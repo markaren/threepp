@@ -10,27 +10,27 @@
 namespace threepp {
 
     bool VulkanRenderer::Impl::ensureDrawInfoCapacity(uint32_t frame, VkDeviceSize neededBytes) {
-        if (neededBytes <= drawInfoBufferCapacity[frame]) return false;
+        if (neededBytes <= view().drawInfoBufferCapacity[frame]) return false;
         const VkDeviceSize newCap = std::max<VkDeviceSize>(
-                neededBytes, drawInfoBufferCapacity[frame] * 2u);
-        destroyBuffer(ctx->allocator(), drawInfoBuffers[frame]);
-        drawInfoBuffers[frame] = createBuffer(
+                neededBytes, view().drawInfoBufferCapacity[frame] * 2u);
+        destroyBuffer(ctx->allocator(), view().drawInfoBuffers[frame]);
+        view().drawInfoBuffers[frame] = createBuffer(
                 ctx->allocator(), ctx->device(),
                 newCap,
                 VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
                 VMA_MEMORY_USAGE_AUTO,
                 VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT |
                         VMA_ALLOCATION_CREATE_MAPPED_BIT);
-        drawInfoBufferCapacity[frame] = newCap;
+        view().drawInfoBufferCapacity[frame] = newCap;
         return true;
     }
 
     bool VulkanRenderer::Impl::ensureIndirectCmdCapacity(uint32_t frame, VkDeviceSize neededBytes) {
-        if (neededBytes <= indirectCmdBufferCapacity[frame]) return false;
+        if (neededBytes <= view().indirectCmdBufferCapacity[frame]) return false;
         const VkDeviceSize newCap = std::max<VkDeviceSize>(
-                neededBytes, indirectCmdBufferCapacity[frame] * 2u);
-        destroyBuffer(ctx->allocator(), indirectCmdBuffers[frame]);
-        indirectCmdBuffers[frame] = createBuffer(
+                neededBytes, view().indirectCmdBufferCapacity[frame] * 2u);
+        destroyBuffer(ctx->allocator(), view().indirectCmdBuffers[frame]);
+        view().indirectCmdBuffers[frame] = createBuffer(
                 ctx->allocator(), ctx->device(),
                 newCap,
                 // STORAGE: the occlusion-cull filter compute reads these
@@ -40,7 +40,7 @@ namespace threepp {
                 VMA_MEMORY_USAGE_AUTO,
                 VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT |
                         VMA_ALLOCATION_CREATE_MAPPED_BIT);
-        indirectCmdBufferCapacity[frame] = newCap;
+        view().indirectCmdBufferCapacity[frame] = newCap;
         return true;
     }
 
@@ -310,8 +310,8 @@ namespace threepp {
         vulkan::OcclusionCull::CullMeta* occlMetaDst = nullptr;
         if (occlActiveThisFrame_) {
             vulkan::OcclusionCull::FrameInputs oin{};
-            oin.srcCmds    = indirectCmdBuffers[frame].handle;
-            oin.rasterCam  = rasterCameraUbos[frame].handle;
+            oin.srcCmds    = view().indirectCmdBuffers[frame].handle;
+            oin.rasterCam  = view().rasterCameraUbos[frame].handle;
             oin.hizView    = occlHiz_->view();
             oin.hizSampler = occlHiz_->sampler();
             occl_->prepareFrame(frame, globalIdx, occlBitDomain_, oin);
@@ -319,9 +319,9 @@ namespace threepp {
         }
 
         void* mappedDraws = nullptr;
-        vmaMapMemory(ctx->allocator(), drawInfoBuffers[frame].alloc, &mappedDraws);
+        vmaMapMemory(ctx->allocator(), view().drawInfoBuffers[frame].alloc, &mappedDraws);
         void* mappedCmds = nullptr;
-        vmaMapMemory(ctx->allocator(), indirectCmdBuffers[frame].alloc, &mappedCmds);
+        vmaMapMemory(ctx->allocator(), view().indirectCmdBuffers[frame].alloc, &mappedCmds);
 
         uint8_t* dDst = static_cast<uint8_t*>(mappedDraws);
         uint8_t* cDst = static_cast<uint8_t*>(mappedCmds);
@@ -359,23 +359,23 @@ namespace threepp {
         // Bucket-offset writes above land in [0, globalIdx) of each buffer —
         // flush exactly that; the occl meta rides its own persistently-mapped
         // buffer, flushed through its owner.
-        flushHostWrites(ctx->allocator(), drawInfoBuffers[frame].alloc, 0, drawBytes);
-        flushHostWrites(ctx->allocator(), indirectCmdBuffers[frame].alloc, 0, cmdBytes);
+        flushHostWrites(ctx->allocator(), view().drawInfoBuffers[frame].alloc, 0, drawBytes);
+        flushHostWrites(ctx->allocator(), view().indirectCmdBuffers[frame].alloc, 0, cmdBytes);
         if (occlMetaDst) occl_->flushMeta(frame, globalIdx);
-        vmaUnmapMemory(ctx->allocator(), indirectCmdBuffers[frame].alloc);
-        vmaUnmapMemory(ctx->allocator(), drawInfoBuffers[frame].alloc);
+        vmaUnmapMemory(ctx->allocator(), view().indirectCmdBuffers[frame].alloc);
+        vmaUnmapMemory(ctx->allocator(), view().drawInfoBuffers[frame].alloc);
 
         // Rewrite binding 4 if the DrawInfo buffer handle moved (grow).
         // The indirect cmd buffer is consumed by vkCmdDrawIndirect — no
         // descriptor binding needed for it.
         if (drawGrown) {
             VkDescriptorBufferInfo dbInfo{};
-            dbInfo.buffer = drawInfoBuffers[frame].handle;
+            dbInfo.buffer = view().drawInfoBuffers[frame].handle;
             dbInfo.offset = 0;
             dbInfo.range  = VK_WHOLE_SIZE;
             VkWriteDescriptorSet w{};
             w.sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-            w.dstSet          = rasterDescSets[frame];
+            w.dstSet          = view().rasterDescSets[frame];
             w.dstBinding      = 4;
             w.descriptorCount = 1;
             w.descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
@@ -391,7 +391,7 @@ namespace threepp {
     // see buildIndirectDrawData above for how the GPU buffers are
     // populated.
     void VulkanRenderer::Impl::recordRasterGbufPass(VkCommandBuffer cb, uint32_t frame) {
-        const auto& g = rasterGbufs[frame];
+        const auto& g = view().rasterGbufs[frame];
         // MSAA path: rasterize into the MS framebuffer/render pass/
         // pipelines (RasterGbufImages::*MS + rasterGbufRenderPassMS);
         // the single-sample framebuffer/pipelines below stay exactly
@@ -403,7 +403,7 @@ namespace threepp {
                                      useMsaa ? rasterGbufRenderPassMS : rasterGbufRenderPass,
                                      useMsaa ? g.framebufferMS : g.framebuffer,
                                      useMsaa,
-                                     indirectCmdBuffers[frame].handle,
+                                     view().indirectCmdBuffers[frame].handle,
                                      /*clear=*/true);
     }
 
@@ -416,7 +416,7 @@ namespace threepp {
                                       VkRenderPass renderPass, VkFramebuffer fb,
                                       bool useMsaa, VkBuffer indirectBuffer,
                                       bool clear) {
-        const auto& g = rasterGbufs[frame];
+        const auto& g = view().rasterGbufs[frame];
         if (fb == VK_NULL_HANDLE) return;// not initialized
 
         VkClearValue clears[6]{};
@@ -470,7 +470,7 @@ namespace threepp {
         vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, indirectPipe);
         vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_GRAPHICS,
                                 rasterPipelineLayout, 0, 1,
-                                &rasterDescSets[frame], 0, nullptr);
+                                &view().rasterDescSets[frame], 0, nullptr);
 
         // One vkCmdDrawIndirect per cull-mode group. Empty groups skip;
         // a typical static scene fires one (BACK_cull); transmissive
@@ -607,7 +607,7 @@ namespace threepp {
         if (hybridDebugView_ == HybridDebugView::Off) return;
         createDebugResolvePipeline();
 
-        const auto& g = rasterGbufs[frame];
+        const auto& g = view().rasterGbufs[frame];
 
         // Map the public view enum to the shader's compact code. Depth is
         // not reachable from setHybridDebugView (1..4) and has no sampled

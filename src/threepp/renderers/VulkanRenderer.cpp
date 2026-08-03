@@ -165,7 +165,7 @@ namespace threepp {
                                           regionRenderExt_.width, regionRenderExt_.height,
                                           deferredVolFog_, deferredVolDensity_, deferredVolAniso_,
                                           sampleIndex,
-                                          deferredCamDeltaLen_, deferredCamRotAngle_,
+                                          view().deferredCamDeltaLen_, deferredCamRotAngle_,
                                           clusterLightCountThisFrame_);
             gpuTimings_->end(cb, TP_Froxel, currentFrame);
             VkMemoryBarrier2 fbar{};
@@ -192,7 +192,7 @@ namespace threepp {
             deferredShade_->recordCloudMarch(cb, currentFrame,
                                              regionRenderExt_.width, regionRenderExt_.height,
                                              envImage.mipLevels, sampleIndex,
-                                             deferredCamDeltaLen_, deferredCamRotAngle_);
+                                             view().deferredCamDeltaLen_, deferredCamRotAngle_);
             VkMemoryBarrier2 cldBar{};
             cldBar.sType         = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2;
             cldBar.srcStageMask  = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
@@ -223,7 +223,7 @@ namespace threepp {
         shadeParams.volDensity         = deferredVolDensity_;
         shadeParams.volAniso           = deferredVolAniso_;
         shadeParams.starIntensity      = deferredStarIntensity_;
-        shadeParams.camDeltaLen        = deferredCamDeltaLen_;
+        shadeParams.camDeltaLen        = view().deferredCamDeltaLen_;
         shadeParams.camRotAngle        = deferredCamRotAngle_;
         shadeParams.timeSec            = static_cast<float>(glfwGetTime());
         shadeParams.sunTanHalfAngle    = std::tan(sunAngularRadiusDeg_ * 0.017453292519943295f);
@@ -896,9 +896,9 @@ namespace threepp {
         // endFrame advances currentFrame after recording (VulkanCoreImpl.hpp),
         // so the freshest attachment contents are (currentFrame - 1) mod N —
         // the same slot arithmetic the fog history uses.
-        const uint32_t n    = static_cast<uint32_t>(impl.rasterGbufs.size());
+        const uint32_t n    = static_cast<uint32_t>(impl.primaryView().rasterGbufs.size());
         const uint32_t slot = (impl.currentFrame + n - 1u) % n;
-        const auto& g       = impl.rasterGbufs[slot];
+        const auto& g       = impl.primaryView().rasterGbufs[slot];
 
         // Select the attachment, its aspect, and the layout it rests in after a
         // frame (the raster render pass' finalLayout; the MSAA resolve leaves the

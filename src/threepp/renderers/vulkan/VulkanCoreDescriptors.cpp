@@ -7,9 +7,9 @@ void VulkanRenderer::Impl::rewriteTaaDescriptors() {
             std::array<VkImageView, kFramesInFlight> idsViews{};
             std::array<VkImageView, kFramesInFlight> depthViews{};
             for (uint32_t f = 0; f < kFramesInFlight; ++f) {
-                motionViews[f]   = rasterGbufs[f].motion.view;
-                idsViews[f]      = rasterGbufs[f].ids.view;
-                depthViews[f]    = rasterGbufs[f].depth.view;
+                motionViews[f]   = view().rasterGbufs[f].motion.view;
+                idsViews[f]      = view().rasterGbufs[f].ids.view;
+                depthViews[f]    = view().rasterGbufs[f].depth.view;
             }
             const auto& swapViews = ctx->swapchainImageViews();
             vulkan::TaaResolve::DescriptorWriteInputs in{};
@@ -46,7 +46,7 @@ void VulkanRenderer::Impl::rewriteBloomDescriptors() {
             for (uint32_t f = 0; f < kFramesInFlight; ++f) {
                 sceneViews[f] = bloom_->sceneHdrView(f);
                 bloomViews[f] = bloom_->bloomView(f);
-                idsViews[f]   = rasterGbufs[f].ids.view;
+                idsViews[f]   = view().rasterGbufs[f].ids.view;
                 taaInViews[f] = taa_->inputView(f);
                 // HDR-mode (FSR/DLSS upscaler path): PostComposite's binding 6
                 // reads whichever history slot THIS frame-in-flight's upscaler
@@ -84,8 +84,8 @@ void VulkanRenderer::Impl::rewriteBloomDescriptors() {
                 std::array<VkBuffer, kFramesInFlight>    camBufs{};
                 std::array<VkImageView, kFramesInFlight> depthViews{};
                 for (uint32_t f = 0; f < kFramesInFlight; ++f) {
-                    camBufs[f]    = cameraUbos[f].handle;
-                    depthViews[f] = rasterGbufs[f].depth.view;
+                    camBufs[f]    = view().cameraUbos[f].handle;
+                    depthViews[f] = view().rasterGbufs[f].depth.view;
                 }
                 vulkan::DofPass::ResizeInputs din{};
                 din.cameraUbos       = camBufs.data();
@@ -152,7 +152,7 @@ void VulkanRenderer::Impl::rewriteDeferredDescriptors(int onlyFrame) {
             std::array<VkImageView, kFramesInFlight> albedoMSViews{};
             std::array<VkImageView, kFramesInFlight> uvMSViews{};
             for (uint32_t f = 0; f < kFramesInFlight; ++f) {
-                camBufs[f]       = cameraUbos[f].handle;
+                camBufs[f]       = view().cameraUbos[f].handle;
                 lightBufs[f]     = lightsUbos[f].handle;
                 fogBufs[f]       = fogUbos[f].handle;
                 cloudBufs[f]     = cloudUbos[f].handle;
@@ -160,34 +160,34 @@ void VulkanRenderer::Impl::rewriteDeferredDescriptors(int onlyFrame) {
                 clusterLightBufs[f] = clusterLightsBuffers[f].handle;
                 matBufs[f]       = materialDescsBuffers[f].handle;
                 emBufs[f]        = emissiveTriBuffers[f].handle;
-                normalViews[f]   = rasterGbufs[f].normal.view;
-                depthViews[f]    = rasterGbufs[f].depth.view;
-                idsViews[f]      = rasterGbufs[f].ids.view;
-                albedoViews[f]   = rasterGbufs[f].albedo.view;
-                uvViews[f]       = rasterGbufs[f].uv.view;
-                motionViews[f]   = rasterGbufs[f].motion.view;
-                indirectViews[f] = rasterGbufs[f].indirect.view;
-                momentsSqViews[f]= rasterGbufs[f].momentsSq.view;
-                atrousAViews[f]  = rasterGbufs[f].atrousA.view;
-                atrousBViews[f]  = rasterGbufs[f].atrousB.view;
-                reflectViews[f]  = rasterGbufs[f].reflect.view;
-                reflAuxViews[f]  = rasterGbufs[f].reflAux.view;
-                shadowVisViews[f]     = rasterGbufs[f].shadowVis.view;
-                directUViews[f]       = rasterGbufs[f].directU.view;
-                shadowAtrousAViews[f] = rasterGbufs[f].shadowAtrousA.view;
-                shadowAtrousBViews[f] = rasterGbufs[f].shadowAtrousB.view;
-                froxelScatterViews[f] = rasterGbufs[f].froxelScatter.view;
-                froxelLutViews[f]     = rasterGbufs[f].froxelLut.view;
-                cloudColorViews[f]    = rasterGbufs[f].cloudColor.view;
-                cloudAuxViews[f]      = rasterGbufs[f].cloudAux.view;
-                cloudShadowViews[f]   = rasterGbufs[f].cloudShadow.view;
+                normalViews[f]   = view().rasterGbufs[f].normal.view;
+                depthViews[f]    = view().rasterGbufs[f].depth.view;
+                idsViews[f]      = view().rasterGbufs[f].ids.view;
+                albedoViews[f]   = view().rasterGbufs[f].albedo.view;
+                uvViews[f]       = view().rasterGbufs[f].uv.view;
+                motionViews[f]   = view().rasterGbufs[f].motion.view;
+                indirectViews[f] = view().rasterGbufs[f].indirect.view;
+                momentsSqViews[f]= view().rasterGbufs[f].momentsSq.view;
+                atrousAViews[f]  = view().rasterGbufs[f].atrousA.view;
+                atrousBViews[f]  = view().rasterGbufs[f].atrousB.view;
+                reflectViews[f]  = view().rasterGbufs[f].reflect.view;
+                reflAuxViews[f]  = view().rasterGbufs[f].reflAux.view;
+                shadowVisViews[f]     = view().rasterGbufs[f].shadowVis.view;
+                directUViews[f]       = view().rasterGbufs[f].directU.view;
+                shadowAtrousAViews[f] = view().rasterGbufs[f].shadowAtrousA.view;
+                shadowAtrousBViews[f] = view().rasterGbufs[f].shadowAtrousB.view;
+                froxelScatterViews[f] = view().rasterGbufs[f].froxelScatter.view;
+                froxelLutViews[f]     = view().rasterGbufs[f].froxelLut.view;
+                cloudColorViews[f]    = view().rasterGbufs[f].cloudColor.view;
+                cloudAuxViews[f]      = view().rasterGbufs[f].cloudAux.view;
+                cloudShadowViews[f]   = view().rasterGbufs[f].cloudShadow.view;
                 sceneHdrViews[f] = bloom_->sceneHdrView(f);
-                const bool haveMS = gbufMsaaSamples_ > 1 && rasterGbufs[f].normalMS.view != VK_NULL_HANDLE;
-                normalMSViews[f] = haveMS ? rasterGbufs[f].normalMS.view : gbufDummyMS_[0].view;
-                depthMSViews[f]  = haveMS ? rasterGbufs[f].depthMS.view  : gbufDummyMS_[1].view;
-                idsMSViews[f]    = haveMS ? rasterGbufs[f].idsMS.view    : gbufDummyMS_[2].view;
-                uvMSViews[f]     = haveMS ? rasterGbufs[f].uvMS.view     : gbufDummyMS_[3].view;
-                albedoMSViews[f] = haveMS ? rasterGbufs[f].albedoMS.view : gbufDummyMS_[4].view;
+                const bool haveMS = gbufMsaaSamples_ > 1 && view().rasterGbufs[f].normalMS.view != VK_NULL_HANDLE;
+                normalMSViews[f] = haveMS ? view().rasterGbufs[f].normalMS.view : gbufDummyMS_[0].view;
+                depthMSViews[f]  = haveMS ? view().rasterGbufs[f].depthMS.view  : gbufDummyMS_[1].view;
+                idsMSViews[f]    = haveMS ? view().rasterGbufs[f].idsMS.view    : gbufDummyMS_[2].view;
+                uvMSViews[f]     = haveMS ? view().rasterGbufs[f].uvMS.view     : gbufDummyMS_[3].view;
+                albedoMSViews[f] = haveMS ? view().rasterGbufs[f].albedoMS.view : gbufDummyMS_[4].view;
             }
             // Bindless material-texture array for reflected-hit texturing —
             // same source the RT set's binding 8 uses.
@@ -256,8 +256,8 @@ void VulkanRenderer::Impl::rewriteDeferredDescriptors(int onlyFrame) {
             // deferred shade's NEE uses (created unconditionally in
             // createReservoirImages). rewriteDescriptors picks write/read
             // slots per frame. Locals must outlive the call below.
-            const VkImageView resPosViews[2] = {reservoirPosImagesPP[0].view, reservoirPosImagesPP[1].view};
-            const VkImageView resWViews[2]   = {reservoirWImagesPP[0].view,   reservoirWImagesPP[1].view};
+            const VkImageView resPosViews[2] = {view().reservoirPosImagesPP[0].view, view().reservoirPosImagesPP[1].view};
+            const VkImageView resWViews[2]   = {view().reservoirWImagesPP[0].view,   view().reservoirWImagesPP[1].view};
             in.reservoirPos     = resPosViews;
             in.reservoirW       = resWViews;
             // Probe GI (bindings 36/37/54) — the SH store + per-frame grid UBO
@@ -270,7 +270,7 @@ void VulkanRenderer::Impl::rewriteDeferredDescriptors(int onlyFrame) {
             // reprojection reads last frame's view-proj from them.
             std::array<VkBuffer, kFramesInFlight> rasterCamBufs{};
             for (uint32_t f = 0; f < kFramesInFlight; ++f)
-                rasterCamBufs[f] = rasterCameraUbos[f].handle;
+                rasterCamBufs[f] = view().rasterCameraUbos[f].handle;
             in.rasterCamUbo     = rasterCamBufs.data();
             in.gbufNormalMS     = normalMSViews.data();
             in.gbufDepthMS      = depthMSViews.data();
@@ -449,7 +449,7 @@ void VulkanRenderer::Impl::ensureHybridResources() {
                 // Force the image block below to re-run even if the extent
                 // is unchanged — MS attachments/framebuffer must be (re)created
                 // (or freed, on the ==1 branch) for the new sample count.
-                rasterGbufs[0].width = 0;
+                view().rasterGbufs[0].width = 0;
             }
             if (overlayWireframePipeline == VK_NULL_HANDLE) {
                 createOverlayPipeline();
@@ -462,7 +462,7 @@ void VulkanRenderer::Impl::ensureHybridResources() {
             // must launch at the same resolution the gbuffer rasterized at.
             const VkExtent2D ext = renderExtent();
             const bool gbufImagesRebuilt =
-                    rasterGbufs[0].width != ext.width || rasterGbufs[0].height != ext.height;
+                    view().rasterGbufs[0].width != ext.width || view().rasterGbufs[0].height != ext.height;
             if (gbufImagesRebuilt) {
                 createRasterGbufImages(ext.width, ext.height);
             }
@@ -478,17 +478,17 @@ void VulkanRenderer::Impl::ensureHybridResources() {
                     std::array<VkImageView, kFramesInFlight> nMS{}, mMS{}, iMS{}, uMS{}, aMS{}, dMS{};
                     std::array<VkImageView, kFramesInFlight> nR{}, mR{}, iR{}, uR{}, aR{};
                     for (uint32_t f = 0; f < kFramesInFlight; ++f) {
-                        nMS[f] = rasterGbufs[f].normalMS.view;
-                        mMS[f] = rasterGbufs[f].motionMS.view;
-                        iMS[f] = rasterGbufs[f].idsMS.view;
-                        uMS[f] = rasterGbufs[f].uvMS.view;
-                        aMS[f] = rasterGbufs[f].albedoMS.view;
-                        dMS[f] = rasterGbufs[f].depthMS.view;
-                        nR[f]  = rasterGbufs[f].normal.view;
-                        mR[f]  = rasterGbufs[f].motion.view;
-                        iR[f]  = rasterGbufs[f].ids.view;
-                        uR[f]  = rasterGbufs[f].uv.view;
-                        aR[f]  = rasterGbufs[f].albedo.view;
+                        nMS[f] = view().rasterGbufs[f].normalMS.view;
+                        mMS[f] = view().rasterGbufs[f].motionMS.view;
+                        iMS[f] = view().rasterGbufs[f].idsMS.view;
+                        uMS[f] = view().rasterGbufs[f].uvMS.view;
+                        aMS[f] = view().rasterGbufs[f].albedoMS.view;
+                        dMS[f] = view().rasterGbufs[f].depthMS.view;
+                        nR[f]  = view().rasterGbufs[f].normal.view;
+                        mR[f]  = view().rasterGbufs[f].motion.view;
+                        iR[f]  = view().rasterGbufs[f].ids.view;
+                        uR[f]  = view().rasterGbufs[f].uv.view;
+                        aR[f]  = view().rasterGbufs[f].albedo.view;
                     }
                     vulkan::GbufResolve::DescriptorWriteInputs gin{};
                     gin.normalMS = nMS.data(); gin.motionMS = mMS.data(); gin.idsMS = iMS.data();
@@ -508,14 +508,14 @@ void VulkanRenderer::Impl::ensureHybridResources() {
             // depth doesn't exist until gbuf_resolve, which runs AFTER the
             // two-phase raster).
             if (occlHiz_ && occlusionCullingEnabled_ &&
-                rasterGbufs[0].depth.view != VK_NULL_HANDLE) {
+                view().rasterGbufs[0].depth.view != VK_NULL_HANDLE) {
                 const bool haveMS = gbufMsaaSamples_ > 1 &&
-                                    rasterGbufs[0].depthMS.view != VK_NULL_HANDLE;
+                                    view().rasterGbufs[0].depthMS.view != VK_NULL_HANDLE;
                 std::array<VkImageView, kFramesInFlight> dv{};
                 std::array<VkImageView, kFramesInFlight> dvMS{};
                 for (uint32_t f = 0; f < kFramesInFlight; ++f) {
-                    dv[f]   = rasterGbufs[f].depth.view;
-                    dvMS[f] = haveMS ? rasterGbufs[f].depthMS.view : gbufDummyMS_[1].view;
+                    dv[f]   = view().rasterGbufs[f].depth.view;
+                    dvMS[f] = haveMS ? view().rasterGbufs[f].depthMS.view : gbufDummyMS_[1].view;
                 }
                 occlHiz_->resize(renderExtent(), dv.data(), dvMS.data(),
                                  haveMS ? gbufMsaaSamples_ : 1u);

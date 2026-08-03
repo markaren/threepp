@@ -1072,18 +1072,14 @@ namespace threepp {
         // lightPos.xyz + lightType.w (rgba32f), reservoirWImagesPP carries
         // W_sum + M + W + p_hat (rgba16f). At frame N the shade writes slot
         // (N & 1) and reads slot ((N+1) & 1).
-        std::array<Image2D, 2> reservoirPosImagesPP{};
-        std::array<Image2D, 2> reservoirWImagesPP{};
+        // (reservoirPosImagesPP / reservoirWImagesPP moved to ViewContext —
+        //  the reservoirs are SCREEN-space, so they belong to a view.)
         // Frame counter driving Halton jitter + blue-noise offset for the
-        // deferred shade's stochastic GI / soft-shadow sampling.
+        // deferred shade's stochastic GI / soft-shadow sampling. Genuinely
+        // shared: it is the sequence CLOCK, not per-view history. Every view
+        // in a frame samples the same Halton/blue-noise phase.
         uint32_t sampleIndex = 0;
-        // Prev-frame camera packed as four vec4s (matches PrevCameraUbo):
-        //   [0..3]  = vec4(pos.xyz,  projScaleX)   → prevCamPosX
-        //   [4..7]  = vec4(fwd.xyz,  projScaleY)   → prevCamFwdY
-        //   [8..11] = vec4(rgt.xyz,  0)             → prevCamRgt
-        //   [12..15]= vec4(up.xyz,   0)             → prevCamUp
-        std::array<float, 16> prevCamBufData_{};
-        bool prevCameraValid = false;
+        // (prevCamBufData_ / prevCameraValid moved to ViewContext.)
 
         // Per-entry "moved" bitmask, one bit per TLAS instance. Bit i set when
         // entry i's effective worldMatrix / pose / displacement changed since
@@ -1883,7 +1879,147 @@ namespace threepp {
             Image2D       depthMS;
             VkFramebuffer framebufferMS = VK_NULL_HANDLE;// MS render target (rasterGbufRenderPassMS)
         };
-        std::array<RasterGbufImages, kFramesInFlight> rasterGbufs{};
+
+        // ── ViewContext: everything a single camera's render owns ───────────
+        // >>> VIEWCTX_BEGIN (the rename pass that introduced view() skips this
+        //     block — these are the DECLARATIONS, not uses.)
+        //
+        // The deferred pipeline used to be hard-wired to exactly one view: one
+        // G-buffer set, one temporal-history chain, one camera-UBO chain, all
+        // sitting as plain Impl members. Everything below is what turned out to
+        // be genuinely PER-VIEW once that assumption was written down, split
+        // into three groups:
+        //
+        //   1. the G-buffer + every temporal accumulator hanging off it
+        //      (rasterGbufs — GI, moments, reflections, shadow ratio, froxels,
+        //       clouds, depth: all screen-space, all history-bearing),
+        //   2. the per-frame-in-flight buffers/descriptors that describe THIS
+        //      camera to the GPU (camera UBOs, raster camera UBO, the culled
+        //      draw list and its indirect commands, the raster descriptor sets),
+        //   3. the host-side temporal bookkeeping the shaders can't hold
+        //      (previous VP, previous jitter, sky reprojection, depth
+        //       linearization, previous camera pose).
+        //
+        // Group 3 is the subtle one: it is exactly the state that makes a
+        // camera CUT distinguishable from a camera MOVE. Sharing it between
+        // views is what would make view A's cut ghost into view B.
+        //
+        // What deliberately stays on Impl: anything world-space or scene-wide —
+        // TLAS/BLAS, geometry/material descriptor tables, light UBOs, the env
+        // map and its PMREM, probe GI (world-space by construction), and
+        // `sampleIndex` (a clock, not a history).
+        struct ViewContext {
+            // Group 1 — G-buffer + temporal accumulators.
+            std::array<RasterGbufImages, kFramesInFlight> rasterGbufs{};
+
+            // Group 2 — per-frame-in-flight description of this camera.
+            //
+            // Camera UBO (viewInverse + projInverse), 2 mat4 back-to-back,
+            // std140.
+            std::array<Buffer, kFramesInFlight> cameraUbos{};
+            // Raster camera UBO (RasterCameraData: jittered/unjittered VP,
+            // prev VP, jitter).
+            std::array<Buffer, kFramesInFlight> rasterCameraUbos{};
+            std::array<VkDescriptorSet, kFramesInFlight> rasterDescSets{};
+            // Per-frame draw info ring. Each entry mirrors the GLSL DrawInfo
+            // struct in gbuffer_indirect.vert: model matrix + buffer device
+            // addresses + flags. Sized lazily; grows on demand. Per-view
+            // because the contents are the FRUSTUM-CULLED draw list, and each
+            // camera culls differently.
+            std::array<Buffer, kFramesInFlight> drawInfoBuffers{};
+            std::array<VkDeviceSize, kFramesInFlight> drawInfoBufferCapacity{};
+            // Per-frame indirect command ring. Holds a contiguous array of
+            // VkDrawIndirectCommand structs partitioned by cull mode (Front,
+            // then Back, then Double). Counts + offsets per group recorded in
+            // indirectGroupRanges_ during recordRasterGbufPass.
+            std::array<Buffer, kFramesInFlight> indirectCmdBuffers{};
+            std::array<VkDeviceSize, kFramesInFlight> indirectCmdBufferCapacity{};
+            // ReSTIR DI reservoir ping-pong — [2] PHYSICAL images (not
+            // per-frame-in-flight). Screen-space, so per-view. At frame N the
+            // shade writes slot (N & 1) and reads slot ((N+1) & 1).
+            std::array<Image2D, 2> reservoirPosImagesPP{};
+            std::array<Image2D, 2> reservoirWImagesPP{};
+
+            // Group 3 — host-side temporal bookkeeping.
+            //
+            // Which projection this view shades through. Read by the uploads
+            // (parallel-ray packing, jitter placement) and by DoF, which has no
+            // meaning without a lens.
+            bool orthoFrame_ = false;
+            // Prev-frame camera packed as four vec4s (matches PrevCameraUbo):
+            //   [0..3]  = vec4(pos.xyz,  projScaleX)   → prevCamPosX
+            //   [4..7]  = vec4(fwd.xyz,  projScaleY)   → prevCamFwdY
+            //   [8..11] = vec4(rgt.xyz,  0)             → prevCamRgt
+            //   [12..15]= vec4(up.xyz,   0)             → prevCamUp
+            std::array<float, 16> prevCamBufData_{};
+            bool prevCameraValid = false;
+            // Cached unjittered view-projection matrix (column-major,
+            // row-of-element-4 layout). Computed once per frame in
+            // uploadRasterCameraUbo and read by recordOverlayPass to build
+            // the per-draw mvp = vpUnjit · model push constant.
+            std::array<float, 16> currVPunjit_{};
+            // Cached unjittered view and reverse-Z projection matrices,
+            // mirrored alongside currVPunjit_ each frame. The particle
+            // billboard pass needs them SEPARATELY (not the combined VP): the
+            // distance-attenuated billboard scale uses view-space depth and
+            // proj[1][1] individually, so it pushes
+            // modelView = currViewUnjit_ · meshWorld and currProjUnjit_.
+            std::array<float, 16> currViewUnjit_{};
+            std::array<float, 16> currProjUnjit_{};
+            bool  rasterPrevVPValid_ = false;
+            float rasterPrevVP_[16]{};
+            // prevVPunjit · currVPunjit⁻¹ for the TAA's sky-motion
+            // reconstruction (sky rasterizes nothing → zero motion → wrong
+            // reproject under camera rotation). Computed in
+            // uploadRasterCameraUbo while both VPs are in hand; identity until
+            // the first real frame.
+            std::array<float, 16> taaSkyReproj_{1.f, 0.f, 0.f, 0.f,
+                                                0.f, 1.f, 0.f, 0.f,
+                                                0.f, 0.f, 1.f, 0.f,
+                                                0.f, 0.f, 0.f, 1.f};
+            // Reverse-Z view-depth linearization (A,B,C,D) for the TAA depth
+            // disocclusion gate: viewZ = (A·d + B)/(C·d + D). Set each frame in
+            // uploadRasterCameraUbo from the inverse reverse-Z projection. Zero
+            // until the first real frame ⇒ shader leaves the depth gate off.
+            std::array<float, 4> taaDepthLin_{};
+            // This frame's Halton jitter in RENDER TEXELS for the TAA resolve's
+            // current-sample jitter cancellation (taa_resolve re-anchors every
+            // current-frame read at the unjittered pixel center — without it
+            // the composed output translates with the 8-phase jitter: the
+            // systemic "everything shakes"). {0, 0} whenever the raster renders
+            // unjittered (MSAA mode, event camera) — the resolve then runs
+            // bit-identical to its pre-cancellation arithmetic.
+            float taaJitterTexels_[2]{};
+            float rasterPrevJitter_[2]{};
+            bool  rasterPrevJitterValid_ = false;
+            // Camera WORLD motion this frame (translation m, forward-rotation
+            // rad) for the deferred reflection history policy: a chase-cam
+            // surface (car sunroof with a following camera) is
+            // screen-STATIONARY — its motion vectors are ~0 — while its
+            // view-dependent reflection content slides with every meter the
+            // camera travels. Screen-space motion alone cannot see
+            // camera+object co-motion; these can.
+            float deferredCamPrevPos_[3]{};
+            float deferredCamPrevFwd_[3]{};
+            bool  deferredCamPrevValid_ = false;
+            float deferredCamDeltaLen_ = 0.f;
+        };
+        // Every view this renderer drives. views_[0] is the PRIMARY (the
+        // swapchain-presenting one) and always exists — it is created in the
+        // constructor and never removed, so `view()` is unconditionally valid.
+        std::vector<std::unique_ptr<ViewContext>> views_;
+        // The view currently being set up / recorded. Always views_[0] today;
+        // the per-view render loop retargets it. A raw pointer (not an index)
+        // so a view() call is one indirection in the hot record path.
+        ViewContext* curView_ = nullptr;
+        ViewContext&       view()       { return *curView_; }
+        const ViewContext& view() const { return *curView_; }
+        // The primary view, by name, for the (many) places that mean "the
+        // swapchain view" rather than "whichever view is being recorded".
+        ViewContext&       primaryView()       { return *views_[0]; }
+        const ViewContext& primaryView() const { return *views_[0]; }
+        // <<< VIEWCTX_END
+
         VkRenderPass rasterGbufRenderPass = VK_NULL_HANDLE;
         // MSAA render pass, keyed by sample count (2 or 4). Only the pass
         // matching gbufMsaaSamples_ is ever created; the other stays
@@ -1922,18 +2058,9 @@ namespace threepp {
         // ids, motion, depth, metalness) stays the receiving surface's.
         VkPipeline            rasterGbufDecalPipeline = VK_NULL_HANDLE;
         VkDescriptorPool      rasterDescPool       = VK_NULL_HANDLE;
-        std::array<VkDescriptorSet, kFramesInFlight> rasterDescSets{};
-        // Per-frame draw info ring. Each entry mirrors the GLSL DrawInfo
-        // struct in gbuffer_indirect.vert: model matrix + buffer device
-        // addresses + flags. Sized lazily; grows on demand.
-        std::array<Buffer, kFramesInFlight> drawInfoBuffers{};
-        std::array<VkDeviceSize, kFramesInFlight> drawInfoBufferCapacity{};
-        // Per-frame indirect command ring. Holds a contiguous array of
-        // VkDrawIndirectCommand structs partitioned by cull mode (Front,
-        // then Back, then Double). Counts + offsets per group recorded in
-        // indirectGroupRanges_ during recordRasterGbufPass.
-        std::array<Buffer, kFramesInFlight> indirectCmdBuffers{};
-        std::array<VkDeviceSize, kFramesInFlight> indirectCmdBufferCapacity{};
+        // (rasterDescSets / drawInfoBuffers / indirectCmdBuffers and their
+        //  capacities moved to ViewContext — the descriptor POOL and the
+        //  layout stay shared, the SETS are per-view.)
 
         // Hybrid raster overlay (wireframe + Line/LineSegments). Runs after
         // TAA resolve, draws onto the swapchain with the G-buffer's depth
@@ -2392,18 +2519,7 @@ namespace threepp {
             bool     isPoints;   // true → POINT_LIST topology, overrides the line topology
         };
         std::vector<LineEntry> lastVisibleLines_;
-        // Cached unjittered view-projection matrix (column-major,
-        // row-of-element-4 layout). Computed once per frame in
-        // uploadRasterCameraUbo and read by recordOverlayPass to build
-        // the per-draw mvp = vpUnjit · model push constant.
-        std::array<float, 16> currVPunjit_{};
-        // Cached unjittered view and reverse-Z projection matrices, mirrored
-        // alongside currVPunjit_ each frame. The particle billboard pass needs
-        // them SEPARATELY (not the combined VP): the distance-attenuated
-        // billboard scale uses view-space depth and proj[1][1] individually, so
-        // it pushes modelView = currViewUnjit_ · meshWorld and currProjUnjit_.
-        std::array<float, 16> currViewUnjit_{};
-        std::array<float, 16> currProjUnjit_{};
+        // (currVPunjit_ / currViewUnjit_ / currProjUnjit_ moved to ViewContext.)
 
         // Per-frame raster camera data. currVPjittered drives gl_Position;
         // currVPunjittered + prevVP drive the motion-vector computation
@@ -2421,42 +2537,9 @@ namespace threepp {
                                       // deferred shade's hybrid reproject tap correction.
                                       // .z smuggles the normal-map Toksvig toggle.
         };
-        std::array<Buffer, kFramesInFlight> rasterCameraUbos{};
-        bool  rasterPrevVPValid_ = false;
-        float rasterPrevVP_[16]{};
-        // prevVPunjit · currVPunjit⁻¹ for the TAA's sky-motion reconstruction
-        // (sky rasterizes nothing → zero motion → wrong reproject under
-        // camera rotation). Computed in uploadRasterCameraUbo while both
-        // VPs are in hand; identity until the first real frame.
-        std::array<float, 16> taaSkyReproj_{1.f, 0.f, 0.f, 0.f,
-                                            0.f, 1.f, 0.f, 0.f,
-                                            0.f, 0.f, 1.f, 0.f,
-                                            0.f, 0.f, 0.f, 1.f};
-        // Reverse-Z view-depth linearization (A,B,C,D) for the TAA depth
-        // disocclusion gate: viewZ = (A·d + B)/(C·d + D). Set each frame in
-        // uploadRasterCameraUbo from the inverse reverse-Z projection. Zero
-        // until the first real frame ⇒ shader leaves the depth gate disabled.
-        std::array<float, 4> taaDepthLin_{};
-        // This frame's Halton jitter in RENDER TEXELS for the TAA resolve's
-        // current-sample jitter cancellation (taa_resolve re-anchors every
-        // current-frame read at the unjittered pixel center — without it the
-        // composed output translates with the 8-phase jitter: the systemic
-        // "everything shakes"). {0, 0} whenever the raster renders unjittered
-        // (MSAA mode, event camera) — the resolve then runs bit-identical to
-        // its pre-cancellation arithmetic. Set in uploadRasterCameraUbo.
-        float taaJitterTexels_[2]{};
-        float rasterPrevJitter_[2]{};
-        bool  rasterPrevJitterValid_ = false;
-        // Camera WORLD motion this frame (translation m, forward-rotation rad)
-        // for the deferred reflection history policy: a chase-cam surface (car
-        // sunroof with a following camera) is screen-STATIONARY — its motion
-        // vectors are ~0 — while its view-dependent reflection content slides
-        // with every meter the camera travels. Screen-space motion alone cannot
-        // see camera+object co-motion; these can.
-        float deferredCamPrevPos_[3]{};
-        float deferredCamPrevFwd_[3]{};
-        bool  deferredCamPrevValid_ = false;
-        float deferredCamDeltaLen_ = 0.f;
+        // (rasterCameraUbos, the prev-VP / prev-jitter / sky-reproject /
+        //  depth-linearization TAA bookkeeping, and the prev camera pose all
+        //  moved to ViewContext — see the RasterCameraData note there.)
         float deferredCamRotAngle_ = 0.f;
 
         // Nearest-filter sampler used by the deferred shade to read gbuffer
@@ -2904,9 +2987,7 @@ namespace threepp {
         };
         HybridDebugView hybridDebugView_ = HybridDebugView::Off;
 
-        // Per-frame-in-flight camera UBO (viewInverse + projInverse).
-        // 2 mat4 packed back-to-back, std140 layout.
-        std::array<Buffer, kFramesInFlight> cameraUbos{};
+        // (cameraUbos moved to ViewContext.)
 
         uint32_t imageCount_ = 0;
 
@@ -2993,12 +3074,11 @@ namespace threepp {
         // through the ortho-only overlay path and must keep doing so.
         bool orthoSceneRendering_ = false;
 
-        // True for the duration of a deferred frame opened by an ORTHOGRAPHIC
-        // camera. Set in beginDeferredFrame, read by the passes that only make
-        // sense under a lens (DoF) and by the uploads that pack the projection
-        // for the shaders. Distinct from orthoSceneRendering_, which is the
-        // user's standing permission rather than this frame's projection.
-        bool orthoFrame_ = false;
+        // (orthoFrame_ moved to ViewContext — under multi-view the projection
+        //  kind is a property of the VIEW, not of the frame: a perspective
+        //  primary and an orthographic secondary coexist in one submission.
+        //  Distinct from orthoSceneRendering_, which is the user's standing
+        //  permission rather than any view's projection.)
 
         // Does THIS render() call mean "shade the scene through a parallel
         // projection"? Only a standalone one (nothing in flight) can — a second
@@ -3043,6 +3123,12 @@ namespace threepp {
         uint32_t gbufMsaaSamples_        = 1;
 
         explicit Impl(Canvas& c) : canvas(c), size(c.size()) {
+            // The PRIMARY view. Created before anything else touches a
+            // per-view resource, because view() dereferences curView_
+            // unconditionally — every createXxx below allocates into it.
+            views_.push_back(std::make_unique<ViewContext>());
+            curView_ = views_[0].get();
+
             ctx = std::make_unique<VulkanContext>(
                     static_cast<GLFWwindow*>(canvas.windowPtr()),
                     /*enableRayTracing*/ true,
@@ -3348,7 +3434,17 @@ namespace threepp {
             }
             morphedMeshStates.clear();
 
-            for (auto& b : cameraUbos) destroyBuffer(ctx->allocator(), b);
+            // Per-view buffers/images: walk EVERY view, not just the current
+            // one. Loops here (rather than view().x) so adding a secondary
+            // view can never leak by forgetting to extend the destructor.
+            for (auto& vp : views_) {
+                for (auto& b : vp->cameraUbos)         destroyBuffer(ctx->allocator(), b);
+                for (auto& b : vp->rasterCameraUbos)   destroyBuffer(ctx->allocator(), b);
+                for (auto& b : vp->drawInfoBuffers)    destroyBuffer(ctx->allocator(), b);
+                for (auto& b : vp->indirectCmdBuffers) destroyBuffer(ctx->allocator(), b);
+                for (auto& img : vp->reservoirPosImagesPP) destroyImage2D(ctx->allocator(), d, img);
+                for (auto& img : vp->reservoirWImagesPP)   destroyImage2D(ctx->allocator(), d, img);
+            }
             for (auto& b : lightsUbos) destroyBuffer(ctx->allocator(), b);
             for (auto& b : clusterLightsBuffers) destroyBuffer(ctx->allocator(), b);
             for (auto& b : clusterGridBuffers) destroyBuffer(ctx->allocator(), b);
@@ -3368,8 +3464,6 @@ namespace threepp {
             destroyImage2D(ctx->allocator(), d, oceanFineHeightDummy);
             destroyImage2D(ctx->allocator(), d, oceanFoamDummy);
             destroyImage2D(ctx->allocator(), d, foamDetailImage);
-            for (auto& img : reservoirPosImagesPP) destroyImage2D(ctx->allocator(), d, img);
-            for (auto& img : reservoirWImagesPP) destroyImage2D(ctx->allocator(), d, img);
             for (auto& img : materialTextures) destroyImage2D(ctx->allocator(), d, img);
             materialTextures.clear();
             if (textureSampler_) vkDestroySampler(d, textureSampler_, nullptr);
@@ -3403,9 +3497,8 @@ namespace threepp {
             // first render(); if render() was never called, all handles stay
             // VK_NULL_HANDLE and these calls become no-ops.
             destroyRasterGbufImages();
-            for (auto& b : rasterCameraUbos)    destroyBuffer(ctx->allocator(), b);
-            for (auto& b : drawInfoBuffers)     destroyBuffer(ctx->allocator(), b);
-            for (auto& b : indirectCmdBuffers)  destroyBuffer(ctx->allocator(), b);
+            // (rasterCameraUbos / drawInfoBuffers / indirectCmdBuffers are
+            //  freed in the per-view loop above, alongside the camera UBOs.)
             if (rasterGbufPipeline)         vkDestroyPipeline(d, rasterGbufPipeline, nullptr);
             if (rasterGbufIndirectPipeline) vkDestroyPipeline(d, rasterGbufIndirectPipeline, nullptr);
             if (rasterGbufDecalPipeline)    vkDestroyPipeline(d, rasterGbufDecalPipeline, nullptr);

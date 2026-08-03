@@ -117,13 +117,13 @@ void VulkanRenderer::Impl::createReservoirImages() {
             // reservoir images are sized to the resolution the deferred shade
             // launches at. Equal to the swapchain extent unless renderScale_ < 1.
             const VkExtent2D ext = renderExtent();
-            for (size_t i = 0; i < reservoirPosImagesPP.size(); ++i) {
-                reservoirPosImagesPP[i] = createStorageImage2D(
+            for (size_t i = 0; i < view().reservoirPosImagesPP.size(); ++i) {
+                view().reservoirPosImagesPP[i] = createStorageImage2D(
                         ext.width, ext.height, VK_FORMAT_R32G32B32A32_SFLOAT,
                         0, i == 0 ? "reservoirPosImagePP[0]" : "reservoirPosImagePP[1]");
             }
-            for (size_t i = 0; i < reservoirWImagesPP.size(); ++i) {
-                reservoirWImagesPP[i] = createStorageImage2D(
+            for (size_t i = 0; i < view().reservoirWImagesPP.size(); ++i) {
+                view().reservoirWImagesPP[i] = createStorageImage2D(
                         ext.width, ext.height, VK_FORMAT_R16G16B16A16_SFLOAT,
                         0, i == 0 ? "reservoirWImagePP[0]" : "reservoirWImagePP[1]");
             }
@@ -132,13 +132,13 @@ void VulkanRenderer::Impl::createReservoirImages() {
             // sees M=0 (no prior history) instead of garbage.
             clearGbufImages();
             sampleIndex = 0;
-            prevCameraValid = false;
+            view().prevCameraValid = false;
             prevWorldMats.clear();
         }
 
 void VulkanRenderer::Impl::resetAccumulation() {
             sampleIndex = 0;
-            prevCameraValid = false;
+            view().prevCameraValid = false;
             prevWorldMats.clear();
 #if defined(THREEPP_WITH_FSR)
             fsrResetNext_ = true;// FSR treats the next dispatch as a camera cut
@@ -308,8 +308,8 @@ void VulkanRenderer::Impl::reallocateRenderExtentResources() {
             // known-idle point is the natural place, and it keeps the queue from
             // growing unbounded if the app spams resizes). Safe: device idle.
             flushRetireQueue();
-            for (auto& img : reservoirPosImagesPP) destroyImage2D(ctx->allocator(), ctx->device(), img);
-            for (auto& img : reservoirWImagesPP) destroyImage2D(ctx->allocator(), ctx->device(), img);
+            for (auto& img : view().reservoirPosImagesPP) destroyImage2D(ctx->allocator(), ctx->device(), img);
+            for (auto& img : view().reservoirWImagesPP) destroyImage2D(ctx->allocator(), ctx->device(), img);
             createReservoirImages();// reallocates the reservoir images + clears them
             // Resize hybrid raster attachments BEFORE descriptor rewrites —
             // bindings point at rasterGbufs[f].*.view, so stale views from the
@@ -422,7 +422,7 @@ bool VulkanRenderer::Impl::beginDeferredFrame(Object3D& scene, Camera& camera) {
             // Which projection this frame shades through. Read by the uploads
             // (parallel-ray packing, jitter placement) and by DoF, which has no
             // meaning without a lens. Stamped before the first upload below.
-            orthoFrame_ = camera.is<OrthographicCamera>();
+            view().orthoFrame_ = camera.is<OrthographicCamera>();
 
             VkDevice d = ctx->device();
             vkWaitForFences(d, 1, &inFlight[currentFrame], VK_TRUE, UINT64_MAX);
