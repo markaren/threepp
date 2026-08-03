@@ -18,11 +18,11 @@ void VulkanRenderer::Impl::rewriteTaaDescriptors() {
             in.gbufIdsPerFrame    = idsViews.data();
             in.gbufDepthPerFrame  = depthViews.data();
             in.swapchainViews     = swapViews.data();
-            taa_->rewriteDescriptors(in);
+            view().taa_->rewriteDescriptors(in);
         }
 
 void VulkanRenderer::Impl::rewriteBloomDescriptors() {
-            bloom_->rewriteDescriptors();
+            view().bloom_->rewriteDescriptors();
             // PostComposite's display-extent HDR output scratch (hdrOut_) is
             // VRAM-costing and only needed when an external upscaler (FSR 3.1 /
             // DLSS) is active — allocate it lazily, here, BEFORE the view-
@@ -36,7 +36,7 @@ void VulkanRenderer::Impl::rewriteBloomDescriptors() {
             // and recordPostFinalize copies hdrOut_ to the swapchain.
             if (fsrActiveForHdrPlumbing()) {
                 const VkExtent2D outExt = ctx->swapchainExtent();
-                post_->resizeHdrOutput(outExt.width, outExt.height);
+                view().post_->resizeHdrOutput(outExt.width, outExt.height);
             }
             std::array<VkImageView, kFramesInFlight> sceneViews{};
             std::array<VkImageView, kFramesInFlight> bloomViews{};
@@ -44,16 +44,16 @@ void VulkanRenderer::Impl::rewriteBloomDescriptors() {
             std::array<VkImageView, kFramesInFlight> taaInViews{};
             std::array<VkImageView, kFramesInFlight> hdrSceneViews{};
             for (uint32_t f = 0; f < kFramesInFlight; ++f) {
-                sceneViews[f] = bloom_->sceneHdrView(f);
-                bloomViews[f] = bloom_->bloomView(f);
+                sceneViews[f] = view().bloom_->sceneHdrView(f);
+                bloomViews[f] = view().bloom_->bloomView(f);
                 idsViews[f]   = view().rasterGbufs[f].ids.view;
-                taaInViews[f] = taa_->inputView(f);
+                taaInViews[f] = view().taa_->inputView(f);
                 // HDR-mode (FSR/DLSS upscaler path): PostComposite's binding 6
                 // reads whichever history slot THIS frame-in-flight's upscaler
                 // dispatch just wrote its upscaled linear-HDR output into (FSR/
                 // DLSS run no McGuire motion blur, so this is always the plain
                 // history write slot).
-                hdrSceneViews[f] = taa_->historyView(vulkan::TaaResolve::writeSlotFor(f));
+                hdrSceneViews[f] = view().taa_->historyView(vulkan::TaaResolve::writeSlotFor(f));
             }
             vulkan::PostComposite::DescriptorWriteInputs in{};
             in.sceneHdrPerFrame  = sceneViews.data();
@@ -61,7 +61,7 @@ void VulkanRenderer::Impl::rewriteBloomDescriptors() {
             in.rasterIdsPerFrame = idsViews.data();
             in.taaInputPerFrame  = taaInViews.data();
             in.hdrScenePerFrame  = hdrSceneViews.data();
-            post_->rewriteDescriptors(in);
+            view().post_->rewriteDescriptors(in);
 
             // Finalize (HDR-mode PostComposite output → swapchain, via
             // TaaResolve's RCAS/copy — see TaaResolve::recordPostFinalize).
@@ -69,12 +69,12 @@ void VulkanRenderer::Impl::rewriteBloomDescriptors() {
                 std::array<VkImageView, kFramesInFlight> hdrOutViews{};
                 std::array<VkImage,     kFramesInFlight> hdrOutImages{};
                 for (uint32_t f = 0; f < kFramesInFlight; ++f) {
-                    hdrOutViews[f]  = post_->hdrOutView(f);
-                    hdrOutImages[f] = post_->hdrOutImage(f);
+                    hdrOutViews[f]  = view().post_->hdrOutView(f);
+                    hdrOutImages[f] = view().post_->hdrOutImage(f);
                 }
                 const auto& swapViews  = ctx->swapchainImageViews();
                 const auto& swapImages = ctx->swapchainImages();
-                taa_->rewritePostFinalizeDescriptors(hdrOutViews.data(), hdrOutImages.data(),
+                view().taa_->rewritePostFinalizeDescriptors(hdrOutViews.data(), hdrOutImages.data(),
                                                      swapViews.data(), swapImages.data());
             }
 
@@ -108,7 +108,7 @@ void VulkanRenderer::Impl::rewriteDeferredDescriptors(int onlyFrame) {
             // before the first deferred dispatch. (Don't clear the dirty flag on
             // this early-out: the pending refresh still owes a write once the
             // scene builds — the all-slots rewrite there will satisfy it.)
-            if (!deferredShade_ || tlas == VK_NULL_HANDLE) return;
+            if (!view().deferredShade_ || tlas == VK_NULL_HANDLE) return;
             // Satisfied slots are no longer dirty.
             if (onlyFrame < 0) deferredDescDirty_.fill(false);
             else               deferredDescDirty_[onlyFrame] = false;
@@ -181,7 +181,7 @@ void VulkanRenderer::Impl::rewriteDeferredDescriptors(int onlyFrame) {
                 cloudColorViews[f]    = view().rasterGbufs[f].cloudColor.view;
                 cloudAuxViews[f]      = view().rasterGbufs[f].cloudAux.view;
                 cloudShadowViews[f]   = view().rasterGbufs[f].cloudShadow.view;
-                sceneHdrViews[f] = bloom_->sceneHdrView(f);
+                sceneHdrViews[f] = view().bloom_->sceneHdrView(f);
                 const bool haveMS = gbufMsaaSamples_ > 1 && view().rasterGbufs[f].normalMS.view != VK_NULL_HANDLE;
                 normalMSViews[f] = haveMS ? view().rasterGbufs[f].normalMS.view : gbufDummyMS_[0].view;
                 depthMSViews[f]  = haveMS ? view().rasterGbufs[f].depthMS.view  : gbufDummyMS_[1].view;
@@ -277,7 +277,7 @@ void VulkanRenderer::Impl::rewriteDeferredDescriptors(int onlyFrame) {
             in.gbufIdsMS        = idsMSViews.data();
             in.gbufAlbedoMS     = albedoMSViews.data();
             in.gbufUvMS         = uvMSViews.data();
-            deferredShade_->rewriteDescriptors(in, onlyFrame);
+            view().deferredShade_->rewriteDescriptors(in, onlyFrame);
             // The probe UPDATE pass consumes the same scene inputs (TLAS,
             // lights, env, material/geometry/emissive buffers) — keep its set
             // in lockstep with the deferred one.

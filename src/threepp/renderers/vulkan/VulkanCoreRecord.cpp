@@ -994,7 +994,7 @@ void VulkanRenderer::Impl::recordUpscaleAndPost(VkCommandBuffer cb, uint32_t ima
             // bloom put out for the same slider value. Computed unconditionally
             // (both orders need it; HDR mode's bloom-add moves into TaaResolve).
             const float effBloomIntensity =
-                    bloomIntensity_ / static_cast<float>(std::max(bloom_->levels(), 1u));
+                    bloomIntensity_ / static_cast<float>(std::max(view().bloom_->levels(), 1u));
 
 #if defined(THREEPP_WITH_DLSS) || defined(THREEPP_WITH_FSR)
             // External upscalers (DLSS/FSR) run full-frame only — split-screen
@@ -1014,7 +1014,7 @@ void VulkanRenderer::Impl::recordUpscaleAndPost(VkCommandBuffer cb, uint32_t ima
             // (display extent) → PostComposite adds bloom + tonemaps at display
             // res → recordPostFinalize (RCAS) → swapchain. See DlssUpscaler.{hpp,cpp}.
             if (useDlss() && dlss_ && dlss_->valid() && !dlss_->failing() && upscalerFullFrame) {
-                bloom_->recordPyramid(cb, currentFrame,
+                view().bloom_->recordPyramid(cb, currentFrame,
                                       regionRenderExt_.width, regionRenderExt_.height,
                                       bloomIntensity_, bloomThreshold_, bloomClamp_);
 
@@ -1034,8 +1034,8 @@ void VulkanRenderer::Impl::recordUpscaleAndPost(VkCommandBuffer cb, uint32_t ima
 
                 vulkan::DlssUpscaler::DispatchInputs din{};
                 din.cmd          = cb;
-                din.colorImage   = bloom_->sceneHdrImage(currentFrame);
-                din.colorView    = bloom_->sceneHdrView(currentFrame);
+                din.colorImage   = view().bloom_->sceneHdrImage(currentFrame);
+                din.colorView    = view().bloom_->sceneHdrView(currentFrame);
                 din.colorFormat  = VK_FORMAT_R16G16B16A16_SFLOAT;
                 din.colorLayout  = VK_IMAGE_LAYOUT_GENERAL;
                 din.depthImage   = view().rasterGbufs[currentFrame].depth.image;
@@ -1046,8 +1046,8 @@ void VulkanRenderer::Impl::recordUpscaleAndPost(VkCommandBuffer cb, uint32_t ima
                 din.motionView   = view().rasterGbufs[currentFrame].motion.view;
                 din.motionFormat = VK_FORMAT_R16G16B16A16_SFLOAT;
                 din.motionLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-                din.outputImage  = taa_->historyImage(writeSlot);
-                din.outputView   = taa_->historyView(writeSlot);
+                din.outputImage  = view().taa_->historyImage(writeSlot);
+                din.outputView   = view().taa_->historyView(writeSlot);
                 din.outputFormat = VK_FORMAT_R16G16B16A16_SFLOAT;
                 din.renderWidth  = regionRenderExt_.width;
                 din.renderHeight = regionRenderExt_.height;
@@ -1088,7 +1088,7 @@ void VulkanRenderer::Impl::recordUpscaleAndPost(VkCommandBuffer cb, uint32_t ima
                     b.newLayout     = VK_IMAGE_LAYOUT_GENERAL;
                     b.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
                     b.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-                    b.image         = taa_->historyImage(writeSlot);
+                    b.image         = view().taa_->historyImage(writeSlot);
                     b.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
                     b.subresourceRange.levelCount = 1;
                     b.subresourceRange.layerCount = 1;
@@ -1101,7 +1101,7 @@ void VulkanRenderer::Impl::recordUpscaleAndPost(VkCommandBuffer cb, uint32_t ima
 
                 // Tonemap at DISPLAY res, reading the DLSS output (history slot
                 // via PostComposite's HDR-mode binding 6), ADDING bloom.
-                post_->recordDispatch(cb, currentFrame,
+                view().post_->recordDispatch(cb, currentFrame,
                                       regionSwapExt_.width, regionSwapExt_.height,
                                       static_cast<uint32_t>(toneMapping_),
                                       exposureBits, preExpBits_, envIsBgColor,
@@ -1110,7 +1110,7 @@ void VulkanRenderer::Impl::recordUpscaleAndPost(VkCommandBuffer cb, uint32_t ima
                                       /*hdrMode=*/true);
 
                 // Finalize hdrOut_ → swapchain (display-referred RCAS or plain copy).
-                taa_->recordPostFinalize(cb, currentFrame, imageIndex,
+                view().taa_->recordPostFinalize(cb, currentFrame, imageIndex,
                                          regionSwapExt_.width, regionSwapExt_.height,
                                          sharpenStrength_ > 0.0f, sharpenStrength_);
             } else
@@ -1127,7 +1127,7 @@ void VulkanRenderer::Impl::recordUpscaleAndPost(VkCommandBuffer cb, uint32_t ima
             // NOT fold bloom in), and recordPostFinalize sends hdrOut_ to the
             // swapchain via RCAS/copy. See FsrUpscaler.{hpp,cpp}.
             if (useFsr() && fsr_ && fsr_->valid() && upscalerFullFrame) {
-                bloom_->recordPyramid(cb, currentFrame,
+                view().bloom_->recordPyramid(cb, currentFrame,
                                       regionRenderExt_.width, regionRenderExt_.height,
                                       bloomIntensity_, bloomThreshold_, bloomClamp_);
 
@@ -1147,7 +1147,7 @@ void VulkanRenderer::Impl::recordUpscaleAndPost(VkCommandBuffer cb, uint32_t ima
 
                 vulkan::FsrUpscaler::DispatchInputs fin{};
                 fin.cmd          = cb;
-                fin.colorImage   = bloom_->sceneHdrImage(currentFrame);
+                fin.colorImage   = view().bloom_->sceneHdrImage(currentFrame);
                 fin.colorFormat  = VK_FORMAT_R16G16B16A16_SFLOAT;
                 fin.colorLayout  = VK_IMAGE_LAYOUT_GENERAL;
                 fin.depthImage   = view().rasterGbufs[currentFrame].depth.image;
@@ -1156,7 +1156,7 @@ void VulkanRenderer::Impl::recordUpscaleAndPost(VkCommandBuffer cb, uint32_t ima
                 fin.motionImage  = view().rasterGbufs[currentFrame].motion.image;
                 fin.motionFormat = VK_FORMAT_R16G16B16A16_SFLOAT;
                 fin.motionLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-                fin.outputImage  = taa_->historyImage(writeSlot);
+                fin.outputImage  = view().taa_->historyImage(writeSlot);
                 fin.outputFormat = VK_FORMAT_R16G16B16A16_SFLOAT;
                 fin.renderWidth  = regionRenderExt_.width;
                 fin.renderHeight = regionRenderExt_.height;
@@ -1201,7 +1201,7 @@ void VulkanRenderer::Impl::recordUpscaleAndPost(VkCommandBuffer cb, uint32_t ima
                     b.newLayout     = VK_IMAGE_LAYOUT_GENERAL;
                     b.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
                     b.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-                    b.image         = taa_->historyImage(writeSlot);
+                    b.image         = view().taa_->historyImage(writeSlot);
                     b.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
                     b.subresourceRange.levelCount = 1;
                     b.subresourceRange.layerCount = 1;
@@ -1215,7 +1215,7 @@ void VulkanRenderer::Impl::recordUpscaleAndPost(VkCommandBuffer cb, uint32_t ima
                 // Tonemap at DISPLAY res, reading the FSR output (history slot via
                 // PostComposite's HDR-mode binding 6), ADDING bloom (non-zero
                 // intensity — FSR didn't fold it in). Sky mask stays render-extent.
-                post_->recordDispatch(cb, currentFrame,
+                view().post_->recordDispatch(cb, currentFrame,
                                       regionSwapExt_.width, regionSwapExt_.height,
                                       static_cast<uint32_t>(toneMapping_),
                                       exposureBits, preExpBits_, envIsBgColor,
@@ -1224,7 +1224,7 @@ void VulkanRenderer::Impl::recordUpscaleAndPost(VkCommandBuffer cb, uint32_t ima
                                       /*hdrMode=*/true);
 
                 // Finalize hdrOut_ → swapchain (display-referred RCAS or plain copy).
-                taa_->recordPostFinalize(cb, currentFrame, imageIndex,
+                view().taa_->recordPostFinalize(cb, currentFrame, imageIndex,
                                          regionSwapExt_.width, regionSwapExt_.height,
                                          sharpenStrength_ > 0.0f, sharpenStrength_);
             } else
@@ -1237,10 +1237,10 @@ void VulkanRenderer::Impl::recordUpscaleAndPost(VkCommandBuffer cb, uint32_t ima
                 // (skipped when bloomIntensity_ == 0); the post composite then
                 // closes the HDR path — exposure, white balance, tone map,
                 // grade LUT, sRGB — into the TAA input image (render extent).
-                bloom_->recordPyramid(cb, currentFrame,
+                view().bloom_->recordPyramid(cb, currentFrame,
                                       regionRenderExt_.width, regionRenderExt_.height,
                                       bloomIntensity_, bloomThreshold_, bloomClamp_);
-                post_->recordDispatch(cb, currentFrame,
+                view().post_->recordDispatch(cb, currentFrame,
                                       regionRenderExt_.width, regionRenderExt_.height,
                                       static_cast<uint32_t>(toneMapping_),
                                       exposureBits, preExpBits_, envIsBgColor,
@@ -1254,7 +1254,7 @@ void VulkanRenderer::Impl::recordUpscaleAndPost(VkCommandBuffer cb, uint32_t ima
                 // jittered low-res samples accumulate into the full-res
                 // history, reconstructing detail (no separate blit needed).
                 gpuTimings_->begin(cb, TP_TAA, currentFrame);
-                taa_->recordResolve(cb, currentFrame, imageIndex,
+                view().taa_->recordResolve(cb, currentFrame, imageIndex,
                                     regionRenderExt_.width, regionRenderExt_.height,
                                     regionSwapExt_.width, regionSwapExt_.height, effAlpha, taaDtFrames,
                                     sharpenStrength_ > 0.0f, sharpenStrength_,

@@ -2003,6 +2003,32 @@ namespace threepp {
             float deferredCamPrevFwd_[3]{};
             bool  deferredCamPrevValid_ = false;
             float deferredCamDeltaLen_ = 0.f;
+
+            // Group 4 — the passes whose DESCRIPTOR SETS or IMAGES are this
+            // view's. Each owns a pipeline it could in principle share with a
+            // sibling view; they are per-view anyway because the alternative is
+            // rewriting a descriptor set that may still be in flight, and this
+            // codebase has already paid for that lesson once (VUID-03047, fixed
+            // by going per-frame-in-flight — this is the same fix extended by
+            // one dimension).
+            //
+            //   taa_    owns the temporal history ping-pong. The most
+            //           view-specific object in the renderer: sharing it is
+            //           exactly how view A's camera cut would ghost view B.
+            //   bloom_  owns sceneHdr at the render extent (the deferred
+            //           shade's output target) plus the pyramid above it.
+            //   post_   owns hdrOut at the display extent.
+            //   deferredShade_  owns per-frame-in-flight sets binding this
+            //           view's G-buffer, reservoirs and sceneHdr.
+            //
+            // Deliberately NOT here, and primary-only by scope: occlusion
+            // culling + its Hi-Z, the MSAA G-buffer resolve, and the thin-lens
+            // DoF. They read per-view images too, but no secondary view is
+            // allowed to use them, so they stay single instances on Impl.
+            std::unique_ptr<vulkan::TaaResolve>    taa_;
+            std::unique_ptr<vulkan::BloomPass>     bloom_;
+            std::unique_ptr<vulkan::PostComposite> post_;
+            std::unique_ptr<vulkan::DeferredShade> deferredShade_;
         };
         // Every view this renderer drives. views_[0] is the PRIMARY (the
         // swapchain-presenting one) and always exists — it is created in the
@@ -2364,9 +2390,9 @@ namespace threepp {
         // exist. Idempotent; buffers are fixed at creation so the sets are
         // written exactly once.
         void ensureParticleIoSets() {
-            if (particleIoDescPool_ != VK_NULL_HANDLE || !deferredShade_ ||
+            if (particleIoDescPool_ != VK_NULL_HANDLE || !view().deferredShade_ ||
                 particleCenterBufs_[0].handle == VK_NULL_HANDLE) return;
-            VkDescriptorSetLayout ioLayout = deferredShade_->particleIoLayout();
+            VkDescriptorSetLayout ioLayout = view().deferredShade_->particleIoLayout();
             if (ioLayout == VK_NULL_HANDLE) return;
             VkDescriptorPoolSize ips{};
             ips.type            = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
@@ -2553,12 +2579,9 @@ namespace threepp {
         // of per-mesh UV availability.
         Buffer dummyUvBuffer_{};
 
-        // ── Raster TAA resolve ─────────────────────────────────────────────
-        // Encapsulated in vulkan/TaaResolve.{hpp,cpp}. Owns its pipeline,
-        // descriptor pool/sets, sampler, input image + history ping-pong.
-        // External deps (raster gbuffer views, swapchain views) are passed
-        // in at descriptor-write time.
-        std::unique_ptr<vulkan::TaaResolve> taa_;
+        // (taa_ moved to ViewContext — TaaResolve owns the temporal HISTORY
+        //  ping-pong, which is the single most view-specific thing in the
+        //  renderer. See the pass-ownership note there.)
 #if defined(THREEPP_WITH_FSR)
         // AMD FidelityFX FSR 3.1 upscaler. When its context creates successfully
         // (Windows only) it REPLACES the TAA temporal resolve — see the
@@ -2663,7 +2686,7 @@ namespace threepp {
 #if defined(THREEPP_WITH_FSR)
             if (fsrEnabled_ == enabled) return;
             fsrEnabled_ = enabled;
-            if (taa_) taa_->invalidateHistory();
+            if (view().taa_) view().taa_->invalidateHistory();
             markMaterialSamplerDirty();// jitter gate flips → sampler policy flips
             fsrResetNext_ = true;
 #if defined(THREEPP_WITH_DLSS)
@@ -2679,7 +2702,7 @@ namespace threepp {
 #if defined(THREEPP_WITH_DLSS)
             if (dlssEnabled_ == enabled) return;
             dlssEnabled_ = enabled;
-            if (taa_) taa_->invalidateHistory();
+            if (view().taa_) view().taa_->invalidateHistory();
             markMaterialSamplerDirty();// jitter gate flips → sampler policy flips
             dlssResetNext_ = true;
 #if defined(THREEPP_WITH_FSR)
@@ -2700,16 +2723,9 @@ namespace threepp {
             (void) enabled;
 #endif
         }
-        // HDR bloom pyramid — the shade/resolve writes linear HDR into
-        // bloom_->sceneHdr (the shared set's binding 1); bloom_ builds the
-        // Jimenez progressive pyramid from it. bloomIntensity_ == 0 skips
-        // the pyramid entirely.
-        std::unique_ptr<vulkan::BloomPass> bloom_;
-        // Exposure / white balance / tone map (incl. AgX) / grade LUT / sRGB
-        // — the camera/display end of the post stack, one dispatch into the
-        // TAA input (post_composite.comp). Owns the white-balance matrix and
-        // the 33³ grade LUT (setWhiteBalance / setColorGrade forward here).
-        std::unique_ptr<vulkan::PostComposite> post_;
+        // (bloom_ and post_ moved to ViewContext — bloom_ owns sceneHdr, the
+        //  render-extent HDR target every view needs its own copy of, and
+        //  post_ owns the display-extent hdrOut fed from it.)
         // Thin-lens depth of field on sceneHdr, recorded between the scene
         // dispatch and the bloom pyramid so bokeh still blooms + tone-maps
         // as HDR (see vulkan/DofPass.hpp). CoC is camera-derived: aperture
@@ -2829,10 +2845,12 @@ namespace threepp {
         // Procedural direction-space star field on deferred sky pixels (0 = off).
         float deferredStarIntensity_ = 0.f;
 
-        // Deferred shade pass. Shades the material G-buffer analytically into
-        // bloom_->sceneHdr; bloom + TAA finish the frame. Owns its own focused
-        // descriptor set (see DeferredShade.hpp).
-        std::unique_ptr<vulkan::DeferredShade> deferredShade_;
+        // (deferredShade_ moved to ViewContext — its per-frame-in-flight
+        //  descriptor sets bind this view's G-buffer, reservoirs and sceneHdr,
+        //  so the sets themselves are per-view. The PIPELINE could be shared;
+        //  it is not, because a set can never be rewritten while it may be in
+        //  flight (VUID-03047), and a per-view pass object makes that
+        //  impossible by construction rather than by discipline.)
         // World-space irradiance probe grid (multi-bounce GI for the deferred
         // gather — see vulkan/ProbeGI.hpp). Created alongside deferredShade_;
         // its SH buffer + grid UBO back the deferred set's bindings 36/37, so
@@ -3162,7 +3180,7 @@ namespace threepp {
             // TAA pipeline + images. The deferred shade's descriptor binding 1
             // (shade output target) always points at the TAA input view.
             imageCount_ = static_cast<uint32_t>(ctx->swapchainImages().size());
-            taa_ = std::make_unique<vulkan::TaaResolve>(
+            view().taa_ = std::make_unique<vulkan::TaaResolve>(
                     *ctx, cmdPool, imageCount_, kFramesInFlight);
             {
                 // TAA input is the deferred render extent; history +
@@ -3170,7 +3188,7 @@ namespace threepp {
                 // resolve pass runs as a temporal upsampler.
                 const VkExtent2D inExt  = renderExtent();
                 const VkExtent2D outExt = ctx->swapchainExtent();
-                taa_->createImages(inExt.width, inExt.height,
+                view().taa_->createImages(inExt.width, inExt.height,
                                    outExt.width, outExt.height);
             }
 #if defined(THREEPP_WITH_DLSS)
@@ -3216,11 +3234,11 @@ namespace threepp {
             // HDR bloom pyramid. sceneHdr lives at the deferred render
             // extent (it is the shared set's binding 1 target); the bloom
             // pyramid levels are half that and below.
-            bloom_ = std::make_unique<vulkan::BloomPass>(*ctx, cmdPool, kFramesInFlight);
-            bloom_->createImages(renderExtent().width, renderExtent().height);
+            view().bloom_ = std::make_unique<vulkan::BloomPass>(*ctx, cmdPool, kFramesInFlight);
+            view().bloom_->createImages(renderExtent().width, renderExtent().height);
             onAfterBloomCreateImages();
             // Exposure/WB/tone-map/grade/sRGB composite → TAA input.
-            post_ = std::make_unique<vulkan::PostComposite>(*ctx, cmdPool, kFramesInFlight);
+            view().post_ = std::make_unique<vulkan::PostComposite>(*ctx, cmdPool, kFramesInFlight);
             // Thin-lens DoF (images/descriptors fitted in rewriteBloomDescriptors).
             dof_ = std::make_unique<vulkan::DofPass>(*ctx, cmdPool, kFramesInFlight);
             // Lens distortion + sensor noise, applied to the FINISHED frame at
@@ -3235,7 +3253,7 @@ namespace threepp {
             // up when the device supports VK_KHR_ray_query. Without it,
             // deferredShade_ stays null if ray query is unavailable.
             if (ctx->rayQuerySupported()) {
-                deferredShade_ = std::make_unique<vulkan::DeferredShade>(*ctx, kFramesInFlight);
+                view().deferredShade_ = std::make_unique<vulkan::DeferredShade>(*ctx, kFramesInFlight);
                 // Probe grid backs the deferred set's bindings 36/37 (dummy-
                 // free: real buffers from construction, sampling gated by the
                 // grid UBO's enable flag until setProbeGI(true)).
@@ -3586,8 +3604,16 @@ namespace threepp {
             // Release the NGX feature + shut NGX down while the device is alive.
             dlss_.reset();
 #endif
-            // TAA resolve subsystem owns its pipeline/layout/sampler/images.
-            taa_.reset();
+            // Per-view passes own pipelines, layouts, samplers, descriptor
+            // pools and images, all of which need the device alive — so they
+            // are released HERE rather than left to ~ViewContext, which runs
+            // when views_ unwinds. Every view, not just the current one.
+            for (auto& vp : views_) {
+                vp->taa_.reset();
+                vp->post_.reset();
+                vp->bloom_.reset();
+                vp->deferredShade_.reset();
+            }
         }
 
         void createCommandResources();
@@ -7148,7 +7174,7 @@ namespace threepp {
             if (!autoExposure_) return;
             VkImageView views[kFramesInFlight];
             for (uint32_t f = 0; f < kFramesInFlight; ++f)
-                views[f] = bloom_->sceneHdrView(f);
+                views[f] = view().bloom_->sceneHdrView(f);
             autoExposure_->rewriteDescriptors(views);
         }
 
@@ -7162,7 +7188,7 @@ namespace threepp {
                 autoExposure_->maxEV      = autoExpMaxEV_;
                 VkImageView views[kFramesInFlight];
                 for (uint32_t f = 0; f < kFramesInFlight; ++f)
-                    views[f] = bloom_->sceneHdrView(f);
+                    views[f] = view().bloom_->sceneHdrView(f);
                 autoExposure_->rewriteDescriptors(views);
             }
             // Physical camera: the EMA adapts an EV COMPENSATION around the

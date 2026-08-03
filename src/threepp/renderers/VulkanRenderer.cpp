@@ -107,7 +107,7 @@ namespace threepp {
         // analytic split (all point/spot lights, no 8-per-type cap).
         // Barrier: cull's grid writes → shade's reads (compute→compute).
         if (clusterLightCountThisFrame_ > 0) {
-            deferredShade_->recordClusterBuild(cb, currentFrame,
+            view().deferredShade_->recordClusterBuild(cb, currentFrame,
                                                clusterLightCountThisFrame_,
                                                regionRenderExt_.width, regionRenderExt_.height);
             VkMemoryBarrier2 cbar{};
@@ -128,7 +128,7 @@ namespace threepp {
         // passes; the barrier makes its write visible to their sampled reads.
         // Only when clouds are on (off = free / image-identical).
         if (cloudsEnabled_) {
-            deferredShade_->recordCloudShadow(cb, currentFrame, sampleIndex);
+            view().deferredShade_->recordCloudShadow(cb, currentFrame, sampleIndex);
             VkMemoryBarrier2 csBar{};
             csBar.sType         = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2;
             csBar.srcStageMask  = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
@@ -161,7 +161,7 @@ namespace threepp {
                                    clusterLightCountThisFrame_ > 0;
         if (froxelsActive) {
             gpuTimings_->begin(cb, TP_Froxel, currentFrame);
-            deferredShade_->recordFroxels(cb, currentFrame,
+            view().deferredShade_->recordFroxels(cb, currentFrame,
                                           regionRenderExt_.width, regionRenderExt_.height,
                                           deferredVolFog_, deferredVolDensity_, deferredVolAniso_,
                                           sampleIndex,
@@ -189,7 +189,7 @@ namespace threepp {
         // makes its cloudColor + cloudAux writes visible to the shade's
         // depth-aware upsample.
         if (cloudsEnabled_) {
-            deferredShade_->recordCloudMarch(cb, currentFrame,
+            view().deferredShade_->recordCloudMarch(cb, currentFrame,
                                              regionRenderExt_.width, regionRenderExt_.height,
                                              envImage.mipLevels, sampleIndex,
                                              view().deferredCamDeltaLen_, deferredCamRotAngle_);
@@ -236,7 +236,7 @@ namespace threepp {
         shadeParams.bgIsSolidColor     = envIsBgColor;
 
         gpuTimings_->begin(cb, TP_DeferredShade, currentFrame);
-        deferredShade_->recordDispatch(cb, currentFrame, shadeParams);
+        view().deferredShade_->recordDispatch(cb, currentFrame, shadeParams);
         gpuTimings_->end(cb, TP_DeferredShade, currentFrame);// pathTraceMs = deferred SHADE only
 
         // ── MSAA dispatch B: per-sample shading at complex (edge) pixels ──
@@ -267,7 +267,7 @@ namespace threepp {
             shadeParams.shadeMode    = 1u;
             shadeParams.shadeBActive = true;
             gpuTimings_->begin(cb, TP_ShadeB, currentFrame);
-            deferredShade_->recordDispatch(cb, currentFrame, shadeParams);
+            view().deferredShade_->recordDispatch(cb, currentFrame, shadeParams);
             gpuTimings_->end(cb, TP_ShadeB, currentFrame);
 
             // Dispatch B's outImage write -> bloom/composite's read.
@@ -303,7 +303,7 @@ namespace threepp {
             denoiseDep.pMemoryBarriers = &denoiseBar;
             vkCmdPipelineBarrier2(cb, &denoiseDep);
             gpuTimings_->begin(cb, TP_Denoise, currentFrame);// denoiseMs = deferred SVGF (4 GI passes + reflection pass)
-            deferredShade_->recordFilterAndComposite(cb, currentFrame, regionRenderExt_.width, regionRenderExt_.height,
+            view().deferredShade_->recordFilterAndComposite(cb, currentFrame, regionRenderExt_.width, regionRenderExt_.height,
                                                      gbufMsaaSamples_, shadeBActive, preExpBits_);
             gpuTimings_->end(cb, TP_Denoise, currentFrame);
         }
@@ -352,7 +352,7 @@ namespace threepp {
             preDep.pMemoryBarriers    = &preBar;
             vkCmdPipelineBarrier2(cb, &preDep);
 
-            deferredShade_->recordParticleLight(
+            view().deferredShade_->recordParticleLight(
                     cb, currentFrame, particleIoDescSets_[currentFrame],
                     particleLightCount_, /*centerBase=*/0u,
                     clusterLightCountThisFrame_, froxelsActive,
@@ -1498,7 +1498,7 @@ namespace threepp {
     void VulkanRenderer::setWhiteBalance(float temperatureK, float tint) {
         core()->wbTemperatureK_ = temperatureK;
         core()->wbTint_ = tint;
-        if (core()->post_) core()->post_->setWhiteBalance(temperatureK, tint);
+        if (core()->primaryView().post_) core()->primaryView().post_->setWhiteBalance(temperatureK, tint);
     }
 
     std::pair<float, float> VulkanRenderer::whiteBalance() const {
@@ -1506,14 +1506,14 @@ namespace threepp {
     }
 
     void VulkanRenderer::setColorGrade(const ColorGrade& grade) {
-        if (!core()->post_) return;
+        if (!core()->primaryView().post_) return;
         vulkan::PostComposite::ColorGrade g;
         g.lift[0]  = grade.lift.x;  g.lift[1]  = grade.lift.y;  g.lift[2]  = grade.lift.z;
         g.gamma[0] = grade.gamma.x; g.gamma[1] = grade.gamma.y; g.gamma[2] = grade.gamma.z;
         g.gain[0]  = grade.gain.x;  g.gain[1]  = grade.gain.y;  g.gain[2]  = grade.gain.z;
         g.saturation = grade.saturation;
         g.contrast   = grade.contrast;
-        core()->post_->setColorGrade(g);
+        core()->primaryView().post_->setColorGrade(g);
     }
 
     void VulkanRenderer::setFireflyClamp(float cap) {

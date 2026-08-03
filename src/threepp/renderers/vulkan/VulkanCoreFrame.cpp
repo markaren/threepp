@@ -324,7 +324,7 @@ void VulkanRenderer::Impl::reallocateRenderExtentResources() {
                 // a temporal upsampler.
                 const VkExtent2D inExt  = renderExtent();
                 const VkExtent2D outExt = ctx->swapchainExtent();
-                taa_->createImages(inExt.width, inExt.height,
+                view().taa_->createImages(inExt.width, inExt.height,
                                    outExt.width, outExt.height);
             }
 #if defined(THREEPP_WITH_FSR)
@@ -363,7 +363,7 @@ void VulkanRenderer::Impl::reallocateRenderExtentResources() {
                 }
             }
 #endif
-            bloom_->createImages(renderExtent().width, renderExtent().height);
+            view().bloom_->createImages(renderExtent().width, renderExtent().height);
             onAfterBloomCreateImages();
             // TAA descriptor sets are persistent (pool lives inside TaaResolve);
             // just rewrite them to the new image / view handles.
@@ -546,8 +546,8 @@ bool VulkanRenderer::Impl::beginDeferredFrame(Object3D& scene, Camera& camera) {
             if (buildAndUploadEmissiveTris(currentFrame, lastVisibleEntries_)) {
                 // Keep the deferred pass's emissive binding fresh when the
                 // per-frame buffer grows.
-                if (deferredShade_) {
-                    deferredShade_->rewriteEmissive(currentFrame,
+                if (view().deferredShade_) {
+                    view().deferredShade_->rewriteEmissive(currentFrame,
                                                     emissiveTriBuffers[currentFrame].handle);
                     probeGI_->rewriteEmissive(currentFrame,
                                               emissiveTriBuffers[currentFrame].handle);
@@ -861,7 +861,7 @@ void VulkanRenderer::Impl::renderFrame(Object3D& scene, Camera& camera) {
                                                         renderExtent().height);
                             endAndSubmitOneShot(initCb, "DLSS feature self-heal recreate");
                             dlssResetNext_ = true;
-                            if (taa_) taa_->invalidateHistory();
+                            if (view().taa_) view().taa_->invalidateHistory();
                         } else {
                             dlssActive_ = false;// give up until the next resize
                             std::fprintf(stderr,
