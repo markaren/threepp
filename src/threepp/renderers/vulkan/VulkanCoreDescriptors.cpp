@@ -11,13 +11,21 @@ void VulkanRenderer::Impl::rewriteTaaDescriptors() {
                 idsViews[f]      = view().rasterGbufs[f].ids.view;
                 depthViews[f]    = view().rasterGbufs[f].depth.view;
             }
+            // Where this view's resolve writes. The primary hands TaaResolve
+            // the real swapchain views, one per image. A secondary hands it a
+            // SWAPCHAIN OF ONE — its own colour target — which is why its
+            // TaaResolve was constructed with imageCount = 1 and is always
+            // recorded with imageIndex = 0. TaaResolve itself needed no change
+            // for this: it only ever wanted "the images I may be asked to
+            // write, indexed by the number you pass recordResolve".
             const auto& swapViews = ctx->swapchainImageViews();
+            const VkImageView oneView[1] = {view().colorTarget.view};
             vulkan::TaaResolve::DescriptorWriteInputs in{};
             in.gbufSampler        = gbufSampler_;
             in.gbufMotionPerFrame = motionViews.data();
             in.gbufIdsPerFrame    = idsViews.data();
             in.gbufDepthPerFrame  = depthViews.data();
-            in.swapchainViews     = swapViews.data();
+            in.swapchainViews     = view().secondary ? oneView : swapViews.data();
             view().taa_->rewriteDescriptors(in);
         }
 
@@ -35,7 +43,7 @@ void VulkanRenderer::Impl::rewriteBloomDescriptors() {
             // history write slot, so PostComposite tonemaps it at display res
             // and recordPostFinalize copies hdrOut_ to the swapchain.
             if (fsrActiveForHdrPlumbing()) {
-                const VkExtent2D outExt = ctx->swapchainExtent();
+                const VkExtent2D outExt = viewOutExtent();
                 view().post_->resizeHdrOutput(outExt.width, outExt.height);
             }
             std::array<VkImageView, kFramesInFlight> sceneViews{};
@@ -80,7 +88,13 @@ void VulkanRenderer::Impl::rewriteBloomDescriptors() {
 
             // DoF scratch + descriptors track the same lifetimes (sceneHdr /
             // raster depth / render extent), so (re)fit it here too.
-            if (dof_) {
+            //
+            // PRIMARY ONLY. dof_ is a single shared pass (depth of field is a
+            // lens effect on the display view; a measurement camera has no
+            // lens by scope), so letting a secondary through here would resize
+            // the primary's DoF scratch to the secondary's extent and re-point
+            // its descriptors at the secondary's G-buffer.
+            if (dof_ && !view().secondary) {
                 std::array<VkBuffer, kFramesInFlight>    camBufs{};
                 std::array<VkImageView, kFramesInFlight> depthViews{};
                 for (uint32_t f = 0; f < kFramesInFlight; ++f) {
@@ -400,12 +414,30 @@ void VulkanRenderer::Impl::ensureHybridResources() {
                 check(vkCreateSampler(ctx->device(), &sci, nullptr, &gbufSampler_),
                       "vkCreateSampler(gbuf)");
             }
+            // Per-view FIRST, and the order matters: this call creates the
+            // shared descriptor set LAYOUT (guarded inside) alongside this
+            // view's own pool and sets, and createRasterGbufPipeline below
+            // builds its pipeline layout FROM that set layout. Creating the
+            // pipeline first hands vkCreatePipelineLayout a NULL set layout —
+            // which is not a crash at creation, just a stream of
+            // VUID-VkPipelineLayoutCreateInfo-06753 and a pipeline that binds
+            // nothing.
+            //
+            // Guarded on the VIEW's own state rather than the shared render
+            // pass: a second view arrives long after the pass exists and must
+            // still get its own camera ring, or it would silently render
+            // through the primary's camera.
+            if (view().rasterCameraUbos[0].handle == VK_NULL_HANDLE) {
+                createRasterCameraUbos();
+                createRasterDsLayoutAndPool();
+            }
+            // Shared across every view: the render pass and the pipelines built
+            // against it. Created once, by whichever view gets here first
+            // (always the primary in practice).
             if (rasterGbufRenderPass == VK_NULL_HANDLE) {
                 createRasterGbufRenderPass();
                 // Two-phase occlusion load/store variants (compatible).
                 createOcclRenderPasses(VK_SAMPLE_COUNT_1_BIT, occlRenderPassA_, occlRenderPassB_);
-                createRasterCameraUbos();
-                createRasterDsLayoutAndPool();
                 createRasterGbufPipeline();
             }
             // Occlusion-cull compute (pipeline + visBits + phase buffers are

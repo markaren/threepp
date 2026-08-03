@@ -1144,15 +1144,11 @@ namespace threepp {
             bool     isInstanced = false;// entry came from an InstancedMesh expansion
                                          // (the snapshot fast path recomputes its world
                                          // matrix as matrixWorld * getMatrixAt(i))
-            // Frustum-cull bit, populated once per frame by
-            // cullEntriesAgainstFrustum() right before record. Raster passes
-            // skip entries with inFrustum == false to dodge the GPU's per-
-            // draw command-processor overhead on off-screen geometry. The
-            // ray-query path is unaffected — TLAS culling handles it implicitly.
-            // Defaults to true so passes work before the first cull pass.
-            // Skinned / displaced / morphed entries always stay true; their
-            // local AABB doesn't reflect deformed extents.
-            bool     inFrustum   = true;
+            // (The frustum-cull bit used to live here. It is now
+            //  ViewContext::inFrustum, indexed in lockstep with
+            //  lastVisibleEntries_, because the answer depends on WHICH CAMERA
+            //  is asking and an entry is shared by all of them. Read it through
+            //  viewCulled(i).)
             // Automatic mesh LOD (setAutoLod): 0 == the geometry's own
             // (finest) buffers; N>0 selects BlasRecord::lodLevels[N-1].
             // Written once per frame by the LOD selection pass in
@@ -1909,6 +1905,76 @@ namespace threepp {
         // map and its PMREM, probe GI (world-space by construction), and
         // `sampleIndex` (a clock, not a history).
         struct ViewContext {
+            // Group 0 — identity and geometry of the view itself.
+            //
+            // `secondary` is the one branch that separates this view from the
+            // swapchain-presenting primary. False for views_[0], and every
+            // extent/target accessor keys off it so the primary path can be
+            // read as untouched.
+            bool     secondary = false;
+            uint32_t id        = 0;// stable handle handed to the public API
+            // addView / removeView are routinely called from inside the
+            // animate callback, i.e. with a frame already open and its command
+            // buffer recording. Allocating (or freeing) GPU resources there is
+            // exactly the hazard the rest of this class defers around — see
+            // pendingRenderScaleRealloc_ / pendingAccumulationReset_. So a view
+            // is registered immediately (the caller gets its handle straight
+            // away) and its resources are created, or released, at the next
+            // frame boundary: post-fence, pre-record, device drained.
+            bool pendingCreate  = false;
+            bool pendingDestroy = false;
+            // Only meaningful when `secondary`: the primary derives both from
+            // the swapchain on every call so it can never go stale on resize.
+            // Native-res by scope fence, so these two are equal.
+            VkExtent2D renderExt{};
+            VkExtent2D outExt{};
+            // The camera this view renders. Held as a raw pointer with a uuid
+            // alongside, NEVER as a bare pointer used as a cache key — pointers
+            // get recycled in this codebase and a recycled Camera* silently
+            // inherits the previous camera's temporal history.
+            Camera*     camera = nullptr;
+            std::string cameraUuid;
+            // Where a secondary's finished frame lands: this view's own colour
+            // image, in the swapchain's format so the whole TAA/post tail
+            // writes it byte-identically to how it writes the swapchain. It is
+            // the single entry of the "swapchain of one" that this view's
+            // TaaResolve was built against (imageCount = 1, imageIndex = 0).
+            // Read back from HERE, never through the swapchain path — a
+            // MAILBOX-mode swapchain read is allowed to be stale.
+            Image2D colorTarget{};
+            // Host-visible landing buffer for readViewRGBPixels. Allocated
+            // eagerly with the rest of the view so a readback never allocates
+            // mid-frame.
+            Buffer  readbackBuf{};
+            // Everything this view cost, in bytes, summed as it was allocated.
+            // Reported at addView time — a robot rig with eight cameras should
+            // find out what it just asked for, not discover it in a VRAM graph.
+            VkDeviceSize allocatedBytes = 0;
+
+            // This view's frustum-cull result, one byte per entry of
+            // lastVisibleEntries_, written by cullEntriesAgainstFrustum.
+            //
+            // This used to be a bool ON the shared MeshEntry, which worked
+            // exactly as long as there was one camera. With N views the last
+            // one to cull would win, and the primary's overlay depth prepass —
+            // the other reader — would silently draw the WRONG occluder set: no
+            // crash, no validation error, just geometry intermittently missing
+            // from the overlay depending on where in the frame the secondaries
+            // ran. Correct frame ordering happens to hide it today, which is
+            // precisely why it should not be left as an ordering obligation.
+            //
+            // Indexed in lockstep with lastVisibleEntries_; sized (and
+            // default-included) by the cull itself, so a view that has never
+            // culled draws everything rather than nothing.
+            std::vector<uint8_t> inFrustum;
+
+            // Per-view raster descriptor POOL. The layout is shared (one set
+            // shape for every view); the pool is not, because it is sized for
+            // exactly kFramesInFlight sets and a second view would exhaust it.
+            // A pool per view also means removeView frees its sets by
+            // destroying one object instead of returning them individually.
+            VkDescriptorPool rasterDescPool = VK_NULL_HANDLE;
+
             // Group 1 — G-buffer + temporal accumulators.
             std::array<RasterGbufImages, kFramesInFlight> rasterGbufs{};
 
@@ -2038,12 +2104,38 @@ namespace threepp {
         // the per-view render loop retargets it. A raw pointer (not an index)
         // so a view() call is one indirection in the hot record path.
         ViewContext* curView_ = nullptr;
+        // Handles are dense and monotonic, never reused. 0 is reserved for the
+        // primary (and doubles as "invalid" from addView), so a stale handle
+        // from a removed view can never alias a later one.
+        uint32_t nextViewId_ = 1;
+        // Total bytes VMA currently has allocated across every heap. Sampled
+        // before/after a view's allocation to report what that view cost —
+        // measured rather than computed from a table of formats that would rot
+        // the moment someone adds an accumulator to the G-buffer.
+        [[nodiscard]] VkDeviceSize vmaAllocatedBytes() const {
+            VkPhysicalDeviceMemoryProperties mp{};
+            vkGetPhysicalDeviceMemoryProperties(ctx->physicalDevice(), &mp);
+            std::vector<VmaBudget> budgets(mp.memoryHeapCount);
+            vmaGetHeapBudgets(ctx->allocator(), budgets.data());
+            VkDeviceSize total = 0;
+            for (uint32_t i = 0; i < mp.memoryHeapCount; ++i)
+                total += budgets[i].statistics.allocationBytes;
+            return total;
+        }
         ViewContext&       view()       { return *curView_; }
         const ViewContext& view() const { return *curView_; }
         // The primary view, by name, for the (many) places that mean "the
         // swapchain view" rather than "whichever view is being recorded".
         ViewContext&       primaryView()       { return *views_[0]; }
         const ViewContext& primaryView() const { return *views_[0]; }
+        // Did entry `i` survive THIS view's frustum cull? Out-of-range reads
+        // answer "yes", which is the conservative direction: a view that has
+        // not culled yet (or an entry list that grew since) draws everything
+        // rather than dropping geometry.
+        [[nodiscard]] bool viewCulled(size_t i) const {
+            const auto& c = curView_->inFrustum;
+            return i >= c.size() || c[i] != 0;
+        }
         // <<< VIEWCTX_END
 
         VkRenderPass rasterGbufRenderPass = VK_NULL_HANDLE;
@@ -2083,10 +2175,10 @@ namespace threepp {
         // decal lerps its albedo over the receiver's, everything else (normal,
         // ids, motion, depth, metalness) stays the receiving surface's.
         VkPipeline            rasterGbufDecalPipeline = VK_NULL_HANDLE;
-        VkDescriptorPool      rasterDescPool       = VK_NULL_HANDLE;
-        // (rasterDescSets / drawInfoBuffers / indirectCmdBuffers and their
-        //  capacities moved to ViewContext — the descriptor POOL and the
-        //  layout stay shared, the SETS are per-view.)
+        // (rasterDescPool / rasterDescSets / drawInfoBuffers /
+        //  indirectCmdBuffers and their capacities moved to ViewContext. Only
+        //  the LAYOUT stays shared — every view's set has the same shape, but
+        //  a pool sized for one view's frames-in-flight cannot serve two.)
 
         // Hybrid raster overlay (wireframe + Line/LineSegments). Runs after
         // TAA resolve, draws onto the swapchain with the G-buffer's depth
@@ -2929,7 +3021,7 @@ namespace threepp {
         // Deferred render extent: swapchain extent × renderScale_, each axis
         // clamped to ≥ 1px. Exactly equal to the swapchain extent when
         // renderScale_ is 1 (the unscaled fast path).
-        VkExtent2D renderExtent() const {
+        VkExtent2D primaryRenderExtent() const {
             const VkExtent2D s = ctx->swapchainExtent();
             if (renderScale_ >= 0.999f) return s;
             const auto px = [](uint32_t v, float k) -> uint32_t {
@@ -2937,6 +3029,29 @@ namespace threepp {
                 return r < 1u ? 1u : r;
             };
             return {px(s.width, renderScale_), px(s.height, renderScale_)};
+        }
+        // ── The two extents every pass in the render chain is written against ──
+        // renderExtent()  — where the G-buffer rasterizes and the shade
+        //                   dispatches (the TAA resolve's INPUT).
+        // viewOutExtent() — where the temporal history lives and the frame is
+        //                   finally written (the TAA resolve's OUTPUT).
+        //
+        // The primary DERIVES both from the swapchain on every call, exactly as
+        // before. That is deliberate: caching them would introduce a staleness
+        // window on resize / renderScale change that the old code could not
+        // have, and the primary path must stay provably identical. Only a
+        // secondary reads its stored pair, which is fixed at addView time and
+        // never tracks the window.
+        //
+        // Secondaries are native-res by scope: renderExt == outExt, so their
+        // TAA resolve is a plain 1:1 temporal filter with no upsampling.
+        VkExtent2D renderExtent() const {
+            if (curView_ && curView_->secondary) return curView_->renderExt;
+            return primaryRenderExtent();
+        }
+        VkExtent2D viewOutExtent() const {
+            if (curView_ && curView_->secondary) return curView_->outExt;
+            return ctx->swapchainExtent();
         }
         // ── Per-frame timing instrumentation ─────────────────────────────
         // Managed by vulkan/GpuTimings.{hpp,cpp}. Owns one VkQueryPool per
@@ -3187,7 +3302,7 @@ namespace threepp {
                 // output are the swapchain extent. When they differ the
                 // resolve pass runs as a temporal upsampler.
                 const VkExtent2D inExt  = renderExtent();
-                const VkExtent2D outExt = ctx->swapchainExtent();
+                const VkExtent2D outExt = viewOutExtent();
                 view().taa_->createImages(inExt.width, inExt.height,
                                    outExt.width, outExt.height);
             }
@@ -3522,7 +3637,8 @@ namespace threepp {
             if (rasterGbufDecalPipeline)    vkDestroyPipeline(d, rasterGbufDecalPipeline, nullptr);
             if (rasterPipelineLayout)   vkDestroyPipelineLayout(d, rasterPipelineLayout, nullptr);
             if (rasterDsLayout)         vkDestroyDescriptorSetLayout(d, rasterDsLayout, nullptr);
-            if (rasterDescPool)         vkDestroyDescriptorPool(d, rasterDescPool, nullptr);
+            for (auto& vp : views_)
+                if (vp->rasterDescPool) vkDestroyDescriptorPool(d, vp->rasterDescPool, nullptr);
             if (rasterGbufRenderPass)   vkDestroyRenderPass(d, rasterGbufRenderPass, nullptr);
             if (occlRenderPassA_)       vkDestroyRenderPass(d, occlRenderPassA_, nullptr);
             if (occlRenderPassB_)       vkDestroyRenderPass(d, occlRenderPassB_, nullptr);
@@ -7171,7 +7287,10 @@ namespace threepp {
 
         // Called once after bloom_->createImages(); wires sceneHdr views.
         void onAfterBloomCreateImages() {
-            if (!autoExposure_) return;
+            // Auto-exposure meters the PRIMARY's sceneHdr — it drives the
+            // display's exposure, and a secondary must not re-point it at its
+            // own (differently exposed, differently sized) image.
+            if (!autoExposure_ || view().secondary) return;
             VkImageView views[kFramesInFlight];
             for (uint32_t f = 0; f < kFramesInFlight; ++f)
                 views[f] = view().bloom_->sceneHdrView(f);
@@ -7293,6 +7412,40 @@ namespace threepp {
         // submit + present). Returns false on swapchain OUT_OF_DATE —
         // caller leaves state Idle.
         bool beginDeferredFrame(Object3D& scene, Camera& camera);
+
+        // ── Multi-view API (see ViewContext) ───────────────────────────────
+        // addView stands up a COMPLETE second deferred chain — G-buffer,
+        // history, camera UBOs, descriptor sets, its own TaaResolve /
+        // BloomPass / PostComposite / DeferredShade, and the colour target it
+        // resolves into. Eagerly, all of it: a view is a persistent object, so
+        // the cost is paid once here rather than as a stall on the frame that
+        // first happens to need it. Returns a handle, or 0 on failure.
+        //
+        // Views are NOT churned per frame. Adding one drains the device and
+        // allocates; rendering an existing one costs a second pass over the
+        // shared scene and nothing else.
+        uint32_t addViewImpl(Camera& camera, uint32_t width, uint32_t height);
+        bool     removeViewImpl(uint32_t handle);
+        bool     setViewCameraImpl(uint32_t handle, Camera& camera);
+        ViewContext* findView(uint32_t handle);
+        // Allocate / free everything a SECONDARY view owns. Both assume the
+        // device is idle.
+        void createSecondaryViewResources(ViewContext& v);
+        void destroySecondaryViewResources(ViewContext& v);
+        // Drain, then service every view marked pendingCreate / pendingDestroy.
+        // Called at the frame boundary; a no-op (and harmlessly retried next
+        // frame) until the shared render pass exists.
+        void applyPendingViewChanges();
+        bool pendingViewChanges_ = false;
+        // Record every secondary view's chain into the already-open frame
+        // command buffer, after the primary has been recorded. Shares the
+        // frame's TLAS/BLAS, lights, materials and textures; re-runs only what
+        // is genuinely per-camera.
+        void recordSecondaryViews(VkCommandBuffer cb);
+        // Copy a secondary view's finished colour target to host memory as
+        // tightly-packed RGB8, top-down (matching readRGBPixels — the Vulkan
+        // readback is already top-down and must NOT be flipped).
+        std::vector<unsigned char> readViewPixelsImpl(uint32_t handle);
 
         // Ortho-only frame start: no deferred render, no per-frame uploads.
         // Acquires the swap image, opens the cmd buffer, and clears the

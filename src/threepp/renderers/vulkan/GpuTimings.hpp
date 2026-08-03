@@ -78,6 +78,15 @@ namespace threepp::vulkan {
         // --- out-of-band setters (called outside the cmd-buffer window) ---
         void setCpuFrameMs(float ms) { lastTimings_.cpuFrameMs = ms; }
 
+        // Silence begin/end for a stretch of recording. There is ONE query
+        // pool per frame-in-flight, with one slot pair per pass, so a second
+        // view re-running the same passes into the same command buffer would
+        // write timestamps that are already written — every one of them a
+        // VUID-vkCmdWriteTimestamp2-None-03864, and the resulting numbers a
+        // meaningless mix of two views. Secondary views therefore record
+        // silently and lastFrameTimings() keeps meaning "the primary".
+        void setSuppressed(bool s) { suppressed_ = s; }
+
         // --- accessors ---
         [[nodiscard]] VulkanRenderer::FrameTimings timings() const { return lastTimings_; }
         [[nodiscard]] bool supported() const { return timingsSupported_; }
@@ -90,6 +99,7 @@ namespace threepp::vulkan {
         std::vector<uint32_t>   maskRecorded_;
         float timestampPeriodNs_ = 1.0f;
         bool  timingsSupported_  = false;
+        bool  suppressed_        = false;
 
         VulkanRenderer::FrameTimings                   lastTimings_{};
         std::chrono::high_resolution_clock::time_point recordStartTp_{};

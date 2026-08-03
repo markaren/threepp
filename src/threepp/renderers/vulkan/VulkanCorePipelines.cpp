@@ -551,7 +551,7 @@ void VulkanRenderer::Impl::createRasterGbufImages(uint32_t w, uint32_t h) {
                 // shared image, not one per frame in flight), so allocating
                 // these would be pure waste — a swapchain-sized D32 per FIF.
                 if (overlaySamples() <= 1) {
-                    const VkExtent2D swapExt = ctx->swapchainExtent();
+                    const VkExtent2D swapExt = viewOutExtent();
                     g.unjitDepth = createAttachmentImage2D(swapExt.width, swapExt.height,
                                                            VK_FORMAT_D32_SFLOAT,
                                                            depthUsage, VK_IMAGE_ASPECT_DEPTH_BIT,
@@ -754,12 +754,18 @@ void VulkanRenderer::Impl::createRasterDsLayoutAndPool() {
             bindings[4].descriptorCount = 1;
             bindings[4].stageFlags      = VK_SHADER_STAGE_VERTEX_BIT;
 
-            VkDescriptorSetLayoutCreateInfo dlci{};
-            dlci.sType        = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-            dlci.bindingCount = 5;
-            dlci.pBindings    = bindings;
-            check(vkCreateDescriptorSetLayout(ctx->device(), &dlci, nullptr, &rasterDsLayout),
-                  "vkCreateDescriptorSetLayout(raster)");
+            // The LAYOUT is shared by every view — one set shape, created once.
+            // The POOL and SETS below are per-view (see ViewContext), so this
+            // function is called again for each view added and must not
+            // recreate the layout underneath the existing pipelines.
+            if (rasterDsLayout == VK_NULL_HANDLE) {
+                VkDescriptorSetLayoutCreateInfo dlci{};
+                dlci.sType        = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+                dlci.bindingCount = 5;
+                dlci.pBindings    = bindings;
+                check(vkCreateDescriptorSetLayout(ctx->device(), &dlci, nullptr, &rasterDsLayout),
+                      "vkCreateDescriptorSetLayout(raster)");
+            }
 
             VkDescriptorPoolSize sizes[3]{};
             sizes[0].type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
@@ -774,14 +780,14 @@ void VulkanRenderer::Impl::createRasterDsLayoutAndPool() {
             dpci.maxSets       = kFramesInFlight;
             dpci.poolSizeCount = 3;
             dpci.pPoolSizes    = sizes;
-            check(vkCreateDescriptorPool(ctx->device(), &dpci, nullptr, &rasterDescPool),
+            check(vkCreateDescriptorPool(ctx->device(), &dpci, nullptr, &view().rasterDescPool),
                   "vkCreateDescriptorPool(raster)");
 
             std::array<VkDescriptorSetLayout, kFramesInFlight> layouts;
             layouts.fill(rasterDsLayout);
             VkDescriptorSetAllocateInfo ai{};
             ai.sType              = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
-            ai.descriptorPool     = rasterDescPool;
+            ai.descriptorPool     = view().rasterDescPool;
             ai.descriptorSetCount = kFramesInFlight;
             ai.pSetLayouts        = layouts.data();
             check(vkAllocateDescriptorSets(ctx->device(), &ai, view().rasterDescSets.data()),

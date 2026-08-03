@@ -453,7 +453,7 @@ namespace threepp {
         // size in clip space (2/width) must use the resolution the deferred
         // shade + the raster gbuffer actually run at, not the swapchain extent.
         const VkExtent2D ext = renderExtent();
-        uint32_t phaseCount = jitterPhaseCount_(ext, ctx->swapchainExtent());
+        uint32_t phaseCount = jitterPhaseCount_(ext, viewOutExtent());
         float jx, jy;
 #if defined(THREEPP_WITH_FSR)
         // When FSR is the active upscaler, drive the jitter from FSR's own
@@ -464,7 +464,7 @@ namespace threepp {
         // offset + camera near/far/vertical-FOV for the dispatch (no camera there).
         if (useFsr() && fsr_) {
             phaseCount = static_cast<uint32_t>(
-                    fsr_->jitterPhaseCount(ext.width, ctx->swapchainExtent().width));
+                    fsr_->jitterPhaseCount(ext.width, viewOutExtent().width));
             if (phaseCount == 0u) phaseCount = 1u;
             fsr_->jitterOffset(static_cast<int>(haltonFrame_ % phaseCount),
                                static_cast<int>(phaseCount), jx, jy);
@@ -628,7 +628,7 @@ namespace threepp {
         // Phase count scales with the upscale ratio (FSR2-style) so the
         // sequence covers the output grid when renderScale < 1; matches
         // updateCameraUbo's value this frame (same extents → same count).
-        uint32_t phaseCount = jitterPhaseCount_(ext, ctx->swapchainExtent());
+        uint32_t phaseCount = jitterPhaseCount_(ext, viewOutExtent());
         float jx, jy;
 #if defined(THREEPP_WITH_FSR)
         // When FSR is the active upscaler, drive the jitter from FSR's own
@@ -639,7 +639,7 @@ namespace threepp {
         // offset + camera near/far/vertical-FOV for the dispatch (no camera there).
         if (useFsr() && fsr_) {
             phaseCount = static_cast<uint32_t>(
-                    fsr_->jitterPhaseCount(ext.width, ctx->swapchainExtent().width));
+                    fsr_->jitterPhaseCount(ext.width, viewOutExtent().width));
             if (phaseCount == 0u) phaseCount = 1u;
             fsr_->jitterOffset(static_cast<int>(haltonFrame_ % phaseCount),
                                static_cast<int>(phaseCount), jx, jy);

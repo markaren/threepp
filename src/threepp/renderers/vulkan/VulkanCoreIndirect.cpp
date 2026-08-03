@@ -106,7 +106,7 @@ namespace threepp {
         for (size_t i = 0; i < lastVisibleEntries_.size(); ++i) {
             const auto& en = lastVisibleEntries_[i];
             if (en.isOverlay)  continue;
-            if (!en.inFrustum) continue;
+            if (!viewCulled(i)) continue;
             if (en.mesh != memoMesh) {
                 memoMesh     = en.mesh;
                 memoRec      = resolveBlasForEntry(en);

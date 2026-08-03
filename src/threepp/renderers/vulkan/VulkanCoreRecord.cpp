@@ -571,7 +571,7 @@ bool VulkanRenderer::Impl::recordGbufferStage(VkCommandBuffer cb, uint32_t image
                     gpuTimings_->begin(cb, TP_OverlayDepth, currentFrame);
                     // Swapchain extent — the depth target is full-res so the
                     // post-TAA overlay can depth-test the upscaled image.
-                    const VkExtent2D dext = ctx->swapchainExtent();
+                    const VkExtent2D dext = viewOutExtent();
                     // Hardware-MSAA overlay: rasterize the occluders into the
                     // multisampled overlayMsDepth_ so the overlay's depth test
                     // is correct PER SAMPLE (a 1-sample depth buffer would
@@ -650,7 +650,11 @@ bool VulkanRenderer::Impl::recordGbufferStage(VkCommandBuffer cb, uint32_t image
                     for (size_t i = 0; i < lastVisibleEntries_.size(); ++i) {
                         const auto& en = lastVisibleEntries_[i];
                         if (en.isOverlay) continue;// overlay meshes drawn by overlay pass instead
-                        if (!en.inFrustum) continue;// frustum cull (same lever as the gbuf prepass)
+                        // Frustum cull, same lever as the gbuf prepass — read
+                        // from THIS view's results. The overlay only ever runs
+                        // for the primary, and this is the reader that a shared
+                        // cull bit would have fed the last secondary's answer.
+                        if (!viewCulled(i)) continue;
                         const BlasRecord* rec = resolveBlasForEntry(en);
                         if (!rec || rec->vertex.handle == VK_NULL_HANDLE) continue;
 
@@ -2132,7 +2136,7 @@ void VulkanRenderer::Impl::recordCommandBuffer(VkCommandBuffer cb, uint32_t imag
 
             // Extents + exposure are shared by both render modes and by the
             // bloom/TAA tail below, so hoist them out of the mode branch.
-            const VkExtent2D ext   = ctx->swapchainExtent();
+            const VkExtent2D ext   = viewOutExtent();
             // Deferred render extent — equals `ext` unless
             // renderScale_ < 1, in which case TAA upsamples to the swapchain.
             const VkExtent2D ptExt = renderExtent();

@@ -126,6 +126,12 @@ void VulkanRenderer::Impl::flushGeometryDescsIfDirty(uint32_t frame) {
 
 void VulkanRenderer::Impl::cullEntriesAgainstFrustum(Camera& camera) {
             if (lastVisibleEntries_.empty()) return;
+            // Results land in THIS view's array, never on the shared entry —
+            // see ViewContext::inFrustum for why that distinction is load-
+            // bearing. Default-include on grow so a freshly added view draws
+            // everything for the one frame before its first cull.
+            auto& cull = view().inFrustum;
+            cull.assign(lastVisibleEntries_.size(), uint8_t{1});
             // Combine projection * matrixWorldInverse to extract the world-
             // space frustum (Three.js convention; Camera::updateMatrixWorld
             // already ran in updateCameraUbo this frame).
@@ -133,13 +139,17 @@ void VulkanRenderer::Impl::cullEntriesAgainstFrustum(Camera& camera) {
             vp.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse);
             Frustum frustum;
             frustum.setFromProjectionMatrix(vp);
-            for (auto& en : lastVisibleEntries_) {
+            // Indexed rather than range-for: every result has to be written at
+            // the entry's own slot, and several branches bail with `continue`.
+            for (size_t ci = 0; ci < lastVisibleEntries_.size(); ++ci) {
+                auto& en = lastVisibleEntries_[ci];
+                const auto keep = [&](bool v) { cull[ci] = v ? uint8_t{1} : uint8_t{0}; };
                 // Default-include conservative cases — they always draw. Deformers
                 // (skinned/displaced/morphed/tet) are here because their cached local
                 // AABB doesn't reflect the per-frame deformed extents, so frustum-
                 // culling them risks popping a still-on-screen body out of the gbuffer.
                 if (en.isOverlay || en.isSkinned || en.isDisplaced || en.isMorphed || en.isTet) {
-                    en.inFrustum = true;
+                    keep(true);
                 } else if (en.isGrass) {
                     // Grass CAN be frustum-culled: unlike the other deformers, its
                     // deformed extent has a tight provable bound. The CPU position
@@ -151,18 +161,18 @@ void VulkanRenderer::Impl::cullEntriesAgainstFrustum(Camera& camera) {
                     // (The tile still stays in the TLAS for shadows/reflections/GI;
                     // inFrustum only gates the raster G-buffer draw.)
                     Box3 worldAabb;
-                    if (!grassSwayWorldAabb(en, worldAabb)) { en.inFrustum = true; continue; }
-                    en.inFrustum = frustum.intersectsBox(worldAabb);
+                    if (!grassSwayWorldAabb(en, worldAabb)) { keep(true); continue; }
+                    keep(frustum.intersectsBox(worldAabb));
                 } else {
                     auto geom = en.mesh->geometry();
-                    if (!geom) { en.inFrustum = true; continue; }
+                    if (!geom) { keep(true); continue; }
                     if (!geom->boundingBox) geom->computeBoundingBox();
-                    if (!geom->boundingBox) { en.inFrustum = true; continue; }
+                    if (!geom->boundingBox) { keep(true); continue; }
                     Box3 worldAabb = *geom->boundingBox;
                     Matrix4 w;
                     std::memcpy(w.elements.data(), en.worldMatrix.data(), 64);
                     worldAabb.applyMatrix4(w);
-                    en.inFrustum = frustum.intersectsBox(worldAabb);
+                    keep(frustum.intersectsBox(worldAabb));
                 }
             }
         }

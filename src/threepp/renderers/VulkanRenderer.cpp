@@ -751,6 +751,33 @@ namespace threepp {
         return rgb;
     }
 
+    uint32_t VulkanRenderer::addView(Camera& camera, int width, int height) {
+        if (width <= 0 || height <= 0) return 0u;
+        return core()->addViewImpl(camera,
+                                   static_cast<uint32_t>(width),
+                                   static_cast<uint32_t>(height));
+    }
+
+    bool VulkanRenderer::removeView(uint32_t handle) {
+        return core()->removeViewImpl(handle);
+    }
+
+    bool VulkanRenderer::setViewCamera(uint32_t handle, Camera& camera) {
+        return core()->setViewCameraImpl(handle, camera);
+    }
+
+    std::vector<unsigned char> VulkanRenderer::readViewRGBPixels(uint32_t handle) {
+        return core()->readViewPixelsImpl(handle);
+    }
+
+    bool VulkanRenderer::viewSize(uint32_t handle, int& width, int& height) const {
+        auto* v = const_cast<Impl*>(core())->findView(handle);
+        if (!v) return false;
+        width  = static_cast<int>(v->outExt.width);
+        height = static_cast<int>(v->outExt.height);
+        return true;
+    }
+
     void VulkanRenderer::setSceneCaptureEnabled(bool enabled) {
         // Scene capture copies the mid-frame swapchain image into a staging
         // buffer (recordSceneCapture) — same TRANSFER_SRC precondition as

@@ -123,6 +123,48 @@ namespace threepp {
         [[nodiscard]] bool readGBufferAOV(GBufferAOV aov, std::vector<uint8_t>& out,
                                           int& width, int& height, int& bytesPerPixel);
 
+        // ── Multi-view: N cameras per frame ──────────────────────────────
+        // A camera rig — a robot's cameras, a multi-sensor capture setup —
+        // wants several viewpoints of the SAME simulated instant. Rendering
+        // them by calling render() N times gives N different instants and pays
+        // N times for one scene. addView instead attaches a persistent extra
+        // view: every render() then produces the primary AND every added view
+        // from one scene build, in a single queue submission.
+        //
+        // Each view gets its own G-buffer, its own temporal history and its own
+        // camera state, so one camera cutting or moving cannot smear another.
+        // World-space work — acceleration structures, lights, materials,
+        // textures, probe GI — is built once and shared.
+        //
+        // Views are PERSISTENT. addView is expensive (it drains the device and
+        // allocates a full deferred chain, reporting the cost); rendering an
+        // existing view every frame is not. Do not add and remove per frame.
+        //
+        // Secondary views are deliberately plainer than the primary: native
+        // resolution with the built-in temporal resolve, no DLSS/FSR, no
+        // occlusion culling, no UI overlay, no depth of field, no lens or
+        // sensor model. They are measurement cameras, not the display.
+        //
+        // Returns a handle (> 0), or 0 if the view could not be created —
+        // notably when render() has not run yet, since a view shares the
+        // primary's render pass and pipelines.
+        uint32_t addView(Camera& camera, int width, int height);
+        // Destroys the view and frees everything it owns. Returns false for an
+        // unknown handle. Handles are never reused, so a stale one is inert
+        // rather than dangerous.
+        bool removeView(uint32_t handle);
+        // Repoint a view at a different camera. Treated as a CUT: the view's
+        // temporal history is dropped rather than reprojected across a
+        // discontinuity that never happened in world space.
+        bool setViewCamera(uint32_t handle, Camera& camera);
+        // This view's most recent frame as tightly-packed RGB8, row-major,
+        // TOP-LEFT origin — the same convention as readRGBPixels (the Vulkan
+        // readback is already top-down; there is no flip). Empty on an unknown
+        // handle. Reads the view's own colour image, never the swapchain.
+        [[nodiscard]] std::vector<unsigned char> readViewRGBPixels(uint32_t handle);
+        // Pixel size of a view's output, as passed to addView. False if unknown.
+        bool viewSize(uint32_t handle, int& width, int& height) const;
+
         // ── Segmentation labels for the Ids AOV ──────────────────────────
         // The Ids attachment's .y channel is a STABLE per-object instance id,
         // auto-assigned on first draw (unlike .x, the per-frame visible index,
