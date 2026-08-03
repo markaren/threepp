@@ -165,6 +165,27 @@ namespace threepp {
         // Pixel size of a view's output, as passed to addView. False if unknown.
         bool viewSize(uint32_t handle, int& width, int& height) const;
 
+        // Show this view inside the primary's frame, with its top-left corner
+        // at (x, y) in window pixels. The view's image is already resolved, on
+        // the device and in the swapchain's format, so this is a single image
+        // copy in the frame's own command buffer — no readback, no upload, no
+        // texture, and no second submission.
+        //
+        // 1:1 only: `width`/`height` must equal the size the view was added at,
+        // and a mismatch draws NOTHING rather than a filtered rescale. A
+        // secondary resamples an image the view's temporal resolve already
+        // produced exactly once, and sizing the view to its rect costs nothing.
+        // Pass a rect that runs off the window edge and it is clipped.
+        //
+        // Composited after the scene capture (which stays a clean picture of
+        // the primary camera alone) and before the UI overlay, so ImGui and
+        // screen-space sprites still draw on top of it. False on an unknown
+        // handle.
+        bool setViewDisplayRect(uint32_t handle, int x, int y, int width, int height);
+        // Back to a measurement camera: still rendered, still readable, no
+        // longer drawn into the frame.
+        bool hideView(uint32_t handle);
+
         // readGBufferAOV for a specific view. Handle 0 means the primary, so
         // this is the general form and readGBufferAOV is the shorthand.
         //

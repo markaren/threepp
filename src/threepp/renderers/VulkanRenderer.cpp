@@ -770,6 +770,14 @@ namespace threepp {
         return core()->readViewPixelsImpl(handle);
     }
 
+    bool VulkanRenderer::setViewDisplayRect(uint32_t handle, int x, int y, int width, int height) {
+        return core()->setViewDisplayRectImpl(handle, x, y, width, height);
+    }
+
+    bool VulkanRenderer::hideView(uint32_t handle) {
+        return core()->setViewDisplayRectImpl(handle, 0, 0, 0, 0);
+    }
+
     bool VulkanRenderer::viewSize(uint32_t handle, int& width, int& height) const {
         auto* v = const_cast<Impl*>(core())->findView(handle);
         if (!v) return false;

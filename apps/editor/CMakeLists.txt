@@ -36,6 +36,7 @@ add_executable(threepp_editor
         TreeOverlay.cpp
         ViewGizmo.cpp
         ViewportMarkers.cpp
+        VulkanViewPane.cpp
         panels/AssetPanel.cpp
         panels/HierarchyPanel.cpp
         panels/InspectorPanel.cpp

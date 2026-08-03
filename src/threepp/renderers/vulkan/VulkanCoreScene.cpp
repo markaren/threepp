@@ -2189,7 +2189,12 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
             // scene resources — TLAS, geom/material descs, the bindless
             // material-texture array and the emissive-tri buffer. A rebuild
             // freed and recreated those, so the set would otherwise dangle.
-            rewriteDeferredDescriptors();
+            //
+            // Every view: the scene is shared, so a rebuild invalidates every
+            // view's set, not just the one that happens to be current. An
+            // editor rebuilds on nearly every edit, which is where leaving the
+            // secondaries out shows up first.
+            forEachLiveView([&] { rewriteDeferredDescriptors(); });
             // The (re)build above rebound the bindless texture array. The
             // raster descriptor's binding 3 mirrors that same table, so
             // invalidate its per-slot cache — each frame slot then re-writes

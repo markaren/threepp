@@ -1951,6 +1951,23 @@ namespace threepp {
             // find out what it just asked for, not discover it in a VRAM graph.
             VkDeviceSize allocatedBytes = 0;
 
+            // Optional on-screen destination: where this view's finished image
+            // is copied into the primary's swapchain image, in top-left pixel
+            // coordinates. `displayed` off means the view is a measurement
+            // camera only (the default) — it renders and can be read back, but
+            // never touches the frame the user sees.
+            //
+            // This exists so a tool can show a second camera WITHOUT a CPU
+            // round trip: the pixels are already on the device, in the
+            // swapchain's own format, so putting them on screen is one copy in
+            // the frame's existing command buffer rather than a readback, an
+            // upload and a texture.
+            bool    displayed = false;
+            int32_t dispX = 0, dispY = 0;
+            // Zero means "this view's own size" — the copy path is a straight
+            // vkCmdCopyImage then, with no filtering to argue about.
+            int32_t dispW = 0, dispH = 0;
+
             // This view's frustum-cull result, one byte per entry of
             // lastVisibleEntries_, written by cullEntriesAgainstFrustum.
             //
@@ -7442,6 +7459,36 @@ namespace threepp {
         // frame's TLAS/BLAS, lights, materials and textures; re-runs only what
         // is genuinely per-camera.
         void recordSecondaryViews(VkCommandBuffer cb);
+        // Run `fn` once per LIVE view — the primary and every secondary that
+        // already owns its resources — with curView_ pointed at it.
+        //
+        // The per-view helpers (rewriteDeferredDescriptors, clearGbufImages,
+        // ...) all read view(), which made them silently primary-only at the
+        // call sites that are actually SCENE-wide: a rebuilt TLAS, a swapped
+        // material texture, a new environment map. A secondary left out of
+        // those keeps a descriptor pointing at freed memory — it does not
+        // crash, it just renders the world as it was before, or as nothing.
+        //
+        // Assumes the device is idle, or that the caller knows the slot it is
+        // rewriting is fence-proven idle: same precondition the single-view
+        // call always had.
+        template<class F>
+        void forEachLiveView(F&& fn) {
+            ViewContext* saved = curView_;
+            for (auto& v : views_) {
+                if (v->pendingCreate || v->pendingDestroy) continue;
+                curView_ = v.get();
+                fn();
+            }
+            curView_ = saved;
+        }
+        // Copy every DISPLAYED secondary view's colour target into the primary's
+        // swapchain image, at that view's rect. Recorded after the secondaries
+        // have resolved and after the scene capture (which must stay a clean
+        // picture of the primary alone), and before the overlay, so ImGui and
+        // sprites still draw on top.
+        void recordViewComposite(VkCommandBuffer cb, uint32_t imageIndex);
+        bool setViewDisplayRectImpl(uint32_t handle, int x, int y, int w, int h);
         // Copy a secondary view's finished colour target to host memory as
         // tightly-packed RGB8, top-down (matching readRGBPixels — the Vulkan
         // readback is already top-down and must NOT be flipped).

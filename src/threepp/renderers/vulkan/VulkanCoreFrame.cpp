@@ -566,8 +566,13 @@ bool VulkanRenderer::Impl::beginDeferredFrame(Object3D& scene, Camera& camera) {
                 // images) now that nothing references them.
                 vkDeviceWaitIdle(ctx->device());
                 flushRetireQueue();
-                rewriteDeferredDescriptors();
-                clearGbufImages();
+                // EVERY view. The old env images were just retired and freed;
+                // a secondary whose descriptor still names them samples freed
+                // memory, which reads as a black sky rather than as a crash.
+                forEachLiveView([&] {
+                    rewriteDeferredDescriptors();
+                    clearGbufImages();
+                });
             }
 
             // Per-FIF deferred-descriptor refresh: a material texture swapped in
@@ -576,7 +581,11 @@ bool VulkanRenderer::Impl::beginDeferredFrame(Object3D& scene, Camera& camera) {
             // its set now — the other slot refreshes when its frame comes around.
             // No-op if the env path above already did an all-slots rewrite.
             if (deferredDescDirty_[currentFrame]) {
-                rewriteDeferredDescriptors(static_cast<int>(currentFrame));
+                // Per-view sets, one scene-wide cause: the swapped texture is
+                // in the bindless array every view's set points at.
+                forEachLiveView([&] {
+                    rewriteDeferredDescriptors(static_cast<int>(currentFrame));
+                });
             }
 
             vkResetFences(d, 1, &inFlight[currentFrame]);
@@ -624,6 +633,13 @@ bool VulkanRenderer::Impl::beginDeferredFrame(Object3D& scene, Camera& camera) {
                                   eventLumaBuf_.handle,
                                   eventCamParams_);
             }
+
+            // Any secondary view the caller asked to see, copied into the
+            // frame at its rect. After the scene capture deliberately: a
+            // sensor consuming that capture wants the primary camera's image,
+            // not a picture-in-picture of some other camera. Before the
+            // overlay, so ImGui and screen-space sprites still draw over it.
+            recordViewComposite(cmdBuffers[currentFrame], imageIndex);
 
             // Screen-space sprite auto-overlay. Walks the main scene for
             // Sprites with screenSpace=true and composites them through
@@ -1226,6 +1242,161 @@ void VulkanRenderer::Impl::recordSecondaryViews(VkCommandBuffer cb) {
             regionDstX_      = savedDstX;
             regionDstY_      = savedDstY;
             curView_         = views_[0].get();
+        }
+
+bool VulkanRenderer::Impl::setViewDisplayRectImpl(uint32_t handle, int x, int y, int w, int h) {
+            ViewContext* v = findView(handle);
+            if (!v || !v->secondary) return false;
+            v->displayed = w != 0 && h != 0;
+            v->dispX = x;
+            v->dispY = y;
+            v->dispW = w;
+            v->dispH = h;
+            return true;
+        }
+
+// ── Multi-view: putting a view on screen ────────────────────────────────────
+//
+// A secondary view's image is already on the device, already resolved, and
+// already in the swapchain's own format (see createSecondaryViewResources).
+// Showing it is therefore one image copy inside the frame's existing command
+// buffer — no readback, no upload, no texture, no extra submission. That is the
+// whole reason ViewContext::colorTarget was given TRANSFER_SRC usage.
+//
+// Both images sit in GENERAL for their entire life (the colour target by
+// construction; the swapchain from the primary's composite until present), so
+// this needs no layout changes at all — only visibility barriers between the
+// compute stores that wrote them and the transfer that reads and writes them.
+void VulkanRenderer::Impl::recordViewComposite(VkCommandBuffer cb, uint32_t imageIndex) {
+            if (views_.size() < 2u) return;
+
+            const VkExtent2D swap = ctx->swapchainExtent();
+            if (swap.width == 0u || swap.height == 0u) return;
+
+            struct Job {
+                VkImage src;
+                VkOffset2D srcOff;
+                VkExtent2D srcExt;
+                VkOffset2D dstOff;
+                VkExtent2D dstExt;
+            };
+            std::vector<Job> jobs;
+            std::vector<VkImageMemoryBarrier2> pre;
+
+            for (size_t i = 1; i < views_.size(); ++i) {
+                ViewContext& v = *views_[i];
+                if (!v.displayed || v.pendingCreate || v.pendingDestroy) continue;
+                if (v.colorTarget.image == VK_NULL_HANDLE) continue;
+
+                const int32_t vw = static_cast<int32_t>(v.outExt.width);
+                const int32_t vh = static_cast<int32_t>(v.outExt.height);
+                const int32_t dw = v.dispW > 0 ? v.dispW : vw;
+                const int32_t dh = v.dispH > 0 ? v.dispH : vh;
+                // Only the 1:1 case is composited. Anything else would be a
+                // filtered blit of a temporally-resolved image, i.e. a second,
+                // different resampling of pixels the view already resolved
+                // exactly once — and the caller sizing its view to its rect is
+                // both free and what makes the result exact-pixel. A mismatch
+                // is a caller bug, so it draws nothing rather than something
+                // plausible-looking.
+                if (dw != vw || dh != vh) continue;
+
+                // Clip to the swapchain. A dock rect can legitimately hang off
+                // the edge for a frame during a window resize, and a copy that
+                // runs past the destination is undefined behaviour, not a
+                // clipped copy.
+                int32_t sx = 0, sy = 0;
+                int32_t dx = v.dispX, dy = v.dispY;
+                int32_t cw = vw, ch = vh;
+                if (dx < 0) { sx = -dx; cw -= sx; dx = 0; }
+                if (dy < 0) { sy = -dy; ch -= sy; dy = 0; }
+                cw = std::min(cw, static_cast<int32_t>(swap.width) - dx);
+                ch = std::min(ch, static_cast<int32_t>(swap.height) - dy);
+                if (cw <= 0 || ch <= 0) continue;
+
+                jobs.push_back(Job{v.colorTarget.image,
+                                   {sx, sy},
+                                   {static_cast<uint32_t>(cw), static_cast<uint32_t>(ch)},
+                                   {dx, dy},
+                                   {static_cast<uint32_t>(cw), static_cast<uint32_t>(ch)}});
+
+                VkImageMemoryBarrier2 b{};
+                b.sType               = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
+                b.srcStageMask        = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+                b.srcAccessMask       = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
+                b.dstStageMask        = VK_PIPELINE_STAGE_2_COPY_BIT;
+                b.dstAccessMask       = VK_ACCESS_2_TRANSFER_READ_BIT;
+                b.oldLayout           = VK_IMAGE_LAYOUT_GENERAL;
+                b.newLayout           = VK_IMAGE_LAYOUT_GENERAL;
+                b.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+                b.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+                b.image               = v.colorTarget.image;
+                b.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+                b.subresourceRange.levelCount = 1;
+                b.subresourceRange.layerCount = 1;
+                pre.push_back(b);
+            }
+            if (jobs.empty()) return;
+
+            const VkImage dst = ctx->swapchainImages()[imageIndex];
+
+            // The swapchain image was last written by the primary's composite
+            // (a compute store) or by the scene-capture copy just before this.
+            VkImageMemoryBarrier2 dstBarrier{};
+            dstBarrier.sType               = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
+            dstBarrier.srcStageMask        = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT |
+                                             VK_PIPELINE_STAGE_2_COPY_BIT;
+            dstBarrier.srcAccessMask       = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT |
+                                             VK_ACCESS_2_TRANSFER_READ_BIT;
+            dstBarrier.dstStageMask        = VK_PIPELINE_STAGE_2_COPY_BIT;
+            dstBarrier.dstAccessMask       = VK_ACCESS_2_TRANSFER_WRITE_BIT;
+            dstBarrier.oldLayout           = VK_IMAGE_LAYOUT_GENERAL;
+            dstBarrier.newLayout           = VK_IMAGE_LAYOUT_GENERAL;
+            dstBarrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+            dstBarrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+            dstBarrier.image               = dst;
+            dstBarrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+            dstBarrier.subresourceRange.levelCount = 1;
+            dstBarrier.subresourceRange.layerCount = 1;
+            pre.push_back(dstBarrier);
+
+            VkDependencyInfo dep{};
+            dep.sType                   = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
+            dep.imageMemoryBarrierCount = static_cast<uint32_t>(pre.size());
+            dep.pImageMemoryBarriers    = pre.data();
+            vkCmdPipelineBarrier2(cb, &dep);
+
+            for (const auto& j : jobs) {
+                VkImageCopy region{};
+                region.srcSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+                region.srcSubresource.layerCount = 1;
+                region.srcOffset                 = {j.srcOff.x, j.srcOff.y, 0};
+                region.dstSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+                region.dstSubresource.layerCount = 1;
+                region.dstOffset                 = {j.dstOff.x, j.dstOff.y, 0};
+                region.extent                    = {j.dstExt.width, j.dstExt.height, 1};
+                vkCmdCopyImage(cb, j.src, VK_IMAGE_LAYOUT_GENERAL,
+                               dst, VK_IMAGE_LAYOUT_GENERAL, 1, &region);
+            }
+
+            // Hand the swapchain image back to the overlay (a colour
+            // attachment) and to anything that samples or stores into it.
+            VkImageMemoryBarrier2 post = dstBarrier;
+            post.srcStageMask  = VK_PIPELINE_STAGE_2_COPY_BIT;
+            post.srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
+            post.dstStageMask  = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT |
+                                 VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT |
+                                 VK_PIPELINE_STAGE_2_COPY_BIT;
+            post.dstAccessMask = VK_ACCESS_2_COLOR_ATTACHMENT_READ_BIT |
+                                 VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT |
+                                 VK_ACCESS_2_SHADER_STORAGE_READ_BIT |
+                                 VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT |
+                                 VK_ACCESS_2_TRANSFER_READ_BIT;
+            VkDependencyInfo depPost{};
+            depPost.sType                   = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
+            depPost.imageMemoryBarrierCount = 1;
+            depPost.pImageMemoryBarriers    = &post;
+            vkCmdPipelineBarrier2(cb, &depPost);
         }
 
 std::vector<unsigned char> VulkanRenderer::Impl::readViewPixelsImpl(uint32_t handle) {

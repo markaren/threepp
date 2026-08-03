@@ -16,6 +16,7 @@
 #define THREEPP_EDITOR_EDITORAPP_HPP
 
 #include "FileBrowser.hpp"
+#include "VulkanViewPane.hpp"
 
 #ifdef THREEPP_EDITOR_WITH_PYTHON
 #include "Scripting.hpp"
@@ -624,8 +625,17 @@ namespace threepp::editor {
         // panel, under the inspector. False when there is no room for it (the
         // bottom panel is collapsed, or the window is tiny).
         [[nodiscard]] bool cameraDockRect(float& x, float& y, float& w, float& h) const;
+        // The selected object as a Camera, perspective or orthographic. What
+        // the dock renders; nullptr for anything else.
+        [[nodiscard]] Camera* selectedCamera() const;
+        // Points the dock's Vulkan secondary view at the selected camera and at
+        // this frame's dock rect. Must run BEFORE Renderer::render(), which is
+        // where the view is actually recorded and composited. A no-op on OpenGL,
+        // whose dock is a scissored second render in renderCameraPreview().
+        void syncCameraDockPane();
         // Renders the selected scene camera into that dock; drawUi frames and
-        // labels it via preview_.
+        // labels it via preview_. On Vulkan the pixels are already there (see
+        // syncCameraDockPane) and this only fills preview_ in.
         void renderCameraPreview();
         void pickAt(float mouseX, float mouseY);
         [[nodiscard]] Object3D* resolveSelectable(Object3D* hit) const;
@@ -1359,12 +1369,22 @@ namespace threepp::editor {
         // the dock has room this frame; `active` whether a camera rendered into
         // it — an empty dock still paints itself, so the corner never reverts
         // to a sliver of unreachable viewport.
+        // `pending` is the Vulkan-only middle state: a camera IS selected but
+        // its secondary view has not composited yet (it is allocated at the
+        // next frame boundary), so the dock still holds primary-viewport
+        // pixels and has to be painted over — without the "No camera selected"
+        // hint, which would be a lie for the frame it appeared in.
         struct {
             float x = 0, y = 0, w = 0, h = 0;
             bool visible = false;
             bool active = false;
+            bool pending = false;
             std::string label;
         } preview_;
+        // The dock's exact-pixel path on Vulkan: one persistent secondary view,
+        // re-pointed at whichever camera is selected. Empty and inert on OpenGL,
+        // where the dock is a scissored second render of the same scene.
+        VulkanViewPane dockPane_;
         // Object3D* the hierarchy wants to scroll into view next frame.
         Object3D* scrollTo_ = nullptr;
         // Structural edits requested from inside a tree walk (delete, reparent,

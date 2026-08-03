@@ -234,6 +234,11 @@ EditorApp::EditorApp(const Options& options)
     }
 #endif
 
+    // Arms the camera dock's exact-pixel path when (and only when) the backend
+    // can do it. On OpenGL this leaves the pane inert and the dock keeps its
+    // scissored second render.
+    dockPane_.attach(renderer_.get());
+
     // After every renderer knob above: this is the baseline a document is
     // opened against and saved as a difference from.
     renderDefaults_ = RenderConfig::capture(*renderer_);
@@ -525,6 +530,11 @@ EditorApp::~EditorApp() {
 
     canvas_.setIOCapture(nullptr);
 
+    // Before the renderer goes: the pane holds a view handle into it. (The pane
+    // is a member and would release itself, but member destruction order runs
+    // after this body and the renderer is declared above it.)
+    dockPane_.release();
+
     // Stops the poll and takes the scratch .py with it. Whatever was saved is
     // already in the document; what is left on disk is a copy nobody will read.
     stopExternalEdit("the editor is closing");
@@ -626,7 +636,13 @@ void EditorApp::frame(float dt) {
 
     refreshSelectionHelpers();
 
+    // Before the render, not after: on Vulkan the camera dock is a secondary
+    // view that the renderer records INSIDE render(), and the camera it points
+    // at has to be this frame's camera. (Play and Stop replace the scene, and
+    // with it every camera object in it.)
+    syncCameraDockPane();
     renderer_->render(document_.scene(), viewCamera());
+    dockPane_.endFrame();
     renderCameraPreview();
     if (!benchSkipUi_) ui_->render();
 
@@ -686,14 +702,20 @@ void EditorApp::drawUi() {
         const float s = contentScale_;
 
         if (!preview_.active) {
-            // Nothing selected: paint the dock so the corner reads as panel
-            // rather than as a scrap of viewport nobody can reach.
+            // Nothing rendered into it: paint the dock so the corner reads as
+            // panel rather than as a scrap of viewport nobody can reach.
             draw->AddRectFilled(min, max, ImGui::GetColorU32(ImGuiCol_WindowBg));
-            const char* hint = "No camera selected";
-            const auto textSize = ImGui::CalcTextSize(hint);
-            draw->AddText({min.x + (preview_.w - textSize.x) * 0.5f,
-                           min.y + (preview_.h - textSize.y) * 0.5f},
-                          ImGui::GetColorU32(theme::muted()), hint);
+            // ...but only claim nothing is selected when nothing is. A Vulkan
+            // secondary view is allocated at a frame boundary, so for the frame
+            // or two before it first draws the dock is empty with a camera
+            // selected, and the hint would be wrong.
+            if (!preview_.pending) {
+                const char* hint = "No camera selected";
+                const auto textSize = ImGui::CalcTextSize(hint);
+                draw->AddText({min.x + (preview_.w - textSize.x) * 0.5f,
+                               min.y + (preview_.h - textSize.y) * 0.5f},
+                              ImGui::GetColorU32(theme::muted()), hint);
+            }
         }
 
         draw->AddRect(min, max, ImGui::GetColorU32(ImGuiCol_Border));
@@ -2531,9 +2553,33 @@ bool EditorApp::cameraDockRect(float& x, float& y, float& w, float& h) const {
     return w >= 80.f * s && h >= 60.f * s;
 }
 
+Camera* EditorApp::selectedCamera() const {
+
+    auto* selected = selection_.get();
+    if (!selected) return nullptr;
+    if (auto* persp = selected->as<PerspectiveCamera>()) return persp;
+    if (auto* ortho = selected->as<OrthographicCamera>()) return ortho;
+    return nullptr;
+}
+
+void EditorApp::syncCameraDockPane() {
+
+    if (!dockPane_.supported()) return;
+
+    float x = 0, y = 0, w = 0, h = 0;
+    const bool haveRect = cameraDockRect(x, y, w, h);
+    // A camera only, and only while the dock has room. Anything else releases
+    // the view — a collapsed dock has no business holding a deferred chain.
+    Camera* cam = haveRect ? selectedCamera() : nullptr;
+    dockPane_.sync(cam,
+                   static_cast<int>(x), static_cast<int>(y),
+                   static_cast<int>(w), static_cast<int>(h));
+}
+
 void EditorApp::renderCameraPreview() {
 
     preview_.active = false;
+    preview_.pending = false;
     preview_.visible = false;
 
     float x = 0, y = 0, w = 0, h = 0;
@@ -2547,8 +2593,31 @@ void EditorApp::renderCameraPreview() {
     preview_.h = h;
     preview_.visible = true;
 
-    auto* selected = selection_.get();
-    auto* cam = selected ? selected->as<PerspectiveCamera>() : nullptr;
+    auto* dockCam = selectedCamera();
+    if (!dockCam) return;
+
+    const auto dockLabel = [&] {
+        return dockCam->name.empty() ? std::string("Camera") : dockCam->name;
+    };
+
+    // Vulkan: the pixels are already in the frame. The renderer rendered this
+    // camera as a full secondary view — its own G-buffer, its own shadows, GI
+    // and reflections — and copied the result into the dock rect during
+    // render(). Nothing left to draw here; the dock is EXACT rather than the
+    // lit-pane approximation it used to be.
+    if (dockPane_.supported()) {
+        preview_.label = dockLabel();
+        preview_.active = dockPane_.active();
+        // Selected, but the view is still being stood up (it is allocated at a
+        // frame boundary). Those pixels are the primary viewport's; say so.
+        preview_.pending = !preview_.active;
+        return;
+    }
+
+    // OpenGL: a second, scissored render of the same scene. Exact by
+    // construction — it is the same renderer drawing the same frame — and
+    // deliberately left alone.
+    auto* cam = dockCam->as<PerspectiveCamera>();
     if (!cam) return;
 
     const auto size = renderer_->size();
