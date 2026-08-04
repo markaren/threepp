@@ -38,6 +38,16 @@ this repository are therefore a derivative work of three.js, and its license rid
 
 ---
 
+## meios (design acknowledgment)
+
+The xacro engine in [`src/threepp/loaders/xacro/`](src/threepp/loaders/xacro) is an independent
+implementation, written against the behaviour of ROS's python xacro. Its design was informed by
+[meios](https://github.com/skrede/meios) (Apache-2.0), a C++20 URDF/xacro processor — most
+visibly the idea of an expansion budget, which makes a malformed or hostile document fail with a
+message instead of exhausting memory.
+
+---
+
 ## Embedded in the threepp library
 
 **helvetiker (MgOpen Moderna) typeface** — `src/resources/helvetiker_bold.typeface.json` is
