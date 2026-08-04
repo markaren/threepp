@@ -48,6 +48,11 @@ namespace threepp::xacro {
     // True when the document declares the xacro namespace on its root element.
     [[nodiscard]] bool needsProcessing(const pugi::xml_document& doc);
 
+    // The prefix this document binds the xacro namespace to, "xacro" when it binds none —
+    // the same answer expansion works from, so anything that has to recognise a xacro
+    // element before expanding asks here rather than assuming.
+    [[nodiscard]] std::string documentPrefix(const pugi::xml_document& doc);
+
 }// namespace threepp::xacro
 
 #endif

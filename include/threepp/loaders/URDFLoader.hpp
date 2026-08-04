@@ -107,6 +107,22 @@ namespace threepp {
         // large batch build that never renders) — the desc's `visual` fields are left null.
         URDFArticulationDesc parseArticulation(const std::filesystem::path& path, bool loadVisuals = true);
 
+        // Why the most recent load/parse/parseArticulation went the way it did: the xacro
+        // expansion's errors and warnings, plus the plain-XML failures (unreadable file,
+        // malformed document, no <robot> root) — warnings first, then errors, each group in
+        // the order it was produced. Cleared at the start of every call, so an empty list
+        // after a successful one is meaningful.
+        //
+        // These are also printed to std::cerr, as they always were — the console tools and
+        // the examples have no other place to show them. Keeping them here is for the
+        // callers that do: the editor puts lastError() in front of the user instead of a
+        // generic "nothing importable in the file".
+        [[nodiscard]] const std::vector<std::string>& diagnostics() const;
+
+        // The errors among them, joined into one message. Empty when the last call
+        // succeeded, and never empty when it returned nullptr or an empty description.
+        [[nodiscard]] std::string lastError() const;
+
         ~URDFLoader();
 
     private:

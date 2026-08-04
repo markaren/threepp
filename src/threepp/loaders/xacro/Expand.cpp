@@ -706,6 +706,12 @@ bool threepp::xacro::needsProcessing(const pugi::xml_document& doc) {
     return false;
 }
 
+std::string threepp::xacro::documentPrefix(const pugi::xml_document& doc) {
+
+    const auto root = doc.document_element();
+    return root ? resolvePrefix(root) : "xacro";
+}
+
 bool threepp::xacro::expand(const pugi::xml_document& in, pugi::xml_document& out,
                             const ExpandInputs& inputs, Diagnostics& diags) {
 

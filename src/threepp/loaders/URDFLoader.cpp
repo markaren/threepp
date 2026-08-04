@@ -444,10 +444,26 @@ struct URDFLoader::Impl {
     std::map<std::string, std::string> xacroArgs;
     xacro::PackageResolver packages;
 
+    // Everything the last call had to say, and the errors on their own. Two lists
+    // rather than one filtered on read, because a caller that wants the reason a load
+    // failed must not have to guess which lines are the reason.
+    std::vector<std::string> diagnostics;
+    std::vector<std::string> errors;
+
     Impl() {
         auto ml = std::make_shared<ModelLoader>();
         ml->setIgnoreUpDirection(true);
         loader = std::move(ml);
+    }
+
+    void beginCall() {
+        diagnostics.clear();
+        errors.clear();
+    }
+
+    void fail(const std::string& message) {
+        diagnostics.push_back(message);
+        errors.push_back(message);
     }
 
     static bool needsProcessing(const pugi::xml_document& doc, const std::filesystem::path& path) {
@@ -470,20 +486,30 @@ struct URDFLoader::Impl {
 
         for (const auto& warning : diags.warnings()) {
             std::cerr << "[xacro] warning: " << warning << std::endl;
+            diagnostics.push_back("[xacro] warning: " + warning);
         }
         if (!ok) {
             for (const auto& error : diags.errors()) {
                 std::cerr << "[xacro] " << error << std::endl;
+                fail(error);
             }
+            // expand() only returns false with something in diags.errors(), but a caller
+            // asking why must never be told "no reason".
+            if (diags.errors().empty()) fail("xacro expansion of '" + document.string() + "' failed");
         }
         return ok;
     }
 
     std::shared_ptr<Robot> load(const std::filesystem::path& path) {
+        beginCall();
+
         pugi::xml_document doc;
         pugi::xml_parse_result result = doc.load_file(path.string().c_str());
 
-        if (!result) return nullptr;
+        if (!result) {
+            fail("cannot read '" + path.string() + "': " + result.description());
+            return nullptr;
+        }
 
         if (needsProcessing(doc, path)) {
             pugi::xml_document processed;
@@ -495,10 +521,15 @@ struct URDFLoader::Impl {
     }
 
     std::shared_ptr<Robot> parse(const std::filesystem::path& baseDir, const std::string& urdf) {
+        beginCall();
+
         pugi::xml_document doc;
         pugi::xml_parse_result result = doc.load_string(urdf.c_str());
 
-        if (!result) return nullptr;
+        if (!result) {
+            fail(std::string("cannot parse the document: ") + result.description());
+            return nullptr;
+        }
 
         if (xacro::needsProcessing(doc)) {
             pugi::xml_document processed;
@@ -510,24 +541,40 @@ struct URDFLoader::Impl {
     }
 
     URDFArticulationDesc parseArticulation(const std::filesystem::path& path, bool loadVisuals = true) {
+        beginCall();
+
         pugi::xml_document doc;
-        if (!doc.load_file(path.string().c_str())) return {};
+        if (const auto result = doc.load_file(path.string().c_str()); !result) {
+            fail("cannot read '" + path.string() + "': " + result.description());
+            return {};
+        }
 
         CachingLoader cachingLoader(loader.get());
         if (needsProcessing(doc, path)) {
             pugi::xml_document processed;
             if (!expandXacro(doc, path, processed)) return {};
             const auto robotNode = processed.child("robot");
-            return robotNode ? buildArticulationDesc(&packages, robotNode, path, &cachingLoader, loadVisuals) : URDFArticulationDesc{};
+            if (!robotNode) {
+                fail("'" + path.string() + "' has no <robot> element");
+                return {};
+            }
+            return buildArticulationDesc(&packages, robotNode, path, &cachingLoader, loadVisuals);
         }
         const auto robotNode = doc.child("robot");
-        return robotNode ? buildArticulationDesc(&packages, robotNode, path, &cachingLoader, loadVisuals) : URDFArticulationDesc{};
+        if (!robotNode) {
+            fail("'" + path.string() + "' has no <robot> element");
+            return {};
+        }
+        return buildArticulationDesc(&packages, robotNode, path, &cachingLoader, loadVisuals);
     }
 
     std::shared_ptr<Robot> loadFromXml(const pugi::xml_document& doc, const std::filesystem::path& path) {
 
         const auto root = doc.child("robot");
-        if (!root) return nullptr;
+        if (!root) {
+            fail("'" + path.string() + "' has no <robot> element");
+            return nullptr;
+        }
 
         CachingLoader cachingLoader(loader.get());
 
@@ -643,6 +690,21 @@ std::shared_ptr<Robot> URDFLoader::parse(const std::filesystem::path& baseDir, c
 URDFArticulationDesc URDFLoader::parseArticulation(const std::filesystem::path& path, bool loadVisuals) {
 
     return pimpl_->parseArticulation(path, loadVisuals);
+}
+
+const std::vector<std::string>& URDFLoader::diagnostics() const {
+
+    return pimpl_->diagnostics;
+}
+
+std::string URDFLoader::lastError() const {
+
+    std::string joined;
+    for (const auto& error : pimpl_->errors) {
+        if (!joined.empty()) joined += '\n';
+        joined += error;
+    }
+    return joined;
 }
 
 URDFLoader::~URDFLoader() = default;

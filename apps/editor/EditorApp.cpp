@@ -1193,7 +1193,16 @@ void EditorApp::pollImports(float dt) {
                            [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
             if (extension == ".urdf" || extension == ".xacro") {
                 URDFLoader loader;
-                return loader.load(path);
+                auto robot = loader.load(path);
+                // A xacro that fails knows exactly why — a missing package, an
+                // argument nobody supplied — and that reason is worth far more to
+                // whoever is looking at the modal than "nothing importable".
+                if (!robot) {
+                    if (const auto reason = loader.lastError(); !reason.empty()) {
+                        throw std::runtime_error(reason);
+                    }
+                }
+                return robot;
             }
             ModelLoader loader;
             return loader.load(path);
@@ -2398,6 +2407,7 @@ void EditorApp::rearticulateRobots(Scene& scene) {
         try {
             URDFLoader loader;
             robot = loader.load(config.urdf);
+            if (!robot) error = loader.lastError();
         } catch (const std::exception& e) {
             error = e.what();
         }

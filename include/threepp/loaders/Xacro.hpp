@@ -49,6 +49,35 @@ namespace threepp::xacro {
         std::unique_ptr<Impl> pimpl_;
     };
 
+    struct ArgDecl {
+        std::string name;
+        // The declared text, exactly as written — neither substituted nor evaluated. UR's
+        // joint_limit_params defaults to
+        // "$(find ur_description)/config/$(arg ur_type)/joint_limits.yaml", and the point of
+        // showing it is that it is still a recipe at this stage, not a path.
+        std::string defaultValue;
+        bool hasDefault = false;
+    };
+
+    // The <xacro:arg> declarations directly under the document root, in document order and
+    // deduplicated by name (first wins, as in expansion). Deliberately shallow: it follows
+    // no includes, expands no macros and evaluates nothing, because the whole point is to
+    // learn what a file wants to be told BEFORE anything that needs telling can run. A file
+    // that declares no arguments — any plain URDF — yields an empty vector, and so does one
+    // that cannot be read or parsed, rather than throwing.
+    [[nodiscard]] std::vector<ArgDecl> scanArgs(const std::filesystem::path& file);
+
+    [[nodiscard]] std::vector<ArgDecl> scanArgsFromString(const std::string& xml);
+
+    // Where the editor keeps the arguments a robot was imported with, so a rebuild uses the
+    // same ones. The names live under one key, comma-joined (a xacro argument name is an
+    // identifier, so that needs no escaping); each value lives under its own key, verbatim,
+    // because values are very often paths. Declared here, in the layer that owns the
+    // concept, so the editor and ObjectLoader agree on the spelling without the loaders
+    // having to know the editor exists.
+    inline constexpr const char* argsUserDataKey = "xacroArgs";
+    inline constexpr const char* argValueUserDataPrefix = "xacroArg:";
+
 }// namespace threepp::xacro
 
 #endif//THREEPP_XACRO_HPP
