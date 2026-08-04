@@ -6,7 +6,14 @@
 #include <map>
 #include <memory>
 #include <string>
+#include <utility>
 #include <vector>
+
+namespace threepp {
+
+    class Object3D;
+
+}
 
 namespace threepp::xacro {
 
@@ -77,6 +84,12 @@ namespace threepp::xacro {
     // having to know the editor exists.
     inline constexpr const char* argsUserDataKey = "xacroArgs";
     inline constexpr const char* argValueUserDataPrefix = "xacroArg:";
+
+    // The pairs those entries record on an object, in recorded order. A name whose value
+    // key is missing (or not a string) is dropped, not read as empty — an empty override
+    // is a real override and would suppress the file's own default. The one reader for
+    // both RobotConfig and ObjectLoader, so the two cannot drift apart.
+    [[nodiscard]] std::vector<std::pair<std::string, std::string>> readArgsUserData(const Object3D& object);
 
 }// namespace threepp::xacro
 

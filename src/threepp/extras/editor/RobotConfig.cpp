@@ -55,19 +55,6 @@ namespace {
         return std::any_cast<bool>(it->second);
     }
 
-    std::vector<std::string> splitNames(const std::string& list) {
-
-        std::vector<std::string> names;
-        for (std::size_t start = 0; start <= list.size();) {
-            const auto end = list.find(',', start);
-            auto name = list.substr(start, (end == std::string::npos ? list.size() : end) - start);
-            if (!name.empty()) names.push_back(std::move(name));
-            if (end == std::string::npos) break;
-            start = end + 1;
-        }
-        return names;
-    }
-
     // Every argument value key on the object, whether or not the name list still
     // mentions it. Collected first and erased afterwards, because erasing while
     // walking userData would invalidate the walk.
@@ -137,12 +124,7 @@ std::optional<RobotConfig> RobotConfig::read(const Object3D& object) {
     config.joints = decodeJoints(readString(object, jointsKey));
     config.showColliders = readBool(object, collidersKey, false);
 
-    for (const auto& name : splitNames(readString(object, xacro::argsUserDataKey))) {
-        const auto key = xacro::argValueUserDataPrefix + name;
-        // A name whose value key is gone is dropped, not read as empty: an empty
-        // override is a real override and would suppress the file's default.
-        if (object.userData.count(key)) config.xacroArgs.emplace_back(name, readString(object, key.c_str()));
-    }
+    config.xacroArgs = xacro::readArgsUserData(object);
 
     return config;
 }

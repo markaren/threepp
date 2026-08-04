@@ -1,10 +1,12 @@
 
 #include "threepp/loaders/Xacro.hpp"
 
+#include "threepp/core/Object3D.hpp"
 #include "threepp/loaders/xacro/Expand.hpp"
 
 #include "pugixml.hpp"
 
+#include <any>
 #include <set>
 #include <sstream>
 #include <string_view>
@@ -154,4 +156,28 @@ std::vector<ArgDecl> threepp::xacro::scanArgsFromString(const std::string& xml) 
     if (!doc.load_string(xml.c_str())) return {};
 
     return scan(doc);
+}
+
+std::vector<std::pair<std::string, std::string>> threepp::xacro::readArgsUserData(const Object3D& object) {
+
+    std::vector<std::pair<std::string, std::string>> args;
+
+    const auto names = object.userData.find(argsUserDataKey);
+    if (names == object.userData.end() || names->second.type() != typeid(std::string)) return args;
+
+    const auto list = std::any_cast<std::string>(names->second);
+    for (std::size_t start = 0; start <= list.size();) {
+        const auto end = list.find(',', start);
+        const auto name = list.substr(start, (end == std::string::npos ? list.size() : end) - start);
+        if (!name.empty()) {
+            const auto value = object.userData.find(argValueUserDataPrefix + name);
+            if (value != object.userData.end() && value->second.type() == typeid(std::string)) {
+                args.emplace_back(name, std::any_cast<std::string>(value->second));
+            }
+        }
+        if (end == std::string::npos) break;
+        start = end + 1;
+    }
+
+    return args;
 }

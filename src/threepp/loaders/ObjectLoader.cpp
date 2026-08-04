@@ -1115,33 +1115,13 @@ namespace {
 
     // The xacro arguments the editor recorded on the placeholder when the robot was
     // imported. Re-importing without them would rebuild a DIFFERENT robot — a UR5e
-    // saved as a UR5e would come back as whatever the file defaults to — so they are
-    // read straight out of userData here, by the key names the loaders layer owns.
-    // Nothing about RobotConfig is known at this level, and nothing needs to be: the
-    // two entries are plain strings.
+    // saved as a UR5e would come back as whatever the file defaults to. Nothing about
+    // RobotConfig is known at this level, and nothing needs to be: the entries are
+    // plain strings, read by the one reader the loaders layer owns.
     std::map<std::string, std::string> readXacroArgs(const Object3D& object) {
 
         std::map<std::string, std::string> args;
-
-        const auto names = object.userData.find(xacro::argsUserDataKey);
-        if (names == object.userData.end() || names->second.type() != typeid(std::string)) return args;
-
-        const auto list = std::any_cast<std::string>(names->second);
-        for (std::size_t start = 0; start <= list.size();) {
-            const auto end = list.find(',', start);
-            const auto name = list.substr(start, (end == std::string::npos ? list.size() : end) - start);
-            if (!name.empty()) {
-                const auto value = object.userData.find(xacro::argValueUserDataPrefix + name);
-                // A name with no value key is skipped rather than passed as empty:
-                // an empty override is a real override, and not the same thing.
-                if (value != object.userData.end() && value->second.type() == typeid(std::string)) {
-                    args[name] = std::any_cast<std::string>(value->second);
-                }
-            }
-            if (end == std::string::npos) break;
-            start = end + 1;
-        }
-
+        for (const auto& [name, value] : xacro::readArgsUserData(object)) args[name] = value;
         return args;
     }
 
