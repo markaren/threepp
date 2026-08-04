@@ -182,16 +182,21 @@ namespace {
         return keep && *keep && *keep != '0';
     }
 
-    // What a queued file wants to be told before it can be expanded. Only a
-    // robot description is asked: scanArgs on a 200 MB .glb would parse the
-    // whole thing as XML, fail, and answer the same empty vector.
-    std::vector<xacro::ArgDecl> declaredXacroArgs(const std::filesystem::path& path) {
+    bool isDescription(const std::filesystem::path& path) {
 
         auto extension = path.extension().string();
         std::transform(extension.begin(), extension.end(), extension.begin(),
                        [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
 
-        if (extension != ".urdf" && extension != ".xacro") return {};
+        return extension == ".urdf" || extension == ".xacro";
+    }
+
+    // What a queued file wants to be told before it can be expanded. Only a
+    // robot description is asked: scanArgs on a 200 MB .glb would parse the
+    // whole thing as XML, fail, and answer the same empty vector.
+    std::vector<xacro::ArgDecl> declaredXacroArgs(const std::filesystem::path& path) {
+
+        if (!isDescription(path)) return {};
         return xacro::scanArgs(path);
     }
 
@@ -1228,16 +1233,13 @@ void EditorApp::pollImports(float dt) {
         // Loader exceptions surface through the future and are rethrown on
         // the main thread in the get() below.
         activeImport_->future = std::async(std::launch::async, [path, args]() -> std::shared_ptr<Object3D> {
-            auto extension = path.extension().string();
-            std::transform(extension.begin(), extension.end(), extension.begin(),
-                           [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
-            if (extension == ".urdf" || extension == ".xacro") {
+            if (isDescription(path)) {
                 URDFLoader loader;
                 if (!args.empty()) loader.setArgs(args);
                 auto robot = loader.load(path);
                 // A xacro that fails knows exactly why — a missing package, an
-                // argument nobody supplied — and that reason is worth far more to
-                // whoever is looking at the modal than "nothing importable".
+                // argument nobody supplied, a file and a line — and that reason is
+                // worth far more in the console than "nothing importable".
                 if (!robot) {
                     if (const auto reason = loader.lastError(); !reason.empty()) {
                         throw std::runtime_error(reason);
@@ -1272,7 +1274,10 @@ void EditorApp::pollImports(float dt) {
 
     if (!error.empty()) {
         log("import failed: " + path.filename().string() + " - " + error);
-        importError_ = path.filename().string() + "\n\n" + error;
+        // A description says why it failed, down to the file and line, and the
+        // console has already said it. A modal on top of that only asks for a
+        // click before you can go and fix the thing it named.
+        if (!isDescription(path)) importError_ = path.filename().string() + "\n\n" + error;
         return;
     }
 
