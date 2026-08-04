@@ -1401,6 +1401,7 @@ namespace threepp::editor {
             std::filesystem::path path;
             std::vector<xacro::ArgDecl> declared;
             std::vector<std::vector<char>> values;
+            bool opened = false;
         };
         std::unique_ptr<ArgPrompt> argPrompt_;
         // Transient status-bar message (import results and similar).

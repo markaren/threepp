@@ -1328,13 +1328,24 @@ void EditorApp::drawArgPrompt() {
     if (!argPrompt_) return;
 
     constexpr const char* title = "Import arguments";
-    if (!ImGui::IsPopupOpen(title)) ImGui::OpenPopup(title);
+    if (!argPrompt_->opened) {
+        ImGui::OpenPopup(title);
+        argPrompt_->opened = true;
+    }
 
     const ImVec2 centre = ImGui::GetMainViewport()->GetCenter();
     ImGui::SetNextWindowPos(centre, ImGuiCond_Appearing, {0.5f, 0.5f});
     ImGui::SetNextWindowSizeConstraints({460 * contentScale_, 0}, {820 * contentScale_, FLT_MAX});
 
-    if (!ImGui::BeginPopupModal(title, nullptr, ImGuiWindowFlags_AlwaysAutoResize)) return;
+    if (!ImGui::BeginPopupModal(title, nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+        // Dismissed with Esc, which reads as Cancel — reopening it would make the
+        // dialog impossible to get out of by the one key that always means "no".
+        if (!ImGui::IsPopupOpen(title)) {
+            log("import cancelled: " + argPrompt_->path.filename().string());
+            argPrompt_.reset();
+        }
+        return;
+    }
 
     ImGui::TextUnformatted(argPrompt_->path.filename().string().c_str());
     ImGui::TextDisabled("%s", "Leave a field empty to use the file's own default.");
