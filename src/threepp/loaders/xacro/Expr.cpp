@@ -6,6 +6,7 @@
 #include <cctype>
 #include <charconv>
 #include <cmath>
+#include <cstdlib>
 #include <memory>
 #include <set>
 #include <string>
@@ -104,8 +105,15 @@ namespace {
             t.type = Token::Type::Number;
             t.text = text;
             if (real) {
+                // The lexer already vetted every character, so the only job left is the
+                // conversion itself — which libc++ without floating-point from_chars
+                // (see ColladaLoader.cpp) hands to strtod on the null-terminated copy.
                 double d{};
+#if defined(__cpp_lib_to_chars)
                 std::from_chars(text.data(), text.data() + text.size(), d);
+#else
+                d = std::strtod(text.c_str(), nullptr);
+#endif
                 t.value = Value(d);
             } else {
                 long long i{};
