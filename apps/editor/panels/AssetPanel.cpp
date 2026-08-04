@@ -169,19 +169,50 @@ void EditorApp::drawAssetsTab() {
 
 void EditorApp::drawConsoleTab() {
 
+    // The console is where a failure is reported, so it is the one panel whose
+    // text has to leave the app — into a bug report, a search box, a message.
+    // ImGui text is not selectable, so copying is explicit: the whole log, or
+    // one line by right-click.
+    const auto copyAll = [this] {
+        std::string all;
+        for (const auto& line : console_) {
+            all += line;
+            all += '\n';
+        }
+        ImGui::SetClipboardText(all.c_str());
+    };
+
     if (ImGui::SmallButton("Clear")) console_.clear();
+    ImGui::SameLine();
+    if (ImGui::SmallButton("Copy") && !console_.empty()) copyAll();
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Copy all lines (Ctrl+C). Right-click a line to copy just that one.");
     ImGui::SameLine();
     ImGui::TextColored(theme::muted(), "%zu messages", console_.size());
     ImGui::Separator();
 
     if (ImGui::BeginChild("##console", {0, 0})) {
-        for (const auto& line : console_) {
+
+        // Ctrl+C with the log under the mouse: the shortcut people try first.
+        if (!console_.empty() && ImGui::IsWindowHovered() &&
+            ImGui::IsKeyPressed(ImGuiKey_C) && ImGui::GetIO().KeyCtrl) {
+            copyAll();
+        }
+
+        for (std::size_t i = 0; i < console_.size(); ++i) {
+            const auto& line = console_[i];
             const bool bad = line.rfind("warning", 0) == 0 || line.find("failed") != std::string::npos;
+            ImGui::PushID(static_cast<int>(i));
             if (bad) {
                 ImGui::TextColored(theme::warning(), "%s", line.c_str());
             } else {
                 ImGui::TextUnformatted(line.c_str());
             }
+            if (ImGui::BeginPopupContextItem("##line")) {
+                if (ImGui::MenuItem("Copy Line")) ImGui::SetClipboardText(line.c_str());
+                if (ImGui::MenuItem("Copy All")) copyAll();
+                ImGui::EndPopup();
+            }
+            ImGui::PopID();
         }
         if (consoleScrollToBottom_) {
             ImGui::SetScrollHereY(1.f);
