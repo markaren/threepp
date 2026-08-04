@@ -42,6 +42,7 @@
 #include "threepp/helpers/Box3Helper.hpp"
 #include "threepp/helpers/BoxHelper.hpp"
 #include "threepp/input/IOCapture.hpp"
+#include "threepp/loaders/Xacro.hpp"
 #include "threepp/math/Vector2.hpp"
 #include "threepp/objects/Group.hpp"
 #include "threepp/objects/InstancedMesh.hpp"
@@ -54,6 +55,7 @@
 #include <optional>
 #include <string>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 
 class ImguiContext;
@@ -762,6 +764,10 @@ namespace threepp::editor {
         // finished ones on the main thread.
         void pollImports(float dt);
         void drawImportToast();
+        // The modal that asks for a xacro's declared arguments. Drawn with the
+        // other dialogs; it has to answer before pollImports can launch the
+        // worker, which is why the queue entry waits in argPrompt_ meanwhile.
+        void drawArgPrompt();
         void flashStatus(std::string message);
 
         // --- misc ----------------------------------------------------------
@@ -1370,10 +1376,34 @@ namespace threepp::editor {
             std::filesystem::path path;
             std::future<std::shared_ptr<Object3D>> future;
             float elapsed = 0.f;
+            // What the arg prompt collected, kept so the RobotConfig written on
+            // success records it and every later rebuild can reuse it.
+            std::vector<std::pair<std::string, std::string>> args;
         };
-        std::deque<std::filesystem::path> importQueue_;
+        // A queued file, and the xacro arguments it is to be expanded with.
+        // `argsResolved` separates "nobody has looked yet" from "looked, and the
+        // answer was none" — the second is the normal case for every asset type
+        // that is not an argument-driven description.
+        struct PendingImport {
+            std::filesystem::path path;
+            std::vector<std::pair<std::string, std::string>> args;
+            bool argsResolved = false;
+        };
+        std::deque<PendingImport> importQueue_;
         std::unique_ptr<ActiveImport> activeImport_;
         std::string importError_;
+        // A popped entry parked between "this file declares arguments" and the
+        // user answering. One editable buffer per declaration, left EMPTY on
+        // purpose: an untouched field must send no override at all, so that the
+        // file's own default — which may be derived from another argument —
+        // still applies. The declared text is shown as a hint instead.
+        struct ArgPrompt {
+            std::filesystem::path path;
+            std::vector<xacro::ArgDecl> declared;
+            std::vector<std::vector<char>> values;
+            bool opened = false;
+        };
+        std::unique_ptr<ArgPrompt> argPrompt_;
         // Transient status-bar message (import results and similar).
         std::string statusFlash_;
         float statusFlashRemaining_ = 0.f;

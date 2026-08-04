@@ -30,6 +30,9 @@ lights, the frame loop, loaders and the two backends.
 * FFT-displaced ocean, water & sky shaders, PMREM environment maps
 * Path-traced sensor simulation: LIDAR, depth sensor, event camera
 * Built-in model loaders [Binary STL, OBJ/MTL, glTF, COLLADA, USD, FBX, SVG, URDF]
+* **Native xacro support** — URDF loading takes `.urdf.xacro` directly (macros, properties,
+  YAML-driven parameters, `$(find)`/`$(arg)`), no ROS or Python install required; verified
+  against the Universal Robots ROS 2 description
 * Builds on Windows, Linux, macOS, MinGW and with Emscripten.
 
 ## Current state of the project

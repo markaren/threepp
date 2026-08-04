@@ -182,6 +182,24 @@ namespace {
         return keep && *keep && *keep != '0';
     }
 
+    bool isDescription(const std::filesystem::path& path) {
+
+        auto extension = path.extension().string();
+        std::transform(extension.begin(), extension.end(), extension.begin(),
+                       [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+
+        return extension == ".urdf" || extension == ".xacro";
+    }
+
+    // What a queued file wants to be told before it can be expanded. Only a
+    // robot description is asked: scanArgs on a 200 MB .glb would parse the
+    // whole thing as XML, fail, and answer the same empty vector.
+    std::vector<xacro::ArgDecl> declaredXacroArgs(const std::filesystem::path& path) {
+
+        if (!isDescription(path)) return {};
+        return xacro::scanArgs(path);
+    }
+
 }// namespace
 
 
@@ -828,6 +846,8 @@ void EditorApp::drawUi() {
         ImGui::EndPopup();
     }
 
+    drawArgPrompt();
+
     if (!importError_.empty() && !ImGui::IsPopupOpen("Import failed")) {
         ImGui::OpenPopup("Import failed");
     }
@@ -1171,7 +1191,7 @@ void EditorApp::importModel(const std::filesystem::path& path) {
 
     // Loading happens on a worker so the UI never freezes; pollImports picks
     // the queue up, shows the toast and finalizes on the main thread.
-    importQueue_.push_back(path);
+    importQueue_.push_back({path, {}, false});
     log("import queued: " + path.filename().string());
 }
 
@@ -1180,20 +1200,52 @@ void EditorApp::pollImports(float dt) {
     uiTime_ += dt;
     if (statusFlashRemaining_ > 0.f && (statusFlashRemaining_ -= dt) <= 0.f) statusFlash_.clear();
 
-    if (!activeImport_ && !importQueue_.empty()) {
-        auto path = importQueue_.front();
+    if (!activeImport_ && !argPrompt_ && !importQueue_.empty()) {
+
+        auto entry = importQueue_.front();
         importQueue_.pop_front();
+
+        // A description that declares arguments cannot be expanded until someone
+        // has said what they are — UR's ur_type defaults to a deliberately
+        // invalid value so that an unanswered import fails loudly. Ask first,
+        // and launch nothing this frame; the prompt's OK pushes the entry back.
+        if (!entry.argsResolved) {
+            auto declared = declaredXacroArgs(entry.path);
+            if (!declared.empty() && !options_.selfTest) {
+                argPrompt_ = std::make_unique<ArgPrompt>();
+                argPrompt_->path = entry.path;
+                argPrompt_->values.resize(declared.size(), std::vector<char>(1024, '\0'));
+                argPrompt_->declared = std::move(declared);
+                return;
+            }
+            // Nothing declared, or a headless self-test run, which has nobody to
+            // ask and takes the file's own defaults.
+            entry.argsResolved = true;
+        }
+
+        const auto path = entry.path;
+        std::map<std::string, std::string> args;
+        for (const auto& [name, value] : entry.args) args[name] = value;
+
         activeImport_ = std::make_unique<ActiveImport>();
         activeImport_->path = path;
+        activeImport_->args = std::move(entry.args);
         // Loader exceptions surface through the future and are rethrown on
         // the main thread in the get() below.
-        activeImport_->future = std::async(std::launch::async, [path]() -> std::shared_ptr<Object3D> {
-            auto extension = path.extension().string();
-            std::transform(extension.begin(), extension.end(), extension.begin(),
-                           [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
-            if (extension == ".urdf" || extension == ".xacro") {
+        activeImport_->future = std::async(std::launch::async, [path, args]() -> std::shared_ptr<Object3D> {
+            if (isDescription(path)) {
                 URDFLoader loader;
-                return loader.load(path);
+                if (!args.empty()) loader.setArgs(args);
+                auto robot = loader.load(path);
+                // A xacro that fails knows exactly why — a missing package, an
+                // argument nobody supplied, a file and a line — and that reason is
+                // worth far more in the console than "nothing importable".
+                if (!robot) {
+                    if (const auto reason = loader.lastError(); !reason.empty()) {
+                        throw std::runtime_error(reason);
+                    }
+                }
+                return robot;
             }
             ModelLoader loader;
             return loader.load(path);
@@ -1209,6 +1261,7 @@ void EditorApp::pollImports(float dt) {
 
     const auto path = activeImport_->path;
     const auto elapsed = activeImport_->elapsed;
+    const auto args = activeImport_->args;
     std::shared_ptr<Object3D> group;
     std::string error;
     try {
@@ -1221,7 +1274,10 @@ void EditorApp::pollImports(float dt) {
 
     if (!error.empty()) {
         log("import failed: " + path.filename().string() + " - " + error);
-        importError_ = path.filename().string() + "\n\n" + error;
+        // A description says why it failed, down to the file and line, and the
+        // console has already said it. A modal on top of that only asks for a
+        // click before you can go and fix the thing it named.
+        if (!isDescription(path)) importError_ = path.filename().string() + "\n\n" + error;
         return;
     }
 
@@ -1247,6 +1303,9 @@ void EditorApp::pollImports(float dt) {
         RobotConfig config;
         config.urdf = path.string();
         config.joints = robot->jointValues();
+        // Whatever the arg prompt collected. Without this the file is only half
+        // the answer, and every later rebuild would expand it differently.
+        config.xacroArgs = args;
         config.write(*robot);
         // URDFLoader builds the collision hulls visible; they are wireframe
         // duplicates sitting on the visual meshes, so start them hidden.
@@ -1267,6 +1326,90 @@ void EditorApp::pollImports(float dt) {
     }
     log(message);
     flashStatus(message);
+}
+
+void EditorApp::drawArgPrompt() {
+
+    if (!argPrompt_) return;
+
+    constexpr const char* title = "Import arguments";
+    if (!argPrompt_->opened) {
+        ImGui::OpenPopup(title);
+        argPrompt_->opened = true;
+    }
+
+    const ImVec2 centre = ImGui::GetMainViewport()->GetCenter();
+    ImGui::SetNextWindowPos(centre, ImGuiCond_Appearing, {0.5f, 0.5f});
+    ImGui::SetNextWindowSizeConstraints({460 * contentScale_, 0}, {820 * contentScale_, FLT_MAX});
+
+    if (!ImGui::BeginPopupModal(title, nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+        // Dismissed with Esc, which reads as Cancel — reopening it would make the
+        // dialog impossible to get out of by the one key that always means "no".
+        if (!ImGui::IsPopupOpen(title)) {
+            log("import cancelled: " + argPrompt_->path.filename().string());
+            argPrompt_.reset();
+        }
+        return;
+    }
+
+    ImGui::TextUnformatted(argPrompt_->path.filename().string().c_str());
+    ImGui::TextDisabled("%s", "Leave a field empty to use the file's own default.");
+    ImGui::Spacing();
+    ImGui::Separator();
+    ImGui::Spacing();
+
+    for (std::size_t i = 0; i < argPrompt_->declared.size(); ++i) {
+
+        const auto& decl = argPrompt_->declared[i];
+        auto& buffer = argPrompt_->values[i];
+
+        ImGui::TextUnformatted(decl.name.c_str());
+        ImGui::SetNextItemWidth(-1);
+        // The declared text is a HINT, never the field's contents. Pre-filling
+        // would turn a default that is still being derived — UR's joint limits
+        // path is built out of ur_type — into a frozen literal the moment the
+        // dialog was opened.
+        const std::string id = "##arg" + std::to_string(i);
+        ImGui::InputTextWithHint(id.c_str(),
+                                 decl.hasDefault ? decl.defaultValue.c_str() : "(no default - required)",
+                                 buffer.data(), buffer.size());
+        ImGui::Spacing();
+    }
+
+    ImGui::Separator();
+    ImGui::Spacing();
+
+    if (ImGui::Button("Import", {110 * contentScale_, 0})) {
+
+        PendingImport entry;
+        entry.path = argPrompt_->path;
+        entry.argsResolved = true;
+        for (std::size_t i = 0; i < argPrompt_->declared.size(); ++i) {
+            const std::string value = argPrompt_->values[i].data();
+            if (value.empty()) continue;
+            entry.args.emplace_back(argPrompt_->declared[i].name, value);
+        }
+
+        // Back to the front: it was popped to get here, and it is still the
+        // import the user asked for first.
+        importQueue_.push_front(std::move(entry));
+        argPrompt_.reset();
+        ImGui::CloseCurrentPopup();
+        ImGui::EndPopup();
+        return;
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Cancel", {110 * contentScale_, 0})) {
+        // Dropped, not failed: nobody asked for a robot built out of defaults
+        // they just declined to accept, and an error modal would be a lie.
+        log("import cancelled: " + argPrompt_->path.filename().string());
+        argPrompt_.reset();
+        ImGui::CloseCurrentPopup();
+        ImGui::EndPopup();
+        return;
+    }
+
+    ImGui::EndPopup();
 }
 
 float EditorApp::hierarchyPx() const {
@@ -2397,7 +2540,12 @@ void EditorApp::rearticulateRobots(Scene& scene) {
         std::string error;
         try {
             URDFLoader loader;
+            // The same arguments the import used, or this rebuilds a different
+            // robot out of the same file — the exact thing a play/stop cycle
+            // must not do.
+            loader.setArgs(config.argMap());
             robot = loader.load(config.urdf);
+            if (!robot) error = loader.lastError();
         } catch (const std::exception& e) {
             error = e.what();
         }
