@@ -57,6 +57,67 @@ namespace {
         return e;
     }
 
+    // A value landing inside a string literal has to survive the expression lexer, which
+    // reads backslashes as escapes. On Windows every resolved path is full of them.
+    std::string escapedFor(std::string_view text, char quote) {
+
+        std::string out;
+        for (const char c : text) {
+            if (c == '\\' || c == quote) out += '\\';
+            out += c;
+        }
+        return out;
+    }
+
+    // $(find pkg) and $(arg id) may sit inside an expression, including inside a string
+    // literal there: `${xacro.load_yaml('$(find pkg)/config/x.yaml')}` is how a ROS
+    // description names a file it wants to read. Expand those before the expression is
+    // parsed, the way xacro's own text evaluation recurses into what it finds.
+    std::string expandInExpression(std::string_view raw, const SubstCtx& ctx) {
+
+        std::string out;
+        char quote = 0;
+
+        for (std::size_t i = 0; i < raw.size();) {
+
+            const char c = raw[i];
+
+            if (c == '$' && i + 1 < raw.size() && (raw[i + 1] == '{' || raw[i + 1] == '(')) {
+                const bool braced = raw[i + 1] == '{';
+                const std::size_t end = matchDelimiter(raw, i + 1, braced ? '{' : '(',
+                                                       braced ? '}' : ')', ctx.document);
+                const std::string text = substitute(raw.substr(i, end - i + 1), ctx).text;
+                out += quote ? escapedFor(text, quote) : text;
+                i = end + 1;
+                continue;
+            }
+
+            if (quote) {
+                if (c == '\\' && i + 1 < raw.size()) {
+                    out += c;
+                    out += raw[i + 1];
+                    i += 2;
+                    continue;
+                }
+                if (c == quote) quote = 0;
+            } else if (c == '\'' || c == '"') {
+                quote = c;
+            }
+
+            out += c;
+            ++i;
+        }
+
+        return out;
+    }
+
+    // Only the ones that carry a substitution pay for the pass.
+    Value evaluateText(std::string_view raw, const SubstCtx& ctx) {
+
+        if (raw.find('$') == std::string_view::npos) return evaluate(raw, evalContext(ctx));
+        return evaluate(expandInExpression(raw, ctx), evalContext(ctx));
+    }
+
 }// namespace
 
 SubstResult threepp::xacro::substitute(std::string_view raw, const SubstCtx& ctx) {
@@ -94,7 +155,7 @@ SubstResult threepp::xacro::substitute(std::string_view raw, const SubstCtx& ctx
         const bool whole = i == 0 && end + 1 == raw.size();
 
         if (braced) {
-            const Value v = evaluate(inner, evalContext(ctx));
+            const Value v = evaluateText(inner, ctx);
             if (whole) result.whole = v;
             out += v.toString();
         } else {
@@ -109,7 +170,7 @@ SubstResult threepp::xacro::substitute(std::string_view raw, const SubstCtx& ctx
                                              std::string(raw) + "\"",
                                      ctx.document);
                 }
-                const Value v = evaluate(tail, evalContext(ctx));
+                const Value v = evaluateText(tail, ctx);
                 result.whole = v;
                 out += v.toString();
 

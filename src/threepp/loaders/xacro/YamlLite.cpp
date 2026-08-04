@@ -207,18 +207,37 @@ namespace {
                 const std::string rest = trim(line.text.substr(sep + 1));
                 const int number = line.number;
 
-                if (rest.empty()) {
+                // `key: &name` with nothing after it names the block below, the way a bare
+                // `key:` introduces one — the anchor belongs to the whole collection.
+                const std::string anchor = rest.size() > 1 && rest[0] == '&' &&
+                                                           rest.find_first_of(" \t") == std::string::npos
+                                                   ? rest.substr(1)
+                                                   : std::string{};
+
+                if (rest.empty() || !anchor.empty()) {
                     ++i;
+                    Value value;
                     if (i < lines_.size() &&
                         (lines_[i].indent > indent ||
                          (lines_[i].indent == indent && isSequenceEntry(lines_[i].text)))) {
-                        out[key] = parseBlock(i, lines_[i].indent);
-                    } else {
-                        out[key] = Value{};
+                        value = parseBlock(i, lines_[i].indent);
                     }
+                    if (!anchor.empty()) anchors_[anchor] = value;
+                    out[key] = std::move(value);
                 } else {
-                    out[key] = parseScalarOrFlow(rest, number);
+                    Value value = parseScalarOrFlow(rest, number);
                     ++i;
+
+                    // `<<: *base` merges the aliased mapping in. Left as a key called "<<"
+                    // it would read as a member of the robot, which is worse than an error.
+                    if (key == "<<") {
+                        if (!value.isDict()) fail("a merge key needs a mapping", number);
+                        // What the document says itself outranks what it merged in, whichever
+                        // came first in the file - a later key overwrites through out[key].
+                        for (const auto& [name, member] : value.asDict()) out.emplace(name, member);
+                        continue;
+                    }
+                    out[key] = std::move(value);
                 }
             }
             return Value(std::move(out));
@@ -288,13 +307,32 @@ namespace {
             return s;
         }
 
-        Value parseScalarOrFlow(const std::string& text, int line) const {
+        Value parseScalarOrFlow(const std::string& text, int line) {
 
             if (text == "|" || text == ">" || text == "|-" || text == ">-" ||
                 text == "|+" || text == ">+") {
                 fail("block scalars are not supported", line);
             }
-            if (text[0] == '&' || text[0] == '*') fail("anchors and aliases are not supported", line);
+
+            // `*name` stands for whatever `&name` introduced. Anchors are resolved as the
+            // document is read, so an alias can only name something already defined -
+            // which is all YAML allows anyway.
+            if (text[0] == '*') {
+                const std::string name = trim(text.substr(1));
+                const auto found = anchors_.find(name);
+                if (found == anchors_.end()) fail("no anchor named '" + name + "'", line);
+                return found->second;
+            }
+            if (text[0] == '&') {
+                const std::size_t k = text.find_first_of(" \t");
+                const std::string name = text.substr(1, k == std::string::npos ? k : k - 1);
+                if (name.empty()) fail("an anchor needs a name", line);
+
+                Value value;
+                if (k != std::string::npos) value = parseScalarOrFlow(trim(text.substr(k)), line);
+                anchors_[name] = value;
+                return value;
+            }
 
             if (text[0] == '[' || text[0] == '{') {
                 std::size_t p = 0;
@@ -463,6 +501,7 @@ namespace {
 
         std::filesystem::path document_;
         std::vector<Line> lines_;
+        std::map<std::string, Value> anchors_;
     };
 
 }// namespace

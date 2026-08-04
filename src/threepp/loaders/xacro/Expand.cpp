@@ -147,6 +147,28 @@ namespace {
         return out;
     }
 
+    // The quotes in `rpy:='0 0 0'` group the default, they are not part of it. Leaving them
+    // on writes `rpy="'0 0 0'"` into the URDF, which reads as three numbers to nobody.
+    std::string unquoted(const std::string& s) {
+
+        if (s.size() >= 2 && (s.front() == '\'' || s.front() == '"') && s.back() == s.front()) {
+            return s.substr(1, s.size() - 2);
+        }
+        return s;
+    }
+
+    // Where a parameter's default begins, and how long the separator is. ':=' is the form
+    // xacro documents, but the older bare '=' is still out there — franka_description writes
+    // `params="name prefix=${ee_prefix} rpy:='0 0 0'"` and means the same thing by both.
+    // ':=' is looked for first so that its own '=' is not mistaken for the separator.
+    std::pair<std::size_t, std::size_t> defaultSeparator(const std::string& token) {
+
+        if (const auto walrus = token.find(":="); walrus != std::string::npos) return {walrus, 2};
+        if (const auto plain = token.find('='); plain != std::string::npos) return {plain, 1};
+
+        return {std::string::npos, 0};
+    }
+
     std::vector<MacroParam> parseParams(std::string_view raw, const std::string& macro,
                                         const std::filesystem::path& document) {
 
@@ -161,17 +183,17 @@ namespace {
             } else if (startsWith(token, "*")) {
                 p.kind = MacroParam::Kind::Block;
                 p.name = token.substr(1);
-            } else if (const auto sep = token.find(":="); sep != std::string::npos) {
-                p.name = token.substr(0, sep);
-                const std::string rest = token.substr(sep + 2);
+            } else if (const auto sep = defaultSeparator(token); sep.first != std::string::npos) {
+                p.name = token.substr(0, sep.first);
+                const std::string rest = token.substr(sep.first + sep.second);
                 if (rest == "^") {
                     p.kind = MacroParam::Kind::Inherit;
                 } else if (startsWith(rest, "^|")) {
                     p.kind = MacroParam::Kind::InheritDefault;
-                    p.def = rest.substr(2);
+                    p.def = unquoted(rest.substr(2));
                 } else {
                     p.kind = MacroParam::Kind::Default;
-                    p.def = rest;
+                    p.def = unquoted(rest);
                 }
             } else {
                 p.name = token;

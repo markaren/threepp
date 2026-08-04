@@ -277,10 +277,47 @@ TEST_CASE("YamlLite converts the !degrees and !radians tags") {
     REQUIRE_THROWS_AS(parseYaml("a: !degrees true\n"), XacroError);
 }
 
+TEST_CASE("YamlLite resolves anchors and aliases") {
+
+    // How an inertia config says "this finger is the other one" — franka_description
+    // writes its two fingers exactly this way.
+    const auto v = parseYaml(
+            "left: &finger\n"
+            "  mass: 0.03\n"
+            "  inertia:\n"
+            "    xx: 0.5\n"
+            "right: *finger\n"
+            "scalar: &m 2.5\n"
+            "again: *m\n");
+
+    REQUIRE(v.asDict().at("right").asDict().at("mass").asNumber() == Catch::Approx(0.03));
+    REQUIRE(v.asDict().at("right").asDict().at("inertia").asDict().at("xx").asNumber() == Catch::Approx(0.5));
+    REQUIRE(v.asDict().at("again").asNumber() == Catch::Approx(2.5));
+
+    SECTION("a merge key folds the aliased mapping in, and loses to what the document says") {
+
+        const auto merged = parseYaml(
+                "base: &base\n"
+                "  a: 1\n"
+                "  b: 2\n"
+                "derived:\n"
+                "  <<: *base\n"
+                "  b: 3\n");
+
+        const auto& derived = merged.asDict().at("derived").asDict();
+        REQUIRE(derived.at("a").asInt() == 1);
+        REQUIRE(derived.at("b").asInt() == 3);
+        REQUIRE(derived.count("<<") == 0);
+    }
+
+    SECTION("an alias with no anchor is an error, not an empty value") {
+
+        REQUIRE_THROWS_AS(parseYaml("a: *nobody\n"), XacroError);
+    }
+}
+
 TEST_CASE("YamlLite rejects what it does not support") {
 
-    REQUIRE_THROWS_AS(parseYaml("a: &anchor 1\n"), XacroError);
-    REQUIRE_THROWS_AS(parseYaml("a: *alias\n"), XacroError);
     REQUIRE_THROWS_AS(parseYaml("a: !!str 1\n"), XacroError);
     REQUIRE_THROWS_AS(parseYaml("a: !custom 1\n"), XacroError);
     REQUIRE_THROWS_AS(parseYaml("a: !Degrees 1\n"), XacroError);
@@ -356,6 +393,33 @@ TEST_CASE("Expr resolves names through the scope") {
     REQUIRE(eval("width * 2", &scope) == Value(1.0));
     REQUIRE(eval("name + '_link'", &scope) == Value("robot_link"));
     REQUIRE(eval("limits['upper']", &scope) == Value(2LL));
+
+    // A mapping answers to a dotted name as well as a subscript.
+    REQUIRE(eval("limits.upper", &scope) == Value(2LL));
+    REQUIRE_THROWS_AS(eval("limits.lower", &scope), XacroError);
+    REQUIRE_THROWS_AS(eval("width.upper", &scope), XacroError);
+}
+
+TEST_CASE("A substitution inside an expression is expanded before it is evaluated") {
+
+    // `${xacro.load_yaml('$(find pkg)/config/x.yaml')}` is how a ROS description names a
+    // file it wants to read - franka_description opens its inertias exactly this way, and
+    // the path it builds is full of backslashes on Windows for the lexer to trip over.
+    const TempDir dir("nested_subst");
+    writeFile(dir.path / "config" / "limits.yaml", "shoulder:\n  upper: 6.28\n");
+
+    Processor processor;
+    processor.addPackagePath("arm_description", dir.path);
+
+    const auto xml = requireOk(processor.processString(
+            wrap(R"XML(<xacro:arg name="which" default="limits"/>
+                       <xacro:property name="limits"
+                                       value="${xacro.load_yaml('$(find arm_description)/config/$(arg which).yaml')}"/>
+                       <limit upper="${limits.shoulder.upper}" home="$(dirname)"/>)XML"),
+            dir.path));
+
+    REQUIRE(contains(xml, R"XML(upper="6.28")XML"));
+    REQUIRE(contains(xml, "home=\"" + dir.path.string() + "\""));
 }
 
 TEST_CASE("Expr errors throw instead of defaulting to zero") {
@@ -743,6 +807,20 @@ TEST_CASE("Expand instantiates macros") {
 
         REQUIRE(contains(xml, R"XML(<link name="leaf_1")XML"));
         REQUIRE(contains(xml, R"XML(<link name="leaf_2")XML"));
+    }
+
+    SECTION("a default may be written with '=' as well as ':='") {
+
+        // franka_description mixes the two forms inside one params attribute.
+        const auto xml = requireOk(process(
+                R"XML(<xacro:macro name="link" params="name prefix=front_ rpy:='0 0 0'">
+                        <link name="${prefix}${name}" rpy="${rpy}"/>
+                      </xacro:macro>
+                      <xacro:link name="wheel"/>
+                      <xacro:link name="hand" prefix="left_"/>)XML"));
+
+        REQUIRE(contains(xml, R"XML(<link name="front_wheel" rpy="0 0 0")XML"));
+        REQUIRE(contains(xml, R"XML(<link name="left_hand")XML"));
     }
 
     SECTION("unbounded recursion hits the budget instead of the stack") {

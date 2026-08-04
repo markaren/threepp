@@ -907,8 +907,18 @@ namespace {
 
     Operand resolveAttr(const Operand& base, const std::string& attr) {
 
+        // What load_yaml returns answers to both `d['k']` and `d.k`, the way the dict
+        // wrapper python xacro installs on its loader does. Descriptions lean on it:
+        // franka reads `link_inertials.origin.rpy` straight out of its inertia file.
+        if (base.kind == Operand::Kind::Val && base.value.isDict()) {
+            const auto& dict = base.value.asDict();
+            const auto found = dict.find(attr);
+            if (found == dict.end()) throw XacroError("no member '" + attr + "' in the mapping");
+            return {Operand::Kind::Val, found->second, {}};
+        }
+
         if (base.kind != Operand::Kind::Module) {
-            throw XacroError("attribute access is only supported on 'math' and 'xacro'");
+            throw XacroError("attribute access is only supported on 'math', 'xacro' and mappings");
         }
 
         if (base.name == "math") {
