@@ -70,6 +70,20 @@ namespace {
         return out;
     }
 
+    // A package directory is an answer, not a hint: callers join relative filenames onto it
+    // and print it out of $(find). It must therefore stand on its own. On Windows a path
+    // like "D:pkg" carries a root name but no root directory, so std::filesystem calls it
+    // relative - it is relative to that drive's working directory, and joining it onto the
+    // document that named the package would silently double the directory up.
+    std::filesystem::path anchored(const std::filesystem::path& dir) {
+
+        if (dir.is_absolute()) return dir;
+
+        std::error_code ec;
+        const auto full = std::filesystem::absolute(dir, ec);
+        return ec ? dir : full;
+    }
+
     bool named(const std::filesystem::path& dir, const std::string& package) {
 
         const auto name = PackageResolver::manifestName(dir);
@@ -81,7 +95,7 @@ namespace {
 
 void PackageResolver::addPackagePath(const std::string& package, const std::filesystem::path& dir) {
 
-    registry_[package] = dir;
+    registry_[package] = anchored(dir);
     cache_.erase(package);
 }
 
@@ -119,8 +133,9 @@ std::optional<std::filesystem::path> PackageResolver::resolve(const std::string&
     if (const auto it = cache_.find(package); it != cache_.end()) return it->second;
 
     const auto accept = [&](const std::filesystem::path& p) {
-        cache_[package] = p;
-        return std::optional<std::filesystem::path>(p);
+        const auto dir = anchored(p);
+        cache_[package] = dir;
+        return std::optional<std::filesystem::path>(dir);
     };
 
     const auto chain = ancestors(fromDoc);

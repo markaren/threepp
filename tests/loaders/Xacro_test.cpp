@@ -16,6 +16,7 @@
 #include <fstream>
 #include <map>
 #include <string>
+#include <system_error>
 
 using namespace threepp;
 using namespace threepp::xacro;
@@ -464,6 +465,37 @@ TEST_CASE("PackageResolver honours the explicit registry") {
     const auto found = packages.resolve("registered_pkg", dir.path / "any.xacro");
     REQUIRE(found.has_value());
     REQUIRE(*found == dir.path);
+}
+
+TEST_CASE("PackageResolver answers with a directory that stands on its own") {
+
+    // A registered path may be spelled relative to the working directory - on Windows also
+    // drive-relative, as "D:pkg". The answer must not stay that way: callers join filenames
+    // onto it, and a relative answer would be re-anchored at the including document instead.
+    const TempDir dir("relative_registry");
+    writeFile(dir.path / "urdf" / "part.xacro", wrap(R"XML(<link name="part"/>)XML"));
+
+    std::error_code ec;
+    const auto spelled = std::filesystem::relative(dir.path, std::filesystem::current_path(), ec);
+    if (ec || spelled.empty()) SKIP("the temp directory has no relative spelling from here");
+
+    PackageResolver packages;
+    packages.addPackagePath("relative_pkg", spelled);
+
+    const auto found = packages.resolve("relative_pkg", dir.path / "any.xacro");
+    REQUIRE(found.has_value());
+    REQUIRE(found->is_absolute());
+    REQUIRE(std::filesystem::equivalent(*found, dir.path));
+
+    const TempDir elsewhere("relative_registry_doc");
+    const auto document = elsewhere.path / "robot.xacro";
+    writeFile(document, wrap(R"XML(<xacro:include filename="package://relative_pkg/urdf/part.xacro"/>)XML"));
+
+    Processor processor;
+    processor.addPackagePath("relative_pkg", spelled);
+
+    const auto xml = requireOk(processor.processFile(document));
+    REQUIRE(contains(xml, R"XML(<link name="part")XML"));
 }
 
 TEST_CASE("PackageResolver walks up to a matching manifest") {
