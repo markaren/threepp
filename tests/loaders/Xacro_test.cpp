@@ -400,6 +400,33 @@ TEST_CASE("Expr resolves names through the scope") {
     REQUIRE_THROWS_AS(eval("width.upper", &scope), XacroError);
 }
 
+TEST_CASE("Expr slices lists and strings") {
+
+    Scope scope;
+    scope.set("types", Value(List{Value("base"), Value("left"), Value("right")}));
+
+    // "every arm but the first", which is how a two-armed description splits its list.
+    REQUIRE(eval("types[1:]", &scope).asList().size() == 2);
+    REQUIRE(eval("types[1:]", &scope).asList()[0] == Value("left"));
+    REQUIRE(eval("types[:1]", &scope).asList()[0] == Value("base"));
+    REQUIRE(eval("types[1:2]", &scope).asList().size() == 1);
+    REQUIRE(eval("types[:]", &scope).asList().size() == 3);
+    REQUIRE(eval("types[-1:]", &scope).asList()[0] == Value("right"));
+    REQUIRE(eval("types[::2]", &scope).asList().size() == 2);
+    REQUIRE(eval("types[::-1]", &scope).asList()[0] == Value("right"));
+
+    // Out of range clamps, the way Python does, rather than throwing.
+    REQUIRE(eval("types[5:]", &scope).asList().empty());
+    REQUIRE(eval("types[:99]", &scope).asList().size() == 3);
+
+    REQUIRE(eval("'prefix_link'[7:]") == Value("link"));
+    REQUIRE(eval("len(types[1:])", &scope) == Value(2LL));
+
+    REQUIRE_THROWS_AS(eval("types[::0]", &scope), XacroError);
+    REQUIRE_THROWS_AS(eval("types['a':]", &scope), XacroError);
+    REQUIRE_THROWS_AS(eval("5[1:]"), XacroError);
+}
+
 TEST_CASE("A substitution inside an expression is expanded before it is evaluated") {
 
     // `${xacro.load_yaml('$(find pkg)/config/x.yaml')}` is how a ROS description names a
@@ -831,6 +858,25 @@ TEST_CASE("Expand instantiates macros") {
 
         REQUIRE_FALSE(result.ok);
         REQUIRE(contains(result.errors.front(), "nested more than"));
+    }
+
+    SECTION("the same file included twice redefines nothing") {
+
+        // xacro has no include guards, so a shared utils file lands once per branch of the
+        // robot. franka's does, and every macro in it was drawing a warning.
+        const TempDir dir("reinclude");
+        writeFile(dir.path / "utils.xacro",
+                  wrap(R"XML(<xacro:macro name="util"><link name="util"/></xacro:macro>)XML"));
+        writeFile(dir.path / "robot.xacro",
+                  wrap(R"XML(<xacro:include filename="utils.xacro"/>
+                             <xacro:include filename="utils.xacro"/>
+                             <xacro:util/>)XML"));
+
+        Processor processor;
+        const auto result = processor.processFile(dir.path / "robot.xacro");
+
+        REQUIRE(result.ok);
+        REQUIRE(result.warnings.empty());
     }
 
     SECTION("a later definition replaces an earlier one, with a warning") {

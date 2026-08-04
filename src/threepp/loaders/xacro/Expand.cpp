@@ -12,6 +12,7 @@
 #include <iterator>
 #include <list>
 #include <optional>
+#include <set>
 #include <system_error>
 #include <utility>
 #include <vector>
@@ -329,6 +330,7 @@ namespace {
         Scope scope_;
         std::map<std::string, Value> args_;
         std::map<std::string, MacroDef> macros_;
+        std::set<std::string> warnedRedefinitions_;
         std::map<std::string, BlockArg> blocks_;
         std::vector<std::filesystem::path> includeStack_;
         std::list<pugi::xml_document> owned_;
@@ -587,8 +589,24 @@ namespace {
         def.doc = doc;
         def.params = parseParams(node.attribute("params").value(), name, doc.path);
 
-        if (macros_.count(name)) {
-            warn("macro '" + name + "' redefined", doc);
+        // xacro has no include guards, so a file that several branches of a robot need is
+        // simply included several times - franka's utils.xacro lands once per arm. That
+        // redefines every macro in it with the very same text, which is not what "redefined"
+        // is meant to warn about. Only a definition that differs is worth a word: same file,
+        // same place in it, same macro.
+        if (const auto previous = macros_.find(name); previous != macros_.end()) {
+            const bool identical = previous->second.doc.path == doc.path &&
+                                   previous->second.body.offset_debug() == node.offset_debug();
+
+            // Two files that both define the name take turns as the includes interleave,
+            // and saying so every time buries the fact that they disagree at all. Each
+            // definition gets to announce itself once.
+            const std::string site = name + '@' + doc.path.string() + ':' +
+                                     std::to_string(node.offset_debug());
+
+            if (!identical && warnedRedefinitions_.insert(site).second) {
+                warn("macro '" + name + "' redefined", doc);
+            }
         }
         macros_[name] = std::move(def);
     }

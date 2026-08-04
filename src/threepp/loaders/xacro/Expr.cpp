@@ -181,7 +181,7 @@ namespace {
                 }
             }
 
-            static const std::string oneChar = "+-*/%<>()[],.=";
+            static const std::string oneChar = "+-*/%<>()[],.=:";
             const char c = s_[p_];
             if (oneChar.find(c) == std::string::npos) {
                 throw XacroError(std::string("unexpected character '") + c + "'");
@@ -213,7 +213,10 @@ namespace {
                           Not,
                           Compare,
                           Ternary,
-                          ListLit };
+                          ListLit,
+                          // kids are always [base, start, stop, step]; a bound the author
+                          // left out is a null kid, which is not the same as a zero
+                          Slice };
 
         Kind kind{Kind::Literal};
         Value literal;
@@ -434,11 +437,36 @@ namespace {
             while (true) {
                 if (isOp("[")) {
                     ++p_;
-                    auto n = make(Node::Kind::Index);
-                    n->kids.push_back(std::move(base));
-                    n->kids.push_back(ternary());
+
+                    NodePtr start;
+                    if (!isOp(":")) start = ternary();
+
+                    if (!isOp(":")) {
+                        auto n = make(Node::Kind::Index);
+                        n->kids.push_back(std::move(base));
+                        n->kids.push_back(std::move(start));
+                        expectOp("]");
+                        base = std::move(n);
+                        continue;
+                    }
+
+                    ++p_;
+                    NodePtr stop;
+                    NodePtr step;
+                    if (!isOp("]") && !isOp(":")) stop = ternary();
+                    if (isOp(":")) {
+                        ++p_;
+                        if (!isOp("]")) step = ternary();
+                    }
                     expectOp("]");
+
+                    auto n = make(Node::Kind::Slice);
+                    n->kids.push_back(std::move(base));
+                    n->kids.push_back(std::move(start));
+                    n->kids.push_back(std::move(stop));
+                    n->kids.push_back(std::move(step));
                     base = std::move(n);
+
                 } else if (isOp(".")) {
                     ++p_;
                     if (peek().type != Token::Type::Name) throw XacroError("expected an attribute name after '.'");
@@ -687,6 +715,46 @@ namespace {
         }
 
         throw XacroError("cannot subscript " + base.typeName());
+    }
+
+    // Python's slice, bounds and all: a missing end means "as far as it goes", a negative
+    // index counts from the back, and anything past either end is clamped rather than an
+    // error. `${robot_types_list[1:]}` is a description saying "every arm but the first".
+    Value sliced(const Value& base, const std::optional<long long>& from,
+                 const std::optional<long long>& to, const std::optional<long long>& by) {
+
+        if (!base.isList() && !base.isString()) throw XacroError("cannot slice " + base.typeName());
+
+        const long long size = base.isList() ? static_cast<long long>(base.asList().size())
+                                             : static_cast<long long>(base.asString().size());
+
+        const long long step = by.value_or(1);
+        if (step == 0) throw XacroError("a slice step cannot be zero");
+
+        const auto bounded = [&](long long i, long long low, long long high) {
+            if (i < 0) i += size;
+            return std::clamp(i, low, high);
+        };
+
+        const long long forward = step > 0;
+        const long long start = from ? bounded(*from, forward ? 0 : -1, forward ? size : size - 1)
+                                     : (forward ? 0 : size - 1);
+        const long long stop = to ? bounded(*to, forward ? 0 : -1, forward ? size : size - 1)
+                                  : (forward ? size : -1);
+
+        if (base.isList()) {
+            List out;
+            for (long long i = start; forward ? i < stop : i > stop; i += step) {
+                out.push_back(base.asList()[static_cast<std::size_t>(i)]);
+            }
+            return Value(std::move(out));
+        }
+
+        std::string out;
+        for (long long i = start; forward ? i < stop : i > stop; i += step) {
+            out += base.asString()[static_cast<std::size_t>(i)];
+        }
+        return Value(out);
     }
 
     Operand evalNode(const Node& n, const EvalContext& ctx);
@@ -949,6 +1017,19 @@ namespace {
             case Node::Kind::Index:
                 return {Operand::Kind::Val,
                         subscript(evalValue(*n.kids[0], ctx), evalValue(*n.kids[1], ctx)), {}};
+
+            case Node::Kind::Slice: {
+                const auto bound = [&](const NodePtr& kid) -> std::optional<long long> {
+                    if (!kid) return std::nullopt;
+                    const Value v = evalValue(*kid, ctx);
+                    if (!v.isNumber() || v.isBool()) throw XacroError("a slice bound has to be a number");
+                    return v.asInt();
+                };
+                return {Operand::Kind::Val,
+                        sliced(evalValue(*n.kids[0], ctx), bound(n.kids[1]), bound(n.kids[2]),
+                               bound(n.kids[3])),
+                        {}};
+            }
 
             case Node::Kind::ListLit: {
                 List out;
