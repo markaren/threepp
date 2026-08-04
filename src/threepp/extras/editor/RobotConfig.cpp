@@ -5,6 +5,7 @@
 
 #include "threepp/core/Object3D.hpp"
 #include "threepp/extras/editor/EditorCommands.hpp"
+#include "threepp/loaders/Xacro.hpp"
 #include "threepp/objects/Robot.hpp"
 
 #include <any>
@@ -54,6 +55,22 @@ namespace {
         return std::any_cast<bool>(it->second);
     }
 
+    // Every argument value key on the object, whether or not the name list still
+    // mentions it. Collected first and erased afterwards, because erasing while
+    // walking userData would invalidate the walk.
+    std::vector<std::string> argValueKeys(const Object3D& object) {
+
+        const std::string prefix = xacro::argValueUserDataPrefix;
+
+        std::vector<std::string> keys;
+        for (const auto& [key, _] : object.userData) {
+            if (key.size() > prefix.size() && key.compare(0, prefix.size(), prefix) == 0) {
+                keys.push_back(key);
+            }
+        }
+        return keys;
+    }
+
 }// namespace
 
 
@@ -90,6 +107,13 @@ std::vector<float> RobotConfig::decodeJoints(const std::string& text) {
     return values;
 }
 
+std::map<std::string, std::string> RobotConfig::argMap() const {
+
+    std::map<std::string, std::string> args;
+    for (const auto& [name, value] : xacroArgs) args[name] = value;
+    return args;
+}
+
 std::optional<RobotConfig> RobotConfig::read(const Object3D& object) {
 
     const auto urdf = readString(object, urdfKey);
@@ -99,6 +123,9 @@ std::optional<RobotConfig> RobotConfig::read(const Object3D& object) {
     config.urdf = urdf;
     config.joints = decodeJoints(readString(object, jointsKey));
     config.showColliders = readBool(object, collidersKey, false);
+
+    config.xacroArgs = xacro::readArgsUserData(object);
+
     return config;
 }
 
@@ -117,6 +144,26 @@ void RobotConfig::write(Object3D& object) const {
     } else {
         object.userData.erase(collidersKey);
     }
+
+    // Every value key goes first. Writing over the survivors is cheap, and it is
+    // the only way an argument that was removed does not resurrect itself the
+    // next time this is read: the name list would no longer mention it, but the
+    // orphaned value would still be sitting in the document waiting for a name
+    // list that does.
+    for (const auto& key : argValueKeys(object)) object.userData.erase(key);
+
+    if (xacroArgs.empty()) {
+        object.userData.erase(xacro::argsUserDataKey);
+        return;
+    }
+
+    std::string names;
+    for (const auto& [name, value] : xacroArgs) {
+        if (!names.empty()) names += ',';
+        names += name;
+        object.userData[xacro::argValueUserDataPrefix + name] = value;
+    }
+    object.userData[xacro::argsUserDataKey] = names;
 }
 
 void RobotConfig::erase(Object3D& object) {
@@ -124,6 +171,8 @@ void RobotConfig::erase(Object3D& object) {
     object.userData.erase(urdfKey);
     object.userData.erase(jointsKey);
     object.userData.erase(collidersKey);
+    object.userData.erase(xacro::argsUserDataKey);
+    for (const auto& key : argValueKeys(object)) object.userData.erase(key);
 }
 
 void threepp::editor::transplantRobot(Object3D& placeholder, const std::shared_ptr<Robot>& robot,

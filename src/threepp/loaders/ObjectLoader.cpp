@@ -23,6 +23,7 @@
 #include "threepp/loaders/ImageLoader.hpp"
 #include "threepp/loaders/ModelLoader.hpp"
 #include "threepp/loaders/URDFLoader.hpp"
+#include "threepp/loaders/Xacro.hpp"
 #include "threepp/materials/materials.hpp"
 #include "threepp/materials/MeshDepthMaterial.hpp"
 #include "threepp/materials/MeshMatcapMaterial.hpp"
@@ -1112,7 +1113,23 @@ namespace {
 
     // ------------------------------------------------- linked asset subtrees
 
-    std::shared_ptr<Object3D> importAsset(const std::filesystem::path& path) {
+    // The xacro arguments the editor recorded on the placeholder when the robot was
+    // imported. Re-importing without them would rebuild a DIFFERENT robot — a UR5e
+    // saved as a UR5e would come back as whatever the file defaults to. Nothing about
+    // RobotConfig is known at this level, and nothing needs to be: the entries are
+    // plain strings, read by the one reader the loaders layer owns.
+    std::map<std::string, std::string> readXacroArgs(const Object3D& object) {
+
+        std::map<std::string, std::string> args;
+        for (const auto& [name, value] : xacro::readArgsUserData(object)) args[name] = value;
+        return args;
+    }
+
+    // `why` collects the loader's own account of a failure, which for a xacro is
+    // the difference between a usable report and "it did not load".
+    std::shared_ptr<Object3D> importAsset(const std::filesystem::path& path,
+                                          const std::map<std::string, std::string>& xacroArgs,
+                                          std::string& why) {
 
         auto extension = path.extension().string();
         std::transform(extension.begin(), extension.end(), extension.begin(),
@@ -1120,7 +1137,10 @@ namespace {
 
         if (extension == ".urdf" || extension == ".xacro") {
             URDFLoader loader;
-            return loader.load(path);
+            if (!xacroArgs.empty()) loader.setArgs(xacroArgs);
+            auto robot = loader.load(path);
+            if (!robot) why = loader.lastError();
+            return robot;
         }
 
         ModelLoader loader;
@@ -1226,7 +1246,7 @@ namespace {
         std::shared_ptr<Object3D> imported;
         std::string error;
         try {
-            imported = importAsset(path);
+            imported = importAsset(path, readXacroArgs(placeholder), error);
         } catch (const std::exception& e) {
             error = e.what();
         }

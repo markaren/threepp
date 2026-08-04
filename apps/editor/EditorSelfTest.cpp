@@ -4343,6 +4343,15 @@ int EditorApp::runSelfTest() {
         std::filesystem::remove(conveyorPath, conveyorEc);
     }
 
+    // A description reports its failure to the console and raises no modal, so asking
+    // importError_ alone would pass no matter what happened to it.
+    const auto importFailed = [this] {
+        if (!importError_.empty()) return true;
+        return std::any_of(console_.begin(), console_.end(), [](const std::string& line) {
+            return line.find("import failed:") != std::string::npos;
+        });
+    };
+
     // With a model path on the command line, exercise the async import path
     // end to end: queue -> worker -> finalize -> selected group in the scene.
     if (!options_.openOnStart.empty() && options_.openOnStart.extension() != ".json") {
@@ -4351,7 +4360,7 @@ int EditorApp::runSelfTest() {
         int budget = 3000;// frames; the worker is genuinely asynchronous
         while ((activeImport_ || !importQueue_.empty()) && budget-- > 0) step();
         check(budget > 0, "import completed in time");
-        check(importError_.empty(), "import reported no error");
+        check(!importFailed(), "import reported no error");
         check(document_.scene().children.size() == childrenBefore + 1,
               "import added one group to the scene");
         check(selection_.get() != nullptr, "import selected the new group");
@@ -4519,7 +4528,7 @@ int EditorApp::runSelfTest() {
         int budget = 6000;
         while ((activeImport_ || !importQueue_.empty()) && budget-- > 0) step();
         check(budget > 0, "urdf import completed in time");
-        check(importError_.empty(), "urdf import reported no error");
+        check(!importFailed(), "urdf import reported no error");
 
         auto* robot = selection_.get() ? selection_.get()->as<Robot>() : nullptr;
         check(robot != nullptr, "urdf import yields a Robot");
@@ -4825,7 +4834,7 @@ int EditorApp::runSelfTest() {
         importModel(path);
         int budget = 6000;
         while ((activeImport_ || !importQueue_.empty()) && budget-- > 0) step();
-        check(budget > 0 && importError_.empty(), "the millimetre urdf imported");
+        check(budget > 0 && !importFailed(), "the millimetre urdf imported");
 
         auto* robot = selection_.get() ? selection_.get()->as<Robot>() : nullptr;
         check(robot != nullptr, "and came in as a Robot");

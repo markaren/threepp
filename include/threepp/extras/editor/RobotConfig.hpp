@@ -21,9 +21,11 @@
 #define THREEPP_EDITOR_ROBOTCONFIG_HPP
 
 #include <functional>
+#include <map>
 #include <memory>
 #include <optional>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace threepp {
@@ -50,10 +52,30 @@ namespace threepp::editor {
         // rebuilds the robot, and an inspection aid that vanishes when you
         // press play is worse than useless.
         bool showColliders = false;
+        // The xacro arguments the robot was imported with — ONLY the ones that
+        // were explicitly set, never the file's own defaults. A description that
+        // derives one default from another (UR's joint limits path is built from
+        // ur_type) has to keep deriving it, and a captured default would freeze
+        // the derivation at whatever it happened to be on the day of the import.
+        // In the declaration order of the file, which is the order the import
+        // dialog showed them in.
+        //
+        // Stored as two kinds of userData entry rather than one packed string,
+        // for the reason at the top of this file: an argument value is very often
+        // a path. The key names live in Xacro.hpp, because ObjectLoader has to
+        // read the same entries when it re-imports a linked asset and it knows
+        // nothing about the editor.
+        std::vector<std::pair<std::string, std::string>> xacroArgs;
 
         static constexpr const char* urdfKey = "urdf";
         static constexpr const char* jointsKey = "jointValues";
         static constexpr const char* collidersKey = "showColliders";
+
+        // The same arguments in the shape URDFLoader::setArgs wants. Every path
+        // that rebuilds the robot goes through this, so "rebuilt with the
+        // arguments it was imported with" is one call rather than a convention
+        // each rebuild site has to remember.
+        [[nodiscard]] std::map<std::string, std::string> argMap() const;
 
         [[nodiscard]] static std::string encodeJoints(const std::vector<float>& values);
         [[nodiscard]] static std::vector<float> decodeJoints(const std::string& text);
