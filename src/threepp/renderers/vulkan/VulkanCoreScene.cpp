@@ -2198,10 +2198,11 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
             // The (re)build above rebound the bindless texture array. The
             // raster descriptor's binding 3 mirrors that same table, so
             // invalidate its per-slot cache — each frame slot then re-writes
-            // binding 3 on its next uploadRasterCameraUbo. This is the only
-            // event that changes the table, so it's the only place the raster
-            // mirror needs invalidating.
-            rasterMatTexValid_.fill(0);
+            // binding 3 on its next uploadRasterCameraUbo. Per view: the flag
+            // guards per-view sets, and recordSecondaryViews calls
+            // uploadRasterCameraUbo once per view per frame, so each view
+            // heals its own slot.
+            for (auto& v : views_) v->rasterMatTexValid_.fill(0);
             prevSceneFingerprint = std::move(currFp);
             sceneBuilt_ = true;
 

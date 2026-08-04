@@ -913,7 +913,7 @@ namespace threepp {
         // common case). matTexInfos must outlive the vkUpdateDescriptorSets
         // call below, so it is declared here in function scope.
         std::array<VkDescriptorImageInfo, kMaxMaterialTextures> matTexInfos{};
-        if (rasterMatTexValid_[frame] == 0) {
+        if (view().rasterMatTexValid_[frame] == 0) {
             fillMaterialTextureInfos(matTexInfos);
             writes[3].sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
             writes[3].dstSet          = view().rasterDescSets[frame];
@@ -923,7 +923,7 @@ namespace threepp {
             writes[3].descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
             writes[3].pImageInfo      = matTexInfos.data();
             writeCount = 4;
-            rasterMatTexValid_[frame] = 1;
+            view().rasterMatTexValid_[frame] = 1;
         }
         vkUpdateDescriptorSets(ctx->device(), writeCount, writes, 0, nullptr);
     }

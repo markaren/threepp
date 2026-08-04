@@ -548,10 +548,20 @@ bool VulkanRenderer::Impl::beginDeferredFrame(Object3D& scene, Camera& camera) {
             // binding if the buffer grew.
             if (buildAndUploadEmissiveTris(currentFrame, lastVisibleEntries_)) {
                 // Keep the deferred pass's emissive binding fresh when the
-                // per-frame buffer grows.
-                if (view().deferredShade_) {
-                    view().deferredShade_->rewriteEmissive(currentFrame,
-                                                    emissiveTriBuffers[currentFrame].handle);
+                // per-frame buffer grows. EVERY view: growth destroyed the old
+                // buffer outright, and recordSecondaryViews records against
+                // this same slot later this frame — a secondary's set left
+                // stale names freed memory (an intermittent device-lost once
+                // VMA recycles the block, not a visual glitch). Safe to
+                // rewrite here: the slot's fence has signaled, and the
+                // secondaries ride the same submission.
+                forEachLiveView([&] {
+                    if (view().deferredShade_) {
+                        view().deferredShade_->rewriteEmissive(currentFrame,
+                                                        emissiveTriBuffers[currentFrame].handle);
+                    }
+                });
+                if (primaryView().deferredShade_) {
                     probeGI_->rewriteEmissive(currentFrame,
                                               emissiveTriBuffers[currentFrame].handle);
                 }

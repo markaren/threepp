@@ -74,8 +74,20 @@ namespace threepp {
         for (auto& v : cmds) v.clear();
         // Occlusion-cull metadata rides the same bucketing so its final
         // concatenated order matches the command records 1:1.
+        // PRIMARY ONLY, like the two-phase record itself (recordGbufferStage
+        // gates the passes, but the hazard is here): occl_'s per-FIF
+        // descriptor set and meta buffer are single shared instances, and a
+        // secondary's build runs AFTER the primary's dispatches were recorded
+        // but BEFORE the GPU executes them — prepareFrame would re-point the
+        // set at the secondary's cmd/camera buffers and flushMeta would
+        // replace the meta (with a different draw count), so the primary's
+        // filter/cull-test would execute against the secondary's camera and
+        // list. That is both "moving the second camera changes the main
+        // view" and, when the counts mismatch, garbage compacted into
+        // indirect draws — a GPU hang → watchdog → device lost.
         const bool wantOcclMeta = occlusionCullingEnabled_ && occl_ &&
-                                  occlHiz_ && occlHiz_->valid() && !scissorTest;
+                                  occlHiz_ && occlHiz_->valid() && !scissorTest &&
+                                  !view().secondary;
         auto& occlMeta = indirectOcclScratch_;
         for (auto& v : occlMeta) v.clear();
         auto bucketOf = [](VkCullModeFlags cm) -> int {
@@ -295,7 +307,11 @@ namespace threepp {
         }
 
         indirectTotalDraws_ = globalIdx;
-        occlActiveThisFrame_ = wantOcclMeta && globalIdx > 0u;
+        // Publish only from the primary's build: a secondary reruns this
+        // function later in the same frame (wantOcclMeta forced false above)
+        // and must not stomp the flag the primary's frame body branched on.
+        const bool occlThisBuild = wantOcclMeta && globalIdx > 0u;
+        if (!view().secondary) occlActiveThisFrame_ = occlThisBuild;
         if (globalIdx == 0u) return;
 
         // Concatenate buckets into the per-frame device buffers.
@@ -308,7 +324,7 @@ namespace threepp {
         // sets if any input changed (AFTER the capacity calls above so
         // the src handle is final), then get the mapped meta destination.
         vulkan::OcclusionCull::CullMeta* occlMetaDst = nullptr;
-        if (occlActiveThisFrame_) {
+        if (occlThisBuild) {
             vulkan::OcclusionCull::FrameInputs oin{};
             oin.srcCmds    = view().indirectCmdBuffers[frame].handle;
             oin.rasterCam  = view().rasterCameraUbos[frame].handle;

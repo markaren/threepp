@@ -2004,6 +2004,17 @@ namespace threepp {
             // prev VP, jitter).
             std::array<Buffer, kFramesInFlight> rasterCameraUbos{};
             std::array<VkDescriptorSet, kFramesInFlight> rasterDescSets{};
+            // Per-frame-slot gate for THIS view's raster binding 3 — the
+            // 2048-entry bindless material-texture array (1 = current,
+            // 0 = needs (re)write; value-inits to 0 so a view's first
+            // uploadRasterCameraUbo always writes it). Lives on the view
+            // because the SETS are per-view: as a single Impl-wide array the
+            // primary consumed the invalidation first and every secondary's
+            // binding 3 stayed stale — a view added after the first frames
+            // never had it written at all (no textures), and one that
+            // outlived a table rebuild kept image views the rebuild had
+            // freed (intermittent device-lost, not a visual glitch).
+            std::array<int8_t, kFramesInFlight> rasterMatTexValid_{};
             // Per-frame draw info ring. Each entry mirrors the GLSL DrawInfo
             // struct in gbuffer_indirect.vert: model matrix + buffer device
             // addresses + flags. Sized lazily; grows on demand. Per-view
@@ -3011,18 +3022,8 @@ namespace threepp {
         // so only this base weight needs the correction.
         double taaPrevTimeSec_ = -1.0;
 
-        // Per-frame-slot gate for the raster descriptor's binding 3 — the
-        // 2048-entry bindless material-texture array. Its contents are
-        // identical every frame and only change when the scene texture table
-        // is rebuilt. Rewriting all 2048 entries every frame burned a
-        // vkUpdateDescriptorSets call + a ~48 KB host array fill for nothing.
-        // 1 = current, 0 = needs (re)write; value-inits to 0 so the first
-        // frame writes it. Invalidated (->0) at scene (re)build; each slot
-        // rewrites on its next uploadRasterCameraUbo, before
-        // recordCommandBuffer binds the set. rasterDescSets live in their own
-        // pool (rasterDescPool, init-only) so swapchain / main-pool rebuilds
-        // don't affect them — only a texture-table change does.
-        std::array<int8_t, kFramesInFlight> rasterMatTexValid_{};
+        // (rasterMatTexValid_ — the binding-3 texture-table gate — lives on
+        // ViewContext: the raster sets it guards are per-view.)
 
         // ── Lower-resolution render mode ────────────────────────────────
         // renderScale_ < 1 runs the deferred shade + the raster G-buffer at
@@ -7226,7 +7227,8 @@ namespace threepp {
         // Same (fence-idle-safe) pattern refreshDirtyMaterialTextures uses.
         void markMaterialSamplerDirty() {
             deferredDescDirty_.fill(true);
-            rasterMatTexValid_.fill(0);
+            // Every view: the flag is per-view (it guards per-view sets).
+            for (auto& v : views_) v->rasterMatTexValid_.fill(0);
         }
         void setTextureAnisotropy(float aniso);// 0 = auto; VulkanCoreTextures.cpp
 

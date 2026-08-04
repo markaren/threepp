@@ -218,7 +218,9 @@ void VulkanRenderer::Impl::refreshDirtyMaterialTextures() {
             // on each slot's next uploadRasterCameraUbo. Both are already
             // per-frame-lazy, so the new views land the frame each slot renders.
             deferredDescDirty_.fill(true);
-            rasterMatTexValid_.fill(0);
+            // Every view — the flag guards per-view raster sets, and a
+            // secondary skipped here keeps sampling the retired images.
+            for (auto& v : views_) v->rasterMatTexValid_.fill(0);
         }
 
 std::vector<uint8_t> VulkanRenderer::Impl::generateBlueNoiseTile_() {
