@@ -134,10 +134,10 @@ private:
             drawGL();
             return;
         }
-        drawToneMapAndExposure(false, false);
+        drawToneMapAndExposure(false);
     }
 
-    void drawToneMapAndExposure(bool allowAgX, bool exposureDriven) {
+    void drawToneMapAndExposure(bool exposureDriven) {
         using threepp::ToneMapping;
         struct Entry {
             const char* name;
@@ -152,7 +152,7 @@ private:
                 {"Neutral (PBR)", ToneMapping::Neutral},
                 {"AgX", ToneMapping::AgX},
         };
-        const int count = allowAgX ? 7 : 6;
+        const int count = 7;
 
         const char* preview = "Custom";
         for (int i = 0; i < count; ++i) {
@@ -182,7 +182,7 @@ private:
     // ---- OpenGL ----------------------------------------------------------
 
     void drawGL() {
-        drawToneMapAndExposure(false, false);
+        drawToneMapAndExposure(false);
 
         if (section("Shadows", false)) {
             auto& sm = gl_->shadowMap();
@@ -243,7 +243,7 @@ private:
 
     void drawVulkanDisplay() {
         const bool exposureDriven = vk_->autoExposure() || vk_->physicalCamera();
-        drawToneMapAndExposure(true, exposureDriven);
+        drawToneMapAndExposure(exposureDriven);
 
         bool autoExp = vk_->autoExposure();
         if (ImGui::Checkbox("Auto exposure", &autoExp)) vk_->setAutoExposure(autoExp);

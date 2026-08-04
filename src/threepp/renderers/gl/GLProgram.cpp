@@ -121,6 +121,10 @@ namespace {
                 toneMappingName = "Neutral";
                 break;
 
+            case ToneMapping::AgX:
+                toneMappingName = "AgX";
+                break;
+
             case ToneMapping::Custom:
                 toneMappingName = "Custom";
                 break;
