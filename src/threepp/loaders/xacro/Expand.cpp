@@ -468,8 +468,11 @@ namespace {
         }
 
         std::filesystem::path file(filename);
-        if (file.is_relative()) file = doc.path.parent_path() / file;
+        if (file.is_relative()) file = (doc.path.parent_path() / file).lexically_normal();
 
+        // The canonical form is for recognising a file we are already inside — it resolves
+        // symlinks and, on Windows, 8.3 short names. It is not the document's identity:
+        // $(dirname) and error messages keep the spelling the include actually used.
         std::error_code ec;
         auto canonical = std::filesystem::weakly_canonical(file, ec);
         if (ec) canonical = file;
@@ -500,7 +503,7 @@ namespace {
         const auto root = included.document_element();
         if (!root) throw XacroError("'" + file.string() + "' has no root element", doc.path);
 
-        const DocCtx sub{canonical, resolvePrefix(root)};
+        const DocCtx sub{file, resolvePrefix(root)};
 
         includeStack_.push_back(canonical);
         processChildren(root, dst, sub);
