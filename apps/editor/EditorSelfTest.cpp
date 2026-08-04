@@ -2504,6 +2504,163 @@ int EditorApp::runSelfTest() {
             document_.scene().background = Color(0x1c1f24);// as the template had it
             step(2);
         }
+
+        // --- the dock is the REAL render, not an impression of one ---------
+        // On Vulkan the dock used to be an OverlayPass "lit pane": first
+        // directional light plus ambient, and by construction no shadows, no
+        // GI, no reflections. It is now a full secondary deferred view, and a
+        // cast shadow is the cheapest thing that only the real pipeline can
+        // produce. The template scene has what it takes already — a 1 m box
+        // that casts, a ground that receives, and a sun at (6,10,5), so the
+        // shadow falls toward -x-z and the sunward ground stays lit.
+        //
+        // Both backends are held to this: GL's dock has always been a real
+        // scissored render, so a shadow there is parity, not a new claim.
+        {
+            cameraRaw->position.set(-3.2f, 2.6f, -3.0f);
+            cameraRaw->lookAt(Vector3(0.f, 0.2f, 0.f));
+            cameraRaw->fov = 60.f;
+            cameraRaw->updateProjectionMatrix();
+            step(8);
+
+            // Just off the box's -x-z corner, well inside the umbra, versus the
+            // sunward ground the box cannot reach. Both are ground pixels of
+            // one material, so the only thing that differs is the shadow.
+            const double shadowed = dockLuma(Vector3(-0.85f, 0.01f, -0.75f));
+            const double sunlit = dockLuma(Vector3(-2.6f, 0.01f, 1.9f));
+            check(shadowed >= 0.0 && sunlit >= 0.0, "both shadow probes land inside the dock");
+            check(shadowed >= 0.0 && sunlit >= 0.0 && sunlit > shadowed * 1.25,
+                  "the dock casts a shadow the lit pane could not");
+        }
+
+        // --- one view, re-pointed --------------------------------------------
+        // Switching which camera the dock shows must be setViewCamera on the
+        // SAME view, not remove + add: a view is a whole deferred chain and
+        // ~46 MB, and churning one per selection click is what the pane class
+        // exists to prevent. The handle is the evidence.
+        {
+            const auto dockMeanLuma = [&]() -> double {
+                float dx = 0, dy = 0, dw = 0, dh = 0;
+                if (!cameraDockRect(dx, dy, dw, dh)) return -1.0;
+                const auto pixels = renderer_->readRGBPixels();
+                const auto size = renderer_->size();
+                const int w = size.width(), h = size.height();
+                if (pixels.size() < static_cast<std::size_t>(w) * h * 3) return -1.0;
+                double sum = 0;
+                int n = 0;
+                // Inset so the dock's 1 px border never enters the average.
+                for (int y = static_cast<int>(dy) + 3; y < static_cast<int>(dy + dh) - 3; y += 2) {
+                    for (int x = static_cast<int>(dx) + 3; x < static_cast<int>(dx + dw) - 3; x += 2) {
+                        if (x < 0 || y < 0 || x >= w || y >= h) continue;
+                        const int row = bottomUp ? (h - 1 - y) : y;
+                        const std::size_t i = (static_cast<std::size_t>(row) * w + x) * 3;
+                        sum += 0.2126 * pixels[i] + 0.7152 * pixels[i + 1] + 0.0722 * pixels[i + 2];
+                        ++n;
+                    }
+                }
+                return n > 0 ? sum / n : -1.0;
+            };
+
+            const std::uint32_t handleBefore = dockPane_.handle();
+            const double lumaFirst = dockMeanLuma();
+
+            // A second camera pointed somewhere completely different — straight
+            // up at the empty background, which no framing of the lit scene can
+            // be confused with.
+            auto addedSecond = ObjectFactory::createCamera(document_.scene());
+            auto* secondRaw = addedSecond.get();
+            addObject(addedSecond, document_.scene(), "Add Second Camera");
+            secondRaw->position.set(0.f, 2.f, 0.f);
+            secondRaw->lookAt(Vector3(0.f, 12.f, 0.f));
+            secondRaw->updateMatrixWorld();
+            selectObject(secondRaw);
+            step(8);
+
+            const double lumaSecond = dockMeanLuma();
+            check(lumaFirst >= 0.0 && lumaSecond >= 0.0 && std::abs(lumaFirst - lumaSecond) > 4.0,
+                  "selecting another camera re-aims the dock at it");
+            if (dockPane_.supported()) {
+                check(dockPane_.handle() == handleBefore && handleBefore != 0,
+                      "and does it by re-pointing ONE view, not by churning a new one");
+            }
+
+            // Play and Stop replace the scene, and with it every camera object
+            // in it — behind the SAME uuid. A pane that cached the Camera* (or
+            // skipped the update when the uuid matched) would hand the renderer
+            // a pointer into freed memory, and it would survive the uuid check
+            // precisely because the uuid is what stayed the same.
+            // Every raw pointer into the scene dies here, so hold the uuids and
+            // re-resolve after — the same discipline the pane itself follows.
+            const std::string secondUuid = secondRaw->uuid;
+            const std::string firstUuid = cameraRaw->uuid;
+            startPlay();
+            step(6);
+            check(isPlaying(), "play starts with a camera docked");
+            stopPlay();
+            step(8);
+            check(!isPlaying(), "and stops again");
+            check(dockMeanLuma() >= 0.0, "the dock still renders across a scene replace");
+            if (dockPane_.supported()) {
+                check(dockPane_.handle() != 0, "the pane still holds its view after play/stop");
+            }
+
+            auto* secondLive = findByUuid(document_.scene(), secondUuid);
+            check(secondLive != nullptr, "the docked camera comes back from play by uuid");
+            // Nothing after this point is meaningful without it, and every
+            // later block navigates from these cameras.
+            if (!secondLive) return 1;
+
+            // The crash a user found: deselect and reselect in a tight loop is
+            // release + create of a real allocation, every time.
+            for (int i = 0; i < 8; ++i) {
+                selectObject(nullptr);
+                step(2);
+                selectObject(secondLive);
+                step(2);
+            }
+            check(dockMeanLuma() >= 0.0, "the dock survives repeated deselect/reselect");
+
+            // A collapsed dock has no business holding a deferred chain.
+            if (dockPane_.supported()) {
+                bottomPanelOpen_ = false;
+                step(3);
+                check(dockPane_.handle() == 0, "collapsing the dock frees its view");
+                bottomPanelOpen_ = true;
+                step(6);
+                check(dockPane_.handle() != 0, "and reopening takes one back");
+            }
+
+            // An orthographic scene camera is a legal dock subject: secondary
+            // views claim ortho support, and the projection reaches the shaders
+            // through camAux rather than the eye-point idiom a perspective view
+            // can assume.
+            {
+                auto ortho = OrthographicCamera::create(-4.f, 4.f, 3.f, -3.f, 0.1f, 100.f);
+                ortho->name = "Ortho Camera";
+                ortho->position.set(-4.f, 3.5f, 4.f);
+                ortho->lookAt(Vector3(0.f, 0.5f, 0.f));
+                ortho->updateMatrixWorld();
+                auto* orthoRaw = ortho.get();
+                addObject(ortho, document_.scene(), "Add Ortho Camera");
+                selectObject(orthoRaw);
+                step(10);
+                check(dockMeanLuma() > 8.0, "an orthographic camera renders in the dock");
+                selectObject(orthoRaw);
+                deleteSelected();
+                step(2);
+            }
+
+            selectObject(secondLive);
+            deleteSelected();
+            step(2);
+            // cameraRaw died with the scene replace above; the rest of this
+            // suite still expects to be holding the first camera.
+            cameraRaw = dynamic_cast<PerspectiveCamera*>(findByUuid(document_.scene(), firstUuid));
+            check(cameraRaw != nullptr, "and so does the camera the suite started with");
+            if (!cameraRaw) return 1;
+            selectObject(cameraRaw);
+            step(2);
+        }
     }
 
     deleteSelected();
