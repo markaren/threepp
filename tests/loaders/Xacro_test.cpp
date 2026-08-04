@@ -975,3 +975,144 @@ TEST_CASE("URDFLoader keeps exposing its arguments as properties") {
     REQUIRE(robot);
     REQUIRE(robot->getObjectByName("b_link_2"));
 }
+
+TEST_CASE("scanArgs reports what a document asks to be told") {
+
+    SECTION("declarations in order, with and without defaults") {
+
+        const auto args = scanArgsFromString(wrap(
+                R"XML(  <xacro:arg name="ur_type" default="ur5x"/>
+                        <xacro:arg name="tf_prefix"/>
+                        <xacro:arg name="joint_limits" default="$(find ur_description)/config/$(arg ur_type)/joint_limits.yaml"/>)XML"));
+
+        REQUIRE(args.size() == 3);
+        CHECK(args[0].name == "ur_type");
+        CHECK(args[0].hasDefault);
+        CHECK(args[0].defaultValue == "ur5x");
+        CHECK(args[1].name == "tf_prefix");
+        CHECK_FALSE(args[1].hasDefault);
+        CHECK(args[1].defaultValue.empty());
+        CHECK(args[2].name == "joint_limits");
+        // Still a recipe, not a path: the dialog shows what the file will do if
+        // left alone, which is the thing an override would replace.
+        CHECK(args[2].defaultValue == "$(find ur_description)/config/$(arg ur_type)/joint_limits.yaml");
+    }
+
+    SECTION("a repeated name keeps the first declaration, as expansion does") {
+
+        const auto args = scanArgsFromString(wrap(
+                R"XML(  <xacro:arg name="dof" default="6"/>
+                        <xacro:arg name="dof" default="7"/>)XML"));
+
+        REQUIRE(args.size() == 1);
+        CHECK(args.front().defaultValue == "6");
+    }
+
+    SECTION("the document's own prefix, not the conventional one") {
+
+        const auto args = scanArgsFromString(
+                "<robot xmlns:x=\"http://ros.org/wiki/xacro\" name=\"test\">\n"
+                "  <x:arg name=\"dof\" default=\"2\"/>\n"
+                "  <xacro:arg name=\"not_bound\" default=\"ignored\"/>\n"
+                "</robot>\n");
+
+        REQUIRE(args.size() == 1);
+        CHECK(args.front().name == "dof");
+    }
+
+    SECTION("shallow on purpose: a nested declaration is not a document argument") {
+
+        const auto args = scanArgsFromString(wrap(
+                R"XML(  <xacro:arg name="top" default="1"/>
+                        <xacro:macro name="thing" params="n">
+                          <xacro:arg name="inside" default="2"/>
+                        </xacro:macro>)XML"));
+
+        REQUIRE(args.size() == 1);
+        CHECK(args.front().name == "top");
+    }
+
+    SECTION("a plain URDF declares nothing") {
+
+        CHECK(scanArgsFromString("<robot name=\"arm\"><link name=\"base_link\"/></robot>").empty());
+    }
+
+    SECTION("malformed and missing files answer empty rather than throw") {
+
+        CHECK(scanArgsFromString("<robot name=\"unclosed\">").empty());
+        CHECK(scanArgsFromString("").empty());
+
+        const TempDir dir("scanargs");
+        CHECK(scanArgs(dir.path / "nothing_here.xacro").empty());
+    }
+
+    SECTION("from a file, which is how the editor asks") {
+
+        const TempDir dir("scanargsfile");
+        const auto file = dir.path / "robot.urdf.xacro";
+        writeFile(file, wrap(R"XML(<xacro:arg name="dof" default="1"/>)XML"));
+
+        const auto args = scanArgs(file);
+        REQUIRE(args.size() == 1);
+        CHECK(args.front().name == "dof");
+        CHECK(args.front().defaultValue == "1");
+    }
+}
+
+TEST_CASE("URDFLoader says why a load failed") {
+
+    const TempDir dir("lasterror");
+
+    SECTION("a xacro that cannot be expanded names its cause") {
+
+        const auto file = dir.path / "robot.urdf.xacro";
+        writeFile(file, wrap(R"XML(<link name="${no_such_property}"/>)XML"));
+
+        URDFLoader loader;
+        CHECK_FALSE(loader.load(file));
+
+        const auto error = loader.lastError();
+        CHECK_FALSE(error.empty());
+        CHECK(contains(error, "no_such_property"));
+        CHECK_FALSE(loader.diagnostics().empty());
+    }
+
+    SECTION("a file that is not there, and one that is not XML") {
+
+        URDFLoader loader;
+        CHECK_FALSE(loader.load(dir.path / "absent.urdf"));
+        CHECK(contains(loader.lastError(), "absent.urdf"));
+
+        const auto junk = dir.path / "junk.urdf";
+        writeFile(junk, "this is not a document");
+        CHECK_FALSE(loader.load(junk));
+        CHECK_FALSE(loader.lastError().empty());
+    }
+
+    SECTION("XML without a <robot> root is a failure with a reason too") {
+
+        const auto file = dir.path / "notarobot.urdf";
+        writeFile(file, "<model name=\"arm\"/>");
+
+        URDFLoader loader;
+        CHECK_FALSE(loader.load(file));
+        CHECK(contains(loader.lastError(), "<robot>"));
+    }
+
+    SECTION("a successful load clears what the failed one left behind") {
+
+        const auto broken = dir.path / "broken.urdf.xacro";
+        writeFile(broken, wrap(R"XML(<link name="${nope}"/>)XML"));
+
+        const auto good = dir.path / "good.urdf";
+        writeFile(good, "<robot name=\"arm\"><link name=\"base_link\"/></robot>");
+
+        URDFLoader loader;
+        CHECK_FALSE(loader.load(broken));
+        REQUIRE_FALSE(loader.diagnostics().empty());
+
+        REQUIRE(loader.load(good));
+        CHECK(loader.lastError().empty());
+        CHECK(loader.diagnostics().empty());
+    }
+}

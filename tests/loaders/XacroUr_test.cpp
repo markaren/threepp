@@ -262,3 +262,36 @@ TEST_CASE("URDFLoader loads the UR5e description straight from xacro") {
     REQUIRE(info.size() == 6);
     REQUIRE(info.front().name == "shoulder_pan_joint");
 }
+
+TEST_CASE("scanArgs finds what ur.urdf.xacro wants to be told") {
+
+    const auto root = urRoot();
+    if (!root) SKIP(skipReason);
+
+    const auto args = scanArgs(*root / "urdf" / "ur.urdf.xacro");
+    REQUIRE(args.size() >= 12);
+
+    // Document order, which is the order the import dialog lists them in.
+    CHECK(args.front().name == "name");
+    CHECK(args.front().defaultValue == "ur");
+
+    const auto find = [&args](const std::string& name) -> const ArgDecl* {
+        for (const auto& arg : args) {
+            if (arg.name == name) return &arg;
+        }
+        return nullptr;
+    };
+
+    const auto* type = find("ur_type");
+    REQUIRE(type);
+    // Deliberately invalid upstream, so an import that supplies nothing fails —
+    // which is exactly why the dialog has to exist.
+    CHECK(type->defaultValue == "ur5x");
+
+    const auto* limits = find("joint_limit_params");
+    REQUIRE(limits);
+    CHECK(contains(limits->defaultValue, "$(arg ur_type)"));
+
+    REQUIRE(find("tf_prefix"));
+    REQUIRE(find("safety_limits"));
+}

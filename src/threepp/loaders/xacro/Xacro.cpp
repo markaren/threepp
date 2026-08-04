@@ -5,7 +5,9 @@
 
 #include "pugixml.hpp"
 
+#include <set>
 #include <sstream>
+#include <string_view>
 
 using namespace threepp;
 using namespace threepp::xacro;
@@ -17,6 +19,43 @@ namespace {
         std::ostringstream out;
         doc.save(out, "  ", pugi::format_indent);
         return out.str();
+    }
+
+    std::string trim(std::string_view s) {
+
+        std::size_t b = 0;
+        std::size_t e = s.size();
+        const auto space = [](char c) { return c == ' ' || c == '\t' || c == '\n' || c == '\r'; };
+        while (b < e && space(s[b])) ++b;
+        while (e > b && space(s[e - 1])) --e;
+        return std::string(s.substr(b, e - b));
+    }
+
+    std::vector<ArgDecl> scan(const pugi::xml_document& doc) {
+
+        const auto root = doc.document_element();
+        if (!root) return {};
+
+        const std::string tag = documentPrefix(doc) + ":arg";
+
+        std::vector<ArgDecl> args;
+        std::set<std::string> seen;
+
+        for (const auto& child : root.children(tag.c_str())) {
+
+            ArgDecl decl;
+            decl.name = trim(child.attribute("name").value());
+            if (decl.name.empty()) continue;
+            if (!seen.insert(decl.name).second) continue;
+
+            if (const auto def = child.attribute("default")) {
+                decl.hasDefault = true;
+                decl.defaultValue = def.value();
+            }
+            args.push_back(std::move(decl));
+        }
+
+        return args;
     }
 
 }// namespace
@@ -99,4 +138,20 @@ ProcessResult Processor::processString(const std::string& xml,
 
     // A stand-in document name, so the directory-relative machinery has a parent path.
     return pimpl_->run(doc, baseDir / "(string)");
+}
+
+std::vector<ArgDecl> threepp::xacro::scanArgs(const std::filesystem::path& file) {
+
+    pugi::xml_document doc;
+    if (!doc.load_file(file.string().c_str())) return {};
+
+    return scan(doc);
+}
+
+std::vector<ArgDecl> threepp::xacro::scanArgsFromString(const std::string& xml) {
+
+    pugi::xml_document doc;
+    if (!doc.load_string(xml.c_str())) return {};
+
+    return scan(doc);
 }
