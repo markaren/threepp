@@ -84,8 +84,20 @@ namespace {
 
             if (c == '$' && i + 1 < raw.size() && (raw[i + 1] == '{' || raw[i + 1] == '(')) {
                 const bool braced = raw[i + 1] == '{';
-                const std::size_t end = matchDelimiter(raw, i + 1, braced ? '{' : '(',
-                                                       braced ? '}' : ')', ctx.document);
+
+                // An opener with no closer is not a substitution. xacro's scanner only
+                // matches complete patterns, so `${'cost is $(unknown'}` is a string with
+                // a dollar in it, not an error about it.
+                std::size_t end;
+                try {
+                    end = matchDelimiter(raw, i + 1, braced ? '{' : '(',
+                                         braced ? '}' : ')', ctx.document);
+                } catch (const XacroError&) {
+                    out += c;
+                    ++i;
+                    continue;
+                }
+
                 const std::string text = substitute(raw.substr(i, end - i + 1), ctx).text;
                 out += quote ? escapedFor(text, quote) : text;
                 i = end + 1;

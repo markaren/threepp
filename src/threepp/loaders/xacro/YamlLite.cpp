@@ -214,31 +214,31 @@ namespace {
                                                    ? rest.substr(1)
                                                    : std::string{};
 
+                Value value;
+
                 if (rest.empty() || !anchor.empty()) {
                     ++i;
-                    Value value;
                     if (i < lines_.size() &&
                         (lines_[i].indent > indent ||
                          (lines_[i].indent == indent && isSequenceEntry(lines_[i].text)))) {
                         value = parseBlock(i, lines_[i].indent);
                     }
                     if (!anchor.empty()) anchors_[anchor] = value;
-                    out[key] = std::move(value);
                 } else {
-                    Value value = parseScalarOrFlow(rest, number);
+                    value = parseScalarOrFlow(rest, number);
                     ++i;
-
-                    // `<<: *base` merges the aliased mapping in. Left as a key called "<<"
-                    // it would read as a member of the robot, which is worse than an error.
-                    if (key == "<<") {
-                        if (!value.isDict()) fail("a merge key needs a mapping", number);
-                        // What the document says itself outranks what it merged in, whichever
-                        // came first in the file - a later key overwrites through out[key].
-                        for (const auto& [name, member] : value.asDict()) out.emplace(name, member);
-                        continue;
-                    }
-                    out[key] = std::move(value);
                 }
+
+                // `<<: *base` (or a block) merges the mapping in. Left as a key called "<<"
+                // it would read as a member of the robot, which is worse than an error. What
+                // the document says itself outranks what it merged in, whichever came first
+                // in the file - emplace declines to overwrite, a later key overwrites below.
+                if (key == "<<") {
+                    if (!value.isDict()) fail("a merge key needs a mapping", number);
+                    for (const auto& [name, member] : value.asDict()) out.emplace(name, member);
+                    continue;
+                }
+                out[key] = std::move(value);
             }
             return Value(std::move(out));
         }

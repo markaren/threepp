@@ -310,6 +310,21 @@ TEST_CASE("YamlLite resolves anchors and aliases") {
         REQUIRE(derived.count("<<") == 0);
     }
 
+    SECTION("a merge key written in block form merges the same way") {
+
+        const auto merged = parseYaml(
+                "derived:\n"
+                "  <<:\n"
+                "    a: 9\n"
+                "    b: 2\n"
+                "  b: 3\n");
+
+        const auto& derived = merged.asDict().at("derived").asDict();
+        REQUIRE(derived.at("a").asInt() == 9);
+        REQUIRE(derived.at("b").asInt() == 3);
+        REQUIRE(derived.count("<<") == 0);
+    }
+
     SECTION("an alias with no anchor is an error, not an empty value") {
 
         REQUIRE_THROWS_AS(parseYaml("a: *nobody\n"), XacroError);
@@ -447,6 +462,15 @@ TEST_CASE("A substitution inside an expression is expanded before it is evaluate
 
     REQUIRE(contains(xml, R"XML(upper="6.28")XML"));
     REQUIRE(contains(xml, "home=\"" + dir.path.string() + "\""));
+
+    SECTION("an opener with no closer is a dollar in a string, not a substitution") {
+
+        const auto result = process(R"XML(<a v="${'cost is $(unknown'}"/>)XML");
+        const std::string got = result.ok ? result.xml : result.errors.front();
+        INFO(got);
+        REQUIRE(result.ok);
+        REQUIRE(contains(result.xml, "cost is $(unknown"));
+    }
 }
 
 TEST_CASE("Expr errors throw instead of defaulting to zero") {
@@ -877,6 +901,29 @@ TEST_CASE("Expand instantiates macros") {
 
         REQUIRE(result.ok);
         REQUIRE(result.warnings.empty());
+    }
+
+    SECTION("two files that disagree take turns; each definition says so once") {
+
+        const TempDir dir("pingpong");
+        writeFile(dir.path / "a.xacro", wrap(R"XML(<xacro:macro name="m"><a/></xacro:macro>)XML"));
+        writeFile(dir.path / "b.xacro", wrap(R"XML(<xacro:macro name="m"><b/></xacro:macro>)XML"));
+        writeFile(dir.path / "top.xacro",
+                  wrap(R"XML(<xacro:include filename="a.xacro"/>
+                             <xacro:include filename="b.xacro"/>
+                             <xacro:include filename="a.xacro"/>
+                             <xacro:include filename="b.xacro"/>
+                             <xacro:m/>)XML"));
+
+        Processor processor;
+        const auto result = processor.processFile(dir.path / "top.xacro");
+        REQUIRE(result.ok);
+
+        std::size_t redefinitions = 0;
+        for (const auto& w : result.warnings) {
+            if (contains(w, "redefined")) ++redefinitions;
+        }
+        REQUIRE(redefinitions == 2);
     }
 
     SECTION("a later definition replaces an earlier one, with a warning") {
