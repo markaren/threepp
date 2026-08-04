@@ -9,13 +9,17 @@ material.specularRoughness = max( roughnessFactor, 0.0525 );// 0.0525 correspond
 material.specularRoughness += geometryRoughness;
 material.specularRoughness = min( material.specularRoughness, 1.0 );
 
+// 1.0 is the F90 every lobe assumed implicitly before KHR_materials_specular
+// existed; USE_SPECULAR overwrites it below.
+material.specularF90 = 1.0;
+
 #ifdef REFLECTIVITY
 
-	material.specularColor = mix( vec3( MAXIMUM_SPECULAR_COEFFICIENT * pow2( reflectivity ) ), diffuseColor.rgb, metalnessFactor );
+	material.specularF0 = mix( vec3( MAXIMUM_SPECULAR_COEFFICIENT * pow2( reflectivity ) ), diffuseColor.rgb, metalnessFactor );
 
 #else
 
-	material.specularColor = mix( vec3( DEFAULT_SPECULAR_COEFFICIENT ), diffuseColor.rgb, metalnessFactor );
+	material.specularF0 = mix( vec3( DEFAULT_SPECULAR_COEFFICIENT ), diffuseColor.rgb, metalnessFactor );
 
 #endif
 

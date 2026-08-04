@@ -3,7 +3,17 @@ struct PhysicalMaterial {
 
 	vec3 diffuseColor;
 	float specularRoughness;
-	vec3 specularColor;
+
+	// Named specularF0 rather than specularColor so the KHR_materials_specular
+	// uniform of that name (meshphysical_frag, under USE_SPECULAR) stays
+	// unambiguous — this field is the F0 the two are combined INTO.
+	vec3 specularF0;
+
+	// Unconditional, not #ifdef USE_SPECULAR: it is read at four call sites and
+	// fencing all of them buys nothing. Defaulted to 1.0 in
+	// <lights_physical_fragment>, which reproduces the old implicit F90 = 1
+	// bit-for-bit.
+	float specularF90;
 
 #ifdef CLEARCOAT
 	float clearcoat;
@@ -58,7 +68,9 @@ float clearcoatDHRApprox( const in float roughness, const in float dotNL ) {
 
 		// LTC Fresnel Approximation by Stephen Hill
 		// http://blog.selfshadow.com/publications/s2016-advances/s2016_ltc_fresnel.pdf
-		vec3 fresnel = ( material.specularColor * t2.x + ( vec3( 1.0 ) - material.specularColor ) * t2.y );
+		// vec3( 1.0 ) was the implicit F90; specularF90 defaults to 1.0, so this
+		// is unchanged for every material that does not set KHR specular.
+		vec3 fresnel = ( material.specularF0 * t2.x + ( vec3( material.specularF90 ) - material.specularF0 ) * t2.y );
 
 		reflectedLight.directSpecular += lightColor * fresnel * LTC_Evaluate( normal, viewDir, position, mInv, rectCoords );
 
@@ -94,7 +106,7 @@ void RE_Direct_Physical( const in IncidentLight directLight, const in GeometricC
 
 		float clearcoatDHR = material.clearcoat * clearcoatDHRApprox( material.clearcoatRoughness, ccDotNL );
 
-		reflectedLight.directSpecular += ccIrradiance * material.clearcoat * BRDF_Specular_GGX( directLight, geometry.viewDir, geometry.clearcoatNormal, vec3( DEFAULT_SPECULAR_COEFFICIENT ), material.clearcoatRoughness );
+		reflectedLight.directSpecular += ccIrradiance * material.clearcoat * BRDF_Specular_GGX( directLight, geometry.viewDir, geometry.clearcoatNormal, vec3( DEFAULT_SPECULAR_COEFFICIENT ), 1.0, material.clearcoatRoughness );
 
 	#else
 
@@ -102,7 +114,7 @@ void RE_Direct_Physical( const in IncidentLight directLight, const in GeometricC
 
 	#endif
 
-	reflectedLight.directSpecular += ( 1.0 - clearcoatDHR ) * irradiance * BRDF_Specular_GGX( directLight, geometry.viewDir, geometry.normal, material.specularColor, material.specularRoughness);
+	reflectedLight.directSpecular += ( 1.0 - clearcoatDHR ) * irradiance * BRDF_Specular_GGX( directLight, geometry.viewDir, geometry.normal, material.specularF0, material.specularF90, material.specularRoughness );
 
 	#ifdef USE_SHEEN
 		// KHR_materials_sheen: the Charlie lobe sits ON TOP of the base BRDF. The
@@ -132,7 +144,7 @@ void RE_IndirectSpecular_Physical( const in vec3 radiance, const in vec3 irradia
 
 		float ccDotNV = saturate( dot( geometry.clearcoatNormal, geometry.viewDir ) );
 
-		reflectedLight.indirectSpecular += clearcoatRadiance * material.clearcoat * BRDF_Specular_GGX_Environment( geometry.viewDir, geometry.clearcoatNormal, vec3( DEFAULT_SPECULAR_COEFFICIENT ), material.clearcoatRoughness );
+		reflectedLight.indirectSpecular += clearcoatRadiance * material.clearcoat * BRDF_Specular_GGX_Environment( geometry.viewDir, geometry.clearcoatNormal, vec3( DEFAULT_SPECULAR_COEFFICIENT ), 1.0, material.clearcoatRoughness );
 
 		float ccDotNL = ccDotNV;
 		float clearcoatDHR = material.clearcoat * clearcoatDHRApprox( material.clearcoatRoughness, ccDotNL );
@@ -146,12 +158,13 @@ void RE_IndirectSpecular_Physical( const in vec3 radiance, const in vec3 irradia
 	float clearcoatInv = 1.0 - clearcoatDHR;
 
 	// Both indirect specular and indirect diffuse light accumulate here.
-	// Uses three.js r155+ EnvironmentBRDF (split-sum F0*brdf.x + brdf.y)
-	// rather than the older F_Schlick_RoughnessDependent + multi-scattering
-	// approach. The roughness-aware Fresnel pumped grazing-angle reflection
-	// on rough surfaces (e.g. asphalt) far above what looks correct.
+	// Uses three.js r155+ EnvironmentBRDF (split-sum F0*brdf.x + F90*brdf.y)
+	// rather than the older roughness-dependent Fresnel + multi-scattering
+	// approach (both functions are gone from <bsdfs> now). That Fresnel pumped
+	// grazing-angle reflection on rough surfaces (e.g. asphalt) far above what
+	// looks correct.
 	vec3 cosineWeightedIrradiance = irradiance * RECIPROCAL_PI;
-	vec3 envBRDF = BRDF_Specular_GGX_Environment( geometry.viewDir, geometry.normal, material.specularColor, material.specularRoughness );
+	vec3 envBRDF = BRDF_Specular_GGX_Environment( geometry.viewDir, geometry.normal, material.specularF0, material.specularF90, material.specularRoughness );
 
 	reflectedLight.indirectSpecular += clearcoatInv * radiance * envBRDF;
 	reflectedLight.indirectDiffuse += material.diffuseColor * cosineWeightedIrradiance;

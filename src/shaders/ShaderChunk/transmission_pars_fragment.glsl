@@ -79,8 +79,8 @@
 
 		float NdotV = saturate(dot(n, viewDir));
 		vec2 brdf = integrateSpecularBRDF(NdotV, perceptualRoughness);
-		vec3 specularColor = f0 * brdf.x + f90 * brdf.y;
+		vec3 envFresnel = f0 * brdf.x + f90 * brdf.y;
 
-		return (1.0 - specularColor) * attenuatedColor * baseColor;
+		return (1.0 - envFresnel) * attenuatedColor * baseColor;
 	}
 #endif
