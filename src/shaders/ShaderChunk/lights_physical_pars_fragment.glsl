@@ -3,7 +3,17 @@ struct PhysicalMaterial {
 
 	vec3 diffuseColor;
 	float specularRoughness;
-	vec3 specularColor;
+
+	// Named specularF0 rather than specularColor so the KHR_materials_specular
+	// uniform of that name (meshphysical_frag, under USE_SPECULAR) stays
+	// unambiguous — this field is the F0 the two are combined INTO.
+	vec3 specularF0;
+
+	// Unconditional, not #ifdef USE_SPECULAR: it is read at four call sites and
+	// fencing all of them buys nothing. Defaulted to 1.0 in
+	// <lights_physical_fragment>, which reproduces the old implicit F90 = 1
+	// bit-for-bit.
+	float specularF90;
 
 #ifdef CLEARCOAT
 	float clearcoat;
@@ -12,6 +22,13 @@ struct PhysicalMaterial {
 #ifdef USE_SHEEN
 	vec3 sheenColor;
 	float sheenRoughness;
+#endif
+#ifdef USE_IRIDESCENCE
+	float iridescence;
+	float iridescenceIOR;
+	float iridescenceThickness;// nanometres
+	vec3 iridescenceFresnel;   // evaluated at dotNVi, filled in <lights_fragment_begin>
+	vec3 iridescenceF0;        // the same, folded back through Schlick_to_F0
 #endif
 
 };
@@ -58,7 +75,9 @@ float clearcoatDHRApprox( const in float roughness, const in float dotNL ) {
 
 		// LTC Fresnel Approximation by Stephen Hill
 		// http://blog.selfshadow.com/publications/s2016-advances/s2016_ltc_fresnel.pdf
-		vec3 fresnel = ( material.specularColor * t2.x + ( vec3( 1.0 ) - material.specularColor ) * t2.y );
+		// vec3( 1.0 ) was the implicit F90; specularF90 defaults to 1.0, so this
+		// is unchanged for every material that does not set KHR specular.
+		vec3 fresnel = ( material.specularF0 * t2.x + ( vec3( material.specularF90 ) - material.specularF0 ) * t2.y );
 
 		reflectedLight.directSpecular += lightColor * fresnel * LTC_Evaluate( normal, viewDir, position, mInv, rectCoords );
 
@@ -94,7 +113,7 @@ void RE_Direct_Physical( const in IncidentLight directLight, const in GeometricC
 
 		float clearcoatDHR = material.clearcoat * clearcoatDHRApprox( material.clearcoatRoughness, ccDotNL );
 
-		reflectedLight.directSpecular += ccIrradiance * material.clearcoat * BRDF_Specular_GGX( directLight, geometry.viewDir, geometry.clearcoatNormal, vec3( DEFAULT_SPECULAR_COEFFICIENT ), material.clearcoatRoughness );
+		reflectedLight.directSpecular += ccIrradiance * material.clearcoat * BRDF_Specular_GGX( directLight, geometry.viewDir, geometry.clearcoatNormal, vec3( DEFAULT_SPECULAR_COEFFICIENT ), 1.0, material.clearcoatRoughness );
 
 	#else
 
@@ -102,7 +121,25 @@ void RE_Direct_Physical( const in IncidentLight directLight, const in GeometricC
 
 	#endif
 
-	reflectedLight.directSpecular += ( 1.0 - clearcoatDHR ) * irradiance * BRDF_Specular_GGX( directLight, geometry.viewDir, geometry.normal, material.specularColor, material.specularRoughness);
+	#ifdef USE_IRIDESCENCE
+
+		// three.js parity: the thin-film Fresnel is evaluated once at the VIEW
+		// angle but mixed in at the HALF vector, per light. Vulkan instead
+		// substitutes a single F0 and hardcodes F90 = 1; this is the more
+		// correct of the two, so the backends differ here on purpose.
+		//
+		// Iridescence does not apply to the clearcoat or LTC lobes.
+		vec3 halfDir = normalize( directLight.direction + geometry.viewDir );
+		float dotVH = saturate( dot( directLight.direction, halfDir ) );
+		vec3 F = mix( F_Schlick( material.specularF0, material.specularF90, dotVH ), material.iridescenceFresnel, material.iridescence );
+
+		reflectedLight.directSpecular += ( 1.0 - clearcoatDHR ) * irradiance * BRDF_Specular_GGX_Fresnel( directLight, geometry.viewDir, geometry.normal, F, material.specularRoughness );
+
+	#else
+
+		reflectedLight.directSpecular += ( 1.0 - clearcoatDHR ) * irradiance * BRDF_Specular_GGX( directLight, geometry.viewDir, geometry.normal, material.specularF0, material.specularF90, material.specularRoughness );
+
+	#endif
 
 	#ifdef USE_SHEEN
 		// KHR_materials_sheen: the Charlie lobe sits ON TOP of the base BRDF. The
@@ -132,7 +169,7 @@ void RE_IndirectSpecular_Physical( const in vec3 radiance, const in vec3 irradia
 
 		float ccDotNV = saturate( dot( geometry.clearcoatNormal, geometry.viewDir ) );
 
-		reflectedLight.indirectSpecular += clearcoatRadiance * material.clearcoat * BRDF_Specular_GGX_Environment( geometry.viewDir, geometry.clearcoatNormal, vec3( DEFAULT_SPECULAR_COEFFICIENT ), material.clearcoatRoughness );
+		reflectedLight.indirectSpecular += clearcoatRadiance * material.clearcoat * BRDF_Specular_GGX_Environment( geometry.viewDir, geometry.clearcoatNormal, vec3( DEFAULT_SPECULAR_COEFFICIENT ), 1.0, material.clearcoatRoughness );
 
 		float ccDotNL = ccDotNV;
 		float clearcoatDHR = material.clearcoat * clearcoatDHRApprox( material.clearcoatRoughness, ccDotNL );
@@ -146,12 +183,20 @@ void RE_IndirectSpecular_Physical( const in vec3 radiance, const in vec3 irradia
 	float clearcoatInv = 1.0 - clearcoatDHR;
 
 	// Both indirect specular and indirect diffuse light accumulate here.
-	// Uses three.js r155+ EnvironmentBRDF (split-sum F0*brdf.x + brdf.y)
-	// rather than the older F_Schlick_RoughnessDependent + multi-scattering
-	// approach. The roughness-aware Fresnel pumped grazing-angle reflection
-	// on rough surfaces (e.g. asphalt) far above what looks correct.
+	// Uses three.js r155+ EnvironmentBRDF (split-sum F0*brdf.x + F90*brdf.y)
+	// rather than the older roughness-dependent Fresnel + multi-scattering
+	// approach (both functions are gone from <bsdfs> now). That Fresnel pumped
+	// grazing-angle reflection on rough surfaces (e.g. asphalt) far above what
+	// looks correct.
 	vec3 cosineWeightedIrradiance = irradiance * RECIPROCAL_PI;
-	vec3 envBRDF = BRDF_Specular_GGX_Environment( geometry.viewDir, geometry.normal, material.specularColor, material.specularRoughness );
+
+	#ifdef USE_IRIDESCENCE
+		vec3 iblF0 = mix( material.specularF0, material.iridescenceF0, material.iridescence );
+	#else
+		vec3 iblF0 = material.specularF0;
+	#endif
+
+	vec3 envBRDF = BRDF_Specular_GGX_Environment( geometry.viewDir, geometry.normal, iblF0, material.specularF90, material.specularRoughness );
 
 	reflectedLight.indirectSpecular += clearcoatInv * radiance * envBRDF;
 	reflectedLight.indirectDiffuse += material.diffuseColor * cosineWeightedIrradiance;

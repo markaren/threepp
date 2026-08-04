@@ -56,26 +56,32 @@ vec3 BRDF_Diffuse_Lambert( const in vec3 diffuseColor ) {
 
 } // validated
 
-vec3 F_Schlick( const in vec3 specularColor, const in float dotVH ) {
+// Original approximation by Christophe Schlick '94, in its exact pow5 form.
+//
+// Epic's exp2( ( -5.55473 * dotVH - 6.98316 ) * dotVH ) fit used to live here.
+// It is gone deliberately: Schlick_to_F0 below is the exact algebraic inverse
+// of the pow5 form ONLY, and Belcour's evalIridescence uses pow5 internally.
+// Mixing the two forms leaves a ~0.003 residual with no physical meaning, so
+// the tree keeps a single Fresnel everywhere. The cost of pow() over exp2()
+// is not measurable next to the rest of the lobe.
+vec3 F_Schlick( const in vec3 f0, const in float f90, const in float dotVH ) {
 
-	// Original approximation by Christophe Schlick '94
-	// float fresnel = pow( 1.0 - dotVH, 5.0 );
+	float fresnel = pow( 1.0 - dotVH, 5.0 );
 
-	// Optimized variant (presented by Epic at SIGGRAPH '13)
-	// https://cdn2.unrealengine.com/Resources/files/2013SiggraphPresentationsNotes-26915738.pdf
-	float fresnel = exp2( ( -5.55473 * dotVH - 6.98316 ) * dotVH );
-
-	return ( 1.0 - specularColor ) * fresnel + specularColor;
+	return f0 * ( 1.0 - fresnel ) + ( f90 * fresnel );
 
 } // validated
 
-vec3 F_Schlick_RoughnessDependent( const in vec3 F0, const in float dotNV, const in float roughness ) {
+// Inverse of F_Schlick: recover the F0 that would produce reflectance `f` at
+// `dotVH`. Used to fold a spectrally-varying iridescence Fresnel back into an
+// F0 the split-sum environment BRDF can consume.
+vec3 Schlick_to_F0( const in vec3 f, const in float f90, const in float dotVH ) {
 
-	// See F_Schlick
-	float fresnel = exp2( ( -5.55473 * dotNV - 6.98316 ) * dotNV );
-	vec3 Fr = max( vec3( 1.0 - roughness ), F0 ) - F0;
+	float x = clamp( 1.0 - dotVH, 0.0, 1.0 );
+	float x2 = x * x;
+	float x5 = clamp( x * x2 * x2, 0.0, 0.9999 );
 
-	return Fr * fresnel + F0;
+	return ( f - vec3( f90 ) * x5 ) / ( 1.0 - x5 );
 
 }
 
@@ -124,8 +130,14 @@ float D_GGX( const in float alpha, const in float dotNH ) {
 
 }
 
-// GGX Distribution, Schlick Fresnel, GGX-Smith Visibility
-vec3 BRDF_Specular_GGX( const in IncidentLight incidentLight, const in vec3 viewDir, const in vec3 normal, const in vec3 specularColor, const in float roughness ) {
+// GGX Distribution, GGX-Smith Visibility, Fresnel supplied by the CALLER.
+//
+// Deliberately not an overload of BRDF_Specular_GGX: a 5-arg
+// BRDF_Specular_GGX( IncidentLight, vec3, vec3, vec3, float ) is exactly the
+// old signature, so every existing call site would silently rebind to it and
+// pass an F0 where an F is expected. The distinct name plus the 6-arg base
+// forces each site to be visited.
+vec3 BRDF_Specular_GGX_Fresnel( const in IncidentLight incidentLight, const in vec3 viewDir, const in vec3 normal, const in vec3 F, const in float roughness ) {
 
 	float alpha = pow2( roughness ); // UE4's roughness
 
@@ -134,15 +146,25 @@ vec3 BRDF_Specular_GGX( const in IncidentLight incidentLight, const in vec3 view
 	float dotNL = saturate( dot( normal, incidentLight.direction ) );
 	float dotNV = saturate( dot( normal, viewDir ) );
 	float dotNH = saturate( dot( normal, halfDir ) );
-	float dotLH = saturate( dot( incidentLight.direction, halfDir ) );
-
-	vec3 F = F_Schlick( specularColor, dotLH );
 
 	float G = G_GGX_SmithCorrelated( alpha, dotNL, dotNV );
 
 	float D = D_GGX( alpha, dotNH );
 
 	return F * ( G * D );
+
+}
+
+// GGX Distribution, Schlick Fresnel, GGX-Smith Visibility
+vec3 BRDF_Specular_GGX( const in IncidentLight incidentLight, const in vec3 viewDir, const in vec3 normal, const in vec3 f0, const in float f90, const in float roughness ) {
+
+	vec3 halfDir = normalize( incidentLight.direction + viewDir );
+
+	// H bisects L and V, so dot( L, H ) == dot( V, H ). Named dotVH here to
+	// match F_Schlick's parameter; this is a rename, not a change of vector.
+	float dotVH = saturate( dot( incidentLight.direction, halfDir ) );
+
+	return BRDF_Specular_GGX_Fresnel( incidentLight, viewDir, normal, F_Schlick( f0, f90, dotVH ), roughness );
 
 } // validated
 
@@ -264,37 +286,17 @@ vec3 LTC_Evaluate( const in vec3 N, const in vec3 V, const in vec3 P, const in m
 // End Rect Area Light
 
 // ref: https://www.unrealengine.com/blog/physically-based-shading-on-mobile - environmentBRDF for GGX on mobile
-vec3 BRDF_Specular_GGX_Environment( const in vec3 viewDir, const in vec3 normal, const in vec3 specularColor, const in float roughness ) {
+// The unweighted `+ brdf.y` this used to return WAS an implicit F90 = 1; f90 is
+// now explicit so KHR_materials_specular can dim the grazing response.
+vec3 BRDF_Specular_GGX_Environment( const in vec3 viewDir, const in vec3 normal, const in vec3 f0, const in float f90, const in float roughness ) {
 
 	float dotNV = saturate( dot( normal, viewDir ) );
 
 	vec2 brdf = integrateSpecularBRDF( dotNV, roughness );
 
-	return specularColor * brdf.x + brdf.y;
+	return f0 * brdf.x + f90 * brdf.y;
 
 } // validated
-
-// Fdez-Agüera's "Multiple-Scattering Microfacet Model for Real-Time Image Based Lighting"
-// Approximates multiscattering in order to preserve energy.
-// http://www.jcgt.org/published/0008/01/03/
-void BRDF_Specular_Multiscattering_Environment( const in GeometricContext geometry, const in vec3 specularColor, const in float roughness, inout vec3 singleScatter, inout vec3 multiScatter ) {
-
-	float dotNV = saturate( dot( geometry.normal, geometry.viewDir ) );
-
-	vec3 F = F_Schlick_RoughnessDependent( specularColor, dotNV, roughness );
-	vec2 brdf = integrateSpecularBRDF( dotNV, roughness );
-	vec3 FssEss = F * brdf.x + brdf.y;
-
-	float Ess = brdf.x + brdf.y;
-	float Ems = 1.0 - Ess;
-
-	vec3 Favg = specularColor + ( 1.0 - specularColor ) * 0.047619; // 1/21
-	vec3 Fms = FssEss * Favg / ( 1.0 - Ems * Favg );
-
-	singleScatter += FssEss;
-	multiScatter += Fms * Ems;
-
-}
 
 float G_BlinnPhong_Implicit( /* const in float dotNL, const in float dotNV */ ) {
 
@@ -309,16 +311,20 @@ float D_BlinnPhong( const in float shininess, const in float dotNH ) {
 
 }
 
-vec3 BRDF_Specular_BlinnPhong( const in IncidentLight incidentLight, const in GeometricContext geometry, const in vec3 specularColor, const in float shininess ) {
+// Named specularTint, not specularColor: with USE_SPECULAR a uniform of that
+// name is declared above this chunk in meshphysical_frag, and a parameter
+// shadowing it reads as a bug (same reasoning as BRDF_Specular_Sheen below).
+vec3 BRDF_Specular_BlinnPhong( const in IncidentLight incidentLight, const in GeometricContext geometry, const in vec3 specularTint, const in float shininess ) {
 
 	vec3 halfDir = normalize( incidentLight.direction + geometry.viewDir );
 
 	//float dotNL = saturate( dot( geometry.normal, incidentLight.direction ) );
 	//float dotNV = saturate( dot( geometry.normal, geometry.viewDir ) );
 	float dotNH = saturate( dot( geometry.normal, halfDir ) );
-	float dotLH = saturate( dot( incidentLight.direction, halfDir ) );
+	// dot( L, H ) == dot( V, H ); renamed to match F_Schlick's parameter.
+	float dotVH = saturate( dot( incidentLight.direction, halfDir ) );
 
-	vec3 F = F_Schlick( specularColor, dotLH );
+	vec3 F = F_Schlick( specularTint, 1.0, dotVH );
 
 	float G = G_BlinnPhong_Implicit( /* dotNL, dotNV */ );
 

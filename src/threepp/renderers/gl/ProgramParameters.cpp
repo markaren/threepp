@@ -54,6 +54,8 @@ ProgramParameters::ProgramParameters(
     auto vertextangentsMaterial = dynamic_cast<MaterialWithVertexTangents*>(material);
     auto depthpackMaterial = dynamic_cast<MaterialWithDepthPacking*>(material);
     auto sheenMaterial = dynamic_cast<MaterialWithSheen*>(material);
+    auto pbrSpecularMaterial = dynamic_cast<MaterialWithPbrSpecular*>(material);
+    auto iridescenceMaterial = dynamic_cast<MaterialWithIridescence*>(material);
     auto shaderMaterial = dynamic_cast<ShaderMaterial*>(material);
     auto definesMaterial = dynamic_cast<MaterialWithDefines*>(material);
     auto thicknessMaterial = dynamic_cast<MaterialWithThickness*>(material);
@@ -137,7 +139,18 @@ ProgramParameters::ProgramParameters(
     // gate the define on it and spare every other physical material the cost.
     sheen = sheenMaterial && !sheenMaterial->sheenColor.equals(Color(0, 0, 0));
 
-    transmission = transmissionMaterial && transmissionMaterial->transmission > 0;
+    // KHR_materials_specular at its defaults (intensity 1, colour white) is the
+    // identity, so gate on "was it touched" — untouched materials keep the
+    // cheaper program variant AND byte-identical output.
+    pbrSpecular = pbrSpecularMaterial &&
+                  (pbrSpecularMaterial->specularIntensity != 1.f ||
+                   !pbrSpecularMaterial->specularColor.equals(Color(1, 1, 1)));
+
+    // Iridescence is a layer weight: at 0 the thin-film Fresnel is mixed in
+    // with weight zero, so the variant is pure cost.
+    iridescence = iridescenceMaterial && iridescenceMaterial->iridescence > 0;
+
+    transmission =transmissionMaterial && transmissionMaterial->transmission > 0;
     transmissionMap = transmissionMaterial && transmissionMaterial->transmissionMap;
     thicknessMap = thicknessMaterial && thicknessMaterial->thicknessMap;
 
@@ -251,6 +264,8 @@ std::string ProgramParameters::hash() const {
     s << std::to_string(gradientMap) << '\n';
 
     s << std::to_string(sheen) << '\n';
+    s << std::to_string(pbrSpecular) << '\n';
+    s << std::to_string(iridescence) << '\n';
 
     s << std::to_string(transmission) << '\n';
     s << std::to_string(transmissionMap) << '\n';

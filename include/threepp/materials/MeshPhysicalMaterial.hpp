@@ -90,6 +90,8 @@ namespace threepp {
             TPP_PARAM(float, iridescence)
             TPP_PARAM(float, iridescenceIOR)
             TPP_PARAM(float, iridescenceThicknessNm)
+            TPP_PARAM(float, specularIntensity)
+            TPP_PARAM(Color, specularColor)
 #undef TPP_PARAM
 
         private:
@@ -143,6 +145,8 @@ namespace threepp {
             std::optional<float> iridescence_;
             std::optional<float> iridescenceIOR_;
             std::optional<float> iridescenceThicknessNm_;
+            std::optional<float> specularIntensity_;
+            std::optional<Color> specularColor_;
         };
 
         [[nodiscard]] std::string type() const override;

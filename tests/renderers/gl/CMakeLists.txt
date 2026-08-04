@@ -2,6 +2,11 @@
 add_test_executable(GLRenderLists_test)
 add_test_executable(GLUniforms_test)
 
+# Source-level check on ProgramParameters::hash(); needs the two files at runtime.
+add_test_executable(GLProgramCacheKey_test)
+target_compile_definitions(GLProgramCacheKey_test PRIVATE
+        PROGRAM_PARAMETERS_DIR="${PROJECT_SOURCE_DIR}/src/threepp/renderers/gl")
+
 # End-to-end GL pixel tests. These construct a Canvas, so they need GLFW and a
 # display server; xvfb-run is used when available so they work in headless CI.
 # On a runner with no GL driver at all, Canvas construction throws — reported as
@@ -31,4 +36,6 @@ if (THREEPP_WITH_GLFW)
     add_gl_render_test(GLShadowMap_test)
     add_gl_render_test(GLBackgroundOrtho_test)
     add_gl_render_test(GLSensorScan_test)
+    add_gl_render_test(GLToneMapping_test)
+    add_gl_render_test(GLSpecularBRDF_test)
 endif ()

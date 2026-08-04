@@ -107,7 +107,7 @@ namespace threepp {
         // AgX (three.js AgXToneMapping): Sobotka's filmic sigmoid — the
         // gentlest highlight rolloff of the set; holds saturated emitters
         // without hue skew. NOTE: numeric value diverges from three.js
-        // (threepp assigned 6 to Neutral first). Vulkan renderers only.
+        // (threepp assigned 6 to Neutral first).
         AgX = 7
     };
 
