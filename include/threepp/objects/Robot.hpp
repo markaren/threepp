@@ -6,6 +6,11 @@
 #include "threepp/math/MathUtils.hpp"
 
 #include <algorithm>
+#include <limits>
+#include <string>
+#include <unordered_map>
+#include <unordered_set>
+#include <vector>
 
 namespace threepp {
 
@@ -62,20 +67,67 @@ namespace threepp {
             jointInfos_.emplace_back(info);
             origPose_.emplace(std::make_pair(joint.get(), std::make_pair(joint->position.clone(), joint->quaternion.clone())));
             if (info.type != JointType::Fixed) {
+                jointDof_.emplace_back(static_cast<int>(articulatedJoints_.size()));
                 articulatedJoints_.emplace_back(joint.get(), info);
+            } else {
+                jointDof_.emplace_back(-1);
             }
         }
 
+        // Designate which link's inbound joint frame is the end effector.
+        //
+        // A robot is a TREE, not a chain: an arm with a two-finger gripper
+        // branches at the palm. Without this, "the end effector" can only mean
+        // the last joint that happened to be added, and the FK below can only
+        // mean the product of every joint in the file — which for a branched
+        // robot multiplies both fingers into the tool pose.
+        //
+        // Pass an empty name to restore the default (the last joint added),
+        // which is what a plain serial arm wants and what every caller got
+        // before this existed.
+        void setEndEffector(const std::string& linkName) {
+            eeLink_ = linkName;
+            rebuildChain();
+        }
+
+        [[nodiscard]] const std::string& endEffectorLink() const {
+            return eeLink_;
+        }
+
+        // The DOF indices on the path from the root to the end effector, in
+        // root-to-tip order. For a serial arm this is every DOF; for an arm
+        // with a gripper it is the arm's joints only — precisely the set an IK
+        // solver is allowed to move, since closing the fingers must not be a
+        // way to reach further.
+        [[nodiscard]] const std::vector<size_t>& chainDofs() const {
+            return chainDofs_;
+        }
+
         [[nodiscard]] Matrix4 getEndEffectorTransform() const {
-            auto end = joints_.back();
+            auto end = chain_.empty() ? joints_.back() : joints_.at(chain_.back());
             end->updateMatrixWorld(true);
             return *end->matrixWorld;
         }
 
+        // Analytic FK to the end effector, without touching the scene graph.
+        //
+        // `values` is indexed by GLOBAL dof index — the same order as
+        // jointValues() and numDOF() — not by position along the chain. That
+        // matters for a branched robot: the fingers keep their slots in the
+        // vector, they simply do not contribute to the tool pose. Indices past
+        // the end of `values` read as zero, so passing just the leading arm
+        // DOFs of an arm-plus-gripper robot does the sensible thing.
         [[nodiscard]] Matrix4 computeEndEffectorTransform(const std::vector<float>& values, bool deg = false, bool enforceLimits = true) const {
             Matrix4 result;
 
-            for (unsigned i = 0, j = 0; i < joints_.size(); ++i) {
+            // Walk the root-to-tip path. Before finalize() there is no path yet,
+            // so fall back to every joint in insertion order.
+            const bool walkAll = chain_.empty();
+            const size_t count = walkAll ? joints_.size() : chain_.size();
+
+            for (size_t k = 0; k < count; ++k) {
+
+                const size_t i = walkAll ? k : chain_.at(k);
 
                 const auto& joint = joints_.at(i);
                 const auto& info = jointInfos_.at(i);
@@ -84,14 +136,18 @@ namespace threepp {
                                               .makeRotationFromQuaternion(origPose_.at(joint.get()).second)
                                               .setPosition(origPose_.at(joint.get()).first);
 
+                if (info.type == JointType::Fixed) {
+                    result.multiply(jointTransform);
+                    continue;
+                }
+
+                const int dof = jointDof_.at(i);
+                const auto slot = static_cast<size_t>(dof);
+                auto value = slot < values.size() ? values[slot] : 0.f;
+
                 switch (info.type) {
 
-                    case JointType::Fixed: {
-                        result.multiply(jointTransform);
-                        break;
-                    }
                     case JointType::Revolute: {
-                        auto value = values[j++];
                         value = deg ? math::degToRad(value) : value;
                         if (enforceLimits && info.range.has_value()) {
                             value = info.range->clamp(value);
@@ -101,13 +157,14 @@ namespace threepp {
                         break;
                     }
                     case JointType::Prismatic: {
-                        auto value = values[j++];
                         if (enforceLimits && info.range.has_value()) {
                             value = info.range->clamp(value);
                         }
                         result.multiply(jointTransform.multiply(Matrix4().makeTranslation(info.axis.clone().multiplyScalar(value))));
                         break;
                     }
+                    case JointType::Fixed:
+                        break;// handled above
                 }
             }
 
@@ -133,9 +190,31 @@ namespace threepp {
                 }
             }
 
-            add(links_.front());
+            // Attach the ROOT link — the one no joint names as a child.
+            //
+            // This used to be links_.front(), i.e. whichever <link> came first
+            // in the file. That holds for hand-written URDFs and fails for
+            // xacro-expanded ones, which emit links in macro-expansion order.
+            // When the first link is not the root it has already been parented
+            // under its own inbound joint by the loop above, and Object3D::add()
+            // unlinks a node from its current parent — so the call tore that
+            // link back out and silently orphaned everything below it.
+            if (!links_.empty()) {
+                std::unordered_set<std::string> childLinks;
+                for (const auto& info : jointInfos_) {
+                    childLinks.insert(info.child);
+                }
+
+                auto root = std::ranges::find_if(links_, [&](const auto& link) {
+                    return !childLinks.contains(link->name);
+                });
+
+                add(root != links_.end() ? *root : links_.front());
+            }
 
             jointValues_.resize(numDOF());
+
+            rebuildChain();
         }
 
         void setJointValues(const std::vector<float>& values, float deg = false) {
@@ -253,14 +332,99 @@ namespace threepp {
         }
 
     private:
+        // The default end effector: the far end of the LONGEST joint chain.
+        //
+        // The obvious default — the last joint declared — is wrong on real
+        // URDFs. The KUKA iiwa declares a base-plate branch AFTER its tool
+        // joint, so "last" names the robot's own pedestal, and FK to it walks a
+        // single fixed joint and reports the base as the end effector. (Today's
+        // flat product gets the right answer there only by luck: that branch
+        // joint's origin happens to be identity, so multiplying it in changes
+        // nothing.) Depth picks the tool on every serial arm and on the iiwa,
+        // and ties break on declaration order so the result is deterministic
+        // regardless of hash ordering.
+        [[nodiscard]] std::string deepestLeaf(const std::unordered_map<std::string, size_t>& inbound,
+                                              const std::unordered_set<std::string>& parents) const {
+            std::string best;
+            size_t bestDepth = 0;
+            size_t bestJoint = std::numeric_limits<size_t>::max();
+
+            for (const auto& [child, jointIndex] : inbound) {
+                if (parents.contains(child)) continue;// has children of its own, so not a leaf
+
+                size_t depth = 0;
+                std::string link = child;
+                std::unordered_set<std::string> seen;
+                while (true) {
+                    auto it = inbound.find(link);
+                    if (it == inbound.end()) break;
+                    if (!seen.insert(link).second) break;// cycle: malformed tree
+                    ++depth;
+                    link = jointInfos_[it->second].parent;
+                }
+
+                if (depth > bestDepth || (depth == bestDepth && jointIndex < bestJoint)) {
+                    best = child;
+                    bestDepth = depth;
+                    bestJoint = jointIndex;
+                }
+            }
+
+            return best.empty() ? jointInfos_.back().child : best;
+        }
+
+        // Resolve the root-to-tip joint path, walking the child->parent link
+        // relations backwards from the end-effector link. Cheap, and only ever
+        // runs on finalize() or an explicit setEndEffector().
+        void rebuildChain() {
+            chain_.clear();
+            chainDofs_.clear();
+            if (joints_.empty()) return;
+
+            // child link name -> the joint that drives it. A link has exactly
+            // one inbound joint in a well-formed URDF, so this is a function.
+            std::unordered_map<std::string, size_t> inbound;
+            std::unordered_set<std::string> parents;
+            for (size_t i = 0; i < jointInfos_.size(); ++i) {
+                inbound.emplace(jointInfos_[i].child, i);
+                parents.insert(jointInfos_[i].parent);
+            }
+
+            if (eeLink_.empty()) {
+                eeLink_ = deepestLeaf(inbound, parents);
+            }
+
+            std::string link = eeLink_;
+            std::unordered_set<std::string> visited;
+            while (true) {
+                auto it = inbound.find(link);
+                if (it == inbound.end()) break;// reached the root link
+                if (!visited.insert(link).second) break;// cycle: malformed tree
+                chain_.push_back(it->second);
+                link = jointInfos_[it->second].parent;
+            }
+
+            std::ranges::reverse(chain_);
+
+            for (const size_t i : chain_) {
+                const int dof = jointDof_.at(i);
+                if (dof >= 0) chainDofs_.push_back(static_cast<size_t>(dof));
+            }
+        }
+
         std::vector<float> jointValues_;
 
         std::vector<JointInfo> jointInfos_;
         std::vector<std::shared_ptr<Object3D>> links_;
         std::vector<std::shared_ptr<Object3D>> colliders_;
         std::vector<std::shared_ptr<Object3D>> joints_;
+        std::vector<int> jointDof_;// parallel to joints_; dof index, or -1 if fixed
         std::vector<std::pair<Object3D*, JointInfo>> articulatedJoints_;
         std::unordered_map<Object3D* , std::pair<Vector3, Quaternion>> origPose_;
+
+        std::string eeLink_;
+        std::vector<size_t> chain_;    // joint indices, root -> tip
+        std::vector<size_t> chainDofs_;// dof indices along that path
     };
 
 }// namespace threepp
