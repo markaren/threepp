@@ -631,6 +631,46 @@ Also available: `OBJLoader` + `MTLLoader`, `STLLoader`, `ColladaLoader`, `FBXLoa
 descriptions → a `Robot` with joints), `FontLoader` (typeface.json / TTF), and `AssimpLoader` as
 a catch-all if you link assimp yourself.
 
+### URDF and xacro
+
+`URDFLoader::load` runs a `.xacro` (or any document that declares the xacro namespace) through
+a built-in xacro engine before parsing it, so a description that ships as macros needs no
+external `xacro` command. The engine is also usable on its own:
+
+```cpp
+xacro::Processor processor;
+processor.addPackagePath("ur_description", "/opt/ros/ur_description");
+processor.setArgs({{"name", "ur"}, {"ur_type", "ur5e"}});
+
+const auto result = processor.processFile("urdf/ur.urdf.xacro");
+if (!result.ok) for (const auto& e : result.errors) std::cerr << e << '\n';
+```
+
+`URDFLoader` takes the same two settings (`setArgs`, `addPackagePath`); the package registry
+also backs `package://` mesh URIs, ahead of the `package.xml` walk and `ROS_PACKAGE_PATH` /
+`AMENT_PREFIX_PATH`.
+
+Supported: `property` (including `scope="parent"`/`"global"` and `default=`), `arg` with
+defaults and command-line overrides, `macro` with whitespace-separated params, `:=` defaults,
+`:=^` / `:=^|default` inheritance and `*block` / `**block` + `insert_block`, `include`
+(with cycle detection), `if` / `unless`, and the `${...}` / `$(...)` substitutions
+`arg`, `find`, `env`, `optenv`, `dirname`, `eval` and the `$$` escape. Expressions are a
+Python subset over None/bool/int/float/str/list/dict — arithmetic (`**`, `//`, `%`),
+comparisons, `and`/`or`/`not`, `in`, ternaries, subscripting, list literals, `math.*` and the
+usual builtins, plus `xacro.load_yaml`. Anything that cannot be evaluated is an error with the
+offending file and text; nothing is silently dropped.
+
+The bundled YAML reader covers block mappings and sequences, flow collections, comments and
+typed scalars, and honours python xacro's `!degrees` / `!radians` tags. It does not do anchors,
+aliases, block scalars, multi-document files or any other tag — those are reported rather than
+guessed at. Also unsupported next to python xacro: namespaced includes (`<xacro:include ns=…>`),
+`<xacro:element>` / `<xacro:attribute>`, property block bodies, and the parts of `$(eval)` that
+need a real python interpreter (comprehensions, imports, attribute access on values).
+
+`tests/loaders/Xacro_test.cpp` covers the engine on inline documents. `XacroUr_test.cpp`
+expands the Universal Robots ROS 2 description end to end; that clone is not vendored, so
+point `THREEPP_UR_DESCRIPTION` at one to run it — otherwise its cases skip.
+
 ## Animation
 
 Three independent mechanisms, often combined:

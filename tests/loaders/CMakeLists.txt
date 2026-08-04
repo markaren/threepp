@@ -10,6 +10,10 @@ add_test_executable(ObjectLoader_test)
 add_test_executable(STLLoader_test)
 add_test_executable(URDFLoader_test)
 add_test_executable(Xacro_test)
+add_test_executable(XacroUr_test)
+# Every case needs a Universal_Robots_ROS2_Description clone (THREEPP_UR_DESCRIPTION);
+# without one Catch2 skips them all and exits 4, which is a ctest skip, not a failure.
+set_tests_properties(XacroUr_test PROPERTIES SKIP_RETURN_CODE 4)
 
 add_subdirectory(svg)
 
