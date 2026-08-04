@@ -13,6 +13,8 @@
 #include "threepp/renderers/RenderTarget.hpp"
 #include "threepp/textures/CubeTexture.hpp"
 
+#include <algorithm>
+
 using namespace threepp;
 using namespace threepp::gl;
 
@@ -285,6 +287,12 @@ struct GLMaterials::Impl {
         // whatever the previously drawn material put there.
         uniforms.at("specularIntensity").value<float>() = material->specularIntensity;
         uniforms.at("specularColor").value<Color>().copy(material->specularColor);
+
+        // Same clamps the Vulkan path applies: an IOR below 1 inverts Snell
+        // inside evalIridescence, a negative thickness is meaningless.
+        uniforms.at("iridescence").value<float>() = material->iridescence;
+        uniforms.at("iridescenceIOR").value<float>() = std::max(1.f, material->iridescenceIOR);
+        uniforms.at("iridescenceThicknessNm").value<float>() = std::max(0.f, material->iridescenceThicknessNm);
 
         if (material->clearcoatMap) {
             uniforms.at("clearcoatMap").setValue(material->clearcoatMap.get());

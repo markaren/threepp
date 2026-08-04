@@ -72,8 +72,7 @@ namespace {
         return f;
     }
 
-    AvgColor renderFixture(const Fixture& f) {
-        GLRenderer renderer(glCanvas());
+    AvgColor renderWith(GLRenderer& renderer, const Fixture& f) {
         renderer.outputColorSpace = ColorSpace::NoColorSpace;
         renderer.toneMapping = ToneMapping::None;
         renderer.toneMappingExposure = 1.f;
@@ -82,6 +81,11 @@ namespace {
         auto px = renderer.readRGBPixels();
         REQUIRE(px.size() == DATA_SIZE);
         return centerPixel(px, RT_WIDTH, RT_HEIGHT);
+    }
+
+    AvgColor renderFixture(const Fixture& f) {
+        GLRenderer renderer(glCanvas());
+        return renderWith(renderer, f);
     }
 
 }// namespace
@@ -170,4 +174,147 @@ TEST_CASE("KHR specular: GL specularIntensity 0 kills the env specular lobe", "[
     INFO("env specular lit: " << lit << ", intensity 0: " << dark);
     CHECK(lit > 5.0);  // the lobe is actually doing something to begin with
     CHECK(dark < 1.51);// ...and intensity 0 switches all of it off
+}
+
+// --- KHR_materials_iridescence ---------------------------------------------
+//
+// evalIridescence is hard to pin with a hand-computed number at a general
+// thickness, but there is one regime where it is trivial: as thickness grows,
+// the exp( -phase^2 * vr ) factor inside iridSensitivity annihilates both
+// higher-order Fourier terms and the whole function collapses to its
+// achromatic zeroth term C0 = R12 + Rs.
+//
+// At 4000 nm that factor is ~9e-9, so with IOR 1.3 over the default F0 = 0.04,
+// at normal incidence (cosTheta1 = 1, which the ortho fixture guarantees):
+//   R12  = ((1.3-1)/(1.3+1))^2                       = 0.0170132
+//   base IOR from F0=0.04 = (1+0.2)/(1-0.2)          = 1.5
+//   R23  = ((1.5-1.3)/(1.5+1.3))^2                   = 0.0051020
+//   T121 = 1 - R12,  Rs = T121^2*R23/(1-R12*R23)     = 0.0049293
+//   C0   = R12 + Rs                                  = 0.0219425
+// against a base F0 of 0.04. Both fall straight out of the fixture's
+// intensity * F * 4/PI, so the mix weight can be read directly off the byte.
+namespace {
+
+    constexpr double IRID_C0_4000NM = 0.0219425;
+
+    double byteFor(double F) {
+        return 18.0 * F * FOUR_OVER_PI * 255.0;
+    }
+
+}// namespace
+
+TEST_CASE("Iridescence: GL thin film collapses to its achromatic C0 at 4000nm", "[brdf][iridescence]") {
+    auto f = makeFixture(18.f);
+    f.material->iridescence = 1.f;
+    f.material->iridescenceIOR = 1.3f;
+    f.material->iridescenceThicknessNm = 4000.f;
+
+    const auto c = renderFixture(f);
+    const double expected = byteFor(IRID_C0_4000NM);// 128.2
+    INFO("C0 analytic " << expected << ", GL: " << c.r << ", " << c.g << ", " << c.b);
+    CHECK(std::abs(c.r - expected) < 2.0);
+    // Achromatic: the spectral terms really are gone, not merely small.
+    CHECK(std::abs(c.r - c.g) <= 1.0);
+    CHECK(std::abs(c.g - c.b) <= 1.0);
+}
+
+// The mix weight itself. Halfway between base F0 (byte 234) and the thin-film
+// C0 (byte 128) has to land on 181 — a weight applied to the wrong operand, or
+// applied twice, misses this.
+TEST_CASE("Iridescence: GL mixes the thin-film Fresnel by the layer weight", "[brdf][iridescence]") {
+    auto f = makeFixture(18.f);
+    f.material->iridescence = 0.5f;
+    f.material->iridescenceIOR = 1.3f;
+    f.material->iridescenceThicknessNm = 4000.f;
+
+    const auto c = renderFixture(f);
+    const double expected = byteFor(0.5 * 0.04 + 0.5 * IRID_C0_4000NM);// 181.0
+    INFO("half-mix analytic " << expected << ", GL: " << c.r);
+    CHECK(std::abs(c.r - expected) < 2.0);
+}
+
+// A thickness of 0 means "no film". The shader forces the layer weight to zero
+// in that case, so the pixel must equal the plain dielectric — while STILL
+// compiling the USE_IRIDESCENCE variant, since the program flag is gated on
+// iridescence > 0 and this material has iridescence = 1.
+//
+// That makes this simultaneously a cache-key check: both draws go through one
+// GLRenderer, and a hash() that ignored the iridescence flag would serve the
+// first program for the second material.
+TEST_CASE("Iridescence: GL zero thickness is exactly the plain dielectric", "[brdf][iridescence]") {
+    GLRenderer renderer(glCanvas());
+
+    auto plain = makeFixture(18.f);
+    const double base = renderWith(renderer, plain).r;
+
+    auto zeroThickness = makeFixture(18.f);
+    zeroThickness.material->iridescence = 1.f;
+    zeroThickness.material->iridescenceIOR = 1.3f;
+    zeroThickness.material->iridescenceThicknessNm = 0.f;
+    const double zero = renderWith(renderer, zeroThickness).r;
+
+    auto film = makeFixture(18.f);
+    film.material->iridescence = 1.f;
+    film.material->iridescenceIOR = 1.3f;
+    film.material->iridescenceThicknessNm = 4000.f;
+    const double lit = renderWith(renderer, film).r;
+
+    INFO("plain " << base << ", thickness 0 " << zero << ", 4000nm film " << lit);
+    CHECK(base == zero);      // byte-identical through a different program variant
+    CHECK(std::abs(lit - zero) > 50.0);// ...and the variant is not being ignored
+}
+
+// The achromatic anchor above cannot see a bungled iridSensitivity: the whole
+// spectral block is multiplied by ~0 at 4000 nm. At 550 nm it dominates, and
+// the film reads strongly blue — analytically about (23, 91, 171). Assert a
+// large channel spread rather than the exact triple, so a plausible-but-not-
+// bit-exact rasterizer still passes while a transposed XYZ_TO_REC709 or a
+// mistyped coefficient (both of which flatten or invert the hue) does not.
+TEST_CASE("Iridescence: GL 550nm film is strongly chromatic", "[brdf][iridescence]") {
+    auto f = makeFixture(18.f);
+    f.material->iridescence = 1.f;
+    f.material->iridescenceIOR = 1.3f;
+    f.material->iridescenceThicknessNm = 550.f;
+
+    const auto c = renderFixture(f);
+    const double spread = std::max({c.r, c.g, c.b}) - std::min({c.r, c.g, c.b});
+    INFO("550nm film RGB: " << c.r << ", " << c.g << ", " << c.b << " (spread " << spread << ")");
+    CHECK(spread > 15.0);
+    // Blue-dominant, as the Fourier terms put it — catches an inverted hue.
+    CHECK(c.b > c.g);
+    CHECK(c.g > c.r);
+}
+
+// The IBL half of the feature, and the only thing that exercises
+// Schlick_to_F0. The split-sum environment BRDF consumes an F0, not a
+// reflectance, so the thin-film Fresnel is folded back through the exact
+// inverse of Schlick before being mixed into the IBL F0.
+//
+// At normal incidence Schlick_to_F0 is the identity (x5 = 0), which makes this
+// closed-form too. With the 4000 nm achromatic film over Le = 20:
+//   integrateSpecularBRDF( 1, 0.5 ) = ( 0.723263, 0.001737 )
+//   plain: 20 * ( 0.04     * 0.723263 + 0.001737 ) = 0.6133 -> byte 156
+//   film:  20 * ( 0.021943 * 0.723263 + 0.001737 ) = 0.3521 -> byte  90
+// A missing Schlick_to_F0 (feeding the raw Fresnel straight in) happens to
+// agree here BY CONSTRUCTION at dotNV = 1; what this pins is that the IBL lobe
+// mixes at all rather than ignoring iridescence, which it did before.
+TEST_CASE("Iridescence: GL env specular uses the folded iridescence F0", "[brdf][iridescence]") {
+    auto plain = makeFixture(0.f);
+    plain.scene->environment = makeConstantEnv(20.f);
+    const double base = renderFixture(plain).r;
+
+    auto film = makeFixture(0.f);
+    film.scene->environment = makeConstantEnv(20.f);
+    film.material->iridescence = 1.f;
+    film.material->iridescenceIOR = 1.3f;
+    film.material->iridescenceThicknessNm = 4000.f;
+    const double lit = renderFixture(film).r;
+
+    const double brdfX = 0.723263, brdfY = 0.001737;
+    const double expectedBase = 20.0 * (0.04 * brdfX + brdfY) * 255.0;
+    const double expectedFilm = 20.0 * (IRID_C0_4000NM * brdfX + brdfY) * 255.0;
+    INFO("env plain analytic " << expectedBase << " GL " << base
+                               << " | env film analytic " << expectedFilm << " GL " << lit);
+    CHECK(std::abs(base - expectedBase) < 3.0);
+    CHECK(std::abs(lit - expectedFilm) < 3.0);
 }

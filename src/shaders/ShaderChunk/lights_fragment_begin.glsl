@@ -26,6 +26,40 @@ geometry.viewDir = ( isOrthographic ) ? vec3( 0, 0, 1 ) : normalize( vViewPositi
 
 #endif
 
+// Thin-film iridescence is evaluated ONCE per fragment, at the view angle, and
+// the result is then mixed per-lobe below.
+//
+// It lives here rather than in a chunk of its own because it needs
+// geometry.viewDir, and that is built four lines up with the
+// isOrthographic ? vec3(0,0,1) : normalize(vViewPosition) branch — duplicating
+// that expression anywhere else is an invitation to silent drift. The #ifdef
+// makes the block inert for phong/toon/lambert, which share this chunk.
+#ifdef USE_IRIDESCENCE
+
+	float dotNVi = saturate( dot( normal, geometry.viewDir ) );
+
+	if ( material.iridescenceThickness == 0.0 ) {
+
+		material.iridescence = 0.0;
+
+	} else {
+
+		material.iridescence = saturate( material.iridescence );
+
+	}
+
+	if ( material.iridescence > 0.0 ) {
+
+		material.iridescenceFresnel = evalIridescence( 1.0, material.iridescenceIOR, dotNVi, material.iridescenceThickness, material.specularF0 );
+
+		// The split-sum environment BRDF consumes an F0, not a reflectance, so
+		// fold the spectral Fresnel back through the exact inverse of Schlick.
+		material.iridescenceF0 = Schlick_to_F0( material.iridescenceFresnel, 1.0, dotNVi );
+
+	}
+
+#endif
+
 IncidentLight directLight;
 
 #if ( NUM_POINT_LIGHTS > 0 ) && defined( RE_Direct )

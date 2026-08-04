@@ -23,6 +23,13 @@ struct PhysicalMaterial {
 	vec3 sheenColor;
 	float sheenRoughness;
 #endif
+#ifdef USE_IRIDESCENCE
+	float iridescence;
+	float iridescenceIOR;
+	float iridescenceThickness;// nanometres
+	vec3 iridescenceFresnel;   // evaluated at dotNVi, filled in <lights_fragment_begin>
+	vec3 iridescenceF0;        // the same, folded back through Schlick_to_F0
+#endif
 
 };
 
@@ -114,7 +121,25 @@ void RE_Direct_Physical( const in IncidentLight directLight, const in GeometricC
 
 	#endif
 
-	reflectedLight.directSpecular += ( 1.0 - clearcoatDHR ) * irradiance * BRDF_Specular_GGX( directLight, geometry.viewDir, geometry.normal, material.specularF0, material.specularF90, material.specularRoughness );
+	#ifdef USE_IRIDESCENCE
+
+		// three.js parity: the thin-film Fresnel is evaluated once at the VIEW
+		// angle but mixed in at the HALF vector, per light. Vulkan instead
+		// substitutes a single F0 and hardcodes F90 = 1; this is the more
+		// correct of the two, so the backends differ here on purpose.
+		//
+		// Iridescence does not apply to the clearcoat or LTC lobes.
+		vec3 halfDir = normalize( directLight.direction + geometry.viewDir );
+		float dotVH = saturate( dot( directLight.direction, halfDir ) );
+		vec3 F = mix( F_Schlick( material.specularF0, material.specularF90, dotVH ), material.iridescenceFresnel, material.iridescence );
+
+		reflectedLight.directSpecular += ( 1.0 - clearcoatDHR ) * irradiance * BRDF_Specular_GGX_Fresnel( directLight, geometry.viewDir, geometry.normal, F, material.specularRoughness );
+
+	#else
+
+		reflectedLight.directSpecular += ( 1.0 - clearcoatDHR ) * irradiance * BRDF_Specular_GGX( directLight, geometry.viewDir, geometry.normal, material.specularF0, material.specularF90, material.specularRoughness );
+
+	#endif
 
 	#ifdef USE_SHEEN
 		// KHR_materials_sheen: the Charlie lobe sits ON TOP of the base BRDF. The
@@ -164,7 +189,14 @@ void RE_IndirectSpecular_Physical( const in vec3 radiance, const in vec3 irradia
 	// grazing-angle reflection on rough surfaces (e.g. asphalt) far above what
 	// looks correct.
 	vec3 cosineWeightedIrradiance = irradiance * RECIPROCAL_PI;
-	vec3 envBRDF = BRDF_Specular_GGX_Environment( geometry.viewDir, geometry.normal, material.specularF0, material.specularF90, material.specularRoughness );
+
+	#ifdef USE_IRIDESCENCE
+		vec3 iblF0 = mix( material.specularF0, material.iridescenceF0, material.iridescence );
+	#else
+		vec3 iblF0 = material.specularF0;
+	#endif
+
+	vec3 envBRDF = BRDF_Specular_GGX_Environment( geometry.viewDir, geometry.normal, iblF0, material.specularF90, material.specularRoughness );
 
 	reflectedLight.indirectSpecular += clearcoatInv * radiance * envBRDF;
 	reflectedLight.indirectDiffuse += material.diffuseColor * cosineWeightedIrradiance;

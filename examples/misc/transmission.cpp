@@ -67,6 +67,9 @@ int main() {
     float thickness = glassMat->thickness;
     float attenuationDistance = glassMat->attenuationDistance;
     std::array<float, 3> attenuationColor = {1.f, 1.f, 1.f};
+    float iridescence = glassMat->iridescence;
+    float iridescenceIOR = glassMat->iridescenceIOR;
+    float iridescenceThicknessNm = glassMat->iridescenceThicknessNm;
 
     RendererSettingsUi ui(canvas, *renderer, [&] {
         if (ImGui::SliderFloat("Transmission", &transmission, 0.f, 1.f)) {
@@ -95,6 +98,23 @@ int main() {
         }
         if (ImGui::ColorEdit3("Attenuation Color", attenuationColor.data())) {
             glassMat->attenuationColor.setRGB(attenuationColor[0], attenuationColor[1], attenuationColor[2]);
+            glassMat->needsUpdate();
+        }
+
+        // KHR_materials_iridescence. Sweeping thickness is the interesting one:
+        // the hue cycles fastest in the 200-800 nm range and washes out to a
+        // flat achromatic tint above ~2000 nm, where the spectral terms die.
+        ImGui::SeparatorText("Iridescence");
+        if (ImGui::SliderFloat("Iridescence", &iridescence, 0.f, 1.f)) {
+            glassMat->iridescence = iridescence;
+            glassMat->needsUpdate();
+        }
+        if (ImGui::SliderFloat("Iridescence IOR", &iridescenceIOR, 1.f, 2.5f)) {
+            glassMat->iridescenceIOR = iridescenceIOR;
+            glassMat->needsUpdate();
+        }
+        if (ImGui::SliderFloat("Film Thickness (nm)", &iridescenceThicknessNm, 0.f, 1600.f)) {
+            glassMat->iridescenceThicknessNm = iridescenceThicknessNm;
             glassMat->needsUpdate();
         }
     }, "Transmission");

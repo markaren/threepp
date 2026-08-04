@@ -80,3 +80,17 @@ material.specularRoughness = min( material.specularRoughness, 1.0 );
 
 #endif
 
+#ifdef USE_IRIDESCENCE
+
+	material.iridescence = iridescence;
+	material.iridescenceIOR = iridescenceIOR;
+	material.iridescenceThickness = iridescenceThicknessNm;
+
+	// Initialized here rather than only inside the `iridescence > 0` branch in
+	// <lights_fragment_begin>. Both are consumed through mix( ..., weight ),
+	// and a NaN in the unused operand survives a weight of zero.
+	material.iridescenceFresnel = vec3( 0.0 );
+	material.iridescenceF0 = vec3( 0.0 );
+
+#endif
+

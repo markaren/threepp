@@ -55,6 +55,7 @@ ProgramParameters::ProgramParameters(
     auto depthpackMaterial = dynamic_cast<MaterialWithDepthPacking*>(material);
     auto sheenMaterial = dynamic_cast<MaterialWithSheen*>(material);
     auto pbrSpecularMaterial = dynamic_cast<MaterialWithPbrSpecular*>(material);
+    auto iridescenceMaterial = dynamic_cast<MaterialWithIridescence*>(material);
     auto shaderMaterial = dynamic_cast<ShaderMaterial*>(material);
     auto definesMaterial = dynamic_cast<MaterialWithDefines*>(material);
     auto thicknessMaterial = dynamic_cast<MaterialWithThickness*>(material);
@@ -144,6 +145,10 @@ ProgramParameters::ProgramParameters(
     pbrSpecular = pbrSpecularMaterial &&
                   (pbrSpecularMaterial->specularIntensity != 1.f ||
                    !pbrSpecularMaterial->specularColor.equals(Color(1, 1, 1)));
+
+    // Iridescence is a layer weight: at 0 the thin-film Fresnel is mixed in
+    // with weight zero, so the variant is pure cost.
+    iridescence = iridescenceMaterial && iridescenceMaterial->iridescence > 0;
 
     transmission =transmissionMaterial && transmissionMaterial->transmission > 0;
     transmissionMap = transmissionMaterial && transmissionMaterial->transmissionMap;
@@ -260,6 +265,7 @@ std::string ProgramParameters::hash() const {
 
     s << std::to_string(sheen) << '\n';
     s << std::to_string(pbrSpecular) << '\n';
+    s << std::to_string(iridescence) << '\n';
 
     s << std::to_string(transmission) << '\n';
     s << std::to_string(transmissionMap) << '\n';

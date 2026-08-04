@@ -38,6 +38,12 @@ uniform float opacity;
 	uniform vec3 specularColor;
 #endif
 
+#ifdef USE_IRIDESCENCE
+	uniform float iridescence;
+	uniform float iridescenceIOR;
+	uniform float iridescenceThicknessNm;
+#endif
+
 varying vec3 vViewPosition;
 
 #ifndef FLAT_SHADED
@@ -65,6 +71,7 @@ varying vec3 vViewPosition;
 #include <lightmap_pars_fragment>
 #include <emissivemap_pars_fragment>
 #include <bsdfs>
+#include <iridescence_pars_fragment>
 #include <transmission_pars_fragment>
 #include <cube_uv_reflection_fragment>
 #include <envmap_common_pars_fragment>
