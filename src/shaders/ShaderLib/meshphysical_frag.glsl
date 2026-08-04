@@ -33,6 +33,11 @@ uniform float opacity;
 	uniform float sheenRoughness;
 #endif
 
+#ifdef USE_SPECULAR
+	uniform float specularIntensity;
+	uniform vec3 specularColor;
+#endif
+
 varying vec3 vViewPosition;
 
 #ifndef FLAT_SHADED

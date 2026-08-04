@@ -28,6 +28,23 @@ namespace {
 
     constexpr double FOUR_OVER_PI = 4.0 / 3.14159265358979323846;
 
+    // 8x4 equirect, Le = 1 per texel. Used by the F90 case, which needs an
+    // environment: F90 only shows up in the split-sum's brdf.y term, and the
+    // analytic-light fixture above evaluates Fresnel at dotVH = 1 where F90
+    // has zero weight by construction.
+    std::shared_ptr<Texture> makeConstantEnv(float Le) {
+        constexpr int W = 8, H = 4;
+        std::vector<float> data(W * H * 4, Le);
+        Image img{std::move(data), static_cast<unsigned>(W), static_cast<unsigned>(H), 0};
+        auto tex = Texture::create(img);
+        tex->format = Format::RGBA;
+        tex->type = Type::Float;
+        tex->colorSpace = ColorSpace::Linear;
+        tex->mapping = Mapping::EquirectangularReflection;
+        tex->needsUpdate();
+        return tex;
+    }
+
     struct Fixture {
         std::shared_ptr<Scene> scene;
         std::shared_ptr<OrthographicCamera> camera;
@@ -98,4 +115,59 @@ TEST_CASE("BRDF: GL direct specular matches the closed form at default F0", "[br
     const double expected = 18.0 * 0.04 * FOUR_OVER_PI * 255.0;// 233.7
     INFO("F0=0.04 analytic " << expected << ", GL: " << c.r);
     CHECK(std::abs(c.r - expected) < 2.0);
+}
+
+// --- KHR_materials_specular -------------------------------------------------
+
+// specularIntensity scales F0 linearly. At dotVH = 1 the direct lobe is exactly
+// F0, so halving the intensity has to halve the byte: 234 -> 117, no rounding
+// slack to hide behind.
+TEST_CASE("KHR specular: GL specularIntensity scales F0 linearly", "[brdf][specular]") {
+    auto f = makeFixture(18.f);
+    f.material->specularIntensity = 0.5f;
+
+    const auto c = renderFixture(f);
+    const double expected = 18.0 * 0.04 * 0.5 * FOUR_OVER_PI * 255.0;// 116.8
+    INFO("intensity 0.5 analytic " << expected << ", GL: " << c.r);
+    CHECK(std::abs(c.r - expected) < 2.0);
+}
+
+// specularColor tints F0 per channel. A (1, 0.5, 0.25) tint must come back as
+// an exact 4:2:1 ratio — this is what catches the tint being applied to the
+// wrong term (e.g. multiplied into F90, or after the metalness mix).
+TEST_CASE("KHR specular: GL specularColor tints F0 per channel", "[brdf][specular]") {
+    auto f = makeFixture(18.f);
+    f.material->specularColor = Color(1.f, 0.5f, 0.25f);
+
+    const auto c = renderFixture(f);
+    const double base = 18.0 * 0.04 * FOUR_OVER_PI * 255.0;
+    INFO("tint (1,.5,.25) analytic " << base << "/" << base / 2 << "/" << base / 4
+                                     << ", GL: " << c.r << ", " << c.g << ", " << c.b);
+    CHECK(std::abs(c.r - base) < 2.0);
+    CHECK(std::abs(c.g - base / 2.0) < 2.0);
+    CHECK(std::abs(c.b - base / 4.0) < 2.0);
+}
+
+// THE F90 CASE. F90 lives only in the split-sum environment BRDF's brdf.y
+// term, which BRDF_Specular_GGX_Environment used to add unweighted. With
+// specularIntensity = 0 the surface has no specular response at all, so an
+// env-lit black dielectric must read ~0. If brdf.y is still unweighted it
+// reads ~9 instead — the whole grazing lobe survives an intensity of zero.
+//
+// Le = 20 stays under the PMREM firefly clamp; the material is black and
+// metalness 0, so the diffuse lobe contributes nothing and every photon in the
+// frame came through the specular path.
+TEST_CASE("KHR specular: GL specularIntensity 0 kills the env specular lobe", "[brdf][specular]") {
+    auto f = makeFixture(0.f);// no analytic light: env only
+    f.scene->environment = makeConstantEnv(20.f);
+
+    const double lit = renderFixture(f).r;
+
+    f.material->specularIntensity = 0.f;
+    f.material->needsUpdate();
+    const double dark = renderFixture(f).r;
+
+    INFO("env specular lit: " << lit << ", intensity 0: " << dark);
+    CHECK(lit > 5.0);  // the lobe is actually doing something to begin with
+    CHECK(dark < 1.51);// ...and intensity 0 switches all of it off
 }

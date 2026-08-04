@@ -237,6 +237,8 @@ ShaderLib::ShaderLib()
                                               {"clearcoatNormalMap", Uniform()},
                                               {"sheenColor", Uniform(Color(0x000000))},
                                               {"sheenRoughness", Uniform(0.f)},
+                                              {"specularIntensity", Uniform(1.f)},
+                                              {"specularColor", Uniform(Color(0xffffff))},
                                               {"transmission", Uniform(0.f)},
                                               {"transmissionMap", Uniform()},
                                               {"transmissionSamplerSize", Uniform(Vector2(0,0))},

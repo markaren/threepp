@@ -1,2 +1,3 @@
 
 add_test_executable(MaterialClone_test)
+add_test_executable(MeshPhysicalMaterialParams_test)

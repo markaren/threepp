@@ -599,6 +599,7 @@ GLProgram::GLProgram(const GLRenderer* renderer, std::string cacheKey, const Pro
                     parameters->alphaMap ? "#define USE_ALPHAMAP" : "",
 
                     parameters->sheen ? "#define USE_SHEEN" : "",
+                    parameters->pbrSpecular ? "#define USE_SPECULAR" : "",
                     parameters->transmission ? "#define USE_TRANSMISSION" : "",
                     parameters->transmissionMap ? "#define USE_TRANSMISSIONMAP" : "",
                     parameters->thicknessMap ? "#define USE_THICKNESSMAP" : "",

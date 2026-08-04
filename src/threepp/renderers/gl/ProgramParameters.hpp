@@ -68,6 +68,7 @@ namespace threepp {
             bool gradientMap{};
 
             bool sheen{};
+            bool pbrSpecular{};
 
             bool transmission{};
             bool transmissionMap{};

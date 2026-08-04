@@ -18,9 +18,15 @@
 	vec3 viewDir = ( isOrthographic ) ? vec3( 0, 0, 1 ) : normalize( vViewPosition );
 	float ior = ( 1.0 + 0.4 * reflectivity ) / ( 1.0 - 0.4 * reflectivity );
 
-	// From https://google.github.io/filament/Filament.html#materialsystem/parameterization/remapping
-	vec3 f0 = vec3( pow( ior - 1.0, 2.0 ) / pow( ior + 1.0, 2.0 ) );
-	vec3 f90 = vec3( 1.0 );
+	// Reuse the F0/F90 the lighting lobes already resolved rather than deriving
+	// a second one here. For a plain dielectric the two are algebraically the
+	// same value — threepp's reflectivity->ior mapping makes
+	// ((ior-1)/(ior+1))^2 == 0.16*reflectivity^2 — so this is a no-op unless
+	// KHR_materials_specular (or metalness) is in play, in which case
+	// transmission should follow them. The local `ior` above stays: it drives
+	// the refraction geometry, not the Fresnel.
+	vec3 f0 = material.specularF0;
+	vec3 f90 = vec3( material.specularF90 );
 
 	// Per glTF KHR_materials_transmission, transmitted light is tinted by volume
 	// attenuation only. Some assets ship baseColor=(0,0,0) as "clear glass" relying

@@ -279,6 +279,13 @@ struct GLMaterials::Impl {
         uniforms.at("sheenColor").value<Color>().copy(material->sheenColor);
         uniforms.at("sheenRoughness").value<float>() = material->sheenRoughness;
 
+        // Unconditional on purpose. materialProperties->uniforms points at the
+        // ONE global ShaderLib::physical.uniforms map shared by every
+        // standard/physical material, so a write skipped inside an `if` leaves
+        // whatever the previously drawn material put there.
+        uniforms.at("specularIntensity").value<float>() = material->specularIntensity;
+        uniforms.at("specularColor").value<Color>().copy(material->specularColor);
+
         if (material->clearcoatMap) {
             uniforms.at("clearcoatMap").setValue(material->clearcoatMap.get());
         }

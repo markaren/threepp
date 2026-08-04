@@ -104,6 +104,8 @@ std::shared_ptr<MeshPhysicalMaterial> MeshPhysicalMaterial::create(const Params&
     TPP_SET(iridescence)
     TPP_SET(iridescenceIOR)
     TPP_SET(iridescenceThicknessNm)
+    TPP_SET(specularIntensity)
+    TPP_SET(specularColor)
 
 #undef TPP_SET
 #undef TPP_TEX
