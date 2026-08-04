@@ -53,6 +53,7 @@ namespace {
         e.argsAsProperties = ctx.argsAsProperties;
         e.document = ctx.document;
         e.diags = ctx.diags;
+        e.locator = ctx.locator;
         return e;
     }
 

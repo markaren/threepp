@@ -4,20 +4,30 @@
 using namespace threepp;
 using namespace threepp::xacro;
 
-namespace {
+std::string threepp::xacro::decorate(const std::string& message,
+                                     const std::filesystem::path& document, std::size_t line) {
 
-    std::string decorate(const std::string& message, const std::filesystem::path& document) {
+    if (document.empty()) return message;
+    if (line == 0) return document.string() + ": " + message;
 
-        if (document.empty()) return message;
-        return document.string() + ": " + message;
-    }
+    return document.string() + ":" + std::to_string(line) + ": " + message;
+}
 
-}// namespace
-
-XacroError::XacroError(const std::string& message, std::filesystem::path document)
-    : std::runtime_error(decorate(message, document)),
+XacroError::XacroError(const std::string& message, std::filesystem::path document, std::size_t line)
+    : std::runtime_error(decorate(message, document, line)),
       message_(message),
-      document_(std::move(document)) {}
+      document_(std::move(document)),
+      line_(line),
+      what_(decorate(message_, document_, line_)) {}
+
+void XacroError::locate(const std::filesystem::path& document, std::size_t line) {
+
+    // A line only means anything against the file it was counted in.
+    if (document_.empty()) document_ = document;
+    if (line_ == 0 && document_ == document) line_ = line;
+
+    what_ = decorate(message_, document_, line_);
+}
 
 void Diagnostics::error(const std::string& message, const std::filesystem::path& document) {
 
@@ -26,12 +36,13 @@ void Diagnostics::error(const std::string& message, const std::filesystem::path&
 
 void Diagnostics::error(const XacroError& e) {
 
-    errors_.emplace_back(decorate(e.message(), e.document()));
+    errors_.emplace_back(decorate(e.message(), e.document(), e.line()));
 }
 
-void Diagnostics::warn(const std::string& message, const std::filesystem::path& document) {
+void Diagnostics::warn(const std::string& message, const std::filesystem::path& document,
+                       std::size_t line) {
 
-    warnings_.emplace_back(decorate(message, document));
+    warnings_.emplace_back(decorate(message, document, line));
 }
 
 void Diagnostics::clear() {

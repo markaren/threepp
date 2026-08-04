@@ -23,6 +23,7 @@ namespace threepp::xacro {
         bool argsAsProperties = false;
         std::filesystem::path document;// the file the expression sits in; load_yaml resolves against it
         Diagnostics* diags = nullptr;
+        const Locator* locator = nullptr;// asked for a line only when something is reported
     };
 
     [[nodiscard]] Value evaluate(std::string_view expression, const EvalContext& ctx);

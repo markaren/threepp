@@ -473,12 +473,13 @@ struct URDFLoader::Impl {
     // `document` is the file the XML came from — includes, $(dirname) and load_yaml all
     // resolve against its directory, so a string gets the base directory it was parsed with.
     bool expandXacro(const pugi::xml_document& doc, const std::filesystem::path& document,
-                     pugi::xml_document& out) {
+                     pugi::xml_document& out, std::string_view source = {}) {
 
         xacro::ExpandInputs inputs;
         for (const auto& [name, value] : xacroArgs) inputs.args[name] = xacro::Value(value);
         inputs.packages = &packages;
         inputs.document = document;
+        inputs.source = source;
         inputs.argsAsProperties = true;
 
         xacro::Diagnostics diags;
@@ -533,7 +534,7 @@ struct URDFLoader::Impl {
 
         if (xacro::needsProcessing(doc)) {
             pugi::xml_document processed;
-            if (!expandXacro(doc, baseDir / "(string)", processed)) return nullptr;
+            if (!expandXacro(doc, baseDir / "(string)", processed, urdf)) return nullptr;
             return loadFromXml(processed, baseDir);
         }
 

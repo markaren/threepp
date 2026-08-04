@@ -14,6 +14,7 @@
 #include <filesystem>
 #include <map>
 #include <string>
+#include <string_view>
 
 namespace pugi {
     class xml_document;
@@ -36,6 +37,10 @@ namespace threepp::xacro {
         PackageResolver* packages = nullptr;
         std::filesystem::path document;// the file `in` was read from; relative includes,
                                        // $(dirname) and load_yaml resolve against its directory
+        // The bytes `in` was parsed from, for counting lines when reporting an error. Only
+        // needed when the document did not come from `document` verbatim - a file is read
+        // back on demand. Must outlive the call.
+        std::string_view source;
         Budget budget;
         // URDFLoader compatibility: a name that is not a property may resolve from the
         // argument table (with a warning). Off for the standalone Processor.

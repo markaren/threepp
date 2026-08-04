@@ -1091,6 +1091,84 @@ TEST_CASE("scanArgs reports what a document asks to be told") {
     }
 }
 
+TEST_CASE("Errors say which file and which line") {
+
+    const TempDir dir("lines");
+
+    SECTION("the line is the element the author wrote, not the document's first") {
+
+        const auto file = dir.path / "robot.urdf.xacro";
+        writeFile(file, wrap(R"XML(<link name="fine"/>
+<link name="${nope}"/>)XML"));
+
+        Processor processor;
+        const auto result = processor.processFile(file);
+
+        REQUIRE_FALSE(result.ok);
+        REQUIRE(contains(result.errors.front(), file.string() + ":3: "));
+    }
+
+    SECTION("an error under an include belongs to the included file") {
+
+        const auto leaf = dir.path / "leaf.xacro";
+        writeFile(leaf, wrap(R"XML(<link name="ok"/>
+<link name="${nope}"/>)XML"));
+
+        const auto top = dir.path / "top.xacro";
+        writeFile(top, wrap(R"XML(<xacro:include filename="leaf.xacro"/>)XML"));
+
+        Processor processor;
+        const auto result = processor.processFile(top);
+
+        REQUIRE_FALSE(result.ok);
+        REQUIRE(contains(result.errors.front(), leaf.string() + ":3: "));
+    }
+
+    SECTION("a macro is reported where its body is, not where it was called") {
+
+        const auto file = dir.path / "macro.urdf.xacro";
+        writeFile(file, wrap(R"XML(<xacro:macro name="arm">
+  <link name="${nope}"/>
+</xacro:macro>
+<xacro:arm/>)XML"));
+
+        Processor processor;
+        const auto result = processor.processFile(file);
+
+        REQUIRE_FALSE(result.ok);
+        REQUIRE(contains(result.errors.front(), file.string() + ":3: "));
+    }
+
+    SECTION("a document given as a string is counted the same way") {
+
+        const auto result = process(R"XML(<link name="ok"/>
+<link name="${nope}"/>)XML");
+
+        REQUIRE_FALSE(result.ok);
+        REQUIRE(contains(result.errors.front(), "(string):3: "));
+    }
+
+    SECTION("a warning is placed the same way an error is") {
+
+        const auto result = process(R"XML(<xacro:macro name="dup"><a/></xacro:macro>
+<xacro:macro name="dup"><b/></xacro:macro>
+<xacro:dup/>)XML");
+
+        REQUIRE(result.ok);
+        REQUIRE_FALSE(result.warnings.empty());
+        REQUIRE(contains(result.warnings.front(), "(string):3: "));
+    }
+
+    SECTION("an error with no element behind it still names the file") {
+
+        const auto result = process(R"XML(<xacro:include filename="not_here.xacro"/>)XML", {}, dir.path);
+
+        REQUIRE_FALSE(result.ok);
+        REQUIRE(contains(result.errors.front(), "(string):2: "));
+        REQUIRE(contains(result.errors.front(), "no such file"));
+    }
+}
+
 TEST_CASE("URDFLoader says why a load failed") {
 
     const TempDir dir("lasterror");

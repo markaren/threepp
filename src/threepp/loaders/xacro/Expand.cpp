@@ -8,6 +8,8 @@
 #include "pugixml.hpp"
 
 #include <algorithm>
+#include <fstream>
+#include <iterator>
 #include <list>
 #include <optional>
 #include <system_error>
@@ -64,6 +66,10 @@ namespace {
     struct DocCtx {
         std::filesystem::path path;
         std::string prefix{"xacro"};
+        // Index of `path` in the expander's document list. A DocCtx dies with the frame that
+        // made it, so an error being located after the stack has unwound asks for the file
+        // by index instead of holding on to this one.
+        std::size_t id = 0;
     };
 
     struct MacroParam {
@@ -185,6 +191,51 @@ namespace {
         return p.kind == MacroParam::Kind::Block || p.kind == MacroParam::Kind::BlockChildren;
     }
 
+    // Where the lines of one document start, so pugixml's byte offset for a node can be
+    // reported as the line an author would look for. Built once per file that an error
+    // touches - a run that goes well never counts a newline.
+    class LineIndex {
+
+    public:
+        explicit LineIndex(std::string_view text) {
+
+            starts_.push_back(0);
+            for (std::size_t i = 0; i < text.size(); ++i) {
+                if (text[i] == '\n') starts_.push_back(i + 1);
+            }
+        }
+
+        [[nodiscard]] std::size_t lineOf(std::size_t offset) const {
+
+            const auto after = std::upper_bound(starts_.begin(), starts_.end(), offset);
+            return static_cast<std::size_t>(after - starts_.begin());
+        }
+
+    private:
+        std::vector<std::size_t> starts_;
+    };
+
+    // pugixml reports offsets into the buffer it parsed. That is the file byte for byte
+    // for UTF-8, but a UTF-16 or UTF-32 file is transcoded first and the offsets no longer
+    // point into anything we can read back, so those documents go without lines.
+    bool transcoded(std::string_view text) {
+
+        const auto byte = [&](std::size_t i) { return static_cast<unsigned char>(text[i]); };
+
+        if (text.size() >= 2 && ((byte(0) == 0xFF && byte(1) == 0xFE) || (byte(0) == 0xFE && byte(1) == 0xFF))) {
+            return true;
+        }
+        return text.size() >= 4 && byte(0) == 0 && byte(1) == 0;
+    }
+
+    std::optional<std::string> readText(const std::filesystem::path& path) {
+
+        std::ifstream in(path, std::ios::binary);
+        if (!in) return std::nullopt;
+
+        return std::string(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
+    }
+
     std::string joinNames(const std::map<std::string, MacroDef>& macros) {
 
         if (macros.empty()) return "none are defined";
@@ -198,7 +249,7 @@ namespace {
     }
 
 
-    class Expander {
+    class Expander: public Locator {
 
     public:
         Expander(const ExpandInputs& inputs, Diagnostics& diags)
@@ -206,7 +257,18 @@ namespace {
 
         void run(const pugi::xml_node& root, pugi::xml_document& out);
 
+        // Pin an error to the last node the run had entered - the innermost one, since a
+        // node is marked on the way in and nothing clears it on the way out.
+        void locate(XacroError& e);
+
+        [[nodiscard]] std::size_t currentLine() const override;
+
     private:
+        void warn(const std::string& message, const DocCtx& doc) {
+            // The line is counted in the file the run is standing in; anything else gets none.
+            diags_.warn(message, doc.path, doc.id == hereDoc_ ? currentLine() : 0);
+        }
+
         [[nodiscard]] SubstResult subst(std::string_view raw, const DocCtx& doc) const;
 
         [[nodiscard]] Value typed(std::string_view raw, const DocCtx& doc) const;
@@ -230,6 +292,15 @@ namespace {
 
         [[nodiscard]] bool condition(const pugi::xml_node& node, const DocCtx& doc);
 
+        std::size_t noteDocument(const std::filesystem::path& path);
+
+        void mark(const pugi::xml_node& node, const DocCtx& doc) {
+            here_ = node;
+            hereDoc_ = doc.id;
+        }
+
+        const LineIndex* linesOf(const std::filesystem::path& path) const;
+
         const ExpandInputs& inputs_;
         Diagnostics& diags_;
 
@@ -239,6 +310,13 @@ namespace {
         std::map<std::string, BlockArg> blocks_;
         std::vector<std::filesystem::path> includeStack_;
         std::list<pugi::xml_document> owned_;
+
+        // Every document the run has opened, and where it had got to. The nodes stay valid
+        // because the documents they belong to are owned here or by the caller.
+        std::vector<std::filesystem::path> documents_;
+        mutable std::map<std::filesystem::path, std::optional<LineIndex>> lines_;
+        pugi::xml_node here_;
+        std::size_t hereDoc_ = 0;
 
         std::size_t outputElements_ = 0;
         std::size_t instantiations_ = 0;
@@ -253,6 +331,7 @@ namespace {
         ctx.packages = inputs_.packages;
         ctx.document = doc.path;
         ctx.diags = &diags_;
+        ctx.locator = this;
         ctx.argsAsProperties = inputs_.argsAsProperties;
         return substitute(raw, ctx);
     }
@@ -265,17 +344,20 @@ namespace {
 
     void Expander::run(const pugi::xml_node& root, pugi::xml_document& out) {
 
-        DocCtx doc{inputs_.document, resolvePrefix(root)};
+        DocCtx doc{inputs_.document, resolvePrefix(root), noteDocument(inputs_.document)};
 
         std::error_code ec;
         auto canonical = std::filesystem::weakly_canonical(inputs_.document, ec);
         includeStack_.push_back(ec ? inputs_.document : canonical);
 
         auto outRoot = out.append_child(root.name());
+
+        mark(root, doc);
         processChildren(root, outRoot, doc);
 
         // The root's own attributes go last: `<robot name="$(arg name)">` is the standard
         // idiom and the <xacro:arg> that gives `name` a default is one of its children.
+        mark(root, doc);
         copyAttributes(root, outRoot, doc);
     }
 
@@ -286,7 +368,58 @@ namespace {
         }
     }
 
+    std::size_t Expander::noteDocument(const std::filesystem::path& path) {
+
+        documents_.push_back(path);
+        return documents_.size() - 1;
+    }
+
+    const LineIndex* Expander::linesOf(const std::filesystem::path& path) const {
+
+        if (const auto it = lines_.find(path); it != lines_.end()) {
+            return it->second ? &*it->second : nullptr;
+        }
+
+        auto& slot = lines_[path];
+
+        // The root document may have been parsed from a string the caller still holds;
+        // everything else was read from disk and can be read again.
+        const std::string_view given = path == inputs_.document ? inputs_.source : std::string_view{};
+        const auto text = given.empty() ? readText(path) : std::nullopt;
+        const std::string_view source = given.empty() ? (text ? std::string_view(*text) : std::string_view{}) : given;
+
+        if (!source.empty() && !transcoded(source)) slot.emplace(source);
+
+        return slot ? &*slot : nullptr;
+    }
+
+    std::size_t Expander::currentLine() const {
+
+        if (!here_ || hereDoc_ >= documents_.size()) return 0;
+
+        const auto offset = here_.offset_debug();
+        if (offset < 0) return 0;
+
+        const auto* lines = linesOf(documents_[hereDoc_]);
+        return lines ? lines->lineOf(static_cast<std::size_t>(offset)) : 0;
+    }
+
+    void Expander::locate(XacroError& e) {
+
+        if (e.line() != 0 || hereDoc_ >= documents_.size()) return;
+
+        const auto& path = documents_[hereDoc_];
+        if (!e.document().empty() && e.document() != path) return;
+
+        if (const auto line = currentLine()) e.locate(path, line);
+    }
+
     void Expander::processNode(const pugi::xml_node& node, pugi::xml_node dst, const DocCtx& doc) {
+
+        // Marking is all the bookkeeping an error needs, and it is two stores. Catching per
+        // node instead would rethrow once per frame, and a rethrow re-enters the unwinder:
+        // a macro nested to its budget then dies on the stack rather than on the budget.
+        mark(node, doc);
 
         switch (node.type()) {
             case pugi::node_pcdata:
@@ -433,7 +566,7 @@ namespace {
         def.params = parseParams(node.attribute("params").value(), name, doc.path);
 
         if (macros_.count(name)) {
-            diags_.warn("macro '" + name + "' redefined", doc.path);
+            warn("macro '" + name + "' redefined", doc);
         }
         macros_[name] = std::move(def);
     }
@@ -503,7 +636,7 @@ namespace {
         const auto root = included.document_element();
         if (!root) throw XacroError("'" + file.string() + "' has no root element", doc.path);
 
-        const DocCtx sub{file, resolvePrefix(root)};
+        const DocCtx sub{file, resolvePrefix(root), noteDocument(file)};
 
         includeStack_.push_back(canonical);
         processChildren(root, dst, sub);
@@ -583,6 +716,7 @@ namespace {
         ctx.argsAsProperties = inputs_.argsAsProperties;
         ctx.document = doc.path;
         ctx.diags = &diags_;
+        ctx.locator = this;
         return coerce(evaluate(trim(result.text), ctx));
     }
 
@@ -678,13 +812,13 @@ namespace {
             const bool declared = std::any_of(def.params.begin(), def.params.end(),
                                               [&](const MacroParam& p) { return !isBlockParam(p) && p.name == attribute; });
             if (!declared) {
-                diags_.warn("macro '" + name + "': ignoring undeclared attribute '" + attribute + "'", doc.path);
+                warn("macro '" + name + "': ignoring undeclared attribute '" + attribute + "'", doc);
             }
         }
         if (nextBlock < callBlocks.size()) {
-            diags_.warn("macro '" + name + "': ignoring " + std::to_string(callBlocks.size() - nextBlock) +
-                                " unbound block argument(s)",
-                        doc.path);
+            warn("macro '" + name + "': ignoring " + std::to_string(callBlocks.size() - nextBlock) +
+                         " unbound block argument(s)",
+                 doc);
         }
 
         processChildren(def.body, dst, def.doc);
@@ -724,10 +858,13 @@ bool threepp::xacro::expand(const pugi::xml_document& in, pugi::xml_document& ou
         return false;
     }
 
+    // Outlives the try, so an error can still ask it where the run had got to.
+    Expander expander(inputs, diags);
+
     try {
-        Expander expander(inputs, diags);
         expander.run(root, out);
-    } catch (const XacroError& e) {
+    } catch (XacroError& e) {
+        expander.locate(e);
         diags.error(e);
         return false;
     } catch (const std::exception& e) {

@@ -68,7 +68,8 @@ struct Processor::Impl {
     std::map<std::string, std::filesystem::path> packages;
 
     [[nodiscard]] ProcessResult run(const pugi::xml_document& doc,
-                                    const std::filesystem::path& document) const {
+                                    const std::filesystem::path& document,
+                                    std::string_view source = {}) const {
 
         PackageResolver resolver;
         for (const auto& [package, dir] : packages) resolver.addPackagePath(package, dir);
@@ -77,6 +78,7 @@ struct Processor::Impl {
         for (const auto& [name, value] : args) inputs.args[name] = Value(value);
         inputs.packages = &resolver;
         inputs.document = document;
+        inputs.source = source;
 
         pugi::xml_document out;
         Diagnostics diags;
@@ -139,7 +141,7 @@ ProcessResult Processor::processString(const std::string& xml,
     }
 
     // A stand-in document name, so the directory-relative machinery has a parent path.
-    return pimpl_->run(doc, baseDir / "(string)");
+    return pimpl_->run(doc, baseDir / "(string)", xml);
 }
 
 std::vector<ArgDecl> threepp::xacro::scanArgs(const std::filesystem::path& file) {

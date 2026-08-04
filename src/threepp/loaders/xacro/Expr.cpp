@@ -893,7 +893,7 @@ namespace {
             if (const auto it = ctx.args->find(name); it != ctx.args->end()) {
                 if (ctx.diags) {
                     ctx.diags->warn("'" + name + "' is not a property; using the argument of that name",
-                                    ctx.document);
+                                    ctx.document, ctx.locator ? ctx.locator->currentLine() : 0);
                 }
                 // Arguments are strings; as a property the text gets the type it looks like,
                 // so `${count + 1}` keeps working for a numeric argument.
