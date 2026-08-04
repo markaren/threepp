@@ -286,7 +286,6 @@ namespace {
                 fail("block scalars are not supported", line);
             }
             if (text[0] == '&' || text[0] == '*') fail("anchors and aliases are not supported", line);
-            if (text[0] == '!') fail("tags are not supported", line);
 
             if (text[0] == '[' || text[0] == '{') {
                 std::size_t p = 0;
@@ -392,6 +391,34 @@ namespace {
             return out;
         }
 
+        // The two tags python xacro registers on its yaml loader. Both yield a float in
+        // radians; anything else is a tag we would silently get wrong, so it stays an error.
+        Value tagged(const std::string& raw, int line) const {
+
+            std::size_t k = 0;
+            while (k < raw.size() && raw[k] != ' ' && raw[k] != '\t') ++k;
+
+            const std::string tag = raw.substr(0, k);
+            const std::string rest = trim(raw.substr(k));
+
+            if (tag != "!degrees" && tag != "!radians") {
+                fail("the '" + tag + "' tag is not supported", line);
+            }
+            if (rest.empty() || rest[0] == '!') {
+                fail("the '" + tag + "' tag needs a number", line);
+            }
+
+            const Value inner = scalar(rest, line);
+            if (!inner.isNumber() || inner.isBool()) {
+                fail("the '" + tag + "' tag needs a number, got '" + rest + "'", line);
+            }
+
+            constexpr double pi = 3.14159265358979323846;
+            constexpr double degToRad = pi / 180.0;
+
+            return Value(tag == "!degrees" ? inner.asNumber() * degToRad : inner.asNumber());
+        }
+
         Value scalar(const std::string& raw, int line) const {
 
             if (raw.size() >= 2 && (raw.front() == '\'' || raw.front() == '"') && raw.back() == raw.front()) {
@@ -400,7 +427,7 @@ namespace {
             if (!raw.empty() && (raw[0] == '&' || raw[0] == '*')) {
                 fail("anchors and aliases are not supported", line);
             }
-            if (!raw.empty() && raw[0] == '!') fail("tags are not supported", line);
+            if (!raw.empty() && raw[0] == '!') return tagged(raw, line);
 
             if (raw.empty() || raw == "~" || raw == "null" || raw == "Null" || raw == "NULL") return Value{};
             if (raw == "true" || raw == "True" || raw == "TRUE") return Value(true);

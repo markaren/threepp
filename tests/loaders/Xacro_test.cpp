@@ -243,11 +243,46 @@ TEST_CASE("YamlLite reads flow collections, comments and CRLF") {
     REQUIRE(parseYaml("[]").asList().empty());
 }
 
+TEST_CASE("YamlLite converts the !degrees and !radians tags") {
+
+    // The two tags python xacro registers on its yaml loader; robot joint limit packs are
+    // written with them (ur_description's config/*/joint_limits.yaml, for one).
+    const Value v = parseYaml("full: !degrees  360.0\n"
+                              "back: !degrees -360.0\n"
+                              "half: !degrees 180\n"
+                              "raw: !radians 1.5\n"
+                              "list:\n"
+                              "  - !degrees 90\n"
+                              "  - !radians 2\n"
+                              "flow: [!degrees 90, 3]\n"
+                              "commented: !degrees 180  # half a turn\n");
+
+    constexpr double pi = 3.14159265358979323846;
+
+    REQUIRE(v.asDict().at("full").isDouble());
+    REQUIRE(v.asDict().at("full").asNumber() == Catch::Approx(2.0 * pi).margin(1e-15));
+    REQUIRE(v.asDict().at("back").asNumber() == Catch::Approx(-2.0 * pi).margin(1e-15));
+    REQUIRE(v.asDict().at("half").asNumber() == Catch::Approx(pi).margin(1e-15));
+    REQUIRE(v.asDict().at("raw").isDouble());
+    REQUIRE(v.asDict().at("raw").asNumber() == Catch::Approx(1.5));
+    REQUIRE(v.asDict().at("list").asList()[0].asNumber() == Catch::Approx(pi / 2.0).margin(1e-15));
+    REQUIRE(v.asDict().at("list").asList()[1].asNumber() == Catch::Approx(2.0));
+    REQUIRE(v.asDict().at("flow").asList()[0].asNumber() == Catch::Approx(pi / 2.0).margin(1e-15));
+    REQUIRE(v.asDict().at("flow").asList()[1].asInt() == 3);
+    REQUIRE(v.asDict().at("commented").asNumber() == Catch::Approx(pi).margin(1e-15));
+
+    REQUIRE_THROWS_AS(parseYaml("a: !degrees\n"), XacroError);
+    REQUIRE_THROWS_AS(parseYaml("a: !degrees text\n"), XacroError);
+    REQUIRE_THROWS_AS(parseYaml("a: !degrees true\n"), XacroError);
+}
+
 TEST_CASE("YamlLite rejects what it does not support") {
 
     REQUIRE_THROWS_AS(parseYaml("a: &anchor 1\n"), XacroError);
     REQUIRE_THROWS_AS(parseYaml("a: *alias\n"), XacroError);
     REQUIRE_THROWS_AS(parseYaml("a: !!str 1\n"), XacroError);
+    REQUIRE_THROWS_AS(parseYaml("a: !custom 1\n"), XacroError);
+    REQUIRE_THROWS_AS(parseYaml("a: !Degrees 1\n"), XacroError);
     REQUIRE_THROWS_AS(parseYaml("a: |\n  text\n"), XacroError);
     REQUIRE_THROWS_AS(parseYaml("a:\n\tb: 1\n"), XacroError);
     REQUIRE_THROWS_AS(parseYaml("a: 1\n---\nb: 2\n"), XacroError);
