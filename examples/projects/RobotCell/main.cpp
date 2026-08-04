@@ -1,6 +1,8 @@
-// KUKA iiwa robot cell — an interactive pick-and-place demo combining:
+// Franka FR3 robot cell — an interactive pick-and-place demo combining:
 //
-//   * URDFLoader: the KUKA LBR iiwa 14 R820 model, jointed via Robot.
+//   * URDFLoader: the Franka FR3 with its Franka Hand, jointed via Robot. The
+//     hand BRANCHES off the arm, so the tool frame is named explicitly
+//     (fr3_hand_tcp) and the two finger DOFs are excluded from the IK.
 //   * Numeric IK: damped-least-squares over a finite-difference Jacobian of
 //     Robot::computeEndEffectorTransform, with a tool-down orientation
 //     constraint, joint speed/range limits, and a null-space rest-posture
@@ -11,24 +13,31 @@
 //     descend) at a capped speed, and keep-out volumes (floor, table slab,
 //     base column) are enforced on the setpoint, so approaches are vertical
 //     and the tool is never commanded through an obstacle.
-//   * PhysX: crates are rigid bodies; the environment is static colliders; a
-//     kinematic sphere rides the tool tip so the arm can nudge crates; the
-//     suction gripper carries a crate by switching its actor kinematic and
-//     driving it from the tool frame.
-//   * DepthSensor: eye-in-hand depth camera on the flange. The point cloud is
-//     not decoration — it is the ONLY source of crate positions. The robot
-//     surveys the table from above, clusters the cloud into detections
+//   * PhysX: crates are rigid bodies; the environment is static colliders; the
+//     arm is a real articulated collider that PD-tracks the IK command, and the
+//     two finger joints are driven as a pair (upstream couples them with
+//     <mimic>, which threepp does not implement).
+//     CAVEAT, and it is the honest one: the crate is still CARRIED by switching
+//     its actor kinematic and driving it from the tool frame. The jaws close on
+//     it and the timing lines up, but nothing about the hold is force-based —
+//     the crate cannot slip, tilt or be knocked loose. Replacing that with a
+//     friction grasp is the next change, not this one.
+//   * DepthSensor: eye-in-hand depth camera on the side of the hand. The point
+//     cloud is not decoration — it is the ONLY source of crate positions. The
+//     robot surveys the table from above, clusters the cloud into detections
 //     (centroid + measured top height), and picks from those. The controller
 //     never reads crate poses from the scene graph; its world knowledge is
-//     perception (the cloud), proprioception (its own FK), and the suction
-//     cup's vacuum-seal state. Turn the sensor off and the robot is blind.
+//     perception (the cloud), proprioception (its own FK), and the grasp state.
+//     Turn the sensor off and the robot is blind. Like any real wrist camera it
+//     also sees its own fingertips; they sit well above the detector's height
+//     band, so they never become crates.
 //   * SVG UI: HUD built from runtime-generated SVG (panels, LEDs, joint-range
 //     bars, buttons) + screen-space TextSprites, after examples/loaders/svg_ui.
 //
 // Interactions:
 //   click  take manual control: jog the tool to hover just above the clicked
-//          point (disengages AUTO, like grabbing the wheel). With the tool
-//          over a crate, G seals the suction; jog elsewhere and G releases —
+//          point (disengages AUTO, like grabbing the wheel). With the jaws
+//          around a crate, G closes the gripper; jog elsewhere and G opens it —
 //          full manual pick-and-place.
 //   AUTO   resume the perception loop: survey + clear the table
 //   SPACE  spawn a crate on the infeed table
@@ -41,6 +50,7 @@
 
 #include "threepp/canvas/Monitor.hpp"
 #include "threepp/extras/SpriteInteractor.hpp"
+#include "threepp/extras/kinematics/InverseKinematics.hpp"
 #include "threepp/extras/physx/PhysxWorld.hpp"
 #include "threepp/extras/physx/UrdfArticulation.hpp"
 #include "threepp/helpers/CameraHelper.hpp"
@@ -105,9 +115,22 @@ namespace {
     const Vector3 kTableCenter{0.55f, 0.28f, 0.f};
     const Vector3 kBinCenter{-0.42f, 0.f, 0.34f};
     constexpr float kCrate = 0.07f;     // crate edge length
-    constexpr float kTipLen = 0.10f;    // flange -> suction tip along tool Z
     constexpr float kHoverH = 0.16f;    // hover height above a crate
-    constexpr float kGrabRadius = 0.09f;// suction engage distance
+    constexpr float kGrabRadius = 0.09f;// grasp engage distance
+
+    // Franka Hand: each finger slides 0 .. 0.04 m from the centre line, so the
+    // jaws span 0.08 m fully open. Closing to half a crate edge puts them flat
+    // on the crate's faces rather than through them.
+    constexpr float kFingerOpen = 0.04f;
+    constexpr float kFingerGrip = kCrate * 0.5f;
+
+    // Franka's canonical "ready" posture, and the rest pose the null-space term
+    // pulls toward. Indexed by GLOBAL dof: seven arm joints, then the two
+    // fingers. Every joint here is inside the FR3's limits, notably joint4
+    // (which may never be positive) and joint6 (which may never be negative).
+    const std::vector<float> kHomePose{
+            0.f, -math::PI / 4.f, 0.f, -3.f * math::PI / 4.f, 0.f, math::PI / 2.f, math::PI / 4.f,
+            kFingerOpen, kFingerOpen};
     // survey pose: eye-in-hand sensor straight above the table centre, high
     // enough that the 70-deg FOV covers the whole crate zone
     const Vector3 kSurveyTip{kTableCenter.x, kTableTop + 0.45f, kTableCenter.z};
@@ -116,7 +139,10 @@ namespace {
     // traverses arc AROUND the pedestal instead of crossing directly over the
     // robot (tip directly above the base is near-singular — J4 saturates and
     // the IK crawls, stalling transports).
-    constexpr float kBaseKeepOutR = 0.24f;  // base-column keep-out radius
+    // 0.30 rather than the 0.24 this cell used with the iiwa: a wider arc needs
+    // less base rotation for the same Cartesian speed, which is what keeps the
+    // traverse inside the IK's joint-speed cap. See cellIkOptions().
+    constexpr float kBaseKeepOutR = 0.30f;  // base-column keep-out radius
     constexpr float kBaseKeepOutTop = 0.66f;// ...applies below this height
 
     // ========================================================================
@@ -362,154 +388,69 @@ namespace {
     }
 
     // ========================================================================
-    // Damped-least-squares IK on Robot::computeEndEffectorTransform
+    // Tool frame
     // ========================================================================
+    // The Franka carries its own TCP: fr3_hand_tcp sits between the fingertips,
+    // and Robot::setEndEffector() below makes it the frame both FK paths report.
+    // So there is no tool offset to add here any more — where the old suction
+    // rig needed "flange plus kTipLen along Z", the grasp point now IS the end
+    // effector, and the +Z column of that frame is still the approach axis.
 
-    Vector3 tipOf(const Matrix4& flange) {
-        // tool tip = flange origin + tipLen along flange Z
-        const auto& e = flange.elements;
-        return {e[12] + e[8] * kTipLen, e[13] + e[9] * kTipLen, e[14] + e[10] * kTipLen};
+    Vector3 tipOf(const Matrix4& tcp) {
+        const auto& e = tcp.elements;
+        return {e[12], e[13], e[14]};
     }
 
-    Vector3 toolAxisOf(const Matrix4& flange) {
-        const auto& e = flange.elements;
+    Vector3 toolAxisOf(const Matrix4& tcp) {
+        const auto& e = tcp.elements;
         return Vector3(e[8], e[9], e[10]).normalize();
     }
 
-    // solve the 6x6 system A y = b in place (Gaussian elimination, partial pivot)
-    bool solve6(std::array<float, 36>& A, std::array<float, 6>& b) {
-        for (int c = 0; c < 6; ++c) {
-            int piv = c;
-            for (int r = c + 1; r < 6; ++r) {
-                if (std::abs(A[r * 6 + c]) > std::abs(A[piv * 6 + c])) piv = r;
-            }
-            if (std::abs(A[piv * 6 + c]) < 1e-12f) return false;
-            if (piv != c) {
-                for (int k = 0; k < 6; ++k) std::swap(A[c * 6 + k], A[piv * 6 + k]);
-                std::swap(b[c], b[piv]);
-            }
-            const float inv = 1.f / A[c * 6 + c];
-            for (int r = c + 1; r < 6; ++r) {
-                const float f = A[r * 6 + c] * inv;
-                if (f == 0.f) continue;
-                for (int k = c; k < 6; ++k) A[r * 6 + k] -= f * A[c * 6 + k];
-                b[r] -= f * b[c];
-            }
-        }
-        for (int c = 5; c >= 0; --c) {
-            float s = b[c];
-            for (int k = c + 1; k < 6; ++k) s -= A[c * 6 + k] * b[k];
-            b[c] = s / A[c * 6 + c];
-        }
-        return true;
+    // The controller's IK configuration, in one place so the demo and its
+    // headless selftest cannot drift apart.
+    //
+    // AxisAlign rather than a full pose task: the jaws must point down, but the
+    // spin ABOUT that axis is left free, which is what lets the wrist settle
+    // into a comfortable roll instead of fighting a roll nobody specified. A
+    // two-finger grasp of a square crate does not care which way round the jaws
+    // straddle it.
+    IkOptions cellIkOptions(const std::vector<float>& restPose) {
+
+        IkOptions o;
+        o.task = IkTask::AxisAlign;
+        o.toolAxis.set(0.f, 0.f, 1.f);   // fr3_hand_tcp +Z is the approach axis
+        o.targetAxis.set(0.f, -1.f, 0.f);// straight down, in world
+        o.orientationWeight = 0.30f;     // reach first, straighten up second
+        o.damping = 0.12f;
+
+        // A per-frame controller budget, not a solve-to-convergence one: the
+        // planner only ever hands over a setpoint a few millimetres away, so a
+        // handful of iterations tracks it exactly.
+        o.maxIterations = 8;
+
+        // rad/s, and it has to be read together with kBaseKeepOutR. Arcing the
+        // tool around the base keep-out at radius R and Cartesian speed v needs
+        // v/R of base rotation; at 0.6 m/s and R = 0.30 that is 2.0 rad/s. Cap
+        // the joints below that and joint 1 saturates mid-traverse, the tip cuts
+        // INSIDE the arc the planner carefully routed, and it clips the very
+        // keep-out the arc exists to respect. The FR3's own limit on the
+        // proximal joints is 2.62 rad/s, so this stays inside the real robot.
+        o.maxJointSpeed = 2.4f;
+
+        // Keeps the redundant elbow up and out of the pedestal instead of
+        // wherever the pseudo-inverse happens to leave it.
+        o.restPoseGain = 0.04f;
+        o.restPose = restPose;
+        return o;
     }
 
-    // One controller tick: move q toward placing the tool tip at `target` with
-    // the tool axis pointing straight down. Joint speed is capped so the arm
-    // glides rather than teleports. Returns the remaining tip position error.
-    class IkController {
-
-    public:
-        IkController(Robot& robot, std::vector<float> restPose)
-            : robot_(robot), n_(robot.numDOF()), ranges_(robot.getJointRanges(false)),
-              qRest_(std::move(restPose)) {
-            qRest_.resize(n_, 0.f);
-        }
-
-        float track(std::vector<float>& q, const Vector3& target, float dt) {
-
-            const Vector3 down{0.f, -1.f, 0.f};
-            const float maxDq = kJointSpeed * dt;
-            const std::vector<float> q0 = q;
-
-            float posErr = 0.f;
-            for (int iter = 0; iter < kIters; ++iter) {
-
-                const Matrix4 m = robot_.computeEndEffectorTransform(q);
-                const Vector3 p = tipOf(m);
-                const Vector3 a = toolAxisOf(m);
-
-                // residual: position to target + tool-axis misalignment (a x down
-                // is the small-angle rotation needed to swing a onto down)
-                const Vector3 ePos = Vector3().subVectors(target, p);
-                const Vector3 ori = Vector3().crossVectors(a, down);
-                posErr = ePos.length();
-
-                std::array<float, 6> e{ePos.x, ePos.y, ePos.z,
-                                       -ori.x * kOriW, -ori.y * kOriW, -ori.z * kOriW};
-                if (posErr < 1e-4f && ori.length() < 1e-3f) break;
-
-                // finite-difference Jacobian, 6 x n
-                std::vector<std::array<float, 6>> J(n_);
-                std::vector<float> qh = q;
-                for (size_t j = 0; j < n_; ++j) {
-                    qh[j] = q[j] + kH;
-                    const Matrix4 mj = robot_.computeEndEffectorTransform(qh);
-                    qh[j] = q[j];
-                    const Vector3 pj = tipOf(mj);
-                    const Vector3 oj = Vector3().crossVectors(toolAxisOf(mj), down);
-                    J[j] = {(pj.x - p.x) / kH, (pj.y - p.y) / kH, (pj.z - p.z) / kH,
-                            (oj.x - ori.x) * kOriW / kH, (oj.y - ori.y) * kOriW / kH, (oj.z - ori.z) * kOriW / kH};
-                }
-
-                // task step: dq = J^T (J J^T + lambda^2 I)^-1 e
-                std::array<float, 36> A{};
-                for (int r = 0; r < 6; ++r) {
-                    for (int c = 0; c < 6; ++c) {
-                        float s = 0.f;
-                        for (size_t j = 0; j < n_; ++j) s += J[j][r] * J[j][c];
-                        A[r * 6 + c] = s + (r == c ? kLambda * kLambda : 0.f);
-                    }
-                }
-                std::array<float, 36> A2 = A;// solve6 destroys its input
-                std::array<float, 6> y = e;
-                if (!solve6(A, y)) break;
-
-                // null-space rest-posture bias: v = k (q_rest - q) projected
-                // through (I - J^+ J), so the redundant elbow DOF drifts toward
-                // the comfortable pose without disturbing the tip task.
-                std::array<float, 6> Jv{};
-                std::vector<float> v(n_);
-                for (size_t j = 0; j < n_; ++j) {
-                    v[j] = kNullGain * (qRest_[j] - q[j]);
-                    for (int r = 0; r < 6; ++r) Jv[r] += J[j][r] * v[j];
-                }
-                const bool nullOk = solve6(A2, Jv);// Jv becomes (JJ^T+l^2)^-1 J v
-
-                for (size_t j = 0; j < n_; ++j) {
-                    float dq = 0.f;
-                    for (int r = 0; r < 6; ++r) dq += J[j][r] * y[r];
-                    if (nullOk) {
-                        float jjv = 0.f;
-                        for (int r = 0; r < 6; ++r) jjv += J[j][r] * Jv[r];
-                        dq += v[j] - jjv;
-                    }
-                    q[j] = ranges_[j].clamp(q[j] + dq);
-                }
-            }
-
-            // joint speed cap relative to the start of this tick
-            for (size_t j = 0; j < n_; ++j) {
-                q[j] = q0[j] + std::clamp(q[j] - q0[j], -maxDq, maxDq);
-            }
-
-            const Matrix4 m = robot_.computeEndEffectorTransform(q);
-            return Vector3().subVectors(target, tipOf(m)).length();
-        }
-
-    private:
-        static constexpr int kIters = 3;
-        static constexpr float kH = 1e-3f;     // finite-difference step (rad)
-        static constexpr float kLambda = 0.12f;// DLS damping
-        static constexpr float kOriW = 0.30f;  // orientation error weight
-        static constexpr float kJointSpeed = 1.8f;// rad/s
-        static constexpr float kNullGain = 0.04f; // rest-posture pull per iteration
-
-        Robot& robot_;
-        size_t n_;
-        std::vector<Robot::JointRange> ranges_;
-        std::vector<float> qRest_;
-    };
+    // The DLS solver this demo grew is now library code:
+    // include/threepp/extras/kinematics/InverseKinematics.hpp. It kept the
+    // finite-difference Jacobian, the tool-axis constraint and the null-space
+    // rest posture, and fixed three things that were latent here — an
+    // anti-parallel tool direction being a converged fixed point, the
+    // null-space projector leaking enough into the task to prevent
+    // convergence, and an unclamped first step diving into the joint limits.
 
     // ========================================================================
     // Cartesian motion planner
@@ -547,6 +488,48 @@ namespace {
             return p;
         }
 
+        // Steer AROUND the base column instead of through it.
+        //
+        // guard() only ever pushed the waypoint out, which does nothing when
+        // the waypoint is already clear — a bin at r = 0.54 is untouched, and
+        // the setpoint then runs table-to-bin in a straight line that passes
+        // within ~0.18 m of the base. The keep-out was documented as an arc and
+        // implemented as a point check; this is the arc.
+        //
+        // When the straight run would clip the column, aim instead at a point
+        // on the safe radius, one bearing step around toward the goal. Repeated
+        // every tick that sweeps the setpoint around the cylinder.
+        static Vector3 arcAroundBase(const Vector3& from, Vector3 to) {
+
+            if (from.y >= kBaseKeepOutTop && to.y >= kBaseKeepOutTop) return to;
+
+            const float ax = from.x, az = from.z;
+            const float bx = to.x, bz = to.z;
+            const float dx = bx - ax, dz = bz - az;
+            const float len2 = dx * dx + dz * dz;
+            if (len2 < 1e-8f) return to;
+
+            // closest approach of the segment to the base axis
+            float t = -(ax * dx + az * dz) / len2;
+            t = std::clamp(t, 0.f, 1.f);
+            const float cx = ax + t * dx, cz = az + t * dz;
+            if (std::hypot(cx, cz) >= kBaseKeepOutR) return to;
+
+            const float rFrom = std::hypot(ax, az);
+            const float safeR = std::max(rFrom, kBaseKeepOutR + 0.02f);
+            const float aAng = std::atan2(az, ax);
+            float dAng = std::atan2(bz, bx) - aAng;
+            while (dAng > math::PI) dAng -= 2.f * math::PI;
+            while (dAng < -math::PI) dAng += 2.f * math::PI;
+
+            // A bounded bearing step, so the setpoint stays a short, trackable
+            // distance ahead rather than jumping to the far side of the arc.
+            const float ang = aAng + std::clamp(dAng, -0.30f, 0.30f);
+            to.x = safeR * std::cos(ang);
+            to.z = safeR * std::sin(ang);
+            return to;
+        }
+
         const Vector3& step(const Vector3& goal, float vmax, float dt) {
             // route: ascend in place, traverse at travel height, descend
             Vector3 wp = goal;
@@ -559,6 +542,7 @@ namespace {
                     wp.set(goal.x, travelY, goal.z);
                 }
             }
+            wp = arcAroundBase(setpoint, wp);
             wp = guard(wp, goal);
 
             Vector3 d = Vector3().subVectors(wp, setpoint);
@@ -783,19 +767,22 @@ namespace {
     // within tolerance, so it can run in CI or after controller changes.
     int runSelfTest(Robot& robot) {
 
-        std::vector<float> q{0.f, 0.55f, 0.f, -1.5f, 0.f, 0.9f, 0.f};
+        std::vector<float> q = kHomePose;
         q.resize(robot.numDOF(), 0.f);
-        IkController ik(robot, q);
+        const IkSolver ik(robot, cellIkOptions(kHomePose));
         MotionPlanner planner;
         planner.reset(tipOf(robot.computeEndEffectorTransform(q)));
 
         // a full pick-place tour; the planner must route table<->bin legs at
         // travel height without dragging the tool through the table or base
         const std::vector<Vector3> targets{
-                {kTableCenter.x - 0.07f, kTableTop + kCrate + kHoverH, kTableCenter.z - 0.2f},// hover, near table corner
-                {kTableCenter.x - 0.07f, kTableTop + kCrate + 0.012f, kTableCenter.z - 0.2f}, // descend onto crate
-                {kBinCenter.x, 0.46f, kBinCenter.z},                                          // transport to bin
-                {kTableCenter.x + 0.07f, kTableTop + kCrate + 0.012f, kTableCenter.z + 0.2f}, // pick at far corner
+                // Grasp targets are the crate's CENTRE height, not its top: the
+                // end effector is now fr3_hand_tcp, which sits between the
+                // fingertips, where the old suction cup sat on the top face.
+                {kTableCenter.x - 0.07f, kTableTop + kCrate + kHoverH, kTableCenter.z - 0.2f},   // hover, near table corner
+                {kTableCenter.x - 0.07f, kTableTop + kCrate * 0.5f, kTableCenter.z - 0.2f},      // descend onto crate
+                {kBinCenter.x, 0.46f, kBinCenter.z},                                             // transport to bin
+                {kTableCenter.x + 0.07f, kTableTop + kCrate * 0.5f, kTableCenter.z + 0.2f},      // pick at far corner
                 kSurveyTip,                                                                   // perception survey pose
         };
 
@@ -809,7 +796,7 @@ namespace {
             int guardHits = 0;
             for (; ticks < 8 * 60; ++ticks) {// up to 8 simulated seconds
                 const Vector3& sp = planner.step(goal, 0.6f, dt);
-                ik.track(q, sp, dt);
+                ik.solve(q, sp, dt);
                 const Vector3 tip = tipOf(robot.computeEndEffectorTransform(q));
                 err = Vector3().subVectors(goal, tip).length();
                 if (err < 0.005f) break;
@@ -1005,9 +992,10 @@ int main(int argc, char** argv) {
     }
 
     if (argc > 1 && std::string(argv[1]) == "--selftest") {
-        const auto urdfPath = std::filesystem::path(DATA_FOLDER) / "urdf" / "lbr_iiwa_14_r820.urdf";
+        const auto urdfPath = std::filesystem::path(DATA_FOLDER) / "urdf" / "franka" / "fr3.urdf";
         URDFLoader urdfLoader;
         auto robot = urdfLoader.load(urdfPath);
+        robot->setEndEffector("fr3_hand_tcp");
         robot->rotation.x = -math::PI / 2;
         robot->position.y = kPedestalH;
         robot->updateMatrix();
@@ -1029,7 +1017,7 @@ int main(int argc, char** argv) {
     const auto screen = monitor::monitorSize();
     const int winW = std::min(static_cast<int>(1366 * uiScale), screen.width() * 9 / 10);
     const int winH = std::min(static_cast<int>(820 * uiScale), screen.height() * 9 / 10);
-    Canvas canvas(Canvas::Parameters().title("threepp - KUKA Robot Cell").size(winW, winH).antialiasing(4));
+    Canvas canvas(Canvas::Parameters().title("threepp - Franka Robot Cell").size(winW, winH).antialiasing(4));
     auto renderer = createRenderer(canvas);
 
 #ifdef ROBOT_CELL_WITH_VULKAN
@@ -1116,39 +1104,45 @@ int main(int argc, char** argv) {
     }
 
     // ===== robot ============================================================
-    const auto urdfPath = std::filesystem::path(DATA_FOLDER) / "urdf" / "lbr_iiwa_14_r820.urdf";
+    const auto urdfPath = std::filesystem::path(DATA_FOLDER) / "urdf" / "franka" / "fr3.urdf";
     URDFLoader urdfLoader;
     auto robot = urdfLoader.load(urdfPath);
+
+    // The FR3 is a TREE, not a chain: the two fingers branch off the hand. Name
+    // the tool explicitly rather than relying on the deepest-leaf default —
+    // the tool frame and both fingertips sit at the same depth, so the default
+    // only lands on the tool by a declaration-order tie-break, and saying so
+    // here is what keeps this demo honest if the URDF is ever regenerated.
+    robot->setEndEffector("fr3_hand_tcp");
+
     robot->rotation.x = -math::PI / 2;// URDF Z-up -> world Y-up
     robot->position.y = kPedestalH;
     robot->showColliders(false);
     robot->updateMatrix();// computeEndEffectorTransform premultiplies robot->matrix
     scene->add(robot);
 
-    const size_t nDof = robot->numDOF();
-    std::vector<float> q{0.f, 0.55f, 0.f, -1.5f, 0.f, 0.9f, 0.f};
+    const size_t nDof = robot->numDOF();// 7 arm + 2 fingers
+    std::vector<float> q = kHomePose;
     q.resize(nDof, 0.f);
     robot->setJointValues(q);
 
-    IkController ik(*robot, q);
+    // The fingers are DOFs of the same robot but are NOT on the path to the
+    // tool, so IkSolver leaves them alone (Robot::chainDofs()) and the gripper
+    // is commanded separately below. Without that split the solver would
+    // happily "reach" a target by opening the hand.
+    const size_t nArm = robot->chainDofs().size();
+    const size_t fingerL = nArm, fingerR = nArm + 1;
+
+    const IkSolver ik(*robot, cellIkOptions(kHomePose));
     MotionPlanner planner;
 
-    // tool frame: posed every frame from forward kinematics (flange + tipLen)
+    // Tool frame: posed every frame from forward kinematics, now landing on
+    // fr3_hand_tcp. It carries no geometry any more — the Franka Hand is real
+    // hardware in the URDF, so the procedurally-built suction column and cup
+    // that used to stand in for a tool are gone. What remains is a mount point
+    // for the eye-in-hand sensor and the frame the carried crate rides.
     auto toolGroup = Group::create();
     scene->add(toolGroup);
-    {
-        auto toolMat = MeshStandardMaterial::create(MeshStandardMaterial::Params{}.color(Color(0x222831)).roughness(0.4f).metalness(0.6f));
-        auto column = Mesh::create(CylinderGeometry::create(0.018f, 0.018f, kTipLen - 0.02f, 16), toolMat);
-        column->rotation.x = math::PI / 2;// cylinder Y axis -> tool Z
-        column->position.z = (kTipLen - 0.02f) / 2.f;
-        toolGroup->add(column);
-
-        auto cupMat = MeshStandardMaterial::create(MeshStandardMaterial::Params{}.color(Color(kAccent)).roughness(0.5f));
-        auto cup = Mesh::create(CylinderGeometry::create(0.026f, 0.018f, 0.02f, 16), cupMat);
-        cup->rotation.x = math::PI / 2;
-        cup->position.z = kTipLen - 0.01f;
-        toolGroup->add(cup);
-    }
 
     // Physical arm: the SAME URDF loaded as a PhysX articulation (one shared loader with the visual
     // Robot above), so the arm is a REAL collider that nudges crates it sweeps through — replacing the
@@ -1164,6 +1158,46 @@ int main(int argc, char** argv) {
     armOpts.renderVisuals = false;// invisible physical twin; the Robot above is what you see
     auto arm = loadArticulation(world, urdfPath, armOpts);
 
+    // Robot DOF order is <joint> DOCUMENT order; the articulation's drive-target
+    // order is the topological order its link walk produced. Those coincide for
+    // a serial chain and MUST NOT be assumed to for a branched one — and
+    // setDriveTargets silently truncates on a length mismatch and silently
+    // drives the wrong axis on an order mismatch, so getting this wrong is not
+    // an error anyone would see. Map by NAME once, here.
+    std::vector<int> dofOfDriveSlot(arm.jointNames.size(), -1);
+    {
+        const auto infos = robot->getArticulatedJointInfo();
+        for (size_t slot = 0; slot < arm.jointNames.size(); ++slot) {
+            for (size_t d = 0; d < infos.size(); ++d) {
+                if (infos[d].name == arm.jointNames[slot]) {
+                    dofOfDriveSlot[slot] = static_cast<int>(d);
+                    break;
+                }
+            }
+            if (dofOfDriveSlot[slot] < 0) {
+                std::cerr << "no visual DOF for articulation joint '" << arm.jointNames[slot] << "'\n";
+            }
+        }
+    }
+    std::vector<float> qDrive(arm.jointNames.size(), 0.f);
+
+    // The arm's PD gains would crush a 0.1 kg crate if the fingers inherited
+    // them — URDFArticulationOptions carries ONE triple for the whole robot, so
+    // retune the finger drives through the raw PhysX joint afterwards. Soft and
+    // force-limited: the jaws should stall against a crate, not launch it.
+    for (size_t slot = 0; slot < arm.jointNames.size(); ++slot) {
+        const auto& name = arm.jointNames[slot];
+        if (name.find("finger_joint") == std::string::npos) continue;
+        // eX, not the URDF's own <axis xyz="0 1 0">: threepp builds every
+        // prismatic DOF on the articulation's X axis and rotates the joint
+        // frame to suit (Articulation.hpp). Naming the URDF axis here would
+        // silently tune a drive nothing is attached to.
+        if (auto* joint = arm.links[slot].raw()->getInboundJoint()) {
+            joint->setDriveParams(PxArticulationAxis::eX,
+                                  PxArticulationDrive{800.f, 40.f, 60.f, PxArticulationDriveType::eFORCE});
+        }
+    }
+
     // ===== eye-in-hand depth sensor =========================================
     // 70-deg FOV so the survey pose sees the whole crate zone in one scan.
     // GL: raster DepthSensor (render-to-target + depth readback).
@@ -1175,7 +1209,14 @@ int main(int argc, char** argv) {
 
     DepthSensor sensor(kSensFov, kSensW, kSensH, 0.04f, kSensFar);
     sensor.rangeNoise.stddev = 0.004f;
-    sensor.position.set(0.065f, 0.f, 0.01f);
+
+    // Mounted on the side of the hand, not between the jaws. toolGroup is now
+    // fr3_hand_tcp — which sits BETWEEN the fingertips — so the old flange-era
+    // offset would bury the camera inside the gripper and fill the frame with
+    // finger. Back it off 0.10 m along -Z (onto the hand body) and out 0.075 m
+    // in +X, which is perpendicular to the jaw travel (the fingers slide along
+    // the hand's Y), so neither finger crosses the cone.
+    sensor.position.set(0.075f, 0.f, -0.10f);
     sensor.rotation.x = math::PI;// camera looks -Z; flip to look along tool +Z (down)
 
     std::shared_ptr<CameraHelper> frustum;// raster only — the PT sensor has no Camera
@@ -1317,12 +1358,13 @@ int main(int argc, char** argv) {
                 carried = c.actor;
                 carried->setRigidBodyFlag(PxRigidBodyFlag::eKINEMATIC, true);
                 grabOffset = tipPose.transformInv(carried->getGlobalPose());
-                // The captured offset bakes in the descend standoff + grab-radius slack,
-                // leaving the crate floating ~1 cm below the cup. Seat it: put the crate
-                // centre exactly kCrate/2 down the tool axis (tipPose +Z) so its top face
-                // meets the cup contact plane (which sits at the tip). Lateral position
-                // and the crate's orientation are kept.
-                grabOffset.p.z = kCrate * 0.5f;
+                // The captured offset bakes in the descend standoff and the grab-radius
+                // slack. Seat it: a two-finger jaw holds a crate about its CENTRE, and
+                // fr3_hand_tcp already sits between the fingertips, so the crate centre
+                // belongs AT the tool origin — where the old suction cup wanted it half a
+                // crate further down the tool axis, its top face against the cup plane.
+                // Lateral position and the crate's orientation are kept.
+                grabOffset.p.z = 0.f;
                 break;
             }
         }
@@ -1400,7 +1442,7 @@ int main(int argc, char** argv) {
             g->scale.set(W, -uiScale, 1.f);
         });
     }
-    ui->add(makeText(font, "THREEPP  //  KUKA ROBOT CELL", kAccent, 20, 0.f, 1.f, 18.f, -22.f));
+    ui->add(makeText(font, "THREEPP  //  FRANKA ROBOT CELL", kAccent, 20, 0.f, 1.f, 18.f, -22.f));
     Readout stateTxt{makeText(font, "", 0xcfe8ff, 18, 0.5f, 1.f, 0.f, -22.f,
                               TextSprite::HorizontalAlignment::Center)};
     ui->add(stateTxt.sprite);
@@ -1425,7 +1467,7 @@ int main(int argc, char** argv) {
     };
     std::vector<StatusRow> rows{
             {makeLed(8.f), "AUTO CYCLE"},
-            {makeLed(8.f), "SUCTION"},
+            {makeLed(8.f), "GRIPPER"},
             {makeLed(8.f), "CARRYING"},
             {makeLed(8.f), "DEPTH SENSOR"}};
     for (size_t i = 0; i < rows.size(); ++i) {
@@ -1638,10 +1680,13 @@ int main(int argc, char** argv) {
                 else if (timedOut) abortJob();
                 break;
             case Phase::Descend:
-                // descend onto the PERCEIVED top (+ cup standoff); if the
-                // crate moved since the survey, the grip simply misses and
-                // the robot goes back to look again
-                tipTarget = Vector3(job.center.x, job.center.y + 0.012f, job.center.z);
+                // Descend so the JAWS STRADDLE the crate: job.center.y is the
+                // perceived TOP, and the tool frame sits between the
+                // fingertips, so the grasp height is half a crate below that.
+                // The suction era stopped a centimetre ABOVE the same surface.
+                // If the crate moved since the survey the grip simply misses
+                // and the robot goes back to look again.
+                tipTarget = Vector3(job.center.x, job.center.y - kCrate * 0.5f, job.center.z);
                 if (near() || timedOut) goTo(Phase::Grip);
                 break;
             case Phase::Grip:
@@ -1696,9 +1741,28 @@ int main(int argc, char** argv) {
         // slow, careful Cartesian speed near contact; brisk while traversing
         const float vmax = (phase == Phase::Descend || phase == Phase::Grip) ? 0.25f : 0.6f;
         const Vector3& setpoint = planner.step(tipTarget, vmax, dt);
-        ik.track(qCmd, setpoint, dt);
+        ik.solve(qCmd, setpoint, dt);
+
+        // The gripper is commanded outside the IK, which never touches these
+        // two DOFs. Both fingers get the SAME target: upstream couples them
+        // with <mimic>, which threepp does not implement, so the symmetry that
+        // a real FR3 gets from the constraint has to be kept by the caller.
+        const float fingerTarget = gripWanted ? kFingerGrip : kFingerOpen;
+        const float fingerStep = 0.06f * dt;// ~14 mm/s, visibly a jaw closing
+        for (const size_t f : {fingerL, fingerR}) {
+            qCmd[f] += std::clamp(fingerTarget - qCmd[f], -fingerStep, fingerStep);
+        }
+
         robot->setJointValues(qCmd);
-        arm.articulation->setDriveTargets(qCmd.data(), qCmd.size());// the physical arm PD-tracks the IK command
+
+        // Re-order into the articulation's own drive-target order (see the
+        // name map built at load time) before handing the physical twin its
+        // setpoint.
+        for (size_t slot = 0; slot < qDrive.size(); ++slot) {
+            const int dof = dofOfDriveSlot[slot];
+            qDrive[slot] = dof >= 0 ? qCmd[static_cast<size_t>(dof)] : 0.f;
+        }
+        arm.articulation->setDriveTargets(qDrive.data(), qDrive.size());// the physical arm PD-tracks the IK command
 
         flange = robot->computeEndEffectorTransform(qCmd);
         tip = tipOf(flange);

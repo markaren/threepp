@@ -366,6 +366,58 @@ TEST_CASE("The root link is found by topology, not by document order") {
     CHECK_THAT(fromGraph.y, WithinAbs(0.f, 1e-5));
 }
 
+TEST_CASE("The Franka FR3 resolves to its tool frame, with the fingers off-chain") {
+
+    // A real arm-plus-gripper: 7 revolute arm joints, two prismatic fingers
+    // branching off the hand, and an fr3_hand_tcp frame between them. The tool
+    // frame and both fingers sit at the same depth, so the declaration-order
+    // tie-break is what lands on the tool rather than on a fingertip.
+    const std::filesystem::path urdfPath =
+            std::filesystem::path(DATA_FOLDER) / "urdf" / "franka" / "fr3.urdf";
+    if (!std::filesystem::exists(urdfPath)) {
+        WARN("Franka URDF not present at " << urdfPath.string() << ", skipping");
+        return;
+    }
+
+    URDFLoader loader;
+    auto robot = loader.load(urdfPath);
+    REQUIRE(robot);
+
+    // 7 arm + 2 fingers. The many fixed joints (accelerometers, flange, hand,
+    // tcp) carry transform but no DOF.
+    REQUIRE(robot->numDOF() == 9);
+    CHECK(robot->endEffectorLink() == "fr3_hand_tcp");
+
+    // The arm solves; the fingers do not.
+    const auto dofs = robot->chainDofs();
+    REQUIRE(dofs.size() == 7);
+    for (size_t i = 0; i < dofs.size(); ++i) CHECK(dofs[i] == i);
+
+    // Squeezing the gripper must not move the tool frame by so much as a micron.
+    std::vector<float> q(9, 0.f);
+    q[1] = -0.4f;
+    q[3] = -1.9f;
+    q[5] = 1.6f;
+    const Vector3 open = positionOf(robot->computeEndEffectorTransform(q));
+    q[7] = 0.04f;
+    q[8] = 0.04f;
+    const Vector3 shut = positionOf(robot->computeEndEffectorTransform(q));
+
+    INFO("tcp open (" << open.x << ", " << open.y << ", " << open.z << ") vs shut ("
+                      << shut.x << ", " << shut.y << ", " << shut.z << ")");
+    CHECK_THAT(open.x, WithinAbs(shut.x, 1e-6));
+    CHECK_THAT(open.y, WithinAbs(shut.y, 1e-6));
+    CHECK_THAT(open.z, WithinAbs(shut.z, 1e-6));
+
+    // And the two FK paths agree on the posed robot.
+    robot->setJointValues(q);
+    robot->updateMatrixWorld(true);
+    const Vector3 fromGraph = positionOf(robot->getEndEffectorTransform());
+    INFO("graph (" << fromGraph.x << ", " << fromGraph.y << ", " << fromGraph.z << ")");
+    REQUIRE_THAT(fromGraph.x, WithinAbs(shut.x, 1e-5));
+    REQUIRE_THAT(fromGraph.y, WithinAbs(shut.y, 1e-5));
+    REQUIRE_THAT(fromGraph.z, WithinAbs(shut.z, 1e-5));
+}
 TEST_CASE("Revolute joints already agreed, and still do") {
 
     // The control: the revolute path was never broken, so it must be unchanged.
