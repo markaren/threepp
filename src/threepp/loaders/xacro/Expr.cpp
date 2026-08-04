@@ -881,6 +881,19 @@ namespace {
 
         if (functionNames().count(name)) return {Operand::Kind::Func, Value{}, name};
 
+        if (ctx.argsAsProperties && ctx.args) {
+            if (const auto it = ctx.args->find(name); it != ctx.args->end()) {
+                if (ctx.diags) {
+                    ctx.diags->warn("'" + name + "' is not a property; using the argument of that name",
+                                    ctx.document);
+                }
+                // Arguments are strings; as a property the text gets the type it looks like,
+                // so `${count + 1}` keeps working for a numeric argument.
+                const Value& v = it->second;
+                return {Operand::Kind::Val, v.isString() ? classify(v.asString()) : v, {}};
+            }
+        }
+
         throw XacroError("undefined name '" + name + "'");
     }
 

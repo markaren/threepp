@@ -92,6 +92,10 @@ namespace threepp {
         // These override <xacro:arg default="..."/> values and are available as ${name} / $(arg name).
         URDFLoader& setArgs(std::map<std::string, std::string> args);
 
+        // Tell the loader where a ROS package lives, ahead of the package.xml walk and the
+        // environment. Used by both $(find package) in xacro and package:// mesh URIs.
+        URDFLoader& addPackagePath(const std::string& package, const std::filesystem::path& dir);
+
         std::shared_ptr<Robot> load(const std::filesystem::path& path);
 
         std::shared_ptr<Robot> parse(const std::filesystem::path& baseDir, const std::string& xml);

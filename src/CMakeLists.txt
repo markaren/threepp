@@ -158,6 +158,7 @@ set(publicHeaders
         "threepp/loaders/SVGLoader.hpp"
         "threepp/loaders/TextureLoader.hpp"
         "threepp/loaders/URDFLoader.hpp"
+        "threepp/loaders/Xacro.hpp"
 
         "threepp/materials/LineDashedMaterial.hpp"
         "threepp/materials/Material.hpp"
@@ -320,6 +321,7 @@ set(privateHeaders
         "threepp/loaders/ObjectJsonConstants.hpp"
 
         "threepp/loaders/xacro/Diagnostics.hpp"
+        "threepp/loaders/xacro/Expand.hpp"
         "threepp/loaders/xacro/Expr.hpp"
         "threepp/loaders/xacro/PackageResolver.hpp"
         "threepp/loaders/xacro/Scope.hpp"
@@ -472,11 +474,13 @@ set(sources
         "threepp/loaders/URDFLoader.cpp"
 
         "threepp/loaders/xacro/Diagnostics.cpp"
+        "threepp/loaders/xacro/Expand.cpp"
         "threepp/loaders/xacro/Expr.cpp"
         "threepp/loaders/xacro/PackageResolver.cpp"
         "threepp/loaders/xacro/Scope.cpp"
         "threepp/loaders/xacro/Substitution.cpp"
         "threepp/loaders/xacro/Value.cpp"
+        "threepp/loaders/xacro/Xacro.cpp"
         "threepp/loaders/xacro/YamlLite.cpp"
 
         "threepp/materials/LineBasicMaterial.cpp"

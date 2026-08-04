@@ -22,6 +22,7 @@ namespace threepp::xacro {
         PackageResolver* packages = nullptr;
         std::filesystem::path document;
         Diagnostics* diags = nullptr;
+        bool argsAsProperties = false;// see EvalContext
     };
 
     struct SubstResult {

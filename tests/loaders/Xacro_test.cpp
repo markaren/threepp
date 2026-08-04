@@ -1,16 +1,20 @@
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
 
+#include "threepp/loaders/URDFLoader.hpp"
+#include "threepp/loaders/Xacro.hpp"
 #include "threepp/loaders/xacro/Expr.hpp"
 #include "threepp/loaders/xacro/PackageResolver.hpp"
 #include "threepp/loaders/xacro/Scope.hpp"
 #include "threepp/loaders/xacro/Substitution.hpp"
 #include "threepp/loaders/xacro/Value.hpp"
 #include "threepp/loaders/xacro/YamlLite.hpp"
+#include "threepp/objects/Robot.hpp"
 
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <map>
 #include <string>
 
 using namespace threepp;
@@ -71,6 +75,33 @@ namespace {
         ctx.scope = scope;
         ctx.document = document;
         return evaluate(expression, ctx);
+    }
+
+    std::string wrap(const std::string& body) {
+
+        return "<robot xmlns:xacro=\"http://www.ros.org/wiki/xacro\" name=\"test\">\n" + body + "\n</robot>\n";
+    }
+
+    ProcessResult process(const std::string& body,
+                          const std::map<std::string, std::string>& args = {},
+                          const std::filesystem::path& baseDir = std::filesystem::temp_directory_path()) {
+
+        Processor processor;
+        processor.setArgs(args);
+        return processor.processString(wrap(body), baseDir);
+    }
+
+    bool contains(const std::string& haystack, const std::string& needle) {
+
+        return haystack.find(needle) != std::string::npos;
+    }
+
+    std::string requireOk(const ProcessResult& result) {
+
+        const std::string why = result.errors.empty() ? std::string{} : result.errors.front();
+        INFO(why);
+        REQUIRE(result.ok);
+        return result.xml;
     }
 
 }// namespace
@@ -455,4 +486,457 @@ TEST_CASE("PackageResolver reads the environment") {
 
     setEnv("ROS_PACKAGE_PATH", nullptr);
     setEnv("AMENT_PREFIX_PATH", nullptr);
+}
+
+TEST_CASE("Expand evaluates properties in document order and keeps their type") {
+
+    const auto xml = requireOk(process(
+            R"XML(<xacro:property name="width" value="0.5"/>
+                  <xacro:property name="count" value="3"/>
+                  <xacro:property name="base" value="base"/>
+                  <xacro:property name="empty"/>
+                  <link name="${base}_link" w="${width * 2}" n="${count + 1}" raw="${width}" e="[${empty}]"/>
+                  <xacro:property name="width" value="${width * 2}"/>
+                  <link name="second" w="${width}"/>)XML"));
+
+    REQUIRE(contains(xml, R"XML(<link name="base_link" w="1.0" n="4" raw="0.5" e="[]")XML"));
+    REQUIRE(contains(xml, R"XML(<link name="second" w="1.0")XML"));
+}
+
+TEST_CASE("Expand honours property scopes") {
+
+    SECTION("a macro's own properties do not escape it") {
+
+        const auto xml = requireOk(process(
+                R"XML(<xacro:property name="l" value="outer"/>
+                      <xacro:macro name="shadow">
+                        <xacro:property name="l" value="inner"/>
+                        <a l="${l}"/>
+                      </xacro:macro>
+                      <xacro:shadow/>
+                      <b l="${l}"/>)XML"));
+
+        REQUIRE(contains(xml, R"XML(<a l="inner")XML"));
+        REQUIRE(contains(xml, R"XML(<b l="outer")XML"));
+    }
+
+    SECTION("parent and global write through") {
+
+        const auto xml = requireOk(process(
+                R"XML(<xacro:macro name="inner">
+                        <xacro:property name="p" value="from_inner" scope="parent"/>
+                        <xacro:property name="g" value="from_inner" scope="global"/>
+                      </xacro:macro>
+                      <xacro:macro name="outer">
+                        <xacro:inner/>
+                        <a p="${p}"/>
+                      </xacro:macro>
+                      <xacro:outer/>
+                      <b g="${g}"/>)XML"));
+
+        REQUIRE(contains(xml, R"XML(<a p="from_inner")XML"));
+        REQUIRE(contains(xml, R"XML(<b g="from_inner")XML"));
+    }
+
+    SECTION("a parent write does not leak past the caller") {
+
+        const auto result = process(
+                R"XML(<xacro:macro name="inner">
+                        <xacro:property name="p" value="from_inner" scope="parent"/>
+                      </xacro:macro>
+                      <xacro:macro name="outer"><xacro:inner/></xacro:macro>
+                      <xacro:outer/>
+                      <b p="${p}"/>)XML");
+
+        REQUIRE_FALSE(result.ok);
+        REQUIRE(contains(result.errors.front(), "undefined name 'p'"));
+    }
+
+    SECTION("an unknown scope is an error") {
+
+        const auto result = process(R"XML(<xacro:property name="a" value="1" scope="somewhere"/>)XML");
+        REQUIRE_FALSE(result.ok);
+        REQUIRE(contains(result.errors.front(), "unknown scope"));
+    }
+
+    SECTION("a block body is rejected rather than half supported") {
+
+        const auto result = process(R"XML(<xacro:property name="a"><child/></xacro:property>)XML");
+        REQUIRE_FALSE(result.ok);
+        REQUIRE(contains(result.errors.front(), "block body"));
+    }
+}
+
+TEST_CASE("Expand resolves arguments, defaults and overrides") {
+
+    const std::string body =
+            R"XML(<xacro:arg name="prefix" default="left_"/>
+                  <xacro:arg name="count" default="2"/>
+                  <link name="$(arg prefix)base" n="$(arg count)"/>)XML";
+
+    SECTION("declared defaults apply") {
+
+        const auto xml = requireOk(process(body));
+        REQUIRE(contains(xml, R"XML(<link name="left_base" n="2")XML"));
+    }
+
+    SECTION("a supplied argument wins over the default") {
+
+        const auto xml = requireOk(process(body, {{"prefix", "right_"}}));
+        REQUIRE(contains(xml, R"XML(<link name="right_base" n="2")XML"));
+    }
+
+    SECTION("an undeclared argument is an error, not an empty string") {
+
+        const auto result = process(R"XML(<link name="$(arg nope)"/>)XML");
+        REQUIRE_FALSE(result.ok);
+        REQUIRE(contains(result.errors.front(), "undefined arg 'nope'"));
+    }
+
+    SECTION("$(arg) yields a string even for numeric text") {
+
+        const auto xml = requireOk(process(
+                R"XML(<xacro:arg name="n" default="2"/>
+                      <link n="$(arg n)0"/>)XML"));
+        REQUIRE(contains(xml, R"XML(<link n="20")XML"));
+    }
+}
+
+TEST_CASE("Expand instantiates macros") {
+
+    SECTION("parameters split on any whitespace run and defaults fill in") {
+
+        const auto xml = requireOk(process(
+                "<xacro:macro name=\"wheel\" params=\"name\n"
+                "        radius:=0.1\n"
+                "        parent\">\n"
+                "  <link name=\"${name}\" r=\"${radius}\" p=\"${parent}\"/>\n"
+                "</xacro:macro>\n"
+                "<xacro:wheel name=\"w1\" parent=\"base\"/>\n"
+                "<xacro:wheel name=\"w2\" parent=\"base\" radius=\"0.2\"/>"));
+
+        REQUIRE(contains(xml, R"XML(<link name="w1" r="0.1" p="base")XML"));
+        REQUIRE(contains(xml, R"XML(<link name="w2" r="0.2" p="base")XML"));
+    }
+
+    SECTION("defaults are bound in declaration order") {
+
+        const auto xml = requireOk(process(
+                R"XML(<xacro:macro name="pair" params="a b:=${a + 1}">
+                        <link a="${a}" b="${b}"/>
+                      </xacro:macro>
+                      <xacro:pair a="4"/>)XML"));
+
+        REQUIRE(contains(xml, R"XML(<link a="4" b="5")XML"));
+    }
+
+    SECTION("^ inherits the enclosing binding") {
+
+        const auto xml = requireOk(process(
+                R"XML(<xacro:property name="prefix" value="A_"/>
+                      <xacro:macro name="inh" params="prefix:=^ suffix:=^|tip">
+                        <link name="${prefix}${suffix}"/>
+                      </xacro:macro>
+                      <xacro:inh/>
+                      <xacro:inh suffix="base"/>)XML"));
+
+        REQUIRE(contains(xml, R"XML(<link name="A_tip")XML"));
+        REQUIRE(contains(xml, R"XML(<link name="A_base")XML"));
+    }
+
+    SECTION("a bare ^ with nothing to inherit is an error") {
+
+        const auto result = process(
+                R"XML(<xacro:macro name="inh" params="missing:=^"><link/></xacro:macro>
+                      <xacro:inh/>)XML");
+
+        REQUIRE_FALSE(result.ok);
+        REQUIRE(contains(result.errors.front(), "nothing to inherit"));
+    }
+
+    SECTION("a missing required parameter is an error") {
+
+        const auto result = process(
+                R"XML(<xacro:macro name="need" params="a"><link a="${a}"/></xacro:macro>
+                      <xacro:need/>)XML");
+
+        REQUIRE_FALSE(result.ok);
+        REQUIRE(contains(result.errors.front(), "missing parameter 'a'"));
+    }
+
+    SECTION("macros nest and see the caller's properties") {
+
+        const auto xml = requireOk(process(
+                R"XML(<xacro:macro name="leaf" params="n"><link name="leaf_${n}"/></xacro:macro>
+                      <xacro:macro name="branch" params="n">
+                        <xacro:leaf n="${n}"/>
+                        <xacro:leaf n="${n + 1}"/>
+                      </xacro:macro>
+                      <xacro:branch n="1"/>)XML"));
+
+        REQUIRE(contains(xml, R"XML(<link name="leaf_1")XML"));
+        REQUIRE(contains(xml, R"XML(<link name="leaf_2")XML"));
+    }
+
+    SECTION("unbounded recursion hits the budget instead of the stack") {
+
+        const auto result = process(
+                R"XML(<xacro:macro name="deep" params="n"><xacro:deep n="${n + 1}"/></xacro:macro>
+                      <xacro:deep n="0"/>)XML");
+
+        REQUIRE_FALSE(result.ok);
+        REQUIRE(contains(result.errors.front(), "nested more than"));
+    }
+
+    SECTION("a later definition replaces an earlier one, with a warning") {
+
+        const auto result = process(
+                R"XML(<xacro:macro name="dup"><a/></xacro:macro>
+                      <xacro:macro name="dup"><b/></xacro:macro>
+                      <xacro:dup/>)XML");
+
+        REQUIRE(result.ok);
+        REQUIRE(contains(result.xml, "<b"));
+        REQUIRE_FALSE(contains(result.xml, "<a"));
+        REQUIRE_FALSE(result.warnings.empty());
+        REQUIRE(contains(result.warnings.front(), "redefined"));
+    }
+
+    SECTION("an unknown xacro element names the macros that do exist") {
+
+        const auto result = process(
+                R"XML(<xacro:macro name="known"><a/></xacro:macro>
+                      <xacro:nosuch/>)XML");
+
+        REQUIRE_FALSE(result.ok);
+        REQUIRE(contains(result.errors.front(), "unknown element 'xacro:nosuch'"));
+        REQUIRE(contains(result.errors.front(), "known"));
+    }
+}
+
+TEST_CASE("Expand binds and inserts blocks") {
+
+    const auto xml = requireOk(process(
+            R"XML(<xacro:macro name="mount" params="name *origin **extras">
+                    <xacro:property name="off" value="0.25"/>
+                    <joint name="${name}">
+                      <xacro:insert_block name="origin"/>
+                      <extra><xacro:insert_block name="extras"/></extra>
+                    </joint>
+                  </xacro:macro>
+                  <xacro:mount name="j1">
+                    <origin xyz="0 0 ${off}"/>
+                    <bag><p1 v="1"/><p2 v="2"/></bag>
+                  </xacro:mount>)XML"));
+
+    REQUIRE(contains(xml, R"XML(<joint name="j1">)XML"));
+    REQUIRE(contains(xml, R"XML(<origin xyz="0 0 0.25" />)XML"));
+    REQUIRE(contains(xml, "<extra>"));
+    REQUIRE(contains(xml, R"XML(<p1 v="1" />)XML"));
+    REQUIRE(contains(xml, R"XML(<p2 v="2" />)XML"));
+    REQUIRE_FALSE(contains(xml, "<bag"));
+}
+
+TEST_CASE("Expand reports block arguments that are not there") {
+
+    SECTION("a missing block argument is an error") {
+
+        const auto result = process(
+                R"XML(<xacro:macro name="mount" params="*origin"><joint><xacro:insert_block name="origin"/></joint></xacro:macro>
+                      <xacro:mount/>)XML");
+
+        REQUIRE_FALSE(result.ok);
+        REQUIRE(contains(result.errors.front(), "missing block parameter 'origin'"));
+    }
+
+    SECTION("insert_block for an unbound name is an error") {
+
+        const auto result = process(R"XML(<xacro:insert_block name="nope"/>)XML");
+        REQUIRE_FALSE(result.ok);
+        REQUIRE(contains(result.errors.front(), "no such block"));
+    }
+}
+
+TEST_CASE("Expand takes conditionals literally, then as expressions") {
+
+    const auto xml = requireOk(process(
+            R"XML(<xacro:arg name="flag" default="true"/>
+                  <xacro:property name="n" value="3"/>
+                  <xacro:if value="$(arg flag)"><a/></xacro:if>
+                  <xacro:unless value="$(arg flag)"><b/></xacro:unless>
+                  <xacro:if value="FALSE"><c/></xacro:if>
+                  <xacro:if value="1"><d/></xacro:if>
+                  <xacro:if value="${n > 2}"><e/></xacro:if>
+                  <xacro:if value="n == 3"><f/></xacro:if>
+                  <xacro:unless value="${n > 5}"><g/></xacro:unless>)XML"));
+
+    REQUIRE(contains(xml, "<a"));
+    REQUIRE_FALSE(contains(xml, "<b"));
+    REQUIRE_FALSE(contains(xml, "<c"));
+    REQUIRE(contains(xml, "<d"));
+    REQUIRE(contains(xml, "<e"));
+    REQUIRE(contains(xml, "<f"));
+    REQUIRE(contains(xml, "<g"));
+
+    SECTION("a value that is not a boolean is an error") {
+
+        const auto result = process(R"XML(<xacro:if value="${2.5}"><a/></xacro:if>)XML");
+        REQUIRE_FALSE(result.ok);
+        REQUIRE(contains(result.errors.front(), "not a boolean"));
+    }
+}
+
+TEST_CASE("Expand includes files relative to the document that names them") {
+
+    const TempDir dir("include");
+
+    writeFile(dir.path / "sub" / "leaf.xacro",
+              wrap(R"XML(<xacro:property name="leaf_dir" value="$(dirname)"/>
+                         <xacro:macro name="leaf"><link name="leaf"/></xacro:macro>)XML"));
+
+    writeFile(dir.path / "sub" / "branch.xacro",
+              wrap(R"XML(<xacro:include filename="leaf.xacro"/>
+                         <xacro:property name="branch_dir" value="$(dirname)"/>)XML"));
+
+    writeFile(dir.path / "top.xacro",
+              wrap(R"XML(<xacro:include filename="sub/branch.xacro"/>
+                         <xacro:leaf/>
+                         <dirs branch="${branch_dir}" leaf="${leaf_dir}" top="$(dirname)"/>)XML"));
+
+    Processor processor;
+    const auto xml = requireOk(processor.processFile(dir.path / "top.xacro"));
+
+    REQUIRE(contains(xml, R"XML(<link name="leaf")XML"));
+    REQUIRE(contains(xml, "branch=\"" + (dir.path / "sub").string() + "\""));
+    REQUIRE(contains(xml, "leaf=\"" + (dir.path / "sub").string() + "\""));
+    REQUIRE(contains(xml, "top=\"" + dir.path.string() + "\""));
+}
+
+TEST_CASE("Expand rejects include cycles, missing files and namespaced includes") {
+
+    const TempDir dir("cycle");
+
+    writeFile(dir.path / "a.xacro", wrap(R"XML(<xacro:include filename="b.xacro"/>)XML"));
+    writeFile(dir.path / "b.xacro", wrap(R"XML(<xacro:include filename="a.xacro"/>)XML"));
+
+    Processor processor;
+    const auto cycle = processor.processFile(dir.path / "a.xacro");
+    REQUIRE_FALSE(cycle.ok);
+    REQUIRE(contains(cycle.errors.front(), "include cycle"));
+
+    const auto missing = process(R"XML(<xacro:include filename="not_here.xacro"/>)XML", {}, dir.path);
+    REQUIRE_FALSE(missing.ok);
+    REQUIRE(contains(missing.errors.front(), "no such file"));
+
+    const auto namespaced = process(R"XML(<xacro:include filename="b.xacro" ns="other"/>)XML", {}, dir.path);
+    REQUIRE_FALSE(namespaced.ok);
+    REQUIRE(contains(namespaced.errors.front(), "'ns' attribute is not supported"));
+}
+
+TEST_CASE("Processor round-trips a document and drops the xacro namespace") {
+
+    const TempDir dir("roundtrip");
+    const auto file = dir.path / "robot.urdf.xacro";
+
+    writeFile(file,
+              wrap(R"XML(<!-- dropped -->
+                         <xacro:property name="side" value="0.4"/>
+                         <link name="base"><size>${side}</size></link>)XML"));
+
+    Processor processor;
+    const auto xml = requireOk(processor.processFile(file));
+
+    REQUIRE(contains(xml, R"XML(<robot name="test">)XML"));
+    REQUIRE_FALSE(contains(xml, "xmlns:xacro"));
+    REQUIRE_FALSE(contains(xml, "dropped"));
+    REQUIRE(contains(xml, "<size>0.4</size>"));
+}
+
+TEST_CASE("Processor resolves $(find) through a registered package") {
+
+    const TempDir dir("find");
+    writeFile(dir.path / "shapes" / "meshes" / "base.dae", "");
+
+    Processor processor;
+    processor.addPackagePath("shapes", dir.path / "shapes");
+
+    const auto xml = requireOk(processor.processString(
+            wrap(R"XML(<mesh filename="$(find shapes)/meshes/base.dae"/>)XML"), dir.path));
+
+    REQUIRE(contains(xml, (dir.path / "shapes").string() + "/meshes/base.dae"));
+}
+
+TEST_CASE("URDFLoader loads a xacro robot built from a macro, a property and an include") {
+
+    const TempDir dir("urdf");
+
+    writeFile(dir.path / "macros.xacro",
+              "<robot xmlns:xacro=\"http://www.ros.org/wiki/xacro\">\n"
+              R"XML(  <xacro:property name="side" value="0.2"/>
+                      <xacro:macro name="box_link" params="name *origin">
+                        <link name="${name}">
+                          <visual>
+                            <xacro:insert_block name="origin"/>
+                            <geometry><box size="${side} ${side} ${side}"/></geometry>
+                          </visual>
+                        </link>
+                      </xacro:macro>)XML"
+              "\n</robot>\n");
+
+    const auto file = dir.path / "robot.urdf.xacro";
+    writeFile(file,
+              "<robot xmlns:xacro=\"http://www.ros.org/wiki/xacro\" name=\"$(arg robot_name)\">\n"
+              R"XML(  <xacro:arg name="robot_name" default="smoke"/>
+                      <xacro:include filename="macros.xacro"/>
+                      <xacro:property name="reach" value="0.5"/>
+                      <xacro:box_link name="base_link"><origin xyz="0 0 0"/></xacro:box_link>
+                      <xacro:box_link name="arm_link"><origin xyz="0 0 ${reach / 2}"/></xacro:box_link>
+                      <joint name="base_to_arm" type="revolute">
+                        <parent link="base_link"/>
+                        <child link="arm_link"/>
+                        <origin xyz="0 0 ${reach}"/>
+                        <axis xyz="0 0 1"/>
+                        <limit lower="${-pi}" upper="${pi}" effort="10" velocity="1"/>
+                      </joint>)XML"
+              "\n</robot>\n");
+
+    URDFLoader loader;
+    const auto robot = loader.load(file);
+
+    REQUIRE(robot);
+    CHECK(robot->name == "smoke");
+    REQUIRE(robot->getObjectByName("base_link"));
+    REQUIRE(robot->getObjectByName("arm_link"));
+    REQUIRE(robot->numDOF() == 1);
+
+    const auto joints = robot->getArticulatedJointInfo();
+    CHECK(joints.front().name == "base_to_arm");
+    REQUIRE(joints.front().range.has_value());
+    CHECK(joints.front().range->max == Catch::Approx(3.14159265).epsilon(1e-6));
+
+    URDFLoader named;
+    named.setArgs({{"robot_name", "override"}});
+    const auto renamed = named.load(file);
+    REQUIRE(renamed);
+    CHECK(renamed->name == "override");
+}
+
+TEST_CASE("URDFLoader keeps exposing its arguments as properties") {
+
+    const TempDir dir("urdfargs");
+    const auto file = dir.path / "robot.urdf.xacro";
+
+    writeFile(file,
+              "<robot xmlns:xacro=\"http://www.ros.org/wiki/xacro\" name=\"args\">\n"
+              R"XML(  <xacro:arg name="prefix" default="a_"/>
+                      <xacro:arg name="count" default="1"/>
+                      <link name="${prefix}link_${count + 1}"/>)XML"
+              "\n</robot>\n");
+
+    URDFLoader loader;
+    loader.setArgs({{"prefix", "b_"}});
+
+    const auto robot = loader.load(file);
+    REQUIRE(robot);
+    REQUIRE(robot->getObjectByName("b_link_2"));
 }

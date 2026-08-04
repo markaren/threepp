@@ -16,6 +16,8 @@
 
 #include "pugixml.hpp"
 #include "threepp/loaders/ModelLoader.hpp"
+#include "threepp/loaders/xacro/Expand.hpp"
+#include "threepp/loaders/xacro/PackageResolver.hpp"
 
 #include <array>
 #include <cmath>
@@ -164,12 +166,26 @@ namespace {
         return {};
     }
 
-    std::filesystem::path getModelPath(const std::filesystem::path& basePath, std::string_view fileName) {
+    // package://pkg/rel, resolved by the same PackageResolver $(find pkg) uses, with the
+    // basePath-relative and walk-up attempts kept as fallbacks.
+    std::filesystem::path getModelPath(xacro::PackageResolver* packages,
+                                       const std::filesystem::path& basePath, std::string_view fileName) {
         if (!fileName.starts_with("package://")) {
             return basePath / fileName;
         }
 
-        const auto relative = std::filesystem::path(fileName.substr(10));
+        const std::string uri(fileName.substr(10));
+        const auto relative = std::filesystem::path(uri);
+
+        if (packages) {
+            const auto slash = uri.find('/');
+            const std::string package = uri.substr(0, slash);
+            const std::filesystem::path tail =
+                    slash == std::string::npos ? std::filesystem::path{} : std::filesystem::path(uri.substr(slash + 1));
+            if (const auto dir = packages->resolve(package, basePath)) {
+                if (auto p = *dir / tail; exists(p)) return p;
+            }
+        }
 
         if (auto p = basePath / relative; exists(p)) return p;
 
@@ -182,9 +198,10 @@ namespace {
         return {};
     }
 
-    std::shared_ptr<Object3D> parseGeometryNode(const std::filesystem::path& path, Loader<Group>* loader, const pugi::xml_node& geometry) {
+    std::shared_ptr<Object3D> parseGeometryNode(xacro::PackageResolver* packages, const std::filesystem::path& path,
+                                                Loader<Group>* loader, const pugi::xml_node& geometry) {
         if (const auto mesh = geometry.child("mesh")) {
-            const auto fileName = getModelPath(path.parent_path(), mesh.attribute("filename").value());
+            const auto fileName = getModelPath(packages, path.parent_path(), mesh.attribute("filename").value());
             if (fileName.empty()) {
                 return nullptr;
             }
@@ -243,7 +260,8 @@ namespace {
 
     // A link's <collision> as a PhysX-buildable primitive: box/sphere directly, cylinder approximated by
     // a capsule, mesh approximated by its bounding box (articulation links take primitive shapes).
-    URDFArticulationDesc::Collision parseCollisionShape(const pugi::xml_node& collisionNode,
+    URDFArticulationDesc::Collision parseCollisionShape(xacro::PackageResolver* packages,
+                                                        const pugi::xml_node& collisionNode,
                                                         const std::filesystem::path& path, Loader<Group>* loader) {
         using Coll = URDFArticulationDesc::Collision;
         Coll c;
@@ -277,7 +295,7 @@ namespace {
             return c;
         }
         if (const auto mesh = geometry.child("mesh")) {// trimesh -> ONE convex hull
-            const auto fileName = getModelPath(path.parent_path(), mesh.attribute("filename").value());
+            const auto fileName = getModelPath(packages, path.parent_path(), mesh.attribute("filename").value());
             if (!fileName.empty() && loader) {
                 if (auto obj = loader->load(fileName)) {
                     if (const auto scale = mesh.attribute("scale")) {
@@ -340,7 +358,7 @@ namespace {
 
     // The link's first <visual> as a link-frame subtree (origin-positioned Group + geometry), for the
     // articulation builder to parent under the collider so the robot renders as its real meshes.
-    std::shared_ptr<Object3D> parseFirstVisual(const pugi::xml_node& linkNode,
+    std::shared_ptr<Object3D> parseFirstVisual(xacro::PackageResolver* packages, const pugi::xml_node& linkNode,
                                                const std::filesystem::path& path, Loader<Group>* loader) {
         const auto visual = linkNode.child("visual");
         if (!visual) return nullptr;
@@ -349,7 +367,7 @@ namespace {
             group->position.copy(parseTupleString(origin.attribute("xyz").value()));
             applyRotation(group, parseTupleString(origin.attribute("rpy").value()));
         }
-        if (auto obj = parseGeometryNode(path, loader, visual.child("geometry"))) {
+        if (auto obj = parseGeometryNode(packages, path, loader, visual.child("geometry"))) {
             if (const auto material = visual.child("material"); material && material.child("color")) {
                 const auto mtl = getMaterial(material);
                 obj->traverseType<Mesh>([mtl](Mesh& mesh) { mesh.setMaterial(mtl); });
@@ -360,7 +378,7 @@ namespace {
     }
 
     // Walk the URDF link/joint tree (root first) into a flat articulation description.
-    URDFArticulationDesc buildArticulationDesc(const pugi::xml_node& robotNode,
+    URDFArticulationDesc buildArticulationDesc(xacro::PackageResolver* packages, const pugi::xml_node& robotNode,
                                                const std::filesystem::path& path, Loader<Group>* loader,
                                                bool loadVisuals) {
         URDFArticulationDesc desc;
@@ -403,12 +421,12 @@ namespace {
                 L.range = getRange(joint);
                 L.jointOrigin = originMatrix(joint);
             }
-            L.collision = parseCollisionShape(linkNode.child("collision"), path, loader);
+            L.collision = parseCollisionShape(packages, linkNode.child("collision"), path, loader);
             if (const auto m = parseInertialMass(linkNode)) {
                 L.hasMass = true;
                 L.mass = *m;
             }
-            if (loadVisuals) L.visual = parseFirstVisual(linkNode, path, loader);
+            if (loadVisuals) L.visual = parseFirstVisual(packages, linkNode, path, loader);
             const int myIdx = static_cast<int>(desc.links.size());
             desc.links.push_back(std::move(L));
             for (const auto& child : childLinks[name])
@@ -419,18 +437,46 @@ namespace {
 
 }// namespace
 
-#include "XacroProcessor.hpp"
-
 
 struct URDFLoader::Impl {
 
     std::shared_ptr<Loader<Group>> loader;
     std::map<std::string, std::string> xacroArgs;
+    xacro::PackageResolver packages;
 
     Impl() {
         auto ml = std::make_shared<ModelLoader>();
         ml->setIgnoreUpDirection(true);
         loader = std::move(ml);
+    }
+
+    static bool needsProcessing(const pugi::xml_document& doc, const std::filesystem::path& path) {
+        return utils::toLower(path.extension().string()) == ".xacro" || xacro::needsProcessing(doc);
+    }
+
+    // `document` is the file the XML came from — includes, $(dirname) and load_yaml all
+    // resolve against its directory, so a string gets the base directory it was parsed with.
+    bool expandXacro(const pugi::xml_document& doc, const std::filesystem::path& document,
+                     pugi::xml_document& out) {
+
+        xacro::ExpandInputs inputs;
+        for (const auto& [name, value] : xacroArgs) inputs.args[name] = xacro::Value(value);
+        inputs.packages = &packages;
+        inputs.document = document;
+        inputs.argsAsProperties = true;
+
+        xacro::Diagnostics diags;
+        const bool ok = xacro::expand(doc, out, inputs, diags);
+
+        for (const auto& warning : diags.warnings()) {
+            std::cerr << "[xacro] warning: " << warning << std::endl;
+        }
+        if (!ok) {
+            for (const auto& error : diags.errors()) {
+                std::cerr << "[xacro] " << error << std::endl;
+            }
+        }
+        return ok;
     }
 
     std::shared_ptr<Robot> load(const std::filesystem::path& path) {
@@ -439,11 +485,9 @@ struct URDFLoader::Impl {
 
         if (!result) return nullptr;
 
-        const std::string ext = utils::toLower(path.extension().string());
-        if (ext == ".xacro" || xacro::Processor::needsProcessing(doc)) {
-            xacro::Processor proc(path.parent_path(), xacroArgs);
+        if (needsProcessing(doc, path)) {
             pugi::xml_document processed;
-            proc.process(doc, processed);
+            if (!expandXacro(doc, path, processed)) return nullptr;
             return loadFromXml(processed, path);
         }
 
@@ -456,10 +500,9 @@ struct URDFLoader::Impl {
 
         if (!result) return nullptr;
 
-        if (xacro::Processor::needsProcessing(doc)) {
-            xacro::Processor proc(baseDir, xacroArgs);
+        if (xacro::needsProcessing(doc)) {
             pugi::xml_document processed;
-            proc.process(doc, processed);
+            if (!expandXacro(doc, baseDir / "(string)", processed)) return nullptr;
             return loadFromXml(processed, baseDir);
         }
 
@@ -470,17 +513,15 @@ struct URDFLoader::Impl {
         pugi::xml_document doc;
         if (!doc.load_file(path.string().c_str())) return {};
 
-        const std::string ext = utils::toLower(path.extension().string());
         CachingLoader cachingLoader(loader.get());
-        if (ext == ".xacro" || xacro::Processor::needsProcessing(doc)) {
-            xacro::Processor proc(path.parent_path(), xacroArgs);
+        if (needsProcessing(doc, path)) {
             pugi::xml_document processed;
-            proc.process(doc, processed);
+            if (!expandXacro(doc, path, processed)) return {};
             const auto robotNode = processed.child("robot");
-            return robotNode ? buildArticulationDesc(robotNode, path, &cachingLoader, loadVisuals) : URDFArticulationDesc{};
+            return robotNode ? buildArticulationDesc(&packages, robotNode, path, &cachingLoader, loadVisuals) : URDFArticulationDesc{};
         }
         const auto robotNode = doc.child("robot");
-        return robotNode ? buildArticulationDesc(robotNode, path, &cachingLoader, loadVisuals) : URDFArticulationDesc{};
+        return robotNode ? buildArticulationDesc(&packages, robotNode, path, &cachingLoader, loadVisuals) : URDFArticulationDesc{};
     }
 
     std::shared_ptr<Robot> loadFromXml(const pugi::xml_document& doc, const std::filesystem::path& path) {
@@ -506,7 +547,7 @@ struct URDFLoader::Impl {
                     applyRotation(group, parseTupleString(origin.attribute("rpy").value()));
                 }
 
-                if (auto visualObject = parseGeometryNode(path, &cachingLoader, visual.child("geometry"))) {
+                if (auto visualObject = parseGeometryNode(&packages, path, &cachingLoader, visual.child("geometry"))) {
                     group->add(visualObject);
                 }
 
@@ -537,7 +578,7 @@ struct URDFLoader::Impl {
                 material->wireframe = true;
                 material->color = Color::white;
 
-                if (auto colliderObject = parseGeometryNode(path, &cachingLoader, collider.child("geometry"))) {
+                if (auto colliderObject = parseGeometryNode(&packages, path, &cachingLoader, collider.child("geometry"))) {
                     group->add(colliderObject);
 
                     colliderObject->traverseType<Mesh>([material](Mesh& mesh) {
@@ -581,6 +622,11 @@ URDFLoader& URDFLoader::setGeometryLoader(std::shared_ptr<Loader<Group>> loader)
 
 URDFLoader& URDFLoader::setArgs(std::map<std::string, std::string> args) {
     pimpl_->xacroArgs = std::move(args);
+    return *this;
+}
+
+URDFLoader& URDFLoader::addPackagePath(const std::string& package, const std::filesystem::path& dir) {
+    pimpl_->packages.addPackagePath(package, dir);
     return *this;
 }
 

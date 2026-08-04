@@ -49,6 +49,8 @@ namespace {
 
         EvalContext e;
         e.scope = ctx.scope;
+        e.args = ctx.args;
+        e.argsAsProperties = ctx.argsAsProperties;
         e.document = ctx.document;
         e.diags = ctx.diags;
         return e;
