@@ -9,6 +9,7 @@ add_test_executable(OBJLoader_test)
 add_test_executable(ObjectLoader_test)
 add_test_executable(STLLoader_test)
 add_test_executable(URDFLoader_test)
+add_test_executable(Xacro_test)
 
 add_subdirectory(svg)
 
