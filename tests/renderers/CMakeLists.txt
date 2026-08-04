@@ -23,6 +23,20 @@ if (THREEPP_WITH_VULKAN AND THREEPP_WITH_GLFW)
     add_test(NAME VulkanGolden_test COMMAND VulkanGolden_test)
     set_tests_properties(VulkanGolden_test PROPERTIES SKIP_RETURN_CODE 42)
 
+    # Multi-view deferred rendering: N cameras, one scene, one submission.
+    # Parity against the primary, temporal-history independence, add/remove
+    # lifecycle, the primary's overlay culling being immune to a secondary, and
+    # per-view depth/instance-id AOVs. Same plain exit-code + skip-42 shape as
+    # the goldens; the opt-in --bench / --sweep modes report timings and are not
+    # part of the assertions.
+    add_executable(VulkanMultiView_test VulkanMultiView_test.cpp)
+    target_link_libraries(VulkanMultiView_test PRIVATE threepp)
+    target_include_directories(VulkanMultiView_test PRIVATE
+            "${PROJECT_SOURCE_DIR}/src"
+            "${PROJECT_SOURCE_DIR}/examples/vulkan")# capture_util.hpp
+    add_test(NAME VulkanMultiView_test COMMAND VulkanMultiView_test)
+    set_tests_properties(VulkanMultiView_test PROPERTIES SKIP_RETURN_CODE 42)
+
     # Camera-model geometry: film gauge / focal length round-trip and the
     # reported cameraIntrinsics() checked against the renderer's own
     # projection. Numeric (not pixel) claims, so unlike the goldens this is
