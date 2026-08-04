@@ -699,18 +699,20 @@ void EditorApp::drawUi() {
         const auto* viewport = ImGui::GetMainViewport();
         const ImVec2 min(viewport->Pos.x + preview_.x, viewport->Pos.y + preview_.y);
         const ImVec2 max(min.x + preview_.w, min.y + preview_.h);
-        const float s = contentScale_;
 
         if (!preview_.active) {
             // Nothing rendered into it: paint the dock so the corner reads as
             // panel rather than as a scrap of viewport nobody can reach.
             draw->AddRectFilled(min, max, ImGui::GetColorU32(ImGuiCol_WindowBg));
-            // ...but only claim nothing is selected when nothing is. A Vulkan
+            // ...but only claim the dock is empty when it is. A Vulkan
             // secondary view is allocated at a frame boundary, so for the frame
-            // or two before it first draws the dock is empty with a camera
-            // selected, and the hint would be wrong.
+            // or two before it first draws the dock holds a camera and no
+            // picture, and the hint would be wrong.
             if (!preview_.pending) {
-                const char* hint = "No camera selected";
+                // Two different states, and telling them apart is the whole
+                // point: a scene with cameras and an empty dock is something
+                // the picker below can fix.
+                const char* hint = preview_.hasCameras ? "No camera in dock" : "No camera in scene";
                 const auto textSize = ImGui::CalcTextSize(hint);
                 draw->AddText({min.x + (preview_.w - textSize.x) * 0.5f,
                                min.y + (preview_.h - textSize.y) * 0.5f},
@@ -719,15 +721,9 @@ void EditorApp::drawUi() {
         }
 
         draw->AddRect(min, max, ImGui::GetColorU32(ImGuiCol_Border));
-
-        if (preview_.active) {
-            const ImVec2 pad(6.f * s, 3.f * s);
-            const auto textSize = ImGui::CalcTextSize(preview_.label.c_str());
-            draw->AddRectFilled(min, {min.x + textSize.x + 2 * pad.x, min.y + textSize.y + 2 * pad.y},
-                                ImGui::GetColorU32(ImGuiCol_WindowBg, 0.85f));
-            draw->AddText({min.x + pad.x, min.y + pad.y},
-                          ImGui::GetColorU32(ImGuiCol_Text), preview_.label.c_str());
-        }
+        // The label used to be painted here. It is a picker now — which camera
+        // the dock shows is a thing you set, not a readout of the selection.
+        drawCameraDockPicker();
     }
 
     // Dialogs and modals last so they sit above the panels.
@@ -887,6 +883,10 @@ void EditorApp::newScene() {
 
     selectObject(nullptr);
     commands_.clear();
+    // The dock's camera belongs to the document that had it. Play and Stop
+    // deliberately keep it (same uuids, new objects); a different document is
+    // where it goes back to following whatever camera the scene brings.
+    dockCamera_.reset();
     document_.newScene();
     buildTemplateScene();
     // A new document is a document: it renders the way the editor starts,
@@ -953,6 +953,9 @@ void EditorApp::openScene(const std::filesystem::path& path) {
         log("open failed: " + error);
         return;
     }
+    // Only now, on the way in: a failed open leaves the document (and so the
+    // dock) exactly as it was.
+    dockCamera_.reset();
     commands_.clear();
     logWarnings();
     // Where this document asks to be seen from, if it says. A file that says
@@ -985,6 +988,7 @@ void EditorApp::openExample(const std::string& slug) {
         log("open example failed: " + error);
         return;
     }
+    dockCamera_.reset();
     commands_.clear();
     logWarnings();
     // Untitled and clean: it came from the binary, not from a file, so Save
@@ -2280,6 +2284,12 @@ void EditorApp::selectObject(Object3D* object, std::optional<int> instance) {
 
     selection_.set(object);
 
+    // Clicking a camera still aims the dock at it: that gesture is how most
+    // people find the dock at all, and it costs nothing to keep. What it no
+    // longer does is the reverse — clicking anything else leaves the dock
+    // alone, because framing a shot means selecting the thing being framed.
+    if (auto* camera = selectedCamera()) setDockCamera(camera);
+
     // Always drop the previous outlines first: the overlay group co-owns them,
     // so overwriting the pointer alone would leave the old box in the scene.
     if (selectionBox_) {
@@ -2553,13 +2563,117 @@ bool EditorApp::cameraDockRect(float& x, float& y, float& w, float& h) const {
     return w >= 80.f * s && h >= 60.f * s;
 }
 
+namespace {
+
+    // Perspective or orthographic; anything else is not a dock subject.
+    Camera* asCamera(Object3D& object) {
+
+        if (auto* persp = object.as<PerspectiveCamera>()) return persp;
+        if (auto* ortho = object.as<OrthographicCamera>()) return ortho;
+        return nullptr;
+    }
+
+}// namespace
+
 Camera* EditorApp::selectedCamera() const {
 
     auto* selected = selection_.get();
-    if (!selected) return nullptr;
-    if (auto* persp = selected->as<PerspectiveCamera>()) return persp;
-    if (auto* ortho = selected->as<OrthographicCamera>()) return ortho;
-    return nullptr;
+    return selected ? asCamera(*selected) : nullptr;
+}
+
+std::vector<Camera*> EditorApp::sceneCameras() const {
+
+    std::vector<Camera*> cameras;
+    document_.scene().traverse([&](Object3D& object) {
+        // The frustum helper and the marker icons are not scene cameras, and
+        // the viewport camera is not in the scene at all.
+        if (document_.isEditorOnly(object)) return;
+        if (auto* cam = asCamera(object)) cameras.push_back(cam);
+    });
+    return cameras;
+}
+
+Camera* EditorApp::dockCamera() const {
+
+    const auto cameras = sceneCameras();
+    Camera* first = cameras.empty() ? nullptr : cameras.front();
+
+    // Never chosen: follow the scene. Opening a scene that has a camera and
+    // finding the dock blank is the thing this whole indirection exists to
+    // avoid.
+    if (!dockCamera_) return first;
+
+    for (auto* cam : cameras) {
+        if (cam->uuid == *dockCamera_) return cam;
+    }
+
+    // Chosen, but not in the scene right now. "None" means none; a camera that
+    // was deleted (or is one undo away from coming back) falls back rather than
+    // leaving the dock dead, and re-docks by uuid the moment it returns.
+    return dockCamera_->empty() ? nullptr : first;
+}
+
+void EditorApp::setDockCamera(Camera* camera) {
+
+    dockCamera_ = camera ? camera->uuid : std::string{};
+}
+
+void EditorApp::drawCameraDockPicker() {
+
+    if (!preview_.visible) return;
+
+    const auto cameras = sceneCameras();
+    // Nothing to choose between, and the dock already says so in the middle.
+    // A combo reading "None" over an empty list is worse than no combo.
+    if (cameras.empty()) return;
+
+    const float s = contentScale_;
+    const float pad = 6.f * s;
+    const auto& style = ImGui::GetStyle();
+    // Never more than a third of the dock: this is a label that happens to be
+    // clickable, and what the dock is for is the picture behind it.
+    const float itemWidth = std::min(150.f * s, preview_.w / 3.f);
+    if (itemWidth < 60.f * s || preview_.h < 40.f * s) return;
+
+    const auto* viewport = ImGui::GetMainViewport();
+    ImGui::SetNextWindowPos({viewport->Pos.x + preview_.x + pad,
+                             viewport->Pos.y + preview_.y + pad});
+    ImGui::SetNextWindowSize({itemWidth + style.WindowPadding.x * 2.f, 0.f});
+    // The same plate the static label used to draw, now holding a widget.
+    ImGui::SetNextWindowBgAlpha(0.85f);
+
+    // NoFocusOnAppearing keeps a glance at the dock from pulling keyboard focus
+    // off the hierarchy, and the window is deliberately NOT NoInputs: hovering
+    // it raises WantCaptureMouse, which is also what stops a click on the dock
+    // from picking through into the scene behind it.
+    if (ImGui::Begin("##cameraDock", nullptr,
+                     layout::barFlags | ImGuiWindowFlags_AlwaysAutoResize |
+                             ImGuiWindowFlags_NoFocusOnAppearing)) {
+
+        auto* current = dockCamera();
+        const auto label = [](const Camera* camera) {
+            return camera->name.empty() ? std::string("Camera") : camera->name;
+        };
+
+        ImGui::SetNextItemWidth(itemWidth);
+        if (ImGui::BeginCombo("##dockCamera", current ? label(current).c_str() : "None")) {
+            if (ImGui::Selectable("None", current == nullptr)) setDockCamera(nullptr);
+            for (auto* camera : cameras) {
+                // Names repeat freely in a scene; the uuid is what makes two
+                // "Camera" rows two different rows to ImGui.
+                ImGui::PushID(camera->uuid.c_str());
+                if (ImGui::Selectable(label(camera).c_str(), camera == current)) {
+                    setDockCamera(camera);
+                }
+                ImGui::PopID();
+            }
+            ImGui::EndCombo();
+        }
+        if (ImGui::IsItemHovered()) {
+            ImGui::SetTooltip("The camera this dock renders.\nIndependent of what is selected.");
+        }
+    }
+    ImGui::End();
 }
 
 void EditorApp::syncCameraDockPane() {
@@ -2570,7 +2684,7 @@ void EditorApp::syncCameraDockPane() {
     const bool haveRect = cameraDockRect(x, y, w, h);
     // A camera only, and only while the dock has room. Anything else releases
     // the view — a collapsed dock has no business holding a deferred chain.
-    Camera* cam = haveRect ? selectedCamera() : nullptr;
+    Camera* cam = haveRect ? dockCamera() : nullptr;
     dockPane_.sync(cam,
                    static_cast<int>(x), static_cast<int>(y),
                    static_cast<int>(w), static_cast<int>(h));
@@ -2592,13 +2706,13 @@ void EditorApp::renderCameraPreview() {
     preview_.w = w;
     preview_.h = h;
     preview_.visible = true;
+    // Read by drawUi for the empty state, which has two quite different things
+    // to say: a scene with no camera in it, versus a dock deliberately pointed
+    // at nothing.
+    preview_.hasCameras = !sceneCameras().empty();
 
-    auto* dockCam = selectedCamera();
+    auto* dockCam = dockCamera();
     if (!dockCam) return;
-
-    const auto dockLabel = [&] {
-        return dockCam->name.empty() ? std::string("Camera") : dockCam->name;
-    };
 
     // Vulkan: the pixels are already in the frame. The renderer rendered this
     // camera as a full secondary view — its own G-buffer, its own shadows, GI
@@ -2606,9 +2720,8 @@ void EditorApp::renderCameraPreview() {
     // render(). Nothing left to draw here; the dock is EXACT rather than the
     // lit-pane approximation it used to be.
     if (dockPane_.supported()) {
-        preview_.label = dockLabel();
         preview_.active = dockPane_.active();
-        // Selected, but the view is still being stood up (it is allocated at a
+        // Docked, but the view is still being stood up (it is allocated at a
         // frame boundary). Those pixels are the primary viewport's; say so.
         preview_.pending = !preview_.active;
         return;
@@ -2649,7 +2762,6 @@ void EditorApp::renderCameraPreview() {
     cam->updateProjectionMatrix();
     overlay_->visible = overlayVisible;
 
-    preview_.label = cam->name.empty() ? std::string("Camera") : cam->name;
     preview_.active = true;
 }
 

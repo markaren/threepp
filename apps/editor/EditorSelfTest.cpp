@@ -2340,6 +2340,9 @@ int EditorApp::runSelfTest() {
     step();
     check(cameraHelper_ == nullptr, "deselecting drops the frustum helper");
     check(viewportMarkers_.size() == lightMarkers + 1, "the marker outlives deselection");
+    // The dock is not a property of the selection. Adding a camera aimed it
+    // (adding selects), and letting go of the selection does not un-aim it.
+    check(dockCamera() == cameraRaw, "the dock holds its camera with nothing selected");
 
     selectObject(cameraRaw);
     step();
@@ -2604,21 +2607,79 @@ int EditorApp::runSelfTest() {
                 check(dockPane_.handle() != 0, "the pane still holds its view after play/stop");
             }
 
-            auto* secondLive = findByUuid(document_.scene(), secondUuid);
+            auto* secondLive = dynamic_cast<Camera*>(findByUuid(document_.scene(), secondUuid));
             check(secondLive != nullptr, "the docked camera comes back from play by uuid");
             // Nothing after this point is meaningful without it, and every
             // later block navigates from these cameras.
             if (!secondLive) return 1;
 
-            // The crash a user found: deselect and reselect in a tight loop is
-            // release + create of a real allocation, every time.
-            for (int i = 0; i < 8; ++i) {
+            // --- the dock is NOT the selection ----------------------------
+            // The whole point of the dock is watching what a camera sees while
+            // you work on what it is pointed at — which means selecting that
+            // something. Deselecting, or selecting anything else, used to
+            // blank the dock; nothing about either is a statement about which
+            // camera you are framing with.
+            {
+                const double docked = dockMeanLuma();
+
+                selectObject(nullptr);
+                step(4);
+                check(dockCamera() == secondLive, "deselecting leaves the dock camera alone");
+                check(docked >= 0.0 && std::abs(dockMeanLuma() - docked) < 2.0,
+                      "and the dock keeps rendering it");
+
+                if (auto* box = document_.scene().getObjectByName("Box")) {
+                    selectObject(box);
+                    step(4);
+                    check(dockCamera() == secondLive,
+                          "selecting the object being framed does not take the camera away");
+                    check(docked >= 0.0 && std::abs(dockMeanLuma() - docked) < 2.0,
+                          "and the dock still shows what that camera sees");
+                }
                 selectObject(nullptr);
                 step(2);
-                selectObject(secondLive);
+            }
+
+            // --- the picker aims it, without touching the selection --------
+            {
+                auto* firstLive = dynamic_cast<PerspectiveCamera*>(
+                        findByUuid(document_.scene(), firstUuid));
+                check(firstLive != nullptr, "the first camera survives to be picked");
+                if (firstLive) {
+                    setDockCamera(firstLive);
+                    step(6);
+                    check(dockCamera() == firstLive, "the picker re-aims the dock");
+                    check(selection_.get() == nullptr,
+                          "and does not select anything to do it");
+
+                    // "None" means none: the fallback that covers a deleted
+                    // camera must not undo a deliberate choice.
+                    setDockCamera(nullptr);
+                    step(4);
+                    check(dockCamera() == nullptr, "None empties the dock and stays empty");
+                    if (dockPane_.supported()) {
+                        check(dockPane_.handle() == 0, "and hands the secondary view back");
+                    }
+
+                    setDockCamera(secondLive);
+                    step(6);
+                    check(dockCamera() == secondLive, "and the dock takes a camera again");
+                    if (dockPane_.supported()) {
+                        check(dockPane_.handle() != 0, "with a view to render it into");
+                    }
+                }
+            }
+
+            // The crash a user found, at the churn rate the picker can now
+            // produce: None and back is release + create of a real allocation,
+            // every time.
+            for (int i = 0; i < 8; ++i) {
+                setDockCamera(nullptr);
+                step(2);
+                setDockCamera(secondLive);
                 step(2);
             }
-            check(dockMeanLuma() >= 0.0, "the dock survives repeated deselect/reselect");
+            check(dockMeanLuma() >= 0.0, "the dock survives repeated release/retake");
 
             // A collapsed dock has no business holding a deferred chain.
             if (dockPane_.supported()) {
@@ -2641,13 +2702,20 @@ int EditorApp::runSelfTest() {
                 ortho->lookAt(Vector3(0.f, 0.5f, 0.f));
                 ortho->updateMatrixWorld();
                 auto* orthoRaw = ortho.get();
+                const std::string orthoUuid = orthoRaw->uuid;
                 addObject(ortho, document_.scene(), "Add Ortho Camera");
                 selectObject(orthoRaw);
                 step(10);
                 check(dockMeanLuma() > 8.0, "an orthographic camera renders in the dock");
                 selectObject(orthoRaw);
                 deleteSelected();
-                step(2);
+                step(6);
+                // A camera that leaves the scene must not take the dock down
+                // with it: the dock falls back to another camera rather than
+                // going dark on a delete (or on the undo of an Add).
+                check(dockCamera() != nullptr && dockCamera()->uuid != orthoUuid,
+                      "deleting the docked camera falls the dock back to another");
+                check(dockMeanLuma() >= 0.0, "and it keeps rendering");
             }
 
             selectObject(secondLive);

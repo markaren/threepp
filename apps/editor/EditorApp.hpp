@@ -621,21 +621,37 @@ namespace threepp::editor {
         // The object a marker stands for, or nullptr when `hit` is not part of
         // one. Lets a click on an icon select its owner.
         [[nodiscard]] Object3D* markerOwnerOf(Object3D* hit) const;
-        // The dock the selected camera renders into: the band beside the bottom
+        // The dock the docked camera renders into: the band beside the bottom
         // panel, under the inspector. False when there is no room for it (the
         // bottom panel is collapsed, or the window is tiny).
         [[nodiscard]] bool cameraDockRect(float& x, float& y, float& w, float& h) const;
-        // The selected object as a Camera, perspective or orthographic. What
-        // the dock renders; nullptr for anything else.
+        // The selected object as a Camera, perspective or orthographic. Aims
+        // the dock when it changes; it is NOT what the dock renders — see
+        // dockCamera().
         [[nodiscard]] Camera* selectedCamera() const;
-        // Points the dock's Vulkan secondary view at the selected camera and at
+        // The camera the dock renders. Resolved from dockCamera_ every frame
+        // rather than cached, which is what carries it across a scene replace
+        // (play/stop rebuilds every camera behind the same uuid) and lets a
+        // deleted camera fall back to another without any bookkeeping.
+        [[nodiscard]] Camera* dockCamera() const;
+        // Every camera in the scene, in hierarchy order: what the dock's picker
+        // offers, and where dockCamera() finds its default.
+        [[nodiscard]] std::vector<Camera*> sceneCameras() const;
+        // Aims the dock. nullptr is the explicit "None" — the dock stays empty
+        // instead of falling back to the first camera in the scene.
+        void setDockCamera(Camera* camera);
+        // The picker in the dock's corner. Drawn as a real ImGui window (the
+        // rest of the dock is background-drawlist), so it also stops a click on
+        // the dock from picking through into the scene behind it.
+        void drawCameraDockPicker();
+        // Points the dock's Vulkan secondary view at the dock camera and at
         // this frame's dock rect. Must run BEFORE Renderer::render(), which is
         // where the view is actually recorded and composited. A no-op on OpenGL,
         // whose dock is a scissored second render in renderCameraPreview().
         void syncCameraDockPane();
-        // Renders the selected scene camera into that dock; drawUi frames and
-        // labels it via preview_. On Vulkan the pixels are already there (see
-        // syncCameraDockPane) and this only fills preview_ in.
+        // Renders the docked scene camera into that dock; drawUi frames it and
+        // draws the picker via preview_. On Vulkan the pixels are already there
+        // (see syncCameraDockPane) and this only fills preview_ in.
         void renderCameraPreview();
         void pickAt(float mouseX, float mouseY);
         [[nodiscard]] Object3D* resolveSelectable(Object3D* hit) const;
@@ -1365,25 +1381,40 @@ namespace threepp::editor {
         float uiTime_ = 0.f;
 
         // Camera dock, filled by renderCameraPreview each frame and read by
-        // drawUi, which draws the frame and label over it. `visible` is whether
-        // the dock has room this frame; `active` whether a camera rendered into
-        // it — an empty dock still paints itself, so the corner never reverts
-        // to a sliver of unreachable viewport.
-        // `pending` is the Vulkan-only middle state: a camera IS selected but
-        // its secondary view has not composited yet (it is allocated at the
-        // next frame boundary), so the dock still holds primary-viewport
-        // pixels and has to be painted over — without the "No camera selected"
-        // hint, which would be a lie for the frame it appeared in.
+        // drawUi, which draws the frame and the picker over it. `visible` is
+        // whether the dock has room this frame; `active` whether a camera
+        // rendered into it — an empty dock still paints itself, so the corner
+        // never reverts to a sliver of unreachable viewport.
+        // `pending` is the Vulkan-only middle state: a camera IS docked but its
+        // secondary view has not composited yet (it is allocated at the next
+        // frame boundary), so the dock still holds primary-viewport pixels and
+        // has to be painted over — without the empty-dock hint, which would be
+        // a lie for the frame it appeared in.
         struct {
             float x = 0, y = 0, w = 0, h = 0;
             bool visible = false;
             bool active = false;
             bool pending = false;
-            std::string label;
+            // Whether the scene has any camera at all: an empty dock in a scene
+            // with cameras is a choice, in a scene without them a fact.
+            bool hasCameras = false;
         } preview_;
+        // Which camera the dock shows, as a uuid because the scene it lives in
+        // is replaced wholesale by Play and Stop — same uuids, new objects, so
+        // a Camera* here would dangle and a "same uuid, skip" check would not
+        // notice. Deliberately NOT the selection: the dock is a view you set up
+        // and then work against, and the object you are framing is exactly what
+        // you select next.
+        //   nullopt      - nothing chosen yet; follow the scene's first camera,
+        //                  so a scene that has one never opens to a blank dock.
+        //   empty string - "None" chosen in the picker. Stays empty; the point
+        //                  of choosing None is that nothing takes its place.
+        //   a uuid       - that camera, falling back to the first while it is
+        //                  out of the scene (deleted, or an undo away).
+        std::optional<std::string> dockCamera_;
         // The dock's exact-pixel path on Vulkan: one persistent secondary view,
-        // re-pointed at whichever camera is selected. Empty and inert on OpenGL,
-        // where the dock is a scissored second render of the same scene.
+        // re-pointed at whichever camera the dock holds. Empty and inert on
+        // OpenGL, where the dock is a scissored second render of the same scene.
         VulkanViewPane dockPane_;
         // Object3D* the hierarchy wants to scroll into view next frame.
         Object3D* scrollTo_ = nullptr;
