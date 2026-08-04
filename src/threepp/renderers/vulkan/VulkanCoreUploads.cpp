@@ -22,6 +22,15 @@ namespace threepp {
         // Initial cap = 1 identity matrix. ensureMotionMatCapacity grows
         // and triggers a descriptor rewrite the first time a scene is
         // built with > 1 instance.
+        //
+        // PRIMARY ONLY: motion matrices are per-object world-space state,
+        // camera-independent, so motionMatBuffers lives on Impl and is shared
+        // by every view. A secondary running this block overwrote the shared
+        // handles with fresh 1-capacity buffers — leaking the primary's (one
+        // ring per addView, reported at vkDestroyDevice), resetting the
+        // capacity, and leaving every already-written descriptor pointing at
+        // the orphaned ring.
+        if (view().secondary) return;
         for (uint32_t f = 0; f < kFramesInFlight; ++f) {
             motionMatBuffers[f] = createBuffer(
                     ctx->allocator(), ctx->device(),

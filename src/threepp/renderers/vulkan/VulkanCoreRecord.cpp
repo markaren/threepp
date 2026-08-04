@@ -385,7 +385,11 @@ bool VulkanRenderer::Impl::recordGbufferStage(VkCommandBuffer cb, uint32_t image
                 const VkRenderPass  occlB  = occlMsaa ? occlRenderPassBMS_ : occlRenderPassB_;
                 const VkFramebuffer occlFb = occlMsaa ? view().rasterGbufs[currentFrame].framebufferMS
                                                       : view().rasterGbufs[currentFrame].framebuffer;
-                if (occlActiveThisFrame_ && occlA != VK_NULL_HANDLE &&
+                // Secondaries always take the plain pass: occlusion culling is
+                // primary-only by scope, and occl_/occlHiz_ are single shared
+                // instances — a secondary recording them would clobber the
+                // primary's phase buffers and HiZ pyramid.
+                if (!view().secondary && occlActiveThisFrame_ && occlA != VK_NULL_HANDLE &&
                     occlFb != VK_NULL_HANDLE) {
                     // ── Two-phase occlusion culling ────────────────────────
                     // Filter to last frame's visible set → pass A → farthest
@@ -567,7 +571,19 @@ bool VulkanRenderer::Impl::recordGbufferStage(VkCommandBuffer cb, uint32_t image
                 // pass for occlusion testing. Only runs when an overlay
                 // pipeline exists AND the scene actually has overlay
                 // candidates this frame (else the prepass is wasted work).
-                if (overlayDepthPrepassPipeline != VK_NULL_HANDLE && sceneHasOverlayContent()) {
+                //
+                // PRIMARY ONLY. The overlay itself is primary-only by scope,
+                // and the prepass touches SHARED state: ensureOverlayMsaaImages
+                // below sizes overlayMsColor_/overlayMsDepth_/overlayAaScratch_
+                // to THIS view's extent and rewrites overlayInjectSet_ — a
+                // single persistent set. A secondary running this re-sized
+                // those to its own (smaller) extent and updated a set already
+                // bound in the open command buffer, which invalidates the
+                // ENTIRE buffer: every later draw silently becomes garbage
+                // (corrupted gizmo/overlay, missing markers) and the submit is
+                // free to end in VK_ERROR_DEVICE_LOST.
+                if (!view().secondary &&
+                    overlayDepthPrepassPipeline != VK_NULL_HANDLE && sceneHasOverlayContent()) {
                     gpuTimings_->begin(cb, TP_OverlayDepth, currentFrame);
                     // Swapchain extent — the depth target is full-res so the
                     // post-TAA overlay can depth-test the upscaled image.

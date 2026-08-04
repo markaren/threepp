@@ -502,7 +502,14 @@ void VulkanRenderer::Impl::ensureHybridResources() {
             // descriptors rewritten whenever the MS/resolved image views
             // changed (any image rebuild above) so they never point at
             // stale/destroyed views.
-            if (gbufMsaaSamples_ > 1) {
+            // Primary only: gbufResolve_ is a single shared instance whose
+            // descriptors name ONE view's images. A secondary rebuilding its
+            // G-buffer under MSAA would re-point the shared sets at its own
+            // images — mid-record, while they may be bound — poisoning the
+            // primary's resolve. (Secondary + gbuf-MSAA is unsupported; the
+            // secondary renders through whichever pass its own framebuffers
+            // provide.)
+            if (gbufMsaaSamples_ > 1 && !view().secondary) {
                 if (!gbufResolve_) {
                     gbufResolve_ = std::make_unique<vulkan::GbufResolve>(*ctx, kFramesInFlight);
                 }
@@ -539,8 +546,11 @@ void VulkanRenderer::Impl::ensureHybridResources() {
             // the mip-0 source is the RAW MS depth attachment (the resolved
             // depth doesn't exist until gbuf_resolve, which runs AFTER the
             // two-phase raster).
-            if (occlHiz_ && occlusionCullingEnabled_ &&
+            if (!view().secondary && occlHiz_ && occlusionCullingEnabled_ &&
                 view().rasterGbufs[0].depth.view != VK_NULL_HANDLE) {
+                // Primary only — occlHiz_ is shared; resizing it to a
+                // secondary's extent (and re-pointing it at that view's depth)
+                // would corrupt the primary's culling and dangle on removeView.
                 const bool haveMS = gbufMsaaSamples_ > 1 &&
                                     view().rasterGbufs[0].depthMS.view != VK_NULL_HANDLE;
                 std::array<VkImageView, kFramesInFlight> dv{};
