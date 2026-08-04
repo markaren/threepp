@@ -5,6 +5,7 @@
 
 #include <charconv>
 #include <cmath>
+#include <cstdlib>
 #include <fstream>
 #include <limits>
 #include <sstream>
@@ -47,8 +48,16 @@ namespace {
         if (v.empty()) return false;
         if (v.front() == '+') v.remove_prefix(1);
         if (v.empty()) return false;
+#if defined(__cpp_lib_to_chars)
         auto [ptr, ec] = std::from_chars(v.data(), v.data() + v.size(), out);
         return ec == std::errc{} && ptr == v.data() + v.size();
+#else
+        // libc++ without floating-point from_chars (see ColladaLoader.cpp).
+        const std::string copy(v);
+        char* next = nullptr;
+        out = std::strtod(copy.c_str(), &next);
+        return next == copy.c_str() + copy.size();
+#endif
     }
 
     class Parser {

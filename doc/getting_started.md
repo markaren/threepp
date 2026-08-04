@@ -665,7 +665,9 @@ typed scalars, and honours python xacro's `!degrees` / `!radians` tags. It does 
 aliases, block scalars, multi-document files or any other tag — those are reported rather than
 guessed at. Also unsupported next to python xacro: namespaced includes (`<xacro:include ns=…>`),
 `<xacro:element>` / `<xacro:attribute>`, property block bodies, and the parts of `$(eval)` that
-need a real python interpreter (comprehensions, imports, attribute access on values).
+need a real python interpreter (comprehensions, imports, attribute access on values). Block
+parameters (`*origin`) are visible only inside the macro they were passed to — a nested macro
+cannot `insert_block` its caller's block, where python xacro would let it through.
 
 `tests/loaders/Xacro_test.cpp` covers the engine on inline documents. `XacroUr_test.cpp`
 expands the Universal Robots ROS 2 description end to end; that clone is not vendored, so

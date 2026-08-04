@@ -5,6 +5,8 @@
 
 #include <charconv>
 #include <cmath>
+#include <cstdio>
+#include <cstdlib>
 #include <system_error>
 
 using namespace threepp;
@@ -36,10 +38,19 @@ namespace {
         if (s.empty()) return false;
         if (s.front() == '+') s.remove_prefix(1);
         if (s.empty()) return false;
+#if defined(__cpp_lib_to_chars)
         const char* begin = s.data();
         const char* end = begin + s.size();
         auto [ptr, ec] = std::from_chars(begin, end, out);
         return ec == std::errc{} && ptr == end;
+#else
+        // libc++ without floating-point from_chars (see ColladaLoader.cpp): strtod
+        // needs a terminator, and the view is a substring, so copy first.
+        const std::string copy(s);
+        char* next = nullptr;
+        out = std::strtod(copy.c_str(), &next);
+        return next == copy.c_str() + copy.size();
+#endif
     }
 
     int compareNumbers(double a, double b) {
@@ -57,8 +68,19 @@ std::string threepp::xacro::formatDouble(double d) {
     if (std::isinf(d)) return d < 0 ? "-inf" : "inf";
 
     char buf[64];
+#if defined(__cpp_lib_to_chars)
     auto [ptr, ec] = std::to_chars(buf, buf + sizeof(buf), d);
     std::string s(buf, ptr);
+#else
+    // Shortest round-trip by hand: widen the precision until strtod gives the
+    // value back. %.17g alone would render 0.1 as 0.10000000000000001.
+    std::string s;
+    for (int precision = 1; precision <= 17; ++precision) {
+        std::snprintf(buf, sizeof(buf), "%.*g", precision, d);
+        if (std::strtod(buf, nullptr) == d) break;
+    }
+    s = buf;
+#endif
 
     if (s.find('.') == std::string::npos && s.find('e') == std::string::npos &&
         s.find('E') == std::string::npos) {
