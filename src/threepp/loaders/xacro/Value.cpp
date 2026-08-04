@@ -294,3 +294,16 @@ Value threepp::xacro::classify(std::string_view text) {
 
     return Value(std::string(text));
 }
+
+std::optional<bool> threepp::xacro::booleanLiteral(std::string_view text) {
+
+    // The spellings get_boolean_value() answers to, and only those: it compares against
+    // 'true'/'True'/'false'/'False' outright, so "TRUE" raises there and is not a boolean
+    // here either. Surrounding space is threepp's own leniency - upstream leaves "  false  "
+    // a string - and it is the same leniency classify() already extends to a number and
+    // xacro:if to its condition.
+    const auto t = trimmed(text);
+    if (t == "true" || t == "True") return true;
+    if (t == "false" || t == "False") return false;
+    return std::nullopt;
+}

@@ -7,6 +7,8 @@
 
 #include <catch2/catch_test_macros.hpp>
 
+#include "UrdfStructure.hpp"
+
 #include "threepp/loaders/Xacro.hpp"
 
 #include <cstdlib>
@@ -90,6 +92,16 @@ TEST_CASE("xacro expands the FR3 arm") {
     REQUIRE(contains(xml, "link0\""));
     REQUIRE(count(xml, "type=\"revolute\"") == 7);// an FR3 is a seven-axis arm
 
+    // Whichever way that ternary goes, both ends of every joint have to name a link this
+    // document declares. The arm derives its prefix from `no_prefix` while the hand derives
+    // one from `robot_type` alone, so the two only agree when `$(arg no_prefix)` - the text
+    // "false" - is read as the boolean it spells. Read as a truthy string it expanded the
+    // arm bare, the hand still asked for `fr3_link8`, and every assertion above still
+    // passed with the whole gripper hanging off nothing.
+    const auto dangling = urdf_structure::danglingJointEndpoints(xml);
+    INFO(urdf_structure::joined(dangling));
+    REQUIRE(dangling.empty());
+
     // The inertias come out of inertials.yaml, read through
     // ${xacro.load_yaml('$(find franka_description)/...')} and reached by dotted name.
     REQUIRE(count(xml, "<inertia ") >= 7);
@@ -140,6 +152,10 @@ TEST_CASE("xacro expands the two-armed franka, which slices and re-includes") {
     REQUIRE(count(xml, "<link ") > 50);
     REQUIRE_FALSE(contains(xml, "${"));
     REQUIRE_FALSE(contains(xml, "$("));
+
+    const auto dangling = urdf_structure::danglingJointEndpoints(xml);
+    INFO(urdf_structure::joined(dangling));
+    REQUIRE(dangling.empty());
 
     // A shared utils file lands once per branch of the robot, and two different files here
     // really do define an inertia-cylinder between them. The disagreement is worth saying;

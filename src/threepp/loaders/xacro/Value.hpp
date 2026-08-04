@@ -5,6 +5,7 @@
 #define THREEPP_XACRO_VALUE_HPP
 
 #include <map>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <variant>
@@ -79,8 +80,16 @@ namespace threepp::xacro {
     bool operator==(const Value& a, const Value& b);
 
     // Text -> typed value using xacro's rules: a full int parse wins, then a full float
-    // parse, otherwise the (untrimmed) text stays a string. "true"/"false" stay strings.
+    // parse, otherwise the (untrimmed) text stays a string. "true"/"false" stay strings
+    // here; it is the expression evaluator that reads those back, see booleanLiteral.
     [[nodiscard]] Value classify(std::string_view text);
+
+    // The boolean a piece of text names, if it names one. python xacro types a value as it
+    // enters its symbol table (Table._eval_literal): int first, then float, then
+    // get_boolean_value, "order of types is important!" as the source puts it. classify()
+    // above is the first two of those three and this is the last - and the number parses
+    // having already run is why "1" and "0" are not on the list: they are ints by then.
+    [[nodiscard]] std::optional<bool> booleanLiteral(std::string_view text);
 
     [[nodiscard]] std::string formatDouble(double d);
 

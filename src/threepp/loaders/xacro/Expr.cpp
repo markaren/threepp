@@ -936,6 +936,24 @@ namespace {
         throw XacroError("unknown function '" + name + "'");
     }
 
+    // What a bound name is worth once an expression reads it. python xacro types a value as
+    // it enters the symbol table (Table._eval_literal), so its table holds the boolean False
+    // for a property or macro parameter written "false"; threepp keeps the text classify()
+    // made of it and recovers the boolean here instead. The answer is the same either way
+    // because every read of a name comes through this function, and reading is the only
+    // thing the type was ever going to change. That is how `<xacro:arg name="x"
+    // default="false"/>` passed on as `x="$(arg x)"` - the argument table only ever holds
+    // text - reaches `${'' if x else prefix}` meaning what it says, which is the answer
+    // xacro:if/unless have always given the same word. classify() typed the numbers when
+    // they were stored, so booleans are all that is left to recover.
+    Value asSymbol(const Value& v) {
+
+        if (v.isString()) {
+            if (const auto b = booleanLiteral(v.asString())) return Value(*b);
+        }
+        return v;
+    }
+
     Operand resolveName(const std::string& name, const EvalContext& ctx) {
 
         if (name == "True") return {Operand::Kind::Val, Value(true), {}};
@@ -943,7 +961,7 @@ namespace {
         if (name == "None") return {Operand::Kind::Val, Value{}, {}};
 
         if (ctx.scope) {
-            if (const Value* v = ctx.scope->find(name)) return {Operand::Kind::Val, *v, {}};
+            if (const Value* v = ctx.scope->find(name)) return {Operand::Kind::Val, asSymbol(*v), {}};
         }
 
         if (name == "true") return {Operand::Kind::Val, Value(true), {}};
@@ -966,7 +984,7 @@ namespace {
                 // Arguments are strings; as a property the text gets the type it looks like,
                 // so `${count + 1}` keeps working for a numeric argument.
                 const Value& v = it->second;
-                return {Operand::Kind::Val, v.isString() ? classify(v.asString()) : v, {}};
+                return {Operand::Kind::Val, v.isString() ? asSymbol(classify(v.asString())) : v, {}};
             }
         }
 

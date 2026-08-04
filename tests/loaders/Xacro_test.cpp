@@ -1,6 +1,8 @@
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
 
+#include "UrdfStructure.hpp"
+
 #include "threepp/loaders/URDFLoader.hpp"
 #include "threepp/loaders/Xacro.hpp"
 #include "threepp/loaders/xacro/Expr.hpp"
@@ -781,6 +783,113 @@ TEST_CASE("Expand resolves arguments, defaults and overrides") {
                 R"XML(<xacro:arg name="n" default="2"/>
                       <link n="$(arg n)0"/>)XML"));
         REQUIRE(contains(xml, R"XML(<link n="20")XML"));
+    }
+}
+
+TEST_CASE("A name spelled true or false is a boolean where an expression reads it") {
+
+    // The argument table only ever holds text, so `$(arg flag)` hands "false" on as a
+    // string. python xacro types a value as it enters its symbol table, and the last thing
+    // it tries after the two number parses is the boolean, so "false" is False by the time
+    // an expression reads it — the same answer xacro:if has always given it. Before this,
+    // the two halves of one document disagreed: `<xacro:if value="$(arg flag)">` skipped its
+    // body while `${'' if flag else prefix}` in the very next macro took the truthy branch,
+    // because a non-empty string is truthy.
+
+    SECTION("a false argument reaches an expression falsy") {
+
+        const std::string body =
+                R"XML(<xacro:arg name="off" default="false"/>
+                      <xacro:macro name="arm" params="off">
+                        <a picked="${'no' if off else 'yes'}"/>
+                      </xacro:macro>
+                      <xacro:arm off="$(arg off)"/>)XML";
+
+        REQUIRE(contains(requireOk(process(body)), R"XML(<a picked="yes")XML"));
+        REQUIRE(contains(requireOk(process(body, {{"off", "true"}})), R"XML(<a picked="no")XML"));
+        REQUIRE(contains(requireOk(process(body, {{"off", ""}})), R"XML(<a picked="yes")XML"));
+    }
+
+    SECTION("a property carrying the word is one too, in either spelling") {
+
+        // `padded` is threepp being lenient rather than faithful: upstream compares the text
+        // outright, so it would leave "  false  " a string. Trimming is what classify()
+        // already does deciding a number and what xacro:if does reading a condition.
+        const auto xml = requireOk(process(
+                R"XML(<xacro:property name="lower" value="false"/>
+                      <xacro:property name="upper" value="True"/>
+                      <xacro:property name="padded" value="  false  "/>
+                      <a l="${not lower}" u="${upper and True}" p="${not padded}"/>)XML"));
+
+        REQUIRE(contains(xml, R"XML(<a l="True" u="True" p="True")XML"));
+    }
+
+    SECTION("and renders as python str() does, capitalised") {
+
+        const auto xml = requireOk(process(
+                R"XML(<xacro:arg name="flag" default="false"/>
+                      <xacro:property name="p" value="$(arg flag)"/>
+                      <a evaluated="${p}" substituted="$(arg flag)"/>)XML"));
+
+        // `${p}` is the boolean, and str(False) is "False"; `$(arg flag)` never reaches the
+        // evaluator at all, so it stays the text the caller wrote.
+        REQUIRE(contains(xml, R"XML(<a evaluated="False" substituted="false")XML"));
+    }
+
+    SECTION("only that word: 1 and 0 were already numbers") {
+
+        // int() is tried before the boolean, so "1" is the number 1 and stays one — it just
+        // happens to be truthy, which is the whole reason the two spellings are usable for
+        // the same job. Turning it into True as well would render `${n}` as "True".
+        const auto xml = requireOk(process(
+                R"XML(<xacro:arg name="n" default="1"/>
+                      <xacro:arg name="z" default="0"/>
+                      <xacro:property name="n" value="$(arg n)"/>
+                      <xacro:property name="z" value="$(arg z)"/>
+                      <a n="${n}" plus="${n + 1}" picked="${'on' if n else 'off'}" zero="${'on' if z else 'off'}"/>)XML"));
+
+        REQUIRE(contains(xml, R"XML(<a n="1" plus="2" picked="on" zero="off")XML"));
+    }
+
+    SECTION("a document that derives one prefix by expression and another by hand stays wired") {
+
+        // franka's shape, cut down: the arm reads `no_prefix` in a ternary, the hand derives
+        // its own prefix from the robot type alone and names the arm's last link as its
+        // parent. Disagree about the argument and every element is still emitted — only the
+        // hand is no longer attached to anything.
+        const std::string body =
+                R"XML(<xacro:arg name="no_prefix" default="false"/>
+                      <xacro:macro name="arm" params="robot_type no_prefix">
+                        <xacro:property name="prefix" value="${'' if no_prefix else robot_type + '_'}"/>
+                        <link name="${prefix}link0"/>
+                        <link name="${prefix}link8"/>
+                        <joint name="${prefix}joint1" type="revolute">
+                          <parent link="${prefix}link0"/>
+                          <child link="${prefix}link8"/>
+                        </joint>
+                      </xacro:macro>
+                      <xacro:macro name="hand" params="robot_type connected_to">
+                        <link name="${robot_type}_hand"/>
+                        <joint name="${robot_type}_hand_joint" type="fixed">
+                          <parent link="${connected_to}"/>
+                          <child link="${robot_type}_hand"/>
+                        </joint>
+                      </xacro:macro>
+                      <xacro:arm robot_type="fr3" no_prefix="$(arg no_prefix)"/>
+                      <xacro:hand robot_type="fr3" connected_to="fr3_link8"/>)XML";
+
+        const auto xml = requireOk(process(body));
+
+        const auto dangling = urdf_structure::danglingJointEndpoints(xml);
+        INFO(urdf_structure::joined(dangling));
+        REQUIRE(dangling.empty());
+
+        REQUIRE(contains(xml, R"XML(<link name="fr3_link8")XML"));
+
+        // The text assertions that cannot see the difference, kept as the point: they hold
+        // either way, prefix or no prefix, attached or detached.
+        REQUIRE(contains(xml, "link8\""));
+        REQUIRE(contains(xml, R"XML(<link name="fr3_hand")XML"));
     }
 }
 
