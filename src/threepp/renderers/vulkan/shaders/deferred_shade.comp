@@ -272,9 +272,10 @@ layout(set = 0, binding = 37, scalar) uniform ProbeGridUbo {
 // Octahedral depth store (Chebyshev visibility — see probe_common.glsl).
 layout(set = 0, binding = 54, scalar) readonly buffer ProbeDepthBuf { uint probeDepth[]; };
 
-// (Bindings 55-56 retired — they carried the removed hybrid-SSR inputs.
-// Binding 57, the raster camera UBO, lives on for cloud_march.comp's
-// temporal reprojection — declared there, unused by this shader.)
+// (Binding 56 retired — it carried a removed hybrid-SSR input; 55 lives on
+// above as gbufIdsPrevTex. Binding 57, the raster camera UBO, lives on for
+// cloud_march.comp's temporal reprojection — declared there, unused by this
+// shader.)
 
 // ── MSAA per-sample edge shading (dispatch B, shadeMode==1 only) ───────────
 // Raw MS raster attachments — bound only when setGbufferMsaa(2|4) is active;
@@ -1109,7 +1110,6 @@ void main() {
     // those paths are untouched, matching the detail-layer precedent.
     if (pm.translucency > 0.0) {
         const vec3  tCol  = albedo * pm.translucencyColor;
-        const vec3  tOrig = worldPos + N * SHADOW_EPS;
         vec3        tSum  = vec3(0.0);
         for (uint i = 0u; i < lights.dirCount; ++i) {
             const vec3  L    = normalize(lights.dirLights[i].direction);
@@ -1118,6 +1118,13 @@ void main() {
             const float fwd  = pow(max(dot(V, -L), 0.0), kTransScatterPower) * kTransScatterWeight;
             const float w    = back + fwd;
             if (w <= 0.0) continue;
+            // Offset toward the LIGHT's side of the card, per light: the back-lit
+            // term fires exactly when L is on the -N side, and a +N (camera-side)
+            // origin re-crosses the card's own plane at t ≈ EPS/|ndl| — where the
+            // cutout alpha test re-samples this fragment's own solid texel and
+            // commits: vis was identically 0 and the whole wrapped back-light
+            // vanished whenever shadows were on (the backlit canopy read flat).
+            const vec3 tOrig = worldPos + ((ndl < 0.0) ? -N : N) * SHADOW_EPS;
             const float vis = shadowsOn
                     ? sunShadowVis(tOrig, L, pc.sunTanHalfAngle, /*cheapHit=*/true)
                     : 1.0;
@@ -1939,5 +1946,10 @@ void main() {
     // Unshadowed analytic direct for the recombine (U × R̃). UNWEIGHTED like
     // indirect/reflect — the denoise applies recombineCoverage at consumption.
     // vec3(0) whenever the channel is off, so the recombine adds nothing.
-    imageStore(directUImage, px, vec4(directU, 1.0));
+    // fp16-SAFE clamp — same bound + rationale as the diffInd clamp above: the
+    // GGX peak at the 0.04 roughness floor times a physical-unit light pushes U
+    // past fp16 max (65504); an Inf store turns NaN at the recombine's dU × R̃
+    // whenever the filtered ratio is exactly 0 (converged umbra), and that NaN
+    // poisons the pixel's TAA history permanently.
+    imageStore(directUImage, px, vec4(min(directU, vec3(6.5e4)), 1.0));
 }
