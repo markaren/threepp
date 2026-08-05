@@ -84,6 +84,12 @@ namespace threepp {
         // Off by default. A splat cloud that renders "fine" while quietly
         // producing NaNs looks identical to one that doesn't, which is exactly
         // the bug this exists to make visible.
+        //
+        // Covers the colour path, where a corrupt SH coefficient would
+        // otherwise be scrubbed into a plausible-looking colour by the clamp.
+        // A non-finite *geometry* input never reaches a fragment at all: the
+        // vertex stage collapses the quad off-screen, in debug mode or out of
+        // it, because there is no meaningful position to paint magenta at.
         void setDebugNonFinite(bool flag);
 
         [[nodiscard]] std::string type() const override { return "SplatCloud"; }

@@ -155,7 +155,12 @@ vec3 shColor(int splat, vec3 dir) {
     // The +0.5 belongs to the evaluation, not the data: the optimiser
     // initialises the DC term as (rgb - 0.5) / SH_C0. Kept in step with
     // splats::SH_COLOR_OFFSET.
-    return max(c + 0.5, vec3(0.0));
+    //
+    // Deliberately NOT clamped here. max(NaN, 0.0) returns 0.0 on most
+    // hardware, which would quietly turn a corrupt coefficient into a
+    // plausible-looking colour; the fragment stage checks for non-finite
+    // values first and clamps afterwards.
+    return c + 0.5;
 }
 
 void discardVertex() {
@@ -301,6 +306,9 @@ void main() {
     }
     alpha = min(0.99, alpha);
 
+    // Checked before the clamp below, not after: max(NaN, 0.0) is 0.0 on most
+    // hardware, so clamping first would hide a corrupt SH coefficient behind a
+    // colour that looks fine.
     if (any(isnan(vColor)) || any(isinf(vColor))) {
 
         if (splatDebugNonFinite) {
@@ -314,7 +322,7 @@ void main() {
     // Display-referred already: splats are trained against sRGB-ish images, so
     // no tone mapping happens here. Straight (non-premultiplied) alpha, matching
     // Blending::Normal.
-    fragColor = vec4(vColor, alpha);
+    fragColor = vec4(max(vColor, vec3(0.0)), alpha);
 }
 )";
 

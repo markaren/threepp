@@ -122,6 +122,10 @@ namespace threepp::splats {
 
     // colour = sum_i coeff_i * basis_i(dir) + 0.5, clamped at 0.
     // `coeffs` is coefficient-major: coeffs[c * 3 + channel].
+    //
+    // The GLSL twin of this clamps in the fragment stage rather than here, so
+    // that it can test for non-finite values first — identical for finite
+    // input, which is all this CPU-side query is ever asked about.
     [[nodiscard]] inline Vector3 evalSh(const float* coeffs, int degree, const Vector3& dir) {
 
         float basis[16];
