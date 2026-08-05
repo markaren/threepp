@@ -110,25 +110,20 @@ TEST_CASE("DataUtils: denormals and underflow go to the nearest half, then to ze
     CHECK(std::signbit(roundTrip(-1e-9f)));
 }
 
-TEST_CASE("DataUtils: overflow saturates to a signed infinity") {
+TEST_CASE("DataUtils: overflow saturates to the largest finite half") {
 
     // THE DELIBERATE DEVIATION FROM r129, and the reason it is one. r129's
     // overflow branch ORs the float's 23-bit mantissa into a value about to be
     // stored as 16 bits, so 70000 comes back as NEGATIVE infinity and 1e20 as
-    // a NaN. This port implements what the comment in r129 says that branch
-    // does; current three.js gets the same answers by clamping the input to
-    // +/-65504 before converting at all.
-    CHECK(std::isinf(roundTrip(70000.f)));
-    CHECK(roundTrip(70000.f) > 0.f);
+    // a NaN. Current three.js sidesteps the branch by clamping the input to
+    // +/-65504 before converting; this port does the same — half-float
+    // texture data should saturate, not turn infinite.
+    CHECK(roundTrip(70000.f) == 65504.f);
+    CHECK(roundTrip(-70000.f) == -65504.f);
+    CHECK(roundTrip(1e20f) == 65504.f);
 
-    CHECK(std::isinf(roundTrip(-70000.f)));
-    CHECK(roundTrip(-70000.f) < 0.f);
-
-    CHECK(std::isinf(roundTrip(1e20f)));
-    CHECK(roundTrip(1e20f) > 0.f);
-
-    CHECK(DataUtils::toHalfFloat(std::numeric_limits<float>::infinity()) == 0x7c00);
-    CHECK(DataUtils::toHalfFloat(-std::numeric_limits<float>::infinity()) == 0xfc00);
+    CHECK(DataUtils::toHalfFloat(std::numeric_limits<float>::infinity()) == 0x7bff);
+    CHECK(DataUtils::toHalfFloat(-std::numeric_limits<float>::infinity()) == 0xfbff);
 
     // Just under the top the answer is still finite: 65504 is representable
     // and 65519 rounds down onto it.

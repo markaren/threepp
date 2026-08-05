@@ -22,15 +22,15 @@
 // comes out as a NaN. The line reads like a transcription slip of the C
 // original, where `&&` yields 0 or 1 rather than its right operand.
 //
-// This port implements what that comment describes, which is also what every
-// later three.js does (current three.js sidesteps the whole branch by clamping
-// the input to ±65504 first):
+// This port sidesteps the broken branch the way current three.js does: the
+// input is clamped to ±65504 before converting, which makes the branch
+// unreachable for anything but NaN:
 //
-//     NaN in   -> NaN out          (a mantissa bit is kept, so it stays NaN)
-//     Inf in   -> Inf out
-//     overflow -> Inf, signed      (|value| >= 65520)
+//     NaN in   -> NaN out          (fails both clamp comparisons, keeps a mantissa bit)
+//     Inf in   -> +/-65504         (the clamp reaches it first)
+//     overflow -> +/-65504, signed (saturate to the largest finite half)
 //
-// Everything below 65504 is untouched by the deviation and matches r129
+// Everything at or below 65504 is untouched by the deviation and matches r129
 // exactly. fromHalfFloat has no counterpart in r129 at all; it is an
 // extension, added because a conversion you cannot invert is a conversion you
 // cannot test.
@@ -47,6 +47,15 @@ namespace threepp {
 
         // float32 -> float16, returned as the raw 16 bits.
         [[nodiscard]] inline std::uint16_t toHalfFloat(float val) {
+
+            // Current three.js clamps the input to the finite half range
+            // before converting; NaN fails both comparisons and falls through
+            // unchanged.
+            if (val > 65504.f) {
+                val = 65504.f;
+            } else if (val < -65504.f) {
+                val = -65504.f;
+            }
 
             std::uint32_t u;
             std::memcpy(&u, &val, sizeof(u));
