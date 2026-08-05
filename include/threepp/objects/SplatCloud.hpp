@@ -28,7 +28,11 @@
 // THE ONLY PER-FRAME TRAFFIC is the draw order. Splats must be blended
 // back-to-front, so update() counting-sorts the splat indices by view depth and
 // writes the sorted index into instanceColor.x (floats are exact up to 2^24, so
-// the index survives the round trip). The shader reads that one float and
+// the index survives the round trip). The 16-bit key is quantised over a
+// PERCENTILE interval of the view depths rather than their full extent — a
+// scan's strays are a thousand units outside a twenty-unit subject, and
+// spreading 65536 buckets over that leaves the subject with a few hundred.
+// The shader reads that one float and
 // fetches everything else by it. instanceMatrix is deliberately unused and stays
 // identity — the renderer uploads it once regardless, 64 bytes per splat of
 // dead VRAM, which is the price of not editing the renderer.
@@ -114,7 +118,10 @@ namespace threepp {
         std::shared_ptr<RawShaderMaterial> splatMaterial_;
 
         // Counting-sort scratch, allocated once. 16-bit key, so 65536 buckets.
+        // sample_ is the fixed-stride subset of depths_ the key range is taken
+        // from; see the clamp constants in SplatCloud.cpp.
         std::vector<float> depths_;
+        std::vector<float> sample_;
         std::vector<std::uint16_t> keys_;
         std::vector<std::uint32_t> histogram_;
 

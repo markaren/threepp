@@ -1,3 +1,4 @@
 
+add_test_executable(SplatCloudSort_test)
 add_test_executable(SplatData_test)
 add_test_executable(SplatSH_test)

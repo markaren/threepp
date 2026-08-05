@@ -169,6 +169,63 @@ TEST_CASE("GL splats: draw order follows the camera, from both sides") {
     CHECK(b.b > b.r);
 }
 
+TEST_CASE("GL splats: one far outlier does not coarsen the sort for everything else") {
+
+    // The 16-bit sort key is spread over the view-depth range of the cloud.
+    // Let a single stray splat 4000 units away set that range and one bucket
+    // is 0.06 units wide -- wider than the separation between two splats that
+    // are genuinely in front of one another, which puts them in the SAME
+    // bucket, which makes the sort fall back on index order for the pair. The
+    // result is not noise: it is confidently wrong from one side and right
+    // from the other, and it looks perfectly plausible either way.
+    //
+    // Clamping the key range to a robust percentile of the depths fixes it,
+    // and this test is the reason to believe that: without the clamp the
+    // "from +z" check below fails, because blue (the later index) wins the
+    // tie from both sides.
+    std::vector<SplatSpec> specs;
+
+    // Enough splats for a percentile to mean something, kept well away from
+    // the centre pixel and spread over a normal-looking depth range.
+    for (int i = 0; i < 200; ++i) {
+
+        const float t = static_cast<float>(i) / 199.f;
+        const float side = (i % 2 == 0) ? 1.f : -1.f;
+        specs.push_back({{side * (1.2f + 0.6f * t), (t - 0.5f) * 2.f, (t - 0.5f)},
+                         {0.f, 0.35f, 0.f},
+                         0.05f,
+                         0.5f});
+    }
+
+    // The stray. Past the far plane, so it paints nothing and can only
+    // influence the picture through the sort.
+    specs.push_back({{0.f, 0.f, -4000.f}, {1.f, 1.f, 1.f}, 0.05f, 0.9f});
+
+    // The pair: 0.006 apart, an order of magnitude inside the unclamped
+    // bucket. Red is the lower index, so a tie is won by blue.
+    specs.push_back({{0.f, 0.f, 0.003f}, {1.f, 0.f, 0.f}, 0.30f, 0.95f});
+    specs.push_back({{0.f, 0.f, -0.003f}, {0.f, 0.f, 1.f}, 0.30f, 0.95f});
+
+    auto cloud = makeCloud(specs);
+    cloud->frustumCulled = false;
+
+    auto front = PerspectiveCamera::create(50, 1.0f, 0.1f, 100);
+    front->position.set(0, 0, 5);
+    front->lookAt(Vector3{0, 0, 0});
+
+    const auto f = pixelAt(renderSplats(cloud, *front, Color(0x000000)), RT_WIDTH / 2, RT_HEIGHT / 2);
+    INFO("from +z: " << f.r << ", " << f.g << ", " << f.b);
+    CHECK(f.r > f.b);
+
+    auto back = PerspectiveCamera::create(50, 1.0f, 0.1f, 100);
+    back->position.set(0, 0, -5);
+    back->lookAt(Vector3{0, 0, 0});
+
+    const auto b = pixelAt(renderSplats(cloud, *back, Color(0x000000)), RT_WIDTH / 2, RT_HEIGHT / 2);
+    INFO("from -z: " << b.r << ", " << b.g << ", " << b.b);
+    CHECK(b.b > b.r);
+}
+
 TEST_CASE("GL splats: opacity controls how much background survives") {
 
     auto camera = PerspectiveCamera::create(50, 1.0f, 0.1f, 100);

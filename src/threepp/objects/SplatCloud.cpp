@@ -10,6 +10,8 @@
 #include "threepp/textures/DataTexture.hpp"
 
 #include <algorithm>
+#include <cmath>
+#include <cstddef>
 #include <limits>
 #include <optional>
 #include <stdexcept>
@@ -38,6 +40,30 @@ namespace {
 
     // Sort keys are 16-bit, so the counting sort is a fixed 65536-bucket pass.
     constexpr int SORT_BUCKETS = 65536;
+
+    // The key range is a robust interval of the view depths, not their full
+    // extent. A scan's stray splats live a thousand units outside a
+    // twenty-unit subject: spreading 65536 buckets over THAT makes one bucket
+    // 0.04 units wide against 0.017-unit content, so most of the cloud lands
+    // in a handful of buckets and the sort quietly degrades to file order.
+    //
+    // Splats outside the interval clamp into the first or last bucket. Their
+    // ordering among themselves is lost, which is exactly the trade: they are
+    // the splats the interval was chosen to exclude, and they are still on
+    // the correct side of everything else, because clamping preserves which
+    // end they came from.
+    constexpr float SORT_CLAMP_LO = 0.01f;// p1 of the sampled view depths
+    constexpr float SORT_CLAMP_HI = 0.99f;// p99
+
+    // A little air on each end, so the p1/p99 splats themselves are not
+    // sitting in the clamped end buckets.
+    constexpr float SORT_CLAMP_MARGIN = 0.02f;
+
+    // Exact percentiles over five million depths, every frame, are not free.
+    // A fixed stride is: no RNG, no state, the same sample for the same cloud
+    // every time, and 8192 depths estimate a 1st percentile far more tightly
+    // than the sort needs.
+    constexpr size_t SORT_SAMPLE_TARGET = 8192;
 
     int texHeightFor(size_t texels, const char* what, size_t splats) {
 
@@ -595,14 +621,62 @@ void SplatCloud::sortByDepth(Camera& camera) {
 
     // GL view space looks down -z, so the farthest splat has the most negative
     // z: ascending z IS back-to-front. Quantise into 16 bits and counting-sort.
-    const float span = maxZ - minZ;
+    //
+    // The quantisation interval is p1..p99 of a fixed-stride sample of the
+    // depths rather than min..max, so a handful of strays cannot rob the rest
+    // of the cloud of its resolution. See the constants above.
+    float lo = minZ;
+    float hi = maxZ;
+
+    {
+        const size_t stride = std::max<size_t>(1, n / SORT_SAMPLE_TARGET);
+
+        sample_.clear();
+        sample_.reserve(n / stride + 1);
+        // Non-finite depths are dropped rather than ranked: NaN breaks the
+        // strict weak ordering nth_element is entitled to assume, and a single
+        // corrupt mean would otherwise poison the interval for the whole
+        // cloud. Such a splat still gets a key below (clamped, harmlessly) and
+        // the shader still refuses to draw it.
+        for (size_t i = 0; i < n; i += stride) {
+
+            if (std::isfinite(depths_[i])) sample_.push_back(depths_[i]);
+        }
+
+        if (sample_.size() >= 3) {
+
+            const auto last = sample_.size() - 1;
+            const auto loRank = static_cast<size_t>(SORT_CLAMP_LO * static_cast<float>(last));
+            const auto hiRank = static_cast<size_t>(SORT_CLAMP_HI * static_cast<float>(last));
+
+            std::nth_element(sample_.begin(), sample_.begin() + static_cast<std::ptrdiff_t>(loRank), sample_.end());
+            const float pLo = sample_[loRank];
+
+            std::nth_element(sample_.begin() + static_cast<std::ptrdiff_t>(loRank) + 1,
+                             sample_.begin() + static_cast<std::ptrdiff_t>(hiRank), sample_.end());
+            const float pHi = sample_[hiRank];
+
+            if (pHi > pLo) {
+
+                const float mid = 0.5f * (pLo + pHi);
+                const float half = 0.5f * (pHi - pLo) * (1.f + SORT_CLAMP_MARGIN);
+                lo = mid - half;
+                hi = mid + half;
+            }
+            // Otherwise the middle 98% of the cloud is at one depth (a flat
+            // cloud seen face on, or a tiny one). min..max is then both the
+            // honest interval and the one that still separates anything.
+        }
+    }
+
+    const float span = hi - lo;
     const float scale = span > 0.f ? static_cast<float>(SORT_BUCKETS - 1) / span : 0.f;
 
     std::fill(histogram_.begin(), histogram_.end(), 0u);
 
     for (size_t i = 0; i < n; ++i) {
 
-        const float k = (depths_[i] - minZ) * scale;
+        const float k = (depths_[i] - lo) * scale;
         keys_[i] = static_cast<std::uint16_t>(
                 std::clamp(k, 0.f, static_cast<float>(SORT_BUCKETS - 1)));
         ++histogram_[keys_[i]];
