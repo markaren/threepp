@@ -7,7 +7,7 @@
 #include "threepp/extras/DataUtils.hpp"
 #include "threepp/materials/RawShaderMaterial.hpp"
 #include "threepp/math/Matrix4.hpp"
-#include "threepp/renderers/GLRenderer.hpp"
+#include "threepp/renderers/Renderer.hpp"
 #include "threepp/textures/DataTexture.hpp"
 
 #include <algorithm>
@@ -463,22 +463,15 @@ SplatCloud::SplatCloud(SplatData data)
     // late — but the viewport uniform is read at draw time, so that is current.
     onBeforeRender = RenderCallback(
             [this](void* renderer, Object3D*, Camera* camera, BufferGeometry*, Material*, std::optional<GeometryGroup>) {
-                auto* base = static_cast<Renderer*>(renderer);
-
-                if (auto* gl = dynamic_cast<GLRenderer*>(base)) {
+                if (auto* base = static_cast<Renderer*>(renderer)) {
 
                     // The bound render target's viewport, which is what the
-                    // splat footprint has to be measured in.
+                    // splat footprint has to be measured in. Virtual on the
+                    // renderer interface, so this links without any concrete
+                    // backend — the no-GLFW build depends on that.
                     Vector4 viewport;
-                    gl->getCurrentViewport(viewport);
+                    base->getCurrentViewport(viewport);
                     setViewportSize(static_cast<int>(viewport.z), static_cast<int>(viewport.w));
-
-                } else if (base) {
-
-                    const auto size = base->size();
-                    const auto ratio = base->getTargetPixelRatio();
-                    setViewportSize(static_cast<int>(static_cast<float>(size.width()) * ratio),
-                                    static_cast<int>(static_cast<float>(size.height()) * ratio));
                 }
 
                 if (camera) update(*camera);

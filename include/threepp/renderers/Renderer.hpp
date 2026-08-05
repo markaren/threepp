@@ -78,6 +78,17 @@ namespace threepp {
         virtual void setViewport(const Vector4& v) = 0;
         virtual void setViewport(int x, int y, int width, int height) = 0;
 
+        // The viewport actually being rendered into right now, in pixels. The
+        // base answer is the full drawing buffer; a backend that tracks render
+        // targets overrides this with the bound target's viewport.
+        virtual void getCurrentViewport(Vector4& target) const {
+            const auto s = size();
+            const auto r = getTargetPixelRatio();
+            target.set(0.f, 0.f,
+                       static_cast<float>(s.width()) * r,
+                       static_cast<float>(s.height()) * r);
+        }
+
         // --- Scissor ---
 
         virtual void setScissor(const Vector4& v) = 0;

@@ -95,7 +95,7 @@ namespace threepp {
 
         void setDrawingBufferSize(const std::pair<int, int>& size, int pixelRatio);
 
-        void getCurrentViewport(Vector4& target) const;
+        void getCurrentViewport(Vector4& target) const override;
 
         void getViewport(Vector4& target) const;
 
