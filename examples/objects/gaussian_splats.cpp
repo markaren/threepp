@@ -8,7 +8,7 @@
 //   --cam x,y,z --look x,y,z               reframe a capture without rebuilding
 //   --no-flip                              keep a loaded file's own axes
 //   --no-cull                              keep a loaded file's outlier splats
-//   --no-morton                            keep a loaded file's storage order
+//   --morton                               Morton-reorder storage (see below)
 //   --bench N                              N frames on a slow orbit, timings, exit
 //
 // Loaded scans are run through SplatData::removeOutliers by default: a
@@ -16,12 +16,17 @@
 // optimiser parked in the sky, and they smear over the subject from most
 // angles. --no-cull renders the file as authored.
 //
-// They are then Morton-reordered, which changes nothing about what is drawn —
-// only where the data for consecutive draws lives. The shader fetches per-splat
-// data by SORTED index, so with file-order storage a depth slab through the
-// scene walks the data textures in a random permutation; Morton order makes 3D
-// neighbours texture neighbours and the slab hits runs instead. --no-morton
-// keeps the file's order, which is the A side of that comparison.
+// --morton runs SplatData::reorderMorton first, and it is OFF by default,
+// because the fetch-locality hypothesis behind it MEASURED AS A REGRESSION on
+// this draw-order path: 82-87 ms vs 50.9 ms orbiting the 5M Sanctuaire scan
+// (three interleaved rounds, 2026-08-05), and no win on the 216k control.
+// Correctness is unaffected (49.8 dB vs file order, tie-order scale). Best
+// current explanation: the counting sort's ~80-splat tie groups become
+// spatially contiguous on screen under Morton order, so consecutive
+// overlapping quads serialize in the blend stage on the same framebuffer
+// tiles; file order scatters them. The reorder stays available because a
+// TILE-based rasterizer reads splats per screen region, where spatial storage
+// locality aligns with access instead of fighting it.
 //
 // --bench orbits deliberately. update() early-outs when the camera has not
 // moved, so a benchmark on a static camera measures the draw alone and quietly
@@ -166,7 +171,7 @@ int main(int argc, char** argv) {
     int shotFrame = 0;
     bool flip = true;
     bool cull = true;
-    bool morton = true;
+    bool morton = false;// measured slower on the GL draw-order path; see header
     int benchFrames = 0;
 
     for (int i = 1; i < argc; ++i) {
@@ -180,7 +185,9 @@ int main(int argc, char** argv) {
             flip = false;
         } else if (arg == "--no-cull") {
             cull = false;
-        } else if (arg == "--no-morton") {
+        } else if (arg == "--morton") {
+            morton = true;
+        } else if (arg == "--no-morton") {// kept so A/B scripts don't break
             morton = false;
         } else if (arg == "--bench" && i + 1 < argc) {
             benchFrames = std::atoi(argv[++i]);
