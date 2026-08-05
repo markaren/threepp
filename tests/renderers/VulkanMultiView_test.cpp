@@ -435,6 +435,70 @@ namespace {
         runFrames(canvas, r, scene, primaryCam, 3);
     }
 
+    // ── Gate: G-buffer MSAA + secondary views coexist ───────────────────────
+    // setGbufferMsaa routes the raster through an MS pass whose dominant-sample
+    // resolve is ONE shared GbufResolve instance with descriptors naming the
+    // PRIMARY's images. Secondaries used to be given an MS framebuffer too, so
+    // their record path re-entered that resolve: it re-read the primary's
+    // samples, the secondary's own resolved G-buffer was never written, and its
+    // depth was overwritten with the PRIMARY's. Secondaries now raster through
+    // the 1x pass (no framebufferMS is created for them). This pins both
+    // symptoms: a same-camera secondary must agree with the primary (it used to
+    // shade from stale/garbage resolve targets), and two differently-placed
+    // secondaries must DISAGREE on depth (they used to both carry the
+    // primary's).
+    void gateMsaa(Canvas& canvas, VulkanRenderer& r, Scene& scene, Camera& primaryCam) {
+        std::printf("\n[msaa] secondary views coexist with setGbufferMsaa(2)\n");
+        r.setGbufferMsaa(2);
+
+        auto secCam = makeCam(primaryCam.position, Vector3(0.f, 1.5f, 0.f));
+        auto sideA = makeCam(Vector3(4.0f, 2.5f, 4.5f), Vector3(0.f, 1.5f, 0.f));
+        auto sideB = makeCam(Vector3(-4.0f, 2.5f, 4.5f), Vector3(0.f, 1.5f, 0.f));
+        uint32_t vh = 0, hA = 0, hB = 0;
+        runFrames(canvas, r, scene, primaryCam, 160, [&](int i) {
+            if (i == 0) {
+                vh = r.addView(*secCam, kW, kH);
+                hA = r.addView(*sideA, 320, 200);
+                hB = r.addView(*sideB, 320, 200);
+            }
+        });
+        if (!vh || !hA || !hB) {
+            check(false, "msaa gate: addView returned handles");
+            r.setGbufferMsaa(1);
+            return;
+        }
+
+        const auto prim = r.readRGBPixels();
+        const auto sec = r.readViewRGBPixels(vh);
+        check(!sec.empty() && sec.size() == prim.size(), "msaa: secondary readback matches primary size");
+        if (!sec.empty() && sec.size() == prim.size()) {
+            const auto d = capture::imageDiff(prim, sec);
+            std::printf("  PSNR=%.2f dB  maxD=%d  hot=%.3f%%\n", d.psnr, d.maxD, d.hotPct);
+            check(d.psnr >= 30.0, "msaa: secondary agrees with primary (PSNR >= 30 dB)");
+        }
+
+        std::vector<uint8_t> dA, dB;
+        int wA = 0, hgtA = 0, bppA = 0, wB = 0, hgtB = 0, bppB = 0;
+        const bool okA = r.readViewGBufferAOV(hA, VulkanRenderer::GBufferAOV::Depth, dA, wA, hgtA, bppA);
+        const bool okB = r.readViewGBufferAOV(hB, VulkanRenderer::GBufferAOV::Depth, dB, wB, hgtB, bppB);
+        long differing = 0, compared = 0;
+        if (okA && okB && dA.size() == dB.size()) {
+            const auto* fa = reinterpret_cast<const float*>(dA.data());
+            const auto* fb = reinterpret_cast<const float*>(dB.data());
+            for (long i = 0; i < long(wA) * hgtA; ++i, ++compared)
+                if (std::fabs(fa[i] - fb[i]) > 1e-4f) ++differing;
+        }
+        const double pct = compared ? 100.0 * double(differing) / double(compared) : 0.0;
+        std::printf("  side A vs side B depth differs on %.1f%% of pixels\n", pct);
+        check(okA && okB && pct > 50.0, "msaa: two secondaries carry their OWN depth");
+
+        (void) r.removeView(vh);
+        (void) r.removeView(hA);
+        (void) r.removeView(hB);
+        r.setGbufferMsaa(1);
+        runFrames(canvas, r, scene, primaryCam, 3);
+    }
+
     // ── Opt-in measurement: 0 vs 3 secondary views, interleaved ─────────────
     // Interleaved within ONE run, alternating in blocks, because per-session
     // clock/thermal drift makes two separate runs untrustworthy. Not a gate —
@@ -579,6 +643,7 @@ int main(int argc, char** argv) {
     gateLifecycle(canvas, renderer, scene, *primaryCam);
     gateCullIsolation(canvas, renderer, scene, *primaryCam);
     gateAov(canvas, renderer, scene, *primaryCam);
+    gateMsaa(canvas, renderer, scene, *primaryCam);
 
     std::printf("\nmulti-view: %d failed\n", failures);
     return failures == 0 ? 0 : 1;

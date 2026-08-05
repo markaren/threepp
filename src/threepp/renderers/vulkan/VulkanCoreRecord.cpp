@@ -423,7 +423,11 @@ bool VulkanRenderer::Impl::recordGbufferStage(VkCommandBuffer cb, uint32_t image
                 // compute->{fragment,everyone-else} (the resolved colour
                 // images + resolved depth feed every existing G-buffer
                 // consumer downstream).
-                if (gbufMsaaSamples_ > 1 && gbufResolve_ &&
+                // !secondary: defense in depth — a secondary never gets a
+                // framebufferMS (createRasterGbufImages gates it), and the
+                // shared gbufResolve_ sets name the PRIMARY's images, so
+                // resolving here for a secondary would read the wrong view.
+                if (!view().secondary && gbufMsaaSamples_ > 1 && gbufResolve_ &&
                     view().rasterGbufs[currentFrame].framebufferMS != VK_NULL_HANDLE) {
                     const VkExtent2D resExt = {view().rasterGbufs[currentFrame].width, view().rasterGbufs[currentFrame].height};
                     gpuTimings_->begin(cb, TP_GbufResolve, currentFrame);

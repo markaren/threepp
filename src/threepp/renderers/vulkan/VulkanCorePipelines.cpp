@@ -573,11 +573,16 @@ void VulkanRenderer::Impl::createRasterGbufImages(uint32_t w, uint32_t h) {
                 g.width  = w;
                 g.height = h;
 
-                // MSAA raster targets — only when opted in. These are the
-                // actual render targets the pipeline rasterizes into; normal/
-                // motion/ids/uv/albedo/depth above become the RESOLVE
-                // TARGETS gbuf_resolve.comp writes into (see setGbufferMsaa).
-                if (gbufMsaaSamples_ > 1) {
+                // MSAA raster targets — only when opted in, and PRIMARY only:
+                // gbufResolve_ is one shared instance whose descriptors name the
+                // primary's images (VulkanCoreDescriptors gates its writes on
+                // !secondary). Giving a secondary a framebufferMS routed its
+                // raster through the MS pass with a resolve that read the
+                // PRIMARY's samples — the secondary's resolved gbuf was never
+                // written and its depth got the primary's. No framebufferMS →
+                // the secondary rasters through the 1x pass (the useMsaa check
+                // in buildIndirectDrawData keys on framebufferMS).
+                if (gbufMsaaSamples_ > 1 && !view().secondary) {
                     const auto samples = gbufMsaaSamples_ == 4 ? VK_SAMPLE_COUNT_4_BIT
                                                                 : VK_SAMPLE_COUNT_2_BIT;
                     // MS attachments need SAMPLED only (not STORAGE — compute
@@ -675,7 +680,10 @@ void VulkanRenderer::Impl::createRasterGbufImages(uint32_t w, uint32_t h) {
                 pushInit(g.cloudAux.image, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_GENERAL);// storage (compute r/w)
                 pushInit(g.cloudShadow.image, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_GENERAL);// storage (compute r/w)
                 pushInit(g.depth.image,  VK_IMAGE_ASPECT_DEPTH_BIT, VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL);
-                if (gbufMsaaSamples_ > 1) {
+                // null-check, not just the msaa toggle: a SECONDARY view gets no
+                // MS images (see the !secondary gate at creation above) — a
+                // barrier on a VK_NULL_HANDLE image is a driver crash.
+                if (gbufMsaaSamples_ > 1 && g.normalMS.image != VK_NULL_HANDLE) {
                     pushInit(g.normalMS.image, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
                     pushInit(g.motionMS.image, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
                     pushInit(g.idsMS.image,    VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
