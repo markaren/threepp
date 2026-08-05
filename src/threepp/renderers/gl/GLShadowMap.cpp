@@ -21,6 +21,7 @@
 
 #include "threepp/renderers/gl/GLCapabilities.hpp"
 #include "threepp/renderers/gl/GLObjects.hpp"
+#include "threepp/renderers/gl/GLTextures.hpp"
 
 
 #include <cmath>
@@ -43,6 +44,7 @@ struct GLShadowMap::Impl {
 
     GLShadowMap* scope;
     GLObjects& _objects;
+    GLTextures& _textures;
 
     const Frustum* _frustum;
 
@@ -63,9 +65,10 @@ struct GLShadowMap::Impl {
 
     std::shared_ptr<Mesh> fullScreenMesh;
 
-    Impl(GLShadowMap* scope, GLObjects& objects)
+    Impl(GLShadowMap* scope, GLObjects& objects, GLTextures& textures)
         : scope(scope),
           _objects(objects),
+          _textures(textures),
           _frustum(nullptr),
           _maxTextureSize(GLCapabilities::instance().maxTextureSize) {
 
@@ -101,6 +104,12 @@ struct GLShadowMap::Impl {
         _renderer.setRenderTarget(shadow->map.get());
         _renderer.clear();
         _renderer.renderBufferDirect(camera, nullptr, geometry, shadowMaterialHorizontal.get(), fullScreenMesh.get(), std::nullopt);
+
+        // The moments are final now, so build the mip chain the receiver will
+        // pick its level from. Has to be here: the blur passes go through
+        // renderBufferDirect, which is below the level of render() where the
+        // renderer would otherwise do this for a bound target.
+        _textures.updateRenderTargetMipmap(shadow->map.get());
     }
 
     MeshDepthMaterial* getDepthMaterialVariant(bool useMorphing) {
@@ -382,7 +391,17 @@ struct GLShadowMap::Impl {
             if (!shadow->map) {
 
                 GLRenderTarget::Options pars{};
-                pars.minFilter = wantVsm ? Filter::Linear : Filter::Nearest;
+                // Mipmapped moments for VSM. This is the one thing VSM can do
+                // that no depth-comparison filter can: a mean and a variance
+                // average correctly, so a mip level *is* the right answer for a
+                // pixel covering many texels, where an averaged depth would be
+                // meaningless. Without it the moments are point-sampled and, on
+                // a receiver at an angle to the light, neighbouring pixels land
+                // on texels whose means straddle the surface — a stipple across
+                // the whole frustum that looks like noise and is really
+                // undersampling. The editor's default scene hits it: a 2048 map
+                // over the 10-unit shadow camera against a ~640px view is 4:1.
+                pars.minFilter = wantVsm ? Filter::LinearMipmapLinear : Filter::Nearest;
                 pars.magFilter = wantVsm ? Filter::Linear : Filter::Nearest;
                 pars.format = Format::RGBA;
 
@@ -418,10 +437,18 @@ struct GLShadowMap::Impl {
 
                 shadow->map = GLRenderTarget::create(static_cast<int>(_shadowMapSize.x), static_cast<int>(_shadowMapSize.y), pars);
                 shadow->map->texture->name = light->name + ".shadowMap";
+                // Set on the texture rather than through Options, whose
+                // generateMipmaps field the RenderTarget constructor never
+                // reads. Only the map is mipmapped: mapPass is scratch that
+                // only the horizontal blur samples, at level 0.
+                shadow->map->texture->generateMipmaps = wantVsm;
 
                 if (wantVsm) {
 
-                    shadow->mapPass = GLRenderTarget::create(static_cast<int>(_shadowMapSize.x), static_cast<int>(_shadowMapSize.y), pars);
+                    auto passPars = pars;
+                    passPars.minFilter = Filter::Linear;
+                    shadow->mapPass = GLRenderTarget::create(static_cast<int>(_shadowMapSize.x), static_cast<int>(_shadowMapSize.y), passPars);
+                    shadow->mapPass->texture->generateMipmaps = false;
                 }
 
                 shadow->camera->updateProjectionMatrix();
@@ -501,8 +528,8 @@ private:
     std::shared_ptr<ShaderMaterial> shadowMaterialHorizontal = createShadowMaterialHorizontal();
 };
 
-GLShadowMap::GLShadowMap(GLObjects& objects)
-    : pimpl_(std::make_unique<Impl>(this, objects)) {}
+GLShadowMap::GLShadowMap(GLObjects& objects, GLTextures& textures)
+    : pimpl_(std::make_unique<Impl>(this, objects, textures)) {}
 
 
 void GLShadowMap::render(GLRenderer& renderer, const std::vector<Light*>& lights, Object3D* scene, Camera* camera) {

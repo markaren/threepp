@@ -67,9 +67,10 @@
 
 	vec2 texture2DDistribution( sampler2D shadow, vec2 uv ) {
 
-		// The VSM blur writes (mean, std_dev) as floats into a float target.
-		// three.js packs them into RGBA8 here, which costs the variance all its
-		// precision unless the shadow camera is fitted tightly to the scene.
+		// (E[z], E[z^2]) as floats, written by the VSM blur. three.js packs a
+		// mean and a standard deviation into RGBA8 here instead, which costs the
+		// variance all its precision unless the shadow camera is fitted tightly
+		// to the scene, and cannot survive mip filtering at all.
 		return texture2D( shadow, uv ).xy;
 
 	}
@@ -85,7 +86,11 @@
 		if (hard_shadow != 1.0 ) {
 
 			float distance = compare - distribution.x ;
-			float variance = max( 0.00000, distribution.y * distribution.y );
+			// Var(z) = E[z^2] - E[z]^2, recovered here rather than stored, so
+			// what the map holds stays linearly filterable. The floor keeps a
+			// perfectly flat footprint - where the two terms cancel - from
+			// dividing by zero below.
+			float variance = max( 0.00001, distribution.y - distribution.x * distribution.x );
 			float softness_probability = variance / (variance + distance * distance ); // Chebeyshevs inequality
 			softness_probability = clamp( ( softness_probability - 0.3 ) / ( 0.95 - 0.3 ), 0.0, 1.0 ); // 0.3 reduces light bleed
 			occlusion = clamp( max( hard_shadow, softness_probability ), 0.0, 1.0 );

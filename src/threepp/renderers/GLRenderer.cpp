@@ -179,7 +179,7 @@ struct GLRenderer::Impl {
           background(scope, cubemaps, state, objects, parameters.premultipliedAlpha),
           bufferRenderer(std::make_unique<gl::GLBufferRenderer>(_info)),
           indexedBufferRenderer(std::make_unique<gl::GLIndexedBufferRenderer>(_info)),
-          shadowMap(objects) {
+          shadowMap(objects, textures) {
 
         this->setViewport(0, 0, _size.width(), _size.height());
         this->setScissor(0, 0, _size.width(), _size.height());

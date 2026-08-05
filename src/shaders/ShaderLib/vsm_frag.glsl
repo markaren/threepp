@@ -20,9 +20,12 @@ void main() {
 			// Raw, not unpackRGBATo2Half: the vertical pass wrote the moments as
 			// floats. Packing them into RGBA8 is what made VSM unusable at any
 			// depth range the shadow camera was not hand-fitted to.
+			//
+			// Both channels are already the moments E[z] and E[z^2], so this is
+			// a plain sum of each - no reconstructing E[z^2] from a deviation.
 			vec2 distribution = texture2D( shadow_pass, ( gl_FragCoord.xy + vec2( i, 0.0 ) * radius ) / resolution ).xy;
 			mean += distribution.x;
-			squared_mean += distribution.y * distribution.y + distribution.x * distribution.x;
+			squared_mean += distribution.y;
 
 		#else
 
@@ -37,9 +40,14 @@ void main() {
 	mean = mean * HALF_SAMPLE_RATE;
 	squared_mean = squared_mean * HALF_SAMPLE_RATE;
 
-	float std_dev = sqrt( squared_mean - mean * mean );
-
-	gl_FragColor = vec4( mean, std_dev, 0.0, 1.0 );
+	// E[z] and E[z^2], not a mean and a standard deviation. Both are linear in
+	// the samples, so any later averaging of this target - a mip level, a
+	// bilinear tap - stays a valid distribution over the wider footprint, and
+	// the receiver recovers the variance itself. A standard deviation does NOT
+	// average that way: mip-filtering one silently understates the spread, and
+	// on a receiver sloped away from the light that reads as everything
+	// shadowing itself.
+	gl_FragColor = vec4( mean, squared_mean, 0.0, 1.0 );
 
 }
 

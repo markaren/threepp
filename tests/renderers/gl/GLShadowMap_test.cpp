@@ -8,6 +8,7 @@
 
 #include "gl_test_helpers.hpp"
 
+
 #include <cstdlib>
 
 #include "threepp/lights/AmbientLight.hpp"
@@ -244,6 +245,74 @@ TEST_CASE("VSM renders a clean shadow, not fringes") {
     }
     INFO("shadowed pixels: " << dark);
     CHECK(dark > 0);
+
+    renderer.dispose();
+}
+
+// The same, with a shadow map far larger than the view.
+//
+// The test above uses a map sized to the view, and passed while the editor -
+// whose template scene keeps the 2048 default against a viewport a few hundred
+// pixels wide - was covered in stipple. A pixel there spans several shadow
+// texels, so the moments get point-sampled out of a map whose values ramp
+// across the receiver, and neighbouring pixels land either side of the surface.
+//
+// This is what mipmapped moments are for, and why the map stores E[z] and
+// E[z^2] rather than a mean and a deviation: a mip level of the former is still
+// a valid distribution over the footprint, so the receiver can ask for the
+// level that matches its own. Averaging deviations instead darkened the whole
+// frustum - not stipple any more, but not a shadow either.
+TEST_CASE("VSM survives a shadow map much larger than the view") {
+
+    const auto alternation = [](const std::vector<unsigned char>& px, int w, int h) {
+        long long energy = 0;
+        for (int y = 0; y < h; y++) {
+            for (int x = 1; x < w - 1; x++) {
+                const size_t i = (static_cast<size_t>(y) * w + x) * 3;
+                const int prev = px[i - 3] + px[i - 2] + px[i - 1];
+                const int cur = px[i] + px[i + 1] + px[i + 2];
+                const int next = px[i + 3] + px[i + 4] + px[i + 5];
+                energy += std::abs(2 * cur - prev - next);
+            }
+        }
+        return energy;
+    };
+
+    constexpr int size = 256;
+
+    Canvas canvas(Canvas::Parameters().size(size, size).headless(true));
+    GLRenderer renderer(canvas);
+    renderer.shadowMap().enabled = true;
+    renderer.setClearColor(Color(0, 0, 0));
+
+    // mapSize left at its default, which is the whole point.
+    auto s = makeShadowScene();
+
+    const auto render = [&](ShadowMap type) {
+        renderer.shadowMap().type = type;
+        renderer.shadowMap().needsUpdate = true;
+        renderer.render(*s.scene, *s.camera);
+        return renderer.readRGBPixels();
+    };
+
+    const long long pcf = alternation(render(ShadowMap::PFC), size, size);
+
+    const auto vsmPixels = render(ShadowMap::VSM);
+    const long long vsm = alternation(vsmPixels, size, size);
+
+    INFO("per-pixel alternation under minification: PCF " << pcf << ", VSM " << vsm);
+    CHECK(vsm < pcf * 4 + 5000);
+
+    // Still a shadow, and still not a uniformly dark frustum: both failure
+    // modes seen while fixing this would sail past a fringe check alone.
+    int dark = 0;
+    for (size_t i = 0; i < vsmPixels.size(); i += 3) {
+        if (vsmPixels[i] + vsmPixels[i + 1] + vsmPixels[i + 2] < 90) dark++;
+    }
+    const int total = static_cast<int>(vsmPixels.size() / 3);
+    INFO("shadowed pixels " << dark << " of " << total);
+    CHECK(dark > 0);
+    CHECK(dark < total / 3);
 
     renderer.dispose();
 }

@@ -18,10 +18,11 @@ namespace threepp {
     namespace gl {
 
         class GLObjects;
+        struct GLTextures;
 
         struct GLShadowMap : public ShadowMapConfig {
 
-            explicit GLShadowMap(GLObjects& objects);
+            GLShadowMap(GLObjects& objects, GLTextures& textures);
 
             void render(GLRenderer& renderer, const std::vector<Light*>& lights, Object3D* scene, Camera* camera);
 
