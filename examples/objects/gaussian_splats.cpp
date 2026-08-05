@@ -8,12 +8,20 @@
 //   --cam x,y,z --look x,y,z               reframe a capture without rebuilding
 //   --no-flip                              keep a loaded file's own axes
 //   --no-cull                              keep a loaded file's outlier splats
+//   --no-morton                            keep a loaded file's storage order
 //   --bench N                              N frames on a slow orbit, timings, exit
 //
 // Loaded scans are run through SplatData::removeOutliers by default: a
 // photogrammetry scan carries a tail of enormous near-opaque splats that the
 // optimiser parked in the sky, and they smear over the subject from most
 // angles. --no-cull renders the file as authored.
+//
+// They are then Morton-reordered, which changes nothing about what is drawn —
+// only where the data for consecutive draws lives. The shader fetches per-splat
+// data by SORTED index, so with file-order storage a depth slab through the
+// scene walks the data textures in a random permutation; Morton order makes 3D
+// neighbours texture neighbours and the slab hits runs instead. --no-morton
+// keeps the file's order, which is the A side of that comparison.
 //
 // --bench orbits deliberately. update() early-outs when the camera has not
 // moved, so a benchmark on a static camera measures the draw alone and quietly
@@ -158,6 +166,7 @@ int main(int argc, char** argv) {
     int shotFrame = 0;
     bool flip = true;
     bool cull = true;
+    bool morton = true;
     int benchFrames = 0;
 
     for (int i = 1; i < argc; ++i) {
@@ -171,6 +180,8 @@ int main(int argc, char** argv) {
             flip = false;
         } else if (arg == "--no-cull") {
             cull = false;
+        } else if (arg == "--no-morton") {
+            morton = false;
         } else if (arg == "--bench" && i + 1 < argc) {
             benchFrames = std::atoi(argv[++i]);
         } else if (arg == "--cam" || arg == "--look" || arg == "--frames" || arg == "--out") {
@@ -238,6 +249,26 @@ int main(int argc, char** argv) {
                                  std::chrono::steady_clock::now() - tCull)
                                  .count()
                       << " ms (--no-cull to keep them)" << std::endl;
+        }
+
+        // After the cull, not before: the reorder then pays for the splats that
+        // survive rather than for the ones about to be dropped. Order between
+        // the two is otherwise free — the cull compacts survivors in place and
+        // preserves their relative order, so it cannot undo a Morton pass.
+        //
+        // Procedural clouds are left in generated order on purpose: they are
+        // 2700 splats of test fixture, the locality win is nothing there, and
+        // file order is what the existing captures were taken in.
+        if (morton) {
+
+            const auto tMorton = std::chrono::steady_clock::now();
+            data.reorderMorton();
+            std::cout << std::setprecision(1)
+                      << "  Morton-reordered " << data.count() << " splats in "
+                      << std::chrono::duration<double, std::milli>(
+                                 std::chrono::steady_clock::now() - tMorton)
+                                 .count()
+                      << " ms (--no-morton to keep file order)" << std::endl;
         }
 
     } else {
