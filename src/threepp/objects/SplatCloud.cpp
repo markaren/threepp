@@ -1,4 +1,4 @@
-﻿
+
 #include "threepp/objects/SplatCloud.hpp"
 
 #include "threepp/cameras/Camera.hpp"
@@ -19,16 +19,21 @@ using namespace threepp;
 namespace {
 
     // One row of every splat texture is this wide; index -> (u, v) is integer
-    // division. 2048 keeps a degree-3 million-splat SH texture at 8192 rows,
-    // well inside the 16384 every GL 3.3 implementation in practice reports â€”
-    // the spec's own floor (1024) could not hold that cloud in any layout.
-    constexpr int TEX_WIDTH = 2048;
-
-    // GL_MAX_TEXTURE_SIZE is not knowable here (no context yet), so this is the
-    // value every desktop implementation of the last decade reports. At degree 3
-    // it caps a cloud at 2^21 splats, comfortably past the envelope this is
-    // built for; the point is that overrunning it should say so rather than
-    // upload nothing and render black.
+    // division.
+    //
+    // Both constants are the 16384 every desktop GL implementation of the last
+    // decade reports, rather than a queried GL_MAX_TEXTURE_SIZE, and the reason
+    // is ordering rather than laziness: the textures are built in the
+    // constructor, which routinely runs before any GL context exists — a loader
+    // thread, a headless test, or simply building the cloud before the Canvas.
+    // There is nothing to ask at that point, and deferring the whole build to
+    // first render would trade a real constraint for a worse one. The GL 3.3
+    // spec floor is far lower, but nothing that reports it could hold a cloud
+    // this size in any layout.
+    //
+    // 8192 x 16384 is 134M texels: 8.4M splats at SH degree 3 (16 texels each,
+    // see buildTextures), 67M at degree 1, 134M at degree 0.
+    constexpr int TEX_WIDTH = 8192;
     constexpr int MAX_TEX_HEIGHT = 16384;
 
     // Sort keys are 16-bit, so the counting sort is a fixed 65536-bucket pass.
@@ -320,7 +325,7 @@ void main() {
     // The Gaussian, evaluated through its inverse 2D covariance.
     float power = -0.5 * (vConic.x * vDelta.x * vDelta.x + 2.0 * vConic.y * vDelta.x * vDelta.y + vConic.z * vDelta.y * vDelta.y);
 
-    // Negated comparison so NaN â€” which fails every comparison â€” lands here too.
+    // Negated comparison so NaN — which fails every comparison — lands here too.
     if (!(power <= 0.0)) {
 
         if (splatDebugNonFinite && isnan(power)) {
@@ -428,7 +433,7 @@ SplatCloud::SplatCloud(SplatData data)
 
     // Safety net for callers who forget update(): the renderer has already
     // uploaded instanceColor by the time this runs, so the sort lands one frame
-    // late â€” but the viewport uniform is read at draw time, so that is current.
+    // late — but the viewport uniform is read at draw time, so that is current.
     onBeforeRender = RenderCallback(
             [this](void* renderer, Object3D*, Camera* camera, BufferGeometry*, Material*, std::optional<GeometryGroup>) {
                 auto* base = static_cast<Renderer*>(renderer);
@@ -463,10 +468,23 @@ void SplatCloud::buildTextures() {
     const size_t n = data_.count();
     const int coeffs = data_.coeffCount();
 
+    // Allocate the texture first and fill its pixels in place, rather than
+    // filling a staging vector and handing it over. DataTexture::create takes
+    // its ImageData by const reference and the constructor takes it by value,
+    // so passing a buffer in costs a full copy — at five million splats the SH
+    // texture alone is 1.2 GB, and the copy put 2.5 GB in flight for no reason.
+    auto allocate = [](int height) {
+        auto texture = DataTexture::create<float>(4, TEX_WIDTH, static_cast<unsigned int>(height));
+        texture->format = Format::RGBA;
+        texture->type = Type::Float;
+        return texture;
+    };
+
     // --- means + opacity: one texel each -----------------------------------
     {
-        const int height = std::max(1, texHeightFor(n, "mean", n));
-        std::vector<float> texels(static_cast<size_t>(TEX_WIDTH) * height * 4, 0.f);
+        meanTexture_ = allocate(std::max(1, texHeightFor(n, "mean", n)));
+        auto& texels = meanTexture_->image().data<float>();
+
         for (size_t i = 0; i < n; ++i) {
 
             texels[i * 4 + 0] = data_.means[i].x;
@@ -474,15 +492,13 @@ void SplatCloud::buildTextures() {
             texels[i * 4 + 2] = data_.means[i].z;
             texels[i * 4 + 3] = data_.opacities[i];
         }
-        meanTexture_ = DataTexture::create(std::move(texels), TEX_WIDTH, height);
-        meanTexture_->format = Format::RGBA;
-        meanTexture_->type = Type::Float;
     }
 
     // --- 3D covariance: six floats, two texels each -------------------------
     {
-        const int height = std::max(1, texHeightFor(n * 2, "covariance", n));
-        std::vector<float> texels(static_cast<size_t>(TEX_WIDTH) * height * 4, 0.f);
+        covTexture_ = allocate(std::max(1, texHeightFor(n * 2, "covariance", n)));
+        auto& texels = covTexture_->image().data<float>();
+
         for (size_t i = 0; i < n; ++i) {
 
             float cov[6];
@@ -496,15 +512,13 @@ void SplatCloud::buildTextures() {
             texels[t + 4] = cov[4];// yz
             texels[t + 5] = cov[5];// zz
         }
-        covTexture_ = DataTexture::create(std::move(texels), TEX_WIDTH, height);
-        covTexture_->format = Format::RGBA;
-        covTexture_->type = Type::Float;
     }
 
     // --- SH: one texel per coefficient, alpha unused ------------------------
     {
-        const int height = std::max(1, texHeightFor(n * static_cast<size_t>(coeffs), "SH", n));
-        std::vector<float> texels(static_cast<size_t>(TEX_WIDTH) * height * 4, 0.f);
+        shTexture_ = allocate(std::max(1, texHeightFor(n * static_cast<size_t>(coeffs), "SH", n)));
+        auto& texels = shTexture_->image().data<float>();
+
         for (size_t i = 0; i < n; ++i) {
 
             const float* c = data_.shAt(i);
@@ -516,9 +530,6 @@ void SplatCloud::buildTextures() {
                 texels[t + 2] = c[k * 3 + 2];
             }
         }
-        shTexture_ = DataTexture::create(std::move(texels), TEX_WIDTH, height);
-        shTexture_->format = Format::RGBA;
-        shTexture_->type = Type::Float;
     }
 
     auto& uniforms = splatMaterial_->uniforms;

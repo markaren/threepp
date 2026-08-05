@@ -1,9 +1,9 @@
-﻿// End-to-end GL pixel tests for SplatCloud: does a Gaussian land where it
+// End-to-end GL pixel tests for SplatCloud: does a Gaussian land where it
 // should, in the colour it should, blended in the right order, and does a
 // degenerate splat poison the frame.
 //
 // The ordering case is the one worth having. A splat cloud with a broken sort
-// still renders â€” it renders confidently, and wrong â€” so the test drives the
+// still renders — it renders confidently, and wrong — so the test drives the
 // same two splats from both sides of the scene and demands the answer flip.
 
 #include "gl_test_helpers.hpp"
@@ -42,7 +42,7 @@ namespace {
         return SplatCloud::create(std::move(data));
     }
 
-    // Renders through a render target so the readback is linear â€” the splat
+    // Renders through a render target so the readback is linear — the splat
     // shader is a RawShaderMaterial and writes its colour out untouched, so a
     // red splat should arrive as a red pixel with no encode in between.
     std::vector<unsigned char> renderSplats(const std::shared_ptr<SplatCloud>& cloud,
