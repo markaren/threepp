@@ -198,6 +198,7 @@ int main(int argc, char** argv) {
     bool useVulkan = false;
     bool occluder = false;
     bool debugNaN = false;
+    bool fog = false;
 
     for (int i = 1; i < argc; ++i) {
 
@@ -208,6 +209,8 @@ int main(int argc, char** argv) {
             debugNaN = true;
         } else if (arg == "--occluder") {
             occluder = true;
+        } else if (arg == "--fog") {
+            fog = true;
         } else if (arg == "--shot" && i + 1 < argc) {
             shotPath = argv[++i];
         } else if (arg.rfind("--screenshot=", 0) == 0) {
@@ -393,6 +396,20 @@ int main(int argc, char** argv) {
         vkRenderer->setRenderScale(1.f);
         vkRenderer->setDlss(false);
         vkRenderer->setFsr(false);
+        if (fog) {
+            // --fog: does the cloud sit IN the medium, or punch a clear hole
+            // through it? deferred_shade_60_fog_volumetrics.glsl bakes fog into
+            // sceneHdr DURING the shade, so anything composited afterwards gets
+            // none of it unless the pass re-derives it (SplatPass does).
+            // Falloff is deliberately large so the whole cloud is inside it.
+            VulkanRenderer::HeightFogSettings hf;
+            hf.density = 0.012f;
+            hf.baseY = -50.f;
+            hf.falloff = 400.f;
+            hf.noiseAmount = 0.f;
+            vkRenderer->setHeightFog(hf);
+            std::cout << "  height fog on (density 0.06)" << std::endl;
+        }
         renderer = vkRenderer.get();
     }
 #else

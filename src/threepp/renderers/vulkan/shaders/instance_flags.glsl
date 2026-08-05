@@ -41,7 +41,13 @@ bool ifMoving(uint z)      { return (z & kInstFlagMoving) != 0u; }
 uint ifClassId(uint z)     { return (z >> 8) & 0xFFu; }
 
 float ifShadingReactivity(uint z) {
-    return ((z & (kInstFlagDeformer | kInstFlagTexAnim)) != 0u) ? 1.0 : 0.0;
+    // kInstFlagSplat is the third source of the same meaning: a Gaussian-splat
+    // pixel carries a motion vector built from the alpha-weighted EXPECTED
+    // depth of a semi-transparent stack, which is exact for an opaque cloud and
+    // approximate at every silhouette — so history is worth less there than a
+    // rasterized surface's is. Deliberately NOT in ifIrradianceReactivity:
+    // splats contribute no demodulated GI integrand at all.
+    return ((z & (kInstFlagDeformer | kInstFlagTexAnim | kInstFlagSplat)) != 0u) ? 1.0 : 0.0;
 }
 
 float ifIrradianceReactivity(uint z) {

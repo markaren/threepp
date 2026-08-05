@@ -115,16 +115,31 @@ void VulkanRenderer::Impl::rewriteBloomDescriptors() {
                 std::array<VkImageView, kFramesInFlight> depthViews{};
                 std::array<VkImageView, kFramesInFlight> motionViews{};
                 std::array<VkImageView, kFramesInFlight> idsViews{};
+                std::array<VkImage, kFramesInFlight>     motionImgs{};
+                std::array<VkBuffer, kFramesInFlight>    fogBufs{};
+                std::array<VkBuffer, kFramesInFlight>    cloudBufs{};
+                std::array<VkBuffer, kFramesInFlight>    lightBufs{};
                 for (uint32_t f = 0; f < kFramesInFlight; ++f) {
                     depthViews[f]  = view().rasterGbufs[f].depth.view;
                     motionViews[f] = view().rasterGbufs[f].motion.view;
+                    motionImgs[f]  = view().rasterGbufs[f].motion.image;
                     idsViews[f]    = view().rasterGbufs[f].ids.view;
+                    fogBufs[f]     = fogUbos[f].handle;
+                    cloudBufs[f]   = cloudUbos[f].handle;
+                    lightBufs[f]   = lightsUbos[f].handle;
                 }
                 vulkan::SplatPass::ResizeInputs sin{};
                 sin.sceneHdrPerFrame = sceneViews.data();
                 sin.depthPerFrame    = depthViews.data();
                 sin.motionPerFrame   = motionViews.data();
+                sin.motionImages     = motionImgs.data();
                 sin.idsPerFrame      = idsViews.data();
+                sin.fogUbos          = fogBufs.data();
+                sin.cloudUbos        = cloudBufs.data();
+                sin.lightsUbos       = lightBufs.data();
+                sin.envView          = envImage.view;
+                sin.envSampler       = envImage.sampler;
+                sin.envMips          = envImage.mipLevels;
                 splat_->resize(renderExtent().width, renderExtent().height, sin);
             }
 

@@ -37,11 +37,13 @@ namespace threepp::vulkan {
         constexpr uint32_t kProjStride = 64; // sizeof(SplatProj)
         constexpr uint32_t kGeomStride = 40; // vec3 + float + float[6], scalar layout
         constexpr uint32_t kGlobalWords = 12;
-        constexpr uint32_t kBindings   = 18;
+        constexpr uint32_t kBindings   = 22;
 
         constexpr uint32_t kSplatFlagOrtho     = 1u;
         constexpr uint32_t kSplatFlagDebugNaN  = 2u;
         constexpr uint32_t kSplatFlagDepthTest = 4u;
+        constexpr uint32_t kSplatFlagMotion    = 8u;
+        constexpr uint32_t kSplatFlagFog       = 16u;
         constexpr uint32_t kSplatFlagChecksum  = 32u;
         constexpr uint32_t kSplatFlagBgSolid   = 64u;
 
@@ -58,12 +60,14 @@ namespace threepp::vulkan {
             float proj[16];
             float projInv[16];
             float model[16];
-            float prevViewProj[16];
+            float prevVPfromView[16];
+            float camWorld[16];
             float camPosWs[4];
             float camFwdWs[4];
             float viewport[2];
             float focal[2];
             float percentile[2];
+            float jitterClip[2];
             float nearPlane;
             float preExposure;
             uint32_t splatCount;
@@ -75,11 +79,7 @@ namespace threepp::vulkan {
             uint32_t depthBits;
             uint32_t budget;
             uint32_t flags;
-            uint32_t radixShift;
-            uint32_t radixBlocks;
-            uint32_t scanCount;
-            uint32_t scanStride;
-            uint32_t reactivity;
+            uint32_t envMipCount;
         };
 
         uint32_t divUp(uint32_t a, uint32_t b) { return (a + b - 1) / b; }
@@ -220,6 +220,10 @@ namespace threepp::vulkan {
         bnd[15].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
         bnd[16].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
         bnd[17].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+        bnd[18].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;// fog
+        bnd[19].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;// clouds
+        bnd[20].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;// lights (ambient)
+        bnd[21].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;// env
 
         VkDescriptorSetLayoutCreateInfo dlci{};
         dlci.sType        = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
@@ -265,13 +269,13 @@ namespace threepp::vulkan {
         const uint32_t sets = kMaxClouds * framesInFlight_;
         VkDescriptorPoolSize sz[4]{};
         sz[0].type            = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-        sz[0].descriptorCount = sets;
+        sz[0].descriptorCount = sets * 4;// splat + fog + clouds + lights
         sz[1].type            = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
         sz[1].descriptorCount = sets * 13;
         sz[2].type            = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
-        sz[2].descriptorCount = sets * 3;
+        sz[2].descriptorCount = sets * 2;// sceneHdr + gbuf motion
         sz[3].type            = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-        sz[3].descriptorCount = sets;
+        sz[3].descriptorCount = sets * 3;// gbuf depth + gbuf ids + env
 
         VkDescriptorPoolCreateInfo dpci{};
         dpci.sType         = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
@@ -422,7 +426,12 @@ namespace threepp::vulkan {
     }
 
     void SplatPass::writeSets(Cloud& c) {
-        if (sceneHdrViews_.empty() || c.sets.empty()) return;
+        // Every binding needs a real object: descriptorBindingPartiallyBound is
+        // not enabled on this device, so a VK_NULL_HANDLE anywhere in the set
+        // is a validation error, not a "don't sample it".
+        if (sceneHdrViews_.empty() || c.sets.empty() || envView_ == VK_NULL_HANDLE ||
+            fogUbos_.empty() || cloudUbos_.empty() || lightsUbos_.empty())
+            return;
 
         for (uint32_t f = 0; f < framesInFlight_; ++f) {
             VkDescriptorBufferInfo ubo{uboBuf_[f].handle, uboStride_ * c.slot, sizeof(SplatUboData)};
@@ -452,15 +461,28 @@ namespace threepp::vulkan {
             VkDescriptorImageInfo dep{sampler_, depthViews_[f],
                                       VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL};
             VkDescriptorImageInfo mot{VK_NULL_HANDLE, motionViews_[f], VK_IMAGE_LAYOUT_GENERAL};
-            VkDescriptorImageInfo ids{VK_NULL_HANDLE, idsViews_[f], VK_IMAGE_LAYOUT_GENERAL};
+            VkDescriptorImageInfo ids{sampler_, idsViews_[f],
+                                      VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
             w[14].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
             w[14].pImageInfo     = &hdr;
             w[15].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
             w[15].pImageInfo     = &dep;
             w[16].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
             w[16].pImageInfo     = &mot;
-            w[17].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+            w[17].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
             w[17].pImageInfo     = &ids;
+
+            VkDescriptorBufferInfo ub[3]{{fogUbos_[f], 0, VK_WHOLE_SIZE},
+                                         {cloudUbos_[f], 0, VK_WHOLE_SIZE},
+                                         {lightsUbos_[f], 0, VK_WHOLE_SIZE}};
+            for (uint32_t i = 0; i < 3; ++i) {
+                w[18 + i].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+                w[18 + i].pBufferInfo    = &ub[i];
+            }
+            VkDescriptorImageInfo env{envSampler_ ? envSampler_ : sampler_, envView_,
+                                      VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+            w[21].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+            w[21].pImageInfo     = &env;
 
             vkUpdateDescriptorSets(ctx_.device(), kBindings, w.data(), 0, nullptr);
         }
@@ -614,16 +636,20 @@ namespace threepp::vulkan {
 
         sceneHdrViews_.assign(in.sceneHdrPerFrame, in.sceneHdrPerFrame + framesInFlight_);
         depthViews_.assign(in.depthPerFrame, in.depthPerFrame + framesInFlight_);
+        if (in.fogUbos)    fogUbos_.assign(in.fogUbos, in.fogUbos + framesInFlight_);
+        if (in.cloudUbos)  cloudUbos_.assign(in.cloudUbos, in.cloudUbos + framesInFlight_);
+        if (in.lightsUbos) lightsUbos_.assign(in.lightsUbos, in.lightsUbos + framesInFlight_);
+        if (in.envView) {
+            envView_    = in.envView;
+            envSampler_ = in.envSampler;
+            envMips_    = std::max(in.envMips, 1u);
+        }
         if (in.motionPerFrame) motionViews_.assign(in.motionPerFrame, in.motionPerFrame + framesInFlight_);
         else                   motionViews_ = sceneHdrViews_;
+        if (in.motionImages) motionImages_.assign(in.motionImages, in.motionImages + framesInFlight_);
+        else                 motionImages_.assign(framesInFlight_, VK_NULL_HANDLE);
         if (in.idsPerFrame) idsViews_.assign(in.idsPerFrame, in.idsPerFrame + framesInFlight_);
-        else                idsViews_.assign(framesInFlight_, VK_NULL_HANDLE);
-
-        // An rgba16ui storage image has no stand-in of another format, so a
-        // build without the ids view simply gets the depth-tested V1 path and
-        // no motion writes (the binding is never sampled either way).
-        for (auto& v : idsViews_)
-            if (v == VK_NULL_HANDLE) v = motionViews_[0];
+        else                idsViews_ = depthViews_;
 
         if (!sameExtent || rangeBuf_.handle == VK_NULL_HANDLE) {
             destroyBuffer(ctx_.allocator(), rangeBuf_);
@@ -717,6 +743,11 @@ namespace threepp::vulkan {
             std::memcpy(u.proj, p.proj, sizeof(u.proj));
             std::memcpy(u.projInv, p.projInverse, sizeof(u.projInv));
             std::memcpy(u.model, fc.model, sizeof(u.model));
+            std::memcpy(u.prevVPfromView, p.prevVPfromView, sizeof(u.prevVPfromView));
+            std::memcpy(u.camWorld, p.camWorld, sizeof(u.camWorld));
+            u.jitterClip[0] = p.jitterClip[0];
+            u.jitterClip[1] = p.jitterClip[1];
+            u.envMipCount   = envMips_;
             u.camPosWs[0] = p.camPos[0];
             u.camPosWs[1] = p.camPos[1];
             u.camPosWs[2] = p.camPos[2];
@@ -743,7 +774,9 @@ namespace threepp::vulkan {
                       (p.depthTest ? kSplatFlagDepthTest : 0u) |
                       (fc.debugNonFinite ? kSplatFlagDebugNaN : 0u) |
                       (checksum ? kSplatFlagChecksum : 0u) |
-                      (p.bgIsSolidColor ? kSplatFlagBgSolid : 0u);
+                      (p.bgIsSolidColor ? kSplatFlagBgSolid : 0u) |
+                      (p.motionVectors ? kSplatFlagMotion : 0u) |
+                      (p.fog ? kSplatFlagFog : 0u);
 
             VmaAllocationInfo ui{};
             vmaGetAllocationInfo(ctx_.allocator(), uboBuf_[frame].alloc, &ui);
@@ -842,11 +875,52 @@ namespace threepp::vulkan {
             }
 
             // ── composite ────────────────────────────────────────────────────
+            // The motion attachment rests in SHADER_READ_ONLY_OPTIMAL (the
+            // G-buffer render pass's finalLayout) and this pass writes it as a
+            // STORAGE image, which only works in GENERAL. Flip it, dispatch,
+            // flip it back — leaving it in GENERAL would be a silent lie to
+            // every consumer downstream that samples it in the layout the
+            // render pass promised.
+            const bool flipMotion = p.motionVectors && motionImages_[frame] != VK_NULL_HANDLE;
+            auto motionLayout = [&](VkImageLayout from, VkImageLayout to,
+                                    VkAccessFlags2 srcAccess, VkAccessFlags2 dstAccess) {
+                VkImageMemoryBarrier2 b{};
+                b.sType         = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
+                b.srcStageMask  = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+                b.srcAccessMask = srcAccess;
+                b.dstStageMask  = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT |
+                                  VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT;
+                b.dstAccessMask = dstAccess;
+                b.oldLayout     = from;
+                b.newLayout     = to;
+                b.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+                b.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+                b.image         = motionImages_[frame];
+                b.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+                b.subresourceRange.levelCount = 1;
+                b.subresourceRange.layerCount = 1;
+                VkDependencyInfo di{};
+                di.sType                    = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
+                di.imageMemoryBarrierCount  = 1;
+                di.pImageMemoryBarriers     = &b;
+                vkCmdPipelineBarrier2(cb, &di);
+            };
+            if (flipMotion)
+                motionLayout(VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_LAYOUT_GENERAL,
+                             VK_ACCESS_2_SHADER_SAMPLED_READ_BIT,
+                             VK_ACCESS_2_SHADER_STORAGE_READ_BIT |
+                                     VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT);
+
             vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, rasterPipe_);
             pc = {0, 0, 0, 0, 0, 0, 0, 0};
             vkCmdPushConstants(cb, pipeLayout_, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(pc), &pc);
             vkCmdDispatch(cb, tilesX_, tilesY_, 1);
             barrier(cb);
+
+            if (flipMotion)
+                motionLayout(VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                             VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
+                             VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
 
             VkBufferCopy copy{0, 0, kGlobalWords * sizeof(uint32_t)};
             vkCmdCopyBuffer(cb, globalBuf_.handle, debugBuf_[frame].handle, 1, &copy);

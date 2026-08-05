@@ -65,6 +65,12 @@ void main() {
 
     float T = 1.0;
     vec3  C = vec3(0.0);
+    // Alpha-weighted EXPECTED view distance, premultiplied exactly like C. It
+    // costs one multiply-add inside a loop that is already reading viewDist for
+    // the depth test, and it is what makes a splat cloud's motion vectors
+    // computable at all: the cloud is rigid, so per-pixel motion is pure camera
+    // reprojection of a depth — and this is the depth.
+    float D = 0.0;
     bool  done = !inside;
 
     uint i = range.x;
@@ -101,6 +107,7 @@ void main() {
                 alpha = min(kMaxAlpha, alpha);
 
                 C += sColor[k] * (alpha * T);
+                D += sDist[k] * (alpha * T);
                 T *= (1.0 - alpha);
                 if (T < kMinAlpha) { done = true; break; }
             }
@@ -116,6 +123,9 @@ void main() {
 
     if (!inside || range.y == range.x || T >= 1.0) return;
 
+    const float coverage = 1.0 - T;
+    const float expDist  = D / coverage;// alpha-weighted expected view distance
+
     // Pre-exposure — the factor the shade already baked into every sceneHdr
     // store, and the single easiest thing in this pass to leave out and never
     // see, because it is 1.0 until a physical camera is configured.
@@ -125,18 +135,73 @@ void main() {
     // colour back verbatim. Composing against one of those as if it had been
     // pre-exposed would weight the blend against the wrong background.
     float preExp = ubo.preExposure;
-    if ((ubo.flags & kSplatFlagBgSolid) != 0u && imageLoad(gbufIds, px).x < 1u) preExp = 1.0;
+    const uvec4 ids = texelFetch(gbufIds, px, 0);
+    if ((ubo.flags & kSplatFlagBgSolid) != 0u && ids.x < 1u) preExp = 1.0;
+
+    // ── the view-space point the cloud is "at", for fog and for motion ──────
+    // Both want the same thing and the reconstruction is four lines, so it is
+    // done once. The UNJITTERED projection is the one to invert: the pixel grid
+    // does not move with the jitter, and the motion vector has to land in the
+    // same convention the raster's does (unjittered current, unjittered prev).
+    const bool ortho = (ubo.flags & kSplatFlagOrtho) != 0u;
+    const vec2 ndc = vec2(((float(px.x) + 0.5) / ubo.viewport.x) * 2.0 - 1.0,
+                          1.0 - ((float(px.y) + 0.5) / ubo.viewport.y) * 2.0);
+    // proj carries the jitter as a shear on m02/m12; subtract it back out.
+    const float p02 = ubo.proj[2][0] - ubo.jitterClip.x;
+    const float p12 = ubo.proj[2][1] - ubo.jitterClip.y;
+    const vec3 viewPos = ortho
+            ? vec3((ndc.x - ubo.proj[3][0]) / ubo.proj[0][0],
+                   (ndc.y - ubo.proj[3][1]) / ubo.proj[1][1], -expDist)
+            : vec3(expDist * (ndc.x + p02) / ubo.proj[0][0],
+                   expDist * (ndc.y + p12) / ubo.proj[1][1], -expDist);
+
+    // ── fog ─────────────────────────────────────────────────────────────────
+    // Applied to the CLOUD's own radiance only. The background already carries
+    // the fog the shade gave it at ITS depth; fogging the composite would
+    // double-count it. Reduces to the identity when there is no medium, so a
+    // fog-free frame is bit-unchanged.
+    vec3 splatDisp = C / coverage;
+    if ((ubo.flags & kSplatFlagFog) != 0u) {
+        const vec3 worldPos = (ubo.camWorld * vec4(viewPos, 1.0)).xyz;
+        vec3 inScatter;
+        const float Tfog = splatFog(ubo.camPosWs.xyz, worldPos, inScatter);
+        if (Tfog < 1.0) {
+            const vec3 lit = splatSrgbToLinear(splatDisp) * Tfog + inScatter;
+            splatDisp = splatLinearToSrgb(max(lit, vec3(0.0)));
+        }
+    }
 
     // The whole composite in the splat's own display-referred domain — the one
-    // its coefficients were fitted in (see splat_common.glsl). C is already
-    // premultiplied by the front-to-back transmittance; the background arrives
-    // through the same transfer function the display would put it through, and
-    // leaves through its exact inverse, so a pixel with T == 1 is untouched
-    // (returned above) and one with T == 0 is exactly the splat colour.
+    // its coefficients were fitted in (see splat_common.glsl). The background
+    // arrives through the same transfer function the display would put it
+    // through and leaves through its exact inverse, so a pixel with T == 1 is
+    // untouched (returned above) and one with T == 0 is exactly the splat
+    // colour.
     const vec4 dst = imageLoad(sceneHdr, px);
     const vec3 dstDisp = splatLinearToSrgb(dst.rgb / preExp);
-    const vec3 outRgb  = splatSrgbToLinear(dstDisp * T + C) * preExp;
+    const vec3 outRgb  = splatSrgbToLinear(dstDisp * T + splatDisp * coverage) * preExp;
     imageStore(sceneHdr, px, vec4(outRgb, dst.a));
+
+    // ── motion vectors + reactivity ─────────────────────────────────────────
+    // A splat cloud is RIGID, so its per-pixel motion is pure camera
+    // reprojection of the expected depth — exactly computable, and free from
+    // the accumulation loop. Without it TAA reprojects a splat pixel from
+    // whatever the raster left there: the geometry BEHIND the cloud, or (over
+    // sky) the far-plane reconstruction, and either one smears the cloud
+    // whenever the camera moves.
+    //
+    // Only where the cloud actually owns the pixel. Below that the background's
+    // own motion is the better answer for the majority of what is there, and a
+    // thin translucent fringe reprojected by its own average depth is how you
+    // get a halo that swims against the geometry it sits on.
+    if ((ubo.flags & kSplatFlagMotion) != 0u && !ortho && coverage > 0.5) {
+        const vec4 prevClip = ubo.prevVPfromView * vec4(viewPos, 1.0);
+        if (abs(prevClip.w) > 1e-6) {
+            const vec2 prevNdc = prevClip.xy / prevClip.w;
+            const vec4 m = imageLoad(gbufMotion, px);
+            imageStore(gbufMotion, px, vec4(prevNdc - ndc, m.z, m.w));
+        }
+    }
 
     if ((ubo.flags & kSplatFlagChecksum) != 0u) {
         // Order-independent hash of the composited result: uint addition is

@@ -46,6 +46,11 @@
 // thin-walled in an earlier design, never packed — kept so re-introducing
 // them can't silently collide).
 #define kInstFlagWater       0x01u// DisplacedMesh (FFT water / displaced surface)
+#define kInstFlagSplat       0x02u// Gaussian-splat pixel (composited by SplatPass,
+                                  // not rasterized — its motion vector comes from
+                                  // an alpha-weighted EXPECTED depth, so it is
+                                  // exact for an opaque cloud and approximate
+                                  // wherever several depths mix)
 #define kInstFlagSkinned     0x08u// GPU-skinned mesh
 #define kInstFlagDoubleSided 0x10u// Side::Double material (±N = same surface)
 #define kInstFlagDeformer    0x20u// persistent per-frame deformer (tet soft body)

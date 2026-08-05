@@ -15,6 +15,11 @@
 #ifndef THREEPP_SPLAT_COMMON_GLSL
 #define THREEPP_SPLAT_COMMON_GLSL
 
+// The per-instance flag bit layout the G-buffer IDs channel uses — the splat
+// raster ORs kInstFlagSplat into it so the temporal resolve knows a pixel's
+// motion came from an expected depth rather than a rasterized surface.
+#include "vulkan_shared.h"
+
 // ── Tiling ──────────────────────────────────────────────────────────────────
 // 16x16 is the 3DGS reference tile and it is also exactly one raster
 // workgroup (256 threads, one thread per pixel), so the tile loop needs no
@@ -108,15 +113,21 @@ struct SplatGlobals {
 
 layout(set = 0, binding = 0, scalar) uniform SplatUbo {
     mat4  modelView;  // cloud local -> view
-    mat4  proj;       // view -> clip, GL convention (NDC z in [-1,1], y UP)
+    mat4  proj;       // view -> clip, GL convention (NDC z in [-1,1], y UP), JITTERED
     mat4  projInv;    // clip -> view, REVERSE-Z — the one gbufDepth was written with
     mat4  model;      // cloud local -> world (SH view direction)
-    mat4  prevViewProj;// previous frame's unjittered world -> clip (V2 motion)
+    // View space -> PREVIOUS frame's unjittered clip, in one matrix (the host
+    // composes TaaResolve's own sky-reprojection with this frame's projection,
+    // so the splat motion vectors are built from exactly the matrices the
+    // raster's are).
+    mat4  prevVPfromView;
+    mat4  camWorld;   // view -> world (fog needs a world-space height)
     vec4  camPosWs;   // world-space camera position, .w unused
     vec4  camFwdWs;   // world-space camera forward (orthographic view axis)
     vec2  viewport;   // render extent in pixels
     vec2  focal;      // fx, fy in pixels
     vec2  percentile; // p1 / p99 of the view distances (CPU sample)
+    vec2  jitterClip; // this frame's raster jitter, already inside `proj`
     float nearPlane;
     float preExposure;// the factor already baked into sceneHdr's stores
 
@@ -129,11 +140,7 @@ layout(set = 0, binding = 0, scalar) uniform SplatUbo {
     uint  depthBits;  // 32 - tileBits
     uint  budget;     // expanded-entry capacity
     uint  flags;      // see kSplatFlag* below
-    uint  radixShift; // current radix pass's bit offset
-    uint  radixBlocks;// blocks the current radix pass dispatches
-    uint  scanCount;  // element count for the current scan dispatch
-    uint  scanStride; // level stride for the current scan dispatch
-    uint  reactivity; // instance-flag word to OR into gbufIds (V2)
+    uint  envMipCount;// mip levels in the prefiltered env (top mip = sky ambient)
 } ubo;
 
 const uint kSplatFlagOrtho      = 1u;// parallel projection
@@ -187,7 +194,56 @@ layout(set = 0, binding = 13, scalar) buffer ScanBuf    { uint scanScratch[]; };
 layout(set = 0, binding = 14, rgba16f) uniform image2D sceneHdr;
 layout(set = 0, binding = 15) uniform sampler2D gbufDepth;// reversed-Z D32
 layout(set = 0, binding = 16, rgba16f) uniform image2D gbufMotion;
-layout(set = 0, binding = 17, rgba16ui) uniform uimage2D gbufIds;
+// READ-ONLY, and sampled rather than storage on purpose: the ids attachment is
+// created without STORAGE usage (it is a render target the whole rest of the
+// frame samples), and the one thing this pass needs from it — is this pixel the
+// solid-colour background the shade left un-pre-exposed — is a read.
+layout(set = 0, binding = 17) uniform usampler2D gbufIds;
+
+// ── Fog inputs ──────────────────────────────────────────────────────────────
+// The same UBOs the deferred shade and particle_light.comp read, bound here
+// because deferred_shade_60_fog_volumetrics.glsl bakes fog into sceneHdr
+// DURING the shade — anything composited afterwards gets exactly none of it,
+// and a splat cloud punching a clear hole through a foggy scene is the most
+// obvious tell there is. KEEP IN SYNC with particle_light.comp's copies.
+layout(set = 0, binding = 18, scalar) uniform FogUbo {
+    vec3  sigmaT;
+    float enabled;
+    vec3  color;
+    float anisotropy;
+    float waterSurfaceY;
+    vec3  worldUp;
+    float hfDensity;
+    float hfBaseY;
+    float hfFalloff;
+    float murkDensity;
+    vec3  murkColor;
+} fog;
+
+layout(set = 0, binding = 19, scalar) uniform CloudUbo {
+    float enabled;
+    float coverage;
+    float density;
+    float bottomY;
+    float topY;
+    float evolveSpeed;
+    float timeSec;
+    float heteroActive;
+    vec3  wind;
+    float hfDensity;
+    float hfBaseY;
+    float hfFalloff;
+    float hfNoiseAmount;
+    float shadowActive;
+} clouds;
+
+// Only the leading `ambient` is read; a uniform block may be shorter than the
+// buffer bound to it, and the offsets of what it does declare still match.
+layout(set = 0, binding = 20, scalar) uniform LightsUbo {
+    vec3 ambient;
+} lights;
+
+layout(set = 0, binding = 21) uniform sampler2D envTex;// prefiltered PMREM chain
 
 // ── Spherical harmonics ─────────────────────────────────────────────────────
 // The SAME decimal literals as threepp/splats/SplatSH.hpp and as the GL
@@ -335,6 +391,69 @@ uint splatDepthBucket(float dist, float dMin, float dMax, float pLo, float pHi) 
     const float span = dMax - pHi;
     const float k = (span > 0.0) ? (dist - pHi) * (float(tail - 1u) / span) : 0.0;
     return (buckets - tail) + (!(k > 0.0) ? 0u : (k >= float(tail - 1u) ? tail - 1u : uint(k)));
+}
+
+// ── Fog over the camera -> splat leg ────────────────────────────────────────
+// The two ANALYTIC terms of the three the surface path composes: exponential
+// height-fog extinction with ambient in-scatter, and the murk below a water
+// surface. KEEP IN SYNC with heightFogOpticalDepth / fogPathLength in
+// deferred_shade_60_fog_volumetrics.glsl and particle_light.comp — same
+// clamps, same Taylor guard.
+//
+// NOT mirrored here, and deliberately: the froxel LUT's integrated point-light
+// glow and the short sun march (god rays IN FRONT of the cloud). Both need
+// bindings this pass does not carry (the cluster grid, the froxel volume, the
+// TLAS), and both are additive — leaving them out makes a splat cloud slightly
+// less lit by nearby lamps and invisible to god rays, not wrongly fogged.
+
+float splatHeightFogOd(vec3 a, vec3 b) {
+    if (clouds.hfDensity <= 0.0) return 0.0;
+    const float H   = max(clouds.hfFalloff, 1e-3);
+    const float ya  = max(a.y - clouds.hfBaseY, 0.0);
+    const float yb  = max(b.y - clouds.hfBaseY, 0.0);
+    const float len = min(distance(a, b), 1.0e7);
+    const float ea = exp(-ya / H);
+    const float eb = exp(-yb / H);
+    const float x  = (yb - ya) / H;
+    const float f  = (abs(x) < 1e-3) ? (ea * (1.0 - 0.5 * x + x * x * (1.0 / 6.0)))
+                                     : ((ea - eb) / x);
+    return min(clouds.hfDensity * len * f, 80.0);
+}
+
+float splatMurkPathLength(vec3 a, vec3 b) {
+    const float full = distance(a, b);
+    if (fog.waterSurfaceY > 1e29) return full;
+    const float ya = a.y - fog.waterSurfaceY;
+    const float yb = b.y - fog.waterSurfaceY;
+    if (ya >= 0.0 && yb >= 0.0) return 0.0;
+    if (ya < 0.0 && yb < 0.0) return full;
+    const float t = ya / (ya - yb);
+    return (ya < 0.0) ? full * t : full * (1.0 - t);
+}
+
+vec3 splatEnvTop() {
+    const float lod = float(max(ubo.envMipCount, 1u) - 1u);
+    return textureLod(envTex, vec2(0.5, 1.0), lod).rgb;
+}
+
+// Returns the leg transmittance; `inScatter` receives what to ADD after it.
+float splatFog(vec3 camPos, vec3 P, out vec3 inScatter) {
+    inScatter = vec3(0.0);
+    const float odAir  = splatHeightFogOd(camPos, P);
+    const float odMurk = (fog.murkDensity > 0.0)
+                                 ? fog.murkDensity * splatMurkPathLength(camPos, P)
+                                 : 0.0;
+    if (odAir <= 0.0 && odMurk <= 0.0) return 1.0;
+
+    const float Ta = exp(-odAir);
+    const float Tm = exp(-min(odMurk, 80.0));
+    const vec3  fogLight  = lights.ambient + splatEnvTop();
+    const vec3  airAlbedo = (fog.enabled > 0.5) ? fog.color : vec3(1.0);
+    // Sequential air-then-murk composition, mirroring applyHeteroSurfaceFog +
+    // applyMurk: lit*(Ta*Tm) + [airIn*(1-Ta)]*Tm + murkIn*(1-Tm).
+    inScatter = airAlbedo * fogLight * (1.0 - Ta) * Tm
+              + fog.murkColor * fogLight * (1.0 - Tm);
+    return Ta * Tm;
 }
 
 #endif// THREEPP_SPLAT_COMMON_GLSL

@@ -426,8 +426,16 @@ void VulkanRenderer::Impl::createRasterGbufImages(uint32_t w, uint32_t h) {
                 g.normal = createAttachmentImage2D(w, h, VK_FORMAT_R16G16B16A16_SFLOAT,
                                                    colorUsage, VK_IMAGE_ASPECT_COLOR_BIT,
                                                    N("normal"));
+                // motion additionally carries STORAGE, unconditionally: the
+                // Gaussian-splat pass writes camera-reprojection motion into it
+                // for the pixels a splat cloud owns (SplatPass.hpp), and a
+                // storage write needs the usage bit at CREATION — by the time a
+                // SplatCloud shows up in a scene these images already exist.
+                // One image of the twenty here, and only the write path pays
+                // whatever compression the bit costs.
                 g.motion = createAttachmentImage2D(w, h, VK_FORMAT_R16G16B16A16_SFLOAT,
-                                                   colorUsage, VK_IMAGE_ASPECT_COLOR_BIT,
+                                                   colorUsage | VK_IMAGE_USAGE_STORAGE_BIT,
+                                                   VK_IMAGE_ASPECT_COLOR_BIT,
                                                    N("motion"));
                 g.ids    = createAttachmentImage2D(w, h, VK_FORMAT_R16G16B16A16_UINT,
                                                    colorUsage, VK_IMAGE_ASPECT_COLOR_BIT,

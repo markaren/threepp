@@ -2277,8 +2277,11 @@ void VulkanRenderer::Impl::collectSplatClouds(Object3D& scene, Camera& camera) {
             // which is the one thing that WAS written with it.
             std::memcpy(splatParams_.view, camera.matrixWorldInverse.elements.data(), 64);
             std::memcpy(splatParams_.proj, camera.projectionMatrix.elements.data(), 64);
+            std::memcpy(splatParams_.camWorld, camera.matrixWorld->elements.data(), 64);
+            const Matrix4 projRev = reverseZVk(camera.projectionMatrix);
+            std::memcpy(splatProjRevZ_, projRev.elements.data(), 64);
             Matrix4 projInv;
-            projInv.copy(reverseZVk(camera.projectionMatrix)).invert();
+            projInv.copy(projRev).invert();
             std::memcpy(splatParams_.projInverse, projInv.elements.data(), 64);
 
             const auto& cw = camera.matrixWorld->elements;

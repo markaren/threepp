@@ -60,6 +60,18 @@
 // no shadows, appear in no reflection, contribute to no probe and are invisible
 // to the RT sensors — all deliberate, all documented as out of scope in
 // plans/gaussian-splats-vulkan.md.
+//
+// ENVIRONMENT KNOBS, all off by default and all A/B switches rather than
+// settings — each one turns off a term so its contribution can be MEASURED
+// rather than asserted (which is how the motion-vector +2.4 dB and the
+// blend-domain +9.6 dB numbers in the commit log were arrived at):
+//
+//   THREEPP_VK_SPLAT_CHECKSUM=1   hash the sorted key/payload arrays, print the
+//                                 entry count, and assert two invariants (the
+//                                 scan really is the exclusive scan; the sorted
+//                                 keys really are non-decreasing)
+//   THREEPP_VK_SPLAT_NOMOTION=1   skip the gbufMotion write
+//   THREEPP_VK_SPLAT_NOFOG=1      skip the per-splat fog
 
 #ifndef THREEPP_VULKAN_SPLAT_PASS_HPP
 #define THREEPP_VULKAN_SPLAT_PASS_HPP
@@ -119,8 +131,18 @@ namespace threepp::vulkan {
         struct ResizeInputs {
             const VkImageView* sceneHdrPerFrame = nullptr;// rgba16f GENERAL
             const VkImageView* depthPerFrame    = nullptr;// D32 reversed-Z, read-only layout
-            const VkImageView* motionPerFrame   = nullptr;// rgba16f GENERAL (V2)
-            const VkImageView* idsPerFrame      = nullptr;// rgba16ui GENERAL (V2)
+            const VkImageView* motionPerFrame   = nullptr;// rgba16f, STORAGE-capable
+            const VkImage*     motionImages     = nullptr;// [framesInFlight], for the layout flip
+            const VkImageView* idsPerFrame      = nullptr;// rgba16ui, sampled read-only
+            // The same fog / cloud / lights UBOs the deferred shade reads, and
+            // the prefiltered env — the splat pass has to re-derive the fog the
+            // shade already baked into sceneHdr for everything else.
+            const VkBuffer*    fogUbos    = nullptr;// [framesInFlight]
+            const VkBuffer*    cloudUbos  = nullptr;// [framesInFlight]
+            const VkBuffer*    lightsUbos = nullptr;// [framesInFlight]
+            VkImageView        envView    = VK_NULL_HANDLE;
+            VkSampler          envSampler = VK_NULL_HANDLE;
+            uint32_t           envMips    = 1;
         };
         void resize(uint32_t width, uint32_t height, const ResizeInputs& in);
 
@@ -134,12 +156,20 @@ namespace threepp::vulkan {
             float view[16]{};      // world -> view (camera.matrixWorldInverse)
             float proj[16]{};      // view -> clip, GL convention, jittered
             float projInverse[16]{};// clip -> view, REVERSE-Z (matches gbufDepth)
+            float camWorld[16]{};  // view -> world (camera.matrixWorld)
+            // View space -> the PREVIOUS frame's unjittered clip, composed on
+            // the host from TaaResolve's own sky-reprojection so the splat
+            // motion vectors come out of the same matrices the raster's do.
+            float prevVPfromView[16]{};
             float camPos[3]{};
             float camFwd[3]{};
+            float jitterClip[2]{};// the shear already applied to `proj`
             float nearPlane   = 0.1f;
             float preExposure = 1.f;
             bool  orthographic = false;
             bool  depthTest    = true;
+            bool  motionVectors = true;// write gbufMotion + the reactivity flag
+            bool  fog           = false;// a medium is active this frame
             // The scene background is a flat colour, so PostComposite hands
             // those pixels back verbatim and the shade never pre-exposed them.
             bool  bgIsSolidColor = false;
@@ -246,6 +276,11 @@ namespace threepp::vulkan {
         // Cached per-frame image views so a cloud added mid-run can have its
         // freshly-allocated sets written without another resize() round trip.
         std::vector<VkImageView> sceneHdrViews_, depthViews_, motionViews_, idsViews_;
+        std::vector<VkImage>     motionImages_;
+        std::vector<VkBuffer>    fogUbos_, cloudUbos_, lightsUbos_;
+        VkImageView envView_    = VK_NULL_HANDLE;
+        VkSampler   envSampler_ = VK_NULL_HANDLE;
+        uint32_t    envMips_    = 1;
 
         VkDeviceSize uboStride_ = 0;// per-cloud slot stride, alignment-padded
         mutable uint32_t lastFrame_ = 0;// frame slot the last record() wrote

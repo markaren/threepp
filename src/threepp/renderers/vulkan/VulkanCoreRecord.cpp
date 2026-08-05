@@ -975,10 +975,39 @@ void VulkanRenderer::Impl::recordSplats(VkCommandBuffer cb) {
             if (view().orthoFrame_) {
                 p.proj[12] -= jClipX;
                 p.proj[13] -= jClipY;
+                p.jitterClip[0] = -jClipX;
+                p.jitterClip[1] = -jClipY;
             } else {
                 p.proj[8] += jClipX;
                 p.proj[9] += jClipY;
+                p.jitterClip[0] = jClipX;
+                p.jitterClip[1] = jClipY;
             }
+
+            // View space -> previous frame's unjittered clip, in one matrix.
+            // taaSkyReproj_ is prevVP * inverse(currVPunjittered) and was built
+            // in uploadRasterCameraUbo BEFORE rasterPrevVP_ rolled over to this
+            // frame, so composing it with this frame's projection is the only
+            // way to get the real previous VP here — and it guarantees the
+            // splat motion vectors and the raster's come from the same
+            // matrices, which is the whole point of writing them at all.
+            {
+                Matrix4 sky, projRev, prev;
+                std::memcpy(sky.elements.data(), view().taaSkyReproj_.data(), 64);
+                std::memcpy(projRev.elements.data(), splatProjRevZ_, 64);
+                prev.multiplyMatrices(sky, projRev);
+                std::memcpy(p.prevVPfromView, prev.elements.data(), 64);
+            }
+
+            // A medium is active when there is anything to extinguish along the
+            // camera->splat leg. Both terms are the ones splat_common.glsl's
+            // splatFog actually evaluates; with neither, the fog branch is
+            // skipped outright and the frame is bit-identical to a fogless one.
+            p.fog = (heightFogEnabled_ && heightFogDensity_ > 0.f) || murkDensity_ > 0.f;
+            if (const char* e = std::getenv("THREEPP_VK_SPLAT_NOMOTION"); e && *e && *e != '0')
+                p.motionVectors = false;
+            if (const char* e = std::getenv("THREEPP_VK_SPLAT_NOFOG"); e && *e && *e != '0')
+                p.fog = false;
             // The factor the shade already baked into every sceneHdr store.
             // Getting this wrong is invisible until the physical camera is on,
             // and then the splats are wrong by the whole exposure gain.

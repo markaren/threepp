@@ -2874,6 +2874,9 @@ namespace threepp {
         // point in the frame that holds a Camera&). The jitter shear is added
         // at record time because the raster does not choose it until later.
         vulkan::SplatPass::RecordParams splatParams_{};
+        // This frame's REVERSE-Z projection, stashed alongside — recordSplats
+        // composes it with taaSkyReproj_ to get view space -> previous clip.
+        float splatProjRevZ_[16]{};
         // setSplatDebugChecksum — the determinism gate's switch. Off by
         // default; the hashes cost two extra dispatches and an atomic per
         // composited pixel.
