@@ -352,6 +352,16 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                 if (sn.geomB) sn.attrVer = sn.geomB->attributesVersion();
                 sceneSnapshot_.push_back(sn);
                 if (matHidden) return;
+                // SplatClouds are composited by the compute tile rasterizer
+                // (SplatPass), not by the G-buffer. The unit quad they carry is
+                // a GL-backend implementation detail — it has no normals and
+                // describes no surface — so it is recorded in the snapshot (an
+                // add/remove still invalidates the scene) and then dropped
+                // before any entry, BLAS or TLAS instance is built from it.
+                // The missing "normal" attribute would exclude it two lines
+                // below anyway; saying so out loud is the difference between an
+                // invariant and a coincidence.
+                if (dynamic_cast<SplatCloud*>(m)) return;
                 auto geom = m->geometry();
                 if (!geom || !geom->hasAttribute("position")) return;
                 if (!geom->hasAttribute("normal")) return;
@@ -2252,6 +2262,108 @@ void VulkanRenderer::Impl::collectWorldSprites(Object3D& scene) {
                 e.tex = mm->map.get();
                 lastVisibleSprites_.push_back(e);
             });
+        }
+
+void VulkanRenderer::Impl::collectSplatClouds(Object3D& scene, Camera& camera) {
+            lastVisibleSplats_.clear();
+            if (!splat_) return;
+
+            camera.updateWorldMatrix(true, false);
+
+            // Everything the pass needs from the camera. The projection stays
+            // in threepp's GL convention (NDC z in [-1,1], y up): the splat
+            // pass does its own NDC -> pixel mapping, so it never wants the
+            // reverse-Z form — except for linearizing the G-buffer depth,
+            // which is the one thing that WAS written with it.
+            std::memcpy(splatParams_.view, camera.matrixWorldInverse.elements.data(), 64);
+            std::memcpy(splatParams_.proj, camera.projectionMatrix.elements.data(), 64);
+            Matrix4 projInv;
+            projInv.copy(reverseZVk(camera.projectionMatrix)).invert();
+            std::memcpy(splatParams_.projInverse, projInv.elements.data(), 64);
+
+            const auto& cw = camera.matrixWorld->elements;
+            splatParams_.camPos[0] = cw[12];
+            splatParams_.camPos[1] = cw[13];
+            splatParams_.camPos[2] = cw[14];
+            // Camera forward is -Z of its world matrix (threepp convention).
+            splatParams_.camFwd[0] = -cw[8];
+            splatParams_.camFwd[1] = -cw[9];
+            splatParams_.camFwd[2] = -cw[10];
+            splatParams_.orthographic = camera.is<OrthographicCamera>();
+            splatParams_.depthTest    = true;
+            if (auto* pc = dynamic_cast<PerspectiveCamera*>(&camera)) {
+                splatParams_.nearPlane = pc->nearPlane;
+            } else if (auto* oc = dynamic_cast<OrthographicCamera*>(&camera)) {
+                splatParams_.nearPlane = oc->nearPlane;
+            }
+
+            scene.traverseVisible([&](Object3D& o) {
+                auto* sc = dynamic_cast<SplatCloud*>(&o);
+                if (!sc || sc->splatCount() == 0) return;
+                auto mat = sc->material();
+                if (mat && !mat->visible) return;
+
+                vulkan::SplatPass::CloudEntry e{};
+                e.cloud = sc;
+                e.debugNonFinite = sc->debugNonFinite();
+                std::memcpy(e.model, sc->matrixWorld->elements.data(), 64);
+
+                // p1 / p99 of the view distances, from a fixed-stride sample —
+                // the same estimator, the same sample size and the same
+                // percentiles the GL path uses (SplatCloud.cpp's SORT_CLAMP_*),
+                // because the tail-band doctrine only works if both ends of it
+                // agree on where the content interval is. A stride sample is
+                // exact-repeatable (no RNG, no state), and 8192 depths pin a
+                // 1st percentile far more tightly than a sort key needs.
+                //
+                // Only the interval comes from here; the exact min/max come
+                // from the projection pass's atomics on the GPU, so a splat
+                // outside the sample still lands in a monotone tail bucket
+                // instead of collapsing onto the end.
+                Matrix4 modelView;
+                modelView.multiplyMatrices(camera.matrixWorldInverse, *sc->matrixWorld);
+                const auto& mv = modelView.elements;
+
+                const auto& means = sc->data().means;
+                const size_t n = means.size();
+                constexpr size_t kSampleTarget = 8192;// == SORT_SAMPLE_TARGET
+                const size_t stride = std::max<size_t>(1, n / kSampleTarget);
+                std::vector<float> sample;
+                sample.reserve(n / stride + 1);
+                for (size_t i = 0; i < n; i += stride) {
+                    const auto& m = means[i];
+                    // View distance is positive in front of the camera; GL view
+                    // space looks down -z, so it is the negated z row.
+                    const float d = -(mv[2] * m.x + mv[6] * m.y + mv[10] * m.z + mv[14]);
+                    if (std::isfinite(d) && d > 0.f) sample.push_back(d);
+                }
+                if (sample.size() >= 3) {
+                    const auto last   = sample.size() - 1;
+                    const auto loRank = static_cast<size_t>(0.01f * static_cast<float>(last));
+                    const auto hiRank = static_cast<size_t>(0.99f * static_cast<float>(last));
+                    std::nth_element(sample.begin(),
+                                     sample.begin() + static_cast<std::ptrdiff_t>(loRank),
+                                     sample.end());
+                    e.pLo = sample[loRank];
+                    std::nth_element(sample.begin() + static_cast<std::ptrdiff_t>(loRank) + 1,
+                                     sample.begin() + static_cast<std::ptrdiff_t>(hiRank),
+                                     sample.end());
+                    e.pHi = sample[hiRank];
+                    // A little air on each end so the p1/p99 splats themselves
+                    // are not sitting in the tail bands (SORT_CLAMP_MARGIN).
+                    const float mid  = 0.5f * (e.pLo + e.pHi);
+                    const float half = 0.5f * (e.pHi - e.pLo) * 1.02f;
+                    e.pLo = mid - half;
+                    e.pHi = mid + half;
+                } else if (!sample.empty()) {
+                    e.pLo = sample.front();
+                    e.pHi = sample.back();
+                }
+
+                lastVisibleSplats_.push_back(e);
+            });
+
+            splat_->syncClouds(lastVisibleSplats_);
         }
 
 }// namespace threepp

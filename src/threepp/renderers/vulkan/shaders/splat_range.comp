@@ -1,0 +1,34 @@
+#version 460
+#extension GL_EXT_scalar_block_layout : require
+#extension GL_GOOGLE_include_directive : enable
+
+// Splat stage 5/6 — tile -> [begin, end) from the sorted key array.
+//
+// The sort put every tile's entries in one contiguous run (the tile id is the
+// key's high bits), so the ranges are just the boundaries between runs. One
+// thread per entry, each comparing against its predecessor. tileRange was
+// zero-filled before the dispatch, so a tile with no entries keeps (0, 0) and
+// the raster skips it without a branch of its own.
+
+layout(local_size_x = 256) in;
+
+#include "splat_common.glsl"
+
+void main() {
+    const uint i = gl_GlobalInvocationID.x;
+    const uint n = g.entryCount;
+    if (i >= n) return;
+
+    const uint tile = keysA[i] >> ubo.depthBits;
+
+    if (i == 0u) {
+        tileRange[tile].x = 0u;
+    } else {
+        const uint prev = keysA[i - 1u] >> ubo.depthBits;
+        if (prev != tile) {
+            tileRange[prev].y = i;
+            tileRange[tile].x = i;
+        }
+    }
+    if (i == n - 1u) tileRange[tile].y = n;
+}

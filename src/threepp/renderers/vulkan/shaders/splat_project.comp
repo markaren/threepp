@@ -1,0 +1,150 @@
+#version 460
+#extension GL_EXT_scalar_block_layout : require
+#extension GL_GOOGLE_include_directive : enable
+
+// Splat stage 1/6 — project, cull, and count tiles. One thread per splat.
+//
+// This is the GL vertex shader (SplatCloud.cpp) doing the same EWA algebra for
+// the same reason, with two differences that are the whole point of a tile
+// rasterizer: the result is written to a buffer instead of a varying, and the
+// splat's screen footprint is turned into a TILE RECT plus a count rather than
+// a quad. The count is what the prefix sum consumes, and the prefix sum is what
+// makes the expansion deterministic.
+//
+// SCREEN SPACE IS Y-DOWN here. threepp's projection is GL-convention (NDC y
+// up) and the Vulkan raster negates y at gl_Position, so the framebuffer maps
+// ndc.y = +1 to row 0. The Jacobian's y row is negated to match — get that
+// wrong and every splat's covariance is mirrored about its own centre, which
+// looks like a subtle blur rather than like a bug.
+
+layout(local_size_x = 256) in;
+
+#include "splat_common.glsl"
+
+void main() {
+    const uint i = gl_GlobalInvocationID.x;
+    if (i >= ubo.splatCount) return;
+
+    // Cull is expressed as "count 0 tiles": the prefix sum then hands this
+    // splat a zero-width range and the expansion writes nothing for it.
+    counts[i] = 0u;
+    proj[i].tileCount = 0u;
+
+    const vec3 meanLocal = geom[i].mean;
+    const vec4 viewPos   = ubo.modelView * vec4(meanLocal, 1.0);
+
+    // Negated comparison so a non-finite mean lands here too.
+    if (!(viewPos.z <= -ubo.nearPlane)) return;
+
+    // 3D covariance, symmetric, precomputed on the CPU as R*S*S^T*R^T
+    // (SplatData::computeCovariance — the same six floats the GL path uploads).
+    const mat3 sigma = mat3(geom[i].cov[0], geom[i].cov[1], geom[i].cov[2],
+                            geom[i].cov[1], geom[i].cov[3], geom[i].cov[4],
+                            geom[i].cov[2], geom[i].cov[4], geom[i].cov[5]);
+
+    const mat3 W = mat3(ubo.modelView);
+    const mat3 sigmaView = W * sigma * transpose(W);
+
+    // Focal lengths in pixels straight out of the projection: fx = 0.5*W*P[0][0].
+    const float focalX = 0.5 * ubo.viewport.x * ubo.proj[0][0];
+    const float focalY = 0.5 * ubo.viewport.y * ubo.proj[1][1];
+
+    const bool ortho = (ubo.flags & kSplatFlagOrtho) != 0u;
+
+    mat3 J;
+    if (ortho) {
+        // A parallel projection is already affine: the Jacobian is the constant
+        // pixels-per-world-unit scale, not the perspective form (which would
+        // shrink distant splats under a projection that has no perspective).
+        J = mat3(vec3(focalX, 0.0, 0.0),
+                 vec3(0.0, -focalY, 0.0),
+                 vec3(0.0, 0.0, 0.0));
+    } else {
+        const float zInv  = 1.0 / -viewPos.z;// viewPos.z < 0 here
+        const float zInv2 = zInv * zInv;
+        J = mat3(vec3(focalX * zInv, 0.0, 0.0),
+                 vec3(0.0, -focalY * zInv, 0.0),
+                 vec3(focalX * viewPos.x * zInv2, -focalY * viewPos.y * zInv2, 0.0));
+    }
+
+    const mat3 cov2 = J * sigmaView * transpose(J);
+
+    const float a = cov2[0][0] + kScreenDilation;
+    const float b = cov2[0][1];
+    const float c = cov2[1][1] + kScreenDilation;
+
+    const float det = a * c - b * b;
+    if (!(det > 0.0)) return;// also catches NaN
+
+    // 3 sigma of the larger principal axis, in pixels, clamped so one splat
+    // straddling the near plane cannot claim the whole screen (and with it the
+    // whole expansion budget).
+    const float mid    = 0.5 * (a + c);
+    const float lambda = mid + sqrt(max(0.0, mid * mid - det));
+    float radius = 3.0 * sqrt(lambda);
+    if (!(radius > 0.0)) return;
+    radius = min(radius, kMaxRadiusFactor * max(ubo.viewport.x, ubo.viewport.y));
+
+    const vec4 clip = ubo.proj * viewPos;
+    if (!(abs(clip.w) > 1e-9)) return;
+    const vec2 ndc = clip.xy / clip.w;
+
+    const vec2 center = vec2((ndc.x * 0.5 + 0.5) * ubo.viewport.x,
+                             (0.5 - ndc.y * 0.5) * ubo.viewport.y);
+    if (any(isnan(center))) return;
+
+    const vec2 lo = center - vec2(radius);
+    const vec2 hi = center + vec2(radius);
+    if (hi.x < 0.0 || hi.y < 0.0 || lo.x >= ubo.viewport.x || lo.y >= ubo.viewport.y) return;
+
+    const uint tx0 = uint(clamp(floor(lo.x / float(kTileW)), 0.0, float(ubo.tilesX - 1u)));
+    const uint tx1 = uint(clamp(floor(hi.x / float(kTileW)), 0.0, float(ubo.tilesX - 1u)));
+    const uint ty0 = uint(clamp(floor(lo.y / float(kTileH)), 0.0, float(ubo.tilesY - 1u)));
+    const uint ty1 = uint(clamp(floor(hi.y / float(kTileH)), 0.0, float(ubo.tilesY - 1u)));
+    const uint nTiles = (tx1 - tx0 + 1u) * (ty1 - ty0 + 1u);
+
+    // View-direction-dependent colour, evaluated ONCE per splat rather than
+    // once per covered pixel — the single biggest reason a tile rasterizer
+    // beats a quad rasterizer on a degree-3 cloud.
+    const vec3 meanWorld = (ubo.model * vec4(meanLocal, 1.0)).xyz;
+    const vec3 dir = ortho ? normalize(ubo.camFwdWs.xyz)
+                           : normalize(meanWorld - ubo.camPosWs.xyz);
+    const vec3 shRgb = splatShColor(i, dir);
+
+    vec3 color;
+    if (any(isnan(shRgb)) || any(isinf(shRgb))) {
+        // Checked BEFORE any clamp: max(NaN, 0.0) is 0.0 on most hardware, so
+        // clamping first would launder a corrupt coefficient into a colour that
+        // looks perfectly plausible. The GL path discards such a fragment; the
+        // splat is the unit here, so it is dropped whole (identical result —
+        // the colour is constant across the footprint).
+        if ((ubo.flags & kSplatFlagDebugNaN) == 0u) return;
+        color = vec3(1.0, 0.0, 1.0);
+    } else {
+        // Stored DISPLAY-REFERRED, which is the domain the coefficients were
+        // fitted in and the domain the blend has to happen in. The raster
+        // decodes the composited result once, at the end (splat_common.glsl).
+        color = max(shRgb, vec3(0.0));
+    }
+
+    const float dist = -viewPos.z;
+
+    proj[i].center    = center;
+    proj[i].conic     = vec3(c, -b, a) / det;
+    proj[i].opacity   = geom[i].opacity;
+    proj[i].color     = color;
+    proj[i].viewDist  = dist;
+    proj[i].tileX0    = tx0;
+    proj[i].tileY0    = ty0;
+    proj[i].tileX1    = tx1;
+    proj[i].tileY1    = ty1;
+    proj[i].tileCount = nTiles;
+    counts[i] = nTiles;
+
+    // Exact min/max over the VISIBLE distances, for the sort key's tail bands.
+    // atomicMin/Max on the IEEE bit pattern of a positive float is a float
+    // min/max, and both are exact and order-independent — no determinism cost.
+    atomicMin(g.minDistBits, floatBitsToUint(dist));
+    atomicMax(g.maxDistBits, floatBitsToUint(dist));
+    atomicAdd(g.visibleCount, 1u);
+}

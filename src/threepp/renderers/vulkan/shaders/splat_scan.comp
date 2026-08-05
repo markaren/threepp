@@ -1,0 +1,86 @@
+#version 460
+#extension GL_EXT_scalar_block_layout : require
+#extension GL_GOOGLE_include_directive : enable
+
+// Splat stage 2/6 — block-local EXCLUSIVE prefix sum, plus the block total.
+//
+// This exists so the tile expansion can be deterministic. The obvious
+// expansion — every splat atomicAdds a global cursor and writes there — gives a
+// different (splat, tile) ordering every run, which the radix sort then
+// faithfully preserves inside every group of equal keys, and the frame stops
+// being reproducible. A prefix sum over the per-splat tile counts instead gives
+// splat i a base index that is a pure function of counts[0..i), so the whole
+// expanded list is a pure function of the projection.
+//
+// One workgroup handles kScanBlock = 1024 elements: 256 threads x 4 each, a
+// serial scan per thread, then a Hillis-Steele scan of the 256 thread totals in
+// shared memory. The block total goes to scanScratch[sumOff + block] and the
+// driver recurses on THAT array until one block is left (SplatPass::recordScan),
+// which covers 1024^3 elements in three levels — far past anything a splat
+// cloud can produce.
+//
+// No subgroup ops anywhere in this file, deliberately. The codebase never
+// queries VkPhysicalDeviceSubgroupProperties and enables subgroupSizeControl
+// only inside THREEPP_WITH_FSR, so a subgroup-width assumption here would be an
+// unchecked portability bet on the one pass that must be bit-reproducible.
+
+layout(local_size_x = 256) in;
+
+#include "splat_common.glsl"
+
+shared uint sTotals[kScanThreads];
+
+// Which array this dispatch is scanning (arg0):
+//   0  counts[]  -> offsets[]                 the per-splat tile counts
+//   1  scanScratch[srcOff + i], in place      any recursion level above 0
+//   2  hist[]    -> hist[], in place          the radix [bin][block] histogram
+// In-place is safe: each element is read by exactly the thread that later
+// writes it, and that thread has already loaded all of its own before storing
+// any of them.
+uint loadIn(uint i) {
+    if (pc.arg0 == 0u) return counts[i];
+    if (pc.arg0 == 2u) return hist[i];
+    return scanScratch[pc.srcOff + i];
+}
+void storeOut(uint i, uint v) {
+    if (pc.arg0 == 0u)      offsets[i] = v;
+    else if (pc.arg0 == 2u) hist[i] = v;
+    else                    scanScratch[pc.dstOff + i] = v;
+}
+
+void main() {
+    const uint tid   = gl_LocalInvocationID.x;
+    const uint block = gl_WorkGroupID.x;
+    const uint base  = block * kScanBlock + tid * kScanPerThread;
+
+    // Serial exclusive scan of this thread's kScanPerThread elements.
+    uint local[kScanPerThread];
+    uint running = 0u;
+    for (uint k = 0u; k < kScanPerThread; ++k) {
+        const uint idx = base + k;
+        const uint v = (idx < pc.count) ? loadIn(idx) : 0u;
+        local[k] = running;
+        running += v;
+    }
+    sTotals[tid] = running;
+    barrier();
+
+    // Hillis-Steele inclusive scan of the thread totals, then shift to
+    // exclusive. Double-buffered through a register so no thread reads a slot
+    // another thread has already advanced.
+    for (uint off = 1u; off < kScanThreads; off <<= 1u) {
+        const uint add = (tid >= off) ? sTotals[tid - off] : 0u;
+        barrier();
+        sTotals[tid] += add;
+        barrier();
+    }
+    const uint threadBase = sTotals[tid] - running;// exclusive
+
+    for (uint k = 0u; k < kScanPerThread; ++k) {
+        const uint idx = base + k;
+        if (idx < pc.count) storeOut(idx, threadBase + local[k]);
+    }
+
+    // Block total = the inclusive scan of the last thread.
+    if (tid == kScanThreads - 1u) scanScratch[pc.sumOff + block] = sTotals[tid];
+}

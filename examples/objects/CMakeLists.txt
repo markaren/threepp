@@ -15,6 +15,12 @@ add_example(NAME "points" LINK_IMGUI WEB)
 # Not WEB: SplatCloud's material is a RawShaderMaterial carrying its own
 # "#version 330 core", which a WebGL2 build cannot compile.
 add_example(NAME "gaussian_splats")
+# The one example that drives BOTH backends from one scene, so the GL path can
+# be the Vulkan path's correctness oracle (--vulkan). THREEPP_WITH_VULKAN is
+# PRIVATE on the library target, so the flag has to be restated here.
+if (THREEPP_WITH_VULKAN)
+    target_compile_definitions(gaussian_splats PRIVATE THREEPP_WITH_VULKAN=1)
+endif ()
 
 add_example(NAME "bones" LINK_IMGUI)
 add_example(NAME "decal" LINK_IMGUI)

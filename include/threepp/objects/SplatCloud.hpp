@@ -110,6 +110,10 @@ namespace threepp {
         // it, because there is no meaningful position to paint magenta at.
         void setDebugNonFinite(bool flag);
 
+        // Readable so a backend that does not consume the GL material's
+        // uniforms (the Vulkan compute rasterizer) can honour the same switch.
+        [[nodiscard]] bool debugNonFinite() const { return debugNonFinite_; }
+
         [[nodiscard]] std::string type() const override { return "SplatCloud"; }
 
         // The GLSL, exposed so tests can assert the shader and the C++ SH table
@@ -137,6 +141,7 @@ namespace threepp {
         // common case, since onBeforeRender calls it too — costs 16 compares.
         std::array<float, 16> lastSortMatrix_{};
         bool sorted_{false};
+        bool debugNonFinite_{false};
 
         void buildTextures();
         void sortByDepth(Camera& camera);

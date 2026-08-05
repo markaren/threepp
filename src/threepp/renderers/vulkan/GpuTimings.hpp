@@ -40,7 +40,8 @@ namespace threepp::vulkan {
         TP_Dof           = 8,// thin-lens depth of field (setDepthOfField only)
         TP_Froxel        = 9,// froxel volumetrics: inject + integrate (medium-active frames only)
         TP_SensorImage   = 10,// lens distortion + sensor noise (setLensDistortion / setSensorNoise only)
-        TP_COUNT         = 11,
+        TP_Splat         = 11,// Gaussian-splat tile rasterizer (scenes with a SplatCloud only)
+        TP_COUNT         = 12,
     };
     inline constexpr uint32_t kTimingSlots = TP_COUNT * 2u;
 

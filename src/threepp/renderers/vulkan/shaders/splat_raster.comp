@@ -1,0 +1,156 @@
+#version 460
+#extension GL_EXT_scalar_block_layout : require
+#extension GL_GOOGLE_include_directive : enable
+
+// Splat stage 6/6 — the tile rasterizer. One 16x16 workgroup per tile, one
+// thread per pixel, walking that tile's sorted run FRONT to back.
+//
+// Front-to-back with a running transmittance is the same integral the GL path
+// evaluates back-to-front with fixed-function blending — sum of
+// c_i * a_i * prod_{j<i}(1 - a_j) either way — but it buys two things a
+// back-to-front blend cannot have: the loop can STOP once transmittance falls
+// below a visible threshold, and it can stop at the first splat behind the
+// opaque geometry (the run is depth-ordered, so everything after it is behind
+// it too). That is the software depth test: test on, write off.
+//
+// Splats are staged through shared memory a tile-worth at a time. 256 threads
+// cooperatively load 256 entries, then every thread walks the same 256 — so the
+// per-splat record is read once from global memory per tile instead of once per
+// pixel, which is the whole reason this arrangement beats a quad rasterizer.
+//
+// The alpha/transmittance constants (1/255 floor, 0.99 ceiling) and the
+// negated comparisons that make NaN fall on the reject side are lifted from
+// the GL fragment shader on purpose: the two backends have to agree on which
+// fragments exist before they can be compared on what colour those fragments
+// are.
+
+layout(local_size_x = 16, local_size_y = 16) in;
+
+#include "splat_common.glsl"
+
+shared vec2  sCenter[kTilePixels];
+shared vec3  sConic[kTilePixels];
+shared vec3  sColor[kTilePixels];
+shared float sOpacity[kTilePixels];
+shared float sDist[kTilePixels];
+shared uint  sActive;
+
+// View-space distance from a REVERSED-Z NDC depth. Only the projection
+// inverse's z/w rows matter; mirrors viewDepth() in dof_coc.comp, which reads
+// the same image with the same matrix.
+float viewDepth(float zNdc) {
+    const float vz = ubo.projInv[2][2] * zNdc + ubo.projInv[3][2];
+    const float vw = ubo.projInv[2][3] * zNdc + ubo.projInv[3][3];
+    return -(vz / vw);
+}
+
+void main() {
+    const uint tileId = gl_WorkGroupID.y * ubo.tilesX + gl_WorkGroupID.x;
+    const ivec2 px = ivec2(gl_WorkGroupID.xy * uvec2(kTileW, kTileH) + gl_LocalInvocationID.xy);
+    const uint lid = gl_LocalInvocationIndex;
+
+    const bool inside = px.x < int(ubo.viewport.x) && px.y < int(ubo.viewport.y);
+    const vec2 pxc = vec2(px) + vec2(0.5);
+
+    // Opaque geometry in front of this pixel, as a view distance. Reverse-Z
+    // clears to 0, which linearizes to the far plane — so an empty pixel keeps
+    // every splat, which is what a sky-heavy framing needs.
+    float geomDist = 3.4e38;
+    if ((ubo.flags & kSplatFlagDepthTest) != 0u && inside) {
+        geomDist = viewDepth(texelFetch(gbufDepth, px, 0).x);
+        if (!(geomDist > 0.0)) geomDist = 3.4e38;
+    }
+
+    const uvec2 range = tileRange[tileId];
+
+    float T = 1.0;
+    vec3  C = vec3(0.0);
+    bool  done = !inside;
+
+    uint i = range.x;
+    while (i < range.y) {
+        barrier();// the previous batch's LDS reads are finished
+        if (lid == 0u) sActive = 0u;
+
+        const uint n = min(kTilePixels, range.y - i);
+        if (lid < n) {
+            const uint s = valsA[i + lid];
+            sCenter[lid]  = proj[s].center;
+            sConic[lid]   = proj[s].conic;
+            sColor[lid]   = proj[s].color;
+            sOpacity[lid] = proj[s].opacity;
+            sDist[lid]    = proj[s].viewDist;
+        }
+        barrier();
+
+        if (!done) {
+            for (uint k = 0u; k < n; ++k) {
+                // Depth-ordered run: the first splat behind the geometry ends
+                // this pixel outright.
+                if (sDist[k] > geomDist) { done = true; break; }
+
+                const vec2 d = sCenter[k] - pxc;
+                const vec3 cn = sConic[k];
+                const float power = -0.5 * (cn.x * d.x * d.x + 2.0 * cn.y * d.x * d.y +
+                                            cn.z * d.y * d.y);
+                // Negated so NaN — which fails every comparison — is rejected.
+                if (!(power <= 0.0)) continue;
+
+                float alpha = sOpacity[k] * exp(power);
+                if (!(alpha >= kMinAlpha)) continue;
+                alpha = min(kMaxAlpha, alpha);
+
+                C += sColor[k] * (alpha * T);
+                T *= (1.0 - alpha);
+                if (T < kMinAlpha) { done = true; break; }
+            }
+        }
+
+        if (!done) atomicAdd(sActive, 1u);
+        barrier();
+        // Uniform across the workgroup, so breaking here is legal and the tile
+        // stops the moment every one of its pixels has saturated.
+        if (sActive == 0u) break;
+        i += n;
+    }
+
+    if (!inside || range.y == range.x) return;
+
+    const float coverage = 1.0 - T;
+    if (coverage <= 0.0) return;
+
+    // C is the DISPLAY-REFERRED composite, premultiplied by coverage (see the
+    // colour-domain note in splat_common.glsl). Un-premultiply, decode once,
+    // re-premultiply: an sRGB image with an alpha channel entering a linear
+    // pipeline. Opaque pixels come out bit-for-bit the GL answer.
+    vec3 lin = splatSrgbToLinear(C / coverage) * coverage;
+
+    // Pre-exposure — the factor the shade already baked into every sceneHdr
+    // store, and the single easiest thing in this pass to leave out and never
+    // see, because it is 1.0 until a physical camera is configured.
+    //
+    // EXCEPT on solid-background sky pixels: the shade deliberately skips the
+    // pre-exposure there so PostComposite can hand the configured background
+    // colour back verbatim. Pre-exposing a splat over one of those would make
+    // it brighter than the same splat one pixel away over geometry.
+    float preExp = ubo.preExposure;
+    if ((ubo.flags & kSplatFlagBgSolid) != 0u && imageLoad(gbufIds, px).x < 1u) preExp = 1.0;
+    lin *= preExp;
+
+    // Splats OVER whatever the shade left here; the background keeps whatever
+    // transmittance the cloud left of it.
+    const vec4 dst = imageLoad(sceneHdr, px);
+    const vec3 outRgb = dst.rgb * T + lin;
+    imageStore(sceneHdr, px, vec4(outRgb, dst.a));
+
+    if ((ubo.flags & kSplatFlagChecksum) != 0u) {
+        // Order-independent hash of the composited result: uint addition is
+        // commutative and associative, so the sum is the same however the
+        // workgroups interleave. Quantized to 2^-12 so it is a determinism
+        // gate, not a last-bit fp16 lottery.
+        const uvec3 q = uvec3(clamp(outRgb, vec3(0.0), vec3(64.0)) * 4096.0);
+        const uint h = (q.x * 0x9E3779B9u) ^ (q.y * 0x85EBCA6Bu) ^ (q.z * 0xC2B2AE35u) ^
+                       (uint(px.y * 8191 + px.x) * 0x27D4EB2Du);
+        atomicAdd(g.hashColor, h);
+    }
+}

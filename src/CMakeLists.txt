@@ -796,6 +796,7 @@ if (THREEPP_WITH_VULKAN)
             "threepp/renderers/vulkan/PostComposite.cpp"
             "threepp/renderers/vulkan/DofPass.cpp"
             "threepp/renderers/vulkan/SensorPass.cpp"
+            "threepp/renderers/vulkan/SplatPass.cpp"
             "threepp/renderers/vulkan/DeferredShade.cpp"
             "threepp/renderers/vulkan/ProbeGI.cpp"
             "threepp/renderers/vulkan/HiZPyramid.cpp"
@@ -1088,6 +1089,45 @@ if (THREEPP_WITH_VULKAN)
         "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/dof_combine.comp"
         kDofCombineCompSpv
         _dof_combine_spv_h)
+    # Gaussian-splat compute tile rasterizer (project -> prefix sum ->
+    # deterministic expansion -> radix sort -> per-tile accumulation into
+    # sceneHdr). See vulkan/SplatPass.{hpp,cpp} and shaders/splat_common.glsl.
+    compile_vulkan_shader(threepp
+        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/splat_project.comp"
+        kSplatProjectCompSpv
+        _splat_project_spv_h)
+    compile_vulkan_shader(threepp
+        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/splat_scan.comp"
+        kSplatScanCompSpv
+        _splat_scan_spv_h)
+    compile_vulkan_shader(threepp
+        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/splat_scan_add.comp"
+        kSplatScanAddCompSpv
+        _splat_scan_add_spv_h)
+    compile_vulkan_shader(threepp
+        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/splat_expand.comp"
+        kSplatExpandCompSpv
+        _splat_expand_spv_h)
+    compile_vulkan_shader(threepp
+        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/splat_radix_hist.comp"
+        kSplatRadixHistCompSpv
+        _splat_radix_hist_spv_h)
+    compile_vulkan_shader(threepp
+        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/splat_radix_scatter.comp"
+        kSplatRadixScatterCompSpv
+        _splat_radix_scatter_spv_h)
+    compile_vulkan_shader(threepp
+        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/splat_range.comp"
+        kSplatRangeCompSpv
+        _splat_range_spv_h)
+    compile_vulkan_shader(threepp
+        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/splat_raster.comp"
+        kSplatRasterCompSpv
+        _splat_raster_spv_h)
+    compile_vulkan_shader(threepp
+        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/splat_checksum.comp"
+        kSplatChecksumCompSpv
+        _splat_checksum_spv_h)
     # Auto-exposure: log2-luma histogram over sceneHdr. See AutoExposure.{hpp,cpp}.
     compile_vulkan_shader(threepp
         "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/lum_histogram.comp"

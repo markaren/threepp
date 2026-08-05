@@ -1,0 +1,52 @@
+#version 460
+#extension GL_EXT_scalar_block_layout : require
+#extension GL_GOOGLE_include_directive : enable
+
+// Splat stage 4a/6 — per-block digit histogram of an LSD radix sort.
+//
+// Classic four-bit counting sort (Satish/Harris/Garland; the same structure
+// FidelityFX ParallelSort uses), expressed on this pass's own prefix sum
+// instead of on subgroup intrinsics. The histogram is written [bin][block], so
+// a single exclusive scan of the flattened array yields, for every (bin,
+// block) pair, the exact base index that block's elements of that bin occupy in
+// the output — which is what makes the scatter stable and therefore the sort
+// bit-reproducible.
+//
+// pc.arg0 = shift (0, 4, 8, ... 28), pc.arg1 = block count, pc.arg2 = source
+// side of the ping-pong (0 = A, 1 = B). The element count is g.entryCount,
+// read on the GPU: the expansion total is not known to the host, so the passes
+// are dispatched for the worst case and the tail blocks early-out.
+
+layout(local_size_x = 128) in;
+
+#include "splat_common.glsl"
+
+shared uint sCnt[kRadixBins];
+
+uint loadKey(uint i) {
+    return (pc.arg2 == 0u) ? keysA[i] : keysB[i];
+}
+
+void main() {
+    const uint tid   = gl_LocalInvocationID.x;
+    const uint block = gl_WorkGroupID.x;
+
+    if (tid < kRadixBins) sCnt[tid] = 0u;
+    barrier();
+
+    const uint n    = g.entryCount;
+    const uint base = block * kRadixBlock;
+
+    for (uint k = 0u; k < kRadixPerThread; ++k) {
+        const uint idx = base + k * kRadixThreads + tid;
+        if (idx < n) {
+            const uint bin = (loadKey(idx) >> pc.arg0) & (kRadixBins - 1u);
+            atomicAdd(sCnt[bin], 1u);
+        }
+    }
+    barrier();
+
+    // [bin][block]: bin-major so the flattened exclusive scan orders bins
+    // globally and blocks within a bin — the radix invariant.
+    if (tid < kRadixBins) hist[tid * pc.arg1 + block] = sCnt[tid];
+}

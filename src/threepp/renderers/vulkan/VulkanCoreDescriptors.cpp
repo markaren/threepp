@@ -108,6 +108,26 @@ void VulkanRenderer::Impl::rewriteBloomDescriptors() {
                 dof_->resize(renderExtent().width, renderExtent().height, din);
             }
 
+            // Splats track the same lifetimes as DoF (sceneHdr, the raster
+            // depth, the render extent) and are primary-only for the same
+            // reason — see recordSplats.
+            if (splat_ && !view().secondary) {
+                std::array<VkImageView, kFramesInFlight> depthViews{};
+                std::array<VkImageView, kFramesInFlight> motionViews{};
+                std::array<VkImageView, kFramesInFlight> idsViews{};
+                for (uint32_t f = 0; f < kFramesInFlight; ++f) {
+                    depthViews[f]  = view().rasterGbufs[f].depth.view;
+                    motionViews[f] = view().rasterGbufs[f].motion.view;
+                    idsViews[f]    = view().rasterGbufs[f].ids.view;
+                }
+                vulkan::SplatPass::ResizeInputs sin{};
+                sin.sceneHdrPerFrame = sceneViews.data();
+                sin.depthPerFrame    = depthViews.data();
+                sin.motionPerFrame   = motionViews.data();
+                sin.idsPerFrame      = idsViews.data();
+                splat_->resize(renderExtent().width, renderExtent().height, sin);
+            }
+
         }
 
 void VulkanRenderer::Impl::rewriteDeferredDescriptors(int onlyFrame) {

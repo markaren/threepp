@@ -951,6 +951,46 @@ void VulkanRenderer::Impl::recordSwapchainPrepare(VkCommandBuffer cb, uint32_t i
             }
 }
 
+void VulkanRenderer::Impl::recordSplats(VkCommandBuffer cb) {
+            // ── Gaussian splats into the linear-HDR scene ──────────────────────
+            // After the shade (so the G-buffer depth it tests against, and the
+            // sceneHdr it composites over, are both final) and before the DoF
+            // (so bokeh, bloom, tone mapping and TAA all act on splats without
+            // any of it being re-derived here). See vulkan/SplatPass.hpp.
+            //
+            // PRIMARY ONLY: one shared set of scratch buffers, sized to the
+            // extent the pass was last resized to, and no secondary view has
+            // asked to have splats in its AOVs.
+            if (!splat_ || !splat_->hasClouds() || view().secondary) return;
+
+            auto p = splatParams_;
+            // Same sub-pixel jitter the raster prepass used this frame,
+            // reapplied as the same projection shear (uploadRasterCameraUbo):
+            // without it the splats sit a fraction of a pixel off the geometry
+            // they are depth-tested against, and TAA resolves a cloud that
+            // never moved with the frame it is part of.
+            const VkExtent2D ext = renderExtent();
+            const float jClipX = 2.f * view().taaJitterTexels_[0] / static_cast<float>(ext.width);
+            const float jClipY = 2.f * view().taaJitterTexels_[1] / static_cast<float>(ext.height);
+            if (view().orthoFrame_) {
+                p.proj[12] -= jClipX;
+                p.proj[13] -= jClipY;
+            } else {
+                p.proj[8] += jClipX;
+                p.proj[9] += jClipY;
+            }
+            // The factor the shade already baked into every sceneHdr store.
+            // Getting this wrong is invisible until the physical camera is on,
+            // and then the splats are wrong by the whole exposure gain.
+            p.preExposure = preExposure();
+            p.bgIsSolidColor = envIsBgColor;
+
+            gpuTimings_->begin(cb, TP_Splat, currentFrame);
+            splat_->record(cb, currentFrame, p);
+            gpuTimings_->end(cb, TP_Splat, currentFrame);
+
+}
+
 void VulkanRenderer::Impl::recordDepthOfField(VkCommandBuffer cb) {
             // ── Thin-lens depth of field (opt-in) ──────────────────────────────
             // Defocus the linear-HDR scene BEFORE bloom/composite/TAA so
@@ -2179,6 +2219,10 @@ void VulkanRenderer::Impl::recordCommandBuffer(VkCommandBuffer cb, uint32_t imag
             // Dispatch the deferred shade compute (VulkanRenderer::Impl);
             // bloom + TAA below are shared.
             recordSceneDispatch(cb, setIdx, ext, ptExt, exposureBits);
+
+            // Gaussian splats: composite SplatClouds into sceneHdr while it
+            // is still linear HDR, so everything below acts on them too.
+            recordSplats(cb);
 
             // Thin-lens depth of field (opt-in): defocus the linear-HDR
             // scene before bloom/composite/TAA.

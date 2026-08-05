@@ -494,6 +494,12 @@ namespace threepp {
             // updateMatrixWorld) — independent of the snapshot/lean machinery,
             // since impact sprites move/spawn/expire every frame.
             core()->collectWorldSprites(scene);
+            // Gaussian splat clouds, same sidecar treatment and the same
+            // reason: a SplatCloud is not a kind the snapshot / BLAS machinery
+            // has anything to say about. Also the last point in the frame that
+            // still holds a Camera&, so the pass's camera parameters and the
+            // per-cloud depth percentiles are stashed here.
+            core()->collectSplatClouds(scene, camera);
             core()->pendingCpuEnsureSceneMs_ =
                     std::chrono::duration<float, std::milli>(
                             std::chrono::high_resolution_clock::now() - sceneStart)

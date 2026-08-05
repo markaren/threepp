@@ -597,6 +597,7 @@ void SplatCloud::setViewportSize(int width, int height) {
 
 void SplatCloud::setDebugNonFinite(bool flag) {
 
+    debugNonFinite_ = flag;
     splatMaterial_->uniforms["splatDebugNonFinite"].setValue(flag);
 }
 

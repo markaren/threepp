@@ -1,0 +1,80 @@
+#version 460
+#extension GL_EXT_scalar_block_layout : require
+#extension GL_GOOGLE_include_directive : enable
+
+// Splat debug — order-independent hashes over the pass's own buffers.
+//
+// Two jobs, both of which exist because "it looks about right" is not evidence:
+//
+//   mode 0  hash the UPLOADED per-splat geometry and spherical harmonics. The
+//           host computes the same hash over the same SplatData with the same
+//           arithmetic and compares. That is what proves the device-local
+//           staging upload, the 40-byte scalar-layout struct and the half
+//           packing all agree with the CPU model — before a single pixel is
+//           drawn, so a V0 mistake cannot masquerade as a V1 rasterizer bug.
+//
+//   mode 1  hash the SORTED key and payload arrays. Two frames rendered from
+//           the same camera must produce the same two numbers; if they don't,
+//           the expansion or the sort is order-dependent, which is exactly the
+//           failure the prefix-sum expansion exists to prevent. Hashing the
+//           key list rather than the framebuffer isolates the gate: a pixel
+//           comparison downstream of it also has to survive TAA jitter and the
+//           denoiser's own temporal state, neither of which is on trial here.
+//
+// Every hash is a sum of per-element mixes, so it is invariant under the order
+// the invocations happen to run in — a hash that depended on scheduling could
+// not tell a real regression from a scheduling difference.
+
+layout(local_size_x = 256) in;
+
+#include "splat_common.glsl"
+
+uint mixu(uint x) {
+    x ^= x >> 16;
+    x *= 0x7FEB352Du;
+    x ^= x >> 15;
+    x *= 0x846CA68Bu;
+    x ^= x >> 16;
+    return x;
+}
+
+void main() {
+    const uint i = gl_GlobalInvocationID.x;
+
+    if (pc.arg1 == 0u) {
+        if (i >= ubo.splatCount) return;
+        uint h = mixu(floatBitsToUint(geom[i].mean.x) + i * 0x9E3779B9u);
+        h += mixu(floatBitsToUint(geom[i].mean.y));
+        h += mixu(floatBitsToUint(geom[i].mean.z));
+        h += mixu(floatBitsToUint(geom[i].opacity));
+        for (uint k = 0u; k < 6u; ++k) h += mixu(floatBitsToUint(geom[i].cov[k]) + k);
+        atomicAdd(g.hashGeom, h);
+
+        uint s = 0u;
+        const uint base = i * ubo.shCoeffs * 2u;
+        for (uint k = 0u; k < ubo.shCoeffs * 2u; ++k) s += mixu(sh[base + k] + k);
+        atomicAdd(g.hashSh, s + i * 0x85EBCA6Bu);
+        return;
+    }
+
+    // mode 2 — the prefix sum's own invariant: offsets[] must be the exclusive
+    // scan of counts[]. A silently wrong scan gives overlapping expansion
+    // ranges, which is splats quietly overwriting each other rather than any
+    // visible failure, so it is worth one dispatch to assert rather than infer.
+    if (pc.arg1 == 2u) {
+        if (i == 0u || i >= ubo.splatCount) return;
+        if (offsets[i] != offsets[i - 1u] + counts[i - 1u]) atomicAdd(g.pad0, 1u);
+        return;
+    }
+
+    // mode 3 — the sort's own invariant: the key array must be non-decreasing.
+    if (pc.arg1 == 3u) {
+        if (i == 0u || i >= g.entryCount) return;
+        if (keysA[i] < keysA[i - 1u]) atomicAdd(g.pad1, 1u);
+        return;
+    }
+
+    if (i >= g.entryCount) return;
+    atomicAdd(g.hashKey, mixu(keysA[i] ^ (i * 0x9E3779B9u)));
+    atomicAdd(g.hashVal, mixu(valsA[i] + (i * 0x85EBCA6Bu)));
+}

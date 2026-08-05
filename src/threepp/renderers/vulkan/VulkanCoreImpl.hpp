@@ -27,6 +27,7 @@
 #include "PostComposite.hpp"
 #include "DofPass.hpp"
 #include "SensorPass.hpp"
+#include "SplatPass.hpp"
 #include "DeferredShade.hpp"
 #include "HiZPyramid.hpp"
 #include "OcclusionCull.hpp"
@@ -68,6 +69,7 @@
 #include "threepp/objects/ParticleSystem.hpp"
 #include "threepp/objects/Skeleton.hpp"
 #include "threepp/objects/SkinnedMesh.hpp"
+#include "threepp/objects/SplatCloud.hpp"
 #include "threepp/objects/Sprite.hpp"
 #include "threepp/materials/SpriteMaterial.hpp"
 #include "threepp/materials/ShaderMaterial.hpp"
@@ -143,6 +145,7 @@ namespace threepp {
     using vulkan::TP_Dof;
     using vulkan::TP_Froxel;
     using vulkan::TP_SensorImage;
+    using vulkan::TP_Splat;
 
     namespace {
         // Frames-in-flight depth. Bumped from 2 → 3 to deepen CPU/GPU
@@ -2853,6 +2856,24 @@ namespace threepp {
         // film gauge (filmHeightM_ below), focus plane at focusDistance_.
         // OFF by default (the whole pass is skipped; zero cost).
         std::unique_ptr<vulkan::DofPass> dof_;
+        // Gaussian splats (SplatCloud), composited into sceneHdr between the
+        // deferred shade and the DoF — linear HDR, pre-post, so splats get
+        // DoF/bloom/tonemap/TAA through the same path as everything else. See
+        // vulkan/SplatPass.hpp. PRIMARY VIEW ONLY (the pass owns one set of
+        // scratch buffers sized to the extent it was last resized to; a
+        // secondary view would fight it for them, and painting splats into a
+        // sensor AOV without being asked is worse than not drawing them).
+        // Allocates nothing until a scene actually contains a SplatCloud.
+        std::unique_ptr<vulkan::SplatPass> splat_;
+        // This frame's SplatClouds, gathered by the sidecar collector in
+        // VulkanRenderer::render (see collectSplatClouds) — outside the
+        // snapshot machinery, like collectWorldSprites, because a SplatCloud
+        // is not a kind the G-buffer path knows how to draw.
+        std::vector<vulkan::SplatPass::CloudEntry> lastVisibleSplats_;
+        // Camera-derived splat parameters, stashed by the collector (the last
+        // point in the frame that holds a Camera&). The jitter shear is added
+        // at record time because the raster does not choose it until later.
+        vulkan::SplatPass::RecordParams splatParams_{};
         // Final image formation (lens warp + sensor noise). Runs after the
         // overlay pass so it applies to everything the camera sees, not just
         // the parts of the frame that existed before the overlay composited.
@@ -3374,6 +3395,9 @@ namespace threepp {
             view().post_ = std::make_unique<vulkan::PostComposite>(*ctx, cmdPool, kFramesInFlight);
             // Thin-lens DoF (images/descriptors fitted in rewriteBloomDescriptors).
             dof_ = std::make_unique<vulkan::DofPass>(*ctx, cmdPool, kFramesInFlight);
+            // Gaussian splats (images/descriptors fitted in rewriteBloomDescriptors,
+            // like DoF; buffers only appear once a scene actually has a cloud).
+            splat_ = std::make_unique<vulkan::SplatPass>(*ctx, cmdPool, kFramesInFlight);
             // Lens distortion + sensor noise, applied to the FINISHED frame at
             // the very end of recording (after the overlay pass — see
             // SensorPass.hpp). Allocates nothing until a lens or noise is set.
@@ -6608,6 +6632,21 @@ namespace threepp {
         // / expire constantly — no snapshot caching). Mirrors OverlayPass's
         // sprite collection, minus the screen-space branch.
         void collectWorldSprites(Object3D& scene);
+
+        // Sidecar collector for SplatClouds — same shape and the same reason as
+        // collectWorldSprites: a SplatCloud is not a kind the snapshot/BLAS
+        // machinery has anything to say about, so it is gathered by its own
+        // traversal and nothing else has to change. Also estimates each cloud's
+        // p1/p99 view distance here, where the camera is in hand, from the same
+        // fixed-stride sample SplatCloud::sortByDepth uses on the GL path.
+        void collectSplatClouds(Object3D& scene, Camera& camera);
+
+        // Composite this frame's splat clouds into sceneHdr. Called between the
+        // deferred shade and the depth of field. Reads splatParams_, which the
+        // collector filled while it still had the camera — everything except
+        // the raster's sub-pixel jitter, which is only decided later (in
+        // uploadRasterCameraUbo) and is folded in here.
+        void recordSplats(VkCommandBuffer cb);
 
         // Line geometry cache for the 3D hybrid overlay (recordCommandBuffer's
         // line-draw section). Keyed on raw BufferGeometry*; geomId in LineRec

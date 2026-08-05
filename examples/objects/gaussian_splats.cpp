@@ -1,15 +1,32 @@
-// 3D Gaussian Splats on the GL backend.
+// 3D Gaussian Splats, on either backend.
 //
 //   gaussian_splats [<file.ply>]           an INRIA-convention splat file
 //   gaussian_splats                        three interpenetrating procedural clouds
 //
+//   --vulkan                               render through the Vulkan compute
+//                                          tile rasterizer instead of GL
 //   --shot <out.png> [--frames N]          headless capture, then exit
 //   --screenshot=<out.png>                 same thing, spelled the other way
 //   --cam x,y,z --look x,y,z               reframe a capture without rebuilding
+//   --occluder                             a box through the middle of the cloud
+//                                          (the splat-behind-mesh depth test)
 //   --no-flip                              keep a loaded file's own axes
 //   --no-cull                              keep a loaded file's outlier splats
 //   --morton                               Morton-reorder storage (see below)
 //   --bench N                              N frames on a slow orbit, timings, exit
+//
+// ONE BINARY, TWO BACKENDS, ON PURPOSE. The GL path is the correctness oracle
+// for the Vulkan one, and an oracle is only worth having if the thing being
+// compared is genuinely the same: same asset, same outlier cull, same framing
+// arithmetic, same camera. Everything above this line is shared; the only
+// branch is which renderer is constructed.
+//
+// Comparing the two: run both with --shot and the SAME --cam/--look, and pass
+// --vulkan a tone mapping of None (it is, by default here) so the sRGB decode
+// the splat pass does on the way into linear HDR and the sRGB encode the post
+// stack does on the way out are inverses. With a tone curve enabled the Vulkan
+// splats tone-map along with the rest of the scene — correct, and deliberately
+// not what GL does, which writes display-referred values straight out.
 //
 // Loaded scans are run through SplatData::removeOutliers by default: a
 // photogrammetry scan carries a tail of enormous near-opaque splats that the
@@ -53,7 +70,12 @@
 #include "threepp/objects/SplatCloud.hpp"
 #include "threepp/threepp.hpp"
 
+#if defined(THREEPP_WITH_VULKAN)
+#include "threepp/renderers/VulkanRenderer.hpp"
+#endif
+
 #include <algorithm>
+#include <memory>
 #include <chrono>
 #include <cmath>
 #include <cstdlib>
@@ -173,11 +195,20 @@ int main(int argc, char** argv) {
     bool cull = true;
     bool morton = false;// measured slower on the GL draw-order path; see header
     int benchFrames = 0;
+    bool useVulkan = false;
+    bool occluder = false;
+    bool debugNaN = false;
 
     for (int i = 1; i < argc; ++i) {
 
         const std::string arg = argv[i];
-        if (arg == "--shot" && i + 1 < argc) {
+        if (arg == "--vulkan") {
+            useVulkan = true;
+        } else if (arg == "--debug-nan") {
+            debugNaN = true;
+        } else if (arg == "--occluder") {
+            occluder = true;
+        } else if (arg == "--shot" && i + 1 < argc) {
             shotPath = argv[++i];
         } else if (arg.rfind("--screenshot=", 0) == 0) {
             shotPath = arg.substr(13);
@@ -344,8 +375,40 @@ int main(int argc, char** argv) {
                           .title("Gaussian splats")
                           .antialiasing(0)
                           .vsync(shotPath.empty() && benchFrames <= 0));
-    GLRenderer renderer(canvas);
-    renderer.checkShaderErrors = true;
+
+    std::unique_ptr<GLRenderer> glRenderer;
+    Renderer* renderer = nullptr;
+#if defined(THREEPP_WITH_VULKAN)
+    std::unique_ptr<VulkanRenderer> vkRenderer;
+    if (useVulkan) {
+        vkRenderer = std::make_unique<VulkanRenderer>(canvas);
+        // Tone mapping OFF, exposure 1: the splat pass sRGB-DECODES its colour
+        // into linear sceneHdr and PostComposite sRGB-ENCODES on the way out,
+        // so with no curve between them the round trip is the identity and this
+        // capture is directly comparable to the GL one. Turn a curve on and the
+        // splats tone-map with the scene — which is the point of compositing
+        // pre-post, but it is not a GL comparison any more.
+        vkRenderer->toneMapping = ToneMapping::None;
+        vkRenderer->toneMappingExposure = 1.f;
+        vkRenderer->setRenderScale(1.f);
+        vkRenderer->setDlss(false);
+        vkRenderer->setFsr(false);
+        renderer = vkRenderer.get();
+    }
+#else
+    if (useVulkan) {
+        std::cerr << "this build has no Vulkan backend (-DTHREEPP_WITH_VULKAN=ON)" << std::endl;
+        return 1;
+    }
+#endif
+    if (!renderer) {
+        glRenderer = std::make_unique<GLRenderer>(canvas);
+        glRenderer->checkShaderErrors = true;
+        renderer = glRenderer.get();
+    }
+    std::cout << "  backend " << (useVulkan ? "Vulkan (compute tile rasterizer)"
+                                            : "GL (instanced quads)")
+              << std::endl;
 
     auto scene = Scene::create();
     scene->background = Color(0x101014);
@@ -384,6 +447,32 @@ int main(int argc, char** argv) {
 
     scene->add(cloud);
 
+    // --occluder: an opaque slab driven through the middle of the cloud. The
+    // splat compositor has no hardware depth test — it reads the G-buffer depth
+    // and stops accumulating behind it — so "does a box in front of the cloud
+    // actually hide the part of the cloud behind it" is a real question with a
+    // wrong answer available, and this is how it gets asked. Sized and placed
+    // from the fit sphere so it works on a procedural toy and a scan alike.
+    if (occluder) {
+
+        auto box = Mesh::create(BoxGeometry::create(fit.radius * 0.35f,
+                                                    fit.radius * 2.4f,
+                                                    fit.radius * 2.4f),
+                                MeshStandardMaterial::create({{"color", Color(0xE8E4D8)},
+                                                              {"roughness", 0.85f}}));
+        box->position.copy(fit.center);
+        scene->add(box);
+
+        // Something for it to be lit by; a black slab proves nothing.
+        auto sun = DirectionalLight::create(0xffffff, 2.5f);
+        sun->position.set(fit.center.x + fit.radius * 2.f,
+                          fit.center.y + fit.radius * 3.f,
+                          fit.center.z + fit.radius * 2.f);
+        scene->add(sun);
+        scene->add(AmbientLight::create(0xffffff, 0.35f));
+        std::cout << "  occluder slab through the cloud centre" << std::endl;
+    }
+
     // Frame the cloud: back off far enough that its bounding sphere fits the
     // vertical field of view, with a little margin. Mostly along +z with a
     // slight rise, so the three shells read side by side.
@@ -403,7 +492,12 @@ int main(int argc, char** argv) {
     controls.target.copy(target);
     controls.update();
 
-    bool debugNonFinite = false;
+    bool debugNonFinite = debugNaN;
+    if (debugNaN) {
+        cloud->setDebugNonFinite(true);
+        std::cout << "  non-finite debug ON: splats with a corrupt SH coefficient paint magenta"
+                  << std::endl;
+    }
     KeyAdapter keyAdapter(KeyAdapter::Mode::KEY_PRESSED, [&](KeyEvent evt) {
         if (evt.key == Key::D) {
             debugNonFinite = !debugNonFinite;
@@ -416,7 +510,7 @@ int main(int argc, char** argv) {
     canvas.onWindowResize([&](WindowSize size) {
         camera->aspect = size.aspect();
         camera->updateProjectionMatrix();
-        renderer.setSize(size);
+        renderer->setSize(size);
     });
 
     // Per-frame wall time for the capture path. The first few frames pay for
@@ -450,9 +544,13 @@ int main(int argc, char** argv) {
         // Before render(), not inside onBeforeRender: the renderer uploads the
         // sorted-index attribute while it builds the render list, which is
         // earlier than the hook, so the hook's sort would show up a frame late.
-        cloud->update(*camera);
+        // GL only. The Vulkan backend sorts on the GPU per tile, so the CPU
+        // counting sort and the instanceColor upload it drives are pure waste
+        // there — and worse than waste at 216k splats, since they would dominate
+        // the frame the pass is supposed to be measured on.
+        if (!useVulkan) cloud->update(*camera);
 
-        renderer.render(*scene, *camera);
+        renderer->render(*scene, *camera);
 
         if (shotPath.empty() && !benching) return;
 
@@ -464,7 +562,7 @@ int main(int argc, char** argv) {
 
             if (!shotPath.empty()) {
 
-                renderer.writeFramebuffer(shotPath);
+                renderer->writeFramebuffer(shotPath);
                 std::cout << "wrote " << shotPath << std::endl;
             }
 

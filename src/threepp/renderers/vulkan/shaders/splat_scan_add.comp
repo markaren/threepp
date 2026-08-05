@@ -1,0 +1,27 @@
+#version 460
+#extension GL_EXT_scalar_block_layout : require
+#extension GL_GOOGLE_include_directive : enable
+
+// Splat stage 2b/6 — the walk-back half of the recursive prefix sum.
+//
+// splat_scan left every block scanned relative to its own start; this adds the
+// scanned block sums back, so element i of block b ends up holding the sum of
+// everything before it in the WHOLE array. Same arg0 convention as splat_scan
+// (0 = the counts/offsets level, 1 = a scanScratch level).
+
+layout(local_size_x = 256) in;
+
+#include "splat_common.glsl"
+
+void main() {
+    const uint i = gl_GlobalInvocationID.x;
+    if (i >= pc.count) return;
+
+    const uint block = i / kScanBlock;
+    const uint add   = scanScratch[pc.sumOff + block];
+    if (add == 0u) return;
+
+    if (pc.arg0 == 0u)      offsets[i] += add;
+    else if (pc.arg0 == 2u) hist[i] += add;
+    else                    scanScratch[pc.dstOff + i] += add;
+}
