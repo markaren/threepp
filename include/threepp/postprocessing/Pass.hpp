@@ -45,7 +45,7 @@ namespace threepp {
 
         // Called when the composer is resized. Passes holding their own
         // targets or resolution-dependent uniforms override this.
-        virtual void setSize(unsigned int width, unsigned int height) {}
+        virtual void setSize(unsigned int /*width*/, unsigned int /*height*/) {}
 
         virtual void render(GLRenderer& renderer,
                             RenderTarget* writeBuffer,

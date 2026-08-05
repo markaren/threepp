@@ -10,6 +10,7 @@
 #include "threepp/renderers/RenderTarget.hpp"
 
 #include <algorithm>
+#include <utility>
 
 using namespace threepp;
 
@@ -164,6 +165,9 @@ struct EffectComposer::Impl {
 };
 
 
+EffectComposer::EffectComposer(GLRenderer& renderer)
+    : pimpl_(std::make_unique<Impl>(renderer, Options{})) {}
+
 EffectComposer::EffectComposer(GLRenderer& renderer, const Options& options)
     : pimpl_(std::make_unique<Impl>(renderer, options)) {}
 
@@ -176,7 +180,7 @@ void EffectComposer::addPass(const std::shared_ptr<Pass>& pass) {
 void EffectComposer::insertPass(const std::shared_ptr<Pass>& pass, size_t index) {
 
     auto& passes = pimpl_->passes;
-    passes.insert(passes.begin() + static_cast<long>(std::min(index, passes.size())), pass);
+    passes.insert(passes.begin() + static_cast<std::ptrdiff_t>(std::min(index, passes.size())), pass);
     pass->setSize(pimpl_->effectiveWidth(), pimpl_->effectiveHeight());
 }
 

@@ -5,6 +5,7 @@
 
 #include "threepp/constants.hpp"
 
+#include <cstddef>
 #include <memory>
 #include <optional>
 #include <vector>
@@ -58,7 +59,12 @@ namespace threepp {
         // the result is left in readBuffer().
         bool renderToScreen = true;
 
-        explicit EffectComposer(GLRenderer& renderer, const Options& options = {});
+        // Two overloads rather than a defaulted argument: `= {}` on a nested
+        // type needs that type's default member initializers complete while
+        // the enclosing class still isn't, which GCC rejects.
+        explicit EffectComposer(GLRenderer& renderer);
+
+        EffectComposer(GLRenderer& renderer, const Options& options);
 
         EffectComposer(const EffectComposer&) = delete;
         EffectComposer& operator=(const EffectComposer&) = delete;
