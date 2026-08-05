@@ -36,7 +36,8 @@ layout(set = 0, binding = 0) uniform CameraUbo {
     mat4 currVPunjittered;
     mat4 prevVP;
     vec4 jitter;          // .xy = curr clip-space sub-pixel jitter
-    vec4 prevJitter;      // .xy = prev clip-space sub-pixel jitter
+    vec4 prevJitter;      // .xy = prev clip-space sub-pixel jitter; .z = Toksvig
+                          // toggle; .w = frame counter (alphaHash decorrelation)
 } cam;
 
 layout(set = 0, binding = 2, scalar) readonly buffer GbufMatBuf {
@@ -107,13 +108,18 @@ layout(location = 4) out vec4 outAlbedoMetal;
 layout(constant_id = 0) const uint DECAL_PASS = 0u;
 
 // Per-pixel, per-frame hash in [0,1) for the stochastic alpha-blend screen-
-// door. Folds the Halton sub-pixel jitter (changes every frame) into the seed
-// so the dither pattern decorrelates over time and the temporal accumulator /
-// TAA resolve it toward the true alpha-weighted blend instead of a fixed grid.
-float alphaHash(vec2 fragXY, vec2 jitter) {
+// door. Folds the Halton sub-pixel jitter AND a frame counter (prevJitter.w)
+// into the seed so the dither pattern decorrelates over time and the temporal
+// accumulator / TAA resolve it toward the true alpha-weighted blend instead of
+// a fixed grid. The counter is not redundant with the jitter: the raster
+// jitter is ZEROED under gbuf-MSAA without an upscaler (rasterJitterOn), and
+// jitter-only seeding froze the dither bit-identical every frame there — a
+// permanent static screen-door instead of a converging blend.
+float alphaHash(vec2 fragXY, vec2 jitter, float frameSalt) {
     uint h = uint(fragXY.x) * 1973u + uint(fragXY.y) * 9277u
            + floatBitsToUint(jitter.x) * 26699u
-           + floatBitsToUint(jitter.y) * 53401u + 0x9e3779b9u;
+           + floatBitsToUint(jitter.y) * 53401u
+           + uint(frameSalt) * 15731u + 0x9e3779b9u;
     h ^= h >> 16; h *= 0x7feb352du;
     h ^= h >> 15; h *= 0x846ca68bu;
     h ^= h >> 16;
@@ -756,7 +762,7 @@ void main() {
             if (albedoAlpha <= 0.01) {
                 discard;
             } else if (albedoAlpha < 0.99) {
-                if (alphaHash(gl_FragCoord.xy, cam.jitter.xy) >= albedoAlpha) discard;
+                if (alphaHash(gl_FragCoord.xy, cam.jitter.xy, cam.prevJitter.w) >= albedoAlpha) discard;
             }
         }
     }

@@ -799,10 +799,15 @@ namespace threepp {
         ubo.prevJitter[0] = view().rasterPrevJitterValid_ ? view().rasterPrevJitter_[0] : jClipX;
         ubo.prevJitter[1] = view().rasterPrevJitterValid_ ? view().rasterPrevJitter_[1] : jClipY;
         // .z: normal-map Toksvig spec-AA toggle (gbuffer.frag), packed here
-        // because prevJitter.zw is otherwise unread by any gbuffer shader —
-        // see normalMapToksvig_. .w stays reserved/unused.
+        // because prevJitter.zw was otherwise unread by any gbuffer shader —
+        // see normalMapToksvig_. .w: frame counter for the alpha-blend
+        // screen-door's per-frame decorrelation (alphaHash). The hash used to
+        // fold cam.jitter alone, but rasterJitterOn above zeroes the jitter in
+        // exactly the msaa>1 non-upscaler case — the dither froze bit-identical
+        // every frame and the screen-door never converged under TAA. Wrapped at
+        // 1024 so the float is always exact.
         ubo.prevJitter[2] = normalMapToksvig_ ? 1.f : 0.f;
-        ubo.prevJitter[3] = 0.f;
+        ubo.prevJitter[3] = static_cast<float>(haltonFrame_ & 1023u);
 
         uploadHostVisible(ctx->allocator(), view().rasterCameraUbos[frame], &ubo, sizeof(ubo));
 
