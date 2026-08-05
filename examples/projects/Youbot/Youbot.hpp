@@ -48,21 +48,24 @@ public:
         front_right_wheel->rotateY(math::DEG2RAD * rotationSpeed * scale * dt);
     }
 
+    // Joint values in radians, in the kinematic model's convention. The model's
+    // own rest pose has joints 2 and 3 a quarter turn from that zero, which is
+    // the only reason those two are offset.
     void setJointValues(const std::vector<float>& vals) const {
-        arm_joint1->rotation.z = math::DEG2RAD * vals[0];
-        arm_joint2->rotation.z = math::DEG2RAD * (vals[1] - 90);
-        arm_joint3->rotation.z = math::DEG2RAD * (vals[2] - 90);
-        arm_joint4->rotation.z = math::DEG2RAD * vals[3];
-        arm_joint5->rotation.z = math::DEG2RAD * vals[4];
+        arm_joint1->rotation.z = vals[0];
+        arm_joint2->rotation.z = vals[1] - math::PI / 2;
+        arm_joint3->rotation.z = vals[2] - math::PI / 2;
+        arm_joint4->rotation.z = vals[3];
+        arm_joint5->rotation.z = vals[4];
     }
 
     [[nodiscard]] std::vector<float> getJointValues() const {
         return {
-                arm_joint1->rotation.z * math::RAD2DEG,
-                arm_joint2->rotation.z * math::RAD2DEG + 90,
-                arm_joint3->rotation.z * math::RAD2DEG + 90,
-                arm_joint4->rotation.z * math::RAD2DEG,
-                arm_joint5->rotation.z * math::RAD2DEG,
+                arm_joint1->rotation.z,
+                arm_joint2->rotation.z + math::PI / 2,
+                arm_joint3->rotation.z + math::PI / 2,
+                arm_joint4->rotation.z,
+                arm_joint5->rotation.z,
         };
     }
 

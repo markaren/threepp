@@ -248,9 +248,21 @@ namespace threepp {
                 // Finite-difference the residual, one FK evaluation per DOF.
                 for (size_t k = 0; k < n; ++k) {
                     const size_t d = dofs_[k];
-                    const float h = types_[k] == Robot::JointType::Prismatic
-                                            ? options_.prismaticStep
-                                            : options_.revoluteStep;
+                    float h = types_[k] == Robot::JointType::Prismatic
+                                      ? options_.prismaticStep
+                                      : options_.revoluteStep;
+
+                    // Probe INTO the range. Robot's FK clamps to the joint
+                    // limits, so a forward probe taken at the upper stop is
+                    // clamped straight back onto it: the residual does not
+                    // move, the column reads as zero, and the joint is frozen
+                    // there for good — including the way back INTO the range,
+                    // which is what turns "the arm reached a limit" into "the
+                    // arm stopped working". Differencing backwards at the stop
+                    // keeps the column honest, and the sign takes care of
+                    // itself because the divisor carries the sign of h.
+                    if (q[d] + h > ranges_.at(d).max) h = -h;
+
                     qh[d] = q[d] + h;
                     std::array<float, 6> fh{};
                     residual(qh, targetPos, targetRot, fh);

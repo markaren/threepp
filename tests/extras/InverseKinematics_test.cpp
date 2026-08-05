@@ -253,6 +253,37 @@ TEST_CASE("IK stays inside the joint limits") {
     }
 }
 
+TEST_CASE("A joint that reaches a limit is not stuck there") {
+
+    // Robot's FK clamps to the joint limits, so a joint sitting exactly on a
+    // stop is the one place a forward finite difference reports nothing: probe
+    // outward, get clamped back, and the column reads as zero. A joint whose
+    // column is zero cannot be moved in EITHER direction, so the arm that
+    // pushed into a stop once would never leave it — the whole solve stops
+    // working from that moment on, not just the joint.
+    auto robot = planarArm("-0.35\" upper=\"0.35");
+    REQUIRE(robot);
+
+    IkOptions opts;
+    opts.task = IkTask::Position;
+    opts.maxIterations = 200;
+    const IkSolver solver(*robot, opts);
+
+    // Well out of reach: every joint ends up pinned against a stop.
+    std::vector<float> q{0.f, 0.f, 0.f};
+    solver.solve(q, {2.5f, 0.2f, 0.f});
+    REQUIRE(q[0] > 0.35f - 1e-4f);// pinned against the upper stop
+
+    // Now ask for a pose the arm can strike from well inside its range.
+    const std::vector<float> goal{-0.2f, 0.15f, -0.1f};
+    const Vector3 target = positionOf(solver.toolTransform(goal));
+
+    const auto result = solver.solve(q, target);
+    INFO("left at [" << q[0] << ", " << q[1] << ", " << q[2] << "]");
+    CHECK(result.converged);
+    CHECK(positionOf(solver.toolTransform(q)).distanceTo(target) < 1e-3f);
+}
+
 TEST_CASE("The speed cap bounds what one call may move") {
 
     auto robot = planarArm();
