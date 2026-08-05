@@ -37,6 +37,19 @@ if (THREEPP_WITH_VULKAN AND THREEPP_WITH_GLFW)
     add_test(NAME VulkanMultiView_test COMMAND VulkanMultiView_test)
     set_tests_properties(VulkanMultiView_test PROPERTIES SKIP_RETURN_CODE 42)
 
+    # Gaussian-splat compute tile rasterizer: bit-exact repeat-frame
+    # determinism (the gate on the prefix-sum tile expansion — an atomic-append
+    # expansion passes every visual check and fails this one), splat-behind-mesh
+    # occlusion, and a golden image for a GENERATED cloud so the repo needs no
+    # asset. Same plain exit-code + skip-42 shape as the goldens.
+    add_executable(VulkanSplat_test VulkanSplat_test.cpp)
+    target_link_libraries(VulkanSplat_test PRIVATE threepp)
+    target_include_directories(VulkanSplat_test PRIVATE "${PROJECT_SOURCE_DIR}/src")
+    target_compile_definitions(VulkanSplat_test PRIVATE
+            PROJECT_FOLDER="${PROJECT_SOURCE_DIR}")
+    add_test(NAME VulkanSplat_test COMMAND VulkanSplat_test)
+    set_tests_properties(VulkanSplat_test PROPERTIES SKIP_RETURN_CODE 42)
+
     # Camera-model geometry: film gauge / focal length round-trip and the
     # reported cameraIntrinsics() checked against the renderer's own
     # projection. Numeric (not pixel) claims, so unlike the goldens this is

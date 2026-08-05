@@ -143,6 +143,9 @@ namespace threepp::vulkan {
             // The scene background is a flat colour, so PostComposite hands
             // those pixels back verbatim and the shade never pre-exposed them.
             bool  bgIsSolidColor = false;
+            // Hash the sorted key/payload arrays and the composited pixels
+            // (VulkanRenderer::setSplatDebugChecksum).
+            bool  checksum = false;
         };
         void record(VkCommandBuffer cb, uint32_t frame, const RecordParams& p);
 

@@ -497,7 +497,9 @@ namespace threepp::vulkan {
         // exact shortfall, so the fix is to resize to what the frame WANTED
         // (plus a quarter of headroom for the next camera angle) rather than to
         // climb a doubling ladder and pay a wrong frame for every rung.
+        bool grewOnOverflow = false;
         if (const uint32_t over = lastOverflow(); over > 0 && !budgetCapped_) {
+            grewOnOverflow = true;
             const uint64_t wanted = (uint64_t(entryBudget_) + over) * 5 / 4;
             uint32_t next = static_cast<uint32_t>(std::min<uint64_t>(wanted, kMaxEntries));
             if (next > entryBudget_) {
@@ -544,13 +546,16 @@ namespace threepp::vulkan {
             }
 
             if (needSplats > maxSplats_ || needEntries > entryBudget_) {
-                // Worth one line on stderr: until it lands, frames ARE wrong
+                // Worth one line on stderr, but only when an actual frame was
+                // truncated: until the resize lands those frames ARE wrong
                 // (splats missing from tiles), and a silent self-correction
-                // leaves whoever saw those frames with no explanation.
-                if (needEntries > entryBudget_ && entryBudget_ > 0)
+                // leaves whoever saw them with no explanation. Sizing a cloud
+                // for the first time is not that and says nothing.
+                if (grewOnOverflow)
                     std::cerr << "[threepp] SplatPass: tile expansion budget "
                               << entryBudget_ << " -> " << needEntries
-                              << " (splat, tile) pairs" << std::endl;
+                              << " (splat, tile) pairs after a truncated frame"
+                              << std::endl;
                 allocateScratch(std::max(needSplats, maxSplats_), needEntries);
                 // The overflow counters just consumed describe a frame that no
                 // longer exists. Clearing them stops the next few syncs from
@@ -690,10 +695,11 @@ namespace threepp::vulkan {
         lastFrame_ = frame;
 
         // Debug hashes cost a full extra pass over the key list and an atomic
-        // per composited pixel, so they are opt-in — the determinism test sets
-        // the variable, nothing else does.
+        // per composited pixel, so they are opt-in: the determinism test asks
+        // through setSplatDebugChecksum, a human debugging by hand through the
+        // environment variable.
         const char* cse = std::getenv("THREEPP_VK_SPLAT_CHECKSUM");
-        const bool checksum = cse && *cse && *cse != '0';
+        const bool checksum = p.checksum || (cse && *cse && *cse != '0');
 
         for (const auto& fc : frameClouds_) {
             Cloud& c = *fc.cloud;

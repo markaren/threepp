@@ -1390,6 +1390,17 @@ namespace threepp {
         return pimpl_->gbufferMsaa();
     }
 
+    void VulkanRenderer::setSplatDebugChecksum(bool enabled) {
+        core()->splatChecksum_ = enabled;
+    }
+
+    bool VulkanRenderer::splatDebugChecksum(std::uint64_t out[4]) const {
+        out[0] = out[1] = out[2] = out[3] = 0;
+        if (!core()->splat_) return false;
+        core()->splat_->readDebug(out);
+        return out[3] != 0;
+    }
+
     void VulkanRenderer::setBloomThreshold(float threshold) {
         core()->bloomThreshold_ = threshold < 0.f ? 0.f : threshold;
     }

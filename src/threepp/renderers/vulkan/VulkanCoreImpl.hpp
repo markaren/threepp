@@ -2874,6 +2874,10 @@ namespace threepp {
         // point in the frame that holds a Camera&). The jitter shear is added
         // at record time because the raster does not choose it until later.
         vulkan::SplatPass::RecordParams splatParams_{};
+        // setSplatDebugChecksum — the determinism gate's switch. Off by
+        // default; the hashes cost two extra dispatches and an atomic per
+        // composited pixel.
+        bool splatChecksum_ = false;
         // Final image formation (lens warp + sensor noise). Runs after the
         // overlay pass so it applies to everything the camera sees, not just
         // the parts of the frame that existed before the overlay composited.

@@ -955,6 +955,28 @@ namespace threepp {
         void setGbufferMsaa(uint32_t samples);
         [[nodiscard]] uint32_t gbufferMsaa() const;
 
+        // ── Gaussian-splat determinism hook (test-only) ─────────────────────
+        // Enables order-independent hashes over the splat pass's own buffers:
+        // out[0] = the sorted key array, out[1] = the sorted payload array,
+        // out[2] = the composited pixels, out[3] = the expanded (splat, tile)
+        // pair count. Two frames rendered from the same camera must produce
+        // the same four numbers, and if they do not, the tile expansion or the
+        // radix sort is order-dependent — which is the failure the prefix-sum
+        // expansion exists to prevent, and the reason sensor goldens can be
+        // trusted at all.
+        //
+        // Hashing the pass's OWN buffers rather than the framebuffer is the
+        // point: a pixel comparison downstream also has to survive TAA jitter
+        // and the denoiser's temporal state, neither of which is on trial.
+        //
+        // splatDebugChecksum() drains the device. Off by default; both the
+        // extra dispatches and the per-pixel atomic cost real time. Returns
+        // false when no splat cloud was drawn. (THREEPP_VK_SPLAT_CHECKSUM=1
+        // turns the same hashes on from the environment, plus two invariant
+        // assertions printed to stderr.)
+        void setSplatDebugChecksum(bool enabled);
+        [[nodiscard]] bool splatDebugChecksum(std::uint64_t out[4]) const;
+
     private:
         // The one implementation struct, defined in vulkan/VulkanCoreImpl.hpp
         // and opaque to callers of this header.

@@ -984,6 +984,7 @@ void VulkanRenderer::Impl::recordSplats(VkCommandBuffer cb) {
             // and then the splats are wrong by the whole exposure gain.
             p.preExposure = preExposure();
             p.bgIsSolidColor = envIsBgColor;
+            p.checksum       = splatChecksum_;
 
             gpuTimings_->begin(cb, TP_Splat, currentFrame);
             splat_->record(cb, currentFrame, p);
