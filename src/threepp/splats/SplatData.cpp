@@ -174,6 +174,88 @@ namespace {
         values.resize(out * stride);
     }
 
+    // Applies `perm` (new index -> old index) to `values` in place, `stride`
+    // elements per splat, by rotating each cycle of the permutation. In place
+    // rather than gathering into a fresh vector on purpose: the degree-3 SH
+    // block of a five-million-splat scan is ~960 MB and a gather would need a
+    // second copy of it live at the same time. `moved` is caller-owned scratch
+    // (one bit per splat, reused across every array) and is reset here.
+    template<class T>
+    void permute(std::vector<T>& values, const std::vector<std::uint32_t>& perm,
+                 std::vector<bool>& moved, size_t stride = 1) {
+
+        const size_t n = perm.size();
+        if (values.size() != n * stride) return;// see the note on reorderMorton
+
+        std::fill(moved.begin(), moved.end(), false);
+        std::vector<T> head(stride);
+
+        const auto at = [stride](std::vector<T>& v, size_t i) {
+            return v.begin() + static_cast<std::ptrdiff_t>(i * stride);
+        };
+
+        for (size_t i = 0; i < n; ++i) {
+
+            if (moved[i]) continue;
+
+            // The head of the cycle is the only element whose original value is
+            // overwritten before something else needs it, so it is the only one
+            // that has to be held aside.
+            std::copy(at(values, i), at(values, i + 1), head.begin());
+
+            size_t dst = i;
+            for (;;) {
+
+                moved[dst] = true;
+                const size_t src = perm[dst];
+
+                if (src == i) {
+
+                    std::copy(head.begin(), head.end(), at(values, dst));
+                    break;
+                }
+
+                std::copy(at(values, src), at(values, src + 1), at(values, dst));
+                dst = src;
+            }
+        }
+    }
+
+    // Cell index on one axis, always in [0, 1023]. Written so that the two
+    // comparisons are false for a NaN: a non-finite coordinate takes the first
+    // branch and lands in cell 0, and no NaN ever reaches the cast.
+    std::uint32_t mortonCell(float v, float lo, float invSpan) {
+
+        const float t = (v - lo) * invSpan;
+        if (!(t > 0.f)) return 0u;
+        if (!(t < 1.f)) return 1023u;
+
+        // t < 1 strictly and multiplying by a power of two is exact, so the
+        // product is below 1024 and the cast cannot reach it; the min is there
+        // so that stays true if anyone edits the constants.
+        return std::min(static_cast<std::uint32_t>(t * 1024.f), 1023u);
+    }
+
+    // Ten bits spread to every third bit: 0b--98'7654'3210 becomes
+    // 0b9--8--7--6--5--4--3--2--1--0. The published shift-and-mask expansion;
+    // three of these, shifted by 2 / 1 / 0, are the whole encoder.
+    std::uint32_t spread3(std::uint32_t v) {
+
+        v &= 0x000003ffu;
+        v = (v | (v << 16)) & 0xff0000ffu;
+        v = (v | (v << 8)) & 0x0300f00fu;
+        v = (v | (v << 4)) & 0x030c30c3u;
+        v = (v | (v << 2)) & 0x09249249u;
+        return v;
+    }
+
+    // x most significant within each 3-bit group. See the convention note on
+    // SplatData::reorderMorton.
+    std::uint32_t mortonKey(std::uint32_t x, std::uint32_t y, std::uint32_t z) {
+
+        return (spread3(x) << 2) | (spread3(y) << 1) | spread3(z);
+    }
+
 }// namespace
 
 size_t SplatData::removeOutliers(const OutlierPolicy& policy) {
@@ -242,6 +324,70 @@ size_t SplatData::removeOutliers(const OutlierPolicy& policy) {
     for (auto& [name, values] : extras) compact(values, keep);
 
     return removed;
+}
+
+std::vector<std::uint32_t> SplatData::reorderMorton(float boundsPercentile) {
+
+    const size_t n = count();
+
+    std::vector<std::uint32_t> perm(n);
+    for (size_t i = 0; i < n; ++i) perm[i] = static_cast<std::uint32_t>(i);
+    if (n < 2) return perm;
+
+    // --- the robust grid ----------------------------------------------------
+    // One axis at a time, so only one coordinate array (plus percentile()'s
+    // working copy) is ever live: at five million splats that is the
+    // difference between 40 MB and 100 MB of scratch.
+    const float p = std::clamp(boundsPercentile, 0.5f, 1.f);
+
+    float lo[3]{}, invSpan[3]{};
+    for (int axis = 0; axis < 3; ++axis) {
+
+        std::vector<float> v;
+        v.reserve(n);
+        for (const auto& m : means) v.push_back(axis == 0 ? m.x : (axis == 1 ? m.y : m.z));
+
+        const float hi = percentile(v, p);
+        lo[axis] = percentile(std::move(v), 1.f - p);
+
+        // An axis with no spread — a planar cloud, a single column — has no
+        // grid to build, so every splat lands in cell 0 and the other two axes
+        // order the cloud between them. Written as `hi > lo` rather than
+        // `hi <= lo` so that non-finite bounds take this branch as well, which
+        // degrades the whole reorder to a stable no-op instead of to nonsense.
+        invSpan[axis] = (hi > lo[axis]) ? 1.f / (hi - lo[axis]) : 0.f;
+    }
+
+    // --- the keys, and a stable sort of the indices by them ------------------
+    std::vector<std::uint32_t> keys(n);
+    for (size_t i = 0; i < n; ++i) {
+
+        keys[i] = mortonKey(mortonCell(means[i].x, lo[0], invSpan[0]),
+                            mortonCell(means[i].y, lo[1], invSpan[1]),
+                            mortonCell(means[i].z, lo[2], invSpan[2]));
+    }
+
+    // Stable: splats sharing a cell keep file order, which is what makes a
+    // second call an exact no-op rather than an arbitrary reshuffle of ties.
+    std::stable_sort(perm.begin(), perm.end(),
+                     [&keys](std::uint32_t a, std::uint32_t b) { return keys[a] < keys[b]; });
+
+    bool identity = true;
+    for (size_t i = 0; i < n && identity; ++i) identity = perm[i] == static_cast<std::uint32_t>(i);
+    if (identity) return perm;
+
+    // --- move every array together ------------------------------------------
+    std::vector<bool> moved(n);
+
+    permute(means, perm, moved);
+    permute(scales, perm, moved);
+    permute(rotations, perm, moved);
+    permute(opacities, perm, moved);
+    permute(sh, perm, moved, static_cast<size_t>(coeffCount()) * 3);
+
+    for (auto& [name, values] : extras) permute(values, perm, moved);
+
+    return perm;
 }
 
 bool SplatData::validate(std::string* why) const {

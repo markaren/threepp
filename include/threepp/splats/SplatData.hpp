@@ -28,6 +28,7 @@
 
 #include <cmath>
 #include <cstddef>
+#include <cstdint>
 #include <map>
 #include <string>
 #include <vector>
@@ -182,6 +183,65 @@ namespace threepp {
         // handful of enormous splats. Scene-relative size is the signal that
         // separates the two; peer-relative size on its own is not.
         size_t removeOutliers(const OutlierPolicy& policy = {});
+
+        // Reorders storage into Morton (Z-order) sequence, so that splats which
+        // are neighbours in space become neighbours in memory. Returns the
+        // permutation that was applied, as NEW INDEX -> OLD INDEX: after the
+        // call, splat i is the splat that used to be at perm[i], which is the
+        // direction a caller needs to remap an external per-splat array of its
+        // own (remapped[i] = mine[perm[i]]). The identity permutation is
+        // returned when nothing moved.
+        //
+        // WHY, since the render order is a per-frame depth sort and not this:
+        // the shader fetches per-splat data by SORTED index while storage is
+        // file order, so a depth slab through the scene walks the data textures
+        // in a random permutation and the texture cache dies. Morton order does
+        // not change what is drawn or in what order — it changes where the data
+        // for consecutive draws LIVES, and a slab through a real surface then
+        // hits contiguous runs instead of scattered texels.
+        //
+        // NOT called by the loader, for the same reason removeOutliers is not:
+        // a raw cloud is what the file says. The one visible side effect is
+        // that the depth sort's tie-break becomes Morton order instead of file
+        // order, which is strictly the better tie-break.
+        //
+        // THE KEY. Each axis is quantised to 10 bits (1024 cells) over a
+        // ROBUST interval — [P(1-p), P(p)] of that axis's own coordinates, not
+        // its min/max. This is the outlier lesson again: one stray 1000 units
+        // out would otherwise stretch the grid until the whole subject shares a
+        // handful of cells and the reorder does nothing. Coordinates outside
+        // the interval clamp into the edge cells, the same doctrine as the
+        // depth sort's clamp — an outlier gets a worse ordering, never an
+        // undefined one — and clamping also keeps the strays grouped together
+        // at the ends, which is what you want anyway. A non-finite coordinate
+        // lands in cell 0 without ever reaching a float-to-integer conversion.
+        //
+        // The three cell indices interleave x -> y -> z, x MOST significant
+        // within each 3-bit group: key bit 3i+2 is x bit i, 3i+1 is y bit i,
+        // 3i is z bit i, for a 30-bit key in a uint32. Read from the top, the
+        // key is x, y, z, x, y, z, ...; at one bit per axis it is exactly the
+        // lexicographic order of (x, y, z), which is what SplatData_test hand
+        // computes over the corners of a cube.
+        //
+        // Deterministic and repeat-callable: exact order statistics for the
+        // bounds (no sampling, no RNG) and a STABLE sort by key, so splats
+        // sharing a cell keep their relative order. A second call is therefore
+        // a no-op that returns the identity — SplatData_test pins that.
+        //
+        // Every array moves as one tuple: means, scales, rotations, opacities,
+        // the SH block (coeffCount() * 3 floats) and every `extras` array. The
+        // permutation is applied in place by cycle-following rather than by
+        // gathering into fresh vectors: at five million splats the degree-3 SH
+        // block alone is near a gigabyte, and a gather would want a second copy
+        // of it. An array whose length does not match count() is left alone
+        // instead of being walked off the end; on a validate()-clean cloud
+        // there are none.
+        //
+        // One-time cost at load. std::stable_sort at five million splats is
+        // acceptable there; it is deliberately not parallelised, because
+        // Parallel.hpp's par policy is MSVC-only and silently serial elsewhere,
+        // which would make the cost a platform surprise rather than a constant.
+        std::vector<std::uint32_t> reorderMorton(float boundsPercentile = 0.999f);
 
         // True when every array length agrees and the degree is in range.
         // `why` (optional) receives a description of the first problem found.
