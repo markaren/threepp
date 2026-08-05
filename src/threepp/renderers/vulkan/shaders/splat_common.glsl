@@ -258,28 +258,49 @@ vec3 splatShColor(uint splat, vec3 dir) {
 // A 3DGS optimiser fits its spherical harmonics against sRGB-ENCODED training
 // images, by minimising |sum(c_i * a_i * T_i) - I_sRGB|. The coefficients are
 // therefore NOT radiances; they are display-referred values chosen so that a
-// DISPLAY-SPACE alpha blend of them reproduces the photograph. Decoding each
-// one to linear and blending there is a different operator on different
-// numbers, and by Jensen (sRGB decode is convex) it comes out systematically
-// BRIGHTER — measured at +15% mean on the procedural cloud, and it does not
-// look like a bug, it looks like a slightly different exposure.
+// DISPLAY-SPACE alpha blend of them reproduces the photograph. Where the blend
+// happens is not a detail — it is the difference between reproducing the scan
+// and reproducing something close to it:
 //
-// So the accumulation runs in the splat's own display-referred domain, exactly
-// as the GL path's fixed-function blend does, and the RESULT is brought into
-// sceneHdr's linear domain once, at the end, the way any sRGB image with an
-// alpha channel enters a linear pipeline: un-premultiply by coverage, decode,
-// re-premultiply. Where the cloud is opaque that is bit-for-bit the GL answer;
-// where it is not, it is the only self-consistent way to put a display-referred
-// image over a linear scene, and no choice reproduces both exactly (alpha
-// compositing is only associative within ONE domain).
+//   decode per splat, blend in linear   +15% mean on the procedural cloud, and
+//                                       a scan's near-invisible sky halo (a
+//                                       shell at ~2% coverage) lifts 7x into a
+//                                       visible grey DOME. Physically the
+//                                       correct operator for radiances; these
+//                                       are not radiances.
+//   blend display, decode the composite exact where the cloud is opaque, same
+//                                       halo lift where it is not (the lift is
+//                                       inherent to linear compositing over
+//                                       black, not to where the decode sits).
+//   blend display, background included  what this does. Bit-for-bit the GL
+//                                       answer at every coverage.
 //
-// Everything downstream then works on a linear value: fog, DoF, bloom, tone
-// mapping and TAA all act on splats without any of it being re-derived here,
-// which is the reason this pass composites pre-post at all.
+// So the whole composite — splats AND the scene behind them — happens in the
+// display-referred domain, and the result re-enters sceneHdr through the
+// decode. The background round-trips EXACTLY (encode then decode is the
+// identity, including above 1.0 — the sRGB curve is monotone on all of
+// [0, inf) and nothing clamps), so a pixel no splat touched is unchanged, and
+// an HDR sky behind a translucent splat keeps its range. Everything downstream
+// still sees a linear value: fog, DoF, bloom, tone mapping and TAA act on
+// splats without any of it being re-derived here, which is why this pass
+// composites pre-post at all.
+//
+// The honest cost: partial-coverage compositing is not linear-light. It is the
+// operator the asset was fitted with, which for a scan — where the ground
+// truth is "what the capture looks like" — is the one that matters.
 vec3 splatSrgbToLinear(vec3 c) {
     const vec3 lo = c / 12.92;
     const vec3 hi = pow(max(c + 0.055, vec3(0.0)) / 1.055, vec3(2.4));
     return mix(hi, lo, lessThanEqual(c, vec3(0.04045)));
+}
+
+// KEEP IN SYNC with linearToSRGB in post_composite.comp — this is its exact
+// inverse, and the pair has to round-trip or a pixel with no splats over it
+// would come out changed.
+vec3 splatLinearToSrgb(vec3 x) {
+    const vec3 lo = 12.92 * x;
+    const vec3 hi = 1.055 * pow(max(x, vec3(0.0)), vec3(1.0 / 2.4)) - 0.055;
+    return mix(hi, lo, lessThan(x, vec3(0.0031308)));
 }
 
 // ── Sort key ────────────────────────────────────────────────────────────────

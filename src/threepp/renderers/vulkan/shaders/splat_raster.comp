@@ -114,16 +114,7 @@ void main() {
         i += n;
     }
 
-    if (!inside || range.y == range.x) return;
-
-    const float coverage = 1.0 - T;
-    if (coverage <= 0.0) return;
-
-    // C is the DISPLAY-REFERRED composite, premultiplied by coverage (see the
-    // colour-domain note in splat_common.glsl). Un-premultiply, decode once,
-    // re-premultiply: an sRGB image with an alpha channel entering a linear
-    // pipeline. Opaque pixels come out bit-for-bit the GL answer.
-    vec3 lin = splatSrgbToLinear(C / coverage) * coverage;
+    if (!inside || range.y == range.x || T >= 1.0) return;
 
     // Pre-exposure — the factor the shade already baked into every sceneHdr
     // store, and the single easiest thing in this pass to leave out and never
@@ -131,16 +122,20 @@ void main() {
     //
     // EXCEPT on solid-background sky pixels: the shade deliberately skips the
     // pre-exposure there so PostComposite can hand the configured background
-    // colour back verbatim. Pre-exposing a splat over one of those would make
-    // it brighter than the same splat one pixel away over geometry.
+    // colour back verbatim. Composing against one of those as if it had been
+    // pre-exposed would weight the blend against the wrong background.
     float preExp = ubo.preExposure;
     if ((ubo.flags & kSplatFlagBgSolid) != 0u && imageLoad(gbufIds, px).x < 1u) preExp = 1.0;
-    lin *= preExp;
 
-    // Splats OVER whatever the shade left here; the background keeps whatever
-    // transmittance the cloud left of it.
+    // The whole composite in the splat's own display-referred domain — the one
+    // its coefficients were fitted in (see splat_common.glsl). C is already
+    // premultiplied by the front-to-back transmittance; the background arrives
+    // through the same transfer function the display would put it through, and
+    // leaves through its exact inverse, so a pixel with T == 1 is untouched
+    // (returned above) and one with T == 0 is exactly the splat colour.
     const vec4 dst = imageLoad(sceneHdr, px);
-    const vec3 outRgb = dst.rgb * T + lin;
+    const vec3 dstDisp = splatLinearToSrgb(dst.rgb / preExp);
+    const vec3 outRgb  = splatSrgbToLinear(dstDisp * T + C) * preExp;
     imageStore(sceneHdr, px, vec4(outRgb, dst.a));
 
     if ((ubo.flags & kSplatFlagChecksum) != 0u) {
