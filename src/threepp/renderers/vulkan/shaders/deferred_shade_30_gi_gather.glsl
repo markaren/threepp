@@ -369,7 +369,16 @@ vec3 shadeDiffuseDirect(vec3 P, vec3 N, vec3 V, vec3 albedo, float roughness,
                         const float D     = distGGX(NdotH, ar);
                         const float G     = geomSmithG1(NdotV, k) * geomSmithG1(ndl, k);
                         const vec3  F     = fresnelSchlick(max(dot(V, H), 0.0), F0);
-                        const float solid = min(area * cosE / (dist * dist), TWO_PI);
+                        // Bound the multiplier by the WIDENED lobe's own solid
+                        // angle (≈ 4π·α² with α = ar²): D grew as the lobe
+                        // narrowed but still swept the light's FULL solid angle,
+                        // so a near-mirror surface returned ~8× the light's own
+                        // radiance (a mirror cannot out-shine what it reflects —
+                        // the ceiling is F·L). The α⁴ cap lands the mirror limit
+                        // exactly there and is a no-op on rough surfaces, where
+                        // the lobe is already wider than the light.
+                        const float solid = min(min(area * cosE / (dist * dist), TWO_PI),
+                                                4.0 * PI * ar * ar * ar * ar);
                         lit += (D * G) * F / max(4.0 * NdotV * ndl, 1e-4) * rl.color * (solid * ndl * vis);
                     }
                 }
