@@ -163,6 +163,18 @@ bool gTraceSkipWater = false;
 
 vec3 traceRadiance(vec3 origin, vec3 dir, bool doShadows, float maxLod, float missLod, inout uint seed, bool cheapHits, bool probeHitFill) {
     const int REFL_MAX_BOUNCES = 3;
+    // A PASS-THROUGH is not a bounce: the water-crest skip, a sub-cutoff cutout
+    // texel and a blend layer all leave the ray travelling in the SAME direction
+    // through a surface that did not stop it. Charging those against the bounce
+    // budget made three leaf-card texels exhaust the trace, and then whatever
+    // the terminal is, is wrong — black (the original behaviour) hid inside a
+    // dark tree reflection, while the environment (which briefly replaced it)
+    // painted bright white speckle over every canopy reflected in the fjord
+    // water: a canopy IS a stack of alpha-cutout cards, so most rays into one
+    // thread several. Give the pass-throughs their own, larger budget so the ray
+    // reaches a real surface (or the open sky) on its own, and let
+    // REFL_MAX_BOUNCES count only genuine reflective bounces, unchanged.
+    const int REFL_MAX_STEPS = 12;
     vec3  radiance   = vec3(0.0);
     vec3  tput       = vec3(1.0);
     vec3  o          = origin;
@@ -175,8 +187,9 @@ vec3 traceRadiance(vec3 origin, vec3 dir, bool doShadows, float maxLod, float mi
     // analyticDirectSplit, before any reflection/glass tracing).
     gShadowMovingOccluder = false;
 
-    int b = 0;// hoisted: the post-loop env terminal below reads where it stopped
-    for (; b < REFL_MAX_BOUNCES; ++b) {
+    int b    = 0;// REFLECTIVE bounces only — incremented at the continuation below
+    int step = 0;// every ray segment (bounces + pass-throughs); the loop guard
+    for (; step < REFL_MAX_STEPS; ++step) {
         rayQueryEXT rq;
         rayQueryInitializeEXT(rq, topAS, gl_RayFlagsOpaqueEXT, 0xFFu, o, 1e-3, d, 1e30);
         while (rayQueryProceedEXT(rq)) {}
@@ -302,26 +315,28 @@ vec3 traceRadiance(vec3 origin, vec3 dir, bool doShadows, float maxLod, float mi
         const vec3  hitR  = reflect(-hitV, hitN);
         // Stop bouncing on rough surfaces, the last bounce, or when the specular
         // throughput is negligible — cap off with prefiltered-env specular.
-        if (b == REFL_MAX_BOUNCES - 1 || hRough > 0.35 ||
+        if (b >= REFL_MAX_BOUNCES - 1 || hRough > 0.35 ||
             max(max(specW.r, specW.g), specW.b) < 0.02) {
             radiance += tput * specW * sampleEnvLod(hitR, hRough * maxLod);
             break;
         }
         // Continue the reflection one bounce deeper (GGX-jittered when glossy).
+        ++b;// the ONLY place a reflective bounce is counted
         tput      *= specW;
         d          = (hRough < 0.08) ? hitR : sampleGGXReflectionFib(hitV, hitN, hRough, 0, 1);
         if (dot(d, hitN) <= 0.0) d = hitR;
         o          = hitP + hitN * SHADOW_EPS;
         curMissLod = hRough * maxLod;
     }
-    // Budget exhausted purely by PASS-THROUGHS (water-crest skip, sub-cutoff
-    // cutout texels, blend carry-through): no shading exit fired, so d and
-    // curMissLod still describe the live ray — terminate on the environment
-    // exactly as the miss branch would, instead of returning black (the dark
-    // dots in grazing ocean reflections / black speckle through stacked
-    // foliage). Every shading exit break's first (the b==MAX-1 cap-off catches
-    // the bounce path), so this can never double-count.
-    if (b == REFL_MAX_BOUNCES) radiance += tput * sampleEnvLod(d, curMissLod);
+    // STEP budget exhausted — the ray threaded REFL_MAX_STEPS surfaces without
+    // one of them ever stopping it. d and curMissLod still describe the live
+    // ray, so terminate on the environment exactly as the miss branch would
+    // (returning black here is what put dark dots in grazing ocean
+    // reflections). At 12 steps this is rare enough not to be a visible answer
+    // in its own right, which is the whole point: at 3 it fired constantly, and
+    // a frequent wrong answer is a visible artifact whichever colour it is.
+    // Every shading exit break's first, so this can never double-count.
+    if (step >= REFL_MAX_STEPS) radiance += tput * sampleEnvLod(d, curMissLod);
     // A moving-caster SHADOW inside the reflected content is moving content just
     // like the mover itself: the shadow rays at the reflected hits committed on
     // a currently-MOVING mesh, so the reflected radiance carries a shadow that
