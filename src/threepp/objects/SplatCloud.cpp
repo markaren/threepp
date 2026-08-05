@@ -4,6 +4,7 @@
 #include "threepp/cameras/Camera.hpp"
 #include "threepp/core/BufferGeometry.hpp"
 #include "threepp/core/Uniform.hpp"
+#include "threepp/extras/DataUtils.hpp"
 #include "threepp/materials/RawShaderMaterial.hpp"
 #include "threepp/math/Matrix4.hpp"
 #include "threepp/renderers/GLRenderer.hpp"
@@ -541,9 +542,26 @@ void SplatCloud::buildTextures() {
     }
 
     // --- SH: one texel per coefficient, alpha unused ------------------------
+    //
+    // HALF, not float, and the only one of the three that is. SH coefficients
+    // are small (|c| < ~4 after activation), smooth, and every one of them is
+    // multiplied by a basis function and summed -- the error budget is a
+    // fraction of a colour LSB. The mean and covariance stay fp32 because the
+    // shader INVERTS the projected covariance: half's 11-bit significand on
+    // Sxx..Szz costs real precision in the conic, and a near-singular conic is
+    // how a splat renderer produces a screen-wide smear from nothing.
+    //
+    // It is also where all the memory is. At 5M splats and degree 3 the SH
+    // texture is 16 texels per splat against 1 for the mean and 2 for the
+    // covariance: 1220 MB of the 1450 MB total, halved to 610 MB.
     {
-        shTexture_ = allocate(std::max(1, texHeightFor(n * static_cast<size_t>(coeffs), "SH", n)));
-        auto& texels = shTexture_->image().data<float>();
+        shTexture_ = DataTexture::create<std::uint16_t>(
+                4, TEX_WIDTH,
+                static_cast<unsigned int>(std::max(1, texHeightFor(n * static_cast<size_t>(coeffs), "SH", n))));
+        shTexture_->format = Format::RGBA;
+        shTexture_->type = Type::HalfFloat;
+
+        auto& texels = shTexture_->image().data<std::uint16_t>();
 
         for (size_t i = 0; i < n; ++i) {
 
@@ -551,9 +569,9 @@ void SplatCloud::buildTextures() {
             for (int k = 0; k < coeffs; ++k) {
 
                 const size_t t = (i * static_cast<size_t>(coeffs) + k) * 4;
-                texels[t + 0] = c[k * 3 + 0];
-                texels[t + 1] = c[k * 3 + 1];
-                texels[t + 2] = c[k * 3 + 2];
+                texels[t + 0] = DataUtils::toHalfFloat(c[k * 3 + 0]);
+                texels[t + 1] = DataUtils::toHalfFloat(c[k * 3 + 1]);
+                texels[t + 2] = DataUtils::toHalfFloat(c[k * 3 + 2]);
             }
         }
     }

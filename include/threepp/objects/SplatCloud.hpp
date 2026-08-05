@@ -11,14 +11,22 @@
 // turns the draw into glDrawElementsInstanced, and nothing in the renderer had
 // to change.
 //
-// Per-splat data does NOT ride in vertex attributes. It lives in three RGBA32F
+// Per-splat data does NOT ride in vertex attributes. It lives in three
 // DataTextures fetched with texelFetch by instance index — the same trick
 // Skeleton uses for boneTexture, and the reason a million splats need no
 // per-instance attribute plumbing:
 //
-//   splatMeanTex   1 texel  / splat   (mean.xyz, opacity)
-//   splatCovTex    2 texels / splat   (Sxx,Sxy,Sxz,Syy), (Syz,Szz,-,-)
-//   splatShTex     N texels / splat   one texel per SH coefficient, rgb used
+//   splatMeanTex   RGBA32F  1 texel  / splat   (mean.xyz, opacity)
+//   splatCovTex    RGBA32F  2 texels / splat   (Sxx,Sxy,Sxz,Syy), (Syz,Szz,-,-)
+//   splatShTex     RGBA16F  N texels / splat   one texel per SH coefficient, rgb used
+//
+// splatShTex is HALF and the other two are not. SH coefficients are small,
+// smooth, and get summed against basis functions, so half's 11-bit significand
+// is far inside the error budget of an 8-bit colour — and SH is where the
+// memory is: at degree 3 it is 16 of the 19 texels a splat occupies. The mean
+// and covariance stay fp32 because the shader inverts the projected
+// covariance, and a near-singular conic is how a splat renderer turns a
+// rounding error into a screen-wide smear.
 //
 // splatShTex spends its alpha channel to keep a coefficient from straddling a
 // texel boundary; at degree 3 that is 16 texels per splat instead of 12. The

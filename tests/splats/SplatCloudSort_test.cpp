@@ -9,12 +9,20 @@
 // GLSplatCloud_test carries the end-to-end version of the same claim.
 
 #include "threepp/cameras/PerspectiveCamera.hpp"
+#include "threepp/core/Uniform.hpp"
+#include "threepp/extras/DataUtils.hpp"
+#include "threepp/materials/RawShaderMaterial.hpp"
 #include "threepp/objects/SplatCloud.hpp"
 #include "threepp/splats/SplatData.hpp"
+#include "threepp/textures/DataTexture.hpp"
 
 #include <catch2/catch_test_macros.hpp>
 
+#include <cmath>
 #include <cstddef>
+#include <cstdint>
+#include <memory>
+#include <string>
 #include <vector>
 
 using namespace threepp;
@@ -162,6 +170,82 @@ TEST_CASE("SplatCloud: a cloud at a single depth still sorts") {
 
     REQUIRE_NOTHROW(cloud->update(*camera));
     CHECK(drawOrder(*cloud).size() == means.size());
+}
+
+// --------------------------------------------------------------------------
+// Texture packing
+// --------------------------------------------------------------------------
+
+namespace {
+
+    Texture* uniformTexture(SplatCloud& cloud, const std::string& name) {
+
+        // dynamic, not static: Material is a virtual base of ShaderMaterial.
+        auto material = std::dynamic_pointer_cast<RawShaderMaterial>(cloud.material());
+        REQUIRE(material != nullptr);
+        return material->uniforms.at(name).value<Texture*>();
+    }
+
+}// namespace
+
+TEST_CASE("SplatCloud: SH rides in half, geometry rides in float") {
+
+    // The split is the whole point of the half-float SH change: SH is 16 of
+    // the 19 texels a degree-3 splat occupies, so that is where halving pays,
+    // and the covariance is what the shader inverts, so that is where it must
+    // not. A well-meaning "make them all half" would sail past a pixel test
+    // and show up as smearing on a real scan.
+    SplatGenerator::Options o;
+    o.count = 256;
+    o.shDegree = 3;
+    o.seed = 5150u;
+    auto data = SplatGenerator::generate(o);
+    const auto original = data.sh;
+
+    auto cloud = SplatCloud::create(std::move(data));
+
+    auto* mean = uniformTexture(*cloud, "splatMeanTex");
+    auto* cov = uniformTexture(*cloud, "splatCovTex");
+    auto* sh = uniformTexture(*cloud, "splatShTex");
+
+    REQUIRE(mean != nullptr);
+    REQUIRE(cov != nullptr);
+    REQUIRE(sh != nullptr);
+
+    CHECK(mean->type == Type::Float);
+    CHECK(mean->image().isFloat());
+    CHECK(cov->type == Type::Float);
+    CHECK(cov->image().isFloat());
+
+    CHECK(sh->type == Type::HalfFloat);
+    CHECK(sh->format == Format::RGBA);
+    CHECK(sh->image().isHalfFloat());
+
+    // Half the bytes of the equivalent RGBA32F, exactly.
+    const auto& texels = sh->image().data<std::uint16_t>();
+    CHECK(texels.size() * sizeof(std::uint16_t) ==
+          static_cast<size_t>(sh->image().width()) * sh->image().height() * 4 * sizeof(std::uint16_t));
+
+    // And every coefficient still says what it said, to within half's
+    // precision. Generated coefficients run to about +/-1, where a half step
+    // is 2^-11; the tolerance below is a couple of those.
+    const int coeffs = cloud->data().coeffCount();
+    double worst = 0.0;
+    for (size_t i = 0; i < cloud->splatCount(); ++i) {
+
+        for (int k = 0; k < coeffs; ++k) {
+
+            const size_t t = (i * static_cast<size_t>(coeffs) + k) * 4;
+            for (int ch = 0; ch < 3; ++ch) {
+
+                const float want = original[(i * static_cast<size_t>(coeffs) + k) * 3 + ch];
+                const float got = DataUtils::fromHalfFloat(texels[t + ch]);
+                worst = std::max(worst, static_cast<double>(std::abs(got - want)));
+            }
+        }
+    }
+    INFO("worst SH round-trip error " << worst);
+    CHECK(worst < 1e-3);
 }
 
 TEST_CASE("SplatCloud: a NaN mean does not poison the key range") {
