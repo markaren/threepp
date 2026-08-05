@@ -1,3 +1,4 @@
+add_test_executable(DataUtils_test)
 add_test_executable(EditorAnimation_test)
 add_test_executable(EditorArticulationConfig_test)
 add_test_executable(EditorCommands_test)

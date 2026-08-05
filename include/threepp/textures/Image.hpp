@@ -10,7 +10,13 @@
 
 namespace threepp {
 
-    using ImageData = std::variant<std::vector<unsigned char>, std::vector<float>>;
+    // The pixel buffer a texture carries, in whichever CPU type the upload
+    // path wants: bytes (UnsignedByte), floats (Float), or raw half-float bits
+    // (HalfFloat — see threepp/extras/DataUtils.hpp for the conversion).
+    // uint16_t here always means half, never UnsignedShort: nothing in threepp
+    // uploads 16-bit integer pixel data, and giving the alternative one meaning
+    // keeps isHalfFloat() honest.
+    using ImageData = std::variant<std::vector<unsigned char>, std::vector<float>, std::vector<std::uint16_t>>;
 
     class Image {
 
@@ -39,6 +45,10 @@ namespace threepp {
 
         [[nodiscard]] bool isFloat() const noexcept {
             return std::holds_alternative<std::vector<float>>(data_);
+        }
+
+        [[nodiscard]] bool isHalfFloat() const noexcept {
+            return std::holds_alternative<std::vector<std::uint16_t>>(data_);
         }
 
         [[nodiscard]] int channels() const noexcept {

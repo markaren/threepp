@@ -6884,6 +6884,20 @@ namespace threepp {
             const uint32_t h = img.height();
             if (w == 0 || h == 0) return {};
 
+            // Half-float CPU pixel data (ImageData's uint16 alternative) has no
+            // path here yet: everything below normalises to RGBA8 and the two
+            // decoders it knows are u8 and f32. Say so and return the null
+            // image, which the callers already treat as "no texture" -- the
+            // alternative is std::bad_variant_access out of img.data<float>()
+            // several branches down, which is a worse way to learn the same
+            // thing. SplatCloud, the only half-float DataTexture in the tree,
+            // is GL-only.
+            if (img.isHalfFloat()) {
+                std::cerr << "[VulkanRenderer] half-float DataTexture is not supported yet ("
+                          << w << "x" << h << "); ignoring\n";
+                return {};
+            }
+
             // Normalise everything to tightly-packed RGBA8. The pipeline
             // treats the bindless array as a uniform u8x4 sampler set, so
             // BCn blocks decompress, mono/dual-channel maps replicate or

@@ -13,6 +13,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
 #include <iostream>
 
 using namespace threepp;
@@ -279,6 +280,13 @@ void gl::GLTextures::uploadTexture(TextureProperties* textureProperties, Texture
                 state->texImage2D(GL_TEXTURE_2D, 0, glInternalFormat,
                                   static_cast<int>(image.width()), static_cast<int>(image.height()),
                                   glFormat, glType, texture.image().data<float>().data());
+            } else if (glType == GL_HALF_FLOAT) {
+                // Type::HalfFloat with CPU data: the buffer is raw half bits
+                // (see threepp/extras/DataUtils.hpp), and getInternalFormat has
+                // already picked the matching R/RG/RGB/RGBA 16F.
+                state->texImage2D(GL_TEXTURE_2D, 0, glInternalFormat,
+                                  static_cast<int>(image.width()), static_cast<int>(image.height()),
+                                  glFormat, glType, texture.image().data<std::uint16_t>().data());
             } else {
 
                 std::cerr << "Unnsupported gltype=" << glType << std::endl;

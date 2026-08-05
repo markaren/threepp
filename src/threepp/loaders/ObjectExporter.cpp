@@ -7,6 +7,7 @@
 
 #include "threepp/animation/AnimationClip.hpp"
 #include "threepp/cameras/OrthographicCamera.hpp"
+#include "threepp/extras/DataUtils.hpp"
 #include "threepp/cameras/PerspectiveCamera.hpp"
 #include "threepp/geometries/geometries.hpp"
 #include "threepp/geometries/LatheGeometry.hpp"
@@ -195,6 +196,13 @@ namespace {
             pixels.resize(src.size());
             for (size_t i = 0; i < src.size(); ++i) {
                 pixels[i] = static_cast<unsigned char>(std::lround(std::clamp(src[i], 0.f, 1.f) * 255.f));
+            }
+        } else if (image.isHalfFloat()) {
+            const auto& src = image.data<std::uint16_t>();
+            pixels.resize(src.size());
+            for (size_t i = 0; i < src.size(); ++i) {
+                const float v = DataUtils::fromHalfFloat(src[i]);
+                pixels[i] = static_cast<unsigned char>(std::lround(std::clamp(v, 0.f, 1.f) * 255.f));
             }
         } else {
             pixels = image.data<unsigned char>();
