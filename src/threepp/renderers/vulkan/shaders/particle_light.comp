@@ -240,7 +240,10 @@ vec3 froxelInscatter(vec2 fuv, float viewDist) {
     if ((pc.flags & 1u) == 0u) return vec3(0.0);
     const float t = log(max(viewDist, kFroxelZMin) / kFroxelZMin)
                   / log(kFroxelZMax / kFroxelZMin);
-    return texture(froxelLutTex, vec3(fuv, clamp(t, 0.0, 1.0))).rgb;
+    // Half-texel shift — texel = slice FAR edge; see froxelInscatter in
+    // deferred_shade_10_lighting_utils.glsl. 64.0 = kFroxelZ.
+    const float w = max(clamp(t, 0.0, 1.0) * 64.0 - 0.5, 0.0) / 64.0;
+    return texture(froxelLutTex, vec3(fuv, w)).rgb;
 }
 
 void main() {
@@ -266,7 +269,13 @@ void main() {
     // stand-in, and such particles are clipped or peripheral anyway.
     const vec4 clip     = rcam.currVPunjittered * vec4(P, 1.0);
     const bool onScreen = clip.w > 1e-4;
-    const vec2 uv       = onScreen ? clamp(clip.xy / clip.w * 0.5 + 0.5, 0.0, 1.0)
+    // currVPunjittered is GL-convention clip (Y UP — the raster negates Y at
+    // gl_Position only), while the cluster grid and froxel LUT are indexed
+    // y-DOWN. Flip Y like every other consumer (occl_cull, cloud_march does
+    // 0.5 - ndc.y*0.5) — without it a particle read the vertically MIRRORED
+    // cluster cell + froxel column: a lamp low in frame lit smoke high in frame.
+    const vec2 ndcP     = clip.xy / clip.w;
+    const vec2 uv       = onScreen ? clamp(vec2(ndcP.x * 0.5 + 0.5, 0.5 - ndcP.y * 0.5), 0.0, 1.0)
                                    : vec2(0.5);
 
     // ── Direct: suns (RT shadow + cloud shadow + HG toward the camera) ──────

@@ -11,7 +11,13 @@ vec3 froxelInscatter(vec2 fuv, float viewDist) {
     if ((pc.flags & 256u) == 0u) return vec3(0.0);
     const float t = log(max(viewDist, kFroxelZMin) / kFroxelZMin)
                   / log(kFroxelZMax / kFroxelZMin);
-    return texture(froxelLutTex, vec3(fuv, clamp(t, 0.0, 1.0))).rgb;
+    // Texel k holds the cumulative integral to slice k's FAR edge
+    // (froxel_integrate stores AFTER folding slice k), so the unshifted
+    // normalized read landed half a slice DEEP — a deterministic
+    // 2048^(0.5/64) ≈ 6.1% over-integration of every volumetric leg. Shift
+    // back half a texel. 64.0 = kFroxelZ — KEEP IN SYNC with froxel_integrate.
+    const float w = max(clamp(t, 0.0, 1.0) * 64.0 - 0.5, 0.0) / 64.0;
+    return texture(froxelLutTex, vec3(fuv, w)).rgb;
 }
 // Cloud shadow transmittance at a world point (bilinear from the top-down
 // cloud shadow map, binding 65). 1.0 (full sun) when clouds/shadows are off or
@@ -32,7 +38,9 @@ float froxelTransmittance(vec2 fuv, float viewDist) {
     if ((pc.flags & 256u) == 0u) return 1.0;
     const float t = log(max(viewDist, kFroxelZMin) / kFroxelZMin)
                   / log(kFroxelZMax / kFroxelZMin);
-    return texture(froxelLutTex, vec3(fuv, clamp(t, 0.0, 1.0))).a;
+    // Same half-texel shift as froxelInscatter above (texel = slice FAR edge).
+    const float w = max(clamp(t, 0.0, 1.0) * 64.0 - 0.5, 0.0) / 64.0;
+    return texture(froxelLutTex, vec3(fuv, w)).a;
 }
 
 // ReBLUR-style TEMPORAL accumulation for the reflection (+ glass). Adaptive blend
