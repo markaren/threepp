@@ -144,6 +144,7 @@ set(publicHeaders
         "threepp/loaders/CubeTextureLoader.hpp"
         "threepp/loaders/ColladaLoader.hpp"
         "threepp/loaders/DDSLoader.hpp"
+        "threepp/loaders/EXRLoader.hpp"
         "threepp/loaders/FontLoader.hpp"
         "threepp/loaders/GLTFLoader.hpp"
         "threepp/loaders/MaterialVariants.hpp"
@@ -318,6 +319,7 @@ set(privateHeaders
         "threepp/utils/Base64.hpp"
         "threepp/utils/RegexUtil.hpp"
 
+        "threepp/loaders/HdrTexture.hpp"
         "threepp/loaders/ObjectJsonConstants.hpp"
 
         "threepp/loaders/xacro/Diagnostics.hpp"
@@ -458,6 +460,7 @@ set(sources
         "threepp/loaders/AsyncGroup.cpp"
         "threepp/loaders/ColladaLoader.cpp"
         "threepp/loaders/DDSLoader.cpp"
+        "threepp/loaders/EXRLoader.cpp"
         "threepp/loaders/FontLoader.cpp"
         "threepp/loaders/GLTFLoader.cpp"
         "threepp/loaders/MaterialVariants.cpp"

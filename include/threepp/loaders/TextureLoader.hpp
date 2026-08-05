@@ -19,6 +19,10 @@ namespace threepp {
         // emissive maps pass `ColorSpace::sRGB` so the sampler decodes from sRGB
         // to linear. Data textures (normal, metallic/roughness, occlusion,
         // displacement) should stay `NoColorSpace`.
+        //
+        // `.exr` and `.hdr` are routed to EXRLoader / RGBELoader and come back as
+        // linear float RGBA equirect textures — `colorSpace` does not apply to
+        // them and is ignored.
         std::shared_ptr<Texture> load(const std::filesystem::path& path,
                                       ColorSpace colorSpace,
                                       bool flipY = true);

@@ -14,6 +14,7 @@
 #ifdef THREEPP_PY_HAS_FBX
 #include "threepp/loaders/FBXLoader.hpp"
 #endif
+#include "threepp/loaders/EXRLoader.hpp"
 #include "threepp/loaders/ModelLoader.hpp"
 #include "threepp/loaders/OBJLoader.hpp"
 #include "threepp/loaders/RGBELoader.hpp"
@@ -49,6 +50,17 @@ namespace threepp_py {
                 .def("load", [](RGBELoader& l, const std::string& path, bool flip_y) { return l.load(path, flip_y); },
                      py::arg("path"), py::arg("flip_y") = true,
                      "Load a Radiance .hdr equirectangular environment as a float Texture.");
+
+        // ---- EXRLoader (OpenEXR .exr -> float equirect Texture) --------------
+        // Same output shape as RGBELoader, so the two are interchangeable. Reads
+        // scanline EXRs with NONE/RLE/ZIPS/ZIP compression — what Blender writes
+        // and what the HDRI sites ship. Returns None on an unsupported codec
+        // (PIZ/DWAA/...) rather than decoding garbage.
+        py::class_<EXRLoader>(m, "EXRLoader")
+                .def(py::init<>())
+                .def("load", [](EXRLoader& l, const std::string& path, bool flip_y) { return l.load(path, flip_y); },
+                     py::arg("path"), py::arg("flip_y") = true,
+                     "Load an OpenEXR .exr equirectangular environment as a float Texture.");
 
         // ---- rotate_equirect -------------------------------------------------
         // Resample an equirectangular (lat/long) float texture by a 3D rotation

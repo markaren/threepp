@@ -1,7 +1,7 @@
 
 #include "threepp/loaders/RGBELoader.hpp"
 
-#include "threepp/textures/Texture.hpp"
+#include "threepp/loaders/HdrTexture.hpp"
 
 // stb_image.h is already compiled via ImageLoader.cpp — just declare the API.
 #include "stb_image.h"
@@ -48,20 +48,10 @@ std::shared_ptr<Texture> RGBELoader::load(const std::filesystem::path& path, boo
     }
     stbi_image_free(pixels);
 
-    Image image{std::move(data), static_cast<unsigned int>(width), static_cast<unsigned int>(height), 0};
-
-    auto texture = Texture::create(image);
-    texture->name = path.stem().string();
-    texture->format = Format::RGBA;
-    texture->type = Type::Float;
-    texture->colorSpace = ColorSpace::Linear;// stbi_loadf already decoded RGBE → linear floats
-    texture->mapping = Mapping::EquirectangularReflection;
-    // Equirect maps wrap 360° in azimuth — Repeat on S keeps the atan2 seam (at
-    // -X) continuous when sampled directly as a background and when GGX-prefiltered
-    // into the GL PMREM atlas (otherwise the seam bakes a vertical streak). T stays
-    // clamped (the poles do not wrap).
-    texture->wrapS = TextureWrapping::Repeat;
-    texture->needsUpdate();
-
-    return texture;
+    // stbi_loadf already decoded RGBE → linear floats, which is what
+    // makeHdrTexture (shared with EXRLoader) tags the result as.
+    return detail::makeHdrTexture(std::move(data),
+                                  static_cast<unsigned int>(width),
+                                  static_cast<unsigned int>(height),
+                                  path.stem().string());
 }

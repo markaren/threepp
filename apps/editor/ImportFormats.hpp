@@ -60,6 +60,15 @@ namespace threepp::editor::formats {
         return list;
     }
 
+    // HDR images, which become the scene environment rather than a material map.
+    // Both decode to linear float RGBA equirects (RGBELoader / EXRLoader), so
+    // everything downstream treats them identically.
+    inline const std::vector<std::string>& environments() {
+
+        static const std::vector<std::string> list{".hdr", ".exr"};
+        return list;
+    }
+
     // Everything the Import action accepts, mesh and robot alike.
     inline const std::vector<std::string>& importable() {
 
@@ -84,6 +93,11 @@ namespace threepp::editor::formats {
     inline bool isImportable(const std::filesystem::path& path) {
 
         return contains(importable(), extensionOf(path));
+    }
+
+    inline bool isEnvironment(const std::string& extension) {
+
+        return contains(environments(), extension);
     }
 
     inline bool isImage(const std::string& extension) {

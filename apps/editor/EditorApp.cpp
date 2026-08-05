@@ -46,6 +46,7 @@
 #include "threepp/lights/AmbientLight.hpp"
 #include "threepp/lights/DirectionalLight.hpp"
 #include "threepp/loaders/AssetSource.hpp"
+#include "threepp/loaders/EXRLoader.hpp"
 #include "threepp/loaders/ModelLoader.hpp"
 #include "threepp/loaders/RGBELoader.hpp"
 #include "threepp/loaders/TextureLoader.hpp"
@@ -1572,10 +1573,15 @@ void EditorApp::setEnvironment(const std::filesystem::path& path, bool alsoBackg
     // The snapshot carries the environment, so this would be undone by Stop.
     if (rejectWhilePlaying("Set Environment")) return;
 
-    RGBELoader loader;
     std::shared_ptr<Texture> texture;
     try {
-        texture = loader.load(path);
+        if (formats::extensionOf(path) == ".exr") {
+            EXRLoader loader;
+            texture = loader.load(path);
+        } else {
+            RGBELoader loader;
+            texture = loader.load(path);
+        }
     } catch (const std::exception& e) {
         log("environment failed: " + std::string(e.what()));
         return;
@@ -3718,7 +3724,7 @@ void EditorApp::handleFileDrop(const std::vector<std::string>& paths) {
             } else {
                 openScene(path);
             }
-        } else if (extension == ".hdr") {
+        } else if (formats::isEnvironment(extension)) {
             setEnvironment(path, true);
         } else if (formats::contains(formats::importable(), extension)) {
             importModel(path);

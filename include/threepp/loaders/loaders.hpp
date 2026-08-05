@@ -3,11 +3,13 @@
 #define THREEPP_LOADERS_HPP
 
 #include "DDSLoader.hpp"
+#include "EXRLoader.hpp"
 #include "FontLoader.hpp"
 #include "ModelLoader.hpp"
 #include "OBJLoader.hpp"
 #include "ObjectExporter.hpp"
 #include "ObjectLoader.hpp"
+#include "RGBELoader.hpp"
 #include "STLLoader.hpp"
 #include "TextureLoader.hpp"
 

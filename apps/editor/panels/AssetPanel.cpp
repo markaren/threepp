@@ -31,7 +31,7 @@ namespace {
 
         if (extension == ".json") return AssetKind::Scene;
         if (formats::contains(formats::importable(), extension)) return AssetKind::Model;
-        if (extension == ".hdr") return AssetKind::Environment;
+        if (formats::isEnvironment(extension)) return AssetKind::Environment;
         if (formats::isImage(extension)) return AssetKind::Image;
         return AssetKind::Other;
     }
@@ -41,7 +41,7 @@ namespace {
         switch (kind) {
             case AssetKind::Scene: return "scene";
             case AssetKind::Model: return "model";
-            case AssetKind::Environment: return "hdr";
+            case AssetKind::Environment: return "env";
             case AssetKind::Image: return "image";
             case AssetKind::Other: return "";
         }

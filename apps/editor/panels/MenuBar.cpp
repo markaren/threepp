@@ -136,7 +136,7 @@ void EditorApp::drawMenuBar() {
             if (ImGui::MenuItem("Set Environment...", nullptr, false, editable)) {
                 pendingDialog_ = PendingDialog::Environment;
                 fileBrowser_.open("Set Environment", FileBrowser::Mode::Open,
-                                  settings_.environmentDir, {".hdr"});
+                                  settings_.environmentDir, formats::environments());
             }
             if (ImGui::MenuItem("Clear Environment", nullptr, false,
                                 editable && document_.scene().environment != nullptr)) {

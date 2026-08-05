@@ -421,7 +421,8 @@ too dark".
 The default `load(path)` overload tags `NoColorSpace`, matching three.js.
 
 Related loaders: `CubeTextureLoader` (six faces → skybox), `RGBELoader` (`.hdr` equirectangular
-environments), `DDSLoader`, `ImageLoader`. `TextureLoader` caches by path by default.
+environments), `EXRLoader` (the same for `.exr`), `DDSLoader`, `ImageLoader`. `TextureLoader`
+caches by path by default, and routes `.hdr`/`.exr` to the two HDR loaders.
 
 ## Lights, shadows and environments
 
@@ -462,6 +463,10 @@ auto env = rgbe.load("puresky_2k.hdr");
 scene.environment = env;   // lights everything
 scene.background = env;    // and is visible behind it
 ```
+
+`EXRLoader` is the `.exr` equivalent and returns the same kind of texture, so the two are
+interchangeable. It reads scanline EXRs compressed with NONE/RLE/ZIPS/ZIP; PIZ and DWAA files
+are rejected with a message naming the codec.
 
 Tone mapping turns the resulting HDR values into displayable ones:
 

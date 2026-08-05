@@ -196,10 +196,10 @@ leave a small one with no viewport at all. The hierarchy also scrolls
 horizontally, because a deep tree indents past any fixed width and the panel
 cannot be widened past the screen.
 
-**Files.** New / Open / Save / Save As, Import Model, Set Environment (.hdr),
-Recent Files. All dialogs are a first-party ImGui file browser — no native
+**Files.** New / Open / Save / Save As, Import Model, Set Environment
+(.hdr / .exr), Recent Files. All dialogs are a first-party ImGui file browser — no native
 dialog library. Drag-and-drop onto the window works too: `.json` opens a scene,
-`.hdr` becomes the environment, model files are imported, `.py` attaches to the
+`.hdr`/`.exr` becomes the environment, model files are imported, `.py` attaches to the
 selected object as a script, and image files become the selected mesh's
 base-colour map.
 

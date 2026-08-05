@@ -2,7 +2,9 @@
 #include "threepp/loaders/TextureLoader.hpp"
 
 #include "threepp/loaders/DDSLoader.hpp"
+#include "threepp/loaders/EXRLoader.hpp"
 #include "threepp/loaders/ImageLoader.hpp"
+#include "threepp/loaders/RGBELoader.hpp"
 
 #include <algorithm>
 #include <cctype>
@@ -85,6 +87,21 @@ struct TextureLoader::Impl {
             DDSLoader ddsLoader;
             texture = ddsLoader.load(path);
             if (texture) texture->colorSpace = colorSpace;
+        } else if (ext == ".exr" || ext == ".hdr") {
+            // HDR formats decode to linear float RGBA, not 8-bit. Without this
+            // branch a .hdr fell through to stb's LDR path, which tonemaps it to
+            // bytes and returns silently — a dim, clipped environment map that
+            // looks like a shading bug rather than a loading one.
+            //
+            // `colorSpace` is deliberately not applied: the pixels are already
+            // scene-linear, and tagging them sRGB would decode them twice.
+            if (ext == ".exr") {
+                EXRLoader exrLoader;
+                texture = exrLoader.load(path, flipY);
+            } else {
+                RGBELoader rgbeLoader;
+                texture = rgbeLoader.load(path, flipY);
+            }
         } else {
             const bool isJPEG = checkIsJPEG(path.string());
             auto image = imageLoader_.load(path, isJPEG ? 3 : 4, flipY);
