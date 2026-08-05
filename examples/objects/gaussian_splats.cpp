@@ -598,6 +598,20 @@ int main(int argc, char** argv) {
                           << "  max " << timed.back() << " ms"
                           << "  (" << 1000.0 * static_cast<double>(timed.size()) / sum << " fps mean)"
                           << std::endl;
+#if defined(THREEPP_WITH_VULKAN)
+                // GPU-side breakdown, so "the splat pass costs X" is a
+                // measurement of the pass and not of the whole frame around it.
+                if (vkRenderer) {
+                    const auto t = vkRenderer->lastFrameTimings();
+                    std::cout << std::setprecision(3)
+                              << "  gpu  splat " << t.splatMs
+                              << "  shade " << t.pathTraceMs
+                              << "  gbuf " << t.rasterGbufMs
+                              << "  taa " << t.taaMs
+                              << "  denoise " << t.denoiseMs
+                              << " ms   cpu record " << t.cpuRecordMs << " ms" << std::endl;
+                }
+#endif
             }
             std::exit(0);
         }

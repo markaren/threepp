@@ -79,6 +79,7 @@ namespace threepp::vulkan {
         lastTimings_.taaMs         = 0.f;
         lastTimings_.dofMs         = 0.f;
         lastTimings_.froxelMs      = 0.f;
+        lastTimings_.splatMs       = 0.f;
         if (!timingsSupported_) return;
         const uint32_t mask = maskRecorded_[frame];
         if (mask == 0u) return;// first use of this slot
@@ -109,6 +110,7 @@ namespace threepp::vulkan {
         lastTimings_.taaMs        = pairMs(TP_TAA);
         lastTimings_.dofMs        = pairMs(TP_Dof);
         lastTimings_.froxelMs     = pairMs(TP_Froxel);
+        lastTimings_.splatMs      = pairMs(TP_Splat);
     }
 
 }// namespace threepp::vulkan

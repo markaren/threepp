@@ -763,6 +763,7 @@ namespace threepp {
             float overlayMs      = 0.f;// hybrid overlay depth + draw
             float dofMs          = 0.f;// thin-lens depth of field (0 unless setDepthOfField)
             float froxelMs       = 0.f;// froxel volumetrics: inject + integrate (0 unless a medium is active)
+            float splatMs        = 0.f;// Gaussian-splat tile rasterizer (0 unless the scene has a SplatCloud)
             float cpuEnsureSceneMs = 0.f;// ensureSceneBuilt
             float cpuRecordMs      = 0.f;// recordCommandBuffer
             float cpuFrameMs       = 0.f;// total render() wall time

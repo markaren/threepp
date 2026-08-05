@@ -190,16 +190,28 @@ namespace threepp::vulkan {
 
     private:
         // The expanded key list is the sum of tiles covered per splat, and that
-        // is DATA, not a constant: measured 2.6 per splat on the 216k ATLAS
-        // scan at 1080p, and hundreds per splat on a handful of screen-filling
-        // ones (the procedural demo is exactly that shape). So this is only the
-        // FIRST GUESS. The expansion reports how many entries it could not fit
-        // and syncClouds resizes to the number the frame actually wanted — one
-        // truncated frame, then correct, instead of a doubling ladder that
-        // costs a wrong frame per rung. Kept modest deliberately: 8 per splat
-        // is already 3x the measured need, and at five million splats every
-        // entry is 16 bytes across the four key/payload buffers.
-        static constexpr uint32_t kEntriesPerSplat = 8;
+        // is DATA, not a constant. So this is only the FIRST GUESS: the
+        // expansion reports how many entries it could not fit and syncClouds
+        // resizes to the number the frame actually wanted — one truncated
+        // frame, then correct, instead of a doubling ladder that costs a wrong
+        // frame per rung.
+        //
+        // The guess matters for SPEED, not just memory, because the radix sort
+        // and the tile-range pass are dispatched over the BUDGET (the expanded
+        // count lives on the GPU and the host never sees it in time to size a
+        // dispatch). Measured per-splat need at 960x600: 2.52 on the 216k ATLAS
+        // scan, 1.74 on the 5.0M Sanctuaire scan — and orbit frame time on
+        // Sanctuaire against the guess:
+        //
+        //     guess 8   36.2 ms   (4.6x more budget than the frame used)
+        //     guess 4   28.8 ms   (2.3x)   <- here: still no truncated frame
+        //     exact     25.2 ms   (1.25x, reached by letting it grow from 1)
+        //
+        // 4 is the largest guess that fits both real scans without truncating
+        // anything, and it collects most of the difference. Closing the last
+        // 3.6 ms wants an indirect dispatch off the GPU-side count, which is on
+        // the V3 list in doc/vulkan_splats.md, not here.
+        static constexpr uint32_t kEntriesPerSplat = 4;
         // Hard ceiling on the four key/payload buffers (4 B per entry each).
         // Past it the frame is genuinely too big for this design and the host
         // says so out loud, once, with the numbers — a silently truncated

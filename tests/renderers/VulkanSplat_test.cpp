@@ -24,6 +24,14 @@
 //   3. A GOLDEN IMAGE for a small procedural cloud — generated, not loaded, so
 //      the repo needs no asset. Catches the whole pipeline drifting at once.
 //
+//      Byte-exact run to run in practice, but gated on PSNR/maxDelta rather
+//      than equality: the temporal resolve's blend is frame-rate aware (see
+//      taaDtFrames), so anything that shifts WHEN a frame lands — a
+//      reallocation stall, a different machine — moves the last few frames'
+//      convergence by a LSB or two. A golden captured under one splat-budget
+//      constant and compared under another measured maxDelta 2 for exactly
+//      that reason, which is inside the gate and should stay inside it.
+//
 // Run standalone (a plain exit-code program, not Catch2):
 //   VulkanSplat_test              compare to tests/renderers/golden/splat.ppm
 //   VulkanSplat_test --update     rewrite the reference after a reviewed change
