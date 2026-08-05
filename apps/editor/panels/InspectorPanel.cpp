@@ -30,6 +30,11 @@
 #include "threepp/lights/Light.hpp"
 #include "threepp/lights/PointLight.hpp"
 #include "threepp/lights/SpotLight.hpp"
+#include "threepp/lights/DirectionalLight.hpp"
+#include "threepp/cameras/OrthographicCamera.hpp"
+#include "threepp/renderers/RenderTarget.hpp"
+#include "threepp/math/Box3.hpp"
+#include "threepp/extras/editor/ShadowFit.hpp"
 #include "threepp/materials/interfaces.hpp"
 #include "threepp/math/MathUtils.hpp"
 #include "threepp/objects/Mesh.hpp"
@@ -1235,6 +1240,131 @@ void EditorApp::drawLightSection(Object3D& object) {
         document_.setDirty(true);
     }
 
+    drawLightShadowSection(object);
+
+    ImGui::TreePop();
+}
+
+// The shadow camera. Until this existed the panel offered no way to reach it at
+// all: a scene whose content ran past the default Ortho(-5,5,5,-5) lost its
+// shadows out there, one whose content sat well inside it got a fraction of the
+// depth range, and either way the only recourse was code — which is what
+// HoverArenaAuthor had to take, setting that scene's camera by hand.
+//
+// So the fields are the feature. "Fit to scene" is a convenience that fills
+// them in once; it is not a mode, because no single rule serves every scene.
+void EditorApp::drawLightShadowSection(Object3D& object) {
+
+    auto* directional = object.as<DirectionalLight>();
+    if (!directional || !directional->shadow) return;
+    if (!object.castShadow) return;
+
+    auto* camera = dynamic_cast<OrthographicCamera*>(directional->shadow->camera.get());
+    if (!camera) return;
+
+    if (!ImGui::TreeNodeEx("Shadow", ImGuiTreeNodeFlags_DefaultOpen)) return;
+
+    // A button, not a mode. No fit is right for every scene — a large ground
+    // plane fits to an extent that spreads the map too thin for anything
+    // standing on it — so this proposes a starting point and the fields below
+    // own it from there. Undoable like any other edit.
+    if (ImGui::Button("Fit to scene")) {
+        const Box3 bounds = editor::ShadowFit::shadowBounds(document_.scene());
+        if (!bounds.isEmpty()) {
+            const Vector3 before{camera->right, camera->nearPlane, camera->farPlane};
+            editor::ShadowFit::fit(*directional, bounds);
+            const Vector3 after{camera->right, camera->nearPlane, camera->farPlane};
+
+            if (!before.equals(after)) {
+                commands_.execute(makeProperty<Vector3>(
+                        "Fit Shadow Camera", "shadowfit:" + object.uuid,
+                        [camera](const Vector3& v) {
+                            camera->left = -v.x;
+                            camera->right = v.x;
+                            camera->top = v.x;
+                            camera->bottom = -v.x;
+                            camera->nearPlane = v.y;
+                            camera->farPlane = v.z;
+                            camera->updateProjectionMatrix();
+                        },
+                        before, after));
+                document_.setDirty(true);
+            }
+        }
+    }
+    if (ImGui::IsItemHovered()) {
+        ImGui::SetTooltip("Size the camera to everything that casts or receives a shadow.\n"
+                          "A starting point - a large ground plane fits wider than you\n"
+                          "want, and the extent below is then yours to set. Nothing\n"
+                          "outside these bounds casts or receives at all.");
+    }
+
+    ImGui::PushItemWidth(140.f);
+
+    const auto cameraField = [&](const char* label, const std::string& key, float* value,
+                                 float speed, float min, float max,
+                                 const std::function<void(const float&)>& setter) {
+        float edited = *value;
+        const bool changed = ImGui::DragFloat(label, &edited, speed, min, max);
+        if (ImGui::IsItemActivated()) commands_.beginTransaction();
+        if (changed) {
+            commands_.execute(makeProperty<float>(label, key + object.uuid, setter, *value, edited));
+            document_.setDirty(true);
+        }
+        if (ImGui::IsItemDeactivated()) commands_.endTransaction();
+    };
+
+    // One extent rather than four edges: a square shadow camera is what keeps
+    // the fit rotation-stable, and four fields invite a lopsided one that
+    // swims as the light turns.
+    float extent = camera->right;
+    const bool extentChanged = ImGui::DragFloat("Extent", &extent, 0.25f, 0.1f, 5000.f);
+    if (ImGui::IsItemActivated()) commands_.beginTransaction();
+    if (extentChanged) {
+        commands_.execute(makeProperty<float>(
+                "Shadow Extent", "shadowextent:" + object.uuid,
+                [camera](const float& v) {
+                    camera->left = -v;
+                    camera->right = v;
+                    camera->top = v;
+                    camera->bottom = -v;
+                    camera->updateProjectionMatrix();
+                },
+                camera->right, extent));
+        document_.setDirty(true);
+    }
+    if (ImGui::IsItemDeactivated()) commands_.endTransaction();
+
+    cameraField("Near", "shadownear:", &camera->nearPlane, 0.05f, 0.01f, 1000.f,
+                [camera](const float& v) { camera->nearPlane = v; camera->updateProjectionMatrix(); });
+    cameraField("Far", "shadowfar:", &camera->farPlane, 0.5f, 0.1f, 10000.f,
+                [camera](const float& v) { camera->farPlane = v; camera->updateProjectionMatrix(); });
+
+    // Neither of these is something a fit could decide for you.
+    auto* shadow = directional->shadow.get();
+    static const char* sizes[] = {"512", "1024", "2048", "4096"};
+    const int current = static_cast<int>(std::lround(std::log2(std::max(512.f, shadow->mapSize.x)))) - 9;
+    int picked = std::clamp(current, 0, 3);
+    if (ImGui::Combo("Map size", &picked, sizes, IM_ARRAYSIZE(sizes))) {
+        const float chosen = static_cast<float>(512 << picked);
+        commands_.execute(makeProperty<float>(
+                "Shadow Map Size", "shadowmapsize:" + object.uuid,
+                [shadow](const float& v) {
+                    shadow->mapSize.set(v, v);
+                    // The targets were built for the old size; drop them so the
+                    // next shadow render allocates at the new one.
+                    shadow->dispose();
+                    shadow->map.reset();
+                    shadow->mapPass.reset();
+                },
+                shadow->mapSize.x, chosen));
+        document_.setDirty(true);
+    }
+
+    cameraField("Bias", "shadowbias:", &shadow->bias, 0.0001f, -0.01f, 0.01f,
+                [shadow](const float& v) { shadow->bias = v; });
+
+    ImGui::PopItemWidth();
     ImGui::TreePop();
 }
 

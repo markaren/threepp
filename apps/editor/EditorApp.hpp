@@ -206,6 +206,7 @@ namespace threepp::editor {
         void drawGeneratorSection(Object3D& object);
         void drawInstancingSection(Object3D& object);
         void drawLightSection(Object3D& object);
+        void drawLightShadowSection(Object3D& object);
         void drawCameraSection(Object3D& object);
         void drawAnimationSection(Object3D& object);
         void drawJointsSection(Object3D& object);
