@@ -130,6 +130,120 @@ Box3 SplatData::computeBounds(float sigma) const {
     return box;
 }
 
+namespace {
+
+    // Exact order statistic, not an interpolated quantile: nth_element puts
+    // THE element of that rank in place, which is the same element on every
+    // standard library. `v` is taken by value because it gets reordered.
+    float percentile(std::vector<float> v, float q) {
+
+        if (v.empty()) return 0.f;
+
+        const auto rank = static_cast<size_t>(
+                std::clamp(q, 0.f, 1.f) * static_cast<float>(v.size() - 1));
+        std::nth_element(v.begin(), v.begin() + static_cast<std::ptrdiff_t>(rank), v.end());
+        return v[rank];
+    }
+
+    float medianOf(std::vector<float> v) {
+
+        if (v.empty()) return 0.f;
+        const size_t mid = v.size() / 2;
+        std::nth_element(v.begin(), v.begin() + static_cast<std::ptrdiff_t>(mid), v.end());
+        return v[mid];
+    }
+
+    // Keeps the elements of `values` whose `keep` flag is set, in order, in
+    // place. `stride` elements per splat, so one call handles the SH block
+    // (coeffCount * 3 floats per splat) as well as a plain per-splat array.
+    template<class T>
+    void compact(std::vector<T>& values, const std::vector<bool>& keep, size_t stride = 1) {
+
+        size_t out = 0;
+        for (size_t i = 0; i < keep.size(); ++i) {
+
+            if (!keep[i]) continue;
+            if (out != i) {
+
+                std::copy(values.begin() + static_cast<std::ptrdiff_t>(i * stride),
+                          values.begin() + static_cast<std::ptrdiff_t>((i + 1) * stride),
+                          values.begin() + static_cast<std::ptrdiff_t>(out * stride));
+            }
+            ++out;
+        }
+        values.resize(out * stride);
+    }
+
+}// namespace
+
+size_t SplatData::removeOutliers(const OutlierPolicy& policy) {
+
+    const size_t n = count();
+    if (n == 0) return 0;
+
+    // --- the two distributions the rule is expressed against ----------------
+    std::vector<float> sizes;
+    sizes.reserve(n);
+    for (const auto& s : scales) sizes.push_back(std::max({s.x, s.y, s.z}));
+
+    std::vector<float> xs, ys, zs;
+    xs.reserve(n);
+    ys.reserve(n);
+    zs.reserve(n);
+    for (const auto& m : means) {
+
+        xs.push_back(m.x);
+        ys.push_back(m.y);
+        zs.push_back(m.z);
+    }
+    // Component-wise median, not the bounding-box centre: on a scan the box
+    // centre is halfway between two outliers and points at empty air.
+    const Vector3 centre{medianOf(std::move(xs)), medianOf(std::move(ys)), medianOf(std::move(zs))};
+
+    std::vector<float> radii;
+    radii.reserve(n);
+    for (const auto& m : means) radii.push_back(m.distanceTo(centre));
+
+    // The cloud's robust radius, which is what "big" and "far" are measured
+    // against. A cloud with no spread at all (one splat, or every splat on
+    // top of the median) has no scale to reason with: r is 0, every limit
+    // collapses to 0, and the strictly-greater tests below would remove
+    // everything — so the rules are skipped outright.
+    const float r = percentile(radii, policy.radiusPercentile);
+    if (!(r > 0.f)) return 0;
+
+    const float sizeLimit = std::max(policy.sizeVsRadius * r,
+                                     policy.sizeVsPeers * percentile(sizes, policy.sizePercentile));
+    const float distanceLimit = policy.distanceVsRadius * r;
+
+    // --- the mask -----------------------------------------------------------
+    // Strictly greater throughout. Non-finite inputs fail the comparison and
+    // are kept; culling is not the place to launder NaNs, and the shader
+    // already refuses to draw them.
+    std::vector<bool> keep(n, true);
+    size_t removed = 0;
+    for (size_t i = 0; i < n; ++i) {
+
+        if (sizes[i] > sizeLimit || radii[i] > distanceLimit) {
+
+            keep[i] = false;
+            ++removed;
+        }
+    }
+
+    if (removed == 0) return 0;
+
+    compact(means, keep);
+    compact(scales, keep);
+    compact(rotations, keep);
+    compact(opacities, keep);
+    compact(sh, keep, static_cast<size_t>(coeffCount()) * 3);
+
+    for (auto& [name, values] : extras) compact(values, keep);
+
+    return removed;
+}
+
 bool SplatData::validate(std::string* why) const {
 
     auto fail = [why](const std::string& msg) {

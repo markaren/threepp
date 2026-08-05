@@ -118,6 +118,71 @@ namespace threepp {
         // deviations of each splat's own largest axis. Empty for an empty cloud.
         [[nodiscard]] Box3 computeBounds(float sigma = 3.f) const;
 
+        // Thresholds for removeOutliers(). Every one is a ratio against the
+        // cloud's own distribution, so nothing in here carries a unit and the
+        // same numbers behave the same way on a scan measured in metres, in
+        // centimetres, or in whatever arbitrary scale a COLMAP reconstruction
+        // happened to land in.
+        struct OutlierPolicy {
+
+            // The cloud's robust radius: this percentile of the distance from
+            // each mean to the component-wise median centre. Both rules below
+            // are measured against it.
+            float radiusPercentile = 0.99f;
+
+            // "Smear". Both conditions have to hold:
+            //   max(scale) > sizeVsRadius * robustRadius       scene-scale
+            //   max(scale) > sizeVsPeers  * P_size(max(scale)) peer-relative
+            // The first says the splat is as big as the whole reconstruction;
+            // the second says it is nothing like its neighbours. Requiring
+            // both is what keeps a cloud of a few large blobs — a test
+            // fixture, a coarse proxy — from being mistaken for a scan.
+            float sizePercentile = 0.99f;
+            float sizeVsPeers = 8.f;
+            float sizeVsRadius = 1.f;
+
+            // "Stray": a point this far outside the reconstruction is a
+            // reconstruction artefact, not part of the subject.
+            float distanceVsRadius = 8.f;
+        };
+
+        // Drops what photogrammetry leaves behind: the handful of enormous
+        // near-opaque smears a 3DGS optimiser parks across the sky to explain
+        // the background, and the stray points scattered hundreds of units
+        // outside the reconstruction. Returns how many were removed.
+        //
+        // NOT called by the loader. A raw cloud is what the file says, and a
+        // caller may legitimately want it; this is an explicit, opt-in edit.
+        //
+        // THE RULE, with r = P_radiusPercentile(|mean - medianCentre|) — a
+        // splat goes if EITHER
+        //
+        //   max(scale) > sizeVsRadius * r  AND  max(scale) > sizeVsPeers * P_size
+        //   |mean - medianCentre| > distanceVsRadius * r
+        //
+        // Every threshold is a ratio of two lengths measured from the cloud
+        // itself, which makes the rule scale-free, and all of them are
+        // one-sided by construction: on a cloud with no tail the high
+        // percentile is already close to the maximum, the factor puts the
+        // threshold above it, and NOTHING is removed. A guard that fires on
+        // clean input is a bug, and SplatData_test pins that it does not.
+        //
+        // Deterministic: percentiles are exact order statistics of the whole
+        // cloud (std::nth_element on a copy), no sampling and no RNG.
+        // Survivors keep their relative order, and `extras` and `sh` are
+        // compacted alongside, so the cloud stays valid().
+        //
+        // Conservative by design, and measured that way. On the 5.0M-splat
+        // Sanctuaire Sainte-Anne-de-Beaupré scan the defaults remove ~0.02%,
+        // the sky stops being washed over by a dark smear, and the town below
+        // the horizon is left alone. Loosening sizeVsRadius towards 0.06 —
+        // eight times the 99th percentile of splat size, which sounds
+        // reasonable and is not — starts deleting the far shore across the
+        // river, because on a scan the distant background genuinely IS a
+        // handful of enormous splats. Scene-relative size is the signal that
+        // separates the two; peer-relative size on its own is not.
+        size_t removeOutliers(const OutlierPolicy& policy = {});
+
         // True when every array length agrees and the degree is in range.
         // `why` (optional) receives a description of the first problem found.
         [[nodiscard]] bool validate(std::string* why = nullptr) const;

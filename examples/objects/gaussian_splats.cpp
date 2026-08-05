@@ -7,7 +7,13 @@
 //   --screenshot=<out.png>                 same thing, spelled the other way
 //   --cam x,y,z --look x,y,z               reframe a capture without rebuilding
 //   --no-flip                              keep a loaded file's own axes
+//   --no-cull                              keep a loaded file's outlier splats
 //   --bench N                              N frames on a slow orbit, timings, exit
+//
+// Loaded scans are run through SplatData::removeOutliers by default: a
+// photogrammetry scan carries a tail of enormous near-opaque splats that the
+// optimiser parked in the sky, and they smear over the subject from most
+// angles. --no-cull renders the file as authored.
 //
 // --bench orbits deliberately. update() early-outs when the camera has not
 // moved, so a benchmark on a static camera measures the draw alone and quietly
@@ -151,6 +157,7 @@ int main(int argc, char** argv) {
     int shotFrames = args.frames.value_or(10);
     int shotFrame = 0;
     bool flip = true;
+    bool cull = true;
     int benchFrames = 0;
 
     for (int i = 1; i < argc; ++i) {
@@ -162,6 +169,8 @@ int main(int argc, char** argv) {
             shotPath = arg.substr(13);
         } else if (arg == "--no-flip") {
             flip = false;
+        } else if (arg == "--no-cull") {
+            cull = false;
         } else if (arg == "--bench" && i + 1 < argc) {
             benchFrames = std::atoi(argv[++i]);
         } else if (arg == "--cam" || arg == "--look" || arg == "--frames" || arg == "--out") {
@@ -212,6 +221,23 @@ int main(int argc, char** argv) {
                       << "\n  opacity       p50 " << pct(alpha, 0.5)
                       << "  p99 " << pct(alpha, 0.99)
                       << "  max " << alpha.back() << std::endl;
+        }
+
+        // Scans get the outlier cull by default; procedural clouds never do,
+        // since they have no tail to cut and the point of the demo is that
+        // every generated splat is drawn. See SplatData::removeOutliers for
+        // the rule — it is percentile-based, so it is a no-op on a clean scan.
+        if (cull) {
+
+            const size_t before = data.count();
+            const auto tCull = std::chrono::steady_clock::now();
+            const size_t removed = data.removeOutliers();
+            std::cout << std::setprecision(1)
+                      << "  culled " << removed << " of " << before << " outliers in "
+                      << std::chrono::duration<double, std::milli>(
+                                 std::chrono::steady_clock::now() - tCull)
+                                 .count()
+                      << " ms (--no-cull to keep them)" << std::endl;
         }
 
     } else {

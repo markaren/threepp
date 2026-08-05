@@ -266,3 +266,160 @@ TEST_CASE("SplatData: an empty cloud is valid") {
     CHECK(data.count() == 0);
     CHECK(data.computeBounds().isEmpty());
 }
+
+
+// --------------------------------------------------------------------------
+// removeOutliers
+// --------------------------------------------------------------------------
+
+namespace {
+
+    // A tidy cloud: 200 splats scattered inside a unit-ish box, all about the
+    // same size. Nothing in here is an outlier by any percentile rule.
+    SplatData cleanCloud(int degree = 1) {
+
+        SplatData data;
+        data.resize(200, degree);
+
+        for (size_t i = 0; i < data.count(); ++i) {
+
+            const auto f = static_cast<float>(i);
+            data.means[i].set(std::sin(f) * 0.5f, std::cos(f) * 0.5f, std::sin(f * 1.7f) * 0.5f);
+            // Deliberately not identical: a rule that only survives a
+            // perfectly uniform cloud is not a rule.
+            data.scales[i].set(0.02f + 0.01f * (f / 200.f), 0.03f, 0.025f);
+            data.rotations[i].set(0.f, 0.f, 0.f, 1.f);
+            data.opacities[i] = 0.5f;
+            data.setDcColor(i, Vector3{f / 200.f, 0.5f, 1.f - f / 200.f});
+        }
+
+        return data;
+    }
+
+}// namespace
+
+TEST_CASE("SplatData::removeOutliers: a clean cloud loses nothing") {
+
+    // The one-sided-guard doctrine: a cull that fires on input with no tail
+    // is not conservative, it is destructive. This is the case that matters.
+    auto data = cleanCloud();
+    const auto before = data.count();
+
+    CHECK(data.removeOutliers() == 0);
+    CHECK(data.count() == before);
+    CHECK(data.validate());
+}
+
+TEST_CASE("SplatData::removeOutliers: generated clouds lose nothing either") {
+
+    // Same claim against the generator, including the awkward cases it can
+    // produce (zero scale, near-zero opacity, extreme anisotropy).
+    auto o = options(7u, 3, 512);
+    o.anisotropy = 6.f;
+    o.includeDegenerates = true;
+
+    auto data = SplatGenerator::generate(o);
+    const auto before = data.count();
+
+    CHECK(data.removeOutliers() == 0);
+    CHECK(data.count() == before);
+}
+
+TEST_CASE("SplatData::removeOutliers: exactly the planted outliers go") {
+
+    auto data = cleanCloud(1);
+    const auto total = data.count();
+
+    // Tag every splat so survivors can be identified after the compaction.
+    // The two planted outliers get negative tags.
+    data.extras["tag"].resize(total);
+    for (size_t i = 0; i < total; ++i) data.extras["tag"][i] = static_cast<float>(i);
+
+    // A giant near-opaque smear at the centre of the scene, and a stray point
+    // far outside it: one for the size rule, one for the distance rule. Both
+    // sit in the MIDDLE of the cloud, so "order preserved" is a real claim
+    // rather than an artefact of only ever removing from the end.
+    data.scales[7].set(40.f, 40.f, 40.f);
+    data.opacities[7] = 0.95f;
+    data.extras["tag"][7] = -1.f;
+
+    data.means[150].set(900.f, 0.f, 0.f);
+    data.extras["tag"][150] = -2.f;
+
+    REQUIRE(data.validate());
+    CHECK(data.removeOutliers() == 2);
+    CHECK(data.count() == total - 2);
+    REQUIRE(data.validate());
+
+    // Neither planted splat survived...
+    const auto& tags = data.extras.at("tag");
+    for (float t : tags) CHECK(t >= 0.f);
+
+    // ...and the survivors are still in their original relative order.
+    for (size_t i = 1; i < tags.size(); ++i) CHECK(tags[i] > tags[i - 1]);
+}
+
+TEST_CASE("SplatData::removeOutliers: the SH block travels with its splat") {
+
+    SplatData data;
+    data.resize(60, 2);
+
+    for (size_t i = 0; i < data.count(); ++i) {
+
+        data.means[i].set(0.1f * static_cast<float>(i % 5), 0.f, 0.f);
+        data.scales[i].set(0.05f, 0.05f, 0.05f);
+        data.rotations[i].set(0.f, 0.f, 0.f, 1.f);
+        data.opacities[i] = 0.6f;
+
+        // Every coefficient of splat i carries i, so a mis-strided compaction
+        // shows up as a coefficient that belongs to somebody else.
+        float* c = data.shAt(i);
+        for (int k = 0; k < data.coeffCount() * 3; ++k) c[k] = static_cast<float>(i);
+    }
+
+    // One giant in the middle.
+    data.scales[30].set(20.f, 20.f, 20.f);
+
+    REQUIRE(data.removeOutliers() == 1);
+    REQUIRE(data.count() == 59);
+    REQUIRE(data.validate());
+
+    for (size_t i = 0; i < data.count(); ++i) {
+
+        const auto expected = static_cast<float>(i < 30 ? i : i + 1);
+        const float* c = data.shAt(i);
+        for (int k = 0; k < data.coeffCount() * 3; ++k) {
+
+            REQUIRE(c[k] == Approx(expected));
+        }
+    }
+}
+
+TEST_CASE("SplatData::removeOutliers: an empty cloud is a no-op") {
+
+    SplatData data;
+    CHECK(data.removeOutliers() == 0);
+    CHECK(data.validate());
+}
+
+TEST_CASE("SplatData::removeOutliers: the rule is scale-free") {
+
+    // The same cloud measured in different units must lose the same splats.
+    auto build = [](float unit) {
+        auto d = cleanCloud(0);
+        for (auto& m : d.means) m.multiplyScalar(unit);
+        for (auto& s : d.scales) s.multiplyScalar(unit);
+        d.means.emplace_back(0.f, 0.f, 0.f);
+        d.scales.emplace_back(40.f * unit, 40.f * unit, 40.f * unit);
+        d.rotations.emplace_back(0.f, 0.f, 0.f, 1.f);
+        d.opacities.push_back(0.9f);
+        d.sh.insert(d.sh.end(), 3, 0.5f);
+        return d;
+    };
+
+    auto metres = build(1.f);
+    auto millimetres = build(1000.f);
+
+    CHECK(metres.removeOutliers() == 1);
+    CHECK(millimetres.removeOutliers() == 1);
+}
