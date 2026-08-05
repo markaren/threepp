@@ -10,51 +10,65 @@ set(THREEPP_SHADER_INCLUDES)
 set(THREEPP_SHADERCHUNK_CODE)
 set(THREEPP_SHADERLIB_CODE)
 
-file(GLOB files "${PROJECT_SOURCE_DIR}/src/shaders/ShaderChunk/*.glsl")
-foreach (shaderFile ${files})
+# Filled with the generated headers; src/CMakeLists.txt hands them to the
+# threepp target so the custom commands below are part of the build graph.
+set(THREEPP_GENERATED_SHADER_HEADERS)
 
-    get_filename_component(fileName ${shaderFile} NAME_WLE)
-    set(header_file "${generatedSourcesDir}/threepp/renderers/shaders/ShaderChunk/${fileName}.hpp")
+# embed_glsl_dir(<source subdir> <namespace> <code accumulator var>)
+#
+# One build-time custom command per shader, mirroring how the Vulkan backend
+# treats its .comp/.glsl (see cmake/CompileVulkanShaders.cmake). Editing a
+# shader then re-embeds exactly that one header and recompiles ShaderChunk.cpp.
+#
+# This used to be a plain file(READ)/file(WRITE) here at configure time, which
+# meant nothing in the build graph depended on the .glsl files: `cmake --build`
+# after a shader edit rebuilt nothing and the binary silently kept running the
+# previously embedded text. It cost a debugging session — a probe edit produced
+# output bit-identical to the unedited shader, which looked like a finding.
+#
+# The registration list below (the #includes and data_[] lines baked into
+# ShaderChunk.cpp) stays a configure-time product, which is right: it changes
+# only when a shader is ADDED or REMOVED, and CONFIGURE_DEPENDS on the globs
+# makes CMake re-configure in exactly that case.
+function(embed_glsl_dir subdir ns codeVar)
 
-    file(READ ${shaderFile} text)
-    set(text "\
-namespace threepp::shaders::shaderchunk {\n\n\
-const char* ${fileName}=R\"(${text})\";\n\n\
-}\n")
+    file(GLOB files CONFIGURE_DEPENDS "${PROJECT_SOURCE_DIR}/src/shaders/${subdir}/*.glsl")
 
-    file(WRITE "${header_file}"
-            "#ifndef THREEPP_${fileName}_HPP\n"
-            "#define THREEPP_${fileName}_HPP\n\n")
-    file(APPEND "${header_file}" "${text}")
-    file(APPEND "${header_file}" "\n\n#endif\n")
+    set(_includes "${THREEPP_SHADER_INCLUDES}")
+    set(_code "${${codeVar}}")
+    set(_headers "${THREEPP_GENERATED_SHADER_HEADERS}")
 
-    set(THREEPP_SHADER_INCLUDES "${THREEPP_SHADER_INCLUDES}\n#include \"ShaderChunk/${fileName}.hpp\"")
-    set(THREEPP_SHADERCHUNK_CODE "${THREEPP_SHADERCHUNK_CODE}\tdata_[\"${fileName}\"] = shaderchunk::${fileName};\n")
+    foreach (shaderFile ${files})
 
-endforeach ()
+        get_filename_component(fileName ${shaderFile} NAME_WLE)
+        set(header_file "${generatedSourcesDir}/threepp/renderers/shaders/${subdir}/${fileName}.hpp")
 
-file(GLOB files "${PROJECT_SOURCE_DIR}/src/shaders/ShaderLib/*.glsl")
-foreach (shaderFile ${files})
+        add_custom_command(
+                OUTPUT "${header_file}"
+                COMMAND "${CMAKE_COMMAND}"
+                        "-DIN=${shaderFile}"
+                        "-DOUT=${header_file}"
+                        "-DNS=${ns}"
+                        "-DNAME=${fileName}"
+                        -P "${PROJECT_SOURCE_DIR}/cmake/EmbedGlsl.cmake"
+                DEPENDS "${shaderFile}" "${PROJECT_SOURCE_DIR}/cmake/EmbedGlsl.cmake"
+                COMMENT "Embedding GL shader ${subdir}/${fileName}.glsl"
+                VERBATIM)
 
-    get_filename_component(fileName ${shaderFile} NAME_WLE)
-    set(header_file "${generatedSourcesDir}/threepp/renderers/shaders/ShaderLib/${fileName}.hpp")
+        list(APPEND _headers "${header_file}")
+        set(_includes "${_includes}\n#include \"${subdir}/${fileName}.hpp\"")
+        set(_code "${_code}\tdata_[\"${fileName}\"] = ${ns}::${fileName};\n")
 
-    file(READ ${shaderFile} text)
-    set(text "\
-namespace threepp::shaders::shaderlib {\n\n\
-const char* ${fileName}=R\"(${text})\";\n\n\
-}\n")
+    endforeach ()
 
-    file(WRITE "${header_file}"
-            "#ifndef THREEPP_${fileName}_HPP\n"
-            "#define THREEPP_${fileName}_HPP\n\n")
-    file(APPEND "${header_file}" "${text}")
-    file(APPEND "${header_file}" "\n\n#endif\n")
+    set(THREEPP_SHADER_INCLUDES "${_includes}" PARENT_SCOPE)
+    set(${codeVar} "${_code}" PARENT_SCOPE)
+    set(THREEPP_GENERATED_SHADER_HEADERS "${_headers}" PARENT_SCOPE)
 
-    set(THREEPP_SHADER_INCLUDES "${THREEPP_SHADER_INCLUDES}\n#include \"ShaderLib/${fileName}.hpp\"")
-    set(THREEPP_SHADERLIB_CODE "${THREEPP_SHADERLIB_CODE}\tdata_[\"${fileName}\"] = shaderlib::${fileName};\n")
+endfunction()
 
-endforeach ()
+embed_glsl_dir(ShaderChunk shaderchunk THREEPP_SHADERCHUNK_CODE)
+embed_glsl_dir(ShaderLib shaderlib THREEPP_SHADERLIB_CODE)
 
 configure_file(
         "threepp/renderers/shaders/ShaderChunk.cpp.in"

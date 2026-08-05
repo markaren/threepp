@@ -827,6 +827,11 @@ list(APPEND sources
         "${generatedSourcesDir}/threepp/renderers/shaders/ShaderChunk.cpp"
 )
 
+# The embedded GL shader headers. Listed as target sources so their custom
+# commands join the build graph — that is what makes editing a .glsl actually
+# rebuild, instead of silently keeping the text embedded at configure time.
+list(APPEND sources ${THREEPP_GENERATED_SHADER_HEADERS})
+
 add_library(threepp ${sources} ${privateHeaders} ${publicHeadersFull})
 add_library(threepp::threepp ALIAS threepp)
 target_compile_features(threepp PUBLIC "cxx_std_20")
