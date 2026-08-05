@@ -17,7 +17,10 @@ void main() {
 
 		#ifdef HORIZONTAL_PASS
 
-			vec2 distribution = unpackRGBATo2Half( texture2D( shadow_pass, ( gl_FragCoord.xy + vec2( i, 0.0 ) * radius ) / resolution ) );
+			// Raw, not unpackRGBATo2Half: the vertical pass wrote the moments as
+			// floats. Packing them into RGBA8 is what made VSM unusable at any
+			// depth range the shadow camera was not hand-fitted to.
+			vec2 distribution = texture2D( shadow_pass, ( gl_FragCoord.xy + vec2( i, 0.0 ) * radius ) / resolution ).xy;
 			mean += distribution.x;
 			squared_mean += distribution.y * distribution.y + distribution.x * distribution.x;
 
@@ -36,7 +39,7 @@ void main() {
 
 	float std_dev = sqrt( squared_mean - mean * mean );
 
-	gl_FragColor = pack2HalfToRGBA( vec2( mean, std_dev ) );
+	gl_FragColor = vec4( mean, std_dev, 0.0, 1.0 );
 
 }
 

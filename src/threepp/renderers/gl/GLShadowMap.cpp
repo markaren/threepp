@@ -386,6 +386,36 @@ struct GLShadowMap::Impl {
                 pars.magFilter = wantVsm ? Filter::Linear : Filter::Nearest;
                 pars.format = Format::RGBA;
 
+                // VSM stores moments — a mean depth and a standard deviation —
+                // and then asks for the variance, a difference of two nearly
+                // equal numbers. Eight-bit channels cannot carry that: the
+                // default shadow camera spans 0.5..500, so a scene a few units
+                // from the light sits at a depth near 0.01 and uses a hundredth
+                // of the range. The variance underflows to zero, Chebyshev's
+                // inequality degenerates, and neighbouring texels disagree at
+                // random — a moiré of fringes across every receiver.
+                //
+                // Float moments fix it at the source: precision no longer
+                // bounds how finely two nearby depths can be told apart, at any
+                // range the camera happens to have. Deliberately unlike
+                // three.js, which packs the moments into RGBA8 and so works
+                // only where the shadow camera was fitted to the scene by hand.
+                // Nothing in the public API moves — the same ShadowMap::VSM
+                // with the same LightShadow knobs.
+                //
+                // Full float, not half: at a depth of 0.01 a half's ulp is
+                // ~8e-6 against the packed format's 1.5e-5, which measurably
+                // does NOT clear the fringes. Costs 4x a packed map on both
+                // targets, so VSM is the one type that pays for its map — fair,
+                // since it is the one type that cannot work without it. The
+                // caster pass still writes 24-bit packed depth exactly as
+                // before; a float target stores that losslessly.
+                //
+                // Desktop GL 3.3 has RGBA32F both colour-renderable and
+                // linearly filterable in core. WebGL2 needs EXT_color_buffer_float
+                // to render to it and OES_texture_float_linear to filter it.
+                if (wantVsm) pars.type = Type::Float;
+
                 shadow->map = GLRenderTarget::create(static_cast<int>(_shadowMapSize.x), static_cast<int>(_shadowMapSize.y), pars);
                 shadow->map->texture->name = light->name + ".shadowMap";
 

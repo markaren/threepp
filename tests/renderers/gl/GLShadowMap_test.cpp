@@ -8,6 +8,8 @@
 
 #include "gl_test_helpers.hpp"
 
+#include <cstdlib>
+
 #include "threepp/lights/AmbientLight.hpp"
 #include "threepp/lights/DirectionalLight.hpp"
 #include "threepp/materials/MeshStandardMaterial.hpp"
@@ -162,6 +164,86 @@ TEST_CASE("VSM as the very first shadow type also works") {
     const auto px = renderOnce(renderer, s);
     REQUIRE(px.size() == DATA_SIZE);
     CHECK(countNonBlack(px) > 0);
+
+    renderer.dispose();
+}
+
+// VSM has to produce a shadow, not a moiré.
+//
+// The four tests above ask only whether VSM crashes or draws something, and it
+// passed all of them while covering every receiver in interference fringes: the
+// moments were packed into RGBA8, and with the default shadow camera spanning
+// 0.5..500 a scene a few units from the light sits near depth 0.01, so the
+// variance underflowed and neighbouring texels disagreed at random.
+//
+// Its own canvas, larger than the 64x64 shared one and with a shadow map to
+// match. Both parts matter: the fringes need pixels to alternate across before
+// they are measurable at all, and a map far larger than the view aliases for an
+// unrelated reason (bilinear undersampling of the moments, which the variance
+// test amplifies) that would mask the signal here. Roughly one shadow texel per
+// pixel is also what a real frame has.
+//
+// Measured as a second difference along each row: zero for any smooth ramp — a
+// soft shadow edge, a lit gradient — and large only where the image alternates
+// pixel to pixel, which a plain gradient metric cannot tell from a soft
+// penumbra. PCF is the reference for what this scene costs without fringes.
+TEST_CASE("VSM renders a clean shadow, not fringes") {
+
+    const auto alternation = [](const std::vector<unsigned char>& px, int w, int h) {
+        long long energy = 0;
+        for (int y = 0; y < h; y++) {
+            for (int x = 1; x < w - 1; x++) {
+                const size_t i = (static_cast<size_t>(y) * w + x) * 3;
+                const int prev = px[i - 3] + px[i - 2] + px[i - 1];
+                const int cur = px[i] + px[i + 1] + px[i + 2];
+                const int next = px[i + 3] + px[i + 4] + px[i + 5];
+                energy += std::abs(2 * cur - prev - next);
+            }
+        }
+        return energy;
+    };
+
+    constexpr int size = 256;
+
+    Canvas canvas(Canvas::Parameters().size(size, size).headless(true));
+    GLRenderer renderer(canvas);
+    renderer.shadowMap().enabled = true;
+    renderer.setClearColor(Color(0, 0, 0));
+
+    auto s = makeShadowScene();
+    for (auto& child : s.scene->children) {
+        if (auto* d = child->as<DirectionalLight>()) d->shadow->mapSize.set(size, size);
+    }
+
+    const auto render = [&](ShadowMap type) {
+        renderer.shadowMap().type = type;
+        renderer.shadowMap().needsUpdate = true;
+        renderer.render(*s.scene, *s.camera);
+        return renderer.readRGBPixels();
+    };
+
+    const long long pcf = alternation(render(ShadowMap::PFC), size, size);
+
+    const auto vsmPixels = render(ShadowMap::VSM);
+    const long long vsm = alternation(vsmPixels, size, size);
+
+    INFO("per-pixel alternation: PCF " << pcf << ", VSM " << vsm);
+
+    // A soft shadow legitimately costs a little more than a hard one. Fringing
+    // cost two orders of magnitude: with the moments packed into RGBA8 this
+    // scene measures 2.65M against PCF's 94k.
+    CHECK(vsm < pcf * 4 + 5000);
+
+    // And it still has to cast a shadow — a VSM returning 1.0 everywhere would
+    // trivially have no fringes at all.
+    CHECK(countNonBlack(vsmPixels) > 0);
+
+    int dark = 0;
+    for (size_t i = 0; i < vsmPixels.size(); i += 3) {
+        if (vsmPixels[i] + vsmPixels[i + 1] + vsmPixels[i + 2] < 90) dark++;
+    }
+    INFO("shadowed pixels: " << dark);
+    CHECK(dark > 0);
 
     renderer.dispose();
 }

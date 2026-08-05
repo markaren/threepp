@@ -67,7 +67,10 @@
 
 	vec2 texture2DDistribution( sampler2D shadow, vec2 uv ) {
 
-		return unpackRGBATo2Half( texture2D( shadow, uv ) );
+		// The VSM blur writes (mean, std_dev) as floats into a float target.
+		// three.js packs them into RGBA8 here, which costs the variance all its
+		// precision unless the shadow camera is fitted tightly to the scene.
+		return texture2D( shadow, uv ).xy;
 
 	}
 
