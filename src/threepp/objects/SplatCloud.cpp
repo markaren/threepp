@@ -694,9 +694,14 @@ void SplatCloud::sortByDepth(Camera& camera) {
 
     for (size_t i = 0; i < n; ++i) {
 
+        // std::clamp passes NaN straight through — NaN loses both of its
+        // comparisons — and a float-to-integer conversion of NaN is undefined
+        // behaviour, not a large number. Written as a negated comparison so
+        // NaN lands in the first branch along with everything too far away.
         const float k = (depths_[i] - lo) * scale;
-        keys_[i] = static_cast<std::uint16_t>(
-                std::clamp(k, 0.f, static_cast<float>(SORT_BUCKETS - 1)));
+        keys_[i] = !(k > 0.f)                                        ? 0
+                : (k >= static_cast<float>(SORT_BUCKETS - 1))        ? static_cast<std::uint16_t>(SORT_BUCKETS - 1)
+                                                                     : static_cast<std::uint16_t>(k);
         ++histogram_[keys_[i]];
     }
 
