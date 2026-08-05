@@ -175,7 +175,8 @@ vec3 traceRadiance(vec3 origin, vec3 dir, bool doShadows, float maxLod, float mi
     // analyticDirectSplit, before any reflection/glass tracing).
     gShadowMovingOccluder = false;
 
-    for (int b = 0; b < REFL_MAX_BOUNCES; ++b) {
+    int b = 0;// hoisted: the post-loop env terminal below reads where it stopped
+    for (; b < REFL_MAX_BOUNCES; ++b) {
         rayQueryEXT rq;
         rayQueryInitializeEXT(rq, topAS, gl_RayFlagsOpaqueEXT, 0xFFu, o, 1e-3, d, 1e30);
         while (rayQueryProceedEXT(rq)) {}
@@ -313,6 +314,14 @@ vec3 traceRadiance(vec3 origin, vec3 dir, bool doShadows, float maxLod, float mi
         o          = hitP + hitN * SHADOW_EPS;
         curMissLod = hRough * maxLod;
     }
+    // Budget exhausted purely by PASS-THROUGHS (water-crest skip, sub-cutoff
+    // cutout texels, blend carry-through): no shading exit fired, so d and
+    // curMissLod still describe the live ray — terminate on the environment
+    // exactly as the miss branch would, instead of returning black (the dark
+    // dots in grazing ocean reflections / black speckle through stacked
+    // foliage). Every shading exit break's first (the b==MAX-1 cap-off catches
+    // the bounce path), so this can never double-count.
+    if (b == REFL_MAX_BOUNCES) radiance += tput * sampleEnvLod(d, curMissLod);
     // A moving-caster SHADOW inside the reflected content is moving content just
     // like the mover itself: the shadow rays at the reflected hits committed on
     // a currently-MOVING mesh, so the reflected radiance carries a shadow that
