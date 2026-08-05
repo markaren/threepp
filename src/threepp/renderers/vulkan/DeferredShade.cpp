@@ -85,9 +85,9 @@ namespace threepp::vulkan {
 
         std::array<VkDescriptorSetLayoutBinding, kDeferredBindingCount> b{};
         // Dense cursor: array index and binding number diverge past the
-        // retired 55-56 slot (binding numbers stay stable for the shaders,
-        // the array carries no zero-init gap entries — those are invalid
-        // layout bindings, not padding).
+        // retired 56 slot (55 is live — the prev-ids history; binding numbers
+        // stay stable for the shaders, the array carries no zero-init gap
+        // entries — those are invalid layout bindings, not padding).
         uint32_t nb = 0;
         auto set = [&](uint32_t binding, VkDescriptorType t) {
             auto& e = b.at(nb);// bound-checked: one slot per set() call, exact fit

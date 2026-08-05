@@ -32,7 +32,11 @@ vec3 shadeWater(vec3 P, vec3 N, vec3 V, MaterialDesc pm, int instIdx,
                 float slopeVarSq, vec3 Nmacro) {
     const float NdotV = max(dot(N, V), 1e-4);
     const float ior   = max(pm.ior, 1.0);
-    const float r0    = pow((1.0 - ior) / (1.0 + ior), 2.0);
+    // Explicit square: the max() above makes (1-ior)/(1+ior) ≤ 0, and GLSL's
+    // pow() is spec-undefined for a negative base (works only where the driver
+    // folds pow(x,2) → x·x).
+    const float f0n   = (1.0 - ior) / (1.0 + ior);
+    const float r0    = f0n * f0n;
     const float F     = r0 + (1.0 - r0) * pow(1.0 - NdotV, 5.0);
 
     // Effective specular roughness = base water roughness ⊕ the sub-pixel chop
@@ -458,7 +462,9 @@ float glassRough(float matRoughness) {
 vec3 shadeGlass(vec3 P, vec3 N, vec3 V, MaterialDesc pm, vec3 albedo,
                 bool doShadows, float maxLod, inout uint seed) {
     const float ior     = max(pm.ior, 1.0);
-    const float r0      = pow((1.0 - ior) / (1.0 + ior), 2.0);
+    // Explicit square — same negative-base pow() rationale as shadeWater above.
+    const float f0n     = (1.0 - ior) / (1.0 + ior);
+    const float r0      = f0n * f0n;
     // Microfacet roughness: the material's, floored to kGlassFrost and capped at
     // kGlassMaxRough (see the const). The slight softening is the
     // "less perfect" the user wanted AND it lets the multi-bounce surface
