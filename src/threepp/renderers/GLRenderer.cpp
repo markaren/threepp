@@ -321,6 +321,12 @@ struct GLRenderer::Impl {
 
         if (_currentRenderTarget) {
 
+            // Resolve multisample renderbuffers into the target's texture
+            // before anything samples it. Must precede the mipmap generation
+            // below, which reads that texture.
+
+            textures.updateMultisampleRenderTarget(_currentRenderTarget);
+
             // Generate mipmap if we're using any kind of mipmap filtering
 
             textures.updateRenderTargetMipmap(_currentRenderTarget);
@@ -1250,6 +1256,10 @@ struct GLRenderer::Impl {
             const auto* rtProps = properties.renderTargetProperties.get(renderTarget);
             if (rtProps->glCubeFramebuffers) {
                 framebuffer = (*rtProps->glCubeFramebuffers)[activeCubeFace];
+            } else if (rtProps->glMultisampledFramebuffer) {
+                // Draws go to the multisampled attachments; the texture-backed
+                // framebuffer receives the resolve at the end of render().
+                framebuffer = *rtProps->glMultisampledFramebuffer;
             } else {
                 framebuffer = *rtProps->glFramebuffer;
             }
@@ -1344,8 +1354,24 @@ struct GLRenderer::Impl {
         glGetIntegerv(GL_PACK_ALIGNMENT, &prevAlign);
         glPixelStorei(GL_PACK_ALIGNMENT, 1);
 
+        // glReadPixels on a multisampled framebuffer is an error, and that is
+        // what a multisampled target has bound. Read the resolve framebuffer
+        // instead — render() has already blitted into it. Raw binds, and put
+        // back afterwards, so GLState's cache stays true (see
+        // GLTextures::updateMultisampleRenderTarget).
+        const bool multisampled = _currentRenderTarget && textures.getRenderTargetSamples(_currentRenderTarget) > 0;
+        if (multisampled) {
+            const auto* rtProps = properties.renderTargetProperties.get(_currentRenderTarget);
+            glBindFramebuffer(GL_READ_FRAMEBUFFER, *rtProps->glFramebuffer);
+        }
+
         // this was size.width(), size.width() before refactor.. I assume it was an error
         glReadPixels(static_cast<int>(position.x), static_cast<int>(position.y), size.first, size.second, glFormat, GL_UNSIGNED_BYTE, data);
+
+        if (multisampled) {
+            const auto* rtProps = properties.renderTargetProperties.get(_currentRenderTarget);
+            glBindFramebuffer(GL_FRAMEBUFFER, *rtProps->glMultisampledFramebuffer);
+        }
 
         glPixelStorei(GL_PACK_ALIGNMENT, prevAlign);
     }

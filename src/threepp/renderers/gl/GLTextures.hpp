@@ -50,7 +50,7 @@ namespace threepp::gl {
         // Setup storage for target texture and bind it to correct framebuffer
         void setupFrameBufferTexture(unsigned int framebuffer, GLRenderTarget* renderTarget, Texture& texture, unsigned int attachment, unsigned int textureTarget);
 
-        void setupRenderBufferStorage(unsigned int renderbuffer, GLRenderTarget* renderTarget);
+        void setupRenderBufferStorage(unsigned int renderbuffer, GLRenderTarget* renderTarget, bool isMultisample = false);
 
         void setupDepthTexture(unsigned int framebuffer, GLRenderTarget* renderTarget);
 
@@ -61,6 +61,14 @@ namespace threepp::gl {
         void setupRenderTarget(GLRenderTarget* renderTarget);
 
         void updateRenderTargetMipmap(GLRenderTarget* renderTarget);
+
+        // Resolve a multisampled target's renderbuffers into the texture the
+        // rest of the pipeline samples. No-op for single-sampled targets.
+        void updateMultisampleRenderTarget(GLRenderTarget* renderTarget);
+
+        // Sample count actually used for a target: its request, clamped to what
+        // the driver supports. 0 means single-sampled.
+        [[nodiscard]] int getRenderTargetSamples(const GLRenderTarget* renderTarget) const;
 
         [[nodiscard]] std::optional<unsigned int> getGlTexture(Texture& texture) const;
 

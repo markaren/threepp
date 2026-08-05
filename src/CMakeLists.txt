@@ -269,6 +269,17 @@ set(publicHeaders
         "threepp/renderers/shaders/ShaderLib.hpp"
         "threepp/renderers/shaders/UniformsLib.hpp"
 
+        "threepp/postprocessing/postprocessing.hpp"
+        "threepp/postprocessing/ClearPass.hpp"
+        "threepp/postprocessing/EffectComposer.hpp"
+        "threepp/postprocessing/MaskPass.hpp"
+        "threepp/postprocessing/Pass.hpp"
+        "threepp/postprocessing/RenderPass.hpp"
+        "threepp/postprocessing/SavePass.hpp"
+        "threepp/postprocessing/ShaderPass.hpp"
+        "threepp/postprocessing/TexturePass.hpp"
+        "threepp/postprocessing/shaders/CopyShader.hpp"
+
 )
 
 set(publicHeadersFull)
@@ -579,6 +590,15 @@ set(sources
         "threepp/renderers/GLRenderer.cpp"
         "threepp/renderers/RenderTarget.cpp"
         "threepp/renderers/RendererFactory.cpp"
+
+        "threepp/postprocessing/ClearPass.cpp"
+        "threepp/postprocessing/EffectComposer.cpp"
+        "threepp/postprocessing/MaskPass.cpp"
+        "threepp/postprocessing/Pass.cpp"
+        "threepp/postprocessing/RenderPass.cpp"
+        "threepp/postprocessing/SavePass.cpp"
+        "threepp/postprocessing/ShaderPass.cpp"
+        "threepp/postprocessing/TexturePass.cpp"
 
         "threepp/renderers/common/Lights.cpp"
         "threepp/renderers/common/RenderLists.cpp"

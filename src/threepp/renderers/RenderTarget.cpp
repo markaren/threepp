@@ -17,6 +17,7 @@ RenderTarget::RenderTarget(unsigned int width, unsigned int height, const Option
       scissor(0.f, 0.f, static_cast<float>(width), static_cast<float>(height)),
       viewport(0.f, 0.f, static_cast<float>(width), static_cast<float>(height)),
       depthBuffer(options.depthBuffer), stencilBuffer(options.stencilBuffer),
+      samples(options.samples),
       texture(Texture::create({Image({}, width, height)})) {
 
     if (options.mapping) texture->mapping = *options.mapping;
@@ -43,7 +44,12 @@ void RenderTarget::setSize(unsigned int width, unsigned int height, unsigned int
 
         this->texture->image() = Image(std::vector<unsigned char>{}, width, height, depth);
 
-        this->dispose();
+        // Tell the backend to drop the GPU resources sized for the old
+        // dimensions. Deliberately not dispose(): that latches on `disposed` so
+        // the destructor can't double-fire, and a target has to survive being
+        // resized more than once — a composer resized twice would otherwise
+        // keep rendering into framebuffers of the first new size.
+        this->dispatchEvent("dispose", this);
     }
 
     this->viewport.set(0, 0, static_cast<float>(width), static_cast<float>(height));
@@ -63,6 +69,7 @@ RenderTarget& RenderTarget::copy(const RenderTarget& source) {
 
     this->depthBuffer = source.depthBuffer;
     this->stencilBuffer = source.stencilBuffer;
+    this->samples = source.samples;
     this->depthTexture = source.depthTexture;
 
     return *this;

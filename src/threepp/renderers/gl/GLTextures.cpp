@@ -11,6 +11,7 @@
 #include <GLES3/gl32.h>
 #endif
 
+#include <algorithm>
 #include <cmath>
 #include <iostream>
 
@@ -81,6 +82,32 @@ namespace {
         }
 
         return internalFormat;
+    }
+
+    // Sized internal format for a target's depth (or depth-stencil) attachment.
+    //
+    // Both sides of a multisampled target are allocated from here, and that is
+    // the point: resolving is a glBlitFramebuffer, and a depth blit is only
+    // legal when the read and draw attachments carry the *same* format. It is
+    // also why the stencil case names GL_DEPTH24_STENCIL8 rather than the
+    // unsized GL_DEPTH_STENCIL — unsized leaves the pick to the driver, and
+    // there is no guarantee it picks the same thing for a renderbuffer as for
+    // a multisampled one.
+    GLint depthRenderbufferFormat(const GLRenderTarget* renderTarget) {
+
+        if (renderTarget->depthTexture) {
+
+            // Match whatever setupDepthTexture attached, so the resolve blit is legal.
+            if (renderTarget->depthTexture->format == Format::DepthStencil) return GL_DEPTH24_STENCIL8;
+
+            switch (renderTarget->depthTexture->type) {
+                case Type::Float: return GL_DEPTH_COMPONENT32F;
+                case Type::UnsignedInt: return GL_DEPTH_COMPONENT24;
+                default: return GL_DEPTH_COMPONENT16;
+            }
+        }
+
+        return renderTarget->stencilBuffer ? GL_DEPTH24_STENCIL8 : GL_DEPTH_COMPONENT16;
     }
 
 }// namespace
@@ -325,6 +352,10 @@ void gl::GLTextures::deallocateRenderTarget(GLRenderTarget* renderTarget) {
     }
     if (renderTargetProperties->glDepthbuffer) glDeleteRenderbuffers(1, &renderTargetProperties->glDepthbuffer.value());
 
+    if (renderTargetProperties->glMultisampledFramebuffer) glDeleteFramebuffers(1, &renderTargetProperties->glMultisampledFramebuffer.value());
+    if (renderTargetProperties->glColorRenderbuffer) glDeleteRenderbuffers(1, &renderTargetProperties->glColorRenderbuffer.value());
+    if (renderTargetProperties->glDepthRenderbuffer) glDeleteRenderbuffers(1, &renderTargetProperties->glDepthRenderbuffer.value());
+
     properties->textureProperties.remove(texture.get());
     properties->renderTargetProperties.remove(renderTarget);
 }
@@ -477,26 +508,24 @@ void gl::GLTextures::setupFrameBufferTexture(
     state->bindFramebuffer(GL_FRAMEBUFFER, 0);
 }
 
-void gl::GLTextures::setupRenderBufferStorage(unsigned int renderbuffer, GLRenderTarget* renderTarget) {
+void gl::GLTextures::setupRenderBufferStorage(unsigned int renderbuffer, GLRenderTarget* renderTarget, bool isMultisample) {
 
     glBindRenderbuffer(GL_RENDERBUFFER, renderbuffer);
 
-    if (renderTarget->depthBuffer && !renderTarget->stencilBuffer) {
+    const int samples = isMultisample ? getRenderTargetSamples(renderTarget) : 0;
 
-        auto glInternalFormat = GL_DEPTH_COMPONENT16;
+    if (renderTarget->depthBuffer) {
 
-        glRenderbufferStorage(GL_RENDERBUFFER, glInternalFormat, renderTarget->width, renderTarget->height);
+        const GLint glInternalFormat = depthRenderbufferFormat(renderTarget);
 
+        if (samples > 0) {
+            glRenderbufferStorageMultisample(GL_RENDERBUFFER, samples, glInternalFormat, renderTarget->width, renderTarget->height);
+        } else {
+            glRenderbufferStorage(GL_RENDERBUFFER, glInternalFormat, renderTarget->width, renderTarget->height);
+        }
 
-        glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_RENDERBUFFER, renderbuffer);
-
-    } else if (renderTarget->depthBuffer && renderTarget->stencilBuffer) {
-
-
-        glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH_STENCIL, renderTarget->width, renderTarget->height);
-
-
-        glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_STENCIL_ATTACHMENT, GL_RENDERBUFFER, renderbuffer);
+        const GLenum attachment = renderTarget->stencilBuffer ? GL_DEPTH_STENCIL_ATTACHMENT : GL_DEPTH_ATTACHMENT;
+        glFramebufferRenderbuffer(GL_FRAMEBUFFER, attachment, GL_RENDERBUFFER, renderbuffer);
 
     } else {
 
@@ -507,7 +536,11 @@ void gl::GLTextures::setupRenderBufferStorage(unsigned int renderbuffer, GLRende
         const auto glType = toGLType(texture->type);
         const auto glInternalFormat = getInternalFormat(glFormat, glType);
 
-        glRenderbufferStorage(GL_RENDERBUFFER, glInternalFormat, renderTarget->width, renderTarget->height);
+        if (samples > 0) {
+            glRenderbufferStorageMultisample(GL_RENDERBUFFER, samples, glInternalFormat, renderTarget->width, renderTarget->height);
+        } else {
+            glRenderbufferStorage(GL_RENDERBUFFER, glInternalFormat, renderTarget->width, renderTarget->height);
+        }
     }
 
     glBindRenderbuffer(GL_RENDERBUFFER, 0);
@@ -666,7 +699,91 @@ void gl::GLTextures::setupRenderTarget(GLRenderTarget* renderTarget) {
         if (renderTarget->depthBuffer) {
             setupDepthRenderbuffer(renderTarget);
         }
+
+        // Multisampled target: a second framebuffer with multisampled
+        // renderbuffers for colour (and depth) is what actually gets drawn
+        // into. The texture-backed framebuffer built above stays as the resolve
+        // destination — see updateMultisampleRenderTarget.
+        if (getRenderTargetSamples(renderTarget) > 0) {
+
+            GLuint glMultisampledFramebuffer;
+            glGenFramebuffers(1, &glMultisampledFramebuffer);
+            renderTargetProperties->glMultisampledFramebuffer = glMultisampledFramebuffer;
+
+            GLuint glColorRenderbuffer;
+            glGenRenderbuffers(1, &glColorRenderbuffer);
+            renderTargetProperties->glColorRenderbuffer = glColorRenderbuffer;
+
+            const auto glFormat = toGLFormat(texture->format);
+            const auto glType = toGLType(texture->type);
+            const auto glInternalFormat = getInternalFormat(glFormat, glType);
+
+            glBindRenderbuffer(GL_RENDERBUFFER, glColorRenderbuffer);
+            glRenderbufferStorageMultisample(GL_RENDERBUFFER, getRenderTargetSamples(renderTarget),
+                                             glInternalFormat, renderTarget->width, renderTarget->height);
+
+            state->bindFramebuffer(GL_FRAMEBUFFER, glMultisampledFramebuffer);
+            glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_RENDERBUFFER, glColorRenderbuffer);
+            glBindRenderbuffer(GL_RENDERBUFFER, 0);
+
+            if (renderTarget->depthBuffer) {
+
+                GLuint glDepthRenderbuffer;
+                glGenRenderbuffers(1, &glDepthRenderbuffer);
+                renderTargetProperties->glDepthRenderbuffer = glDepthRenderbuffer;
+                setupRenderBufferStorage(glDepthRenderbuffer, renderTarget, true);
+            }
+
+            const GLenum status = glCheckFramebufferStatus(GL_FRAMEBUFFER);
+            if (status != GL_FRAMEBUFFER_COMPLETE) {
+                std::cerr << "GLTextures: multisampled framebuffer incomplete: 0x"
+                          << std::hex << status << std::dec << std::endl;
+            }
+
+            state->bindFramebuffer(GL_FRAMEBUFFER, 0);
+        }
     }
+}
+
+int gl::GLTextures::getRenderTargetSamples(const GLRenderTarget* renderTarget) const {
+
+    if (!renderTarget || renderTarget->samples == 0) return 0;
+
+    // A cube target renders six faces through six framebuffers; there is no
+    // resolve path for those, so the request is ignored rather than half-honoured.
+    if (dynamic_cast<CubeTexture*>(renderTarget->texture.get())) return 0;
+
+    return std::min(maxSamples, static_cast<int>(renderTarget->samples));
+}
+
+void gl::GLTextures::updateMultisampleRenderTarget(GLRenderTarget* renderTarget) {
+
+    if (getRenderTargetSamples(renderTarget) == 0) return;
+
+    const auto renderTargetProperties = properties->renderTargetProperties.get(renderTarget);
+    if (!renderTargetProperties->glMultisampledFramebuffer) return;
+
+    const auto width = static_cast<int>(renderTarget->width);
+    const auto height = static_cast<int>(renderTarget->height);
+
+    GLbitfield mask = GL_COLOR_BUFFER_BIT;
+    if (renderTarget->depthBuffer) mask |= GL_DEPTH_BUFFER_BIT;
+    if (renderTarget->stencilBuffer) mask |= GL_STENCIL_BUFFER_BIT;
+
+    // Deliberately not going through GLState here. Its cache is keyed by bind
+    // target, so a READ/DRAW split recorded in it would linger as two entries
+    // that disagree with the single GL_FRAMEBUFFER entry every other call site
+    // uses — the next bind could then be skipped as redundant while the driver
+    // still has the split in effect. Splitting the binding raw and putting it
+    // back together before returning leaves the cache true as written.
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, *renderTargetProperties->glMultisampledFramebuffer);
+    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, *renderTargetProperties->glFramebuffer);
+
+    glBlitFramebuffer(0, 0, width, height, 0, 0, width, height, mask, GL_NEAREST);
+
+    // The target may still be the current one — restore it as a whole, which is
+    // what GLState already believes is bound.
+    glBindFramebuffer(GL_FRAMEBUFFER, *renderTargetProperties->glMultisampledFramebuffer);
 }
 
 void gl::GLTextures::updateRenderTargetMipmap(GLRenderTarget* renderTarget) {
