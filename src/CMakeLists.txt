@@ -226,6 +226,7 @@ set(publicHeaders
         "threepp/objects/TextSprite.hpp"
         "threepp/objects/Water.hpp"
         "threepp/objects/GrassMesh.hpp"
+        "threepp/objects/SplatCloud.hpp"
 
         "threepp/splats/SplatData.hpp"
         "threepp/splats/SplatSH.hpp"
@@ -583,6 +584,7 @@ set(sources
         "threepp/objects/TextSprite.cpp"
         "threepp/objects/Water.cpp"
         "threepp/objects/GrassMesh.cpp"
+        "threepp/objects/SplatCloud.cpp"
 
         "threepp/splats/SplatData.cpp"
 

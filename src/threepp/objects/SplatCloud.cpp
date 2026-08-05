@@ -1,0 +1,576 @@
+
+#include "threepp/objects/SplatCloud.hpp"
+
+#include "threepp/cameras/Camera.hpp"
+#include "threepp/core/BufferGeometry.hpp"
+#include "threepp/core/Uniform.hpp"
+#include "threepp/materials/RawShaderMaterial.hpp"
+#include "threepp/math/Matrix4.hpp"
+#include "threepp/renderers/GLRenderer.hpp"
+#include "threepp/textures/DataTexture.hpp"
+
+#include <algorithm>
+#include <limits>
+#include <optional>
+#include <stdexcept>
+
+using namespace threepp;
+
+namespace {
+
+    // One row of every splat texture is this wide; index -> (u, v) is integer
+    // division. 2048 keeps a degree-3 million-splat SH texture at 8192 rows,
+    // well inside the 16384 every GL 3.3 implementation in practice reports —
+    // the spec's own floor (1024) could not hold that cloud in any layout.
+    constexpr int TEX_WIDTH = 2048;
+
+    // Sort keys are 16-bit, so the counting sort is a fixed 65536-bucket pass.
+    constexpr int SORT_BUCKETS = 65536;
+
+    int texHeightFor(size_t texels) {
+
+        return static_cast<int>((texels + TEX_WIDTH - 1) / TEX_WIDTH);
+    }
+
+    std::shared_ptr<BufferGeometry> unitQuad() {
+
+        // xy in [-1, 1]; the vertex shader scales it to the splat's 3-sigma
+        // footprint in pixels. z is unused.
+        auto geometry = BufferGeometry::create();
+        geometry->setAttribute("position", FloatBufferAttribute::create(
+                                                   {-1.f, -1.f, 0.f,
+                                                    1.f, -1.f, 0.f,
+                                                    1.f, 1.f, 0.f,
+                                                    -1.f, 1.f, 0.f},
+                                                   3));
+        geometry->setIndex(std::vector<unsigned int>{0, 1, 2, 0, 2, 3});
+
+        return geometry;
+    }
+
+}// namespace
+
+
+// ---------------------------------------------------------------------------
+// Shaders
+//
+// The SH constants below are written with the SAME decimal literals as
+// threepp/splats/SplatSH.hpp. SplatSH_test asserts this text still contains
+// every one of them, so the C++ evaluator and the GPU one cannot drift.
+// ---------------------------------------------------------------------------
+
+const std::string& SplatCloud::vertexShaderSource() {
+
+    static const std::string source = R"(#version 330 core
+
+// Standard threepp uniforms (GLRenderer sets these for a RawShaderMaterial too).
+uniform mat4 modelMatrix;
+uniform mat4 modelViewMatrix;
+uniform mat4 projectionMatrix;
+uniform vec3 cameraPosition;
+
+// Per-splat data, fetched by index. See SplatCloud.hpp for the packing.
+uniform sampler2D splatMeanTex;// (mean.xyz, opacity)
+uniform sampler2D splatCovTex; // (Sxx,Sxy,Sxz,Syy), (Syz,Szz,-,-)
+uniform sampler2D splatShTex;  // one texel per SH coefficient, rgb used
+
+uniform int splatTexWidth;
+uniform int splatShCoeffs;// (degree+1)^2
+uniform int splatShDegree;
+uniform vec2 splatViewport;// framebuffer size in pixels
+uniform float splatNear;   // camera near plane
+
+in vec3 position;     // unit quad corner, xy in [-1, 1]
+in vec3 instanceColor;// .x = the splat this draw slot renders (sorted)
+
+out vec3 vColor;
+out float vOpacity;
+out vec3 vConic;
+out vec2 vDelta;
+
+const float SH_C0 = 0.28209479177387814;
+const float SH_C1 = 0.4886025119029199;
+const float SH_C2_0 = 1.0925484305920792;
+const float SH_C2_1 = -1.0925484305920792;
+const float SH_C2_2 = 0.31539156525252005;
+const float SH_C2_3 = -1.0925484305920792;
+const float SH_C2_4 = 0.5462742152960396;
+const float SH_C3_0 = -0.5900435899266435;
+const float SH_C3_1 = 2.890611442640554;
+const float SH_C3_2 = -0.4570457994644658;
+const float SH_C3_3 = 0.3731763325901154;
+const float SH_C3_4 = -0.4570457994644658;
+const float SH_C3_5 = 1.445305721320277;
+const float SH_C3_6 = -0.5900435899266435;
+
+// The low-pass the EWA splatting formulation adds to the projected covariance:
+// without it a splat narrower than a pixel projects to a near-singular conic and
+// either aliases or inverts. It costs a little brightness on small splats; that
+// is a deliberate trade (no Mip-Splatting compensation here).
+const float SCREEN_DILATION = 0.3;
+
+ivec2 splatTexel(int i) {
+
+    return ivec2(i % splatTexWidth, i / splatTexWidth);
+}
+
+vec3 shCoeff(int base, int c) {
+
+    return texelFetch(splatShTex, splatTexel(base + c), 0).rgb;
+}
+
+// dir points FROM the camera TO the splat, in world space.
+vec3 shColor(int splat, vec3 dir) {
+
+    int base = splat * splatShCoeffs;
+
+    vec3 c = SH_C0 * shCoeff(base, 0);
+
+    if (splatShDegree >= 1) {
+
+        float x = dir.x;
+        float y = dir.y;
+        float z = dir.z;
+
+        c += -SH_C1 * y * shCoeff(base, 1) + SH_C1 * z * shCoeff(base, 2) - SH_C1 * x * shCoeff(base, 3);
+
+        if (splatShDegree >= 2) {
+
+            float xx = x * x;
+            float yy = y * y;
+            float zz = z * z;
+            float xy = x * y;
+            float yz = y * z;
+            float xz = x * z;
+
+            c += SH_C2_0 * xy * shCoeff(base, 4) + SH_C2_1 * yz * shCoeff(base, 5) + SH_C2_2 * (2.0 * zz - xx - yy) * shCoeff(base, 6) + SH_C2_3 * xz * shCoeff(base, 7) + SH_C2_4 * (xx - yy) * shCoeff(base, 8);
+
+            if (splatShDegree >= 3) {
+
+                c += SH_C3_0 * y * (3.0 * xx - yy) * shCoeff(base, 9) + SH_C3_1 * xy * z * shCoeff(base, 10) + SH_C3_2 * y * (4.0 * zz - xx - yy) * shCoeff(base, 11) + SH_C3_3 * z * (2.0 * zz - 3.0 * xx - 3.0 * yy) * shCoeff(base, 12) + SH_C3_4 * x * (4.0 * zz - xx - yy) * shCoeff(base, 13) + SH_C3_5 * z * (xx - yy) * shCoeff(base, 14) + SH_C3_6 * x * (xx - 3.0 * yy) * shCoeff(base, 15);
+            }
+        }
+    }
+
+    // The +0.5 belongs to the evaluation, not the data: the optimiser
+    // initialises the DC term as (rgb - 0.5) / SH_C0. Kept in step with
+    // splats::SH_COLOR_OFFSET.
+    return max(c + 0.5, vec3(0.0));
+}
+
+void discardVertex() {
+
+    // Behind the near plane, or numerically hopeless. z/w > 1 clips the whole
+    // primitive away; the varyings still need defined values.
+    gl_Position = vec4(0.0, 0.0, 2.0, 1.0);
+    vColor = vec3(0.0);
+    vOpacity = 0.0;
+    vConic = vec3(1.0, 0.0, 1.0);
+    vDelta = vec2(0.0);
+}
+
+void main() {
+
+    // Floats are exact to 2^24, so the sorted index survives the trip through
+    // the instanceColor attribute intact.
+    int splat = int(instanceColor.x + 0.5);
+
+    vec4 meanOpacity = texelFetch(splatMeanTex, splatTexel(splat), 0);
+    vec3 meanLocal = meanOpacity.xyz;
+
+    vec4 viewPos = modelViewMatrix * vec4(meanLocal, 1.0);
+    if (viewPos.z > -splatNear) {
+
+        discardVertex();
+        return;
+    }
+
+    // 3D covariance, symmetric, precomputed on the CPU as R*S*S^T*R^T.
+    int covBase = splat * 2;
+    vec4 c0 = texelFetch(splatCovTex, splatTexel(covBase), 0);
+    vec4 c1 = texelFetch(splatCovTex, splatTexel(covBase + 1), 0);
+    mat3 sigma = mat3(
+            c0.x, c0.y, c0.z,
+            c0.y, c0.w, c1.x,
+            c0.z, c1.x, c1.y);
+
+    // Into view space. W is modelView's linear part, so a scaled or rotated
+    // cloud transforms correctly.
+    mat3 W = mat3(modelViewMatrix);
+    mat3 sigmaView = W * sigma * transpose(W);
+
+    // EWA: J is the local affine approximation of the perspective divide at the
+    // splat's centre. Focal lengths in pixels come straight out of the
+    // projection matrix -- fx = 0.5 * width * P[0][0].
+    float focalX = 0.5 * splatViewport.x * projectionMatrix[0][0];
+    float focalY = 0.5 * splatViewport.y * projectionMatrix[1][1];
+
+    float zInv = 1.0 / -viewPos.z;// viewPos.z < 0 here
+    float zInv2 = zInv * zInv;
+
+    mat3 J = mat3(
+            focalX * zInv, 0.0, 0.0,
+            0.0, focalY * zInv, 0.0,
+            focalX * viewPos.x * zInv2, focalY * viewPos.y * zInv2, 0.0);
+
+    mat3 cov2 = J * sigmaView * transpose(J);
+
+    float a = cov2[0][0] + SCREEN_DILATION;
+    float b = cov2[0][1];
+    float c = cov2[1][1] + SCREEN_DILATION;
+
+    float det = a * c - b * b;
+    if (!(det > 0.0)) {// also catches NaN
+
+        discardVertex();
+        return;
+    }
+
+    // Conic = inverse of the 2D covariance, which is what the fragment stage
+    // evaluates the Gaussian with.
+    vConic = vec3(c, -b, a) / det;
+
+    // 3 sigma of the larger principal axis, in pixels.
+    float mid = 0.5 * (a + c);
+    float lambda = mid + sqrt(max(0.0, mid * mid - det));
+    float radius = 3.0 * sqrt(lambda);
+    if (!(radius > 0.0)) {
+
+        discardVertex();
+        return;
+    }
+    // A splat straddling the near plane can project to an arbitrarily large
+    // footprint; clamping keeps one bad Gaussian from shading the whole screen.
+    radius = min(radius, max(splatViewport.x, splatViewport.y));
+
+    vec4 clip = projectionMatrix * viewPos;
+    vec2 ndc = clip.xy / clip.w;
+
+    vDelta = position.xy * radius;
+
+    // Offset in NDC, then scaled back by w so the perspective divide undoes it.
+    // clip.z and clip.w pass through untouched, so depth stays the splat centre's.
+    vec2 ndcQuad = ndc + vDelta * 2.0 / splatViewport;
+    gl_Position = vec4(ndcQuad * clip.w, clip.z, clip.w);
+
+    vOpacity = meanOpacity.w;
+
+    vec3 meanWorld = (modelMatrix * vec4(meanLocal, 1.0)).xyz;
+    vColor = shColor(splat, normalize(meanWorld - cameraPosition));
+}
+)";
+
+    return source;
+}
+
+const std::string& SplatCloud::fragmentShaderSource() {
+
+    static const std::string source = R"(#version 330 core
+
+in vec3 vColor;
+in float vOpacity;
+in vec3 vConic;
+in vec2 vDelta;
+
+uniform bool splatDebugNonFinite;
+
+out vec4 fragColor;
+
+const vec4 DEBUG_MAGENTA = vec4(1.0, 0.0, 1.0, 1.0);
+
+void main() {
+
+    // The Gaussian, evaluated through its inverse 2D covariance.
+    float power = -0.5 * (vConic.x * vDelta.x * vDelta.x + 2.0 * vConic.y * vDelta.x * vDelta.y + vConic.z * vDelta.y * vDelta.y);
+
+    // Negated comparison so NaN — which fails every comparison — lands here too.
+    if (!(power <= 0.0)) {
+
+        if (splatDebugNonFinite && isnan(power)) {
+
+            fragColor = DEBUG_MAGENTA;
+            return;
+        }
+        discard;
+    }
+
+    float alpha = vOpacity * exp(power);
+    if (!(alpha >= 0.00392156862)) {// 1/255: below this the blend is a no-op
+
+        discard;
+    }
+    alpha = min(0.99, alpha);
+
+    if (any(isnan(vColor)) || any(isinf(vColor))) {
+
+        if (splatDebugNonFinite) {
+
+            fragColor = DEBUG_MAGENTA;
+            return;
+        }
+        discard;
+    }
+
+    // Display-referred already: splats are trained against sRGB-ish images, so
+    // no tone mapping happens here. Straight (non-premultiplied) alpha, matching
+    // Blending::Normal.
+    fragColor = vec4(vColor, alpha);
+}
+)";
+
+    return source;
+}
+
+
+// ---------------------------------------------------------------------------
+// Object
+// ---------------------------------------------------------------------------
+
+SplatCloud::SplatCloud(SplatData data)
+    : InstancedMesh(unitQuad(), RawShaderMaterial::create(), std::max<size_t>(data.count(), 1)),
+      data_(std::move(data)) {
+
+    std::string why;
+    if (!data_.validate(&why)) {
+
+        throw std::invalid_argument("SplatCloud: invalid SplatData (" + why + ")");
+    }
+
+    // The file's quaternions are arbitrary length; the covariance is only a
+    // rotation-times-scale if they are unit.
+    data_.normalizeRotations();
+
+    // dynamic, not static: Material is a *virtual* base of ShaderMaterial, and
+    // static_cast cannot walk down from a virtual base.
+    splatMaterial_ = std::dynamic_pointer_cast<RawShaderMaterial>(material());
+    splatMaterial_->vertexShader = vertexShaderSource();
+    splatMaterial_->fragmentShader = fragmentShaderSource();
+
+    // transparent = true is not cosmetic: GLState disables blending outright for
+    // Blending::Normal on an opaque material, and every splat past the first
+    // would overwrite instead of blending.
+    splatMaterial_->transparent = true;
+    splatMaterial_->depthTest = true;
+    splatMaterial_->depthWrite = false;
+    splatMaterial_->side = Side::Double;
+
+    buildTextures();
+
+    // instanceColor carries the sorted index. setColorAt is what allocates the
+    // attribute (and with it the divisor-1 binding); after that we write the
+    // raw float array directly, since these are indices, not colours.
+    setColorAt(count() - 1, Color());
+    auto& slots = instanceColor()->array();
+    for (size_t i = 0; i < count(); ++i) slots[i * 3] = static_cast<float>(i);
+    instanceColor()->needsUpdate();
+
+    // An empty cloud still allocated one instance's worth of buffers (the base
+    // class rejects count 0); draw none of it.
+    if (data_.count() == 0) setCount(0);
+
+    // A splat's footprint reaches well past its centre, so the bounds are the
+    // means dilated by 3 sigma. frustumCulled stays on: the sphere is honest.
+    const auto box = data_.computeBounds(3.f);
+    Sphere sphere;
+    if (!box.isEmpty()) {
+
+        box.getBoundingSphere(sphere);
+        boundingSphere = sphere;
+
+    } else {
+
+        boundingSphere = Sphere(Vector3{}, 0.f);
+    }
+
+    depths_.resize(data_.count());
+    keys_.resize(data_.count());
+    histogram_.resize(SORT_BUCKETS);
+
+    // Safety net for callers who forget update(): the renderer has already
+    // uploaded instanceColor by the time this runs, so the sort lands one frame
+    // late — but the viewport uniform is read at draw time, so that is current.
+    onBeforeRender = RenderCallback(
+            [this](void* renderer, Object3D*, Camera* camera, BufferGeometry*, Material*, std::optional<GeometryGroup>) {
+                auto* base = static_cast<Renderer*>(renderer);
+
+                if (auto* gl = dynamic_cast<GLRenderer*>(base)) {
+
+                    // The bound render target's viewport, which is what the
+                    // splat footprint has to be measured in.
+                    Vector4 viewport;
+                    gl->getCurrentViewport(viewport);
+                    setViewportSize(static_cast<int>(viewport.z), static_cast<int>(viewport.w));
+
+                } else if (base) {
+
+                    const auto size = base->size();
+                    const auto ratio = base->getTargetPixelRatio();
+                    setViewportSize(static_cast<int>(static_cast<float>(size.width()) * ratio),
+                                    static_cast<int>(static_cast<float>(size.height()) * ratio));
+                }
+
+                if (camera) update(*camera);
+            });
+}
+
+std::shared_ptr<SplatCloud> SplatCloud::create(SplatData data) {
+
+    return std::make_shared<SplatCloud>(std::move(data));
+}
+
+void SplatCloud::buildTextures() {
+
+    const size_t n = data_.count();
+    const int coeffs = data_.coeffCount();
+
+    // --- means + opacity: one texel each -----------------------------------
+    {
+        const int height = std::max(1, texHeightFor(n));
+        std::vector<float> texels(static_cast<size_t>(TEX_WIDTH) * height * 4, 0.f);
+        for (size_t i = 0; i < n; ++i) {
+
+            texels[i * 4 + 0] = data_.means[i].x;
+            texels[i * 4 + 1] = data_.means[i].y;
+            texels[i * 4 + 2] = data_.means[i].z;
+            texels[i * 4 + 3] = data_.opacities[i];
+        }
+        meanTexture_ = DataTexture::create(std::move(texels), TEX_WIDTH, height);
+        meanTexture_->format = Format::RGBA;
+        meanTexture_->type = Type::Float;
+    }
+
+    // --- 3D covariance: six floats, two texels each -------------------------
+    {
+        const int height = std::max(1, texHeightFor(n * 2));
+        std::vector<float> texels(static_cast<size_t>(TEX_WIDTH) * height * 4, 0.f);
+        for (size_t i = 0; i < n; ++i) {
+
+            float cov[6];
+            data_.computeCovariance(i, cov);
+
+            const size_t t = i * 2 * 4;
+            texels[t + 0] = cov[0];// xx
+            texels[t + 1] = cov[1];// xy
+            texels[t + 2] = cov[2];// xz
+            texels[t + 3] = cov[3];// yy
+            texels[t + 4] = cov[4];// yz
+            texels[t + 5] = cov[5];// zz
+        }
+        covTexture_ = DataTexture::create(std::move(texels), TEX_WIDTH, height);
+        covTexture_->format = Format::RGBA;
+        covTexture_->type = Type::Float;
+    }
+
+    // --- SH: one texel per coefficient, alpha unused ------------------------
+    {
+        const int height = std::max(1, texHeightFor(n * static_cast<size_t>(coeffs)));
+        std::vector<float> texels(static_cast<size_t>(TEX_WIDTH) * height * 4, 0.f);
+        for (size_t i = 0; i < n; ++i) {
+
+            const float* c = data_.shAt(i);
+            for (int k = 0; k < coeffs; ++k) {
+
+                const size_t t = (i * static_cast<size_t>(coeffs) + k) * 4;
+                texels[t + 0] = c[k * 3 + 0];
+                texels[t + 1] = c[k * 3 + 1];
+                texels[t + 2] = c[k * 3 + 2];
+            }
+        }
+        shTexture_ = DataTexture::create(std::move(texels), TEX_WIDTH, height);
+        shTexture_->format = Format::RGBA;
+        shTexture_->type = Type::Float;
+    }
+
+    auto& uniforms = splatMaterial_->uniforms;
+    uniforms["splatMeanTex"] = Uniform(static_cast<Texture*>(meanTexture_.get()));
+    uniforms["splatCovTex"] = Uniform(static_cast<Texture*>(covTexture_.get()));
+    uniforms["splatShTex"] = Uniform(static_cast<Texture*>(shTexture_.get()));
+    uniforms["splatTexWidth"] = Uniform(TEX_WIDTH);
+    uniforms["splatShCoeffs"] = Uniform(coeffs);
+    uniforms["splatShDegree"] = Uniform(data_.shDegree);
+    uniforms["splatViewport"] = Uniform(Vector2(1.f, 1.f));
+    uniforms["splatNear"] = Uniform(0.1f);
+    uniforms["splatDebugNonFinite"] = Uniform(false);
+}
+
+void SplatCloud::setViewportSize(int width, int height) {
+
+    splatMaterial_->uniforms["splatViewport"].setValue(
+            Vector2(static_cast<float>(std::max(1, width)), static_cast<float>(std::max(1, height))));
+}
+
+void SplatCloud::setDebugNonFinite(bool flag) {
+
+    splatMaterial_->uniforms["splatDebugNonFinite"].setValue(flag);
+}
+
+void SplatCloud::update(Camera& camera) {
+
+    // Both matrices must be current before the sort reads them; a caller that
+    // just moved the camera has not necessarily re-rendered yet.
+    camera.updateWorldMatrix(true, false);
+    this->updateWorldMatrix(true, false);
+
+    splatMaterial_->uniforms["splatNear"].setValue(camera.nearPlane);
+
+    sortByDepth(camera);
+}
+
+void SplatCloud::sortByDepth(Camera& camera) {
+
+    const size_t n = data_.count();
+    if (n == 0) return;
+
+    Matrix4 modelView;
+    modelView.multiplyMatrices(camera.matrixWorldInverse, *matrixWorld);
+    const auto& e = modelView.elements;
+
+    if (sorted_ && std::equal(e.begin(), e.end(), lastSortMatrix_.begin())) return;
+    std::copy(e.begin(), e.end(), lastSortMatrix_.begin());
+
+    // View-space z of each mean. Column-major elements, so row 2 is
+    // (e[2], e[6], e[10], e[14]).
+    float minZ = std::numeric_limits<float>::max();
+    float maxZ = std::numeric_limits<float>::lowest();
+
+    for (size_t i = 0; i < n; ++i) {
+
+        const auto& m = data_.means[i];
+        const float z = e[2] * m.x + e[6] * m.y + e[10] * m.z + e[14];
+        depths_[i] = z;
+        minZ = std::min(minZ, z);
+        maxZ = std::max(maxZ, z);
+    }
+
+    // GL view space looks down -z, so the farthest splat has the most negative
+    // z: ascending z IS back-to-front. Quantise into 16 bits and counting-sort.
+    const float span = maxZ - minZ;
+    const float scale = span > 0.f ? static_cast<float>(SORT_BUCKETS - 1) / span : 0.f;
+
+    std::fill(histogram_.begin(), histogram_.end(), 0u);
+
+    for (size_t i = 0; i < n; ++i) {
+
+        const float k = (depths_[i] - minZ) * scale;
+        keys_[i] = static_cast<std::uint16_t>(
+                std::clamp(k, 0.f, static_cast<float>(SORT_BUCKETS - 1)));
+        ++histogram_[keys_[i]];
+    }
+
+    std::uint32_t running = 0;
+    for (int bucket = 0; bucket < SORT_BUCKETS; ++bucket) {
+
+        const std::uint32_t hits = histogram_[bucket];
+        histogram_[bucket] = running;
+        running += hits;
+    }
+
+    auto& slots = instanceColor()->array();
+    for (size_t i = 0; i < n; ++i) {
+
+        slots[static_cast<size_t>(histogram_[keys_[i]]++) * 3] = static_cast<float>(i);
+    }
+
+    instanceColor()->needsUpdate();
+    sorted_ = true;
+}
