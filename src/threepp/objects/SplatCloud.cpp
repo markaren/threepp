@@ -94,6 +94,7 @@ uniform int splatShCoeffs;// (degree+1)^2
 uniform int splatShDegree;
 uniform vec2 splatViewport;// framebuffer size in pixels
 uniform float splatNear;   // camera near plane
+uniform bool isOrthographic;
 
 in vec3 position;     // unit quad corner, xy in [-1, 1]
 in vec3 instanceColor;// .x = the splat this draw slot renders (sorted)
@@ -225,13 +226,29 @@ void main() {
     float focalX = 0.5 * splatViewport.x * projectionMatrix[0][0];
     float focalY = 0.5 * splatViewport.y * projectionMatrix[1][1];
 
-    float zInv = 1.0 / -viewPos.z;// viewPos.z < 0 here
-    float zInv2 = zInv * zInv;
+    mat3 J;
+    if (isOrthographic) {
 
-    mat3 J = mat3(
-            focalX * zInv, 0.0, 0.0,
-            0.0, focalY * zInv, 0.0,
-            focalX * viewPos.x * zInv2, focalY * viewPos.y * zInv2, 0.0);
+        // No divide to approximate: a parallel projection is already affine, so
+        // the Jacobian is the constant pixels-per-world-unit scale. (For an
+        // orthographic camera P[0][0] is 2/(right-left), which makes focalX
+        // come out as exactly that.) Using the perspective form here would
+        // shrink distant splats under a projection that has no perspective.
+        J = mat3(
+                focalX, 0.0, 0.0,
+                0.0, focalY, 0.0,
+                0.0, 0.0, 0.0);
+
+    } else {
+
+        float zInv = 1.0 / -viewPos.z;// viewPos.z < 0 here
+        float zInv2 = zInv * zInv;
+
+        J = mat3(
+                focalX * zInv, 0.0, 0.0,
+                0.0, focalY * zInv, 0.0,
+                focalX * viewPos.x * zInv2, focalY * viewPos.y * zInv2, 0.0);
+    }
 
     mat3 cov2 = J * sigmaView * transpose(J);
 

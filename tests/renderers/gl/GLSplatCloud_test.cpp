@@ -202,6 +202,30 @@ TEST_CASE("GL splats: opacity controls how much background survives") {
     CHECK(solidCentre.g > faintCentre.g);
 }
 
+TEST_CASE("GL splats: an orthographic camera does not shrink distant splats") {
+
+    // The EWA Jacobian approximates the perspective divide. A parallel
+    // projection has none, and using the perspective form anyway makes the far
+    // splat smaller — which looks entirely plausible until you notice the
+    // camera is orthographic.
+    auto camera = OrthographicCamera::create(-2, 2, 2, -2, 0.1f, 100);
+    camera->position.set(0, 0, 6);
+    camera->lookAt(Vector3{0, 0, 0});
+
+    auto nearCloud = makeCloud({{{0, 0, 2.f}, {1.f, 1.f, 1.f}, 0.3f, 0.9f}});
+    auto farCloud = makeCloud({{{0, 0, -2.f}, {1.f, 1.f, 1.f}, 0.3f, 0.9f}});
+
+    const int nearLit = countNonBlack(renderSplats(nearCloud, *camera, Color(0x000000)));
+    const int farLit = countNonBlack(renderSplats(farCloud, *camera, Color(0x000000)));
+
+    INFO("near covers " << nearLit << " px, far covers " << farLit << " px");
+    REQUIRE(nearLit > 0);
+    REQUIRE(farLit > 0);
+
+    const double ratio = static_cast<double>(std::min(nearLit, farLit)) / std::max(nearLit, farLit);
+    CHECK(ratio > 0.9);
+}
+
 TEST_CASE("GL splats: a splat behind the camera paints nothing") {
 
     auto camera = PerspectiveCamera::create(50, 1.0f, 0.1f, 100);
