@@ -1148,8 +1148,27 @@ void EditorApp::applyDocumentRender() {
 
 void EditorApp::frameDocument() {
 
+    // The DOCUMENT, as the name says — not the editor's own furniture. The
+    // overlay is an ordinary child of the scene (SceneDocument detaches it only
+    // for export), so setFromObject(scene) measures it too, and the transform
+    // gizmo inside it carries a bound of order 1e6: its picker planes are sized
+    // against the camera distance rather than against anything in the world.
+    // Framing that puts the camera a million units out and the actual scene a
+    // sub-pixel speck at the far plane.
+    //
+    // Found by importing a splat scan and photographing a black viewport. It
+    // needs a selection to bite (no selection, no attached gizmo), which is why
+    // it survived: the paths that frame — open a scene, open an example — do it
+    // before anything is selected, and an import does not reframe at all.
     Box3 box;
-    box.setFromObject(document_.scene());
+    for (auto* child : document_.scene().children) {
+
+        if (!child || document_.isEditorOnly(*child)) continue;
+
+        Box3 childBox;
+        childBox.setFromObject(*child);
+        if (!childBox.isEmpty()) box.union_(childBox);
+    }
     if (box.isEmpty()) return;
 
     const Vector3 centre = box.getCenter();

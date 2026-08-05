@@ -478,8 +478,14 @@ int EditorApp::runScreenshot() {
     // scenario is the DEFAULT, not the contract: `--screenshot=x.png` with
     // nothing else on the line still builds the tubes and writes every sibling
     // view, which is what the road/spline acceptance passes ask for.
-    if (!options_.example.empty() ||
-        (!options_.openOnStart.empty() && options_.openOnStart.extension() == ".json")) {
+    //
+    // ANY file on the command line counts, not only a .json. The startup path
+    // sends everything else through the import dispatch, so `threepp_editor
+    // scan.ply --screenshot=x.png` has a scene to photograph too — and
+    // photographing the spline tubes instead, because the file was a model
+    // rather than a document, is not a distinction anyone typing that meant to
+    // draw. The settle (--seconds) is what the async import finishes in.
+    if (!options_.example.empty() || !options_.openOnStart.empty()) {
         return runSceneScreenshot();
     }
 
