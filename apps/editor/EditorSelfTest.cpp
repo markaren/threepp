@@ -25,6 +25,7 @@
 #include "threepp/extras/editor/ScriptWorkspace.hpp"
 #include "threepp/extras/editor/SensorConfig.hpp"
 #include "threepp/extras/editor/SoundConfig.hpp"
+#include "threepp/extras/editor/SplatImportConfig.hpp"
 #include "threepp/extras/editor/SplineConfig.hpp"
 #include "threepp/extras/editor/TextConfig.hpp"
 #include "threepp/extras/editor/TreeConfig.hpp"
@@ -62,6 +63,8 @@
 #include "threepp/objects/ObjectWithMorphTargetInfluences.hpp"
 #include "threepp/objects/Points.hpp"
 #include "threepp/objects/Robot.hpp"
+#include "threepp/objects/SplatCloud.hpp"
+#include "threepp/splats/SplatData.hpp"
 #include "threepp/scenes/Scene.hpp"
 #ifdef THREEPP_WITH_VULKAN
 // The screenshot passes ask the renderer which way up its pixels come back.
@@ -7189,6 +7192,114 @@ int EditorApp::runSelfTest() {
                           orbit_->target.distanceTo(droveTarget) < 1e-2f,
                   "leaving the camera where the user drove it");
         }
+    }
+
+    // --- Gaussian splat clouds ---------------------------------------------
+    // A procedural cloud, so this needs no asset on disk. The three things an
+    // editor owes an imported scan: it draws, it can be clicked, and the fact
+    // that it is not saved yet is said rather than discovered.
+    //
+    // stepFixed throughout. Nothing here accumulates simulated time, but Play
+    // and Stop do run a session, and the doctrine is cheaper to keep than to
+    // decide about per call site.
+    {
+        newScene();
+        selectObject(nullptr);
+
+        // Away from the template Box and Ground, and looked at head on, so the
+        // before/after difference below is the cloud and only the cloud.
+        const Vector3 where(0.f, 4.f, 0.f);
+        camera_.position.set(0.f, 4.f, 5.f);
+        orbit_->target.copy(where);
+        stepFixed(4);
+
+        const auto before = renderer_->readRGBPixels();
+        check(!before.empty(), "the frame can be read back at all");
+
+        SplatGenerator::Options options;
+        options.count = 3000;
+        options.shDegree = 1;
+        auto cloud = SplatCloud::create(SplatGenerator::generate(options));
+        cloud->name = "Procedural Splats";
+        cloud->position.copy(where);
+
+        // Through the same command the import uses, so this exercises the undo
+        // entry and the hierarchy insert rather than a bare scene->add.
+        addObject(cloud, document_.scene(), "Add Splats");
+        // The add selects what it added; drop the selection so the outline is
+        // not counted as splat pixels.
+        selectObject(nullptr);
+        stepFixed(4);
+
+        check(document_.scene().getObjectByName("Procedural Splats") != nullptr,
+              "a splat cloud goes into the scene like any other object");
+
+        // Pixels, because nothing else answers "does it draw". Count of pixels
+        // that MOVED, not a frame mean: 3000 splats two metres across are a
+        // small part of the frame and an average would bury them.
+        const auto after = renderer_->readRGBPixels();
+        std::size_t moved = 0;
+        const std::size_t n = std::min(before.size(), after.size());
+        for (std::size_t i = 0; i < n; ++i) {
+            if (std::abs(static_cast<int>(after[i]) - static_cast<int>(before[i])) > 16) ++moved;
+        }
+        check(after.size() == before.size() && moved > n / 500,
+              "and it renders (nonzero splat pixels)");
+        std::cout << "[selftest] splat pixels moved: " << moved << " of " << n << std::endl;
+
+        // Clickable. Without SplatCloud::raycast this picks nothing: the
+        // inherited InstancedMesh version tests the unit quad against 3000
+        // identity matrices, none of which is where a splat is.
+        const auto* viewport = ImGui::GetMainViewport();
+        pickAt(viewport->Pos.x + viewport->Size.x * 0.5f,
+               viewport->Pos.y + viewport->Size.y * 0.5f);
+        stepFixed();
+        check(selection_.get() == cloud.get(), "a click in the viewport selects the cloud");
+
+        // The gizmo needs a bound to sit on, and the cloud's must be its own
+        // rather than the unit quad InstancedMesh would compute.
+        Box3 bounds;
+        bounds.setFromObject(*cloud);
+        check(!bounds.isEmpty() && bounds.getSize().x > 1.f,
+              "with a bounding box the size of the cloud, not of the quad");
+
+        // The import mark round-trips through userData.
+        editor::SplatImportConfig config;
+        config.source = "C:/scans/procedural.ply";
+        config.culled = true;
+        config.removed = 7;
+        config.flippedX = true;
+        config.write(*cloud);
+        const auto read = editor::SplatImportConfig::read(*cloud);
+        check(read && read->source == config.source && read->culled && read->removed == 7 &&
+                      read->flippedX,
+              "the import mark round-trips through userData");
+
+        // The limitation is announced, not discovered.
+        check(warnAboutSplatClouds("Play") == 1,
+              "Play warns that the cloud is not serialized");
+
+        // Re-selected, and with the console out of the way, so the picture
+        // shows the whole Splats section — the source path and the
+        // not-serialized warning sit below the fold otherwise, and those are
+        // the two lines this pass exists to put on screen.
+        selectObject(cloud.get());
+        const bool consoleWasOpen = bottomPanelOpen_;
+        bottomPanelOpen_ = false;
+        stepFixed(2);
+        shootTo(std::filesystem::temp_directory_path() / "threepp_editor_splats.png");
+        bottomPanelOpen_ = consoleWasOpen;
+        stepFixed();
+
+        // And then it really is lost, because Stop restores from a snapshot in
+        // the same format the save file uses. Pinned deliberately: when the
+        // serialization pass lands, THIS is the assertion that has to flip.
+        startPlay();
+        stepFixed(4);
+        stopPlay();
+        stepFixed(4);
+        check(document_.scene().getObjectByName("Procedural Splats") == nullptr,
+              "and Stop drops it, which is the gap the warning is about");
     }
 
     std::cout << "[selftest] " << (failed == 0 ? "ALL PASS" : "FAILED") << std::endl;
