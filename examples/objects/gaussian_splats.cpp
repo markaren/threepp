@@ -6,6 +6,17 @@
 //   --shot <out.png> [--frames N]          headless capture, then exit
 //   --screenshot=<out.png>                 same thing, spelled the other way
 //   --cam x,y,z --look x,y,z               reframe a capture without rebuilding
+//   --no-flip                              keep a loaded file's own axes
+//   --bench N                              N frames on a slow orbit, timings, exit
+//
+// --bench orbits deliberately. update() early-outs when the camera has not
+// moved, so a benchmark on a static camera measures the draw alone and quietly
+// skips the sort and the per-frame index upload -- the two costs that actually
+// scale with splat count.
+//
+// Loaded scans are turned 180 degrees about X by default, because the
+// photogrammetry pipelines that produce them work +Y-down and threepp is
+// +Y-up; without it every real capture arrives upside down.
 //
 // The procedural scene is built so that a rendering mistake is visible rather
 // than plausible. Three ellipsoidal shells of flattened, randomly oriented
@@ -23,10 +34,14 @@
 #include "threepp/objects/SplatCloud.hpp"
 #include "threepp/threepp.hpp"
 
+#include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstdlib>
+#include <iomanip>
 #include <iostream>
 #include <string>
+#include <vector>
 
 using namespace threepp;
 
@@ -135,6 +150,8 @@ int main(int argc, char** argv) {
     std::string shotPath = args.out.value_or("");
     int shotFrames = args.frames.value_or(10);
     int shotFrame = 0;
+    bool flip = true;
+    int benchFrames = 0;
 
     for (int i = 1; i < argc; ++i) {
 
@@ -143,6 +160,10 @@ int main(int argc, char** argv) {
             shotPath = argv[++i];
         } else if (arg.rfind("--screenshot=", 0) == 0) {
             shotPath = arg.substr(13);
+        } else if (arg == "--no-flip") {
+            flip = false;
+        } else if (arg == "--bench" && i + 1 < argc) {
+            benchFrames = std::atoi(argv[++i]);
         } else if (arg == "--cam" || arg == "--look" || arg == "--frames" || arg == "--out") {
             ++i;// consumed by parseArgs
         } else if (arg.rfind("--", 0) != 0) {
@@ -151,13 +172,47 @@ int main(int argc, char** argv) {
     }
 
     SplatData data;
-    if (!plyPath.empty()) {
+    const bool loadedFromFile = !plyPath.empty();
+    if (loadedFromFile) {
 
         std::cout << "loading " << plyPath << " ..." << std::endl;
+        const auto t0 = std::chrono::steady_clock::now();
         data = SplatLoader::loadPly(plyPath);
+        const auto parseMs = std::chrono::duration<double, std::milli>(
+                                     std::chrono::steady_clock::now() - t0)
+                                     .count();
         std::cout << "  " << data.count() << " splats, SH degree " << data.shDegree;
         for (const auto& [name, values] : data.extras) std::cout << ", extra '" << name << "'";
-        std::cout << std::endl;
+        std::cout << "\n  parsed in " << std::fixed << std::setprecision(1) << parseMs << " ms"
+                  << std::endl;
+
+        // Scale and opacity distributions. Worth printing for any real scan:
+        // photogrammetry output routinely carries a long tail of enormous,
+        // near-opaque splats, and when a capture looks like fog rather than a
+        // building this is the first thing to check.
+        if (data.count() > 0) {
+
+            std::vector<float> longest;
+            longest.reserve(data.count());
+            for (const auto& s : data.scales) longest.push_back(std::max({s.x, s.y, s.z}));
+            std::sort(longest.begin(), longest.end());
+
+            std::vector<float> alpha(data.opacities);
+            std::sort(alpha.begin(), alpha.end());
+
+            auto pct = [](const std::vector<float>& v, double q) {
+                return v[static_cast<size_t>(q * static_cast<double>(v.size() - 1))];
+            };
+
+            std::cout << std::setprecision(4)
+                      << "  longest axis  p50 " << pct(longest, 0.5)
+                      << "  p99 " << pct(longest, 0.99)
+                      << "  p99.9 " << pct(longest, 0.999)
+                      << "  max " << longest.back()
+                      << "\n  opacity       p50 " << pct(alpha, 0.5)
+                      << "  p99 " << pct(alpha, 0.99)
+                      << "  max " << alpha.back() << std::endl;
+        }
 
     } else {
 
@@ -169,19 +224,100 @@ int main(int argc, char** argv) {
     // Framing uses 1 sigma, not the renderer's 3: the 3-sigma sphere is the
     // conservative bound the culler needs, and using it here backs the camera
     // off far enough that the cloud sits in the middle of the frame like a coin.
+    //
+    // Real scans need more than the extremes, though. Photogrammetry leaves
+    // stray splats hundreds of metres out, and a bounding sphere that honours
+    // them frames the outliers instead of the building. The framing radius is
+    // therefore a percentile of the distance from the median centre, which
+    // ignores a sparse halo without any explicit outlier pass.
     Sphere fit;
-    data.computeBounds(1.f).getBoundingSphere(fit);
+    if (data.count() > 0) {
 
-    Canvas canvas("Gaussian splats", {{"aa", 0}});
+        // Component-wise median, not the bounding box centre. A scan's extremes
+        // are exactly the splats that should not be trusted: this asset's box
+        // is 2000 units across while the building inside it is a fraction of
+        // that, so the box centre points at empty air between two outliers.
+        auto median = [](std::vector<float> v) {
+            std::nth_element(v.begin(), v.begin() + v.size() / 2, v.end());
+            return v[v.size() / 2];
+        };
+        std::vector<float> xs, ys, zs;
+        xs.reserve(data.count());
+        ys.reserve(data.count());
+        zs.reserve(data.count());
+        for (const auto& m : data.means) {
+            xs.push_back(m.x);
+            ys.push_back(m.y);
+            zs.push_back(m.z);
+        }
+        fit.center.set(median(xs), median(ys), median(zs));
+
+        std::vector<float> radii;
+        radii.reserve(data.count());
+        for (const auto& m : data.means) radii.push_back(m.distanceTo(fit.center));
+        std::sort(radii.begin(), radii.end());
+
+        auto pctR = [&](double q) { return radii[static_cast<size_t>(q * static_cast<double>(radii.size() - 1))]; };
+
+        // 90th percentile: tight enough to fill the frame with the subject,
+        // loose enough not to sit inside it.
+        fit.radius = pctR(0.90);
+        if (fit.radius <= 0.f) fit.radius = 1.f;
+
+        std::cout << "  median centre " << fit.center
+                  << "\n  radius about it  p50 " << pctR(0.5) << "  p90 " << pctR(0.9)
+                  << "  p99 " << pctR(0.99) << "  max " << radii.back()
+                  << "\n  framing radius " << fit.radius << std::endl;
+
+    } else {
+        fit.center.set(0, 0, 0);
+        fit.radius = 1.f;
+    }
+
+    // vsync off whenever we are capturing or benchmarking: both report frame
+    // times, and a 60 Hz clamp would report the monitor rather than the renderer.
+    Canvas canvas(Canvas::Parameters()
+                          .title("Gaussian splats")
+                          .antialiasing(0)
+                          .vsync(shotPath.empty() && benchFrames <= 0));
     GLRenderer renderer(canvas);
     renderer.checkShaderErrors = true;
 
     auto scene = Scene::create();
     scene->background = Color(0x101014);
 
-    auto camera = PerspectiveCamera::create(50, canvas.aspect(), 0.05f, 500.f);
+    // Clip planes scale with the scene. A fixed far plane is fine for a
+    // procedural toy and useless for a scan measured in metres, where backing
+    // the camera off to frame a basilica puts the whole building past it.
+    auto camera = PerspectiveCamera::create(50, canvas.aspect(),
+                                            std::max(0.01f, fit.radius * 0.002f),
+                                            std::max(100.f, fit.radius * 40.f));
 
+    const auto tBuild = std::chrono::steady_clock::now();
     auto cloud = SplatCloud::create(std::move(data));
+    std::cout << "  cloud built (covariances + data textures) in " << std::fixed
+              << std::setprecision(1)
+              << std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - tBuild).count()
+              << " ms" << std::endl;
+
+    // Photogrammetry rigs (COLMAP, and the 3DGS pipelines built on it) put +Y
+    // down, so a scan loads upside down in a +Y-up scene. The conventional
+    // half-turn about X is the fix, and it belongs here rather than in
+    // SplatLoader: which way is up is a property of the scene the cloud is
+    // being placed into, not of the file. Procedural clouds are authored
+    // +Y-up already and are never flipped.
+    if (loadedFromFile && flip) {
+
+        cloud->rotation.x = math::PI;
+        std::cout << "  flipped 180 degrees about X for +Y-up (--no-flip to keep the file's axes)"
+                  << std::endl;
+    }
+
+    // The fit sphere was measured in the cloud's own coordinates; move its
+    // centre into world space so the framing below still points at the scan.
+    cloud->updateMatrixWorld();
+    fit.center.applyMatrix4(*cloud->matrixWorld);
+
     scene->add(cloud);
 
     // Frame the cloud: back off far enough that its bounding sphere fits the
@@ -219,7 +355,34 @@ int main(int argc, char** argv) {
         renderer.setSize(size);
     });
 
+    // Per-frame wall time for the capture path. The first few frames pay for
+    // shader compilation and the initial texture upload, so they are recorded
+    // and then dropped rather than averaged into the result.
+    constexpr int WARMUP_FRAMES = 5;
+    const bool benching = benchFrames > 0;
+    const int measuredFrames = benching ? benchFrames : shotFrames;
+
+    std::vector<double> frameMs;
+    frameMs.reserve(static_cast<size_t>(std::max(measuredFrames, 1)));
+    auto frameStart = std::chrono::steady_clock::now();
+
+    // A benchmark has to move the camera. update() early-outs when the
+    // modelView is unchanged, so a static camera measures the draw alone and
+    // silently skips both the sort and the instanceColor upload -- which are
+    // the two things a 5M-splat cloud is actually being asked about here.
+    const float orbitRadians = benching ? (0.35f / static_cast<float>(std::max(1, benchFrames))) : 0.f;
+
     canvas.animate([&] {
+        if (benching) {
+
+            const float c = std::cos(orbitRadians), s = std::sin(orbitRadians);
+            const Vector3 d{camera->position.x - target.x, camera->position.y - target.y,
+                            camera->position.z - target.z};
+            camera->position.set(target.x + d.x * c - d.z * s, camera->position.y,
+                                 target.z + d.x * s + d.z * c);
+            camera->lookAt(target);
+        }
+
         // Before render(), not inside onBeforeRender: the renderer uploads the
         // sorted-index attribute while it builds the render list, which is
         // earlier than the hook, so the hook's sort would show up a frame late.
@@ -227,10 +390,36 @@ int main(int argc, char** argv) {
 
         renderer.render(*scene, *camera);
 
-        if (!shotPath.empty() && ++shotFrame >= shotFrames) {
+        if (shotPath.empty() && !benching) return;
 
-            renderer.writeFramebuffer(shotPath);
-            std::cout << "wrote " << shotPath << std::endl;
+        const auto now = std::chrono::steady_clock::now();
+        frameMs.push_back(std::chrono::duration<double, std::milli>(now - frameStart).count());
+        frameStart = now;
+
+        if (++shotFrame >= measuredFrames) {
+
+            if (!shotPath.empty()) {
+
+                renderer.writeFramebuffer(shotPath);
+                std::cout << "wrote " << shotPath << std::endl;
+            }
+
+            if (frameMs.size() > WARMUP_FRAMES) {
+
+                std::vector<double> timed(frameMs.begin() + WARMUP_FRAMES, frameMs.end());
+                std::sort(timed.begin(), timed.end());
+                double sum = 0;
+                for (double v : timed) sum += v;
+
+                std::cout << std::fixed << std::setprecision(2)
+                          << "frames " << timed.size() << " (after " << WARMUP_FRAMES << " warmup)"
+                          << "  mean " << sum / static_cast<double>(timed.size()) << " ms"
+                          << "  median " << timed[timed.size() / 2] << " ms"
+                          << "  min " << timed.front() << " ms"
+                          << "  max " << timed.back() << " ms"
+                          << "  (" << 1000.0 * static_cast<double>(timed.size()) / sum << " fps mean)"
+                          << std::endl;
+            }
             std::exit(0);
         }
     });
