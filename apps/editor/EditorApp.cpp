@@ -75,6 +75,7 @@
 #include <cstdio>
 #include <cstdlib>// std::getenv (THREEPP_BENCH_VSYNC)
 #include <cstring>
+#include <fstream>
 #include <iostream>
 #include <sstream>
 
@@ -211,6 +212,16 @@ namespace {
     // buffers until the renderer first draws them.
     std::shared_ptr<Object3D> loadSplatPly(const std::filesystem::path& path) {
 
+        // isSplatPly answers false for a file it cannot OPEN, so keep
+        // "unreadable" and "not a splat" apart here — otherwise a filesystem
+        // problem (a path that did not survive an encoding trip, most of all)
+        // gets reported as a file-format verdict, which is exactly the wrong
+        // trail to send someone down.
+        if (std::ifstream probe(path, std::ios::binary); !probe) {
+            throw std::runtime_error("cannot open the file, so no header was read"
+                                     " - a path or permissions problem, not a format one");
+        }
+
         if (!SplatLoader::isSplatPly(path)) {
 
             // Not a splat scan, so it belongs to the mesh path — which is
@@ -231,7 +242,11 @@ namespace {
         // gaussian_splats example's, and both recorded so a future
         // serialization pass can reproduce this import from the file alone.
         editor::SplatImportConfig config;
-        config.source = path.string();
+        // Stored as UTF-8; .string() narrows through the ANSI code page and
+        // would mangle the same paths the drop handler just went out of its
+        // way to decode correctly.
+        const auto srcU8 = path.u8string();
+        config.source = std::string(srcU8.begin(), srcU8.end());
 
         // Photogrammetry output carries a long tail of enormous near-opaque
         // splats that render as fog over the subject. The rule is
@@ -586,7 +601,10 @@ EditorApp::EditorApp(const Options& options)
         // drop, so `threepp_editor model.glb` imports into the template scene.
         // The self-test drives its own import instead (with assertions).
         if (!options_.openOnStart.empty() && !options_.selfTest) {
-            handleFileDrop({options_.openOnStart.string()});
+            // handleFileDrop expects UTF-8, because that is what GLFW drops
+            // deliver; .string() would narrow through the ANSI code page.
+            const auto u8 = options_.openOnStart.u8string();
+            handleFileDrop({std::string(u8.begin(), u8.end())});
         }
     }
 
@@ -3834,7 +3852,12 @@ void EditorApp::handleFileDrop(const std::vector<std::string>& paths) {
     if (!paths.empty() && rejectWhilePlaying("Dropping files")) return;
 
     for (const auto& entry : paths) {
-        std::filesystem::path path(entry);
+        // GLFW hands dropped paths over as UTF-8. Constructing a path from a
+        // plain std::string decodes through the ANSI code page on Windows,
+        // which mangles anything past ASCII — a scan in a folder named
+        // "…Beaupré" arrived as an unopenable path and got blamed for not
+        // being a splat. Decode as what the bytes actually are.
+        std::filesystem::path path(std::u8string(entry.begin(), entry.end()));
         const auto extension = formats::extensionOf(path);
 
         if (extension == ".json") {
