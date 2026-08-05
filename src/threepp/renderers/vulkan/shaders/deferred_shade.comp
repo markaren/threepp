@@ -1257,12 +1257,19 @@ void main() {
     }
     if (reflBlend > 0.0 && opaqueRefl && !reflSkip) {
         // Emitter self-emission scale for the ray (the other half of the split):
-        // DIELECTRICS → 0: F0≈0.04, so a reflected small emitter is physically
-        // ~invisible, yet a full-radiance hit produced bright "probe speckles" (their faint
-        // correct highlight now comes from emissiveSpecNEE). METALS → (1−specNEET):
-        // near-mirror keeps the sharp BRDF-sampled lamp image; rough hands the
-        // energy to the NEE above.
-        gReflEmitterScale = (metalness < 0.5) ? 0.0 : (1.0 - specNEET);
+        // (1−specNEET) for EVERYONE — near-mirror keeps the sharp BRDF-sampled
+        // lamp image, rough hands the energy to the NEE above. Safe for
+        // dielectrics because the scale is nonzero ONLY in the deterministic
+        // band (roughness < kReflStochastic — specNEET hits 1 at 0.25): the
+        // mirror ray is traced fresh every frame with zero variance, so the
+        // stochastic full-radiance speckles the old dielectric→0 rule guarded
+        // against cannot occur — the stochastic GGX band has scale 0 either
+        // way. The old hard 0 left roughness ≤ 0.10 dielectrics (below the
+        // specNEET ramp) with NO owner for emitter specular at all: a
+        // lacquered floor reflected a lamp as a dark, unlit object while the
+        // same floor at roughness 0.3 showed it — the Fresnel composite
+        // already keeps the dielectric's reflected lamp appropriately faint.
+        gReflEmitterScale = 1.0 - specNEET;
         // GGX-importance-sample the reflection LOBE — but ONLY where it's WIDE
         // (roughness ≥ kReflStochastic). A NARROW lobe at 1 spp is a spike train
         // on any high-contrast reflected content (a lamp, a tight highlight: hit
