@@ -12,6 +12,10 @@ add_example(NAME "lod" WEB WEB_EMBED
 )
 add_example(NAME "points" LINK_IMGUI WEB)
 
+# Not WEB: SplatCloud's material is a RawShaderMaterial carrying its own
+# "#version 330 core", which a WebGL2 build cannot compile.
+add_example(NAME "gaussian_splats")
+
 add_example(NAME "bones" LINK_IMGUI)
 add_example(NAME "decal" LINK_IMGUI)
 add_example(NAME "water" LINK_IMGUI WEB WEB_EMBED
