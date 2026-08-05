@@ -6,4 +6,5 @@ add_test_executable(SplatData_test)
 # without a GLFW frontend because SplatCloud reaches the viewport through the
 # virtual Renderer interface rather than a concrete GLRenderer cast.
 add_test_executable(SplatCloudSort_test)
+add_test_executable(SplatCloudRaycast_test)
 add_test_executable(SplatSH_test)

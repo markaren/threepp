@@ -15,6 +15,7 @@
 #include "threepp/extras/editor/ScriptConfig.hpp"
 #include "threepp/extras/editor/SensorConfig.hpp"
 #include "threepp/extras/editor/SoundConfig.hpp"
+#include "threepp/extras/editor/SplatImportConfig.hpp"
 #include "threepp/extras/editor/SplineConfig.hpp"
 #include "threepp/extras/editor/TextConfig.hpp"
 #include "threepp/extras/editor/TreeConfig.hpp"
@@ -22,6 +23,7 @@
 
 #include "threepp/extras/curves/CatmullRomCurve3.hpp"
 #include "threepp/objects/Robot.hpp"
+#include "threepp/objects/SplatCloud.hpp"
 #include "threepp/extras/imgui/ImguiContext.hpp"
 
 #include "threepp/cameras/PerspectiveCamera.hpp"
@@ -273,6 +275,7 @@ void EditorApp::drawInspector() {
         drawMaterialSection(*selected);
         drawGeometrySection(*selected);
         drawGeneratorSection(*selected);
+        drawSplatSection(*selected);
         drawInstancingSection(*selected);
         drawLightSection(*selected);
         drawCameraSection(*selected);
@@ -1115,6 +1118,64 @@ void EditorApp::drawGeneratorSection(Object3D& object) {
 #ifndef THREEPP_EDITOR_WITH_PYTHON
     ImGui::TextColored(theme::warning(), "Built without Python - saved, but cannot run.");
 #endif
+
+    ImGui::TreePop();
+}
+
+
+// -------------------------------------------------------------------- splats
+
+void EditorApp::drawSplatSection(Object3D& object) {
+
+    auto* cloud = object.as<SplatCloud>();
+    if (!cloud) return;
+    if (!section("Splats")) return;
+
+    const auto& data = cloud->data();
+
+    ImGui::Text("Splats     %zu", cloud->splatCount());
+    // The SH degree is what a scan's view-dependent colour costs and how much
+    // of the cloud's memory is spherical harmonics: degree 3 is 16 of the 19
+    // texels a splat occupies. Worth stating, and there is nowhere else it
+    // shows.
+    ImGui::Text("SH degree  %d", data.shDegree);
+    if (!data.extras.empty()) {
+        // Per-splat properties the loader kept but nothing renders — semantic
+        // labels, confidences, learned descriptors. Named because their
+        // presence is the whole reason SplatData has an escape hatch.
+        std::string names;
+        for (const auto& [name, values] : data.extras) {
+            if (!names.empty()) names += ", ";
+            names += name;
+        }
+        ImGui::TextWrapped("Extras     %s", names.c_str());
+    }
+
+    if (const auto config = editor::SplatImportConfig::read(object)) {
+
+        ImGui::Separator();
+        // Read-only, and selectable rather than an InputText: the path is not
+        // an editable property of the cloud (changing it would not reload
+        // anything), but it is very often what you want to copy out.
+        ImGui::TextColored(theme::muted(), "Source");
+        ImGui::TextWrapped("%s", config->source.c_str());
+
+        if (config->culled) {
+            ImGui::TextColored(theme::muted(), "Culled %zu outlier splats on import.",
+                               config->removed);
+        }
+        if (config->flippedX) {
+            ImGui::TextColored(theme::muted(), "Flipped 180 degrees about X for +Y-up.");
+        }
+    }
+
+    ImGui::Separator();
+    // The limitation, on the object it applies to. The console and the status
+    // bar say it at Play and at Save; this is where you find out why without
+    // having pressed anything.
+    ImGui::TextColored(theme::warning(), "Not serialized yet");
+    ImGui::TextWrapped("This cloud is not written to the scene file and does not survive Play. "
+                       "Re-import the .ply after Stop.");
 
     ImGui::TreePop();
 }

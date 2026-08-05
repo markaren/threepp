@@ -14,6 +14,7 @@
 #include "threepp/extras/editor/RobotConfig.hpp"
 #include "threepp/extras/editor/ScriptConfig.hpp"
 #include "threepp/extras/editor/ScriptWorkspace.hpp"
+#include "threepp/extras/editor/SplatImportConfig.hpp"
 #include "threepp/extras/editor/SplineConfig.hpp"
 #include "threepp/extras/editor/ViewSpec.hpp"
 #include "threepp/extras/imgui/ImguiContext.hpp"
@@ -49,6 +50,7 @@
 #include "threepp/loaders/EXRLoader.hpp"
 #include "threepp/loaders/ModelLoader.hpp"
 #include "threepp/loaders/RGBELoader.hpp"
+#include "threepp/loaders/SplatLoader.hpp"
 #include "threepp/loaders/TextureLoader.hpp"
 #include "threepp/loaders/URDFLoader.hpp"
 #include "threepp/materials/MeshStandardMaterial.hpp"
@@ -60,6 +62,7 @@
 #include "threepp/objects/ObjectWithMaterials.hpp"
 #include "threepp/objects/Points.hpp"
 #include "threepp/objects/Robot.hpp"
+#include "threepp/objects/SplatCloud.hpp"
 #include "threepp/renderers/RendererFactory.hpp"
 #include "threepp/scenes/Scene.hpp"
 #ifdef THREEPP_WITH_VULKAN
@@ -199,6 +202,57 @@ namespace {
 
         if (!isDescription(path)) return {};
         return xacro::scanArgs(path);
+    }
+
+    // A .ply, decided by its header rather than its name. Runs on the import
+    // worker, so everything expensive here — the parse, the outlier cull, the
+    // covariance and data-texture build inside SplatCloud — is off the UI
+    // thread. Nothing touches GL: the cloud's DataTextures are plain CPU
+    // buffers until the renderer first draws them.
+    std::shared_ptr<Object3D> loadSplatPly(const std::filesystem::path& path) {
+
+        if (!SplatLoader::isSplatPly(path)) {
+
+            // Not a splat scan, so it belongs to the mesh path — which is
+            // unchanged, and which is where it stops: threepp has no mesh PLY
+            // loader today, and ModelLoader refuses the extension. Saying so
+            // here beats letting "no importable content in the file" stand for
+            // both "your scan is malformed" and "we cannot read mesh PLYs".
+            ModelLoader loader;
+            if (auto group = loader.load(path)) return group;
+            throw std::runtime_error(
+                    "no f_dc_0 property in the PLY header, so this is not a Gaussian splat scan"
+                    " - and threepp has no mesh PLY loader");
+        }
+
+        auto data = SplatLoader::loadPly(path);
+
+        // The two defaults a user means by "import my scan", both of them the
+        // gaussian_splats example's, and both recorded so a future
+        // serialization pass can reproduce this import from the file alone.
+        editor::SplatImportConfig config;
+        config.source = path.string();
+
+        // Photogrammetry output carries a long tail of enormous near-opaque
+        // splats that render as fog over the subject. The rule is
+        // percentile-based against the cloud's own distribution, so it is a
+        // no-op on a clean scan and carries no unit.
+        config.culled = true;
+        config.removed = data.removeOutliers();
+
+        auto cloud = SplatCloud::create(std::move(data));
+
+        // COLMAP — and the 3DGS pipelines built on it — put +Y down, so a scan
+        // arrives upside down in a +Y-up scene. The conventional half-turn
+        // about X is the fix, and it belongs on the NODE rather than in the
+        // data: which way is up is a property of the scene the cloud is being
+        // placed into, not of the file. The gizmo can undo it.
+        cloud->rotation.x = math::PI;
+        config.flippedX = true;
+
+        config.write(*cloud);
+
+        return cloud;
     }
 
 }// namespace
@@ -1094,8 +1148,27 @@ void EditorApp::applyDocumentRender() {
 
 void EditorApp::frameDocument() {
 
+    // The DOCUMENT, as the name says — not the editor's own furniture. The
+    // overlay is an ordinary child of the scene (SceneDocument detaches it only
+    // for export), so setFromObject(scene) measures it too, and the transform
+    // gizmo inside it carries a bound of order 1e6: its picker planes are sized
+    // against the camera distance rather than against anything in the world.
+    // Framing that puts the camera a million units out and the actual scene a
+    // sub-pixel speck at the far plane.
+    //
+    // Found by importing a splat scan and photographing a black viewport. It
+    // needs a selection to bite (no selection, no attached gizmo), which is why
+    // it survived: the paths that frame — open a scene, open an example — do it
+    // before anything is selected, and an import does not reframe at all.
     Box3 box;
-    box.setFromObject(document_.scene());
+    for (auto* child : document_.scene().children) {
+
+        if (!child || document_.isEditorOnly(*child)) continue;
+
+        Box3 childBox;
+        childBox.setFromObject(*child);
+        if (!childBox.isEmpty()) box.union_(childBox);
+    }
     if (box.isEmpty()) return;
 
     const Vector3 centre = box.getCenter();
@@ -1133,6 +1206,13 @@ void EditorApp::saveScene() {
 void EditorApp::saveSceneAs(const std::filesystem::path& path) {
 
     if (rejectWhilePlaying("Save As")) return;
+
+    // Said before the write rather than left to the exporter's own warning
+    // afterwards: this one names the objects and reaches the status bar, and it
+    // reads as a caveat on a save that is about to happen rather than a
+    // complaint about one that already did. ObjectExporter still warns for
+    // every other caller.
+    warnAboutSplatClouds("Save");
 
     // The look goes into the file with the geometry. Written as a difference
     // from the editor's startup state, so a document nobody adjusted the
@@ -1248,6 +1328,7 @@ void EditorApp::pollImports(float dt) {
                 }
                 return robot;
             }
+            if (formats::isSplatCandidate(path)) return loadSplatPly(path);
             ModelLoader loader;
             return loader.load(path);
         });
@@ -1267,7 +1348,15 @@ void EditorApp::pollImports(float dt) {
     std::string error;
     try {
         group = activeImport_->future.get();
-        if (!group || group->children.empty()) error = "no importable content in the file";
+        // A splat cloud IS the imported object rather than a Group of meshes,
+        // so it has no children and the emptiness test would throw away a
+        // perfectly good import.
+        auto* splat = group ? group->as<SplatCloud>() : nullptr;
+        if (!group || (group->children.empty() && !splat)) {
+            error = "no importable content in the file";
+        } else if (splat && splat->splatCount() == 0) {
+            error = "the file declares no splats";
+        }
     } catch (const std::exception& e) {
         error = e.what();
     }
@@ -1292,9 +1381,15 @@ void EditorApp::pollImports(float dt) {
     // Normalised to match what ObjectLoader stamps when it re-imports, so that
     // saving a scene, reopening it and saving again produces the same bytes
     // rather than converging on the second try.
+    //
+    // A splat cloud is deliberately NOT marked: assetSource means "ObjectLoader
+    // can rebuild this subtree by re-importing the file", and it cannot — see
+    // SplatImportConfig, which records the same path for the serialization pass
+    // without claiming something the loader would then fail to honour.
     std::error_code pathEc;
     const auto canonical = std::filesystem::weakly_canonical(path, pathEc);
-    setAssetSource(*group, pathEc ? path : canonical);
+    auto* splatCloud = group->as<SplatCloud>();
+    if (!splatCloud) setAssetSource(*group, pathEc ? path : canonical);
 
     // A robot records where it came from: the joint table cannot be
     // serialised, so the document keeps a reference and rebuilds on load.
@@ -1318,7 +1413,14 @@ void EditorApp::pollImports(float dt) {
     settings_.modelDir = path.parent_path().string();
 
     char message[192];
-    if (dof > 0) {
+    if (splatCloud) {
+        // Splats, not nodes: a cloud is one node no matter how big the scan is,
+        // and "1 node" is the least informative thing that could be said about
+        // a quarter of a million Gaussians.
+        std::snprintf(message, sizeof(message), "Imported %s (%zu splats, SH degree %d, %.1fs)",
+                      path.filename().string().c_str(), splatCloud->splatCount(),
+                      splatCloud->data().shDegree, elapsed);
+    } else if (dof > 0) {
         std::snprintf(message, sizeof(message), "Imported %s (%zu nodes, %zu joints, %.1fs)",
                       path.filename().string().c_str(), nodes, dof, elapsed);
     } else {
@@ -1327,6 +1429,18 @@ void EditorApp::pollImports(float dt) {
     }
     log(message);
     flashStatus(message);
+
+    // The gap, said once at the moment it is created rather than only when it
+    // bites. Repeated on Play and on Save, because that is where it costs
+    // something — see warnAboutSplatClouds.
+    if (splatCloud) {
+        if (const auto config = editor::SplatImportConfig::read(*splatCloud); config && config->culled) {
+            log("culled " + std::to_string(config->removed) + " outlier splats, and flipped 180" +
+                " degrees about X for +Y-up");
+        }
+        log("note: splat clouds are not serialized yet - \"" + splatCloud->name +
+            "\" is not saved with the scene and will not survive Play");
+    }
 }
 
 void EditorApp::drawArgPrompt() {
@@ -3477,6 +3591,12 @@ void EditorApp::startPlay() {
     scriptsPolledKeys_ = false;
     vehicleTeleopActive_ = false;
 
+    // Before play_.play, because that is where the snapshot is taken and the
+    // cloud stops being in the document's future. Warn only; refusing to play
+    // over a splat would make the scene unusable for the thing it was imported
+    // to be looked at in.
+    warnAboutSplatClouds("Stop");
+
     std::string error;
     if (!play_.play(document_, &error)) {
         log("play failed: " + error);
@@ -3758,6 +3878,31 @@ void EditorApp::log(const std::string& message) {
 void EditorApp::logWarnings() {
 
     for (const auto& warning : document_.warnings()) log("warning: " + warning);
+}
+
+std::size_t EditorApp::warnAboutSplatClouds(const char* action) {
+
+    std::vector<std::string> names;
+    document_.scene().traverse([&](Object3D& object) {
+        if (object.as<SplatCloud>()) {
+            names.push_back(object.name.empty() ? object.uuid : object.name);
+        }
+    });
+    if (names.empty()) return 0;
+
+    // Named, not counted: "1 splat cloud" tells you nothing about which of the
+    // three in the scene you are about to lose.
+    for (const auto& name : names) {
+        log(std::string("warning: splat clouds are not serialized yet - \"") + name +
+            "\" will not survive " + action);
+    }
+
+    char message[192];
+    std::snprintf(message, sizeof(message), "%s drops %zu unserialized splat cloud%s",
+                  action, names.size(), names.size() == 1 ? "" : "s");
+    flashStatus(message);
+
+    return names.size();
 }
 
 void EditorApp::beginEditIfActivated() {

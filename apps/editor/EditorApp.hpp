@@ -204,6 +204,11 @@ namespace threepp::editor {
         void drawMaterialSection(Object3D& object);
         void drawGeometrySection(Object3D& object);
         void drawGeneratorSection(Object3D& object);
+        // Read-only: what the cloud IS (splats, SH degree), where it came from,
+        // and the fact that none of it is saved yet. No authoring verbs — a
+        // scan is imported, looked at and placed, and the placement is the
+        // transform section's job like everything else's.
+        void drawSplatSection(Object3D& object);
         void drawInstancingSection(Object3D& object);
         void drawLightSection(Object3D& object);
         void drawLightShadowSection(Object3D& object);
@@ -788,6 +793,13 @@ namespace threepp::editor {
         void handleFileDrop(const std::vector<std::string>& paths);
         void log(const std::string& message);
         void logWarnings();
+        // Says, in the console and the status bar, that any splat cloud in the
+        // scene is about to be dropped by `action` ("Play", "Save"). Splat
+        // clouds are not serialized yet, and both operations go through
+        // ObjectExporter — Play because Stop restores from a snapshot in the
+        // same format the save file uses. Losing the object is accepted for
+        // now; losing it silently is not. Returns how many were found.
+        std::size_t warnAboutSplatClouds(const char* action);
         void applyGizmoMode();
         // Whether the transform handles belong on screen at all: something is
         // selected, the toolbar is not in Select mode, and play is stopped.

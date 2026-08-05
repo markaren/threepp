@@ -114,6 +114,19 @@ namespace threepp {
         // uniforms (the Vulkan compute rasterizer) can honour the same switch.
         [[nodiscard]] bool debugNonFinite() const { return debugNonFinite_; }
 
+        // Ray against the cloud's own 3-sigma bounding sphere, and nothing
+        // finer. What it replaces is the reason it exists: InstancedMesh's
+        // raycast tests the unit quad once per instance against an
+        // instanceMatrix this class deliberately leaves at identity, so a
+        // million ray-triangle tests all hit — or miss — the same two triangles
+        // at the origin. That is both wrong and slow, and it is what stands
+        // between a splat cloud and being clickable in an editor viewport.
+        //
+        // One intersection at most, no instanceId: which splat was hit is a
+        // later refinement (nearest mean along the ray), and picking the whole
+        // cloud is what selection actually wants.
+        void raycast(const Raycaster& raycaster, std::vector<Intersection>& intersects) override;
+
         [[nodiscard]] std::string type() const override { return "SplatCloud"; }
 
         // The GLSL, exposed so tests can assert the shader and the C++ SH table

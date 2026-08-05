@@ -41,6 +41,20 @@ namespace threepp::editor::formats {
         return list;
     }
 
+    // 3D Gaussian Splat scans, which go to SplatLoader and come back as a
+    // single SplatCloud rather than a Group of meshes.
+    //
+    // Its own category rather than an entry in meshes() because the extension
+    // does not settle it: Turk's PLY carries triangle soup, laser point clouds
+    // and 3DGS output alike, and the same file name means all three. The
+    // extension only gets a file as far as the import; which loader runs is
+    // decided by sniffing the header for f_dc_0 (SplatLoader::isSplatPly).
+    inline const std::vector<std::string>& splats() {
+
+        static const std::vector<std::string> list{".ply"};
+        return list;
+    }
+
     // Behaviour scripts. Not importable — a script is attached to an existing
     // object rather than added to the scene, so it is its own category.
     inline const std::vector<std::string>& scripts() {
@@ -69,12 +83,13 @@ namespace threepp::editor::formats {
         return list;
     }
 
-    // Everything the Import action accepts, mesh and robot alike.
+    // Everything the Import action accepts: mesh, robot and splat alike.
     inline const std::vector<std::string>& importable() {
 
         static const std::vector<std::string> list = [] {
             std::vector<std::string> all = meshes();
             all.insert(all.end(), robots().begin(), robots().end());
+            all.insert(all.end(), splats().begin(), splats().end());
             return all;
         }();
         return list;
@@ -88,6 +103,13 @@ namespace threepp::editor::formats {
     inline bool isRobot(const std::filesystem::path& path) {
 
         return contains(robots(), extensionOf(path));
+    }
+
+    // The extension only — it says the file MIGHT be a splat scan. The header
+    // is what says it is.
+    inline bool isSplatCandidate(const std::filesystem::path& path) {
+
+        return contains(splats(), extensionOf(path));
     }
 
     inline bool isImportable(const std::filesystem::path& path) {

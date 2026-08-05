@@ -3,6 +3,7 @@
 
 #include "threepp/cameras/Camera.hpp"
 #include "threepp/core/BufferGeometry.hpp"
+#include "threepp/core/Raycaster.hpp"
 #include "threepp/core/Uniform.hpp"
 #include "threepp/extras/DataUtils.hpp"
 #include "threepp/materials/RawShaderMaterial.hpp"
@@ -456,6 +457,14 @@ SplatCloud::SplatCloud(SplatData data)
 
         box.getBoundingSphere(sphere);
         boundingSphere = sphere;
+        // The box too, and not as a convenience: Box3::expandByObject reaches
+        // for InstancedMesh::boundingBox and COMPUTES one if it is absent, by
+        // transforming the geometry's bounds through every instanceMatrix.
+        // Here that is the unit quad through a million identities — a 1x1 box
+        // at the origin — so anything that measures a scene by walking it
+        // (frame the document, focus the selection) would aim at a postage
+        // stamp instead of the scan.
+        boundingBox = box;
 
     } else {
 
@@ -599,6 +608,34 @@ void SplatCloud::setDebugNonFinite(bool flag) {
 
     debugNonFinite_ = flag;
     splatMaterial_->uniforms["splatDebugNonFinite"].setValue(flag);
+}
+
+void SplatCloud::raycast(const Raycaster& raycaster, std::vector<Intersection>& intersects) {
+
+    // boundingSphere is the 3-sigma bound the constructor already computed for
+    // frustum culling, in the cloud's own coordinates; the world matrix takes
+    // it to where the ray is. A cloud with no splats has radius 0 and is not
+    // clickable, which is the honest answer for something that draws nothing.
+    if (!visible || data_.count() == 0) return;
+    if (!boundingSphere || boundingSphere->radius <= 0.f) return;
+
+    Sphere sphere;
+    sphere.copy(*boundingSphere);
+    sphere.applyMatrix4(*matrixWorld);
+
+    Vector3 point;
+    raycaster.ray.intersectSphere(sphere, point);
+    // The miss and the entirely-behind-the-ray cases both come back NaN.
+    if (std::isnan(point.x)) return;
+
+    const float distance = raycaster.ray.origin.distanceTo(point);
+    if (distance < raycaster.nearPlane || distance > raycaster.farPlane) return;
+
+    Intersection intersection{};
+    intersection.distance = distance;
+    intersection.point = point;
+    intersection.object = this;
+    intersects.push_back(intersection);
 }
 
 void SplatCloud::update(Camera& camera) {

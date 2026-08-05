@@ -118,6 +118,39 @@ SplatData SplatLoader::loadPly(const std::filesystem::path& path) {
     }
 }
 
+bool SplatLoader::isSplatPly(const std::filesystem::path& path) {
+
+    std::ifstream in(path, std::ios::binary);
+    if (!in) return false;
+    return isSplatPly(in);
+}
+
+bool SplatLoader::isSplatPly(std::istream& stream) {
+
+    std::string line;
+    if (!headerLine(stream, line) || line != "ply") return false;
+
+    // A bound on the scan rather than a trust in end_header: a truncated or
+    // non-PLY file that happens to start with the magic must not turn this
+    // into a read of the whole thing. Real headers are ~70 lines at SH
+    // degree 3; a thousand is generous and still bounded.
+    constexpr int MAX_HEADER_LINES = 1000;
+
+    for (int i = 0; i < MAX_HEADER_LINES && headerLine(stream, line); ++i) {
+
+        const auto tok = tokens(line);
+        if (tok.empty()) continue;
+        if (tok[0] == "end_header") return false;
+        // "property float f_dc_0" — the name is the last token, and only the
+        // name is checked. The type is parsePly's business to reject; a file
+        // that declares f_dc_0 as a double is a splat file this loader cannot
+        // read, and it should say so rather than be quietly handed to a mesh
+        // parser that will say something else.
+        if (tok[0] == "property" && tok.back() == "f_dc_0") return true;
+    }
+    return false;
+}
+
 SplatData SplatLoader::parsePly(std::istream& stream) {
 
     std::string line;
