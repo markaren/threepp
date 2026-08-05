@@ -104,6 +104,34 @@ namespace {
         }
     };
 
+    // Object types this format cannot carry, dropped with a warning rather than
+    // written out to be thrown away on load.
+    //
+    // SplatCloud is the only one. Without this it takes the InstancedMesh
+    // branch below and writes one 16-float instanceMatrix per splat — 14 MB of
+    // identity matrices for a 216k-splat scan, because that class keeps them
+    // identity on purpose and puts the real per-splat data (means, covariances,
+    // spherical harmonics) in DataTextures hanging off a RawShaderMaterial's
+    // uniforms, which are not serialized either. ObjectLoader has no
+    // "SplatCloud" case and rejects the type outright, so every one of those
+    // bytes is written to be discarded. A splat cloud belongs in its own .ply,
+    // referenced — that is the serialization pass, and it is not this one.
+    //
+    // Matched on type() rather than by dynamic_cast, for symmetry with
+    // ObjectLoader's dispatch (a type() string table) and so the exporter does
+    // not have to include the splat headers to know what it cannot write.
+    bool isUnexportable(const Object3D& object) {
+
+        return object.type() == "SplatCloud";
+    }
+
+    std::string unexportableReason(const Object3D& object) {
+
+        return "skipping " + object.type() + " '" +
+               (object.name.empty() ? object.uuid : object.name) +
+               "': splat clouds are not serialized yet, it will not be in the saved document";
+    }
+
     // Deterministic iteration over threepp's unordered maps.
     template<class Map>
     std::vector<std::string> sortedKeys(const Map& map) {
@@ -1158,9 +1186,17 @@ namespace {
         if (!object.children.empty()) {
             json arr = json::array();
             for (auto* child : object.children) {
-                if (child) arr.push_back(writeObject(*child, meta));
+                if (!child) continue;
+                if (isUnexportable(*child)) {
+                    meta.warn(unexportableReason(*child));
+                    continue;
+                }
+                arr.push_back(writeObject(*child, meta));
             }
-            data["children"] = arr;
+            // A parent whose children were all dropped writes no children key
+            // at all, rather than an empty array nothing else in the format
+            // produces.
+            if (!arr.empty()) data["children"] = arr;
         }
 
         return data;
@@ -1188,7 +1224,29 @@ std::string ObjectExporter::toJson(Object3D& object, const ObjectExporterOptions
             {"type", "Object"},
             {"generator", "threepp.ObjectExporter"}};
 
-    auto objectJson = writeObject(object, meta);
+    // The root gets the same check its children get, from the other side.
+    // Nothing in the editor exports a bare splat cloud — a document is always
+    // rooted at a Scene — but this entry point is public, and "write the
+    // payload anyway because it happens to be the root" is precisely the
+    // outcome isUnexportable exists to prevent. A bare Object3D keeps the
+    // identity and the placement, so the caller still gets a document that
+    // loads, plus a warning naming what is not in it.
+    json objectJson;
+    if (isUnexportable(object)) {
+
+        meta.warn(unexportableReason(object));
+
+        objectJson["uuid"] = object.uuid;
+        objectJson["type"] = "Object3D";
+        if (!object.name.empty()) objectJson["name"] = object.name;
+        objectJson["layers"] = object.layers.mask();
+        if (object.matrixAutoUpdate) object.updateMatrix();
+        objectJson["matrix"] = toArray(*object.matrix);
+
+    } else {
+
+        objectJson = writeObject(object, meta);
+    }
 
     if (!meta.geometries.empty()) output["geometries"] = meta.geometries;
     if (!meta.materials.empty()) output["materials"] = meta.materials;
