@@ -1,4 +1,4 @@
-
+﻿
 #include "threepp/objects/SplatCloud.hpp"
 
 #include "threepp/cameras/Camera.hpp"
@@ -20,16 +20,31 @@ namespace {
 
     // One row of every splat texture is this wide; index -> (u, v) is integer
     // division. 2048 keeps a degree-3 million-splat SH texture at 8192 rows,
-    // well inside the 16384 every GL 3.3 implementation in practice reports —
+    // well inside the 16384 every GL 3.3 implementation in practice reports â€”
     // the spec's own floor (1024) could not hold that cloud in any layout.
     constexpr int TEX_WIDTH = 2048;
+
+    // GL_MAX_TEXTURE_SIZE is not knowable here (no context yet), so this is the
+    // value every desktop implementation of the last decade reports. At degree 3
+    // it caps a cloud at 2^21 splats, comfortably past the envelope this is
+    // built for; the point is that overrunning it should say so rather than
+    // upload nothing and render black.
+    constexpr int MAX_TEX_HEIGHT = 16384;
 
     // Sort keys are 16-bit, so the counting sort is a fixed 65536-bucket pass.
     constexpr int SORT_BUCKETS = 65536;
 
-    int texHeightFor(size_t texels) {
+    int texHeightFor(size_t texels, const char* what, size_t splats) {
 
-        return static_cast<int>((texels + TEX_WIDTH - 1) / TEX_WIDTH);
+        const size_t rows = (texels + TEX_WIDTH - 1) / TEX_WIDTH;
+        if (rows > static_cast<size_t>(MAX_TEX_HEIGHT)) {
+
+            throw std::length_error(
+                    "SplatCloud: " + std::to_string(splats) + " splats need a " + what +
+                    " texture " + std::to_string(rows) + " rows tall, past the " +
+                    std::to_string(MAX_TEX_HEIGHT) + "-row limit");
+        }
+        return static_cast<int>(rows);
     }
 
     std::shared_ptr<BufferGeometry> unitQuad() {
@@ -288,7 +303,7 @@ void main() {
     // The Gaussian, evaluated through its inverse 2D covariance.
     float power = -0.5 * (vConic.x * vDelta.x * vDelta.x + 2.0 * vConic.y * vDelta.x * vDelta.y + vConic.z * vDelta.y * vDelta.y);
 
-    // Negated comparison so NaN — which fails every comparison — lands here too.
+    // Negated comparison so NaN â€” which fails every comparison â€” lands here too.
     if (!(power <= 0.0)) {
 
         if (splatDebugNonFinite && isnan(power)) {
@@ -396,7 +411,7 @@ SplatCloud::SplatCloud(SplatData data)
 
     // Safety net for callers who forget update(): the renderer has already
     // uploaded instanceColor by the time this runs, so the sort lands one frame
-    // late — but the viewport uniform is read at draw time, so that is current.
+    // late â€” but the viewport uniform is read at draw time, so that is current.
     onBeforeRender = RenderCallback(
             [this](void* renderer, Object3D*, Camera* camera, BufferGeometry*, Material*, std::optional<GeometryGroup>) {
                 auto* base = static_cast<Renderer*>(renderer);
@@ -433,7 +448,7 @@ void SplatCloud::buildTextures() {
 
     // --- means + opacity: one texel each -----------------------------------
     {
-        const int height = std::max(1, texHeightFor(n));
+        const int height = std::max(1, texHeightFor(n, "mean", n));
         std::vector<float> texels(static_cast<size_t>(TEX_WIDTH) * height * 4, 0.f);
         for (size_t i = 0; i < n; ++i) {
 
@@ -449,7 +464,7 @@ void SplatCloud::buildTextures() {
 
     // --- 3D covariance: six floats, two texels each -------------------------
     {
-        const int height = std::max(1, texHeightFor(n * 2));
+        const int height = std::max(1, texHeightFor(n * 2, "covariance", n));
         std::vector<float> texels(static_cast<size_t>(TEX_WIDTH) * height * 4, 0.f);
         for (size_t i = 0; i < n; ++i) {
 
@@ -471,7 +486,7 @@ void SplatCloud::buildTextures() {
 
     // --- SH: one texel per coefficient, alpha unused ------------------------
     {
-        const int height = std::max(1, texHeightFor(n * static_cast<size_t>(coeffs)));
+        const int height = std::max(1, texHeightFor(n * static_cast<size_t>(coeffs), "SH", n));
         std::vector<float> texels(static_cast<size_t>(TEX_WIDTH) * height * 4, 0.f);
         for (size_t i = 0; i < n; ++i) {
 
