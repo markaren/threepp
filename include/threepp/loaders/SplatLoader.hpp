@@ -43,6 +43,27 @@ namespace threepp {
         // it hand-built buffers. The stream must be positioned at the "ply"
         // magic and opened in binary mode.
         [[nodiscard]] static SplatData parsePly(std::istream& stream);
+
+        // Does this file hold Gaussian splats rather than a mesh?
+        //
+        // ".ply" says nothing: the same extension carries Turk's original
+        // triangle soup, a laser-scanned point cloud and a 3DGS optimiser's
+        // output, and an importer that has to pick a loader gets no help from
+        // the name. The header does say, and cheaply — f_dc_0 is the degree-0
+        // SH coefficient every 3DGS file has and no mesh PLY does, so its
+        // presence in the property table is the discriminator.
+        //
+        // Reads only the header (a few hundred bytes) and never throws:
+        // a missing, unreadable or malformed file is simply "not a splat",
+        // which leaves the existing mesh path to report the failure in its own
+        // words rather than pre-empting it with a splat-flavoured complaint.
+        [[nodiscard]] static bool isSplatPly(const std::filesystem::path& path);
+
+        // Stream form, for tests and for callers that already have the bytes.
+        // Consumes from the current position; the stream is left wherever the
+        // scan stopped, so a caller that wants to parse afterwards must seek
+        // back to the magic.
+        [[nodiscard]] static bool isSplatPly(std::istream& stream);
     };
 
 }// namespace threepp
