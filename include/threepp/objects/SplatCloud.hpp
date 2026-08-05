@@ -73,6 +73,12 @@ namespace threepp {
         // Sorts back-to-front for this camera and refreshes the per-frame
         // uniforms. Cheap to call redundantly: it early-outs when neither the
         // camera nor the cloud has moved since the last sort.
+        //
+        // One order at a time. Drawing the same cloud from two cameras in one
+        // frame re-sorts for each, but there is a single instanceColor buffer,
+        // so both views end up drawn in whichever order was uploaded last. A
+        // split-screen or multi-view setup needs one SplatCloud per view until
+        // the ordering moves onto the GPU.
         void update(Camera& camera);
 
         // Pixel size of the framebuffer being drawn into. Set automatically
