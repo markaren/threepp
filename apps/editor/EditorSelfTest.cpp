@@ -7294,8 +7294,18 @@ int EditorApp::runSelfTest() {
         // And then it really is lost, because Stop restores from a snapshot in
         // the same format the save file uses. Pinned deliberately: when the
         // serialization pass lands, THIS is the assertion that has to flip.
+        const std::size_t consoleBefore = console_.size();
         startPlay();
         stepFixed(4);
+
+        // Through the real Play, not the helper: the call site is the half that
+        // can be forgotten, and a warning nobody wired up is worse than none.
+        bool warned = false;
+        for (std::size_t i = consoleBefore; i < console_.size(); ++i) {
+            if (console_[i].find("not serialized yet") != std::string::npos) warned = true;
+        }
+        check(warned, "and pressing Play really does say so, not just the helper");
+
         stopPlay();
         stepFixed(4);
         check(document_.scene().getObjectByName("Procedural Splats") == nullptr,
