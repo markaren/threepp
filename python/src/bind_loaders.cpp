@@ -53,9 +53,9 @@ namespace threepp_py {
 
         // ---- EXRLoader (OpenEXR .exr -> float equirect Texture) --------------
         // Same output shape as RGBELoader, so the two are interchangeable. Reads
-        // scanline EXRs with NONE/RLE/ZIPS/ZIP compression — what Blender writes
-        // and what the HDRI sites ship. Returns None on an unsupported codec
-        // (PIZ/DWAA/...) rather than decoding garbage.
+        // scanline EXRs with NONE/RLE/ZIPS/ZIP/PIZ compression — what Blender
+        // writes, what the HDRI sites ship, and what VFX pipelines use. Returns
+        // None on a lossy codec (DWAA/B44/PXR24) rather than decoding garbage.
         py::class_<EXRLoader>(m, "EXRLoader")
                 .def(py::init<>())
                 .def("load", [](EXRLoader& l, const std::string& path, bool flip_y) { return l.load(path, flip_y); },

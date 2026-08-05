@@ -3,6 +3,7 @@
 
 #include "threepp/loaders/EXRLoader.hpp"
 #include "threepp/textures/Texture.hpp"
+#include "threepp/utils/Base64.hpp"
 
 #include <algorithm>
 #include <cstdint>
@@ -418,8 +419,24 @@ TEST_CASE("EXRLoader places pixels by dataWindow origin, not by chunk order") {
 
 TEST_CASE("EXRLoader rejects codecs it cannot decode instead of returning garbage") {
 
+    EXRLoader loader;
+
+    // PXR24, B44, B44A, DWAA, DWAB — everything past the four this loader
+    // synthesizes and the PIZ file it embeds.
+    for (int codec : {5, 6, 7, 8, 9}) {
+        auto spec = gradientSpec(NONE);
+        spec.compression = codec;
+        CHECK(loader.loadFromMemory(buildExr(spec)) == nullptr);
+    }
+}
+
+TEST_CASE("EXRLoader rejects a PIZ chunk that is not really PIZ") {
+
+    // Tagged PIZ, but the chunks were written by the ZIP path. The Huffman
+    // decoder has to fail closed on them rather than emit whatever the bytes
+    // happen to decode to.
     auto spec = gradientSpec(NONE);
-    spec.compression = 4;// PIZ
+    spec.compression = 4;
 
     EXRLoader loader;
     CHECK(loader.loadFromMemory(buildExr(spec)) == nullptr);
@@ -460,4 +477,129 @@ TEST_CASE("EXRLoader rejects a file with no colour channels") {
 
     EXRLoader loader;
     CHECK(loader.loadFromMemory(buildExr(spec)) == nullptr);
+}
+
+// A PIZ file written by OpenEXR itself, base64'd.
+//
+// The codecs above are synthesized in-test because their write side is a few
+// lines each. PIZ's is a wavelet plus a canonical-Huffman coder — several
+// hundred lines — and a fixture produced by our own encoder would only prove the
+// two halves agree with each other, not that either matches the format. So this
+// one comes from outside.
+//
+// It is 16 x 40 RGBA half, 40 rows so it spans two 32-line PIZ blocks with the
+// second one partial, and every value is exactly representable as a half:
+//
+//     R = x/16,  G = y/64,  B = ((3x + y) % 16)/16,  A = 1
+//
+// To regenerate: in Blender, make a 16x40 float image with those values (its
+// pixel buffer is bottom-up), set colorspace Non-Color and view transform Raw,
+// then save as OPEN_EXR with codec PIZ and colour depth 16, and base64 the file.
+namespace {
+
+    const char* PIZ_FIXTURE_BASE64 =
+        "di8xAQIAAABTb2Z0d2FyZQBzdHJpbmcADQAAAEJsZW5kZXIgNS4wLjFjaGFubmVscwBjaGxpc3QASQAAAEEAAQAAAAAAAAAB"
+        "AAAAAQAAAEIAAQAAAAAAAAABAAAAAQAAAEcAAQAAAAAAAAABAAAAAQAAAFIAAQAAAAAAAAABAAAAAQAAAABjb2xvckludGVy"
+        "b3BJRABzdHJpbmcAEAAAAGxpbl9yZWM3MDlfc2NlbmVjb21wcmVzc2lvbgBjb21wcmVzc2lvbgABAAAABGRhdGFXaW5kb3cA"
+        "Ym94MmkAEAAAAAAAAAAAAAAADwAAACcAAABkaXNwbGF5V2luZG93AGJveDJpABAAAAAAAAAAAAAAAA8AAAAnAAAAbGluZU9y"
+        "ZGVyAGxpbmVPcmRlcgABAAAAAHBpeGVsQXNwZWN0UmF0aW8AZmxvYXQABAAAAAAAgD9zY3JlZW5XaW5kb3dDZW50ZXIAdjJm"
+        "AAgAAAAAAAAAAAAAAHNjcmVlbldpbmRvd1dpZHRoAGZsb2F0AAQAAAAAAIA/eERlbnNpdHkAZmxvYXQABAAAAAAAkEIAvQEA"
+        "AAAAAADVCAAAAAAAAAAAAAAQBwAAgASABwEAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+        "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+        "AAAAAAAAAAAAAQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+        "AAEAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABAAAAAAAA"
+        "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAEAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAQAAAAAAAAAAAAAAAAAA"
+        "AAAAAAAAAAAAAAAAAAAAAAABAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAEAAAAAAAAAAAAAAAAAAAABAAAAAAAA"
+        "AAAAAAAAAAAAAQAAAAAAAAAAAAAAAAAAAAEAAAAAAAAAAAAAAAAAAAABAAAAAAAAAAAAAAAAAAAAAQAAAAAAAAAAAAAAAAAA"
+        "AAEAAAAAAAAAAAAAAAAAAAABAAAAAAAAAAAAAAAAAAAAAQAAAAAAAAABAAAAAAAAAAEAAAAAAAAAAQAAAAAAAAABAAAAAAAA"
+        "AAEAAAAAAAAAAQAAAAAAAAABAAAAAAAAAAEAAAAAAAAAAQAAAAAAAAABAAAAAAAAAAEAAAAAAAAAAQAAAAAAAAABAAAAAAAA"
+        "AAEAAAAAAAAAAQAAAAAAAAABAAAAAAAAAAAAAAAAAAAAAQAAAAAAAAAAAAAAAAAAAAEAAAAAAAAAAAAAAAAAAAABAAAAAAAA"
+        "AAAAAAAAAAAAAQAAAAAAAAAAAAAAAAAAAAEAAAAAAAAAAAAAAAAAAAABAAAAAAAAAAAAAAAAAAAAAQAAAAAAAAAAAAAAAAAA"
+        "AAEHBAAAAAAAAAAAAQDZAQAAyxAAAAAAAAAEgAYgAgr4jwcAbwkr8BH/ASv/////////////////////////////////////"
+        "////////////////////////////////////////////////////////////////////////////////////////////////"
+        "////////////////////////////////////////////////////////////////////////////////////////////////"
+        "////////////////////////////////////////////////////////////////////////////////////////////////"
+        "////////////////////////////////////////////////////////////////////////////////////////////////"
+        "////////////////////////////////////////////////////////////////////////////////////////////////"
+        "///////////////////////////////////////////////////////////////////HG/DCQB+x+xxfBQBxxBBAygCgH/AF"
+        "AP+ARApRQYGSgwRCCUOiDDndRTuIIaKEBSAiBiARQ4M7qKdzogw6EEoUgUooMDIqDBDudEGHO6igRQ4MQQ0UICkBEDERBhzu"
+        "op3PQYIhBKGQKUUGBkdRTudEGHOCIGIBFDgxBDRQgKRzogw53UU4oMDIqDBEIJQpApRhzuop3OiKEBSAiBiARQ4MQQ0UU7nR"
+        "BhzuAiBSigwMlBgiEEodEGHO6incQQ0UICkBEDEAihwZ3UU7nRBh0IJQpApRQYGRUGCHc6IMOd1FAihwYghooQFICIGIiDDn"
+        "dRTuegwRCCUMgUooMDI6inc6IMOcEQMQCKHBiCGihAUjnRBhzuopxQYGRUGCIQShSBSjDndRTudEUICkBEDEAihwYghoop3O"
+        "iDDncAP/+7u7u7r169e7u7u7n/P+7u7u7r169e7u7u7l//7u7u7uvXr17u7u7uf8/7u7u7uvXr17u7u7uAv/+7u7u7r169e7"
+        "u7u7n/P+7u7u7r169e7u7u7l//7u7u7uvXr17u7u7uf8/7u7u7uvXr17u7u7uAJlMMZTAbVm1f//znOd3d///MpzKdq7V///"
+        "Oc53d3//8ymGMp2rNq///nOc7u7//+ZTmU7V2r//+c5zu7v//wBMphjKYDas2r//+c5zu7v//5lOZTtXav//5znO7u///mUw"
+        "xlO1ZtX//85znd3f//zKcynau1f//znOd3d//+AgAAAAAAQAAAA8ADwAPAA8ADwAPAA8ADwAPAA8ADwAPAA8ADwAPAA8AAAA"
+        "MgA2gDgAOoA7ADAANQA4gDkAOwAsADQANwA5gDoAOAA4ADgAOAA4ADgAOAA4ADgAOAA4ADgAOAA4ADgAOAAAACwAMAAyADQA"
+        "NQA2ADcAOIA4ADmAOQA6gDoAO4A7ADwAPAA8ADwAPAA8ADwAPAA8ADwAPAA8ADwAPAA8ADwALAA0ADcAOYA6AAAAMgA2gDgA"
+        "OoA7ADAANQA4gDkAOyA4IDggOCA4IDggOCA4IDggOCA4IDggOCA4IDggOCA4AAAALAAwADIANAA1ADYANwA4gDgAOYA5ADqA"
+        "OgA7gDsAPAA8ADwAPAA8ADwAPAA8ADwAPAA8ADwAPAA8ADwAPAAwADUAOIA5ADsALAA0ADcAOYA6AAAAMgA2gDgAOoA7QDhA"
+        "OEA4QDhAOEA4QDhAOEA4QDhAOEA4QDhAOEA4QDgAAAAsADAAMgA0ADUANgA3ADiAOAA5gDkAOoA6ADuAOwA8ADwAPAA8ADwA"
+        "PAA8ADwAPAA8ADwAPAA8ADwAPAA8ADIANoA4ADqAOwAwADUAOIA5ADsALAA0ADcAOYA6AABgOGA4YDhgOGA4YDhgOGA4YDhg"
+        "OGA4YDhgOGA4YDhgOAAAACwAMAAyADQANQA2ADcAOIA4ADmAOQA6gDoAO4A7ADwAPAA8ADwAPAA8ADwAPAA8ADwAPAA8ADwA"
+        "PAA8ADwANAA3ADmAOgAAADIANoA4ADqAOwAwADUAOIA5ADsALIA4gDiAOIA4gDiAOIA4gDiAOIA4gDiAOIA4gDiAOIA4AAAA"
+        "LAAwADIANAA1ADYANwA4gDgAOYA5ADqAOgA7gDsAPAA8ADwAPAA8ADwAPAA8ADwAPAA8ADwAPAA8ADwAPAA1ADiAOQA7ACwA"
+        "NAA3ADmAOgAAADIANoA4ADqAOwAwoDigOKA4oDigOKA4oDigOKA4oDigOKA4oDigOKA4oDgAAAAsADAAMgA0ADUANgA3ADiA"
+        "OAA5gDkAOoA6ADuAOwA8ADwAPAA8ADwAPAA8ADwAPAA8ADwAPAA8ADwAPAA8ADaAOAA6gDsAMAA1ADiAOQA7ACwANAA3ADmA"
+        "OgAAADLAOMA4wDjAOMA4wDjAOMA4wDjAOMA4wDjAOMA4wDjAOAAAACwAMAAyADQANQA2ADcAOIA4ADmAOQA6gDoAO4A7ADwA"
+        "PAA8ADwAPAA8ADwAPAA8ADwAPAA8ADwAPAA8ADwANwA5gDoAAAAyADaAOAA6gDsAMAA1ADiAOQA7ACwANOA44DjgOOA44Djg"
+        "OOA44DjgOOA44DjgOOA44DjgOOA4AAAALAAwADIANAA1ADYANwA4gDgAOYA5ADqAOgA7gDs=";
+
+}// namespace
+
+TEST_CASE("EXRLoader decodes a PIZ file written by OpenEXR") {
+
+    const auto data = utils::base64Decode(PIZ_FIXTURE_BASE64);
+
+    EXRLoader loader;
+    auto texture = loader.loadFromMemory(data, "piz", false);
+    REQUIRE(texture != nullptr);
+
+    REQUIRE(texture->image().width() == 16u);
+    REQUIRE(texture->image().height() == 40u);
+
+    const auto& p = pixels(texture);
+    REQUIRE(p.size() == static_cast<size_t>(16 * 40 * 4));
+
+    // Every texel, not a sample: a wavelet fault shows up as a block or a
+    // quadrant, and the partial second block is exactly where it would hide.
+    for (int y = 0; y < 40; ++y) {
+        for (int x = 0; x < 16; ++x) {
+            const size_t i = (static_cast<size_t>(y) * 16 + x) * 4;
+            CHECK(p[i + 0] == static_cast<float>(x) / 16.f);
+            CHECK(p[i + 1] == static_cast<float>(y) / 64.f);
+            CHECK(p[i + 2] == static_cast<float>((3 * x + y) % 16) / 16.f);
+            CHECK(p[i + 3] == 1.f);
+        }
+    }
+}
+
+TEST_CASE("EXRLoader survives a corrupted PIZ file") {
+
+    // The wavelet and Huffman decoders index tables and step pointers with
+    // values that come straight out of the file, which is the part of this
+    // loader most likely to run off the end of a buffer. Nothing here asserts
+    // what a mangled file decodes to — only that the loader either refuses it
+    // or returns a whole, correctly-sized image, and does not crash doing so.
+    const auto full = utils::base64Decode(PIZ_FIXTURE_BASE64);
+
+    EXRLoader loader;
+
+    auto check = [](const std::shared_ptr<Texture>& t) {
+        if (!t) return;
+        CHECK(t->image().width() == 16u);
+        CHECK(t->image().height() == 40u);
+        CHECK(t->image().data<float>().size() == static_cast<size_t>(16 * 40 * 4));
+    };
+
+    for (size_t cut = 1; cut < full.size(); cut += 7) {
+        const std::vector<unsigned char> truncated(full.begin(), full.begin() + cut);
+        check(loader.loadFromMemory(truncated));
+    }
+
+    for (size_t i = 0; i < full.size(); i += 11) {
+        auto data = full;
+        data[i] = static_cast<unsigned char>(data[i] ^ 0xffu);
+        check(loader.loadFromMemory(data));
+    }
 }

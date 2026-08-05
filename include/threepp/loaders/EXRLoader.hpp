@@ -18,11 +18,12 @@ namespace threepp {
     // RGBELoader returns for .hdr, so the two are interchangeable at the call
     // site.
     //
-    // Supported subset: single-part scanline images with NONE, RLE, ZIPS or ZIP
-    // compression and HALF / FLOAT / UINT channels. That covers what Blender
-    // writes and what the HDRI sites ship. Tiled, deep and multi-part files, and
-    // the PIZ / PXR24 / B44 / DWAA / DWAB codecs, are rejected with a message
-    // naming what was found rather than decoded into garbage.
+    // Supported subset: single-part scanline images with NONE, RLE, ZIPS, ZIP or
+    // PIZ compression and HALF / FLOAT / UINT channels. That covers what Blender
+    // writes, what the HDRI sites ship, and the lossless codec VFX pipelines use.
+    // Tiled, deep and multi-part files, and the PXR24 / B44 / DWAA / DWAB codecs,
+    // are rejected with a message naming what was found rather than decoded into
+    // garbage.
     //
     // Channels are matched by name: R, G, B and A, or Y alone for a luminance
     // image (broadcast to RGB). Alpha defaults to 1 when the file has none.

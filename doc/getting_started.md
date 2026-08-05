@@ -465,8 +465,8 @@ scene.background = env;    // and is visible behind it
 ```
 
 `EXRLoader` is the `.exr` equivalent and returns the same kind of texture, so the two are
-interchangeable. It reads scanline EXRs compressed with NONE/RLE/ZIPS/ZIP; PIZ and DWAA files
-are rejected with a message naming the codec.
+interchangeable. It reads scanline EXRs compressed with NONE/RLE/ZIPS/ZIP/PIZ; the lossy
+codecs (DWAA/DWAB, B44, PXR24) are rejected with a message naming the codec.
 
 Tone mapping turns the resulting HDR values into displayable ones:
 

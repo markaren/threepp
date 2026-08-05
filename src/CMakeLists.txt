@@ -322,6 +322,8 @@ set(privateHeaders
         "threepp/loaders/HdrTexture.hpp"
         "threepp/loaders/ObjectJsonConstants.hpp"
 
+        "threepp/loaders/exr/PizDecode.hpp"
+
         "threepp/loaders/xacro/Diagnostics.hpp"
         "threepp/loaders/xacro/Expand.hpp"
         "threepp/loaders/xacro/Expr.hpp"
@@ -461,6 +463,7 @@ set(sources
         "threepp/loaders/ColladaLoader.cpp"
         "threepp/loaders/DDSLoader.cpp"
         "threepp/loaders/EXRLoader.cpp"
+        "threepp/loaders/exr/PizDecode.cpp"
         "threepp/loaders/FontLoader.cpp"
         "threepp/loaders/GLTFLoader.cpp"
         "threepp/loaders/MaterialVariants.cpp"

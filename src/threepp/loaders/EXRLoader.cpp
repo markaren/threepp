@@ -2,6 +2,7 @@
 #include "threepp/loaders/EXRLoader.hpp"
 
 #include "threepp/loaders/HdrTexture.hpp"
+#include "threepp/loaders/exr/PizDecode.hpp"
 
 // stb_image.h is already compiled via ImageLoader.cpp — declared here only for
 // stbi_zlib_decode_buffer. EXR's ZIP/ZIPS chunks are ordinary zlib streams, so
@@ -374,9 +375,10 @@ namespace {
         const int linesPerBlock = scanLinesPerBlock(h.compression);
         if (linesPerBlock == 0 ||
             (h.compression != Compression::None && h.compression != Compression::Rle &&
-             h.compression != Compression::Zips && h.compression != Compression::Zip)) {
+             h.compression != Compression::Zips && h.compression != Compression::Zip &&
+             h.compression != Compression::Piz)) {
             std::cerr << "[EXRLoader] unsupported compression: " << compressionName(h.compression)
-                      << " (supported: NONE, RLE, ZIPS, ZIP)" << std::endl;
+                      << " (supported: NONE, RLE, ZIPS, ZIP, PIZ)" << std::endl;
             return std::nullopt;
         }
 
@@ -421,9 +423,11 @@ namespace {
         // Byte offset of each channel inside one scanline. Channels are stored
         // whole-row at a time, in chlist order, not interleaved per pixel.
         std::vector<size_t> channelOffset(h.channels.size(), 0);
+        std::vector<int> shortsPerSample(h.channels.size(), 0);// PIZ codes 16-bit words
         size_t bytesPerLine = 0;
         for (size_t i = 0; i < h.channels.size(); ++i) {
             channelOffset[i] = bytesPerLine;
+            shortsPerSample[i] = static_cast<int>(bytesPerSample(h.channels[i].type) / sizeof(uint16_t));
             bytesPerLine += static_cast<size_t>(width) * bytesPerSample(h.channels[i].type);
         }
         // stbi_zlib_decode_buffer takes int lengths, and a block is the unit it
@@ -499,6 +503,15 @@ namespace {
                     return std::nullopt;
                 }
                 reconstruct(block, scratch);
+            } else if (h.compression == Compression::Piz) {
+                // PIZ carries its own transform end to end — no predictor, no
+                // byte de-interleave; those belong to ZIP/RLE only.
+                if (!detail::pizDecode(chunk, static_cast<size_t>(dataSize), shortsPerSample,
+                                       static_cast<int>(width), static_cast<int>(linesInBlock),
+                                       block.data(), uncompressedSize)) {
+                    std::cerr << "[EXRLoader] corrupt PIZ chunk" << std::endl;
+                    return std::nullopt;
+                }
             } else {
                 const int written = stbi_zlib_decode_buffer(
                         reinterpret_cast<char*>(block.data()), static_cast<int>(uncompressedSize),
