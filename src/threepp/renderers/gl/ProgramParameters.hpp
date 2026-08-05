@@ -144,7 +144,12 @@ namespace threepp {
                     Scene* scene,
                     Material* material,
                     Texture* resolvedEnvMap,
-                    const std::unordered_map<std::string, std::string>& shaderIDs);
+                    const std::unordered_map<std::string, std::string>& shaderIDs,
+                    // Colour space the fragment shader must encode into: the
+                    // bound render target's, or the renderer's when drawing to
+                    // the screen. Resolved by the caller, which is the only
+                    // side that knows what is currently bound.
+                    ColorSpace outputColorSpace);
 
             [[nodiscard]] std::string hash() const;
         };

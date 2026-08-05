@@ -35,7 +35,8 @@ ProgramParameters::ProgramParameters(
         Scene* scene,
         Material* material,
         Texture* resolvedEnvMap,
-        const std::unordered_map<std::string, std::string>& shaderIDs) {
+        const std::unordered_map<std::string, std::string>& shaderIDs,
+        ColorSpace outputColorSpace) {
 
     auto mapMaterial = dynamic_cast<MaterialWithMap*>(material);
     auto alphaMaterial = dynamic_cast<MaterialWithAlphaMap*>(material);
@@ -96,7 +97,12 @@ ProgramParameters::ProgramParameters(
     instancingColor = instancedMesh != nullptr && instancedMesh->instanceColor() != nullptr;
 
     supportsVertexTextures = capabilities.vertexTextures;
-    outputEncoding = renderer.outputColorSpace;
+
+    // Not renderer.outputColorSpace: a shader drawing into a render target has
+    // to encode into *that* target's colour space, which is normally linear.
+    // Reading the renderer's instead put the display encode into every
+    // offscreen pass, so anything sampling the result got it twice.
+    outputEncoding = outputColorSpace;
 
     map = mapMaterial && mapMaterial->map;
     mapEncoding = getTextureEncodingFromMap(map ? mapMaterial->map : nullptr);

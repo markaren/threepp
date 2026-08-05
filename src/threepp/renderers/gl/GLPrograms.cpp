@@ -54,9 +54,10 @@ ProgramParameters GLPrograms::getParameters(
         size_t numShadows,
         Scene* scene,
         Object3D* object,
-        Texture* resolvedEnvMap) {
+        Texture* resolvedEnvMap,
+        ColorSpace outputColorSpace) {
 
-    return {renderer, shadowConfig, capabilities, clipping, lights, numShadows, object, scene, material, resolvedEnvMap, shaderIDs};
+    return {renderer, shadowConfig, capabilities, clipping, lights, numShadows, object, scene, material, resolvedEnvMap, shaderIDs, outputColorSpace};
 }
 
 std::string GLPrograms::getProgramCacheKey(const GLRenderer& renderer, const ProgramParameters& parameters) {

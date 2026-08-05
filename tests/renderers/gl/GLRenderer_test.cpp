@@ -755,3 +755,86 @@ TEST_CASE("GL: CapsuleGeometry renders correctly") {
 // Section 14: Cross-renderer — Extended material parity
 // =============================================================================
 
+
+
+// =============================================================================
+// Section 15: Render-target output colour space
+// =============================================================================
+
+// A shader drawing into a render target must encode into *that* target's colour
+// space, not the renderer's display one. Getting this wrong is invisible in a
+// single pass and wrong in every chain: the display encode lands in the target,
+// and whatever samples it — a transmission pass, a mirror, a post-processing
+// composer — encodes a second time.
+//
+// Unlit plate of linear 0.5 into a default (linear) target: the readback is 128.
+// The renderer's own output space is sRGB here, which would land at 188.
+TEST_CASE("GL: rendering into a render target does not apply the display encode") {
+
+    auto scene = Scene::create();
+    scene->background = Color(0, 0, 0);
+
+    auto mat = MeshBasicMaterial::create();
+    mat->color = Color(0.5f, 0.5f, 0.5f);
+    scene->add(Mesh::create(PlaneGeometry::create(4, 4), mat));
+
+    auto camera = OrthographicCamera::create(-1, 1, 1, -1, 0.1f, 10.f);
+    camera->position.set(0, 0, 2);
+    camera->lookAt(Vector3{0, 0, 0});
+
+    GLRenderer renderer(glCanvas());
+    renderer.outputColorSpace = ColorSpace::sRGB;
+    renderer.setClearColor(Color(0, 0, 0));
+
+    RenderTarget::Options options;
+    options.minFilter = Filter::Linear;
+    options.magFilter = Filter::Linear;
+    auto target = RenderTarget::create(RT_WIDTH, RT_HEIGHT, options);
+
+    renderer.setRenderTarget(target.get());
+    renderer.render(*scene, *camera);
+    const auto offscreen = centerPixel(renderer.readRGBPixels(), RT_WIDTH, RT_HEIGHT);
+
+    // Same scene to the screen, where the display encode *is* wanted.
+    renderer.setRenderTarget(nullptr);
+    renderer.render(*scene, *camera);
+    const auto onscreen = centerPixel(renderer.readRGBPixels(), RT_WIDTH, RT_HEIGHT);
+
+    INFO("offscreen " << offscreen.r << " (expect ~128 linear), onscreen " << onscreen.r << " (expect ~188 sRGB)");
+    CHECK(std::abs(offscreen.r - 128.0) < 3.0);
+    CHECK(std::abs(onscreen.r - 188.0) < 3.0);
+}
+
+// A target that asks for sRGB gets it: the encoding follows the target's own
+// texture, so an sRGB-tagged target is encoded and a linear one is not.
+TEST_CASE("GL: an sRGB-tagged render target is encoded") {
+
+    auto scene = Scene::create();
+    scene->background = Color(0, 0, 0);
+
+    auto mat = MeshBasicMaterial::create();
+    mat->color = Color(0.5f, 0.5f, 0.5f);
+    scene->add(Mesh::create(PlaneGeometry::create(4, 4), mat));
+
+    auto camera = OrthographicCamera::create(-1, 1, 1, -1, 0.1f, 10.f);
+    camera->position.set(0, 0, 2);
+    camera->lookAt(Vector3{0, 0, 0});
+
+    GLRenderer renderer(glCanvas());
+    renderer.outputColorSpace = ColorSpace::NoColorSpace;// screen is linear here
+    renderer.setClearColor(Color(0, 0, 0));
+
+    RenderTarget::Options options;
+    options.minFilter = Filter::Linear;
+    options.magFilter = Filter::Linear;
+    options.encoding = ColorSpace::sRGB;
+    auto target = RenderTarget::create(RT_WIDTH, RT_HEIGHT, options);
+
+    renderer.setRenderTarget(target.get());
+    renderer.render(*scene, *camera);
+    const auto offscreen = centerPixel(renderer.readRGBPixels(), RT_WIDTH, RT_HEIGHT);
+    renderer.setRenderTarget(nullptr);
+
+    INFO("sRGB target: " << offscreen.r << " (expect ~188)");
+    CHECK(std::abs(offscreen.r - 188.0) < 3.0);
+}

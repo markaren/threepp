@@ -732,6 +732,16 @@ struct GLRenderer::Impl {
         }
     }
 
+    // Colour space a fragment shader must encode into right now: the bound
+    // render target's, or the renderer's output space when drawing to the
+    // screen. Mirrors WebGLPrograms, which reads the current target's texture
+    // encoding for exactly this reason — an offscreen pass is an intermediate,
+    // not a display.
+    [[nodiscard]] ColorSpace currentOutputColorSpace() const {
+
+        return _currentRenderTarget ? _currentRenderTarget->texture->colorSpace : scope.outputColorSpace;
+    }
+
     gl::GLProgram* getProgram(Material* material, Object3D* _scene, Object3D* object) {
 
         auto* scene = _scene->as<Scene>();
@@ -765,7 +775,7 @@ struct GLRenderer::Impl {
             materialProperties->envMap = cubemaps.getPMREM(materialProperties->environment);
         }
 
-        auto parameters = gl::GLPrograms::getParameters(scope, shadowCfg, caps, clipping, material, lights.state, shadowsArray.size(), scene, object, materialProperties->envMap);
+        auto parameters = gl::GLPrograms::getParameters(scope, shadowCfg, caps, clipping, material, lights.state, shadowsArray.size(), scene, object, materialProperties->envMap, currentOutputColorSpace());
         auto programCacheKey = gl::GLPrograms::getProgramCacheKey(scope, parameters);
 
         auto& programs = materialProperties->programs;
@@ -889,7 +899,7 @@ struct GLRenderer::Impl {
 
         auto& fog = scene->fog;
         auto environment = isMeshStandardMaterial ? scene->environment : nullptr;
-        ColorSpace encoding = (_currentRenderTarget == nullptr) ? scope.outputColorSpace : _currentRenderTarget->texture->colorSpace;
+        ColorSpace encoding = currentOutputColorSpace();
 
         Texture* envMap;
         auto materialWithEnvMap = material->as<MaterialWithEnvMap>();
