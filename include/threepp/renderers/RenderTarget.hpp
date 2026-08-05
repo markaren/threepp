@@ -33,6 +33,14 @@ namespace threepp {
             bool depthBuffer{true};
             bool stencilBuffer{false};
 
+            // MSAA sample count. 0 (the default) is an ordinary single-sampled
+            // target. Above 0, the backend draws into a multisampled
+            // renderbuffer pair and resolves into `texture` when the target is
+            // unbound, so sampling the texture is unchanged — the extra samples
+            // exist only for the duration of the pass. Clamped to the driver's
+            // GL_MAX_SAMPLES.
+            unsigned int samples{0};
+
             std::shared_ptr<DepthTexture> depthTexture;
 
             Options() = default;
@@ -53,6 +61,10 @@ namespace threepp {
 
         bool depthBuffer;
         bool stencilBuffer;
+
+        // See Options::samples. Changing this after the target has been used
+        // has no effect until the target is disposed and re-created.
+        unsigned int samples;
 
         std::shared_ptr<DepthTexture> depthTexture;
 

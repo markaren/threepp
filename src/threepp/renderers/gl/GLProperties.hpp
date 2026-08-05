@@ -34,6 +34,14 @@ namespace threepp::gl {
         std::optional<unsigned int> glFramebuffer;
         std::optional<std::array<unsigned int, 6>> glCubeFramebuffers;
         std::optional<unsigned int> glDepthbuffer;
+
+        // Multisampled targets (RenderTarget::samples > 0) own a second
+        // framebuffer whose attachments are multisampled renderbuffers. Draws
+        // go there; glFramebuffer (the one holding the texture) only ever
+        // receives the resolve blit.
+        std::optional<unsigned int> glMultisampledFramebuffer;
+        std::optional<unsigned int> glColorRenderbuffer;
+        std::optional<unsigned int> glDepthRenderbuffer;
     };
 
     struct MaterialProperties {

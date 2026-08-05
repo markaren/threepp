@@ -18,6 +18,7 @@ add_subdirectory(lights)
 add_subdirectory(loaders)
 add_subdirectory(misc)
 add_subdirectory(objects)
+add_subdirectory(postprocessing)
 add_subdirectory(shaders)
 add_subdirectory(textures)
 

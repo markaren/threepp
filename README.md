@@ -58,6 +58,9 @@ The OpenGL backend is a mechanical port of the WebGL renderer.
 * Raycasting [Mesh, Line, Points]
 * 2D/3D Textures, 2D/3D text, Sprites, RenderTarget, CubeMaps
 * Transparency, Transmission, Shadows
+* Post-processing on the OpenGL path: `EffectComposer` with render/shader/mask/
+  clear/texture/save passes, MSAA-capable internal targets, and three.js addon
+  shaders that port over as-is ([examples/postprocessing](examples/postprocessing))
 * Environment maps, including PMREM
 * Animation, morph targets, Bones
 * Controls [Orbit, Fly, Drag, Transform]
