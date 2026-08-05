@@ -156,6 +156,7 @@ set(publicHeaders
         "threepp/loaders/ObjectLoader.hpp"
         "threepp/loaders/OBJLoader.hpp"
         "threepp/loaders/STLLoader.hpp"
+        "threepp/loaders/SplatLoader.hpp"
         "threepp/loaders/SVGLoader.hpp"
         "threepp/loaders/TextureLoader.hpp"
         "threepp/loaders/URDFLoader.hpp"
@@ -225,6 +226,9 @@ set(publicHeaders
         "threepp/objects/TextSprite.hpp"
         "threepp/objects/Water.hpp"
         "threepp/objects/GrassMesh.hpp"
+
+        "threepp/splats/SplatData.hpp"
+        "threepp/splats/SplatSH.hpp"
 
         "threepp/textures/CubeTexture.hpp"
         "threepp/textures/DataTexture.hpp"
@@ -490,6 +494,7 @@ set(sources
         "threepp/loaders/ObjectLoader.cpp"
         "threepp/loaders/OBJLoader.cpp"
         "threepp/loaders/STLLoader.cpp"
+        "threepp/loaders/SplatLoader.cpp"
         "threepp/loaders/SVGLoader.cpp"
         "threepp/loaders/TextureLoader.cpp"
         "threepp/loaders/URDFLoader.cpp"
@@ -578,6 +583,8 @@ set(sources
         "threepp/objects/TextSprite.cpp"
         "threepp/objects/Water.cpp"
         "threepp/objects/GrassMesh.cpp"
+
+        "threepp/splats/SplatData.cpp"
 
         "threepp/textures/Texture.cpp"
         "threepp/textures/DataTexture3D.cpp"
