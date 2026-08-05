@@ -7,6 +7,7 @@
 #ifndef THREEPP_POSTPROCESSING_HPP
 #define THREEPP_POSTPROCESSING_HPP
 
+#include "threepp/postprocessing/BokehPass.hpp"
 #include "threepp/postprocessing/ClearPass.hpp"
 #include "threepp/postprocessing/EffectComposer.hpp"
 #include "threepp/postprocessing/MaskPass.hpp"
@@ -15,7 +16,10 @@
 #include "threepp/postprocessing/SavePass.hpp"
 #include "threepp/postprocessing/ShaderPass.hpp"
 #include "threepp/postprocessing/TexturePass.hpp"
+#include "threepp/postprocessing/UnrealBloomPass.hpp"
 
+#include "threepp/postprocessing/shaders/BokehShader.hpp"
 #include "threepp/postprocessing/shaders/CopyShader.hpp"
+#include "threepp/postprocessing/shaders/LuminosityHighPassShader.hpp"
 
 #endif//THREEPP_POSTPROCESSING_HPP

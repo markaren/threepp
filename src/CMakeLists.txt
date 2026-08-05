@@ -270,6 +270,7 @@ set(publicHeaders
         "threepp/renderers/shaders/UniformsLib.hpp"
 
         "threepp/postprocessing/postprocessing.hpp"
+        "threepp/postprocessing/BokehPass.hpp"
         "threepp/postprocessing/ClearPass.hpp"
         "threepp/postprocessing/EffectComposer.hpp"
         "threepp/postprocessing/MaskPass.hpp"
@@ -278,7 +279,10 @@ set(publicHeaders
         "threepp/postprocessing/SavePass.hpp"
         "threepp/postprocessing/ShaderPass.hpp"
         "threepp/postprocessing/TexturePass.hpp"
+        "threepp/postprocessing/UnrealBloomPass.hpp"
+        "threepp/postprocessing/shaders/BokehShader.hpp"
         "threepp/postprocessing/shaders/CopyShader.hpp"
+        "threepp/postprocessing/shaders/LuminosityHighPassShader.hpp"
 
 )
 
@@ -591,6 +595,7 @@ set(sources
         "threepp/renderers/RenderTarget.cpp"
         "threepp/renderers/RendererFactory.cpp"
 
+        "threepp/postprocessing/BokehPass.cpp"
         "threepp/postprocessing/ClearPass.cpp"
         "threepp/postprocessing/EffectComposer.cpp"
         "threepp/postprocessing/MaskPass.cpp"
@@ -599,6 +604,7 @@ set(sources
         "threepp/postprocessing/SavePass.cpp"
         "threepp/postprocessing/ShaderPass.cpp"
         "threepp/postprocessing/TexturePass.cpp"
+        "threepp/postprocessing/UnrealBloomPass.cpp"
 
         "threepp/renderers/common/Lights.cpp"
         "threepp/renderers/common/RenderLists.cpp"

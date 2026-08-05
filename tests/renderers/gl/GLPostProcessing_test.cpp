@@ -12,6 +12,9 @@
 #include "threepp/materials/MeshBasicMaterial.hpp"
 #include "threepp/postprocessing/postprocessing.hpp"
 
+#include <cmath>
+#include <utility>
+
 namespace {
 
     // Full-frame unlit plate of a known linear colour.
@@ -337,4 +340,241 @@ TEST_CASE("EffectComposer: MaskPass confines the passes it brackets", "[postproc
     INFO("inside mask " << masked << " (expect ~51), outside " << untouched << " (expect ~204)");
     CHECK(std::abs(masked - 51.0) < 4.0);
     CHECK(std::abs(untouched - 204.0) < 4.0);
+}
+
+// =============================================================================
+// UnrealBloomPass
+// =============================================================================
+
+namespace {
+
+    // A small bright square on black, so "did light spread beyond the source"
+    // is a question about specific pixels.
+    std::shared_ptr<Scene> emitterScene(float brightness) {
+
+        auto scene = Scene::create();
+        scene->background = Color(0, 0, 0);
+
+        auto mat = MeshBasicMaterial::create();
+        mat->color = Color(brightness, brightness, brightness);
+
+        scene->add(Mesh::create(PlaneGeometry::create(0.5f, 0.5f), mat));
+
+        return scene;
+    }
+
+    // Mean brightness of a ring of pixels well outside the emitter - where
+    // bloom shows up and nothing else does.
+    double haloBrightness(const std::vector<unsigned char>& px) {
+
+        double sum = 0;
+        int count = 0;
+
+        for (int y = 0; y < RT_HEIGHT; y++) {
+            for (int x = 0; x < RT_WIDTH; x++) {
+                const double dx = x - RT_WIDTH / 2.0;
+                const double dy = y - RT_HEIGHT / 2.0;
+                const double r = std::sqrt(dx * dx + dy * dy);
+                if (r < 14.0 || r > 24.0) continue;// the emitter is ~8px half-width
+
+                const size_t i = (static_cast<size_t>(y) * RT_WIDTH + x) * 3;
+                sum += (px[i] + px[i + 1] + px[i + 2]) / 3.0;
+                count++;
+            }
+        }
+
+        return count > 0 ? sum / count : 0.0;
+    }
+
+}// namespace
+
+// The whole point of the pass: light from a bright source has to appear where
+// the source is not. A chain that ran the mips but never added them back, or
+// composited black, leaves the halo at zero.
+TEST_CASE("UnrealBloomPass: a bright source spreads light beyond itself", "[postprocessing]") {
+
+    auto scene = emitterScene(1.f);
+    auto camera = plateCamera();
+
+    const auto haloWith = [&](float strength) {
+        GLRenderer renderer(glCanvas());
+        renderer.outputColorSpace = ColorSpace::NoColorSpace;
+        renderer.setClearColor(Color(0, 0, 0));
+
+        EffectComposer composer(renderer);
+        composer.addPass(std::make_shared<RenderPass>(*scene, *camera));
+        composer.addPass(std::make_shared<UnrealBloomPass>(Vector2(RT_WIDTH, RT_HEIGHT), strength, 0.5f, 0.2f));
+        composer.render();
+
+        return haloBrightness(renderer.readRGBPixels());
+    };
+
+    const double none = haloWith(0.f);
+    const double bloomed = haloWith(3.f);
+
+    INFO("halo without bloom " << none << ", with bloom " << bloomed);
+    CHECK(none < 1.0);
+    CHECK(bloomed > 8.0);
+}
+
+// Strength 0 has to be the identity. It is the knob reached for to A/B the
+// effect, so a pass that still tints or dims at zero makes that comparison a
+// lie - and would mean the blend is not actually additive.
+TEST_CASE("UnrealBloomPass: strength 0 leaves the image untouched", "[postprocessing]") {
+
+    auto scene = platedScene(Color(0.5f, 0.5f, 0.5f));
+    auto camera = plateCamera();
+
+    GLRenderer renderer(glCanvas());
+    renderer.outputColorSpace = ColorSpace::NoColorSpace;
+    renderer.setClearColor(Color(0, 0, 0));
+
+    EffectComposer composer(renderer);
+    composer.addPass(std::make_shared<RenderPass>(*scene, *camera));
+    composer.render();
+    const auto plain = centerPixel(renderer.readRGBPixels(), RT_WIDTH, RT_HEIGHT);
+
+    EffectComposer bloomComposer(renderer);
+    bloomComposer.addPass(std::make_shared<RenderPass>(*scene, *camera));
+    bloomComposer.addPass(std::make_shared<UnrealBloomPass>(Vector2(RT_WIDTH, RT_HEIGHT), 0.f, 0.5f, 0.5f));
+    bloomComposer.render();
+    const auto bloomed = centerPixel(renderer.readRGBPixels(), RT_WIDTH, RT_HEIGHT);
+
+    INFO("plain " << plain.r << ", strength-0 bloom " << bloomed.r);
+    CHECK(std::abs(bloomed.r - plain.r) < 2.0);
+}
+
+// The threshold has to gate. A source below it must not bloom at all -
+// otherwise the high pass is doing nothing and every mid-grey surface glows.
+TEST_CASE("UnrealBloomPass: a source below the threshold does not bloom", "[postprocessing]") {
+
+    auto scene = emitterScene(0.3f);
+    auto camera = plateCamera();
+
+    GLRenderer renderer(glCanvas());
+    renderer.outputColorSpace = ColorSpace::NoColorSpace;
+    renderer.setClearColor(Color(0, 0, 0));
+
+    EffectComposer composer(renderer);
+    composer.addPass(std::make_shared<RenderPass>(*scene, *camera));
+    composer.addPass(std::make_shared<UnrealBloomPass>(Vector2(RT_WIDTH, RT_HEIGHT), 3.f, 0.5f, 0.8f));
+    composer.render();
+
+    const double halo = haloBrightness(renderer.readRGBPixels());
+
+    INFO("halo from a 0.3 source under a 0.8 threshold: " << halo);
+    CHECK(halo < 1.0);
+}
+
+// =============================================================================
+// BokehPass
+// =============================================================================
+
+namespace {
+
+    // Two plates at different depths, one on each side of the frame, so one can
+    // be in focus while the other is not.
+    struct DepthScene {
+        std::shared_ptr<Scene> scene;
+        std::shared_ptr<PerspectiveCamera> camera;
+    };
+
+    DepthScene twoPlateScene() {
+
+        auto scene = Scene::create();
+        scene->background = Color(0, 0, 0);
+
+        const auto plate = [](float z, float x, float size) {
+            auto mat = MeshBasicMaterial::create();
+            mat->color = Color(1, 1, 1);
+            auto mesh = Mesh::create(PlaneGeometry::create(size, size * 8.f), mat);
+            mesh->position.set(x, 0, z);
+            return mesh;
+        };
+
+        scene->add(plate(-2.f, -0.7f, 0.6f)); // near, left half
+        scene->add(plate(-12.f, 4.2f, 3.6f));// far, right half
+
+        auto camera = PerspectiveCamera::create(50, 1.f, 0.1f, 50.f);
+        camera->position.set(0, 0, 0);
+        camera->lookAt(Vector3{0, 0, -1});
+
+        return {scene, camera};
+    }
+
+    // Sum of squared horizontal gradients over a column band: high when an edge
+    // in that band is crisp, low once it has been smeared.
+    double gradientEnergy(const std::vector<unsigned char>& px, int x0, int x1) {
+
+        double energy = 0;
+        for (int y = 0; y < RT_HEIGHT; y++) {
+            for (int x = x0; x < x1 - 1; x++) {
+                const size_t i = (static_cast<size_t>(y) * RT_WIDTH + x) * 3;
+                const double a = (px[i] + px[i + 1] + px[i + 2]) / 3.0;
+                const double b = (px[i + 3] + px[i + 4] + px[i + 5]) / 3.0;
+                energy += (b - a) * (b - a);
+            }
+        }
+        return energy;
+    }
+
+}// namespace
+
+// Focus has to select by depth: pulling focus from the near plate to the far
+// one must sharpen the far edge and soften the near one. A pass blurring
+// uniformly - reading a broken depth target, say - moves both together.
+TEST_CASE("BokehPass: focus selects which depth stays sharp", "[postprocessing]") {
+
+    auto depthScene = twoPlateScene();
+
+    const auto energiesAt = [&](float focus) {
+        GLRenderer renderer(glCanvas());
+        renderer.outputColorSpace = ColorSpace::NoColorSpace;
+        renderer.setClearColor(Color(0, 0, 0));
+
+        EffectComposer composer(renderer);
+        composer.addPass(std::make_shared<RenderPass>(*depthScene.scene, *depthScene.camera));
+        composer.addPass(std::make_shared<BokehPass>(*depthScene.scene, *depthScene.camera, focus, 0.05f, 0.02f));
+        composer.render();
+
+        const auto px = renderer.readRGBPixels();
+        return std::pair<double, double>{gradientEnergy(px, 0, RT_WIDTH / 2),
+                                         gradientEnergy(px, RT_WIDTH / 2, RT_WIDTH)};
+    };
+
+    const auto nearFocus = energiesAt(2.f); // focus the near plate
+    const auto farFocus = energiesAt(12.f); // focus the far plate
+
+    INFO("focus near: left " << nearFocus.first << " right " << nearFocus.second
+                             << " | focus far: left " << farFocus.first << " right " << farFocus.second);
+
+    // The near plate (left) is crisper when focused near; the far plate
+    // (right) is crisper when focused far.
+    CHECK(nearFocus.first > farFocus.first);
+    CHECK(farFocus.second > nearFocus.second);
+}
+
+// Aperture 0 is the pinhole case and must be the identity, for the same reason
+// strength 0 must be for bloom.
+TEST_CASE("BokehPass: aperture 0 leaves the image untouched", "[postprocessing]") {
+
+    auto depthScene = twoPlateScene();
+
+    GLRenderer renderer(glCanvas());
+    renderer.outputColorSpace = ColorSpace::NoColorSpace;
+    renderer.setClearColor(Color(0, 0, 0));
+
+    EffectComposer plainComposer(renderer);
+    plainComposer.addPass(std::make_shared<RenderPass>(*depthScene.scene, *depthScene.camera));
+    plainComposer.render();
+    const double plain = gradientEnergy(renderer.readRGBPixels(), 0, RT_WIDTH);
+
+    EffectComposer bokehComposer(renderer);
+    bokehComposer.addPass(std::make_shared<RenderPass>(*depthScene.scene, *depthScene.camera));
+    bokehComposer.addPass(std::make_shared<BokehPass>(*depthScene.scene, *depthScene.camera, 5.f, 0.f, 0.02f));
+    bokehComposer.render();
+    const double pinhole = gradientEnergy(renderer.readRGBPixels(), 0, RT_WIDTH);
+
+    INFO("plain " << plain << ", aperture-0 bokeh " << pinhole);
+    CHECK(std::abs(pinhole - plain) < plain * 0.02);
 }
