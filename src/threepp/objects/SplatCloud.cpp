@@ -48,13 +48,21 @@ namespace {
     // 0.04 units wide against 0.017-unit content, so most of the cloud lands
     // in a handful of buckets and the sort quietly degrades to file order.
     //
-    // Splats outside the interval clamp into the first or last bucket. Their
-    // ordering among themselves is lost, which is exactly the trade: they are
-    // the splats the interval was chosen to exclude, and they are still on
-    // the correct side of everything else, because clamping preserves which
-    // end they came from.
+    // Splats outside the interval do NOT collapse into a single end bucket.
+    // Collapsing loses their ordering among themselves, and the stable sort
+    // then composites them in file order — which repainted the Sanctuaire
+    // scan's sky, a shell of huge overlapping translucent splats beyond p99,
+    // in whatever pastels file order happened to blend. Each side instead
+    // keeps a small band of buckets of its own, spread over [min, p1) and
+    // (p99, max]: coarse, but monotone, and the sky stays the colour it was
+    // scanned in.
     constexpr float SORT_CLAMP_LO = 0.01f;// p1 of the sampled view depths
     constexpr float SORT_CLAMP_HI = 0.99f;// p99
+
+    // Buckets reserved for each tail. 2048 leaves the content interval 61440
+    // of the 65536 — a 3% resolution tax — while a tail spanning a couple of
+    // thousand units still resolves splats a unit apart.
+    constexpr int SORT_TAIL_BUCKETS = 2048;
 
     // A little air on each end, so the p1/p99 splats themselves are not
     // sitting in the clamped end buckets.
@@ -680,8 +688,21 @@ void SplatCloud::sortByDepth(Camera& camera) {
         }
     }
 
-    const float span = hi - lo;
-    const float scale = span > 0.f ? static_cast<float>(SORT_BUCKETS - 1) / span : 0.f;
+    // Three monotone segments: the content interval gets almost the whole
+    // range, and each tail keeps its own small band (see SORT_TAIL_BUCKETS).
+    // When a tail is empty — lo already at the cloud's edge, or the margin
+    // pushed past it — its scale is zero and the segment degenerates to the
+    // old clamp, harmlessly.
+    constexpr int TAIL = SORT_TAIL_BUCKETS;
+    constexpr int CONTENT = SORT_BUCKETS - 2 * TAIL;
+
+    const float loSpan = lo - minZ;
+    const float midSpan = hi - lo;
+    const float hiSpan = maxZ - hi;
+
+    const float loScale = loSpan > 0.f ? static_cast<float>(TAIL - 1) / loSpan : 0.f;
+    const float midScale = midSpan > 0.f ? static_cast<float>(CONTENT - 1) / midSpan : 0.f;
+    const float hiScale = hiSpan > 0.f ? static_cast<float>(TAIL - 1) / hiSpan : 0.f;
 
     std::fill(histogram_.begin(), histogram_.end(), 0u);
 
@@ -689,12 +710,34 @@ void SplatCloud::sortByDepth(Camera& camera) {
 
         // std::clamp passes NaN straight through — NaN loses both of its
         // comparisons — and a float-to-integer conversion of NaN is undefined
-        // behaviour, not a large number. Written as a negated comparison so
-        // NaN lands in the first branch along with everything too far away.
-        const float k = (depths_[i] - lo) * scale;
-        keys_[i] = !(k > 0.f)                                        ? 0
-                : (k >= static_cast<float>(SORT_BUCKETS - 1))        ? static_cast<std::uint16_t>(SORT_BUCKETS - 1)
-                                                                     : static_cast<std::uint16_t>(k);
+        // behaviour, not a large number. Every branch is written so NaN falls
+        // into a plain integer answer (the far end, bucket 0).
+        const float z = depths_[i];
+        std::uint16_t key;
+
+        if (!(z >= lo)) {// below the interval, or NaN
+
+            const float k = (z - minZ) * loScale;
+            key = !(k > 0.f)                                ? 0
+                : (k >= static_cast<float>(TAIL - 1))       ? static_cast<std::uint16_t>(TAIL - 1)
+                                                            : static_cast<std::uint16_t>(k);
+        } else if (z <= hi) {// the content interval
+
+            const float k = (z - lo) * midScale;
+            key = static_cast<std::uint16_t>(
+                    TAIL + ((k >= static_cast<float>(CONTENT - 1)) ? CONTENT - 1
+                                                                   : static_cast<int>(k)));
+        } else {// beyond the interval
+
+            const float k = (z - hi) * hiScale;
+            key = static_cast<std::uint16_t>(
+                    (SORT_BUCKETS - TAIL) +
+                    (!(k > 0.f)                          ? 0
+                     : (k >= static_cast<float>(TAIL - 1)) ? TAIL - 1
+                                                           : static_cast<int>(k)));
+        }
+
+        keys_[i] = key;
         ++histogram_[keys_[i]];
     }
 

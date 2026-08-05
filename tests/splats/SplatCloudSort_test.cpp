@@ -137,6 +137,57 @@ TEST_CASE("SplatCloud: one far outlier does not coarsen the sort for everything 
     CHECK(slotOf(order, farther) > slotOf(order, nearer));
 }
 
+TEST_CASE("SplatCloud: strays beyond the interval still sort among themselves") {
+
+    // The clamp must not collapse a tail into ONE bucket. Collapsed, the
+    // stable sort composites everything out there in file order — which
+    // repainted the Sanctuaire scan's sky (a shell of huge translucent
+    // splats beyond p99) in file-order pastels. Each tail keeps a band of
+    // buckets of its own, so strays stay depth-ordered coarsely.
+    //
+    // Both pairs are laid down in file order that CONTRADICTS depth order,
+    // so a collapsed tail fails the assertion instead of passing by luck.
+    std::vector<Vector3> means;
+    for (int i = 0; i < 200; ++i) {
+
+        const float t = static_cast<float>(i) / 199.f;
+        means.emplace_back((i % 2 ? -1.f : 1.f) * (1.2f + 0.6f * t), (t - 0.5f) * 2.f, t - 0.5f);
+    }
+
+    // Far tail (below p1 in view depth), nearer of the pair filed first.
+    const size_t farNearer = means.size();
+    means.emplace_back(0.f, 0.f, -2000.f);
+    const size_t farFarther = means.size();
+    means.emplace_back(0.f, 0.f, -3000.f);
+
+    // Near tail (above p99), between the camera and the content — again the
+    // nearer of the pair filed first.
+    const size_t nearNearer = means.size();
+    means.emplace_back(0.f, 0.f, 4.5f);
+    const size_t nearFarther = means.size();
+    means.emplace_back(0.f, 0.f, 4.0f);
+
+    auto cloud = SplatCloud::create(cloudOf(means));
+
+    auto camera = PerspectiveCamera::create(50, 1.f, 0.1f, 100);
+    camera->position.set(0, 0, 5);
+    camera->lookAt(Vector3{0, 0, 0});
+    cloud->update(*camera);
+
+    const auto order = drawOrder(*cloud);
+
+    INFO("far tail: nearer at slot " << slotOf(order, farNearer)
+                                     << ", farther at " << slotOf(order, farFarther));
+    CHECK(slotOf(order, farNearer) > slotOf(order, farFarther));
+
+    INFO("near tail: nearer at slot " << slotOf(order, nearNearer)
+                                      << ", farther at " << slotOf(order, nearFarther));
+    CHECK(slotOf(order, nearNearer) > slotOf(order, nearFarther));
+
+    // And the content pair the interval exists to protect still resolves.
+    CHECK(slotOf(order, farFarther) < slotOf(order, 0));
+}
+
 TEST_CASE("SplatCloud: the sort is stable, so equal depths keep index order") {
 
     // Ties are what carried the popping-free result: splats at the same depth
