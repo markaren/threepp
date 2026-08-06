@@ -14,6 +14,14 @@
 //   --no-cull                              keep a loaded file's outlier splats
 //   --morton                               Morton-reorder storage (see below)
 //   --bench N                              N frames on a slow orbit, timings, exit
+//   --level N                              which SOG detail level to read (0 = finest)
+//   --scale S                              render scale; the splat pass is measured
+//                                          at RENDER resolution, so this is the only
+//                                          flag that changes its pixel count
+//   --upscaler                             leave DLSS/FSR enabled (off by default for
+//                                          GL parity). Alone it changes nothing: at
+//                                          scale 1 DLSS selects DLAA and upscales
+//                                          nothing — pair it with --scale
 //
 // ONE BINARY, TWO BACKENDS, ON PURPOSE. The GL path is the correctness oracle
 // for the Vulkan one, and an oracle is only worth having if the thing being
@@ -66,6 +74,7 @@
 
 #include "capture_util.hpp"
 
+#include "threepp/loaders/SogLoader.hpp"
 #include "threepp/loaders/SplatLoader.hpp"
 #include "threepp/objects/SplatCloud.hpp"
 #include "threepp/threepp.hpp"
@@ -200,6 +209,11 @@ int main(int argc, char** argv) {
     bool debugNaN = false;
     bool fog = false;
     bool addSun = false;
+    // --level picks a SOG detail level; --upscaler lifts the GL-parity clamp
+    // below so the pass can be measured at a render scale a real app would use.
+    int lodLevel = 0;
+    bool upscaler = false;
+    float renderScale = 1.f;
 
     for (int i = 1; i < argc; ++i) {
 
@@ -214,6 +228,12 @@ int main(int argc, char** argv) {
             fog = true;
         } else if (arg == "--sun") {
             addSun = true;
+        } else if (arg == "--level" && i + 1 < argc) {
+            lodLevel = std::atoi(argv[++i]);
+        } else if (arg == "--upscaler") {
+            upscaler = true;
+        } else if (arg == "--scale" && i + 1 < argc) {
+            renderScale = static_cast<float>(std::atof(argv[++i]));
         } else if (arg == "--shot" && i + 1 < argc) {
             shotPath = argv[++i];
         } else if (arg.rfind("--screenshot=", 0) == 0) {
@@ -241,7 +261,22 @@ int main(int argc, char** argv) {
 
         std::cout << "loading " << plyPath << " ..." << std::endl;
         const auto t0 = std::chrono::steady_clock::now();
-        data = SplatLoader::loadPly(plyPath);
+        // A SOG asset (a .zip, a .sog, or an unpacked folder) is recognised by
+        // content, not by extension — and it is the only shape that carries
+        // detail levels, which is what --level selects. The levels are
+        // ALTERNATIVES: each covers the whole scene at its own density, so
+        // --level 1 is the same building from half as many splats, not half a
+        // building. A .ply has exactly one level and ignores the flag.
+        if (SogLoader::isSog(plyPath)) {
+
+            const auto info = SogLoader::describe(plyPath);
+            std::cout << "  SOG asset, " << info.lodLevels << " level(s):";
+            for (const auto& l : info.levels) std::cout << " [" << l.lod << "] " << l.count;
+            std::cout << "\n  reading level " << lodLevel << std::endl;
+            data = SogLoader::load(plyPath, {lodLevel});
+        } else {
+            data = SplatLoader::loadPly(plyPath);
+        }
         const auto parseMs = std::chrono::duration<double, std::milli>(
                                      std::chrono::steady_clock::now() - t0)
                                      .count();
@@ -396,9 +431,28 @@ int main(int argc, char** argv) {
         // pre-post, but it is not a GL comparison any more.
         vkRenderer->toneMapping = ToneMapping::None;
         vkRenderer->toneMappingExposure = 1.f;
-        vkRenderer->setRenderScale(1.f);
-        vkRenderer->setDlss(false);
-        vkRenderer->setFsr(false);
+        // Render scale 1 with both upscalers off is a GL-PARITY clamp, not a
+        // recommendation: the comparison has to be of rasterizers at the same
+        // pixel count. It also means the default bench measures the splat pass
+        // at its worst, because the pass runs at RENDER resolution — its tiles
+        // come from the render extent and it composites into sceneHdr before the
+        // upscale. --scale sets that render scale and --upscaler leaves the
+        // upscalers enabled, so the pass can be measured the way a real app
+        // would run it. Captures taken that way are no longer comparable to GL
+        // ones.
+        //
+        // --upscaler ALONE changes nothing, and the reason is worth stating: the
+        // renderer's own default scale is already 1, and DLSS picks its quality
+        // mode from the ratio — at 1.0 that is DLAA, which renders at native
+        // resolution and upscales nothing. Only --scale moves the pixel count.
+        // Use --scale without --upscaler to price the pixels alone, with it to
+        // price what an app actually ships.
+        vkRenderer->setRenderScale(renderScale);
+        if (!upscaler) {
+
+            vkRenderer->setDlss(false);
+            vkRenderer->setFsr(false);
+        }
         if (fog) {
             // --fog: does the cloud sit IN the medium, or punch a clear hole
             // through it? deferred_shade_60_fog_volumetrics.glsl bakes fog into

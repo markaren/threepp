@@ -18,6 +18,8 @@ gaussian_splats <scene.ply> --vulkan --occluder     splat-behind-mesh depth test
 gaussian_splats <scene.ply> --vulkan --fog          does the cloud sit IN the medium
 gaussian_splats <scene.ply> --vulkan --fog --sun    ...with the medium LIT by a sun only
 gaussian_splats <scene.ply> --vulkan --bench 200    orbit, timings, GPU breakdown
+gaussian_splats <scan.zip>  --vulkan --level 1      a coarser SOG level, same scene
+gaussian_splats <scan.zip>  --vulkan --scale 0.5    the pass runs at RENDER resolution
 ```
 
 Compare captures with tone mapping off (the example's Vulkan default) so the
