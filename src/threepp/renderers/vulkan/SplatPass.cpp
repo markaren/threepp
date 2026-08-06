@@ -40,6 +40,7 @@ namespace threepp::vulkan {
         constexpr uint32_t kGeomStride = 40; // vec3 + float + float[6], scalar layout
         constexpr uint32_t kGlobalWords = 12;
         constexpr uint32_t kBindings   = 23;// 22 = the indirect dispatch args
+        constexpr uint32_t kMaxRanges  = 64;// KEEP IN SYNC with splat_common.glsl
 
         constexpr uint32_t kSplatFlagOrtho     = 1u;
         constexpr uint32_t kSplatFlagDebugNaN  = 2u;
@@ -82,6 +83,8 @@ namespace threepp::vulkan {
             uint32_t budget;
             uint32_t flags;
             uint32_t envMipCount;
+            uint32_t rangeCount;
+            uint32_t ranges[kMaxRanges * 2];// (first compact index, source base)
         };
 
         uint32_t divUp(uint32_t a, uint32_t b) { return (a + b - 1) / b; }
@@ -645,7 +648,25 @@ namespace threepp::vulkan {
             fc.pLo = e.pLo;
             fc.pHi = e.pHi;
             fc.debugNonFinite = e.debugNonFinite;
-            frameClouds_.push_back(fc);
+            // Validate the submission list HERE rather than trusting it in the
+            // shader: a range past the end of the cloud would read another
+            // cloud's memory through the same descriptor, and a caller that
+            // hands over more than kMaxRanges would silently overflow the UBO.
+            fc.submitCount = it->second->count;
+            if (!e.ranges.empty()) {
+
+                uint32_t total = 0;
+                for (const auto& [off, n] : e.ranges) {
+                    if (fc.ranges.size() >= kMaxRanges) break;
+                    if (n == 0 || off >= it->second->count) continue;
+                    const uint32_t clamped = std::min(n, it->second->count - off);
+                    fc.ranges.emplace_back(off, clamped);
+                    total += clamped;
+                }
+                fc.submitCount = total;
+                if (fc.ranges.empty() || total == 0) continue;// nothing submitted
+            }
+            frameClouds_.push_back(std::move(fc));
         }
     }
 
@@ -779,6 +800,11 @@ namespace threepp::vulkan {
         for (const auto& fc : frameClouds_) {
             Cloud& c = *fc.cloud;
             if (c.count == 0) continue;
+            // Everything per-splat runs over what this frame SUBMITS; the
+            // resident count only sizes the buffers. Equal unless the frame
+            // handed over a range list.
+            const uint32_t nSubmit = fc.submitCount;
+            if (nSubmit == 0) continue;
             timing = p.timings && !stagesWritten;
 
             // ── per-cloud UBO slot ───────────────────────────────────────────
@@ -812,7 +838,19 @@ namespace threepp::vulkan {
             u.percentile[1] = fc.pHi;
             u.nearPlane   = p.nearPlane;
             u.preExposure = p.preExposure;
-            u.splatCount  = c.count;
+            // The SUBMITTED total, not the resident total: every stage after
+            // project indexes compactly, so this is the only count they need.
+            u.splatCount  = fc.submitCount;
+            u.rangeCount  = static_cast<uint32_t>(fc.ranges.size());
+            {
+                uint32_t first = 0, k = 0;
+                for (const auto& [off, n] : fc.ranges) {
+                    u.ranges[k * 2 + 0] = first;// compact start, ascending
+                    u.ranges[k * 2 + 1] = off;  // source base
+                    first += n;
+                    ++k;
+                }
+            }
             u.shCoeffs    = c.shCoeffs;
             u.shDegree    = c.shDegree;
             u.tilesX      = tilesX_;
@@ -853,35 +891,35 @@ namespace threepp::vulkan {
             // ── project + cull + tile counts ─────────────────────────────────
             stageBegin(TP_SplatProject);
             vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, projectPipe_);
-            pc = {c.count, 0, 0, 0, 0, 0, 0, 0};
+            pc = {nSubmit, 0, 0, 0, 0, 0, 0, 0};
             vkCmdPushConstants(cb, pipeLayout_, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(pc), &pc);
-            vkCmdDispatch(cb, divUp(c.count, 256), 1, 1);
+            vkCmdDispatch(cb, divUp(nSubmit, 256), 1, 1);
             barrier(cb);
 
             if (checksum) {
                 vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, checksumPipe_);
-                pc = {c.count, 0, 0, 0, 0, /*mode*/ 0, 0, 0};
+                pc = {nSubmit, 0, 0, 0, 0, /*mode*/ 0, 0, 0};
                 vkCmdPushConstants(cb, pipeLayout_, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(pc), &pc);
-                vkCmdDispatch(cb, divUp(c.count, 256), 1, 1);
+                vkCmdDispatch(cb, divUp(nSubmit, 256), 1, 1);
                 barrier(cb);
             }
 
             // ── prefix sum over the per-splat tile counts ────────────────────
-            recordScan(cb, c.count, 0);
+            recordScan(cb, nSubmit, 0);
 
             if (checksum) {
                 vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, checksumPipe_);
-                pc = {c.count, 0, 0, 0, 0, /*mode*/ 2, 0, 0};
+                pc = {nSubmit, 0, 0, 0, 0, /*mode*/ 2, 0, 0};
                 vkCmdPushConstants(cb, pipeLayout_, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(pc), &pc);
-                vkCmdDispatch(cb, divUp(c.count, 256), 1, 1);
+                vkCmdDispatch(cb, divUp(nSubmit, 256), 1, 1);
                 barrier(cb);
             }
 
             // ── deterministic expansion ──────────────────────────────────────
             vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, expandPipe_);
-            pc = {c.count, 0, 0, 0, 0, 0, 0, 0};
+            pc = {nSubmit, 0, 0, 0, 0, 0, 0, 0};
             vkCmdPushConstants(cb, pipeLayout_, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(pc), &pc);
-            vkCmdDispatch(cb, divUp(c.count, 256), 1, 1);
+            vkCmdDispatch(cb, divUp(nSubmit, 256), 1, 1);
             barrier(cb);
 
             // ── size the sort from the data ──────────────────────────────────

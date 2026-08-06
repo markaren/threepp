@@ -22,13 +22,18 @@ layout(local_size_x = 256) in;
 #include "splat_common.glsl"
 
 void main() {
-    const uint i = gl_GlobalInvocationID.x;
-    if (i >= ubo.splatCount) return;
+    // dst is this splat's COMPACT index — the one every later stage uses — and
+    // i is where its data actually lives. They differ only when the frame
+    // submits a subset of the cloud (per-chunk LOD); splatSourceIndex is the
+    // identity otherwise, so the unsubmitted case is bit-for-bit unchanged.
+    const uint dst = gl_GlobalInvocationID.x;
+    if (dst >= ubo.splatCount) return;
+    const uint i = splatSourceIndex(dst);
 
     // Cull is expressed as "count 0 tiles": the prefix sum then hands this
     // splat a zero-width range and the expansion writes nothing for it.
-    counts[i] = 0u;
-    proj[i].tileCount = 0u;
+    counts[dst] = 0u;
+    proj[dst].tileCount = 0u;
 
     const vec3 meanLocal = geom[i].mean;
     const vec4 viewPos   = ubo.modelView * vec4(meanLocal, 1.0);
@@ -129,17 +134,17 @@ void main() {
 
     const float dist = -viewPos.z;
 
-    proj[i].center    = center;
-    proj[i].conic     = vec3(c, -b, a) / det;
-    proj[i].opacity   = geom[i].opacity;
-    proj[i].color     = color;
-    proj[i].viewDist  = dist;
-    proj[i].tileX0    = tx0;
-    proj[i].tileY0    = ty0;
-    proj[i].tileX1    = tx1;
-    proj[i].tileY1    = ty1;
-    proj[i].tileCount = nTiles;
-    counts[i] = nTiles;
+    proj[dst].center    = center;
+    proj[dst].conic     = vec3(c, -b, a) / det;
+    proj[dst].opacity   = geom[i].opacity;
+    proj[dst].color     = color;
+    proj[dst].viewDist  = dist;
+    proj[dst].tileX0    = tx0;
+    proj[dst].tileY0    = ty0;
+    proj[dst].tileX1    = tx1;
+    proj[dst].tileY1    = ty1;
+    proj[dst].tileCount = nTiles;
+    counts[dst] = nTiles;
 
     // Exact min/max over the VISIBLE distances, for the sort key's tail bands.
     // atomicMin/Max on the IEEE bit pattern of a positive float is a float

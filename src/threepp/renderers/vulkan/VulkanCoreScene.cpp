@@ -2311,6 +2311,24 @@ void VulkanRenderer::Impl::collectSplatClouds(Object3D& scene, Camera& camera) {
                 e.debugNonFinite = sc->debugNonFinite();
                 std::memcpy(e.model, sc->matrixWorld->elements.data(), 64);
 
+                // THREEPP_VK_SPLAT_RANGESPLIT=K submits the cloud as K
+                // contiguous ranges covering ALL of it, in order. That is the
+                // identity by construction — the compact index sequence is the
+                // original one — so it is how the range path is proved
+                // bit-for-bit against the whole-cloud path before a selection
+                // policy exists to submit anything more interesting.
+                if (const char* rs = std::getenv("THREEPP_VK_SPLAT_RANGESPLIT")) {
+
+                    const int k = std::atoi(rs);
+                    if (k > 1) {
+                        const uint32_t total = static_cast<uint32_t>(sc->splatCount());
+                        const uint32_t per   = (total + static_cast<uint32_t>(k) - 1u) /
+                                               static_cast<uint32_t>(k);
+                        for (uint32_t off = 0; off < total; off += per)
+                            e.ranges.emplace_back(off, std::min(per, total - off));
+                    }
+                }
+
                 // p1 / p99 of the view distances, from a fixed-stride sample —
                 // the same estimator, the same sample size and the same
                 // percentiles the GL path uses (SplatCloud.cpp's SORT_CLAMP_*),

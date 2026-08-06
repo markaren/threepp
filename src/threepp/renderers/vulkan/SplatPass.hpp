@@ -116,6 +116,19 @@ namespace threepp::vulkan {
             // does. The sort key's content interval — see splatDepthBucket.
             float pLo = 0.f, pHi = 0.f;
             bool  debugNonFinite = false;
+            // Partial submission for per-chunk LOD: (source offset, count) into
+            // the cloud's own splats, submitted in the order given. Empty =
+            // submit the whole cloud, which is the identity path.
+            //
+            // This is the shape per-chunk LOD needs because the two obvious
+            // alternatives measured badly: one SplatCloud per chunk costs ~1.3 ms
+            // EACH (record() runs the whole pipeline per cloud, tile walk
+            // included), and re-packing a merged buffer per selection change is a
+            // re-upload of up to 1.2 GB. Ranges keep every chunk at every level
+            // resident and uploaded once, and make the per-frame selection a
+            // handful of integers. A chunk that fails a frustum test is simply
+            // not in the list, so chunk culling is this and nothing more.
+            std::vector<std::pair<uint32_t, uint32_t>> ranges;
         };
 
         // Upload anything new, evict anything gone, grow the shared scratch to
@@ -257,6 +270,11 @@ namespace threepp::vulkan {
             float  model[16]{};
             float  pLo = 0.f, pHi = 0.f;
             bool   debugNonFinite = false;
+            // Validated copy of CloudEntry::ranges, clamped to the cloud and to
+            // kMaxRanges, plus the total they submit. submitCount == cloud->count
+            // and an empty list is the whole-cloud path.
+            std::vector<std::pair<uint32_t, uint32_t>> ranges;
+            uint32_t submitCount = 0;
         };
         std::vector<FrameCloud> frameClouds_;
         uint32_t slotsUsed_ = 0;

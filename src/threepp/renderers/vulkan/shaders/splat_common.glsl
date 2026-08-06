@@ -24,6 +24,11 @@
 // 16x16 is the 3DGS reference tile and it is also exactly one raster
 // workgroup (256 threads, one thread per pixel), so the tile loop needs no
 // pixel-to-thread mapping beyond gl_LocalInvocationID.
+// Submission ranges per cloud (per-chunk LOD). The Sanctuaire scan is ~10
+// chunks per level across 4 levels, so 64 covers "every chunk at some level"
+// with room to spare. KEEP IN SYNC with kMaxRanges in SplatPass.cpp.
+const uint kMaxRanges = 64u;
+
 const uint kTileW = 16u;
 const uint kTileH = 16u;
 const uint kTilePixels = kTileW * kTileH;
@@ -141,7 +146,38 @@ layout(set = 0, binding = 0, scalar) uniform SplatUbo {
     uint  budget;     // expanded-entry capacity
     uint  flags;      // see kSplatFlag* below
     uint  envMipCount;// mip levels in the prefiltered env (top mip = sky ambient)
+    // ── Partial submission (per-chunk LOD) ──────────────────────────────────
+    // The cloud's buffers hold every chunk at every detail level, uploaded once;
+    // a frame submits a SUBSET as a list of source ranges. splatCount above is
+    // the submitted TOTAL, so every stage after project — the scan, the sort,
+    // the raster — works on a compact [0, splatCount) index and needs no
+    // knowledge of this at all. Only project translates.
+    //
+    // Why ranges rather than one cloud per chunk: a second SplatCloud is a
+    // second run of the ENTIRE pass (clears, sizing, 8 sort rounds, a
+    // full-screen tile walk) and measures ~1.3 ms — ten chunks would be ~12 ms
+    // before drawing a splat. And why ranges rather than rebuilding a merged
+    // buffer per selection: the rebuild is a re-upload of up to 1.2 GB.
+    //
+    // rangeCount 0 = submit the whole cloud, the identity path, bit-for-bit
+    // what this pass did before ranges existed.
+    uint  rangeCount;
+    uvec2 ranges[kMaxRanges];// .x = first compact index, .y = source base
 } ubo;
+
+// Compact destination index -> source splat index. Binary search over the
+// range table's compact starts, which are ascending by construction (the host
+// builds them by accumulating counts). ~6 UBO reads at kMaxRanges = 64.
+uint splatSourceIndex(uint dst) {
+    if (ubo.rangeCount == 0u) return dst;
+    uint lo = 0u, hi = ubo.rangeCount - 1u;
+    while (lo < hi) {
+        const uint mid = (lo + hi + 1u) / 2u;
+        if (ubo.ranges[mid].x <= dst) lo = mid;
+        else                          hi = mid - 1u;
+    }
+    return ubo.ranges[lo].y + (dst - ubo.ranges[lo].x);
+}
 
 const uint kSplatFlagOrtho      = 1u;// parallel projection
 const uint kSplatFlagDebugNaN   = 2u;// paint non-finite results magenta
