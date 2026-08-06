@@ -8,6 +8,7 @@
 
 #include "threepp/objects/Group.hpp"
 #include "threepp/objects/Mesh.hpp"
+#include "threepp/objects/SplatCloud.hpp"
 #include "threepp/scenes/Scene.hpp"
 
 using namespace threepp;
@@ -20,6 +21,19 @@ namespace {
         auto object = Object3D::create();
         object->name = name;
         return object;
+    }
+
+    // Enough splats to be worth weighing (~6 MB at SH degree 0) and few enough
+    // that a test builds several without noticing. The budget tests set their
+    // limit from the measured weight rather than a hardcoded number, so the
+    // count here is free to change.
+    constexpr std::size_t kTestSplats = 50'000;
+
+    std::shared_ptr<SplatCloud> splatScan(std::size_t splats) {
+
+        SplatData data;
+        data.resize(splats, 0);
+        return SplatCloud::create(std::move(data));
     }
 
 }// namespace
@@ -274,6 +288,259 @@ TEST_CASE("insertChildAt keeps referenced children referenced", "[editor]") {
     CHECK(scene->children[2]->name == "overlay");
     // The referenced child is still owned by us alone.
     CHECK(overlay.use_count() == 1);
+}
+
+// ---------------------------------------------------------------- byte budget
+//
+// The count cap says nothing about size, and the editor's heavyweight is the
+// Gaussian-splat scan: one deleted 6M-splat cloud held for undo is 1.8 GB of
+// host memory. These pin the budget that bounds it — and, just as much, the two
+// places it deliberately refuses to bite.
+
+TEST_CASE("retainedSubtreeBytes weighs splat clouds and nothing else", "[editor]") {
+
+    auto plain = Group::create();
+    plain->add(named("child"));
+    CHECK(retainedSubtreeBytes(*plain) == 0);
+
+    auto scan = splatScan(kTestSplats);
+    const auto weight = retainedSubtreeBytes(*scan);
+
+    // The splat arrays plus the identity instanceMatrix the base class allocates
+    // and this class never uses — 64 bytes a splat that a budget has to see,
+    // since dropping the command really does free them. No GL copy in the total:
+    // nothing has rendered this cloud (that is what makes a Vulkan-only scan
+    // cheaper to hold than a drawn one).
+    const auto floorBytes = scan->data().byteSize() + scan->splatCount() * 16 * sizeof(float);
+    CHECK(weight >= floorBytes);
+    CHECK(weight < 2 * floorBytes);
+    CHECK_FALSE(scan->glResourcesBuilt());
+
+    // Found through a subtree, not just at the root.
+    auto wrapper = Group::create();
+    wrapper->add(scan);
+    CHECK(retainedSubtreeBytes(*wrapper) == weight);
+}
+
+TEST_CASE("the budget charges the history only for detached subtrees", "[editor]") {
+
+    auto scene = Scene::create();
+    auto scan = splatScan(kTestSplats);
+    const auto weight = retainedSubtreeBytes(*scan);
+    REQUIRE(weight > 0);
+
+    CommandStack stack;
+    stack.execute(std::make_unique<AddObjectCommand>(*scene, scan, "Import"));
+
+    // In the scene: co-owned, so the history is not what keeps it alive.
+    CHECK(stack.retainedBytes() == 0);
+
+    REQUIRE(stack.undo());
+    CHECK(stack.retainedBytes() == weight);
+
+    REQUIRE(stack.redo());
+    CHECK(stack.retainedBytes() == 0);
+}
+
+TEST_CASE("one subtree held by two commands is counted once", "[editor]") {
+
+    auto scene = Scene::create();
+    auto scan = splatScan(kTestSplats);
+    const auto weight = retainedSubtreeBytes(*scan);
+
+    CommandStack stack;
+    stack.execute(std::make_unique<AddObjectCommand>(*scene, scan, "Import"));
+    stack.execute(std::make_unique<RemoveObjectCommand>(*scan, "Delete"));
+
+    // Both commands hold the same detached cloud now. Summing per command would
+    // report double the memory that dropping either would free.
+    CHECK(stack.retainedBytes() == weight);
+}
+
+TEST_CASE("the byte budget evicts the oldest deletion that no longer fits", "[editor]") {
+
+    auto scene = Scene::create();
+    auto first = splatScan(kTestSplats);
+    auto second = splatScan(kTestSplats);
+    scene->add(first);
+    scene->add(second);
+
+    const auto weight = retainedSubtreeBytes(*first);
+    CommandStack stack(CommandStack::defaultLimit, weight + weight / 2);
+
+    std::vector<std::string> prunedNames;
+    std::size_t prunedBytes = 0;
+    stack.onPrune([&](const std::vector<std::string>& dropped, std::size_t bytes) {
+        prunedNames.insert(prunedNames.end(), dropped.begin(), dropped.end());
+        prunedBytes += bytes;
+    });
+
+    stack.execute(std::make_unique<RemoveObjectCommand>(*first, "Delete First"));
+    REQUIRE(stack.retainedBytes() == weight);
+    REQUIRE(prunedNames.empty());
+
+    stack.execute(std::make_unique<RemoveObjectCommand>(*second, "Delete Second"));
+
+    CHECK(stack.undoCount() == 1);
+    CHECK(stack.undoName() == "Delete Second");
+    CHECK(stack.retainedBytes() == weight);
+    // Named, not counted: the user has to be told which undo left.
+    CHECK(prunedNames == std::vector<std::string>{"Delete First"});
+    CHECK(prunedBytes == weight);
+    // Really let go: this test's own pointer is the last owner of the first scan.
+    CHECK(first.use_count() == 1);
+}
+
+TEST_CASE("the newest undo entry survives a budget it cannot fit", "[editor]") {
+
+    auto scene = Scene::create();
+    auto scan = splatScan(kTestSplats);
+    scene->add(scan);
+
+    CommandStack stack(CommandStack::defaultLimit, 1);
+    stack.execute(std::make_unique<RemoveObjectCommand>(*scan, "Delete"));
+
+    // Over budget by design: a deletion the budget cannot hold is still a
+    // deletion the user must be able to take back.
+    CHECK(stack.undoCount() == 1);
+    CHECK(stack.retainedBytes() == retainedSubtreeBytes(*scan));
+
+    REQUIRE(stack.undo());
+    CHECK(scan->parent == scene.get());
+    CHECK(stack.retainedBytes() == 0);
+}
+
+TEST_CASE("a held deletion survives unrelated edits pushed after it", "[editor]") {
+
+    // Protecting only the NEWEST entry would keep this promise for exactly one
+    // push: move a box after deleting a scan the budget cannot hold, and the
+    // deletion becomes the second-newest entry and therefore droppable — the undo
+    // would vanish while the user was looking somewhere else. What is protected is
+    // the newest entry still HOLDING something, and everything newer than it.
+    auto scene = Scene::create();
+    auto scan = splatScan(kTestSplats);
+    auto box = named("box");
+    scene->add(scan);
+    scene->add(box);
+    auto* raw = box.get();
+
+    CommandStack stack(CommandStack::defaultLimit, 1);
+    stack.execute(std::make_unique<RemoveObjectCommand>(*scan, "Delete Scan"));
+    REQUIRE(stack.undoCount() == 1);
+
+    for (int i = 0; i < 5; ++i) {
+        stack.execute(makeProperty<std::string>(
+                "Rename", {}, [raw](const std::string& v) { raw->name = v; }, "box", "renamed"));
+    }
+
+    CHECK(stack.undoCount() == 6);
+    CHECK(stack.retainedBytes() > stack.byteLimit());// exceeded, not truncated
+
+    // And the deletion is genuinely still there to undo.
+    for (int i = 0; i < 5; ++i) REQUIRE(stack.undo());
+    CHECK(stack.undoName() == "Delete Scan");
+    REQUIRE(stack.undo());
+    CHECK(scan->parent == scene.get());
+}
+
+TEST_CASE("the count cap reports a dropped entry that was holding memory", "[editor]") {
+
+    // The byte budget is not the only thing that can drop a held scan — a session
+    // long enough to hit the 200-command cap does it too, and owes the same
+    // notice rather than silently losing a multi-gigabyte undo.
+    auto scene = Scene::create();
+    auto scan = splatScan(kTestSplats);
+    scene->add(scan);
+    auto box = named("box");
+    scene->add(box);
+    auto* raw = box.get();
+
+    CommandStack stack(/*limit*/ 2);
+    std::vector<std::string> prunedNames;
+    std::size_t prunedBytes = 0;
+    stack.onPrune([&](const std::vector<std::string>& dropped, std::size_t bytes) {
+        prunedNames.insert(prunedNames.end(), dropped.begin(), dropped.end());
+        prunedBytes += bytes;
+    });
+
+    stack.execute(std::make_unique<RemoveObjectCommand>(*scan, "Delete Scan"));
+    const auto weight = stack.retainedBytes();
+    REQUIRE(weight > 0);
+
+    // Two more edits: the cap is 2, so the deletion falls off the bottom.
+    for (int i = 0; i < 2; ++i) {
+        stack.execute(makeProperty<std::string>(
+                "Rename", {}, [raw](const std::string& v) { raw->name = v; }, "box", "renamed"));
+    }
+
+    CHECK(stack.undoCount() == 2);
+    CHECK(prunedNames == std::vector<std::string>{"Delete Scan"});
+    CHECK(prunedBytes == weight);
+    CHECK(stack.retainedBytes() == 0);
+    CHECK(scan.use_count() == 1);
+}
+
+TEST_CASE("the redo branch is relieved before the undo history", "[editor]") {
+
+    auto scene = Scene::create();
+    auto kept = splatScan(kTestSplats);
+    auto added = splatScan(kTestSplats);
+    scene->add(kept);
+
+    const auto weight = retainedSubtreeBytes(*kept);
+    CommandStack stack(CommandStack::defaultLimit, weight + weight / 2);
+
+    // An applied deletion below, an undone import above: the one arrangement
+    // where both stacks hold a detached scan at the same time.
+    stack.execute(std::make_unique<RemoveObjectCommand>(*kept, "Delete Kept"));
+    stack.execute(std::make_unique<AddObjectCommand>(*scene, added, "Import"));
+    REQUIRE(stack.undoCount() == 2);
+
+    REQUIRE(stack.undo());
+
+    // Two scans do not fit. The speculative future pays, not the history.
+    CHECK(stack.undoCount() == 1);
+    CHECK(stack.undoName() == "Delete Kept");
+    CHECK_FALSE(stack.canRedo());
+    CHECK(stack.retainedBytes() == weight);
+    CHECK(added.use_count() == 1);
+}
+
+TEST_CASE("lowering the byte limit prunes on the spot", "[editor]") {
+
+    auto scene = Scene::create();
+    auto first = splatScan(kTestSplats);
+    auto second = splatScan(kTestSplats);
+    scene->add(first);
+    scene->add(second);
+
+    CommandStack stack;
+    stack.execute(std::make_unique<RemoveObjectCommand>(*first, "Delete First"));
+    stack.execute(std::make_unique<RemoveObjectCommand>(*second, "Delete Second"));
+    REQUIRE(stack.undoCount() == 2);
+
+    const auto weight = retainedSubtreeBytes(*second);
+    stack.setByteLimit(weight + weight / 2);
+
+    CHECK(stack.undoCount() == 1);
+    CHECK(first.use_count() == 1);
+}
+
+TEST_CASE("an ordinary editing session retains nothing", "[editor]") {
+
+    auto scene = Scene::create();
+    auto object = named("a");
+    scene->add(object);
+    auto* raw = object.get();
+
+    CommandStack stack;
+    for (int i = 0; i < 50; ++i) {
+        stack.execute(makeProperty<std::string>(
+                "Rename", {}, [raw](const std::string& v) { raw->name = v; }, "a", "b"));
+    }
+
+    CHECK(stack.retainedBytes() == 0);
+    CHECK(stack.undoCount() == 50);
 }
 
 TEST_CASE("Selection notifies only on change", "[editor]") {

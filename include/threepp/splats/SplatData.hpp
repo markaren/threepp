@@ -80,6 +80,27 @@ namespace threepp {
             return splats::shCoeffCount(shDegree);
         }
 
+        // Bytes the arrays hold. Reported from capacity() rather than size():
+        // a loader that reserved for the file's splat count and then dropped
+        // outliers is still holding the memory it reserved, and this number
+        // exists to be budgeted against, not to look tidy.
+        //
+        // `sh` dominates and by a lot — at degree 3 it is 192 of the 236 bytes a
+        // splat costs, which is why the loaders offer a degree cap at all.
+        [[nodiscard]] std::size_t byteSize() const {
+
+            std::size_t bytes = means.capacity() * sizeof(Vector3) +
+                                scales.capacity() * sizeof(Vector3) +
+                                rotations.capacity() * sizeof(Quaternion) +
+                                opacities.capacity() * sizeof(float) +
+                                sh.capacity() * sizeof(float);
+
+            for (const auto& [name, values] : extras) {
+                bytes += name.capacity() + values.capacity() * sizeof(float);
+            }
+            return bytes;
+        }
+
         // Sizes every array for `n` splats at `degree`, zero-filled. Rotations
         // become identity, so a partially-filled cloud is still renderable.
         void resize(size_t n, int degree);

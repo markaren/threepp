@@ -642,6 +642,45 @@ void SplatCloud::buildTextures() {
     // Their defaults live in the constructor, before any setter can run.
 }
 
+std::size_t SplatCloud::cpuBytes() const {
+
+    std::size_t bytes = sizeof(*this) + data_.byteSize();
+
+    // The base class allocates 16 floats per instance in its constructor and
+    // this class never writes anything but identity into them. 64 bytes a splat
+    // of dead weight — 384 MB at 6M — and unavoidable without either an
+    // InstancedMesh that can decline the buffer or a SplatCloud that stops
+    // deriving from one. Counted because it is really held, not because it
+    // should be.
+    if (const auto* matrices = instanceMatrix()) bytes += matrices->byteLength();
+
+    // The sorted index, which the constructor allocates because the renderer
+    // needs the attribute to exist before it walks the scene, and the
+    // counting-sort scratch, which it allocates alongside. 18 bytes a splat.
+    if (const auto* colors = instanceColor()) bytes += colors->byteLength();
+
+    bytes += depths_.capacity() * sizeof(float) +
+             sample_.capacity() * sizeof(float) +
+             keys_.capacity() * sizeof(std::uint16_t) +
+             histogram_.capacity() * sizeof(std::uint32_t);
+
+    // The data textures, on the other hand, appear only once a GL frame has drawn
+    // this cloud (see ensureGlResources): 176 bytes a splat at SH degree 3 that a
+    // cloud the Vulkan backend alone has drawn never allocates, which is the whole
+    // point of lazy.
+    for (const auto* texture : {meanTexture_.get(), covTexture_.get(), shTexture_.get()}) {
+        if (texture) bytes += texture->image().byteSize();
+    }
+
+    bytes += lodTable_.levels.capacity() * sizeof(splats::LodLevel);
+    for (const auto& level : lodTable_.levels) {
+        bytes += level.chunks.capacity() * sizeof(splats::LodChunk);
+    }
+    bytes += submitRanges_.capacity() * sizeof(std::pair<std::uint32_t, std::uint32_t>);
+
+    return bytes;
+}
+
 void SplatCloud::setViewportSize(int width, int height) {
 
     splatMaterial_->uniforms["splatViewport"].setValue(

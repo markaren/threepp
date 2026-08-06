@@ -156,6 +156,14 @@ void AddObjectCommand::undo() {
     object_->removeFromParent();
 }
 
+void AddObjectCommand::retainedRoots(std::vector<Object3D*>& out) const {
+
+    // Held whether the add is applied or undone; the stack charges it to the
+    // history only in the undone state, where the object is out of the scene and
+    // this shared_ptr is the last thing keeping it alive.
+    if (object_) out.push_back(object_.get());
+}
+
 bool AddObjectCommand::rebind(Object3D& root) {
 
     auto* parent = findByUuid(root, parentUuid_);
@@ -206,6 +214,14 @@ void RemoveObjectCommand::undo() {
     } else {
         parent_->addRef(*raw_);
     }
+}
+
+void RemoveObjectCommand::retainedRoots(std::vector<Object3D*>& out) const {
+
+    // Non-null exactly while the deletion stands (redo() takes ownership, undo()
+    // hands it back), which is precisely when the deleted subtree's memory is
+    // the history's to account for.
+    if (object_) out.push_back(object_.get());
 }
 
 bool RemoveObjectCommand::rebind(Object3D& root) {
@@ -297,6 +313,15 @@ void ReparentCommand::undo() {
     object_->scale.copy(oldScale_);
     object_->updateMatrix();
     object_->matrixWorldNeedsUpdate = true;
+}
+
+void ReparentCommand::retainedRoots(std::vector<Object3D*>& out) const {
+
+    // Only ever held while the subtree sits under its new parent, so this
+    // normally costs the history nothing — reported anyway rather than assumed,
+    // since a reparent under a subtree that is ITSELF detached is exactly the
+    // case an assumption would get wrong.
+    if (owned_) out.push_back(owned_.get());
 }
 
 bool ReparentCommand::rebind(Object3D& root) {

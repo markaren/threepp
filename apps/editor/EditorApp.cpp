@@ -78,6 +78,7 @@
 #include <cstdlib>// std::getenv (THREEPP_BENCH_VSYNC)
 #include <cstring>
 #include <fstream>
+#include <iomanip>
 #include <iostream>
 #include <sstream>
 
@@ -562,6 +563,25 @@ EditorApp::EditorApp(const Options& options)
             });
             if (found) selectObject(found);
         }
+    });
+
+    // A dropped undo entry is a promise withdrawn, so say WHICH one out loud. The
+    // budget only ever bites on splat scans, where one deletion held in history is
+    // a couple of gigabytes of host memory.
+    commands_.onPrune([this](const std::vector<std::string>& dropped, std::size_t bytesFreed) {
+        constexpr double gib = 1024.0 * 1024.0 * 1024.0;
+        constexpr std::size_t named = 3;// enough to be specific, short enough to read
+
+        std::ostringstream message;
+        message << "undo history: dropped ";
+        for (std::size_t i = 0; i < std::min(named, dropped.size()); ++i) {
+            message << (i ? ", " : "") << '"' << dropped[i] << '"';
+        }
+        if (dropped.size() > named) message << " and " << (dropped.size() - named) << " more";
+        message << std::fixed << std::setprecision(2)
+                << " to free " << static_cast<double>(bytesFreed) / gib << " GiB (budget "
+                << static_cast<double>(commands_.byteLimit()) / gib << " GiB)";
+        log(message.str());
     });
 
     // Undoing an "Add" deletes the object it created, and undoing a paste or a
@@ -2176,6 +2196,15 @@ namespace {
         // Never merged: two regenerates are two distinct generations of content,
         // and collapsing them would drop the middle one's output on the floor.
         bool mergeWith(const Command&) override { return false; }
+
+        // Both generations are held; whichever one is currently out of the scene
+        // is the one the history is paying for. After a play-stop swap that can be
+        // both, since the dead graph detached everything on its way out.
+        void retainedRoots(std::vector<Object3D*>& out) const override {
+
+            if (previous_) out.push_back(previous_.get());
+            if (next_) out.push_back(next_.get());
+        }
 
         [[nodiscard]] bool rebind(Object3D& root) override {
 

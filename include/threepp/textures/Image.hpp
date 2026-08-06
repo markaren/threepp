@@ -2,8 +2,10 @@
 #ifndef THREEPP_IMAGE_HPP
 #define THREEPP_IMAGE_HPP
 
+#include <cstddef>
 #include <cstdint>
 #include <optional>
+#include <type_traits>
 #include <utility>
 #include <variant>
 #include <vector>
@@ -49,6 +51,16 @@ namespace threepp {
 
         [[nodiscard]] bool isHalfFloat() const noexcept {
             return std::holds_alternative<std::vector<std::uint16_t>>(data_);
+        }
+
+        // Bytes the pixel buffer holds, whichever CPU type it is. Textures are
+        // usually too small to be worth weighing; a splat cloud's SH texture is
+        // hundreds of megabytes, and a memory budget cannot weigh what it has
+        // no way to measure.
+        [[nodiscard]] std::size_t byteSize() const noexcept {
+            return std::visit([](const auto& v) {
+                return v.size() * sizeof(typename std::decay_t<decltype(v)>::value_type);
+            }, data_);
         }
 
         [[nodiscard]] int channels() const noexcept {

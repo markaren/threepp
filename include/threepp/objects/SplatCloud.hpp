@@ -119,6 +119,29 @@ namespace threepp {
         // "a Vulkan-only cloud never pays the GL copy" (see ensureGlResources).
         [[nodiscard]] bool glResourcesBuilt() const { return glResourcesBuilt_; }
 
+        // Host memory this cloud holds, in bytes: the splat data, the sorted index
+        // and sort scratch, the identity instanceMatrix the base class allocates
+        // whether the splat shader reads it or not, and — only once a GL frame has
+        // built them — the data textures. GPU-side residency is the backend's own
+        // and not counted here.
+        //
+        // Exists because something has to be able to ask. A scan is three orders of
+        // magnitude heavier than any mesh in the same scene, so anything that holds
+        // clouds and has a budget (the editor's undo history is the first) has to
+        // weigh them rather than count them.
+        //
+        // Measured per splat at SH degree 3, which is 606 B in total:
+        //
+        //   348  splat data — of which 128 is the rotation quaternion's
+        //        change-notification plumbing, four float_views and a std::function
+        //        where 16 bytes of quaternion would do
+        //    64  instanceMatrix, identity and never read by the splat shader
+        //    18  sorted index and counting-sort scratch
+        //   176  the data textures, and only after a GL frame
+        //
+        // So 2.4 GiB for a 6M-splat scan on Vulkan, 3.4 GiB once GL has drawn it.
+        [[nodiscard]] std::size_t cpuBytes() const;
+
         // ── Partial submission: which splats this frame actually draws ────────
         // A list of (offset, count) into this cloud's own splats. Empty — the
         // default — draws all of them.

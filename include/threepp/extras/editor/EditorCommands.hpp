@@ -174,6 +174,7 @@ namespace threepp::editor {
         [[nodiscard]] std::string name() const override { return label_; }
         bool mergeWith(const Command&) override { return false; }
         [[nodiscard]] bool rebind(Object3D& root) override;
+        void retainedRoots(std::vector<Object3D*>& out) const override;
 
         [[nodiscard]] Object3D* object() const { return object_.get(); }
 
@@ -199,6 +200,7 @@ namespace threepp::editor {
         [[nodiscard]] std::string name() const override { return label_; }
         bool mergeWith(const Command&) override { return false; }
         [[nodiscard]] bool rebind(Object3D& root) override;
+        void retainedRoots(std::vector<Object3D*>& out) const override;
 
         [[nodiscard]] Object3D* object() const { return raw_; }
         // Checked before execution: object_ (the retained ownership) is only
@@ -228,6 +230,7 @@ namespace threepp::editor {
         [[nodiscard]] std::string name() const override { return label_; }
         bool mergeWith(const Command&) override { return false; }
         [[nodiscard]] bool rebind(Object3D& root) override;
+        void retainedRoots(std::vector<Object3D*>& out) const override;
 
         // False when the move is impossible (no parent, or the target is a
         // descendant of the object). Callers must not push an invalid command.
