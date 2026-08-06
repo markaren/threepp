@@ -356,7 +356,96 @@ set(privateHeaders
         "threepp/loaders/xacro/YamlLite.hpp"
 )
 
+# libwebp v1.6.0, decoder subset — exactly upstream's own `webpdecoder` target, compiled
+# straight into threepp the way meshoptimizer and pugixml are. Upstream's CMake is not used:
+# add_subdirectory would bring install rules, pkg-config generation and package exports with
+# it. Provenance and the manifest these names come from: external/libwebp/README.threepp.md.
+set(libwebpSources
+
+        "external/libwebp/src/dec/alpha_dec.c"
+        "external/libwebp/src/dec/buffer_dec.c"
+        "external/libwebp/src/dec/frame_dec.c"
+        "external/libwebp/src/dec/idec_dec.c"
+        "external/libwebp/src/dec/io_dec.c"
+        "external/libwebp/src/dec/quant_dec.c"
+        "external/libwebp/src/dec/tree_dec.c"
+        "external/libwebp/src/dec/vp8_dec.c"
+        "external/libwebp/src/dec/vp8l_dec.c"
+        "external/libwebp/src/dec/webp_dec.c"
+
+        # The SIMD kernels are all listed unconditionally: each one is wrapped in its own
+        # WEBP_USE_<arch> guard and compiles to nothing off-target, and libwebp picks between
+        # them at runtime. No per-file -msse4.1/-mavx2 here — without those flags the SSE4.1
+        # and AVX2 kernels self-disable and dispatch falls back, which is the intended
+        # degradation rather than a build error.
+        "external/libwebp/src/dsp/alpha_processing.c"
+        "external/libwebp/src/dsp/alpha_processing_mips_dsp_r2.c"
+        "external/libwebp/src/dsp/alpha_processing_neon.c"
+        "external/libwebp/src/dsp/alpha_processing_sse2.c"
+        "external/libwebp/src/dsp/alpha_processing_sse41.c"
+        "external/libwebp/src/dsp/cpu.c"
+        "external/libwebp/src/dsp/dec.c"
+        "external/libwebp/src/dsp/dec_clip_tables.c"
+        "external/libwebp/src/dsp/dec_mips32.c"
+        "external/libwebp/src/dsp/dec_mips_dsp_r2.c"
+        "external/libwebp/src/dsp/dec_msa.c"
+        "external/libwebp/src/dsp/dec_neon.c"
+        "external/libwebp/src/dsp/dec_sse2.c"
+        "external/libwebp/src/dsp/dec_sse41.c"
+        "external/libwebp/src/dsp/filters.c"
+        "external/libwebp/src/dsp/filters_mips_dsp_r2.c"
+        "external/libwebp/src/dsp/filters_msa.c"
+        "external/libwebp/src/dsp/filters_neon.c"
+        "external/libwebp/src/dsp/filters_sse2.c"
+        "external/libwebp/src/dsp/lossless.c"
+        "external/libwebp/src/dsp/lossless_avx2.c"
+        "external/libwebp/src/dsp/lossless_mips_dsp_r2.c"
+        "external/libwebp/src/dsp/lossless_msa.c"
+        "external/libwebp/src/dsp/lossless_neon.c"
+        "external/libwebp/src/dsp/lossless_sse2.c"
+        "external/libwebp/src/dsp/lossless_sse41.c"
+        "external/libwebp/src/dsp/rescaler.c"
+        "external/libwebp/src/dsp/rescaler_mips32.c"
+        "external/libwebp/src/dsp/rescaler_mips_dsp_r2.c"
+        "external/libwebp/src/dsp/rescaler_msa.c"
+        "external/libwebp/src/dsp/rescaler_neon.c"
+        "external/libwebp/src/dsp/rescaler_sse2.c"
+        "external/libwebp/src/dsp/upsampling.c"
+        "external/libwebp/src/dsp/upsampling_mips_dsp_r2.c"
+        "external/libwebp/src/dsp/upsampling_msa.c"
+        "external/libwebp/src/dsp/upsampling_neon.c"
+        "external/libwebp/src/dsp/upsampling_sse2.c"
+        "external/libwebp/src/dsp/upsampling_sse41.c"
+        "external/libwebp/src/dsp/yuv.c"
+        "external/libwebp/src/dsp/yuv_mips32.c"
+        "external/libwebp/src/dsp/yuv_mips_dsp_r2.c"
+        "external/libwebp/src/dsp/yuv_neon.c"
+        "external/libwebp/src/dsp/yuv_sse2.c"
+        "external/libwebp/src/dsp/yuv_sse41.c"
+
+        "external/libwebp/src/utils/bit_reader_utils.c"
+        "external/libwebp/src/utils/color_cache_utils.c"
+        "external/libwebp/src/utils/filters_utils.c"
+        "external/libwebp/src/utils/huffman_utils.c"
+        "external/libwebp/src/utils/palette.c"
+        "external/libwebp/src/utils/quant_levels_dec_utils.c"
+        "external/libwebp/src/utils/random_utils.c"
+        "external/libwebp/src/utils/rescaler_utils.c"
+        "external/libwebp/src/utils/thread_utils.c"
+        "external/libwebp/src/utils/utils.c"
+)
+
+# Upstream's C is not ours to keep warning-clean, and THREEPP_TREAT_WARNINGS_AS_ERRORS would
+# otherwise let one of its diagnostics fail the whole build.
+if (CMAKE_C_COMPILER_ID STREQUAL "GNU" OR CMAKE_C_COMPILER_ID STREQUAL "Clang")
+    set_source_files_properties(${libwebpSources} PROPERTIES COMPILE_OPTIONS "-w")
+elseif (CMAKE_C_COMPILER_ID STREQUAL "MSVC")
+    set_source_files_properties(${libwebpSources} PROPERTIES COMPILE_OPTIONS "/w")
+endif ()
+
 set(sources
+
+        ${libwebpSources}
 
         "external/pugixml/pugixml.cpp"
         "external/meshoptimizer/allocator.cpp"
@@ -867,6 +956,18 @@ target_include_directories(threepp
         "${CMAKE_CURRENT_SOURCE_DIR}/external/stb"
         "${CMAKE_CURRENT_SOURCE_DIR}/external/pugixml"
         "${CMAKE_CURRENT_SOURCE_DIR}/external/meshoptimizer"
+)
+
+# libwebp's internal includes are rooted at its package directory — vp8l_dec.c asks for
+# "src/dec/vp8li_dec.h", not "vp8li_dec.h" — so the package directory itself goes on the
+# include path, and BEFORE everything else so that no other root can answer a "src/..." query
+# first. BEFORE has to precede the scope keyword: `PRIVATE BEFORE` parses BEFORE as a
+# directory name and appends instead of prepending.
+# The nested "src" entry is for the public header, which ImageLoader.cpp includes the way an
+# outside consumer would, as "webp/decode.h".
+target_include_directories(threepp BEFORE PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/external/libwebp"
+        "${CMAKE_CURRENT_SOURCE_DIR}/external/libwebp/src"
 )
 
 if (THREEPP_WITH_AUDIO)

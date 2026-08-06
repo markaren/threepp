@@ -102,6 +102,7 @@ consuming threepp as a library does not link it.
 | [glad](src/external/glad) (generated GL loader) | generated code, no restrictions; generator MIT © David Herberth | — | `glad.h` header states the generator |
 | [khrplatform.h](src/external/glad/KHR/khrplatform.h) | MIT-style (Khronos) | © 2008-2018 The Khronos Group Inc. | file header |
 | [GLFW](src/external/glfw) | zlib/libpng | © 2002-2006 Marcus Geelnard, © 2006-2019 Camilla Löwy | [LICENSE.md](src/external/glfw/LICENSE.md); its `deps/` files carry their own notices |
+| [libwebp](src/external/libwebp) v1.6.0 — *decoder subset* (WebP support in `ImageLoader`; no encoder, mux/demux or sharpyuv) | BSD-3-Clause **+ WebM patent grant** | © Google LLC / the WebM Project authors | [COPYING](src/external/libwebp/COPYING) **and** [PATENTS](src/external/libwebp/PATENTS) — the patent grant is a separate file and travels with the license, not instead of it; [README.threepp.md](src/external/libwebp/README.threepp.md) records the exact tag and what was stripped |
 | [meshoptimizer](src/external/meshoptimizer/meshoptimizer.h) | MIT | © 2016-2026 Arseny Kapoulkine | end of file |
 | [miniaudio](src/external/miniaudio/miniaudio.h) | your choice of public domain or MIT No Attribution | © 2023 David Reid | end of file |
 | [nlohmann/json](src/external/nlohmann/nlohmann/json.hpp) | MIT | © 2013-2023 Niels Lohmann | file header (SPDX) |
