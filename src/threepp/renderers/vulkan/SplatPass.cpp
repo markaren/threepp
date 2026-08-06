@@ -234,7 +234,16 @@ namespace threepp::vulkan {
         bnd[14].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
         bnd[15].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
         bnd[16].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
-        bnd[17].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+        // COMBINED, because the shader SAMPLES it (usampler2D gbufIds in
+        // splat_common.glsl) and the write at w[17] says so too. This was
+        // STORAGE_IMAGE from the day the V2 depth-test work added the binding —
+        // a shader/layout type mismatch the validation layer flags at pipeline
+        // creation (VUID 07990) and every writeSets (VUID 00319), and which the
+        // NVIDIA driver TOLERATED most of the time: same-offset access
+        // violations inside the ICD, on real scans, at unpredictable moments,
+        // were this bug being tolerated less. Undefined behavior that mostly
+        // works is worse than a crash on frame one.
+        bnd[17].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
         bnd[18].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;// fog
         bnd[19].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;// clouds
         bnd[20].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;// lights (ambient + suns)
@@ -509,6 +518,15 @@ namespace threepp::vulkan {
         }
     }
 
+    void SplatPass::setEnvironment(VkImageView view, VkSampler sampler, uint32_t mips) {
+        if (view == VK_NULL_HANDLE) return;// nothing to point at yet
+        if (view == envView_ && sampler == envSampler_) return;
+        envView_    = view;
+        envSampler_ = sampler;
+        envMips_    = std::max(mips, 1u);
+        envDirty_   = true;
+    }
+
     void SplatPass::retireStale() {
         for (auto it = resident_.begin(); it != resident_.end();) {
             if (it->second->lastSeen + framesInFlight_ + 1 <= syncSerial_) {
@@ -534,7 +552,9 @@ namespace threepp::vulkan {
         // reallocate shared scratch and rewrite descriptor sets that other
         // frames may still be reading, so the device is drained first. This is
         // the one stall in the pass and it happens on asset load, not per frame.
-        bool structural = false;
+        // A replaced environment means every resident set holds a dead view;
+        // the rewrite needs the same waitIdle a new upload does.
+        bool structural = envDirty_;
         uint32_t needSplats = maxSplats_;
         for (const auto& e : clouds) {
             if (!e.cloud) continue;
@@ -665,6 +685,7 @@ namespace threepp::vulkan {
                 }
             }
             for (auto& kv : resident_) writeSets(*kv.second);
+            envDirty_ = false;// every set now points at the live environment
         }
 
         // Opt-in invariant report. The two numbers that matter are structural,

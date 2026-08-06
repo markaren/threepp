@@ -131,6 +131,16 @@ namespace threepp::vulkan {
             std::vector<std::pair<uint32_t, uint32_t>> ranges;
         };
 
+        // The CURRENT prefiltered environment, pushed every frame before
+        // syncClouds. resize() also carries it, but resize() runs on swapchain
+        // lifecycle — an environment REBUILT between resizes (scene switch, sky
+        // change) destroys the view this pass cached, and the next cloud upload
+        // then writes a dangling handle into its descriptor sets
+        // (VUID-VkWriteDescriptorSet-descriptorType-02996, and a driver-level
+        // access violation when sampled). A change marks the sets dirty;
+        // syncClouds treats that as structural and rewrites them post-idle.
+        void setEnvironment(VkImageView view, VkSampler sampler, uint32_t mips);
+
         // Upload anything new, evict anything gone, grow the shared scratch to
         // fit the largest resident cloud. Runs OUTSIDE command recording (the
         // staging copy is a one-shot submit), so it may allocate freely.
@@ -353,6 +363,7 @@ namespace threepp::vulkan {
         std::vector<VkImage>     motionImages_;
         std::vector<VkBuffer>    fogUbos_, cloudUbos_, lightsUbos_;
         VkImageView envView_    = VK_NULL_HANDLE;
+        bool        envDirty_   = false;// sets hold a dead env view; rewrite post-idle
         VkSampler   envSampler_ = VK_NULL_HANDLE;
         uint32_t    envMips_    = 1;
 

@@ -2389,6 +2389,11 @@ void VulkanRenderer::Impl::collectSplatClouds(Object3D& scene, Camera& camera) {
                 lastVisibleSplats_.push_back(e);
             });
 
+            // The CURRENT env view, every frame: resize() also hands it over,
+            // but resize() runs on swapchain lifecycle and the environment can
+            // be rebuilt between resizes — the pass would then write the DEAD
+            // view into fresh descriptor sets at the next cloud upload.
+            splat_->setEnvironment(envImage.view, envImage.sampler, envImage.mipLevels);
             splat_->syncClouds(lastVisibleSplats_);
         }
 
