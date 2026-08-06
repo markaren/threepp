@@ -340,7 +340,7 @@ namespace splattest {
             // Quaternion is (x, y, z, w) — permute here, and only here. Get it
             // wrong and the result is still exactly unit length and still
             // passes validate(), which is why this is the one worth staring at.
-            const Quaternion& r = data.rotations[i];
+            const SplatQuat& r = data.rotations[i];
             double q[4] = {r.w, r.x, r.y, r.z};
 
             const double len = std::sqrt(q[0] * q[0] + q[1] * q[1] + q[2] * q[2] + q[3] * q[3]);

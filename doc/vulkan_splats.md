@@ -247,6 +247,37 @@ buffer is assembled from the selected per-chunk levels, which also removes the
 inter-cloud compositing-order worry. And `kMaxClouds = 8` is not a limit anyone
 should want to raise: eight clouds is already 16 ms.
 
+## Host memory per splat (measured 2026-08-07)
+
+`SplatData::byteSize()`, over a generated cloud at each SH degree:
+
+| SH degree | 0 | 1 | 2 | 3 |
+|---|---|---|---|---|
+| before | 168 B | 204 B | 264 B | 348 B |
+| **now** | **56 B** | **92 B** | **152 B** | **236 B** |
+
+The difference is one field. `rotations` was a `std::vector<Quaternion>`, and
+`sizeof(Quaternion)` is **128**, not 16: its four components are `float_view`
+(a float plus a pointer to the owner's change callback, 16 bytes each) and it
+carries a `std::function<void()>` besides. 112 bytes a splat of notification
+machinery that the splat path never subscribes to — rotations are written once
+by a loader and read by `computeCovariance` — which is 672 MB on a 6M-splat
+scan, on **both** backends, before any renderer exists, since the data is loaded
+first. That is more than the ~1 GB GL-side copy that lazy GL resources went
+after, for a fraction of the change. `SplatQuat` (four plain floats, in
+`SplatData.hpp`) is the fix, with a `static_assert` on its size so it stays one.
+
+**What is still on the table: 64 bytes a splat of identity matrices.** A
+`SplatCloud` derives from `InstancedMesh`, whose constructor allocates 16 floats
+of `instanceMatrix` per instance; the splat path never writes anything but
+identity into them, because a splat's placement is its mean and its covariance,
+not a transform. 384 MB at 6M, counted honestly by `SplatCloud::cpuBytes()`
+because it really is held. Recovering it needs one of two structural changes —
+an `InstancedMesh` that can decline the buffer, or a `SplatCloud` that stops
+deriving from one — and neither is a local edit, which is why the number is
+documented here rather than fixed. Note the ratio it implies: at SH degree 0 the
+dead instance matrices now outweigh the entire splat payload.
+
 ## V3 — the perf checklist
 
 Not implemented. Ordered by measured or estimated value.

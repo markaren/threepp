@@ -49,7 +49,7 @@ void SplatData::resize(size_t n, int degree) {
 
     means.assign(n, Vector3{});
     scales.assign(n, Vector3{});
-    rotations.assign(n, Quaternion{});
+    rotations.assign(n, SplatQuat{});
     opacities.assign(n, 0.f);
     sh.assign(n * static_cast<size_t>(coeffCount()) * 3, 0.f);
 }
@@ -452,8 +452,8 @@ SplatData SplatGenerator::generate(const Options& options) {
 
         // Uniform-ish random orientation, then optionally de-normalised so the
         // consumer has to deal with it.
-        Quaternion q(rng.range(-1.f, 1.f), rng.range(-1.f, 1.f),
-                     rng.range(-1.f, 1.f), rng.range(-1.f, 1.f));
+        SplatQuat q(rng.range(-1.f, 1.f), rng.range(-1.f, 1.f),
+                    rng.range(-1.f, 1.f), rng.range(-1.f, 1.f));
         if (q.lengthSq() <= 1e-12f) q.set(0.f, 0.f, 0.f, 1.f);
         q.normalize();
         if (options.unnormalizedRotations) {

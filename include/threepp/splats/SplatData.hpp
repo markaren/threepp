@@ -10,7 +10,8 @@
 //
 //   mean      local-space centre of the Gaussian
 //   scale     LINEAR and non-negative (importers apply exp() to log-scale)
-//   rotation  unit quaternion, threepp order (x, y, z, w)
+//   rotation  unit quaternion, threepp order (x, y, z, w) — stored as
+//             SplatQuat, four plain floats, for the reason given there
 //   opacity   [0, 1] (importers apply sigmoid() to logits)
 //   sh        radiance, float3 per coefficient, degrees 0-3
 //
@@ -51,15 +52,119 @@ namespace threepp {
 
     }// namespace splats
 
+    // A splat rotation: four plain floats in threepp order (x, y, z, w),
+    // default identity.
+    //
+    // NOT threepp::Quaternion, and the reason is arithmetic. Quaternion's four
+    // components are float_view — a float plus a pointer to the owner's change
+    // callback, 16 bytes each — and it carries a std::function<void()> member
+    // besides, so it spends 128 bytes to hold 16 bytes of rotation. In a
+    // per-splat array that is 112 bytes of pure overhead: two thirds of a
+    // degree-0 splat, and 672 MB on a six-million-splat scan, paid on both
+    // backends and before any renderer is involved. Nothing in the splat path
+    // subscribes to the notification it buys — rotations are written once by a
+    // loader or the generator and read by computeCovariance and the GPU
+    // uploads. The onChange plumbing exists for Object3D transform
+    // propagation, which is a different problem.
+    //
+    // Converts implicitly FROM Quaternion, so a caller holding one can still
+    // just assign it. The other direction is named, because materialising a
+    // Quaternion is exactly the cost this type exists to avoid.
+    struct SplatQuat {
+
+        float x{0.f};
+        float y{0.f};
+        float z{0.f};
+        float w{1.f};
+
+        SplatQuat() = default;
+
+        SplatQuat(float x, float y, float z, float w)
+            : x(x), y(y), z(z), w(w) {}
+
+        SplatQuat(const Quaternion& q)
+            : x(q.x), y(q.y), z(q.z), w(q.w) {}
+
+        [[nodiscard]] Quaternion toQuaternion() const {
+
+            return Quaternion(x, y, z, w);
+        }
+
+        SplatQuat& set(float x, float y, float z, float w) {
+
+            this->x = x;
+            this->y = y;
+            this->z = z;
+            this->w = w;
+
+            return *this;
+        }
+
+        [[nodiscard]] float lengthSq() const {
+
+            return x * x + y * y + z * z + w * w;
+        }
+
+        [[nodiscard]] float length() const {
+
+            return std::sqrt(lengthSq());
+        }
+
+        // Reciprocal-multiply and the zero-length identity fallback, both
+        // exactly as Quaternion::normalize does them. Mirroring that float
+        // sequence, rather than writing the obvious `x /= length()`, is what
+        // makes changing the storage type a no-op on the VALUES — the generator
+        // feeds SplatData_test's determinism pin, the loader round trips, and
+        // VulkanSplat_test's golden image, and a last-ulp drift here would
+        // disturb all three to no purpose.
+        SplatQuat& normalize() {
+
+            auto l = length();
+
+            if (l == 0) {
+
+                x = 0.f;
+                y = 0.f;
+                z = 0.f;
+                w = 1.f;
+
+            } else {
+
+                l = 1.f / l;
+
+                x *= l;
+                y *= l;
+                z *= l;
+                w *= l;
+            }
+
+            return *this;
+        }
+
+        bool operator==(const SplatQuat& o) const {
+
+            return x == o.x && y == o.y && z == o.z && w == o.w;
+        }
+
+        bool operator!=(const SplatQuat& o) const {
+
+            return !(*this == o);
+        }
+    };
+
+    // The entire point of the type. A regression here is 112 bytes a splat.
+    static_assert(sizeof(SplatQuat) == 4 * sizeof(float),
+                  "SplatQuat must stay four plain floats");
+
     // Struct-of-arrays. All the per-splat vectors are the same length except
     // `sh`, which is count() * coeffCount() * 3.
     struct SplatData {
 
         std::vector<Vector3> means;
-        std::vector<Vector3> scales;       // linear, non-negative
-        std::vector<Quaternion> rotations; // unit
-        std::vector<float> opacities;      // [0, 1]
-        std::vector<float> sh;             // coefficient-major, see header comment
+        std::vector<Vector3> scales;      // linear, non-negative
+        std::vector<SplatQuat> rotations; // unit
+        std::vector<float> opacities;     // [0, 1]
+        std::vector<float> sh;            // coefficient-major, see header comment
 
         int shDegree = 0;
 
@@ -86,12 +191,16 @@ namespace threepp {
         // exists to be budgeted against, not to look tidy.
         //
         // `sh` dominates and by a lot — at degree 3 it is 192 of the 236 bytes a
-        // splat costs, which is why the loaders offer a degree cap at all.
+        // splat costs, which is why the loaders offer a degree cap at all. The
+        // other 44 are mean, scale, rotation and opacity, and they come to 44
+        // only because the rotation is four plain floats: see SplatQuat, which
+        // is what this comment used to describe and the struct did not do.
+        // Measured, degrees 0-3: 56, 92, 152, 236 bytes a splat.
         [[nodiscard]] std::size_t byteSize() const {
 
             std::size_t bytes = means.capacity() * sizeof(Vector3) +
                                 scales.capacity() * sizeof(Vector3) +
-                                rotations.capacity() * sizeof(Quaternion) +
+                                rotations.capacity() * sizeof(SplatQuat) +
                                 opacities.capacity() * sizeof(float) +
                                 sh.capacity() * sizeof(float);
 
