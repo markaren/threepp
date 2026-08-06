@@ -225,7 +225,7 @@ namespace {
     // A multi-level asset is read at level 0, its finest — "import my scan"
     // means the scan, not a proxy — with the level recorded so a future
     // serialization pass can reproduce the choice.
-    std::shared_ptr<Object3D> loadSplatSog(const std::filesystem::path& path) {
+    std::shared_ptr<Object3D> loadSplatSog(const std::filesystem::path& path, bool vulkanBackend) {
 
         const auto info = SogLoader::describe(path);
 
@@ -233,7 +233,21 @@ namespace {
         // cloud (splats::loadSogWithLod says why every other), with the level
         // table travelling on the cloud so the per-frame policy in render()
         // finds it. A single-level asset imports exactly as before.
-        auto [data, lodTable] = splats::loadSogWithLod(path);
+        //
+        // VULKAN ONLY. The GL path ignores submission ranges, so a multi-level
+        // cloud there draws every resident level stacked — the scan two or
+        // three times over, fatter and slower, with no way to select. On a GL
+        // editor a multi-level asset imports at its finest level, exactly as it
+        // did before dynamic LOD existed. (The editor DEFAULTS to GL; --vulkan
+        // is the flag, and it is where all of the splat perf work lives.)
+        splats::SogLodResult loaded;
+        if (vulkanBackend) {
+            loaded = splats::loadSogWithLod(path);
+        } else {
+            loaded.data = SogLoader::load(path);
+        }
+        auto& data = loaded.data;
+        auto& lodTable = loaded.table;
 
         editor::SplatImportConfig config;
         const auto srcU8 = path.u8string();
@@ -1403,9 +1417,14 @@ void EditorApp::pollImports(float dt) {
         activeImport_ = std::make_unique<ActiveImport>();
         activeImport_->path = path;
         activeImport_->args = std::move(entry.args);
+        // Which backend, decided HERE on the main thread and captured by value:
+        // the worker must not touch renderer_, and the splat import needs to
+        // know because multi-level dynamic-LOD import is Vulkan-only (the GL
+        // path ignores submission ranges and would draw every level stacked).
+        const bool vulkanBackend = dynamic_cast<VulkanRenderer*>(renderer_.get()) != nullptr;
         // Loader exceptions surface through the future and are rethrown on
         // the main thread in the get() below.
-        activeImport_->future = std::async(std::launch::async, [path, args]() -> std::shared_ptr<Object3D> {
+        activeImport_->future = std::async(std::launch::async, [path, args, vulkanBackend]() -> std::shared_ptr<Object3D> {
             if (isDescription(path)) {
                 URDFLoader loader;
                 if (!args.empty()) loader.setArgs(args);
@@ -1422,7 +1441,7 @@ void EditorApp::pollImports(float dt) {
             }
             // Content decides, not the name. A SOG asset can be a directory,
             // a .sog or a .zip, and the only thing they share is a meta.json.
-            if (SogLoader::isSog(path)) return loadSplatSog(path);
+            if (SogLoader::isSog(path)) return loadSplatSog(path, vulkanBackend);
 
             // A directory that got this far is not a SOG, and no other importer
             // takes one — say which of the two it is rather than letting

@@ -7432,20 +7432,68 @@ int EditorApp::runSelfTest() {
                 check(std::abs(imported->rotation.x - math::PI) < 1e-5f,
                       "which puts the node a half-turn about X");
 
-                // Multi-level assets import for DYNAMIC LOD: several levels in
-                // one cloud plus the table the per-frame policy drives. The
-                // wiring, not just the import: after frames have run, the
-                // policy must have chosen and written a range list — an empty
-                // one here means the table exists and nothing consumes it,
-                // which is exactly the editor gap that shipped once already.
-                check(imported->lodTable().levels.size() >= 2,
-                      "a multi-level scan keeps several levels resident");
-                stepFixed(4);
-                check(!imported->submitRanges().empty(),
-                      "and the per-frame policy is actually driving its ranges");
-                std::cout << "[selftest] SOG dynamic LOD: level "
-                          << imported->lodTable().heldLevel << " held, "
-                          << imported->submitRanges().size() << " range(s)" << std::endl;
+                // Multi-level import is BACKEND-CONDITIONAL, and each backend
+                // has its own contract to assert. Vulkan: several levels
+                // resident plus the wiring — after frames run, the policy must
+                // have written a non-empty range list (an empty one means the
+                // table exists and nothing consumes it, the gap that shipped
+                // once already). GL: the guard must have refused — ONE level,
+                // no table, no ranges — because the GL path ignores ranges and
+                // a multi-level cloud there draws every level stacked.
+                const bool vulkanBackend =
+                        dynamic_cast<VulkanRenderer*>(renderer_.get()) != nullptr;
+                if (vulkanBackend) {
+                    check(imported->lodTable().levels.size() >= 2,
+                          "a multi-level scan keeps several levels resident (Vulkan)");
+                    stepFixed(4);
+                    check(!imported->submitRanges().empty(),
+                          "and the per-frame policy is actually driving its ranges");
+                    std::cout << "[selftest] SOG dynamic LOD: level "
+                              << imported->lodTable().heldLevel << " held, "
+                              << imported->submitRanges().size() << " range(s)" << std::endl;
+                } else {
+                    check(imported->lodTable().empty(),
+                          "a GL editor imports ONE level, no LOD table");
+                    stepFixed(4);
+                    check(imported->submitRanges().empty(),
+                          "and nothing writes ranges the GL path would ignore");
+                }
+
+                // The user-reported sequence, verbatim: import a scan, DELETE
+                // it, import a DIFFERENT one (THREEPP_SOG_SCAN2 — ideally a
+                // bigger scan from another producer, which is what the report
+                // used). The first fix for this aimed at the residency leak;
+                // this exists so the claim "fixed" rests on the actual
+                // sequence at actual scale rather than on a toy repro.
+                if (const char* scan2 = std::getenv("THREEPP_SOG_SCAN2"); scan2 && *scan2) {
+
+                    selectObject(imported);
+                    deleteSelected();
+                    selectObject(nullptr);
+                    stepFixed(8);// past framesInFlight+1, so eviction has run
+
+                    const std::filesystem::path asset2(scan2);
+                    const auto u8b = asset2.u8string();
+                    const std::size_t befor2 = document_.scene().children.size();
+                    handleFileDrop({std::string(u8b.begin(), u8b.end())});
+                    for (int i = 0; i < 4000 && document_.scene().children.size() == befor2; ++i)
+                        stepFixed();
+
+                    SplatCloud* second = nullptr;
+                    for (const auto& child : document_.scene().children) {
+                        if (auto* c = child->as<SplatCloud>()) second = c;
+                    }
+                    check(second != nullptr && second != imported,
+                          "delete-then-import-another at scan scale survives");
+                    if (second) {
+                        stepFixed(4);
+                        std::cout << "[selftest] second scan: " << second->splatCount()
+                                  << " splats, " << second->lodTable().levels.size()
+                                  << " level(s), " << second->submitRanges().size()
+                                  << " range(s)" << std::endl;
+                        check(second->splatCount() > 0, "and it drew in with splats");
+                    }
+                }
             }
         }
     }
