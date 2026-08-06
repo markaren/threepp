@@ -50,6 +50,7 @@
 #include "threepp/loaders/EXRLoader.hpp"
 #include "threepp/loaders/ModelLoader.hpp"
 #include "threepp/loaders/RGBELoader.hpp"
+#include "threepp/loaders/SogLoader.hpp"
 #include "threepp/loaders/SplatLoader.hpp"
 #include "threepp/loaders/TextureLoader.hpp"
 #include "threepp/loaders/URDFLoader.hpp"
@@ -203,6 +204,53 @@ namespace {
 
         if (!isDescription(path)) return {};
         return xacro::scanArgs(path);
+    }
+
+    // A SOG / SSOG scan: a directory of chunks, or the .zip / .sog archive of
+    // one. Decided by content, like the PLY path below it.
+    //
+    // It gets the SAME half-turn about X the .ply path applies, and the reason
+    // is worth writing down because the format documentation points the other
+    // way. SOG v2 declares itself right-handed with +Y up, which reads like a
+    // promise that no flip is needed — it is not. That line describes the
+    // CONTAINER's axis convention, not which way the scan inside it was
+    // reconstructed. splat-transform re-encodes an existing 3DGS .ply without
+    // reorienting it, and on the Sanctuaire scan the decoded means match that
+    // .ply's to 8e-13 with no negation on any axis. So a SOG made from a COLMAP
+    // capture is +Y DOWN exactly like its .ply, and skipping the flip lands the
+    // basilica on its roof. Measured, not reasoned: the first import without it
+    // came out upside down.
+    //
+    // A multi-level asset is read at level 0, its finest — "import my scan"
+    // means the scan, not a proxy — with the level recorded so a future
+    // serialization pass can reproduce the choice.
+    std::shared_ptr<Object3D> loadSplatSog(const std::filesystem::path& path) {
+
+        const auto info = SogLoader::describe(path);
+
+        auto data = SogLoader::load(path);
+
+        editor::SplatImportConfig config;
+        const auto srcU8 = path.u8string();
+        config.source = std::string(srcU8.begin(), srcU8.end());
+        config.lod = info.lodLevels > 1 ? 0 : -1;
+
+        // The same cull the .ply path applies, and for the same reason: a scan
+        // is a scan whatever container it arrived in.
+        config.culled = true;
+        config.removed = data.removeOutliers();
+
+        auto cloud = SplatCloud::create(std::move(data));
+
+        // On the NODE, not in the data, for the same reason the .ply path puts
+        // it there: which way is up belongs to the scene, and the gizmo can
+        // undo it.
+        cloud->rotation.x = math::PI;
+        config.flippedX = true;
+
+        config.write(*cloud);
+
+        return cloud;
     }
 
     // A .ply, decided by its header rather than its name. Runs on the import
@@ -1346,6 +1394,26 @@ void EditorApp::pollImports(float dt) {
                 }
                 return robot;
             }
+            // Content decides, not the name. A SOG asset can be a directory,
+            // a .sog or a .zip, and the only thing they share is a meta.json.
+            if (SogLoader::isSog(path)) return loadSplatSog(path);
+
+            // A directory that got this far is not a SOG, and no other importer
+            // takes one — say which of the two it is rather than letting
+            // ModelLoader report an extension it never saw.
+            std::error_code dirEc;
+            if (std::filesystem::is_directory(path, dirEc)) {
+                throw std::runtime_error("no meta.json or lod-meta.json in this folder,"
+                                         " so it is not a Gaussian splat scan");
+            }
+
+            const auto extension = formats::extensionOf(path);
+            if (extension == ".zip" || extension == ".sog") {
+                throw std::runtime_error("this archive holds no meta.json or lod-meta.json,"
+                                         " so it is not a Gaussian splat scan"
+                                         " - and threepp imports no other kind of archive");
+            }
+
             if (formats::isSplatCandidate(path)) return loadSplatPly(path);
             ModelLoader loader;
             return loader.load(path);
@@ -3859,6 +3927,22 @@ void EditorApp::handleFileDrop(const std::vector<std::string>& paths) {
         // being a splat. Decode as what the bytes actually are.
         std::filesystem::path path(std::u8string(entry.begin(), entry.end()));
         const auto extension = formats::extensionOf(path);
+
+        // A dropped FOLDER, which no extension can describe. A SOG scan is a
+        // directory of chunks in its unpacked form, and dropping the folder is
+        // the obvious gesture — so ask the only question that can answer it.
+        // Anything else stays "ignored", as before: this is not a general
+        // import-a-directory feature.
+        std::error_code dirEc;
+        if (std::filesystem::is_directory(path, dirEc)) {
+            if (SogLoader::isSog(path)) {
+                importModel(path);
+            } else {
+                log("ignored dropped folder " + path.filename().string() +
+                    " - no meta.json or lod-meta.json, so it is not a splat scan");
+            }
+            continue;
+        }
 
         if (extension == ".json") {
             if (document_.dirty()) {

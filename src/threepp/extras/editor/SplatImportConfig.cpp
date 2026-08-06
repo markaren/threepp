@@ -24,6 +24,7 @@ std::optional<SplatImportConfig> SplatImportConfig::read(const Object3D& object)
         if (key == "cull") config.culled = toBool(value, false);
         else if (key == "removed") config.removed = static_cast<std::size_t>(std::max(0, toInt(value, 0)));
         else if (key == "flipX") config.flippedX = toBool(value, false);
+        else if (key == "lod") config.lod = toInt(value, -1);
     });
 
     return config;
@@ -46,6 +47,7 @@ void SplatImportConfig::write(Object3D& object) const {
     ops += ";removed=" + std::to_string(removed);
     ops += ";flipX=";
     ops += flippedX ? "1" : "0";
+    ops += ";lod=" + std::to_string(lod);
     object.userData[opsKey] = ops;
 }
 

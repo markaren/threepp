@@ -158,6 +158,7 @@ set(publicHeaders
         "threepp/loaders/ObjectLoader.hpp"
         "threepp/loaders/OBJLoader.hpp"
         "threepp/loaders/STLLoader.hpp"
+        "threepp/loaders/SogLoader.hpp"
         "threepp/loaders/SplatLoader.hpp"
         "threepp/loaders/SVGLoader.hpp"
         "threepp/loaders/TextureLoader.hpp"
@@ -346,6 +347,7 @@ set(privateHeaders
 
         "threepp/loaders/exr/PizDecode.hpp"
 
+        "threepp/loaders/sog/SogZip.hpp"
         "threepp/loaders/xacro/Diagnostics.hpp"
         "threepp/loaders/xacro/Expand.hpp"
         "threepp/loaders/xacro/Expr.hpp"
@@ -588,11 +590,13 @@ set(sources
         "threepp/loaders/ObjectLoader.cpp"
         "threepp/loaders/OBJLoader.cpp"
         "threepp/loaders/STLLoader.cpp"
+        "threepp/loaders/SogLoader.cpp"
         "threepp/loaders/SplatLoader.cpp"
         "threepp/loaders/SVGLoader.cpp"
         "threepp/loaders/TextureLoader.cpp"
         "threepp/loaders/URDFLoader.cpp"
 
+        "threepp/loaders/sog/SogZip.cpp"
         "threepp/loaders/xacro/Diagnostics.cpp"
         "threepp/loaders/xacro/Expand.cpp"
         "threepp/loaders/xacro/Expr.cpp"

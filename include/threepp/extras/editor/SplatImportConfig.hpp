@@ -56,7 +56,19 @@ namespace threepp::editor {
         // the data, so it also lives in the object's own rotation — this flag
         // is what says the rotation was the importer's doing rather than the
         // user's, which is what a future re-import has to know.
+        //
+        // TRUE for a SOG scan as well, despite SOG v2 declaring itself +Y up:
+        // that declaration is about the container, not about which way the
+        // capture inside it was reconstructed, and splat-transform re-encodes a
+        // 3DGS .ply without reorienting it. A COLMAP-derived SOG is therefore
+        // +Y down exactly like the .ply it came from.
         bool flippedX = false;
+
+        // Which detail level was read, for a SOG asset that declares several.
+        // -1 for a .ply and for a lone SOG chunk, neither of which has levels —
+        // a re-import has to be able to tell "level 0" from "no levels at all",
+        // and 0 cannot say both.
+        int lod = -1;
 
         static constexpr const char* sourceKey = "splatSource";
         static constexpr const char* opsKey = "splatImportOps";

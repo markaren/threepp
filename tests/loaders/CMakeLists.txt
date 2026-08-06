@@ -9,6 +9,7 @@ add_test_executable(ImageLoader_test)
 add_test_executable(OBJLoader_test)
 add_test_executable(ObjectLoader_test)
 add_test_executable(ObjectExporterSplat_test)
+add_test_executable(SogLoader_test)
 add_test_executable(SplatLoader_test)
 add_test_executable(STLLoader_test)
 add_test_executable(URDFLoader_test)
@@ -19,7 +20,7 @@ add_test_executable(XacroFranka_test)
 # the one (THREEPP_UR_DESCRIPTION), a franka_description for the other
 # (THREEPP_FRANKA_DESCRIPTION). Without one Catch2 skips them all and exits 4, which is a
 # ctest skip, not a failure.
-set_tests_properties(XacroUr_test XacroFranka_test PROPERTIES SKIP_RETURN_CODE 4)
+set_tests_properties(XacroUr_test XacroFranka_test SogLoader_test PROPERTIES SKIP_RETURN_CODE 4)
 
 add_subdirectory(svg)
 

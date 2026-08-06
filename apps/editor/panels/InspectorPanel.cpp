@@ -1167,6 +1167,12 @@ void EditorApp::drawSplatSection(Object3D& object) {
         if (config->flippedX) {
             ImGui::TextColored(theme::muted(), "Flipped 180 degrees about X for +Y-up.");
         }
+        // Only for a source that HAS levels: -1 means the file declared none,
+        // and printing "level -1" would invent a distinction the scan does not
+        // make.
+        if (config->lod >= 0) {
+            ImGui::TextColored(theme::muted(), "Read detail level %d.", config->lod);
+        }
     }
 
     ImGui::Separator();

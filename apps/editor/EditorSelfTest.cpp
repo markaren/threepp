@@ -7274,6 +7274,20 @@ int EditorApp::runSelfTest() {
         check(read && read->source == config.source && read->culled && read->removed == 7 &&
                       read->flippedX,
               "the import mark round-trips through userData");
+        check(read && read->lod == -1,
+              "and a source with no detail levels reads back as lod -1, not lod 0");
+
+        // A SOG asset records which level it came from, and -1 is reserved for
+        // "this source has no levels" so a re-import can tell the two apart.
+        editor::SplatImportConfig sog;
+        sog.source = "C:/scans/scan.zip";
+        sog.flippedX = true;
+        sog.lod = 0;
+        sog.write(*cloud);
+        const auto readSog = editor::SplatImportConfig::read(*cloud);
+        check(readSog && readSog->flippedX && readSog->lod == 0,
+              "a SOG import mark records which detail level it read");
+        config.write(*cloud);
 
         // The limitation is announced, not discovered.
         check(warnAboutSplatClouds("Play") == 1,
@@ -7310,6 +7324,57 @@ int EditorApp::runSelfTest() {
         stepFixed(4);
         check(document_.scene().getObjectByName("Procedural Splats") == nullptr,
               "and Stop drops it, which is the gap the warning is about");
+    }
+
+    // A real SOG scan, dropped the way a user drops one. Gated on the asset
+    // because it is 90 MB at its smallest and nothing in the repo ships it; the
+    // generative coverage lives in SogLoader_test, and what this adds is the
+    // EDITOR path — the drop handler, the format dispatch and the import mark.
+    if (const char* scan = std::getenv("THREEPP_SOG_SCAN"); scan && *scan) {
+
+        // getenv hands back bytes in the ANSI code page on Windows, NOT UTF-8,
+        // so the narrow path constructor is the correct one here — decoding
+        // them as UTF-8 throws on the first accented character, which is how
+        // this was found.
+        const std::filesystem::path asset(scan);
+
+        std::error_code ec;
+        if (std::filesystem::exists(asset, ec)) {
+
+            const std::size_t before = document_.scene().children.size();
+
+            // The drop handler decodes UTF-8, which is what GLFW hands it — and
+            // what a path like ".../Sainte-Anne-de-Beaupré/ssog" needs.
+            const auto u8 = asset.u8string();
+            handleFileDrop({std::string(u8.begin(), u8.end())});
+
+            // The import runs on a worker; give it room to finish.
+            for (int i = 0; i < 4000 && document_.scene().children.size() == before; ++i) stepFixed();
+
+            SplatCloud* imported = nullptr;
+            for (const auto& child : document_.scene().children) {
+                if (auto* c = child->as<SplatCloud>()) imported = c;
+            }
+
+            check(imported != nullptr, "a dropped SOG scan imports as a splat cloud");
+
+            if (imported) {
+
+                std::cout << "[selftest] SOG import: " << imported->splatCount()
+                          << " splats, SH degree " << imported->data().shDegree << std::endl;
+                check(imported->splatCount() > 0, "with splats in it");
+
+                const auto mark = editor::SplatImportConfig::read(*imported);
+                check(mark.has_value(), "and an import mark naming the source");
+                // SOG v2 declares +Y up, which tempts you to skip the flip. The
+                // container's convention is not the capture's: this scan is a
+                // re-encoded COLMAP .ply and comes in upside down without it.
+                check(mark && mark->flippedX,
+                      "and the same half-turn about X a COLMAP .ply gets");
+                check(std::abs(imported->rotation.x - math::PI) < 1e-5f,
+                      "which puts the node a half-turn about X");
+            }
+        }
     }
 
     std::cout << "[selftest] " << (failed == 0 ? "ALL PASS" : "FAILED") << std::endl;

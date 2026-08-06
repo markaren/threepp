@@ -41,17 +41,29 @@ namespace threepp::editor::formats {
         return list;
     }
 
-    // 3D Gaussian Splat scans, which go to SplatLoader and come back as a
-    // single SplatCloud rather than a Group of meshes.
+    // 3D Gaussian Splat scans, which go to SplatLoader or SogLoader and come
+    // back as a single SplatCloud rather than a Group of meshes.
     //
     // Its own category rather than an entry in meshes() because the extension
     // does not settle it: Turk's PLY carries triangle soup, laser point clouds
     // and 3DGS output alike, and the same file name means all three. The
     // extension only gets a file as far as the import; which loader runs is
-    // decided by sniffing the header for f_dc_0 (SplatLoader::isSplatPly).
+    // decided by sniffing — f_dc_0 in the header for a PLY
+    // (SplatLoader::isSplatPly), the meta.json for a SOG (SogLoader::isSog).
+    //
+    // ".zip" earns its place the same way and is the widest net here, because a
+    // SOG scan downloaded from superspl.at arrives under exactly that name —
+    // the spec's bundled ".sog" is the same container, and neither extension is
+    // reliable. Nothing is claimed on the strength of the name: a zip holding
+    // anything else is refused by the import with a message that says so, which
+    // is a better answer than the drop being silently ignored.
+    //
+    // A SOG asset can also be a DIRECTORY, which has no extension at all. That
+    // case is handled at the drop and dialog sites rather than here, since a
+    // list of extensions cannot express it.
     inline const std::vector<std::string>& splats() {
 
-        static const std::vector<std::string> list{".ply"};
+        static const std::vector<std::string> list{".ply", ".sog", ".zip"};
         return list;
     }
 
