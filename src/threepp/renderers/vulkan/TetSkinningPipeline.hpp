@@ -28,6 +28,14 @@ namespace threepp::vulkan {
         static constexpr uint32_t kMaxTetMeshes  = 256;
         // Storage buffers per set — must match tet_skinning.comp's binding count.
         static constexpr uint32_t kBindingsPerSet = 9;
+        // Ring depth for the per-frame tet-position buffer (binding 6). The host
+        // memcpy in refreshTetBlas happens BEFORE renderFrame's fence wait, so up
+        // to kFramesInFlight prior frames may still read the buffer — a single
+        // buffer gets overwritten mid-read and consecutive frames skin with the
+        // same physics state (duplicate-then-skip judder). kFramesInFlight + 1
+        // slots (each with its own descriptor set) make the write always land in
+        // a slot no in-flight frame references.
+        static constexpr uint32_t kPosSlots = 3;
 
         explicit TetSkinningPipeline(VulkanContext& ctx);
         ~TetSkinningPipeline();

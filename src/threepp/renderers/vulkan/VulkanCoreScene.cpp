@@ -1152,8 +1152,13 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                     // Tet-skinned soft bodies (PhysX) deform every frame — re-upload
                     // their collision-tet positions, queue the GPU skin + BLAS refit,
                     // and flag motion for reprojection/TAA like the other deformers.
+                    // At most one refresh per mesh per frame: refreshTetBlas advances
+                    // the tetPos write ring, whose depth only covers the in-flight
+                    // frames if it moves once per submission.
+                    std::unordered_set<Mesh*> tetRefreshed;
                     for (size_t i = 0; i < entries.size(); ++i) {
                         if (!entries[i].isTet) continue;
+                        if (!tetRefreshed.insert(entries[i].mesh).second) continue;
                         auto tIt = tetMeshStates.find(entries[i].mesh);
                         if (tIt == tetMeshStates.end()) continue;
                         refreshTetBlas(*entries[i].mesh, *tIt->second);
@@ -1626,7 +1631,7 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                         destroyBuffer(ctx->allocator(), it->second->restInv0);
                         destroyBuffer(ctx->allocator(), it->second->restInv1);
                         destroyBuffer(ctx->allocator(), it->second->restInv2);
-                        destroyBuffer(ctx->allocator(), it->second->tetPos);
+                        for (auto& slot : it->second->tetPos) destroyBuffer(ctx->allocator(), slot);
                         vulkan::destroyExternalBuffer(ctx->device(), it->second->tetPosExt);
                         destroyBuffer(ctx->allocator(), it->second->blasScratch);
                         auto& rec = it->second->blas;
@@ -1639,9 +1644,10 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                             destroyBuffer(ctx->allocator(), rec->uv);
                             destroyBuffer(ctx->allocator(), rec->prevVertex);
                         }
-                        if (it->second->tetDescSet != VK_NULL_HANDLE) {
-                            tetSkinning_->freeMeshDescriptorSet(it->second->tetDescSet);
-                            it->second->tetDescSet = VK_NULL_HANDLE;
+                        for (auto& ds : it->second->tetDescSet) {
+                            if (ds == VK_NULL_HANDLE) continue;
+                            tetSkinning_->freeMeshDescriptorSet(ds);
+                            ds = VK_NULL_HANDLE;
                         }
                         it = tetMeshStates.erase(it);
                     } else {

@@ -741,9 +741,11 @@ void VulkanRenderer::Impl::refreshTetBlas(Mesh& m, TetMeshState& st) {
             if (!st.blas) return;
             // Zero-copy interop: the registered CUDA device→device copy writes the
             // deformed tet positions straight into the exported binding-6 buffer —
-            // no host readback, no DataTexture, no map/memcpy. Runs at the SAME
-            // frame point as the CPU upload below, so the (pre-existing, benign)
-            // overlap with a still-in-flight prior frame's dispatch is unchanged.
+            // no host readback, no DataTexture, no map/memcpy. The external buffer
+            // is single-instance (bound in every ring slot), so unlike the CPU
+            // path below it can still overlap a still-in-flight prior frame's
+            // dispatch; ring-buffering it would need one exported allocation +
+            // CUDA import per slot.
             if (st.tetPosExt.handle != VK_NULL_HANDLE) {
                 if (st.tetPosExternalCopy) st.tetPosExternalCopy();
                 pendingTetRebuilds_.push_back(&st);
@@ -755,7 +757,11 @@ void VulkanRenderer::Impl::refreshTetBlas(Mesh& m, TetMeshState& st) {
             const VkDeviceSize bytes = std::min<VkDeviceSize>(
                     st.tetPosBytes, static_cast<VkDeviceSize>(tetImg.size()) * sizeof(float));
             if (bytes == 0) return;
-            uploadHostVisible(ctx->allocator(), st.tetPos, tetImg.data(), bytes);
+            // Advance the ring so this write never lands in a buffer an in-flight
+            // frame's dispatch still reads (which showed the same physics state on
+            // consecutive frames — visible stutter at a steady frame rate).
+            st.tetPosSlot = (st.tetPosSlot + 1) % TetMeshState::kTetPosSlots;
+            uploadHostVisible(ctx->allocator(), st.tetPos[st.tetPosSlot], tetImg.data(), bytes);
             pendingTetRebuilds_.push_back(&st);
         }
 
@@ -764,14 +770,17 @@ void VulkanRenderer::Impl::rewriteTetPosBinding(TetMeshState& st, VkBuffer buf) 
             bi.buffer = buf;
             bi.offset = 0;
             bi.range  = VK_WHOLE_SIZE;
-            VkWriteDescriptorSet wr{};
-            wr.sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-            wr.dstSet          = st.tetDescSet;
-            wr.dstBinding      = 6;
-            wr.descriptorCount = 1;
-            wr.descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-            wr.pBufferInfo     = &bi;
-            vkUpdateDescriptorSets(ctx->device(), 1, &wr, 0, nullptr);
+            for (auto ds : st.tetDescSet) {
+                if (ds == VK_NULL_HANDLE) continue;
+                VkWriteDescriptorSet wr{};
+                wr.sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+                wr.dstSet          = ds;
+                wr.dstBinding      = 6;
+                wr.descriptorCount = 1;
+                wr.descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+                wr.pBufferInfo     = &bi;
+                vkUpdateDescriptorSets(ctx->device(), 1, &wr, 0, nullptr);
+            }
         }
 
 void VulkanRenderer::Impl::disableSoftBodyInterop(const Mesh& mesh) {
@@ -780,12 +789,29 @@ void VulkanRenderer::Impl::disableSoftBodyInterop(const Mesh& mesh) {
             auto& st = *it->second;
             if (st.tetPosExt.handle == VK_NULL_HANDLE) return;
             check(vkDeviceWaitIdle(ctx->device()), "vkDeviceWaitIdle (softbody interop disable)");
-            st.tetPos = createBuffer(
-                    ctx->allocator(), ctx->device(), st.tetPosBytes,
-                    VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
-                    VMA_MEMORY_USAGE_AUTO,
-                    VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT);
-            rewriteTetPosBinding(st, st.tetPos.handle);
+            // Recreate the ring and point each slot's set back at its own buffer
+            // (rewriteTetPosBinding writes ONE buffer into all slots — interop
+            // only; here every slot must get its distinct ring buffer back).
+            for (uint32_t s = 0; s < TetMeshState::kTetPosSlots; ++s) {
+                st.tetPos[s] = createBuffer(
+                        ctx->allocator(), ctx->device(), st.tetPosBytes,
+                        VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+                        VMA_MEMORY_USAGE_AUTO,
+                        VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT);
+                if (st.tetDescSet[s] == VK_NULL_HANDLE) continue;
+                VkDescriptorBufferInfo bi{};
+                bi.buffer = st.tetPos[s].handle;
+                bi.offset = 0;
+                bi.range  = VK_WHOLE_SIZE;
+                VkWriteDescriptorSet wr{};
+                wr.sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+                wr.dstSet          = st.tetDescSet[s];
+                wr.dstBinding      = 6;
+                wr.descriptorCount = 1;
+                wr.descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+                wr.pBufferInfo     = &bi;
+                vkUpdateDescriptorSets(ctx->device(), 1, &wr, 0, nullptr);
+            }
             vulkan::destroyExternalBuffer(ctx->device(), st.tetPosExt);
             st.tetPosExternalCopy = nullptr;
         }

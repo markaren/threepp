@@ -474,19 +474,31 @@ namespace threepp {
             Buffer restInv1   {};// vec3<float> — baked Dr^-1 column 1
             Buffer restInv2   {};// vec3<float> — baked Dr^-1 column 2
             // Per-frame collision-tet world positions (vec4/texel), re-uploaded each
-            // frame from the soft body's tet texture image.
-            Buffer tetPos     {};
+            // frame from the soft body's tet texture image. Ring-buffered (one
+            // buffer + descriptor set per slot): the host write in refreshTetBlas
+            // happens before renderFrame's fence wait, so kFramesInFlight prior
+            // frames may still be reading — a single buffer would get overwritten
+            // mid-flight and consecutive displayed frames would skin with the same
+            // physics state (duplicate-then-skip judder). refreshTetBlas advances
+            // tetPosSlot once per frame; recordCommandBuffer dispatches with that
+            // slot's descriptor set.
+            static constexpr uint32_t kTetPosSlots = vulkan::TetSkinningPipeline::kPosSlots;
+            static_assert(kTetPosSlots >= kFramesInFlight + 1,
+                          "tetPos ring must cover all in-flight frames plus the one being recorded");
+            std::array<Buffer, kTetPosSlots> tetPos {};
+            uint32_t tetPosSlot = 0;// slot written this frame (advanced by refreshTetBlas)
             VkDeviceSize tetPosBytes = 0;
             // Zero-copy interop (enableSoftBodyInterop): when tetPosExt holds a
-            // buffer, it replaces tetPos as the shader's binding-6 source and
-            // tetPosExternalCopy (a CUDA device→device copy registered by the
-            // PhysX glue) replaces the CPU upload in refreshTetBlas.
+            // buffer, it replaces the tetPos ring as the shader's binding-6 source
+            // (rewritten in every slot's set) and tetPosExternalCopy (a CUDA
+            // device→device copy registered by the PhysX glue) replaces the CPU
+            // upload in refreshTetBlas.
             vulkan::ExternalBuffer tetPosExt {};
             std::function<void()>  tetPosExternalCopy;
             uint32_t vertexCount    = 0;
             uint32_t primitiveCount = 0;
             bool     indexed        = false;
-            VkDescriptorSet tetDescSet = VK_NULL_HANDLE;
+            std::array<VkDescriptorSet, kTetPosSlots> tetDescSet {};
             Buffer blasScratch {};
             VkDeviceSize blasScratchSize = 0;
             uint32_t blasRefitCounter = 0;
@@ -3586,7 +3598,7 @@ namespace threepp {
                 destroyBuffer(ctx->allocator(), st->restInv0);
                 destroyBuffer(ctx->allocator(), st->restInv1);
                 destroyBuffer(ctx->allocator(), st->restInv2);
-                destroyBuffer(ctx->allocator(), st->tetPos);
+                for (auto& slot : st->tetPos) destroyBuffer(ctx->allocator(), slot);
                 vulkan::destroyExternalBuffer(d, st->tetPosExt);
                 destroyBuffer(ctx->allocator(), st->blasScratch);
                 if (st->blas) destroyBlasRecord(*st->blas);
@@ -4115,40 +4127,46 @@ namespace threepp {
             allocAndUpload(state->restInv1,   r1Attr->array().data(),  vertexCount * 3 * sizeof(float));
             allocAndUpload(state->restInv2,   r2Attr->array().data(),  vertexCount * 3 * sizeof(float));
 
-            // Per-frame tet positions buffer, sized to the tet texture image (one
-            // RGBA32F texel per collision-tet vertex). Filled by refreshTetBlas.
+            // Per-frame tet positions ring, sized to the tet texture image (one
+            // RGBA32F texel per collision-tet vertex). Filled by refreshTetBlas,
+            // one slot per frame (see TetMeshState::tetPos).
             const auto& tetImg = mat->tetTexture->image().data<float>();
             state->tetPosBytes = static_cast<VkDeviceSize>(tetImg.size()) * sizeof(float);
-            state->tetPos = createBuffer(
-                    ctx->allocator(), ctx->device(), state->tetPosBytes,
-                    VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
-                    VMA_MEMORY_USAGE_AUTO,
-                    VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT);
-
-            // Descriptor set — 9 storage buffers (see tet_skinning.comp).
-            state->tetDescSet = tetSkinning_->allocateMeshDescriptorSet();
-            std::array<VkDescriptorBufferInfo, 9> bi{};
-            const Buffer* bufs[9] = {
-                    &state->tetIndex, &state->tetWeight, &state->baseNormal,
-                    &state->restInv0, &state->restInv1, &state->restInv2,
-                    &state->tetPos,
-                    &state->blas->vertex, &state->blas->normal,
-            };
-            std::array<VkWriteDescriptorSet, 9> wr{};
-            for (uint32_t i = 0; i < 9; ++i) {
-                bi[i].buffer          = bufs[i]->handle;
-                bi[i].offset          = 0;
-                bi[i].range           = VK_WHOLE_SIZE;
-                wr[i]                 = {};
-                wr[i].sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-                wr[i].dstSet          = state->tetDescSet;
-                wr[i].dstBinding      = i;
-                wr[i].descriptorCount = 1;
-                wr[i].descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-                wr[i].pBufferInfo     = &bi[i];
+            for (auto& slot : state->tetPos) {
+                slot = createBuffer(
+                        ctx->allocator(), ctx->device(), state->tetPosBytes,
+                        VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+                        VMA_MEMORY_USAGE_AUTO,
+                        VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT);
             }
-            vkUpdateDescriptorSets(ctx->device(),
-                                   static_cast<uint32_t>(wr.size()), wr.data(), 0, nullptr);
+
+            // Descriptor sets — 9 storage buffers each (see tet_skinning.comp);
+            // one set per ring slot, identical except binding 6 (tetPos).
+            for (uint32_t s = 0; s < TetMeshState::kTetPosSlots; ++s) {
+                state->tetDescSet[s] = tetSkinning_->allocateMeshDescriptorSet();
+                std::array<VkDescriptorBufferInfo, 9> bi{};
+                const Buffer* bufs[9] = {
+                        &state->tetIndex, &state->tetWeight, &state->baseNormal,
+                        &state->restInv0, &state->restInv1, &state->restInv2,
+                        &state->tetPos[s],
+                        &state->blas->vertex, &state->blas->normal,
+                };
+                std::array<VkWriteDescriptorSet, 9> wr{};
+                for (uint32_t i = 0; i < 9; ++i) {
+                    bi[i].buffer          = bufs[i]->handle;
+                    bi[i].offset          = 0;
+                    bi[i].range           = VK_WHOLE_SIZE;
+                    wr[i]                 = {};
+                    wr[i].sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+                    wr[i].dstSet          = state->tetDescSet[s];
+                    wr[i].dstBinding      = i;
+                    wr[i].descriptorCount = 1;
+                    wr[i].descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+                    wr[i].pBufferInfo     = &bi[i];
+                }
+                vkUpdateDescriptorSets(ctx->device(),
+                                       static_cast<uint32_t>(wr.size()), wr.data(), 0, nullptr);
+            }
 
             // Persistent BLAS-rebuild scratch (sized once, reused every frame).
             VkAccelerationStructureGeometryTrianglesDataKHR triData{};
@@ -4200,9 +4218,10 @@ namespace threepp {
         // BLAS rebuild — recorded in recordCommandBuffer next to the skinned path.
         void refreshTetBlas(Mesh& m, TetMeshState& st);
 
-        // Rewrite binding 6 (tetPos — see tet_skinning.comp) of a tet mesh's
-        // descriptor set to point at `buf`. Used by the interop enable/disable
-        // swap; the other 8 bindings are untouched.
+        // Rewrite binding 6 (tetPos — see tet_skinning.comp) of every ring slot's
+        // descriptor set to point at `buf` (the single exported interop buffer).
+        // Used by the interop enable swap; the other 8 bindings are untouched.
+        // The caller vkDeviceWaitIdles first, so no set is in a pending cb.
         void rewriteTetPosBinding(TetMeshState& st, VkBuffer buf);
 
         // Zero-copy interop enable: swap the mesh's tet-position buffer for an
@@ -4219,13 +4238,14 @@ namespace threepp {
                 st.tetPosExternalCopy = std::move(deviceCopy);
                 return {st.tetPosExt.osHandle, static_cast<size_t>(st.tetPosExt.size)};
             }
-            if (st.tetPosBytes == 0 || st.tetDescSet == VK_NULL_HANDLE) return {};
+            if (st.tetPosBytes == 0 || st.tetDescSet[0] == VK_NULL_HANDLE) return {};
             check(vkDeviceWaitIdle(ctx->device()), "vkDeviceWaitIdle (softbody interop enable)");
             st.tetPosExt = vulkan::createExternalBuffer(
                     ctx->physicalDevice(), ctx->device(), st.tetPosBytes,
                     VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
             rewriteTetPosBinding(st, st.tetPosExt.handle);
-            destroyBuffer(ctx->allocator(), st.tetPos);// CPU-path buffer no longer read
+            for (auto& slot : st.tetPos)// CPU-path ring no longer read
+                destroyBuffer(ctx->allocator(), slot);
             st.tetPosExternalCopy = std::move(deviceCopy);
             return {st.tetPosExt.osHandle, static_cast<size_t>(st.tetPosExt.size)};
         }

@@ -78,15 +78,16 @@ namespace threepp::vulkan {
               "vkCreateComputePipelines(tetSkinning)");
         vkDestroyShaderModule(ctx_.device(), mod, nullptr);
 
-        // Descriptor pool sized for up to kMaxTetMeshes meshes. FREE_DESCRIPTOR_SET_BIT
-        // lets a TetMeshState free its set when the soft body is removed.
+        // Descriptor pool sized for up to kMaxTetMeshes meshes, kPosSlots sets
+        // each (one per tet-position ring slot). FREE_DESCRIPTOR_SET_BIT
+        // lets a TetMeshState free its sets when the soft body is removed.
         VkDescriptorPoolSize ps{};
         ps.type            = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-        ps.descriptorCount = kMaxTetMeshes * kBindingsPerSet;
+        ps.descriptorCount = kMaxTetMeshes * kPosSlots * kBindingsPerSet;
         VkDescriptorPoolCreateInfo dpci{};
         dpci.sType         = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
         dpci.flags         = VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT;
-        dpci.maxSets       = kMaxTetMeshes;
+        dpci.maxSets       = kMaxTetMeshes * kPosSlots;
         dpci.poolSizeCount = 1;
         dpci.pPoolSizes    = &ps;
         check(vkCreateDescriptorPool(ctx_.device(), &dpci, nullptr, &descPool_),
@@ -105,8 +106,9 @@ namespace threepp::vulkan {
             throw std::runtime_error(
                     "TetSkinningPipeline: descriptor pool exhausted - scene has more "
                     "than kMaxTetMeshes=" +
-                    std::to_string(kMaxTetMeshes) + " tet-skinned meshes (live count " +
-                    std::to_string(liveSetCount_) + "). Bump kMaxTetMeshes in "
+                    std::to_string(kMaxTetMeshes) + " tet-skinned meshes (live set count " +
+                    std::to_string(liveSetCount_) + " of " +
+                    std::to_string(kMaxTetMeshes * kPosSlots) + "). Bump kMaxTetMeshes in "
                     "TetSkinningPipeline.hpp.");
         }
         check(r, "vkAllocateDescriptorSets(tetSkinning)");

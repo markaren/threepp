@@ -207,7 +207,7 @@ void VulkanRenderer::Impl::recordDeformAndTlas(VkCommandBuffer cb) {
 
                 tetSkinning_->bindPipeline(cb);
                 for (auto* st : pendingTetRebuilds_) {
-                    tetSkinning_->recordDispatch(cb, st->tetDescSet, st->vertexCount);
+                    tetSkinning_->recordDispatch(cb, st->tetDescSet[st->tetPosSlot], st->vertexCount);
                 }
 
                 {
