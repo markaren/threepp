@@ -160,8 +160,10 @@ namespace threepp {
             // ever sees them.
             std::transform(ext.begin(), ext.end(), ext.begin(),
                            [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
-            // stb_image handles most of these; ".dds" is routed to DDSLoader downstream.
-            for (const auto* e : {".png", ".jpg", ".jpeg", ".bmp", ".tga", ".gif", ".hdr", ".pic", ".pnm", ".dds"})
+            // stb_image handles most of these; ".webp" goes to the vendored libwebp
+            // decoder and ".dds" is routed to DDSLoader, both downstream in ImageLoader
+            // and TextureLoader respectively.
+            for (const auto* e : {".png", ".jpg", ".jpeg", ".bmp", ".tga", ".gif", ".webp", ".hdr", ".pic", ".pnm", ".dds"})
                 if (ext == e) return true;
             return false;
         }

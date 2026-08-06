@@ -732,7 +732,7 @@ void EditorApp::drawTextureSlot(const Object3D& owner, Material& material, const
         pendingTextureSlot_ = {owner.uuid, label};
         pendingDialog_ = PendingDialog::Texture;
         fileBrowser_.open("Load Texture", FileBrowser::Mode::Open, settings_.textureDir,
-                          {".png", ".jpg", ".jpeg", ".bmp", ".tga", ".gif"});
+                          formats::images());
     }
     ImGui::SameLine();
     if (current) {
