@@ -7431,6 +7431,21 @@ int EditorApp::runSelfTest() {
                       "and the same half-turn about X a COLMAP .ply gets");
                 check(std::abs(imported->rotation.x - math::PI) < 1e-5f,
                       "which puts the node a half-turn about X");
+
+                // Multi-level assets import for DYNAMIC LOD: several levels in
+                // one cloud plus the table the per-frame policy drives. The
+                // wiring, not just the import: after frames have run, the
+                // policy must have chosen and written a range list — an empty
+                // one here means the table exists and nothing consumes it,
+                // which is exactly the editor gap that shipped once already.
+                check(imported->lodTable().levels.size() >= 2,
+                      "a multi-level scan keeps several levels resident");
+                stepFixed(4);
+                check(!imported->submitRanges().empty(),
+                      "and the per-frame policy is actually driving its ranges");
+                std::cout << "[selftest] SOG dynamic LOD: level "
+                          << imported->lodTable().heldLevel << " held, "
+                          << imported->submitRanges().size() << " range(s)" << std::endl;
             }
         }
     }

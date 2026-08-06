@@ -64,6 +64,7 @@
 #include "threepp/objects/Points.hpp"
 #include "threepp/objects/Robot.hpp"
 #include "threepp/objects/SplatCloud.hpp"
+#include "threepp/splats/SplatLod.hpp"
 #include "threepp/renderers/RendererFactory.hpp"
 #include "threepp/scenes/Scene.hpp"
 #ifdef THREEPP_WITH_VULKAN
@@ -228,7 +229,11 @@ namespace {
 
         const auto info = SogLoader::describe(path);
 
-        auto data = SogLoader::load(path);
+        // A multi-level asset imports for DYNAMIC LOD: every other level in one
+        // cloud (splats::loadSogWithLod says why every other), with the level
+        // table travelling on the cloud so the per-frame policy in render()
+        // finds it. A single-level asset imports exactly as before.
+        auto [data, lodTable] = splats::loadSogWithLod(path);
 
         editor::SplatImportConfig config;
         const auto srcU8 = path.u8string();
@@ -236,11 +241,17 @@ namespace {
         config.lod = info.lodLevels > 1 ? 0 : -1;
 
         // The same cull the .ply path applies, and for the same reason: a scan
-        // is a scan whatever container it arrived in.
-        config.culled = true;
-        config.removed = data.removeOutliers();
+        // is a scan whatever container it arrived in. NOT under dynamic LOD
+        // though: the cull reorders and removes splats, which would invalidate
+        // every offset in the level table. The outliers a coarse level carries
+        // are the price of the table staying true.
+        if (lodTable.empty()) {
+            config.culled = true;
+            config.removed = data.removeOutliers();
+        }
 
         auto cloud = SplatCloud::create(std::move(data));
+        cloud->setLodTable(std::move(lodTable));
 
         // On the NODE, not in the data, for the same reason the .ply path puts
         // it there: which way is up belongs to the scene, and the gizmo can
@@ -774,6 +785,21 @@ void EditorApp::frame(float dt) {
     updateGridPlacement();
 
     refreshSelectionHelpers();
+
+    // Dynamic splat LOD, before the render so this frame draws the choice.
+    // Only clouds imported with a multi-level table participate (lodTable()
+    // empty otherwise); the policy picks the coarsest level that still covers
+    // the cloud's projected footprint — so leaning in is always the finest
+    // level — and frustum-culls its chunks. Uses the same camera the frame
+    // renders with, which during Play is the play camera.
+    {
+        auto& cam = viewCamera();
+        const int viewH = canvas_.size().height();
+        document_.scene().traverse([&](Object3D& o) {
+            if (auto* sc = dynamic_cast<SplatCloud*>(&o); sc && !sc->lodTable().empty())
+                splats::selectLod(*sc, sc->lodTable(), cam, viewH);
+        });
+    }
 
     // Before the render, not after: on Vulkan the camera dock is a secondary
     // view that the renderer records INSIDE render(), and the camera it points

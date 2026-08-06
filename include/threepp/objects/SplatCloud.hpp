@@ -58,6 +58,7 @@
 
 #include "threepp/objects/InstancedMesh.hpp"
 #include "threepp/splats/SplatData.hpp"
+#include "threepp/splats/SplatLod.hpp"
 
 #include <array>
 #include <cstdint>
@@ -144,6 +145,17 @@ namespace threepp {
             return submitRanges_;
         }
 
+        // The multi-level table splats::selectLod drives the ranges from, when
+        // this cloud was loaded with several detail levels resident (see
+        // splats::loadSogWithLod). ON the cloud rather than in a side map: the
+        // table is cloud data, it travels with the object across scenes and
+        // threads (imports build it on a worker), and nothing has to remember
+        // to clean up an entry when the cloud dies — today's residency-cache
+        // lesson, applied at the layer above.
+        void setLodTable(splats::LodTable table) { lodTable_ = std::move(table); }
+        [[nodiscard]] splats::LodTable& lodTable() { return lodTable_; }
+        [[nodiscard]] const splats::LodTable& lodTable() const { return lodTable_; }
+
         // Ray against the cloud's own 3-sigma bounding sphere, and nothing
         // finer. What it replaces is the reason it exists: InstancedMesh's
         // raycast tests the unit quad once per instance against an
@@ -186,6 +198,7 @@ namespace threepp {
         bool sorted_{false};
         bool debugNonFinite_{false};
         std::vector<std::pair<uint32_t, uint32_t>> submitRanges_;
+        splats::LodTable lodTable_;
 
         void buildTextures();
         void sortByDepth(Camera& camera);

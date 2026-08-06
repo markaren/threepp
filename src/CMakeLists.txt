@@ -232,6 +232,7 @@ set(publicHeaders
         "threepp/objects/SplatCloud.hpp"
 
         "threepp/splats/SplatData.hpp"
+        "threepp/splats/SplatLod.hpp"
         "threepp/splats/SplatSH.hpp"
 
         "threepp/textures/CubeTexture.hpp"
@@ -684,6 +685,7 @@ set(sources
         "threepp/objects/SplatCloud.cpp"
 
         "threepp/splats/SplatData.cpp"
+        "threepp/splats/SplatLod.cpp"
 
         "threepp/textures/Texture.cpp"
         "threepp/textures/DataTexture3D.cpp"
