@@ -283,6 +283,13 @@ int main(int argc, char** argv) {
     report(countLit(reloaded, 0, kW / 6) < 200,
            "with nothing left where the dead cloud stood");
 
+    // A Vulkan-only cloud must never pay the GL copy: the data textures and
+    // sorted-index attribute are ~1 GB at scan scale, they are CPU-side, and
+    // every undo-history copy of a cloud retains them too. Lazy means a cloud
+    // that has drawn plenty of Vulkan frames still has none of it.
+    report(!second->glResourcesBuilt(),
+           "a Vulkan-only cloud never builds its GL-side textures");
+
     // ── 4. hidden is parked, deleted is evicted, and the scratch follows ────
     // Toggling visibility must NOT cost the re-upload a real deletion does: a
     // hidden cloud stays in the scene, so its buffers stay on the device and

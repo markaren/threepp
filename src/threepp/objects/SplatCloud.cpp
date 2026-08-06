@@ -435,15 +435,22 @@ SplatCloud::SplatCloud(SplatData data)
     splatMaterial_->depthWrite = false;
     splatMaterial_->side = Side::Double;
 
-    buildTextures();
+    // The state-carrying uniforms get their defaults HERE, before any setter
+    // can run — never in the lazy build below, which would overwrite whatever
+    // setViewportSize / setDebugNonFinite recorded in the meantime.
+    splatMaterial_->uniforms["splatViewport"] = Uniform(Vector2(1.f, 1.f));
+    splatMaterial_->uniforms["splatNear"] = Uniform(0.1f);
+    splatMaterial_->uniforms["splatDebugNonFinite"] = Uniform(false);
 
-    // instanceColor carries the sorted index. setColorAt is what allocates the
-    // attribute (and with it the divisor-1 binding); after that we write the
-    // raw float array directly, since these are indices, not colours.
-    setColorAt(count() - 1, Color());
-    auto& slots = instanceColor()->array();
-    for (size_t i = 0; i < count(); ++i) slots[i * 3] = static_cast<float>(i);
-    instanceColor()->needsUpdate();
+    // The GL-side resources — the data textures and the sorted-index
+    // instanceColor — are built LAZILY, on the first GL draw or update().
+    // Only GLRenderer invokes onBeforeRender (grep says so), so on a Vulkan
+    // backend a 6M-splat cloud never allocates the ~1 GB of CPU-side texture
+    // images it would never sample — and neither does every copy of it the
+    // editor's undo history retains. Measured on the editor's two-scan
+    // import/delete/import sequence: peak RAM 5.5 GB eager.
+    onBeforeRender = [this](void*, Object3D*, Camera*, BufferGeometry*, Material*,
+                            std::optional<GeometryGroup>) { ensureGlResources(); };
 
     // An empty cloud still allocated one instance's worth of buffers (the base
     // class rejects count 0); draw none of it.
@@ -498,6 +505,31 @@ SplatCloud::SplatCloud(SplatData data)
 std::shared_ptr<SplatCloud> SplatCloud::create(SplatData data) {
 
     return std::make_shared<SplatCloud>(std::move(data));
+}
+
+void SplatCloud::ensureGlResources() {
+    if (glResourcesBuilt_) return;
+    glResourcesBuilt_ = true;
+
+    buildTextures();
+
+    // instanceColor carries the sorted index. setColorAt is what allocates the
+    // attribute (and with it the divisor-1 binding); after that we write the
+    // raw float array directly, since these are indices, not colours. File
+    // order until the first update() sorts — exactly what the eager path drew.
+    //
+    // An EMPTY cloud still allocates: the shader binds instanceColor whether or
+    // not any instance draws, and GL throws on the missing attribute (the eager
+    // path allocated before the constructor's setCount(0), which is why this
+    // never showed until the build went lazy). The base class kept one
+    // instance's worth of capacity, so briefly reopening the count is safe.
+    const bool wasEmpty = count() == 0;
+    if (wasEmpty) setCount(1);
+    setColorAt(count() - 1, Color());
+    auto& slots = instanceColor()->array();
+    for (size_t i = 0; i < data_.count(); ++i) slots[i * 3] = static_cast<float>(i);
+    instanceColor()->needsUpdate();
+    if (wasEmpty) setCount(0);
 }
 
 void SplatCloud::buildTextures() {
@@ -593,9 +625,13 @@ void SplatCloud::buildTextures() {
     uniforms["splatTexWidth"] = Uniform(TEX_WIDTH);
     uniforms["splatShCoeffs"] = Uniform(coeffs);
     uniforms["splatShDegree"] = Uniform(data_.shDegree);
-    uniforms["splatViewport"] = Uniform(Vector2(1.f, 1.f));
-    uniforms["splatNear"] = Uniform(0.1f);
-    uniforms["splatDebugNonFinite"] = Uniform(false);
+    // splatViewport / splatNear / splatDebugNonFinite are NOT set here, and
+    // that is a hard rule: they carry STATE (setViewportSize, update,
+    // setDebugNonFinite), this function runs LAZILY on first GL use, and a
+    // default written here would stomp whatever a setter recorded in between —
+    // which is exactly how the NaN-sentinel debug flag silently became false
+    // and the sentinel test's magenta went to zero when the build went lazy.
+    // Their defaults live in the constructor, before any setter can run.
 }
 
 void SplatCloud::setViewportSize(int width, int height) {
@@ -639,6 +675,11 @@ void SplatCloud::raycast(const Raycaster& raycaster, std::vector<Intersection>& 
 }
 
 void SplatCloud::update(Camera& camera) {
+
+    // update() is the GL path's documented per-frame entry, so it is the other
+    // legitimate trigger for the lazy GL resources (onBeforeRender being the
+    // first — a caller that renders without ever calling update() still draws).
+    ensureGlResources();
 
     // Both matrices must be current before the sort reads them; a caller that
     // just moved the camera has not necessarily re-rendered yet.

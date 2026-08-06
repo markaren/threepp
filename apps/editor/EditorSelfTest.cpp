@@ -7443,6 +7443,8 @@ int EditorApp::runSelfTest() {
                 const bool vulkanBackend =
                         dynamic_cast<VulkanRenderer*>(renderer_.get()) != nullptr;
                 if (vulkanBackend) {
+                    check(!imported->glResourcesBuilt(),
+                          "a Vulkan editor never builds the scan's GL-side textures");
                     check(imported->lodTable().levels.size() >= 2,
                           "a multi-level scan keeps several levels resident (Vulkan)");
                     stepFixed(4);

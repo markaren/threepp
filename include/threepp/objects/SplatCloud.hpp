@@ -115,6 +115,10 @@ namespace threepp {
         // uniforms (the Vulkan compute rasterizer) can honour the same switch.
         [[nodiscard]] bool debugNonFinite() const { return debugNonFinite_; }
 
+        // Whether the GL-side data textures exist yet — the assertable form of
+        // "a Vulkan-only cloud never pays the GL copy" (see ensureGlResources).
+        [[nodiscard]] bool glResourcesBuilt() const { return glResourcesBuilt_; }
+
         // ── Partial submission: which splats this frame actually draws ────────
         // A list of (offset, count) into this cloud's own splats. Empty — the
         // default — draws all of them.
@@ -197,9 +201,15 @@ namespace threepp {
         std::array<float, 16> lastSortMatrix_{};
         bool sorted_{false};
         bool debugNonFinite_{false};
+        bool glResourcesBuilt_{false};
         std::vector<std::pair<uint32_t, uint32_t>> submitRanges_;
         splats::LodTable lodTable_;
 
+        // The GL-side CPU cost — data textures plus the sorted-index
+        // instanceColor — built on first GL use (onBeforeRender or update()),
+        // never on a Vulkan backend. ~1 GB at 6M splats, and the editor's undo
+        // history retains it per held copy, which is why lazy matters twice.
+        void ensureGlResources();
         void buildTextures();
         void sortByDepth(Camera& camera);
     };
