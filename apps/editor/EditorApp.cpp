@@ -3878,8 +3878,7 @@ void EditorApp::handleFileDrop(const std::vector<std::string>& paths) {
             } else {
                 log("no selection to attach " + path.filename().string() + " to");
             }
-        } else if (extension == ".png" || extension == ".jpg" || extension == ".jpeg" ||
-                   extension == ".bmp" || extension == ".tga" || extension == ".gif") {
+        } else if (formats::isImage(extension)) {
             // Deferred: which slot this belongs in depends on where the cursor
             // is over the inspector, and those rows are only known once the UI
             // has drawn. resolveTextureDrops() picks it up at the end of the

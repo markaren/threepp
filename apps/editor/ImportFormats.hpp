@@ -74,6 +74,18 @@ namespace threepp::editor::formats {
         return list;
     }
 
+    // Textures — anything ImageLoader decodes into a material map. Everything up to
+    // ".gif" is stb_image's doing; ".webp" is the vendored libwebp decoder
+    // (src/external/libwebp), which ImageLoader dispatches to by sniffing the RIFF
+    // magic rather than by extension. The name only has to get the file as far as a
+    // file dialog or a drop; the loader decides what it actually is.
+    inline const std::vector<std::string>& images() {
+
+        static const std::vector<std::string> list{
+                ".png", ".jpg", ".jpeg", ".bmp", ".tga", ".gif", ".webp"};
+        return list;
+    }
+
     // HDR images, which become the scene environment rather than a material map.
     // Both decode to linear float RGBA equirects (RGBELoader / EXRLoader), so
     // everything downstream treats them identically.
@@ -124,9 +136,7 @@ namespace threepp::editor::formats {
 
     inline bool isImage(const std::string& extension) {
 
-        static const std::vector<std::string> list{
-                ".png", ".jpg", ".jpeg", ".bmp", ".tga", ".gif"};
-        return contains(list, extension);
+        return contains(images(), extension);
     }
 
 }// namespace threepp::editor::formats
