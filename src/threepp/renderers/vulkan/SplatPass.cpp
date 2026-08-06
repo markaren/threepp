@@ -540,12 +540,46 @@ namespace threepp::vulkan {
         }
     }
 
-    void SplatPass::syncClouds(const std::vector<CloudEntry>& clouds) {
+    void SplatPass::syncClouds(const std::vector<CloudEntry>& clouds,
+                               const std::vector<const SplatCloud*>& parked) {
         frameClouds_.clear();
         ++syncSerial_;
+
+        // HIDDEN is not DELETED. A parked cloud (in the scene, not effectively
+        // visible) keeps its lastSeen fresh so retireStale leaves its geometry
+        // and SH buffers resident — toggling visibility on a 5M-splat scan
+        // costs nothing instead of a seconds-long re-upload each way. Only a
+        // cloud that leaves the SCENE (or dies) stops appearing in either list
+        // and ages out. The uuid check keeps a recycled address from parking a
+        // dead cloud's buffers under a live pointer. BEFORE retireStale, so a
+        // refresh on the aging boundary wins.
+        for (const SplatCloud* p : parked) {
+            if (!p) continue;
+            if (auto it = resident_.find(p);
+                it != resident_.end() && it->second->uuid == p->uuid)
+                it->second->lastSeen = syncSerial_;
+        }
+
         // BEFORE the empty early-out: deleting the scene's last splat cloud is
         // exactly when there is something to retire and nothing to submit.
         retireStale();
+
+        // Nothing resident at all: the shared sort scratch serves nobody, and
+        // by retireStale's own timing argument nothing in flight references it
+        // — the last frame that recorded a splat pass drained at least
+        // framesInFlight_+1 syncs ago. ~700 MB at a 5M high-water; letting it
+        // linger after the scan is deleted is the absolute-caps doctrine
+        // violated. (A PARKED cloud keeps the scratch alive: resident_ is not
+        // empty then, and unhide should not wait on a reallocation it can see
+        // coming.)
+        if (resident_.empty() && maxSplats_ > 1) {
+            for (auto* b : {&projBuf_, &countBuf_, &offsetBuf_, &keyA_, &valA_, &keyB_, &valB_,
+                            &histBuf_, &scanBuf_})
+                destroyBuffer(ctx_.allocator(), *b);
+            maxSplats_    = 0;
+            entryBudget_  = 0;
+            budgetCapped_ = false;
+        }
         if (clouds.empty()) return;
 
         // A cloud arriving or a cloud growing is a rare, load-time event; both
@@ -555,7 +589,11 @@ namespace threepp::vulkan {
         // A replaced environment means every resident set holds a dead view;
         // the rewrite needs the same waitIdle a new upload does.
         bool structural = envDirty_;
-        uint32_t needSplats = maxSplats_;
+        // Live demand comes from what this frame SUBMITS. Parked clouds keep
+        // their own buffers but record nothing, so the scratch never has to
+        // fit them — hiding the big scan lets the scratch shrink to the scene
+        // that is actually drawing.
+        uint32_t liveSplats = 0;
         for (const auto& e : clouds) {
             if (!e.cloud) continue;
             // A pointer hit with a uuid MISMATCH is a recycled address wearing
@@ -565,15 +603,37 @@ namespace threepp::vulkan {
                 it == resident_.end() || it->second->uuid != e.cloud->uuid) {
                 structural = true;
             }
-            needSplats = std::max(needSplats, static_cast<uint32_t>(e.cloud->splatCount()));
+            liveSplats = std::max(liveSplats, static_cast<uint32_t>(e.cloud->splatCount()));
         }
+        uint32_t needSplats  = maxSplats_;
         uint32_t needEntries = entryBudget_;
-        if (needSplats > maxSplats_) {
+        if (liveSplats > maxSplats_) {
             structural  = true;
+            needSplats  = liveSplats;
             needEntries = std::max<uint32_t>(
                     needEntries,
                     static_cast<uint32_t>(std::min<uint64_t>(
-                            uint64_t(needSplats) * kEntriesPerSplat, kMaxEntries)));
+                            uint64_t(liveSplats) * kEntriesPerSplat, kMaxEntries)));
+        } else if (uint64_t(liveSplats) * 2 < maxSplats_) {
+            // The high-water mark is at least double the live demand — V3 item
+            // 5, promoted from "hygiene" the day eviction started actually
+            // freeing cloud buffers while this stayed behind. Post-indirect-
+            // dispatch the oversize costs VRAM only, so shrinking is a pure
+            // win; the hysteresis is the factor of two itself plus the sync
+            // delay below, so a hide/unhide toggle inside the window pays
+            // nothing and a scene that really did get smaller reclaims within
+            // a second.
+            if (shrinkSince_ == 0) shrinkSince_ = syncSerial_;
+            if (syncSerial_ - shrinkSince_ > 60) {
+                structural    = true;
+                needSplats    = std::max(liveSplats, 1u);
+                needEntries   = static_cast<uint32_t>(std::min<uint64_t>(
+                        uint64_t(needSplats) * kEntriesPerSplat, kMaxEntries));
+                budgetCapped_ = false;
+                shrinkSince_  = 0;
+            }
+        } else {
+            shrinkSince_ = 0;
         }
 
         // A frame that overflowed was TRUNCATED — splats are missing from
@@ -663,7 +723,7 @@ namespace threepp::vulkan {
                 resident_.emplace(e.cloud, std::move(c));
             }
 
-            if (needSplats > maxSplats_ || needEntries > entryBudget_) {
+            if (needSplats != maxSplats_ || needEntries != entryBudget_) {
                 // Worth one line on stderr, but only when an actual frame was
                 // truncated: until the resize lands those frames ARE wrong
                 // (splats missing from tiles), and a silent self-correction
@@ -674,7 +734,7 @@ namespace threepp::vulkan {
                               << entryBudget_ << " -> " << needEntries
                               << " (splat, tile) pairs after a truncated frame"
                               << std::endl;
-                allocateScratch(std::max(needSplats, maxSplats_), needEntries);
+                allocateScratch(needSplats, needEntries);
                 // The overflow counters just consumed describe a frame that no
                 // longer exists. Clearing them stops the next few syncs from
                 // reading the same stale shortfall and growing again.

@@ -2300,11 +2300,22 @@ void VulkanRenderer::Impl::collectSplatClouds(Object3D& scene, Camera& camera) {
                 splatParams_.nearPlane = oc->nearPlane;
             }
 
-            scene.traverseVisible([&](Object3D& o) {
+            // Full traverse, not traverseVisible: a hidden cloud must be
+            // COLLECTED so the pass can PARK it (keep its GPU buffers) rather
+            // than age it out — the difference between a visibility toggle
+            // costing nothing and costing a seconds-long re-upload each way.
+            lastParkedSplats_.clear();
+            scene.traverse([&](Object3D& o) {
                 auto* sc = dynamic_cast<SplatCloud*>(&o);
                 if (!sc || sc->splatCount() == 0) return;
                 auto mat = sc->material();
-                if (mat && !mat->visible) return;
+                bool effectiveVisible = !(mat && !mat->visible);
+                for (Object3D* n = &o; effectiveVisible && n; n = n->parent)
+                    if (!n->visible) effectiveVisible = false;
+                if (!effectiveVisible) {
+                    lastParkedSplats_.push_back(sc);
+                    return;
+                }
 
                 vulkan::SplatPass::CloudEntry e{};
                 e.cloud = sc;
@@ -2394,7 +2405,7 @@ void VulkanRenderer::Impl::collectSplatClouds(Object3D& scene, Camera& camera) {
             // be rebuilt between resizes — the pass would then write the DEAD
             // view into fresh descriptor sets at the next cloud upload.
             splat_->setEnvironment(envImage.view, envImage.sampler, envImage.mipLevels);
-            splat_->syncClouds(lastVisibleSplats_);
+            splat_->syncClouds(lastVisibleSplats_, lastParkedSplats_);
         }
 
 }// namespace threepp

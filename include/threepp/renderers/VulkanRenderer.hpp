@@ -992,6 +992,11 @@ namespace threepp {
         // VRAM itself is not assertable from a test. 0 when no splat pass exists.
         [[nodiscard]] std::size_t splatResidentClouds() const;
 
+        // The splat pass's shared-scratch high-water, in splats. The other half
+        // of the eviction test surface: "deleting the scan released its ~700 MB
+        // of sort scratch" is a VRAM claim, and this is the assertable form.
+        [[nodiscard]] std::size_t splatScratchSplats() const;
+
     private:
         // The one implementation struct, defined in vulkan/VulkanCoreImpl.hpp
         // and opaque to callers of this header.

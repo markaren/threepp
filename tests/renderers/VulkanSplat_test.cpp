@@ -283,6 +283,32 @@ int main(int argc, char** argv) {
     report(countLit(reloaded, 0, kW / 6) < 200,
            "with nothing left where the dead cloud stood");
 
+    // ── 4. hidden is parked, deleted is evicted, and the scratch follows ────
+    // Toggling visibility must NOT cost the re-upload a real deletion does: a
+    // hidden cloud stays in the scene, so its buffers stay on the device and
+    // unhiding is instant. Only removal (or death) evicts — and when the last
+    // cloud goes, the shared sort scratch (~700 MB at a 5M high-water) has to
+    // go with it rather than linger as a high-water mark forever.
+    second->visible = false;
+    for (int i = 0; i < 10; ++i) draw();
+    report(renderer.splatResidentClouds() == 1,
+           "a HIDDEN cloud stays resident - parked, not evicted");
+    const auto hidden = renderer.readRGBPixels();
+    report(countLit(hidden, 3 * kW / 4, kW) < 200, "while drawing nothing");
+
+    second->visible = true;
+    for (int i = 0; i < 6; ++i) draw();
+    const auto unhidden = renderer.readRGBPixels();
+    report(countLit(unhidden, 3 * kW / 4, kW) > 500,
+           "and unhiding draws again from the parked buffers");
+
+    scene->remove(*second);
+    second.reset();
+    for (int i = 0; i < 10; ++i) draw();
+    report(renderer.splatResidentClouds() == 0, "removal from the scene still evicts");
+    report(renderer.splatScratchSplats() <= 1,
+           "and the last eviction releases the shared sort scratch");
+
     std::printf(failures == 0 ? "\nALL CHECKS PASSED\n" : "\n%d CHECK(S) FAILED\n", failures);
     return failures == 0 ? 0 : 1;
 }

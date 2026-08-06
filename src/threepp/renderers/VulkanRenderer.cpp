@@ -1405,6 +1405,10 @@ namespace threepp {
         return core()->splat_ ? core()->splat_->residentCount() : 0;
     }
 
+    std::size_t VulkanRenderer::splatScratchSplats() const {
+        return core()->splat_ ? core()->splat_->scratchSplats() : 0;
+    }
+
     void VulkanRenderer::setBloomThreshold(float threshold) {
         core()->bloomThreshold_ = threshold < 0.f ? 0.f : threshold;
     }

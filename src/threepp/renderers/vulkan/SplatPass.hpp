@@ -141,12 +141,22 @@ namespace threepp::vulkan {
         // syncClouds treats that as structural and rewrites them post-idle.
         void setEnvironment(VkImageView view, VkSampler sampler, uint32_t mips);
 
-        // Upload anything new, evict anything gone, grow the shared scratch to
-        // fit the largest resident cloud. Runs OUTSIDE command recording (the
-        // staging copy is a one-shot submit), so it may allocate freely.
-        // Returns true when a buffer handle changed and the descriptor sets
-        // need rewriting.
-        void syncClouds(const std::vector<CloudEntry>& clouds);
+        // Upload anything new, evict anything gone, size the shared scratch to
+        // what this frame actually SUBMITS — growing for a bigger cloud and
+        // shrinking (with hysteresis) when the demand halves, because after
+        // indirect dispatch the oversize costs VRAM only and the doctrine is
+        // absolute caps. Runs OUTSIDE command recording (the staging copy is a
+        // one-shot submit), so it may allocate freely.
+        //
+        // `parked`: clouds that are IN the scene but not effectively visible.
+        // They draw nothing and the scratch is not sized for them, but their
+        // geometry and SH buffers stay resident, so toggling visibility on a
+        // 5M-splat scan costs nothing instead of a seconds-long re-upload each
+        // way. Hidden is not deleted; only a cloud absent from BOTH lists ages
+        // out. The corollary is stated rather than hidden: a hidden scan holds
+        // its VRAM on purpose, because it is still in the scene.
+        void syncClouds(const std::vector<CloudEntry>& clouds,
+                        const std::vector<const SplatCloud*>& parked = {});
 
         [[nodiscard]] bool hasClouds() const { return !frameClouds_.empty(); }
 
@@ -222,6 +232,11 @@ namespace threepp::vulkan {
         // freed once its last referencing frame drains") is invisible from the
         // outside except as VRAM, and VRAM is not assertable — this is.
         [[nodiscard]] std::size_t residentCount() const { return resident_.size(); }
+
+        // The shared scratch's current high-water in splats — the other half of
+        // the same test surface: "the scratch was released/shrunk" is a VRAM
+        // claim, and VRAM is not assertable; this is.
+        [[nodiscard]] uint32_t scratchSplats() const { return maxSplats_; }
 
     private:
         // The expanded key list is the sum of tiles covered per splat, and that
@@ -318,6 +333,7 @@ namespace threepp::vulkan {
         };
         std::vector<FrameCloud> frameClouds_;
         uint32_t slotsUsed_ = 0;
+        uint64_t shrinkSince_ = 0;// first sync the scratch looked 2x oversized; 0 = it doesn't
         // (slot, descriptor sets) returned by retired clouds, reused by the
         // next upload so slots and pool capacity cycle instead of running out.
         std::vector<std::pair<uint32_t, std::vector<VkDescriptorSet>>> freeSlots_;

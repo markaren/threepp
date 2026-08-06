@@ -2870,6 +2870,10 @@ namespace threepp {
         // snapshot machinery, like collectWorldSprites, because a SplatCloud
         // is not a kind the G-buffer path knows how to draw.
         std::vector<vulkan::SplatPass::CloudEntry> lastVisibleSplats_;
+        // Splat clouds in the scene but not effectively visible this frame —
+        // parked, not evicted: their GPU buffers stay so a visibility toggle
+        // costs nothing (see SplatPass::syncClouds).
+        std::vector<const SplatCloud*> lastParkedSplats_;
         // Camera-derived splat parameters, stashed by the collector (the last
         // point in the frame that holds a Camera&). The jitter shear is added
         // at record time because the raster does not choose it until later.

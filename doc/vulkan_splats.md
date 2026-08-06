@@ -296,10 +296,16 @@ Not implemented. Ordered by measured or estimated value.
    Read it as: the raster half is real work on real coverage, the sort is
    mostly not (item 1), and per-splat projection is the smallest of the three
    even at 5M.
-5. **Shrink the budget as well as grow it.** The budget never comes back down
-   after a close-up frame inflates it, so a scene that pans away keeps paying.
-   Same machinery as the growth path (`syncClouds` already reads the entry count
-   every frame), plus hysteresis so a pan does not thrash the reallocation.
+5. ~~**Shrink the budget as well as grow it.**~~ DONE, as VRAM reclamation (the
+   time cost died with indirect dispatch). The scratch follows the LIVE demand:
+   it grows as before, shrinks (with a factor-of-two threshold plus a ~60-sync
+   delay) when the submitted demand halves, and is released outright when the
+   last resident cloud goes. Hidden clouds are PARKED, not evicted — collected
+   via a full traverse and reported to `syncClouds` so their buffers stay and a
+   visibility toggle costs nothing; only leaving the scene evicts. The traded
+   corner is stated in the code: a fresh import after a full release re-learns
+   its entry budget through one truncated frame, exactly like a first-ever
+   import.
 6. **A tile-local early-out on transmittance.** The raster already breaks when
    every pixel in a tile has saturated; it does not skip splats that arrive after
    the tile is opaque but before the batch boundary.
