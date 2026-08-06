@@ -273,6 +273,10 @@ namespace threepp::vulkan {
         Buffer   projBuf_{}, countBuf_{}, offsetBuf_{};
         Buffer   keyA_{}, valA_{}, keyB_{}, valB_{};
         Buffer   rangeBuf_{}, globalBuf_{}, histBuf_{}, scanBuf_{};
+        // Two VkDispatchIndirectCommands written by splat_indirect.comp from the
+        // expanded entry count. Fixed size, written and consumed inside one
+        // submission, so one buffer serves every cloud and every frame.
+        Buffer   indirectBuf_{};
         std::vector<Buffer> uboBuf_;  // [framesInFlight], host-visible
         std::vector<Buffer> debugBuf_;// [framesInFlight], host-visible readback
 
@@ -285,6 +289,7 @@ namespace threepp::vulkan {
         VkPipeline scanPipe_     = VK_NULL_HANDLE;
         VkPipeline scanAddPipe_  = VK_NULL_HANDLE;
         VkPipeline expandPipe_   = VK_NULL_HANDLE;
+        VkPipeline indirectPipe_ = VK_NULL_HANDLE;
         VkPipeline histPipe_     = VK_NULL_HANDLE;
         VkPipeline scatterPipe_  = VK_NULL_HANDLE;
         VkPipeline rangePipe_    = VK_NULL_HANDLE;
@@ -310,6 +315,11 @@ namespace threepp::vulkan {
         void uploadCloud(Cloud& c, const SplatCloud& src);
         void oneShot(const std::function<void(VkCommandBuffer)>& body);
         void barrier(VkCommandBuffer cb) const;
+        // The compute write -> vkCmdDispatchIndirect read hazard. barrier()
+        // covers compute and transfer only; indirect command fetch is its own
+        // stage and access, and omitting it is the kind of miss that works on
+        // one driver and hangs on another.
+        void barrierIndirect(VkCommandBuffer cb) const;
         // Records a recursive exclusive prefix sum. mode0 picks the level-0
         // array: 0 = counts[] -> offsets[], 2 = hist[] in place. Higher levels
         // always run in scanScratch.

@@ -7,6 +7,7 @@
 
 #include "threepp/renderers/vulkan/shaders/splat_checksum.comp.spv.h"
 #include "threepp/renderers/vulkan/shaders/splat_expand.comp.spv.h"
+#include "threepp/renderers/vulkan/shaders/splat_indirect.comp.spv.h"
 #include "threepp/renderers/vulkan/shaders/splat_project.comp.spv.h"
 #include "threepp/renderers/vulkan/shaders/splat_radix_hist.comp.spv.h"
 #include "threepp/renderers/vulkan/shaders/splat_radix_scatter.comp.spv.h"
@@ -38,7 +39,7 @@ namespace threepp::vulkan {
         constexpr uint32_t kProjStride = 64; // sizeof(SplatProj)
         constexpr uint32_t kGeomStride = 40; // vec3 + float + float[6], scalar layout
         constexpr uint32_t kGlobalWords = 12;
-        constexpr uint32_t kBindings   = 22;
+        constexpr uint32_t kBindings   = 23;// 22 = the indirect dispatch args
 
         constexpr uint32_t kSplatFlagOrtho     = 1u;
         constexpr uint32_t kSplatFlagDebugNaN  = 2u;
@@ -171,6 +172,16 @@ namespace threepp::vulkan {
                                           VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
                                   VMA_MEMORY_USAGE_AUTO);
         ctx_.setObjectName(globalBuf_.handle, "splat.globals");
+
+        // Two VkDispatchIndirectCommands = 6 uints. STORAGE so the sizing
+        // kernel can write it, INDIRECT so the dispatches can read it.
+        indirectBuf_ = createBuffer(ctx_.allocator(), ctx_.device(),
+                                    6 * sizeof(uint32_t),
+                                    VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
+                                            VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT |
+                                            VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+                                    VMA_MEMORY_USAGE_AUTO);
+        ctx_.setObjectName(indirectBuf_.handle, "splat.indirectArgs");
     }
 
     SplatPass::~SplatPass() {
@@ -182,13 +193,13 @@ namespace threepp::vulkan {
         }
         resident_.clear();
         for (auto* b : {&projBuf_, &countBuf_, &offsetBuf_, &keyA_, &valA_, &keyB_, &valB_,
-                        &rangeBuf_, &globalBuf_, &histBuf_, &scanBuf_})
+                        &rangeBuf_, &globalBuf_, &histBuf_, &scanBuf_, &indirectBuf_})
             destroyBuffer(a, *b);
         for (auto& b : uboBuf_) destroyBuffer(a, b);
         for (auto& b : debugBuf_) destroyBuffer(a, b);
 
-        for (VkPipeline p : {projectPipe_, scanPipe_, scanAddPipe_, expandPipe_, histPipe_,
-                             scatterPipe_, rangePipe_, rasterPipe_, checksumPipe_})
+        for (VkPipeline p : {projectPipe_, scanPipe_, scanAddPipe_, expandPipe_, indirectPipe_,
+                             histPipe_, scatterPipe_, rangePipe_, rasterPipe_, checksumPipe_})
             if (p) vkDestroyPipeline(d, p, nullptr);
         if (pipeLayout_) vkDestroyPipelineLayout(d, pipeLayout_, nullptr);
         if (dsLayout_)   vkDestroyDescriptorSetLayout(d, dsLayout_, nullptr);
@@ -254,6 +265,8 @@ namespace threepp::vulkan {
                                         sizeof(kSplatScanAddCompSpv), "splat_scan_add");
         expandPipe_   = makeComputePipe(d, cache, pipeLayout_, kSplatExpandCompSpv,
                                         sizeof(kSplatExpandCompSpv), "splat_expand");
+        indirectPipe_ = makeComputePipe(d, cache, pipeLayout_, kSplatIndirectCompSpv,
+                                        sizeof(kSplatIndirectCompSpv), "splat_indirect");
         histPipe_     = makeComputePipe(d, cache, pipeLayout_, kSplatRadixHistCompSpv,
                                         sizeof(kSplatRadixHistCompSpv), "splat_radix_hist");
         scatterPipe_  = makeComputePipe(d, cache, pipeLayout_, kSplatRadixScatterCompSpv,
@@ -272,7 +285,7 @@ namespace threepp::vulkan {
         sz[0].type            = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
         sz[0].descriptorCount = sets * 4;// splat + fog + clouds + lights
         sz[1].type            = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-        sz[1].descriptorCount = sets * 13;
+        sz[1].descriptorCount = sets * 14;// 13 sort/scratch buffers + indirect args
         sz[2].type            = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
         sz[2].descriptorCount = sets * 2;// sceneHdr + gbuf motion
         sz[3].type            = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
@@ -485,6 +498,10 @@ namespace threepp::vulkan {
             w[21].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
             w[21].pImageInfo     = &env;
 
+            VkDescriptorBufferInfo ind{indirectBuf_.handle, 0, VK_WHOLE_SIZE};
+            w[22].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+            w[22].pBufferInfo    = &ind;
+
             vkUpdateDescriptorSets(ctx_.device(), kBindings, w.data(), 0, nullptr);
         }
     }
@@ -605,7 +622,16 @@ namespace threepp::vulkan {
             if (const auto* w = static_cast<const uint32_t*>(ai.pMappedData); w && w[2]) {
                 std::cerr << "[splat] entries " << w[2] << " overflow " << w[3]
                           << " visible " << w[4] << " scanBad " << w[10]
-                          << " orderBad " << w[11] << std::endl;
+                          << " orderBad " << w[11]
+                          // The three hashes are what makes this an A/B
+                          // instrument rather than only an invariant report: on
+                          // a real scan the final FRAME is not reproducible
+                          // run to run, so a changed picture proves nothing —
+                          // these hash the splat pass's own output (sorted keys,
+                          // sorted payload, composited pixels) and are the level
+                          // at which a sort change must be byte-identical.
+                          << " hashKey " << w[7] << " hashVal " << w[8]
+                          << " hashColor " << w[9] << std::endl;
             }
         }
 
@@ -664,6 +690,20 @@ namespace threepp::vulkan {
         if (maxSplats_ == 0) allocateScratch(1, kEntriesPerSplat);
 
         for (auto& kv : resident_) writeSets(*kv.second);
+    }
+
+    void SplatPass::barrierIndirect(VkCommandBuffer cb) const {
+        VkMemoryBarrier2 mb{};
+        mb.sType         = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2;
+        mb.srcStageMask  = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+        mb.srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
+        mb.dstStageMask  = VK_PIPELINE_STAGE_2_DRAW_INDIRECT_BIT;
+        mb.dstAccessMask = VK_ACCESS_2_INDIRECT_COMMAND_READ_BIT;
+        VkDependencyInfo di{};
+        di.sType              = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
+        di.memoryBarrierCount = 1;
+        di.pMemoryBarriers    = &mb;
+        vkCmdPipelineBarrier2(cb, &di);
     }
 
     void SplatPass::barrier(VkCommandBuffer cb) const {
@@ -844,21 +884,52 @@ namespace threepp::vulkan {
             vkCmdDispatch(cb, divUp(c.count, 256), 1, 1);
             barrier(cb);
 
+            // ── size the sort from the data ──────────────────────────────────
+            // One thread reads g.entryCount and writes the group counts the
+            // radix and range dispatches below consume. Everything after the
+            // expansion used to run over entryBudget_ instead, which measured
+            // 7.9 ms of sorting on a frame with nothing on screen.
+            // THREEPP_VK_SPLAT_NOINDIRECT restores the worst-case dispatches.
+            // Same escape-hatch shape as NOMOTION/NOFOG, and it earns its keep
+            // twice: it is how the indirect path was A/B'd for byte-identical
+            // output on a real scan, and it is the first thing to try if some
+            // other driver disagrees about vkCmdDispatchIndirect.
+            const char* nie = std::getenv("THREEPP_VK_SPLAT_NOINDIRECT");
+            const bool indirectDispatch = !(nie && *nie && *nie != '0');
+
+            if (indirectDispatch) {
+
+                vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, indirectPipe_);
+                pc = {entryBudget_, 0, 0, 0, 0, 0, 0, 0};
+                vkCmdPushConstants(cb, pipeLayout_, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(pc), &pc);
+                vkCmdDispatch(cb, 1, 1, 1);
+                barrierIndirect(cb);
+            }
+
             // ── 8 x 4-bit LSD radix, ping-ponging A <-> B ────────────────────
-            // Dispatched for the WORST case: the expanded entry count lives on
-            // the GPU (g.entryCount) and the host never sees it in time to size
-            // the dispatch, so the tail blocks read it and exit. Sizing these
-            // from an indirect dispatch is on the V3 list.
+            // The histogram is indexed [bin][block] with pc.arg1 = the WORST-CASE
+            // block count, and the scan below still runs the worst-case extent
+            // (recordScan's per-level offsets are host arithmetic). Only the
+            // dispatches shrink — which is exactly why the histogram has to be
+            // ZEROED first: the tail blocks used to run and write zero counts,
+            // and now they do not run at all, so their bins would carry LAST
+            // FRAME'S values into a scan that still reads them. Every offset
+            // after the live region would be wrong, and the picture with it.
             stageEnd(TP_SplatProject);
             stageBegin(TP_SplatSort);
             for (uint32_t pass = 0; pass < kRadixPasses; ++pass) {
                 const uint32_t shift = pass * 4;
                 const uint32_t side  = pass & 1u;// 0: A->B, 1: B->A
 
+                vkCmdFillBuffer(cb, histBuf_.handle, 0,
+                                VkDeviceSize(kRadixBins) * radixBlocks * 4, 0u);
+                barrier(cb);
+
                 vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, histPipe_);
                 pc = {entryBudget_, 0, 0, 0, shift, radixBlocks, side, 0};
                 vkCmdPushConstants(cb, pipeLayout_, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(pc), &pc);
-                vkCmdDispatch(cb, radixBlocks, 1, 1);
+                if (indirectDispatch) vkCmdDispatchIndirect(cb, indirectBuf_.handle, 0);
+                else                  vkCmdDispatch(cb, radixBlocks, 1, 1);
                 barrier(cb);
 
                 recordScan(cb, kRadixBins * radixBlocks, 2);
@@ -866,7 +937,8 @@ namespace threepp::vulkan {
                 vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, scatterPipe_);
                 pc = {entryBudget_, 0, 0, 0, shift, radixBlocks, side, 0};
                 vkCmdPushConstants(cb, pipeLayout_, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(pc), &pc);
-                vkCmdDispatch(cb, radixBlocks, 1, 1);
+                if (indirectDispatch) vkCmdDispatchIndirect(cb, indirectBuf_.handle, 0);
+                else                  vkCmdDispatch(cb, radixBlocks, 1, 1);
                 barrier(cb);
             }
 
@@ -877,7 +949,10 @@ namespace threepp::vulkan {
             vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, rangePipe_);
             pc = {entryBudget_, 0, 0, 0, 0, 0, 0, 0};
             vkCmdPushConstants(cb, pipeLayout_, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(pc), &pc);
-            vkCmdDispatch(cb, divUp(entryBudget_, 256), 1, 1);
+            // rangeBuf_ was zero-filled at the top of this cloud, so the tiles
+            // this dispatch no longer reaches are empty rather than stale.
+            if (indirectDispatch) vkCmdDispatchIndirect(cb, indirectBuf_.handle, 3 * sizeof(uint32_t));
+            else                  vkCmdDispatch(cb, divUp(entryBudget_, 256), 1, 1);
             barrier(cb);
 
             if (checksum) {

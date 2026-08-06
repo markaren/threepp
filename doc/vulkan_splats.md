@@ -158,11 +158,33 @@ renders a plausible frame while testing nothing.
 
 Not implemented. Ordered by measured or estimated value.
 
-1. **Size the sort and range dispatches from the actual entry count.** The
-   expanded count lives on the GPU, so today every pass after the expansion is
-   dispatched over the BUDGET. `vkCmdDispatchIndirect` off a count the expansion
-   writes; the histogram scan's extent has to follow the same count or the
-   offsets do not line up.
+1. ~~**Size the sort and range dispatches from the actual entry count.**~~ DONE.
+   `splat_indirect.comp` reads `g.entryCount` after the expansion barrier and
+   writes two `VkDispatchIndirectCommand`s; histogram, scatter and range are
+   `vkCmdDispatchIndirect` off them. Measured, 5.0M Sanctuaire at 960×600:
+
+   | camera | before | after | sort before → after |
+   |---|---|---|---|
+   | basilica fills the screen | 28.72 ms | **24.18 ms** | 9.71 → 4.89 |
+   | zoom 8× in | 12.96 ms | **7.44 ms** | 9.38 → 3.69 |
+   | pointed at empty space | 9.81 ms | **1.77 ms** | 8.50 → **0.16** |
+
+   34.6 → 41.5 fps framed, 75.6 → 132.7 zoomed, 94 → 548 with nothing on
+   screen. Byte-identical output: `hashKey`/`hashVal`/`hashColor` match the
+   worst-case path exactly at 5.0M and 2.5M, `scanBad 0 orderBad 0`.
+
+   The scan chain is still host-sized and that is now the visible residue: at
+   full view 8,724,270 entries of a 20M budget means the sort should have fallen
+   to ~44 %, and it did (9.71 → 4.89), but the 8 × 625k-word histogram scan and
+   its ~64 barriers ride along at worst case regardless. Both remaining targets
+   in the plan (full view ≤23 ms, zoom ≤6 ms) were missed by 1–1.5 ms on exactly
+   that. Making the scan indirect too is the follow-up, and it is a bigger change
+   than this one: `recordScan` computes per-level counts AND scratch offsets on
+   the host.
+
+   `THREEPP_VK_SPLAT_NOINDIRECT=1` restores the worst-case dispatches — the A/B
+   switch the numbers above came from, and the first thing to try if another
+   driver disagrees.
 
    Now measured rather than estimated, and it is worth more than the −12 % this
    line used to claim. With the per-stage timings (item 4) on the 5.0M

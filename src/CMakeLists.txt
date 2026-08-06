@@ -1216,6 +1216,10 @@ if (THREEPP_WITH_VULKAN)
         kSplatExpandCompSpv
         _splat_expand_spv_h)
     compile_vulkan_shader(threepp
+        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/splat_indirect.comp"
+        kSplatIndirectCompSpv
+        _splat_indirect_spv_h)
+    compile_vulkan_shader(threepp
         "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/splat_radix_hist.comp"
         kSplatRadixHistCompSpv
         _splat_radix_hist_spv_h)

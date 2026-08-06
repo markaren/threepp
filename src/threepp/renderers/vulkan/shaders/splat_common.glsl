@@ -252,6 +252,12 @@ layout(set = 0, binding = 20, scalar) uniform LightsUbo {
 
 layout(set = 0, binding = 21) uniform sampler2D envTex;// prefiltered PMREM chain
 
+// VkDispatchIndirectCommand pairs written by splat_indirect.comp: [0..2] the
+// radix histogram/scatter extent, [3..5] the tile-range extent. Written by one
+// thread after the expansion, consumed by vkCmdDispatchIndirect in the same
+// submission — so it is one buffer, not one per frame in flight.
+layout(set = 0, binding = 22, scalar) buffer IndirectBuf { uint indirect[]; };
+
 // ── Spherical harmonics ─────────────────────────────────────────────────────
 // The SAME decimal literals as threepp/splats/SplatSH.hpp and as the GL
 // vertex shader. SplatSH_test asserts the GL text still carries every one of
