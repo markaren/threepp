@@ -195,6 +195,22 @@ namespace {
 }// namespace
 
 
+// One detail level of a SOG asset, resident inside the single cloud alongside
+// every other level, plus where each of its chunks sits. Offsets are absolute
+// indices into the cloud, which is exactly what SplatCloud::setSubmitRanges
+// wants, so the per-frame selection is a lookup and never an upload.
+struct LodChunk {
+    size_t offset;
+    size_t count;
+    Box3   bound;// cloud-local
+};
+struct LodLevel {
+    int    lod = 0;
+    size_t base = 0;
+    size_t count = 0;
+    std::vector<LodChunk> chunks;
+};
+
 int main(int argc, char** argv) {
 
     // --cam / --look / --frames / --out come from the shared capture harness.
@@ -219,6 +235,7 @@ int main(int argc, char** argv) {
     bool upscaler = false;
     float renderScale = 1.f;
     int cloudSplit = 1;
+    bool lodDynamic = false;
 
     for (int i = 1; i < argc; ++i) {
 
@@ -241,6 +258,8 @@ int main(int argc, char** argv) {
             renderScale = static_cast<float>(std::atof(argv[++i]));
         } else if (arg == "--clouds" && i + 1 < argc) {
             cloudSplit = std::max(1, std::atoi(argv[++i]));
+        } else if (arg == "--lod-dynamic") {
+            lodDynamic = true;
         } else if (arg == "--shot" && i + 1 < argc) {
             shotPath = argv[++i];
         } else if (arg.rfind("--screenshot=", 0) == 0) {
@@ -263,6 +282,7 @@ int main(int argc, char** argv) {
     }
 
     SplatData data;
+    std::vector<LodLevel> lodLevels;// non-empty only under --lod-dynamic
     const bool loadedFromFile = !plyPath.empty();
     if (loadedFromFile) {
 
@@ -274,7 +294,61 @@ int main(int argc, char** argv) {
         // ALTERNATIVES: each covers the whole scene at its own density, so
         // --level 1 is the same building from half as many splats, not half a
         // building. A .ply has exactly one level and ignores the flag.
-        if (SogLoader::isSog(plyPath)) {
+        if (SogLoader::isSog(plyPath) && lodDynamic) {
+
+            // --lod-dynamic: every declared level in ONE cloud, uploaded once.
+            // The per-frame choice is then a range list, not a re-upload and not
+            // another cloud — both of which were measured and rejected (see
+            // doc/vulkan_splats.md). No loader change is needed for this:
+            // describe() reports each level's chunks with their counts and
+            // bounds in exactly the order load() concatenates them, so a prefix
+            // sum over those counts IS the chunk table.
+            const auto info = SogLoader::describe(plyPath);
+            // EVERY OTHER level, finest first. Resident VRAM is the sum of what
+            // is loaded and it is paid TWICE — the GL-side data textures and the
+            // Vulkan pass's own buffers each hold a copy — so all four levels of
+            // the Sanctuaire scan (9.4M splats) exhausts a 12 GB card and dies.
+            // Adjacent levels differ by only 2x anyway, so every other one gives
+            // 4x steps for a third less memory and keeps level 0, which is the
+            // one the close-up invariant needs.
+            std::cout << "  SOG asset, " << info.lodLevels
+                      << " level(s), loading every other one for dynamic LOD" << std::endl;
+            for (int l = 0; l < info.lodLevels; l += 2) {
+
+                SplatData d = SogLoader::load(plyPath, {l});
+                LodLevel lvl;
+                lvl.lod   = l;
+                lvl.base  = data.count();
+                lvl.count = d.count();
+                size_t within = 0;
+                for (const auto& ch : info.levels[static_cast<size_t>(l)].chunks) {
+
+                    lvl.chunks.push_back({lvl.base + within, ch.count, ch.bound});
+                    within += ch.count;
+                }
+                if (within != lvl.count) {
+                    std::cerr << "  level " << l << ": chunk counts sum to " << within
+                              << " but the level holds " << lvl.count
+                              << " — chunk table unusable, dynamic LOD off" << std::endl;
+                    lodLevels.clear();
+                    break;
+                }
+                // Append into the single resident buffer. First level seeds the
+                // degree; the loader already promotes bands to the maximum.
+                if (data.count() == 0) {
+                    data = std::move(d);
+                } else {
+                    data.means.insert(data.means.end(), d.means.begin(), d.means.end());
+                    data.scales.insert(data.scales.end(), d.scales.begin(), d.scales.end());
+                    data.rotations.insert(data.rotations.end(), d.rotations.begin(), d.rotations.end());
+                    data.opacities.insert(data.opacities.end(), d.opacities.begin(), d.opacities.end());
+                    data.sh.insert(data.sh.end(), d.sh.begin(), d.sh.end());
+                }
+                std::cout << "    level " << l << ": " << lvl.count << " splats at offset "
+                          << lvl.base << ", " << lvl.chunks.size() << " chunks" << std::endl;
+                lodLevels.push_back(std::move(lvl));
+            }
+        } else if (SogLoader::isSog(plyPath)) {
 
             const auto info = SogLoader::describe(plyPath);
             std::cout << "  SOG asset, " << info.lodLevels << " level(s):";
@@ -668,6 +742,79 @@ int main(int argc, char** argv) {
             camera->position.set(target.x + d.x * c - d.z * s, camera->position.y,
                                  target.z + d.x * s + d.z * c);
             camera->lookAt(target);
+        }
+
+        // ── dynamic LOD selection ───────────────────────────────────────────
+        // Two decisions per frame, both driving one range list. WHICH LEVEL:
+        // the coarsest whose splats still cover the cloud's projected footprint
+        // at kTargetPerPixel, which makes "close up" saturate to level 0 by
+        // construction — the whole point. WHICH CHUNKS: those whose bound is in
+        // the frustum, which is where chunk culling lives now that it is an
+        // if-statement rather than a GPU pass.
+        //
+        // Deliberately NOT per-chunk level mixing yet: levels do not share a
+        // chunk partition (their chunk lists differ), so a near-chunk-fine,
+        // far-chunk-coarse policy needs a cross-level correspondence this does
+        // not have. One level for the cloud plus per-chunk culling is the
+        // honest first version, and it is already the machinery the mixed
+        // version will use.
+        if (!lodLevels.empty() && useVulkan) {
+
+            constexpr float kTargetPerPixel = 1.0f;
+            constexpr float kHysteresis     = 1.25f;// switch only past a 25% margin
+            static int heldLevel = 0;
+
+            // Projected footprint of the fit sphere, in pixels.
+            const auto sz = canvas.size();
+            const float dist = camera->position.distanceTo(target);
+            const float pxPerUnit = 0.5f * static_cast<float>(sz.height()) /
+                                    (std::tan(math::degToRad(camera->fov * 0.5f)) *
+                                     std::max(dist, 1e-3f));
+            const float rPx  = fit.radius * pxPerUnit;
+            const float area = std::max(math::PI * rPx * rPx, 1.f);
+
+            // Coarsest level that still covers the footprint; levels are
+            // ordered finest-first, so walk back from the coarsest.
+            int want = 0;
+            for (int l = static_cast<int>(lodLevels.size()) - 1; l >= 0; --l) {
+                if (static_cast<float>(lodLevels[static_cast<size_t>(l)].count) / area >=
+                    kTargetPerPixel) { want = l; break; }
+            }
+            // Hysteresis: only move when the candidate is clearly better, so an
+            // orbit that hovers on a threshold does not flip every frame.
+            if (want != heldLevel) {
+
+                const float held = static_cast<float>(lodLevels[static_cast<size_t>(heldLevel)].count) / area;
+                const float cand = static_cast<float>(lodLevels[static_cast<size_t>(want)].count) / area;
+                const bool coarser = want > heldLevel;
+                if (coarser ? (cand >= kTargetPerPixel * kHysteresis)
+                            : (held < kTargetPerPixel / kHysteresis))
+                    heldLevel = want;
+            }
+
+            const auto& lvl = lodLevels[static_cast<size_t>(heldLevel)];
+            Matrix4 vp;
+            vp.multiplyMatrices(camera->projectionMatrix, camera->matrixWorldInverse);
+            Frustum frustum;
+            frustum.setFromProjectionMatrix(vp);
+
+            std::vector<std::pair<uint32_t, uint32_t>> ranges;
+            for (const auto& ch : lvl.chunks) {
+
+                Box3 world = ch.bound;
+                world.applyMatrix4(*cloud->matrixWorld);
+                if (!frustum.intersectsBox(world)) continue;
+                // Merge with the previous range when they are adjacent: chunks
+                // are stored contiguously, so a fully-visible level collapses to
+                // ONE range and never approaches the 64 the backend honours.
+                const auto off = static_cast<uint32_t>(ch.offset);
+                const auto cnt = static_cast<uint32_t>(ch.count);
+                if (!ranges.empty() && ranges.back().first + ranges.back().second == off)
+                    ranges.back().second += cnt;
+                else
+                    ranges.emplace_back(off, cnt);
+            }
+            cloud->setSubmitRanges(std::move(ranges));
         }
 
         // Before render(), not inside onBeforeRender: the renderer uploads the

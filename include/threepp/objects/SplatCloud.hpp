@@ -114,6 +114,36 @@ namespace threepp {
         // uniforms (the Vulkan compute rasterizer) can honour the same switch.
         [[nodiscard]] bool debugNonFinite() const { return debugNonFinite_; }
 
+        // ── Partial submission: which splats this frame actually draws ────────
+        // A list of (offset, count) into this cloud's own splats. Empty — the
+        // default — draws all of them.
+        //
+        // This is the mechanism per-chunk LOD is built on, and the reason it is
+        // a range list rather than anything else is measured: a second
+        // SplatCloud costs ~1.3 ms because the Vulkan pass runs end to end per
+        // cloud, and re-packing a merged buffer per selection change is a
+        // re-upload of up to 1.2 GB. Keep every chunk at every detail level in
+        // ONE cloud, uploaded once, and let the frame pick ranges. A chunk
+        // outside the frustum is a chunk left out of the list, which is all
+        // chunk culling ever needs to be.
+        //
+        // Order matters and is preserved: the ranges are drawn in the order
+        // given, so a list covering the whole cloud in ascending order is
+        // exactly equivalent to an empty one. Offsets past the end are dropped
+        // and counts are clamped by the backend; at most 64 ranges are honoured.
+        //
+        // VULKAN ONLY today — the GL path draws every splat regardless. Setting
+        // this changes nothing there rather than silently disagreeing between
+        // backends, which is why the example prints which backend is running.
+        void setSubmitRanges(std::vector<std::pair<uint32_t, uint32_t>> ranges) {
+
+            submitRanges_ = std::move(ranges);
+        }
+        [[nodiscard]] const std::vector<std::pair<uint32_t, uint32_t>>& submitRanges() const {
+
+            return submitRanges_;
+        }
+
         // Ray against the cloud's own 3-sigma bounding sphere, and nothing
         // finer. What it replaces is the reason it exists: InstancedMesh's
         // raycast tests the unit quad once per instance against an
@@ -155,6 +185,7 @@ namespace threepp {
         std::array<float, 16> lastSortMatrix_{};
         bool sorted_{false};
         bool debugNonFinite_{false};
+        std::vector<std::pair<uint32_t, uint32_t>> submitRanges_;
 
         void buildTextures();
         void sortByDepth(Camera& camera);

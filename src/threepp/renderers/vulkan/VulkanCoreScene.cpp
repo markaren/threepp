@@ -2311,6 +2311,10 @@ void VulkanRenderer::Impl::collectSplatClouds(Object3D& scene, Camera& camera) {
                 e.debugNonFinite = sc->debugNonFinite();
                 std::memcpy(e.model, sc->matrixWorld->elements.data(), 64);
 
+                // What the app asked to draw this frame (SplatCloud::
+                // setSubmitRanges); empty is the whole cloud.
+                e.ranges = sc->submitRanges();
+
                 // THREEPP_VK_SPLAT_RANGESPLIT=K submits the cloud as K
                 // contiguous ranges covering ALL of it, in order. That is the
                 // identity by construction — the compact index sequence is the
@@ -2321,6 +2325,7 @@ void VulkanRenderer::Impl::collectSplatClouds(Object3D& scene, Camera& camera) {
 
                     const int k = std::atoi(rs);
                     if (k > 1) {
+                        e.ranges.clear();// the probe overrides the app's choice
                         const uint32_t total = static_cast<uint32_t>(sc->splatCount());
                         const uint32_t per   = (total + static_cast<uint32_t>(k) - 1u) /
                                                static_cast<uint32_t>(k);
