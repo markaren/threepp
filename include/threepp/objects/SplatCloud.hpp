@@ -205,10 +205,15 @@ namespace threepp {
         std::vector<std::pair<uint32_t, uint32_t>> submitRanges_;
         splats::LodTable lodTable_;
 
-        // The GL-side CPU cost — data textures plus the sorted-index
-        // instanceColor — built on first GL use (onBeforeRender or update()),
-        // never on a Vulkan backend. ~1 GB at 6M splats, and the editor's undo
-        // history retains it per held copy, which is why lazy matters twice.
+        // The data textures, built on first GL use (update(), which the object's
+        // own onBeforeRender calls) and never on a Vulkan backend. ~1 GB at 6M
+        // splats, and the editor's undo history retains it per held copy, which
+        // is why lazy matters twice.
+        //
+        // The sorted-index instanceColor is NOT here: an attribute created during
+        // onBeforeRender arrives after the renderer has already decided what to
+        // upload, so it is allocated in the constructor. The constructor says why
+        // at length; it cost an editor crash to learn.
         void ensureGlResources();
         void buildTextures();
         void sortByDepth(Camera& camera);

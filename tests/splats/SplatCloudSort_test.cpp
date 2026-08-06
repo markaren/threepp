@@ -255,6 +255,14 @@ TEST_CASE("SplatCloud: SH rides in half, geometry rides in float") {
 
     auto cloud = SplatCloud::create(std::move(data));
 
+    // The textures are built on first GL use, so ask for it: update() is that
+    // trigger and needs no GL context, only a camera. Reading the uniforms of a
+    // freshly constructed cloud finds an empty map — which is the point of lazy,
+    // and what a Vulkan-only cloud never pays.
+    auto camera = PerspectiveCamera::create(50, 1.f, 0.1f, 100);
+    camera->position.set(0, 0, 5);
+    cloud->update(*camera);
+
     auto* mean = uniformTexture(*cloud, "splatMeanTex");
     auto* cov = uniformTexture(*cloud, "splatCovTex");
     auto* sh = uniformTexture(*cloud, "splatShTex");

@@ -442,19 +442,12 @@ SplatCloud::SplatCloud(SplatData data)
     splatMaterial_->uniforms["splatNear"] = Uniform(0.1f);
     splatMaterial_->uniforms["splatDebugNonFinite"] = Uniform(false);
 
-    // The GL-side resources — the data textures and the sorted-index
-    // instanceColor — are built LAZILY, on the first GL draw or update().
-    // Only GLRenderer invokes onBeforeRender (grep says so), so on a Vulkan
+    // The DATA TEXTURES are built LAZILY, on the first GL draw or update() —
+    // see ensureGlResources. Only the GL path ever gets there, so on a Vulkan
     // backend a 6M-splat cloud never allocates the ~1 GB of CPU-side texture
-    // images it would never sample — and neither does every copy of it the
+    // images it would never sample, and neither does every copy of it the
     // editor's undo history retains. Measured on the editor's two-scan
-    // import/delete/import sequence: peak RAM 5.5 GB eager.
-    onBeforeRender = [this](void*, Object3D*, Camera*, BufferGeometry*, Material*,
-                            std::optional<GeometryGroup>) { ensureGlResources(); };
-
-    // An empty cloud still allocated one instance's worth of buffers (the base
-    // class rejects count 0); draw none of it.
-    if (data_.count() == 0) setCount(0);
+    // import/delete/import sequence: peak RAM 5.5 GB eager, 4.3 GB lazy.
 
     // A splat's footprint reaches well past its centre, so the bounds are the
     // means dilated by 3 sigma. frustumCulled stays on: the sphere is honest.
@@ -482,6 +475,38 @@ SplatCloud::SplatCloud(SplatData data)
     keys_.resize(data_.count());
     histogram_.resize(SORT_BUCKETS);
 
+    // instanceColor carries the sorted index, and it is allocated HERE rather
+    // than with the rest of the GL-side memory in ensureGlResources — the one
+    // piece of it that cannot be lazy.
+    //
+    // GLRenderer decides what to upload for an object in projectObject, while it
+    // is building the render list, which is a phase EARLIER than the
+    // onBeforeRender that triggers the lazy build: GLObjects::update skips an
+    // instanceColor that does not exist yet, and then setupVertexAttributes
+    // binds the attribute the splat shader declares and looks up a GL buffer
+    // nobody created ("invalid unordered_map key"). It crashed every splat
+    // import in the editor, which draws through onBeforeRender, while the tests
+    // that call update(camera) first — building the resources before the render
+    // list is built — never saw it.
+    //
+    // The rule this encodes: an object may create UNIFORMS during
+    // onBeforeRender, but never an ATTRIBUTE. The vertex layout has to be
+    // settled before the renderer walks the scene. Cheap to honour — 12 bytes a
+    // splat against the 176 the data textures cost, which stay lazy.
+    //
+    // setColorAt is what allocates the attribute (and with it the divisor-1
+    // binding); after that the raw float array is written directly, since these
+    // are indices, not colours. File order until the first update() sorts. An
+    // EMPTY cloud allocates too: the shader binds instanceColor whether or not
+    // any instance draws, and the base class was constructed with one instance's
+    // worth of capacity for exactly this. Its count drops to zero AFTER the
+    // allocation, so nothing draws and the attribute still exists.
+    setColorAt(count() - 1, Color());
+    auto& slots = instanceColor()->array();
+    for (size_t i = 0; i < data_.count(); ++i) slots[i * 3] = static_cast<float>(i);
+    instanceColor()->needsUpdate();
+    if (data_.count() == 0) setCount(0);
+
     // Safety net for callers who forget update(): the renderer has already
     // uploaded instanceColor by the time this runs, so the sort lands one frame
     // late — but the viewport uniform is read at draw time, so that is current.
@@ -508,28 +533,11 @@ std::shared_ptr<SplatCloud> SplatCloud::create(SplatData data) {
 }
 
 void SplatCloud::ensureGlResources() {
+
     if (glResourcesBuilt_) return;
     glResourcesBuilt_ = true;
 
     buildTextures();
-
-    // instanceColor carries the sorted index. setColorAt is what allocates the
-    // attribute (and with it the divisor-1 binding); after that we write the
-    // raw float array directly, since these are indices, not colours. File
-    // order until the first update() sorts — exactly what the eager path drew.
-    //
-    // An EMPTY cloud still allocates: the shader binds instanceColor whether or
-    // not any instance draws, and GL throws on the missing attribute (the eager
-    // path allocated before the constructor's setCount(0), which is why this
-    // never showed until the build went lazy). The base class kept one
-    // instance's worth of capacity, so briefly reopening the count is safe.
-    const bool wasEmpty = count() == 0;
-    if (wasEmpty) setCount(1);
-    setColorAt(count() - 1, Color());
-    auto& slots = instanceColor()->array();
-    for (size_t i = 0; i < data_.count(); ++i) slots[i * 3] = static_cast<float>(i);
-    instanceColor()->needsUpdate();
-    if (wasEmpty) setCount(0);
 }
 
 void SplatCloud::buildTextures() {

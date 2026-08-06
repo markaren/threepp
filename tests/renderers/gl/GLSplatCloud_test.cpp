@@ -46,7 +46,8 @@ namespace {
     // shader is a RawShaderMaterial and writes its colour out untouched, so a
     // red splat should arrive as a red pixel with no encode in between.
     std::vector<unsigned char> renderSplats(const std::shared_ptr<SplatCloud>& cloud,
-                                            Camera& camera, const Color& clear) {
+                                            Camera& camera, const Color& clear,
+                                            bool explicitUpdate = true) {
 
         auto scene = Scene::create();
         scene->add(cloud);
@@ -54,7 +55,12 @@ namespace {
         // Explicit, before render(): the renderer uploads instanceColor while
         // building the render list, which is earlier than onBeforeRender, so
         // the fallback path inside the object would land the sort a frame late.
-        cloud->update(camera);
+        //
+        // explicitUpdate == false is the OTHER caller — an app that just adds a
+        // cloud to a scene and renders, which is what the editor does. Everything
+        // the shader binds has to already exist by then; see the case at the
+        // bottom of this file.
+        if (explicitUpdate) cloud->update(camera);
 
         GLRenderer renderer(glCanvas());
         renderer.setClearColor(clear);
@@ -400,6 +406,43 @@ TEST_CASE("GL splats: an empty cloud renders nothing and does not crash") {
     camera->position.set(0, 0, 4);
 
     const auto pixels = renderSplats(cloud, *camera, Color(0x000000));
+
+    CHECK(countNonBlack(pixels) == 0);
+}
+
+TEST_CASE("GL splats: a cloud added to a scene draws without an explicit update") {
+
+    // The editor's path, and the one every other case in this file skips by
+    // calling update(camera) first. It used to throw rather than draw: the
+    // sorted-index attribute was created lazily inside onBeforeRender, which
+    // runs AFTER GLRenderer has walked the scene and decided which buffers to
+    // upload, so the draw bound an attribute with no GL buffer behind it
+    // ("invalid unordered_map key"). Every splat import in the editor died on
+    // it, and no test here could see it.
+    auto cloud = makeCloud({{{0, 0, 0}, {1.f, 0.f, 0.f}, 0.25f, 1.0f}});
+
+    auto camera = PerspectiveCamera::create(50, 1.0f, 0.1f, 100);
+    camera->position.set(0, 0, 4);
+
+    const auto pixels = renderSplats(cloud, *camera, Color(0x000000), /*explicitUpdate*/ false);
+
+    const auto centre = pixelAt(pixels, RT_WIDTH / 2, RT_HEIGHT / 2);
+    CHECK(centre.r > 200.0);
+    CHECK(centre.g < 40.0);
+    CHECK(countMagenta(pixels) == 0);
+}
+
+TEST_CASE("GL splats: an empty cloud drawn without an explicit update is also fine") {
+
+    // Same ordering, and the case that made the attribute allocation subtle:
+    // an empty cloud has no instances to draw but the shader still binds
+    // instanceColor, so the buffer has to exist for a draw that draws nothing.
+    auto cloud = SplatCloud::create(SplatData{});
+
+    auto camera = PerspectiveCamera::create(50, 1.0f, 0.1f, 100);
+    camera->position.set(0, 0, 4);
+
+    const auto pixels = renderSplats(cloud, *camera, Color(0x000000), /*explicitUpdate*/ false);
 
     CHECK(countNonBlack(pixels) == 0);
 }
