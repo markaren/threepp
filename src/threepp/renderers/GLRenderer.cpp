@@ -28,6 +28,7 @@
 #include "threepp/materials/RawShaderMaterial.hpp"
 
 #include "threepp/objects/Group.hpp"
+#include "threepp/core/InstancedBufferGeometry.hpp"
 #include "threepp/objects/InstancedMesh.hpp"
 #include "threepp/objects/LOD.hpp"
 #include "threepp/objects/Line.hpp"
@@ -500,14 +501,18 @@ struct GLRenderer::Impl {
 
             renderer->renderInstances(drawStart, drawCount, im->count());
 
-        } /*else if (auto g = dynamic_cast<InstancedBufferGeometry*>(geometry)) {
+        } else if (auto ig = dynamic_cast<InstancedBufferGeometry*>(geometry)) {
 
-            const auto instanceCount = std::min(g->instanceCount, g->_maxInstanceCount);
+            // No _maxInstanceCount clamp, unlike three.js: that exists to guard
+            // an instanceCount raised past what the instanced attributes were
+            // allocated for, and here the attributes and the count are set
+            // together by the geometry's owner. An empty one draws nothing.
+            if (ig->instanceCount > 0) {
 
-            renderer->renderInstances(drawStart, drawCount, instanceCount);
+                renderer->renderInstances(drawStart, drawCount, static_cast<int>(ig->instanceCount));
+            }
 
-        } */
-        else {
+        } else {
 
             renderer->render(drawStart, drawCount);
         }

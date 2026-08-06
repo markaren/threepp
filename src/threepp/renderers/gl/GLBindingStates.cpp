@@ -3,6 +3,7 @@
 
 #include "threepp/renderers/gl/GLUtils.hpp"
 
+#include "threepp/core/BufferAttribute.hpp"
 #include "threepp/core/InterleavedBufferAttribute.hpp"
 #include "threepp/materials/materials.hpp"
 #include "threepp/objects/InstancedMesh.hpp"
@@ -286,9 +287,13 @@ struct GLBindingStates::Impl {
 
                     } else {
 
-                        if (false /*geometryAttribute.isInstancedBufferAttribute*/) {
+                        if (auto* instanced = dynamic_cast<InstancedBufferAttribute*>(geometryAttribute.get())) {
 
-                            // TODO
+                            // Per-instance: advance once every meshPerAttribute
+                            // instances rather than once per vertex. The instance
+                            // COUNT comes from the geometry (InstancedBufferGeometry),
+                            // not from here — this only sets the stepping.
+                            enableAttributeAndDivisor(programAttribute, instanced->meshPerAttribute);
 
                         } else {
 

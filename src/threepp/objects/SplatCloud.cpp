@@ -88,11 +88,30 @@ namespace {
         return static_cast<int>(rows);
     }
 
-    std::shared_ptr<BufferGeometry> unitQuad() {
+    // The unit quad, instanced `count` times, carrying the one per-instance
+    // attribute the splat shader declares.
+    //
+    // splatIndex is allocated HERE, in the geometry the constructor hands to the
+    // base class, rather than later with the rest of the GL-side memory in
+    // ensureGlResources. GLRenderer decides what to upload for an object in
+    // projectObject, while it is building the render list, which is a phase
+    // EARLIER than the onBeforeRender that triggers the lazy build: an attribute
+    // that does not exist yet is skipped there, and then setupVertexAttributes
+    // binds the attribute the splat shader declares and looks up a GL buffer
+    // nobody created ("invalid unordered_map key"). It crashed every splat import
+    // in the editor, which draws through onBeforeRender, while the tests that
+    // call update(camera) first — building the resources before the render list
+    // is built — never saw it.
+    //
+    // The rule this encodes: an object may create UNIFORMS during onBeforeRender,
+    // but never an ATTRIBUTE. The vertex layout has to be settled before the
+    // renderer walks the scene. Cheap to honour — 4 bytes a splat against the 176
+    // the data textures cost, which stay lazy.
+    std::shared_ptr<InstancedBufferGeometry> splatQuad(size_t count) {
 
         // xy in [-1, 1]; the vertex shader scales it to the splat's 3-sigma
         // footprint in pixels. z is unused.
-        auto geometry = BufferGeometry::create();
+        auto geometry = InstancedBufferGeometry::create(count);
         geometry->setAttribute("position", FloatBufferAttribute::create(
                                                    {-1.f, -1.f, 0.f,
                                                     1.f, -1.f, 0.f,
@@ -100,6 +119,13 @@ namespace {
                                                     -1.f, 1.f, 0.f},
                                                    3));
         geometry->setIndex(std::vector<unsigned int>{0, 1, 2, 0, 2, 3});
+
+        // File order until the first update() sorts. An EMPTY cloud allocates a
+        // slot too: the shader binds splatIndex whether or not any instance
+        // draws, and instanceCount drops to 0 afterwards so nothing is drawn.
+        std::vector<float> order(std::max<size_t>(count, 1));
+        for (size_t i = 0; i < order.size(); ++i) order[i] = static_cast<float>(i);
+        geometry->setAttribute("splatIndex", InstancedBufferAttribute::create(std::move(order), 1));
 
         return geometry;
     }
@@ -137,8 +163,8 @@ uniform vec2 splatViewport;// framebuffer size in pixels
 uniform float splatNear;   // camera near plane
 uniform bool isOrthographic;
 
-in vec3 position;     // unit quad corner, xy in [-1, 1]
-in vec3 instanceColor;// .x = the splat this draw slot renders (sorted)
+in vec3 position;   // unit quad corner, xy in [-1, 1]
+in float splatIndex;// the splat this draw slot renders (sorted)
 
 out vec3 vColor;
 out float vOpacity;
@@ -234,8 +260,8 @@ void discardVertex() {
 void main() {
 
     // Floats are exact to 2^24, so the sorted index survives the trip through
-    // the instanceColor attribute intact.
-    int splat = int(instanceColor.x + 0.5);
+    // the splatIndex attribute intact.
+    int splat = int(splatIndex + 0.5);
 
     vec4 meanOpacity = texelFetch(splatMeanTex, splatTexel(splat), 0);
     vec3 meanLocal = meanOpacity.xyz;
@@ -408,7 +434,7 @@ void main() {
 // ---------------------------------------------------------------------------
 
 SplatCloud::SplatCloud(SplatData data)
-    : InstancedMesh(unitQuad(), RawShaderMaterial::create(), std::max<size_t>(data.count(), 1)),
+    : Mesh(splatQuad(data.count()), RawShaderMaterial::create()),
       data_(std::move(data)) {
 
     std::string why;
@@ -456,59 +482,27 @@ SplatCloud::SplatCloud(SplatData data)
     if (!box.isEmpty()) {
 
         box.getBoundingSphere(sphere);
-        boundingSphere = sphere;
-        // The box too, and not as a convenience: Box3::expandByObject reaches
-        // for InstancedMesh::boundingBox and COMPUTES one if it is absent, by
-        // transforming the geometry's bounds through every instanceMatrix.
-        // Here that is the unit quad through a million identities — a 1x1 box
-        // at the origin — so anything that measures a scene by walking it
-        // (frame the document, focus the selection) would aim at a postage
-        // stamp instead of the scan.
-        boundingBox = box;
+        // Onto the GEOMETRY, which is where Frustum::intersectsObject and
+        // Box3::expandByObject read an ordinary Mesh's bounds from — and they
+        // COMPUTE them from the position attribute if absent, which here is the
+        // unit quad: a 1x1 box at the origin. Anything that measures a scene by
+        // walking it (frame the document, focus the selection) would aim at a
+        // postage stamp instead of the scan. Safe to overwrite per cloud because
+        // splatQuad() builds a fresh geometry for each one.
+        geometry_->boundingSphere = sphere;
+        geometry_->boundingBox = box;
 
     } else {
 
-        boundingSphere = Sphere(Vector3{}, 0.f);
+        geometry_->boundingSphere = Sphere(Vector3{}, 0.f);
     }
 
     depths_.resize(data_.count());
     keys_.resize(data_.count());
     histogram_.resize(SORT_BUCKETS);
 
-    // instanceColor carries the sorted index, and it is allocated HERE rather
-    // than with the rest of the GL-side memory in ensureGlResources — the one
-    // piece of it that cannot be lazy.
-    //
-    // GLRenderer decides what to upload for an object in projectObject, while it
-    // is building the render list, which is a phase EARLIER than the
-    // onBeforeRender that triggers the lazy build: GLObjects::update skips an
-    // instanceColor that does not exist yet, and then setupVertexAttributes
-    // binds the attribute the splat shader declares and looks up a GL buffer
-    // nobody created ("invalid unordered_map key"). It crashed every splat
-    // import in the editor, which draws through onBeforeRender, while the tests
-    // that call update(camera) first — building the resources before the render
-    // list is built — never saw it.
-    //
-    // The rule this encodes: an object may create UNIFORMS during
-    // onBeforeRender, but never an ATTRIBUTE. The vertex layout has to be
-    // settled before the renderer walks the scene. Cheap to honour — 12 bytes a
-    // splat against the 176 the data textures cost, which stay lazy.
-    //
-    // setColorAt is what allocates the attribute (and with it the divisor-1
-    // binding); after that the raw float array is written directly, since these
-    // are indices, not colours. File order until the first update() sorts. An
-    // EMPTY cloud allocates too: the shader binds instanceColor whether or not
-    // any instance draws, and the base class was constructed with one instance's
-    // worth of capacity for exactly this. Its count drops to zero AFTER the
-    // allocation, so nothing draws and the attribute still exists.
-    setColorAt(count() - 1, Color());
-    auto& slots = instanceColor()->array();
-    for (size_t i = 0; i < data_.count(); ++i) slots[i * 3] = static_cast<float>(i);
-    instanceColor()->needsUpdate();
-    if (data_.count() == 0) setCount(0);
-
     // Safety net for callers who forget update(): the renderer has already
-    // uploaded instanceColor by the time this runs, so the sort lands one frame
+    // uploaded splatIndex by the time this runs, so the sort lands one frame
     // late — but the viewport uniform is read at draw time, so that is current.
     onBeforeRender = RenderCallback(
             [this](void* renderer, Object3D*, Camera* camera, BufferGeometry*, Material*, std::optional<GeometryGroup>) {
@@ -646,18 +640,12 @@ std::size_t SplatCloud::cpuBytes() const {
 
     std::size_t bytes = sizeof(*this) + data_.byteSize();
 
-    // The base class allocates 16 floats per instance in its constructor and
-    // this class never writes anything but identity into them. 64 bytes a splat
-    // of dead weight — 384 MB at 6M — and unavoidable without either an
-    // InstancedMesh that can decline the buffer or a SplatCloud that stops
-    // deriving from one. Counted because it is really held, not because it
-    // should be.
-    if (const auto* matrices = instanceMatrix()) bytes += matrices->byteLength();
-
-    // The sorted index, which the constructor allocates because the renderer
-    // needs the attribute to exist before it walks the scene, and the
-    // counting-sort scratch, which it allocates alongside. 18 bytes a splat.
-    if (const auto* colors = instanceColor()) bytes += colors->byteLength();
+    // The sorted index, which splatQuad allocates because the renderer needs the
+    // attribute to exist before it walks the scene, and the counting-sort
+    // scratch alongside it. 10 bytes a splat. No instanceMatrix line any more:
+    // this used to derive from InstancedMesh and hold 64 bytes a splat of
+    // identity matrices the splat shader never declared.
+    if (const auto* index = splatIndexAttribute()) bytes += index->byteLength();
 
     bytes += depths_.capacity() * sizeof(float) +
              sample_.capacity() * sizeof(float) +
@@ -695,15 +683,18 @@ void SplatCloud::setDebugNonFinite(bool flag) {
 
 void SplatCloud::raycast(const Raycaster& raycaster, std::vector<Intersection>& intersects) {
 
-    // boundingSphere is the 3-sigma bound the constructor already computed for
-    // frustum culling, in the cloud's own coordinates; the world matrix takes
-    // it to where the ray is. A cloud with no splats has radius 0 and is not
-    // clickable, which is the honest answer for something that draws nothing.
+    // The geometry's boundingSphere is the 3-sigma bound the constructor already
+    // computed for frustum culling, in the cloud's own coordinates; the world
+    // matrix takes it to where the ray is. A cloud with no splats has radius 0
+    // and is not clickable, which is the honest answer for something that draws
+    // nothing.
     if (!visible || data_.count() == 0) return;
-    if (!boundingSphere || boundingSphere->radius <= 0.f) return;
+
+    const auto& bounds = geometry_->boundingSphere;
+    if (!bounds || bounds->radius <= 0.f) return;
 
     Sphere sphere;
-    sphere.copy(*boundingSphere);
+    sphere.copy(*bounds);
     sphere.applyMatrix4(*matrixWorld);
 
     Vector3 point;
@@ -875,12 +866,13 @@ void SplatCloud::sortByDepth(Camera& camera) {
         running += hits;
     }
 
-    auto& slots = instanceColor()->array();
+    auto* index = splatIndexAttribute();
+    auto& slots = index->array();
     for (size_t i = 0; i < n; ++i) {
 
-        slots[static_cast<size_t>(histogram_[keys_[i]]++) * 3] = static_cast<float>(i);
+        slots[static_cast<size_t>(histogram_[keys_[i]]++)] = static_cast<float>(i);
     }
 
-    instanceColor()->needsUpdate();
+    index->needsUpdate();
     sorted_ = true;
 }

@@ -306,15 +306,22 @@ TEST_CASE("retainedSubtreeBytes weighs splat clouds and nothing else", "[editor]
     auto scan = splatScan(kTestSplats);
     const auto weight = retainedSubtreeBytes(*scan);
 
-    // The splat arrays plus the identity instanceMatrix the base class allocates
-    // and this class never uses — 64 bytes a splat that a budget has to see,
-    // since dropping the command really does free them. No GL copy in the total:
+    // The splat arrays plus the one per-instance attribute a cloud keeps live:
+    // the sorted draw order, 4 bytes a splat, which cannot be lazy because the
+    // renderer binds it before onBeforeRender runs. No GL copy in the total:
     // nothing has rendered this cloud (that is what makes a Vulkan-only scan
     // cheaper to hold than a drawn one).
-    const auto floorBytes = scan->data().byteSize() + scan->splatCount() * 16 * sizeof(float);
+    const auto floorBytes = scan->data().byteSize() + scan->splatCount() * sizeof(float);
     CHECK(weight >= floorBytes);
     CHECK(weight < 2 * floorBytes);
     CHECK_FALSE(scan->glResourcesBuilt());
+
+    // This floor used to include 16 floats a splat of identity instanceMatrix,
+    // back when SplatCloud derived from InstancedMesh. Everything above the
+    // floor now is counting-sort scratch, and asserting it stays SMALLER than
+    // those matrices would have been is what stops the rebase reverting by
+    // accident — a SplatCloud that goes back to InstancedMesh fails here.
+    CHECK(weight - floorBytes < scan->splatCount() * 16 * sizeof(float));
 
     // Found through a subtree, not just at the root.
     auto wrapper = Group::create();

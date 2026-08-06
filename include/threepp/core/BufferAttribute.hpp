@@ -619,6 +619,47 @@ namespace threepp {
     typedef TypedBufferAttribute<std::uint8_t> Uint8BufferAttribute;
     typedef TypedBufferAttribute<std::int8_t> Int8BufferAttribute;
 
+    // A per-INSTANCE attribute: the vertex fetch advances once every
+    // `meshPerAttribute` instances instead of once per vertex (glVertexAttrib-
+    // Divisor). It lives in the geometry's ordinary attribute map alongside the
+    // per-vertex ones, so it is uploaded and bound by the same code — only the
+    // divisor differs, which GLBindingStates decides by dynamic_cast.
+    //
+    // `count()` is therefore the INSTANCE count, not the vertex count, and an
+    // InstancedBufferAttribute only means anything on an InstancedBufferGeometry
+    // (nothing else tells the renderer how many instances to draw).
+    class InstancedBufferAttribute: public TypedBufferAttribute<float> {
+
+    public:
+        // Instances between advances. 1 is per-instance data, the only value
+        // anything in this repo uses; three.js allows N for shared blocks.
+        int meshPerAttribute = 1;
+
+        static std::unique_ptr<InstancedBufferAttribute> create(std::vector<float>&& array, int itemSize,
+                                                                int meshPerAttribute = 1) {
+
+            return std::unique_ptr<InstancedBufferAttribute>(
+                    new InstancedBufferAttribute(std::move(array), itemSize, meshPerAttribute));
+        }
+
+        // The base clone() builds a plain TypedBufferAttribute, which would drop
+        // the divisor silently and turn a copied geometry into one that draws
+        // instance 0 for every vertex. Overridden so BufferGeometry::clone, which
+        // goes through cloneUntyped, keeps what makes this attribute what it is.
+        [[nodiscard]] std::unique_ptr<BufferAttribute> cloneUntyped() const override {
+
+            auto clone = std::unique_ptr<InstancedBufferAttribute>(
+                    new InstancedBufferAttribute(std::vector<float>{}, itemSize_, meshPerAttribute));
+            clone->copy(*this);
+
+            return clone;
+        }
+
+    protected:
+        InstancedBufferAttribute(std::vector<float>&& array, int itemSize, int meshPerAttribute)
+            : TypedBufferAttribute<float>(std::move(array), itemSize, false),
+              meshPerAttribute(meshPerAttribute) {}
+    };
 
 }// namespace threepp
 

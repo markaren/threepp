@@ -2,7 +2,7 @@
 //
 // SplatCloud needs no GL context to be built or sorted: the textures are
 // plain CPU buffers until something uploads them, and update() writes the
-// draw order into instanceColor. So the ordering — the property a splat
+// draw order into the splatIndex attribute. So the ordering — the property a splat
 // renderer lives or dies by — can be asserted directly, without a window,
 // and without inferring it from pixels.
 //
@@ -46,15 +46,19 @@ namespace {
     }
 
     // The draw order update() produced: drawOrder[slot] = splat index.
+    // Read through the geometry rather than through SplatCloud, because that is
+    // where the renderer reads it from too — the attribute IS the interface.
     std::vector<size_t> drawOrder(SplatCloud& cloud) {
 
-        const auto& slots = cloud.instanceColor()->array();
+        const auto* index = cloud.geometry()->getAttribute<float>("splatIndex");
+        REQUIRE(index != nullptr);
+        const auto& slots = index->array();
 
         std::vector<size_t> order;
         order.reserve(cloud.splatCount());
         for (size_t i = 0; i < cloud.splatCount(); ++i) {
 
-            order.push_back(static_cast<size_t>(slots[i * 3] + 0.5f));
+            order.push_back(static_cast<size_t>(slots[i] + 0.5f));
         }
         return order;
     }

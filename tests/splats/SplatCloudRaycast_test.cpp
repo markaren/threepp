@@ -1,10 +1,10 @@
 // Picking a splat cloud.
 //
 // The override exists because the inherited one is actively wrong here:
-// InstancedMesh::raycast walks every instance's instanceMatrix, and SplatCloud
-// leaves all of them at identity on purpose (the per-splat data lives in
-// textures). So the base class tests the same unit quad at the origin N times
-// and reports hits that have nothing to do with where the splats are.
+// Mesh::raycast tests the geometry, which is one unit quad at the origin — the
+// per-splat data lives in textures, not in vertices. So the base class reports
+// hits that have nothing to do with where the splats are. (It was worse under
+// InstancedMesh: the same two triangles, tested once per splat.)
 //
 // These assertions are about the SPHERE — the 3-sigma bound the constructor
 // already computes for frustum culling — not about individual splats. Hitting

@@ -249,6 +249,12 @@ should want to raise: eight clouds is already 16 ms.
 
 ## Host memory per splat (measured 2026-08-07)
 
+Two independent cuts landed the same day. Together a degree-3 splat went from
+**606 B to 423 B** including the GL-side data textures, and from 430 B to 247 B
+without them — 1.4 GiB rather than 2.4 GiB to hold a 6M-splat scan on Vulkan.
+
+### The rotation: `std::vector<Quaternion>` → `SplatQuat`
+
 `SplatData::byteSize()`, over a generated cloud at each SH degree:
 
 | SH degree | 0 | 1 | 2 | 3 |
@@ -267,16 +273,38 @@ first. That is more than the ~1 GB GL-side copy that lazy GL resources went
 after, for a fraction of the change. `SplatQuat` (four plain floats, in
 `SplatData.hpp`) is the fix, with a `static_assert` on its size so it stays one.
 
-**What is still on the table: 64 bytes a splat of identity matrices.** A
-`SplatCloud` derives from `InstancedMesh`, whose constructor allocates 16 floats
-of `instanceMatrix` per instance; the splat path never writes anything but
-identity into them, because a splat's placement is its mean and its covariance,
-not a transform. 384 MB at 6M, counted honestly by `SplatCloud::cpuBytes()`
-because it really is held. Recovering it needs one of two structural changes —
-an `InstancedMesh` that can decline the buffer, or a `SplatCloud` that stops
-deriving from one — and neither is a local edit, which is why the number is
-documented here rather than fixed. Note the ratio it implies: at SH degree 0 the
-dead instance matrices now outweigh the entire splat payload.
+### The instancing: `InstancedMesh` → `Mesh` + `InstancedBufferGeometry`
+
+`SplatCloud` used
+to derive from `InstancedMesh`, whose constructor allocates 16 floats of
+`instanceMatrix` per instance. The splat path never wrote anything but identity
+into them — a splat's placement is its mean and its covariance, not a transform —
+and the splat shader does not even declare the attribute, but `GLObjects::update`
+uploads `instanceMatrix` for *every* `InstancedMesh` in the render list
+regardless, so the identity matrices cost 64 B/splat of host memory **and** 64 of
+VRAM. At SH degree 0 that was more than the entire splat payload.
+
+It now derives from `Mesh` over an `InstancedBufferGeometry`, which carries only
+the attributes the shader declares — one of them, the sorted draw order, which
+shrank from a vec3 `instanceColor` to a single float on the way since only `.x`
+was ever read. `SplatCloud::cpuBytes()`, measured over a 200k cloud with no GL
+frame drawn:
+
+| SH degree | 0 | 3 |
+|---|---|---|
+| as InstancedMesh | 139.3 B | 319.3 B |
+| **as Mesh** | **67.3 B** | **247.3 B** |
+
+72 B/splat either way — 432 MB of host memory at 6M splats, plus 384 MB of VRAM
+that GL no longer uploads. The GL render is byte-identical across the change.
+
+This needed three renderer stubs filled in, all of them pre-existing `if (false)`
+/ commented-out placeholders for the mechanism three.js already uses:
+`InstancedBufferGeometry`'s draw call in `GLRenderer`, the per-attribute divisor
+in `GLBindingStates`, and `InstancedBufferAttribute` itself. Nothing about the
+`InstancedMesh` path changed — the new branches are additive, and
+`InstancedMesh` remains the right answer whenever instances really are one mesh
+at many transforms.
 
 ## V3 — the perf checklist
 

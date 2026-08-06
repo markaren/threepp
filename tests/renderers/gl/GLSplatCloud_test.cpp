@@ -52,7 +52,7 @@ namespace {
         auto scene = Scene::create();
         scene->add(cloud);
 
-        // Explicit, before render(): the renderer uploads instanceColor while
+        // Explicit, before render(): the renderer uploads splatIndex while
         // building the render list, which is earlier than onBeforeRender, so
         // the fallback path inside the object would land the sort a frame late.
         //
@@ -436,7 +436,7 @@ TEST_CASE("GL splats: an empty cloud drawn without an explicit update is also fi
 
     // Same ordering, and the case that made the attribute allocation subtle:
     // an empty cloud has no instances to draw but the shader still binds
-    // instanceColor, so the buffer has to exist for a draw that draws nothing.
+    // splatIndex, so the buffer has to exist for a draw that draws nothing.
     auto cloud = SplatCloud::create(SplatData{});
 
     auto camera = PerspectiveCamera::create(50, 1.0f, 0.1f, 100);
