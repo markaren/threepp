@@ -154,6 +154,38 @@ while the lit air around it stayed grey. `--fog --sun` is that configuration, an
 metres-scale scan leaves the unit-scale procedural cloud at `T = 0.97`, which
 renders a plausible frame while testing nothing.
 
+## Tile size: 16×16 stays, and zooming OUT is the open problem
+
+`kTileW/kTileH = 16` was measured against 8×8 (three sites: `splat_common.glsl`,
+`SplatPass.cpp`, and the raster's `local_size`), 5.0M scan under `--lod-dynamic`:
+
+| camera | 16×16 | 8×8 | entries at 8×8 |
+|---|---|---|---|
+| zoomed 16× OUT | 66.1 ms (raster 66.7) | **42.0 ms** (raster 34.1) | 1.69M → 2.51M |
+| framed | 7.29 ms | 7.91 ms | → 5.07M |
+| zoomed 8× IN | 7.78 ms | **17.97 ms** (sort 9.9) | → **19.5M** |
+
+Smaller tiles buy 1.6× in the pathological zoomed-out case and lose 2.3× in the
+common close-up one, because a splat covers four times as many tiles and the
+expansion and sort pay for every pair — 19.5M entries at 8×8 also comes within
+reach of the 25M budget, i.e. of truncation. One global constant has to serve
+every camera, so 16×16 stands. This is measured now rather than assumed.
+
+**The zoomed-out cliff is real and unfixed**: 66 ms at 15 fps with the LOD policy
+already choosing its coarsest level and the sort down at 1.05 ms. The raster is
+~66 of those milliseconds. Zoomed far out the whole scan lands in a few dozen
+tiles, so ~1.7M entries pile into them and each tile blends its share serially in
+one workgroup — the same tile-starvation mechanism that makes `--scale 0.5` cost
+73% more, and note 16× out has FEWER entries than 4× out yet runs 3× slower.
+
+LOD cannot reach it: at that zoom the scan covers ~100×60 px, so even a 625k
+level is ~100 splats per pixel and the policy's ~1/px target is unreachable with
+the levels an asset ships. The candidates are a sub-pixel cull in project (a
+splat below a footprint threshold costs a full entry and a full serial blend step
+for a sliver of alpha — note `kScreenDilation = 0.3` deliberately keeps such
+splats alive, matching GL), or LOD levels coarser than the asset's own. Neither
+is measured yet.
+
 ## The per-cloud tax (measured 2026-08-06)
 
 `record()` runs the WHOLE pipeline per cloud — the clears, the sizing dispatch,
