@@ -411,6 +411,31 @@ void VulkanRenderer::Impl::setGbufferMsaa(uint32_t samples) {
             reallocateRenderExtentResources();
         }
 
+void VulkanRenderer::Impl::setSplatDepthAov(bool enabled) {
+            if (enabled == splatDepthAov_) return;
+            splatDepthAov_ = enabled;
+            // ensureHybridResources only recreates the G-buffer images when the
+            // EXTENT changed, and this toggle changes a FORMAT decision at the
+            // same extent — so without this the AOV image stays whatever size
+            // it was first allocated at (1x1, silently, for the whole run).
+            // Same poke, for the same reason, as the MSAA sample-count change.
+            // Primary only: a secondary view's AOV image is 1x1 either way,
+            // because splats are never drawn into one.
+            primaryView().rasterGbufs[0].width = 0;
+            // The AOV image is allocated with the render-extent resources
+            // (1x1 when off, full-res when on), so the toggle has to go back
+            // through the same reallocation the render scale and the G-buffer
+            // MSAA toggle use — including the mid-frame deferral, since the
+            // images the in-flight command buffer names must not be freed
+            // under it.
+            if (frameState_ != FrameState::Idle) {
+                pendingRenderScaleRealloc_ = true;// shares the reallocation gate
+                return;
+            }
+            vkDeviceWaitIdle(ctx->device());
+            reallocateRenderExtentResources();
+        }
+
 void VulkanRenderer::Impl::beginCommandRecording(VkCommandBuffer cb) {
             VkCommandBufferBeginInfo bi{};
             bi.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;

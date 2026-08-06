@@ -119,9 +119,39 @@ namespace threepp {
         //   Motion (8)  4x float16 : screen-space motion (prevNDC - currNDC) in xy, prevDepth in z
         //   Ids    (8)  4x uint16  : x = instanceCustomIndex+1 (0 = sky/no-hit), y = meshId, z = flag bits
         //   Albedo (4)  4x unorm8  : linear base colour in rgb, metalness in a
-        enum class GBufferAOV { Depth, Normal, Motion, Ids, Albedo };
+        //   SplatDepth (4) 1x float32 : Gaussian-splat expected VIEW DISTANCE in
+        //                  world units (positive, NOT reversed-Z NDC), 0 where no
+        //                  splat cloud owns the pixel. Requires setSplatDepthAov.
+        enum class GBufferAOV { Depth, Normal, Motion, Ids, Albedo, SplatDepth };
         [[nodiscard]] bool readGBufferAOV(GBufferAOV aov, std::vector<uint8_t>& out,
                                           int& width, int& height, int& bytesPerPixel);
+
+        // ── Gaussian-splat expected depth ────────────────────────────────
+        // A splat cloud is composited by a compute tile rasterizer and is in no
+        // acceleration structure, so it writes no G-buffer depth and every
+        // ray-traced consumer — the RT sensors, reflections, shadows — passes
+        // straight through it. The raster already accumulates the alpha-weighted
+        // expected view distance per pixel (it is what makes the cloud's motion
+        // vectors computable); this switch exports it.
+        //
+        // What it is: for each pixel a cloud owns, sum(dist * alpha * T) /
+        // (1 - T) — the depth of the cloud's opacity centroid along that ray.
+        // Only where accumulated coverage exceeds 0.5, because below that the
+        // geometry behind the translucent fringe is the better answer; the rest
+        // reads 0. Nearest cloud wins where several overlap.
+        //
+        // What it is NOT: a surface. The expected value sits behind the visible
+        // front of a splat by roughly the cloud's own thickness along the ray,
+        // so it localizes a wall well and a foliage canopy poorly. For picking
+        // and for coarse occupancy it is the right number; for metric ranging
+        // against thin structure it is biased, knowingly.
+        //
+        // OFF by default and a SETUP knob: enabling it reallocates the render
+        // targets (a full-res r32f per frame in flight), so set it once before
+        // the render loop rather than per frame. Primary view only — splats are
+        // not drawn into secondary views at all.
+        void setSplatDepthAov(bool enabled);
+        [[nodiscard]] bool splatDepthAov() const;
 
         // ── Multi-view: N cameras per frame ──────────────────────────────
         // A camera rig — a robot's cameras, a multi-sensor capture setup —

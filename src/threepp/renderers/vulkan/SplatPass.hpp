@@ -61,6 +61,15 @@
 // to the RT sensors — all deliberate, all documented as out of scope in
 // plans/gaussian-splats-vulkan.md.
 //
+// The one crack in that wall is the EXPECTED-DEPTH AOV
+// (VulkanRenderer::setSplatDepthAov). It does not put splats in an
+// acceleration structure — nothing here does — but it does let a consumer
+// outside the renderer find out that a cloud was in front of a given pixel and
+// how far away, which is what picking needs and what a coarse occupancy build
+// can start from. Off by default; see splat_raster.comp for the coverage gate
+// and the nearest-wins rule, and the note on setSplatDepthAov for what the
+// expected value is and is not.
+//
 // ENVIRONMENT KNOBS, all off by default and all A/B switches rather than
 // settings — each one turns off a term so its contribution can be MEASURED
 // rather than asserted (which is how the motion-vector +2.4 dB and the
@@ -168,6 +177,12 @@ namespace threepp::vulkan {
             const VkImageView* motionPerFrame   = nullptr;// rgba16f, STORAGE-capable
             const VkImage*     motionImages     = nullptr;// [framesInFlight], for the layout flip
             const VkImageView* idsPerFrame      = nullptr;// rgba16ui, sampled read-only
+            // Expected-depth AOV target, r32f in GENERAL. Full-res when the
+            // AOV is enabled, 1x1 when it is not — the binding needs a real
+            // image either way. Null leaves the pass unable to write its sets
+            // at all, which is why the renderer always supplies one.
+            const VkImageView* splatDepthPerFrame = nullptr;
+            const VkImage*     splatDepthImages   = nullptr;// [framesInFlight], for the clear
             // The same fog / cloud / lights UBOs the deferred shade reads, and
             // the prefiltered env — the splat pass has to re-derive the fog the
             // shade already baked into sceneHdr for everything else.
@@ -204,6 +219,10 @@ namespace threepp::vulkan {
             bool  depthTest    = true;
             bool  motionVectors = true;// write gbufMotion + the reactivity flag
             bool  fog           = false;// a medium is active this frame
+            // Export the accumulated expected view distance to the depth AOV
+            // (VulkanRenderer::setSplatDepthAov). Off by default: the image is
+            // 1x1 unless the renderer was asked for it.
+            bool  depthAov      = false;
             // The scene background is a flat colour, so PostComposite hands
             // those pixels back verbatim and the shade never pre-exposed them.
             bool  bgIsSolidColor = false;
@@ -217,6 +236,12 @@ namespace threepp::vulkan {
             GpuTimings* timings = nullptr;
         };
         void record(VkCommandBuffer cb, uint32_t frame, const RecordParams& p);
+
+        // Zero the expected-depth AOV for this frame slot. Separate from
+        // record() and called BEFORE it, because record() is skipped outright
+        // on a frame with no clouds and the AOV still has to describe THAT
+        // frame — an empty one. No-op when no AOV image was supplied.
+        void clearDepthAov(VkCommandBuffer cb, uint32_t frame);
 
         // Debug/test surface. [0] sorted-key hash, [1] sorted-payload hash,
         // [2] composited-colour hash, [3] expanded entry count. Stalls the
@@ -376,7 +401,8 @@ namespace threepp::vulkan {
         // Cached per-frame image views so a cloud added mid-run can have its
         // freshly-allocated sets written without another resize() round trip.
         std::vector<VkImageView> sceneHdrViews_, depthViews_, motionViews_, idsViews_;
-        std::vector<VkImage>     motionImages_;
+        std::vector<VkImageView> splatDepthViews_;
+        std::vector<VkImage>     motionImages_, splatDepthImages_;
         std::vector<VkBuffer>    fogUbos_, cloudUbos_, lightsUbos_;
         VkImageView envView_    = VK_NULL_HANDLE;
         bool        envDirty_   = false;// sets hold a dead env view; rewrite post-idle

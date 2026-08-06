@@ -119,11 +119,15 @@ void VulkanRenderer::Impl::rewriteBloomDescriptors() {
                 std::array<VkBuffer, kFramesInFlight>    fogBufs{};
                 std::array<VkBuffer, kFramesInFlight>    cloudBufs{};
                 std::array<VkBuffer, kFramesInFlight>    lightBufs{};
+                std::array<VkImageView, kFramesInFlight> splatDepthViews{};
+                std::array<VkImage, kFramesInFlight>     splatDepthImgs{};
                 for (uint32_t f = 0; f < kFramesInFlight; ++f) {
                     depthViews[f]  = view().rasterGbufs[f].depth.view;
                     motionViews[f] = view().rasterGbufs[f].motion.view;
                     motionImgs[f]  = view().rasterGbufs[f].motion.image;
                     idsViews[f]    = view().rasterGbufs[f].ids.view;
+                    splatDepthViews[f] = view().rasterGbufs[f].splatDepth.view;
+                    splatDepthImgs[f]  = view().rasterGbufs[f].splatDepth.image;
                     fogBufs[f]     = fogUbos[f].handle;
                     cloudBufs[f]   = cloudUbos[f].handle;
                     lightBufs[f]   = lightsUbos[f].handle;
@@ -134,6 +138,8 @@ void VulkanRenderer::Impl::rewriteBloomDescriptors() {
                 sin.motionPerFrame   = motionViews.data();
                 sin.motionImages     = motionImgs.data();
                 sin.idsPerFrame      = idsViews.data();
+                sin.splatDepthPerFrame = splatDepthViews.data();
+                sin.splatDepthImages   = splatDepthImgs.data();
                 sin.fogUbos          = fogBufs.data();
                 sin.cloudUbos        = cloudBufs.data();
                 sin.lightsUbos       = lightBufs.data();

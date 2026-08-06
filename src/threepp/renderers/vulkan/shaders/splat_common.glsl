@@ -186,6 +186,7 @@ const uint kSplatFlagMotion     = 8u;// write gbufMotion + reactivity (V2)
 const uint kSplatFlagFog        = 16u;// apply height fog per splat (V2)
 const uint kSplatFlagChecksum   = 32u;// hash the composited result (determinism test)
 const uint kSplatFlagBgSolid    = 64u;// scene background is a solid colour
+const uint kSplatFlagDepthAov   = 128u;// export the expected view distance to splatDepth
 
 // Per-dispatch scalars. One block, shared by every stage — the scan and the
 // radix run the same shader many times over different regions, and a push
@@ -293,6 +294,14 @@ layout(set = 0, binding = 21) uniform sampler2D envTex;// prefiltered PMREM chai
 // thread after the expansion, consumed by vkCmdDispatchIndirect in the same
 // submission — so it is one buffer, not one per frame in flight.
 layout(set = 0, binding = 22, scalar) buffer IndirectBuf { uint indirect[]; };
+
+// Expected-depth AOV: the alpha-weighted view distance the raster's
+// accumulation loop already produces, in WORLD UNITS (positive, view-space),
+// for the pixels a cloud owns. Written only under kSplatFlagDepthAov; a 1x1
+// image is bound when the AOV is off, because every binding in this set needs
+// a real object either way (writeSets' opening comment). See splat_raster.comp
+// for the coverage gate and the nearest-wins rule.
+layout(set = 0, binding = 23, r32f) uniform image2D splatDepth;
 
 // ── Spherical harmonics ─────────────────────────────────────────────────────
 // The SAME decimal literals as threepp/splats/SplatSH.hpp and as the GL

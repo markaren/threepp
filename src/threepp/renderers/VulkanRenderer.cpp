@@ -971,6 +971,14 @@ namespace threepp {
             case GBufferAOV::Motion: img = &g.motion; break;
             case GBufferAOV::Ids:    img = &g.ids;    break;
             case GBufferAOV::Albedo: img = &g.albedo; break;
+            case GBufferAOV::SplatDepth:
+                // Answer false rather than hand back the 1x1 placeholder: a
+                // caller who forgot setSplatDepthAov would otherwise get a
+                // successful read of a one-pixel image, which reads as "the
+                // frame had no splats in it" instead of "you never asked for
+                // this AOV".
+                if (!impl.splatDepthAov_) return false;
+                img = &g.splatDepth; restLayout = VK_IMAGE_LAYOUT_GENERAL; break;
         }
         if (!img || img->image == VK_NULL_HANDLE || img->width == 0 || img->height == 0) {
             return false;// no frame rendered yet
@@ -1388,6 +1396,14 @@ namespace threepp {
 
     uint32_t VulkanRenderer::gbufferMsaa() const {
         return pimpl_->gbufferMsaa();
+    }
+
+    void VulkanRenderer::setSplatDepthAov(bool enabled) {
+        pimpl_->setSplatDepthAov(enabled);
+    }
+
+    bool VulkanRenderer::splatDepthAov() const {
+        return core()->splatDepthAov();
     }
 
     void VulkanRenderer::setSplatDebugChecksum(bool enabled) {

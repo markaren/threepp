@@ -44,7 +44,9 @@
 #include "threepp/objects/SplatCloud.hpp"
 #include "threepp/renderers/VulkanRenderer.hpp"
 
+#include <algorithm>
 #include <cmath>
+#include <cstdint>
 #include <cstdio>
 #include <cstring>
 #include <filesystem>
@@ -246,6 +248,94 @@ int main(int argc, char** argv) {
     report(leftAfter * 4 < leftBefore, "an opaque slab hides the splats behind it");
     report(rightAfter * 10 > rightBefore * 9, "splats beside the slab are untouched");
 
+    // ── 2b. the expected-depth AOV ──────────────────────────────────────────
+    // The raster accumulates an alpha-weighted expected view distance to make
+    // the cloud's motion vectors computable; setSplatDepthAov exports it. It is
+    // the only record a frame keeps that a splat cloud was THERE — the cloud is
+    // in no acceleration structure, so nothing ray-traced can find it.
+    //
+    // Checked here rather than in its own program because the scene is already
+    // the useful one: a cloud at a known distance with a slab across half of
+    // it, so the AOV can be asserted to agree with the software depth test
+    // rather than merely to be non-empty.
+    {
+        std::vector<uint8_t> aov;
+        int aw = 0, ah = 0, abpp = 0;
+        report(!renderer.readGBufferAOV(VulkanRenderer::GBufferAOV::SplatDepth,
+                                        aov, aw, ah, abpp),
+               "the depth AOV reads back FALSE until it is asked for");
+
+        renderer.setSplatDepthAov(true);
+        report(renderer.splatDepthAov(), "setSplatDepthAov(true) sticks");
+        // The toggle reallocates the render targets, so give the frame that
+        // rebuilds them a chance to draw before reading.
+        for (int i = 0; i < 4; ++i) draw();
+
+        const bool got = renderer.readGBufferAOV(VulkanRenderer::GBufferAOV::SplatDepth,
+                                                 aov, aw, ah, abpp);
+        std::printf("       AOV extent %dx%d  bpp %d (display %dx%d)\n",
+                    aw, ah, abpp, kW, kH);
+        // The G-buffer extent, NOT the display extent: readGBufferAOV documents
+        // that it hands back the render-scaled size, and an upscaler makes the
+        // two differ. Asserting kW/kH here would be asserting that no upscaler
+        // is configured, which is a different test.
+        const bool shaped = got && abpp == 4 && aw > 0 && ah > 0 &&
+                            aov.size() == static_cast<size_t>(aw) * ah * 4;
+        report(shaped, "the depth AOV reads back at the G-buffer extent as 1x float32");
+
+        if (shaped) {
+            std::vector<float> d(static_cast<size_t>(aw) * ah);
+            std::memcpy(d.data(), aov.data(), d.size() * sizeof(float));
+
+            // Distances only where a cloud owns the pixel; 0 is the sentinel.
+            long long covered = 0;
+            double sum = 0;
+            float lo = 1e30f, hi = -1e30f;
+            bool anyNegative = false;
+            for (float v : d) {
+                if (v < 0.f) anyNegative = true;
+                if (v <= 0.f) continue;
+                ++covered;
+                sum += v;
+                lo = std::min(lo, v);
+                hi = std::max(hi, v);
+            }
+            std::printf("       AOV covered %lld px  dist [%.2f, %.2f]  mean %.2f\n",
+                        covered, covered ? lo : 0.f, covered ? hi : 0.f,
+                        covered ? sum / static_cast<double>(covered) : 0.0);
+
+            report(covered > 2000, "the AOV marks the pixels the cloud owns");
+            report(!anyNegative, "and never a negative distance");
+            // Camera sits 6.6 units from the origin; the cloud's own extent is
+            // 3x2x3, so every covered pixel has to fall inside a generous
+            // bracket around that. A reversed-Z NDC value (0..1) or a
+            // world-space coordinate would both fail this.
+            report(covered > 0 && lo > 3.f && hi < 12.f,
+                   "at view-space distances consistent with where the cloud is");
+
+            // The AOV honours the same software depth test the colour does:
+            // behind the slab the accumulation stops, so those pixels stay 0.
+            auto countCovered = [&](int x0, int x1) {
+                long long n = 0;
+                for (int y = 0; y < ah; ++y)
+                    for (int x = x0; x < x1; ++x)
+                        if (d[static_cast<size_t>(y) * aw + x] > 0.f) ++n;
+                return n;
+            };
+            const long long leftCov  = countCovered(0, aw / 4);
+            const long long rightCov = countCovered(3 * aw / 4, aw);
+            std::printf("       AOV covered  left %lld   right %lld\n", leftCov, rightCov);
+            // Far fewer than countLit reports for the same strip, and that is
+            // the coverage gate doing its job: a pixel the cloud merely tints
+            // is lit, but only a pixel the cloud actually OWNS (accumulated
+            // alpha past 0.5) gets a depth. The outer quarter is mostly thin
+            // fringe, so the two counts differ by roughly 7x here.
+            report(rightCov > 50, "the AOV is populated beside the slab");
+            report(leftCov * 4 < rightCov,
+                   "and the slab occludes the AOV as it occludes the colour");
+        }
+    }
+
     // ── 3. delete, then load another — residency must follow the scene ──────
     // The residency cache is keyed by SplatCloud pointer. Two ways that goes
     // wrong, both exercised here: a deleted cloud's buffers staying resident
@@ -262,6 +352,29 @@ int main(int argc, char** argv) {
     for (int i = 0; i < 8; ++i) draw();
     report(renderer.splatResidentClouds() == 0,
            "a deleted cloud's GPU buffers are evicted once its frames drain");
+
+    // The AOV has to describe THIS frame, and this frame has no splats in it.
+    // The trap is that the splat pass skips itself entirely when there is
+    // nothing to draw, so a clear living inside it would leave whatever the
+    // last cloud-bearing frame wrote in this frame-in-flight slot — an AOV
+    // reporting a cloud that is no longer in the scene, with no error anywhere.
+    {
+        std::vector<uint8_t> aov;
+        int aw = 0, ah = 0, abpp = 0;
+        if (renderer.readGBufferAOV(VulkanRenderer::GBufferAOV::SplatDepth,
+                                    aov, aw, ah, abpp) &&
+            abpp == 4) {
+            std::vector<float> d(static_cast<size_t>(aw) * ah);
+            std::memcpy(d.data(), aov.data(), d.size() * sizeof(float));
+            const long long covered =
+                    std::count_if(d.begin(), d.end(), [](float v) { return v > 0.f; });
+            std::printf("       AOV covered after deletion: %lld px\n", covered);
+            report(covered == 0, "a frame with no splats leaves an EMPTY depth AOV");
+        } else {
+            report(false, "the depth AOV still reads back with no cloud in the scene");
+        }
+    }
+    renderer.setSplatDepthAov(false);
 
     // Same allocation size, immediately after the free — on MSVC's allocator
     // this lands on the old address nearly always. If it does, the test bites

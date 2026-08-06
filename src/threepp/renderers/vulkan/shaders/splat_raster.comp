@@ -203,6 +203,38 @@ void main() {
         }
     }
 
+    // ── expected-depth AOV ──────────────────────────────────────────────────
+    // expDist, exported. The accumulation loop computes it either way (the
+    // motion vectors above cannot exist without it), so the AOV costs one
+    // guarded read-modify-write per covered pixel and nothing anywhere else.
+    // It is what a consumer OUTSIDE the renderer needs, because a splat cloud
+    // is in no BLAS: every ray-traced consumer — picking, lidar, the RT
+    // sensors — misses the cloud entirely, and this image is the only place
+    // the frame records that something was there.
+    //
+    // Units are view-space distance in world units, positive, NOT reversed-Z
+    // NDC: the consumers unproject it or compare it against a metric range,
+    // and neither wants to invert a projection to do so.
+    //
+    // The same coverage > 0.5 gate the motion write uses, for the same reason
+    // spelled out above it — below half coverage the geometry BEHIND the
+    // fringe is the better answer, and a translucent halo reported as a
+    // surface is a worse lie than no surface at all. So 0 means "no cloud
+    // owns this pixel", which is the whole reason the image is cleared at the
+    // top of every frame the AOV is enabled.
+    //
+    // NEAREST WINS. record() dispatches one raster per cloud with a barrier
+    // between them and one thread per pixel within a dispatch, so this
+    // read-modify-write races nothing; without the comparison the LAST cloud
+    // submitted would own every pixel two clouds share, which is submission
+    // order — not geometry — deciding what the sensor sees.
+    if ((ubo.flags & kSplatFlagDepthAov) != 0u && coverage > 0.5) {
+        const float prev = imageLoad(splatDepth, px).x;
+        if (!(prev > 0.0) || expDist < prev) {
+            imageStore(splatDepth, px, vec4(expDist));
+        }
+    }
+
     if ((ubo.flags & kSplatFlagChecksum) != 0u) {
         // Order-independent hash of the composited result: uint addition is
         // commutative and associative, so the sum is the same however the

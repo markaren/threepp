@@ -39,7 +39,7 @@ namespace threepp::vulkan {
         constexpr uint32_t kProjStride = 64; // sizeof(SplatProj)
         constexpr uint32_t kGeomStride = 40; // vec3 + float + float[6], scalar layout
         constexpr uint32_t kGlobalWords = 12;
-        constexpr uint32_t kBindings   = 23;// 22 = the indirect dispatch args
+        constexpr uint32_t kBindings   = 24;// 22 = the indirect dispatch args, 23 = the depth AOV
         constexpr uint32_t kMaxRanges  = 64;// KEEP IN SYNC with splat_common.glsl
 
         constexpr uint32_t kSplatFlagOrtho     = 1u;
@@ -49,6 +49,7 @@ namespace threepp::vulkan {
         constexpr uint32_t kSplatFlagFog       = 16u;
         constexpr uint32_t kSplatFlagChecksum  = 32u;
         constexpr uint32_t kSplatFlagBgSolid   = 64u;
+        constexpr uint32_t kSplatFlagDepthAov  = 128u;
 
         struct SplatPc {
             uint32_t count, srcOff, dstOff, sumOff;
@@ -248,6 +249,7 @@ namespace threepp::vulkan {
         bnd[19].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;// clouds
         bnd[20].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;// lights (ambient + suns)
         bnd[21].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;// env
+        bnd[23].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;// expected-depth AOV
 
         VkDescriptorSetLayoutCreateInfo dlci{};
         dlci.sType        = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
@@ -299,7 +301,7 @@ namespace threepp::vulkan {
         sz[1].type            = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
         sz[1].descriptorCount = sets * 14;// 13 sort/scratch buffers + indirect args
         sz[2].type            = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
-        sz[2].descriptorCount = sets * 2;// sceneHdr + gbuf motion
+        sz[2].descriptorCount = sets * 3;// sceneHdr + gbuf motion + splat depth AOV
         sz[3].type            = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
         sz[3].descriptorCount = sets * 3;// gbuf depth + gbuf ids + env
 
@@ -456,7 +458,8 @@ namespace threepp::vulkan {
         // not enabled on this device, so a VK_NULL_HANDLE anywhere in the set
         // is a validation error, not a "don't sample it".
         if (sceneHdrViews_.empty() || c.sets.empty() || envView_ == VK_NULL_HANDLE ||
-            fogUbos_.empty() || cloudUbos_.empty() || lightsUbos_.empty())
+            fogUbos_.empty() || cloudUbos_.empty() || lightsUbos_.empty() ||
+            splatDepthViews_.empty())
             return;
 
         for (uint32_t f = 0; f < framesInFlight_; ++f) {
@@ -513,6 +516,16 @@ namespace threepp::vulkan {
             VkDescriptorBufferInfo ind{indirectBuf_.handle, 0, VK_WHOLE_SIZE};
             w[22].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
             w[22].pBufferInfo    = &ind;
+
+            // GENERAL for the whole frame: the pass both stores to it and
+            // clears it by transfer, and the AOV readback transitions it away
+            // and back around its copy. Full-res when the AOV is on, 1x1 when
+            // it is off — either way a real image, which is what the opening
+            // comment of this function is about.
+            VkDescriptorImageInfo sd{VK_NULL_HANDLE, splatDepthViews_[f],
+                                     VK_IMAGE_LAYOUT_GENERAL};
+            w[23].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+            w[23].pImageInfo     = &sd;
 
             vkUpdateDescriptorSets(ctx_.device(), kBindings, w.data(), 0, nullptr);
         }
@@ -834,6 +847,21 @@ namespace threepp::vulkan {
         else                 motionImages_.assign(framesInFlight_, VK_NULL_HANDLE);
         if (in.idsPerFrame) idsViews_.assign(in.idsPerFrame, in.idsPerFrame + framesInFlight_);
         else                idsViews_ = depthViews_;
+        // No fallback to another image here, the way motion/ids fall back
+        // above: binding 23 is declared r32f and those are not, and a storage
+        // image whose view format disagrees with the shader's format qualifier
+        // is undefined behaviour rather than a wasted write. Without a real
+        // image the sets simply are not written (writeSets returns early).
+        if (in.splatDepthPerFrame) {
+            splatDepthViews_.assign(in.splatDepthPerFrame, in.splatDepthPerFrame + framesInFlight_);
+        } else {
+            splatDepthViews_.clear();
+        }
+        if (in.splatDepthImages) {
+            splatDepthImages_.assign(in.splatDepthImages, in.splatDepthImages + framesInFlight_);
+        } else {
+            splatDepthImages_.assign(framesInFlight_, VK_NULL_HANDLE);
+        }
 
         if (!sameExtent || rangeBuf_.handle == VK_NULL_HANDLE) {
             destroyBuffer(ctx_.allocator(), rangeBuf_);
@@ -912,6 +940,39 @@ namespace threepp::vulkan {
             vkCmdDispatch(cb, divUp(l.count, kScanThreads), 1, 1);
             barrier(cb);
         }
+    }
+
+    void SplatPass::clearDepthAov(VkCommandBuffer cb, uint32_t frame) {
+        if (frame >= splatDepthImages_.size()) return;
+        const VkImage img = splatDepthImages_[frame];
+        if (img == VK_NULL_HANDLE) return;
+
+        // Zero is "no cloud owns this pixel" — the sentinel the raster's
+        // coverage gate produces by omission — so the AOV is only meaningful
+        // if the frame starts from it. This runs from the CALLER, before the
+        // hasClouds() test that skips record() entirely: a frame that draws no
+        // splats has to leave an empty AOV behind, not the AOV of whichever
+        // frame last used this frame-in-flight slot.
+        VkClearColorValue zero{};
+        VkImageSubresourceRange full{};
+        full.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        full.levelCount = 1;
+        full.layerCount = 1;
+        vkCmdClearColorImage(cb, img, VK_IMAGE_LAYOUT_GENERAL, &zero, 1, &full);
+
+        // transfer write -> the raster's imageLoad/imageStore.
+        VkMemoryBarrier2 mb{};
+        mb.sType         = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2;
+        mb.srcStageMask  = VK_PIPELINE_STAGE_2_CLEAR_BIT;
+        mb.srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
+        mb.dstStageMask  = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+        mb.dstAccessMask = VK_ACCESS_2_SHADER_STORAGE_READ_BIT |
+                           VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
+        VkDependencyInfo di{};
+        di.sType              = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
+        di.memoryBarrierCount = 1;
+        di.pMemoryBarriers    = &mb;
+        vkCmdPipelineBarrier2(cb, &di);
     }
 
     void SplatPass::record(VkCommandBuffer cb, uint32_t frame, const RecordParams& p) {
@@ -1000,7 +1061,10 @@ namespace threepp::vulkan {
                       (checksum ? kSplatFlagChecksum : 0u) |
                       (p.bgIsSolidColor ? kSplatFlagBgSolid : 0u) |
                       (p.motionVectors ? kSplatFlagMotion : 0u) |
-                      (p.fog ? kSplatFlagFog : 0u);
+                      (p.fog ? kSplatFlagFog : 0u) |
+                      // Belt and braces: without a real image bound the sets
+                      // were never written, so the flag must not be set either.
+                      (p.depthAov && !splatDepthViews_.empty() ? kSplatFlagDepthAov : 0u);
 
             VmaAllocationInfo ui{};
             vmaGetAllocationInfo(ctx_.allocator(), uboBuf_[frame].alloc, &ui);

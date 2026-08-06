@@ -1849,6 +1849,7 @@ namespace threepp {
             Image2D       cloudColor;   // rgba16f HALF-res — cloud march result (rgb=in-scatter, a=transmittance); STORAGE (march) + SAMPLED (shade upsample + prev-fif reproject), ping-ponged
             Image2D       cloudAux;     // rg16f HALF-res — cloud mean-depth (.r) + temporal histLen (.g); STORAGE (march) + SAMPLED (prev-fif history), ping-ponged
             Image2D       cloudShadow;  // r8 512² (FIXED) — top-down cloud transmittance over an 8 km camera-centred square; STORAGE (shadow pass) + SAMPLED (surface/froxel/water sun); regenerated per frame
+            Image2D       splatDepth;   // r32f — Gaussian-splat expected view distance in world units, 0 where no cloud owns the pixel (SplatPass); FULL-RES only under setSplatDepthAov, 1x1 otherwise. STORAGE + TRANSFER (clear + AOV copy), GENERAL for its whole life
             Image2D       depth;        // d32_sfloat — JITTERED projection (matches color attachments above; consumed by chit + TAA)
             // Hybrid raster overlay's UNJITTERED depth attachment. Filled by
             // an extra depth-only prepass (overlay_depth.vert) right after
@@ -7327,6 +7328,17 @@ namespace threepp {
         void setGbufferMsaa(uint32_t samples);
 
         [[nodiscard]] uint32_t gbufferMsaa() const { return gbufMsaaSamples_; }
+
+        // Gaussian-splat expected-depth AOV. OFF by default, and off means the
+        // backing image is one texel: a full-res r32f per frame in flight is
+        // ~25 MB at 1080p that a scene with no splats in it would never read,
+        // and this renderer's fixed footprint is already the thing being
+        // watched. Toggling reallocates the render-extent resources, exactly
+        // like setGbufferMsaa — a setup knob, not a per-frame one.
+        void setSplatDepthAov(bool enabled);
+
+        [[nodiscard]] bool splatDepthAov() const { return splatDepthAov_; }
+        bool splatDepthAov_ = false;
 
         // ── Auto-exposure state ───────────────────────────────────────────────
         std::unique_ptr<vulkan::AutoExposure> autoExposure_;

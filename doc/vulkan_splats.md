@@ -130,6 +130,46 @@ not exposed to Python, the editor or serialization. Secondary views (`addView`)
 skip the pass entirely rather than paint splats into a sensor AOV nobody asked
 for.
 
+## The expected-depth AOV
+
+`VulkanRenderer::setSplatDepthAov(true)` exports what the raster already
+computes. The accumulation loop carries `D += viewDist * alpha * T` alongside
+the colour — it has to, because a rigid cloud's motion vectors are pure camera
+reprojection of a depth and this is that depth — and `expDist = D / (1 - T)`
+falls out at the end of the tile loop. The AOV is that number, written to an
+`r32f` image and readable through `readGBufferAOV(GBufferAOV::SplatDepth)`.
+
+Three decisions worth stating, because each has a plausible alternative:
+
+**View-space distance in world units, not reversed-Z NDC.** The consumers are
+outside the renderer — picking unprojects it, an occupancy build compares it
+against a metric range — and neither wants to invert a projection first.
+
+**Only where accumulated coverage passes 0.5; 0 everywhere else.** The same
+gate, for the same reason, that the motion write above it uses: below half
+coverage the geometry behind the translucent fringe is the better answer, and a
+halo reported as a surface is a worse lie than no surface. That makes the AOV's
+covered-pixel count much smaller than a "lit pixel" count — measured about 7×
+smaller on the outer strip of the test cloud, which is nearly all fringe.
+
+**Nearest cloud wins where two overlap**, via a compare before the store. Each
+cloud is its own dispatch with a barrier between, so the read-modify-write
+races nothing; without the compare, submission order rather than geometry would
+decide what a sensor sees.
+
+What it is *not* is a surface. The expected value sits behind the visible front
+of a cloud by roughly its own thickness along the ray, so it localizes a wall
+well and a canopy poorly. The unbiased-for-surfaces alternative is the MEDIAN
+depth — the `t` where transmittance crosses 0.5 — which costs one more
+comparison in the same loop and is the obvious next step if metric ranging
+against thin structure turns out to matter.
+
+Off by default, and off means the backing image is one texel: full-res `r32f`
+per frame in flight is ~25 MB at 1080p that a scene without splats would never
+read. Toggling reallocates the render-extent resources, so it is a setup knob
+like `setGbufferMsaa`, not a per-frame one. With it off the frame is unchanged
+— the golden in `VulkanSplat_test` matches byte-exact across the change.
+
 Every fog term that carries light back INTO the camera→splat leg is mirrored:
 analytic height fog, the murk below a water surface, and the sun's single-
 scattering glow. The sun term is **closed form** rather than the surface path's

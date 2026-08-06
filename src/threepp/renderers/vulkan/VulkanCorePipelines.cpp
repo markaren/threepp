@@ -148,6 +148,7 @@ void VulkanRenderer::Impl::destroyRasterGbufImages() {
                 destroyImage2D(ctx->allocator(), d, g.cloudColor);
                 destroyImage2D(ctx->allocator(), d, g.cloudAux);
                 destroyImage2D(ctx->allocator(), d, g.cloudShadow);
+                destroyImage2D(ctx->allocator(), d, g.splatDepth);
                 destroyImage2D(ctx->allocator(), d, g.depth);
                 destroyImage2D(ctx->allocator(), d, g.unjitDepth);
                 destroyImage2D(ctx->allocator(), d, g.normalMS);
@@ -543,6 +544,22 @@ void VulkanRenderer::Impl::createRasterGbufImages(uint32_t w, uint32_t h) {
                 g.cloudShadow = createAttachmentImage2D(512, 512, VK_FORMAT_R8_UNORM,
                                                         VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
                                                         VK_IMAGE_ASPECT_COLOR_BIT, N("cloudShadow"));
+                // Gaussian-splat expected-depth AOV. Splats are PRIMARY-view
+                // only (SplatPass.hpp's SCOPE note), so a secondary view gets
+                // the one-texel version even with the AOV on — same reasoning
+                // as the MS attachments below, and the same shape: allocate
+                // 1x1 rather than nothing, because binding 23 of the splat
+                // descriptor set needs a real r32f image whether or not the
+                // shader writes it, and a separate dummy with its own
+                // lifetime is more moving parts than one texel.
+                const bool wantSplatDepth = splatDepthAov_ && !view().secondary;
+                g.splatDepth = createAttachmentImage2D(
+                        wantSplatDepth ? w : 1u, wantSplatDepth ? h : 1u,
+                        VK_FORMAT_R32_SFLOAT,
+                        VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT |
+                                VK_IMAGE_USAGE_TRANSFER_SRC_BIT |
+                                VK_IMAGE_USAGE_TRANSFER_DST_BIT,
+                        VK_IMAGE_ASPECT_COLOR_BIT, N("splatDepth"));
                 g.depth  = createAttachmentImage2D(w, h, VK_FORMAT_D32_SFLOAT,
                                                    depthUsage, VK_IMAGE_ASPECT_DEPTH_BIT,
                                                    N("depth"));
@@ -687,6 +704,7 @@ void VulkanRenderer::Impl::createRasterGbufImages(uint32_t w, uint32_t h) {
                 pushInit(g.cloudColor.image, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_GENERAL);// storage (compute r/w)
                 pushInit(g.cloudAux.image, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_GENERAL);// storage (compute r/w)
                 pushInit(g.cloudShadow.image, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_GENERAL);// storage (compute r/w)
+                pushInit(g.splatDepth.image, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_GENERAL);// storage (compute r/w) + transfer clear
                 pushInit(g.depth.image,  VK_IMAGE_ASPECT_DEPTH_BIT, VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL);
                 // null-check, not just the msaa toggle: a SECONDARY view gets no
                 // MS images (see the !secondary gate at creation above) — a
