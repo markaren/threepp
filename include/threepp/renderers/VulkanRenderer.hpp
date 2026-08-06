@@ -986,6 +986,12 @@ namespace threepp {
         void setSplatDebugChecksum(bool enabled);
         [[nodiscard]] bool splatDebugChecksum(std::uint64_t out[4]) const;
 
+        // How many splat clouds hold GPU buffers right now. A test surface for
+        // the eviction contract — a deleted cloud's ~1.2 GB (at 5M splats) must
+        // actually leave the device once its last referencing frame drains, and
+        // VRAM itself is not assertable from a test. 0 when no splat pass exists.
+        [[nodiscard]] std::size_t splatResidentClouds() const;
+
     private:
         // The one implementation struct, defined in vulkan/VulkanCoreImpl.hpp
         // and opaque to callers of this header.

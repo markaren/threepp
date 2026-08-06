@@ -7326,6 +7326,64 @@ int EditorApp::runSelfTest() {
               "and Stop drops it, which is the gap the warning is about");
     }
 
+    // Delete a splat cloud, then bring in another one — a user-reported crash.
+    // The second cloud is bigger than the first so the import forces the
+    // structural resize path (waitIdle + scratch reallocation + descriptor
+    // rewrite for every resident cloud), which is the path with the most
+    // machinery to get wrong. The checks are that the editor is still alive,
+    // that the SECOND cloud is what draws, and that repeating the cycle does
+    // not degrade — a residency cache that never evicts fails that last one
+    // by running out of slots, silently or otherwise.
+    {
+        newScene();
+        selectObject(nullptr);
+
+        const Vector3 where(0.f, 4.f, 0.f);
+        camera_.position.set(0.f, 4.f, 5.f);
+        orbit_->target.copy(where);
+        stepFixed(4);
+
+        const auto empty = renderer_->readRGBPixels();
+
+        auto countMoved = [&](const std::vector<uint8_t>& a, const std::vector<uint8_t>& b) {
+            std::size_t moved = 0;
+            const std::size_t n = std::min(a.size(), b.size());
+            for (std::size_t i = 0; i < n; ++i)
+                if (std::abs(static_cast<int>(b[i]) - static_cast<int>(a[i])) > 16) ++moved;
+            return moved;
+        };
+
+        for (int cycle = 0; cycle < 3; ++cycle) {
+
+            SplatGenerator::Options options;
+            options.count = 3000 + 5000 * (cycle + 1);// each bigger: structural every time
+            options.shDegree = 1;
+            auto cloud = SplatCloud::create(SplatGenerator::generate(options));
+            cloud->name = "Splats " + std::to_string(cycle);
+            cloud->position.copy(where);
+            addObject(cloud, document_.scene(), "Add Splats");
+            selectObject(nullptr);
+            stepFixed(4);
+
+            const auto drawn = renderer_->readRGBPixels();
+            const auto moved = countMoved(empty, drawn);
+            check(moved > empty.size() / 500,
+                  ("delete/import cycle " + std::to_string(cycle) + ": the new cloud draws").c_str());
+
+            selectObject(cloud.get());
+            deleteSelected();
+            selectObject(nullptr);
+            stepFixed(4);
+
+            const auto gone = renderer_->readRGBPixels();
+            check(countMoved(empty, gone) < empty.size() / 500,
+                  ("delete/import cycle " + std::to_string(cycle) +
+                   ": and deleting it really clears the frame — a ghost here means "
+                   "the pass is drawing a resident copy of a cloud the scene no longer has")
+                          .c_str());
+        }
+    }
+
     // A real SOG scan, dropped the way a user drops one. Gated on the asset
     // because it is 90 MB at its smallest and nothing in the repo ships it; the
     // generative coverage lives in SogLoader_test, and what this adds is the

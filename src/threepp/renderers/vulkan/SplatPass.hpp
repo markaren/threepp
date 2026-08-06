@@ -207,6 +207,12 @@ namespace threepp::vulkan {
         // the last drained frame. Non-zero means the frame was TRUNCATED.
         [[nodiscard]] uint32_t lastOverflow() const;
 
+        // How many clouds hold GPU buffers right now. A test surface, like
+        // readDebug: the eviction contract ("a deleted cloud's buffers are
+        // freed once its last referencing frame drains") is invisible from the
+        // outside except as VRAM, and VRAM is not assertable — this is.
+        [[nodiscard]] std::size_t residentCount() const { return resident_.size(); }
+
     private:
         // The expanded key list is the sum of tiles covered per splat, and that
         // is DATA, not a constant. So this is only the FIRST GUESS: the
@@ -253,7 +259,31 @@ namespace threepp::vulkan {
             uint32_t slot       = 0;// UBO slot, stable for the cloud's lifetime
             std::vector<VkDescriptorSet> sets;// [framesInFlight]
             uint64_t lastSeen = 0;
+            // The residency cache is keyed by SplatCloud POINTER, and a pointer
+            // is not an identity: delete a cloud, allocate another, and the new
+            // one can land at the SAME address — the cache then serves the dead
+            // cloud's buffers under the live cloud's key, which renders the old
+            // scan with the new transform and no error anywhere. The overlay
+            // line cache had exactly this bug. uuid is the identity check.
+            std::string uuid;
         };
+
+        // Retire every resident entry whose cloud was not submitted for
+        // `framesInFlight_ + 1` consecutive syncs — one sync per frame, one
+        // frame per submit, so by then no in-flight command buffer references
+        // its buffers or sets and they can be destroyed WITHOUT a device stall.
+        // The slot and descriptor sets go to a freelist for the next upload
+        // (sets are rewritten on upload anyway; the pool never has to free).
+        //
+        // This is the eviction the class comment always promised ("retired
+        // after its last referencing frame drains") and nothing implemented:
+        // lastSeen was written and never read, so a deleted 5M-splat scan kept
+        // its ~1.2 GB of buffers forever and the NEXT import allocated on top —
+        // device OOM at import, reported as "crash when I deleted a splat and
+        // then loaded a new one". The visible cost of eviction: a cloud HIDDEN
+        // for a few frames is also retired, and pays its upload again when
+        // re-shown. Predictable stall beats unbounded leak.
+        void retireStale();
 
         VulkanContext& ctx_;
         VkCommandPool  cmdPool_;
@@ -278,6 +308,9 @@ namespace threepp::vulkan {
         };
         std::vector<FrameCloud> frameClouds_;
         uint32_t slotsUsed_ = 0;
+        // (slot, descriptor sets) returned by retired clouds, reused by the
+        // next upload so slots and pool capacity cycle instead of running out.
+        std::vector<std::pair<uint32_t, std::vector<VkDescriptorSet>>> freeSlots_;
 
         // Shared scratch, sized to the largest resident cloud. ONE set, not
         // one per frame-in-flight: every buffer here is written and consumed

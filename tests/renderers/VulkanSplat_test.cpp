@@ -246,6 +246,43 @@ int main(int argc, char** argv) {
     report(leftAfter * 4 < leftBefore, "an opaque slab hides the splats behind it");
     report(rightAfter * 10 > rightBefore * 9, "splats beside the slab are untouched");
 
+    // ── 3. delete, then load another — residency must follow the scene ──────
+    // The residency cache is keyed by SplatCloud pointer. Two ways that goes
+    // wrong, both exercised here: a deleted cloud's buffers staying resident
+    // forever (a ~1.2 GB leak per 5M-splat import, and the OOM behind a
+    // user-reported "crash when I deleted a splat and loaded a new one"), and a
+    // NEW cloud allocated at the dead cloud's address being mistaken for it —
+    // which renders the old scan under the new key with no error anywhere.
+    scene->remove(*box);
+    scene->remove(*cloud);
+    const void* oldAddress = cloud.get();
+    cloud.reset();// really freed — the recycling case needs the address back
+
+    // Enough frames for lastSeen to age past framesInFlight_ + 1.
+    for (int i = 0; i < 8; ++i) draw();
+    report(renderer.splatResidentClouds() == 0,
+           "a deleted cloud's GPU buffers are evicted once its frames drain");
+
+    // Same allocation size, immediately after the free — on MSVC's allocator
+    // this lands on the old address nearly always. If it does, the test bites
+    // hardest; if not, it still covers plain delete-then-load.
+    auto second = SplatCloud::create(makeCloud());
+    std::printf("       address reuse: %s\n", second.get() == oldAddress ? "YES (recycled)" : "no");
+    // A different transform: if stale residency served the OLD upload, the
+    // hue-banded cloud would still draw at the ORIGIN rather than offset.
+    second->position.set(2.0f, 0.f, 0.f);
+    scene->add(second);
+    for (int i = 0; i < 40; ++i) draw();
+    const auto reloaded = renderer.readRGBPixels();
+    report(renderer.splatResidentClouds() == 1, "the reloaded cloud is resident alone");
+    // Offset +2 in x pushes the cloud right of centre: the right third must be
+    // lit and the far-left third dark, which the ORIGIN-rendered stale version
+    // fails on both counts.
+    report(countLit(reloaded, 3 * kW / 4, kW) > 500,
+           "and it draws at ITS transform, not the dead cloud's");
+    report(countLit(reloaded, 0, kW / 6) < 200,
+           "with nothing left where the dead cloud stood");
+
     std::printf(failures == 0 ? "\nALL CHECKS PASSED\n" : "\n%d CHECK(S) FAILED\n", failures);
     return failures == 0 ? 0 : 1;
 }

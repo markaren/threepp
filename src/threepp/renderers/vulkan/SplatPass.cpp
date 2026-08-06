@@ -509,9 +509,25 @@ namespace threepp::vulkan {
         }
     }
 
+    void SplatPass::retireStale() {
+        for (auto it = resident_.begin(); it != resident_.end();) {
+            if (it->second->lastSeen + framesInFlight_ + 1 <= syncSerial_) {
+                destroyBuffer(ctx_.allocator(), it->second->geom);
+                destroyBuffer(ctx_.allocator(), it->second->sh);
+                freeSlots_.emplace_back(it->second->slot, std::move(it->second->sets));
+                it = resident_.erase(it);
+            } else {
+                ++it;
+            }
+        }
+    }
+
     void SplatPass::syncClouds(const std::vector<CloudEntry>& clouds) {
         frameClouds_.clear();
         ++syncSerial_;
+        // BEFORE the empty early-out: deleting the scene's last splat cloud is
+        // exactly when there is something to retire and nothing to submit.
+        retireStale();
         if (clouds.empty()) return;
 
         // A cloud arriving or a cloud growing is a rare, load-time event; both
@@ -522,7 +538,13 @@ namespace threepp::vulkan {
         uint32_t needSplats = maxSplats_;
         for (const auto& e : clouds) {
             if (!e.cloud) continue;
-            if (!resident_.count(e.cloud)) structural = true;
+            // A pointer hit with a uuid MISMATCH is a recycled address wearing
+            // a dead cloud's key — structural, so the branch below gets its
+            // waitIdle and can destroy the corpse before uploading the heir.
+            if (auto it = resident_.find(e.cloud);
+                it == resident_.end() || it->second->uuid != e.cloud->uuid) {
+                structural = true;
+            }
             needSplats = std::max(needSplats, static_cast<uint32_t>(e.cloud->splatCount()));
         }
         uint32_t needEntries = entryBudget_;
@@ -564,27 +586,60 @@ namespace threepp::vulkan {
         if (structural) {
             check(vkDeviceWaitIdle(ctx_.device()), "vkDeviceWaitIdle(splat sync)");
 
+            // Device idle, so recycled-address corpses (uuid mismatch) can be
+            // destroyed on the spot; their slot and sets go back to the pool
+            // and the upload loop below sees a clean miss at that key.
+            for (auto it = resident_.begin(); it != resident_.end();) {
+                bool recycled = false;
+                for (const auto& e : clouds) {
+                    if (e.cloud == it->first && it->second->uuid != e.cloud->uuid) {
+                        recycled = true;
+                        break;
+                    }
+                }
+                if (recycled) {
+                    destroyBuffer(ctx_.allocator(), it->second->geom);
+                    destroyBuffer(ctx_.allocator(), it->second->sh);
+                    freeSlots_.emplace_back(it->second->slot, std::move(it->second->sets));
+                    it = resident_.erase(it);
+                } else {
+                    ++it;
+                }
+            }
+
             for (const auto& e : clouds) {
                 if (!e.cloud || resident_.count(e.cloud)) continue;
-                if (slotsUsed_ >= kMaxClouds) {
+                if (freeSlots_.empty() && slotsUsed_ >= kMaxClouds) {
                     std::cerr << "[threepp] SplatPass: more than " << kMaxClouds
                               << " splat clouds in one scene; the extra ones are not drawn"
                               << std::endl;
                     break;
                 }
                 auto c = std::make_unique<Cloud>();
-                c->slot = slotsUsed_++;
-                uploadCloud(*c, *e.cloud);
+                c->uuid     = e.cloud->uuid;
+                c->lastSeen = syncSerial_;
+                if (!freeSlots_.empty()) {
+                    // A retired cloud's slot and sets, ready for rewriting —
+                    // writeSets below refreshes every binding, so nothing of
+                    // the previous owner survives into the reuse.
+                    c->slot = freeSlots_.back().first;
+                    c->sets = std::move(freeSlots_.back().second);
+                    freeSlots_.pop_back();
+                    uploadCloud(*c, *e.cloud);
+                } else {
+                    c->slot = slotsUsed_++;
+                    uploadCloud(*c, *e.cloud);
 
-                std::vector<VkDescriptorSetLayout> layouts(framesInFlight_, dsLayout_);
-                VkDescriptorSetAllocateInfo ai{};
-                ai.sType              = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
-                ai.descriptorPool     = descPool_;
-                ai.descriptorSetCount = framesInFlight_;
-                ai.pSetLayouts        = layouts.data();
-                c->sets.resize(framesInFlight_);
-                check(vkAllocateDescriptorSets(ctx_.device(), &ai, c->sets.data()),
-                      "vkAllocateDescriptorSets(splat)");
+                    std::vector<VkDescriptorSetLayout> layouts(framesInFlight_, dsLayout_);
+                    VkDescriptorSetAllocateInfo ai{};
+                    ai.sType              = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+                    ai.descriptorPool     = descPool_;
+                    ai.descriptorSetCount = framesInFlight_;
+                    ai.pSetLayouts        = layouts.data();
+                    c->sets.resize(framesInFlight_);
+                    check(vkAllocateDescriptorSets(ctx_.device(), &ai, c->sets.data()),
+                          "vkAllocateDescriptorSets(splat)");
+                }
                 resident_.emplace(e.cloud, std::move(c));
             }
 
