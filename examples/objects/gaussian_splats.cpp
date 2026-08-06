@@ -18,6 +18,10 @@
 //   --scale S                              render scale; the splat pass is measured
 //                                          at RENDER resolution, so this is the only
 //                                          flag that changes its pixel count
+//   --clouds K                             partition the same splats across K clouds
+//                                          (constant total) — measures the per-cloud
+//                                          tax, which is ~1.3 ms each: see
+//                                          doc/vulkan_splats.md
 //   --upscaler                             leave DLSS/FSR enabled (off by default for
 //                                          GL parity). Alone it changes nothing: at
 //                                          scale 1 DLSS selects DLAA and upscales
@@ -214,6 +218,7 @@ int main(int argc, char** argv) {
     int lodLevel = 0;
     bool upscaler = false;
     float renderScale = 1.f;
+    int cloudSplit = 1;
 
     for (int i = 1; i < argc; ++i) {
 
@@ -234,6 +239,8 @@ int main(int argc, char** argv) {
             upscaler = true;
         } else if (arg == "--scale" && i + 1 < argc) {
             renderScale = static_cast<float>(std::atof(argv[++i]));
+        } else if (arg == "--clouds" && i + 1 < argc) {
+            cloudSplit = std::max(1, std::atoi(argv[++i]));
         } else if (arg == "--shot" && i + 1 < argc) {
             shotPath = argv[++i];
         } else if (arg.rfind("--screenshot=", 0) == 0) {
@@ -501,7 +508,37 @@ int main(int argc, char** argv) {
                                             std::max(100.f, fit.radius * 40.f));
 
     const auto tBuild = std::chrono::steady_clock::now();
-    auto cloud = SplatCloud::create(std::move(data));
+    // --clouds K partitions the SAME splats across K SplatCloud objects, total
+    // count unchanged and every splat in its original place, so the picture is
+    // the same and only the number of clouds differs. That measures the
+    // PER-CLOUD tax: SplatPass::record runs the whole pipeline once per cloud —
+    // the clears, the sizing dispatch, 8 rounds of hist/scan/scatter and a
+    // full-screen tile walk — and per-chunk LOD would submit ten of them. If
+    // the slope here is steep, per-chunk LOD wants one merged buffer instead.
+    std::vector<std::shared_ptr<SplatCloud>> parts;
+    if (cloudSplit <= 1) {
+        parts.push_back(SplatCloud::create(std::move(data)));
+    } else {
+
+        const size_t total = data.count();
+        const size_t per   = (total + cloudSplit - 1) / static_cast<size_t>(cloudSplit);
+        const size_t cc    = static_cast<size_t>(data.coeffCount()) * 3;
+        for (size_t b = 0; b < total; b += per) {
+
+            const size_t e = std::min(total, b + per);
+            SplatData d;
+            d.shDegree = data.shDegree;
+            d.means.assign(data.means.begin() + b, data.means.begin() + e);
+            d.scales.assign(data.scales.begin() + b, data.scales.begin() + e);
+            d.rotations.assign(data.rotations.begin() + b, data.rotations.begin() + e);
+            d.opacities.assign(data.opacities.begin() + b, data.opacities.begin() + e);
+            d.sh.assign(data.sh.begin() + b * cc, data.sh.begin() + e * cc);
+            parts.push_back(SplatCloud::create(std::move(d)));
+        }
+        std::cout << "  split across " << parts.size() << " clouds of ~" << per
+                  << " splats (same splats, same places)" << std::endl;
+    }
+    auto cloud = parts.front();
     std::cout << "  cloud built (covariances + data textures) in " << std::fixed
               << std::setprecision(1)
               << std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - tBuild).count()
@@ -515,17 +552,17 @@ int main(int argc, char** argv) {
     // +Y-up already and are never flipped.
     if (loadedFromFile && flip) {
 
-        cloud->rotation.x = math::PI;
+        for (auto& p : parts) p->rotation.x = math::PI;
         std::cout << "  flipped 180 degrees about X for +Y-up (--no-flip to keep the file's axes)"
                   << std::endl;
     }
 
     // The fit sphere was measured in the cloud's own coordinates; move its
     // centre into world space so the framing below still points at the scan.
-    cloud->updateMatrixWorld();
+    for (auto& p : parts) p->updateMatrixWorld();
     fit.center.applyMatrix4(*cloud->matrixWorld);
 
-    scene->add(cloud);
+    for (auto& p : parts) scene->add(p);
 
     // --occluder: an opaque slab driven through the middle of the cloud. The
     // splat compositor has no hardware depth test — it reads the G-buffer depth
@@ -640,7 +677,8 @@ int main(int argc, char** argv) {
         // counting sort and the instanceColor upload it drives are pure waste
         // there — and worse than waste at 216k splats, since they would dominate
         // the frame the pass is supposed to be measured on.
-        if (!useVulkan) cloud->update(*camera);
+        if (!useVulkan)
+            for (auto& p : parts) p->update(*camera);
 
         renderer->render(*scene, *camera);
 

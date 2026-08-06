@@ -154,6 +154,27 @@ while the lit air around it stayed grey. `--fog --sun` is that configuration, an
 metres-scale scan leaves the unit-scale procedural cloud at `T = 0.97`, which
 renders a plausible frame while testing nothing.
 
+## The per-cloud tax (measured 2026-08-06)
+
+`record()` runs the WHOLE pipeline per cloud — the clears, the sizing dispatch,
+eight rounds of fill/hist/scan/scatter, and a full-screen `(tilesX, tilesY)` tile
+walk — so a second cloud is not a second batch, it is a second pass. Measured
+with `--clouds K`, which partitions the same splats across K clouds at constant
+total (1.25M, level 2, framed):
+
+| K | 1 | 2 | 4 | 8 |
+|---|---|---|---|---|
+| frame | 7.1 ms | 9.6 ms | 13.2 ms | 16.4 ms |
+
+**~1.3 ms per extra cloud**, and it is nearly all fixed overhead: the per-stage
+numbers (which cover the first cloud only) shrink as K rises while the frame
+grows. Ten clouds would cost ~12 ms before drawing a splat.
+
+Consequences. Per-chunk LOD cannot be N chunk-clouds — it wants ONE cloud whose
+buffer is assembled from the selected per-chunk levels, which also removes the
+inter-cloud compositing-order worry. And `kMaxClouds = 8` is not a limit anyone
+should want to raise: eight clouds is already 16 ms.
+
 ## V3 — the perf checklist
 
 Not implemented. Ordered by measured or estimated value.
@@ -185,6 +206,22 @@ Not implemented. Ordered by measured or estimated value.
    `THREEPP_VK_SPLAT_NOINDIRECT=1` restores the worst-case dispatches — the A/B
    switch the numbers above came from, and the first thing to try if another
    driver disagrees.
+
+   Follow-up, ablated and REFUTED as written: the 8 per-pass histogram zero-fills
+   cost ~0.5 ms of the 3.9 ms zoom sort (ablation: skip them, 3.43 vs 3.92–4.22),
+   but double-buffering the histogram so each fill rides the previous pass's
+   barrier recovered NOTHING (3.70/3.88 zoom, 4.84/5.20 full — inside noise), and
+   was reverted rather than kept as unmotivated complexity in the sort. So the
+   cost is the fill's own launch, not its barrier. Removing the fills for real
+   needs the scan to stop dirtying the histogram tail — an OUT-OF-PLACE scan, one
+   fill per frame — which is the same class of change as making the scan extent
+   dynamic and should be evaluated with it. The other ablation, "skip the scan
+   chain", is INVALID as a measurement: it leaves garbage offsets, so the scatter
+   thrashes and the sort gets *slower* (5.55). What is valid: 4 passes instead of
+   8 halves the sort (1.90 vs 3.92), so cost is linear in passes at ~0.49 ms
+   each, against ~12 MB of real data per pass at that zoom. The sort is
+   dispatch-and-barrier bound, roughly 6 such units per pass, which is why only
+   FEWER PASSES moves it much.
 
    Now measured rather than estimated, and it is worth more than the −12 % this
    line used to claim. With the per-stage timings (item 4) on the 5.0M
