@@ -2,6 +2,7 @@
 
 #include "threepp/extras/DataUtils.hpp"
 #include "threepp/objects/SplatCloud.hpp"
+#include "threepp/renderers/vulkan/GpuTimings.hpp"
 #include "threepp/renderers/vulkan/VulkanContext.hpp"
 
 #include "threepp/renderers/vulkan/shaders/splat_checksum.comp.spv.h"
@@ -727,9 +728,18 @@ namespace threepp::vulkan {
         const char* cse = std::getenv("THREEPP_VK_SPLAT_CHECKSUM");
         const bool checksum = p.checksum || (cse && *cse && *cse != '0');
 
+        // Per-stage timestamps go to the FIRST drawn cloud only — the slots are
+        // one pair per stage per frame, and a second writer would both violate
+        // VUID-vkCmdWriteTimestamp2-None-03864 and report the wrong interval.
+        bool stagesWritten = false;// slots for this frame already used
+        bool timing        = false;// this cloud's stages go to the pool
+        const auto stageBegin = [&](TimingPass tp) { if (timing) p.timings->begin(cb, tp, frame); };
+        const auto stageEnd   = [&](TimingPass tp) { if (timing) p.timings->end(cb, tp, frame); };
+
         for (const auto& fc : frameClouds_) {
             Cloud& c = *fc.cloud;
             if (c.count == 0) continue;
+            timing = p.timings && !stagesWritten;
 
             // ── per-cloud UBO slot ───────────────────────────────────────────
             SplatUboData u{};
@@ -801,6 +811,7 @@ namespace threepp::vulkan {
             SplatPc pc{};
 
             // ── project + cull + tile counts ─────────────────────────────────
+            stageBegin(TP_SplatProject);
             vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, projectPipe_);
             pc = {c.count, 0, 0, 0, 0, 0, 0, 0};
             vkCmdPushConstants(cb, pipeLayout_, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(pc), &pc);
@@ -838,6 +849,8 @@ namespace threepp::vulkan {
             // the GPU (g.entryCount) and the host never sees it in time to size
             // the dispatch, so the tail blocks read it and exit. Sizing these
             // from an indirect dispatch is on the V3 list.
+            stageEnd(TP_SplatProject);
+            stageBegin(TP_SplatSort);
             for (uint32_t pass = 0; pass < kRadixPasses; ++pass) {
                 const uint32_t shift = pass * 4;
                 const uint32_t side  = pass & 1u;// 0: A->B, 1: B->A
@@ -857,7 +870,10 @@ namespace threepp::vulkan {
                 barrier(cb);
             }
 
+            stageEnd(TP_SplatSort);
+
             // ── tile ranges ──────────────────────────────────────────────────
+            stageBegin(TP_SplatRaster);
             vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, rangePipe_);
             pc = {entryBudget_, 0, 0, 0, 0, 0, 0, 0};
             vkCmdPushConstants(cb, pipeLayout_, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(pc), &pc);
@@ -916,6 +932,8 @@ namespace threepp::vulkan {
             vkCmdPushConstants(cb, pipeLayout_, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(pc), &pc);
             vkCmdDispatch(cb, tilesX_, tilesY_, 1);
             barrier(cb);
+            stageEnd(TP_SplatRaster);
+            stagesWritten = stagesWritten || timing;
 
             if (flipMotion)
                 motionLayout(VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,

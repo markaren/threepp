@@ -685,6 +685,12 @@ int main(int argc, char** argv) {
                               << "  taa " << t.taaMs
                               << "  denoise " << t.denoiseMs
                               << " ms   cpu record " << t.cpuRecordMs << " ms" << std::endl;
+                    // Inside the splat pass: which stage owns the frame decides
+                    // where an optimisation belongs. project = per-splat work,
+                    // sort = the radix passes, raster = tile ranges + composite.
+                    std::cout << "  gpu  splat: project " << t.splatProjectMs
+                              << "  sort " << t.splatSortMs
+                              << "  raster " << t.splatRasterMs << " ms" << std::endl;
                 }
 #endif
             }

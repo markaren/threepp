@@ -111,6 +111,9 @@ namespace threepp::vulkan {
         lastTimings_.dofMs        = pairMs(TP_Dof);
         lastTimings_.froxelMs     = pairMs(TP_Froxel);
         lastTimings_.splatMs      = pairMs(TP_Splat);
+        lastTimings_.splatProjectMs = pairMs(TP_SplatProject);
+        lastTimings_.splatSortMs    = pairMs(TP_SplatSort);
+        lastTimings_.splatRasterMs  = pairMs(TP_SplatRaster);
     }
 
 }// namespace threepp::vulkan

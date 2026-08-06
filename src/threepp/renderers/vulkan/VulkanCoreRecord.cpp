@@ -1015,6 +1015,7 @@ void VulkanRenderer::Impl::recordSplats(VkCommandBuffer cb) {
             p.bgIsSolidColor = envIsBgColor;
             p.checksum       = splatChecksum_;
 
+            p.timings        = gpuTimings_.get();// per-stage split, from inside
             gpuTimings_->begin(cb, TP_Splat, currentFrame);
             splat_->record(cb, currentFrame, p);
             gpuTimings_->end(cb, TP_Splat, currentFrame);

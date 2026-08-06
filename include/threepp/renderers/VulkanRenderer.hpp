@@ -764,6 +764,14 @@ namespace threepp {
             float dofMs          = 0.f;// thin-lens depth of field (0 unless setDepthOfField)
             float froxelMs       = 0.f;// froxel volumetrics: inject + integrate (0 unless a medium is active)
             float splatMs        = 0.f;// Gaussian-splat tile rasterizer (0 unless the scene has a SplatCloud)
+            // The three stages inside splatMs, for the FIRST splat cloud of the
+            // frame only (see TimingPass). They partition the pass: per-splat
+            // work, the sort, and the tile composite — which is the split that
+            // decides whether an optimisation belongs in front of the sort or
+            // behind it.
+            float splatProjectMs = 0.f;// project + cull + prefix sum + expand
+            float splatSortMs    = 0.f;// the radix passes and their scans
+            float splatRasterMs  = 0.f;// tile ranges + composite
             float cpuEnsureSceneMs = 0.f;// ensureSceneBuilt
             float cpuRecordMs      = 0.f;// recordCommandBuffer
             float cpuFrameMs       = 0.f;// total render() wall time

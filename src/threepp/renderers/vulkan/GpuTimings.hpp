@@ -41,7 +41,16 @@ namespace threepp::vulkan {
         TP_Froxel        = 9,// froxel volumetrics: inject + integrate (medium-active frames only)
         TP_SensorImage   = 10,// lens distortion + sensor noise (setLensDistortion / setSensorNoise only)
         TP_Splat         = 11,// Gaussian-splat tile rasterizer (scenes with a SplatCloud only)
-        TP_COUNT         = 12,
+        // The three stages INSIDE TP_Splat, so the pass can be attributed
+        // rather than inferred. They partition TP_Splat and should sum to it
+        // bar the barriers between them. Written for the FIRST splat cloud of
+        // the frame only: a second cloud would write slots this frame already
+        // holds, which is a VUID-vkCmdWriteTimestamp2-None-03864 violation and
+        // garbage numbers besides.
+        TP_SplatProject  = 12,// per-splat project + cull + prefix sum + expand
+        TP_SplatSort     = 13,// the 8 x 4-bit radix passes and their scans
+        TP_SplatRaster   = 14,// tile ranges + the tile-local composite
+        TP_COUNT         = 15,
     };
     inline constexpr uint32_t kTimingSlots = TP_COUNT * 2u;
 

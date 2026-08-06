@@ -160,10 +160,25 @@ Not implemented. Ordered by measured or estimated value.
 
 1. **Size the sort and range dispatches from the actual entry count.** The
    expanded count lives on the GPU, so today every pass after the expansion is
-   dispatched over the BUDGET. Measured upside, Sanctuaire orbit: 28.8 → 25.2 ms
-   (−12 %), and 36.2 → 25.2 ms (−30 %) against the pre-tuning budget.
-   `vkCmdDispatchIndirect` off a count the expansion writes; the histogram scan's
-   extent has to follow the same count or the offsets do not line up.
+   dispatched over the BUDGET. `vkCmdDispatchIndirect` off a count the expansion
+   writes; the histogram scan's extent has to follow the same count or the
+   offsets do not line up.
+
+   Now measured rather than estimated, and it is worth more than the −12 % this
+   line used to claim. With the per-stage timings (item 4) on the 5.0M
+   Sanctuaire at 960×600: sort **9.86 ms** of a 28 ms frame with the basilica
+   filling the screen, and **7.9 ms with the camera pointed at empty space** —
+   i.e. 7.9 ms to sort ZERO entries, because the dispatch, the 16×39,063-word
+   histogram and its scan chain are all sized from a 20M-entry budget that is
+   `splatCount × 4` and never looks at the data. Only ~2 ms of the full-view
+   sort is the sort. The intuition that the tail blocks "read the count and
+   exit, so over-dispatch is nearly free" is WRONG by about 8 ms.
+
+   This is also the blocker for dynamic LOD: `maxSplats_` is a high-water mark,
+   so once the finest level has been resident the coarse levels keep paying the
+   fine level's sort. Rendering 625k splats with 5M resident would cost ~7.9 ms
+   of sort against ~0.6 ms earned, capping any dynamic scheme around 110 fps
+   however coarse it goes.
 2. **Chunk frustum culling before the sort.** ATLAS culls 5 k of 216 k and
    Sanctuaire 134 k of 5.0 M by the per-splat near/offscreen test alone, all of
    it *after* per-splat projection work. A coarse per-chunk AABB reject would
@@ -174,9 +189,22 @@ Not implemented. Ordered by measured or estimated value.
    6 passes (−25 % sort) at the cost of 4096 depth buckets instead of a million.
    Measure the tie-order cost on the Sanctuaire sky first — the tail-band
    doctrine exists because that is where quantisation shows.
-4. **Per-stage GpuTimings.** `TP_Splat` brackets the whole pass; project / scan /
-   expand / sort / raster want their own so items 1–3 can be attributed rather
-   than inferred.
+4. ~~**Per-stage GpuTimings.**~~ DONE. `TP_SplatProject` / `TP_SplatSort` /
+   `TP_SplatRaster` partition `TP_Splat` from inside the pass, for the first
+   splat cloud of the frame (one slot pair per stage, so a second writer would
+   be a VUID violation and a wrong number). Surfaced as
+   `FrameTimings::splat{Project,Sort,Raster}Ms` and printed by the example's
+   `--bench`. The 5.0M Sanctuaire at 960×600, median of 195 frames:
+
+   | framing | project | sort | raster | total |
+   |---|---|---|---|---|
+   | basilica fills the screen | 3.66 ms | 9.86 ms | 13.87 ms | 27.4 ms |
+   | camera pointed away | 1.34 ms | 7.90 ms | 0.055 ms | 9.3 ms |
+   | level 2 (1.25M), same framing | 1.03 ms | 2.29 ms | 4.42 ms | 7.8 ms |
+
+   Read it as: the raster half is real work on real coverage, the sort is
+   mostly not (item 1), and per-splat projection is the smallest of the three
+   even at 5M.
 5. **Shrink the budget as well as grow it.** The budget never comes back down
    after a close-up frame inflates it, so a scene that pans away keeps paying.
    Same machinery as the growth path (`syncClouds` already reads the entry count

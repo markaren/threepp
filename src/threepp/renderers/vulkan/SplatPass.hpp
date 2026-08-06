@@ -94,6 +94,7 @@ namespace threepp {
 namespace threepp::vulkan {
 
     class VulkanContext;
+    class GpuTimings;
 
     class SplatPass {
 
@@ -176,6 +177,11 @@ namespace threepp::vulkan {
             // Hash the sorted key/payload arrays and the composited pixels
             // (VulkanRenderer::setSplatDebugChecksum).
             bool  checksum = false;
+            // Optional per-stage timestamps. The caller already brackets the
+            // whole pass with TP_Splat; handing the pool in lets the pass split
+            // that into project / sort / raster from the inside, where the stage
+            // boundaries actually are. Null = no per-stage timing.
+            GpuTimings* timings = nullptr;
         };
         void record(VkCommandBuffer cb, uint32_t frame, const RecordParams& p);
 
