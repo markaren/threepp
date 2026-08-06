@@ -182,7 +182,12 @@ namespace threepp {
         // river, because on a scan the distant background genuinely IS a
         // handful of enormous splats. Scene-relative size is the signal that
         // separates the two; peer-relative size on its own is not.
-        size_t removeOutliers(const OutlierPolicy& policy = {});
+        // Two overloads rather than a defaulted argument: `= {}` on a nested
+        // type needs that type's default member initializers complete while
+        // the enclosing class still isn't, which GCC rejects.
+        size_t removeOutliers();
+
+        size_t removeOutliers(const OutlierPolicy& policy);
 
         // Reorders storage into Morton (Z-order) sequence, so that splats which
         // are neighbours in space become neighbours in memory. Returns the
@@ -293,7 +298,10 @@ namespace threepp {
             bool includeDegenerates = false;
         };
 
-        [[nodiscard]] static SplatData generate(const Options& options = {});
+        // Two overloads for the same reason as SplatData::removeOutliers.
+        [[nodiscard]] static SplatData generate();
+
+        [[nodiscard]] static SplatData generate(const Options& options);
     };
 
 }// namespace threepp

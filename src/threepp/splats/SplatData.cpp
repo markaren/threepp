@@ -258,6 +258,11 @@ namespace {
 
 }// namespace
 
+size_t SplatData::removeOutliers() {
+
+    return removeOutliers(OutlierPolicy{});
+}
+
 size_t SplatData::removeOutliers(const OutlierPolicy& policy) {
 
     const size_t n = count();
@@ -417,6 +422,11 @@ bool SplatData::validate(std::string* why) const {
     return true;
 }
 
+
+SplatData SplatGenerator::generate() {
+
+    return generate(Options{});
+}
 
 SplatData SplatGenerator::generate(const Options& options) {
 
