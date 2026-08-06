@@ -222,7 +222,7 @@ namespace threepp::vulkan {
         bnd[17].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
         bnd[18].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;// fog
         bnd[19].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;// clouds
-        bnd[20].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;// lights (ambient)
+        bnd[20].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;// lights (ambient + suns)
         bnd[21].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;// env
 
         VkDescriptorSetLayoutCreateInfo dlci{};

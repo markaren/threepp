@@ -16,6 +16,7 @@ gaussian_splats <scene.ply> --vulkan           Vulkan compute tile rasterizer
 gaussian_splats <scene.ply> --vulkan --shot out.png --frames 200
 gaussian_splats <scene.ply> --vulkan --occluder     splat-behind-mesh depth test
 gaussian_splats <scene.ply> --vulkan --fog          does the cloud sit IN the medium
+gaussian_splats <scene.ply> --vulkan --fog --sun    ...with the medium LIT by a sun only
 gaussian_splats <scene.ply> --vulkan --bench 200    orbit, timings, GPU breakdown
 ```
 
@@ -127,10 +128,29 @@ not exposed to Python, the editor or serialization. Secondary views (`addView`)
 skip the pass entirely rather than paint splats into a sensor AOV nobody asked
 for.
 
-Two of the three fog terms the surface path composes are mirrored (analytic
-height fog + murk); the froxel LUT's point-light glow and the sun march are not.
-Both are additive, so a cloud is slightly less lit by nearby lamps and invisible
-to god rays — not wrongly fogged.
+Every fog term that carries light back INTO the camera→splat leg is mirrored:
+analytic height fog, the murk below a water surface, and the sun's single-
+scattering glow. The sun term is **closed form** rather than the surface path's
+16-step march — for a directional light both `L` and `rd` are fixed, so the HG
+phase is constant along the leg and the weight the march is left carrying
+integrates exactly to `1 - Ta` over the profile `splatHeightFogOd` already
+integrates. Checked numerically against that march across six configurations:
+worst difference 0.94 %, and that residual is the march's own 16-step truncation,
+not a modelling gap.
+
+Still not mirrored, both additive: the froxel LUT's point-light glow (wants the
+froxel volume + cluster grid this pass does not bind) and the **shadowing** of
+the sun term (wants the TLAS), so a cloud is a little less lit by nearby lamps
+than a mesh beside it, and its sun haze is the unoccluded upper bound rather than
+a shafted one — too bright by a bounded amount, never too dark.
+
+The sun term is the one that mattered, because its absence was not a dimming. A
+sun-only scene zeroes the ambient and env terms that were the only ones here, so
+the leg kept its extinction and got nothing back: the cloud sank toward black
+while the lit air around it stayed grey. `--fog --sun` is that configuration, and
+`--fog`'s density is now scaled to the fit radius — a fixed density tuned for a
+metres-scale scan leaves the unit-scale procedural cloud at `T = 0.97`, which
+renders a plausible frame while testing nothing.
 
 ## V3 — the perf checklist
 

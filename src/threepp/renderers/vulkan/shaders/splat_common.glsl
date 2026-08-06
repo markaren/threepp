@@ -237,10 +237,17 @@ layout(set = 0, binding = 19, scalar) uniform CloudUbo {
     float shadowActive;
 } clouds;
 
-// Only the leading `ambient` is read; a uniform block may be shorter than the
-// buffer bound to it, and the offsets of what it does declare still match.
+// Only the leading `ambient` and the sun list are read; a uniform block may be
+// shorter than the buffer bound to it, and the offsets of what it does declare
+// still match — so the point/spot/rect tail stays undeclared. The fields that
+// ARE declared must keep the exact order and types deferred_shade.comp and
+// particle_light.comp give them, or every offset after the first mismatch is
+// garbage.
+struct DirLight { vec3 direction; vec3 color; };
 layout(set = 0, binding = 20, scalar) uniform LightsUbo {
-    vec3 ambient;
+    vec3     ambient;
+    uint     dirCount;
+    DirLight dirLights[8];
 } lights;
 
 layout(set = 0, binding = 21) uniform sampler2D envTex;// prefiltered PMREM chain
@@ -394,17 +401,24 @@ uint splatDepthBucket(float dist, float dMin, float dMax, float pLo, float pHi) 
 }
 
 // ── Fog over the camera -> splat leg ────────────────────────────────────────
-// The two ANALYTIC terms of the three the surface path composes: exponential
-// height-fog extinction with ambient in-scatter, and the murk below a water
-// surface. KEEP IN SYNC with heightFogOpticalDepth / fogPathLength in
+// The ANALYTIC form of every fog term that puts light back INTO this leg:
+// exponential height-fog extinction with ambient in-scatter, the murk below a
+// water surface, and the sun's single-scattering glow. KEEP IN SYNC with
+// heightFogOpticalDepth / fogPathLength / volumetricDirScatter in
 // deferred_shade_60_fog_volumetrics.glsl and particle_light.comp — same
-// clamps, same Taylor guard.
+// clamps, same Taylor guard, same HG phase.
 //
-// NOT mirrored here, and deliberately: the froxel LUT's integrated point-light
-// glow and the short sun march (god rays IN FRONT of the cloud). Both need
-// bindings this pass does not carry (the cluster grid, the froxel volume, the
-// TLAS), and both are additive — leaving them out makes a splat cloud slightly
-// less lit by nearby lamps and invisible to god rays, not wrongly fogged.
+// Still NOT mirrored, both additive: the froxel LUT's integrated point-light
+// glow (needs the froxel volume + cluster grid this pass does not bind), and
+// the SHADOWING of the sun term — the shafts the surface march carves with an
+// RT ray per step, which needs the TLAS. So a splat cloud is a little less lit
+// by nearby lamps than a mesh beside it, and its sun haze is the unoccluded
+// upper bound rather than a shafted one: both leave it too BRIGHT by a bounded
+// amount. That direction matters. The sun term itself used to be missing too,
+// and because a sun-only scene zeroes the ambient AND env terms that were the
+// only ones here, the leg kept its extinction and got nothing back — a cloud
+// in lit air faded to black, the one failure a "slightly dimmer" gap cannot
+// produce.
 
 float splatHeightFogOd(vec3 a, vec3 b) {
     if (clouds.hfDensity <= 0.0) return 0.0;
@@ -436,6 +450,14 @@ vec3 splatEnvTop() {
     return textureLod(envTex, vec2(0.5, 1.0), lod).rgb;
 }
 
+// Henyey-Greenstein phase — the same expression as hgPhase in
+// deferred_shade_60_fog_volumetrics.glsl / particle_light.comp / froxel_inject.comp,
+// with PI written out because splat_common carries no PI of its own.
+float splatHgPhase(float mu, float g) {
+    const float g2 = g * g;
+    return (1.0 - g2) / (4.0 * 3.14159265358979 * pow(max(1.0 + g2 - 2.0 * g * mu, 1e-4), 1.5));
+}
+
 // Returns the leg transmittance; `inScatter` receives what to ADD after it.
 float splatFog(vec3 camPos, vec3 P, out vec3 inScatter) {
     inScatter = vec3(0.0);
@@ -453,6 +475,31 @@ float splatFog(vec3 camPos, vec3 P, out vec3 inScatter) {
     // applyMurk: lit*(Ta*Tm) + [airIn*(1-Ta)]*Tm + murkIn*(1-Tm).
     inScatter = airAlbedo * fogLight * (1.0 - Ta) * Tm
               + fog.murkColor * fogLight * (1.0 - Tm);
+    // Sun in-scatter over the same AIR leg, closed form. The surface path
+    // MARCHES this (volumetricDirScatter) because its per-step shadow ray makes
+    // the integrand vary along the ray; with no TLAS here nothing varies — for a
+    // directional light L and rd are both fixed, so the HG phase is constant
+    // over the whole leg, and the weight the march is left carrying integrates
+    // exactly: the integral of sigma(x)*exp(-od(cam,x)) over the leg IS 1 - Ta,
+    // over the very profile splatHeightFogOd already integrates. So this is that
+    // march with vis == 1 and no cloud shadow, not an approximation of its shape.
+    // Murk gets no sun term, matching applyMurk (ambient in-scatter only), and
+    // the air term is attenuated by Tm to keep the same air-then-murk order.
+    // Gated as the march is (an air medium + at least one sun) plus a leg long
+    // enough to matter, which also keeps normalize(P - camPos) off zero length.
+    if (odAir > 1e-4 && clouds.heteroActive > 0.5 && lights.dirCount > 0u) {
+
+        const vec3 rd = ((ubo.flags & kSplatFlagOrtho) != 0u)
+                                ? normalize(ubo.camFwdWs.xyz)
+                                : normalize(P - camPos);
+        vec3 sun = vec3(0.0);
+        for (uint i = 0u; i < lights.dirCount; ++i) {
+
+            const vec3 L = normalize(lights.dirLights[i].direction);
+            sun += lights.dirLights[i].color * splatHgPhase(dot(L, rd), fog.anisotropy);
+        }
+        inScatter += airAlbedo * sun * (1.0 - Ta) * Tm;
+    }
     return Ta * Tm;
 }
 

@@ -199,6 +199,7 @@ int main(int argc, char** argv) {
     bool occluder = false;
     bool debugNaN = false;
     bool fog = false;
+    bool addSun = false;
 
     for (int i = 1; i < argc; ++i) {
 
@@ -211,6 +212,8 @@ int main(int argc, char** argv) {
             occluder = true;
         } else if (arg == "--fog") {
             fog = true;
+        } else if (arg == "--sun") {
+            addSun = true;
         } else if (arg == "--shot" && i + 1 < argc) {
             shotPath = argv[++i];
         } else if (arg.rfind("--screenshot=", 0) == 0) {
@@ -402,13 +405,19 @@ int main(int argc, char** argv) {
             // sceneHdr DURING the shade, so anything composited afterwards gets
             // none of it unless the pass re-derives it (SplatPass does).
             // Falloff is deliberately large so the whole cloud is inside it.
+            // Density scaled to the SCENE. The framing below backs off to about
+            // 2.25x the fit radius, so 0.45/radius puts roughly one optical depth
+            // over the camera->cloud leg whatever the scan is measured in. A fixed
+            // density cannot do that: 0.012 was picked for a metres-scale building
+            // and leaves the unit-radius procedural cloud at T = 0.97 — --fog then
+            // renders a frame that looks right while testing nothing.
             VulkanRenderer::HeightFogSettings hf;
-            hf.density = 0.012f;
+            hf.density = 0.45f / std::max(1e-3f, fit.radius);
             hf.baseY = -50.f;
             hf.falloff = 400.f;
             hf.noiseAmount = 0.f;
             vkRenderer->setHeightFog(hf);
-            std::cout << "  height fog on (density 0.06)" << std::endl;
+            std::cout << "  height fog on (density " << hf.density << ")" << std::endl;
         }
         renderer = vkRenderer.get();
     }
@@ -479,16 +488,28 @@ int main(int argc, char** argv) {
                                                               {"roughness", 0.85f}}));
         box->position.copy(fit.center);
         scene->add(box);
+        std::cout << "  occluder slab through the cloud centre" << std::endl;
+    }
 
-        // Something for it to be lit by; a black slab proves nothing.
+    // A sun, for either of two reasons. The occluder slab needs something to be
+    // lit by (a black slab proves nothing), and --sun ALONE is the fog
+    // configuration with a wrong answer available: the shade gives a mesh three
+    // fog in-scatter terms — scene ambient, the env top and the sun march — so a
+    // scene holding only a sun zeroes the first two, and a splat pass mirroring
+    // only those two has nothing left to add back against the extinction it does
+    // apply. --fog --sun is therefore where a cloud fades toward black while the
+    // meshes in the same air sit in a lit haze. The ambient hides exactly that,
+    // so it stays with the occluder instead of coming along with the sun.
+    if (occluder || addSun) {
+
         auto sun = DirectionalLight::create(0xffffff, 2.5f);
         sun->position.set(fit.center.x + fit.radius * 2.f,
                           fit.center.y + fit.radius * 3.f,
                           fit.center.z + fit.radius * 2.f);
         scene->add(sun);
-        scene->add(AmbientLight::create(0xffffff, 0.35f));
-        std::cout << "  occluder slab through the cloud centre" << std::endl;
+        std::cout << "  directional sun" << std::endl;
     }
+    if (occluder) scene->add(AmbientLight::create(0xffffff, 0.35f));
 
     // Frame the cloud: back off far enough that its bounding sphere fits the
     // vertical field of view, with a little margin. Mostly along +z with a
