@@ -1,10 +1,18 @@
-# Build redistributable wheels (GL backend) for the `threepp` Python package and
-# attach them to a GitHub Release. NO PyPI upload — wheels live on the Releases
-# page, so users `pip install` them from a URL/file.
+# Build redistributable wheels (GL backend) for the `threepp` Python package.
 #
-# Releases are date-tagged (YYYY-MM-DD, e.g. 2026-06-17). Pushing such a tag runs
-# this workflow and attaches the wheels to that release. The wheel version is the
-# PEP 440 form of the tag (2026-06-17 -> 2026.06.17), derived at build time.
+# Two paths, and only one of them publishes anywhere real:
+#
+#   push a date tag (YYYY-MM-DD)  -> build, then ATTACH to that GitHub Release.
+#                                    Version is the PEP 440 form of the tag
+#                                    (2026-06-17 -> 2026.06.17).
+#   workflow_dispatch             -> build, then REHEARSE the upload against
+#                                    TestPyPI as <version>.dev<run_number>.
+#
+# So the real PyPI index is still untouched by both. Adding it is one job — copy
+# publish_testpypi, drop the repository-url, gate it on the tag instead of the
+# dispatch, and point it at a `pypi` environment — but note that a PyPI upload
+# is IRREVERSIBLE: a filename can never be re-uploaded, even after deleting the
+# release. Rehearse on TestPyPI until the artifacts are boring.
 #
 # The wheels are GL-only (Vulkan/PhysX stay source-build opt-ins).
 name: Wheels
@@ -27,29 +35,63 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
-      # PEP 440 needs dots, not dashes: 2026-06-17 -> 2026.06.17 (pip normalises
-      # the leading zeros). On dispatch (no tag) the pyproject default version is
-      # kept. Anchored to ^version so it only touches [project].version.
-      - name: Derive version from the date tag
-        if: startsWith(github.ref, 'refs/tags/')
+      # On a tag: PEP 440 needs dots, not dashes (2026-06-17 -> 2026.06.17; pip
+      # normalises the leading zeros).
+      #
+      # On dispatch: a UNIQUE .devN version per run. A fixed 0.1.0 would upload
+      # to TestPyPI exactly once and every later rehearsal would be skipped as a
+      # duplicate filename — a green job that tested nothing. run_number is
+      # shared by every job in the run, so wheels and sdist agree on the version
+      # without passing anything between them.
+      #
+      # Anchored to ^version so it only ever touches [project].version.
+      - name: Derive the distribution version
         shell: bash
         env:
           TAG: ${{ github.ref_name }}
+          RUN: ${{ github.run_number }}
         run: |
-          ver="${TAG//-/.}"
+          if [[ "$GITHUB_REF" == refs/tags/* ]]; then
+            ver="${TAG//-/.}"
+          else
+            base=$(sed -nE 's/^version = "([^"]+)".*/\1/p' pyproject.toml)
+            ver="${base}.dev${RUN}"
+          fi
           sed -i.bak -E "s/^version = \".*\"/version = \"${ver}\"/" pyproject.toml
           rm -f pyproject.toml.bak
           echo "wheel version -> ${ver}"
 
       - name: Build wheels
-        uses: pypa/cibuildwheel@v2.21.3
+        uses: pypa/cibuildwheel@v4.1.1
         env:
-          # CPython 3.10–3.13. To add 3.14, bump cibuildwheel to a version that
-          # ships 3.14 support and append `cp314-*` here.
-          CIBW_BUILD: "cp310-* cp311-* cp312-* cp313-*"
+          # CPython 3.10–3.14. cibuildwheel 4.0 is where 3.14 became a default
+          # build target (3.x needed a prerelease opt-in), so 4.x is the floor.
+          # Pinned to 4.1.1 rather than the newest 4.2.0 only because 4.2.0 is
+          # days old and this workflow has yet to go green once.
+          #
+          # CIBW_BUILD is an explicit ALLOWLIST, which is what keeps the bump
+          # safe: 4.2.0 builds CPython 3.15 by default and 4.x offers
+          # free-threaded builds as standard, but neither can leak in here.
+          # `cp314-*` does not match the free-threaded id `cp314t-*` — the glob
+          # sees `t` where it wants `-` — so no untested no-GIL wheel appears.
+          CIBW_BUILD: "cp310-* cp311-* cp312-* cp313-* cp314-*"
+          # Redundant since 3.0 (PyPy and 32-bit Linux are no longer default,
+          # and musllinux/win32 were never selected by CIBW_BUILD above), but
+          # kept as a belt on the allowlist's braces.
           CIBW_SKIP: "*-musllinux* *_i686 *-win32 pp*"
           CIBW_ARCHS_MACOS: "x86_64 arm64"
+          # STILL LOAD-BEARING after the 4.x bump. cibuildwheel 2.x defaulted the
+          # x86_64 leg to 10.9 and 3.x raised it to 10.13 — but libc++ marks
+          # std::filesystem::path unavailable below 10.15, and Texture.hpp holds
+          # one, so 10.13 fails too (std::visit / std::get<variant> want 10.13 and
+          # would be satisfied). 11.0 clears the whole "introduced in macOS 10.x"
+          # class at once and matches the arm64 leg's own floor, so both archs
+          # compile against identical library availability.
+          CIBW_ENVIRONMENT_MACOS: MACOSX_DEPLOYMENT_TARGET=11.0
           # C++20 needs a recent toolchain; AlmaLinux 8 (manylinux_2_28) ships GCC 12.
+          # This is cibuildwheel's own default since 3.0, so the pin is now
+          # documentation rather than configuration — kept because the GCC version
+          # is a hard requirement here, not a preference.
           CIBW_MANYLINUX_X86_64_IMAGE: manylinux_2_28
           # The vendored GLFW needs the X11/GL dev headers to compile on Linux.
           CIBW_BEFORE_ALL_LINUX: >
@@ -79,13 +121,20 @@ jobs:
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v6
-      - name: Derive version from the date tag
-        if: startsWith(github.ref, 'refs/tags/')
+      # Must stay byte-for-byte equivalent to the wheel job's version logic, or
+      # the sdist and the wheels in one run disagree and PyPI rejects the set.
+      - name: Derive the distribution version
         shell: bash
         env:
           TAG: ${{ github.ref_name }}
+          RUN: ${{ github.run_number }}
         run: |
-          ver="${TAG//-/.}"
+          if [[ "$GITHUB_REF" == refs/tags/* ]]; then
+            ver="${TAG//-/.}"
+          else
+            base=$(sed -nE 's/^version = "([^"]+)".*/\1/p' pyproject.toml)
+            ver="${base}.dev${RUN}"
+          fi
           sed -i.bak -E "s/^version = \".*\"/version = \"${ver}\"/" pyproject.toml
           rm -f pyproject.toml.bak
           echo "sdist version -> ${ver}"
@@ -95,6 +144,36 @@ jobs:
         with:
           name: sdist
           path: dist/*.tar.gz
+
+  # Rehearses the real upload against TestPyPI, on DISPATCH ONLY — so the path
+  # that will one day publish to PyPI is exercised without a tag and without
+  # touching the real index. Deliberately not gated on the tag: a tag run is a
+  # release, and a release should not also be a rehearsal.
+  #
+  # Authenticated by OIDC (trusted publishing), so there is no token and no
+  # secret. This needs a PENDING PUBLISHER registered at test.pypi.org — a
+  # separate account and separate registration from PyPI's — whose owner /
+  # repository / workflow filename / environment must match this job exactly:
+  #   markaren / threepp / wheels.yml / testpypi
+  publish_testpypi:
+    name: Rehearse the upload on TestPyPI
+    needs: [ build_wheels, build_sdist ]
+    runs-on: ubuntu-latest
+    if: github.event_name == 'workflow_dispatch'
+    environment: testpypi
+    permissions:
+      id-token: write        # the OIDC token; nothing else is needed
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true   # every wheels-<os> artifact plus the sdist
+      - uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          repository-url: https://test.pypi.org/legacy/
+          # The .devN version above already makes each run unique; this only
+          # covers a re-run of the SAME run, which would otherwise 400.
+          skip-existing: true
 
   release:
     name: Attach wheels to the GitHub Release
