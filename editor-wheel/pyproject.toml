@@ -1,0 +1,62 @@
+# threepp-editor — the threepp scene editor as a pip-installable application.
+#
+#   pip install threepp-editor
+#   threepp-editor                # or: python -m threepp_editor
+#
+# WHEEL-ONLY distribution, and deliberately so: the build needs the whole
+# threepp repository (this directory's CMakeLists add_subdirectory's the repo
+# root), so a standalone sdist of just this directory cannot build. CI builds
+# the wheels from the repo; there is nothing meaningful to put in an sdist.
+#
+# The wheel is PER-INTERPRETER (cp310..cp314) even though it contains no
+# extension module: the editor EMBEDS CPython for its scripting console, so
+# the executable links python3XX.dll and is bound to that minor version. The
+# launcher (threepp_editor/cli.py) primes the child process's environment so
+# the embedded interpreter finds the running Python's runtime DLL, stdlib and
+# site-packages — including a venv's.
+#
+# What's inside: the editor with the GL viewport, CPU PhysX play sessions
+# (rigid bodies, joints, vehicles; soft bodies need the GPU DLLs dropped in —
+# same story as the threepp wheel), Python scripting, and the UNION type stubs
+# the "Edit in VS Code" flow hands to Pylance. Vulkan view is not compiled
+# into this build (source builds get it with -DTHREEPP_WITH_VULKAN=ON).
+[build-system]
+requires = ["scikit-build-core>=0.10"]
+build-backend = "scikit_build_core.build"
+
+[project]
+name = "threepp-editor"
+version = "0.1.0"
+description = "Scene editor for threepp — author physics-ready 3D scenes, robots and sensors, then drive them from Python"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { file = "../LICENSE" }
+authors = [{ name = "Lars Ivar Hatledal", email = "laht@ntnu.no" }]
+keywords = ["3d", "editor", "scene-editor", "physics", "robotics", "simulation", "threejs"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: C++",
+    "Topic :: Multimedia :: Graphics :: 3D Modeling",
+    "Environment :: X11 Applications",
+    "Environment :: Win32 (MS Windows)",
+]
+# No dependency on `threepp`: the editor embeds its OWN bindings (one type
+# registry shared with the play session), so the wheel's module is neither
+# needed nor reachable from editor scripts. Install both side by side freely.
+dependencies = []
+
+[project.scripts]
+threepp-editor = "threepp_editor.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/markaren/threepp"
+Source = "https://github.com/markaren/threepp"
+
+[tool.scikit-build]
+minimum-version = "0.10"
+build.targets = ["threepp_editor"]
+install.components = ["editor_package"]
+wheel.packages = ["threepp_editor"]
+cmake.version = ">=3.21"
