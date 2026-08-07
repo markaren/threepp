@@ -216,12 +216,19 @@ jobs:
           # dependency, auditwheel vendors libvulkan.so.1 into the wheel, and a
           # machine without a GPU/ICD fails at VulkanRenderer construction with
           # a catchable RuntimeError — import always works.
+          #
+          # LD_LIBRARY_PATH is FOR AUDITWHEEL: the module's DT_NEEDED says just
+          # "libvulkan.so.1", and auditwheel resolves that against the ld search
+          # path — the vcpkg lib dir isn't on it, so without this the repair
+          # dies with "required library could not be located" instead of
+          # vendoring the loader.
           CIBW_ENVIRONMENT_LINUX: >
             CMAKE_ARGS="-DTHREEPP_WITH_VULKAN=ON
             -DCMAKE_PREFIX_PATH=/opt/vcpkg_installed/x64-linux
             -DGLSLANG_VALIDATOR=/opt/vcpkg_installed/x64-linux/tools/glslang/glslangValidator
             -Dunofficial-omniverse-physx-sdk_DIR=/opt/vcpkg_installed/x64-linux/share/unofficial-omniverse-physx-sdk"
             SKBUILD_BUILD_DIR="/tmp/skb-shared"
+            LD_LIBRARY_PATH="/opt/vcpkg_installed/x64-linux/lib"
           # GLFW links the system X11/GL libs; keep them external (the user's system
           # / GPU driver provides them) instead of bundling them into the wheel.
           CIBW_REPAIR_WHEEL_COMMAND_LINUX: >
