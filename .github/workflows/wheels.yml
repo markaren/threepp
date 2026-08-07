@@ -119,7 +119,7 @@ jobs:
           & "$env:RUNNER_TEMP\vcpkg\vcpkg" install --triplet x64-windows --x-feature=physx --x-install-root=vcpkg_installed
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           # Hand the SDK hint to the build step with FORWARD slashes, from here
-          # rather than a ${{ }} env expression: the workspace path spelled with
+          # rather than a workflow env expression: the workspace path spelled with
           # backslashes (D:\a\threepp\threepp\vcpkg_installed\...) is full of
           # accidental escape sequences (\a, \t, \v) wherever CMake processes
           # strings, and find_package is QUIET — a corrupted hint doesn't fail
