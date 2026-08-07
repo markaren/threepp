@@ -729,15 +729,15 @@ namespace threepp::water {
         pipePermute_ = makeComputePipeline(ctx_, modP, layoutPermute_);
         vkDestroyShaderModule(ctx_.device(), modP, nullptr);
 
-        // ── Pool: enough for 1 twiddle + 4 butterfly (2 horizontal + 2 vertical) +
-        // 2 permute (one per direction) descriptor sets.
+        // ── Pool: 1 twiddle set + kMaxDescGroups write-once groups, each
+        // 4 butterfly (2 horizontal + 2 vertical) + 2 permute sets.
         const std::array<VkDescriptorPoolSize, 2> poolSizes{
-            VkDescriptorPoolSize{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 4 * 2 + 2 * 1},
-            VkDescriptorPoolSize{VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,          1 + 4 * 1 + 2 * 1},
+            VkDescriptorPoolSize{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, kMaxDescGroups * (4 * 2 + 2 * 1)},
+            VkDescriptorPoolSize{VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,          1 + kMaxDescGroups * (4 * 1 + 2 * 1)},
         };
         VkDescriptorPoolCreateInfo dpci{};
         dpci.sType         = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
-        dpci.maxSets       = 1 + 4 + 2;
+        dpci.maxSets       = 1 + kMaxDescGroups * 6;
         dpci.poolSizeCount = static_cast<uint32_t>(poolSizes.size());
         dpci.pPoolSizes    = poolSizes.data();
         check(vkCreateDescriptorPool(ctx_.device(), &dpci, nullptr, &pool_),
@@ -764,33 +764,8 @@ namespace threepp::water {
         wT.pImageInfo = &tw;
         vkUpdateDescriptorSets(ctx_.device(), 1, &wT, 0, nullptr);
 
-        // Pre-allocate 2 horizontal + 2 vertical butterfly DSes. We bind images
-        // lazily in rebindDescriptorSets when the caller hands us new image pair.
-        dsHorizontal_.resize(2);
-        VkDescriptorSetAllocateInfo daiB{};
-        daiB.sType              = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
-        daiB.descriptorPool     = pool_;
-        daiB.descriptorSetCount = 1;
-        daiB.pSetLayouts        = &dslButterfly_;
-        for (auto& ds : dsHorizontal_) {
-            check(vkAllocateDescriptorSets(ctx_.device(), &daiB, &ds),
-                  "vkAllocateDescriptorSets(butterflyH)");
-        }
-        dsVertical_.resize(2);
-        for (auto& ds : dsVertical_) {
-            check(vkAllocateDescriptorSets(ctx_.device(), &daiB, &ds),
-                  "vkAllocateDescriptorSets(butterflyV)");
-        }
-
-        VkDescriptorSetAllocateInfo daiP{};
-        daiP.sType              = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
-        daiP.descriptorPool     = pool_;
-        daiP.descriptorSetCount = 1;
-        daiP.pSetLayouts        = &dslPermute_;
-        for (auto& ds : dsPermute_) {
-            check(vkAllocateDescriptorSets(ctx_.device(), &daiP, &ds),
-                  "vkAllocateDescriptorSets(permute)");
-        }
+        // Butterfly/permute sets are allocated and wired per image pair in
+        // groupFor — nothing more to allocate up front.
     }
 
     void IFFT::recordTwiddleOnce(VkCommandBuffer cb) {
@@ -807,17 +782,42 @@ namespace threepp::water {
         twiddleComputed_ = true;
     }
 
-    void IFFT::rebindDescriptorSets(OceanImage& a, OceanImage& b) {
-        // Two horizontal sets:
-        //   [0] reads a, writes b (called when pingPong is true on iter 0)
-        //   [1] reads b, writes a
-        // Same pattern for vertical.
-        // Permute:
-        //   [0] reads (image holding result before permute), writes (other one)
-        // We don't know yet which holds the result; that's resolved at record time.
-        struct ImgBinding {
-            VkSampler sampler; VkImageView view; VkImageLayout layout;
-        };
+    IFFT::DescGroup& IFFT::groupFor(const OceanImage& a, const OceanImage& b) {
+        for (auto& g : groups_) {
+            if (g.input == a.view && g.scratch == b.view) return g;
+        }
+        if (groups_.size() >= kMaxDescGroups) {
+            // An image pair this IFFT has never seen, with the cache full,
+            // means images were recreated without recreating the IFFT — the
+            // DisplacedMeshState contract says that cannot happen. Reusing or
+            // rewriting a group here would race in-flight command buffers.
+            throw std::runtime_error("[IFFT] descriptor-group cache exhausted — image pair churn without IFFT recreation");
+        }
+
+        DescGroup g{};
+        g.input   = a.view;
+        g.scratch = b.view;
+
+        VkDescriptorSetAllocateInfo daiB{};
+        daiB.sType              = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+        daiB.descriptorPool     = pool_;
+        daiB.descriptorSetCount = 1;
+        daiB.pSetLayouts        = &dslButterfly_;
+        for (auto* sets : {&g.h, &g.v}) {
+            for (auto& ds : *sets) {
+                check(vkAllocateDescriptorSets(ctx_.device(), &daiB, &ds),
+                      "vkAllocateDescriptorSets(butterfly)");
+            }
+        }
+        VkDescriptorSetAllocateInfo daiP{};
+        daiP.sType              = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+        daiP.descriptorPool     = pool_;
+        daiP.descriptorSetCount = 1;
+        daiP.pSetLayouts        = &dslPermute_;
+        for (auto& ds : g.p) {
+            check(vkAllocateDescriptorSets(ctx_.device(), &daiP, &ds),
+                  "vkAllocateDescriptorSets(permute)");
+        }
 
         const VkDescriptorImageInfo twInfo{ sampler_, twiddle_.view, VK_IMAGE_LAYOUT_GENERAL };
         const VkDescriptorImageInfo aSampled{ sampler_, a.view, VK_IMAGE_LAYOUT_GENERAL };
@@ -833,10 +833,10 @@ namespace threepp::water {
             w[2].dstBinding = 2; w[2].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;          w[2].pImageInfo = &write;
             vkUpdateDescriptorSets(ctx_.device(), static_cast<uint32_t>(w.size()), w.data(), 0, nullptr);
         };
-        writeButterfly(dsHorizontal_[0], aSampled, bStorage);
-        writeButterfly(dsHorizontal_[1], bSampled, aStorage);
-        writeButterfly(dsVertical_[0],   aSampled, bStorage);
-        writeButterfly(dsVertical_[1],   bSampled, aStorage);
+        writeButterfly(g.h[0], aSampled, bStorage);
+        writeButterfly(g.h[1], bSampled, aStorage);
+        writeButterfly(g.v[0], aSampled, bStorage);
+        writeButterfly(g.v[1], bSampled, aStorage);
 
         auto writePermute = [&](VkDescriptorSet ds, const VkDescriptorImageInfo& read, const VkDescriptorImageInfo& write) {
             std::array<VkWriteDescriptorSet, 2> w{};
@@ -845,21 +845,19 @@ namespace threepp::water {
             w[1].dstBinding = 1; w[1].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;          w[1].pImageInfo = &write;
             vkUpdateDescriptorSets(ctx_.device(), static_cast<uint32_t>(w.size()), w.data(), 0, nullptr);
         };
-        // dsPermute_[0]: read a, write b
-        // dsPermute_[1]: read b, write a
-        writePermute(dsPermute_[0], aSampled, bStorage);
-        writePermute(dsPermute_[1], bSampled, aStorage);
+        writePermute(g.p[0], aSampled, bStorage);
+        writePermute(g.p[1], bSampled, aStorage);
 
-        prevInput_   = &a;
-        prevScratch_ = &b;
+        groups_.push_back(g);
+        return groups_.back();
     }
 
     void IFFT::recordApply(VkCommandBuffer cb, OceanImage& input, OceanImage& scratch) {
         if (!twiddleComputed_) recordTwiddleOnce(cb);
 
-        if (prevInput_ != &input || prevScratch_ != &scratch) {
-            rebindDescriptorSets(input, scratch);
-        }
+        // Write-once group for this image pair — record-time only BINDS, so
+        // in-flight frames (and this frame's earlier chain) keep their sets.
+        DescGroup& grp = groupFor(input, scratch);
 
         cmdTransitionToGeneral(cb, input);
         cmdTransitionToGeneral(cb, scratch);
@@ -874,7 +872,7 @@ namespace threepp::water {
         vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, pipeHorizontal_);
         for (uint32_t step = 0; step < logSize_; ++step) {
             pingPong = !pingPong;
-            VkDescriptorSet ds = pingPong ? dsHorizontal_[0] : dsHorizontal_[1];
+            VkDescriptorSet ds = pingPong ? grp.h[0] : grp.h[1];
             vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_COMPUTE, layoutButterfly_,
                                     0, 1, &ds, 0, nullptr);
             const int32_t s = static_cast<int32_t>(step);
@@ -890,7 +888,7 @@ namespace threepp::water {
         vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, pipeVertical_);
         for (uint32_t step = 0; step < logSize_; ++step) {
             pingPong = !pingPong;
-            VkDescriptorSet ds = pingPong ? dsVertical_[0] : dsVertical_[1];
+            VkDescriptorSet ds = pingPong ? grp.v[0] : grp.v[1];
             vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_COMPUTE, layoutButterfly_,
                                     0, 1, &ds, 0, nullptr);
             const int32_t s = static_cast<int32_t>(step);
@@ -906,9 +904,9 @@ namespace threepp::water {
         // when pingPong is false, in `scratch` when true.
         const bool resultInScratch = pingPong;
         vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, pipePermute_);
-        // dsPermute_[0]: read a (=input), write b (=scratch)
-        // dsPermute_[1]: read b (=scratch), write a (=input)
-        VkDescriptorSet dsP = resultInScratch ? dsPermute_[1] : dsPermute_[0];
+        // grp.p[0]: read a (=input), write b (=scratch)
+        // grp.p[1]: read b (=scratch), write a (=input)
+        VkDescriptorSet dsP = resultInScratch ? grp.p[1] : grp.p[0];
         vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_COMPUTE, layoutPermute_,
                                 0, 1, &dsP, 0, nullptr);
         const uint32_t g = groupCountFor(textureSize_);

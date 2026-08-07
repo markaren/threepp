@@ -22,6 +22,7 @@
 #include <vk_mem_alloc.h>
 #include <vulkan/vulkan.h>
 
+#include <array>
 #include <cstdint>
 #include <vector>
 #include <memory>
@@ -202,22 +203,33 @@ namespace threepp::water {
         VkPipeline pipeVertical_   = VK_NULL_HANDLE;
         VkPipeline pipePermute_    = VK_NULL_HANDLE;
 
-        // Per-step descriptor set ring. We need 2*logSize ping-pong
-        // configurations (horizontal then vertical), each binding two
-        // images either as A→B or B→A. The permute pass needs one more.
-        std::vector<VkDescriptorSet> dsHorizontal_; // 2 entries (ping/pong)
-        std::vector<VkDescriptorSet> dsVertical_;   // 2 entries
         VkDescriptorSet dsTwiddle_ = VK_NULL_HANDLE;
-        VkDescriptorSet dsPermute_[2]{}; // [0]: reads input, writes scratch; [1]: reads scratch, writes input
+
+        // Butterfly/permute sets are wired ONCE per distinct (input, scratch)
+        // view pair and only *bound* afterwards. They are referenced by the
+        // frame command buffer with N frames in flight — and by the earlier
+        // height chain of the SAME frame when the displacement chain follows —
+        // so rewriting a live set races both the pending frame and the
+        // already-recorded one (VUID-vkUpdateDescriptorSets-None-03047).
+        // Lifecycle: the cascade's images and its IFFT are created and
+        // destroyed together (DisplacedMeshState), so cached views cannot
+        // outlive the images they name.
+        struct DescGroup {
+            VkImageView input   = VK_NULL_HANDLE;
+            VkImageView scratch = VK_NULL_HANDLE;
+            std::array<VkDescriptorSet, 2> h{};// [0] reads input writes scratch, [1] the reverse
+            std::array<VkDescriptorSet, 2> v{};
+            std::array<VkDescriptorSet, 2> p{};// same orientation convention
+        };
+        static constexpr uint32_t kMaxDescGroups = 4;// 2 pairs/cascade (height, displacement) + headroom
+        std::vector<DescGroup> groups_;
 
         bool twiddleComputed_ = false;
-        OceanImage*   prevInput_   = nullptr;
-        OceanImage*   prevScratch_ = nullptr;
 
         void createTwiddleImage();
         void createPipelines();
         void recordTwiddleOnce(VkCommandBuffer cb);
-        void rebindDescriptorSets(OceanImage& a, OceanImage& b);
+        DescGroup& groupFor(const OceanImage& input, const OceanImage& scratch);
     };
 
     // ─── OceanCascade ──────────────────────────────────────────────────
