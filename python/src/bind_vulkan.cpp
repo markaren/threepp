@@ -166,7 +166,10 @@ namespace {
             int w = 0, h = 0, bpp = 0;
             if (!renderer_.readGBufferAOV(VulkanRenderer::GBufferAOV::Depth, raw, w, h, bpp) ||
                 w <= 0 || h <= 0) {
-                return py::array_t<float>({py::ssize_t(0), py::ssize_t(0)});
+                // ShapeContainer spelled out: a braced {0, 0} is ambiguous to
+                // gcc-14 (constant zeros also convert toward the buffer_info /
+                // pointer overloads); non-zero shapes like {n, 7} are not.
+                return py::array_t<float>(py::array::ShapeContainer{0, 0});
             }
             py::array_t<float> arr({static_cast<py::ssize_t>(h), static_cast<py::ssize_t>(w)});
             auto* dst        = arr.mutable_data();
@@ -206,7 +209,7 @@ namespace {
             int w = 0, h = 0, bpp = 0;
             if (!renderer_.readGBufferAOV(VulkanRenderer::GBufferAOV::Ids, raw, w, h, bpp) ||
                 w <= 0 || h <= 0) {
-                return py::array_t<uint32_t>({py::ssize_t(0), py::ssize_t(0)});
+                return py::array_t<uint32_t>(py::array::ShapeContainer{0, 0});// see depth_last
             }
             py::array_t<uint32_t> arr({static_cast<py::ssize_t>(h), static_cast<py::ssize_t>(w)});
             auto* dst     = arr.mutable_data();
@@ -224,7 +227,7 @@ namespace {
             int w = 0, h = 0, bpp = 0;
             if (!renderer_.readGBufferAOV(VulkanRenderer::GBufferAOV::Ids, raw, w, h, bpp) ||
                 w <= 0 || h <= 0) {
-                return py::array_t<uint32_t>({py::ssize_t(0), py::ssize_t(0)});
+                return py::array_t<uint32_t>(py::array::ShapeContainer{0, 0});// see depth_last
             }
             py::array_t<uint32_t> arr({static_cast<py::ssize_t>(h), static_cast<py::ssize_t>(w)});
             auto* dst     = arr.mutable_data();
