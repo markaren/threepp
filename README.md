@@ -385,7 +385,7 @@ for you. By hand, pass to CMake:
 ```
 
 This will generate .html versions of a subset of the examples to be loaded in a browser. <br>
-**You can run a collection of them online [here](https://laht.folk.ntnu.no/web/threepp_examples/).**
+**You can run a collection of them online [here](https://markaren.github.io/threepp/).**
 
 ### Optional downstream dependencies
 
