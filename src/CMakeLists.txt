@@ -1547,6 +1547,24 @@ if (THREEPP_WITH_VULKAN)
 endif ()
 
 
+# MSVC compiles one file at a time unless told otherwise. MSBuild parallelises
+# across PROJECTS, and threepp is a single project of ~640 sources, so without
+# /MP the whole library is built by one cl.exe serially — on the Visual Studio
+# generator, which is what scikit-build-core uses for the Python wheels and what
+# the IDE uses locally. Measured on 12 cores: 7.32 min -> 1.96 min (3.7x), with a
+# byte-for-byte identical threepp.lib, since /MP only changes how many compiler
+# processes run, not what they emit.
+#
+# Set as a compile OPTION, not by overriding CMAKE_CXX_FLAGS: passing
+# -DCMAKE_CXX_FLAGS=/MP replaces the platform defaults and silently drops /EHsc,
+# which changes the exception model and shrank the library by 11% when measured.
+#
+# Harmless on Ninja, which already parallelises per file — cl.exe given /MP and a
+# single input just compiles it. No PCH in this build, so no interaction there.
+if (MSVC)
+    target_compile_options(threepp PRIVATE /MP)
+endif ()
+
 if (THREEPP_TREAT_WARNINGS_AS_ERRORS)
     # Treat warnings as errors,
     if (CMAKE_CXX_COMPILER_ID STREQUAL "GNU" OR CMAKE_CXX_COMPILER_ID STREQUAL "Clang")

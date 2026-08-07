@@ -154,7 +154,12 @@ endif ()
 set_target_properties(threepp_py PROPERTIES OUTPUT_NAME threepp)
 
 if (MSVC)
-    target_compile_options(threepp_py PRIVATE /bigobj)
+    # /bigobj: bind_math.cpp and bind_objects.cpp exceed the default section limit.
+    # /MP: this module is ~26 translation units, several of them slow, and MSBuild
+    # (scikit-build-core's generator on Windows) builds a single project serially.
+    # Same reasoning and the same measured win as the threepp library itself —
+    # see the /MP block in src/CMakeLists.txt.
+    target_compile_options(threepp_py PRIVATE /bigobj /MP)
 endif ()
 
 # Build the native module INTO the `threepp/` package dir (next to __init__.py), so
