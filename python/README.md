@@ -282,6 +282,15 @@ restore happens *after* the produced-files check, so a `threepp.editor` that
 disappeared from the module still fails the run rather than being papered over
 by the committed copy.
 
+The union stays in the source tree for the editor's Pylance integration, but it
+does **not** ship in the wheel: the wheel carries `py.typed`, so an installed
+stub is *certified* to a type checker, and certifying 40-odd names that raise
+`AttributeError` on a pip install would be lying. The wheel instead installs
+[`wheel-stubs/editor.pyi`](wheel-stubs/editor.pyi) — just `SplinePath` and
+`spline_from_object`, the two names `bind_editor.cpp` actually provides there.
+A name added to `bind_editor.cpp` belongs in **both** stubs; a name added to
+the editor-only TUs belongs only in the union.
+
 #### Keyword-named bindings
 
 A bound name that is a Python keyword cannot be written in Python source *or* in

@@ -220,9 +220,19 @@ install(DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/threepp/rl"
 # where the stubs have not been generated.
 install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/threepp/py.typed"
         DESTINATION threepp COMPONENT python_module)
+# editor.pyi is EXCLUDED here and replaced below. The source-tree copy is the
+# UNION of the wheel's threepp.editor and the editor app's (which additionally
+# compiles bind_editor_physics/_sensors/_authoring) — the editor needs that
+# union for Pylance, but the wheel provides only SplinePath/spline_from_object,
+# and py.typed makes checkers trust whatever ships. Shipping the union would
+# certify ~40 names that raise AttributeError on a wheel install. See
+# wheel-stubs/editor.pyi for the sync contract between the two files.
 install(DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/threepp/threepp"
         DESTINATION threepp COMPONENT python_module OPTIONAL
-        FILES_MATCHING PATTERN "*.pyi")
+        FILES_MATCHING PATTERN "*.pyi"
+        PATTERN "editor.pyi" EXCLUDE)
+install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/wheel-stubs/editor.pyi"
+        DESTINATION threepp/threepp COMPONENT python_module OPTIONAL)
 
 # Optional: regenerate the IDE type stubs in the source tree
 # (threepp/threepp/*.pyi). Needs the pinned generator:
