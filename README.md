@@ -7,32 +7,70 @@
 A cross-platform C++20 3D library with the high-level API of [three.js](https://github.com/mrdoob/three.js/) —
 and modern backends: portable OpenGL, and a deferred Vulkan renderer with ray-traced accents.
 
+On top of that: a scene editor, PhysX-backed robot simulation, and ground-truth
+sensor output for synthetic-data generation.
+
 ![Real-time ray-traced FFT ocean](doc/screenshots/pt_ocean.png)
 *Real-time FFT ocean — Vulkan deferred-hybrid renderer (raster-first, with ray-traced shadows & reflections) ([examples/vulkan/vulkan_ocean.cpp](examples/vulkan/vulkan_ocean.cpp))*
 
-![Procedural forest](doc/screenshots/forest.png)
-*Procedural terrain, trees and vegetation ([examples/extras/vegetation/forest_demo.cpp](examples/extras/vegetation/forest_demo.cpp))*
+![The threepp scene editor](doc/screenshots/bistro_editor.png)
+*The scene editor — hierarchy, inspector, Play mode, and a live sensor preview ([apps/editor](apps/editor), [doc/editor.md](doc/editor.md))*
 
 
 > You get a scene graph, materials, lighting, cameras, render loop, controls, loaders, all composable, in a handful of lines.
 > 
-> An **advanced editor** with physics simulation and Unity-style Python scripting is also available.
+> And when you would rather author than code: the **editor** ([doc/editor.md](doc/editor.md)) and the
+> headless **player** ([doc/player.md](doc/player.md)) ship with it.
 
 
 📖 **New here? Start with [Getting started](doc/getting_started.md)** — a guide to the concepts
 the whole library is built from: the scene graph, ownership and lifetimes, geometry/material,
 lights, the frame loop, loaders and the two backends.
 
+Recent changes are in [CHANGELOG.md](CHANGELOG.md).
+
 ## Highlights
 
-* Two rendering backends behind one scene graph: OpenGL 3.3 raster (the portable
-  baseline, also the Emscripten/WebGL2 target) and a **deferred Vulkan renderer**
-  (raster G-buffer with ray-traced AO, GI, reflections and shadows; denoised,
-  with TAA).
-* **Python bindings** — pybind11 bindings for the core scene API; renders to NumPy arrays.
-* FFT-displaced ocean, PMREM environment maps.
-* Path-traced sensor simulation: LIDAR, depth sensor, event camera.
-* Built-in model loaders [Binary STL, OBJ/MTL, glTF, COLLADA, USD, FBX, SVG, URDF]
+**Rendering**
+
+* Two backends behind one scene graph: OpenGL 3.3 raster (the portable baseline,
+  also the Emscripten/WebGL2 target) and a **deferred Vulkan renderer** (raster
+  G-buffer with ray-traced AO, GI, reflections and shadows; denoised, with TAA).
+* **`Ocean`** — three-cascade FFT-displaced water with foam, transmission and live
+  wind, in one line: `scene->add(Ocean::create())`. Vulkan only; on OpenGL the type
+  is an inert flat plane. PMREM environment maps.
+* **Gaussian splatting** — `SplatCloud` renders scans on both backends, with two
+  loaders (INRIA `.ply`, PlayCanvas SOG) and dynamic LOD on Vulkan.
+
+**Simulation & perception**
+
+* **Ground-truth labels straight out of the render** (Vulkan) — one call reads the
+  G-buffer in its native format: float32 metric depth, per-object instance ids that
+  survive add/remove/hide/LOD, semantic classes, world normals and motion. `addView`
+  attaches N cameras rendered from one scene build in a single submission, so a whole
+  sensor rig sees the same simulated instant.
+* **Simulated sensors** — LIDAR (VLP-16/HDL-32E/OS1-64/OS0-128 patterns), depth and
+  event cameras, plus IMU, joint encoder, contact and 6-axis force/torque. Ray-traced
+  on Vulkan, rasterized on OpenGL, with the same range semantics on both. Every
+  measurement is seeded and sim-clock-stamped, so a recorded run replays bit-for-bit.
+* **Robots, not just rigid bodies** — PhysX reduced-coordinate articulations built from
+  a URDF or xacro in one call, with joints, limits, PD drives, V-HACD concave colliders,
+  and a header-only damped-least-squares IK solver. From C++ and Python.
+* **Physical camera, lens and sensor model** — EV100 exposure from an aperture/shutter/ISO
+  triplet, photometric light units, OpenCV-convention intrinsics, Brown-Conrady and fisheye
+  distortion applied to both the image and the labels, and electron-domain sensor noise.
+  All off by default; it expects a scene lit in real photometric units.
+
+**Tooling**
+
+* **A scene editor and a headless player** — author scenes with physics, sensors and
+  Python behaviour scripts, then replay them in CI. Documents are plain three.js JSON,
+  so an authored scene runs in an ordinary threepp program with no editor present.
+* **Python bindings** — the scene graph, headless render-to-NumPy, PhysX, and
+  `threepp.rl` (a GPU-vectorized RL stack).
+* Built-in loaders — models [Binary STL, OBJ/MTL, glTF/GLB incl. meshopt compression,
+  COLLADA, SVG, URDF/xacro], images [PNG/JPEG, DDS, WebP, Radiance HDR, OpenEXR] and
+  Gaussian-splat scans. `USDLoader` and `FBXLoader` are opt-in.
 * **Native xacro support** — URDF loading takes `.urdf.xacro` directly (macros, properties,
   YAML-driven parameters, `$(find)`/`$(arg)`), no ROS or Python install required; verified
   against the Franka and Universal Robots ROS 2 description.
@@ -45,15 +83,31 @@ lights, the frame loop, loaders and the two backends.
 > APIs may change, and backends (especially the Vulkan backend) evolve rapidly. Pin a tag/commit if you
 > need reproducibility, and expect to track changes if you follow `master`.
 
-The core library is mature and feature-complete, with advanced rendering capabilities including
-the deferred Vulkan backend. It is usable for a wide variety of rendering applications,
-from interactive 3D apps to robotics and scientific visualization.
+There are two layers here, and they move at very different speeds.
 
-The high-level API is mostly in line with three.js [r129](https://github.com/mrdoob/three.js/tree/r129)
-with changes from newer revisions in some areas.
-The OpenGL backend is a mechanical port of the WebGL renderer.
+**The three.js port is mature and stable.** The high-level API is mostly in line with three.js
+[r129](https://github.com/mrdoob/three.js/tree/r129) with changes from newer revisions in some
+areas, and the OpenGL backend is a mechanical port of the WebGL renderer. It barely moves between
+releases, and it is what most users touch.
+
+**The simulation layer on top of it is where the project is going** — the deferred Vulkan renderer,
+the sensor suite, PhysX robotics, the editor and the Python bindings. That is where the work goes,
+and it is what the stability warning above is really about.
+
+A few limits worth knowing before you start:
+
+* The Vulkan backend evolves fastest and breaks most often. OpenGL is the conservative choice.
+* Gaussian splat clouds are a backdrop, not a simulation asset: they cast no shadows, appear in
+  no reflection, contribute nothing to GI, are invisible to the ray-traced sensors, and are not
+  serialized.
+* The editor is tested against OpenGL; its Vulkan view pane is best-effort. See the known-limitations
+  list in [doc/editor.md](doc/editor.md).
+* GPU code paths are not covered by CI — the runners have no device. Golden-image tests are a local
+  pre-push check.
 
 ### What works?
+
+**three.js parity** — what the ported API gives you:
 
 * Line, Points, Mesh, InstancedMesh
 * Geometries [Box, Sphere, Plane, Cylindrical, Capsule, Tube, ++]
@@ -69,11 +123,47 @@ The OpenGL backend is a mechanical port of the WebGL renderer.
 * Animation, morph targets, Bones
 * Controls [Orbit, Fly, Drag, Transform]
 * Water and Sky shaders
-* Gaussian splatting
 * Built-in text rendering and font loading [typeface.json, TTF]
+* Scene serialization — `ObjectExporter`/`ObjectLoader` read and write three.js
+  "Object" JSON (metadata 4.5) deterministically, with the option to *reference*
+  source models and textures instead of inlining them. Documents authored by the
+  three.js editor load as-is.
+
+**Beyond three.js** — what this library adds:
+
+* Gaussian splatting — `SplatCloud` with two scan loaders and a Vulkan compute
+  tile rasterizer ([doc/vulkan_splats.md](doc/vulkan_splats.md))
+* Simulated sensors — LIDAR, depth and event cameras, IMU, joint encoder, contact,
+  force/torque
+* PhysX physics — rigid bodies, reduced-coordinate articulations, joints, soft
+  bodies, vehicles, and V-HACD convex decomposition
+* Automatic mesh LOD (Vulkan, on by default), GPU occlusion culling, and NVIDIA
+  DLSS / AMD FSR 3.1 temporal upscaling
+* Procedural content, all asset-free and first-party — quadtree-LOD terrain, trees,
+  grass, conveyor systems, a parametric log cabin
+* Real-world terrain — a documented "region pack" format plus an included Python tool
+  that builds one from Norwegian national open data (Kartverket elevation, NVDB roads,
+  OSM footprints with lidar-measured building heights)
 * Basic Audio support using [miniaudio](https://miniaud.io/docs/manual/index.html)
 * Generic model loader based on [Assimp](https://github.com/assimp/assimp)
+  (requires the assimp package — see [Optional downstream dependencies](#optional-downstream-dependencies))
 * Easy integration with [Dear ImGui](https://github.com/ocornut/imgui)
+
+### Applications
+
+Two binaries build alongside the library (`THREEPP_BUILD_EDITOR`, on by default for a
+top-level GLFW build):
+
+* **`threepp_editor`** — a scene editor: viewport, hierarchy, inspector, undo/redo, and a
+  Play mode backed by PhysX. Scenes save as ordinary three.js Object JSON with everything
+  editor-specific (physics, sensors, scripts, joints, vehicles, splines, conveyors, sound)
+  in `userData`, so a saved document opens and runs in a plain threepp program with no
+  editor present. Python behaviour scripts attach to objects Unity-style.
+  See [doc/editor.md](doc/editor.md).
+* **`threepp_player`** — the same play runtime with no editing machinery: headless,
+  independent episodes, sensor CSV recording, and a nonzero exit if any script raised or
+  the document would not play. It registers the same play sessions the editor does, in the
+  same order, so a scene that runs under Play runs in CI. See [doc/player.md](doc/player.md).
 
 ## But, but why?
 
@@ -88,6 +178,10 @@ For convenience, geometries, materials, etc. have a static `::create` function t
 Thus, you don't necessarily need to handle memory explicitly using `threepp`.
 Furthermore, materials, geometries and textures are automatically disposed of when they go out of scope.
 Yay!
+
+`threepp/threepp.hpp` is a convenience umbrella over the three.js-equivalent core. Everything under
+`extras/`, `postprocessing/`, `splats/` and the newer objects and loaders is included explicitly —
+if a feature listed above seems missing, check its own header first.
 
 
 ### A good fit for AI-assisted development
@@ -199,6 +293,12 @@ pixels = renderer.read_pixels()   # (H, W, 3) uint8 NumPy array
 renderer.save_frame("out.png")
 ```
 
+Beyond the scene graph, the module exposes the Vulkan AOVs as typed NumPy arrays (metric depth,
+instance and semantic ids, normals, motion), PhysX articulations, and `threepp.rl` — a
+GPU-vectorized RL stack (`GpuSim`, `VecTask`, `PPO`) with no rl_games / rsl_rl / Gym dependency,
+reading and writing PhysX state directly as CUDA tensors. Probe what a given build has with
+`tp.HAS_VULKAN` / `tp.HAS_PHYSX` / `tp.HAS_IMGUI` / `tp.HAS_AUDIO`.
+
 Build the wheel from source (OpenGL backend; Vulkan and PhysX remain opt-in CMake builds):
 ```shell
 pip install .
@@ -224,7 +324,7 @@ cmake --list-presets
 |--------------|-----------------------------------------------------------------------|
 | `gl`         | OpenGL 3.3 backend, with examples, tests and the editor — start here  |
 | `gl-debug`   | as `gl`, unoptimised and with debug info                              |
-| `vulkan`     | the deferred Vulkan renderer (needs the Vulkan SDK)                   |
+| `vulkan`     | the deferred Vulkan renderer (Vulkan SDK on PATH, or the vcpkg `vulkan` feature) |
 | `vulkan-aaa` | as `vulkan`, plus the FSR 3.1 and DLSS upscalers (Windows)            |
 | `python`     | the pybind11 `threepp` module                                         |
 | `no-glfw`    | build check only: no GLFW frontend, and so no rendering at all        |
@@ -296,18 +396,22 @@ This will generate .html versions of a subset of the examples to be loaded in a 
 When consuming `threepp` in your own application,
 some headers will require additional dependencies to compile.
 
-| **Header**   | **Dependency** | **Description**                               |
-|--------------|----------------|-----------------------------------------------|
-| AssimpLoader | assimp         | Import a wide variety of different 3D formats |
-| ImguiContext | imgui          | ImGUI utility                                 |
-| Physx\*      | physx          | Physics simulation                            |
-| Vulkan\*     | Vulkan SDK     | Vulkan renderer backend                       |
+| **Header**              | **Dependency** | **Description**                                        |
+|-------------------------|----------------|--------------------------------------------------------|
+| AssimpLoader            | assimp         | Import a wide variety of different 3D formats          |
+| ImguiContext            | imgui          | ImGUI utility                                          |
+| Physx\*                 | physx          | Physics simulation                                     |
+| ConvexDecomposition     | v-hacd         | Concave collision shapes (pulled by the vcpkg `physx` feature) |
+| Vulkan\*, Ocean, DisplacedMesh | Vulkan SDK | Vulkan renderer backend; `Ocean` links only under `THREEPP_WITH_VULKAN` |
+
+> `THREEPP_FETCH_ASSIMP` was removed — assimp now comes from vcpkg (the `assimp` feature) or from
+> the system. A build script still passing that option gets a silent no-op.
 
 ## Consuming threepp
 
-Threepp is mainly available as a CMake package and can be consumed in a number of ways. 
-It's also available as a [Conan](https://conan.io/center/recipes?value=threepp) package, 
-so it can be consumed using [conan](https://conan.io/) or [xmake](https://xmake.io/).
+Threepp is mainly a CMake package. `FetchContent` is the recommended route and the one the
+project tests; [conan](https://conan.io/) and [xmake](https://xmake.io/) are also possible —
+see [doc/package_managers.md](doc/package_managers.md).
 
 ### CMake FetchContent (recommended)
 
@@ -347,56 +451,19 @@ An example is provided [here](tests/threepp_fetchcontent_test). <br>
 See also [this demo](https://github.com/markaren/threepp_wxwidgets), 
 which additionally uses [WxWidgets](https://wxwidgets.org/) as the Window system.
 
-### Using Conan
+### Conan and xmake
 
-Example `conanfile.py` :
-
-```python
-from conan import ConanFile
-from conan.tools.cmake import CMake, cmake_layout
-
-
-class ExampleRecipe(ConanFile):
-    settings = "os", "compiler", "build_type", "arch"
-    generators = "CMakeDeps", "CMakeToolchain"
-
-    def requirements(self):
-        self.requires("threepp/0.0.20260310")
-
-    def layout(self):
-        cmake_layout(self)
-
-    def build(self):
-        cmake = CMake(self)
-        cmake.configure()
-        cmake.build()
-```
-
-### Xmake
-
-Example `xmake.lua` file:
-
-```lua
-add_rules("mode.debug", "mode.release")
-add_requires("imgui", {configs = {glfw_opengl3 = true}}) -- optional dependency for UI widgets
-add_requires("assimp") -- optional dependency for importing assembly models (.glb/.dae)
-add_requires("conan::threepp/0.0.20260310", {
-    alias = "threepp",
-    configs = {
-        settings = {"compiler.cppstd=20"}
-    }
-})
-target("example")
-set_kind("binary")
-add_files("src/*.cpp")
-add_packages("imgui", "threepp", "assimp")
-set_languages("c++20")
-```
+`threepp` is also on [Conan Center](https://conan.io/center/recipes/threepp), which xmake can
+consume too. Both are covered in **[doc/package_managers.md](doc/package_managers.md)** —
+including the caveat that the published recipe normally trails this repository's tags, and
+that the package does not carry the Vulkan, PhysX, Python or application halves.
 
 ## Gallery
 
 | | |
 |:---:|:---:|
+| <img src="doc/screenshots/aalesund.png" width="400" alt="Ålesund terrain"><br>*Ålesund from Kartverket elevation data, NVDB roads and OSM footprints ([norway_terrain](examples/extras/terrain/norway_terrain.cpp))* | <img src="doc/screenshots/sponza.png" width="400" alt="Sponza"><br>*Sponza — probe GI, sky light through the openings* |
+| <img src="doc/screenshots/forest.png" width="400" alt="Procedural forest"><br>*Procedural terrain, trees and vegetation ([forest_demo](examples/extras/vegetation/forest_demo.cpp))* | <img src="doc/screenshots/depth_sensor.png" width="400" alt="Depth sensor"><br>*Depth-camera returns, range-coloured, with occlusion shadows* |
 | <img src="doc/screenshots/deferred_ocean_night.png" width="400" alt="Ocean night"><br>*Lighthouse at night — deferred hybrid, volumetric beam ([vulkan_ocean](examples/vulkan/vulkan_ocean.cpp))* | <img src="doc/screenshots/bistro.png" width="400" alt="Bistro"><br>*Lumberyard Bistro, deferred ([vulkan_bistro](examples/vulkan/vulkan_bistro.cpp))* |
 | <img src="doc/screenshots/tps.png" width="400" alt="Shooter"><br>*Third-person shooter ([projects/Shooter](examples/projects/Shooter))* | <img src="doc/screenshots/lidar.png" width="400" alt="Lidar"><br>*LIDAR* |
 | <img src="doc/screenshots/detect.png" width="400" alt="Inference"><br>*RF-DETR detection* | <img src="doc/screenshots/water_sky.png" width="400" alt="Water+sky"><br>*Water and sky shaders* |
