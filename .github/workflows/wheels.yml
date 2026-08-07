@@ -118,17 +118,38 @@ jobs:
           New-Item -ItemType Directory -Force $env:VCPKG_DEFAULT_BINARY_CACHE | Out-Null
           & "$env:RUNNER_TEMP\vcpkg\vcpkg" install --triplet x64-windows --x-feature=physx --x-install-root=vcpkg_installed
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          # Hand the SDK hint to the build step with FORWARD slashes, from here
+          # rather than a ${{ }} env expression: the workspace path spelled with
+          # backslashes (D:\a\threepp\threepp\vcpkg_installed\...) is full of
+          # accidental escape sequences (\a, \t, \v) wherever CMake processes
+          # strings, and find_package is QUIET — a corrupted hint doesn't fail
+          # the build, it silently produces a GL-only wheel. That is exactly the
+          # failure the smoke test caught on the first PhysX dispatch.
+          $root = $pwd.Path -replace '\\', '/'
+          "CMAKE_ARGS=-Dunofficial-omniverse-physx-sdk_DIR=$root/vcpkg_installed/x64-windows/share/unofficial-omniverse-physx-sdk" >> $env:GITHUB_ENV
 
       - name: Build wheels
         uses: pypa/cibuildwheel@v4.1.1
         env:
-          # scikit-build-core forwards CMAKE_ARGS to the CMake configure. The
-          # _DIR hint is how python/CMakeLists.txt finds PhysX without the vcpkg
-          # toolchain file (its find_package is QUIET-optional, so an sdist user
-          # without vcpkg still builds — GL-only, exactly as before). Windows
-          # only: the Linux path must be valid INSIDE the container and is set
-          # via CIBW_ENVIRONMENT_LINUX below.
-          CMAKE_ARGS: ${{ runner.os == 'Windows' && format('-Dunofficial-omniverse-physx-sdk_DIR={0}\vcpkg_installed\x64-windows\share\unofficial-omniverse-physx-sdk', github.workspace) || '' }}
+          # scikit-build-core forwards CMAKE_ARGS to the CMake configure; it is
+          # how python/CMakeLists.txt finds PhysX without the vcpkg toolchain
+          # file (find_package is QUIET-optional, so an sdist user without vcpkg
+          # still builds — GL-only, exactly as before). On Windows the variable
+          # arrives via $GITHUB_ENV from the vcpkg step above; on Linux the path
+          # must be valid INSIDE the container, so CIBW_ENVIRONMENT_LINUX below
+          # sets it there.
+          #
+          # cibuildwheel 4.x runs `delvewheel repair` on Windows BY DEFAULT (2.x
+          # ran nothing). delvewheel resolves the .pyd's imports from PATH and
+          # errors on the PhysX DLLs ("Unable to find library: physx_64.dll") —
+          # it does not accept the copies already inside the wheel, and vcpkg's
+          # bin is not on PATH. We vendor those four DLLs deliberately via
+          # install() rules (license file beside them, GPU pair excluded), so
+          # repair is disabled rather than taught to duplicate the job. If wheels
+          # ever need to carry msvcp140 for machines without the VC++ redist,
+          # re-enable delvewheel WITH --add-path to the vcpkg bin and drop the
+          # install() rules in the same change — not piecemeal.
+          CIBW_REPAIR_WHEEL_COMMAND_WINDOWS: ""
           # CPython 3.10–3.14. cibuildwheel 4.0 is where 3.14 became a default
           # build target (3.x needed a prerelease opt-in), so 4.x is the floor.
           # Pinned to 4.1.1 rather than the newest 4.2.0 only because 4.2.0 is
@@ -142,8 +163,9 @@ jobs:
           CIBW_BUILD: "cp310-* cp311-* cp312-* cp313-* cp314-*"
           # Redundant since 3.0 (PyPy and 32-bit Linux are no longer default,
           # and musllinux/win32 were never selected by CIBW_BUILD above), but
-          # kept as a belt on the allowlist's braces.
-          CIBW_SKIP: "*-musllinux* *_i686 *-win32 pp*"
+          # kept as a belt on the allowlist's braces. `pp*` is gone: 4.x warns
+          # that a selector for a non-enabled group is invalid.
+          CIBW_SKIP: "*-musllinux* *_i686 *-win32"
           # C++20 needs a recent toolchain; AlmaLinux 8 (manylinux_2_28) ships GCC 12.
           # This is cibuildwheel's own default since 3.0, so the pin is now
           # documentation rather than configuration — kept because the GCC version
