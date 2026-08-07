@@ -33,7 +33,7 @@
         "vulkan-memory-allocator",
         {
           "name": "glslang",
-          "features": ["tools"]
+          "features": ["tools", "opt"]
         }
       ]
     }
