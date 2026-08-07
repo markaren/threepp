@@ -14,7 +14,8 @@
 # is IRREVERSIBLE: a filename can never be re-uploaded, even after deleting the
 # release. Rehearse on TestPyPI until the artifacts are boring.
 #
-# The wheels are GL-only (Vulkan/PhysX stay source-build opt-ins).
+# The wheels are GL-only (Vulkan/PhysX stay source-build opt-ins), for Linux and
+# Windows on CPython 3.10-3.14. macOS has no wheel on purpose — see the matrix.
 name: Wheels
 
 on:
@@ -30,7 +31,26 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ ubuntu-22.04, windows-2022, macos-14 ]
+        # Linux + Windows only. macOS is DELIBERATELY not built here: it is the
+        # slowest leg by far (it would build two arches x five interpreters, and
+        # every platform gates the publish jobs below), and it can only ever run
+        # the GL backend — no Vulkan without MoltenVK, which has no equivalent
+        # for the ray-tracing path the deferred renderer needs, and no PhysX GPU,
+        # which is CUDA. The C++ library is still compiled on every push by the
+        # `darwin` job in config.yml, so the LIBRARY cannot rot unnoticed — but
+        # that job does not build the Python module, so the sdist path a mac
+        # user actually hits (pip install -> local compile) has NO CI coverage
+        # after this change. Known trade-off, accepted 2026-08-07.
+        #
+        # If macOS is ever added back, it needs
+        #   CIBW_ENVIRONMENT_MACOS: MACOSX_DEPLOYMENT_TARGET=11.0
+        # or it will not compile: cibuildwheel gives the x86_64 leg a 10.9 target
+        # (10.13 since 3.x), and libc++ marks std::visit and std::get<variant>
+        # unavailable below 10.13 and std::filesystem::path below 10.15 — all
+        # three are used by Image.hpp and Texture.hpp, so every translation unit
+        # reaching them fails. 11.0 clears the whole class and matches arm64's
+        # own floor. Recorded here because it cost a CI round to find.
+        os: [ ubuntu-22.04, windows-2022 ]
 
     steps:
       - uses: actions/checkout@v6
@@ -79,15 +99,6 @@ jobs:
           # and musllinux/win32 were never selected by CIBW_BUILD above), but
           # kept as a belt on the allowlist's braces.
           CIBW_SKIP: "*-musllinux* *_i686 *-win32 pp*"
-          CIBW_ARCHS_MACOS: "x86_64 arm64"
-          # STILL LOAD-BEARING after the 4.x bump. cibuildwheel 2.x defaulted the
-          # x86_64 leg to 10.9 and 3.x raised it to 10.13 — but libc++ marks
-          # std::filesystem::path unavailable below 10.15, and Texture.hpp holds
-          # one, so 10.13 fails too (std::visit / std::get<variant> want 10.13 and
-          # would be satisfied). 11.0 clears the whole "introduced in macOS 10.x"
-          # class at once and matches the arm64 leg's own floor, so both archs
-          # compile against identical library availability.
-          CIBW_ENVIRONMENT_MACOS: MACOSX_DEPLOYMENT_TARGET=11.0
           # C++20 needs a recent toolchain; AlmaLinux 8 (manylinux_2_28) ships GCC 12.
           # This is cibuildwheel's own default since 3.0, so the pin is now
           # documentation rather than configuration — kept because the GCC version
