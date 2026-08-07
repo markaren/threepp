@@ -14,8 +14,13 @@
 # is IRREVERSIBLE: a filename can never be re-uploaded, even after deleting the
 # release. Rehearse on TestPyPI until the artifacts are boring.
 #
-# The wheels are GL-only (Vulkan/PhysX stay source-build opt-ins), for Linux and
-# Windows on CPython 3.10-3.14. macOS has no wheel on purpose — see the matrix.
+# The wheels ship the GL renderer AND CPU PhysX physics (PhysxWorld,
+# articulations, proprioceptive sensors), for Linux and Windows on CPython
+# 3.10-3.14. GPU physics is NOT in the wheel — PhysXGpu_64.dll is 76 MB zipped
+# against PyPI's 100 MiB/file cap — so soft bodies / GpuSim / direct-GPU RL
+# need a source build (the DLL is dlopen'd, so dropping it next to the module
+# also works). Vulkan stays a source-build opt-in. macOS has no wheel on
+# purpose — see the matrix.
 name: Wheels
 
 on:
@@ -81,9 +86,42 @@ jobs:
           rm -f pyproject.toml.bak
           echo "wheel version -> ${ver}"
 
+      # PhysX for the wheels, via vcpkg's manifest "physx" feature — the same
+      # mechanism config.yml's linux job already proves out. Pinned to the same
+      # vcpkg release so a port-side regression cannot land here unannounced and
+      # the binary-cache key stays stable. First uncached PhysX build costs
+      # ~15 min; the cache makes later runs near-free.
+      - name: Restore vcpkg binary cache
+        uses: actions/cache@v4
+        with:
+          path: vcpkg-cache
+          key: vcpkg-wheels-${{ matrix.os }}-2026.01.16-${{ hashFiles('vcpkg.json') }}
+
+      # Windows builds on the host, so vcpkg runs as its own step here. Linux
+      # builds inside the manylinux container, where the host's vcpkg would be
+      # useless — its PhysX must be built IN the container (CIBW_BEFORE_ALL_LINUX
+      # below), against the same glibc/toolchain as the wheel itself.
+      - name: PhysX via vcpkg (host — Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          git clone --depth 1 --branch 2026.01.16 https://github.com/microsoft/vcpkg.git "$env:RUNNER_TEMP\vcpkg"
+          & "$env:RUNNER_TEMP\vcpkg\bootstrap-vcpkg.bat" -disableMetrics
+          $env:VCPKG_DEFAULT_BINARY_CACHE = "${{ github.workspace }}\vcpkg-cache"
+          New-Item -ItemType Directory -Force $env:VCPKG_DEFAULT_BINARY_CACHE | Out-Null
+          & "$env:RUNNER_TEMP\vcpkg\vcpkg" install --triplet x64-windows --x-feature=physx --x-install-root=vcpkg_installed
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
       - name: Build wheels
         uses: pypa/cibuildwheel@v4.1.1
         env:
+          # scikit-build-core forwards CMAKE_ARGS to the CMake configure. The
+          # _DIR hint is how python/CMakeLists.txt finds PhysX without the vcpkg
+          # toolchain file (its find_package is QUIET-optional, so an sdist user
+          # without vcpkg still builds — GL-only, exactly as before). Windows
+          # only: the Linux path must be valid INSIDE the container and is set
+          # via CIBW_ENVIRONMENT_LINUX below.
+          CMAKE_ARGS: ${{ runner.os == 'Windows' && format('-Dunofficial-omniverse-physx-sdk_DIR={0}\vcpkg_installed\x64-windows\share\unofficial-omniverse-physx-sdk', github.workspace) || '' }}
           # CPython 3.10–3.14. cibuildwheel 4.0 is where 3.14 became a default
           # build target (3.x needed a prerelease opt-in), so 4.x is the floor.
           # Pinned to 4.1.1 rather than the newest 4.2.0 only because 4.2.0 is
@@ -105,9 +143,24 @@ jobs:
           # is a hard requirement here, not a preference.
           CIBW_MANYLINUX_X86_64_IMAGE: manylinux_2_28
           # The vendored GLFW needs the X11/GL dev headers to compile on Linux.
+          # Then PhysX, built inside the container by a pinned vcpkg: the
+          # x64-linux triplet is static, so the .a links straight into the
+          # module — nothing extra for auditwheel to graft, and the wheel stays
+          # self-contained. Runs ONCE per job (cibuildwheel keeps one container
+          # for all five interpreters). The binary cache lives on the host via
+          # the /host mount, so actions/cache above covers this too.
           CIBW_BEFORE_ALL_LINUX: >
             yum install -y libX11-devel libXrandr-devel libXinerama-devel
-            libXcursor-devel libXi-devel mesa-libGL-devel
+            libXcursor-devel libXi-devel mesa-libGL-devel zip unzip tar &&
+            git clone --depth 1 --branch 2026.01.16 https://github.com/microsoft/vcpkg.git /opt/vcpkg &&
+            /opt/vcpkg/bootstrap-vcpkg.sh -disableMetrics &&
+            export VCPKG_DEFAULT_BINARY_CACHE=/host${{ github.workspace }}/vcpkg-cache &&
+            mkdir -p "$VCPKG_DEFAULT_BINARY_CACHE" &&
+            cd /project &&
+            /opt/vcpkg/vcpkg install --triplet x64-linux --x-feature=physx
+            --x-install-root=/opt/vcpkg_installed
+          CIBW_ENVIRONMENT_LINUX: >
+            CMAKE_ARGS="-Dunofficial-omniverse-physx-sdk_DIR=/opt/vcpkg_installed/x64-linux/share/unofficial-omniverse-physx-sdk"
           # GLFW links the system X11/GL libs; keep them external (the user's system
           # / GPU driver provides them) instead of bundling them into the wheel.
           CIBW_REPAIR_WHEEL_COMMAND_LINUX: >
@@ -116,10 +169,14 @@ jobs:
             --exclude libEGL.so.1 --exclude libX11.so.6 --exclude libXrandr.so.2
             --exclude libXinerama.so.1 --exclude libXcursor.so.1 --exclude libXi.so.6
             --exclude libXext.so.6 --exclude libxcb.so.1
-          # Smoke-test the import where there's a usable runtime. The manylinux
-          # container has no GL driver and the X11 libs are intentionally external,
-          # so skip its import test (the wheel still works on a real Linux desktop).
-          CIBW_TEST_COMMAND: 'python -c "import threepp; print(threepp.HAS_IMGUI)"'
+          # Smoke-test where there's a usable runtime: import, ASSERT the wheel
+          # has ImGui and PhysX (a silently failed vcpkg step must fail the job,
+          # not ship a physics-less wheel), and run one second of CPU physics —
+          # headless by design, so it runs fine on a display-less runner. The
+          # manylinux container has no GL driver and the X11 libs are
+          # intentionally external, so skip there (the wheel still works on a
+          # real Linux desktop).
+          CIBW_TEST_COMMAND: 'python {project}/python/scripts/wheel_smoke.py'
           CIBW_TEST_SKIP: "*-manylinux*"
 
       - uses: actions/upload-artifact@v4

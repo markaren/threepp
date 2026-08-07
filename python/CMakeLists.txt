@@ -143,6 +143,31 @@ if (TARGET unofficial::omniverse-physx-sdk::sdk)
                     COMMAND ${CMAKE_COMMAND} -E copy_if_different ${_physx_dlls} $<TARGET_FILE_DIR:threepp_py>
                     COMMAND_EXPAND_LISTS)
         endif ()
+
+        # WHEEL: ship the CPU runtime, and only the CPU runtime. These four are
+        # the module's LOAD-TIME imports (dumpbin-verified) — without them a
+        # PhysX wheel dies at `import threepp`, because the POST_BUILD copy
+        # above only reaches the build tree, never the wheel. Named explicitly,
+        # not globbed: the glob would sweep in PhysXGpu_64.dll (238 MB raw,
+        # 76 MB zipped — alone nearly the whole PyPI 100 MiB file cap) and
+        # PhysXDevice64.dll. Those two are dlopen'd by bare name at runtime,
+        # never linked, so the wheel imports and simulates CPU-only without
+        # them; PhysxWorld's GPU dynamics (enableGpuDynamics/enableDirectGpu,
+        # soft bodies, GpuSim) then need a source build or the DLLs dropped
+        # next to the module by hand. A missing file here fails the install
+        # loudly — if the vcpkg port renames its DLLs, better a broken build
+        # than a wheel that cannot import.
+        foreach (_dll PhysX_64.dll PhysXCommon_64.dll PhysXCooking_64.dll PhysXFoundation_64.dll)
+            install(FILES "${_physx_bin}/${_dll}"
+                    DESTINATION threepp COMPONENT python_module)
+        endforeach ()
+    endif ()
+    # PhysX 5 is BSD-3-Clause; redistributing its binaries requires carrying the
+    # notice. vcpkg stages it as share/physx/copyright — ship it beside the DLLs.
+    get_filename_component(_physx_share "${unofficial-omniverse-physx-sdk_DIR}/.." ABSOLUTE)
+    if (EXISTS "${_physx_share}/physx/copyright")
+        install(FILES "${_physx_share}/physx/copyright"
+                DESTINATION threepp COMPONENT python_module RENAME "PHYSX_LICENSE.txt")
     endif ()
     message(STATUS "threepp_py: PhysX rigid-body world enabled")
 else ()
@@ -219,6 +244,14 @@ install(DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/threepp/rl"
 # threepp_stubs target below. OPTIONAL so a wheel can still be built in a tree
 # where the stubs have not been generated.
 install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/threepp/py.typed"
+        DESTINATION threepp COMPONENT python_module)
+# The binary-notice clause that PHYSX_LICENSE.txt satisfies for PhysX binds the
+# REST of what is statically linked into this module too: libwebp and pybind11
+# are BSD-3, imgui/pugixml/nlohmann/meshoptimizer are MIT, and the embedded
+# GLSL derives from three.js (MIT). THIRD_PARTY.md is the repo's map of all of
+# it, with the notices that must ride along reproduced in full — ship it. Not
+# OPTIONAL: a license file silently missing is worse than a loud build break.
+install(FILES "${PROJECT_SOURCE_DIR}/THIRD_PARTY.md"
         DESTINATION threepp COMPONENT python_module)
 # editor.pyi is EXCLUDED here and replaced below. The source-tree copy is the
 # UNION of the wheel's threepp.editor and the editor app's (which additionally

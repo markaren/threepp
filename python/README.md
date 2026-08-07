@@ -31,10 +31,13 @@ canvas.animate(lambda: renderer.render(scene, camera))
 > tag builds a `YYYY.MM.DD` wheel); pin a version (`threepp==2026.6.17`) and
 > check the release notes before upgrading.
 
-Prebuilt **GL-only** wheels (Windows / macOS / Linux, CPython 3.10–3.13) are
-attached to each [GitHub release](https://github.com/markaren/threepp/releases) —
-no build tools or system libraries needed. Download the wheel matching your OS +
-Python from the Releases page, then:
+Prebuilt wheels (Windows / Linux, CPython 3.10–3.14) are attached to each
+[GitHub release](https://github.com/markaren/threepp/releases) — no build tools
+or system libraries needed. They ship the GL renderer **and CPU PhysX physics**:
+`PhysxWorld`, articulations, and the proprioceptive sensors work out of the box
+(`tp.HAS_PHYSX == True`). macOS has no prebuilt wheel — `pip install` builds it
+from source there (GL-only; a C++ compiler and CMake are all it needs). Download
+the wheel matching your OS + Python from the Releases page, then:
 
 ```sh
 pip install ./threepp-2026.6.17-cp312-cp312-win_amd64.whl
@@ -47,9 +50,13 @@ automatically):
 pip install "git+https://github.com/markaren/threepp"
 ```
 
-The wheel is **GL-only** by design — it needs no Vulkan SDK, PhysX, or CUDA and
-runs on any machine. The Vulkan deferred renderer / G-buffer AOVs and the PhysX physics
-+ GPU-RL backends are opt-in **source** builds (see the backend sections below).
+Physics in the wheel is **CPU-only** — the GPU runtime (`PhysXGpu_64.dll`) is
+238 MB and stays out. Everything `PhysxWorld` does by default works; the GPU
+paths (soft bodies via `enableGpuDynamics`, `GpuSim` / direct-GPU RL) need a
+**source** build with the PhysX SDK, or the GPU DLL dropped next to the module
+(it is loaded lazily by name, never linked). The Vulkan deferred renderer /
+G-buffer AOVs are likewise an opt-in source build (see the backend sections
+below).
 
 ## Build
 

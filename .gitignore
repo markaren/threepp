@@ -18,6 +18,11 @@ wheelhouse/
 *.egg-info/
 __pycache__/
 
+# vcpkg manifest-mode install root. The wheel CI provisions PhysX here at the
+# repo root (wheels.yml); scikit-build-core's sdist also honours this file, so
+# the entry keeps a quarter-gigabyte SDK out of the tarball as well.
+vcpkg_installed/
+
 
 *.bin
 *.weights

@@ -5,10 +5,19 @@
 #   pip install .                      # build + install from source
 #   pip wheel . --no-deps -w dist      # build a redistributable wheel
 #
-# The wheel is GL-only by design: the Vulkan path-tracer (needs the Vulkan SDK +
-# a GPU) and the PhysX direct-GPU RL backend (needs vcpkg + GPU DLLs) remain
-# opt-in source builds — configure CMake directly with -DTHREEPP_WITH_VULKAN=ON
-# / the PhysX SDK hint for those.
+# What's in the wheel: the GL renderer plus CPU PhysX physics — PhysxWorld,
+# articulations, the proprioceptive sensors. PhysX is found QUIET-optionally at
+# configure time, so nothing here requires it: the CI wheels provide it via a
+# vcpkg _DIR hint in CMAKE_ARGS (see .github/workflows/wheels.yml), while a bare
+# `pip install` from the sdist on a machine without vcpkg still builds, GL-only.
+#
+# NOT in the wheel, by design:
+#   - GPU physics (soft bodies, GpuSim, direct-GPU RL): PhysXGpu_64.dll is 76 MB
+#     zipped against PyPI's 100 MiB/file cap. It is dlopen'd, never linked, so
+#     the CPU wheel imports and simulates without it; a source build (or placing
+#     the DLL next to the module) turns the GPU path on.
+#   - the Vulkan deferred renderer (needs the Vulkan SDK + a GPU): source build,
+#     -DTHREEPP_WITH_VULKAN=ON.
 [build-system]
 requires = ["scikit-build-core>=0.10"]
 build-backend = "scikit_build_core.build"
@@ -16,12 +25,12 @@ build-backend = "scikit_build_core.build"
 [project]
 name = "threepp"
 version = "0.1.0"
-description = "three.js-style 3D scene authoring and rendering for Python (OpenGL, headless render-to-numpy)"
+description = "three.js-style 3D scene authoring and rendering for Python (OpenGL, headless render-to-numpy, PhysX rigid-body physics)"
 readme = "python/README.md"
 requires-python = ">=3.10"
 license = { file = "LICENSE" }
 authors = [{ name = "Lars Ivar Hatledal", email = "laht@ntnu.no" }]
-keywords = ["3d", "graphics", "opengl", "rendering", "threejs", "scene-graph", "visualization", "robotics", "synthetic-data"]
+keywords = ["3d", "graphics", "opengl", "rendering", "threejs", "scene-graph", "visualization", "robotics", "synthetic-data", "physics", "physx"]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "License :: OSI Approved :: MIT License",
