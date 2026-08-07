@@ -171,6 +171,11 @@ python examples/headless_render.py
 - **In-window UI**: `ImguiContext` + the `threepp.imgui` submodule — Dear ImGui
   immediate-mode widgets (window/text/button/slider/checkbox/color/combo/…) for
   control panels. Works on **both** the GL and Vulkan renderers (`tp.HAS_IMGUI`).
+- **3D Gaussian Splatting**: `SplatLoader.load_ply()` reads the `.ply` files
+  3DGS optimisers emit (any SH degree, header-driven) and `SplatCloud` puts the
+  result in the scene graph like any mesh — rendered by **both** the GL and
+  Vulkan backends. `is_splat_ply()` discriminates splat files from mesh PLYs;
+  `submit_ranges` exposes the chunk-LOD/culling mechanism (Vulkan).
 - **Rigid-body physics** (when built with PhysX, see below): `PhysxWorld` +
   `RigidBody` — add `Mesh`es as dynamic/static bodies (box/sphere/capsule, convex
   hull, or triangle mesh), `step(dt)`, and the bound meshes follow the simulation

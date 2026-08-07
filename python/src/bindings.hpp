@@ -81,6 +81,7 @@ namespace threepp_py {
     void init_pointcloud(py::module_& m); // VoxelGrid, ICP, MarchingCubes
     void init_terrain(py::module_& m);   // TerrainGenerator + TerrainParams
     void init_vegetation(py::module_& m); // TreeGenerator, TreeTextures
+    void init_splats(py::module_& m);    // SplatLoader + SplatCloud (3D Gaussian Splatting; GL + Vulkan)
     void init_render(py::module_& m);
     void init_loaders(py::module_& m);
     void init_robot(py::module_& m); // URDFLoader + Robot (articulated Object3D)

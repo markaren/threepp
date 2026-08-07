@@ -33,6 +33,7 @@ pybind11_add_module(threepp_py
         src/bind_pointcloud.cpp
         src/bind_terrain.cpp
         src/bind_vegetation.cpp
+        src/bind_splats.cpp
         src/bind_render.cpp
         src/bind_loaders.cpp
         src/bind_robot.cpp
