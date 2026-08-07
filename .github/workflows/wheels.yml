@@ -25,6 +25,10 @@
 # source build (the DLL is dlopen'd, so dropping it next to the module also
 # works). FSR/DLSS are likewise absent (signed vendor DLLs; DLSS alone is
 # 56-66 MB). macOS has no wheel on purpose — see the matrix.
+#
+# The EDITOR ships as its own package from build_editor_wheels: threepp-editor,
+# per-interpreter Windows wheels (the exe embeds CPython). Same version, same
+# publish jobs, its own trusted-publisher registrations.
 name: Wheels
 
 on:
@@ -252,6 +256,80 @@ jobs:
           name: wheels-${{ matrix.os }}
           path: ./wheelhouse/*.whl
 
+  # The editor as its own per-interpreter wheels (threepp-editor). Windows only:
+  # the exe embeds CPython, and executables linking libpython sit outside
+  # manylinux practice — Linux editor wheels stay a research question, documented
+  # in editor-wheel/. GL viewport by decree (editor-wheel/CMakeLists FORCEs
+  # Vulkan off), CPU PhysX via the same vcpkg mechanism as the module wheels.
+  build_editor_wheels:
+    name: Editor wheels (Windows)
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v6
+
+      # Same version logic as the module wheels, applied to the editor's own
+      # pyproject — run_number keeps the two packages' versions in lockstep.
+      - name: Derive the distribution version
+        shell: bash
+        env:
+          TAG: ${{ github.ref_name }}
+          RUN: ${{ github.run_number }}
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/* ]]; then
+            ver="${TAG//-/.}"
+          else
+            base=$(sed -nE 's/^version = "([^"]+)".*/\1/p' editor-wheel/pyproject.toml)
+            ver="${base}.dev${RUN}"
+          fi
+          sed -i.bak -E "s/^version = \".*\"/version = \"${ver}\"/" editor-wheel/pyproject.toml
+          rm -f editor-wheel/pyproject.toml.bak
+          echo "editor wheel version -> ${ver}"
+
+      # Same cache key as build_wheels: the binary cache is per-port archives,
+      # so this job's physx-only install hits the archives the other job built.
+      - name: Restore vcpkg binary cache
+        uses: actions/cache@v4
+        with:
+          path: vcpkg-cache
+          key: vcpkg-wheels-windows-2022-2026.01.16-physx-vulkan-${{ hashFiles('vcpkg.json') }}
+
+      - name: PhysX via vcpkg
+        shell: pwsh
+        run: |
+          git clone --depth 1 --branch 2026.01.16 https://github.com/microsoft/vcpkg.git "$env:RUNNER_TEMP\vcpkg"
+          & "$env:RUNNER_TEMP\vcpkg\bootstrap-vcpkg.bat" -disableMetrics
+          $env:VCPKG_DEFAULT_BINARY_CACHE = "${{ github.workspace }}\vcpkg-cache"
+          New-Item -ItemType Directory -Force $env:VCPKG_DEFAULT_BINARY_CACHE | Out-Null
+          & "$env:RUNNER_TEMP\vcpkg\vcpkg" install --triplet x64-windows --x-feature=physx --x-install-root=vcpkg_installed
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          # Forward slashes, via GITHUB_ENV, no vulkan flags — the editor build
+          # is GL-only and its CMakeLists FORCEs Vulkan off besides.
+          $root = $pwd.Path -replace '\\', '/'
+          "CMAKE_ARGS=-Dunofficial-omniverse-physx-sdk_DIR=$root/vcpkg_installed/x64-windows/share/unofficial-omniverse-physx-sdk" >> $env:GITHUB_ENV
+
+      - name: Build editor wheels
+        uses: pypa/cibuildwheel@v4.1.1
+        with:
+          package-dir: editor-wheel
+        env:
+          SKBUILD_BUILD_DIR: ${{ runner.temp }}\skb-editor
+          CIBW_BUILD: "cp310-* cp311-* cp312-* cp313-* cp314-*"
+          CIBW_SKIP: "*-musllinux* *_i686 *-win32"
+          # Same reasoning as the module wheels: we vendor the PhysX DLLs
+          # deliberately; delvewheel would fail resolving them from PATH.
+          CIBW_REPAIR_WHEEL_COMMAND_WINDOWS: ""
+          # --help prints usage and exits 0 BEFORE any window or GL context is
+          # created (main.cpp returns straight after the usage text), so this
+          # runs on the display-less runner. It still exercises the whole
+          # delivery chain: console script -> launcher env priming -> exe
+          # launch -> python3XX.dll resolution -> argument parsing.
+          CIBW_TEST_COMMAND: "threepp-editor --help"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wheels-editor-windows
+          path: ./wheelhouse/*.whl
+
   build_sdist:
     name: Source distribution
     runs-on: ubuntu-22.04
@@ -293,7 +371,10 @@ jobs:
   #   markaren / threepp / wheels.yml / testpypi
   publish_testpypi:
     name: Rehearse the upload on TestPyPI
-    needs: [ build_wheels, build_sdist ]
+    # One publish step serves BOTH projects: the artifacts merge into one dist/
+    # and the OIDC identity (this workflow + the testpypi environment) is
+    # registered as trusted publisher for threepp AND threepp-editor.
+    needs: [ build_wheels, build_editor_wheels, build_sdist ]
     runs-on: ubuntu-latest
     if: github.event_name == 'workflow_dispatch'
     environment: testpypi
@@ -313,7 +394,7 @@ jobs:
 
   release:
     name: Attach wheels to the GitHub Release
-    needs: [ build_wheels, build_sdist ]
+    needs: [ build_wheels, build_editor_wheels, build_sdist ]
     runs-on: ubuntu-22.04
     if: startsWith(github.ref, 'refs/tags/2')   # the date tag that triggered the run
     permissions:

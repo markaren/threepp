@@ -17,6 +17,12 @@ set(THREEPP_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
 set(THREEPP_BUILD_TESTS OFF CACHE BOOL "" FORCE)
 set(THREEPP_BUILD_EDITOR ON CACHE BOOL "" FORCE)
 set(THREEPP_WITH_PYTHON OFF CACHE BOOL "" FORCE)
+# FORCE, not default: CI reuses a CMAKE_ARGS that carries -DTHREEPP_WITH_VULKAN=ON
+# for the module wheel, and a Vulkan-linked editor exe gains a load-time
+# vulkan-1.dll import — it would refuse to START on machines without a Vulkan
+# runtime, the exact failure the module wheel needed /DELAYLOAD to avoid. The
+# editor wheel is GL-viewport by decree; this line makes stray flags harmless.
+set(THREEPP_WITH_VULKAN OFF CACHE BOOL "" FORCE)
 
 add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/.." threepp)
 
