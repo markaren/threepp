@@ -7440,8 +7440,15 @@ int EditorApp::runSelfTest() {
                 // once already). GL: the guard must have refused — ONE level,
                 // no table, no ranges — because the GL path ignores ranges and
                 // a multi-level cloud there draws every level stacked.
+#ifdef THREEPP_WITH_VULKAN
                 const bool vulkanBackend =
                         dynamic_cast<VulkanRenderer*>(renderer_.get()) != nullptr;
+#else
+                // Without the backend compiled in, VulkanRenderer is a name and
+                // not a type — there is nothing to cast to, and no editor built
+                // this way can be running it.
+                const bool vulkanBackend = false;
+#endif
                 if (vulkanBackend) {
                     check(!imported->glResourcesBuilt(),
                           "a Vulkan editor never builds the scan's GL-side textures");

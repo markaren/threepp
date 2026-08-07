@@ -1441,7 +1441,11 @@ void EditorApp::pollImports(float dt) {
         // the worker must not touch renderer_, and the splat import needs to
         // know because multi-level dynamic-LOD import is Vulkan-only (the GL
         // path ignores submission ranges and would draw every level stacked).
+#ifdef THREEPP_WITH_VULKAN
         const bool vulkanBackend = dynamic_cast<VulkanRenderer*>(renderer_.get()) != nullptr;
+#else
+        const bool vulkanBackend = false;
+#endif
         // Loader exceptions surface through the future and are rethrown on
         // the main thread in the get() below.
         activeImport_->future = std::async(std::launch::async, [path, args, vulkanBackend]() -> std::shared_ptr<Object3D> {
