@@ -15,6 +15,9 @@ and modern backends: portable OpenGL, and a deferred Vulkan renderer with ray-tr
 
 
 > You get a scene graph, materials, lighting, cameras, render loop, controls, loaders, all composable, in a handful of lines.
+> 
+> An **advanced editor** with physics simulation and Unity-style Python scripting is also available.
+
 
 📖 **New here? Start with [Getting started](doc/getting_started.md)** — a guide to the concepts
 the whole library is built from: the scene graph, ownership and lifetimes, geometry/material,
@@ -25,14 +28,14 @@ lights, the frame loop, loaders and the two backends.
 * Two rendering backends behind one scene graph: OpenGL 3.3 raster (the portable
   baseline, also the Emscripten/WebGL2 target) and a **deferred Vulkan renderer**
   (raster G-buffer with ray-traced AO, GI, reflections and shadows; denoised,
-  with TAA)
-* **Python bindings** — pybind11 bindings for the core scene API; renders to NumPy arrays
-* FFT-displaced ocean, water & sky shaders, PMREM environment maps
-* Path-traced sensor simulation: LIDAR, depth sensor, event camera
+  with TAA).
+* **Python bindings** — pybind11 bindings for the core scene API; renders to NumPy arrays.
+* FFT-displaced ocean, PMREM environment maps.
+* Path-traced sensor simulation: LIDAR, depth sensor, event camera.
 * Built-in model loaders [Binary STL, OBJ/MTL, glTF, COLLADA, USD, FBX, SVG, URDF]
 * **Native xacro support** — URDF loading takes `.urdf.xacro` directly (macros, properties,
   YAML-driven parameters, `$(find)`/`$(arg)`), no ROS or Python install required; verified
-  against the Universal Robots ROS 2 description
+  against the Franka and Universal Robots ROS 2 description.
 * Builds on Windows, Linux, macOS, MinGW and with Emscripten.
 
 ## Current state of the project
@@ -66,6 +69,7 @@ The OpenGL backend is a mechanical port of the WebGL renderer.
 * Animation, morph targets, Bones
 * Controls [Orbit, Fly, Drag, Transform]
 * Water and Sky shaders
+* Gaussian splatting
 * Built-in text rendering and font loading [typeface.json, TTF]
 * Basic Audio support using [miniaudio](https://miniaud.io/docs/manual/index.html)
 * Generic model loader based on [Assimp](https://github.com/assimp/assimp)
