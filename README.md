@@ -27,7 +27,6 @@ sensor output for synthetic-data generation.
 the whole library is built from: the scene graph, ownership and lifetimes, geometry/material,
 lights, the frame loop, loaders and the two backends.
 
-Recent changes are in [CHANGELOG.md](CHANGELOG.md).
 
 ## Highlights
 
@@ -460,18 +459,15 @@ that the package does not carry the Vulkan, PhysX, Python or application halves.
 
 ## Gallery
 
-| | |
-|:---:|:---:|
-| <img src="doc/screenshots/aalesund.png" width="400" alt="Ålesund terrain"><br>*Ålesund from Kartverket elevation data, NVDB roads and OSM footprints ([norway_terrain](examples/extras/terrain/norway_terrain.cpp))* | <img src="doc/screenshots/sponza.png" width="400" alt="Sponza"><br>*Sponza — probe GI, sky light through the openings* |
+| |                                                                                                                                               |
+|:---:|:---------------------------------------------------------------------------------------------------------------------------------------------:|
+| <img src="doc/screenshots/aalesund.png" width="400" alt="Ålesund terrain"><br>*Ålesund from Kartverket elevation data, NVDB roads and OSM footprints ([norway_terrain](examples/extras/terrain/norway_terrain.cpp))* |            <img src="doc/screenshots/sponza.png" width="400" alt="Sponza"><br>*Sponza — probe GI, sky light through the openings*             |
 | <img src="doc/screenshots/forest.png" width="400" alt="Procedural forest"><br>*Procedural terrain, trees and vegetation ([forest_demo](examples/extras/vegetation/forest_demo.cpp))* | <img src="doc/screenshots/depth_sensor.png" width="400" alt="Depth sensor"><br>*Depth-camera returns, range-coloured, with occlusion shadows* |
-| <img src="doc/screenshots/deferred_ocean_night.png" width="400" alt="Ocean night"><br>*Lighthouse at night — deferred hybrid, volumetric beam ([vulkan_ocean](examples/vulkan/vulkan_ocean.cpp))* | <img src="doc/screenshots/bistro.png" width="400" alt="Bistro"><br>*Lumberyard Bistro, deferred ([vulkan_bistro](examples/vulkan/vulkan_bistro.cpp))* |
-| <img src="doc/screenshots/tps.png" width="400" alt="Shooter"><br>*Third-person shooter ([projects/Shooter](examples/projects/Shooter))* | <img src="doc/screenshots/lidar.png" width="400" alt="Lidar"><br>*LIDAR* |
-| <img src="doc/screenshots/detect.png" width="400" alt="Inference"><br>*RF-DETR detection* | <img src="doc/screenshots/water_sky.png" width="400" alt="Water+sky"><br>*Water and sky shaders* |
-| <img src="doc/screenshots/animation.png" width="400" alt="Animation"><br>*Skinned animation* | <img src="doc/screenshots/Shadows.PNG" width="400" alt="Shadows"><br>*Shadow mapping* |
-| <img src="doc/screenshots/Optimization.PNG" width="400" alt="Optimization"><br>*Optimization playground ([projects/Optimization](examples/projects/Optimization))* | <img src="doc/screenshots/colnav.png" width="400" alt="colnav"><br>*Collision avoidance* |
-| <img src="doc/screenshots/spline_editor.png" width="400" alt="Spline Editor"><br>*Spline editor* | <img src="doc/screenshots/robot_cell_capture.png" width="400" alt="SVG UI"><br>*SVG-based UI* |
-| <img src="doc/screenshots/tiger_svg.png" width="400" alt="SVG"><br>*SVG loader* | <img src="doc/screenshots/fonts.png" width="400" alt="Fonts"><br>*Text rendering* |
-| <img src="doc/screenshots/fly.PNG" width="400" alt="FlyControls"><br>*Fly controls* | <img src="doc/screenshots/chess.png" width="400" alt="Chess"><br>*glTF Chessboard under HDRi sky* |
+|  <img src="doc/screenshots/lidar.png" width="400" alt="Lidar"><br>*LIDAR*    |                                                                       <img src="doc/screenshots/chess.png" width="400" alt="Chess"><br>*glTF Chessboard under HDRi sky*                                                                         |
+| <img src="doc/screenshots/detect.png" width="400" alt="Inference"><br>*RF-DETR detection* |          <img src="doc/screenshots/Optimization.PNG" width="400" alt="Optimization"><br>*Optimization playground ([projects/Optimization](examples/projects/Optimization))*                                |
+| <img src="doc/screenshots/spline_editor.png" width="400" alt="Spline Editor"><br>*Spline editor* |                         <img src="doc/screenshots/robot_cell_capture.png" width="400" alt="SVG UI"><br>*SVG-based UI*                         |
+| <img src="doc/screenshots/tiger_svg.png" width="400" alt="SVG"><br>*SVG loader* |                               <img src="doc/screenshots/fonts.png" width="400" alt="Fonts"><br>*Text rendering*                               |
+                                                                                                                                              |
 
 ## License
 
