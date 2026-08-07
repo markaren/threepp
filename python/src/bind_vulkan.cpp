@@ -38,10 +38,35 @@
 #include <string>
 #include <vector>
 
+#ifdef _WIN32
+#include <windows.h>
+#endif
+
 namespace py = pybind11;// the threepp_py::py alias isn't visible in the anon namespace below
 using namespace threepp;
 
 namespace {
+
+    // Is the Vulkan LOADER present at runtime? The two platforms differ:
+    //
+    //   Windows: the wheel links vulkan-1.dll with /DELAYLOAD (python/CMakeLists),
+    //   so `import threepp` succeeds on machines with no Vulkan runtime — but the
+    //   first delay-loaded call on such a machine raises a structured exception,
+    //   not a C++ one, which no Python except can catch. This probe is what turns
+    //   that crash into the clean RuntimeError below.
+    //
+    //   Linux: the loader is a normal link dependency; auditwheel vendors
+    //   libvulkan.so.1 into the wheel, so if the module imported, the loader is
+    //   loaded. Present by construction — a machine without a GPU/ICD then fails
+    //   at VulkanContext creation with a catchable std::runtime_error
+    //   ("no Vulkan-capable GPU found"), which pybind surfaces as RuntimeError.
+    bool vulkan_loader_present() {
+#ifdef _WIN32
+        return ::LoadLibraryW(L"vulkan-1.dll") != nullptr;
+#else
+        return true;
+#endif
+    }
 
     // IEEE-754 half (binary16) -> float32. The G-buffer normal/motion attachments
     // are R16G16B16A16_SFLOAT; the native AOV readback returns their raw bytes, so
@@ -385,7 +410,16 @@ namespace threepp_py {
 
     void init_vulkan(py::module_& m) {
         py::class_<PyVulkanRenderer>(m, "VulkanRenderer")
-                .def(py::init([](Canvas& c, int flush) { return std::make_unique<PyVulkanRenderer>(c, flush); }),
+                .def(py::init([](Canvas& c, int flush) {
+                         if (!vulkan_loader_present()) {
+                             throw std::runtime_error(
+                                     "Vulkan loader (vulkan-1.dll) not found — this machine has no "
+                                     "Vulkan runtime. The GL renderer (threepp.GLRenderer) works "
+                                     "everywhere; VulkanRenderer needs a Vulkan-capable GPU driver. "
+                                     "Check threepp.vulkan_available() before constructing.");
+                         }
+                         return std::make_unique<PyVulkanRenderer>(c, flush);
+                     }),
                      py::arg("canvas"), py::arg("flush_frames") = 3, py::keep_alive<1, 2>(),
                      "Deferred (RasterFirst) Vulkan renderer. Pass a headless Canvas "
                      "created with vsync=False.")
@@ -934,6 +968,16 @@ namespace threepp_py {
                      "EV clamp for auto-exposure relative to linear 1.0 (default -3 to +3).");
 
         m.attr("HAS_VULKAN") = true;
+        // HAS_VULKAN says the backend was COMPILED IN; this says the machine can
+        // actually load it. Distinct since the wheel began shipping Vulkan with a
+        // delay-loaded loader: HAS_VULKAN is True everywhere the wheel installs,
+        // vulkan_available() is False where no Vulkan runtime exists. (Driver /
+        // GPU problems still surface as RuntimeError at construction — this only
+        // answers whether the loader is present.)
+        m.def("vulkan_available", [] { return vulkan_loader_present(); },
+              "True when the Vulkan loader is present at runtime. HAS_VULKAN=True + "
+              "vulkan_available()=False means the wheel carries the backend but this "
+              "machine has no Vulkan runtime — use GLRenderer.");
     }
 
     threepp::Renderer* py_vulkan_native_renderer(const py::handle& h) {
@@ -952,6 +996,8 @@ namespace threepp_py {
     void init_vulkan(py::module_& m) {
         // Marker so Python can check availability:  threepp.HAS_VULKAN
         m.attr("HAS_VULKAN") = false;
+        m.def("vulkan_available", [] { return false; },
+              "Always False in a GL-only build (HAS_VULKAN is False too).");
     }
 
     threepp::Renderer* py_vulkan_native_renderer(const py::handle&) { return nullptr; }

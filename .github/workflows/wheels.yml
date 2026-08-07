@@ -14,13 +14,17 @@
 # is IRREVERSIBLE: a filename can never be re-uploaded, even after deleting the
 # release. Rehearse on TestPyPI until the artifacts are boring.
 #
-# The wheels ship the GL renderer AND CPU PhysX physics (PhysxWorld,
-# articulations, proprioceptive sensors), for Linux and Windows on CPython
-# 3.10-3.14. GPU physics is NOT in the wheel — PhysXGpu_64.dll is 76 MB zipped
-# against PyPI's 100 MiB/file cap — so soft bodies / GpuSim / direct-GPU RL
-# need a source build (the DLL is dlopen'd, so dropping it next to the module
-# also works). Vulkan stays a source-build opt-in. macOS has no wheel on
-# purpose — see the matrix.
+# The wheels ship the GL renderer, CPU PhysX physics (PhysxWorld, articulations,
+# proprioceptive sensors) AND the Vulkan deferred renderer with its G-buffer
+# AOVs, for Linux and Windows on CPython 3.10-3.14. Vulkan degrades gracefully:
+# the loader is delay-loaded on Windows and auditwheel-vendored on Linux, so the
+# wheel imports everywhere and VulkanRenderer raises a clean RuntimeError on
+# machines without a Vulkan runtime (threepp.vulkan_available() to probe).
+# GPU physics is NOT in the wheel — PhysXGpu_64.dll is 76 MB zipped against
+# PyPI's 100 MiB/file cap — so soft bodies / GpuSim / direct-GPU RL need a
+# source build (the DLL is dlopen'd, so dropping it next to the module also
+# works). FSR/DLSS are likewise absent (signed vendor DLLs; DLSS alone is
+# 56-66 MB). macOS has no wheel on purpose — see the matrix.
 name: Wheels
 
 on:
@@ -98,11 +102,14 @@ jobs:
       # vcpkg release so a port-side regression cannot land here unannounced and
       # the binary-cache key stays stable. First uncached PhysX build costs
       # ~15 min; the cache makes later runs near-free.
+      # The feature list is part of the key on purpose: actions/cache does NOT
+      # re-save on an exact-key hit, so growing the feature set under an old key
+      # would rebuild the new ports every run while believing itself cached.
       - name: Restore vcpkg binary cache
         uses: actions/cache@v4
         with:
           path: vcpkg-cache
-          key: vcpkg-wheels-${{ matrix.os }}-2026.01.16-${{ hashFiles('vcpkg.json') }}
+          key: vcpkg-wheels-${{ matrix.os }}-2026.01.16-physx-vulkan-${{ hashFiles('vcpkg.json') }}
 
       # Windows builds on the host, so vcpkg runs as its own step here. Linux
       # builds inside the manylinux container, where the host's vcpkg would be
@@ -116,17 +123,24 @@ jobs:
           & "$env:RUNNER_TEMP\vcpkg\bootstrap-vcpkg.bat" -disableMetrics
           $env:VCPKG_DEFAULT_BINARY_CACHE = "${{ github.workspace }}\vcpkg-cache"
           New-Item -ItemType Directory -Force $env:VCPKG_DEFAULT_BINARY_CACHE | Out-Null
-          & "$env:RUNNER_TEMP\vcpkg\vcpkg" install --triplet x64-windows --x-feature=physx --x-install-root=vcpkg_installed
+          & "$env:RUNNER_TEMP\vcpkg\vcpkg" install --triplet x64-windows --x-feature=physx --x-feature=vulkan --x-install-root=vcpkg_installed
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          # Hand the SDK hint to the build step with FORWARD slashes, from here
+          # Hand the hints to the build step with FORWARD slashes, from here
           # rather than a workflow env expression: the workspace path spelled with
           # backslashes (D:\a\threepp\threepp\vcpkg_installed\...) is full of
           # accidental escape sequences (\a, \t, \v) wherever CMake processes
           # strings, and find_package is QUIET — a corrupted hint doesn't fail
           # the build, it silently produces a GL-only wheel. That is exactly the
           # failure the smoke test caught on the first PhysX dispatch.
+          #
+          # Vulkan comes entirely from vcpkg (no SDK install on the runner):
+          # CMAKE_PREFIX_PATH lets FindVulkan see the headers + loader lib and
+          # find_path see vk_mem_alloc.h; GLSLANG_VALIDATOR points straight at
+          # the tool so the shader-embed step never depends on PATH. Wrong paths
+          # fail the CONFIGURE loudly — never a silently degraded wheel.
           $root = $pwd.Path -replace '\\', '/'
-          "CMAKE_ARGS=-Dunofficial-omniverse-physx-sdk_DIR=$root/vcpkg_installed/x64-windows/share/unofficial-omniverse-physx-sdk" >> $env:GITHUB_ENV
+          $vi = "$root/vcpkg_installed/x64-windows"
+          "CMAKE_ARGS=-DTHREEPP_WITH_VULKAN=ON -DCMAKE_PREFIX_PATH=$vi -DGLSLANG_VALIDATOR=$vi/tools/glslang/glslangValidator.exe -Dunofficial-omniverse-physx-sdk_DIR=$vi/share/unofficial-omniverse-physx-sdk" >> $env:GITHUB_ENV
 
       - name: Build wheels
         uses: pypa/cibuildwheel@v4.1.1
@@ -196,10 +210,17 @@ jobs:
             export VCPKG_DEFAULT_BINARY_CACHE=/host${{ github.workspace }}/vcpkg-cache &&
             mkdir -p "$VCPKG_DEFAULT_BINARY_CACHE" &&
             cd /project &&
-            /opt/vcpkg/vcpkg install --triplet x64-linux --x-feature=physx
+            /opt/vcpkg/vcpkg install --triplet x64-linux --x-feature=physx --x-feature=vulkan
             --x-install-root=/opt/vcpkg_installed
+          # Vulkan on Linux needs no delay-load: the loader is a normal link
+          # dependency, auditwheel vendors libvulkan.so.1 into the wheel, and a
+          # machine without a GPU/ICD fails at VulkanRenderer construction with
+          # a catchable RuntimeError — import always works.
           CIBW_ENVIRONMENT_LINUX: >
-            CMAKE_ARGS="-Dunofficial-omniverse-physx-sdk_DIR=/opt/vcpkg_installed/x64-linux/share/unofficial-omniverse-physx-sdk"
+            CMAKE_ARGS="-DTHREEPP_WITH_VULKAN=ON
+            -DCMAKE_PREFIX_PATH=/opt/vcpkg_installed/x64-linux
+            -DGLSLANG_VALIDATOR=/opt/vcpkg_installed/x64-linux/tools/glslang/glslangValidator
+            -Dunofficial-omniverse-physx-sdk_DIR=/opt/vcpkg_installed/x64-linux/share/unofficial-omniverse-physx-sdk"
             SKBUILD_BUILD_DIR="/tmp/skb-shared"
           # GLFW links the system X11/GL libs; keep them external (the user's system
           # / GPU driver provides them) instead of bundling them into the wheel.

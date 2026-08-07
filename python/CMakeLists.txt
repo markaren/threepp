@@ -61,6 +61,20 @@ set_target_properties(threepp PROPERTIES POSITION_INDEPENDENT_CODE ON)
 # Vulkan ImGui path is #ifdef'd out and falls through to GL on a Vulkan window).
 if (THREEPP_WITH_VULKAN)
     target_compile_definitions(threepp_py PRIVATE THREEPP_PY_HAS_VULKAN THREEPP_WITH_VULKAN)
+    # DELAY-load the Vulkan loader on Windows. vulkan-1.dll is otherwise a
+    # load-time import of the .pyd, which would make `import threepp` fail on
+    # every machine without a Vulkan runtime — GL-only users included. Delayed,
+    # the DLL is first touched when a Vulkan entry point is called; the binding
+    # guards that moment (bind_vulkan.cpp probes the loader in the
+    # VulkanRenderer constructor and raises a clean RuntimeError instead of
+    # letting the delay-load helper raise a structured exception Python cannot
+    # catch). Linux needs none of this: auditwheel vendors libvulkan.so.1 into
+    # the wheel, and a GPU-less machine fails at VulkanContext creation with a
+    # catchable std::runtime_error.
+    if (WIN32)
+        target_link_options(threepp_py PRIVATE "/DELAYLOAD:vulkan-1.dll")
+        target_link_libraries(threepp_py PRIVATE delayimp)
+    endif ()
 endif ()
 
 # AMD FidelityFX FSR runtime DLL. threepp's FsrUpscaler loads amd_fidelityfx_vk.dll

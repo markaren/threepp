@@ -33,11 +33,15 @@ canvas.animate(lambda: renderer.render(scene, camera))
 
 Prebuilt wheels (Windows / Linux, CPython 3.10–3.14) are attached to each
 [GitHub release](https://github.com/markaren/threepp/releases) — no build tools
-or system libraries needed. They ship the GL renderer **and CPU PhysX physics**:
-`PhysxWorld`, articulations, and the proprioceptive sensors work out of the box
-(`tp.HAS_PHYSX == True`). macOS has no prebuilt wheel — `pip install` builds it
-from source there (GL-only; a C++ compiler and CMake are all it needs). Download
-the wheel matching your OS + Python from the Releases page, then:
+or system libraries needed. They ship the GL renderer, **CPU PhysX physics**
+(`PhysxWorld`, articulations, proprioceptive sensors — `tp.HAS_PHYSX == True`)
+**and the Vulkan deferred renderer** with its G-buffer AOVs
+(`tp.HAS_VULKAN == True`). Vulkan needs a Vulkan-capable GPU driver at runtime —
+on machines without one the wheel still imports and renders GL, and
+`tp.vulkan_available()` tells you which world you're in. macOS has no prebuilt
+wheel — `pip install` builds it from source there (GL-only; a C++ compiler and
+CMake are all it needs). Download the wheel matching your OS + Python from the
+Releases page, then:
 
 ```sh
 pip install ./threepp-2026.6.17-cp312-cp312-win_amd64.whl
@@ -51,12 +55,12 @@ pip install "git+https://github.com/markaren/threepp"
 ```
 
 Physics in the wheel is **CPU-only** — the GPU runtime (`PhysXGpu_64.dll`) is
-238 MB and stays out. Everything `PhysxWorld` does by default works; the GPU
-paths (soft bodies via `enableGpuDynamics`, `GpuSim` / direct-GPU RL) need a
-**source** build with the PhysX SDK, or the GPU DLL dropped next to the module
-(it is loaded lazily by name, never linked). The Vulkan deferred renderer /
-G-buffer AOVs are likewise an opt-in source build (see the backend sections
-below).
+238 MB and stays out. Everything `PhysxWorld` does by default works. The GPU
+paths need the two GPU DLLs (`PhysXGpu_64.dll` + `PhysXDevice64.dll`) dropped
+next to the installed module (they are loaded lazily by name, never linked):
+that alone enables `PhysxWorld(gpu_dynamics=True)` and the direct-GPU RL batch
+(verified). Soft bodies additionally need a Python API the wheel does not bind
+yet — today they are an editor capability.
 
 ## Build
 

@@ -5,19 +5,23 @@
 #   pip install .                      # build + install from source
 #   pip wheel . --no-deps -w dist      # build a redistributable wheel
 #
-# What's in the wheel: the GL renderer plus CPU PhysX physics — PhysxWorld,
-# articulations, the proprioceptive sensors. PhysX is found QUIET-optionally at
-# configure time, so nothing here requires it: the CI wheels provide it via a
-# vcpkg _DIR hint in CMAKE_ARGS (see .github/workflows/wheels.yml), while a bare
-# `pip install` from the sdist on a machine without vcpkg still builds, GL-only.
+# What's in the wheel: the GL renderer, CPU PhysX physics (PhysxWorld,
+# articulations, the proprioceptive sensors) and the Vulkan deferred renderer
+# with its G-buffer AOVs. Both extras are found QUIET-optionally at configure
+# time, so nothing here requires them: the CI wheels provide the SDKs via
+# CMAKE_ARGS hints (see .github/workflows/wheels.yml), while a bare
+# `pip install` from the sdist on a machine with neither still builds, GL-only.
 #
-# NOT in the wheel, by design:
-#   - GPU physics (soft bodies, GpuSim, direct-GPU RL): PhysXGpu_64.dll is 76 MB
-#     zipped against PyPI's 100 MiB/file cap. It is dlopen'd, never linked, so
-#     the CPU wheel imports and simulates without it; a source build (or placing
-#     the DLL next to the module) turns the GPU path on.
-#   - the Vulkan deferred renderer (needs the Vulkan SDK + a GPU): source build,
-#     -DTHREEPP_WITH_VULKAN=ON.
+# Vulkan degrades gracefully at runtime: the loader is delay-loaded on Windows
+# and auditwheel-vendored on Linux, so `import threepp` works on machines with
+# no Vulkan runtime and threepp.vulkan_available() reports the truth;
+# VulkanRenderer raises a clean RuntimeError there.
+#
+# NOT in the wheel, by design: GPU physics runtime (PhysXGpu_64.dll is 76 MB
+# zipped against PyPI's 100 MiB/file cap). It is dlopen'd, never linked — drop
+# PhysXGpu_64.dll + PhysXDevice64.dll next to the installed module and
+# PhysxWorld(gpu_dynamics=True) / direct-GPU RL work (verified); soft bodies
+# additionally need a binding surface the wheel does not have yet.
 [build-system]
 requires = ["scikit-build-core>=0.10"]
 build-backend = "scikit_build_core.build"
@@ -25,7 +29,7 @@ build-backend = "scikit_build_core.build"
 [project]
 name = "threepp"
 version = "0.1.0"
-description = "three.js-style 3D scene authoring and rendering for Python (OpenGL, headless render-to-numpy, PhysX rigid-body physics)"
+description = "three.js-style 3D scene authoring and rendering for Python (OpenGL + Vulkan deferred rendering, headless render-to-numpy, G-buffer AOVs, PhysX rigid-body physics)"
 readme = "python/README.md"
 requires-python = ">=3.10"
 license = { file = "LICENSE" }

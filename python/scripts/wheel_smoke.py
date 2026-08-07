@@ -12,9 +12,17 @@ import threepp as tp
 
 print("HAS_IMGUI :", tp.HAS_IMGUI)
 print("HAS_PHYSX :", tp.HAS_PHYSX)
+print("HAS_VULKAN:", tp.HAS_VULKAN)
+print("vulkan_available():", tp.vulkan_available())
 
 assert tp.HAS_IMGUI, "wheel built without ImGui — examples/external missing from the sdist?"
 assert tp.HAS_PHYSX, "wheel built without PhysX — the vcpkg provisioning step did not take effect"
+# Vulkan is COMPILED IN (delay-loaded on Windows; loader vendored by auditwheel
+# on Linux), so import must succeed and HAS_VULKAN must be True even on this
+# GPU-less runner. vulkan_available() is allowed to be False here — that's the
+# graceful-degradation path working; the crash mode this guards against is
+# `import threepp` itself failing on machines without a Vulkan runtime.
+assert tp.HAS_VULKAN, "wheel built without Vulkan — the SDK/vcpkg feature did not reach the configure"
 
 # A box must fall. One second of CPU simulation, no renderer, no GPU DLLs —
 # the wheel ships only the four CPU PhysX DLLs, and this proves they load and
