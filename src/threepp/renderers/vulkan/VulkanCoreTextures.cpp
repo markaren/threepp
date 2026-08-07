@@ -66,9 +66,10 @@ void VulkanRenderer::Impl::createTextureSampler() {
             VkPhysicalDeviceProperties props{};
             vkGetPhysicalDeviceProperties(ctx->physicalDevice(), &props);
             const float maxAniso = std::min(16.0f, props.limits.maxSamplerAnisotropy);
-            // The material-sampler policy set (see the member comment):
-            // aniso for the unjittered raster, isotropic for the jittered
-            // one, each in a REPEAT and a CLAMP_TO_EDGE flavour.
+            // The material-sampler set (see the member comment): the 16×
+            // pair AUTO always hands out, and the isotropic pair that only a
+            // forced setTextureAnisotropy(1) reaches — each in a REPEAT and a
+            // CLAMP_TO_EDGE flavour.
             textureSampler_    = createMaterialSamplerWithAniso(ctx->device(), maxAniso);
             textureSamplerIso_ = createMaterialSamplerWithAniso(ctx->device(), 1.0f);
             textureSamplerClamp_    = createMaterialSamplerWithAniso(ctx->device(), maxAniso,

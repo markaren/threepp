@@ -7301,7 +7301,7 @@ namespace threepp {
             return !eventCamEnabled_ && (useFsr() || useDlss() || gbufMsaaSamples_ <= 1);
         }
         // The sampler the material-texture bindings use this frame: AUTO
-        // policy (aniso when unjittered, isotropic when jittered) unless
+        // (16×, jittered or not) unless
         // setTextureAnisotropy forced a level, in the REPEAT (default) or
         // CLAMP_TO_EDGE wrap flavour. May lazily create the custom sampler
         // pair for forced levels other than 1/16. Implemented in

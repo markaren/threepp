@@ -308,10 +308,10 @@ private:
             vk_->setGbufferMsaa(msaaIdx == 2 ? 4u : (msaaIdx == 1 ? 2u : 1u));
         }
 
-        // AUTO = 16x when the raster is unjittered (MSAA / event camera),
-        // isotropic under TAA/DLSS/FSR jitter (grazing-angle sharpening
-        // defeats temporal reconstruction).
-        static const char* anisoNames[] = {"Auto (by mode)", "1x (iso)", "2x", "4x", "8x", "16x"};
+        // AUTO = 16x in every mode, jittered or not. (An earlier AUTO dropped
+        // to isotropic under TAA/DLSS/FSR jitter; that was withdrawn — it cost
+        // grazing-angle sharpness and bought no temporal stability.)
+        static const char* anisoNames[] = {"Auto (16x)", "1x (iso)", "2x", "4x", "8x", "16x"};
         static const float anisoValues[] = {0.f, 1.f, 2.f, 4.f, 8.f, 16.f};
         const float aniso = vk_->textureAnisotropy();
         int anisoIdx = 0;
