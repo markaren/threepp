@@ -18,10 +18,6 @@ sensor output for synthetic-data generation.
 
 
 > You get a scene graph, materials, lighting, cameras, render loop, controls, loaders, all composable, in a handful of lines.
-> 
-> And when you would rather author than code: the **editor** ([doc/editor.md](doc/editor.md)) and the
-> headless **player** ([doc/player.md](doc/player.md)) ship with it.
-
 
 📖 **New here? Start with [Getting started](doc/getting_started.md)** — a guide to the concepts
 the whole library is built from: the scene graph, ownership and lifetimes, geometry/material,
@@ -36,8 +32,9 @@ lights, the frame loop, loaders and the two backends.
   also the Emscripten/WebGL2 target) and a **deferred Vulkan renderer** (raster
   G-buffer with ray-traced AO, GI, reflections and shadows; denoised, with TAA).
 * **`Ocean`** — three-cascade FFT-displaced water with foam, transmission and live
-  wind, in one line: `scene->add(Ocean::create())`. Vulkan only; on OpenGL the type
-  is an inert flat plane. PMREM environment maps.
+  wind. Vulkan only; on OpenGL the type
+  is an inert flat plane. 
+* PMREM environment maps.
 * **Gaussian splatting** — `SplatCloud` renders scans on both backends, with two
   loaders (INRIA `.ply`, PlayCanvas SOG) and dynamic LOD on Vulkan.
 
@@ -142,7 +139,7 @@ A few limits worth knowing before you start:
   grass, conveyor systems, a parametric log cabin
 * Real-world terrain — a documented "region pack" format plus an included Python tool
   that builds one from Norwegian national open data (Kartverket elevation, NVDB roads,
-  OSM footprints with lidar-measured building heights)
+  OSM footprints with building heights)
 * Basic Audio support using [miniaudio](https://miniaud.io/docs/manual/index.html)
 * Generic model loader based on [Assimp](https://github.com/assimp/assimp)
   (requires the assimp package — see [Optional downstream dependencies](#optional-downstream-dependencies))
@@ -403,8 +400,6 @@ some headers will require additional dependencies to compile.
 | ConvexDecomposition     | v-hacd         | Concave collision shapes (pulled by the vcpkg `physx` feature) |
 | Vulkan\*, Ocean, DisplacedMesh | Vulkan SDK | Vulkan renderer backend; `Ocean` links only under `THREEPP_WITH_VULKAN` |
 
-> `THREEPP_FETCH_ASSIMP` was removed — assimp now comes from vcpkg (the `assimp` feature) or from
-> the system. A build script still passing that option gets a silent no-op.
 
 ## Consuming threepp
 
@@ -467,7 +462,7 @@ that the package does not carry the Vulkan, PhysX, Python or application halves.
 | <img src="doc/screenshots/detect.png" width="400" alt="Inference"><br>*RF-DETR detection* |          <img src="doc/screenshots/Optimization.PNG" width="400" alt="Optimization"><br>*Optimization playground ([projects/Optimization](examples/projects/Optimization))*                                |
 | <img src="doc/screenshots/spline_editor.png" width="400" alt="Spline Editor"><br>*Spline editor* |                         <img src="doc/screenshots/robot_cell_capture.png" width="400" alt="SVG UI"><br>*SVG-based UI*                         |
 | <img src="doc/screenshots/tiger_svg.png" width="400" alt="SVG"><br>*SVG loader* |                               <img src="doc/screenshots/fonts.png" width="400" alt="Fonts"><br>*Text rendering*                               |
-                                                                                                                                              |
+
 
 ## License
 
