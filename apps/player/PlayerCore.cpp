@@ -5,8 +5,13 @@
 #include "threepp/extras/editor/SensorPlaySession.hpp"
 
 #ifdef THREEPP_EDITOR_WITH_PHYSX
+#include "threepp/extras/editor/ConveyorPlaySession.hpp"
 #include "threepp/extras/editor/PhysicsPlaySession.hpp"
 #include "threepp/extras/editor/PhysxSensorPlaySession.hpp"
+#endif
+
+#ifdef THREEPP_WITH_AUDIO
+#include "threepp/extras/editor/AudioPlaySession.hpp"
 #endif
 
 #ifdef THREEPP_EDITOR_WITH_PYTHON
@@ -64,9 +69,29 @@ PlayerCore::PlayerCore() {
     physics_ = std::make_shared<editor::PhysicsPlaySession>();
     physics_->setLogger([this](const std::string& message) { log(message); });
     play_.addSession(physics_);
+    // Right after physics, as in the editor: its start() borrows the world
+    // physics just built, and the reverse stop order tears the belts down while
+    // that world is still alive. Without this session an authored conveyor is
+    // inert scenery here — the visuals sit still and nothing resting on a belt
+    // is carried — so a document that works under Play stops working in CI.
+    conveyor_ = std::make_shared<editor::ConveyorPlaySession>();
+    conveyor_->setPhysics(physics_.get());
+    play_.addSession(conveyor_);
 #endif
 
     play_.addSession(std::make_shared<editor::AnimationPlaySession>());
+
+#ifdef THREEPP_WITH_AUDIO
+    // Authored sound. A headless run leaves the listener host null, so the
+    // listener sits at the origin — but the session still LOADS every authored
+    // file, which is the part worth having in CI: a sound whose file moved is
+    // logged on the run that broke it rather than the next time somebody
+    // listens. A machine with no audio device at all is handled inside the
+    // session — it logs once and becomes a no-op, never fatal.
+    audio_ = std::make_shared<editor::AudioPlaySession>();
+    audio_->setLogger([this](const std::string& message) { log(message); });
+    play_.addSession(audio_);
+#endif
 
     // After physics (whose world the pushed sensors register with) and after the
     // animation player, so a scan sees the pose the frame ended on.
@@ -112,6 +137,8 @@ PlayerCore::~PlayerCore() {
     play_.clearSessions();
     scripts_.reset();
     sensors_.reset();
+    audio_.reset();
+    conveyor_.reset();
     physics_.reset();
 
     if (sensorRig_) {
@@ -132,6 +159,15 @@ void PlayerCore::setLogger(std::function<void(const std::string&)> logger) {
 void PlayerCore::setRenderer(Renderer* renderer) {
 
     if (sensors_) sensors_->setRenderer(renderer);
+}
+
+void PlayerCore::setAudioListenerHost(Object3D* host) {
+
+#ifdef THREEPP_WITH_AUDIO
+    if (audio_) audio_->setListenerHost(host);
+#else
+    (void) host;
+#endif
 }
 
 void PlayerCore::setRecordDirectory(const std::filesystem::path& dir, bool perEpisodeSubdirectories) {
@@ -198,6 +234,18 @@ bool PlayerCore::beginEpisode(int index, std::string* error) {
         sensors_->setRecording(true);
     }
 
+#ifdef THREEPP_WITH_AUDIO
+    // Where a relative userData["soundFile"] resolves from. Per episode rather
+    // than once, for the same reason the editor sets it per play: the anchor is
+    // the document's directory, and open() can be pointed somewhere else
+    // between runs of the same PlayerCore.
+    if (audio_) {
+        audio_->setResourcePath(document_.path().empty()
+                                        ? std::filesystem::path{}
+                                        : document_.path().parent_path());
+    }
+#endif
+
     std::string failure;
     if (!play_.play(document_, &failure)) {
         current_.error = failure.empty() ? "play refused the document" : failure;
@@ -212,6 +260,7 @@ bool PlayerCore::beginEpisode(int index, std::string* error) {
     if (sensors_) current_.sensorCount = sensors_->sensorCount();
 #ifdef THREEPP_EDITOR_WITH_PHYSX
     if (physics_) current_.bodyCount = physics_->bodyCount();
+    if (conveyor_) current_.conveyorCount = conveyor_->conveyorCount();
 #endif
 #ifdef THREEPP_EDITOR_WITH_PYTHON
     if (scripts_) current_.scriptInstances = scripts_->instanceCount();

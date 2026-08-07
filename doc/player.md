@@ -1,10 +1,17 @@
 # threepp player
 
 `threepp_player` plays a scene the [editor](editor.md) authored. It is the same
-play runtime — physics, articulations, sensors, Python scripts — with the
-editing machinery taken off: no ImGui, no panels, no undo, no gizmos, no
-selection. A window, a camera and the four play sessions, or not even the
-window.
+play runtime — physics, articulations, conveyors, animation, sound, sensors,
+Python scripts — with the editing machinery taken off: no ImGui, no panels, no
+undo, no gizmos, no selection. A window, a camera and the editor's own six play
+sessions, or not even the window.
+
+The session set and its registration order are the editor's, deliberately, and
+every optional one is gated on the same build macro: a document that runs under
+Play runs here. Headless changes what is *observed*, not what runs — the audio
+listener has no host so sounds are not spatialized around anybody, and with no
+renderer the vision sensors do not scan, but everything still starts, steps and
+stops.
 
 It exists to be a **gate**. Point it at a scene whose script drives a trained
 policy, give it an episode count and a budget, let the sensors write their CSVs,

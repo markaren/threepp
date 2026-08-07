@@ -25,11 +25,16 @@
 
 #include "threepp/extras/editor/PhysicsConfig.hpp"
 #include "threepp/extras/editor/SceneDocument.hpp"
+#ifdef THREEPP_EDITOR_WITH_PHYSX
+#include "threepp/extras/editor/ConveyorConfig.hpp"
+#include "threepp/extras/editor/ObjectFactory.hpp"
+#endif
 #include "threepp/extras/editor/ScriptConfig.hpp"
 #include "threepp/extras/editor/SensorConfig.hpp"
 
 #include "threepp/geometries/BoxGeometry.hpp"
 #include "threepp/materials/MeshStandardMaterial.hpp"
+#include "threepp/objects/Group.hpp"
 #include "threepp/objects/Mesh.hpp"
 #include "threepp/scenes/Scene.hpp"
 
@@ -155,6 +160,44 @@ class Drawer:
         REQUIRE(subject != nullptr);
         return subject->position.y;
     }
+
+#ifdef THREEPP_EDITOR_WITH_PHYSX
+    // A default conveyor running +x at 1 m/s, with a box set down a hair over
+    // its upstream end. The belt surface sits at y = 0.75, so y = 1 rests on it
+    // after a substep — the same drop EditorConveyor_test uses against a plain
+    // PhysxWorld, authored here as a DOCUMENT so the player has to rebuild it.
+    std::string conveyorDocumentJson() {
+
+        SceneDocument authoring;
+        auto& scene = authoring.scene();
+
+        auto conveyorNode = ObjectFactory::createConveyor(scene);
+        scene.add(conveyorNode);
+
+        auto config = ConveyorConfig::read(*conveyorNode).value();
+        config.speed = 1.f;
+        config.reverse = false;
+        config.write(*conveyorNode);
+        config.syncDerived(*conveyorNode);
+
+        auto cargo = Mesh::create(BoxGeometry::create(0.4f, 0.4f, 0.4f),
+                                  MeshStandardMaterial::create());
+        cargo->name = "Cargo";
+        cargo->position.set(-1.2f, 1.f, 0.f);
+        PhysicsConfig physics;
+        physics.enabled = true;
+        physics.body = PhysicsConfig::Body::Dynamic;
+        physics.shape = PhysicsConfig::Shape::Box;
+        physics.mass = 5.f;
+        physics.write(*cargo);
+        scene.add(cargo);
+
+        std::string error;
+        auto json = authoring.toJson(false, &error);
+        REQUIRE(error.empty());
+        return json;
+    }
+#endif
 
 }// namespace
 
@@ -369,6 +412,46 @@ TEST_CASE("a document that will not load is a failed run", "[player]") {
     CHECK(core.results().empty());
     CHECK(core.exitCode() == 1);
 }
+
+#ifdef THREEPP_EDITOR_WITH_PHYSX
+
+TEST_CASE("an authored conveyor conveys under the player, as it does under Play", "[player]") {
+
+    // The session set is the editor's, and this is the assertion that says so
+    // for the one session the player used to be missing: for a while it
+    // registered physics/animation/sensors/scripts and no conveyor, so an
+    // authored belt was inert scenery here — the exact divergence the header
+    // promises can never happen, live in the tree.
+    //
+    // Asserted on the CARGO rather than on conveyorCount, deliberately: a
+    // registered session that built no belts would still report a conveyor.
+    PlayerCore core;
+    std::string error;
+    REQUIRE(core.openJson(conveyorDocumentJson(), &error));
+    REQUIRE(core.beginEpisode(0, &error));
+
+    auto* cargo = core.scene().getObjectByName("Cargo");
+    REQUIRE(cargo != nullptr);
+    const float startX = cargo->position.x;
+
+    // Sampled DURING the run: the belt ends at x = 1.5 and cargo that conveys
+    // all the way falls off it, which is correct behaviour rather than the
+    // thing being asserted.
+    bool conveyed = false;
+    for (int i = 0; i < 300 && !conveyed; ++i) {
+        core.step(kFrame);
+        conveyed = cargo->position.x > startX + 0.8f// carried a metre along travel
+                   && cargo->position.y > 0.6f      // still on the belt, not fallen through
+                   && std::abs(cargo->position.z) < 0.3f;// and not shoved sideways
+    }
+    CHECK(conveyed);
+
+    const auto result = core.endEpisode();
+    CHECK(result.conveyorCount == 1);
+    CHECK(result.ok());
+}
+
+#endif// THREEPP_EDITOR_WITH_PHYSX
 
 TEST_CASE("an episode cannot be started twice", "[player]") {
 

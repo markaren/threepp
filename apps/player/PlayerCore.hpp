@@ -7,13 +7,16 @@
 // contract and episode independence are actually asserted rather than asserted
 // about.
 //
-// The sessions and their ORDER are the editor's, deliberately (see
-// EditorApp's constructor): physics, animation, sensors, scripts. Registration
-// order is update order, and PlayController stops them in the reverse of it, so
-// a script's stop() still has a world and the sensors still have an SDK. The
-// player is a second front end over that runtime, not a second runtime — if the
-// two ever disagree about the order, a scene that works in the editor stops
-// working in CI, which is the one thing this must never do.
+// The sessions and their ORDER are the editor's, deliberately (see EditorApp's
+// constructor): physics, conveyor, animation, audio, sensors, scripts.
+// Registration order is update order, and PlayController stops them in the
+// reverse of it, so a script's stop() still has a world and the sensors still
+// have an SDK. The player is a second front end over that runtime, not a second
+// runtime — if the two ever disagree about the order, or about WHICH sessions
+// run, a scene that works in the editor stops working in CI, which is the one
+// thing this must never do. Every optional session is gated on the same macro
+// the editor gates it on, so a build without PhysX, audio or Python drops
+// exactly the same sessions in both front ends.
 //
 // An EPISODE is one full play -> step* -> stop cycle. Stop restores the snapshot
 // PlayController took at play(), so the document an episode starts from is
@@ -36,6 +39,7 @@
 namespace threepp {
 
     class Group;
+    class Object3D;
     class Renderer;
     class Scene;
 
@@ -43,6 +47,8 @@ namespace threepp {
 
 namespace threepp::editor {
 
+    class AudioPlaySession;
+    class ConveyorPlaySession;
     class PhysicsPlaySession;
     class ScriptPlaySession;
     class SensorPlaySession;
@@ -79,6 +85,10 @@ namespace threepp::player {
         std::size_t sensorCount = 0;
         std::size_t sensorRows = 0;
         std::size_t bodyCount = 0;
+        // Conveyors the belt sim picked up. Zero in a build without PhysX, and
+        // zero for a document with none — but a document that HAS one and
+        // reports zero is the regression this exists to make visible in a log.
+        std::size_t conveyorCount = 0;
 
         [[nodiscard]] bool ok() const {
             return started && error.empty() && scriptErrors == 0;
@@ -115,6 +125,12 @@ namespace threepp::player {
         // session names its files after the sensor and truncates them on open.
         void setRecordDirectory(const std::filesystem::path& dir, bool perEpisodeSubdirectories);
         [[nodiscard]] bool recording() const { return recording_; }
+
+        // The node whose world pose the audio listener rides — a windowed
+        // player passes its camera. Borrowed. Null is the headless default and
+        // leaves the listener at the origin, which is what a run with nobody
+        // listening wants. No-op in a build without audio.
+        void setAudioListenerHost(Object3D* host);
 
         // Who empties scripting::debugDraw() at the end of each step.
         //
@@ -187,6 +203,8 @@ namespace threepp::player {
         editor::PlayController play_;
 
         std::shared_ptr<editor::PhysicsPlaySession> physics_;
+        std::shared_ptr<editor::ConveyorPlaySession> conveyor_;
+        std::shared_ptr<editor::AudioPlaySession> audio_;
         std::shared_ptr<editor::SensorPlaySession> sensors_;
         std::shared_ptr<editor::ScriptPlaySession> scripts_;
 

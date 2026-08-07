@@ -9,8 +9,12 @@
 # library.
 #
 # Every optional half is gated the way the editor gates it, and the player builds
-# and runs without any of them: no PhysX means a document plays without physics,
-# no Python means its scripts are loaded and not run.
+# and runs without any of them: no PhysX means a document plays without physics
+# and its conveyors stay decorative, no Python means its scripts are loaded and
+# not run, no audio means authored sounds are skipped. THREEPP_WITH_AUDIO needs
+# nothing here — it is PUBLIC on the threepp target, so linking the library is
+# what carries it, and the editor and the player therefore compile the same
+# AudioPlaySession.hpp.
 
 # The player minus the window. Its own library for the same reason
 # threepp_editor_scripting and threepp_editor_examples are: the headless test

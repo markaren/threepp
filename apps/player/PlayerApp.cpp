@@ -187,6 +187,13 @@ void PlayerApp::buildView() {
         orbit_ = std::make_unique<OrbitControls>(camera_, *canvas_);
         orbit_->enableDamping = true;
 
+        // Somebody is watching, so somebody can hear: the listener rides the
+        // camera, as it rides the editor's viewport camera. A headless run
+        // leaves this null and the listener stays at the origin — the sounds
+        // still load and still play, they are just not spatialized around
+        // anyone.
+        core_.setAudioListenerHost(&camera_);
+
         canvas_->onWindowResize([this](WindowSize size) {
             camera_.aspect = size.aspect();
             camera_.updateProjectionMatrix();
@@ -391,6 +398,10 @@ void PlayerApp::report(const EpisodeResult& result) {
               << result.seconds << " s sim, " << result.scriptInstances << " script(s), "
               << result.scriptErrors << " error(s), " << result.bodyCount << " bodies, "
               << result.sensorCount << " sensor(s)";
+    // Only when the document has them: a line that says "0 conveyors" on every
+    // scene teaches nobody anything, but a scene that HAD one and now reports
+    // none is exactly what somebody reading a CI log needs to see.
+    if (result.conveyorCount > 0) std::cout << ", " << result.conveyorCount << " conveyor(s)";
     if (core_.recording()) std::cout << ", " << result.sensorRows << " row(s) recorded";
     if (!result.error.empty()) std::cout << " [" << result.error << "]";
     std::cout << std::endl;
