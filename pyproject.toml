@@ -48,8 +48,19 @@ dependencies = ["numpy"]
 
 # `pip install threepp[rl]` adds the owned PPO trainer's dependency. (GpuSim
 # itself additionally requires a PhysX-enabled source build.)
+#
+# `threepp[editor]` pulls the scene-editor application (its own package,
+# `pip install threepp-editor` works just as well). UNPINNED on purpose: the
+# CI version step rewrites only this file's `version =` line, so a `==` pin
+# here would forever point at a version that never ships — the two packages
+# stay in lockstep by being tagged together, not by metadata. The sys_platform
+# marker makes the extra a no-op on Linux/macOS rather than an install error:
+# editor wheels are Windows-only today (the exe embeds CPython, and
+# libpython-linking executables sit outside manylinux practice).
 [project.optional-dependencies]
 rl = ["torch"]
+editor = ["threepp-editor; sys_platform == 'win32'"]
+full = ["threepp[rl,editor]"]
 
 [project.urls]
 Homepage = "https://github.com/markaren/threepp"

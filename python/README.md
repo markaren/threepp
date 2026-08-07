@@ -47,6 +47,18 @@ Releases page, then:
 pip install ./threepp-2026.6.17-cp312-cp312-win_amd64.whl
 ```
 
+The **scene editor** is its own package — author physics-ready scenes, robots
+and sensors visually, then drive them from Python:
+
+```sh
+pip install threepp-editor      # or: pip install threepp[editor]  (Windows)
+threepp-editor
+```
+
+(`threepp[full]` = `[rl,editor]`. The editor ships Windows wheels only; the
+extra is a no-op elsewhere, and `pip install threepp-editor` states the
+platform requirement honestly.)
+
 Or build from source (needs a C++ compiler + CMake ≥ 3.21; pybind11 is fetched
 automatically):
 
