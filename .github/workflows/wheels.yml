@@ -28,6 +28,13 @@ on:
   push:
     tags:
       - '2[0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]'   # date releases, e.g. 2026-06-17
+      # Same-day re-release, e.g. 2026-06-17-2. PyPI filenames are immutable —
+      # a botched 2026.6.17 can never be re-uploaded, and without this pattern
+      # the fastest legal fix is waiting for tomorrow's date. The version step's
+      # dash-to-dot rewrite already handles it: 2026-06-17-2 -> 2026.06.17.2,
+      # which PEP 440 sorts after 2026.6.17 exactly as intended. Yank the bad
+      # release on PyPI, tag with the suffix, done.
+      - '2[0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]-[0-9]'
 
 jobs:
   build_wheels:
