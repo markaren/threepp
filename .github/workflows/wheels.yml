@@ -1,18 +1,18 @@
-# Build redistributable wheels (GL backend) for the `threepp` Python package.
+# Build redistributable wheels for the `threepp` and `threepp-editor` packages.
 #
-# Two paths, and only one of them publishes anywhere real:
+# Two paths:
 #
-#   push a date tag (YYYY-MM-DD)  -> build, then ATTACH to that GitHub Release.
+#   push a date tag (YYYY-MM-DD)  -> build, PUBLISH both packages to PyPI, and
+#                                    attach everything to that GitHub Release.
 #                                    Version is the PEP 440 form of the tag
 #                                    (2026-06-17 -> 2026.06.17).
 #   workflow_dispatch             -> build, then REHEARSE the upload against
 #                                    TestPyPI as <version>.dev<run_number>.
 #
-# So the real PyPI index is still untouched by both. Adding it is one job — copy
-# publish_testpypi, drop the repository-url, gate it on the tag instead of the
-# dispatch, and point it at a `pypi` environment — but note that a PyPI upload
-# is IRREVERSIBLE: a filename can never be re-uploaded, even after deleting the
-# release. Rehearse on TestPyPI until the artifacts are boring.
+# A PyPI upload is IRREVERSIBLE: a filename can never be re-uploaded, even
+# after deleting the release. The dispatch path exists so every change to this
+# pipeline is rehearsed on TestPyPI until boring BEFORE a tag makes it real;
+# a botched release recovers via the same-day suffix tag (2026-06-17-2).
 #
 # The wheels ship the GL renderer, CPU PhysX physics (PhysxWorld, articulations,
 # proprioceptive sensors) AND the Vulkan deferred renderer with its G-buffer
@@ -391,6 +391,35 @@ jobs:
           # The .devN version above already makes each run unique; this only
           # covers a re-run of the SAME run, which would otherwise 400.
           skip-existing: true
+
+  # The real thing. Everything this job does was rehearsed on TestPyPI first:
+  # same artifacts, same merge, same action, same OIDC exchange — only the index
+  # differs. Tag-gated, and behind the `pypi` environment so repository-side
+  # protection rules (required reviewers, if configured) gate the upload.
+  #
+  # One step publishes BOTH projects: the trusted-publisher identity (this
+  # workflow) is registered for threepp (environment: pypi) and threepp-editor
+  # (no environment constraint = wildcard; tighten to `pypi` in the project's
+  # publishing settings after its first release exists — pending publishers
+  # cannot share an identical identity tuple, which is why it started env-less).
+  #
+  # Deliberately NO skip-existing: versions derive from the tag, so a duplicate
+  # filename here means something is genuinely wrong (a re-run of a consumed
+  # tag) and must fail loudly — recovery is the suffix tag, never overwrite.
+  publish_pypi:
+    name: Publish to PyPI
+    needs: [ build_wheels, build_editor_wheels, build_sdist ]
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/2')
+    environment: pypi
+    permissions:
+      id-token: write        # OIDC trusted publishing — no token, no secret
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - uses: pypa/gh-action-pypi-publish@release/v1
 
   release:
     name: Attach wheels to the GitHub Release
