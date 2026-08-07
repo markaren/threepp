@@ -8,6 +8,7 @@
 #include "pugixml.hpp"
 
 #include <algorithm>
+#include <iterator>
 
 
 using namespace threepp;

@@ -3,6 +3,7 @@
 
 #include "threepp/loaders/xacro/YamlLite.hpp"
 
+#include <algorithm>
 #include <cctype>
 #include <charconv>
 #include <cmath>

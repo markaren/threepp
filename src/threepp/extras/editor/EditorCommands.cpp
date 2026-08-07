@@ -5,6 +5,7 @@
 #include "threepp/textures/Texture.hpp"
 
 #include <algorithm>
+#include <iterator>
 
 using namespace threepp;
 using namespace threepp::editor;

@@ -4,6 +4,7 @@
 #include "quickhull.hpp"
 
 #include <array>
+#include <iterator>
 
 using namespace threepp;
 

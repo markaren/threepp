@@ -19,6 +19,7 @@
 #include "threepp/objects/Mesh.hpp"
 
 #include <algorithm>
+#include <cmath>
 
 
 using namespace threepp;

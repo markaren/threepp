@@ -1,6 +1,8 @@
 
 #include "threepp/math/Interpolant.hpp"
 
+#include <limits>
+
 using namespace threepp;
 
 Interpolant::Interpolant(Sample parameterPositions, Sample sampleValues, int sampleSize, Sample* resultBuffer)
