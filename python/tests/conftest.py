@@ -23,8 +23,15 @@ def _release_physx_between_tests():
     yield
     gc.collect()
 
-# Make the built `threepp` module (in python/, the parent of tests/) importable.
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+# Make the built `threepp` module (in python/, the parent of tests/) importable —
+# UNLESS the run is deliberately pointed at an installed wheel. This insert
+# otherwise SHADOWS site-packages, which once made a whole "suite passed against
+# the installed wheel" verification silently test the dev tree instead (the venv
+# didn't even have threepp; the suite went green anyway). With
+# THREEPP_TEST_INSTALLED=1 the dev tree stays off sys.path, so `import threepp`
+# resolves to the environment's own package and the tests verify the artifact.
+if not os.environ.get("THREEPP_TEST_INSTALLED"):
+    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import threepp as tp  # noqa: E402
 
