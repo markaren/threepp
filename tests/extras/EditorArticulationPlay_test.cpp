@@ -211,6 +211,75 @@ namespace {
 }// namespace
 
 
+TEST_CASE("A failed articulation load says why") {
+
+    // loadArticulation builds its own URDFLoader, uses it, and lets it die -
+    // so everything the parser worked out about the file (an xacro line
+    // number, an unreadable include, a document with no <robot> root) went
+    // with it, and the caller got back an empty result that says only "no".
+    // The result now carries the account out. python's load_articulation puts
+    // it in the exception, which is where a ROS node reads it.
+    const auto dir = std::filesystem::temp_directory_path() / "threepp-articulation-test";
+    std::filesystem::create_directories(dir);
+
+    PhysxWorld::Settings settings;
+    settings.fixedTimestep = kFrame;
+    settings.maxSubSteps = 1;
+
+    SECTION("a file that is not there") {
+
+        PhysxWorld world(settings);
+        const auto missing = dir / "no_such_robot.urdf";
+        std::error_code ec;
+        std::filesystem::remove(missing, ec);
+
+        auto built = loadArticulation(world, missing, URDFArticulationOptions{});
+        REQUIRE_FALSE(built.articulation);
+        REQUIRE_FALSE(built.error.empty());
+        CHECK(built.error.find("no_such_robot") != std::string::npos);
+        CHECK_FALSE(built.diagnostics.empty());
+    }
+
+    SECTION("a xacro that cannot expand") {
+
+        PhysxWorld world(settings);
+        const auto path = dir / "undefined_property.urdf.xacro";
+        // The undefined name is on line 4, which is what the assertion below
+        // reads back out of the message.
+        std::ofstream(path, std::ios::trunc) << R"XML(<?xml version='1.0'?>
+<robot name='x' xmlns:xacro='http://www.ros.org/wiki/xacro'>
+  <link name='base'><visual><geometry>
+    <box size='${nope} 1 1'/>
+  </geometry></visual></link>
+</robot>
+)XML";
+
+        auto built = loadArticulation(world, path, URDFArticulationOptions{});
+        REQUIRE_FALSE(built.articulation);
+        REQUIRE_FALSE(built.error.empty());
+        // The name it could not resolve AND the line it was on - the two
+        // things that turn "it failed" into a fix.
+        CHECK(built.error.find("nope") != std::string::npos);
+        CHECK(built.error.find(":4") != std::string::npos);
+    }
+
+    SECTION("a load that succeeds leaves the error empty") {
+
+        PhysxWorld world(settings);
+        const auto path = writeFixture();
+
+        URDFArticulationOptions opts;
+        opts.fixedBase = true;
+        opts.renderVisuals = false;
+        auto built = loadArticulation(world, path, opts);
+        REQUIRE(built.articulation);
+        // The invariant the field is documented with: empty exactly when the
+        // articulation came up. Diagnostics may still hold warnings, which is
+        // why the two are separate.
+        CHECK(built.error.empty());
+    }
+}
+
 TEST_CASE("The articulation and the visual robot agree on where a link is") {
 
     const auto path = writeFixture();

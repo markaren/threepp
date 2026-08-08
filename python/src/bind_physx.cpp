@@ -543,7 +543,14 @@ namespace threepp_py {
                          opts.renderVisuals = render_visuals;
                          opts.scale = scale;
                          auto r = loadArticulation(w, std::filesystem::path(path), opts);
-                         if (!r.articulation) throw std::runtime_error("load_articulation: could not read URDF: " + path);
+                         if (!r.articulation) {
+                             // r.error is the URDFLoader's own account, copied out
+                             // before the loader inside loadArticulation died with
+                             // it. Without it this said only "could not read",
+                             // about a file the parser could describe in detail.
+                             throw std::runtime_error("load_articulation: could not read '" + path +
+                                                      "'" + (r.error.empty() ? "" : " - " + r.error));
+                         }
                          return std::make_tuple(std::move(r.articulation), std::move(r.meshes), std::move(r.jointNames));
                      },
                      py::arg("path"), py::arg("fixed_base") = false,

@@ -320,6 +320,110 @@ class Twinnames:
     CHECK_FALSE(scripting::inspect(folded).error.empty());
 }
 
+TEST_CASE("a failed URDF load tells a script why", "[editor][scripting]") {
+
+    // The bindings used to raise "URDFLoader: failed to parse URDF XML" and
+    // drop everything the parser had worked out. That is the wrong end of the
+    // trade for the case this exists to serve: a ROS node handed
+    // /robot_description off a topic, where the XML never touched a disk and
+    // the exception text IS the whole diagnosis.
+    //
+    // Findings ride the object's SCALE, as elsewhere in these tests - nothing
+    // else writes to it, so a start() that never ran cannot read as a pass.
+    const auto path = writeScript("urdf_diag.py", R"(
+import threepp
+
+
+class UrdfDiag:
+    def start(self, obj):
+        loader = threepp.URDFLoader()
+
+        # Malformed XML through parse(), which is the /robot_description shape.
+        try:
+            loader.parse(".", "<robot name='x'><link")
+            obj.scale.x = -1.0
+        except RuntimeError as exc:
+            # The parser's own words, not a generic sentence. 2.0 for the real
+            # reason, -2.0 for a raise that carried nothing.
+            obj.scale.x = 2.0 if "parse the document" in str(exc) else -2.0
+
+        # The same account is readable afterwards rather than only thrown.
+        obj.scale.y = 2.0 if loader.last_error and len(loader.diagnostics) == 1 else -1.0
+
+        # And a xacro failure carries the FILE AND LINE, which is the whole
+        # difference between a fix and a guess.
+        try:
+            loader.parse(".", "<robot name='x' xmlns:xacro='http://www.ros.org/wiki/xacro'>"
+                              "<link name='${nope}'/></robot>")
+            obj.scale.z = -1.0
+        except RuntimeError as exc:
+            obj.scale.z = 2.0 if "nope" in str(exc) else -2.0
+
+    def update(self, dt):
+        pass
+)");
+
+    auto scene = Scene::create();
+    auto probe = attach(*scene, path);
+
+    ScriptPlaySession scripts;
+    scripts.start(*scene);
+    CHECK(scripts.errorFor(probe->uuid).empty());
+
+    CHECK(probe->scale.x == 2.f);// the raise carries the parser's reason
+    CHECK(probe->scale.y == 2.f);// last_error / diagnostics are readable
+    CHECK(probe->scale.z == 2.f);// and a xacro failure names what it could not resolve
+
+    scripts.stop();
+}
+
+TEST_CASE("a URDF that loads can still have something to say", "[editor][scripting]") {
+
+    // The half `last_error` cannot express. A xacro that expands FINE still
+    // warns - a redefined macro, an attribute a macro never declared - and
+    // those warnings only ever went to stderr, where a script cannot see them
+    // and a GUI has nowhere to put them.
+    const auto path = writeScript("urdf_warn.py", R"(
+import threepp
+
+
+class UrdfWarn:
+    def start(self, obj):
+        loader = threepp.URDFLoader()
+        xml = (
+            "<robot name='w' xmlns:xacro='http://www.ros.org/wiki/xacro'>"
+            "<xacro:macro name='thing' params='size'><link name='l${size}'/></xacro:macro>"
+            "<xacro:macro name='thing' params='size'><link name='m${size}'/></xacro:macro>"
+            "<xacro:thing size='1' colour='red'/>"
+            "<link name='base'/>"
+            "</robot>"
+        )
+        robot = loader.parse(".", xml)          # succeeds
+        obj.scale.x = 2.0 if robot is not None else -1.0
+        # Succeeded, so there is no error...
+        obj.scale.y = 2.0 if loader.last_error == "" else -1.0
+        # ...and yet there is plenty to say.
+        warnings = [d for d in loader.diagnostics if "warning" in d]
+        obj.scale.z = 2.0 if len(warnings) >= 2 else -1.0
+
+    def update(self, dt):
+        pass
+)");
+
+    auto scene = Scene::create();
+    auto probe = attach(*scene, path);
+
+    ScriptPlaySession scripts;
+    scripts.start(*scene);
+    CHECK(scripts.errorFor(probe->uuid).empty());
+
+    CHECK(probe->scale.x == 2.f);// it loaded
+    CHECK(probe->scale.y == 2.f);// with no error
+    CHECK(probe->scale.z == 2.f);// and warnings all the same
+
+    scripts.stop();
+}
+
 TEST_CASE("ScriptPlaySession runs start/update/stop", "[editor][scripting]") {
 
     const auto path = writeScript("spinner.py", kSpinner);

@@ -90,6 +90,18 @@ namespace threepp {
         // their actors so an IMU or contact sensor authored on one resolves.
         std::vector<std::pair<std::string, ArticulationLink>> linkForName;
 
+        // Why this went the way it did, straight from the URDFLoader that read
+        // the file (see URDFLoader::diagnostics / lastError). The loader is
+        // built INSIDE loadArticulation and dies with it, so without copying
+        // these out a caller has no way to reach them at all - and the failure
+        // path returns an empty result, which on its own says only "no".
+        //
+        // `error` is empty exactly when `articulation` is non-null.
+        // `diagnostics` can be non-empty either way: a URDF that builds fine
+        // still warns about a mesh it could not find.
+        std::string error;
+        std::vector<std::string> diagnostics;
+
         [[nodiscard]] std::size_t numDof() const { return jointNames.size(); }
     };
 
@@ -166,7 +178,19 @@ namespace threepp {
         // only load each link's <visual> mesh from disk when we will actually render it — otherwise this
         // dominates a large batch build (~0.45 s/env for a detailed arm that never renders in training).
         URDFArticulationDesc desc = loader.parseArticulation(path, opts.renderVisuals);
-        if (desc.links.empty()) return result;// unreadable / no single root
+        // Copied out before anything else can go wrong, and on both paths: the
+        // loader is a local and takes its account of the file with it.
+        result.diagnostics = loader.diagnostics();
+        if (desc.links.empty()) {
+            result.error = loader.lastError();
+            if (result.error.empty()) {
+                // parseArticulation can come back empty without the XML being
+                // at fault - a document that parses cleanly but has no single
+                // root link. Saying so beats an empty string.
+                result.error = "no single root link in " + path.string();
+            }
+            return result;// unreadable / no single root
+        }
 
         // Units, before anything is built from the description.
         scaleArticulationDesc(desc, opts.scale);

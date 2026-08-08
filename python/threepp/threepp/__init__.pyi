@@ -5400,13 +5400,33 @@ class TreeParams:
 class URDFLoader:
     def __init__(self) -> None:
         ...
+    @property
+    def last_error(self) -> str:
+        """
+        Why the most recent load/parse/parse_articulation failed: the errors it produced, joined into one message. Empty after a call that succeeded, and never empty after one that did not.
+
+        The raise already carries this. It is here for the caller that wants to report rather than propagate - a ROS node logging a bad /robot_description and carrying on, say.
+        """
+    @property
+    def diagnostics(self) -> list[str]:
+        """
+        Everything the most recent call had to say: warnings first, then errors, each group in the order it was produced.
+
+        Not the same as `last_error`, and the difference is the point: the warnings come from the XACRO expansion - a redefined macro, an undeclared attribute being ignored, a name resolved as an arg rather than a property - and a document that produces them still loads. They only ever went to stderr, where a script cannot see them and a GUI has nowhere to show them.
+
+        Cleared at the start of every call, so an empty list after a success means there was genuinely nothing to say.
+        """
     def load(self, path: str) -> Robot:
         """
         Load a .urdf/.xacro file into a Robot (meshes via ModelLoader).
+
+        Raises RuntimeError carrying the parser's own explanation - the same text `last_error` holds, which for a xacro failure includes the file and LINE. Read `diagnostics` afterwards for the warnings too, which a load that SUCCEEDS can also produce.
         """
     def parse(self, base_dir: str, xml: str) -> Robot:
         """
         Parse URDF XML from a string; base_dir resolves relative mesh paths.
+
+        Raises RuntimeError carrying the parser's own explanation, exactly as `load` does. This is the call a ROS node makes on /robot_description, where the XML came off a topic and there is no file to go and look at.
         """
     def set_args(self, args: collections.abc.Mapping[str, str]) -> None:
         """
