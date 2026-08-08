@@ -28,24 +28,24 @@ canvas.animate(lambda: renderer.render(scene, camera))
 
 > **Status: pre-1.0 / alpha.** This is a young package and the API is still
 > moving — it **may change between releases**. Releases are dated (a `YYYY-MM-DD`
-> tag builds a `YYYY.MM.DD` wheel); pin a version (`threepp==2026.6.17`) and
-> check the release notes before upgrading.
+> tag builds a `YYYY.MM.DD` wheel); pin the exact release you tested and check
+> the release notes before upgrading.
 
-Prebuilt wheels (Windows / Linux, CPython 3.10–3.14) are attached to each
-[GitHub release](https://github.com/markaren/threepp/releases) — no build tools
-or system libraries needed. They ship the GL renderer, **CPU PhysX physics**
+Prebuilt wheels (Windows / Linux, CPython 3.10–3.14) are on PyPI — no build
+tools or system libraries needed:
+
+```sh
+pip install threepp
+```
+
+They ship the GL renderer, **CPU PhysX physics**
 (`PhysxWorld`, articulations, proprioceptive sensors — `tp.HAS_PHYSX == True`)
 **and the Vulkan deferred renderer** with its G-buffer AOVs
 (`tp.HAS_VULKAN == True`). Vulkan needs a Vulkan-capable GPU driver at runtime —
 on machines without one the wheel still imports and renders GL, and
 `tp.vulkan_available()` tells you which world you're in. macOS has no prebuilt
 wheel — `pip install` builds it from source there (GL-only; a C++ compiler and
-CMake are all it needs). Download the wheel matching your OS + Python from the
-Releases page, then:
-
-```sh
-pip install ./threepp-2026.6.17-cp312-cp312-win_amd64.whl
-```
+CMake are all it needs).
 
 The **scene editor** is its own package — author physics-ready scenes, robots
 and sensors visually, then drive them from Python:
@@ -191,17 +191,20 @@ python examples/headless_render.py
 - **Rigid-body physics** (when built with PhysX, see below): `PhysxWorld` +
   `RigidBody` — add `Mesh`es as dynamic/static bodies (box/sphere/capsule, convex
   hull, or triangle mesh), `step(dt)`, and the bound meshes follow the simulation
-  (`tp.HAS_PHYSX`).
-- **Proprioceptive sensors** (PhysX builds): `Imu` — a gyroscope + accelerometer
-  attached to any scene node, driven from the physics step loop, with a
-  configurable `NoiseModel`. See *Proprioceptive sensors* below.
+  (`tp.HAS_PHYSX`). Reduced-coordinate `Articulation`s (URDF robots with joints,
+  limits and drives) are bound too.
+- **Proprioceptive sensors** (PhysX builds): `Imu` (gyroscope + accelerometer),
+  `JointEncoder`, `ContactSensor` and `ForceTorqueSensor` — attached to scene
+  nodes, driven from the physics step loop, with configurable seeded
+  `NoiseModel`s. See *Proprioceptive sensors* below.
 - **Vulkan deferred renderer + G-buffer AOVs** (when built with Vulkan, see
   below): `VulkanRenderer.render_aov(scene, camera, aov)` returns a deferred
   G-buffer attachment as `(H, W, 3)` uint8 — `'rgb'`, `'normals'`,
-  `'segmentation'` (per-instance ids), `'albedo'`, `'motion'` — and
-  `read_depth(scene, camera)` returns **metric depth** as `(H, W)` float32
-  (distance from the camera in scene units). This is the "labels for free" path
-  for synthetic-data generation.
+  `'segmentation'` (per-instance ids), `'albedo'`, `'motion'` — and the lossless
+  typed family reads the native attachments: `read_depth` (**metric** `(H, W)`
+  float32), `read_instance_ids` (**raw** uint32 ids), `read_normals_float`,
+  `read_motion`, `read_aovs_typed`. This is the "labels for free" path for
+  synthetic-data generation.
 - **FFT ocean** (renders under the Vulkan backend): `tp.Ocean(size=1000.0)` is a
   ready-made 3-cascade Phillips/FFT-displaced water surface — waves, foam, and
   transmission. Add it to a scene and render. Tune `ocean.params` (wind / cascades
@@ -369,18 +372,19 @@ cmake --build build --target threepp_py
 
 `tp.HAS_VULKAN` reports whether the backend was compiled in.
 
-**Current scope / honest limits.** The colour AOVs come out as `(H, W, 3)` uint8
-via the renderer's debug-resolve pass: normals as `n*0.5+0.5`, segmentation as
-per-id hashed colours, albedo as *linear* albedo (so it looks gamma-/hue-off as
-a viewed image, but the data is the real linear base colour). **Depth is metric
-float32** (`read_depth`) — the debug-resolve pass packs the reverse-Z depth into
-24 bits, which the host decodes and linearizes with the camera near/far;
-verified accurate to a fraction of a unit against known distances. Still not
-exposed: **raw integer** instance ids (segmentation comes back as hashed colours,
-not the underlying ids), which wants a device-buffer readback. Driving is via the
-deferred frame-model under the hood (submit/present is deferred to the canvas
-frame-end callback, so each `render*` repeats a few frames to make the MAILBOX
-readback deterministic — tune with `set_flush_frames`).
+**Two readback paths.** The 8-bit visualisation AOVs (`render_aov` /
+`render_aovs`) come out as `(H, W, 3)` uint8 via the renderer's debug-resolve
+pass: normals as `n*0.5+0.5`, segmentation as per-id hashed colours, albedo as
+*linear* albedo (so it looks gamma-/hue-off as a viewed image, but the data is
+the real linear base colour). The **lossless** path copies the native G-buffer
+attachments straight to host memory: `read_depth` → **metric** `(H, W)` float32
+(full-precision native D32 read, verified accurate against known distances),
+`read_instance_ids` → **raw** `(H, W)` uint32 per-instance ids,
+`read_normals_float`, `read_motion`, and `read_aovs_typed([...])` for several in
+one render. Driving is via the deferred frame-model under the hood
+(submit/present is deferred to the canvas frame-end callback, so each `render*`
+repeats a few frames to make the MAILBOX readback deterministic — tune with
+`set_flush_frames`).
 
 ## In-window UI (Dear ImGui)
 
@@ -468,8 +472,10 @@ cmake --build build --target threepp_py
 (Or, to reuse an existing install without the toolchain, pass
 `-Dunofficial-omniverse-physx-sdk_DIR=<vcpkg_installed>/x64-windows/share/unofficial-omniverse-physx-sdk`;
 the build then stages the PhysX runtime DLLs next to the module.) `tp.HAS_PHYSX`
-reports whether it was compiled in. Soft bodies and vehicles (which need the
-CUDA/GPU path) are not exposed yet — rigid bodies only.
+reports whether it was compiled in. Reduced-coordinate **articulations** (robots)
+are bound too — `Articulation` / `ArticulationLink`, built from a URDF in one
+call. Soft bodies and vehicles (which need the CUDA/GPU path) are not exposed
+yet.
 
 Combined with the Vulkan AOVs, this is the **dynamic** half of the synthetic-data
 story: physics gives you moving scenes, the G-buffer gives you per-frame
@@ -478,8 +484,9 @@ segmentation / depth / optical-flow labels for free.
 ## Proprioceptive sensors (IMU)
 
 On top of the PhysX world, threepp exposes a **proprioceptive sensor** suite for
-robotics — the first sensor is a production-quality `Imu` (gyroscope +
-accelerometer). A sensor **rides the scene graph**: you attach it to an
+robotics: `Imu` (gyroscope + accelerometer), `JointEncoder`, `ContactSensor` and
+`ForceTorqueSensor`, each with seeded noise models. The walkthrough below uses
+the `Imu`. A sensor **rides the scene graph**: you attach it to an
 `Object3D`, and that node's world frame *is* the measurement frame. Register it
 with the world and it is sampled from the physics step loop — one clean sample
 per fixed substep, timestamped with the accumulated sim time — so the sampling

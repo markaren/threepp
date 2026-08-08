@@ -64,7 +64,7 @@ lights, the frame loop, loaders and the two backends.
   so an authored scene runs in an ordinary threepp program with no editor present.
 * **Python bindings** — the scene graph, headless render-to-NumPy, PhysX, and
   `threepp.rl` (a GPU-vectorized RL stack).
-* Built-in loaders — models [Binary STL, OBJ/MTL, glTF/GLB incl. meshopt compression,
+* Built-in loaders — models [STL (binary & ASCII), OBJ/MTL, glTF/GLB incl. meshopt compression,
   COLLADA, SVG, URDF/xacro], images [PNG/JPEG, DDS, WebP, Radiance HDR, OpenEXR] and
   Gaussian-splat scans. `USDLoader` and `FBXLoader` are opt-in.
 * **Native xacro support** — URDF loading takes `.urdf.xacro` directly (macros, properties,
@@ -454,14 +454,14 @@ that the package does not carry the Vulkan, PhysX, Python or application halves.
 
 ## Gallery
 
-| |                                                                                                                                               |
-|:---:|:---------------------------------------------------------------------------------------------------------------------------------------------:|
-| <img src="doc/screenshots/aalesund.png" width="400" alt="Ålesund terrain"><br>*Ålesund from Kartverket elevation data, NVDB roads and OSM footprints ([norway_terrain](examples/extras/terrain/norway_terrain.cpp))* |            <img src="doc/screenshots/sponza.png" width="400" alt="Sponza"><br>*Sponza — probe GI, sky light through the openings*             |
-| <img src="doc/screenshots/forest.png" width="400" alt="Procedural forest"><br>*Procedural terrain, trees and vegetation ([forest_demo](examples/extras/vegetation/forest_demo.cpp))* | <img src="doc/screenshots/depth_sensor.png" width="400" alt="Depth sensor"><br>*Depth-camera returns, range-coloured, with occlusion shadows* |
-|  <img src="doc/screenshots/lidar.png" width="400" alt="Lidar"><br>*LIDAR*    |                                                                       <img src="doc/screenshots/chess.png" width="400" alt="Chess"><br>*glTF Chessboard under HDRi sky*                                                                         |
-| <img src="doc/screenshots/detect.png" width="400" alt="Inference"><br>*RF-DETR detection* |          <img src="doc/screenshots/Optimization.PNG" width="400" alt="Optimization"><br>*Optimization playground ([projects/Optimization](examples/projects/Optimization))*                                |
-| <img src="doc/screenshots/spline_editor.png" width="400" alt="Spline Editor"><br>*Spline editor* |                         <img src="doc/screenshots/robot_cell_capture.png" width="400" alt="SVG UI"><br>*SVG-based UI*                         |
-| <img src="doc/screenshots/tiger_svg.png" width="400" alt="SVG"><br>*SVG loader* |                               <img src="doc/screenshots/fonts.png" width="400" alt="Fonts"><br>*Text rendering*                               |
+|                                                                                                                                                                                                                      |                                                                                                                                                                    |
+|:--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------:|:------------------------------------------------------------------------------------------------------------------------------------------------------------------:|
+| <img src="doc/screenshots/aalesund.png" width="400" alt="Ålesund terrain"><br>*Ålesund from Kartverket elevation data, NVDB roads and OSM footprints ([norway_terrain](examples/extras/terrain/norway_terrain.cpp))* |                       <img src="doc/screenshots/sponza.png" width="400" alt="Sponza"><br>*Sponza — probe GI, sky light through the openings*                       |
+|               <img src="doc/screenshots/spot_slam.png" width="400" alt="Procedural forest"><br>*Procedural terrain, trees and vegetation ([forest_demo](examples/extras/vegetation/forest_demo.cpp))*                |           <img src="doc/screenshots/depth_sensor.png" width="400" alt="Depth sensor"><br>*Depth-camera returns, range-coloured, with occlusion shadows*            |
+|                                                                       <img src="doc/screenshots/lidar.png" width="400" alt="Lidar"><br>*LIDAR*                                                                       |                                         <img src="doc/screenshots/chess.png" width="400" alt="Chess"><br>*glTF Chessboard*                                         |
+|                                                              <img src="doc/screenshots/detect.png" width="400" alt="Inference"><br>*RF-DETR detection*                                                               | <img src="doc/screenshots/Optimization.PNG" width="400" alt="Optimization"><br>*Optimization playground ([projects/Optimization](examples/projects/Optimization))* |
+|                                                              <img src="doc/screenshots/spline_editor.png" width="400" alt="Spline Editor"><br>*Splines*                                                              |                              <img src="doc/screenshots/robot_cell_capture.png" width="400" alt="SVG UI"><br>*URDF with SVG-based UI*                               |
+|                                                                   <img src="doc/screenshots/tiger_svg.png" width="400" alt="SVG"><br>*SVG loader*                                                                    |                                         <img src="doc/screenshots/fonts.png" width="400" alt="Fonts"><br>*Text rendering*                                          |
 
 
 ## License

@@ -154,8 +154,11 @@ angles are **radians** — `math::degToRad(45)` converts. There is no enforced l
 in practice everything (examples, physics, loaders) treats 1 unit = 1 meter.
 
 Coming from robotics or CAD, where Z-up is common: loaders for formats that declare an
-up-axis (Collada, USD) convert on import, and `URDFLoader` owns the frame handling for the
-meshes a robot description references — your Z-up asset arrives Y-up in the scene.
+up-axis (Collada, USD) convert on import, so those assets arrive Y-up in the scene.
+`URDFLoader` is the exception — a loaded robot keeps URDF's native Z-up frame (the loader
+only fixes per-primitive conventions, e.g. URDF's Z-aligned cylinders onto threepp's
+Y-aligned `CylinderGeometry`). Either rotate the robot root `-π/2` about X yourself, or
+work Z-up and set `camera->up` to `(0, 0, 1)` like the robotics examples do.
 
 Transforms compose down the tree, so grouping is how you build articulated things:
 
@@ -603,7 +606,8 @@ Built-in controls, all taking the event source as their last argument:
 
 ## Loading models
 
-The generic front door dispatches on file extension (`.obj`, `.dae`, `.gltf`, `.glb`, `.stl`):
+The generic front door dispatches on file extension (`.obj`, `.dae`, `.gltf`, `.glb`, `.stl` —
+plus `.usd*` and `.fbx` when the opt-in USD/FBX loaders are compiled in):
 
 ```cpp
 ModelLoader loader;
@@ -865,12 +869,12 @@ A reading order:
 | [objects/instancing.cpp](../examples/objects/instancing.cpp) | Thousands of objects, one draw call |
 | [misc/transmission.cpp](../examples/misc/transmission.cpp) | Glass and `MeshPhysicalMaterial` |
 
-| Deeper | |
-|---|---|
+| Deeper |                                              |
+|---|----------------------------------------------|
 | [vulkan/vulkan_ocean_minimal.cpp](../examples/vulkan/vulkan_ocean_minimal.cpp) | Deferred backend, in ~40 lines of scene code |
-| [helpers/lidar.cpp](../examples/helpers/lidar.cpp), [helpers/depth_sensor.cpp](../examples/helpers/depth_sensor.cpp) | Simulated sensors |
-| [extras/](../examples/extras) | Terrain, vegetation, curves |
-| [projects/](../examples/projects) | Complete applications (Crane3R, Drive, FPS, MapView) |
+| [helpers/lidar.cpp](../examples/helpers/lidar.cpp), [helpers/depth_sensor.cpp](../examples/helpers/depth_sensor.cpp) | Simulated sensors                            |
+| [extras/](../examples/extras) | Terrain, vegetation, curves                  |
+| [projects/](../examples/projects) | More complex examples                        |
 
 Because the API mirrors three.js, the [three.js documentation](https://threejs.org/docs/) and
 its [examples](https://threejs.org/examples/) are a usable reference for the shared surface —

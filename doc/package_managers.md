@@ -50,7 +50,7 @@ Example `xmake.lua`:
 ```lua
 add_rules("mode.debug", "mode.release")
 add_requires("imgui", {configs = {glfw_opengl3 = true}}) -- optional dependency for UI widgets
-add_requires("assimp") -- optional dependency for importing assembly models (.glb/.dae)
+add_requires("assimp") -- optional catch-all importer (.fbx, .blend, …; glTF/COLLADA load natively)
 add_requires("conan::threepp/0.0.20260310", {
     alias = "threepp",
     configs = {
