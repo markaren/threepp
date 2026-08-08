@@ -1657,6 +1657,24 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                 for (auto it = displacedStates.begin(); it != displacedStates.end(); ) {
                     if (it->second->liveCheck.expired()) {
                         auto& st = it->second;
+                        // The deferred-shade inputs (bindings 13/14) cache this
+                        // state's fine-cascade height + foam views, set once in
+                        // ensureDisplacedState. Those images die with the state,
+                        // so the cache must fall back to the dummies before the
+                        // all-slots descriptor rewrite later in this build —
+                        // otherwise it writes destroyed VkImageViews into live
+                        // sets (VUID 02996), and the ICD dereferencing the dead
+                        // handle is the load-dependent access violation.
+                        for (const auto& c : st->cascades) {
+                            if (c.dyn && c.dyn->ht().view == oceanFineHeightView) {
+                                oceanFineHeightView = oceanFineHeightDummy.view;
+                                oceanFineTileSize   = 0.0f;
+                            }
+                        }
+                        if (st->foamImage.view == oceanFoamView) {
+                            oceanFoamView     = oceanFoamDummy.view;
+                            oceanFoamTileSize = 0.0f;
+                        }
                         if (st->blas) {
                             auto& rec = st->blas;
                             if (rec->as) ctx->rt().destroyAccelerationStructure(ctx->device(), rec->as, nullptr);
