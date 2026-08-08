@@ -1367,6 +1367,11 @@ int EditorApp::runSelfTest() {
         step();
         check(selectionBox_ && selectionBox_->visible, "and the selection outline");
 
+        // Whatever the View menu was left on — the axes default to off — has to
+        // come back out of the session unchanged.
+        const bool gridWas = grid_ && grid_->visible;
+        const bool axesWas = axes_ && axes_->visible;
+
         startPlay();
         step(2);
         check(markers_ && !markers_->visible, "play hides the marker icons");
@@ -1416,7 +1421,7 @@ int EditorApp::runSelfTest() {
 
         // Deliberately NOT hidden: the point cloud is what the scene is DOING,
         // and the grid and the axes are a View-menu preference nobody revoked.
-        check(grid_ && grid_->visible && axes_ && axes_->visible,
+        check(grid_ && grid_->visible == gridWas && axes_ && axes_->visible == axesWas,
               "while the grid and the origin axes are the user's own preference");
 
         // Put the scene back the way the drives that follow expect it.

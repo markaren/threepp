@@ -418,6 +418,10 @@ EditorApp::EditorApp(const Options& options)
     overlay_->add(grid_);
 
     axes_ = AxesHelper::create(1.5f);
+    // Off until asked for: the grid already says where the ground is, and three
+    // coloured sticks at the origin are furniture in every scene that does not
+    // happen to be authored around it. View > Origin Axes switches them on.
+    axes_->visible = false;
     overlay_->add(axes_);
 
     markers_ = Group::create();
