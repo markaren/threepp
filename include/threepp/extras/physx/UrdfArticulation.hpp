@@ -31,6 +31,7 @@
 #include "threepp/objects/Mesh.hpp"
 
 #include <filesystem>
+#include <map>
 #include <memory>
 #include <string>
 #include <utility>
@@ -58,6 +59,17 @@ namespace threepp {
         // solves in SCALED units, which is what a caller mirroring joint values
         // onto an unscaled kinematic model has to undo.
         float scale = 1.f;
+        // xacro argument overrides, exactly as URDFLoader::setArgs takes them — the same
+        // `name:=value` pairs the xacro CLI accepts.
+        //
+        // A parameterised description is not optional detail: UR's ur.urdf.xacro derives its
+        // joint-limit, kinematics and visual yaml paths from $(arg ur_type), whose default
+        // ("ur5x") names a config directory that does not exist. Building the articulation
+        // without the caller's arguments therefore does not produce a slightly different robot,
+        // it produces no robot at all — while the KINEMATIC path (EditorApp::rearticulateRobots,
+        // which does pass RobotConfig::argMap()) renders the right one. Two rebuild paths
+        // disagreeing about what one document says is the bug this exists to prevent.
+        std::map<std::string, std::string> args;
     };
 
     struct URDFArticulationResult {
@@ -148,6 +160,9 @@ namespace threepp {
                                                    const URDFArticulationOptions& opts = {}) {
         URDFArticulationResult result;
         URDFLoader loader;
+        // The caller's xacro arguments, before anything is parsed — without them a parameterised
+        // description expands to the file's own defaults, which is a different robot (or none).
+        if (!opts.args.empty()) loader.setArgs(opts.args);
         // only load each link's <visual> mesh from disk when we will actually render it — otherwise this
         // dominates a large batch build (~0.45 s/env for a detailed arm that never renders in training).
         URDFArticulationDesc desc = loader.parseArticulation(path, opts.renderVisuals);

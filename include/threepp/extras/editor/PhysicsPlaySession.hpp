@@ -910,6 +910,10 @@ namespace threepp::editor {
             opts.selfCollision = artConfig->selfCollision;
             opts.solverPositionIterations = std::max(artConfig->iterations, 1);
             opts.scale = scale;
+            // The SAME arguments the document was imported with and the kinematic rebuild uses.
+            // Without this the articulation expands the xacro with the file's defaults and
+            // silently describes a different robot from the one on screen.
+            opts.args = robotConfig->argMap();
             // The visual robot IS what renders; the articulation's colliders are
             // an invisible physical twin bound to the sim. Never load or add them.
             opts.renderVisuals = false;

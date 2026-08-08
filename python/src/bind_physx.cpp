@@ -528,8 +528,10 @@ namespace threepp_py {
                      [](PhysxWorld& w, const std::string& path, bool fixed_base,
                         const std::array<float, 3>& base_position, float default_density,
                         float stiffness, float damping, float max_force, bool self_collision,
-                        int solver_position_iterations, bool render_visuals, float scale) {
+                        int solver_position_iterations, bool render_visuals, float scale,
+                        const std::map<std::string, std::string>& args) {
                          URDFArticulationOptions opts;
+                         opts.args = args;
                          opts.fixedBase = fixed_base;
                          opts.basePosition = Vector3(base_position[0], base_position[1], base_position[2]);
                          opts.defaultDensity = default_density;
@@ -550,6 +552,7 @@ namespace threepp_py {
                      py::arg("max_force") = 1e6f, py::arg("self_collision") = false,
                      py::arg("solver_position_iterations") = 12, py::arg("render_visuals") = true,
                      py::arg("scale") = 1.f,
+                     py::arg("args") = std::map<std::string, std::string>{},
                      // No keep_alive: the result is a tuple (can't be a weakref nurse). The returned
                      // articulation holds a PhysxWorld& — the caller must keep the world alive (urdf.py does).
                      "Import a URDF/xacro as a finalized Articulation (one shared parser with the C++ "
@@ -560,7 +563,10 @@ namespace threepp_py {
                      "stiffness/damping/max_force set a PD drive on every joint. scale reinterprets the "
                      "file's length units (a millimetre URDF in a metre world is 0.001) - shapes, joint "
                      "frames and prismatic limits are built scaled, masses stay as authored, and a "
-                     "prismatic DOF then reads and drives in the SCALED units.");
+                     "prismatic DOF then reads and drives in the SCALED units. `args` are xacro "
+                     "argument overrides, the same name:=value pairs the xacro CLI takes - a "
+                     "parameterised description built without them expands to the FILE's defaults, "
+                     "which for many robots names config paths that do not exist.");
 
         // GPU-resident batched articulation state I/O (the direct-GPU API). Build one
         // over many identical finalized articulations in a PhysxWorld(direct_gpu=True),

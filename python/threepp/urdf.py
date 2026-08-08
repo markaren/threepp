@@ -60,7 +60,7 @@ class UrdfArticulation:
 def load_articulation(world, path, *, fixed_base=False, base_position=(0, 0, 0),
                       default_density=1000.0, stiffness=0.0, damping=0.0, max_force=1e6,
                       self_collision=False, solver_position_iterations=12, render_visuals=True,
-                      scale=1.0):
+                      scale=1.0, args=None):
     """Import a URDF/xacro as a reduced-coordinate `Articulation`. Returns a UrdfArticulation.
 
     The articulation is built at the zero joint configuration. `stiffness`/`damping`/`max_force`
@@ -71,6 +71,11 @@ def load_articulation(world, path, *, fixed_base=False, base_position=(0, 0, 0),
     0.001. Shapes, joint frames and prismatic limits are built scaled; masses stay as authored (URDF
     states kilograms whatever the geometry was drawn in) and inertia follows from the scaled shapes.
     A prismatic joint then reads and drives in the SCALED units.
+
+    `args` are xacro argument overrides — `{"ur_type": "ur5e"}` is the same as `ur_type:=ur5e` on
+    the xacro CLI. A parameterised description built WITHOUT them expands to the file's own
+    defaults, which is a different robot and for many (UR's `ur.urdf.xacro` among them) names
+    config paths that do not exist.
     """
     if not tp.HAS_PHYSX:
         raise RuntimeError("threepp.urdf.load_articulation needs a PhysX-enabled threepp build")
@@ -85,5 +90,6 @@ def load_articulation(world, path, *, fixed_base=False, base_position=(0, 0, 0),
         self_collision=self_collision,
         solver_position_iterations=int(solver_position_iterations),
         render_visuals=render_visuals,
-        scale=float(scale))
+        scale=float(scale),
+        args={str(k): str(v) for k, v in (args or {}).items()})
     return UrdfArticulation(art, meshes, joint_names, world)
