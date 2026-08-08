@@ -49,6 +49,17 @@ namespace threepp::vulkan {
             return false;
         }
 
+        bool hasInstanceExtension(const char* name) {
+            uint32_t n = 0;
+            vkEnumerateInstanceExtensionProperties(nullptr, &n, nullptr);
+            std::vector<VkExtensionProperties> exts(n);
+            vkEnumerateInstanceExtensionProperties(nullptr, &n, exts.data());
+            for (const auto& e : exts) {
+                if (std::strcmp(e.extensionName, name) == 0) return true;
+            }
+            return false;
+        }
+
         std::vector<VkExtensionProperties> deviceExtensions(VkPhysicalDevice dev) {
             uint32_t n = 0;
             vkEnumerateDeviceExtensionProperties(dev, nullptr, &n, nullptr);
@@ -98,8 +109,32 @@ namespace threepp::vulkan {
 
     }// namespace
 
-    VulkanContext::VulkanContext(GLFWwindow* window, bool enableRayTracing, bool vsync)
+    VulkanContext::VulkanContext(GLFWwindow* window, bool enableRayTracing, bool vsync,
+                                 bool preferHeadlessSurface)
         : window_(window), vsync_(vsync) {
+
+        // Surface mode. A headless canvas prefers VK_EXT_headless_surface: the
+        // swapchain and frame loop run unmodified, but the surface has no
+        // window behind it, so no display server is needed — the requirement
+        // that actually matters on cloud GPU instances, where a window surface
+        // either can't be created at all (no X server) or lands on an X server
+        // the GPU cannot present to (Xvfb). Supported by NVIDIA, Mesa and the
+        // Khronos loader; when an ICD lacks it, fall back to the hidden-window
+        // surface where a window system exists (today's headless behaviour),
+        // and fail with a direct message where none does (GLFW Null platform).
+        if (preferHeadlessSurface) {
+            if (hasInstanceExtension(VK_EXT_HEADLESS_SURFACE_EXTENSION_NAME)) {
+                headlessSurface_ = true;
+            } else if (glfwGetPlatform() != GLFW_PLATFORM_NULL) {
+                std::cerr << "[VulkanContext] VK_EXT_headless_surface not available; "
+                             "headless canvas falls back to a hidden-window surface.\n";
+            } else {
+                throw std::runtime_error(
+                        "[VulkanContext] headless mode needs VK_EXT_headless_surface, "
+                        "which this Vulkan driver does not expose, and no window system "
+                        "is available to create a window surface instead");
+            }
+        }
 
         // Validation defaults on in debug builds and off elsewhere, but
         // THREEPP_VULKAN_VALIDATION overrides either way ("0" forces off, any
@@ -239,9 +274,18 @@ namespace threepp::vulkan {
         app.pEngineName = "threepp";
         app.apiVersion = VK_API_VERSION_1_3;
 
-        uint32_t glfwExtCount = 0;
-        const char** glfwExts = glfwGetRequiredInstanceExtensions(&glfwExtCount);
-        std::vector<const char*> extensions(glfwExts, glfwExts + glfwExtCount);
+        std::vector<const char*> extensions;
+        if (headlessSurface_) {
+            // No window system involved: name the surface machinery directly
+            // instead of asking GLFW, whose Null platform cannot create
+            // surfaces and reports no extensions at all.
+            extensions = {VK_KHR_SURFACE_EXTENSION_NAME,
+                          VK_EXT_HEADLESS_SURFACE_EXTENSION_NAME};
+        } else {
+            uint32_t glfwExtCount = 0;
+            const char** glfwExts = glfwGetRequiredInstanceExtensions(&glfwExtCount);
+            extensions.assign(glfwExts, glfwExts + glfwExtCount);
+        }
         if (enableValidation) {
             extensions.push_back(VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
         }
@@ -278,6 +322,22 @@ namespace threepp::vulkan {
     }
 
     void VulkanContext::createSurface() {
+        if (headlessSurface_) {
+            // Loaded via vkGetInstanceProcAddr — extension entry points are
+            // not exported by every loader.
+            auto fn = reinterpret_cast<PFN_vkCreateHeadlessSurfaceEXT>(
+                    vkGetInstanceProcAddr(instance_, "vkCreateHeadlessSurfaceEXT"));
+            if (!fn) {
+                throw std::runtime_error(
+                        "[VulkanContext] vkCreateHeadlessSurfaceEXT not found despite "
+                        "VK_EXT_headless_surface being advertised");
+            }
+            VkHeadlessSurfaceCreateInfoEXT ci{};
+            ci.sType = VK_STRUCTURE_TYPE_HEADLESS_SURFACE_CREATE_INFO_EXT;
+            check(fn(instance_, &ci, nullptr, &surface_), "vkCreateHeadlessSurfaceEXT");
+            std::cerr << "[VulkanContext] surface: headless (VK_EXT_headless_surface)\n";
+            return;
+        }
         check(glfwCreateWindowSurface(instance_, window_, nullptr, &surface_),
               "glfwCreateWindowSurface");
     }
@@ -392,6 +452,14 @@ namespace threepp::vulkan {
             if (presentSupport && queueFamilies_.present == UINT32_MAX) {
                 queueFamilies_.present = i;
             }
+        }
+        // A headless surface has no real presentation engine; ICDs generally
+        // report present support for it on the graphics family, but the
+        // extension leaves that implementation-defined. Presenting there is a
+        // no-op regardless, so route it through the graphics queue when the
+        // driver declined to name a family.
+        if (headlessSurface_ && queueFamilies_.present == UINT32_MAX) {
+            queueFamilies_.present = queueFamilies_.graphics;
         }
         if (queueFamilies_.graphics == UINT32_MAX || queueFamilies_.present == UINT32_MAX) {
             throw std::runtime_error("[VulkanContext] required queue families not present on GPU");
@@ -714,6 +782,15 @@ namespace threepp::vulkan {
                 break;
             }
         }
+        if (chosenFmt.format != VK_FORMAT_B8G8R8A8_UNORM) {
+            // Every CPU readback (readRGBPixels, scene capture, view readback)
+            // and the event-camera shaders assume BGRA byte order in the
+            // swapchain image. No known desktop ICD omits BGRA8_UNORM, but if
+            // one ever does, swapped channels should be diagnosable from the
+            // log rather than from staring at pink screenshots.
+            std::cerr << "[VulkanContext] surface does not offer B8G8R8A8_UNORM; using format "
+                      << chosenFmt.format << " - CPU readbacks assume BGRA byte order\n";
+        }
 
         uint32_t pmN = 0;
         vkGetPhysicalDeviceSurfacePresentModesKHR(physicalDevice_, surface_, &pmN, nullptr);
@@ -742,7 +819,12 @@ namespace threepp::vulkan {
                   << "\n";
 
         VkExtent2D extent = caps.currentExtent;
-        if (extent.width == UINT32_MAX) {
+        if (extent.width == UINT32_MAX || headlessSurface_) {
+            // No window defines the extent, so the canvas window size does.
+            // The special "application chooses" value covers most of this, but
+            // a headless surface needs the override unconditionally: nothing
+            // pins its currentExtent to reality, and not every ICD returns the
+            // special value there (SwiftShader reports a fixed 1280x720).
             int w, h;
             glfwGetFramebufferSize(window_, &w, &h);
             extent.width = std::clamp<uint32_t>(static_cast<uint32_t>(w),

@@ -3336,7 +3336,8 @@ namespace threepp {
             ctx = std::make_unique<VulkanContext>(
                     static_cast<GLFWwindow*>(canvas.windowPtr()),
                     /*enableRayTracing*/ true,
-                    /*vsync*/ canvas.vsync());
+                    /*vsync*/ canvas.vsync(),
+                    /*preferHeadlessSurface*/ canvas.headless());
 
             // The scene-dependent AS build runs lazily on the first render()
             // call. Everything below is scene-independent and safe at ctor time.

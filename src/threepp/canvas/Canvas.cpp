@@ -15,9 +15,11 @@
 
 #include <GLFW/glfw3.h>
 
+#include <cstdlib>
 #include <iostream>
 #include <optional>
 #include <stdexcept>
+#include <string_view>
 
 using namespace threepp;
 
@@ -157,9 +159,37 @@ namespace {
         return count;
     }
 
-    void initGLfw() {
+    void initGLfw(bool headless) {
         if (glfwRefCount()++ == 0) {
             glfwSetErrorCallback(error_callback);
+#ifndef __EMSCRIPTEN__
+            // Pick the GLFW platform before the first glfwInit reads the hint.
+            // A headless canvas on a machine with no display server (cloud GPU
+            // instances: DISPLAY/WAYLAND_DISPLAY unset) selects the Null
+            // platform — glfwInit would otherwise fail outright on X11/Wayland,
+            // and a headless Vulkan canvas never needs the window system: its
+            // surface comes from VK_EXT_headless_surface (see VulkanContext).
+            // Windows and macOS always have a window system, so headless keeps
+            // the native platform (hidden window). THREEPP_GLFW_PLATFORM=null
+            // forces the Null platform anywhere, which is how the display-free
+            // path is exercised on a developer machine. The hint is sticky
+            // across init/terminate cycles, so the windowed case must reset it
+            // to ANY_PLATFORM.
+            bool wantNull = false;
+            if (const char* forced = std::getenv("THREEPP_GLFW_PLATFORM"); forced && *forced) {
+                wantNull = std::string_view{forced} == "null";
+            }
+#if !defined(_WIN32) && !defined(__APPLE__)
+            else if (headless) {
+                const char* x11 = std::getenv("DISPLAY");
+                const char* wl = std::getenv("WAYLAND_DISPLAY");
+                wantNull = (!x11 || !*x11) && (!wl || !*wl);
+            }
+#endif
+            glfwInitHint(GLFW_PLATFORM, wantNull ? GLFW_PLATFORM_NULL : GLFW_ANY_PLATFORM);
+#else
+            (void) headless;
+#endif
             if (!glfwInit()) {
                 --glfwRefCount();
                 throw std::runtime_error("Canvas: glfwInit() failed");
@@ -197,7 +227,7 @@ struct Canvas::Impl {
         : scope(scope),
           params_(params) {
 
-        initGLfw();
+        initGLfw(params.headless_);
 
         if (params.size_) {
             size_ = *params.size_;
@@ -566,6 +596,11 @@ int Canvas::samples() const {
     return pimpl_->params_.antialiasing_;
 }
 
+bool Canvas::headless() const {
+
+    return pimpl_->params_.headless_;
+}
+
 void Canvas::setFrameEndCallback(std::function<void()> callback) {
     pimpl_->frameEndCallback_ = std::move(callback);
 }
@@ -714,7 +749,7 @@ WindowSize monitor::monitorSize(int monitor) {
     return {width, height};
 #else
 
-    initGLfw();
+    initGLfw(/*headless*/ false);
 
     int count;
     auto monitors = glfwGetMonitors(&count);
@@ -728,7 +763,7 @@ std::pair<float, float> monitor::contentScale(int monitor) {
 #ifdef __EMSCRIPTEN__
     return {1, 1};//TODO
 #else
-    initGLfw();
+    initGLfw(/*headless*/ false);
 
     int count;
     auto monitors = glfwGetMonitors(&count);

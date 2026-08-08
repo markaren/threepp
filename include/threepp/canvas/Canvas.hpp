@@ -65,6 +65,12 @@ namespace threepp {
 
         [[nodiscard]] int samples() const;
 
+        /// True when the canvas was created with headless=true: the window (if
+        /// any) is hidden, and a Vulkan renderer prefers a
+        /// VK_EXT_headless_surface over a window surface, which needs no
+        /// display server at all.
+        [[nodiscard]] bool headless() const;
+
         /// Register a callback invoked at the end of each frame (after the user
         /// animate callback, before glfwPollEvents). Used by swapchain-based
         /// backends to present, analogous to glfwSwapBuffers for GL.

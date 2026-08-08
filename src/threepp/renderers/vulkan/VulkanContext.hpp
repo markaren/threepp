@@ -28,7 +28,8 @@ namespace threepp::vulkan {
     class VulkanContext {
 
     public:
-        explicit VulkanContext(GLFWwindow* window, bool enableRayTracing, bool vsync = true);
+        explicit VulkanContext(GLFWwindow* window, bool enableRayTracing, bool vsync = true,
+                               bool preferHeadlessSurface = false);
         ~VulkanContext();
 
         VulkanContext(const VulkanContext&) = delete;
@@ -69,6 +70,13 @@ namespace threepp::vulkan {
         bool swapchainSupportsTransferSrc() const { return swapchainTransferSrc_; }
 
         bool rayTracingEnabled() const { return rayTracingEnabled_; }
+
+        // True when the surface is a VK_EXT_headless_surface (headless canvas
+        // on a supporting ICD). The swapchain machinery runs unchanged, but
+        // presentation is a no-op sink — nothing is displayed and no
+        // window-system connection is needed, which is what lets the renderer
+        // run on display-less machines (cloud GPU instances).
+        bool headlessSurface() const { return headlessSurface_; }
 
         // VK_KHR_ray_query — inline ray tracing from any stage (compute). Used
         // by the raster-first deferred shading pass for hard shadow rays.
@@ -138,6 +146,7 @@ namespace threepp::vulkan {
         bool                     swapchainTransferSrc_ = false;
 
         bool vsync_ = true;// FIFO when true, else MAILBOX/IMMEDIATE (see createSwapchain)
+        bool headlessSurface_ = false;// VK_EXT_headless_surface instead of a window surface
         bool rayTracingEnabled_ = false;
         bool rayQuerySupported_ = false;
         bool externalMemorySupported_ = false;

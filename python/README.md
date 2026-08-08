@@ -386,6 +386,20 @@ one render. Driving is via the deferred frame-model under the hood
 repeats a few frames to make the MAILBOX readback deterministic — tune with
 `set_flush_frames`).
 
+**Headless / display-less machines (cloud GPUs).** A `headless=True` canvas
+needs no display at all: the Vulkan renderer creates its surface via
+`VK_EXT_headless_surface` (supported by NVIDIA's Linux driver and Mesa) instead
+of a window surface, and on Linux with no `DISPLAY`/`WAYLAND_DISPLAY` the
+canvas skips the window system entirely (GLFW Null platform). That is exactly
+the Colab/EC2-style setup — compute-only NVIDIA kernel modules, no X server the
+GPU can present to — where the wheel's synthetic-data path
+(`render_aov` / `read_depth` / `read_rgb_pixels`) runs unmodified; presenting
+to a headless surface is simply a no-op. Where the ICD lacks the extension
+(e.g. NVIDIA's *Windows* driver), a headless canvas falls back to the previous
+behaviour — a hidden window with a real surface — and logs that it did so.
+Set `THREEPP_GLFW_PLATFORM=null` to force the window-system-free path on any
+OS (useful for reproducing the cloud setup locally).
+
 ## In-window UI (Dear ImGui)
 
 threepp integrates Dear ImGui; the binding exposes it as `ImguiContext` plus the
