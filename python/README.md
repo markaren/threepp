@@ -113,8 +113,8 @@ display is only required for the on-screen examples.
 | [`examples/vulkan_ui.py`](examples/vulkan_ui.py) | The same ImGui control panel, over the **Vulkan** deferred renderer. Needs a Vulkan build + display. |
 | [`examples/physics_demo.py`](examples/physics_demo.py) | A pile of boxes tumbling onto the floor — `PhysxWorld` rigid bodies driving the scene graph. Needs a PhysX build + display. |
 | [`examples/imu_demo.py`](examples/imu_demo.py) | **Headless IMU** — a box dropped onto the floor with an `Imu` mounted off-CoM; prints the physics-truth table (free fall ~0, at rest ~+9.81). Needs a PhysX build; no display. |
-| [`examples/spider/spider_demo.py`](examples/spider/spider_demo.py) | **Drive a physics hexapod with WASD** — an articulated robot walking via a CPG tripod gait (no training). Needs a PhysX build + display. |
-| [`examples/spider/train_vec.py`](examples/spider/train_vec.py) / [`play.py`](examples/spider/play.py) | Residual RL on the gait. `train_vec.py` runs **K robots in one PhysX scene** (one `world.step()` for all of them, ~7–35× faster than separate processes); `play.py` drives the trained policy with WASD. `train.py` is the slower `SubprocVecEnv` variant. Needs `gymnasium`, `stable-baselines3`. |
+| [`examples/cartpole/train_cartpole.py`](examples/cartpole/train_cartpole.py) / [`play_cartpole.py`](examples/cartpole/play_cartpole.py) | **GPU-vectorized RL end to end** — a `VecTask` cartpole swing-up trained with the owned `threepp.rl` PPO (committed checkpoint included; `play` renders the result). Needs a PhysX GPU build + torch. |
+| [`examples/spot/`](examples/spot) | **Quadruped RL family** — Spot locomotion policies (steps, stairs, heightfield), sim-to-sim deploy into the editor, depth scanning; see its [README](examples/spot/README.md). |
 | [`examples/smoke_test.py`](examples/smoke_test.py) | Assertion-based regression test of the whole surface; prints `ALL OK`. |
 
 ```sh
