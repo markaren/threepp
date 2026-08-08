@@ -598,7 +598,16 @@ namespace threepp {
             using namespace ::physx;
 
             foundation_ = PxCreateFoundation(PX_PHYSICS_VERSION, allocator_, errorCallback_);
-            if (!foundation_) throw std::runtime_error("PxCreateFoundation failed");
+            if (!foundation_) {
+                if (PxIsFoundationValid()) {
+                    throw std::runtime_error(
+                            "PxCreateFoundation failed: PhysX allows one foundation per process, "
+                            "and another PhysxWorld is still alive. Destroy it before creating a "
+                            "new one (in Python: del the old world and gc.collect(), or restart "
+                            "the kernel).");
+                }
+                throw std::runtime_error("PxCreateFoundation failed");
+            }
 
             // trackOutstandingAllocations=true matches the GPU samples; harmless when off.
             physics_ = PxCreatePhysics(PX_PHYSICS_VERSION, *foundation_, PxTolerancesScale(),
@@ -1139,7 +1148,13 @@ namespace threepp {
             if (!mat) mat = defaultMat_;
             const auto pl = worldPlacement(mesh);
             auto inferred = physx_detail::inferShape(*g, pl.scale);
-            if (!inferred.valid) throw std::runtime_error("PhysxWorld::add: unsupported geometry");
+            if (!inferred.valid) {
+                throw std::runtime_error(
+                        "PhysxWorld::add: cannot infer a collider from '" + g->type() +
+                        "'. Shape inference covers Box/Sphere/Capsule geometry; use "
+                        "addDynamicConvex (convex hull) for a dynamic body, or "
+                        "addStaticTrimesh (exact triangles) for a static collider.");
+            }
             PxRigidDynamic* body = physics_->createRigidDynamic(pl.pose);
             PxShape* shape = physics_->createShape(inferred.geom.any(), *mat, true);
             shape->setLocalPose(inferred.localPose);
@@ -1158,7 +1173,13 @@ namespace threepp {
             if (!mat) mat = defaultMat_;
             const auto pl = worldPlacement(mesh);
             auto inferred = physx_detail::inferShape(*g, pl.scale);
-            if (!inferred.valid) throw std::runtime_error("PhysxWorld::addStatic: unsupported geometry");
+            if (!inferred.valid) {
+                throw std::runtime_error(
+                        "PhysxWorld::addStatic: cannot infer a collider from '" + g->type() +
+                        "'. Shape inference covers Box/Sphere/Capsule geometry; use "
+                        "addStaticTrimesh (exact triangles), addDynamicConvex (convex hull), "
+                        "or a thin BoxGeometry as a floor.");
+            }
             PxRigidStatic* body = physics_->createRigidStatic(pl.pose);
             PxShape* shape = physics_->createShape(inferred.geom.any(), *mat, true);
             shape->setLocalPose(inferred.localPose);
@@ -1369,7 +1390,12 @@ namespace threepp {
             using namespace ::physx;
             auto* g = mesh.geometry().get();
             if (!g) throw std::runtime_error("PhysxWorld::add(InstancedMesh): no geometry");
-            if (!physx_detail::inferShape(*g).valid) throw std::runtime_error("PhysxWorld::add(InstancedMesh): unsupported geometry");
+            if (!physx_detail::inferShape(*g).valid) {
+                throw std::runtime_error(
+                        "PhysxWorld::add(InstancedMesh): cannot infer a collider from '" + g->type() +
+                        "'. Shape inference covers Box/Sphere/Capsule geometry; instanced bodies "
+                        "have no trimesh/convex fallback, so use one of those geometry types.");
+            }
             if (!mat) mat = defaultMat_;
             std::vector<PxRigidActor*> actors;
             actors.reserve(mesh.count());

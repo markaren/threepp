@@ -169,8 +169,10 @@ namespace threepp {
             if (!shape.valid) {
                 const auto* posAttr = g->getAttribute<float>("position");
                 if (!posAttr || posAttr->count() < 4) {
-                    throw std::runtime_error("Articulation.add_link: unsupported geometry "
-                                             "(use Box/Sphere/Capsule, or a mesh with >= 4 vertices for a convex hull)");
+                    throw std::runtime_error(
+                            "Articulation.add_link: cannot build a collider from '" + g->type() +
+                            "'. Shape inference covers Box/Sphere/Capsule geometry, and the "
+                            "convex-hull fallback needs a position attribute with at least 4 vertices.");
                 }
                 convex = world_.cookConvexHull(posAttr->array().data(), posAttr->count(), 64);
                 if (!convex) throw std::runtime_error("Articulation.add_link: convex hull cook failed");
