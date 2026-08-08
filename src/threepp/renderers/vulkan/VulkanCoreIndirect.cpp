@@ -585,24 +585,28 @@ namespace threepp {
               "vkCreateComputePipelines(debug_resolve)");
         vkDestroyShaderModule(ctx->device(), mod, nullptr);
 
+        // One set per frame-in-flight (see the member comment — a single
+        // shared set rewritten per frame is the in-flight-update violation).
         std::array<VkDescriptorPoolSize, 2> ps{};
         ps[0].type            = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-        ps[0].descriptorCount = 5;// normal/motion/ids/albedo + depth
+        ps[0].descriptorCount = 5 * kFramesInFlight;// normal/motion/ids/albedo + depth
         ps[1].type            = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
-        ps[1].descriptorCount = 1;
+        ps[1].descriptorCount = 1 * kFramesInFlight;
         VkDescriptorPoolCreateInfo dpci{};
         dpci.sType         = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
-        dpci.maxSets       = 1;
+        dpci.maxSets       = kFramesInFlight;
         dpci.poolSizeCount = static_cast<uint32_t>(ps.size());
         dpci.pPoolSizes    = ps.data();
         check(vkCreateDescriptorPool(ctx->device(), &dpci, nullptr, &debugResolveDescPool_),
               "vkCreateDescriptorPool(debug_resolve)");
+        std::array<VkDescriptorSetLayout, kFramesInFlight> layouts{};
+        layouts.fill(debugResolveDsLayout_);
         VkDescriptorSetAllocateInfo dsai{};
         dsai.sType              = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
         dsai.descriptorPool     = debugResolveDescPool_;
-        dsai.descriptorSetCount = 1;
-        dsai.pSetLayouts        = &debugResolveDsLayout_;
-        check(vkAllocateDescriptorSets(ctx->device(), &dsai, &debugResolveDescSet_),
+        dsai.descriptorSetCount = kFramesInFlight;
+        dsai.pSetLayouts        = layouts.data();
+        check(vkAllocateDescriptorSets(ctx->device(), &dsai, debugResolveDescSets_.data()),
               "vkAllocateDescriptorSets(debug_resolve)");
     }
 
@@ -661,22 +665,27 @@ namespace threepp {
         outInfo.imageView   = ctx->swapchainImageViews()[imageIndex];
         outInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
 
+        // This frame's own set: its previous use retired with the
+        // inFlight[frame] fence wait at the top of the frame, so rewriting it
+        // here cannot race the OTHER in-flight frame's pending command buffer
+        // (which binds the other slot's set).
+        VkDescriptorSet ds = debugResolveDescSets_[frame];
         std::array<VkWriteDescriptorSet, 6> w{};
         for (auto& it : w) it.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
         const VkDescriptorImageInfo* imgs[4] = {&normalInfo, &motionInfo, &idsInfo, &albedoInfo};
         for (uint32_t i = 0; i < 4; ++i) {
-            w[i].dstSet          = debugResolveDescSet_;
+            w[i].dstSet          = ds;
             w[i].dstBinding      = i;
             w[i].descriptorCount = 1;
             w[i].descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
             w[i].pImageInfo      = imgs[i];
         }
-        w[4].dstSet          = debugResolveDescSet_;
+        w[4].dstSet          = ds;
         w[4].dstBinding      = 4;
         w[4].descriptorCount = 1;
         w[4].descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
         w[4].pImageInfo      = &outInfo;
-        w[5].dstSet          = debugResolveDescSet_;
+        w[5].dstSet          = ds;
         w[5].dstBinding      = 5;
         w[5].descriptorCount = 1;
         w[5].descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
@@ -716,7 +725,7 @@ namespace threepp {
 
         vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, debugResolvePipeline_);
         vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_COMPUTE,
-                                debugResolvePipelineLayout_, 0, 1, &debugResolveDescSet_, 0, nullptr);
+                                debugResolvePipelineLayout_, 0, 1, &ds, 0, nullptr);
         vkCmdPushConstants(cb, debugResolvePipelineLayout_, VK_SHADER_STAGE_COMPUTE_BIT,
                            0, sizeof(pc), &pc);
         vkCmdDispatch(cb, (ext.width + 7) / 8, (ext.height + 7) / 8, 1);

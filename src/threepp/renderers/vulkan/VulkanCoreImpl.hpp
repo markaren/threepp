@@ -1794,7 +1794,14 @@ namespace threepp {
         VkPipelineLayout      debugResolvePipelineLayout_ = VK_NULL_HANDLE;
         VkPipeline            debugResolvePipeline_       = VK_NULL_HANDLE;
         VkDescriptorPool      debugResolveDescPool_       = VK_NULL_HANDLE;
-        VkDescriptorSet       debugResolveDescSet_        = VK_NULL_HANDLE;
+        // One descriptor set per frame-in-flight, rewritten every frame the
+        // debug view is active (gbuf views are per-frame, the storage target
+        // is the acquired swapchain image). A single shared set would be
+        // updated while the other in-flight frame still had it bound in a
+        // pending command buffer — VUID-vkUpdateDescriptorSets-None-03047,
+        // firing per frame on the AOV readback path (render_aov routes
+        // through this pass every frame).
+        std::array<VkDescriptorSet, kFramesInFlight> debugResolveDescSets_{};
 
         // User-requested sensor resolution. 0 means "track swapchain";
         // any non-zero pair pins the detector + luma buffer at that res
@@ -3912,17 +3919,11 @@ namespace threepp {
             //     the deferred shade's ray-query hit handling reads via
             //     gdesc.prevVertexAddress, interpolates, and derives the
             //     hit's prevWorldPos, which feeds the motionMat reproject.
-            //     TRANSFER_DST_BIT lets the per-frame
-            //     vkCmdCopyBuffer push current→prev before the skinning
-            //     compute writes new positions. Device-local (no host
-            //     access) — the per-frame update happens entirely on GPU.
-            const VkDeviceSize vbBytes = posAttr->array().size() * sizeof(float);
-            rec->prevVertex = createBuffer(
-                    ctx->allocator(), ctx->device(), vbBytes,
-                    VK_BUFFER_USAGE_VERTEX_BUFFER_BIT |
-                            VK_BUFFER_USAGE_TRANSFER_DST_BIT |
-                            VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
-                    VMA_MEMORY_USAGE_AUTO);
+            //     The per-frame vkCmdCopyBuffer pushes current→prev before
+            //     the skinning compute writes new positions.
+            // buildBlasFor already allocated + seeded rec->prevVertex with
+            // exactly the size/usage this path needs — re-creating it here
+            // orphaned that buffer (VUID 05137 leak at device destroy).
 
             auto state = std::make_unique<SkinnedMeshState>();
             state->blas = std::move(rec);
@@ -4092,15 +4093,10 @@ namespace threepp {
             if (!rec) return nullptr;
             rec->liveCheck = geom;
 
-            // Previous-frame vertex buffer for per-vertex motion vectors (same role
-            // as the skinned path; copied current->prev before each compute).
-            const VkDeviceSize vbBytes = posAttr->array().size() * sizeof(float);
-            rec->prevVertex = createBuffer(
-                    ctx->allocator(), ctx->device(), vbBytes,
-                    VK_BUFFER_USAGE_VERTEX_BUFFER_BIT |
-                            VK_BUFFER_USAGE_TRANSFER_DST_BIT |
-                            VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
-                    VMA_MEMORY_USAGE_AUTO);
+            // Previous-frame vertex buffer for per-vertex motion vectors (same
+            // role as the skinned path; copied current->prev before each
+            // compute). buildBlasFor already allocated + seeded rec->prevVertex
+            // — re-creating it here orphaned that buffer (VUID 05137).
 
             auto state = std::make_unique<TetMeshState>();
             state->blas = std::move(rec);
@@ -4455,16 +4451,12 @@ namespace threepp {
             // its non-null address — the contents were dead).
             blas->isOceanSurface = true;
 
-            // Per-vertex previous-pose buffer for hybrid raster motion vec.
-            // Same size as vertex (R32G32B32 SFLOAT × vertexCount). Filled
-            // GPU-side via vkCmdCopyBuffer before each water_displace dispatch.
-            blas->prevVertex = createBuffer(
-                    ctx->allocator(), ctx->device(),
-                    VkDeviceSize(vertexCount) * 3u * sizeof(float),
-                    VK_BUFFER_USAGE_VERTEX_BUFFER_BIT |
-                            VK_BUFFER_USAGE_TRANSFER_DST_BIT |
-                            VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
-                    VMA_MEMORY_USAGE_AUTO);
+            // Per-vertex previous-pose buffer for hybrid raster motion vec —
+            // buildBlasFor already allocated + seeded blas->prevVertex (same
+            // size R32G32B32 SFLOAT × vertexCount, same usage); it is filled
+            // GPU-side via vkCmdCopyBuffer before each water_displace
+            // dispatch. Re-creating it here orphaned the buildBlasFor buffer
+            // (the one VUID 05137 leak that survived renderer teardown).
 
             auto state = std::make_unique<DisplacedMeshState>();
             state->blas = std::move(blas);
@@ -4573,24 +4565,26 @@ namespace threepp {
             // can run at a different FFT resolution, so each readback is
             // sized to its own dim²·8 bytes (RG32F). Kept persistent so the
             // mappings survive between frames.
-            auto makeReadback = [&](uint32_t dim) {
+            auto makeReadback = [&](uint32_t dim, const char* name) {
                 const VkDeviceSize bytes =
                         VkDeviceSize(dim) * VkDeviceSize(dim) * 8u;
-                return createBuffer(
+                auto b = createBuffer(
                         ctx->allocator(), ctx->device(), bytes,
                         VK_BUFFER_USAGE_TRANSFER_DST_BIT,
                         VMA_MEMORY_USAGE_AUTO,
                         VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT |
                                 VMA_ALLOCATION_CREATE_MAPPED_BIT);
+                ctx->setObjectName(b.handle, name);
+                return b;
             };
-            state->heightReadback  = makeReadback(textureSizes[0]);
+            state->heightReadback  = makeReadback(textureSizes[0], "ocean.heightReadback0");
             state->heightReadbackDim[0] = textureSizes[0];
             if (dm.params.tileSize1 > 0.f) {
-                state->heightReadback1 = makeReadback(textureSizes[1]);
+                state->heightReadback1 = makeReadback(textureSizes[1], "ocean.heightReadback1");
                 state->heightReadbackDim[1] = textureSizes[1];
             }
             if (dm.params.tileSize2 > 0.f) {
-                state->heightReadback2 = makeReadback(textureSizes[2]);
+                state->heightReadback2 = makeReadback(textureSizes[2], "ocean.heightReadback2");
                 state->heightReadbackDim[2] = textureSizes[2];
             }
 

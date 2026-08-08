@@ -1600,16 +1600,9 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                         destroyBuffer(ctx->allocator(), it->second->skinWeight);
                         destroyBuffer(ctx->allocator(), it->second->boneMatrices);
                         destroyBuffer(ctx->allocator(), it->second->blasScratch);
-                        auto& rec = it->second->blas;
-                        if (rec) {
-                            if (rec->as) ctx->rt().destroyAccelerationStructure(ctx->device(), rec->as, nullptr);
-                            destroyBuffer(ctx->allocator(), rec->storage);
-                            destroyBuffer(ctx->allocator(), rec->vertex);
-                            destroyBuffer(ctx->allocator(), rec->index);
-                            destroyBuffer(ctx->allocator(), rec->normal);
-                            destroyBuffer(ctx->allocator(), rec->uv);
-                            destroyBuffer(ctx->allocator(), rec->prevVertex);
-                        }
+                        // destroyBlasRecord, not a hand-rolled subset — the
+                        // manual copy here missed rec->color + rec->blasScratch.
+                        if (it->second->blas) destroyBlasRecord(*it->second->blas);
                         // Return the skinning descriptor set to the pool, else
                         // the slot leaks across remove/re-add cycles and the
                         // next allocateMeshDescriptorSet eventually hits
@@ -1634,16 +1627,9 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                         for (auto& slot : it->second->tetPos) destroyBuffer(ctx->allocator(), slot);
                         vulkan::destroyExternalBuffer(ctx->device(), it->second->tetPosExt);
                         destroyBuffer(ctx->allocator(), it->second->blasScratch);
-                        auto& rec = it->second->blas;
-                        if (rec) {
-                            if (rec->as) ctx->rt().destroyAccelerationStructure(ctx->device(), rec->as, nullptr);
-                            destroyBuffer(ctx->allocator(), rec->storage);
-                            destroyBuffer(ctx->allocator(), rec->vertex);
-                            destroyBuffer(ctx->allocator(), rec->index);
-                            destroyBuffer(ctx->allocator(), rec->normal);
-                            destroyBuffer(ctx->allocator(), rec->uv);
-                            destroyBuffer(ctx->allocator(), rec->prevVertex);
-                        }
+                        // destroyBlasRecord, not a hand-rolled subset — the
+                        // manual copy here missed rec->color + rec->blasScratch.
+                        if (it->second->blas) destroyBlasRecord(*it->second->blas);
                         for (auto& ds : it->second->tetDescSet) {
                             if (ds == VK_NULL_HANDLE) continue;
                             tetSkinning_->freeMeshDescriptorSet(ds);
@@ -1675,20 +1661,20 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                             oceanFoamView     = oceanFoamDummy.view;
                             oceanFoamTileSize = 0.0f;
                         }
-                        if (st->blas) {
-                            auto& rec = st->blas;
-                            if (rec->as) ctx->rt().destroyAccelerationStructure(ctx->device(), rec->as, nullptr);
-                            destroyBuffer(ctx->allocator(), rec->storage);
-                            destroyBuffer(ctx->allocator(), rec->vertex);
-                            destroyBuffer(ctx->allocator(), rec->index);
-                            destroyBuffer(ctx->allocator(), rec->normal);
-                            destroyBuffer(ctx->allocator(), rec->uv);
-                            destroyBuffer(ctx->allocator(), rec->prevVertex);
-                        }
+                        if (st->blas) destroyBlasRecord(*st->blas);
                         if (st->scratchA.view  != VK_NULL_HANDLE) vkDestroyImageView(ctx->device(), st->scratchA.view, nullptr);
                         if (st->scratchA.image != VK_NULL_HANDLE) vmaDestroyImage(ctx->allocator(), st->scratchA.image, st->scratchA.alloc);
                         if (st->foamImage.view  != VK_NULL_HANDLE) vkDestroyImageView(ctx->device(), st->foamImage.view, nullptr);
                         if (st->foamImage.image != VK_NULL_HANDLE) vmaDestroyImage(ctx->allocator(), st->foamImage.image, st->foamImage.alloc);
+                        // Host-side state buffers — same set the renderer
+                        // teardown destroys; missing them here leaked the
+                        // readback trio + foam/wake SSBOs on every scene
+                        // switch that removed an ocean (VUID 05137).
+                        destroyBuffer(ctx->allocator(), st->heightReadback);
+                        destroyBuffer(ctx->allocator(), st->heightReadback1);
+                        destroyBuffer(ctx->allocator(), st->heightReadback2);
+                        destroyBuffer(ctx->allocator(), st->foamDisturbBuffer);
+                        destroyBuffer(ctx->allocator(), st->wakeTrailBuffer);
                         // PhillipsSpectrum / DynamicSpectrum / IFFT destructors
                         // run on unique_ptr reset.
                         it = displacedStates.erase(it);

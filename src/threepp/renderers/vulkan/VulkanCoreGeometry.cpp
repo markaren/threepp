@@ -1326,6 +1326,7 @@ void VulkanRenderer::Impl::recordDisplacedDeform(VkCommandBuffer cb, DisplacedMe
                                 VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
                         VMA_MEMORY_USAGE_AUTO,
                         VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT);
+                ctx->setObjectName(st.foamDisturbBuffer.handle, "ocean.foamDisturb");
             }
             const uint32_t disturbCount = static_cast<uint32_t>(std::min<size_t>(
                     dm.foamDisturbances.size(),
@@ -1349,6 +1350,7 @@ void VulkanRenderer::Impl::recordDisplacedDeform(VkCommandBuffer cb, DisplacedMe
                                 VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
                         VMA_MEMORY_USAGE_AUTO,
                         VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT);
+                ctx->setObjectName(st.wakeTrailBuffer.handle, "ocean.wakeTrail");
             }
             const uint32_t wakeSampleCount = static_cast<uint32_t>(std::min<size_t>(
                     dm.wake.trail.size(),
