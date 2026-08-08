@@ -346,11 +346,12 @@ namespace threepp::editor {
                                                  toPxTransform(position, rotation), params);
             // node = nullptr: no document entry, so findJoint never answers
             // with it and the handle returned to the script is the only one.
+            // The break watch is already up: start() installs it
+            // unconditionally, precisely so a joint created at runtime in a
+            // scene that AUTHORED none still gets its break latched and
+            // logged. The test for that is the runtime-break case in
+            // EditorJointPlay_test - remove the start() call and it fails.
             joints_.push_back({nullptr, joint});
-            // An authored scene may have had no joints at all, in which case
-            // start() installed no break watch - and a runtime joint with a
-            // break threshold would then break silently.
-            watchJointBreaks();
             return joint;
         }
 
@@ -1155,9 +1156,10 @@ namespace threepp::editor {
         // for drainBrokenJoints. Fired from inside step(), so only bookkeeping
         // happens here.
         //
-        // Idempotent, and called again by createJoint: a scene with no
-        // authored joints installed no watch at start(), and without this a
-        // breakable joint a script built would break in silence.
+        // Installed by start() UNCONDITIONALLY - not gated on any joints
+        // existing yet, as it once was - because a runtime joint can arrive in
+        // a scene that authored none, and a breakable joint without the watch
+        // breaks in silence. Idempotent behind breakWatch_.
         void watchJointBreaks() {
 
             if (breakWatch_ || !world_) return;

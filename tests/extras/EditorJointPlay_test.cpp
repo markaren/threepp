@@ -568,6 +568,96 @@ TEST_CASE("a force/torque sensor reads a plain joint's reaction", "[editor][phys
     session.stop();
 }
 
+TEST_CASE("a runtime joint's break is watched and reported", "[editor][physx]") {
+
+    // Review coverage for two claims d8818040 makes and no other test runs.
+    //
+    // First: the break watch exists even when the scene AUTHORED no joints.
+    // It used to be gated on "any authored joints at start()?", and under that
+    // gate a breakable runtime joint snaps in silence - broken() still flips
+    // (it reads the eBROKEN flag straight off PhysX) but nothing latches the
+    // failure wrench and nothing reaches the console. The log assertion below
+    // is the one that bites if the gate ever comes back.
+    //
+    // Second: the watch's callback has a node to name for an authored joint
+    // and NOTHING for a runtime one (node == nullptr). It must log without
+    // dereferencing, and must NOT queue a null node for drainBrokenJoints -
+    // that queue feeds on_joint_break dispatch, which looks scripts up BY
+    // node.
+    SceneDocument document;
+    auto& scene = document.scene();
+
+    auto crate = makeDynamicBox(scene, "Crate", {0.f, 3.f, 0.f});
+    scene.add(crate);
+
+    PhysicsPlaySession session;
+    std::vector<std::string> logged;
+    session.setLogger([&](const std::string& line) { logged.push_back(line); });
+    session.start(scene);
+    REQUIRE(session.jointCount() == 0);// nothing authored, so no watch yet
+
+    auto* actor = session.resolveJointBody(crate.get());
+    REQUIRE(actor != nullptr);
+
+    // A weld to the world armed to fail: 1 N against ~10 N of crate weight.
+    Joint::Params params;
+    params.breakForce = 1.f;
+    params.breakTorque = 1.f;
+    auto fuse = session.createJoint(actor, nullptr, {0.f, 3.f, 0.f}, Quaternion(), params);
+    REQUIRE(fuse != nullptr);
+
+    run(session, 30);
+
+    // The break registered on the handle a script would be holding...
+    CHECK(fuse->broken());
+    // ...the crate is in free fall...
+    CHECK(crate->position.y < 2.5f);
+    // ...the console heard, with no node to name...
+    const bool reported = std::any_of(logged.begin(), logged.end(), [](const std::string& line) {
+        return line.find("runtime joint broke") != std::string::npos;
+    });
+    CHECK(reported);
+    // ...and nothing was queued for a script dispatch that resolves by node.
+    std::vector<Object3D*> broken;
+    session.drainBrokenJoints(broken);
+    CHECK(broken.empty());
+
+    session.stop();
+}
+
+TEST_CASE("a session destroyed mid-play takes its runtime joints safely",
+          "[editor][physx]") {
+
+    // The editor closing during Play destroys the session WITHOUT a stop() -
+    // ~PhysicsPlaySession only clears active(). Runtime joints then die by
+    // MEMBER destruction, and the only thing keeping that safe is that
+    // joints_ is declared after world_, so it destructs first. This test is
+    // what turns that declaration-order coincidence into a contract: reorder
+    // the members and it crashes here instead of in a closing editor.
+    SceneDocument document;
+    auto& scene = document.scene();
+
+    auto crate = makeDynamicBox(scene, "Crate", {0.f, 3.f, 0.f});
+    scene.add(crate);
+
+    std::weak_ptr<Joint> survivor;
+    {
+        PhysicsPlaySession session;
+        session.start(scene);
+
+        auto* actor = session.resolveJointBody(crate.get());
+        REQUIRE(actor != nullptr);
+        auto joint = session.createJoint(actor, nullptr, {0.f, 3.f, 0.f}, Quaternion(),
+                                         Joint::Params{});
+        survivor = joint;
+        run(session, 10);
+        // No stop(). The session goes down with the joint still live.
+    }
+    // ~joints_ ran before ~world_, so the release found a live PxPhysics, and
+    // nothing outlived anything it depended on.
+    CHECK(survivor.expired());
+}
+
 TEST_CASE("a breakable joint reports its break", "[editor][physx]") {
 
     SceneDocument document;
