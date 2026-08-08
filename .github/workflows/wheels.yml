@@ -304,8 +304,16 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           # Forward slashes, via GITHUB_ENV, no vulkan flags — the editor build
           # is GL-only and its CMakeLists FORCEs Vulkan off besides.
+          #
+          # CMAKE_PREFIX_PATH is NOT redundant beside the physx-sdk _DIR: the
+          # _DIR navigates find_package straight to PhysX's config and nothing
+          # else, while find_path(VHACD.h) — convex decomposition, installed by
+          # the SAME vcpkg feature — searches the prefix path. Without it the
+          # editor wheel shipped "VHACD.h not found, convex decomposition
+          # disabled" while the header sat in vcpkg_installed all along.
           $root = $pwd.Path -replace '\\', '/'
-          "CMAKE_ARGS=-Dunofficial-omniverse-physx-sdk_DIR=$root/vcpkg_installed/x64-windows/share/unofficial-omniverse-physx-sdk" >> $env:GITHUB_ENV
+          $vi = "$root/vcpkg_installed/x64-windows"
+          "CMAKE_ARGS=-DCMAKE_PREFIX_PATH=$vi -Dunofficial-omniverse-physx-sdk_DIR=$vi/share/unofficial-omniverse-physx-sdk" >> $env:GITHUB_ENV
 
       - name: Build editor wheels
         uses: pypa/cibuildwheel@v4.1.1
