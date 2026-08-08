@@ -111,6 +111,11 @@ namespace threepp::editor {
             bool play = false;
             // Optional robot for the selftest's URDF pass.
             std::filesystem::path urdf;
+            // Light the scene from this .hdr / .exr on start, as File > Set Environment does.
+            // A document cannot carry a float environment of its own (its images go through the
+            // 8-bit ImageLoader), so without this a --screenshot run could never be lit the way
+            // the app lights it. Set as the background too, matching the menu's default.
+            std::filesystem::path environment;
             // Render the road-acceptance scene to this PNG and exit. Exists so
             // a person — or a tool — can LOOK at what the geometry does before
             // anyone claims it works.

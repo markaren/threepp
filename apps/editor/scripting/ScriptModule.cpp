@@ -89,6 +89,11 @@ PYBIND11_EMBEDDED_MODULE(threepp, m) {
     tp::init_animation(m);
     tp::init_cameras(m);
     tp::init_lights(m);
+    // The loaders — after textures (RGBELoader hands back a Texture) and after objects (the
+    // model loaders hand back a Group). This is what lets a script assign scene.environment: the
+    // property was always writable, there was simply nothing in the module that could make a
+    // texture to put in it.
+    tp::init_loaders(m);
     tp::init_robot(m);
 #ifdef THREEPP_EDITOR_WITH_PHYSX
     // threepp.PhysxWorld and its RigidBody / Articulation / PhysxMaterial — the

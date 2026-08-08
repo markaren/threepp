@@ -641,3 +641,50 @@ class Sketcher:
     session.stop();
     CHECK(list.segments.empty());
 }
+
+TEST_CASE("a script can load a texture and light the scene with it", "[editor][scripting]") {
+
+    // The editor's module is assembled from a SUBSET of the wheel's binding TUs, and
+    // bind_loaders.cpp was not in it. `scene.environment` was writable the whole time; there was
+    // simply nothing in the module that could produce a Texture to assign, and no constructor
+    // from data either - so the only way to light a scene with an HDRI was the File menu, which
+    // a script and a headless --screenshot run cannot reach.
+    //
+    // This pins the wiring rather than the pixels: if bind_loaders.cpp ever falls out of
+    // apps/editor/CMakeLists.txt again, or init_loaders is dropped from ScriptModule.cpp, these
+    // names go missing and the failure is an AttributeError deep inside somebody's scene script.
+    const std::string source = R"PY(
+import threepp
+from threepp import editor
+
+
+class Probe:
+
+    def start(self, obj):
+        # RAISE rather than record: a missing name has to fail the session, or this test passes
+        # with the bindings gone (threepp.Texture comes from bind_textures.cpp, which never left).
+        missing = [n for n in ("TextureLoader", "RGBELoader", "EXRLoader", "ModelLoader")
+                   if not hasattr(threepp, n)]
+        if missing:
+            raise RuntimeError("threepp module is missing loaders: " + ", ".join(missing))
+        # The assignment the loaders exist to serve. An empty Texture is enough to prove the
+        # property accepts one - the file decode is ImageLoader's business, tested elsewhere.
+        editor.scene().environment = threepp.Texture()
+
+    def update(self, dt):
+        pass
+)PY";
+
+    auto scene = Scene::create();
+    attachSource(*scene, source);
+
+    ScriptPlaySession session;
+    session.start(*scene);
+    CHECK(session.errorCount() == 0);
+    REQUIRE(session.instanceCount() == 1);
+    session.update(0.016f);
+
+    CHECK(scene->environment != nullptr);
+
+    session.stop();
+}

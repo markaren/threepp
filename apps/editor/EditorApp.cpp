@@ -701,6 +701,12 @@ EditorApp::EditorApp(const Options& options)
         }
     }
 
+    // After the document, so it lights whatever ended up open — and before Play, so a
+    // --screenshot run is lit by the time it shoots.
+    if (!options_.environment.empty()) {
+        setEnvironment(options_.environment, /*alsoBackground*/ true);
+    }
+
     log("threepp editor ready");
 #ifndef THREEPP_EDITOR_WITH_PHYSX
     log("built without PhysX - no physics session; vision sensors still scan");

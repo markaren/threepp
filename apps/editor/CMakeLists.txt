@@ -153,6 +153,14 @@ if (THREEPP_EDITOR_WITH_PYTHON AND Python3_FOUND AND TARGET pybind11::headers)
             "${PROJECT_SOURCE_DIR}/python/src/bind_animation.cpp"
             "${PROJECT_SOURCE_DIR}/python/src/bind_cameras.cpp"
             "${PROJECT_SOURCE_DIR}/python/src/bind_lights.cpp"
+            # TextureLoader / RGBELoader / EXRLoader / ModelLoader and friends. Without this a
+            # script could reach scene.environment — writable, and the assignment works — with
+            # nothing in the module able to produce a texture to assign, since bind_textures
+            # binds Texture with no constructor from data either. So the ONLY way to light a
+            # scene with an HDRI was File > Set Environment, a UI action: not scriptable, and
+            # unreachable from a headless --screenshot run. Costs no new dependency; every
+            # loader in here is part of threepp already, and FBX stays behind its own guard.
+            "${PROJECT_SOURCE_DIR}/python/src/bind_loaders.cpp"
             "${PROJECT_SOURCE_DIR}/python/src/bind_robot.cpp")
 
     # The physics and sensor halves of threepp.editor: handles onto the bodies

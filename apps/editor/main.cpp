@@ -55,6 +55,8 @@ int main(int argc, char** argv) {
             options.play = true;
         } else if (std::strncmp(argument, "--urdf=", 7) == 0) {
             options.urdf = argument + 7;
+        } else if (std::strncmp(argument, "--environment=", 14) == 0) {
+            options.environment = argument + 14;
         } else if (std::strncmp(argument, "--screenshot=", 13) == 0) {
             options.screenshot = argument + 13;
         } else if (std::strncmp(argument, "--bench=", 8) == 0) {
@@ -89,6 +91,8 @@ int main(int argc, char** argv) {
                       << "  --selftest       drive the editor through its acceptance passes,\n"
                       << "                   print each one and exit non-zero on a failure\n"
                       << "  --urdf=PATH      import a URDF on start\n"
+                      << "  --environment=P  light the scene from a .hdr/.exr, as\n"
+                      << "                   File > Set Environment does (background too)\n"
                       << "  --example=SLUG   open a scene that ships in the binary (hover-arena)\n"
                       << "  --screenshot=PNG with no scene of its own: build the spline-tube\n"
                       << "                   scenario, play it and write PNG plus one _<view>.png\n"
