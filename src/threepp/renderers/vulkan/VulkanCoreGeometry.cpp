@@ -1211,7 +1211,12 @@ void VulkanRenderer::Impl::recordDisplacedDeform(VkCommandBuffer cb, DisplacedMe
                 water::OceanImage dsp = c.dyn->displacement();
                 ht.currentLayout  = VK_IMAGE_LAYOUT_GENERAL;
                 dsp.currentLayout = VK_IMAGE_LAYOUT_GENERAL;
-                st.scratchA.currentLayout = VK_IMAGE_LAYOUT_GENERAL;
+                // scratchA.currentLayout is deliberately NOT forced: it is
+                // created UNDEFINED and recordApply's cmdTransitionToGeneral
+                // relies on the tracked value to record the one first-use
+                // UNDEFINED→GENERAL barrier (pre-setting GENERAL here skipped
+                // that barrier and tripped submit-time layout validation on
+                // the first FFT chain).
                 c.ifft->recordApply(cb, ht,  st.scratchA);
                 c.ifft->recordApply(cb, dsp, st.scratchA);
 

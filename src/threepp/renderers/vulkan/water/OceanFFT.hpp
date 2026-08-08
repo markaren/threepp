@@ -171,11 +171,14 @@ namespace threepp::water {
 
         // Records: log2N horizontal butterflies + log2N vertical butterflies
         // + 1 permute pass. After this completes, `input` holds the spatial
-        // domain image (sign-corrected). `scratch` is left in an undefined
-        // state (caller may share scratch across multiple cascades).
+        // domain image (sign-corrected). `scratch` contents are left garbage
+        // (caller may share scratch across multiple cascades).
         //
-        // Both images must be RG32F, both must be in GENERAL layout already
-        // (this method does not transition them).
+        // Both images must be RG32F. Layout is handled here: each image is
+        // transitioned to GENERAL based on its tracked currentLayout (first
+        // use records the UNDEFINED→GENERAL barrier), and both end the call
+        // in GENERAL. Callers must not force currentLayout beforehand — a
+        // wrong claim of GENERAL suppresses that first-use barrier.
         void recordApply(VkCommandBuffer cb, OceanImage& input, OceanImage& scratch);
 
         uint32_t textureSize() const { return textureSize_; }
