@@ -166,6 +166,160 @@ class Two:
     CHECK_FALSE(scripting::inspect(ambiguous).error.empty());
 }
 
+TEST_CASE("the file name matches its class through the punctuation",
+          "[editor][scripting]") {
+
+    // Python spells files snake_case and classes CamelCase, so stage_look.py
+    // holding `class StageLook` is the ORDINARY way to write a script. Matching
+    // the two literally makes that pair a non-match.
+    //
+    // Worth being precise about WHEN that bites, because it is not "always":
+    // a file whose single class defines update() has always resolved through
+    // the sole-updater fallback, name or no name. The file name only has to be
+    // read when something else is competing for the job - and that is exactly
+    // when the mismatch turns into "no class named 'stage_look'", about a class
+    // sitting right there, correctly named.
+
+    // A competitor that would otherwise win: Helper updates, WristCamera does
+    // not, so the sole-updater rule picks Helper and the file name is the only
+    // thing that can overrule it.
+    const auto beside = writeScript("wrist_camera.py", R"(
+class Helper:
+    def update(self, dt):
+        pass
+
+class WristCamera:
+    def start(self, obj):
+        pass
+)");
+    CHECK(scripting::inspect(beside).className == "WristCamera");
+
+    // Two updaters: without the file name this is ambiguous and refuses to
+    // run at all. With it, the named one wins - which is the whole purpose of
+    // naming a class after its file.
+    const auto contested = writeScript("stage_look.py", R"(
+class Helper:
+    def update(self, dt):
+        pass
+
+class StageLook:
+    def update(self, dt):
+        pass
+)");
+    CHECK(scripting::inspect(contested).className == "StageLook");
+    CHECK(scripting::inspect(contested).error.empty());
+
+    // Hyphens too - a file name is not a Python identifier and never had to be.
+    const auto kebab = writeScript("stage-look.py", R"(
+class Helper:
+    def update(self, dt):
+        pass
+
+class StageLook:
+    def update(self, dt):
+        pass
+)");
+    CHECK(scripting::inspect(kebab).className == "StageLook");
+
+    // The fold is symmetric: a snake_case CLASS in a camelCase file matches.
+    const auto reversed = writeScript("stageLook.py", R"(
+class Helper:
+    def update(self, dt):
+        pass
+
+class stage_look:
+    def update(self, dt):
+        pass
+)");
+    CHECK(scripting::inspect(reversed).className == "stage_look");
+
+    // And the plain single-class file keeps working, which is the case the
+    // fold must not disturb.
+    const auto lone = writeScript("lone_worker.py", R"(
+class LoneWorker:
+    def update(self, dt):
+        pass
+)");
+    CHECK(scripting::inspect(lone).className == "LoneWorker");
+}
+
+TEST_CASE("a setup script needs no update()", "[editor][scripting]") {
+
+    // A script that only implements start() is a real thing - it dresses the
+    // scene once and gets out of the way - and it used to be unreachable
+    // unless its file name matched its class exactly, because the fallback
+    // looked for update() and nothing else.
+    const auto sole = writeScript("unrelated_name.py", R"(
+class Dressing:
+    def start(self, obj):
+        obj.position.y = 3.0
+)");
+    CHECK(scripting::inspect(sole).className == "Dressing");
+    CHECK(scripting::inspect(sole).error.empty());
+
+    // Strictly a last resort, though: it is consulted only where the update()
+    // rule found NOTHING, so it can never take a resolution away from a class
+    // that does update. Here Behaviour still wins over the bare starter.
+    const auto mixed = writeScript("mixed_roles.py", R"(
+class Dressing:
+    def start(self, obj):
+        pass
+
+class Behaviour:
+    def update(self, dt):
+        pass
+)");
+    CHECK(scripting::inspect(mixed).className == "Behaviour");
+
+    // Two starters and no updater is as ambiguous as two updaters.
+    const auto both = writeScript("two_starters.py", R"(
+class One:
+    def start(self, obj):
+        pass
+
+class Two:
+    def start(self, obj):
+        pass
+)");
+    CHECK_FALSE(scripting::inspect(both).error.empty());
+}
+
+TEST_CASE("an unmatched class name is reported with one that would match",
+          "[editor][scripting]") {
+
+    // The error a typo actually produces. Naming the classes it DID find, and
+    // a spelling that would have worked, is the difference between a minute
+    // and an afternoon - the old message said only that 'stage_look' was
+    // missing, which is the one name nobody would ever type.
+    const auto typo = writeScript("stage_look2.py", R"(
+class StageLuke:
+    def start(self, obj):
+        pass
+
+class Bystander:
+    def start(self, obj):
+        pass
+)");
+    const auto reported = scripting::inspect(typo).error;
+    REQUIRE_FALSE(reported.empty());
+    CHECK(reported.find("StageLuke") != std::string::npos);
+    CHECK(reported.find("Bystander") != std::string::npos);
+    CHECK(reported.find("StageLook2") != std::string::npos);
+
+    // Two classes whose names differ ONLY by punctuation: the fold makes them
+    // one name, and picking either would be a coin toss.
+    const auto folded = writeScript("twin_names.py", R"(
+class TwinNames:
+    def update(self, dt):
+        pass
+
+class Twinnames:
+    def update(self, dt):
+        pass
+)");
+    CHECK_FALSE(scripting::inspect(folded).error.empty());
+}
+
 TEST_CASE("ScriptPlaySession runs start/update/stop", "[editor][scripting]") {
 
     const auto path = writeScript("spinner.py", kSpinner);

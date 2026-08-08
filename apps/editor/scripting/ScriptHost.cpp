@@ -65,21 +65,76 @@ def load(path):
                 pass
     return mod, stem
 
+def _fold(name):
+    """A name with its separators dropped, for matching a class to a file.
+
+    Python spells files snake_case and classes CamelCase, so stage_look.py
+    holding `class StageLook` is the NORMAL way to write a script, not an edge
+    case. Comparing the two literally makes that pair a non-match, and the
+    failure lands as "no class named 'stage_look'" - which reads as though the
+    class is missing when it is sitting right there, correctly named. Folding
+    both sides to letters and digits makes stage_look / stage-look / StageLook
+    / stageLook one name, which is what a person means by them.
+    """
+    return "".join(c for c in name if c.isalnum()).lower()
+
+def _lifecycle(c, *names):
+    return any(callable(getattr(c, n, None)) for n in names)
+
 def find_class(mod, stem):
-    """The script class: named after the file, else the one defining update()."""
+    """The script class: named after the file, else the one that behaves like one."""
     own = [v for v in vars(mod).values()
            if inspect.isclass(v) and getattr(v, "__module__", None) == mod.__name__]
+
+    # Literal match first, so nothing that already resolved resolves differently.
     for c in own:
         if c.__name__.lower() == stem.lower():
             return c
+
+    # Then the same match with separators folded away. Ambiguity here can only
+    # come from two classes in one file whose names differ ONLY by punctuation,
+    # which is worth refusing rather than picking from.
+    folded = _fold(stem)
+    if folded:
+        named = [c for c in own if _fold(c.__name__) == folded]
+        if len(named) == 1:
+            return named[0]
+        if len(named) > 1:
+            raise LookupError(
+                "%s.py: %s all match the file name once punctuation is ignored; "
+                "rename all but one" % (stem, ", ".join(sorted(c.__name__ for c in named))))
+
     updaters = [c for c in own if callable(getattr(c, "update", None))]
     if len(updaters) == 1:
         return updaters[0]
+
+    # Nothing updates, so look for a class that is a script in every other way.
+    # Strictly a LAST resort - it runs only where the line above found none at
+    # all - because a setup script that only implements start() is a real thing
+    # and used to be unreachable unless its file name matched exactly.
+    if not updaters:
+        starters = [c for c in own if _lifecycle(c, "start", "stop")]
+        if len(starters) == 1:
+            return starters[0]
+
     if not own:
         raise LookupError("%s.py defines no class" % stem)
+
+    names = ", ".join(sorted(c.__name__ for c in own))
     if not updaters:
-        raise LookupError("%s.py: no class named '%s', and none defines update()" % (stem, stem))
-    raise LookupError("%s.py: several classes define update(); name one '%s'" % (stem, stem))
+        raise LookupError(
+            "%s.py: nothing here is the script. Name a class after the file "
+            "('%s' works - case and punctuation are ignored) or give exactly one "
+            "of them update(). Found: %s" % (stem, _suggest(stem), names))
+    raise LookupError(
+        "%s.py: several classes define update() (%s); name one after the file - "
+        "'%s' works, and so does any spelling of it, since case and punctuation "
+        "are ignored" % (stem, names, _suggest(stem)))
+
+def _suggest(stem):
+    """The CamelCase a file name is asking for, for an error message."""
+    parts = [p for p in "".join(c if c.isalnum() else " " for c in stem).split() if p]
+    return "".join(p[:1].upper() + p[1:] for p in parts) or stem
 
 def load_class(path):
     mod, stem = load(path)
