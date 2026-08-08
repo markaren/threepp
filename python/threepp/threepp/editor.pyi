@@ -787,7 +787,7 @@ def add(object: threepp.Object3D, parent: threepp.Object3D | None = None) -> thr
     """
     Add `object` to what this generator is building, and return it. With no `parent` it goes at the generator's root; pass one of your own earlier adds to nest. Raises outside a generator run.
     """
-def scene() -> threepp.Object3D:
+def scene() -> threepp.Scene:
     """
     The live scene: what a generator is authoring into, or what a behaviour script is playing in. READ it to reach what you did not author — scene.get_object_by_name("Ground"), scene.children. Objects a generator reaches this way are NOT its output and are not replaced when it re-runs. During Play this answers from start() onwards, including update(), fixed_update() and the collision and trigger callbacks. Raises when nothing is generating and nothing is playing.
     """
