@@ -123,9 +123,16 @@ namespace threepp::vulkan {
         // surface where a window system exists (today's headless behaviour),
         // and fail with a direct message where none does (GLFW Null platform).
         if (preferHeadlessSurface) {
+#ifdef GLFW_PLATFORM// 3.4+
+            const bool haveWindowSystem = glfwGetPlatform() != GLFW_PLATFORM_NULL;
+#else
+            // GLFW before 3.4 has no Null platform, so glfwInit having succeeded
+            // means a window system is there (see initGLfw in Canvas.cpp).
+            const bool haveWindowSystem = true;
+#endif
             if (hasInstanceExtension(VK_EXT_HEADLESS_SURFACE_EXTENSION_NAME)) {
                 headlessSurface_ = true;
-            } else if (glfwGetPlatform() != GLFW_PLATFORM_NULL) {
+            } else if (haveWindowSystem) {
                 std::cerr << "[VulkanContext] VK_EXT_headless_surface not available; "
                              "headless canvas falls back to a hidden-window surface.\n";
             } else {

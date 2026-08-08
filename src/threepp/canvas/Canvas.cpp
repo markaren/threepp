@@ -162,7 +162,8 @@ namespace {
     void initGLfw(bool headless) {
         if (glfwRefCount()++ == 0) {
             glfwSetErrorCallback(error_callback);
-#ifndef __EMSCRIPTEN__
+            (void) headless;
+#if !defined(__EMSCRIPTEN__) && defined(GLFW_PLATFORM)
             // Pick the GLFW platform before the first glfwInit reads the hint.
             // A headless canvas on a machine with no display server (cloud GPU
             // instances: DISPLAY/WAYLAND_DISPLAY unset) selects the Null
@@ -187,8 +188,16 @@ namespace {
             }
 #endif
             glfwInitHint(GLFW_PLATFORM, wantNull ? GLFW_PLATFORM_NULL : GLFW_ANY_PLATFORM);
-#else
-            (void) headless;
+#elif !defined(__EMSCRIPTEN__)
+            // GLFW before 3.4 has no platform selection and no Null platform:
+            // a display-less machine just fails in glfwInit below. Distro
+            // packages still ship 3.3 (Ubuntu 22.04), so an external GLFW can
+            // land here even though the vendored copy is 3.4.
+            if (const char* forced = std::getenv("THREEPP_GLFW_PLATFORM"); forced && std::string_view{forced} == "null") {
+                std::cerr << "Canvas: THREEPP_GLFW_PLATFORM=null ignored - GLFW "
+                          << GLFW_VERSION_MAJOR << '.' << GLFW_VERSION_MINOR
+                          << " predates the Null platform (needs 3.4)" << std::endl;
+            }
 #endif
             if (!glfwInit()) {
                 --glfwRefCount();
