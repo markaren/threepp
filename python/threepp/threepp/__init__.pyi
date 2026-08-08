@@ -3365,7 +3365,7 @@ class ModelLoader:
         ...
     def load(self, path: str) -> Group:
         """
-        Load a model (.obj/.gltf/.glb/.stl/.dae) as a Group.
+        Load a model (.obj/.gltf/.glb/.stl/.dae/.json) as a Group. .json is a three.js scene document - what the threepp editor saves - with the document root adopted as the group's child, so a Scene root keeps its environment and userData and is reachable with group.children[0].
         """
     def set_ignore_up_direction(self, ignore: bool) -> None:
         ...

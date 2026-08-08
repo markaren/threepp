@@ -146,7 +146,10 @@ namespace threepp_py {
         py::class_<ModelLoader>(m, "ModelLoader")
                 .def(py::init<>())
                 .def("load", [](ModelLoader& l, const std::string& path) { return l.load(path); }, py::arg("path"),
-                     "Load a model (.obj/.gltf/.glb/.stl/.dae) as a Group.")
+                     "Load a model (.obj/.gltf/.glb/.stl/.dae/.json) as a Group. .json is a three.js "
+                     "scene document - what the threepp editor saves - with the document root "
+                     "adopted as the group's child, so a Scene root keeps its environment and "
+                     "userData and is reachable with group.children[0].")
                 .def("set_ignore_up_direction", [](ModelLoader& l, bool ignore) { l.setIgnoreUpDirection(ignore); }, py::arg("ignore"));
 
         // ---- OBJLoader -------------------------------------------------------

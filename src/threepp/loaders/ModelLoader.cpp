@@ -4,6 +4,7 @@
 #include "threepp/loaders/ColladaLoader.hpp"
 #include "threepp/loaders/GLTFLoader.hpp"
 #include "threepp/loaders/OBJLoader.hpp"
+#include "threepp/loaders/ObjectLoader.hpp"
 #include "threepp/loaders/STLLoader.hpp"
 #ifdef THREEPP_WITH_USD
 #include "threepp/loaders/USDLoader.hpp"
@@ -25,6 +26,35 @@ std::shared_ptr<Group> ModelLoader::load(const std::filesystem::path& path) {
     if (!exists(path)) {
         std::cerr << "[ModelLoader] File does not exist: " << std::filesystem::absolute(path).string() << std::endl;
         return nullptr;
+    }
+
+    if (ext == ".json") {
+        // A three.js "Object" JSON document - which is to say, a scene the
+        // threepp EDITOR saved. The one format this dispatch produced itself
+        // was the one it could not read back: every interchange format above
+        // and below routed, and File > Save's own output fell through to
+        // "unsupported extension".
+        //
+        // ObjectLoader hands back the document's ROOT, which for a saved scene
+        // is a Scene - and a Scene is not a Group, so it is ADOPTED as the
+        // group's child rather than cast or unwrapped. Unwrapping the children
+        // instead would silently drop everything that lives ON the root
+        // (environment, background, fog, the root's own userData); this way
+        // the whole document survives, one level down, and a caller that wants
+        // the scene properties reaches them with as<Scene>() on the child.
+        // thread_local like every sibling below: loadAsync runs this on a
+        // worker thread, and the instance is reused per thread. Safe for
+        // ObjectLoader because both its fields reset per call - resourcePath_
+        // defaults from the file being loaded, warnings_ clears at the start
+        // of every parse.
+        thread_local ObjectLoader loader;
+        auto root = loader.load(path);
+        if (!root) return nullptr;
+        if (auto group = std::dynamic_pointer_cast<Group>(root)) return group;
+        auto group = Group::create();
+        group->name = root->name.empty() ? path.stem().string() : root->name;
+        group->add(root);
+        return group;
     }
 
     if (ext == ".obj") {
