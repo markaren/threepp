@@ -13,6 +13,7 @@
 #include "threepp/lights/PointLight.hpp"
 #include "threepp/loaders/ObjectExporter.hpp"
 #include "threepp/loaders/ObjectLoader.hpp"
+#include "threepp/loaders/TextureLoader.hpp"
 #include "threepp/materials/LineBasicMaterial.hpp"
 #include "threepp/materials/MeshBasicMaterial.hpp"
 #include "threepp/materials/MeshLambertMaterial.hpp"
@@ -38,7 +39,10 @@
 
 #include <any>
 #include <cstdint>
+#include <filesystem>
+#include <fstream>
 #include <string>
+#include <vector>
 
 using namespace threepp;
 using Catch::Matchers::WithinAbs;
@@ -1198,4 +1202,64 @@ TEST_CASE("three.js typed-array names map onto threepp attribute types") {
         CHECK(parsed->geometry()->getIndex()->array() ==
               std::vector<unsigned int>{0, 1, 2, 2, 1, 0});
     }
+}
+
+
+TEST_CASE("A REFERENCED image comes back the same way up it went in") {
+
+    // The two `url` forms in an `images` entry are two different contracts:
+    //
+    //   data URI   the exporter wrote the texture's rows verbatim, so they are already in final
+    //              order and must NOT be flipped on the way back (the embedded round-trip test
+    //              above pins that, byte for byte).
+    //   file path  ImageStorage::Reference stores the path the texture was originally loaded
+    //              from. Re-reading it is an import, and every importer in the tree defaults to
+    //              flipY = true.
+    //
+    // Both used to decode with flipY = false, so a Reference-mode save came back upside down.
+    //
+    // A P6 PPM because stb reads it and writing one by hand needs no encoder - and two rows of
+    // different colours because row ORDER is the whole question.
+    const auto dir = std::filesystem::temp_directory_path() / "threepp-objectloader-flip-test";
+    std::filesystem::create_directories(dir);
+    const auto file = dir / "rows.ppm";
+    {
+        std::ofstream out(file, std::ios::binary | std::ios::trunc);
+        out << "P6\n2 2\n255\n";
+        const unsigned char rows[] = {
+                255, 0, 0, /**/ 255, 0, 0,  // top row in the FILE: red
+                0, 0, 255, /**/ 0, 0, 255,  // bottom row in the FILE: blue
+        };
+        out.write(reinterpret_cast<const char*>(rows), sizeof(rows));
+    }
+
+    TextureLoader textures;
+    auto texture = textures.load(file);// flipY defaults to true, as everywhere else
+    REQUIRE(texture != nullptr);
+    const std::vector<unsigned char> original = texture->image().data<unsigned char>();
+    REQUIRE(original.size() == 2 * 2 * 4);
+    // The loader flipped it, so the first row in MEMORY is the file's last: blue.
+    CHECK(original[2] == 255);
+    CHECK(original[0] == 0);
+
+    auto material = MeshStandardMaterial::create();
+    material->map = texture;
+    auto mesh = Mesh::create(BoxGeometry::create(), material);
+
+    // Reference mode with no resourcePath writes an absolute path, which the loader resolves
+    // without needing one of its own.
+    ObjectExporterOptions options;
+    options.images = ImageStorage::Reference;
+    ObjectExporter exporter;
+    const auto text = exporter.toJson(*mesh, options);
+    REQUIRE(text.find("data:image") == std::string::npos);// it really did reference, not embed
+
+    ObjectLoader loader;
+    auto parsed = loader.parse(text);
+    REQUIRE(parsed != nullptr);
+    auto* parsedMaterial = parsed->materialAs<MeshStandardMaterial>();
+    REQUIRE(parsedMaterial != nullptr);
+    REQUIRE(parsedMaterial->map != nullptr);
+
+    CHECK(parsedMaterial->map->image().data<unsigned char>() == original);
 }

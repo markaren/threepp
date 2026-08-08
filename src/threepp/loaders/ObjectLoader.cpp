@@ -150,19 +150,40 @@ namespace {
 
     // -------------------------------------------------------------- images
 
-    std::vector<Image> decodeImage(const json& url, int channels, const fs::path& resourcePath) {
+    // The two `url` forms are two different contracts, and they do not want the same row order.
+    //
+    //   data URI   ObjectExporter::writeImage emitted the texture's rows VERBATIM, and
+    //              writeTexture declares `flipY: false` beside them - the bytes are already in
+    //              final order. Flipping here would invert every embedded texture in every
+    //              document ever saved.
+    //   file path  ImageStorage::Reference stores the path the texture was ORIGINALLY loaded
+    //              from. Re-reading it is an import, and every importer in the tree
+    //              (TextureLoader, ImageLoader, RGBELoader, EXRLoader) defaults flipY = true.
+    //              Decoding it with false hands back the opposite of the texture that was saved.
+    //
+    // Both used to pass `false`, so a Reference-mode save came back with every texture upside
+    // down - and so did any document referencing an image by path, which is how an environment
+    // map is most naturally written.
+    //
+    // An explicit `flipY` on the image entry overrides either default.
+    std::vector<Image> decodeImage(const json& entry, const json& url, int channels,
+                                   const fs::path& resourcePath) {
 
         ImageLoader loader;
         std::vector<Image> out;
+
+        const bool hasOverride = entry.contains("flipY") && entry["flipY"].is_boolean();
+        const bool override = hasOverride && entry["flipY"].get<bool>();
 
         const auto decodeOne = [&](const std::string& u) -> std::optional<Image> {
             if (u.rfind("data:", 0) == 0) {
                 const auto comma = u.find(',');
                 if (comma == std::string::npos) return std::nullopt;
                 const auto bytes = utils::base64Decode(u.substr(comma + 1));
-                return loader.load(bytes, channels, false);
+                return loader.load(bytes, channels, hasOverride ? override : false);
             }
-            return loader.load(resourcePath.empty() ? fs::path(u) : resourcePath / u, channels, false);
+            return loader.load(resourcePath.empty() ? fs::path(u) : resourcePath / u, channels,
+                               hasOverride ? override : true);
         };
 
         if (url.is_array()) {
@@ -188,7 +209,7 @@ namespace {
             if (!entry.contains("uuid") || !entry.contains("url")) continue;
 
             const auto channels = value(entry, "threeppChannels", 4);
-            auto decoded = decodeImage(entry["url"], channels, resourcePath);
+            auto decoded = decodeImage(entry, entry["url"], channels, resourcePath);
 
             if (decoded.empty()) {
                 warnings.add("could not decode image '" + entry["uuid"].get<std::string>() + "'");
