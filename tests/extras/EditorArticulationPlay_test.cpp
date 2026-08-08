@@ -29,6 +29,7 @@
 #include "threepp/objects/Robot.hpp"
 #include "threepp/scenes/Scene.hpp"
 
+#include <algorithm>
 #include <cmath>
 #include <filesystem>
 #include <fstream>
@@ -278,6 +279,58 @@ TEST_CASE("A failed articulation load says why") {
         // why the two are separate.
         CHECK(built.error.empty());
     }
+}
+
+TEST_CASE("The editor's failure log carries the parser's reason") {
+
+    // The log line at the end of the chain. URDFLoader keeps diagnostics so
+    // that "the editor puts lastError() in front of the user instead of a
+    // generic message" (its header's words) - but the session's robot import
+    // said "the URDF at X is unreadable" whatever the parser knew. A user
+    // whose xacro has a typo on line 4 should read exactly that.
+    const auto dir = std::filesystem::temp_directory_path() / "threepp-articulation-test";
+    std::filesystem::create_directories(dir);
+    const auto bad = dir / "bad_robot.urdf.xacro";
+    std::ofstream(bad, std::ios::trunc) << R"XML(<?xml version='1.0'?>
+<robot name='x' xmlns:xacro='http://www.ros.org/wiki/xacro'>
+  <link name='base'><visual><geometry>
+    <box size='${nope} 1 1'/>
+  </geometry></visual></link>
+</robot>
+)XML";
+
+    // The robot node is EMPTY on purpose: with an unloadable URDF there is no
+    // visual robot to import, but a document can still carry the config (a
+    // scene authored on a machine where the file existed, opened on one where
+    // it is broken), and the session must say something useful, not crash and
+    // not shrug.
+    Scene scene;
+    // NOT Robot::create() - Robot has no create() of its own, so that spelling
+    // silently calls the inherited Object3D::create() and builds a plain
+    // Object3D the session's as<Robot>() discovery walks straight past.
+    auto robot = std::make_shared<Robot>();
+    robot->name = "Broken";
+    RobotConfig rc;
+    rc.urdf = bad.string();
+    rc.write(*robot);
+    ArticulationConfig ac;
+    ac.enabled = true;
+    ac.write(*robot);
+    scene.add(robot);
+
+    PhysicsPlaySession session;
+    std::vector<std::string> logged;
+    session.setLogger([&](const std::string& line) { logged.push_back(line); });
+    session.start(scene);
+
+    const auto found = std::find_if(logged.begin(), logged.end(), [](const std::string& line) {
+        return line.find("Broken") != std::string::npos &&
+               line.find("nope") != std::string::npos &&
+               line.find(":4") != std::string::npos;
+    });
+    CHECK(found != logged.end());
+
+    session.stop();
 }
 
 TEST_CASE("The articulation and the visual robot agree on where a link is") {

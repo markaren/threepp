@@ -241,6 +241,24 @@ class LoneWorker:
         pass
 )");
     CHECK(scripting::inspect(lone).className == "LoneWorker");
+
+    // When a LITERAL (case-insensitive) match and a fold match are both
+    // present, the literal one wins - it ran first before the fold existed,
+    // and "nothing that already resolved resolves differently" is the fold's
+    // whole compatibility promise. Note this is also why two classes named
+    // Stage_Look and StageLook in stage_look.py are NOT the fold's ambiguity
+    // error: Stage_Look IS the file's name, so the question never reaches the
+    // fold.
+    const auto both = writeScript("stage_door.py", R"(
+class StageDoor:
+    def update(self, dt):
+        pass
+
+class Stage_Door:
+    def update(self, dt):
+        pass
+)");
+    CHECK(scripting::inspect(both).className == "Stage_Door");
 }
 
 TEST_CASE("a setup script needs no update()", "[editor][scripting]") {

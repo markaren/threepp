@@ -1008,9 +1008,23 @@ namespace threepp::editor {
                 return;
             }
             if (!built.articulation) {
-                log("physics: \"" + robot.name + "\" could not be articulated - the URDF at \"" +
-                    robotConfig->urdf + "\" is unreadable");
+                // built.error is the URDFLoader's own account - for a xacro
+                // failure, the file and LINE. This log line is the reason
+                // URDFLoader keeps diagnostics at all (see its header): the
+                // editor is the caller that puts them in front of the user
+                // instead of a generic "unreadable".
+                log("physics: \"" + robot.name + "\" could not be articulated - " +
+                    (built.error.empty() ? "the URDF at \"" + robotConfig->urdf +
+                                                   "\" is unreadable"
+                                         : built.error));
                 return;
+            }
+            // A robot that DID build can still have been warned about - a
+            // redefined xacro macro, an ignored attribute. Those went only to
+            // stderr before, which an editor user never sees; the console is
+            // exactly the place they belong.
+            for (const auto& line : built.diagnostics) {
+                log("physics: \"" + robot.name + "\" - " + line);
             }
 
             auto played = std::make_unique<PlayedArticulation>();
