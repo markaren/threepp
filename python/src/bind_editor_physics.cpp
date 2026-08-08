@@ -68,6 +68,10 @@ namespace {
 
     Vector3 toVector3(const ::physx::PxVec3& v) { return {v.x, v.y, v.z}; }
 
+    // Defined below with the other free functions; JointHandle::release needs
+    // it from up here.
+    editor::PhysicsPlaySession* playing();
+
     // Everything a handle needs from the session that created it. Held as a
     // weak token rather than a pointer to the session, so a handle cannot keep
     // a stopped session's world alive and cannot silently read a dead one.
@@ -192,6 +196,17 @@ namespace {
             if (!valid()) return "<RigidBody (session stopped)>";
             return "<RigidBody '" + object_->name + "' " +
                    (isStatic() ? "static" : (isKinematic() ? "kinematic" : "dynamic")) + ">";
+        }
+
+        // The actor itself, for create_joint. Not bound to Python - a
+        // PxRigidActor is not a thing a script has any use for - but the
+        // resolver needs it, and it goes through the same lifetime gate as
+        // every other read so a handle held across Stop cannot smuggle a freed
+        // actor into a joint.
+        [[nodiscard]] ::physx::PxRigidActor* actor() const {
+
+            lifetime_.require("rigid body");
+            return actor_;
         }
 
     private:
@@ -485,17 +500,23 @@ namespace {
     class JointHandle {
 
     public:
-        JointHandle(std::shared_ptr<Object3D> object, Joint* joint, Lifetime lifetime)
-            : object_(std::move(object)), joint_(joint), lifetime_(std::move(lifetime)) {}
+        JointHandle(std::shared_ptr<Object3D> object, std::shared_ptr<Joint> joint,
+                    Lifetime lifetime)
+            : object_(std::move(object)), joint_(std::move(joint)),
+              lifetime_(std::move(lifetime)) {}
 
-        [[nodiscard]] bool valid() const { return lifetime_.alive(); }
+        // Weak on BOTH counts. The session token covers Stop, as it does for
+        // every handle in this file; the weak_ptr additionally covers
+        // release(), which drops ONE joint without stopping anything - a
+        // distinction only a runtime joint can make, and exactly the one a
+        // gripper needs.
+        [[nodiscard]] bool valid() const { return lifetime_.alive() && !joint_.expired(); }
 
         [[nodiscard]] std::shared_ptr<Object3D> object() const { return object_; }
 
         [[nodiscard]] const char* type() const {
 
-            require();
-            switch (joint_->type()) {
+            switch (live()->type()) {
                 case Joint::Type::Fixed: return "fixed";
                 case Joint::Type::Revolute: return "revolute";
                 case Joint::Type::Prismatic: return "prismatic";
@@ -507,63 +528,58 @@ namespace {
 
         [[nodiscard]] float position() const {
 
-            require();
-            return joint_->position();
+            return live()->position();
         }
 
         [[nodiscard]] float velocity() const {
 
-            require();
-            return joint_->velocity();
+            return live()->velocity();
         }
 
         [[nodiscard]] bool broken() const {
 
-            require();
-            return joint_->broken();
+            return live()->broken();
         }
 
         void setDriveTarget(float value) {
 
-            require();
-            joint_->setDriveTarget(value);
+            live()->setDriveTarget(value);
         }
 
         void setDriveVelocity(float value) {
 
-            require();
-            joint_->setDriveVelocity(value);
+            live()->setDriveVelocity(value);
         }
 
         [[nodiscard]] Vector3 reactionForce() const {
 
-            require();
+            auto* j = live();
             Vector3 force, torque;
-            joint_->reactionForce(force, torque);
+            j->reactionForce(force, torque);
             return force;
         }
 
         [[nodiscard]] Vector3 reactionTorque() const {
 
-            require();
+            auto* j = live();
             Vector3 force, torque;
-            joint_->reactionForce(force, torque);
+            j->reactionForce(force, torque);
             return torque;
         }
 
         [[nodiscard]] Vector3 breakForce() const {
 
-            require();
+            auto* j = live();
             Vector3 force, torque;
-            joint_->breakWrench(force, torque);
+            j->breakWrench(force, torque);
             return force;
         }
 
         [[nodiscard]] Vector3 breakTorque() const {
 
-            require();
+            auto* j = live();
             Vector3 force, torque;
-            joint_->breakWrench(force, torque);
+            j->breakWrench(force, torque);
             return torque;
         }
 
@@ -572,16 +588,47 @@ namespace {
             const std::string name =
                     object_ ? (object_->name.empty() ? object_->type() : object_->name) : "?";
             if (!lifetime_.alive()) return "<threepp.editor.Joint '" + name + "' (stopped)>";
+            if (joint_.expired()) return "<threepp.editor.Joint '" + name + "' (released)>";
             std::string out = "<threepp.editor.Joint '" + name + "' " + type();
-            if (joint_->broken()) out += " BROKEN";
+            if (live()->broken()) out += " BROKEN";
             return out + ">";
         }
 
+        // Drop the constraint NOW - the release half of a grasp. Idempotent:
+        // letting go twice is a script being careful, not an error, so this
+        // answers False rather than raising.
+        bool release() {
+
+            lifetime_.require("joint");
+            auto joint = joint_.lock();
+            if (!joint) return false;
+            auto* session = playing();
+            if (!session) return false;
+            const bool dropped = session->destroyJoint(joint.get());
+            // Drop our own lock before returning, so the Joint dies HERE -
+            // inside a call the script made while the world is unambiguously
+            // alive - rather than whenever the last handle happens to go.
+            joint.reset();
+            return dropped;
+        }
+
     private:
-        void require() const { lifetime_.require("joint"); }
+        // The joint, or a raise. Two deaths, two messages: "the session
+        // stopped" and "you released this" are different mistakes, and
+        // reporting the wrong one costs an afternoon.
+        [[nodiscard]] Joint* live() const {
+
+            lifetime_.require("joint");
+            const auto joint = joint_.lock();
+            if (!joint) {
+                throw std::runtime_error(
+                        "this joint has been released - call create_joint again to remake it");
+            }
+            return joint.get();
+        }
 
         std::shared_ptr<Object3D> object_;
-        Joint* joint_;
+        std::weak_ptr<Joint> joint_;
         Lifetime lifetime_;
     };
 
@@ -694,6 +741,73 @@ namespace {
 
         auto* session = editor::PhysicsPlaySession::active();
         return (session && session->world()) ? session : nullptr;
+    }
+
+    // One side of a runtime joint, whatever a script happened to be holding.
+    //
+    // Four spellings reach the same PxRigidActor, and accepting all four is
+    // the whole point of this function: the reason a gripper was not
+    // scriptable is that each of them was a dead end somewhere. None was the
+    // world; a SCENE OBJECT had no route to a body at all if it was an
+    // articulation link; the lifetime-checked editor.RigidBody was a different
+    // C++ type from the raw threepp.RigidBody that Joint's constructor cast
+    // to; and threepp.RigidBody itself is what world.add() hands back.
+    //
+    // A scene object resolves through the session's own rule
+    // (resolveJointBody), which is the SAME one an authored joint node uses -
+    // so "weld this to the gripper link" means the same thing whether it was
+    // authored in the inspector or built by a script. That rule reaches
+    // articulation links, which rigid_body_from_object deliberately does not.
+    ::physx::PxRigidActor* resolveJointSide(const py::handle& h, const char* which) {
+
+        if (h.is_none()) return nullptr;// the world
+
+        auto* session = playing();
+        if (!session) throw std::runtime_error("create_joint: no play session is running");
+
+        // The editor's own handle first: it is the one with a lifetime, so a
+        // stale one must raise here rather than be reinterpreted as something
+        // else further down.
+        if (py::isinstance<RigidBody>(h)) return h.cast<RigidBody*>()->actor();
+
+        // A link handed out by an Articulation.
+        if (py::isinstance<ArticulationLink>(h)) return h.cast<ArticulationLink*>()->raw();
+
+        // Anything in the scene graph: mesh, link node, robot, group.
+        if (const auto object = threepp_py::as_object3d(h)) {
+            if (auto* actor = session->resolveJointBody(object.get())) return actor;
+            const std::string name = object->name.empty() ? object->type() : object->name;
+            throw std::runtime_error(
+                    std::string("create_joint: ") + which + " \"" + name +
+                    "\" has no rigid body - give it a Physics entry, add it with "
+                    "editor.world().add(), or name a link of a robot whose Articulation "
+                    "section says Simulate");
+        }
+
+        // threepp.RigidBody - what world.add() hands back - cannot be unwrapped
+        // here: it is declared in bind_physx.cpp's own anonymous namespace, so
+        // this translation unit cannot name the type even though both register
+        // under module-level names that look related. That is the same split
+        // that made a gripper unscriptable in the first place, and the honest
+        // answer is not to smuggle the pointer across but to point at the door
+        // that IS open: the mesh it was added for resolves to the same actor.
+        std::string got = "that";
+        try {
+            got = py::cast<std::string>(h.attr("__class__").attr("__name__"));
+        } catch (const py::error_already_set&) {
+        }
+        if (got == "RigidBody") {
+            throw std::runtime_error(
+                    std::string("create_joint: ") + which +
+                    " is a raw threepp.RigidBody, which cannot be unwrapped here - pass the "
+                    "MESH you added instead (editor.world().add(mesh) binds the two, so the "
+                    "mesh resolves to the same body), or use "
+                    "editor.rigid_body_from_object(mesh)");
+        }
+        throw std::runtime_error(
+                std::string("create_joint: ") + which + " is a " + got +
+                " - it must be a scene object, an editor.RigidBody, an ArticulationLink, "
+                "or None for the world");
     }
 
 }// namespace
@@ -834,6 +948,13 @@ namespace threepp_py {
                                        "on_break() reads it directly, the break already happened.")
                 .def_property_readonly("break_torque", &JointHandle::breakTorque,
                                        "Torque (N*m, world axes) alongside break_force.")
+                .def("release", &JointHandle::release,
+                     "Drop this constraint now - the letting-go half of a grasp. True if it "
+                     "was still live, False if it had already gone (releasing twice is a "
+                     "script being careful, not an error). Every read on the handle raises "
+                     "afterwards, and `valid` goes False.\n\n"
+                     "An AUTHORED joint can be released too: it is document state, so the "
+                     "next Play builds it again from the node that carries it.")
                 .def("__repr__", &JointHandle::repr);
 
         py::class_<VehicleHandle, std::shared_ptr<VehicleHandle>>(sub, "Vehicle")
@@ -955,7 +1076,7 @@ namespace threepp_py {
                     const auto* played = session->findJoint(object.get());
                     if (!played || !played->joint) return py::none();
                     return py::cast(std::make_shared<JointHandle>(
-                            std::move(object), played->joint.get(),
+                            std::move(object), played->joint,
                             Lifetime{session->lifetime()}));
                 },
                 py::arg("object"),
@@ -963,6 +1084,50 @@ namespace threepp_py {
                 "is not running or the object is not a joint node. NO ancestor walk, unlike the "
                 "other from_object verbs: a joint is its own node, so the script asking is "
                 "normally sitting on it.");
+
+        sub.def(
+                "create_joint",
+                [](const py::handle& bodyA, const py::handle& bodyB, const Vector3& position,
+                   const Quaternion& rotation, const Joint::Params& params) -> py::object {
+                    auto* session = playing();
+                    if (!session) {
+                        throw std::runtime_error(
+                                "create_joint: no play session is running - joints exist only "
+                                "during Play");
+                    }
+                    auto* a = resolveJointSide(bodyA, "body_a");
+                    auto* b = resolveJointSide(bodyB, "body_b");
+
+                    auto joint = session->createJoint(a, b, position, rotation, params);
+
+                    // The handle's `object` is body A's, when body A was one -
+                    // an authored joint's handle carries the node it was
+                    // authored on, and the nearest thing a runtime joint has
+                    // is the thing it was hung off.
+                    auto object = as_object3d(bodyA);
+                    return py::cast(std::make_shared<JointHandle>(
+                            std::move(object), std::move(joint), Lifetime{session->lifetime()}));
+                },
+                py::arg("body_a"), py::arg("body_b"), py::arg("position"),
+                py::arg("rotation") = Quaternion(), py::arg("params") = Joint::Params{},
+                "Build a joint between two bodies RIGHT NOW, and hand back the same "
+                "threepp.editor.Joint that joint_from_object returns.\n\n"
+                "This is how a gripper is scripted: on contact, weld the part to the tool "
+                "link; to let go, call release() on what you get back. A joint is a real "
+                "constraint, so the part keeps its mass and its contacts - unlike reparenting "
+                "it in the scene graph, which teleports it and takes it out of the "
+                "simulation.\n\n"
+                "Either side may be a scene object (a mesh with Physics, or any LINK of a "
+                "simulated robot - the same resolution an authored joint node uses), a "
+                "RigidBody from either handle type, an ArticulationLink, or None for the "
+                "world. Not both None.\n\n"
+                "`position` and `rotation` are the joint frame in WORLD space: the anchor, "
+                "with local X along the hinge or slide axis. `params` is a threepp.Joint.Params "
+                "- the default is a fixed weld, which is what a grasp wants.\n\n"
+                "The SESSION owns the joint, so Stop destroys it in the right order however "
+                "long the handle is kept; the handle then reports valid == False. Raises "
+                "outside Play, when a side names something with no rigid body, or when both "
+                "sides are the world or the same body.");
 
         sub.def(
                 "vehicle_from_object", [](const py::handle& h) -> py::object {

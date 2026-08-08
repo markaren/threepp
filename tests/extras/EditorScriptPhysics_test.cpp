@@ -562,6 +562,100 @@ class Spawner:
     physics.stop();
 }
 
+TEST_CASE("a script welds a body it spawned, then lets go",
+          "[editor][scripting][physx]") {
+
+    // editor.create_joint: the runtime constraint a gripper is. Before it,
+    // threepp.Joint was bound but unreachable in practice - its constructor
+    // cast both sides to the raw threepp.RigidBody, which is a DIFFERENT C++
+    // type from the lifetime-checked editor.RigidBody a script can get, and
+    // there was no route at all from a scene object to a body.
+    //
+    // The findings ride the spawner's SCALE, as in the case above: a static
+    // body's pose is never written back, so only the script can have touched
+    // it.
+    auto scene = Scene::create();
+    addGround(*scene);
+
+    auto spawner = addBox(*scene, "Spawner", PhysicsConfig::Body::Static, R"(
+import threepp
+from threepp import editor
+
+
+class Spawner:
+    def start(self, obj):
+        self.obj = obj
+        self.box = None
+        self.joint = None
+        self.ticks = 0
+
+    def update(self, dt):
+        self.ticks += 1
+
+        if self.box is None:
+            self.box = threepp.Mesh(threepp.BoxGeometry(0.4, 0.4, 0.4),
+                                    threepp.MeshStandardMaterial())
+            self.box.name = "Held"
+            self.box.position.set(3.0, 4.0, 0.0)
+            editor.scene().add(self.box)
+            editor.world().add(self.box)
+            # Pin it to the WORLD where it was spawned. Body B is None, which
+            # is the "one side is the world" case; body A is the MESH, resolved
+            # through the session's own rule - the thing that had no route.
+            self.joint = editor.create_joint(
+                self.box, None, position=threepp.Vector3(3.0, 4.0, 0.0))
+            self.obj.scale.x = 2.0 if self.joint.valid else -1.0
+            return
+
+        # Let go on tick 60, after it has had a second to NOT fall.
+        if self.ticks == 60:
+            # Still up there: the constraint is holding a body that would
+            # otherwise be a metre down by now.
+            self.obj.scale.y = 2.0 if self.box.position.y > 3.5 else -1.0
+            released = self.joint.release()
+            again = self.joint.release()
+            # True then False, and invalid afterwards - releasing twice is a
+            # script being careful, not an error.
+            ok = released and not again and not self.joint.valid
+            try:
+                self.joint.broken
+                ok = False
+            except RuntimeError:
+                pass
+            self.obj.scale.z = 2.0 if ok else -1.0
+)");
+
+    PhysicsPlaySession physics;
+    ScriptPlaySession scripts;
+
+    physics.start(*scene);
+    scripts.start(*scene);
+    REQUIRE(scripts.errorFor(spawner->uuid).empty());
+
+    using Catch::Matchers::WithinAbs;
+
+    run(physics, scripts, 60);
+    CHECK(scripts.errorFor(spawner->uuid).empty());
+
+    auto* held = scene->getObjectByName("Held");
+    REQUIRE(held != nullptr);
+    // Welded to the world: a second of gravity moved it nowhere.
+    CHECK_THAT(held->position.y, WithinAbs(4.f, 0.05f));
+    CHECK_THAT(spawner->scale.x, WithinAbs(2.f, 1e-5));// the joint came up
+
+    run(physics, scripts, 120);
+    CHECK(scripts.errorFor(spawner->uuid).empty());
+    CHECK_THAT(spawner->scale.y, WithinAbs(2.f, 1e-5));// it was still up at release
+    CHECK_THAT(spawner->scale.z, WithinAbs(2.f, 1e-5));// release/idempotence/invalidation
+
+    // And once let go it FELL - which a scene-graph reparent could never show,
+    // because reparenting takes the body out of the simulation entirely.
+    CHECK_THAT(held->position.y, WithinAbs(0.2f, 0.06f));
+
+    scripts.stop();
+    physics.stop();
+}
+
 TEST_CASE("a script on a joint node reads its joint", "[editor][scripting][physx]") {
 
     SceneDocument document;

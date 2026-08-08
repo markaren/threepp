@@ -4,7 +4,7 @@ The runtime face of editor-authored data.
 from __future__ import annotations
 import typing
 import threepp
-__all__: list[str] = ['Articulation', 'Camera', 'Collision', 'Contact', 'ContactSample', 'Encoder', 'EncoderSample', 'ForceTorque', 'Imu', 'ImuSample', 'Joint', 'RaycastHit', 'RigidBody', 'SoftBody', 'SplinePath', 'Task', 'Time', 'Vehicle', 'WrenchSample', 'add', 'articulation_from_object', 'camera_from_object', 'contact_from_object', 'encoder_from_object', 'encoders_from_object', 'force_torque_from_object', 'imu_from_object', 'is_key_down', 'joint_from_object', 'raycast', 'rigid_body_from_object', 'scene', 'script_from_object', 'soft_body_from_object', 'spline_from_object', 'start_coroutine', 'time', 'until', 'vehicle_from_object', 'wait']
+__all__: list[str] = ['Articulation', 'Camera', 'Collision', 'Contact', 'ContactSample', 'Encoder', 'EncoderSample', 'ForceTorque', 'Imu', 'ImuSample', 'Joint', 'RaycastHit', 'RigidBody', 'SoftBody', 'SplinePath', 'Task', 'Time', 'Vehicle', 'WrenchSample', 'add', 'articulation_from_object', 'camera_from_object', 'contact_from_object', 'create_joint', 'encoder_from_object', 'encoders_from_object', 'force_torque_from_object', 'imu_from_object', 'is_key_down', 'joint_from_object', 'raycast', 'rigid_body_from_object', 'scene', 'script_from_object', 'soft_body_from_object', 'spline_from_object', 'start_coroutine', 'time', 'until', 'vehicle_from_object', 'wait']
 class SplinePath:
     def get_point_at(self, u: typing.SupportsFloat | typing.SupportsIndex) -> threepp.Vector3:
         """
@@ -226,9 +226,16 @@ class Articulation:
         """
 class Joint:
     """
-    One authored joint, played: the constraint PhysX built from a joint node's
-    userData. Only exists during Play, and only in a build with the PhysX SDK.
+    One live joint: the constraint PhysX built either from a joint node's
+    userData or from a create_joint call. Only exists during Play, and only in
+    a build with the PhysX SDK.
     """
+    def release(self) -> bool:
+        """
+        Drop this constraint now - the letting-go half of a grasp. True if it was still live, False if it had already gone (releasing twice is a script being careful, not an error). Every read on the handle raises afterwards, and `valid` goes False.
+
+        An AUTHORED joint can be released too: it is document state, so the next Play builds it again from the node that carries it.
+        """
     @property
     def object(self) -> threepp.Object3D:
         """
@@ -743,6 +750,18 @@ def world() -> threepp.PhysxWorld | None:
     This is the ONLY way to a world inside the editor: threepp.PhysxWorld's own constructor raises there, because the session owns the one world and a second would bring up a second PhysX foundation beside it.
 
     NOTE the handle difference: what world.add returns is a raw threepp.RigidBody, valid while the world is alive - which includes stop(), since sessions stop in reverse order and physics goes down last - but NOT invalidated when the world dies, so one stashed beyond its session dereferences a released actor. rigid_body_from_object returns the lifetime-checked threepp.editor.RigidBody, which raises instead. Prefer that one for anything held longer than the session.
+    """
+def create_joint(body_a: typing.Any, body_b: typing.Any, position: threepp.Vector3, rotation: threepp.Quaternion = ..., params: threepp.Joint.Params = ...) -> Joint:
+    """
+    Build a joint between two bodies RIGHT NOW, and hand back the same threepp.editor.Joint that joint_from_object returns.
+
+    This is how a gripper is scripted: on contact, weld the part to the tool link; to let go, call release() on what you get back. A joint is a real constraint, so the part keeps its mass and its contacts - unlike reparenting it in the scene graph, which teleports it and takes it out of the simulation.
+
+    Either side may be a scene object (a mesh with Physics, or any LINK of a simulated robot - the same resolution an authored joint node uses), an editor.RigidBody, an ArticulationLink, or None for the world. Not both None.
+
+    `position` and `rotation` are the joint frame in WORLD space: the anchor, with local X along the hinge or slide axis. `params` is a threepp.Joint.Params - the default is a fixed weld, which is what a grasp wants.
+
+    The SESSION owns the joint, so Stop destroys it in the right order however long the handle is kept; the handle then reports valid == False. Raises outside Play, when a side names something with no rigid body, or when both sides are the world or the same body.
     """
 def joint_from_object(object: threepp.Object3D | None) -> Joint | None:
     """

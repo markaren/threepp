@@ -65,6 +65,7 @@
 #include <exception>
 #include <functional>
 #include <memory>
+#include <stdexcept>// createJoint reports a degenerate pair to the script that asked
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -259,8 +260,15 @@ namespace threepp::editor {
         // One authored joint: the node it was authored on and the live
         // constraint (see JointConfig for the authoring model).
         struct PlayedJoint {
+            // The node it was authored on, or NULL for a joint a script built
+            // at runtime (editor.create_joint) - which has no document entry
+            // and no node of its own.
             Object3D* node = nullptr;
-            std::unique_ptr<Joint> joint;
+            // shared, not unique, so a script handle can hold a weak_ptr and
+            // report that THIS joint was released - which a session-wide
+            // lifetime token cannot say, since releasing one grasp does not
+            // stop the session.
+            std::shared_ptr<Joint> joint;
         };
 
         // Joints created on the last start(), for the status readout and the
@@ -272,10 +280,98 @@ namespace threepp::editor {
         // is its own node, not a property smeared over a subtree.
         [[nodiscard]] const PlayedJoint* findJoint(const Object3D* node) const {
 
+            // A null query must not match a runtime joint's null node, which
+            // would hand back an arbitrary script's grasp.
+            if (!node) return nullptr;
             for (const auto& played : joints_) {
                 if (played.node == node) return &played;
             }
             return nullptr;
+        }
+
+        // --- runtime joints: what a SCRIPT builds -----------------------------
+
+        // The actor a joint may grab for `object`: this session's own bodies
+        // (static, kinematic and dynamic alike) first, then the world's
+        // associations - which is where an articulated robot's LINKS live. One
+        // rule, so a script welding a part to a gripper link resolves it
+        // exactly as an authored joint node does.
+        //
+        // Public because it is the whole answer to "what can I joint to". A
+        // script holds scene objects, not PxRigidActors, and the other route
+        // from one to the other - rigid_body_from_object - deliberately stops
+        // at this session's own registry: an articulation link is not a
+        // PxRigidDynamic and could not answer half of what that handle
+        // promises (velocity, mass, forces are all articulation-level there).
+        [[nodiscard]] ::physx::PxRigidActor* resolveJointBody(const Object3D* object) const {
+
+            if (auto* actor = findActor(object)) return actor;
+            return world_ ? world_->findActor(object) : nullptr;
+        }
+
+        // Build a joint NOW and keep it, exactly as an authored one is kept.
+        //
+        // The session owning it is the point, not an implementation detail. A
+        // Joint whose lifetime Python controlled would be released whenever
+        // the collector next ran, and after Stop that moment is a
+        // use-after-free: ~Joint calls release() on a PxJoint whose PxPhysics
+        // the world has already destroyed. Held here it dies in stop()'s
+        // order - every joint, then the world - however long the script hangs
+        // on to its handle.
+        //
+        // `position`/`rotation` are the joint frame in WORLD space, the same
+        // convention JointConfig's node transform carries: origin at the
+        // anchor, local X along the hinge/slide axis.
+        //
+        // Throws std::invalid_argument with a reason worth reading when the
+        // pair is degenerate (both sides the world, or the same actor twice).
+        std::shared_ptr<Joint> createJoint(::physx::PxRigidActor* a, ::physx::PxRigidActor* b,
+                                           const Vector3& position, const Quaternion& rotation,
+                                           const Joint::Params& params) {
+
+            if (!world_) throw std::invalid_argument("create_joint: no physics world is playing");
+
+            // Joint's own constructor rejects both of these, but it throws in
+            // PhysX's vocabulary; a script gets told what it did instead.
+            if (!a && !b) {
+                throw std::invalid_argument(
+                        "create_joint: both sides are the world - one of them has to be a body");
+            }
+            if (a == b) {
+                throw std::invalid_argument(
+                        "create_joint: both sides are the same body - a joint needs two");
+            }
+
+            auto joint = std::make_shared<Joint>(*world_, a, b,
+                                                 toPxTransform(position, rotation), params);
+            // node = nullptr: no document entry, so findJoint never answers
+            // with it and the handle returned to the script is the only one.
+            joints_.push_back({nullptr, joint});
+            // An authored scene may have had no joints at all, in which case
+            // start() installed no break watch - and a runtime joint with a
+            // break threshold would then break silently.
+            watchJointBreaks();
+            return joint;
+        }
+
+        // Drop a joint before Stop - the release half of a grasp. False when
+        // this session does not hold it (already released). An AUTHORED joint
+        // can be dropped too: it is document state, so the next Play builds it
+        // again from the node that carries it.
+        bool destroyJoint(const Joint* joint) {
+
+            for (auto it = joints_.begin(); it != joints_.end(); ++it) {
+                if (it->joint.get() != joint) continue;
+                // Detach rather than merely drop: the caller may still be
+                // holding a reference (a script's handle keeps a weak one, but
+                // C++ callers and the release() path hold strong ones), and
+                // the constraint has to go NOW - a grasp that let go only when
+                // the last reference happened to die is not a release.
+                it->joint->detach();
+                joints_.erase(it);
+                return true;
+            }
+            return false;
         }
 
         // One authored vehicle, played: the model root the config was authored
@@ -515,33 +611,7 @@ namespace threepp::editor {
             });
             for (auto* node : jointNodes) buildJoint(scene, *node);
 
-            // One watch for the lot of them: a break is worth a console line
-            // whether or not anything scripted is listening (the constraint is
-            // gone for good), and the node is queued for drainBrokenJoints.
-            // Fired from inside step(), so only bookkeeping happens here.
-            if (!joints_.empty()) {
-                breakWatch_ = world_->watchConstraintBreaks([this](const ConstraintBreakEvent& event) {
-                    for (const auto& played : joints_) {
-                        if (played.joint && played.joint->raw() == event.joint) {
-                            // The event carries the breaking step's solver
-                            // wrench — the failure load. Latch it on the Joint
-                            // so breakWrench() (the script handle, the load
-                            // cell's final sample) answers with it for the
-                            // rest of the play.
-                            played.joint->latchBreakWrench(event.force, event.torque);
-                            char load[64];
-                            std::snprintf(load, sizeof(load), "%.1f N / %.1f N*m",
-                                          static_cast<double>(event.force.length()),
-                                          static_cast<double>(event.torque.length()));
-                            log("joint: \"" + played.node->name +
-                                "\" broke at " + load +
-                                " - the load exceeded its break threshold");
-                            brokenJoints_.push_back(played.node);
-                            return;
-                        }
-                    }
-                });
-            }
+            watchJointBreaks();
         }
 
         void update(float dt) override {
@@ -573,6 +643,17 @@ namespace threepp::editor {
             if (world_ && breakWatch_) world_->unwatchConstraintBreaks(breakWatch_);
             breakWatch_ = 0;
             brokenJoints_.clear();
+            // DETACH before clearing, and that ordering is the whole safety
+            // story for a scripted joint. Clearing the list only drops THIS
+            // session's reference; a script that stashed its grasp handle in a
+            // module global still holds one, and that Joint would then be
+            // destroyed some time after world_ below - releasing a PxJoint
+            // whose PxPhysics is gone. Releasing it here, while the world is
+            // unambiguously alive, leaves every outstanding reference holding
+            // something inert instead.
+            for (auto& played : joints_) {
+                if (played.joint) played.joint->detach();
+            }
             joints_.clear();
             // Vehicles before the world: a vehicle's destructor unregisters
             // its substep callback and pulls its chassis actor out of the
@@ -1068,14 +1149,48 @@ namespace threepp::editor {
             }
         }
 
-        // A body for a joint to grab: the session's own actors first (static
-        // bodies included), then the world's associations, which is where an
-        // articulated robot's links live — so a joint node parented under a
-        // gripper link, or naming a link as its other body, resolves too.
-        [[nodiscard]] ::physx::PxRigidActor* resolveJointBody(const Object3D* object) const {
+        // One watch for every joint this session holds: a break is worth a
+        // console line whether or not anything scripted is listening (the
+        // constraint is gone for good), and an authored joint's node is queued
+        // for drainBrokenJoints. Fired from inside step(), so only bookkeeping
+        // happens here.
+        //
+        // Idempotent, and called again by createJoint: a scene with no
+        // authored joints installed no watch at start(), and without this a
+        // breakable joint a script built would break in silence.
+        void watchJointBreaks() {
 
-            if (auto* actor = findActor(object)) return actor;
-            return world_ ? world_->findActor(object) : nullptr;
+            if (breakWatch_ || !world_) return;
+
+            breakWatch_ = world_->watchConstraintBreaks([this](const ConstraintBreakEvent& event) {
+                for (const auto& played : joints_) {
+                    if (!played.joint || played.joint->raw() != event.joint) continue;
+
+                    // The event carries the breaking step's solver wrench —
+                    // the failure load. Latch it on the Joint so breakWrench()
+                    // (the script handle, the load cell's final sample)
+                    // answers with it for the rest of the play.
+                    played.joint->latchBreakWrench(event.force, event.torque);
+                    char load[64];
+                    std::snprintf(load, sizeof(load), "%.1f N / %.1f N*m",
+                                  static_cast<double>(event.force.length()),
+                                  static_cast<double>(event.torque.length()));
+                    // A runtime joint has no node, so it has no name to print
+                    // and nothing to queue: drainBrokenJoints dispatches
+                    // on_joint_break to the script authored on the node, and
+                    // there is none. The script holds the handle and reads
+                    // `broken` — which the latch above has just made true.
+                    if (played.node) {
+                        log("joint: \"" + played.node->name + "\" broke at " + load +
+                            " - the load exceeded its break threshold");
+                        brokenJoints_.push_back(played.node);
+                    } else {
+                        log("joint: a runtime joint broke at " + std::string(load) +
+                            " - the load exceeded its break threshold");
+                    }
+                    return;
+                }
+            });
         }
 
         // Build one authored joint (see JointConfig for the model: the node's
@@ -1152,7 +1267,7 @@ namespace threepp::editor {
             params.collide = config->collide;
 
             try {
-                joints_.push_back({&node, std::make_unique<Joint>(
+                joints_.push_back({&node, std::make_shared<Joint>(
                                                   *world_, actorA, actorB,
                                                   toPxTransform(position, rotation), params)});
             } catch (const std::exception& e) {

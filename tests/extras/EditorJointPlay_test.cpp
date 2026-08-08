@@ -15,7 +15,12 @@
 #include "threepp/extras/editor/PhysicsPlaySession.hpp"
 #include "threepp/extras/editor/PhysxSensorPlaySession.hpp"
 #include "threepp/extras/editor/SceneDocument.hpp"
+#include "threepp/extras/editor/ArticulationConfig.hpp"
+#include "threepp/extras/editor/RobotConfig.hpp"
 #include "threepp/extras/editor/SensorConfig.hpp"
+
+#include "threepp/loaders/URDFLoader.hpp"
+#include "threepp/objects/Robot.hpp"
 
 #include "threepp/extras/sensors/ForceTorqueSensor.hpp"
 #include "threepp/extras/sensors/JointEncoder.hpp"
@@ -26,6 +31,9 @@
 
 #include <algorithm>
 #include <cmath>
+#include <filesystem>
+#include <fstream>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -48,6 +56,53 @@ namespace {
         config.shape = PhysicsConfig::Shape::Box;
         config.write(*box);
         return box;
+    }
+
+    // A two-link robot with one prismatic DOF, for the articulation-link case.
+    // Deliberately an ARTICULATION and not two rigid bodies: a link is exactly
+    // what the session's own actor registry does not contain.
+    constexpr const char* kLiftUrdf = R"(<?xml version="1.0"?>
+        <robot name="lift">
+          <link name="base">
+            <visual><geometry><box size="0.2 0.2 0.2"/></geometry></visual>
+            <collision><geometry><box size="0.2 0.2 0.2"/></geometry></collision>
+          </link>
+          <link name="tool">
+            <visual><geometry><box size="0.15 0.15 0.15"/></geometry></visual>
+            <collision><geometry><box size="0.15 0.15 0.15"/></geometry></collision>
+          </link>
+          <joint name="lift" type="prismatic">
+            <parent link="base"/>
+            <child link="tool"/>
+            <origin xyz="0 0 0.4" rpy="0 0 0"/>
+            <axis xyz="0 0 1"/>
+            <limit lower="0.0" upper="0.6"/>
+          </joint>
+        </robot>)";
+
+    std::shared_ptr<Robot> makeLiftRobot(Scene& scene) {
+
+        const auto dir = std::filesystem::temp_directory_path() / "threepp-runtime-joint-test";
+        std::filesystem::create_directories(dir);
+        const auto path = dir / "lift.urdf";
+        std::ofstream(path, std::ios::trunc) << kLiftUrdf;
+
+        URDFLoader loader;
+        auto robot = loader.load(path);
+        if (!robot) return nullptr;
+        robot->name = "Lift";
+        // The part hangs at y=3; put the tool link up there to weld to.
+        robot->position.set(0.f, 2.6f, 0.f);
+
+        RobotConfig rc;
+        rc.urdf = path.string();
+        rc.write(*robot);
+
+        ArticulationConfig ac;
+        ac.enabled = true;
+        ac.fixedBase = true;
+        ac.write(*robot);
+        return robot;
     }
 
     // A joint node under `bodyA`, at `localPosition`, hinging about the WORLD
@@ -107,6 +162,156 @@ TEST_CASE("a fixed joint welds two falling boxes together", "[editor][physx]") {
 
     session.stop();
     CHECK(session.jointCount() == 0);
+}
+
+TEST_CASE("a joint built at runtime welds, then lets go", "[editor][physx]") {
+
+    // The C++ half of what a script does through editor.create_joint: no
+    // authored node, no JointConfig, no document entry - the session is asked
+    // for a constraint mid-play and asked to drop it again.
+    SceneDocument document;
+    auto& scene = document.scene();
+
+    auto a = makeDynamicBox(scene, "A", {0.f, 6.f, 0.f});
+    auto b = makeDynamicBox(scene, "B", {1.5f, 6.f, 0.f});
+    scene.add(a);
+    scene.add(b);
+
+    PhysicsPlaySession session;
+    session.start(scene);
+    REQUIRE(session.jointCount() == 0);// nothing authored
+
+    auto* actorA = session.resolveJointBody(a.get());
+    auto* actorB = session.resolveJointBody(b.get());
+    REQUIRE(actorA != nullptr);
+    REQUIRE(actorB != nullptr);
+
+    auto weld = session.createJoint(actorA, actorB, {0.75f, 6.f, 0.f}, Quaternion(),
+                                    Joint::Params{});
+    REQUIRE(weld != nullptr);
+    CHECK(session.jointCount() == 1);
+
+    run(session, 60);
+    // Held: the pair fell together, keeping the offset they were welded at.
+    CHECK(a->position.y < 5.f);
+    CHECK_THAT(b->position.x - a->position.x, WithinAbs(1.5f, 0.05f));
+    CHECK_THAT(b->position.y - a->position.y, WithinAbs(0.f, 0.05f));
+
+    // Let go. The session drops its reference, and since it held the only
+    // owning one the constraint dies here - while the world is alive, which is
+    // the whole reason the session owns it.
+    CHECK(session.destroyJoint(weld.get()));
+    CHECK(session.jointCount() == 0);
+    CHECK_FALSE(session.destroyJoint(weld.get()));// idempotent
+
+    // Released means RELEASED, not "will be released once the last reference
+    // goes". This test still holds one, and the constraint is gone anyway.
+    CHECK(weld.use_count() == 1);
+    CHECK_FALSE(weld->attached());
+    CHECK_THROWS(weld->broken());
+
+    session.stop();
+    // And the reference outliving stop() is inert rather than fatal - see the
+    // ownership case below, which is where that is asserted properly.
+}
+
+TEST_CASE("a runtime joint reaches an articulation link", "[editor][physx]") {
+
+    // The failure issue 408 is about. A robot's LINKS are not in the session's
+    // own actor registry - they belong to the articulation - so the lookup a
+    // rigid-body handle uses answers None for them. resolveJointBody is the
+    // rule that does reach them, and this is the assertion that it does.
+    SceneDocument document;
+    auto& scene = document.scene();
+
+    auto robot = makeLiftRobot(scene);
+    REQUIRE(robot != nullptr);
+    scene.add(robot);
+
+    auto part = makeDynamicBox(scene, "Part", {0.f, 3.f, 0.f});
+    scene.add(part);
+
+    PhysicsPlaySession session;
+    session.start(scene);
+    REQUIRE(session.articulationCount() == 1);
+
+    auto* link = robot->getObjectByName("tool");
+    REQUIRE(link != nullptr);
+
+    // The contrast, stated as an assertion rather than a comment: the
+    // rigid-body route stops at the session's registry and finds nothing for a
+    // link, while the joint route resolves it through the world's
+    // associations.
+    CHECK(session.findActor(link) == nullptr);
+    auto* linkActor = session.resolveJointBody(link);
+    REQUIRE(linkActor != nullptr);
+
+    auto* partActor = session.resolveJointBody(part.get());
+    REQUIRE(partActor != nullptr);
+
+    Vector3 anchor;
+    part->getWorldPosition(anchor);
+    auto grip = session.createJoint(partActor, linkActor, anchor, Quaternion(),
+                                    Joint::Params{});
+    REQUIRE(grip != nullptr);
+
+    // Welded to a link of a fixed-base robot, the part stops falling.
+    run(session, 90);
+    CHECK(part->position.y > 2.f);
+
+    session.stop();
+    CHECK(session.jointCount() == 0);
+}
+
+TEST_CASE("a runtime joint dies with the session that owns it", "[editor][physx]") {
+
+    // The crash this ownership exists to prevent. ~Joint calls release() on
+    // its PxJoint, which is only legal while the PxPhysics that made it lives.
+    // A joint owned by a script would be collected whenever Python got round
+    // to it - after Stop, that is a use-after-free. Owned here, stop() takes
+    // it down BEFORE the world, and a reference outliving the session finds an
+    // already-dead joint rather than a live pointer into freed memory.
+    SceneDocument document;
+    auto& scene = document.scene();
+
+    auto a = makeDynamicBox(scene, "A", {0.f, 6.f, 0.f});
+    scene.add(a);
+
+    std::weak_ptr<Joint> survivor;
+    {
+        PhysicsPlaySession session;
+        session.start(scene);
+
+        auto* actorA = session.resolveJointBody(a.get());
+        REQUIRE(actorA != nullptr);
+        // One side the world: a pendulum pinned to nothing.
+        auto joint = session.createJoint(actorA, nullptr, {0.f, 6.f, 0.f}, Quaternion(),
+                                         Joint::Params{});
+        REQUIRE(joint != nullptr);
+        survivor = joint;
+        CHECK_FALSE(survivor.expired());
+
+        run(session, 30);
+        session.stop();
+
+        // stop() dropped the session's reference, but THIS scope still holds
+        // one - exactly the shape of a script that stashed its grasp handle
+        // somewhere that outlives the Play. The object is still alive...
+        CHECK(session.jointCount() == 0);
+        CHECK_FALSE(survivor.expired());
+        // ...and defused: stop() released the constraint while the world was
+        // still up, so the destructor that runs at the end of this scope - by
+        // which time the world is gone - has nothing left to release. Without
+        // this, that destructor is a use-after-free on a freed PxPhysics, and
+        // it fires whenever the last reference happens to die.
+        CHECK_FALSE(joint->attached());
+        // broken() rather than position(): a FIXED joint's position is 0 by
+        // definition and never reaches PhysX, so it would answer happily and
+        // prove nothing about whether the constraint is still there.
+        CHECK_THROWS(joint->broken());
+    }
+    // Scope over: the joint went without touching the released world.
+    CHECK(survivor.expired());
 }
 
 TEST_CASE("a revolute joint swings a pendulum about a world anchor", "[editor][physx]") {

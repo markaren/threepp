@@ -189,9 +189,58 @@ namespace threepp {
             joint_->setConstraintFlag(::physx::PxConstraintFlag::eVISUALIZATION, true);
         }
 
-        ~Joint() {
-            if (joint_) joint_->release();
+        ~Joint() { detach(); }
+
+        // Release the constraint NOW and forget it.
+        //
+        // Exists because "destroy the Joint before its world" is not something
+        // its owner can always promise. Releasing a PxPhysics destroys every
+        // joint it made, so a Joint that outlives its world holds a dangling
+        // PxJoint and its destructor releases it a second time - a crash that
+        // arrives whenever the last reference happens to go, which for a
+        // scripted joint is whenever the collector next runs. Whoever DOES
+        // know the world is still alive (PhysicsPlaySession::stop, which runs
+        // before the world is dropped) calls this, and every reference still
+        // outstanding is left holding something inert.
+        //
+        // Idempotent. After it, attached() is false and the accessors raise
+        // rather than dereference.
+        void detach() {
+            if (!joint_) return;
+
+            // Wake both sides BEFORE the constraint goes.
+            //
+            // A body held still by a joint falls asleep - that is PhysX doing
+            // its job. Releasing the joint does not wake it, so a grasp that
+            // let go left the part hanging in mid-air until something else
+            // happened to touch it: the constraint was genuinely gone and the
+            // object still did not fall, which reads as "release() did
+            // nothing" and is the most confusing possible symptom. Their
+            // equilibrium just changed; they are entitled to be re-solved.
+            ::physx::PxRigidActor* actors[2] = {nullptr, nullptr};
+            joint_->getActors(actors[0], actors[1]);
+            for (auto* actor : actors) {
+                if (!actor) continue;// that side is the world
+                if (auto* link = actor->is<::physx::PxArticulationLink>()) {
+                    // A link does not sleep on its own account - the whole
+                    // articulation does.
+                    link->getArticulation().wakeUp();
+                } else if (auto* body = actor->is<::physx::PxRigidDynamic>()) {
+                    // Kinematic bodies are driven, not solved; waking one is
+                    // meaningless and PhysX warns about it.
+                    if (!body->getRigidBodyFlags().isSet(::physx::PxRigidBodyFlag::eKINEMATIC)) {
+                        body->wakeUp();
+                    }
+                }
+            }
+
+            joint_->release();
+            joint_ = nullptr;
         }
+
+        // False once detach() (or the world's teardown) has taken the
+        // constraint away.
+        [[nodiscard]] bool attached() const { return joint_ != nullptr; }
         Joint(const Joint&) = delete;
         Joint& operator=(const Joint&) = delete;
 
@@ -200,7 +249,7 @@ namespace threepp {
         // scalar axis). For a script nudging a door or stepping a slider.
         void setDriveTarget(float value) {
             using namespace ::physx;
-            auto* d6 = joint_->is<PxD6Joint>();
+            auto* d6 = live()->is<PxD6Joint>();
             if (!d6) return;
             if (type_ == Type::Revolute) {
                 d6->setDrivePosition(PxTransform(PxQuat(value, PxVec3(1, 0, 0))));
@@ -211,7 +260,7 @@ namespace threepp {
 
         void setDriveVelocity(float value) {
             using namespace ::physx;
-            auto* d6 = joint_->is<PxD6Joint>();
+            auto* d6 = live()->is<PxD6Joint>();
             if (!d6) return;
             if (type_ == Type::Revolute) {
                 d6->setDriveVelocity(PxVec3(PxZero), PxVec3(value, 0, 0));
@@ -223,7 +272,7 @@ namespace threepp {
         // True once the solver exceeded the break threshold; the constraint no
         // longer acts and never comes back.
         [[nodiscard]] bool broken() const {
-            return joint_->getConstraintFlags().isSet(::physx::PxConstraintFlag::eBROKEN);
+            return live()->getConstraintFlags().isSet(::physx::PxConstraintFlag::eBROKEN);
         }
 
         // --- joint-space state, for encoders and scripts -------------------
@@ -236,11 +285,11 @@ namespace threepp {
             switch (type_) {
                 case Type::Revolute:
                 case Type::Spherical:
-                    return joint_->is<PxD6Joint>()->getTwistAngle();
+                    return live()->is<PxD6Joint>()->getTwistAngle();
                 case Type::Prismatic:
-                    return joint_->getRelativeTransform().p.x;
+                    return live()->getRelativeTransform().p.x;
                 case Type::Distance:
-                    return joint_->is<PxDistanceJoint>()->getDistance();
+                    return live()->is<PxDistanceJoint>()->getDistance();
                 case Type::Fixed:
                     break;
             }
@@ -257,14 +306,14 @@ namespace threepp {
             switch (type_) {
                 case Type::Revolute:
                 case Type::Spherical:
-                    return joint_->getRelativeAngularVelocity().x;
+                    return live()->getRelativeAngularVelocity().x;
                 case Type::Prismatic:
-                    return joint_->getRelativeLinearVelocity().x;
+                    return live()->getRelativeLinearVelocity().x;
                 case Type::Distance: {
-                    const PxVec3 p = joint_->getRelativeTransform().p;
+                    const PxVec3 p = live()->getRelativeTransform().p;
                     const float d = p.magnitude();
                     if (d < 1e-6f) return 0.f;
-                    return joint_->getRelativeLinearVelocity().dot(p) / d;
+                    return live()->getRelativeLinearVelocity().dot(p) / d;
                 }
                 case Type::Fixed:
                     break;
@@ -288,7 +337,7 @@ namespace threepp {
                 return;
             }
             ::physx::PxVec3 f(::physx::PxZero), t(::physx::PxZero);
-            if (auto* constraint = joint_->getConstraint()) constraint->getForce(f, t);
+            if (auto* constraint = live()->getConstraint()) constraint->getForce(f, t);
             force.set(f.x, f.y, f.z);
             torque.set(t.x, t.y, t.z);
         }
@@ -327,10 +376,22 @@ namespace threepp {
         void latchBreakWrench() const {
             if (breakLatched_) return;
             ::physx::PxVec3 f(::physx::PxZero), t(::physx::PxZero);
-            if (auto* constraint = joint_->getConstraint()) constraint->getForce(f, t);
+            if (auto* constraint = live()->getConstraint()) constraint->getForce(f, t);
             breakLatched_ = true;
             breakForce_.set(f.x, f.y, f.z);
             breakTorque_.set(t.x, t.y, t.z);
+        }
+
+        // The joint, or a raise. A detached Joint is a live C++ object with
+        // nothing behind it, and saying so is much better than the alternative
+        // - which is reading through a pointer PhysX freed.
+        [[nodiscard]] ::physx::PxJoint* live() const {
+            if (!joint_) {
+                throw std::runtime_error(
+                        "Joint: this constraint has been released - its world was torn down, "
+                        "or it was detached explicitly");
+            }
+            return joint_;
         }
 
         ::physx::PxJoint* joint_ = nullptr;
