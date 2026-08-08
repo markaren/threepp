@@ -6,7 +6,7 @@
 #   the wheel (python/CMakeLists.txt)  compiles bind_editor.cpp only
 #       -> SplinePath, spline_from_object. That is this file.
 #   the editor app's embedded interpreter (apps/editor/CMakeLists.txt) also
-#       compiles bind_editor_physics.cpp / _sensors / _authoring
+#       compiles bind_editor_physics.cpp / _sensors / _camera / _authoring
 #       -> the union described by threepp/threepp/editor.pyi, which the editor
 #          hands to Pylance via THREEPP_EDITOR_PYTHON_STUBS.
 #

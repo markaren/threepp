@@ -270,7 +270,7 @@ install(FILES "${PROJECT_SOURCE_DIR}/THIRD_PARTY.md"
         DESTINATION threepp COMPONENT python_module)
 # editor.pyi is EXCLUDED here and replaced below. The source-tree copy is the
 # UNION of the wheel's threepp.editor and the editor app's (which additionally
-# compiles bind_editor_physics/_sensors/_authoring) — the editor needs that
+# compiles bind_editor_physics/_sensors/_camera/_authoring) — the editor needs that
 # union for Pylance, but the wheel provides only SplinePath/spline_from_object,
 # and py.typed makes checkers trust whatever ships. Shipping the union would
 # certify ~40 names that raise AttributeError on a wheel install. See

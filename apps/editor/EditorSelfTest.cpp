@@ -6801,6 +6801,45 @@ int EditorApp::runSelfTest() {
 
         stopPlay();
         check(sensors_ && sensors_->sensorCount() == 0, "stop drops the camera with everything else");
+
+        // --- and its recording is FRAMES, not a summary --------------------
+        // recordCamera is its own path (a PNG per capture plus an index CSV,
+        // where the ranging sensors write one row per scan), so the recording
+        // pass above proves nothing about it. Armed before Play, like a user
+        // pressing Record then Play, which is the capture-from-t=0 contract.
+        {
+            std::error_code ec;
+            const auto recordDir = std::filesystem::temp_directory_path() /
+                                   "threepp-selftest-camera-rec";
+            std::filesystem::remove_all(recordDir, ec);
+            if (sensors_) {
+                sensors_->setRecordDirectory(recordDir);
+                sensors_->setRecording(true);
+            }
+
+            startPlay();
+            stepFixed(12);
+            stopPlay();
+            if (sensors_) sensors_->setRecording(false);
+
+            std::size_t pngs = 0, csvs = 0, rows = 0;
+            if (std::filesystem::exists(recordDir, ec)) {
+                for (const auto& file : std::filesystem::directory_iterator(recordDir)) {
+                    const auto ext = file.path().extension();
+                    if (ext == ".png") ++pngs;
+                    if (ext != ".csv") continue;
+                    ++csvs;
+                    std::ifstream in(file.path());
+                    std::string line;
+                    while (std::getline(in, line)) ++rows;
+                }
+            }
+            check(pngs > 1, "recording a camera writes a PNG per frame");
+            check(csvs == 1, "and one index CSV");
+            // Header plus one row per PNG: the index and the frames agree.
+            check(rows == pngs + 1, "whose rows match the frames on disk");
+            std::filesystem::remove_all(recordDir, ec);
+        }
     }
 
     // ------------------------------------------------ scene-root userData
