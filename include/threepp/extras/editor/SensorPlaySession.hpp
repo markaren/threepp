@@ -1,9 +1,9 @@
 // The PlaySession that turns authored SensorConfig entries into live sensors.
 //
 // This header is PhysX-FREE, and that is the point of its shape. The vision
-// sensors — depth and lidar — are renderer constructs: a scan needs a Renderer
-// and a Scene, not a physics world, so a build without the PhysX SDK still
-// authors, plays, overlays and records them. The four body/joint sensors (IMU,
+// sensors — depth, lidar and the colour camera — are renderer constructs: a
+// scan needs a Renderer and a Scene, not a physics world, so a build without
+// the PhysX SDK still authors, plays, overlays and records them. The four body/joint sensors (IMU,
 // contact, encoder, force/torque) do need the world, so their construction and
 // draining are virtual hooks: this class answers with a status line naming the
 // missing build, and PhysxSensorPlaySession overrides them with the real thing.
@@ -30,13 +30,18 @@
 //   pushed  — Imu, ContactSensor: registered with the PhysxWorld that
 //             PhysicsPlaySession built, sampled from its fixed-substep loop the
 //             instant body state is fresh. Lives in PhysxSensorPlaySession.
-//   pulled  — DepthSensor, LidarSensor: a scan needs a Renderer, which the
-//             physics step loop has no business holding, so update() drives
-//             their clock and rate gate itself and scans when scanDue() says so.
+//   pulled  — DepthSensor, LidarSensor, CameraSensor: a scan needs a Renderer,
+//             which the physics step loop has no business holding, so update()
+//             drives their clock and rate gate itself and scans when scanDue()
+//             says so. The two RANGING ones share a fire-on-one-frame,
+//             deliver-on-a-later-one protocol (see scanAll) because a traced
+//             scan means waiting on a fence; a colour capture is a render plus
+//             a readback, both synchronous, and takes its own shorter path.
 //
-// Editor furniture is hidden for the duration of every scan. A depth camera
-// pointed at the viewport grid measures the grid; the sensor rig itself lives
-// outside that hidden subtree so it is never hidden from itself.
+// Editor furniture is hidden for the duration of every scan and every capture.
+// A depth camera pointed at the viewport grid measures the grid and a colour
+// camera photographs it; the sensor rig itself lives outside that hidden
+// subtree so it is never hidden from itself.
 
 #ifndef THREEPP_EDITOR_SENSORPLAYSESSION_HPP
 #define THREEPP_EDITOR_SENSORPLAYSESSION_HPP
@@ -44,6 +49,7 @@
 #include "threepp/extras/editor/PlaySession.hpp"
 #include "threepp/extras/editor/SensorConfig.hpp"
 
+#include "threepp/helpers/CameraSensor.hpp"
 #include "threepp/helpers/DepthSensor.hpp"
 #include "threepp/helpers/LidarSensor.hpp"
 
@@ -221,6 +227,11 @@ namespace threepp::editor {
             // scene's world-matrix update and are never saved or picked.
             std::unique_ptr<DepthSensor> depth;
             std::unique_ptr<LidarSensor> lidar;
+            // Vision too, but not RANGING: a picture, not a cloud. Kept in its
+            // own slot rather than folded into withVision() because it shares
+            // none of the ranging scan protocol - no fire/deliver pair, no
+            // RangeNoiseModel, no points.
+            std::unique_ptr<CameraSensor> camera;
 
             // Why this entry is not measuring, when it is not. Empty = fine.
             std::string status;
@@ -257,7 +268,7 @@ namespace threepp::editor {
             std::size_t rows = 0;
 
             [[nodiscard]] bool live() const {
-                return imu || contact || encoder || forceTorque || depth || lidar;
+                return imu || contact || encoder || forceTorque || depth || lidar || camera;
             }
 
             // Points the newest scan produced, whichever vision kind this is.
@@ -280,8 +291,7 @@ namespace threepp::editor {
             if (active_ == this) active_ = nullptr;
 
             for (const auto& entry : entries_) {
-                if (entry->depth) entry->depth->removeFromParent();
-                if (entry->lidar) entry->lidar->removeFromParent();
+                detachVision(*entry);
             }
         }
 
@@ -432,6 +442,7 @@ namespace threepp::editor {
             }
 
             scanAll(dt);
+            captureCameras(dt);
             drainBodies();
         }
 
@@ -452,8 +463,7 @@ namespace threepp::editor {
             // survives Stop (it is editor furniture) and must not be left
             // holding raw pointers into freed sensors.
             for (const auto& entry : entries_) {
-                if (entry->depth) entry->depth->removeFromParent();
-                if (entry->lidar) entry->lidar->removeFromParent();
+                detachVision(*entry);
             }
 
             entries_.clear();
@@ -581,6 +591,8 @@ namespace threepp::editor {
             auto entry = makeEntry(node, config);
             if (config.type == SensorConfig::Type::Depth) {
                 buildDepth(*entry, config);
+            } else if (config.type == SensorConfig::Type::Camera) {
+                buildCamera(*entry, config);
             } else {
                 buildLidar(*entry, config);
             }
@@ -674,6 +686,53 @@ namespace threepp::editor {
             adoptVision(entry, entry.lidar, std::move(lidar), config, "returns");
         }
 
+        // The colour camera. Deliberately NOT routed through adoptVision: that
+        // helper's whole body is the ranging contract (seeded RangeNoiseModel,
+        // resetNoise), and a picture has no range to corrupt. What it does
+        // share — the rate gate and the rig parenting — is two lines.
+        void buildCamera(Entry& entry, const SensorConfig& config) {
+
+            if (!rig_) {
+                entry.status = "no sensor rig - the editor did not wire one up";
+                return;
+            }
+
+            const auto width = static_cast<unsigned>(
+                    std::clamp(config.width, 8, SensorConfig::maxImageSize));
+            const auto height = static_cast<unsigned>(
+                    std::clamp(config.height, 8, SensorConfig::maxImageSize));
+            const float near = std::max(config.nearPlane, 1e-3f);
+            const float far = std::max(config.farPlane, near + 1e-3f);
+
+            auto camera = std::make_unique<CameraSensor>(
+                    std::clamp(config.fovY, 1.f, 179.f), width, height, near, far);
+            camera->name = entry.label + " (camera)";
+            camera->setRateHz(static_cast<double>(std::max(config.rateHz, 0.f)));
+            rig_->addRef(*camera);
+            entry.camera = std::move(camera);
+
+            // Mean luminance, which is the one scalar worth plotting for an
+            // image: it says at a glance whether the camera is looking at the
+            // scene or at the inside of a link.
+            entry.traceNames = {"brightness", nullptr, nullptr, nullptr, nullptr, nullptr};
+            entry.traceCount = 1;
+            if (!renderer_) entry.status = "no renderer - built but not capturing";
+        }
+
+        // The rig node this entry's vision sensor lives on, whichever kind it
+        // is. Every vision sensor IS an Object3D; only the ranging pair also
+        // carries a cloud, which is why withVision() cannot answer this.
+        [[nodiscard]] static Object3D* visionNode(Entry& entry) {
+            if (entry.depth) return entry.depth.get();
+            if (entry.lidar) return entry.lidar.get();
+            if (entry.camera) return entry.camera.get();
+            return nullptr;
+        }
+
+        static void detachVision(Entry& entry) {
+            if (auto* node = visionNode(entry)) node->removeFromParent();
+        }
+
         // Park the sensor node on the authored object's world pose. Scale is
         // dropped deliberately: a scaled sensor would scale its own ray
         // directions, and "the sensor is 2x bigger" is not a thing a sensor is.
@@ -681,21 +740,22 @@ namespace threepp::editor {
 
             if (!entry.node) return;
 
+            auto* sensorNode = visionNode(entry);
+            if (!sensorNode) return;
+
             entry.node->updateWorldMatrix(true, false);
             Vector3 position, scale;
             Quaternion rotation;
             entry.node->matrixWorld->decompose(position, rotation, scale);
 
-            withVision(entry, [&](Object3D& sensorNode, auto&) {
-                sensorNode.position.copy(position);
-                sensorNode.quaternion.copy(rotation);
-                sensorNode.scale.set(1.f, 1.f, 1.f);
-                // The rig is an identity-transformed child of the scene root, so
-                // the local pose above IS the world pose. Force it down into the
-                // child cameras now — the scan reads their world matrices
-                // directly.
-                sensorNode.updateWorldMatrix(true, true);
-            });
+            sensorNode->position.copy(position);
+            sensorNode->quaternion.copy(rotation);
+            sensorNode->scale.set(1.f, 1.f, 1.f);
+            // The rig is an identity-transformed child of the scene root, so
+            // the local pose above IS the world pose. Force it down into the
+            // child cameras now — the scan reads their world matrices
+            // directly.
+            sensorNode->updateWorldMatrix(true, true);
         }
 
         // A vision scan is FIRED on one frame and DELIVERED on a later one.
@@ -803,6 +863,95 @@ namespace threepp::editor {
             entry.csv << entry.lastTime << ',' << count << ',' << sum.x << ',' << sum.y << ','
                       << sum.z << ',' << rmin << ',' << rmax << '\n';
             ++entry.rows;
+        }
+
+        // The colour cameras' half of the frame loop, and a much shorter story
+        // than scanAll's: a raster capture is a render plus a readback, both
+        // synchronous, so there is no fence to poll and no fire/deliver split.
+        // The furniture-hiding window is the same one and for the same reason —
+        // a wrist camera pointed at the floor would otherwise photograph the
+        // viewport grid.
+        void captureCameras(float dt) {
+
+            if (!renderer_ || !scene_) return;
+
+            bool any = false;
+            for (const auto& entry : entries_) {
+                if (!entry->camera) continue;
+                entry->camera->tick(static_cast<double>(dt), simTime_);
+                any = any || entry->camera->captureDue();
+            }
+            if (!any) return;
+
+            const bool wasVisible = hidden_ ? hidden_->visible : true;
+            if (hidden_) hidden_->visible = false;
+
+            for (const auto& entry : entries_) {
+                if (!entry->camera || !entry->camera->captureDue()) continue;
+                placeVision(*entry);
+                if (entry->camera->capture(*renderer_, *scene_)) {
+                    entry->lastTime = entry->camera->lastCaptureTime();
+                    ++entry->scans;
+                    entry->traces[0].push(meanLuminance(entry->camera->image()));
+                    recordCamera(*entry);
+                } else if (entry->status.empty()) {
+                    // Said once, at the moment the user is looking, and then
+                    // left standing in the panel: a camera that cannot capture
+                    // on this backend is a fact about the run, not a per-frame
+                    // event to spam the console with.
+                    entry->status = "colour capture needs a render-target backend - "
+                                    "authored and aimed, but not capturing here";
+                    log("sensor: \"" + entry->label + "\" - " + entry->status);
+                }
+            }
+
+            if (hidden_) hidden_->visible = wasVisible;
+        }
+
+        // Rec. 601 luma over the whole frame, 0-255. Cheap enough at every
+        // authored resolution to not be worth sub-sampling.
+        static float meanLuminance(const std::vector<unsigned char>& rgb) {
+
+            if (rgb.size() < 3) return 0.f;
+            double sum = 0.0;
+            const std::size_t pixels = rgb.size() / 3;
+            for (std::size_t i = 0; i < pixels; ++i) {
+                sum += 0.299 * rgb[i * 3] + 0.587 * rgb[i * 3 + 1] + 0.114 * rgb[i * 3 + 2];
+            }
+            return static_cast<float>(sum / static_cast<double>(pixels));
+        }
+
+        // A camera's recording is the FRAMES: one PNG per capture beside a CSV
+        // indexing them. That is what a perception dataset is, and it is the
+        // reason to prefer this over the ranging sensors' one-row-per-scan
+        // summary — a row saying "the picture was this bright" trains nothing.
+        void recordCamera(Entry& entry) {
+
+            if (!recording_ || !entry.camera) return;
+            if (!openFile(entry, "t,frame,file,mean_luma")) return;
+
+            const auto stem = sanitize(entry.label) + "_" + entry.uuid.substr(0, 8) + "_" +
+                              frameNumber(entry.camera->frames());
+            const auto file = recordDir_ / (stem + ".png");
+            if (!entry.camera->writeImage(file)) {
+                log("sensor: cannot write " + file.string());
+                recording_ = false;
+                return;
+            }
+
+            entry.csv << entry.lastTime << ',' << entry.camera->frames() << ','
+                      << stem << ".png," << meanLuminance(entry.camera->image()) << '\n';
+            ++entry.rows;
+        }
+
+        // Zero-padded so the frames sort in capture order in a file browser and
+        // in a glob, which is how every tool that eats an image sequence finds
+        // them.
+        static std::string frameNumber(std::size_t frame) {
+
+            auto text = std::to_string(frame);
+            if (text.size() < 6) text.insert(0, 6 - text.size(), '0');
+            return text;
         }
 
         void closeFiles() {

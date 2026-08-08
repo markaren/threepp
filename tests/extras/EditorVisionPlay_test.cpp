@@ -65,6 +65,22 @@ namespace {
         return post;
     }
 
+    std::shared_ptr<Mesh> authorCamera(Scene& scene, const char* name) {
+
+        auto mount = ObjectFactory::createPrimitive(Primitive::Box, scene);
+        mount->name = name;
+
+        SensorConfig sensor;
+        sensor.enabled = true;
+        sensor.type = SensorConfig::Type::Camera;
+        sensor.fovY = 55.f;
+        sensor.width = 64;
+        sensor.height = 48;
+        sensor.rateHz = 15.f;
+        sensor.write(*mount);
+        return mount;
+    }
+
 }// namespace
 
 
@@ -86,6 +102,66 @@ TEST_CASE("A vision sensor without a renderer is built and says so") {
     CHECK(entry.scans == 0);// nothing to scan with
     rig.sensors.stop();
     CHECK(rig.rig->children.empty());
+}
+
+TEST_CASE("A colour camera without a renderer is built and says so") {
+
+    // The same contract the ranging sensors have, and the reason it needs its
+    // own case: a camera takes a DIFFERENT build path (buildCamera, not
+    // adoptVision) and a different slot, so nothing the lidar case asserts
+    // reaches it.
+    Rig rig;
+    rig.scene.add(authorCamera(rig.scene, "Wrist"));
+
+    rig.sensors.start(rig.scene);
+    REQUIRE(rig.sensors.liveCount() == 1);
+    const auto& entry = *rig.sensors.entries().front();
+    REQUIRE(entry.camera != nullptr);
+    CHECK(entry.camera->width() == 64u);
+    CHECK(entry.camera->height() == 48u);
+    CHECK_FALSE(entry.status.empty());// "no renderer"
+    // Parented into the rig, so the export/snapshot filter covers it and it is
+    // never saved into the document or picked in the viewport.
+    CHECK(entry.camera->parent == rig.rig.get());
+
+    rig.update(30);
+    CHECK(entry.scans == 0);      // nothing to capture with
+    CHECK(entry.camera->frames() == 0);
+    CHECK(entry.camera->image().empty());
+
+    rig.sensors.stop();
+    CHECK(rig.rig->children.empty());
+}
+
+TEST_CASE("A camera is found by the lookup a script handle uses") {
+
+    // camera_from_object() resolves through findSensors, walking UP the graph
+    // so a script sited on a child of the instrumented link still finds it.
+    Rig rig;
+    auto mount = authorCamera(rig.scene, "Wrist");
+    auto child = ObjectFactory::createPrimitive(Primitive::Sphere, rig.scene);
+    child->name = "Tool Tip";
+    mount->add(child);
+    rig.scene.add(mount);
+
+    rig.sensors.start(rig.scene);
+
+    const auto found = rig.sensors.findSensors(child.get(), SensorConfig::Type::Camera);
+    REQUIRE(found.size() == 1);
+    CHECK(found.front()->node == mount.get());
+    CHECK(found.front()->camera != nullptr);
+
+    // And it is not confusable with the ranging kinds, which is what keeps
+    // depth_from_object-shaped lookups from answering with a picture.
+    CHECK(rig.sensors.findSensors(child.get(), SensorConfig::Type::Depth).empty());
+    CHECK(rig.sensors.findSensors(child.get(), SensorConfig::Type::Lidar).empty());
+
+    // The handle's lifetime token dies with the session, which is what makes a
+    // handle kept across Stop raise instead of reading a freed Entry.
+    const auto token = rig.sensors.lifetime();
+    CHECK_FALSE(token.expired());
+    rig.sensors.stop();
+    CHECK(token.expired());
 }
 
 TEST_CASE("With no physics world the clock accumulates the frame delta") {

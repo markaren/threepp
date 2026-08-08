@@ -6712,6 +6712,97 @@ int EditorApp::runSelfTest() {
     }
 #endif
 
+    // --- the colour camera sensor -------------------------------------------
+    //
+    // Asserted HERE and not in a unit test because the output is PIXELS: a
+    // frame needs a live GL context, and every failure mode worth catching is
+    // invisible to a test that can only ask whether a sensor was built. A
+    // black frame, a frame of one flat colour, a frame the wrong size and a
+    // frame full of the editor's own grid all pass "the camera came up".
+    //
+    // Outside the PhysX block above on purpose: a picture needs a renderer and
+    // a scene, so this runs in every build.
+    {
+        newScene();
+        step(2);
+
+        std::string cameraUuid;
+        {
+            auto eye = ObjectFactory::createPrimitive(Primitive::Sphere, document_.scene());
+            eye->name = "Wrist Cam";
+            // In front of the template scene's contents, looking down its own
+            // -Z at them — the same convention every threepp camera has.
+            eye->position.set(0.f, 1.2f, 5.f);
+            eye->scale.set(0.1f, 0.1f, 0.1f);
+
+            SensorConfig camera;
+            camera.enabled = true;
+            camera.type = SensorConfig::Type::Camera;
+            camera.width = 128;
+            camera.height = 96;
+            camera.fovY = 55.f;
+            camera.rateHz = 0.f;// every frame
+            camera.nearPlane = 0.05f;
+            camera.farPlane = 60.f;
+            camera.write(*eye);
+            cameraUuid = eye->uuid;
+            addObject(eye, document_.scene(), "Add Wrist Cam");
+            step();
+        }
+
+        startPlay();
+        stepFixed(20);
+
+        const SensorPlaySession::Entry* cameraEntry = nullptr;
+        if (sensors_) {
+            for (const auto& entry : sensors_->entries()) {
+                if (entry->uuid == cameraUuid) cameraEntry = entry.get();
+            }
+        }
+        check(cameraEntry != nullptr && cameraEntry->camera != nullptr,
+              "the authored colour camera came up");
+
+        if (cameraEntry && cameraEntry->camera) {
+            const auto& sensor = *cameraEntry->camera;
+            check(sensor.frames() > 0, "and captured frames during play");
+
+            const auto& image = sensor.image();
+            check(image.size() == static_cast<std::size_t>(128 * 96 * 3),
+                  "the frame is the authored size, tightly packed RGB8");
+
+            // A frame that is black, or one flat colour, is what a broken
+            // render target, a missed clear or a camera inside geometry all
+            // look like — and all three would sail past a size check.
+            double sum = 0.0;
+            unsigned char lo = 255, hi = 0;
+            for (std::size_t i = 0; i + 2 < image.size(); i += 3) {
+                const auto luma = static_cast<unsigned char>(
+                        (299 * image[i] + 587 * image[i + 1] + 114 * image[i + 2]) / 1000);
+                sum += luma;
+                lo = std::min(lo, luma);
+                hi = std::max(hi, luma);
+            }
+            const double mean = image.empty() ? 0.0 : sum / (static_cast<double>(image.size()) / 3.0);
+            check(mean > 4.0, "the frame is not black");
+            check(hi - lo > 24, "and has a scene in it rather than one flat fill");
+
+            // Round-trip through a file: this is the path a dataset dump and a
+            // script's save() both take, and an encode that silently fails
+            // would leave a user with an empty directory and no error.
+            std::error_code ec;
+            const auto shot = std::filesystem::temp_directory_path() /
+                              "threepp-selftest-camera" / "frame.png";
+            std::filesystem::remove_all(shot.parent_path(), ec);
+            check(sensor.writeImage(shot), "the frame writes to a PNG");
+            check(std::filesystem::exists(shot) && std::filesystem::file_size(shot, ec) > 0,
+                  "and the file has bytes in it");
+            std::filesystem::remove_all(shot.parent_path(), ec);
+        }
+
+        stopPlay();
+        check(sensors_ && sensors_->sensorCount() == 0, "stop drops the camera with everything else");
+    }
+
     // ------------------------------------------------ scene-root userData
     //
     // Whether an authoring rule can live ON the scene rather than on a node

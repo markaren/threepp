@@ -148,6 +148,11 @@ if (THREEPP_EDITOR_WITH_PYTHON AND Python3_FOUND AND TARGET pybind11::headers)
             "${PROJECT_SOURCE_DIR}/python/src/bind_curves.cpp"
             "${PROJECT_SOURCE_DIR}/python/src/bind_editor.cpp"
             "${PROJECT_SOURCE_DIR}/python/src/bind_editor_authoring.cpp"
+            # threepp.editor.Camera / camera_from_object. Up here rather than in
+            # the PhysX block below because a colour frame is a renderer product:
+            # gating it on the physics SDK would mean a PhysX-free editor could
+            # author and aim a camera it could never read.
+            "${PROJECT_SOURCE_DIR}/python/src/bind_editor_camera.cpp"
             "${PROJECT_SOURCE_DIR}/python/src/bind_materials.cpp"
             "${PROJECT_SOURCE_DIR}/python/src/bind_objects.cpp"
             "${PROJECT_SOURCE_DIR}/python/src/bind_animation.cpp"

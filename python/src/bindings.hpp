@@ -66,6 +66,11 @@ namespace threepp_py {
     // threepp.editor, sensor half — read handles onto the proprioceptive sensors
     // the play session is running. Same gating and ordering as the physics half.
     void init_editor_sensors(py::module_& m);
+    // threepp.editor, camera half — the read handle onto the play session's
+    // colour cameras. Editor-only like the two above (it needs a play session),
+    // and likewise must follow init_editor, but NOT gated on PhysX: an image is
+    // a renderer product, so a build without the SDK still has this one.
+    void init_editor_camera(py::module_& m);
     // threepp.editor, authoring half — add() for a generator script to build
     // document content. Editor-only for the same reason as the physics half (the
     // wheel has no document), and likewise must follow init_editor.

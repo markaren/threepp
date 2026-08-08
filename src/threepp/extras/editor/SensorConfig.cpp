@@ -22,6 +22,7 @@ namespace {
         if (text == "encoder") return SensorConfig::Type::Encoder;
         if (text == "contact") return SensorConfig::Type::Contact;
         if (text == "forcetorque") return SensorConfig::Type::ForceTorque;
+        if (text == "camera") return SensorConfig::Type::Camera;
         return fallback;
     }
 
@@ -34,6 +35,7 @@ namespace {
             case SensorConfig::Type::Encoder: return "encoder";
             case SensorConfig::Type::Contact: return "contact";
             case SensorConfig::Type::ForceTorque: return "forcetorque";
+            case SensorConfig::Type::Camera: return "camera";
         }
         return "imu";
     }
@@ -72,6 +74,7 @@ const char* SensorConfig::label(Type type) {
         case Type::Encoder: return "Joint Encoder";
         case Type::Contact: return "Contact";
         case Type::ForceTorque: return "Force/Torque";
+        case Type::Camera: return "Camera";
     }
     return "IMU";
 }
@@ -94,6 +97,11 @@ bool SensorConfig::isProprioceptive(Type type) {
 }
 
 bool SensorConfig::isVision(Type type) {
+
+    return type == Type::Depth || type == Type::Lidar || type == Type::Camera;
+}
+
+bool SensorConfig::isRanging(Type type) {
 
     return type == Type::Depth || type == Type::Lidar;
 }

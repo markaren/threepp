@@ -134,7 +134,13 @@ void EditorApp::drawSensorsTab() {
                 ImGui::TextColored(theme::muted(), "every substep, seed %d", entry->config.seed);
             }
 
-            if (SensorConfig::isVision(entry->config.type)) {
+            if (entry->camera) {
+                // A camera's yield is pixels, not points, so the ranging
+                // readout's "nothing in range" warning would be nonsense here -
+                // a frame of empty sky is a perfectly good frame.
+                ImGui::Text("%zu frames, %ux%u, t = %.3f s", entry->scans,
+                            entry->camera->width(), entry->camera->height(), entry->lastTime);
+            } else if (SensorConfig::isVision(entry->config.type)) {
                 ImGui::Text("%zu scans, %zu points, t = %.3f s",
                             entry->scans, entry->pointCount(), entry->lastTime);
                 if (entry->scans > 0 && entry->pointCount() == 0) {

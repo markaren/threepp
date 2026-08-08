@@ -3988,7 +3988,8 @@ void EditorApp::drawSensorSection(Object3D& object) {
 
     {
         static const char* types[] = {"IMU", "Depth Camera", "LIDAR",
-                                      "Joint Encoder", "Contact", "Force/Torque"};
+                                      "Joint Encoder", "Contact", "Force/Torque",
+                                      "Camera"};
         int type = static_cast<int>(config.type);
         if (ImGui::Combo("Type", &type, types, IM_ARRAYSIZE(types))) {
             auto after = config;
@@ -4170,6 +4171,24 @@ void EditorApp::drawSensorSection(Object3D& object) {
             break;
         }
 
+        case SensorConfig::Type::Camera: {
+            floatField(
+                    "FOV (deg)", config.fovY, 0.25f, 1.f, 179.f,
+                    [](SensorConfig& c, float v) { c.fovY = v; }, "Camera FOV", "%.1f");
+            intField(
+                    "Width", config.width, 1.f, 8, SensorConfig::maxImageSize,
+                    [](SensorConfig& c, int v) { c.width = v; }, "Camera Width");
+            intField(
+                    "Height", config.height, 1.f, 8, SensorConfig::maxImageSize,
+                    [](SensorConfig& c, int v) { c.height = v; }, "Camera Height");
+            ImGui::TextColored(theme::muted(),
+                               "Looks down this object's -Z. Read it from a script with "
+                               "editor.camera_from_object(obj).image");
+            ImGui::TextColored(theme::muted(),
+                               "Record writes one PNG per frame plus an index CSV.");
+            break;
+        }
+
         case SensorConfig::Type::Lidar: {
             static const char* beams[] = {"Dense Grid", "VLP-16", "HDL-32E", "OS1-64", "OS0-128"};
             int pattern = static_cast<int>(config.beams);
@@ -4228,6 +4247,12 @@ void EditorApp::drawSensorSection(Object3D& object) {
         if (config.farPlane <= config.nearPlane) {
             ImGui::TextColored(theme::warning(), "Far must be beyond Near");
         }
+    }
+
+    // Range noise is a RANGING sensor's, not every vision sensor's: a sigma in
+    // metres has nothing to say about a colour pixel. The Camera shares the
+    // frustum above and stops there.
+    if (SensorConfig::isRanging(config.type)) {
         floatField(
                 "Range Sigma (m)", config.rangeStddev, 0.001f, 0.f, 5.f,
                 [](SensorConfig& c, float v) { c.rangeStddev = v; }, "Range Noise", "%.4f");

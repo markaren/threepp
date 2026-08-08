@@ -74,6 +74,12 @@ PYBIND11_EMBEDDED_MODULE(threepp, m) {
     tp::init_curves(m);// CatmullRomCurve3 — what an authored spline reads back as
     tp::init_editor(m);// threepp.editor — SplinePath, the no-boilerplate way to read one
     tp::init_editor_authoring(m);// threepp.editor.add — what a generator builds into
+    // threepp.editor.camera_from_object — the frame the play session's colour
+    // camera last captured. Outside the PhysX block below on purpose: a picture
+    // needs a renderer and a scene, neither of which is a physics concern, so
+    // withholding it in a build without the SDK would be withholding it for
+    // somebody else's reason.
+    tp::init_editor_camera(m);
     // threepp.editor.script_from_object — one script reaching another's live
     // instance. Registered unconditionally, unlike the handles below it: this
     // needs nothing but a running session.

@@ -126,7 +126,8 @@ TEST_CASE("Every type emits every key, so a type flip is not a data loss") {
 
     for (const auto type : {SensorConfig::Type::Imu, SensorConfig::Type::Depth,
                             SensorConfig::Type::Lidar, SensorConfig::Type::Encoder,
-                            SensorConfig::Type::Contact, SensorConfig::Type::ForceTorque}) {
+                            SensorConfig::Type::Contact, SensorConfig::Type::ForceTorque,
+                            SensorConfig::Type::Camera}) {
         auto config = loaded();
         config.type = type;
         CHECK(keysOf(config.encode()) == expected);
@@ -253,8 +254,48 @@ TEST_CASE("Vision and proprioceptive types are partitioned") {
 
     CHECK(SensorConfig::isVision(SensorConfig::Type::Depth));
     CHECK(SensorConfig::isVision(SensorConfig::Type::Lidar));
+    CHECK(SensorConfig::isVision(SensorConfig::Type::Camera));
     CHECK(SensorConfig::isProprioceptive(SensorConfig::Type::Imu));
     CHECK(SensorConfig::isProprioceptive(SensorConfig::Type::Contact));
     CHECK(SensorConfig::isProprioceptive(SensorConfig::Type::Encoder));
     CHECK(SensorConfig::isProprioceptive(SensorConfig::Type::ForceTorque));
+}
+
+TEST_CASE("A camera is vision but not ranging") {
+
+    // The distinction the range-noise fields hang off: a Camera goes through
+    // the renderer and the frame loop like the other two, but there is no
+    // distance in a colour pixel for a sigma in metres to corrupt. Fold it into
+    // isRanging and the inspector grows noise controls that do nothing, while
+    // the point-cloud overlay starts asking a picture for its points.
+    CHECK(SensorConfig::isRanging(SensorConfig::Type::Depth));
+    CHECK(SensorConfig::isRanging(SensorConfig::Type::Lidar));
+    CHECK_FALSE(SensorConfig::isRanging(SensorConfig::Type::Camera));
+    CHECK_FALSE(SensorConfig::isRanging(SensorConfig::Type::Imu));
+}
+
+TEST_CASE("A camera survives the userData round trip") {
+
+    SensorConfig camera;
+    camera.enabled = true;
+    camera.type = SensorConfig::Type::Camera;
+    camera.rateHz = 15.f;
+    camera.fovY = 42.5f;
+    camera.width = 640;
+    camera.height = 480;
+    camera.nearPlane = 0.02f;
+    camera.farPlane = 12.f;
+
+    Object3D object;
+    camera.write(object);
+
+    const auto read = SensorConfig::read(object);
+    REQUIRE(read.has_value());
+    // The type token, not the enum's ordinal: a document written today has to
+    // survive a Type appended tomorrow.
+    CHECK(read->type == SensorConfig::Type::Camera);
+    CHECK(read->width == 640);
+    CHECK(read->height == 480);
+    CHECK_THAT(read->fovY, WithinAbs(42.5, 1e-4));
+    CHECK_THAT(read->rateHz, WithinAbs(15.0, 1e-4));
 }

@@ -40,13 +40,17 @@ namespace threepp::editor {
 
     struct SensorConfig {
 
+        // Appended to, never reordered: the inspector's type combo indexes this
+        // enum directly, so an insertion in the middle would silently retype
+        // every sensor a user had already authored.
         enum class Type {
-            Imu,        // gyro + accelerometer, pushed from the physics substep
-            Depth,      // pinhole depth camera, pulled from the frame loop
-            Lidar,      // 360-degree ranging, pulled from the frame loop
-            Encoder,    // joint position/velocity (needs an articulated robot)
-            Contact,    // touch latch + contact force
-            ForceTorque // 6-axis load cell (needs an articulated robot)
+            Imu,         // gyro + accelerometer, pushed from the physics substep
+            Depth,       // pinhole depth camera, pulled from the frame loop
+            Lidar,       // 360-degree ranging, pulled from the frame loop
+            Encoder,     // joint position/velocity (needs an articulated robot)
+            Contact,     // touch latch + contact force
+            ForceTorque, // 6-axis load cell (needs an articulated robot)
+            Camera       // colour image, pulled from the frame loop
         };
 
         // LIDAR beam pattern. `Dense` is every pixel of the six cube faces — a
@@ -90,7 +94,11 @@ namespace threepp::editor {
         float rangeStddevPerMetre = 0.f;// m per m of range, added in quadrature
         float rangeBias = 0.f;          // m, positive reads long
 
-        // --- Depth ----------------------------------------------------------
+        // --- Depth and Camera (shared) --------------------------------------
+        // Both are pinholes; only what they record differs, so a user who has
+        // framed one has framed the other. nearPlane/farPlane above are shared
+        // too — for the Camera they are only the frustum, since a picture has
+        // no range to be noisy about.
         float fovY = 60.f;// degrees
         int width = 160;
         int height = 120;
@@ -151,6 +159,14 @@ namespace threepp::editor {
         // the ones the frame loop pulls with a renderer in hand.
         [[nodiscard]] static bool isProprioceptive(Type type);
         [[nodiscard]] static bool isVision(Type type);
+
+        // The RANGING subset of the vision sensors: the two that measure
+        // distance and answer with a point cloud. A Camera is vision (it needs
+        // the renderer and the frame loop) but not ranging (it produces a
+        // picture), so everything written against a cloud or a RangeNoiseModel
+        // — the noise fields in the inspector, the point-cloud overlay, the
+        // per-scan CSV — asks THIS rather than isVision.
+        [[nodiscard]] static bool isRanging(Type type);
 
         // Seed for the numbered sub-stream `index`, so the gyro, the
         // accelerometer and a range channel of ONE authored sensor do not all

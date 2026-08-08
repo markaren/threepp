@@ -4,7 +4,7 @@ The runtime face of editor-authored data.
 from __future__ import annotations
 import typing
 import threepp
-__all__: list[str] = ['Articulation', 'Collision', 'Contact', 'ContactSample', 'Encoder', 'EncoderSample', 'ForceTorque', 'Imu', 'ImuSample', 'Joint', 'RaycastHit', 'RigidBody', 'SoftBody', 'SplinePath', 'Task', 'Time', 'Vehicle', 'WrenchSample', 'add', 'articulation_from_object', 'contact_from_object', 'encoder_from_object', 'encoders_from_object', 'force_torque_from_object', 'imu_from_object', 'is_key_down', 'joint_from_object', 'raycast', 'rigid_body_from_object', 'scene', 'script_from_object', 'soft_body_from_object', 'spline_from_object', 'start_coroutine', 'time', 'until', 'vehicle_from_object', 'wait']
+__all__: list[str] = ['Articulation', 'Camera', 'Collision', 'Contact', 'ContactSample', 'Encoder', 'EncoderSample', 'ForceTorque', 'Imu', 'ImuSample', 'Joint', 'RaycastHit', 'RigidBody', 'SoftBody', 'SplinePath', 'Task', 'Time', 'Vehicle', 'WrenchSample', 'add', 'articulation_from_object', 'camera_from_object', 'contact_from_object', 'encoder_from_object', 'encoders_from_object', 'force_torque_from_object', 'imu_from_object', 'is_key_down', 'joint_from_object', 'raycast', 'rigid_body_from_object', 'scene', 'script_from_object', 'soft_body_from_object', 'spline_from_object', 'start_coroutine', 'time', 'until', 'vehicle_from_object', 'wait']
 class SplinePath:
     def get_point_at(self, u: typing.SupportsFloat | typing.SupportsIndex) -> threepp.Vector3:
         """
@@ -450,6 +450,53 @@ class ContactSample:
         """
         Mean contact force over the interval (N). Zero while the pair sleeps, even though the touch is real.
         """
+class Camera:
+    """
+    A live colour camera the play session is running for a scene object - what
+    the robot sees. Only exists during Play. Unlike the other sensor handles
+    this one needs no PhysX build: a frame is a renderer product.
+    """
+    @property
+    def object(self) -> threepp.Object3D:
+        """
+        The scene object this camera was authored on.
+        """
+    @property
+    def valid(self) -> bool:
+        """
+        False once the play session that created it has stopped.
+        """
+    @property
+    def width(self) -> int:
+        """
+        Image width in pixels.
+        """
+    @property
+    def height(self) -> int:
+        """
+        Image height in pixels.
+        """
+    @property
+    def frames(self) -> int:
+        """
+        Frames captured since Play began. Compare against the value you last handled to detect a new one; two consecutive frames of a still scene are legitimately identical bytes.
+        """
+    @property
+    def time(self) -> float:
+        """
+        Sim time the newest frame was captured at (s), on the same clock as every other sensor's measurements.
+        """
+    @property
+    def image(self) -> bytes:
+        """
+        The newest frame as bytes: tightly packed RGB8, row-major, TOP-LEFT origin (row 0 is the top), length width*height*3. Empty before the first capture.
+
+        A copy, so keeping it is safe - the sensor overwrites its own buffer on the next capture. This is the layout a ROS sensor_msgs/Image with encoding "rgb8" wants, with no conversion.
+        """
+    def save(self, path: str) -> bool:
+        """
+        Write the newest frame to a .png/.jpg/.bmp, creating parent directories. False when there is no frame yet or the extension is not one of those.
+        """
 class Imu:
     """
     A live IMU the play session is running for a scene object. Only exists
@@ -660,6 +707,10 @@ def encoders_from_object(object: threepp.Object3D | None) -> list[Encoder]:
 def force_torque_from_object(object: threepp.Object3D | None) -> ForceTorque | None:
     """
     The live force/torque sensor authored on `object`, or None when Play is not running or none measures it. A load cell sits in ONE joint, so there is never more than one to choose between.
+    """
+def camera_from_object(object: threepp.Object3D | None) -> Camera | None:
+    """
+    The live colour camera authored on `object`, or None when Play is not running, no camera is authored here, or the one that is could not come up. The lookup walks up the scene graph, so a script on a child finds the camera on its link.
     """
 def imu_from_object(object: threepp.Object3D | None) -> Imu | None:
     """
