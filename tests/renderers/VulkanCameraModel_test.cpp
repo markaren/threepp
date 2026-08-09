@@ -318,16 +318,17 @@ int main() {
         // OUTSIDE the nominal frustum (ideal normalized 0.75, 0.20 — the
         // rendered pinhole image reaches |x| <= (W/2)/fx = 0.656). It is
         // therefore invisible in every check before that one, and no detector
-        // here looks at blue.
+        // here looks at blue. Added at its point of use, in the overscan block.
         //
-        // It is added HERE rather than at the point of use because adding a
-        // mesh after an earlier add/remove crashes the renderer outright
-        // (0xC0000409) — reproducible with the lens disabled, so unrelated to
-        // the camera model. Keeping the scene's object set stable sidesteps it.
+        // (Historical: this add used to live up here because adding a mesh
+        // after the cross's add/remove crashed the renderer outright,
+        // 0xC0000409. That defect has since been fixed — verified by moving
+        // the add back to the point of use and running the full session — and
+        // VulkanValidation_test's churn phase now pins the add-after-remove
+        // shape, overlay-line remove included.)
         auto outsider = Mesh::create(SphereGeometry::create(0.22f, 24, 12),
                                      MeshBasicMaterial::create({{"color", Color(0.f, 0.f, 1.f)}}));
         outsider->position.set(0.75f * 5.f, 0.20f * 5.f, -5.f);
-        scene.add(outsider);
         scene.background = Color(0.f, 0.f, 0.f);
         camera.position.set(0.f, 0.f, 0.f);
         camera.lookAt({0.f, 0.f, -1.f});
@@ -566,10 +567,13 @@ int main() {
             // image reaches |x| <= (W/2)/fx = 0.656, and a 1.3x overscan
             // reaches 0.853. Barrel then maps it to roughly (365, 174), inside
             // the output frame.
-            // NOTE: `outsider` is added at scene-setup time, not here. Adding a
-            // mesh at this point in the session crashes the renderer — with the
-            // lens on OR off, so it is unrelated to this feature; see the
-            // add/remove/add churn note where it is created.
+            // Mid-session mesh add — deliberately at the point of use. This is
+            // the exact sequence (cross added/removed earlier, mesh added now)
+            // that used to fail-fast with 0xC0000409; running it here keeps the
+            // fixed behaviour pinned inside a real session, not just in the
+            // synthetic churn phase of VulkanValidation_test.
+            scene.add(outsider);
+            settle();
             auto blueCount = [&] {
                 const auto rgb = renderer.readRGBPixels();
                 const size_t n = static_cast<size_t>(kW) * kH;

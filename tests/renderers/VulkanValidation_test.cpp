@@ -371,6 +371,32 @@ int main() {
         scene.remove(*extra);
         runFrames(canvas, renderer, scene, *camera, 3);
 
+        // Add-after-remove: the sequence that used to fail-fast 0xC0000409
+        // (VulkanCameraModel_test structured its whole scene around avoiding
+        // it). The historical shape had a LINE object (an overlay entry, which
+        // holds an entry slot but pushes no TLAS instance) as the thing
+        // removed, and a traced triangle mesh as the thing added after. Fixed
+        // by later entry-list work; pinned here so it stays fixed.
+        {
+            const std::vector<float> verts = {-0.3f, 0.f, 0.f, 0.3f, 0.f, 0.f,
+                                              0.f, -0.3f, 0.f, 0.f, 0.3f, 0.f};
+            auto lineGeo = BufferGeometry::create();
+            lineGeo->setAttribute("position", FloatBufferAttribute::create(verts, 3));
+            auto lineMat = LineBasicMaterial::create();
+            lineMat->color = Color(0.f, 1.f, 0.f);
+            auto cross = LineSegments::create(lineGeo, lineMat);
+            cross->position.set(0.5f, 1.2f, 1.f);
+            scene.add(cross);
+            runFrames(canvas, renderer, scene, *camera, 3);
+            scene.remove(*cross);
+            runFrames(canvas, renderer, scene, *camera, 3);
+        }
+        auto extra2 = Mesh::create(SphereGeometry::create(0.4f, 16, 8),
+                                   sceneMaterial(Color(0.9f, 0.7f, 0.1f), 0.4f, 0.f));
+        extra2->position.set(-0.5f, 0.4f, 2.2f);
+        scene.add(extra2);
+        runFrames(canvas, renderer, scene, *camera, 3);
+
         // A material-side change too: the per-entry GPU patch path rather than
         // the whole-list rebuild.
         if (unlitMode()) {
