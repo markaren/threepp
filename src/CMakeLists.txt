@@ -863,6 +863,9 @@ if (THREEPP_WITH_VULKAN)
             "threepp/renderers/vulkan/GpuTimings.hpp"
             "threepp/renderers/vulkan/OverlayPass.hpp"
             "threepp/renderers/vulkan/VulkanFrameTypes.hpp"
+            # Types split out of the VulkanCoreImpl.hpp Impl header.
+            "threepp/renderers/vulkan/VulkanImplCommon.hpp"
+            "threepp/renderers/vulkan/VulkanGpuLayouts.hpp"
             "threepp/renderers/vulkan/TaaResolve.hpp"
             "threepp/renderers/vulkan/WaterDisplacePipeline.hpp"
             "threepp/renderers/vulkan/GrassWindPipeline.hpp"
