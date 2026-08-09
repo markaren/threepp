@@ -396,7 +396,19 @@ void VulkanRenderer::Impl::setRenderScale(float scale) {
         }
 
 void VulkanRenderer::Impl::setGbufferMsaa(uint32_t samples) {
-            const uint32_t clamped = samples >= 4 ? 4u : (samples >= 2 ? 2u : 1u);
+            uint32_t clamped = samples >= 4 ? 4u : (samples >= 2 ? 2u : 1u);
+            // 2x is the one count the spec doesn't guarantee (lavapipe: 1|4
+            // only). Promote to 4x rather than dropping to 1x — the caller
+            // asked for MSAA, and 4x is the mandatory multisample count. The
+            // clamp must land in gbufMsaaSamples_ itself: the resolve/shade
+            // dispatches loop over this value, so images built at one count
+            // with shaders reading another would be silently wrong even where
+            // it didn't crash.
+            if (clamped == 2 && !gbufMsaaCountSupported(2)) {
+                std::cerr << "[VulkanRenderer] gbuffer MSAA 2x is not supported by this "
+                             "device (only 1x/4x are spec-guaranteed); using 4x.\n";
+                clamped = 4;
+            }
             if (clamped == gbufMsaaSamples_) return;
             gbufMsaaSamples_ = clamped;
             // The material sampler is 16x aniso regardless of jitter now, so

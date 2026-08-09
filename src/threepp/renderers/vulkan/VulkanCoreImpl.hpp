@@ -2207,8 +2207,9 @@ namespace threepp {
         // to deferred_shade.comp's dispatch-B sampler2DMS bindings when
         // gbufMsaaSamples_ == 1 — sampler2DMS is a distinct SPIR-V type from
         // sampler2D, so (unlike other "1x1 dummy" bindings elsewhere) this
-        // can't reuse a single-sample dummy; a real 2-sample image is the
-        // minimum valid stand-in. Created once, lazily, on first use.
+        // can't reuse a single-sample dummy; a real multisample image is the
+        // minimum valid stand-in (2x where the device has it, else 4x — see
+        // ensureGbufDummyMS). Created once, lazily, on first use.
         std::array<Image2D, 5> gbufDummyMS_{};
         bool gbufDummyMSCreated_ = false;
 
@@ -6890,10 +6891,11 @@ namespace threepp {
 
         // Lazy bring-up: called at the start of each render() when hybrid is on.
         // Idempotent — handles both initial creation and post-resize reallocation.
-        // 1x1 VK_SAMPLE_COUNT_2_BIT dummy images for deferred_shade.comp's
-        // dispatch-B sampler2DMS/usampler2DMS bindings when MSAA is off —
-        // see gbufDummyMS_'s declaration for why a single-sample dummy can't
-        // stand in here. Formats mirror normal/depth/ids/uv/albedo exactly
+        // 1x1 multisample dummy images (2x, or 4x where the device lacks 2x)
+        // for deferred_shade.comp's dispatch-B sampler2DMS/usampler2DMS
+        // bindings when MSAA is off — see gbufDummyMS_'s declaration for why
+        // a single-sample dummy can't stand in here. Formats mirror
+        // normal/depth/ids/uv/albedo exactly
         // (SAMPLED usage only; never rasterized into, never resolved from).
         void ensureGbufDummyMS();
 
@@ -7344,6 +7346,31 @@ namespace threepp {
         void setGbufferMsaa(uint32_t samples);
 
         [[nodiscard]] uint32_t gbufferMsaa() const { return gbufMsaaSamples_; }
+
+        // Whether the DEVICE can rasterize + sample the G-buffer at this
+        // count. The MS G-buffer spans color, depth AND integer (ids) formats,
+        // each used as both attachment and sampled image, so the usable counts
+        // are the intersection of all five limit masks. The spec only
+        // guarantees 1x and 4x in each of them — 2x is optional, and lavapipe
+        // advertises exactly 1|4, which the validation CI gate caught after
+        // every NVIDIA-tested build had passed: vkCreateImage with an
+        // unsupported sample count is a spec violation
+        // (VUID-VkImageCreateInfo-samples-02258 family) and a crash risk, not
+        // a graceful fallback. Callers that want N>1 fall back to 4, the
+        // mandatory multisample count. Same idea as overlaySamples() above,
+        // which has always clamped the canvas request this way.
+        [[nodiscard]] bool gbufMsaaCountSupported(uint32_t samples) const {
+            VkPhysicalDeviceProperties props{};
+            vkGetPhysicalDeviceProperties(ctx->physicalDevice(), &props);
+            const auto& lim = props.limits;
+            const VkSampleCountFlags mask = lim.framebufferColorSampleCounts &
+                                            lim.framebufferDepthSampleCounts &
+                                            lim.sampledImageColorSampleCounts &
+                                            lim.sampledImageDepthSampleCounts &
+                                            lim.sampledImageIntegerSampleCounts;
+            // VK_SAMPLE_COUNT_N_BIT == N numerically (see overlaySamples).
+            return (mask & static_cast<VkSampleCountFlags>(samples)) != 0;
+        }
 
         // Gaussian-splat expected-depth AOV. OFF by default, and off means the
         // backing image is one texel: a full-res r32f per frame in flight is

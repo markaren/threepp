@@ -382,12 +382,21 @@ void VulkanRenderer::Impl::ensureGbufDummyMS() {
                                                    VK_IMAGE_ASPECT_COLOR_BIT};
             const char* names[5] = {"gbufDummyMS.normal", "gbufDummyMS.depth", "gbufDummyMS.ids",
                                     "gbufDummyMS.uv", "gbufDummyMS.albedo"};
+            // Any multisample count satisfies the sampler2DMS binding (the
+            // SPIR-V type encodes "multisampled", not a count, and the texels
+            // are never meaningfully read) — but the count still has to be one
+            // this device can CREATE. 2x is optional in the spec and absent on
+            // lavapipe (1|4), where these five creates were the validation CI
+            // gate's first real catch; 4x is the mandatory fallback.
+            const VkSampleCountFlagBits dummySamples = gbufMsaaCountSupported(2)
+                    ? VK_SAMPLE_COUNT_2_BIT
+                    : VK_SAMPLE_COUNT_4_BIT;
             for (int i = 0; i < 5; ++i) {
                 const VkImageUsageFlags usage = (aspects[i] == VK_IMAGE_ASPECT_DEPTH_BIT)
                         ? (VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT)
                         : (VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT);
                 gbufDummyMS_[i] = createAttachmentImage2D(1, 1, fmts[i], usage, aspects[i],
-                                                          names[i], VK_SAMPLE_COUNT_2_BIT);
+                                                          names[i], dummySamples);
             }
             // Layout-init: SHADER_READ_ONLY (color) / DEPTH_STENCIL_READ_ONLY
             // (depth) — matches what deferred_shade.comp's descriptor binds
