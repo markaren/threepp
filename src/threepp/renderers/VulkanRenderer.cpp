@@ -50,13 +50,23 @@ namespace threepp {
         {
             VkMemoryBarrier2 asbar{};
             asbar.sType         = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2;
-            asbar.srcStageMask  = VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR |
-                                  VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
-            asbar.srcAccessMask = VK_ACCESS_2_ACCELERATION_STRUCTURE_WRITE_BIT_KHR |
-                                  VK_ACCESS_2_SHADER_WRITE_BIT;
+            asbar.srcStageMask  = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+            asbar.srcAccessMask = VK_ACCESS_2_SHADER_WRITE_BIT;
             asbar.dstStageMask  = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
-            asbar.dstAccessMask = VK_ACCESS_2_ACCELERATION_STRUCTURE_READ_BIT_KHR |
-                                  VK_ACCESS_2_SHADER_READ_BIT;
+            asbar.dstAccessMask = VK_ACCESS_2_SHADER_READ_BIT;
+            // The AS half of this fence exists FOR ray query, so it is also
+            // gated ON ray query: AS_READ paired with a COMPUTE stage is a
+            // validation error when the rayQuery feature is off
+            // (VUID-VkMemoryBarrier2-dstAccessMask-06256 — the validation gate
+            // found this the first time the no-ray-query fallback actually
+            // ran). Without ray query the deferred compute never touches an
+            // acceleration structure, and the RT-pipeline consumers are fenced
+            // by the AS_BUILD → RT_SHADER barriers at the build sites.
+            if (ctx->rayQuerySupported()) {
+                asbar.srcStageMask  |= VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR;
+                asbar.srcAccessMask |= VK_ACCESS_2_ACCELERATION_STRUCTURE_WRITE_BIT_KHR;
+                asbar.dstAccessMask |= VK_ACCESS_2_ACCELERATION_STRUCTURE_READ_BIT_KHR;
+            }
             VkDependencyInfo asdep{};
             asdep.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
             asdep.memoryBarrierCount = 1;

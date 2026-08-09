@@ -398,10 +398,19 @@ jobs:
       # VK_DRIVER_FILES / VK_ICD_FILENAMES come from the ICD-locating step via
       # GITHUB_ENV — not re-declared here, where a step-level value would
       # override the resolved one.
+      #
+      # THREEPP_GATE_UNLIT: shading a LIT pixel on llvmpipe — which traces rays
+      # into a non-empty TLAS — segfaults inside its JIT-compiled shader code
+      # (Mesa 24.x–25.2.8; bisected in VulkanValidation_test.cpp, see the scene
+      # comment there). Every phase's API-level lifecycle coverage — the point
+      # of this gate — is identical with Basic materials, so the gate runs
+      # unlit here and fully lit on real GPUs. Retest against a newer Mesa
+      # before assuming this is still needed.
       - name: Run the Vulkan runtime gate
         env:
           THREEPP_VULKAN_VALIDATION: '1'
           THREEPP_VULKAN_STRICT_VALIDATION: '1'
+          THREEPP_GATE_UNLIT: '1'
         run: |
           set -euo pipefail
           xvfb-run -a -s "-screen 0 1280x1024x24" \

@@ -36,6 +36,7 @@
 #include "threepp/geometries/PlaneGeometry.hpp"
 #include "threepp/geometries/SphereGeometry.hpp"
 #include "threepp/helpers/AxesHelper.hpp"
+#include "threepp/materials/MeshBasicMaterial.hpp"
 #include "threepp/materials/MeshPhysicalMaterial.hpp"
 #include "threepp/materials/MeshStandardMaterial.hpp"
 #include "threepp/renderers/VulkanRenderer.hpp"
@@ -106,38 +107,65 @@ namespace {
     // (OverlayPass, whose geometry cache has had lifetime bugs of its own).
     // Deliberately no HDR environment: PMREM would add an asset dependency and
     // real cost, and the default env image already exercises the sampling path.
+    //
+    // THREEPP_GATE_UNLIT=1 swaps every mesh to opaque MeshBasicMaterial. It
+    // exists for lavapipe, where shading a LIT pixel — which traces rays into a
+    // non-empty TLAS — segfaults inside llvmpipe's JIT-compiled shader code
+    // (Mesa 24.x and 25.2.8, first frame, no validation message precedes it).
+    // Bisected to exactly that: an unlit scene runs every phase below clean,
+    // toggling off AO / probe GI / ReSTIR / denoise / shadows / lights one at a
+    // time changes nothing, and forcing the no-ray-query fallback crashes the
+    // same way via the RT pipeline. The gate's quarry is API-level lifecycle
+    // errors — descriptor updates, reallocation, swapchain churn — and every
+    // phase provokes those identically with Basic materials, so unlit mode
+    // keeps the gate's value while the lit path stays a known llvmpipe gap.
+    // Real-GPU runs (the default) keep the full lit scene.
     struct World {
         std::shared_ptr<Mesh> floor, box, glass;
         std::shared_ptr<AxesHelper> axes;
     };
 
+    bool unlitMode() {
+        const char* env = std::getenv("THREEPP_GATE_UNLIT");
+        return env && *env && *env != '0';
+    }
+
+    // Opaque on purpose in unlit mode: a TRANSPARENT flat-color basic mesh is
+    // routed to the raster overlay pass and leaves the traced scene entirely,
+    // which would quietly drain the TLAS this test means to keep populated.
+    std::shared_ptr<Material> sceneMaterial(const Color& color, float roughness, float metalness) {
+        if (unlitMode()) {
+            return MeshBasicMaterial::create({{"color", color}});
+        }
+        return MeshStandardMaterial::create(
+                MeshStandardMaterial::Params{}.color(color).roughness(roughness).metalness(metalness));
+    }
+
     World buildScene(Scene& scene) {
         World w;
 
-        w.floor = Mesh::create(
-                PlaneGeometry::create(20.f, 20.f),
-                MeshStandardMaterial::create(
-                        MeshStandardMaterial::Params{}.color(Color(0.55f, 0.56f, 0.58f)).roughness(0.8f)));
+        w.floor = Mesh::create(PlaneGeometry::create(20.f, 20.f),
+                               sceneMaterial(Color(0.55f, 0.56f, 0.58f), 0.8f, 0.f));
         w.floor->rotation.x = -math::PI / 2.f;
         w.floor->receiveShadow = true;
         scene.add(w.floor);
 
-        w.box = Mesh::create(
-                BoxGeometry::create(1.2f, 1.2f, 1.2f),
-                MeshStandardMaterial::create(
-                        MeshStandardMaterial::Params{}.color(Color(0.9f, 0.35f, 0.2f)).roughness(0.3f).metalness(0.1f)));
+        w.box = Mesh::create(BoxGeometry::create(1.2f, 1.2f, 1.2f),
+                             sceneMaterial(Color(0.9f, 0.35f, 0.2f), 0.3f, 0.1f));
         w.box->position.set(-1.1f, 0.6f, 0.f);
         w.box->castShadow = true;
         scene.add(w.box);
 
         w.glass = Mesh::create(
                 SphereGeometry::create(0.8f, 32, 16),
-                MeshPhysicalMaterial::create(
-                        MeshPhysicalMaterial::Params{}
-                                .color(Color(0.95f, 0.97f, 1.f))
-                                .roughness(0.05f)
-                                .transmission(0.9f)
-                                .thickness(0.6f)));
+                unlitMode() ? std::static_pointer_cast<Material>(
+                                      MeshBasicMaterial::create({{"color", Color(0.95f, 0.97f, 1.f)}}))
+                            : std::static_pointer_cast<Material>(MeshPhysicalMaterial::create(
+                                      MeshPhysicalMaterial::Params{}
+                                              .color(Color(0.95f, 0.97f, 1.f))
+                                              .roughness(0.05f)
+                                              .transmission(0.9f)
+                                              .thickness(0.6f))));
         w.glass->position.set(1.1f, 0.8f, 0.f);
         scene.add(w.glass);
 
@@ -214,7 +242,8 @@ int main() {
     camera->position.set(0.f, 2.2f, 5.f);
     camera->lookAt(Vector3(0.f, 0.8f, 0.f));
 
-    std::printf("=== VulkanValidation_test: %dx%d, layer active ===\n", kW, kH);
+    std::printf("=== VulkanValidation_test: %dx%d, layer active, %s scene ===\n", kW, kH,
+                unlitMode() ? "UNLIT (THREEPP_GATE_UNLIT)" : "lit");
 
     // Instance / device / swapchain creation happened above, before any phase
     // could bracket it. Close it as its own phase so that a violation there is
@@ -333,9 +362,8 @@ int main() {
     // acceleration structures mid-flight. Removal is the direction that frees
     // GPU-side records, so it is the one that can leave a stale handle behind.
     {
-        auto extra = Mesh::create(
-                BoxGeometry::create(0.5f, 0.5f, 0.5f),
-                MeshStandardMaterial::create(MeshStandardMaterial::Params{}.color(Color(0.2f, 0.8f, 0.4f))));
+        auto extra = Mesh::create(BoxGeometry::create(0.5f, 0.5f, 0.5f),
+                                  sceneMaterial(Color(0.2f, 0.8f, 0.4f), 0.5f, 0.f));
         extra->position.set(0.f, 0.3f, 2.f);
         extra->castShadow = true;
         scene.add(extra);
@@ -345,7 +373,11 @@ int main() {
 
         // A material-side change too: the per-entry GPU patch path rather than
         // the whole-list rebuild.
-        world.box->material()->as<MeshStandardMaterial>()->color.setRGB(0.2f, 0.4f, 0.9f);
+        if (unlitMode()) {
+            world.box->material()->as<MeshBasicMaterial>()->color.setRGB(0.2f, 0.4f, 0.9f);
+        } else {
+            world.box->material()->as<MeshStandardMaterial>()->color.setRGB(0.2f, 0.4f, 0.9f);
+        }
         world.box->material()->needsUpdate();
         runFrames(canvas, renderer, scene, *camera, 3);
     }
