@@ -384,6 +384,28 @@ namespace threepp {
         canvas.setFrameEndCallback([this] {
             if (pimpl_) pimpl_->endFrame();
         });
+
+        // The window was created hidden (Canvas::initWindow, Vulkan branch) so
+        // the seconds of device and pipeline setup do not stand in the taskbar
+        // as a blank, unresponsive frame that the user clicks away from — the
+        // click that used to leave the first real frame surfacing in the
+        // background. Push one empty-scene frame through the normal path so the
+        // window's first appearance carries real pixels (and the heaviest
+        // pipelines are warm), then reveal it; GLFW_FOCUS_ON_SHOW takes the
+        // foreground at that moment. A warmup failure is not fatal here: the
+        // window is revealed regardless, and whatever is wrong will report from
+        // the first real frame in the usual place.
+        if (!canvas.headless()) {
+            try {
+                Scene warmup;
+                PerspectiveCamera camera;
+                render(warmup, camera);
+                pimpl_->endFrame();
+            } catch (...) {
+                // fall through to the reveal
+            }
+            canvas.showWindow();
+        }
     }
 
     VulkanRenderer::~VulkanRenderer() = default;

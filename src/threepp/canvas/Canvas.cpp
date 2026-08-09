@@ -268,7 +268,14 @@ struct Canvas::Impl {
             glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
         }
         glfwWindowHint(GLFW_RESIZABLE, params_.resizable_);
-        glfwWindowHint(GLFW_VISIBLE, params_.headless_ ? GLFW_FALSE : GLFW_TRUE);
+        // A Vulkan canvas starts hidden and is revealed by the renderer once it
+        // has presented a first frame (Canvas::showWindow). Device and pipeline
+        // setup leaves a visible window blank and unresponsive for seconds —
+        // long enough that the user clicks back to whatever launched the app,
+        // and the first real frame then surfaces in the background. GL windows
+        // paint within the same frame they appear, so they stay visible-on-create.
+        const bool deferShow = params_.headless_ || api == GraphicsAPI::Vulkan;
+        glfwWindowHint(GLFW_VISIBLE, deferShow ? GLFW_FALSE : GLFW_TRUE);
 #else
         // Browser: OpenGL (WebGL2) needs GLFW to create the WebGL context.
         // Suppressing it left GLctx undefined and crashed the GL renderer on
@@ -612,6 +619,18 @@ bool Canvas::headless() const {
 
 void Canvas::setFrameEndCallback(std::function<void()> callback) {
     pimpl_->frameEndCallback_ = std::move(callback);
+}
+
+void Canvas::showWindow() {
+
+#ifndef __EMSCRIPTEN__
+    // Never un-hide a headless canvas: hidden IS its contract, and on the GLFW
+    // Null platform there is nothing to show anyway.
+    if (pimpl_->params_.headless_) return;
+    if (!pimpl_->window) return;
+    if (glfwGetWindowAttrib(pimpl_->window, GLFW_VISIBLE)) return;
+    glfwShowWindow(pimpl_->window);
+#endif
 }
 
 bool Canvas::isInsideAnimateLoop() const {

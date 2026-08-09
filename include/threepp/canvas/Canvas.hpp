@@ -76,6 +76,17 @@ namespace threepp {
         /// backends to present, analogous to glfwSwapBuffers for GL.
         void setFrameEndCallback(std::function<void()> callback);
 
+        /// Reveal a window that was created hidden, once there is something to
+        /// show in it. A Vulkan canvas starts hidden (see initWindow): device
+        /// and pipeline setup takes long enough that a visible-but-blank window
+        /// invites the user to click somewhere else, and the first real frame
+        /// then surfaces behind whatever they clicked. The renderer calls this
+        /// after presenting its first frame; focus follows the reveal
+        /// (GLFW_FOCUS_ON_SHOW), at a moment when the window has pixels and the
+        /// app can actually hold the foreground. Idempotent; never un-hides a
+        /// headless canvas.
+        void showWindow();
+
         /// True while inside animateOnce() user callback (between f() call
         /// and frame-end callback). Lets a swapchain-based backend decide
         /// whether to auto-present after render() or defer to the frame-end
