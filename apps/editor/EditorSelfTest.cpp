@@ -2577,8 +2577,21 @@ int EditorApp::runSelfTest() {
             // Just off the box's -x-z corner, well inside the umbra, versus the
             // sunward ground the box cannot reach. Both are ground pixels of
             // one material, so the only thing that differs is the shadow.
+            //
+            // Both probes must survive ANY dock proportions: the dock rect is
+            // carved from whatever window and panel layout this machine has,
+            // and dockLuma rejects points outside NDC +-0.9. The shadowed
+            // probe projects to x = 0.01/aspect (dead centre); the sunlit one
+            // sits at x = 0.38/aspect, inside the margin down to an aspect of
+            // ~0.45. Its previous home at (-2.6, 1.9) was x = 1.20/aspect —
+            // outside the frame on any dock squarer than 4:3, which read as
+            // "no shadow" on machines whose dock band is narrower than the
+            // one this check was written against. Sunlit is still sunlit:
+            // the box's shadow sweeps -x-z from the sun at (6,10,5) and ends
+            // at z = 0.5, a couple of metres short of the probe, and the view
+            // ray to it clears the box entirely.
             const double shadowed = dockLuma(Vector3(-0.85f, 0.01f, -0.75f));
-            const double sunlit = dockLuma(Vector3(-2.6f, 0.01f, 1.9f));
+            const double sunlit = dockLuma(Vector3(0.4f, 0.01f, 2.4f));
             check(shadowed >= 0.0 && sunlit >= 0.0, "both shadow probes land inside the dock");
             check(shadowed >= 0.0 && sunlit >= 0.0 && sunlit > shadowed * 1.25,
                   "the dock casts a shadow the lit pane could not");
