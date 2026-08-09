@@ -868,6 +868,7 @@ if (THREEPP_WITH_VULKAN)
             "threepp/renderers/vulkan/VulkanGpuLayouts.hpp"
             "threepp/renderers/vulkan/VulkanGeometryState.hpp"
             "threepp/renderers/vulkan/VulkanSceneTypes.hpp"
+            "threepp/renderers/vulkan/VulkanViewContext.hpp"
             "threepp/renderers/vulkan/TaaResolve.hpp"
             "threepp/renderers/vulkan/WaterDisplacePipeline.hpp"
             "threepp/renderers/vulkan/GrassWindPipeline.hpp"
