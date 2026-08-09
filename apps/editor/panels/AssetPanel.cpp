@@ -198,6 +198,12 @@ void EditorApp::drawConsoleTab() {
             copyAll();
         }
 
+        // A console line is a sentence, and the diagnostics grew into long ones:
+        // wrap at the panel's right edge rather than clip. Wrap pos 0 means "the
+        // content region's right", so it follows the panel as it resizes; the
+        // wrapped rows are still ONE item, so the right-click menu covers all of
+        // them.
+        ImGui::PushTextWrapPos(0.f);
         for (std::size_t i = 0; i < console_.size(); ++i) {
             const auto& line = console_[i];
             const bool bad = line.rfind("warning", 0) == 0 || line.find("failed") != std::string::npos;
@@ -214,6 +220,7 @@ void EditorApp::drawConsoleTab() {
             }
             ImGui::PopID();
         }
+        ImGui::PopTextWrapPos();
         if (consoleScrollToBottom_) {
             ImGui::SetScrollHereY(1.f);
             consoleScrollToBottom_ = false;
