@@ -156,6 +156,13 @@ namespace {
 }// namespace
 
 int main() {
+    // Unbuffered stdout. Under ctest, stdout is a pipe and therefore fully
+    // buffered — a segfault discards everything printf'd since the last flush,
+    // which on the first lavapipe run meant a crash after 493 s reported ZERO
+    // phase lines and looked like a startup crash. The stderr interleaving this
+    // costs is nothing next to knowing which phase died.
+    std::setvbuf(stdout, nullptr, _IONBF, 0);
+
     // Force the layer on from inside the test rather than relying on the build
     // type or on the caller's environment. Release builds default validation
     // OFF, which is the whole reason spec violations went unnoticed there — a
