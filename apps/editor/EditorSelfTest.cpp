@@ -181,6 +181,8 @@ namespace {
 extern "C" {
     int stbi_write_png(char const* filename, int w, int h, int comp, const void* data, int stride_in_bytes);
     void stbi_flip_vertically_on_write(int flag);
+    unsigned char* stbi_load(char const* filename, int* x, int* y, int* channels_in_file, int desired_channels);
+    void stbi_image_free(void* retval_from_stbi_load);
 }
 
 // The pixels the renderer just produced, written as a PNG. Shared by both
@@ -201,6 +203,10 @@ bool EditorApp::shootTo(const std::filesystem::path& path) {
             pixels.size() >= static_cast<std::size_t>(size.width()) * size.height() * 3 &&
             stbi_write_png(path.string().c_str(), size.width(), size.height(), 3,
                            pixels.data(), size.width() * 3) != 0;
+    // The flip flag is process-global and every other stb writer in the tree
+    // (CameraSensor::writeImage, GLRenderer::writeImage, sensor recordings)
+    // pre-flips its own buffer and assumes the global is 0 — leave it that way.
+    stbi_flip_vertically_on_write(0);
     std::cout << "[screenshot] " << (wrote ? "wrote " : "FAILED to write ") << path.string()
               << std::endl;
     return wrote;
@@ -6921,6 +6927,29 @@ int EditorApp::runSelfTest() {
             check(mean > 4.0, "the frame is not black");
             check(hi - lo > 24, "and has a scene in it rather than one flat fill");
 
+            // Row ORDER, not just row statistics: a vertically mirrored frame
+            // keeps every mean and range intact, so only an up-versus-down
+            // comparison can see one. image() promises top-left origin, and
+            // from this viewpoint the template scene is dark sky over bright
+            // ground.
+            const auto quarterMeans = [](const unsigned char* rgb, int w, int h) {
+                const auto meanOf = [&](int firstRow, int lastRow) {
+                    double lumaSum = 0.0;
+                    for (int y = firstRow; y < lastRow; ++y)
+                        for (int x = 0; x < w; ++x) {
+                            const auto* p = rgb + (static_cast<std::size_t>(y) * w + x) * 3;
+                            lumaSum += (299 * p[0] + 587 * p[1] + 114 * p[2]) / 1000.0;
+                        }
+                    return lumaSum / (static_cast<double>(lastRow - firstRow) * w);
+                };
+                return std::pair{meanOf(0, h / 4), meanOf(h - h / 4, h)};
+            };
+            const auto [skyLuma, groundLuma] = quarterMeans(image.data(), 128, 96);
+            std::cout << "[selftest] camera frame top-quarter mean " << skyLuma
+                      << ", bottom-quarter mean " << groundLuma << std::endl;
+            check(groundLuma > skyLuma + 8.0,
+                  "and is the right way up (dark sky above bright ground)");
+
             // Round-trip through a file: this is the path a dataset dump and a
             // script's save() both take, and an encode that silently fails
             // would leave a user with an empty directory and no error.
@@ -6931,6 +6960,22 @@ int EditorApp::runSelfTest() {
             check(sensor.writeImage(shot), "the frame writes to a PNG");
             check(std::filesystem::exists(shot) && std::filesystem::file_size(shot, ec) > 0,
                   "and the file has bytes in it");
+
+            // Decoded BACK, not just present: stb's flip-on-write flag is
+            // process-global, and the screenshot passes earlier in this run
+            // exercise the one caller that sets it. Left set, it inverts every
+            // PNG a sensor writes while the in-memory frame stays correct —
+            // only the file itself can witness that.
+            int decodedW = 0, decodedH = 0;
+            unsigned char* decoded = stbi_load(shot.string().c_str(), &decodedW, &decodedH, nullptr, 3);
+            if (decoded) {
+                const auto [fileSky, fileGround] = quarterMeans(decoded, decodedW, decodedH);
+                check(decodedW == 128 && decodedH == 96 && fileGround > fileSky + 8.0,
+                      "and the PNG decodes back the right way up (no leaked write-flip)");
+                stbi_image_free(decoded);
+            } else {
+                check(false, "and the PNG decodes back the right way up (no leaked write-flip)");
+            }
             std::filesystem::remove_all(shot.parent_path(), ec);
         }
 
