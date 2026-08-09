@@ -2438,7 +2438,7 @@ int EditorApp::runSelfTest() {
         check(std::abs(bottomPanelPx() - bottomHeightLimit() * s) < 0.5f,
               "an absurd height clamps to what the window can spare");
         check(bottomPanelPx() < static_cast<float>(renderer_->size().height()) -
-                                        menuHeight_ - toolbarHeight_ - statusHeight_,
+                                        menuHeight_ - statusHeight_,
               "the clamp leaves a viewport to look at");
         check(settings_.bottomPanelHeight == 100000.f,
               "clamping the layout does not rewrite the preference");

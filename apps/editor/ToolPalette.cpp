@@ -1,8 +1,12 @@
-// The tool palette: the transform tools as viewport furniture. Select, Move,
-// Rotate and Scale, then the space toggle and Snap, stacked in the viewport's
-// top-left corner — the mirror of the view gizmo in the top-right, drawn with
-// the same brush: ImGui's background draw list, vector icons, no textures, no
-// second render pass, the same picture on either backend.
+// The viewport chrome: what used to be a toolbar, as viewport furniture.
+//
+// The tool palette — the transform tools Select, Move, Rotate and Scale, the
+// space toggle and Snap — stacked in the top-left corner; the transport —
+// Play, Pause, Stop — as a pill in the top-centre; the viewpoint picker under
+// the view gizmo top-right. All but the picker are drawn with the view
+// gizmo's brush: ImGui's background draw list, vector icons, no textures, no
+// second render pass, the same picture on either backend. The picker stays a
+// real ImGui window, because a combo is not worth reinventing in a draw list.
 //
 // The icons are sprites in the old sense — a dozen draw-list primitives each —
 // because a bitmap would need an atlas, a loader and a DPI ladder, and a
@@ -168,10 +172,10 @@ void EditorApp::drawToolPalette() {
     const float width = cell + pad * 2.f;
     const float height = pad * 2.f + cell * static_cast<float>(kTools.size()) + sep;
 
-    // Top-left of the viewport: under the toolbar, clear of the hierarchy -
+    // Top-left of the viewport: under the menu bar, clear of the hierarchy -
     // the mirror of the view gizmo's corner.
     const ImVec2 origin(viewport->Pos.x + hierarchyPx() + margin,
-                        viewport->Pos.y + menuHeight_ + toolbarHeight_ + margin);
+                        viewport->Pos.y + menuHeight_ + margin);
 
     // A window small enough that the panels have eaten the viewport has no
     // corner to draw in. The bottom edge counts the bottom panel: a palette
@@ -318,4 +322,166 @@ void EditorApp::drawToolPalette() {
             case Tool::Snap: snapEnabled_ = !snapEnabled_; break;
         }
     }
+}
+
+// ------------------------------------------------------------- the transport
+
+void EditorApp::drawTransportBar() {
+
+    const float s = contentScale_;
+    const auto* viewport = ImGui::GetMainViewport();
+
+    const float cell = 34.f * s;
+    const float pad = 5.f * s;
+
+    const float width = cell * 3.f + pad * 2.f;
+    const float height = cell + pad * 2.f;// 44*s - the play banner stands on this
+
+    // Top-centre, floating over the 3D view: where the eye already goes when
+    // something starts moving.
+    const ImVec2 origin(viewport->Pos.x + (viewport->Size.x - width) * 0.5f,
+                        viewport->Pos.y + menuHeight_ + 10.f * s);
+
+    // A window narrow enough that the pill would sit on the palette or the
+    // panels has no centre to float in.
+    if (origin.x < viewport->Pos.x + hierarchyPx() + 70.f * s) return;
+    if (origin.x + width > viewport->Pos.x + viewport->Size.x - inspectorPx() - 70.f * s) return;
+
+    const ImGuiIO& io = ImGui::GetIO();
+    const auto onPill = [&](const ImVec2& p) {
+        return p.x >= origin.x && p.x <= origin.x + width &&
+               p.y >= origin.y && p.y <= origin.y + height;
+    };
+    const bool interactive = onPill(io.MousePos) && !io.WantCaptureMouse && !fileBrowser_.isOpen();
+
+    bool ownsPress = !ImGui::IsAnyMouseDown();
+    if (!ownsPress) {
+        for (int button = 0; button < 3 && !ownsPress; ++button) {
+            if (ImGui::IsMouseDown(button)) ownsPress = onPill(io.MouseClickedPos[button]);
+        }
+    }
+    // OR, not assign: the palette reset the flag at the top of this frame and
+    // both are the same piece of furniture as far as the pick gate cares.
+    toolPaletteHovered_ = toolPaletteHovered_ || (interactive && ownsPress);
+
+    const auto drag = ImGui::GetMouseDragDelta(ImGuiMouseButton_Left, 0.f);
+    const bool released = interactive && ownsPress &&
+                          ImGui::IsMouseReleased(ImGuiMouseButton_Left) && !gizmo_->isDragging() &&
+                          std::abs(drag.x) < 3.f * s && std::abs(drag.y) < 3.f * s;
+
+    auto* draw = ImGui::GetBackgroundDrawList();
+    draw->AddRectFilled(origin, {origin.x + width, origin.y + height},
+                        IM_COL32(12, 14, 17, interactive ? 165 : 105), 9.f * s);
+
+    const bool playing = isPlaying();
+    const bool paused = playing && play_.paused();
+
+    for (int index = 0; index < 3; ++index) {
+
+        const ImVec2 r0{origin.x + pad + cell * static_cast<float>(index), origin.y + pad};
+        const ImVec2 r1{r0.x + cell, r0.y + cell};
+        const ImVec2 centre{(r0.x + r1.x) * 0.5f, (r0.y + r1.y) * 0.5f};
+
+        const bool enabled = index == 0 || playing;
+        const bool hot = enabled && interactive && ownsPress &&
+                         io.MousePos.x >= r0.x && io.MousePos.x <= r1.x &&
+                         io.MousePos.y >= r0.y && io.MousePos.y <= r1.y;
+
+        // The running state on the buttons themselves, in the play banner's
+        // colours: green under Play while the clock runs, amber under Pause
+        // while it holds.
+        if (index == 0 && playing && !paused) {
+            draw->AddRectFilled(r0, r1, ImGui::ColorConvertFloat4ToU32(theme::playing()), 6.f * s);
+        } else if (index == 1 && paused) {
+            draw->AddRectFilled(r0, r1, ImGui::ColorConvertFloat4ToU32(theme::warning()), 6.f * s);
+        } else if (hot) {
+            draw->AddRectFilled(r0, r1, IM_COL32(255, 255, 255, 22), 6.f * s);
+        }
+
+        const ImU32 icon = !enabled ? IM_COL32(116, 121, 128, 255)
+                           : hot    ? IM_COL32(255, 255, 255, 255)
+                                    : IM_COL32(224, 228, 233, 255);
+
+        const float u = s;
+        if (index == 0) {
+            draw->AddTriangleFilled({centre.x + 5.5f * u, centre.y},
+                                    {centre.x - 3.5f * u, centre.y - 5.5f * u},
+                                    {centre.x - 3.5f * u, centre.y + 5.5f * u}, icon);
+        } else if (index == 1) {
+            draw->AddRectFilled({centre.x - 4.5f * u, centre.y - 5.f * u},
+                                {centre.x - 1.5f * u, centre.y + 5.f * u}, icon, 1.f * s);
+            draw->AddRectFilled({centre.x + 1.5f * u, centre.y - 5.f * u},
+                                {centre.x + 4.5f * u, centre.y + 5.f * u}, icon, 1.f * s);
+        } else {
+            draw->AddRectFilled({centre.x - 4.5f * u, centre.y - 4.5f * u},
+                                {centre.x + 4.5f * u, centre.y + 4.5f * u}, icon, 1.f * s);
+        }
+
+        if (!hot) continue;
+        if (index == 0) ImGui::SetTooltip(playing ? "Restart play" : "Play");
+        if (index == 1) ImGui::SetTooltip(paused ? "Resume" : "Pause");
+        if (index == 2) ImGui::SetTooltip("Stop");
+
+        if (!released) continue;
+        if (index == 0) startPlay();
+        if (index == 1) togglePause();
+        if (index == 2) stopPlay();
+    }
+}
+
+// ------------------------------------------------------- the viewpoint picker
+
+void EditorApp::drawViewpointPicker() {
+
+    const float s = contentScale_;
+    const auto* viewport = ImGui::GetMainViewport();
+
+    const float width = 130.f * s;
+    // Right-aligned under the view gizmo's disc (margin + 2*radius tall, see
+    // drawViewGizmo) - the picker says in words what the gizmo says in balls,
+    // and answers to the same corner.
+    const ImVec2 pos(viewport->Pos.x + viewport->Size.x - inspectorPx() - 14.f * s - width,
+                     viewport->Pos.y + menuHeight_ + 14.f * s + 80.f * s + 10.f * s);
+    if (pos.x < viewport->Pos.x + hierarchyPx() + 14.f * s) return;
+
+    ImGui::SetNextWindowPos(pos);
+    if (ImGui::Begin("##viewpoint", nullptr,
+                     ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
+                             ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoScrollbar |
+                             ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoBackground |
+                             ImGuiWindowFlags_NoFocusOnAppearing |
+                             ImGuiWindowFlags_AlwaysAutoResize)) {
+
+        // ASCII only: the ImGui default font has no glyph for a middle dot and
+        // draws a box in its place.
+        const std::string label =
+                std::string(viewPresetLabel(viewPreset())) + (orthographic() ? " / Ortho" : " / Persp");
+
+        ImGui::SetNextItemWidth(width);
+        if (ImGui::BeginCombo("##viewpointCombo", label.c_str())) {
+
+            static constexpr ViewPreset presets[] = {
+                    ViewPreset::Front, ViewPreset::Back,
+                    ViewPreset::Right, ViewPreset::Left,
+                    ViewPreset::Top, ViewPreset::Bottom};
+
+            for (auto preset : presets) {
+                if (ImGui::Selectable(viewPresetLabel(preset),
+                                      viewPreset() == preset && orthographic())) {
+                    setOrthographic(true);
+                    setViewPreset(preset);
+                }
+            }
+            ImGui::Separator();
+            bool ortho = orthographic();
+            if (ImGui::Checkbox("Orthographic", &ortho)) setOrthographic(ortho);
+
+            ImGui::EndCombo();
+        }
+        if (ImGui::IsItemHovered()) {
+            ImGui::SetTooltip("Axis views: Num1/3/7 (Ctrl for the opposite side).\n"
+                              "Num5 toggles orthographic. Alt+digit works without a numpad.");
+        }
+    }
+    ImGui::End();
 }

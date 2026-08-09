@@ -231,7 +231,7 @@ void EditorApp::drawInspector() {
     const float s = contentScale_;
 
     const float width = inspectorPx();
-    const float top = menuHeight_ + toolbarHeight_;
+    const float top = menuHeight_;
     const float bottom = statusHeight_ + bottomBandPx();
     const float height = std::max(viewport->Size.y - top - bottom, 40.f * s);
 

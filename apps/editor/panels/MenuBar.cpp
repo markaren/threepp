@@ -275,7 +275,7 @@ void EditorApp::drawMenuBar() {
         static RendererSettings settings(*renderer_);
         ImGui::SetNextWindowSize({360 * contentScale_, 0}, ImGuiCond_FirstUseEver);
         ImGui::SetNextWindowPos({ImGui::GetMainViewport()->Size.x - 380 * contentScale_,
-                                 menuHeight_ + toolbarHeight_ + 20 * contentScale_},
+                                 menuHeight_ + 20 * contentScale_},
                                 ImGuiCond_FirstUseEver);
         if (ImGui::Begin("Renderer Settings", &showRendererSettings)) {
             settings.drawContent();

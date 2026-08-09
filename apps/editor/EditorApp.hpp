@@ -192,7 +192,6 @@ namespace threepp::editor {
 
         // --- panels (apps/editor/panels/*.cpp) ------------------------------
         void drawMenuBar();
-        void drawToolbar();
         void drawHierarchy();
         void drawInspector();
         void drawBottomPanel();
@@ -724,12 +723,16 @@ namespace threepp::editor {
         // from wherever the camera stands - the same contract setViewPreset
         // leans on, just spread over a third of a second.
         void updateViewTween(float dt);
-        // --- tool palette (apps/editor/ToolPalette.cpp) ----------------------
-        // The transform tools as viewport furniture: Select/Move/Rotate/Scale,
-        // the space toggle and Snap, as vector icon sprites stacked in the
-        // viewport's top-left corner — the view gizmo's mirror, drawn with the
-        // same background-draw-list brush and the same interaction rules.
+        // --- viewport chrome (apps/editor/ToolPalette.cpp) -------------------
+        // The controls that used to be a toolbar, as viewport furniture drawn
+        // with the view gizmo's background-draw-list brush and interaction
+        // rules. The palette: Select/Move/Rotate/Scale, the space toggle and
+        // Snap, stacked top-left. The transport: Play/Pause/Stop as a pill
+        // top-centre. The viewpoint picker: a small real-ImGui window under
+        // the view gizmo (a combo is not worth reinventing in a draw list).
         void drawToolPalette();
+        void drawTransportBar();
+        void drawViewpointPicker();
         // --- follow selection -----------------------------------------------
         // Chase camera. While it is on and something is selected, every frame
         // walks the orbit target towards the selection's world position and
@@ -1252,7 +1255,6 @@ namespace threepp::editor {
         // Heights of the fixed chrome, measured as it is drawn — the side
         // panels need them to size themselves in the same frame.
         float menuHeight_ = 0.f;
-        float toolbarHeight_ = 0.f;
         float statusHeight_ = 0.f;
         bool bottomPanelOpen_ = true;
         // One-shot request to bring the Sensors tab forward. Consumed by the tab

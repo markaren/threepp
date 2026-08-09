@@ -45,7 +45,6 @@ add_executable(threepp_editor
         panels/ScriptEditorPanel.cpp
         panels/SensorsPanel.cpp
         panels/StatusBar.cpp
-        panels/Toolbar.cpp
 )
 
 target_link_libraries(threepp_editor PRIVATE threepp imgui::imgui threepp_editor_examples)

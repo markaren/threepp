@@ -888,7 +888,6 @@ void EditorApp::drawUi() {
     frameTextureSlots_.clear();
 
     drawMenuBar();
-    drawToolbar();
     // Before the panels: the Scripts tab lives in the bottom panel, and which
     // scripts are in it — if any — is decided here.
     updateScriptEditors();
@@ -899,6 +898,8 @@ void EditorApp::drawUi() {
     drawPlayBanner();
     drawViewGizmo();
     drawToolPalette();
+    drawTransportBar();
+    drawViewpointPicker();
     drawImportToast();
 
     if (preview_.visible) {
@@ -1711,7 +1712,7 @@ float EditorApp::bottomHeightLimit() const {
     const float total = static_cast<float>(renderer_->size().height());
     // A viewport strip has to survive: dragging the panel up to the toolbar
     // would leave nothing to drag it back down against.
-    const float free = total - menuHeight_ - toolbarHeight_ - statusHeight_ - 140.f * s;
+    const float free = total - menuHeight_ - statusHeight_ - 140.f * s;
 
     return std::max(free / s, EditorSettings::minBottomHeight);
 }

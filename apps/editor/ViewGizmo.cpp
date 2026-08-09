@@ -75,9 +75,9 @@ void EditorApp::drawViewGizmo() {
 
     const float radius = 40.f * s;
     const float margin = 14.f * s;
-    // Top-right of the viewport: under the toolbar, clear of the inspector.
+    // Top-right of the viewport: under the menu bar, clear of the inspector.
     const ImVec2 center(viewport->Pos.x + viewport->Size.x - inspectorPx() - margin - radius,
-                        viewport->Pos.y + menuHeight_ + toolbarHeight_ + margin + radius);
+                        viewport->Pos.y + menuHeight_ + margin + radius);
 
     // A window small enough that the panels have eaten the viewport has no
     // corner to draw in.

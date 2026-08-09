@@ -97,15 +97,16 @@ void EditorApp::drawPlayBanner() {
     const auto* viewport = ImGui::GetMainViewport();
     const float s = contentScale_;
 
-    // A slim strip across the viewport, high enough to be unmissable and out of
-    // the way of the toolbar.
+    // A slim strip across the viewport, high enough to be unmissable and just
+    // below the transport pill it narrates (see drawTransportBar: the pill is
+    // 44*s tall and stands 10*s under the menu).
     const char* text = play_.paused() ? "PAUSED" : "PLAY";
     const ImVec2 size = ImGui::CalcTextSize(text);
     const float width = size.x + 40 * s;
     const float height = size.y + 10 * s;
 
     ImGui::SetNextWindowPos({viewport->Pos.x + (viewport->Size.x - width) * 0.5f,
-                             viewport->Pos.y + menuHeight_ + toolbarHeight_ + 10 * s});
+                             viewport->Pos.y + menuHeight_ + 62 * s});
     ImGui::SetNextWindowSize({width, height});
     ImGui::SetNextWindowBgAlpha(0.85f);
     ImGui::PushStyleColor(ImGuiCol_WindowBg,

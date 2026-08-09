@@ -255,7 +255,7 @@ void EditorApp::drawHierarchy() {
     const float s = contentScale_;
 
     const float width = hierarchyPx();
-    const float top = menuHeight_ + toolbarHeight_;
+    const float top = menuHeight_;
     const float bottom = statusHeight_ + bottomBandPx();
     const float height = std::max(viewport->Size.y - top - bottom, 40.f * s);
 
