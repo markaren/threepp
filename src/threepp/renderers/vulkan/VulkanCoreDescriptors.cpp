@@ -614,4 +614,52 @@ void VulkanRenderer::Impl::ensureHybridResources() {
             }
         }
 
+
+void VulkanRenderer::Impl::ensureParticleIoSets() {
+            if (particleIoDescPool_ != VK_NULL_HANDLE || !view().deferredShade_ ||
+                particleCenterBufs_[0].handle == VK_NULL_HANDLE) return;
+            VkDescriptorSetLayout ioLayout = view().deferredShade_->particleIoLayout();
+            if (ioLayout == VK_NULL_HANDLE) return;
+            VkDescriptorPoolSize ips{};
+            ips.type            = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+            ips.descriptorCount = 2 * kFramesInFlight;
+            VkDescriptorPoolCreateInfo ipci{};
+            ipci.sType         = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+            ipci.maxSets       = kFramesInFlight;
+            ipci.poolSizeCount = 1;
+            ipci.pPoolSizes    = &ips;
+            check(vkCreateDescriptorPool(ctx->device(), &ipci, nullptr, &particleIoDescPool_),
+                  "vkCreateDescriptorPool(particleIo)");
+            for (uint32_t f = 0; f < kFramesInFlight; ++f) {
+                VkDescriptorSetAllocateInfo asi{};
+                asi.sType              = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+                asi.descriptorPool     = particleIoDescPool_;
+                asi.descriptorSetCount = 1;
+                asi.pSetLayouts        = &ioLayout;
+                check(vkAllocateDescriptorSets(ctx->device(), &asi, &particleIoDescSets_[f]),
+                      "vkAllocateDescriptorSets(particleIo)");
+                VkDescriptorBufferInfo cbi{};
+                cbi.buffer = particleCenterBufs_[f].handle;
+                cbi.offset = 0;
+                cbi.range  = VK_WHOLE_SIZE;
+                VkDescriptorBufferInfo obi{};
+                obi.buffer = particleLightBufs_[f].handle;
+                obi.offset = 0;
+                obi.range  = VK_WHOLE_SIZE;
+                VkWriteDescriptorSet w[2]{};
+                w[0].sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+                w[0].dstSet          = particleIoDescSets_[f];
+                w[0].dstBinding      = 0;
+                w[0].descriptorCount = 1;
+                w[0].descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+                w[0].pBufferInfo     = &cbi;
+                w[1].sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+                w[1].dstSet          = particleIoDescSets_[f];
+                w[1].dstBinding      = 1;
+                w[1].descriptorCount = 1;
+                w[1].descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+                w[1].pBufferInfo     = &obi;
+                vkUpdateDescriptorSets(ctx->device(), 2, w, 0, nullptr);
+            }
+        }
 }// namespace threepp

@@ -1875,4 +1875,855 @@ void VulkanRenderer::Impl::recordTlasRefit(VkCommandBuffer cb,
             if (fullBuild) tlasBuiltInstanceCount_ = instanceCount;
         }
 
+
+void VulkanRenderer::Impl::lodWorkerMain() {
+            for (;;) {
+                LodJob job;
+                {
+                    std::unique_lock<std::mutex> lk(lodJobMutex_);
+                    lodJobCv_.wait(lk, [this] { return lodWorkerStop_ || !lodJobQueue_.empty(); });
+                    // Exit immediately on stop, even with jobs still queued —
+                    // shutdown must be bounded; nothing will ever drain their
+                    // results after this. A job already popped and mid-
+                    // simplify (the loop body below, no lock held) still
+                    // runs to completion — can't interrupt meshopt mid-call,
+                    // and its result is simply never drained.
+                    if (lodWorkerStop_) return;
+                    job = std::move(lodJobQueue_.front());
+                    lodJobQueue_.pop_front();
+                }
+                const size_t vertexCount = job.positions.size() / 3;
+                // Soup input: weld first (identical-attribute duplicates →
+                // canonical indices over the ORIGINAL vertex ids), then
+                // simplify those. An empty weld result flows through as an
+                // empty chain ⇒ LodState::Failed at drain, same as any other
+                // degenerate geometry.
+                std::vector<uint32_t> canonical;
+                const uint32_t* idxData = job.indices.data();
+                size_t idxCount = job.indices.size();
+                if (job.indices.empty()) {
+                    canonical = geometrylod::buildCanonicalIndices(
+                            job.positions.data(),
+                            job.normals.empty() ? nullptr : job.normals.data(),
+                            job.uvs.empty() ? nullptr : job.uvs.data(),
+                            vertexCount);
+                    idxData = canonical.data();
+                    idxCount = canonical.size();
+                }
+                // sparse=true for welded soup: the canonical indices reference
+                // only ~1/6 of the soup vertex buffer (the representatives),
+                // and meshopt needs SimplifySparse to keep the unreferenced
+                // duplicates out of its wedge/seam analysis — see the
+                // parameter doc in GeometryLod.hpp.
+                auto levels = geometrylod::generateChain(
+                        job.positions.data(), vertexCount, idxData, idxCount,
+                        /*sparse=*/job.indices.empty(),
+                        job.normals.empty() ? nullptr : job.normals.data(),
+                        job.normalWeight);
+                std::lock_guard<std::mutex> lk(lodResultMutex_);
+                lodResultQueue_.push_back({job.geom, job.geomVersion, std::move(levels)});
+            }
+        }
+
+void VulkanRenderer::Impl::destroyBlasLodLevels(BlasRecord& rec) {
+            for (auto& lvl : rec.lodLevels) {
+                if (lvl.as) ctx->rt().destroyAccelerationStructure(ctx->device(), lvl.as, nullptr);
+                lodBlasBytes_  -= std::min<uint64_t>(lodBlasBytes_,  lvl.storage.size);
+                lodIndexBytes_ -= std::min<uint64_t>(lodIndexBytes_, lvl.index.size);
+                destroyBuffer(ctx->allocator(), lvl.storage);
+                destroyBuffer(ctx->allocator(), lvl.index);
+            }
+            if (rec.lodState == BlasRecord::LodState::Ready && !rec.lodLevels.empty()) {
+                lodChainsReadyCount_ = lodChainsReadyCount_ > 0 ? lodChainsReadyCount_ - 1 : 0;
+            }
+            rec.lodLevels.clear();
+            rec.lodState = BlasRecord::LodState::None;
+        }
+
+VulkanRenderer::Impl::SkinnedMeshState* VulkanRenderer::Impl::ensureSkinnedBlas(SkinnedMesh& sm) {
+            auto it = skinnedMeshStates.find(&sm);
+            if (it != skinnedMeshStates.end()) return it->second.get();
+
+            // Deforming paths (skinned / tet / morph / displaced) stay
+            // float-typed by design: the skinning compute rewrites these very
+            // buffers every frame, so upload-time widening would be a per-frame
+            // tax and the narrow source array would be dead weight. A narrowed
+            // normal here means someone ran compressAttributes() on a skinned
+            // mesh — warn instead of silently dropping it from the scene.
+            auto* posAttr     = sm.geometry()->getAttribute<float>("position");
+            auto* nrmAttr     = sm.geometry()->getAttribute<float>("normal");
+            auto* skinIdxAttr = sm.geometry()->getAttribute<float>("skinIndex");
+            auto* skinWAttr   = sm.geometry()->getAttribute<float>("skinWeight");
+            if (!nrmAttr && sm.geometry()->hasAttribute("normal")) {
+                static bool warned = false;
+                if (!warned) {
+                    warned = true;
+                    std::cerr << "[VulkanRenderer] skinned mesh has a non-float 'normal' "
+                                 "attribute - deforming geometry must keep float attributes "
+                                 "(do not compressAttributes() skinned meshes). Skipping.\n";
+                }
+            }
+            if (!posAttr || !nrmAttr || !skinIdxAttr || !skinWAttr) return nullptr;
+            if (!sm.skeleton || sm.skeleton->bones.empty()) return nullptr;
+
+            // Build BLAS with the bind-pose positions/normals first. The
+            // BLAS buffers are then re-written each frame by the skinning
+            // compute shader (binding 5/6) and rebuilt in-place.
+            auto rec = buildBlasFor(*sm.geometry());
+            if (!rec) return nullptr;
+            rec->liveCheck = sm.geometry();
+
+            // Per-vertex previous-pose buffer. Used for two purposes:
+            // (1) Hybrid raster motion-vector source (existing).
+            // (2) Per-vertex prev-world-position reproject (2026-05-13):
+            //     the deferred shade's ray-query hit handling reads via
+            //     gdesc.prevVertexAddress, interpolates, and derives the
+            //     hit's prevWorldPos, which feeds the motionMat reproject.
+            //     The per-frame vkCmdCopyBuffer pushes current→prev before
+            //     the skinning compute writes new positions.
+            // buildBlasFor already allocated + seeded rec->prevVertex with
+            // exactly the size/usage this path needs — re-creating it here
+            // orphaned that buffer (VUID 05137 leak at device destroy).
+
+            auto state = std::make_unique<SkinnedMeshState>();
+            state->blas = std::move(rec);
+            state->liveCheck = sm.geometry();
+            const uint32_t vertexCount = static_cast<uint32_t>(posAttr->count());
+            const uint32_t boneCount   = static_cast<uint32_t>(sm.skeleton->bones.size());
+            state->vertexCount = vertexCount;
+            state->boneCount   = boneCount;
+            state->prevBoneMats.assign(boneCount * 16, 0.f);
+
+            auto* idxAttr = sm.geometry()->getIndex();
+            state->indexed = idxAttr != nullptr;
+            state->primitiveCount = state->indexed
+                    ? static_cast<uint32_t>(idxAttr->count() / 3)
+                    : vertexCount / 3;
+
+            // ── GPU-skinning input buffers. Uploaded once, reused every frame.
+            auto allocAndUpload = [&](Buffer& dst, const void* src,
+                                      VkDeviceSize bytes) {
+                dst = createBuffer(
+                        ctx->allocator(), ctx->device(), bytes,
+                        VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+                        VMA_MEMORY_USAGE_AUTO,
+                        VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT);
+                uploadHostVisible(ctx->allocator(), dst, src, bytes);
+            };
+            allocAndUpload(state->baseVertex, posAttr->array().data(),
+                           vertexCount * 3 * sizeof(float));
+            allocAndUpload(state->baseNormal, nrmAttr->array().data(),
+                           vertexCount * 3 * sizeof(float));
+            allocAndUpload(state->skinIndex, skinIdxAttr->array().data(),
+                           vertexCount * 4 * sizeof(float));
+            allocAndUpload(state->skinWeight, skinWAttr->array().data(),
+                           vertexCount * 4 * sizeof(float));
+
+            // Bone matrices buffer: [bindMatrix, bindMatrixInverse, bones...].
+            // bindMatrix is constant. bindMatrixInverse is NOT (attached bind mode
+            // ties it to the current matrixWorld) — refreshSkinnedBlas re-uploads
+            // it every frame; seed both here.
+            const VkDeviceSize matsBytes = (2 + boneCount) * 16 * sizeof(float);
+            state->boneMatrices = createBuffer(
+                    ctx->allocator(), ctx->device(), matsBytes,
+                    VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+                    VMA_MEMORY_USAGE_AUTO,
+                    VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT);
+            {
+                void* mapped = nullptr;
+                vmaMapMemory(ctx->allocator(), state->boneMatrices.alloc, &mapped);
+                std::memcpy(static_cast<char*>(mapped),
+                            sm.bindMatrix.elements.data(),
+                            16 * sizeof(float));
+                std::memcpy(static_cast<char*>(mapped) + 16 * sizeof(float),
+                            sm.bindMatrixInverse.elements.data(),
+                            16 * sizeof(float));
+                std::memset(static_cast<char*>(mapped) + 32 * sizeof(float),
+                            0, boneCount * 16 * sizeof(float));
+                flushHostWrites(ctx->allocator(), state->boneMatrices.alloc);
+                vmaUnmapMemory(ctx->allocator(), state->boneMatrices.alloc);
+            }
+
+            // Descriptor set — wires base inputs + bone mats + BLAS outputs.
+            state->skinDescSet = skinning_->allocateMeshDescriptorSet();
+
+            std::array<VkDescriptorBufferInfo, 7> bi{};
+            const Buffer* bufs[7] = {
+                    &state->baseVertex, &state->baseNormal,
+                    &state->skinIndex,  &state->skinWeight,
+                    &state->boneMatrices,
+                    &state->blas->vertex, &state->blas->normal,
+            };
+            std::array<VkWriteDescriptorSet, 7> wr{};
+            for (uint32_t i = 0; i < 7; ++i) {
+                bi[i].buffer        = bufs[i]->handle;
+                bi[i].offset        = 0;
+                bi[i].range         = VK_WHOLE_SIZE;
+                wr[i]               = {};
+                wr[i].sType         = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+                wr[i].dstSet        = state->skinDescSet;
+                wr[i].dstBinding    = i;
+                wr[i].descriptorCount = 1;
+                wr[i].descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+                wr[i].pBufferInfo     = &bi[i];
+            }
+            vkUpdateDescriptorSets(ctx->device(),
+                                   static_cast<uint32_t>(wr.size()),
+                                   wr.data(), 0, nullptr);
+
+            // BLAS rebuild scratch buffer (persistent — sized once, reused).
+            VkAccelerationStructureGeometryTrianglesDataKHR triData{};
+            triData.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_TRIANGLES_DATA_KHR;
+            triData.vertexFormat = VK_FORMAT_R32G32B32_SFLOAT;
+            triData.vertexData.deviceAddress = state->blas->vertex.address;
+            triData.vertexStride = 3 * sizeof(float);
+            triData.maxVertex    = vertexCount - 1;
+            if (state->indexed) {
+                triData.indexType = VK_INDEX_TYPE_UINT32;
+                triData.indexData.deviceAddress = state->blas->index.address;
+            } else {
+                triData.indexType = VK_INDEX_TYPE_NONE_KHR;
+            }
+            VkAccelerationStructureGeometryKHR blasGeom{};
+            blasGeom.sType         = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_KHR;
+            blasGeom.geometryType  = VK_GEOMETRY_TYPE_TRIANGLES_KHR;
+            blasGeom.geometry.triangles = triData;
+            blasGeom.flags         = 0;
+            VkAccelerationStructureBuildGeometryInfoKHR blasBuild{};
+            blasBuild.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_GEOMETRY_INFO_KHR;
+            blasBuild.type  = VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR;
+            blasBuild.flags = VK_BUILD_ACCELERATION_STRUCTURE_PREFER_FAST_TRACE_BIT_KHR |
+                              VK_BUILD_ACCELERATION_STRUCTURE_ALLOW_UPDATE_BIT_KHR;
+            blasBuild.mode  = VK_BUILD_ACCELERATION_STRUCTURE_MODE_BUILD_KHR;
+            blasBuild.geometryCount = 1;
+            blasBuild.pGeometries   = &blasGeom;
+            blasBuild.dstAccelerationStructure = state->blas->as;
+            VkAccelerationStructureBuildSizesInfoKHR blasSizes{};
+            blasSizes.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_SIZES_INFO_KHR;
+            ctx->rt().getAccelerationStructureBuildSizes(
+                    ctx->device(),
+                    VK_ACCELERATION_STRUCTURE_BUILD_TYPE_DEVICE_KHR,
+                    &blasBuild, &state->primitiveCount, &blasSizes);
+            state->blasScratchSize = blasSizes.buildScratchSize;
+            state->blasScratch = createAsScratchBuffer(
+                    ctx->allocator(), ctx->device(), state->blasScratchSize);
+
+            auto* raw = state.get();
+            skinnedMeshStates.emplace(&sm, std::move(state));
+            // First-frame refresh: upload bones + queue a rebuild so the BLAS
+            // reflects the current pose, not bind pose, when the next frame
+            // records.
+            refreshSkinnedBlas(sm, *raw);
+            return raw;
+        }
+
+VulkanRenderer::Impl::TetMeshState* VulkanRenderer::Impl::ensureTetBlas(Mesh& m) {
+            auto found = tetMeshStates.find(&m);
+            if (found != tetMeshStates.end()) return found->second.get();
+
+            auto geom = m.geometry();
+            if (!geom) return nullptr;
+            auto* posAttr = geom->getAttribute<float>("position");
+            auto* nrmAttr = geom->getAttribute<float>("normal");
+            auto* tiAttr  = geom->getAttribute<float>("tetIndex");
+            auto* twAttr  = geom->getAttribute<float>("tetWeight");
+            auto* r0Attr  = geom->getAttribute<float>("tetRestInv0");
+            auto* r1Attr  = geom->getAttribute<float>("tetRestInv1");
+            auto* r2Attr  = geom->getAttribute<float>("tetRestInv2");
+            auto mat = m.material();
+            if (!posAttr || !nrmAttr || !tiAttr || !twAttr || !r0Attr || !r1Attr || !r2Attr) return nullptr;
+            if (!mat || !mat->tetTexture) return nullptr;
+
+            // BLAS built from the rest positions; the tet_skinning compute then
+            // rewrites the vertex/normal buffers each frame and the BLAS is refit.
+            auto rec = buildBlasFor(*geom);
+            if (!rec) return nullptr;
+            rec->liveCheck = geom;
+
+            // Previous-frame vertex buffer for per-vertex motion vectors (same
+            // role as the skinned path; copied current->prev before each
+            // compute). buildBlasFor already allocated + seeded rec->prevVertex
+            // — re-creating it here orphaned that buffer (VUID 05137).
+
+            auto state = std::make_unique<TetMeshState>();
+            state->blas = std::move(rec);
+            state->liveCheck = geom;
+            const uint32_t vertexCount = static_cast<uint32_t>(posAttr->count());
+            state->vertexCount = vertexCount;
+            auto* idxAttr = geom->getIndex();
+            state->indexed = idxAttr != nullptr;
+            state->primitiveCount = state->indexed
+                    ? static_cast<uint32_t>(idxAttr->count() / 3)
+                    : vertexCount / 3;
+
+            auto allocAndUpload = [&](Buffer& dst, const void* src, VkDeviceSize bytes) {
+                dst = createBuffer(
+                        ctx->allocator(), ctx->device(), bytes,
+                        VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+                        VMA_MEMORY_USAGE_AUTO,
+                        VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT);
+                uploadHostVisible(ctx->allocator(), dst, src, bytes);
+            };
+            allocAndUpload(state->tetIndex,   tiAttr->array().data(),  vertexCount * 4 * sizeof(float));
+            allocAndUpload(state->tetWeight,  twAttr->array().data(),  vertexCount * 4 * sizeof(float));
+            allocAndUpload(state->baseNormal, nrmAttr->array().data(), vertexCount * 3 * sizeof(float));
+            allocAndUpload(state->restInv0,   r0Attr->array().data(),  vertexCount * 3 * sizeof(float));
+            allocAndUpload(state->restInv1,   r1Attr->array().data(),  vertexCount * 3 * sizeof(float));
+            allocAndUpload(state->restInv2,   r2Attr->array().data(),  vertexCount * 3 * sizeof(float));
+
+            // Per-frame tet positions ring, sized to the tet texture image (one
+            // RGBA32F texel per collision-tet vertex). Filled by refreshTetBlas,
+            // one slot per frame (see TetMeshState::tetPos).
+            const auto& tetImg = mat->tetTexture->image().data<float>();
+            state->tetPosBytes = static_cast<VkDeviceSize>(tetImg.size()) * sizeof(float);
+            for (auto& slot : state->tetPos) {
+                slot = createBuffer(
+                        ctx->allocator(), ctx->device(), state->tetPosBytes,
+                        VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+                        VMA_MEMORY_USAGE_AUTO,
+                        VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT);
+            }
+
+            // Descriptor sets — 9 storage buffers each (see tet_skinning.comp);
+            // one set per ring slot, identical except binding 6 (tetPos).
+            for (uint32_t s = 0; s < TetMeshState::kTetPosSlots; ++s) {
+                state->tetDescSet[s] = tetSkinning_->allocateMeshDescriptorSet();
+                std::array<VkDescriptorBufferInfo, 9> bi{};
+                const Buffer* bufs[9] = {
+                        &state->tetIndex, &state->tetWeight, &state->baseNormal,
+                        &state->restInv0, &state->restInv1, &state->restInv2,
+                        &state->tetPos[s],
+                        &state->blas->vertex, &state->blas->normal,
+                };
+                std::array<VkWriteDescriptorSet, 9> wr{};
+                for (uint32_t i = 0; i < 9; ++i) {
+                    bi[i].buffer          = bufs[i]->handle;
+                    bi[i].offset          = 0;
+                    bi[i].range           = VK_WHOLE_SIZE;
+                    wr[i]                 = {};
+                    wr[i].sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+                    wr[i].dstSet          = state->tetDescSet[s];
+                    wr[i].dstBinding      = i;
+                    wr[i].descriptorCount = 1;
+                    wr[i].descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+                    wr[i].pBufferInfo     = &bi[i];
+                }
+                vkUpdateDescriptorSets(ctx->device(),
+                                       static_cast<uint32_t>(wr.size()), wr.data(), 0, nullptr);
+            }
+
+            // Persistent BLAS-rebuild scratch (sized once, reused every frame).
+            VkAccelerationStructureGeometryTrianglesDataKHR triData{};
+            triData.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_TRIANGLES_DATA_KHR;
+            triData.vertexFormat = VK_FORMAT_R32G32B32_SFLOAT;
+            triData.vertexData.deviceAddress = state->blas->vertex.address;
+            triData.vertexStride = 3 * sizeof(float);
+            triData.maxVertex    = vertexCount - 1;
+            if (state->indexed) {
+                triData.indexType = VK_INDEX_TYPE_UINT32;
+                triData.indexData.deviceAddress = state->blas->index.address;
+            } else {
+                triData.indexType = VK_INDEX_TYPE_NONE_KHR;
+            }
+            VkAccelerationStructureGeometryKHR blasGeom{};
+            blasGeom.sType         = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_KHR;
+            blasGeom.geometryType  = VK_GEOMETRY_TYPE_TRIANGLES_KHR;
+            blasGeom.geometry.triangles = triData;
+            blasGeom.flags         = 0;
+            VkAccelerationStructureBuildGeometryInfoKHR blasBuild{};
+            blasBuild.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_GEOMETRY_INFO_KHR;
+            blasBuild.type  = VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR;
+            blasBuild.flags = VK_BUILD_ACCELERATION_STRUCTURE_PREFER_FAST_TRACE_BIT_KHR |
+                              VK_BUILD_ACCELERATION_STRUCTURE_ALLOW_UPDATE_BIT_KHR;
+            blasBuild.mode  = VK_BUILD_ACCELERATION_STRUCTURE_MODE_BUILD_KHR;
+            blasBuild.geometryCount = 1;
+            blasBuild.pGeometries   = &blasGeom;
+            blasBuild.dstAccelerationStructure = state->blas->as;
+            VkAccelerationStructureBuildSizesInfoKHR blasSizes{};
+            blasSizes.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_SIZES_INFO_KHR;
+            ctx->rt().getAccelerationStructureBuildSizes(
+                    ctx->device(),
+                    VK_ACCELERATION_STRUCTURE_BUILD_TYPE_DEVICE_KHR,
+                    &blasBuild, &state->primitiveCount, &blasSizes);
+            state->blasScratchSize = blasSizes.buildScratchSize;
+            state->blasScratch = createAsScratchBuffer(
+                    ctx->allocator(), ctx->device(), state->blasScratchSize);
+
+            auto* raw = state.get();
+            tetMeshStates.emplace(&m, std::move(state));
+            // First-frame refresh so the BLAS reflects the current deformation.
+            refreshTetBlas(m, *raw);
+            return raw;
+        }
+
+VulkanRenderer::Impl::DisplacedMeshState* VulkanRenderer::Impl::ensureDisplacedState(DisplacedMesh& dm) {
+            auto it = displacedStates.find(&dm);
+            if (it != displacedStates.end()) return it->second.get();
+
+            auto* posAttr = dm.geometry()->getAttribute<float>("position");
+            if (!posAttr) return nullptr;
+            const uint32_t vertexCount = static_cast<uint32_t>(posAttr->count());
+            // Grid topology: explicit gridWidth/gridDepth hints when set
+            // (Ocean::create always fills them — required for rectangular
+            // grids), else the historical square derivation from
+            // sqrt(vertexCount). PlaneGeometry(w, h, segX, segY) produces
+            // (segX+1)·(segY+1) verts laid out row-major, X fastest.
+            uint32_t gridDimX = dm.gridWidth;
+            uint32_t gridDimZ = dm.gridDepth;
+            if (gridDimX == 0 || gridDimZ == 0) {
+                const uint32_t gridDim = static_cast<uint32_t>(std::round(std::sqrt(double(vertexCount))));
+                gridDimX = gridDimZ = gridDim;
+            }
+            if (gridDimX < 2 || gridDimZ < 2 || gridDimX * gridDimZ != vertexCount) return nullptr;
+
+            // Plane extents: derive from the rest-position bbox (the displace
+            // pass reconstructs rest positions from grid index + these).
+            float xMin = std::numeric_limits<float>::infinity();
+            float xMax = -std::numeric_limits<float>::infinity();
+            float zMin = std::numeric_limits<float>::infinity();
+            float zMax = -std::numeric_limits<float>::infinity();
+            for (uint32_t i = 0; i < vertexCount; ++i) {
+                const float x = posAttr->getX(i);
+                const float z = posAttr->getZ(i);
+                if (x < xMin) xMin = x;
+                if (x > xMax) xMax = x;
+                if (z < zMin) zMin = z;
+                if (z > zMax) zMax = z;
+            }
+            const float planeSizeX = xMax - xMin;
+            const float planeSizeZ = zMax - zMin;
+            if (!(planeSizeX > 0.f) || !(planeSizeZ > 0.f)) return nullptr;
+
+            auto blas = buildBlasFor(*dm.geometry());
+            if (!blas) return nullptr;
+            blas->liveCheck = dm.geometry();
+
+            // FFT-displaced ocean mesh: mark it so the chit / deferred passes
+            // apply world-space foam + thin-shell water shading. Foam itself
+            // lives in a world-space texture built by foam_world.comp, so the
+            // only per-mesh state needed here is this "is water" marker (it
+            // used to be a zero-filled per-vertex foam buffer, read solely for
+            // its non-null address — the contents were dead).
+            blas->isOceanSurface = true;
+
+            // Per-vertex previous-pose buffer for hybrid raster motion vec —
+            // buildBlasFor already allocated + seeded blas->prevVertex (same
+            // size R32G32B32 SFLOAT × vertexCount, same usage); it is filled
+            // GPU-side via vkCmdCopyBuffer before each water_displace
+            // dispatch. Re-creating it here orphaned the buildBlasFor buffer
+            // (the one VUID 05137 leak that survived renderer teardown).
+
+            auto state = std::make_unique<DisplacedMeshState>();
+            state->blas = std::move(blas);
+            state->vertexCount = vertexCount;
+            state->gridDimX = gridDimX;
+            state->gridDimZ = gridDimZ;
+            state->planeSizeX = planeSizeX;
+            state->planeSizeZ = planeSizeZ;
+            state->liveCheck = dm.geometry();
+
+            // FFT cascades — one Phillips/Dynamic/IFFT chain per non-zero
+            // `tileSize` in DisplacedMesh::Params. Cascades are band-passed
+            // by k so each covers a disjoint wavenumber range:
+            //   cascade 0 (largest tile): 0 → kNyq of cascade 1
+            //   cascade 1 (middle):       kNyq of cascade 1 → kNyq of cascade 2
+            //   cascade 2 (smallest):     kNyq of cascade 2 → ∞
+            // where kNyq_i = π·N / tileSize_i. Cascade 0 is required;
+            // tileSize1/tileSize2 == 0 disable the corresponding band.
+            const float tileSizes[3] = {
+                    dm.params.tileSize0,
+                    dm.params.tileSize1,
+                    dm.params.tileSize2,
+            };
+            const uint32_t textureSizes[3] = {
+                    dm.params.textureSize0,
+                    dm.params.textureSize1,
+                    dm.params.textureSize2,
+            };
+            // Hand-off k between adjacent cascades = the SMALLER tile's lowest
+            // natural k = 2π / tileSize_(smaller). Each cascade then covers
+            // wavelengths between its own tile and the next-smaller tile:
+            //   cascade 0: λ ∈ [tileSize_1, tileSize_0]
+            //   cascade 1: λ ∈ [tileSize_2, tileSize_1]
+            //   cascade 2: λ ∈ [<tileSize_2]  (down to its own Nyquist)
+            //
+            // Why not split at the larger tile's Nyquist (k = π·N / L_larger)?
+            // Because that boundary is at the mesh's resolving limit — it
+            // hands all the mesh-resolvable wavelengths to cascade 0 alone,
+            // and cascades 1 and 2 emit only sub-mesh wavelengths that
+            // alias as displacement noise. The 2π/L_smaller scheme reserves
+            // a real, mesh-displayable band for each intermediate cascade.
+            constexpr float kTwoPi = 6.28318530717958647692f;
+            const float kHandoff01 = (tileSizes[0] > 0.f && tileSizes[1] > 0.f)
+                    ? kTwoPi / tileSizes[1] : 0.f;
+            const float kHandoff12 = (tileSizes[1] > 0.f && tileSizes[2] > 0.f)
+                    ? kTwoPi / tileSizes[2] : 0.f;
+            for (uint32_t i = 0; i < 3; ++i) {
+                if (!(tileSizes[i] > 0.f)) continue;
+                const uint32_t texSize = textureSizes[i];
+                water::PhillipsSpectrum::Settings ps{};
+                ps.textureSize = texSize;
+                ps.tileSize    = tileSizes[i];
+                // Cascade 1's SAMPLE DOMAIN is rotated by kOceanCascade1RotTheta
+                // (repeat-lattice break — see vulkan_shared.h). A domain-space
+                // wave at angle θd propagates in world at θd − θrot, so add the
+                // rotation here to keep the rendered propagation direction at
+                // the caller's windTheta for every cascade.
+                ps.windTheta   = dm.params.windTheta +
+                                 (i == 1 ? kOceanCascade1RotTheta : 0.f);
+                ps.windSpeed   = dm.params.windSpeed;
+                if (i == 0) {
+                    ps.kMin = 0.f;
+                    ps.kMax = kHandoff01; // 0 if no cascade 1 → no upper bound
+                } else if (i == 1) {
+                    ps.kMin = kHandoff01;
+                    ps.kMax = kHandoff12; // 0 if no cascade 2 → no upper bound
+                } else {
+                    ps.kMin = kHandoff12;
+                    ps.kMax = 0.f;
+                }
+                // Short-wave roll-off. Two regimes:
+                //  • OPEN band (kMax == 0, the finest enabled cascade): suppress
+                //    wavelengths shorter than ~5× the sample spacing, or
+                //    Phillips puts energy into bands the FFT can't resolve and
+                //    the crests alias into spikes. Resolution-tied by design.
+                //  • BAND-LIMITED (kMax > 0): the hard kMax already guarantees
+                //    nothing unresolvable is emitted, so the roll-off only
+                //    tapers the band edge. Keyed to the BAND, not the
+                //    resolution: the old 5·tile/texSize formula would wipe out
+                //    the entire band content when the band-passed cascades run
+                //    at their right-sized (small) resolutions.
+                //    The per-cascade ratios REPRODUCE the attenuation the old
+                //    formula gave at the historical resolutions ({1024, 512}):
+                //    0.05·λmin ≈ 0.91 at cascade 0's edge, 0.12·λmin ≈ 0.55 at
+                //    cascade 1's. The stronger cascade-1 taper is load-bearing:
+                //    a first cut used 0.05 for both, and the extra ~9–12 m
+                //    energy it left in cascade 1 aliased into a checkerboard
+                //    moiré at grazing distances where the (warp-thinned) mesh
+                //    spacing approaches those wavelengths' Nyquist.
+                ps.smallWaveCutoff = (ps.kMax > 0.f)
+                        ? (i == 0 ? 0.05f : 0.12f) * (kTwoPi / ps.kMax)
+                        : 5.f * tileSizes[i] / float(texSize);
+                auto& c = state->cascades[i];
+                c.tileSize = tileSizes[i];
+                c.phillips = std::make_unique<water::PhillipsSpectrum>(*ctx, ps);
+                c.dyn      = std::make_unique<water::DynamicSpectrum>(
+                        *ctx, *c.phillips, texSize, tileSizes[i]);
+                c.ifft     = std::make_unique<water::IFFT>(*ctx, texSize);
+                state->cascadeMask |= (1u << i);
+            }
+            if (state->cascadeMask == 0u) return nullptr; // no cascades → invalid setup
+            state->appliedWindSpeed = dm.params.windSpeed;
+            state->appliedWindTheta = dm.params.windTheta;
+
+            // Per-cascade height readback buffers (host-mapped). Each cascade
+            // can run at a different FFT resolution, so each readback is
+            // sized to its own dim²·8 bytes (RG32F). Kept persistent so the
+            // mappings survive between frames.
+            auto makeReadback = [&](uint32_t dim, const char* name) {
+                const VkDeviceSize bytes =
+                        VkDeviceSize(dim) * VkDeviceSize(dim) * 8u;
+                auto b = createBuffer(
+                        ctx->allocator(), ctx->device(), bytes,
+                        VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+                        VMA_MEMORY_USAGE_AUTO,
+                        VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT |
+                                VMA_ALLOCATION_CREATE_MAPPED_BIT);
+                ctx->setObjectName(b.handle, name);
+                return b;
+            };
+            state->heightReadback  = makeReadback(textureSizes[0], "ocean.heightReadback0");
+            state->heightReadbackDim[0] = textureSizes[0];
+            if (dm.params.tileSize1 > 0.f) {
+                state->heightReadback1 = makeReadback(textureSizes[1], "ocean.heightReadback1");
+                state->heightReadbackDim[1] = textureSizes[1];
+            }
+            if (dm.params.tileSize2 > 0.f) {
+                state->heightReadback2 = makeReadback(textureSizes[2], "ocean.heightReadback2");
+                state->heightReadbackDim[2] = textureSizes[2];
+            }
+
+            // Scratch image for IFFT ping-pong (RG32F). Cascades dispatch
+            // back-to-back on the same queue and share this scratch, so size
+            // it to the largest enabled cascade. Smaller cascades' IFFT runs
+            // only touch their own extent within the scratch — the unused
+            // tail is harmless.
+            uint32_t scratchDim = 0;
+            for (uint32_t i = 0; i < 3; ++i) {
+                if (tileSizes[i] > 0.f) scratchDim = std::max(scratchDim, textureSizes[i]);
+            }
+            {
+                VkImageCreateInfo ici{};
+                ici.sType         = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+                ici.imageType     = VK_IMAGE_TYPE_2D;
+                ici.format        = VK_FORMAT_R32G32_SFLOAT;
+                ici.extent        = {scratchDim, scratchDim, 1};
+                ici.mipLevels     = 1;
+                ici.arrayLayers   = 1;
+                ici.samples       = VK_SAMPLE_COUNT_1_BIT;
+                ici.tiling        = VK_IMAGE_TILING_OPTIMAL;
+                ici.usage         = VK_IMAGE_USAGE_STORAGE_BIT |
+                                    VK_IMAGE_USAGE_SAMPLED_BIT |
+                                    VK_IMAGE_USAGE_TRANSFER_DST_BIT |
+                                    VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
+                ici.sharingMode   = VK_SHARING_MODE_EXCLUSIVE;
+                ici.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+                VmaAllocationCreateInfo aci{};
+                aci.usage = VMA_MEMORY_USAGE_AUTO;
+                check(vmaCreateImage(ctx->allocator(), &ici, &aci,
+                                     &state->scratchA.image, &state->scratchA.alloc, nullptr),
+                      "vmaCreateImage(displaceScratch)");
+                state->scratchA.format = VK_FORMAT_R32G32_SFLOAT;
+                state->scratchA.width  = scratchDim;
+                state->scratchA.height = scratchDim;
+                VkImageViewCreateInfo vci{};
+                vci.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+                vci.image = state->scratchA.image;
+                vci.viewType = VK_IMAGE_VIEW_TYPE_2D;
+                vci.format = VK_FORMAT_R32G32_SFLOAT;
+                vci.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+                check(vkCreateImageView(ctx->device(), &vci, nullptr, &state->scratchA.view),
+                      "vkCreateImageView(displaceScratch)");
+                ctx->setObjectName(state->scratchA.image, "ocean.scratchA (IFFT ping-pong)");
+                ctx->setObjectName(state->scratchA.view,  "ocean.scratchA (IFFT ping-pong)");
+            }
+
+            // World-space foam image. Coverage equals the cascade-0 tile
+            // (matches the FFT periodicity, so REPEAT-sampling at any
+            // world XZ folds back into the same texture cell). Resolution
+            // targets ~0.5 m per texel — fine enough to carry the cascade-1
+            // whitecap detail foam_world.comp's fine Jacobian stencil
+            // extracts — capped at 2048² (a 1000 m tile → 0.49 m/texel,
+            // 16 MB R32F, exactly the historical footprint) and floored at
+            // 256² so a small pond isn't handed a 16 MB accumulator for a
+            // 16 m tile. R32F storage so both compute imageLoad/Store and
+            // chit linear sampling work without format conversions.
+            {
+                uint32_t foamRes = 256u;
+                while (foamRes < 2048u && float(foamRes) * 0.5f < dm.params.tileSize0)
+                    foamRes *= 2u;
+                state->foamRes      = foamRes;
+                state->foamTileSize = dm.params.tileSize0;
+                VkImageCreateInfo ici{};
+                ici.sType         = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+                ici.imageType     = VK_IMAGE_TYPE_2D;
+                ici.format        = VK_FORMAT_R32_SFLOAT;
+                ici.extent        = {state->foamRes, state->foamRes, 1};
+                ici.mipLevels     = 1;
+                ici.arrayLayers   = 1;
+                ici.samples       = VK_SAMPLE_COUNT_1_BIT;
+                ici.tiling        = VK_IMAGE_TILING_OPTIMAL;
+                ici.usage         = VK_IMAGE_USAGE_STORAGE_BIT |
+                                    VK_IMAGE_USAGE_SAMPLED_BIT |
+                                    VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+                ici.sharingMode   = VK_SHARING_MODE_EXCLUSIVE;
+                ici.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+                VmaAllocationCreateInfo aci{};
+                aci.usage = VMA_MEMORY_USAGE_AUTO;
+                check(vmaCreateImage(ctx->allocator(), &ici, &aci,
+                                     &state->foamImage.image, &state->foamImage.alloc, nullptr),
+                      "vmaCreateImage(foamWorld)");
+                state->foamImage.format = VK_FORMAT_R32_SFLOAT;
+                state->foamImage.width  = state->foamRes;
+                state->foamImage.height = state->foamRes;
+                VkImageViewCreateInfo vci{};
+                vci.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+                vci.image = state->foamImage.image;
+                vci.viewType = VK_IMAGE_VIEW_TYPE_2D;
+                vci.format = VK_FORMAT_R32_SFLOAT;
+                vci.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+                check(vkCreateImageView(ctx->device(), &vci, nullptr, &state->foamImage.view),
+                      "vkCreateImageView(foamWorld)");
+                ctx->setObjectName(state->foamImage.image, "ocean.foamWorld (R32F)");
+                ctx->setObjectName(state->foamImage.view,  "ocean.foamWorld (R32F)");
+
+                // Initial clear to zero + layout transition to GENERAL so the
+                // first foam_world dispatch's imageLoad reads 0 (no foam yet)
+                // and the chit's linear sampler reads from a defined image.
+                VkCommandBuffer cb = beginOneShot();
+                {
+                    VkImageMemoryBarrier imb{};
+                    imb.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+                    imb.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+                    imb.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+                    imb.srcAccessMask = 0;
+                    imb.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+                    imb.image = state->foamImage.image;
+                    imb.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+                    imb.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+                    imb.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+                    vkCmdPipelineBarrier(cb,
+                            VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+                            VK_PIPELINE_STAGE_TRANSFER_BIT,
+                            0, 0, nullptr, 0, nullptr, 1, &imb);
+                }
+                VkClearColorValue cc{};
+                cc.float32[0] = 0.0f;
+                VkImageSubresourceRange sub{VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+                vkCmdClearColorImage(cb, state->foamImage.image,
+                                     VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                                     &cc, 1, &sub);
+                {
+                    VkImageMemoryBarrier imb{};
+                    imb.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+                    imb.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+                    imb.newLayout = VK_IMAGE_LAYOUT_GENERAL;
+                    imb.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+                    imb.dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
+                    imb.image = state->foamImage.image;
+                    imb.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+                    imb.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+                    imb.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+                    vkCmdPipelineBarrier(cb,
+                            VK_PIPELINE_STAGE_TRANSFER_BIT,
+                            VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT |
+                                    VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR,
+                            0, 0, nullptr, 0, nullptr, 1, &imb);
+                }
+                endAndSubmitOneShot(cb);
+                state->foamImage.currentLayout = VK_IMAGE_LAYOUT_GENERAL;
+            }
+
+            // Allocate this mesh's displace descriptor set + write bindings.
+            state->displaceDS = waterDisplace_->allocateMeshDescriptorSet();
+
+            // Bind each enabled cascade's spatial images to its (height, displace)
+            // slot pair. Disabled cascades are filled with cascade 0's images
+            // so the shader's combined-image-sampler bindings are always valid;
+            // the shader gates which slots are actually sampled via cascadeMask.
+            std::array<VkDescriptorImageInfo, 6> imageInfos{};
+            for (uint32_t i = 0; i < 3; ++i) {
+                const uint32_t srcCascade = (state->cascadeMask & (1u << i)) ? i : 0u;
+                const auto& c = state->cascades[srcCascade];
+                imageInfos[i * 2 + 0].sampler     = waterDisplace_->sampler();
+                imageInfos[i * 2 + 0].imageView   = c.dyn->ht().view;
+                imageInfos[i * 2 + 0].imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+                imageInfos[i * 2 + 1].sampler     = waterDisplace_->sampler();
+                imageInfos[i * 2 + 1].imageView   = c.dyn->displacement().view;
+                imageInfos[i * 2 + 1].imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+            }
+            std::array<VkWriteDescriptorSet, 6> ws{};
+            for (uint32_t i = 0; i < 6; ++i) {
+                ws[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+                ws[i].dstSet = state->displaceDS;
+                ws[i].dstBinding = i;
+                ws[i].descriptorCount = 1;
+                ws[i].descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+                ws[i].pImageInfo = &imageInfos[i];
+            }
+            vkUpdateDescriptorSets(ctx->device(), uint32_t(ws.size()), ws.data(), 0, nullptr);
+
+            // Foam-world descriptor set — same cascade bindings 0..5 as the
+            // displace set, plus binding 6 = the storage image foam target.
+            state->foamWorldDS = foamWorld_->allocateMeshDescriptorSet();
+            std::array<VkDescriptorImageInfo, 6> foamCascadeInfos{};
+            for (uint32_t i = 0; i < 3; ++i) {
+                const uint32_t srcCascade = (state->cascadeMask & (1u << i)) ? i : 0u;
+                const auto& c = state->cascades[srcCascade];
+                foamCascadeInfos[i * 2 + 0].sampler     = foamWorld_->sampler();
+                foamCascadeInfos[i * 2 + 0].imageView   = c.dyn->ht().view;
+                foamCascadeInfos[i * 2 + 0].imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+                foamCascadeInfos[i * 2 + 1].sampler     = foamWorld_->sampler();
+                foamCascadeInfos[i * 2 + 1].imageView   = c.dyn->displacement().view;
+                foamCascadeInfos[i * 2 + 1].imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+            }
+            VkDescriptorImageInfo foamStorageInfo{};
+            foamStorageInfo.sampler     = VK_NULL_HANDLE;
+            foamStorageInfo.imageView   = state->foamImage.view;
+            foamStorageInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+            std::array<VkWriteDescriptorSet, 7> fws{};
+            for (uint32_t i = 0; i < 6; ++i) {
+                fws[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+                fws[i].dstSet = state->foamWorldDS;
+                fws[i].dstBinding = i;
+                fws[i].descriptorCount = 1;
+                fws[i].descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+                fws[i].pImageInfo = &foamCascadeInfos[i];
+            }
+            fws[6].sType          = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            fws[6].dstSet         = state->foamWorldDS;
+            fws[6].dstBinding     = 6;
+            fws[6].descriptorCount= 1;
+            fws[6].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+            fws[6].pImageInfo     = &foamStorageInfo;
+            vkUpdateDescriptorSets(ctx->device(), uint32_t(fws.size()), fws.data(), 0, nullptr);
+
+            // Hand the smallest enabled cascade's height image to closest_hit
+            // (binding 32) for sub-mesh-resolution normal perturbation. Picks
+            // the highest enabled bit — the cascade with the smallest tileSize
+            // and therefore the finest spatial resolution. The cascade VkImage
+            // handle is stable until the DisplacedMesh is destroyed, so we
+            // only rewrite the descriptor on first init (not per frame).
+            {
+                uint32_t fineIdx = 0;
+                float fineTile   = 0.f;
+                for (uint32_t i = 0; i < 3; ++i) {
+                    if (state->cascadeMask & (1u << i)) {
+                        fineIdx  = i;
+                        fineTile = state->cascades[i].tileSize;
+                    }
+                }
+                if (fineTile > 0.f) {
+                    oceanFineHeightView = state->cascades[fineIdx].dyn->ht().view;
+                    oceanFineTileSize   = fineTile;
+                    rewriteDeferredDescriptors();
+                }
+            }
+
+            // Hand this mesh's world-foam view to closest_hit (binding 33) so
+            // the chit can sample foam at arbitrary world XZ during shading.
+            // Like oceanFineHeight above, the foam VkImage handle is stable
+            // until the DisplacedMesh is destroyed, so we only rewrite once.
+            oceanFoamView     = state->foamImage.view;
+            oceanFoamTileSize = state->foamTileSize;
+            rewriteDeferredDescriptors();
+
+            auto* raw = state.get();
+            displacedStates.emplace(&dm, std::move(state));
+            return raw;
+        }
+
+VulkanRenderer::Impl::GrassMeshState* VulkanRenderer::Impl::ensureGrassState(GrassMesh& gm) {
+            auto it = grassStates.find(&gm);
+            if (it != grassStates.end()) return it->second.get();
+
+            auto* posAttr = gm.geometry()->getAttribute<float>("position");
+            auto* hfAttr  = gm.geometry()->getAttribute<float>("heightFrac");
+            if (!posAttr || !hfAttr) return nullptr;
+            const uint32_t vertexCount = static_cast<uint32_t>(posAttr->count());
+            if (vertexCount == 0 || static_cast<uint32_t>(hfAttr->count()) != vertexCount) return nullptr;
+
+            auto blas = buildBlasFor(*gm.geometry());
+            if (!blas) return nullptr;
+            blas->liveCheck = gm.geometry();
+
+            auto state = std::make_unique<GrassMeshState>();
+            state->vertexCount = vertexCount;
+            state->liveCheck = gm.geometry();
+
+            // Immutable rest positions — the shader reads these and writes the
+            // displaced result into the (separate) BLAS vertex buffer.
+            const VkDeviceSize posBytes = VkDeviceSize(vertexCount) * 3u * sizeof(float);
+            state->restPos = createBuffer(
+                    ctx->allocator(), ctx->device(), posBytes,
+                    VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
+                            VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
+                    VMA_MEMORY_USAGE_AUTO,
+                    VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT);
+            uploadHostVisible(ctx->allocator(), state->restPos, posAttr->array().data(), posBytes);
+
+            const VkDeviceSize hfBytes = VkDeviceSize(vertexCount) * sizeof(float);
+            state->heightFrac = createBuffer(
+                    ctx->allocator(), ctx->device(), hfBytes,
+                    VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
+                            VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
+                    VMA_MEMORY_USAGE_AUTO,
+                    VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT);
+            uploadHostVisible(ctx->allocator(), state->heightFrac, hfAttr->array().data(), hfBytes);
+
+            state->blas = std::move(blas);
+            auto* raw = state.get();
+            grassStates.emplace(&gm, std::move(state));
+            return raw;
+        }
 }// namespace threepp

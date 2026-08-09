@@ -2418,4 +2418,225 @@ void VulkanRenderer::Impl::collectSplatClouds(Object3D& scene, Camera& camera) {
             splat_->syncClouds(lastVisibleSplats_, lastParkedSplats_);
         }
 
+
+VulkanRenderer::Impl::MaterialDesc VulkanRenderer::Impl::materialFromMesh(const Mesh& m) {
+            MaterialDesc d{};
+            d.albedo[0] = d.albedo[1] = d.albedo[2] = 0.8f;
+            d.roughness = 0.5f;
+            d.metalness = 0.0f;
+            d.emissive[0] = d.emissive[1] = d.emissive[2] = 0.0f;
+            d.emissiveIntensity = 1.0f;
+            d.albedoTexIndex = -1;
+            d.roughnessTexIndex = -1;
+            d.metalnessTexIndex = -1;
+            d.normalTexIndex = -1;
+            d.normalScale[0] = 1.0f;
+            d.normalScale[1] = 1.0f;
+            d.alphaCutoff = 0.0f;// disabled by default; any-hit short-circuits on alphaCutoff <= 0
+            d.transmission = 0.0f;// opaque by default
+            d.ior          = 1.5f;// glass-typical default; only consulted when transmission > 0
+            d.transmissionTexIndex = -1;
+            d.clearcoat = 0.0f;// no coat by default; lobe is skipped when clearcoat == 0
+            d.clearcoatRoughness = 0.0f;
+            d.clearcoatTexIndex = -1;
+            d.clearcoatRoughnessTexIndex = -1;
+            d.attenuationColor[0] = d.attenuationColor[1] = d.attenuationColor[2] = 1.0f;
+            d.attenuationDistance = 0.0f;
+            d.emissiveTexIndex = -1;
+            d.specularIntensity = 1.0f;
+            d.specularColor[0] = d.specularColor[1] = d.specularColor[2] = 1.0f;
+            d.sheenColor[0] = d.sheenColor[1] = d.sheenColor[2] = 0.0f;
+            d.sheenRoughness = 0.0f;
+            d.iridescence = 0.0f;             // off by default; lobe is skipped when iridescence == 0
+            d.iridescenceIOR = 1.3f;
+            d.iridescenceThicknessNm = 400.0f;
+            d.dispersion = 0.0f;              // off by default; lobe is skipped when dispersion == 0
+            d.thickness = 0.0f;               // 0 = use back-face actual distance for Beer-Lambert (closed-mesh path)
+            d.thinWalled = 0;                 // 0 = closed-mesh BSDF; 1 = thin-shell BSDF (set explicitly via MaterialWithThickness::thinWalled)
+            d.occlusionTexIndex = -1;
+            d.detailTexIndex = -1;
+            d.detailRepeat = 0.f;
+            d.detailStrength = 0.f;
+            d.detailNormalTexIndex = -1;
+            d.detailNormalScale = 1.f;
+            d.detailRoughStrength = 0.f;
+            d._padDetail = 0.f;
+            d.terrainWeightTexIndex = -1;
+            d.terrainNormalTexIndex = -1;
+            d.terrainBandStrength = 0.f;
+            d.terrainNormalScale = 1.f;
+            d.terrainRoughStrength = 0.f;
+            d.terrainHeightBlend = 0.f;
+            d._padTerrain[0] = d._padTerrain[1] = 0.f;
+            for (int bi = 0; bi < 4; ++bi) {
+                d.terrainBandAlbedoTex[bi] = -1;
+                d.terrainBandNormalTex[bi] = -1;
+                d.terrainBandRepeat[bi] = 1.f;
+                d.terrainBandRough[bi] = 0.9f;
+            }
+            d.translucency = 0.f;             // off by default; deferred sun/ambient translucency term is skipped when 0
+            d.translucencyColor[0] = d.translucencyColor[1] = d.translucencyColor[2] = 1.0f;
+            static constexpr float kIdent[9] = {1,0,0, 0,1,0, 0,0,1};
+            std::copy(kIdent, kIdent+9, d.uvTransform);
+            std::copy(kIdent, kIdent+9, d.uvTransformNormal);
+            std::copy(kIdent, kIdent+9, d.uvTransformRoughMetal);
+            std::copy(kIdent, kIdent+9, d.uvTransformEmissive);
+            std::copy(kIdent, kIdent+9, d.uvTransformOcclusion);
+            std::copy(kIdent, kIdent+9, d.uvTransformClearcoat);
+            std::copy(kIdent, kIdent+9, d.uvTransformClearcoatRough);
+            std::copy(kIdent, kIdent+9, d.uvTransformTransmission);
+            auto mat = m.material();
+            if (!mat) return d;
+            d.alphaCutoff = mat->alphaTest;
+            if (auto* col = dynamic_cast<MaterialWithColor*>(mat.get())) {
+                d.albedo[0] = col->color.r;
+                d.albedo[1] = col->color.g;
+                d.albedo[2] = col->color.b;
+            }
+            if (auto* rg = dynamic_cast<MaterialWithRoughness*>(mat.get())) {
+                d.roughness = rg->roughness;
+            }
+            if (auto* mt = dynamic_cast<MaterialWithMetalness*>(mat.get())) {
+                d.metalness = mt->metalness;
+            }
+            if (auto* em = dynamic_cast<MaterialWithEmissive*>(mat.get())) {
+                d.emissive[0] = em->emissive.r;
+                d.emissive[1] = em->emissive.g;
+                d.emissive[2] = em->emissive.b;
+                d.emissiveIntensity = em->emissiveIntensity;
+            }
+            if (auto* nm = dynamic_cast<MaterialWithNormalMap*>(mat.get())) {
+                d.normalScale[0] = nm->normalScale.x;
+                d.normalScale[1] = nm->normalScale.y;
+            }
+            if (auto* tr = dynamic_cast<MaterialWithTransmission*>(mat.get())) {
+                d.transmission = tr->transmission;
+                d.ior          = std::max(1.0f, tr->ior);
+                d.dispersion   = std::max(0.0f, tr->dispersion);
+                // glTF permits transmission + alphaMode BLEND together; alpha
+                // is COVERAGE, independent of the transmission tint, and the
+                // spec composite is α·glassResult + (1−α)·background. Smoked
+                // car windows ship exactly this pattern (BLACK baseColor as
+                // the tint + low alpha): taking the tint alone renders them
+                // opaque-black in both render modes, while GL — which ignores
+                // the transmission extension and plain alpha-blends — shows
+                // the background through. Fold the coverage into the tint,
+                // tint' = mix(1, tint, α): for the dominant straight-through
+                // path this reproduces the blend composite exactly, with no
+                // second blend pass in either pipeline.
+                if (d.transmission > 0.0f && mat->transparent && mat->opacity < 1.0f) {
+                    const float a = std::clamp(mat->opacity, 0.0f, 1.0f);
+                    for (float& c : d.albedo) {
+                        c = (1.0f - a) + a * c;
+                    }
+                }
+            }
+            // Additive-blend effects (muzzle flashes, sparks, energy glows): the
+            // surface GLOWS over the scene rather than occluding/refracting it.
+            // Deferred sentinel: transmission > 1 (= 1 + strength) → "add, don't
+            // mix". Ray-query-safe: transmission>1 reads as full stochastic
+            // pass-through (effectively invisible to the hit test), which is
+            // correct since additive blending has no physical analogue.
+            if (mat->blending == Blending::Additive && d.transmission == 0.0f) {
+                d.transmission = 1.0f + std::clamp(mat->opacity, 0.0f, 1.0f);
+                d.ior          = 1.0f;
+            }
+            // Alpha-blend transparency (transparent=true, opacity<1) has no
+            // physical analogue in a ray tracer, so treat it as stochastic pass-through:
+            // with probability (1-opacity) the ray continues straight through
+            // (ior=1 → refract returns the incident direction unchanged, F=0).
+            // Deferred reads ior≈1 as the "clean alpha blend" marker (vs ior>1
+            // real refractive glass).
+            if (d.transmission == 0.0f && mat->transparent && mat->opacity < 1.0f) {
+                d.transmission = 1.0f - mat->opacity;
+                d.ior          = 1.0f;
+            }
+            // BLEND mode with texture alpha (alphaMode=BLEND, opacity=1.0):
+            // alphaCutoff=-1.0 sentinel triggers per-texel stochastic blend in
+            // the deferred shade's ray-query hit handling using the albedo
+            // texture's alpha channel.
+            //
+            // DECAL refinement (-2.0): transparent + depthWrite=false +
+            // polygonOffset is the decal authoring signature (DecalGeometry
+            // scorch splats etc.). The gbuffer raster routes these to a
+            // dedicated pipeline that alpha-blends ONLY the albedo attachment
+            // over the receiving surface (normal/ids/motion/depth untouched) —
+            // a deterministic lerp matching GL's forward blend, instead of the
+            // stochastic screen-door whose per-frame id flicker defeats the
+            // temporal accumulator and lets the denoiser dilate the splat.
+            // Every shader-side blend test is a sign test (alphaCutoff < 0),
+            // so -2 inherits all -1 semantics (no shadow cast, stochastic
+            // pass-through in the ray-query hit handling) automatically.
+            if (mat->transparent && d.alphaCutoff == 0.0f && d.transmission == 0.0f) {
+                d.alphaCutoff = (!mat->depthWrite && mat->polygonOffset) ? -2.0f : -1.0f;
+            }
+            if (auto* cc = dynamic_cast<MaterialWithClearcoat*>(mat.get())) {
+                d.clearcoat = cc->clearcoat;
+                d.clearcoatRoughness = cc->clearcoatRoughness;
+            }
+            if (auto* att = dynamic_cast<MaterialWithAttenuation*>(mat.get())) {
+                d.attenuationColor[0] = att->attenuationColor.r;
+                d.attenuationColor[1] = att->attenuationColor.g;
+                d.attenuationColor[2] = att->attenuationColor.b;
+                d.attenuationDistance = att->attenuationDistance;
+            }
+            if (auto* th = dynamic_cast<MaterialWithThickness*>(mat.get())) {
+                d.thickness  = std::max(0.0f, th->thickness);
+                d.thinWalled = th->thinWalled ? 1 : 0;
+            }
+            if (auto* dm = dynamic_cast<MaterialWithDetailMap*>(mat.get())) {
+                // texIndex stays -1 here; the texture-index fill sites bind it
+                // (detailTexOf gates on detailMap && strength > 0).
+                d.detailRepeat        = dm->detailRepeat;
+                d.detailStrength      = std::clamp(dm->detailStrength, 0.f, 1.f);
+                d.detailNormalScale   = dm->detailNormalScale;
+                d.detailRoughStrength = std::clamp(dm->detailRoughStrength, 0.f, 1.f);
+            }
+            if (auto* tm = dynamic_cast<MaterialWithTerrainMaps*>(mat.get())) {
+                // Indices stay -1 here; the texture-index fill sites bind them
+                // (terrainWeightTexOf gates on the weight map + a band set).
+                d.terrainBandStrength  = std::clamp(tm->terrainBandStrength, 0.f, 1.f);
+                d.terrainNormalScale   = tm->terrainBandNormalScale;
+                d.terrainRoughStrength = std::clamp(tm->terrainBandRoughStrength, 0.f, 1.f);
+                d.terrainHeightBlend   = std::max(tm->terrainHeightBlend, 0.f);
+                for (int bi = 0; bi < 4; ++bi) {
+                    d.terrainBandRepeat[bi] = tm->terrainBandRepeat[static_cast<size_t>(bi)];
+                    d.terrainBandRough[bi]  = tm->terrainBandRoughness[static_cast<size_t>(bi)];
+                }
+            }
+            if (auto* sp = dynamic_cast<MaterialWithPbrSpecular*>(mat.get())) {
+                d.specularIntensity   = sp->specularIntensity;
+                d.specularColor[0]    = sp->specularColor.r;
+                d.specularColor[1]    = sp->specularColor.g;
+                d.specularColor[2]    = sp->specularColor.b;
+            }
+            if (auto* tl = dynamic_cast<MaterialWithTranslucency*>(mat.get())) {
+                d.translucency         = std::clamp(tl->translucency, 0.f, 1.f);
+                d.translucencyColor[0] = tl->translucencyColor.r;
+                d.translucencyColor[1] = tl->translucencyColor.g;
+                d.translucencyColor[2] = tl->translucencyColor.b;
+            }
+            if (auto* sh = dynamic_cast<MaterialWithSheen*>(mat.get())) {
+                d.sheenColor[0]  = sh->sheenColor.r;
+                d.sheenColor[1]  = sh->sheenColor.g;
+                d.sheenColor[2]  = sh->sheenColor.b;
+                d.sheenRoughness = sh->sheenRoughness;
+            }
+            if (auto* ir = dynamic_cast<MaterialWithIridescence*>(mat.get())) {
+                d.iridescence            = ir->iridescence;
+                d.iridescenceIOR         = std::max(1.0f, ir->iridescenceIOR);
+                d.iridescenceThicknessNm = std::max(0.0f, ir->iridescenceThicknessNm);
+            }
+            // sideMode mirrors threepp::Side {Front=0, Back=1, Double=2}.
+            // Chit reads it for the wrong-side pass-through gate; the raster
+            // gbuffer pass picks BACK / FRONT / NONE cull mode accordingly.
+            d.sideMode = static_cast<int32_t>(mat->side);
+            // MeshBasicMaterial is unlit: emit base color directly with no
+            // PBR shading or bounce. Use roughness < 0 as the shader sentinel
+            // (avoids growing the MaterialDesc layout).
+            if (dynamic_cast<MeshBasicMaterial*>(mat.get())) {
+                d.roughness = -1.0f;
+            }
+            return d;
+        }
 }// namespace threepp

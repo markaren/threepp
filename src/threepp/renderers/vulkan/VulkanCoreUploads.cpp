@@ -1333,4 +1333,218 @@ namespace threepp {
         }
     }
 
+
+VulkanRenderer::Impl::ParticleGeomRec* VulkanRenderer::Impl::ensureParticleGeom(const std::shared_ptr<BufferGeometry>& geomSp) {
+            BufferGeometry* geom = geomSp.get();
+            if (!geom) return nullptr;
+            auto* posAttr  = geom->getAttribute<float>("position");
+            auto* normAttr = geom->getAttribute<float>("normal");
+            auto* uvAttr   = geom->getAttribute<float>("uv");
+            auto* colAttr  = geom->getAttribute<float>("color");
+            auto* idxAttr  = geom->getIndex();
+            if (!posAttr || !normAttr || !uvAttr || !colAttr || !idxAttr) return nullptr;
+
+            const uint32_t vtx = static_cast<uint32_t>(posAttr->count());
+            const uint32_t idxCount = static_cast<uint32_t>(idxAttr->count());
+            if (vtx == 0 || idxCount == 0) return nullptr;
+            // Particle attributes are vec3/vec3/vec2/vec3 — bail if a custom
+            // geometry doesn't match (the billboard pipeline assumes this layout).
+            if (normAttr->count() != static_cast<int>(vtx) ||
+                uvAttr->count()   != static_cast<int>(vtx) ||
+                colAttr->count()  != static_cast<int>(vtx)) return nullptr;
+
+            const unsigned int ver = geomVersionOf(*geom);
+
+            auto uploadAnim = [&](ParticleGeomRec& rec) {
+                uploadHostVisible(ctx->allocator(), rec.position, posAttr->array().data(), vtx * 3 * sizeof(float));
+                uploadHostVisible(ctx->allocator(), rec.normal, normAttr->array().data(), vtx * 3 * sizeof(float));
+                uploadHostVisible(ctx->allocator(), rec.color, colAttr->array().data(), vtx * 3 * sizeof(float));
+            };
+
+            auto it = particleGeomCache_.find(geom);
+            if (it != particleGeomCache_.end()) {
+                ParticleGeomRec& rec = it->second;
+                const bool stale = rec.vertexCount != vtx || rec.indexCount != idxCount ||
+                                   rec.liveCheck.expired() || rec.liveCheck.lock().get() != geom;
+                if (!stale) {
+                    if (rec.animVersion != ver) {
+                        uploadAnim(rec);
+                        rec.animVersion = ver;
+                    }
+                    return &rec;
+                }
+                // Topology change / recycled address — rebuild from scratch.
+                // Retire the old buffers (in-flight frames may still draw from
+                // them) instead of a full device drain. VulkanRetireQueue.hpp.
+                retireParticleGeomRec(rec);
+                particleGeomCache_.erase(it);
+            }
+
+            // Fresh build. All buffers host-visible; pos/normal/color re-uploaded
+            // each frame, uv + index written once here.
+            const VkBufferUsageFlags vbUsage =
+                    VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+            ParticleGeomRec rec{};
+            rec.vertexCount = vtx;
+            rec.indexCount  = idxCount;
+            rec.liveCheck   = geomSp;
+            auto mkBuf = [&](VkDeviceSize bytes) {
+                return createBuffer(ctx->allocator(), ctx->device(), bytes, vbUsage,
+                                    VMA_MEMORY_USAGE_AUTO,
+                                    VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT);
+            };
+            rec.position = mkBuf(vtx * 3 * sizeof(float));
+            rec.normal   = mkBuf(vtx * 3 * sizeof(float));
+            rec.uv       = mkBuf(vtx * 2 * sizeof(float));
+            rec.color    = mkBuf(vtx * 3 * sizeof(float));
+            rec.index    = createBuffer(ctx->allocator(), ctx->device(),
+                                        idxCount * sizeof(uint32_t),
+                                        VK_BUFFER_USAGE_INDEX_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+                                        VMA_MEMORY_USAGE_AUTO,
+                                        VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT);
+            uploadHostVisible(ctx->allocator(), rec.uv, uvAttr->array().data(), vtx * 2 * sizeof(float));
+            uploadHostVisible(ctx->allocator(), rec.index, idxAttr->array().data(), idxCount * sizeof(uint32_t));
+            auto [ins, _] = particleGeomCache_.emplace(geom, std::move(rec));
+            uploadAnim(ins->second);
+            ins->second.animVersion = ver;
+            return &ins->second;
+        }
+
+const vulkan::LineRec* VulkanRenderer::Impl::ensureLineGeometryUploaded(const BufferGeometry* geom) {
+            if (!geom) return nullptr;
+            auto posAttr = geom->getAttribute<float>("position");
+            if (!posAttr || posAttr->count() == 0) return nullptr;
+            auto* idxAttr = geom->getIndex();
+            // Optional per-vertex color, used by AxesHelper-style overlays.
+            // Untyped so a narrowed (compressAttributes) color still counts;
+            // the upload below widens it through a FloatAttributeView.
+            const auto* colAttr = geom->getAttribute("color");
+
+            const uint32_t posVer = posAttr->version;
+            const uint32_t idxVer = (idxAttr && idxAttr->count() > 0) ? idxAttr->version : 0u;
+            const uint32_t colVer = (colAttr && colAttr->count() > 0) ? colAttr->version : 0u;
+
+            auto it = lineGeomCache_.find(geom);
+            if (it != lineGeomCache_.end() && it->second.geomId != geom->id) {
+                // Recycled pointer: this address was a DIFFERENT geometry whose
+                // buffers we still hold. Retire them and re-upload from scratch
+                // (the version fields would otherwise alias — both at 0).
+                // Through the retire queue, not destroyBuffer: this runs during
+                // record, so the previous frame's line draw may still be reading
+                // them. retire() no-ops on null handles.
+                retire(std::move(it->second.vertex));
+                retire(std::move(it->second.index));
+                retire(std::move(it->second.color));
+                lineGeomCache_.erase(it);
+                it = lineGeomCache_.end();
+            }
+            if (it != lineGeomCache_.end()) {
+                auto& rec = it->second;
+                rec.lastTouch = overlayFrameCounter_;
+                if (rec.positionVersion == posVer &&
+                    rec.indexVersion    == idxVer &&
+                    rec.colorVersion    == colVer) {
+                    return &rec;
+                }
+                // Re-upload paths.
+                const auto& posArr = posAttr->array();
+                const VkDeviceSize vbBytes = posArr.size() * sizeof(float);
+                if (vbBytes > rec.vertex.size) {
+                    destroyBuffer(ctx->allocator(), rec.vertex);
+                    rec.vertex = createBuffer(
+                            ctx->allocator(), ctx->device(), vbBytes,
+                            VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
+                            VMA_MEMORY_USAGE_AUTO,
+                            VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT);
+                }
+                uploadHostVisible(ctx->allocator(), rec.vertex, posArr.data(), vbBytes);
+                rec.vertexCount     = static_cast<uint32_t>(posAttr->count());
+                rec.positionVersion = posVer;
+
+                if (idxAttr && idxAttr->count() > 0) {
+                    const auto& indices = idxAttr->array();
+                    const VkDeviceSize ibBytes = indices.size() * sizeof(unsigned int);
+                    if (rec.index.handle == VK_NULL_HANDLE || ibBytes > rec.index.size) {
+                        if (rec.index.handle != VK_NULL_HANDLE) destroyBuffer(ctx->allocator(), rec.index);
+                        rec.index = createBuffer(
+                                ctx->allocator(), ctx->device(), ibBytes,
+                                VK_BUFFER_USAGE_INDEX_BUFFER_BIT,
+                                VMA_MEMORY_USAGE_AUTO,
+                                VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT);
+                    }
+                    uploadHostVisible(ctx->allocator(), rec.index, indices.data(), ibBytes);
+                    rec.indexCount   = static_cast<uint32_t>(indices.size());
+                    rec.indexVersion = idxVer;
+                } else if (rec.index.handle != VK_NULL_HANDLE) {
+                    destroyBuffer(ctx->allocator(), rec.index);
+                    rec.index        = {};
+                    rec.indexCount   = 0;
+                    rec.indexVersion = 0;
+                }
+
+                // Color buffer follows the same in-place / recreate logic.
+                if (colAttr && colAttr->count() > 0) {
+                    FloatAttributeView colView(colAttr);
+                    const VkDeviceSize cbBytes = colView.size() * sizeof(float);
+                    if (rec.color.handle == VK_NULL_HANDLE || cbBytes > rec.color.size) {
+                        if (rec.color.handle != VK_NULL_HANDLE) destroyBuffer(ctx->allocator(), rec.color);
+                        rec.color = createBuffer(
+                                ctx->allocator(), ctx->device(), cbBytes,
+                                VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
+                                VMA_MEMORY_USAGE_AUTO,
+                                VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT);
+                    }
+                    uploadHostVisible(ctx->allocator(), rec.color, colView.data(), cbBytes);
+                    rec.colorVersion = colVer;
+                } else if (rec.color.handle != VK_NULL_HANDLE) {
+                    destroyBuffer(ctx->allocator(), rec.color);
+                    rec.color        = {};
+                    rec.colorVersion = 0;
+                }
+                return &rec;
+            }
+
+            // First-time upload.
+            const auto& posArr = posAttr->array();
+            vulkan::LineRec rec{};
+            rec.vertexCount     = static_cast<uint32_t>(posAttr->count());
+            rec.positionVersion = posVer;
+            rec.geomId          = geom->id;
+            rec.lastTouch       = overlayFrameCounter_;
+
+            const VkDeviceSize vbBytes = posArr.size() * sizeof(float);
+            rec.vertex = createBuffer(
+                    ctx->allocator(), ctx->device(), vbBytes,
+                    VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
+                    VMA_MEMORY_USAGE_AUTO,
+                    VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT);
+            uploadHostVisible(ctx->allocator(), rec.vertex, posArr.data(), vbBytes);
+
+            if (idxAttr && idxAttr->count() > 0) {
+                const auto& indices = idxAttr->array();
+                rec.indexCount   = static_cast<uint32_t>(indices.size());
+                rec.indexVersion = idxVer;
+                const VkDeviceSize ibBytes = indices.size() * sizeof(unsigned int);
+                rec.index = createBuffer(
+                        ctx->allocator(), ctx->device(), ibBytes,
+                        VK_BUFFER_USAGE_INDEX_BUFFER_BIT,
+                        VMA_MEMORY_USAGE_AUTO,
+                        VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT);
+                uploadHostVisible(ctx->allocator(), rec.index, indices.data(), ibBytes);
+            }
+
+            if (colAttr && colAttr->count() > 0) {
+                FloatAttributeView colView(colAttr);
+                rec.colorVersion = colVer;
+                const VkDeviceSize cbBytes = colView.size() * sizeof(float);
+                rec.color = createBuffer(
+                        ctx->allocator(), ctx->device(), cbBytes,
+                        VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
+                        VMA_MEMORY_USAGE_AUTO,
+                        VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT);
+                uploadHostVisible(ctx->allocator(), rec.color, colView.data(), cbBytes);
+            }
+
+            return &lineGeomCache_.emplace(geom, std::move(rec)).first->second;
+        }
 }// namespace threepp

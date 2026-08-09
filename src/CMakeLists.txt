@@ -882,6 +882,7 @@ if (THREEPP_WITH_VULKAN)
             "threepp/renderers/vulkan/VmaImpl.cpp"
             "threepp/renderers/vulkan/VulkanContext.cpp"
             "threepp/renderers/vulkan/VulkanResources.cpp"
+            "threepp/renderers/vulkan/VulkanCoreInit.cpp"
             "threepp/renderers/vulkan/VulkanCoreGeometry.cpp"
             "threepp/renderers/vulkan/VulkanCoreScene.cpp"
             "threepp/renderers/vulkan/VulkanCoreUploads.cpp"

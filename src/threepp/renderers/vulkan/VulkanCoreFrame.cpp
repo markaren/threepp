@@ -1507,4 +1507,33 @@ std::vector<unsigned char> VulkanRenderer::Impl::readViewPixelsImpl(uint32_t han
             return rgb;
         }
 
+
+void VulkanRenderer::Impl::dumpMemoryStats(const char* tag) const {
+            if (!ctx || ctx->allocator() == VK_NULL_HANDLE) return;
+            const VkPhysicalDeviceMemoryProperties* mp = nullptr;
+            vmaGetMemoryProperties(ctx->allocator(), &mp);
+            VmaBudget budgets[VK_MAX_MEMORY_HEAPS] = {};
+            vmaGetHeapBudgets(ctx->allocator(), budgets);
+            VmaTotalStatistics stats{};
+            vmaCalculateStatistics(ctx->allocator(), &stats);
+            constexpr double MB = 1024.0 * 1024.0;
+            std::fprintf(stderr,
+                         "[threepp][vk-mem] %s: reserved %.1f MB in %u blocks, "
+                         "live %.1f MB in %u allocations\n",
+                         tag,
+                         stats.total.statistics.blockBytes / MB,
+                         stats.total.statistics.blockCount,
+                         stats.total.statistics.allocationBytes / MB,
+                         stats.total.statistics.allocationCount);
+            const uint32_t heaps = mp ? mp->memoryHeapCount : 0u;
+            for (uint32_t i = 0; i < heaps; ++i) {
+                const bool devLocal =
+                        (mp->memoryHeaps[i].flags & VK_MEMORY_HEAP_DEVICE_LOCAL_BIT) != 0;
+                std::fprintf(stderr,
+                             "[threepp][vk-mem]   heap %u%s: usage %.1f MB / budget %.1f MB\n",
+                             i, devLocal ? " (device-local)" : "",
+                             budgets[i].usage / MB, budgets[i].budget / MB);
+            }
+            std::fflush(stderr);
+        }
 }// namespace threepp

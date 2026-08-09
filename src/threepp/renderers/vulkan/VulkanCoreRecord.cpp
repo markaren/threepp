@@ -2699,4 +2699,126 @@ void VulkanRenderer::Impl::recordOverlayAndPresentTransition(VkCommandBuffer cb,
             }
         }
 
+
+void VulkanRenderer::Impl::ensureOverlayMsaaImages(VkExtent2D ext) {
+            if (overlaySamples() <= 1) return;
+            if (overlayMsColor_.image != VK_NULL_HANDLE &&
+                overlayMsColor_.width == ext.width && overlayMsColor_.height == ext.height) return;
+            if (overlayMsColor_.image != VK_NULL_HANDLE) retire(std::move(overlayMsColor_));
+            if (overlayMsDepth_.image != VK_NULL_HANDLE) retire(std::move(overlayMsDepth_));
+            if (overlayAaScratch_.image != VK_NULL_HANDLE) retire(std::move(overlayAaScratch_));
+
+            overlayMsColor_ = createAttachmentImage2D(
+                    ext.width, ext.height, ctx->swapchainFormat(),
+                    VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT, VK_IMAGE_ASPECT_COLOR_BIT,
+                    "overlayMsColor", overlaySampleBits_);
+            overlayMsDepth_ = createAttachmentImage2D(
+                    ext.width, ext.height, VK_FORMAT_D32_SFLOAT,
+                    VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT, VK_IMAGE_ASPECT_DEPTH_BIT,
+                    "overlayMsDepth", overlaySampleBits_);
+
+            // Scratch needs a sampler (the inject shader reads it), which
+            // createAttachmentImage2D doesn't make.
+            {
+                Image2D out{};
+                out.width  = ext.width;
+                out.height = ext.height;
+                out.format = ctx->swapchainFormat();
+                VkImageCreateInfo ici{};
+                ici.sType         = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+                ici.imageType     = VK_IMAGE_TYPE_2D;
+                ici.format        = out.format;
+                ici.extent        = {ext.width, ext.height, 1};
+                ici.mipLevels     = 1;
+                ici.arrayLayers   = 1;
+                ici.samples       = VK_SAMPLE_COUNT_1_BIT;
+                ici.tiling        = VK_IMAGE_TILING_OPTIMAL;
+                ici.usage         = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+                ici.sharingMode   = VK_SHARING_MODE_EXCLUSIVE;
+                ici.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+                VmaAllocationCreateInfo aci{};
+                aci.usage = VMA_MEMORY_USAGE_AUTO;
+                check(vmaCreateImage(ctx->allocator(), &ici, &aci, &out.image, &out.alloc, nullptr),
+                      "vmaCreateImage(overlayAaScratch)");
+                VkImageViewCreateInfo vci{};
+                vci.sType    = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+                vci.image    = out.image;
+                vci.viewType = VK_IMAGE_VIEW_TYPE_2D;
+                vci.format   = out.format;
+                vci.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+                vci.subresourceRange.levelCount = 1;
+                vci.subresourceRange.layerCount = 1;
+                check(vkCreateImageView(ctx->device(), &vci, nullptr, &out.view),
+                      "vkCreateImageView(overlayAaScratch)");
+                VkSamplerCreateInfo sci{};
+                sci.sType        = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
+                sci.magFilter    = VK_FILTER_NEAREST;// inject texelFetches 1:1
+                sci.minFilter    = VK_FILTER_NEAREST;
+                sci.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+                sci.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+                sci.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+                check(vkCreateSampler(ctx->device(), &sci, nullptr, &out.sampler),
+                      "vkCreateSampler(overlayAaScratch)");
+                ctx->setObjectName(out.image, "overlayAaScratch");
+                overlayAaScratch_ = out;
+            }
+
+            if (overlayInjectSet_ != VK_NULL_HANDLE) {
+                VkDescriptorImageInfo ii{overlayAaScratch_.sampler, overlayAaScratch_.view,
+                                         VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+                VkWriteDescriptorSet w{};
+                w.sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+                w.dstSet          = overlayInjectSet_;
+                w.dstBinding      = 0;
+                w.descriptorCount = 1;
+                w.descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+                w.pImageInfo      = &ii;
+                vkUpdateDescriptorSets(ctx->device(), 1, &w, 0, nullptr);
+            }
+        }
+
+void VulkanRenderer::Impl::prepareParticleLighting() {
+            particleLightCount_ = 0;
+            particleLitBase_.clear();
+            ensureParticleIoSets();
+            if (particlePipelineNormal_ == VK_NULL_HANDLE ||
+                particleIoDescSets_[currentFrame] == VK_NULL_HANDLE ||
+                particleCenterBufs_[currentFrame].handle == VK_NULL_HANDLE) return;
+
+            particleCenterScratch_.clear();
+            uint32_t base = 0;
+            for (const auto& en : lastVisibleEntries_) {
+                if (!en.isParticle || !en.mesh) continue;
+                auto geomSp = en.mesh->geometry();
+                BufferGeometry* geom = geomSp.get();
+                if (!geom) continue;
+                auto* posAttr = geom->getAttribute<float>("position");
+                if (!posAttr) continue;
+                const uint32_t vtx = static_cast<uint32_t>(posAttr->count());
+                const uint32_t particles = vtx / 4u;// 4 coincident verts per particle
+                if (particles == 0) continue;
+                if (base + particles > kMaxLitParticles) continue;// draw falls back unlit
+
+                const auto& w = en.worldMatrix;// column-major world transform
+                const auto& p = posAttr->array();
+                particleCenterScratch_.resize(static_cast<size_t>(base + particles) * 4);
+                float* dst = particleCenterScratch_.data() + static_cast<size_t>(base) * 4;
+                for (uint32_t i = 0; i < particles; ++i) {
+                    const float x = p[i * 12u + 0u];// vertex 4i of particle i
+                    const float y = p[i * 12u + 1u];
+                    const float z = p[i * 12u + 2u];
+                    dst[i * 4u + 0u] = w[0] * x + w[4] * y + w[8] * z + w[12];
+                    dst[i * 4u + 1u] = w[1] * x + w[5] * y + w[9] * z + w[13];
+                    dst[i * 4u + 2u] = w[2] * x + w[6] * y + w[10] * z + w[14];
+                    dst[i * 4u + 3u] = 0.f;
+                }
+                particleLitBase_[en.mesh] = base;
+                base += particles;
+            }
+            if (base == 0) return;
+            uploadHostVisible(ctx->allocator(), particleCenterBufs_[currentFrame],
+                              particleCenterScratch_.data(),
+                              particleCenterScratch_.size() * sizeof(float));
+            particleLightCount_ = base;
+        }
 }// namespace threepp

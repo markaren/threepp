@@ -575,4 +575,319 @@ bool VulkanRenderer::Impl::refreshEnvTextureFromScene(Object3D& scene) {
             return true;
         }
 
+
+const Image2D* VulkanRenderer::Impl::ensureParticleTexture(const Texture* tex) {
+            if (!tex) return nullptr;
+            Image& img = const_cast<Texture*>(tex)->image();
+            const uint32_t w = img.width();
+            const uint32_t h = img.height();
+            if (w == 0 || h == 0) return nullptr;
+
+            const unsigned int curVersion = tex->version();
+            auto it = particleTexCache_.find(tex);
+            if (it != particleTexCache_.end()) {
+                ParticleTexRec& rec = it->second;
+                const bool stale = rec.version != curVersion ||
+                                   rec.width != w || rec.height != h;
+                if (!stale) return &rec.image;
+                // Retire the old image instead of a full device drain: in-flight
+                // frames may still sample it (particle descriptors are allocated
+                // per-frame from reset pools, so there's no descriptor-set hazard
+                // — image lifetime is the only concern). VulkanRetireQueue.hpp.
+                retire(std::move(rec.image));
+                particleTexCache_.erase(it);
+            }
+
+            std::vector<unsigned char> rgba;
+            const size_t pixels = static_cast<size_t>(w) * h;
+            try {
+                auto& src = img.data<unsigned char>();
+                if (src.size() == pixels * 4) {
+                    rgba.assign(src.begin(), src.end());
+                } else if (src.size() == pixels * 3) {
+                    rgba.resize(pixels * 4);
+                    for (size_t i = 0; i < pixels; ++i) {
+                        rgba[i * 4 + 0] = src[i * 3 + 0];
+                        rgba[i * 4 + 1] = src[i * 3 + 1];
+                        rgba[i * 4 + 2] = src[i * 3 + 2];
+                        rgba[i * 4 + 3] = 255u;
+                    }
+                } else {
+                    return nullptr;
+                }
+            } catch (const std::bad_variant_access&) {
+                return nullptr;
+            }
+
+            // Same colorSpace→format rule as the sprite/bindless paths: only an
+            // explicitly sRGB-tagged texture gets hardware sRGB decode on sample;
+            // particle.frag re-encodes the linear product for the UNORM swapchain.
+            const VkFormat fmt = (tex->colorSpace == ColorSpace::sRGB)
+                                         ? VK_FORMAT_R8G8B8A8_SRGB
+                                         : VK_FORMAT_R8G8B8A8_UNORM;
+            char name[64];
+            std::snprintf(name, sizeof(name), "particleTex[%p]",
+                          static_cast<const void*>(tex));
+            Image2D up = createSampledImage2D(
+                    w, h, fmt, rgba.data(), rgba.size(),
+                    VK_FILTER_LINEAR,
+                    VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE,
+                    VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE,
+                    name);
+            ParticleTexRec rec{};
+            rec.image   = up;
+            rec.version = curVersion;
+            rec.width   = w;
+            rec.height  = h;
+            auto [ins, _] = particleTexCache_.emplace(tex, std::move(rec));
+            return &ins->second.image;
+        }
+
+Image2D VulkanRenderer::Impl::buildMaterialImage2D(const Texture* tex) {
+            Image& img = const_cast<Texture*>(tex)->image();
+            const uint32_t w = img.width();
+            const uint32_t h = img.height();
+            if (w == 0 || h == 0) return {};
+
+            // Half-float CPU pixel data (ImageData's uint16 alternative) has no
+            // path here yet: everything below normalises to RGBA8 and the two
+            // decoders it knows are u8 and f32. Say so and return the null
+            // image, which the callers already treat as "no texture" -- the
+            // alternative is std::bad_variant_access out of img.data<float>()
+            // several branches down, which is a worse way to learn the same
+            // thing. SplatCloud, the only half-float DataTexture in the tree,
+            // is GL-only.
+            if (img.isHalfFloat()) {
+                std::cerr << "[VulkanRenderer] half-float DataTexture is not supported yet ("
+                          << w << "x" << h << "); ignoring\n";
+                return {};
+            }
+
+            // Normalise everything to tightly-packed RGBA8. The pipeline
+            // treats the bindless array as a uniform u8x4 sampler set, so
+            // BCn blocks decompress, mono/dual-channel maps replicate or
+            // pad, and float defaults clamp+quantize.
+            const size_t pixels = static_cast<size_t>(w) * h;
+            std::vector<unsigned char> rgba;
+            std::vector<std::uint8_t> bcnRgba;
+            const std::uint8_t* srcPtr = nullptr;
+            int channels = 0;
+
+            if (img.compressedFormat.has_value()) {
+                // Pass-through: if the file already ships BC blocks (DDS) AND a
+                // complete mip chain, upload them VERBATIM — no decode, no
+                // re-encode, no generation loss, and BC1 sources stay at their
+                // native 0.5 B/px (half of what a BC7 transcode would use).
+                // Anything short of that (partial chain, unmapped format,
+                // THREEPP_NO_BC) falls through to the decode path below, which
+                // re-encodes to BC7 with CPU-built mips.
+                static const bool noBcPass = std::getenv("THREEPP_NO_BC") != nullptr;
+                if (!noBcPass && bc7SampledSupported()) {
+                    const VkFormat vkFmt = glCompressedToVk(
+                            *img.compressedFormat, tex->colorSpace == ColorSpace::sRGB);
+                    const uint32_t fullLevels =
+                            1u + static_cast<uint32_t>(std::floor(std::log2(
+                                         static_cast<float>(std::max(w, h)))));
+                    if (vkFmt != VK_FORMAT_UNDEFINED &&
+                        tex->mipmaps().size() + 1 == fullLevels) {
+                        std::vector<std::vector<std::uint8_t>> levels;
+                        levels.reserve(fullLevels);
+                        bool ok = true;
+                        try {
+                            levels.push_back(img.data<unsigned char>());
+                            uint32_t lw = w, lh = h;
+                            for (auto& mip : const_cast<Texture*>(tex)->mipmaps()) {
+                                lw = std::max(1u, lw >> 1);
+                                lh = std::max(1u, lh >> 1);
+                                if (mip.width() != lw || mip.height() != lh ||
+                                    !mip.compressedFormat.has_value() ||
+                                    *mip.compressedFormat != *img.compressedFormat) {
+                                    ok = false;
+                                    break;
+                                }
+                                levels.push_back(mip.data<unsigned char>());
+                            }
+                        } catch (const std::bad_variant_access&) {
+                            ok = false;
+                        }
+                        if (ok) {
+                            char bcName[80];
+                            std::snprintf(bcName, sizeof(bcName),
+                                          "materialTexture BC-passthrough (%ux%u, tex=%p)",
+                                          w, h, static_cast<const void*>(tex));
+                            return createSampledImageBC(
+                                    w, h, vkFmt, levels,
+                                    VK_FILTER_LINEAR,
+                                    wrapToVk(tex->wrapS),
+                                    wrapToVk(tex->wrapT),
+                                    bcName);
+                        }
+                    }
+                }
+
+                const auto& blocks = img.data<unsigned char>();
+                bcnRgba = bcn::bcnDecompress(
+                        blocks.data(),
+                        static_cast<int>(w),
+                        static_cast<int>(h),
+                        *img.compressedFormat);
+                if (bcnRgba.empty()) {
+                    std::cerr << "[VulkanRenderer] unsupported compressed format 0x"
+                              << std::hex << *img.compressedFormat << std::dec
+                              << " for material tex (" << w << "x" << h << ")\n";
+                    return {};
+                }
+                srcPtr = bcnRgba.data();
+                channels = 4;
+            } else {
+                bool isU8 = true;
+                try {
+                    auto& src = img.data<unsigned char>();
+                    if (src.size() % pixels != 0) {
+                        std::cerr << "[VulkanRenderer] unsupported pixel layout for material tex ("
+                                  << src.size() << " bytes for " << w << "x" << h << ")\n";
+                        return {};
+                    }
+                    channels = static_cast<int>(src.size() / pixels);
+                    if (channels < 1 || channels > 4) {
+                        std::cerr << "[VulkanRenderer] unsupported channel count " << channels
+                                  << " for material tex (" << w << "x" << h << ")\n";
+                        return {};
+                    }
+                    srcPtr = src.data();
+                } catch (const std::bad_variant_access&) {
+                    isU8 = false;
+                }
+                if (!isU8) {
+                    // Float-pixel default (e.g. Bistro's 1×1 RGBA32F constants).
+                    // Quantise to u8 with sRGB-agnostic clamp; tiny default
+                    // textures only need the linear value, and HDR ranges are
+                    // expressed via material scalars instead.
+                    auto& srcF = img.data<float>();
+                    if (srcF.size() % pixels != 0) {
+                        std::cerr << "[VulkanRenderer] unsupported float-pixel layout for material tex ("
+                                  << srcF.size() * sizeof(float) << " bytes for "
+                                  << w << "x" << h << ")\n";
+                        return {};
+                    }
+                    const int fch = static_cast<int>(srcF.size() / pixels);
+                    if (fch < 1 || fch > 4) {
+                        std::cerr << "[VulkanRenderer] unsupported float channel count " << fch
+                                  << " for material tex\n";
+                        return {};
+                    }
+                    rgba.resize(pixels * 4);
+                    for (size_t i = 0; i < pixels; ++i) {
+                        float r = srcF[i * fch + 0];
+                        float g = (fch >= 2) ? srcF[i * fch + 1] : r;
+                        float b = (fch >= 3) ? srcF[i * fch + 2] : ((fch == 1) ? r : 0.f);
+                        float a = (fch >= 4) ? srcF[i * fch + 3] : 1.f;
+                        auto q = [](float v) {
+                            if (!(v == v)) v = 0.f;// NaN→0
+                            v = v < 0.f ? 0.f : (v > 1.f ? 1.f : v);
+                            return static_cast<unsigned char>(v * 255.f + 0.5f);
+                        };
+                        rgba[i * 4 + 0] = q(r);
+                        rgba[i * 4 + 1] = q(g);
+                        rgba[i * 4 + 2] = q(b);
+                        rgba[i * 4 + 3] = q(a);
+                    }
+                }
+            }
+
+            // Expand srcPtr (BCn or u8) into rgba; float branch already filled it.
+            if (rgba.empty()) {
+                rgba.resize(pixels * 4);
+                if (channels == 4) {
+                    std::memcpy(rgba.data(), srcPtr, pixels * 4);
+                } else {
+                    for (size_t i = 0; i < pixels; ++i) {
+                        const unsigned char r = srcPtr[i * channels + 0];
+                        const unsigned char g = (channels >= 2) ? srcPtr[i * channels + 1] : r;
+                        const unsigned char b = (channels >= 3) ? srcPtr[i * channels + 2]
+                                                                : ((channels == 1) ? r : 0);
+                        const unsigned char a = (channels >= 4) ? srcPtr[i * channels + 3] : 255u;
+                        rgba[i * 4 + 0] = r;
+                        rgba[i * 4 + 1] = g;
+                        rgba[i * 4 + 2] = b;
+                        rgba[i * 4 + 3] = a;
+                    }
+                }
+            }
+
+            // sRGB tag → hardware decode at sample time. Loaders should mark
+            // albedo maps as SRGBColorSpace; legacy (untagged) textures fall
+            // through as UNORM so the shader sees raw channel values.
+            const bool srgb = tex->colorSpace == ColorSpace::sRGB;
+            char texName[80];
+            std::snprintf(texName, sizeof(texName),
+                          "materialTexture (%ux%u, tex=%p)",
+                          w, h, static_cast<const void*>(tex));
+
+            // BC7 transcode: 4x less VRAM and 4x less bandwidth per sample.
+            // Everything above was normalised to RGBA8 — including BCn (DDS)
+            // sources, which the old path decompressed and uploaded FAT at 4x
+            // their on-disk size. Mips are built + encoded on the CPU (BC
+            // images cannot blit-downsample); tiny images (LUT-like defaults,
+            // 1x1 constants) stay uncompressed, as does everything when the
+            // device lacks BC7 or THREEPP_NO_BC=1 (same-binary A/B hatch).
+            static const bool noBc = std::getenv("THREEPP_NO_BC") != nullptr;
+            if (!noBc && w >= 8u && h >= 8u && bc7SampledSupported()) {
+                auto mips = bcn::buildMipChainRGBA8(rgba.data(), static_cast<int>(w),
+                                                    static_cast<int>(h), srgb);
+                std::vector<std::vector<std::uint8_t>> blocks;
+                blocks.reserve(mips.size() + 1);
+                blocks.push_back(bcn::bc7EncodeMode6(rgba.data(), static_cast<int>(w),
+                                                     static_cast<int>(h)));
+                int mw = static_cast<int>(w), mh = static_cast<int>(h);
+                for (const auto& lvl : mips) {
+                    mw = std::max(1, mw >> 1);
+                    mh = std::max(1, mh >> 1);
+                    blocks.push_back(bcn::bc7EncodeMode6(lvl.data(), mw, mh));
+                }
+                return createSampledImageBC(
+                        w, h,
+                        srgb ? VK_FORMAT_BC7_SRGB_BLOCK : VK_FORMAT_BC7_UNORM_BLOCK,
+                        blocks,
+                        VK_FILTER_LINEAR,
+                        wrapToVk(tex->wrapS),
+                        wrapToVk(tex->wrapT),
+                        texName);
+            }
+
+            const VkFormat fmt = srgb ? VK_FORMAT_R8G8B8A8_SRGB
+                                      : VK_FORMAT_R8G8B8A8_UNORM;
+            return createSampledImage2D(
+                    w, h, fmt,
+                    rgba.data(), rgba.size(),
+                    VK_FILTER_LINEAR,
+                    wrapToVk(tex->wrapS),
+                    wrapToVk(tex->wrapT),
+                    texName);
+        }
+
+VkFormat VulkanRenderer::Impl::glCompressedToVk(unsigned int glFmt, bool srgb) {
+            switch (glFmt) {
+                case 0x83F0u:// DXT1 RGB
+                    return srgb ? VK_FORMAT_BC1_RGB_SRGB_BLOCK : VK_FORMAT_BC1_RGB_UNORM_BLOCK;
+                case 0x83F1u:// DXT1 RGBA
+                case 0x8C4Cu:// DXT1 sRGB
+                case 0x8C4Du:// DXT1 sRGB+A
+                    return srgb ? VK_FORMAT_BC1_RGBA_SRGB_BLOCK : VK_FORMAT_BC1_RGBA_UNORM_BLOCK;
+                case 0x83F2u:// DXT3
+                    return srgb ? VK_FORMAT_BC2_SRGB_BLOCK : VK_FORMAT_BC2_UNORM_BLOCK;
+                case 0x83F3u:// DXT5
+                case 0x8C4Fu:// DXT5 sRGB
+                    return srgb ? VK_FORMAT_BC3_SRGB_BLOCK : VK_FORMAT_BC3_UNORM_BLOCK;
+                case 0x8DBBu:// RGTC1 / BC4
+                    return VK_FORMAT_BC4_UNORM_BLOCK;
+                case 0x8DBDu:// RGTC2 / BC5
+                    return VK_FORMAT_BC5_UNORM_BLOCK;
+                case 0x8E8Cu:// BPTC / BC7
+                case 0x8E8Du:// BPTC sRGB
+                    return srgb ? VK_FORMAT_BC7_SRGB_BLOCK : VK_FORMAT_BC7_UNORM_BLOCK;
+                default:
+                    return VK_FORMAT_UNDEFINED;
+            }
+        }
 }// namespace threepp
