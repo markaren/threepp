@@ -18,6 +18,14 @@ using namespace threepp::editor;
 
 namespace {
 
+    // The hierarchy indents by less than the rest of the UI, because it is the
+    // one panel whose nesting has no bound: a robot import is a dozen levels of
+    // joint/link before the first mesh, and the theme's 18px — which reads well
+    // for an inspector section two deep — has pushed the name column off the
+    // panel by level seven. Ten still steps visibly against a 13px font, and
+    // buys back roughly a name's worth of width every three levels.
+    constexpr float kIndentPx = 10.f;
+
     // A one-glyph type hint in front of the name — enough to tell a light from
     // a mesh from a group while scanning, without an icon font.
     const char* kindTag(const Object3D& object) {
@@ -295,12 +303,17 @@ void EditorApp::drawHierarchy() {
 
         ImGui::Separator();
 
+        // Wraps every TreeNode/TreePop below, so the push and the pops that
+        // TreePop performs all read the same spacing. The flat 6px margin is an
+        // explicit width and so is deliberately not scaled by it.
+        ImGui::PushStyleVar(ImGuiStyleVar_IndentSpacing, kIndentPx * s);
         ImGui::Indent(6 * s);
         const auto children = scene.children;
         for (auto* child : children) {
             if (child) drawHierarchyNode(*child);
         }
         ImGui::Unindent(6 * s);
+        ImGui::PopStyleVar();
 
         // Clicking empty space below the tree deselects — the same gesture as
         // clicking empty space in the viewport.
