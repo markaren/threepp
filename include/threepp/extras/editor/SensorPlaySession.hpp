@@ -236,6 +236,11 @@ namespace threepp::editor {
 
             // Why this entry is not measuring, when it is not. Empty = fine.
             std::string status;
+            // Consecutive colour captures that returned nothing. A Vulkan
+            // camera legitimately misses its first few (the secondary view
+            // serving it warms up over a frame or two), so a status is only
+            // worth raising once the misses stop looking like warm-up.
+            int captureMisses = 0;
 
             // Counters for the readout.
             std::size_t samples = 0;// measurements drained so far
@@ -881,11 +886,22 @@ namespace threepp::editor {
         }
 
         // The colour cameras' half of the frame loop, and a much shorter story
-        // than scanAll's: a raster capture is a render plus a readback, both
-        // synchronous, so there is no fence to poll and no fire/deliver split.
-        // The furniture-hiding window is the same one and for the same reason —
-        // a wrist camera pointed at the floor would otherwise photograph the
-        // viewport grid.
+        // than scanAll's: no fence to poll and no fire/deliver split, because
+        // the sensor hides the split inside capture(). On a raster backend the
+        // capture is a render plus a readback, both synchronous; on Vulkan it
+        // collects the frame the last render() drew from the sensor's own
+        // secondary view, so the picture is one frame old and the first
+        // capture or two of a Play return false while the view warms up.
+        // The furniture-hiding window matters on the raster path — a wrist
+        // camera pointed at the floor would otherwise photograph the viewport
+        // grid. On Vulkan the pixels were drawn before this call, but the
+        // furniture is overlay-pass work, which secondary views never draw.
+        //
+        // Empty-handed captures a camera gets before its status calls that a
+        // failure. Vulkan warm-up takes two or three; ten is comfortably past
+        // any of them while still inside a Play's first second.
+        static constexpr int kCaptureGraceFrames = 10;
+
         void captureCameras(float dt) {
 
             if (!renderer_ || !scene_) return;
@@ -908,14 +924,20 @@ namespace threepp::editor {
                     entry->lastTime = entry->camera->lastCaptureTime();
                     ++entry->scans;
                     entry->traces[0].push(meanLuminance(entry->camera->image()));
+                    // A warm-up note must not outlive the warm-up.
+                    entry->status.clear();
+                    entry->captureMisses = 0;
                     recordCamera(*entry);
-                } else if (entry->status.empty()) {
+                } else if (entry->camera->frames() == 0 &&
+                           ++entry->captureMisses > kCaptureGraceFrames &&
+                           entry->status.empty()) {
                     // Said once, at the moment the user is looking, and then
-                    // left standing in the panel: a camera that cannot capture
-                    // on this backend is a fact about the run, not a per-frame
-                    // event to spam the console with.
-                    entry->status = "colour capture needs a render-target backend - "
-                                    "authored and aimed, but not capturing here";
+                    // left standing in the panel: a camera that never produces
+                    // a frame is a fact about the run, not a per-frame event
+                    // to spam the console with. The grace window is what keeps
+                    // a Vulkan view's first few warm-up misses out of it.
+                    entry->status = "no frame captured - the renderer is not "
+                                    "producing images for this camera";
                     log("sensor: \"" + entry->label + "\" - " + entry->status);
                 }
             }

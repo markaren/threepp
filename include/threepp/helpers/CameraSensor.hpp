@@ -15,6 +15,7 @@ namespace threepp {
     class RenderTarget;
     class Renderer;
     class Scene;
+    class VulkanRenderer;
 
     /**
      * A colour camera bolted to a link — what the robot SEES.
@@ -35,16 +36,22 @@ namespace threepp {
      * its own model (shot noise and read noise are per-pixel and per-exposure)
      * rather than borrowed from the ranging one.
      *
-     * RASTER ONLY. The capture is a render into a RenderTarget followed by a
-     * pixel readback, which is what GLRenderer does and what VulkanRenderer
-     * explicitly does not: it ignores setRenderTarget and offers addView /
-     * readViewRGBPixels instead. Those secondary views render as part of the
-     * PRIMARY frame, so they would photograph the editor's grid and gizmos —
-     * the furniture their owner hides for the duration of a raster scan is
-     * already long drawn by the time a view is read back. A correct Vulkan
-     * colour camera therefore wants per-view visibility, which is a renderer
-     * feature and not something to fake here. capture() answers false on any
-     * backend without render targets rather than handing back a wrong picture.
+     * Backend-portable, two different ways. On a raster backend the capture
+     * is a render into this sensor's own RenderTarget plus a synchronous
+     * readback: the frame is of THIS instant, of whatever scene the caller
+     * passed. VulkanRenderer has no render targets (setRenderTarget is
+     * ignored); there the sensor lazily attaches a persistent secondary view
+     * (addView) and capture() collects the frame the LAST render() drew — one
+     * frame of latency, the same fire/deliver model the ranging sensors have
+     * on that backend, and a picture of the scene render() draws rather than
+     * of the `scene` argument. Two consequences worth knowing: the first
+     * capture or two after the view is created return false while it warms
+     * up, and per-view visibility does not exist — hiding an object only
+     * around capture() cannot keep it out of pixels that were drawn earlier.
+     * In practice the editor's furniture stays out anyway: secondary views
+     * skip the overlay pass, which is where the grid, gizmos and cloud
+     * overlays live. A MESH visible at render time is in the picture, exactly
+     * as it is in the ranging sensors' TLAS.
      *
      * The camera looks down its node's local -Z, the same convention as every
      * threepp camera and as DepthSensor, so a sensor parented to a tool flange
@@ -61,10 +68,11 @@ namespace threepp {
         /**
          * Render `scene` from this sensor's pose and read the frame back.
          *
-         * True when image() holds a NEW frame. False when the backend has no
-         * render target (see the class note) — in which case image() keeps
-         * whatever it had, so a reader sees a stale frame rather than a black
-         * one that looks like a measurement.
+         * True when image() holds a NEW frame. False while the Vulkan view is
+         * still warming up, or before the renderer's first frame (see the
+         * class note) — in which case image() keeps whatever it had, so a
+         * reader sees a stale frame rather than a black one that looks like a
+         * measurement.
          *
          * Restores the renderer's previously bound target, so this is safe to
          * call from the middle of a frame loop that is rendering elsewhere.
@@ -122,10 +130,22 @@ namespace threepp {
         PerspectiveCamera camera_;
         std::unique_ptr<RenderTarget> target_;
 
+        // Vulkan only: the persistent secondary view serving capture() there,
+        // and the renderer it belongs to. A bare pointer on the dock pane's
+        // grounds — whoever owns the renderer outlives the sensors aimed
+        // through it. Null / 0 everywhere else.
+        VulkanRenderer* viewRenderer_ = nullptr;
+        unsigned int viewHandle_ = 0;
+
         std::vector<unsigned char> image_;
         std::size_t frames_ = 0;
         double lastCaptureTime_ = 0.0;
         bool due_ = false;
+
+        // Hand the view back to its renderer. The view's target still holds
+        // the last picture, so this is also what keeps a reset() episode from
+        // opening on the previous episode's frame.
+        void releaseView();
     };
 
 }// namespace threepp

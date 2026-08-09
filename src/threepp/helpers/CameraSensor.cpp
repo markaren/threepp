@@ -6,6 +6,10 @@
 #include "threepp/scenes/Scene.hpp"
 #include "threepp/utils/ImageUtils.hpp"
 
+#ifdef THREEPP_WITH_VULKAN
+#include "threepp/renderers/VulkanRenderer.hpp"
+#endif
+
 // stb_image_write - implementation is compiled in utils/StbImageWrite.cpp.
 #include "stb_image_write.h"
 
@@ -49,15 +53,61 @@ CameraSensor::CameraSensor(float fovY, unsigned int width, unsigned int height,
     addRef(camera_);
 }
 
-CameraSensor::~CameraSensor() = default;
+CameraSensor::~CameraSensor() {
+
+    releaseView();
+}
+
+void CameraSensor::releaseView() {
+
+#ifdef THREEPP_WITH_VULKAN
+    if (viewRenderer_ && viewHandle_ != 0) viewRenderer_->removeView(viewHandle_);
+#endif
+    viewRenderer_ = nullptr;
+    viewHandle_ = 0;
+}
 
 bool CameraSensor::capture(Renderer& renderer, Scene& scene) {
 
-    // Bind first and ASK: a backend without render targets (VulkanRenderer
-    // ignores setRenderTarget and always reports nullptr) would otherwise
+#ifdef THREEPP_WITH_VULKAN
+    if (auto* vk = dynamic_cast<VulkanRenderer*>(&renderer)) {
+        // The view renders the scene render() is already drawing; the argument
+        // only has a say on backends with render targets. See the class note.
+        (void) scene;
+
+        // A different renderer than last time orphans the old view — release
+        // it on the renderer that owns it before adopting the new one.
+        if (viewRenderer_ && viewRenderer_ != vk) releaseView();
+
+        if (viewHandle_ == 0) {
+            viewHandle_ = vk->addView(camera_, static_cast<int>(width_),
+                                      static_cast<int>(height_));
+            if (viewHandle_ != 0) viewRenderer_ = vk;
+            // 0 means render() has not run yet; retried on the next capture.
+            // Either way there is nothing to read until a LATER frame has
+            // drawn the view, so this capture reports no new frame.
+            return false;
+        }
+
+        auto pixels = vk->readViewRGBPixels(viewHandle_);
+        const auto expected = static_cast<std::size_t>(width_) * height_ * 3;
+        // Empty while the view is warming up (its resources are allocated at
+        // the next frame boundary after addView).
+        if (pixels.size() != expected) return false;
+
+        // Already top-down (see readViewRGBPixels) — no flip.
+        image_ = std::move(pixels);
+        ++frames_;
+        lastCaptureTime_ = simTime();
+        due_ = false;
+        return true;
+    }
+#endif
+
+    // Bind first and ASK: a backend without render targets would otherwise
     // render this camera straight over the window and read the swapchain back
     // as if it were the sensor's frame. Probing the renderer's own answer keeps
-    // that decision out of an #ifdef and out of a dynamic_cast.
+    // the raster decision out of an #ifdef.
     auto* restore = renderer.getRenderTarget();
     renderer.setRenderTarget(target_.get());
     if (renderer.getRenderTarget() != target_.get()) {
@@ -112,6 +162,10 @@ bool CameraSensor::writeImage(const std::filesystem::path& file) const {
 
 void CameraSensor::reset() {
 
+    // The Vulkan view goes with the frame: its target still holds the last
+    // episode's picture, and on that backend capture() collects what was
+    // already drawn — keeping the view would open the next episode on it.
+    releaseView();
     image_.clear();
     frames_ = 0;
     lastCaptureTime_ = 0.0;
