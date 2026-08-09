@@ -461,6 +461,104 @@ TEST_CASE("The visual robot's joints track the articulation") {
     physics.stop();
 }
 
+TEST_CASE("Scaling a robot up multiplies its gravity load, and the density case says so") {
+
+    // Two mass regimes, two outcomes — measured before this test was written:
+    //
+    //             scale x1     x2            x4
+    //   density   0.003 rad    0.056 (x16)   1.2 rad - collapsed
+    //   authored  0.007 rad    0.014 (x2)    0.029 rad - holds
+    //
+    // A link with no <inertial><mass> takes density x volume, so scaling the
+    // robot up cubes its mass and the gravity torque grows with the FOURTH
+    // power of the scale, against drive gains that are constants from
+    // ArticulationConfig. An authored mass is deliberately never scaled (the
+    // millimetre-CAD contract: lengths in mm, masses already in kg), so there
+    // the torque grows only linearly and the drive keeps up. This pins both
+    // policies through their observable outcome, and the diagnostic that names
+    // the sagging one.
+    const char* kUrdfWithMass = R"(
+        <robot name="arm">
+          <link name="base_link">
+            <visual><geometry><box size="0.2 0.2 0.2"/></geometry></visual>
+            <collision><geometry><box size="0.2 0.2 0.2"/></geometry></collision>
+            <inertial><mass value="8.0"/><inertia ixx="0.05" iyy="0.05" izz="0.05" ixy="0" ixz="0" iyz="0"/></inertial>
+          </link>
+          <link name="upper_link">
+            <visual><geometry><box size="0.1 0.4 0.1"/></geometry></visual>
+            <collision><geometry><box size="0.1 0.4 0.1"/></geometry></collision>
+            <inertial><mass value="4.0"/><inertia ixx="0.06" iyy="0.01" izz="0.06" ixy="0" ixz="0" iyz="0"/></inertial>
+          </link>
+          <link name="slider_link">
+            <visual><geometry><box size="0.05 0.2 0.05"/></geometry></visual>
+            <collision><geometry><box size="0.05 0.2 0.05"/></geometry></collision>
+            <inertial><mass value="1.0"/><inertia ixx="0.004" iyy="0.001" izz="0.004" ixy="0" ixz="0" iyz="0"/></inertial>
+          </link>
+          <joint name="shoulder" type="revolute">
+            <parent link="base_link"/>
+            <child link="upper_link"/>
+            <origin xyz="0 0 0.3" rpy="0 0 0"/>
+            <axis xyz="0 0 1"/>
+            <limit lower="-2.0" upper="2.0"/>
+          </joint>
+          <joint name="extend" type="prismatic">
+            <parent link="upper_link"/>
+            <child link="slider_link"/>
+            <origin xyz="0 0.4 0" rpy="0 0 0"/>
+            <axis xyz="0 1 0"/>
+            <limit lower="0.0" upper="0.5"/>
+          </joint>
+        </robot>)";
+
+    const auto dir = std::filesystem::temp_directory_path() / "threepp-articulation-test";
+    std::filesystem::create_directories(dir);
+    const auto massPath = dir / "arm_mass.urdf";
+    std::ofstream(massPath, std::ios::trunc) << kUrdfWithMass;
+
+    struct Outcome {
+        float sag = -1.f;
+        bool warned = false;
+    };
+
+    const auto run = [&](const std::filesystem::path& p, float s) -> Outcome {
+        Scene scene;
+        auto robot = authorRobot(scene, p, {0.8f, 0.1f}, /*fixedBase*/ true);
+        robot->scale.set(s, s, s);
+        scene.updateMatrixWorld(true);
+
+        Outcome outcome;
+        PhysicsPlaySession physics;
+        physics.setLogger([&](const std::string& line) {
+            if (line.find("density x volume") != std::string::npos) outcome.warned = true;
+        });
+        physics.start(scene);
+        if (physics.articulationCount() != 1) return outcome;
+        for (int i = 0; i < 240; ++i) physics.update(kFrame);
+        outcome.sag = std::abs(0.8f - robot->getJointValue(0));
+        physics.stop();
+        return outcome;
+    };
+
+    // Density-derived masses at x4: the drive gives way, and the console said
+    // why before the first step ran.
+    const auto density = run(writeFixture(), 4.f);
+    CHECK(density.sag > 0.3f);
+    CHECK(density.warned);
+
+    // Authored masses at x4: still holding, nothing to warn about.
+    const auto authored = run(massPath, 4.f);
+    CHECK(authored.sag >= 0.f);
+    CHECK(authored.sag < 0.1f);
+    CHECK_FALSE(authored.warned);
+
+    // And at scale 1 the density robot neither sags nor warns - the diagnostic
+    // is about scale, not about the fallback itself.
+    const auto unscaled = run(writeFixture(), 1.f);
+    CHECK(unscaled.sag >= 0.f);
+    CHECK(unscaled.sag < 0.1f);
+    CHECK_FALSE(unscaled.warned);
+}
+
 TEST_CASE("A camera bolted to a link rides the simulated robot") {
 
     // The robot-cell case: a camera (or any sensor host) parented to a link, so

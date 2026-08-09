@@ -1121,8 +1121,22 @@ visual `Robot` (through a name map — the articulation's DOF add-order is not t
 robot's joint order, so the *joint name* is the bridge); a floating base also
 writes the solved root pose, so a walker actually travels. A link that carries
 its own `PhysicsConfig` is **not** given a second rigid body — the articulation
-link is already the body there — and a robot with a non-unit world scale is
-skipped with one log line, because PhysX links cannot be scaled.
+link is already the body there.
+
+**Scaling.** A robot with a *uniform* world scale is built at the scaled size —
+shapes, joint frames and prismatic limits all folded in, since a PhysX link has
+no scale of its own. A non-uniform scale is refused with one log line: links can
+be scaled but not stretched. What scaling does to **mass** depends on the URDF:
+an authored `<inertial><mass>` is deliberately never scaled (the
+millimetre-CAD contract — lengths drawn in mm, masses already in kilograms), but
+a link without one takes `density` × the *scaled* volume, so scaling that robot
+up cubes its masses and the gravity torque on a joint grows with the **fourth
+power** of the scale. The PD gains are constants from the config, so a ×2 robot
+sags 16× further and a ×4 robot collapses outright — measured, and pinned by a
+test. The build logs a diagnostic naming the affected links when this applies;
+the remedies are in the message: raise `stiffness`, lower `density`, or author
+`<inertial>` masses. With authored masses the torque grows only linearly and
+the default drive keeps up.
 
 #### Joint sensors
 

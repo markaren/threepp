@@ -30,6 +30,7 @@
 #include "threepp/objects/Group.hpp"
 #include "threepp/objects/Mesh.hpp"
 
+#include <cstdio>
 #include <filesystem>
 #include <map>
 #include <memory>
@@ -206,6 +207,10 @@ namespace threepp {
         Matrix4 baseT;
         baseT.compose(opts.basePosition, opts.baseRotation, Vector3(1.f, 1.f, 1.f));
 
+        // Links whose mass comes from the density fallback rather than an
+        // authored <inertial><mass>. Counted for the scale diagnostic below.
+        std::size_t densityLinks = 0;
+
         for (std::size_t i = 0; i < n; ++i) {
             const auto& L = desc.links[i];
             Matrix4 parentWorld = (L.parent < 0) ? baseT : worldT[L.parent];
@@ -226,7 +231,9 @@ namespace threepp {
             mesh->position.copy(mp);
             mesh->quaternion.copy(mq);
 
-            const float density = (L.hasMass && volume > 1e-9f) ? (L.mass / volume) : opts.defaultDensity;
+            const bool hasAuthoredMass = L.hasMass && volume > 1e-9f;
+            if (!hasAuthoredMass) ++densityLinks;
+            const float density = hasAuthoredMass ? (L.mass / volume) : opts.defaultDensity;
 
             ArticulationLink linkResult = [&]() -> ArticulationLink {
                 if (isRoot) {
@@ -273,6 +280,25 @@ namespace threepp {
                 if (mesh->material()) mesh->material()->visible = false;
             }
             result.meshes.push_back(mesh);
+        }
+
+        // A robot scaled UP whose masses come from the density fallback gets
+        // heavier with the cube of the scale while its lever arms grow linearly:
+        // the gravity torque on a joint grows with the FOURTH power, against
+        // drive gains that are authored absolute numbers. Measured on a two-DOF
+        // arm, doubling the scale multiplies the drive sag by 16, and a x4 robot
+        // collapses outright. An authored <inertial><mass> is deliberately NOT
+        // scaled (a millimetre CAD export authors its masses in kilograms), so
+        // there the torque grows only linearly and the drive keeps up. Say which
+        // regime this build is in rather than letting the robot sag in silence.
+        if (opts.scale > 1.001f && densityLinks > 0) {
+            char scaleText[32];
+            std::snprintf(scaleText, sizeof(scaleText), "%.3g", static_cast<double>(opts.scale));
+            result.diagnostics.push_back(
+                    "scaled x" + std::string(scaleText) + " with " + std::to_string(densityLinks) +
+                    " link(s) taking mass from density x volume - their gravity load grows with the "
+                    "fourth power of the scale. If the drive sags, raise its stiffness, lower the "
+                    "density, or author <inertial> masses in the URDF");
         }
 
         // Every desc link, root and fixed-collapsed alike, mapped to the
