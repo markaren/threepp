@@ -2821,4 +2821,45 @@ void VulkanRenderer::Impl::prepareParticleLighting() {
                               particleCenterScratch_.size() * sizeof(float));
             particleLightCount_ = base;
         }
+
+vulkan::SensorPass::Params VulkanRenderer::Impl::buildSensorParams() {
+            vulkan::SensorPass::Params p{};
+            p.distortActive = lens_.active();
+            p.noiseActive   = sensorNoise_.enabled;
+
+            if (p.distortActive) {
+                p.lensModel     = static_cast<uint32_t>(lens_.model);
+                p.radial[0]     = lens_.k1;
+                p.radial[1]     = lens_.k2;
+                p.radial[2]     = lens_.k3;
+                p.radial[3]     = lens_.k4;
+                p.tangential[0] = lens_.p1;
+                p.tangential[1] = lens_.p2;
+                // (fx/W, fy/H) = 0.5·proj[0], 0.5·proj[5]; (cx/W, cy/H) =
+                // 0.5·(1∓skew). Same derivation as cameraIntrinsics(), with
+                // the extent divided out. projP0_/projP5_ are the OUTPUT
+                // intrinsics — updateCameraUbo stashes them before applying
+                // overscan, so the lens is described by the camera the user
+                // configured, not by the widened one we rendered.
+                p.normK[0] = 0.5f * projP0_;
+                p.normK[1] = 0.5f * projP5_;
+                p.normK[2] = 0.5f * (1.f - projP8_);
+                p.normK[3] = 0.5f * (1.f + projP9_);
+                p.overscan = effectiveOverscan();
+            }
+
+            if (p.noiseActive) {
+                p.frameSeed      = sensorNoise_.seed * 2654435761u + sensorNoiseFrame_;
+                p.fullWell       = sensorNoise_.fullWellElectrons;
+                p.readNoise      = sensorNoise_.readNoiseElectrons;
+                // Dark current is a rate; the exposure time turns it into a
+                // count. A long exposure is noisier for the same reason a real
+                // long exposure is.
+                p.darkElectrons  = sensorNoise_.darkCurrentElectronsPerSec * camShutter_;
+                p.prnu           = sensorNoise_.prnuPercent * 0.01f;
+                p.isoGain        = camIso_ / 100.f;
+                ++sensorNoiseFrame_;
+            }
+            return p;
+        }
 }// namespace threepp

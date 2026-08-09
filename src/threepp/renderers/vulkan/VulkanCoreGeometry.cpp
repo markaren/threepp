@@ -2726,4 +2726,136 @@ VulkanRenderer::Impl::GrassMeshState* VulkanRenderer::Impl::ensureGrassState(Gra
             grassStates.emplace(&gm, std::move(state));
             return raw;
         }
+
+bool VulkanRenderer::Impl::enqueueLodJob(const BufferGeometry* geomPtr, unsigned int geomVersion, BufferGeometry& geom,
+                           float normalWeight) {
+            auto* posAttr = geom.getAttribute<float>("position");
+            if (!posAttr) return false;
+            LodJob job;
+            job.geom = geomPtr;
+            job.geomVersion = geomVersion;
+            job.normalWeight = normalWeight;
+            const auto& pos = posAttr->array();
+            job.positions.assign(pos.begin(), pos.end());
+            const auto vtxCount = posAttr->count();
+            // Normals feed the simplifier's ATTRIBUTE metric on every path
+            // (indexed and soup) — without them the position-only quadric
+            // flattens smooth glossy surfaces' shading for free (the
+            // CarConcept regression; see generateChain's header doc). On the
+            // soup path they additionally drive the weld's seam preservation.
+            if (FloatAttributeView nrm{geom.getAttribute("normal")};
+                nrm && nrm.count() == vtxCount &&
+                nrm.size() == static_cast<size_t>(vtxCount) * 3) {
+                job.normals.assign(nrm.data(), nrm.data() + nrm.size());
+            }
+            if (const auto* idxAttr = geom.getIndex()) {
+                const auto& idx = idxAttr->array();
+                job.indices.assign(idx.begin(), idx.end());
+            } else {
+                // Soup weld only: UVs join the binary-equality test so
+                // genuine UV seams stay split.
+                if (FloatAttributeView uv{geom.getAttribute("uv")};
+                    uv && uv.count() == vtxCount &&
+                    uv.size() == static_cast<size_t>(vtxCount) * 2) {
+                    job.uvs.assign(uv.data(), uv.data() + uv.size());
+                }
+            }
+            ensureLodWorkerStarted();
+            {
+                std::lock_guard<std::mutex> lk(lodJobMutex_);
+                lodJobQueue_.push_back(std::move(job));
+            }
+            lodJobCv_.notify_one();
+            ++lodChainsQueuedCount_;
+            return true;
+        }
+
+void VulkanRenderer::Impl::cpuMorphBlend(Mesh& mesh,
+                                  std::vector<float>& outPos,
+                                  std::vector<float>& outNorm) {
+            const auto& geom = *mesh.geometry();
+            auto* posAttr = geom.getAttribute<float>("position");
+            auto* nrmAttr = geom.getAttribute<float>("normal");
+            if (!posAttr) return;
+
+            const int vtxCount = posAttr->count();
+            const auto& basePos = posAttr->array();
+            outPos.assign(basePos.begin(), basePos.end());
+
+            if (nrmAttr) {
+                const auto& baseNrm = nrmAttr->array();
+                outNorm.assign(baseNrm.begin(), baseNrm.end());
+            } else {
+                outNorm.assign(vtxCount * 3, 0.f);
+            }
+
+            const auto& morphAttrsMap = geom.getMorphAttributes();
+            auto posIt = morphAttrsMap.find("position");
+            if (posIt == morphAttrsMap.end()) return;
+            const auto& morphPos = posIt->second;
+
+            const std::vector<std::shared_ptr<BufferAttribute>>* morphNrm = nullptr;
+            auto nrmIt = morphAttrsMap.find("normal");
+            if (nrmIt != morphAttrsMap.end()) morphNrm = &nrmIt->second;
+
+            auto* morphObj = mesh.as<ObjectWithMorphTargetInfluences>();
+            if (!morphObj) return;
+            const auto& influences = morphObj->morphTargetInfluences();
+
+            const bool relative = geom.morphTargetsRelative;
+            const size_t numTargets = morphPos.size();
+
+            for (size_t t = 0; t < numTargets && t < influences.size(); ++t) {
+                const float w = influences[t];
+                if (w == 0.f) continue;
+
+                auto* tAttr = dynamic_cast<TypedBufferAttribute<float>*>(morphPos[t].get());
+                if (!tAttr || tAttr->count() != vtxCount) continue;
+                const auto& tData = tAttr->array();
+
+                if (relative) {
+                    for (int v = 0; v < vtxCount; ++v) {
+                        outPos[v * 3 + 0] += w * tData[v * 3 + 0];
+                        outPos[v * 3 + 1] += w * tData[v * 3 + 1];
+                        outPos[v * 3 + 2] += w * tData[v * 3 + 2];
+                    }
+                } else {
+                    for (int v = 0; v < vtxCount; ++v) {
+                        outPos[v * 3 + 0] += w * (tData[v * 3 + 0] - basePos[v * 3 + 0]);
+                        outPos[v * 3 + 1] += w * (tData[v * 3 + 1] - basePos[v * 3 + 1]);
+                        outPos[v * 3 + 2] += w * (tData[v * 3 + 2] - basePos[v * 3 + 2]);
+                    }
+                }
+
+                if (morphNrm && t < morphNrm->size()) {
+                    auto* nAttr = dynamic_cast<TypedBufferAttribute<float>*>((*morphNrm)[t].get());
+                    if (nAttr && nAttr->count() == vtxCount) {
+                        const auto& nData = nAttr->array();
+                        if (relative) {
+                            for (int v = 0; v < vtxCount; ++v) {
+                                outNorm[v * 3 + 0] += w * nData[v * 3 + 0];
+                                outNorm[v * 3 + 1] += w * nData[v * 3 + 1];
+                                outNorm[v * 3 + 2] += w * nData[v * 3 + 2];
+                            }
+                        } else if (nrmAttr) {
+                            const auto& baseNrm = nrmAttr->array();
+                            for (int v = 0; v < vtxCount; ++v) {
+                                outNorm[v * 3 + 0] += w * (nData[v * 3 + 0] - baseNrm[v * 3 + 0]);
+                                outNorm[v * 3 + 1] += w * (nData[v * 3 + 1] - baseNrm[v * 3 + 1]);
+                                outNorm[v * 3 + 2] += w * (nData[v * 3 + 2] - baseNrm[v * 3 + 2]);
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Renormalize normals.
+            for (int v = 0; v < vtxCount; ++v) {
+                float& nx = outNorm[v * 3 + 0];
+                float& ny = outNorm[v * 3 + 1];
+                float& nz = outNorm[v * 3 + 2];
+                const float len = std::sqrt(nx * nx + ny * ny + nz * nz);
+                if (len > 0.f) { const float inv = 1.f / len; nx *= inv; ny *= inv; nz *= inv; }
+            }
+        }
 }// namespace threepp
