@@ -13,6 +13,7 @@
 #include "VulkanImplCommon.hpp"
 #include "VulkanGpuLayouts.hpp"
 #include "VulkanGeometryState.hpp"
+#include "VulkanSceneTypes.hpp"
 #include "EnvPrefilter.hpp"
 #include "EventCameraDetector.hpp"
 #include "LidarScanner.hpp"
@@ -561,17 +562,9 @@ namespace threepp {
         // border (metres wide at coarse mips). Maintained by
         // ensureMaterialTexture; only read for slots with a live view.
         std::vector<uint8_t> materialTexClampUV_;
-        // Cache value: (weak_ptr liveness tag, bindless slot, uploaded version).
-        // The weak_ptr lets ensureSceneBuilt prune entries when a Texture is
-        // destroyed (so a future Texture* address-collision doesn't read stale
-        // GPU data). `version` is the Texture::version() at last upload; when it
-        // changes (setData + needsUpdate on a DataTexture), refreshDirtyMaterialTextures
-        // re-uploads the slot in place so live texture edits are honoured.
-        struct CachedTexture {
-            std::weak_ptr<Texture> ref;
-            uint32_t slot = 0;
-            unsigned int version = 0;
-        };
+        // Entry-list / cache records moved to VulkanSceneTypes.hpp (their doc
+        // comments travel with them).
+        using CachedTexture = vulkan::impl::CachedTexture;
         std::unordered_map<const Texture*, CachedTexture> textureCache;
         std::vector<uint32_t> freeTextureSlots;// slots reclaimed by prune
         // Slots whose cache entry was found STALE at lookup (the original
@@ -641,136 +634,11 @@ namespace threepp {
         // VulkanCoreFrame.cpp.
         std::vector<uint32_t> meshMovedSticky_;
 
-        // Unit of work for ray tracing: a single TLAS instance. A regular Mesh
-        // expands to one MeshEntry; an InstancedMesh expands to N entries (one
-        // per sub-instance) all sharing the same Mesh*/BLAS but with distinct
-        // worldMatrix = mesh->matrixWorld * instanceMatrix[i].
-        struct MeshEntry {
-            Mesh*    mesh;
-            std::array<float, 16> worldMatrix;
-            uint32_t instanceIndex;// 0 for non-instanced
-            // Hybrid overlay flag: wireframe-flagged material OR mesh.layers
-            // includes the configured overlayLayer_. Excluded from TLAS,
-            // raster G-buffer, and emissive-tri NEE so the traced/rasterized
-            // scene can't see/shadow them; drawn instead by the post-TAA
-            // overlay pass.
-            bool     isOverlay = false;
-            // ParticleSystem billboard mesh (material name == kParticleMaterialName).
-            // Implies isOverlay (so all the scene-exclusion guards apply), but is
-            // drawn by the dedicated billboard particle pass — NOT the wireframe/
-            // basic overlay-mesh loop, which would render its un-expanded quads as
-            // zero-area triangles. The overlay-mesh loop skips on this flag.
-            bool     isParticle = false;
-            // Geometry rigidly parented UNDER a Camera — a first-person
-            // viewmodel (hands, weapon, cockpit). Rasterized and shaded like
-            // any other mesh, and still visible to primary/radiance traces
-            // (cullMask 0xFF), but tagged kRayMaskNoShadow in the TLAS so no
-            // occlusion query can see it: a viewmodel that casts sun shadows
-            // paints floating hands and a gun on the floor next to the player.
-            // Resolved by an ancestor walk at full expansion (a reparent is a
-            // structure change ⇒ full re-expansion, so it can't go stale).
-            // NOTE: castShadow can't drive this — it defaults to FALSE on
-            // Object3D and no loader sets it, so honouring the flag in the RT
-            // path would delete the shadows of every loaded scene.
-            bool     camAttached = false;
-            // Cached type probes. Resolved once per Mesh in ensureSceneBuilt's
-            // traverseVisible callback (before the InstancedMesh fork so an
-            // N-instance mesh costs 3 dynamic_casts, not 3·N). Consumers
-            // (resolveBlasForEntry, recordRasterGbufPass, TLAS refit, bone /
-            // displaced / morph dirty-detection) read these flags instead of
-            // casting every frame.
-            bool     isSkinned   = false;
-            bool     isDisplaced = false;
-            bool     isGrass     = false;// GPU wind-deformed grass field
-            bool     isMorphed   = false;
-            bool     isTet       = false;
-            bool     isInstanced = false;// entry came from an InstancedMesh expansion
-                                         // (the snapshot fast path recomputes its world
-                                         // matrix as matrixWorld * getMatrixAt(i))
-            // (The frustum-cull bit used to live here. It is now
-            //  ViewContext::inFrustum, indexed in lockstep with
-            //  lastVisibleEntries_, because the answer depends on WHICH CAMERA
-            //  is asking and an entry is shared by all of them. Read it through
-            //  viewCulled(i).)
-            // Automatic mesh LOD (setAutoLod): 0 == the geometry's own
-            // (finest) buffers; N>0 selects BlasRecord::lodLevels[N-1].
-            // Written once per frame by the LOD selection pass in
-            // ensureSceneBuilt and read verbatim by both buildIndirectDrawData
-            // (raster) and the TLAS instance fill — never re-derived. Carries
-            // hysteresis state across lean (snapshot-fast-path) frames since
-            // entries persist in lastVisibleEntries_; resets to 0 on a full
-            // re-expansion (rare, and the selection pass re-picks it that
-            // same frame anyway).
-            uint8_t  lodLevel    = 0;
-            // Auto-LOD selection caches, derived ONCE at full expansion so the
-            // per-frame selection pass is pure float math — the uncached
-            // version paid a dynamic_cast + ancestor hash-walk + shared_ptr
-            // derefs PER ENTRY PER FRAME (~2-4 ms on 4k-entry scenes; measured
-            // as the whole feature's CPU cost on Bistro/fjord).
-            //   lodExemptStatic — mesh opted out (Object3D::autoLod == false,
-            //     e.g. TileTerrain tiles, which are their own LOD system) or
-            //     sits under a threepp::LOD subtree
-            //     (structure changes force a full expansion ⇒ can't go stale).
-            //   lodEmissive — cached MaterialWithEmissive cast (material
-            //     POINTER swaps force a full expansion). VALUES are read live
-            //     each frame, so an emissive that turns on later (dusk-driven
-            //     lantern intensity) exempts immediately, cast-free.
-            //   lodGeomKey — blasCache key (geometry pointer swaps force a
-            //     full expansion).
-            //   lodCenter/lodRadius — object-space bounding sphere; radius 0 ⇒
-            //     unknown ⇒ entry stays LOD0. lodSphereDirty re-derives it
-            //     after an in-place geometry edit (set by the geom-dirty
-            //     detection, consumed lazily by the next selection pass).
-            bool lodExemptStatic = false;
-            bool lodSphereDirty    = false;
-            const MaterialWithEmissive* lodEmissive = nullptr;
-            const BufferGeometry* lodGeomKey = nullptr;
-            float lodCenter[3] = {0.f, 0.f, 0.f};
-            float lodRadius = 0.f;
-        };
+        // Definition moved to VulkanSceneTypes.hpp.
+        using MeshEntry = vulkan::impl::MeshEntry;
 
-        // ── Scene-structure SNAPSHOT (ensureSceneBuilt fast path) ────────────
-        // One node per traverseVisible visit from the last full expansion, in
-        // visit order. ensureSceneBuilt first REPLAYS the traversal comparing
-        // only cheap invariants (object/geometry/material pointers + the flags
-        // that route classification); when the whole sequence matches, last
-        // frame's entries + fingerprints are reused with refreshed matrices and
-        // live version reads instead of being re-derived (the per-mesh
-        // dynamic_cast storm + texture lookups + allocations cost ~9 ms/frame
-        // on Bistro's ~1500 meshes — on a completely STATIC scene). Any
-        // mismatch anywhere falls back to the full expansion, so correctness
-        // never depends on the snapshot: worst case we rebuild, exactly like
-        // every frame did before. three.js polling semantics are preserved —
-        // transform/material/geometry mutations are still picked up by the
-        // value/version diffs every frame; no user-side notification calls.
-        // KNOWN EDGE (accepted as rare-as-asset-restructuring): morph
-        // attributes ADDED to an already-seen geometry keep the cached
-        // isMorphed=false until any structural change rebuilds the snapshot
-        // (position/normal additions ARE detected via the flag bits below).
-        struct SnapNode {
-            Object3D* obj = nullptr;
-            // Typed views of obj, resolved by the full pass's dynamic_casts.
-            // Object3D is a VIRTUAL base, so the replay walk cannot
-            // static_cast down — it reuses these instead (same object at the
-            // same address ⇒ same dynamic type ⇒ pointers still valid).
-            Mesh*          mesh = nullptr;
-            InstancedMesh* inst = nullptr;
-            Line*          line = nullptr;
-            Points*        pts  = nullptr;
-            LOD*           lod  = nullptr;// kSnapLod nodes: replay walk re-runs level selection
-            const void* geom = nullptr;               // mesh/line/points geometry
-            BufferGeometry* geomB = nullptr;          // typed view of geom (attributesVersion reads)
-            const Material* mat = nullptr;            // mesh material
-            const MaterialWithWireframe* wf = nullptr;// cached cast of mat (same object ⇒ still valid)
-            const MeshBasicMaterial* basic = nullptr; // cached cast of mat (kSnapUiBlend replay reads)
-            int32_t instCount = -1;                   // InstancedMesh count; -1 = plain Mesh
-            uint32_t flags = 0;                       // kind(2b) | attr/wire/overlay/tet bits
-            // BufferGeometry::attributesVersion() at record time. Unchanged ⇒
-            // no attribute was added/replaced/removed ⇒ the hasPos/hasNorm
-            // flag bits are still valid WITHOUT re-doing the string-keyed
-            // hasAttribute lookups (2/mesh/frame — ~1 ms on Bistro).
-            unsigned int attrVer = 0;
-        };
+        // Definition moved to VulkanSceneTypes.hpp.
+        using SnapNode = vulkan::impl::SnapNode;
         static constexpr uint32_t kSnapKindMask   = 3u;
         static constexpr uint32_t kSnapKindOther  = 0u;
         static constexpr uint32_t kSnapKindMesh   = 1u;
@@ -819,20 +687,9 @@ namespace threepp {
         // the array each frame from prevWorldMats keyed by (Mesh*, instanceIndex)
         // so each InstancedMesh sub-instance has its own motion delta. First-frame
         // / first-seen entries are identity so reproject is a no-op.
-        struct EntryKey {
-            const Mesh* mesh;
-            uint32_t    instanceIndex;
-            bool operator==(const EntryKey& o) const noexcept {
-                return mesh == o.mesh && instanceIndex == o.instanceIndex;
-            }
-        };
-        struct EntryKeyHash {
-            size_t operator()(const EntryKey& k) const noexcept {
-                const auto h1 = std::hash<const void*>{}(k.mesh);
-                const auto h2 = std::hash<uint32_t>{}(k.instanceIndex);
-                return h1 ^ (h2 + 0x9e3779b9u + (h1 << 6) + (h1 >> 2));
-            }
-        };
+        // Definitions moved to VulkanSceneTypes.hpp.
+        using EntryKey     = vulkan::impl::EntryKey;
+        using EntryKeyHash = vulkan::impl::EntryKeyHash;
         std::array<Buffer, kFramesInFlight> motionMatBuffers{};
         std::array<VkDeviceSize, kFramesInFlight> motionMatBufferCapacity{};
         // Per-buffer-slot "last upload was all-identity" flag. When true and
@@ -1888,24 +1745,8 @@ namespace threepp {
         std::array<VkDescriptorSet, kFramesInFlight> overlayFogDescSets_{};
         std::array<Buffer, kFramesInFlight>          overlayFogUbos_{};
 
-        // Per-BufferGeometry vertex/index buffers for particle billboards. The
-        // animated attributes (position/normal/color) are re-uploaded every frame
-        // (version-gated); uv + index are static (uploaded once). Particles own
-        // these buffers directly — they never build a BLAS. Single-buffered with
-        // in-place memcpy, exactly like ensureLineGeometryUploaded: a write-during-
-        // read race with the other in-flight frame is benign for an overlay visual
-        // (at most a sub-pixel tear on a fast-moving particle for one frame).
-        struct ParticleGeomRec {
-            Buffer   position;// vec3 — particle centers (all 4 quad verts equal)
-            Buffer   normal;  // vec3 — {size, angle, opacity}
-            Buffer   uv;      // vec2 — corner offset
-            Buffer   color;   // vec3 — RGB
-            Buffer   index;   // uint32
-            uint32_t indexCount  = 0;
-            uint32_t vertexCount = 0;
-            unsigned int animVersion = ~0u;// pos+normal+color composite version
-            std::weak_ptr<BufferGeometry> liveCheck;
-        };
+        // Definition moved to VulkanSceneTypes.hpp.
+        using ParticleGeomRec = vulkan::impl::ParticleGeomRec;
         std::unordered_map<const BufferGeometry*, ParticleGeomRec> particleGeomCache_;
 
         // ── Lit particles (particle_light.comp) ────────────────────────────
@@ -2037,16 +1878,8 @@ namespace threepp {
             particleLightCount_ = base;
         }
 
-        // Per-Texture sampled image for particle textures. Keyed on the raw
-        // Texture* (the ShaderMaterial uniform holds no shared_ptr) + version;
-        // re-upload is vkDeviceWaitIdle-guarded. Pointer-recycle with an
-        // identical version is a documented edge case.
-        struct ParticleTexRec {
-            Image2D      image{};
-            unsigned int version = ~0u;
-            uint32_t     width   = 0;
-            uint32_t     height  = 0;
-        };
+        // Definition moved to VulkanSceneTypes.hpp.
+        using ParticleTexRec = vulkan::impl::ParticleTexRec;
         std::unordered_map<const Texture*, ParticleTexRec> particleTexCache_;
 
         // ── World-space Sprite billboards (screenSpace == false) ────────────
@@ -2063,34 +1896,12 @@ namespace threepp {
         // indices) — identical for every Sprite, so one static copy serves all.
         Buffer spriteQuadVtx_{};
         Buffer spriteQuadIdx_{};
-        // Per-frame snapshot of visible world-space sprites, rebuilt each
-        // perspective frame by collectWorldSprites() (sprites move/spawn/expire
-        // constantly, so this is a fresh walk, not snapshot-cached).
-        struct WorldSpriteEntry {
-            std::array<float, 16> world;
-            std::array<float, 4>  color;   // rgb + opacity
-            Vector2               center;
-            float                 rotation = 0.f;
-            const Texture*        tex = nullptr;
-        };
+        // Definition moved to VulkanSceneTypes.hpp.
+        using WorldSpriteEntry = vulkan::impl::WorldSpriteEntry;
         std::vector<WorldSpriteEntry> lastVisibleSprites_;
 
-        // Per-Line scene snapshot, refreshed in ensureSceneBuilt alongside
-        // lastVisibleEntries_. Lives only for the overlay record's draw
-        // loop — neither the deferred shade nor the raster G-buffer touches this.
-        struct LineEntry {
-            // For Line / LineSegments the `line` pointer is the object; for
-            // Points entries it is null and `points` holds the object instead.
-            // Keeping a single entry struct (rather than a separate
-            // PointEntry) avoids duplicating the overlay walk + geometry
-            // upload paths, since both topologies share the same vertex
-            // buffer layout (position + optional color).
-            Line*    line;
-            Points*  points;
-            std::array<float, 16> worldMatrix;
-            bool     isSegments; // true → LINE_LIST, false → LINE_STRIP (ignored when isPoints)
-            bool     isPoints;   // true → POINT_LIST topology, overrides the line topology
-        };
+        // Definition moved to VulkanSceneTypes.hpp.
+        using LineEntry = vulkan::impl::LineEntry;
         std::vector<LineEntry> lastVisibleLines_;
         // (currVPunjit_ / currViewUnjit_ / currProjUnjit_ moved to ViewContext.)
 
@@ -5022,7 +4833,8 @@ namespace threepp {
         // grows past the reservation the mesh is re-based — the abandoned
         // bits go stale, which at worst mispredicts phase 1 for one frame
         // (phase 2 recovers the same frame, the cull's standing guarantee).
-        struct OcclBitRange { uint32_t base; uint32_t capacity; };
+        // Definition moved to VulkanSceneTypes.hpp.
+        using OcclBitRange = vulkan::impl::OcclBitRange;
         std::unordered_map<unsigned int, OcclBitRange> occlBitRanges_;// Object3D::id -> range
         uint32_t occlBitDomain_ = 0;// one past the highest reserved bit
         // One-entry memo: an InstancedMesh's entries are contiguous in the
@@ -5051,12 +4863,8 @@ namespace threepp {
             return it->second.base + en.instanceIndex;
         }
 
-        // Per-cull-mode dispatch span into indirectCmdBuffers[frame].
-        struct DrawGroup {
-            VkCullModeFlags cullMode = VK_CULL_MODE_BACK_BIT;
-            uint32_t        offset   = 0;// first cmd index (cmd-buffer-relative)
-            uint32_t        count    = 0;
-        };
+        // Definition moved to VulkanSceneTypes.hpp.
+        using DrawGroup = vulkan::impl::DrawGroup;
         // [0] Front (BACK cull), [1] Back (FRONT cull), [2] Double (NONE cull),
         // [3] blend decals (NONE cull, drawn LAST with rasterGbufDecalPipeline
         // so their albedo lerps over the already-rasterized receivers).
