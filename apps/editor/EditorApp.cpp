@@ -480,7 +480,7 @@ EditorApp::EditorApp(const Options& options)
         // The view gizmo draws on the background list, so ImGui's own capture
         // knows nothing about it - while the pointer is on it, a drag must
         // not orbit and a click must not pick.
-        return ImGui::GetIO().WantCaptureMouse || viewGizmoHovered_;
+        return ImGui::GetIO().WantCaptureMouse || viewGizmoHovered_ || toolPaletteHovered_;
     };
     ioCapture_.preventScrollEvent = [] { return ImGui::GetIO().WantCaptureMouse; };
     ioCapture_.preventKeyboardEvent = [] { return ImGui::GetIO().WantCaptureKeyboard; };
@@ -898,6 +898,7 @@ void EditorApp::drawUi() {
     drawStatusBar();
     drawPlayBanner();
     drawViewGizmo();
+    drawToolPalette();
     drawImportToast();
 
     if (preview_.visible) {
@@ -1073,7 +1074,7 @@ void EditorApp::drawUi() {
     // Picking runs last: it must see the WantCaptureMouse produced by every
     // panel drawn this frame.
     if (!io.WantCaptureMouse && !fileBrowser_.isOpen() && !radiusDragOwnsMouse &&
-        !viewGizmoHovered_ &&
+        !viewGizmoHovered_ && !toolPaletteHovered_ &&
         ImGui::IsMouseReleased(ImGuiMouseButton_Left) && !gizmo_->isDragging()) {
         // A click, not the end of an orbit drag.
         const auto drag = ImGui::GetMouseDragDelta(ImGuiMouseButton_Left, 0.f);

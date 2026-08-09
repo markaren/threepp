@@ -39,54 +39,12 @@ void EditorApp::drawToolbar() {
 
     if (ImGui::Begin("##toolbar", nullptr, layout::barFlags)) {
 
-        const ImVec2 button{86 * s, 0};
-
-        // The gizmo is parked for the duration of Play (see startPlay), so the
-        // buttons that aim it are greyed rather than left live over nothing.
-        // Snap, below, is a preference and stays.
-        const bool gizmoAvailable = !isPlaying();
-        if (!gizmoAvailable) ImGui::BeginDisabled();
-
-        if (modeButton("Select", gizmoMode_ == "select", button)) {
-            gizmoMode_ = "select";
-            applyGizmoMode();
-        }
-        ImGui::SameLine();
-        if (modeButton("Move", gizmoMode_ == "translate", button)) {
-            gizmoMode_ = "translate";
-            applyGizmoMode();
-        }
-        ImGui::SameLine();
-        if (modeButton("Rotate", gizmoMode_ == "rotate", button)) {
-            gizmoMode_ = "rotate";
-            applyGizmoMode();
-        }
-        ImGui::SameLine();
-        if (modeButton("Scale", gizmoMode_ == "scale", button)) {
-            gizmoMode_ = "scale";
-            applyGizmoMode();
-        }
-
-        ImGui::SameLine();
-        ImGui::TextColored(theme::muted(), "|");
-        ImGui::SameLine();
-
-        if (modeButton(gizmoWorldSpace_ ? "World" : "Local", false, {76 * s, 0})) {
-            gizmoWorldSpace_ = !gizmoWorldSpace_;
-            applyGizmoMode();
-        }
-        if (!gizmoAvailable) ImGui::EndDisabled();
-        ImGui::SameLine();
-        if (modeButton("Snap", snapEnabled_, {76 * s, 0})) {
-            snapEnabled_ = !snapEnabled_;
-        }
-        if (ImGui::IsItemHovered()) {
-            ImGui::SetTooltip("Snap translate/rotate/scale to a grid.\nHold Shift for the same effect.");
-        }
+        // The transform tools live in the viewport's tool palette now (see
+        // ToolPalette.cpp) - the bar keeps what is not viewport furniture:
+        // the transport, and where the camera stands.
 
         // --- transport, centred ---------------------------------------------
         const float transportWidth = 3 * 46 * s + 2 * ImGui::GetStyle().ItemSpacing.x;
-        ImGui::SameLine();
         ImGui::SetCursorPosX((viewport->Size.x - transportWidth) * 0.5f);
 
         const bool playing = isPlaying();

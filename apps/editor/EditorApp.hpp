@@ -724,6 +724,12 @@ namespace threepp::editor {
         // from wherever the camera stands - the same contract setViewPreset
         // leans on, just spread over a third of a second.
         void updateViewTween(float dt);
+        // --- tool palette (apps/editor/ToolPalette.cpp) ----------------------
+        // The transform tools as viewport furniture: Select/Move/Rotate/Scale,
+        // the space toggle and Snap, as vector icon sprites stacked in the
+        // viewport's top-left corner — the view gizmo's mirror, drawn with the
+        // same background-draw-list brush and the same interaction rules.
+        void drawToolPalette();
         // --- follow selection -----------------------------------------------
         // Chase camera. While it is on and something is selected, every frame
         // walks the orbit target towards the selection's world position and
@@ -910,6 +916,9 @@ namespace threepp::editor {
         // the orbit's mouse capture both stand down while it is - the gizmo
         // is background furniture ImGui's own capture knows nothing about.
         bool viewGizmoHovered_ = false;
+        // Its twin for the tool palette in the opposite corner, consumed by
+        // the same two gates (ioCapture_ and the pick), for the same reason.
+        bool toolPaletteHovered_ = false;
         // Follow Selection (View menu, Shift+F). Session state on purpose: it
         // belongs to what is open and what is selected, not to the editor's
         // saved preferences.
