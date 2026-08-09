@@ -326,18 +326,42 @@ jobs:
           wget -qO "$GITHUB_WORKSPACE/third_party/vma/vk_mem_alloc.h" \
             https://raw.githubusercontent.com/GPUOpen-LibrariesAndSDKs/VulkanMemoryAllocator/v3.1.0/include/vk_mem_alloc.h
 
-      # Fail here, with the driver's own extension list in the log, rather than
-      # letting the tests skip themselves further down. If this step is what
-      # breaks, the fix is a newer Mesa (a PPA, or a newer runner image), and the
-      # output says which extension was missing.
-      - name: Probe lavapipe for the extensions the renderer requires
-        env:
-          VK_DRIVER_FILES: /usr/share/vulkan/icd.d/lvp_icd.x86_64.json
-          VK_ICD_FILENAMES: /usr/share/vulkan/icd.d/lvp_icd.x86_64.json
+      # The ICD manifest filename is Mesa's to choose, so resolve it by glob and
+      # export it for every later step, rather than hard-pinning a path that a
+      # packaging change would silently break. (The first run of this job pinned
+      # the path AND ran vulkaninfo outside Xvfb; the probe then reported all
+      # five extensions missing — including VK_KHR_swapchain, which lavapipe has
+      # always had. An impossible capability report means a broken probe
+      # environment, which is why this step now fails on enumeration explicitly
+      # before saying anything about extensions.)
+      - name: Locate the lavapipe ICD manifest
         run: |
           set -euo pipefail
-          vulkaninfo --summary || true
-          vulkaninfo > vulkaninfo.txt 2>&1 || true
+          ls -la /usr/share/vulkan/icd.d/ || true
+          icd=$(ls /usr/share/vulkan/icd.d/lvp_icd*.json | head -n1)
+          if [ -z "$icd" ]; then
+            echo "::error::no lavapipe ICD manifest under /usr/share/vulkan/icd.d — mesa-vulkan-drivers did not provide lvp_icd*.json (listing above)."
+            exit 1
+          fi
+          echo "using ICD manifest: $icd"
+          echo "VK_DRIVER_FILES=$icd" >> "$GITHUB_ENV"
+          echo "VK_ICD_FILENAMES=$icd" >> "$GITHUB_ENV"
+
+      # Fail here, with the driver's own extension list in the log, rather than
+      # letting the tests skip themselves further down. Under xvfb-run because
+      # vulkaninfo probes WSI: with no DISPLAY it can fail before enumerating
+      # anything, and an enumeration failure must be reported as one — not as
+      # "every extension is missing". If enumeration works and extensions ARE
+      # missing, the fix is a newer Mesa (a PPA, or a newer runner image).
+      - name: Probe lavapipe for the extensions the renderer requires
+        run: |
+          set -euo pipefail
+          xvfb-run -a vulkaninfo > vulkaninfo.txt 2>&1 || true
+          grep -m1 "driverInfo" vulkaninfo.txt || true
+          if ! grep -q "deviceName" vulkaninfo.txt; then
+            echo "::error::vulkaninfo enumerated no Vulkan device at all — the probe environment is broken (ICD manifest, loader, or display), not lavapipe's capabilities. First lines: $(head -c 400 vulkaninfo.txt | tr '\n' ' ')"
+            exit 1
+          fi
           missing=""
           for ext in VK_KHR_ray_tracing_pipeline \
                      VK_KHR_acceleration_structure \
@@ -356,7 +380,7 @@ jobs:
             echo "note: VK_EXT_headless_surface absent — the hidden-window fallback carries this job"
           fi
           if [ -n "$missing" ]; then
-            echo "::error::lavapipe lacks required extension(s):$missing — the renderer requests ray tracing unconditionally, so every Vulkan test would skip itself. Needs a newer Mesa."
+            echo "::error::lavapipe ($(grep -m1 driverInfo vulkaninfo.txt | sed 's/.*= //' || echo unknown)) lacks required extension(s):$missing — the renderer requests ray tracing unconditionally, so every Vulkan test would skip itself. Needs a newer Mesa."
             exit 1
           fi
           echo "lavapipe exposes every extension the renderer requires."
@@ -371,10 +395,11 @@ jobs:
       # counters — so VulkanCameraModel_test is a validation gate here too, at no
       # extra cost. VulkanValidation_test sets THREEPP_VULKAN_VALIDATION itself;
       # it is set here as well so the other test is covered.
+      # VK_DRIVER_FILES / VK_ICD_FILENAMES come from the ICD-locating step via
+      # GITHUB_ENV — not re-declared here, where a step-level value would
+      # override the resolved one.
       - name: Run the Vulkan runtime gate
         env:
-          VK_DRIVER_FILES: /usr/share/vulkan/icd.d/lvp_icd.x86_64.json
-          VK_ICD_FILENAMES: /usr/share/vulkan/icd.d/lvp_icd.x86_64.json
           THREEPP_VULKAN_VALIDATION: '1'
           THREEPP_VULKAN_STRICT_VALIDATION: '1'
         run: |
