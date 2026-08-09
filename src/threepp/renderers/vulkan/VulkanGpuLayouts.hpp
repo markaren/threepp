@@ -161,8 +161,9 @@ namespace threepp::vulkan::impl {
     static_assert(sizeof(GpuOverlayFogUbo) == 96);
 
     // Host mirror of gbuffer_indirect.vert's DrawInfo struct. Tight-
-    // packed (120 bytes, all members naturally aligned to ≤ 8) so it
-    // matches the GLSL `scalar` block layout used in the shader.
+    // packed (136 bytes — the static_assert below is the authority — all
+    // members naturally aligned to ≤ 8) so it matches the GLSL `scalar`
+    // block layout used in the shader.
     struct DrawInfoGpu {
         float    model[16];        // 64
         uint64_t posAddr;          // 8

@@ -33,7 +33,7 @@
 //
 // Geometry fetch for the reflection hit uses a GeometryDesc (buffer-reference
 // vertex/normal/index buffers + barycentric interpolation) mirroring
-// VulkanCoreImpl::GeometryDesc.
+// GeometryDesc (VulkanGeometryState.hpp).
 
 layout(local_size_x = 8, local_size_y = 8) in;
 
@@ -106,7 +106,7 @@ layout(set = 0, binding = 7, rgba16f) uniform image2D outImage;
 layout(set = 0, binding = 8) uniform accelerationStructureEXT topAS;
 layout(set = 0, binding = 9, scalar) readonly buffer MatBuf  { MaterialDesc mats[]; };
 
-// Geometry fetch for reflection-hit normals + UVs — mirrors VulkanCoreImpl::GeometryDesc.
+// Geometry fetch for reflection-hit normals + UVs — mirrors GeometryDesc (VulkanGeometryState.hpp).
 layout(buffer_reference, scalar) readonly buffer NormalBuf { float n[]; };
 layout(buffer_reference, scalar) readonly buffer IndexBuf  { uint  i[]; };
 layout(buffer_reference, scalar) readonly buffer UvBuf     { float u[]; };
@@ -118,7 +118,7 @@ struct GeometryDesc {
     uint64_t uvAddress;
     uint64_t foamAddress;
     uint64_t prevVertexAddress;
-    uint64_t colorAddress;// unused here, kept for layout match with VulkanCoreImpl::GeometryDesc
+    uint64_t colorAddress;// unused here, kept for layout match with GeometryDesc (VulkanGeometryState.hpp)
     uint     indexed;
     uint     flags;// bit 0: sticky moved flag (history gates), bit 1: normal is
                    // oct-snorm16x2, bit 2: uv is unorm16x2, bit 3: color is unorm8x4
@@ -313,7 +313,7 @@ layout(set = 0, binding = 45, rgba16f) uniform writeonly image2D directUImage;
 // arrays — the UBO's 8-per-type slots (the STRONGEST 8, same sort) remain the
 // source for every other consumer (reflection hits, GI rays, volumetric
 // beams, probes), where screen-space clusters can't apply.
-// KEEP IN SYNC with cluster_build.comp + GpuClusterLight (VulkanCoreImpl.hpp).
+// KEEP IN SYNC with cluster_build.comp + GpuClusterLight (VulkanGpuLayouts.hpp).
 struct ClusterLight {
     vec3  position;   float range;
     vec3  color;      float decay;

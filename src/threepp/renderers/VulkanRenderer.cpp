@@ -5,7 +5,10 @@
 //                                scene fingerprint, raster G-buffer, deferred shade,
 //                                TAA/bloom, fog, lights, skinning, ocean/water, LIDAR,
 //                                env-PMREM, camera UBOs). Bodies live in the
-//                                vulkan/VulkanCore*.cpp TUs.
+//                                vulkan/VulkanCore*.cpp TUs (ctor/dtor in
+//                                VulkanCoreInit.cpp); Impl's nested types live in
+//                                vulkan/Vulkan{ImplCommon,GpuLayouts,GeometryState,
+//                                SceneTypes,ViewContext}.hpp, aliased back into Impl.
 //   VulkanRenderer.cpp (this)  — Impl::recordSceneDispatch (DeferredShade +
 //                                auto-exposure) + the public method bodies.
 //
@@ -974,7 +977,7 @@ namespace threepp {
         if (impl.frameSerial_ == 0 || !impl.sceneBuilt_) return false;
 
         // The just-rendered G-buffer sits in the slot BEFORE the current one:
-        // endFrame advances currentFrame after recording (VulkanCoreImpl.hpp),
+        // endFrame advances currentFrame after recording (VulkanCoreFrame.cpp),
         // so the freshest attachment contents are (currentFrame - 1) mod N —
         // the same slot arithmetic the fog history uses.
         // Which view's G-buffer. 0 = the primary; anything else must name a

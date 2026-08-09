@@ -42,7 +42,7 @@
 // image-indexed descriptor sets (this class is frame-in-flight-indexed only,
 // matching every other consumer here). Instead HDR mode writes hdrOut_ — an
 // owned per-frame-in-flight display-extent BGRA8 scratch — and the caller
-// (VulkanCoreImpl.hpp) finalizes it into the swapchain via TaaResolve's
+// (VulkanRenderer::Impl) finalizes it into the swapchain via TaaResolve's
 // existing swapchain-indexed RCAS/copy machinery (recordPostFinalize),
 // exactly the pattern a downstream RCAS already uses on the LDR history
 // slot. setTaaHdrOutput(bool) selects which output binding 3 targets;

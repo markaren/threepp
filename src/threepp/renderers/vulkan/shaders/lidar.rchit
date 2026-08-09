@@ -47,9 +47,9 @@
 #include "vulkan_shared.h"
 #include "lidar_shared.h"
 
-// Geometry descriptors mirror VulkanCoreImpl::GeometryDesc (the host-side
-// struct) — single source of truth would be nice but each shader that needs
-// it includes its own copy inline, so we mirror.
+// Geometry descriptors mirror GeometryDesc (VulkanGeometryState.hpp, the
+// host-side struct) — single source of truth would be nice but each shader
+// that needs it includes its own copy inline, so we mirror.
 struct GeometryDesc {
     uint64_t vertexAddress;
     uint64_t normalAddress;
@@ -57,7 +57,7 @@ struct GeometryDesc {
     uint64_t uvAddress;
     uint64_t foamAddress;
     uint64_t prevVertexAddress;
-    uint64_t colorAddress;// unused here, kept for layout match with VulkanCoreImpl::GeometryDesc
+    uint64_t colorAddress;// unused here, kept for layout match with GeometryDesc (VulkanGeometryState.hpp)
     uint     indexed;
     uint     flags;// unused here — lidar reads positions/indices only (always float)
 };

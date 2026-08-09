@@ -29,7 +29,7 @@ layout(set = 0, binding = 0) uniform CameraUbo {
 #include "camera_ray.glsl"// camViewPointAtDist — perspective AND ortho
 
 // KEEP IN SYNC with deferred_shade.comp's ClusterLight + the CPU
-// GpuClusterLight (VulkanCoreImpl.hpp) — scalar layout, 64 bytes.
+// GpuClusterLight (VulkanGpuLayouts.hpp) — scalar layout, 64 bytes.
 struct ClusterLight {
     vec3  position;   float range;         // range 0 = infinite (three.js)
     vec3  color;      float decay;         // color premultiplied by intensity

@@ -2,7 +2,7 @@
 //
 // VulkanRenderer::setGbufferMsaa(2|4) rasterizes the G-buffer at K samples
 // per pixel into MS attachments (RasterGbufImages::{normal,motion,ids,uv,
-// albedo,depth}MS in VulkanCoreImpl.hpp). This pass picks, per pixel, the
+// albedo,depth}MS in VulkanViewContext.hpp). This pass picks, per pixel, the
 // sample whose instance id has the most votes among the K live samples
 // (ties broken by nearest reversed-Z depth) and writes that sample's
 // G-buffer data into the EXISTING single-sample images — the same images

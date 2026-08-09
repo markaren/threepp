@@ -339,9 +339,9 @@ VulkanRenderer::Impl::~Impl() {
             // EnvPrefilter owns its pipeline / layout / pool / sampler.
             envPrefilter_.reset();
 
-            // GPU skinning teardown. Per-SkinnedMeshState buffers are
+            // GPU skinning teardown. Per-SkinnedMeshState buffers were already
             // destroyed alongside the BLAS in the skinnedMeshStates clear
-            // (see below); the shared pipeline + pool live in skinning_.
+            // (above); the shared pipeline + pool live in skinning_.
             skinning_.reset();
             tetSkinning_.reset();
 
