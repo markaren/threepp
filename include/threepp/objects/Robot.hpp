@@ -48,6 +48,11 @@ namespace threepp {
 
         Robot() = default;
 
+        static std::shared_ptr<Robot> create() {
+
+            return std::make_shared<Robot>();
+        }
+
         void showColliders(bool flag) {
             for (auto& c : links_) {
                 c->traverse([&](auto& obj) {
@@ -63,9 +68,24 @@ namespace threepp {
         }
 
         void addJoint(const std::shared_ptr<Object3D>& joint, const JointInfo& info) {
+            addJoint(joint, info, joint->position, joint->quaternion);
+        }
+
+        // The same, with the joint's REST pose given rather than read off the
+        // node. A document stores a robot in whatever pose it was saved in, so
+        // a reader has the joint node's driven transform and not the one it has
+        // at zero — and reading the driven pose as the rest pose bakes the saved
+        // angles into the joint's own frame, doubling them the moment anything
+        // drives it.
+        void addJoint(const std::shared_ptr<Object3D>& joint, const JointInfo& info,
+                      const Vector3& restPosition, const Quaternion& restRotation) {
             joints_.emplace_back(joint);
             jointInfos_.emplace_back(info);
-            origPose_.emplace(std::make_pair(joint.get(), std::make_pair(joint->position.clone(), joint->quaternion.clone())));
+            // clone(), not a plain copy: copying a Quaternion copies its
+            // onChange callback too, which would leave the stored rest pose
+            // holding a capture of a node it must not notify (and may outlive).
+            origPose_.emplace(std::make_pair(joint.get(),
+                                             std::make_pair(restPosition.clone(), restRotation.clone())));
             if (info.type != JointType::Fixed) {
                 jointDof_.emplace_back(static_cast<int>(articulatedJoints_.size()));
                 articulatedJoints_.emplace_back(joint.get(), info);
@@ -215,6 +235,54 @@ namespace threepp {
             jointValues_.resize(numDOF());
 
             rebuildChain();
+        }
+
+        // finalize() for a robot whose hierarchy ALREADY exists — the one a
+        // deserialiser needs.
+        //
+        // finalize() parents each link under its inbound joint and the root link
+        // under the robot, which is right when the loader built the nodes loose
+        // and wrong when they were read back as a tree: the hierarchy is already
+        // the document's, and Object3D::add() unlinks and re-appends, so
+        // re-parenting an existing child moves it to the end of its parent's
+        // list — reordering nodes that an asset override table identifies by
+        // position, and shuffling the viewport's own hierarchy for no reason.
+        // Only the derived tables are rebuilt here.
+        void finalizeInPlace() {
+            jointValues_.resize(numDOF());
+
+            rebuildChain();
+        }
+
+        // --- what a document needs to write this robot down -------------------
+        // The joint table is not derivable from the transforms: axes, limits,
+        // types and rest poses exist only here. Without them a saved robot can
+        // only come back frozen, and the only way to re-articulate it is to
+        // re-import the source file — which rebuilds the subtree and discards
+        // whatever was authored into it.
+
+        [[nodiscard]] const std::vector<std::shared_ptr<Object3D>>& links() const {
+            return links_;
+        }
+
+        // Every joint, fixed ones included, parallel to jointInfos(). Not to be
+        // confused with jointValues(), which is indexed by DOF.
+        [[nodiscard]] const std::vector<std::shared_ptr<Object3D>>& jointNodes() const {
+            return joints_;
+        }
+
+        [[nodiscard]] const std::vector<JointInfo>& jointInfos() const {
+            return jointInfos_;
+        }
+
+        // The joint node's local transform with this joint at zero.
+        [[nodiscard]] std::pair<Vector3, Quaternion> jointRestPose(size_t index) const {
+            return origPose_.at(joints_.at(index).get());
+        }
+
+        // The DOF slot joint `index` drives, or -1 when it is fixed.
+        [[nodiscard]] int jointDof(size_t index) const {
+            return jointDof_.at(index);
         }
 
         void setJointValues(const std::vector<float>& values, float deg = false) {

@@ -1,17 +1,19 @@
-// What the editor needs to rebuild an articulated robot from a saved scene.
+// The document's record of where a robot came from and how it stands.
 //
 // A Robot loaded from URDF is a live object: it owns a joint table, the original
-// pose of every joint node, and the axis/limit data needed to drive them. None
-// of that survives the three.js JSON, which knows only about transforms — a
-// saved robot comes back as a plain Object3D subtree, correctly posed but
-// frozen.
+// pose of every joint node, and the axis/limit data needed to drive them. The
+// table itself now travels in the document (ObjectExporter's "threeppRobot"
+// block), so a saved robot loads back live — this config is NOT what makes it
+// articulate. It is what everything else needs:
 //
-// So the scene stores a reference instead: the URDF path it came from, plus the
-// current joint values. On load the editor re-imports the file and transplants
-// the live Robot over the frozen placeholder, keeping its uuid and placement.
-// The geometry is still written to the document, so a scene without its URDF
-// (or opened by another tool) renders exactly as it was saved — it just cannot
-// be re-jointed.
+//   - the URDF path, for the paths that genuinely must re-read the file — the
+//     PhysX articulation (inertia and collision data are not in the scene
+//     graph) and transplantRobot, which revives documents written before the
+//     articulation block existed;
+//   - the joint values, so the inspector and every rebuild agree on the pose
+//     the document was saved in;
+//   - the import-time xacro arguments, without which the file describes a
+//     different robot (see below).
 //
 // Unlike PhysicsConfig and AnimationConfig this does NOT pack into one
 // key=value string: a Windows path contains the characters that format uses as
@@ -48,9 +50,9 @@ namespace threepp::editor {
         // URDF ships collision geometry alongside the visual meshes, and
         // URDFLoader builds both. The collision hulls are wireframe stand-ins
         // that sit right on top of the real meshes, so they start hidden and
-        // this is the per-robot opt-in. Persisted because a play/stop cycle
-        // rebuilds the robot, and an inspection aid that vanishes when you
-        // press play is worse than useless.
+        // this is the per-robot opt-in. Persisted so the choice survives a
+        // save/reload and a legacy re-articulation alike — an inspection aid
+        // that resets itself is worse than useless.
         bool showColliders = false;
         // The xacro arguments the robot was imported with — ONLY the ones that
         // were explicitly set, never the file's own defaults. A description that
@@ -88,26 +90,37 @@ namespace threepp::editor {
         static void erase(Object3D& object);
     };
 
-    // Transplant a freshly re-imported Robot over the frozen placeholder a
-    // document round trip left behind, in place: `robot` takes the placeholder's
-    // uuid, name, transform, visibility and userData, is posed from the
-    // placeholder's RobotConfig, and is swapped into the placeholder's parent at
-    // the same child index. The placeholder is detached.
+    // Make the frozen placeholder a document round trip left behind articulate
+    // again, by moving `donor`'s JOINT TABLE onto the subtree the document
+    // already carries. Returns the live Robot now standing in the placeholder's
+    // place — same uuid, name, transform, layers and userData, same child index
+    // under the same parent, posed from the placeholder's RobotConfig — or
+    // nullptr if there was nothing to do.
     //
-    // Descendant userData is preserved too — a sensor or a physics entry authored
-    // on a LINK or on one of its meshes, not on the root, would otherwise be
-    // silently dropped, because only the root's userData is part of RobotConfig.
-    // Each placeholder descendant's non-empty userData is re-applied to the node
-    // at the SAME POSITION in the fresh robot's pre-order walk, provided the two
-    // still agree on the name; a name that disagrees falls back to a lookup by
-    // name (first match wins). Position rather than name because a URDF's visual
-    // and collision groups and their meshes are unnamed, and those are the nodes a
-    // viewport click selects. What cannot be placed is reported through `log`.
+    // The donor is read, not planted. It is a fresh import of the same URDF, and
+    // the only thing taken from it is what the document cannot express: each
+    // joint's axis, type, limits and rest pose, plus which link is the end
+    // effector. The NODES those apply to are looked up in the placeholder's own
+    // subtree — links by name, joint nodes as the parent of their child link —
+    // so everything authored into the robot survives: a camera bolted to the
+    // wrist, a collider deleted, a material retouched, a sensor on an unnamed
+    // mesh. Planting the donor instead, which is what this used to do, deleted
+    // all of that on every Stop.
+    //
+    // Documents written since the articulation extension (ObjectExporter's
+    // "threeppRobot" block) never come here: they load live and need no file at
+    // all. This is the path for the ones written before it, and for a node that
+    // carries nothing but a urdf reference.
+    //
+    // When the document's subtree has drifted so far from the file that not one
+    // joint resolves — an empty placeholder, or a URDF rebuilt from scratch —
+    // the donor's own subtree is planted after all and `log` says so, because a
+    // robot that cannot be driven is worse than one that lost its annotations.
     //
     // This is the headless core of EditorApp::rearticulateRobots, factored out so
     // it can be tested without the app; the app calls it inside its traversal.
-    void transplantRobot(Object3D& placeholder, const std::shared_ptr<Robot>& robot,
-                         const std::function<void(const std::string&)>& log = {});
+    std::shared_ptr<Robot> transplantRobot(Object3D& placeholder, const std::shared_ptr<Robot>& donor,
+                                           const std::function<void(const std::string&)>& log = {});
 
 }// namespace threepp::editor
 

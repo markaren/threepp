@@ -421,6 +421,14 @@ Two consequences worth knowing:
 Saved documents embed texture images as base64 PNG data-URIs, so a scene file
 stands on its own.
 
+Two threepp extensions ride alongside the standard keys, both on an object
+entry, both ignored by three.js and by any reader that does not know them:
+`threeppAsset` (a linked subtree — a path plus a table of per-node edits, in
+place of the children) and `threeppRobot` (a robot's joint table — see
+[Robots](#robots-urdf-in-userdata)). Neither invents a new object type: the
+object still declares itself as what it is, so an old reader gets the same
+scene, just without the behaviour the extension restores.
+
 ### Editor-only objects
 
 The grid, origin axes, selection outline and transform gizmo have to be in the
@@ -1001,13 +1009,10 @@ A URDF also describes collision geometry, which `URDFLoader` builds as white
 wireframe hulls sitting directly on top of the visual meshes — and leaves
 visible. The editor hides them on import and offers **Show Colliders** to bring
 them back. That choice is stored rather than treated as a transient view
-setting, because Play rebuilds the robot from its URDF: a non-persisted toggle
-would reset itself exactly when you wanted to watch the hulls. Hidden is the
-default, so the key is only written when the toggle is on.
+setting, so it survives a save and a reload; hidden is the default, and the key
+is only written when the toggle is on.
 
-None of that articulation can go into the three.js JSON, which knows only about
-transforms — a saved robot would come back correctly posed but frozen. So the
-document stores a reference instead:
+The document stores a reference to the file it came from, plus the pose:
 
 ```
 userData["urdf"]          C:/models/lbr_iiwa_14_r820.urdf
@@ -1016,23 +1021,58 @@ userData["showColliders"] true      (omitted when hidden, which is the default)
 ```
 
 Joint values are always radians/metres regardless of what the slider displays.
-On load — including the play snapshot restore — `EditorApp::rearticulateRobots`
-re-imports each referenced URDF and transplants the live `Robot` over the frozen
-placeholder, keeping its uuid, name and placement so selection and undo
-rebinding still resolve, then reapplies the stored pose. The geometry is still
-written to the document, so a scene whose URDF has moved away (or one opened by
-another tool) renders exactly as saved — it just cannot be re-jointed, and says
-so in the console.
+The path is what the **physics** side rebuilds from (`UrdfArticulation` needs
+the file's inertial and collision data, which the scene graph does not carry),
+and what a re-import would use — it is not what makes the robot articulate on
+load.
 
-**Descendant userData survives the transplant.** The swap keeps the placeholder
-root's identity and userData, but a sensor (or a physics entry) is often
-authored on a *link*, not the root — and the fresh robot's link nodes are new
-objects. So before the swap each placeholder descendant's userData is collected
-by node name and re-applied to the same-named node of the rebuilt robot (first
-match wins; a name the URDF no longer has is reported, not lost). That is what
-makes "an encoder on the wrist link" a durable authoring choice rather than
-something a document load quietly drops. The transplant is a free function,
-`transplantRobot`, so this rule is the same headless and in the app.
+#### The joint table is part of the document
+
+A `Robot` writes its articulation into its own object entry, as a threepp
+extension `ObjectLoader` reads back and everything else ignores:
+
+```
+"threeppRobot": {
+  "endEffector": "tool0",
+  "links": ["<uuid>", ...],
+  "joints": [{ "node": "<uuid>", "name": "shoulder", "type": "revolute",
+               "axis": [0,0,1], "parent": "base_link", "child": "upper_link",
+               "limit": [-2.96, 2.96], "rest": [x,y,z, qx,qy,qz,qw],
+               "value": 0.3 }, ...]
+}
+```
+
+Nodes are referenced by uuid, which the loader preserves, so a robot comes back
+**live** — drivable, limited, with the same end effector — from the document
+alone. No URDF is read, which means a play/stop cycle costs nothing, works with
+the source file missing, and cannot hand you a different robot because the file
+changed under the editor.
+
+That last point is the reason this exists. Play/stop used to re-import the URDF
+and swap the file's subtree in over the document's, so **everything authored
+into a robot was deleted on every Stop**: a camera parented to the wrist, a
+sensor on the unnamed mesh a viewport click actually selects, a collider
+deleted, a material retouched. Only the root's identity survived, plus a
+best-effort carry of descendant `userData` — and even that broke as soon as a
+child was added, because it was keyed by position in the subtree walk.
+
+A robot saved by an older editor has no such block. Those still go through
+`EditorApp::rearticulateRobots` → `transplantRobot`, which re-imports the URDF
+**for its joint table only** and moves that onto the subtree the document
+carries — links matched by name, joint nodes as the parent of their child link.
+The document's tree is kept, so the same edits survive; what the file names and
+the document no longer has is reported in the console. Only when nothing at all
+matches — an empty placeholder, or a URDF rebuilt from scratch — is the file's
+subtree planted instead, and the console says that too. Re-saving upgrades the
+document.
+
+A subtree stored by *reference* (`ModelStorage::Reference`, the "keep the file,
+store a path and a table of edits" mode) is a different mechanism: there
+`ObjectLoader` re-imports the robot wholesale, so it arrives articulated on its
+own, and the block is deliberately not written — its uuids would name nodes the
+re-import has already replaced. That mode's override table can carry per-node
+edits but not new children, so a node authored under a referenced robot is not
+saved; embed the model (the default) if you author into it.
 
 #### Simulating a robot: `userData["articulation"]`
 

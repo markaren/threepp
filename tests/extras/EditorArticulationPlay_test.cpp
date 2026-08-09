@@ -24,6 +24,7 @@
 #include "threepp/extras/editor/PhysicsPlaySession.hpp"
 #include "threepp/extras/editor/RobotConfig.hpp"
 
+#include "threepp/cameras/PerspectiveCamera.hpp"
 #include "threepp/loaders/URDFLoader.hpp"
 #include "threepp/objects/Mesh.hpp"
 #include "threepp/objects/Robot.hpp"
@@ -305,9 +306,10 @@ TEST_CASE("The editor's failure log carries the parser's reason") {
     // it is broken), and the session must say something useful, not crash and
     // not shrug.
     Scene scene;
-    // NOT Robot::create() - Robot has no create() of its own, so that spelling
-    // silently calls the inherited Object3D::create() and builds a plain
-    // Object3D the session's as<Robot>() discovery walks straight past.
+    // Robot::create() would do as well; it exists now (the deserialiser needs
+    // it). It did not always, and the inherited Object3D::create() that spelling
+    // used to resolve to built a plain Object3D the session's as<Robot>()
+    // discovery walks straight past - hence the explicit make_shared here.
     auto robot = std::make_shared<Robot>();
     robot->name = "Broken";
     RobotConfig rc;
@@ -457,6 +459,61 @@ TEST_CASE("The visual robot's joints track the articulation") {
     CHECK(std::abs(robot->getJointValue(0)) > 0.4f);
 
     physics.stop();
+}
+
+TEST_CASE("A camera bolted to a link rides the simulated robot") {
+
+    // The robot-cell case: a camera (or any sensor host) parented to a link, so
+    // it sees what that link sees while the articulation drives it. Three things
+    // have to hold at once, and this pins all three — the last one is what a
+    // play/stop cycle used to break by rebuilding the subtree from the URDF.
+    const auto path = writeFixture();
+    Scene scene;
+
+    auto robot = authorRobot(scene, path, {0.f, 0.f}, /*fixedBase*/ true);
+    auto* link = findByName(*robot, "slider_link");
+    REQUIRE(link != nullptr);
+
+    auto eye = PerspectiveCamera::create(60.f, 1.f, 0.01f, 50.f);
+    eye->name = "WristCam";
+    eye->position.set(0.f, 0.f, 0.15f);// off the shoulder axis, so rotation moves it
+    link->add(eye);
+
+    scene.updateMatrixWorld(true);
+    Vector3 atRest;
+    eye->getWorldPosition(atRest);
+
+    // Drive both joints away from zero and let the articulation settle there.
+    robot->setJointValue(0, 0.9f);
+    robot->setJointValue(1, 0.3f);
+    auto config = *RobotConfig::read(*robot);
+    config.joints = robot->jointValues();
+    config.write(*robot);
+
+    PhysicsPlaySession physics;
+    physics.start(scene);
+    for (int i = 0; i < 120; ++i) physics.update(kFrame);
+
+    scene.updateMatrixWorld(true);
+    Vector3 whilePlaying;
+    eye->getWorldPosition(whilePlaying);
+
+    // 1. It is still where its link put it — the simulated pose reaches the
+    //    camera's world matrix, so a render from it looks down the real arm.
+    Vector3 linkAt;
+    link->getWorldPosition(linkAt);
+    CHECK(linkAt.distanceTo(whilePlaying) < 0.16f);// the 0.15 local offset
+
+    // 2. And that is a MOVED pose, not the rest pose it was bolted on at.
+    CHECK(atRest.distanceTo(whilePlaying) > 0.05f);
+
+    physics.stop();
+
+    // 3. The node is still there, still on its link, after Stop.
+    REQUIRE(link->parent != nullptr);
+    auto* survivor = findByName(*robot, "WristCam");
+    REQUIRE(survivor != nullptr);
+    CHECK(survivor->parent == link);
 }
 
 TEST_CASE("A PhysicsConfig on a robot link does not create a second body") {

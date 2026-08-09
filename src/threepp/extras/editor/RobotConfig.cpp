@@ -11,7 +11,9 @@
 #include <any>
 #include <cstddef>
 #include <cstdio>
+#include <filesystem>
 #include <functional>
+#include <memory>
 #include <string>
 #include <string_view>
 #include <unordered_map>
@@ -22,30 +24,6 @@ using namespace threepp::editor;
 using namespace threepp::editor::codec;
 
 namespace {
-
-    // Same contract as the other editor configs: locale-independent, trailing
-    // zeros trimmed, byte-identical for an unchanged value so saved documents
-    // stay diff-clean.
-    // Pre-order walk of everything below `root`, root excluded. Both sides of a
-    // transplant are built from the SAME URDF by the same loader, so a node's
-    // position in this walk identifies it — which is what makes carrying an
-    // authored entry across possible at all for the nodes that have no name.
-    // The same walk (and the same reasoning) is ObjectLoader::applyAssetOverrides'.
-    std::vector<Object3D*> flattenDescendants(Object3D& root) {
-
-        std::vector<Object3D*> flat;
-
-        std::function<void(Object3D&)> collect = [&](Object3D& node) {
-            for (auto* child : node.children) {
-                if (!child) continue;
-                flat.push_back(child);
-                collect(*child);
-            }
-        };
-        collect(root);
-
-        return flat;
-    }
 
     bool readBool(const Object3D& object, const char* key, bool fallback) {
 
@@ -74,6 +52,9 @@ namespace {
 }// namespace
 
 
+// Same contract as the other editor configs: locale-independent, trailing zeros
+// trimmed, byte-identical for an unchanged value so saved documents stay
+// diff-clean.
 std::string RobotConfig::encodeJoints(const std::vector<float>& values) {
 
     std::string out;
@@ -175,89 +156,211 @@ void RobotConfig::erase(Object3D& object) {
     for (const auto& key : argValueKeys(object)) object.userData.erase(key);
 }
 
-void threepp::editor::transplantRobot(Object3D& placeholder, const std::shared_ptr<Robot>& robot,
-                                      const std::function<void(const std::string&)>& log) {
+std::shared_ptr<Robot> threepp::editor::transplantRobot(Object3D& placeholder,
+                                                        const std::shared_ptr<Robot>& donor,
+                                                        const std::function<void(const std::string&)>& log) {
 
-    if (!robot) return;
+    if (!donor) return nullptr;
     auto* parent = placeholder.parent;
-    if (!parent) return;
+    if (!parent) return nullptr;
 
     const auto config = RobotConfig::read(placeholder).value_or(RobotConfig{});
 
-    // Collect each placeholder DESCENDANT's non-empty userData before the swap,
-    // keyed by its POSITION in the pre-order walk. Only descendants: the root's
-    // userData is copied wholesale just below, and a sensor authored on the root
-    // rides with it.
-    //
-    // Position, not name. A URDF's visual and collision groups are unnamed, and
-    // so is every mesh the geometry loader hands back — and those are exactly the
-    // nodes a viewport click drills down to, so a name-keyed carry-over dropped a
-    // sensor authored by clicking the robot. The name is kept alongside as the
-    // check that the two trees still line up (see below).
-    struct Carried {
-        std::size_t index;
-        std::string name;
-        std::unordered_map<std::string, std::any> data;
+    // First node with each name in the DOCUMENT's subtree. URDF link and joint
+    // names are unique within a file — the loader's own finalize() resolves the
+    // hierarchy by them — which is what makes this a lookup rather than a guess.
+    // The root is excluded: it can be neither a link nor a joint node, and a
+    // robot renamed to match one of its links would otherwise shadow that link
+    // (traverse visits the root first, and the first name wins).
+    std::unordered_map<std::string, Object3D*> byName;
+    placeholder.traverse([&](Object3D& node) {
+        if (&node == &placeholder || node.name.empty()) return;
+        byName.emplace(node.name, &node);
+    });
+
+    const auto lookup = [&](const std::string& name) -> Object3D* {
+        if (name.empty()) return nullptr;
+        const auto it = byName.find(name);
+        return it == byName.end() ? nullptr : it->second;
     };
 
-    std::vector<Carried> descendantData;
-    {
-        const auto flat = flattenDescendants(placeholder);
-        for (std::size_t i = 0; i < flat.size(); ++i) {
-            if (flat[i]->userData.empty()) continue;
-            descendantData.push_back({i, flat[i]->name, flat[i]->userData});
-        }
-    }
+    // The document's node for each of the donor's joints.
+    //
+    // Not by the joint node's own name: URDF link and joint names live in
+    // separate namespaces and a file is free to reuse one. The joint node is
+    // whatever sits between a link and its child link, so its child link — a
+    // name that IS unique — identifies it without depending on the loader having
+    // named the joint node at all. The name is the fallback for a document whose
+    // hierarchy has been rearranged.
+    const auto& donorJoints = donor->jointNodes();
+    const auto& donorInfos = donor->jointInfos();
 
-    // The root's identity, placement and userData move to the fresh robot.
-    robot->name = placeholder.name;
-    robot->uuid = placeholder.uuid;
-    robot->position.copy(placeholder.position);
-    robot->quaternion.copy(placeholder.quaternion);
-    robot->scale.copy(placeholder.scale);
-    robot->visible = placeholder.visible;
-    robot->userData = placeholder.userData;
+    std::vector<Object3D*> jointNodes(donorInfos.size(), nullptr);
+    std::size_t resolved = 0;
 
-    // Re-apply descendant userData onto the fresh subtree. Same position AND the
-    // same name is the same node; when the name disagrees the file has changed
-    // underneath and the position no longer identifies anything, so fall back to
-    // a name lookup before giving up. What cannot be placed is reported, not lost
-    // silently — for an unnamed node that is all that can be said about it.
-    const auto fresh = flattenDescendants(*robot);
+    for (std::size_t i = 0; i < donorInfos.size(); ++i) {
 
-    std::unordered_map<std::string, Object3D*> byName;
-    for (auto* node : fresh) {
-        if (node->name.empty()) continue;
-        byName.emplace(node->name, node);// first match wins
-    }
-
-    for (auto& entry : descendantData) {
-
-        Object3D* target = nullptr;
-        if (entry.index < fresh.size() && fresh[entry.index]->name == entry.name) {
-            target = fresh[entry.index];
-        } else if (!entry.name.empty()) {
-            if (const auto it = byName.find(entry.name); it != byName.end()) target = it->second;
-        }
-
-        if (!target) {
-            if (log) {
-                log("robot \"" + robot->name + "\": userData on " +
-                    (entry.name.empty() ? "node #" + std::to_string(entry.index)
-                                        : "\"" + entry.name + "\"") +
-                    " did not resolve after re-articulation (node gone from the URDF)");
+        if (auto* childLink = lookup(donorInfos[i].child)) {
+            // Not the placeholder itself: the ROOT link hangs directly off the
+            // robot, and no joint drives it.
+            if (childLink->parent && childLink->parent != &placeholder) {
+                jointNodes[i] = childLink->parent;
             }
-            continue;
         }
-        for (auto& [key, value] : entry.data) target->userData[key] = value;
+        if (!jointNodes[i] && i < donorJoints.size() && donorJoints[i]) {
+            jointNodes[i] = lookup(donorJoints[i]->name);
+        }
+        if (jointNodes[i]) ++resolved;
     }
 
-    for (std::size_t i = 0; i < config.joints.size() && i < robot->numDOF(); ++i) {
-        robot->setJointValue(i, config.joints[i]);
+    // Nothing to adopt, or nothing matched: an empty placeholder, or a file
+    // rebuilt from scratch. Plant the donor rather than hand back a robot with no
+    // joints — the annotations are worth less than the articulation — and say so.
+    // A jointless URDF (one rigid link) has nothing to resolve and is adopted on
+    // the strength of its subtree alone.
+    const bool adopt = !placeholder.children.empty() && (resolved > 0 || donorInfos.empty());
+
+    if (!adopt && log && !placeholder.children.empty()) {
+        log("robot \"" + placeholder.name + "\": none of the " +
+            std::to_string(donorInfos.size()) +
+            " joints matched a node in the saved subtree, so it was rebuilt from the file - "
+            "anything authored below the robot is gone (the file has likely changed since "
+            "the document was saved)");
     }
-    robot->showColliders(config.showColliders);
+
+    auto live = Robot::create();
+
+    // The root's identity, placement and userData become the live robot's,
+    // whichever subtree it ends up wearing.
+    live->name = placeholder.name;
+    live->uuid = placeholder.uuid;
+    live->position.copy(placeholder.position);
+    live->quaternion.copy(placeholder.quaternion);
+    live->scale.copy(placeholder.scale);
+    live->matrixAutoUpdate = placeholder.matrixAutoUpdate;
+    live->visible = placeholder.visible;
+    live->castShadow = placeholder.castShadow;
+    live->receiveShadow = placeholder.receiveShadow;
+    live->frustumCulled = placeholder.frustumCulled;
+    live->renderOrder = placeholder.renderOrder;
+    live->layers.disableAll();
+    for (unsigned int channel = 0; channel < 32; ++channel) {
+        if (placeholder.layers.mask() & (1u << channel)) live->layers.enable(channel);
+    }
+    live->animations = placeholder.animations;
+    live->userData = placeholder.userData;
+
+    // The saved joint values are indexed by the DONOR's DOF layout. When a joint
+    // fails to resolve the live table compacts around it, so each live DOF
+    // remembers the donor slot its value comes from — without this, every joint
+    // after a gap would inherit its neighbour's saved value.
+    std::vector<int> valueSlot;
+
+    if (adopt) {
+
+        // Move the document's subtree over wholesale, in order. Nothing is
+        // rebuilt, so nothing below the root can be lost.
+        std::vector<Object3D*> children = placeholder.children;
+        for (auto* child : children) {
+            if (!child) continue;
+            if (auto owned = child->removeFromParent()) {
+                live->add(owned);
+            } else {
+                // Attached by reference: the parent never owned it, so neither
+                // does the new one.
+                live->addRef(*child);
+            }
+        }
+
+        // The table itself, read off the donor and applied to the document's
+        // nodes. A co-owner, not a borrower: Robot keeps RAW pointers to its
+        // joint nodes in origPose_/articulatedJoints_, and it is the table's own
+        // shared_ptr that keeps those valid if a link is later deleted out of the
+        // hierarchy.
+        const auto refer = [](Object3D* node) {
+            if (node->weak_from_this().expired()) {
+                return std::shared_ptr<Object3D>(node, [](Object3D*) {});
+            }
+            return node->shared_from_this();
+        };
+
+        std::vector<std::string> unresolved;
+
+        for (const auto& link : donor->links()) {
+            if (!link) continue;
+            if (auto* node = lookup(link->name)) {
+                live->addLink(refer(node));
+            } else {
+                unresolved.push_back("link \"" + link->name + "\"");
+            }
+        }
+
+        for (std::size_t i = 0; i < donorInfos.size(); ++i) {
+            if (!jointNodes[i]) {
+                unresolved.push_back("joint \"" + donorInfos[i].name + "\"");
+                continue;
+            }
+            const auto [restPosition, restRotation] = donor->jointRestPose(i);
+            live->addJoint(refer(jointNodes[i]), donorInfos[i], restPosition, restRotation);
+            if (donorInfos[i].type != Robot::JointType::Fixed) {
+                valueSlot.push_back(donor->jointDof(i));
+            }
+        }
+
+        live->finalizeInPlace();
+        if (const auto& ee = donor->endEffectorLink(); !ee.empty()) live->setEndEffector(ee);
+
+        if (!unresolved.empty() && log) {
+            std::string names;
+            for (std::size_t i = 0; i < unresolved.size() && i < 4; ++i) {
+                names += (i ? ", " : "") + unresolved[i];
+            }
+            if (unresolved.size() > 4) names += " and " + std::to_string(unresolved.size() - 4) + " more";
+            log("robot \"" + live->name + "\": " +
+                std::filesystem::path(config.urdf).filename().string() + " names " + names +
+                " but the saved subtree has no matching node - those parts are not articulated");
+        }
+
+    } else {
+
+        // The donor's own hierarchy, which it already owns and has a table for.
+        // Re-hang it under the live root rather than returning the donor itself,
+        // so both branches hand back the same thing.
+        std::vector<Object3D*> children = donor->children;
+        for (auto* child : children) {
+            if (!child) continue;
+            if (auto owned = child->removeFromParent()) {
+                live->add(owned);
+            } else {
+                live->addRef(*child);
+            }
+        }
+        for (const auto& link : donor->links()) {
+            if (link) live->addLink(link);
+        }
+        for (std::size_t i = 0; i < donorInfos.size(); ++i) {
+            if (i >= donorJoints.size() || !donorJoints[i]) continue;
+            const auto [restPosition, restRotation] = donor->jointRestPose(i);
+            live->addJoint(donorJoints[i], donorInfos[i], restPosition, restRotation);
+            if (donorInfos[i].type != Robot::JointType::Fixed) {
+                valueSlot.push_back(donor->jointDof(i));
+            }
+        }
+        live->finalizeInPlace();
+        if (const auto& ee = donor->endEffectorLink(); !ee.empty()) live->setEndEffector(ee);
+    }
+
+    for (std::size_t i = 0; i < valueSlot.size() && i < live->numDOF(); ++i) {
+        const int slot = valueSlot[i];
+        if (slot >= 0 && static_cast<std::size_t>(slot) < config.joints.size()) {
+            live->setJointValue(i, config.joints[slot]);
+        }
+    }
+    live->showColliders(config.showColliders);
 
     const auto index = childIndex(*parent, placeholder);
     placeholder.removeFromParent();
-    insertChildAt(*parent, robot, index);
+    insertChildAt(*parent, live, index);
+
+    return live;
 }

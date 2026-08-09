@@ -38,6 +38,7 @@
 #include "threepp/objects/LineLoop.hpp"
 #include "threepp/objects/LineSegments.hpp"
 #include "threepp/objects/Points.hpp"
+#include "threepp/objects/Robot.hpp"
 #include "threepp/objects/Skeleton.hpp"
 #include "threepp/objects/SkinnedMesh.hpp"
 #include "threepp/objects/Sprite.hpp"
@@ -1126,10 +1127,137 @@ namespace {
         }
         if (type == "Group") return Group::create();
         if (type == "Bone") return Bone::create();
-        if (type == "Object3D") return Object3D::create();
+        // A robot writes its type as the plain Object3D it also is, so a reader
+        // without the articulation extension still gets the hierarchy — frozen,
+        // exactly as before this existed. With it, the object comes back live.
+        if (type == "Object3D") {
+            if (j.contains("threeppRobot")) return Robot::create();
+            return Object3D::create();
+        }
 
         ctx.warnings.add("unsupported object type '" + type + "' - skipped");
         return nullptr;
+    }
+
+    // ------------------------------------------------------- articulation
+
+    // Rebuild a Robot's joint table over the hierarchy that has just been
+    // parsed. See ObjectExporter::writeArticulation for what is in the block and
+    // why it is there; the short version is that this is what stops a document
+    // round trip from having to re-import the URDF, which is what used to throw
+    // away everything authored into a robot's subtree.
+    //
+    // The nodes are the document's, referenced by uuid. Robot's tables hold
+    // shared_ptrs and its origPose_/articulatedJoints_ hold RAW pointers into
+    // the same nodes, so the table has to be a co-owner: a URDF-built robot owns
+    // its links and joints outright, and that ownership is what keeps those raw
+    // pointers valid when a link is deleted out of the hierarchy. Sharing the
+    // node's existing control block (shared_from_this) keeps that property
+    // without duplicating the node.
+    void restoreArticulation(Robot& robot, const json& j, Warnings& warnings) {
+
+        std::unordered_map<std::string, Object3D*> byUuid;
+        robot.traverse([&](Object3D& node) { byUuid.emplace(node.uuid, &node); });
+
+        const auto find = [&](const json& entry, const char* key) -> Object3D* {
+            if (!entry.contains(key) || !entry[key].is_string()) return nullptr;
+            const auto it = byUuid.find(entry[key].get<std::string>());
+            return it == byUuid.end() ? nullptr : it->second;
+        };
+
+        const auto refer = [](Object3D* node) {
+            // Everything the loader builds is heap-shared; a node that is not
+            // (one on the stack) can still be referred to, just not co-owned.
+            if (node->weak_from_this().expired()) {
+                return std::shared_ptr<Object3D>(node, [](Object3D*) {});
+            }
+            return node->shared_from_this();
+        };
+
+        std::size_t missing = 0;
+
+        if (j.contains("links") && j["links"].is_array()) {
+            for (const auto& uuid : j["links"]) {
+                if (!uuid.is_string()) continue;
+                const auto it = byUuid.find(uuid.get<std::string>());
+                if (it == byUuid.end()) {
+                    ++missing;
+                    continue;
+                }
+                robot.addLink(refer(it->second));
+            }
+        }
+
+        // Values are applied only after the tables are complete: setJointValue
+        // indexes by DOF, and the DOF count is not known until the last joint
+        // is in.
+        std::vector<float> values;
+
+        if (j.contains("joints") && j["joints"].is_array()) {
+            for (const auto& entry : j["joints"]) {
+
+                auto* node = find(entry, "node");
+                if (!node) {
+                    ++missing;
+                    continue;
+                }
+
+                Robot::JointInfo info;
+                info.name = value<std::string>(entry, "name", "");
+                const auto type = value<std::string>(entry, "type", "fixed");
+                info.type = type == "revolute"    ? Robot::JointType::Revolute
+                            : type == "prismatic" ? Robot::JointType::Prismatic
+                                                  : Robot::JointType::Fixed;
+                info.parent = value<std::string>(entry, "parent", "");
+                info.child = value<std::string>(entry, "child", "");
+
+                if (entry.contains("axis") && entry["axis"].size() >= 3) {
+                    const auto& a = entry["axis"];
+                    info.axis.set(a[0].get<float>(), a[1].get<float>(), a[2].get<float>());
+                }
+                if (entry.contains("limit") && entry["limit"].size() >= 2) {
+                    const auto& l = entry["limit"];
+                    info.range = Robot::JointRange{l[0].get<float>(), l[1].get<float>()};
+                }
+
+                // The node is sitting in its DRIVEN pose, which is the document's
+                // to keep; the rest pose is the one the table needs.
+                Vector3 restPosition{node->position};
+                Quaternion restRotation{node->quaternion};
+                if (entry.contains("rest") && entry["rest"].size() >= 7) {
+                    const auto& r = entry["rest"];
+                    restPosition.set(r[0].get<float>(), r[1].get<float>(), r[2].get<float>());
+                    restRotation.set(r[3].get<float>(), r[4].get<float>(),
+                                     r[5].get<float>(), r[6].get<float>());
+                }
+
+                robot.addJoint(refer(node), info, restPosition, restRotation);
+
+                if (info.type != Robot::JointType::Fixed) {
+                    values.push_back(value(entry, "value", 0.f));
+                }
+            }
+        }
+
+        robot.finalizeInPlace();
+
+        if (const auto ee = value<std::string>(j, "endEffector", ""); !ee.empty()) {
+            robot.setEndEffector(ee);
+        }
+
+        // Re-driving from the stored values does not move anything — the nodes
+        // are already in this pose — but it is what puts the same numbers in the
+        // joint table, so an inspector reads the angles the robot is standing in
+        // rather than a row of zeros.
+        for (std::size_t i = 0; i < values.size() && i < robot.numDOF(); ++i) {
+            robot.setJointValue(i, values[i]);
+        }
+
+        if (missing > 0) {
+            warnings.add("robot '" + robot.name + "': the articulation table references " +
+                         std::to_string(missing) +
+                         " node(s) missing from the hierarchy - those joints came back frozen");
+        }
     }
 
     // ------------------------------------------------- linked asset subtrees
@@ -1378,6 +1506,14 @@ namespace {
 
         } else {
             for (const auto& child : children) object->add(child);
+        }
+
+        // After the children: the joint table names the nodes it drives, and
+        // they have to be in the tree before they can be found.
+        if (j.contains("threeppRobot")) {
+            if (auto* robot = object->as<Robot>()) {
+                restoreArticulation(*robot, j["threeppRobot"], ctx.warnings);
+            }
         }
 
         return object;

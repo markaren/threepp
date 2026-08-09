@@ -27,6 +27,7 @@
 #include "threepp/objects/LOD.hpp"
 #include "threepp/objects/Line.hpp"
 #include "threepp/objects/Points.hpp"
+#include "threepp/objects/Robot.hpp"
 #include "threepp/objects/Skeleton.hpp"
 #include "threepp/objects/SkinnedMesh.hpp"
 #include "threepp/objects/Sprite.hpp"
@@ -973,6 +974,90 @@ namespace {
         return nodes;
     }
 
+    // ------------------------------------------------------- articulation
+
+    // A Robot is an ordinary Object3D hierarchy plus a joint table: which node
+    // each joint drives, on what axis, between what limits, and what that node's
+    // transform is with the joint at zero. Not one bit of that is derivable from
+    // the transforms the rest of the document carries, so without this block the
+    // only way to get a saved robot moving again is to re-import its URDF — and
+    // that rebuilds the subtree from the file, discarding anything authored into
+    // it (a camera bolted to the wrist, a collider deleted, a material
+    // retouched). Writing the table down is what makes a robot a normal part of
+    // the document rather than a live view of a file.
+    //
+    // Nodes are referenced by uuid, which the loader preserves, so the block
+    // survives anything that keeps identities — including the play snapshot.
+    // Ignored by three.js and by any older threepp: they read the same
+    // hierarchy, just frozen, exactly as they did before this existed.
+    json writeArticulation(Robot& robot) {
+
+        json out;
+        // The resolved link, not "" for the default: the default is derived
+        // (the deepest leaf), and pinning it here means a later change to that
+        // derivation cannot silently re-aim an existing document's IK.
+        out["endEffector"] = robot.endEffectorLink();
+
+        json links = json::array();
+        for (const auto& link : robot.links()) {
+            if (link) links.push_back(link->uuid);
+        }
+        out["links"] = links;
+
+        json joints = json::array();
+
+        const auto& nodes = robot.jointNodes();
+        const auto& infos = robot.jointInfos();
+        // Copied once, and bounds-checked below rather than read through
+        // getJointValue: on a Robot assembled by hand but never finalize()d the
+        // value vector is still empty, and an exporter must not crash on a
+        // malformed scene — the pose it cannot read is simply not written.
+        const auto values = robot.jointValues();
+
+        for (std::size_t i = 0; i < nodes.size() && i < infos.size(); ++i) {
+
+            if (!nodes[i]) continue;
+            const auto& info = infos[i];
+
+            json entry;
+            entry["node"] = nodes[i]->uuid;
+            entry["name"] = info.name;
+            entry["type"] = info.type == Robot::JointType::Revolute    ? "revolute"
+                            : info.type == Robot::JointType::Prismatic ? "prismatic"
+                                                                       : "fixed";
+            entry["axis"] = json::array({noNegativeZero(info.axis.x),
+                                         noNegativeZero(info.axis.y),
+                                         noNegativeZero(info.axis.z)});
+            entry["parent"] = info.parent;
+            entry["child"] = info.child;
+            // Absent means unlimited, which is a URDF continuous joint and not
+            // the same thing as a limit of zero.
+            if (info.range) {
+                entry["limit"] = json::array({info.range->min, info.range->max});
+            }
+
+            const auto [position, rotation] = robot.jointRestPose(i);
+            entry["rest"] = json::array({noNegativeZero(position.x),
+                                         noNegativeZero(position.y),
+                                         noNegativeZero(position.z),
+                                         noNegativeZero(rotation.x),
+                                         noNegativeZero(rotation.y),
+                                         noNegativeZero(rotation.z),
+                                         noNegativeZero(rotation.w)});
+
+            // Fixed joints have no DOF slot and so no value to carry.
+            if (const int dof = robot.jointDof(i);
+                dof >= 0 && static_cast<std::size_t>(dof) < values.size()) {
+                entry["value"] = values[static_cast<std::size_t>(dof)];
+            }
+
+            joints.push_back(entry);
+        }
+        out["joints"] = joints;
+
+        return out;
+    }
+
     // -------------------------------------------------------------- objects
 
     json writeObject(Object3D& object, Meta& meta, bool includeMatrix = true);
@@ -1149,6 +1234,15 @@ namespace {
         // ---- sprite pivot (threepp extension; ignored by three.js)
         if (auto* sprite = dynamic_cast<Sprite*>(&object)) {
             data["center"] = toArray(sprite->center);
+        }
+
+        // ---- articulation (threepp extension; ignored by three.js)
+        // Below the linked-asset return on purpose: a referenced subtree comes
+        // back from its own file as a live Robot, and the uuids this block names
+        // are regenerated by that re-import, so there they would resolve to
+        // nothing.
+        if (auto* robot = dynamic_cast<Robot*>(&object)) {
+            data["threeppRobot"] = writeArticulation(*robot);
         }
 
         // ---- geometry / material

@@ -264,27 +264,55 @@ TEST_CASE("an argument that changes the robot survives re-articulation") {
         const auto restored = snapshot.restore(&error);
         REQUIRE(restored);
 
-        // Stop re-articulates whatever came back carrying a urdf reference.
-        Object3D* placeholder = nullptr;
+        // The document carries the joint table now, so Stop hands back a live
+        // robot and never re-reads the file. The arguments still have to be on
+        // it: the physics session builds its articulation from them, and so does
+        // any later rebuild of a document written before that block existed.
+        Robot* live = nullptr;
         restored->traverse([&](Object3D& node) {
-            if (!placeholder && !node.as<Robot>() && RobotConfig::read(node)) placeholder = &node;
+            if (!live) live = node.as<Robot>();
         });
-        REQUIRE(placeholder != nullptr);
+        REQUIRE(live != nullptr);
+        CHECK(live->numDOF() == 2);
 
-        const auto config2 = *RobotConfig::read(*placeholder);
-        REQUIRE(config2.xacroArgs.size() == 1);
-        CHECK(config2.xacroArgs.front().second == "2");
+        const auto config2 = RobotConfig::read(*live);
+        REQUIRE(config2);
+        REQUIRE(config2->xacroArgs.size() == 1);
+        CHECK(config2->xacroArgs.front().second == "2");
 
-        const auto fresh = rebuild(config2);
+        // And the rebuild those arguments feed still produces the same robot.
+        const auto fresh = rebuild(*config2);
+        REQUIRE(fresh);
+        CHECK(fresh->numDOF() == 2);
+    }
+
+    SECTION("through the pre-articulation-block path, which re-imports the file") {
+
+        // A document written before the joint table was part of the format: the
+        // subtree is there, frozen. transplantRobot re-imports for the table and
+        // keeps the subtree — including the arguments, ready for the next one.
+        Scene scene;
+        robot->name = "arm";
+
+        auto placeholder = robot->clone();
+        placeholder->uuid = robot->uuid;
+        scene.add(placeholder);
+
+        const auto config2 = RobotConfig::read(*placeholder);
+        REQUIRE(config2);
+        REQUIRE(config2->xacroArgs.size() == 1);
+
+        const auto fresh = rebuild(*config2);
         REQUIRE(fresh);
         CHECK(fresh->numDOF() == 2);
 
-        // And after the transplant the arguments are still on the live robot,
-        // ready for the NEXT rebuild — a play/stop cycle is not a one-shot.
-        transplantRobot(*placeholder, fresh);
-        const auto again = RobotConfig::read(*fresh);
+        const auto live = transplantRobot(*placeholder, fresh);
+        REQUIRE(live);
+        CHECK(live->numDOF() == 2);
+
+        const auto again = RobotConfig::read(*live);
         REQUIRE(again);
-        CHECK(again->xacroArgs == config2.xacroArgs);
+        CHECK(again->xacroArgs == config2->xacroArgs);
     }
 }
 

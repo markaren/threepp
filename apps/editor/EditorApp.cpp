@@ -2801,10 +2801,17 @@ void EditorApp::setJointValue(Robot& robot, std::size_t index, float radians) {
 
 void EditorApp::rearticulateRobots(Scene& scene) {
 
-    // A document round trip flattens a Robot into a plain Object3D: the pose
-    // survives, the joint table does not. Rebuild from the referenced URDF and
-    // transplant, keeping the placeholder's identity and placement so uuid
-    // lookups (selection, undo rebinding) still resolve.
+    // A document written before the articulation extension flattens a Robot into
+    // a plain Object3D: the pose survives, the joint table does not. Re-import
+    // the referenced URDF and move its joint table onto the subtree the document
+    // carries, keeping the placeholder's identity and placement so uuid lookups
+    // (selection, undo rebinding) still resolve.
+    //
+    // Documents written since do not come through here at all — ObjectLoader
+    // hands back a live Robot, which is the branch just below. That is the whole
+    // point of the extension: a play/stop cycle no longer reads the URDF, so it
+    // cannot rebuild the subtree from it, so it cannot delete anything authored
+    // into it.
     std::vector<Object3D*> placeholders;
     scene.traverse([&placeholders](Object3D& object) {
         if (auto* robot = object.as<Robot>()) {
@@ -2852,9 +2859,10 @@ void EditorApp::rearticulateRobots(Scene& scene) {
             continue;
         }
 
-        // The identity/placement transplant AND the descendant-userData
-        // preservation (a sensor authored on a link, not the root) live in a free
-        // function so they can be tested headlessly — see transplantRobot.
+        // Only the joint table is taken from the re-import; the subtree stays the
+        // document's. That, the identity/placement handover and the reporting all
+        // live in a free function so they can be tested headlessly — see
+        // transplantRobot.
         transplantRobot(*placeholder, robot, [this](const std::string& m) { log(m); });
     }
 }

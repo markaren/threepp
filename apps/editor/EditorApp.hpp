@@ -564,8 +564,9 @@ namespace threepp::editor {
         // --- viewport markers ----------------------------------------------
         // Billboarded SVG icons standing in for objects that draw nothing
         // (cameras, lights), plus the frustum helper for a selected camera.
-        // Rebuilds live Robots over the frozen placeholders a loaded document
-        // leaves behind. See RobotConfig.
+        // Re-drives loaded Robots from their saved joint values, and revives the
+        // frozen placeholders a pre-articulation-block document leaves behind.
+        // See RobotConfig.
         void rearticulateRobots(Scene& scene);
         // Drives one joint and records the new pose in userData, so the scene
         // carries the pose it is showing.

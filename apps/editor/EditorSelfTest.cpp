@@ -4684,6 +4684,61 @@ int EditorApp::runSelfTest() {
                 }
             }
 
+            // A node authored INTO the robot — the way a robot cell is built:
+            // drop a camera on the wrist, a marker on a link. Play/Stop used to
+            // rebuild the robot's subtree from its URDF, which deleted every one
+            // of them; the document carries the joint table now, so Stop restores
+            // the subtree it saved instead of re-reading the file.
+            if (live) {
+
+                Object3D* mount = nullptr;
+                live->traverse([&](Object3D& node) {
+                    // A LINK, not the root and not a mesh: the node an authored
+                    // camera would actually be parented to.
+                    if (mount || &node == live || node.name.empty()) return;
+                    if (node.type() == "Mesh") return;
+                    mount = &node;
+                });
+                check(mount != nullptr, "the robot has a named node to author onto");
+
+                if (mount) {
+                    const auto mountUuid = mount->uuid;
+
+                    auto bolted = ObjectFactory::createCamera(document_.scene());
+                    bolted->name = "Bolted Sensor Cam";
+                    bolted->position.set(0.f, 0.f, 0.1f);
+                    const auto boltedUuid = bolted->uuid;
+                    addObject(bolted, *mount, "Bolt Camera To Link");
+                    step();
+
+                    startPlay();
+                    step(3);
+                    stopPlay();
+                    step();
+
+                    Object3D* survivor = nullptr;
+                    document_.scene().traverse([&](Object3D& o) {
+                        if (!survivor && o.uuid == boltedUuid) survivor = &o;
+                    });
+                    check(survivor != nullptr,
+                          "a node authored under a robot link survives play/stop");
+                    check(survivor && survivor->parent && survivor->parent->uuid == mountUuid,
+                          "and it is still parented to the link it was bolted to");
+
+                    // Put the robot back the way the rest of this section expects
+                    // to find it.
+                    if (survivor) survivor->removeFromParent();
+                    step();
+
+                    Object3D* rebuiltRobot = nullptr;
+                    document_.scene().traverse([&](Object3D& o) {
+                        if (!rebuiltRobot && o.uuid == uuid) rebuiltRobot = &o;
+                    });
+                    found = rebuiltRobot;
+                    live = rebuiltRobot ? rebuiltRobot->as<Robot>() : nullptr;
+                }
+            }
+
             // Collision hulls: hidden on import, and the opt-in has to outlive
             // the rebuild or it would reset every time play is pressed. A URDF
             // with no <collision> elements has nothing to toggle, so the checks
