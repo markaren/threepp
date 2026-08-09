@@ -106,6 +106,11 @@ bool SensorConfig::isRanging(Type type) {
     return type == Type::Depth || type == Type::Lidar;
 }
 
+bool SensorConfig::isPinhole(Type type) {
+
+    return type == Type::Depth || type == Type::Camera;
+}
+
 std::uint64_t SensorConfig::streamSeed(int index) const {
 
     // SplitMix64's own mixing step: decorrelates the sub-streams of one authored

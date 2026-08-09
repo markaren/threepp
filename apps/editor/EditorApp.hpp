@@ -238,8 +238,16 @@ namespace threepp::editor {
         void drawVehicleSection(Object3D& object);
         // Sensor authoring: type, rate, seed and the per-type noise model, all
         // written into userData["sensor"]. Fields for the types you are not on
-        // are hidden, never dropped — see SensorConfig.
+        // are hidden, never dropped — see SensorConfig. The host gates the type
+        // list: a Camera hosts the pinhole sensors (its frustum is theirs),
+        // everything else hosts the rest.
         void drawSensorSection(Object3D& object);
+        // The migration behind the legacy hint in that section: a pinhole
+        // sensor authored on a plain object moves onto a new camera child whose
+        // frustum is stamped from the config, in one undo step. The child sits
+        // at the host's origin with identity rotation, so the aim the host's
+        // transform encoded is exactly the aim the camera wakes up with.
+        void moveSensorToCameraChild(Object3D& host);
         // Shown for a spline and, in its point form, for one of its control
         // points — both are ordinary scene nodes, so the section is what tells
         // them apart.

@@ -10,6 +10,7 @@
 #include "threepp/extras/editor/GeneratorConfig.hpp"
 #include "threepp/extras/editor/JointConfig.hpp"
 #include "threepp/extras/editor/MaterialTextureSlots.hpp"
+#include "threepp/extras/editor/ObjectFactory.hpp"
 #include "threepp/extras/editor/PhysicsConfig.hpp"
 #include "threepp/extras/editor/RobotConfig.hpp"
 #include "threepp/extras/editor/ScriptConfig.hpp"
@@ -3951,10 +3952,38 @@ void EditorApp::drawSensorSection(Object3D& object) {
     if (!section("Sensor", false)) return;
 
     auto* target = &object;
+    // The host gates what can live here: a Camera hosts the pinhole sensors —
+    // its frustum IS their pose and optics — and everything else hosts the
+    // rest. Authoring-side only: SensorPlaySession builds whatever it finds,
+    // so a scene written before the gate still plays.
+    auto* hostCamera = object.as<PerspectiveCamera>();
     auto config = SensorConfig::read(object).value_or(SensorConfig{});
+    // The camera is the frustum's source of truth and the string follows it —
+    // passively, outside the command stack. The undoable edit is the camera's
+    // (the Camera section above); this derived copy heals whenever the two are
+    // on screen together, so undoing a FOV change heals right back too. Play
+    // reads the camera directly either way (see SensorPlaySession::build).
+    if (hostCamera && config.enabled && SensorConfig::isPinhole(config.type) && !isPlaying() &&
+        (config.fovY != hostCamera->fov ||
+         config.nearPlane != hostCamera->nearPlane ||
+         config.farPlane != hostCamera->farPlane)) {
+        config.fovY = hostCamera->fov;
+        config.nearPlane = hostCamera->nearPlane;
+        config.farPlane = hostCamera->farPlane;
+        config.write(object);
+        document_.setDirty(true);
+    }
     const auto before = config;
 
     const auto commit = [&](SensorConfig after, const char* label) {
+        // On a camera host the camera's frustum is the truth (the play session
+        // reads it directly); stamp it into the flat string on every write so
+        // userData never drifts from what Play will build.
+        if (hostCamera && SensorConfig::isPinhole(after.type)) {
+            after.fovY = hostCamera->fov;
+            after.nearPlane = hostCamera->nearPlane;
+            after.farPlane = hostCamera->farPlane;
+        }
         commands_.execute(makeProperty<SensorConfig>(
                 label, "sensor:" + object.uuid,
                 [target](const SensorConfig& value) { value.write(*target); },
@@ -3970,6 +3999,11 @@ void EditorApp::drawSensorSection(Object3D& object) {
     if (ImGui::Checkbox("Enabled", &enabled)) {
         auto after = config;
         after.enabled = enabled;
+        // A camera's default sensor is itself: the colour camera. The generic
+        // default (IMU) belongs to the link-shaped hosts.
+        if (enabled && hostCamera && !SensorConfig::isPinhole(after.type)) {
+            after.type = SensorConfig::Type::Camera;
+        }
         commit(after, enabled ? "Add Sensor" : "Remove Sensor");
         // Re-read: the click already changed the document, and drawing the rest
         // of this frame from the pre-click value would show the wrong fields for
@@ -3978,8 +4012,14 @@ void EditorApp::drawSensorSection(Object3D& object) {
     }
 
     if (!config.enabled) {
-        ImGui::TextColored(theme::muted(),
-                           "Measures in this object's world frame. The transform gizmo aims it.");
+        if (hostCamera) {
+            ImGui::TextColored(theme::muted(),
+                               "Records this camera's frustum. Aim the camera; the dock "
+                               "shows exactly what it will capture.");
+        } else {
+            ImGui::TextColored(theme::muted(),
+                               "Measures in this object's world frame. The transform gizmo aims it.");
+        }
         ImGui::TreePop();
         return;
     }
@@ -3987,18 +4027,52 @@ void EditorApp::drawSensorSection(Object3D& object) {
     ImGui::PushItemWidth(-110 * contentScale_);
 
     {
-        static const char* types[] = {"IMU", "Depth Camera", "LIDAR",
-                                      "Joint Encoder", "Contact", "Force/Torque",
-                                      "Camera"};
-        int type = static_cast<int>(config.type);
-        if (ImGui::Combo("Type", &type, types, IM_ARRAYSIZE(types))) {
+        // Only what the host can carry — plus whatever is ALREADY here, so the
+        // combo never lies about a legacy rig (a depth eye authored on a plain
+        // object before the pinholes moved onto cameras).
+        static constexpr SensorConfig::Type all[] = {
+                SensorConfig::Type::Imu, SensorConfig::Type::Depth,
+                SensorConfig::Type::Lidar, SensorConfig::Type::Encoder,
+                SensorConfig::Type::Contact, SensorConfig::Type::ForceTorque,
+                SensorConfig::Type::Camera};
+        std::vector<SensorConfig::Type> offered;
+        std::vector<const char*> names;
+        int current = 0;
+        for (const auto candidate : all) {
+            const bool belongs = SensorConfig::isPinhole(candidate) == (hostCamera != nullptr);
+            if (!belongs && candidate != config.type) continue;
+            if (candidate == config.type) current = static_cast<int>(offered.size());
+            offered.push_back(candidate);
+            names.push_back(SensorConfig::label(candidate));
+        }
+        if (ImGui::Combo("Type", &current, names.data(), static_cast<int>(names.size()))) {
             auto after = config;
-            after.type = static_cast<SensorConfig::Type>(type);
+            after.type = offered[static_cast<std::size_t>(current)];
             // Only the type changes. Every other key is written regardless of
             // type (see SensorConfig), so the settings of the type being left
             // behind are still there when the user comes back to it.
             commit(after, "Sensor Type");
             config = SensorConfig::read(object).value_or(config);
+        }
+    }
+
+    // The legacy shape: a pinhole authored on a plain object, from before these
+    // moved onto cameras. It still plays — the gate is authoring-side — but
+    // everything a camera host gives (the frustum helper, the dock preview,
+    // fov/near/far in one place) is one click away.
+    if (!hostCamera && SensorConfig::isPinhole(config.type)) {
+        ImGui::TextColored(theme::warning(),
+                           "%s sensors live on a Camera object now.",
+                           SensorConfig::label(config.type));
+        const auto uuid = object.uuid;
+        if (ImGui::SmallButton("Move To Camera Child")) {
+            // Deferred like every graph edit launched from a panel: the add
+            // reshapes the hierarchy this frame is still drawing.
+            deferred_ = [this, uuid] {
+                if (auto* live = findByUuid(document_.scene(), uuid)) {
+                    moveSensorToCameraChild(*live);
+                }
+            };
         }
     }
 
@@ -4159,9 +4233,13 @@ void EditorApp::drawSensorSection(Object3D& object) {
         }
 
         case SensorConfig::Type::Depth: {
-            floatField(
-                    "FOV (deg)", config.fovY, 0.25f, 1.f, 179.f,
-                    [](SensorConfig& c, float v) { c.fovY = v; }, "Depth FOV", "%.1f");
+            // On a camera host the frustum is the camera's; only the image
+            // dimensions are the sensor's own.
+            if (!hostCamera) {
+                floatField(
+                        "FOV (deg)", config.fovY, 0.25f, 1.f, 179.f,
+                        [](SensorConfig& c, float v) { c.fovY = v; }, "Depth FOV", "%.1f");
+            }
             intField(
                     "Width", config.width, 1.f, 8, SensorConfig::maxImageSize,
                     [](SensorConfig& c, int v) { c.width = v; }, "Depth Width");
@@ -4172,9 +4250,11 @@ void EditorApp::drawSensorSection(Object3D& object) {
         }
 
         case SensorConfig::Type::Camera: {
-            floatField(
-                    "FOV (deg)", config.fovY, 0.25f, 1.f, 179.f,
-                    [](SensorConfig& c, float v) { c.fovY = v; }, "Camera FOV", "%.1f");
+            if (!hostCamera) {
+                floatField(
+                        "FOV (deg)", config.fovY, 0.25f, 1.f, 179.f,
+                        [](SensorConfig& c, float v) { c.fovY = v; }, "Camera FOV", "%.1f");
+            }
             intField(
                     "Width", config.width, 1.f, 8, SensorConfig::maxImageSize,
                     [](SensorConfig& c, int v) { c.width = v; }, "Camera Width");
@@ -4238,14 +4318,24 @@ void EditorApp::drawSensorSection(Object3D& object) {
     // depend on how long ago the previous scan was.
     if (SensorConfig::isVision(config.type)) {
         ImGui::Spacing();
-        floatField(
-                "Near (m)", config.nearPlane, 0.005f, 0.001f, 100.f,
-                [](SensorConfig& c, float v) { c.nearPlane = v; }, "Sensor Near", "%.3f");
-        floatField(
-                "Far (m)", config.farPlane, 0.25f, 0.01f, 10000.f,
-                [](SensorConfig& c, float v) { c.farPlane = v; }, "Sensor Far", "%.2f");
-        if (config.farPlane <= config.nearPlane) {
-            ImGui::TextColored(theme::warning(), "Far must be beyond Near");
+        if (hostCamera && SensorConfig::isPinhole(config.type)) {
+            // One source of truth: the Camera section above is where the
+            // frustum is edited, so these numbers are shown, not editable —
+            // two drag fields for the same plane would fight.
+            ImGui::TextColored(theme::muted(),
+                               "Frustum from this camera: FOV %.1f deg, near %.3f, far %.2f.",
+                               hostCamera->fov, hostCamera->nearPlane, hostCamera->farPlane);
+            ImGui::TextColored(theme::muted(), "Edit them in the Camera section.");
+        } else {
+            floatField(
+                    "Near (m)", config.nearPlane, 0.005f, 0.001f, 100.f,
+                    [](SensorConfig& c, float v) { c.nearPlane = v; }, "Sensor Near", "%.3f");
+            floatField(
+                    "Far (m)", config.farPlane, 0.25f, 0.01f, 10000.f,
+                    [](SensorConfig& c, float v) { c.farPlane = v; }, "Sensor Far", "%.2f");
+            if (config.farPlane <= config.nearPlane) {
+                ImGui::TextColored(theme::warning(), "Far must be beyond Near");
+            }
         }
     }
 
@@ -4290,4 +4380,103 @@ void EditorApp::drawSensorSection(Object3D& object) {
     ImGui::TextColored(theme::muted(), "Stored in userData[\"sensor\"]");
 
     ImGui::TreePop();
+}
+
+namespace {
+
+    // "Move To Camera Child" in ONE undo step. Three commands — add the
+    // camera, write its config, clear the host's — would be three entries,
+    // because the stack's transactions coalesce by merge key only (see
+    // CommandStack::push), and a half-undone move is the worst of both
+    // models: a scene with two of the sensor, or none. Same shape as
+    // EditorApp.cpp's RegenerateCommand, and for the same reason.
+    class MoveSensorToCameraCommand: public Command {
+
+    public:
+        MoveSensorToCameraCommand(Object3D& host, std::shared_ptr<Object3D> camera,
+                                  SensorConfig config)
+            : host_(&host), camera_(std::move(camera)), config_(config),
+              hostUuid_(host.uuid), cameraUuid_(camera_->uuid) {}
+
+        void redo() override {
+
+            if (!host_ || !camera_) return;
+            host_->add(camera_);
+            config_.write(*camera_);
+            SensorConfig::erase(*host_);
+        }
+
+        void undo() override {
+
+            if (camera_) camera_->removeFromParent();
+            if (host_) config_.write(*host_);
+        }
+
+        [[nodiscard]] std::string name() const override { return "Move Sensor To Camera"; }
+
+        bool mergeWith(const Command&) override { return false; }
+
+        // The camera is what the history keeps alive; whether it is currently
+        // in the scene or held detached is the stack's to weigh.
+        void retainedRoots(std::vector<Object3D*>& out) const override {
+
+            if (camera_) out.push_back(camera_.get());
+        }
+
+        [[nodiscard]] bool rebind(Object3D& root) override {
+
+            auto* host = findByUuid(root, hostUuid_);
+            if (!host || !camera_) return false;
+            host_ = host;
+            // Same contract as AddObjectCommand: after a scene replace the
+            // camera usually came back as a fresh instance behind the same
+            // uuid, and undo must remove THAT one. Absent from the new graph
+            // (the move currently undone), the retained instance stays the
+            // target — the shared_ptr keeps it alive.
+            if (auto* live = findByUuid(root, cameraUuid_)) {
+                auto owned = live->weak_from_this().lock();
+                if (!owned) return false;
+                camera_ = std::move(owned);
+            }
+            return true;
+        }
+
+    private:
+        Object3D* host_;
+        std::shared_ptr<Object3D> camera_;
+        SensorConfig config_;
+        std::string hostUuid_;
+        std::string cameraUuid_;
+    };
+
+}// namespace
+
+void EditorApp::moveSensorToCameraChild(Object3D& host) {
+
+    // The same gate addObject holds for every add; asked here because the
+    // bespoke command below does not route through it.
+    if (rejectWhilePlaying("Move Sensor To Camera")) return;
+
+    const auto config = SensorConfig::read(host);
+    if (!config || !config->enabled || !SensorConfig::isPinhole(config->type)) return;
+
+    auto camera = ObjectFactory::createCamera(document_.scene());
+    // At the host's origin, axes aligned: the host's transform is what aimed
+    // this sensor until now, and identity here keeps that aim exactly.
+    camera->position.set(0, 0, 0);
+    // The authored numbers survive the move: the camera is stamped FROM the
+    // config, and only from here on does the relationship invert.
+    camera->fov = std::clamp(config->fovY, 1.f, 179.f);
+    camera->nearPlane = std::max(config->nearPlane, 1e-3f);
+    camera->farPlane = std::max(config->farPlane, camera->nearPlane + 1e-3f);
+    camera->updateProjectionMatrix();
+
+    auto* added = camera.get();
+    commands_.execute(std::make_unique<MoveSensorToCameraCommand>(host, std::move(camera), *config));
+    document_.setDirty(true);
+    // What addObject would have done for the node it adds — and selecting a
+    // camera is also what aims the dock at it, so the preview the legacy hint
+    // promised is on screen when the click lands.
+    selectObject(added);
+    scrollTo_ = added;
 }

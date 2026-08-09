@@ -49,6 +49,7 @@
 #include "threepp/extras/editor/PlaySession.hpp"
 #include "threepp/extras/editor/SensorConfig.hpp"
 
+#include "threepp/cameras/PerspectiveCamera.hpp"
 #include "threepp/helpers/CameraSensor.hpp"
 #include "threepp/helpers/DepthSensor.hpp"
 #include "threepp/helpers/LidarSensor.hpp"
@@ -588,13 +589,27 @@ namespace threepp::editor {
                 return;
             }
 
-            auto entry = makeEntry(node, config);
+            // A pinhole hosted on a camera reads its frustum FROM the camera,
+            // whatever the flat string says: the Camera section of the
+            // inspector is where those numbers are edited, and a stale
+            // userData copy must not out-vote it. Everywhere else the config
+            // is the only frustum there is.
+            SensorConfig effective = config;
+            if (SensorConfig::isPinhole(config.type)) {
+                if (const auto* camera = node.as<PerspectiveCamera>()) {
+                    effective.fovY = camera->fov;
+                    effective.nearPlane = camera->nearPlane;
+                    effective.farPlane = camera->farPlane;
+                }
+            }
+
+            auto entry = makeEntry(node, effective);
             if (config.type == SensorConfig::Type::Depth) {
-                buildDepth(*entry, config);
+                buildDepth(*entry, effective);
             } else if (config.type == SensorConfig::Type::Camera) {
-                buildCamera(*entry, config);
+                buildCamera(*entry, effective);
             } else {
-                buildLidar(*entry, config);
+                buildLidar(*entry, effective);
             }
             commit(std::move(entry));
         }

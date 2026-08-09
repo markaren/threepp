@@ -168,6 +168,13 @@ namespace threepp::editor {
         // per-scan CSV — asks THIS rather than isVision.
         [[nodiscard]] static bool isRanging(Type type);
 
+        // The PINHOLE subset of the vision sensors: the two whose whole pose is
+        // a frustum, which is why the editor hosts them on a Camera object —
+        // aim it like a camera, read fov/near/far off it. The lidar is vision
+        // but not pinhole: it sees 360 degrees, so there is no frustum for a
+        // camera node to be the truth of.
+        [[nodiscard]] static bool isPinhole(Type type);
+
         // Seed for the numbered sub-stream `index`, so the gyro, the
         // accelerometer and a range channel of ONE authored sensor do not all
         // draw from the same sequence (which would correlate them) while still

@@ -765,6 +765,40 @@ int EditorApp::runScreenshot() {
     playFor(0.3f);
     wrote = shoot(sibling("_campreview")) && wrote;
 
+    // And the dock as SENSOR preview: a camera-hosted colour sensor, selected,
+    // still in edit mode — no Play anywhere near. This is the shot the sensor
+    // authoring flow is judged on now: aiming a sensor IS aiming a camera, so
+    // the frustum helper and the sensor glyph stand on the same node in the
+    // viewport while the dock shows what the sensor will record, before the
+    // first Play ever runs.
+    {
+        auto eye = ObjectFactory::createCamera(document_.scene());
+        eye->name = "Sensor Cam";
+        eye->position.set(-2.2f, 3.4f, 8.5f);
+        // -Z is the viewing direction; pitched down the slope the tubes run on.
+        eye->rotation.set(-0.55f, 0.35f, 0.f);
+        eye->fov = 62.f;
+        eye->nearPlane = 0.1f;
+        eye->farPlane = 60.f;
+        eye->updateProjectionMatrix();
+
+        SensorConfig colour;
+        colour.enabled = true;
+        colour.type = SensorConfig::Type::Camera;
+        colour.width = 192;
+        colour.height = 128;
+        colour.rateHz = 8.f;
+        colour.write(*eye);
+        addObject(eye, document_.scene(), "Add Sensor Cam");
+
+        // Framed so the sensor camera, its frustum and the slope it looks at
+        // are all in shot together with the dock.
+        camera_.position.set(-6.f, 8.f, 18.f);
+        orbit_->target.set(-1.f, 2.f, 6.f);
+    }
+    playFor(0.3f);
+    wrote = shoot(sibling("_sensor_dock")) && wrote;
+
     // And instancing. The question a screenshot answers here is the one the
     // assertions cannot: a grid of instances drawn from one object, with the
     // outline sitting around ONE of them. A box around the whole cloud and a box
@@ -6434,24 +6468,34 @@ int EditorApp::runSelfTest() {
             // pinhole pass and a readback, not six cube faces), so the LIDAR
             // passing says nothing about it. Aimed straight down at the ground,
             // which is the one thing every template scene has.
-            auto eye = ObjectFactory::createPrimitive(Primitive::Sphere, document_.scene());
+            //
+            // Hosted on a CAMERA, the way the inspector now authors pinholes,
+            // and the camera's frustum disagrees with the flat string ON
+            // PURPOSE: the config's numbers (fov 60, far 3.5) would put the
+            // ground — 4 m straight down — entirely beyond the range shell and
+            // return an empty cloud. Every depth assertion below therefore
+            // doubles as proof that Play read the camera, not the stale copy.
+            auto eye = ObjectFactory::createCamera(document_.scene());
             eye->name = "Depth Cam";
             eye->position.set(-2.f, 4.f, 2.f);
             // -Z is the viewing direction; -90 degrees about X points it at -Y.
             eye->rotation.x = -1.5707963f;
-            eye->scale.set(0.12f, 0.12f, 0.12f);
+            eye->fov = 110.f;
+            eye->nearPlane = 0.2f;
+            eye->farPlane = 20.f;
+            eye->updateProjectionMatrix();
 
             SensorConfig depth;
             depth.enabled = true;
             depth.type = SensorConfig::Type::Depth;
             depth.width = 96;
             depth.height = 72;
-            depth.fovY = 60.f;
+            depth.fovY = 60.f; // stale on purpose — the camera's 110 is the truth
             depth.rateHz = 0.f;
             depth.seed = 777;
             depth.rangeStddev = 0.005f;
             depth.nearPlane = 0.2f;
-            depth.farPlane = 20.f;
+            depth.farPlane = 3.5f;// stale too: shorter than anything in view
             depth.write(*eye);
             depthUuid = eye->uuid;
             addObject(eye, document_.scene(), "Add Depth Cam");
@@ -6594,7 +6638,21 @@ int EditorApp::runSelfTest() {
                   "the depth camera's scan is delivered too");
             const std::size_t depthHash = depthEntry ? hashPoints(depthEntry->cloud) : 0;
             const std::size_t depthPoints = depthEntry ? depthEntry->cloud.size() : 0;
+            // Not empty ALSO proves the far plane is the camera's 20 m: the
+            // config's 3.5 m shell ends short of the 4 m ground below.
             check(depthPoints > 0, "and its cloud is not empty");
+            // And the fov is the camera's 110 degrees: the config's 60-degree
+            // cone tops out at 5.55 m of slant range on this geometry, while
+            // the wide cone reads past 8 m near the image's x edges.
+            if (depthEntry) {
+                float longest = 0.f;
+                const Vector3 eyeAt(-2.f, 4.f, 2.f);
+                for (const auto& p : depthEntry->cloud) {
+                    longest = std::max(longest, p.distanceTo(eyeAt));
+                }
+                check(longest > 6.f,
+                      "the scan reads the camera's frustum, not the config's stale copy");
+            }
 
             // The IMU needs a substep to have run, which on a fast machine is not
             // the first frame.
@@ -6733,6 +6791,10 @@ int EditorApp::runSelfTest() {
 
         std::string cameraUuid;
         {
+            // Deliberately the LEGACY shape — a pinhole on a plain object,
+            // which the inspector no longer authors but a saved scene may
+            // still carry. It playing here is the soft-enforcement contract:
+            // the gate is authoring-side, never the session's.
             auto eye = ObjectFactory::createPrimitive(Primitive::Sphere, document_.scene());
             eye->name = "Wrist Cam";
             // In front of the template scene's contents, looking down its own
@@ -6845,6 +6907,68 @@ int EditorApp::runSelfTest() {
             check(rows == pngs + 1, "whose rows match the frames on disk");
             std::filesystem::remove_all(recordDir, ec);
         }
+    }
+
+    // --- moving a legacy pinhole onto a camera child ------------------------
+    //
+    // The migration behind the inspector's "Move To Camera Child" hint, driven
+    // through the same member the button defers to. Document machinery only —
+    // no Play needed — so it runs in every build. The interesting properties:
+    // the config crosses whole, the camera is stamped from its numbers, the
+    // child's identity transform preserves the aim the host's transform
+    // encoded, and ONE undo restores the entire legacy shape.
+    {
+        newScene();
+        step(2);
+
+        auto host = ObjectFactory::createPrimitive(Primitive::Sphere, document_.scene());
+        host->name = "Legacy Eye";
+        host->position.set(3.f, 2.f, 0.f);
+        host->rotation.x = -0.7f;
+
+        SensorConfig legacy;
+        legacy.enabled = true;
+        legacy.type = SensorConfig::Type::Depth;
+        legacy.fovY = 71.f;
+        legacy.nearPlane = 0.25f;
+        legacy.farPlane = 17.f;
+        legacy.seed = 31;
+        legacy.write(*host);
+        addObject(host, document_.scene(), "Add Legacy Eye");
+        step();
+
+        const auto undoBefore = commands_.undoCount();
+        moveSensorToCameraChild(*host);
+        step();
+
+        PerspectiveCamera* child = nullptr;
+        for (const auto& candidate : host->children) {
+            if (auto* camera = candidate->as<PerspectiveCamera>()) child = camera;
+        }
+        check(child != nullptr, "migration hangs a camera child under the legacy host");
+        check(!SensorConfig::read(*host).has_value(), "and the host keeps no sensor entry");
+        if (child) {
+            const auto moved = SensorConfig::read(*child);
+            check(moved && moved->enabled && moved->type == SensorConfig::Type::Depth &&
+                          moved->seed == 31,
+                  "the config crossed whole");
+            check(std::abs(child->fov - 71.f) < 1e-4f &&
+                          std::abs(child->nearPlane - 0.25f) < 1e-4f &&
+                          std::abs(child->farPlane - 17.f) < 1e-4f,
+                  "and the camera frustum is stamped from the authored numbers");
+            check(child->position.length() < 1e-6f,
+                  "the child sits at the host's origin, keeping the authored aim");
+        }
+        check(commands_.undoCount() == undoBefore + 1,
+              "the move is ONE undo step, not three");
+
+        commands_.undo();
+        step();
+        check(host->children.empty(), "undo removes the camera child");
+        const auto restored = SensorConfig::read(*host);
+        check(restored && restored->enabled && restored->type == SensorConfig::Type::Depth &&
+                      std::abs(restored->fovY - 71.f) < 1e-4f,
+              "and puts the sensor back on the host, numbers intact");
     }
 
     // ------------------------------------------------ scene-root userData
