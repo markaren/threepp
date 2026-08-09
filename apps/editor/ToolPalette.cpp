@@ -238,8 +238,10 @@ void EditorApp::drawToolPalette() {
         y += cell;
 
         // The gizmo is parked for the duration of Play (see startPlay), so
-        // the tools that aim it sleep too. Snap is a preference and stays.
-        const bool enabled = tool == Tool::Snap || gizmoAvailable;
+        // the whole palette sleeps with it - including Snap, which can affect
+        // nothing while there is no gizmo to snap. (Shift stays the runtime
+        // hold-to-snap override either way.)
+        const bool enabled = gizmoAvailable;
 
         bool active = false;
         switch (tool) {
@@ -288,8 +290,12 @@ void EditorApp::drawToolPalette() {
                 }
                 break;
             case Tool::Snap:
+                // Asleep, the poles grey out with the body: an accent tip on a
+                // parked tool would claim a liveness it does not have.
                 drawSnapIcon(draw, centre, h, s, icon,
-                             active ? IM_COL32(255, 255, 255, 255) : accent);
+                             !enabled ? icon
+                             : active ? IM_COL32(255, 255, 255, 255)
+                                      : accent);
                 break;
         }
 
