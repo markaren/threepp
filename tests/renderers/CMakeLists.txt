@@ -50,6 +50,22 @@ if (THREEPP_WITH_VULKAN AND THREEPP_WITH_GLFW)
     add_test(NAME VulkanSplat_test COMMAND VulkanSplat_test)
     set_tests_properties(VulkanSplat_test PROPERTIES SKIP_RETURN_CODE 42)
 
+    # The cross-hardware gate. Asserts zero VALIDATION errors over a sequence of
+    # reconfigurations (AOV resolves, view add/remove, render-scale and MSAA
+    # realloc, swapchain recreate, entry-list churn) — a claim every conformant
+    # driver must agree on, unlike the pixel goldens above, so it is the one
+    # Vulkan test CI can run on a software rasteriser. Skips 42 when there is no
+    # device OR no validation layer, since without the layer it proves nothing.
+    add_executable(VulkanValidation_test VulkanValidation_test.cpp)
+    target_link_libraries(VulkanValidation_test PRIVATE threepp)
+    target_include_directories(VulkanValidation_test PRIVATE "${PROJECT_SOURCE_DIR}/src")
+    add_test(NAME VulkanValidation_test COMMAND VulkanValidation_test)
+    # Generous: on lavapipe every frame is ray-traced deferred shading on the CPU,
+    # and CTest's default 1500 s is not obviously enough on a loaded runner.
+    set_tests_properties(VulkanValidation_test PROPERTIES
+            SKIP_RETURN_CODE 42
+            TIMEOUT 2400)
+
     # Camera-model geometry: film gauge / focal length round-trip and the
     # reported cameraIntrinsics() checked against the renderer's own
     # projection. Numeric (not pixel) claims, so unlike the goldens this is

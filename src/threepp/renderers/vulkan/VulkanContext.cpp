@@ -1,14 +1,18 @@
 #include "VulkanContext.hpp"
 
+#include "threepp/renderers/vulkan/ValidationReport.hpp"
+
 #include <GLFW/glfw3.h>
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <mutex>
 #include <set>
 #include <stdexcept>
 #include <string>
@@ -75,9 +79,50 @@ namespace threepp::vulkan {
             return false;
         }
 
+        // Validation tally behind threepp/renderers/vulkan/ValidationReport.hpp.
+        //
+        // Process-wide and atomic rather than VulkanContext members, for two
+        // reasons: the layer reports instance-level violations before any context
+        // exists (and object-lifetime ones after one is destroyed), and the
+        // messenger callback is a C function pointer the loader may invoke from
+        // whichever thread made the offending call.
+        std::atomic<std::uint32_t> gValidationErrors{0};
+        std::atomic<std::uint32_t> gValidationWarnings{0};
+        std::atomic<bool>          gValidationActive{false};
+
+        // THREEPP_VULKAN_STRICT_VALIDATION — turn a counted error into a nonzero
+        // process exit, so every Vulkan-backed executable becomes a validation
+        // gate with no edit of its own.
+        //
+        // Checked at normal termination rather than inside the callback, which
+        // runs in the loader with a Vulkan call on the stack: throwing from there
+        // would unwind through C frames, and aborting there would lose every
+        // message after the first. Deferring costs nothing — the frames that
+        // follow a violation are worth seeing, and often name the resource that
+        // the first message only hinted at.
+        void strictValidationExitCheck() {
+            const auto errs  = gValidationErrors.load();
+            const auto warns = gValidationWarnings.load();
+            if (errs == 0) {
+                std::cerr << "[VulkanContext] strict validation: clean ("
+                          << warns << " warning(s))\n";
+                return;
+            }
+            std::cerr << "[VulkanContext] strict validation FAILED: " << errs
+                      << " validation error(s), " << warns << " warning(s). "
+                      << "Exiting " << kStrictValidationExitCode
+                      << " (THREEPP_VULKAN_STRICT_VALIDATION is set).\n";
+            std::cerr.flush();
+            std::cout.flush();
+            // _Exit, not exit: this IS an atexit handler, so exit() here would
+            // re-enter termination. Streams are flushed by hand just above,
+            // since _Exit does not.
+            std::_Exit(kStrictValidationExitCode);
+        }
+
         VKAPI_ATTR VkBool32 VKAPI_CALL debugCallback(
                 VkDebugUtilsMessageSeverityFlagBitsEXT severity,
-                VkDebugUtilsMessageTypeFlagsEXT,
+                VkDebugUtilsMessageTypeFlagsEXT type,
                 const VkDebugUtilsMessengerCallbackDataEXT* data,
                 void*) {
             if (severity >= VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT) {
@@ -96,7 +141,29 @@ namespace threepp::vulkan {
                 if (data->pMessage && std::strstr(data->pMessage, "rw_luma_history")) {
                     return VK_FALSE;
                 }
-                std::cerr << "[Vulkan] " << data->pMessage << "\n";
+                // Counted AFTER the third-party filter above, so suppressed noise
+                // cannot fail a gate, and BEFORE the print, so a message that is
+                // counted is always also visible.
+                //
+                // An ERROR counts only when it carries the VALIDATION message
+                // type — i.e. it is a spec violation. The messenger also hears
+                // GENERAL-type errors, which describe the ENVIRONMENT rather
+                // than this code: the instance-creation messenger surfaced the
+                // loader failing to open a stale third-party layer manifest
+                // (Rockstar's SocialClubVulkanLayer.json, registered but
+                // deleted) the first time it ran. Gating on those would make
+                // the verdict depend on which machine ran it. They are tallied
+                // as warnings, so they stay visible without being fatal.
+                const bool isSpecViolation =
+                        (severity & VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT) != 0 &&
+                        (type & VK_DEBUG_UTILS_MESSAGE_TYPE_VALIDATION_BIT_EXT) != 0;
+                if (isSpecViolation) {
+                    gValidationErrors.fetch_add(1, std::memory_order_relaxed);
+                } else {
+                    gValidationWarnings.fetch_add(1, std::memory_order_relaxed);
+                }
+                std::cerr << "[Vulkan] " << (isSpecViolation ? "ERROR: " : "WARNING: ")
+                          << data->pMessage << "\n";
             }
             return VK_FALSE;
         }
@@ -105,6 +172,27 @@ namespace threepp::vulkan {
             if (r != VK_SUCCESS) {
                 throw std::runtime_error(std::string("[VulkanContext] ") + what + " failed: " + std::to_string(r));
             }
+        }
+
+        // One definition of what the messenger listens to, used twice: chained
+        // into VkInstanceCreateInfo::pNext (covering vkCreateInstance /
+        // vkDestroyInstance, which run before/after the persistent messenger
+        // exists) and passed to vkCreateDebugUtilsMessengerEXT for everything in
+        // between. Keeping them the same struct is the point — a severity added
+        // in one place but not the other would make instance-time coverage
+        // silently diverge from runtime coverage.
+        VkDebugUtilsMessengerCreateInfoEXT debugMessengerCreateInfo() {
+            VkDebugUtilsMessengerCreateInfoEXT ci{};
+            ci.sType = VK_STRUCTURE_TYPE_DEBUG_UTILS_MESSENGER_CREATE_INFO_EXT;
+            ci.messageSeverity =
+                    VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT |
+                    VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT;
+            ci.messageType =
+                    VK_DEBUG_UTILS_MESSAGE_TYPE_GENERAL_BIT_EXT |
+                    VK_DEBUG_UTILS_MESSAGE_TYPE_VALIDATION_BIT_EXT |
+                    VK_DEBUG_UTILS_MESSAGE_TYPE_PERFORMANCE_BIT_EXT;
+            ci.pfnUserCallback = debugCallback;
+            return ci;
         }
 
     }// namespace
@@ -169,7 +257,26 @@ namespace threepp::vulkan {
         rayTracingEnabled_ = enableRayTracing;
 
         createInstance(enableValidation);
-        if (enableValidation) createDebugMessenger();
+        if (enableValidation) {
+            createDebugMessenger();
+            gValidationActive.store(true);
+
+            // Strict mode is armed here rather than at the env read above so it
+            // can never be armed without a messenger to feed it: a process that
+            // asked for strict validation but got no layer must not exit 0 as if
+            // it had been checked. validationActive() is what tells a caller the
+            // difference, and the arming message says which of the two happened.
+            if (const char* env = std::getenv("THREEPP_VULKAN_STRICT_VALIDATION"); env && *env && *env != '0') {
+                static std::once_flag once;
+                std::call_once(once, [] { std::atexit(strictValidationExitCheck); });
+                std::cerr << "[VulkanContext] strict validation armed: any validation error "
+                             "exits "
+                          << kStrictValidationExitCode << " at termination.\n";
+            }
+        } else if (const char* env = std::getenv("THREEPP_VULKAN_STRICT_VALIDATION"); env && *env && *env != '0') {
+            std::cerr << "[VulkanContext] THREEPP_VULKAN_STRICT_VALIDATION is set but the "
+                         "validation layer is not active — nothing is being checked.\n";
+        }
         createSurface();
         pickPhysicalDevice();
         createLogicalDevice();
@@ -308,21 +415,19 @@ namespace threepp::vulkan {
         ci.enabledLayerCount = static_cast<uint32_t>(layers.size());
         ci.ppEnabledLayerNames = layers.data();
 
+        // The persistent messenger (createDebugMessenger below) only exists once
+        // the instance does, so vkCreateInstance / vkDestroyInstance themselves
+        // would be the one stretch validation couldn't report on. Chaining the
+        // same create-info through pNext is the spec's remedy: the layer runs a
+        // messenger scoped to exactly those two calls.
+        const auto dbgCi = debugMessengerCreateInfo();
+        if (enableValidation) ci.pNext = &dbgCi;
+
         check(vkCreateInstance(&ci, nullptr, &instance_), "vkCreateInstance");
     }
 
     void VulkanContext::createDebugMessenger() {
-        VkDebugUtilsMessengerCreateInfoEXT ci{};
-        ci.sType = VK_STRUCTURE_TYPE_DEBUG_UTILS_MESSENGER_CREATE_INFO_EXT;
-        ci.messageSeverity =
-                VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT |
-                VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT;
-        ci.messageType =
-                VK_DEBUG_UTILS_MESSAGE_TYPE_GENERAL_BIT_EXT |
-                VK_DEBUG_UTILS_MESSAGE_TYPE_VALIDATION_BIT_EXT |
-                VK_DEBUG_UTILS_MESSAGE_TYPE_PERFORMANCE_BIT_EXT;
-        ci.pfnUserCallback = debugCallback;
-
+        const auto ci = debugMessengerCreateInfo();
         auto fn = reinterpret_cast<PFN_vkCreateDebugUtilsMessengerEXT>(vkGetInstanceProcAddr(
                 instance_, "vkCreateDebugUtilsMessengerEXT"));
         if (fn) check(fn(instance_, &ci, nullptr, &debugMessenger_), "vkCreateDebugUtilsMessengerEXT");
@@ -933,6 +1038,24 @@ namespace threepp::vulkan {
         destroySwapchainResources();
         createSwapchain();
         createSwapchainImageViews();
+    }
+
+    // ── ValidationReport.hpp ────────────────────────────────────────────────
+    // Defined here, next to the messenger callback that feeds them, so the
+    // counters stay internal to this TU. The public declarations carry no Vulkan
+    // types precisely so that a test can read them without the PRIVATE Vulkan /
+    // VMA include paths.
+
+    std::uint32_t validationErrorCount() {
+        return gValidationErrors.load(std::memory_order_relaxed);
+    }
+
+    std::uint32_t validationWarningCount() {
+        return gValidationWarnings.load(std::memory_order_relaxed);
+    }
+
+    bool validationActive() {
+        return gValidationActive.load();
     }
 
 }// namespace threepp::vulkan

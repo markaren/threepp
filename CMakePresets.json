@@ -139,6 +139,15 @@
       }
     },
     {
+      "name": "ci-linux-vulkan-lavapipe",
+      "inherits": "ci-linux-vulkan",
+      "displayName": "CI: Linux, Vulkan RUNTIME tests on lavapipe",
+      "description": "As 'ci-linux-vulkan' but with the tests built, so the Vulkan backend can be RUN — on Mesa's lavapipe software rasteriser, which needs no GPU. Only VulkanValidation_test is a cross-hardware gate: it asserts zero validation errors, which any conformant driver must agree on. The pixel goldens are references captured on one GPU and cannot pass here, so the job selects tests by name rather than running everything this preset builds.",
+      "cacheVariables": {
+        "THREEPP_BUILD_TESTS": "ON"
+      }
+    },
+    {
       "name": "ci-linux-physx",
       "inherits": "ci-linux",
       "displayName": "CI: Linux, GL + PhysX via vcpkg",
@@ -250,6 +259,15 @@
       "configuration": "Release"
     },
     {
+      "name": "ci-linux-vulkan-lavapipe",
+      "configurePreset": "ci-linux-vulkan-lavapipe",
+      "configuration": "Release",
+      "targets": [
+        "VulkanValidation_test",
+        "VulkanCameraModel_test"
+      ]
+    },
+    {
       "name": "ci-linux-physx",
       "configurePreset": "ci-linux-physx",
       "configuration": "Release"
@@ -320,6 +338,17 @@
       "inherits": "base",
       "configurePreset": "ci-linux-no-glfw",
       "configuration": "Release"
+    },
+    {
+      "name": "ci-linux-vulkan-lavapipe",
+      "inherits": "base",
+      "configurePreset": "ci-linux-vulkan-lavapipe",
+      "configuration": "Release",
+      "filter": {
+        "include": {
+          "name": "^(VulkanValidation|VulkanCameraModel)_test$"
+        }
+      }
     },
     {
       "name": "ci-linux-physx",
