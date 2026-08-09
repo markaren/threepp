@@ -407,6 +407,34 @@ jobs:
           xvfb-run -a -s "-screen 0 1280x1024x24" \
             ctest --preset ci-linux-vulkan-lavapipe 2>&1 | tee ctest.log
 
+      # Reading this job's logs requires being signed in, but annotations are
+      # public — so on failure, the verdict itself (which tests failed, the
+      # phase table, the first distinct validation messages) is lifted out of
+      # the logs and into annotations, where the commit page shows it to
+      # anyone. Each message is truncated: VUID texts run to kilobytes and
+      # GitHub clips long annotations anyway, but the VUID name lands well
+      # inside the first 600 characters.
+      - name: Surface the verdict as annotations
+        if: failure()
+        run: |
+          testlog=build/ci-linux-vulkan-lavapipe/Testing/Temporary/LastTest.log
+          if [ -f ctest.log ]; then
+            grep -E '\*\*\*|Passed|Failed' ctest.log | tail -n 6 | while IFS= read -r line; do
+              echo "::error::ctest: ${line}"
+            done
+          fi
+          if [ -f "$testlog" ]; then
+            grep -F '[phase]' "$testlog" | tail -n 9 | while IFS= read -r line; do
+              echo "::error::${line}"
+            done
+            grep -F '[Vulkan] ERROR' "$testlog" | cut -c1-600 | sort -u | head -n 5 | while IFS= read -r line; do
+              echo "::error::${line}"
+            done
+            grep -F 'strict validation' "$testlog" | tail -n 2 | while IFS= read -r line; do
+              echo "::error::${line}"
+            done
+          fi
+
       # A skip is exit 42 and CTest counts it as success. Here it means no device
       # or no validation layer — i.e. the job proved nothing — so it must fail.
       - name: Assert nothing skipped itself
