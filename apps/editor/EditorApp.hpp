@@ -196,7 +196,6 @@ namespace threepp::editor {
         void drawInspector();
         void drawBottomPanel();
         void drawStatusBar();
-        void drawPlayBanner();
 
         // Hierarchy helpers
         void drawHierarchyNode(Object3D& object);

@@ -89,36 +89,3 @@ void EditorApp::drawStatusBar() {
     ImGui::End();
     ImGui::PopStyleVar();
 }
-
-void EditorApp::drawPlayBanner() {
-
-    if (!isPlaying()) return;
-
-    const auto* viewport = ImGui::GetMainViewport();
-    const float s = contentScale_;
-
-    // A slim strip across the viewport, high enough to be unmissable and just
-    // below the transport pill it narrates (see drawTransportBar: the pill is
-    // 44*s tall and stands 10*s under the menu).
-    const char* text = play_.paused() ? "PAUSED" : "PLAY";
-    const ImVec2 size = ImGui::CalcTextSize(text);
-    const float width = size.x + 40 * s;
-    const float height = size.y + 10 * s;
-
-    ImGui::SetNextWindowPos({viewport->Pos.x + (viewport->Size.x - width) * 0.5f,
-                             viewport->Pos.y + menuHeight_ + 62 * s});
-    ImGui::SetNextWindowSize({width, height});
-    ImGui::SetNextWindowBgAlpha(0.85f);
-    ImGui::PushStyleColor(ImGuiCol_WindowBg,
-                          play_.paused() ? ImVec4{0.35f, 0.28f, 0.10f, 1.f}
-                                         : ImVec4{0.10f, 0.32f, 0.16f, 1.f});
-    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, {20 * s, 5 * s});
-
-    if (ImGui::Begin("##playBanner", nullptr,
-                     layout::barFlags | ImGuiWindowFlags_NoInputs | ImGuiWindowFlags_NoFocusOnAppearing)) {
-        ImGui::TextColored(play_.paused() ? theme::warning() : theme::playing(), "%s", text);
-    }
-    ImGui::End();
-    ImGui::PopStyleVar();
-    ImGui::PopStyleColor();
-}

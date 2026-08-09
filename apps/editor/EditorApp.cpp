@@ -895,7 +895,6 @@ void EditorApp::drawUi() {
     drawInspector();
     drawBottomPanel();
     drawStatusBar();
-    drawPlayBanner();
     drawViewGizmo();
     drawToolPalette();
     drawTransportBar();
