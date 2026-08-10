@@ -5,7 +5,7 @@ add_example(NAME "physx_softbody" SOURCES softbody.cpp LINK_IMGUI LINK_PHYSX)
 # GPU PBD granular material (PxPBDParticleSystem). Builds everywhere PhysX is
 # found — the PBD headers ship with the SDK whether or not CUDA does — and
 # reports + exits 0 at runtime when GPU dynamics is unavailable.
-add_example(NAME "physx_granular_conveyor" SOURCES granular_conveyor.cpp LINK_PHYSX)
+add_example(NAME "physx_granular_conveyor" SOURCES granular_conveyor.cpp LINK_IMGUI LINK_PHYSX)
 
 # THREEPP_WITH_VULKAN is PRIVATE to the library target, so an example that wants
 # to reach VulkanRenderer's own knobs (pin auto-exposure for a repeatable

@@ -15,7 +15,7 @@
 // COMPILES anywhere PhysX does — the headers ship regardless — and at runtime
 // prints why and exits 0 when there is no GPU, so CI can build and run it.
 //
-//   granular_conveyor                       interactive (pick a backend)
+//   granular_conveyor                       interactive (pick a backend; live HUD)
 //   granular_conveyor --shot pbd_belt       headless captures -> aaa_caps/
 //   granular_conveyor --selftest            headless numeric gates, no window
 //   granular_conveyor --bench               particles-vs-fps table
@@ -38,6 +38,7 @@
 #include "threepp/threepp.hpp"
 
 #include "threepp/extras/conveyor/ConveyorPhysics.hpp"
+#include "threepp/extras/imgui/RendererSettings.hpp"
 #include "threepp/extras/physx/PhysxParticles.hpp"
 
 #ifdef THREEPP_WITH_VULKAN
@@ -811,6 +812,37 @@ int main(int argc, char** argv) {
     double simAccum = 0, frameAccum = 0, gbufAccum = 0, shadeAccum = 0;
     int windowFrames = 0;
 
+    // ── Live HUD (interactive only) ──────────────────────────────────────────
+    // RendererSettingsUi draws the FPS row itself; these add the sim-vs-render
+    // split the --bench table reports, because that split is the whole question
+    // this demo raises: at 300k grains, is the wall PhysX or the renderer?
+    // Smoothed over 0.5 s — a per-frame readout of either number is unreadable.
+    //
+    // NOTE ON THAT FPS ROW AND VSYNC: interactive runs present with vsync on
+    // (see the Canvas parameters), so FPS pins to the refresh rate as soon as
+    // the frame fits in its budget. The millisecond rows keep telling the truth
+    // after that — read those, not FPS, when judging headroom where the sim is
+    // heavy. --bench runs unvsynced.
+    double hudSimMs = 0.0, hudFrameMs = 0.0, hudGbufMs = 0.0;
+    unsigned hudGrains = 0;
+    double hudWall = 0.0, hudSimAccum = 0.0, hudFrameAccum = 0.0, hudGbufAccum = 0.0;
+    int hudFrames = 0;
+    auto hudLast = std::chrono::high_resolution_clock::now();
+
+    // Headless paths build no UI at all: --shot frames are the deliverable and
+    // must not have a panel painted into them, and --bench/--selftest measure a
+    // frame that the panel would otherwise be part of.
+    std::unique_ptr<RendererSettingsUi> ui;
+    if (!offscreen) {
+        ui = std::make_unique<RendererSettingsUi>(canvas, *renderer, [&] {
+            ImGui::Text("grains    %8u", hudGrains);
+            ImGui::Text("sim       %8.2f ms", hudSimMs);
+            if (hudFrameMs > 0.0) ImGui::Text("renderer  %8.2f ms", hudFrameMs);
+            if (hudGbufMs > 0.0) ImGui::Text("gbuf      %8.2f ms", hudGbufMs);
+        },
+        "Granular");
+    }
+
     canvas.animate([&] {
         for (auto& l : lanes) {
             if (!l.chute) continue;
@@ -823,9 +855,11 @@ int main(int argc, char** argv) {
         const auto tSim = std::chrono::high_resolution_clock::now();
         world->step(kDt);
         particles->pull();
-        simAccum += std::chrono::duration<double, std::milli>(
-                            std::chrono::high_resolution_clock::now() - tSim)
-                            .count();
+        const double simMs = std::chrono::duration<double, std::milli>(
+                                     std::chrono::high_resolution_clock::now() - tSim)
+                                     .count();
+        simAccum += simMs;
+        if (ui) hudSimAccum += simMs;
 
         for (auto& l : lanes) {
             l.field->update(l.group->positions(), l.group->active());
@@ -835,6 +869,7 @@ int main(int argc, char** argv) {
         }
 
         renderer->render(scene, camera);
+        if (ui) ui->render();
         ++frame;
 
 #ifdef THREEPP_WITH_VULKAN
@@ -843,8 +878,31 @@ int main(int argc, char** argv) {
             frameAccum += double(t.cpuFrameMs);
             gbufAccum += double(t.rasterGbufMs);
             shadeAccum += double(t.pathTraceMs);
+            if (ui) {
+                hudFrameAccum += double(t.cpuFrameMs);
+                hudGbufAccum += double(t.rasterGbufMs);
+            }
         }
 #endif
+
+        // HUD window: the means of whatever was accumulated over the span.
+        // Closes on elapsed TIME, not a frame count, so the readout keeps
+        // refreshing at a usable rate when a heavy scene drops to single-digit
+        // fps (a 120-frame window would freeze it for 20 s there).
+        if (ui) {
+            const auto nowT = std::chrono::high_resolution_clock::now();
+            hudWall += std::chrono::duration<double>(nowT - hudLast).count();
+            hudLast = nowT;
+            ++hudFrames;
+            if (hudWall >= 0.5) {
+                const double k = 1.0 / double(hudFrames);
+                hudSimMs = hudSimAccum * k;
+                hudFrameMs = hudFrameAccum * k;
+                hudGbufMs = hudGbufAccum * k;
+                hudWall = hudSimAccum = hudFrameAccum = hudGbufAccum = 0.0;
+                hudFrames = 0;
+            }
+        }
 
         // Telemetry is not free: measure() is two passes over every grain, so at
         // 300k it is milliseconds of CPU per frame and would show up in the
@@ -866,6 +924,10 @@ int main(int argc, char** argv) {
             if (frame == 60) at60 = measure(lanes[0].group->positions(), lanes[0].group->active());
             if (frame == 240) at240 = measure(lanes[0].group->positions(), lanes[0].group->active());
         }
+        // Every frame, not on the 2 Hz `sample` gate above: active() is a
+        // counter read, not a pass over the grains. (The panel drew earlier in
+        // this frame, so it shows this value one frame later — invisible.)
+        hudGrains = total;
 
         // Benchmark windows: close one whenever it fills, tagged with the
         // population it was measured at.
