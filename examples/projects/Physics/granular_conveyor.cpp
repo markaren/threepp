@@ -828,8 +828,10 @@ int main(int argc, char** argv) {
         double statsMs;  // telemetry passes over every grain (2 Hz gated)
         double rendMs;   // host wall around renderer->render()
         double frameMs;  // renderer CPU frame (cpuFrameMs), Vulkan only
+        double ensMs;    // ensureSceneBuilt, the scene.* half of frameMs
         double tailMs;   // outside the animate body: submit+present / swap, poll
         double gpuMs;    // whole-command-buffer GPU span (Vulkan only)
+        double gpuSumMs; // the bracketed GPU passes only; gpu - gpusum is unbracketed
         double gbufMs;   // raster G-buffer (Vulkan only)
         double shadeMs;  // deferred shade / trace (Vulkan only)
     };
@@ -838,6 +840,7 @@ int main(int argc, char** argv) {
     std::chrono::high_resolution_clock::time_point windowStart;
     double simAccum = 0, frameAccum = 0, gbufAccum = 0, shadeAccum = 0, gpuAccum = 0;
     double emitAccum = 0, fieldAccum = 0, statsAccum = 0, rendAccum = 0, tailAccum = 0;
+    double ensAccum = 0, gpuSumAccum = 0;
     int windowFrames = 0;
     // Closed at the TOP of the animate body, not the bottom. Closing at the
     // bottom made the first frame of every window contribute its wall time but
@@ -899,7 +902,8 @@ int main(int argc, char** argv) {
                 benchRows.push_back({hudGrains, double(windowFrames) / wall,
                                      wall * 1000.0 * k, simAccum * k, emitAccum * k,
                                      fieldAccum * k, statsAccum * k, rendAccum * k,
-                                     frameAccum * k, tailAccum * k, gpuAccum * k,
+                                     frameAccum * k, ensAccum * k, tailAccum * k,
+                                     gpuAccum * k, gpuSumAccum * k,
                                      gbufAccum * k, shadeAccum * k});
                 windowFrames = 0;
             }
@@ -907,6 +911,7 @@ int main(int argc, char** argv) {
                 windowStart = nowW;
                 simAccum = frameAccum = gbufAccum = shadeAccum = gpuAccum = 0;
                 emitAccum = fieldAccum = statsAccum = rendAccum = tailAccum = 0;
+                ensAccum = gpuSumAccum = 0;
             }
             ++windowFrames;
         }
@@ -971,6 +976,11 @@ int main(int argc, char** argv) {
             // readBack runs right after the fence wait. Only window means are
             // comparable with the CPU columns, never a per-frame difference.
             gpuAccum += double(t.gpuTotalMs);
+            gpuSumAccum += double(t.gpuPassSumMs);
+            // The scene.* half of cpuFrameMs, so a hole inside render() can be
+            // localised to ensureSceneBuilt (structural rebuilds do work outside
+            // every scene.* scope) rather than to the frame path.
+            ensAccum += double(t.cpuEnsureSceneMs);
             if (ui) {
                 hudFrameAccum += double(t.cpuFrameMs);
                 hudGbufAccum += double(t.rasterGbufMs);
@@ -1071,19 +1081,20 @@ int main(int argc, char** argv) {
     if (bench) {
         // Header and row are independent format strings — edit them together.
         // `resid` is wall minus everything measured: the honest hole.
-        std::printf("\n%9s %7s %8s %8s %8s %8s %8s %8s %8s %8s %8s %8s %8s %8s"
+        std::printf("\n%9s %7s %7s %7s %7s %7s %7s %7s %7s %7s %7s %7s %7s %7s %7s %7s"
                     "   (%dx%d, %d-frame windows)\n",
-                    "particles", "fps", "wall ms", "sim ms", "emit ms", "field ms",
-                    "stats ms", "rend ms", "frame ms", "tail ms", "resid ms",
-                    "gpu ms", "gbuf ms", "shade ms",
+                    "particles", "fps", "wall", "sim", "emit", "field",
+                    "stats", "rend", "frame", "ens", "tail", "resid",
+                    "gpu", "gpusum", "gbuf", "shade",
                     size.width(), size.height(), kBenchWindow);
         for (const auto& r : benchRows) {
             const double resid = r.wallMs - (r.simMs + r.emitMs + r.fieldMs + r.statsMs +
                                              r.rendMs + r.tailMs);
-            std::printf("%9u %7.1f %8.2f %8.2f %8.2f %8.2f %8.2f %8.2f %8.2f %8.2f %8.2f"
-                        " %8.2f %8.3f %8.3f\n",
+            std::printf("%9u %7.1f %7.2f %7.2f %7.2f %7.2f %7.2f %7.2f %7.2f %7.2f %7.2f"
+                        " %7.2f %7.2f %7.2f %7.3f %7.3f\n",
                         r.n, r.fps, r.wallMs, r.simMs, r.emitMs, r.fieldMs, r.statsMs,
-                        r.rendMs, r.frameMs, r.tailMs, resid, r.gpuMs, r.gbufMs, r.shadeMs);
+                        r.rendMs, r.frameMs, r.ensMs, r.tailMs, resid,
+                        r.gpuMs, r.gpuSumMs, r.gbufMs, r.shadeMs);
         }
         std::fflush(stdout);
     }
