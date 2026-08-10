@@ -28,6 +28,7 @@
 #include <cstdint>
 #include <functional>
 #include <memory>
+#include <vector>
 
 namespace threepp::vulkan::impl {
 
@@ -172,6 +173,62 @@ namespace threepp::vulkan::impl {
         // flag bits are still valid WITHOUT re-doing the string-keyed
         // hasAttribute lookups (2/mesh/frame — ~1 ms on Bistro).
         unsigned int attrVer = 0;
+    };
+
+    // One contiguous run of entries sharing a single source Mesh: an
+    // InstancedMesh expansion (count() entries) or a single-entry span for a
+    // plain mesh. Rebuilt at every FULL expansion, in entry order; the
+    // snapshot fast path guarantees the structure is unchanged on lean
+    // frames, so spans stay aligned with lastVisibleEntries_.
+    //
+    // Purpose: every per-frame loop over the entry list used to pay per-MESH
+    // costs per INSTANCE (a 100k-grain InstancedMesh re-read its material
+    // version, geometry versions, blasCache slot and emissive cast 100k times
+    // a frame — measured ~0.3-4 µs/instance across the loops). All per-mesh
+    // facts those loops consult now live here, so they cost O(spans), and the
+    // remaining per-entry work (matrix refresh, TLAS instance fill, draw
+    // fill, cull tests) runs only for spans whose inputs actually changed.
+    struct EntrySpan {
+        Mesh*          mesh = nullptr;
+        InstancedMesh* inst = nullptr;// typed view resolved at expansion; null = plain mesh
+        uint32_t first = 0;           // first entry index in lastVisibleEntries_
+        uint32_t count = 0;
+        // Matrix change detection. A span's entry world matrices are a pure
+        // function of (mesh->matrixWorld, instanceMatrix contents); the lean
+        // path refreshes them ONLY when one of these moved. instanceMatrix
+        // edits are detected by BufferAttribute::version — i.e. the user must
+        // call instanceMatrix()->needsUpdate() after setMatrixAt, exactly the
+        // contract the GL backend's attribute upload already requires.
+        std::array<float, 16> meshWorld{};// mesh->matrixWorld at last refresh
+        unsigned int instMatVersion = ~0u;// instanceMatrix()->version at last refresh
+        bool movedThisFrame = false;      // set by the lean refresh; consumed by
+                                          // the diff, motion matrices and TLAS refit
+        // True while the motionMat scratch holds non-identity blocks for this
+        // span (set when a moved span writes real deltas; the next static
+        // frame resets its blocks to identity once and clears this).
+        bool motionNonIdentity = false;
+        // True while any entry in the span carries lodLevel > 0 — lets the
+        // auto-LOD selection (and the feature-off reset) skip the per-entry
+        // "snap back to 0" walk for spans that were never lifted off LOD0.
+        bool lodNonZero = false;
+        // Span-wide world AABB: union of the entries' world bounding spheres,
+        // recomputed whenever the span's matrices are refreshed. Lets the
+        // frustum cull answer fully-inside / fully-outside once per span and
+        // fall back to per-entry sphere tests only on partial intersection.
+        float aabbMin[3]{}, aabbMax[3]{};
+        bool  aabbValid = false;
+        // Chunked world AABBs (fixed-size runs of entries) for large instanced
+        // spans, rebuilt together with the span AABB. The frustum cull
+        // classifies a whole chunk at a time and runs per-entry tests only
+        // for chunks that straddle the frustum. min/max packed as [0..2]/[3..5].
+        std::vector<std::array<float, 6>> chunkAabbs;
+        // Object-space bounds of the shared geometry (box + enclosing-sphere
+        // radius), cached at expansion for the per-entry Arvo transform /
+        // sphere tests. Invalidated (localBoundsValid=false) when the
+        // geometry is edited in place, re-derived lazily.
+        float localCenter[3]{}, localHalf[3]{};
+        float localRadius = 0.f;
+        bool  localBoundsValid = false;
     };
 
     struct EntryKey {

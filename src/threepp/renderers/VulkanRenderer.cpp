@@ -21,6 +21,8 @@
 // public setters below.
 #include "vulkan/VulkanCoreImpl.hpp"
 
+#include "vulkan/VulkanCpuPhaseProf.hpp"
+
 // stb_image_write - implementation is compiled in utils/StbImageWrite.cpp.
 #include "stb_image_write.h"
 
@@ -545,6 +547,7 @@ namespace threepp {
                 std::chrono::duration<float, std::milli>(
                         std::chrono::high_resolution_clock::now() - frameStart)
                         .count());
+        vulkan::cpuprof::Registry::get().endFrame();
     }
 
     WindowSize VulkanRenderer::size() const { return core()->size; }
@@ -1150,10 +1153,14 @@ namespace threepp {
 
     void VulkanRenderer::setObjectInstanceId(const Object3D& obj, uint32_t instanceId) {
         core()->instanceIdOverride_[obj.id] = static_cast<uint16_t>(instanceId & 0xFFFFu);
+        // stableId feeds DrawInfoGpu — invalidate the indirect-build skip
+        // caches or an otherwise-static scene keeps serving the old id.
+        ++core()->drawInputsVersion_;
     }
 
     void VulkanRenderer::setObjectClassId(const Object3D& obj, uint32_t classId) {
         core()->classIds_[obj.id] = static_cast<uint16_t>(classId > 255u ? 255u : classId);
+        ++core()->drawInputsVersion_;// class id rides DrawInfoGpu::flags bits 8..15
     }
 
     void VulkanRenderer::setEventCameraEnabled(bool enabled) {

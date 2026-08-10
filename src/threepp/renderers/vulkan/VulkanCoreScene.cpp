@@ -1,5 +1,9 @@
 #include "VulkanCoreImpl.hpp"
 
+#include "VulkanCpuPhaseProf.hpp"
+
+#include <cfloat>
+
 namespace threepp {
 
 uint32_t VulkanRenderer::Impl::snapMeshFlags(Mesh& m, const MaterialWithWireframe* wf) const {
@@ -125,32 +129,52 @@ void VulkanRenderer::Impl::flushGeometryDescsIfDirty(uint32_t frame) {
         }
 
 void VulkanRenderer::Impl::cullEntriesAgainstFrustum(Camera& camera) {
+            THREEPP_CPUPROF("frame.C_frustumCull");
             if (lastVisibleEntries_.empty()) return;
             // Results land in THIS view's array, never on the shared entry —
             // see ViewContext::inFrustum for why that distinction is load-
             // bearing. Default-include on grow so a freshly added view draws
             // everything for the one frame before its first cull.
             auto& cull = view().inFrustum;
-            cull.assign(lastVisibleEntries_.size(), uint8_t{1});
             // Combine projection * matrixWorldInverse to extract the world-
             // space frustum (Three.js convention; Camera::updateMatrixWorld
             // already ran in updateCameraUbo this frame).
             Matrix4 vp;
             vp.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse);
+            // Same frustum + same scene inputs as the last cull ⇒ inFrustum
+            // already holds the right answer — skip the walk entirely. (The
+            // sticky-only drawInputsVersion_ bumps re-run it for ~30 frames
+            // after motion stops; harmless.)
+            if (view().cullValidVersion == drawInputsVersion_ &&
+                cull.size() == lastVisibleEntries_.size() &&
+                std::memcmp(view().prevCullVp, vp.elements.data(), 64) == 0) {
+                return;
+            }
+            cull.assign(lastVisibleEntries_.size(), uint8_t{1});
             Frustum frustum;
             frustum.setFromProjectionMatrix(vp);
-            // Indexed rather than range-for: every result has to be written at
-            // the entry's own slot, and several branches bail with `continue`.
-            for (size_t ci = 0; ci < lastVisibleEntries_.size(); ++ci) {
-                auto& en = lastVisibleEntries_[ci];
-                const auto keep = [&](bool v) { cull[ci] = v ? uint8_t{1} : uint8_t{0}; };
-                // Default-include conservative cases — they always draw. Deformers
-                // (skinned/displaced/morphed/tet) are here because their cached local
-                // AABB doesn't reflect the per-frame deformed extents, so frustum-
-                // culling them risks popping a still-on-screen body out of the gbuffer.
-                if (en.isOverlay || en.isSkinned || en.isDisplaced || en.isMorphed || en.isTet) {
-                    keep(true);
-                } else if (en.isGrass) {
+            const auto& planes = frustum.planes();
+            auto& entries = lastVisibleEntries_;
+
+            // Per SPAN. The old per-entry loop paid a shared_ptr geometry()
+            // fetch plus an 8-corner Box3::applyMatrix4 (with per-point
+            // perspective divides) per instance per frame — ~12 ms at 115k
+            // static instances. Now: one span-level AABB classify answers
+            // fully-outside / fully-inside for the whole run, and only spans
+            // that straddle the frustum pay a per-entry test (a world-sphere
+            // test — conservative vs the old box test, so it can only KEEP
+            // more, never cull more).
+            for (auto& sp : entrySpans_) {
+                MeshEntry& e0 = entries[sp.first];
+                // Default-include conservative cases — they always draw (the
+                // assign(1) above already covers them). Deformers (skinned/
+                // displaced/morphed/tet) because their cached local AABB
+                // doesn't reflect the per-frame deformed extents; frustum-
+                // culling them risks popping a still-on-screen body out of
+                // the gbuffer.
+                if (e0.isOverlay || e0.isSkinned || e0.isDisplaced || e0.isMorphed || e0.isTet)
+                    continue;
+                if (e0.isGrass) {
                     // Grass CAN be frustum-culled: unlike the other deformers, its
                     // deformed extent has a tight provable bound. The CPU position
                     // attribute is the rest pose; grass_wind.comp displaces each
@@ -160,21 +184,168 @@ void VulkanRenderer::Impl::cullEntriesAgainstFrustum(Camera& camera) {
                     // is what lets a large tiled meadow cull its off-screen tiles.
                     // (The tile still stays in the TLAS for shadows/reflections/GI;
                     // inFrustum only gates the raster G-buffer draw.)
-                    Box3 worldAabb;
-                    if (!grassSwayWorldAabb(en, worldAabb)) { keep(true); continue; }
-                    keep(frustum.intersectsBox(worldAabb));
-                } else {
-                    auto geom = en.mesh->geometry();
-                    if (!geom) { keep(true); continue; }
+                    for (uint32_t j = 0; j < sp.count; ++j) {
+                        const size_t ci = size_t(sp.first) + j;
+                        Box3 worldAabb;
+                        if (!grassSwayWorldAabb(entries[ci], worldAabb)) continue;// keep
+                        cull[ci] = frustum.intersectsBox(worldAabb) ? uint8_t{1} : uint8_t{0};
+                    }
+                    continue;
+                }
+                // Lazily (re-)derive the shared object-space bounds — cleared
+                // when the geometry is edited in place.
+                if (!sp.localBoundsValid) {
+                    auto geom = sp.mesh->geometry();
+                    if (!geom) continue;// keep(true)
                     if (!geom->boundingBox) geom->computeBoundingBox();
-                    if (!geom->boundingBox) { keep(true); continue; }
-                    Box3 worldAabb = *geom->boundingBox;
-                    Matrix4 w;
-                    std::memcpy(w.elements.data(), en.worldMatrix.data(), 64);
-                    worldAabb.applyMatrix4(w);
-                    keep(frustum.intersectsBox(worldAabb));
+                    if (!geom->boundingBox) continue;// keep(true)
+                    const Vector3 c = geom->boundingBox->getCenter();
+                    const Vector3 h = geom->boundingBox->getSize() * 0.5f;
+                    sp.localCenter[0] = c.x; sp.localCenter[1] = c.y; sp.localCenter[2] = c.z;
+                    sp.localHalf[0]   = h.x; sp.localHalf[1]   = h.y; sp.localHalf[2]   = h.z;
+                    sp.localRadius    = h.length();// enclosing-sphere radius
+                    sp.localBoundsValid = true;
+                    sp.aabbValid = false;
+                }
+                // Lazily recompute the span's world AABB after a matrix
+                // refresh. A single-entry span gets the EXACT world box (Arvo
+                // transform — identical to the old 8-corner result); an
+                // instanced span gets the union of world sphere centers
+                // dilated by radius x max scale (conservative).
+                if (!sp.aabbValid) {
+                    const float* lc = sp.localCenter;
+                    if (sp.count == 1) {
+                        const float* M = entries[sp.first].worldMatrix.data();
+                        const float cx = M[0]*lc[0] + M[4]*lc[1] + M[8]*lc[2] + M[12];
+                        const float cy = M[1]*lc[0] + M[5]*lc[1] + M[9]*lc[2] + M[13];
+                        const float cz = M[2]*lc[0] + M[6]*lc[1] + M[10]*lc[2] + M[14];
+                        const float hx = std::abs(M[0])*sp.localHalf[0] + std::abs(M[4])*sp.localHalf[1] + std::abs(M[8])*sp.localHalf[2];
+                        const float hy = std::abs(M[1])*sp.localHalf[0] + std::abs(M[5])*sp.localHalf[1] + std::abs(M[9])*sp.localHalf[2];
+                        const float hz = std::abs(M[2])*sp.localHalf[0] + std::abs(M[6])*sp.localHalf[1] + std::abs(M[10])*sp.localHalf[2];
+                        sp.aabbMin[0] = cx - hx; sp.aabbMin[1] = cy - hy; sp.aabbMin[2] = cz - hz;
+                        sp.aabbMax[0] = cx + hx; sp.aabbMax[1] = cy + hy; sp.aabbMax[2] = cz + hz;
+                    } else {
+                        // Chunked accumulation: one AABB per kCullChunk-entry
+                        // run (union of world sphere centers dilated by
+                        // radius x chunk max scale) + the span AABB as the
+                        // union of the chunks.
+                        constexpr uint32_t kCullChunk = 512;
+                        const uint32_t nChunks = (sp.count + kCullChunk - 1u) / kCullChunk;
+                        sp.chunkAabbs.resize(nChunks);
+                        float smn[3] = {FLT_MAX, FLT_MAX, FLT_MAX};
+                        float smx[3] = {-FLT_MAX, -FLT_MAX, -FLT_MAX};
+                        for (uint32_t ch = 0; ch < nChunks; ++ch) {
+                            const uint32_t j0 = ch * kCullChunk;
+                            const uint32_t j1 = std::min(sp.count, j0 + kCullChunk);
+                            float mn[3] = {FLT_MAX, FLT_MAX, FLT_MAX};
+                            float mx[3] = {-FLT_MAX, -FLT_MAX, -FLT_MAX};
+                            float maxScaleSq = 0.f;
+                            for (uint32_t j = j0; j < j1; ++j) {
+                                const float* M = entries[sp.first + j].worldMatrix.data();
+                                const float cx = M[0]*lc[0] + M[4]*lc[1] + M[8]*lc[2] + M[12];
+                                const float cy = M[1]*lc[0] + M[5]*lc[1] + M[9]*lc[2] + M[13];
+                                const float cz = M[2]*lc[0] + M[6]*lc[1] + M[10]*lc[2] + M[14];
+                                mn[0] = std::min(mn[0], cx); mx[0] = std::max(mx[0], cx);
+                                mn[1] = std::min(mn[1], cy); mx[1] = std::max(mx[1], cy);
+                                mn[2] = std::min(mn[2], cz); mx[2] = std::max(mx[2], cz);
+                                const float s0 = M[0]*M[0] + M[1]*M[1] + M[2]*M[2];
+                                const float s1 = M[4]*M[4] + M[5]*M[5] + M[6]*M[6];
+                                const float s2 = M[8]*M[8] + M[9]*M[9] + M[10]*M[10];
+                                maxScaleSq = std::max(maxScaleSq, std::max(s0, std::max(s1, s2)));
+                            }
+                            const float r = sp.localRadius * std::sqrt(maxScaleSq);
+                            auto& cb = sp.chunkAabbs[ch];
+                            for (int k = 0; k < 3; ++k) {
+                                cb[k]     = mn[k] - r;
+                                cb[k + 3] = mx[k] + r;
+                                smn[k] = std::min(smn[k], cb[k]);
+                                smx[k] = std::max(smx[k], cb[k + 3]);
+                            }
+                        }
+                        for (int k = 0; k < 3; ++k) { sp.aabbMin[k] = smn[k]; sp.aabbMax[k] = smx[k]; }
+                    }
+                    sp.aabbValid = true;
+                }
+                // Span-level classify: 0 = fully outside, 2 = fully inside,
+                // 1 = straddles (per-entry tests decide).
+                int cls = 2;
+                for (const auto& plane : planes) {
+                    const auto& n = plane.normal;
+                    // p-vertex (corner at max signed distance) below the plane
+                    // ⇒ the whole box is outside.
+                    const float px = n.x > 0 ? sp.aabbMax[0] : sp.aabbMin[0];
+                    const float py = n.y > 0 ? sp.aabbMax[1] : sp.aabbMin[1];
+                    const float pz = n.z > 0 ? sp.aabbMax[2] : sp.aabbMin[2];
+                    if (n.x*px + n.y*py + n.z*pz + plane.constant < 0) { cls = 0; break; }
+                    // n-vertex below ⇒ the box straddles this plane.
+                    const float qx = n.x > 0 ? sp.aabbMin[0] : sp.aabbMax[0];
+                    const float qy = n.y > 0 ? sp.aabbMin[1] : sp.aabbMax[1];
+                    const float qz = n.z > 0 ? sp.aabbMin[2] : sp.aabbMax[2];
+                    if (n.x*qx + n.y*qy + n.z*qz + plane.constant < 0) cls = 1;
+                }
+                if (cls == 0) {
+                    std::fill(cull.begin() + sp.first, cull.begin() + sp.first + sp.count, uint8_t{0});
+                    continue;
+                }
+                if (cls == 2 || sp.count == 1) continue;// keep(1) — single spans were classified exactly
+                // Straddling instanced span: classify chunk AABBs first, then
+                // per-entry world-sphere tests only for straddling chunks.
+                const float* lc = sp.localCenter;
+                constexpr uint32_t kCullChunk = 512;
+                for (uint32_t ch = 0; ch < sp.chunkAabbs.size(); ++ch) {
+                    const auto& cb = sp.chunkAabbs[ch];
+                    int ccls = 2;
+                    for (const auto& plane : planes) {
+                        const auto& n = plane.normal;
+                        const float px = n.x > 0 ? cb[3] : cb[0];
+                        const float py = n.y > 0 ? cb[4] : cb[1];
+                        const float pz = n.z > 0 ? cb[5] : cb[2];
+                        if (n.x*px + n.y*py + n.z*pz + plane.constant < 0) { ccls = 0; break; }
+                        const float qx = n.x > 0 ? cb[0] : cb[3];
+                        const float qy = n.y > 0 ? cb[1] : cb[4];
+                        const float qz = n.z > 0 ? cb[2] : cb[5];
+                        if (n.x*qx + n.y*qy + n.z*qz + plane.constant < 0) ccls = 1;
+                    }
+                    const uint32_t j0 = ch * kCullChunk;
+                    const uint32_t j1 = std::min(sp.count, j0 + kCullChunk);
+                    if (ccls == 0) {
+                        std::fill(cull.begin() + sp.first + j0, cull.begin() + sp.first + j1, uint8_t{0});
+                        continue;
+                    }
+                    if (ccls == 2) continue;// whole chunk stays visible
+                    for (uint32_t j = j0; j < j1; ++j) {
+                        const size_t ci = size_t(sp.first) + j;
+                        const float* M = entries[ci].worldMatrix.data();
+                        const float cx = M[0]*lc[0] + M[4]*lc[1] + M[8]*lc[2] + M[12];
+                        const float cy = M[1]*lc[0] + M[5]*lc[1] + M[9]*lc[2] + M[13];
+                        const float cz = M[2]*lc[0] + M[6]*lc[1] + M[10]*lc[2] + M[14];
+                        const float s0 = M[0]*M[0] + M[1]*M[1] + M[2]*M[2];
+                        const float s1 = M[4]*M[4] + M[5]*M[5] + M[6]*M[6];
+                        const float s2 = M[8]*M[8] + M[9]*M[9] + M[10]*M[10];
+                        const float r = sp.localRadius *
+                                        std::sqrt(std::max(s0, std::max(s1, s2)));
+                        uint8_t vis = 1;
+                        for (const auto& plane : planes) {
+                            const auto& n = plane.normal;
+                            if (n.x*cx + n.y*cy + n.z*cz + plane.constant < -r) { vis = 0; break; }
+                        }
+                        cull[ci] = vis;
+                    }
                 }
             }
+
+            // Track whether the results changed — buildIndirectDrawData's
+            // skip signature depends on the camera only through these bits.
+            auto& prev = view().prevInFrustum;
+            if (prev.size() != cull.size() ||
+                std::memcmp(prev.data(), cull.data(), cull.size()) != 0) {
+                ++view().cullVersion;
+                prev = cull;
+            }
+            // Stamp the recompute gate: these results stay valid until the
+            // frustum or the scene draw inputs change.
+            view().cullValidVersion = drawInputsVersion_;
+            std::memcpy(view().prevCullVp, vp.elements.data(), 64);
         }
 
 void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
@@ -183,7 +354,10 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
             // transforms actually moved pay the world-matrix multiplies — a
             // forced pass re-multiplied every node every frame (several
             // ms/frame on Bistro's node count, static or not).
-            scene.updateMatrixWorld();
+            {
+                THREEPP_CPUPROF("scene.1_updateMatrixWorld");
+                scene.updateMatrixWorld();
+            }
             // A parentless camera (the common case — not add()ed to the scene)
             // is untouched by the scene's updateMatrixWorld, but the LOD level
             // selection below reads camera.matrixWorld. Same guard as
@@ -207,19 +381,62 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
             // caught: matrices by the memcmp diff, material/geometry edits by
             // their version reads, structure/visibility/texture-routing
             // changes by the snapshot walk itself (mismatch ⇒ full path).
-            const bool snapLean = sceneSnapshotMatches(scene, camera);
+            bool snapLean;
+            {
+                THREEPP_CPUPROF("scene.2_snapshotMatch");
+                snapLean = sceneSnapshotMatches(scene, camera);
+            }
             std::vector<MeshEntry>& entries = lastVisibleEntries_;// canonical list, cached across frames
             std::vector<MeshFingerprint> currFp;
             if (snapLean) {
-                for (auto& e : entries) {
-                    if (e.isInstanced) {
-                        Matrix4 instMat;
-                        Matrix4 world;
-                        static_cast<InstancedMesh*>(e.mesh)->getMatrixAt(e.instanceIndex, instMat);
-                        world.multiplyMatrices(*e.mesh->matrixWorld, instMat);
-                        std::memcpy(e.worldMatrix.data(), world.elements.data(), 64);
+                THREEPP_CPUPROF("scene.3_leanMatrixRefresh");
+                // Per SPAN: a span's entry world matrices are a pure function
+                // of (mesh->matrixWorld, instanceMatrix contents). Neither
+                // moved ⇒ every entry matrix is bit-identical to last frame ⇒
+                // skip the span entirely — the old per-entry recompute paid
+                // getMatrixAt + a 4x4 multiply per instance per frame on
+                // fully static fields. instanceMatrix edits are version-gated
+                // (setMatrixAt + needsUpdate(), the same contract the GL
+                // backend's attribute upload requires).
+                for (auto& sp : entrySpans_) {
+                    sp.movedThisFrame = false;
+                    const float* mw = sp.mesh->matrixWorld->elements.data();
+                    if (sp.inst) {
+                        const unsigned int v = sp.inst->instanceMatrix()->version;
+                        if (v == sp.instMatVersion &&
+                            std::memcmp(sp.meshWorld.data(), mw, 64) == 0) continue;
+                        sp.instMatVersion = v;
+                        std::memcpy(sp.meshWorld.data(), mw, 64);
+                        sp.movedThisFrame = true;
+                        sp.aabbValid = false;
+                        // Tight refresh: world = meshWorld * instanceMat[j],
+                        // straight off the raw attribute floats (no Matrix4
+                        // temporaries, no bounds-checked getMatrixAt).
+                        const auto& arr = sp.inst->instanceMatrix()->array();
+                        for (uint32_t j = 0; j < sp.count; ++j) {
+                            const float* b = arr.data() + size_t(j) * 16u;
+                            float* o = entries[sp.first + j].worldMatrix.data();
+                            for (int c = 0; c < 4; ++c) {
+                                const float b0 = b[c * 4 + 0], b1 = b[c * 4 + 1],
+                                            b2 = b[c * 4 + 2], b3 = b[c * 4 + 3];
+                                o[c * 4 + 0] = mw[0] * b0 + mw[4] * b1 + mw[8] * b2 + mw[12] * b3;
+                                o[c * 4 + 1] = mw[1] * b0 + mw[5] * b1 + mw[9] * b2 + mw[13] * b3;
+                                o[c * 4 + 2] = mw[2] * b0 + mw[6] * b1 + mw[10] * b2 + mw[14] * b3;
+                                o[c * 4 + 3] = mw[3] * b0 + mw[7] * b1 + mw[11] * b2 + mw[15] * b3;
+                            }
+                            // Keep the fingerprint's matrix mirror fresh so a
+                            // later non-lean frame's generic compare sees this
+                            // frame's state, not a stale lean-era matrix.
+                            prevSceneFingerprint[sp.first + j].matrix =
+                                    entries[sp.first + j].worldMatrix;
+                        }
                     } else {
-                        std::memcpy(e.worldMatrix.data(), e.mesh->matrixWorld->elements.data(), 64);
+                        if (std::memcmp(sp.meshWorld.data(), mw, 64) == 0) continue;
+                        std::memcpy(sp.meshWorld.data(), mw, 64);
+                        sp.movedThisFrame = true;
+                        sp.aabbValid = false;
+                        std::memcpy(entries[sp.first].worldMatrix.data(), mw, 64);
+                        prevSceneFingerprint[sp.first].matrix = entries[sp.first].worldMatrix;
                     }
                 }
                 for (auto& le : lastVisibleLines_) {
@@ -228,11 +445,13 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                     std::memcpy(le.worldMatrix.data(), src->matrixWorld->elements.data(), 64);
                 }
             } else {
+            THREEPP_CPUPROF("scene.3b_fullExpansion");
             // Expand the visible scene into one MeshEntry per TLAS instance.
             // Regular meshes contribute one entry; an InstancedMesh contributes
             // count() entries each with worldMatrix = matrixWorld * instanceMat[i].
             std::vector<MeshEntry> built;
             std::vector<LineEntry> builtLines;
+            std::vector<EntrySpan> builtSpans;
             sceneSnapshot_.clear();
             // Rebuilt below as the walk visits each threepp::LOD node — a
             // mesh entry whose parent chain hits one of these is exempt from
@@ -429,7 +648,33 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                     e.lodCenter[2]      = lodCenter.z;
                     e.lodRadius         = lodRadius;
                 };
+                // Per-mesh span over the entries pushed below. Caches the
+                // matrix-change-detection inputs and the object-space bounds
+                // so the per-frame loops can gate whole spans (see EntrySpan).
+                EntrySpan sp{};
+                sp.mesh  = m;
+                sp.first = static_cast<uint32_t>(built.size());
+                // Expansion frames hand every span fresh matrices; leaving the
+                // flag set keeps the motion-matrix build computing real deltas
+                // (vs the remapped prev worlds) on rebuild frames — a spawn
+                // burst must not blank the movers' motion vectors for a frame.
+                sp.movedThisFrame = true;
+                sp.meshWorld = {};
+                std::memcpy(sp.meshWorld.data(), m->matrixWorld->elements.data(), 64);
+                sp.localRadius = lodRadius;
+                if (geom->boundingBox) {
+                    const Vector3 half = geom->boundingBox->getSize() * 0.5f;
+                    sp.localCenter[0] = lodCenter.x;
+                    sp.localCenter[1] = lodCenter.y;
+                    sp.localCenter[2] = lodCenter.z;
+                    sp.localHalf[0]   = half.x;
+                    sp.localHalf[1]   = half.y;
+                    sp.localHalf[2]   = half.z;
+                    sp.localBoundsValid = true;
+                }
                 if (inst && inst->count() > 0) {
+                    sp.inst           = inst;
+                    sp.instMatVersion = inst->instanceMatrix()->version;
                     Matrix4 instMat;
                     Matrix4 world;
                     for (size_t j = 0; j < inst->count(); ++j) {
@@ -467,9 +712,12 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                     std::memcpy(e.worldMatrix.data(), m->matrixWorld->elements.data(), 64);
                     built.push_back(e);
                 }
+                sp.count = static_cast<uint32_t>(built.size()) - sp.first;
+                builtSpans.push_back(sp);
             });
             lastVisibleEntries_ = std::move(built);
             lastVisibleLines_   = std::move(builtLines);
+            entrySpans_         = std::move(builtSpans);
             probeGridDirty_     = true;// scene structure changed → re-fit the probe grid
             }// !snapLean
 
@@ -486,6 +734,7 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
             lodChangedThisFrame_ = false;
             if (autoLod_) drainLodResults();// budget: 16 geoms / 8 MiB of new levels per frame
             {
+                THREEPP_CPUPROF("scene.4_lodSelect");
                 VulkanRenderer::AutoLodStats stats{};
                 stats.indexBytes   = lodIndexBytes_;
                 stats.blasBytes    = lodBlasBytes_;
@@ -511,18 +760,34 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                             ? std::tan(math::degToRad(persp->getEffectiveFOV()) * 0.5f)
                             : 0.f;
 
-                    for (auto& en : entries) {
-                        if (en.isOverlay || en.isParticle) continue;// not scene geometry — no LOD concept
+                    // Per SPAN: exemption class, emissive values, the blasCache
+                    // slot and chain eligibility are per-MESH facts — resolve
+                    // them once per span. Only spans with a READY chain pay the
+                    // per-entry projected-error math; everything else is a
+                    // constant-time skip (plus a snap-back walk gated on
+                    // lodNonZero so it runs only right after a chain retires).
+                    for (auto& sp : entrySpans_) {
+                        MeshEntry& e0 = entries[sp.first];
+                        if (e0.isOverlay || e0.isParticle) continue;// not scene geometry — no LOD concept
+                        const auto resetSpan = [&]() {
+                            if (sp.lodNonZero) {
+                                for (uint32_t j = 0; j < sp.count; ++j) {
+                                    auto& en = entries[sp.first + j];
+                                    if (en.lodLevel != 0) lodChangedThisFrame_ = true;
+                                    en.lodLevel = 0;
+                                }
+                                sp.lodNonZero = false;
+                            }
+                            stats.entriesPerLevel[0] += sp.count;
+                        };
                         // Deformers (stale local AABB), opted-out meshes
                         // (Object3D::autoLod == false — self-managed LOD like
                         // terrain tiles), authored manual-LOD subtrees, and
                         // non-perspective cameras (SSE needs a pinhole model):
                         // full detail.
-                        if (en.isSkinned || en.isDisplaced || en.isGrass || en.isMorphed || en.isTet ||
-                            en.lodExemptStatic || !persp) {
-                            if (en.lodLevel != 0) lodChangedThisFrame_ = true;
-                            en.lodLevel = 0;
-                            ++stats.entriesPerLevel[0];
+                        if (e0.isSkinned || e0.isDisplaced || e0.isGrass || e0.isMorphed || e0.isTet ||
+                            e0.lodExemptStatic || !persp) {
+                            resetSpan();
                             continue;
                         }
                         // Emissive VALUES read live off the expansion-cached
@@ -531,19 +796,16 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                         // silent index-buffer swap underneath it. Live values
                         // (not a cached verdict) so a lantern whose intensity
                         // ramps up at dusk exempts the moment it turns on.
-                        if (en.lodEmissive &&
-                            (en.lodEmissive->emissive.r > 0.f || en.lodEmissive->emissive.g > 0.f ||
-                             en.lodEmissive->emissive.b > 0.f || en.lodEmissive->emissiveMap)) {
-                            if (en.lodLevel != 0) lodChangedThisFrame_ = true;
-                            en.lodLevel = 0;
-                            ++stats.entriesPerLevel[0];
+                        if (e0.lodEmissive &&
+                            (e0.lodEmissive->emissive.r > 0.f || e0.lodEmissive->emissive.g > 0.f ||
+                             e0.lodEmissive->emissive.b > 0.f || e0.lodEmissive->emissiveMap)) {
+                            resetSpan();
                             continue;
                         }
 
-                        auto blasIt = blasCache.find(en.lodGeomKey);
+                        auto blasIt = blasCache.find(e0.lodGeomKey);
                         if (blasIt == blasCache.end()) {
-                            en.lodLevel = 0;// brand-new geometry this frame — no LOD0 record to chain off yet
-                            ++stats.entriesPerLevel[0];
+                            resetSpan();// brand-new geometry this frame — no LOD0 record to chain off yet
                             continue;
                         }
                         BlasRecord& rec = *blasIt->second;
@@ -564,9 +826,9 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                                 // lifetime. Failed enqueue (no position attribute)
                                 // marks Failed, not Queued: no result is coming,
                                 // so Queued would strand the record forever.
-                                auto geomSp = en.mesh->geometry();
-                                rec.lodState = (geomSp && enqueueLodJob(en.lodGeomKey, rec.geomVersion, *geomSp,
-                                                                        lodNormalWeightFor(*en.mesh)))
+                                auto geomSp = e0.mesh->geometry();
+                                rec.lodState = (geomSp && enqueueLodJob(e0.lodGeomKey, rec.geomVersion, *geomSp,
+                                                                        lodNormalWeightFor(*e0.mesh)))
                                         ? BlasRecord::LodState::Queued
                                         : BlasRecord::LodState::Failed;
                             } else if (!lodBudgetWarned_) {
@@ -577,11 +839,13 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                         }
 
                         if (rec.lodState != BlasRecord::LodState::Ready || rec.lodLevels.empty()) {
-                            en.lodLevel = 0;
-                            ++stats.entriesPerLevel[0];
+                            resetSpan();
                             continue;
                         }
 
+                        bool spanNonZero = false;
+                        for (uint32_t j = 0; j < sp.count; ++j) {
+                        MeshEntry& en = entries[sp.first + j];
                         // Re-derive the cached object-space sphere after an
                         // in-place geometry edit (flagged by the geom-dirty
                         // detection; boundingBox was invalidated there too).
@@ -646,7 +910,10 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
 
                         if (selected != en.lodLevel) lodChangedThisFrame_ = true;
                         en.lodLevel = selected;
+                        if (selected != 0) spanNonZero = true;
                         ++stats.entriesPerLevel[std::min<uint8_t>(selected, 5)];
+                        }// per-entry (Ready-chain spans only)
+                        sp.lodNonZero = spanNonZero;
                     }
                 } else {
                     // Feature off (or just turned off this frame): every
@@ -656,11 +923,18 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                     // prior setAutoLod(true) session would persist forever
                     // (MeshEntry::lodLevel survives across lean frames).
                     uint32_t nonOverlay = 0;
-                    for (auto& en : entries) {
-                        if (en.isOverlay || en.isParticle) continue;
-                        if (en.lodLevel != 0) lodChangedThisFrame_ = true;
-                        en.lodLevel = 0;
-                        ++nonOverlay;
+                    for (auto& sp : entrySpans_) {
+                        const auto& e0 = entries[sp.first];
+                        if (e0.isOverlay || e0.isParticle) continue;
+                        if (sp.lodNonZero) {
+                            for (uint32_t j = 0; j < sp.count; ++j) {
+                                auto& en = entries[sp.first + j];
+                                if (en.lodLevel != 0) lodChangedThisFrame_ = true;
+                                en.lodLevel = 0;
+                            }
+                            sp.lodNonZero = false;
+                        }
+                        nonOverlay += sp.count;
                     }
                     stats.entriesPerLevel[0] = nonOverlay;
                 }
@@ -702,80 +976,106 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
             // correct values.
             bool leanOk = false;
             if (snapLean) {
+                THREEPP_CPUPROF("scene.5_leanDiff");
                 leanOk = true;
-                for (size_t i = 0; i < prevSceneFingerprint.size() && leanOk; ++i) {
-                    MeshFingerprint& fp = prevSceneFingerprint[i];
-                    const MeshEntry& en = entries[i];
-                    const bool xfmChanged =
-                            std::memcmp(fp.matrix.data(), en.worldMatrix.data(), sizeof(fp.matrix)) != 0;
+                // Per SPAN: material version, texture set, and geometry
+                // versions are per-MESH facts — read them once per span
+                // instead of once per instance (the per-entry loop paid a
+                // material-version read + four attribute-version reads per
+                // instance per frame). Matrix change comes straight from the
+                // span refresh above (fp.matrix was updated there in the same
+                // pass). Per-entry writes remain only for spans that changed.
+                for (auto& sp : entrySpans_) {
+                    if (!leanOk) break;
+                    MeshFingerprint& fp0 = prevSceneFingerprint[sp.first];
+                    const bool xfmChanged = sp.movedThisFrame;
                     bool matChanged = false;
-                    const unsigned int matVer = fp.matTyped ? fp.matTyped->version() : 0u;
-                    if (matVer != fp.matVersion) {
-                        Mesh* m = en.mesh;
-                        if (albedoTexOf(*m) != fp.albedoTex ||
-                            roughnessTexOf(*m) != fp.roughnessTex ||
-                            metalnessTexOf(*m) != fp.metalnessTex ||
-                            normalTexOf(*m) != fp.normalTex ||
-                            transmissionTexOf(*m) != fp.transmissionTex ||
-                            clearcoatTexOf(*m) != fp.clearcoatTex ||
-                            clearcoatRoughnessTexOf(*m) != fp.clearcoatRoughnessTex ||
-                            emissiveTexOf(*m) != fp.emissiveTex ||
-                            occlusionTexOf(*m) != fp.occlusionTex) {
+                    const unsigned int matVer = fp0.matTyped ? fp0.matTyped->version() : 0u;
+                    if (matVer != fp0.matVersion) {
+                        Mesh* m = sp.mesh;
+                        if (albedoTexOf(*m) != fp0.albedoTex ||
+                            roughnessTexOf(*m) != fp0.roughnessTex ||
+                            metalnessTexOf(*m) != fp0.metalnessTex ||
+                            normalTexOf(*m) != fp0.normalTex ||
+                            transmissionTexOf(*m) != fp0.transmissionTex ||
+                            clearcoatTexOf(*m) != fp0.clearcoatTex ||
+                            clearcoatRoughnessTexOf(*m) != fp0.clearcoatRoughnessTex ||
+                            emissiveTexOf(*m) != fp0.emissiveTex ||
+                            occlusionTexOf(*m) != fp0.occlusionTex) {
                             leanOk = false;// texture swap = STRUCTURAL — full path decides
                             break;
                         }
                         matChanged = true;
-                        fp.matVersion = matVer;
                         const MaterialDesc md = materialFromMesh(*m);
-                        fp.pbr = {md.albedo[0], md.albedo[1], md.albedo[2],
-                                  md.roughness, md.metalness,
-                                  md.emissive[0], md.emissive[1], md.emissive[2],
-                                  md.emissiveIntensity,
-                                  md.normalScale[0], md.normalScale[1],
-                                  md.transmission, md.ior,
-                                  md.clearcoat, md.clearcoatRoughness};
+                        const std::array<float, 15> pbr = {
+                                md.albedo[0], md.albedo[1], md.albedo[2],
+                                md.roughness, md.metalness,
+                                md.emissive[0], md.emissive[1], md.emissive[2],
+                                md.emissiveIntensity,
+                                md.normalScale[0], md.normalScale[1],
+                                md.transmission, md.ior,
+                                md.clearcoat, md.clearcoatRoughness};
+                        for (uint32_t j = 0; j < sp.count; ++j) {
+                            auto& fp = prevSceneFingerprint[sp.first + j];
+                            fp.matVersion = matVer;
+                            fp.pbr = pbr;
+                        }
                     }
-                    BufferGeometry* g = fp.geomTyped;
+                    BufferGeometry* g = fp0.geomTyped;
                     const unsigned int av = g->attributesVersion();
-                    if (av != fp.attrVersion) {// attribute added/replaced/removed — re-cache
-                        fp.attrVersion = av;
+                    if (av != fp0.attrVersion) {// attribute added/replaced/removed — re-cache
                         // Untyped: only `version` is polled off these, and typed
                         // lookups would come back null for narrowed attributes.
-                        fp.posAttr  = g->getAttribute("position");
-                        fp.normAttr = g->getAttribute("normal");
-                        fp.uvAttr   = g->getAttribute("uv");
-                        fp.idxAttr  = g->getIndex();
+                        auto* posAttr  = g->getAttribute("position");
+                        auto* normAttr = g->getAttribute("normal");
+                        auto* uvAttr   = g->getAttribute("uv");
+                        auto* idxAttr  = g->getIndex();
+                        for (uint32_t j = 0; j < sp.count; ++j) {
+                            auto& fp = prevSceneFingerprint[sp.first + j];
+                            fp.attrVersion = av;
+                            fp.posAttr  = posAttr;
+                            fp.normAttr = normAttr;
+                            fp.uvAttr   = uvAttr;
+                            fp.idxAttr  = idxAttr;
+                        }
                     }
                     unsigned int gv = 0;// must mirror geomVersionOf()
-                    if (fp.posAttr)  gv += fp.posAttr->version;
-                    if (fp.normAttr) gv += fp.normAttr->version;
-                    if (fp.idxAttr)  gv += fp.idxAttr->version;
-                    if (fp.uvAttr)   gv += fp.uvAttr->version;
-                    const bool geomChanged = (gv != fp.geomVersion);
+                    if (fp0.posAttr)  gv += fp0.posAttr->version;
+                    if (fp0.normAttr) gv += fp0.normAttr->version;
+                    if (fp0.idxAttr)  gv += fp0.idxAttr->version;
+                    if (fp0.uvAttr)   gv += fp0.uvAttr->version;
+                    const bool geomChanged = (gv != fp0.geomVersion);
                     if (geomChanged) {
-                        fp.geomVersion = gv;
+                        for (uint32_t j = 0; j < sp.count; ++j)
+                            prevSceneFingerprint[sp.first + j].geomVersion = gv;
                         // Particle billboard meshes mutate their attributes every
                         // frame but own no BLAS — flagging geomDirty would fire a
                         // per-frame vkDeviceWaitIdle for a refit that skips them
                         // anyway (blasCache miss). The billboard pass re-uploads
                         // their vertex cache itself, version-gated.
-                        if (!en.isParticle) {
+                        if (!entries[sp.first].isParticle) {
                             geomDirtyAny = true;
-                            entryGeomDirty[i] = true;
+                            for (uint32_t j = 0; j < sp.count; ++j) {
+                                entryGeomDirty[sp.first + j] = true;
+                                entries[sp.first + j].lodSphereDirty = true;// auto-LOD's cached sphere follows
+                            }
                             // boundingBox invalidation — mirrors the generic loop.
-                            if (auto gg = en.mesh->geometry()) gg->boundingBox.reset();
-                            entries[i].lodSphereDirty = true;// auto-LOD's cached sphere follows
+                            if (auto gg = sp.mesh->geometry()) gg->boundingBox.reset();
+                            sp.localBoundsValid = false;
+                            sp.aabbValid = false;
                         }
                     }
-                    if (xfmChanged) {
-                        matricesSame = false;
-                        fp.matrix = en.worldMatrix;
+                    if (xfmChanged) matricesSame = false;// fp.matrix refreshed with the span above
+                    if (matChanged) {
+                        materialValuesSame = false;
+                        for (uint32_t j = 0; j < sp.count; ++j)
+                            entryMatDirty[sp.first + j] = true;
                     }
-                    if (matChanged) { materialValuesSame = false; entryMatDirty[i] = true; }
                     if (xfmChanged || matChanged || geomChanged) {
-                        const size_t w = i >> 5;
-                        if (w >= meshMovedBits_.size()) meshMovedBits_.resize(w + 1, 0u);
-                        meshMovedBits_[w] |= (1u << (i & 31u));
+                        const size_t lastW = (size_t(sp.first) + sp.count - 1) >> 5;
+                        if (lastW >= meshMovedBits_.size()) meshMovedBits_.resize(lastW + 1, 0u);
+                        for (uint32_t i = sp.first; i < sp.first + sp.count; ++i)
+                            meshMovedBits_[i >> 5] |= (1u << (i & 31u));
                     }
                 }
                 if (!leanOk) {
@@ -798,6 +1098,7 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
             // identical results — copy them straight from
             // prevSceneFingerprint[i] and only refresh the world matrix.
             if (!leanOk) {
+            THREEPP_CPUPROF("scene.5b_fingerprint");
             currFp.resize(entries.size());
             const bool prevValid = sceneBuilt_ && prevSceneFingerprint.size() == entries.size();
             // Per-Material memo for the slow (non-fast-path) branch: the nine
@@ -902,8 +1203,14 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
             // before its first ray trace. Gated on the cached isSkinned flag
             // so non-skinned entries skip the type probe entirely.
             std::vector<bool> entryBonesDirty(entries.size(), false);
-            for (size_t i = 0; i < entries.size(); ++i) {
-                if (!entries[i].isSkinned) continue;
+            {
+            THREEPP_CPUPROF("scene.6_deformerScans");
+            // Deformer flags are per-MESH — gate on the span's first entry so
+            // a non-deformer span (the 100k-instance common case) costs one
+            // bool read, not count() of them.
+            for (const auto& sp : entrySpans_) {
+                if (!entries[sp.first].isSkinned) continue;
+                for (size_t i = sp.first; i < size_t(sp.first) + sp.count; ++i) {
                 auto* sm = static_cast<SkinnedMesh*>(entries[i].mesh);
                 if (!sm->skeleton || sm->skeleton->bones.empty()) continue;
                 auto stIt = skinnedMeshStates.find(sm);
@@ -918,6 +1225,8 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                                 bm.size() * sizeof(float)) != 0) {
                     entryBonesDirty[i] = true;
                 }
+                }
+            }
             }
 
             // DisplacedMesh — intrinsically dirty every frame (FFT spectrum
@@ -925,8 +1234,12 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
             // routed through the cached isDisplaced flag instead of a fresh
             // dynamic_cast every frame.
             std::vector<bool> entryDisplacedDirty(entries.size(), false);
-            for (size_t i = 0; i < entries.size(); ++i) {
-                if (entries[i].isDisplaced) entryDisplacedDirty[i] = true;
+            {
+                THREEPP_CPUPROF("scene.6_deformerScans");
+                for (const auto& sp : entrySpans_) {
+                    if (!entries[sp.first].isDisplaced) continue;
+                    for (uint32_t j = 0; j < sp.count; ++j) entryDisplacedDirty[sp.first + j] = true;
+                }
             }
 
             // GrassMesh — intrinsically dirty every frame (wind advances) UNLESS
@@ -940,11 +1253,16 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
             // exactly like an animated frame — no TAA ghosting from the freeze.
             std::vector<bool> entryGrassDirty(entries.size(), false);
             {
+                THREEPP_CPUPROF("scene.6_deformerScans");
                 // Camera world position (translation column of matrixWorld).
                 const auto& cw = camera.matrixWorld->elements;
                 const Vector3 camPos(cw[12], cw[13], cw[14]);
-                for (size_t i = 0; i < entries.size(); ++i) {
-                    if (entries[i].isGrass) entryGrassDirty[i] = grassShouldAnimate(entries[i], camPos);
+                for (const auto& sp : entrySpans_) {
+                    if (!entries[sp.first].isGrass) continue;
+                    for (uint32_t j = 0; j < sp.count; ++j) {
+                        const size_t i = size_t(sp.first) + j;
+                        entryGrassDirty[i] = grassShouldAnimate(entries[i], camPos);
+                    }
                 }
             }
 
@@ -955,8 +1273,11 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
             // the getMorphAttributes hash lookup + SkinnedMesh dynamic_cast
             // used to run for every entry every frame.
             std::vector<bool> entryMorphDirty(entries.size(), false);
-            for (size_t i = 0; i < entries.size(); ++i) {
-                if (!entries[i].isMorphed || entries[i].isSkinned) continue;
+            {
+            THREEPP_CPUPROF("scene.6_deformerScans");
+            for (const auto& sp : entrySpans_) {
+                if (!entries[sp.first].isMorphed || entries[sp.first].isSkinned) continue;
+                for (size_t i = sp.first; i < size_t(sp.first) + sp.count; ++i) {
                 Mesh* m = entries[i].mesh;
                 auto mIt = morphedMeshStates.find(m);
                 if (mIt == morphedMeshStates.end()) {
@@ -971,25 +1292,32 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                     std::memcmp(inf.data(), prev.data(), inf.size() * sizeof(float)) != 0) {
                     entryMorphDirty[i] = true;
                 }
+                }
+            }
             }
 
             // LEAN path: the deformer dirty bits (bones / displaced / morph)
             // come from the scans above — fold them into the moved-bits mask
             // and the *DirtyAny flags exactly like the generic loop does.
             if (leanOk) {
-                for (size_t i = 0; i < entries.size(); ++i) {
-                    const bool b = entryBonesDirty[i];
-                    const bool d = entryDisplacedDirty[i];
-                    const bool gr = entryGrassDirty[i];
-                    const bool mo = entryMorphDirty[i];
-                    if (!(b || d || gr || mo)) continue;
-                    if (b) bonesDirtyAny = true;
-                    if (d) displacedDirtyAny = true;
-                    if (gr) grassDirtyAny = true;
-                    if (mo) morphDirtyAny = true;
-                    const size_t w = i >> 5;
-                    if (w >= meshMovedBits_.size()) meshMovedBits_.resize(w + 1, 0u);
-                    meshMovedBits_[w] |= (1u << (i & 31u));
+                THREEPP_CPUPROF("scene.6_deformerScans");
+                for (const auto& sp : entrySpans_) {
+                    const auto& e0 = entries[sp.first];
+                    if (!(e0.isSkinned || e0.isDisplaced || e0.isGrass || e0.isMorphed)) continue;
+                    for (size_t i = sp.first; i < size_t(sp.first) + sp.count; ++i) {
+                        const bool b = entryBonesDirty[i];
+                        const bool d = entryDisplacedDirty[i];
+                        const bool gr = entryGrassDirty[i];
+                        const bool mo = entryMorphDirty[i];
+                        if (!(b || d || gr || mo)) continue;
+                        if (b) bonesDirtyAny = true;
+                        if (d) displacedDirtyAny = true;
+                        if (gr) grassDirtyAny = true;
+                        if (mo) morphDirtyAny = true;
+                        const size_t w = i >> 5;
+                        if (w >= meshMovedBits_.size()) meshMovedBits_.resize(w + 1, 0u);
+                        meshMovedBits_[w] |= (1u << (i & 31u));
+                    }
                 }
             }
             // Continuous-motion fast path: when only the per-mesh matrices
@@ -1017,7 +1345,8 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                 // scene-wide.
                 // The LEAN path already filled the change flags in its in-place
                 // diff; only the full path runs the generic compare here.
-                if (!leanOk)
+                if (!leanOk) {
+                THREEPP_CPUPROF("scene.5c_genericCompare");
                 for (size_t i = 0; i < currFp.size(); ++i) {
                     const auto& a = currFp[i];
                     const auto& b = prevSceneFingerprint[i];
@@ -1086,6 +1415,19 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                         if (w >= meshMovedBits_.size()) meshMovedBits_.resize(w + 1, 0u);
                         meshMovedBits_[w] |= (1u << (i & 31u));
                     }
+                }
+                // The lean diff invalidates span bounds itself; the generic
+                // compare above only fills per-entry bits — mirror the geom-
+                // dirty invalidation onto the spans (the expansion snapshotted
+                // local bounds BEFORE the edit was detected).
+                if (geomDirtyAny) {
+                    for (auto& sp : entrySpans_) {
+                        if (sp.first < entryGeomDirty.size() && entryGeomDirty[sp.first]) {
+                            sp.localBoundsValid = false;
+                            sp.aabbValid = false;
+                        }
+                    }
+                }
                 }
                 if (structuralSame) {
                     if (bonesDirtyAny) {
@@ -1156,16 +1498,18 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                     // the tetPos write ring, whose depth only covers the in-flight
                     // frames if it moves once per submission.
                     std::unordered_set<Mesh*> tetRefreshed;
-                    for (size_t i = 0; i < entries.size(); ++i) {
-                        if (!entries[i].isTet) continue;
-                        if (!tetRefreshed.insert(entries[i].mesh).second) continue;
-                        auto tIt = tetMeshStates.find(entries[i].mesh);
-                        if (tIt == tetMeshStates.end()) continue;
-                        refreshTetBlas(*entries[i].mesh, *tIt->second);
-                        tetDirtyAny = true;
-                        const size_t w = i >> 5;
-                        if (w >= meshMovedBits_.size()) meshMovedBits_.resize(w + 1, 0u);
-                        meshMovedBits_[w] |= (1u << (i & 31u));
+                    for (const auto& sp : entrySpans_) {
+                        if (!entries[sp.first].isTet) continue;
+                        for (size_t i = sp.first; i < size_t(sp.first) + sp.count; ++i) {
+                            if (!tetRefreshed.insert(entries[i].mesh).second) continue;
+                            auto tIt = tetMeshStates.find(entries[i].mesh);
+                            if (tIt == tetMeshStates.end()) continue;
+                            refreshTetBlas(*entries[i].mesh, *tIt->second);
+                            tetDirtyAny = true;
+                            const size_t w = i >> 5;
+                            if (w >= meshMovedBits_.size()) meshMovedBits_.resize(w + 1, 0u);
+                            meshMovedBits_[w] |= (1u << (i & 31u));
+                        }
                     }
                     // Geometries whose prevVertex was re-snapshotted (to OLD
                     // positions) this frame. The prevVertex re-sync pass below
@@ -1295,6 +1639,7 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                     }
 
                     if (!matricesSame || bonesDirtyAny || displacedDirtyAny || grassDirtyAny || tetDirtyAny || geomDirtyAny || morphDirtyAny || lodChangedThisFrame_) {
+                        THREEPP_CPUPROF("scene.7_tlasRefitFill");
                         // TLAS refit: needed when instance transforms change
                         // (matricesSame=false) AND when any skinned BLAS was
                         // just rebuilt — the TLAS's per-instance wrapped AABB
@@ -1308,83 +1653,112 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                         // BLAS (and which index buffer) an entry's instance
                         // references — see the plain-geometry branch below
                         // and the geomDescsCached_ patch after this loop.
-                        std::vector<VkAccelerationStructureInstanceKHR> instances;
+                        // Persistent scratch (swapped with pendingTlasInstances_
+                        // below) so both vectors keep their capacity — a fresh
+                        // ~5 MB allocation per moving frame at 100k instances
+                        // otherwise.
+                        auto& instances = tlasInstanceScratch_;
+                        instances.clear();
                         instances.reserve(entries.size());
                         // instanceCustomIndex == entry index (matches the entries-
                         // indexed geomDescs/matDescs built in the full rebuild);
                         // overlay/skipped entries push no instance, exactly as
                         // their geomDescs/matDescs slots are left default.
-                        for (size_t i = 0; i < entries.size(); ++i) {
-                            const MeshEntry& en = entries[i];
-                            if (en.isOverlay) continue;// raster-overlay only
-                            VkDeviceAddress blasAddr = 0;
-                            if (en.isSkinned) {
-                                auto* sm = static_cast<SkinnedMesh*>(en.mesh);
-                                if (!sm->skeleton || sm->skeleton->bones.empty()) continue;
-                                auto smIt = skinnedMeshStates.find(sm);
-                                if (smIt == skinnedMeshStates.end()) continue;
-                                blasAddr = smIt->second->blas->address;
-                            } else if (en.isDisplaced) {
-                                auto* dm = static_cast<DisplacedMesh*>(en.mesh);
-                                auto dmIt = displacedStates.find(dm);
-                                if (dmIt == displacedStates.end()) continue;
-                                blasAddr = dmIt->second->blas->address;
-                            } else if (en.isGrass) {
-                                auto* gm = static_cast<GrassMesh*>(en.mesh);
-                                auto gIt = grassStates.find(gm);
-                                if (gIt == grassStates.end()) continue;
-                                blasAddr = gIt->second->blas->address;
-                            } else if (en.isTet) {
-                                auto tIt = tetMeshStates.find(en.mesh);
-                                if (tIt == tetMeshStates.end()) continue;
-                                blasAddr = tIt->second->blas->address;
-                            } else if (en.isMorphed) {
-                                auto mIt = morphedMeshStates.find(en.mesh);
-                                if (mIt == morphedMeshStates.end()) continue;
-                                blasAddr = mIt->second->blas->address;
-                            } else {
-                                const BufferGeometry* geomKey = en.mesh->geometry().get();
-                                auto it = blasCache.find(geomKey);
-                                if (it == blasCache.end()) continue;// shouldn't happen on transform-only
-                                const auto lodSel = selectLodGeom(*it->second, en.lodLevel);
-                                blasAddr = lodSel.asAddress;
-                                // RT secondary hits (reflections/GI/lidar/probe update)
-                                // read GeometryDesc::indexAddress keyed by gl_PrimitiveID
-                                // from whichever BLAS this instance references — it must
-                                // track the SAME level, or a hit against a coarser BLAS
-                                // misindexes the still-LOD0 index buffer. `indexed` rides
-                                // along: a level of a non-indexed soup record IS an
-                                // indexed fetch. Patched into the buffer itself
-                                // (vkDeviceWaitIdle-gated) below, only on a frame where a
-                                // level actually changed.
-                                if (i < geomDescsCached_.size()) {
-                                    geomDescsCached_[i].indexAddress = lodSel.indexAddress;
-                                    geomDescsCached_[i].indexed = lodSel.indexed ? 1u : 0u;
-                                }
-                            }
-                            VkAccelerationStructureInstanceKHR inst{};
-                            const auto& e = en.worldMatrix;
-                            for (int r = 0; r < 3; ++r) {
-                                for (int c = 0; c < 4; ++c) {
-                                    inst.transform.matrix[r][c] = e[c * 4 + r];
-                                }
-                            }
-                            inst.instanceCustomIndex = static_cast<uint32_t>(i);
+                        //
+                        // Per SPAN: the BLAS resolve, visibility mask and LOD
+                        // eligibility are per-MESH — one lookup per span, not
+                        // one per instance. Per-entry work is the transform
+                        // write (+ per-entry LOD selection only when the span's
+                        // record actually has a chain).
+                        for (const auto& sp : entrySpans_) {
+                            const MeshEntry& e0 = entries[sp.first];
+                            if (e0.isOverlay) continue;// raster-overlay only
                             // Same visibility-group rule as the full rebuild:
                             // blend/transmissive (non-water) → alpha mask so
                             // occlusion queries skip them, camera-parented
                             // viewmodels → no-shadow mask.
-                            inst.mask = kRayMaskOpaque;
-                            if (i < matDescsCached_.size() && !en.isDisplaced) {
-                                const auto& cmd = matDescsCached_[i];
+                            uint8_t spanMask = kRayMaskOpaque;
+                            if (sp.first < matDescsCached_.size() && !e0.isDisplaced) {
+                                const auto& cmd = matDescsCached_[sp.first];
                                 if (cmd.transmission > 0.0f || cmd.alphaCutoff < 0.0f)
-                                    inst.mask = kRayMaskAlpha;
+                                    spanMask = kRayMaskAlpha;
                             }
-                            if (en.camAttached) inst.mask = kRayMaskNoShadow;
-                            inst.instanceShaderBindingTableRecordOffset = 0;
-                            inst.flags = VK_GEOMETRY_INSTANCE_TRIANGLE_FACING_CULL_DISABLE_BIT_KHR;
-                            inst.accelerationStructureReference = blasAddr;
-                            instances.push_back(inst);
+                            if (e0.camAttached) spanMask = kRayMaskNoShadow;
+                            const bool isDeformer = e0.isSkinned || e0.isDisplaced ||
+                                                    e0.isGrass || e0.isTet || e0.isMorphed;
+                            BlasRecord* rec = nullptr;
+                            bool perEntryLod = false;
+                            LodGeomSel lodSel0{};
+                            if (!isDeformer) {
+                                const BufferGeometry* geomKey = e0.mesh->geometry().get();
+                                auto it = blasCache.find(geomKey);
+                                if (it == blasCache.end()) continue;// shouldn't happen on transform-only
+                                rec = it->second.get();
+                                perEntryLod = !rec->lodLevels.empty();
+                                lodSel0 = selectLodGeom(*rec, 0);
+                            }
+                            for (uint32_t j = 0; j < sp.count; ++j) {
+                                const size_t i = size_t(sp.first) + j;
+                                const MeshEntry& en = entries[i];
+                                VkDeviceAddress blasAddr = 0;
+                                if (en.isSkinned) {
+                                    auto* sm = static_cast<SkinnedMesh*>(en.mesh);
+                                    if (!sm->skeleton || sm->skeleton->bones.empty()) continue;
+                                    auto smIt = skinnedMeshStates.find(sm);
+                                    if (smIt == skinnedMeshStates.end()) continue;
+                                    blasAddr = smIt->second->blas->address;
+                                } else if (en.isDisplaced) {
+                                    auto* dm = static_cast<DisplacedMesh*>(en.mesh);
+                                    auto dmIt = displacedStates.find(dm);
+                                    if (dmIt == displacedStates.end()) continue;
+                                    blasAddr = dmIt->second->blas->address;
+                                } else if (en.isGrass) {
+                                    auto* gm = static_cast<GrassMesh*>(en.mesh);
+                                    auto gIt = grassStates.find(gm);
+                                    if (gIt == grassStates.end()) continue;
+                                    blasAddr = gIt->second->blas->address;
+                                } else if (en.isTet) {
+                                    auto tIt = tetMeshStates.find(en.mesh);
+                                    if (tIt == tetMeshStates.end()) continue;
+                                    blasAddr = tIt->second->blas->address;
+                                } else if (en.isMorphed) {
+                                    auto mIt = morphedMeshStates.find(en.mesh);
+                                    if (mIt == morphedMeshStates.end()) continue;
+                                    blasAddr = mIt->second->blas->address;
+                                } else {
+                                    // RT secondary hits (reflections/GI/lidar/probe
+                                    // update) read GeometryDesc::indexAddress keyed by
+                                    // gl_PrimitiveID from whichever BLAS this instance
+                                    // references — it must track the SAME level, or a
+                                    // hit against a coarser BLAS misindexes the
+                                    // still-LOD0 index buffer. `indexed` rides along: a
+                                    // level of a non-indexed soup record IS an indexed
+                                    // fetch. Patched into the buffer itself below, only
+                                    // on a frame where a level actually changed. When
+                                    // the record has NO chain, lodSel0 already equals
+                                    // what the full rebuild wrote — skip the patch.
+                                    const auto lodSel = perEntryLod ? selectLodGeom(*rec, en.lodLevel)
+                                                                    : lodSel0;
+                                    blasAddr = lodSel.asAddress;
+                                    if (perEntryLod && i < geomDescsCached_.size()) {
+                                        geomDescsCached_[i].indexAddress = lodSel.indexAddress;
+                                        geomDescsCached_[i].indexed = lodSel.indexed ? 1u : 0u;
+                                    }
+                                }
+                                VkAccelerationStructureInstanceKHR inst{};
+                                const auto& e = en.worldMatrix;
+                                for (int r = 0; r < 3; ++r) {
+                                    for (int c = 0; c < 4; ++c) {
+                                        inst.transform.matrix[r][c] = e[c * 4 + r];
+                                    }
+                                }
+                                inst.instanceCustomIndex = static_cast<uint32_t>(i);
+                                inst.mask = spanMask;
+                                inst.instanceShaderBindingTableRecordOffset = 0;
+                                inst.flags = VK_GEOMETRY_INSTANCE_TRIANGLE_FACING_CULL_DISABLE_BIT_KHR;
+                                inst.accelerationStructureReference = blasAddr;
+                                instances.push_back(inst);
+                            }
                         }
                         if (lodChangedThisFrame_ && !geomDescsCached_.empty()) {
                             // geomDescsCached_ was patched in place above; the
@@ -1401,11 +1775,12 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                         const bool blasDeformed = bonesDirtyAny || displacedDirtyAny || grassDirtyAny || tetDirtyAny || morphDirtyAny || geomDirtyAny || lodChangedThisFrame_;
                         // Stage the refit; recordCommandBuffer records it into the
                         // frame cb after the deformable BLAS rebuilds (no drain).
-                        pendingTlasInstances_ = std::move(instances);
+                        pendingTlasInstances_.swap(instances);// scratch keeps its capacity
                         pendingTlasFullBuild_ = blasDeformed;
                         pendingTlasRefit_ = true;
                     }
                     if (!materialValuesSame) {
+                        THREEPP_CPUPROF("scene.8_matDescPatch");
                         // Material-values-only update: rebuild MaterialDescs into
                         // the host-side cache, mark every per-frame slot dirty,
                         // and let renderFrame flush after the next fence wait.
@@ -1517,6 +1892,15 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                         }
                         for (auto& d : matDescsDirty_) d = true;
                         cacheCullFlags(matDescsCached_);
+                    }
+                    // Anything that reached one of the change branches above
+                    // reshapes the DrawInfo/indirect content — invalidate the
+                    // per-view indirect skip caches. A fully quiet frame (the
+                    // common static case) leaves the version untouched.
+                    if (!matricesSame || !materialValuesSame || geomDirtyAny ||
+                        bonesDirtyAny || displacedDirtyAny || grassDirtyAny ||
+                        tetDirtyAny || morphDirtyAny || lodChangedThisFrame_) {
+                        ++drawInputsVersion_;
                     }
                     // Update prevSceneFingerprint so later frames compare
                     // against this frame's state, not stale. (The lean path
@@ -2119,7 +2503,8 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
             // texel's own moved bit (ids .z, kInstFlagMoving) instead of
             // dereferencing geoms[prev ids .x], the ReSTIR reservoirs store
             // world-space light samples (position + type, never an index),
-            // and prevWorldMats is keyed by (Mesh*, instanceIndex). The
+            // and the prev-world motion references are identity-remapped
+            // below alongside meshMovedSticky_. The
             // per-pixel depth/normal gates then cold-start exactly the pixels
             // whose surface really changed. So neither an APPEND (spawned
             // PhysX body, grown ParticleSystem) nor a mid-list REMOVAL /
@@ -2138,16 +2523,19 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
             //     countdown must not land on an unrelated survivor (a stale
             //     moving label makes the trailing-edge guards reject history
             //     at every silhouette for 30 frames — edge shimmer).
-            //   prevWorldMats — erase ONLY removed keys: a clear fakes
-            //     identity motion scene-wide for a frame, and a surviving
-            //     stale key could hand a recycled Mesh allocation a dead
-            //     entry's matrix (one-frame ghost motion).
+            //   prevWorldByEntry_ — remap by the same identity so a surviving
+            //     entry keeps its motion reference (a reset fakes identity
+            //     motion scene-wide for a frame); removed entries' slots are
+            //     simply dropped with the old index space.
             // (meshMovedBits_ is refilled in CURRENT index space every
             // ensureSceneBuilt pass, so it needs no remap.)
             //
             // A duplicate (mesh, instanceIndex) key would make the identity
             // match ambiguous — not expected, every entry is its own TLAS
             // slot — so that lone case falls back to the old global reset.
+            std::vector<std::array<float, 16>> oldPrevWorld = std::move(prevWorldByEntry_);
+            std::vector<uint8_t> oldPrevValid = std::move(prevWorldValidByEntry_);
+            seedMotionState(entries);// identity motion + prev=current for every slot
             bool identityOk = sceneBuilt_;
             if (identityOk) {
                 std::unordered_map<EntryKey, size_t, EntryKeyHash> oldIdx;
@@ -2165,10 +2553,16 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                         if (it == oldIdx.end()) continue;// new entry — no history
                         if (it->second < meshMovedSticky_.size())
                             remappedSticky[i] = meshMovedSticky_[it->second];
-                        oldIdx.erase(it);// leftovers below = removed entries
+                        if (it->second < oldPrevWorld.size() && oldPrevValid[it->second] &&
+                            i < prevWorldByEntry_.size()) {
+                            prevWorldByEntry_[i] = oldPrevWorld[it->second];
+                        }
+                        oldIdx.erase(it);// leftovers = removed entries (slots dropped)
                     }
                     meshMovedSticky_.swap(remappedSticky);
-                    for (const auto& [key, idx] : oldIdx) prevWorldMats.erase(key);
+                    stickyActiveCount_ = 0;
+                    for (uint32_t v : meshMovedSticky_)
+                        if (v > 0u) ++stickyActiveCount_;
                 }
             }
             if (!identityOk) {
@@ -2176,8 +2570,8 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                 // We're already past vkDeviceWaitIdle so the clear is synchronous.
                 clearGbufImages();
                 sampleIndex = 0;
-                prevWorldMats.clear();
                 meshMovedSticky_.clear();
+                stickyActiveCount_ = 0;
             }
 
             // Grow motion-mat + mesh-moved-bits buffers if the new instance
@@ -2225,6 +2619,7 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
             for (auto& v : views_) v->rasterMatTexValid_.fill(0);
             prevSceneFingerprint = std::move(currFp);
             sceneBuilt_ = true;
+            ++drawInputsVersion_;// structural rebuild — every draw record is new
 
             // Companion to the post-init dump: with the scene's BLASes +
             // geometry buffers now resident, allocationBytes − the post-init

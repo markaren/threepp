@@ -1,5 +1,7 @@
 #include "VulkanCoreImpl.hpp"
 
+#include "VulkanCpuPhaseProf.hpp"
+
 #include "threepp/renderers/vulkan/shaders/vulkan_shared.h"// kInstFlag* bit layout
 
 // debug_resolve.comp's embedded SPIR-V array (kDebugResolveCompSpv) is only
@@ -60,6 +62,7 @@ namespace threepp {
     // sidesteps the gl_DrawIDARB-resets-per-call issue without
     // needing dynamic-offset descriptors or per-call push constants.
     void VulkanRenderer::Impl::buildIndirectDrawData(uint32_t frame) {
+        THREEPP_CPUPROF("frame.D_buildIndirect");
         for (auto& g : indirectGroups_) { g.offset = 0; g.count = 0; }
         indirectTotalDraws_ = 0;
 
@@ -88,6 +91,34 @@ namespace threepp {
         const bool wantOcclMeta = occlusionCullingEnabled_ && occl_ &&
                                   occlHiz_ && occlHiz_->valid() && !scissorTest &&
                                   !view().secondary;
+
+        // Skip signature: the DrawInfo/cmd/occl-meta contents are a pure
+        // function of (scene draw inputs, this view's cull bits, the occl
+        // configuration). When this FIF slot's device buffers were last
+        // filled from the exact same inputs, restore the CPU-side outputs
+        // and return — a fully static frame reuses ~20 MB of records
+        // verbatim instead of rebuilding and re-copying them.
+        const std::array<uint64_t, 2> buildSig = {
+                (uint64_t(drawInputsVersion_) << 32) | uint64_t(view().cullVersion),
+                (wantOcclMeta ? (1ull << 63) : 0ull) ^
+                        (wantOcclMeta ? reinterpret_cast<uint64_t>(occlHiz_->view()) : 0ull)};
+        if (view().indirectBuiltSig[frame] == buildSig) {
+            indirectGroups_     = view().cachedIndirectGroups;
+            indirectTotalDraws_ = view().cachedIndirectTotal;
+            if (!view().secondary) occlActiveThisFrame_ = view().cachedOcclActive;
+            if (view().cachedOcclActive && indirectTotalDraws_ > 0u) {
+                // Descriptor upkeep only — handles and capacity are unchanged
+                // by definition of the signature match.
+                vulkan::OcclusionCull::FrameInputs oin{};
+                oin.srcCmds    = view().indirectCmdBuffers[frame].handle;
+                oin.rasterCam  = view().rasterCameraUbos[frame].handle;
+                oin.hizView    = occlHiz_->view();
+                oin.hizSampler = occlHiz_->sampler();
+                occl_->prepareFrame(frame, indirectTotalDraws_, occlBitDomain_, oin);
+            }
+            return;
+        }
+
         auto& occlMeta = indirectOcclScratch_;
         for (auto& v : occlMeta) v.clear();
         auto bucketOf = [](VkCullModeFlags cm) -> int {
@@ -115,6 +146,17 @@ namespace threepp {
         bool              memoIdsValid = false;
         uint16_t          memoClassId  = 0;
         uint16_t          memoStableId = 0;
+        // Material-derived per-mesh memos (one virtual material() call +
+        // flag/offset derivation per RUN of instances, not per instance).
+        std::shared_ptr<Material> memoMatSp;
+        uint32_t          memoMatFlags = 0u;// double-sided / tex-anim bits
+        bool              memoVtxColor = false;
+        float             memoPolyOff  = 0.f;
+        bool              memoLodStatic = false;// record has no LOD chain
+        LodGeomSel        memoLodSel0{};
+        // Object-space bounds for the occl-meta Arvo transform.
+        bool              memoBoundsValid = false;
+        float             memoCenter[3]{}, memoHalf[3]{};
         for (size_t i = 0; i < lastVisibleEntries_.size(); ++i) {
             const auto& en = lastVisibleEntries_[i];
             if (en.isOverlay)  continue;
@@ -123,15 +165,57 @@ namespace threepp {
                 memoMesh     = en.mesh;
                 memoRec      = resolveBlasForEntry(en);
                 memoIdsValid = false;
+                // One virtual material() call per run (it is an out-of-line
+                // override returning shared_ptr by value, so the compiler
+                // cannot CSE repeated calls). Held by shared_ptr so the raw
+                // pointer cannot dangle on a temporary.
+                memoMatSp = en.mesh->material();
+                const Material* sm = memoMatSp.get();
+                memoMatFlags = 0u;
+                // DOUBLE_SIDED: gbuffer.frag flips N toward the viewer, so on
+                // cutout foliage the jittered coverage flips a pixel's normal
+                // SIGN frame to frame. The GI temporal reproject + SVGF normal
+                // edge-stop must treat ±N as the SAME surface there (flag
+                // consumed in deferred_shade.comp / deferred_gi_filter.comp) or
+                // the GI history cold-starts every frame — measured as 8× the
+                // frame-to-frame flicker on a procedural tree canopy.
+                if (sm && sm->side == Side::Double) memoMatFlags |= kInstFlagDoubleSided;
+                // TEXTURE-ANIMATED (scrolling UVs, video/live textures): the
+                // pattern moves with NO geometric motion vectors, so the TAA
+                // resolve must hold a short history (α floor) instead of
+                // smearing it. TAA-only — the GI history accumulates
+                // DEMODULATED irradiance, which a texture animation doesn't
+                // change, so bit 6 deliberately does NOT shorten the GI cap.
+                if (sm && sm->textureAnimatedHint) memoMatFlags |= kInstFlagTexAnim;
+                memoVtxColor = sm && sm->vertexColors;
+                // polygonOffset → per-mesh clip-z depth bias (decals). Reverse-Z:
+                // a +clip-z bias pushes the surface toward NEAR so it renders on
+                // top of coplanar geometry (no z-fight). threepp/GL uses NEGATIVE
+                // polygonOffsetUnits for "on top", so flip the sign; units==0
+                // (bool only) → a small default that clears z-fight without
+                // floating. (The slope-scaled `factor` term isn't applied — flat
+                // decals don't need it; bias is uniform in NDC.)
+                memoPolyOff = 0.f;
+                if (sm && sm->polygonOffset) {
+                    const float uf = sm->polygonOffsetUnits + sm->polygonOffsetFactor;
+                    memoPolyOff = (uf != 0.f) ? (-uf * 1.0e-6f) : 4.0e-6f;
+                }
+                memoLodStatic = memoRec && memoRec->lodLevels.empty();
+                if (memoRec) memoLodSel0 = selectLodGeom(*memoRec, 0);
+                memoBoundsValid = false;
+                if (auto geom = en.mesh->geometry()) {
+                    if (!geom->boundingBox) geom->computeBoundingBox();
+                    if (geom->boundingBox) {
+                        const Vector3 c = geom->boundingBox->getCenter();
+                        const Vector3 h = geom->boundingBox->getSize() * 0.5f;
+                        memoCenter[0] = c.x; memoCenter[1] = c.y; memoCenter[2] = c.z;
+                        memoHalf[0]   = h.x; memoHalf[1]   = h.y; memoHalf[2]   = h.z;
+                        memoBoundsValid = true;
+                    }
+                }
             }
             const BlasRecord* rec = memoRec;
             if (!rec || rec->vertex.handle == VK_NULL_HANDLE) continue;
-            // One virtual material() call (it is an out-of-line override
-            // returning shared_ptr by value, so the compiler cannot CSE the
-            // three separate calls this replaces). Held by shared_ptr so the
-            // raw pointer cannot dangle on a temporary.
-            const auto      matSp = en.mesh->material();
-            const Material* mat   = matSp.get();
 
             // Auto-LOD: en.lodLevel==0 for every non-eligible entry (the
             // selection pass in ensureSceneBuilt only sets it >0 on plain
@@ -140,8 +224,9 @@ namespace threepp {
             // ensureSceneBuilt — both read en.lodLevel verbatim. Indexed-ness
             // is PER SELECTION, not per record: a level of a non-indexed soup
             // record is an indexed draw (welded canonical indices) against
-            // the same soup vertex buffer.
-            const auto lodSel = selectLodGeom(*rec, en.lodLevel);
+            // the same soup vertex buffer. Chain-less records (the common
+            // case) resolve once per run via the memo.
+            const auto lodSel = memoLodStatic ? memoLodSel0 : selectLodGeom(*rec, en.lodLevel);
             const bool indexed = lodSel.indexed;
             const uint32_t vcount = indexed ? lodSel.indexCount : rec->vertexCount;
             if (vcount == 0u) continue;
@@ -179,34 +264,17 @@ namespace threepp {
             // and the geometry uploaded a color buffer — matches the
             // GeometryDesc::colorAddress gate. gbuffer.frag multiplies albedo
             // by the interpolated value.
-            di.colorAddr = (rec->color.handle != VK_NULL_HANDLE && mat && mat->vertexColors)
+            di.colorAddr = (rec->color.handle != VK_NULL_HANDLE && memoVtxColor)
                                    ? rec->color.address
                                    : 0ull;
             di.instanceCustomIndex = static_cast<uint32_t>(i);
             // Per-instance flag word — canonical bit layout in
             // vulkan_shared.h (kInstFlag*); shaders read it back from the
-            // gbuffer IDs .z via the instance_flags.glsl accessors.
-            uint32_t flags = 0u;
+            // gbuffer IDs .z via the instance_flags.glsl accessors. The
+            // material-derived bits come from the per-run memo above.
+            uint32_t flags = memoMatFlags;
             if (en.isDisplaced) flags |= kInstFlagWater;
             if (en.isSkinned)   flags |= kInstFlagSkinned;
-            {
-                const Material* sm = mat;
-                // DOUBLE_SIDED: gbuffer.frag flips N toward the viewer, so on
-                // cutout foliage the jittered coverage flips a pixel's normal
-                // SIGN frame to frame. The GI temporal reproject + SVGF normal
-                // edge-stop must treat ±N as the SAME surface there (flag
-                // consumed in deferred_shade.comp / deferred_gi_filter.comp) or
-                // the GI history cold-starts every frame — measured as 8× the
-                // frame-to-frame flicker on a procedural tree canopy.
-                if (sm && sm->side == Side::Double) flags |= kInstFlagDoubleSided;
-                // TEXTURE-ANIMATED (scrolling UVs, video/live textures): the
-                // pattern moves with NO geometric motion vectors, so the TAA
-                // resolve must hold a short history (α floor) instead of
-                // smearing it. TAA-only — the GI history accumulates
-                // DEMODULATED irradiance, which a texture animation doesn't
-                // change, so bit 6 deliberately does NOT shorten the GI cap.
-                if (sm && sm->textureAnimatedHint) flags |= kInstFlagTexAnim;
-            }
             // PERSISTENT DEFORMER: a PhysX soft body deforms EVERY frame, so
             // the GI temporal cap in deferred_shade.comp must not chase its
             // oscillating per-pixel motion magnitude (visible pumping on the
@@ -238,22 +306,7 @@ namespace threepp {
             // reordering, unlike instanceCustomIndex/.x).
             di.stableId    = memoStableId;
             di.packedAttrs = rec->packedMask;
-            // polygonOffset → per-mesh clip-z depth bias (decals). Reverse-Z:
-            // a +clip-z bias pushes the surface toward NEAR so it renders on
-            // top of coplanar geometry (no z-fight). threepp/GL uses NEGATIVE
-            // polygonOffsetUnits for "on top", so flip the sign; units==0
-            // (bool only) → a small default that clears z-fight without
-            // floating. (The slope-scaled `factor` term isn't applied — flat
-            // decals don't need it; bias is uniform in NDC.)
-            float polyOff = 0.f;
-            if (const Material* pm = mat; pm && pm->polygonOffset) {
-                // Honor BOTH factor + units (combined as a constant NDC bias —
-                // the slope term can't be evaluated in the vertex shader; flat
-                // decals don't need it). 0/0 (bool only) → a small default.
-                const float uf = pm->polygonOffsetUnits + pm->polygonOffsetFactor;
-                polyOff = (uf != 0.f) ? (-uf * 1.0e-6f) : 4.0e-6f;
-            }
-            di.polygonOffset = polyOff;
+            di.polygonOffset = memoPolyOff;// per-mesh, derived once in the memo
             draws[b].push_back(di);
 
             VkDrawIndirectCommand cmd{};
@@ -279,28 +332,37 @@ namespace threepp {
                 cm.cullBit = occlCullBitFor(en);
                 bool always = en.isSkinned || en.isDisplaced ||
                               en.isMorphed || en.isTet;
-                Box3 worldAabb;
                 if (en.isGrass) {
-                    if (!grassSwayWorldAabb(en, worldAabb)) always = true;
-                } else if (!always) {
-                    auto geom = en.mesh->geometry();
-                    if (geom && !geom->boundingBox) geom->computeBoundingBox();
-                    if (geom && geom->boundingBox) {
-                        worldAabb = *geom->boundingBox;
-                        Matrix4 w;
-                        std::memcpy(w.elements.data(), en.worldMatrix.data(), 64);
-                        worldAabb.applyMatrix4(w);
-                    } else {
+                    Box3 worldAabb;
+                    if (!grassSwayWorldAabb(en, worldAabb)) {
                         always = true;
+                        cm.flags = 1u;
+                    } else {
+                        cm.aabbMin[0] = worldAabb.min().x;
+                        cm.aabbMin[1] = worldAabb.min().y;
+                        cm.aabbMin[2] = worldAabb.min().z;
+                        cm.aabbMax[0] = worldAabb.max().x;
+                        cm.aabbMax[1] = worldAabb.max().y;
+                        cm.aabbMax[2] = worldAabb.max().z;
                     }
+                } else if (!always && memoBoundsValid) {
+                    // Arvo transform of the memoized object-space box: exactly
+                    // the AABB of the 8 transformed corners (world matrices
+                    // are affine), without the per-corner perspective divides
+                    // Box3::applyMatrix4 pays.
+                    const float* M = en.worldMatrix.data();
+                    const float cx = M[0]*memoCenter[0] + M[4]*memoCenter[1] + M[8]*memoCenter[2] + M[12];
+                    const float cy = M[1]*memoCenter[0] + M[5]*memoCenter[1] + M[9]*memoCenter[2] + M[13];
+                    const float cz = M[2]*memoCenter[0] + M[6]*memoCenter[1] + M[10]*memoCenter[2] + M[14];
+                    const float hx = std::abs(M[0])*memoHalf[0] + std::abs(M[4])*memoHalf[1] + std::abs(M[8])*memoHalf[2];
+                    const float hy = std::abs(M[1])*memoHalf[0] + std::abs(M[5])*memoHalf[1] + std::abs(M[9])*memoHalf[2];
+                    const float hz = std::abs(M[2])*memoHalf[0] + std::abs(M[6])*memoHalf[1] + std::abs(M[10])*memoHalf[2];
+                    cm.aabbMin[0] = cx - hx; cm.aabbMin[1] = cy - hy; cm.aabbMin[2] = cz - hz;
+                    cm.aabbMax[0] = cx + hx; cm.aabbMax[1] = cy + hy; cm.aabbMax[2] = cz + hz;
+                } else {
+                    always = true;
                 }
                 cm.flags = always ? 1u : 0u;
-                cm.aabbMin[0] = worldAabb.min().x;
-                cm.aabbMin[1] = worldAabb.min().y;
-                cm.aabbMin[2] = worldAabb.min().z;
-                cm.aabbMax[0] = worldAabb.max().x;
-                cm.aabbMax[1] = worldAabb.max().y;
-                cm.aabbMax[2] = worldAabb.max().z;
                 occlMeta[b].push_back(cm);
             }
             ++globalIdx;
@@ -312,7 +374,15 @@ namespace threepp {
         // and must not stomp the flag the primary's frame body branched on.
         const bool occlThisBuild = wantOcclMeta && globalIdx > 0u;
         if (!view().secondary) occlActiveThisFrame_ = occlThisBuild;
-        if (globalIdx == 0u) return;
+        if (globalIdx == 0u) {
+            // Nothing visible: cache the (all-zero) outputs so identical
+            // frames skip even the entry walk.
+            view().cachedIndirectGroups = indirectGroups_;
+            view().cachedIndirectTotal  = 0u;
+            view().cachedOcclActive     = false;
+            view().indirectBuiltSig[frame] = buildSig;
+            return;
+        }
 
         // Concatenate buckets into the per-frame device buffers.
         const VkDeviceSize drawBytes = sizeof(DrawInfoGpu) * globalIdx;
@@ -398,6 +468,12 @@ namespace threepp {
             w.pBufferInfo     = &dbInfo;
             vkUpdateDescriptorSets(ctx->device(), 1, &w, 0, nullptr);
         }
+
+        // Publish the skip cache for this view + FIF slot.
+        view().cachedIndirectGroups = indirectGroups_;
+        view().cachedIndirectTotal  = indirectTotalDraws_;
+        view().cachedOcclActive     = occlThisBuild;
+        view().indirectBuiltSig[frame] = buildSig;
     }
 
     // Begin the raster G-buffer render pass and ship the prebuilt

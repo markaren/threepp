@@ -1,5 +1,7 @@
 #include "VulkanCoreImpl.hpp"
 
+#include "VulkanCpuPhaseProf.hpp"
+
 #include <chrono>
 
 namespace threepp {
@@ -100,17 +102,25 @@ namespace threepp {
     }
 
     // Compute per-instance motion matrices = prevWorld * inverse(curWorld)
-    // and upload to motionMatBuffers[frame]. Identity for first-seen
-    // entries (cold-start frame after a topology rebuild) so the reproject
-    // is a no-op until prevWorldMats picks up real history. Keying by
-    // (Mesh*, instanceIndex) so each InstancedMesh sub-instance carries
-    // its own motion delta. Caller must have already waited the
+    // and upload to motionMatBuffers[frame]. The prev matrices live in the
+    // entry-aligned prevWorldByEntry_ (identity-remapped across full rebuilds
+    // by (Mesh*, instanceIndex), so each InstancedMesh sub-instance keeps its
+    // own motion delta and a topology rebuild reprojects as a no-op only for
+    // genuinely new entries). Caller must have already waited the
     // inFlight[frame] fence — we write a buffer the GPU may have been
     // reading on the previous use of `frame`.
     void VulkanRenderer::Impl::computeAndUploadMotionMatrices(uint32_t frame,
                                         const std::vector<MeshEntry>& entries) {
+        THREEPP_CPUPROF("frame.A_motionMats");
         const uint32_t count = static_cast<uint32_t>(entries.size());
         if (count == 0) return;
+
+        // Defensive (re)size — the full rebuild seeds these; a mismatch here
+        // means a code path skipped the seeding, fall back to identity.
+        if (motionScratch_.size() != size_t(count) * 16u ||
+            prevWorldByEntry_.size() != count) {
+            seedMotionState(entries);
+        }
 
         // Per-instance "settled" threshold. Physics solvers (Bullet,
         // PhysX, etc.) often leave bodies with sub-millimeter / sub-
@@ -122,7 +132,7 @@ namespace threepp {
         //
         // Threshold the per-element matrix delta: if the largest absolute
         // change is below kSettledEps, treat motion as identity AND
-        // don't update prevWorldMats. The body then locks to its prior
+        // don't update the prev matrix. The body then locks to its prior
         // pose persistently — sub-eps accumulation can't drift past the
         // threshold because the reference doesn't update.
         //
@@ -132,63 +142,138 @@ namespace threepp {
         // motion gets frozen.
         constexpr float kSettledEps = 1e-4f;
 
-        std::vector<float> data(count * 16);
-        std::vector<uint8_t> settled(count, 0);
-        bool anyNonIdentity = false;
-        for (uint32_t i = 0; i < count; ++i) {
-            Matrix4 cur;
-            std::memcpy(cur.elements.data(), entries[i].worldMatrix.data(), 64);
+        static constexpr float kIdentity[16] = {1, 0, 0, 0, 0, 1, 0, 0,
+                                                0, 0, 1, 0, 0, 0, 0, 1};
 
-            Matrix4 motion;// identity by default
-            EntryKey key{entries[i].mesh, entries[i].instanceIndex};
-            auto it = prevWorldMats.find(key);
-            if (it != prevWorldMats.end()) {
-                Matrix4 prev;
-                std::memcpy(prev.elements.data(), it->second.data(), 64);
-
-                // Per-element max-abs delta. Cheap, catches both
-                // translation (cols 12..14) and rotation/scale (rest).
+        // Per SPAN: a span whose matrices did not change this frame
+        // (ensureSceneBuilt's span refresh) has identity motion by
+        // definition — its scratch blocks are touched at most once (to
+        // clear the previous motion) and its prev matrices stay put. Only
+        // moved spans pay per-entry work. This replaced a per-entry hash
+        // lookup + full 4x4 inverse per instance per frame (~11 ms at 115k
+        // static, ~55 ms at 100k moving).
+        bool changedAny = false;
+        for (auto& sp : entrySpans_) {
+            if (!sp.movedThisFrame) {
+                if (sp.motionNonIdentity) {
+                    // Span stopped moving: collapse its blocks back to
+                    // identity once. prev already equals cur (unchanged).
+                    for (uint32_t j = 0; j < sp.count; ++j)
+                        std::memcpy(&motionScratch_[(size_t(sp.first) + j) * 16u],
+                                    kIdentity, 64);
+                    sp.motionNonIdentity = false;
+                    changedAny = true;
+                }
+                continue;
+            }
+            bool spanNonIdentity = false;
+            for (uint32_t j = 0; j < sp.count; ++j) {
+                const size_t i = size_t(sp.first) + j;
+                const float* cur = entries[i].worldMatrix.data();
+                float* prev = prevWorldByEntry_[i].data();
+                float* dst = &motionScratch_[i * 16u];
+                if (!prevWorldValidByEntry_[i]) {
+                    // First-seen (cold-start): identity motion, seed prev.
+                    std::memcpy(dst, kIdentity, 64);
+                    std::memcpy(prev, cur, 64);
+                    prevWorldValidByEntry_[i] = 1u;
+                    changedAny = true;
+                    continue;
+                }
                 float maxDelta = 0.0f;
                 for (int e = 0; e < 16; ++e) {
-                    const float d = std::abs(cur.elements[e] - prev.elements[e]);
+                    const float d = std::abs(cur[e] - prev[e]);
                     if (d > maxDelta) maxDelta = d;
                 }
                 if (maxDelta < kSettledEps) {
-                    settled[i] = 1u;// keep motion as identity
-                } else {
-                    Matrix4 curInv;
-                    curInv.copy(cur).invert();
-                    motion.multiplyMatrices(prev, curInv);
-                    anyNonIdentity = true;
+                    // Settled: motion identity, prev stays anchored.
+                    if (std::memcmp(dst, kIdentity, 64) != 0) {
+                        std::memcpy(dst, kIdentity, 64);
+                        changedAny = true;
+                    }
+                    continue;
                 }
+                // motion = prev * inverse(cur). World matrices are affine
+                // (TRS compositions; bottom row 0,0,0,1), so a 3x3-cofactor
+                // affine inverse is exact and ~3x cheaper than the general
+                // 4x4 cofactor expansion Matrix4::invert runs.
+                float inv[16];
+                {
+                    const float a00 = cur[0], a01 = cur[4], a02 = cur[8],  tx = cur[12];
+                    const float a10 = cur[1], a11 = cur[5], a12 = cur[9],  ty = cur[13];
+                    const float a20 = cur[2], a21 = cur[6], a22 = cur[10], tz = cur[14];
+                    const float c00 = a11 * a22 - a12 * a21;
+                    const float c01 = a02 * a21 - a01 * a22;
+                    const float c02 = a01 * a12 - a02 * a11;
+                    const float det = a00 * c00 + a10 * c01 + a20 * c02;
+                    const float id  = det != 0.f ? 1.f / det : 0.f;
+                    const float b00 = c00 * id;
+                    const float b01 = c01 * id;
+                    const float b02 = c02 * id;
+                    const float b10 = (a12 * a20 - a10 * a22) * id;
+                    const float b11 = (a00 * a22 - a02 * a20) * id;
+                    const float b12 = (a02 * a10 - a00 * a12) * id;
+                    const float b20 = (a10 * a21 - a11 * a20) * id;
+                    const float b21 = (a01 * a20 - a00 * a21) * id;
+                    const float b22 = (a00 * a11 - a01 * a10) * id;
+                    inv[0] = b00; inv[4] = b01; inv[8]  = b02;
+                    inv[1] = b10; inv[5] = b11; inv[9]  = b12;
+                    inv[2] = b20; inv[6] = b21; inv[10] = b22;
+                    inv[12] = -(b00 * tx + b01 * ty + b02 * tz);
+                    inv[13] = -(b10 * tx + b11 * ty + b12 * tz);
+                    inv[14] = -(b20 * tx + b21 * ty + b22 * tz);
+                    inv[3] = 0.f; inv[7] = 0.f; inv[11] = 0.f; inv[15] = 1.f;
+                }
+                // dst = prev * inv (column-major 4x4; both affine).
+                for (int c = 0; c < 4; ++c) {
+                    const float i0 = inv[c * 4 + 0], i1 = inv[c * 4 + 1],
+                                i2 = inv[c * 4 + 2], i3 = inv[c * 4 + 3];
+                    dst[c * 4 + 0] = prev[0] * i0 + prev[4] * i1 + prev[8] * i2 + prev[12] * i3;
+                    dst[c * 4 + 1] = prev[1] * i0 + prev[5] * i1 + prev[9] * i2 + prev[13] * i3;
+                    dst[c * 4 + 2] = prev[2] * i0 + prev[6] * i1 + prev[10] * i2 + prev[14] * i3;
+                    dst[c * 4 + 3] = prev[3] * i0 + prev[7] * i1 + prev[11] * i2 + prev[15] * i3;
+                }
+                std::memcpy(prev, cur, 64);
+                spanNonIdentity = true;
+                changedAny = true;
             }
-            std::memcpy(&data[i * 16], motion.elements.data(), 64);
+            if (spanNonIdentity) sp.motionNonIdentity = true;
         }
+        if (changedAny) ++motionScratchVersion_;
 
-        // Fast path: if every entry's motion is identity AND the buffer
-        // slot was already all-identity from a previous frame, skip the
-        // upload. mmap+memcpy of an all-zero scene's per-frame motionMat
-        // is a real cost on heavy scenes (1500 entries × 64B = 96KB
-        // mapped+written every frame for nothing). Sub-millisecond
-        // individually, but it adds up on CPU-bound paths.
-        if (!anyNonIdentity && motionMatBufferAllIdentity_[frame]) {
-            // Buffer slot already holds identities; skip the upload.
-        } else {
+        // Upload only when this FIF slot doesn't already hold the current
+        // scratch contents (a fully static scene uploads once per slot and
+        // then never again).
+        if (motionUploadedVersion_[frame] != motionScratchVersion_) {
             uploadHostVisible(ctx->allocator(), motionMatBuffers[frame],
-                              data.data(), data.size() * sizeof(float));
-            motionMatBufferAllIdentity_[frame] = !anyNonIdentity;
+                              motionScratch_.data(),
+                              motionScratch_.size() * sizeof(float));
+            motionUploadedVersion_[frame] = motionScratchVersion_;
         }
+    }
 
-        // Record this frame's matrices for next frame's motion delta —
-        // BUT skip settled entries so prev stays anchored to its
-        // pre-jitter pose. Re-evaluating against the same frozen prev
-        // each frame keeps the body locked in render space until real
-        // motion actually crosses the eps threshold.
-        for (uint32_t i = 0; i < count; ++i) {
-            if (settled[i]) continue;
-            EntryKey key{entries[i].mesh, entries[i].instanceIndex};
-            prevWorldMats[key] = entries[i].worldMatrix;
+    // Seed the entry-aligned motion state to "no motion": scratch all
+    // identity, prev = the entries' CURRENT world matrices (so the first
+    // real move produces a correct one-frame delta, not a cold start).
+    // Callers that can preserve cross-rebuild history overwrite prev slots
+    // afterwards (see the identity remap in the full rebuild).
+    void VulkanRenderer::Impl::seedMotionState(const std::vector<MeshEntry>& entries) {
+        const size_t count = entries.size();
+        motionScratch_.assign(count * 16u, 0.f);
+        for (size_t i = 0; i < count; ++i) {
+            motionScratch_[i * 16u + 0]  = 1.f;
+            motionScratch_[i * 16u + 5]  = 1.f;
+            motionScratch_[i * 16u + 10] = 1.f;
+            motionScratch_[i * 16u + 15] = 1.f;
         }
+        prevWorldByEntry_.resize(count);
+        prevWorldValidByEntry_.assign(count, 1u);
+        for (size_t i = 0; i < count; ++i)
+            prevWorldByEntry_[i] = entries[i].worldMatrix;
+        ++motionScratchVersion_;
+        // New layout ⇒ every FIF slot's contents are stale regardless of
+        // version equality (the buffers may have been reallocated too).
+        motionUploadedVersion_.fill(motionScratchVersion_ - 1u);
     }
 
     // Upload meshMovedBits_ to meshMovedBitsBuffers[frame]. Caller must have
@@ -215,6 +300,7 @@ namespace threepp {
     // must then rewrite descriptor binding 14 for this frame's sets.
     bool VulkanRenderer::Impl::buildAndUploadEmissiveTris(uint32_t frame,
                                     const std::vector<MeshEntry>& entries) {
+        THREEPP_CPUPROF("frame.E_emissiveTris");
         emissiveTriCountThisFrame_ = 0;
         emissiveTotalPowerThisFrame_ = 0.0f;
 
@@ -252,12 +338,17 @@ namespace threepp {
         data.reserve(64 * 16);
         float cumPower = 0.0f;
 
-        for (const auto& en : entries) {
-            if (en.isOverlay) continue;// raster-overlay only — no emissive contribution to the traced scene
-            if (!en.mesh) continue;
-            auto matPtr = en.mesh->material();
-            if (!matPtr) continue;
-            auto* em = dynamic_cast<MaterialWithEmissive*>(matPtr.get());
+        // Per SPAN: the emissive verdict is a per-MESH fact, read off the
+        // expansion-cached MaterialWithEmissive* (material pointer swaps force
+        // a full expansion, so it can't dangle). The old per-entry walk paid a
+        // material() shared_ptr + a cross-hierarchy dynamic_cast per INSTANCE
+        // whenever anything in the scene moved — ~220 ms/frame on a 100k-
+        // instance moving field with zero emissives.
+        for (const auto& sp : entrySpans_) {
+            const auto& e0 = entries[sp.first];
+            if (e0.isOverlay) continue;// raster-overlay only — no emissive contribution to the traced scene
+            if (!e0.mesh) continue;
+            const MaterialWithEmissive* em = e0.lodEmissive;
             if (!em) continue;
             const float emR = em->emissive.r * em->emissiveIntensity;
             const float emG = em->emissive.g * em->emissiveIntensity;
@@ -268,7 +359,7 @@ namespace threepp {
             // so use the constant tint for power. Slightly under-samples
             // bright textured emissives but keeps the build lightweight.
 
-            auto geomPtr = en.mesh->geometry();
+            auto geomPtr = e0.mesh->geometry();
             if (!geomPtr) continue;
             auto* posAttr = geomPtr->getAttribute<float>("position");
             if (!posAttr) continue;
@@ -283,6 +374,8 @@ namespace threepp {
                     : vcount / 3;
             if (triCount == 0) continue;
 
+            for (uint32_t sj = 0; sj < sp.count; ++sj) {
+            const MeshEntry& en = entries[sp.first + sj];
             const float* M = en.worldMatrix.data();// column-major 4x4
             auto xform = [&](float x, float y, float z, float& wx, float& wy, float& wz) {
                 wx = M[0] * x + M[4] * y + M[8]  * z + M[12];
@@ -329,6 +422,7 @@ namespace threepp {
                 data.push_back(emR); data.push_back(emG); data.push_back(emB);
                 data.push_back(0.0f);
             }
+            }// per-entry (emissive spans only)
         }
 
         const uint32_t triCount = static_cast<uint32_t>(data.size() / 16);
@@ -374,7 +468,7 @@ namespace threepp {
                         VMA_ALLOCATION_CREATE_MAPPED_BIT);
         motionMatBufferCapacity[frame] = newCap;
         // New buffer is undefined; force the next upload to actually run.
-        motionMatBufferAllIdentity_[frame] = false;
+        motionUploadedVersion_[frame] = motionScratchVersion_ - 1u;
         return true;
     }
 

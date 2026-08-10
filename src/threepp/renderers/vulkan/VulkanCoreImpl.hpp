@@ -684,20 +684,20 @@ namespace threepp {
         // Previous-frame camera (proj_prev * view_prev) for primary-hit
         // reprojection. One UBO per frame-in-flight so updates don't race the
         // GPU. Per-instance motion matrices (prevWorld * inverse(curWorld)) live
-        // in a single SSBO indexed by gl_InstanceCustomIndexEXT; the host repacks
-        // the array each frame from prevWorldMats keyed by (Mesh*, instanceIndex)
-        // so each InstancedMesh sub-instance has its own motion delta. First-frame
-        // / first-seen entries are identity so reproject is a no-op.
+        // in a single SSBO indexed by gl_InstanceCustomIndexEXT; the host keeps
+        // an entry-aligned staging (motionScratch_) refreshed only for spans
+        // that moved, with prev worlds in prevWorldByEntry_ (identity-remapped
+        // by (Mesh*, instanceIndex) across full rebuilds) so each InstancedMesh
+        // sub-instance has its own motion delta. First-frame / first-seen
+        // entries are identity so reproject is a no-op.
         // Definitions moved to VulkanSceneTypes.hpp.
         using EntryKey     = vulkan::impl::EntryKey;
         using EntryKeyHash = vulkan::impl::EntryKeyHash;
         std::array<Buffer, kFramesInFlight> motionMatBuffers{};
         std::array<VkDeviceSize, kFramesInFlight> motionMatBufferCapacity{};
-        // Per-buffer-slot "last upload was all-identity" flag. When true and
-        // the current frame also has no per-instance motion, skip the upload
-        // entirely — the buffer slot is still valid identity from before.
-        // Cleared on capacity-grow (new buffer is undefined).
-        std::array<bool, kFramesInFlight> motionMatBufferAllIdentity_{};
+        // (The per-slot all-identity flag was replaced by the version pair
+        //  motionScratchVersion_ / motionUploadedVersion_ — see the members
+        //  next to prevWorldByEntry_.)
         // Per-frame emissive-triangle CDF buffer. Each entry is 4 vec4 (64 B):
         //   v0.xyz/area, v1.xyz/cumPower, v2.xyz/power, emission.rgb/_pad.
         // Built fresh each frame from the visible scene; size = numEmissiveTris.
@@ -896,7 +896,9 @@ namespace threepp {
         size_t   cachedEmissiveEntryCount_ = static_cast<size_t>(-1);
         uint32_t cachedEmissiveVersion_ = 0;
         std::array<uint32_t, kFramesInFlight> emissiveBufferVersion_{};
-        std::unordered_map<EntryKey, std::array<float, 16>, EntryKeyHash> prevWorldMats;
+        // (prevWorldMats hash map replaced by the entry-aligned
+        //  prevWorldByEntry_ / prevWorldValidByEntry_ vectors — identity-
+        //  remapped across full rebuilds alongside meshMovedSticky_.)
 
         // Definition moved to VulkanGeometryState.hpp.
         using MeshFingerprint = vulkan::impl::MeshFingerprint;
@@ -906,6 +908,38 @@ namespace threepp {
         // after the in-flight fence has been waited (safe to write the
         // motionMatBuffers[currentFrame] HOST_VISIBLE buffer).
         std::vector<MeshEntry> lastVisibleEntries_;
+        // Per-mesh spans over lastVisibleEntries_ (see EntrySpan). Rebuilt at
+        // every full expansion; on lean frames the per-frame loops consult the
+        // spans first and touch individual entries only for spans that changed.
+        using EntrySpan = vulkan::impl::EntrySpan;
+        std::vector<EntrySpan> entrySpans_;
+        // Entry-aligned previous-frame world matrices for the motion-matrix
+        // build (replaces the per-entry (Mesh*, instanceIndex) hash lookups —
+        // ~11 ms/frame at 115k entries). Remapped by EntryKey identity across
+        // full rebuilds in the same pass that remaps meshMovedSticky_.
+        std::vector<std::array<float, 16>> prevWorldByEntry_;
+        std::vector<uint8_t> prevWorldValidByEntry_;
+        // Persistent motion-matrix staging (16 floats per entry, identity for
+        // unmoved spans). motionScratchVersion_ bumps when any block changes;
+        // per-FIF uploadedVersion skips the map+memcpy when the slot already
+        // holds the current contents.
+        std::vector<float> motionScratch_;
+        uint32_t motionScratchVersion_ = 0;
+        std::array<uint32_t, kFramesInFlight> motionUploadedVersion_{};
+        // TLAS refit instance staging, swapped with pendingTlasInstances_ so
+        // both vectors keep their capacity across frames (a fresh 4.8 MB
+        // allocation per moving frame at 100k instances otherwise).
+        std::vector<VkAccelerationStructureInstanceKHR> tlasInstanceScratch_;
+        // Version of every input that shapes DrawInfo/indirect-cmd contents
+        // EXCEPT the per-view cull bits (those live on the view as
+        // cullVersion). Bumped by ensureSceneBuilt on any non-quiet frame and
+        // by the moved-sticky stamp when a flag bit transitions; paired with
+        // ViewContext::indirectBuiltSig to skip buildIndirectDrawData when a
+        // FIF slot's device buffers already hold the exact same content.
+        uint32_t drawInputsVersion_ = 1;
+        // Count of entries whose moved-sticky countdown is nonzero — lets the
+        // per-frame stamp skip its O(entries) walk on fully settled scenes.
+        uint32_t stickyActiveCount_ = 0;
         // Per-entry cull mode cached from each upload of matDescs.
         //   Side::Front  → VK_CULL_MODE_BACK_BIT  (default fast path)
         //   Side::Back   → VK_CULL_MODE_FRONT_BIT
@@ -1759,11 +1793,13 @@ namespace threepp {
             // World-space sprites are drawn in the overlay pass and depth-test
             // against unjitDepth, so they need the prepass + overlay pass too.
             if (!lastVisibleSprites_.empty()) return true;
-            for (const auto& en : lastVisibleEntries_) {
-                // isOverlay covers particle billboards too (kSnapParticle folds
-                // into isOverlay), so a scene with only particles still triggers
-                // the depth prepass + overlay pass the billboard loop needs.
-                if (en.isOverlay) return true;
+            // Per SPAN, not per entry — isOverlay is uniform across an
+            // InstancedMesh expansion, and isOverlay covers particle
+            // billboards too (kSnapParticle folds into isOverlay), so a scene
+            // with only particles still triggers the depth prepass + overlay
+            // pass the billboard loop needs.
+            for (const auto& sp : entrySpans_) {
+                if (lastVisibleEntries_[sp.first].isOverlay) return true;
             }
             return false;
         }
@@ -2463,6 +2499,11 @@ namespace threepp {
         // its own motion delta. Caller must have already waited the
         // inFlight[frame] fence — we write a buffer the GPU may have been
         // reading on the previous use of `frame`.
+        // Reset the entry-aligned motion state (scratch identity, prev =
+        // current worlds). Called at every full rebuild (before the identity
+        // remap restores surviving history) and by the accumulation resets.
+        void seedMotionState(const std::vector<MeshEntry>& entries);
+
         void computeAndUploadMotionMatrices(uint32_t frame,
                                             const std::vector<MeshEntry>& entries);
 
