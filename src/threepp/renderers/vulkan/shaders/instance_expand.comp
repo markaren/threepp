@@ -1,0 +1,92 @@
+#version 450
+// instance_expand.comp — per-instance world matrices, on the GPU.
+//
+// Stage 1 of the GPU-driven instance work (plans/gpu-driven-instances.md).
+// This computes exactly what VulkanCoreScene.cpp's lean matrix refresh
+// computes on the CPU — world = spanWorld * instanceMatrix[i] — for every
+// InstancedMesh span, and NOTHING reads the result yet. DrawInfo, motion
+// matrices, the frustum cull and the TLAS instance fill all still consume
+// MeshEntry::worldMatrix. The output buffer exists so the two can be
+// compared (VulkanRenderer::instanceExpandCheck /
+// tests/renderers/VulkanInstanceExpand_test.cpp); the consumers move in the
+// later stages, one at a time, against a producer that is already known to
+// agree with the CPU bit for bit.
+//
+// BIT-EXACTNESS is the whole point of this shader, so the multiply is spelled
+// out instead of written as `A * B`:
+//
+//   * The CPU sums (((a0*b0 + a1*b1) + a2*b2) + a3*b3) per element — both CPU
+//     paths do, the scalar one by construction and the SSE2 one deliberately
+//     (see the comment on multiplyMatricesSse2 in math/Matrix4.cpp). The loop
+//     below sums in the same order, and `+` is left-associative in GLSL too.
+//   * `precise` forbids the two transforms that would otherwise make the GPU
+//     answer differ while still being "correct": re-associating the sum, and
+//     contracting a multiply+add into an FMA (which rounds ONCE instead of
+//     twice, so it is more accurate and therefore not equal).
+//
+// That qualifier is LOAD-BEARING, not defensive. Measured by deleting it
+// (RTX 4070, driver's own glslang→NVIDIA compile of this shader): 4444 of 4500
+// matrices stopped being bit-equal, worst element off by 9.5e-7 absolute and
+// 2135 ULP — the ULP number is that large because the disagreements land on
+// near-zero elements where the four products cancel, which is exactly where a
+// "small epsilon" tolerance would have been declared a pass and exactly where a
+// TLAS descriptor or a motion vector would later be seen to disagree with the
+// CPU by an amount nobody could explain.
+//
+// A GLSL `mat4` is column-major and so is threepp's `std::array<float,16>`, so
+// A[j][r] is the CPU's mw[j*4+r] with no transpose anywhere.
+
+layout(local_size_x = 64) in;
+
+// One per InstancedMesh span (plain meshes are not on this path — see the
+// scope note in the plan: instanced spans are where the per-instance cost is,
+// and confining the change to them confines the blast radius).
+// std430: mat4 is 64 B / 16-aligned, the four uints pack behind it, stride 80.
+struct SpanDesc {
+    mat4 world;      // the mesh->matrixWorld the CPU baked this span's entries from
+    uint firstEntry; // base index into outWorld (== MeshEntry index)
+    uint count;      // instances in this span
+    uint matBase;    // first matrix of this span in the instance-matrix pool
+    uint workBase;   // exclusive prefix sum of `count` over the spans in this buffer
+};
+
+layout(std430, binding = 0) readonly  buffer Spans    { SpanDesc spans[]; };
+layout(std430, binding = 1) readonly  buffer InstMats { mat4     instMats[]; };
+layout(std430, binding = 2) writeonly buffer OutWorld { mat4     outWorld[]; };
+
+layout(push_constant) uniform Pc {
+    uint spanCount;// spans in the buffer; >= 1 whenever this is dispatched
+    uint totalWork;// sum of every span's count == the dispatch domain
+} pc;
+
+void main() {
+    const uint g = gl_GlobalInvocationID.x;
+    if (g >= pc.totalWork) return;
+
+    // Which span owns work item g. The alternative — one vkCmdDispatch per
+    // span — costs O(spans) command-buffer calls per frame, which is CPU cost
+    // in the exact place this project exists to remove. workBase is a prefix
+    // sum built host-side, so this is a plain upper-bound search for the last
+    // span whose base is <= g (spans[0].workBase == 0 anchors it).
+    uint lo = 0u, hi = pc.spanCount;
+    while (lo + 1u < hi) {
+        const uint mid = (lo + hi) >> 1u;
+        if (spans[mid].workBase <= g) lo = mid;
+        else hi = mid;
+    }
+    const uint local = g - spans[lo].workBase;
+    if (local >= spans[lo].count) return;// defensive; prefix sums make it unreachable
+
+    const mat4 A = spans[lo].world;
+    const mat4 B = instMats[spans[lo].matBase + local];
+
+    mat4 C;
+    for (int c = 0; c < 4; ++c) {
+        const float b0 = B[c][0], b1 = B[c][1], b2 = B[c][2], b3 = B[c][3];
+        for (int r = 0; r < 4; ++r) {
+            precise float v = A[0][r] * b0 + A[1][r] * b1 + A[2][r] * b2 + A[3][r] * b3;
+            C[c][r] = v;
+        }
+    }
+    outWorld[spans[lo].firstEntry + local] = C;
+}

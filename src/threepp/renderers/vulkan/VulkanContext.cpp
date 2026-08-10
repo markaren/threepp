@@ -2,6 +2,10 @@
 
 #include "threepp/renderers/vulkan/ValidationReport.hpp"
 
+// kFramesInFlight: the suppressed-present swapchain must be deep enough for the
+// frame loop to keep one acquired image per in-flight slot (see createSwapchain).
+#include "VulkanImplCommon.hpp"
+
 #include <GLFW/glfw3.h>
 
 #include <algorithm>
@@ -229,6 +233,47 @@ namespace threepp::vulkan {
                         "which this Vulkan driver does not expose, and no window system "
                         "is available to create a window surface instead");
             }
+        }
+
+        // ── THREEPP_VULKAN_SUPPRESS_PRESENT: opt-in, and it stays opt-in ─────
+        // A headless canvas displays nothing, so it has nothing to present: its
+        // swapchain is only an image ring for the frame loop and the capture
+        // paths. Presenting anyway is NOT free. On Windows/NVIDIA,
+        // vkQueuePresentKHR to a hidden (never-composited) window performs a
+        // HOST-side wait for the presented image's rendering to complete, so the
+        // CPU cannot get a frame ahead of the GPU. Measured on an RTX 4070 with
+        // the granular-conveyor bench: frame.K3_present tracks gpuTotalMs 1:1
+        // (5.5 ms at 2k grains, 10.6 ms at 78.4k), is unaffected by swapchain
+        // image count (3 vs 8), moves wholesale into an explicit pre-present
+        // fence wait when one is added, and vanishes (0.22 ms) the moment the
+        // same window is shown. MAILBOX and IMMEDIATE behave identically; FIFO
+        // does not block but pins the loop to the refresh rate, which is exactly
+        // what vsync=off exists to escape. So no present mode is a fix — the
+        // only fix is not presenting, which is what this flag does.
+        //
+        // It is OFF by default because removing the stall MEASURED SLOWER on
+        // every population of that bench: 25k 68.0→62.9 fps, 50k 49.8→46.1, 78.4k
+        // 34.2→30.1 (N=5 interleaved). The stall was doing unintended work — it
+        // kept the app's PhysX GPU (CUDA) step from overlapping the Vulkan
+        // command buffer, and when the CPU is freed to run ahead the two
+        // time-slice on the same device instead: the whole-command-buffer GPU
+        // span inflates 10.8→17.6 ms at 78.4k for identical graphics work (the
+        // same effect as feedback_vulkan_async_same_family_timeslice).
+        //
+        // A frame loop with NO co-resident GPU compute has nothing to time-slice
+        // against, and there it is the win the stall's size predicts:
+        // VulkanMultiView_test --bench (headless, vsync off, pure renderer, N=5
+        // interleaved) goes 1.419→1.144 ms/frame with no secondary views (-19%)
+        // and 4.458→4.000 with three (-10%), with no overlap between the two
+        // groups' samples. So this is a real capability with a real cost, and
+        // which it is depends on the caller's GPU tenancy — hence a flag rather
+        // than a default either way.
+        presentSuppressed_ = false;
+        if (const char* sp = std::getenv("THREEPP_VULKAN_SUPPRESS_PRESENT");
+            sp && *sp == '1' && preferHeadlessSurface) {
+            presentSuppressed_ = true;
+            std::cout << "[VulkanContext] presents suppressed (headless canvas): the frame "
+                         "loop pins one swapchain image per in-flight slot\n";
         }
 
         // Validation defaults on in debug builds and off elsewhere, but
@@ -946,6 +991,15 @@ namespace threepp::vulkan {
         }
 
         uint32_t imageCount = caps.minImageCount + 1;
+        if (presentSuppressed_) {
+            // Suppressed presents mean the frame loop holds one acquired image
+            // per frame-in-flight slot for the swapchain's whole lifetime, and
+            // vkAcquireNextImageKHR may only be relied on to return without
+            // blocking while at most (imageCount - minImageCount + 1) images are
+            // app-owned. minImageCount + kFramesInFlight keeps that headroom at
+            // one spare image no matter what the surface reports as its minimum.
+            imageCount = caps.minImageCount + impl::kFramesInFlight;
+        }
         if (caps.maxImageCount > 0 && imageCount > caps.maxImageCount) {
             imageCount = caps.maxImageCount;
         }

@@ -109,23 +109,82 @@ bool VulkanRenderer::Impl::sceneSnapshotMatches(Object3D& scene, Camera& camera)
             return ok && cur == sceneSnapshot_.size();
         }
 
+// One mapping, then only the ranges the host actually patched. Shared by both
+// desc rings because they differ in nothing but element type: entries-indexed
+// arrays whose per-slot pending set is a DescDirtyRanges. The whole-array
+// fallback stays one memcpy of everything — a structural rebuild has no smaller
+// truth to tell.
+namespace {
+    template<typename T>
+    void uploadDescRanges(VmaAllocator alloc, const vulkan::Buffer& buf,
+                          const std::vector<T>& src,
+                          const VulkanRenderer::Impl::DescDirtyRanges& dirty) {
+        if (dirty.whole) {
+            vulkan::uploadHostVisible(alloc, buf, src.data(), src.size() * sizeof(T));
+            return;
+        }
+        void* mapped = nullptr;
+        vulkan::check(vmaMapMemory(alloc, buf.alloc, &mapped),
+                      "vmaMapMemory(uploadDescRanges)");
+        for (auto [first, last] : dirty.ranges) {
+            // Clamp rather than assert: a shrink between mark and flush goes
+            // through a structural rebuild, which sets `whole`, so this is only
+            // belt and braces — but it makes a range list unable to overrun the
+            // buffer no matter who marked it.
+            if (last > src.size()) last = static_cast<uint32_t>(src.size());
+            if (first >= last) continue;
+            const VkDeviceSize off = VkDeviceSize(first) * sizeof(T);
+            const VkDeviceSize n = VkDeviceSize(last - first) * sizeof(T);
+            std::memcpy(static_cast<uint8_t*>(mapped) + off, src.data() + first, n);
+            // Per range. VMA widens a non-coherent flush to nonCoherentAtomSize
+            // itself, which can only ever publish neighbouring bytes that are
+            // already coherent — a flush publishes host writes and invalidates
+            // nothing, so a wider range is never wrong.
+            vulkan::check(vmaFlushAllocation(alloc, buf.alloc, off, n),
+                          "vmaFlushAllocation(uploadDescRanges)");
+        }
+        vmaUnmapMemory(alloc, buf.alloc);
+    }
+}// namespace
+
+// A genuine addition, not a split: scene.8_matDescPatch times the HOST-side
+// re-derivation inside ensureSceneBuilt and contains no device copy. The copy is
+// here, on the other side of the fence wait, and was in no counter at all.
+//
+// It used to be whole-array: entries-indexed at 608 B/entry, so ONE changed
+// material re-sent every entry's MaterialDesc, to every frame-in-flight slot —
+// 47.7 MB and 2.8 ms per frame at 78.4k grains, for the two belt meshes whose
+// scrolling texture bumps their material version. Now it sends the entry ranges
+// ensureSceneBuilt actually patched (see DescDirtyRanges).
 void VulkanRenderer::Impl::flushMaterialDescsIfDirty(uint32_t frame) {
-            if (!matDescsDirty_[frame]) return;
-            matDescsDirty_[frame] = false;
-            if (matDescsCached_.empty()) return;
-            uploadHostVisible(ctx->allocator(), materialDescsBuffers[frame],
-                              matDescsCached_.data(),
-                              matDescsCached_.size() * sizeof(MaterialDesc));
+            THREEPP_CPUPROF("frame.I_uploadMatDesc");
+            auto& dirty = matDescsDirty_[frame];
+            if (!dirty.any()) return;
+            if (matDescsCached_.empty() ||
+                materialDescsBuffers[frame].handle == VK_NULL_HANDLE) {
+                dirty.clear();
+                return;
+            }
+            uploadDescRanges(ctx->allocator(), materialDescsBuffers[frame],
+                             matDescsCached_, dirty);
+            dirty.clear();
         }
 
+// Same shape, 64 B/entry. Dirtied per ENTRY by the frame.B_movedSticky walk on a
+// 0↔1 sticky transition, and whole-array by an auto-LOD level switch — but the
+// copy lands here, outside those phases, so it needs its own key.
 void VulkanRenderer::Impl::flushGeometryDescsIfDirty(uint32_t frame) {
-            if (!geomDescsDirty_[frame]) return;
-            geomDescsDirty_[frame] = false;
-            if (geomDescsCached_.empty()) return;
-            if (geometryDescsBuffers[frame].handle == VK_NULL_HANDLE) return;
-            uploadHostVisible(ctx->allocator(), geometryDescsBuffers[frame],
-                              geomDescsCached_.data(),
-                              geomDescsCached_.size() * sizeof(GeometryDesc));
+            THREEPP_CPUPROF("frame.I2_uploadGeomDesc");
+            auto& dirty = geomDescsDirty_[frame];
+            if (!dirty.any()) return;
+            if (geomDescsCached_.empty() ||
+                geometryDescsBuffers[frame].handle == VK_NULL_HANDLE) {
+                dirty.clear();
+                return;
+            }
+            uploadDescRanges(ctx->allocator(), geometryDescsBuffers[frame],
+                             geomDescsCached_, dirty);
+            dirty.clear();
         }
 
 void VulkanRenderer::Impl::cullEntriesAgainstFrustum(Camera& camera) {
@@ -1770,7 +1829,14 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                             // this replaced a vkDeviceWaitIdle per switch
                             // frame, which hitched exactly when the camera
                             // was moving.
-                            for (auto& d : geomDescsDirty_) d = true;
+                            //
+                            // WHOLE-ARRAY on purpose, unlike the matDescs patch:
+                            // the entries this touched are chosen inside the TLAS
+                            // instance fill above, the frame's hottest loop, and
+                            // a level switch is already paying for BLAS
+                            // re-references. 64 B/entry with a bounded audience
+                            // is not worth a mark in there.
+                            markGeomDescsWhole();
                         }
                         const bool blasDeformed = bonesDirtyAny || displacedDirtyAny || grassDirtyAny || tetDirtyAny || morphDirtyAny || geomDirtyAny || lodChangedThisFrame_;
                         // Stage the refit; recordCommandBuffer records it into the
@@ -1813,7 +1879,11 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                         // valid. Full fallback only if the cache size somehow doesn't
                         // match (never on the fast path that reaches here).
                         const bool patchMatDescs = matDescsCached_.size() == entries.size();
-                        if (!patchMatDescs) matDescsCached_.assign(entries.size(), MaterialDesc{});
+                        if (!patchMatDescs) {
+                            matDescsCached_.assign(entries.size(), MaterialDesc{});
+                            // Every entry re-derived below ⇒ every entry dirty.
+                            markMatDescsWhole();
+                        }
                         // Same dedup as the full-rebuild path below (consulted only on
                         // the full-rebuild fallback): entries order is identical
                         // (overlay skip matches), so identical Material* pointers
@@ -1889,8 +1959,13 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                                 md.terrainNormalTexIndex = ensureMaterialTexture(tex);
                             }
                             matDescsCached_[i] = md;
+                            // The dirty RANGE is recorded where the write is, so
+                            // the two can never drift. entryMatDirty is set for a
+                            // whole span at once (a material is a per-mesh fact),
+                            // and spans are contiguous in entry order, so an
+                            // instanced span of any size coalesces to one range.
+                            markMatDescsDirty(static_cast<uint32_t>(i));
                         }
-                        for (auto& d : matDescsDirty_) d = true;
                         cacheCullFlags(matDescsCached_);
                     }
                     // Anything that reached one of the change branches above
@@ -2478,7 +2553,10 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
             for (uint32_t f = 0; f < kFramesInFlight; ++f) {
                 uploadDescBuffer(geometryDescsBuffers[f], geomDescs);
             }
-            for (auto& d : geomDescsDirty_) d = false;
+            // Every slot now holds the fresh array, so no slot owes anything —
+            // including any range marked earlier in this same frame, which this
+            // upload has just superseded.
+            for (auto& d : geomDescsDirty_) d.clear();
             // Host mirror for the lean-path auto-LOD patch above. geomDescs
             // just built already reflects each entry's CURRENT en.lodLevel
             // (the selection pass runs before this heavy rebuild, so an
@@ -2494,7 +2572,7 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                 uploadDescBuffer(materialDescsBuffers[f], matDescs);
             }
             matDescsCached_ = matDescs;
-            for (auto& d : matDescsDirty_) d = false;
+            for (auto& d : matDescsDirty_) d.clear();
             cacheCullFlags(matDescs);
 
             // Topology rebuild vs temporal history. Nothing consumed ACROSS

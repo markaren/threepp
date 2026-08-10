@@ -1,4 +1,5 @@
 #include "VulkanCoreImpl.hpp"
+#include "VulkanCpuPhaseProf.hpp"
 
 #include "threepp/core/AttributeView.hpp"
 
@@ -1805,7 +1806,19 @@ void VulkanRenderer::Impl::recordTlasRefit(VkCommandBuffer cb,
                           << instBuf.size << " B\n";
                 return;
             }
-            uploadHostVisible(ctx->allocator(), instBuf, instances.data(), instBytes);
+            // 64 B/instance, straight into the buffer the AS builder reads as its
+            // host-side build input (no staging hop). Distinct from
+            // scene.7_tlasRefitFill, which is the CPU FILL of the same array back
+            // inside ensureSceneBuilt; this is the copy to the device. Scoped to
+            // the copy ALONE so it stays a sibling of frame.L_tlasRefitRec below.
+            {
+                THREEPP_CPUPROF("frame.H_uploadTlasInst");
+                uploadHostVisible(ctx->allocator(), instBuf, instances.data(), instBytes);
+            }
+            // The build-size query is a per-frame driver round-trip at N instances
+            // and the refit record is one command — separated from the copy so a
+            // large L can be attributed to one or the other.
+            THREEPP_CPUPROF("frame.L_tlasRefitRec");
 
             VkAccelerationStructureGeometryInstancesDataKHR instData{};
             instData.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_INSTANCES_DATA_KHR;

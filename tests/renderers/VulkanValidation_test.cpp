@@ -39,9 +39,11 @@
 #include "threepp/materials/MeshBasicMaterial.hpp"
 #include "threepp/materials/MeshPhysicalMaterial.hpp"
 #include "threepp/materials/MeshStandardMaterial.hpp"
+#include "threepp/objects/InstancedMesh.hpp"
 #include "threepp/renderers/VulkanRenderer.hpp"
 #include "threepp/renderers/vulkan/ValidationReport.hpp"
 
+#include <cmath>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -408,6 +410,71 @@ int main() {
         runFrames(canvas, renderer, scene, *camera, 3);
     }
     endPhase("scene topology churn");
+
+    // ── Phase 8: instanced-span churn ───────────────────────────────────────
+    // Instanced spans are the only geometry the GPU instance-expansion pass
+    // (instance_expand.comp) touches, so without one in the scene this gate
+    // covers that pass by not running it. Everything the pass does that this
+    // test exists to catch happens here: per-frame host writes into a
+    // frame-in-flight-owned mapped pool, a descriptor set rewritten between the
+    // fence wait and recording, and — when a second span pushes the pools past
+    // their capacity mid-run — a reallocation that hands the old buffer to the
+    // retire queue while the sibling frame may still name it.
+    {
+        auto field = InstancedMesh::create(BoxGeometry::create(0.15f, 0.15f, 0.15f),
+                                           sceneMaterial(Color(0.3f, 0.6f, 0.9f), 0.5f, 0.f), 512);
+        {
+            Matrix4 m;
+            for (size_t i = 0; i < field->count(); ++i) {
+                const float t = static_cast<float>(i) * 0.05f;
+                m.setPosition(std::sin(t) * 3.f, 0.2f + 0.02f * static_cast<float>(i % 20),
+                              std::cos(t) * 3.f);
+                field->setMatrixAt(i, m);
+            }
+            field->instanceMatrix()->needsUpdate();
+        }
+        scene.add(field);
+        runFrames(canvas, renderer, scene, *camera, kPhaseFrames);
+
+        // Per-frame instance edits: the version-gated upload path, hit on every
+        // frame and therefore on both frames-in-flight.
+        for (int f = 0; f < kPhaseFrames; ++f) {
+            Matrix4 m;
+            for (size_t i = 0; i < field->count(); ++i) {
+                const float t = static_cast<float>(i) * 0.05f + static_cast<float>(f) * 0.1f;
+                m.setPosition(std::sin(t) * 3.f, 0.2f, std::cos(t) * 3.f);
+                field->setMatrixAt(i, m);
+            }
+            field->instanceMatrix()->needsUpdate();
+            runFrames(canvas, renderer, scene, *camera, 1);
+        }
+
+        // A second, much larger span mid-run: grows the per-frame matrix pool
+        // AND the shared world-matrix buffer while frames are in flight.
+        auto field2 = InstancedMesh::create(SphereGeometry::create(0.1f, 8, 4),
+                                            sceneMaterial(Color(0.9f, 0.5f, 0.2f), 0.6f, 0.f), 6000);
+        {
+            Matrix4 m;
+            for (size_t i = 0; i < field2->count(); ++i) {
+                const float t = static_cast<float>(i) * 0.011f;
+                m.setPosition(std::sin(t) * 5.f, 1.5f + std::sin(t * 3.f), std::cos(t) * 5.f);
+                field2->setMatrixAt(i, m);
+            }
+            field2->instanceMatrix()->needsUpdate();
+        }
+        scene.add(field2);
+        runFrames(canvas, renderer, scene, *camera, kPhaseFrames);
+
+        // Shrink the live count, then remove both — the direction that frees
+        // records and re-stamps the per-slot upload bookkeeping.
+        field2->setCount(1000);
+        runFrames(canvas, renderer, scene, *camera, 3);
+        scene.remove(*field2);
+        runFrames(canvas, renderer, scene, *camera, 3);
+        scene.remove(*field);
+        runFrames(canvas, renderer, scene, *camera, 3);
+    }
+    endPhase("instanced-span churn");
 
     // ── Verdict ─────────────────────────────────────────────────────────────
     const auto errors   = vulkan::validationErrorCount();

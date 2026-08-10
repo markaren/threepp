@@ -78,6 +78,18 @@ namespace threepp::vulkan {
         // run on display-less machines (cloud GPU instances).
         bool headlessSurface() const { return headlessSurface_; }
 
+        // True when this swapchain must never be presented to: a headless canvas
+        // (nothing is displayed) that additionally asked for it via
+        // THREEPP_VULKAN_SUPPRESS_PRESENT=1. Presenting to a hidden window costs
+        // a host-side wait for the presented image's rendering to complete on
+        // Windows/NVIDIA — 5.5-10.6 ms per frame, exactly the GPU frame
+        // duration, so the CPU can never get a frame ahead. Off by default
+        // because removing that stall measured SLOWER wherever GPU compute is
+        // co-resident; see the derivation and the numbers at the assignment in
+        // the constructor, and acquireOrReuseSwapchainImage (VulkanCoreFrame)
+        // for what replaces the acquire/present cycle when it is on.
+        bool presentSuppressed() const { return presentSuppressed_; }
+
         // VK_KHR_ray_query — inline ray tracing from any stage (compute). Used
         // by the raster-first deferred shading pass for hard shadow rays.
         // Optional; ReferencePT works without it.
@@ -147,6 +159,7 @@ namespace threepp::vulkan {
 
         bool vsync_ = true;// FIFO when true, else MAILBOX/IMMEDIATE (see createSwapchain)
         bool headlessSurface_ = false;// VK_EXT_headless_surface instead of a window surface
+        bool presentSuppressed_ = false;// opt-in headless mode: acquire once per slot, never present
         bool rayTracingEnabled_ = false;
         bool rayQuerySupported_ = false;
         bool externalMemorySupported_ = false;

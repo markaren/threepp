@@ -39,6 +39,7 @@
 #include "SplatPass.hpp"
 #include "DeferredShade.hpp"
 #include "HiZPyramid.hpp"
+#include "InstanceExpand.hpp"
 #include "OcclusionCull.hpp"
 #include "ProbeGI.hpp"
 #include "WaterDisplacePipeline.hpp"
@@ -353,28 +354,95 @@ namespace threepp {
         // `MaterialDesc md{};` call sites unchanged.
         using MaterialDesc = threepp::vulkan_pt::MaterialDesc;
 
+        // ── Per-slot dirty state for the entries-indexed desc rings ──────────
+        // What one frame-in-flight slot still owes the GPU: either the whole
+        // array, or a set of half-open ENTRY ranges. Ranges exist because the
+        // arrays are entries-indexed and enormous — MaterialDesc is 608 B, so a
+        // 78.4k-grain scene is 47.7 MB, and a whole-array flush for the two belt
+        // meshes whose scrolling texture bumps their material version every
+        // frame was the single largest CPU item in the frame (2.8 ms).
+        //
+        // PER SLOT, not global: a change dirtied on frame N must reach every
+        // slot's buffer, but each slot may only be written after ITS fence has
+        // signalled. So each slot accumulates independently and is cleared alone
+        // when its turn comes — the classic pending-set, now carrying ranges
+        // instead of one bool.
+        struct DescDirtyRanges {
+            // Half-open [first, last) entry ranges, kept sorted and coalesced.
+            std::vector<std::pair<uint32_t, uint32_t>> ranges;
+            bool whole = false;// structural rebuild / unidentifiable source
+
+            bool any() const { return whole || !ranges.empty(); }
+            void clear() {
+                whole = false;
+                ranges.clear();
+            }
+            void markWhole() {
+                whole = true;
+                ranges.clear();// subsumed
+            }
+            // Callers mark in increasing entry order (every producer walks
+            // entries forward), so coalescing against the LAST range is enough
+            // to make an instanced span — contiguous by construction — exactly
+            // one range. Out-of-order marks stay correct, just less coalesced.
+            void mark(uint32_t first, uint32_t count = 1) {
+                if (whole || count == 0) return;
+                const uint32_t last = first + count;
+                if (!ranges.empty() && first <= ranges.back().second) {
+                    ranges.back().second = std::max(ranges.back().second, last);
+                    return;
+                }
+                // A range list long enough to be its own cost is a sign the
+                // change is scene-wide; one memcpy beats a hundred, and it is
+                // never wrong — only broader than necessary.
+                if (ranges.size() >= 64) {
+                    markWhole();
+                    return;
+                }
+                ranges.emplace_back(first, last);
+            }
+        };
+
         // Per-frame-in-flight GeometryDesc storage — same fence-gated ring as
         // materialDescsBuffers below. Ringed for auto-LOD: a level switch
         // repoints GeometryDesc::indexAddress/indexed, and the single-buffer
         // version needed a vkDeviceWaitIdle on every switch frame to patch it
         // in place — a stall exactly when the camera moves (the frames where
         // responsiveness matters most). Hot path stages in geomDescsCached_ +
-        // flips geomDescsDirty_[*]; renderFrame's flushGeometryDescsIfDirty
-        // memcpys into this frame's slot once its fence has signaled.
+        // marks geomDescsDirty_ (markGeomDescsDirty / ...Whole); renderFrame's
+        // flushGeometryDescsIfDirty memcpys the marked ranges into this frame's
+        // slot once its fence has signaled.
         std::array<Buffer, kFramesInFlight> geometryDescsBuffers{};
-        std::array<bool, kFramesInFlight> geomDescsDirty_{};
+        std::array<DescDirtyRanges, kFramesInFlight> geomDescsDirty_{};
         // Per-frame-in-flight MaterialDesc storage. Was a single shared buffer
         // gated by vkDeviceWaitIdle on every animated-pbr update; now one buffer
         // per kFramesInFlight slot so the upload after a fence wait races
-        // nothing. The hot path stages new descs in `matDescsCached_` + flips
-        // `matDescsDirty_[*]=true`; renderFrame's flushMaterialDescsIfDirty
-        // memcpys into `materialDescsBuffers[currentFrame]` once the fence has
+        // nothing. The hot path stages new descs in `matDescsCached_` and marks
+        // the entry ranges it touched (markMatDescsDirty); renderFrame's
+        // flushMaterialDescsIfDirty memcpys those ranges into
+        // `materialDescsBuffers[currentFrame]` once the fence has
         // signaled (= GPU done with this slot). Descriptor sets are bound
         // per-frame (set idx = f*imageCount_+k → buffer[f]) so the binding
         // stays valid across the swap.
         std::array<Buffer, kFramesInFlight> materialDescsBuffers{};
         std::vector<MaterialDesc> matDescsCached_;
-        std::array<bool, kFramesInFlight> matDescsDirty_{};
+        std::array<DescDirtyRanges, kFramesInFlight> matDescsDirty_{};
+
+        // Stage a desc change for EVERY slot at once — the shape every producer
+        // wants, since a host-side patch is a fact about the scene and not about
+        // one frame. Named per array so the call sites read as what they patched.
+        void markMatDescsDirty(uint32_t first, uint32_t count = 1) {
+            for (auto& d : matDescsDirty_) d.mark(first, count);
+        }
+        void markMatDescsWhole() {
+            for (auto& d : matDescsDirty_) d.markWhole();
+        }
+        void markGeomDescsDirty(uint32_t first, uint32_t count = 1) {
+            for (auto& d : geomDescsDirty_) d.mark(first, count);
+        }
+        void markGeomDescsWhole() {
+            for (auto& d : geomDescsDirty_) d.markWhole();
+        }
 
         // Per-FIF deferred-descriptor refresh flag. Set (all slots) when a
         // material texture is swapped in place (refreshDirtyMaterialTextures) or
@@ -744,8 +812,8 @@ namespace threepp {
         // to fold into the same "force a full TLAS rebuild" trigger the
         // deformer paths already use (blasDeformed) — an AS-reference change
         // per VkAccelerationStructureInstanceKHR is only unambiguously legal
-        // under MODE_BUILD, not the incremental MODE_UPDATE refit. Also
-        // flips geomDescsDirty_[*] so RT secondary rays (reflections/GI/
+        // under MODE_BUILD, not the incremental MODE_UPDATE refit. Also marks
+        // geomDescsDirty_ whole-array so RT secondary rays (reflections/GI/
         // lidar/probe update) read the SAME index buffer the swapped BLAS
         // was built from — without it, gl_PrimitiveID from a hit against a
         // coarser BLAS would misindex the still-LOD0
@@ -1686,6 +1754,59 @@ namespace threepp {
         // True while THIS frame's raster actually ran two-phase (consumers
         // in the same recordCommandBuffer body branch on it).
         bool occlActiveThisFrame_ = false;
+
+        // ── GPU per-instance world matrices (stage 1: producer only) ─────────
+        // instance_expand.comp recomputes, per InstancedMesh span, exactly what
+        // ensureSceneBuilt's lean refresh bakes into MeshEntry::worldMatrix. No
+        // consumer reads it — DrawInfo, motion, cull and the TLAS instance fill
+        // all still take the CPU values — so this is pure added cost until
+        // stages 2-5 move them over. It buys the one thing those stages cannot
+        // buy themselves: proof that the GPU producer agrees with the CPU
+        // (VulkanRenderer::instanceExpandCheck).
+        std::unique_ptr<vulkan::InstanceExpand> instExpand_;
+        // OFF by default, and it stays off until a consumer reads the buffer.
+        // The comment above is the whole argument: the pass is measured slower
+        // (~+1.0 ms wall at 85k grains, 8 of 8 interleaved A/B pairs) and its
+        // output is read by nobody, so defaulting it on made every application
+        // and every test in the tree pay for a value none of them use — and
+        // quietly moved the baseline that stages 2-5 must be measured against.
+        // setGpuInstanceExpansion(true) opts in, which is all the A/B lever and
+        // VulkanInstanceExpand_test need.
+        bool gpuInstanceExpand_ = false;// setGpuInstanceExpansion; the A/B lever
+        // The GPU path's span list: an index into entrySpans_ plus the two
+        // prefix sums the shader needs. Instanced spans only. Rebuilt (and
+        // compared) every frame — it is O(spans), not O(instances), and a diff
+        // is what tells the per-fif upload bookkeeping below that its
+        // per-span slots no longer mean the same thing.
+        struct InstExpandSpan {
+            uint32_t spanIdx  = 0;// index into entrySpans_
+            uint32_t count    = 0;// instances actually uploaded (clamped to the attribute)
+            uint32_t matBase  = 0;// first matrix in the pool
+            uint32_t workBase = 0;// exclusive prefix sum of count
+            bool operator==(const InstExpandSpan& o) const noexcept {
+                return spanIdx == o.spanIdx && count == o.count &&
+                       matBase == o.matBase && workBase == o.workBase;
+            }
+        };
+        std::vector<InstExpandSpan> instExpandSpans_, instExpandScratch_;
+        uint32_t instExpandMatrixTotal_ = 0;// matrices in the pool
+        uint32_t instExpandWorkTotal_   = 0;// dispatch domain
+        // Content serial per GPU-path span, bumped whenever the CPU re-baked
+        // that span's entries (EntrySpan::movedThisFrame). The per-fif stamps
+        // chase it, so a span that moved on frame N is re-sent to BOTH slots
+        // rather than only to the slot that happened to be current — the bug
+        // a plain "did it move this frame" gate would have.
+        //
+        // It also closes a hole the layout diff alone cannot see: two instanced
+        // meshes swapping places in entrySpans_ with identical counts produces
+        // an IDENTICAL InstExpandSpan list, so the diff would keep the old
+        // per-slot stamps while slot k now means a different mesh. Safe because
+        // entrySpans_ is only ever rebuilt by the full expansion, and that path
+        // sets movedThisFrame on EVERY span — so any rebuild bumps every serial
+        // and both slots re-upload.
+        std::vector<uint64_t> instExpandSerial_;
+        std::array<std::vector<uint64_t>, kFramesInFlight> instExpandFifSerial_;
+
         float bloomThreshold_ = 1.0f;// soft-knee bright-pass cutoff (linear HDR)
         float bloomClamp_ = 0.0f;    // per-tap HDR cap before the bright pass; <= 0 = off
         float sharpenStrength_ = 0.5f;// post-TAA RCAS amount; 0 = off
@@ -1841,6 +1962,20 @@ namespace threepp {
         std::vector<VkSemaphore> renderFinished;
         std::array<VkFence,         kFramesInFlight> inFlight{};
 
+        // Suppressed-present swapchain state (ctx->presentSuppressed(), i.e. a
+        // headless canvas). Nothing is ever presented, so nothing is ever
+        // released back to the presentation engine either: each frame-in-flight
+        // slot acquires ONE image the first time it runs and keeps it for the
+        // swapchain's lifetime. UINT32_MAX = this slot has not acquired yet.
+        // Reset by recreateSwapchainAndDescriptors, which is the only thing that
+        // invalidates the images.
+        std::array<uint32_t, kFramesInFlight> pinnedSwapImage_{};
+        // Whether imageAvailable[slot] still carries an unconsumed signal from
+        // the acquire. True for exactly the one frame that follows an acquire;
+        // false afterwards, so the submit does not wait on an already-consumed
+        // binary semaphore (which would deadlock).
+        std::array<bool, kFramesInFlight> acquireSemPending_{};
+
         uint32_t currentFrame = 0;
         bool needsResize = false;
 
@@ -1975,6 +2110,15 @@ namespace threepp {
         // (the image count can change and retired semaphores may be left in
         // an indeterminate signalled state). Requires an idle device.
         void createRenderFinishedSemaphores();
+
+        // The frame's swapchain image. Normally a straight
+        // vkAcquireNextImageKHR; when presents are suppressed (headless canvas)
+        // the slot's image is acquired once and reused from then on, because a
+        // never-presented image is never released back to the presentation
+        // engine and so can never be re-acquired. Sets pinnedSwapImage_ /
+        // acquireSemPending_ and returns the acquire's VkResult (VK_SUCCESS on
+        // the reuse path) for the caller's OUT_OF_DATE / SUBOPTIMAL handling.
+        VkResult acquireOrReuseSwapchainImage(uint32_t& imageIndex);
 
         // Allocate, begin, return a one-shot command buffer.
         VkCommandBuffer beginOneShot();
@@ -2506,6 +2650,23 @@ namespace threepp {
 
         void computeAndUploadMotionMatrices(uint32_t frame,
                                             const std::vector<MeshEntry>& entries);
+
+        // ── GPU instance expansion (stage 1) ────────────────────────────────
+        // Rebuild the GPU-path span list, grow this slot's pools, and upload
+        // the SpanDescs + every span whose instance matrices the CPU re-read
+        // since this slot last saw them. Caller must have already waited the
+        // inFlight[frame] fence: both pools and the frame's descriptor set are
+        // written here, and a descriptor written while its frame is in flight
+        // is the VUID-03047 zone.
+        void prepareInstanceExpansion(uint32_t frame);
+
+        // One dispatch, into the frame's already-open command buffer.
+        void recordInstanceExpansion(VkCommandBuffer cb, uint32_t frame);
+
+        // Copy the GPU world matrices back and compare them against
+        // MeshEntry::worldMatrix over the instanced spans. DRAINS THE DEVICE;
+        // backs VulkanRenderer::instanceExpandCheck.
+        bool verifyInstanceExpansion(VulkanRenderer::InstanceExpandCheck& out);
 
         // Upload meshMovedBits_ to meshMovedBitsBuffers[frame]. Caller must have
         // already waited the inFlight[frame] fence.

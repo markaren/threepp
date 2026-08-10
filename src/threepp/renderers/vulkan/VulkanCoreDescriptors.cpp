@@ -503,6 +503,15 @@ void VulkanRenderer::Impl::ensureHybridResources() {
                         [this](Buffer&& b) { retire(std::move(b)); });
                 occlHiz_ = std::make_unique<vulkan::HiZPyramid>(*ctx, kFramesInFlight);
             }
+            // GPU per-instance world-matrix expansion (stage 1; producer only).
+            // Same retire contract as occl_: its output buffer is shared across
+            // frames in flight and growing it mid-record must not free a handle
+            // a sibling frame still names.
+            if (!instExpand_) {
+                instExpand_ = std::make_unique<vulkan::InstanceExpand>(
+                        *ctx, kFramesInFlight,
+                        [this](Buffer&& b) { retire(std::move(b)); });
+            }
             // MSAA render pass + pipelines — only built when opted in, and
             // rebuilt when the sample count changes (2↔4) or MSAA is turned
             // off (torn down; the 1× path above is untouched either way).

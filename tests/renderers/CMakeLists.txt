@@ -71,6 +71,18 @@ if (THREEPP_WITH_VULKAN AND THREEPP_WITH_GLFW)
     # projection. Numeric (not pixel) claims, so unlike the goldens this is
     # hardware-independent — but it still needs a device to construct the
     # renderer, hence the same skip code.
+    # GPU per-instance world matrices vs the CPU's, bit for bit. The gate on
+    # stage 1 of plans/gpu-driven-instances.md: instance_expand.comp produces
+    # what MeshEntry::worldMatrix holds, no consumer reads it yet, and the only
+    # thing that makes the later stages safe is that the two are provably the
+    # same numbers. Numeric (not pixel), so hardware-independent — but it needs
+    # a device, hence the same skip code as the goldens.
+    add_executable(VulkanInstanceExpand_test VulkanInstanceExpand_test.cpp)
+    target_link_libraries(VulkanInstanceExpand_test PRIVATE threepp)
+    target_include_directories(VulkanInstanceExpand_test PRIVATE "${PROJECT_SOURCE_DIR}/src")
+    add_test(NAME VulkanInstanceExpand_test COMMAND VulkanInstanceExpand_test)
+    set_tests_properties(VulkanInstanceExpand_test PROPERTIES SKIP_RETURN_CODE 42)
+
     add_executable(VulkanCameraModel_test VulkanCameraModel_test.cpp)
     target_link_libraries(VulkanCameraModel_test PRIVATE threepp)
     target_include_directories(VulkanCameraModel_test PRIVATE "${PROJECT_SOURCE_DIR}/src")

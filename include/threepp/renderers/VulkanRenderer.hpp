@@ -803,6 +803,22 @@ namespace threepp {
             float splatProjectMs = 0.f;// project + cull + prefix sum + expand
             float splatSortMs    = 0.f;// the radix passes and their scans
             float splatRasterMs  = 0.f;// tile ranges + composite
+            // GPU per-instance world-matrix expansion (0 unless
+            // setGpuInstanceExpansion and the scene has instanced geometry).
+            float instanceExpandMs = 0.f;
+            // GPU execution SPAN of the whole submitted command buffer — not a sum
+            // of the fields above, and not busy time. It covers the passes that
+            // have no timestamp bracket at all (TLAS refit, deformers, bloom/post,
+            // RCAS, probe GI, cluster build, cloud march, auto-exposure, particle
+            // light, ImGui/present transition) and every secondary view, whose
+            // timestamps are suppressed. Read against cpuFrameMs to tell "the CPU
+            // is the wall" from "the CPU is waiting".
+            float gpuTotalMs     = 0.f;
+            // The bracketed passes, summed over a DISJOINT set (the three splat
+            // sub-stages are excluded — they partition splatMs; the sensor-image
+            // pass is included even though it has no field of its own).
+            // gpuTotalMs - gpuPassSumMs is GPU work invisible to the brackets.
+            float gpuPassSumMs   = 0.f;
             float cpuEnsureSceneMs = 0.f;// ensureSceneBuilt
             float cpuRecordMs      = 0.f;// recordCommandBuffer
             float cpuFrameMs       = 0.f;// total render() wall time
@@ -1027,6 +1043,46 @@ namespace threepp {
         // of the eviction test surface: "deleting the scan released its ~700 MB
         // of sort scratch" is a VRAM claim, and this is the assertable form.
         [[nodiscard]] std::size_t splatScratchSplats() const;
+
+        // ── GPU per-instance world matrices ───────────────────────────────────
+        // A compute pass (instance_expand.comp) that recomputes, per
+        // InstancedMesh span, the world matrix the CPU bakes into every
+        // instance's scene entry: world = mesh.matrixWorld * instanceMatrix[i].
+        //
+        // Right now NOTHING consumes it — the draw list, motion vectors,
+        // frustum cull and the ray-tracing instance descriptors all still read
+        // the CPU values — so this costs an instance-matrix upload and a
+        // dispatch and saves nothing yet. It is the verified foundation for
+        // moving those consumers onto the GPU; see
+        // plans/gpu-driven-instances.md. ON by default so the pass is covered
+        // by the same tests as everything else; turn it OFF to A/B its cost or
+        // to take it out of the frame entirely.
+        void setGpuInstanceExpansion(bool enabled);
+        [[nodiscard]] bool gpuInstanceExpansion() const;
+
+        // Test/debug hook: read the compute pass's output back and compare it
+        // against the CPU's per-instance matrices, over every instanced span of
+        // the frame last rendered. `mismatches` counts entries whose 16 floats
+        // are not BITWISE identical — the multiply is spelled out on both sides
+        // in the same order precisely so that 0 is the achievable answer, and a
+        // non-zero maxAbsDiff with mismatches == 0 is impossible by
+        // construction. False when the pass is off or the scene has no
+        // instanced geometry.
+        //
+        // FINALIZES the in-flight frame and then DRAINS THE DEVICE: render()
+        // leaves the command buffer open (the present is deferred to the canvas
+        // frame-end callback), so reading the output before closing it would
+        // compare this frame's CPU matrices against last frame's GPU ones —
+        // equal only when nothing moved, i.e. exactly when the check proves
+        // nothing.
+        struct InstanceExpandCheck {
+            std::size_t spans           = 0;// instanced spans on the GPU path
+            std::size_t entriesCompared = 0;
+            std::size_t mismatches      = 0;// bitwise-unequal matrices
+            float       maxAbsDiff      = 0.f;
+            std::uint32_t maxUlpDiff    = 0;// worst element, in float steps
+        };
+        bool instanceExpandCheck(InstanceExpandCheck& out);
 
     private:
         // The one implementation struct, defined in vulkan/VulkanCoreImpl.hpp

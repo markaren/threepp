@@ -43,7 +43,22 @@ namespace threepp::vulkan {
         if (timingsSupported_ && pools_[frame] != VK_NULL_HANDLE) {
             vkCmdResetQueryPool(cb, pools_[frame], 0, kTimingSlots);
             maskRecorded_[frame] = 0u;
+            // Open the whole-command-buffer bracket. AFTER the reset, in the same
+            // command buffer — writing a timestamp into a query the stream has not
+            // yet reset is VUID-vkCmdWriteTimestamp2-None-03864 and garbage
+            // results. Written directly rather than through begin(): suppressed_
+            // is a secondary-view device and must not be able to make the frame
+            // total vanish. Its mask bit is set by endFrameTotal.
+            vkCmdWriteTimestamp2(cb, VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT,
+                                 pools_[frame], TP_Frame * 2u);
         }
+    }
+
+    void GpuTimings::endFrameTotal(VkCommandBuffer cb, uint32_t frame) {
+        if (!timingsSupported_ || pools_[frame] == VK_NULL_HANDLE) return;
+        vkCmdWriteTimestamp2(cb, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,
+                             pools_[frame], TP_Frame * 2u + 1u);
+        maskRecorded_[frame] |= (1u << TP_Frame);
     }
 
     void GpuTimings::begin(VkCommandBuffer cb, TimingPass pass, uint32_t frame) {
@@ -80,6 +95,16 @@ namespace threepp::vulkan {
         lastTimings_.dofMs         = 0.f;
         lastTimings_.froxelMs      = 0.f;
         lastTimings_.splatMs       = 0.f;
+        // These three were missing from the zeroing block: assigned below but
+        // never cleared, so on the two early returns (no timestamp support, first
+        // use of a slot) they kept the PREVIOUS frame's value — stale non-zero
+        // splat numbers on exactly the frames a warm-up window includes.
+        lastTimings_.splatProjectMs = 0.f;
+        lastTimings_.splatSortMs    = 0.f;
+        lastTimings_.splatRasterMs  = 0.f;
+        lastTimings_.instanceExpandMs = 0.f;
+        lastTimings_.gpuTotalMs     = 0.f;
+        lastTimings_.gpuPassSumMs   = 0.f;
         if (!timingsSupported_) return;
         const uint32_t mask = maskRecorded_[frame];
         if (mask == 0u) return;// first use of this slot
@@ -114,6 +139,22 @@ namespace threepp::vulkan {
         lastTimings_.splatProjectMs = pairMs(TP_SplatProject);
         lastTimings_.splatSortMs    = pairMs(TP_SplatSort);
         lastTimings_.splatRasterMs  = pairMs(TP_SplatRaster);
+        lastTimings_.instanceExpandMs = pairMs(TP_InstanceExpand);
+        lastTimings_.gpuTotalMs     = pairMs(TP_Frame);
+        // The DISJOINT bracketed passes only. TP_SplatProject/Sort/Raster are
+        // recorded INSIDE TP_Splat and partition it, so they are excluded or splat
+        // frames double-count. TP_SensorImage is named explicitly: it is bracketed
+        // in the record pass but has no public field, so a sum built from the
+        // struct alone would silently drop it. gpuTotalMs minus this is the GPU
+        // work no bracket covers, plus the pipeline bubbles between passes.
+        lastTimings_.gpuPassSumMs =
+                lastTimings_.rasterGbufMs + lastTimings_.gbufResolveMs +
+                lastTimings_.shadeBMs + lastTimings_.overlayMs +
+                lastTimings_.pathTraceMs + lastTimings_.denoiseMs +
+                lastTimings_.taaMs + lastTimings_.dofMs +
+                lastTimings_.froxelMs + lastTimings_.splatMs +
+                lastTimings_.instanceExpandMs +
+                pairMs(TP_SensorImage);
     }
 
 }// namespace threepp::vulkan

@@ -911,6 +911,7 @@ if (THREEPP_WITH_VULKAN)
             "threepp/renderers/vulkan/ProbeGI.cpp"
             "threepp/renderers/vulkan/HiZPyramid.cpp"
             "threepp/renderers/vulkan/OcclusionCull.cpp"
+            "threepp/renderers/vulkan/InstanceExpand.cpp"
             "threepp/renderers/vulkan/WaterDisplacePipeline.cpp"
             "threepp/renderers/vulkan/FoamWorldPipeline.cpp"
             "threepp/renderers/vulkan/GrassWindPipeline.cpp"
@@ -1327,6 +1328,13 @@ if (THREEPP_WITH_VULKAN)
         "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/occl_cull.comp"
         kOcclCullCompSpv
         _occl_cull_spv_h)
+    # GPU per-instance world-matrix expansion (world = spanWorld ·
+    # instanceMatrix[i]) — see InstanceExpand.{hpp,cpp} and
+    # plans/gpu-driven-instances.md.
+    compile_vulkan_shader(threepp
+        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/instance_expand.comp"
+        kInstanceExpandCompSpv
+        _instance_expand_spv_h)
     compile_vulkan_shader(threepp
         "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/skinning.comp"
         kSkinningCompSpv
