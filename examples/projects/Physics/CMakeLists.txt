@@ -2,6 +2,11 @@
 add_example(NAME "physx_demo" SOURCES main.cpp LINK_IMGUI LINK_PHYSX)
 add_example(NAME "physx_softbody" SOURCES softbody.cpp LINK_IMGUI LINK_PHYSX)
 
+# GPU PBD granular material (PxPBDParticleSystem). Builds everywhere PhysX is
+# found — the PBD headers ship with the SDK whether or not CUDA does — and
+# reports + exits 0 at runtime when GPU dynamics is unavailable.
+add_example(NAME "physx_granular_conveyor" SOURCES granular_conveyor.cpp LINK_PHYSX)
+
 # CUDA→Vulkan zero-copy interop for the soft-body tet positions (optional):
 # PhysX's deformed positions are copied device→device into the Vulkan
 # renderer's exported tet-skinning buffer — no host round-trip. Needs the
