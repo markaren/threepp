@@ -1,0 +1,238 @@
+// FireEffect — a campfire built out of the pieces the renderer already has.
+//
+// plans/particle-atmosphere.md F-B. Nothing here is a new renderer feature:
+// the flame is a ParticleField whose DensityRepr carries F0's blackbody
+// emission ramp, the smoke is a SECOND field with its own albedo (the reason
+// F0 made the medium params per field), the embers are the legacy
+// ParticleSystem billboard path untouched, and the light the fire casts on the
+// world is one ordinary PointLight. That last piece is the important one: a
+// volume that emits does not, by itself, light anything. The PointLight is
+// what puts the fire into the cluster list, the froxel glow, the deferred
+// surface shading and the ray-traced shadows — every one of them existing
+// machinery, with zero renderer change in this file's name.
+//
+// ── VULKAN ONLY (inherited) ─────────────────────────────────────────────────
+// ParticleField has no GL implementation, so under `--api gl` the flame and
+// smoke VOLUMES render nothing. The PointLight and the ember billboards still
+// work, so a GL scene gets a flickering fire-coloured light and sparks but no
+// flame body. Use the Vulkan backend for the whole effect.
+//
+// ── THE EMITTER IS STATELESS AND SEEDED ─────────────────────────────────────
+// Every slot's position is a CLOSED FORM f(seed_i, t): a hashed birth phase, a
+// hashed lifetime, a buoyant rise and a sum of phase-shifted sines for the
+// swirl, with the w < 0 dead-slot sentinel covering the part of each slot's
+// period when it is not alive. There is no integration, no per-frame state and
+// no RNG object anywhere in it, which buys three things:
+//
+//   • determinism — the same seed and the same t give the same bytes, in this
+//     process and in the next one, which is the contract the whole particle
+//     subsystem is held to;
+//   • free resume and free seeking — update(t) at any t is valid with no
+//     warm-up, so a headless capture can jump straight to t = 8 s;
+//   • it is the SAME model the device emitter (plan F2) will run in a compute
+//     shader, so moving this fire onto the GPU later is a port, not a redesign.
+//
+// The per-frame CPU cost is ~18k closed-form evaluations plus one memcpy per
+// field — microseconds, and independent of how many cameras look at the fire.
+//
+// ── THE ONE EXCEPTION: EMBERS ───────────────────────────────────────────────
+// The ember sparks ride the legacy ParticleSystem, which owns its own RNG and
+// integrates per frame. It is therefore NOT deterministic and NOT seekable,
+// and it is the only part of this effect that is not. That path is deliberately
+// left alone (plan: do not touch it), and Params::embers turns it off — which
+// is what a golden capture or an A/B measurement should do.
+//
+// ── CHURN ───────────────────────────────────────────────────────────────────
+// Both fields are created ONCE, in the constructor, at their final capacity,
+// and are PARKED (liveCount 0) until ignite(). Creating or destroying a field
+// is a structural scene change — entry re-expansion, a vkDeviceWaitIdle and a
+// cleared TAA history — so extinguish() parks rather than removes, and a fire
+// that will ever be lit should be constructed before the scene starts running.
+// See the churn contract in ParticleField.hpp.
+//
+// Usage:
+//     auto fire = FireEffect::create();          // parked
+//     fire->position.set(0.f, 0.f, 3.f);
+//     scene.add(fire);
+//     fire->ignite();
+//     ... each frame:  fire->update(elapsedSeconds);
+
+#ifndef THREEPP_FIREEFFECT_HPP
+#define THREEPP_FIREEFFECT_HPP
+
+#include "threepp/core/Object3D.hpp"
+#include "threepp/lights/PointLight.hpp"
+#include "threepp/math/Color.hpp"
+#include "threepp/math/Vector3.hpp"
+#include "threepp/objects/ParticleField.hpp"
+
+#include <cstdint>
+#include <memory>
+#include <vector>
+
+namespace threepp {
+
+    class ParticleSystem;
+    class Texture;
+
+    class FireEffect: public Object3D {
+
+    public:
+        struct Params {
+            // ── Flame envelope (metres, in the effect's own space) ──────────
+            float height = 1.20f;// base of the fire to the flame tips
+            float radius = 0.25f;// flame radius at the base
+
+            // Capacities. Fixed for the life of the fields (churn contract).
+            // 6k/12k is a campfire: the density volume is a smooth medium well
+            // before the particle count becomes visible as grain, because each
+            // particle splats over 8 voxels.
+            std::uint32_t flameParticles = 6'000;
+            std::uint32_t smokeParticles = 12'000;
+            // Voxels per axis for each volume. Latched when the field first
+            // enables its DensityRepr and never changed. Deliberately COARSE:
+            // resolution beyond ~8 taps per occupied voxel buys nothing but
+            // speckle, since the particles are the only thing filling it.
+            std::uint32_t flameResolution = 32;
+            std::uint32_t smokeResolution = 32;
+
+            // ── The medium ──────────────────────────────────────────────────
+            // sigma_t contributed by ONE particle. R-3 of the plan: the trap
+            // here is authoring, not range — too much sigma makes a SOOT-BLACK
+            // flame, because extinction beats emission. These are tuned values,
+            // not 1.0.
+            //
+            // The number to reason with is TOTAL OPTICAL MASS, N * sigma: the
+            // trilinear splat conserves it, so the mean sigma_t inside the body
+            // is N * sigma / (occupied voxels) and the marched depth is that
+            // times the chord. A field with a TENTH the particle count needs
+            // TEN TIMES the sigma to be the same medium — which is why these
+            // read high next to a 10^5-particle dust cloud's 0.5.
+            float flameSigma = 2.20f;
+            float smokeSigma = 0.34f;
+            // Flames are mostly soot: what little they scatter, they scatter
+            // dark. Smoke is grey and forward-scattering.
+            Color flameAlbedo{0.32f, 0.27f, 0.24f};
+            Color smokeAlbedo{0.25f, 0.25f, 0.26f};
+            float smokeAnisotropy = 0.30f;
+
+            // ── Emission (F0's blackbody ramp) ──────────────────────────────
+            float emissiveIntensity = 34.f;  // radiance of a 2000 K flame; ACES wants tens
+            float tempBottomK       = 1950.f;// core
+            float tempTopK          = 1080.f;// where the flame gives out to smoke
+            float tempFalloff       = 1.55f; // holds the core temperature, drops late
+
+            // ── Smoke column ────────────────────────────────────────────────
+            float smokeHeight = 2.20f;// above the flame tips
+            float smokeSpread = 0.60f;// how far the column widens by the top
+            Vector3 wind{0.22f, 0.f, 0.09f};// horizontal drift, m/s
+
+            // ── The light the fire casts ────────────────────────────────────
+            // This is what makes fire light the WORLD. Intensity is modulated
+            // by the seeded flicker below; the colour is the blackbody hue at
+            // lightTempK, itself wobbled a little so the flicker shifts warmth
+            // and not just brightness (a pure brightness flicker reads as a
+            // failing bulb, not as fire).
+            float lightIntensity = 26.f;
+            float lightRange     = 12.f;
+            float lightTempK     = 1850.f;
+            float lightHeight    = 0.30f;// above the fire's base
+            // Physical source size -> ray-traced soft shadows with a widening
+            // penumbra, which is most of why firelight reads as firelight.
+            float lightRadius = 0.10f;
+            // 0 = a steady lamp, 1 = the full seeded flicker. The flicker is a
+            // sum of INCOMMENSURATE sines: it never repeats, it needs no RNG
+            // state, and it is a pure function of t (so it survives a seek).
+            float flicker = 1.0f;
+
+            // ── Embers (legacy ParticleSystem, additive) ────────────────────
+            // Null texture = no embers, whatever `embers` says. Kept as a
+            // caller-supplied asset so this header pulls in no data folder.
+            bool embers = true;
+            std::shared_ptr<Texture> emberTexture;
+            int   emberRate = 26;   // particles per second
+            float emberLife = 2.1f; // seconds
+
+            std::uint32_t seed = 20260811u;
+        };
+
+        // Creates both fields at full capacity and PARKED. Nothing burns until
+        // ignite(); nothing structural happens after this call.
+        static std::shared_ptr<FireEffect> create(const Params& params = {});
+
+        // Advance to ABSOLUTE time t (seconds since whatever origin the caller
+        // likes). Not a delta: the emitter is closed-form in t, so calling this
+        // with t = 0, then t = 5, then t = 5 again is all well defined and all
+        // reproducible. Call once per frame, before render.
+        //
+        // (The legacy ember path is the exception — it integrates, so it is
+        // driven by the difference between consecutive calls, clamped to keep a
+        // hitch or a seek from launching every spark at once.)
+        void update(float timeSec);
+
+        // Un-park both fields and turn the light on. Cheap: no allocation, no
+        // device idle, no TAA history clear — the fields already exist.
+        void ignite();
+        // Park both fields (liveCount 0) and turn the light off. The fields
+        // stay in the scene at one entry each, which is the whole reason the
+        // churn contract says park instead of remove.
+        void extinguish();
+        [[nodiscard]] bool lit() const { return lit_; }
+
+        [[nodiscard]] const Params& params() const { return p_; }
+
+        [[nodiscard]] const std::shared_ptr<ParticleField>& flameField() const { return flame_; }
+        [[nodiscard]] const std::shared_ptr<ParticleField>& smokeField() const { return smoke_; }
+        [[nodiscard]] const std::shared_ptr<PointLight>&    light() const { return light_; }
+
+        // The HUE of a blackbody at `kelvin`, normalised so the maximum channel
+        // is 1 — a light colour, with the brightness left to the light's own
+        // intensity. This is the host mirror of blackbodyRGB() in
+        // shaders/particle_density.glsl, minus that function's
+        // Stefan-Boltzmann (T/2000K)^4 magnitude: same two fitted curves, same
+        // coefficients. KEEP THE COEFFICIENTS IN SYNC — the point of sharing
+        // them is that the flame body and the light it casts are the same
+        // colour at the same temperature.
+        [[nodiscard]] static Color blackbodyColor(float kelvin);
+
+        // The flicker envelope at time t, in roughly [0.55, 1.45]. Exposed
+        // because a scene often wants something ELSE to flicker in step — a
+        // lantern, an emissive material, an audio gain — and re-deriving it
+        // would put a second, drifting copy of the sines in the caller.
+        [[nodiscard]] float flickerAt(float timeSec) const;
+
+        [[nodiscard]] std::string type() const override { return "FireEffect"; }
+
+        explicit FireEffect(const Params& params);
+        ~FireEffect() override;
+
+    private:
+        Params p_;
+        bool   lit_      = false;
+        float  lastTime_ = 0.f;// ONLY for the legacy embers' dt; see update()
+        bool   haveTime_ = false;
+
+        std::shared_ptr<ParticleField> flame_;
+        std::shared_ptr<ParticleField> smoke_;
+        std::shared_ptr<PointLight>    light_;
+        std::shared_ptr<ParticleSystem> embers_;
+
+        // Staging for the two submits. Sized once, never grown — the memcpy
+        // into the field is the only per-particle cost in the design and it
+        // should not share a frame with an allocation.
+        std::vector<ParticlePos> flameHost_;
+        std::vector<ParticlePos> smokeHost_;
+
+        // The volumes' world boxes, recomputed from the effect's world matrix
+        // each update (the boxes are WORLD-space by DensityRepr's contract,
+        // while the particles this emitter writes are effect-LOCAL and are
+        // transformed on the way in by the field's matrixWorld).
+        Vector3 flameBoxLocal_, flameHalf_, smokeBoxLocal_, smokeHalf_;
+
+        void emitFlame(float t);
+        void emitSmoke(float t);
+    };
+
+}// namespace threepp
+
+#endif// THREEPP_FIREEFFECT_HPP
