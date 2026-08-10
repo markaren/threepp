@@ -101,6 +101,24 @@ namespace threepp::vulkan {
             ParticleField* field;
             std::uint32_t  entryIndex;
             std::uint32_t  classId;
+            // Vertices per proxy instance — the index count of MeshRepr's
+            // geometry, resolved by the renderer from the same BlasRecord the
+            // DrawInfo addresses come from. 0 = the field draws nothing this
+            // frame (no MeshRepr, or its geometry has not uploaded yet).
+            std::uint32_t  proxyVertexCount = 0;
+        };
+
+        // What the raster pass needs to issue one field's draw. Rebuilt every
+        // prepareFrame, in the order the Rec list arrived, so the renderer can
+        // zip it against its own per-field DrawInfo indices.
+        struct DrawState {
+            const ParticleField* field    = nullptr;
+            VkBuffer        indirect      = VK_NULL_HANDLE;// ONE VkDrawIndirectCommand
+            VkBuffer        counts        = VK_NULL_HANDLE;// src of the instanceCount copy
+            VkDeviceAddress posAddr       = 0;
+            VkDeviceAddress prevPosAddr   = 0;
+            VkDeviceAddress oriAddr       = 0;// 0 → identity orientations
+            std::uint32_t   vertexCount   = 0;// 0 → skip the draw
         };
 
         // Same contract and same reason as InstanceExpand::RetireBufferFn: a
@@ -118,6 +136,17 @@ namespace threepp::vulkan {
         // frame serial being recorded; `frame` is the frame-in-flight index.
         void prepareFrame(std::uint64_t serial, std::uint32_t frame,
                           const std::vector<Rec>& fields);
+
+        // Publish liveCount into each field's VkDrawIndirectCommand, on the
+        // DEVICE: a 4-byte copy into byte offset 4 of the command, which is
+        // where instanceCount lives (plan §1.3, route 1). The CPU writes the
+        // record's other three words in prepareFrame and never learns the
+        // count — under Ownership::Interop the counts block is written by the
+        // sim's CUDA kernel and there is nothing to learn. Recorded at the head
+        // of the frame's command buffer, before any consumer.
+        void recordCounts(VkCommandBuffer cb);
+
+        [[nodiscard]] const std::vector<DrawState>& drawStates() const { return draws_; }
 
         // The FieldDesc SSBO for a frame-in-flight, and how many entries of it
         // prepareFrame filled. Nothing reads these before phase 1; they are the
@@ -141,6 +170,15 @@ namespace threepp::vulkan {
             std::uint32_t capacity     = 0;
             Buffer        positions[kSlots]{};
             Buffer        counts[kSlots]{};
+            // One VkDrawIndirectCommand per slot. Per-slot rather than shared
+            // because its instanceCount is written by a device copy inside the
+            // frame that reads it, and two frames in flight must not share the
+            // word one of them is still consuming.
+            Buffer        indirect[kSlots]{};
+            // Orientations, snorm16x4. SINGLE instance, not ringed: write-once
+            // by contract (ParticleField::setOrientations documents why).
+            Buffer        orientations{};
+            std::uint64_t oriSerial = 0;// ParticleField::orientationSerial() uploaded
             // ParticleField::dataSerial() this slot was last filled from. 0 =
             // freshly allocated, i.e. holds garbage and must be re-sent.
             std::uint64_t slotSerial[kSlots]{};
@@ -155,6 +193,7 @@ namespace threepp::vulkan {
         std::uint32_t descCapacity_ = 0;// in FieldDescGpu elements
         std::uint32_t descCount_    = 0;
         std::vector<FieldDescGpu> descScratch_;
+        std::vector<DrawState>    draws_;
 
         State& ensureState(const ParticleField& field);
         void   ensureDescCapacity(std::uint32_t frame, std::uint32_t count);

@@ -3,6 +3,7 @@
 #include "threepp/renderers/vulkan/shaders/gbuffer.vert.spv.h"
 #include "threepp/renderers/vulkan/shaders/gbuffer.frag.spv.h"
 #include "threepp/renderers/vulkan/shaders/gbuffer_indirect.vert.spv.h"
+#include "threepp/renderers/vulkan/shaders/particlefield_gbuf.vert.spv.h"
 #include "threepp/renderers/vulkan/shaders/overlay.vert.spv.h"
 #include "threepp/renderers/vulkan/shaders/overlay.frag.spv.h"
 #include "threepp/renderers/vulkan/shaders/overlay_fullscreen.vert.spv.h"
@@ -101,6 +102,10 @@ void VulkanRenderer::Impl::destroyRasterGbufMsObjects() {
             if (rasterGbufDecalPipelineMS != VK_NULL_HANDLE) {
                 vkDestroyPipeline(d, rasterGbufDecalPipelineMS, nullptr);
                 rasterGbufDecalPipelineMS = VK_NULL_HANDLE;
+            }
+            if (rasterGbufParticlePipelineMS != VK_NULL_HANDLE) {
+                vkDestroyPipeline(d, rasterGbufParticlePipelineMS, nullptr);
+                rasterGbufParticlePipelineMS = VK_NULL_HANDLE;
             }
             if (rasterGbufRenderPassMS != VK_NULL_HANDLE) {
                 vkDestroyRenderPass(d, rasterGbufRenderPassMS, nullptr);
@@ -1081,6 +1086,27 @@ void VulkanRenderer::Impl::createRasterGbufPipeline() {
                                             &rasterGbufDecalPipeline),
                   "vkCreateGraphicsPipelines(rasterGbufDecal)");
 
+            // ParticleField variant: same render pass, layout, fragment stage
+            // and depth/blend state as the indirect pipeline — only the vertex
+            // stage differs. It must be its own pipeline because
+            // gbuffer_indirect.vert's contract is one instance per draw, and a
+            // field is one draw with instanceCount = the device-side liveCount.
+            VkShaderModuleCreateInfo vciPf{};
+            vciPf.sType    = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
+            vciPf.codeSize = sizeof(kParticleFieldGbufVertSpv);
+            vciPf.pCode    = kParticleFieldGbufVertSpv;
+            VkShaderModule vertPfModule = VK_NULL_HANDLE;
+            check(vkCreateShaderModule(ctx->device(), &vciPf, nullptr, &vertPfModule),
+                  "vkCreateShaderModule(particlefield_gbuf.vert)");
+            VkPipelineShaderStageCreateInfo stagesPf[2] = {stagesInd[0], stagesInd[1]};
+            stagesPf[0].module = vertPfModule;
+            VkGraphicsPipelineCreateInfo gpciPf = gpciInd;
+            gpciPf.pStages = stagesPf;
+            check(vkCreateGraphicsPipelines(ctx->device(), ctx->pipelineCache(), 1, &gpciPf, nullptr,
+                                            &rasterGbufParticlePipeline),
+                  "vkCreateGraphicsPipelines(rasterGbufParticle)");
+            vkDestroyShaderModule(ctx->device(), vertPfModule, nullptr);
+
             vkDestroyShaderModule(ctx->device(), vertIndirectModule, nullptr);
             vkDestroyShaderModule(ctx->device(), fragIndModule, nullptr);
         }
@@ -1097,6 +1123,10 @@ void VulkanRenderer::Impl::createRasterGbufPipelineMS(VkSampleCountFlagBits samp
             if (rasterGbufDecalPipelineMS != VK_NULL_HANDLE) {
                 vkDestroyPipeline(ctx->device(), rasterGbufDecalPipelineMS, nullptr);
                 rasterGbufDecalPipelineMS = VK_NULL_HANDLE;
+            }
+            if (rasterGbufParticlePipelineMS != VK_NULL_HANDLE) {
+                vkDestroyPipeline(ctx->device(), rasterGbufParticlePipelineMS, nullptr);
+                rasterGbufParticlePipelineMS = VK_NULL_HANDLE;
             }
 
             VkShaderModuleCreateInfo vsmci{};
@@ -1305,6 +1335,23 @@ void VulkanRenderer::Impl::createRasterGbufPipelineMS(VkSampleCountFlagBits samp
             check(vkCreateGraphicsPipelines(ctx->device(), ctx->pipelineCache(), 1, &gpciDecal, nullptr,
                                             &rasterGbufDecalPipelineMS),
                   "vkCreateGraphicsPipelines(rasterGbufDecalMS)");
+
+            // ParticleField, MSAA. Same reasoning as the 1x path above.
+            VkShaderModuleCreateInfo vciPf{};
+            vciPf.sType    = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
+            vciPf.codeSize = sizeof(kParticleFieldGbufVertSpv);
+            vciPf.pCode    = kParticleFieldGbufVertSpv;
+            VkShaderModule vertPfModule = VK_NULL_HANDLE;
+            check(vkCreateShaderModule(ctx->device(), &vciPf, nullptr, &vertPfModule),
+                  "vkCreateShaderModule(particlefield_gbuf.vert MS)");
+            VkPipelineShaderStageCreateInfo stagesPf[2] = {stagesInd[0], stagesInd[1]};
+            stagesPf[0].module = vertPfModule;
+            VkGraphicsPipelineCreateInfo gpciPf = gpciInd;
+            gpciPf.pStages = stagesPf;
+            check(vkCreateGraphicsPipelines(ctx->device(), ctx->pipelineCache(), 1, &gpciPf, nullptr,
+                                            &rasterGbufParticlePipelineMS),
+                  "vkCreateGraphicsPipelines(rasterGbufParticleMS)");
+            vkDestroyShaderModule(ctx->device(), vertPfModule, nullptr);
 
             vkDestroyShaderModule(ctx->device(), vertIndirectModule, nullptr);
             vkDestroyShaderModule(ctx->device(), fragIndModule, nullptr);

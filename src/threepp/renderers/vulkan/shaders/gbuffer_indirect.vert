@@ -68,6 +68,9 @@ layout(location = 5) out vec2 vUv;
 layout(location = 6) out vec3 vWorldPos;
 layout(location = 7) out vec3 vColor;// per-vertex color (vec3(1) when no "color" / vertexColors off)
 layout(location = 8) flat out uint vStableId;// stable per-object id -> outIds.y
+// Per-particle identity -> outIds.w. Zero here: only particlefield_gbuf.vert
+// draws particles. Declared because gbuffer.frag is shared between the two.
+layout(location = 9) flat out uint vParticleId;
 
 vec3 fetchVec3(uint64_t addr, uint i) {
     FloatBuf b = FloatBuf(addr);
@@ -150,6 +153,7 @@ void main() {
     vInstanceIdx   = d.instanceCustomIndex;
     vFlags         = d.flags;// render flags in bits 0..7 | class id in bits 8..15
     vStableId      = d.stableId;
+    vParticleId    = 0u;
     vUv            = inUv;
     vWorldPos      = worldPos.xyz;
     // Per-vertex color (material.vertexColors). gbuffer.frag multiplies albedo

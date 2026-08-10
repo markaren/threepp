@@ -82,7 +82,13 @@ namespace threepp {
             std::uint32_t capacity      = 0;    // fixed for life; see the churn contract
             Ownership     ownership     = Ownership::HostRing;
             WSemantic     wSemantic     = WSemantic::InvMass;
-            float         uniformRadius = 0.01f;// used when wSemantic == InvMass
+            // The world radius the MeshRepr proxy geometry is authored at.
+            // Under WSemantic::InvMass, w is PhysX's inverse mass and says
+            // nothing about size, so the proxy draws at scale 1 and this value
+            // is what the later representations (AABB dilation, billboard size,
+            // density kernel) use. Under WSemantic::Radius, w IS the world
+            // radius and the proxy scales by w / uniformRadius.
+            float         uniformRadius = 0.01f;
             bool          orientations  = false;// allocate the snorm16x4 buffer
             bool          attributes    = false;
         };
@@ -120,7 +126,22 @@ namespace threepp {
         [[nodiscard]] const Config& config() const { return config_; }
         [[nodiscard]] std::uint32_t capacity() const { return config_.capacity; }
 
+        // Turn the mesh representation on: every live particle draws `proxy`
+        // once, with `material`, as ONE indirect draw (Vulkan only).
+        //
+        // Use this rather than mutating meshRepr() by hand. `material` must ALSO
+        // be the field's Mesh material — the G-buffer shades a particle through
+        // the field entry's MaterialDesc slot, which is derived from
+        // Object3D::material() like every other mesh — and this is what keeps
+        // the two in step. The field's own Mesh GEOMETRY is deliberately left
+        // as the zero-area placeholder (see the file header): the proxy is
+        // pulled bindlessly by the particle vertex stage, never rasterised at
+        // the field origin, and never put in the field's BLAS.
+        void setMeshRepr(std::shared_ptr<BufferGeometry> proxy,
+                         std::shared_ptr<Material>       material);
+
         [[nodiscard]] MeshRepr&      meshRepr() { return meshRepr_; }
+        [[nodiscard]] const MeshRepr& meshRepr() const { return meshRepr_; }
         [[nodiscard]] BillboardRepr& billboardRepr() { return billboardRepr_; }
         [[nodiscard]] DensityRepr&   densityRepr() { return densityRepr_; }
         [[nodiscard]] TracedRepr&    tracedRepr() { return tracedRepr_; }
@@ -131,6 +152,17 @@ namespace threepp {
         // is one memcpy, not a loop. n > capacity() is clamped to capacity.
         // Also sets the live count to n.
         void submit(const void* pxVec4Array, std::uint32_t n);
+
+        // Per-particle orientation, as n quaternions in (x, y, z, w) order.
+        // Requires Config::orientations. WRITE-ONCE by contract: the device
+        // buffer is a single instance (not ringed), because the plan's model is
+        // "written once, at slot claim" — an orientation set is authored with
+        // the field, not animated. Rewriting it while frames are in flight is
+        // a host write to a buffer the GPU may be reading; if a sim ever needs
+        // per-frame orientation it needs a ring, exactly like positions.
+        // Encoded to snorm16x4 (8 B/particle on the device, versus the 36 B of
+        // host floats per instance the InstancedMesh path carried).
+        void setOrientations(const float* quatXyzw, std::uint32_t n);
 
         // For Ownership::Renderer / Interop the count comes from the device and
         // is never read back. For HostRing, submit() sets it; this setter exists
@@ -148,6 +180,13 @@ namespace threepp {
         [[nodiscard]] const std::vector<ParticlePos>& hostPositions() const { return host_; }
         [[nodiscard]] std::uint64_t dataSerial() const { return dataSerial_; }
 
+        // snorm16x4 quaternions, 4 shorts per particle, sized to capacity when
+        // Config::orientations is set and empty otherwise. The serial is 0
+        // until setOrientations() is first called, which is what lets the
+        // backend skip allocating the buffer for a field that never uses one.
+        [[nodiscard]] const std::vector<std::int16_t>& hostOrientations() const { return ori_; }
+        [[nodiscard]] std::uint64_t orientationSerial() const { return oriSerial_; }
+
         explicit ParticleField(const Config& config);
         ~ParticleField() override = default;
 
@@ -157,6 +196,8 @@ namespace threepp {
         std::uint64_t dataSerial_ = 1;// bumped by submit/setLiveCount
 
         std::vector<ParticlePos> host_;
+        std::vector<std::int16_t> ori_;// snorm16x4, 4 per particle
+        std::uint64_t             oriSerial_ = 0;
 
         MeshRepr      meshRepr_;
         BillboardRepr billboardRepr_;

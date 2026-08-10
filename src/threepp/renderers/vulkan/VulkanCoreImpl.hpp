@@ -1182,6 +1182,7 @@ namespace threepp {
         VkPipeline   rasterGbufPipelineMS         = VK_NULL_HANDLE;
         VkPipeline   rasterGbufIndirectPipelineMS = VK_NULL_HANDLE;
         VkPipeline   rasterGbufDecalPipelineMS    = VK_NULL_HANDLE;
+        VkPipeline   rasterGbufParticlePipelineMS = VK_NULL_HANDLE;
         // Sample count backing the MS pipelines/render pass/images above (0
         // until first created; tracks which count they were built for, so a
         // 2→4 change knows to tear down and rebuild rather than reuse).
@@ -1211,6 +1212,27 @@ namespace threepp {
         // decal lerps its albedo over the receiver's, everything else (normal,
         // ids, motion, depth, metalness) stays the receiving surface's.
         VkPipeline            rasterGbufDecalPipeline = VK_NULL_HANDLE;
+        // ParticleField variant: particlefield_gbuf.vert over the SAME render
+        // pass, layout, fragment stage and blend/depth state as the indirect
+        // pipeline. It exists as a sibling rather than a flag because it breaks
+        // the one-instance-per-draw contract gbuffer_indirect.vert documents —
+        // a field is one draw with instanceCount = the device-side live count,
+        // so gl_InstanceIndex is the particle index and the DrawInfo index
+        // arrives by push constant.
+        VkPipeline            rasterGbufParticlePipeline = VK_NULL_HANDLE;
+        // Host mirror of particlefield_gbuf.vert's push_constant block
+        // (scalar layout; 64-bit members first so nothing needs padding).
+        struct ParticleFieldPC {
+            uint64_t posAddr;
+            uint64_t prevPosAddr;
+            uint64_t oriAddr;
+            uint32_t drawIdx;
+            uint32_t wSemantic;
+            float    invUniformRadius;
+            float    _pad;
+        };
+        static_assert(sizeof(ParticleFieldPC) == 40,
+                      "ParticleFieldPC drifted from particlefield_gbuf.vert");
         // (rasterDescPool / rasterDescSets / drawInfoBuffers /
         //  indirectCmdBuffers and their capacities moved to ViewContext. Only
         //  the LAYOUT stays shared — every view's set has the same shape, but
@@ -1769,6 +1791,18 @@ namespace threepp {
         std::vector<std::pair<ParticleField*, uint32_t>> particleFields_;
         // Reused scratch for the per-frame Rec list handed to the pass.
         std::vector<vulkan::ParticleFieldPass::Rec> particleFieldRecs_;
+        // Phase 1. Per visible field, the index of its ONE DrawInfo record in
+        // this view's concatenated draw array — the push constant the particle
+        // vertex stage reads. Parallel to particleFields_ /
+        // particleFieldPass_->drawStates(), rebuilt by buildIndirectDrawData
+        // (and restored from the view cache on its skip path, since the field's
+        // DrawInfo is as static as every other one).
+        struct ParticleDrawSlot {
+            const ParticleField* field = nullptr;
+            uint32_t             drawIdx = 0;   // index into the DrawInfo SSBO
+            VkCullModeFlags      cull = VK_CULL_MODE_BACK_BIT;// from the material's Side
+        };
+        std::vector<ParticleDrawSlot> particleDrawSlots_;
 
         // ── GPU per-instance world matrices (stage 1: producer only) ─────────
         // instance_expand.comp recomputes, per InstancedMesh span, exactly what
@@ -2682,6 +2716,28 @@ namespace threepp {
         // prepareInstanceExpansion: post-fence, pre-record.
         void prepareParticleFields(uint32_t frame);
 
+        // Publish each field's device-side live count into its draw command.
+        // Head of the frame command buffer, before any consumer reads it.
+        void recordParticleFieldCounts(VkCommandBuffer cb);
+
+        // One vkCmdDrawIndirect per visible ParticleField, inside the G-buffer
+        // render pass and after every ordinary bucket. Separate pipeline, and
+        // deliberately so: see particlefield_gbuf.vert's header.
+        void recordParticleFieldDraws(VkCommandBuffer cb, bool useMsaa);
+
+        // Upload + BLAS-build a geometry that is nobody's Mesh geometry (the
+        // ParticleField MeshRepr proxy). Same blasCache, same liveCheck-based
+        // eviction as every ordinary static geometry.
+        const BlasRecord* ensureCachedBlas(const std::shared_ptr<BufferGeometry>& geom) {
+            if (!geom) return nullptr;
+            auto it = blasCache.find(geom.get());
+            if (it != blasCache.end()) return it->second.get();
+            auto rec = buildBlasFor(*geom, /*allowPacked=*/true);
+            if (!rec) return nullptr;
+            rec->liveCheck = geom;
+            return blasCache.emplace(geom.get(), std::move(rec)).first->second.get();
+        }
+
         // One dispatch, into the frame's already-open command buffer.
         void recordInstanceExpansion(VkCommandBuffer cb, uint32_t frame);
 
@@ -2792,6 +2848,18 @@ namespace threepp {
         // Branches off the cached type flags so we don't dynamic_cast every
         // entry on every raster draw call.
         const BlasRecord* resolveBlasForEntry(const MeshEntry& en) const {
+            if (en.isParticleField) {
+                // A field's raster draw pulls the MeshRepr PROXY, not the
+                // zero-area placeholder the field carries as its Mesh geometry
+                // (the placeholder is what keeps the field's own BLAS/TLAS
+                // instance harmless, and what keeps it valid on GL). Nothing
+                // else names the proxy, so ensureCachedBlas uploads it during
+                // scene expansion and this is the read side.
+                const auto& repr = static_cast<const ParticleField*>(en.mesh)->meshRepr();
+                if (!repr.enabled || !repr.geometry) return nullptr;
+                auto it = blasCache.find(repr.geometry.get());
+                return it != blasCache.end() ? it->second.get() : nullptr;
+            }
             if (en.isSkinned) {
                 auto* sm = static_cast<SkinnedMesh*>(en.mesh);
                 auto it = skinnedMeshStates.find(sm);
@@ -2971,10 +3039,15 @@ namespace threepp {
         // `indirectBuffer` supplies the VkDrawIndirectCommand records the
         // bucket groups index into (the two-phase path swaps in the compute-
         // written phase buffers; offsets/counts are identical by design).
+        // `particles`: issue the ParticleField draws in THIS pass. The
+        // two-phase occlusion path calls this twice over the same attachments,
+        // and a field is always-draw, so without the flag every particle would
+        // rasterize twice. Phase A gets them, so the HiZ built from its depth
+        // already sees the bed.
         void recordRasterGbufPassInternal(VkCommandBuffer cb, uint32_t frame,
                                           VkRenderPass renderPass, VkFramebuffer fb,
                                           bool useMsaa, VkBuffer indirectBuffer,
-                                          bool clear);
+                                          bool clear, bool particles = true);
 
         // Lazily create the debug_resolve compute pipeline + descriptor set.
         void createDebugResolvePipeline();

@@ -407,7 +407,8 @@ bool VulkanRenderer::Impl::recordGbufferStage(VkCommandBuffer cb, uint32_t image
                                           occlHiz_->mips(), renderExtent());
                     recordRasterGbufPassInternal(cb, currentFrame, occlB, occlFb,
                                                  occlMsaa,
-                                                 occl_->phase2Buffer(), /*clear=*/false);
+                                                 occl_->phase2Buffer(), /*clear=*/false,
+                                                 /*particles=*/false);
                 } else {
                     recordRasterGbufPass(cb, currentFrame);
                 }
@@ -675,6 +676,14 @@ bool VulkanRenderer::Impl::recordGbufferStage(VkCommandBuffer cb, uint32_t image
                         // for the primary, and this is the reader that a shared
                         // cull bit would have fed the last secondary's answer.
                         if (!viewCulled(i)) continue;
+                        // ParticleField: its BlasRecord is the MeshRepr PROXY,
+                        // and this fixed-function pass has no per-particle
+                        // vertex stage — drawing it here would put ONE proxy at
+                        // the field origin into the overlay depth buffer. Phase
+                        // 1's answer is that particles do not occlude overlay
+                        // meshes; the alternative is a second particle pipeline
+                        // for a depth-only pass, which no consumer has asked for.
+                        if (en.isParticleField) continue;
                         const BlasRecord* rec = resolveBlasForEntry(en);
                         if (!rec || rec->vertex.handle == VK_NULL_HANDLE) continue;
 

@@ -5,6 +5,8 @@
 #include "threepp/core/BufferGeometry.hpp"
 #include "threepp/materials/MeshBasicMaterial.hpp"
 
+#include <algorithm>
+#include <cmath>
 #include <cstring>
 #include <stdexcept>
 #include <string>
@@ -77,6 +79,54 @@ void ParticleField::submit(const void* pxVec4Array, std::uint32_t n) {
     }
     liveCount_ = n;
     ++dataSerial_;
+}
+
+void ParticleField::setMeshRepr(std::shared_ptr<BufferGeometry> proxy,
+                                std::shared_ptr<Material> material) {
+
+    if (!proxy || !material) {
+        throw std::invalid_argument(
+                "ParticleField::setMeshRepr: the mesh representation needs both a proxy "
+                "geometry and a material");
+    }
+    meshRepr_.geometry = std::move(proxy);
+    meshRepr_.material = material;
+    meshRepr_.enabled  = true;
+    // The G-buffer shades a particle through the field ENTRY's MaterialDesc,
+    // which the backend derives from Object3D::material() exactly as it does
+    // for any other mesh. The Mesh geometry stays the zero-area placeholder —
+    // only the material has to follow the representation.
+    setMaterial(material);
+}
+
+void ParticleField::setOrientations(const float* quatXyzw, std::uint32_t n) {
+
+    if (!config_.orientations) {
+        throw std::invalid_argument(
+                "ParticleField::setOrientations: Config::orientations was not set, so no "
+                "orientation buffer exists (it is fixed at create, like capacity)");
+    }
+    if (n > config_.capacity) n = config_.capacity;
+    if (n > 0 && !quatXyzw) {
+        throw std::invalid_argument("ParticleField::setOrientations: null source with n > 0");
+    }
+    ori_.assign(std::size_t(config_.capacity) * 4u, 0);
+    for (std::uint32_t i = 0; i < n; ++i) {
+        for (int c = 0; c < 4; ++c) {
+            const float v = std::max(-1.f, std::min(1.f, quatXyzw[std::size_t(i) * 4u + c]));
+            // Round-to-nearest over the 32767 half-range: the same convention
+            // unpackSnorm2x16 inverts, so a decoded quaternion is within
+            // 1/32767 of the authored one per component. That quantisation is
+            // the documented reason a ParticleField capture is not expected to
+            // be bit-identical to the InstancedMesh it replaces.
+            ori_[std::size_t(i) * 4u + c] =
+                    static_cast<std::int16_t>(std::lround(v * 32767.f));
+        }
+    }
+    // Slots past n keep the all-zero quaternion, which decodes to a zero matrix
+    // — the same "no pixels" collapse a dead slot gets, and unreachable anyway
+    // because instanceCount never exceeds the live count.
+    ++oriSerial_;
 }
 
 void ParticleField::setLiveCount(std::uint32_t n) {

@@ -2293,6 +2293,18 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                 if (en.isParticle) continue;
                 const BufferGeometry* geomKey = m->geometry().get();
 
+                // The ParticleField MeshRepr proxy is nobody's Mesh geometry —
+                // the field carries the zero-area placeholder as its own — so
+                // nothing else in this walk would ever upload it, and the
+                // particle raster pass pulls its vertices bindlessly. Cached
+                // and evicted exactly like any other static geometry; the
+                // field's OWN entry keeps the placeholder, which is what keeps
+                // its BLAS and TLAS instance harmless (phase 1 particles do not
+                // cast traced shadows — that is the §4 AABB BLAS).
+                if (en.isParticleField) {
+                    ensureCachedBlas(static_cast<ParticleField*>(m)->meshRepr().geometry);
+                }
+
                 // Deformer BLAS priming (skinned skin compute, ocean FFT
                 // displace, grass wind refit) submits its own command buffers
                 // with barriers/readbacks that must execute now — never fold

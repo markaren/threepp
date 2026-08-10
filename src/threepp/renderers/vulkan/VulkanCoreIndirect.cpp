@@ -71,6 +71,7 @@ namespace threepp {
         THREEPP_CPUPROF_NAMED(profD, "frame.D_buildIndirect");
         for (auto& g : indirectGroups_) { g.offset = 0; g.count = 0; }
         indirectTotalDraws_ = 0;
+        particleDrawSlots_.clear();
 
         if (lastVisibleEntries_.empty()) return;
 
@@ -108,7 +109,14 @@ namespace threepp {
                 (uint64_t(drawInputsVersion_) << 32) | uint64_t(view().cullVersion),
                 (wantOcclMeta ? (1ull << 63) : 0ull) ^
                         (wantOcclMeta ? reinterpret_cast<uint64_t>(occlHiz_->view()) : 0ull)};
-        if (view().indirectBuiltSig[frame] == buildSig) {
+        // A scene with a ParticleField never takes the skip path. The DrawInfo
+        // contents would restore correctly, but particleDrawSlots_ (which is
+        // per-view and holds the push-constant index the particle pipeline
+        // needs) would not — it is Impl state, not view state, so a secondary
+        // view's build would leave the primary reading the wrong index. Fields
+        // only appear in scenes that are moving anyway, where the signature
+        // never matches; this is here so it cannot be wrong in the case it does.
+        if (particleFields_.empty() && view().indirectBuiltSig[frame] == buildSig) {
             indirectGroups_     = view().cachedIndirectGroups;
             indirectTotalDraws_ = view().cachedIndirectTotal;
             if (!view().secondary) occlActiveThisFrame_ = view().cachedOcclActive;
@@ -132,6 +140,12 @@ namespace threepp {
             if (cm == VK_CULL_MODE_FRONT_BIT) return 1;
             return 2;
         };
+
+        // Where each visible ParticleField's DrawInfo landed, as (bucket,
+        // position-in-bucket) — resolvable to a global index only after the
+        // bucket offsets below are known.
+        struct PfSlot { const ParticleField* field; int bucket; uint32_t pos; VkCullModeFlags cull; };
+        std::vector<PfSlot> pfSlots;
 
         uint32_t globalIdx = 0;
         // Last-entry memos. An InstancedMesh expands to one entry per instance,
@@ -232,7 +246,14 @@ namespace threepp {
             // record is an indexed draw (welded canonical indices) against
             // the same soup vertex buffer. Chain-less records (the common
             // case) resolve once per run via the memo.
-            const auto lodSel = memoLodStatic ? memoLodSel0 : selectLodGeom(*rec, en.lodLevel);
+            // ParticleField: LOD level 0, always. en.lodLevel was selected
+            // against the field's PLACEHOLDER geometry, and rec here is the
+            // MeshRepr proxy — two different geometries, so the level index
+            // does not carry across. prepareParticleFields resolves the proxy's
+            // vertex count the same way, and the two must agree.
+            const auto lodSel = (memoLodStatic || en.isParticleField)
+                                        ? memoLodSel0
+                                        : selectLodGeom(*rec, en.lodLevel);
             const bool indexed = lodSel.indexed;
             const uint32_t vcount = indexed ? lodSel.indexCount : rec->vertexCount;
             if (vcount == 0u) continue;
@@ -316,11 +337,24 @@ namespace threepp {
             draws[b].push_back(di);
 
             VkDrawIndirectCommand cmd{};
-            cmd.vertexCount   = vcount;
+            // A ParticleField's DrawInfo record is real — the particle pipeline
+            // reads it through a push-constant index, and it is where the proxy
+            // geometry's addresses, the field's world matrix, its material's
+            // instanceCustomIndex and its flags live. Its BUCKET draw is not:
+            // the field is drawn by recordParticleFieldDraws from its own
+            // indirect buffer, whose instanceCount the device writes. A zero
+            // vertexCount is what makes the bucket's vkCmdDrawIndirect step
+            // over the record for free, WITHOUT perturbing the one-instance
+            // contract every other record in this array carries.
+            cmd.vertexCount   = en.isParticleField ? 0u : vcount;
             cmd.instanceCount = 1u;
             cmd.firstVertex   = 0u;
             cmd.firstInstance = 0u;// patched below to the final-position index
             cmds[b].push_back(cmd);
+            if (en.isParticleField) {
+                pfSlots.push_back({static_cast<const ParticleField*>(en.mesh), b,
+                                   static_cast<uint32_t>(draws[b].size()) - 1u, wantCull});
+            }
 
             if (wantOcclMeta) {
                 // Same rules as cullEntriesAgainstFrustum: deformers'
@@ -458,6 +492,15 @@ namespace threepp {
             offset += n;
         }
 
+        // Now that the bucket offsets are final, resolve each field's DrawInfo
+        // index. Same reason the firstInstance patch above exists: entry order
+        // is not concatenated order.
+        particleDrawSlots_.reserve(pfSlots.size());
+        for (const auto& s : pfSlots) {
+            particleDrawSlots_.push_back(
+                    {s.field, indirectGroups_[s.bucket].offset + s.pos, s.cull});
+        }
+
         // Bucket-offset writes above land in [0, globalIdx) of each buffer —
         // flush exactly that; the occl meta rides its own persistently-mapped
         // buffer, flushed through its owner.
@@ -523,7 +566,7 @@ namespace threepp {
     void VulkanRenderer::Impl::recordRasterGbufPassInternal(VkCommandBuffer cb, uint32_t frame,
                                       VkRenderPass renderPass, VkFramebuffer fb,
                                       bool useMsaa, VkBuffer indirectBuffer,
-                                      bool clear) {
+                                      bool clear, bool particles) {
         const auto& g = view().rasterGbufs[frame];
         if (fb == VK_NULL_HANDLE) return;// not initialized
 
@@ -571,6 +614,7 @@ namespace threepp {
             vkCmdEndRenderPass(cb);
             return;
         }
+        const bool drawParticleFields = particles && !particleDrawSlots_.empty();
 
         const VkPipeline indirectPipe = useMsaa ? rasterGbufIndirectPipelineMS : rasterGbufIndirectPipeline;
         const VkPipeline decalPipe    = useMsaa ? rasterGbufDecalPipelineMS : rasterGbufDecalPipeline;
@@ -608,7 +652,66 @@ namespace threepp {
                               static_cast<uint32_t>(cmdStride));
         }
 
+        // ParticleFields last, on the sibling pipeline. Same render pass, same
+        // descriptor set (already bound above), same fragment stage — only the
+        // vertex stage and the source of the indirect record differ.
+        if (drawParticleFields) recordParticleFieldDraws(cb, useMsaa);
+
         vkCmdEndRenderPass(cb);
+    }
+
+    // One vkCmdDrawIndirect per visible ParticleField. Each is a SINGLE record
+    // whose instanceCount was written on the device by
+    // recordParticleFieldCounts, so the number of particles never crosses the
+    // PCI bus as a CPU-visible value — the entire point of the entity.
+    //
+    // Recorded inside the caller's render pass, with the raster descriptor set
+    // already bound. The per-field push constant carries the DrawInfo index
+    // (firstInstance is 0 here, because gl_InstanceIndex is the PARTICLE index)
+    // plus the position / prev-position / orientation buffer addresses.
+    void VulkanRenderer::Impl::recordParticleFieldDraws(VkCommandBuffer cb, bool useMsaa) {
+        if (!particleFieldPass_) return;
+        const VkPipeline pipe = useMsaa ? rasterGbufParticlePipelineMS : rasterGbufParticlePipeline;
+        if (pipe == VK_NULL_HANDLE) return;
+        const auto& states = particleFieldPass_->drawStates();
+        if (states.empty()) return;
+
+        bool bound = false;
+        VkCullModeFlags curCull = VK_CULL_MODE_FLAG_BITS_MAX_ENUM;
+        for (const auto& st : states) {
+            if (st.vertexCount == 0u || st.indirect == VK_NULL_HANDLE) continue;
+            // Match by identity, not by position: a field whose MeshRepr is off
+            // (or whose proxy geometry has not uploaded yet) produces no
+            // DrawInfo, so the two lists are not index-parallel. Fields per
+            // scene are counted in ones, so the scan is free.
+            const ParticleDrawSlot* slot = nullptr;
+            for (const auto& s : particleDrawSlots_) {
+                if (s.field == st.field) { slot = &s; break; }
+            }
+            if (!slot) continue;
+
+            if (!bound) {
+                vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, pipe);
+                bound = true;
+            }
+            if (slot->cull != curCull) {
+                vkCmdSetCullMode(cb, slot->cull);
+                curCull = slot->cull;
+            }
+
+            const auto& cfg = st.field->config();
+            ParticleFieldPC pc{};
+            pc.posAddr     = st.posAddr;
+            pc.prevPosAddr = st.prevPosAddr;
+            pc.oriAddr     = st.oriAddr;
+            pc.drawIdx     = slot->drawIdx;
+            pc.wSemantic   = static_cast<uint32_t>(cfg.wSemantic);
+            pc.invUniformRadius =
+                    (cfg.uniformRadius > 0.f) ? (1.f / cfg.uniformRadius) : 0.f;
+            vkCmdPushConstants(cb, rasterPipelineLayout, VK_SHADER_STAGE_VERTEX_BIT,
+                               0, sizeof(pc), &pc);
+            vkCmdDrawIndirect(cb, st.indirect, 0, 1, sizeof(VkDrawIndirectCommand));
+        }
     }
 
     // Lazily create the debug_resolve compute pipeline + descriptor set.

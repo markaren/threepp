@@ -1409,6 +1409,15 @@ if (THREEPP_WITH_VULKAN)
         "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/gbuffer_indirect.vert"
         kGbufferIndirectVertSpv
         _gbuffer_indirect_vert_spv_h)
+    # ParticleField mesh representation: a SIBLING of gbuffer_indirect.vert
+    # over the same render pass and the same fragment stage. It is separate
+    # precisely because it breaks that file's one-instance-per-draw contract —
+    # a field is one indirect draw whose instanceCount is the device-side live
+    # count, so gl_InstanceIndex is the particle index there.
+    compile_vulkan_shader(threepp
+        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/particlefield_gbuf.vert"
+        kParticleFieldGbufVertSpv
+        _particlefield_gbuf_vert_spv_h)
     # MSAA G-buffer dominant-sample resolve (VulkanRenderer::setGbufferMsaa,
     # opt-in, default off). gbuf_resolve.comp picks the majority-covering
     # instance per pixel from the K raster samples and writes it into the

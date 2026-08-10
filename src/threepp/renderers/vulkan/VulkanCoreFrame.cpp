@@ -761,6 +761,10 @@ bool VulkanRenderer::Impl::beginDeferredFrame(Object3D& scene, Camera& camera) {
             {
                 THREEPP_CPUPROF("frame.M3_instExpandRec");
                 recordInstanceExpansion(cmdBuffers[currentFrame], currentFrame);
+                // Same place, same shape: a handful of 4-byte copies that give
+                // each ParticleField's draw command its instanceCount without
+                // the count ever being a CPU-visible value.
+                recordParticleFieldCounts(cmdBuffers[currentFrame]);
             }
             // Record the full deferred-render body into the now-open cmd
             // buffer. Leaves the swapchain image in GENERAL.

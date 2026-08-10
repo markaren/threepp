@@ -26,6 +26,8 @@
 //   granular_conveyor --rate 4000           grains per second per lane
 //   granular_conveyor --drop                no belt: phase-1 block-drop test
 //   granular_conveyor --gpu-instances off   A/B the GPU per-instance passes
+//   granular_conveyor --field im            InstancedMesh field (Vulkan A/B control)
+//   granular_conveyor --field pf            ParticleField (Vulkan default)
 //   ... --cam 6,3,7 --look 4,0.5,-3 --fov 40    reframe without rebuilding
 //
 // Each lane turns 45 degrees away from its neighbour on the way to its
@@ -46,6 +48,7 @@
 #include "threepp/extras/conveyor/ConveyorPhysics.hpp"
 #include "threepp/extras/imgui/RendererSettings.hpp"
 #include "threepp/extras/physx/PhysxParticles.hpp"
+#include "threepp/objects/ParticleField.hpp"
 
 #ifdef THREEPP_WITH_VULKAN
 #include "threepp/renderers/VulkanRenderer.hpp"
@@ -144,6 +147,46 @@ namespace {
         return len;
     }
 
+    // ── Grain field: two implementations, one interface ──────────────────────
+    //
+    // The visual half of a lane — "point N proxy meshes at N particle
+    // positions" — has two implementations that must be selectable in the SAME
+    // binary, because the only honest way to judge the second is to interleave
+    // it against the first (--field im|pf):
+    //
+    //   GrainField  one InstancedMesh, N instance matrices written per frame.
+    //               The only path GL has, and a first-class capability there:
+    //               measured at 500k moving grains, 26 fps whole-demo, with the
+    //               GL render half at ~10.8 ms. --api gl always uses it.
+    //   PfField     one threepp::ParticleField. VULKAN ONLY. The CPU writes one
+    //               memcpy of positions and the renderer's per-frame work drops
+    //               to O(1) in the grain count.
+    struct IGrainVisual {
+        virtual ~IGrainVisual() = default;
+        // Per-frame: point the field at `n` live grain positions (PxVec4, w =
+        // inverse mass).
+        virtual void update(const ::physx::PxVec4* positions, unsigned n) = 0;
+        virtual Object3D& object() = 0;
+        [[nodiscard]] virtual std::shared_ptr<Object3D> shared() const = 0;
+    };
+
+    // Uniform random orientation (Shoemake), one per grain, from `seed`. Shared
+    // by both implementations so the two fields orient their grains
+    // IDENTICALLY — without that the A/B capture compares two different piles
+    // of rocks and says nothing about the renderer.
+    std::vector<Quaternion> grainOrientations(unsigned capacity, unsigned seed) {
+        std::vector<Quaternion> out(capacity);
+        std::mt19937 rng{seed};
+        std::uniform_real_distribution<float> uni(0.f, 1.f);
+        for (unsigned i = 0; i < capacity; ++i) {
+            const float u1 = uni(rng), u2 = uni(rng), u3 = uni(rng);
+            const float s1 = std::sqrt(1.f - u1), s2 = std::sqrt(u1);
+            out[i].set(s1 * std::sin(math::TWO_PI * u2), s1 * std::cos(math::TWO_PI * u2),
+                       s2 * std::sin(math::TWO_PI * u3), s2 * std::cos(math::TWO_PI * u3));
+        }
+        return out;
+    }
+
     // ── Instanced grain field ────────────────────────────────────────────────
     //
     // One InstancedMesh per particle group, created ONCE at the group's full
@@ -158,7 +201,7 @@ namespace {
     //     3x3 block (a fixed random orientation, so a pile does not read as a
     //     lattice of identically-facing rocks) is written once at setup and
     //     never touched again — PBD particles carry no orientation anyway.
-    class GrainField {
+    class GrainField: public IGrainVisual {
 
     public:
         GrainField(const std::shared_ptr<BufferGeometry>& geometry,
@@ -170,19 +213,13 @@ namespace {
             mesh_->setCount(0);
             mesh_->frustumCulled = false;// the field spans the whole scene
 
-            std::mt19937 rng{seed};
-            std::uniform_real_distribution<float> uni(0.f, 1.f);
+            const auto quats = grainOrientations(capacity, seed);
             auto& e = mesh_->instanceMatrix()->array();
             std::memset(e.data(), 0, e.size() * sizeof(float));
-            Quaternion q;
             Matrix4 m;
             for (unsigned i = 0; i < capacity_; ++i) {
-                // Uniform random orientation (Shoemake), baked in permanently.
-                const float u1 = uni(rng), u2 = uni(rng), u3 = uni(rng);
-                const float s1 = std::sqrt(1.f - u1), s2 = std::sqrt(u1);
-                q.set(s1 * std::sin(math::TWO_PI * u2), s1 * std::cos(math::TWO_PI * u2),
-                      s2 * std::sin(math::TWO_PI * u3), s2 * std::cos(math::TWO_PI * u3));
-                m.makeRotationFromQuaternion(q);
+                // Uniform random orientation, baked in permanently.
+                m.makeRotationFromQuaternion(quats[i]);
                 for (int c = 0; c < 3; ++c)
                     for (int r = 0; r < 3; ++r)
                         rot_[std::size_t(i) * 9 + c * 3 + r] = m.elements[c * 4 + r];
@@ -190,9 +227,7 @@ namespace {
             }
         }
 
-        // Per-frame: point the field at `n` live grain positions (PxVec4, w =
-        // inverse mass, ignored here).
-        void update(const ::physx::PxVec4* positions, unsigned n) {
+        void update(const ::physx::PxVec4* positions, unsigned n) override {
 
             n = std::min(n, capacity_);
             auto& e = mesh_->instanceMatrix()->array();
@@ -222,8 +257,8 @@ namespace {
             if (want != mesh_->count()) mesh_->setCount(want);
         }
 
-        [[nodiscard]] InstancedMesh& mesh() { return *mesh_; }
-        [[nodiscard]] std::shared_ptr<InstancedMesh> shared() const { return mesh_; }
+        Object3D& object() override { return *mesh_; }
+        [[nodiscard]] std::shared_ptr<Object3D> shared() const override { return mesh_; }
 
     private:
         static constexpr unsigned kStep = 4096;
@@ -232,6 +267,70 @@ namespace {
         std::vector<float> rot_;// 3x3 per instance, written once, read on claim
         unsigned capacity_ = 0;
         unsigned claimed_ = 0;
+    };
+
+    // ── ParticleField grain field (Vulkan only) ──────────────────────────────
+    //
+    // The same picture, produced without the renderer ever learning how many
+    // grains there are. Everything GrainField does per grain per frame — 3
+    // floats into a 64-byte instance matrix, an InstancedMesh count step, and
+    // downstream of that one MeshEntry / DrawInfo / motion matrix / TLAS
+    // instance descriptor per grain — collapses to:
+    //
+    //   • ONE memcpy of the PBD position block. PxVec4 IS ParticlePos, so
+    //     there is no repack; that memcpy is the whole `field` bench column.
+    //   • ONE entry in the renderer, whatever the capacity. The grain count
+    //     reaches the GPU as a 4-byte device-side copy into the draw command's
+    //     instanceCount and never reaches the CPU at all.
+    //
+    // Orientations are written ONCE, at construction, as 8 B of snorm16x4 per
+    // grain on the device — against GrainField's 36 B of host floats per grain
+    // plus the claim-time write into the instance matrix.
+    class PfField: public IGrainVisual {
+
+    public:
+        PfField(const std::shared_ptr<BufferGeometry>& geometry,
+                const std::shared_ptr<Material>& material, unsigned capacity,
+                unsigned seed, float radius) {
+
+            ParticleField::Config cfg;
+            cfg.capacity = capacity;
+            cfg.ownership = ParticleField::Ownership::HostRing;
+            // PhysX writes inverse mass into w, which says nothing about size,
+            // so the proxy geometry (authored at `radius`) draws at scale 1 and
+            // a negative w is the dead-slot predicate. Interop mode will hand
+            // this same buffer straight to CUDA.
+            cfg.wSemantic = ParticleField::WSemantic::InvMass;
+            cfg.uniformRadius = radius;
+            cfg.orientations = true;
+            field_ = ParticleField::create(cfg);
+            field_->setMeshRepr(geometry, material);
+            field_->frustumCulled = false;
+
+            // Byte-identical orientations to GrainField's, from the same seed,
+            // before the snorm16x4 quantisation the buffer applies.
+            const auto quats = grainOrientations(capacity, seed);
+            std::vector<float> xyzw(std::size_t(capacity) * 4u);
+            for (unsigned i = 0; i < capacity; ++i) {
+                xyzw[std::size_t(i) * 4u + 0u] = quats[i].x;
+                xyzw[std::size_t(i) * 4u + 1u] = quats[i].y;
+                xyzw[std::size_t(i) * 4u + 2u] = quats[i].z;
+                xyzw[std::size_t(i) * 4u + 3u] = quats[i].w;
+            }
+            field_->setOrientations(xyzw.data(), capacity);
+        }
+
+        void update(const ::physx::PxVec4* positions, unsigned n) override {
+            // The entire per-frame CPU cost of the representation. No loop, no
+            // count step, no entry-list consequence.
+            field_->submit(positions, n);
+        }
+
+        Object3D& object() override { return *field_; }
+        [[nodiscard]] std::shared_ptr<Object3D> shared() const override { return field_; }
+
+    private:
+        std::shared_ptr<ParticleField> field_;
     };
 
     // ── The pour ─────────────────────────────────────────────────────────────
@@ -671,7 +770,7 @@ namespace {
         const char* name = "";
         float z = 0.f;
         PbdParticles::Group* group = nullptr;
-        std::unique_ptr<GrainField> field;
+        std::unique_ptr<IGrainVisual> field;
         std::unique_ptr<Chute> chute;
         std::shared_ptr<MeshStandardMaterial> beltMat;
         LaneGeom geom;
@@ -695,6 +794,11 @@ int main(int argc, char** argv) {
     float fov = 0.f;// 0 = per-mode default
     bool forceGl = false;// --api gl: bench/capture through OpenGL instead
     bool gpuInstances = true;// --gpu-instances off: A/B the GPU instance passes
+    // --field pf|im. The Vulkan default is the ParticleField; --api gl forces
+    // the InstancedMesh path unconditionally (ParticleField has no GL
+    // implementation, by decision — see its class header). Both are selectable
+    // on Vulkan in this one binary because an A/B has to be interleaved.
+    bool useParticleField = true;
     // --cam / --look come from the shared capture harness, so reframing a
     // beauty shot never needs a rebuild.
     const capture::Args cap = capture::parseArgs(argc, argv);
@@ -719,6 +823,11 @@ int main(int argc, char** argv) {
         else if (std::strcmp(argv[i], "--api") == 0 && i + 1 < argc) {
             const char* a = argv[++i];
             forceGl = std::strcmp(a, "gl") == 0 || std::strcmp(a, "opengl") == 0;
+        }
+        else if (std::strcmp(argv[i], "--field") == 0 && i + 1 < argc) {
+            const char* a = argv[++i];
+            useParticleField = !(std::strcmp(a, "im") == 0 ||
+                                 std::strcmp(a, "instanced") == 0);
         }
         else if (std::strcmp(argv[i], "--gpu-instances") == 0 && i + 1 < argc) {
             const char* a = argv[++i];
@@ -885,14 +994,35 @@ int main(int argc, char** argv) {
     pelletMat->roughness = 0.35f;
     pelletMat->metalness = 0.05f;
 
+    // ParticleField is Vulkan-only by decision: GL keeps the InstancedMesh
+    // path, which is a first-class capability there and the reference ceiling
+    // this demo's bench table reports against. Decided from the RENDERER, not
+    // the --api flag: the interactive run picks its backend on stdin inside
+    // createRenderer, and the offscreen path falls back to GL when Vulkan is
+    // unavailable — in both, forceGl is false while the renderer is GL, and a
+    // ParticleField there would draw exactly nothing.
+#ifdef THREEPP_WITH_VULKAN
+    const bool pfFields = useParticleField && vk != nullptr;
+#else
+    const bool pfFields = false;
+#endif
+    const auto makeField = [&](const std::shared_ptr<BufferGeometry>& geom,
+                               const std::shared_ptr<Material>& mat, unsigned cap,
+                               unsigned seed) -> std::unique_ptr<IGrainVisual> {
+        if (pfFields) return std::make_unique<PfField>(geom, mat, cap, seed, radius);
+        return std::make_unique<GrainField>(geom, mat, cap, seed);
+    };
+    std::cout << "grain field: " << (pfFields ? "ParticleField (one entry per lane)"
+                                              : "InstancedMesh (one entry per grain)")
+              << std::endl;
+
     std::vector<Lane> lanes;
     if (dropMode) {
         Lane l;
         l.name = "gravel";
         l.z = 0.f;
         l.group = &particles->addGroup(budget, gravelSpec);
-        l.field = std::make_unique<GrainField>(IcosahedronGeometry::create(radius, 0), gravelMat,
-                                               budget, 7u);
+        l.field = makeField(IcosahedronGeometry::create(radius, 0), gravelMat, budget, 7u);
         lanes.push_back(std::move(l));
     } else {
         struct LaneDef {
@@ -913,15 +1043,15 @@ int main(int argc, char** argv) {
             l.name = d.name;
             l.z = d.z;
             l.group = &particles->addGroup(perLane, *d.mat);
-            l.field = std::make_unique<GrainField>(d.geom, d.visual, perLane, d.seed);
+            l.field = makeField(d.geom, d.visual, perLane, d.seed);
             l.chute = std::make_unique<Chute>(Vector3(kChuteX, kBeltY + 0.42f, d.z), kBeltWidth,
                                               ps.spacing, d.seed * 41u + 1u);
             lanes.push_back(std::move(l));
         }
     }
     for (auto& l : lanes) {
-        l.field->mesh().castShadow = true;
-        l.field->mesh().receiveShadow = true;
+        l.field->object().castShadow = true;
+        l.field->object().receiveShadow = true;
         scene.add(l.field->shared());
     }
 

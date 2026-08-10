@@ -1774,12 +1774,35 @@ void VulkanRenderer::Impl::prepareParticleFields(uint32_t frame) {
             particleFieldRecs_.reserve(particleFields_.size());
             for (const auto& [field, entryIndex] : particleFields_) {
                 if (!field) continue;
+                // Vertices per proxy instance, from the SAME record and the
+                // SAME LOD level buildIndirectDrawData puts in the DrawInfo —
+                // a mismatch would draw the proxy's index buffer against the
+                // wrong vertex count. 0 when MeshRepr is off or the proxy has
+                // not uploaded, which parks the field's draw for the frame.
+                uint32_t vcount = 0u;
+                if (entryIndex < lastVisibleEntries_.size()) {
+                    const auto& en = lastVisibleEntries_[entryIndex];
+                    if (const BlasRecord* rec = resolveBlasForEntry(en)) {
+                        if (rec->vertex.handle != VK_NULL_HANDLE) {
+                            const auto sel = selectLodGeom(*rec, 0);
+                            vcount = sel.indexed ? sel.indexCount : rec->vertexCount;
+                        }
+                    }
+                }
                 // classId read live, not cached at expansion: setObjectClassId
                 // is a per-frame-editable label and a field is one lookup.
                 particleFieldRecs_.push_back({field, entryIndex,
-                                              classIdForObject(*field)});
+                                              classIdForObject(*field), vcount});
             }
             particleFieldPass_->prepareFrame(frameSerial_, frame, particleFieldRecs_);
+        }
+
+// The device-side liveCount -> instanceCount publish. Head of the frame command
+// buffer, beside recordInstanceExpansion, and for the same structural reason:
+// no dependants, its own phase, and it must precede every consumer.
+void VulkanRenderer::Impl::recordParticleFieldCounts(VkCommandBuffer cb) {
+            if (!particleFieldPass_) return;
+            particleFieldPass_->recordCounts(cb);
         }
 
 void VulkanRenderer::Impl::recordInstanceExpansion(VkCommandBuffer cb, uint32_t frame) {

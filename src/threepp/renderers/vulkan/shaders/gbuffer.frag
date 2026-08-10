@@ -54,6 +54,10 @@ layout(location = 5) in vec2 vUv;
 layout(location = 6) in vec3 vWorldPos;
 layout(location = 7) in vec3 vColor;// per-vertex color (material.vertexColors); white when unused
 layout(location = 8) flat in uint vStableId;// stable per-object id (host-assigned; NOT the visible-set index)
+// Per-PARTICLE identity -> outIds.w. Only particlefield_gbuf.vert produces a
+// non-zero value; both mesh vertex stages write 0, which is what the channel
+// held when it was reserved.
+layout(location = 9) flat in uint vParticleId;
 
 // Attachment 0: world-space normal (rgba16f). .xyz = n*0.5+0.5 encoded world
 // normal, .w = linear roughness (the deferred_shade.comp shading pass reads
@@ -796,7 +800,9 @@ void main() {
     // deferred_shade.comp's gbufIdsTex.x convention). .y = stable per-object id (host-assigned; 0 when
     // unassigned/sky). .z = flags | class byte (already packed into vFlags host-
     // side, bits 8..15). Truncates to uint16 per channel — class fits in 8..15.
-    outIds = uvec4(vInstanceIdx + 1u, vStableId, vFlags, 0u);
+    // .w = per-particle index within a ParticleField (0 for every ordinary
+    // mesh — see the vParticleId declaration).
+    outIds = uvec4(vInstanceIdx + 1u, vStableId, vFlags, vParticleId);
 
     // log2 of the per-pixel UV-footprint diameter (texture-size-independent).
     // A consumer would turn this into a per-texture LOD via `bias + log2(textureSize.x)`.

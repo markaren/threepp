@@ -64,6 +64,11 @@ layout(location = 8) flat out uint vStableId;// stable per-object id — matches
                                              // gbuffer.frag interface. This fixed path is not
                                              // used for the ids pass (indirect draws are), so
                                              // it just mirrors the visible index as before.
+// Per-particle identity -> outIds.w, written by particlefield_gbuf.vert alone.
+// Declared here because gbuffer.frag is SHARED: a fragment input with no
+// matching vertex output is an interface mismatch, so this path publishes the
+// same "no particle" zero the channel always carried.
+layout(location = 9) flat out uint vParticleId;
 
 void main() {
     vec4 worldPos     = pc.model * vec4(inPos, 1.0);
@@ -91,6 +96,7 @@ void main() {
     vWorldPos      = worldPos.xyz;
     vColor         = vec3(1.0);// no color binding on this path
     vStableId      = pc.instanceCustomIndex + 1u;// fixed path: mirror .x (unused for ids)
+    vParticleId    = 0u;
 
     // threepp's projection matrix follows the GL convention (Y up in NDC).
     // Vulkan NDC has Y pointing down, so we negate Y at the gl_Position

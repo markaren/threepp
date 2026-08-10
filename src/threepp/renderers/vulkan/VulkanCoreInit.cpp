@@ -367,6 +367,7 @@ VulkanRenderer::Impl::~Impl() {
             //  freed in the per-view loop above, alongside the camera UBOs.)
             if (rasterGbufPipeline)         vkDestroyPipeline(d, rasterGbufPipeline, nullptr);
             if (rasterGbufIndirectPipeline) vkDestroyPipeline(d, rasterGbufIndirectPipeline, nullptr);
+            if (rasterGbufParticlePipeline) vkDestroyPipeline(d, rasterGbufParticlePipeline, nullptr);
             if (rasterGbufDecalPipeline)    vkDestroyPipeline(d, rasterGbufDecalPipeline, nullptr);
             if (rasterPipelineLayout)   vkDestroyPipelineLayout(d, rasterPipelineLayout, nullptr);
             if (rasterDsLayout)         vkDestroyDescriptorSetLayout(d, rasterDsLayout, nullptr);
