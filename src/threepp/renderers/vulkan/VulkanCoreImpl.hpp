@@ -354,28 +354,95 @@ namespace threepp {
         // `MaterialDesc md{};` call sites unchanged.
         using MaterialDesc = threepp::vulkan_pt::MaterialDesc;
 
+        // ── Per-slot dirty state for the entries-indexed desc rings ──────────
+        // What one frame-in-flight slot still owes the GPU: either the whole
+        // array, or a set of half-open ENTRY ranges. Ranges exist because the
+        // arrays are entries-indexed and enormous — MaterialDesc is 608 B, so a
+        // 78.4k-grain scene is 47.7 MB, and a whole-array flush for the two belt
+        // meshes whose scrolling texture bumps their material version every
+        // frame was the single largest CPU item in the frame (2.8 ms).
+        //
+        // PER SLOT, not global: a change dirtied on frame N must reach every
+        // slot's buffer, but each slot may only be written after ITS fence has
+        // signalled. So each slot accumulates independently and is cleared alone
+        // when its turn comes — the classic pending-set, now carrying ranges
+        // instead of one bool.
+        struct DescDirtyRanges {
+            // Half-open [first, last) entry ranges, kept sorted and coalesced.
+            std::vector<std::pair<uint32_t, uint32_t>> ranges;
+            bool whole = false;// structural rebuild / unidentifiable source
+
+            bool any() const { return whole || !ranges.empty(); }
+            void clear() {
+                whole = false;
+                ranges.clear();
+            }
+            void markWhole() {
+                whole = true;
+                ranges.clear();// subsumed
+            }
+            // Callers mark in increasing entry order (every producer walks
+            // entries forward), so coalescing against the LAST range is enough
+            // to make an instanced span — contiguous by construction — exactly
+            // one range. Out-of-order marks stay correct, just less coalesced.
+            void mark(uint32_t first, uint32_t count = 1) {
+                if (whole || count == 0) return;
+                const uint32_t last = first + count;
+                if (!ranges.empty() && first <= ranges.back().second) {
+                    ranges.back().second = std::max(ranges.back().second, last);
+                    return;
+                }
+                // A range list long enough to be its own cost is a sign the
+                // change is scene-wide; one memcpy beats a hundred, and it is
+                // never wrong — only broader than necessary.
+                if (ranges.size() >= 64) {
+                    markWhole();
+                    return;
+                }
+                ranges.emplace_back(first, last);
+            }
+        };
+
         // Per-frame-in-flight GeometryDesc storage — same fence-gated ring as
         // materialDescsBuffers below. Ringed for auto-LOD: a level switch
         // repoints GeometryDesc::indexAddress/indexed, and the single-buffer
         // version needed a vkDeviceWaitIdle on every switch frame to patch it
         // in place — a stall exactly when the camera moves (the frames where
         // responsiveness matters most). Hot path stages in geomDescsCached_ +
-        // flips geomDescsDirty_[*]; renderFrame's flushGeometryDescsIfDirty
-        // memcpys into this frame's slot once its fence has signaled.
+        // marks geomDescsDirty_ (markGeomDescsDirty / ...Whole); renderFrame's
+        // flushGeometryDescsIfDirty memcpys the marked ranges into this frame's
+        // slot once its fence has signaled.
         std::array<Buffer, kFramesInFlight> geometryDescsBuffers{};
-        std::array<bool, kFramesInFlight> geomDescsDirty_{};
+        std::array<DescDirtyRanges, kFramesInFlight> geomDescsDirty_{};
         // Per-frame-in-flight MaterialDesc storage. Was a single shared buffer
         // gated by vkDeviceWaitIdle on every animated-pbr update; now one buffer
         // per kFramesInFlight slot so the upload after a fence wait races
-        // nothing. The hot path stages new descs in `matDescsCached_` + flips
-        // `matDescsDirty_[*]=true`; renderFrame's flushMaterialDescsIfDirty
-        // memcpys into `materialDescsBuffers[currentFrame]` once the fence has
+        // nothing. The hot path stages new descs in `matDescsCached_` and marks
+        // the entry ranges it touched (markMatDescsDirty); renderFrame's
+        // flushMaterialDescsIfDirty memcpys those ranges into
+        // `materialDescsBuffers[currentFrame]` once the fence has
         // signaled (= GPU done with this slot). Descriptor sets are bound
         // per-frame (set idx = f*imageCount_+k → buffer[f]) so the binding
         // stays valid across the swap.
         std::array<Buffer, kFramesInFlight> materialDescsBuffers{};
         std::vector<MaterialDesc> matDescsCached_;
-        std::array<bool, kFramesInFlight> matDescsDirty_{};
+        std::array<DescDirtyRanges, kFramesInFlight> matDescsDirty_{};
+
+        // Stage a desc change for EVERY slot at once — the shape every producer
+        // wants, since a host-side patch is a fact about the scene and not about
+        // one frame. Named per array so the call sites read as what they patched.
+        void markMatDescsDirty(uint32_t first, uint32_t count = 1) {
+            for (auto& d : matDescsDirty_) d.mark(first, count);
+        }
+        void markMatDescsWhole() {
+            for (auto& d : matDescsDirty_) d.markWhole();
+        }
+        void markGeomDescsDirty(uint32_t first, uint32_t count = 1) {
+            for (auto& d : geomDescsDirty_) d.mark(first, count);
+        }
+        void markGeomDescsWhole() {
+            for (auto& d : geomDescsDirty_) d.markWhole();
+        }
 
         // Per-FIF deferred-descriptor refresh flag. Set (all slots) when a
         // material texture is swapped in place (refreshDirtyMaterialTextures) or
@@ -745,8 +812,8 @@ namespace threepp {
         // to fold into the same "force a full TLAS rebuild" trigger the
         // deformer paths already use (blasDeformed) — an AS-reference change
         // per VkAccelerationStructureInstanceKHR is only unambiguously legal
-        // under MODE_BUILD, not the incremental MODE_UPDATE refit. Also
-        // flips geomDescsDirty_[*] so RT secondary rays (reflections/GI/
+        // under MODE_BUILD, not the incremental MODE_UPDATE refit. Also marks
+        // geomDescsDirty_ whole-array so RT secondary rays (reflections/GI/
         // lidar/probe update) read the SAME index buffer the swapped BLAS
         // was built from — without it, gl_PrimitiveID from a hit against a
         // coarser BLAS would misindex the still-LOD0

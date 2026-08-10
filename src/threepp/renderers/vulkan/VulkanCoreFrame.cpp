@@ -573,8 +573,9 @@ bool VulkanRenderer::Impl::beginDeferredFrame(Object3D& scene, Camera& camera) {
             computeAndUploadMotionMatrices(currentFrame, lastVisibleEntries_);
             // Same fence guarantee covers materialDescsBuffers[currentFrame].
             // ensureSceneBuilt staged any material-value change in
-            // matDescsCached_ + flipped matDescsDirty_[*]=true; flush this
-            // slot now (the other slot flushes when its frame comes around).
+            // matDescsCached_ and marked the entry ranges it patched; flush this
+            // slot's ranges now (the other slot flushes when its frame comes
+            // around, which is why the pending set is PER SLOT).
             flushMaterialDescsIfDirty(currentFrame);
             // Stamp per-entry MOVED state (meshMovedBits_, finalized in
             // ensureSceneBuilt) into GeometryDesc._pad so the reflection/GI ray-hit
@@ -620,19 +621,24 @@ bool VulkanRenderer::Impl::beginDeferredFrame(Object3D& scene, Camera& camera) {
                         const uint32_t nf = (geomDescsCached_[i].flags & ~1u) | moved;
                         if (geomDescsCached_[i].flags != nf) {
                             geomDescsCached_[i].flags = nf;
+                            // Range marked at the write, ascending, so a cohort of
+                            // grains that all start (or all settle) together is one
+                            // range rather than one whole-array resend. A scattered
+                            // enough set promotes itself back to whole-array inside
+                            // DescDirtyRanges::mark.
+                            markGeomDescsDirty(static_cast<uint32_t>(i));
                             changed = true;
                         }
                     }
                     stickyActiveCount_ = active;
                     if (changed) {
-                        for (uint32_t f = 0; f < kFramesInFlight; ++f) geomDescsDirty_[f] = true;
                         ++drawInputsVersion_;// kInstFlagMoving transitions reshape DrawInfo
                     }
                 }
             }
             // Same fence guarantee covers geometryDescsBuffers[currentFrame]:
-            // an auto-LOD level switch patched geomDescsCached_ + flipped
-            // geomDescsDirty_[*] in ensureSceneBuilt; landing the flush here —
+            // an auto-LOD level switch patched geomDescsCached_ + marked
+            // geomDescsDirty_ in ensureSceneBuilt; landing the flush here —
             // post-fence, pre-record — keeps this frame's GeometryDescs
             // consistent with this frame's TLAS (which references the newly
             // selected level BLASes) without any device stall.
