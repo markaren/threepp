@@ -555,6 +555,7 @@ namespace threepp_py {
                                            d["overlay_ms"] = t.overlayMs;
                                            d["dof_ms"] = t.dofMs;
                                            d["froxel_ms"] = t.froxelMs;
+                                           d["instance_expand_ms"] = t.instanceExpandMs;
                                            d["gpu_total_ms"] = t.gpuTotalMs;
                                            d["gpu_pass_sum_ms"] = t.gpuPassSumMs;
                                            d["cpu_ensure_scene_ms"] = t.cpuEnsureSceneMs;

@@ -628,6 +628,13 @@ bool VulkanRenderer::Impl::beginDeferredFrame(Object3D& scene, Camera& camera) {
             // by the indirect-drawing gbuf pass. Runs after the cull
             // pass + camera upload (depends on both) and before record.
             buildIndirectDrawData(currentFrame);
+            // GPU per-instance world matrices — the producer half only; nothing
+            // above or below reads its output yet (stage 1 of
+            // plans/gpu-driven-instances.md). Placed after ensureHybridResources
+            // because that is where instExpand_ is created, and inside the
+            // post-fence window because it writes this slot's host-mapped pools
+            // and this slot's descriptor set.
+            prepareInstanceExpansion(currentFrame);
             {
                 THREEPP_CPUPROF("frame.I3_uploadMovedBits");
                 uploadMeshMovedBits(currentFrame);
@@ -710,6 +717,14 @@ bool VulkanRenderer::Impl::beginDeferredFrame(Object3D& scene, Camera& camera) {
                 THREEPP_CPUPROF("frame.3a_cbBegin");
                 vkResetCommandBuffer(cmdBuffers[currentFrame], 0);
                 beginCommandRecording(cmdBuffers[currentFrame]);
+            }
+            // First thing in the stream, and its own phase: one dispatch, no
+            // dependants. Deliberately NOT inside frame.J_record — a phase whose
+            // whole purpose is a cost measurement must not be summed into
+            // another one.
+            {
+                THREEPP_CPUPROF("frame.M3_instExpandRec");
+                recordInstanceExpansion(cmdBuffers[currentFrame], currentFrame);
             }
             // Record the full deferred-render body into the now-open cmd
             // buffer. Leaves the swapchain image in GENERAL.

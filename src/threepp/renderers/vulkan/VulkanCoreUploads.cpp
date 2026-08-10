@@ -2,7 +2,10 @@
 
 #include "VulkanCpuPhaseProf.hpp"
 
+#include <algorithm>
 #include <chrono>
+#include <cmath>
+#include <cstring>
 
 namespace threepp {
 
@@ -1648,5 +1651,166 @@ const vulkan::LineRec* VulkanRenderer::Impl::ensureLineGeometryUploaded(const Bu
             }
 
             return &lineGeomCache_.emplace(geom, std::move(rec)).first->second;
+        }
+
+// ── GPU instance expansion (stage 1 of plans/gpu-driven-instances.md) ────────
+//
+// The producer half of the GPU-driven instance work, with no consumer yet. It
+// mirrors, on the GPU, the loop at VulkanCoreScene.cpp's lean matrix refresh:
+// for every InstancedMesh span, world = mesh->matrixWorld * instanceMatrix[i].
+//
+// Two contracts hold this together, and both are the ones EntrySpan already
+// documents:
+//   * The matrix the entries were baked from is `EntrySpan::meshWorld`, NOT a
+//     live read of mesh->matrixWorld. On a lean frame where neither the mesh
+//     transform nor the instance-matrix version moved, the CPU skips the span
+//     and its entries keep last frame's matrices — which came from meshWorld.
+//     Uploading the live matrix instead would make the GPU "more current" than
+//     the CPU and the equality check would fail on exactly the frames where
+//     nothing is wrong.
+//   * The instance matrices are re-sent only when the CPU re-read them, i.e.
+//     when EntrySpan::movedThisFrame said so. That keeps
+//     instanceMatrix()->needsUpdate() load-bearing (invariant 6) instead of
+//     quietly uploading 5 MB a frame for a static field, and it keeps the two
+//     sides reading the attribute array at the SAME instants.
+
+void VulkanRenderer::Impl::prepareInstanceExpansion(uint32_t frame) {
+            if (!gpuInstanceExpand_ || !instExpand_) return;
+            THREEPP_CPUPROF_NAMED(phSpans, "frame.M_instSpanDesc");
+
+            // 1. The GPU-path span list + its two prefix sums. Instanced spans
+            //    only; a plain mesh's single entry is already its mesh matrix
+            //    and there is nothing to expand.
+            instExpandScratch_.clear();
+            uint32_t matBase = 0, workBase = 0;
+            for (uint32_t i = 0; i < static_cast<uint32_t>(entrySpans_.size()); ++i) {
+                const auto& sp = entrySpans_[i];
+                if (!sp.inst || sp.count == 0u) continue;
+                // Clamp to what the attribute actually holds. InstancedMesh
+                // allocates instanceMatrix for maxCount and setCount() can move
+                // count below it, so count <= capacity always — but reading past
+                // the array on a future API change would be a silent OOB, and the
+                // clamped span is still a valid (smaller) comparison.
+                const size_t avail = sp.inst->instanceMatrix()->array().size() / 16u;
+                const uint32_t n = static_cast<uint32_t>(std::min<size_t>(sp.count, avail));
+                if (n == 0u) continue;
+                instExpandScratch_.push_back({i, n, matBase, workBase});
+                matBase  += n;
+                workBase += n;
+            }
+            instExpandMatrixTotal_ = matBase;
+            instExpandWorkTotal_   = workBase;
+
+            // 2. A layout change invalidates every per-slot "already uploaded"
+            //    stamp: slot k of the list no longer describes the same span.
+            if (instExpandScratch_ != instExpandSpans_) {
+                instExpandSpans_ = instExpandScratch_;
+                instExpandSerial_.assign(instExpandSpans_.size(), 1ull);
+                for (uint32_t f = 0; f < kFramesInFlight; ++f)
+                    instExpandFifSerial_[f].assign(instExpandSpans_.size(), 0ull);
+            }
+            if (instExpandSpans_.empty()) return;
+
+            instExpand_->prepareFrame(frame,
+                                      static_cast<uint32_t>(instExpandSpans_.size()),
+                                      instExpandMatrixTotal_,
+                                      static_cast<uint32_t>(lastVisibleEntries_.size()));
+            // A reallocated pool holds garbage — every span is stale in it.
+            if (instExpand_->takeMatrixPoolFresh(frame))
+                instExpandFifSerial_[frame].assign(instExpandSpans_.size(), 0ull);
+
+            // 3. SpanDescs: rewritten whole, every frame. O(spans).
+            auto* dst = instExpand_->spanPtr(frame);
+            for (size_t k = 0; k < instExpandSpans_.size(); ++k) {
+                const auto& gs = instExpandSpans_[k];
+                const auto& sp = entrySpans_[gs.spanIdx];
+                auto& d = dst[k];
+                std::memcpy(d.world, sp.meshWorld.data(), 64);
+                d.firstEntry = sp.first;
+                d.count      = gs.count;
+                d.matBase    = gs.matBase;
+                d.workBase   = gs.workBase;
+                // Content serial: bumped on the frames the CPU re-baked this
+                // span, so both frames-in-flight eventually catch up.
+                if (sp.movedThisFrame) ++instExpandSerial_[k];
+            }
+            instExpand_->flushSpans(frame, static_cast<uint32_t>(instExpandSpans_.size()));
+            phSpans.stop();
+
+            // 4. The instance matrices themselves — the new per-frame upload
+            //    this stage pays for. Version-gated per span per slot; the
+            //    dirty range is flushed once rather than per span.
+            {
+                THREEPP_CPUPROF("frame.M2_instMatUpload");
+                float* pool = instExpand_->matrixPtr(frame);
+                uint32_t dirtyLo = ~0u, dirtyHi = 0u;
+                for (size_t k = 0; k < instExpandSpans_.size(); ++k) {
+                    if (instExpandFifSerial_[frame][k] == instExpandSerial_[k]) continue;
+                    instExpandFifSerial_[frame][k] = instExpandSerial_[k];
+                    const auto& gs = instExpandSpans_[k];
+                    const auto& src = entrySpans_[gs.spanIdx].inst->instanceMatrix()->array();
+                    const size_t n = size_t(gs.count) * 16u;
+                    std::memcpy(pool + size_t(gs.matBase) * 16u, src.data(), n * sizeof(float));
+                    dirtyLo = std::min(dirtyLo, gs.matBase);
+                    dirtyHi = std::max(dirtyHi, gs.matBase + gs.count);
+                }
+                if (dirtyHi > dirtyLo) instExpand_->flushMatrices(frame, dirtyLo, dirtyHi - dirtyLo);
+            }
+        }
+
+void VulkanRenderer::Impl::recordInstanceExpansion(VkCommandBuffer cb, uint32_t frame) {
+            if (!gpuInstanceExpand_ || !instExpand_ || instExpandSpans_.empty()) return;
+            gpuTimings_->begin(cb, vulkan::TP_InstanceExpand, frame);
+            instExpand_->record(cb, frame,
+                                static_cast<uint32_t>(instExpandSpans_.size()),
+                                instExpandWorkTotal_);
+            gpuTimings_->end(cb, vulkan::TP_InstanceExpand, frame);
+        }
+
+bool VulkanRenderer::Impl::verifyInstanceExpansion(VulkanRenderer::InstanceExpandCheck& out) {
+            out = {};
+            if (!gpuInstanceExpand_ || !instExpand_ || instExpandSpans_.empty()) return false;
+            // The dispatch for the frame just rendered is RECORDED but not
+            // submitted — render() leaves the command buffer open and the
+            // Canvas frame-end callback (or the next render()) closes it. Read
+            // it now and we would be comparing this frame's CPU matrices against
+            // last frame's GPU output, which is only equal when nothing moved,
+            // i.e. exactly when the check proves nothing. Close the frame first.
+            if (frameState_ != FrameState::Idle) endFrame();
+            std::vector<float> gpu;
+            if (!instExpand_->readWorldMatrices(cmdPool, ctx->graphicsQueue(),
+                                                static_cast<uint32_t>(lastVisibleEntries_.size()),
+                                                gpu))
+                return false;
+            const size_t haveEntries = gpu.size() / 16u;
+            out.spans = instExpandSpans_.size();
+            for (const auto& gs : instExpandSpans_) {
+                const auto& sp = entrySpans_[gs.spanIdx];
+                for (uint32_t j = 0; j < gs.count; ++j) {
+                    const size_t e = size_t(sp.first) + j;
+                    if (e >= haveEntries || e >= lastVisibleEntries_.size()) continue;
+                    const float* g = gpu.data() + e * 16u;
+                    const float* c = lastVisibleEntries_[e].worldMatrix.data();
+                    ++out.entriesCompared;
+                    if (std::memcmp(g, c, 64) == 0) continue;
+                    ++out.mismatches;
+                    for (int k = 0; k < 16; ++k) {
+                        out.maxAbsDiff = std::max(out.maxAbsDiff, std::abs(g[k] - c[k]));
+                        // ULP distance of two same-sign finites is the distance
+                        // between their bit patterns read as integers — the only
+                        // scale-free way to say "one step of float apart".
+                        int32_t gi, ci;
+                        std::memcpy(&gi, g + k, 4);
+                        std::memcpy(&ci, c + k, 4);
+                        if ((gi < 0) != (ci < 0)) {
+                            out.maxUlpDiff = 0xFFFFFFFFu;// sign straddle: not an ULP story
+                        } else {
+                            const uint32_t d = static_cast<uint32_t>(std::abs(gi - ci));
+                            out.maxUlpDiff = std::max(out.maxUlpDiff, d);
+                        }
+                    }
+                }
+            }
+            return true;
         }
 }// namespace threepp

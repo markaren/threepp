@@ -1467,6 +1467,19 @@ namespace threepp {
         return core()->splat_ ? core()->splat_->scratchSplats() : 0;
     }
 
+    void VulkanRenderer::setGpuInstanceExpansion(bool enabled) {
+        core()->gpuInstanceExpand_ = enabled;
+    }
+
+    bool VulkanRenderer::gpuInstanceExpansion() const {
+        return core()->gpuInstanceExpand_;
+    }
+
+    bool VulkanRenderer::instanceExpandCheck(InstanceExpandCheck& out) {
+        out = {};
+        return core()->verifyInstanceExpansion(out);
+    }
+
     void VulkanRenderer::setBloomThreshold(float threshold) {
         core()->bloomThreshold_ = threshold < 0.f ? 0.f : threshold;
     }

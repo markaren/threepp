@@ -102,6 +102,7 @@ namespace threepp::vulkan {
         lastTimings_.splatProjectMs = 0.f;
         lastTimings_.splatSortMs    = 0.f;
         lastTimings_.splatRasterMs  = 0.f;
+        lastTimings_.instanceExpandMs = 0.f;
         lastTimings_.gpuTotalMs     = 0.f;
         lastTimings_.gpuPassSumMs   = 0.f;
         if (!timingsSupported_) return;
@@ -138,6 +139,7 @@ namespace threepp::vulkan {
         lastTimings_.splatProjectMs = pairMs(TP_SplatProject);
         lastTimings_.splatSortMs    = pairMs(TP_SplatSort);
         lastTimings_.splatRasterMs  = pairMs(TP_SplatRaster);
+        lastTimings_.instanceExpandMs = pairMs(TP_InstanceExpand);
         lastTimings_.gpuTotalMs     = pairMs(TP_Frame);
         // The DISJOINT bracketed passes only. TP_SplatProject/Sort/Raster are
         // recorded INSIDE TP_Splat and partition it, so they are excluded or splat
@@ -151,6 +153,7 @@ namespace threepp::vulkan {
                 lastTimings_.pathTraceMs + lastTimings_.denoiseMs +
                 lastTimings_.taaMs + lastTimings_.dofMs +
                 lastTimings_.froxelMs + lastTimings_.splatMs +
+                lastTimings_.instanceExpandMs +
                 pairMs(TP_SensorImage);
     }
 

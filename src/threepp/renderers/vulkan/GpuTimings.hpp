@@ -61,7 +61,12 @@ namespace threepp::vulkan {
         // TOP_OF_PIPE open is not covered by the imageAvailable wait's stage mask,
         // so a swapchain-acquire stall can land inside it.
         TP_Frame         = 15,
-        TP_COUNT         = 16,
+        // GPU per-instance world-matrix expansion (instance_expand.comp).
+        // Stage 1 of the GPU-driven instance work: bracketed from the start
+        // because "the dispatch is free" is a claim, and the whole project is
+        // decided by whether work moved to the GPU costs less there.
+        TP_InstanceExpand = 16,
+        TP_COUNT          = 17,
     };
     inline constexpr uint32_t kTimingSlots = TP_COUNT * 2u;
 

@@ -39,6 +39,7 @@
 #include "SplatPass.hpp"
 #include "DeferredShade.hpp"
 #include "HiZPyramid.hpp"
+#include "InstanceExpand.hpp"
 #include "OcclusionCull.hpp"
 #include "ProbeGI.hpp"
 #include "WaterDisplacePipeline.hpp"
@@ -1686,6 +1687,51 @@ namespace threepp {
         // True while THIS frame's raster actually ran two-phase (consumers
         // in the same recordCommandBuffer body branch on it).
         bool occlActiveThisFrame_ = false;
+
+        // ── GPU per-instance world matrices (stage 1: producer only) ─────────
+        // instance_expand.comp recomputes, per InstancedMesh span, exactly what
+        // ensureSceneBuilt's lean refresh bakes into MeshEntry::worldMatrix. No
+        // consumer reads it — DrawInfo, motion, cull and the TLAS instance fill
+        // all still take the CPU values — so this is pure added cost until
+        // stages 2-5 move them over. It buys the one thing those stages cannot
+        // buy themselves: proof that the GPU producer agrees with the CPU
+        // (VulkanRenderer::instanceExpandCheck).
+        std::unique_ptr<vulkan::InstanceExpand> instExpand_;
+        bool gpuInstanceExpand_ = true;// setGpuInstanceExpansion; the A/B lever
+        // The GPU path's span list: an index into entrySpans_ plus the two
+        // prefix sums the shader needs. Instanced spans only. Rebuilt (and
+        // compared) every frame — it is O(spans), not O(instances), and a diff
+        // is what tells the per-fif upload bookkeeping below that its
+        // per-span slots no longer mean the same thing.
+        struct InstExpandSpan {
+            uint32_t spanIdx  = 0;// index into entrySpans_
+            uint32_t count    = 0;// instances actually uploaded (clamped to the attribute)
+            uint32_t matBase  = 0;// first matrix in the pool
+            uint32_t workBase = 0;// exclusive prefix sum of count
+            bool operator==(const InstExpandSpan& o) const noexcept {
+                return spanIdx == o.spanIdx && count == o.count &&
+                       matBase == o.matBase && workBase == o.workBase;
+            }
+        };
+        std::vector<InstExpandSpan> instExpandSpans_, instExpandScratch_;
+        uint32_t instExpandMatrixTotal_ = 0;// matrices in the pool
+        uint32_t instExpandWorkTotal_   = 0;// dispatch domain
+        // Content serial per GPU-path span, bumped whenever the CPU re-baked
+        // that span's entries (EntrySpan::movedThisFrame). The per-fif stamps
+        // chase it, so a span that moved on frame N is re-sent to BOTH slots
+        // rather than only to the slot that happened to be current — the bug
+        // a plain "did it move this frame" gate would have.
+        //
+        // It also closes a hole the layout diff alone cannot see: two instanced
+        // meshes swapping places in entrySpans_ with identical counts produces
+        // an IDENTICAL InstExpandSpan list, so the diff would keep the old
+        // per-slot stamps while slot k now means a different mesh. Safe because
+        // entrySpans_ is only ever rebuilt by the full expansion, and that path
+        // sets movedThisFrame on EVERY span — so any rebuild bumps every serial
+        // and both slots re-upload.
+        std::vector<uint64_t> instExpandSerial_;
+        std::array<std::vector<uint64_t>, kFramesInFlight> instExpandFifSerial_;
+
         float bloomThreshold_ = 1.0f;// soft-knee bright-pass cutoff (linear HDR)
         float bloomClamp_ = 0.0f;    // per-tap HDR cap before the bright pass; <= 0 = off
         float sharpenStrength_ = 0.5f;// post-TAA RCAS amount; 0 = off
@@ -2506,6 +2552,23 @@ namespace threepp {
 
         void computeAndUploadMotionMatrices(uint32_t frame,
                                             const std::vector<MeshEntry>& entries);
+
+        // ── GPU instance expansion (stage 1) ────────────────────────────────
+        // Rebuild the GPU-path span list, grow this slot's pools, and upload
+        // the SpanDescs + every span whose instance matrices the CPU re-read
+        // since this slot last saw them. Caller must have already waited the
+        // inFlight[frame] fence: both pools and the frame's descriptor set are
+        // written here, and a descriptor written while its frame is in flight
+        // is the VUID-03047 zone.
+        void prepareInstanceExpansion(uint32_t frame);
+
+        // One dispatch, into the frame's already-open command buffer.
+        void recordInstanceExpansion(VkCommandBuffer cb, uint32_t frame);
+
+        // Copy the GPU world matrices back and compare them against
+        // MeshEntry::worldMatrix over the instanced spans. DRAINS THE DEVICE;
+        // backs VulkanRenderer::instanceExpandCheck.
+        bool verifyInstanceExpansion(VulkanRenderer::InstanceExpandCheck& out);
 
         // Upload meshMovedBits_ to meshMovedBitsBuffers[frame]. Caller must have
         // already waited the inFlight[frame] fence.

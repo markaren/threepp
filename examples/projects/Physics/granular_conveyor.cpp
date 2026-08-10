@@ -22,6 +22,7 @@
 //   granular_conveyor --count 200000        particle budget (split over lanes)
 //   granular_conveyor --rate 4000           grains per second per lane
 //   granular_conveyor --drop                no belt: phase-1 block-drop test
+//   granular_conveyor --gpu-instances off   A/B the GPU per-instance passes
 //   ... --cam 6,3,7 --look 4,0.5,-3 --fov 40    reframe without rebuilding
 //
 // The default framing is the overview: both chutes, both belts, both
@@ -518,6 +519,7 @@ int main(int argc, char** argv) {
     int frames = 0;// 0 = per-mode default
     float fov = 0.f;// 0 = per-mode default
     bool forceGl = false;// --api gl: bench/capture through OpenGL instead
+    bool gpuInstances = true;// --gpu-instances off: A/B the GPU instance passes
     // --cam / --look come from the shared capture harness, so reframing a
     // beauty shot never needs a rebuild.
     const capture::Args cap = capture::parseArgs(argc, argv);
@@ -542,6 +544,10 @@ int main(int argc, char** argv) {
         else if (std::strcmp(argv[i], "--api") == 0 && i + 1 < argc) {
             const char* a = argv[++i];
             forceGl = std::strcmp(a, "gl") == 0 || std::strcmp(a, "opengl") == 0;
+        }
+        else if (std::strcmp(argv[i], "--gpu-instances") == 0 && i + 1 < argc) {
+            const char* a = argv[++i];
+            gpuInstances = !(std::strcmp(a, "off") == 0 || std::strcmp(a, "0") == 0);
         }
         else if (std::strcmp(argv[i], "--shots") == 0 && i + 1 < argc) {
             shotFrames.clear();
@@ -645,6 +651,12 @@ int main(int argc, char** argv) {
 
 #ifdef THREEPP_WITH_VULKAN
     auto* vk = dynamic_cast<VulkanRenderer*>(renderer.get());
+    // --gpu-instances off: the A/B lever for the GPU-driven instance work
+    // (plans/gpu-driven-instances.md). Each stage adds GPU-side production of a
+    // per-instance fact, and "did it get cheaper" is only answerable by running
+    // the same binary with the pass on and off, interleaved. Default (on) is
+    // whatever the renderer's default is.
+    if (vk && !gpuInstances) vk->setGpuInstanceExpansion(false);
     if (vk && offscreen) {
         // PIN the exposure. Auto-exposure chases a scene whose average
         // brightness changes as the piles grow, which makes both A/B frame
@@ -834,11 +846,13 @@ int main(int argc, char** argv) {
         double gpuSumMs; // the bracketed GPU passes only; gpu - gpusum is unbracketed
         double gbufMs;   // raster G-buffer (Vulkan only)
         double shadeMs;  // deferred shade / trace (Vulkan only)
+        double iexpMs;   // GPU per-instance world-matrix expansion (Vulkan only)
     };
     std::vector<BenchRow> benchRows;
     constexpr int kBenchWindow = 120;
     std::chrono::high_resolution_clock::time_point windowStart;
     double simAccum = 0, frameAccum = 0, gbufAccum = 0, shadeAccum = 0, gpuAccum = 0;
+    double iexpAccum = 0;
     double emitAccum = 0, fieldAccum = 0, statsAccum = 0, rendAccum = 0, tailAccum = 0;
     double ensAccum = 0, gpuSumAccum = 0;
     int windowFrames = 0;
@@ -904,12 +918,12 @@ int main(int argc, char** argv) {
                                      fieldAccum * k, statsAccum * k, rendAccum * k,
                                      frameAccum * k, ensAccum * k, tailAccum * k,
                                      gpuAccum * k, gpuSumAccum * k,
-                                     gbufAccum * k, shadeAccum * k});
+                                     gbufAccum * k, shadeAccum * k, iexpAccum * k});
                 windowFrames = 0;
             }
             if (windowFrames == 0) {
                 windowStart = nowW;
-                simAccum = frameAccum = gbufAccum = shadeAccum = gpuAccum = 0;
+                simAccum = frameAccum = gbufAccum = shadeAccum = gpuAccum = iexpAccum = 0;
                 emitAccum = fieldAccum = statsAccum = rendAccum = tailAccum = 0;
                 ensAccum = gpuSumAccum = 0;
             }
@@ -977,6 +991,10 @@ int main(int argc, char** argv) {
             // comparable with the CPU columns, never a per-frame difference.
             gpuAccum += double(t.gpuTotalMs);
             gpuSumAccum += double(t.gpuPassSumMs);
+            // The GPU cost of the instance-expansion dispatch, on its own. It is
+            // pure ADDED cost until a consumer moves onto it, so it has to be
+            // visible next to what it will eventually replace.
+            iexpAccum += double(t.instanceExpandMs);
             // The scene.* half of cpuFrameMs, so a hole inside render() can be
             // localised to ensureSceneBuilt (structural rebuilds do work outside
             // every scene.* scope) rather than to the frame path.
@@ -1081,20 +1099,20 @@ int main(int argc, char** argv) {
     if (bench) {
         // Header and row are independent format strings — edit them together.
         // `resid` is wall minus everything measured: the honest hole.
-        std::printf("\n%9s %7s %7s %7s %7s %7s %7s %7s %7s %7s %7s %7s %7s %7s %7s %7s"
+        std::printf("\n%9s %7s %7s %7s %7s %7s %7s %7s %7s %7s %7s %7s %7s %7s %7s %7s %7s"
                     "   (%dx%d, %d-frame windows)\n",
                     "particles", "fps", "wall", "sim", "emit", "field",
                     "stats", "rend", "frame", "ens", "tail", "resid",
-                    "gpu", "gpusum", "gbuf", "shade",
+                    "gpu", "gpusum", "gbuf", "shade", "iexp",
                     size.width(), size.height(), kBenchWindow);
         for (const auto& r : benchRows) {
             const double resid = r.wallMs - (r.simMs + r.emitMs + r.fieldMs + r.statsMs +
                                              r.rendMs + r.tailMs);
             std::printf("%9u %7.1f %7.2f %7.2f %7.2f %7.2f %7.2f %7.2f %7.2f %7.2f %7.2f"
-                        " %7.2f %7.2f %7.2f %7.3f %7.3f\n",
+                        " %7.2f %7.2f %7.2f %7.3f %7.3f %7.3f\n",
                         r.n, r.fps, r.wallMs, r.simMs, r.emitMs, r.fieldMs, r.statsMs,
                         r.rendMs, r.frameMs, r.ensMs, r.tailMs, resid,
-                        r.gpuMs, r.gpuSumMs, r.gbufMs, r.shadeMs);
+                        r.gpuMs, r.gpuSumMs, r.gbufMs, r.shadeMs, r.iexpMs);
         }
         std::fflush(stdout);
     }
