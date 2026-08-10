@@ -17,7 +17,9 @@
 //   • bloom on the core, and the froxel glow of the firelight in the height fog
 //
 // Controls:  drag = orbit   scroll = zoom   SPACE = ignite / extinguish
-// Headless:  vulkan_fire --shot out.png [--frames N] [--t SECONDS] [--no-embers]
+//            D = day / night (day is the mode to LOOK at the smoke: sun-lit
+//            with HG forward scatter, while the flame washes out as it should)
+// Headless:  vulkan_fire --shot out.png [--frames N] [--t SECONDS] [--no-embers] [--day]
 //            vulkan_fire --bench            interleaved A/B of the effect's GPU cost
 //            vulkan_fire --seq DIR          consecutive frames along a SCRIPTED orbit
 //
@@ -195,30 +197,72 @@ namespace {
         return g;
     }
 
-    // Night, pinned. Auto-exposure would swing on the fire (and on every
-    // flicker of it), which is the documented capture confound in this repo:
-    // it eats the fog and it eats the fire. Every capture and every A/B here
-    // runs with a FIXED exposure.
-    void setupNight(VulkanRenderer& renderer, Scene& scene) {
+    // Two times of day, one scene. Night is the WOW shot the effect was built
+    // for; DAY exists to LOOK at the smoke. In daylight the flame washes out —
+    // physically right, its radiance is competing with a sunlit sky — and the
+    // grey column becomes the subject, lit by applyParticleFog's directional
+    // sun term (HG phase + centroid shadow ray) plus the sky ambient, instead
+    // of by the fire's own light. Every knob below is runtime-settable, so the
+    // switch is a keypress, not a restart.
+    //
+    // Exposure is pinned in BOTH modes. Auto-exposure would swing on the fire
+    // (and on every flicker of it), which is the documented capture confound
+    // in this repo: it eats the fog and it eats the fire.
+    void applyTimeOfDay(bool day, VulkanRenderer& renderer, Scene& scene,
+                        DirectionalLight& sun, AmbientLight& ambient) {
         renderer.toneMapping = ToneMapping::ACESFilmic;
         renderer.toneMappingExposure = 1.0f;
         renderer.setAutoExposure(false);
-        renderer.setClearColor(Color(0.010f, 0.013f, 0.022f));
-        scene.background = Color(0.010f, 0.013f, 0.022f);
-        renderer.setDeferredStarfield(0.85f);
         renderer.setBloomIntensity(0.55f);
         renderer.setBloomThreshold(1.15f);
-        // Ground mist. This is what turns the fire's PointLight into a visible
-        // GLOW rather than a light that only exists where it lands on something
-        // — the froxel injector scatters clustered lights through this medium,
-        // and a low, shallow layer is where a campfire's glow actually sits.
-        VulkanRenderer::HeightFogSettings hf;
-        hf.density     = 0.032f;
-        hf.baseY       = 0.0f;
-        hf.falloff     = 2.4f;
-        hf.noiseAmount = 0.55f;
-        renderer.setHeightFog(hf);
         renderer.setVolumetricFog(true);
+        VulkanRenderer::HeightFogSettings hf;
+        hf.baseY = 0.0f;
+        if (day) {
+            const Color sky(0.60f, 0.73f, 0.92f);
+            renderer.setClearColor(sky);
+            scene.background = sky;
+            renderer.setDeferredStarfield(0.f);
+            // The one DirectionalLight is the moon at night and the sun by
+            // day (one-sun policy: the scene's DirectionalLight claims the
+            // sun slot either way, so re-parameterising it is the honest way
+            // to switch — two lights fighting over the slot is not).
+            // Placed off to the side so the column is SIDE-lit: forward HG
+            // scatter puts the bright rim on the sun side and leaves the
+            // shadowed side flat grey, which is exactly the asymmetry a
+            // sun-lit smoke column should show.
+            sun.color.setRGB(1.00f, 0.97f, 0.90f);
+            sun.intensity = 2.6f;
+            sun.position.set(5.f, 8.f, 2.f);
+            ambient.color.setRGB(0.55f, 0.65f, 0.85f);
+            ambient.intensity = 0.35f;
+            // Daylight haze, not night mist: thin enough that the fire's
+            // froxel glow no longer owns the frame, present enough that the
+            // sun's in-scatter has a medium to live in.
+            hf.density     = 0.006f;
+            hf.falloff     = 3.0f;
+            hf.noiseAmount = 0.40f;
+        } else {
+            renderer.setClearColor(Color(0.010f, 0.013f, 0.022f));
+            scene.background = Color(0.010f, 0.013f, 0.022f);
+            renderer.setDeferredStarfield(0.85f);
+            // A moon: just enough to keep the sky-facing surfaces from being
+            // pure black, so the firelight has something to be brighter THAN.
+            sun.color.setRGB(0.55f, 0.66f, 0.95f);
+            sun.intensity = 0.05f;
+            sun.position.set(-6.f, 9.f, -4.f);
+            ambient.color.setRGB(0.20f, 0.26f, 0.40f);
+            ambient.intensity = 0.05f;
+            // Ground mist. This is what turns the fire's PointLight into a
+            // visible GLOW rather than a light that only exists where it lands
+            // on something — the froxel injector scatters clustered lights
+            // through this medium, and a low, shallow layer is where a
+            // campfire's glow actually sits.
+            hf.density     = 0.032f;
+            hf.falloff     = 2.4f;
+            hf.noiseAmount = 0.55f;
+        }
+        renderer.setHeightFog(hf);
     }
 
 }// namespace
@@ -242,6 +286,7 @@ int main(int argc, char** argv) {
                            // history is at its steady state for the MOTION —
                            // not at a cold start, which would confound.
     float orbitDeg  = 22.f;// camera azimuth rate, deg/s; 0 = hold the pose
+    bool  day       = false;// --day: start in daylight (D toggles at runtime)
     for (int i = 1; i < argc; ++i) {
         const std::string a = argv[i];
         if (a == "--shot" && i + 1 < argc) shotPath = argv[++i];
@@ -254,6 +299,7 @@ int main(int argc, char** argv) {
         else if (a == "--seqframes" && i + 1 < argc) seqFrames = std::atoi(argv[++i]);
         else if (a == "--warm" && i + 1 < argc) seqWarm = std::atoi(argv[++i]);
         else if (a == "--orbit" && i + 1 < argc) orbitDeg = float(std::atof(argv[++i]));
+        else if (a == "--day") day = true;
     }
     const capture::Args cap = capture::parseArgs(argc, argv);
 
@@ -267,19 +313,20 @@ int main(int argc, char** argv) {
     renderer.setFsr(upscaler == "fsr");
 
     Scene scene;
-    setupNight(renderer, scene);
 
     scene.add(makeGround());
     scene.add(makeStoneRing(0.46f));
     scene.add(makeFuel());
     scene.add(makeCamp());
 
-    // A moon: just enough to keep the sky-facing surfaces from being pure
-    // black, so the firelight has something to be brighter THAN.
-    auto moon = DirectionalLight::create(Color(0.55f, 0.66f, 0.95f), 0.05f);
-    moon->position.set(-6.f, 9.f, -4.f);
-    scene.add(moon);
-    scene.add(AmbientLight::create(Color(0.20f, 0.26f, 0.40f), 0.05f));
+    // ONE DirectionalLight, moon or sun depending on the mode — applyTimeOfDay
+    // owns every parameter on it (and on the ambient), so the toggle is a
+    // re-parameterisation, never an add/remove.
+    auto sun = DirectionalLight::create();
+    scene.add(sun);
+    auto ambient = AmbientLight::create();
+    scene.add(ambient);
+    applyTimeOfDay(day, renderer, scene, *sun, *ambient);
 
     // ── The effect ──────────────────────────────────────────────────────────
     FireEffect::Params fp;
@@ -315,12 +362,15 @@ int main(int argc, char** argv) {
         ui = std::make_unique<RendererSettingsUi>(canvas, renderer, [&] {
             ImGui::TextWrapped("One FireEffect: an emissive ParticleField for the flame, "
                                "a second field for the smoke, ember billboards, and one "
-                               "PointLight. SPACE toggles it.");
+                               "PointLight. SPACE toggles it, D toggles day/night.");
         });
         keys = std::make_unique<KeyAdapter>(KeyAdapter::Mode::KEY_PRESSED, [&](KeyEvent evt) {
             if (evt.key == Key::SPACE) {
                 if (fire->lit()) fire->extinguish();
                 else fire->ignite();
+            } else if (evt.key == Key::D) {
+                day = !day;
+                applyTimeOfDay(day, renderer, scene, *sun, *ambient);
             }
         });
         canvas.addKeyListener(*keys);
