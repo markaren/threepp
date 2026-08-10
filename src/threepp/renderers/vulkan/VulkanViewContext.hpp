@@ -13,6 +13,7 @@
 
 #include "VulkanImplCommon.hpp"
 #include "VulkanResources.hpp"
+#include "VulkanSceneTypes.hpp"// DrawGroup (indirect-skip cache)
 #include "BloomPass.hpp"
 #include "DeferredShade.hpp"
 #include "PostComposite.hpp"
@@ -197,6 +198,27 @@ namespace threepp::vulkan::impl {
         // default-included) by the cull itself, so a view that has never
         // culled draws everything rather than nothing.
         std::vector<uint8_t> inFrustum;
+        // Previous frame's inFrustum + a version counter bumped whenever the
+        // cull results change. Feeds the buildIndirectDrawData skip signature:
+        // DrawInfo/cmd contents depend on the camera ONLY through these bits,
+        // so a static scene under a static (or fully-containing) camera can
+        // reuse the per-FIF device buffers verbatim.
+        std::vector<uint8_t> prevInFrustum;
+        uint32_t cullVersion = 0;
+        // Cull-recompute gate: inFrustum is still valid when the VP matrix
+        // and the scene draw inputs are unchanged since it was last written
+        // (static scene + static camera skips the whole cull walk).
+        uint32_t cullValidVersion = 0;// drawInputsVersion_ at last cull; 0 = never
+        float prevCullVp[16] = {};
+
+        // buildIndirectDrawData skip cache: the input signature each FIF slot's
+        // DrawInfo/cmd buffers were last built from ({0,0} = never), plus the
+        // CPU-side outputs (bucket groups / total / occl flag) the record path
+        // reads — restored on a signature match instead of rebuilt.
+        std::array<std::array<uint64_t, 2>, kFramesInFlight> indirectBuiltSig{};
+        std::array<vulkan::impl::DrawGroup, 4> cachedIndirectGroups{};
+        uint32_t cachedIndirectTotal = 0;
+        bool     cachedOcclActive = false;
 
         // Per-view raster descriptor POOL. The layout is shared (one set
         // shape for every view); the pool is not, because it is sized for

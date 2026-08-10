@@ -1,5 +1,7 @@
 #include "VulkanCoreImpl.hpp"
 
+#include "VulkanCpuPhaseProf.hpp"
+
 namespace threepp {
 
 void VulkanRenderer::Impl::createCommandResources() {
@@ -133,13 +135,13 @@ void VulkanRenderer::Impl::createReservoirImages() {
             clearGbufImages();
             sampleIndex = 0;
             view().prevCameraValid = false;
-            prevWorldMats.clear();
+            seedMotionState(lastVisibleEntries_);// forget motion history (identity next frame)
         }
 
 void VulkanRenderer::Impl::resetAccumulation() {
             sampleIndex = 0;
             view().prevCameraValid = false;
-            prevWorldMats.clear();
+            seedMotionState(lastVisibleEntries_);// forget motion history (identity next frame)
 #if defined(THREEPP_WITH_FSR)
             fsrResetNext_ = true;// FSR treats the next dispatch as a camera cut
 #endif
@@ -536,27 +538,42 @@ bool VulkanRenderer::Impl::beginDeferredFrame(Object3D& scene, Camera& camera) {
             // smooth gravity roll). Only re-uploads on a 0↔1 transition (the
             // countdown is host-side), so a settled scene still pays nothing.
             {
+                THREEPP_CPUPROF("frame.B_movedSticky");
                 constexpr uint32_t kMovedStickyFrames = 30;
                 if (meshMovedSticky_.size() < geomDescsCached_.size())
                     meshMovedSticky_.resize(geomDescsCached_.size(), 0u);
-                bool changed = false;
-                for (size_t i = 0; i < geomDescsCached_.size(); ++i) {
-                    const uint32_t w = static_cast<uint32_t>(i) >> 5u;
-                    const uint32_t bit = 1u << (static_cast<uint32_t>(i) & 31u);
-                    const bool movedNow = w < meshMovedBits_.size() && (meshMovedBits_[w] & bit);
-                    if (movedNow) meshMovedSticky_[i] = kMovedStickyFrames;
-                    else if (meshMovedSticky_[i] > 0u) --meshMovedSticky_[i];
-                    const uint32_t moved = meshMovedSticky_[i] > 0u ? 1u : 0u;
-                    // Bit 0 only — bits 1..3 carry the packed-attribute mask
-                    // (GeometryDesc::flags) and must survive the stamp.
-                    const uint32_t nf = (geomDescsCached_[i].flags & ~1u) | moved;
-                    if (geomDescsCached_[i].flags != nf) {
-                        geomDescsCached_[i].flags = nf;
-                        changed = true;
+                // Fast skip: with no moved bits set this frame AND no live
+                // countdowns, every sticky value stays 0 and every flag bit
+                // stays as-is — the walk is a no-op. Settled scenes (the
+                // common case) pay one word-scan instead of O(entries).
+                bool anyMoved = false;
+                for (const uint32_t w : meshMovedBits_)
+                    if (w != 0u) { anyMoved = true; break; }
+                if (anyMoved || stickyActiveCount_ > 0u) {
+                    bool changed = false;
+                    uint32_t active = 0;
+                    for (size_t i = 0; i < geomDescsCached_.size(); ++i) {
+                        const uint32_t w = static_cast<uint32_t>(i) >> 5u;
+                        const uint32_t bit = 1u << (static_cast<uint32_t>(i) & 31u);
+                        const bool movedNow = w < meshMovedBits_.size() && (meshMovedBits_[w] & bit);
+                        if (movedNow) meshMovedSticky_[i] = kMovedStickyFrames;
+                        else if (meshMovedSticky_[i] > 0u) --meshMovedSticky_[i];
+                        const uint32_t moved = meshMovedSticky_[i] > 0u ? 1u : 0u;
+                        if (moved) ++active;
+                        // Bit 0 only — bits 1..3 carry the packed-attribute mask
+                        // (GeometryDesc::flags) and must survive the stamp.
+                        const uint32_t nf = (geomDescsCached_[i].flags & ~1u) | moved;
+                        if (geomDescsCached_[i].flags != nf) {
+                            geomDescsCached_[i].flags = nf;
+                            changed = true;
+                        }
+                    }
+                    stickyActiveCount_ = active;
+                    if (changed) {
+                        for (uint32_t f = 0; f < kFramesInFlight; ++f) geomDescsDirty_[f] = true;
+                        ++drawInputsVersion_;// kInstFlagMoving transitions reshape DrawInfo
                     }
                 }
-                if (changed)
-                    for (uint32_t f = 0; f < kFramesInFlight; ++f) geomDescsDirty_[f] = true;
             }
             // Same fence guarantee covers geometryDescsBuffers[currentFrame]:
             // an auto-LOD level switch patched geomDescsCached_ + flipped
