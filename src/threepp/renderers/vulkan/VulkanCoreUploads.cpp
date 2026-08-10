@@ -1905,6 +1905,11 @@ void VulkanRenderer::Impl::updateParticleDensityUbo(uint32_t frame) {
             const auto& vols = particleFieldPass_->densityVolumes();
             const uint32_t n = std::min<uint32_t>(
                     static_cast<uint32_t>(vols.size()), vulkan::kMaxDensityFields);
+            // Unbound slots keep the zero-initialised albedo/emission of the
+            // struct: the shader never indexes past counts.x, but a NaN or a
+            // stale temperature in a slot a future frame promotes to live is
+            // exactly the class of bug that only shows up under churn.
+            uint32_t emissive = 0;
             for (uint32_t i = 0; i < n; ++i) {
                 ubo.boxMin[i][0] = vols[i].boxMin[0];
                 ubo.boxMin[i][1] = vols[i].boxMin[1];
@@ -1913,13 +1918,21 @@ void VulkanRenderer::Impl::updateParticleDensityUbo(uint32_t frame) {
                 ubo.boxInvSize[i][0] = vols[i].boxInvSize[0];
                 ubo.boxInvSize[i][1] = vols[i].boxInvSize[1];
                 ubo.boxInvSize[i][2] = vols[i].boxInvSize[2];
+                // PER FIELD since plans/particle-atmosphere.md F-A — this used
+                // to be one shared vec4 filled from the first enabled field.
+                ubo.albedoAniso[i][0] = vols[i].albedo[0];
+                ubo.albedoAniso[i][1] = vols[i].albedo[1];
+                ubo.albedoAniso[i][2] = vols[i].albedo[2];
+                ubo.albedoAniso[i][3] = vols[i].anisotropy;
+                for (uint32_t c = 0; c < 4; ++c) ubo.emission[i][c] = vols[i].emission[c];
+                if (vols[i].emission[0] > 0.f) emissive = 1;
             }
-            const float* alb = particleFieldPass_->densityAlbedo();
-            ubo.albedoAniso[0] = alb[0];
-            ubo.albedoAniso[1] = alb[1];
-            ubo.albedoAniso[2] = alb[2];
-            ubo.albedoAniso[3] = particleFieldPass_->densityAnisotropy();
-            ubo.counts[0]      = n;
+            ubo.counts[0] = n;
+            // ONE uniform branch for the whole march: the emissive path (the
+            // blackbody term, the 32-step bump and the hash dither) is skipped
+            // wholesale when this is 0, which is what makes a dust-only scene
+            // execute the identical arithmetic it did before fire existed.
+            ubo.counts[1] = emissive;
             uploadHostVisible(ctx->allocator(), particleDensityUbos_[frame], &ubo, sizeof(ubo));
 
             // The bound volume LIST changed (a field gained or lost its volume):

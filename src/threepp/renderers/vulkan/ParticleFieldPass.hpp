@@ -111,19 +111,33 @@ namespace threepp::vulkan {
         float       boxMin[3]{};    // world min corner
         float       resolution = 0.f;// voxels/axis, as the UBO's boxMin.w
         float       boxInvSize[3]{};// 1 / (2 * halfExtent)
+        // ── PER-FIELD medium params (plans/particle-atmosphere.md F-A) ──────
+        // These used to be one shared value taken from whichever field was
+        // enumerated first. They are per volume now because a fire field and a
+        // smoke field are the same scene, and one albedo cannot be both.
+        float albedo[3]{1.f, 1.f, 1.f};// DensityRepr::albedo
+        float anisotropy = 0.f;        // DensityRepr::anisotropy (HG g)
+        // DensityRepr's emission, packed as the shader reads it:
+        // x = intensity (0 = pure dust), y = bottom K, z = top K, w = exponent.
+        float emission[4]{0.f, 1900.f, 800.f, 1.6f};
     };
 
     // Binding 68 of the deferred set. MUST match ParticleDensityUbo in
     // shaders/particle_density.glsl, which is std140 (NOT scalar) because it is
     // pulled into shaders that do not all enable GL_EXT_scalar_block_layout —
     // everything here is a vec4/uvec4, so the two layouts coincide anyway.
+    // (160 -> 272 B when albedoAniso went per field and emission was added;
+    // still one UBO, still one upload, and every member is still a vec4, which
+    // is the invariant that keeps std140 and this C mirror the same bytes.)
     struct ParticleDensityUboGpu {
         float         boxMin[kMaxDensityFields][4];    // xyz = world min, w = resolution
         float         boxInvSize[kMaxDensityFields][4];// xyz = 1 / (2 * halfExtent)
-        float         albedoAniso[4];                  // rgb = albedo, a = HG g
-        std::uint32_t counts[4];                       // x = active volumes
+        float         albedoAniso[kMaxDensityFields][4];// rgb = albedo, a = HG g
+        float         emission[kMaxDensityFields][4];  // x = intensity, yzw = ramp
+        // x = active volumes, y = 1 when any of them is emissive
+        std::uint32_t counts[4];
     };
-    static_assert(sizeof(ParticleDensityUboGpu) == 160, "ParticleDensityUbo layout drift");
+    static_assert(sizeof(ParticleDensityUboGpu) == 272, "ParticleDensityUbo layout drift");
 
     class ParticleFieldPass {
 
@@ -210,14 +224,6 @@ namespace threepp::vulkan {
         [[nodiscard]] const std::vector<DensityVolumeDesc>& densityVolumes() const {
             return densityVols_;
         }
-        // Medium parameters shared by every bound volume: the FIRST enabled
-        // field's DensityRepr albedo + anisotropy. Two dust fields with
-        // different albedos in one scene share the first's — a σ-weighted blend
-        // needs the per-volume σ at sample time, which the summed
-        // particleDensity() deliberately does not carry.
-        [[nodiscard]] const float* densityAlbedo() const { return densityAlbedo_; }
-        [[nodiscard]] float densityAnisotropy() const { return densityAniso_; }
-
         // Bumped whenever the bound volume LIST changes (a volume allocated,
         // retired, or reordered). The renderer compares it against what its
         // descriptor sets were last written with; equal means the sets are
@@ -350,8 +356,6 @@ namespace threepp::vulkan {
 
         std::vector<DensityVolumeDesc> densityVols_;
         std::vector<DensityDispatch>   densityDispatch_;
-        float         densityAlbedo_[3]{1.f, 1.f, 1.f};
-        float         densityAniso_    = 0.f;
         std::uint64_t densityGen_      = 0;
         std::uint32_t densityOverflow_ = 0;
 

@@ -167,7 +167,11 @@ namespace {
     // Scene variants the child can render. Every one of them uses the SAME
     // geometry, lights and camera — only the ParticleField differs — so a
     // difference between two of them is attributable to the field alone.
-    enum class DetMode { NoField, DensityOff, Parked, Dust };
+    // `Fire` is F0's determinism checkpoint: the same dust field with emission
+    // turned on. Emission brings a per-PIXEL hash into the march (the banding
+    // dither), so it is exactly the term that would break run-to-run
+    // reproducibility if it were ever keyed on a frame index or a wall clock.
+    enum class DetMode { NoField, DensityOff, Parked, Dust, Fire };
 
     std::vector<ParticlePos> makeDustSlab(std::uint32_t n, const Vector3& c, const Vector3& h) {
         std::vector<ParticlePos> out(n);
@@ -228,6 +232,13 @@ namespace {
             field->submit(dpos.data(), kDust);
             if (mode != DetMode::DensityOff) {
                 field->setDensityRepr(dCenter, dHalf, 0.02f, 64);
+            }
+            if (mode == DetMode::Fire) {
+                auto& dr = field->densityRepr();
+                dr.emissiveIntensity = 40.f;
+                dr.tempBottomK       = 1900.f;
+                dr.tempTopK          = 900.f;
+                dr.tempFalloff       = 1.6f;
             }
             if (mode == DetMode::Parked) field->setLiveCount(0);
             scene.add(field);
@@ -294,6 +305,7 @@ int main(int argc, char** argv) {
             const DetMode mode = ms == "nofield"    ? DetMode::NoField
                                : ms == "densityoff" ? DetMode::DensityOff
                                : ms == "parked"     ? DetMode::Parked
+                               : ms == "fire"       ? DetMode::Fire
                                                     : DetMode::Dust;
             return runDetChild(mode, out);
         }
@@ -1237,6 +1249,229 @@ int main(int argc, char** argv) {
         for (int i = 0; i < 4; ++i) frame();
     }
 
+    // ── F0: PER-FIELD MEDIUM PARAMS + EMISSION ──────────────────────────────
+    //
+    // plans/particle-atmosphere.md F-A. Two claims, and they are the two the
+    // phase exists for:
+    //
+    //   (b) EMISSION. A field with DensityRepr::emissiveIntensity > 0 emits
+    //       blackbody radiance in proportion to its own sigma, ramped over the
+    //       normalised height of its box. A cone of particles must therefore
+    //       render as a flame-shaped gradient — hot and bright at the base,
+    //       cooling and dimming toward the tip — with NO flame texture and no
+    //       billboard anywhere in the renderer. Judged by EYE from the capture
+    //       (house rule), and bounded here by the one thing an image metric can
+    //       state honestly: the emission is RED-DOMINANT and falls with height.
+    //   (d) PER-FIELD ALBEDO. The wart this phase removed: `albedoAniso` used to
+    //       be one shared vec4 filled from whichever field enumerated first, so
+    //       two dust clouds with different albedos rendered identically tinted.
+    //       Asserted by a SWAP: give field L the warm albedo and field R the
+    //       cool one, then exchange them. Per field, the two regions must move
+    //       in OPPOSITE directions. Under the old shared value they would move
+    //       TOGETHER (both regions always wore the first field's albedo), which
+    //       is what makes this a regression test and not a smoke test.
+    {
+        const char* capDir = capDirForDet;
+        const auto capture = [&](const char* name) {
+            if (!capDir) return;
+            const std::string p = std::string(capDir) + "/" + name + ".png";
+            renderer.writeFramebuffer(p);
+            std::printf("[capture] %s\n", p.c_str());
+        };
+
+        // Night: the emission has to be what lights the frame, so the sun is
+        // dropped to a rim and the ambient to a whisper. A daylit flame is a
+        // grey smudge and proves nothing.
+        const float sunWas = light->intensity;
+        light->intensity = 0.12f;
+        auto amb = AmbientLight::create(0x30405a, 0.10f);
+        scene.add(amb);
+        ground->visible = true;
+        box->visible    = false;
+
+        const Vector3 camWas = camera->position;
+        camera->position.set(0.f, 1.15f, 3.4f);
+        camera->lookAt(Vector3(0.f, 0.80f, 1.5f));
+
+        // ── (b) the flame cone ──────────────────────────────────────────────
+        const Vector3 fCenter(0.f, 0.80f, 1.5f);
+        const Vector3 fHalf(0.32f, 0.62f, 0.32f);
+        constexpr std::uint32_t kFlame = 60'000;
+        ParticleField::Config fcfg;
+        fcfg.capacity = kFlame;
+        auto flame = ParticleField::create(fcfg);
+        flame->setDensityRepr(fCenter, fHalf, 1.2f, /*resolution*/ 48);
+        {
+            auto& dr = flame->densityRepr();
+            dr.albedo             = Color(0.35f, 0.30f, 0.28f);// sooty: emission dominates
+            dr.anisotropy         = 0.25f;
+            dr.emissiveIntensity  = 45.f;
+            dr.tempBottomK        = 1950.f;
+            dr.tempTopK           = 900.f;
+            dr.tempFalloff        = 1.6f;
+        }
+        check(flame->densityRepr().emissiveIntensity > 0.f,
+              "DensityRepr carries an emission ramp");
+
+        // A CONE, tapering to a point, denser at the base — the shape a
+        // buoyant diffusion flame has, built from nothing but positions. Fixed
+        // seed: this capture must be the same image every run.
+        std::vector<ParticlePos> fpos(kFlame);
+        {
+            std::mt19937 rng(20260811u);
+            std::uniform_real_distribution<float> u01(0.f, 1.f);
+            for (std::uint32_t i = 0; i < kFlame; ++i) {
+                const float h  = std::pow(u01(rng), 0.75f);      // biased to the base
+                const float rr = fHalf.x * std::pow(1.f - h, 0.85f) * std::sqrt(u01(rng));
+                const float th = u01(rng) * 2.f * math::PI;
+                fpos[i] = {fCenter.x + rr * std::cos(th),
+                           fCenter.y - fHalf.y + h * 2.f * fHalf.y,
+                           fCenter.z + rr * std::sin(th), 1.f};
+            }
+        }
+        scene.add(flame);
+        flame->submit(fpos.data(), kFlame);
+        for (int i = 0; i < 45; ++i) { flame->submit(fpos.data(), kFlame); frame(); }
+        const auto firePx = renderer.readRGBPixels();
+        capture("10_emissive_cone_taa");
+
+        // Row means over the flame's screen column, top to bottom. The ramp
+        // says the base is hotter (whiter, brighter) than the tip, and the
+        // Stefan-Boltzmann magnitude says it is much brighter — so both the
+        // luminance and the red dominance must GROW downward. Sign-explicit on
+        // purpose: "the image changed" would pass on a uniform orange block.
+        int fw = kW, fh = kH;
+        const auto colStats = [&](const std::vector<unsigned char>& px, int y0, int y1) {
+            double lum = 0, r = 0, b = 0;
+            std::size_t n = 0;
+            for (int y = y0; y < y1; ++y)
+                for (int x = fw * 7 / 16; x < fw * 9 / 16; ++x) {
+                    const std::size_t i = std::size_t(y) * std::size_t(fw) + std::size_t(x);
+                    if (i * 3 + 2 >= px.size()) continue;
+                    lum += 0.2126 * px[i * 3] + 0.7152 * px[i * 3 + 1] + 0.0722 * px[i * 3 + 2];
+                    r += px[i * 3];
+                    b += px[i * 3 + 2];
+                    ++n;
+                }
+            const double d = double(std::max<std::size_t>(n, 1));
+            return std::array<double, 3>{lum / d, r / d, b / d};
+        };
+        // The flame spans roughly the middle third of the frame vertically at
+        // this framing; sample its upper and lower halves.
+        const auto top = colStats(firePx, fh * 30 / 100, fh * 45 / 100);
+        const auto bot = colStats(firePx, fh * 55 / 100, fh * 70 / 100);
+        std::printf("[info] emissive cone, flame column: upper luma %.1f (R %.1f, B %.1f), "
+                    "lower luma %.1f (R %.1f, B %.1f)\n",
+                    top[0], top[1], top[2], bot[0], bot[1], bot[2]);
+        check(bot[0] > top[0] * 1.3,
+              "the emission ramp is hotter at the base: the lower flame is "
+              "markedly brighter than the tip");
+        check(bot[1] > bot[2] * 1.5,
+              "the emitted radiance is red-dominant (a blackbody at flame "
+              "temperature, not a white glow)");
+
+        // MSAA leg of the same capture — the plan asks for both, because the
+        // emissive core is the highest-contrast silhouette this renderer draws
+        // and MSAA is the one path with no temporal averaging to hide banding.
+        renderer.setGbufferMsaa(4);
+        for (int i = 0; i < 45; ++i) { flame->submit(fpos.data(), kFlame); frame(); }
+        capture("11_emissive_cone_msaa");
+        renderer.setGbufferMsaa(1);
+        for (int i = 0; i < 20; ++i) { flame->submit(fpos.data(), kFlame); frame(); }
+
+        // Emission off must return the frame to plain dust: the whole emissive
+        // path (blackbody term, 32-step bump, hash dither) is behind one
+        // uniform branch, and this is the assertion that the branch is real.
+        flame->densityRepr().emissiveIntensity = 0.f;
+        for (int i = 0; i < 40; ++i) { flame->submit(fpos.data(), kFlame); frame(); }
+        const auto darkPx = renderer.readRGBPixels();
+        capture("12_emission_off");
+        const auto botOff = colStats(darkPx, fh * 55 / 100, fh * 70 / 100);
+        std::printf("[info] emissiveIntensity 0: flame column luma %.1f -> %.1f\n",
+                    bot[0], botOff[0]);
+        check(botOff[0] < 0.25 * bot[0],
+              "emissiveIntensity = 0 puts the field back to pure dust");
+        scene.remove(*flame);
+        for (int i = 0; i < 4; ++i) frame();
+
+        // ── (d) two fields, two albedos, measured by SWAP ───────────────────
+        light->intensity = 2.2f;
+        amb->intensity   = 0.9f;
+        camera->position.set(0.f, 1.6f, 5.2f);
+        camera->lookAt(Vector3(0.f, 1.2f, 0.f));
+
+        constexpr std::uint32_t kTwo = 40'000;
+        const Vector3 lC(-1.30f, 1.20f, 0.f), rC(1.30f, 1.20f, 0.f);
+        const Vector3 tHalf(0.55f, 0.75f, 0.55f);
+        const auto slab = [&](const Vector3& c, unsigned seed) {
+            std::vector<ParticlePos> out(kTwo);
+            std::mt19937 rng(seed);
+            std::uniform_real_distribution<float> u(-1.f, 1.f);
+            for (std::uint32_t i = 0; i < kTwo; ++i)
+                out[i] = {c.x + u(rng) * tHalf.x, c.y + u(rng) * tHalf.y,
+                          c.z + u(rng) * tHalf.z, 1.f};
+            return out;
+        };
+        ParticleField::Config tcfg;
+        tcfg.capacity = kTwo;
+        auto fieldL = ParticleField::create(tcfg);
+        auto fieldR = ParticleField::create(tcfg);
+        fieldL->setDensityRepr(lC, tHalf, 0.9f, 48);
+        fieldR->setDensityRepr(rC, tHalf, 0.9f, 48);
+        const auto posL = slab(lC, 771u), posR = slab(rC, 991u);
+        scene.add(fieldL);
+        scene.add(fieldR);
+
+        const Color warm(1.00f, 0.55f, 0.18f), cool(0.18f, 0.48f, 1.00f);
+        // Mean (R - B) over each field's own screen half. Chromatic on purpose:
+        // luminance would move with the albedo's brightness and could be
+        // matched by two greys, but the SIGN of R-B is the tint itself.
+        const auto tint = [&](const std::vector<unsigned char>& px, int x0, int x1) {
+            double s = 0;
+            std::size_t n = 0;
+            for (int y = kH / 5; y < kH * 4 / 5; ++y)
+                for (int x = x0; x < x1; ++x) {
+                    const std::size_t i = std::size_t(y) * std::size_t(kW) + std::size_t(x);
+                    if (i * 3 + 2 >= px.size()) continue;
+                    s += double(px[i * 3]) - double(px[i * 3 + 2]);
+                    ++n;
+                }
+            return s / double(std::max<std::size_t>(n, 1));
+        };
+        const auto legs = [&](const Color& cl, const Color& cr, const char* tag) {
+            fieldL->densityRepr().albedo = cl;
+            fieldR->densityRepr().albedo = cr;
+            for (int i = 0; i < 40; ++i) {
+                fieldL->submit(posL.data(), kTwo);
+                fieldR->submit(posR.data(), kTwo);
+                frame();
+            }
+            const auto px = renderer.readRGBPixels();
+            capture(tag);
+            return std::pair<double, double>{tint(px, kW / 12, kW * 5 / 12),
+                                             tint(px, kW * 7 / 12, kW * 11 / 12)};
+        };
+        const auto [l1, r1] = legs(warm, cool, "13_two_fields_warm_left");
+        const auto [l2, r2] = legs(cool, warm, "14_two_fields_warm_right");
+        const double dL = l1 - l2, dR = r1 - r2;
+        std::printf("[info] two fields, albedo SWAP: left tint(R-B) %.2f -> %.2f (%+.2f), "
+                    "right %.2f -> %.2f (%+.2f)\n", l1, l2, dL, r1, r2, dR);
+        check(std::fabs(dL) > 1.5 && std::fabs(dR) > 1.5,
+              "each field's own screen region responds to ITS OWN albedo");
+        check(dL * dR < 0.0,
+              "swapping two fields' albedos moves their regions in OPPOSITE "
+              "directions — the medium params are PER FIELD, not first-field-wins");
+
+        scene.remove(*fieldL);
+        scene.remove(*fieldR);
+        scene.remove(*amb);
+        light->intensity = sunWas;
+        box->visible     = true;
+        camera->position.copy(camWas);
+        camera->lookAt(Vector3(0.f, 0.8f, 0.f));
+        for (int i = 0; i < 4; ++i) frame();
+    }
+
     // ── PHASE 2, checkpoint (d): a dust-free scene costs no pixels ──────────
     //
     // Cross-process, at a FIXED frame index, so the stochastic-per-frame-index
@@ -1282,6 +1517,15 @@ int main(int argc, char** argv) {
         const auto noFieldB = renderChild("nofield", "b");
         const auto offA     = renderChild("densityoff", "a");
         const auto parkedA  = renderChild("parked", "a");
+        // F0 checkpoint (c): emission must not cost determinism. The march's
+        // banding dither is a hash of the PIXEL COORDINATE with no frame term,
+        // so two processes rendering the same emissive scene to the same frame
+        // index must agree to within the renderer's own run-to-run floor —
+        // measured by the `nofield` control in the very same sweep, which is
+        // what makes this a statement about emission rather than about the
+        // backend's pre-existing RT/GI non-reproducibility.
+        const auto fireA = renderChild("fire", "a");
+        const auto fireB = renderChild("fire", "b");
         const long long control = diffBytes(noFieldA, noFieldB);
         if (control < 0) {
             std::printf("[skip] cross-process comparisons (a child could not render)\n");
@@ -1306,6 +1550,22 @@ int main(int argc, char** argv) {
             check(dPark >= 0 && dPark <= bound,
                   "a parked density field changes no more than re-running the "
                   "same scene does");
+
+            const long long dFire = diffBytes(fireA, fireB);
+            std::printf("[info]            fire    vs fire      : %lld / %lld bytes "
+                        "(F0 checkpoint c — emission keeps determinism)\n", dFire, total);
+            if (dFire < 0) {
+                std::printf("[skip] emissive determinism pair (a child could not render)\n");
+            } else {
+                // Same bound as above, and for the same reason: an emissive
+                // march that had picked up a frame-keyed jitter would differ in
+                // essentially every pixel the flame covers — a double-digit
+                // percentage, nothing like this floor.
+                check(dFire <= bound,
+                      "an EMISSIVE particle field renders reproducibly across "
+                      "processes (the step dither is a pixel hash, not a "
+                      "temporal jitter)");
+            }
         }
     }
 

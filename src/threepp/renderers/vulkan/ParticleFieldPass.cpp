@@ -525,12 +525,6 @@ void ParticleFieldPass::prepareFrame(std::uint64_t serial, std::uint32_t frame,
             if (densityVols_.size() >= kMaxDensityFields) {
                 ++densityOverflow_;
             } else if (ensureDensityVolume(st, *r.field)) {
-                if (densityVols_.empty()) {
-                    densityAlbedo_[0] = dr.albedo.r;
-                    densityAlbedo_[1] = dr.albedo.g;
-                    densityAlbedo_[2] = dr.albedo.b;
-                    densityAniso_     = dr.anisotropy;
-                }
                 // Half-extent is a divisor; a degenerate axis would produce an
                 // infinity that poisons every sample in the volume.
                 const float hx = std::max(dr.halfExtent.x, 1e-4f);
@@ -547,6 +541,22 @@ void ParticleFieldPass::prepareFrame(std::uint64_t serial, std::uint32_t frame,
                 v.boxInvSize[1] = 1.f / (2.f * hy);
                 v.boxInvSize[2] = 1.f / (2.f * hz);
                 v.linView       = st.densityLin.view;
+                // Per-field medium + emission. Every one of these travels with
+                // the volume now (plans/particle-atmosphere.md F-A); the
+                // first-field-wins fill that used to sit here, and the wart
+                // comment in the header that apologised for it, are both gone.
+                v.albedo[0]  = dr.albedo.r;
+                v.albedo[1]  = dr.albedo.g;
+                v.albedo[2]  = dr.albedo.b;
+                v.anisotropy = dr.anisotropy;
+                v.emission[0] = std::max(dr.emissiveIntensity, 0.f);
+                v.emission[1] = dr.tempBottomK;
+                v.emission[2] = dr.tempTopK;
+                // The shader raises the in-box height fraction to this power.
+                // Clamped HERE rather than in the march: pow(0, 0) is undefined
+                // in GLSL, and a floor costs nothing on the host but two
+                // instructions per step per volume in the shader.
+                v.emission[3] = std::max(dr.tempFalloff, 1e-3f);
                 densityVols_.push_back(v);
 
                 DensityDispatch dd{};

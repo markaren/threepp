@@ -143,6 +143,30 @@ namespace threepp {
             Vector3       halfExtent{5.f, 5.f, 5.f};// world half-size per axis
             std::uint32_t resolution = 128;        // voxels/axis; latched at first enable
             bool          enabled    = false;
+
+            // ── EMISSION (fire) — plans/particle-atmosphere.md F-A ───────────
+            // A flame is emission-dominated, and emission at a sample point is
+            // sigma(x) * L_e(x). sigma is ALREADY marched by the dust path, so
+            // fire needs NO second volume: make L_e an analytic function of the
+            // normalised HEIGHT inside this field's box — a blackbody ramp,
+            // hot at the bottom, cooling into the smoke line — and the flame's
+            // SHAPE comes from the particle distribution while its COLOUR
+            // structure comes from the ramp. (A per-particle temperature
+            // channel, for real combustion sims, is deliberately v2: the
+            // analytic ramp covers authored fire and costs one vec4.)
+            //
+            // emissiveIntensity == 0 is the exact no-op: the shader takes a
+            // uniform branch around the whole emissive path, so a pure dust
+            // field renders the same bits it did before emission existed.
+            float emissiveIntensity = 0.f;  // HDR radiance scale of a 2000 K flame;
+                                            // ACES/AgX wants tens, not ones.
+            float tempBottomK       = 1900.f;// blackbody T at the box BOTTOM (core)
+            float tempTopK          = 800.f; // blackbody T at the box TOP (sooty tips)
+            // Exponent of the bottom->top temperature ramp over normalised box
+            // height: T = mix(bottom, top, pow(heightFraction, tempFalloff)).
+            // > 1 holds the core temperature through the lower flame and drops
+            // it late, which is what a real diffusion flame does.
+            float tempFalloff       = 1.6f;
         };
         struct TracedRepr {// procedural-AABB BLAS
             float radiusScale = 1.f;// AABB dilation vs the render radius

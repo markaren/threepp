@@ -81,6 +81,13 @@ layout(set = 0, binding = 0) uniform CameraUbo {
 // before parallel projections existed.
 vec3 gPrimaryOrigin = vec3(0.0);
 vec3 gPrimaryDir    = vec3(0.0, 0.0, -1.0);
+// This pixel's integer coordinate, in the same global-invocation space every
+// other per-pixel term uses. A GLOBAL rather than a parameter because
+// applyParticleFog needs it for its spatial dither and is reached through
+// skyBackground(), which the MSAA sky-minority blend calls with no px of its
+// own; threading it down would grow four signatures to hand one value to one
+// hash. Set beside gPrimaryOrigin, so every reader below sees this pixel's.
+ivec2 gPixelCoord = ivec2(0);
 
 struct DirLight   { vec3 direction; vec3 color; };
 struct PointLight { vec3 position; float range; vec3 color; float decay; float radius; };
@@ -663,6 +670,7 @@ void main() {
     const vec3 camPos = camRayOrigin(ndc);
     gPrimaryOrigin    = camPos;
     gPrimaryDir       = camRayDir(ndc);
+    gPixelCoord       = px;
     const float maxLod = float(max(pc.envMipCount, 1u) - 1u);
 
     const uint id = (msSampleIdx >= 0) ? texelFetch(gbufIdsMS, px, msSampleIdx).x

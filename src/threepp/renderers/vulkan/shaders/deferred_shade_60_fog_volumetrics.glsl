@@ -139,6 +139,43 @@ vec3 applyHeteroSurfaceFog(vec3 col, vec2 fuv, float viewDist, vec3 ro, vec3 hit
 // Applied to EVERY leg the shade terminates: surfaces, water, and the sky
 // background. Gated on flags bit 11 = "a ParticleField density volume is live
 // this frame", so a scene without dust pays four compares and an early return.
+//
+// ── EMISSION (fire) — plans/particle-atmosphere.md F-A ───────────────────────
+// A field with DensityRepr::emissiveIntensity > 0 adds an emitted-radiance term
+// to the same march, per step and per emissive volume:
+//
+//     T   = mix(bottomK, topK, pow(heightFraction, falloff))
+//     E  += intensity * blackbodyRGB(T) * sigma_i * e^(-tau) * dt
+//
+// Emission scales with THAT VOLUME's own sigma because that is the physics —
+// soot radiates in proportion to how much soot there is — and it is also what
+// makes the flame's silhouette be the particle distribution rather than a
+// billboard card: there is no flame texture anywhere in this renderer. The
+// e^(-tau) factor is self-occlusion, so a deep flame's far side is dimmed by
+// its own near side exactly as the in-scatter is. `heightFraction` is tt.y, the
+// in-box normalised coordinate the loop already computes for the fetch.
+//
+// The whole emissive path sits behind `pd.counts.y != 0` — a UNIFORM branch on
+// "any bound volume is emissive" — so a dust-only scene executes the identical
+// arithmetic it did before this term existed. That is the F0 checkpoint, not a
+// nicety.
+//
+// ── BANDING: SPATIAL DITHER, NEVER TEMPORAL JITTER ──────────────────────────
+// A high-contrast emissive core bands where a trilinear dust cloud did not: 24
+// uniform steps quantise a steep radiance ramp into visible shells. The two
+// mitigations here are chosen to KEEP the determinism contract:
+//
+//   1. 24 -> 32 steps whenever any volume is emissive. One uniform branch, and
+//      cheap against the march's fixed cost — R-2's stated first answer.
+//   2. A per-PIXEL hash offset on the step phase, replacing the fixed +0.5.
+//      This is spatial dithering: the offset is a function of the pixel
+//      coordinate ALONE, with no frame term anywhere, so a static scene still
+//      renders the same bytes every frame and every run — unlike the pcg
+//      jitter volumetricSpotScatter/volumetricDirScatter use, which are keyed
+//      on pc.frame and are therefore off limits here. TAA converges the
+//      resulting dither exactly as it converges those marches' jitter; without
+//      TAA it reads as fine stationary noise instead of hard shells, which is
+//      the better failure.
 vec3 applyParticleFog(vec3 col, vec3 ro, vec3 rd, float tMax) {
     if ((pc.flags & 2048u) == 0u) return col;
 #ifdef PD_LINEAR
@@ -161,43 +198,98 @@ vec3 applyParticleFog(vec3 col, vec3 ro, vec3 rd, float tMax) {
     }
     if (t1 <= t0) return col;
 
-    const int   STEPS = 24;
+    // Uniform branches, both of them: every pixel in the dispatch takes the
+    // same side, so neither costs divergence.
+    const bool emissive = pd.counts.y != 0u;
+    const bool multi    = n > 1u;
+
+    const int   STEPS = emissive ? 32 : 24;
     const float dt    = (t1 - t0) / float(STEPS);
+    // Step phase. Exactly 0.5 (midpoint, the pre-emission form, bit for bit)
+    // unless something is emissive; then the per-pixel hash dither above.
+    // pcgHash of the pixel coordinate only — NO pc.frame term, deliberately.
+    float phase = 0.5;
+    if (emissive) {
+        uint seed = pcgHash(uint(gPixelCoord.x) * 7919u + pcgHash(uint(gPixelCoord.y) * 104729u));
+        phase = rnd(seed);
+    }
     float tau = 0.0, wsum = 0.0;
     vec3  cen = vec3(0.0);
+    vec3  emis = vec3(0.0);// sum of intensity * blackbody * sigma_i * e^-tau * dt
+    vec3  albW = vec3(0.0);// sigma-weighted albedo, already carrying the w weight
+    float gW   = 0.0;      // sigma-weighted HG g, same weighting
     for (int s = 0; s < STEPS; ++s) {
-        const float t = t0 + (float(s) + 0.5) * dt;
+        const float t = t0 + (float(s) + phase) * dt;
         const vec3  x = ro + rd * t;
         float sig = 0.0;
+        vec3  albStep = vec3(0.0);
+        float gStep   = 0.0;
+        vec3  emStep  = vec3(0.0);
         for (uint i = 0u; i < n; ++i) {
             const vec3 tt = (x - pd.boxMin[i].xyz) * pd.boxInvSize[i].xyz;
             // Skip, don't clamp: CLAMP_TO_EDGE would smear each face's voxels
             // over everything outside the box.
             if (any(lessThan(tt, vec3(0.0))) || any(greaterThan(tt, vec3(1.0)))) continue;
-            sig += texture(particleDensityLinTex[i], tt).r;
+            const float si = texture(particleDensityLinTex[i], tt).r;
+            sig += si;
+            if (multi) {
+                albStep += pd.albedoAniso[i].rgb * si;
+                gStep   += pd.albedoAniso[i].a * si;
+            }
+            if (emissive && pd.emission[i].x > 0.0) {
+                // Blackbody temperature from the height fraction inside THIS
+                // volume's box. tt.y is already clamped to [0,1] by the skip
+                // above, so the pow's base is never negative (float pow of a
+                // negative base is undefined and has produced NaN in this tree
+                // before — feedback_float_pi_sin_pow_nan).
+                const float T = mix(pd.emission[i].y, pd.emission[i].z,
+                                    pow(tt.y, pd.emission[i].w));
+                emStep += (pd.emission[i].x * si) * blackbodyRGB(T);
+            }
         }
         if (sig <= 0.0) continue;
-        const float w = sig * exp(-tau) * dt;
+        const float tr = exp(-tau);
+        const float w  = sig * tr * dt;// KEEP the grouping: this is the pre-emission expression
         tau  += sig * dt;
         wsum += w;
         cen  += w * x;
+        if (multi) {
+            albW += albStep * (tr * dt);
+            gW   += gStep * (tr * dt);
+        }
+        if (emissive) emis += emStep * (tr * dt);
         if (tau > 8.0) break;// e^-8: nothing behind this survives
     }
     if (wsum <= 0.0) return col;
     cen /= wsum;
 
+    // The medium's own single-scatter albedo and phase (DensityRepr::albedo /
+    // anisotropy), not the FogUbo's — a dust field can be present with no scene
+    // fog at all. With ONE volume bound they are that field's values verbatim,
+    // which is the pre-F0 expression bit for bit; with several they are the
+    // sigma-weighted mixture along this ray, so a warm fire and a grey smoke
+    // column each tint their own share of the in-scatter.
+    vec3  medAlbedo = pd.albedoAniso[0].rgb;
+    float medG      = pd.albedoAniso[0].a;
+    if (multi) {
+        medAlbedo = albW / wsum;
+        medG      = gW / wsum;
+    }
+
     vec3 sun = vec3(0.0);
     for (uint i = 0u; i < lights.dirCount; ++i) {
         const vec3 L = normalize(lights.dirLights[i].direction);
         sun += lights.dirLights[i].color
-             * (hgPhase(dot(L, rd), pd.albedoAniso.a)
+             * (hgPhase(dot(L, rd), medG)
                 * shadowVis(cen, L, 1e30) * cloudShadowSample(cen));
     }
     const vec3 amb = lights.ambient
                    + sampleEnvLod(vec3(0.0, 1.0, 0.0), float(max(pc.envMipCount, 1u) - 1u));
-    // The medium's own single-scatter albedo (DensityRepr::albedo), not the
-    // FogUbo's — a dust field can be present with no scene fog at all.
-    return col * exp(-tau) + pd.albedoAniso.rgb * (amb + sun) * wsum;
+    // Emission is ADDED, not scattered: it is radiance the medium produced, so
+    // it neither multiplies by the albedo (that is the fraction of INCIDENT
+    // light re-emitted) nor attenuates the background any further than tau
+    // already did.
+    return col * exp(-tau) + medAlbedo * (amb + sun) * wsum + emis;
 #else
     return col;
 #endif
