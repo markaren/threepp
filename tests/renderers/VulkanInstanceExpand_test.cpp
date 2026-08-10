@@ -121,7 +121,11 @@ int main() {
     }
     VulkanRenderer& renderer = *rendererPtr;
 
-    check(renderer.gpuInstanceExpansion(), "GPU instance expansion is on by default");
+    // OFF by default: the pass is a measured regression whose output no
+    // consumer reads yet, so every app in the tree would pay for nothing.
+    // This test is the opt-in caller, which is the point of the setter.
+    check(!renderer.gpuInstanceExpansion(), "GPU instance expansion is off by default");
+    renderer.setGpuInstanceExpansion(true);
 
     Scene scene;
     scene.background = Color(0.05f, 0.05f, 0.08f);

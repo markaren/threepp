@@ -1697,7 +1697,15 @@ namespace threepp {
         // buy themselves: proof that the GPU producer agrees with the CPU
         // (VulkanRenderer::instanceExpandCheck).
         std::unique_ptr<vulkan::InstanceExpand> instExpand_;
-        bool gpuInstanceExpand_ = true;// setGpuInstanceExpansion; the A/B lever
+        // OFF by default, and it stays off until a consumer reads the buffer.
+        // The comment above is the whole argument: the pass is measured slower
+        // (~+1.0 ms wall at 85k grains, 8 of 8 interleaved A/B pairs) and its
+        // output is read by nobody, so defaulting it on made every application
+        // and every test in the tree pay for a value none of them use — and
+        // quietly moved the baseline that stages 2-5 must be measured against.
+        // setGpuInstanceExpansion(true) opts in, which is all the A/B lever and
+        // VulkanInstanceExpand_test need.
+        bool gpuInstanceExpand_ = false;// setGpuInstanceExpansion; the A/B lever
         // The GPU path's span list: an index into entrySpans_ plus the two
         // prefix sums the shader needs. Instanced spans only. Rebuilt (and
         // compared) every frame — it is O(spans), not O(instances), and a diff
