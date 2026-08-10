@@ -15,7 +15,11 @@
 //     cannot resolve, so they stay per-pixel in deferred_shade.comp's
 //     volumetricSpot/DirScatter marches),
 //   • Henyey-Greenstein phase and camera/light-leg extinction matching the
-//     per-pixel point-glow terms term for term —
+//     per-pixel point-glow terms term for term,
+//   • scattering off the HEIGHT-FOG medium only: ParticleField dust is in the
+//     extinction legs but NOT in the term that sources in-scatter, because this
+//     grid cannot estimate a plume's σ while the camera moves (see the S
+//     product below) — dust's glow is marched per pixel in applyParticleFog —
 // and EMA-accumulates it against the previous frame's froxel (the sub-froxel
 // jitter is what turns 1 sample/froxel into a converged integral; camera
 // motion shortens the history so beams track instead of smearing). The
@@ -206,6 +210,9 @@ void main() {
     vec3  pdAlbedo = vec3(1.0);
     float pdG      = 0.0;
     float pdSigma  = 0.0;
+    // σ that SOURCES the in-scatter, which is not the same σ that extinguishes.
+    // See the block above the S product below for why they had to split.
+    float sigmaSrc = sigma;
     if (hetero) {
         // The SPLIT form of mediumExtinction: the particle half also hands back
         // the sigma-weighted albedo/g of the mixture at x, which is what the
@@ -214,7 +221,8 @@ void main() {
         // medium with one blended albedo, and asking for the params separately
         // would sample all four volumes a second time.
         pdSigma   = particleMedium(x, pdAlbedo, pdG);
-        sigma     = heightFogDensity(x, clouds.timeSec) + pdSigma;
+        sigmaSrc  = heightFogDensity(x, clouds.timeSec);
+        sigma     = sigmaSrc + pdSigma;
         // fog.anisotropy is populated whenever ANY medium exists (it is the
         // medium's HG g, set unconditionally by updateFogUbo) — a heightFog-only
         // medium honours setFogAnisotropy instead of a hardcoded mist g.
@@ -284,7 +292,35 @@ void main() {
 
     // σ_s = σ_t · albedo — in-scattered radiance per unit length. The camera-
     // leg transmittance is applied by the integrate pass (front-to-back T).
-    const vec3 S = sum * medAlbedo * sigma;
+    //
+    // sigmaSrc, NOT sigma: PARTICLE density is deliberately excluded from the
+    // term that SOURCES in-scatter, while staying in every extinction leg above
+    // (the exp(-sigma*d) light legs) and in froxel_integrate's transmittance.
+    // The split is not fussiness — the two roles have opposite frequency
+    // requirements:
+    //
+    //   • Extinction is an INTEGRAL along a leg. Errors average out, a plume
+    //     dimming a lamp behind it is a broad soft effect, and the LUT resolves
+    //     it fine. Dust belongs here.
+    //   • Sourcing is a POINT sample of σ multiplied by a glow. Inside a plume,
+    //     σ swings by orders of magnitude within one 10 px × 12.6%-of-distance
+    //     cell, and this grid estimates it from ONE jittered sample per cell
+    //     converged by an EMA whose history cap drops to 2 frames the moment
+    //     the camera moves. The product then boils in cell-sized blocks that
+    //     are glued to the SCREEN while the world slides underneath — measured
+    //     on the campfire as froxel-lattice-locked frame-to-frame difference
+    //     (1.24× phase contrast, gone at 1.05× with this term removed). It is
+    //     the same view-dependence that already evicted dust from the LUT's
+    //     transmittance path in plan §3.3, reappearing through in-scatter.
+    //
+    // Dust's point-light glow is therefore marched per pixel instead, in
+    // applyParticleFog (deferred_shade_60_fog_volumetrics.glsl), against the
+    // world-anchored volume at its own resolution. Each medium sources its
+    // in-scatter where that medium can actually be resolved: smooth analytic
+    // height fog here, high-frequency world-anchored dust there. Nothing is
+    // counted twice, and a scene with no point lights is unaffected either way
+    // (sum is 0, so S was 0 whatever σ multiplied it).
+    const vec3 S = sum * medAlbedo * sigmaSrc;
 
     // Temporal EMA against the SAME froxel of the previous frame (no
     // reprojection — froxels are view-anchored). Camera motion shortens the

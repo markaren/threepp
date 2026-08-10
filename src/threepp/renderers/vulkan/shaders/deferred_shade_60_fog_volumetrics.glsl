@@ -125,10 +125,45 @@ vec3 applyHeteroSurfaceFog(vec3 col, vec2 fuv, float viewDist, vec3 ro, vec3 hit
 // σ profile and it early-outs entirely when scene fog is off. The sun is
 // shadowed ONCE, at the σ-weighted centroid of the traversed dust (a full
 // per-step shadow ray is shaft-resolution the plume scale does not need), and
-// dimmed by the cloud-shadow map at the same point. Clustered point/spot glow
-// inside the dust still arrives through froxelInscatter — the injector
-// multiplies its in-scatter by the dust's own σ — coarse, but a glow is
-// low-frequency in exactly the way a silhouette is not.
+// dimmed by the cloud-shadow map at the same point.
+//
+// ── POINT LIGHTS ARE MARCHED HERE, NOT READ OUT OF THE FROXEL LUT ────────────
+// They used to arrive through froxelInscatter: the injector multiplied its
+// clustered point-light in-scatter by the dust's own σ, on the argument that
+// "a glow is low-frequency in exactly the way a silhouette is not". That
+// argument fails when the light sits INSIDE a thin plume, which is the entire
+// campfire geometry. The froxel grid is 128×72×64 and VIEW-anchored (10 px per
+// cell laterally at 720p, depth slices ~12.6% of distance); its σ is sampled at
+// ONE per-frame-jittered point per cell and converged by a temporal EMA whose
+// history cap collapses to 2 frames as soon as the camera moves. Inside a plume
+// the sub-cell σ variance is enormous, so during camera motion that estimator
+// does not converge: the product σ·glow boils in cell-sized blocks GLUED TO THE
+// SCREEN while the world slides underneath. Measured on the campfire (frozen
+// effect, 22°/s orbit): the frame-to-frame difference over the smoke column
+// carried 1.24× more variance when blocked on the froxel lattice than when
+// blocked half a cell out of phase — structure locked to the grid — and
+// dropping this term took that to 1.05× (i.e. gone).
+//
+// It is the SAME mechanism the header above evicted from the extinction path,
+// arriving a second time through the in-scatter path. So the point-light glow
+// is computed per step of THIS march instead, from the 8-cap LightsUbo set,
+// with the same per-step terms the injector used (1 m-clamped inverse square,
+// quartic range window, HG phase, light-leg extinction) — world-anchored by
+// construction, at the volume's own resolution.
+//
+// The two media now partition cleanly, each sourcing its in-scatter in the
+// representation that can actually resolve it: HEIGHT FOG (smooth, analytic,
+// low-frequency) keeps the froxel grid; PARTICLE DUST (high-frequency, world-
+// anchored) is marched. froxel_inject.comp drops σ_particles from its in-scatter
+// SOURCE term to match, so nothing is counted twice — it keeps dust in the
+// light-leg extinction, where a plume dimming a lamp behind it is correct and
+// genuinely low-frequency.
+//
+// SPOT lights are skipped, as they are in the injector: a tight cone is the
+// high-frequency case that already owns a dedicated per-pixel march
+// (volumetricSpotScatter). That march integrates the height-fog/beam medium and
+// not the dust, so a spot shining into a plume gets no dust glow — a v1 gap,
+// recorded rather than papered over.
 //
 // ∫σ·e^(-τ) dt over the dust segment is accumulated as `wsum`; with dust the
 // only extinction on that segment it equals 1 - T exactly, so the in-scatter
@@ -218,6 +253,7 @@ vec3 applyParticleFog(vec3 col, vec3 ro, vec3 rd, float tMax) {
     vec3  emis = vec3(0.0);// sum of intensity * blackbody * sigma_i * e^-tau * dt
     vec3  albW = vec3(0.0);// sigma-weighted albedo, already carrying the w weight
     float gW   = 0.0;      // sigma-weighted HG g, same weighting
+    vec3  pnt  = vec3(0.0);// point-light in-scatter, ALREADY albedo-multiplied
     for (int s = 0; s < STEPS; ++s) {
         const float t = t0 + (float(s) + phase) * dt;
         const vec3  x = ro + rd * t;
@@ -258,6 +294,48 @@ vec3 applyParticleFog(vec3 col, vec3 ro, vec3 rd, float tMax) {
             gW   += gStep * (tr * dt);
         }
         if (emissive) emis += emStep * (tr * dt);
+        // ── Point-light glow, per step ──────────────────────────────────────
+        // Unlike the sun, a point light's geometry changes ALONG the ray
+        // (direction turns, inverse square falls off), so it cannot be factored
+        // out to the one centroid evaluation the sun gets — it has to be inside
+        // the loop. Uniform branch: pointCount is the same for every pixel.
+        if (lights.pointCount > 0u) {
+            // The LOCAL mixture params here, not the ray-averaged medAlbedo /
+            // medG the sun and ambient use. The phase has to be evaluated per
+            // step regardless (toL turns), so the albedo rides along on the
+            // same divide, and a warm flame overlapping a grey smoke column
+            // then tints its own share of the glow instead of the ray's mean.
+            const vec3  aL = multi ? albStep / sig : pd.albedoAniso[0].rgb;
+            const float gL = multi ? gStep / sig : pd.albedoAniso[0].a;
+            vec3 pl = vec3(0.0);
+            for (uint i = 0u; i < lights.pointCount; ++i) {
+                vec3        toL = lights.pointLights[i].position - x;
+                const float d   = length(toL);
+                if (d < 1e-3) continue;
+                toL /= d;
+                // The froxel injector's per-step terms verbatim, so moving the
+                // light here changes WHERE the glow is resolved and not what it
+                // is: 1 m-clamped inverse square (no firefly at the source),
+                // the same quartic range window the surface path applies, HG
+                // phase, and the light-leg transmittance. That last one uses
+                // the LOCAL dust sigma over the whole leg — the injector's own
+                // homogeneous-at-x approximation, and a good one here because
+                // a light inside a plume has a short leg.
+                float atten = 1.0 / max(d * d, 1.0);
+                const float range = (lights.pointLights[i].range > 0.0)
+                                          ? lights.pointLights[i].range : 200.0;
+                const float rt  = d / range;
+                const float r4  = rt * rt * rt * rt;
+                const float wnd = max(1.0 - r4, 0.0);
+                atten *= wnd * wnd;
+                pl += lights.pointLights[i].color
+                    * (atten * hgPhase(dot(toL, rd), gL) * exp(-sig * d));
+            }
+            // w is sigma * e^-tau * dt — the same weight the ambient/sun term
+            // integrates, so the point glow is scattered by this step's dust
+            // and self-occluded by the dust in front of it, consistently.
+            pnt += pl * aL * w;
+        }
         if (tau > 8.0) break;// e^-8: nothing behind this survives
     }
     if (wsum <= 0.0) return col;
@@ -288,8 +366,9 @@ vec3 applyParticleFog(vec3 col, vec3 ro, vec3 rd, float tMax) {
     // Emission is ADDED, not scattered: it is radiance the medium produced, so
     // it neither multiplies by the albedo (that is the fraction of INCIDENT
     // light re-emitted) nor attenuates the background any further than tau
-    // already did.
-    return col * exp(-tau) + medAlbedo * (amb + sun) * wsum + emis;
+    // already did. `pnt` is already albedo-weighted and already carries its own
+    // per-step w, so it is added rather than folded into the wsum product.
+    return col * exp(-tau) + medAlbedo * (amb + sun) * wsum + emis + pnt;
 #else
     return col;
 #endif

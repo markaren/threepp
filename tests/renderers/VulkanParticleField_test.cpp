@@ -1151,10 +1151,16 @@ int main(int argc, char** argv) {
                   "(the r32ui fixed-point claim)");
         }
 
-        // A point light INSIDE the cloud: the in-scatter half. froxel_inject
-        // multiplies its clustered-light glow by the medium's own sigma, so
-        // this needs no new shading code at all — the light simply becomes
-        // visible as a glow because there is now something to scatter off.
+        // A point light INSIDE the cloud: the in-scatter half. The glow is
+        // marched per pixel inside applyParticleFog, against the world-anchored
+        // density volume — it used to come out of the froxel LUT (which
+        // multiplied its clustered-light in-scatter by the medium's own sigma),
+        // but a view-anchored 128x72x64 grid cannot estimate sigma inside a
+        // plume while the camera moves, and it quantised the smoke into
+        // cell-sized blocks glued to the screen (plans/particle-atmosphere.md,
+        // the 2026-08-11 amendment). Either way this needs no new *scene* code:
+        // the light simply becomes visible because there is something to
+        // scatter off.
         auto glow = PointLight::create(0xffc070, 90.f, 14.f);
         glow->position.set(0.f, 1.4f, 0.8f);
         scene.add(glow);

@@ -19,6 +19,16 @@
 // Controls:  drag = orbit   scroll = zoom   SPACE = ignite / extinguish
 // Headless:  vulkan_fire --shot out.png [--frames N] [--t SECONDS] [--no-embers]
 //            vulkan_fire --bench            interleaved A/B of the effect's GPU cost
+//            vulkan_fire --seq DIR          consecutive frames along a SCRIPTED orbit
+//
+// --seq is the motion harness. Some defects in a volumetric are invisible in a
+// still and only appear while the camera moves (view-anchored quantisation is
+// the whole class), so a single --shot cannot see them: the evidence has to be
+// a SEQUENCE. Combine with --t to freeze the effect, and then the ONLY thing
+// changing between the written frames is the camera — any boiling left in the
+// image is view dependence by construction, with nothing to blame on the fire's
+// own animation. The path is closed-form in frame index, so two runs of the
+// same command produce the same poses.
 
 #include "capture_util.hpp"
 
@@ -37,6 +47,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <filesystem>
 #include <memory>
 #include <string>
 #include <vector>
@@ -224,6 +235,13 @@ int main(int argc, char** argv) {
     // DLSS/FSR emitter-fog silhouette issue, which plan R-1 files under its own
     // bug rather than fighting here.
     std::string upscaler = "taa";
+    // --seq: the motion harness (see the header comment).
+    std::string seqDir;
+    int   seqFrames = 8;   // consecutive frames written
+    int   seqWarm   = 100; // frames run before the first write, so TAA/froxel
+                           // history is at its steady state for the MOTION —
+                           // not at a cold start, which would confound.
+    float orbitDeg  = 22.f;// camera azimuth rate, deg/s; 0 = hold the pose
     for (int i = 1; i < argc; ++i) {
         const std::string a = argv[i];
         if (a == "--shot" && i + 1 < argc) shotPath = argv[++i];
@@ -232,6 +250,10 @@ int main(int argc, char** argv) {
         else if (a == "--no-embers") noEmbers = true;
         else if (a == "--bench") bench = true;
         else if (a == "--upscaler" && i + 1 < argc) upscaler = argv[++i];
+        else if (a == "--seq" && i + 1 < argc) seqDir = argv[++i];
+        else if (a == "--seqframes" && i + 1 < argc) seqFrames = std::atoi(argv[++i]);
+        else if (a == "--warm" && i + 1 < argc) seqWarm = std::atoi(argv[++i]);
+        else if (a == "--orbit" && i + 1 < argc) orbitDeg = float(std::atof(argv[++i]));
     }
     const capture::Args cap = capture::parseArgs(argc, argv);
 
@@ -239,7 +261,7 @@ int main(int argc, char** argv) {
                   {{"title", std::string("Vulkan Deferred - Campfire")},
                    {"size", std::pair<int, int>{1280, 720}},
                    {"vsync", false},
-                   {"headless", !shotPath.empty() || bench}});
+                   {"headless", !shotPath.empty() || bench || !seqDir.empty()}});
     VulkanRenderer renderer(canvas);
     renderer.setDlss(upscaler == "dlss");// F1 ships and gates on TAA; see plan R-1
     renderer.setFsr(upscaler == "fsr");
@@ -286,7 +308,7 @@ int main(int argc, char** argv) {
     std::unique_ptr<OrbitControls> controls;
     std::unique_ptr<RendererSettingsUi> ui;
     std::unique_ptr<KeyAdapter> keys;// the canvas keeps a reference, not a copy
-    if (shotPath.empty() && !bench) {
+    if (shotPath.empty() && !bench && seqDir.empty()) {
         controls = std::make_unique<OrbitControls>(camera, canvas);
         controls->target.copy(target);
         controls->update();
@@ -359,6 +381,39 @@ int main(int argc, char** argv) {
         std::printf("  effect total (shade + froxel + density delta): %.4f ms\n",
                     ((onA.shade - offA.shade) + (onA.froxel - offA.froxel) +
                      (onA.density - offA.density)) * inv);
+        return 0;
+    }
+
+    // ── Scripted-orbit frame sequence ───────────────────────────────────────
+    // A closed-form camera path (azimuth linear in the frame index, radius and
+    // height held) around the same target the interactive OrbitControls uses,
+    // so the written frames are exactly what a user dragging the mouse sees.
+    // The frames are consecutive, at the steady state of every temporal history
+    // in the renderer, which is the only way to LOOK at a motion-only defect.
+    if (!seqDir.empty()) {
+        namespace fs = std::filesystem;
+        fs::create_directories(seqDir);
+        constexpr float kDt = 1.f / 60.f;
+        const Vector3 eye0 = camera.position;
+        const float r0 = std::hypot(eye0.x - target.x, eye0.z - target.z);
+        const float a0 = std::atan2(eye0.z - target.z, eye0.x - target.x);
+        const float rate = orbitDeg * (kTau / 360.f);// rad/s
+        for (int i = 0; i < seqWarm + seqFrames; ++i) {
+            const float t = float(i) * kDt;
+            const float a = a0 + rate * t;
+            camera.position.set(target.x + r0 * std::cos(a), eye0.y, target.z + r0 * std::sin(a));
+            camera.lookAt(target);
+            fire->update(shotTime >= 0.f ? shotTime : t);
+            canvas.animateOnce([&] { renderer.render(scene, camera); });
+            if (i >= seqWarm) {
+                char name[64];
+                std::snprintf(name, sizeof(name), "f%02d.png", i - seqWarm);
+                renderer.writeFramebuffer((fs::path(seqDir) / name).string());
+            }
+        }
+        std::printf("[seq] %d frames -> %s (orbit %.1f deg/s, warm %d, fx %s)\n",
+                    seqFrames, seqDir.c_str(), double(orbitDeg), seqWarm,
+                    shotTime >= 0.f ? "FROZEN" : "animated");
         return 0;
     }
 
