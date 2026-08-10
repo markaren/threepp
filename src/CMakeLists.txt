@@ -1339,6 +1339,20 @@ if (THREEPP_WITH_VULKAN)
         "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/instance_expand.comp"
         kInstanceExpandCompSpv
         _instance_expand_spv_h)
+    # ParticleField density representation (plans/particle-field.md §3.3): one
+    # thread per particle slot splats fixed-point sigma_t into a world-anchored
+    # r32ui volume that every view's froxel pass then samples. See
+    # ParticleFieldPass.{hpp,cpp} and shaders/particle_density.glsl.
+    compile_vulkan_shader(threepp
+        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/particle_density_scatter.comp"
+        kParticleDensityScatterCompSpv
+        _particle_density_scatter_spv_h)
+    # r32ui -> r16f mirror: hardware trilinear for the deferred shade's
+    # per-pixel dust march (view-independent, unlike the froxel LUT read).
+    compile_vulkan_shader(threepp
+        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/particle_density_convert.comp"
+        kParticleDensityConvertCompSpv
+        _particle_density_convert_spv_h)
     compile_vulkan_shader(threepp
         "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/skinning.comp"
         kSkinningCompSpv

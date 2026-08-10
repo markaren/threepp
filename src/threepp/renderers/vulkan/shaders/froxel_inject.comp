@@ -209,6 +209,14 @@ void main() {
         // medium's HG g, set unconditionally by updateFogUbo) — a heightFog-only
         // medium honours setFogAnisotropy instead of a hardcoded mist g.
         hgG       = fog.anisotropy;
+        // DUST WITH NO SCENE FOG (plan §3.3): there is no FogUbo to inherit an
+        // albedo or a phase from, so the medium's own DensityRepr supplies
+        // both. Exactly the pre-phase-2 path when no density field exists
+        // (pd.counts.x == 0) or when scene fog owns the medium.
+        if (!fogDriven && pd.counts.x > 0u) {
+            medAlbedo = pd.albedoAniso.rgb;
+            hgG       = pd.albedoAniso.a;
+        }
     }
     if (sigma <= 0.0) {
         imageStore(froxelScatterImage, fi, vec4(0.0));

@@ -18,6 +18,11 @@
 // and trail the swept shadow as a faint ghost ring.
 #extension GL_KHR_shader_subgroup_vote : require
 
+// This pass owns the per-pixel dust march (applyParticleFog), so it carries
+// the r16f volume array (binding 69) the froxel pipelines do not. Must precede
+// every include that can reach particle_density.glsl.
+#define PD_LINEAR 1
+
 #include "vulkan_shared.h"  // MaterialDesc
 #include "instance_flags.glsl"// per-instance flag accessors + reactivity channels
 
@@ -379,6 +384,12 @@ layout(set = 0, binding = 66) uniform sampler2D cloudAuxTex;
 // (deferred_shade_10_lighting_utils.glsl) to attenuate the sun on the ground.
 layout(set = 0, binding = 65) uniform sampler2D cloudShadowTex;
 
+// ParticleField density volumes (bindings 67/68 + the r16f mirrors at 69,
+// declared because PD_LINEAR is defined above). applyParticleFog marches the
+// r16f volumes per pixel — world-anchored, hardware trilinear — which is what
+// keeps dust view-independent and sharper than the froxel grid.
+#include "particle_density.glsl"
+
 #include "probe_common.glsl"// probeIrradiance()
 
 // Shared ShadePush block (vulkan_shared.h) — field docs + the flags bit
@@ -676,6 +687,10 @@ void main() {
         // carries the clouds too — consistent under the solid-bg bypass.
         vec3 skyRad = applySkyFog(sampleEnvLod(dirWS, 0.0) + proceduralStars(dirWS), dirWS);
         skyRad = compositeClouds(skyRad, px, 1e30);// upsampled half-res cloud layer over the sky
+        // Dust in front of the sky. Without this the cloud is invisible against
+        // the background and only reads where it covers geometry — the whole
+        // silhouette of a dust curtain lives here.
+        skyRad = applyParticleFog(skyRad, camPos, dirWS, 1e30);
         vec3 sky = skyRad * domWeight;
         // SOLID-COLOUR background (flags bit 10): the bg is DISPLAY-referred
         // (the exact clear colour, restored verbatim by the composite's sky
@@ -718,10 +733,13 @@ void main() {
         // vestigial homogeneous path) so an unlit MeshBasicMaterial fades to the
         // same haze as everything else — no crisp unlit island in the mist. Then
         // the underwater murk on the below-surface leg portion (no-op above water).
-        vec3 outU = applyMurk((clouds.heteroActive > 0.5)
-                   ? applyHeteroSurfaceFog(albedo, uv, length(wpU - camPos), camPos, wpU)
-                   : applySceneFog(albedo, camPos, wpU), camPos, wpU) * domWeight;
-        if (skyEdgeW > 0.0) outU += skyEdgeW * skyBackground(ndc);
+        const float distU = length(wpU - camPos);
+        vec3 outU = applyParticleFog(
+                            applyMurk((clouds.heteroActive > 0.5)
+                                      ? applyHeteroSurfaceFog(albedo, uv, distU, camPos, wpU)
+                                      : applySceneFog(albedo, camPos, wpU), camPos, wpU),
+                            camPos, (wpU - camPos) / max(distU, 1e-6), distU) * domWeight;
+        if (skyEdgeW > 0.0) outU += skyEdgeW * skyBackground(ndc, camPos);
         imageStore(outImage, px, vec4(outU * uintBitsToFloat(pc.preExpBits), 1.0));
         imageStore(indirectImage, px, vec4(0.0));
         imageStore(shadowVisImage, px, vec4(0.0));
@@ -888,10 +906,13 @@ void main() {
         // Coverage weighting as in the main path — water-dominant edge pixels
         // reserve geoMinW for dispatch B and blend their own sky minority;
         // the volumetric in-scatter is per-pixel and stays at full weight.
-        wcol = applyMurk((clouds.heteroActive > 0.5)
-              ? applyHeteroSurfaceFog(wcol, uv, length(worldPos - camPos), camPos, worldPos)
-              : applySceneFog(wcol, camPos, worldPos), camPos, worldPos) * domWeight;
-        if (skyEdgeW > 0.0) wcol += skyEdgeW * skyBackground(ndc);
+        const float distW = length(worldPos - camPos);
+        wcol = applyParticleFog(
+                       applyMurk((clouds.heteroActive > 0.5)
+                                 ? applyHeteroSurfaceFog(wcol, uv, distW, camPos, worldPos)
+                                 : applySceneFog(wcol, camPos, worldPos), camPos, worldPos),
+                       camPos, (worldPos - camPos) / max(distW, 1e-6), distW) * domWeight;
+        if (skyEdgeW > 0.0) wcol += skyEdgeW * skyBackground(ndc, camPos);
         // Volumetric in-scatter — the SAME three terms the opaque path adds
         // below: froxel clustered point-light glow, per-pixel spot beams, and
         // the per-pixel directional sun shafts / aerial glow. The sun term
@@ -1451,9 +1472,14 @@ void main() {
     // branch runs only when no medium is present (a no-op then). The underwater
     // murk (below-surface leg) composes on top; the beam march carries its own
     // extinction either way.
-    lit = applyMurk((clouds.heteroActive > 0.5)
-        ? applyHeteroSurfaceFog(lit, uv, length(worldPos - camPos), camPos, worldPos)
-        : applySceneFog(lit, camPos, worldPos), camPos, worldPos);
+    {
+        const float distL = length(worldPos - camPos);
+        lit = applyParticleFog(
+                      applyMurk((clouds.heteroActive > 0.5)
+                                ? applyHeteroSurfaceFog(lit, uv, distL, camPos, worldPos)
+                                : applySceneFog(lit, camPos, worldPos), camPos, worldPos),
+                      camPos, (worldPos - camPos) / max(distL, 1e-6), distL);
+    }
     if (pc.shadeMode == 1u) {
         // Dispatch B: weighted accumulate into dispatch A's already-written
         // pixel (which stored domWeight*lit for the SAME complex pixel — see
@@ -1481,7 +1507,7 @@ void main() {
         // against the sky). Simple pixels and msaa=1 keep domWeight==1,
         // skyEdgeW==0 — byte-identical to the pre-MSAA output.
         vec3 outC = lit * domWeight;
-        if (skyEdgeW > 0.0) outC += skyEdgeW * skyBackground(ndc);
+        if (skyEdgeW > 0.0) outC += skyEdgeW * skyBackground(ndc, camPos);
         // DEPTH-AWARE cloud layer: march camera→surface and composite the cloud
         // in-scatter/extinction in FRONT of the terrain (a drone above the deck
         // sees clouds between it and the ground). tSceneMax = surface distance

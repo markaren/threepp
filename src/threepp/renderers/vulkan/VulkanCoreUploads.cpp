@@ -1411,7 +1411,24 @@ namespace threepp {
         // whole 0→far ray (including below 512 m), so folding cloudDensity into the
         // froxels too would double-count it (see mediumExtinction in cloud_density.glsl).
         // updateFogUbo ran first (VulkanCoreFrame.cpp) and resolved the medium.
-        ubo.heteroActive  = mediumActiveThisFrame_ ? 1.0f : 0.0f;
+        //
+        // PLUS: a live ParticleField density volume (plan §3.3). Dust IS a
+        // heterogeneous near-field medium, and froxel_inject/froxel_integrate
+        // only call mediumExtinction inside `heteroActive > 0.5` — so a dust
+        // cloud in a scene with no fog at all would be evaluated by nobody.
+        // The predicate is the CPU half of ParticleFieldPass's: DensityRepr on
+        // and at least one live particle. It is computed HERE, not read back
+        // off the pass, because this UBO is written before prepareParticleFields
+        // rebuilds the pass's volume list — and the two agree by construction,
+        // since the pass derives its list from exactly these two facts.
+        particleDensityActiveThisFrame_ = false;
+        for (const auto& [field, entryIndex] : particleFields_) {
+            if (field && field->densityRepr().enabled && field->liveCount() > 0) {
+                particleDensityActiveThisFrame_ = true;
+                break;
+            }
+        }
+        ubo.heteroActive  = (mediumActiveThisFrame_ || particleDensityActiveThisFrame_) ? 1.0f : 0.0f;
         ubo.wind[0]       = cloudWind_[0];
         ubo.wind[1]       = cloudWind_[1];
         ubo.wind[2]       = cloudWind_[2];
@@ -1795,6 +1812,136 @@ void VulkanRenderer::Impl::prepareParticleFields(uint32_t frame) {
                                               classIdForObject(*field), vcount});
             }
             particleFieldPass_->prepareFrame(frameSerial_, frame, particleFieldRecs_);
+            updateParticleDensityUbo(frame);
+        }
+
+// ── ParticleField density volumes (phase 2, plan §3.3) ───────────────────────
+// The two handles bindings 67/68 always name. Created once, never resized, and
+// deliberately owned HERE rather than by ParticleFieldPass: the deferred
+// descriptor sets are written before the pass is lazily constructed, and go on
+// being written on every scene that never gets a field.
+void VulkanRenderer::Impl::ensureParticleDensityResources() {
+            if (particleDensityUbos_[0].handle == VK_NULL_HANDLE) {
+                vulkan::ParticleDensityUboGpu zero{};
+                for (uint32_t f = 0; f < kFramesInFlight; ++f) {
+                    particleDensityUbos_[f] = createBuffer(
+                            ctx->allocator(), ctx->device(), sizeof(zero),
+                            VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, VMA_MEMORY_USAGE_AUTO,
+                            VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT);
+                    // counts.x == 0 ⇒ particleDensity() returns 0.0 before a
+                    // single field exists, so the very first frame is already
+                    // the dust-free answer rather than whatever VMA handed us.
+                    uploadHostVisible(ctx->allocator(), particleDensityUbos_[f], &zero, sizeof(zero));
+                }
+            }
+            if (particleDensityDummy_.image == VK_NULL_HANDLE) {
+                particleDensityDummy_ = createImage3D(
+                        1u, 1u, 1u, VK_FORMAT_R32_UINT,
+                        VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT |
+                                VK_IMAGE_USAGE_TRANSFER_DST_BIT,
+                        "particleDensityDummy (1x1x1, binding 67 placeholder)");
+                // GENERAL, matching what the real volumes declare, and cleared
+                // to 0 so a slot that is bound but never written still reads as
+                // "no dust" rather than as uninitialised device memory. The
+                // shader never samples an unused slot (counts.x gates it), but
+                // a descriptor whose image has never been transitioned is a
+                // validation error the moment the set is bound.
+                VkCommandBuffer cb = beginOneShot();
+                VkImageMemoryBarrier imb{};
+                imb.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+                imb.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+                imb.newLayout = VK_IMAGE_LAYOUT_GENERAL;
+                imb.srcAccessMask = 0;
+                imb.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+                imb.image = particleDensityDummy_.image;
+                imb.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+                imb.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+                imb.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+                vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+                                     VK_PIPELINE_STAGE_TRANSFER_BIT,
+                                     0, 0, nullptr, 0, nullptr, 1, &imb);
+                VkClearColorValue zero{};
+                VkImageSubresourceRange range{VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+                vkCmdClearColorImage(cb, particleDensityDummy_.image,
+                                     VK_IMAGE_LAYOUT_GENERAL, &zero, 1, &range);
+                endAndSubmitOneShot(cb);
+            }
+            // The r16f twin, for binding 69 (the shade's linear-sampled
+            // mirrors). Same GENERAL + cleared-to-zero contract, same reason.
+            if (particleDensityLinDummy_.image == VK_NULL_HANDLE) {
+                particleDensityLinDummy_ = createImage3D(
+                        1u, 1u, 1u, VK_FORMAT_R16_SFLOAT,
+                        VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT,
+                        "particleDensityLinDummy (1x1x1, binding 69 placeholder)");
+                VkCommandBuffer cb = beginOneShot();
+                VkImageMemoryBarrier imb{};
+                imb.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+                imb.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+                imb.newLayout = VK_IMAGE_LAYOUT_GENERAL;
+                imb.srcAccessMask = 0;
+                imb.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+                imb.image = particleDensityLinDummy_.image;
+                imb.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+                imb.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+                imb.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+                vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+                                     VK_PIPELINE_STAGE_TRANSFER_BIT,
+                                     0, 0, nullptr, 0, nullptr, 1, &imb);
+                VkClearColorValue zero{};
+                VkImageSubresourceRange range{VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+                vkCmdClearColorImage(cb, particleDensityLinDummy_.image,
+                                     VK_IMAGE_LAYOUT_GENERAL, &zero, 1, &range);
+                endAndSubmitOneShot(cb);
+            }
+        }
+
+// Publish this frame's volume boxes. O(volumes), post-fence / pre-record — the
+// same window every other ParticleField write lands in (R6).
+void VulkanRenderer::Impl::updateParticleDensityUbo(uint32_t frame) {
+            if (!particleFieldPass_) return;
+            ensureParticleDensityResources();
+
+            vulkan::ParticleDensityUboGpu ubo{};
+            const auto& vols = particleFieldPass_->densityVolumes();
+            const uint32_t n = std::min<uint32_t>(
+                    static_cast<uint32_t>(vols.size()), vulkan::kMaxDensityFields);
+            for (uint32_t i = 0; i < n; ++i) {
+                ubo.boxMin[i][0] = vols[i].boxMin[0];
+                ubo.boxMin[i][1] = vols[i].boxMin[1];
+                ubo.boxMin[i][2] = vols[i].boxMin[2];
+                ubo.boxMin[i][3] = vols[i].resolution;
+                ubo.boxInvSize[i][0] = vols[i].boxInvSize[0];
+                ubo.boxInvSize[i][1] = vols[i].boxInvSize[1];
+                ubo.boxInvSize[i][2] = vols[i].boxInvSize[2];
+            }
+            const float* alb = particleFieldPass_->densityAlbedo();
+            ubo.albedoAniso[0] = alb[0];
+            ubo.albedoAniso[1] = alb[1];
+            ubo.albedoAniso[2] = alb[2];
+            ubo.albedoAniso[3] = particleFieldPass_->densityAnisotropy();
+            ubo.counts[0]      = n;
+            uploadHostVisible(ctx->allocator(), particleDensityUbos_[frame], &ubo, sizeof(ubo));
+
+            // The bound volume LIST changed (a field gained or lost its volume):
+            // every view's set names a stale view. Refresh THIS slot now — its
+            // fence has signaled, which is what makes the write legal — and mark
+            // the others so they refresh at the top of their own frames.
+            const uint64_t gen = particleFieldPass_->densityGeneration();
+            if (particleDensityDescGen_[frame] != gen) {
+                for (uint32_t f = 0; f < kFramesInFlight; ++f)
+                    if (f != frame) deferredDescDirty_[f] = true;
+                forEachLiveView([&] { rewriteDeferredDescriptors(static_cast<int>(frame)); });
+            }
+        }
+
+// The whole density representation's per-frame GPU cost: one clear + one
+// dispatch per field, at the head of the frame command buffer and BEFORE any
+// view's froxel pass. Once for all views — the volume is world-anchored (R9).
+void VulkanRenderer::Impl::recordParticleDensityScatter(VkCommandBuffer cb, uint32_t frame) {
+            if (!particleFieldPass_ || !particleFieldPass_->densityActive()) return;
+            gpuTimings_->begin(cb, vulkan::TP_ParticleDensity, frame);
+            particleFieldPass_->recordDensityScatter(cb);
+            gpuTimings_->end(cb, vulkan::TP_ParticleDensity, frame);
         }
 
 // The device-side liveCount -> instanceCount publish. Head of the frame command

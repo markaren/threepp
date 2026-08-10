@@ -1,0 +1,25 @@
+#version 460
+
+// r32ui fixed-point → r16f, once per field per frame, straight after the
+// scatter. The march in deferred_shade (applyParticleFog) samples the FLOAT
+// volume with HARDWARE trilinear — 1 fetch per step instead of the 8
+// texelFetches the integer format forces on the froxel passes — and that is
+// the only reason this image exists. 64³ r16f is 512 KB; the dispatch is
+// noise inside TP_ParticleDensity.
+//
+// KEEP IN SYNC: kInvScale is 1 / kParticleDensityScale
+// (shaders/particle_density.glsl, ParticleFieldPass.hpp kDensityFixedScale).
+
+layout(local_size_x = 4, local_size_y = 4, local_size_z = 4) in;
+
+layout(set = 0, binding = 0, r32ui) uniform readonly uimage3D srcFixed;
+layout(set = 0, binding = 1, r16f)  uniform writeonly image3D dstLin;
+
+const float kInvScale = 1.0 / 4096.0;
+
+void main() {
+    const ivec3 c  = ivec3(gl_GlobalInvocationID);
+    const ivec3 sz = imageSize(dstLin);
+    if (any(greaterThanEqual(c, sz))) return;
+    imageStore(dstLin, c, vec4(float(imageLoad(srcFixed, c).x) * kInvScale));
+}

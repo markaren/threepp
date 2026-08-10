@@ -110,7 +110,12 @@ float heightFogDensity(vec3 p, float time) {
 // scale.
 const float kCloudSigmaMul = 0.05;
 
-// Near-field extinction σ_t for the heterogeneous froxels: HEIGHT FOG ONLY.
+// ParticleField density volumes — particleDensity(p), bindings 67/68. Included
+// HERE rather than beside each includer so mediumExtinction's two terms travel
+// together and no shader can end up with one and not the other.
+#include "particle_density.glsl"
+
+// Near-field extinction σ_t for the heterogeneous froxels: height fog + dust.
 // The far cloud march (cloud_march.comp) already integrates the cloud over the
 // WHOLE 0→far ray — including in front of near surfaces and when the camera is
 // inside the deck — and composites it via compositeClouds(). Folding
@@ -118,6 +123,13 @@ const float kCloudSigmaMul = 0.05;
 // 0–512 m overlap, so the two volumes split cleanly by phenomenon: froxels own
 // the near-ground mist, the far march owns the cloud (no 512 m seam because the
 // cloud is never split across it).
+//
+// PLUS the ParticleField density volumes (plan §3.3): dust is a σ_t term like
+// any other, so adding it here is the whole of "dust occludes, glows and tints"
+// — froxel_inject scatters clustered lights through it, froxel_integrate
+// attenuates transmittance through it, and the surface path reads that
+// transmittance back out of the LUT. particleDensity() is exactly 0.0 when no
+// field has a density representation this frame.
 float mediumExtinction(vec3 p, float time) {
-    return heightFogDensity(p, time);
+    return heightFogDensity(p, time) + particleDensity(p);
 }

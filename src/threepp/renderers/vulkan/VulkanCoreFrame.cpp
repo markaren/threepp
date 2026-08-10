@@ -765,6 +765,13 @@ bool VulkanRenderer::Impl::beginDeferredFrame(Object3D& scene, Camera& camera) {
                 // each ParticleField's draw command its instanceCount without
                 // the count ever being a CPU-visible value.
                 recordParticleFieldCounts(cmdBuffers[currentFrame]);
+                // And the density representation's whole per-frame GPU cost:
+                // clear + splat each dust field into its world-anchored volume.
+                // HERE, not per view: the volume is world-anchored precisely so
+                // K cameras share ONE scatter (plan R9), and it must precede
+                // every view's froxel pass, all of which record later into this
+                // same command buffer.
+                recordParticleDensityScatter(cmdBuffers[currentFrame], currentFrame);
             }
             // Record the full deferred-render body into the now-open cmd
             // buffer. Leaves the swapchain image in GENERAL.

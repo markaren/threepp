@@ -138,6 +138,19 @@ namespace threepp::vulkan {
             // Cloud shadow map (bindings 64/65) — 512² R8 top-down cloud
             // transmittance, per FIF, regenerated each frame.
             const VkImageView* cloudShadow = nullptr;// [framesInFlight] r8 512²
+            // ParticleField density volumes (bindings 67/68) — plan §3.3. A
+            // FIXED-SIZE array of r32ui 3D images sampled by the froxel passes
+            // through mediumExtinction, plus the small std140 UBO that says
+            // where in the world each one sits. Always bound: unused slots get
+            // the renderer's 1×1×1 dummy, so a scene with no dust is still a
+            // complete descriptor set. Shared across views by construction —
+            // the volume is world-anchored so K cameras cost one scatter.
+            const VkImageView* particleDensity    = nullptr;// [kMaxDensityFields]
+            // The r16f mirrors (binding 69), LINEAR-sampled by the shade's
+            // per-pixel dust march. Same count and same dummy-fill contract.
+            const VkImageView* particleDensityLin = nullptr;// [kMaxDensityFields]
+            uint32_t           particleDensityCount = 0;    // == kMaxDensityFields
+            const VkBuffer*    particleDensityUbo = nullptr;// [framesInFlight]
         };
         // onlyFrame >= 0 rewrites just that frame-in-flight slot's set (the
         // caller has fence-proven that slot is idle — used by the per-FIF
@@ -213,6 +226,12 @@ namespace threepp::vulkan {
             // DoF/bloom mixing into sky pixels is amplified 1/preExposure at
             // the bypass → white silhouette rims).
             bool bgIsSolidColor = false;
+            // A ParticleField density volume is live this frame (flags bit 11).
+            // Gates applyParticleFog, which reads the dust's integrated
+            // transmittance out of the froxel LUT's .a channel — so on every
+            // scene without dust the term is an early return, not merely a
+            // multiply by 1.
+            bool particleDensity = false;
         };
         // Dispatch the deferred shade over the render extent.
         void recordDispatch(VkCommandBuffer cb, uint32_t frame, const DispatchParams& p);

@@ -332,7 +332,45 @@ void VulkanRenderer::Impl::rewriteDeferredDescriptors(int onlyFrame) {
             in.gbufIdsMS        = idsMSViews.data();
             in.gbufAlbedoMS     = albedoMSViews.data();
             in.gbufUvMS         = uvMSViews.data();
+            // ParticleField density volumes (bindings 67/68). World-anchored
+            // and therefore SHARED by every view: the same handles go into the
+            // primary's set and each secondary's, which is R9's whole point.
+            // Every slot is filled — live volumes first, the 1×1×1 dummy for
+            // the rest — so the set is complete on a scene that has no dust and
+            // on one that just lost its last field.
+            ensureParticleDensityResources();
+            std::array<VkImageView, vulkan::kMaxDensityFields> pdViews{};
+            std::array<VkImageView, vulkan::kMaxDensityFields> pdLinViews{};
+            {
+                uint32_t n = 0;
+                if (particleFieldPass_) {
+                    for (const auto& v : particleFieldPass_->densityVolumes()) {
+                        if (n >= vulkan::kMaxDensityFields) break;
+                        pdLinViews[n] = v.linView;
+                        pdViews[n++]  = v.view;
+                    }
+                }
+                for (uint32_t i = n; i < vulkan::kMaxDensityFields; ++i) {
+                    pdViews[i]    = particleDensityDummy_.view;
+                    pdLinViews[i] = particleDensityLinDummy_.view;
+                }
+            }
+            std::array<VkBuffer, kFramesInFlight> pdUbos{};
+            for (uint32_t f = 0; f < kFramesInFlight; ++f)
+                pdUbos[f] = particleDensityUbos_[f].handle;
+            in.particleDensity      = pdViews.data();
+            in.particleDensityLin   = pdLinViews.data();
+            in.particleDensityCount = vulkan::kMaxDensityFields;
+            in.particleDensityUbo   = pdUbos.data();
             view().deferredShade_->rewriteDescriptors(in, onlyFrame);
+            // The set now names the pass's CURRENT volume list; record that so
+            // the per-frame check in updateParticleDensityUbo can tell an
+            // already-correct set from a stale one.
+            {
+                const uint64_t gen = particleFieldPass_ ? particleFieldPass_->densityGeneration() : 0u;
+                if (onlyFrame >= 0) particleDensityDescGen_[onlyFrame] = gen;
+                else for (auto& g : particleDensityDescGen_) g = gen;
+            }
             // The probe UPDATE pass consumes the same scene inputs (TLAS,
             // lights, env, material/geometry/emissive buffers) — keep its set
             // in lockstep with the deferred one.
@@ -516,7 +554,15 @@ void VulkanRenderer::Impl::ensureHybridResources() {
             // that left the scene may still be named by an in-flight frame.
             if (!particleFieldPass_) {
                 particleFieldPass_ = std::make_unique<vulkan::ParticleFieldPass>(
-                        *ctx, [this](Buffer&& b) { retire(std::move(b)); });
+                        *ctx, [this](Buffer&& b) { retire(std::move(b)); },
+                        // The density volume is an IMAGE and is named by every
+                        // view's descriptor set, so it retires on the same
+                        // frame-serial rule as everything else.
+                        [this](Image2D&& i) { retire(std::move(i)); },
+                        [this](uint32_t w, uint32_t h, uint32_t d, VkFormat fmt,
+                               VkImageUsageFlags usage, const char* name) {
+                            return createImage3D(w, h, d, fmt, usage, name);
+                        });
             }
             // MSAA render pass + pipelines — only built when opted in, and
             // rebuilt when the sample count changes (2↔4) or MSAA is turned

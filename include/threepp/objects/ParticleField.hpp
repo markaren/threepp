@@ -44,6 +44,7 @@
 
 #include "threepp/constants.hpp"
 #include "threepp/math/Color.hpp"
+#include "threepp/math/Vector3.hpp"
 #include "threepp/objects/Mesh.hpp"
 
 #include <cstdint>
@@ -107,11 +108,41 @@ namespace threepp {
             float    sizeScale = 1.f;
             bool     enabled   = false;
         };
+        // Dense dust / smoke. The field is scattered ONCE per frame into a
+        // world-anchored 3D density volume that every view's froxel pass then
+        // samples (plan §3.3): the per-particle cost is one splat, independent
+        // of screen coverage and independent of how many cameras look at it.
+        //
+        // ── PHASE 2 API ADDITION (the plan's struct has no bounds member) ────
+        // The volume needs a world box and a voxel count, so §3.3's "sized per
+        // field from its configured world bounds" is spelled out here:
+        //
+        //   center/halfExtent — the WORLD-space axis-aligned box the volume
+        //     covers, i.e. [center - halfExtent, center + halfExtent]. World,
+        //     not field-local, because the volume is shared across views and
+        //     across fields; the field's own matrixWorld is applied to the
+        //     PARTICLES on the way in (exactly as the mesh representation
+        //     applies it), so a parented field still lands in the right box.
+        //     Both may be changed per frame — the volume is re-scattered from
+        //     scratch every frame, so moving the box is free.
+        //   resolution — voxels per axis. LATCHED at the first frame the
+        //     representation is enabled and never changed afterwards: the
+        //     image is allocated once and never resized (the same fixed-size
+        //     contract as the position ring). Clamped to [8, 256]; 128 is
+        //     8 MB of r32ui.
+        //
+        // Density is quantised: a voxel accumulates fixed-point sigma_t with
+        // 12 fractional bits (quantum 1/4096 per metre) so the accumulation is
+        // an INTEGER add and therefore associative — which is what makes two
+        // renders of the same scene byte-identical. See particle_density.glsl.
         struct DensityRepr {// dense dust / smoke
             float sigmaPerParticle = 1.f;// sigma_t contributed by one particle
             Color albedo{1.f, 1.f, 1.f};
             float anisotropy = 0.f;      // HG g for THIS medium
-            bool  enabled    = false;
+            Vector3       center{0.f, 0.f, 0.f};   // world centre of the volume
+            Vector3       halfExtent{5.f, 5.f, 5.f};// world half-size per axis
+            std::uint32_t resolution = 128;        // voxels/axis; latched at first enable
+            bool          enabled    = false;
         };
         struct TracedRepr {// procedural-AABB BLAS
             float radiusScale = 1.f;// AABB dilation vs the render radius
@@ -140,11 +171,28 @@ namespace threepp {
         void setMeshRepr(std::shared_ptr<BufferGeometry> proxy,
                          std::shared_ptr<Material>       material);
 
+        // Turn the density representation on: every live particle adds
+        // `sigmaPerParticle` (1/m) of extinction to the world box
+        // [center - halfExtent, center + halfExtent], sampled by the froxel
+        // volumetrics of EVERY view (Vulkan only). Objects behind the box are
+        // attenuated, clustered lights inside it glow, and the ambient/sky
+        // in-scatter fills it — with no per-view particle work.
+        //
+        // Use this rather than mutating densityRepr() by hand for the first
+        // enable: `resolution` is latched the frame the volume is allocated,
+        // and this is the call that makes that moment explicit. center /
+        // halfExtent / sigmaPerParticle stay live-editable afterwards.
+        void setDensityRepr(const Vector3& center, const Vector3& halfExtent,
+                            float sigmaPerParticle, std::uint32_t resolution = 128);
+
         [[nodiscard]] MeshRepr&      meshRepr() { return meshRepr_; }
         [[nodiscard]] const MeshRepr& meshRepr() const { return meshRepr_; }
         [[nodiscard]] BillboardRepr& billboardRepr() { return billboardRepr_; }
+        [[nodiscard]] const BillboardRepr& billboardRepr() const { return billboardRepr_; }
         [[nodiscard]] DensityRepr&   densityRepr() { return densityRepr_; }
+        [[nodiscard]] const DensityRepr& densityRepr() const { return densityRepr_; }
         [[nodiscard]] TracedRepr&    tracedRepr() { return tracedRepr_; }
+        [[nodiscard]] const TracedRepr& tracedRepr() const { return tracedRepr_; }
 
         // ── Ownership::HostRing ─────────────────────────────────────────────
         // Point the field at n host positions laid out as ParticlePos (== 16 B

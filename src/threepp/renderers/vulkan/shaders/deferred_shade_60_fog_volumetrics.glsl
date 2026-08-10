@@ -105,6 +105,104 @@ vec3 applyHeteroSurfaceFog(vec3 col, vec2 fuv, float viewDist, vec3 ro, vec3 hit
     const vec3 medAlbedo = (fog.enabled > 0.5) ? fog.color : vec3(1.0);
     return col * T + medAlbedo * fogLight * (vec3(1.0) - T);
 }
+// ── ParticleField dust over an arbitrary camera leg (plan §3.3, phase 2) ─────
+//
+// A PER-PIXEL march of the WORLD-ANCHORED r16f density volumes — not the
+// froxel LUT. The first ship of this feature read the dust's transmittance
+// out of the LUT's .a channel and both of that grid's resolutions showed:
+// 128×72 across the screen pixelated a compact plume into ~15-px cells, and
+// the view-anchored depth slices (~12.6% of distance) re-quantised the cloud
+// every time the camera moved — VIEW-DEPENDENT dust, on the renderer whose
+// entire sensor argument is that every consumer sees one world state. The
+// volume itself is world-anchored and the march is along the world-space ray,
+// so this form is view-independent by construction and resolves to the
+// volume's own voxels, not the froxel grid's.
+//
+// Extinction is the marched optical depth (Beer-Lambert). In-scatter is the
+// house closed form (ambient + env mean, unphased — applyHeteroSurfaceFog's
+// convention) PLUS the directional sun with the medium's HG phase — the term
+// volumetricDirScatter cannot supply, because its march is the height-fog
+// σ profile and it early-outs entirely when scene fog is off. The sun is
+// shadowed ONCE, at the σ-weighted centroid of the traversed dust (a full
+// per-step shadow ray is shaft-resolution the plume scale does not need), and
+// dimmed by the cloud-shadow map at the same point. Clustered point/spot glow
+// inside the dust still arrives through froxelInscatter — the injector
+// multiplies its in-scatter by the dust's own σ — coarse, but a glow is
+// low-frequency in exactly the way a silhouette is not.
+//
+// ∫σ·e^(-τ) dt over the dust segment is accumulated as `wsum`; with dust the
+// only extinction on that segment it equals 1 - T exactly, so the in-scatter
+// needs no separate normalisation. No jitter on the step offset: the phase-2
+// determinism contract (a static scene renders the same bytes every frame)
+// outranks the mild banding 24 steps of a trilinear-smooth volume could show.
+//
+// Applied to EVERY leg the shade terminates: surfaces, water, and the sky
+// background. Gated on flags bit 11 = "a ParticleField density volume is live
+// this frame", so a scene without dust pays four compares and an early return.
+vec3 applyParticleFog(vec3 col, vec3 ro, vec3 rd, float tMax) {
+    if ((pc.flags & 2048u) == 0u) return col;
+#ifdef PD_LINEAR
+    const uint n = min(pd.counts.x, uint(kMaxDensityFields));
+    if (n == 0u) return col;
+
+    // Union of the ray's box overlaps — one interval, so disjoint plumes cost
+    // steps in the gap, but K is fixed and two plumes usually share a yard.
+    float t0 = tMax, t1 = 0.0;
+    const vec3 inv = 1.0 / rd;// ±inf on axis-parallel components is fine below
+    for (uint i = 0u; i < n; ++i) {
+        const vec3  bmin  = pd.boxMin[i].xyz;
+        const vec3  bsize = 1.0 / pd.boxInvSize[i].xyz;
+        const vec3  ta = (bmin - ro) * inv;
+        const vec3  tb = (bmin + bsize - ro) * inv;
+        const vec3  lo = min(ta, tb), hi = max(ta, tb);
+        const float e = max(max(lo.x, lo.y), max(lo.z, 0.0));
+        const float x = min(min(hi.x, hi.y), min(hi.z, tMax));
+        if (x > e) { t0 = min(t0, e); t1 = max(t1, x); }
+    }
+    if (t1 <= t0) return col;
+
+    const int   STEPS = 24;
+    const float dt    = (t1 - t0) / float(STEPS);
+    float tau = 0.0, wsum = 0.0;
+    vec3  cen = vec3(0.0);
+    for (int s = 0; s < STEPS; ++s) {
+        const float t = t0 + (float(s) + 0.5) * dt;
+        const vec3  x = ro + rd * t;
+        float sig = 0.0;
+        for (uint i = 0u; i < n; ++i) {
+            const vec3 tt = (x - pd.boxMin[i].xyz) * pd.boxInvSize[i].xyz;
+            // Skip, don't clamp: CLAMP_TO_EDGE would smear each face's voxels
+            // over everything outside the box.
+            if (any(lessThan(tt, vec3(0.0))) || any(greaterThan(tt, vec3(1.0)))) continue;
+            sig += texture(particleDensityLinTex[i], tt).r;
+        }
+        if (sig <= 0.0) continue;
+        const float w = sig * exp(-tau) * dt;
+        tau  += sig * dt;
+        wsum += w;
+        cen  += w * x;
+        if (tau > 8.0) break;// e^-8: nothing behind this survives
+    }
+    if (wsum <= 0.0) return col;
+    cen /= wsum;
+
+    vec3 sun = vec3(0.0);
+    for (uint i = 0u; i < lights.dirCount; ++i) {
+        const vec3 L = normalize(lights.dirLights[i].direction);
+        sun += lights.dirLights[i].color
+             * (hgPhase(dot(L, rd), pd.albedoAniso.a)
+                * shadowVis(cen, L, 1e30) * cloudShadowSample(cen));
+    }
+    const vec3 amb = lights.ambient
+                   + sampleEnvLod(vec3(0.0, 1.0, 0.0), float(max(pc.envMipCount, 1u) - 1u));
+    // The medium's own single-scatter albedo (DensityRepr::albedo), not the
+    // FogUbo's — a dust field can be present with no scene fog at all.
+    return col * exp(-tau) + pd.albedoAniso.rgb * (amb + sun) * wsum;
+#else
+    return col;
+#endif
+}
+
 vec3 applySceneFog(vec3 col, vec3 ro, vec3 hit) {
     if (fog.enabled < 0.5) return col;
     const float d = fogPathLength(ro, hit);
@@ -380,7 +478,12 @@ vec3 volumetricDirScatter(vec3 ro, vec3 rd, float tMax, ivec2 px) {
 // blends at MSAA complex pixels for the SKY-minority coverage (and the full sky
 // path uses the same expression). Volumetric in-scatter is NOT included: that is
 // a per-pixel view-ray integral added once, at full weight, by the caller.
-vec3 skyBackground(vec2 ndc) {
+vec3 skyBackground(vec2 ndc, vec3 ro) {
     const vec3 dirWS = camRayDir(ndc);
-    return applySkyFog(sampleEnvLod(dirWS, 0.0) + proceduralStars(dirWS), dirWS);
+    // Same dust term the full sky path applies (deferred_shade.comp's skyRad):
+    // this is the MSAA sky-minority blend, and a minority that skipped the dust
+    // would put an undusted rim along every silhouette inside the cloud.
+    return applyParticleFog(
+            applySkyFog(sampleEnvLod(dirWS, 0.0) + proceduralStars(dirWS), dirWS),
+            ro, dirWS, 1e30);
 }

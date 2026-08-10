@@ -333,6 +333,128 @@ namespace {
         std::shared_ptr<ParticleField> field_;
     };
 
+    // ── Discharge dust (--dust, Vulkan only) ─────────────────────────────────
+    //
+    // Grains slamming into the stockpile kick up fines. The plume is a
+    // ParticleField with ONLY DensityRepr enabled: nothing draws these
+    // particles — they exist as σ_t in a world-anchored volume the froxel
+    // passes sample, so the dust occludes the pile, catches the sun and
+    // haloes the discharge for one compute dispatch (~0.25 ns/particle).
+    //
+    // The particles are given STRUCTURE deliberately: emitted in per-frame
+    // clumps at the impact point, carried up by buoyancy that dies with age,
+    // spread by a cheap curl of sines. Uniform-random dust in a box is the
+    // worst-looking dust there is — Poisson blotch with no shape — and this
+    // emitter is the difference between that and a plume.
+    class DustPlume {
+
+    public:
+        DustPlume(Scene& scene, const Vector3& impact, const Vector3& outDir, unsigned seed)
+            : impact_(impact), out_(outDir), rng_(seed) {
+
+            ParticleField::Config cfg;
+            cfg.capacity = kCap;
+            field_ = ParticleField::create(cfg);
+            const Vector3 center(impact.x + outDir.x * 0.5f, 1.25f, impact.z + outDir.z * 0.5f);
+            field_->setDensityRepr(center, Vector3(3.0f, 1.7f, 3.0f), kSigma, 64);
+            field_->densityRepr().albedo = Color(0.50f, 0.43f, 0.33f);// dirty fines, not steam
+            field_->densityRepr().anisotropy = 0.35f;// sunlit dust scatters forward
+            scene.add(field_);
+
+            pts_.assign(kCap, ParticlePos{0.f, 0.f, 0.f, -1.f});// all dead
+            vel_.assign(kCap, Vector3());
+            age_.assign(kCap, 0.f);
+            life_.assign(kCap, 1.f);
+        }
+
+        void tick(float dt) {
+            t_ += dt;
+            // Ramp in as the first grains actually reach the discharge (~3 s of
+            // belt travel): dust before there is anything to raise it reads as
+            // a smoke machine.
+            const float ramp = std::clamp((t_ - 3.2f) / 2.5f, 0.f, 1.f);
+            emitAcc_ += kRate * ramp * dt;
+            std::uniform_real_distribution<float> u(-1.f, 1.f);
+            std::uniform_real_distribution<float> u01(0.f, 1.f);
+            // A puff every ~1/3 s on top of the base rate: impacts are lumpy,
+            // and the lumps are what make it read as kicked-up rather than leaked.
+            if (ramp > 0.f && u01(rng_) < dt * 3.f) emitAcc_ += 55.f;
+
+            for (int n = int(emitAcc_); n > 0; --n) {
+                const unsigned i = cursor_++ % kCap;
+                const float a = u(rng_) * math::PI;
+                // Two sources, the way a real transfer point sheds fines: most
+                // rise off the SPLASH at the pile (wide, slow), the rest are
+                // stripped off the falling STREAM between drum and pile
+                // (narrow, already moving) — which visually ties the plume to
+                // the pour instead of leaving a puff hovering beside it.
+                const bool stream = u01(rng_) < 0.35f;
+                if (stream) {
+                    const float h = 0.35f + 1.25f * u01(rng_);// along the fall
+                    const float r = 0.16f + 0.10f * u01(rng_);
+                    pts_[i] = {impact_.x - out_.x * 0.35f + std::cos(a) * r,
+                               h,
+                               impact_.z - out_.z * 0.35f + std::sin(a) * r, 1.f};
+                    vel_[i].set(out_.x * 0.35f + 0.25f * u(rng_), -0.15f + 0.45f * u01(rng_),
+                                out_.z * 0.35f + 0.25f * u(rng_));
+                } else {
+                    const float r = 0.65f * std::sqrt(u01(rng_));
+                    pts_[i] = {impact_.x + std::cos(a) * r + out_.x * 0.25f,
+                               impact_.y + 0.30f + 0.30f * u01(rng_),
+                               impact_.z + std::sin(a) * r + out_.z * 0.25f, 1.f};
+                    vel_[i].set(out_.x * (0.30f + 0.40f * u01(rng_)) + 0.30f * u(rng_),
+                                0.50f + 0.70f * u01(rng_),
+                                out_.z * (0.30f + 0.40f * u01(rng_)) + 0.30f * u(rng_));
+                }
+                age_[i] = 0.f;
+                life_[i] = 2.8f + 2.2f * u01(rng_);
+            }
+            emitAcc_ -= float(int(emitAcc_));
+
+            const float drag = std::exp(-1.1f * dt);
+            for (unsigned i = 0; i < kCap; ++i) {
+                if (pts_[i].w < 0.f) continue;
+                age_[i] += dt;
+                if (age_[i] > life_[i]) {
+                    pts_[i].w = -1.f;
+                    continue;
+                }
+                // Buoyancy dies with age; the curl is three phase-shifted sines
+                // sampled at the particle — cheap, divergence-ish-free, and
+                // enough to shear the column into wisps.
+                const float k = 2.1f;
+                const Vector3 p(pts_[i].x, pts_[i].y, pts_[i].z);
+                const float sway = 0.45f * (1.f - age_[i] / life_[i]);
+                vel_[i].x += (std::sin(p.y * k + t_ * 1.3f) + 0.5f * std::sin(p.z * k * 1.7f + t_)) * sway * dt;
+                vel_[i].z += (std::cos(p.y * k * 1.3f - t_ * 1.1f) + 0.5f * std::sin(p.x * k * 1.9f - t_)) * sway * dt;
+                vel_[i].y += (0.45f * (1.f - age_[i] / life_[i]) - 0.12f) * dt;
+                vel_[i].multiplyScalar(drag);
+                pts_[i].x += vel_[i].x * dt;
+                pts_[i].y += vel_[i].y * dt;
+                pts_[i].z += vel_[i].z * dt;
+            }
+            field_->submit(pts_.data(), kCap);
+        }
+
+    private:
+        static constexpr unsigned kCap = 40000;
+        static constexpr float kRate = 3200.f;// particles per second, before puffs
+        // Thin: the dust's only light is the isotropic ambient/skylight term
+        // (the sun march owns height fog, not particle density — a phase-3
+        // candidate), and an optically thick plume under a flat light reads as
+        // cotton. Translucent wisps read as dust.
+        static constexpr float kSigma = 0.30f;
+
+        std::shared_ptr<ParticleField> field_;
+        Vector3 impact_, out_;
+        std::vector<ParticlePos> pts_;
+        std::vector<Vector3> vel_;
+        std::vector<float> age_, life_;
+        std::mt19937 rng_;
+        unsigned cursor_ = 0;
+        float emitAcc_ = 0.f, t_ = 0.f;
+    };
+
     // ── The pour ─────────────────────────────────────────────────────────────
     //
     // A chute discharges `rate` grains per second. Emission has to be
@@ -788,6 +910,7 @@ int main(int argc, char** argv) {
     bool selftest = false;
     bool bench = false;
     bool dropMode = false;
+    bool wantDust = false;// --dust: fines rising off the discharge (Vulkan only)
     unsigned budget = 100000;
     float rate = 2800.f;
     int frames = 0;// 0 = per-mode default
@@ -809,6 +932,7 @@ int main(int argc, char** argv) {
         else if (std::strcmp(argv[i], "--selftest") == 0) selftest = true;
         else if (std::strcmp(argv[i], "--bench") == 0) bench = true;
         else if (std::strcmp(argv[i], "--drop") == 0) dropMode = true;
+        else if (std::strcmp(argv[i], "--dust") == 0) wantDust = true;
         else if (std::strcmp(argv[i], "--count") == 0 && i + 1 < argc)
             budget = unsigned(std::max(2, std::atoi(argv[++i])));
         else if (std::strcmp(argv[i], "--rate") == 0 && i + 1 < argc)
@@ -1085,6 +1209,27 @@ int main(int argc, char** argv) {
                   << std::endl;
     }
 
+    // Dust rises where the grains land. Density representation only — no
+    // geometry, no billboards — so it costs one scatter dispatch however many
+    // particles the plumes carry. ParticleField is Vulkan-only, so --dust on a
+    // GL run is declined out loud rather than silently ignored.
+    std::vector<std::unique_ptr<DustPlume>> plumes;
+    if (wantDust && !dropMode) {
+        if (!pfFields) {
+            std::cout << "granular_conveyor: --dust needs the Vulkan backend - skipping"
+                      << std::endl;
+        } else {
+            for (auto& l : lanes) {
+                if (!l.geom.valid()) continue;
+                const Vector3 impact(l.geom.discharge.x + l.geom.outDir.x * 0.85f, 0.30f,
+                                     l.geom.discharge.z + l.geom.outDir.z * 0.85f);
+                plumes.push_back(std::make_unique<DustPlume>(
+                        scene, impact, l.geom.outDir, 97u + unsigned(plumes.size()) * 31u));
+            }
+            std::cout << "dust: " << plumes.size() << " discharge plume(s)" << std::endl;
+        }
+    }
+
     // Framing has to hold chute -> belt -> BEND -> stockpile for both lanes in
     // one shot, and the eye also has to clear the skirtboards: a 0.32 m guide on
     // a 1.0 m belt hides the bed entirely below ~18 degrees of elevation, and
@@ -1289,6 +1434,7 @@ int main(int argc, char** argv) {
         for (auto& l : lanes)
             l.field->update(l.group->positions(), l.group->active());
         fieldAccum += msSince(tField);
+        for (auto& p : plumes) p->tick(kDt);
         for (auto& l : lanes) {
             if (!l.beltMat) continue;
             l.beltMat->map->offset.y += l.scroll * kDt;

@@ -31,7 +31,12 @@ namespace threepp::vulkan {
     // that no validation layer can see). Both tables are std::array of this
     // size now, filled through .at(), and the fill count is checked, so the
     // failure mode is a loud throw at init instead.
-    constexpr uint32_t kDeferredBindingCount = 66;
+    constexpr uint32_t kDeferredBindingCount = 69;
+
+    // ParticleField density volumes bound at once (binding 67 is an array of
+    // this many). KEEP IN SYNC with kMaxDensityFields in
+    // shaders/particle_density.glsl and ParticleFieldPass.hpp.
+    constexpr uint32_t kMaxDensityVolumes = 4;
 
     DeferredShade::DeferredShade(VulkanContext& ctx, uint32_t framesInFlight)
         : ctx_(ctx), framesInFlight_(framesInFlight) {
@@ -177,6 +182,19 @@ namespace threepp::vulkan {
         set(64, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE);          // cloud shadow CUR (r8, storage write)
         set(65, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER); // cloud shadow (LINEAR — sun visibility sample)
         set(66, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER); // cloud aux CUR (shade's depth-aware upsample; texelFetch)
+        // ParticleField density volumes (plan §3.3): a fixed-size array of
+        // world-anchored r32ui 3D images sampled by mediumExtinction, plus the
+        // std140 UBO carrying each one's world box. Integer format ⇒ NEAREST
+        // only, which is what the manual trilinear in particle_density.glsl is
+        // for; the sampler handle is the pass's NEAREST gbufSampler_.
+        set(67, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER); // particle density volumes...
+        b[nb - 1].descriptorCount = kMaxDensityVolumes;     // ...fixed-size array
+        set(68, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER);         // ParticleDensityUbo (boxes + medium albedo)
+        // The r16f mirrors of the density volumes, LINEAR-sampled: the shade's
+        // per-pixel dust march (applyParticleFog) takes 1 hardware-trilinear
+        // fetch per step where the integer volume would force 8 texelFetches.
+        set(69, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER); // particle density r16f mirrors...
+        b[nb - 1].descriptorCount = kMaxDensityVolumes;     // ...same fixed-size array
 
         // Exact fit is the contract: a new binding must bump
         // kDeferredBindingCount, and rewriteDescriptors must gain the matching
@@ -790,6 +808,46 @@ namespace threepp::vulkan {
             setw(63, 65, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &cloudShadowTexInfo, nullptr);
             setw(64, 66, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &cloudAuxTexInfo,    nullptr);
             setw(65, 55, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &idsPrevInfo,        nullptr);
+            // ParticleField density volumes: the whole fixed-size array in one
+            // write (every slot valid — the caller fills unused ones with its
+            // 1×1×1 dummy), plus the per-FIF box UBO.
+            std::array<VkDescriptorImageInfo, kMaxDensityVolumes> pdInfos{};
+            for (uint32_t i = 0; i < kMaxDensityVolumes; ++i) {
+                pdInfos[i].sampler     = gbufSampler_;
+                pdInfos[i].imageView   = (in.particleDensity && i < in.particleDensityCount)
+                                                 ? in.particleDensity[i]
+                                                 : VK_NULL_HANDLE;
+                pdInfos[i].imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+            }
+            w[66].sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            w[66].dstSet          = sets_[f];
+            w[66].dstBinding      = 67;
+            w[66].dstArrayElement = 0;
+            w[66].descriptorCount = kMaxDensityVolumes;
+            w[66].descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+            w[66].pImageInfo      = pdInfos.data();
+            VkDescriptorBufferInfo pdUboInfo{};
+            pdUboInfo.buffer = in.particleDensityUbo ? in.particleDensityUbo[f] : VK_NULL_HANDLE;
+            pdUboInfo.offset = 0;
+            pdUboInfo.range  = VK_WHOLE_SIZE;
+            setw(67, 68, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, nullptr, &pdUboInfo);
+            // The r16f mirrors — LINEAR (lutSampler_), unlike the integer
+            // volumes above, which is the entire reason they exist.
+            std::array<VkDescriptorImageInfo, kMaxDensityVolumes> pdLinInfos{};
+            for (uint32_t i = 0; i < kMaxDensityVolumes; ++i) {
+                pdLinInfos[i].sampler     = lutSampler_;
+                pdLinInfos[i].imageView   = (in.particleDensityLin && i < in.particleDensityCount)
+                                                    ? in.particleDensityLin[i]
+                                                    : VK_NULL_HANDLE;
+                pdLinInfos[i].imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+            }
+            w[68].sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            w[68].dstSet          = sets_[f];
+            w[68].dstBinding      = 69;
+            w[68].dstArrayElement = 0;
+            w[68].descriptorCount = kMaxDensityVolumes;
+            w[68].descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+            w[68].pImageInfo      = pdLinInfos.data();
             vkUpdateDescriptorSets(ctx_.device(), static_cast<uint32_t>(w.size()), w.data(), 0, nullptr);
         }
     }
@@ -836,7 +894,8 @@ namespace threepp::vulkan {
                    | (p.shadeBActive ? 128u : 0u)
                    | (p.froxelsActive ? 256u : 0u)  // froxel LUT valid this frame
                    | (shadowDwellOff ? 512u : 0u)   // bit 9: shadow dwell kill switch (was SSR)
-                   | (p.bgIsSolidColor ? 1024u : 0u);// solid bg: sky store NOT pre-exposed
+                   | (p.bgIsSolidColor ? 1024u : 0u) // solid bg: sky store NOT pre-exposed
+                   | (p.particleDensity ? 2048u : 0u);// bit 11: ParticleField dust live
         push.frame              = p.frameCounter;
         push.emissiveCount      = p.emissiveCount;
         push.emissiveTotalPower = p.emissiveTotalPower;

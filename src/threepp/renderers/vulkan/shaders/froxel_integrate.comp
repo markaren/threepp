@@ -96,14 +96,28 @@ void main() {
 
     vec3  L = vec3(0.0);
     float T = 1.0;
+    // PARTICLE-ONLY transmittance — the LUT's .a channel (see below). Stays
+    // exactly 1.0 for every slice when no ParticleField has a density
+    // representation this frame, which is what makes dust-free scenes
+    // image-identical to before phase 2.
+    float Tp = 1.0;
     float z0 = 0.0;// slice 0 reaches the camera
     for (uint k = 0u; k < kFroxelZ; ++k) {
         const float z1  = froxelDist(float(k + 1u));
         const float seg = z1 - z0;
         const vec3  S   = imageLoad(froxelScatterImage, ivec3(col, k)).rgb;
-        const float sigma = hetero
-            ? mediumExtinction(froxelWorld(uv, 0.5 * (z0 + z1)), clouds.timeSec)
-            : sigmaHom;
+        // The two heterogeneous terms are evaluated SEPARATELY rather than
+        // through mediumExtinction: their sum drives the in-scatter integral
+        // below exactly as before, but the surface path needs the particle leg
+        // on its own (it applies the height-fog leg in closed form — see
+        // applyHeteroSurfaceFog).
+        float sigmaP = 0.0;
+        float sigma  = sigmaHom;
+        if (hetero) {
+            const vec3 x = froxelWorld(uv, 0.5 * (z0 + z1));
+            sigmaP = particleDensity(x);
+            sigma  = heightFogDensity(x, clouds.timeSec) + sigmaP;
+        }
         if (sigma > 1e-6) {
             // Analytic homogeneous segment: ∫ S·e^(-σt) dt over the slice.
             L += T * S * ((1.0 - exp(-sigma * seg)) / sigma);
@@ -111,7 +125,16 @@ void main() {
         } else {
             L += T * S * seg;
         }
-        imageStore(froxelLutImage, ivec3(col, k), vec4(L, T));
+        if (sigmaP > 1e-6) Tp *= exp(-sigmaP * seg);
+        // .a carries the PARTICLE transmittance, not the total. The total was
+        // written here historically and read by nobody: the surface extinction
+        // in heterogeneous mode is the closed-form height-fog integral
+        // (applyHeteroSurfaceFog explains why the analytic form beats the LUT's
+        // per-slice quantisation for a smooth medium), and the sky/water legs
+        // use the same closed form. Dust is the opposite case — it is neither
+        // smooth nor analytic, and the LUT's front-to-back walk is already the
+        // exact integral of it — so the dead channel is where it belongs.
+        imageStore(froxelLutImage, ivec3(col, k), vec4(L, Tp));
         z0 = z1;
     }
 }

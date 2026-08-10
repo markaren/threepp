@@ -99,6 +99,28 @@ void ParticleField::setMeshRepr(std::shared_ptr<BufferGeometry> proxy,
     setMaterial(material);
 }
 
+void ParticleField::setDensityRepr(const Vector3& center, const Vector3& halfExtent,
+                                   float sigmaPerParticle, std::uint32_t resolution) {
+
+    if (halfExtent.x <= 0.f || halfExtent.y <= 0.f || halfExtent.z <= 0.f) {
+        throw std::invalid_argument(
+                "ParticleField::setDensityRepr: halfExtent must be positive on every axis "
+                "— it is the world box the density volume covers");
+    }
+    if (!(sigmaPerParticle > 0.f)) {
+        throw std::invalid_argument(
+                "ParticleField::setDensityRepr: sigmaPerParticle must be > 0 (it is the "
+                "extinction, in 1/m, one particle contributes to its voxel)");
+    }
+    densityRepr_.center           = center;
+    densityRepr_.halfExtent       = halfExtent;
+    densityRepr_.sigmaPerParticle = sigmaPerParticle;
+    // Clamped rather than rejected: the bound is the image the backend
+    // allocates (256^3 of r32ui is 64 MB), not a semantic limit.
+    densityRepr_.resolution = std::max(8u, std::min(256u, resolution));
+    densityRepr_.enabled    = true;
+}
+
 void ParticleField::setOrientations(const float* quatXyzw, std::uint32_t n) {
 
     if (!config_.orientations) {

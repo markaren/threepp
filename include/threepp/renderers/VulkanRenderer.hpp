@@ -35,6 +35,7 @@
 namespace threepp {
 
     class Mesh;
+    class ParticleField;
 
     class VulkanRenderer: public Renderer {
 
@@ -125,6 +126,27 @@ namespace threepp {
         enum class GBufferAOV { Depth, Normal, Motion, Ids, Albedo, SplatDepth };
         [[nodiscard]] bool readGBufferAOV(GBufferAOV aov, std::vector<uint8_t>& out,
                                           int& width, int& height, int& bytesPerPixel);
+
+        // ── ParticleField density volume readback (TEST / DEBUG) ─────────
+        // Copy a ParticleField's world-space density volume back to the host as
+        // raw FIXED-POINT sigma_t: `out` is resolution^3 uint32 in x-fastest
+        // order, each value sigma_t * 4096 (12 fractional bits — see
+        // shaders/particle_density.glsl for why that scale).
+        //
+        // This exists because the density representation's headline guarantee is
+        // DETERMINISM — the volume is accumulated with integer atomics, whose
+        // adds are associative, so the same particles produce the same bits
+        // however the GPU orders them — and that guarantee is not checkable
+        // through the rendered image, whose GI/ReSTIR/TAA are stochastic per
+        // frame index by design. Reading the volume is what turns the claim into
+        // an assertion.
+        //
+        // DRAINS THE DEVICE (vkDeviceWaitIdle) and allocates a staging buffer of
+        // resolution^3 * 4 bytes. Not a per-frame call. Returns false when the
+        // field has no volume (density representation off, or never rendered).
+        [[nodiscard]] bool readParticleDensityVolume(const ParticleField& field,
+                                                     std::vector<uint32_t>& out,
+                                                     uint32_t& resolution);
 
         // ── Gaussian-splat expected depth ────────────────────────────────
         // A splat cloud is composited by a compute tile rasterizer and is in no
@@ -806,6 +828,11 @@ namespace threepp {
             // GPU per-instance world-matrix expansion (0 unless
             // setGpuInstanceExpansion and the scene has instanced geometry).
             float instanceExpandMs = 0.f;
+            // ParticleField density scatter — the clear + per-particle splat
+            // into the world-space density volume (0 unless a ParticleField in
+            // the scene has DensityRepr enabled with live particles). Recorded
+            // once per frame however many cameras look at the dust.
+            float particleDensityMs = 0.f;
             // GPU execution SPAN of the whole submitted command buffer — not a sum
             // of the fields above, and not busy time. It covers the passes that
             // have no timestamp bracket at all (TLAS refit, deformers, bloom/post,

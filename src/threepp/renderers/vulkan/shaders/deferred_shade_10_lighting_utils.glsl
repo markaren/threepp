@@ -31,10 +31,17 @@ float cloudShadowSample(vec3 worldPos) {
     if (any(lessThan(suv, vec2(0.0))) || any(greaterThan(suv, vec2(1.0)))) return 1.0;
     return texture(cloudShadowTex, suv).r;
 }
-// Integrated volumetric TRANSMITTANCE (LUT .a) for the same leg — the surface
-// extinction in heterogeneous height-fog mode (the LUT carried the per-slice
-// height-fog + cloud σ front-to-back). 1.0 when the froxels didn't run.
-float froxelTransmittance(vec2 fuv, float viewDist) {
+// Integrated PARTICLE transmittance (LUT .a) for the same leg — exp(-∫σ_dust)
+// over camera→(uv, viewDist), folded front-to-back by froxel_integrate from
+// the ParticleField density volumes (plan §3.3). 1.0 when the froxels didn't
+// run, and 1.0 everywhere when no field has a density representation, so the
+// surface path this feeds is an exact no-op on every scene without dust.
+//
+// The channel used to carry the medium's TOTAL transmittance and was read by
+// nobody: heterogeneous surface extinction is the closed-form height-fog
+// integral (applyHeteroSurfaceFog says why), and dust — neither smooth nor
+// analytic — is the term that genuinely wants the LUT's per-slice walk.
+float froxelParticleTransmittance(vec2 fuv, float viewDist) {
     if ((pc.flags & 256u) == 0u) return 1.0;
     const float t = log(max(viewDist, kFroxelZMin) / kFroxelZMin)
                   / log(kFroxelZMax / kFroxelZMin);

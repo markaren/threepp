@@ -1804,6 +1804,31 @@ namespace threepp {
         };
         std::vector<ParticleDrawSlot> particleDrawSlots_;
 
+        // ── ParticleField density volumes (phase 2, plan §3.3) ──────────────
+        // Bindings 67/68 of EVERY view's deferred set. Both handles are owned
+        // here, not by ParticleFieldPass, because they must be valid from the
+        // renderer's first descriptor write — which happens before the pass is
+        // lazily constructed, and keeps happening on scenes that never get one.
+        //
+        //   particleDensityUbos_  — per-FIF ParticleDensityUbo (std140, 160 B),
+        //                           rewritten every frame; handle never changes.
+        //   particleDensityDummy_ — 1x1x1 R32_UINT in GENERAL, bound to every
+        //                           array slot no live volume occupies. Same
+        //                           "always bound, harmlessly unused" idiom as
+        //                           the ocean/MSAA dummies.
+        Buffer  particleDensityUbos_[kFramesInFlight]{};
+        Image2D particleDensityDummy_{};
+        // Its r16f twin for binding 69 (the shade's linear-sampled mirrors).
+        Image2D particleDensityLinDummy_{};
+        // Any field contributed density this frame. Forces heteroActive, opens
+        // the froxel gate with no clustered lights, and sets the shade's flags
+        // bit 11 — the three gates plan §3.3 calls "real, small, easy to miss".
+        bool     particleDensityActiveThisFrame_ = false;
+        // ParticleFieldPass::densityGeneration() each FIF's deferred set was
+        // last written with. Not equal ⇒ that set names a stale (possibly
+        // retired) volume view and must be rewritten before it is recorded.
+        uint64_t particleDensityDescGen_[kFramesInFlight]{};
+
         // ── GPU per-instance world matrices (stage 1: producer only) ─────────
         // instance_expand.comp recomputes, per InstancedMesh span, exactly what
         // ensureSceneBuilt's lean refresh bakes into MeshEntry::worldMatrix. No
@@ -2719,6 +2744,20 @@ namespace threepp {
         // Publish each field's device-side live count into its draw command.
         // Head of the frame command buffer, before any consumer reads it.
         void recordParticleFieldCounts(VkCommandBuffer cb);
+
+        // ── ParticleField density (phase 2) ─────────────────────────────────
+        // Clear + splat every density field into its world-anchored volume,
+        // ONCE for all views. Bracketed by TP_ParticleDensity so the claim
+        // "the cheapest per-particle representation by an order of magnitude"
+        // is a number. No-op without a density field.
+        void recordParticleDensityScatter(VkCommandBuffer cb, uint32_t frame);
+        // Per-FIF ParticleDensityUbo (bindings 68) + the 1x1x1 dummy volume.
+        // Both created once and never resized.
+        void ensureParticleDensityResources();
+        // Rewrite the frame's ParticleDensityUbo from the pass's current volume
+        // list. Post-fence, pre-record; also refreshes the deferred descriptor
+        // sets when the volume LIST changed (generation bump).
+        void updateParticleDensityUbo(uint32_t frame);
 
         // One vkCmdDrawIndirect per visible ParticleField, inside the G-buffer
         // render pass and after every ordinary bucket. Separate pipeline, and

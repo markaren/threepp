@@ -87,6 +87,44 @@ namespace threepp::vulkan {
     };
     static_assert(sizeof(FieldCountsGpu) == 16, "FieldCountsGpu layout drift");
 
+    // ── PHASE 2: the world-space density volume (plan §3.3) ─────────────────
+    // Volumes bound to the froxel/shade descriptor set at once. KEEP IN SYNC
+    // with kMaxDensityFields in shaders/particle_density.glsl. Fields past this
+    // many keep every other representation and simply contribute no density.
+    inline constexpr std::uint32_t kMaxDensityFields = 4;
+
+    // Fixed-point scale for the r32ui accumulator: 12 fractional bits.
+    // KEEP IN SYNC with kParticleDensityScale in shaders/particle_density.glsl,
+    // where the choice (quantum 1/4096 /m, saturation 2^32/4096 = 1.05e6 /m)
+    // is argued against plan R4.
+    inline constexpr float kDensityFixedScale = 4096.f;
+
+    // What the renderer needs to bind one field's volume into the deferred set
+    // and tell the shader where it lives. Mirrors ParticleDensityUbo in
+    // shaders/particle_density.glsl one for one.
+    struct DensityVolumeDesc {
+        VkImageView view = VK_NULL_HANDLE;
+        // The r16f mirror (particle_density_convert.comp) — binding 69, the
+        // volume the deferred shade's per-pixel dust march samples with
+        // hardware trilinear. Same lifetime as `view`.
+        VkImageView linView = VK_NULL_HANDLE;
+        float       boxMin[3]{};    // world min corner
+        float       resolution = 0.f;// voxels/axis, as the UBO's boxMin.w
+        float       boxInvSize[3]{};// 1 / (2 * halfExtent)
+    };
+
+    // Binding 68 of the deferred set. MUST match ParticleDensityUbo in
+    // shaders/particle_density.glsl, which is std140 (NOT scalar) because it is
+    // pulled into shaders that do not all enable GL_EXT_scalar_block_layout —
+    // everything here is a vec4/uvec4, so the two layouts coincide anyway.
+    struct ParticleDensityUboGpu {
+        float         boxMin[kMaxDensityFields][4];    // xyz = world min, w = resolution
+        float         boxInvSize[kMaxDensityFields][4];// xyz = 1 / (2 * halfExtent)
+        float         albedoAniso[4];                  // rgb = albedo, a = HG g
+        std::uint32_t counts[4];                       // x = active volumes
+    };
+    static_assert(sizeof(ParticleDensityUboGpu) == 160, "ParticleDensityUbo layout drift");
+
     class ParticleFieldPass {
 
     public:
@@ -126,8 +164,20 @@ namespace threepp::vulkan {
         // so its buffers go to the renderer's frame-serial retire queue rather
         // than being destroyed inline.
         using RetireBufferFn = std::function<void(Buffer&&)>;
+        // Same contract for the density volume, which is an IMAGE and is named
+        // by descriptor SETS as well as by command buffers — so it goes through
+        // the frame-serial queue too, and the sets that name it are refreshed
+        // through the renderer's per-frame dirty flags (see densityGeneration).
+        using RetireImageFn = std::function<void(Image2D&&)>;
+        // 3D-image factory. The renderer already owns one (Impl::createImage3D,
+        // the froxel grids' own constructor); handing it in keeps a second copy
+        // of the VkImageCreateInfo/VkImageViewCreateInfo pair out of the tree.
+        using CreateImage3DFn = std::function<Image2D(std::uint32_t, std::uint32_t,
+                                                     std::uint32_t, VkFormat,
+                                                     VkImageUsageFlags, const char*)>;
 
-        ParticleFieldPass(VulkanContext& ctx, RetireBufferFn retireFn);
+        ParticleFieldPass(VulkanContext& ctx, RetireBufferFn retireFn,
+                          RetireImageFn retireImageFn, CreateImage3DFn createImage3DFn);
         ~ParticleFieldPass();
         ParticleFieldPass(const ParticleFieldPass&) = delete;
         ParticleFieldPass& operator=(const ParticleFieldPass&) = delete;
@@ -146,6 +196,44 @@ namespace threepp::vulkan {
         // of the frame's command buffer, before any consumer.
         void recordCounts(VkCommandBuffer cb);
 
+        // ── PHASE 2 ─────────────────────────────────────────────────────────
+        // Zero the density volumes and splat this frame's live particles into
+        // them. ONE dispatch per field for ALL views (plan R9): the volume is
+        // world-anchored precisely so K cameras share this work, so it is
+        // recorded at the head of the frame's command buffer, alongside
+        // recordCounts, and never inside a per-view block. No-op when no field
+        // has a density representation — not one command is written.
+        void recordDensityScatter(VkCommandBuffer cb);
+
+        // This frame's bound volumes, in descriptor-array order. Never longer
+        // than kMaxDensityFields.
+        [[nodiscard]] const std::vector<DensityVolumeDesc>& densityVolumes() const {
+            return densityVols_;
+        }
+        // Medium parameters shared by every bound volume: the FIRST enabled
+        // field's DensityRepr albedo + anisotropy. Two dust fields with
+        // different albedos in one scene share the first's — a σ-weighted blend
+        // needs the per-volume σ at sample time, which the summed
+        // particleDensity() deliberately does not carry.
+        [[nodiscard]] const float* densityAlbedo() const { return densityAlbedo_; }
+        [[nodiscard]] float densityAnisotropy() const { return densityAniso_; }
+
+        // Bumped whenever the bound volume LIST changes (a volume allocated,
+        // retired, or reordered). The renderer compares it against what its
+        // descriptor sets were last written with; equal means the sets are
+        // already correct and no descriptor write is needed, which is what
+        // keeps a steady-state dust scene out of the VUID-03047 zone entirely.
+        [[nodiscard]] std::uint64_t densityGeneration() const { return densityGen_; }
+
+        // Any field contributed density this frame. Drives heteroActive, the
+        // froxel-pass gate and the shade's flags bit 11 — the "real, small,
+        // easy-to-miss" wiring plan §3.3 calls out.
+        [[nodiscard]] bool densityActive() const { return !densityVols_.empty(); }
+
+        // Fields whose DensityRepr is on but which did not fit in
+        // kMaxDensityFields this frame. Reported, not silently dropped.
+        [[nodiscard]] std::uint32_t densityOverflowCount() const { return densityOverflow_; }
+
         [[nodiscard]] const std::vector<DrawState>& drawStates() const { return draws_; }
 
         // The FieldDesc SSBO for a frame-in-flight, and how many entries of it
@@ -155,6 +243,12 @@ namespace threepp::vulkan {
             return descBufs_[frame].handle;
         }
         [[nodiscard]] std::uint32_t descCount() const { return descCount_; }
+
+        // TEST/DEBUG: one field's density volume, for readback. False when the
+        // field has none (representation off, or never rendered). See
+        // VulkanRenderer::readParticleDensityVolume for why this exists.
+        [[nodiscard]] bool densityVolumeFor(const ParticleField& field,
+                                            VkImage& image, std::uint32_t& res) const;
 
         // Fields with resident device state. Read by the renderer's own
         // early-out: a scene that never had a field must not pay for one, and a
@@ -183,10 +277,45 @@ namespace threepp::vulkan {
             // freshly allocated, i.e. holds garbage and must be re-sent.
             std::uint64_t slotSerial[kSlots]{};
             std::uint64_t lastSeenSerial = 0;
+            // ── Density volume (phase 2) ────────────────────────────────────
+            // Allocated at the FIRST frame DensityRepr::enabled is seen and
+            // never resized — the same fixed-size contract as the position
+            // ring, and for the same reason: it is named by descriptor sets,
+            // so a resize is a structural change, not a reallocation.
+            // DensityRepr::center/halfExtent may still move every frame; they
+            // are a transform, not a size.
+            Image2D         density{};
+            std::uint32_t   densityRes = 0;// latched with the image
+            VkDescriptorSet densitySet = VK_NULL_HANDLE;
+            // The r16f mirror + the convert dispatch's set (src uint volume,
+            // dst float volume). Created and written alongside densitySet,
+            // once, outside any frame's record.
+            Image2D         densityLin{};
+            VkDescriptorSet convertSet = VK_NULL_HANDLE;
         };
 
-        VulkanContext& ctx_;
-        RetireBufferFn retireFn_;
+        // One field's scatter dispatch, resolved in prepareFrame so recording
+        // touches no ParticleField and no map.
+        struct DensityDispatch {
+            VkDescriptorSet set   = VK_NULL_HANDLE;
+            VkImage         image = VK_NULL_HANDLE;
+            VkImage         linImage   = VK_NULL_HANDLE;
+            VkDescriptorSet convertSet = VK_NULL_HANDLE;
+            std::uint32_t   res   = 0;
+            std::uint32_t   groups = 0;// ceil(capacity / 64)
+            float           world[16]{};
+            VkDeviceAddress posAddr   = 0;
+            VkDeviceAddress countAddr = 0;
+            float           boxMin[3]{};
+            float           boxInvSize[3]{};
+            std::uint32_t   capacity   = 0;
+            float           sigmaFixed = 0.f;
+        };
+
+        VulkanContext&  ctx_;
+        RetireBufferFn  retireFn_;
+        RetireImageFn   retireImageFn_;
+        CreateImage3DFn createImage3DFn_;
 
         std::unordered_map<const ParticleField*, std::unique_ptr<State>> states_;
         Buffer        descBufs_[impl::kFramesInFlight]{};
@@ -195,10 +324,46 @@ namespace threepp::vulkan {
         std::vector<FieldDescGpu> descScratch_;
         std::vector<DrawState>    draws_;
 
+        // Density scatter pipeline — created lazily, on the first field that
+        // asks for a volume, so a scene without dust allocates nothing.
+        VkDescriptorSetLayout densityDsLayout_ = VK_NULL_HANDLE;
+        VkDescriptorPool      densityPool_     = VK_NULL_HANDLE;
+        VkPipelineLayout      densityPipeLayout_ = VK_NULL_HANDLE;
+        VkPipeline            densityPipe_     = VK_NULL_HANDLE;
+        // r32ui → r16f convert (particle_density_convert.comp), one dispatch
+        // per field after its scatter. Shares densityPool_.
+        VkDescriptorSetLayout convertDsLayout_   = VK_NULL_HANDLE;
+        VkPipelineLayout      convertPipeLayout_ = VK_NULL_HANDLE;
+        VkPipeline            convertPipe_       = VK_NULL_HANDLE;
+
+        // A destroyed field's descriptor set, held until no in-flight frame can
+        // still name it. Same rule as VulkanRetireQueue (serial +
+        // kFramesInFlight <= current), kept local because the renderer's queue
+        // takes resources, not sets. Freeing one inline would be a
+        // VUID-vkFreeDescriptorSets-pDescriptorSets-00309 the moment a field is
+        // dropped while a frame that drew it is still executing.
+        struct RetiredSet {
+            VkDescriptorSet set;
+            std::uint64_t   serial;
+        };
+        std::vector<RetiredSet> densitySetRetire_;
+
+        std::vector<DensityVolumeDesc> densityVols_;
+        std::vector<DensityDispatch>   densityDispatch_;
+        float         densityAlbedo_[3]{1.f, 1.f, 1.f};
+        float         densityAniso_    = 0.f;
+        std::uint64_t densityGen_      = 0;
+        std::uint32_t densityOverflow_ = 0;
+
         State& ensureState(const ParticleField& field);
         void   ensureDescCapacity(std::uint32_t frame, std::uint32_t count);
         void   destroyState(State& st);
         void   retireOrDestroy(Buffer& b);
+        void   retireOrDestroy(Image2D& img);
+        void   ensureDensityPipeline();
+        // Allocates the field's volume on first use; false when the field's
+        // DensityRepr is off or the volume could not be created.
+        bool   ensureDensityVolume(State& st, const ParticleField& field);
     };
 
 }// namespace threepp::vulkan

@@ -221,6 +221,10 @@ VulkanRenderer::Impl::~Impl() {
             // the device is provably idle here (flushRetireQueue above).
             particleFieldPass_.reset();
             particleFields_.clear();
+            // The two density handles the renderer (not the pass) owns.
+            for (auto& b : particleDensityUbos_) destroyBuffer(ctx->allocator(), b);
+            destroyImage2D(ctx->allocator(), d, particleDensityDummy_);
+            destroyImage2D(ctx->allocator(), d, particleDensityLinDummy_);
 
             if (tlas) ctx->rt().destroyAccelerationStructure(d, tlas, nullptr);
             destroyBuffer(ctx->allocator(), tlasBuffer);

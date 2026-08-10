@@ -66,7 +66,14 @@ namespace threepp::vulkan {
         // because "the dispatch is free" is a claim, and the whole project is
         // decided by whether work moved to the GPU costs less there.
         TP_InstanceExpand = 16,
-        TP_COUNT          = 17,
+        // ParticleField density scatter (particle_density_scatter.comp): the
+        // per-frame clear + splat of every dust field into its world-anchored
+        // volume. Bracketed separately from TP_Froxel because §3.3's claim —
+        // "the cheapest per-particle representation by an order of magnitude" —
+        // is only checkable if the per-particle half and the fixed froxel half
+        // are two numbers. Recorded ONCE per frame for all views.
+        TP_ParticleDensity = 17,
+        TP_COUNT          = 18,
     };
     inline constexpr uint32_t kTimingSlots = TP_COUNT * 2u;
 
