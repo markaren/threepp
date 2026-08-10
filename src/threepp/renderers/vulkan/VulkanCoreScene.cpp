@@ -109,7 +109,14 @@ bool VulkanRenderer::Impl::sceneSnapshotMatches(Object3D& scene, Camera& camera)
             return ok && cur == sceneSnapshot_.size();
         }
 
+// A genuine addition, not a split: scene.8_matDescPatch times the HOST-side
+// re-derivation inside ensureSceneBuilt and contains no device copy. The copy is
+// here, on the other side of the fence wait, and was in no counter at all. It is
+// entries-indexed and whole-array (608 B/entry), so one changed material re-sends
+// every entry's MaterialDesc — and ensureSceneBuilt marks every frame-in-flight
+// slot dirty, so each slot pays it.
 void VulkanRenderer::Impl::flushMaterialDescsIfDirty(uint32_t frame) {
+            THREEPP_CPUPROF("frame.I_uploadMatDesc");
             if (!matDescsDirty_[frame]) return;
             matDescsDirty_[frame] = false;
             if (matDescsCached_.empty()) return;
@@ -118,7 +125,11 @@ void VulkanRenderer::Impl::flushMaterialDescsIfDirty(uint32_t frame) {
                               matDescsCached_.size() * sizeof(MaterialDesc));
         }
 
+// Same shape, 64 B/entry. Dirtied for ALL slots by the frame.B_movedSticky walk
+// on any 0↔1 sticky transition and by an auto-LOD level switch — but the copy
+// lands here, outside that phase, so it needs its own key.
 void VulkanRenderer::Impl::flushGeometryDescsIfDirty(uint32_t frame) {
+            THREEPP_CPUPROF("frame.I2_uploadGeomDesc");
             if (!geomDescsDirty_[frame]) return;
             geomDescsDirty_[frame] = false;
             if (geomDescsCached_.empty()) return;

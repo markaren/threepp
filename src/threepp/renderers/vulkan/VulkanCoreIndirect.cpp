@@ -62,7 +62,13 @@ namespace threepp {
     // sidesteps the gl_DrawIDARB-resets-per-call issue without
     // needing dynamic-offset descriptors or per-call push constants.
     void VulkanRenderer::Impl::buildIndirectDrawData(uint32_t frame) {
-        THREEPP_CPUPROF("frame.D_buildIndirect");
+        // SPLIT, not nested: function-scope until now, so its number already
+        // included the ~15 MB of memcpy at the bottom of this function and the
+        // build could not be told from the copy. stop()ped where the entry walk
+        // ends; the concatenate-and-copy region below carries
+        // frame.F_uploadDrawInfo, as a sibling. Every early return between here
+        // and the stop() still accounts (the destructor is what fires).
+        THREEPP_CPUPROF_NAMED(profD, "frame.D_buildIndirect");
         for (auto& g : indirectGroups_) { g.offset = 0; g.count = 0; }
         indirectTotalDraws_ = 0;
 
@@ -383,6 +389,11 @@ namespace threepp {
             view().indirectBuiltSig[frame] = buildSig;
             return;
         }
+        // Build done; everything below is bytes-to-the-device (plus the
+        // firstInstance patch loop, which is O(draws) CPU work living inside what
+        // reads as a pure memcpy region).
+        profD.stop();
+        THREEPP_CPUPROF("frame.F_uploadDrawInfo");
 
         // Concatenate buckets into the per-frame device buffers.
         const VkDeviceSize drawBytes = sizeof(DrawInfoGpu) * globalIdx;

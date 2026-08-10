@@ -50,7 +50,18 @@ namespace threepp::vulkan {
         TP_SplatProject  = 12,// per-splat project + cull + prefix sum + expand
         TP_SplatSort     = 13,// the 8 x 4-bit radix passes and their scans
         TP_SplatRaster   = 14,// tile ranges + the tile-local composite
-        TP_COUNT         = 15,
+        // The WHOLE submitted command buffer: opened in beginFrame right after
+        // the pool reset, closed in endFrame right before vkEndCommandBuffer.
+        // Deliberately not a sum of the slots above — it also covers every pass
+        // that has no bracket at all (TLAS refit, deformers, bloom/post, RCAS,
+        // probe GI, cluster build, cloud march, auto-exposure, particle light,
+        // ImGui/present transition) AND every secondary view, whose timestamps
+        // are suppressed. Read gpuTotalMs - gpuPassSumMs to see how much GPU work
+        // is invisible to the bracketed passes. It is a SPAN, not busy time: the
+        // TOP_OF_PIPE open is not covered by the imageAvailable wait's stage mask,
+        // so a swapchain-acquire stall can land inside it.
+        TP_Frame         = 15,
+        TP_COUNT         = 16,
     };
     inline constexpr uint32_t kTimingSlots = TP_COUNT * 2u;
 
@@ -72,6 +83,13 @@ namespace threepp::vulkan {
         // GPU timestamp pairs — call begin before a pass, end after it.
         void begin(VkCommandBuffer cb, TimingPass pass, uint32_t frame);
         void end  (VkCommandBuffer cb, TimingPass pass, uint32_t frame);
+
+        // Closes the TP_Frame bracket beginFrame opened. Must be the LAST
+        // timestamp recorded into this command buffer (call it immediately before
+        // vkEndCommandBuffer). Sets TP_Frame's recorded-mask bit — the bit is set
+        // by the END, not the begin, so readBack can never WAIT_BIT on a pair whose
+        // second endpoint was never written.
+        void endFrameTotal(VkCommandBuffer cb, uint32_t frame);
 
         // Call at vkEndCommandBuffer to capture cpuRecordMs.
         void finishRecord();

@@ -111,7 +111,12 @@ namespace threepp {
     // reading on the previous use of `frame`.
     void VulkanRenderer::Impl::computeAndUploadMotionMatrices(uint32_t frame,
                                         const std::vector<MeshEntry>& entries) {
-        THREEPP_CPUPROF("frame.A_motionMats");
+        // SPLIT, not nested: this phase used to be function-scope and therefore
+        // silently included the upload below, so its number was compute+copy and
+        // no upload cost was separable. stop()ped after the math so A means
+        // "derive the matrices" and frame.G_uploadMotion means "move the bytes",
+        // and the two can be summed.
+        THREEPP_CPUPROF_NAMED(profA, "frame.A_motionMats");
         const uint32_t count = static_cast<uint32_t>(entries.size());
         if (count == 0) return;
 
@@ -240,11 +245,14 @@ namespace threepp {
             if (spanNonIdentity) sp.motionNonIdentity = true;
         }
         if (changedAny) ++motionScratchVersion_;
+        profA.stop();
 
         // Upload only when this FIF slot doesn't already hold the current
         // scratch contents (a fully static scene uploads once per slot and
-        // then never again).
+        // then never again). 64 B/entry, whole-array — a single moved span
+        // re-copies every entry's block.
         if (motionUploadedVersion_[frame] != motionScratchVersion_) {
+            THREEPP_CPUPROF("frame.G_uploadMotion");
             uploadHostVisible(ctx->allocator(), motionMatBuffers[frame],
                               motionScratch_.data(),
                               motionScratch_.size() * sizeof(float));

@@ -803,6 +803,19 @@ namespace threepp {
             float splatProjectMs = 0.f;// project + cull + prefix sum + expand
             float splatSortMs    = 0.f;// the radix passes and their scans
             float splatRasterMs  = 0.f;// tile ranges + composite
+            // GPU execution SPAN of the whole submitted command buffer — not a sum
+            // of the fields above, and not busy time. It covers the passes that
+            // have no timestamp bracket at all (TLAS refit, deformers, bloom/post,
+            // RCAS, probe GI, cluster build, cloud march, auto-exposure, particle
+            // light, ImGui/present transition) and every secondary view, whose
+            // timestamps are suppressed. Read against cpuFrameMs to tell "the CPU
+            // is the wall" from "the CPU is waiting".
+            float gpuTotalMs     = 0.f;
+            // The bracketed passes, summed over a DISJOINT set (the three splat
+            // sub-stages are excluded — they partition splatMs; the sensor-image
+            // pass is included even though it has no field of its own).
+            // gpuTotalMs - gpuPassSumMs is GPU work invisible to the brackets.
+            float gpuPassSumMs   = 0.f;
             float cpuEnsureSceneMs = 0.f;// ensureSceneBuilt
             float cpuRecordMs      = 0.f;// recordCommandBuffer
             float cpuFrameMs       = 0.f;// total render() wall time

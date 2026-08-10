@@ -811,19 +811,42 @@ int main(int argc, char** argv) {
     };
 
     // --bench: fps sampled in windows, tagged with the live particle count.
+    //
+    // Every column is measured, and together they are meant to CLOSE: wall should
+    // equal sim + emit + field + stats + rend + tail, and rend (a host chrono
+    // around render()) should equal frame (the renderer's own cpuFrameMs) to
+    // within timer noise. Where those two disagree, one of them is lying about
+    // its own extent; where the sum falls short of wall, the missing time is
+    // outside every timer in this file.
     struct BenchRow {
         unsigned n;
         double fps;
+        double wallMs;   // frame period: window wall / frames
         double simMs;    // world.step() + the position readback
-        double frameMs;  // renderer CPU frame
+        double emitMs;   // chute tick + Group::emit (CUDA lock + blocking HtoD)
+        double fieldMs;  // the per-particle instanceMatrix write, alone
+        double statsMs;  // telemetry passes over every grain (2 Hz gated)
+        double rendMs;   // host wall around renderer->render()
+        double frameMs;  // renderer CPU frame (cpuFrameMs), Vulkan only
+        double tailMs;   // outside the animate body: submit+present / swap, poll
+        double gpuMs;    // whole-command-buffer GPU span (Vulkan only)
         double gbufMs;   // raster G-buffer (Vulkan only)
         double shadeMs;  // deferred shade / trace (Vulkan only)
     };
     std::vector<BenchRow> benchRows;
     constexpr int kBenchWindow = 120;
     std::chrono::high_resolution_clock::time_point windowStart;
-    double simAccum = 0, frameAccum = 0, gbufAccum = 0, shadeAccum = 0;
+    double simAccum = 0, frameAccum = 0, gbufAccum = 0, shadeAccum = 0, gpuAccum = 0;
+    double emitAccum = 0, fieldAccum = 0, statsAccum = 0, rendAccum = 0, tailAccum = 0;
     int windowFrames = 0;
+    // Closed at the TOP of the animate body, not the bottom. Closing at the
+    // bottom made the first frame of every window contribute its wall time but
+    // not its phase times (the accumulators were zeroed after that frame's sim had
+    // already been added), and divided kBenchWindow frames by kBenchWindow-1 frame
+    // periods — ~0.8% low on every phase, ~0.8% high on fps, and a spurious
+    // residual in exactly the wall-minus-phases number this table exists to
+    // report. Tagged with hudGrains (the previous frame's population) because
+    // `total` is body-local.
 
     // ── Live HUD (interactive only) ──────────────────────────────────────────
     // RendererSettingsUi draws the FPS row itself; these add the sim-vs-render
@@ -856,7 +879,41 @@ int main(int argc, char** argv) {
         "Granular");
     }
 
-    canvas.animate([&] {
+    using Clk = std::chrono::high_resolution_clock;
+    const auto msSince = [](const Clk::time_point& t) {
+        return std::chrono::duration<double, std::milli>(Clk::now() - t).count();
+    };
+    // Stamped at the very end of the animate body; the tail is measured from it to
+    // the point animateOnce() hands control back. See the explicit loop below.
+    Clk::time_point bodyEnd{};
+    bool haveBodyEnd = false;
+
+    const auto frameBody = [&] {
+        // Window bookkeeping first, so a window spans exactly kBenchWindow frame
+        // tops and every one of those frames' phases lands inside it.
+        if (bench) {
+            const auto nowW = Clk::now();
+            if (windowFrames >= kBenchWindow) {
+                const double wall = std::chrono::duration<double>(nowW - windowStart).count();
+                const double k = 1.0 / double(windowFrames);
+                benchRows.push_back({hudGrains, double(windowFrames) / wall,
+                                     wall * 1000.0 * k, simAccum * k, emitAccum * k,
+                                     fieldAccum * k, statsAccum * k, rendAccum * k,
+                                     frameAccum * k, tailAccum * k, gpuAccum * k,
+                                     gbufAccum * k, shadeAccum * k});
+                windowFrames = 0;
+            }
+            if (windowFrames == 0) {
+                windowStart = nowW;
+                simAccum = frameAccum = gbufAccum = shadeAccum = gpuAccum = 0;
+                emitAccum = fieldAccum = statsAccum = rendAccum = tailAccum = 0;
+            }
+            ++windowFrames;
+        }
+
+        // Outside the sim timer below, and not free: Group::emit takes a scoped
+        // CUDA lock and issues three SYNCHRONOUS host-to-device copies per lane.
+        const auto tEmit = Clk::now();
         for (auto& l : lanes) {
             if (!l.chute) continue;
             const auto& burst = l.chute->tick(kDt, rate);
@@ -864,6 +921,7 @@ int main(int argc, char** argv) {
                 l.group->emit(burst.data(), unsigned(burst.size()), Vector3(0.4f, -1.4f, 0.f),
                               0.02f);
         }
+        emitAccum += msSince(tEmit);
 
         const auto tSim = std::chrono::high_resolution_clock::now();
         world->step(kDt);
@@ -874,14 +932,31 @@ int main(int argc, char** argv) {
         simAccum += simMs;
         if (ui) hudSimAccum += simMs;
 
-        for (auto& l : lanes) {
+        // The per-particle instanceMatrix write, ALONE and in its own loop. This is
+        // the setMatrixAt-equivalent: 12 bytes at a 64-byte stride for every live
+        // grain, per lane, per frame, plus instanceMatrix()->needsUpdate(). It is
+        // the prime suspect for the work outside render(), so it must not share a
+        // timer with the belt scroll below — that one dirties a material, which is
+        // what makes the renderer's whole-array MaterialDesc flush fire, an
+        // unrelated cost on the other side of render().
+        const auto tField = Clk::now();
+        for (auto& l : lanes)
             l.field->update(l.group->positions(), l.group->active());
+        fieldAccum += msSince(tField);
+        for (auto& l : lanes) {
             if (!l.beltMat) continue;
             l.beltMat->map->offset.y += l.scroll * kDt;
             l.beltMat->needsUpdate();
         }
 
+        // Host-side wall around render(), as a CONTROL on cpuFrameMs: the renderer
+        // stamps that itself, from its own frameStart to just before it returns. If
+        // the two agree, every unaccounted millisecond is provably outside render();
+        // if they do not, cpuFrameMs is wrong about its own extent. It is also the
+        // only render number a --api gl run has.
+        const auto tRend = Clk::now();
         renderer->render(scene, camera);
+        rendAccum += msSince(tRend);
         if (ui) ui->render();
         ++frame;
 
@@ -891,6 +966,11 @@ int main(int argc, char** argv) {
             frameAccum += double(t.cpuFrameMs);
             gbufAccum += double(t.rasterGbufMs);
             shadeAccum += double(t.pathTraceMs);
+            // Whole-command-buffer GPU span. NOTE it describes the RETIRED
+            // occupant of this frame-in-flight slot — two frames back, since
+            // readBack runs right after the fence wait. Only window means are
+            // comparable with the CPU columns, never a per-frame difference.
+            gpuAccum += double(t.gpuTotalMs);
             if (ui) {
                 hudFrameAccum += double(t.cpuFrameMs);
                 hudGbufAccum += double(t.rasterGbufMs);
@@ -921,6 +1001,10 @@ int main(int argc, char** argv) {
         // 300k it is milliseconds of CPU per frame and would show up in the
         // --bench table as a rendering cost. Sample it at 2 Hz plus the exact
         // frames a gate reads, which still catches a NaN within 30 frames.
+        // Timed OUTSIDE the gate on purpose: the column then reports the true
+        // per-frame mean, zero frames included, which is the number that belongs
+        // in a wall-minus-phases residual. (Per-occurrence it is ~30x this.)
+        const auto tStats = Clk::now();
         const bool sample = frame % 30 == 0 || frame == kCohortStart ||
                             frame == kCohortStart + kCohortSpan || frame >= frames;
         unsigned total = 0;
@@ -941,24 +1025,7 @@ int main(int argc, char** argv) {
         // counter read, not a pass over the grains. (The panel drew earlier in
         // this frame, so it shows this value one frame later — invisible.)
         hudGrains = total;
-
-        // Benchmark windows: close one whenever it fills, tagged with the
-        // population it was measured at.
-        if (bench) {
-            if (windowFrames == 0) {
-                windowStart = std::chrono::high_resolution_clock::now();
-                simAccum = frameAccum = gbufAccum = shadeAccum = 0;
-            }
-            if (++windowFrames >= kBenchWindow) {
-                const double wall = std::chrono::duration<double>(
-                                            std::chrono::high_resolution_clock::now() - windowStart)
-                                            .count();
-                const double k = 1.0 / double(windowFrames);
-                benchRows.push_back({total, double(windowFrames) / wall, simAccum * k,
-                                     frameAccum * k, gbufAccum * k, shadeAccum * k});
-                windowFrames = 0;
-            }
-        }
+        statsAccum += msSince(tStats);
 
         if (frame % 150 == 0) {
             std::printf("[f%4d] n=%6u", frame, total);
@@ -979,19 +1046,45 @@ int main(int argc, char** argv) {
             std::cout << "wrote " << p.string() << " (n=" << total << ")" << std::endl;
         }
         if (offscreen && frame >= frames) canvas.close();
-    });
+        bodyEnd = Clk::now();
+        haveBodyEnd = true;
+    };
+
+    // canvas.animate(f) IS `while (animateOnce(f)) {}` — spelled out here because
+    // the interval between the body returning and animateOnce handing control back
+    // is invisible to any timer inside the body, and for Vulkan that interval holds
+    // vkQueueSubmit2 + vkQueuePresentKHR (endFrame runs from the Canvas frame-end
+    // callback), which are the only blocking Vulkan calls in the frame that are
+    // NOT inside render(). For GL it holds glfwSwapBuffers. Plus glfwPollEvents
+    // for both. Interactive runs present with vsync ON, where a large tail is just
+    // the refresh wait and means nothing; read this only from --bench.
+    while (canvas.animateOnce(frameBody)) {
+        if (!haveBodyEnd) continue;// the final call returns false without running f
+        tailAccum += msSince(bodyEnd);
+        haveBodyEnd = false;
+    }
 
     // Both borrow the world and must die before it (they unregister substep
     // hooks and release actors / device buffers through its CUDA context).
     beltSim.reset();
 
     if (bench) {
-        std::printf("\n%10s %8s %9s %9s %9s %9s   (%dx%d, %d-frame windows)\n", "particles", "fps",
-                    "sim ms", "frame ms", "gbuf ms", "shade ms", size.width(), size.height(),
-                    kBenchWindow);
-        for (const auto& r : benchRows)
-            std::printf("%10u %8.1f %9.2f %9.2f %9.3f %9.3f\n", r.n, r.fps, r.simMs, r.frameMs,
-                        r.gbufMs, r.shadeMs);
+        // Header and row are independent format strings — edit them together.
+        // `resid` is wall minus everything measured: the honest hole.
+        std::printf("\n%9s %7s %8s %8s %8s %8s %8s %8s %8s %8s %8s %8s %8s %8s"
+                    "   (%dx%d, %d-frame windows)\n",
+                    "particles", "fps", "wall ms", "sim ms", "emit ms", "field ms",
+                    "stats ms", "rend ms", "frame ms", "tail ms", "resid ms",
+                    "gpu ms", "gbuf ms", "shade ms",
+                    size.width(), size.height(), kBenchWindow);
+        for (const auto& r : benchRows) {
+            const double resid = r.wallMs - (r.simMs + r.emitMs + r.fieldMs + r.statsMs +
+                                             r.rendMs + r.tailMs);
+            std::printf("%9u %7.1f %8.2f %8.2f %8.2f %8.2f %8.2f %8.2f %8.2f %8.2f %8.2f"
+                        " %8.2f %8.3f %8.3f\n",
+                        r.n, r.fps, r.wallMs, r.simMs, r.emitMs, r.fieldMs, r.statsMs,
+                        r.rendMs, r.frameMs, r.tailMs, resid, r.gpuMs, r.gbufMs, r.shadeMs);
+        }
         std::fflush(stdout);
     }
 

@@ -464,17 +464,35 @@ bool VulkanRenderer::Impl::beginDeferredFrame(Object3D& scene, Camera& camera) {
             view().orthoFrame_ = camera.is<OrthographicCamera>();
 
             VkDevice d = ctx->device();
-            vkWaitForFences(d, 1, &inFlight[currentFrame], VK_TRUE, UINT64_MAX);
+            // ALONE in its own scope, deliberately: this is the one number that
+            // says whether the CPU is the wall or is merely waiting for the GPU,
+            // and folding the retire drain or the query readback into it would
+            // put CPU work (or, worse, a second GPU wait) under a label that is
+            // read as "GPU back-pressure".
+            {
+                THREEPP_CPUPROF("frame.0_fenceWait");
+                vkWaitForFences(d, 1, &inFlight[currentFrame], VK_TRUE, UINT64_MAX);
+            }
             // Fence signaled ⇒ frame (frameSerial_ - kFramesInFlight) is
             // GPU-complete (this slot's previous occupant). Reclaim every
             // resource retired by that frame or earlier before touching this
             // slot's buffers/descriptors. See VulkanRetireQueue.hpp.
-            drainRetireQueue();
+            {
+                THREEPP_CPUPROF("frame.0a_retireDrain");
+                drainRetireQueue();
+            }
             // Fence has signaled → the previous render that wrote into this
             // frame's query pool has retired. Read it now, before we reset
             // the pool and re-record. Result is stored in gpuTimings_ for
             // the public getter to read.
-            gpuTimings_->readBack(currentFrame, pendingCpuEnsureSceneMs_);
+            // Its own phase, not part of the fence wait: every pair is fetched
+            // with VK_QUERY_RESULT_WAIT_BIT (GpuTimings.cpp), so "returns
+            // immediately because the fence already signaled" is an assumption,
+            // and a separate key is what makes it checkable.
+            {
+                THREEPP_CPUPROF("frame.0b_queryReadback");
+                gpuTimings_->readBack(currentFrame, pendingCpuEnsureSceneMs_);
+            }
 
             // Apply any setter requests deferred from mid-frame. setRenderScale
             // / resetAccumulation issue vkDeviceWaitIdle + reallocate descriptor
@@ -497,8 +515,16 @@ bool VulkanRenderer::Impl::beginDeferredFrame(Object3D& scene, Camera& camera) {
             }
 
             uint32_t imageIndex = 0;
-            VkResult acq = vkAcquireNextImageKHR(d, ctx->swapchain(), UINT64_MAX,
-                                                 imageAvailable[currentFrame], VK_NULL_HANDLE, &imageIndex);
+            // Third place the CPU can block on something that is not the CPU:
+            // with only kFramesInFlight swapchain images this waits for the
+            // presentation engine to release one. Own key, so a compositor stall
+            // cannot be read as CPU work — or as fence-wait back-pressure.
+            VkResult acq;
+            {
+                THREEPP_CPUPROF("frame.0c_acquire");
+                acq = vkAcquireNextImageKHR(d, ctx->swapchain(), UINT64_MAX,
+                                            imageAvailable[currentFrame], VK_NULL_HANDLE, &imageIndex);
+            }
             if (acq == VK_ERROR_OUT_OF_DATE_KHR) {
                 recreateSwapchainAndDescriptors();
                 return false;
@@ -508,10 +534,13 @@ bool VulkanRenderer::Impl::beginDeferredFrame(Object3D& scene, Camera& camera) {
             }
             frameImageIndex_ = imageIndex;
 
-            updateCameraUbo(currentFrame, camera);
-            updateLightsUbo(currentFrame, scene);
-            updateFogUbo(currentFrame, scene, camera);
-            updateCloudUbo(currentFrame);
+            {
+                THREEPP_CPUPROF("frame.1_uboUpdates");
+                updateCameraUbo(currentFrame, camera);
+                updateLightsUbo(currentFrame, scene);
+                updateFogUbo(currentFrame, scene, camera);
+                updateCloudUbo(currentFrame);
+            }
             // Safe to write motionMatBuffers[currentFrame] now that the
             // inFlight[currentFrame] fence has been signaled — the GPU has
             // finished its previous use of this slot.
@@ -590,13 +619,19 @@ bool VulkanRenderer::Impl::beginDeferredFrame(Object3D& scene, Camera& camera) {
             // camera VPs (curr jittered, curr unjittered, prev unjittered).
             // Must run after computeAndUploadMotionMatrices so the descriptor
             // rewrite picks up the populated motionMat buffer for this frame.
-            ensureHybridResources();
-            uploadRasterCameraUbo(currentFrame, camera);
+            {
+                THREEPP_CPUPROF("frame.2_ensureHybridRes");
+                ensureHybridResources();
+                uploadRasterCameraUbo(currentFrame, camera);
+            }
             // Build the per-frame DrawInfo + indirect-cmd buffers used
             // by the indirect-drawing gbuf pass. Runs after the cull
             // pass + camera upload (depends on both) and before record.
             buildIndirectDrawData(currentFrame);
-            uploadMeshMovedBits(currentFrame);
+            {
+                THREEPP_CPUPROF("frame.I3_uploadMovedBits");
+                uploadMeshMovedBits(currentFrame);
+            }
             // Same fence guarantees emissiveTriBuffers[currentFrame] is no
             // longer in use; rebuild the per-frame CDF and rewrite the emissive
             // binding if the buffer grew.
@@ -609,6 +644,7 @@ bool VulkanRenderer::Impl::beginDeferredFrame(Object3D& scene, Camera& camera) {
                 // VMA recycles the block, not a visual glitch). Safe to
                 // rewrite here: the slot's fence has signaled, and the
                 // secondaries ride the same submission.
+                THREEPP_CPUPROF("frame.2c_descRefresh");
                 forEachLiveView([&] {
                     if (view().deferredShade_) {
                         view().deferredShade_->rewriteEmissive(currentFrame,
@@ -620,7 +656,13 @@ bool VulkanRenderer::Impl::beginDeferredFrame(Object3D& scene, Camera& camera) {
                                               emissiveTriBuffers[currentFrame].handle);
                 }
             }
+            // Same key as above: the registry sums a name across call sites, and
+            // both of these are "a descriptor/env refresh landed in this frame".
+            // The env branch drains the device and clears the G-buffer, so a
+            // single occurrence is one enormous outlier — that is exactly what a
+            // windowed mean is for.
             if (refreshEnvTextureFromScene(scene)) {
+                THREEPP_CPUPROF("frame.2c_descRefresh");
                 // Env is a primary radiance source — can't reproject, so this
                 // path already wipes the ReSTIR DI reservoir history (a
                 // vkDeviceWaitIdle + clearGbufImages) to cold-start next frame.
@@ -645,6 +687,7 @@ bool VulkanRenderer::Impl::beginDeferredFrame(Object3D& scene, Camera& camera) {
             // its set now — the other slot refreshes when its frame comes around.
             // No-op if the env path above already did an all-slots rewrite.
             if (deferredDescDirty_[currentFrame]) {
+                THREEPP_CPUPROF("frame.2c_descRefresh");
                 // Per-view sets, one scene-wide cause: the swapped texture is
                 // in the bindless array every view's set points at.
                 forEachLiveView([&] {
@@ -656,17 +699,28 @@ bool VulkanRenderer::Impl::beginDeferredFrame(Object3D& scene, Camera& camera) {
             // Per-frame hook: CPU readbacks (e.g. auto-exposure histogram) that are
             // safe only after the current slot's prior GPU work is retired (fence above).
             {
+                THREEPP_CPUPROF("frame.3_onBeginHook");
                 const double now = glfwGetTime();
                 const float  dt  = (lastFrameTime_ > 0.0)
                                    ? static_cast<float>(now - lastFrameTime_) : 0.016f;
                 lastFrameTime_ = now;
                 onBeginDeferredFrame(currentFrame, dt);
             }
-            vkResetCommandBuffer(cmdBuffers[currentFrame], 0);
-            beginCommandRecording(cmdBuffers[currentFrame]);
+            {
+                THREEPP_CPUPROF("frame.3a_cbBegin");
+                vkResetCommandBuffer(cmdBuffers[currentFrame], 0);
+                beginCommandRecording(cmdBuffers[currentFrame]);
+            }
             // Record the full deferred-render body into the now-open cmd
             // buffer. Leaves the swapchain image in GENERAL.
-            recordCommandBuffer(cmdBuffers[currentFrame], imageIndex);
+            // INCLUSIVE of frame.L_tlasRefitDispatch (and therefore of
+            // frame.H_uploadTlasInst inside it), which recordDeformAndTlas
+            // reaches. Those two are reported as detail rows; only ONE of
+            // {frame.J_record} / {L, H} belongs in a phase sum.
+            {
+                THREEPP_CPUPROF("frame.J_record");
+                recordCommandBuffer(cmdBuffers[currentFrame], imageIndex);
+            }
 
             // Every secondary view, into the SAME command buffer and therefore
             // the same submission. They share this frame's TLAS/BLAS, lights,
@@ -675,13 +729,25 @@ bool VulkanRenderer::Impl::beginDeferredFrame(Object3D& scene, Camera& camera) {
             // built and its barriers are already in the stream, and before the
             // capture / event-camera / overlay tail, all of which are the
             // primary's alone.
-            recordSecondaryViews(cmdBuffers[currentFrame]);
+            // NOTE, for anyone reading frame.C_frustumCull / frame.D_buildIndirect
+            // on a multi-view scene: this re-enters both, so those two keys ALREADY
+            // sum primary + every secondary under one name. Single-view scenes
+            // return immediately here and are unaffected.
+            {
+                THREEPP_CPUPROF("frame.J9_secondaryViews");
+                recordSecondaryViews(cmdBuffers[currentFrame]);
+            }
 
             // Scene-only swapchain capture. Runs BEFORE the sprite + ImGui
             // overlays composite — sensor pipelines that consume the
             // renderer's output need a clean image without their own
             // visualisation drawn on top of it, otherwise they'd see
             // their own readout as scene motion and feedback-loop.
+            // One key for the whole record tail (capture, event camera, view
+            // composite, screen-space sprite overlay): individually these are
+            // early-outs on a scene that uses none of them, and the point of the
+            // key is that the books close, not that each is attributable.
+            THREEPP_CPUPROF("frame.4_recordTail");
             if (sceneCaptureEnabled_) {
                 recordSceneCapture(cmdBuffers[currentFrame], imageIndex);
             }
@@ -731,15 +797,26 @@ bool VulkanRenderer::Impl::beginDeferredFrame(Object3D& scene, Camera& camera) {
 
 bool VulkanRenderer::Impl::beginFrameOrthoOnly() {
             VkDevice d = ctx->device();
-            vkWaitForFences(d, 1, &inFlight[currentFrame], VK_TRUE, UINT64_MAX);
+            // DISTINCT names from the deferred path's, even though it is the same
+            // fence ring and the same swapchain: the registry keys on the string,
+            // so reusing frame.0_fenceWait here would silently merge two code
+            // paths into one number.
+            {
+                THREEPP_CPUPROF("frame.0y_fenceWaitOrtho");
+                vkWaitForFences(d, 1, &inFlight[currentFrame], VK_TRUE, UINT64_MAX);
+            }
             // Same retire reclaim as beginDeferredFrame (the ortho-only frame
             // path shares the fence ring). See VulkanRetireQueue.hpp.
             drainRetireQueue();
             gpuTimings_->readBack(currentFrame, pendingCpuEnsureSceneMs_);
 
             uint32_t imageIndex = 0;
-            VkResult acq = vkAcquireNextImageKHR(d, ctx->swapchain(), UINT64_MAX,
-                                                 imageAvailable[currentFrame], VK_NULL_HANDLE, &imageIndex);
+            VkResult acq;
+            {
+                THREEPP_CPUPROF("frame.0z_acquireOrtho");
+                acq = vkAcquireNextImageKHR(d, ctx->swapchain(), UINT64_MAX,
+                                            imageAvailable[currentFrame], VK_NULL_HANDLE, &imageIndex);
+            }
             if (acq == VK_ERROR_OUT_OF_DATE_KHR) {
                 recreateSwapchainAndDescriptors();
                 return false;
@@ -828,9 +905,21 @@ void VulkanRenderer::Impl::endFrame() {
             const uint32_t imageIndex = frameImageIndex_;
             VkCommandBuffer cb = cmdBuffers[currentFrame];
 
-            recordOverlayAndPresentTransition(cb, imageIndex);
-            check(vkEndCommandBuffer(cb), "vkEndCommandBuffer");
-            gpuTimings_->finishRecord();
+            // EVERY frame.K* phase is OUTSIDE cpuFrameMs: endFrame() runs from the
+            // Canvas frame-end callback (see the constructor), i.e. after render()
+            // has already returned and already stamped cpuFrameMs. And because
+            // cpuprof::Registry::endFrame() fires at the tail of render(), these
+            // samples land in the NEXT window — fine for a windowed mean, wrong for
+            // reconciling one frame.
+            {
+                THREEPP_CPUPROF("frame.K1_endRecord");
+                recordOverlayAndPresentTransition(cb, imageIndex);
+                // Closes the whole-command-buffer GPU bracket opened in
+                // GpuTimings::beginFrame; must be the last recorded command.
+                gpuTimings_->endFrameTotal(cb, currentFrame);
+                check(vkEndCommandBuffer(cb), "vkEndCommandBuffer");
+                gpuTimings_->finishRecord();
+            }
 
             VkSemaphoreSubmitInfo waitInfo{};
             waitInfo.sType = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO;
@@ -869,8 +958,14 @@ void VulkanRenderer::Impl::endFrame() {
             submit.pCommandBufferInfos = &cbInfo;
             submit.signalSemaphoreInfoCount = 1;
             submit.pSignalSemaphoreInfos = &signalInfo;
-            check(vkQueueSubmit2(ctx->graphicsQueue(), 1, &submit, inFlight[currentFrame]),
-                  "vkQueueSubmit2");
+            // Separate from present, deliberately: a submit that stalls means
+            // driver-side command translation, a present that stalls means the
+            // compositor. Different diagnoses, so different keys.
+            {
+                THREEPP_CPUPROF("frame.K2_submit");
+                check(vkQueueSubmit2(ctx->graphicsQueue(), 1, &submit, inFlight[currentFrame]),
+                      "vkQueueSubmit2");
+            }
 
             VkPresentInfoKHR pi{};
             pi.sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR;
@@ -881,7 +976,15 @@ void VulkanRenderer::Impl::endFrame() {
             pi.pSwapchains = &sc;
             pi.pImageIndices = &imageIndex;
 
-            VkResult pr = vkQueuePresentKHR(ctx->presentQueue(), &pi);
+            // Brace the present ALONE — the recreate path below is a swapchain
+            // rebuild, not a present, and must not wear this label. With vsync off
+            // this should be near zero; if it is not, the present mode is a
+            // confound for every fps number measured through this renderer.
+            VkResult pr;
+            {
+                THREEPP_CPUPROF("frame.K3_present");
+                pr = vkQueuePresentKHR(ctx->presentQueue(), &pi);
+            }
             if (pr == VK_ERROR_OUT_OF_DATE_KHR || pr == VK_SUBOPTIMAL_KHR || needsResize) {
                 needsResize = false;
                 recreateSwapchainAndDescriptors();
