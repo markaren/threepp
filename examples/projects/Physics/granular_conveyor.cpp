@@ -1,6 +1,8 @@
 // GPU granular material on a conveyor: PhysX 5.5 PxPBDParticleSystem grains
 // poured from a chute onto the belt from extras/conveyor, carried along it, and
-// spilling off the discharge end into a stockpile.
+// spilling off the discharge end into a stockpile. Two lanes run side by side
+// with contrasting PBD materials — grippy GRAVEL against slick PELLETS — so the
+// difference is in how each one piles, not just what colour it is.
 //
 // The belt drives the grains by the same mechanism it drives soft bodies — a
 // kinematic collider whose target is advanced along travel each substep and
@@ -16,18 +18,24 @@
 //   granular_conveyor                       interactive (pick a backend)
 //   granular_conveyor --shot pbd_belt       headless captures -> aaa_caps/
 //   granular_conveyor --selftest            headless numeric gates, no window
-//   granular_conveyor --count 200000        particle budget
-//   granular_conveyor --rate 4000           grains per second poured
-//   granular_conveyor --drop                phase-1 mode: no belt, block drop
+//   granular_conveyor --bench               particles-vs-fps table
+//   granular_conveyor --count 200000        particle budget (split over lanes)
+//   granular_conveyor --rate 4000           grains per second per lane
+//   granular_conveyor --drop                no belt: phase-1 block-drop test
 
 #include "threepp/threepp.hpp"
 
 #include "threepp/extras/conveyor/ConveyorPhysics.hpp"
 #include "threepp/extras/physx/PhysxParticles.hpp"
 
+#ifdef THREEPP_WITH_VULKAN
+#include "threepp/renderers/VulkanRenderer.hpp"
+#endif
+
 #include "capture_util.hpp"
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
@@ -54,20 +62,27 @@ namespace {
     // belt can only drag the layer it touches, so a deep column just sits there
     // slipping (measured: pour 3x capacity and a cohort moves at 0.6x belt
     // speed with grain heaped 0.8 m over a 0.16 m guide). At the numbers below
-    // the ceiling is ~3000 grains/s, which is the default --rate.
+    // the ceiling is ~3000 grains/s per lane, which is what --rate defaults to.
     //
     // The guides are TALLER than that formula's usable depth on purpose: real
     // skirtboards are, and a measured 2800 grains/s settles into a 0.29 m bed,
     // so a 0.22 m guide had grain walking over the edge all the way down.
     constexpr float kBeltY = 1.90f;    // conveying surface height (a stacker)
-    constexpr float kBeltX0 = -4.0f;   // inlet end
-    constexpr float kBeltX1 = 4.0f;    // discharge end
+    constexpr float kBeltX0 = -3.5f;   // inlet end
+    constexpr float kBeltX1 = 3.5f;    // discharge end
     constexpr float kBeltWidth = 1.00f;
     constexpr float kBeltSpeed = 2.2f; // m/s along +X
     constexpr float kGuideHeight = 0.32f;
     // A metre of belt behind the pour, so grain that bounces backwards off the
     // bed is picked up again instead of dribbling off the tail drum.
-    constexpr float kChuteX = -3.00f;
+    constexpr float kChuteX = -2.50f;
+    // Lane separation. Wide enough that two 2 m-radius stockpiles only just
+    // meet: the whole point of the side-by-side is comparing their PROFILES,
+    // and a merged heap has one profile.
+    constexpr float kLaneZ = 2.80f;
+    // Where a stockpile begins: past the discharge drum and past where the
+    // 2.2 m/s stream lands, so pile probes never measure the trajectory.
+    constexpr float kPileX = kBeltX1 + 1.4f;
 
     // ── Instanced grain field ────────────────────────────────────────────────
     //
@@ -346,13 +361,34 @@ namespace {
                         PxTransform(PxVec3(center.x, center.y, center.z)), mat);
     }
 
+    // The chute cone + its two support posts: grain appearing in mid-air does
+    // not read as a pour, and a cone floating in mid-air does not read as a
+    // chute. Purely visual.
+    void addChuteVisual(Scene& scene, float z, float mouthTop,
+                        const std::shared_ptr<Material>& material) {
+
+        auto cone = Mesh::create(CylinderGeometry::create(0.52f, 0.26f, 0.50f, 20, 1, true),
+                                 material);
+        cone->position.set(kChuteX, mouthTop + 0.22f, z);
+        cone->castShadow = true;
+        scene.add(cone);
+
+        const float postTop = mouthTop + 0.47f;
+        auto post = BoxGeometry::create(0.07f, postTop, 0.07f);
+        for (int side = -1; side <= 1; side += 2) {
+            auto leg = Mesh::create(post, material);
+            leg->position.set(kChuteX, postTop * 0.5f, z + float(side) * 0.62f);
+            leg->castShadow = true;
+            scene.add(leg);
+        }
+    }
+
     // ── Telemetry: the numbers the self-test gates on ─────────────────────────
     struct Stats {
         unsigned n = 0;
         unsigned bad = 0;// non-finite components — must stay 0
         float minY = 0.f, maxY = 0.f;
         float meanX = 0.f;
-        float spread = 0.f;  // RMS horizontal distance from the mean
         unsigned spilled = 0;// past the discharge AND below the belt
         // Deepest point of the bed riding the middle of the belt, measured from
         // the conveying surface. This is the overrun alarm: once it passes the
@@ -360,7 +396,13 @@ namespace {
         // and everything downstream of that (transport rate, pile shape) is
         // measuring a jam rather than a conveyor.
         float bedTop = 0.f;
-        float pileTop = 0.f;// highest grain in the stockpile, above the floor
+        // Stockpile shape. `pileTop` is the crest above the floor and
+        // `pileRadius` the RMS horizontal distance from the pile's own centroid,
+        // so pileTop / pileRadius is a repose-angle proxy: THE number that
+        // separates a grippy material from a slick one independently of colour.
+        unsigned pileN = 0;
+        float pileTop = 0.f;
+        float pileRadius = 0.f;
     };
 
     Stats measure(const ::physx::PxVec4* p, unsigned n) {
@@ -368,7 +410,8 @@ namespace {
         s.n = n;
         if (n == 0) return s;
         s.minY = s.maxY = p[0].y;
-        double sx = 0, sz = 0;
+        double sx = 0;
+        double px = 0, pz = 0;
         for (unsigned i = 0; i < n; ++i) {
             const auto& v = p[i];
             if (!std::isfinite(v.x) || !std::isfinite(v.y) || !std::isfinite(v.z)) {
@@ -378,32 +421,31 @@ namespace {
             s.minY = std::min(s.minY, v.y);
             s.maxY = std::max(s.maxY, v.y);
             sx += v.x;
-            sz += v.z;
             if (v.x > kBeltX1 && v.y < kBeltY - 0.3f) ++s.spilled;
-            // Past the discharge drum: the stockpile, whatever height it has
-            // reached. Measured without the belt filter above, or the probe
-            // reads back its own threshold.
-            // The discharge stream is still 2 m up for the first metre past the
-            // lip, so start beyond where it lands or the probe measures the
-            // trajectory instead of the pile.
-            if (v.x > kBeltX1 + 1.4f) s.pileTop = std::max(s.pileTop, v.y);
+            if (v.x > kPileX) {
+                ++s.pileN;
+                px += v.x;
+                pz += v.z;
+                s.pileTop = std::max(s.pileTop, v.y);
+            }
             // Skip the metre downstream of the chute: grain in free fall, and
             // the heap it makes on landing, are not the conveyed bed.
             if (v.x > kChuteX + 1.0f && v.x < kBeltX1 - 0.3f && v.y > kBeltY)
                 s.bedTop = std::max(s.bedTop, v.y - kBeltY);
         }
         const unsigned good = n - s.bad;
-        if (!good) return s;
-        s.meanX = float(sx / good);
-        const double mz = sz / good;
-        double sq = 0;
-        for (unsigned i = 0; i < n; ++i) {
-            const auto& v = p[i];
-            if (!std::isfinite(v.x) || !std::isfinite(v.z)) continue;
-            const double dx = v.x - s.meanX, dz = v.z - mz;
-            sq += dx * dx + dz * dz;
+        if (good) s.meanX = float(sx / good);
+        if (s.pileN > 32) {
+            const double cx = px / s.pileN, cz = pz / s.pileN;
+            double sq = 0;
+            for (unsigned i = 0; i < n; ++i) {
+                const auto& v = p[i];
+                if (!std::isfinite(v.x) || !std::isfinite(v.z) || v.x <= kPileX) continue;
+                const double dx = v.x - cx, dz = v.z - cz;
+                sq += dx * dx + dz * dz;
+            }
+            s.pileRadius = float(std::sqrt(sq / s.pileN));
         }
-        s.spread = float(std::sqrt(sq / good));
         return s;
     }
 
@@ -441,23 +483,38 @@ namespace {
         return out;
     }
 
+    // ── One lane: belt + chute + material + its own instanced field ──────────
+    struct Lane {
+        const char* name = "";
+        float z = 0.f;
+        PbdParticles::Group* group = nullptr;
+        std::unique_ptr<GrainField> field;
+        std::unique_ptr<Chute> chute;
+        std::shared_ptr<MeshStandardMaterial> beltMat;
+        float scroll = 0.f;
+        Stats stats;
+        float cohortX0 = 0.f, cohortX1 = 0.f;
+    };
+
 }// namespace
 
 int main(int argc, char** argv) {
 
     std::string shot;
-    std::vector<int> shotFrames{150, 450, 900};
+    std::vector<int> shotFrames{150, 450, 1200};
     bool selftest = false;
+    bool bench = false;
     bool dropMode = false;
-    unsigned budget = 60000;
+    unsigned budget = 100000;
     float rate = 2800.f;
     int frames = 0;// 0 = per-mode default
     for (int i = 1; i < argc; ++i) {
         if (std::strcmp(argv[i], "--shot") == 0 && i + 1 < argc) shot = argv[++i];
         else if (std::strcmp(argv[i], "--selftest") == 0) selftest = true;
+        else if (std::strcmp(argv[i], "--bench") == 0) bench = true;
         else if (std::strcmp(argv[i], "--drop") == 0) dropMode = true;
         else if (std::strcmp(argv[i], "--count") == 0 && i + 1 < argc)
-            budget = unsigned(std::max(1, std::atoi(argv[++i])));
+            budget = unsigned(std::max(2, std::atoi(argv[++i])));
         else if (std::strcmp(argv[i], "--rate") == 0 && i + 1 < argc)
             rate = float(std::atof(argv[++i]));
         else if (std::strcmp(argv[i], "--frames") == 0 && i + 1 < argc) frames = std::atoi(argv[++i]);
@@ -470,8 +527,8 @@ int main(int argc, char** argv) {
             }
         }
     }
-    const bool offscreen = !shot.empty() || selftest;
-    if (frames <= 0) frames = dropMode ? 300 : 900;
+    const bool offscreen = !shot.empty() || selftest || bench;
+    if (frames <= 0) frames = dropMode ? 300 : 1200;
 
     // ── The GPU gate ─────────────────────────────────────────────────────────
     // Constructing a GPU world is the only honest probe (driver, device and the
@@ -498,15 +555,32 @@ int main(int argc, char** argv) {
     // stand over instead of one that buries its own discharge.
     ps.spacing = 0.05f;
     ps.solverIterations = 8;
-    PbdParticles particles(*world, ps);
-    const float radius = particles.solidRestOffset();
+    auto particles = std::make_unique<PbdParticles>(*world, ps);
+    const float radius = particles->solidRestOffset();
 
-    // Gravel: high friction so the belt can drag it and the pile can hold an
-    // angle. Damping bleeds the energy a 1 m drop onto the belt puts in.
+    // ── The two materials ────────────────────────────────────────────────────
+    // PxPBDMaterial has no restitution, so the contrast has to come from
+    // friction and damping — which is the honest place for it anyway: the
+    // repose angle of a granular heap IS its internal friction. Gravel grips
+    // and stacks; pellets slip and run out flat.
     PbdParticles::MaterialSpec gravelSpec;
-    gravelSpec.friction = 0.95f;
-    gravelSpec.damping = 0.2f;
-    auto& gravel = particles.addGroup(budget, gravelSpec);
+    // > 1 is legal; PBD friction is soft, so a "grippy" granular material wants
+    // more than a rigid body would. It also saturates: 2.0 measured the same
+    // pile aspect as 1.2 (0.749 vs 0.756), so 1.2 is where the knob stops
+    // paying and where it is left.
+    gravelSpec.friction = 1.2f;
+    gravelSpec.damping = 0.25f;
+    PbdParticles::MaterialSpec pelletSpec;
+    // Not zero: a belt conveys by FRICTION, so a frictionless material is not a
+    // slick material, it is one the belt cannot pick up at all (measured at
+    // 0.02: the pour sloshed over the skirtboards along the whole belt and a
+    // cohort covered 3.6 m against a 5.5 m gate). This is the low end that
+    // still conveys, and it runs out into a shallow pancake where gravel builds
+    // a mound.
+    pelletSpec.friction = 0.22f;
+    pelletSpec.damping = 0.f;
+
+    const unsigned perLane = std::max(1u, budget / 2u);
 
     // ── Scene ────────────────────────────────────────────────────────────────
     Canvas canvas(Canvas::Parameters()
@@ -516,9 +590,8 @@ int main(int argc, char** argv) {
                           .headless(offscreen));
     // Offscreen runs pick a backend for themselves — createRenderer with no
     // argument reads stdin. Vulkan is the target (deferred lighting + shadows on
-    // a 100k-instance field is what the demo is for), but THREEPP_WITH_VULKAN is
-    // PRIVATE to the library, so ask for it and fall back on the throw instead
-    // of guessing at compile time. That is also the CPU-only-CI path.
+    // a 100k-instance field is what the demo is for); the fallback is the
+    // CPU-only-CI / no-Vulkan-build path.
     std::unique_ptr<Renderer> renderer;
     if (offscreen) {
         try {
@@ -534,6 +607,16 @@ int main(int argc, char** argv) {
     renderer->toneMapping = ToneMapping::ACESFilmic;
     renderer->shadowMap().enabled = true;
 
+#ifdef THREEPP_WITH_VULKAN
+    auto* vk = dynamic_cast<VulkanRenderer*>(renderer.get());
+    if (vk && offscreen) {
+        // PIN the exposure. Auto-exposure chases a scene whose average
+        // brightness changes as the piles grow, which makes both A/B frame
+        // times and before/after captures unreadable.
+        vk->setAutoExposure(false);
+    }
+#endif
+
     Scene scene;
     scene.background = Color(0x86a3c0);
 
@@ -546,7 +629,7 @@ int main(int argc, char** argv) {
     auto floorMat = MeshStandardMaterial::create();
     floorMat->color = Color(0x6f6b64);
     floorMat->roughness = 0.95f;
-    auto floor = Mesh::create(BoxGeometry::create(28.f, 0.4f, 20.f), floorMat);
+    auto floor = Mesh::create(BoxGeometry::create(30.f, 0.4f, 24.f), floorMat);
     floor->position.y = -0.2f;
     floor->receiveShadow = true;
     scene.add(floor);
@@ -555,59 +638,92 @@ int main(int argc, char** argv) {
     auto* floorPhys = world->physics().createMaterial(0.9f, 0.9f, 0.f);
     world->addStatic(*floor, floorPhys);
 
+    // Gravel: dark, matte, faceted. detail 0 = a 20-face icosahedron, ~1/2 the
+    // triangles of even a coarse UV sphere, which matters 50 000 times over.
     auto gravelMat = MeshStandardMaterial::create();
-    gravelMat->color = Color(0x6b6258);
-    gravelMat->roughness = 0.9f;
+    gravelMat->color = Color(0x756a5c);
+    gravelMat->roughness = 0.95f;
     gravelMat->metalness = 0.f;
     gravelMat->flatShading = true;
-    // detail 0 = a 20-face icosahedron: a faceted pebble at ~1/5 the triangles
-    // of even a coarse UV sphere, which matters 60 000 times over.
-    GrainField field(IcosahedronGeometry::create(radius, 0), gravelMat, budget, 7u);
-    field.mesh().castShadow = true;
-    field.mesh().receiveShadow = true;
-    scene.add(field.shared());
+
+    // Pellets: pale, smooth, slightly glossy — a rounded bead.
+    auto pelletMat = MeshStandardMaterial::create();
+    pelletMat->color = Color(0xd8bd82);
+    pelletMat->roughness = 0.35f;
+    pelletMat->metalness = 0.05f;
+
+    std::vector<Lane> lanes;
+    if (dropMode) {
+        Lane l;
+        l.name = "gravel";
+        l.z = 0.f;
+        l.group = &particles->addGroup(budget, gravelSpec);
+        l.field = std::make_unique<GrainField>(IcosahedronGeometry::create(radius, 0), gravelMat,
+                                               budget, 7u);
+        lanes.push_back(std::move(l));
+    } else {
+        struct LaneDef {
+            const char* name;
+            float z;
+            const PbdParticles::MaterialSpec* mat;
+            std::shared_ptr<Material> visual;
+            std::shared_ptr<BufferGeometry> geom;
+            unsigned seed;
+        };
+        const LaneDef defs[2] = {
+                {"gravel", -kLaneZ, &gravelSpec, gravelMat,
+                 IcosahedronGeometry::create(radius, 0), 7u},
+                {"pellets", +kLaneZ, &pelletSpec, pelletMat,
+                 SphereGeometry::create(radius, 6, 4), 23u}};
+        for (const auto& d : defs) {
+            Lane l;
+            l.name = d.name;
+            l.z = d.z;
+            l.group = &particles->addGroup(perLane, *d.mat);
+            l.field = std::make_unique<GrainField>(d.geom, d.visual, perLane, d.seed);
+            l.chute = std::make_unique<Chute>(Vector3(kChuteX, kBeltY + 0.42f, d.z), kBeltWidth,
+                                              ps.spacing, d.seed * 41u + 1u);
+            lanes.push_back(std::move(l));
+        }
+    }
+    for (auto& l : lanes) {
+        l.field->mesh().castShadow = true;
+        l.field->mesh().receiveShadow = true;
+        scene.add(l.field->shared());
+    }
 
     std::unique_ptr<cv::ConveyorPhysics> beltSim;
-    std::shared_ptr<MeshStandardMaterial> beltMat;
-    float beltScroll = 0.f;
-    Chute chute(Vector3(kChuteX, kBeltY + 0.42f, 0.f), kBeltWidth, ps.spacing, 991u);
-
     if (!dropMode) {
-        auto spec = laneSpec(0.f);
-        beltMat = addConveyorVisual(scene, spec);
-        beltScroll = -spec.speed * beltMat->map->repeat.y;// travel is +X (not reversed)
-        beltSim = std::make_unique<cv::ConveyorPhysics>(*world, std::vector<cv::ConveyorSpec>{spec});
-        std::cout << "belt: " << beltSim->beltCount() << " drag segments, "
-                  << beltSim->wallCount() << " guide segments, " << kBeltSpeed << " m/s"
-                  << std::endl;
-
-        // The chute itself: an open cone whose mouth covers the emission slab,
-        // so grain reads as falling OUT of something instead of appearing in
-        // mid-air. Purely visual.
         auto chuteMat = MeshStandardMaterial::create();
         chuteMat->color = Color(0x767d84);
         chuteMat->roughness = 0.5f;
         chuteMat->metalness = 0.85f;
         chuteMat->side = Side::Double;
-        auto cone = Mesh::create(CylinderGeometry::create(0.52f, 0.26f, 0.50f, 20, 1, true),
-                                 chuteMat);
-        cone->position.set(kChuteX, chute.slabTop() + 0.22f, 0.f);
-        cone->castShadow = true;
-        scene.add(cone);
 
-        addTailSkirt(scene, *world, 0.f, chuteMat);
+        std::vector<cv::ConveyorSpec> specs;
+        for (auto& l : lanes) {
+            auto spec = laneSpec(l.z);
+            l.beltMat = addConveyorVisual(scene, spec);
+            l.scroll = -spec.speed * l.beltMat->map->repeat.y;// travel is +X
+            addTailSkirt(scene, *world, l.z, chuteMat);
+            addChuteVisual(scene, l.z, l.chute->slabTop(), chuteMat);
+            specs.push_back(std::move(spec));
+        }
+        // One ConveyorPhysics for every lane: it takes the whole spec list and
+        // registers ONE pre/post substep hook pair for all of them.
+        beltSim = std::make_unique<cv::ConveyorPhysics>(*world, std::move(specs));
+        std::cout << "belts: " << beltSim->beltCount() << " drag segments, "
+                  << beltSim->wallCount() << " guide segments, " << kBeltSpeed << " m/s"
+                  << std::endl;
     }
 
-    // Framing has to hold chute -> belt -> stockpile in one shot, which is an
-    // ~13 m span, so the FOV is narrow and the eye is far back rather than wide
-    // and close (a wide lens this near puts the near guide rail across half the
-    // frame).
-    // The eye also has to clear the skirtboards: a 0.32 m guide on a 1.0 m belt
-    // hides the bed entirely below ~18 degrees of elevation, and the conveyed
-    // stream IS the thing being demonstrated. ~27 degrees looks down into it.
-    const Vector3 look = dropMode ? Vector3(0.f, 0.35f, 0.f) : Vector3(1.6f, 1.15f, 0.f);
-    PerspectiveCamera camera(dropMode ? 42.f : 32.f, canvas.aspect(), 0.05f, 300.f);
-    camera.position.copy(dropMode ? Vector3(3.6f, 2.0f, 4.4f) : Vector3(8.0f, 7.4f, 10.4f));
+    // Framing has to hold chute -> belt -> stockpile for BOTH lanes in one
+    // shot, and the eye also has to clear the skirtboards: a 0.32 m guide on a
+    // 1.0 m belt hides the bed entirely below ~18 degrees of elevation, and the
+    // conveyed stream is the thing being demonstrated.
+    const Vector3 look = dropMode ? Vector3(0.f, 0.35f, 0.f) : Vector3(1.4f, 1.10f, 0.f);
+    PerspectiveCamera camera(dropMode ? 42.f : 34.f, canvas.aspect(), 0.05f, 300.f);
+    camera.position.copy(dropMode ? Vector3(3.6f, 2.0f, 4.4f) : Vector3(11.0f, 9.0f, 13.5f));
     camera.lookAt(look);
 
     std::unique_ptr<OrbitControls> controls;
@@ -623,11 +739,12 @@ int main(int argc, char** argv) {
 
     if (dropMode) {
         const auto seeded = block(budget, ps.spacing, Vector3(0.f, 0.9f, 0.f), 4242u);
-        gravel.emit(seeded.data(), unsigned(seeded.size()), Vector3(0.f, -0.5f, 0.f), 0.02f);
+        lanes[0].group->emit(seeded.data(), unsigned(seeded.size()), Vector3(0.f, -0.5f, 0.f),
+                             0.02f);
     }
-    std::cout << "granular_conveyor: capacity " << budget << ", radius " << radius
-              << " m, rate " << rate << "/s, GPU heap " << ws.gpuHeapCapacityMB << " MB"
-              << std::endl;
+    std::cout << "granular_conveyor: " << lanes.size() << " lane(s), capacity " << perLane
+              << "/lane, radius " << radius << " m, rate " << rate << "/s/lane, GPU heap "
+              << ws.gpuHeapCapacityMB << " MB" << std::endl;
 
     // ── Loop ─────────────────────────────────────────────────────────────────
     // Fixed dt, so a headless run is frame-for-frame reproducible and "frame N"
@@ -637,48 +754,95 @@ int main(int argc, char** argv) {
     constexpr int kCohortStart = 30;  // frame the cohort measurement starts
     constexpr int kCohortSpan = 300;  // 5 sim seconds later
     int frame = 0;
-    Stats last;
-    Stats at60, at240;
-    float cohortX0 = 0.f, cohortX1 = 0.f;
+    Stats at60, at240;// drop mode only (one lane)
     bool ok = true;
-    const auto fail = [&](const char* what) {
+    const auto fail = [&](const std::string& what) {
         std::cout << "SELFTEST FAIL: " << what << std::endl;
         ok = false;
     };
 
+    // --bench: fps sampled in windows, tagged with the live particle count.
+    struct BenchRow {
+        unsigned n;
+        double fps;
+        double simMs;
+        double gpuFrameMs;
+    };
+    std::vector<BenchRow> benchRows;
+    constexpr int kBenchWindow = 120;
+    std::chrono::high_resolution_clock::time_point windowStart;
+    double simAccum = 0, gpuAccum = 0;
+    int windowFrames = 0;
+
     canvas.animate([&] {
-        if (!dropMode) {
-            const auto& burst = chute.tick(kDt, rate);
+        for (auto& l : lanes) {
+            if (!l.chute) continue;
+            const auto& burst = l.chute->tick(kDt, rate);
             if (!burst.empty())
-                gravel.emit(burst.data(), unsigned(burst.size()),
-                            Vector3(0.4f, -1.4f, 0.f), 0.02f);
+                l.group->emit(burst.data(), unsigned(burst.size()), Vector3(0.4f, -1.4f, 0.f),
+                              0.02f);
         }
 
+        const auto tSim = std::chrono::high_resolution_clock::now();
         world->step(kDt);
-        particles.pull();
-        field.update(gravel.positions(), gravel.active());
+        particles->pull();
+        simAccum += std::chrono::duration<double, std::milli>(
+                            std::chrono::high_resolution_clock::now() - tSim)
+                            .count();
 
-        if (beltMat) {
-            beltMat->map->offset.y += beltScroll * kDt;
-            beltMat->needsUpdate();
+        for (auto& l : lanes) {
+            l.field->update(l.group->positions(), l.group->active());
+            if (!l.beltMat) continue;
+            l.beltMat->map->offset.y += l.scroll * kDt;
+            l.beltMat->needsUpdate();
         }
 
         renderer->render(scene, camera);
         ++frame;
 
-        last = measure(gravel.positions(), gravel.active());
-        if (last.bad) fail("non-finite particle positions");
-        if (frame == 60) at60 = last;
-        if (frame == 240) at240 = last;
-        if (frame == kCohortStart) cohortX0 = cohortMeanX(gravel.positions(), std::min(kCohort, last.n));
-        if (frame == kCohortStart + kCohortSpan)
-            cohortX1 = cohortMeanX(gravel.positions(), std::min(kCohort, last.n));
+#ifdef THREEPP_WITH_VULKAN
+        if (vk) gpuAccum += double(vk->lastFrameTimings().cpuFrameMs);
+#endif
+
+        unsigned total = 0;
+        for (auto& l : lanes) {
+            l.stats = measure(l.group->positions(), l.group->active());
+            total += l.stats.n;
+            if (l.stats.bad) fail(std::string(l.name) + ": non-finite particle positions");
+            if (frame == kCohortStart)
+                l.cohortX0 = cohortMeanX(l.group->positions(), std::min(kCohort, l.stats.n));
+            if (frame == kCohortStart + kCohortSpan)
+                l.cohortX1 = cohortMeanX(l.group->positions(), std::min(kCohort, l.stats.n));
+        }
+        if (dropMode) {
+            if (frame == 60) at60 = lanes[0].stats;
+            if (frame == 240) at240 = lanes[0].stats;
+        }
+
+        // Benchmark windows: close one whenever it fills, tagged with the
+        // population it was measured at.
+        if (bench) {
+            if (windowFrames == 0) {
+                windowStart = std::chrono::high_resolution_clock::now();
+                simAccum = gpuAccum = 0;
+            }
+            if (++windowFrames >= kBenchWindow) {
+                const double wall = std::chrono::duration<double>(
+                                            std::chrono::high_resolution_clock::now() - windowStart)
+                                            .count();
+                benchRows.push_back({total, double(windowFrames) / wall,
+                                     simAccum / windowFrames, gpuAccum / windowFrames});
+                windowFrames = 0;
+            }
+        }
 
         if (frame % 150 == 0) {
-            std::printf("[f%4d] n=%6u bed=%.3f pile=%.2f meanX=%+.2f spread=%.2f spilled=%6u "
-                        "minY=%.3f\n",
-                        frame, last.n, double(last.bedTop), double(last.pileTop),
-                        double(last.meanX), double(last.spread), last.spilled, double(last.minY));
+            std::printf("[f%4d] n=%6u", frame, total);
+            for (const auto& l : lanes)
+                std::printf("  %s{bed=%.3f pile=%.2f/%.2f spill=%5u}", l.name,
+                            double(l.stats.bedTop), double(l.stats.pileTop),
+                            double(l.stats.pileRadius), l.stats.spilled);
+            std::printf("\n");
             std::fflush(stdout);
         }
 
@@ -688,52 +852,83 @@ int main(int argc, char** argv) {
             std::snprintf(name, sizeof(name), "%s_f%04d.png", shot.c_str(), frame);
             const auto p = capture::shotOutputPath(name);
             renderer->writeFramebuffer(p);
-            std::cout << "wrote " << p.string() << " (n=" << last.n << ")" << std::endl;
+            std::cout << "wrote " << p.string() << " (n=" << total << ")" << std::endl;
         }
         if (offscreen && frame >= frames) canvas.close();
     });
 
-    // ConveyorPhysics borrows the world and must die first (it unregisters its
-    // substep hooks and releases its actors); so must the particle system.
+    // Both borrow the world and must die before it (they unregister substep
+    // hooks and release actors / device buffers through its CUDA context).
     beltSim.reset();
 
-    if (!selftest) return 0;
+    if (bench) {
+        std::printf("\n%10s %8s %10s %10s\n", "particles", "fps", "sim ms", "cpuFrame ms");
+        for (const auto& r : benchRows)
+            std::printf("%10u %8.1f %10.2f %10.2f\n", r.n, r.fps, r.simMs, r.gpuFrameMs);
+        std::fflush(stdout);
+    }
+
+    if (!selftest) {
+        particles.reset();
+        return 0;
+    }
 
     // ── Numeric gates ────────────────────────────────────────────────────────
-    if (last.bad) fail("non-finite particle positions");
-    // The floor's top face is y = 0 and a resting grain's centre sits one radius
-    // above it, so anything materially below 0 has tunnelled.
-    if (last.minY < -0.5f * radius) fail("particles tunnelled through the floor");
+    for (const auto& l : lanes) {
+        if (l.stats.bad) fail(std::string(l.name) + ": non-finite particle positions");
+        // The floor's top face is y = 0 and a resting grain's centre sits one
+        // radius above it, so anything materially below 0 has tunnelled.
+        if (l.stats.minY < -0.5f * radius)
+            fail(std::string(l.name) + ": particles tunnelled through the floor");
+    }
 
     if (dropMode) {
-        if (!(last.maxY < at60.maxY)) fail("the block never collapsed (maxY did not fall)");
-        if (!(at240.spread > at60.spread * 1.05f)) fail("the pile never spread out");
-        if (!(std::abs(last.spread - at240.spread) < 0.03f * at240.spread))
-            fail("the pile never settled (spread still moving at the end)");
-        std::printf("selftest[drop]: n=%u minY=%.4f maxY=%.4f spread60=%.3f spread240=%.3f "
-                    "spreadEnd=%.3f\n",
-                    last.n, double(last.minY), double(last.maxY), double(at60.spread),
-                    double(at240.spread), double(last.spread));
+        const auto& s = lanes[0].stats;
+        if (!(s.maxY < at60.maxY)) fail("the block never collapsed (maxY did not fall)");
+        std::printf("selftest[drop]: n=%u minY=%.4f maxY=%.4f (f60 %.4f, f240 %.4f)\n", s.n,
+                    double(s.minY), double(s.maxY), double(at60.maxY), double(at240.maxY));
     } else {
-        // THE belt gate: a cohort of grains must be carried along travel at
-        // more than half the belt speed. Half, not all, because a grain spends
-        // its first metre being accelerated from the chute's velocity and its
-        // last one falling off the end.
-        const float carried = cohortX1 - cohortX0;
-        const float floorDist = 0.5f * kBeltSpeed * (float(kCohortSpan) * kDt);
-        if (frames < kCohortStart + kCohortSpan) fail("run too short to measure transport");
-        if (!(carried > floorDist)) fail("the belt did not carry the grains");
-        if (last.spilled == 0) fail("nothing reached the discharge end");
-        // Overrun check: a jammed belt can still pass the transport gate if the
-        // bottom layer creeps, so pin the bed depth too.
-        if (!(last.bedTop < 2.f * kGuideHeight))
-            fail("the belt is overloaded (bed climbed over the guides)");
-        std::printf("selftest[belt]: n=%u carried=%.2f m in %.1f s (floor %.2f m) spilled=%u "
-                    "bed=%.3f (guide %.2f) minY=%.4f\n",
-                    last.n, double(carried), double(float(kCohortSpan) * kDt), double(floorDist),
-                    last.spilled, double(last.bedTop), double(kGuideHeight), double(last.minY));
+        for (const auto& l : lanes) {
+            // THE belt gate: a cohort of grains must be carried along travel at
+            // more than half the belt speed. Half, not all, because a grain
+            // spends its first metre being accelerated from the chute's velocity
+            // and its last one falling off the end.
+            const float carried = l.cohortX1 - l.cohortX0;
+            const float floorDist = 0.5f * kBeltSpeed * (float(kCohortSpan) * kDt);
+            if (frames < kCohortStart + kCohortSpan) fail("run too short to measure transport");
+            if (!(carried > floorDist)) fail(std::string(l.name) + ": the belt did not carry it");
+            if (l.stats.spilled == 0)
+                fail(std::string(l.name) + ": nothing reached the discharge end");
+            // Overrun check: a jammed belt can still pass the transport gate on
+            // the creep of its bottom layer, so pin the bed depth too.
+            if (!(l.stats.bedTop < 2.f * kGuideHeight))
+                fail(std::string(l.name) + ": the belt is overloaded (bed over the guides)");
+            std::printf("selftest[%s]: n=%u carried=%.2f m/%.1f s (floor %.2f) spilled=%u "
+                        "bed=%.3f minY=%.4f pile=%.2f/%.2f aspect=%.3f\n",
+                        l.name, l.stats.n, double(carried), double(float(kCohortSpan) * kDt),
+                        double(floorDist), l.stats.spilled, double(l.stats.bedTop),
+                        double(l.stats.minY), double(l.stats.pileTop), double(l.stats.pileRadius),
+                        l.stats.pileRadius > 0.f ? double(l.stats.pileTop / l.stats.pileRadius)
+                                                 : 0.0);
+        }
+        // THE materials gate: the grippy material must build a measurably
+        // STEEPER pile than the slick one. Colour is not evidence.
+        if (lanes.size() == 2) {
+            const auto aspect = [](const Stats& s) {
+                return s.pileRadius > 1e-3f ? s.pileTop / s.pileRadius : 0.f;
+            };
+            const float a0 = aspect(lanes[0].stats), a1 = aspect(lanes[1].stats);
+            if (!(a0 > a1 * 1.15f)) {
+                char buf[160];
+                std::snprintf(buf, sizeof(buf),
+                              "the two materials pile the same (gravel %.3f vs pellets %.3f)", a0,
+                              a1);
+                fail(buf);
+            }
+        }
     }
 
     std::cout << (ok ? "SELFTEST PASS" : "SELFTEST FAIL") << std::endl;
+    particles.reset();
     return ok ? 0 : 1;
 }

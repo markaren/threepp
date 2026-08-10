@@ -65,6 +65,14 @@ namespace threepp {
             // is generous for a solid phase (dense packing sees ~30).
             unsigned maxNeighborhood = 96;
             bool selfCollision = true;
+            // Speculative CCD against rigids. ON by default because the
+            // alternative is not "slightly worse contact" but grains LEAVING the
+            // world: a particle falling two metres arrives at several m/s and
+            // crosses more than its own contact offset per substep, and discrete
+            // collision then misses the floor entirely. Measured on this demo's
+            // 1.9 m discharge — slick grains sank through a 0.4 m floor slab
+            // until this was raised. \see PxParticleFlag::eENABLE_SPECULATIVE_CCD
+            bool speculativeCcd = true;
             // Velocity clamp; 0 = derive from spacing (100 radii per second,
             // matching PhysX's own snippets). A clamp is not optional: an
             // emitter that overlaps existing particles depenetrates explosively
@@ -252,6 +260,8 @@ namespace threepp {
             system_->setMaxDepenetrationVelocity(rest * 10.f);
             system_->setParticleFlag(PxParticleFlag::eDISABLE_SELF_COLLISION,
                                      !settings_.selfCollision);
+            system_->setParticleFlag(PxParticleFlag::eENABLE_SPECULATIVE_CCD,
+                                     settings_.speculativeCcd);
             world.scene().addActor(*system_);
 
             PxScopedCudaLock _lock(*cuda_);
