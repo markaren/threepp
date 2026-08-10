@@ -517,6 +517,7 @@ int main(int argc, char** argv) {
     float rate = 2800.f;
     int frames = 0;// 0 = per-mode default
     float fov = 0.f;// 0 = per-mode default
+    bool forceGl = false;// --api gl: bench/capture through OpenGL instead
     // --cam / --look come from the shared capture harness, so reframing a
     // beauty shot never needs a rebuild.
     const capture::Args cap = capture::parseArgs(argc, argv);
@@ -532,6 +533,16 @@ int main(int argc, char** argv) {
         else if (std::strcmp(argv[i], "--rate") == 0 && i + 1 < argc)
             rate = float(std::atof(argv[++i]));
         else if (std::strcmp(argv[i], "--frames") == 0 && i + 1 < argc) frames = std::atoi(argv[++i]);
+        // --api gl lets --bench measure the SAME sim through the other backend.
+        // The two are not doing the same work (GL is forward + shadow maps; the
+        // Vulkan path adds ray-traced shadows/AO/GI, ReSTIR, denoise and TAA),
+        // so this is not an apples-to-apples renderer comparison — it isolates
+        // what a 100k-instance field costs the CPU when instances are NOT
+        // first-class traced scene entities. Vulkan stays the default.
+        else if (std::strcmp(argv[i], "--api") == 0 && i + 1 < argc) {
+            const char* a = argv[++i];
+            forceGl = std::strcmp(a, "gl") == 0 || std::strcmp(a, "opengl") == 0;
+        }
         else if (std::strcmp(argv[i], "--shots") == 0 && i + 1 < argc) {
             shotFrames.clear();
             for (const char* s = argv[++i]; *s;) {
@@ -616,7 +627,9 @@ int main(int argc, char** argv) {
     // a 100k-instance field is what the demo is for); the fallback is the
     // CPU-only-CI / no-Vulkan-build path.
     std::unique_ptr<Renderer> renderer;
-    if (offscreen) {
+    if (offscreen && forceGl) {
+        renderer = createRenderer(canvas, GraphicsAPI::OpenGL);
+    } else if (offscreen) {
         try {
             renderer = createRenderer(canvas, GraphicsAPI::Vulkan);
         } catch (const std::exception& e) {
