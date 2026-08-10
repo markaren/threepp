@@ -81,8 +81,11 @@ namespace threepp {
         };
 
         // A PBD material. The PhysX factory takes eleven positional reals; this
-        // struct exists so a demo can name the two that actually separate gravel
-        // from pellets (friction, cohesion) instead of counting commas.
+        // struct exists so a caller can NAME the one or two that matter to it
+        // instead of counting commas. For a granular material that is friction
+        // (the repose angle of a heap is its internal friction) and damping;
+        // there is deliberately no restitution knob, because PxPBDMaterial has
+        // none.
         struct MaterialSpec {
             float friction = 0.4f;
             float damping = 0.f;
@@ -326,9 +329,21 @@ namespace threepp {
             auto* buffer = world_->physics().createParticleBuffer(maxParticles, 0, cuda_);
             if (!buffer) throw std::runtime_error("createParticleBuffer failed");
             buffer->setNbActiveParticles(0);
-            system_->addParticleBuffer(buffer);
 
-            groups_.push_back(std::make_unique<Group>(*cuda_, *buffer, *mat, phase, maxParticles));
+            // Build the Group (which allocates the pinned mirrors, and can
+            // throw) BEFORE the system takes ownership of the buffer, and undo
+            // the buffer if it does — otherwise a failed allocation leaves a
+            // buffer registered with a particle system that has no group to
+            // drive or release it.
+            std::unique_ptr<Group> group;
+            try {
+                group = std::make_unique<Group>(*cuda_, *buffer, *mat, phase, maxParticles);
+            } catch (...) {
+                buffer->release();
+                throw;
+            }
+            system_->addParticleBuffer(buffer);
+            groups_.push_back(std::move(group));
             return *groups_.back();
         }
 

@@ -22,6 +22,18 @@
 //   granular_conveyor --count 200000        particle budget (split over lanes)
 //   granular_conveyor --rate 4000           grains per second per lane
 //   granular_conveyor --drop                no belt: phase-1 block-drop test
+//   ... --cam 6,3,7 --look 4,0.5,-3 --fov 40    reframe without rebuilding
+//
+// The default framing is the overview: both chutes, both belts, both
+// stockpiles. Two framings worth keeping, found by looking at captures:
+//   --cam -2,4.4,6.2  --look 2.6,1.95,2.8 --fov 44   the conveyed BED, three
+//       quarters down the near belt with the far lane's pile behind it. The eye
+//       has to sit above ~18 degrees of elevation or the skirtboards hide the
+//       bed entirely, which is the one thing this view exists to show.
+//   --cam 7.4,2.3,1.6 --look 4.9,1,-2.9   --fov 44   the discharge curtain,
+//       close enough to read individual stones.
+// Both want a frame while the chute is still pouring: a lane empties in
+// (capacity/2)/rate seconds, so --frames past that shows a stopped machine.
 
 #include "threepp/threepp.hpp"
 
@@ -388,7 +400,6 @@ namespace {
         unsigned n = 0;
         unsigned bad = 0;// non-finite components — must stay 0
         float minY = 0.f, maxY = 0.f;
-        float meanX = 0.f;
         unsigned spilled = 0;// past the discharge AND below the belt
         // Deepest point of the bed riding the middle of the belt, measured from
         // the conveying surface. This is the overrun alarm: once it passes the
@@ -410,7 +421,6 @@ namespace {
         s.n = n;
         if (n == 0) return s;
         s.minY = s.maxY = p[0].y;
-        double sx = 0;
         double px = 0, pz = 0;
         for (unsigned i = 0; i < n; ++i) {
             const auto& v = p[i];
@@ -420,7 +430,6 @@ namespace {
             }
             s.minY = std::min(s.minY, v.y);
             s.maxY = std::max(s.maxY, v.y);
-            sx += v.x;
             if (v.x > kBeltX1 && v.y < kBeltY - 0.3f) ++s.spilled;
             if (v.x > kPileX) {
                 ++s.pileN;
@@ -433,8 +442,6 @@ namespace {
             if (v.x > kChuteX + 1.0f && v.x < kBeltX1 - 0.3f && v.y > kBeltY)
                 s.bedTop = std::max(s.bedTop, v.y - kBeltY);
         }
-        const unsigned good = n - s.bad;
-        if (good) s.meanX = float(sx / good);
         if (s.pileN > 32) {
             const double cx = px / s.pileN, cz = pz / s.pileN;
             double sq = 0;
@@ -508,8 +515,14 @@ int main(int argc, char** argv) {
     unsigned budget = 100000;
     float rate = 2800.f;
     int frames = 0;// 0 = per-mode default
+    float fov = 0.f;// 0 = per-mode default
+    // --cam / --look come from the shared capture harness, so reframing a
+    // beauty shot never needs a rebuild.
+    const capture::Args cap = capture::parseArgs(argc, argv);
     for (int i = 1; i < argc; ++i) {
         if (std::strcmp(argv[i], "--shot") == 0 && i + 1 < argc) shot = argv[++i];
+        else if (std::strcmp(argv[i], "--fov") == 0 && i + 1 < argc)
+            fov = float(std::atof(argv[++i]));
         else if (std::strcmp(argv[i], "--selftest") == 0) selftest = true;
         else if (std::strcmp(argv[i], "--bench") == 0) bench = true;
         else if (std::strcmp(argv[i], "--drop") == 0) dropMode = true;
@@ -535,9 +548,12 @@ int main(int argc, char** argv) {
     // PhysX GPU library all have to line up), so try it and report.
     PhysxWorld::Settings ws;
     ws.enableGpuDynamics = true;
-    // A PBD system's neighbourhood + contact pools live in the GPU heap; the
-    // 64 MB default is sized for a handful of rigid bodies.
-    ws.gpuHeapCapacityMB = 512;
+    // A PBD system's neighbourhood + contact pools live in the GPU heap, and the
+    // neighbourhood alone is maxParticles * maxNeighborhood * 4 bytes (~115 MB
+    // at 300k x 96). The 64 MB default is sized for a handful of rigid bodies.
+    // PxGpuDynamicsMemoryConfig::isValid() requires a POWER OF TWO here, so this
+    // steps rather than scales.
+    ws.gpuHeapCapacityMB = budget > 400000u ? 2048u : (budget > 150000u ? 1024u : 512u);
     std::unique_ptr<PhysxWorld> world;
     try {
         world = std::make_unique<PhysxWorld>(ws);
@@ -583,9 +599,15 @@ int main(int argc, char** argv) {
     const unsigned perLane = std::max(1u, budget / 2u);
 
     // ── Scene ────────────────────────────────────────────────────────────────
+    // Captures are 1080p (they are the deliverable); --selftest / --bench stay
+    // at 720p, where they are measuring physics and relative frame cost rather
+    // than producing an image.
+    const WindowSize size = !shot.empty() ? WindowSize{1920, 1080}
+                                          : (offscreen ? WindowSize{1280, 720}
+                                                       : WindowSize{1600, 900});
     Canvas canvas(Canvas::Parameters()
                           .title("PBD Granular Conveyor")
-                          .size(offscreen ? WindowSize{1280, 720} : WindowSize{1600, 900})
+                          .size(size)
                           .vsync(!offscreen)
                           .headless(offscreen));
     // Offscreen runs pick a backend for themselves — createRenderer with no
@@ -618,7 +640,14 @@ int main(int argc, char** argv) {
 #endif
 
     Scene scene;
-    scene.background = Color(0x86a3c0);
+    constexpr int kSky = 0x86a3c0;
+    scene.background = Color(kSky);
+    // NO scene fog, deliberately. Fading the far ground into the sky would be
+    // the natural way to hide a finite ground plate's edge, but on the Vulkan
+    // deferred backend Scene::fog desaturates the WHOLE frame regardless of
+    // Fog::nearPlane/farPlane — probed with near=500/far=1000, which cannot
+    // touch a 16 m-deep scene, and the yard still lost its colour. So the edge
+    // is pushed out of frame geometrically instead (see the floor below).
 
     auto sun = DirectionalLight::create(0xfff3e0, 3.2f);
     sun->position.set(7.f, 10.f, 5.f);
@@ -627,9 +656,12 @@ int main(int argc, char** argv) {
     scene.add(AmbientLight::create(0x8899bb, 0.35f));
 
     auto floorMat = MeshStandardMaterial::create();
-    floorMat->color = Color(0x6f6b64);
+    floorMat->color = Color(0x5f5a52);
     floorMat->roughness = 0.95f;
-    auto floor = Mesh::create(BoxGeometry::create(30.f, 0.4f, 24.f), floorMat);
+    // Far larger than the framing needs: with no fog to hide it, the plate's
+    // edge has to be pushed past where a ~30-degree-elevation camera can see
+    // ground at all. A visible edge reads as a diorama.
+    auto floor = Mesh::create(BoxGeometry::create(400.f, 0.4f, 400.f), floorMat);
     floor->position.y = -0.2f;
     floor->receiveShadow = true;
     scene.add(floor);
@@ -721,9 +753,12 @@ int main(int argc, char** argv) {
     // shot, and the eye also has to clear the skirtboards: a 0.32 m guide on a
     // 1.0 m belt hides the bed entirely below ~18 degrees of elevation, and the
     // conveyed stream is the thing being demonstrated.
-    const Vector3 look = dropMode ? Vector3(0.f, 0.35f, 0.f) : Vector3(1.4f, 1.10f, 0.f);
-    PerspectiveCamera camera(dropMode ? 42.f : 34.f, canvas.aspect(), 0.05f, 300.f);
-    camera.position.copy(dropMode ? Vector3(3.6f, 2.0f, 4.4f) : Vector3(11.0f, 9.0f, 13.5f));
+    const Vector3 look = cap.camTarget.value_or(
+            dropMode ? Vector3(0.f, 0.35f, 0.f) : Vector3(1.5f, 1.05f, 0.3f));
+    PerspectiveCamera camera(fov > 0.f ? fov : (dropMode ? 42.f : 33.f), canvas.aspect(), 0.05f,
+                             300.f);
+    camera.position.copy(cap.camPos.value_or(
+            dropMode ? Vector3(3.6f, 2.0f, 4.4f) : Vector3(13.5f, 6.2f, 8.0f)));
     camera.lookAt(look);
 
     std::unique_ptr<OrbitControls> controls;
@@ -742,9 +777,9 @@ int main(int argc, char** argv) {
         lanes[0].group->emit(seeded.data(), unsigned(seeded.size()), Vector3(0.f, -0.5f, 0.f),
                              0.02f);
     }
-    std::cout << "granular_conveyor: " << lanes.size() << " lane(s), capacity " << perLane
-              << "/lane, radius " << radius << " m, rate " << rate << "/s/lane, GPU heap "
-              << ws.gpuHeapCapacityMB << " MB" << std::endl;
+    std::cout << "granular_conveyor: " << lanes.size() << " lane(s), capacity "
+              << lanes[0].group->capacity() << "/lane, radius " << radius << " m, rate " << rate
+              << "/s/lane, GPU heap " << ws.gpuHeapCapacityMB << " MB" << std::endl;
 
     // ── Loop ─────────────────────────────────────────────────────────────────
     // Fixed dt, so a headless run is frame-for-frame reproducible and "frame N"
@@ -765,13 +800,15 @@ int main(int argc, char** argv) {
     struct BenchRow {
         unsigned n;
         double fps;
-        double simMs;
-        double gpuFrameMs;
+        double simMs;    // world.step() + the position readback
+        double frameMs;  // renderer CPU frame
+        double gbufMs;   // raster G-buffer (Vulkan only)
+        double shadeMs;  // deferred shade / trace (Vulkan only)
     };
     std::vector<BenchRow> benchRows;
     constexpr int kBenchWindow = 120;
     std::chrono::high_resolution_clock::time_point windowStart;
-    double simAccum = 0, gpuAccum = 0;
+    double simAccum = 0, frameAccum = 0, gbufAccum = 0, shadeAccum = 0;
     int windowFrames = 0;
 
     canvas.animate([&] {
@@ -801,13 +838,24 @@ int main(int argc, char** argv) {
         ++frame;
 
 #ifdef THREEPP_WITH_VULKAN
-        if (vk) gpuAccum += double(vk->lastFrameTimings().cpuFrameMs);
+        if (vk) {
+            const auto t = vk->lastFrameTimings();
+            frameAccum += double(t.cpuFrameMs);
+            gbufAccum += double(t.rasterGbufMs);
+            shadeAccum += double(t.pathTraceMs);
+        }
 #endif
 
+        // Telemetry is not free: measure() is two passes over every grain, so at
+        // 300k it is milliseconds of CPU per frame and would show up in the
+        // --bench table as a rendering cost. Sample it at 2 Hz plus the exact
+        // frames a gate reads, which still catches a NaN within 30 frames.
+        const bool sample = frame % 30 == 0 || frame == kCohortStart ||
+                            frame == kCohortStart + kCohortSpan || frame >= frames;
         unsigned total = 0;
         for (auto& l : lanes) {
-            l.stats = measure(l.group->positions(), l.group->active());
-            total += l.stats.n;
+            if (sample) l.stats = measure(l.group->positions(), l.group->active());
+            total += l.group->active();
             if (l.stats.bad) fail(std::string(l.name) + ": non-finite particle positions");
             if (frame == kCohortStart)
                 l.cohortX0 = cohortMeanX(l.group->positions(), std::min(kCohort, l.stats.n));
@@ -815,8 +863,8 @@ int main(int argc, char** argv) {
                 l.cohortX1 = cohortMeanX(l.group->positions(), std::min(kCohort, l.stats.n));
         }
         if (dropMode) {
-            if (frame == 60) at60 = lanes[0].stats;
-            if (frame == 240) at240 = lanes[0].stats;
+            if (frame == 60) at60 = measure(lanes[0].group->positions(), lanes[0].group->active());
+            if (frame == 240) at240 = measure(lanes[0].group->positions(), lanes[0].group->active());
         }
 
         // Benchmark windows: close one whenever it fills, tagged with the
@@ -824,14 +872,15 @@ int main(int argc, char** argv) {
         if (bench) {
             if (windowFrames == 0) {
                 windowStart = std::chrono::high_resolution_clock::now();
-                simAccum = gpuAccum = 0;
+                simAccum = frameAccum = gbufAccum = shadeAccum = 0;
             }
             if (++windowFrames >= kBenchWindow) {
                 const double wall = std::chrono::duration<double>(
                                             std::chrono::high_resolution_clock::now() - windowStart)
                                             .count();
-                benchRows.push_back({total, double(windowFrames) / wall,
-                                     simAccum / windowFrames, gpuAccum / windowFrames});
+                const double k = 1.0 / double(windowFrames);
+                benchRows.push_back({total, double(windowFrames) / wall, simAccum * k,
+                                     frameAccum * k, gbufAccum * k, shadeAccum * k});
                 windowFrames = 0;
             }
         }
@@ -862,9 +911,12 @@ int main(int argc, char** argv) {
     beltSim.reset();
 
     if (bench) {
-        std::printf("\n%10s %8s %10s %10s\n", "particles", "fps", "sim ms", "cpuFrame ms");
+        std::printf("\n%10s %8s %9s %9s %9s %9s   (%dx%d, %d-frame windows)\n", "particles", "fps",
+                    "sim ms", "frame ms", "gbuf ms", "shade ms", size.width(), size.height(),
+                    kBenchWindow);
         for (const auto& r : benchRows)
-            std::printf("%10u %8.1f %10.2f %10.2f\n", r.n, r.fps, r.simMs, r.gpuFrameMs);
+            std::printf("%10u %8.1f %9.2f %9.2f %9.3f %9.3f\n", r.n, r.fps, r.simMs, r.frameMs,
+                        r.gbufMs, r.shadeMs);
         std::fflush(stdout);
     }
 
