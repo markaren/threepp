@@ -33,7 +33,7 @@ endif ()
 threepp_fix_physx_static_link_order()
 
 if (TARGET unofficial::omniverse-physx-sdk::sdk)
-    foreach (name Imu_test JointEncoder_test ContactSensor_test ForceTorqueSensor_test EditorPhysicsPlay_test EditorArticulationPlay_test EditorJointPlay_test EditorVehiclePlay_test EditorSensorPlay_test SoftBody_test EditorConveyor_test PhysxWorld_test)
+    foreach (name Imu_test JointEncoder_test ContactSensor_test ForceTorqueSensor_test EditorPhysicsPlay_test EditorArticulationPlay_test EditorJointPlay_test EditorVehiclePlay_test EditorSensorPlay_test SoftBody_test EditorConveyor_test PhysxWorld_test PbdParticles_test)
         add_test_executable(${name})
         target_link_libraries(${name} PRIVATE unofficial::omniverse-physx-sdk::sdk)
     endforeach ()
