@@ -216,6 +216,11 @@ VulkanRenderer::Impl::~Impl() {
             for (auto f : inFlight) if (f) vkDestroyFence(d, f, nullptr);
             if (cmdPool) vkDestroyCommandPool(d, cmdPool, nullptr);
             gpuTimings_.reset();// query pool destruction while device is still valid
+            // Explicit, next to gpuTimings_ and for the same reason: the pass
+            // frees its per-field position rings through ctx's allocator, and
+            // the device is provably idle here (flushRetireQueue above).
+            particleFieldPass_.reset();
+            particleFields_.clear();
 
             if (tlas) ctx->rt().destroyAccelerationStructure(d, tlas, nullptr);
             destroyBuffer(ctx->allocator(), tlasBuffer);

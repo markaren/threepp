@@ -1758,6 +1758,30 @@ void VulkanRenderer::Impl::prepareInstanceExpansion(uint32_t frame) {
             }
         }
 
+// ParticleField, phase 0. The cost claim the whole entity rests on is visible
+// right here: this function is O(fields) plus ONE memcpy per field whose sim
+// advanced. There is no per-particle loop anywhere in it, and nothing it writes
+// grows the entry list, the draw list or the TLAS.
+void VulkanRenderer::Impl::prepareParticleFields(uint32_t frame) {
+            if (!particleFieldPass_) return;
+            // Nothing to do AND nothing to sweep: the overwhelmingly common
+            // scene. Skip before the profiler scope so it stays honest about
+            // which frames actually paid.
+            if (particleFields_.empty() &&
+                particleFieldPass_->liveFieldCount() == 0) return;
+            THREEPP_CPUPROF("frame.P_particleFields");
+            particleFieldRecs_.clear();
+            particleFieldRecs_.reserve(particleFields_.size());
+            for (const auto& [field, entryIndex] : particleFields_) {
+                if (!field) continue;
+                // classId read live, not cached at expansion: setObjectClassId
+                // is a per-frame-editable label and a field is one lookup.
+                particleFieldRecs_.push_back({field, entryIndex,
+                                              classIdForObject(*field)});
+            }
+            particleFieldPass_->prepareFrame(frameSerial_, frame, particleFieldRecs_);
+        }
+
 void VulkanRenderer::Impl::recordInstanceExpansion(VkCommandBuffer cb, uint32_t frame) {
             if (!gpuInstanceExpand_ || !instExpand_ || instExpandSpans_.empty()) return;
             gpuTimings_->begin(cb, vulkan::TP_InstanceExpand, frame);

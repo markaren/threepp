@@ -41,6 +41,7 @@
 #include "HiZPyramid.hpp"
 #include "InstanceExpand.hpp"
 #include "OcclusionCull.hpp"
+#include "ParticleFieldPass.hpp"
 #include "ProbeGI.hpp"
 #include "WaterDisplacePipeline.hpp"
 #include "FoamWorldPipeline.hpp"
@@ -76,6 +77,7 @@
 #include "threepp/objects/GrassMesh.hpp"
 #include "threepp/objects/InstancedMesh.hpp"
 #include "threepp/objects/Mesh.hpp"
+#include "threepp/objects/ParticleField.hpp"
 #include "threepp/objects/ParticleSystem.hpp"
 #include "threepp/objects/Skeleton.hpp"
 #include "threepp/objects/SkinnedMesh.hpp"
@@ -1755,6 +1757,19 @@ namespace threepp {
         // in the same recordCommandBuffer body branch on it).
         bool occlActiveThisFrame_ = false;
 
+        // ── ParticleField (phase 0: buffers + descriptor, no consumer) ──────
+        // The device-side position rings and the per-frame FieldDesc SSBO for
+        // every threepp::ParticleField in the scene. ALWAYS ON and free when
+        // there are no fields: the whole pass is O(fields), and a scene without
+        // one does a single empty-vector test per frame.
+        std::unique_ptr<vulkan::ParticleFieldPass> particleFieldPass_;
+        // (field, its index in lastVisibleEntries_). Written only by a full
+        // scene expansion — a field appearing or disappearing is structural, so
+        // the snapshot fast path never runs with this stale.
+        std::vector<std::pair<ParticleField*, uint32_t>> particleFields_;
+        // Reused scratch for the per-frame Rec list handed to the pass.
+        std::vector<vulkan::ParticleFieldPass::Rec> particleFieldRecs_;
+
         // ── GPU per-instance world matrices (stage 1: producer only) ─────────
         // instance_expand.comp recomputes, per InstancedMesh span, exactly what
         // ensureSceneBuilt's lean refresh bakes into MeshEntry::worldMatrix. No
@@ -2659,6 +2674,13 @@ namespace threepp {
         // written here, and a descriptor written while its frame is in flight
         // is the VUID-03047 zone.
         void prepareInstanceExpansion(uint32_t frame);
+
+        // ── ParticleField (phase 0) ─────────────────────────────────────────
+        // Grow this frame's per-field position ring, copy each field's host
+        // staging into THIS frame's ring slot (version-gated), and rewrite the
+        // FieldDesc SSBO. Same window and same reason as
+        // prepareInstanceExpansion: post-fence, pre-record.
+        void prepareParticleFields(uint32_t frame);
 
         // One dispatch, into the frame's already-open command buffer.
         void recordInstanceExpansion(VkCommandBuffer cb, uint32_t frame);

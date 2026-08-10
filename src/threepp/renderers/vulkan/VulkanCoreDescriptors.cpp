@@ -512,6 +512,12 @@ void VulkanRenderer::Impl::ensureHybridResources() {
                         *ctx, kFramesInFlight,
                         [this](Buffer&& b) { retire(std::move(b)); });
             }
+            // ParticleField device state. Same retire contract again: a field
+            // that left the scene may still be named by an in-flight frame.
+            if (!particleFieldPass_) {
+                particleFieldPass_ = std::make_unique<vulkan::ParticleFieldPass>(
+                        *ctx, [this](Buffer&& b) { retire(std::move(b)); });
+            }
             // MSAA render pass + pipelines — only built when opted in, and
             // rebuilt when the sample count changes (2↔4) or MSAA is turned
             // off (torn down; the 1× path above is untouched either way).

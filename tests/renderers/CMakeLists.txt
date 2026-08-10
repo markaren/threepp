@@ -83,6 +83,17 @@ if (THREEPP_WITH_VULKAN AND THREEPP_WITH_GLFW)
     add_test(NAME VulkanInstanceExpand_test COMMAND VulkanInstanceExpand_test)
     set_tests_properties(VulkanInstanceExpand_test PROPERTIES SKIP_RETURN_CODE 42)
 
+    # ParticleField phase 0: the entity must be ONE entry whatever its capacity.
+    # Asserts the three O(entries) CPU phases stay flat from a 10k- to a
+    # 300k-particle field (read straight out of the CPU phase profiler), that a
+    # field adds exactly one entry, and that its buffer plumbing provokes no
+    # validation errors. Needs a device, hence the same skip code as the goldens.
+    add_executable(VulkanParticleField_test VulkanParticleField_test.cpp)
+    target_link_libraries(VulkanParticleField_test PRIVATE threepp)
+    target_include_directories(VulkanParticleField_test PRIVATE "${PROJECT_SOURCE_DIR}/src")
+    add_test(NAME VulkanParticleField_test COMMAND VulkanParticleField_test)
+    set_tests_properties(VulkanParticleField_test PROPERTIES SKIP_RETURN_CODE 42)
+
     add_executable(VulkanCameraModel_test VulkanCameraModel_test.cpp)
     target_link_libraries(VulkanCameraModel_test PRIVATE threepp)
     target_include_directories(VulkanCameraModel_test PRIVATE "${PROJECT_SOURCE_DIR}/src")

@@ -231,7 +231,13 @@ void VulkanRenderer::Impl::cullEntriesAgainstFrustum(Camera& camera) {
                 // doesn't reflect the per-frame deformed extents; frustum-
                 // culling them risks popping a still-on-screen body out of
                 // the gbuffer.
-                if (e0.isOverlay || e0.isSkinned || e0.isDisplaced || e0.isMorphed || e0.isTet)
+                // ParticleField joins the deformers for a stronger reason than
+                // theirs: its particles live on the device, so the CPU has no
+                // bound to test at all — not a stale one, none. A field is never
+                // frustum-culled at entry granularity; per-particle culling, if
+                // it is ever wanted, belongs in the expansion shader.
+                if (e0.isOverlay || e0.isSkinned || e0.isDisplaced || e0.isMorphed ||
+                    e0.isTet || e0.isParticleField)
                     continue;
                 if (e0.isGrass) {
                     // Grass CAN be frustum-culled: unlike the other deformers, its
@@ -511,6 +517,10 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
             std::vector<MeshEntry> built;
             std::vector<LineEntry> builtLines;
             std::vector<EntrySpan> builtSpans;
+            // (field, its entry index). Rebuilt only here: a field appearing or
+            // disappearing is a structural change, so the snapshot fast path
+            // can't reach a frame where this list is stale.
+            std::vector<std::pair<ParticleField*, uint32_t>> builtFields;
             sceneSnapshot_.clear();
             // Rebuilt below as the walk visits each threepp::LOD node — a
             // mesh entry whose parent chain hits one of these is exempt from
@@ -659,6 +669,18 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                 const bool isSkinned   = (dynamic_cast<SkinnedMesh*>(m)   != nullptr);
                 const bool isDisplaced = (dynamic_cast<DisplacedMesh*>(m) != nullptr);
                 const bool isGrass     = (dynamic_cast<GrassMesh*>(m)     != nullptr);
+                // A ParticleField expands to EXACTLY ONE entry whatever its
+                // capacity — that is the whole reason the type exists. It is
+                // classified here rather than dropped like SplatCloud because it
+                // must reach the entry list: it is the field's one entry that
+                // carries the world matrix, the entry index the FieldDesc
+                // publishes as instanceCustomIndex, and (from phase 1) the one
+                // indirect draw. Its Mesh geometry is a zero-area placeholder
+                // (see ParticleField.cpp), so the machinery below builds it a
+                // harmless one-triangle BLAS and one desc slot apiece, and the
+                // field draws no pixels until a representation is switched on.
+                ParticleField* particleField = dynamic_cast<ParticleField*>(m);
+                const bool isParticleField = (particleField != nullptr);
                 const bool isMorphed   = isMorphedMesh(*m);
                 // Tet-skinned PhysX soft body — detected via the material flag set by
                 // SoftBody::enableGpuSkinning() (which also carries the per-frame tet
@@ -766,17 +788,29 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                     e.isGrass      = isGrass;
                     e.isMorphed    = isMorphed;
                     e.isTet        = isTet;
+                    e.isParticleField = isParticleField;
                     e.camAttached  = camAttached;
                     setLodCaches(e);
                     std::memcpy(e.worldMatrix.data(), m->matrixWorld->elements.data(), 64);
                     built.push_back(e);
                 }
                 sp.count = static_cast<uint32_t>(built.size()) - sp.first;
+                if (isParticleField) {
+                    // The placeholder geometry's bounds describe a point at the
+                    // field's origin and say nothing about where the particles
+                    // are, so publish "no bounds" rather than a wrong box. The
+                    // frustum cull default-includes the span on the same flag.
+                    sp.localBoundsValid = false;
+                    sp.localRadius      = 0.f;
+                    sp.aabbValid        = false;
+                    builtFields.emplace_back(particleField, sp.first);
+                }
                 builtSpans.push_back(sp);
             });
             lastVisibleEntries_ = std::move(built);
             lastVisibleLines_   = std::move(builtLines);
             entrySpans_         = std::move(builtSpans);
+            particleFields_     = std::move(builtFields);
             probeGridDirty_     = true;// scene structure changed → re-fit the probe grid
             }// !snapLean
 

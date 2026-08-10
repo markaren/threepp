@@ -87,6 +87,12 @@ namespace threepp::vulkan::impl {
         bool     isGrass     = false;// GPU wind-deformed grass field
         bool     isMorphed   = false;
         bool     isTet       = false;
+        // threepp::ParticleField — a whole particle field (up to millions of
+        // particles) as ONE entry. Its span has inst == nullptr and count == 1,
+        // and its world AABB is NOT derivable on the CPU (the positions are on
+        // the device), so it is never frustum-culled at entry granularity and
+        // carries the occlusion "always draw" bit, exactly like the deformers.
+        bool     isParticleField = false;
         bool     isInstanced = false;// entry came from an InstancedMesh expansion
                                      // (the snapshot fast path recomputes its world
                                      // matrix as matrixWorld * getMatrixAt(i))

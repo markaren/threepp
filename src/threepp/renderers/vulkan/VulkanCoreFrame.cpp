@@ -667,6 +667,10 @@ bool VulkanRenderer::Impl::beginDeferredFrame(Object3D& scene, Camera& camera) {
             // post-fence window because it writes this slot's host-mapped pools
             // and this slot's descriptor set.
             prepareInstanceExpansion(currentFrame);
+            // ParticleField position rings + FieldDesc SSBO. Same site for the
+            // same reason (R6): this writes this slot's host-visible buffers,
+            // and phase 1's descriptor write lands here too.
+            prepareParticleFields(currentFrame);
             {
                 THREEPP_CPUPROF("frame.I3_uploadMovedBits");
                 uploadMeshMovedBits(currentFrame);

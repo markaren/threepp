@@ -336,8 +336,13 @@ namespace threepp {
                 // — NOT di.stableId, which is per-object and made phase 1
                 // all-or-nothing for InstancedMesh (see occlCullBitFor).
                 cm.cullBit = occlCullBitFor(en);
+                // ParticleField: always draw. The occlusion path copies draw
+                // records with instanceCount zeroed and never compacts them
+                // ("records never move"), and a field's CPU-side world AABB is
+                // not merely stale but unknowable — the positions are on the
+                // device. Same escape the deformers take.
                 bool always = en.isSkinned || en.isDisplaced ||
-                              en.isMorphed || en.isTet;
+                              en.isMorphed || en.isTet || en.isParticleField;
                 if (en.isGrass) {
                     Box3 worldAabb;
                     if (!grassSwayWorldAabb(en, worldAabb)) {

@@ -230,6 +230,7 @@ set(publicHeaders
         "threepp/objects/TextSprite.hpp"
         "threepp/objects/Water.hpp"
         "threepp/objects/GrassMesh.hpp"
+        "threepp/objects/ParticleField.hpp"
         "threepp/objects/SplatCloud.hpp"
 
         "threepp/splats/SplatData.hpp"
@@ -684,6 +685,7 @@ set(sources
         "threepp/objects/TextSprite.cpp"
         "threepp/objects/Water.cpp"
         "threepp/objects/GrassMesh.cpp"
+        "threepp/objects/ParticleField.cpp"
         "threepp/objects/SplatCloud.cpp"
 
         "threepp/splats/SplatData.cpp"
@@ -868,6 +870,7 @@ if (THREEPP_WITH_VULKAN)
             "threepp/renderers/vulkan/VulkanGpuLayouts.hpp"
             "threepp/renderers/vulkan/VulkanGeometryState.hpp"
             "threepp/renderers/vulkan/VulkanSceneTypes.hpp"
+            "threepp/renderers/vulkan/ParticleFieldPass.hpp"
             "threepp/renderers/vulkan/VulkanViewContext.hpp"
             "threepp/renderers/vulkan/TaaResolve.hpp"
             "threepp/renderers/vulkan/WaterDisplacePipeline.hpp"
@@ -912,6 +915,7 @@ if (THREEPP_WITH_VULKAN)
             "threepp/renderers/vulkan/HiZPyramid.cpp"
             "threepp/renderers/vulkan/OcclusionCull.cpp"
             "threepp/renderers/vulkan/InstanceExpand.cpp"
+            "threepp/renderers/vulkan/ParticleFieldPass.cpp"
             "threepp/renderers/vulkan/WaterDisplacePipeline.cpp"
             "threepp/renderers/vulkan/FoamWorldPipeline.cpp"
             "threepp/renderers/vulkan/GrassWindPipeline.cpp"
