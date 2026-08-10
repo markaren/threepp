@@ -1895,6 +1895,20 @@ namespace threepp {
         std::vector<VkSemaphore> renderFinished;
         std::array<VkFence,         kFramesInFlight> inFlight{};
 
+        // Suppressed-present swapchain state (ctx->presentSuppressed(), i.e. a
+        // headless canvas). Nothing is ever presented, so nothing is ever
+        // released back to the presentation engine either: each frame-in-flight
+        // slot acquires ONE image the first time it runs and keeps it for the
+        // swapchain's lifetime. UINT32_MAX = this slot has not acquired yet.
+        // Reset by recreateSwapchainAndDescriptors, which is the only thing that
+        // invalidates the images.
+        std::array<uint32_t, kFramesInFlight> pinnedSwapImage_{};
+        // Whether imageAvailable[slot] still carries an unconsumed signal from
+        // the acquire. True for exactly the one frame that follows an acquire;
+        // false afterwards, so the submit does not wait on an already-consumed
+        // binary semaphore (which would deadlock).
+        std::array<bool, kFramesInFlight> acquireSemPending_{};
+
         uint32_t currentFrame = 0;
         bool needsResize = false;
 
@@ -2029,6 +2043,15 @@ namespace threepp {
         // (the image count can change and retired semaphores may be left in
         // an indeterminate signalled state). Requires an idle device.
         void createRenderFinishedSemaphores();
+
+        // The frame's swapchain image. Normally a straight
+        // vkAcquireNextImageKHR; when presents are suppressed (headless canvas)
+        // the slot's image is acquired once and reused from then on, because a
+        // never-presented image is never released back to the presentation
+        // engine and so can never be re-acquired. Sets pinnedSwapImage_ /
+        // acquireSemPending_ and returns the acquire's VkResult (VK_SUCCESS on
+        // the reuse path) for the caller's OUT_OF_DATE / SUBOPTIMAL handling.
+        VkResult acquireOrReuseSwapchainImage(uint32_t& imageIndex);
 
         // Allocate, begin, return a one-shot command buffer.
         VkCommandBuffer beginOneShot();

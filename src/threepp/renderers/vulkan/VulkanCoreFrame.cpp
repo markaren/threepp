@@ -40,6 +40,31 @@ void VulkanRenderer::Impl::createRenderFinishedSemaphores() {
             sci.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
             for (auto& s : renderFinished)
                 check(vkCreateSemaphore(ctx->device(), &sci, nullptr, &s), "vkCreateSemaphore B");
+            // New images ⇒ every pinned index is stale. Called from
+            // createCommandResources and from every swapchain recreation, which
+            // is exactly the set of moments that invalidate them.
+            pinnedSwapImage_.fill(UINT32_MAX);
+            acquireSemPending_.fill(false);
+        }
+
+VkResult VulkanRenderer::Impl::acquireOrReuseSwapchainImage(uint32_t& imageIndex) {
+            if (ctx->presentSuppressed() && pinnedSwapImage_[currentFrame] != UINT32_MAX) {
+                // This slot already owns an image and nothing ever took it back,
+                // so there is nothing to acquire and nothing to wait for: the
+                // inFlight fence the caller just waited on is what orders this
+                // frame's writes after the previous frame that used this slot —
+                // and therefore this same image.
+                imageIndex = pinnedSwapImage_[currentFrame];
+                return VK_SUCCESS;
+            }
+            const VkResult r = vkAcquireNextImageKHR(
+                    ctx->device(), ctx->swapchain(), UINT64_MAX,
+                    imageAvailable[currentFrame], VK_NULL_HANDLE, &imageIndex);
+            if (r == VK_SUCCESS || r == VK_SUBOPTIMAL_KHR) {
+                acquireSemPending_[currentFrame] = true;
+                if (ctx->presentSuppressed()) pinnedSwapImage_[currentFrame] = imageIndex;
+            }
+            return r;
         }
 
 VkCommandBuffer VulkanRenderer::Impl::beginOneShot() {
@@ -519,11 +544,12 @@ bool VulkanRenderer::Impl::beginDeferredFrame(Object3D& scene, Camera& camera) {
             // with only kFramesInFlight swapchain images this waits for the
             // presentation engine to release one. Own key, so a compositor stall
             // cannot be read as CPU work — or as fence-wait back-pressure.
+            // (Free after the first frame per slot on a suppressed-present
+            // swapchain — there is no presentation engine in that picture.)
             VkResult acq;
             {
                 THREEPP_CPUPROF("frame.0c_acquire");
-                acq = vkAcquireNextImageKHR(d, ctx->swapchain(), UINT64_MAX,
-                                            imageAvailable[currentFrame], VK_NULL_HANDLE, &imageIndex);
+                acq = acquireOrReuseSwapchainImage(imageIndex);
             }
             if (acq == VK_ERROR_OUT_OF_DATE_KHR) {
                 recreateSwapchainAndDescriptors();
@@ -829,8 +855,7 @@ bool VulkanRenderer::Impl::beginFrameOrthoOnly() {
             VkResult acq;
             {
                 THREEPP_CPUPROF("frame.0z_acquireOrtho");
-                acq = vkAcquireNextImageKHR(d, ctx->swapchain(), UINT64_MAX,
-                                            imageAvailable[currentFrame], VK_NULL_HANDLE, &imageIndex);
+                acq = acquireOrReuseSwapchainImage(imageIndex);
             }
             if (acq == VK_ERROR_OUT_OF_DATE_KHR) {
                 recreateSwapchainAndDescriptors();
@@ -965,13 +990,26 @@ void VulkanRenderer::Impl::endFrame() {
             cbInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_SUBMIT_INFO;
             cbInfo.commandBuffer = cb;
 
+            // Suppressed presents (headless canvas) change BOTH semaphores, and
+            // for spec reasons rather than tidiness:
+            //  - imageAvailable is a BINARY semaphore signalled by the acquire.
+            //    Each acquire signals it once, so only the frame that follows an
+            //    acquire may wait on it; a second wait would never be satisfied.
+            //    On a pinned slot that is the slot's FIRST frame only.
+            //  - renderFinished exists solely for the present to wait on. With no
+            //    present nothing ever waits, so signalling it again next frame
+            //    would signal an already-signalled binary semaphore
+            //    (VUID-vkQueueSubmit2-semaphore-03868). Drop the signal instead.
+            // The inFlight fence is unchanged and remains what orders the slot's
+            // reuse of the image and of every per-frame buffer.
+            const bool suppressPresent = ctx->presentSuppressed();
             VkSubmitInfo2 submit{};
             submit.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO_2;
-            submit.waitSemaphoreInfoCount = 1;
+            submit.waitSemaphoreInfoCount = acquireSemPending_[currentFrame] ? 1u : 0u;
             submit.pWaitSemaphoreInfos = &waitInfo;
             submit.commandBufferInfoCount = 1;
             submit.pCommandBufferInfos = &cbInfo;
-            submit.signalSemaphoreInfoCount = 1;
+            submit.signalSemaphoreInfoCount = suppressPresent ? 0u : 1u;
             submit.pSignalSemaphoreInfos = &signalInfo;
             // Separate from present, deliberately: a submit that stalls means
             // driver-side command translation, a present that stalls means the
@@ -981,30 +1019,43 @@ void VulkanRenderer::Impl::endFrame() {
                 check(vkQueueSubmit2(ctx->graphicsQueue(), 1, &submit, inFlight[currentFrame]),
                       "vkQueueSubmit2");
             }
+            acquireSemPending_[currentFrame] = false;// consumed by the submit above
 
-            VkPresentInfoKHR pi{};
-            pi.sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR;
-            pi.waitSemaphoreCount = 1;
-            pi.pWaitSemaphores = &renderFinished[imageIndex];
-            VkSwapchainKHR sc = ctx->swapchain();
-            pi.swapchainCount = 1;
-            pi.pSwapchains = &sc;
-            pi.pImageIndices = &imageIndex;
+            if (suppressPresent) {
+                // Nothing to present to. The image stays app-owned in PRESENT_SRC
+                // (recordOverlayAndPresentTransition left it there, which is what
+                // readRGBPixels expects), and this slot re-renders into the same
+                // image next time round. Resize is the one thing that still has
+                // to be honoured — normally it rides in on the present's result.
+                if (needsResize) {
+                    needsResize = false;
+                    recreateSwapchainAndDescriptors();
+                }
+            } else {
+                VkPresentInfoKHR pi{};
+                pi.sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR;
+                pi.waitSemaphoreCount = 1;
+                pi.pWaitSemaphores = &renderFinished[imageIndex];
+                VkSwapchainKHR sc = ctx->swapchain();
+                pi.swapchainCount = 1;
+                pi.pSwapchains = &sc;
+                pi.pImageIndices = &imageIndex;
 
-            // Brace the present ALONE — the recreate path below is a swapchain
-            // rebuild, not a present, and must not wear this label. With vsync off
-            // this should be near zero; if it is not, the present mode is a
-            // confound for every fps number measured through this renderer.
-            VkResult pr;
-            {
-                THREEPP_CPUPROF("frame.K3_present");
-                pr = vkQueuePresentKHR(ctx->presentQueue(), &pi);
-            }
-            if (pr == VK_ERROR_OUT_OF_DATE_KHR || pr == VK_SUBOPTIMAL_KHR || needsResize) {
-                needsResize = false;
-                recreateSwapchainAndDescriptors();
-            } else if (pr != VK_SUCCESS) {
-                check(pr, "vkQueuePresentKHR");
+                // Brace the present ALONE — the recreate path below is a swapchain
+                // rebuild, not a present, and must not wear this label. With vsync off
+                // this should be near zero; if it is not, the present mode is a
+                // confound for every fps number measured through this renderer.
+                VkResult pr;
+                {
+                    THREEPP_CPUPROF("frame.K3_present");
+                    pr = vkQueuePresentKHR(ctx->presentQueue(), &pi);
+                }
+                if (pr == VK_ERROR_OUT_OF_DATE_KHR || pr == VK_SUBOPTIMAL_KHR || needsResize) {
+                    needsResize = false;
+                    recreateSwapchainAndDescriptors();
+                } else if (pr != VK_SUCCESS) {
+                    check(pr, "vkQueuePresentKHR");
+                }
             }
 
             // Cap to keep `subIdx = sampleIndex * spp + s` (deferred_shade.comp)
