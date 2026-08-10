@@ -956,8 +956,12 @@ int main(int argc, char** argv) {
         // grain, per lane, per frame, plus instanceMatrix()->needsUpdate(). It is
         // the prime suspect for the work outside render(), so it must not share a
         // timer with the belt scroll below — that one dirties a material, which is
-        // what makes the renderer's whole-array MaterialDesc flush fire, an
-        // unrelated cost on the other side of render().
+        // what makes the renderer's MaterialDesc flush fire, an unrelated cost on
+        // the other side of render(). (That flush used to re-send every entry's
+        // 608-byte MaterialDesc for these two belts — 2.8 ms and 47.7 MB a frame
+        // at 78.4k grains. It now sends their entry ranges only, which is why
+        // frame.I_uploadMatDesc reads ~0.003 ms; keeping the two timers apart is
+        // what made the cost attributable in the first place.)
         const auto tField = Clk::now();
         for (auto& l : lanes)
             l.field->update(l.group->positions(), l.group->active());
@@ -1086,6 +1090,20 @@ int main(int argc, char** argv) {
     // NOT inside render(). For GL it holds glfwSwapBuffers. Plus glfwPollEvents
     // for both. Interactive runs present with vsync ON, where a large tail is just
     // the refresh wait and means nothing; read this only from --bench.
+    //
+    // AND EVEN FROM --bench, `tail` and `sim` are two halves of ONE number here.
+    // A --bench run is headless, which on Windows/NVIDIA means presenting to a
+    // window nothing composites, and vkQueuePresentKHR then waits on the HOST for
+    // the presented frame's rendering to finish (see the derivation in
+    // VulkanContext::VulkanContext). So `tail` ~= gpuTotalMs, and it is a WAIT,
+    // not work. Suppress the present
+    // (THREEPP_VULKAN_SUPPRESS_PRESENT=1) and `tail` collapses to 0.07 ms while
+    // `sim` triples: world->step() + particles->pull() is a blocking CUDA sync,
+    // so the moment the CPU is allowed to run a frame ahead, the wait for the
+    // GPU reappears there instead. Measured at 78.4k: tail 12.5 / sim 4.1
+    // becomes tail 0.07 / sim 19.3 for the same wall. Whichever column it lands
+    // in, the wall is the sum of this app's two GPU tenants plus its CPU frame —
+    // read `wall`, and read `gpu` for the graphics half.
     while (canvas.animateOnce(frameBody)) {
         if (!haveBodyEnd) continue;// the final call returns false without running f
         tailAccum += msSince(bodyEnd);
