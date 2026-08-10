@@ -1,15 +1,18 @@
 // GPU granular material on a conveyor: PhysX 5.5 PxPBDParticleSystem grains
-// poured from a chute onto the belt from extras/conveyor, carried along it, and
-// spilling off the discharge end into a stockpile. Two lanes run side by side
-// with contrasting PBD materials — grippy GRAVEL against slick PELLETS — so the
-// difference is in how each one piles, not just what colour it is.
+// poured from a chute onto the belt from extras/conveyor, carried along it,
+// AROUND A BEND, and spilling off the discharge end into a stockpile. Two lanes
+// run side by side with contrasting PBD materials — grippy GRAVEL against slick
+// PELLETS — so the difference is in how each one piles, not just what colour it
+// is.
 //
 // The belt drives the grains by the same mechanism it drives soft bodies — a
 // kinematic collider whose target is advanced along travel each substep and
 // teleported back afterwards (see ConveyorPhysics). No special case was needed
 // for particles: PBD reads the contact velocity of a kinematic rigid exactly
 // like a rigid body does, so the belt "just works" once the granular material's
-// friction is high enough to be dragged.
+// friction is high enough to be dragged. The bend is the same idea turned
+// through 90 degrees of thinking: one kinematic body ROTATING about the arc
+// centre, so every contact across the belt width reads its own surface speed.
 //
 // PBD particles are a CUDA-only PhysX feature with no CPU fallback. This file
 // COMPILES anywhere PhysX does — the headers ship regardless — and at runtime
@@ -25,15 +28,17 @@
 //   granular_conveyor --gpu-instances off   A/B the GPU per-instance passes
 //   ... --cam 6,3,7 --look 4,0.5,-3 --fov 40    reframe without rebuilding
 //
-// The default framing is the overview: both chutes, both belts, both
-// stockpiles. Two framings worth keeping, found by looking at captures:
-//   --cam -2,4.4,6.2  --look 2.6,1.95,2.8 --fov 44   the conveyed BED, three
-//       quarters down the near belt with the far lane's pile behind it. The eye
-//       has to sit above ~18 degrees of elevation or the skirtboards hide the
-//       bed entirely, which is the one thing this view exists to show.
-//   --cam 7.4,2.3,1.6 --look 4.9,1,-2.9   --fov 44   the discharge curtain,
-//       close enough to read individual stones.
-// Both want a frame while the chute is still pouring: a lane empties in
+// Each lane turns 45 degrees away from its neighbour on the way to its
+// stockpile, so the two belts make a V and the default framing sits out on +X
+// looking back into it: both chutes, both bends, both piles, nothing cropped
+// even at the end of the run.
+//
+// One other framing worth keeping, found by looking at captures:
+//   --cam 1.2,9,2.6 --look 1.2,1.9,2.55 --fov 34   straight down onto the
+//       pellet lane's bend. This is the view that shows what a curved belt
+//       does to a granular load: the bed rides hard against the OUTER
+//       skirtboard through the arc and leaves a clean gap along the inner one.
+// It wants a frame while the chute is still pouring: a lane empties in
 // (capacity/2)/rate seconds, so --frames past that shows a stopped machine.
 
 #include "threepp/threepp.hpp"
@@ -54,6 +59,7 @@
 #include <cstdio>
 #include <cstring>
 #include <iostream>
+#include <limits>
 #include <numeric>
 #include <random>
 #include <string>
@@ -83,20 +89,60 @@ namespace {
     // so a 0.22 m guide had grain walking over the edge all the way down.
     constexpr float kBeltY = 1.90f;    // conveying surface height (a stacker)
     constexpr float kBeltX0 = -3.5f;   // inlet end
-    constexpr float kBeltX1 = 3.5f;    // discharge end
     constexpr float kBeltWidth = 1.00f;
-    constexpr float kBeltSpeed = 2.2f; // m/s along +X
+    constexpr float kBeltSpeed = 2.2f; // m/s along travel
     constexpr float kGuideHeight = 0.32f;
     // A metre of belt behind the pour, so grain that bounces backwards off the
     // bed is picked up again instead of dribbling off the tail drum.
     constexpr float kChuteX = -2.50f;
-    // Lane separation. Wide enough that two 2 m-radius stockpiles only just
-    // meet: the whole point of the side-by-side is comparing their PROFILES,
-    // and a merged heap has one profile.
-    constexpr float kLaneZ = 2.80f;
-    // Where a stockpile begins: past the discharge drum and past where the
-    // 2.2 m/s stream lands, so pile probes never measure the trajectory.
-    constexpr float kPileX = kBeltX1 + 1.4f;
+
+    // ── The bend ─────────────────────────────────────────────────────────────
+    //
+    // Each lane runs straight out of its chute, turns 45 degrees AWAY from its
+    // neighbour, and discharges. The turn is the part worth filming. PhysX's
+    // own conveyor feature is a surface velocity carried on a rigid SHAPE,
+    // which the GPU particle and deformable solvers never read — NVIDIA lists
+    // "deformable bodies and particles do not support conveyor belts and will
+    // not contact/fall through" among Omniverse Physics' current limitations,
+    // and tells you to use rigid bodies instead. ConveyorPhysics does not use
+    // that feature at all: a bend is ONE kinematic body rotating about the
+    // vertical axis through the arc centre, tiled by GPU-cooked convex wedges,
+    // and a PBD grain reads its contact velocity exactly like it reads any
+    // other kinematic rigid's. There is no particle special case anywhere in
+    // this file.
+    //
+    // Holding its line through the turn costs a grain v^2/r of lateral
+    // acceleration, and only friction against the belt supplies it: 2.2 m/s^2
+    // (0.22 g) at 2.2 m/s and r = 2.2 m. The bed leans visibly into the outer
+    // skirtboard on the way round, which is the shot.
+    //
+    // The radius is chosen for that lean and for a long readable arc, NOT to
+    // keep the load on. Halving it was tried: r = 1.0 m more than doubles the
+    // demand (0.49 g) and lost 22 grains against 27 at r = 2.2, which is noise.
+    // The bed simply heaps harder against the outer guide. It is the SKIRTBOARD
+    // that holds a granular load through a bend, not friction — which is what a
+    // real curved conveyor is built on, and worth knowing before blaming the
+    // solver for a spill.
+    constexpr float kBendX = 0.90f;      // corner waypoint, on the inlet run
+    constexpr float kBendRadius = 2.20f; // centreline radius of the fillet
+    constexpr float kBendDeg = 45.f;     // turn angle, away from the other lane
+    constexpr float kRunOut = 3.20f;     // corner waypoint to discharge
+    // Lane separation, measured at the INLET. The outward turn splays the two
+    // discharges a further 2 x 2.3 m apart, so two 2 m-radius stockpiles clear
+    // each other comfortably even though the chutes stand close enough to read
+    // as one machine. (A merged heap has one profile, and comparing the two
+    // profiles is the whole point of running the lanes side by side.)
+    constexpr float kLaneZ = 1.75f;
+    // Where a stockpile begins: this far past the discharge drum measured ALONG
+    // travel, so pile probes never measure the falling stream.
+    constexpr float kPileGap = 1.40f;
+
+    // Plan-view length of a polyline (the belts are horizontal).
+    float polylineLength(const std::vector<Vector3>& pts) {
+        float len = 0.f;
+        for (std::size_t i = 0; i + 1 < pts.size(); ++i) len += pts[i].distanceTo(pts[i + 1]);
+        return len;
+    }
 
     // ── Instanced grain field ────────────────────────────────────────────────
     //
@@ -252,26 +298,43 @@ namespace {
 
     // ── Conveyor spec + visuals ──────────────────────────────────────────────
 
-    // A straight belt along +X at the given z, with a side guide on each edge so
-    // a granular BED (unlike a crate) does not simply run off the sides. The
-    // guides are authored the way the editor authors them: two points in plan,
-    // resolved by followWall against the same centreline the ribbon uses.
+    // One lane: a belt leaving the inlet along +X, a rounded corner turning away
+    // from the other lane, and a run-out to the discharge — with a side guide on
+    // each edge so a granular BED (unlike a crate) does not simply run off the
+    // sides. The corner is authored as a cornerRadius on the middle waypoint,
+    // which cornerFillet resolves into an arc TANGENT to both straights, so the
+    // belt cannot kink however the geometry above is retuned.
+    //
+    // The guides are authored the way the editor authors them: two points in
+    // plan, resolved by followWall against the same centreline the ribbon uses.
+    // That is what makes a guide hug the bend instead of cutting its chord —
+    // two world-space points at the ends would be a straight line across the
+    // turn, and grain would leave through the gap.
     cv::ConveyorSpec laneSpec(float z) {
+
+        const float side = z < 0.f ? -1.f : 1.f;// turn away from the other lane
+        const float turn = kBendDeg * math::DEG2RAD;
+        const Vector3 corner(kBendX, kBeltY, z);
+        const Vector3 discharge(corner.x + kRunOut * std::cos(turn), kBeltY,
+                                corner.z + side * kRunOut * std::sin(turn));
 
         cv::ConveyorSpec s;
         s.waypoints = {cv::Waypoint{Vector3(kBeltX0, kBeltY, z)},
-                       cv::Waypoint{Vector3(kBeltX1, kBeltY, z)}};
+                       cv::Waypoint{corner, kBendRadius},
+                       cv::Waypoint{discharge}};
         s.width = kBeltWidth;
         s.speed = kBeltSpeed;
-        s.smooth = false;
+        s.smooth = false;// the corner is an exact fillet, not a spline
         s.frame = true;
 
+        const auto path = cv::resamplePath(s.waypoints, s.smooth, s.samples);
         const float half = kBeltWidth * 0.5f;
-        for (int side = -1; side <= 1; side += 2) {
+        const float len = polylineLength(path);
+        for (int e = -1; e <= 1; e += 2) {
             cv::WallSpec w;
             w.height = kGuideHeight;
-            w.points = {Vector3(kBeltX0, kBeltY, z + float(side) * half),
-                        Vector3(kBeltX1, kBeltY, z + float(side) * half)};
+            w.points = {cv::pointOnPath(path, 0.f, float(e) * half),
+                        cv::pointOnPath(path, len, float(e) * half)};
             s.walls.push_back(std::move(w));
         }
         return s;
@@ -397,12 +460,99 @@ namespace {
         }
     }
 
+    // ── Where a grain stands, along its own belt ──────────────────────────────
+    //
+    // A bent belt cannot be measured along +X. Past the corner, travel has a Z
+    // component, and every question below — has this grain moved DOWN the belt,
+    // how deep is the bed, did it reach the discharge, did it leave over a
+    // skirtboard — is a statement about the PATH, not about an axis. So each
+    // lane carries a coarse copy of the same centreline the ribbon and the
+    // colliders are built from, and grains are projected onto it.
+    //
+    // The projection is hand-rolled rather than cv::projectOntoPath because
+    // that one builds its station table per call: fine for a wall edit, not for
+    // 200 000 grains twice a second.
+    struct LaneGeom {
+        std::vector<Vector3> pts;  // decimated centreline
+        std::vector<float> station;// arc length at each point
+        Vector3 discharge;         // the last point
+        Vector3 outDir;            // horizontal unit travel there
+        float chuteStation = 0.f;  // where the pour lands
+
+        [[nodiscard]] bool valid() const { return pts.size() >= 2; }
+        [[nodiscard]] float length() const { return station.back(); }
+
+        // Metres past the discharge along travel; negative while short of it.
+        [[nodiscard]] float past(float x, float z) const {
+            return (x - discharge.x) * outDir.x + (z - discharge.z) * outDir.z;
+        }
+
+        // Station (arc length, clamped to the ends) and lateral distance, in plan.
+        void project(float x, float z, float& s, float& lateral) const {
+            float best = std::numeric_limits<float>::max();
+            s = 0.f;
+            for (std::size_t i = 0; i + 1 < pts.size(); ++i) {
+                const float ax = pts[i].x, az = pts[i].z;
+                const float dx = pts[i + 1].x - ax, dz = pts[i + 1].z - az;
+                const float len2 = dx * dx + dz * dz;
+                float t = len2 > 1e-12f ? ((x - ax) * dx + (z - az) * dz) / len2 : 0.f;
+                t = std::clamp(t, 0.f, 1.f);
+                const float ex = x - (ax + dx * t), ez = z - (az + dz * t);
+                const float d2 = ex * ex + ez * ez;
+                if (d2 < best) {
+                    best = d2;
+                    s = station[i] + t * (station[i + 1] - station[i]);
+                }
+            }
+            lateral = std::sqrt(best);
+        }
+    };
+
+    // Decimate the dense centreline to ~0.4 m: the projection above is O(points)
+    // per grain, and half a metre of arc is far finer than any gate here reads.
+    // The final point is always kept, because the discharge is a measurement
+    // datum rather than a sample.
+    LaneGeom makeLaneGeom(const std::vector<Vector3>& dense, const Vector3& chuteMouth) {
+
+        LaneGeom g;
+        if (dense.size() < 2) return g;
+        for (const auto& p : dense) {
+            if (g.pts.empty() || g.pts.back().distanceTo(p) > 0.4f) g.pts.push_back(p);
+        }
+        if (g.pts.back().distanceTo(dense.back()) > 1e-4f) g.pts.push_back(dense.back());
+
+        g.station.assign(g.pts.size(), 0.f);
+        for (std::size_t i = 1; i < g.pts.size(); ++i)
+            g.station[i] = g.station[i - 1] + g.pts[i - 1].distanceTo(g.pts[i]);
+        g.discharge = g.pts.back();
+        Vector3 d = g.pts.back();
+        d.sub(g.pts[g.pts.size() - 2]);
+        d.y = 0.f;
+        d.normalize();
+        g.outDir = d;
+        float lat = 0.f;
+        g.project(chuteMouth.x, chuteMouth.z, g.chuteStation, lat);
+        return g;
+    }
+
     // ── Telemetry: the numbers the self-test gates on ─────────────────────────
     struct Stats {
         unsigned n = 0;
         unsigned bad = 0;// non-finite components — must stay 0
         float minY = 0.f, maxY = 0.f;
         unsigned spilled = 0;// past the discharge AND below the belt
+        // Grain found under the MIDDLE of the belt run — below the deck,
+        // between half a metre past the pour and a metre and a half short of
+        // the discharge. Nothing can reach there except over a skirtboard, and
+        // the window is drawn to exclude the two things that look like leakage
+        // and are not: chute splash at the inlet, and the stockpile spreading
+        // back underneath the discharge drum. The bend sits in the middle of
+        // the window, so this is the bend's own failure mode — a straight belt
+        // cannot throw its load sideways — kept apart from `spilled`, which is
+        // where grain is SUPPOSED to leave.
+        unsigned lost = 0;
+        // Mean station of those losses: WHERE along the run they went over.
+        float lostStation = 0.f;
         // Deepest point of the bed riding the middle of the belt, measured from
         // the conveying surface. This is the overrun alarm: once it passes the
         // guide height the belt is being poured into faster than it can pump,
@@ -418,12 +568,14 @@ namespace {
         float pileRadius = 0.f;
     };
 
-    Stats measure(const ::physx::PxVec4* p, unsigned n) {
+    // `geom` may be invalid (the --drop mode has no belt at all), in which case
+    // only the belt-free numbers — count, finiteness, minY/maxY — are filled in.
+    Stats measure(const ::physx::PxVec4* p, unsigned n, const LaneGeom& geom) {
         Stats s;
         s.n = n;
         if (n == 0) return s;
         s.minY = s.maxY = p[0].y;
-        double px = 0, pz = 0;
+        double px = 0, pz = 0, lostS = 0;
         for (unsigned i = 0; i < n; ++i) {
             const auto& v = p[i];
             if (!std::isfinite(v.x) || !std::isfinite(v.y) || !std::isfinite(v.z)) {
@@ -432,24 +584,41 @@ namespace {
             }
             s.minY = std::min(s.minY, v.y);
             s.maxY = std::max(s.maxY, v.y);
-            if (v.x > kBeltX1 && v.y < kBeltY - 0.3f) ++s.spilled;
-            if (v.x > kPileX) {
+            if (!geom.valid()) continue;
+
+            const float past = geom.past(v.x, v.z);
+            float st = 0.f, lat = 0.f;
+            geom.project(v.x, v.z, st, lat);
+
+            if (v.y < kBeltY - 0.3f) {
+                if (past > 0.f) ++s.spilled;
+                if (st > geom.chuteStation + 0.5f && st < geom.length() - 1.5f) {
+                    ++s.lost;
+                    lostS += st;
+                }
+            }
+            if (past > kPileGap) {
                 ++s.pileN;
                 px += v.x;
                 pz += v.z;
                 s.pileTop = std::max(s.pileTop, v.y);
             }
             // Skip the metre downstream of the chute: grain in free fall, and
-            // the heap it makes on landing, are not the conveyed bed.
-            if (v.x > kChuteX + 1.0f && v.x < kBeltX1 - 0.3f && v.y > kBeltY)
+            // the heap it makes on landing, are not the conveyed bed. The
+            // lateral cut is what the old x-range did implicitly on a straight
+            // belt — off the deck sideways is not the bed either.
+            if (st > geom.chuteStation + 1.0f && st < geom.length() - 0.3f &&
+                lat < kBeltWidth && v.y > kBeltY)
                 s.bedTop = std::max(s.bedTop, v.y - kBeltY);
         }
+        if (s.lost) s.lostStation = float(lostS / s.lost);
         if (s.pileN > 32) {
             const double cx = px / s.pileN, cz = pz / s.pileN;
             double sq = 0;
             for (unsigned i = 0; i < n; ++i) {
                 const auto& v = p[i];
-                if (!std::isfinite(v.x) || !std::isfinite(v.z) || v.x <= kPileX) continue;
+                if (!std::isfinite(v.x) || !std::isfinite(v.z)) continue;
+                if (geom.past(v.x, v.z) <= kPileGap) continue;
                 const double dx = v.x - cx, dz = v.z - cz;
                 sq += dx * dx + dz * dz;
             }
@@ -458,20 +627,25 @@ namespace {
         return s;
     }
 
-    // Mean X of a fixed cohort — the first `n` particles ever emitted. Particle
-    // index in a PxParticleBuffer is stable for the buffer's lifetime, so this
-    // follows the SAME grains down the belt; a mean over everything would be
-    // dragged backwards by every new grain the chute drops at the inlet.
-    float cohortMeanX(const ::physx::PxVec4* p, unsigned n) {
-        if (n == 0) return 0.f;
-        double sx = 0;
+    // Mean STATION of a fixed cohort — the first `n` particles ever emitted.
+    // Particle index in a PxParticleBuffer is stable for the buffer's lifetime,
+    // so this follows the SAME grains down the belt; a mean over everything
+    // would be dragged backwards by every new grain the chute drops at the
+    // inlet. Station rather than X, because past the bend X stops being travel:
+    // a grain that rides the whole turn perfectly gains only cos(45 deg) of its
+    // distance in X, which would read as a belt that half works.
+    float cohortMeanStation(const ::physx::PxVec4* p, unsigned n, const LaneGeom& geom) {
+        if (n == 0 || !geom.valid()) return 0.f;
+        double sum = 0;
         unsigned good = 0;
         for (unsigned i = 0; i < n; ++i) {
-            if (!std::isfinite(p[i].x)) continue;
-            sx += p[i].x;
+            if (!std::isfinite(p[i].x) || !std::isfinite(p[i].z)) continue;
+            float st = 0.f, lat = 0.f;
+            geom.project(p[i].x, p[i].z, st, lat);
+            sum += st;
             ++good;
         }
-        return good ? float(sx / good) : 0.f;
+        return good ? float(sum / good) : 0.f;
     }
 
     // A jittered block of grid positions, for the phase-1 drop mode.
@@ -500,9 +674,10 @@ namespace {
         std::unique_ptr<GrainField> field;
         std::unique_ptr<Chute> chute;
         std::shared_ptr<MeshStandardMaterial> beltMat;
+        LaneGeom geom;
         float scroll = 0.f;
         Stats stats;
-        float cohortX0 = 0.f, cohortX1 = 0.f;
+        float cohortS0 = 0.f, cohortS1 = 0.f;
     };
 
 }// namespace
@@ -762,7 +937,12 @@ int main(int argc, char** argv) {
         for (auto& l : lanes) {
             auto spec = laneSpec(l.z);
             l.beltMat = addConveyorVisual(scene, spec);
-            l.scroll = -spec.speed * l.beltMat->map->repeat.y;// travel is +X
+            // UV.v is cumulative arc length, so scrolling it runs the pattern
+            // along travel whatever the path does in plan — including round
+            // the bend, where +X is no longer travel.
+            l.scroll = -spec.speed * l.beltMat->map->repeat.y;
+            l.geom = makeLaneGeom(cv::resamplePath(spec.waypoints, spec.smooth, spec.samples),
+                                  Vector3(kChuteX, kBeltY, l.z));
             addTailSkirt(scene, *world, l.z, chuteMat);
             addChuteVisual(scene, l.z, l.chute->slabTop(), chuteMat);
             specs.push_back(std::move(spec));
@@ -775,16 +955,21 @@ int main(int argc, char** argv) {
                   << std::endl;
     }
 
-    // Framing has to hold chute -> belt -> stockpile for BOTH lanes in one
-    // shot, and the eye also has to clear the skirtboards: a 0.32 m guide on a
-    // 1.0 m belt hides the bed entirely below ~18 degrees of elevation, and the
-    // conveyed stream is the thing being demonstrated.
+    // Framing has to hold chute -> belt -> BEND -> stockpile for both lanes in
+    // one shot, and the eye also has to clear the skirtboards: a 0.32 m guide on
+    // a 1.0 m belt hides the bed entirely below ~18 degrees of elevation, and
+    // the conveyed stream is the thing being demonstrated. The two lanes splay
+    // apart, so the default sits out on +X looking back INTO the V they make —
+    // both turns face the camera from there.
     const Vector3 look = cap.camTarget.value_or(
-            dropMode ? Vector3(0.f, 0.35f, 0.f) : Vector3(1.5f, 1.05f, 0.3f));
-    PerspectiveCamera camera(fov > 0.f ? fov : (dropMode ? 42.f : 33.f), canvas.aspect(), 0.05f,
+            dropMode ? Vector3(0.f, 0.35f, 0.f) : Vector3(1.0f, 1.10f, 0.f));
+    PerspectiveCamera camera(fov > 0.f ? fov : (dropMode ? 42.f : 40.f), canvas.aspect(), 0.05f,
                              300.f);
+    // Framed on the LATE state (both stockpiles at full 50k, ~frame 1150), not
+    // the pretty middle: a framing that only fits while the piles are small
+    // spends the end of the run cropping them.
     camera.position.copy(cap.camPos.value_or(
-            dropMode ? Vector3(3.6f, 2.0f, 4.4f) : Vector3(13.5f, 6.2f, 8.0f)));
+            dropMode ? Vector3(3.6f, 2.0f, 4.4f) : Vector3(14.2f, 6.6f, 0.f)));
     camera.lookAt(look);
 
     std::unique_ptr<OrbitControls> controls;
@@ -812,8 +997,16 @@ int main(int argc, char** argv) {
     // means the same sim time every time.
     constexpr float kDt = 1.f / 60.f;
     constexpr unsigned kCohort = 2000;// grains followed down the belt
-    constexpr int kCohortStart = 30;  // frame the cohort measurement starts
-    constexpr int kCohortSpan = 300;  // 5 sim seconds later
+    // The cohort window. Both ends are constrained, and the bend tightened
+    // both: transit is only (pathLength - chuteStation) / speed ~ 3 s, so a
+    // window longer than that stops measuring how FAST the belt carries and
+    // starts measuring whether the cohort has reached the end — every grain
+    // that runs off clamps to the final station and the mean saturates. Two
+    // seconds is under the transit time with room to spare. The start waits
+    // until the whole cohort exists (2000 grains at 2800/s = 0.71 s), so the
+    // two samples average the same grains rather than a growing set.
+    constexpr int kCohortStart = 60; // frame the cohort measurement starts
+    constexpr int kCohortSpan = 120; // 2 sim seconds later
     int frame = 0;
     Stats at60, at240;// drop mode only (one lane)
     bool ok = true;
@@ -1041,17 +1234,23 @@ int main(int argc, char** argv) {
                             frame == kCohortStart + kCohortSpan || frame >= frames;
         unsigned total = 0;
         for (auto& l : lanes) {
-            if (sample) l.stats = measure(l.group->positions(), l.group->active());
+            if (sample) l.stats = measure(l.group->positions(), l.group->active(), l.geom);
             total += l.group->active();
             if (l.stats.bad) fail(std::string(l.name) + ": non-finite particle positions");
             if (frame == kCohortStart)
-                l.cohortX0 = cohortMeanX(l.group->positions(), std::min(kCohort, l.stats.n));
+                l.cohortS0 = cohortMeanStation(l.group->positions(),
+                                               std::min(kCohort, l.stats.n), l.geom);
             if (frame == kCohortStart + kCohortSpan)
-                l.cohortX1 = cohortMeanX(l.group->positions(), std::min(kCohort, l.stats.n));
+                l.cohortS1 = cohortMeanStation(l.group->positions(),
+                                               std::min(kCohort, l.stats.n), l.geom);
         }
         if (dropMode) {
-            if (frame == 60) at60 = measure(lanes[0].group->positions(), lanes[0].group->active());
-            if (frame == 240) at240 = measure(lanes[0].group->positions(), lanes[0].group->active());
+            if (frame == 60)
+                at60 = measure(lanes[0].group->positions(), lanes[0].group->active(),
+                               lanes[0].geom);
+            if (frame == 240)
+                at240 = measure(lanes[0].group->positions(), lanes[0].group->active(),
+                                lanes[0].geom);
         }
         // Every frame, not on the 2 Hz `sample` gate above: active() is a
         // counter read, not a pass over the grains. (The panel drew earlier in
@@ -1062,9 +1261,10 @@ int main(int argc, char** argv) {
         if (frame % 150 == 0) {
             std::printf("[f%4d] n=%6u", frame, total);
             for (const auto& l : lanes)
-                std::printf("  %s{bed=%.3f pile=%.2f/%.2f spill=%5u}", l.name,
+                std::printf("  %s{bed=%.3f pile=%.2f/%.2f spill=%5u lost=%4u@%.1f}", l.name,
                             double(l.stats.bedTop), double(l.stats.pileTop),
-                            double(l.stats.pileRadius), l.stats.spilled);
+                            double(l.stats.pileRadius), l.stats.spilled, l.stats.lost,
+                            double(l.stats.lostStation));
             std::printf("\n");
             std::fflush(stdout);
         }
@@ -1156,11 +1356,13 @@ int main(int argc, char** argv) {
                     double(s.minY), double(s.maxY), double(at60.maxY), double(at240.maxY));
     } else {
         for (const auto& l : lanes) {
-            // THE belt gate: a cohort of grains must be carried along travel at
-            // more than half the belt speed. Half, not all, because a grain
+            // THE belt gate: a cohort of grains must be carried ALONG THE PATH
+            // at more than half the belt speed — which is the gate the bend
+            // makes interesting, since clearing it now means riding the turn
+            // rather than sliding straight on. Half, not all, because a grain
             // spends its first metre being accelerated from the chute's velocity
             // and its last one falling off the end.
-            const float carried = l.cohortX1 - l.cohortX0;
+            const float carried = l.cohortS1 - l.cohortS0;
             const float floorDist = 0.5f * kBeltSpeed * (float(kCohortSpan) * kDt);
             if (frames < kCohortStart + kCohortSpan) fail("run too short to measure transport");
             if (!(carried > floorDist)) fail(std::string(l.name) + ": the belt did not carry it");
@@ -1170,10 +1372,23 @@ int main(int argc, char** argv) {
             // the creep of its bottom layer, so pin the bed depth too.
             if (!(l.stats.bedTop < 2.f * kGuideHeight))
                 fail(std::string(l.name) + ": the belt is overloaded (bed over the guides)");
+            // THE bend gate: grain goes round the corner, not over the side of
+            // it. Cumulative — everything that ever left the belt along the run,
+            // against everything the lane ever emitted. Measured at 27 and 12
+            // grains in 32 666 (under 0.1%), all of it at station ~1.7, which is
+            // chute splash at the inlet and not the turn at all; the bend's own
+            // contribution is indistinguishable from zero. The threshold is 1%,
+            // an order of magnitude clear, because this is a tripwire for a
+            // BROKEN bend — guides that stop following the arc, or colliders
+            // that stop matching the ribbon — and not a tuning knob.
+            if (!(l.stats.lost < l.stats.n / 100u))
+                fail(std::string(l.name) + ": grain is being thrown off the bend");
             std::printf("selftest[%s]: n=%u carried=%.2f m/%.1f s (floor %.2f) spilled=%u "
-                        "bed=%.3f minY=%.4f pile=%.2f/%.2f aspect=%.3f\n",
+                        "lost=%u@%.2f/%.2f m bed=%.3f minY=%.4f pile=%.2f/%.2f aspect=%.3f\n",
                         l.name, l.stats.n, double(carried), double(float(kCohortSpan) * kDt),
-                        double(floorDist), l.stats.spilled, double(l.stats.bedTop),
+                        double(floorDist), l.stats.spilled, l.stats.lost,
+                        double(l.stats.lostStation), double(l.geom.length()),
+                        double(l.stats.bedTop),
                         double(l.stats.minY), double(l.stats.pileTop), double(l.stats.pileRadius),
                         l.stats.pileRadius > 0.f ? double(l.stats.pileTop / l.stats.pileRadius)
                                                  : 0.0);
