@@ -54,6 +54,23 @@
 // that will ever be lit should be constructed before the scene starts running.
 // See the churn contract in ParticleField.hpp.
 //
+// ── SMOKE ONLY: a chimney is a fire you cannot see ──────────────────────────
+// Params::smokeOnly builds the plume and NOTHING else — one field, no flame
+// volume, no embers, no PointLight. That is not a convenience switch, it is a
+// budget one: a density field costs a slot out of kMaxDensityFields whether it
+// is parked or not, and a PointLight costs a cluster entry and a shadow ray
+// whether or not it is bright. A stove burning behind a wall emits neither, and
+// the thing a scene actually wants from this class in that case is the PLUME —
+// the three-clock buoyancy/advection/dispersion model and the wind-derived box
+// that contains it, both of which are the expensive parts to get right and
+// neither of which has anything to do with flames.
+//
+// Everything that shapes the plume keeps its meaning: `height` and `radius` are
+// the SOURCE geometry (the flue's mouth, rather than a flame's envelope), and
+// smokeHeight / smokeSpread / smokeLifeScale / smokeTaper / smokeSigma are the
+// same knobs they always were. flameField(), emberField() and light() return
+// null, and ignite()/extinguish() park and un-park the one field there is.
+//
 // Usage:
 //     auto fire = FireEffect::create();          // parked
 //     fire->position.set(0.f, 0.f, 3.f);
@@ -83,6 +100,19 @@ namespace threepp {
 
     public:
         struct Params {
+            // ── SMOKE ONLY ──────────────────────────────────────────────────
+            // Build the plume and nothing else: no flame field, no ember field,
+            // no PointLight. See the note at the top of this file — the reason
+            // this is a construction-time flag and not "ignite the smoke and
+            // park the rest" is that a parked density field still holds one of
+            // the four volume slots and a zero-intensity PointLight is still a
+            // light in the cluster list. Not created is the only free.
+            //
+            // A chimney, a smouldering vent, a steam pipe. `height`/`radius`
+            // become the SOURCE geometry (the flue mouth) instead of a flame
+            // envelope; nothing else changes meaning.
+            bool smokeOnly = false;
+
             // ── Flame envelope (metres, in the effect's own space) ──────────
             float height = 1.20f;// base of the fire to the flame tips
             float radius = 0.25f;// flame radius at the base
@@ -160,15 +190,58 @@ namespace threepp {
             // plume stays coherent before it is mixed away is a property of the
             // air, and a demo that wants to see its smoke travel says so.
             float smokeLifeScale = 1.f;
-            // Fraction of the life the shortest-lived parcels give up, so the
-            // plume's downwind END THINS OUT instead of stopping on a plane.
-            // 0 = every parcel runs the full period (the pre-fix behaviour,
-            // exactly). This is F1 note 2's per-parcel ceiling — the thing that
-            // removed the flame's flat red cap — applied to the other end of
-            // the other field: without it a long plume terminates at a sharp
-            // edge in mid-air, which is precisely what "locked in place" looked
-            // like.
+            // ── The DOWNWIND end ────────────────────────────────────────────
+            // Fraction of the life the shortest-lived parcels give up, so a
+            // WIND-BLOWN plume's far end frays instead of stopping on a plane.
+            // Each parcel draws its own ceiling and dies there, so the live
+            // population thins continuously over the last stretch.
+            //
+            // STILL OPT-IN, and that is now a measured choice rather than a
+            // byte-stability one. A taper kills slots — mean ceiling is
+            // 1 − 0.6·taper, so 0.55 leaves a THIRD of the capacity dead at any
+            // instant — and it removes them entirely from the second half of
+            // the trajectory, which is where a plume's visible body is. Turned
+            // on by default at 0.55 it took vulkan_fire's mid-column from
+            // clearly absorbing against the night sky to very nearly invisible
+            // (a row-wise excess-luminance profile over the column moved from
+            // about −2.5 to about +1.5), i.e. it fixed the top by deleting the
+            // plume. The VERTICAL end is fixed by smokeHeightJitter below,
+            // which costs no slots at all; this knob is for the horizontal one,
+            // and a scene with real wind should set it.
             float smokeTaper = 0.f;
+
+            // ── The VERTICAL end: every parcel needs its own ceiling ────────
+            // Spread of the per-parcel height scale, mean-preserving. This is
+            // F1 note 2 — the per-slot ceiling that removed the FLAME's flat
+            // red cap — finally applied to the smoke field, and it closes a
+            // defect that had been in every plume this class ever drew.
+            //
+            // THE DEFECT: the rise is `smokeHeight · s^0.62`, normalised by the
+            // parcel's own age, so it is INDEPENDENT of that parcel's period.
+            // The period jitter staggers how far downwind a parcel gets and
+            // stagger's nothing about where it ends up vertically — every one
+            // of the 12 000 trajectories topped out at exactly the same height.
+            // Against a night sky in vulkan_fire that reads as what it is: a
+            // column with a flat, hard-edged top and straight cone sides, smoke
+            // that does not disperse but STOPS.
+            //
+            // With a spread the ensemble has no single ceiling: the parcels
+            // that fall short spend their late life drifting at a lower
+            // altitude (which thickens the plume downwind, as a real one does)
+            // and the few that overshoot become the wisps above the body. The
+            // draw is skewed LOW — most parcels fall short, a few carry on — so
+            // the density decays smoothly toward the top rather than ending.
+            //
+            // MEAN-PRESERVING BY CONSTRUCTION: the scale is 1 + j·(g − 1) with
+            // E[g] = 1, so raising this changes the plume's RAGGEDNESS and not
+            // its average height, and no sigma re-tune rides along with it. At
+            // 1.0 the scale spans [0.60, 1.60]; recomputeSmokeBox() grows the
+            // volume's top to cover that reach, because a box that does not
+            // contain the tall wisps clips them on a plane and reintroduces the
+            // very defect this fixes (F4 defect 3.2).
+            //
+            // 0 restores the pre-2026-08-11 single-ceiling column exactly.
+            float smokeHeightJitter = 1.f;
 
             // ── The light the fire casts ────────────────────────────────────
             // This is what makes fire light the WORLD. Intensity is modulated
@@ -326,10 +399,14 @@ namespace threepp {
 
         [[nodiscard]] const Params& params() const { return p_; }
 
+        // Null under Params::smokeOnly.
         [[nodiscard]] const std::shared_ptr<ParticleField>& flameField() const { return flame_; }
+        // The one field that always exists.
         [[nodiscard]] const std::shared_ptr<ParticleField>& smokeField() const { return smoke_; }
-        // Null when Params::embers is off or Params::legacyEmbers is on.
+        // Null when Params::embers is off, Params::legacyEmbers is on, or
+        // Params::smokeOnly is set.
         [[nodiscard]] const std::shared_ptr<ParticleField>& emberField() const { return embers_; }
+        // Null under Params::smokeOnly.
         [[nodiscard]] const std::shared_ptr<PointLight>&    light() const { return light_; }
 
         // The HUE of a blackbody at `kelvin`, normalised so the maximum channel

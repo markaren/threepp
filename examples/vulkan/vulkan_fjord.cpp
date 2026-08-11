@@ -12,8 +12,11 @@
 //     canopies for the far bank), plus boulders and a GrassMesh meadow
 //     (GPU wind compute + BLAS refit).
 //   • A red cabin ("hytte") with white trim, glowing windows after sundown,
-//     chimney smoke (ParticleSystem → Vulkan billboard overlay), a wooden dock
-//     with a lantern, and a moored rowing boat.
+//     a chimney plume that is a PARTICIPATING MEDIUM (a smoke-only FireEffect —
+//     one ParticleField with a DensityRepr, so the sun scatters through it and
+//     it composites with the fjord's fog instead of over it; --legacy-smoke
+//     brings back the old sprite plume for an A/B), a wooden dock with a
+//     lantern, and a moored rowing boat.
 //   • A CPU port of the three.js Preetham sky is baked into an equirect float
 //     env map (ping-pong pair, throttled re-bakes) so the sky, IBL ambient and
 //     water reflections all track the sun continuously — dawn mist and god
@@ -37,7 +40,11 @@
 // a valley snowfall, plans/particle-atmosphere.md F4) has been REMOVED: the
 // fjord is a terrain/ocean/vegetation demo and the atmosphere work has demos of
 // its own — `vulkan_fire` for the campfire and `vulkan_snow` for the snowfall,
-// both of which exercise it harder than a corner of this scene did.
+// both of which exercise it harder than a corner of this scene did. The CHIMNEY
+// is the exception, and deliberately so: it is not weather bolted onto the
+// valley, it is the cabin's own smoke, it has been in this demo since before the
+// atmosphere work existed, and it survived that removal. It uses exactly one of
+// the four density-volume slots.
 //
 // Headless:  vulkan_fjord --shot out.png [--frames N] [--time H] [--view 0..6] [--cycle H_per_s]
 
@@ -46,6 +53,7 @@
 #include "threepp/extras/imgui/RendererSettings.hpp"
 
 #include "threepp/extras/architecture/LogCabin.hpp"
+#include "threepp/extras/effects/FireEffect.hpp"
 #include "threepp/extras/curves/CatmullRomCurve3.hpp"
 #include "threepp/extras/terrain/DetailTexture.hpp"
 #include "threepp/extras/terrain/RockGeometry.hpp"
@@ -815,6 +823,15 @@ int main(int argc, char** argv) {
     // between the same two), rather than adding a second switch beside it.
     constexpr float kDayHour = 13.2f, kNightHour = 22.6f;
     bool  dayFlag = false, nightFlag = false;
+    // --legacy-smoke: the pre-2026-08-11 chimney — ~156 alpha-blended sprites on
+    // the legacy ParticleSystem path, CPU-integrated with their own RNG. The A/B
+    // leg for the density plume that replaced it, in ONE binary (the precedent
+    // is FireEffect's --legacy-embers). It brings back the old properties with
+    // it: a plume that is drawn OVER the fog rather than composited into it, no
+    // sunlight scattering through it, and a scene that is not reproducible
+    // run-to-run — the sprite RNG was one of the reasons two fjord captures of
+    // the same pose never matched.
+    bool  legacySmoke = false;
     auto parseVec3 = [](const char* s, float out[3]) {
         const auto v = capture::parseVec3(s);// shared: accepts "x,y,z" and "x y z"
         if (v) { out[0] = v->x; out[1] = v->y; out[2] = v->z; }
@@ -835,6 +852,7 @@ int main(int argc, char** argv) {
         else if (std::strcmp(argv[i], "--dolly") == 0 && i + 1 < argc) seqDolly = static_cast<float>(std::atof(argv[++i]));
         else if (std::strcmp(argv[i], "--day") == 0) dayFlag = true;
         else if (std::strcmp(argv[i], "--night") == 0) nightFlag = true;
+        else if (std::strcmp(argv[i], "--legacy-smoke") == 0) legacySmoke = true;
         else if (std::strcmp(argv[i], "--mist") == 0) {
             mistOn = true;
             if (i + 1 < argc && argv[i + 1][0] != '-') mistDensity = static_cast<float>(std::atof(argv[++i]));
@@ -1528,18 +1546,109 @@ int main(int argc, char** argv) {
     }
 
     // ── chimney smoke ───────────────────────────────────────────────────────
+    // A PARTICIPATING MEDIUM, not a stack of sprites. The plume is one
+    // ParticleField with a DensityRepr — the fjord's only density volume, 1 of
+    // the 4 slots — so it is marched by the same `applyParticleFog` the rest of
+    // the atmosphere is: Beer-Lambert extinction, sun in-scatter through an HG
+    // phase function WITH a shadow ray (which is why the plume goes bright where
+    // the sun rakes through it and grey where the roof shades it), ambient
+    // in-scatter, and correct compositing against the height fog and the sky
+    // rather than an alpha-blended quad drawn on top of them.
+    //
+    // WHAT IT REPLACES, and why the swap is worth a comment: ~156 live textured
+    // puffs on the legacy ParticleSystem path, integrated on the CPU, drawn as
+    // camera-facing sprites in the overlay pass. Those sprites are OPAQUE to the
+    // idea of fog — they occlude what is behind them and are lit by nothing —
+    // so the plume read as crisper than the trees 30 m behind it, and its own
+    // RNG made two captures of the same pose differ. --legacy-smoke keeps that
+    // path in this binary for the A/B; the library's ParticleSystem is untouched
+    // either way.
+    //
+    // THE PLUME MODEL IS NOT WRITTEN HERE. It is FireEffect's, in smoke-only
+    // mode: the three clocks (buoyancy s^0.62, advection LINEAR in age,
+    // turbulent dispersion s^0.55 — see plans/particle-atmosphere.md, F4 defect
+    // 3.1 for why one clock makes a collimated jet), the per-parcel taper that
+    // keeps the downwind end from stopping on a plane, and recomputeSmokeBox(),
+    // which derives the volume's DOMAIN from the wind because the splat DROPS a
+    // particle outside it. A chimney is a fire whose flame you cannot see, so
+    // smokeOnly gives us the plume with no flame volume, no embers and no
+    // PointLight — one field, one slot.
+    //
+    // Local -> world through the group's matrix, NOT position + scale: the cabin
+    // is rotated to face the water, so a naive offset would put the smoke column
+    // out in the meadow beside the roof. The effect is then parented to the
+    // SCENE and not to the cabin: FireEffect composes its world box as
+    // boxLocal + worldPosition, which is only the truth under an unrotated
+    // parent chain.
+    cabin.group->updateMatrixWorld(true);
+    Vector3 chimneyTip = cabin.chimneyTipLocal;
+    chimneyTip.applyMatrix4(*cabin.group->matrixWorld);
+
+    std::shared_ptr<FireEffect> plume;
+    if (!legacySmoke) {
+        FireEffect::Params fp;
+        fp.smokeOnly = true;// one field: no flame, no embers, no light
+        // Source geometry, not a flame: the flue's mouth. `height` only sets
+        // where the column starts above the effect's origin (0.55 × it), which
+        // for a chimney should be ~nothing — the smoke leaves AT the tip.
+        fp.height = 0.30f;
+        fp.radius = 0.22f;// the flue bore, so the column emerges thin
+        // 7 m of climb before the buoyancy gives out. The old sprite plume rose
+        // ~7.5 m over its 6.5 s life, so this is the same column height the
+        // scene was authored around — what changes is that it now BENDS.
+        fp.smokeHeight = 7.0f;
+        fp.smokeSpread = 1.90f;
+        // The plume STREAMS: a parcel is followed 3× its own 3.2-5.6 s period,
+        // so at the fjord's 0.63 m/s surface wind it travels ~9-11 m downwind
+        // while it climbs. The taper frays the far end (F1 note 2's per-parcel
+        // ceiling, applied downwind) so it disperses instead of ending on a
+        // plane, and it is the reason 30% of the slots are dead at any instant.
+        fp.smokeLifeScale = 3.0f;
+        fp.smokeTaper     = 0.50f;
+        // ── sigma is per-PARTICLE; the quantity to reason with is N × sigma ──
+        // A few thousand slots is right for a chimney (the shoreline campfire
+        // this demo used to carry ran 18k over a box twice as long). At 5k over
+        // a ~10 × 7 × 14 m box at 32³ the mean occupancy is ~1 particle per
+        // voxel, which the trilinear splat spreads to ~8 taps — above the grain
+        // threshold, and the reason the resolution is 32 and not 48: the finer
+        // grid would put 0.4 particles in a voxel and the plume would speckle.
+        fp.smokeParticles  = 5'000;
+        fp.smokeResolution = 32;
+        fp.smokeSigma      = 0.20f;
+        // Wood smoke off a stove is pale — condensed water and light ash, not
+        // the soot of an open flame — so it scatters far more of what it
+        // extinguishes than FireEffect's default 0.25 campfire smoke. This is
+        // the number that decides whether the sun makes the plume GLOW or just
+        // makes it a grey silhouette.
+        fp.smokeAlbedo     = Color(0.50f, 0.50f, 0.51f);
+        fp.smokeAnisotropy = 0.35f;// forward-scattering: bright with the sun behind it
+        // ── ONE WIND, LATCHED AT INIT ────────────────────────────────────────
+        // The same vector the waves, the clouds, the grass and (before it) the
+        // sprite plume derive from. LATCHED, exactly as the legacy path latched
+        // it at initialize(), and the reason is stronger here than it was there:
+        // this emitter is a CLOSED FORM in age, so setWind() does not steer the
+        // parcels that are already flying, it re-evaluates where they have
+        // ALWAYS been — the whole plume re-aims retroactively, in one frame, as
+        // a visible snap. Wind-at-init is the honest v1. Driving the slider live
+        // needs the wind to enter the closed form as a history (an integral of
+        // past wind over the parcel's age), which is a real feature and not a
+        // parameter change; it is written up in the plan as an open issue.
+        fp.wind.copy(groundWind0);
+        fp.seed = 4711u;
+        plume = FireEffect::create(fp);
+        plume->name = "chimney_plume";
+        plume->position.copy(chimneyTip);
+        scene.add(plume);
+        plume->ignite();
+    }
+
+    // ── the legacy sprite plume (--legacy-smoke), verbatim ──────────────────
     ParticleSystem smoke;
-    {
+    if (legacySmoke) {
         auto& s = smoke.settings();
         s.makeDefault();
         s.positionStyle = ParticleSystem::Type::BOX;
-        // Local -> world through the group's matrix, NOT position + scale: the
-        // cabin is rotated to face the water, so a naive offset would put the
-        // smoke column out in the meadow beside the roof.
-        cabin.group->updateMatrixWorld(true);
-        Vector3 tip = cabin.chimneyTipLocal;
-        tip.applyMatrix4(*cabin.group->matrixWorld);
-        s.positionBase = tip;
+        s.positionBase = chimneyTip;
         s.positionSpread = {0.15f, 0.05f, 0.15f};
         s.velocityStyle = ParticleSystem::Type::BOX;
         // ONE WIND: the plume's horizontal velocity IS the scene's surface wind.
@@ -1902,7 +2011,12 @@ int main(int argc, char** argv) {
             t->params.time = tElapsed;
             t->params.windStrength = 0.10f + 0.02f * windSpeed;
         }
-        smoke.update(dt);
+        // The plume takes ABSOLUTE time (its emitter is a closed form in t, so a
+        // headless capture of frame 600 does not depend on frames 1..599); the
+        // legacy sprite path integrates and takes the delta. The wind slider
+        // does NOT reach either of them — see the latch note at construction.
+        if (plume) plume->update(tElapsed);
+        else smoke.update(dt);
         boat->position.y = -0.14f + 0.05f * std::sin(tElapsed * 0.9f) + 0.02f * std::sin(tElapsed * 1.7f + 1.f);
         boat->rotation.z = 0.030f * std::sin(tElapsed * 0.7f);
         boat->rotation.x = 0.020f * std::sin(tElapsed * 1.1f + 1.f);

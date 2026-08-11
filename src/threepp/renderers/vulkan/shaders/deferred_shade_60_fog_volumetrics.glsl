@@ -358,12 +358,91 @@ vec3 applyParticleFog(vec3 col, vec3 ro, vec3 rd, float tMax) {
     }
     const vec3 amb = lights.ambient
                    + sampleEnvLod(vec3(0.0, 1.0, 0.0), float(max(pc.envMipCount, 1u) - 1u));
+    // ── EVERYTHING THIS MEDIUM ADDS IS STILL BEHIND THE AIR ─────────────────
+    // The invariant: radiance a medium adds to the frame must be attenuated by
+    // every medium between it and the camera. The caller has already fogged
+    // `col` (applyHeteroSurfaceFog / applySceneFog, then applyMurk) and the
+    // extinction of that background by this dust is the `col * exp(-tau)` term
+    // — but the dust's OWN radiance, the three terms after it, was added raw.
+    // A plume 70 m away therefore composited as if it were at the lens: a small
+    // crisp wisp sitting in front of the murk, visibly less attenuated than the
+    // trees at its own depth. That is the third appearance of the
+    // media-don't-compose class (F4 defect 2 was the same symptom on the legacy
+    // sprite path against the snow haze), and this is its deferred-path twin.
+    //
+    // NO DOUBLE COUNT — the F1 rule holds, extinction and in-scatter keep
+    // separate owners. This multiplies the dust's added radiance by the air's
+    // TRANSMITTANCE only; it does not re-add one photon of air in-scatter,
+    // which the caller already composited. The expression mirrors the surface
+    // path's own choice of medium (hetero height fog when the froxels are
+    // active, the vestigial homogeneous fog otherwise) so a plume and the tree
+    // behind it fade through the same profile, and with no air medium bound
+    // every factor is exactly 1 and the return is textually the pre-fix one.
+    //
+    // AT THE CENTROID, not per step. `cen` is the sigma-weighted centroid the
+    // march already computed and already uses for the sun's shadow ray and the
+    // cloud-shadow sample, so this reuses that approximation rather than
+    // inventing a second one: the air's optical depth varies by well under a
+    // percent across a ten-metre plume seventy metres out, while a per-step
+    // form would put two exps and a distance() inside the 32-step loop.
+    //
+    // AND THE OTHER HALF, which a capture caught and arithmetic would not have:
+    // attenuating only the added term turns a plume in THICK fog into a DARK
+    // HOLE. `col` arrives carrying the air's in-scatter over the WHOLE leg, and
+    // `col · e^-tau` extinguishes all of it — including the share scattered
+    // BETWEEN the camera and the plume, which is in FRONT of the plume and which
+    // the plume therefore cannot occlude. In thin fog that share is nothing; at
+    // --mist 0.010 it is most of the pixel, and the previously-unattenuated
+    // added term had been quietly cancelling the error. Fixing one without the
+    // other swapped a plume that would not fade for a black smudge.
+    //
+    // The split is exact and costs one lerp. With I the air's in-scatter
+    // radiance and T its transmittance to the plume, the caller handed us
+    //     col = colSurf·T_hit + I·(1 − T_hit),
+    // and the composition we want is
+    //     colSurf·T_hit·e^-tau + I·(T_cen − T_hit)·e^-tau + I·(1 − T_cen) + add·T_cen,
+    // which reduces, substituting col, to
+    //     col·e^-tau + I·(1 − T_cen)·(1 − e^-tau) + add·T_cen.
+    // So: put back the near-side haze the dust wrongly ate, in proportion to how
+    // much it ate. I and T are built from the SAME expressions the surface path
+    // used (hetero height fog when the froxels are active, else the vestigial
+    // homogeneous fog, then murk), so plume and background fade through one
+    // profile; `amb` above is already applyHeteroSurfaceFog's `fogLight` term
+    // for term, so it is reused rather than sampled a second time.
+    vec3 trAir = vec3(1.0);
+    vec3 airIn = vec3(0.0);// I·(1 − T), summed per medium
+    if (clouds.heteroActive > 0.5) {
+        const vec3 T = vec3(exp(-heightFogOpticalDepth(ro, cen)));
+        airIn += ((fog.enabled > 0.5) ? fog.color : vec3(1.0)) * amb * (vec3(1.0) - T);
+        trAir *= T;
+    } else if (fog.enabled > 0.5) {
+        const vec3 T = exp(-fog.sigmaT * fogPathLength(ro, cen));
+        airIn += fog.color * amb * (vec3(1.0) - T);
+        trAir *= T;
+    }
+    if (fog.murkDensity > 0.0) {
+        const vec3 T = exp(-vec3(fog.murkDensity) * fogPathLength(ro, cen));
+        airIn += fog.murkColor * amb * (vec3(1.0) - T);
+        trAir *= T;
+    }
+    // With NO air medium bound both are identity (trAir 1, airIn 0) and the
+    // return below is the pre-fix expression textually, not merely equivalently.
+    //
+    // Approximation left standing, and named: with air fog AND murk both live
+    // the two in-scatter shares are summed rather than nested, so the air's
+    // share misses the murk's transmittance factor. Murk is clipped to the
+    // below-waterline leg, so this is exact for every camera above water — the
+    // fjord's case, and the reported one.
+    const float trDust = exp(-tau);
+
     // Emission is ADDED, not scattered: it is radiance the medium produced, so
     // it neither multiplies by the albedo (that is the fraction of INCIDENT
     // light re-emitted) nor attenuates the background any further than tau
     // already did. `pnt` is already albedo-weighted and already carries its own
     // per-step w, so it is added rather than folded into the wsum product.
-    return col * exp(-tau) + medAlbedo * (amb + sun) * wsum + emis + pnt;
+    return col * trDust
+         + airIn * (1.0 - trDust)
+         + (medAlbedo * (amb + sun) * wsum + emis + pnt) * trAir;
 #else
     return col;
 #endif

@@ -100,9 +100,27 @@ void FireEffect::recomputeSmokeBox() {
 
     // The longest period any parcel draws (emitSmoke's 3.2 + 2.4·u3, scaled).
     const float periodMax = (3.2f + 2.4f) * std::max(p_.smokeLifeScale, 0.f);
-    const float smokeTop  = p_.height * 0.80f + p_.smokeHeight;
+    // The tallest parcel, not the nominal one: smokeHeightJitter lets a few
+    // slots overshoot smokeHeight by up to 0.60 × the jitter (emitSmoke's `hs`,
+    // whose maximum is 1 + 0.60·j). A box sized to the nominal height would cut
+    // those wisps off on a plane — which is the defect the jitter exists to
+    // remove, reintroduced through the volume's DOMAIN instead of its emitter.
+    const float hsMax     = 1.f + 0.60f * std::max(p_.smokeHeightJitter, 0.f);
+    const float smokeTop  = p_.height * 0.80f + p_.smokeHeight * hsMax;
     const float smokeBot  = p_.height * 0.55f;
-    const float smokeR    = p_.radius + p_.smokeSpread + 0.15f;
+    // The RADIAL reach, and the max() is a bug fix rather than a flourish. A
+    // parcel's distance from the column axis is r0 + wob, whose ceiling at s = 1
+    // is `radius·0.55 + smokeSpread` plus the wobble's `0.16·smokeSpread` — so
+    // the dispersion term actually reaches 1.16 × smokeSpread, not 1.0 ×. The
+    // original `radius + smokeSpread + 0.15` covers that only while the SOURCE
+    // radius dominates, which it does for a campfire (0.25 vs 0.096) and does
+    // not for a chimney plume authored to spread 2 m (0.22 vs 0.34) — there the
+    // widest wobbling parcels fall outside the box and the splat drops them,
+    // which is defect 3.2's invisible clipping plane arriving through the SIDE
+    // of the volume instead of its downwind end. Taking the larger of the two
+    // leaves every existing caller's box at the value it already had.
+    const float smokeR    = std::max(p_.radius, p_.radius * 0.55f + p_.smokeSpread * 0.16f) +
+                            p_.smokeSpread + 0.15f;
     const float driftX    = p_.wind.x * periodMax;
     const float driftZ    = p_.wind.z * periodMax;
     smokeBoxLocal_ = Vector3(driftX * 0.5f, 0.5f * (smokeBot + smokeTop), driftZ * 0.5f);
@@ -160,6 +178,15 @@ void FireEffect::setWind(const Vector3& worldWind) {
 
 FireEffect::FireEffect(const Params& params): p_(params) {
 
+    // ── SMOKE ONLY ──────────────────────────────────────────────────────────
+    // Normalised once, here, so every `if (p_.embers ...)` below reads the same
+    // truth and no later code has to remember to test two flags. The three
+    // things suppressed are exactly the three that cost something to exist
+    // rather than to be lit: a density volume holds a slot out of
+    // kMaxDensityFields whether or not any particle is alive in it, and a
+    // PointLight sits in the cluster list at intensity 0.
+    if (p_.smokeOnly) p_.embers = p_.legacyEmbers = false;
+
     // ── The boxes ───────────────────────────────────────────────────────────
     // FIXED, not fitted per frame to the particles' actual bounds. A box that
     // moved with the flame would re-anchor the voxel lattice every frame and
@@ -175,7 +202,7 @@ FireEffect::FireEffect(const Params& params): p_(params) {
     recomputeSmokeBox();
 
     // ── The fields. Created ONCE, at final capacity, PARKED ─────────────────
-    {
+    if (!p_.smokeOnly) {
         ParticleField::Config cfg;
         cfg.capacity      = std::max(p_.flameParticles, 1u);
         cfg.ownership     = ParticleField::Ownership::HostRing;
@@ -209,18 +236,23 @@ FireEffect::FireEffect(const Params& params): p_(params) {
         add(smoke_);
     }
 
-    flameHost_.resize(flame_->capacity());
+    if (flame_) flameHost_.resize(flame_->capacity());
     smokeHost_.resize(smoke_->capacity());
 
     // ── The light: the piece that puts the fire INTO the scene ──────────────
-    light_ = PointLight::create(blackbodyColor(p_.lightTempK), p_.lightIntensity,
-                                p_.lightRange, /*decay*/ 2.f);
-    light_->name = "fire.light";
-    light_->position.set(0.f, p_.lightHeight, 0.f);
-    light_->radius     = p_.lightRadius;
-    light_->castShadow = true;
-    light_->intensity  = 0.f;// parked until ignite()
-    add(light_);
+    // Absent under smokeOnly: a stove behind a wall lights nothing outside it,
+    // and an intensity-0 PointLight is not free — it is a cluster entry and a
+    // shadow-casting light the renderer still has to carry.
+    if (!p_.smokeOnly) {
+        light_ = PointLight::create(blackbodyColor(p_.lightTempK), p_.lightIntensity,
+                                    p_.lightRange, /*decay*/ 2.f);
+        light_->name = "fire.light";
+        light_->position.set(0.f, p_.lightHeight, 0.f);
+        light_->radius     = p_.lightRadius;
+        light_->castShadow = true;
+        light_->intensity  = 0.f;// parked until ignite()
+        add(light_);
+    }
 
     // ── Embers: a third ParticleField, device-emitted, drawn as billboards ──
     //
@@ -344,17 +376,17 @@ void FireEffect::ignite() {
     if (embers_) embers_->setLiveCount(embers_->capacity());
     // The light is immediate so a fire ignited and rendered in the same frame
     // already casts.
-    light_->intensity = p_.lightIntensity;
+    if (light_) light_->intensity = p_.lightIntensity;
 }
 
 void FireEffect::extinguish() {
     lit_ = false;
-    flame_->setLiveCount(0);
+    if (flame_) flame_->setLiveCount(0);
     smoke_->setLiveCount(0);
     // Park, don't remove: a field with liveCount 0 stays in the scene at one
     // entry, skips its emit dispatch and draws nothing (churn contract).
     if (embers_) embers_->setLiveCount(0);
-    light_->intensity = 0.f;
+    if (light_) light_->intensity = 0.f;
 }
 
 // ── The flame ───────────────────────────────────────────────────────────────
@@ -453,6 +485,7 @@ void FireEffect::emitSmoke(float t) {
     const float baseY = p_.height * 0.55f;
     const float lifeScale = std::max(p_.smokeLifeScale, 0.f);
     const float taper     = std::max(0.f, std::min(1.f, p_.smokeTaper));
+    const float hJitter   = std::max(p_.smokeHeightJitter, 0.f);
     for (std::uint32_t i = 0; i < n; ++i) {
         const float u0 = rnd01(p_.seed, i, 16u);
         const float u1 = rnd01(p_.seed, i, 17u);
@@ -508,10 +541,31 @@ void FireEffect::emitSmoke(float t) {
         // buoyancy gives out, and runs downwind widening and thinning — which is
         // what a chimney plume in wind does, and what the one 30 m away in this
         // same scene has always done.
+        // ── AND A FOURTH THING, WHICH IS NOT A CLOCK: the parcel's OWN CEILING
+        // `rise` is normalised by the parcel's own age, so it is independent of
+        // that parcel's period — which means the three clocks above stagger
+        // where a parcel gets to horizontally and stagger NOTHING about where it
+        // ends up vertically. Every trajectory in the field topped out at
+        // exactly `baseY + smokeHeight`, and a few thousand parcels sharing one
+        // ceiling is a plane: the flat, hard-edged top this plume had in every
+        // scene that ever drew it, most visibly in vulkan_fire against a night
+        // sky. It is F1 note 2's flat red flame cap, in the other field, and it
+        // survived the F4 defect pass because the taper — which does fix it —
+        // was left opt-in and off.
+        //
+        // MEAN-PRESERVING, so this is a raggedness knob and not a height knob:
+        // E[u^1.5] = 0.4, so E[g] = 0.6 + 1.0 × 0.4 = 1 exactly, and hs is 1 at
+        // jitter 0 (the old single ceiling, textually). Skewed low — most
+        // parcels fall short of the nominal top, a few overshoot into wisps —
+        // which is what makes the density decay toward the top instead of
+        // ending at it.
+        const float g  = 0.60f + 1.00f * std::pow(rnd01(p_.seed, i, 23u), 1.5f);
+        const float hs = 1.f + hJitter * (g - 1.f);
+
         const float age  = s * period;
         const float rise = std::pow(s, 0.62f);
         const float disp = std::pow(s, 0.55f);
-        const float y    = baseY + p_.smokeHeight * rise;
+        const float y    = baseY + p_.smokeHeight * hs * rise;
         const float r0 = (p_.radius * 0.55f + p_.smokeSpread * disp) * std::sqrt(u1);
         const float th = u2 * kTau + 0.9f * rise;
 
@@ -549,7 +603,7 @@ void FireEffect::update(float timeSec) {
         return;
     }
 
-    emitFlame(timeSec);
+    if (flame_) emitFlame(timeSec);
     emitSmoke(timeSec);
     // TWO FLOATS — the entire per-frame CPU cost of the ember field, whatever
     // its capacity. Absolute t, never a delta and never a wall clock: the
@@ -565,8 +619,12 @@ void FireEffect::update(float timeSec) {
     updateMatrixWorld();
     Vector3 origin;
     getWorldPosition(origin);
-    flame_->densityRepr().center = flameBoxLocal_ + origin;
+    if (flame_) flame_->densityRepr().center = flameBoxLocal_ + origin;
     smoke_->densityRepr().center = smokeBoxLocal_ + origin;
+
+    // smokeOnly: no light, and no embers of either kind (the ctor forces both
+    // flags off), so the plume above is the whole effect and this is the end.
+    if (!light_) return;
 
     // ── The light ───────────────────────────────────────────────────────────
     // Brightness AND warmth flicker together: a fire that only pulses in
