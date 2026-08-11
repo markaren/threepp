@@ -50,6 +50,7 @@
 #include "threepp/geometries/PlaneGeometry.hpp"
 #include "threepp/materials/MeshStandardMaterial.hpp"
 #include "threepp/extras/effects/FireEffect.hpp"
+#include "threepp/objects/Ocean.hpp"
 #include "threepp/objects/ParticleField.hpp"
 #include "threepp/objects/ParticleSystem.hpp"
 #include "threepp/renderers/VulkanRenderer.hpp"
@@ -3036,6 +3037,202 @@ int main(int argc, char** argv) {
         scene.remove(*rested);
         scene.remove(*plate);
         box->visible = true;
+        for (int i = 0; i < 6; ++i) frame();
+    }
+
+    // ── WATER-FIRE REFLECTION MARCH ─────────────────────────────────────────
+    //
+    // shadeWater's reflected leg used to see GEOMETRY only, so a flame — which
+    // is a density volume with an emission ramp and not a mesh — had no mirror
+    // image in water. pdEmissiveLeg marches the same medium along that leg.
+    //
+    // THREE claims, and the first is the gate rather than the feature:
+    //
+    //   1. GATE. A NON-emissive field leaves the water exactly where a scene
+    //      with no field at all leaves it. The whole march sits behind
+    //      `pd.counts.y != 0`, so this is the assertion that the branch is
+    //      real — and it is stated against a SAME-SCENE CONTROL rather than as
+    //      byte identity, because a scene containing an Ocean is not
+    //      reproducible at all: the FFT surface advances on glfwGetTime(), so
+    //      two reads of a "static" water scene are two different sets of
+    //      ripples. (Pre-existing renderer property, not this phase's.)
+    //   2. IT IS A MIRROR, NOT A GLOW. Switching emission on must brighten the
+    //      water column BELOW the flame far more than water off to the side.
+    //      A term that simply added radiance everywhere — or a fog leak on the
+    //      camera leg — would move both regions together, which is what makes
+    //      this the load-bearing check and not "the image changed".
+    //   3. THE ADDED RADIANCE IS A BLACKBODY. Red-dominant, because it is the
+    //      same pdEmissionAt() the primary march uses and not a white glint.
+    {
+        const char* capDir = capDirForDet;
+        const auto shot = [&](const char* name) {
+            if (!capDir) return;
+            renderer.writeFramebuffer(std::string(capDir) + "/" + name + ".png");
+        };
+
+        const float sunWas = light->intensity;
+        light->intensity = 0.10f;// night: the flame must be what lights the water
+        auto amb = AmbientLight::create(0x24303f, 0.06f);
+        scene.add(amb);
+        ground->visible = false;// replaced by the pond bed below
+        box->visible    = false;
+
+        // A dark bed under the water. Dark on purpose: a bright floor reads
+        // through the transmission term and competes with the mirror.
+        auto bed = Mesh::create(PlaneGeometry::create(30.f, 30.f),
+                                MeshStandardMaterial::create(
+                                        MeshStandardMaterial::Params{}
+                                                .color(Color(0.045f, 0.042f, 0.038f))
+                                                .roughness(1.f)));
+        bed->rotateX(-math::PI / 2.f);
+        bed->position.y = -0.6f;
+        scene.add(bed);
+
+        // The deferred water path is gated on the FFT-displaced ocean marker,
+        // which only a DisplacedMesh carries — a plain Mesh with a watery
+        // material can never reach shadeWater. Under 100 m Ocean resolves its
+        // own POND material recipe, so nothing here authors water parameters.
+        Ocean::Options oo;
+        oo.size       = 14.f;
+        oo.resolution = 128;
+        oo.windSpeed  = 1.6f;
+        oo.choppiness = 0.30f;
+        oo.waveScale  = 0.45f;
+        auto pond = Ocean::create(oo);
+        scene.add(pond);
+
+        // Low and grazing: Fresnel is the whole economy of a reflection, and a
+        // steep view returns ~2% of it.
+        const Vector3 camWas = camera->position;
+        camera->position.set(0.f, 0.55f, 3.2f);
+        camera->lookAt(Vector3(0.f, 0.30f, -1.2f));
+
+        // The flame, standing clear of every camera leg that reaches the
+        // measured water: its box bottom is at y = 0.37 and the rays from this
+        // eye to the far pond pass under 0.22 m, so anything that shows up in
+        // the water arrived along the REFLECTED leg and not through
+        // applyParticleFog on the way in.
+        const Vector3 fC(0.f, 1.05f, -3.0f);
+        const Vector3 fH(0.35f, 0.68f, 0.35f);
+        constexpr std::uint32_t kWFlame = 50'000;
+        ParticleField::Config wcfg;
+        wcfg.capacity = kWFlame;
+        auto wflame = ParticleField::create(wcfg);
+        wflame->setDensityRepr(fC, fH, 1.6f, /*resolution*/ 48);
+        {
+            auto& dr = wflame->densityRepr();
+            dr.albedo            = Color(0.32f, 0.27f, 0.24f);
+            dr.anisotropy        = 0.25f;
+            dr.emissiveIntensity = 0.f;// leg 1: pure dust
+            dr.tempBottomK       = 1950.f;
+            dr.tempTopK          = 1000.f;
+            dr.tempFalloff       = 1.55f;
+        }
+        std::vector<ParticlePos> wpos(kWFlame);
+        {
+            std::mt19937 rng(20260812u);
+            std::uniform_real_distribution<float> u01(0.f, 1.f);
+            for (std::uint32_t i = 0; i < kWFlame; ++i) {
+                const float h  = std::pow(u01(rng), 0.75f);
+                const float rr = fH.x * std::pow(1.f - h, 0.85f) * std::sqrt(u01(rng));
+                const float th = u01(rng) * 2.f * math::PI;
+                wpos[i] = {fC.x + rr * std::cos(th), fC.y - fH.y + h * 2.f * fH.y,
+                           fC.z + rr * std::sin(th), 1.f};
+            }
+        }
+
+        // Mean luma and mean (R-B) over a screen rectangle.
+        const auto region = [&](const std::vector<unsigned char>& px,
+                                int x0, int x1, int y0, int y1) {
+            double lum = 0, rb = 0;
+            std::size_t n = 0;
+            for (int y = y0; y < y1; ++y)
+                for (int x = x0; x < x1; ++x) {
+                    const std::size_t i = std::size_t(y) * std::size_t(kW) + std::size_t(x);
+                    if (i * 3 + 2 >= px.size()) continue;
+                    lum += 0.2126 * px[i * 3] + 0.7152 * px[i * 3 + 1] + 0.0722 * px[i * 3 + 2];
+                    rb += double(px[i * 3]) - double(px[i * 3 + 2]);
+                    ++n;
+                }
+            const double d = double(std::max<std::size_t>(n, 1));
+            return std::pair<double, double>{lum / d, rb / d};
+        };
+        // The mirror strip is the water column directly below the flame; the
+        // side strip is water at the same depth range, well off the axis.
+        constexpr int kY0 = 240, kY1 = 340;
+        const auto mirrorOf = [&](const std::vector<unsigned char>& px) {
+            return region(px, kW * 42 / 100, kW * 58 / 100, kY0, kY1);
+        };
+        const auto sideOf = [&](const std::vector<unsigned char>& px) {
+            return region(px, kW * 4 / 100, kW * 20 / 100, kY0, kY1);
+        };
+        const auto settle = [&](int n, bool submit) {
+            for (int i = 0; i < n; ++i) {
+                if (submit) wflame->submit(wpos.data(), kWFlame);
+                frame();
+            }
+        };
+
+        // Leg 0a/0b — no field at all, twice. The second read is the CONTROL:
+        // whatever these two differ by is what an unchanged scene does to
+        // itself on this backend, with a live FFT surface underneath it.
+        settle(45, false);
+        const auto none1 = mirrorOf(renderer.readRGBPixels());
+        settle(30, false);
+        const auto none2 = mirrorOf(renderer.readRGBPixels());
+        const double ctrl = std::fabs(none2.first - none1.first);
+        shot("20_water_nofield");
+
+        // Leg 1 — the field is there, marching, and NOT emissive.
+        scene.add(wflame);
+        settle(50, true);
+        const auto dustPx = renderer.readRGBPixels();
+        const auto dustM  = mirrorOf(dustPx);
+        const auto dustS  = sideOf(dustPx);
+        shot("21_water_dust");
+
+        // Leg 2 — the same field, ignited.
+        wflame->densityRepr().emissiveIntensity = 45.f;
+        settle(50, true);
+        const auto firePx = renderer.readRGBPixels();
+        const auto fireM  = mirrorOf(firePx);
+        const auto fireS  = sideOf(firePx);
+        shot("22_water_fire");
+
+        std::printf("[info] water reflection: no-field mirror luma %.2f / %.2f "
+                    "(control spread %.2f), dust %.2f, fire %.2f\n",
+                    none1.first, none2.first, ctrl, dustM.first, fireM.first);
+        std::printf("[info] water reflection: mirror strip %+.2f, side strip %+.2f "
+                    "(dust -> fire), R-B in the strip %.2f -> %.2f\n",
+                    fireM.first - dustM.first, fireS.first - dustS.first,
+                    dustM.second, fireM.second);
+
+        check(std::fabs(dustM.first - none2.first) <= std::max(4.0 * ctrl, 1.5),
+              "a NON-emissive density field leaves the water where a field-free "
+              "scene leaves it — the reflected-leg march is behind the emissive "
+              "gate (stated against a same-scene control: an Ocean advances on "
+              "the wall clock and is never byte-reproducible)");
+
+        const double gainM = fireM.first - dustM.first;
+        const double gainS = fireS.first - dustS.first;
+        check(gainM > 6.0 && gainM > 4.0 * std::fabs(gainS),
+              "igniting the field puts a MIRROR IMAGE in the water: the strip "
+              "below the flame brightens far more than water off to the side, "
+              "which a uniform glow or a camera-leg fog leak could not do");
+
+        check(fireM.second > dustM.second + 4.0,
+              "what the water gained is BLACKBODY radiance — red-dominant, the "
+              "same pdEmissionAt() the primary march uses, not a white glint");
+
+        scene.remove(*wflame);
+        scene.remove(*pond);
+        scene.remove(*bed);
+        scene.remove(*amb);
+        ground->visible = true;
+        box->visible    = true;
+        light->intensity = sunWas;
+        camera->position.copy(camWas);
+        camera->lookAt(Vector3(0.f, 0.8f, 0.f));
         for (int i = 0; i < 6; ++i) frame();
     }
 
