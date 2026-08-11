@@ -81,10 +81,44 @@ layout(buffer_reference, scalar, buffer_reference_align = 16) readonly buffer Bb
     float    time;          // the emitter's ABSOLUTE t, never a wall clock
     uint     seed;
     uint     flags;         // bit0: w IS the radius (WSemantic::Radius)
+    // ── F4 ──────────────────────────────────────────────────────────────────
+    float    glow;          // > 0: this field feeds the offscreen glow pyramid
+    float    stretchMaxScreen;// streak cap as a FRACTION OF FRAME HEIGHT; 0 = off
+    float    nearFade;      // fade the sprite out below this camera distance, m
+    float    lodNear;       // collapse the quad CLOSER than this (mesh draws it)
+    float    lodFade;       // metres of ramp above lodNear
     uint     _pad0;
     uint     _pad1;
-    uint     _pad2;
 };
+
+// ── F4: the per-VIEW record ─────────────────────────────────────────────────
+// Everything here is a property of the CAMERA and the FRAME, not of the field,
+// and it is a second buffer_reference rather than more push constants for one
+// arithmetic reason: the push block was already exactly 128 B — the range every
+// Vulkan implementation guarantees — and the fog model needs a dozen floats.
+// It is not a descriptor for the reason the whole pass is not: a set written
+// per view per frame is precisely the VUID-03047 exposure this design avoids.
+//
+// The renderer writes one record per (view, output mode) into a per-frame-in-
+// flight host-visible block during recording of that frame, which is safe for
+// the same reason ParticleFieldPass::prepareFrame's writes are: this slot's
+// fence has already been waited on, so nothing in flight can be reading it.
+// KEEP IN SYNC with BillboardViewGpu in ParticleFieldPass.hpp.
+layout(buffer_reference, scalar, buffer_reference_align = 16) readonly buffer BbView {
+    float exposure;     // currentExposure(), for the display transform
+    uint  toneMapMode;  // threepp::ToneMapping
+    uint  flags;        // bit0 = a fog medium is present, bit1 = LINEAR HDR out
+    float hfDensity;    // air-medium sigma_t at baseY
+    float hfBaseY;
+    float hfFalloff;    // exponential height scale, metres
+    float murkDensity;  // underwater murk sigma_t
+    float waterSurfaceY;// world Y of the water surface; >= 1e29 = no clip
+    float camWorldY;
+    vec3  viewToWorldY; // world-Y row of the inverse view; reconstructs a
+                        // particle's world Y from its VIEW-space position
+};
+const uint kViewFogActive = 1u;
+const uint kViewLinearOut = 2u;
 
 layout(push_constant, scalar) uniform Pc {
     mat4     proj;       // 64  view -> clip, UNJITTERED (this is a post-TAA pass)
@@ -92,13 +126,20 @@ layout(push_constant, scalar) uniform Pc {
                          //     view-space position is three dot products and no
                          //     matrix-layout convention has to be agreed on
     uint64_t paramsAddr; //  8  -> this field's BbParams record
-    float    exposure;   //  4  currentExposure(), for the display transform
-    uint     toneMapMode;//  4  threepp::ToneMapping
+    uint64_t viewAddr;   //  8  -> this view's BbView record (F4; used to be the
+                         //     exposure/toneMapMode pair, which moved INTO that
+                         //     record to make room for the fog terms)
 } pc;                    // 128 B exactly — the guaranteed minimum push range
 
 layout(location = 0) out vec2  vLocal;// [-1,1]^2 parametric square
 layout(location = 1) out vec4  vColor;// rgb = linear HDR radiance, a = coverage
 layout(location = 2) out float vSoft;
+// F4: the display transform travels with the vertex now that it lives in the
+// per-view record rather than the push block — the fragment stage would
+// otherwise have to dereference the same buffer_reference per FRAGMENT to read
+// two scalars that are constant over the whole draw.
+layout(location = 3) flat out float vExposure;
+layout(location = 4) flat out uint  vToneMap;
 
 // ── The hash ────────────────────────────────────────────────────────────────
 // Bit-for-bit particle_emit.comp's hashU/rnd01, which is itself bit-for-bit
@@ -128,8 +169,51 @@ vec3 viewOf(vec4 p) {
     return vec3(dot(pc.mv[0], p), dot(pc.mv[1], p), dot(pc.mv[2], p));
 }
 
+// ── F4: fog attenuation on a billboard ──────────────────────────────────────
+// A DELIBERATE SECOND COPY of particle.frag's overlay-fog closed forms, which
+// are themselves in sync with heightFogOpticalDepth in
+// deferred_shade_60_fog_volumetrics.glsl. Copied rather than shared because the
+// legacy billboard path must stay byte-identical (the parent plan requires it
+// untouched) and folding these onto a header would recompile it; the same
+// deliberate-duplication call F3 note 6 made for the display curves. If a third
+// copy ever appears, that is the moment to merge all of them.
+//
+// Numerically-stable (e^a − e^b)/x form: the plain difference of exponentials
+// cancels catastrophically in fp32 when the falloff is large (near-uniform fog),
+// which is exactly the fjord's murk.
+float bbAirOpticalDepth(BbView V, float partY, float len) {
+    if (V.hfDensity <= 0.0) return 0.0;
+    const float H  = max(V.hfFalloff, 1e-3);
+    const float ya = max(V.camWorldY - V.hfBaseY, 0.0);
+    const float yb = max(partY       - V.hfBaseY, 0.0);
+    const float clampedLen = min(len, 1.0e7);
+    const float ea = exp(-ya / H);
+    const float eb = exp(-yb / H);
+    const float x  = (yb - ya) / H;
+    const float f  = (abs(x) < 1e-3) ? (ea * (1.0 - 0.5 * x + x * x * (1.0 / 6.0)))
+                                     : ((ea - eb) / x);
+    return min(V.hfDensity * clampedLen * f, 80.0);
+}
+
+// Homogeneous murk over the BELOW-waterSurfaceY portion of the leg only.
+float bbMurkOpticalDepth(BbView V, float partY, float len) {
+    if (V.murkDensity <= 0.0) return 0.0;
+    float d = len;
+    if (V.waterSurfaceY < 1e29) {
+        const float ya = V.camWorldY - V.waterSurfaceY;
+        const float yb = partY       - V.waterSurfaceY;
+        if (ya >= 0.0 && yb >= 0.0) d = 0.0;
+        else if (!(ya < 0.0 && yb < 0.0)) {
+            const float t = ya / (ya - yb);
+            d *= (ya < 0.0) ? t : (1.0 - t);
+        }
+    }
+    return V.murkDensity * d;
+}
+
 void main() {
     BbParams   P  = BbParams(pc.paramsAddr);// a reference cannot be `const`
+    BbView     V  = BbView(pc.viewAddr);
     const uint pi = uint(gl_InstanceIndex);  // firstInstance is 0 for this draw
 
     const vec4 pw = PosBuf(P.posAddr).v[pi];
@@ -159,6 +243,36 @@ void main() {
     radius *= max(1.0 - P.sizeTaper * ageFrac, 0.0);
 
     const vec3 vp = viewOf(vec4(pw.xyz, 1.0));
+    // Distance to the eye. For a perspective camera this is the literal camera
+    // distance; for an orthographic one it is the distance to the view origin,
+    // which is the only thing "near" can mean there and is what every
+    // distance-driven term below wants.
+    const float camDist = length(vp);
+
+    // ── F4: the LOD gate and the near fade, as ONE brightness factor ────────
+    // Both are ramps on camDist and both end up multiplying the sprite's
+    // radiance, so they are computed together and applied once.
+    //
+    // lodNear is the NEAR half of the mesh/billboard split: inside it the field's
+    // MeshRepr is drawing this same particle as a shaded solid (its
+    // MeshRepr::lodFar shrinks it out over the SAME band, so the two cross-fade
+    // rather than pop), and drawing the quad there as well would double the
+    // flake. Outside it, the quad IS the particle and the proxy is gone. One
+    // field, one position buffer, two vertex stages with complementary
+    // predicates — no CPU, no compaction, no second field.
+    float distFade = 1.0;
+    if (P.lodNear > 0.0) {
+        distFade *= (P.lodFade > 1e-4) ? clamp((camDist - P.lodNear) / P.lodFade, 0.0, 1.0)
+                                       : ((camDist >= P.lodNear) ? 1.0 : 0.0);
+    }
+    // The near fade. An additive quad in a field the camera stands INSIDE
+    // compounds with proximity twice over — coverage grows as 1/d^2 and a
+    // stretched streak grows as 1/d on top of that — so the single closest
+    // particle is reliably the brightest thing in the frame however modest the
+    // authored intensity is. That is the "one anomalously bright near streak per
+    // frame" of the F3 rain sequence, and this is its cause rather than its
+    // symptom: it is not a bug in the stretch, it is 1/d.
+    if (P.nearFade > 0.0) distFade *= clamp(camDist / P.nearFade, 0.0, 1.0);
 
     // ── The quad ────────────────────────────────────────────────────────────
     // Corner from two bits of the vertex index, as a triangle strip:
@@ -195,12 +309,39 @@ void main() {
         }
     }
 
+    // ── F4: the streak cap IN THE DOMAIN THE DEFECT LIVES IN ────────────────
+    // stretchMax above is expressed in RADII, i.e. in metres, so it bounds a
+    // streak's length in the world and says nothing about how much of the FRAME
+    // that becomes. A drop two metres from the lens projects its perfectly legal
+    // 12 cm to a bar across a quarter of the image. This clamps the projected
+    // half-length against a fraction of the frame height, measured by projecting
+    // the axis itself — exact for perspective and orthographic alike, with no
+    // small-angle approximation and no aspect ratio to plumb in (the x component
+    // is converted to y-equivalent units by the projection's own anisotropy).
+    if (P.stretchMaxScreen > 0.0 && halfMajor > radius) {
+        const vec4 c0 = pc.proj * vec4(vp, 1.0);
+        const vec4 c1 = pc.proj * vec4(vp + vec3(axisMajor * halfMajor, 0.0), 1.0);
+        if (c0.w > 1e-4 && c1.w > 1e-4) {
+            vec2 dn = c1.xy / c1.w - c0.xy / c0.w;
+            dn.x *= pc.proj[1][1] / max(abs(pc.proj[0][0]), 1e-6);
+            const float lenNdc = length(dn);
+            // NDC spans 2 over the frame height, so a half-length of `s` in NDC
+            // is a full length of `s` frame heights.
+            if (lenNdc > P.stretchMaxScreen)
+                halfMajor = max(radius, halfMajor * (P.stretchMaxScreen / lenNdc));
+        }
+    }
+
+    // Everything that can remove this particle from the frame, in one predicate.
+    // A collapsed quad has exactly zero area and covers no sample — the same
+    // idiom and the same cost (none) as the mesh representation's dead-slot
+    // collapse, and the reason a LOD split needs neither a compaction pass nor a
+    // second draw.
+    const bool cull = dead || (distFade <= 0.0);
+
     vec3 vpos = vp;
     vpos.xy += c.x * axisMinor * halfMinor + c.y * axisMajor * halfMajor;
-    // Dead -> collapse the quad onto its own centre, so it has exactly zero
-    // area and covers no sample. Same idiom and the same cost (none) as the
-    // mesh representation's dead-slot collapse.
-    if (dead) vpos = vp;
+    if (cull) vpos = vp;
 
     vec4 clip = pc.proj * vec4(vpos, 1.0);
     // threepp's projection follows the GL NDC convention (Y up); Vulkan's is
@@ -220,8 +361,43 @@ void main() {
     // 6000 identical lamps, and a hash is the whole cost of saying so.
     const float bj = max(1.0 + P.brightJitter * rndS(pi, 23u, P.seed), 0.0);
 
-    vColor = vec4(mix(P.colorHot, P.colorCool, cf) * (P.intensity * fade * bj),
-                  dead ? 0.0 : 1.0);
+    // ── F4: fog on the camera leg ───────────────────────────────────────────
+    // TRANSMITTANCE ONLY, and the omission of the in-scatter term is the point
+    // rather than a shortcut. These quads blend ADDITIVELY over a background the
+    // deferred pass has ALREADY fogged, so the fog's own radiance along this leg
+    // is in the frame buffer before the sprite arrives; adding it a second time
+    // would double-count it and make distant embers BRIGHTER in murk, which is
+    // the opposite of the effect. What an emitter loses to a medium is its own
+    // light being extinguished, and that is exactly e^(-tau). (The legacy
+    // alpha-blended path composites both terms because it REPLACES the
+    // background rather than adding to it — same model, different compositing.)
+    //
+    // Per PARTICLE, not per fragment: a sprite is a handful of pixels wide and
+    // the optical depth across it is constant to many decimal places.
+    if ((V.flags & kViewFogActive) != 0u) {
+        const float partY = dot(V.viewToWorldY, vp) + V.camWorldY;
+        const float od    = bbAirOpticalDepth(V, partY, camDist) +
+                            bbMurkOpticalDepth(V, partY, camDist);
+        distFade *= exp(-od);
+    }
+
+    // The GLOW pass draws the same quads a second time into a small offscreen
+    // HDR target that the bloom pyramid then runs on. `glow` scales what lands
+    // there, so a field can bloom harder or softer than its sprite is bright,
+    // and a field with glow == 0 is never drawn into that target at all (the
+    // host skips it, so this multiply is never reached with a zero).
+    const float outScale = ((V.flags & kViewLinearOut) != 0u) ? P.glow : 1.0;
+
+    vColor = vec4(mix(P.colorHot, P.colorCool, cf) *
+                          (P.intensity * fade * bj * distFade * outScale),
+                  cull ? 0.0 : 1.0);
     vLocal = c;
     vSoft  = clamp(P.softness, 0.0, 1.0);
+    // The display transform. In the glow pass the fragment stage must NOT apply
+    // it: that target is linear HDR, which is the domain the bright pass and the
+    // 13-tap downsample are defined in. Signalled by a negative exposure rather
+    // than a fifth varying — the value is only ever used as an argument to
+    // odDisplay(), and no real exposure is negative.
+    vExposure = ((V.flags & kViewLinearOut) != 0u) ? -1.0 : V.exposure;
+    vToneMap  = V.toneMapMode;
 }

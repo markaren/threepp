@@ -26,6 +26,7 @@
 // Headless:  vulkan_fire --shot out.png [--frames N] [--t SECONDS] [--no-embers] [--day]
 //            vulkan_fire --legacy-embers   the pre-F3 ParticleSystem sparks,
 //                                          for an A/B in one binary at one seed
+//            vulkan_fire --no-glow         embers without F4's billboard bloom chain
 //            vulkan_fire --bench            interleaved A/B of the effect's GPU cost
 //            vulkan_fire --seq DIR          consecutive frames along a SCRIPTED orbit
 //
@@ -288,6 +289,9 @@ int main(int argc, char** argv) {
     // A/B, and brings its non-determinism back with it.
     bool  noEmbers     = false;
     bool  legacyEmbers = false;
+    // F4: the ember field's own bloom pyramid. --no-glow is the A/B leg for its
+    // cost, and the leg the 0.5 ms budget is re-checked against both ways.
+    bool  noGlow       = false;
     bool  bench        = false;
     // TAA is what this ships and is gated on. The other two are here to LOOK
     // at, not to ship: a bright emissive volume is the worst case for the open
@@ -309,6 +313,7 @@ int main(int argc, char** argv) {
         else if (a == "--t" && i + 1 < argc) shotTime = float(std::atof(argv[++i]));
         else if (a == "--no-embers") noEmbers = true;
         else if (a == "--legacy-embers") legacyEmbers = true;
+        else if (a == "--no-glow") noGlow = true;
         else if (a == "--bench") bench = true;
         else if (a == "--upscaler" && i + 1 < argc) upscaler = argv[++i];
         else if (a == "--seq" && i + 1 < argc) seqDir = argv[++i];
@@ -352,6 +357,7 @@ int main(int argc, char** argv) {
     // --legacy-embers loads the old sprite; the F3 ember field needs no asset
     // at all (the billboard fragment shader draws a procedural spark).
     fp.legacyEmbers = legacyEmbers;
+    if (noGlow) fp.emberGlow = 0.f;
     if (fp.embers && legacyEmbers) {
         TextureLoader tl;
         fp.emberTexture = tl.load(std::string(DATA_FOLDER) + "/textures/smokeparticle.png",

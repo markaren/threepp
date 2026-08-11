@@ -221,6 +221,21 @@ FireEffect::FireEffect(const Params& params): p_(params) {
         br.sizeTaper       = 0.65f;// a cooling ember gets SMALLER
         br.stretchSeconds  = std::max(p_.emberStretch, 0.f);
         br.stretchMax      = 10.f;
+        // ── F4: the spark's own bloom ───────────────────────────────────────
+        // Field billboards composite after the upscaler, which is what keeps
+        // them clear of TAA/DLSS/FSR — and also what puts them past the scene's
+        // bloom pyramid, so until now a spark had no glow but the one its own
+        // 3-px falloff could paint. This turns on the billboard-only pyramid:
+        // the ember field is drawn a second time into a small linear-HDR target
+        // and blurred there. Set it to 0 and not one instruction of that chain
+        // is recorded.
+        br.glow          = std::max(p_.emberGlow, 0.f);
+        br.glowThreshold = std::max(p_.emberGlowThreshold, 0.f);
+        // A spark one lens-length from the camera is a hot streak across a
+        // quarter of the frame. Both caps are new in F4 and both are about the
+        // SAME 1/d compounding, in the two domains it shows up in.
+        br.nearFade         = 0.25f;
+        br.stretchMaxScreen = 0.06f;
         // Parked until ignite(): a Renderer field's live count is its capacity
         // and is set at construction, so parking is the explicit act here.
         embers_->setLiveCount(0);

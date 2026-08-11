@@ -154,6 +154,7 @@ ParticleFieldPass::~ParticleFieldPass() {
     states_.clear();
     for (auto& b : descBufs_) destroyBuffer(ctx_.allocator(), b);
     for (auto& b : bbParamBufs_) destroyBuffer(ctx_.allocator(), b);
+    for (auto& b : bbViewBufs_)  destroyBuffer(ctx_.allocator(), b);
 
     const VkDevice d = ctx_.device();
     if (emitPipe_)          vkDestroyPipeline(d, emitPipe_, nullptr);
@@ -534,6 +535,35 @@ void ParticleFieldPass::ensureBbParamCapacity(std::uint32_t frame, std::uint32_t
     bbParamCapacity_ = newCap;
 }
 
+// ── F4: publish one per-VIEW billboard record ───────────────────────────────
+// Called DURING recording, which is why this block is fixed-size and never
+// grows here: an address handed to a vkCmdPushConstants earlier in the same
+// command buffer would be dangling the moment the buffer is reallocated. A
+// request past the end therefore returns 0, and the caller must skip the draw —
+// a null buffer_reference dereference is undefined behaviour, not a no-op.
+//
+// Writing host-visible memory at record time is safe here for exactly the
+// reason prepareFrame's writes are: this frame-in-flight's fence was waited on
+// before recording began, so nothing in flight can be reading this slot.
+VkDeviceAddress ParticleFieldPass::pushViewRecord(std::uint32_t frame,
+                                                  const BillboardViewGpu& rec) {
+
+    if (bbViewNext_ >= kBbViewSlots) return 0;
+    Buffer& buf = bbViewBufs_[frame];
+    if (buf.handle == VK_NULL_HANDLE) {
+        buf = createBuffer(ctx_.allocator(), ctx_.device(),
+                           VkDeviceSize(kBbViewSlots) * sizeof(BillboardViewGpu),
+                           VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
+                                   VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
+                           VMA_MEMORY_USAGE_AUTO, kHostWrite);
+        if (buf.handle == VK_NULL_HANDLE) return 0;
+    }
+    const VkDeviceSize off = VkDeviceSize(bbViewNext_) * sizeof(BillboardViewGpu);
+    uploadHostVisible(ctx_.allocator(), buf, &rec, sizeof(rec), off);
+    ++bbViewNext_;
+    return buf.address + off;
+}
+
 void ParticleFieldPass::prepareFrame(std::uint64_t serial, std::uint32_t frame,
                                      const std::vector<Rec>& fields) {
 
@@ -559,6 +589,12 @@ void ParticleFieldPass::prepareFrame(std::uint64_t serial, std::uint32_t frame,
     draws_.clear();
     draws_.reserve(fields.size());
     bbParamScratch_.clear();
+    // F4: the per-view record cursor restarts every frame, and the glow gate is
+    // recomputed from scratch — a field that stopped asking for a glow must
+    // stop paying for one on the very next frame, not on the next scene change.
+    bbViewNext_    = 0;
+    glowActive_    = false;
+    glowThreshold_ = 0.f;
     // The bound-volume list is rebuilt from scratch every frame and compared
     // against the previous one at the end: only a genuine change bumps the
     // generation, so a steady-state dust scene never triggers a descriptor
@@ -828,6 +864,24 @@ void ParticleFieldPass::prepareFrame(std::uint64_t serial, std::uint32_t frame,
             bp.brightJitter  = std::max(0.f, std::min(1.f, bb.brightJitter));
             bp.sizeTaper     = std::max(0.f, std::min(1.f, bb.sizeTaper));
             bp.flags = (cfg.wSemantic == ParticleField::WSemantic::Radius) ? 1u : 0u;
+
+            // ── F4 ──────────────────────────────────────────────────────────
+            bp.glow             = std::max(bb.glow, 0.f);
+            bp.stretchMaxScreen = std::max(bb.stretchMaxScreen, 0.f);
+            bp.nearFade         = std::max(bb.nearFade, 0.f);
+            bp.lodNear          = std::max(bb.lodNear, 0.f);
+            bp.lodFade          = std::max(bb.lodFade, 0.f);
+
+            // The glow chain is a SCENE-level decision made out of per-field
+            // requests: every glow field composites additively into the one
+            // offscreen target, so N fields still cost one pyramid. With no
+            // glow field the renderer allocates no target and records nothing.
+            if (bp.glow > 0.f) {
+                ds.glow          = true;
+                ds.glowThreshold = std::max(bb.glowThreshold, 0.f);
+                glowActive_      = true;
+                glowThreshold_   = std::max(glowThreshold_, ds.glowThreshold);
+            }
 
             // The stretch is expressed against the frame's own motion interval:
             // the shader multiplies (pos - prevPos) by this, and the two

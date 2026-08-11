@@ -33,13 +33,18 @@ layout(set = 0, binding = 0) uniform sampler2D tex;
 layout(location = 0) in vec2  vLocal;// [-1,1]^2 parametric square
 layout(location = 1) in vec4  vColor;// rgb = linear HDR radiance, a = alive
 layout(location = 2) in float vSoft;
+// F4: the display transform, flat from the vertex stage. A NEGATIVE exposure is
+// the glow pass's signal to emit LINEAR HDR instead — that target is the input
+// to a bright pass and a 13-tap downsample, both of which are defined on linear
+// radiance and would be meaningless on a tone-mapped, sRGB-encoded value.
+layout(location = 3) flat in float vExposure;
+layout(location = 4) flat in uint  vToneMap;
 
 layout(push_constant, scalar) uniform Pc {
     mat4     proj;
     vec4     mv[3];
     uint64_t paramsAddr;
-    float    exposure;
-    uint     toneMapMode;
+    uint64_t viewAddr;
 } pc;
 
 layout(location = 0) out vec4 outColor;
@@ -67,5 +72,5 @@ void main() {
     // Alpha is masked out of the write (see the pipeline's colorWriteMask): the
     // swapchain's alpha channel is not part of the composite and an additive
     // pass has no business accumulating into it.
-    outColor = vec4(odDisplay(hdr, pc.toneMapMode, pc.exposure), 0.0);
+    outColor = vec4(vExposure < 0.0 ? hdr : odDisplay(hdr, vToneMap, vExposure), 0.0);
 }

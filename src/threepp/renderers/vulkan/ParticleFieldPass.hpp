@@ -179,10 +179,54 @@ namespace threepp::vulkan {
         float time;                   //  88
         std::uint32_t seed;           //  92
         std::uint32_t flags;          //  96  bit0: w IS the radius
-        std::uint32_t _pad[3];        // 100
+        // ── F4 ──────────────────────────────────────────────────────────────
+        float glow;                   // 100  > 0: this field feeds the glow pyramid
+        float stretchMaxScreen;       // 104  streak cap as a fraction of frame height
+        float nearFade;               // 108
+        float lodNear;                // 112  collapse the quad CLOSER than this
+        float lodFade;                // 116
+        std::uint32_t _pad[2];        // 120
     };
-    static_assert(sizeof(BillboardParamsGpu) == 112,
+    static_assert(sizeof(BillboardParamsGpu) == 128,
                   "BillboardParamsGpu drifted from particlefield_billboard.vert");
+
+    // ── F4: the per-VIEW billboard record ───────────────────────────────────
+    // Everything a field billboard needs that belongs to the CAMERA and the
+    // FRAME rather than to the field: the display transform, and the fog medium
+    // the quads are now attenuated by.
+    //
+    // A second buffer_reference block rather than more push constants, for one
+    // arithmetic reason — the push block was already exactly 128 B, the range
+    // every implementation guarantees, and the fog closed form needs a dozen
+    // floats. Not a descriptor, for the reason nothing in this pass is one: a
+    // set written per view per frame is exactly the VUID-03047 exposure the
+    // design avoids. `exposure` and `toneMapMode` MOVED here out of the push
+    // block, which is what freed the 8 bytes the address rides in.
+    //
+    // One record per (view, output mode) per frame, written by the renderer
+    // during recording into a per-frame-in-flight host-visible block. Safe in
+    // that window for the same reason prepareFrame's writes are: this slot's
+    // fence was waited on before recording began, so no in-flight frame can be
+    // reading it.
+    //
+    // MUST mirror the BbView block in shaders/particlefield_billboard.vert.
+    struct BillboardViewGpu {
+        float         exposure;      //  0
+        std::uint32_t toneMapMode;   //  4
+        std::uint32_t flags;         //  8  bit0 fog active, bit1 LINEAR HDR out
+        float         hfDensity;     // 12
+        float         hfBaseY;       // 16
+        float         hfFalloff;     // 20
+        float         murkDensity;   // 24
+        float         waterSurfaceY; // 28
+        float         camWorldY;     // 32
+        float         viewToWorldY[3];// 36
+    };                               // 48
+    static_assert(sizeof(BillboardViewGpu) == 48,
+                  "BillboardViewGpu drifted from particlefield_billboard.vert");
+    // Flag bits, mirrored in the shader.
+    inline constexpr std::uint32_t kBbViewFogActive = 1u;
+    inline constexpr std::uint32_t kBbViewLinearOut = 2u;
 
     class ParticleFieldPass {
 
@@ -229,6 +273,13 @@ namespace threepp::vulkan {
             // sprite texture.
             VkDeviceAddress bbParamsAddr  = 0;
             bool            billboard     = false;// draw the quad this frame
+            // F4: BillboardRepr::glow > 0 — this field is also drawn into the
+            // offscreen glow target and feeds the billboard bloom pyramid. The
+            // gate is per FIELD so weather (rain, snow) pays literally nothing:
+            // with no glow field in the scene the target is never allocated and
+            // the whole chain is never recorded.
+            bool            glow          = false;
+            float           glowThreshold = 0.f;// bright-pass knee, linear HDR
         };
 
         // Same contract and same reason as InstanceExpand::RetireBufferFn: a
@@ -316,6 +367,24 @@ namespace threepp::vulkan {
         [[nodiscard]] std::uint32_t densityOverflowCount() const { return densityOverflow_; }
 
         [[nodiscard]] const std::vector<DrawState>& drawStates() const { return draws_; }
+
+        // Any visible field asked for the glow chain this frame. Lets the
+        // renderer skip allocating the offscreen target — and recording the
+        // pass, and the composite draw — for every scene that does not have a
+        // spark in it, which is nearly all of them.
+        [[nodiscard]] bool glowActive() const { return glowActive_; }
+        // The largest bright-pass knee any glow field asked for. One pyramid
+        // serves every glow field in the scene (they all composite additively
+        // into the same target, so separating them would buy nothing but N
+        // chains), and the threshold is therefore a scene-level number.
+        [[nodiscard]] float glowThreshold() const { return glowThreshold_; }
+
+        // ── F4: publish one per-VIEW billboard record and get its address ────
+        // Called during recording, once per (view, output mode). Returns 0 when
+        // the block could not be allocated, which the caller must treat as "do
+        // not draw" — a null buffer_reference dereference is undefined, not a
+        // no-op. Index resets to 0 in prepareFrame.
+        VkDeviceAddress pushViewRecord(std::uint32_t frame, const BillboardViewGpu& rec);
 
         // The FieldDesc SSBO for a frame-in-flight, and how many entries of it
         // prepareFrame filled. Nothing reads these before phase 1; they are the
@@ -450,6 +519,21 @@ namespace threepp::vulkan {
         Buffer        bbParamBufs_[impl::kFramesInFlight]{};
         std::uint32_t bbParamCapacity_ = 0;// in BillboardParamsGpu elements
         std::vector<BillboardParamsGpu> bbParamScratch_;
+
+        // F4: the per-view records. Unlike the params block this one is filled
+        // DURING recording (the camera of a secondary view is not known any
+        // earlier), so it is written through a persistently mapped pointer and
+        // grown only between frames — a growth mid-recording would invalidate
+        // addresses already pushed into the command buffer, so the block is
+        // sized generously and a request past the end returns 0 rather than
+        // reallocating. kBbViewSlots covers the primary's display + glow draws
+        // plus a dozen secondary views, which is more than any sensor rig in
+        // the tree.
+        static constexpr std::uint32_t kBbViewSlots = 32;
+        Buffer        bbViewBufs_[impl::kFramesInFlight]{};
+        std::uint32_t bbViewNext_ = 0;
+        bool          glowActive_    = false;
+        float         glowThreshold_ = 0.f;
 
         // Device emitter (F-C). Created lazily, on the first Renderer-owned
         // field, so a scene of HostRing fields allocates nothing. NO descriptor

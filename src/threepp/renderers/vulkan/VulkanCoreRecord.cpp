@@ -1406,9 +1406,9 @@ bool VulkanRenderer::Impl::sceneHasFieldBillboards() const {
 // the device. Nothing is sorted — additive blending commutes, so the frame
 // buffer holds the same sum whatever order the fields and their particles
 // arrive in, and this phase draws additive only.
-void VulkanRenderer::Impl::recordFieldBillboards(VkCommandBuffer cb, bool msaaTarget) {
+void VulkanRenderer::Impl::recordFieldBillboards(VkCommandBuffer cb, VkPipeline pipe,
+                                                 bool glowPass) {
             if (!particleFieldPass_) return;
-            const VkPipeline pipe = msaaTarget ? fieldBillboardPipeline_ : fieldBillboardPipeline1x_;
             if (pipe == VK_NULL_HANDLE) return;
             const auto& states = particleFieldPass_->drawStates();
             if (states.empty()) return;
@@ -1420,6 +1420,13 @@ void VulkanRenderer::Impl::recordFieldBillboards(VkCommandBuffer cb, bool msaaTa
             std::memcpy(viewM.elements.data(), view().currViewUnjit_.data(), 64);
             std::memcpy(projM.elements.data(), view().currProjUnjit_.data(), 64);
 
+            // F4: this view's record — the display transform (which moved out of
+            // the push block to make room for this address) plus the fog terms
+            // the quads are now attenuated by. A zero address means the block is
+            // full; the shader would dereference null, so skip the whole draw.
+            const VkDeviceAddress viewAddr = pushBillboardViewRecord(viewM, glowPass);
+            if (viewAddr == 0) return;
+
             bool bound = false;
             const Texture* curTex = nullptr;
             bool curTexBound = false;
@@ -1427,6 +1434,11 @@ void VulkanRenderer::Impl::recordFieldBillboards(VkCommandBuffer cb, bool msaaTa
 
             for (const auto& st : states) {
                 if (!st.billboard || st.bbIndirect == VK_NULL_HANDLE || !st.field) continue;
+                // The glow leg draws ONLY the fields that asked for one. That is
+                // the per-field gate F4 item 1 requires: a 300k rain field never
+                // enters this pass, so weather pays nothing at all for a feature
+                // it does not use.
+                if (glowPass && !st.glow) continue;
 
                 if (!bound) {
                     vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, pipe);
@@ -1487,15 +1499,133 @@ void VulkanRenderer::Impl::recordFieldBillboards(VkCommandBuffer cb, bool msaaTa
                     pc.mv[r][2] = static_cast<float>(e[r + 8]);
                     pc.mv[r][3] = static_cast<float>(e[r + 12]);
                 }
-                pc.paramsAddr  = st.bbParamsAddr;
-                pc.exposure    = currentExposure();
-                pc.toneMapMode = static_cast<uint32_t>(toneMapping_);
+                pc.paramsAddr = st.bbParamsAddr;
+                pc.viewAddr   = viewAddr;
                 vkCmdPushConstants(cb, fieldBillboardPipelineLayout_,
                                    VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
                                    0, sizeof(pc), &pc);
 
                 vkCmdDrawIndirect(cb, st.bbIndirect, 0, 1, sizeof(VkDrawIndirectCommand));
             }
+        }
+
+// ── F4: the per-VIEW billboard record ───────────────────────────────────────
+//
+// Two things the quads need that belong to the camera and the frame rather than
+// to the field: the display transform, and the fog medium.
+//
+// FOG. F3 shipped billboards with none — the legacy path's overlay-fog UBO is
+// bound at set 1 for particle.frag only, and the field pipeline is deliberately
+// descriptor-free — so a distant ember in the fjord's murk read as crisp as a
+// near one. The terms here are the SAME snapshot the legacy path takes a few
+// hundred lines below; they ride a buffer_reference instead of a set, which is
+// what keeps this pass out of the VUID-03047 zone entirely (F3 note 2).
+//
+// The plan proposed also marching the PARTICLE-DENSITY volumes here, on the
+// premise that their addresses are push-constant reachable. They are not: a
+// density volume is a 3D IMAGE (r16f, binding 69, hardware trilinear), and an
+// image cannot be reached by device address at all — sampling one from this
+// shader would mean binding the whole density descriptor array and giving up
+// the property the previous paragraph is about. Deferred, deliberately: the
+// acceptance test ("distant embers in fjord murk must visibly dim") is the
+// height-fog/murk term, which is exactly what this does, and an ember inside a
+// smoke plume is a second-order effect against that.
+VkDeviceAddress VulkanRenderer::Impl::pushBillboardViewRecord(const Matrix4& viewM,
+                                                              bool linearOut) {
+            if (!particleFieldPass_) return 0;
+
+            vulkan::BillboardViewGpu rec{};
+            rec.exposure    = currentExposure();
+            rec.toneMapMode = static_cast<uint32_t>(toneMapping_);
+            rec.flags       = linearOut ? vulkan::kBbViewLinearOut : 0u;
+
+            const bool medium = mediumActiveThisFrame_ || murkDensity_ > 0.f;
+            if (medium) {
+                rec.flags |= vulkan::kBbViewFogActive;
+                rec.hfDensity     = mediumActiveThisFrame_ ? mediumDensityThisFrame_ : 0.f;
+                rec.hfBaseY       = mediumBaseYThisFrame_;
+                rec.hfFalloff     = mediumFalloffThisFrame_;
+                rec.murkDensity   = murkDensity_;
+                rec.waterSurfaceY = fogWaterSurfaceY_;
+                // The inverse view supplies the camera height and the world-Y
+                // row, which is all the fragment needs to reconstruct a
+                // particle's world Y from its view-space position — the same
+                // three-float trick the legacy overlay fog uses, and cheaper
+                // than carrying a full world position per vertex.
+                Matrix4 viewInv = viewM;
+                viewInv.invert();
+                const auto& iv = viewInv.elements;
+                rec.camWorldY       = static_cast<float>(iv[13]);
+                rec.viewToWorldY[0] = static_cast<float>(iv[1]);
+                rec.viewToWorldY[1] = static_cast<float>(iv[5]);
+                rec.viewToWorldY[2] = static_cast<float>(iv[9]);
+            }
+            return particleFieldPass_->pushViewRecord(currentFrame, rec);
+        }
+
+// ── F4: the billboard glow source + pyramid ─────────────────────────────────
+//
+// Recorded between recordUpscaleAndPost and recordHybridOverlay: the composite
+// that consumes it is a draw INSIDE the overlay render-pass instance, and a
+// compute pyramid cannot run inside one. Nothing about the billboard composite
+// point moves.
+void VulkanRenderer::Impl::recordFieldBillboardGlow(VkCommandBuffer cb) {
+
+            if (!billboardGlowReadyThisFrame_ || !billboardGlow_) return;
+            if (fieldBillboardGlowPipeline_ == VK_NULL_HANDLE) return;
+
+            const VkExtent2D gext = billboardGlow_->srcExtent();
+            if (gext.width == 0 || gext.height == 0) return;
+
+            VkRenderingAttachmentInfo colorAtt{};
+            colorAtt.sType       = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+            colorAtt.imageView   = billboardGlow_->srcView(currentFrame);
+            colorAtt.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+            // CLEAR, not LOAD: the target accumulates one frame's sparks and
+            // nothing else, so there is no history to preserve and a clear is
+            // cheaper than the read-modify-write a LOAD implies.
+            colorAtt.loadOp      = VK_ATTACHMENT_LOAD_OP_CLEAR;
+            colorAtt.storeOp     = VK_ATTACHMENT_STORE_OP_STORE;
+            colorAtt.clearValue.color = {{0.f, 0.f, 0.f, 0.f}};
+
+            VkRenderingInfo ri{};
+            ri.sType                = VK_STRUCTURE_TYPE_RENDERING_INFO;
+            ri.renderArea.offset    = {0, 0};
+            ri.renderArea.extent    = gext;
+            ri.layerCount           = 1;
+            ri.colorAttachmentCount = 1;
+            ri.pColorAttachments    = &colorAtt;
+            vkCmdBeginRendering(cb, &ri);
+            VkViewport vp{0.f, 0.f, float(gext.width), float(gext.height), 0.f, 1.f};
+            vkCmdSetViewport(cb, 0, 1, &vp);
+            VkRect2D sc{{0, 0}, gext};
+            vkCmdSetScissor(cb, 0, 1, &sc);
+            recordFieldBillboards(cb, fieldBillboardGlowPipeline_, /*glowPass=*/true);
+            vkCmdEndRendering(cb);
+
+            billboardGlow_->recordPyramid(cb, currentFrame,
+                                          particleFieldPass_->glowThreshold());
+        }
+
+// Lazy creation, in the PREPARE window. A scene with no glow-enabled field
+// never gets here, so it allocates no offscreen target, compiles no pipeline
+// and records no pass — the "weather pays nothing" half of F4 item 1's gate.
+void VulkanRenderer::Impl::ensureFieldBillboardGlow() {
+
+            billboardGlowReadyThisFrame_ = false;
+            if (!particleFieldPass_ || !particleFieldPass_->glowActive()) return;
+            if (fieldBillboardGlowPipeline_ == VK_NULL_HANDLE) return;// pipelines not built yet
+
+            if (!billboardGlow_) {
+                billboardGlow_ = std::make_unique<vulkan::BillboardGlowPass>(
+                        *ctx, cmdPool, kFramesInFlight);
+                createFieldGlowCompositePipeline();
+            }
+            if (fieldGlowCompositePipeline_ == VK_NULL_HANDLE) return;
+
+            const VkExtent2D ext = ctx->swapchainExtent();
+            billboardGlowReadyThisFrame_ =
+                    billboardGlow_->ensureImages(ext.width, ext.height);
         }
 
 void VulkanRenderer::Impl::recordHybridOverlay(VkCommandBuffer cb, uint32_t imageIndex) {
@@ -2050,16 +2180,11 @@ void VulkanRenderer::Impl::recordHybridOverlay(VkCommandBuffer cb, uint32_t imag
                     // tested against unjitDepth (Normal) or unconditionally drawn
                     // (Additive). The vertex data lives in particleGeomCache_, the
                     // texture in particleTexCache_ (white default if untextured).
-                    // THIS FRAME-IN-FLIGHT's texture-descriptor pool, reset once
-                    // for EVERY consumer of it in this pass: legacy particles,
-                    // world sprites and (F3) ParticleField billboards. It used
-                    // to be reset inside the legacy block, which meant a scene
-                    // whose only billboards are fields never reset it and
-                    // silently ran out of sets after 64 frames — allocation
-                    // failed, the draw was skipped, and nothing anywhere said
-                    // so. Unconditional here: it is one host call, and the
-                    // legacy path sees the identical state it saw before.
-                    vkResetDescriptorPool(ctx->device(), particleDescPools_[currentFrame], 0);
+                    // (THIS FRAME-IN-FLIGHT's texture-descriptor pool is reset at
+                    // the head of recordCommandBuffer — see the comment there.
+                    // It used to be reset here, which covered the three
+                    // consumers that existed in F3 but not F4's glow pass, which
+                    // records earlier in the frame.)
 
                     if (particlePipelineNormal_ != VK_NULL_HANDLE) {
                         bool anyParticle = false;
@@ -2313,7 +2438,41 @@ void VulkanRenderer::Impl::recordHybridOverlay(VkCommandBuffer cb, uint32_t imag
                     // crossing 20 px in a frame is precisely the content a
                     // temporal filter mis-resolves, and because this is where
                     // transparents already land.
-                    recordFieldBillboards(cb, overlayMsaa);
+                    recordFieldBillboards(cb,
+                                          overlayMsaa ? fieldBillboardPipeline_
+                                                      : fieldBillboardPipeline1x_,
+                                          /*glowPass=*/false);
+
+                    // ── F4: the billboard glow ─────────────────────────────
+                    // The sparks' own bloom pyramid, computed just before this
+                    // pass began (recordFieldBillboardGlow) and folded in here
+                    // as one fullscreen additive draw. IN THIS PASS on purpose:
+                    // the composite point for field billboards does not move,
+                    // so they stay outside TAA/DLSS/FSR (F3 note 1) and gain a
+                    // glow anyway. Additive, so its position relative to the
+                    // sharp quads above cannot change the sum.
+                    if (billboardGlowReadyThisFrame_ && billboardGlow_ &&
+                        fieldGlowCompositePipeline_ != VK_NULL_HANDLE) {
+                        vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                                          fieldGlowCompositePipeline_);
+                        const VkDescriptorSet gset = billboardGlow_->compositeSet(currentFrame);
+                        vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                                                fieldGlowCompositeLayout_, 0, 1, &gset, 0, nullptr);
+                        FieldGlowPC gpc{};
+                        // Divide by the level count for the same reason
+                        // PostComposite does: the upsample walk-back sums every
+                        // level into level 0, so without it a deeper chain (a
+                        // bigger window) would read brighter for the same knob.
+                        gpc.intensity =
+                                1.f / static_cast<float>(std::max(billboardGlow_->levels(), 1u));
+                        gpc.exposure    = currentExposure();
+                        gpc.toneMapMode = static_cast<uint32_t>(toneMapping_);
+                        gpc.invDisplay[0] = ext.width  ? 1.f / float(ext.width)  : 0.f;
+                        gpc.invDisplay[1] = ext.height ? 1.f / float(ext.height) : 0.f;
+                        vkCmdPushConstants(cb, fieldGlowCompositeLayout_,
+                                           VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(gpc), &gpc);
+                        vkCmdDraw(cb, 3, 1, 0, 0);
+                    }
 
                     vkCmdEndRendering(cb);
 
@@ -2361,6 +2520,28 @@ void VulkanRenderer::Impl::recordCommandBuffer(VkCommandBuffer cb, uint32_t imag
             // Each stage carries its own full commentary; this function is
             // the table of contents.
             updatePaneRegion();
+
+            // ── The shared billboard texture pool, reset ONCE for the frame ──
+            // F3 note 4 is the cautionary tale and this is its second act. That
+            // pool is allocated from by FOUR consumers now — the legacy
+            // ParticleSystem billboards, world sprites, ParticleField billboards
+            // in the overlay, and (F4) the same fields again in the glow pass —
+            // and the failure mode of running it dry is a silent `continue` on
+            // vkAllocateDescriptorSets that looks exactly like the feature not
+            // being implemented. F3 moved the reset to the head of the overlay
+            // pass, which covered the three consumers that existed then; the
+            // glow pass records BEFORE that point and quietly stopped drawing
+            // after 32 frames, which is why its first captures showed a maxD of
+            // 7/255 — inside the backend's own noise.
+            //
+            // Reset here instead: the head of the frame's recording, before any
+            // consumer and after this slot's fence, which is the only place
+            // that is provably correct for all of them (including the secondary
+            // views, which record after the primary and would have been left
+            // unreset on the debug-blit and events-only early-outs). One host
+            // call per frame; every consumer sees the state it saw before.
+            if (particleDescPools_[currentFrame] != VK_NULL_HANDLE)
+                vkResetDescriptorPool(ctx->device(), particleDescPools_[currentFrame], 0);
 
             // Deformers (skinned / tet / displaced / grass) + the per-frame
             // TLAS refit, all recorded into the frame cb.
@@ -2420,6 +2601,14 @@ void VulkanRenderer::Impl::recordCommandBuffer(VkCommandBuffer cb, uint32_t imag
             // Bloom + tonemap + temporal resolve — exactly one of DLSS /
             // FSR / built-in TAA runs (see recordUpscaleAndPost).
             recordUpscaleAndPost(cb, imageIndex, ext, ptExt, exposureBits, preExp);
+
+            // F4: the billboard-only bloom pyramid. AFTER the upscaler (so the
+            // composite point that keeps field billboards clear of TAA/DLSS/FSR
+            // is untouched) and BEFORE the overlay pass (because the fullscreen
+            // draw that consumes the pyramid lives inside it, and a compute
+            // chain cannot be recorded inside a render-pass instance). No-op
+            // unless a visible field asked for a glow.
+            recordFieldBillboardGlow(cb);
 
             // Post-TAA wireframe / line / particle / sprite overlays.
             recordHybridOverlay(cb, imageIndex);

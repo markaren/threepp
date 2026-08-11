@@ -671,6 +671,11 @@ bool VulkanRenderer::Impl::beginDeferredFrame(Object3D& scene, Camera& camera) {
             // same reason (R6): this writes this slot's host-visible buffers,
             // and phase 1's descriptor write lands here too.
             prepareParticleFields(currentFrame);
+            // F4: the billboard glow chain, which prepareParticleFields has just
+            // told us whether any field wants. Created here rather than during
+            // recording so the one-off pipeline compile and image allocation
+            // land in the prepare window like every other lazy resource.
+            ensureFieldBillboardGlow();
             {
                 THREEPP_CPUPROF("frame.I3_uploadMovedBits");
                 uploadMeshMovedBits(currentFrame);
@@ -1569,7 +1574,18 @@ void VulkanRenderer::Impl::recordSecondaryViews(VkCommandBuffer cb) {
                     vkCmdSetViewport(cb, 0, 1, &vp);
                     VkRect2D sc{{0, 0}, ext};
                     vkCmdSetScissor(cb, 0, 1, &sc);
-                    recordFieldBillboards(cb, /*msaaTarget=*/false);
+                    // F4: the SHARP quads only — a secondary view gets no
+                    // billboard GLOW, and that is a decision rather than an
+                    // omission. The glow chain is one half-extent target plus
+                    // one pyramid sized to the primary's display, and giving
+                    // every view its own would be N targets and N pyramids per
+                    // frame for a LENS artefact. A CameraSensor therefore
+                    // measures the spark's own radiance (which is the physical
+                    // quantity) and not the bloom the display adds around it.
+                    // If sensor/display parity on the halo ever matters, the
+                    // fix is a per-view BillboardGlowPass instance, not a
+                    // change here.
+                    recordFieldBillboards(cb, fieldBillboardPipeline1x_, /*glowPass=*/false);
                     vkCmdEndRendering(cb);
 
                     // Back out to everything downstream: recordViewComposite's

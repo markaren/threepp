@@ -908,6 +908,7 @@ if (THREEPP_WITH_VULKAN)
             "threepp/renderers/vulkan/AutoExposure.cpp"
             "threepp/renderers/vulkan/GbufResolve.cpp"
             "threepp/renderers/vulkan/BloomPass.cpp"
+            "threepp/renderers/vulkan/BillboardGlowPass.cpp"
             "threepp/renderers/vulkan/PostComposite.cpp"
             "threepp/renderers/vulkan/DofPass.cpp"
             "threepp/renderers/vulkan/SensorPass.cpp"
@@ -1456,6 +1457,17 @@ if (THREEPP_WITH_VULKAN)
         "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/particlefield_billboard.frag"
         kParticleFieldBillboardFragSpv
         _particlefield_billboard_frag_spv_h)
+    # F4 (1): the billboard-only bloom composite. The glow-enabled fields are
+    # drawn a SECOND time into a small offscreen linear-HDR target, the shared
+    # bloom_down/bloom_up pyramid runs on that target alone, and this fullscreen
+    # pass adds the result into the swapchain inside the same overlay
+    # render-pass instance the sharp quads land in — so the billboards get a
+    # bloom without the composite point moving out of the post-upscaler slot
+    # that keeps them clear of TAA/DLSS/FSR entirely.
+    compile_vulkan_shader(threepp
+        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/particlefield_glow.frag"
+        kParticleFieldGlowFragSpv
+        _particlefield_glow_frag_spv_h)
     # MSAA G-buffer dominant-sample resolve (VulkanRenderer::setGbufferMsaa,
     # opt-in, default off). gbuf_resolve.comp picks the majority-covering
     # instance per pixel from the K raster samples and writes it into the

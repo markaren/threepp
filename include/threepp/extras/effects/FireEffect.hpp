@@ -188,6 +188,33 @@ namespace threepp {
             // way. The velocity itself is free: the emit dispatch already wrote
             // f(t) and f(t - dt).
             float emberStretch = 0.012f;
+            // ── F4: the spark's own bloom ───────────────────────────────────
+            // Field billboards composite AFTER the scene's bloom pyramid (which
+            // is the price of compositing after the upscaler, and that is a
+            // price worth paying — see BillboardGlowPass.hpp), so a spark used
+            // to glow only as far as its own 3-px falloff reached. > 0 renders
+            // the ember field a second time into a small linear-HDR target and
+            // runs the shared bloom_down/up chain on that alone, then adds the
+            // result in the same overlay slot the quads land in. It scales the
+            // radiance written to that target, so the halo can be authored
+            // independently of how bright the spark itself is.
+            //
+            // 0 disables the whole chain — no target, no pipeline, no pass.
+            //
+            // Tuned by eye and it reads high for a reason worth writing down: a
+            // spark is a 3-px source, the pyramid spreads its energy over a
+            // ~40-px halo, and the composite divides by the level count to stay
+            // resolution independent — so about two orders of magnitude of area
+            // and five of level normalisation sit between this number and the
+            // pixels. 1.15 (the sprite's own radiance) produced a peak delta of
+            // 28/255 against the night sky: the halo was measurable and not
+            // visible.
+            float emberGlow          = 8.0f;
+            // Bright-pass knee for the ember pyramid. 0 = none, which is what a
+            // target containing nothing but sparks wants (see
+            // BillboardRepr::glowThreshold — thresholding it suppresses the
+            // subject).
+            float emberGlowThreshold = 0.f;
 
             // Optional sprite texture. Null is the SHIPPED look: the billboard
             // fragment shader draws a procedural soft spark and the effect

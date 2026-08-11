@@ -676,6 +676,21 @@ namespace threepp {
         const auto& states = particleFieldPass_->drawStates();
         if (states.empty()) return;
 
+        // F4 distance LOD: the gate is a camera distance, so this view's world
+        // camera position has to reach the vertex stage. The inverse of the
+        // unjittered view matrix is the cheapest source of it that is certainly
+        // the CURRENT view's (this function is called once per view, inside
+        // that view's raster pass).
+        float camPos[3]{0.f, 0.f, 0.f};
+        {
+            Matrix4 viewInv;
+            std::memcpy(viewInv.elements.data(), view().currViewUnjit_.data(), 64);
+            viewInv.invert();
+            camPos[0] = static_cast<float>(viewInv.elements[12]);
+            camPos[1] = static_cast<float>(viewInv.elements[13]);
+            camPos[2] = static_cast<float>(viewInv.elements[14]);
+        }
+
         bool bound = false;
         VkCullModeFlags curCull = VK_CULL_MODE_FLAG_BITS_MAX_ENUM;
         for (const auto& st : states) {
@@ -708,6 +723,15 @@ namespace threepp {
             pc.wSemantic   = static_cast<uint32_t>(cfg.wSemantic);
             pc.invUniformRadius =
                     (cfg.uniformRadius > 0.f) ? (1.f / cfg.uniformRadius) : 0.f;
+            {
+                const auto& mr = st.field->meshRepr();
+                pc.lodFar   = std::max(mr.lodFar, 0.f);
+                pc.lodFade  = std::max(mr.lodFade, 0.f);
+                pc.nearCull = std::max(mr.nearCull, 0.f);
+            }
+            pc.camPos[0] = camPos[0];
+            pc.camPos[1] = camPos[1];
+            pc.camPos[2] = camPos[2];
             vkCmdPushConstants(cb, rasterPipelineLayout, VK_SHADER_STAGE_VERTEX_BIT,
                                0, sizeof(pc), &pc);
             vkCmdDrawIndirect(cb, st.indirect, 0, 1, sizeof(VkDrawIndirectCommand));

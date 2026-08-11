@@ -79,6 +79,11 @@ layout(push_constant, scalar) uniform PfPush {
     uint     drawIdx;      // index into draws[] — the field's ONE DrawInfo
     uint     wSemantic;    // 0 = InvMass (proxy carries the size), 1 = Radius
     float    invUniformRadius;// 1 / Config::uniformRadius (wSemantic == 1 only)
+    // ── F4: distance LOD (MeshRepr::lodFar / lodFade / nearCull) ────────────
+    float    lodFar;       // collapse the proxy BEYOND this many metres; 0 = off
+    vec3     camPos;       // world-space camera position of the view being drawn
+    float    lodFade;      // metres of ramp below lodFar
+    float    nearCull;     // shrink the proxy out BELOW this many metres; 0 = off
     float    _pad;
 } pf;
 
@@ -174,7 +179,40 @@ void main() {
     // about size — so the scale is 1. Under WSemantic::Radius the proxy is
     // authored at Config::uniformRadius and each particle scales relative to
     // it. Documented on ParticleField::Config::uniformRadius.
-    const float s = (pf.wSemantic == 1u) ? (P.w * pf.invUniformRadius) : 1.0;
+    float s = (pf.wSemantic == 1u) ? (P.w * pf.invUniformRadius) : 1.0;
+
+    // ── F4: the distance LOD, as a SCALE rather than a branch ───────────────
+    // Two ramps, both multiplying the proxy's size, both reaching exactly zero
+    // — a zero-scale proxy has zero area and covers no sample, which is the
+    // same free collapse the dead-slot predicate below uses.
+    //
+    // FAR (lodFar): beyond it the BILLBOARD representation is drawing this same
+    // particle (BillboardRepr::lodNear fades in over the same band), so the
+    // proxy's fragments and the deferred shade behind them are pure waste.
+    // That is the perf lever the 5M snow bench identified — 11 of 16.8 ms in
+    // G-buffer raster + deferred shade of flakes too small to resolve. Note
+    // what it does NOT save: the vertex invocations still happen, because a
+    // field is ONE indirect draw of liveCount instances and compacting it would
+    // need a GPU pass and a free list the stateless emitter deliberately has
+    // no room for. Fragments were the cost; fragments are what goes.
+    //
+    // NEAR (nearCull): a 1.6 cm flake 40 cm from the lens covers ~100 px and
+    // reads as a giant faceted crystal hanging in the frame — the "scale
+    // outlier" of the F3 snow capture. It is NOT an emitter size-hash overshoot
+    // (`size * (1 + sizeJitter * rndS)` is bounded by construction and cannot
+    // exceed 2x the authored size); it is a proximity artefact, and shrinking
+    // out what a real lens could not resolve anyway is the honest fix.
+    if (pf.lodFar > 0.0 || pf.nearCull > 0.0) {
+        const float camDist = distance((d.model * vec4(P.xyz, 1.0)).xyz, pf.camPos);
+        if (pf.lodFar > 0.0) {
+            s *= (pf.lodFade > 1e-4) ? clamp((pf.lodFar - camDist) / pf.lodFade, 0.0, 1.0)
+                                     : ((camDist <= pf.lodFar) ? 1.0 : 0.0);
+        }
+        // Smooth over the whole [0, nearCull] band: a hard cut would pop a
+        // 100-px flake out of existence on one frame, which is more visible
+        // than the flake was.
+        if (pf.nearCull > 0.0) s *= clamp(camDist / pf.nearCull, 0.0, 1.0);
+    }
 
     mat3 R = mat3(1.0);
     if (pf.oriAddr != 0ul) {

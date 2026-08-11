@@ -2158,6 +2158,100 @@ int main(int argc, char** argv) {
             }
         }
 
+        // ── F4 (1): the billboard GLOW, and its gate ────────────────────────
+        //
+        // The gate is the regression that matters. The glow chain allocates an
+        // offscreen target, records a second draw of the field and runs a bloom
+        // pyramid; a field that does not ask for one must be BYTE-IDENTICAL to
+        // the F3 behaviour, not merely close. In process, with the field frozen,
+        // "identical" is exactly 0 differing bytes — the reproducibility check
+        // above already establishes that this scene has no run-to-run noise at
+        // all with the field parked, so there is no floor to hide in.
+        {
+            check(sparks->billboardRepr().glow == 0.f,
+                  "BillboardRepr::glow defaults to 0 — the chain is opt-in");
+
+            sparks->billboardRepr().glow = 6.f;
+            for (int i = 0; i < 24; ++i) frame();
+            const auto glowOn = renderer.readRGBPixels();
+
+            sparks->billboardRepr().glow = 0.f;
+            for (int i = 0; i < 24; ++i) frame();
+            const auto glowOff = renderer.readRGBPixels();
+
+            const long long glowDiff    = diffBytesV(onA, glowOn);
+            const long long gateDiff    = diffBytesV(onA, glowOff);
+            const std::size_t glowPixels = changedPixels(onA, glowOn);
+            std::printf("[info] billboard glow: on vs no-glow %lld bytes (%zu pixels); "
+                        "gated OFF again vs no-glow %lld bytes\n",
+                        glowDiff, glowPixels, gateDiff);
+            check(gateDiff == 0,
+                  "glow == 0 is byte-identical to the pre-F4 billboard pass "
+                  "(the whole chain is behind the per-field gate)");
+            check(glowPixels > 200,
+                  "glow > 0 spreads a halo around the sprites (the pyramid ran "
+                  "and the composite landed)");
+        }
+
+        // ── F4 (2): fog attenuation on the quads ────────────────────────────
+        //
+        // Isolated with four captures rather than two, because a fog medium
+        // dims the BACKGROUND as well and a two-capture test cannot tell the
+        // two apart. The billboards' own contribution is (on - off) at a fixed
+        // fog setting; the claim is that this contribution SHRINKS when a
+        // medium is introduced, which is what "distant embers fade into the
+        // murk" means when it is written as a number.
+        {
+            const auto contribution = [](const std::vector<unsigned char>& on,
+                                         const std::vector<unsigned char>& off) -> double {
+                if (on.size() != off.size()) return -1.0;
+                double s = 0.0;
+                for (std::size_t i = 0; i < on.size(); ++i)
+                    s += std::max(0, int(on[i]) - int(off[i]));
+                return s;
+            };
+
+            // Leg 1: no medium. (onA / offA above were captured in exactly this
+            // state, but re-capture so both legs are measured the same way.)
+            sparks->billboardRepr().enabled = false;
+            for (int i = 0; i < 20; ++i) frame();
+            const auto clearOff = renderer.readRGBPixels();
+            sparks->billboardRepr().enabled = true;
+            for (int i = 0; i < 20; ++i) frame();
+            const auto clearOn = renderer.readRGBPixels();
+
+            // Leg 2: a thick, tall height fog, so the whole camera leg to the
+            // sparks is inside the medium.
+            VulkanRenderer::HeightFogSettings hf;
+            hf.density     = 0.20f;
+            hf.baseY       = 0.f;
+            hf.falloff     = 40.f;// tall: no height falloff over a 5 m leg
+            hf.noiseAmount = 0.f;
+            renderer.setHeightFog(hf);
+            sparks->billboardRepr().enabled = false;
+            for (int i = 0; i < 20; ++i) frame();
+            const auto fogOff = renderer.readRGBPixels();
+            sparks->billboardRepr().enabled = true;
+            for (int i = 0; i < 20; ++i) frame();
+            const auto fogOn = renderer.readRGBPixels();
+
+            const double clearAdd = contribution(clearOn, clearOff);
+            const double fogAdd   = contribution(fogOn, fogOff);
+            std::printf("[info] billboard fog: added luma clear %.0f, in fog %.0f "
+                        "(ratio %.3f)\n", clearAdd, fogAdd,
+                        clearAdd > 0.0 ? fogAdd / clearAdd : -1.0);
+            check(clearAdd > 0.0 && fogAdd >= 0.0 && fogAdd < clearAdd * 0.85,
+                  "a fog medium ATTENUATES the field billboards (F3 shipped them "
+                  "unfogged; F4 routes the transmittance through the per-view "
+                  "record rather than a descriptor set)");
+
+            // Back to a clear scene for everything downstream.
+            VulkanRenderer::HeightFogSettings none;
+            none.density = 0.f;
+            renderer.setHeightFog(none);
+            for (int i = 0; i < 8; ++i) frame();
+        }
+
         // (c) Turn it off again and the frame must come back to the control.
         sparks->billboardRepr().enabled = false;
         for (int i = 0; i < 24; ++i) frame();

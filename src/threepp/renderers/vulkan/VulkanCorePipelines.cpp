@@ -4,6 +4,7 @@
 #include "threepp/renderers/vulkan/shaders/gbuffer.frag.spv.h"
 #include "threepp/renderers/vulkan/shaders/gbuffer_indirect.vert.spv.h"
 #include "threepp/renderers/vulkan/shaders/particlefield_billboard.frag.spv.h"
+#include "threepp/renderers/vulkan/shaders/particlefield_glow.frag.spv.h"
 #include "threepp/renderers/vulkan/shaders/particlefield_billboard.vert.spv.h"
 #include "threepp/renderers/vulkan/shaders/particlefield_gbuf.vert.spv.h"
 #include "threepp/renderers/vulkan/shaders/overlay.vert.spv.h"
@@ -2468,6 +2469,172 @@ void VulkanRenderer::Impl::createFieldBillboardPipeline() {
                       "vkCreateGraphicsPipelines(fieldBillboard 1x)");
                 fieldBillboardPipeline1xOwned_ = true;
             }
+
+            // ── F4: the GLOW variant ────────────────────────────────────────
+            // Same two stages, same layout, same additive blend — three
+            // differences and each is forced by where it draws:
+            //   • rgba16f, because BillboardGlowPass's target holds LINEAR HDR
+            //     (the fragment stage skips its display transform there) and
+            //     the bright pass downstream is defined on linear radiance;
+            //   • ONE sample, because that target never participates in the
+            //     overlay's MSAA machinery;
+            //   • NO depth attachment and no depth test — the target is half
+            //     extent and the overlay's depth is full extent, so there is
+            //     nothing to test against without a second reduction pass. The
+            //     trade (an occluded spark still contributes a halo) is argued
+            //     in BillboardGlowPass.hpp.
+            {
+                const VkFormat glowFmt[1] = {VK_FORMAT_R16G16B16A16_SFLOAT};
+                VkPipelineRenderingCreateInfo prciGlow = prci;
+                prciGlow.pColorAttachmentFormats = glowFmt;
+                prciGlow.depthAttachmentFormat   = VK_FORMAT_UNDEFINED;
+
+                VkPipelineDepthStencilStateCreateInfo dsGlow{};
+                dsGlow.sType           = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
+                dsGlow.depthTestEnable = VK_FALSE;
+                dsGlow.depthWriteEnable = VK_FALSE;
+
+                VkPipelineMultisampleStateCreateInfo msGlow = ms;
+                msGlow.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+
+                VkGraphicsPipelineCreateInfo gpciGlow = gpci;
+                gpciGlow.pNext              = &prciGlow;
+                gpciGlow.pDepthStencilState = &dsGlow;
+                gpciGlow.pMultisampleState  = &msGlow;
+                check(vkCreateGraphicsPipelines(ctx->device(), ctx->pipelineCache(), 1, &gpciGlow,
+                                                nullptr, &fieldBillboardGlowPipeline_),
+                      "vkCreateGraphicsPipelines(fieldBillboard glow)");
+            }
+
+            vkDestroyShaderModule(ctx->device(), vert, nullptr);
+            vkDestroyShaderModule(ctx->device(), frag, nullptr);
+        }
+
+// ── F4: the billboard-glow COMPOSITE pipeline ───────────────────────────────
+//
+// A fullscreen additive draw that folds BillboardGlowPass's finished pyramid
+// into the swapchain from INSIDE the overlay render-pass instance — which is
+// the whole trick of F4 item 1. The bloom the sparks get therefore arrives
+// without the billboard composite point moving one instruction earlier, so
+// F3 note 1's "field billboards are outside TAA/DLSS/FSR entirely" survives by
+// construction rather than by re-argument.
+//
+// Depth TEST off (the halo is a lens effect and has no depth of its own) while
+// the pass's depth attachment stays declared, because a pipeline used inside a
+// render-pass instance must agree with its attachment formats.
+//
+// Created lazily alongside the glow pass, so it needs that pass's set layout.
+void VulkanRenderer::Impl::createFieldGlowCompositePipeline() {
+            if (fieldGlowCompositePipeline_ != VK_NULL_HANDLE) return;
+            if (!billboardGlow_) return;
+
+            VkPushConstantRange pcRange{};
+            pcRange.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+            pcRange.size       = sizeof(FieldGlowPC);
+            const VkDescriptorSetLayout setLayout = billboardGlow_->compositeSetLayout();
+            VkPipelineLayoutCreateInfo plci{};
+            plci.sType                  = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+            plci.setLayoutCount         = 1;
+            plci.pSetLayouts            = &setLayout;
+            plci.pushConstantRangeCount = 1;
+            plci.pPushConstantRanges    = &pcRange;
+            check(vkCreatePipelineLayout(ctx->device(), &plci, nullptr, &fieldGlowCompositeLayout_),
+                  "vkCreatePipelineLayout(fieldGlowComposite)");
+
+            VkShaderModuleCreateInfo vsmci{};
+            vsmci.sType    = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
+            vsmci.codeSize = sizeof(kOverlayFullscreenVertSpv);
+            vsmci.pCode    = kOverlayFullscreenVertSpv;
+            VkShaderModule vert = VK_NULL_HANDLE;
+            check(vkCreateShaderModule(ctx->device(), &vsmci, nullptr, &vert),
+                  "vkCreateShaderModule(overlay_fullscreen.vert glow)");
+            VkShaderModuleCreateInfo fsmci{};
+            fsmci.sType    = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
+            fsmci.codeSize = sizeof(kParticleFieldGlowFragSpv);
+            fsmci.pCode    = kParticleFieldGlowFragSpv;
+            VkShaderModule frag = VK_NULL_HANDLE;
+            check(vkCreateShaderModule(ctx->device(), &fsmci, nullptr, &frag),
+                  "vkCreateShaderModule(particlefield_glow.frag)");
+
+            VkPipelineShaderStageCreateInfo stages[2]{};
+            stages[0].sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+            stages[0].stage  = VK_SHADER_STAGE_VERTEX_BIT;
+            stages[0].module = vert;
+            stages[0].pName  = "main";
+            stages[1].sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+            stages[1].stage  = VK_SHADER_STAGE_FRAGMENT_BIT;
+            stages[1].module = frag;
+            stages[1].pName  = "main";
+
+            VkPipelineVertexInputStateCreateInfo vi{};
+            vi.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
+            VkPipelineInputAssemblyStateCreateInfo ia{};
+            ia.sType    = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
+            ia.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+            VkPipelineViewportStateCreateInfo vp{};
+            vp.sType         = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO;
+            vp.viewportCount = 1;
+            vp.scissorCount  = 1;
+            VkPipelineRasterizationStateCreateInfo rs{};
+            rs.sType       = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
+            rs.polygonMode = VK_POLYGON_MODE_FILL;
+            rs.cullMode    = VK_CULL_MODE_NONE;
+            rs.frontFace   = VK_FRONT_FACE_COUNTER_CLOCKWISE;
+            rs.lineWidth   = 1.0f;
+            VkDynamicState dynStates[2] = {VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR};
+            VkPipelineDynamicStateCreateInfo dyn{};
+            dyn.sType             = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO;
+            dyn.dynamicStateCount = 2;
+            dyn.pDynamicStates    = dynStates;
+
+            const VkFormat fmts[1] = {ctx->swapchainFormat()};
+            VkPipelineRenderingCreateInfo prci{};
+            prci.sType                   = VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO;
+            prci.colorAttachmentCount    = 1;
+            prci.pColorAttachmentFormats = fmts;
+            prci.depthAttachmentFormat   = VK_FORMAT_D32_SFLOAT;
+
+            VkPipelineDepthStencilStateCreateInfo ds{};
+            ds.sType            = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
+            ds.depthTestEnable  = VK_FALSE;
+            ds.depthWriteEnable = VK_FALSE;
+
+            VkPipelineColorBlendAttachmentState cbas[1]{};
+            cbas[0].blendEnable         = VK_TRUE;
+            cbas[0].srcColorBlendFactor = VK_BLEND_FACTOR_ONE;
+            cbas[0].dstColorBlendFactor = VK_BLEND_FACTOR_ONE;
+            cbas[0].colorBlendOp        = VK_BLEND_OP_ADD;
+            cbas[0].srcAlphaBlendFactor = VK_BLEND_FACTOR_ZERO;
+            cbas[0].dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
+            cbas[0].alphaBlendOp        = VK_BLEND_OP_ADD;
+            cbas[0].colorWriteMask      = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
+                                          VK_COLOR_COMPONENT_B_BIT;
+            VkPipelineColorBlendStateCreateInfo cb{};
+            cb.sType           = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
+            cb.attachmentCount = 1;
+            cb.pAttachments    = cbas;
+
+            VkPipelineMultisampleStateCreateInfo ms{};
+            ms.sType                = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
+            ms.rasterizationSamples = overlaySampleBits();
+
+            VkGraphicsPipelineCreateInfo gpci{};
+            gpci.sType               = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
+            gpci.pNext               = &prci;
+            gpci.stageCount          = 2;
+            gpci.pStages             = stages;
+            gpci.pVertexInputState   = &vi;
+            gpci.pInputAssemblyState = &ia;
+            gpci.pViewportState      = &vp;
+            gpci.pRasterizationState = &rs;
+            gpci.pMultisampleState   = &ms;
+            gpci.pDepthStencilState  = &ds;
+            gpci.pColorBlendState    = &cb;
+            gpci.pDynamicState       = &dyn;
+            gpci.layout              = fieldGlowCompositeLayout_;
+            check(vkCreateGraphicsPipelines(ctx->device(), ctx->pipelineCache(), 1, &gpci, nullptr,
+                                            &fieldGlowCompositePipeline_),
+                  "vkCreateGraphicsPipelines(fieldGlowComposite)");
 
             vkDestroyShaderModule(ctx->device(), vert, nullptr);
             vkDestroyShaderModule(ctx->device(), frag, nullptr);

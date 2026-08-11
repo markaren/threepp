@@ -32,6 +32,7 @@
 #endif
 #include "AutoExposure.hpp"
 #include "GbufResolve.hpp"
+#include "BillboardGlowPass.hpp"
 #include "BloomPass.hpp"
 #include "PostComposite.hpp"
 #include "DofPass.hpp"
@@ -1229,9 +1230,17 @@ namespace threepp {
             uint32_t drawIdx;
             uint32_t wSemantic;
             float    invUniformRadius;
+            // F4 distance LOD. camPos is the WORLD position of the view being
+            // recorded, which is why it rides the push constant rather than the
+            // FieldDesc: the same field is drawn once per view and the gate has
+            // to move with the camera.
+            float    lodFar;
+            float    camPos[3];
+            float    lodFade;
+            float    nearCull;
             float    _pad;
         };
-        static_assert(sizeof(ParticleFieldPC) == 40,
+        static_assert(sizeof(ParticleFieldPC) == 64,
                       "ParticleFieldPC drifted from particlefield_gbuf.vert");
         // (rasterDescPool / rasterDescSets / drawInfoBuffers /
         //  indirectCmdBuffers and their capacities moved to ViewContext. Only
@@ -1402,6 +1411,11 @@ namespace threepp {
         // and is only a second object when it has to be.
         VkPipeline       fieldBillboardPipeline1x_     = VK_NULL_HANDLE;
         bool             fieldBillboardPipeline1xOwned_ = false;
+        // F4: the billboard-only bloom chain. Created LAZILY, on the first
+        // frame a field asks for a glow — a scene with no sparks in it
+        // allocates no target, compiles no pipeline and records no pass.
+        std::unique_ptr<vulkan::BillboardGlowPass> billboardGlow_;
+        bool billboardGlowReadyThisFrame_ = false;
         // Host mirror of particlefield_billboard.{vert,frag}'s push block
         // (scalar layout). 128 B EXACTLY — the range every Vulkan
         // implementation guarantees — which is why anything per-FIELD lives in
@@ -1411,11 +1425,36 @@ namespace threepp {
             float    proj[16];  //   0
             float    mv[3][4];  //  64  ROWS of the affine view * model
             uint64_t paramsAddr;// 112
-            float    exposure;  // 120
-            uint32_t toneMapMode;//124
+            // F4: exposure + toneMapMode used to sit in these 8 bytes. They
+            // moved into the per-VIEW record (BillboardViewGpu) to make room
+            // for its address, which is what the fog terms ride in — the push
+            // block was already at 128 B, the guaranteed minimum range, and
+            // growing it past that is not portable.
+            uint64_t viewAddr;  // 120
         };
         static_assert(sizeof(FieldBillboardPC) == 128,
                       "FieldBillboardPC drifted from particlefield_billboard.vert");
+        // F4: the billboard glow pipelines.
+        //   • ...GlowPipeline_ draws the SAME quads into BillboardGlowPass's
+        //     half-extent linear-HDR target: rgba16f, one sample, NO depth
+        //     attachment (see that class's header for why the occlusion test is
+        //     deliberately given up at this resolution).
+        //   • ...CompositePipeline_ is the fullscreen additive draw that folds
+        //     the finished pyramid into the swapchain, INSIDE the overlay
+        //     render-pass instance — so the composite point does not move and
+        //     F3 note 1's outside-TAA property survives untouched.
+        VkPipeline       fieldBillboardGlowPipeline_ = VK_NULL_HANDLE;
+        VkPipelineLayout fieldGlowCompositeLayout_   = VK_NULL_HANDLE;
+        VkPipeline       fieldGlowCompositePipeline_ = VK_NULL_HANDLE;
+        struct FieldGlowPC {
+            float    intensity;
+            float    exposure;
+            uint32_t toneMapMode;
+            uint32_t _pad;
+            float    invDisplay[2];
+        };
+        static_assert(sizeof(FieldGlowPC) == 24,
+                      "FieldGlowPC drifted from particlefield_glow.frag");
         // Per-frame combined-image-sampler pool, reset at the top of the draw
         // loop (mirrors OverlayPass::spriteDescPools_).
         std::array<VkDescriptorPool, kFramesInFlight> particleDescPools_{};
@@ -3433,13 +3472,39 @@ namespace threepp {
         // Called from createParticlePipeline, so the shared texture set layout
         // and the 1x1 white default already exist.
         void createFieldBillboardPipeline();
+        // F4: the fullscreen additive draw that folds the billboard glow
+        // pyramid into the swapchain inside the overlay pass. Needs
+        // billboardGlow_'s set layout, so it is created with it.
+        void createFieldGlowCompositePipeline();
 
         // Draw every visible field's billboard quads into the render pass the
         // caller has already begun. Used by BOTH the primary's post-TAA overlay
         // pass and a secondary view's own composite — a field is scene content,
         // not a primary-view garnish, so a CameraSensor must see it.
-        // `samples` selects between the two pipeline variants.
-        void recordFieldBillboards(VkCommandBuffer cb, bool msaaTarget);
+        // The caller passes the pipeline (the MSAA overlay variant, the
+        // 1-sample sibling a secondary view needs, or F4's linear-HDR glow
+        // variant), and `glowPass` selects which fields are drawn and which
+        // value domain they are written in.
+        void recordFieldBillboards(VkCommandBuffer cb, VkPipeline pipe, bool glowPass);
+
+        // F4: build this view's BillboardViewGpu record — the display transform
+        // and the fog medium the quads are attenuated by — and publish it into
+        // the pass's per-frame block. Returns 0 when there is no room, which
+        // the caller must treat as "skip the draw": a null buffer_reference
+        // dereference is undefined, not a no-op.
+        [[nodiscard]] VkDeviceAddress pushBillboardViewRecord(const Matrix4& viewM,
+                                                              bool linearOut);
+
+        // F4: render the glow-enabled fields into BillboardGlowPass's offscreen
+        // target and run the pyramid over it. Recorded AFTER recordUpscaleAndPost
+        // and BEFORE recordHybridOverlay, because the composite draw that
+        // consumes it lives inside that overlay pass and compute cannot run
+        // inside a render-pass instance. No-op when no field asked for a glow.
+        void recordFieldBillboardGlow(VkCommandBuffer cb);
+        // Lazily create the glow pass + its two graphics pipelines + its images.
+        // Called from the PREPARE window (never mid-recording), so the pipeline
+        // compile lands where every other lazy creation in this renderer does.
+        void ensureFieldBillboardGlow();
 
         // Any visible ParticleField will draw billboards this frame. Cheap (a
         // handful of fields at most) and used by sceneHasOverlayContent(), so

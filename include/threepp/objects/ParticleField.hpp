@@ -127,6 +127,35 @@ namespace threepp {
         struct MeshRepr {// granular
             std::shared_ptr<BufferGeometry> geometry;// the per-particle proxy
             std::shared_ptr<Material>       material;// ONE material for the field
+            // ── F4: distance LOD, the FAR half of the split ─────────────────
+            // Beyond this many metres from the camera the proxy collapses onto
+            // its own centre (zero area, no fragments, no deferred shade) and
+            // the BILLBOARD representation is expected to take over — see
+            // BillboardRepr::lodNear, which is the complementary gate on the
+            // same field. 0 = no LOD, every live particle rasterises, which is
+            // exactly the pre-F4 behaviour.
+            //
+            // The collapse is a per-vertex predicate rather than a compaction:
+            // a field is ONE indirect draw of `liveCount` instances and there
+            // is no free list to compact against, so what LOD buys is the
+            // fragment and deferred-shade cost of distant proxies (the 5M snow
+            // bench put 11 of 16.8 ms exactly there) and not their vertex cost.
+            float lodFar = 0.f;
+            // Metres of soft ramp below lodFar, over which the proxy shrinks to
+            // nothing instead of vanishing on one frame. A hard cut pops; a
+            // shrink under a billboard that is fading IN over the same band is
+            // invisible.
+            float lodFade = 0.f;
+            // ── F4: the NEAR cull ───────────────────────────────────────────
+            // Particles closer to the camera than this shrink away. A 1.6 cm
+            // flake 40 cm from the lens covers ~100 px and reads as a floating
+            // crystal — the "scale outlier" of the F3 snow capture, which is a
+            // PROXIMITY artefact and not (as first suspected) an emitter size
+            // hash that can overshoot: `size * (1 + sizeJitter * rndS)` is
+            // bounded by construction. A real camera cannot resolve a flake
+            // inside its near focus either, so shrinking it out is the honest
+            // fix. 0 = off.
+            float nearCull = 0.f;
             bool enabled = false;
         };
         // Sparse emissive spray: embers, sparks, rain streaks, fireflies.
@@ -191,6 +220,62 @@ namespace threepp {
             // plane projects to an arbitrarily long segment, and one 2000-px
             // streak across the frame is a bug the eye reads instantly.
             float stretchMax = 24.f;
+            // ── F4: the SCREEN-SPACE streak cap ─────────────────────────────
+            // stretchMax is expressed in radii, i.e. in WORLD units, so it caps
+            // a streak's length in metres and says nothing about how many
+            // PIXELS that becomes. The nearest drop in a field the camera
+            // stands inside is metres closer than the rest, so it projects its
+            // (correctly capped) 12 cm to a bright bar across a quarter of the
+            // frame — the "one anomalously bright near streak per frame" the F3
+            // sequence shows. This is the cap in the domain the defect lives
+            // in: a fraction of the frame HEIGHT, applied in NDC. 0 = off.
+            float stretchMaxScreen = 0.f;
+
+            // ── F4: near fade ───────────────────────────────────────────────
+            // Fade the sprite out below this camera distance, in metres, over
+            // the whole [0, nearFade] band. Additive quads compound with
+            // proximity in two ways at once — coverage grows as 1/d^2 and the
+            // streak grows as 1/d — so the closest particle in a field the
+            // camera stands inside is the brightest thing on screen by a wide
+            // margin, whatever the authored intensity is. 0 = off.
+            float nearFade = 0.f;
+            // ── F4: distance LOD, the NEAR half of the split ────────────────
+            // Quads CLOSER than this many metres collapse to zero area, on the
+            // understanding that MeshRepr is drawing that particle as a solid
+            // proxy there (MeshRepr::lodFar is the complementary gate). Both
+            // read the same position buffer in the same frame, so the split
+            // costs no CPU, no second field and no compaction. 0 = off, i.e.
+            // the quad is drawn at every distance.
+            float lodNear = 0.f;
+            // Metres of ramp above lodNear over which the quad fades IN, so it
+            // arrives as the mesh proxy is shrinking out over the same band.
+            float lodFade = 0.f;
+
+            // ── F4: bloom, without re-entering the upscaler domain ──────────
+            // > 0 renders this field a SECOND time into a small offscreen HDR
+            // target, runs the shared bloom_down/up pyramid on that target
+            // alone and composites the result additively in the same overlay
+            // slot the quads land in. The value scales the radiance written to
+            // the glow target, so a field can bloom harder or softer than its
+            // own sprite is bright.
+            //
+            // 0 (the default) skips the whole chain — no target is allocated,
+            // no pass is recorded, no pixel changes. Weather fields want that:
+            // 300k rain streaks have nothing to bloom and the chain is a pure
+            // cost. Sparks want the opposite.
+            float glow = 0.f;
+            // Bright-pass knee for this field's own pyramid, in the same linear
+            // HDR domain the sprite writes.
+            //
+            // 0 (the default) means NO bright pass and no firefly suppression,
+            // and that is the right default here rather than a lazy one: the
+            // glow target contains only this field's emissive quads, so every
+            // pixel in it is already "the highlight". Switching the scene
+            // pyramid's first-level behaviour on instead Karis-suppresses a
+            // 3-px spark — it is a firefly by construction — and then
+            // thresholds what is left to nothing. Raise it only when a field
+            // wants its DIM particles left out of its own halo.
+            float glowThreshold = 0.f;
 
             bool enabled = false;
         };
