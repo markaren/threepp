@@ -328,6 +328,14 @@ std::shared_ptr<FireEffect> FireEffect::create(const Params& params) {
     return std::make_shared<FireEffect>(params);
 }
 
+// The defaulted form. It lives here and not as a `= {}` in the header because
+// the header is inside FireEffect's own class body, where GCC has not yet
+// parsed Params's default member initializers; see the note on the
+// declarations.
+std::shared_ptr<FireEffect> FireEffect::create() {
+    return create(Params{});
+}
+
 void FireEffect::ignite() {
     lit_ = true;
     // The two HostRing fields get their live count from the next submit(). The

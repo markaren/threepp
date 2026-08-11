@@ -274,7 +274,20 @@ namespace threepp {
 
         // Creates both fields at full capacity and PARKED. Nothing burns until
         // ignite(); nothing structural happens after this call.
-        static std::shared_ptr<FireEffect> create(const Params& params = {});
+        //
+        // Two overloads rather than `const Params& = {}`, and that is a
+        // COMPILER constraint, not a style choice: GCC parses a nested class's
+        // default member initializers only once the OUTERMOST class is
+        // complete, so at this line — still inside FireEffect — Params has no
+        // formable `{}` yet and GCC rejects the default argument outright
+        // ("could not convert '{}' to 'const Params&'"). MSVC and Clang accept
+        // it, which is why it survived to CI. The .cpp is past the class, so
+        // the default is spelled there. Keep Params an AGGREGATE while fixing
+        // this — an out-of-line `Params()` would also compile, but it would
+        // make Params non-aggregate and silently break
+        // `create({.height = 2.f})` at every call site.
+        static std::shared_ptr<FireEffect> create(const Params& params);
+        static std::shared_ptr<FireEffect> create();
 
         // Advance to ABSOLUTE time t (seconds since whatever origin the caller
         // likes). Not a delta: the emitter is closed-form in t, so calling this
