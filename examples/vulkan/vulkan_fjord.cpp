@@ -26,7 +26,16 @@
 // overlay billboards, emissive mesh lights.
 //
 // Controls:  drag = orbit   scroll = zoom   C = cinematic camera   SPACE = play/pause time
-// Headless:  vulkan_fjord --shot out.png [--frames N] [--time H] [--cam 0..3] [--cycle H_per_s]
+// F4 (plans/particle-atmosphere.md): the shore now carries a CAMPFIRE — a
+// FireEffect, i.e. an emissive ParticleField for the flame, a second one for
+// the smoke, a device-emitted ember field drawn as blooming billboards, and a
+// flickering PointLight — and the valley carries a SNOWFALL, one 400k-flake
+// ParticleField whose per-frame CPU cost is two floats. `--view 7` is the
+// README pose. D = day/night, F = ignite/extinguish, --nofire / --nosnow park
+// either of them for an A/B or a regression capture.
+//
+// Headless:  vulkan_fjord --shot out.png [--frames N] [--time H] [--view 0..7] [--cycle H_per_s]
+//            vulkan_fjord --shot out.png --view 7 --night --noae   (the README shot)
 
 #include "capture_util.hpp"
 
@@ -37,6 +46,7 @@
 #include "threepp/extras/terrain/DetailTexture.hpp"
 #include "threepp/extras/terrain/RockGeometry.hpp"
 #include "threepp/extras/terrain/TerrainGenerator.hpp"
+#include "threepp/extras/effects/FireEffect.hpp"
 #include "threepp/extras/terrain/TerrainTiles.hpp"
 #include "threepp/extras/vegetation/TreeGenerator.hpp"
 #include "threepp/extras/vegetation/TreeTextures.hpp"
@@ -44,9 +54,11 @@
 #include "threepp/loaders/TextureLoader.hpp"
 #include "threepp/extras/vegetation/GrassTiles.hpp"
 #include "threepp/materials/MeshStandardMaterial.hpp"
+#include "threepp/geometries/OctahedronGeometry.hpp"
 #include "threepp/objects/GrassMesh.hpp"
 #include "threepp/objects/InstancedMesh.hpp"
 #include "threepp/objects/Ocean.hpp"
+#include "threepp/objects/ParticleField.hpp"
 #include "threepp/objects/ParticleSystem.hpp"
 #include "threepp/renderers/VulkanRenderer.hpp"
 #include "threepp/scenes/FogExp2.hpp"
@@ -785,6 +797,28 @@ int main(int argc, char** argv) {
     // scouting artefacts at arbitrary viewpoints without adding a preset each time.
     bool  hasCamPos = false, hasCamLook = false;
     float camPos[3]{}, camLook[3]{};
+    // ── F4 (5): the shoreline campfire + the snowfall ───────────────────────
+    // Both are ON by default — this is the README scene — with escape hatches
+    // so a regression capture can put the demo back exactly where F3 left it.
+    // --nofire is also the A/B leg for the fire's cost, and --nosnow for the
+    // snowfall's; both park rather than remove, per the churn contract.
+    bool  noFire = false, noSnow = false;
+    // --seq DIR: the motion harness. A held pose cannot see a view-anchored
+    // defect — that is the whole lesson of the F1 smoke regression, where every
+    // still passed and the plume boiled in froxel-sized blocks the moment the
+    // camera moved. The path is closed-form in the FRAME INDEX, so two runs of
+    // the same command produce the same poses, and --freeze stops the effects
+    // so the camera is the only thing changing.
+    std::string seqDir;
+    int   seqFrames = 6, seqWarm = 160;
+    float seqOrbit  = 10.f;// degrees per second about the look target
+    bool  seqFreeze = false;
+    // Day/night. The fjord already HAS a time of day (--time H, and the D key
+    // now jumps between these two), so rather than bolting vulkan_fire's second
+    // switch onto it, --day / --night set that same hour. One mechanism.
+    constexpr float kDayHour = 13.2f, kNightHour = 22.6f;
+    bool  dayFlag = false, nightFlag = false;
+    std::uint32_t snowCount = 280'000;
     auto parseVec3 = [](const char* s, float out[3]) {
         const auto v = capture::parseVec3(s);// shared: accepts "x,y,z" and "x y z"
         if (v) { out[0] = v->x; out[1] = v->y; out[2] = v->z; }
@@ -798,6 +832,17 @@ int main(int argc, char** argv) {
         else if (std::strcmp(argv[i], "--cycle") == 0 && i + 1 < argc) startCycle = static_cast<float>(std::atof(argv[++i]));
         else if (std::strcmp(argv[i], "--fly") == 0) startFly = true;
         else if (std::strcmp(argv[i], "--single-grass") == 0) singleGrass = true;
+        else if (std::strcmp(argv[i], "--seq") == 0 && i + 1 < argc) seqDir = argv[++i];
+        else if (std::strcmp(argv[i], "--seqframes") == 0 && i + 1 < argc) seqFrames = std::atoi(argv[++i]);
+        else if (std::strcmp(argv[i], "--warm") == 0 && i + 1 < argc) seqWarm = std::atoi(argv[++i]);
+        else if (std::strcmp(argv[i], "--orbit") == 0 && i + 1 < argc) seqOrbit = static_cast<float>(std::atof(argv[++i]));
+        else if (std::strcmp(argv[i], "--freeze") == 0) seqFreeze = true;
+        else if (std::strcmp(argv[i], "--nofire") == 0) noFire = true;
+        else if (std::strcmp(argv[i], "--nosnow") == 0) noSnow = true;
+        else if (std::strcmp(argv[i], "--day") == 0) dayFlag = true;
+        else if (std::strcmp(argv[i], "--night") == 0) nightFlag = true;
+        else if (std::strcmp(argv[i], "--snowcount") == 0 && i + 1 < argc)
+            snowCount = static_cast<std::uint32_t>(std::atoi(argv[++i]));
         else if (std::strcmp(argv[i], "--mist") == 0) {
             mistOn = true;
             if (i + 1 < argc && argv[i + 1][0] != '-') mistDensity = static_cast<float>(std::atof(argv[++i]));
@@ -823,6 +868,9 @@ int main(int argc, char** argv) {
         else if (std::strcmp(argv[i], "--campos") == 0 && i + 1 < argc) hasCamPos = parseVec3(argv[++i], camPos);// legacy alias
         else if (std::strcmp(argv[i], "--look") == 0 && i + 1 < argc) hasCamLook = parseVec3(argv[++i], camLook);
     }
+    // After the loop so an explicit --time still wins when both are given.
+    if (dayFlag) startTime = kDayHour;
+    if (nightFlag) startTime = kNightHour;
 
     // Window size matters for artefact scouting, not just framing: the water's
     // spec-AA fades the fine chop out of N by the PIXEL FOOTPRINT, so a
@@ -838,7 +886,10 @@ int main(int argc, char** argv) {
     // Cap the upper end well below the default +3 EV: the eye should NOT
     // re-expose midnight back to daylight — night must stay dark.
     renderer.setAutoExposureRange(-2.5f, 1.5f);
-    renderer.setAutoExposureSpeed(shotPath.empty() ? 2.0f : 12.0f);
+    // --seq behaves like --shot for everything except what it writes: no UI,
+    // no orbit controls, a scripted camera and a fast exposure settle.
+    const bool headlessish = !shotPath.empty() || !seqDir.empty();
+    renderer.setAutoExposureSpeed(headlessish ? 12.0f : 2.0f);
     // renderer.setGbufferMsaa(2);// leaf canopies + grass edges
     renderer.setRenderScale(0.85f);
     renderer.setSunAngularRadius(0.6f);// soft RT sun shadows
@@ -1483,6 +1534,175 @@ int main(int argc, char** argv) {
         scene.addRef(smoke);
     }
 
+    // ── F4 (5): the shoreline campfire ──────────────────────────────────────
+    // A FireEffect from extras — three ParticleFields (emissive flame volume,
+    // grey smoke volume, device-emitted ember billboards) plus one flickering
+    // PointLight, all of which are existing machinery. It goes on the beach a
+    // few metres up from the waterline and a little down-shore of the dock, so
+    // the hero framing has it in the near foreground with the cabin, the trees
+    // and the fjord walls behind.
+    //
+    // CREATED ONCE, HERE, AT FULL CAPACITY (the churn contract): every field an
+    // effect owns is a structural scene change — entry re-expansion, a
+    // vkDeviceWaitIdle and a cleared TAA history — so a fire that will ever be
+    // lit is constructed before the scene starts running and IGNITED later.
+    // --nofire leaves it parked rather than absent, which is what makes it a
+    // legitimate A/B leg.
+    //
+    // DENSITY BUDGET (plan R-5, kMaxDensityFields == 4): flame + smoke = 2, the
+    // snowfall below = 3. The chimney smoke is the LEGACY ParticleSystem path
+    // and binds no volume at all, so the fjord sits one slot under the cap.
+    std::shared_ptr<FireEffect> campfire;
+    {
+        FireEffect::Params fp;
+        // Bigger than vulkan_fire's: this one is seen from 10-15 m across an
+        // open shore rather than from 2 m, and a campfire that reads at that
+        // distance has to be a bonfire at this one.
+        fp.height = 1.55f;
+        fp.radius = 0.34f;
+        fp.smokeHeight = 3.4f;
+        fp.emissiveIntensity = 40.f;
+        fp.lightIntensity = 46.f;
+        fp.lightRange = 22.f;
+        // The wind that leans the smoke column is the same direction the
+        // chimney's plume takes, so the two agree about which way the air moves.
+        fp.wind.set(0.55f, 0.f, 0.30f);
+        fp.emberParticles = 260;
+        fp.emberRise = 1.9f;
+        fp.emberLife = 2.8f;
+        campfire = FireEffect::create(fp);
+        const float fx = xWater + 2.6f, fz = kPadZ + 9.5f;
+        campfire->position.set(fx, prov.height(fx, fz) + 0.02f, fz);
+        scene.add(campfire);
+        if (!noFire) campfire->ignite();
+    }
+
+    // ── F4 (2): a SECOND fire, far up the shore ─────────────────────────────
+    // This one exists to make the billboard fog attenuation visible, and it can
+    // only exist because its density volumes are switched OFF. plans R-5 is the
+    // constraint: kMaxDensityFields is 4, one FireEffect eats two (flame +
+    // smoke), and the snowfall takes a third — so a second full campfire would
+    // be five and would be REPORTED as an overflow rather than drawn. Turning
+    // this one's volumes off leaves exactly what the demonstration needs, which
+    // is also what a bonfire 60 m away actually looks like: a warm glow in the
+    // fog and a plume of sparks, with no resolvable flame body.
+    //
+    // With one fire the embers all sit at one distance and "distant embers dim"
+    // has nothing to be measured against. With two, the same field parameters
+    // at 12 m and at 60 m put the attenuation on screen side by side.
+    std::shared_ptr<FireEffect> farFire;
+    {
+        FireEffect::Params fp;
+        fp.height = 1.7f;
+        fp.radius = 0.40f;
+        fp.lightIntensity = 60.f;
+        fp.lightRange = 26.f;
+        fp.emberParticles = 300;
+        fp.emberRise = 2.2f;
+        fp.emberLife = 3.2f;
+        fp.emberSize = 0.020f;// a little larger, so it is not sub-pixel at 60 m
+        fp.seed = 90210u;     // a different seed: two fires flickering in lockstep
+                              // read as one animation played twice
+        farFire = FireEffect::create(fp);
+        // Placed to sit just left of the hero pose's centre line, ~46 m out —
+        // the shoreline MEANDERS (channelCenterX is a function of z), so this is
+        // pinned to the pad rather than to a waterline offset, which would land
+        // it out of frame at a different z.
+        const float fx = padX - 21.5f, fz = kPadZ - 14.f;
+        farFire->position.set(fx, std::max(prov.height(fx, fz), 0.f) + 0.02f, fz);
+        farFire->flameField()->densityRepr().enabled = false;
+        farFire->smokeField()->densityRepr().enabled = false;
+        scene.add(farFire);
+        if (!noFire) farFire->ignite();
+    }
+
+    // ── F4 (5): the snowfall ────────────────────────────────────────────────
+    // ONE ParticleField in Ownership::Renderer mode: the positions live on the
+    // device and particle_emit.comp rewrites them from a closed form every
+    // frame, so 400k flakes cost the host two floats per frame and nothing else.
+    //
+    // WORLD-ANCHORED PATCH, not a camera-following volume, and that is a
+    // deliberate limit rather than an oversight: the emitter's trajectories are
+    // FIELD-LOCAL, so re-anchoring the field to the camera would slide every
+    // flake with it. A patch centred on the shore covers the framing this demo
+    // exists for; making weather follow an arbitrary camera needs the closed
+    // form expressed in world space, which is where F5's surface interaction
+    // will have to take it anyway.
+    std::shared_ptr<ParticleField> snowfall;
+    {
+        constexpr float kHalf = 34.f, kTop = 26.f;
+        ParticleField::Config cfg;
+        cfg.capacity      = std::max(snowCount, 1u);
+        cfg.ownership     = ParticleField::Ownership::Renderer;
+        cfg.wSemantic     = ParticleField::WSemantic::Radius;
+        cfg.uniformRadius = 0.014f;
+        snowfall = ParticleField::create(cfg);
+        snowfall->name = "snowfall";
+        const float sx = xWater - 4.f, sz = kPadZ + 14.f;
+        snowfall->position.set(sx, 0.f, sz);
+
+        ParticleField::EmitterParams e;
+        // An EMISSION SLAB at the top, not a box the size of the volume: the
+        // steady-state cloud is that slab swept along the trajectory, so a
+        // full-height box would give a triangular density ramp instead of even
+        // snowfall (F2 amendment note 7).
+        e.spawnCenter.set(-6.f, kTop, -3.f);
+        e.spawnHalfExtent.set(kHalf, 0.35f, kHalf);
+        e.velocity.set(0.f, -1.15f, 0.f);// terminal velocity, so no acceleration
+        e.speedSpread = 0.12f;
+        e.wind.set(0.48f, 0.f, 0.24f);
+        e.driftAmplitude = 0.42f;
+        e.driftFrequency = 0.14f;
+        e.driftScale     = 13.f;
+        e.lifetime       = 26.f;// 26 s at 1.15 m/s ≈ 30 m of fall from y = 26
+        e.dutyCycle      = 0.95f;
+        e.size           = 0.014f;
+        e.sizeJitter     = 0.50f;
+        e.seed           = 20260814u;
+        snowfall->setEmitter(e);
+        snowfall->setEmitterTime(0.f, 1.f / 60.f);
+
+        auto flakeMat = MeshStandardMaterial::create(
+                MeshStandardMaterial::Params{}
+                        .color(Color(0.96f, 0.97f, 1.00f))
+                        .roughness(0.85f)
+                        .metalness(0.f));
+        snowfall->setMeshRepr(OctahedronGeometry::create(cfg.uniformRadius, 0), flakeMat);
+        // F4 (3): the LOD split. Mesh proxies near, additive quads far, both
+        // gated off the SAME position buffer with complementary distance
+        // predicates — and the near cull that stops a flake 40 cm from the lens
+        // painting a 100-px crystal across the shot.
+        constexpr float kLodNear = 6.0f, kLodFar = 9.0f;
+        auto& mr = snowfall->meshRepr();
+        mr.lodFar   = kLodFar;
+        mr.lodFade  = kLodFar - kLodNear;
+        // Apparent-size cap, not a hole (the linear ramp cancels 1/d exactly —
+        // see vulkan_snow for the derivation): 5.5 m holds the nearest flake at
+        // about 5 px, which is under the size an octahedron starts reading as a
+        // faceted crystal rather than a flake.
+        mr.nearCull = 5.5f;
+        snowfall->setBillboardRepr(Color(0.93f, 0.94f, 0.96f), Color(0.86f, 0.88f, 0.92f),
+                                   /*intensity*/ 0.30f, /*sizeScale*/ 1.05f);
+        auto& br = snowfall->billboardRepr();
+        br.lodNear      = kLodNear;
+        br.lodFade      = kLodFar - kLodNear;
+        br.softness     = 0.62f;
+        br.fadePower    = 0.f;
+        br.sizeTaper    = 0.f;
+        br.brightJitter = 0.40f;
+        // The same field also feeds a world-anchored density volume, so the
+        // snowfall hazes what is behind it — one emit dispatch serving the mesh
+        // proxy, the quads and the volume, for every view.
+        snowfall->setDensityRepr(Vector3(sx, kTop * 0.45f, sz),
+                                 Vector3(kHalf + 2.f, kTop * 0.55f, kHalf + 2.f),
+                                 /*sigmaPerParticle*/ 0.030f, /*resolution*/ 96);
+        auto& dr = snowfall->densityRepr();
+        dr.albedo     = Color(0.90f, 0.93f, 0.98f);
+        dr.anisotropy = 0.35f;
+        scene.add(snowfall);
+        if (noSnow) snowfall->setLiveCount(0);
+    }
+
     // ── sun / moon lights ───────────────────────────────────────────────────
     auto sun = DirectionalLight::create(Color(1.f, 0.95f, 0.88f), 3.f);
     sun->name = "sun";
@@ -1582,6 +1802,20 @@ int main(int argc, char** argv) {
                 camera.position.set(padX, 7.f, kPadZ - 120.f);
                 controls.target.set(channelCenterX(-700.f), 90.f, -700.f);
                 break;
+            case 7:// F4 README HERO: the shoreline campfire in the near
+                   // foreground, the cabin and the fjord walls behind it, snow
+                   // falling through the whole frame. Low and close, because the
+                   // three things this shot has to show — a spark's bloom, an
+                   // ember dimming into the murk with distance, a flake that is
+                   // not a faceted crystal — are all small-scale.
+                // Found by orbiting the first draft 8 degrees and LOOKING: the
+                // dock now leads in from the left, the near fire sits on the
+                // right third with the cabin behind it, and the far fire (the
+                // one that shows what the murk does to an ember at 45 m) is
+                // clear of both.
+                camera.position.set(xWater - 11.8f, 2.35f, kPadZ + 9.95f);
+                controls.target.set(padX - 10.f, 4.2f, kPadZ - 14.f);
+                break;
             case 6:// HIGH overlook, steep pitch DOWN — terrain+water fill most of
                    // the frame while the horizon sits high, leaving a broad SKY band
                    // (with the cloud deck) across the top. This is the black-sky
@@ -1593,10 +1827,13 @@ int main(int argc, char** argv) {
         }
         controls.update();
     };
-    if (!shotPath.empty()) applyShotCam(shotCam);
+    if (headlessish) applyShotCam(shotCam);
     if (hasCamPos) camera.position.set(camPos[0], camPos[1], camPos[2]);
     if (hasCamLook) controls.target.set(camLook[0], camLook[1], camLook[2]);
     if (hasCamPos || hasCamLook) controls.update();
+    // The seq orbit's anchor: the pose the presets / overrides left behind.
+    const Vector3 seqEye0 = camera.position;
+    if (!seqDir.empty()) std::filesystem::create_directories(seqDir);
 
     // ── state + UI ──────────────────────────────────────────────────────────
     float cycleSpeed = startCycle;// hours per second (0 = paused)
@@ -1623,7 +1860,7 @@ int main(int argc, char** argv) {
     // in the extra lambda. Interactive runs only — the headless capture path
     // must not draw UI into the measured frames.
     std::unique_ptr<RendererSettingsUi> ui;
-    if (shotPath.empty()) {
+    if (!headlessish) {
         ui = std::make_unique<RendererSettingsUi>(canvas, renderer, [&] {
             ImGui::TextDisabled("terrain tiles %d (baking %d)", tiles->activeTiles(), tiles->pendingBakes());
             ImGui::SeparatorText("Time of day");
@@ -1662,6 +1899,22 @@ int main(int argc, char** argv) {
         if (evt.key == Key::C) cinematic = !cinematic;
         if (evt.key == Key::SPACE) cycleSpeed = cycleSpeed > 0.f ? 0.f : 0.08f;
         if (evt.key == Key::F9) reproDumpRequest = true;
+        // F4: day / night, vulkan_fire's D-key pattern mapped onto the hour this
+        // demo already has. Jumps rather than cross-fades on purpose — the point
+        // of the key is to compare the two, and a 9-hour sweep is what the
+        // `speed` slider is for.
+        if (evt.key == Key::D) {
+            const bool isNight = timeOfDay > 20.f || timeOfDay < 5.f;
+            timeOfDay = isNight ? kDayHour : kNightHour;
+        }
+        // F4: park / ignite the campfire. Parking, never removing — a field's
+        // creation is a structural scene change and the whole effect is
+        // pre-created for exactly this reason (the churn contract).
+        if (evt.key == Key::F) {
+            const bool on = !campfire->lit();
+            if (on) { campfire->ignite(); farFire->ignite(); }
+            else    { campfire->extinguish(); farFire->extinguish(); }
+        }
     });
     canvas.addKeyListener(keyAdapter);
 
@@ -1686,6 +1939,24 @@ int main(int argc, char** argv) {
             fps = fpsFrames / fpsAccum;
             fpsAccum = 0.f;
             fpsFrames = 0;
+        }
+
+        // ── F4: the campfire and the snowfall ──
+        // Both take an ABSOLUTE time, not a delta, because both emitters are
+        // closed forms in t — which is what makes a headless capture a function
+        // of its FRAME INDEX and nothing else. In shot mode the clock is
+        // therefore the frame counter at a fixed 1/60, never the wall clock;
+        // interactively it is the elapsed time, which is the same expression
+        // sampled irregularly.
+        {
+            // --freeze pins the effects at one t so the CAMERA is the only
+            // thing that changes between written frames: anything still moving
+            // in the sequence is view dependence by construction.
+            const float fxT = seqFreeze ? 7.5f
+                            : (headlessish ? (float(shotFrame) * (1.f / 60.f)) : tElapsed);
+            campfire->update(fxT);
+            farFire->update(fxT);
+            snowfall->setEmitterTime(fxT, 1.f / 60.f);
         }
 
         // ── advance the day ──
@@ -1828,9 +2099,12 @@ int main(int argc, char** argv) {
                     Vector3(padX, 6.f, kPadZ), 0.4f);
             camera.position.copy(eye);
             camera.lookAt(look);
-        } else {
+        } else if (seqDir.empty()) {
             controls.update();
         }
+        // (--seq drives the camera itself, at the END of the previous frame.
+        //  OrbitControls::update() recomputes the position from its own
+        //  spherical state, so letting it run here would undo the orbit.)
         // --climb R (shot mode): rise R m/frame, keeping the shot cam's look —
         // reproduces "flying up/out of the mist layer" in MOTION (the black-on-
         // exit regression). The layer is anchored at baseY; climbing lifts the
@@ -1869,7 +2143,29 @@ int main(int argc, char** argv) {
             std::cout << "[repro] wrote " << base << ".png  replay: " << cmd << std::endl;
         }
 
-        if (shotPath.empty()) {
+        if (!seqDir.empty()) {
+            // Written AFTER the render, so frame N's image is the pose set at
+            // the top of frame N (below); the orbit for the NEXT frame is
+            // applied here, closed-form in the frame index.
+            if (shotFrame >= seqWarm) {
+                char name[64];
+                std::snprintf(name, sizeof(name), "f%02d.png", shotFrame - seqWarm);
+                renderer.writeFramebuffer((std::filesystem::path(seqDir) / name).string());
+            }
+            ++shotFrame;
+            if (shotFrame >= seqWarm + seqFrames) {
+                std::printf("[seq] %d frames -> %s (orbit %.1f deg/s, warm %d, effects %s)\n",
+                            seqFrames, seqDir.c_str(), double(seqOrbit), seqWarm,
+                            seqFreeze ? "FROZEN" : "running");
+                std::exit(0);
+            }
+            const float ang = seqOrbit * (3.14159265f / 180.f) * float(shotFrame) * (1.f / 60.f);
+            const float dx = seqEye0.x - controls.target.x, dz = seqEye0.z - controls.target.z;
+            const float ca = std::cos(ang), sa = std::sin(ang);
+            camera.position.set(controls.target.x + dx * ca - dz * sa, seqEye0.y,
+                                controls.target.z + dx * sa + dz * ca);
+            camera.lookAt(controls.target);
+        } else if (shotPath.empty()) {
             ui->render();
         } else if (++shotFrame >= shotFrames) {
             const auto path = capture::shotOutputPath(shotPath);
