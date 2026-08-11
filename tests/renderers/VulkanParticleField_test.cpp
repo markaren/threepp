@@ -2622,6 +2622,396 @@ int main(int argc, char** argv) {
         }
     }
 
+    // ── F5: ANALYTIC SURFACE INTERACTION (plans/particle-atmosphere.md F5) ──
+    //
+    // Flakes rest where they land and rain splashes there, solved inside the
+    // emitter's closed form against a baked top-down height map. Six claims,
+    // and the geometric one is first because everything else is downstream of
+    // it: the map must be READ AT THE PARTICLE'S OWN xz. A bake anchored one
+    // way and sampled another still produces flakes that stop somewhere, so
+    // "resting happens" is not evidence of anything — the scene below therefore
+    // has TWO landing heights over one footprint, and the assertion is that the
+    // flakes sort themselves between them.
+    //
+    // Requires VK_KHR_ray_query: the bake traces the scene TLAS, and there is
+    // no second implementation. On a device without it the emitter is handed a
+    // null map, nothing lands, and these assertions fail loudly rather than
+    // silently passing.
+    {
+        const auto bytesDiffF5 = [](const std::vector<unsigned char>& a,
+                                    const std::vector<unsigned char>& b) -> long long {
+            if (a.size() != b.size() || a.empty()) return -1;
+            long long d = 0;
+            for (std::size_t i = 0; i < a.size(); ++i)
+                if (a[i] != b[i]) ++d;
+            return d;
+        };
+
+        // A raised plate over exactly HALF the field's footprint. Everything
+        // this section can measure comes from that asymmetry.
+        auto plateMat = MeshStandardMaterial::create();
+        plateMat->color = Color(0.55f, 0.57f, 0.62f);
+        auto plate = Mesh::create(BoxGeometry::create(2.4f, 0.10f, 4.8f), plateMat);
+        plate->position.set(-1.2f, 1.20f, 0.f);// spans x in [-2.4, 0], all z
+        scene.add(plate);
+        // The 1 m box in the middle of the scene straddles the two halves and
+        // would put a third landing height in both of them.
+        box->visible = false;
+
+        constexpr std::uint32_t kRest = 40'000;
+        ParticleField::Config rc;
+        rc.capacity      = kRest;
+        rc.ownership     = ParticleField::Ownership::Renderer;
+        rc.wSemantic     = ParticleField::WSemantic::Radius;
+        rc.uniformRadius = 0.03f;
+        auto rested = ParticleField::create(rc);
+        auto flakeMat = MeshStandardMaterial::create();
+        flakeMat->color = Color(0.96f, 0.97f, 1.f);
+        rested->setMeshRepr(BoxGeometry::create(2.f * rc.uniformRadius,
+                                                2.f * rc.uniformRadius,
+                                                2.f * rc.uniformRadius),
+                            flakeMat);
+
+        ParticleField::EmitterParams re;
+        re.spawnCenter.set(0.f, 4.f, 0.f);
+        re.spawnHalfExtent.set(2.4f, 0.1f, 2.4f);
+        re.velocity.set(0.f, -1.2f, 0.f);
+        // No drift and no size jitter: this section is about WHERE a flake
+        // stops, and every source of lateral variation is one more thing an
+        // assertion about halves has to tolerate.
+        re.lifetime = 8.f;
+        re.size     = 0.03f;
+        re.seed     = 20260816u;
+        re.surface.enabled     = false;// the A/B leg is the DEFAULT
+        re.surface.resolution  = 128;  // 4.8 m / 128 = 3.75 cm per texel
+        re.surface.restSeconds = 2.0f;
+        re.surface.restJitter  = 0.3f;
+        re.surface.fadeSeconds = 0.5f;
+        re.surface.bias        = 0.02f;
+        rested->setEmitter(re);
+        // The volume spans y in [0, 4], 64 voxels, so one row is 6.25 cm: the
+        // ground layer is row 0 and the plate's top surface (1.25 m) is row 20.
+        rested->setDensityRepr(Vector3(0.f, 2.f, 0.f), Vector3(2.4f, 2.f, 2.4f),
+                               0.5f, /*resolution*/ 64);
+        scene.add(rested);
+
+        check(!ParticleField::EmitterParams{}.surface.enabled,
+              "EmitterParams::Surface is opt-in — the default is the pre-F5 emitter");
+
+        constexpr std::uint32_t kVR = 64;
+        // Density-weighted mean HEIGHT and the ground-layer total, per half of
+        // the footprint. The volume is indexed x + res*(y + res*z) — see
+        // particle_density.glsl's linear index — so the x half is the fast axis.
+        const auto profile = [&](const std::vector<std::uint32_t>& v, bool plateHalf,
+                                 double& meanRow, double& groundLayer) {
+            double wsum = 0, rsum = 0;
+            groundLayer = 0;
+            for (std::uint32_t z = 0; z < kVR; ++z)
+                for (std::uint32_t y = 0; y < kVR; ++y)
+                    for (std::uint32_t x = 0; x < kVR; ++x) {
+                        // Skip the two texel columns either side of the plate's
+                        // edge: a nearest-sampled height map has a hard step
+                        // there and a flake may legitimately be on either side.
+                        const bool left = x < kVR / 2 - 2;
+                        const bool right = x > kVR / 2 + 2;
+                        if (plateHalf ? !left : !right) continue;
+                        const double d = double(v[x + kVR * (y + kVR * z)]);
+                        if (d <= 0.0) continue;
+                        wsum += d;
+                        rsum += d * double(y);
+                        if (y < 3) groundLayer += d;
+                    }
+            meanRow = wsum > 0.0 ? rsum / wsum : 0.0;
+        };
+        const auto volAtF5 = [&](float t, std::vector<std::uint32_t>& out) {
+            for (int i = 0; i < 6; ++i) { rested->setEmitterTime(t, 1.f / 60.f); frame(); }
+            std::uint32_t res = 0;
+            return renderer.readParticleDensityVolume(*rested, out, res) && res == kVR;
+        };
+
+        // ── (a) The NEGATIVE CONTROL, measured first ────────────────────────
+        // With the solve off the two halves see the same falling column, so
+        // their profiles must agree. Without this the assertion below would pass
+        // on any build that merely put more density on one side of the volume.
+        std::vector<std::uint32_t> volOff, volOn;
+        const bool okOff = volAtF5(6.5f, volOff);
+        check(okOff, "density volume readback succeeded (surface OFF)");
+        double plateRowOff = 0, openRowOff = 0, plateGndOff = 0, openGndOff = 0;
+        if (okOff) {
+            profile(volOff, true, plateRowOff, plateGndOff);
+            profile(volOff, false, openRowOff, openGndOff);
+            std::printf("[info] F5 control (no landing): mean row plate-half %.2f, "
+                        "open-half %.2f; ground layer %.0f vs %.0f\n",
+                        plateRowOff, openRowOff, plateGndOff, openGndOff);
+            check(std::abs(plateRowOff - openRowOff) < 3.0,
+                  "with the landing solve OFF the two halves of the footprint "
+                  "carry the same vertical profile (the control that stops the "
+                  "next assertion from passing on any asymmetric build)");
+        }
+
+        // ── (b) FLAKES SORT THEMSELVES BY WHAT IS UNDER THEM ────────────────
+        {
+            auto e = rested->emitter();
+            e.surface.enabled = true;
+            rested->setEmitter(e);
+        }
+        const bool okOn = volAtF5(6.5f, volOn);
+        check(okOn, "density volume readback succeeded (surface ON)");
+        if (okOn && okOff) {
+            double plateRow = 0, openRow = 0, plateGnd = 0, openGnd = 0;
+            profile(volOn, true, plateRow, plateGnd);
+            profile(volOn, false, openRow, openGnd);
+            std::printf("[info] F5 resting: mean row plate-half %.2f, open-half %.2f "
+                        "(plate top is row 20, ground is row 0); ground layer "
+                        "%.0f vs %.0f\n", plateRow, openRow, plateGnd, openGnd);
+            check(plateRow > openRow + 4.0,
+                  "flakes over the raised plate come to rest HIGHER than flakes "
+                  "over the open ground — the baked height map is sampled at "
+                  "each particle's own xz, not at one place for the field");
+            // The flake SHADOW. Nothing reaches the ground under the plate: the
+            // trajectory is stopped 1.2 m above it, so the bottom rows of that
+            // half lose both the resting carpet AND the falling column.
+            check(plateGnd < 0.35 * openGnd,
+                  "the ground UNDER the plate is sheltered — a top-down height "
+                  "map stops the flakes on the first surface below the cloud");
+            check(plateGndOff > 0.6 * openGndOff,
+                  "...and it is not sheltered with the solve off (the shelter "
+                  "claim is about the landing, not about the plate's shadow)");
+        }
+
+        // ── (c) DETERMINISM, WITH FLAKES AT REST ────────────────────────────
+        // The F2 seek, re-run on a lifecycle that now has a landing solve, a
+        // hashed rest duration and a fade in it. A bisection is exactly the kind
+        // of thing that could pick up an iteration-order or a frame-count
+        // dependence; it does not, because it reads only (slot, t) and a buffer
+        // whose contents are a function of the scene.
+        {
+            std::vector<std::uint32_t> vA, vElse, vBack;
+            const bool okSeek = volAtF5(6.5f, vA) && volAtF5(3.25f, vElse) &&
+                                volAtF5(6.5f, vBack);
+            check(okSeek, "density volume readback succeeded (F5 seek)");
+            if (okSeek) {
+                std::size_t differ = 0, differElse = 0, occupied = 0;
+                for (std::size_t i = 0; i < vA.size(); ++i) {
+                    if (vA[i] != 0) ++occupied;
+                    if (vA[i] != vBack[i]) ++differ;
+                    if (vA[i] != vElse[i]) ++differElse;
+                }
+                std::printf("[info] F5 seek: %zu voxels occupied; revisited t differs "
+                            "in %zu; a different t differs in %zu\n",
+                            occupied, differ, differElse);
+                check(occupied > 100, "the resting field fills its density volume");
+                check(differ == 0,
+                      "the landing solve is a PURE FUNCTION of (seed, t): seeking "
+                      "away and back reproduces the resting flakes BIT-IDENTICALLY");
+                check(differElse > 0,
+                      "a different t produces a different field (the seek test is "
+                      "not measuring a stale volume)");
+            }
+        }
+
+        // ── (d) A RESTING PARTICLE HAS EXACTLY ZERO MOTION ──────────────────
+        // The claim §F5 makes about motion vectors, asserted rather than
+        // reasoned about: the emitter writes pos and prevPos from the SAME vec3
+        // while a slot is resting, so those pixels reproject onto themselves.
+        // Measured as a FRACTION of the field's own pixels, because the falling
+        // ones in the same frame must still move.
+        {
+            // WHICH pixels are the field's. Not "every pixel with a nonzero
+            // entry" — the ground and the plate are in this scene and static
+            // geometry writes exactly zero motion, so that set would report
+            // half the frame as "resting" whatever the emitter did. Parking the
+            // field leaves the entry LIST alone (parking is not a structural
+            // change) and paints only the statics, which is the set to exclude.
+            std::vector<std::uint8_t> staticEntry(1u << 16, 0);
+            {
+                rested->setLiveCount(0);
+                for (int i = 0; i < 6; ++i) { rested->setEmitterTime(6.5f, 1.f / 60.f); frame(); }
+                std::vector<std::uint8_t> raw;
+                int w = 0, h = 0, bpp = 0;
+                if (renderer.readGBufferAOV(VulkanRenderer::GBufferAOV::Ids, raw, w, h, bpp)) {
+                    const auto* p16 = reinterpret_cast<const std::uint16_t*>(raw.data());
+                    const std::size_t n = std::size_t(w) * std::size_t(h);
+                    for (std::size_t p = 0; p < n; ++p) staticEntry[p16[p * 4u]] = 1;
+                }
+                rested->setLiveCount(kRest);
+            }
+            const auto restingFraction = [&](bool on, double& frac) {
+                auto e = rested->emitter();
+                e.surface.enabled = on;
+                rested->setEmitter(e);
+                for (int i = 0; i < 8; ++i) {
+                    rested->setEmitterTime(6.5f, 1.f / 60.f);
+                    frame();
+                }
+                std::vector<std::uint8_t> raw;
+                int mw = 0, mh = 0, bpp = 0;
+                if (!renderer.readGBufferAOV(VulkanRenderer::GBufferAOV::Motion, raw,
+                                             mw, mh, bpp))
+                    return false;
+                const auto* hf = reinterpret_cast<const std::uint16_t*>(raw.data());
+                const auto h2f = [](std::uint16_t v) {
+                    const std::uint32_t sign = std::uint32_t(v >> 15) << 31;
+                    const std::int32_t exp = (v >> 10) & 0x1F;
+                    const std::uint32_t man = v & 0x3FF;
+                    std::uint32_t bits;
+                    if (exp == 0) bits = sign;
+                    else if (exp == 31) bits = sign | 0x7F800000u | (man << 13);
+                    else bits = sign | (std::uint32_t(exp - 15 + 127) << 23) | (man << 13);
+                    float f;
+                    std::memcpy(&f, &bits, 4);
+                    return f;
+                };
+                std::vector<std::uint8_t> idRaw;
+                int iw = 0, ih = 0, ibpp = 0;
+                if (!renderer.readGBufferAOV(VulkanRenderer::GBufferAOV::Ids, idRaw,
+                                             iw, ih, ibpp) ||
+                    iw != mw)
+                    return false;
+                std::vector<std::uint16_t> ids(std::size_t(iw) * std::size_t(ih) * 4u);
+                std::memcpy(ids.data(), idRaw.data(), ids.size() * sizeof(std::uint16_t));
+                std::size_t fieldPx = 0, still = 0;
+                for (std::size_t p = 0; p * 4u + 3u < ids.size(); ++p) {
+                    const std::uint16_t en = ids[p * 4u + 0u];
+                    if (en == 0 || staticEntry[en]) continue;
+                    ++fieldPx;
+                    const float mx = h2f(hf[p * 4 + 0]), my = h2f(hf[p * 4 + 1]);
+                    if (std::sqrt(mx * mx + my * my) < 1e-5f) ++still;
+                }
+                if (fieldPx < 200) return false;
+                frac = double(still) / double(fieldPx);
+                return true;
+            };
+            double fracOn = 0, fracOff = 0;
+            const bool okM = restingFraction(false, fracOff) && restingFraction(true, fracOn);
+            check(okM, "motion AOV readback succeeded (F5 resting)");
+            if (okM) {
+                std::printf("[info] F5 zero-motion pixels: solve off %.1f%%, "
+                            "solve on %.1f%% of the field's own pixels\n",
+                            100.0 * fracOff, 100.0 * fracOn);
+                check(fracOff < 0.02,
+                      "with nothing resting, essentially every one of the field's "
+                      "pixels carries motion (the control)");
+                // A tenth of the field's pixels, not a third: ~30% of SLOTS are
+                // resting at this t, but a resting flake lies on a surface and
+                // covers a few pixels while the falling ones fill the column
+                // between the camera and it. What the assertion needs is that
+                // the number is decisively off the floor, and the floor here is
+                // an exact zero.
+                check(fracOn > 0.05 && fracOn > 50.0 * fracOff,
+                      "a RESTING particle writes pos == prevPos and reprojects onto "
+                      "itself — zero motion, which is the truth about a flake lying "
+                      "on a roof");
+            }
+        }
+
+        // ── (e) THE GATE: surface off must be EXACTLY the pre-F5 emitter ────
+        //
+        // Asserted on the DENSITY VOLUME, not on the framebuffer, and the F0
+        // amendment is why: 40k raster flakes with RT shadows and a temporal
+        // history do not reproduce byte for byte in this renderer even inside
+        // one process — the same-build control below measures that floor rather
+        // than pretending it is not there. The volume is integer fixed point
+        // scattered from the positions, so it is bit-exact, and the positions
+        // are the whole of what this gate is about: if the aux record, the bake
+        // or the solve perturbed the OFF path by one float, the volume would
+        // say so and nothing else would have to.
+        {
+            const auto capture = [&](bool on, std::vector<std::uint32_t>& vol) {
+                auto e = rested->emitter();
+                e.surface.enabled = on;
+                rested->setEmitter(e);
+                for (int i = 0; i < 12; ++i) {
+                    rested->setEmitterTime(5.0f, 1.f / 60.f);
+                    frame();
+                }
+                std::uint32_t res = 0;
+                const bool ok = renderer.readParticleDensityVolume(*rested, vol, res);
+                return ok && res == kVR;
+            };
+            std::vector<std::uint32_t> gOffA, gOn, gOffB;
+            const bool okG = capture(false, gOffA) && capture(true, gOn) &&
+                             capture(false, gOffB);
+            check(okG, "density volume readback succeeded (F5 gate)");
+            if (okG) {
+                std::size_t gateDiff = 0, onDiff = 0;
+                for (std::size_t i = 0; i < gOffA.size(); ++i) {
+                    if (gOffA[i] != gOffB[i]) ++gateDiff;
+                    if (gOffA[i] != gOn[i]) ++onDiff;
+                }
+                std::printf("[info] F5 gate: OFF -> ON -> OFF, the two OFF volumes "
+                            "differ in %zu voxels; ON differs in %zu\n",
+                            gateDiff, onDiff);
+                check(gateDiff == 0,
+                      "EmitterParams::Surface off reproduces the pre-F5 positions "
+                      "EXACTLY (the aux record, the bake and the solve are all "
+                      "behind one gate, and turning it on and off again leaves "
+                      "not one voxel moved)");
+                check(onDiff > 100,
+                      "...and turning it on does move them (the gate is not "
+                      "measuring a feature that never ran)");
+            }
+        }
+
+        // ── (f) THE SPLASH ──────────────────────────────────────────────────
+        // The ring's phase is encoded in the RADIUS the emitter writes, decoded
+        // by the billboard vertex stage against a threshold the pass computes at
+        // BOTH ends. The assertion is that the rings land where the drops do:
+        // they must be BELOW the field's own centre of mass on screen, because a
+        // splash is at the bottom of a fall and a drop is anywhere in it.
+        {
+            rested->setBillboardRepr(Color(0.80f, 0.86f, 0.95f), Color(0.7f, 0.78f, 0.9f),
+                                     /*intensity*/ 0.9f, /*sizeScale*/ 1.0f);
+            rested->billboardRepr().fadePower = 0.f;
+            rested->billboardRepr().sizeTaper = 0.f;
+            auto e = rested->emitter();
+            e.surface.enabled       = true;
+            e.surface.splashSeconds = 0.f;
+            rested->setEmitter(e);
+            for (int i = 0; i < 16; ++i) { rested->setEmitterTime(6.5f, 1.f / 60.f); frame(); }
+            const auto noSplash = renderer.readRGBPixels();
+
+            e.surface.splashSeconds = 0.6f;
+            e.surface.splashGrow    = 10.f;
+            rested->setEmitter(e);
+            for (int i = 0; i < 16; ++i) { rested->setEmitterTime(6.5f, 1.f / 60.f); frame(); }
+            const auto withSplash = renderer.readRGBPixels();
+
+            // Where the frame changed, weighted by how much.
+            double wsum = 0, ysum = 0;
+            std::size_t changed = 0;
+            const int stride = kW * 3;
+            for (int y = 0; y < kH; ++y)
+                for (int x = 0; x < kW; ++x) {
+                    const std::size_t i = std::size_t(y) * stride + std::size_t(x) * 3;
+                    if (i + 2 >= noSplash.size()) continue;
+                    int d = 0;
+                    for (int c = 0; c < 3; ++c)
+                        d = std::max(d, std::abs(int(withSplash[i + c]) - int(noSplash[i + c])));
+                    if (d < 6) continue;
+                    ++changed;
+                    wsum += d;
+                    ysum += double(d) * double(y);
+                }
+            const double meanY = wsum > 0.0 ? ysum / wsum : 0.0;
+            std::printf("[info] F5 splash: %zu pixels changed, weighted mean row "
+                        "%.1f of %d (the horizon of the plate/ground is below "
+                        "centre in this pose)\n", changed, meanY, kH);
+            check(changed > 200,
+                  "splashSeconds > 0 draws rings the drop-only build does not");
+            check(meanY > double(kH) * 0.5,
+                  "the rings are in the LOWER half of the frame — they are at the "
+                  "landing points, not spread through the falling column");
+
+            rested->billboardRepr().enabled = false;
+        }
+
+        scene.remove(*rested);
+        scene.remove(*plate);
+        box->visible = true;
+        for (int i = 0; i < 6; ++i) frame();
+    }
+
     // ── PHASE 2, checkpoint (d): a dust-free scene costs no pixels ──────────
     //
     // Cross-process, at a FIXED frame index, so the stochastic-per-frame-index

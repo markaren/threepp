@@ -379,6 +379,8 @@ int main(int argc, char** argv) {
     bool  rest       = false;// snow rests on the baked surface and fades
     bool  splash     = false;// rain + splash rings (implies --rain)
     bool  noLand     = false;// --no-land: the same scene with the solve OFF
+    bool  benchRest  = false;// A/B of the landing solve, both legs falling
+    bool  benchBake  = false;// A/B of the height bake, forced every frame
     bool  follow     = false;// toroidal follow, to exercise the bake re-anchor
     float dollyMps   = 0.f;  // --seq: walk the camera in a straight line
     std::uint32_t count = 300'000;
@@ -416,6 +418,8 @@ int main(int argc, char** argv) {
         // same lifetimes, with the landing solve switched OFF. One binary, one
         // seed, the pattern --no-lod set for F4.
         else if (a == "--no-land") noLand = true;
+        else if (a == "--bench-rest") { benchRest = true; rest = true; }
+        else if (a == "--bench-bake") { benchBake = true; rest = true; }
         else if (a == "--splash") { splash = true; rain = true; }
         else if (a == "--follow") follow = true;
         else if (a == "--dolly" && i + 1 < argc) dollyMps = float(std::atof(argv[++i]));
@@ -435,7 +439,8 @@ int main(int argc, char** argv) {
                   {{"title", std::string("Vulkan Deferred - Snow")},
                    {"size", std::pair<int, int>{1280, 720}},
                    {"vsync", false},
-                   {"headless", !shotPath.empty() || bench || benchLod || mvProbe || !seqDir.empty()}});
+                   {"headless", !shotPath.empty() || bench || benchLod || benchRest ||
+                                        benchBake || mvProbe || !seqDir.empty()}});
     VulkanRenderer renderer(canvas);
     renderer.setDlss(upscaler == "dlss");
     renderer.setFsr(upscaler == "fsr");
@@ -747,7 +752,8 @@ int main(int argc, char** argv) {
     std::unique_ptr<OrbitControls> controls;
     std::unique_ptr<RendererSettingsUi> ui;
     std::unique_ptr<KeyAdapter> keys;
-    if (shotPath.empty() && !bench && !benchLod && !mvProbe && seqDir.empty()) {
+    if (shotPath.empty() && !bench && !benchLod && !benchRest && !benchBake &&
+        !mvProbe && seqDir.empty()) {
         controls = std::make_unique<OrbitControls>(camera, canvas);
         controls->target.copy(target);
         controls->update();
@@ -914,6 +920,83 @@ int main(int argc, char** argv) {
         row("GPU raster gbuf", offA.gbuf, onA.gbuf);
         row("GPU deferred shade", offA.shade, onA.shade);
         row("GPU taa resolve", offA.taa, onA.taa);
+        row("GPU overlay (billboards)", offA.overlay, onA.overlay);
+        row("GPU whole frame", offA.gpu, onA.gpu);
+        row("CPU whole frame", offA.cpu, onA.cpu);
+        return 0;
+    }
+
+    // ── Bench: what does F5's landing solve cost, and what does a bake? ─────
+    // Both legs FALLING, both with the shelter in the scene, differing ONLY in
+    // EmitterParams::Surface::enabled — the same honest shape --bench-lod has,
+    // and for the same reason: the parked/falling bench structurally cannot
+    // express a feature that only exists while particles move. Switching it is
+    // one setEmitter call, i.e. a re-pack of a 128 B push block and a 64 B
+    // record: no structural change, no rebuild, no device idle between legs
+    // beyond each leg's own warm-up.
+    //
+    // --bench-bake measures the other half. Leg B nudges the field a tenth of a
+    // millimetre every frame, which moves the bake's key and forces a re-trace
+    // of the WHOLE height map on every frame; nothing else about the frame
+    // changes at that displacement, so the delta is one bake. In real use a
+    // bake happens on a structural change or a follow snap and the steady state
+    // records nothing at all — so this is a cost per EVENT, not per frame.
+    if (benchRest || benchBake) {
+        constexpr int kPairs = 6, kWarm = 40, kMeasure = 90;
+        constexpr float kDt = 1.f / 60.f;
+        struct Acc { double emit = 0, density = 0, gbuf = 0, shade = 0,
+                            overlay = 0, gpu = 0, cpu = 0; };
+        Acc onA{}, offA{};
+        int frame = 0;
+        const auto leg = [&](bool on, Acc& acc) {
+            if (benchRest) {
+                auto e = snow->emitter();
+                e.surface.enabled = on;
+                snow->setEmitter(e);
+            }
+            const float nudge = (benchBake && on) ? 1e-4f : 0.f;
+            for (int i = 0; i < kWarm; ++i) {
+                snow->position.x += nudge;
+                snow->setEmitterTime(float(frame++) * kDt, kDt);
+                canvas.animateOnce([&] { renderer.render(scene, camera); });
+            }
+            Acc a{};
+            for (int i = 0; i < kMeasure; ++i) {
+                snow->position.x += nudge;
+                snow->setEmitterTime(float(frame++) * kDt, kDt);
+                canvas.animateOnce([&] { renderer.render(scene, camera); });
+                const auto t = renderer.lastFrameTimings();
+                a.emit += t.particleEmitMs;   a.density += t.particleDensityMs;
+                a.gbuf += t.rasterGbufMs;     a.shade   += t.pathTraceMs;
+                a.overlay += t.overlayMs;     a.gpu     += t.gpuTotalMs;
+                a.cpu  += t.cpuFrameMs;
+            }
+            acc.emit    += a.emit / kMeasure;    acc.density += a.density / kMeasure;
+            acc.gbuf    += a.gbuf / kMeasure;    acc.shade   += a.shade / kMeasure;
+            acc.overlay += a.overlay / kMeasure; acc.gpu     += a.gpu / kMeasure;
+            acc.cpu     += a.cpu / kMeasure;
+        };
+        for (int p = 0; p < kPairs; ++p) { leg(false, offA); leg(true, onA); }
+        const double inv = 1.0 / double(kPairs);
+        const auto sz = renderer.size();
+        std::printf("\n[%s] %dx%d, %u particles, %d interleaved pairs of %d frames, "
+                    "AE pinned, vsync off\n", benchBake ? "bench-bake" : "bench-rest",
+                    sz.width(), sz.height(), unsigned(count), kPairs, kMeasure);
+        std::printf("  %-26s %10s %10s %10s\n", "ms/frame",
+                    benchBake ? "no bake" : "no land",
+                    benchBake ? "bake/frm" : "resting", "delta");
+        const auto row = [&](const char* n, double off, double on) {
+            std::printf("  %-26s %10.4f %10.4f %10.4f\n", n, off * inv, on * inv,
+                        (on - off) * inv);
+        };
+        // TP_ParticleEmit brackets the bake AND the emit dispatch, deliberately
+        // (see recordParticleFieldEmit): a bake happens on a handful of frames
+        // out of thousands, and a timer of its own would read zero on almost
+        // all of them and hide the spike among the frames that did nothing.
+        row("GPU emit (+bake)", offA.emit, onA.emit);
+        row("GPU density scatter", offA.density, onA.density);
+        row("GPU raster gbuf", offA.gbuf, onA.gbuf);
+        row("GPU deferred shade", offA.shade, onA.shade);
         row("GPU overlay (billboards)", offA.overlay, onA.overlay);
         row("GPU whole frame", offA.gpu, onA.gpu);
         row("CPU whole frame", offA.cpu, onA.cpu);
