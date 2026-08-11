@@ -2084,7 +2084,7 @@ int main(int argc, char** argv) {
         // so the slack below is a guard for less quiet scenes, not headroom
         // this one needs.
         check(onDiff >= 0 && ctlDiff >= 0 &&
-                      onDiff <= std::max<long long>(ctlDiff, long long(onA.size()) / 1000),
+                      onDiff <= std::max<long long>(ctlDiff, static_cast<long long>(onA.size()) / 1000),
               "a frozen billboard field is reproducible in process (its "
               "brightness hash and its re-derived age are pure functions of "
               "seed, slot and t)");
@@ -2262,7 +2262,7 @@ int main(int argc, char** argv) {
         std::printf("[info] billboards off again: bytes vs the original off "
                     "frame %lld (control %lld)\n", backDiff, ctlDiff);
         check(backDiff >= 0 &&
-                      backDiff <= std::max<long long>(ctlDiff, long long(offA.size()) / 1000),
+                      backDiff <= std::max<long long>(ctlDiff, static_cast<long long>(offA.size()) / 1000),
               "a field with BillboardRepr OFF is unaffected by the pass");
 
         scene.remove(*sparks);
@@ -2355,7 +2355,7 @@ int main(int argc, char** argv) {
             camera->position.set(300.f, 3.f, 300.f);
             camera->lookAt(Vector3(300.f, 4.f, 292.f));
 
-            flakes->meshRepr();// (no proxy yet — the billboard half is enough here)
+            (void) flakes->meshRepr();// (no proxy yet — the billboard half is enough here)
             flakes->setBillboardRepr(Color(0.95f, 0.96f, 1.f), Color(0.9f, 0.92f, 0.96f),
                                      /*intensity*/ 1.2f, /*sizeScale*/ 1.4f);
             flakes->billboardRepr().fadePower = 0.f;
@@ -2389,7 +2389,7 @@ int main(int argc, char** argv) {
             std::printf("[info] follow wrap at 300 m from the field: %lld bytes "
                         "differ (same-scene control %lld)\n", followDiff, followCtl);
             check(followDiff > 10 * std::max<long long>(followCtl, 1) &&
-                          followDiff > long long(awayNoFollow.size()) / 200,
+                          followDiff > static_cast<long long>(awayNoFollow.size()) / 200,
                   "EmitterParams::follow puts the weather AROUND the camera 300 m "
                   "from the field's own position — the fixed-patch defect, measured");
 
