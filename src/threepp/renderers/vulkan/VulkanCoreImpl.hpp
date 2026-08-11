@@ -2409,6 +2409,21 @@ namespace threepp {
         // never started) the CUDA writes into the exported memory.
         void disableSoftBodyInterop(const Mesh& mesh);
 
+        // F6: the same idea one abstraction up — a whole FIELD's positions,
+        // exported once and filled device-to-device every frame. Thin: the pass
+        // owns the state, the gate and the fallback (ParticleFieldPass::
+        // enableInterop); this converts its record to the public handle type.
+        // Valid BEFORE the first frame: the pass (and, inside it, the field's
+        // device state and its exported allocation) is brought up on demand, so
+        // an application arms interop at setup and no frame ever runs with an
+        // Interop field whose copy is not registered.
+        VulkanRenderer::ParticleFieldInteropHandle
+        enableParticleFieldInterop(ParticleField& field, std::function<void()> deviceCopy) {
+            ensureParticleFieldPass();
+            const auto e = particleFieldPass_->enableInterop(field, std::move(deviceCopy));
+            return {e.osHandle, e.sizeBytes};
+        }
+
         // Definition moved to VulkanGeometryState.hpp.
         using GeomRefreshOp = vulkan::impl::GeomRefreshOp;
 
@@ -2829,6 +2844,10 @@ namespace threepp {
         // FieldDesc SSBO. Same window and same reason as
         // prepareInstanceExpansion: post-fence, pre-record.
         void prepareParticleFields(uint32_t frame);
+        // Bring up the ParticleField pass if it does not exist yet. Called from
+        // ensureHybridResources on the ordinary path and from
+        // enableParticleFieldInterop, which must work before the first frame.
+        void ensureParticleFieldPass();
 
         // Publish each field's device-side live count into its draw command.
         // Head of the frame command buffer, before any consumer reads it.

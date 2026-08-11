@@ -410,6 +410,27 @@ void VulkanRenderer::Impl::fitProbeGridToScene() {
             probeGI_->setGridBounds(mn, mx);
         }
 
+// The ParticleField pass, created on demand. Extracted from
+// ensureHybridResources so that enableParticleFieldInterop can bring it up
+// BEFORE the first frame: an application must be able to export a field's
+// positions and arm its device copy at setup, rather than polling for a frame
+// in which the field renders nothing and the renderer complains that no copy
+// was registered.
+void VulkanRenderer::Impl::ensureParticleFieldPass() {
+
+    if (particleFieldPass_) return;
+    particleFieldPass_ = std::make_unique<vulkan::ParticleFieldPass>(
+            *ctx, [this](Buffer&& b) { retire(std::move(b)); },
+            // The density volume is an IMAGE and is named by every view's
+            // descriptor set, so it retires on the same frame-serial rule as
+            // everything else.
+            [this](Image2D&& i) { retire(std::move(i)); },
+            [this](uint32_t w, uint32_t h, uint32_t d, VkFormat fmt,
+                   VkImageUsageFlags usage, const char* name) {
+                return createImage3D(w, h, d, fmt, usage, name);
+            });
+}
+
 void VulkanRenderer::Impl::ensureGbufDummyMS() {
             if (gbufDummyMSCreated_) return;
             const VkFormat fmts[5] = {VK_FORMAT_R16G16B16A16_SFLOAT, VK_FORMAT_D32_SFLOAT,
@@ -552,18 +573,7 @@ void VulkanRenderer::Impl::ensureHybridResources() {
             }
             // ParticleField device state. Same retire contract again: a field
             // that left the scene may still be named by an in-flight frame.
-            if (!particleFieldPass_) {
-                particleFieldPass_ = std::make_unique<vulkan::ParticleFieldPass>(
-                        *ctx, [this](Buffer&& b) { retire(std::move(b)); },
-                        // The density volume is an IMAGE and is named by every
-                        // view's descriptor set, so it retires on the same
-                        // frame-serial rule as everything else.
-                        [this](Image2D&& i) { retire(std::move(i)); },
-                        [this](uint32_t w, uint32_t h, uint32_t d, VkFormat fmt,
-                               VkImageUsageFlags usage, const char* name) {
-                            return createImage3D(w, h, d, fmt, usage, name);
-                        });
-            }
+            ensureParticleFieldPass();
             // MSAA render pass + pipelines — only built when opted in, and
             // rebuilt when the sample count changes (2↔4) or MSAA is turned
             // off (torn down; the 1× path above is untouched either way).

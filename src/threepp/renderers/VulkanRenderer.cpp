@@ -1809,6 +1809,12 @@ namespace threepp {
         return core()->enableSoftBodyInterop(mesh, std::move(deviceCopy));
     }
 
+    VulkanRenderer::ParticleFieldInteropHandle
+    VulkanRenderer::enableParticleFieldInterop(ParticleField& field,
+                                               std::function<void()> deviceCopy) {
+        return core()->enableParticleFieldInterop(field, std::move(deviceCopy));
+    }
+
     void VulkanRenderer::setDeferredVolumetrics(float density, float anisotropy) {
         pimpl_->deferredVolDensity_ = std::max(density, 0.f);
         pimpl_->deferredVolAniso_   = std::clamp(anisotropy, -0.95f, 0.95f);

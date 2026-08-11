@@ -48,7 +48,17 @@ ParticleField::ParticleField(const Config& config)
     : Mesh(makePlaceholderGeometry(), MeshBasicMaterial::create()),
       config_(config) {
 
-    if (config_.ownership == Ownership::Renderer) {
+    if (config_.ownership == Ownership::Interop) {
+        // No host staging either, and for the same reason as Renderer below:
+        // the positions are written on the device by a foreign API and the host
+        // never sees them. The one path that needs a staging block is the
+        // no-external-memory fallback, and setHostFallback() allocates it there
+        // — so a working Interop field costs the host nothing at all.
+        //
+        // liveCount stays 0 rather than becoming capacity: unlike the stateless
+        // emitter, a sim HAS a real live count, only the application knows it,
+        // and it publishes it with setLiveCount() every frame.
+    } else if (config_.ownership == Ownership::Renderer) {
         // No host staging at all: the positions are written by the device and
         // the host never sees them. Allocating capacity * 16 B of unreachable
         // staging for a 1M-particle weather field would be 16 MB of memory
@@ -72,12 +82,6 @@ std::shared_ptr<ParticleField> ParticleField::create(const Config& config) {
                 "its final capacity and is never resized (see the churn contract in "
                 "ParticleField.hpp)");
     }
-    if (config.ownership == Ownership::Interop) {
-        throw std::invalid_argument(
-                "ParticleField::create: Ownership::Interop (CUDA zero-copy) is declared "
-                "but not yet wired; use Ownership::HostRing (a host memcpy per frame) or "
-                "Ownership::Renderer (a device compute emitter)");
-    }
     return std::make_shared<ParticleField>(config);
 }
 
@@ -93,6 +97,19 @@ void ParticleField::submit(const void* pxVec4Array, std::uint32_t n) {
                 "ParticleField::submit: this field is Ownership::Renderer — its positions "
                 "are written on the device by the emitter. Use setEmitter()/"
                 "setEmitterTime(), or create the field with Ownership::HostRing");
+    }
+    // Same rule, one exception. An Interop field's positions are written device
+    // to device by the foreign API that imported the renderer's exported
+    // buffer, so host bytes handed in here would be written to a block nothing
+    // reads — except on a device that cannot export at all, where the renderer
+    // has said so and switched this field to the host ring (see hostFallback).
+    if (config_.ownership == Ownership::Interop && !hostFallback_) {
+        throw std::invalid_argument(
+                "ParticleField::submit: this field is Ownership::Interop — its positions "
+                "are written device-to-device by the foreign API that imported the "
+                "renderer's exported buffer (VulkanRenderer::enableParticleFieldInterop). "
+                "Publish the count with setLiveCount(); submit() is legal here only after "
+                "the renderer reports hostFallback()");
     }
     if (n > config_.capacity) n = config_.capacity;
     if (n > 0) {

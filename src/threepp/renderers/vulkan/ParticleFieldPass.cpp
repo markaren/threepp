@@ -27,6 +27,22 @@ namespace {
             VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT |
             VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
 
+    // F6: an Interop field's ring slot is the DESTINATION of the head-of-frame
+    // snapshot, so it adds TRANSFER_DST — and it is device-local (no kHostWrite):
+    // nothing on the host ever writes it.
+    constexpr VkBufferUsageFlags kPositionUsageInterop =
+            kPositionUsage | VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+
+    // F6: the EXPORTED allocation. TRANSFER_SRC is the only usage the renderer
+    // itself needs — it is copied, never bound — and STORAGE is there so a
+    // future phase can point a shader at it without re-exporting. Deliberately
+    // NO SHADER_DEVICE_ADDRESS: createExternalBuffer allocates its dedicated
+    // memory without VK_MEMORY_ALLOCATE_DEVICE_ADDRESS_BIT, and a buffer that
+    // asks for an address on memory that was not allocated for one is invalid.
+    constexpr VkBufferUsageFlags kExternalPositionUsage =
+            VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
+            VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
+
     // Counts: TRANSFER_SRC because §1.3's cleanest liveCount → instanceCount
     // route is a 4-byte device copy into a VkDrawIndirectCommand; INDIRECT so a
     // future consumer can dispatch off it directly; STORAGE + device address so
@@ -186,6 +202,10 @@ ParticleFieldPass::~ParticleFieldPass() {
     // queue is being torn down alongside us.
     for (auto& [_, st] : states_) destroyState(*st);
     states_.clear();
+    // F6: exported allocations of fields swept too recently for the
+    // frame-serial rule to have freed them yet.
+    for (auto& r : extRetire_) vulkan::destroyExternalBuffer(ctx_.device(), r.buf);
+    extRetire_.clear();
     for (auto& b : descBufs_) destroyBuffer(ctx_.allocator(), b);
     for (auto& b : bbParamBufs_) destroyBuffer(ctx_.allocator(), b);
     for (auto& b : bbViewBufs_)  destroyBuffer(ctx_.allocator(), b);
@@ -233,6 +253,10 @@ void ParticleFieldPass::destroyState(State& st) {
     for (auto& b : st.indirect) destroyBuffer(ctx_.allocator(), b);
     for (auto& b : st.bbIndirect) destroyBuffer(ctx_.allocator(), b);
     destroyBuffer(ctx_.allocator(), st.orientations);
+    // The exported allocation is outside VMA (dedicated + export info), so it
+    // has its own destroy — and on Windows that call is also what closes the NT
+    // handle we handed the importer, which CUDA duplicated on import.
+    destroyExternalBuffer(ctx_.device(), st.posExt);
     for (auto& b : st.heights) destroyBuffer(ctx_.allocator(), b);
     destroyImage2D(ctx_.allocator(), ctx_.device(), st.density);
     destroyImage2D(ctx_.allocator(), ctx_.device(), st.densityLin);
@@ -508,8 +532,35 @@ ParticleFieldPass::State& ParticleFieldPass::ensureState(const ParticleField& fi
         st->devPrevPositions = createBuffer(ctx_.allocator(), ctx_.device(), bytes,
                                             kPositionUsage, VMA_MEMORY_USAGE_AUTO, 0);
     }
+    // ── F6: Ownership::Interop ──────────────────────────────────────────────
+    // The exported allocation, and the gate. A device with no external-memory
+    // extension cannot export, cannot be imported by CUDA, and has no honest
+    // interop path at all — so the field becomes a HostRing field in every
+    // respect but its declared mode, is TOLD so (a field that renders nothing
+    // and says nothing is the outcome this exists to prevent), and its own
+    // submit() stops throwing so the caller's pull leg can feed it.
+    if (field.config().ownership == ParticleField::Ownership::Interop) {
+        if (ctx_.externalMemorySupported()) {
+            st->interopOwned = true;
+            st->posExt = vulkan::createExternalBuffer(ctx_.physicalDevice(), ctx_.device(),
+                                                      bytes, kExternalPositionUsage);
+        } else {
+            std::fprintf(stderr,
+                         "[ParticleField] Ownership::Interop asked for on a device with no "
+                         "external-memory extension (VK_KHR_external_memory_win32/fd): no "
+                         "buffer can be exported and no device-to-device copy is possible. "
+                         "Falling back to the host ring — feed this field with submit() "
+                         "(ParticleField::hostFallback() is now true).\n");
+            const_cast<ParticleField&>(field).setHostFallback();
+        }
+    }
+
     for (std::uint32_t s = 0; s < kSlots; ++s) {
-        if (!st->rendererOwned) {
+        if (st->interopOwned) {
+            // Device-local: the snapshot's destination, never host-mapped.
+            st->positions[s] = createBuffer(ctx_.allocator(), ctx_.device(), bytes,
+                                            kPositionUsageInterop, VMA_MEMORY_USAGE_AUTO, 0);
+        } else if (!st->rendererOwned) {
             st->positions[s] = createBuffer(ctx_.allocator(), ctx_.device(), bytes,
                                             kPositionUsage, VMA_MEMORY_USAGE_AUTO, kHostWrite);
         }
@@ -534,6 +585,33 @@ ParticleFieldPass::State& ParticleFieldPass::ensureState(const ParticleField& fi
     auto* raw = st.get();
     states_.emplace(&field, std::move(st));
     return *raw;
+}
+
+// ── F6: export one field's positions and arm its per-frame copy ─────────────
+// Unlike enableSoftBodyInterop this does NOT drain the device, and the
+// difference is structural rather than an oversight: that call SWAPS a buffer
+// that in-flight frames' dispatches are already reading and rewrites the
+// descriptor sets naming it. Here the exported allocation is created with the
+// field's state, before anything can name it, and is never swapped — the
+// shaders read the snapshot ring, whose addresses are republished every frame
+// anyway. Nothing in flight is invalidated, so there is nothing to wait for.
+ParticleFieldPass::InteropExport
+ParticleFieldPass::enableInterop(ParticleField& field, std::function<void()> deviceCopy) {
+
+    State& st = ensureState(field);
+    if (field.config().ownership != ParticleField::Ownership::Interop) {
+        std::fprintf(stderr,
+                     "[ParticleField] enableParticleFieldInterop on a field that was not "
+                     "created with Ownership::Interop — ignored. Ownership is fixed at "
+                     "create, like capacity.\n");
+        return {};
+    }
+    // The fallback case already printed why, and hostFallback() is set: the
+    // caller sees a null handle and keeps its host path.
+    if (!st.interopOwned) return {};
+
+    st.deviceCopy = std::move(deviceCopy);
+    return {st.posExt.osHandle, static_cast<std::size_t>(st.posExt.size)};
 }
 
 void ParticleFieldPass::ensureDescCapacity(std::uint32_t frame, std::uint32_t count) {
@@ -795,6 +873,7 @@ void ParticleFieldPass::prepareFrame(std::uint64_t serial, std::uint32_t frame,
     densityVols_.clear();
     densityDispatch_.clear();
     emitDispatch_.clear();
+    interopCopies_.clear();
     auxScratch_.clear();
     // F5: the bake list is rebuilt from scratch every frame and is EMPTY on the
     // overwhelming majority of them — a map is re-traced only when the key that
@@ -805,6 +884,19 @@ void ParticleFieldPass::prepareFrame(std::uint64_t serial, std::uint32_t frame,
     // Reclaim descriptor sets whose last referencing frame has provably
     // retired — the same `R + kFramesInFlight <= S` rule the resource retire
     // queue enforces, and the reason the sweep below queues rather than frees.
+    // F6: and the same rule for a swept field's exported allocation.
+    if (!extRetire_.empty()) {
+        auto it = extRetire_.begin();
+        while (it != extRetire_.end()) {
+            if (it->serial + impl::kFramesInFlight <= serial) {
+                vulkan::destroyExternalBuffer(ctx_.device(), it->buf);
+                it = extRetire_.erase(it);
+            } else {
+                ++it;
+            }
+        }
+    }
+
     if (!densitySetRetire_.empty() && densityPool_ != VK_NULL_HANDLE) {
         auto it = densitySetRetire_.begin();
         while (it != densitySetRetire_.end()) {
@@ -830,10 +922,42 @@ void ParticleFieldPass::prepareFrame(std::uint64_t serial, std::uint32_t frame,
         // and under Ownership::Renderer even that is gone: there are no host
         // positions to send, and the count is capacity, written once per slot
         // and never again (dataSerial only moves on submit/setLiveCount).
+        // ── F6: the foreign device copy, and this frame's snapshot ──────────
+        // The callback is invoked HERE — post-fence, pre-record — and is
+        // required to be synchronous, so by the time it returns the exported
+        // allocation holds this step's positions and the command buffer that
+        // will snapshot them has not been submitted yet. That host ordering is
+        // the whole synchronisation story: there is no external semaphore, and
+        // the only overlap left is the foreign API writing while an EARLIER
+        // frame's snapshot copy reads — GPU to GPU, and benign in exactly the
+        // sense 5584d2ab records (worst case one copy blends two sim steps of
+        // grain positions, which no eye and no motion vector can resolve).
+        if (st.interopOwned) {
+            if (st.deviceCopy) {
+                st.deviceCopy();
+            } else if (!st.interopUnarmedLogged) {
+                st.interopUnarmedLogged = true;
+                std::fprintf(stderr,
+                             "[ParticleField] an Ownership::Interop field is in the scene but "
+                             "no device copy is registered — it will render nothing. Call "
+                             "VulkanRenderer::enableParticleFieldInterop(field, copy) once, "
+                             "after importing the handle it returns.\n");
+            }
+            if (live > 0) {
+                // The live PREFIX only, so a 300k-capacity field pouring its
+                // first 5k grains copies 80 KB and not 4.8 MB. The tail holds
+                // whatever the previous snapshot left; nothing reads past
+                // instanceCount, which is this same number.
+                interopCopies_.push_back({st.posExt.handle, st.positions[slot].handle,
+                                          VkDeviceSize(live) * sizeof(ParticlePos)});
+                st.snapped[slot] = true;
+            }
+        }
+
         const std::uint64_t want = r.field->dataSerial();
         if (st.slotSerial[slot] != want) {
             st.slotSerial[slot] = want;
-            if (!st.rendererOwned && live > 0) {
+            if (!st.rendererOwned && !st.interopOwned && live > 0) {
                 uploadHostVisible(ctx_.allocator(), st.positions[slot],
                                   r.field->hostPositions().data(),
                                   VkDeviceSize(live) * sizeof(ParticlePos));
@@ -866,7 +990,11 @@ void ParticleFieldPass::prepareFrame(std::uint64_t serial, std::uint32_t frame,
         cmd.firstInstance = 0u;
         uploadHostVisible(ctx_.allocator(), st.indirect[slot], &cmd, sizeof(cmd));
 
-        const bool prevValid = st.slotSerial[prevSlot] != 0;
+        // An interop field's positions change on the device every frame without
+        // dataSerial moving, so its "has this slot ever been filled" answer
+        // comes from the snapshot bookkeeping rather than from the host serial.
+        const bool prevValid = st.interopOwned ? st.snapped[prevSlot]
+                                               : st.slotSerial[prevSlot] != 0;
 
         FieldDescGpu d{};
         const auto& world = r.field->matrixWorld->elements;
@@ -1381,6 +1509,15 @@ void ParticleFieldPass::prepareFrame(std::uint64_t serial, std::uint32_t frame,
             for (auto& b : st.bbIndirect) retireOrDestroy(b);
             for (auto& b : st.heights) retireOrDestroy(b);
             retireOrDestroy(st.orientations);
+            // The exported allocation cannot go through the renderer's retire
+            // queue (that takes Buffers; this one is outside VMA), so it takes
+            // the same rule by hand. The application's CUDA import of it is the
+            // application's to release — dropping a field whose handle is still
+            // imported is its bug, not one this sweep can fix.
+            if (st.posExt.handle != VK_NULL_HANDLE) {
+                extRetire_.push_back({st.posExt, serial});
+                st.posExt = vulkan::ExternalBuffer{};
+            }
             // The set goes back to the pool by hand — the pool is exactly
             // kMaxDensityFields deep, so leaking a set would cap the scene at
             // four dust fields for the life of the process rather than four at
@@ -1569,6 +1706,42 @@ void ParticleFieldPass::recordDensityScatter(VkCommandBuffer cb) {
     mb.srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
     mb.dstStageMask  = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
     mb.dstAccessMask = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT;
+    vkCmdPipelineBarrier2(cb, &dep);
+}
+
+// ── F6: exported allocation → this frame's ring slot ────────────────────────
+// One copy per interop field, then ONE barrier for all of them — the copies are
+// independent and the copy engine is happy to overlap them, exactly as
+// recordCounts argues for its own batch.
+//
+// The destination stages are everything that can read a position this frame:
+// the vertex stage (the mesh proxy and the billboard quad both pull positions
+// by device address), compute (the density scatter), and transfer (nothing
+// today, but the AABB/BLAS phase's copy is on this list the day it lands).
+void ParticleFieldPass::recordInteropSnapshot(VkCommandBuffer cb) {
+
+    if (interopCopies_.empty()) return;
+
+    for (const InteropCopy& c : interopCopies_) {
+        VkBufferCopy region{};
+        region.srcOffset = 0;
+        region.dstOffset = 0;
+        region.size      = c.bytes;
+        vkCmdCopyBuffer(cb, c.src, c.dst, 1, &region);
+    }
+
+    VkMemoryBarrier2 mb{};
+    mb.sType         = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2;
+    mb.srcStageMask  = VK_PIPELINE_STAGE_2_COPY_BIT;
+    mb.srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
+    mb.dstStageMask  = VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT |
+                      VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT |
+                      VK_PIPELINE_STAGE_2_ALL_TRANSFER_BIT;
+    mb.dstAccessMask = VK_ACCESS_2_SHADER_STORAGE_READ_BIT | VK_ACCESS_2_TRANSFER_READ_BIT;
+    VkDependencyInfo dep{};
+    dep.sType              = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
+    dep.memoryBarrierCount = 1;
+    dep.pMemoryBarriers    = &mb;
     vkCmdPipelineBarrier2(cb, &dep);
 }
 

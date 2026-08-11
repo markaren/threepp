@@ -32,9 +32,27 @@
 // gives torn positions mid-read and consecutive frames rendering the same
 // physics state (the duplicate-then-skip judder 5584d2ab fixed for tets).
 //
-// Ownership::Interop (§1.4a) will NOT use this ring — one ExternalBuffer,
-// single-instance across all slots, because that overlap is GPU-to-GPU and
-// benign. The ring exists only because a HOST write races an in-flight read.
+// Ownership::Interop keeps the plan's invariant where the plan states it — the
+// EXPORTED buffer the foreign API writes is ONE buffer, single-instance across
+// all slots, because that overlap is GPU-to-GPU and benign (5584d2ab) — but it
+// does still use this ring, as the destination of a device-to-device SNAPSHOT
+// taken at the head of every frame (see recordInteropSnapshot). The ring is
+// device-local there, never host-mapped, and it buys two things a direct read
+// of the exported buffer cannot:
+//
+//   • prevPositions. Motion vectors need the PREVIOUS state, and the foreign
+//     copy lands on the HOST timeline (it is synchronous, in prepareFrame),
+//     so anything the renderer copies afterwards inside the same frame's
+//     command buffer would capture the state that just arrived — every motion
+//     vector exactly zero. Two consecutive snapshots taken by the renderer's
+//     OWN queue are a genuinely consecutive pair, which is the whole point.
+//   • A stable frame. Consumers (G-buffer draw, density scatter, and whatever
+//     a later BLAS phase adds) then read a buffer no foreign API is writing,
+//     so the field cannot change under them mid-frame. The unsynchronised
+//     overlap is confined to the one copy at the head of the frame.
+//
+// It costs one device-local copy of capacity*16 B per frame — bandwidth on the
+// board, never over the bus, which is the entire point of the phase.
 //
 // Ownership::Renderer does not use it either, for exactly the same reason: its
 // writer is particle_emit.comp, recorded into the same command buffer as every
@@ -365,10 +383,47 @@ namespace threepp::vulkan {
         ParticleFieldPass(const ParticleFieldPass&) = delete;
         ParticleFieldPass& operator=(const ParticleFieldPass&) = delete;
 
+        // What enableInterop hands back: the exported OS handle (a Win32 NT
+        // handle owned by us, a POSIX fd owned by the importer) and the size to
+        // import. Deliberately this pass's own type rather than
+        // VulkanRenderer::ParticleFieldInteropHandle — the pass does not
+        // include the renderer's public header, and the Impl converts.
+        struct InteropExport {
+            void*       osHandle  = nullptr;
+            std::size_t sizeBytes = 0;
+        };
+
+        // ── F6: Ownership::Interop ──────────────────────────────────────────
+        // Export this field's positions allocation and register the copy that
+        // fills it. Once per field, from the application, OUTSIDE any frame:
+        // it may allocate the field's device state, which is why it is not a
+        // per-frame call.
+        //
+        // `deviceCopy` is invoked once per frame from prepareFrame — the
+        // post-fence, pre-record window — and must be SYNCHRONOUS (the
+        // soft-body path's copyTetToVulkan() is the template: cuMemcpyDtoDAsync
+        // + cuStreamSynchronize). That contract is what orders the foreign
+        // write against this frame's snapshot without an external semaphore:
+        // the copy has completed by the time the callback returns, and the
+        // command buffer that reads it has not been submitted yet.
+        //
+        // Returns {} when the device cannot export memory. The field has then
+        // been put into ParticleField::hostFallback() and told the user why, so
+        // the caller's pull-to-host leg can feed it unchanged.
+        InteropExport enableInterop(ParticleField& field, std::function<void()> deviceCopy);
+
         // The whole per-frame job (steps 1-4 above). `serial` is the monotonic
         // frame serial being recorded; `frame` is the frame-in-flight index.
         void prepareFrame(std::uint64_t serial, std::uint32_t frame,
                           const std::vector<Rec>& fields);
+
+        // ── F6: the head-of-frame device-to-device snapshot ─────────────────
+        // One vkCmdCopyBuffer per Interop field, exported buffer → this frame's
+        // ring slot, closed with a barrier that covers every consumer (vertex
+        // pull, density scatter, transfer). MUST be recorded before all of
+        // them, and before recordCounts for tidiness rather than correctness.
+        // No-op — not one command — when no field is Interop-owned.
+        void recordInteropSnapshot(VkCommandBuffer cb);
 
         // Publish liveCount into each field's VkDrawIndirectCommand, on the
         // DEVICE: a 4-byte copy into byte offset 4 of the command, which is
@@ -532,6 +587,32 @@ namespace threepp::vulkan {
             bool          ownerTracked = false;
             std::uint32_t capacity     = 0;
             bool          rendererOwned = false;
+            // ── F6: Ownership::Interop ──────────────────────────────────────
+            // The field asked for interop AND the device can export, so the
+            // ring above is DEVICE-LOCAL and is filled by a copy from posExt
+            // rather than by a host memcpy. False on an interop field that fell
+            // back (no external memory), which is then a HostRing field in
+            // every respect except the exception submit() no longer throws.
+            bool                 interopOwned = false;
+            // THE single instance the plan's §1.4(a) invariant is about: one
+            // exported allocation for all frames in flight, written by the
+            // foreign API, never ringed. Its usage carries no device address —
+            // createExternalBuffer allocates without
+            // VK_MEMORY_ALLOCATE_DEVICE_ADDRESS_BIT, so a SHADER_DEVICE_ADDRESS
+            // buffer on that memory would be invalid — which is a second reason
+            // the shaders read the snapshot and not this.
+            vulkan::ExternalBuffer posExt{};
+            // Invoked once per frame in prepareFrame. Null until enableInterop.
+            std::function<void()>  deviceCopy;
+            // An interop field with no copy registered renders an empty scene
+            // and there is nothing in the pixels to say why, so it says so
+            // itself — ONCE, not once per frame.
+            bool                 interopUnarmedLogged = false;
+            // Has this slot ever been snapshotted? The serial gate below cannot
+            // answer that for an interop field: dataSerial only moves when the
+            // HOST changes the live count, while the device positions change
+            // every frame with nobody on the host any the wiser.
+            bool                 snapped[kSlots]{};
             Buffer        positions[kSlots]{};
             // ── Ownership::Renderer: ONE device-local buffer, plus its
             // prevPositions sibling. NOT the kSlots ring.
@@ -742,6 +823,27 @@ namespace threepp::vulkan {
             std::uint64_t   serial;
         };
         std::vector<RetiredSet> densitySetRetire_;
+
+        // F6: the same rule for a swept field's EXPORTED allocation, which the
+        // renderer's retire queue cannot take (it holds Buffers, and this one is
+        // outside VMA). Destroying it inline would free memory an in-flight
+        // frame's snapshot copy still reads — and, on Windows, close a handle
+        // under the importer.
+        struct RetiredExternal {
+            vulkan::ExternalBuffer buf;
+            std::uint64_t          serial;
+        };
+        std::vector<RetiredExternal> extRetire_;
+
+        // F6: this frame's snapshot copies, resolved in prepareFrame so
+        // recording touches no ParticleField and no map — the same shape as
+        // EmitDispatch / BakeDispatch / DensityDispatch above.
+        struct InteropCopy {
+            VkBuffer     src   = VK_NULL_HANDLE;// the exported allocation
+            VkBuffer     dst   = VK_NULL_HANDLE;// this frame's ring slot
+            VkDeviceSize bytes = 0;
+        };
+        std::vector<InteropCopy> interopCopies_;
 
         std::vector<DensityVolumeDesc> densityVols_;
         std::vector<DensityDispatch>   densityDispatch_;

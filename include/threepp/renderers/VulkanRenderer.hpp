@@ -752,6 +752,35 @@ namespace threepp {
         SoftBodyInteropHandle enableSoftBodyInterop(const Mesh& mesh, std::function<void()> deviceCopy);
         void disableSoftBodyInterop(const Mesh& mesh);
 
+        // ── GPU-particle zero-copy interop (CUDA → Vulkan), plan F6 ──────────
+        // Export an Ownership::Interop ParticleField's positions allocation and
+        // arm the per-frame device-to-device copy that fills it. Import the
+        // returned handle once (CU_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_WIN32 /
+        // _OPAQUE_FD, CUDA_EXTERNAL_MEMORY_DEDICATED — the export is a dedicated
+        // allocation) and copy straight out of the sim: for PhysX PBD that is
+        // PxParticleBuffer::getPositionInvMasses(), and ParticlePos is
+        // byte-identical to PxVec4, so it is one cuMemcpyDtoD with no repack.
+        //
+        // `deviceCopy` runs once per frame inside render(), before recording,
+        // and MUST be synchronous (cuMemcpyDtoDAsync + cuStreamSynchronize) —
+        // that host ordering is what sequences the foreign write against the
+        // frame that reads it, in the absence of a shared semaphore.
+        //
+        // CALL IT AFTER THE FIRST render(): the field's device state and this
+        // renderer's field pass are both created on the frame the field is
+        // first seen. Same polling pattern as enableSoftBodyInterop; a null
+        // handle means "not yet, or not on this device".
+        //
+        // Returns {} when the device has no external-memory extension. The
+        // field is then in ParticleField::hostFallback() and wants submit(),
+        // and the renderer has said so on stderr.
+        struct ParticleFieldInteropHandle {
+            void*  osHandle  = nullptr;
+            size_t sizeBytes = 0;
+        };
+        ParticleFieldInteropHandle enableParticleFieldInterop(ParticleField& field,
+                                                              std::function<void()> deviceCopy);
+
         // Hybrid-mode raster overlay: post-TAA wireframe / Line / layer-tagged
         // meshes drawn over the shaded image, depth-tested against the raster
         // G-buffer. -1 (default) disables layer selection.

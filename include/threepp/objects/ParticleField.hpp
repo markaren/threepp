@@ -41,8 +41,35 @@
 //     the CPU never walks a particle. Its half of the API is setEmitter() /
 //     setEmitterTime(); submit() throws.
 //
-//   Ownership::Interop   — declared, not implemented (CUDA zero-copy); create()
-//     still rejects it.
+//   Ownership::Interop   — a FOREIGN DEVICE API owns the positions. The
+//     renderer allocates the field's positions as an EXPORTABLE dedicated
+//     allocation and hands the OS handle to the application
+//     (VulkanRenderer::enableParticleFieldInterop), which imports it into CUDA
+//     and does one cuMemcpyDtoD per frame straight out of its sim — for PhysX
+//     PBD that is PxParticleBuffer::getPositionInvMasses(), and ParticlePos is
+//     byte-identical to PxVec4 by design, so the copy is a memcpy with no
+//     repack and no host round trip. Its half of the API is setLiveCount() plus
+//     the renderer-side enable; submit() and setEmitter() throw.
+//
+//     ── THE ACCEPTED TRADE: AN INTEROP FIELD IS NOT REPRODUCIBLE ────────────
+//     GPU PhysX is not bit-deterministic — its solver's atomics and its
+//     work partitioning both reorder run to run — so a field whose positions
+//     come out of one FORFEITS the byte-reproducibility contract every other
+//     mode holds. Two runs of the same scene with the same seed will differ,
+//     and no amount of care in this class can prevent it, because the bytes
+//     are authored on the other side of the import.
+//
+//     Use it for SIM-COUPLED CONTENT ONLY — grains on a belt, debris, a
+//     fluid — where the sim IS the truth being rendered. Weather (snow, rain,
+//     embers, dust) stays on Ownership::Renderer's analytic emitter for
+//     exactly this reason: it is a closed form, it is reproducible, and it
+//     costs nothing on the bus either. Sensor goldens over an Interop field
+//     must be tolerance gates, never byte compares.
+//
+//     Everything derived from the emitter's closed form is also unavailable
+//     here — age fade, size taper, colour ramp, surface landing — because
+//     there is no closed form to evaluate. An Interop field is positions, a
+//     radius and an orientation set, and that is the whole model.
 //
 // setOrientations() belongs to NEITHER half: an orientation set is authored
 // once with the field and is orthogonal to who advances the positions, so a
@@ -590,9 +617,9 @@ namespace threepp {
             std::uint32_t seed = 20260812u;
         };
 
-        // Throws std::invalid_argument on capacity == 0 or on an ownership mode
-        // this phase does not implement (Interop). See the churn contract in the
-        // file header before choosing a capacity.
+        // Throws std::invalid_argument on capacity == 0. See the churn contract
+        // in the file header before choosing a capacity — and, for
+        // Ownership::Interop, the reproducibility forfeit stated there.
         static std::shared_ptr<ParticleField> create(const Config& config);
 
         [[nodiscard]] const Config& config() const { return config_; }
@@ -654,7 +681,36 @@ namespace threepp {
         // THROWS on an Ownership::Renderer field: its positions live in device
         // memory the host cannot map, and a silent no-op here would render an
         // empty field with no diagnostic anywhere.
+        //
+        // THROWS on an Ownership::Interop field for the same reason — its
+        // positions are written by the foreign device API, and host data
+        // submitted here would go nowhere — with ONE exception:
+        // hostFallback() below.
         void submit(const void* pxVec4Array, std::uint32_t n);
+
+        // ── Ownership::Interop: the fallback leg ────────────────────────────
+        // Set by the RENDERER, once, when it discovers that this device cannot
+        // export memory to a foreign API at all (no VK_KHR_external_memory_*),
+        // so no import and no device-to-device copy is possible. The renderer
+        // then allocates the field exactly as it would a HostRing one and says
+        // so on stderr; submit() becomes legal, and an application that kept
+        // its pull-to-host path (it should — it is the A/B leg) feeds the field
+        // through it with no other change. A field that silently rendered
+        // nothing on such a device would be the worst of the three outcomes,
+        // which is why this exists rather than a throw at create().
+        //
+        // An APPLICATION may set it too, for the mirror-image failure: the
+        // export succeeded but the foreign API refused to IMPORT it, so again
+        // nothing will ever write the device buffer and the host path is the
+        // only one left. It is a one-way switch either way.
+        [[nodiscard]] bool hostFallback() const { return hostFallback_; }
+        // The staging block is allocated HERE rather than at construction, so
+        // an Interop field that works costs the host not one byte for the
+        // ability to fall back.
+        void setHostFallback() {
+            hostFallback_ = true;
+            host_.resize(config_.capacity);
+        }
 
         // ── Ownership::Renderer ─────────────────────────────────────────────
         // Install the closed-form trajectory the device emitter evaluates. Free
@@ -752,6 +808,7 @@ namespace threepp {
         Config        config_;
         std::uint32_t liveCount_  = 0;
         std::uint64_t dataSerial_ = 1;// bumped by submit/setLiveCount
+        bool          hostFallback_ = false;// Interop on a device that cannot export
 
         std::vector<ParticlePos> host_;
         std::vector<std::int16_t> ori_;// snorm16x4, 4 per particle

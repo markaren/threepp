@@ -1969,6 +1969,14 @@ void VulkanRenderer::Impl::recordParticleDensityScatter(VkCommandBuffer cb, uint
 // no dependants, its own phase, and it must precede every consumer.
 void VulkanRenderer::Impl::recordParticleFieldCounts(VkCommandBuffer cb) {
             if (!particleFieldPass_) return;
+            // F6: the interop snapshot shares this call site rather than
+            // earning a third one. Both are head-of-frame device copies that
+            // must precede every consumer of a field, and this site is already
+            // the one that guarantees that — it runs before the density
+            // scatter and before any view's raster pass. The snapshot goes
+            // FIRST of the two because the counts copy publishes how much of
+            // what it just wrote is live.
+            particleFieldPass_->recordInteropSnapshot(cb);
             particleFieldPass_->recordCounts(cb);
         }
 
