@@ -222,6 +222,7 @@ ParticleFieldPass::~ParticleFieldPass() {
     if (densityPipeLayout_) vkDestroyPipelineLayout(d, densityPipeLayout_, nullptr);
     if (convertPipe_)       vkDestroyPipeline(d, convertPipe_, nullptr);
     if (convertPipeLayout_) vkDestroyPipelineLayout(d, convertPipeLayout_, nullptr);
+    destroyBuffer(ctx_.allocator(), densityMajorants_);
     // The pool frees its sets; the sets are not freed individually anywhere.
     if (densityPool_)       vkDestroyDescriptorPool(d, densityPool_, nullptr);
     if (densityDsLayout_)   vkDestroyDescriptorSetLayout(d, densityDsLayout_, nullptr);
@@ -327,11 +328,14 @@ void ParticleFieldPass::ensureDensityPipeline() {
           "vkCreateDescriptorSetLayout(particle density)");
 
     // Sized for kMaxDensityFields fields, each holding TWO sets: the scatter's
-    // (1 storage image) and the convert's (2 storage images). A field past
-    // that gets no volume, which densityOverflowCount reports.
-    VkDescriptorPoolSize ps{};
-    ps.type            = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
-    ps.descriptorCount = kMaxDensityFields * 3u;
+    // (1 storage image) and the convert's (2 storage images + the shared
+    // majorant SSBO). A field past that gets no volume, which
+    // densityOverflowCount reports.
+    VkDescriptorPoolSize ps[2]{};
+    ps[0].type            = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+    ps[0].descriptorCount = kMaxDensityFields * 3u;
+    ps[1].type            = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    ps[1].descriptorCount = kMaxDensityFields;
     VkDescriptorPoolCreateInfo dpci{};
     dpci.sType         = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
     // FREE_DESCRIPTOR_SET: a destroyed field returns its sets to the pool. The
@@ -339,22 +343,34 @@ void ParticleFieldPass::ensureDensityPipeline() {
     // that created and dropped four dust fields could never have a fifth.
     dpci.flags         = VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT;
     dpci.maxSets       = kMaxDensityFields * 2u;
-    dpci.poolSizeCount = 1;
-    dpci.pPoolSizes    = &ps;
+    dpci.poolSizeCount = 2;
+    dpci.pPoolSizes    = ps;
     check(vkCreateDescriptorPool(d, &dpci, nullptr, &densityPool_),
           "vkCreateDescriptorPool(particle density)");
 
-    // Convert set layout: binding 0 = r32ui src, binding 1 = r16f dst.
-    VkDescriptorSetLayoutBinding cb[2]{};
-    for (std::uint32_t i = 0; i < 2; ++i) {
+    // The majorant buffer. Allocated here rather than per field because it is
+    // ONE array indexed by the frame's volume slot, and because the convert
+    // sets that name it are written once per field and never rewritten — a
+    // buffer that could be reallocated would make them stale.
+    densityMajorants_ = createBuffer(
+            ctx_.allocator(), ctx_.device(),
+            VkDeviceSize(kMaxDensityFields) * sizeof(std::uint32_t),
+            VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+            VMA_MEMORY_USAGE_AUTO, 0);
+
+    // Convert set layout: binding 0 = r32ui src, binding 1 = r16f dst,
+    // binding 2 = the majorant array.
+    VkDescriptorSetLayoutBinding cb[3]{};
+    for (std::uint32_t i = 0; i < 3; ++i) {
         cb[i].binding         = i;
         cb[i].descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
         cb[i].descriptorCount = 1;
         cb[i].stageFlags      = VK_SHADER_STAGE_COMPUTE_BIT;
     }
+    cb[2].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
     VkDescriptorSetLayoutCreateInfo clci{};
     clci.sType        = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-    clci.bindingCount = 2;
+    clci.bindingCount = 3;
     clci.pBindings    = cb;
     check(vkCreateDescriptorSetLayout(d, &clci, nullptr, &convertDsLayout_),
           "vkCreateDescriptorSetLayout(particle density convert)");
@@ -394,11 +410,19 @@ void ParticleFieldPass::ensureDensityPipeline() {
     vkDestroyShaderModule(d, mod, nullptr);
     check(r, "vkCreateComputePipelines(particle_density_scatter)");
 
-    // The convert pipeline: no push constants, two storage images, 4³ groups.
+    // The convert pipeline: two storage images, the majorant SSBO, 4³ groups,
+    // and ONE push constant — the volume's slot, which is the only thing about
+    // the dispatch that is not already in its set.
+    VkPushConstantRange cpcr{};
+    cpcr.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+    cpcr.offset     = 0;
+    cpcr.size       = sizeof(std::uint32_t);
     VkPipelineLayoutCreateInfo cplci{};
-    cplci.sType          = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
-    cplci.setLayoutCount = 1;
-    cplci.pSetLayouts    = &convertDsLayout_;
+    cplci.sType                  = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+    cplci.setLayoutCount         = 1;
+    cplci.pSetLayouts            = &convertDsLayout_;
+    cplci.pushConstantRangeCount = 1;
+    cplci.pPushConstantRanges    = &cpcr;
     check(vkCreatePipelineLayout(d, &cplci, nullptr, &convertPipeLayout_),
           "vkCreatePipelineLayout(particle density convert)");
 
@@ -478,7 +502,11 @@ bool ParticleFieldPass::ensureDensityVolume(State& st, const ParticleField& fiel
     VkDescriptorImageInfo li{};
     li.imageView   = st.densityLin.view;
     li.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
-    VkWriteDescriptorSet w[3]{};
+    VkDescriptorBufferInfo mi{};
+    mi.buffer = densityMajorants_.handle;
+    mi.offset = 0;
+    mi.range  = VK_WHOLE_SIZE;
+    VkWriteDescriptorSet w[4]{};
     for (auto& x : w) {
         x.sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
         x.descriptorCount = 1;
@@ -493,7 +521,11 @@ bool ParticleFieldPass::ensureDensityVolume(State& st, const ParticleField& fiel
     w[2].dstSet     = st.convertSet;
     w[2].dstBinding = 1;
     w[2].pImageInfo = &li;
-    vkUpdateDescriptorSets(ctx_.device(), 3, w, 0, nullptr);
+    w[3].dstSet          = st.convertSet;
+    w[3].dstBinding      = 2;
+    w[3].descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    w[3].pBufferInfo     = &mi;
+    vkUpdateDescriptorSets(ctx_.device(), 4, w, 0, nullptr);
     return true;
 }
 
@@ -1331,6 +1363,10 @@ void ParticleFieldPass::prepareFrame(std::uint64_t serial, std::uint32_t frame,
                 densityVols_.push_back(v);
 
                 DensityDispatch dd{};
+                // densityVols_ was just pushed, so this volume is its last
+                // element — the same index the UBO, the descriptor array and
+                // the majorant buffer all use.
+                dd.volIndex   = static_cast<std::uint32_t>(densityVols_.size() - 1u);
                 dd.set        = st.densitySet;
                 dd.image      = st.density.image;
                 dd.linImage   = st.densityLin.image;
@@ -1670,11 +1706,18 @@ void ParticleFieldPass::recordDensityScatter(VkCommandBuffer cb) {
     for (const DensityDispatch& dd : densityDispatch_) {
         vkCmdClearColorImage(cb, dd.image, VK_IMAGE_LAYOUT_GENERAL, &zero, 1, &range);
     }
+    // The majorants go with them: an atomicMax accumulator that is not zeroed
+    // would hold the high-water mark of the whole session, which is a valid
+    // bound but a uselessly loose one the moment a plume disperses. Every slot
+    // is zeroed, not just the live ones — a slot whose field went away must not
+    // leave a stale bound behind for the next field that lands in it.
+    vkCmdFillBuffer(cb, densityMajorants_.handle, 0, VK_WHOLE_SIZE, 0u);
 
-    // 2. Clear → atomic accumulate.
+    // 2. Clear → atomic accumulate. ALL_TRANSFER rather than CLEAR because the
+    //    majorant zeroing above is a fill, not a clear.
     VkMemoryBarrier2 mb{};
     mb.sType         = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2;
-    mb.srcStageMask  = VK_PIPELINE_STAGE_2_CLEAR_BIT;
+    mb.srcStageMask  = VK_PIPELINE_STAGE_2_ALL_TRANSFER_BIT;
     mb.srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
     mb.dstStageMask  = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
     mb.dstAccessMask = VK_ACCESS_2_SHADER_STORAGE_READ_BIT | VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
@@ -1713,21 +1756,28 @@ void ParticleFieldPass::recordDensityScatter(VkCommandBuffer cb) {
 
     // 5. r32ui → r16f, one dispatch per field — hardware trilinear for the
     //    deferred shade's per-pixel dust march is the whole point of the copy.
+    //    The same dispatch reduces the volume's maximum into the majorant
+    //    buffer — it is already reading every voxel, so the bound the sensor
+    //    needs costs one shared-memory reduction and one atomic per workgroup.
     vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, convertPipe_);
     for (const DensityDispatch& dd : densityDispatch_) {
         vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_COMPUTE, convertPipeLayout_,
                                 0, 1, &dd.convertSet, 0, nullptr);
+        vkCmdPushConstants(cb, convertPipeLayout_, VK_SHADER_STAGE_COMPUTE_BIT,
+                           0, sizeof(dd.volIndex), &dd.volIndex);
         const std::uint32_t g = (dd.res + kConvertLocalSize - 1u) / kConvertLocalSize;
         vkCmdDispatch(cb, g, g, g);
     }
 
     // 6. Both volumes → every read this frame: the froxel passes' manual
     //    trilinear on the uint volume (all views — they ride this one write)
-    //    and the shade's hardware trilinear on the r16f mirror.
+    //    and the shade's hardware trilinear on the r16f mirror. The majorants
+    //    are read by the LIDAR pass, which is a SEPARATE submission and is
+    //    ordered by submission order, not by this barrier.
     mb.srcStageMask  = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
     mb.srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
     mb.dstStageMask  = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
-    mb.dstAccessMask = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT;
+    mb.dstAccessMask = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT | VK_ACCESS_2_SHADER_STORAGE_READ_BIT;
     vkCmdPipelineBarrier2(cb, &dep);
 }
 

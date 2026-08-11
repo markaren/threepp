@@ -1,5 +1,6 @@
 #include "threepp/renderers/vulkan/LidarScanner.hpp"
 
+#include "threepp/renderers/vulkan/ParticleFieldPass.hpp"
 #include "threepp/renderers/vulkan/VulkanContext.hpp"
 
 #include "threepp/renderers/vulkan/shaders/lidar.rgen.spv.h"
@@ -29,11 +30,34 @@ namespace threepp::vulkan {
 
     }// namespace
 
+    static_assert(LidarScanner::kDensityVolumes == kMaxDensityFields,
+                  "LIDAR density array must match the renderer's volume cap.");
+
     LidarScanner::LidarScanner(VulkanContext& ctx) : ctx_(ctx) {
         createDescriptorLayout();
         createPipeline();
         createSbt();
         createCommandObjects();
+
+        VkSamplerCreateInfo sci{};
+        sci.sType        = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
+        sci.magFilter    = VK_FILTER_NEAREST;
+        sci.minFilter    = VK_FILTER_NEAREST;
+        sci.mipmapMode   = VK_SAMPLER_MIPMAP_MODE_NEAREST;
+        sci.addressModeU = sci.addressModeV = sci.addressModeW =
+                VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+        check(vkCreateSampler(ctx_.device(), &sci, nullptr, &densitySampler_),
+              "vkCreateSampler(lidar density)");
+
+        // The stand-in majorant array. Host-visible and written once: 16 bytes
+        // that are never read by any shader (counts.x is 0 whenever this is
+        // bound) but must be a valid descriptor all the same.
+        const std::array<uint32_t, kDensityVolumes> zeros{};
+        majorantFallback_ = createBuffer(
+                ctx_.allocator(), ctx_.device(), sizeof(zeros),
+                VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, VMA_MEMORY_USAGE_AUTO,
+                VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT);
+        uploadHostVisible(ctx_.allocator(), majorantFallback_, zeros.data(), sizeof(zeros));
     }
 
     LidarScanner::~LidarScanner() {
@@ -48,6 +72,8 @@ namespace threepp::vulkan {
             destroyBuffer(ctx_.allocator(), s.beamBuf);
         }
         if (cmdPool_)  vkDestroyCommandPool(d, cmdPool_, nullptr);
+        if (densitySampler_) vkDestroySampler(d, densitySampler_, nullptr);
+        destroyBuffer(ctx_.allocator(), majorantFallback_);
         destroyBuffer(ctx_.allocator(), sbtBuf_);
         if (pipeline_) vkDestroyPipeline(d, pipeline_, nullptr);
         if (descPool_) vkDestroyDescriptorPool(d, descPool_, nullptr);
@@ -63,7 +89,12 @@ namespace threepp::vulkan {
         //   3 = BeamBuf      (SSBO, read)
         //   4 = ResultBuf    (SSBO, write)
         //   5 = FogUbo       (uniform, read — shared with main RT's GpuFogUbo)
-        std::array<VkDescriptorSetLayoutBinding, 6> b{};
+        //   6 = PdMajorantBuf (SSBO, read — per-volume delta-tracking bounds)
+        //  67 = particle density volumes (r32ui, sampled)   ┐ the deferred
+        //  68 = ParticleDensityUbo (boxes + medium params)  ┘ set's numbers,
+        // reused verbatim so shaders/particle_density.glsl is included here
+        // UNMODIFIED — one medium model, one header, two consumers.
+        std::array<VkDescriptorSetLayoutBinding, 9> b{};
         b[0].binding = 0;
         b[0].descriptorType = VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR;
         b[0].descriptorCount = 1;
@@ -89,6 +120,18 @@ namespace threepp::vulkan {
         b[5].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
         b[5].descriptorCount = 1;
         b[5].stageFlags = VK_SHADER_STAGE_RAYGEN_BIT_KHR;
+        b[6].binding = 6;
+        b[6].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        b[6].descriptorCount = 1;
+        b[6].stageFlags = VK_SHADER_STAGE_RAYGEN_BIT_KHR;
+        b[7].binding = 67;
+        b[7].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        b[7].descriptorCount = kDensityVolumes;
+        b[7].stageFlags = VK_SHADER_STAGE_RAYGEN_BIT_KHR;
+        b[8].binding = 68;
+        b[8].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+        b[8].descriptorCount = 1;
+        b[8].stageFlags = VK_SHADER_STAGE_RAYGEN_BIT_KHR;
 
         VkDescriptorSetLayoutCreateInfo dlci{};
         dlci.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
@@ -118,13 +161,15 @@ namespace threepp::vulkan {
         // One set per scan slot: a set referenced by a pending submit must not
         // be updated (VUID-vkUpdateDescriptorSets-None-03047), and every
         // dispatch rewrites the TLAS + desc bindings.
-        std::array<VkDescriptorPoolSize, 3> ps{};
+        std::array<VkDescriptorPoolSize, 4> ps{};
         ps[0].type = VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR;
         ps[0].descriptorCount = kScanSlots;
         ps[1].type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-        ps[1].descriptorCount = 4 * kScanSlots;
+        ps[1].descriptorCount = 5 * kScanSlots;
         ps[2].type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-        ps[2].descriptorCount = kScanSlots;
+        ps[2].descriptorCount = 2 * kScanSlots;
+        ps[3].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        ps[3].descriptorCount = kDensityVolumes * kScanSlots;
 
         VkDescriptorPoolCreateInfo dpci{};
         dpci.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
@@ -360,7 +405,8 @@ namespace threepp::vulkan {
                                            VkAccelerationStructureKHR tlas,
                                            VkBuffer geomDescsBuffer, VkDeviceSize geomDescsSize,
                                            VkBuffer matDescsBuffer, VkDeviceSize matDescsSize,
-                                           VkBuffer fogUbo, VkDeviceSize fogUboSize) {
+                                           VkBuffer fogUbo, VkDeviceSize fogUboSize,
+                                           const DensityBinding& density) {
         VkWriteDescriptorSetAccelerationStructureKHR asi{};
         asi.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET_ACCELERATION_STRUCTURE_KHR;
         asi.accelerationStructureCount = 1;
@@ -381,7 +427,32 @@ namespace threepp::vulkan {
         fogInfo.offset = 0;
         fogInfo.range  = fogUboSize ? fogUboSize : VK_WHOLE_SIZE;
 
-        std::array<VkWriteDescriptorSet, 4> w{};
+        // ── ParticleField density (parent plan phase 3) ─────────────────────
+        // Every slot filled, live volumes first and the caller's dummy behind
+        // them, exactly as the deferred set does it — a set with a hole in it
+        // is a validation error the moment it is bound, whether or not the
+        // shader reads that slot.
+        std::array<VkDescriptorImageInfo, kDensityVolumes> pdInfos{};
+        for (uint32_t i = 0; i < kDensityVolumes; ++i) {
+            pdInfos[i].sampler     = densitySampler_;
+            pdInfos[i].imageView   = (density.views && i < density.viewCount)
+                                             ? density.views[i]
+                                             : VK_NULL_HANDLE;
+            pdInfos[i].imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+        }
+        VkDescriptorBufferInfo pdUboInfo{};
+        pdUboInfo.buffer = density.ubo;
+        pdUboInfo.offset = 0;
+        pdUboInfo.range  = density.uboSize ? density.uboSize : VK_WHOLE_SIZE;
+
+        VkDescriptorBufferInfo majInfo{};
+        majInfo.buffer = density.majorants ? density.majorants : majorantFallback_.handle;
+        majInfo.offset = 0;
+        majInfo.range  = (density.majorants && density.majorantsSize)
+                                 ? density.majorantsSize
+                                 : VK_WHOLE_SIZE;
+
+        std::array<VkWriteDescriptorSet, 7> w{};
         w[0].sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
         w[0].pNext           = &asi;
         w[0].dstSet          = slot.descSet;
@@ -410,6 +481,27 @@ namespace threepp::vulkan {
         w[3].descriptorType  = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
         w[3].pBufferInfo     = &fogInfo;
 
+        w[4].sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        w[4].dstSet          = slot.descSet;
+        w[4].dstBinding      = 6;
+        w[4].descriptorCount = 1;
+        w[4].descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        w[4].pBufferInfo     = &majInfo;
+
+        w[5].sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        w[5].dstSet          = slot.descSet;
+        w[5].dstBinding      = 67;
+        w[5].descriptorCount = kDensityVolumes;
+        w[5].descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        w[5].pImageInfo      = pdInfos.data();
+
+        w[6].sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        w[6].dstSet          = slot.descSet;
+        w[6].dstBinding      = 68;
+        w[6].descriptorCount = 1;
+        w[6].descriptorType  = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+        w[6].pBufferInfo     = &pdUboInfo;
+
         vkUpdateDescriptorSets(ctx_.device(),
                                static_cast<uint32_t>(w.size()), w.data(),
                                0, nullptr);
@@ -420,6 +512,7 @@ namespace threepp::vulkan {
                             VkBuffer geomDescsBuffer, VkDeviceSize geomDescsSize,
                             VkBuffer matDescsBuffer, VkDeviceSize matDescsSize,
                             VkBuffer fogUbo, VkDeviceSize fogUboSize,
+                            const DensityBinding& density,
                             const vulkan_lidar::LidarPushConstants& pc,
                             const vulkan_lidar::LidarBeam* beams, uint32_t numBeams,
                             vulkan_lidar::LidarResult* outResults) {
@@ -431,7 +524,7 @@ namespace threepp::vulkan {
         // the same here as it always did.
         const int slot = dispatch(queue, tlas, geomDescsBuffer, geomDescsSize,
                                   matDescsBuffer, matDescsSize,
-                                  fogUbo, fogUboSize, pc, beams, numBeams);
+                                  fogUbo, fogUboSize, density, pc, beams, numBeams);
         collect(slot, outResults);
     }
 
@@ -440,6 +533,7 @@ namespace threepp::vulkan {
                                VkBuffer geomDescsBuffer, VkDeviceSize geomDescsSize,
                                VkBuffer matDescsBuffer, VkDeviceSize matDescsSize,
                                VkBuffer fogUbo, VkDeviceSize fogUboSize,
+                               const DensityBinding& density,
                                const vulkan_lidar::LidarPushConstants& pc,
                                const vulkan_lidar::LidarBeam* beams, uint32_t numBeams) {
 
@@ -475,7 +569,11 @@ namespace threepp::vulkan {
         const uint32_t maxReturns   = std::max(pc.maxReturns, 1u);
         const uint32_t samples      = std::max(pc.samplesPerBeam, 1u);
         const uint32_t slotsPerBeam = maxReturns * samples;
-        const uint32_t totalSlots   = numBeams * slotsPerBeam;
+        // The paired trace doubles the launch AND the result rows: the clean
+        // leg occupies the second half, at the same stride, so the caller can
+        // difference row i against row i + numBeams * slotsPerBeam.
+        const uint32_t legs         = ((pc.flags & vulkan_lidar::kLidarFlagPairedClean) != 0u) ? 2u : 1u;
+        const uint32_t totalSlots   = numBeams * slotsPerBeam * legs;
 
         // Reserve first: collect() owes the caller a result of the right length
         // whether or not anything was traced.
@@ -483,13 +581,25 @@ namespace threepp::vulkan {
         s.submitted = false;
         s.slots     = totalSlots;
 
+        // The density set members are on this list because the rgen STATICALLY
+        // reads binding 68 (pd.counts) and every slot of 67, whatever the scene
+        // holds — an incomplete set there is a validation error at bind time,
+        // not a quiet zero. A caller that has not built them yet gets the same
+        // all-miss result an unbuilt TLAS gets.
         const bool sceneReady = (tlas != VK_NULL_HANDLE) &&
                                 (geomDescsBuffer != VK_NULL_HANDLE) &&
                                 (matDescsBuffer != VK_NULL_HANDLE) &&
-                                (fogUbo != VK_NULL_HANDLE);
+                                (fogUbo != VK_NULL_HANDLE) &&
+                                (density.ubo != VK_NULL_HANDLE) &&
+                                (density.views != nullptr) &&
+                                (density.viewCount >= kDensityVolumes);
         if (!sceneReady) return handle;
 
-        ensureCapacity(s, numBeams, slotsPerBeam);
+        // Sized by the RESULT count, which is what the leg factor multiplies.
+        // The beam buffer comes out one leg too large and is uploaded with
+        // numBeams rows regardless — the clean leg reads the SAME beams, which
+        // is the whole point of pairing, so there is nothing extra to send.
+        ensureCapacity(s, numBeams * legs, slotsPerBeam);
 
         // Upload beams (mapped, sequential write + flush).
         uploadHostVisible(ctx_.allocator(), s.beamBuf, beams,
@@ -497,7 +607,7 @@ namespace threepp::vulkan {
 
         updateSceneBindings(s, tlas, geomDescsBuffer, geomDescsSize,
                             matDescsBuffer, matDescsSize,
-                            fogUbo, fogUboSize);
+                            fogUbo, fogUboSize, density);
 
         VkCommandBuffer cmd = s.cmdBuf;
 
@@ -542,7 +652,7 @@ namespace threepp::vulkan {
                                    VK_SHADER_STAGE_MISS_BIT_KHR,
                            0, sizeof(pc), &pc);
         ctx_.rt().cmdTraceRays(cmd, &rgenRgn_, &missRgn_, &hitRgn_, &callRgn_,
-                                numBeams, 1, 1);
+                                numBeams * legs, 1, 1);
 
         // Barrier: RT shader writes to resultBuf_ → transfer read.
         VkBufferMemoryBarrier2 rtToCopy{};
@@ -635,7 +745,8 @@ namespace threepp::vulkan {
                 r.intensity   = 0.f;
                 r.instanceId  = -1;
                 r.returnNo    = 0;
-                r._pad[0] = r._pad[1] = 0.f;
+                r._pad0      = 0.f;
+                r.returnKind = 0;
             }
             return true;
         }

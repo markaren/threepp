@@ -503,6 +503,18 @@ namespace threepp::vulkan {
         // keeps a steady-state dust scene out of the VUID-03047 zone entirely.
         [[nodiscard]] std::uint64_t densityGeneration() const { return densityGen_; }
 
+        // ── The per-volume MAJORANT (parent plan phase 3) ───────────────────
+        // kMaxDensityFields uints in Q20.12 — max sigma_t over each bound
+        // volume, in densityVolumes() order — reduced on the GPU by the
+        // convert dispatch and zeroed at the head of every scatter block. The
+        // LIDAR's delta tracking needs a bound it can trust per frame, and the
+        // volume is the only thing that knows one; nothing here is authored.
+        //
+        // VK_NULL_HANDLE until the first field asks for a density volume, so
+        // callers must handle its absence (there is nothing to bound then).
+        [[nodiscard]] VkBuffer     densityMajorants() const { return densityMajorants_.handle; }
+        [[nodiscard]] VkDeviceSize densityMajorantsSize() const { return densityMajorants_.size; }
+
         // Any field contributed density this frame. Drives heteroActive, the
         // froxel-pass gate and the shade's flags bit 11 — the "real, small,
         // easy-to-miss" wiring plan §3.3 calls out.
@@ -724,6 +736,10 @@ namespace threepp::vulkan {
             float           boxInvSize[3]{};
             std::uint32_t   capacity   = 0;
             float           sigmaFixed = 0.f;
+            // This volume's slot in ParticleDensityUbo / densityVolumes(), and
+            // therefore its slot in the majorant buffer. Pushed to the convert
+            // dispatch, which reduces the volume's maximum into it.
+            std::uint32_t   volIndex   = 0;
         };
 
         VulkanContext&  ctx_;
@@ -811,6 +827,11 @@ namespace threepp::vulkan {
         VkDescriptorSetLayout convertDsLayout_   = VK_NULL_HANDLE;
         VkPipelineLayout      convertPipeLayout_ = VK_NULL_HANDLE;
         VkPipeline            convertPipe_       = VK_NULL_HANDLE;
+        // kMaxDensityFields Q20.12 majorants, device-local, written by the
+        // convert dispatch and read by the LIDAR pass. Allocated alongside the
+        // convert pipeline (a dust-free scene allocates neither) and never
+        // resized, so the per-field convert sets that name it are written once.
+        Buffer                densityMajorants_{};
 
         // A destroyed field's descriptor set, held until no in-flight frame can
         // still name it. Same rule as VulkanRetireQueue (serial +

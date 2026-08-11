@@ -53,6 +53,36 @@ namespace threepp::vulkan {
     class LidarScanner {
 
     public:
+        // How many ParticleField density volumes a scan can see at once.
+        // KEEP IN SYNC with vulkan::kMaxDensityFields (ParticleFieldPass.hpp)
+        // and kMaxDensityFields in shaders/particle_density.glsl; a
+        // static_assert in the .cpp ties this one to the first.
+        static constexpr uint32_t kDensityVolumes = 4;
+
+        // The world-anchored ParticleField density volumes this scan should
+        // delta-track through (parent plan phase 3). The scanner binds exactly
+        // what the deferred shade binds, at the same binding numbers and from
+        // the same source of truth, so the sensor and the picture agree about
+        // where the dust is by construction rather than by convention.
+        //
+        // EVERY view slot must be a valid image view — the caller fills unused
+        // ones with its 1x1x1 dummy, as the deferred set does. What actually
+        // gates sampling is `ubo`'s counts.x, which is 0 on a scene with no
+        // dust and makes the whole medium a no-op.
+        struct DensityBinding {
+            VkBuffer     ubo     = VK_NULL_HANDLE;// ParticleDensityUboGpu
+            VkDeviceSize uboSize = 0;
+            // kDensityVolumes r32ui volume views, VK_IMAGE_LAYOUT_GENERAL.
+            const VkImageView* views = nullptr;
+            uint32_t           viewCount = 0;
+            // Per-volume Q20.12 majorants (ParticleFieldPass::densityMajorants).
+            // VK_NULL_HANDLE until some field has asked for a volume; the
+            // scanner then binds its own zeroed stand-in, which reads as "no
+            // bound medium" and costs nothing.
+            VkBuffer     majorants     = VK_NULL_HANDLE;
+            VkDeviceSize majorantsSize = 0;
+        };
+
         explicit LidarScanner(VulkanContext& ctx);
         ~LidarScanner();
 
@@ -77,6 +107,7 @@ namespace threepp::vulkan {
                   VkBuffer geomDescsBuffer, VkDeviceSize geomDescsSize,
                   VkBuffer matDescsBuffer, VkDeviceSize matDescsSize,
                   VkBuffer fogUbo, VkDeviceSize fogUboSize,
+                  const DensityBinding& density,
                   const vulkan_lidar::LidarPushConstants& pc,
                   const vulkan_lidar::LidarBeam* beams, uint32_t numBeams,
                   vulkan_lidar::LidarResult* outResults);
@@ -111,6 +142,7 @@ namespace threepp::vulkan {
                      VkBuffer geomDescsBuffer, VkDeviceSize geomDescsSize,
                      VkBuffer matDescsBuffer, VkDeviceSize matDescsSize,
                      VkBuffer fogUbo, VkDeviceSize fogUboSize,
+                     const DensityBinding& density,
                      const vulkan_lidar::LidarPushConstants& pc,
                      const vulkan_lidar::LidarBeam* beams, uint32_t numBeams);
 
@@ -150,6 +182,17 @@ namespace threepp::vulkan {
         VkStridedDeviceAddressRegionKHR callRgn_{};
 
         VkCommandPool cmdPool_ = VK_NULL_HANDLE;
+
+        // NEAREST + clamp, for the r32ui density volumes: an integer format
+        // cannot be hardware-filtered, and particle_density.glsl does its
+        // trilinear by hand with texelFetch, which ignores the sampler
+        // entirely. It exists only because the binding is a combined sampler.
+        VkSampler densitySampler_ = VK_NULL_HANDLE;
+        // 16 zero bytes, bound at binding 6 when the caller has no majorant
+        // buffer yet (no field has ever asked for a density volume). A
+        // descriptor that is statically used must be valid even on the path
+        // where the shader never reads it.
+        Buffer    majorantFallback_{};
 
         // One outstanding scan. Everything a dispatch writes lives here, so a
         // second scan in flight cannot land on the first one's results — and a
@@ -222,7 +265,8 @@ namespace threepp::vulkan {
                                  VkAccelerationStructureKHR tlas,
                                  VkBuffer geomDescsBuffer, VkDeviceSize geomDescsSize,
                                  VkBuffer matDescsBuffer, VkDeviceSize matDescsSize,
-                                 VkBuffer fogUbo, VkDeviceSize fogUboSize);
+                                 VkBuffer fogUbo, VkDeviceSize fogUboSize,
+                                 const DensityBinding& density);
     };
 
 }// namespace threepp::vulkan

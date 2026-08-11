@@ -33,6 +33,11 @@ namespace threepp::vulkan_lidar {
     // One per-beam result. instanceId = -1 indicates miss / dropped (below
     // detector threshold). returnNo currently always 1 (single return); the
     // field is reserved for future multi-return through transmissive layers.
+    //
+    // `returnKind` was carved out of the old `float _pad[2]` (parent plan
+    // phase 3) — SIZE-PRESERVING on purpose: the struct is memcpy'd through a
+    // device→host readback whose stride every caller assumes, so growing it
+    // would be a silent ABI change for a field that fits in a pad slot.
     struct LidarResult {
         float position[3];
         float distance;
@@ -40,10 +45,22 @@ namespace threepp::vulkan_lidar {
         float intensity;
         int32_t instanceId;
         int32_t returnNo;
-        float _pad[2];
+        float _pad0;
+        // 0 = surface return, 1 = volume-scatter return (the homogeneous
+        // LIDAR/fog medium OR a ParticleField density volume — both ride the
+        // documented instanceId == -2 sentinel, which does not change).
+        int32_t returnKind;
     };
     static_assert(sizeof(LidarResult) == 48,
                   "LidarResult layout drifted - update the GLSL mirror below.");
+
+    // pc.flags bits.
+    //   Paired: the dispatch launches 2 * numBeams threads. The upper half is
+    //   the CLEAN leg — the same beams, the same RNG keys, the particle
+    //   density medium switched off — so the per-beam difference between the
+    //   halves is the ground-truth degradation label (plan §4.6.1). Results
+    //   for the clean leg occupy the second half of the result buffer.
+    inline constexpr uint32_t kLidarFlagPairedClean = 1u;
 
     // 56-byte push constant block. Fits well within the 128-byte minimum
     // pushConstants size that every Vulkan implementation guarantees.
@@ -82,8 +99,10 @@ namespace threepp::vulkan_lidar {
         // sensor's own housing instead of returning it (raster near-plane
         // equivalent).
         float minRange;
+        // kLidarFlag* bits above.
+        uint32_t flags;
     };
-    static_assert(sizeof(LidarPushConstants) == 60,
+    static_assert(sizeof(LidarPushConstants) == 64,
                   "LidarPushConstants layout drifted - update the GLSL mirror below.");
 
 }// namespace threepp::vulkan_lidar
@@ -104,8 +123,11 @@ struct LidarResult {
     float intensity;
     int   instanceId;
     int   returnNo;
-    vec2  _pad;
+    float _pad0;
+    int   returnKind;// 0 = surface, 1 = volume scatter
 };
+
+#define kLidarFlagPairedClean 1u
 
 #endif  // __cplusplus
 

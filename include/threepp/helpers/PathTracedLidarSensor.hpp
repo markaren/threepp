@@ -78,6 +78,19 @@ namespace threepp {
         void scan(VulkanRenderer& renderer, std::vector<LidarReturn>& out);
 
         /**
+         * The clean leg of the last collected `params.pairedCleanTrace` scan:
+         * the same beams, the same RNG keys, traced with the ParticleField
+         * density medium switched off. Empty when the flag is off.
+         *
+         * DELIBERATELY UN-NOISED. `rangeNoise` models the detector, and the
+         * detector is not what the paired trace is measuring — a reference
+         * carrying its own independent noise draw would put that noise into
+         * every `lidarDegradation::rangeError` twice over. Compare this leg
+         * against `out` row for row.
+         */
+        [[nodiscard]] const std::vector<LidarReturn>& cleanReturns() const { return clean_; }
+
+        /**
          * The same scan, split so a frame loop does not have to block on the
          * readback (which costs every frame already queued on the GPU — see
          * VulkanRenderer::scanLidarBegin). Fire with scanBegin() on one frame,
@@ -104,6 +117,8 @@ namespace threepp {
         std::vector<Vector3> directions_;
         // Scratch buffer reused across scans so we don't reallocate.
         std::vector<LidarBeam> beamScratch_;
+        // The paired clean leg, filled by scanCollect when the flag is set.
+        std::vector<LidarReturn> clean_;
         // The world position the outstanding scan was fired from. Noise is
         // applied along each beam from ITS origin, which is the pose at
         // scanBegin() and not wherever the sensor has moved to by collect.

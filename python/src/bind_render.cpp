@@ -78,6 +78,8 @@ namespace threepp_py {
                 .def_readwrite("intensity", &LidarReturn::intensity)
                 .def_readwrite("hit_instance_id", &LidarReturn::hitInstanceId)
                 .def_readwrite("return_no", &LidarReturn::returnNo)
+                // 0 = surface, 1 = volume scatter (fog / dust / snow).
+                .def_readwrite("return_kind", &LidarReturn::returnKind)
                 .def("__repr__", [](const LidarReturn& r) {
                     std::ostringstream o;
                     o << "LidarReturn(distance=" << r.distance << ", intensity=" << r.intensity

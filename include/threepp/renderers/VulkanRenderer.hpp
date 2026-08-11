@@ -796,9 +796,16 @@ namespace threepp {
         // Synchronously trace beams against the same TLAS, evaluate a back-scatter
         // LIDAR equation at the first hit, and return per-beam tuples. Submits its
         // own command buffer + fence and blocks until results come back.
+        //
+        // `cleanResults`, with LidarParams::pairedCleanTrace set, additionally
+        // receives the SAME beams traced with the ParticleField density medium
+        // switched off — the ground-truth degradation reference. Same layout,
+        // same length; pair row i with row i and call lidarDegradation().
+        // Without the flag it is left empty and the trace is unchanged.
         void scanLidar(const std::vector<LidarBeam>& beams,
                        std::vector<LidarReturn>& results,
-                       const LidarParams& params = {});
+                       const LidarParams& params = {},
+                       std::vector<LidarReturn>* cleanResults = nullptr);
 
         // The same scan, PIPELINED — fire on one frame, take delivery on a
         // later one. Use this from a frame loop; scanLidar() above is for a
@@ -832,7 +839,9 @@ namespace threepp {
         [[nodiscard]] bool scanLidarReady(int handle) const;
         // Take delivery, waiting if it somehow has not finished. False when the
         // handle is not outstanding, in which case `results` is left empty.
-        bool scanLidarCollect(int handle, std::vector<LidarReturn>& results);
+        // `cleanResults` takes the paired clean leg, as in scanLidar above.
+        bool scanLidarCollect(int handle, std::vector<LidarReturn>& results,
+                              std::vector<LidarReturn>* cleanResults = nullptr);
 
         // Per-frame timings (milliseconds). See FrameTimings.
         struct FrameTimings {

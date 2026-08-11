@@ -20,10 +20,46 @@
 // Result layout: results[beamIdx * maxReturns + slot]. Slots that didn't
 // produce a return are filled with sentinel-miss values (hitInstanceId=-1,
 // returnNo=0) so the host can iterate over a fixed-stride array and filter.
+//
+// ── PARTICLEFIELD DENSITY AS A LIDAR MEDIUM (parent plan phase 3) ────────────
+// Beyond the homogeneous medium above, this pass also delta-tracks the
+// WORLD-ANCHORED ParticleField density volumes — the same r32ui fixed-point
+// images the froxel passes and the deferred dust march read, bound here at the
+// same binding numbers (67/68) through the same header. Dust, smoke and
+// snow/rain therefore degrade the sensor with the right physics: stochastic
+// free flight to a scatter event, Beer-Lambert on the return leg, and
+// Henyey-Greenstein back-scatter with the medium's OWN g and albedo.
+//
+// For snow and rain that is not an approximation of a "real" answer, it IS the
+// answer: hydrometeors are far below the beam's angular footprint, so a
+// scanner sees them as extinction plus back-scatter, never as discrete hits.
+// Resolvable per-particle returns (gravel on a belt, large droplets) are a
+// procedural-AABB BLAS, which is plan phase 5 and is deliberately NOT here —
+// this pass adds no ray mask, no intersection shader and no BLAS.
+//
+// The two media are INDEPENDENT, so the first collision is the minimum of two
+// independent free-flight samples. That is exact, and it is why the
+// homogeneous sample below is left textually alone: with no volume bound
+// (pd.counts.x == 0) the particle distance is +inf and every expression here
+// collapses to the arithmetic this shader had before phase 3 — a density-free
+// scan is byte-identical, not merely close.
 
 #include "lidar_shared.h"
+// Bindings 67 (the r32ui volumes) and 68 (their box/medium UBO). The INTEGER
+// volumes, not the r16f mirrors the deferred march samples: particleMedium()
+// already returns exactly the (sigma, sigma-weighted albedo, sigma-weighted g)
+// triple a sensor event needs, so nothing new has to be written; and the
+// majorant below is an integer max over precisely the image being sampled,
+// which makes the delta-tracking bound tight AND rigorous with no slack factor.
+#include "particle_density.glsl"
 
 layout(set = 0, binding = 0) uniform accelerationStructureEXT topAS;
+// Per-volume majorant, Q20.12, one entry per bound volume, written on the GPU
+// by particle_density_convert.comp (integer atomicMax — associative, so it is
+// reproducible run to run exactly as the volume itself is).
+layout(set = 0, binding = 6, std430) readonly buffer PdMajorantBuf {
+    uint pdMajorant[];
+};
 layout(set = 0, binding = 3, scalar) readonly buffer BeamBuf {
     LidarBeam beams[];
 };
@@ -67,6 +103,8 @@ layout(push_constant) uniform Pc {
     // Sensor blind zone: first-leg tMin, so the beam passes through the
     // sensor's own housing instead of returning it.
     float minRange;
+    // kLidarFlagPairedClean.
+    uint flags;
 } pc;
 
 struct Payload {
@@ -91,7 +129,8 @@ void writeMiss(uint idx) {
     r.intensity  = 0.0;
     r.instanceId = -1;
     r.returnNo   = 0;
-    r._pad       = vec2(0.0);
+    r._pad0      = 0.0;
+    r.returnKind = 0;
     results[idx] = r;
 }
 
@@ -146,15 +185,134 @@ vec2 inMediumInterval(vec3 origin, vec3 dir, float segMax, float surfaceY) {
     return vec2(0.0, 0.0);
 }
 
+// ── ParticleField volumes: span, majorant, free flight, optical depth ────────
+//
+// All four live HERE rather than in particle_density.glsl, and that is a
+// decision rather than an oversight: that header is pulled into
+// deferred_shade, the froxel pipelines and the water path, and leaving it
+// byte-for-byte untouched is what makes "a scene without dust renders exactly
+// what it rendered before" true by construction instead of by measurement.
+// The cost is that the box-union loop below resembles pdEmissiveLeg's; the
+// MODEL (sigma, albedo, g) is not duplicated — particleMedium() is called.
+
+// Fixed, unjittered steps for the deterministic return-leg optical depth. The
+// phase-2 determinism contract: two scans with the same seed produce the same
+// bytes, so nothing here may carry a frame term.
+const int  kPdTauSteps  = 24;
+// Cap on the delta-tracking rejection loop. Exhausting it is reported as "no
+// collision", which biases toward the surface in a medium so thick that the
+// surface return is extinguished anyway; 64 free paths is e^-64 of transmitted
+// power at the majorant, i.e. far past anything a detector could register.
+const uint kPdMaxTracks = 64u;
+
+// The ray's overlap with the UNION of the bound volume boxes, in segment-local
+// t. Clipping to it is what makes 24 steps meaningful for a 3 m curtain seen
+// from 30 m, and it keeps the delta-tracking walk out of the empty air where
+// the majorant would otherwise force a step every mean free path for nothing.
+bool pdSpan(vec3 ro, vec3 rd, float tMax, out float t0, out float t1) {
+    t0 = tMax;
+    t1 = 0.0;
+    const uint n = min(pd.counts.x, uint(kMaxDensityFields));
+    if (n == 0u) return false;
+    const vec3 inv = 1.0 / rd;// +-inf on axis-parallel components is fine here
+    for (uint i = 0u; i < n; ++i) {
+        const vec3  bmin = pd.boxMin[i].xyz;
+        const vec3  bmax = bmin + 1.0 / pd.boxInvSize[i].xyz;
+        const vec3  ta = (bmin - ro) * inv;
+        const vec3  tb = (bmax - ro) * inv;
+        const vec3  lo = min(ta, tb), hi = max(ta, tb);
+        const float e  = max(max(lo.x, lo.y), max(lo.z, 0.0));
+        const float x  = min(min(hi.x, hi.y), min(hi.z, tMax));
+        if (x > e) { t0 = min(t0, e); t1 = max(t1, x); }
+    }
+    return t1 > t0;
+}
+
+// Delta tracking needs sigma_maj >= sigma_t everywhere on the ray, and the
+// volumes know their own: each one's maximum voxel is reduced on the GPU by
+// the convert pass. The sum of the per-volume maxima bounds the sum of the
+// per-volume sigmas, and a trilinear tap is a convex combination of texels, so
+// it can never exceed its volume's max — the bound holds exactly, per frame,
+// for whatever the medium happens to be. Nothing here is hardcoded.
+float pdMajorantSum() {
+    const uint n = min(pd.counts.x, uint(kMaxDensityFields));
+    float m = 0.0;
+    for (uint i = 0u; i < n; ++i) m += float(pdMajorant[i]) * kParticleDensityInvScale;
+    return m;
+}
+
+// Deterministic optical depth of the particle medium over [0, tEnd] of this
+// segment. This is the RETURN leg of the round trip: the outbound leg is
+// already carried by the free-flight sampling below (surviving to a distance
+// IS exp(-tau) in expectation), so multiplying by this once — and only once —
+// is the Beer-Lambert round trip, exactly as the homogeneous path does it.
+float pdOpticalDepth(vec3 ro, vec3 rd, float tEnd) {
+    float t0, t1;
+    if (tEnd <= 0.0 || !pdSpan(ro, rd, tEnd, t0, t1)) return 0.0;
+    const float dt = (t1 - t0) / float(kPdTauSteps);
+    float tau = 0.0;
+    for (int s = 0; s < kPdTauSteps; ++s) {
+        tau += particleDensity(ro + rd * (t0 + (float(s) + 0.5) * dt));
+    }
+    return tau * dt;
+}
+
+// Free-flight distance to a scatter event in the particle medium, by delta
+// tracking against the majorant: step an exponential distance at sigma_maj,
+// accept the collision with probability sigma_t(x) / sigma_maj, else continue.
+// Returns 1e30 for "no collision on this segment". `alb` / `g` come back as
+// the mixture's own sigma-weighted parameters at the event point, so where a
+// warm fire volume overlaps grey smoke the return is scattered by the blend
+// and not by whichever field was enumerated first.
+float pdFreeFlight(vec3 ro, vec3 rd, float tMax, uint key, out vec3 alb, out float g) {
+    alb = vec3(1.0);
+    g   = 0.0;
+    float t0, t1;
+    if (!pdSpan(ro, rd, tMax, t0, t1)) return 1.0e30;
+    const float maj = pdMajorantSum();
+    if (maj <= 1.0e-9) return 1.0e30;// every bound volume is empty this frame
+
+    float t = t0;
+    for (uint k = 0u; k < kPdMaxTracks; ++k) {
+        t += -log(max(1.0e-6, 1.0 - urand(key ^ (k * 0x9E3779B9u)))) / maj;
+        if (t >= t1) break;
+        vec3  a;
+        float gg;
+        const float sig = particleMedium(ro + rd * t, a, gg);
+        if (urand(key ^ (k * 0x85EBCA6Bu) ^ 0x5BF03635u) * maj < sig) {
+            alb = a;
+            g   = gg;
+            return t;
+        }
+    }
+    return 1.0e30;
+}
+
 void main() {
-    const uint i = gl_LaunchIDEXT.x;
-    if (i >= pc.numBeams) return;
+    // ── Paired clean/degraded trace (plan §4.6.1) ───────────────────────────
+    // With the paired flag the dispatch is 2 * numBeams wide and the upper
+    // half re-runs the SAME beams with the particle medium switched off. The
+    // RNG keys below are derived from the BEAM index, never from the launch
+    // index, so both legs draw identical numbers for everything they share and
+    // the only difference between them is the dust. No second frame, no scene
+    // edit, no BLAS: the clean leg simply skips the medium.
+    const uint launch = gl_LaunchIDEXT.x;
+    const bool paired = (pc.flags & kLidarFlagPairedClean) != 0u;
+    if (launch >= pc.numBeams * (paired ? 2u : 1u)) return;
+    const bool cleanLeg = launch >= pc.numBeams;
+    const uint i        = cleanLeg ? (launch - pc.numBeams) : launch;
+
+    // The uniform gate: false collapses every particle expression below to the
+    // pre-phase-3 arithmetic (see the file header).
+    const bool pdActive = (pd.counts.x != 0u) && !cleanLeg;
 
     const LidarBeam beam = beams[i];
     const uint maxRet    = max(pc.maxReturns, 1u);
     const uint samples   = max(pc.samplesPerBeam, 1u);
     const uint slotsPerBeam = samples * maxRet;
-    const uint beamBase  = i * slotsPerBeam;
+    // Indexed by LAUNCH so the clean leg lands in the second half of the
+    // result buffer, at the same per-beam stride.
+    const uint beamBase  = launch * slotsPerBeam;
 
     // ── Pick the volumetric medium ──
     // Two sources are supported:
@@ -241,6 +399,22 @@ void main() {
         // misses (escapes the medium before scattering) → sentinel.
         const float fogS   = (fogSW < waterL) ? (watInt.x + fogSW) : 1.0e30;
 
+        // ── ParticleField medium: an INDEPENDENT free flight ───────────────
+        // Two independent media collide first at the minimum of two
+        // independent free-flight samples, and the winner carries its own
+        // albedo and phase. With no volume bound pdS is +inf, volS == fogS and
+        // volParticle == false, so everything downstream is unchanged.
+        vec3  pdAlb = vec3(1.0);
+        float pdG   = 0.0;
+        float pdS   = 1.0e30;
+        if (pdActive) {
+            pdS = pdFreeFlight(rayOrigin, rayDir, segmentMax,
+                               pcg(i ^ pc.rngSeed ^ (sIdx * 0x27220A95u + b * 0x165667B1u + 0x9E3779B9u)),
+                               pdAlb, pdG);
+        }
+        const float volS        = min(fogS, pdS);
+        const bool  volParticle = pdS < fogS;
+
         // ── Surface trace ──
         pl.hitPos           = vec3(0.0);
         pl.hitNormal        = vec3(0.0);
@@ -267,30 +441,50 @@ void main() {
                                  (pl.distance <= segmentMax);
         const float surfaceD   = surfaceHit ? pl.distance : 1.0e30;
 
-        const bool fogWins = (sigmaT > 1e-6) && (fogS < surfaceD) && (fogS < segmentMax);
+        const bool fogWins = ((sigmaT > 1e-6) || pdActive) &&
+                             (volS < surfaceD) && (volS < segmentMax);
 
         if (fogWins) {
-            // ── Fog scatter event ──
+            // ── Volume scatter event ──
             // Unbiased single-scatter MC estimator at the sampled depth.
             // The attenuation factor uses the IN-MEDIUM distance from
             // segment start to the scatter point (fogSW), not the total
             // segment-relative distance (fogS) — air outside the medium
             // doesn't attenuate, only the water column does.
+            //
+            // When the PARTICLE medium won, the event takes that medium's own
+            // albedo (collapsed to rec.709 luminance — near-IR doesn't resolve
+            // colour, the same reduction the fog path above makes) and its own
+            // HG g, and the homogeneous leg still attenuates over whatever
+            // in-medium length precedes the event. `pdAtten` is exactly 1.0
+            // whenever no volume is bound, and x * 1.0 == x in IEEE, which is
+            // what keeps the density-free scan bit-for-bit unchanged.
+            const float volAlbedo = volParticle
+                    ? dot(pdAlb, vec3(0.2126, 0.7152, 0.0722))
+                    : fogAlbedo;
+            const float volBack   = volParticle ? hgBackscatter(clamp(pdG, -0.95, 0.95)) : pBack;
+            const float homPath   = volParticle
+                    ? max(0.0, min(volS, watInt.y) - watInt.x)
+                    : fogSW;
+            const float pdAtten   = pdActive
+                    ? exp(-pdOpticalDepth(rayOrigin, rayDir, volS))
+                    : 1.0;
             const float fogI = clamp(
-                    pc.laserPower * throughput * fogAlbedo * pBack
-                    * exp(-sigmaT * fogSW) * pc.invReferenceIntensity,
+                    pc.laserPower * throughput * volAlbedo * volBack
+                    * exp(-sigmaT * homPath) * pc.invReferenceIntensity * pdAtten,
                     0.0, 1.0);
             // The blind zone gates fog returns too — the detector is what
             // cannot see there, not just the surface trace.
-            if (fogI >= pc.detectorThreshold && (totalRange + fogS) >= pc.minRange) {
+            if (fogI >= pc.detectorThreshold && (totalRange + volS) >= pc.minRange) {
                 LidarResult r;
-                r.position   = rayOrigin + rayDir * fogS;
-                r.distance   = totalRange + fogS;
+                r.position   = rayOrigin + rayDir * volS;
+                r.distance   = totalRange + volS;
                 r.normal     = -rayDir;       // back-toward-sensor convention
                 r.intensity  = fogI;
-                r.instanceId = -2;            // sentinel: fog return (not a surface)
+                r.instanceId = -2;            // sentinel: volume return (not a surface)
                 r.returnNo   = int(slot + 1u);
-                r._pad       = vec2(0.0);
+                r._pad0      = 0.0;
+                r.returnKind = 1;             // volume scatter
                 results[sampleBase + slot] = r;
                 ++slot;
                 if (slot >= maxRet) break;
@@ -298,11 +492,11 @@ void main() {
 
             // Continue past the scatter point. Only the in-medium portion
             // attenuates the throughput; air outside the medium doesn't.
-            throughput *= max(0.0, 1.0 - fogAlbedo) * exp(-sigmaT * fogSW);
+            throughput *= max(0.0, 1.0 - volAlbedo) * exp(-sigmaT * homPath) * pdAtten;
             if (throughput < pc.detectorThreshold) break;
 
-            rayOrigin   = rayOrigin + rayDir * (fogS + 0.001);
-            totalRange += fogS + 0.001;
+            rayOrigin   = rayOrigin + rayDir * (volS + 0.001);
+            totalRange += volS + 0.001;
             continue;
         }
 
@@ -320,7 +514,15 @@ void main() {
                 : vec2(0.0, 0.0);
         const float surfWaterPath = max(0.0, surfWat.y - surfWat.x);
 
-        const float scaledIntensity = pl.intensity * throughput * exp(-sigmaT * surfWaterPath);
+        // The particle medium's share of the return leg — exactly 1.0, and
+        // therefore an exact no-op, when nothing is bound. This factor alone
+        // is what turns a dust curtain into DROPOUT: the surface is still hit,
+        // its return is simply extinguished below the detector threshold.
+        const float pdAttSurf = pdActive
+                ? exp(-pdOpticalDepth(rayOrigin, rayDir, pl.distance))
+                : 1.0;
+
+        const float scaledIntensity = pl.intensity * throughput * exp(-sigmaT * surfWaterPath) * pdAttSurf;
         const bool detected =
                 scaledIntensity >= pc.detectorThreshold &&
                 pl.distance > 0.0 &&
@@ -334,7 +536,8 @@ void main() {
             r.intensity  = clamp(scaledIntensity, 0.0, 1.0);
             r.instanceId = pl.instanceId;
             r.returnNo   = int(slot + 1u);
-            r._pad       = vec2(0.0);
+            r._pad0      = 0.0;
+            r.returnKind = 0;             // surface
             results[sampleBase + slot] = r;
             ++slot;
             if (slot >= maxRet) break;
@@ -348,7 +551,7 @@ void main() {
 
         // Medium absorbs along the in-medium portion of the leg we just
         // traversed; downstream attenuation applies on subsequent legs.
-        throughput *= pl.continueFraction * exp(-sigmaT * surfWaterPath);
+        throughput *= pl.continueFraction * exp(-sigmaT * surfWaterPath) * pdAttSurf;
         if (throughput < pc.detectorThreshold) break;
 
         rayOrigin   = pl.hitPos + rayDir * 0.001;

@@ -139,11 +139,13 @@ bool PathTracedLidarSensor::scanReady(const VulkanRenderer& renderer) const {
 
 bool PathTracedLidarSensor::scanCollect(VulkanRenderer& renderer, std::vector<LidarReturn>& out) {
     out.clear();
+    clean_.clear();
     if (scanHandle_ == VulkanRenderer::kNoLidarScan) return false;
     const int handle = scanHandle_;
     scanHandle_ = VulkanRenderer::kNoLidarScan;
 
-    if (!renderer.scanLidarCollect(handle, out)) return false;
+    // The clean leg comes back un-noised on purpose — see cleanReturns().
+    if (!renderer.scanLidarCollect(handle, out, &clean_)) return false;
 
     // Along the beam from where it was FIRED, not from where the sensor is now.
     applyNoise(out, scanOrigin_);

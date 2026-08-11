@@ -180,9 +180,13 @@ void VulkanRenderer::Impl::resetAccumulation() {
 
 void VulkanRenderer::Impl::scanLidar(const std::vector<LidarBeam>& beams,
                        std::vector<LidarReturn>& outResults,
-                       const LidarParams& params) {
+                       const LidarParams& params,
+                       std::vector<LidarReturn>* cleanResults) {
             const int handle = scanLidarBegin(beams, params);
-            if (!scanLidarCollect(handle, outResults)) outResults.clear();
+            if (!scanLidarCollect(handle, outResults, cleanResults)) {
+                outResults.clear();
+                if (cleanResults) cleanResults->clear();
+            }
         }
 
 int VulkanRenderer::Impl::scanLidarBegin(const std::vector<LidarBeam>& beams,
@@ -259,6 +263,40 @@ int VulkanRenderer::Impl::scanLidarBegin(const std::vector<LidarBeam>& beams,
             pc.mediumAlbedo     = std::clamp(params.mediumAlbedo, 0.f, 1.f);
             pc.mediumAnisotropy = std::clamp(params.mediumAnisotropy, -0.95f, 0.95f);
             pc.minRange         = std::max(0.f, params.minRange);
+            pc.flags            = params.pairedCleanTrace
+                                          ? vulkan_lidar::kLidarFlagPairedClean
+                                          : 0u;
+
+            // ── The ParticleField density medium (parent plan phase 3) ──────
+            // Bound from exactly the source the deferred descriptor sets use,
+            // so the beam and the picture cannot disagree about where the dust
+            // is. Volumes are world-anchored and single-instance (not per
+            // frame-in-flight), which is the same staleness contract the TLAS
+            // above already has: an in-flight frame may be rewriting them, and
+            // the opening barrier in LidarScanner::dispatch orders us after
+            // everything already submitted.
+            ensureParticleDensityResources();
+            std::array<VkImageView, vulkan::kMaxDensityFields> pdViews{};
+            {
+                uint32_t n = 0;
+                if (particleFieldPass_) {
+                    for (const auto& v : particleFieldPass_->densityVolumes()) {
+                        if (n >= vulkan::kMaxDensityFields) break;
+                        pdViews[n++] = v.view;
+                    }
+                }
+                for (uint32_t k = n; k < vulkan::kMaxDensityFields; ++k)
+                    pdViews[k] = particleDensityDummy_.view;
+            }
+            vulkan::LidarScanner::DensityBinding density{};
+            density.ubo       = particleDensityUbos_[lastSlot].handle;
+            density.uboSize   = particleDensityUbos_[lastSlot].size;
+            density.views     = pdViews.data();
+            density.viewCount = vulkan::kMaxDensityFields;
+            if (particleFieldPass_) {
+                density.majorants     = particleFieldPass_->densityMajorants();
+                density.majorantsSize = particleFieldPass_->densityMajorantsSize();
+            }
 
             // Pack beams into the shader-side struct (vec3 + pad).
             std::vector<vulkan_lidar::LidarBeam> packed(beams.size());
@@ -279,13 +317,16 @@ int VulkanRenderer::Impl::scanLidarBegin(const std::vector<LidarBeam>& beams,
                     geometryDescsBuffers[lastSlot].handle, geometryDescsBuffers[lastSlot].size,
                     materialDescsBuffers[lastSlot].handle, materialDescsBuffers[lastSlot].size,
                     fogUbos[lastSlot].handle, fogUbos[lastSlot].size,
+                    density,
                     pc,
                     packed.data(), static_cast<uint32_t>(packed.size()));
             if (handle == vulkan::LidarScanner::kNoSlot) return handle;
 
-            // results[(beam * samplesPerBeam + sample) * maxReturns + slot]
+            // results[(beam * samplesPerBeam + sample) * maxReturns + slot],
+            // and twice that many rows when the trace is paired.
             lidarRaw_[vulkan::LidarScanner::slotIndex(handle)].assign(
                     lidar_->resultSlots(handle), vulkan_lidar::LidarResult{});
+            lidarPaired_[vulkan::LidarScanner::slotIndex(handle)] = params.pairedCleanTrace;
             return handle;
         }
 
@@ -293,8 +334,10 @@ bool VulkanRenderer::Impl::scanLidarReady(int handle) const {
             return lidar_ && lidar_->ready(handle);
         }
 
-bool VulkanRenderer::Impl::scanLidarCollect(int handle, std::vector<LidarReturn>& outResults) {
+bool VulkanRenderer::Impl::scanLidarCollect(int handle, std::vector<LidarReturn>& outResults,
+                                            std::vector<LidarReturn>* cleanResults) {
             outResults.clear();
+            if (cleanResults) cleanResults->clear();
             if (!lidar_ || handle == vulkan::LidarScanner::kNoSlot) return false;
             // Check the handle BEFORE touching the staging: a reclaimed handle
             // names a slot that now belongs to someone else, and its staging
@@ -311,16 +354,27 @@ bool VulkanRenderer::Impl::scanLidarCollect(int handle, std::vector<LidarReturn>
             // Unpack into the public LidarReturn struct. We preserve the
             // fixed-stride layout (numBeams * maxReturns) — caller filters
             // entries with hitInstanceId < 0.
-            outResults.resize(raw.size());
-            for (size_t i = 0; i < raw.size(); ++i) {
-                const auto& r = raw[i];
-                auto& o = outResults[i];
+            //
+            // A PAIRED dispatch wrote twice that many rows, the clean leg in
+            // the second half at the same stride. The degraded leg is always
+            // what `outResults` gets, so a caller that ignores pairing sees
+            // exactly the result it saw before pairing existed.
+            const bool paired = lidarPaired_[vulkan::LidarScanner::slotIndex(handle)];
+            const size_t legRows = paired ? raw.size() / 2u : raw.size();
+            auto unpack = [](const vulkan_lidar::LidarResult& r, LidarReturn& o) {
                 o.position.set(r.position[0], r.position[1], r.position[2]);
                 o.normal.set(r.normal[0], r.normal[1], r.normal[2]);
                 o.distance      = r.distance;
                 o.intensity     = r.intensity;
                 o.hitInstanceId = r.instanceId;
                 o.returnNo      = r.returnNo;
+                o.returnKind    = r.returnKind;
+            };
+            outResults.resize(legRows);
+            for (size_t i = 0; i < legRows; ++i) unpack(raw[i], outResults[i]);
+            if (paired && cleanResults) {
+                cleanResults->resize(legRows);
+                for (size_t i = 0; i < legRows; ++i) unpack(raw[legRows + i], (*cleanResults)[i]);
             }
             raw.clear();
             return true;

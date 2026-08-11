@@ -50,6 +50,18 @@ namespace threepp {
         float   intensity;      // normalised return strength [0, 1]; 0 on miss
         int32_t hitInstanceId;  // see above for sentinel meanings
         int32_t returnNo;       // 1 = first return; 0 = miss
+        // 0 = surface return, 1 = volume scatter. Redundant with
+        // `hitInstanceId == -2` today and deliberately so: the sentinel is the
+        // documented compatibility contract and does not move, while this is
+        // the field a consumer switches on without knowing the sentinel table.
+        // The raster LidarSensor leaves it 0.
+        int32_t returnKind = 0;
+    };
+
+    /** `LidarReturn::returnKind` values. */
+    enum class LidarReturnKind : std::int32_t {
+        Surface = 0,
+        VolumeScatter = 1,//!< fog, haze, or a ParticleField density volume
     };
 
     /**
@@ -131,7 +143,64 @@ namespace threepp {
         float mediumExtinction = 0.f;     // 1/m, isotropic
         float mediumAlbedo     = 0.f;     // [0, 1] single-scattering albedo
         float mediumAnisotropy = 0.f;     // Henyey-Greenstein g, [-0.95, 0.95]
+
+        // ── PAIRED CLEAN/DEGRADED TRACE (ground-truth degradation) ─────────
+        // Fire the beam set TWICE in one dispatch: once through the scene as
+        // it is, and once with the ParticleField density medium switched off.
+        // Both legs use the same beams and the same RNG keys, so the per-beam
+        // difference between them is not an estimate of the degradation dust
+        // causes — it IS the degradation, exactly, with no second frame, no
+        // scene edit and no re-simulation.
+        //
+        // Costs one extra launch per beam and nothing else. The clean leg is
+        // delivered through the optional `cleanResults` out-parameter of
+        // VulkanRenderer::scanLidar / scanLidarCollect; without that argument
+        // the flag only wastes trace time. Only the PARTICLE medium is
+        // suppressed — scene fog and the LidarParams medium above are physics
+        // the sensor is configured with, not the thing being measured.
+        //
+        // Vulkan (path-traced) backend only; the raster LidarSensor ignores it.
+        bool pairedCleanTrace = false;
     };
+
+    /**
+     * Per-beam degradation label, derived from a paired clean/degraded scan.
+     * `lidarDegradation()` below builds one; the three fields are the three
+     * things dust does to a beam.
+     */
+    struct LidarDegradation {
+        // clean range - degraded range, in metres. Positive = the beam
+        // returned SHORT (a scatter event or a nearer spurious return);
+        // 0 when neither leg returned, or when the range is unchanged.
+        float rangeError = 0.f;
+        // The clean leg had a return and the degraded leg has none: the
+        // surface was extinguished below the detector threshold.
+        bool dropped = false;
+        // The degraded leg's first return is a volume scatter (returnKind == 1)
+        // where the clean leg's was a surface — the "spurious near return" a
+        // real scanner reports from inside a dust cloud.
+        bool spurious = false;
+    };
+
+    /**
+     * Label one beam by comparing its degraded and clean first returns.
+     *
+     * Both arguments are the FIRST return slot of the same beam in the two
+     * legs of a `pairedCleanTrace` scan. A miss on either side is a valid
+     * input: `returnNo == 0` means "no return", which is exactly the signal
+     * `dropped` is built from.
+     */
+    [[nodiscard]] inline LidarDegradation lidarDegradation(const LidarReturn& degraded,
+                                                           const LidarReturn& clean) {
+        LidarDegradation d;
+        const bool haveD = degraded.returnNo > 0;
+        const bool haveC = clean.returnNo > 0;
+        d.dropped  = haveC && !haveD;
+        d.spurious = haveD && haveC &&
+                     degraded.returnKind == 1 && clean.returnKind == 0;
+        if (haveD && haveC) d.rangeError = clean.distance - degraded.distance;
+        return d;
+    }
 
 }// namespace threepp
 

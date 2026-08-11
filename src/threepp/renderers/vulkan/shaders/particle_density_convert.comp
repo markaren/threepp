@@ -10,16 +10,55 @@
 // KEEP IN SYNC: kInvScale is 1 / kParticleDensityScale
 // (shaders/particle_density.glsl, ParticleFieldPass.hpp kDensityFixedScale).
 
+// ── THE MAJORANT, AND WHY IT IS COMPUTED HERE ────────────────────────────────
+// Delta tracking through a heterogeneous medium (the LIDAR path, parent plan
+// phase 3) needs a sigma_maj that is >= sigma_t everywhere along the ray, and
+// a bound that is too loose costs a rejection step per mean free path while a
+// bound that is too low is simply wrong. The volume knows its own answer, and
+// this pass is already reading every voxel of it — so one shared-memory
+// reduction plus one atomicMax per workgroup (4096 atomics for a 64^3 volume,
+// not 262 144) hands the sensor an EXACT per-volume maximum for free.
+//
+// Exact matters twice over: it is an INTEGER max over the same r32ui image the
+// sensor samples, so (a) integer max is associative and the result is
+// reproducible run to run exactly as the accumulator is, and (b) a trilinear
+// tap is a convex combination of texels and can never exceed it, so the bound
+// needs no slack factor and nothing anywhere is hardcoded.
+
 layout(local_size_x = 4, local_size_y = 4, local_size_z = 4) in;
 
 layout(set = 0, binding = 0, r32ui) uniform readonly uimage3D srcFixed;
 layout(set = 0, binding = 1, r16f)  uniform writeonly image3D dstLin;
+// One Q20.12 entry per BOUND VOLUME, indexed by the volume's slot in
+// ParticleDensityUbo — the host zeroes the whole buffer before the converts
+// run and pushes each field's slot below.
+layout(set = 0, binding = 2, std430) buffer MajorantBuf {
+    uint majorant[];
+};
+
+layout(push_constant) uniform Pc {
+    uint volIndex;
+} pc;
 
 const float kInvScale = 1.0 / 4096.0;
 
+shared uint sMax;
+
 void main() {
+    if (gl_LocalInvocationIndex == 0u) sMax = 0u;
+    barrier();
+
+    // NOT an early return: every invocation must reach both barriers, so the
+    // bounds test gates the work rather than the control flow.
     const ivec3 c  = ivec3(gl_GlobalInvocationID);
     const ivec3 sz = imageSize(dstLin);
-    if (any(greaterThanEqual(c, sz))) return;
-    imageStore(dstLin, c, vec4(float(imageLoad(srcFixed, c).x) * kInvScale));
+    uint v = 0u;
+    if (all(lessThan(c, sz))) {
+        v = imageLoad(srcFixed, c).x;
+        imageStore(dstLin, c, vec4(float(v) * kInvScale));
+    }
+    atomicMax(sMax, v);
+
+    barrier();
+    if (gl_LocalInvocationIndex == 0u) atomicMax(majorant[pc.volIndex], sMax);
 }

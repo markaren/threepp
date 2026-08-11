@@ -3369,9 +3369,12 @@ namespace threepp {
         // last submitted frame's geom/mat descriptors via a private RT pipeline
         // owned by `lidar_`. Synchronous: blocks the calling thread until
         // per-beam results land in `outResults`.
+        // `cleanResults`, when non-null AND params.pairedCleanTrace is set,
+        // receives the second (particle-dust-free) leg at the same layout.
         void scanLidar(const std::vector<LidarBeam>& beams,
                        std::vector<LidarReturn>& outResults,
-                       const LidarParams& params);
+                       const LidarParams& params,
+                       std::vector<LidarReturn>* cleanResults = nullptr);
 
         // The same scan, pipelined: fire on one frame, take delivery on a
         // later one. Blocking readback costs every frame already queued behind
@@ -3379,11 +3382,16 @@ namespace threepp {
         // sensor would inflict ten times a second — see LidarScanner.
         int scanLidarBegin(const std::vector<LidarBeam>& beams, const LidarParams& params);
         [[nodiscard]] bool scanLidarReady(int handle) const;
-        bool scanLidarCollect(int handle, std::vector<LidarReturn>& outResults);
+        bool scanLidarCollect(int handle, std::vector<LidarReturn>& outResults,
+                              std::vector<LidarReturn>* cleanResults = nullptr);
         // Per-slot staging for the outstanding dispatches, sized by
         // scanLidarBegin and consumed by scanLidarCollect.
         std::array<std::vector<vulkan_lidar::LidarResult>,
                    vulkan::LidarScanner::kScanSlots> lidarRaw_{};
+        // Whether the dispatch in each slot was a paired clean/degraded trace,
+        // i.e. whether its raw rows are two legs rather than one. Recorded at
+        // dispatch because collect() cannot tell from the row count alone.
+        std::array<bool, vulkan::LidarScanner::kScanSlots> lidarPaired_{};
 
         // ── Hybrid raster G-buffer prepass implementation ───────────────────
         // Lazy-initialized on first render().
