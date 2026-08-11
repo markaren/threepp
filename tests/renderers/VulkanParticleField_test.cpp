@@ -2777,6 +2777,33 @@ int main(int argc, char** argv) {
             check(plateGndOff > 0.6 * openGndOff,
                   "...and it is not sheltered with the solve off (the shelter "
                   "claim is about the landing, not about the plate's shadow)");
+
+            // ── The RE-BAKE TRIGGER ─────────────────────────────────────────
+            // Take the plate away. That is a structural scene change, which is
+            // the trigger the plan names, and it is the one thing about this
+            // feature that would rot silently: a map that is never re-traced
+            // still rests flakes perfectly, just on furniture that is no longer
+            // there. Without this the whole section passes on a build whose
+            // invalidation hook was deleted, because every bake above is the
+            // FIRST bake and a first bake is always current.
+            scene.remove(*plate);
+            std::vector<std::uint32_t> volGone;
+            if (volAtF5(6.5f, volGone)) {
+                double goneRow = 0, goneGnd = 0, openRow2 = 0, openGnd2 = 0;
+                profile(volGone, true, goneRow, goneGnd);
+                profile(volGone, false, openRow2, openGnd2);
+                std::printf("[info] F5 re-bake: plate REMOVED — that half's mean row "
+                            "%.2f (was %.2f), ground layer %.0f (was %.0f, open half "
+                            "%.0f)\n", goneRow, plateRow, goneGnd, plateGnd, openGnd2);
+                check(goneGnd > 0.5 * openGnd2,
+                      "removing the plate RE-BAKES the height map: the flakes fall "
+                      "through where it used to be and reach the ground, instead of "
+                      "resting on a surface that no longer exists");
+                check(goneRow < plateRow - 4.0,
+                      "...and that half's whole resting height comes back down");
+            }
+            scene.add(plate);
+            for (int i = 0; i < 4; ++i) frame();
         }
 
         // ── (c) DETERMINISM, WITH FLAKES AT REST ────────────────────────────
