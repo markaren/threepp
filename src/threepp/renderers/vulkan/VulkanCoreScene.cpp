@@ -115,10 +115,20 @@ bool VulkanRenderer::Impl::sceneSnapshotMatches(Object3D& scene, Camera& camera)
 // fallback stays one memcpy of everything — a structural rebuild has no smaller
 // truth to tell.
 namespace {
-    template<typename T>
+    // `Dirty` is always Impl::DescDirtyRanges, and it is a DEDUCED parameter
+    // rather than that spelled-out type for an access reason: this is a
+    // NON-MEMBER, so unlike every `T VulkanRenderer::Impl::f()` below it gets no
+    // access grant to VulkanRenderer's private nested Impl. GCC defers a
+    // template's access checks to instantiation and re-runs them from the
+    // instantiation context — namespace scope — and rejects it there ("'struct
+    // VulkanRenderer::Impl' is private within this context"); MSVC and Clang
+    // check once at the declaration and let it through. Deducing the type keeps
+    // the private name out of namespace scope altogether. Both call sites are
+    // Impl members a few lines down, so nothing else can supply it.
+    template<typename T, typename Dirty>
     void uploadDescRanges(VmaAllocator alloc, const vulkan::Buffer& buf,
                           const std::vector<T>& src,
-                          const VulkanRenderer::Impl::DescDirtyRanges& dirty) {
+                          const Dirty& dirty) {
         if (dirty.whole) {
             vulkan::uploadHostVisible(alloc, buf, src.data(), src.size() * sizeof(T));
             return;
