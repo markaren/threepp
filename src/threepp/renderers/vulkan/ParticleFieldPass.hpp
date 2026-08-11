@@ -143,6 +143,52 @@ namespace threepp::vulkan {
     };
     static_assert(sizeof(ParticleDensityUboGpu) == 272, "ParticleDensityUbo layout drift");
 
+    // ── F4/F5: the emitter's per-field AUX RECORD ───────────────────────────
+    // particle_emit.comp's push block is 128 B EXACTLY — the range every Vulkan
+    // implementation guarantees — and F4 spent the last two floats of it on the
+    // toroidal follow centre. F5 needs a height-map address plus a dozen
+    // lifecycle scalars and there was not one byte left.
+    //
+    // So those two floats became ONE 64-bit address and everything behind it
+    // moved here: the same move F3 made for BillboardParamsGpu and F4 for
+    // BillboardViewGpu, with the same guarantee. A buffer_reference is not a
+    // descriptor, so the emit pipeline STILL allocates no set and writes no set,
+    // and still cannot update one a frame in flight names (VUID-03047).
+    //
+    // Written in prepareFrame — the post-fence, pre-record window — into a
+    // per-frame-in-flight host-visible block, exactly like the billboard params.
+    // A field that neither follows nor rests gets NO record and pushes a null
+    // address, which is bit-identical to the two zero floats it replaced.
+    //
+    // MUST mirror the EmitAux block in shaders/particle_emit.comp.
+    struct EmitAuxGpu {
+        VkDeviceAddress heightAddr;   //  0  the bake; 0 = no surface interaction
+        float           followX;      //  8  field-LOCAL centre of the wrap box
+        float           followZ;      // 12
+        float           bakeOriginX;  // 16  field-LOCAL min corner of the map
+        float           bakeOriginZ;  // 20
+        float           bakeInvCell;  // 24  texels per metre
+        std::uint32_t   bakeRes;      // 28  texels per axis
+        float           bakeMiss;     // 32  height off the map / where nothing hit
+        float           landBias;     // 36
+        float           restSeconds;  // 40
+        float           restJitter;   // 44
+        float           fadeSeconds;  // 48
+        float           splashSeconds;// 52  > 0: land as a ring, not as a rest
+        // The ring's radius in ABSOLUTE METRES at impact and at the end of the
+        // splash. Absolute rather than a multiple of the particle's own radius,
+        // and that is what makes the billboard's decode exact: with a relative
+        // scale the value in w would depend on the slot's size hash, and the
+        // vertex stage — which does not know it — could only recover the phase
+        // to within the size jitter. splashR0 is set just above the largest
+        // radius the emitter's jitter can produce, so w >= splashR0 can only
+        // mean a splash. 0 = this field has none.
+        float           splashR0;     // 56
+        float           splashR1;     // 60
+    };
+    static_assert(sizeof(EmitAuxGpu) == 64,
+                  "EmitAuxGpu drifted from the EmitAux block in particle_emit.comp");
+
     // ── F3: per-field billboard appearance (plans/particle-atmosphere.md F-D) ─
     // One record per visible billboard field, rewritten whole every frame into
     // a per-frame-in-flight host-visible block and reached by DEVICE ADDRESS.
@@ -185,9 +231,23 @@ namespace threepp::vulkan {
         float nearFade;               // 108
         float lodNear;                // 112  collapse the quad CLOSER than this
         float lodFade;                // 116
-        std::uint32_t _pad[2];        // 120
+        // ── F5: the splash ring ─────────────────────────────────────────────
+        // The emitter encodes a splash's phase in the RADIUS it writes to w —
+        // it grows the particle, and nothing else in the lifecycle ever does —
+        // so these two numbers are the decode. w > splashR0 means "this is a
+        // ring", and (w - R0) / (R1 - R0) is how far through the splash it is.
+        //
+        // Absolute metres rather than a multiple of the particle's own radius,
+        // deliberately: the alternative is for the vertex stage to re-derive
+        // the per-slot size hash, which would make stream 12 a THIRD shared
+        // contract to keep in sync for no gain. R0 is computed host-side as
+        // just above the largest radius the emitter's size jitter can produce.
+        float splashR0;               // 120  0 = this field has no splash
+        float splashR1;               // 124
+        float splashRingWidth;        // 128  annulus width, fraction of radius
+        std::uint32_t _pad[3];        // 132
     };
-    static_assert(sizeof(BillboardParamsGpu) == 128,
+    static_assert(sizeof(BillboardParamsGpu) == 144,
                   "BillboardParamsGpu drifted from particlefield_billboard.vert");
 
     // ── F4: the per-VIEW billboard record ───────────────────────────────────
@@ -331,6 +391,37 @@ namespace threepp::vulkan {
         // No-op when no field is Renderer-owned — not one command is written.
         void recordEmit(VkCommandBuffer cb);
 
+        // ── F5: the surface height bake ─────────────────────────────────────
+        // Re-bake, for any field whose EmitterParams::Surface is on and whose
+        // baked footprint no longer matches what the emitter is about to ask
+        // for. Recorded IMMEDIATELY BEFORE recordEmit — the map is the emitter's
+        // input — and closed with a barrier in both directions: this pass's
+        // TLAS read must complete before recordDeformAndTlas's refit writes the
+        // acceleration structure later in the same command buffer, and its
+        // buffer write must complete before the emit dispatch reads it.
+        //
+        // No-op on the overwhelming majority of frames: a bake happens only when
+        // the scene's structure changed, the follow centre snapped, the field
+        // moved, or the footprint was reconfigured. Steady state records nothing.
+        void recordSurfaceBake(VkCommandBuffer cb);
+
+        // A bake will be recorded this frame. Same purpose as emitActive(): let
+        // the renderer skip the timestamp bracket on the frames that do nothing.
+        [[nodiscard]] bool surfaceBakeActive() const { return !bakeDispatch_.empty(); }
+
+        // The scene TLAS every bake traces. Called every frame from
+        // prepareParticleFields, in the post-fence window; the descriptor is
+        // rewritten ONLY when the handle actually changes, which happens only on
+        // a structural rebuild, which is itself vkDeviceWaitIdle-guarded — so
+        // this pass never writes a set an in-flight frame could name.
+        void setTlas(VkAccelerationStructureKHR tlas);
+
+        // Throw every field's bake away. The renderer calls this when the entry
+        // list is rebuilt, i.e. when the set of things a flake could land on may
+        // have changed. Cheap: it bumps a counter, and the re-bake happens on
+        // the next frame that needs one.
+        void invalidateSurfaceBakes() { ++bakeStructGen_; }
+
         // Any Renderer-owned field will dispatch this frame. Lets the renderer
         // skip the timestamp bracket (and therefore keep the timing honest) on
         // the overwhelmingly common frame that has no emitter.
@@ -406,6 +497,34 @@ namespace threepp::vulkan {
         [[nodiscard]] std::size_t liveFieldCount() const { return states_.size(); }
 
     private:
+        // ── F5: what a baked height map DESCRIBES ───────────────────────────
+        // The whole re-bake trigger, expressed as a value. Every input the bake
+        // depends on is in here, so "is this slot's map still the right map" is
+        // one comparison and there is no list of events to keep in step with the
+        // things that can invalidate one. The four that matter: the follow
+        // centre SNAPPED (cx/cz), the field MOVED (worldX/Y/Z), the footprint
+        // was reconfigured (extent/res/topY/depth), and the scene's structure
+        // changed (structGen, bumped by invalidateSurfaceBakes).
+        struct BakeKey {
+            float         cx = 0.f, cz = 0.f;// field-local bake centre
+            float         extent = 0.f;      // half-size, field-local metres
+            std::uint32_t res    = 0;
+            float         topY = 0.f, depth = 0.f;
+            float         worldX = 0.f, worldY = 0.f, worldZ = 0.f;
+            std::uint64_t structGen = 0;
+            // Deliberately exact float comparison: every one of these is copied
+            // from the same source each frame, so "unchanged" means bit-equal
+            // and a tolerance would only let a real change through.
+            bool operator==(const BakeKey& o) const {
+                return cx == o.cx && cz == o.cz && extent == o.extent &&
+                       res == o.res && topY == o.topY && depth == o.depth &&
+                       worldX == o.worldX && worldY == o.worldY &&
+                       worldZ == o.worldZ && structGen == o.structGen;
+            }
+            bool operator!=(const BakeKey& o) const { return !(*this == o); }
+            [[nodiscard]] bool valid() const { return res != 0u; }
+        };
+
         struct State {
             // Non-owning; liveness is tracked through `owner` when the field was
             // created the documented way (ParticleField::create → make_shared).
@@ -471,6 +590,21 @@ namespace threepp::vulkan {
             // once, outside any frame's record.
             Image2D         densityLin{};
             VkDescriptorSet convertSet = VK_NULL_HANDLE;
+
+            // ── F5: the baked height map ────────────────────────────────────
+            // RINGED over the frames in flight, unlike the density volume,
+            // because a bake is a WRITE and the previous frames' emit dispatches
+            // are still READING. One buffer would be an unsynchronised
+            // write-after-read across command buffers every time the follow
+            // centre snapped; three are 768 KB at the default resolution and
+            // remove the hazard rather than reasoning about it. Allocated on the
+            // first frame the field asks for a surface, and re-allocated only if
+            // the resolution changes.
+            Buffer        heights[impl::kFramesInFlight]{};
+            std::uint32_t heightRes = 0;// texels/axis the buffers were sized for
+            // What each slot's contents describe. A slot whose key differs from
+            // what this frame wants is re-baked before the emit reads it.
+            BakeKey       bakedKey[impl::kFramesInFlight]{};
         };
 
         // One field's emit dispatch, resolved in prepareFrame so recording
@@ -479,6 +613,18 @@ namespace threepp::vulkan {
         struct EmitDispatch {
             std::uint32_t groups = 0;// ceil(capacity / 64)
             unsigned char pc[128]{}; // EmitPc, prebuilt
+            // Index into auxScratch_, patched into pc's trailing address once
+            // the aux block has been (re)allocated — growing it mid-loop would
+            // invalidate every address already handed out. 0xffffffff = this
+            // field needs no aux record and pushes a null address.
+            std::uint32_t auxIndex = 0xffffffffu;
+        };
+
+        // F5: one field's height bake, resolved in prepareFrame so recording
+        // touches no ParticleField and no map — the same shape as the two above.
+        struct BakeDispatch {
+            std::uint32_t groups = 0;// ceil(res / 8) per axis
+            unsigned char pc[64]{};  // BakePc, prebuilt
         };
 
         // One field's scatter dispatch, resolved in prepareFrame so recording
@@ -544,6 +690,35 @@ namespace threepp::vulkan {
         VkPipeline       emitPipe_       = VK_NULL_HANDLE;
         std::vector<EmitDispatch> emitDispatch_;
 
+        // F4/F5: the emitter's aux records, one host-visible device-addressable
+        // block per frame-in-flight. Same lifetime, same window and same growth
+        // rule as bbParamBufs_ above — filled in prepareFrame, never during
+        // recording, so the slot being written is provably not one an in-flight
+        // frame reads.
+        Buffer        auxBufs_[impl::kFramesInFlight]{};
+        std::uint32_t auxCapacity_ = 0;// in EmitAuxGpu elements
+        std::vector<EmitAuxGpu> auxScratch_;
+
+        // ── F5: the height bake ─────────────────────────────────────────────
+        // The ONE pipeline in this pass with a descriptor set, because an
+        // acceleration structure cannot ride a device address. A single set, not
+        // one per frame in flight: its only binding is the TLAS, whose handle
+        // changes only on a structural rebuild, which is vkDeviceWaitIdle
+        // guarded — so it is never rewritten under an in-flight frame.
+        VkDescriptorSetLayout bakeDsLayout_   = VK_NULL_HANDLE;
+        VkDescriptorPool      bakePool_       = VK_NULL_HANDLE;
+        VkDescriptorSet       bakeSet_        = VK_NULL_HANDLE;
+        VkPipelineLayout      bakePipeLayout_ = VK_NULL_HANDLE;
+        VkPipeline            bakePipe_       = VK_NULL_HANDLE;
+        VkAccelerationStructureKHR bakeTlas_  = VK_NULL_HANDLE;// what the set holds
+        VkAccelerationStructureKHR wantTlas_  = VK_NULL_HANDLE;// what the scene has
+        std::uint64_t         bakeStructGen_  = 0;
+        std::vector<BakeDispatch> bakeDispatch_;
+        // Reported once rather than every frame: a device with no ray query
+        // cannot bake, so surface interaction quietly does nothing there and
+        // says so exactly one time.
+        bool                  bakeUnsupportedLogged_ = false;
+
         // Density scatter pipeline — created lazily, on the first field that
         // asks for a volume, so a scene without dust allocates nothing.
         VkDescriptorSetLayout densityDsLayout_ = VK_NULL_HANDLE;
@@ -576,6 +751,8 @@ namespace threepp::vulkan {
         State& ensureState(const ParticleField& field);
         void   ensureDescCapacity(std::uint32_t frame, std::uint32_t count);
         void   ensureBbParamCapacity(std::uint32_t frame, std::uint32_t count);
+        void   ensureAuxCapacity(std::uint32_t frame, std::uint32_t count);
+        void   ensureBakePipeline();
         void   destroyState(State& st);
         void   retireOrDestroy(Buffer& b);
         void   retireOrDestroy(Image2D& img);

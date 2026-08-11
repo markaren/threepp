@@ -1787,6 +1787,13 @@ void VulkanRenderer::Impl::prepareParticleFields(uint32_t frame) {
             if (particleFields_.empty() &&
                 particleFieldPass_->liveFieldCount() == 0) return;
             THREEPP_CPUPROF("frame.P_particleFields");
+            // F5: the acceleration structure the surface bake traces. Handed
+            // over every frame and acted on only when the handle moved — which
+            // is a structural rebuild, and therefore vkDeviceWaitIdle-guarded,
+            // which is what makes writing that descriptor here safe. Given here
+            // rather than in rewriteDeferredDescriptors because the pass is
+            // created lazily and may not exist when that last ran.
+            particleFieldPass_->setTlas(tlas);
             particleFieldRecs_.clear();
             particleFieldRecs_.reserve(particleFields_.size());
             for (const auto& [field, entryIndex] : particleFields_) {
@@ -1972,6 +1979,16 @@ void VulkanRenderer::Impl::recordParticleFieldCounts(VkCommandBuffer cb) {
 void VulkanRenderer::Impl::recordParticleFieldEmit(VkCommandBuffer cb, uint32_t frame) {
             if (!particleFieldPass_ || !particleFieldPass_->emitActive()) return;
             gpuTimings_->begin(cb, vulkan::TP_ParticleEmit, frame);
+            // F5: the surface height bake, immediately before the emitter that
+            // reads it — and INSIDE the same timestamp bracket, deliberately. A
+            // bake is recorded on a handful of frames out of thousands (a
+            // structural change, a follow-centre snap), so a timer of its own
+            // would read zero almost always and would hide the spike among the
+            // frames that did nothing; folded in, TP_ParticleEmit reports what
+            // the emitter block actually cost on the frame it happened. A bake
+            // is only ever queued alongside an emit dispatch, so the early-out
+            // above cannot skip one that was scheduled.
+            particleFieldPass_->recordSurfaceBake(cb);
             particleFieldPass_->recordEmit(cb);
             gpuTimings_->end(cb, vulkan::TP_ParticleEmit, frame);
         }

@@ -1,0 +1,109 @@
+#version 460
+#extension GL_EXT_scalar_block_layout : require
+#extension GL_EXT_buffer_reference    : require
+#extension GL_EXT_buffer_reference2   : require
+#extension GL_EXT_shader_explicit_arithmetic_types_int64 : require
+#extension GL_EXT_ray_query           : require
+
+// ParticleField SURFACE BAKE — plans/particle-atmosphere.md F5.
+//
+// A top-down HEIGHT MAP of the scene over one field's lateral footprint: one
+// thread per texel, one ray straight down against the scene TLAS, and the
+// world Y of the first thing it hits. particle_emit.comp then solves, inside
+// its closed form, for the age at which a slot's trajectory meets that height
+// and clamps it there — so snow rests and rain splashes with no collision
+// pass, no per-particle state and no CPU work at all.
+//
+// ── WHY THIS IS THE CLOUD-SHADOW MAP'S SHAPE ────────────────────────────────
+// cloud_shadow.comp is the precedent the plan names: an orthographic top-down
+// bake of a slowly-changing quantity, regenerated as a whole rather than
+// updated incrementally, consumed by a bilinear (here nearest) lookup somewhere
+// else entirely. The difference is what fills it — that one MARCHES an analytic
+// cloud field, this one TRACES the actual scene — and how often: the cloud map
+// is rebuilt every frame because the clouds move, and this one is rebuilt only
+// when the scene's structure changes or the field's follow centre snaps,
+// because static geometry does not.
+//
+// ── WHAT IT DELIBERATELY DOES NOT SEE ───────────────────────────────────────
+//   • DYNAMIC OBJECTS, except as they happened to stand at bake time. A moving
+//     car does not carve a flake shadow. Re-baking every frame would fix that
+//     and is not worth a per-frame TLAS traversal per texel for weather; the
+//     limit is written into the API docs rather than papered over.
+//   • OVERHANGS. A height field has one value per column, so a flake rests on
+//     the FIRST surface under the cloud. That is what snow does.
+//   • Anything outside ray mask 0x01 (kRayMaskOpaque): glass and blended
+//     geometry are not surfaces snow settles on, which is the same call every
+//     shadow ray in this renderer already makes.
+//
+// ── ORDERING ────────────────────────────────────────────────────────────────
+// This dispatch is recorded at the head of the frame command buffer, ahead of
+// particle_emit.comp and therefore ahead of recordDeformAndTlas's per-frame
+// TLAS REFIT. It consequently traverses the acceleration structure as of the
+// previous frame's dynamic transforms — which is exactly right for a bake whose
+// contract is "the static scene", and which the caller closes with a barrier in
+// BOTH directions (this read before that refit's write, this write before the
+// emitter's read).
+
+layout(local_size_x = 8, local_size_y = 8) in;
+
+// The scene TLAS. The ONE descriptor this pass owns — an acceleration structure
+// cannot ride a device address, so unlike every other ParticleFieldPass
+// pipeline this one has a set. It is written only when the TLAS HANDLE changes,
+// which happens only on a structural rebuild, which is itself guarded by
+// vkDeviceWaitIdle — so the set can never be rewritten while a frame that names
+// it is in flight (R6 / VUID-03047).
+layout(set = 0, binding = 0) uniform accelerationStructureEXT topAS;
+
+// The map. A plain float buffer reached by device address, so the CONSUMER
+// (particle_emit.comp) keeps its zero-descriptor property: an image would have
+// forced a descriptor on the emitter, which is the trap F4's amendment note 4
+// records about the density volumes.
+layout(buffer_reference, scalar, buffer_reference_align = 4) writeonly buffer HeightOut {
+    float h[];
+};
+
+layout(push_constant, scalar) uniform Pc {
+    uint64_t dstAddr;
+    float    originX;// WORLD min corner of the map's footprint
+    float    originZ;
+    float    cell;   // metres per texel
+    uint     res;    // texels per axis
+    float    topY;   // WORLD y the rays start from
+    float    depth;  // metres of downward search
+    float    missY;  // FIELD-LOCAL height written where nothing was hit
+    float    yOffset;// the field's world Y; subtracted to make the map local
+} pc;
+
+// Opaque + alpha-cutout instances only. KEEP IN SYNC with kRayMaskOpaque in
+// vulkan_shared.h — it is spelled out rather than included because this shader
+// pulls in nothing else from that header and an include would drag the whole
+// ShadePush block in with it.
+const uint kMaskOpaque = 0x01u;
+
+void main() {
+    const uvec2 tx = gl_GlobalInvocationID.xy;
+    if (tx.x >= pc.res || tx.y >= pc.res) return;
+
+    // Texel CENTRE, matching surfaceAt()'s floor((xz - origin) / cell) on the
+    // consumer side: texel (i, j) owns [origin + i·cell, origin + (i+1)·cell),
+    // and the ray is fired down its middle.
+    const vec3 o = vec3(pc.originX + (float(tx.x) + 0.5) * pc.cell,
+                        pc.topY,
+                        pc.originZ + (float(tx.y) + 0.5) * pc.cell);
+
+    rayQueryEXT rq;
+    // NO TerminateOnFirstHit: the CLOSEST hit is the surface, and a first hit
+    // would settle snow on whichever triangle the traversal happened to reach
+    // first. With opaque-only geometry the query commits the nearest
+    // intersection on its own and the proceed loop runs zero iterations.
+    rayQueryInitializeEXT(rq, topAS, gl_RayFlagsOpaqueEXT, kMaskOpaque,
+                          o, 0.0, vec3(0.0, -1.0, 0.0), max(pc.depth, 1e-3));
+    while (rayQueryProceedEXT(rq)) {}
+
+    float h = pc.missY;
+    if (rayQueryGetIntersectionTypeEXT(rq, true) !=
+        gl_RayQueryCommittedIntersectionNoneEXT) {
+        h = (pc.topY - rayQueryGetIntersectionTEXT(rq, true)) - pc.yOffset;
+    }
+    HeightOut(pc.dstAddr).h[tx.y * pc.res + tx.x] = h;
+}

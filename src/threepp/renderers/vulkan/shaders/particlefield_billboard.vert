@@ -87,8 +87,20 @@ layout(buffer_reference, scalar, buffer_reference_align = 16) readonly buffer Bb
     float    nearFade;      // fade the sprite out below this camera distance, m
     float    lodNear;       // collapse the quad CLOSER than this (mesh draws it)
     float    lodFade;       // metres of ramp above lodNear
+    // ── F5: the splash ring ─────────────────────────────────────────────────
+    // The emitter encodes a landed rain drop's splash phase in the RADIUS it
+    // writes to w: it grows the particle from splashR0 to splashR1 over the
+    // splash, and nothing else in the lifecycle ever grows one. So w >= R0
+    // means "this is a ring" and (w - R0)/(R1 - R0) is how far through. No
+    // extra channel, no second buffer, no age re-derivation — the one number
+    // that was already there carries it. 0 = this field has no splash and the
+    // whole path below is dead code the compiler removes.
+    float    splashR0;
+    float    splashR1;
+    float    splashRingWidth;// annulus width as a fraction of the ring radius
     uint     _pad0;
     uint     _pad1;
+    uint     _pad2;
 };
 
 // ── F4: the per-VIEW record ─────────────────────────────────────────────────
@@ -140,6 +152,9 @@ layout(location = 2) out float vSoft;
 // two scalars that are constant over the whole draw.
 layout(location = 3) flat out float vExposure;
 layout(location = 4) flat out uint  vToneMap;
+// F5: > 0 turns the sprite into an ANNULUS of this fractional width — a splash
+// ring. 0 is the ordinary soft disc and costs the fragment stage one compare.
+layout(location = 5) flat out float vRing;
 
 // ── The hash ────────────────────────────────────────────────────────────────
 // Bit-for-bit particle_emit.comp's hashU/rnd01, which is itself bit-for-bit
@@ -332,6 +347,34 @@ void main() {
         }
     }
 
+    // ── F5: the splash ring ─────────────────────────────────────────────────
+    // A landed rain drop has stopped being a drop. The emitter parked it at its
+    // landing point (so pos == prevPos and its motion vector is exactly zero,
+    // which is why the stretch above already collapsed on its own) and grew its
+    // radius from splashR0 to splashR1 — the ONE thing nothing else in the
+    // lifecycle does, and therefore the whole detector. What changes here is
+    // the quad's ORIENTATION: a splash lies in the ground plane, so instead of
+    // the screen-plane axes it is built along the field's own X and Z, taken
+    // straight out of the affine (view * model) block as its columns.
+    //
+    // Field axes rather than world ones, matching the rest of this feature: the
+    // emitter's positions are field-local and a rotated weather field is not
+    // something surface interaction claims to support (the same documented
+    // degradation as the follow wrap's axis-aligned torus).
+    float ringHalf = 0.0;
+    if (P.splashR0 > 0.0 && !dead && pw.w >= P.splashR0) {
+        const float u = clamp((pw.w - P.splashR0) /
+                                      max(P.splashR1 - P.splashR0, 1e-6),
+                              0.0, 1.0);
+        // The taper and the age fade are the DROP's curves and say nothing
+        // about a splash; the ring's own life is u, and it dims as it spreads.
+        ringHalf  = pw.w * P.sizeScale;
+        distFade *= max(1.0 - u, 0.0);
+        vRing     = P.splashRingWidth;
+    } else {
+        vRing = 0.0;
+    }
+
     // Everything that can remove this particle from the frame, in one predicate.
     // A collapsed quad has exactly zero area and covers no sample — the same
     // idiom and the same cost (none) as the mesh representation's dead-slot
@@ -340,7 +383,16 @@ void main() {
     const bool cull = dead || (distFade <= 0.0);
 
     vec3 vpos = vp;
-    vpos.xy += c.x * axisMinor * halfMinor + c.y * axisMajor * halfMajor;
+    if (ringHalf > 0.0) {
+        // Columns 0 and 2 of the affine view*model, i.e. the field's X and Z
+        // axes expressed in view space. Offsetting in three dimensions is what
+        // lays the quad FLAT; the camera-facing path only ever touches .xy.
+        const vec3 axX = vec3(pc.mv[0].x, pc.mv[1].x, pc.mv[2].x);
+        const vec3 axZ = vec3(pc.mv[0].z, pc.mv[1].z, pc.mv[2].z);
+        vpos = vp + (c.x * ringHalf) * axX + (c.y * ringHalf) * axZ;
+    } else {
+        vpos.xy += c.x * axisMinor * halfMinor + c.y * axisMajor * halfMajor;
+    }
     if (cull) vpos = vp;
 
     vec4 clip = pc.proj * vec4(vpos, 1.0);

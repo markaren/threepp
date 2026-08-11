@@ -7,8 +7,10 @@
 #include "threepp/renderers/vulkan/shaders/particle_density_convert.comp.spv.h"
 #include "threepp/renderers/vulkan/shaders/particle_density_scatter.comp.spv.h"
 #include "threepp/renderers/vulkan/shaders/particle_emit.comp.spv.h"
+#include "threepp/renderers/vulkan/shaders/particle_height_bake.comp.spv.h"
 
 #include <algorithm>
+#include <cstdio>
 #include <cstring>
 #include <stdexcept>
 
@@ -131,11 +133,42 @@ namespace {
         std::uint32_t capacityAndFollow;// 108
         std::uint32_t seed;           // 112
         float driftScale;             // 116
-        float followX;                // 120  field-LOCAL follow centre
-        float followZ;                // 124
+        // ── F4/F5 ───────────────────────────────────────────────────────────
+        // The follow centre used to be two floats HERE and there was nothing
+        // left. F5 needs a height map plus a lifecycle block, so those two
+        // floats became this address and the follow centre moved behind it into
+        // EmitAuxGpu. A field that neither follows nor rests pushes 0, which is
+        // the same eight zero bytes it pushed before F5 existed.
+        VkDeviceAddress auxAddr;      // 120  -> EmitAuxGpu, or 0
     };
     static_assert(sizeof(EmitPc) == 128, "particle_emit push-constant drift");
     static_assert(offsetof(EmitPc, seed) == 112, "particle_emit push-constant layout drift");
+    static_assert(offsetof(EmitPc, auxAddr) == 120, "EmitPc::auxAddr must land at 120");
+
+    constexpr std::uint32_t kBakeLocalSize = 8;// == particle_height_bake.comp (8x8)
+
+    // MUST mirror the push block in particle_height_bake.comp under scalar
+    // layout. Well inside the guaranteed 128 B; the explicit tail pad is what
+    // makes the MSVC layout and the GLSL one the same bytes by construction.
+    struct BakePc {
+        VkDeviceAddress dstAddr;//  0
+        float           originX;//  8  WORLD min corner of the footprint
+        float           originZ;// 12
+        float           cell;   // 16  metres per texel
+        std::uint32_t   res;    // 20
+        float           topY;   // 24  WORLD y the rays start from
+        float           depth;  // 28
+        float           missY;  // 32  FIELD-LOCAL "nothing here"
+        float           yOffset;// 36  the field's world Y
+    };
+    static_assert(sizeof(BakePc) == 40, "particle_height_bake push-constant drift");
+
+    // Clamp bounds for EmitterParams::Surface::resolution. The floor keeps a
+    // degenerate map from making surfaceAt's texel arithmetic meaningless; the
+    // ceiling is 4 MB per ring slot, which is where a height field stops being
+    // the cheap half of this feature.
+    constexpr std::uint32_t kBakeResMin = 16;
+    constexpr std::uint32_t kBakeResMax = 1024;
 
 }// namespace
 
@@ -156,10 +189,15 @@ ParticleFieldPass::~ParticleFieldPass() {
     for (auto& b : descBufs_) destroyBuffer(ctx_.allocator(), b);
     for (auto& b : bbParamBufs_) destroyBuffer(ctx_.allocator(), b);
     for (auto& b : bbViewBufs_)  destroyBuffer(ctx_.allocator(), b);
+    for (auto& b : auxBufs_)     destroyBuffer(ctx_.allocator(), b);
 
     const VkDevice d = ctx_.device();
     if (emitPipe_)          vkDestroyPipeline(d, emitPipe_, nullptr);
     if (emitPipeLayout_)    vkDestroyPipelineLayout(d, emitPipeLayout_, nullptr);
+    if (bakePipe_)          vkDestroyPipeline(d, bakePipe_, nullptr);
+    if (bakePipeLayout_)    vkDestroyPipelineLayout(d, bakePipeLayout_, nullptr);
+    if (bakePool_)          vkDestroyDescriptorPool(d, bakePool_, nullptr);
+    if (bakeDsLayout_)      vkDestroyDescriptorSetLayout(d, bakeDsLayout_, nullptr);
     if (densityPipe_)       vkDestroyPipeline(d, densityPipe_, nullptr);
     if (densityPipeLayout_) vkDestroyPipelineLayout(d, densityPipeLayout_, nullptr);
     if (convertPipe_)       vkDestroyPipeline(d, convertPipe_, nullptr);
@@ -195,6 +233,7 @@ void ParticleFieldPass::destroyState(State& st) {
     for (auto& b : st.indirect) destroyBuffer(ctx_.allocator(), b);
     for (auto& b : st.bbIndirect) destroyBuffer(ctx_.allocator(), b);
     destroyBuffer(ctx_.allocator(), st.orientations);
+    for (auto& b : st.heights) destroyBuffer(ctx_.allocator(), b);
     destroyImage2D(ctx_.allocator(), ctx_.device(), st.density);
     destroyImage2D(ctx_.allocator(), ctx_.device(), st.densityLin);
 }
@@ -536,6 +575,158 @@ void ParticleFieldPass::ensureBbParamCapacity(std::uint32_t frame, std::uint32_t
     bbParamCapacity_ = newCap;
 }
 
+// F4/F5 aux records. Same growth discipline, same window, same reason.
+void ParticleFieldPass::ensureAuxCapacity(std::uint32_t frame, std::uint32_t count) {
+
+    const std::uint32_t want = std::max(count, 1u);
+    if (want <= auxCapacity_ && auxBufs_[frame].handle != VK_NULL_HANDLE) return;
+
+    const std::uint32_t newCap = std::max(want, auxCapacity_ * 2u);
+    for (auto& b : auxBufs_) retireOrDestroy(b);
+    for (auto& b : auxBufs_) {
+        b = createBuffer(ctx_.allocator(), ctx_.device(),
+                         VkDeviceSize(newCap) * sizeof(EmitAuxGpu),
+                         VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
+                                 VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
+                         VMA_MEMORY_USAGE_AUTO, kHostWrite);
+    }
+    auxCapacity_ = newCap;
+}
+
+// ── F5: the height-bake pipeline ────────────────────────────────────────────
+// The one pipeline in this pass that owns a descriptor set, and it owns exactly
+// one binding: the scene TLAS. An acceleration structure cannot be reached by
+// buffer_reference — that is the constraint F4's amendment note 4 recorded
+// about the density volumes, arriving here for the same reason — so the choice
+// was a set or no ray tracing. Everything else the bake needs (the destination
+// map, the footprint) rides in a 40 B push block, and the CONSUMER of the map
+// keeps its zero-descriptor property because a float buffer does have an
+// address.
+void ParticleFieldPass::ensureBakePipeline() {
+
+    if (bakePipe_ != VK_NULL_HANDLE) return;
+    if (!ctx_.rayQuerySupported()) return;
+    const VkDevice d = ctx_.device();
+
+    VkDescriptorSetLayoutBinding b{};
+    b.binding         = 0;
+    b.descriptorType  = VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR;
+    b.descriptorCount = 1;
+    b.stageFlags      = VK_SHADER_STAGE_COMPUTE_BIT;
+    VkDescriptorSetLayoutCreateInfo lci{};
+    lci.sType        = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+    lci.bindingCount = 1;
+    lci.pBindings    = &b;
+    check(vkCreateDescriptorSetLayout(d, &lci, nullptr, &bakeDsLayout_),
+          "vkCreateDescriptorSetLayout(particle height bake)");
+
+    VkDescriptorPoolSize ps{};
+    ps.type            = VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR;
+    ps.descriptorCount = 1;
+    VkDescriptorPoolCreateInfo pci{};
+    pci.sType         = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+    pci.maxSets       = 1;
+    pci.poolSizeCount = 1;
+    pci.pPoolSizes    = &ps;
+    check(vkCreateDescriptorPool(d, &pci, nullptr, &bakePool_),
+          "vkCreateDescriptorPool(particle height bake)");
+
+    VkDescriptorSetAllocateInfo ai{};
+    ai.sType              = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+    ai.descriptorPool     = bakePool_;
+    ai.descriptorSetCount = 1;
+    ai.pSetLayouts        = &bakeDsLayout_;
+    check(vkAllocateDescriptorSets(d, &ai, &bakeSet_),
+          "vkAllocateDescriptorSets(particle height bake)");
+
+    VkPushConstantRange pcr{};
+    pcr.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+    pcr.offset     = 0;
+    pcr.size       = sizeof(BakePc);
+    VkPipelineLayoutCreateInfo plci{};
+    plci.sType                  = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+    plci.setLayoutCount         = 1;
+    plci.pSetLayouts            = &bakeDsLayout_;
+    plci.pushConstantRangeCount = 1;
+    plci.pPushConstantRanges    = &pcr;
+    check(vkCreatePipelineLayout(d, &plci, nullptr, &bakePipeLayout_),
+          "vkCreatePipelineLayout(particle height bake)");
+
+    VkShaderModuleCreateInfo smci{};
+    smci.sType    = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
+    smci.codeSize = sizeof(kParticleHeightBakeCompSpv);
+    smci.pCode    = kParticleHeightBakeCompSpv;
+    VkShaderModule mod = VK_NULL_HANDLE;
+    check(vkCreateShaderModule(d, &smci, nullptr, &mod),
+          "vkCreateShaderModule(particle_height_bake)");
+
+    VkComputePipelineCreateInfo cpci{};
+    cpci.sType        = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
+    cpci.stage.sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+    cpci.stage.stage  = VK_SHADER_STAGE_COMPUTE_BIT;
+    cpci.stage.module = mod;
+    cpci.stage.pName  = "main";
+    cpci.layout       = bakePipeLayout_;
+    const VkResult pr =
+            vkCreateComputePipelines(d, VK_NULL_HANDLE, 1, &cpci, nullptr, &bakePipe_);
+    vkDestroyShaderModule(d, mod, nullptr);
+    check(pr, "vkCreateComputePipelines(particle_height_bake)");
+}
+
+// The TLAS the bake traces. Called every frame from prepareParticleFields, and
+// the descriptor is rewritten ONLY when the handle actually moved.
+//
+// That conditional is the whole safety argument. A TLAS handle is recreated
+// only by a structural scene rebuild, which is bracketed by vkDeviceWaitIdle,
+// so a write that happens on that frame cannot land on a set an in-flight frame
+// names (R6 / VUID-03047). A steady-state scene refits the SAME acceleration
+// structure object in place and this function writes nothing.
+void ParticleFieldPass::setTlas(VkAccelerationStructureKHR tlas) {
+
+    if (tlas == wantTlas_) return;
+    wantTlas_ = tlas;
+    // Every baked map was traced against the old structure.
+    ++bakeStructGen_;
+}
+
+void ParticleFieldPass::recordSurfaceBake(VkCommandBuffer cb) {
+
+    if (bakeDispatch_.empty() || bakePipe_ == VK_NULL_HANDLE) return;
+
+    vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, bakePipe_);
+    vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_COMPUTE, bakePipeLayout_, 0, 1,
+                            &bakeSet_, 0, nullptr);
+    for (const BakeDispatch& bd : bakeDispatch_) {
+        vkCmdPushConstants(cb, bakePipeLayout_, VK_SHADER_STAGE_COMPUTE_BIT, 0,
+                           static_cast<std::uint32_t>(sizeof(BakePc)), bd.pc);
+        vkCmdDispatch(cb, bd.groups, bd.groups, 1);
+    }
+
+    // Two dependencies in one barrier, and the second is the one that is easy
+    // to miss.
+    //
+    //   WRITE -> READ: the map must be complete before particle_emit.comp,
+    //     recorded immediately after this, dereferences it.
+    //   READ -> WRITE: this pass TRACED the acceleration structure, and
+    //     recordDeformAndTlas's per-frame refit WRITES it later in this same
+    //     command buffer. Without the read-before-write edge that is an
+    //     unsynchronised hazard even though nothing here writes the AS.
+    VkMemoryBarrier2 mb{};
+    mb.sType         = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2;
+    mb.srcStageMask  = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+    mb.srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT |
+                       VK_ACCESS_2_ACCELERATION_STRUCTURE_READ_BIT_KHR;
+    mb.dstStageMask  = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT |
+                       VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR;
+    mb.dstAccessMask = VK_ACCESS_2_SHADER_STORAGE_READ_BIT |
+                       VK_ACCESS_2_ACCELERATION_STRUCTURE_WRITE_BIT_KHR;
+    VkDependencyInfo di{};
+    di.sType              = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
+    di.memoryBarrierCount = 1;
+    di.pMemoryBarriers    = &mb;
+    vkCmdPipelineBarrier2(cb, &di);
+}
+
 // ── F4: publish one per-VIEW billboard record ───────────────────────────────
 // Called DURING recording, which is why this block is fixed-size and never
 // grows here: an address handed to a vkCmdPushConstants earlier in the same
@@ -604,6 +795,11 @@ void ParticleFieldPass::prepareFrame(std::uint64_t serial, std::uint32_t frame,
     densityVols_.clear();
     densityDispatch_.clear();
     emitDispatch_.clear();
+    auxScratch_.clear();
+    // F5: the bake list is rebuilt from scratch every frame and is EMPTY on the
+    // overwhelming majority of them — a map is re-traced only when the key that
+    // describes it moved (BakeKey).
+    bakeDispatch_.clear();
     densityOverflow_ = 0;
 
     // Reclaim descriptor sets whose last referencing frame has provably
@@ -760,15 +956,182 @@ void ParticleFieldPass::prepareFrame(std::uint64_t serial, std::uint32_t frame,
             // and an axis-aligned torus around a tilted field is not a thing
             // this asks for — the rotation is ignored, which is the honest
             // degradation (the box stays world-axis-aligned).
+            EmitAuxGpu aux{};
+            bool       needAux = false;
             if (ep.follow) {
                 pc.capacityAndFollow |= 0x80000000u;
                 const Vector3& fc = r.field->followCenter();
-                pc.followX = fc.x - world[12];
-                pc.followZ = fc.z - world[14];
+                aux.followX = fc.x - world[12];
+                aux.followZ = fc.z - world[14];
+                needAux     = true;
+            }
+
+            // ── F5: the surface footprint and its bake ──────────────────────
+            const auto& sp = ep.surface;
+            if (sp.enabled) {
+                if (!ctx_.rayQuerySupported()) {
+                    // A device with no ray query cannot trace a height map, and
+                    // there is no second implementation to fall back to. Said
+                    // once, then silent: surface interaction is simply absent.
+                    if (!bakeUnsupportedLogged_) {
+                        bakeUnsupportedLogged_ = true;
+                        std::fprintf(stderr,
+                                     "[threepp] ParticleField: EmitterParams::Surface needs "
+                                     "VK_KHR_ray_query, which this device does not support "
+                                     "— flakes will not rest.\n");
+                    }
+                } else {
+                    ensureBakePipeline();
+                }
+            }
+            if (sp.enabled && bakePipe_ != VK_NULL_HANDLE &&
+                wantTlas_ != VK_NULL_HANDLE) {
+
+                // The set holds a stale acceleration structure. Written HERE,
+                // in prepareFrame's post-fence window, and only on the frame
+                // the handle actually changed — which is a structural rebuild,
+                // which is itself vkDeviceWaitIdle-guarded (see setTlas).
+                if (bakeTlas_ != wantTlas_) {
+                    VkWriteDescriptorSetAccelerationStructureKHR asInfo{};
+                    asInfo.sType =
+                            VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET_ACCELERATION_STRUCTURE_KHR;
+                    asInfo.accelerationStructureCount = 1;
+                    asInfo.pAccelerationStructures    = &wantTlas_;
+                    VkWriteDescriptorSet w{};
+                    w.sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+                    w.pNext           = &asInfo;
+                    w.dstSet          = bakeSet_;
+                    w.dstBinding      = 0;
+                    w.descriptorCount = 1;
+                    w.descriptorType  = VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR;
+                    vkUpdateDescriptorSets(ctx_.device(), 1, &w, 0, nullptr);
+                    bakeTlas_ = wantTlas_;
+                }
+
+                const std::uint32_t res =
+                        std::max(kBakeResMin, std::min(kBakeResMax, sp.resolution));
+                // The FOOTPRINT. Square, and by default the spawn slab's larger
+                // lateral half-extent — which under EmitterParams::follow is
+                // also exactly half the toroidal wrap period, so the map covers
+                // precisely the box the flakes are folded into and no more.
+                const float extent =
+                        (sp.extent > 0.f)
+                                ? sp.extent
+                                : std::max(std::max(ep.spawnHalfExtent.x,
+                                                    ep.spawnHalfExtent.z), 0.5f);
+                // THE CENTRE, and this is the whole of what the F4 defect
+                // amendment's closing note asks for: when the field follows,
+                // the map re-anchors on the SAME SNAPPED centre the wrap uses,
+                // and therefore only on snaps. Anything else — the raw camera
+                // position, a second snap expression — and the flakes would
+                // rest at heights sampled from where the field used to be.
+                float cx = ep.spawnCenter.x, cz = ep.spawnCenter.z;
+                if (ep.follow) { cx = aux.followX; cz = aux.followZ; }
+
+                // The vertical search band, field-local. Derived when the
+                // author did not name one: from the spawn slab's ceiling down
+                // past one lifetime of fall, which is the band the trajectory
+                // can actually occupy.
+                float topY = sp.searchTop, botY = sp.searchBottom;
+                if (!(topY > botY)) {
+                    topY = ep.spawnCenter.y + ep.spawnHalfExtent.y;
+                    const float fall =
+                            std::abs(ep.velocity.y + ep.wind.y) * ep.lifetime;
+                    botY = topY - std::max(fall, 1.f) - 2.f;
+                }
+
+                BakeKey key{};
+                key.cx     = cx;
+                key.cz     = cz;
+                key.extent = extent;
+                key.res    = res;
+                key.topY   = topY;
+                key.depth  = topY - botY;
+                key.worldX = world[12];
+                key.worldY = world[13];
+                key.worldZ = world[14];
+                key.structGen = bakeStructGen_;
+
+                // Resolution is the only thing that changes the ALLOCATION; the
+                // centre and extent are a transform on the same texels.
+                if (st.heightRes != res) {
+                    for (auto& b : st.heights) retireOrDestroy(b);
+                    for (auto& b : st.heights) {
+                        b = createBuffer(ctx_.allocator(), ctx_.device(),
+                                         VkDeviceSize(res) * VkDeviceSize(res) *
+                                                 sizeof(float),
+                                         VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
+                                                 VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
+                                         VMA_MEMORY_USAGE_AUTO, 0);
+                    }
+                    st.heightRes = res;
+                    for (auto& k : st.bakedKey) k = BakeKey{};
+                }
+
+                Buffer& hb = st.heights[frame];
+                if (hb.handle != VK_NULL_HANDLE) {
+                    const float cell  = (2.f * extent) / float(res);
+                    // "Nothing to land on", far below anything the trajectory
+                    // reaches — so the solve reports no landing and the
+                    // particle falls out of the world exactly as it did pre-F5.
+                    const float missY = botY - 1.0e4f;
+
+                    if (st.bakedKey[frame] != key) {
+                        BakePc bp{};
+                        bp.dstAddr = hb.address;
+                        bp.originX = world[12] + cx - extent;
+                        bp.originZ = world[14] + cz - extent;
+                        bp.cell    = cell;
+                        bp.res     = res;
+                        bp.topY    = world[13] + topY;
+                        bp.depth   = key.depth;
+                        bp.missY   = missY;
+                        bp.yOffset = world[13];
+
+                        BakeDispatch bd{};
+                        bd.groups = (res + kBakeLocalSize - 1u) / kBakeLocalSize;
+                        std::memcpy(bd.pc, &bp, sizeof(bp));
+                        bakeDispatch_.push_back(bd);
+                        st.bakedKey[frame] = key;
+                    }
+
+                    aux.heightAddr    = hb.address;
+                    aux.bakeOriginX   = cx - extent;
+                    aux.bakeOriginZ   = cz - extent;
+                    aux.bakeInvCell   = 1.f / cell;
+                    aux.bakeRes       = res;
+                    aux.bakeMiss      = missY;
+                    aux.landBias      = sp.bias;
+                    aux.restSeconds   = std::max(sp.restSeconds, 0.f);
+                    aux.restJitter    = std::max(0.f, std::min(1.f, sp.restJitter));
+                    // Floored, not clamped to zero: a zero fade would divide by
+                    // zero in landedState and hand every consumer a NaN radius,
+                    // which is the failure mode that defeats bounds checks
+                    // rather than showing up as one bad flake.
+                    aux.fadeSeconds   = std::max(sp.fadeSeconds, 1e-3f);
+                    aux.splashSeconds = std::max(sp.splashSeconds, 0.f);
+                    // The splash ring in absolute metres. R0 sits just past the
+                    // largest radius the size jitter can produce, so a w at or
+                    // above it can only be a ring — which is the whole of how
+                    // the billboard recognises one without a second channel.
+                    if (aux.splashSeconds > 0.f) {
+                        const float rMax =
+                                std::max(ep.size, 1e-5f) *
+                                (1.f + std::max(0.f, std::min(1.f, ep.sizeJitter)));
+                        aux.splashR0 = rMax * 1.05f;
+                        aux.splashR1 = std::max(rMax * std::max(sp.splashGrow, 1.1f),
+                                                aux.splashR0 * 1.01f);
+                    }
+                    needAux           = true;
+                }
             }
 
             EmitDispatch ed{};
             ed.groups = (st.capacity + kEmitLocalSize - 1u) / kEmitLocalSize;
+            if (needAux) {
+                ed.auxIndex = static_cast<std::uint32_t>(auxScratch_.size());
+                auxScratch_.push_back(aux);
+            }
             std::memcpy(ed.pc, &pc, sizeof(pc));
             emitDispatch_.push_back(ed);
         }
@@ -937,7 +1300,21 @@ void ParticleFieldPass::prepareFrame(std::uint64_t serial, std::uint32_t frame,
                 bp.duty           = std::max(1e-3f, std::min(1.f, ep.dutyCycle));
                 bp.time           = r.field->emitterTime();
                 bp.seed           = ep.seed;
+                // ── F5: the splash decode ───────────────────────────────────
+                // The same two numbers the emitter encodes with, computed by
+                // the same expression a few dozen lines below — they are a
+                // MATCHED PAIR and the pass owns both ends of it, which is why
+                // neither is authored directly.
+                if (ep.surface.enabled && ep.surface.splashSeconds > 0.f) {
+                    const float rMax =
+                            std::max(ep.size, 1e-5f) *
+                            (1.f + std::max(0.f, std::min(1.f, ep.sizeJitter)));
+                    bp.splashR0 = rMax * 1.05f;
+                    bp.splashR1 = std::max(rMax * std::max(ep.surface.splashGrow, 1.1f),
+                                           bp.splashR0 * 1.01f);
+                }
             }
+            bp.splashRingWidth = std::max(0.02f, std::min(1.f, bb.splashRingWidth));
 
             ds.bbIndirect = st.bbIndirect[slot].handle;
             ds.billboard  = true;
@@ -971,6 +1348,23 @@ void ParticleFieldPass::prepareFrame(std::uint64_t serial, std::uint32_t frame,
         }
     }
 
+    // F4/F5 aux records: one upload for the whole frame, then patch each emit
+    // push block's trailing address. The patch is a memcpy into the prebuilt
+    // bytes at offset 120 rather than a rebuild of the block, because the block
+    // is otherwise finished and the address is the only thing that could not be
+    // known while the loop was still deciding how many records there would be.
+    if (!auxScratch_.empty()) {
+        ensureAuxCapacity(frame, static_cast<std::uint32_t>(auxScratch_.size()));
+        uploadHostVisible(ctx_.allocator(), auxBufs_[frame], auxScratch_.data(),
+                          VkDeviceSize(auxScratch_.size()) * sizeof(EmitAuxGpu));
+        const VkDeviceAddress base = auxBufs_[frame].address;
+        for (EmitDispatch& ed : emitDispatch_) {
+            if (ed.auxIndex == 0xffffffffu) continue;
+            const VkDeviceAddress a = base + ed.auxIndex * sizeof(EmitAuxGpu);
+            std::memcpy(ed.pc + offsetof(EmitPc, auxAddr), &a, sizeof(a));
+        }
+    }
+
     // Sweep. A field whose owning shared_ptr died is gone for good; one merely
     // absent from this frame's entry list may only be parked (visible = false
     // hides it from traverseVisible), so a tracked field is kept.
@@ -985,6 +1379,7 @@ void ParticleFieldPass::prepareFrame(std::uint64_t serial, std::uint32_t frame,
             for (auto& b : st.counts) retireOrDestroy(b);
             for (auto& b : st.indirect) retireOrDestroy(b);
             for (auto& b : st.bbIndirect) retireOrDestroy(b);
+            for (auto& b : st.heights) retireOrDestroy(b);
             retireOrDestroy(st.orientations);
             // The set goes back to the pool by hand — the pool is exactly
             // kMaxDensityFields deep, so leaking a set would cap the scene at

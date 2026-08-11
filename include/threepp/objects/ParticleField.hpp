@@ -277,6 +277,16 @@ namespace threepp {
             // wants its DIM particles left out of its own halo.
             float glowThreshold = 0.f;
 
+            // ── F5: the splash ring ─────────────────────────────────────────
+            // When EmitterParams::Surface::splashSeconds is on, a landed
+            // particle's quad stops facing the camera and lies FLAT in the
+            // world XZ plane, drawn as an expanding annulus. This is the
+            // annulus width as a fraction of the ring's own radius: 1 is a
+            // filled disc, 0.3 is a rim. Nothing here turns the splash on —
+            // that is the emitter's business, and this shader only draws what
+            // the emitter wrote into w.
+            float splashRingWidth = 0.30f;
+
             bool enabled = false;
         };
         // Dense dust / smoke. The field is scattered ONCE per frame into a
@@ -481,6 +491,101 @@ namespace threepp {
             // per-frame-fitted density box, which is why FireEffect's boxes are
             // fixed.)
             float followSnap = 4.f;
+
+            // ── F5: ANALYTIC SURFACE INTERACTION (rest + splatter) ──────────
+            // Snow that RESTS on what is under it and rain that SPLASHES where
+            // it lands, without giving up the closed form.
+            //
+            // A compute pass bakes a top-down HEIGHT MAP of the scene over this
+            // field's lateral footprint (particle_height_bake.comp — one ray
+            // query straight down per texel, the cloud-shadow map's structure
+            // with a TLAS trace where its cloud march is). The emitter then
+            // SOLVES, inside f(seed, t), for the age at which the trajectory's
+            // own height meets the baked height under its own drifted xz, and
+            // clamps the particle there. Landing, resting, fading and (for
+            // rain) splashing are all still pure functions of (seed, t), so
+            // every property the mode exists for survives intact:
+            //
+            //   • DETERMINISM and SEEKING — nothing accumulates; setEmitterTime
+            //     to any t reproduces the resting flakes exactly as well as the
+            //     falling ones.
+            //   • EXACT MOTION VECTORS — a resting particle writes pos ==
+            //     prevPos bit-identically, i.e. zero motion, which is the
+            //     truth about a flake lying on a roof.
+            //   • ZERO PER-PARTICLE CPU — the host writes one 64 B record.
+            //
+            // ── LIMITS, stated up front rather than discovered ──────────────
+            //   • Flakes rest and FADE. They do not accumulate into a snowpack:
+            //     a snowpack is a change to the SURFACE (geometry, albedo,
+            //     material), not to the particles, and it is a separate
+            //     project.
+            //   • The bake sees the scene AS IT WAS AT BAKE TIME. Dynamic
+            //     objects do not carve flake shadows unless something re-bakes;
+            //     the renderer re-bakes on a structural scene change (the same
+            //     trigger as an entry-list rebuild) and whenever the follow
+            //     centre snaps, and that is all.
+            //   • A top-down height map has no overhangs. A flake rests on the
+            //     FIRST surface below the cloud, which is what snow does; it
+            //     will not settle on a shelf under a table.
+            struct Surface {
+                bool enabled = false;
+
+                // Half-size of the SQUARE bake footprint, field-local metres.
+                // 0 = use spawnHalfExtent.xz — which is also the toroidal wrap
+                // period, so a FOLLOWING field's bake covers exactly the box
+                // its flakes are folded into, no more and no less.
+                float extent = 0.f;
+                // Texels per axis. Clamped to [16, 1024]; 256 over a 48 m box
+                // is 19 cm per texel and 256 KB per ring slot.
+                //
+                // The map is sampled NEAREST, deliberately. Bilinear across a
+                // roof edge interpolates between the roof and the ground three
+                // metres below it and rests flakes in mid-air on the ramp
+                // between them; nearest quantises the LANDING POINT in xz to a
+                // texel and puts every flake on a real surface.
+                std::uint32_t resolution = 256;
+
+                // The vertical search band, FIELD-LOCAL. Rays start at
+                // `searchTop` and run down `searchTop - searchBottom` metres.
+                // searchTop == searchBottom (the default pair) means "derive
+                // it": the top is the spawn slab's own ceiling and the bottom
+                // is one lifetime of fall below it, which is the band the
+                // trajectory can actually occupy.
+                float searchTop    = 0.f;
+                float searchBottom = 0.f;
+
+                // Metres above the baked surface the particle's CENTRE rests.
+                // A flake proxy is a solid with a radius, so 0 buries half of
+                // it; the sensible value is around the particle's own size.
+                float bias = 0.f;
+
+                // How long a landed particle holds its position before it
+                // starts to fade, seconds, and the hashed +/- fraction of that
+                // per slot. A field whose flakes all vanish together reads as a
+                // blink; the jitter is the whole cost of avoiding it.
+                float restSeconds = 3.f;
+                float restJitter  = 0.6f;
+                // Seconds of shrink-to-nothing after the rest. The fade is a
+                // RADIUS ramp — w is the radius under WSemantic::Radius, so the
+                // mesh proxy and the billboard both take it for free and no
+                // alpha channel is needed anywhere.
+                float fadeSeconds = 1.2f;
+
+                // ── Rain: the splash ────────────────────────────────────────
+                // > 0 makes a landed particle spend this long as an expanding,
+                // flattened RING at its landing point instead of resting as a
+                // drop. The ring is drawn by the billboard representation,
+                // which recovers the splash's phase from the radius the emitter
+                // wrote into w (see BillboardRepr and the vertex shader): a
+                // scale ABOVE 1 can only mean a splash, because nothing else in
+                // the lifecycle ever grows a particle.
+                float splashSeconds = 0.f;
+                // Ring radius at the end of the splash, in multiples of the
+                // particle's own radius. Also the decode divisor, so the
+                // renderer keeps it in step with the billboard record.
+                float splashGrow = 7.f;
+            };
+            Surface surface;
 
             std::uint32_t seed = 20260812u;
         };

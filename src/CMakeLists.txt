@@ -1364,6 +1364,14 @@ if (THREEPP_WITH_VULKAN)
         "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/particle_emit.comp"
         kParticleEmitCompSpv
         _particle_emit_spv_h)
+    # F5 surface interaction: a top-down height map of the static scene over one
+    # field's footprint, one ray query per texel. The emitter solves its landing
+    # against this map inside the closed form, so snow rests and rain splashes
+    # with no collision pass and no per-particle state.
+    compile_vulkan_shader(threepp
+        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/particle_height_bake.comp"
+        kParticleHeightBakeCompSpv
+        _particle_height_bake_spv_h)
     compile_vulkan_shader(threepp
         "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/skinning.comp"
         kSkinningCompSpv

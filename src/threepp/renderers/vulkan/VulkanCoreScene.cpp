@@ -822,6 +822,12 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
             entrySpans_         = std::move(builtSpans);
             particleFields_     = std::move(builtFields);
             probeGridDirty_     = true;// scene structure changed → re-fit the probe grid
+            // ...and re-bake every ParticleField surface height map (F5). The
+            // set of things a flake can land on is exactly what just changed,
+            // and this is the trigger the plan names ("the same trigger as
+            // entry rebuild"). Cheap: it bumps a counter, and only the fields
+            // that actually use a map pay for a re-trace.
+            if (particleFieldPass_) particleFieldPass_->invalidateSurfaceBakes();
             }// !snapLean
 
             // ── Automatic mesh LOD selection (setAutoLod; ON by default) ────

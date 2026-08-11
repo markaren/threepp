@@ -39,6 +39,9 @@ layout(location = 2) in float vSoft;
 // radiance and would be meaningless on a tone-mapped, sRGB-encoded value.
 layout(location = 3) flat in float vExposure;
 layout(location = 4) flat in uint  vToneMap;
+// F5: > 0 draws an ANNULUS of this fractional width instead of the disc — the
+// splash ring. Flat, so the branch is uniform over every fragment of the quad.
+layout(location = 5) flat in float vRing;
 
 layout(push_constant, scalar) uniform Pc {
     mat4     proj;
@@ -63,6 +66,19 @@ void main() {
     const float skirt = pow(t, mix(4.0, 1.2, vSoft));
     const float core  = pow(t, 9.0);
     float a = skirt + 0.85 * core;
+
+    // ── F5: the splash ANNULUS ──────────────────────────────────────────────
+    // A splash is a rim of water thrown outward, not a filled blob: the disc
+    // above would read as a growing puddle. The peak sits half a width inside
+    // the quad's edge and falls off both ways, squared so the rim is soft
+    // rather than a hard band — and the whole branch is uniform over the draw,
+    // so a field with no splash pays one compare per fragment.
+    if (vRing > 0.0) {
+        const float w = max(vRing, 0.02);
+        const float d = abs(r - (1.0 - 0.5 * w)) / (0.5 * w);
+        const float k = max(1.0 - d, 0.0);
+        a = k * k;
+    }
 
     const vec4 tx = texture(tex, vLocal * 0.5 + 0.5);
     a *= tx.a;
