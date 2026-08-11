@@ -233,4 +233,37 @@ float particleMedium(vec3 p, out vec3 albedo, out float g) {
     return s;
 }
 
+#ifdef PD_LINEAR
+// σ_t at p from the r16f MIRRORS (one hardware-trilinear fetch per volume where
+// the integer path costs eight texelFetches), plus the σ-weighted albedo of the
+// mixture — the same quantity particleMedium() returns, over the cheap
+// representation, for consumers that march a whole leg rather than sampling a
+// point.
+//
+// Only for shaders that carry binding 69, which is why it sits behind the same
+// PD_LINEAR guard the declaration does: the froxel pipelines do not have it.
+//
+// n == 1 short-circuits for particleMedium()'s reason — the a·s/s round trip is
+// not the float identity, and one field is the overwhelmingly common case.
+float pdMediumLinear(vec3 p, out vec3 albedo) {
+    albedo = vec3(1.0);
+    const uint n = min(pd.counts.x, uint(kMaxDensityFields));
+    if (n == 0u) return 0.0;
+    float s = 0.0;
+    vec3  a = vec3(0.0);
+    for (uint i = 0u; i < n; ++i) {
+        const vec3 tt = (p - pd.boxMin[i].xyz) * pd.boxInvSize[i].xyz;
+        // Skip, don't clamp — CLAMP_TO_EDGE smears the boundary voxels over the
+        // whole world, which reads as infinite dust.
+        if (any(lessThan(tt, vec3(0.0))) || any(greaterThan(tt, vec3(1.0)))) continue;
+        const float si = texture(particleDensityLinTex[i], tt).r;
+        s += si;
+        a += pd.albedoAniso[i].rgb * si;
+    }
+    if (s <= 0.0) return 0.0;
+    albedo = (n == 1u) ? pd.albedoAniso[0].rgb : (a / s);
+    return s;
+}
+#endif
+
 #endif// THREEPP_PARTICLE_DENSITY_GLSL

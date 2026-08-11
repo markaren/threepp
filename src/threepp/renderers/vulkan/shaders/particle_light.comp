@@ -136,6 +136,15 @@ layout(set = 0, binding = 65) uniform sampler2D cloudShadowTex;
 
 #include "probe_common.glsl"// probeIrradianceConf()
 
+// ── PARTICLE DENSITY (bindings 67/68/69) ────────────────────────────────────
+// Set 0 here IS the DeferredShade set, so these three bindings have been in
+// this pipeline's layout since F0 — nothing had ever declared them on this
+// side. PD_LINEAR opts into the r16f mirrors (binding 69), which is what makes
+// the leg march below one hardware-filtered fetch per step per volume instead
+// of eight texelFetches.
+#define PD_LINEAR
+#include "particle_density.glsl"
+
 // Particle IO (set 1) — centers written by the CPU per render call (world
 // space, one vec4 per particle), light/fog results read by particle.vert.
 layout(set = 1, binding = 0, scalar) readonly buffer ParticleCenters { vec4 centers[]; };
@@ -356,6 +365,70 @@ void main() {
     // Froxel LUT: the integrated point/spot glow BETWEEN camera and puff.
     if (onScreen) fogAdd += froxelInscatter(uv, dist);
 
+    // ── PARTICLE-DENSITY EXTINCTION over the same leg (defect fix, 2026-08-11)
+    //
+    // THE DEFECT. The fjord's chimney smoke read straight THROUGH 40 m of
+    // snowfall, at full contrast, while every surface behind the same snow was
+    // hazed correctly. This block is the reason: the fog model above is the
+    // legacy overlay's and it predates ParticleField density entirely — it
+    // carries the analytic height fog and the underwater murk and nothing else,
+    // so a medium made of PARTICLES was invisible to it. The deferred path had
+    // grown applyParticleFog; this path had not, and the difference was on
+    // screen the moment a scene put both kinds of medium in one frame.
+    //
+    // WHY THIS IS A BUG FIX AND NOT A NEW FEATURE — which matters, because the
+    // parent plan (plans/particle-field.md §3.2) requires the legacy
+    // ParticleSystem path untouched. The model here was INCOMPLETE, not
+    // different: it already composes extinction and in-scatter for every other
+    // medium in the scene, sequentially, and this is the third medium composed
+    // the same way. The assertion that keeps it honest is byte identity when no
+    // volume is bound, which the uniform branch below gives textually: a scene
+    // with no ParticleField density executes exactly the pre-fix arithmetic.
+    //
+    // PER PARTICLE CENTRE, NOT PER PIXEL. That is the model this whole pass is
+    // — every term above is evaluated once at the centre and interpolated over
+    // the quad by particle.vert — and it is affordable because there are at
+    // most kMaxLitParticles (16384) of them. 8 steps: the media this attenuates
+    // through are weather volumes tens of metres across, where the leg's
+    // optical depth is a smooth integral and 8 samples of a trilinear field
+    // resolve it to well under a display level. No jitter, for the reason the
+    // sun march below states — the overlay has no TAA to average one away.
+    //
+    // TRANSMITTANCE *AND* IN-SCATTER, unlike the F4 billboard path, and the
+    // difference is compositing: these quads are ALPHA-BLENDED and REPLACE the
+    // background they cover, so the in-scatter the deferred pass put into those
+    // pixels is thrown away and has to be re-added here. The additive billboard
+    // path adds to a background that already carries it, so adding it there
+    // would double it (F4 amendment note 4 — same model, different composite).
+    // Computed HERE and applied at the very end, after the froxel glow and the
+    // sun march have contributed to fogAdd: all three are in-scatter over the
+    // same camera leg, and the dust attenuates the lot of them.
+    float Tp = 1.0;
+    vec3  pdInscatter = vec3(0.0);
+    if (pd.counts.x != 0u) {
+        const int   PSTEPS = 8;
+        const float pdt    = dist / float(PSTEPS);
+        float pTau = 0.0;
+        vec3  pAlb = vec3(0.0);// sigma-weighted, carrying the same weight as pTau
+        for (int s = 0; s < PSTEPS; ++s) {
+            vec3 alb;
+            const float sig = pdMediumLinear(camPos + rd * ((float(s) + 0.5) * pdt), alb);
+            if (sig <= 0.0) continue;
+            pTau += sig * pdt;
+            pAlb += alb * (sig * pdt);
+        }
+        Tp = exp(-min(pTau, 80.0));
+        // The dust's own ambient in-scatter, in the same shape the air and murk
+        // terms above take: albedo x ambient x (1 - T). The SUN's contribution
+        // through the dust is deliberately NOT here — that is applyParticleFog's
+        // 24-step march with its shadow ray and phase function, and a second,
+        // cheaper, differently-wrong copy of it is exactly the duplicate BSDF
+        // the house rule forbids. A billboard behind a sunlit plume therefore
+        // loses the right amount of light and gains a slightly cool fill; the
+        // surface one pixel to its side gets both. Recorded, not papered over.
+        if (pTau > 0.0) pdInscatter = (pAlb / pTau) * fogLight * (1.0 - Tp);
+    }
+
     // Short sun march over the leg — the god rays IN FRONT of the puff
     // (volumetricDirScatter's per-step terms at 8 jitter-free steps; no jitter
     // because the overlay has no TAA to average it — stable slight banding
@@ -385,6 +458,18 @@ void main() {
         fogAdd += sum * airAlbedo * dt;
     }
 
-    plight[i * 2u + 0u] = vec4(light, Ta * Tm);
-    plight[i * 2u + 1u] = vec4(fogAdd, 0.0);
+    // The particle medium composes LAST — nearest-to-camera in the sequential
+    // air→murk→dust chain — so it attenuates everything the legs above put in
+    // front of the puff and adds its own. Guarded rather than written
+    // unconditionally as `fogAdd * 1.0 + 0.0`: a scene with no density volume
+    // must execute the pre-fix expression TEXTUALLY, which is what makes the
+    // byte-identity assertion in VulkanParticleField_test a statement about the
+    // code and not about float luck.
+    if (pd.counts.x != 0u) {
+        plight[i * 2u + 0u] = vec4(light, Ta * Tm * Tp);
+        plight[i * 2u + 1u] = vec4(fogAdd * Tp + pdInscatter, 0.0);
+    } else {
+        plight[i * 2u + 0u] = vec4(light, Ta * Tm);
+        plight[i * 2u + 1u] = vec4(fogAdd, 0.0);
+    }
 }
