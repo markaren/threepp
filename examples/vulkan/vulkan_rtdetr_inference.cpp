@@ -22,6 +22,8 @@
 #include "threepp/objects/Sprite.hpp"
 #include "threepp/materials/SpriteMaterial.hpp"
 
+#include "capture_util.hpp"
+#include "coco_labels.hpp"
 #include "utility/DetectionOverlay.hpp"
 #include "rtdetr/RtDetrVk.hpp"
 #include "rtdetr/WeightLoader.hpp"
@@ -36,18 +38,10 @@
 
 using namespace threepp;
 
-static const char* kCocoNames[80] = {
-    "person","bicycle","car","motorbike","aeroplane","bus","train","truck","boat",
-    "traffic light","fire hydrant","stop sign","parking meter","bench","bird","cat",
-    "dog","horse","sheep","cow","elephant","bear","zebra","giraffe","backpack",
-    "umbrella","handbag","tie","suitcase","frisbee","skis","snowboard","sports ball",
-    "kite","baseball bat","baseball glove","skateboard","surfboard","tennis racket",
-    "bottle","wine glass","cup","fork","knife","spoon","bowl","banana","apple",
-    "sandwich","orange","broccoli","carrot","hot dog","pizza","donut","cake","chair",
-    "sofa","pottedplant","bed","diningtable","toilet","tvmonitor","laptop","mouse",
-    "remote","keyboard","cell phone","microwave","oven","toaster","sink","refrigerator",
-    "book","clock","vase","scissors","teddy bear","hair drier","toothbrush"
-};
+// The label table indexes the model's class dimension directly, so a mismatch
+// between the two would mislabel every detection with no other symptom.
+static_assert(std::ssize(coco::kCoco80) == rtdetr::RtDetrVk::NUM_CLASSES,
+              "COCO-80 label table does not match RtDetrVk::NUM_CLASSES");
 
 // ── Validation mode (--validate): diff every layer against the captured ref ──
 static void compare(const char* name, const std::vector<float>& got,
@@ -162,8 +156,7 @@ static int runDetection(Canvas& canvas, VulkanRenderer& renderer, rtdetr::RtDetr
               << std::fixed << std::setprecision(1) << ms << " ms  ("
               << std::setprecision(1) << (1000.0 / ms) << " FPS):\n";
     for (auto& d : detections) {
-        const char* name = (d.classId >= 0 && d.classId < 80) ? kCocoNames[d.classId] : "?";
-        std::cout << "  " << std::left << std::setw(16) << name << std::right
+        std::cout << "  " << std::left << std::setw(16) << coco::name80(d.classId) << std::right
                   << "  conf " << std::setprecision(3) << d.confidence
                   << "  [" << int(d.x1) << "," << int(d.y1) << "," << int(d.x2) << "," << int(d.y2) << "]\n";
     }
@@ -189,20 +182,19 @@ static int runDetection(Canvas& canvas, VulkanRenderer& renderer, rtdetr::RtDetr
     for (auto& d : detections) {
         float bx1 = d.x1 * sx, bx2 = d.x2 * sx;
         float by1 = 640.f - d.y2 * sy, by2 = 640.f - d.y1 * sy;// flip Y for ortho
-        const Color& col = detviz::kPalette[d.classId % 6];
+        const Color& col = detviz::classColor(d.classId);
         scene->add(detviz::makeBoxLines(bx1, by1, bx2, by2, col));
-        const char* name = (d.classId >= 0 && d.classId < 80) ? kCocoNames[d.classId] : "?";
-        scene->add(detviz::makeLabel(font, detviz::labelText(name, d.confidence), col, bx1, by2));
+        scene->add(detviz::makeLabel(font, detviz::labelText(coco::name80(d.classId), d.confidence), col, bx1, by2));
     }
 
-    int shotFrame = 0;
+    // A few frames so the swapchain holds the finished overlay, then write the
+    // path the caller asked for verbatim (not an aaa_caps name) and exit.
+    capture::Shot shot;
+    shot.name = shotPath;
+    shot.frames = 5;
     canvas.animate([&] {
         renderer.render(*scene, *camera);
-        if (!shotPath.empty() && ++shotFrame >= 5) {
-            renderer.writeFramebuffer(shotPath);
-            std::cout << "wrote " << shotPath << "\n";
-            std::exit(0);
-        }
+        if (shot.ready()) capture::finishShotAtPath(renderer, shot.name);
     });
     return 0;
 }

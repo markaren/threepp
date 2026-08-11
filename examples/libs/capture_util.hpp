@@ -3,14 +3,19 @@
 // harnesses (see scratch/README.md). The split is deliberate: this is the
 // durable *capability*; the per-debug scene/pose/flags live in scratch.
 //
-// Three things, none of which should be re-implemented per demo:
+// Four things, none of which should be re-implemented per demo:
 //   • parseArgs()           — camera pose + frames + output overridable from the
 //                             CLI, so reframing a capture needs NO rebuild.
+//   • Shot/finishShot()     — the "warm up N frames, write one PNG, exit"
+//                             recorder every headless capture is built on.
 //   • writeFrameTimings()   — dump VulkanRenderer::lastFrameTimings() as JSON
 //                             (--profile) so per-pass cost is measurable headless
 //                             / in CI instead of eyeballed.
 //   • imageDiff()/diffStats — MSE/PSNR + banded delta stats for objective
 //                             before/after and convergence checks.
+//
+// The window/camera resize boilerplate lives next door in window_util.hpp — it
+// is not a capture concern, and most demos want it without wanting this.
 //
 // Header-only and dependency-free (just threepp + the stdlib). Lives in
 // examples/libs (on every example target's include path), so ANY demo — GL or
@@ -18,6 +23,7 @@
 // Vulkan-only pieces (frame timings) are guarded by THREEPP_WITH_VULKAN.
 #pragma once
 
+#include "threepp/math/MathUtils.hpp"
 #include "threepp/math/Vector3.hpp"
 
 #ifdef THREEPP_WITH_VULKAN
@@ -45,6 +51,7 @@ namespace capture {
         std::optional<threepp::Vector3> camPos;     // --cam:  eye position
         std::optional<threepp::Vector3> camTarget;  // --look: look-at target
         std::optional<int>              frames;     // --frames
+        std::optional<std::string>      shot;       // --shot: capture name -> aaa_caps/
         std::optional<std::string>      out;        // --out
         bool                            profile = false;// --profile (dump timings)
         std::string                     profilePath;    // optional JSON-lines file
@@ -67,6 +74,7 @@ namespace capture {
             if (const char* s = val("--cam")) a.camPos = parseVec3(s);
             else if (const char* s = val("--look")) a.camTarget = parseVec3(s);
             else if (const char* s = val("--frames")) a.frames = std::atoi(s);
+            else if (const char* s = val("--shot")) a.shot = std::string(s);
             else if (const char* s = val("--out")) a.out = std::string(s);
             else if (std::strcmp(argv[i], "--profile") == 0) {
                 a.profile = true;
@@ -75,6 +83,45 @@ namespace capture {
         }
         return a;
     }
+
+    // ── The --shot warm-up counter ────────────────────────────────────────────
+    // A headless capture renders N frames so the path tracer / TAA can converge,
+    // then writes one PNG and exits (see finishShot below). Every demo grew its
+    // own `shotPath` + `shotFrames` + `shotFrame` triple to drive that; Shot IS
+    // that triple, so the loop tail is one line and the default warm-up is stated
+    // in exactly one place.
+    struct Shot {
+        // Enough for the path tracer and TAA to converge on a typical scene; a
+        // demo that settles slower passes its own default to the constructor.
+        static constexpr int kDefaultFrames = 240;
+
+        std::string name;  // --shot <name.png>; empty = interactive run
+        int         frames = kDefaultFrames;// --frames N: warm-up before the write
+        int         frame = 0;              // frames rendered so far
+
+        Shot() = default;
+        explicit Shot(const Args& a, int defaultFrames = kDefaultFrames)
+            : name(a.shot.value_or(std::string{})),
+              frames(a.frames.value_or(defaultFrames)) {}
+
+        // Headless capture requested? (Demos gate their ImGui panel on this: UI
+        // must not be drawn into the measured frames.)
+        [[nodiscard]] bool active() const { return !name.empty(); }
+
+        // Count one rendered frame; true once the warm-up is complete, i.e. this
+        // framebuffer is the one to write. Stays true afterwards — harmless,
+        // because the only sensible response is the [[noreturn]] finishShot():
+        //     if (shot.ready()) capture::finishShot(renderer, shot.name);
+        bool ready() { return active() && ++frame >= frames; }
+
+        // True on the single frame at `fraction` through the warm-up — for
+        // mid-capture state changes ("switch the wind halfway", "toggle to
+        // night"), which is how the live-update paths get exercised headlessly.
+        // Read it BEFORE ready() in the frame body; ready() is what advances.
+        [[nodiscard]] bool at(float fraction) const {
+            return active() && frame == int(float(frames) * fraction);
+        }
+    };
 
 #ifdef THREEPP_WITH_VULKAN
     // ── Frame-timing dump ─────────────────────────────────────────────────────
@@ -118,6 +165,30 @@ namespace capture {
         return p;
     }
 
+    // A sequence run (--seqn / --seqframes) writes consecutive frames as
+    // <stem>_000.png, _001.png, … beside where finishShot() would put
+    // <stem>.png. Built on shotOutputPath() so "where captures go" stays a
+    // single fact: the demos each hand-rolled this <stem>_%03d splice, and a
+    // demo that spells the aaa_caps/ path itself is one that can drift from it.
+    inline std::filesystem::path shotSequencePath(const std::string& name, int index) {
+        const std::filesystem::path p(name);
+        char suffix[16];
+        std::snprintf(suffix, sizeof suffix, "_%03d", index);
+        return shotOutputPath(
+                (p.parent_path() / (p.stem().string() + suffix + p.extension().string())).string());
+    }
+
+    // Write one frame of a sequence; returns the path it went to. Deliberately
+    // silent: callers differ on whether they log per frame or one summary line
+    // at the end, and that is a presentation choice, not shared machinery.
+    template<class Renderer>
+    std::filesystem::path writeShotSequenceFrame(Renderer& renderer,
+                                                 const std::string& name, int index) {
+        const auto p = shotSequencePath(name, index);
+        renderer.writeFramebuffer(p);
+        return p;
+    }
+
     // `stats` is appended verbatim to the "wrote <path>" line — build it with
     // an ostringstream so float formatting matches operator<<.
     template<class Renderer>
@@ -129,6 +200,65 @@ namespace capture {
         std::exit(0);
     }
 #endif// PROJECT_FOLDER
+
+    // finishShot()'s sibling for demos whose --shot is a PATH written exactly as
+    // given, rather than a name resolved into the repo's aaa_caps/ directory.
+    // The detector demos work that way (they take an output filename beside their
+    // input image), so they must NOT go through finishShot — the two are kept
+    // adjacent here so the choice is visible instead of re-derived per demo.
+    template<class Renderer>
+    [[noreturn]] inline void finishShotAtPath(Renderer& renderer, const std::string& path) {
+        renderer.writeFramebuffer(path);
+        std::cout << "wrote " << path << std::endl;
+        std::exit(0);
+    }
+
+    // ── The scripted-orbit sequence (--seq) ──────────────────────────────────
+    // Some defects are invisible in a still and only appear while the camera
+    // moves — view-anchored quantisation is the whole class. The evidence has to
+    // be a SEQUENCE: warm-up frames to bring every temporal history (TAA,
+    // froxel EMA) to its steady state, then N consecutive frames written out.
+    //
+    // The camera path is closed-form in the FRAME INDEX, not in wall-clock time.
+    // That is the property that makes the output evidence: two runs of the same
+    // command produce the same poses, so frames can be diffed across builds.
+    struct OrbitSequence {
+        std::string dir;             // output directory (created if absent)
+        int         frames = 8;      // consecutive frames written
+        int         warm = 100;      // frames rendered before the first write
+        float       orbitDegPerSec = 22.f;// azimuth rate; 0 holds the pose
+        float       dt = 1.f / 60.f; // fixed step — a capture has no wall clock
+    };
+
+    // Orbits `camera` about `target` at its current radius and height, calling
+    // `step(t)` to advance the effect to sequence time t and `renderFrame()` to
+    // draw. Writes dir/f00.png, f01.png, … once the warm-up is done.
+    template<class Renderer, class Camera, class Step, class RenderFrame>
+    void runOrbitSequence(const OrbitSequence& seq, Renderer& renderer, Camera& camera,
+                          const threepp::Vector3& target, Step&& step, RenderFrame&& renderFrame) {
+        std::filesystem::create_directories(seq.dir);
+
+        const threepp::Vector3 eye0 = camera.position;
+        const float r0 = std::hypot(eye0.x - target.x, eye0.z - target.z);
+        const float a0 = std::atan2(eye0.z - target.z, eye0.x - target.x);
+        const float rate = seq.orbitDegPerSec * threepp::math::DEG2RAD;// rad/s
+
+        for (int i = 0; i < seq.warm + seq.frames; ++i) {
+            const float t = float(i) * seq.dt;
+            const float a = a0 + rate * t;
+            camera.position.set(target.x + r0 * std::cos(a), eye0.y,
+                                target.z + r0 * std::sin(a));
+            camera.lookAt(target);
+            step(t);
+            renderFrame();
+            if (i >= seq.warm) {
+                char name[16];
+                std::snprintf(name, sizeof name, "f%02d.png", i - seq.warm);
+                renderer.writeFramebuffer(std::filesystem::path(seq.dir) / name);
+            }
+        }
+    }
+
 
     // ── Image diff (objective before/after + convergence) ─────────────────────
     struct DiffResult {

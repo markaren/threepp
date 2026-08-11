@@ -11,6 +11,7 @@
 //     forward-scatter (+) god rays.
 
 #include "capture_util.hpp"
+#include "window_util.hpp"
 
 #include "threepp/extras/imgui/RendererSettings.hpp"
 #include "threepp/lights/SpotLight.hpp"
@@ -20,8 +21,6 @@
 #include "threepp/scenes/FogExp2.hpp"
 #include "threepp/threepp.hpp"
 
-#include <cstdlib>
-#include <filesystem>
 #include <iostream>
 #include <memory>
 #include <string>
@@ -120,12 +119,7 @@ namespace {
 int main(int argc, char** argv) {
 
     // Headless capture (dev): vulkan_fog --shot <name.png> [--frames N]
-    std::string shotPath;
-    int shotFrames = 240, shotFrame = 0;
-    for (int i = 1; i < argc; ++i) {
-        if (std::string(argv[i]) == "--shot" && i + 1 < argc) shotPath = argv[++i];
-        else if (std::string(argv[i]) == "--frames" && i + 1 < argc) shotFrames = std::atoi(argv[++i]);
-    }
+    capture::Shot shot(capture::parseArgs(argc, argv));
 
     Canvas canvas("Vulkan Deferred - Fog", {{"vsync", false}});
     VulkanRenderer renderer(canvas);
@@ -171,7 +165,7 @@ int main(int argc, char** argv) {
     // from the shared panel. Interactive runs only — the headless capture path
     // must not draw UI into the measured frames.
     std::unique_ptr<RendererSettingsUi> ui;
-    if (shotPath.empty()) {
+    if (!shot.active()) {
         ui = std::make_unique<RendererSettingsUi>(canvas, renderer, [&] {
             ImGui::TextWrapped("FogExp2 single-scattering volumetrics. Toggle off "
                                "to compare. Anisotropy g sweeps the HG phase from "
@@ -190,11 +184,7 @@ int main(int argc, char** argv) {
         }, "Vulkan Deferred - Fog");
     }
 
-    canvas.onWindowResize([&](const WindowSize& ns) {
-        renderer.setSize(ns);
-        camera.aspect = canvas.aspect();
-        camera.updateProjectionMatrix();
-    });
+    demo::bindResize(canvas, renderer, camera);
 
     canvas.animate([&] {
         controls.update();
@@ -207,10 +197,10 @@ int main(int argc, char** argv) {
         }
 
         renderer.render(scene, camera);
-        if (shotPath.empty()) {
+        if (!shot.active()) {
             ui->render();
-        } else if (++shotFrame >= shotFrames) {
-            capture::finishShot(renderer, shotPath);
+        } else if (shot.ready()) {
+            capture::finishShot(renderer, shot.name);
         }
     });
 

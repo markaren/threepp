@@ -19,6 +19,8 @@
 #include "threepp/lights/PointLight.hpp"
 #include "threepp/threepp.hpp"
 
+#include "window_util.hpp"
+
 using namespace threepp;
 
 int main() {
@@ -228,11 +230,7 @@ int main() {
         ImGui::TextDisabled("Drag = orbit, scroll = zoom");
     }, "Physical camera");
 
-    canvas.onWindowResize([&](const WindowSize& ns) {
-        renderer.setSize(ns);
-        camera.aspect = canvas.aspect();
-        camera.updateProjectionMatrix();
-    });
+    demo::bindResize(canvas, renderer, camera);
 
     canvas.animate([&] {
         controls.update();

@@ -26,6 +26,8 @@
 #include "threepp/renderers/VulkanRenderer.hpp"
 #include "threepp/threepp.hpp"
 
+#include "window_util.hpp"
+
 #include <array>
 #include <cmath>
 
@@ -456,11 +458,7 @@ int main() {
         ImGui::TextDisabled("Centre: Sapphire glass");
     }, "The Jewel Room");
 
-    canvas.onWindowResize([&](const WindowSize& ns) {
-        renderer.setSize(ns);
-        camera.aspect = canvas.aspect();
-        camera.updateProjectionMatrix();
-    });
+    demo::bindResize(canvas, renderer, camera);
 
     // ── Render loop ────────────────────────────────────────────────────────────
     Clock clock;

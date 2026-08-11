@@ -9,6 +9,9 @@
 #include "threepp/threepp.hpp"
 #include "threepp/utils/BufferGeometryUtils.hpp"
 
+#include "capture_util.hpp"
+#include "window_util.hpp"
+
 #include <algorithm>
 #include <cmath>
 #include <cstdlib>
@@ -72,8 +75,9 @@ int main(int argc, char** argv) {
     // Optional headless capture (dev): pass a debug view + a shot name to grab
     // a G-buffer debug PNG and exit, e.g. `... <folder> --debug 2 --shot mot.png`.
     // 1 Normal, 2 Motion, 3 InstanceID, 4 Albedo.
-    std::string shotPath;
-    int shotFrames = 120, shotFrame = 0, cliDebugView = 0;
+    // --shot / --frames come from the shared capture flags (120-frame settle).
+    capture::Shot shot(capture::parseArgs(argc, argv), /*defaultFrames=*/120);
+    int cliDebugView = 0;
     // Dev harness: --seq N writes N CONSECUTIVE frames (shot stem + _000.png…)
     // after the settle period — frame-to-frame diffs measure temporal shake.
     // --probe/--sunext/--sunrad toggle the deferred features under test.
@@ -110,9 +114,7 @@ int main(int argc, char** argv) {
     int soloClip = -1;     // --solo N: play only clip N (-1 = every clip at once)
     for (int i = 2; i < argc; ++i) {
         const std::string a = argv[i];
-        if (a == "--shot" && i + 1 < argc) shotPath = argv[++i];
-        else if (a == "--debug" && i + 1 < argc) cliDebugView = std::atoi(argv[++i]);
-        else if (a == "--frames" && i + 1 < argc) shotFrames = std::atoi(argv[++i]);
+        if (a == "--debug" && i + 1 < argc) cliDebugView = std::atoi(argv[++i]);
         else if (a == "--seq" && i + 1 < argc) seqN = std::atoi(argv[++i]);
         else if (a == "--browse" && i + 2 < argc) { browseK = std::atoi(argv[++i]); browseEvery = std::atoi(argv[++i]); }
         else if (a == "--probe" && i + 1 < argc) optProbe = std::atoi(argv[++i]);
@@ -344,7 +346,7 @@ int main(int argc, char** argv) {
             fitCamera(g);
             clipActions.clear();
             clipNames.clear();
-            if (!g.animations.empty() && (shotPath.empty() || shotAnim)) {// capture harness: static scene unless --anim
+            if (!g.animations.empty() && (!shot.active() || shotAnim)) {// capture harness: static scene unless --anim
                 mixer = std::make_unique<AnimationMixer>(g);
 
                 // EVERY clip, not just the first. Multi-clip sample assets
@@ -407,7 +409,7 @@ int main(int argc, char** argv) {
     // here. Interactive runs only — the headless capture paths must not draw
     // UI into the measured frames.
     std::unique_ptr<RendererSettingsUi> ui;
-    if (shotPath.empty()) {
+    if (!shot.active()) {
         ui = std::make_unique<RendererSettingsUi>(canvas, *renderer, [&] {
             ImGui::Text("Model: %s", currentModel >= 0 ? models[currentModel].name.c_str() : "none");
             if (loadedModel && loadedModel->isLoading()) ImGui::Text("Loading...");
@@ -455,11 +457,7 @@ int main(int argc, char** argv) {
         }, "Vulkan Deferred - GLTF Samples");
     }
 
-    canvas.onWindowResize([&](const WindowSize& ns) {
-        renderer->setSize(ns);
-        camera.aspect = canvas.aspect();
-        camera.updateProjectionMatrix();
-    });
+    demo::bindResize(canvas, renderer, camera);
 
     // --churn: a tiny far-corner cube toggled in/out of the scene every N
     // frames — emulates gameplay spawn/despawn (tracers, casings, decals) to
@@ -488,13 +486,13 @@ int main(int argc, char** argv) {
         // --browse: scripted Left/Right browsing. Advances on a pure frame
         // timer — a fast browser clicks Right BEFORE the previous async load
         // lands, so overlapping loads are part of what this reproduces. Each
-        // advance re-arms the capture settle (modelReady/shotFrame) so
+        // advance re-arms the capture settle (modelReady/shot.frame) so
         // --frames applies to the final model only.
         if (browseK > 0 && ++browseFrame >= browseEvery) {
             browseFrame = 0;
             --browseK;
             modelReady = false;
-            shotFrame  = 0;
+            shot.frame = 0;
             loadModel((currentModel + 1) % static_cast<int>(models.size()));
         }
 
@@ -507,7 +505,7 @@ int main(int argc, char** argv) {
 
         // Orbit only through the last stretch of the settle + the capture — a
         // full-settle orbit sweeps the camera tens of degrees off the --cam pose.
-        const bool orbitNow = !shotPath.empty() && orbitDeg != 0.f && shotFrame >= shotFrames - 60;
+        const bool orbitNow = shot.active() && orbitDeg != 0.f && shot.frame >= shot.frames - 60;
         if (orbitNow) {
             // Constant slow orbit about the target's Y axis — exercises the
             // temporal/reprojection paths a static capture never touches.
@@ -531,15 +529,15 @@ int main(int argc, char** argv) {
             camera.position.set(camV[0], camV[1], camV[2]);
             controls.target.set(camV[3], camV[4], camV[5]);
             camera.lookAt(controls.target);
-        } else if (shotPath.empty() || orbitDeg == 0.f) {
+        } else if (!shot.active() || orbitDeg == 0.f) {
             controls.update();
         }
         renderer->render(scene, camera);
 
-        if (shotPath.empty()) {
+        if (!shot.active()) {
             ui->render();
-        } else if (modelReady && ++shotFrame >= shotFrames) {
-            if (shotFrame == shotFrames && vk) {// env-sun extraction is Vulkan-only
+        } else if (modelReady && shot.ready()) {
+            if (shot.frame == shot.frames && vk) {// env-sun extraction is Vulkan-only
                 const auto d = vk->envSunDirection();
                 const auto c = vk->envSunColor();
                 std::cout << "envSunFound=" << vk->envSunFound()
@@ -547,21 +545,14 @@ int main(int argc, char** argv) {
                           << " colorE=(" << c.x << "," << c.y << "," << c.z << ")" << std::endl;
             }
             if (seqN > 0) {// consecutive-frame sequence (temporal-shake harness)
-                const auto stem = fs::path(shotPath).stem().string();
-                const auto ext  = fs::path(shotPath).extension().string();
-                char buf[16];
-                std::snprintf(buf, sizeof(buf), "_%03d", seqI);
-                const auto path = fs::path(PROJECT_FOLDER) / "aaa_caps" / (stem + buf + ext);
-                renderer->writeFramebuffer(path);
+                capture::writeShotSequenceFrame(*renderer, shot.name, seqI);
                 if (++seqI >= seqN) {
-                    std::cout << "wrote " << seqN << " frames to aaa_caps/" << stem << "_*.png" << std::endl;
+                    std::cout << "wrote " << seqN << " frames to aaa_caps/"
+                              << fs::path(shot.name).stem().string() << "_*.png" << std::endl;
                     std::exit(0);
                 }
             } else {
-                const auto path = fs::path(PROJECT_FOLDER) / "aaa_caps" / shotPath;
-                renderer->writeFramebuffer(path);
-                std::cout << "wrote " << path.string() << std::endl;
-                std::exit(0);
+                capture::finishShot(*renderer, shot.name);
             }
         }
     });

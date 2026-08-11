@@ -11,6 +11,8 @@
 #include "threepp/loaders/TextureLoader.hpp"
 #include "threepp/threepp.hpp"
 
+#include "window_util.hpp"
+
 #include <iostream>
 #include <string>
 
@@ -213,11 +215,7 @@ int main() {
         ImGui::TextDisabled("Drag = orbit, scroll = zoom");
     }, "Vulkan - Showcase");
 
-    canvas.onWindowResize([&](const WindowSize& ns) {
-        renderer.setSize(ns);
-        camera.aspect = canvas.aspect();
-        camera.updateProjectionMatrix();
-    });
+    demo::bindResize(canvas, renderer, camera);
 
     Clock clock;
     float t = 0.f;

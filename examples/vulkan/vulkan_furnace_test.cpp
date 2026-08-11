@@ -32,6 +32,8 @@
 #include "threepp/textures/Texture.hpp"
 #include "threepp/threepp.hpp"
 
+#include "window_util.hpp"
+
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
@@ -307,10 +309,8 @@ int main() {
     }, "White Furnace - Env-Only");
 
     canvas.onWindowResize([&](const WindowSize& ns) {
-        renderer.setSize(ns);
-        camera.aspect = canvas.aspect();
-        camera.updateProjectionMatrix();
-        resetMeasurement();
+        demo::applyResize(renderer, camera, ns);
+        resetMeasurement();// a new pixel count invalidates the accumulated average
     });
 
     Vector3 lastCamPos = camera.position;

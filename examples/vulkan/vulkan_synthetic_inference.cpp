@@ -24,11 +24,11 @@
 #include "threepp/loaders/RGBELoader.hpp"
 #include "threepp/renderers/VulkanRenderer.hpp"
 
+#include "coco_labels.hpp"
 #include "rfdetr/RfDetrVk.hpp"
 #include "utility/DetectionOverlay.hpp"
 
 #include <chrono>
-#include <cstring>
 #include <filesystem>
 #include <iostream>
 #include <string>
@@ -36,20 +36,12 @@
 
 using namespace threepp;
 
-namespace {
+// RF-DETR predicts raw COCO category ids, so its logits are as wide as the
+// id space (gaps included) — a mismatch here would mislabel every detection.
+static_assert(std::ssize(coco::kCoco91) == rfdetr::RfDetrConfig{}.numClasses,
+              "COCO-91 label table does not match RfDetrConfig::numClasses");
 
-    // COCO 91-id class names (RF-DETR uses the original COCO ids with gaps).
-    const char* kCoco91[91] = {
-            "N/A", "person", "bicycle", "car", "motorcycle", "airplane", "bus", "train", "truck", "boat",
-            "traffic light", "fire hydrant", "N/A", "stop sign", "parking meter", "bench", "bird", "cat",
-            "dog", "horse", "sheep", "cow", "elephant", "bear", "zebra", "giraffe", "N/A", "backpack",
-            "umbrella", "N/A", "N/A", "handbag", "tie", "suitcase", "frisbee", "skis", "snowboard", "sports ball",
-            "kite", "baseball bat", "baseball glove", "skateboard", "surfboard", "tennis racket", "bottle",
-            "N/A", "wine glass", "cup", "fork", "knife", "spoon", "bowl", "banana", "apple", "sandwich", "orange",
-            "broccoli", "carrot", "hot dog", "pizza", "donut", "cake", "chair", "couch", "potted plant", "bed",
-            "N/A", "dining table", "N/A", "N/A", "toilet", "N/A", "tv", "laptop", "mouse", "remote", "keyboard",
-            "cell phone", "microwave", "oven", "toaster", "sink", "refrigerator", "N/A", "book", "clock", "vase",
-            "scissors", "teddy bear", "hair drier", "toothbrush"};
+namespace {
 
     // Load one soldier instance and start the named clip. The glb is loaded
     // once per instance — skinned meshes can't share a skeleton between
@@ -248,20 +240,24 @@ int main(int argc, char** argv) {
             ui.remove(*overlay);
             overlay = Group::create();
             for (const auto& d : dets) {
-                const Color& col = detviz::kPalette[d.classId % 6];
+                const Color& col = detviz::classColor(d.classId);
                 const float y1 = H - d.y2, y2 = H - d.y1;
                 overlay->add(detviz::makeBoxLines(d.x1, y1, d.x2, y2, col));
-                const char* name = (d.classId >= 0 && d.classId < 91) ? kCoco91[d.classId] : "?";
-                overlay->add(detviz::makeLabel(font, detviz::labelText(name, d.confidence), col, d.x1, y2, H));
+                overlay->add(detviz::makeLabel(font, detviz::labelText(coco::name91(d.classId), d.confidence),
+                                               col, d.x1, y2, H));
             }
             ui.add(overlay);
 
             if (inferCount % 30 == 1 || !shotPath.empty()) {
                 std::printf("[detect %.1f ms] %zu det(s):", ms, dets.size());
-                for (const auto& d : dets)
-                    std::printf("  %s %.2f (%.0f,%.0f - %.0f,%.0f)",
-                                (d.classId >= 0 && d.classId < 91) ? kCoco91[d.classId] : "?",
+                for (const auto& d : dets) {
+                    // "%.*s": the shared table hands back a string_view, which
+                    // carries its own length and is not guaranteed terminated.
+                    const auto name = coco::name91(d.classId);
+                    std::printf("  %.*s %.2f (%.0f,%.0f - %.0f,%.0f)",
+                                static_cast<int>(name.size()), name.data(),
                                 d.confidence, d.x1, d.y1, d.x2, d.y2);
+                }
                 std::printf("\n");
             }
         }

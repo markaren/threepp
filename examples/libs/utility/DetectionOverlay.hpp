@@ -17,17 +17,28 @@
 #include "threepp/textures/Texture.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cstdio>
 #include <memory>
 #include <string>
+#include <string_view>
 #include <unordered_map>
 #include <vector>
 
 namespace detviz {
 
-    inline const threepp::Color kPalette[6] = {
+    inline const std::array<threepp::Color, 6> kPalette{
             threepp::Color(0xff3333), threepp::Color(0x33ff33), threepp::Color(0x3333ff),
             threepp::Color(0xffff33), threepp::Color(0xff33ff), threepp::Color(0x33ffff)};
+
+    // Stable per-class color. Every demo wrote `kPalette[id % 6]`, which repeats
+    // the palette size as a literal (so growing the palette silently leaves the
+    // extra entries unused) and indexes NEGATIVELY if a detector ever emits a
+    // junk class id. Both are handled here instead — the cast to unsigned wraps
+    // by definition, so any int lands in range.
+    [[nodiscard]] inline const threepp::Color& classColor(int cls) {
+        return kPalette[static_cast<unsigned>(cls) % kPalette.size()];
+    }
 
     inline std::shared_ptr<threepp::LineSegments> makeBoxLines(
             float x1, float y1, float x2, float y2, const threepp::Color& col) {
@@ -102,11 +113,14 @@ namespace detviz {
         return group;
     }
 
-    // "name 0.87" — the conventional detector label text.
-    inline std::string labelText(const char* name, float confidence) {
+    // "name 0.87" — the conventional detector label text. Takes a string_view so
+    // it composes with the coco_labels.hpp lookups; those return views into the
+    // constexpr tables, which are NOT guaranteed null-terminated, hence "%.*s".
+    [[nodiscard]] inline std::string labelText(std::string_view name, float confidence) {
         char buf[64];
-        std::snprintf(buf, sizeof buf, "%s %.2f", name, confidence);
-        return buf;
+        std::snprintf(buf, sizeof buf, "%.*s %.2f",
+                      static_cast<int>(name.size()), name.data(), confidence);
+        return buf;// snprintf always NUL-terminates within the buffer
     }
 
 }// namespace detviz

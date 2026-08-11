@@ -22,6 +22,8 @@
 #include "threepp/objects/Sprite.hpp"
 #include "threepp/materials/SpriteMaterial.hpp"
 
+#include "capture_util.hpp"
+#include "coco_labels.hpp"
 #include "utility/DetectionOverlay.hpp"
 #include "rfdetr/RfDetrVk.hpp"
 #include "rfdetr/WeightLoader.hpp"
@@ -36,19 +38,10 @@
 
 using namespace threepp;
 
-// COCO category-id (1..90) -> name; index 0 and the unused ids map to "N/A".
-static const char* kCoco91[91] = {
-    "N/A","person","bicycle","car","motorcycle","airplane","bus","train","truck","boat",
-    "traffic light","fire hydrant","N/A","stop sign","parking meter","bench","bird","cat",
-    "dog","horse","sheep","cow","elephant","bear","zebra","giraffe","N/A","backpack",
-    "umbrella","N/A","N/A","handbag","tie","suitcase","frisbee","skis","snowboard","sports ball",
-    "kite","baseball bat","baseball glove","skateboard","surfboard","tennis racket","bottle",
-    "N/A","wine glass","cup","fork","knife","spoon","bowl","banana","apple","sandwich","orange",
-    "broccoli","carrot","hot dog","pizza","donut","cake","chair","couch","potted plant","bed",
-    "N/A","dining table","N/A","N/A","toilet","N/A","tv","laptop","mouse","remote","keyboard",
-    "cell phone","microwave","oven","toaster","sink","refrigerator","N/A","book","clock","vase",
-    "scissors","teddy bear","hair drier","toothbrush"
-};
+// RF-DETR predicts raw COCO category ids, so its logits are as wide as the
+// id space (gaps included) — a mismatch here would mislabel every detection.
+static_assert(std::ssize(coco::kCoco91) == rfdetr::RfDetrConfig{}.numClasses,
+              "COCO-91 label table does not match RfDetrConfig::numClasses");
 
 // ── Validation mode: diff every layer against the captured reference ──
 static int runValidation(rfdetr::RfDetrVk& model, const std::string& weightsPath, const std::string& refPath) {
@@ -156,8 +149,7 @@ static int runDetection(Canvas& canvas, VulkanRenderer& renderer, rfdetr::RfDetr
     std::cout << "\nDetections (" << dets.size() << ") in " << std::fixed << std::setprecision(1)
               << ms << " ms  (" << (1000.0 / ms) << " FPS):\n";
     for (auto& d : dets) {
-        const char* name = (d.classId >= 0 && d.classId < 91) ? kCoco91[d.classId] : "?";
-        std::cout << "  " << std::left << std::setw(16) << name << std::right
+        std::cout << "  " << std::left << std::setw(16) << coco::name91(d.classId) << std::right
                   << "  conf " << std::setprecision(3) << d.confidence
                   << "  [" << int(d.x1) << "," << int(d.y1) << "," << int(d.x2) << "," << int(d.y2) << "]\n";
     }
@@ -182,20 +174,19 @@ static int runDetection(Canvas& canvas, VulkanRenderer& renderer, rfdetr::RfDetr
     for (auto& d : dets) {
         float bx1 = d.x1 * sx, bx2 = d.x2 * sx;
         float by1 = 640.f - d.y2 * sy, by2 = 640.f - d.y1 * sy;// flip Y for ortho
-        const Color& col = detviz::kPalette[d.classId % 6];
+        const Color& col = detviz::classColor(d.classId);
         scene->add(detviz::makeBoxLines(bx1, by1, bx2, by2, col));
-        const char* name = (d.classId >= 0 && d.classId < 91) ? kCoco91[d.classId] : "?";
-        scene->add(detviz::makeLabel(font, detviz::labelText(name, d.confidence), col, bx1, by2));
+        scene->add(detviz::makeLabel(font, detviz::labelText(coco::name91(d.classId), d.confidence), col, bx1, by2));
     }
 
-    int shotFrame = 0;
+    // A few frames so the swapchain holds the finished overlay, then write the
+    // path the caller asked for verbatim (not an aaa_caps name) and exit.
+    capture::Shot shot;
+    shot.name = shotPath;
+    shot.frames = 5;
     canvas.animate([&] {
         renderer.render(*scene, *camera);
-        if (!shotPath.empty() && ++shotFrame >= 5) {
-            renderer.writeFramebuffer(shotPath);
-            std::cout << "wrote " << shotPath << "\n";
-            std::exit(0);
-        }
+        if (shot.ready()) capture::finishShotAtPath(renderer, shot.name);
     });
     return 0;
 }

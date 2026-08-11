@@ -6,6 +6,8 @@
 #include "threepp/threepp.hpp"
 #include "threepp/utils/BufferGeometryUtils.hpp"
 
+#include "window_util.hpp"
+
 #include <algorithm>
 #include <filesystem>
 
@@ -94,11 +96,7 @@ int main(int argc, char** argv) {
         }
     }, "Bistro scene");
 
-    canvas.onWindowResize([&](const WindowSize& ns) {
-        renderer.setSize(ns);
-        camera.aspect = canvas.aspect();
-        camera.updateProjectionMatrix();
-    });
+    demo::bindResize(canvas, renderer, camera);
 
     canvas.animate([&] {
         controls.update();

@@ -48,6 +48,7 @@
 // upload if one existed.
 
 #include "capture_util.hpp"
+#include "window_util.hpp"
 
 #include "threepp/extras/imgui/RendererSettings.hpp"
 #include "threepp/geometries/CylinderGeometry.hpp"
@@ -63,7 +64,6 @@
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
-#include <filesystem>
 #include <memory>
 #include <string>
 
@@ -71,7 +71,6 @@ using namespace threepp;
 
 namespace {
 
-    constexpr float kTau = 6.28318530718f;
 
     auto matteMat(const Color& c, float rough = 0.92f) {
         return MeshStandardMaterial::create(
@@ -100,14 +99,14 @@ namespace {
         // Drifts: low, wide, snow-coloured lumps so the ground plane is not a
         // featureless sheet the eye reads as infinite.
         for (int i = 0; i < 26; ++i) {
-            const float a = h01(std::uint32_t(i), 31u) * kTau;
+            const float a = h01(std::uint32_t(i), 31u) * math::TWO_PI;
             const float r = 3.5f + 22.f * h01(std::uint32_t(i), 37u);
             const float sc = 0.5f + 1.7f * h01(std::uint32_t(i), 41u);
             auto m = Mesh::create(IcosahedronGeometry::create(sc, 1),
                                   matteMat(Color(0.39f, 0.41f, 0.45f), 0.97f));
             m->position.set(r * std::cos(a), -sc * 0.62f, r * std::sin(a));
-            m->rotation.set(h01(std::uint32_t(i), 43u) * kTau,
-                            h01(std::uint32_t(i), 47u) * kTau, 0.f);
+            m->rotation.set(h01(std::uint32_t(i), 43u) * math::TWO_PI,
+                            h01(std::uint32_t(i), 47u) * math::TWO_PI, 0.f);
             m->scale.set(1.f, 0.42f, 1.f);
             g->add(m);
         }
@@ -149,7 +148,7 @@ namespace {
             trunk->position.y = hgt * 0.5f;
             tree->add(trunk);
             for (int b = 0; b < 6; ++b) {
-                const float a = kTau * (float(b) + 0.4f * h01(std::uint32_t(t * 8 + b), 67u)) / 6.f;
+                const float a = math::TWO_PI * (float(b) + 0.4f * h01(std::uint32_t(t * 8 + b), 67u)) / 6.f;
                 const float lb = 0.9f + 1.3f * h01(std::uint32_t(t * 8 + b), 71u);
                 auto limb = Mesh::create(CylinderGeometry::create(0.035f, 0.06f, lb, 6), bark);
                 limb->position.set(0.35f * std::cos(a), hgt * (0.55f + 0.11f * float(b % 4)),
@@ -305,8 +304,11 @@ namespace {
 
 int main(int argc, char** argv) {
 
-    std::string shotPath;
-    int   shotFrames = 240;
+    // --shot/--frames/--cam/--look are the shared capture flags. NB: unlike the
+    // aaa_caps demos, --shot here is a PATH written as given (see the capture
+    // block below), so it stays out of capture::finishShot.
+    const capture::Args cap = capture::parseArgs(argc, argv);
+    capture::Shot shot(cap, /*defaultFrames=*/240);
     float shotTime   = -1.f;// >= 0: freeze the emitter at this absolute t
     bool  bench      = false;
     // F4 (3): the LOD split's own A/B. The legs differ only in whether the
@@ -338,9 +340,7 @@ int main(int argc, char** argv) {
     float orbitDeg  = 14.f;
     for (int i = 1; i < argc; ++i) {
         const std::string a = argv[i];
-        if (a == "--shot" && i + 1 < argc) shotPath = argv[++i];
-        else if (a == "--frames" && i + 1 < argc) shotFrames = std::atoi(argv[++i]);
-        else if (a == "--t" && i + 1 < argc) shotTime = float(std::atof(argv[++i]));
+        if (a == "--t" && i + 1 < argc) shotTime = float(std::atof(argv[++i]));
         else if (a == "--count" && i + 1 < argc) { count = std::uint32_t(std::atoi(argv[++i])); countExplicit = true; }
         else if (a == "--bench") bench = true;
         else if (a == "--bench-lod") benchLod = true;
@@ -357,13 +357,12 @@ int main(int argc, char** argv) {
     }
     if (rain && !countExplicit) count = kRainCount;
     if (count == 0u) count = 1u;
-    const capture::Args cap = capture::parseArgs(argc, argv);
 
     Canvas canvas("Vulkan Deferred - Snow",
                   {{"title", std::string("Vulkan Deferred - Snow")},
                    {"size", std::pair<int, int>{1280, 720}},
                    {"vsync", false},
-                   {"headless", !shotPath.empty() || bench || benchLod || mvProbe || !seqDir.empty()}});
+                   {"headless", shot.active() || bench || benchLod || mvProbe || !seqDir.empty()}});
     VulkanRenderer renderer(canvas);
     renderer.setDlss(upscaler == "dlss");
     renderer.setFsr(upscaler == "fsr");
@@ -549,7 +548,7 @@ int main(int argc, char** argv) {
     std::unique_ptr<OrbitControls> controls;
     std::unique_ptr<RendererSettingsUi> ui;
     std::unique_ptr<KeyAdapter> keys;
-    if (shotPath.empty() && !bench && !benchLod && !mvProbe && seqDir.empty()) {
+    if (!shot.active() && !bench && !benchLod && !mvProbe && seqDir.empty()) {
         controls = std::make_unique<OrbitControls>(camera, canvas);
         controls->target.copy(target);
         controls->update();
@@ -570,11 +569,7 @@ int main(int argc, char** argv) {
         });
         canvas.addKeyListener(*keys);
     }
-    canvas.onWindowResize([&](WindowSize s) {
-        camera.aspect = s.aspect();
-        camera.updateProjectionMatrix();
-        renderer.setSize(s);
-    });
+    demo::bindResize(canvas, renderer, camera);
 
     // ── Bench: what does a 300k device-emitted field cost? ──────────────────
     // Interleaved A/B with the field PARKED as the A leg — it stays in the
@@ -727,29 +722,16 @@ int main(int argc, char** argv) {
     // command produce the same poses. This is where the motion vectors are
     // judged: consecutive frames, at the steady state of every temporal history.
     if (!seqDir.empty()) {
-        namespace fs = std::filesystem;
-        fs::create_directories(seqDir);
-        constexpr float kDt = 1.f / 60.f;
-        const Vector3 eye0 = camera.position;
-        const float r0 = std::hypot(eye0.x - target.x, eye0.z - target.z);
-        const float a0 = std::atan2(eye0.z - target.z, eye0.x - target.x);
-        const float rate = orbitDeg * (kTau / 360.f);
-        for (int i = 0; i < seqWarm + seqFrames; ++i) {
-            const float t = float(i) * kDt;
-            const float a = a0 + rate * t;
-            camera.position.set(target.x + r0 * std::cos(a), eye0.y, target.z + r0 * std::sin(a));
-            camera.lookAt(target);
-            // --t freezes the field: dt 0 makes every particle reproject onto
-            // itself, so anything still moving in the sequence is the camera.
-            if (shotTime >= 0.f) snow->setEmitterTime(shotTime, 0.f);
-            else snow->setEmitterTime(t, kDt);
-            canvas.animateOnce([&] { renderer.render(scene, camera); });
-            if (i >= seqWarm) {
-                char name[64];
-                std::snprintf(name, sizeof(name), "f%02d.png", i - seqWarm);
-                renderer.writeFramebuffer((fs::path(seqDir) / name).string());
-            }
-        }
+        const capture::OrbitSequence seq{seqDir, seqFrames, seqWarm, orbitDeg};
+        capture::runOrbitSequence(
+                seq, renderer, camera, target,
+                // --t freezes the field: dt 0 makes every particle reproject onto
+                // itself, so anything still moving in the sequence is the camera.
+                [&](float t) {
+                    if (shotTime >= 0.f) snow->setEmitterTime(shotTime, 0.f);
+                    else snow->setEmitterTime(t, seq.dt);
+                },
+                [&] { canvas.animateOnce([&] { renderer.render(scene, camera); }); });
         std::printf("[seq] %d frames -> %s (orbit %.1f deg/s, warm %d, field %s)\n",
                     seqFrames, seqDir.c_str(), double(orbitDeg), seqWarm,
                     shotTime >= 0.f ? "FROZEN" : "falling");
@@ -819,21 +801,20 @@ int main(int argc, char** argv) {
     }
 
     // ── Headless capture ────────────────────────────────────────────────────
-    if (!shotPath.empty()) {
-        const int frames = cap.frames.value_or(shotFrames);
+    if (shot.active()) {
         constexpr float kDt = 1.f / 60.f;// fixed: no wall clock in a capture
-        for (int i = 0; i < frames; ++i) {
+        for (int i = 0; i < shot.frames; ++i) {
             if (shotTime >= 0.f) snow->setEmitterTime(shotTime, 0.f);
             else snow->setEmitterTime(float(i) * kDt, kDt);
             canvas.animateOnce([&] { renderer.render(scene, camera); });
         }
-        renderer.writeFramebuffer(shotPath);
+        renderer.writeFramebuffer(shot.name);
         const auto t = renderer.lastFrameTimings();
         std::printf("[shot] %s (%d frames, %u particles, emit %.4f ms, scatter %.4f ms, "
-                    "cpu frame %.3f ms)\n", shotPath.c_str(), frames, unsigned(count),
+                    "cpu frame %.3f ms)\n", shot.name.c_str(), shot.frames, unsigned(count),
                     double(t.particleEmitMs), double(t.particleDensityMs),
                     double(t.cpuFrameMs));
-        if (cap.profile) capture::writeFrameTimings(t, cap, frames);
+        if (cap.profile) capture::writeFrameTimings(t, cap, shot.frames);
         return 0;
     }
 

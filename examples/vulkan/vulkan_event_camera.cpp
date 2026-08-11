@@ -24,6 +24,8 @@
 #include "threepp/textures/DataTexture.hpp"
 #include "threepp/threepp.hpp"
 
+#include "window_util.hpp"
+
 #include <array>
 #include <chrono>
 #include <cmath>
@@ -218,9 +220,7 @@ int main() {
     bool   lastOverflowed = false;
 
     canvas.onWindowResize([&](WindowSize size) {
-        camera->aspect = size.aspect();
-        camera->updateProjectionMatrix();
-        renderer.setSize(size);
+        demo::applyResize(renderer, camera, size);
         // Re-enable: the renderer will idle and resize the detector's
         // images. With a user-pinned sensor resolution the detector
         // stays at sensor res (not the new swapchain); the host-side

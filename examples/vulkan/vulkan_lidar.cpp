@@ -22,6 +22,8 @@
 #include "threepp/textures/DataTexture.hpp"
 #include "threepp/threepp.hpp"
 
+#include "window_util.hpp"
+
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -281,11 +283,7 @@ int main() {
     capture.preventMouseEvent = [] { return ImGui::GetIO().WantCaptureMouse; };
     canvas.setIOCapture(&capture);
 
-    canvas.onWindowResize([&](WindowSize size) {
-        camera->aspect = size.aspect();
-        camera->updateProjectionMatrix();
-        renderer.setSize(size);
-    });
+    demo::bindResize(canvas, renderer, camera);
 
     std::vector<LidarReturn> returns;
     Clock clock;

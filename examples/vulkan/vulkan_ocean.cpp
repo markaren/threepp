@@ -29,11 +29,11 @@
 #include "threepp/threepp.hpp"
 
 #include "capture_util.hpp"
+#include "window_util.hpp"
 
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
-#include <cstdlib>
 #include <cstring>
 #include <filesystem>
 #include <iostream>
@@ -693,27 +693,24 @@ namespace {
 int main(int argc, char** argv) {
 
     // --shot <name.png> [--frames N] [--night] [--pt] [--vista] [--close] [--island] [--toggle]
-    std::string shotPath;
-    int  shotFrames = 240;
+    // Shared capture machinery (capture_util.hpp): --shot/--frames drive the
+    // warm-up-then-write recorder, --cam/--look override the capture framing
+    // below with NO rebuild, --profile dumps per-pass timings.
+    const capture::Args capArgs = capture::parseArgs(argc, argv);
+    capture::Shot shot(capArgs);
     bool startNight = false;
     bool shotVista  = false;
     bool shotClose  = false;// near-surface grazing view — surface-artifact hunting
     bool shotIsland = false;// low close-up of the −X archipelago island (terrain-detail capture)
     int  toggleNightAt = 0;// --toggle: start in day, flip to night mid-run (exercises the runtime toggle path)
     for (int i = 1; i < argc; ++i) {
-        if (std::strcmp(argv[i], "--shot") == 0 && i + 1 < argc) shotPath = argv[++i];
-        else if (std::strcmp(argv[i], "--frames") == 0 && i + 1 < argc) shotFrames = std::atoi(argv[++i]);
-        else if (std::strcmp(argv[i], "--night") == 0) startNight = true;
+        if (std::strcmp(argv[i], "--night") == 0) startNight = true;
         else if (std::strcmp(argv[i], "--vista") == 0) shotVista = true;
         else if (std::strcmp(argv[i], "--close") == 0) shotClose = true;
         else if (std::strcmp(argv[i], "--island") == 0) shotIsland = true;
         else if (std::strcmp(argv[i], "--toggle") == 0) toggleNightAt = 60;
     }
-    const bool capturing = !shotPath.empty();
-    // Shared capture machinery (capture_util.hpp): --cam/--look override the
-    // capture framing below with NO rebuild; --profile dumps per-pass timings.
-    const capture::Args capArgs = capture::parseArgs(argc, argv);
-    int shotFrame = 0;
+    const bool capturing = shot.active();
 
     Canvas canvas("Vulkan Ocean", {{"vsync", false}, {"size", WindowSize{1600, 900}}});
 
@@ -1787,11 +1784,7 @@ int main(int argc, char** argv) {
     ioCapture.preventKeyboardEvent = []() -> bool { return ImGui::GetIO().WantCaptureKeyboard; };
     canvas.setIOCapture(&ioCapture);
 
-    canvas.onWindowResize([&](const WindowSize& ns) {
-        renderer.setSize(ns);
-        camera.aspect = canvas.aspect();
-        camera.updateProjectionMatrix();
-    });
+    demo::bindResize(canvas, renderer, camera);
 
     Clock clock;
     auto lidarIntensityColor = [](float intensity, Color& col) {
@@ -2428,7 +2421,7 @@ int main(int argc, char** argv) {
                 // matching interactive flying where the tile artifact shows.
                 camera.position.copy(boatPos)
                         .addScaledVector(boatFwd, -10.f)
-                        .addScaledVector(side, 9.f + 0.04f * static_cast<float>(shotFrame))
+                        .addScaledVector(side, 9.f + 0.04f * static_cast<float>(shot.frame))
                         .add(Vector3(0.f, 2.5f, 0.f));
                 Vector3 tgt = boatPos;
                 tgt.addScaledVector(boatFwd, -45.f);// far into the wake — near-horizontal grazing
@@ -2467,7 +2460,7 @@ int main(int argc, char** argv) {
         if (capArgs.profile) {
             static int profCount = 0;
             if (capturing || ++profCount % 60 == 0)
-                capture::writeFrameTimings(renderer.lastFrameTimings(), capArgs, shotFrame);
+                capture::writeFrameTimings(renderer.lastFrameTimings(), capArgs, shot.frame);
         }
 
         // F12: interactive screenshot → aaa_caps/usershot_N.png. Native-res
@@ -2476,8 +2469,8 @@ int main(int argc, char** argv) {
         if (bi.shotRequest) {
             bi.shotRequest = false;
             static int userShotN = 0;
-            const auto path = std::filesystem::path(PROJECT_FOLDER) / "aaa_caps" /
-                              ("usershot_" + std::to_string(userShotN++) + ".png");
+            const auto path = capture::shotOutputPath(
+                    "usershot_" + std::to_string(userShotN++) + ".png");
             try {
                 renderer.writeFramebuffer(path);
                 std::printf("wrote %s\n", path.string().c_str());
@@ -2486,16 +2479,11 @@ int main(int argc, char** argv) {
             }
         }
 
-        if (capturing && toggleNightAt > 0 && shotFrame == toggleNightAt) {
+        if (capturing && toggleNightAt > 0 && shot.frame == toggleNightAt) {
             night = true;// runtime day→night flip — the path the UI checkbox takes
             applyMode();
         }
-        if (capturing && ++shotFrame >= shotFrames) {
-            const auto path = std::filesystem::path(PROJECT_FOLDER) / "aaa_caps" / shotPath;
-            renderer.writeFramebuffer(path);// creates parent dirs; throws on failure
-            std::printf("wrote %s\n", path.string().c_str());
-            std::exit(0);
-        }
+        if (shot.ready()) capture::finishShot(renderer, shot.name);
 
         // ── LIDAR scan + visualisation update ─────────────────────────────
         // Must follow render() so the TLAS is built; the cloud/panel show

@@ -35,11 +35,11 @@
 #include "threepp/threepp.hpp"
 
 #include "capture_util.hpp"
+#include "window_util.hpp"
 
 #include <algorithm>
 #include <cstdlib>
 #include <cstring>
-#include <filesystem>
 #include <iostream>
 #include <string>
 
@@ -48,22 +48,21 @@ using namespace threepp;
 int main(int argc, char** argv) {
 
     // ── Headless capture (dev iteration): N warm-up frames then one PNG ──────
-    std::string shotPath;
-    int shotFrames = 240, shotFrame = 0;
+    // --shot / --frames / --cam / --look are the shared capture flags; only the
+    // sea-state knobs below are specific to this demo.
+    const capture::Args capArgs = capture::parseArgs(argc, argv);
+    capture::Shot shot(capArgs);
+
     float windOverride = -1.f;// <0 = keep the Ocean default
     float wind2 = -1.f;       // ≥0 = setWind() to this halfway through a --shot run (live-wind test)
     bool probes = false;      // sampleHeight parity probes (debug)
     bool pond = false;        // 16 m pond preset: shallow bright bottom, calm wind
     for (int i = 1; i < argc; ++i) {
-        if (std::strcmp(argv[i], "--shot") == 0 && i + 1 < argc) shotPath = argv[++i];
-        else if (std::strcmp(argv[i], "--frames") == 0 && i + 1 < argc) shotFrames = std::atoi(argv[++i]);
-        else if (std::strcmp(argv[i], "--wind") == 0 && i + 1 < argc) windOverride = float(std::atof(argv[++i]));
+        if (std::strcmp(argv[i], "--wind") == 0 && i + 1 < argc) windOverride = float(std::atof(argv[++i]));
         else if (std::strcmp(argv[i], "--wind2") == 0 && i + 1 < argc) wind2 = float(std::atof(argv[++i]));
         else if (std::strcmp(argv[i], "--probes") == 0) probes = true;
         else if (std::strcmp(argv[i], "--pond") == 0) pond = true;
     }
-    const capture::Args capArgs = capture::parseArgs(argc, argv);
-    if (capArgs.frames) shotFrames = *capArgs.frames;
 
     Canvas canvas("Vulkan Deferred - Ocean (minimal)", {{"vsync", false}, {"size", WindowSize{1600, 900}}});
 
@@ -171,11 +170,7 @@ int main(int argc, char** argv) {
     if (capArgs.camTarget) controls.target.copy(*capArgs.camTarget);
     controls.update();
 
-    canvas.onWindowResize([&](const WindowSize& ns) {
-        renderer.setSize(ns);
-        camera.aspect = canvas.aspect();
-        camera.updateProjectionMatrix();
-    });
+    demo::bindResize(canvas, renderer, camera);
 
     // sampleHeight parity probes (--probes): emissive spheres pinned to the
     // CPU-mirrored wave height each frame. If the CPU sampler matches the GPU
@@ -201,7 +196,7 @@ int main(int argc, char** argv) {
         // just a world coordinate — the same warp the showcase points at a boat.
         ocean->warpToward(controls.target.x, controls.target.z, 0.3f);
 
-        if (wind2 >= 0.f && shotFrame == shotFrames / 2)
+        if (wind2 >= 0.f && shot.at(0.5f))
             ocean->setWind(wind2, ocean->params.windTheta);
 
         if (!probeSpheres.empty()) {
@@ -218,13 +213,7 @@ int main(int argc, char** argv) {
 
         renderer.render(scene, camera);
 
-        if (!shotPath.empty() && ++shotFrame >= shotFrames) {
-            const auto path = std::filesystem::path(PROJECT_FOLDER) / "aaa_caps" / shotPath;
-            std::filesystem::create_directories(path.parent_path());
-            renderer.writeFramebuffer(path);
-            std::cout << "wrote " << path.string() << std::endl;
-            std::exit(0);
-        }
+        if (shot.ready()) capture::finishShot(renderer, shot.name);
     });
 
     return 0;

@@ -40,6 +40,7 @@
 // same command produce the same poses.
 
 #include "capture_util.hpp"
+#include "window_util.hpp"
 
 #include "threepp/extras/effects/FireEffect.hpp"
 #include "threepp/extras/imgui/RendererSettings.hpp"
@@ -55,8 +56,6 @@
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
-#include <cstring>
-#include <filesystem>
 #include <memory>
 #include <string>
 #include <vector>
@@ -65,7 +64,6 @@ using namespace threepp;
 
 namespace {
 
-    constexpr float kTau = 6.28318530718f;
 
     auto matteMat(const Color& c, float rough = 0.92f) {
         return MeshStandardMaterial::create(
@@ -89,16 +87,16 @@ namespace {
         auto g = Group::create();
         constexpr int kStones = 11;
         for (int i = 0; i < kStones; ++i) {
-            const float a = kTau * (float(i) + 0.35f * h01(std::uint32_t(i), 7u)) / float(kStones);
+            const float a = math::TWO_PI * (float(i) + 0.35f * h01(std::uint32_t(i), 7u)) / float(kStones);
             const float sc = 0.10f + 0.06f * h01(std::uint32_t(i), 11u);
             auto m = Mesh::create(IcosahedronGeometry::create(sc, 1),
                                   matteMat(Color(0.30f + 0.08f * h01(std::uint32_t(i), 13u),
                                                  0.28f, 0.26f),
                                            0.95f));
             m->position.set(radius * std::cos(a), sc * 0.55f, radius * std::sin(a));
-            m->rotation.set(h01(std::uint32_t(i), 17u) * kTau,
-                            h01(std::uint32_t(i), 19u) * kTau,
-                            h01(std::uint32_t(i), 23u) * kTau);
+            m->rotation.set(h01(std::uint32_t(i), 17u) * math::TWO_PI,
+                            h01(std::uint32_t(i), 19u) * math::TWO_PI,
+                            h01(std::uint32_t(i), 23u) * math::TWO_PI);
             m->scale.set(1.f, 0.72f, 1.15f);
             g->add(m);
         }
@@ -112,7 +110,7 @@ namespace {
         auto g = Group::create();
         auto wood = matteMat(Color(0.16f, 0.10f, 0.07f), 0.95f);
         for (int i = 0; i < 5; ++i) {
-            const float a = kTau * float(i) / 5.f + 0.3f;
+            const float a = math::TWO_PI * float(i) / 5.f + 0.3f;
             auto log = Mesh::create(CylinderGeometry::create(0.035f, 0.045f, 0.72f, 10), wood);
             log->position.set(0.16f * std::cos(a), 0.16f, 0.16f * std::sin(a));
             log->rotation.set(0.f, -a, 1.05f);
@@ -191,13 +189,13 @@ namespace {
         // plane where the light falls off — the falloff needs something to fall
         // off ON.
         for (int i = 0; i < 40; ++i) {
-            const float a = h01(std::uint32_t(i), 31u) * kTau;
+            const float a = h01(std::uint32_t(i), 31u) * math::TWO_PI;
             const float r = 1.6f + 6.5f * h01(std::uint32_t(i), 37u);
             const float sc = 0.05f + 0.16f * h01(std::uint32_t(i), 41u);
             auto m = Mesh::create(IcosahedronGeometry::create(sc, 1),
                                   matteMat(Color(0.13f, 0.115f, 0.10f), 1.f));
             m->position.set(r * std::cos(a), sc * 0.4f, r * std::sin(a));
-            m->rotation.set(h01(std::uint32_t(i), 43u) * kTau, h01(std::uint32_t(i), 47u) * kTau, 0.f);
+            m->rotation.set(h01(std::uint32_t(i), 43u) * math::TWO_PI, h01(std::uint32_t(i), 47u) * math::TWO_PI, 0.f);
             m->scale.set(1.f, 0.6f, 1.f);
             g->add(m);
         }
@@ -276,8 +274,11 @@ namespace {
 
 int main(int argc, char** argv) {
 
-    std::string shotPath;
-    int   shotFrames = 260;
+    // --shot/--frames/--cam/--look are the shared capture flags. NB: unlike the
+    // aaa_caps demos, --shot here is a PATH written as given (see the capture
+    // block below), so it stays out of capture::finishShot.
+    const capture::Args cap = capture::parseArgs(argc, argv);
+    capture::Shot shot(cap, /*defaultFrames=*/260);
     float shotTime   = -1.f;// >= 0: freeze the effect at this absolute t
     // --no-embers used to be MANDATORY for any capture that had to be compared:
     // the embers were a legacy ParticleSystem with its own RNG and per-frame
@@ -308,9 +309,7 @@ int main(int argc, char** argv) {
     bool  day       = false;// --day: start in daylight (D toggles at runtime)
     for (int i = 1; i < argc; ++i) {
         const std::string a = argv[i];
-        if (a == "--shot" && i + 1 < argc) shotPath = argv[++i];
-        else if (a == "--frames" && i + 1 < argc) shotFrames = std::atoi(argv[++i]);
-        else if (a == "--t" && i + 1 < argc) shotTime = float(std::atof(argv[++i]));
+        if (a == "--t" && i + 1 < argc) shotTime = float(std::atof(argv[++i]));
         else if (a == "--no-embers") noEmbers = true;
         else if (a == "--legacy-embers") legacyEmbers = true;
         else if (a == "--no-glow") noGlow = true;
@@ -322,13 +321,12 @@ int main(int argc, char** argv) {
         else if (a == "--orbit" && i + 1 < argc) orbitDeg = float(std::atof(argv[++i]));
         else if (a == "--day") day = true;
     }
-    const capture::Args cap = capture::parseArgs(argc, argv);
 
     Canvas canvas("Vulkan Deferred - Campfire",
                   {{"title", std::string("Vulkan Deferred - Campfire")},
                    {"size", std::pair<int, int>{1280, 720}},
                    {"vsync", false},
-                   {"headless", !shotPath.empty() || bench || !seqDir.empty()}});
+                   {"headless", shot.active() || bench || !seqDir.empty()}});
     VulkanRenderer renderer(canvas);
     renderer.setDlss(upscaler == "dlss");// F1 ships and gates on TAA; see plan R-1
     renderer.setFsr(upscaler == "fsr");
@@ -389,7 +387,7 @@ int main(int argc, char** argv) {
     std::unique_ptr<OrbitControls> controls;
     std::unique_ptr<RendererSettingsUi> ui;
     std::unique_ptr<KeyAdapter> keys;// the canvas keeps a reference, not a copy
-    if (shotPath.empty() && !bench && seqDir.empty()) {
+    if (!shot.active() && !bench && seqDir.empty()) {
         controls = std::make_unique<OrbitControls>(camera, canvas);
         controls->target.copy(target);
         controls->update();
@@ -409,11 +407,7 @@ int main(int argc, char** argv) {
         });
         canvas.addKeyListener(*keys);
     }
-    canvas.onWindowResize([&](WindowSize s) {
-        camera.aspect = s.aspect();
-        camera.updateProjectionMatrix();
-        renderer.setSize(s);
-    });
+    demo::bindResize(canvas, renderer, camera);
 
     // ── Bench: what does the whole effect cost on the GPU? ──────────────────
     // Interleaved A/B with the effect EXTINGUISHED as the A leg (the fields
@@ -496,26 +490,13 @@ int main(int argc, char** argv) {
     // The frames are consecutive, at the steady state of every temporal history
     // in the renderer, which is the only way to LOOK at a motion-only defect.
     if (!seqDir.empty()) {
-        namespace fs = std::filesystem;
-        fs::create_directories(seqDir);
-        constexpr float kDt = 1.f / 60.f;
-        const Vector3 eye0 = camera.position;
-        const float r0 = std::hypot(eye0.x - target.x, eye0.z - target.z);
-        const float a0 = std::atan2(eye0.z - target.z, eye0.x - target.x);
-        const float rate = orbitDeg * (kTau / 360.f);// rad/s
-        for (int i = 0; i < seqWarm + seqFrames; ++i) {
-            const float t = float(i) * kDt;
-            const float a = a0 + rate * t;
-            camera.position.set(target.x + r0 * std::cos(a), eye0.y, target.z + r0 * std::sin(a));
-            camera.lookAt(target);
-            fire->update(shotTime >= 0.f ? shotTime : t);
-            canvas.animateOnce([&] { renderer.render(scene, camera); });
-            if (i >= seqWarm) {
-                char name[64];
-                std::snprintf(name, sizeof(name), "f%02d.png", i - seqWarm);
-                renderer.writeFramebuffer((fs::path(seqDir) / name).string());
-            }
-        }
+        capture::runOrbitSequence(
+                {seqDir, seqFrames, seqWarm, orbitDeg}, renderer, camera, target,
+                // --t freezes the effect, leaving the camera as the only thing
+                // that moves — that separates view dependence from the fire's
+                // own animation.
+                [&](float t) { fire->update(shotTime >= 0.f ? shotTime : t); },
+                [&] { canvas.animateOnce([&] { renderer.render(scene, camera); }); });
         std::printf("[seq] %d frames -> %s (orbit %.1f deg/s, warm %d, fx %s)\n",
                     seqFrames, seqDir.c_str(), double(orbitDeg), seqWarm,
                     shotTime >= 0.f ? "FROZEN" : "animated");
@@ -523,10 +504,9 @@ int main(int argc, char** argv) {
     }
 
     // ── Headless capture ────────────────────────────────────────────────────
-    if (!shotPath.empty()) {
-        const int frames = cap.frames.value_or(shotFrames);
+    if (shot.active()) {
         constexpr float kDt = 1.f / 60.f;// fixed: no wall clock in a capture
-        for (int i = 0; i < frames; ++i) {
+        for (int i = 0; i < shot.frames; ++i) {
             // The emitter is closed-form in t, so a capture can either run the
             // clock or freeze it. --t freezes: identical geometry every frame,
             // which is what lets TAA fully converge and makes two runs of this
@@ -534,9 +514,9 @@ int main(int argc, char** argv) {
             fire->update(shotTime >= 0.f ? shotTime : float(i) * kDt);
             canvas.animateOnce([&] { renderer.render(scene, camera); });
         }
-        renderer.writeFramebuffer(shotPath);
-        std::printf("[shot] %s (%d frames)\n", shotPath.c_str(), frames);
-        if (cap.profile) capture::writeFrameTimings(renderer.lastFrameTimings(), cap, frames);
+        renderer.writeFramebuffer(shot.name);
+        std::printf("[shot] %s (%d frames)\n", shot.name.c_str(), shot.frames);
+        if (cap.profile) capture::writeFrameTimings(renderer.lastFrameTimings(), cap, shot.frames);
         return 0;
     }
 

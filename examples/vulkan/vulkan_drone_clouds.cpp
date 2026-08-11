@@ -16,6 +16,7 @@
 // phase) composited over the HDR sky.  Phase A: sky-only compositing.
 
 #include "capture_util.hpp"
+#include "window_util.hpp"
 
 #include "threepp/extras/imgui/RendererSettings.hpp"
 #include "threepp/lights/AmbientLight.hpp"
@@ -27,7 +28,6 @@
 
 #include <cmath>
 #include <cstdlib>
-#include <filesystem>
 #include <iostream>
 #include <memory>
 #include <sstream>
@@ -114,16 +114,18 @@ namespace {
 }// namespace
 
 int main(int argc, char** argv) {
-    std::string shotPath;
-    int shotFrames = 160, shotFrame = 0, shotCam = 0;
+    // --shot/--frames come from the shared capture flags. NB: this demo's --cam
+    // is a camera PRESET INDEX, not the shared "--cam x,y,z" pose; the two
+    // coexist because an integer fails the vec3 parse, so capArgs.camPos stays
+    // empty and only the preset lookup below sees it.
+    capture::Shot shot(capture::parseArgs(argc, argv), /*defaultFrames=*/160);
+    int shotCam = 0;
     bool startFree = false;
     bool noClouds = false;// perf A/B: render with the cloud layer off
     bool heightFog = false;// near-field heterogeneous height fog (Phase C)
     for (int i = 1; i < argc; ++i) {
         const std::string a = argv[i];
-        if (a == "--shot" && i + 1 < argc) shotPath = argv[++i];
-        else if (a == "--frames" && i + 1 < argc) shotFrames = std::atoi(argv[++i]);
-        else if (a == "--cam" && i + 1 < argc) shotCam = std::atoi(argv[++i]);
+        if (a == "--cam" && i + 1 < argc) shotCam = std::atoi(argv[++i]);
         else if (a == "--free") startFree = true;
         else if (a == "--noclouds") noClouds = true;
         else if (a == "--heightfog") heightFog = true;
@@ -134,7 +136,7 @@ int main(int argc, char** argv) {
     renderer.toneMapping = ToneMapping::ACESFilmic;
     renderer.setAutoExposure(true);
     renderer.setAutoExposureRange(-2.0f, 1.5f);
-    renderer.setAutoExposureSpeed(shotPath.empty() ? 2.0f : 12.0f);
+    renderer.setAutoExposureSpeed(shot.active() ? 12.0f : 2.0f);
     renderer.setRenderScale(0.85f);
     renderer.setSunAngularRadius(0.5f);
 
@@ -179,7 +181,7 @@ int main(int argc, char** argv) {
 
     PerspectiveCamera camera(55.f, canvas.aspect(), 1.f, 60000.f);
     OrbitControls controls{camera, canvas};
-    controls.enabled = shotPath.empty() && startFree;
+    controls.enabled = !shot.active() && startFree;
 
     // Fixed cinematic vantages for headless capture.
     auto applyShotCam = [&](int cam) {
@@ -221,7 +223,7 @@ int main(int argc, char** argv) {
         camera.lookAt(look);
     };
 
-    if (!shotPath.empty()) applyShotCam(shotCam);
+    if (shot.active()) applyShotCam(shotCam);
     else if (!startFree) flightCam(0.f);
 
     bool flightOn = !startFree;
@@ -234,7 +236,7 @@ int main(int argc, char** argv) {
     // hotkey-coupled toggles + the evolve-speed slider (not in the panel) stay
     // here. Interactive runs only — capture frames stay UI-free.
     std::unique_ptr<RendererSettingsUi> ui;
-    if (shotPath.empty()) {
+    if (!shot.active()) {
         ui = std::make_unique<RendererSettingsUi>(canvas, renderer, [&] {
             if (ImGui::Checkbox("Clouds (C)", &cloudsOn))
                 renderer.setClouds(cloudsOn ? std::optional{cloudCfg} : std::nullopt);
@@ -253,11 +255,7 @@ int main(int argc, char** argv) {
     });
     canvas.addKeyListener(keyAdapter);
 
-    canvas.onWindowResize([&](const WindowSize& ns) {
-        renderer.setSize(ns);
-        camera.aspect = canvas.aspect();
-        camera.updateProjectionMatrix();
-    });
+    demo::bindResize(canvas, renderer, camera);
 
     Clock clock;
     canvas.animate([&] {
@@ -265,7 +263,7 @@ int main(int argc, char** argv) {
         fpsAccum += dt;
         if (++fpsFrames, fpsAccum >= 0.5f) { fps = fpsFrames / fpsAccum; fpsAccum = 0.f; fpsFrames = 0; }
 
-        if (shotPath.empty()) {
+        if (!shot.active()) {
             if (flightOn) {
                 flightT += dt / 60.f;// 60 s loop
                 if (flightT >= 1.f) flightT -= 1.f;
@@ -276,13 +274,13 @@ int main(int argc, char** argv) {
         }
 
         renderer.render(scene, camera);
-        if (shotPath.empty()) {
+        if (!shot.active()) {
             ui->render();
-        } else if (++shotFrame >= shotFrames) {
+        } else if (shot.ready()) {
             const auto tm = renderer.lastFrameTimings();
             std::ostringstream stats;
             stats << " (" << fps << " fps)  shade " << tm.pathTraceMs << " ms";
-            capture::finishShot(renderer, shotPath, stats.str());
+            capture::finishShot(renderer, shot.name, stats.str());
         }
     });
 

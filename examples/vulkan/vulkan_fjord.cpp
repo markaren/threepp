@@ -42,6 +42,7 @@
 // Headless:  vulkan_fjord --shot out.png [--frames N] [--time H] [--view 0..6] [--cycle H_per_s]
 
 #include "capture_util.hpp"
+#include "window_util.hpp"
 
 #include "threepp/extras/imgui/RendererSettings.hpp"
 
@@ -78,7 +79,9 @@
 #include <iostream>
 #include <memory>
 #include <numeric>
+#include <optional>
 #include <random>
+#include <sstream>
 #include <string>
 #include <vector>
 
@@ -87,7 +90,6 @@ using namespace threepp;
 namespace {
 
     constexpr float kPi = 3.14159265358979f;
-    constexpr float kTau = 6.28318530718f;
 
     // ═════════════════════════════ world layout ═════════════════════════════
 
@@ -491,7 +493,7 @@ namespace {
             const float ce = std::cos(elev), se = std::sin(elev);
             for (int x = 0; x < W; ++x) {
                 const float u = (static_cast<float>(x) + 0.5f) / static_cast<float>(W);
-                const float az = (u - 0.5f) * kTau;
+                const float az = (u - 0.5f) * math::TWO_PI;
                 const Vector3 dir(ce * std::cos(az), se, ce * std::sin(az));
                 const Vector3 c = sky.radiance(dir, cs);
                 const size_t i = (static_cast<size_t>(y) * W + x) * 4;
@@ -508,7 +510,7 @@ namespace {
         Vector3 acc;
         constexpr int N = 12;
         for (int i = 0; i < N; ++i) {
-            const float az = (static_cast<float>(i) + 0.5f) / N * kTau;
+            const float az = (static_cast<float>(i) + 0.5f) / N * math::TWO_PI;
             const Vector3 dir(std::cos(0.026f) * std::cos(az), std::sin(0.026f), std::cos(0.026f) * std::sin(az));
             acc.add(sky.radiance(dir, cs));
         }
@@ -753,8 +755,11 @@ namespace {
 int main(int argc, char** argv) {
 
     // ── args ────────────────────────────────────────────────────────────────
-    std::string shotPath;
-    int shotFrames = 220, shotFrame = 0, shotCam = 0;
+    // --shot/--frames/--cam/--look are the shared capture flags (capture_util.hpp);
+    // everything else below is this demo's own.
+    const capture::Args capArgs = capture::parseArgs(argc, argv);
+    capture::Shot shot(capArgs, /*defaultFrames=*/220);
+    int shotCam = 0;
     float startTime = 17.6f;// golden hour (sunset ~18:45)
     float startCycle = 0.f; // hours per second (0 = paused)
     bool startFly = false;// begin on the cinematic flight path
@@ -796,8 +801,7 @@ int main(int argc, char** argv) {
     // (--cam is the capture_util convention every Vulkan demo shares; the
     // camera PRESET index moved to --view. --campos stays as a legacy alias.) —
     // scouting artefacts at arbitrary viewpoints without adding a preset each time.
-    bool  hasCamPos = false, hasCamLook = false;
-    float camPos[3]{}, camLook[3]{};
+    std::optional<Vector3> camPos = capArgs.camPos, camLook = capArgs.camTarget;
     // --seq DIR: the motion harness. A held pose cannot see a view-anchored
     // defect — that is the whole lesson of the F1 smoke regression, where every
     // still passed and the plume boiled in froxel-sized blocks the moment the
@@ -815,15 +819,8 @@ int main(int argc, char** argv) {
     // between the same two), rather than adding a second switch beside it.
     constexpr float kDayHour = 13.2f, kNightHour = 22.6f;
     bool  dayFlag = false, nightFlag = false;
-    auto parseVec3 = [](const char* s, float out[3]) {
-        const auto v = capture::parseVec3(s);// shared: accepts "x,y,z" and "x y z"
-        if (v) { out[0] = v->x; out[1] = v->y; out[2] = v->z; }
-        return v.has_value();
-    };
     for (int i = 1; i < argc; ++i) {
-        if (std::strcmp(argv[i], "--shot") == 0 && i + 1 < argc) shotPath = argv[++i];
-        else if (std::strcmp(argv[i], "--frames") == 0 && i + 1 < argc) shotFrames = std::atoi(argv[++i]);
-        else if (std::strcmp(argv[i], "--time") == 0 && i + 1 < argc) startTime = static_cast<float>(std::atof(argv[++i]));
+        if (std::strcmp(argv[i], "--time") == 0 && i + 1 < argc) startTime = static_cast<float>(std::atof(argv[++i]));
         else if (std::strcmp(argv[i], "--view") == 0 && i + 1 < argc) shotCam = std::atoi(argv[++i]);
         else if (std::strcmp(argv[i], "--cycle") == 0 && i + 1 < argc) startCycle = static_cast<float>(std::atof(argv[++i]));
         else if (std::strcmp(argv[i], "--fly") == 0) startFly = true;
@@ -856,9 +853,8 @@ int main(int argc, char** argv) {
         }
         else if (std::strcmp(argv[i], "--debugview") == 0 && i + 1 < argc) debugView = std::atoi(argv[++i]);
         else if (std::strcmp(argv[i], "--tile2") == 0 && i + 1 < argc) tile2Override = static_cast<float>(std::atof(argv[++i]));
-        else if (std::strcmp(argv[i], "--cam") == 0 && i + 1 < argc) hasCamPos = parseVec3(argv[++i], camPos);
-        else if (std::strcmp(argv[i], "--campos") == 0 && i + 1 < argc) hasCamPos = parseVec3(argv[++i], camPos);// legacy alias
-        else if (std::strcmp(argv[i], "--look") == 0 && i + 1 < argc) hasCamLook = parseVec3(argv[++i], camLook);
+        // --cam / --look are already in capArgs; --campos is a legacy alias.
+        else if (std::strcmp(argv[i], "--campos") == 0 && i + 1 < argc) camPos = capture::parseVec3(argv[++i]);
     }
     // After the loop so an explicit --time still wins when both are given.
     if (dayFlag) startTime = kDayHour;
@@ -880,7 +876,7 @@ int main(int argc, char** argv) {
     renderer.setAutoExposureRange(-2.5f, 1.5f);
     // --seq behaves like --shot for everything except what it writes: no UI,
     // no orbit controls, a scripted camera and a fast exposure settle.
-    const bool headlessish = !shotPath.empty() || !seqDir.empty();
+    const bool headlessish = shot.active() || !seqDir.empty();
     renderer.setAutoExposureSpeed(headlessish ? 12.0f : 2.0f);
     // renderer.setGbufferMsaa(2);// leaf canopies + grass edges
     renderer.setRenderScale(0.85f);
@@ -1124,7 +1120,7 @@ int main(int argc, char** argv) {
             for (const auto& p : sites) {
                 const size_t vi = static_cast<size_t>(u01(rng) * static_cast<float>(vars.size())) % vars.size();
                 const float s = minScale + u01(rng) * (maxScale - minScale);
-                q.setFromAxisAngle(up, u01(rng) * kTau);
+                q.setFromAxisAngle(up, u01(rng) * math::TWO_PI);
                 Matrix4 m;
                 m.compose(p, q, Vector3(s, s, s));
                 xf[vi].push_back(m);
@@ -1179,7 +1175,7 @@ int main(int argc, char** argv) {
             if (h < -1.5f || h > 12.f) continue;
             const float sc = 0.5f + u01(rng) * 1.6f;
             axis.set(u01(rng) - 0.5f, u01(rng) - 0.5f, u01(rng) - 0.5f).normalize();
-            q.setFromAxisAngle(axis, u01(rng) * kTau);
+            q.setFromAxisAngle(axis, u01(rng) * math::TWO_PI);
             m.compose(Vector3(x, h - sc * 0.3f, z), q, Vector3(sc, sc * (0.7f + u01(rng) * 0.4f), sc));
             xf[static_cast<size_t>(u01(rng) * static_cast<float>(rgeos.size())) % rgeos.size()].push_back(m);
         }
@@ -1291,7 +1287,7 @@ int main(int argc, char** argv) {
         // Bounded attempt loop — rejection sampling (water / rock walls) can't
         // guarantee the target count, so cap the attempts instead of spinning.
         for (int a = 0; a < 2000000 && blades.size() < kBladeTarget; ++a) {
-            const float ang = u01(rng) * kTau;
+            const float ang = u01(rng) * math::TWO_PI;
             const float rr = std::sqrt(u01(rng)) * kMeadowRadius;
             const float x = padX + std::cos(ang) * rr;
             const float z = kPadZ + std::sin(ang) * rr;
@@ -1313,7 +1309,7 @@ int main(int argc, char** argv) {
             bl.position.set(x, h - 0.04f, z);
             const float s = 0.5f + u01(rng) * 0.5f;
             bl.scale.set(s, 0.28f + u01(rng) * 0.38f, s);
-            bl.yaw.setFromAxisAngle(up, u01(rng) * kTau);
+            bl.yaw.setFromAxisAngle(up, u01(rng) * math::TWO_PI);
             blades.push_back(bl);
         }
         auto grassMat = MeshStandardMaterial::create(
@@ -1675,9 +1671,9 @@ int main(int argc, char** argv) {
         controls.update();
     };
     if (headlessish) applyShotCam(shotCam);
-    if (hasCamPos) camera.position.set(camPos[0], camPos[1], camPos[2]);
-    if (hasCamLook) controls.target.set(camLook[0], camLook[1], camLook[2]);
-    if (hasCamPos || hasCamLook) controls.update();
+    if (camPos) camera.position.copy(*camPos);
+    if (camLook) controls.target.copy(*camLook);
+    if (camPos || camLook) controls.update();
     // The seq orbit / dolly anchor: the pose the presets / overrides left behind.
     const Vector3 seqEye0    = camera.position;
     const Vector3 seqTarget0 = controls.target;
@@ -1757,11 +1753,7 @@ int main(int argc, char** argv) {
     });
     canvas.addKeyListener(keyAdapter);
 
-    canvas.onWindowResize([&](const WindowSize& ns) {
-        renderer.setSize(ns);
-        camera.aspect = canvas.aspect();
-        camera.updateProjectionMatrix();
-    });
+    demo::bindResize(canvas, renderer, camera);
 
     // Initial sky.
     applySky(celestialAt(timeOfDay), true);
@@ -1931,7 +1923,7 @@ int main(int argc, char** argv) {
         // exit regression). The layer is anchored at baseY; climbing lifts the
         // camera through and above it while the temporal history (froxel EMA,
         // TAA) tracks the transition.
-        if (!shotPath.empty() && climbRate > 0.f) {
+        if (shot.active() && climbRate > 0.f) {
             camera.position.y += climbRate;
             // Lift the look target in lock-step so the PITCH stays constant while
             // the camera climbs — the horizon/sky band above the cloud layer stays
@@ -1946,11 +1938,10 @@ int main(int argc, char** argv) {
 
         if (reproDumpRequest) {
             reproDumpRequest = false;
-            const auto dir = std::filesystem::path(PROJECT_FOLDER) / "aaa_caps";
-            std::filesystem::create_directories(dir);
             char base[64];
             std::snprintf(base, sizeof(base), "fjord_repro_%02d", reproDumpIndex++);
-            renderer.writeFramebuffer(dir / (std::string(base) + ".png"));
+            const auto png = capture::shotOutputPath(std::string(base) + ".png");
+            renderer.writeFramebuffer(png);
             char cmd[512];
             std::snprintf(cmd, sizeof(cmd),
                           "vulkan_fjord --shot %s_replay.png --frames 220 --time %.2f --wind %.1f "
@@ -1959,7 +1950,9 @@ int main(int argc, char** argv) {
                           cloudsOn ? "" : " --noclouds",
                           camera.position.x, camera.position.y, camera.position.z,
                           controls.target.x, controls.target.y, controls.target.z);
-            std::ofstream side(dir / (std::string(base) + ".txt"));
+            // Sidecar next to its image by construction, so the pair can never
+            // land in different directories.
+            std::ofstream side(std::filesystem::path(png).replace_extension(".txt"));
             side << cmd << "\n";
             std::cout << "[repro] wrote " << base << ".png  replay: " << cmd << std::endl;
         }
@@ -1968,13 +1961,13 @@ int main(int argc, char** argv) {
             // Written AFTER the render, so frame N's image is the pose set at
             // the top of frame N (below); the orbit for the NEXT frame is
             // applied here, closed-form in the frame index.
-            if (shotFrame >= seqWarm) {
+            if (shot.frame >= seqWarm) {
                 char name[64];
-                std::snprintf(name, sizeof(name), "f%02d.png", shotFrame - seqWarm);
+                std::snprintf(name, sizeof(name), "f%02d.png", shot.frame - seqWarm);
                 renderer.writeFramebuffer((std::filesystem::path(seqDir) / name).string());
             }
-            ++shotFrame;
-            if (shotFrame >= seqWarm + seqFrames) {
+            ++shot.frame;
+            if (shot.frame >= seqWarm + seqFrames) {
                 if (seqDolly != 0.f)
                     std::printf("[seq] %d frames -> %s (dolly %.2f m/s, warm %d)\n",
                                 seqFrames, seqDir.c_str(), double(seqDolly), seqWarm);
@@ -1983,7 +1976,7 @@ int main(int argc, char** argv) {
                                 seqFrames, seqDir.c_str(), double(seqOrbit), seqWarm);
                 std::exit(0);
             }
-            const float tSeq = float(shotFrame) * (1.f / 60.f);
+            const float tSeq = float(shot.frame) * (1.f / 60.f);
             if (seqDolly != 0.f) {
                 // WALK. Eye and target translate together along the ground
                 // heading the shot pose was already looking down, so the framing
@@ -2005,24 +1998,26 @@ int main(int argc, char** argv) {
                                     controls.target.z + dx * sa + dz * ca);
             }
             camera.lookAt(controls.target);
-        } else if (shotPath.empty()) {
+        } else if (!shot.active()) {
             ui->render();
-        } else if (++shotFrame >= shotFrames) {
-            const auto path = capture::shotOutputPath(shotPath);
-            renderer.writeFramebuffer(path);
+        } else if (shot.ready()) {
+            // Per-pass cost + LOD occupancy on the "wrote ..." line — this is
+            // the headless equivalent of reading the HUD, so a capture run
+            // doubles as a perf datapoint.
             const auto t = renderer.lastFrameTimings();
             const auto ls = renderer.autoLodStats();
-            std::cout << "wrote " << path.string() << " (" << fps << " fps)\n"
-                      << "  gbuf " << t.rasterGbufMs << "  shade " << t.shadeBMs
-                      << "  denoise " << t.denoiseMs << "  taa " << t.taaMs
-                      << "  cpuEnsure " << t.cpuEnsureSceneMs << "  cpuRecord " << t.cpuRecordMs
-                      << "  cpuFrame " << t.cpuFrameMs
-                      << "  tiles " << tiles->activeTiles()
-                      << "  lod=[" << ls.entriesPerLevel[0] << "," << ls.entriesPerLevel[1] << ","
-                      << ls.entriesPerLevel[2] << "," << ls.entriesPerLevel[3] << ","
-                      << ls.entriesPerLevel[4] << "," << ls.entriesPerLevel[5] << "]"
-                      << " chains=" << ls.chainsReady << std::endl;
-            std::exit(0);
+            std::ostringstream stats;
+            stats << " (" << fps << " fps)\n"
+                  << "  gbuf " << t.rasterGbufMs << "  shade " << t.shadeBMs
+                  << "  denoise " << t.denoiseMs << "  taa " << t.taaMs
+                  << "  cpuEnsure " << t.cpuEnsureSceneMs << "  cpuRecord " << t.cpuRecordMs
+                  << "  cpuFrame " << t.cpuFrameMs
+                  << "  tiles " << tiles->activeTiles()
+                  << "  lod=[" << ls.entriesPerLevel[0] << "," << ls.entriesPerLevel[1] << ","
+                  << ls.entriesPerLevel[2] << "," << ls.entriesPerLevel[3] << ","
+                  << ls.entriesPerLevel[4] << "," << ls.entriesPerLevel[5] << "]"
+                  << " chains=" << ls.chainsReady;
+            capture::finishShot(renderer, shot.name, stats.str());
         }
     });
 

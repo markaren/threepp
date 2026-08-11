@@ -8,7 +8,8 @@
 #include "threepp/materials/interfaces.hpp"
 #include "threepp/threepp.hpp"
 
-#include <cstring>
+#include "window_util.hpp"
+
 
 using namespace threepp;
 
@@ -131,11 +132,7 @@ int main(int argc, char** argv) {
         ImGui::Checkbox("EnclosingBox", &showEnclosingBox);
     }, "Vulkan");
 
-    canvas.onWindowResize([&](const WindowSize& ns) {
-        renderer.setSize(ns);
-        rtCam.aspect = canvas.aspect();
-        rtCam.updateProjectionMatrix();
-    });
+    demo::bindResize(canvas, renderer, rtCam);
 
     Clock clock;
     float elapsed = 0.f;

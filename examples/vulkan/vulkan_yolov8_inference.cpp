@@ -17,13 +17,14 @@
 #include "threepp/objects/Sprite.hpp"
 #include "threepp/materials/SpriteMaterial.hpp"
 
+#include "capture_util.hpp"
+#include "coco_labels.hpp"
 #include "utility/DetectionOverlay.hpp"
 #include "yolov8/YoloV8nVk.hpp"
 
 #include <algorithm>
 #include <chrono>
 #include <cmath>
-#include <filesystem>
 #include <iomanip>
 #include <iostream>
 #include <string>
@@ -31,18 +32,10 @@
 
 using namespace threepp;
 
-static const char* kCocoNames[80] = {
-    "person","bicycle","car","motorbike","aeroplane","bus","train","truck","boat",
-    "traffic light","fire hydrant","stop sign","parking meter","bench","bird","cat",
-    "dog","horse","sheep","cow","elephant","bear","zebra","giraffe","backpack",
-    "umbrella","handbag","tie","suitcase","frisbee","skis","snowboard","sports ball",
-    "kite","baseball bat","baseball glove","skateboard","surfboard","tennis racket",
-    "bottle","wine glass","cup","fork","knife","spoon","bowl","banana","apple",
-    "sandwich","orange","broccoli","carrot","hot dog","pizza","donut","cake","chair",
-    "sofa","pottedplant","bed","diningtable","toilet","tvmonitor","laptop","mouse",
-    "remote","keyboard","cell phone","microwave","oven","toaster","sink","refrigerator",
-    "book","clock","vase","scissors","teddy bear","hair drier","toothbrush"
-};
+// The label table indexes the model's class dimension directly, so a mismatch
+// between the two would mislabel every detection with no other symptom.
+static_assert(std::ssize(coco::kCoco80) == yolo::YoloV8nVk::NUM_CLASSES,
+              "COCO-80 label table does not match YoloV8nVk::NUM_CLASSES");
 
 int main(int argc, char** argv) {
     std::string imgPath, weightsPath, shotPath;
@@ -119,8 +112,7 @@ int main(int argc, char** argv) {
                       << std::fixed << std::setprecision(2) << std::setw(8) << dt
                       << " ms   detections: " << detections.size() << "\n";
             for (auto& d : detections) {
-                const char* name = (d.cls_id >= 0 && d.cls_id < 80) ? kCocoNames[d.cls_id] : "unknown";
-                std::cout << "             > " << std::left << std::setw(20) << name << std::right
+                std::cout << "             > " << std::left << std::setw(20) << coco::name80(d.cls_id) << std::right
                           << "  conf: " << std::fixed << std::setprecision(3) << d.conf << "\n";
             }
         }
@@ -167,20 +159,19 @@ int main(int argc, char** argv) {
         float x2 = std::min(640.f, d.x2 * sx), y2 = std::min(640.f, d.y2 * sy);
         float sy1 = 640.f - y2;
         float sy2 = 640.f - y1;
-        const Color& col = detviz::kPalette[d.cls_id % 6];
+        const Color& col = detviz::classColor(d.cls_id);
         scene->add(detviz::makeBoxLines(x1, sy1, x2, sy2, col));
-        const char* name = (d.cls_id >= 0 && d.cls_id < 80) ? kCocoNames[d.cls_id] : "unknown";
-        scene->add(detviz::makeLabel(font, detviz::labelText(name, d.conf), col, x1, sy2));
+        scene->add(detviz::makeLabel(font, detviz::labelText(coco::name80(d.cls_id), d.conf), col, x1, sy2));
     }
 
-    int shotFrame = 0;
+    // A few frames so the swapchain holds the finished overlay, then write the
+    // path the caller asked for verbatim (not an aaa_caps name) and exit.
+    capture::Shot shot;
+    shot.name = shotPath;
+    shot.frames = 5;
     canvas.animate([&] {
         renderer.render(*scene, *camera);
-        if (!shotPath.empty() && ++shotFrame >= 5) {
-            renderer.writeFramebuffer(shotPath);
-            std::cout << "wrote " << shotPath << "\n";
-            std::exit(0);
-        }
+        if (shot.ready()) capture::finishShotAtPath(renderer, shot.name);
     });
 
     return 0;
