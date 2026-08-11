@@ -251,6 +251,8 @@ set(publicHeaders
         "threepp/utils/ImageUtils.hpp"
         "threepp/utils/StringUtils.hpp"
         "threepp/utils/TaskManager.hpp"
+        "threepp/utils/ZipReader.hpp"
+        "threepp/utils/ZipWriter.hpp"
 
         "threepp/lights/lights.hpp"
         "threepp/lights/Light.hpp"
@@ -351,7 +353,6 @@ set(privateHeaders
 
         "threepp/loaders/exr/PizDecode.hpp"
 
-        "threepp/loaders/sog/SogZip.hpp"
         "threepp/loaders/xacro/Diagnostics.hpp"
         "threepp/loaders/xacro/Expand.hpp"
         "threepp/loaders/xacro/Expr.hpp"
@@ -602,7 +603,6 @@ set(sources
         "threepp/loaders/TextureLoader.cpp"
         "threepp/loaders/URDFLoader.cpp"
 
-        "threepp/loaders/sog/SogZip.cpp"
         "threepp/loaders/xacro/Diagnostics.cpp"
         "threepp/loaders/xacro/Expand.cpp"
         "threepp/loaders/xacro/Expr.cpp"
@@ -704,6 +704,8 @@ set(sources
         "threepp/utils/StbImageWrite.cpp"
         "threepp/utils/StringUtils.cpp"
         "threepp/utils/TaskManager.cpp"
+        "threepp/utils/ZipReader.cpp"
+        "threepp/utils/ZipWriter.cpp"
 
         "threepp/renderers/GLRenderer.cpp"
         "threepp/renderers/RenderTarget.cpp"

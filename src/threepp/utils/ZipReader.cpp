@@ -1,12 +1,12 @@
 
-#include "threepp/loaders/sog/SogZip.hpp"
+#include "threepp/utils/ZipReader.hpp"
 
 #include <algorithm>
 #include <fstream>
 #include <limits>
 #include <stdexcept>
 
-using namespace threepp::sog;
+using namespace threepp;
 
 namespace {
 
@@ -35,7 +35,7 @@ namespace {
 
     [[noreturn]] void fail(const std::string& msg) {
 
-        throw std::runtime_error("SogZip: " + msg);
+        throw std::runtime_error("ZipReader: " + msg);
     }
 
     std::string quoted(const std::string& s) {
@@ -139,7 +139,7 @@ namespace {
 }// namespace
 
 
-bool SogZip::looksLikeZip(const std::filesystem::path& path) {
+bool ZipReader::looksLikeZip(const std::filesystem::path& path) {
 
     try {
 
@@ -160,7 +160,7 @@ bool SogZip::looksLikeZip(const std::filesystem::path& path) {
     }
 }
 
-SogZip::SogZip(const std::filesystem::path& path)
+ZipReader::ZipReader(const std::filesystem::path& path)
     : bytes_(readWholeFile(path)) {
 
     try {
@@ -175,7 +175,7 @@ SogZip::SogZip(const std::filesystem::path& path)
     }
 }
 
-void SogZip::parse() {
+void ZipReader::parse() {
 
     const unsigned char* const d = bytes_.data();
     const std::uint64_t size = bytes_.size();
@@ -393,12 +393,12 @@ void SogZip::parse() {
     }
 }
 
-bool SogZip::has(const std::string& name) const {
+bool ZipReader::has(const std::string& name) const {
 
     return entries_.find(normalizeName(name)) != entries_.end();
 }
 
-std::vector<unsigned char> SogZip::read(const std::string& name) const {
+std::vector<unsigned char> ZipReader::read(const std::string& name) const {
 
     const auto it = entries_.find(normalizeName(name));
     if (it == entries_.end()) {
@@ -415,7 +415,7 @@ std::vector<unsigned char> SogZip::read(const std::string& name) const {
     return std::vector<unsigned char>(first, first + length);
 }
 
-std::vector<std::string> SogZip::names() const {
+std::vector<std::string> ZipReader::names() const {
 
     return names_;
 }

@@ -3,7 +3,7 @@
 
 #include "nlohmann/json.hpp"
 #include "threepp/loaders/ImageLoader.hpp"
-#include "threepp/loaders/sog/SogZip.hpp"
+#include "threepp/utils/ZipReader.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -95,7 +95,7 @@ namespace {
         [[nodiscard]] std::string describe() const override { return name_; }
 
     private:
-        sog::SogZip zip_;
+        ZipReader zip_;
         std::string name_;
     };
 
@@ -144,7 +144,7 @@ namespace {
         // An archive, recognised by its magic rather than its extension: the
         // same container ships as .zip from superspl.at and as .sog from the
         // spec's bundled form.
-        if (sog::SogZip::looksLikeZip(path)) {
+        if (ZipReader::looksLikeZip(path)) {
 
             r.source = std::make_unique<ZipSource>(path);
             probe(r);

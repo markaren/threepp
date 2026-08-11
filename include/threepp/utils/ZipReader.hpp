@@ -1,22 +1,25 @@
-// A read-only reader for the ZIP containers PlayCanvas SOG / SuperSplat "SSOG"
-// Gaussian-splat scans are distributed in.
+// A read-only reader for STORED (uncompressed) ZIP containers: the PlayCanvas
+// SOG / SuperSplat "SSOG" splat scans it was written for, and threepp's own
+// single-file scene archives (see ZipWriter, ObjectExporter).
 //
 // Provenance: clean-room, written from the PKWARE .ZIP File Format Specification
 // (APPNOTE, public since 1989). No third-party zip code was consulted and none
-// is linked. That is affordable only because SOG archives use a tiny subset of
+// is linked. That is affordable only because these archives use a tiny subset of
 // the format: every entry is STORED (compression method 0), because the payload
-// is already-compressed WebP and JSON, so "reading an entry" is nothing but
-// finding the offset its bytes start at. Nothing here inflates anything; a
-// method other than stored is refused by name rather than guessed at.
+// is already-compressed WebP/PNG, JSON, or raw vertex data that a general
+// compressor buys nothing on, so "reading an entry" is nothing but finding the
+// offset its bytes start at. Nothing here inflates anything; a method other than
+// stored is refused by name rather than guessed at.
 //
 // THE TRAP, and the reason this file exists rather than a ten-line offset walk:
-// THE LOCAL FILE HEADER LIES. 153 of the 154 entries in the reference archive
-// set general-purpose bit 3 (0x08, "sizes follow the data in a descriptor"),
-// and on those the local header's crc32, compressed size and uncompressed size
-// are all written as ZERO — the real values trail the data instead. A reader
-// that takes sizes from the local file header therefore gets 153 zero-length
-// entries and no error whatsoever: every image decodes to nothing, and the
-// failure surfaces far away as a blank splat cloud.
+// THE LOCAL FILE HEADER LIES. 153 of the 154 entries in the reference SOG
+// archive set general-purpose bit 3 (0x08, "sizes follow the data in a
+// descriptor"), and on those the local header's crc32, compressed size and
+// uncompressed size are all written as ZERO — the real values trail the data
+// instead. A reader that takes sizes from the local file header therefore gets
+// 153 zero-length entries and no error whatsoever: every image decodes to
+// nothing, and the failure surfaces far away as a blank splat cloud. (ZipWriter
+// never emits that flag, precisely because of this.)
 //
 // THE CENTRAL DIRECTORY IS THE ONLY TRUTH. Compression method, uncompressed
 // size and the local header's offset are all taken from there. The local header
@@ -36,8 +39,8 @@
 // used to index; a truncated or malformed archive throws, it never returns the
 // wrong bytes.
 
-#ifndef THREEPP_SOG_SOGZIP_HPP
-#define THREEPP_SOG_SOGZIP_HPP
+#ifndef THREEPP_ZIPREADER_HPP
+#define THREEPP_ZIPREADER_HPP
 
 #include <cstdint>
 #include <filesystem>
@@ -45,20 +48,21 @@
 #include <unordered_map>
 #include <vector>
 
-namespace threepp::sog {
+namespace threepp {
 
-    class SogZip {
+    class ZipReader {
 
     public:
         // Is this file plausibly a ZIP archive?
         //
         // Sniffs the first local file header's magic ("PK\x03\x04"), which is
-        // what a SOG bundle starts with. Reads four bytes and never throws: a
-        // missing, unreadable or truncated file is simply "not an archive",
-        // which leaves the caller's plain-file path to report the failure in its
-        // own words. Note the two deliberate false negatives — an empty archive
-        // (which begins with its end-of-central-directory record) and one with a
-        // prepended self-extracting stub — neither of which a SOG scan is.
+        // what a SOG bundle and a threepp scene archive both start with. Reads
+        // four bytes and never throws: a missing, unreadable or truncated file
+        // is simply "not an archive", which leaves the caller's plain-file path
+        // to report the failure in its own words. Note the two deliberate false
+        // negatives — an empty archive (which begins with its end-of-central-
+        // directory record) and one with a prepended self-extracting stub —
+        // neither of which anything in threepp writes.
         [[nodiscard]] static bool looksLikeZip(const std::filesystem::path& path);
 
         // Reads the whole file into memory and parses the central directory.
@@ -67,7 +71,7 @@ namespace threepp::sog {
         // message, on anything it cannot represent. Validation is done here for
         // every entry rather than lazily at read() time, so has() never promises
         // bytes that a later read() would refuse to deliver.
-        explicit SogZip(const std::filesystem::path& path);
+        explicit ZipReader(const std::filesystem::path& path);
 
         // Lookup names are normalised: backslashes become forward slashes and a
         // leading "./" is stripped, so "0_0/meta.json" finds the entry however
@@ -94,7 +98,7 @@ namespace threepp::sog {
         // whatever it throws.
         void parse();
 
-        // The whole file. These archives are ~180 MB and a caller loads most of
+        // The whole file. A SOG archive is ~180 MB and a caller loads most of
         // every one of them anyway, so a memory-mapped or streaming design would
         // buy little and cost the portability of a per-platform mapping layer.
         std::vector<unsigned char> bytes_;
@@ -103,6 +107,6 @@ namespace threepp::sog {
         std::vector<std::string> names_;
     };
 
-}// namespace threepp::sog
+}// namespace threepp
 
-#endif//THREEPP_SOG_SOGZIP_HPP
+#endif//THREEPP_ZIPREADER_HPP
