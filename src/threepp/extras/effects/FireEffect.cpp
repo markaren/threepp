@@ -147,10 +147,90 @@ FireEffect::FireEffect(const Params& params): p_(params) {
     light_->intensity  = 0.f;// parked until ignite()
     add(light_);
 
-    // ── Embers: the legacy billboard path, verbatim and untouched ───────────
-    if (p_.embers && p_.emberTexture) {
-        embers_ = std::make_shared<ParticleSystem>();
-        auto& s = embers_->settings();
+    // ── Embers: a third ParticleField, device-emitted, drawn as billboards ──
+    //
+    // The look this replaces read as "large regular blobs" — a fixed-size soft
+    // texture at a fixed brightness, integrated per frame by an RNG. Four things
+    // fix that, and all four are properties of the field, not of a texture:
+    //
+    //   1. SIZE. Centimetre scale, with 60% per-particle jitter written into w
+    //      by the emitter, so no two sparks are the same size.
+    //   2. BRIGHTNESS. Hashed per particle in the billboard shader (a spark is
+    //      not one of N identical lamps) AND faded over the slot's own life.
+    //   3. COLOUR. A blackbody ramp from hot to cool over that same life, with
+    //      a per-particle offset into the ramp — the same physics the flame's
+    //      emission ramp expresses over height, expressed here over time.
+    //   4. SHAPE. A slight stretch along the analytic velocity, so a rising
+    //      spark reads as a moving thing rather than a floating orb.
+    //
+    // The age all three of the last ones need is re-derived in the shader from
+    // this emitter's own closed form — there is no age buffer and no per-frame
+    // CPU work of any kind here.
+    if (p_.embers && !p_.legacyEmbers) {
+        ParticleField::Config cfg;
+        cfg.capacity  = std::max(p_.emberParticles, 1u);
+        cfg.ownership = ParticleField::Ownership::Renderer;
+        // The emitter writes each spark's own radius into w, which is where the
+        // size variety comes from; uniformRadius is the nominal it jitters
+        // around and the fallback the billboard uses if the semantic ever
+        // changes underneath it.
+        cfg.wSemantic     = ParticleField::WSemantic::Radius;
+        cfg.uniformRadius = std::max(p_.emberSize, 1e-4f);
+        embers_ = ParticleField::create(cfg);
+        embers_->name = "fire.embers";
+
+        ParticleField::EmitterParams e;
+        // Born in a thin disc-ish slab over the fuel bed, not through the whole
+        // flame volume: sparks are thrown off the burning surface.
+        e.spawnCenter.set(0.f, p_.height * 0.16f, 0.f);
+        e.spawnHalfExtent.set(p_.radius * 0.55f, p_.height * 0.06f, p_.radius * 0.55f);
+        // Buoyant: a spark leaves fast, keeps accelerating in the thermal
+        // column, and the wind pushes it the same way the smoke leans.
+        e.velocity.set(p_.wind.x, p_.emberRise, p_.wind.z);
+        e.speedSpread = p_.emberSpread;
+        e.accel.set(0.f, 0.45f, 0.f);
+        // driftGrowth 1: the base of the column is steady and the tips wander,
+        // which is what turns a cone of sparks into a plume of them.
+        e.driftAmplitude = 0.13f;
+        e.driftFrequency = 0.55f;
+        e.driftGrowth    = 1.f;
+        e.driftScale     = 0.7f;
+        e.lifetime = std::max(p_.emberLife, 0.05f);
+        // Wide, because sparks that all die at the same height give the plume a
+        // flat top. With 0.65 the ceiling is spread over 3:1 and the column
+        // thins out with height the way the flame's own per-parcel ceiling does.
+        e.lifetimeJitter = 0.65f;
+        // Duty < 1: a fraction of the slots are dead at any instant, so the
+        // spark count BREATHES instead of sitting at a constant N. This is what
+        // exercises the w < 0 sentinel in the scene the plan cares about.
+        e.dutyCycle  = 0.80f;
+        e.size       = std::max(p_.emberSize, 1e-4f);
+        e.sizeJitter = std::max(0.f, std::min(1.f, p_.emberSizeJitter));
+        e.seed       = p_.seed ^ 0x5bf03635u;
+        embers_->setEmitter(e);
+        embers_->setEmitterTime(0.f, 0.f);
+
+        embers_->setBillboardRepr(blackbodyColor(p_.emberHotK),
+                                  blackbodyColor(p_.emberCoolK),
+                                  p_.emberIntensity);
+        auto& br = embers_->billboardRepr();
+        br.texture   = p_.emberTexture;// null = the procedural spark, the default
+        br.softness  = 0.34f;          // a spark, not a glow
+        br.fadePower = 1.75f;          // holds bright, then goes out
+        br.brightJitter    = 0.55f;
+        br.sizeTaper       = 0.65f;// a cooling ember gets SMALLER
+        br.stretchSeconds  = std::max(p_.emberStretch, 0.f);
+        br.stretchMax      = 10.f;
+        // Parked until ignite(): a Renderer field's live count is its capacity
+        // and is set at construction, so parking is the explicit act here.
+        embers_->setLiveCount(0);
+        add(embers_);
+    }
+
+    // ── Embers, legacy path: the pre-F3 ParticleSystem, verbatim ────────────
+    if (p_.embers && p_.legacyEmbers && p_.emberTexture) {
+        legacyEmbers_ = std::make_shared<ParticleSystem>();
+        auto& s = legacyEmbers_->settings();
         s.makeDefault();
         s.positionStyle  = ParticleSystem::Type::BOX;
         s.positionBase   = Vector3(0.f, p_.height * 0.25f, 0.f);
@@ -175,8 +255,8 @@ FireEffect::FireEffect(const Params& params): p_(params) {
         // and rendered 30-px blobs that hid the flame behind them.
         s.setOpacityTween({0.f, 0.25f, p_.emberLife}, {0.f, 0.9f, 0.f})
                 .setSizeTween({0.f, p_.emberLife}, {0.030f, 0.008f});
-        embers_->initialize();
-        add(embers_);
+        legacyEmbers_->initialize();
+        add(legacyEmbers_);
     }
 }
 
@@ -188,8 +268,12 @@ std::shared_ptr<FireEffect> FireEffect::create(const Params& params) {
 
 void FireEffect::ignite() {
     lit_ = true;
-    // liveCount is set by the next submit(); the light is immediate so a fire
-    // ignited and rendered in the same frame already casts.
+    // The two HostRing fields get their live count from the next submit(). The
+    // ember field is Ownership::Renderer — no submit exists there, and its
+    // count is its capacity — so un-parking it is an explicit call.
+    if (embers_) embers_->setLiveCount(embers_->capacity());
+    // The light is immediate so a fire ignited and rendered in the same frame
+    // already casts.
     light_->intensity = p_.lightIntensity;
 }
 
@@ -197,6 +281,9 @@ void FireEffect::extinguish() {
     lit_ = false;
     flame_->setLiveCount(0);
     smoke_->setLiveCount(0);
+    // Park, don't remove: a field with liveCount 0 stays in the scene at one
+    // entry, skips its emit dispatch and draws nothing (churn contract).
+    if (embers_) embers_->setLiveCount(0);
     light_->intensity = 0.f;
 }
 
@@ -308,20 +395,32 @@ void FireEffect::emitSmoke(float t) {
 
 void FireEffect::update(float timeSec) {
 
-    // The legacy embers are the only stateful piece; they need a delta. Clamp
-    // it so a hitch, a pause or a seek does not integrate a hundred sparks into
-    // one frame.
+    // The delta. The LEGACY ember path needs it because it integrates; the
+    // ember FIELD needs it only as the motion-vector interval its emit dispatch
+    // evaluates f(t - dt) at. Clamped either way, so a hitch, a pause or a seek
+    // neither integrates a hundred sparks into one frame nor asks the emitter
+    // for a previous position half a second in the past.
+    //
+    // A repeated update(t) at the same t therefore gives dt == 0, which freezes
+    // the ember field EXACTLY (both evaluations are the same expression, so
+    // every spark reprojects onto itself and TAA converges completely) — which
+    // is what makes a --t capture of the fire converge WITH the embers in it.
     const float dt = haveTime_ ? std::clamp(timeSec - lastTime_, 0.f, 0.10f) : 0.f;
     lastTime_ = timeSec;
     haveTime_ = true;
 
     if (!lit_) {
-        if (embers_) embers_->update(dt);// let live sparks finish burning out
+        if (legacyEmbers_) legacyEmbers_->update(dt);// let live sparks burn out
         return;
     }
 
     emitFlame(timeSec);
     emitSmoke(timeSec);
+    // TWO FLOATS — the entire per-frame CPU cost of the ember field, whatever
+    // its capacity. Absolute t, never a delta and never a wall clock: the
+    // trajectory is closed form, so a headless capture is a function of its
+    // frame index and nothing else.
+    if (embers_) embers_->setEmitterTime(timeSec, dt);
 
     // DensityRepr's box is WORLD-space by contract (one volume serves every
     // view, so it cannot be per-field-local), while the positions submitted
@@ -352,5 +451,5 @@ void FireEffect::update(float timeSec) {
                          p_.lightHeight + 0.10f * p_.height * (f - 1.f),
                          0.28f * p_.radius * std::cos(3.3f * timeSec + pz));
 
-    if (embers_) embers_->update(dt);
+    if (legacyEmbers_) legacyEmbers_->update(dt);
 }

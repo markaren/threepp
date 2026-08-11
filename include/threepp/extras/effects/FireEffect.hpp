@@ -12,10 +12,11 @@
 // machinery, with zero renderer change in this file's name.
 //
 // ── VULKAN ONLY (inherited) ─────────────────────────────────────────────────
-// ParticleField has no GL implementation, so under `--api gl` the flame and
-// smoke VOLUMES render nothing. The PointLight and the ember billboards still
-// work, so a GL scene gets a flickering fire-coloured light and sparks but no
-// flame body. Use the Vulkan backend for the whole effect.
+// ParticleField has no GL implementation, so under `--api gl` the flame, the
+// smoke and (since F3) the EMBERS all render nothing — the whole effect is now
+// three fields plus a light. The PointLight still works, so a GL scene gets a
+// flickering fire-coloured light and no fire. Use the Vulkan backend.
+// Params::legacyEmbers is the one piece that still draws on GL.
 //
 // ── THE EMITTER IS STATELESS AND SEEDED ─────────────────────────────────────
 // Every slot's position is a CLOSED FORM f(seed_i, t): a hashed birth phase, a
@@ -35,12 +36,15 @@
 // The per-frame CPU cost is ~18k closed-form evaluations plus one memcpy per
 // field — microseconds, and independent of how many cameras look at the fire.
 //
-// ── THE ONE EXCEPTION: EMBERS ───────────────────────────────────────────────
-// The ember sparks ride the legacy ParticleSystem, which owns its own RNG and
-// integrates per frame. It is therefore NOT deterministic and NOT seekable,
-// and it is the only part of this effect that is not. That path is deliberately
-// left alone (plan: do not touch it), and Params::embers turns it off — which
-// is what a golden capture or an A/B measurement should do.
+// ── EMBERS: THE EXCEPTION THAT IS NO LONGER ONE (F3) ────────────────────────
+// The ember sparks used to ride the legacy ParticleSystem, which owns its own
+// RNG and integrates per frame — so they were the ONE part of this effect that
+// was neither deterministic nor seekable, and every metric capture had to turn
+// them off to get a comparable image. They are now a THIRD ParticleField,
+// Ownership::Renderer, drawn by the billboard representation: the same stateless
+// closed form as the flame, evaluated on the device, with the whole effect
+// therefore reproducible with the embers ON. Params::legacyEmbers brings the old
+// path back for an A/B, and brings its properties back with it.
 //
 // ── CHURN ───────────────────────────────────────────────────────────────────
 // Both fields are created ONCE, in the constructor, at their final capacity,
@@ -145,13 +149,59 @@ namespace threepp {
             // state, and it is a pure function of t (so it survives a seek).
             float flicker = 1.0f;
 
-            // ── Embers (legacy ParticleSystem, additive) ────────────────────
-            // Null texture = no embers, whatever `embers` says. Kept as a
-            // caller-supplied asset so this header pulls in no data folder.
+            // ── Embers (a third ParticleField, device-emitted, additive) ────
+            // Sparks rising off the fire, drawn as vertex-less camera-facing
+            // quads by the billboard representation (F3). This was the ONE
+            // non-deterministic and non-seekable part of the effect while it
+            // rode the legacy ParticleSystem — that path owns an RNG and
+            // integrates per frame, so a capture of frame 600 depended on
+            // frames 1..599 and two runs never matched. As a Renderer-owned
+            // field it is the same closed form as the flame: seekable, exactly
+            // reproducible, and free of per-frame CPU work.
             bool embers = true;
+            // Capacity, fixed for life. ~120 alive at a time at the default
+            // duty — a campfire throws sparks, not a firework. Tuned DOWN by
+            // eye: the first build shipped 260 and the plume read as a
+            // sparkler, which is a different object.
+            std::uint32_t emberParticles = 150;
+            float emberLife = 2.2f;// seconds, before the per-slot jitter
+            // WORLD radius, and this is the number the look lives or dies on:
+            // an ember is a centimetre-scale spark seen from a metre or two, so
+            // anything over ~0.02 paints glowing pills across the flame. Half
+            // the value is per-particle jitter, which is what stops the field
+            // reading as N identical dots.
+            float emberSize       = 0.011f;
+            float emberSizeJitter = 0.60f;
+            float emberRise       = 1.45f;// m/s off the fuel bed
+            float emberSpread     = 0.50f;// isotropic velocity spread, m/s
+            float emberIntensity  = 3.4f; // HDR radiance scale on the sprite
+            // Blackbody temperatures the spark's colour ramps BETWEEN over its
+            // life. Hot end sits under the flame's own tempBottomK — a spark
+            // that has left the flame is already cooling — and the cool end is
+            // the deep red just before it goes out.
+            float emberHotK  = 2100.f;
+            float emberCoolK = 1150.f;
+            // Seconds of travel the quad is smeared over, along the spark's own
+            // screen-projected velocity. SMALL on purpose: an ember drifts, and
+            // this is the knob that decides whether it reads as a spark or as a
+            // dash — 0.020 gave a field of 4:1 tick marks all leaning the same
+            // way. The velocity itself is free: the emit dispatch already wrote
+            // f(t) and f(t - dt).
+            float emberStretch = 0.012f;
+
+            // Optional sprite texture. Null is the SHIPPED look: the billboard
+            // fragment shader draws a procedural soft spark and the effect
+            // pulls in no data folder at all. A texture MODULATES that shape.
             std::shared_ptr<Texture> emberTexture;
-            int   emberRate = 26;   // particles per second
-            float emberLife = 2.1f; // seconds
+
+            // ── Escape hatch: the pre-F3 legacy ParticleSystem embers ────────
+            // Kept so the migration can be A/B'd in ONE binary at ONE seed, and
+            // for a caller who wants the old look. It brings back the old
+            // properties with it: its own RNG, per-frame integration, no
+            // seeking, and a scene that is not bit-reproducible. Requires
+            // emberTexture (that path has no procedural sprite).
+            bool legacyEmbers = false;
+            int  emberRate    = 26;// legacy path only: particles per second
 
             std::uint32_t seed = 20260811u;
         };
@@ -183,6 +233,8 @@ namespace threepp {
 
         [[nodiscard]] const std::shared_ptr<ParticleField>& flameField() const { return flame_; }
         [[nodiscard]] const std::shared_ptr<ParticleField>& smokeField() const { return smoke_; }
+        // Null when Params::embers is off or Params::legacyEmbers is on.
+        [[nodiscard]] const std::shared_ptr<ParticleField>& emberField() const { return embers_; }
         [[nodiscard]] const std::shared_ptr<PointLight>&    light() const { return light_; }
 
         // The HUE of a blackbody at `kelvin`, normalised so the maximum channel
@@ -214,8 +266,12 @@ namespace threepp {
 
         std::shared_ptr<ParticleField> flame_;
         std::shared_ptr<ParticleField> smoke_;
+        // The ember field (Ownership::Renderer, billboards). Null when the
+        // legacy escape hatch is on or embers are off.
+        std::shared_ptr<ParticleField> embers_;
         std::shared_ptr<PointLight>    light_;
-        std::shared_ptr<ParticleSystem> embers_;
+        // The pre-F3 path, alive only under Params::legacyEmbers.
+        std::shared_ptr<ParticleSystem> legacyEmbers_;
 
         // Staging for the two submits. Sized once, never grown — the memcpy
         // into the field is the only per-particle cost in the design and it

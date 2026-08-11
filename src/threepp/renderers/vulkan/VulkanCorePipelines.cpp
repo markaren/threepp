@@ -3,6 +3,8 @@
 #include "threepp/renderers/vulkan/shaders/gbuffer.vert.spv.h"
 #include "threepp/renderers/vulkan/shaders/gbuffer.frag.spv.h"
 #include "threepp/renderers/vulkan/shaders/gbuffer_indirect.vert.spv.h"
+#include "threepp/renderers/vulkan/shaders/particlefield_billboard.frag.spv.h"
+#include "threepp/renderers/vulkan/shaders/particlefield_billboard.vert.spv.h"
 #include "threepp/renderers/vulkan/shaders/particlefield_gbuf.vert.spv.h"
 #include "threepp/renderers/vulkan/shaders/overlay.vert.spv.h"
 #include "threepp/renderers/vulkan/shaders/overlay.frag.spv.h"
@@ -2294,6 +2296,181 @@ void VulkanRenderer::Impl::createParticlePipeline() {
 
             ensureParticleWhiteTexture();
             createSpriteWorldPipeline();
+            createFieldBillboardPipeline();
+        }
+
+// ── ParticleField billboards — plans/particle-atmosphere.md F-D ─────────────
+//
+// Everything about this pipeline is an argument against the legacy one it sits
+// beside, so the differences are worth naming:
+//
+//   • ZERO vertex input bindings. The quad is four vertices of nothing: the
+//     corner comes from gl_VertexIndex and the particle from gl_InstanceIndex,
+//     and the position/radius are pulled out of the field's device buffer by
+//     address. The legacy path uploads 4 coincident vertices x 4 attributes per
+//     particle per frame and is capped at 16384 particles because of it.
+//   • ONE indirect draw per field, with instanceCount written on the DEVICE.
+//     The CPU never learns how many particles there are.
+//   • DEPTH-TESTED, unlike the legacy additive variant. That variant turns the
+//     test off so a fireball draws over the scene; a rain streak or an ember
+//     behind a rock must not, and the pass already binds the read-only
+//     unjittered depth, so correctness here is free.
+//   • ADDITIVE, ONE/ONE, with coverage folded into the radiance in the
+//     fragment. Addition commutes, so there is nothing to sort — which is the
+//     entire reason this slice is additive-first.
+void VulkanRenderer::Impl::createFieldBillboardPipeline() {
+            if (fieldBillboardPipeline_ != VK_NULL_HANDLE) return;
+            if (particleDescSetLayout_ == VK_NULL_HANDLE) return;// caller ordering bug
+
+            VkPushConstantRange pcRange{};
+            pcRange.stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
+            pcRange.offset     = 0;
+            pcRange.size       = sizeof(FieldBillboardPC);
+            // Set 0 only, and it is the LEGACY path's texture layout reused
+            // verbatim — so BillboardRepr::texture works through the same
+            // ensureParticleTexture cache and the same 1x1 white default, and
+            // an untextured field costs one extra descriptor write per draw
+            // from a pool that is already reset once per frame.
+            VkPipelineLayoutCreateInfo plci{};
+            plci.sType                  = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+            plci.setLayoutCount         = 1;
+            plci.pSetLayouts            = &particleDescSetLayout_;
+            plci.pushConstantRangeCount = 1;
+            plci.pPushConstantRanges    = &pcRange;
+            check(vkCreatePipelineLayout(ctx->device(), &plci, nullptr,
+                                         &fieldBillboardPipelineLayout_),
+                  "vkCreatePipelineLayout(fieldBillboard)");
+
+            VkShaderModuleCreateInfo vsmci{};
+            vsmci.sType    = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
+            vsmci.codeSize = sizeof(kParticleFieldBillboardVertSpv);
+            vsmci.pCode    = kParticleFieldBillboardVertSpv;
+            VkShaderModule vert = VK_NULL_HANDLE;
+            check(vkCreateShaderModule(ctx->device(), &vsmci, nullptr, &vert),
+                  "vkCreateShaderModule(particlefield_billboard.vert)");
+            VkShaderModuleCreateInfo fsmci{};
+            fsmci.sType    = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
+            fsmci.codeSize = sizeof(kParticleFieldBillboardFragSpv);
+            fsmci.pCode    = kParticleFieldBillboardFragSpv;
+            VkShaderModule frag = VK_NULL_HANDLE;
+            check(vkCreateShaderModule(ctx->device(), &fsmci, nullptr, &frag),
+                  "vkCreateShaderModule(particlefield_billboard.frag)");
+
+            VkPipelineShaderStageCreateInfo stages[2]{};
+            stages[0].sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+            stages[0].stage  = VK_SHADER_STAGE_VERTEX_BIT;
+            stages[0].module = vert;
+            stages[0].pName  = "main";
+            stages[1].sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+            stages[1].stage  = VK_SHADER_STAGE_FRAGMENT_BIT;
+            stages[1].module = frag;
+            stages[1].pName  = "main";
+
+            // No bindings, no attributes — the whole point.
+            VkPipelineVertexInputStateCreateInfo vi{};
+            vi.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
+
+            VkPipelineInputAssemblyStateCreateInfo ia{};
+            ia.sType    = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
+            ia.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP;
+
+            VkPipelineViewportStateCreateInfo vp{};
+            vp.sType         = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO;
+            vp.viewportCount = 1;
+            vp.scissorCount  = 1;
+
+            VkPipelineRasterizationStateCreateInfo rs{};
+            rs.sType       = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
+            rs.polygonMode = VK_POLYGON_MODE_FILL;
+            rs.cullMode    = VK_CULL_MODE_NONE;// a billboard has no back face
+            rs.frontFace   = VK_FRONT_FACE_COUNTER_CLOCKWISE;
+            rs.lineWidth   = 1.0f;
+
+            VkDynamicState dynStates[2] = {VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR};
+            VkPipelineDynamicStateCreateInfo dyn{};
+            dyn.sType             = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO;
+            dyn.dynamicStateCount = 2;
+            dyn.pDynamicStates    = dynStates;
+
+            const VkFormat fmts[1] = {ctx->swapchainFormat()};
+            VkPipelineRenderingCreateInfo prci{};
+            prci.sType                   = VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO;
+            prci.colorAttachmentCount    = 1;
+            prci.pColorAttachmentFormats = fmts;
+            prci.depthAttachmentFormat   = VK_FORMAT_D32_SFLOAT;
+
+            // Reverse-Z, so GREATER_OR_EQUAL. Depth-write OFF: the attachment is
+            // the overlay prepass's read-only depth and a transparent must never
+            // occlude the next transparent.
+            VkPipelineDepthStencilStateCreateInfo ds{};
+            ds.sType            = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
+            ds.depthTestEnable  = VK_TRUE;
+            ds.depthWriteEnable = VK_FALSE;
+            ds.depthCompareOp   = VK_COMPARE_OP_GREATER_OR_EQUAL;
+
+            // Straight ONE/ONE: the fragment already multiplied its radiance by
+            // the sprite's coverage, so there is no second alpha term and
+            // nothing that depends on draw order. ALPHA IS MASKED OUT — the
+            // swapchain's alpha is not part of the composite and an additive
+            // pass has no business accumulating into it.
+            VkPipelineColorBlendAttachmentState cbas[1]{};
+            cbas[0].blendEnable         = VK_TRUE;
+            cbas[0].srcColorBlendFactor = VK_BLEND_FACTOR_ONE;
+            cbas[0].dstColorBlendFactor = VK_BLEND_FACTOR_ONE;
+            cbas[0].colorBlendOp        = VK_BLEND_OP_ADD;
+            cbas[0].srcAlphaBlendFactor = VK_BLEND_FACTOR_ZERO;
+            cbas[0].dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
+            cbas[0].alphaBlendOp        = VK_BLEND_OP_ADD;
+            cbas[0].colorWriteMask      = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
+                                          VK_COLOR_COMPONENT_B_BIT;
+            VkPipelineColorBlendStateCreateInfo cb{};
+            cb.sType           = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
+            cb.attachmentCount = 1;
+            cb.pAttachments    = cbas;
+
+            VkPipelineMultisampleStateCreateInfo ms{};
+            ms.sType                = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
+            ms.rasterizationSamples = overlaySampleBits();
+
+            VkGraphicsPipelineCreateInfo gpci{};
+            gpci.sType               = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
+            gpci.pNext               = &prci;
+            gpci.stageCount          = 2;
+            gpci.pStages             = stages;
+            gpci.pVertexInputState   = &vi;
+            gpci.pInputAssemblyState = &ia;
+            gpci.pViewportState      = &vp;
+            gpci.pRasterizationState = &rs;
+            gpci.pMultisampleState   = &ms;
+            gpci.pDepthStencilState  = &ds;
+            gpci.pColorBlendState    = &cb;
+            gpci.pDynamicState       = &dyn;
+            gpci.layout              = fieldBillboardPipelineLayout_;
+            check(vkCreateGraphicsPipelines(ctx->device(), ctx->pipelineCache(), 1, &gpci, nullptr,
+                                            &fieldBillboardPipeline_),
+                  "vkCreateGraphicsPipelines(fieldBillboard)");
+
+            // The 1-sample sibling a SECONDARY view needs. Secondaries composite
+            // into their own single-sample colour target and never run the
+            // overlay's MSAA machinery, so when the primary's overlay is
+            // multisampled the two cannot share a pipeline. When it is not, they
+            // are the same object and the alias costs nothing.
+            if (ms.rasterizationSamples == VK_SAMPLE_COUNT_1_BIT) {
+                fieldBillboardPipeline1x_      = fieldBillboardPipeline_;
+                fieldBillboardPipeline1xOwned_ = false;
+            } else {
+                VkPipelineMultisampleStateCreateInfo ms1 = ms;
+                ms1.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+                VkGraphicsPipelineCreateInfo gpci1 = gpci;
+                gpci1.pMultisampleState = &ms1;
+                check(vkCreateGraphicsPipelines(ctx->device(), ctx->pipelineCache(), 1, &gpci1,
+                                                nullptr, &fieldBillboardPipeline1x_),
+                      "vkCreateGraphicsPipelines(fieldBillboard 1x)");
+                fieldBillboardPipeline1xOwned_ = true;
+            }
+
+            vkDestroyShaderModule(ctx->device(), vert, nullptr);
+            vkDestroyShaderModule(ctx->device(), frag, nullptr);
         }
 
 void VulkanRenderer::Impl::createSpriteWorldPipeline() {

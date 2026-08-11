@@ -145,6 +145,26 @@ void ParticleField::setDensityRepr(const Vector3& center, const Vector3& halfExt
     densityRepr_.enabled    = true;
 }
 
+void ParticleField::setBillboardRepr(const Color& colorHot, const Color& colorCool,
+                                     float intensity, float sizeScale) {
+
+    if (!(intensity >= 0.f)) {
+        throw std::invalid_argument(
+                "ParticleField::setBillboardRepr: intensity must be >= 0 (it is the HDR "
+                "radiance scale on both colours)");
+    }
+    if (!(sizeScale > 0.f)) {
+        throw std::invalid_argument(
+                "ParticleField::setBillboardRepr: sizeScale must be > 0 (it multiplies the "
+                "particle's own world radius)");
+    }
+    billboardRepr_.colorHot  = colorHot;
+    billboardRepr_.colorCool = colorCool;
+    billboardRepr_.intensity = intensity;
+    billboardRepr_.sizeScale = sizeScale;
+    billboardRepr_.enabled   = true;
+}
+
 void ParticleField::setOrientations(const float* quatXyzw, std::uint32_t n) {
 
     if (!config_.orientations) {

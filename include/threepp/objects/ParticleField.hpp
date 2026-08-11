@@ -49,9 +49,11 @@
 // Renderer field may still carry one.
 //
 // ── PHASE STATE ──────────────────────────────────────────────────────────────
-// MeshRepr (one indirect draw of a proxy per particle) and DensityRepr (a
-// world-anchored sigma_t volume, with an optional blackbody emission ramp) are
-// live. BillboardRepr and TracedRepr are stored and consumed by nothing.
+// MeshRepr (one indirect draw of a proxy per particle), DensityRepr (a
+// world-anchored sigma_t volume, with an optional blackbody emission ramp) and
+// BillboardRepr (one indirect draw of a vertex-less camera-facing quad per
+// particle, ADDITIVE and unlit — see the struct) are live. TracedRepr is
+// stored and consumed by nothing.
 //
 // ── CHURN CONTRACT (read before calling create) ──────────────────────────────
 // A field is created ONCE at its final capacity and is never resized: there is
@@ -127,11 +129,70 @@ namespace threepp {
             std::shared_ptr<Material>       material;// ONE material for the field
             bool enabled = false;
         };
-        struct BillboardRepr {// sparse dust / spray
+        // Sparse emissive spray: embers, sparks, rain streaks, fireflies.
+        //
+        // ── F3 SCOPE: ADDITIVE AND UNLIT ────────────────────────────────────
+        // One indirect draw of (4 vertices x liveCount) per field, composited
+        // in the post-upscaler overlay slot. Two things are deliberately NOT
+        // done and are not oversights:
+        //
+        //   • NO PER-QUAD LIGHTING. The legacy ParticleSystem billboards run
+        //     particle_light.comp, which casts an RT shadow ray and walks the
+        //     cluster list per particle. For emissive content that is µs-class
+        //     work to answer a question whose answer does not matter — an
+        //     ember IS a light source, and the light an emitter casts on the
+        //     world is its own PointLight (FireEffect's), through the ordinary
+        //     deferred path. Normal-blend billboards, which DO want it, are a
+        //     later slice.
+        //   • NO SORT. Addition commutes, so the frame buffer holds the same
+        //     sum whatever order the quads arrive in. `blending` is therefore
+        //     ignored in this phase and every field billboard draws additive;
+        //     when normal blend lands it must reuse SplatPass's deterministic
+        //     radix sort rather than grow a second one.
+        struct BillboardRepr {
+            // Optional. MODULATES the procedural sprite (rgb tint x alpha
+            // coverage); null binds a 1x1 white default, so the untextured
+            // look is the shipped one and needs no asset.
             std::shared_ptr<Texture> texture;
-            Blending blending  = Blending::Normal;
-            float    sizeScale = 1.f;
-            bool     enabled   = false;
+            Blending blending  = Blending::Normal;// ignored in the additive slice
+            float    sizeScale = 1.f;             // multiplies the particle radius
+
+            // Linear HDR radiance at age 0 and at end of life. The default is
+            // the blackbody arc a cooling ember actually walks — white-hot
+            // yellow into deep red — so an ember field with no colour authoring
+            // still reads as fire rather than as orange dots.
+            Color colorHot{1.00f, 0.72f, 0.34f};
+            Color colorCool{1.00f, 0.16f, 0.02f};
+            float intensity = 1.f;// HDR scale on both colours
+
+            // 0 = a tight spark, 1 = a broad glow. Shapes the radial falloff.
+            float softness = 0.45f;
+            // Brightness over life: (1 - ageFrac)^fadePower. > 1 holds the
+            // spark bright and drops it late, which is what a burning ember
+            // does; the age is re-derived from the emitter's closed form, so
+            // this only does anything on an Ownership::Renderer field.
+            float fadePower = 1.6f;
+            // Per-particle brightness spread, hashed. Real embers are not N
+            // identical lamps, and this is the whole cost of saying so.
+            float brightJitter = 0.45f;
+            // Radius over life: r *= (1 - sizeTaper * ageFrac). A cooling ember
+            // gets smaller, not bigger.
+            float sizeTaper = 0.55f;
+
+            // ── Velocity stretch (rain) ─────────────────────────────────────
+            // Seconds of travel to smear the quad over, along the particle's
+            // own screen-projected velocity. The velocity is FREE and exact: a
+            // Renderer field's emit dispatch already wrote f(t) and f(t - dt),
+            // so (pos - prevPos)/dt is the analytic answer with no extra state.
+            // 0 = a round sprite. A 9 m/s raindrop crosses ~20 px per frame and
+            // reads as HAIL without this.
+            float stretchSeconds = 0.f;
+            // Cap, in multiples of the radius. A fast particle near the near
+            // plane projects to an arbitrarily long segment, and one 2000-px
+            // streak across the frame is a bug the eye reads instantly.
+            float stretchMax = 24.f;
+
+            bool enabled = false;
         };
         // Dense dust / smoke. The field is scattered ONCE per frame into a
         // world-anchored 3D density volume that every view's froxel pass then
@@ -334,6 +395,16 @@ namespace threepp {
         // halfExtent / sigmaPerParticle stay live-editable afterwards.
         void setDensityRepr(const Vector3& center, const Vector3& halfExtent,
                             float sigmaPerParticle, std::uint32_t resolution = 128);
+
+        // Turn the billboard representation on: every live particle draws one
+        // camera-facing additive quad, sized from its own radius times
+        // `sizeScale`, composited after the upscalers (Vulkan only).
+        //
+        // Use this rather than setting billboardRepr().enabled by hand — it is
+        // the call that makes the two colours explicit, and they are what the
+        // look is. Everything else on BillboardRepr stays live-editable.
+        void setBillboardRepr(const Color& colorHot, const Color& colorCool,
+                              float intensity = 1.f, float sizeScale = 1.f);
 
         [[nodiscard]] MeshRepr&      meshRepr() { return meshRepr_; }
         [[nodiscard]] const MeshRepr& meshRepr() const { return meshRepr_; }

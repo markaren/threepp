@@ -1442,6 +1442,20 @@ if (THREEPP_WITH_VULKAN)
         "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/particlefield_gbuf.vert"
         kParticleFieldGbufVertSpv
         _particlefield_gbuf_vert_spv_h)
+    # ParticleField BILLBOARD representation (plans/particle-atmosphere.md F-D):
+    # a vertex-less camera-facing quad — one indirect draw of 4 vertices x the
+    # device-side live count per field, corner from gl_VertexIndex and particle
+    # from gl_InstanceIndex, everything else pulled by buffer_reference. Drawn
+    # in the post-upscaler overlay slot, additive and unlit, so it needs neither
+    # particle_light.comp nor a sort.
+    compile_vulkan_shader(threepp
+        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/particlefield_billboard.vert"
+        kParticleFieldBillboardVertSpv
+        _particlefield_billboard_vert_spv_h)
+    compile_vulkan_shader(threepp
+        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/particlefield_billboard.frag"
+        kParticleFieldBillboardFragSpv
+        _particlefield_billboard_frag_spv_h)
     # MSAA G-buffer dominant-sample resolve (VulkanRenderer::setGbufferMsaa,
     # opt-in, default off). gbuf_resolve.comp picks the majority-covering
     # instance per pixel from the K raster samples and writes it into the

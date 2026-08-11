@@ -13,13 +13,19 @@
 //   • a smoke column leaning away on the wind, unlit and grey, right above a
 //     flame that is emissive and warm — two media, two albedos, one scene
 //     (the reason F0 made the medium params per field)
-//   • embers rising and burning out
+//   • embers rising and burning out — small, uneven in size and brightness,
+//     cooling from yellow-white to deep red and slightly streaked along their
+//     own velocity. These are a THIRD ParticleField (F3), drawn as vertex-less
+//     camera-facing quads and emitted on the device from a closed form, so the
+//     whole scene is now reproducible with them switched on
 //   • bloom on the core, and the froxel glow of the firelight in the height fog
 //
 // Controls:  drag = orbit   scroll = zoom   SPACE = ignite / extinguish
 //            D = day / night (day is the mode to LOOK at the smoke: sun-lit
 //            with HG forward scatter, while the flame washes out as it should)
 // Headless:  vulkan_fire --shot out.png [--frames N] [--t SECONDS] [--no-embers] [--day]
+//            vulkan_fire --legacy-embers   the pre-F3 ParticleSystem sparks,
+//                                          for an A/B in one binary at one seed
 //            vulkan_fire --bench            interleaved A/B of the effect's GPU cost
 //            vulkan_fire --seq DIR          consecutive frames along a SCRIPTED orbit
 //
@@ -272,8 +278,17 @@ int main(int argc, char** argv) {
     std::string shotPath;
     int   shotFrames = 260;
     float shotTime   = -1.f;// >= 0: freeze the effect at this absolute t
-    bool  noEmbers   = false;
-    bool  bench      = false;
+    // --no-embers used to be MANDATORY for any capture that had to be compared:
+    // the embers were a legacy ParticleSystem with its own RNG and per-frame
+    // integration, so no two runs of the same command produced the same image
+    // (F1 as-built amendment, point 4). Since F3 they are a third
+    // ParticleField, device-emitted from a closed form, and the WHOLE scene is
+    // reproducible with them on — so the flag is now a look/perf switch, not a
+    // determinism requirement. --legacy-embers brings the old path back for an
+    // A/B, and brings its non-determinism back with it.
+    bool  noEmbers     = false;
+    bool  legacyEmbers = false;
+    bool  bench        = false;
     // TAA is what this ships and is gated on. The other two are here to LOOK
     // at, not to ship: a bright emissive volume is the worst case for the open
     // DLSS/FSR emitter-fog silhouette issue, which plan R-1 files under its own
@@ -293,6 +308,7 @@ int main(int argc, char** argv) {
         else if (a == "--frames" && i + 1 < argc) shotFrames = std::atoi(argv[++i]);
         else if (a == "--t" && i + 1 < argc) shotTime = float(std::atof(argv[++i]));
         else if (a == "--no-embers") noEmbers = true;
+        else if (a == "--legacy-embers") legacyEmbers = true;
         else if (a == "--bench") bench = true;
         else if (a == "--upscaler" && i + 1 < argc) upscaler = argv[++i];
         else if (a == "--seq" && i + 1 < argc) seqDir = argv[++i];
@@ -332,12 +348,16 @@ int main(int argc, char** argv) {
     FireEffect::Params fp;
     fp.height = 1.05f;
     fp.radius = 0.25f;
-    if (!noEmbers) {
+    fp.embers = !noEmbers;
+    // --legacy-embers loads the old sprite; the F3 ember field needs no asset
+    // at all (the billboard fragment shader draws a procedural spark).
+    fp.legacyEmbers = legacyEmbers;
+    if (fp.embers && legacyEmbers) {
         TextureLoader tl;
         fp.emberTexture = tl.load(std::string(DATA_FOLDER) + "/textures/smokeparticle.png",
                                   ColorSpace::sRGB);
+        fp.embers = fp.emberTexture != nullptr;
     }
-    fp.embers = !noEmbers && fp.emberTexture != nullptr;
     auto fire = FireEffect::create(fp);
     // Above the log bed, not on the ground plane: the flame's hottest, brightest
     // part is its base, and sinking that into the fuel hides the one thing the
@@ -388,7 +408,8 @@ int main(int argc, char** argv) {
     if (bench) {
         constexpr int kPairs = 6, kWarm = 40, kMeasure = 90;
         constexpr float kDt = 1.f / 60.f;
-        struct Acc { double shade = 0, froxel = 0, density = 0, gpu = 0; };
+        struct Acc { double shade = 0, froxel = 0, density = 0, emit = 0,
+                            overlay = 0, gpu = 0; };
         Acc onA{}, offA{};
         int frame = 0;
         const auto leg = [&](bool on, Acc& acc) {
@@ -405,11 +426,15 @@ int main(int argc, char** argv) {
                 a.shade   += t.pathTraceMs;
                 a.froxel  += t.froxelMs;
                 a.density += t.particleDensityMs;
+                a.emit    += t.particleEmitMs;
+                a.overlay += t.overlayMs;
                 a.gpu     += t.gpuTotalMs;
             }
             acc.shade += a.shade / kMeasure;
             acc.froxel += a.froxel / kMeasure;
             acc.density += a.density / kMeasure;
+            acc.emit += a.emit / kMeasure;
+            acc.overlay += a.overlay / kMeasure;
             acc.gpu += a.gpu / kMeasure;
         };
         for (int p = 0; p < kPairs; ++p) {// A B A B ... , repo A/B rule
@@ -427,10 +452,26 @@ int main(int argc, char** argv) {
         row("deferred shade", offA.shade, onA.shade);
         row("froxel inj+int", offA.froxel, onA.froxel);
         row("density scatter", offA.density, onA.density);
+        // F3: the embers moved off the legacy ParticleSystem onto a THIRD
+        // ParticleField, so two new lines appear in the effect's bill — the
+        // device emitter that writes the sparks' positions, and the overlay
+        // pass that draws their quads. Both read zero on the parked leg (a
+        // parked field records no dispatch and contributes no overlay content),
+        // so the delta IS the cost. The overlay row also carries the unjittered
+        // depth prepass, which that pass needs and which nothing else in this
+        // scene was asking for — under --legacy-embers the same row instead
+        // carries the ParticleSystem's own billboard draw, which is what makes
+        // the two runs directly comparable.
+        row("particle emit", offA.emit, onA.emit);
+        row("overlay (embers)", offA.overlay, onA.overlay);
         row("whole frame", offA.gpu, onA.gpu);
         std::printf("  effect total (shade + froxel + density delta): %.4f ms\n",
                     ((onA.shade - offA.shade) + (onA.froxel - offA.froxel) +
                      (onA.density - offA.density)) * inv);
+        std::printf("  effect total INCLUDING the embers (+ emit + overlay): %.4f ms\n",
+                    ((onA.shade - offA.shade) + (onA.froxel - offA.froxel) +
+                     (onA.density - offA.density) + (onA.emit - offA.emit) +
+                     (onA.overlay - offA.overlay)) * inv);
         return 0;
     }
 

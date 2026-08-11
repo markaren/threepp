@@ -1382,6 +1382,122 @@ void VulkanRenderer::Impl::recordUpscaleAndPost(VkCommandBuffer cb, uint32_t ima
             // ── End post stack / TAA ────────────────────────────────────────────
 }
 
+// Any visible ParticleField draws quads this frame. Read by
+// sceneHasOverlayContent() so the overlay depth prepass runs (and unjitDepth is
+// therefore valid) for a scene whose only overlay content is a field.
+bool VulkanRenderer::Impl::sceneHasFieldBillboards() const {
+            for (const auto& [field, entryIndex] : particleFields_) {
+                if (field && field->billboardRepr().enabled && field->liveCount() > 0u) return true;
+            }
+            return false;
+        }
+
+// ── ParticleField billboards — one indirect draw per field ──────────────────
+//
+// Recorded INSIDE a render-pass instance the caller has already begun, which is
+// what lets the primary's post-TAA overlay pass and a secondary view's own
+// composite share it verbatim. A field is scene content, not a primary-view
+// garnish: a CameraSensor looking at a campfire has to see the embers, and the
+// same argument the density volume makes about being world-anchored and shared
+// across views applies here to the shader.
+//
+// Per field this issues: one push constant, one (deduplicated) texture
+// descriptor bind, and one vkCmdDrawIndirect whose instanceCount was written on
+// the device. Nothing is sorted — additive blending commutes, so the frame
+// buffer holds the same sum whatever order the fields and their particles
+// arrive in, and this phase draws additive only.
+void VulkanRenderer::Impl::recordFieldBillboards(VkCommandBuffer cb, bool msaaTarget) {
+            if (!particleFieldPass_) return;
+            const VkPipeline pipe = msaaTarget ? fieldBillboardPipeline_ : fieldBillboardPipeline1x_;
+            if (pipe == VK_NULL_HANDLE) return;
+            const auto& states = particleFieldPass_->drawStates();
+            if (states.empty()) return;
+
+            // Unjittered camera: this pass runs AFTER the temporal resolve, so
+            // the jitter that the G-buffer rasterized with has already been
+            // removed from the image the quads composite onto.
+            Matrix4 viewM, projM;
+            std::memcpy(viewM.elements.data(), view().currViewUnjit_.data(), 64);
+            std::memcpy(projM.elements.data(), view().currProjUnjit_.data(), 64);
+
+            bool bound = false;
+            const Texture* curTex = nullptr;
+            bool curTexBound = false;
+            std::unordered_map<const Texture*, VkDescriptorSet> setCache;
+
+            for (const auto& st : states) {
+                if (!st.billboard || st.bbIndirect == VK_NULL_HANDLE || !st.field) continue;
+
+                if (!bound) {
+                    vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, pipe);
+                    bound = true;
+                }
+
+                // The sprite texture, through the LEGACY path's cache, layout,
+                // per-frame pool and 1x1 white default — reuse rather than a
+                // second copy of all four. Deduplicated per texture because a
+                // scene's fields usually share one (or, by default, none).
+                const Texture* tex = st.field->billboardRepr().texture.get();
+                if (!curTexBound || tex != curTex) {
+                    VkDescriptorSet set = VK_NULL_HANDLE;
+                    if (auto it = setCache.find(tex); it != setCache.end()) {
+                        set = it->second;
+                    } else {
+                        const Image2D* texImg = ensureParticleTexture(tex);
+                        if (!texImg) texImg = &particleWhiteTex_;
+                        VkDescriptorSetAllocateInfo asi{};
+                        asi.sType              = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+                        asi.descriptorPool     = particleDescPools_[currentFrame];
+                        asi.descriptorSetCount = 1;
+                        asi.pSetLayouts        = &particleDescSetLayout_;
+                        if (vkAllocateDescriptorSets(ctx->device(), &asi, &set) != VK_SUCCESS) continue;
+                        VkDescriptorImageInfo dii{};
+                        dii.imageView   = texImg->view;
+                        dii.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+                        dii.sampler     = texImg->sampler;
+                        VkWriteDescriptorSet w{};
+                        w.sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+                        w.dstSet          = set;
+                        w.dstBinding      = 0;
+                        w.descriptorCount = 1;
+                        w.descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+                        w.pImageInfo      = &dii;
+                        vkUpdateDescriptorSets(ctx->device(), 1, &w, 0, nullptr);
+                        setCache.emplace(tex, set);
+                    }
+                    vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                                            fieldBillboardPipelineLayout_, 0, 1, &set, 0, nullptr);
+                    curTex      = tex;
+                    curTexBound = true;
+                }
+
+                Matrix4 modelM, mvM;
+                std::memcpy(modelM.elements.data(), st.field->matrixWorld->elements.data(), 64);
+                mvM.multiplyMatrices(viewM, modelM);
+
+                FieldBillboardPC pc{};
+                std::memcpy(pc.proj, projM.elements.data(), 64);
+                // ROWS of the affine view*model. Matrix4 is column-major, so
+                // row i is elements[i], [i+4], [i+8], [i+12] — three dot
+                // products in the shader and no layout convention to agree on.
+                const auto& e = mvM.elements;
+                for (int r = 0; r < 3; ++r) {
+                    pc.mv[r][0] = static_cast<float>(e[r]);
+                    pc.mv[r][1] = static_cast<float>(e[r + 4]);
+                    pc.mv[r][2] = static_cast<float>(e[r + 8]);
+                    pc.mv[r][3] = static_cast<float>(e[r + 12]);
+                }
+                pc.paramsAddr  = st.bbParamsAddr;
+                pc.exposure    = currentExposure();
+                pc.toneMapMode = static_cast<uint32_t>(toneMapping_);
+                vkCmdPushConstants(cb, fieldBillboardPipelineLayout_,
+                                   VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
+                                   0, sizeof(pc), &pc);
+
+                vkCmdDrawIndirect(cb, st.bbIndirect, 0, 1, sizeof(VkDrawIndirectCommand));
+            }
+        }
+
 void VulkanRenderer::Impl::recordHybridOverlay(VkCommandBuffer cb, uint32_t imageIndex) {
             const VkImage img    = ctx->swapchainImages()[imageIndex];
             const VkExtent2D ext = ctx->swapchainExtent();
@@ -1934,6 +2050,17 @@ void VulkanRenderer::Impl::recordHybridOverlay(VkCommandBuffer cb, uint32_t imag
                     // tested against unjitDepth (Normal) or unconditionally drawn
                     // (Additive). The vertex data lives in particleGeomCache_, the
                     // texture in particleTexCache_ (white default if untextured).
+                    // THIS FRAME-IN-FLIGHT's texture-descriptor pool, reset once
+                    // for EVERY consumer of it in this pass: legacy particles,
+                    // world sprites and (F3) ParticleField billboards. It used
+                    // to be reset inside the legacy block, which meant a scene
+                    // whose only billboards are fields never reset it and
+                    // silently ran out of sets after 64 frames — allocation
+                    // failed, the draw was skipped, and nothing anywhere said
+                    // so. Unconditional here: it is one host call, and the
+                    // legacy path sees the identical state it saw before.
+                    vkResetDescriptorPool(ctx->device(), particleDescPools_[currentFrame], 0);
+
                     if (particlePipelineNormal_ != VK_NULL_HANDLE) {
                         bool anyParticle = false;
                         for (const auto& en : lastVisibleEntries_) {
@@ -1941,9 +2068,10 @@ void VulkanRenderer::Impl::recordHybridOverlay(VkCommandBuffer cb, uint32_t imag
                         }
                         const bool anySprite = !lastVisibleSprites_.empty();
                         if (anyParticle || anySprite) {
-                            // Shared per-frame descriptor pool + unjittered camera
-                            // for both billboard kinds (particles + world sprites).
-                            vkResetDescriptorPool(ctx->device(), particleDescPools_[currentFrame], 0);
+                            // (The shared per-frame descriptor pool is reset
+                            // above, for every consumer of it in this pass.)
+                            // Unjittered camera for both billboard kinds
+                            // (particles + world sprites).
                             Matrix4 viewM, projM;
                             std::memcpy(viewM.elements.data(), view().currViewUnjit_.data(), 64);
                             std::memcpy(projM.elements.data(), view().currProjUnjit_.data(), 64);
@@ -2175,6 +2303,17 @@ void VulkanRenderer::Impl::recordHybridOverlay(VkCommandBuffer cb, uint32_t imag
                             }
                         }
                     }
+
+                    // ── ParticleField billboards ───────────────────────────
+                    // LAST in the pass, and outside the legacy block above so a
+                    // scene whose only overlay content is a field of embers
+                    // still gets them (sceneHasOverlayContent() knows about
+                    // fields for exactly that reason). They composite here — on
+                    // the swapchain, after TAA/DLSS/FSR — because a 3-px spark
+                    // crossing 20 px in a frame is precisely the content a
+                    // temporal filter mis-resolves, and because this is where
+                    // transparents already land.
+                    recordFieldBillboards(cb, overlayMsaa);
 
                     vkCmdEndRendering(cb);
 

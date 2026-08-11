@@ -1372,6 +1372,50 @@ namespace threepp {
         VkPipelineLayout      particlePipelineLayout_ = VK_NULL_HANDLE;
         VkPipeline particlePipelineNormal_   = VK_NULL_HANDLE;// alpha blend, depth-test on
         VkPipeline particlePipelineAdditive_ = VK_NULL_HANDLE;// additive blend, depth-test off
+
+        // ── ParticleField billboards (plans/particle-atmosphere.md F-D) ─────
+        // A SIBLING of the two above rather than a variant of them, and it
+        // rides the SAME SLOT in the frame: the post-upscaler overlay render
+        // pass, right after the legacy billboard loop. That position is a
+        // design decision, not an accident of where it was easy to put:
+        //
+        //   • AFTER the upscalers means the quads are never fed to TAA / DLSS /
+        //     FSR. A 3-px spark crossing 20 px in a frame is the exact content
+        //     those filters mis-handle (F2's amendment 4 is the scar), and an
+        //     additive glow has no depth or motion vector to give them anyway.
+        //   • It is where TRANSPARENTS already composite, so field billboards
+        //     land in the same order relative to lines, wireframe and legacy
+        //     particles that a user already reasons about.
+        //   • The pass already binds the unjittered depth read-only, so the
+        //     quads get correct occlusion against scene geometry for free.
+        //
+        // Zero vertex bindings and zero uniform buffers: the quad is
+        // vertex-less, the positions come by buffer_reference and the per-field
+        // appearance record comes by device address. The one descriptor is the
+        // OPTIONAL sprite texture, which reuses the legacy path's set layout,
+        // its per-frame pool and its 1x1 white default verbatim.
+        VkPipelineLayout fieldBillboardPipelineLayout_ = VK_NULL_HANDLE;
+        // At overlaySampleBits() — the primary's overlay pass.
+        VkPipeline       fieldBillboardPipeline_       = VK_NULL_HANDLE;
+        // At 1 sample — a secondary view composites into its own colour target
+        // with no overlay MSAA. Aliases the above when overlaySamples() == 1,
+        // and is only a second object when it has to be.
+        VkPipeline       fieldBillboardPipeline1x_     = VK_NULL_HANDLE;
+        bool             fieldBillboardPipeline1xOwned_ = false;
+        // Host mirror of particlefield_billboard.{vert,frag}'s push block
+        // (scalar layout). 128 B EXACTLY — the range every Vulkan
+        // implementation guarantees — which is why anything per-FIELD lives in
+        // the device-address record instead and only the per-VIEW camera is
+        // here. proj is UNJITTERED: this pass runs after the temporal resolve.
+        struct FieldBillboardPC {
+            float    proj[16];  //   0
+            float    mv[3][4];  //  64  ROWS of the affine view * model
+            uint64_t paramsAddr;// 112
+            float    exposure;  // 120
+            uint32_t toneMapMode;//124
+        };
+        static_assert(sizeof(FieldBillboardPC) == 128,
+                      "FieldBillboardPC drifted from particlefield_billboard.vert");
         // Per-frame combined-image-sampler pool, reset at the top of the draw
         // loop (mirrors OverlayPass::spriteDescPools_).
         std::array<VkDescriptorPool, kFramesInFlight> particleDescPools_{};
@@ -1996,7 +2040,13 @@ namespace threepp {
             for (const auto& sp : entrySpans_) {
                 if (lastVisibleEntries_[sp.first].isOverlay) return true;
             }
-            return false;
+            // ParticleField billboards draw in the overlay pass too, and they
+            // are NOT entries flagged isOverlay — a field is one ordinary
+            // MeshEntry whose billboard representation is a second, independent
+            // draw. A scene of nothing but a campfire's embers would otherwise
+            // skip the depth prepass, leaving unjitDepth UNDEFINED for a pass
+            // that reads it (VUID-vkCmdBeginRendering-pRenderingInfo-09588).
+            return sceneHasFieldBillboards();
         }
         // Free-running sub-pixel jitter sequence index for raster TAA. The
         // active Halton(2,3) period is derived per frame from the upscale ratio
@@ -3373,6 +3423,29 @@ namespace threepp {
         // sampler) and builds the shared static quad. Called from
         // createParticlePipeline so the shared layout already exists.
         void createSpriteWorldPipeline();
+
+        // ParticleField billboard pipeline (F-D). Vertex-less: ZERO vertex
+        // bindings, a triangle strip of 4, one indirect draw per field with the
+        // instance count coming off the device. Additive, depth-TESTED against
+        // the same read-only unjittered depth the legacy path uses (which the
+        // legacy ADDITIVE variant deliberately does not do — a fireball is
+        // meant to draw over the scene, a rain streak behind a wall is not).
+        // Called from createParticlePipeline, so the shared texture set layout
+        // and the 1x1 white default already exist.
+        void createFieldBillboardPipeline();
+
+        // Draw every visible field's billboard quads into the render pass the
+        // caller has already begun. Used by BOTH the primary's post-TAA overlay
+        // pass and a secondary view's own composite — a field is scene content,
+        // not a primary-view garnish, so a CameraSensor must see it.
+        // `samples` selects between the two pipeline variants.
+        void recordFieldBillboards(VkCommandBuffer cb, bool msaaTarget);
+
+        // Any visible ParticleField will draw billboards this frame. Cheap (a
+        // handful of fields at most) and used by sceneHasOverlayContent(), so
+        // the overlay depth prepass and the overlay pass itself run for a scene
+        // whose ONLY overlay content is a field of embers.
+        [[nodiscard]] bool sceneHasFieldBillboards() const;
 
         // Walk the scene for visible world-space Sprites (screenSpace == false)
         // with a texture map, snapshotting their world transform + material into

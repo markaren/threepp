@@ -409,6 +409,14 @@ VulkanRenderer::Impl::~Impl() {
             if (particlePipelineNormal_)    vkDestroyPipeline(d, particlePipelineNormal_, nullptr);
             if (particlePipelineAdditive_)  vkDestroyPipeline(d, particlePipelineAdditive_, nullptr);
             if (particlePipelineLayout_)    vkDestroyPipelineLayout(d, particlePipelineLayout_, nullptr);
+            // ParticleField billboards (F-D). The 1x sibling ALIASES the main
+            // pipeline unless overlay MSAA forced a second object — destroy it
+            // only when it is genuinely a second object.
+            if (fieldBillboardPipeline1xOwned_ && fieldBillboardPipeline1x_)
+                vkDestroyPipeline(d, fieldBillboardPipeline1x_, nullptr);
+            if (fieldBillboardPipeline_)    vkDestroyPipeline(d, fieldBillboardPipeline_, nullptr);
+            if (fieldBillboardPipelineLayout_)
+                vkDestroyPipelineLayout(d, fieldBillboardPipelineLayout_, nullptr);
             if (particleDescSetLayout_)     vkDestroyDescriptorSetLayout(d, particleDescSetLayout_, nullptr);
             for (auto& pool : particleDescPools_) {
                 if (pool) vkDestroyDescriptorPool(d, pool, nullptr);

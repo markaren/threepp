@@ -143,6 +143,47 @@ namespace threepp::vulkan {
     };
     static_assert(sizeof(ParticleDensityUboGpu) == 272, "ParticleDensityUbo layout drift");
 
+    // ── F3: per-field billboard appearance (plans/particle-atmosphere.md F-D) ─
+    // One record per visible billboard field, rewritten whole every frame into
+    // a per-frame-in-flight host-visible block and reached by DEVICE ADDRESS.
+    //
+    // A buffer reference rather than a descriptor, and that is the point: this
+    // pass allocates no descriptor set, writes no descriptor set, and therefore
+    // cannot update one a frame in flight still names (VUID-03047) — the same
+    // argument particle_emit.comp's zero-set push block makes, applied to data
+    // that is too big for the 128 B push range once the camera matrices are in
+    // it. O(fields) bytes per frame, never O(particles).
+    //
+    // MUST mirror the BbParams buffer_reference block in
+    // shaders/particlefield_billboard.vert member for member. The 64-bit
+    // addresses sit first so the block's 8-byte alignment is satisfied at
+    // offset 0 and every float after is naturally 4-aligned, making MSVC's
+    // layout and GLSL's scalar layout the same bytes by construction.
+    struct BillboardParamsGpu {
+        VkDeviceAddress posAddr;      //   0
+        VkDeviceAddress prevPosAddr;  //   8
+        float colorHot[3];            //  16
+        float sizeScale;              //  28
+        float colorCool[3];           //  32
+        float uniformRadius;          //  44
+        float stretchOverDt;          //  48
+        float stretchMax;             //  52
+        float intensity;              //  56
+        float softness;               //  60
+        float fadePower;              //  64
+        float brightJitter;           //  68
+        float sizeTaper;              //  72
+        float lifetime;               //  76  0 = no age is knowable
+        float lifetimeJitter;         //  80
+        float duty;                   //  84
+        float time;                   //  88
+        std::uint32_t seed;           //  92
+        std::uint32_t flags;          //  96  bit0: w IS the radius
+        std::uint32_t _pad[3];        // 100
+    };
+    static_assert(sizeof(BillboardParamsGpu) == 112,
+                  "BillboardParamsGpu drifted from particlefield_billboard.vert");
+
     class ParticleFieldPass {
 
     public:
@@ -175,6 +216,19 @@ namespace threepp::vulkan {
             VkDeviceAddress prevPosAddr   = 0;
             VkDeviceAddress oriAddr       = 0;// 0 → identity orientations
             std::uint32_t   vertexCount   = 0;// 0 → skip the draw
+            // ── F3 billboards ───────────────────────────────────────────────
+            // A SECOND indirect record, because the two representations are
+            // independent: a field can draw a mesh proxy, a quad, both or
+            // neither, and the mesh record's vertexCount is the proxy's index
+            // count while the billboard's is always 4. Both get the same 4-byte
+            // device copy of liveCount into instanceCount.
+            VkBuffer        bbIndirect    = VK_NULL_HANDLE;// VkDrawIndirectCommand{4, live}
+            // Device address of this field's BillboardParamsGpu record. The
+            // billboard vertex stage reaches it by buffer_reference, so the
+            // whole pass has no descriptor of its own beyond the (optional)
+            // sprite texture.
+            VkDeviceAddress bbParamsAddr  = 0;
+            bool            billboard     = false;// draw the quad this frame
         };
 
         // Same contract and same reason as InstanceExpand::RetireBufferFn: a
@@ -319,6 +373,12 @@ namespace threepp::vulkan {
             // frame that reads it, and two frames in flight must not share the
             // word one of them is still consuming.
             Buffer        indirect[kSlots]{};
+            // The billboard representation's own draw record — see
+            // DrawState::bbIndirect for why it is a second buffer rather than a
+            // second use of the one above. Allocated LAZILY, on the first frame
+            // the field's BillboardRepr is on, so a field that never draws
+            // quads costs nothing for the ability to.
+            Buffer        bbIndirect[kSlots]{};
             // Orientations, snorm16x4. SINGLE instance, not ringed: write-once
             // by contract (ParticleField::setOrientations documents why).
             Buffer        orientations{};
@@ -382,6 +442,15 @@ namespace threepp::vulkan {
         std::vector<FieldDescGpu> descScratch_;
         std::vector<DrawState>    draws_;
 
+        // F3 billboards: one host-visible, device-addressable block per
+        // frame-in-flight holding this frame's BillboardParamsGpu records.
+        // Written in prepareFrame — the post-fence, pre-record window — so the
+        // slot being filled is provably not the one an in-flight frame reads.
+        // Grown, never shrunk; a scene's field count does not oscillate.
+        Buffer        bbParamBufs_[impl::kFramesInFlight]{};
+        std::uint32_t bbParamCapacity_ = 0;// in BillboardParamsGpu elements
+        std::vector<BillboardParamsGpu> bbParamScratch_;
+
         // Device emitter (F-C). Created lazily, on the first Renderer-owned
         // field, so a scene of HostRing fields allocates nothing. NO descriptor
         // set layout and NO pool: the two buffer addresses and the whole
@@ -422,6 +491,7 @@ namespace threepp::vulkan {
 
         State& ensureState(const ParticleField& field);
         void   ensureDescCapacity(std::uint32_t frame, std::uint32_t count);
+        void   ensureBbParamCapacity(std::uint32_t frame, std::uint32_t count);
         void   destroyState(State& st);
         void   retireOrDestroy(Buffer& b);
         void   retireOrDestroy(Image2D& img);

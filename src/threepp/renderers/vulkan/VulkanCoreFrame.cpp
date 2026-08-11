@@ -1254,9 +1254,16 @@ void VulkanRenderer::Impl::createSecondaryViewResources(ViewContext& v) {
             // would double-encode). GENERAL layout from creation and forever:
             // TAA imageStores it, the readback copies it, nothing else touches
             // it, so there is no transition to get wrong.
+            // COLOR_ATTACHMENT is for the F3 ParticleField billboard composite
+            // below: a secondary view runs no overlay pass, so the quads are
+            // drawn straight onto this image in a render-pass instance of their
+            // own. The image STAYS in GENERAL for that too — GENERAL is a legal
+            // colour-attachment layout, so the "one layout forever" property
+            // this target was given survives the addition intact.
             v.colorTarget = createStorageImage2D(
                     v.outExt.width, v.outExt.height, ctx->swapchainFormat(),
-                    VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
+                    VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_SAMPLED_BIT |
+                            VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT,
                     "viewColorTarget");
             // Host-visible landing buffer, allocated with the view rather than
             // per readback, so reading a camera never allocates mid-frame.
@@ -1495,6 +1502,95 @@ void VulkanRenderer::Impl::recordSecondaryViews(VkCommandBuffer cb) {
                                       ptExt.width, ptExt.height, ext.width, ext.height,
                                       v.taaDepthLin_.data(), /*mblurShutter=*/0.f,
                                       v.taaJitterTexels_[0], v.taaJitterTexels_[1]);
+
+                // ── ParticleField billboards, per view ─────────────────────
+                // The one piece of the primary's post-TAA overlay a secondary
+                // DOES take, and deliberately: embers and rain are scene
+                // content, so a CameraSensor pointed at a campfire has to see
+                // them, whereas a wireframe gizmo or a HUD sprite genuinely is
+                // a primary-view garnish. The rest of that pass (MSAA inject,
+                // resolve, the shared overlayMs* images, overlayInjectSet_)
+                // stays primary-only for the reason recordGbufferStage spells
+                // out — it is SHARED state and a secondary resizing it
+                // corrupts the open command buffer.
+                //
+                // Same shader, same pipeline layout, 1-sample variant, this
+                // view's own camera. Depth comes from this view's G-buffer,
+                // which recordGbufferStage left in DEPTH_STENCIL_READ_ONLY —
+                // it is the JITTERED depth rather than the primary's unjittered
+                // prepass, which is a sub-pixel disagreement on a soft sprite
+                // and not worth a second full-screen depth pass per view.
+                if (fieldBillboardPipeline1x_ != VK_NULL_HANDLE && sceneHasFieldBillboards()) {
+                    VkImageMemoryBarrier2 toAtt{};
+                    toAtt.sType         = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
+                    toAtt.srcStageMask  = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+                    toAtt.srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
+                    toAtt.dstStageMask  = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
+                    toAtt.dstAccessMask = VK_ACCESS_2_COLOR_ATTACHMENT_READ_BIT |
+                                          VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT;
+                    toAtt.oldLayout = VK_IMAGE_LAYOUT_GENERAL;
+                    toAtt.newLayout = VK_IMAGE_LAYOUT_GENERAL;
+                    toAtt.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+                    toAtt.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+                    toAtt.image = v.colorTarget.image;
+                    toAtt.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+                    toAtt.subresourceRange.levelCount = 1;
+                    toAtt.subresourceRange.layerCount = 1;
+                    VkDependencyInfo dIn{};
+                    dIn.sType                   = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
+                    dIn.imageMemoryBarrierCount = 1;
+                    dIn.pImageMemoryBarriers    = &toAtt;
+                    vkCmdPipelineBarrier2(cb, &dIn);
+
+                    VkRenderingAttachmentInfo colorAtt{};
+                    colorAtt.sType       = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+                    colorAtt.imageView   = v.colorTarget.view;
+                    colorAtt.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+                    colorAtt.loadOp      = VK_ATTACHMENT_LOAD_OP_LOAD;
+                    colorAtt.storeOp     = VK_ATTACHMENT_STORE_OP_STORE;
+
+                    VkRenderingAttachmentInfo depthAtt{};
+                    depthAtt.sType       = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+                    depthAtt.imageView   = v.rasterGbufs[currentFrame].depth.view;
+                    depthAtt.imageLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
+                    depthAtt.loadOp      = VK_ATTACHMENT_LOAD_OP_LOAD;
+                    depthAtt.storeOp     = VK_ATTACHMENT_STORE_OP_NONE;
+
+                    VkRenderingInfo ri{};
+                    ri.sType                = VK_STRUCTURE_TYPE_RENDERING_INFO;
+                    ri.renderArea.offset    = {0, 0};
+                    ri.renderArea.extent    = ext;
+                    ri.layerCount           = 1;
+                    ri.colorAttachmentCount = 1;
+                    ri.pColorAttachments    = &colorAtt;
+                    ri.pDepthAttachment     = &depthAtt;
+                    vkCmdBeginRendering(cb, &ri);
+                    VkViewport vp{0.f, 0.f, float(ext.width), float(ext.height), 0.f, 1.f};
+                    vkCmdSetViewport(cb, 0, 1, &vp);
+                    VkRect2D sc{{0, 0}, ext};
+                    vkCmdSetScissor(cb, 0, 1, &sc);
+                    recordFieldBillboards(cb, /*msaaTarget=*/false);
+                    vkCmdEndRendering(cb);
+
+                    // Back out to everything downstream: recordViewComposite's
+                    // copy to the swapchain and readViewRGBPixels' readback both
+                    // expect the last write to have been a compute store, and
+                    // their own pre-barriers only name that stage.
+                    VkImageMemoryBarrier2 fromAtt = toAtt;
+                    fromAtt.srcStageMask  = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
+                    fromAtt.srcAccessMask = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT;
+                    fromAtt.dstStageMask  = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT |
+                                            VK_PIPELINE_STAGE_2_COPY_BIT |
+                                            VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT;
+                    fromAtt.dstAccessMask = VK_ACCESS_2_SHADER_STORAGE_READ_BIT |
+                                            VK_ACCESS_2_TRANSFER_READ_BIT |
+                                            VK_ACCESS_2_SHADER_SAMPLED_READ_BIT;
+                    VkDependencyInfo dOut{};
+                    dOut.sType                   = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
+                    dOut.imageMemoryBarrierCount = 1;
+                    dOut.pImageMemoryBarriers    = &fromAtt;
+                    vkCmdPipelineBarrier2(cb, &dOut);
+                }
             }
 
             gpuTimings_->setSuppressed(false);

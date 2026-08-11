@@ -1944,6 +1944,241 @@ int main(int argc, char** argv) {
         for (int i = 0; i < 4; ++i) frame();
     }
 
+    // ── F3: BILLBOARDS (plans/particle-atmosphere.md F-D) ───────────────────
+    //
+    // One indirect draw of (4 vertices x liveCount) per field, composited in
+    // the post-upscaler overlay slot. Three claims, and the third is the one
+    // that would silently rot:
+    //
+    //   (a) a billboard field PUTS PIXELS ON THE SCREEN. Trivial to state and
+    //       the only thing that catches "the draw was recorded but the
+    //       descriptor allocation failed" — which is exactly how this pass
+    //       failed its first run, silently, for 64 frames at a time.
+    //   (b) it is REPRODUCIBLE in process: two renders of the same field at the
+    //       same emitter time agree to within the same-scene control, measured
+    //       here with the field parked. The quads carry a hashed brightness and
+    //       a re-derived age, and both are pure functions of (seed, slot, t).
+    //   (c) a field whose BillboardRepr is OFF is unaffected — the whole pass
+    //       is behind that flag, so a scene that does not ask for quads must
+    //       not pay for them or change because of them.
+    {
+        const char* capDir = capDirForDet;
+        // A dark backdrop and no other content: additive quads over a plain
+        // clear colour is the one framing where "how many pixels did the
+        // billboards light up" is a COUNT rather than an estimate.
+        Color clearWas;
+        renderer.getClearColor(clearWas);
+        renderer.setClearColor(Color(0.02f, 0.02f, 0.03f));
+        const float sunWas2 = light->intensity;
+        light->intensity = 0.05f;
+        box->visible     = false;
+        ground->visible  = false;
+        const Vector3 camWas2 = camera->position;
+        camera->position.set(0.f, 1.4f, 4.6f);
+        camera->lookAt(Vector3(0.f, 1.4f, 0.f));
+
+        constexpr std::uint32_t kSparks = 4'000;
+        ParticleField::Config bcfg;
+        bcfg.capacity      = kSparks;
+        bcfg.ownership     = ParticleField::Ownership::Renderer;
+        bcfg.wSemantic     = ParticleField::WSemantic::Radius;
+        bcfg.uniformRadius = 0.02f;
+        auto sparks = ParticleField::create(bcfg);
+
+        ParticleField::EmitterParams se;
+        se.spawnCenter.set(0.f, 0.6f, 0.f);
+        se.spawnHalfExtent.set(0.9f, 0.05f, 0.9f);
+        se.velocity.set(0.f, 0.9f, 0.f);
+        se.speedSpread = 0.35f;
+        se.lifetime    = 2.0f;
+        se.lifetimeJitter = 0.4f;
+        se.dutyCycle   = 0.85f;
+        se.size        = 0.02f;
+        se.sizeJitter  = 0.5f;
+        se.seed        = 20260813u;
+        sparks->setEmitter(se);
+        // dt 0 FREEZES the field: f(t) and f(t - 0) are the same expression, so
+        // every particle reprojects onto itself and there is nothing temporal
+        // left for the comparison below to blame.
+        sparks->setEmitterTime(3.0f, 0.f);
+        scene.add(sparks);
+
+        // (c) first, while the representation is still OFF: this is the control
+        // AND the "unaffected" assertion's baseline.
+        check(!sparks->billboardRepr().enabled,
+              "BillboardRepr is off until it is asked for");
+        for (int i = 0; i < 24; ++i) frame();
+        const auto offA = renderer.readRGBPixels();
+        for (int i = 0; i < 8; ++i) frame();
+        const auto offB = renderer.readRGBPixels();
+
+        // "Pixels the billboards lit" measured AGAINST the same frame without
+        // them, not against an absolute threshold. The sky/ambient floor of
+        // this scene sits well above black after the display transform, so an
+        // absolute cut counts the whole frame; a difference against the
+        // representation-off capture counts exactly what the quads added, and
+        // the scene is otherwise byte-stable (no geometry, so no GI variance),
+        // which makes that difference attributable with no slack at all.
+        const auto changedPixels = [](const std::vector<unsigned char>& a,
+                                      const std::vector<unsigned char>& b) {
+            std::size_t n = 0;
+            if (a.size() != b.size()) return n;
+            for (std::size_t i = 0; i + 2 < a.size(); i += 3) {
+                const int dr = std::abs(int(a[i]) - int(b[i]));
+                const int dg = std::abs(int(a[i + 1]) - int(b[i + 1]));
+                const int db = std::abs(int(a[i + 2]) - int(b[i + 2]));
+                if (dr > 6 || dg > 6 || db > 6) ++n;
+            }
+            return n;
+        };
+        const auto diffBytesV = [](const std::vector<unsigned char>& a,
+                                   const std::vector<unsigned char>& b) -> long long {
+            if (a.empty() || a.size() != b.size()) return -1;
+            long long d = 0;
+            for (std::size_t i = 0; i < a.size(); ++i)
+                if (a[i] != b[i]) ++d;
+            return d;
+        };
+
+        const long long ctlDiff = diffBytesV(offA, offB);
+        // The control's OWN "changed pixels": whatever the scene does to itself
+        // between two renders with no billboards in it. The floor the claim
+        // below has to clear.
+        const std::size_t ctlChanged = changedPixels(offA, offB);
+
+        // Now switch the representation on. Nothing else about the field, the
+        // scene or the camera changes.
+        sparks->setBillboardRepr(Color(1.00f, 0.72f, 0.34f), Color(1.00f, 0.16f, 0.02f),
+                                 /*intensity*/ 4.0f);
+        sparks->billboardRepr().sizeTaper    = 0.5f;
+        sparks->billboardRepr().brightJitter = 0.5f;
+        check(sparks->billboardRepr().enabled, "setBillboardRepr enables the representation");
+
+        for (int i = 0; i < 24; ++i) frame();
+        const auto onA = renderer.readRGBPixels();
+        if (capDir) {
+            const std::string p = std::string(capDir) + "/15_billboards.png";
+            renderer.writeFramebuffer(p);
+            std::printf("[capture] %s\n", p.c_str());
+        }
+        for (int i = 0; i < 8; ++i) frame();
+        const auto onB = renderer.readRGBPixels();
+
+        const std::size_t onChanged = changedPixels(onA, offA);
+        const long long onDiff      = diffBytesV(onA, onB);
+        std::printf("[info] billboards: pixels changed vs the repr-off frame %zu "
+                    "(control's own run-to-run change: %zu) of %zu; run-to-run "
+                    "bytes %lld (on) vs %lld (control)\n",
+                    onChanged, ctlChanged, onA.size() / 3, onDiff, ctlDiff);
+
+        // (a)
+        check(onChanged > ctlChanged + 500,
+              "a field with BillboardRepr on renders non-background pixels");
+        // (b) Against the SAME-SCENE control, not against absolute identity —
+        // the backend's GI/ReSTIR/TAA are stochastic per frame index and a
+        // still scene can differ run to run (see the cross-process notes
+        // above). The claim is that the quads add no NEW variance. On this
+        // deliberately geometry-free scene the control comes out at exactly 0,
+        // so the slack below is a guard for less quiet scenes, not headroom
+        // this one needs.
+        check(onDiff >= 0 && ctlDiff >= 0 &&
+                      onDiff <= std::max<long long>(ctlDiff, long long(onA.size()) / 1000),
+              "a frozen billboard field is reproducible in process (its "
+              "brightness hash and its re-derived age are pure functions of "
+              "seed, slot and t)");
+
+        // ── SECONDARY VIEWS SEE THE BILLBOARDS ──────────────────────────────
+        // The billboard draw rides the post-upscaler overlay SLOT, and almost
+        // everything else in that pass is primary-only by scope (wireframe,
+        // lines, HUD sprites, the MSAA inject/resolve, the lens stage). This
+        // one is not, deliberately: embers and rain are SCENE CONTENT, so a
+        // CameraSensor pointed at a campfire has to see them or the sensor and
+        // the display disagree about what is in the world. A secondary view
+        // therefore gets its own small render-pass instance onto its colour
+        // target, with this view's camera and the 1-sample pipeline.
+        //
+        // Asserted the same way as the primary: the same view, with the
+        // representation off and on, compared against itself.
+        {
+            auto secCam = PerspectiveCamera::create(55.f, float(kW) / float(kH), 0.1f, 100.f);
+            secCam->position.copy(camera->position);
+            secCam->lookAt(Vector3(0.f, 1.4f, 0.f));
+            const std::uint32_t vh = renderer.addView(*secCam, kW, kH);
+            if (vh == 0u) {
+                check(false, "addView returned a handle");
+            } else {
+                sparks->billboardRepr().enabled = false;
+                for (int i = 0; i < 16; ++i) frame();
+                const auto secOff = renderer.readViewRGBPixels(vh);
+                sparks->billboardRepr().enabled = true;
+                for (int i = 0; i < 16; ++i) frame();
+                const auto secOn = renderer.readViewRGBPixels(vh);
+                const std::size_t secChanged = changedPixels(secOn, secOff);
+                std::printf("[info] secondary view: pixels changed by the "
+                            "billboards %zu of %zu\n",
+                            secChanged, secOn.size() / 3);
+                check(!secOn.empty() && secChanged > 500,
+                      "a SECONDARY view renders the field's billboards too "
+                      "(they are scene content, not a primary-view garnish)");
+                (void) renderer.removeView(vh);
+                for (int i = 0; i < 4; ++i) frame();
+            }
+
+            // ── ORTHOGRAPHIC ────────────────────────────────────────────────
+            // The quad is built in VIEW space — offset the particle's
+            // view-space centre along (1,0,0)/(0,1,0), then project — which is
+            // exact under an orthographic projection as well as a perspective
+            // one and needs no camera position. (The legacy billboard path
+            // instead scales in CLIP space by proj[1][1] / |viewPos|, which is
+            // a perspective-only approximation and would collapse here.) A
+            // secondary view is the cheapest way to actually RUN that claim.
+            auto orthoCam = OrthographicCamera::create(-2.4f, 2.4f, 1.5f, -1.5f, 0.1f, 40.f);
+            orthoCam->position.set(0.f, 1.4f, 4.6f);
+            orthoCam->lookAt(Vector3(0.f, 1.4f, 0.f));
+            const std::uint32_t oh = renderer.addView(*orthoCam, kW, kH);
+            if (oh == 0u) {
+                check(false, "addView returned a handle for the ortho camera");
+            } else {
+                sparks->billboardRepr().enabled = false;
+                for (int i = 0; i < 16; ++i) frame();
+                const auto orthoOff = renderer.readViewRGBPixels(oh);
+                sparks->billboardRepr().enabled = true;
+                for (int i = 0; i < 16; ++i) frame();
+                const auto orthoOn = renderer.readViewRGBPixels(oh);
+                const std::size_t orthoChanged = changedPixels(orthoOn, orthoOff);
+                std::printf("[info] ORTHOGRAPHIC view: pixels changed by the "
+                            "billboards %zu of %zu\n",
+                            orthoChanged, orthoOn.size() / 3);
+                check(!orthoOn.empty() && orthoChanged > 500,
+                      "billboards face an ORTHOGRAPHIC camera too (the quad is "
+                      "built in view space, so the projection never enters the "
+                      "sizing)");
+                (void) renderer.removeView(oh);
+                for (int i = 0; i < 4; ++i) frame();
+            }
+        }
+
+        // (c) Turn it off again and the frame must come back to the control.
+        sparks->billboardRepr().enabled = false;
+        for (int i = 0; i < 24; ++i) frame();
+        const auto offC = renderer.readRGBPixels();
+        const long long backDiff = diffBytesV(offA, offC);
+        std::printf("[info] billboards off again: bytes vs the original off "
+                    "frame %lld (control %lld)\n", backDiff, ctlDiff);
+        check(backDiff >= 0 &&
+                      backDiff <= std::max<long long>(ctlDiff, long long(offA.size()) / 1000),
+              "a field with BillboardRepr OFF is unaffected by the pass");
+
+        scene.remove(*sparks);
+        renderer.setClearColor(clearWas);
+        light->intensity = sunWas2;
+        box->visible     = true;
+        ground->visible  = true;
+        camera->position.copy(camWas2);
+        camera->lookAt(Vector3(0.f, 0.8f, 0.f));
+        for (int i = 0; i < 4; ++i) frame();
+    }
+
     // ── PHASE 2, checkpoint (d): a dust-free scene costs no pixels ──────────
     //
     // Cross-process, at a FIXED frame index, so the stochastic-per-frame-index

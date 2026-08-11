@@ -153,6 +153,7 @@ ParticleFieldPass::~ParticleFieldPass() {
     for (auto& [_, st] : states_) destroyState(*st);
     states_.clear();
     for (auto& b : descBufs_) destroyBuffer(ctx_.allocator(), b);
+    for (auto& b : bbParamBufs_) destroyBuffer(ctx_.allocator(), b);
 
     const VkDevice d = ctx_.device();
     if (emitPipe_)          vkDestroyPipeline(d, emitPipe_, nullptr);
@@ -190,6 +191,7 @@ void ParticleFieldPass::destroyState(State& st) {
     destroyBuffer(ctx_.allocator(), st.devPrevPositions);
     for (auto& b : st.counts) destroyBuffer(ctx_.allocator(), b);
     for (auto& b : st.indirect) destroyBuffer(ctx_.allocator(), b);
+    for (auto& b : st.bbIndirect) destroyBuffer(ctx_.allocator(), b);
     destroyBuffer(ctx_.allocator(), st.orientations);
     destroyImage2D(ctx_.allocator(), ctx_.device(), st.density);
     destroyImage2D(ctx_.allocator(), ctx_.device(), st.densityLin);
@@ -512,6 +514,26 @@ void ParticleFieldPass::ensureDescCapacity(std::uint32_t frame, std::uint32_t co
     descCapacity_ = newCap;
 }
 
+// Same growth discipline as ensureDescCapacity, and the same reason for growing
+// EVERY slot at once: the capacity is shared bookkeeping, and a half-grown ring
+// under-runs the other frame-in-flight the next time round.
+void ParticleFieldPass::ensureBbParamCapacity(std::uint32_t frame, std::uint32_t count) {
+
+    const std::uint32_t want = std::max(count, 1u);
+    if (want <= bbParamCapacity_ && bbParamBufs_[frame].handle != VK_NULL_HANDLE) return;
+
+    const std::uint32_t newCap = std::max(want, bbParamCapacity_ * 2u);
+    for (auto& b : bbParamBufs_) retireOrDestroy(b);
+    for (auto& b : bbParamBufs_) {
+        b = createBuffer(ctx_.allocator(), ctx_.device(),
+                         VkDeviceSize(newCap) * sizeof(BillboardParamsGpu),
+                         VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
+                                 VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
+                         VMA_MEMORY_USAGE_AUTO, kHostWrite);
+    }
+    bbParamCapacity_ = newCap;
+}
+
 void ParticleFieldPass::prepareFrame(std::uint64_t serial, std::uint32_t frame,
                                      const std::vector<Rec>& fields) {
 
@@ -536,6 +558,7 @@ void ParticleFieldPass::prepareFrame(std::uint64_t serial, std::uint32_t frame,
     descScratch_.reserve(fields.size());
     draws_.clear();
     draws_.reserve(fields.size());
+    bbParamScratch_.clear();
     // The bound-volume list is rebuilt from scratch every frame and compared
     // against the previous one at the end: only a genuine change bumps the
     // generation, so a steady-state dust scene never triggers a descriptor
@@ -766,6 +789,91 @@ void ParticleFieldPass::prepareFrame(std::uint64_t serial, std::uint32_t frame,
         ds.prevPosAddr = d.prevPosAddr;
         ds.oriAddr     = d.oriAddr;
         ds.vertexCount = r.proxyVertexCount;
+
+        // ── Billboards (plans/particle-atmosphere.md F-D) ───────────────────
+        // Same live-count gate as the density volume, for the same reason: a
+        // parked field must not keep a draw in the command stream that resolves
+        // to zero instances every frame, and it must not keep the overlay pass
+        // switched on for content that is not there.
+        const auto& bb = r.field->billboardRepr();
+        if (bb.enabled && live > 0) {
+            // The draw record, allocated the first frame this field asks for
+            // one. Four vertices, forever — a quad is a quad; only
+            // instanceCount ever changes, and it changes on the DEVICE.
+            if (st.bbIndirect[slot].handle == VK_NULL_HANDLE) {
+                st.bbIndirect[slot] = createBuffer(ctx_.allocator(), ctx_.device(),
+                                                   sizeof(VkDrawIndirectCommand), kIndirectUsage,
+                                                   VMA_MEMORY_USAGE_AUTO, kHostWrite);
+            }
+            VkDrawIndirectCommand bcmd{};
+            bcmd.vertexCount   = 4u;// the quad, as a triangle strip
+            bcmd.instanceCount = 0u;// filled on the device by recordCounts
+            uploadHostVisible(ctx_.allocator(), st.bbIndirect[slot], &bcmd, sizeof(bcmd));
+
+            BillboardParamsGpu bp{};
+            bp.posAddr     = d.posAddr;
+            bp.prevPosAddr = d.prevPosAddr;
+            bp.colorHot[0] = bb.colorHot.r;
+            bp.colorHot[1] = bb.colorHot.g;
+            bp.colorHot[2] = bb.colorHot.b;
+            bp.sizeScale   = std::max(bb.sizeScale, 0.f);
+            bp.colorCool[0] = bb.colorCool.r;
+            bp.colorCool[1] = bb.colorCool.g;
+            bp.colorCool[2] = bb.colorCool.b;
+            bp.uniformRadius = cfg.uniformRadius;
+            bp.stretchMax    = std::max(bb.stretchMax, 0.f);
+            bp.intensity     = std::max(bb.intensity, 0.f);
+            bp.softness      = std::max(0.f, std::min(1.f, bb.softness));
+            bp.fadePower     = std::max(bb.fadePower, 0.f);
+            bp.brightJitter  = std::max(0.f, std::min(1.f, bb.brightJitter));
+            bp.sizeTaper     = std::max(0.f, std::min(1.f, bb.sizeTaper));
+            bp.flags = (cfg.wSemantic == ParticleField::WSemantic::Radius) ? 1u : 0u;
+
+            // The stretch is expressed against the frame's own motion interval:
+            // the shader multiplies (pos - prevPos) by this, and the two
+            // positions are dt apart, so seconds/dt is exactly "how many
+            // seconds of travel to smear over". Doing the divide here keeps dt
+            // out of the shader entirely and keeps the stretch stable when the
+            // frame rate is not.
+            //
+            // A HostRing field has no dt to divide by (its prevPositions are
+            // the previous ring slot, whose age is the frame interval and is
+            // not published), so the stretch is a Renderer-mode feature and is
+            // silently zero elsewhere rather than silently wrong.
+            const bool rendererOwned = st.rendererOwned;
+            const float edt = r.field->emitterDt();
+            bp.stretchOverDt = (rendererOwned && bb.stretchSeconds > 0.f && edt > 1e-6f)
+                                       ? (bb.stretchSeconds / edt)
+                                       : 0.f;
+
+            // ── The lifecycle, handed over so the shader can re-derive AGE ───
+            // There is no age channel in the position buffer — w is the radius,
+            // and a second buffer carrying one float per particle would undo
+            // the point of the entity — so the billboard vertex stage
+            // recomputes a slot's age from the SAME closed form and the SAME
+            // hash particle_emit.comp used. That is four lines of arithmetic
+            // against a whole buffer, and it is what makes fade-over-life,
+            // shrink-over-life and the hot-to-cool colour ramp possible at all.
+            // lifetime == 0 tells the shader "no age is knowable here", which is
+            // the honest answer for a HostRing field driven by a sim.
+            if (rendererOwned) {
+                const auto& ep = r.field->emitter();
+                bp.lifetime       = std::max(ep.lifetime, 1e-3f);
+                bp.lifetimeJitter = std::max(0.f, std::min(1.f, ep.lifetimeJitter));
+                bp.duty           = std::max(1e-3f, std::min(1.f, ep.dutyCycle));
+                bp.time           = r.field->emitterTime();
+                bp.seed           = ep.seed;
+            }
+
+            ds.bbIndirect = st.bbIndirect[slot].handle;
+            ds.billboard  = true;
+            // The address is patched in after the block is (re)allocated below —
+            // growing it here would invalidate every address already handed out
+            // this frame.
+            ds.bbParamsAddr = static_cast<VkDeviceAddress>(bbParamScratch_.size());
+            bbParamScratch_.push_back(bp);
+        }
+
         draws_.push_back(ds);
     }
 
@@ -774,6 +882,19 @@ void ParticleFieldPass::prepareFrame(std::uint64_t serial, std::uint32_t frame,
     if (descCount_ > 0) {
         uploadHostVisible(ctx_.allocator(), descBufs_[frame], descScratch_.data(),
                           VkDeviceSize(descCount_) * sizeof(FieldDescGpu));
+    }
+
+    // Billboard params: one upload for every field, then turn the indices the
+    // loop stashed into real device addresses.
+    if (!bbParamScratch_.empty()) {
+        ensureBbParamCapacity(frame, static_cast<std::uint32_t>(bbParamScratch_.size()));
+        uploadHostVisible(ctx_.allocator(), bbParamBufs_[frame], bbParamScratch_.data(),
+                          VkDeviceSize(bbParamScratch_.size()) * sizeof(BillboardParamsGpu));
+        const VkDeviceAddress base = bbParamBufs_[frame].address;
+        for (DrawState& ds : draws_) {
+            if (!ds.billboard) continue;
+            ds.bbParamsAddr = base + ds.bbParamsAddr * sizeof(BillboardParamsGpu);
+        }
     }
 
     // Sweep. A field whose owning shared_ptr died is gone for good; one merely
@@ -789,6 +910,7 @@ void ParticleFieldPass::prepareFrame(std::uint64_t serial, std::uint32_t frame,
             retireOrDestroy(st.devPrevPositions);
             for (auto& b : st.counts) retireOrDestroy(b);
             for (auto& b : st.indirect) retireOrDestroy(b);
+            for (auto& b : st.bbIndirect) retireOrDestroy(b);
             retireOrDestroy(st.orientations);
             // The set goes back to the pool by hand — the pool is exactly
             // kMaxDensityFields deep, so leaking a set would cap the scene at
@@ -986,14 +1108,22 @@ void ParticleFieldPass::recordCounts(VkCommandBuffer cb) {
     if (draws_.empty()) return;
 
     bool any = false;
+    VkBufferCopy region{};
+    region.srcOffset = 0;// FieldCountsGpu::liveCount
+    region.dstOffset = kInstanceCountOffset;
+    region.size      = sizeof(std::uint32_t);
     for (const DrawState& d : draws_) {
-        if (d.vertexCount == 0u || d.indirect == VK_NULL_HANDLE) continue;
-        VkBufferCopy region{};
-        region.srcOffset = 0;// FieldCountsGpu::liveCount
-        region.dstOffset = kInstanceCountOffset;
-        region.size      = sizeof(std::uint32_t);
-        vkCmdCopyBuffer(cb, d.counts, d.indirect, 1, &region);
-        any = true;
+        if (d.vertexCount != 0u && d.indirect != VK_NULL_HANDLE) {
+            vkCmdCopyBuffer(cb, d.counts, d.indirect, 1, &region);
+            any = true;
+        }
+        // The billboard record takes the SAME 4-byte device copy: the two
+        // representations are independent draws of the same field, so each owns
+        // a record and neither learns the count on the host.
+        if (d.billboard && d.bbIndirect != VK_NULL_HANDLE) {
+            vkCmdCopyBuffer(cb, d.counts, d.bbIndirect, 1, &region);
+            any = true;
+        }
     }
     if (!any) return;
 

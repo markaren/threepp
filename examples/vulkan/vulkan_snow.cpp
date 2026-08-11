@@ -234,11 +234,14 @@ namespace {
 
     // Rain is the SECOND archetype and it exists here to prove the point that
     // an archetype is a parameter set: not one line of shader or renderer code
-    // differs between this and the snow above. It is not a finished rain LOOK —
-    // a drop falling at 9 m/s crosses ~20 px in a frame, so it wants a quad
-    // STRETCHED along the analytic velocity, which is F3's job (the closed form
-    // hands that velocity over for free). Until then a drop is a small solid,
-    // which reads closer to hail than to rain.
+    // differs between this and the snow above.
+    //
+    // F3 finished the LOOK. A drop falling at 9 m/s crosses ~20 px in a frame,
+    // so drawn as a solid it reads as HAIL — which is exactly what F2 shipped
+    // and said so. It now draws through the BILLBOARD representation with the
+    // quad stretched along its own analytic velocity: the emit dispatch already
+    // wrote f(t) and f(t - dt), so (pos - prevPos) IS the frame's displacement
+    // and the streak needs no new state, no second buffer and no CPU work.
     ParticleField::EmitterParams rainParams() {
         ParticleField::EmitterParams e;
         e.spawnCenter.set(-2.2f, 13.0f, -0.9f);
@@ -307,6 +310,13 @@ int main(int argc, char** argv) {
     bool  rain       = false;
     bool  noHaze     = false;
     std::uint32_t count = 300'000;
+    // --rain default. A streaked drop covers two orders of magnitude more
+    // pixels than a 1.6 cm flake proxy, so 300k of them is not "the same
+    // amount of weather at a different speed", it is a solid additive wall.
+    // 90k is a heavy downpour here; --count still overrides, and the perf
+    // checkpoint is measured at the full 300k on purpose.
+    constexpr std::uint32_t kRainCount = 90'000;
+    bool countExplicit = false;
     std::string upscaler = "taa";
     // MSAA instead of a temporal resolve. The one path with NO history at all,
     // which is what makes it the control leg when a temporal artefact is under
@@ -323,7 +333,7 @@ int main(int argc, char** argv) {
         if (a == "--shot" && i + 1 < argc) shotPath = argv[++i];
         else if (a == "--frames" && i + 1 < argc) shotFrames = std::atoi(argv[++i]);
         else if (a == "--t" && i + 1 < argc) shotTime = float(std::atof(argv[++i]));
-        else if (a == "--count" && i + 1 < argc) count = std::uint32_t(std::atoi(argv[++i]));
+        else if (a == "--count" && i + 1 < argc) { count = std::uint32_t(std::atoi(argv[++i])); countExplicit = true; }
         else if (a == "--bench") bench = true;
         else if (a == "--rain") rain = true;
         else if (a == "--no-haze") noHaze = true;
@@ -335,6 +345,7 @@ int main(int argc, char** argv) {
         else if (a == "--warm" && i + 1 < argc) seqWarm = std::atoi(argv[++i]);
         else if (a == "--orbit" && i + 1 < argc) orbitDeg = float(std::atof(argv[++i]));
     }
+    if (rain && !countExplicit) count = kRainCount;
     if (count == 0u) count = 1u;
     const capture::Args cap = capture::parseArgs(argc, argv);
 
@@ -375,17 +386,48 @@ int main(int argc, char** argv) {
     auto snow = ParticleField::create(cfg);
     snow->name = rain ? "rain" : "snow";
 
-    // The proxy: the cheapest closed solid there is. Eight triangles per flake
-    // at 300k is 2.4M triangles of G-buffer raster, which is a fraction of what
-    // this renderer draws for a tree, and every one of them is shaded, shadowed,
-    // fogged and TAA-resolved like any other surface — because a ParticleField's
-    // mesh representation lands in the ordinary G-buffer.
-    auto flakeMat = MeshStandardMaterial::create(
-            MeshStandardMaterial::Params{}
-                    .color(rain ? Color(0.72f, 0.78f, 0.86f) : Color(0.96f, 0.97f, 1.00f))
-                    .roughness(rain ? 0.25f : 0.85f)
-                    .metalness(0.f));
-    snow->setMeshRepr(OctahedronGeometry::create(cfg.uniformRadius, 0), flakeMat);
+    // ── Which representation draws the weather ──────────────────────────────
+    //
+    // SNOW keeps the mesh proxy: a flake is a slow, nearly stationary solid
+    // that the eye resolves as a shape, and putting it in the ordinary G-buffer
+    // is what gets it shaded, shadowed, fogged and TAA-resolved like any other
+    // surface. Eight triangles per flake at 300k is 2.4M triangles, a fraction
+    // of what this renderer draws for a tree. F2's checkpoints are all on that
+    // path and F3 deliberately does not move it.
+    //
+    // RAIN takes the billboard: a drop is not a shape at all, it is a STREAK,
+    // and no amount of shading a 1.3 cm octahedron produces one. The two are
+    // different representations of the same field with the same emitter, which
+    // is the whole argument for the representation split.
+    if (rain) {
+        // FAINT and THIN, and both words are doing work. The blend is additive
+        // over a field the camera stands INSIDE, so every knob here compounds:
+        // the first build shipped intensity 0.55 with a 36 cm streak and 300k
+        // drops and painted a white sheet with a cabin dimly behind it. Rain is
+        // water — it does not glow, it catches a little of the sky and smears
+        // it — so the honest values are an order of magnitude lower than an
+        // ember's, and the count comes down as well (see kRainCount).
+        snow->setBillboardRepr(Color(0.72f, 0.79f, 0.90f), Color(0.60f, 0.67f, 0.78f),
+                               /*intensity*/ 0.085f, /*sizeScale*/ 0.30f);
+        auto& br = snow->billboardRepr();
+        // ~22 cm of travel at 9 m/s: roughly the exposure smear a real camera
+        // gives rain, and about 15 px at this framing on a mid-distance drop.
+        br.stretchSeconds = 0.024f;
+        // The cap that stops a near drop from painting a streak the height of
+        // the frame. 30 radii of a 0.4 cm quad is ~12 cm of hard ceiling.
+        br.stretchMax   = 30.f;
+        br.softness     = 0.95f;// soft along its whole length, no hot core
+        br.fadePower    = 0.f;  // a drop does not fade; it lands
+        br.sizeTaper    = 0.f;
+        br.brightJitter = 0.55f;
+    } else {
+        auto flakeMat = MeshStandardMaterial::create(
+                MeshStandardMaterial::Params{}
+                        .color(Color(0.96f, 0.97f, 1.00f))
+                        .roughness(0.85f)
+                        .metalness(0.f));
+        snow->setMeshRepr(OctahedronGeometry::create(cfg.uniformRadius, 0), flakeMat);
+    }
 
     // The SAME field also feeds the world-anchored density volume, so the
     // snowfall hazes what is behind it. One emit dispatch serves both
@@ -452,7 +494,8 @@ int main(int argc, char** argv) {
     if (bench) {
         constexpr int kPairs = 6, kWarm = 40, kMeasure = 90;
         constexpr float kDt = 1.f / 60.f;
-        struct Acc { double emit = 0, density = 0, gbuf = 0, shade = 0, taa = 0, gpu = 0, cpu = 0; };
+        struct Acc { double emit = 0, density = 0, gbuf = 0, shade = 0, taa = 0,
+                            overlay = 0, gpu = 0, cpu = 0; };
         Acc onA{}, offA{};
         int frame = 0;
         const auto leg = [&](bool on, Acc& acc) {
@@ -471,6 +514,7 @@ int main(int argc, char** argv) {
                 a.gbuf    += t.rasterGbufMs;
                 a.shade   += t.pathTraceMs;
                 a.taa     += t.taaMs;
+                a.overlay += t.overlayMs;
                 a.gpu     += t.gpuTotalMs;
                 a.cpu     += t.cpuFrameMs;
             }
@@ -479,6 +523,7 @@ int main(int argc, char** argv) {
             acc.gbuf += a.gbuf / kMeasure;
             acc.shade += a.shade / kMeasure;
             acc.taa += a.taa / kMeasure;
+            acc.overlay += a.overlay / kMeasure;
             acc.gpu += a.gpu / kMeasure;
             acc.cpu += a.cpu / kMeasure;
         };
@@ -505,6 +550,14 @@ int main(int argc, char** argv) {
         // on a depth mismatch with no local motion context, so a field of small
         // fast movers is its WORST case and this delta is its upper bound.
         row("GPU taa resolve", offA.taa, onA.taa);
+        // F3 checkpoint (d). This is the WHOLE post-upscaler overlay pass —
+        // the unjittered depth prepass plus the billboard draw — because with
+        // the field parked there is no overlay content at all and the pass is
+        // skipped entirely. Under --rain that draw is one vkCmdDrawIndirect of
+        // (4 vertices x liveCount) instances, and it is heavily FILL bound:
+        // each streak covers ~15-200 px and they overlap, so this number tracks
+        // screen coverage far more than it tracks particle count.
+        row("GPU overlay (billboards)", offA.overlay, onA.overlay);
         row("GPU whole frame", offA.gpu, onA.gpu);
         row("CPU whole frame", offA.cpu, onA.cpu);
         std::printf("  emit + scatter: %.4f ms  (F2 checkpoint (a) budget: 1.0 ms)\n",
