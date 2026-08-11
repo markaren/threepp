@@ -3,6 +3,8 @@
 #ifndef THREEPP_OBJECTLOADER_HPP
 #define THREEPP_OBJECTLOADER_HPP
 
+#include "threepp/utils/ZipReader.hpp"
+
 #include <filesystem>
 #include <memory>
 #include <string>
@@ -25,6 +27,10 @@ namespace threepp {
         // Returns nullptr when the document is malformed or carries no `object`.
         std::shared_ptr<Object3D> parse(const std::string& jsonText);
 
+        // A JSON document, or a .tpz archive holding one — decided by sniffing
+        // the file, not by its name. The archive's images/ and buffers/ take the
+        // place of the directory the loose document would resolve urls against;
+        // the JSON inside is identical either way.
         std::shared_ptr<Object3D> load(const std::filesystem::path& path);
 
         // Base directory for image urls that are plain relative paths rather
@@ -38,6 +44,9 @@ namespace threepp {
 
     private:
         std::filesystem::path resourcePath_;
+        // Set only for the duration of an archive load(); parse() on its own has
+        // nothing but the text it was handed.
+        std::shared_ptr<ZipReader> archive_;
         std::vector<std::string> warnings_;
     };
 

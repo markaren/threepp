@@ -52,10 +52,12 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <cstring>
 #include <fstream>
 #include <functional>
 #include <iostream>
 #include <limits>
+#include <optional>
 #include <unordered_map>
 
 using json = nlohmann::json;
@@ -90,6 +92,145 @@ namespace {
 
         if (!j.contains(key) || j.at(key).is_null()) return fallback;
         return j.at(key).get<T>();
+    }
+
+    // ------------------------------------------------------------ resolution
+    //
+    // Where a `url` in the document resolves from. A document is either a file
+    // in a directory next to its images/ and buffers/, or a .tpz archive whose
+    // members carry those same names — the JSON is identical either way, which
+    // is the whole design: the archive is packaging, not a second format.
+    //
+    // Only the archive side answers here. A directory-backed image stays on
+    // ImageLoader's path-taking overload, which sniffs its own file (see
+    // decodeImage): handing it bytes instead would change behaviour for every
+    // document that ever referenced an image by path.
+    struct DocumentSource {
+
+        std::filesystem::path resourcePath;
+        const ZipReader* archive{nullptr};
+
+        [[nodiscard]] bool has(const std::string& url) const {
+
+            if (archive) return archive->has(url);
+
+            std::error_code ec;
+            return !resourcePath.empty() && std::filesystem::is_regular_file(resourcePath / url, ec);
+        }
+
+        [[nodiscard]] std::optional<std::vector<unsigned char>> read(const std::string& url) const {
+
+            if (archive) {
+
+                if (!archive->has(url)) return std::nullopt;
+                return archive->read(url);
+            }
+
+            const auto path = resourcePath.empty() ? fs::path(url) : resourcePath / url;
+
+            std::ifstream in(path, std::ios::binary | std::ios::ate);
+            if (!in) return std::nullopt;
+
+            const std::streamoff end = in.tellg();
+            if (end < 0) return std::nullopt;
+
+            std::vector<unsigned char> bytes(static_cast<std::size_t>(end));
+            in.seekg(0, std::ios::beg);
+            if (end > 0) {
+
+                in.read(reinterpret_cast<char*>(bytes.data()), end);
+                if (in.gcount() != end) return std::nullopt;
+            }
+
+            return bytes;
+        }
+    };
+
+    // The binary sections geometry attributes point into, read once each. A
+    // geometry's attributes and its index all name the same section, so without
+    // this a mesh with five attributes would read (and, in an archive, copy out
+    // of the loaded archive) the same megabytes five times over.
+    //
+    // A section that cannot be read is remembered as absent, so the warning is
+    // one per section rather than one per attribute.
+    class BufferCache {
+
+    public:
+        explicit BufferCache(const DocumentSource& source): source_(source) {}
+
+        const std::vector<unsigned char>* get(const std::string& url, Warnings& warnings) {
+
+            const auto it = sections_.find(url);
+            if (it != sections_.end()) return it->second ? &*it->second : nullptr;
+
+            auto bytes = source_.read(url);
+            if (!bytes) warnings.add("cannot read binary section '" + url + "'");
+
+            const auto inserted = sections_.emplace(url, std::move(bytes)).first;
+            return inserted->second ? &*inserted->second : nullptr;
+        }
+
+    private:
+        const DocumentSource& source_;
+        std::unordered_map<std::string, std::optional<std::vector<unsigned char>>> sections_;
+    };
+
+    // The bytes of one `url`/`byteOffset`/`byteLength` window, or nothing.
+    //
+    // Every bound is checked against the section that was actually loaded, not
+    // against what the JSON claims about it: a document and its sections can
+    // disagree — an archive edited by hand, a truncated file, a document paired
+    // with the wrong buffers — and a memcpy that trusts the JSON reads whatever
+    // happens to follow in memory.
+    const unsigned char* binaryWindow(const json& j, std::size_t elementSize, int itemSize,
+                                      BufferCache& buffers, Warnings& warnings, std::size_t& count) {
+
+        const auto url = value<std::string>(j, "url", "");
+        const auto* section = buffers.get(url, warnings);
+        if (!section) return nullptr;
+
+        const auto offset = value<std::uint64_t>(j, "byteOffset", 0);
+        const auto length = value<std::uint64_t>(j, "byteLength", 0);
+
+        // Subtraction rather than offset + length, so a length near the 64-bit
+        // ceiling cannot wrap the comparison.
+        if (offset > section->size() || length > section->size() - offset) {
+
+            warnings.add("attribute claims " + std::to_string(length) + " bytes at offset " +
+                         std::to_string(offset) + " of '" + url + "', which is " +
+                         std::to_string(section->size()) + " bytes - skipped");
+            return nullptr;
+        }
+
+        if (elementSize == 0 || length % elementSize != 0 ||
+            itemSize <= 0 || (length / elementSize) % static_cast<std::uint64_t>(itemSize) != 0) {
+
+            warnings.add("attribute of " + std::to_string(length) + " bytes in '" + url +
+                         "' is not a whole number of " + std::to_string(itemSize) +
+                         "-component items - skipped");
+            return nullptr;
+        }
+
+        count = static_cast<std::size_t>(length / elementSize);
+
+        return section->data() + offset;
+    }
+
+    template<class T>
+    std::optional<std::vector<T>> readBinaryArray(const json& j, int itemSize,
+                                                  BufferCache& buffers, Warnings& warnings) {
+
+        std::size_t count = 0;
+        const auto* first = binaryWindow(j, sizeof(T), itemSize, buffers, warnings, count);
+        if (!first) return std::nullopt;
+
+        std::vector<T> out(count);
+        // memcpy rather than a typed pointer cast: the section is a byte array
+        // whose alignment is whatever the allocator gave it, and the offsets are
+        // only padded to 4.
+        if (count > 0) std::memcpy(out.data(), first, count * sizeof(T));
+
+        return out;
     }
 
     Matrix4 matrixFrom(const json& j) {
@@ -166,9 +307,13 @@ namespace {
     // down - and so did any document referencing an image by path, which is how an environment
     // map is most naturally written.
     //
-    // An explicit `flipY` on the image entry overrides either default.
+    // An explicit `flipY` on the image entry overrides either default — which is
+    // how the archive says which of the two it holds. A member copied out of the
+    // texture's source file is an import and takes the path default (true); one
+    // the exporter had to re-encode carries flipY: false beside it, because
+    // those rows went in verbatim.
     std::vector<Image> decodeImage(const json& entry, const json& url, int channels,
-                                   const fs::path& resourcePath) {
+                                   const DocumentSource& source) {
 
         ImageLoader loader;
         std::vector<Image> out;
@@ -183,7 +328,15 @@ namespace {
                 const auto bytes = utils::base64Decode(u.substr(comma + 1));
                 return loader.load(bytes, channels, hasOverride ? override : false);
             }
-            return loader.load(resourcePath.empty() ? fs::path(u) : resourcePath / u, channels,
+            // Falls through to the path when the archive does not hold the
+            // name: a document inside an archive may still reference a file
+            // outside it, and that url means what it always meant.
+            if (source.archive && source.archive->has(u)) {
+                auto bytes = source.read(u);
+                if (!bytes) return std::nullopt;
+                return loader.load(*bytes, channels, hasOverride ? override : true);
+            }
+            return loader.load(source.resourcePath.empty() ? fs::path(u) : source.resourcePath / u, channels,
                                hasOverride ? override : true);
         };
 
@@ -201,7 +354,7 @@ namespace {
         return out;
     }
 
-    ImageMap parseImages(const json& j, const fs::path& resourcePath, Warnings& warnings) {
+    ImageMap parseImages(const json& j, const DocumentSource& source, Warnings& warnings) {
 
         ImageMap images;
         if (!j.is_array()) return images;
@@ -210,7 +363,7 @@ namespace {
             if (!entry.contains("uuid") || !entry.contains("url")) continue;
 
             const auto channels = value(entry, "threeppChannels", 4);
-            auto decoded = decodeImage(entry, entry["url"], channels, resourcePath);
+            auto decoded = decodeImage(entry, entry["url"], channels, source);
 
             if (decoded.empty()) {
                 warnings.add("could not decode image '" + entry["uuid"].get<std::string>() + "'");
@@ -580,15 +733,62 @@ namespace {
         return TypedBufferAttribute<T>::create(array.get<std::vector<T>>(), itemSize, normalized);
     }
 
+    // The `url` form: the numbers are in a binary section instead of the JSON.
+    // Additive to the format and to nothing else — the entry still carries its
+    // type, itemSize and normalized flag, so what comes back is the attribute
+    // the array form would have produced, read with a memcpy rather than a
+    // parse. A window that does not check out yields no attribute at all, which
+    // the caller reports and skips.
+    template<class T>
+    std::shared_ptr<BufferAttribute> makeBinaryAttribute(const json& j, int itemSize, bool normalized,
+                                                         BufferCache& buffers, Warnings& warnings) {
+
+        auto array = readBinaryArray<T>(j, itemSize, buffers, warnings);
+        if (!array) return nullptr;
+
+        return TypedBufferAttribute<T>::create(std::move(*array), itemSize, normalized);
+    }
+
     // three.js typed-array name -> threepp TypedBufferAttribute. Six of the names
     // map exactly onto an AttributeType, so a narrowed attribute round-trips with
     // its stored integers bit-identical and its `normalized` flag intact. The two
     // names with no threepp counterpart are widened, each with a warning.
-    std::shared_ptr<BufferAttribute> parseAttribute(const json& j, Warnings& warnings) {
+    std::shared_ptr<BufferAttribute> parseAttribute(const json& j, BufferCache& buffers, Warnings& warnings) {
 
         const auto type = value<std::string>(j, "type", "Float32Array");
         const int itemSize = value(j, "itemSize", 1);
         const bool normalized = value(j, "normalized", false);
+
+        // Only the six types with an exact threepp counterpart can be read
+        // straight out of a section; the two that are widened (Float64Array,
+        // Int32Array) have no binary form because nothing writes one.
+        if (!j.contains("array") && j.contains("url")) {
+
+            std::shared_ptr<BufferAttribute> binary;
+
+            if (type == "Float32Array") {
+                binary = makeBinaryAttribute<float>(j, itemSize, normalized, buffers, warnings);
+            } else if (type == "Uint32Array") {
+                binary = makeBinaryAttribute<unsigned int>(j, itemSize, normalized, buffers, warnings);
+            } else if (type == "Uint16Array") {
+                binary = makeBinaryAttribute<std::uint16_t>(j, itemSize, normalized, buffers, warnings);
+            } else if (type == "Int16Array") {
+                binary = makeBinaryAttribute<std::int16_t>(j, itemSize, normalized, buffers, warnings);
+            } else if (type == "Uint8Array" || type == "Uint8ClampedArray") {
+                binary = makeBinaryAttribute<std::uint8_t>(j, itemSize, normalized, buffers, warnings);
+            } else if (type == "Int8Array") {
+                binary = makeBinaryAttribute<std::int8_t>(j, itemSize, normalized, buffers, warnings);
+            } else {
+                warnings.add("attribute type '" + type + "' has no binary form - skipped");
+                return nullptr;
+            }
+
+            if (binary && j.contains("usage")) {
+                binary->setUsage(static_cast<DrawUsage>(j["usage"].get<int>()));
+            }
+
+            return binary;
+        }
 
         if (!j.contains("array")) return nullptr;
         const auto& array = j["array"];
@@ -652,19 +852,50 @@ namespace {
         return attribute;
     }
 
-    std::shared_ptr<BufferGeometry> parseDataGeometry(const json& data, Warnings& warnings) {
+    // The index in its binary form. Widened to uint32 whatever the section
+    // holds, because BufferGeometry's index always is one host-side.
+    std::optional<std::vector<unsigned int>> parseBinaryIndex(const json& j, BufferCache& buffers, Warnings& warnings) {
+
+        const auto type = value<std::string>(j, "type", "Uint32Array");
+
+        if (type == "Uint16Array") {
+
+            auto narrow = readBinaryArray<std::uint16_t>(j, 1, buffers, warnings);
+            if (!narrow) return std::nullopt;
+
+            return std::vector<unsigned int>(narrow->begin(), narrow->end());
+        }
+
+        if (type != "Uint32Array") {
+
+            warnings.add("index type '" + type + "' has no binary form - the geometry comes back unindexed");
+            return std::nullopt;
+        }
+
+        return readBinaryArray<unsigned int>(j, 1, buffers, warnings);
+    }
+
+    std::shared_ptr<BufferGeometry> parseDataGeometry(const json& data, BufferCache& buffers, Warnings& warnings) {
 
         auto geometry = BufferGeometry::create();
 
         // BufferGeometry's index is always uint32 host-side, so a three.js
         // Uint16Array index widens here (lossless - indices are non-negative).
         if (data.contains("index")) {
-            geometry->setIndex(data["index"]["array"].get<std::vector<unsigned int>>());
+
+            const auto& index = data["index"];
+            if (index.contains("array")) {
+                geometry->setIndex(index["array"].get<std::vector<unsigned int>>());
+            } else if (index.contains("url")) {
+                if (auto indices = parseBinaryIndex(index, buffers, warnings)) {
+                    geometry->setIndex(std::move(*indices));
+                }
+            }
         }
 
         if (data.contains("attributes")) {
             for (auto it = data["attributes"].begin(); it != data["attributes"].end(); ++it) {
-                if (auto attribute = parseAttribute(it.value(), warnings)) {
+                if (auto attribute = parseAttribute(it.value(), buffers, warnings)) {
                     geometry->setAttribute(it.key(), attribute);
                 }
             }
@@ -674,7 +905,7 @@ namespace {
             for (auto it = data["morphAttributes"].begin(); it != data["morphAttributes"].end(); ++it) {
                 auto* target = geometry->getOrCreateMorphAttribute(it.key());
                 for (const auto& entry : it.value()) {
-                    if (auto attribute = parseAttribute(entry, warnings)) target->push_back(attribute);
+                    if (auto attribute = parseAttribute(entry, buffers, warnings)) target->push_back(attribute);
                 }
             }
             geometry->morphTargetsRelative = value(data, "morphTargetsRelative", false);
@@ -782,7 +1013,7 @@ namespace {
         return nullptr;
     }
 
-    GeometryMap parseGeometries(const json& j, Warnings& warnings) {
+    GeometryMap parseGeometries(const json& j, BufferCache& buffers, Warnings& warnings) {
 
         GeometryMap geometries;
         if (!j.is_array()) return geometries;
@@ -796,14 +1027,14 @@ namespace {
 
             if (type == "BufferGeometry" || type == "InstancedBufferGeometry") {
                 if (entry.contains("data")) {
-                    geometry = parseDataGeometry(entry["data"], warnings);
+                    geometry = parseDataGeometry(entry["data"], buffers, warnings);
                 } else {
                     geometry = BufferGeometry::create();
                 }
             } else {
                 geometry = parseParametricGeometry(type, entry);
                 if (!geometry && entry.contains("data")) {
-                    geometry = parseDataGeometry(entry["data"], warnings);
+                    geometry = parseDataGeometry(entry["data"], buffers, warnings);
                 }
                 if (!geometry) {
                     warnings.add("unsupported geometry type '" + type + "'");
@@ -1626,9 +1857,12 @@ std::shared_ptr<Object3D> ObjectLoader::parse(const std::string& jsonText) {
         return nullptr;
     }
 
+    const DocumentSource source{resourcePath_, archive_.get()};
+    BufferCache buffers{source};
+
     const auto animations = parseAnimations(j.contains("animations") ? j["animations"] : json(), warnings);
-    const auto geometries = parseGeometries(j.contains("geometries") ? j["geometries"] : json(), warnings);
-    const auto images = parseImages(j.contains("images") ? j["images"] : json(), resourcePath_, warnings);
+    const auto geometries = parseGeometries(j.contains("geometries") ? j["geometries"] : json(), buffers, warnings);
+    const auto images = parseImages(j.contains("images") ? j["images"] : json(), source, warnings);
     const auto textures = parseTextures(j.contains("textures") ? j["textures"] : json(), images);
     const auto materials = parseMaterials(j.contains("materials") ? j["materials"] : json(), textures, warnings);
 
@@ -1648,22 +1882,56 @@ std::shared_ptr<Object3D> ObjectLoader::parse(const std::string& jsonText) {
 
 std::shared_ptr<Object3D> ObjectLoader::load(const std::filesystem::path& path) {
 
-    std::ifstream in(path, std::ios::binary);
-    if (!in) {
-        std::cerr << "[ObjectLoader] unable to open " << path.string() << std::endl;
-        return nullptr;
+    std::string text;
+
+    // Sniffed, not decided by the extension: a .tpz is a zip whatever it is
+    // called, and a JSON document is not one however it is named.
+    if (ZipReader::looksLikeZip(path)) {
+
+        try {
+
+            archive_ = std::make_shared<ZipReader>(path);
+
+        } catch (const std::exception& e) {
+
+            std::cerr << "[ObjectLoader] " << e.what() << std::endl;
+            return nullptr;
+        }
+
+        if (!archive_->has(objectjson::archiveDocument)) {
+
+            std::cerr << "[ObjectLoader] " << path.string() << " is an archive with no "
+                      << objectjson::archiveDocument << std::endl;
+            archive_.reset();
+            return nullptr;
+        }
+
+        const auto bytes = archive_->read(objectjson::archiveDocument);
+        text.assign(bytes.begin(), bytes.end());
+
+    } else {
+
+        std::ifstream in(path, std::ios::binary);
+        if (!in) {
+            std::cerr << "[ObjectLoader] unable to open " << path.string() << std::endl;
+            return nullptr;
+        }
+
+        text.assign(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
     }
 
-    const std::string text{std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>()};
-
     // Default the base directory to this document's, without clobbering an
-    // explicit setResourcePath() or leaking into the next load().
+    // explicit setResourcePath() or leaking into the next load(). An archive
+    // resolves its own urls, but the document may still point outside itself —
+    // at a linked asset, at an image it was saved before the archive existed —
+    // and those are relative to the archive's directory.
     const auto configured = resourcePath_;
     if (resourcePath_.empty()) resourcePath_ = path.parent_path();
 
     auto object = parse(text);
 
     resourcePath_ = configured;
+    archive_.reset();
 
     return object;
 }

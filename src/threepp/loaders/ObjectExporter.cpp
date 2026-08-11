@@ -37,6 +37,7 @@
 #include "ObjectJsonConstants.hpp"
 #include "threepp/loaders/AssetSource.hpp"
 #include "threepp/utils/Base64.hpp"
+#include "threepp/utils/ZipWriter.hpp"
 
 #include <nlohmann/json.hpp>
 
@@ -45,6 +46,7 @@
 #include <cstdint>
 
 #include <algorithm>
+#include <bit>
 #include <cmath>
 #include <fstream>
 #include <functional>
@@ -66,6 +68,10 @@ namespace {
         ImageStorage imageStorage{ImageStorage::Embed};
         ModelStorage modelStorage{ModelStorage::Embed};
         std::filesystem::path resourcePath;
+
+        // Non-null while writing a .tpz. Images and geometry become members of
+        // it and the JSON keeps a url where the bytes would have been.
+        ZipWriter* archive{nullptr};
 
         std::vector<json> geometries;
         std::vector<json> materials;
@@ -213,7 +219,7 @@ namespace {
         out->insert(out->end(), bytes, bytes + size);
     }
 
-    std::optional<std::string> encodePngDataUrl(const Image& image) {
+    std::optional<std::vector<unsigned char>> encodePng(const Image& image) {
 
         const int channels = image.channels();
         if (channels < 1 || channels > 4) return std::nullopt;
@@ -246,7 +252,38 @@ namespace {
             return std::nullopt;
         }
 
-        return "data:image/png;base64," + utils::base64Encode(png);
+        return png;
+    }
+
+    std::optional<std::string> encodePngDataUrl(const Image& image) {
+
+        auto png = encodePng(image);
+        if (!png) return std::nullopt;
+
+        return "data:image/png;base64," + utils::base64Encode(*png);
+    }
+
+    // The texture's source file, verbatim. An archive stores these bytes rather
+    // than re-encoding the pixels: they are already compressed, in a format
+    // chosen for the image, and a PNG round-trip through stb would be both
+    // slower and (for a photographic JPEG) larger.
+    std::optional<std::vector<unsigned char>> readFile(const std::filesystem::path& path) {
+
+        std::ifstream in(path, std::ios::binary | std::ios::ate);
+        if (!in) return std::nullopt;
+
+        const std::streamoff end = in.tellg();
+        if (end < 0) return std::nullopt;
+
+        std::vector<unsigned char> bytes(static_cast<std::size_t>(end));
+        in.seekg(0, std::ios::beg);
+        if (end > 0) {
+
+            in.read(reinterpret_cast<char*>(bytes.data()), end);
+            if (in.gcount() != end) return std::nullopt;
+        }
+
+        return bytes;
     }
 
     // ------------------------------------------------------------ textures
@@ -259,6 +296,59 @@ namespace {
     bool canReference(const Texture& texture) {
 
         return !texture.sourceFile.empty() && texture.images().size() != 6;
+    }
+
+    // Writes the texture's pixels into the archive and fills in the entry's
+    // `url`. Two ways in, and they do not want the same row order on the way
+    // back out (see ObjectLoader::decodeImage, which this is the other half of):
+    //
+    //   original bytes  the file the texture was loaded from, copied whole.
+    //                   Re-reading it is an import like any other, so the loader
+    //                   decodes it with flipY defaulted to true, exactly as
+    //                   ImageStorage::Reference does with the same bytes on disk.
+    //   PNG fallback    a procedural texture, or a cube map, has no single file
+    //                   to copy. The rows are written in the order the texture
+    //                   holds them, so the entry says flipY: false — the same
+    //                   contract the base64 form has always had.
+    bool writeArchiveImage(const Texture& texture, const std::vector<Image>& images,
+                           const std::string& imageUuid, json& entry, Meta& meta) {
+
+        const std::string base = std::string(archiveImageDir) + imageUuid;
+
+        if (canReference(texture)) {
+
+            if (auto bytes = readFile(texture.sourceFile)) {
+
+                const auto name = base + texture.sourceFile.extension().generic_string();
+                meta.archive->add(name, std::move(*bytes));
+                entry["url"] = name;
+                return true;
+            }
+
+            meta.warn("texture '" + (texture.name.empty() ? texture.uuid() : texture.name) +
+                      "': cannot read '" + texture.sourceFile.string() +
+                      "' - the archive gets a re-encoded PNG of the pixels in memory instead");
+        }
+
+        json urls = json::array();
+        for (std::size_t i = 0; i < images.size(); ++i) {
+
+            auto png = encodePng(images[i]);
+            if (!png) return false;
+
+            // A cube map is six faces behind one texture, so the face index is
+            // part of the name; a plain texture keeps the bare uuid.
+            const auto name = images.size() == 6
+                                      ? base + "-" + std::to_string(i) + ".png"
+                                      : base + ".png";
+            meta.archive->add(name, std::move(*png));
+            urls.push_back(name);
+        }
+
+        entry["url"] = images.size() == 6 ? urls : urls.front();
+        entry["flipY"] = false;
+
+        return true;
     }
 
     // Emits the `images` entry backing `texture` and returns its uuid, or an
@@ -279,6 +369,19 @@ namespace {
         entry["uuid"] = imageUuid;
 
         const bool isCube = images.size() == 6;
+
+        // Inside an archive every texture is stored the same way, whatever the
+        // caller asked for: a url into the archive is both self-contained (the
+        // point of Embed) and cheap (the point of Reference), so there is
+        // nothing left for the setting to choose between.
+        if (meta.archive) {
+
+            if (!writeArchiveImage(texture, images, imageUuid, entry, meta)) return {};
+
+            entry["threeppChannels"] = images.front().channels();
+            meta.images.push_back(entry);
+            return imageUuid;
+        }
 
         // A path reference stands in for the whole entry — the pixels are
         // already on disk, in a better format than a re-encoded PNG.
@@ -352,7 +455,7 @@ namespace {
             // from a file (procedural, or unpacked from inside a .glb) has
             // nothing to point at, so it embeds instead. Say so, because the
             // document is then not as small - or as portable - as asked for.
-            if (meta.imageStorage == ImageStorage::Reference && !canReference(texture)) {
+            if (!meta.archive && meta.imageStorage == ImageStorage::Reference && !canReference(texture)) {
                 meta.warn("texture '" + (texture.name.empty() ? texture.uuid() : texture.name) +
                           "' cannot be referenced - embedded instead");
             }
@@ -619,20 +722,60 @@ namespace {
 
     // ---------------------------------------------------------- geometries
 
+    // Where an attribute's numbers go in archive mode: one binary section per
+    // geometry, named by the geometry's uuid, holding every attribute and the
+    // index back to back. The JSON keeps the schema (type, itemSize,
+    // normalized) and gains an offset into that section instead of an array of
+    // numbers — glTF's arrangement, and for glTF's reason: parsing a million
+    // JSON numbers costs orders of magnitude more than a memcpy.
+    struct BinarySink {
+
+        std::vector<unsigned char>& blob;
+        const std::string& url;
+    };
+
+    // The bytes are the host's, unswapped. Every platform threepp builds for is
+    // little-endian; a byte-swapping path nothing exercises would be a liability
+    // rather than portability, so the assumption is asserted instead of coded
+    // around.
+    static_assert(std::endian::native == std::endian::little,
+                  "the scene archive's binary sections are little-endian");
+
     // Writes the backing store verbatim. array() returns the STORED scalars, not
     // the denormalized ones, which is exactly what three.js expects next to a
     // `normalized` flag - so nothing is decoded on the way out.
     template<class T>
-    bool storeAttributeArray(const BufferAttribute& attribute, json& data) {
+    bool storeAttributeArray(const BufferAttribute& attribute, json& data, BinarySink* sink) {
 
         const auto* typed = dynamic_cast<const TypedBufferAttribute<T>*>(&attribute);
         if (!typed) return false;
 
-        data["array"] = typed->array();
+        if (!sink) {
+
+            data["array"] = typed->array();
+            return true;
+        }
+
+        // Padded to 4 before the section starts, not after it ends, so a
+        // trailing section cannot leave the blob longer than its own contents.
+        // Every type here is 1, 2 or 4 bytes wide, so this is alignment enough
+        // for a reader that memcpys.
+        while (sink->blob.size() % 4 != 0) sink->blob.push_back(0);
+
+        const auto& array = typed->array();
+        const auto bytes = array.size() * sizeof(T);
+
+        data["url"] = sink->url;
+        data["byteOffset"] = sink->blob.size();
+        data["byteLength"] = bytes;
+
+        const auto* first = reinterpret_cast<const unsigned char*>(array.data());
+        sink->blob.insert(sink->blob.end(), first, first + bytes);
+
         return true;
     }
 
-    json writeAttribute(const BufferAttribute& attribute) {
+    json writeAttribute(const BufferAttribute& attribute, BinarySink* sink = nullptr) {
 
         json data;
         data["itemSize"] = attribute.itemSize();
@@ -644,12 +787,12 @@ namespace {
 
         bool stored = false;
         switch (attribute.type()) {
-            case AttributeType::Float: stored = storeAttributeArray<float>(attribute, data); break;
-            case AttributeType::UInt32: stored = storeAttributeArray<unsigned int>(attribute, data); break;
-            case AttributeType::UInt16: stored = storeAttributeArray<std::uint16_t>(attribute, data); break;
-            case AttributeType::Int16: stored = storeAttributeArray<std::int16_t>(attribute, data); break;
-            case AttributeType::UInt8: stored = storeAttributeArray<std::uint8_t>(attribute, data); break;
-            case AttributeType::Int8: stored = storeAttributeArray<std::int8_t>(attribute, data); break;
+            case AttributeType::Float: stored = storeAttributeArray<float>(attribute, data, sink); break;
+            case AttributeType::UInt32: stored = storeAttributeArray<unsigned int>(attribute, data, sink); break;
+            case AttributeType::UInt16: stored = storeAttributeArray<std::uint16_t>(attribute, data, sink); break;
+            case AttributeType::Int16: stored = storeAttributeArray<std::int16_t>(attribute, data, sink); break;
+            case AttributeType::UInt8: stored = storeAttributeArray<std::uint8_t>(attribute, data, sink); break;
+            case AttributeType::Int8: stored = storeAttributeArray<std::int8_t>(attribute, data, sink); break;
         }
 
         if (!stored) return json();
@@ -805,6 +948,14 @@ namespace {
         json inner;
         inner["attributes"] = json::object();
 
+        // One section per geometry, named by uuid — which the exporter and the
+        // loader both keep verbatim, so the name is stable across a round trip
+        // and two saves of the same scene name the same member.
+        std::vector<unsigned char> blob;
+        const std::string url = std::string(archiveBufferDir) + geometry.uuid + ".bin";
+        BinarySink sink{blob, url};
+        BinarySink* const into = meta.archive ? &sink : nullptr;
+
         // The host-side index is always uint32 (BufferGeometry::index_ is an
         // IntBufferAttribute); the uint16 index buffers added in dce8acbb are a
         // Vulkan device-side packing that never reaches this layer. Derived from
@@ -812,12 +963,12 @@ namespace {
         if (const auto* index = geometry.getIndex()) {
             json idx;
             idx["type"] = attributeTypeToArrayName(index->type());
-            idx["array"] = index->array();
+            storeAttributeArray<unsigned int>(*index, idx, into);
             inner["index"] = idx;
         }
 
         for (const auto& name : sortedKeys(geometry.getAttributes())) {
-            auto entry = writeAttribute(*geometry.getAttributes().at(name));
+            auto entry = writeAttribute(*geometry.getAttributes().at(name), into);
             if (entry.is_null()) {
                 meta.warn("geometry '" + geometry.uuid + "': skipping attribute '" + name +
                           "' (unsupported array type)");
@@ -831,7 +982,7 @@ namespace {
             for (const auto& name : sortedKeys(geometry.getMorphAttributes())) {
                 json arr = json::array();
                 for (const auto& attribute : geometry.getMorphAttributes().at(name)) {
-                    auto entry = writeAttribute(*attribute);
+                    auto entry = writeAttribute(*attribute, into);
                     if (!entry.is_null()) arr.push_back(entry);
                 }
                 morph[name] = arr;
@@ -857,6 +1008,11 @@ namespace {
         }
 
         data["data"] = inner;
+
+        // Empty when every attribute was skipped, and then there is nothing to
+        // point a url at either — the entry would only be a name in the
+        // directory promising bytes no attribute asks for.
+        if (into && !blob.empty()) meta.archive->add(url, std::move(blob));
 
         meta.geometries.push_back(data);
 
@@ -1086,7 +1242,19 @@ namespace {
         const auto asset = meta.modelStorage == ModelStorage::Reference
                                    ? assetSource(object)
                                    : std::filesystem::path{};
-        const bool linked = !asset.empty();
+        const bool linked = !asset.empty() && !meta.archive;
+
+        // An archive is one file, and re-importing a .glb from inside it needs
+        // memory-based import plumbing that does not exist yet. The subtree is
+        // written out in full instead — which the binary sections make cheap,
+        // and which is what the archive is for — but the caller asked for a
+        // reference and did not get one, so say which ones.
+        if (!asset.empty() && meta.archive) {
+
+            meta.warn("'" + (object.name.empty() ? object.uuid : object.name) +
+                      "' is linked to '" + asset.generic_string() +
+                      "' - an archive embeds it instead, references into an archive are not supported yet");
+        }
 
         data["uuid"] = object.uuid;
         data["type"] = object.type();
@@ -1305,12 +1473,18 @@ const std::vector<std::string>& ObjectExporter::warnings() const {
 
 std::string ObjectExporter::toJson(Object3D& object, const ObjectExporterOptions& options) {
 
+    return write(object, options, nullptr);
+}
+
+std::string ObjectExporter::write(Object3D& object, const ObjectExporterOptions& options, ZipWriter* archive) {
+
     warnings_.clear();
 
     Meta meta;
     meta.imageStorage = options.images;
     meta.modelStorage = options.models;
     meta.resourcePath = options.resourcePath;
+    meta.archive = archive;
 
     json output;
     output["metadata"] = json{
@@ -1358,15 +1532,37 @@ std::string ObjectExporter::toJson(Object3D& object, const ObjectExporterOptions
 
 void ObjectExporter::save(Object3D& object, const std::filesystem::path& path, const ObjectExporterOptions& options) {
 
-    std::ofstream out(path, std::ios::binary);
-    if (!out) {
-        throw std::runtime_error("[ObjectExporter] unable to open file for writing: " + path.string());
-    }
-
     // References are relative to the document, and here we finally know where
     // the document is. An explicitly configured resourcePath still wins.
     auto resolved = options;
     if (resolved.resourcePath.empty()) resolved.resourcePath = path.parent_path();
 
-    out << toJson(object, resolved);
+    auto extension = path.extension().string();
+    std::transform(extension.begin(), extension.end(), extension.begin(),
+                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+
+    const bool archive = options.format == DocumentFormat::Archive ||
+                         (options.format == DocumentFormat::Auto && extension == ".tpz");
+
+    if (archive) {
+
+        ZipWriter zip;
+
+        // The document is added last though the writer's fixed order puts it
+        // first in the file: producing it is what fills the archive with
+        // everything the urls in it point at.
+        const auto document = write(object, resolved, &zip);
+        zip.add(archiveDocument, document);
+
+        zip.writeTo(path);
+
+        return;
+    }
+
+    std::ofstream out(path, std::ios::binary);
+    if (!out) {
+        throw std::runtime_error("[ObjectExporter] unable to open file for writing: " + path.string());
+    }
+
+    out << write(object, resolved, nullptr);
 }

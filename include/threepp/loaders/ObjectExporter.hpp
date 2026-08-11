@@ -10,6 +10,7 @@
 namespace threepp {
 
     class Object3D;
+    class ZipWriter;
 
     // How a texture's pixels reach the document.
     enum class ImageStorage {
@@ -50,11 +51,32 @@ namespace threepp {
         Reference,
     };
 
+    // Which container save() writes the document into.
+    enum class DocumentFormat {
+
+        // Archive when the target is named ".tpz", plain JSON otherwise.
+        Auto,
+
+        // The JSON document alone. Whatever `images`/`models` ask for.
+        Json,
+
+        // One .tpz file: an uncompressed zip holding scene.json next to the
+        // images and the geometry, so the document is self-contained AND cheap.
+        // Images go in as their ORIGINAL encoded bytes (no base64, no PNG
+        // re-encode) and geometry as raw little-endian binary, which is what
+        // makes it cheap; both override `images`, except for ImageStorage::Omit.
+        // toJson() has nowhere to put the extra members, so this only affects
+        // save().
+        Archive,
+    };
+
     struct ObjectExporterOptions {
 
         ImageStorage images = ImageStorage::Embed;
 
         ModelStorage models = ModelStorage::Embed;
+
+        DocumentFormat format = DocumentFormat::Auto;
 
         // Directory that Reference paths are written relative to. save() fills
         // this in from the output file when it is left empty; toJson() has no
@@ -76,6 +98,10 @@ namespace threepp {
     public:
         [[nodiscard]] std::string toJson(Object3D& object, const ObjectExporterOptions& options = {});
 
+        // Writes the JSON document, or — for a ".tpz" target, or when the
+        // options say so — the single-file archive. The archive is written
+        // through a temp file and renamed over the target, so a crash mid-save
+        // cannot destroy the archive that was already there.
         void save(Object3D& object, const std::filesystem::path& path, const ObjectExporterOptions& options = {});
 
         // Everything the last toJson()/save() could not represent (a texture
@@ -85,6 +111,10 @@ namespace threepp {
         [[nodiscard]] const std::vector<std::string>& warnings() const;
 
     private:
+        // The one export routine. `archive` non-null routes images and geometry
+        // into it as their own members, leaving urls behind in the JSON.
+        std::string write(Object3D& object, const ObjectExporterOptions& options, ZipWriter* archive);
+
         std::vector<std::string> warnings_;
     };
 

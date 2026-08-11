@@ -145,6 +145,15 @@ namespace threepp::objectjson {
         return "Float32Array";
     }
 
+    // ---------------------------------------------------------- scene archive
+    // A .tpz is a zipped project folder, not a second format: the document is
+    // the same three.js 4.5 JSON it would be on disk, sitting next to the same
+    // images/ and buffers/ it would reference there. These are the names both
+    // sides agree on; everything else the loader learns from a url in the JSON.
+    inline constexpr const char* archiveDocument = "scene.json";
+    inline constexpr const char* archiveImageDir = "images/";
+    inline constexpr const char* archiveBufferDir = "buffers/";
+
 }// namespace threepp::objectjson
 
 #endif//THREEPP_OBJECTJSONCONSTANTS_HPP
