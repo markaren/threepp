@@ -77,11 +77,38 @@ vec3 shadeWater(vec3 P, vec3 N, vec3 V, MaterialDesc pm, int instIdx,
     // Offset along the MACRO normal, not the tilted N: on a coarse water mesh
     // the shading normal can lean far enough from the triangle plane that a
     // fixed offset along it fails to clear the neighbouring facet.
-    gTraceSkipWater = true;// this water's own reflection: pass through crests
-    const vec3 reflectColor = traceRadiance(P + Nmacro * SHADOW_EPS, R, doShadows, maxLod,
-                                            reflLod, seed, /*cheapHits=*/true,// water: blur+temporal absorb
-                                            /*probeHitFill=*/true);
+    gTraceSkipWater = true;
+    const vec3 reflOrig = P + Nmacro * SHADOW_EPS;// this water's own reflection: pass through crests
+    vec3 reflectColor = traceRadiance(reflOrig, R, doShadows, maxLod,
+                                      reflLod, seed, /*cheapHits=*/true,// water: blur+temporal absorb
+                                      /*probeHitFill=*/true);
     gTraceSkipWater = false;
+
+    // ── FIRE IN THE MIRROR ───────────────────────────────────────────────────
+    // The traced leg above sees geometry and the environment. It does NOT see
+    // the participating media — a ParticleField flame is density with a
+    // blackbody emission ramp, not a mesh — so a campfire beside a pond
+    // reflected only its flicker PointLight's glint and never the flame body.
+    // Match the primary leg: multiply the traced radiance by the medium's
+    // transmittance and add the emission it produced, marched over the same
+    // volumes with the same expression (pdEmissiveLeg, 16 steps, emission +
+    // extinction only — see its header for what is deliberately left out).
+    //
+    // tMax is the reflected content's own distance so the march stops at the
+    // reflected surface: gTraceHitT < 0 means the ray escaped to the sky, and
+    // then the volume boxes are the only thing bounding it. The whole block is
+    // behind the same two uniform gates the emission term uses — flags bit 11
+    // ("a density volume is live") and pd.counts.y ("something is emissive") —
+    // so a scene with no fields, and a dust-only scene as well, runs the
+    // pre-change arithmetic textually.
+#ifdef PD_LINEAR
+    if ((pc.flags & 2048u) != 0u && pd.counts.y != 0u) {
+        vec3 legEmis;
+        const float legT = pdEmissiveLeg(reflOrig, R, gTraceHitT > 0.0 ? gTraceHitT : 1e30,
+                                         legEmis);
+        reflectColor = reflectColor * legT + legEmis;
+    }
+#endif
 
     // Transmission, two terms:
     //

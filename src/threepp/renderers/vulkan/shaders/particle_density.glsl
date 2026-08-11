@@ -137,6 +137,24 @@ vec3 blackbodyRGB(float T) {
     return vec3(1.0, g, b) * (h2 * h2);
 }
 
+// The emitted radiance ONE volume contributes at a sample point — the SINGLE
+// expression the fire model has, factored out so that every consumer of it is
+// the same model by construction rather than by review. `ty` is the sample's
+// normalised height inside that volume's box (already in [0,1] — every caller
+// reaches this only after the in-box test, which is what keeps the pow's base
+// non-negative; a negative base is undefined in GLSL and has produced NaN in
+// this tree before, feedback_float_pi_sin_pow_nan). `sigma` is THAT volume's
+// own extinction there, because emission ∝ σ is the physics (soot radiates in
+// proportion to how much soot there is) and is what makes a flame's silhouette
+// be the particle distribution instead of a billboard card.
+//
+// Callers gate on pd.emission[i].x > 0.0 themselves: the multiply would be a
+// no-op but blackbodyRGB and the pow would not.
+vec3 pdEmissionAt(uint i, float ty, float sigma) {
+    const float T = mix(pd.emission[i].y, pd.emission[i].z, pow(ty, pd.emission[i].w));
+    return (pd.emission[i].x * sigma) * blackbodyRGB(T);
+}
+
 // One volume's contribution at a world point, trilinear. Returns 0 outside the
 // box (NOT clamp-to-edge: a clamped read smears the boundary voxels across the
 // whole world, which reads as infinite dust).
@@ -263,6 +281,88 @@ float pdMediumLinear(vec3 p, out vec3 albedo) {
     if (s <= 0.0) return 0.0;
     albedo = (n == 1u) ? pd.albedoAniso[0].rgb : (a / s);
     return s;
+}
+
+// ── THE CHEAP LEG: emission + extinction only, for SECONDARY rays ────────────
+// plans/particle-atmosphere.md, "water-fire reflection march".
+//
+// A traced reflection ray sees GEOMETRY. A flame is not geometry — it is a
+// participating medium, a ParticleField density volume with F0's blackbody
+// emission ramp — so a campfire beside a pond reflected in that pond showed
+// only the flicker PointLight's glint on the wave facets and none of the flame
+// itself. The primary leg gets the full treatment from applyParticleFog; a
+// reflected leg gets THIS: the same medium, the same emission expression
+// (pdEmissionAt, shared), the same skip-don't-clamp box test, the same
+// Beer-Lambert compositing order — and NOTHING ELSE.
+//
+// WHAT IS DELIBERATELY OMITTED, and why it is an omission and not a bug:
+// the sun's in-scatter (one centroid shadow ray + HG phase + cloud shadow),
+// the ambient/env in-scatter, and the per-step point-light glow. Those are
+// applyParticleFog's 32-step march, and the house rule this tree runs on is
+// ONE medium model — a second, differently-wrong copy of the full march is the
+// duplicate BSDF that rule exists to forbid. So a smoke plume reflected in
+// water DIMS what is behind it (transmittance) but is not itself lit by the
+// sun in the mirror: it reads as a dark column rather than a bright one. That
+// is the same trade particle_light.comp's overlay fog makes, recorded there
+// for the same reason. The flame, being emission-dominated, loses nothing:
+// emission IS the term this returns.
+//
+// Fixed step count, midpoint phase, no temporal jitter — the phase-2
+// determinism contract. 16 rather than the primary march's 32: a reflected
+// image is Fresnel-weighted (F ≈ 0.02 face-on), perturbed by the wave normals
+// that already dither the sampling across neighbouring pixels, and never the
+// subject of the frame. If a banding shell ever shows, F0's sanctioned answer
+// is the per-PIXEL hash offset (spatial dither, no frame term), not jitter.
+const int kPdLegSteps = 16;
+
+// Returns the leg's transmittance; `emis` receives the emitted radiance
+// accumulated along it, already self-occluded by the medium in front of it.
+// EXACTLY 1.0 / vec3(0.0) — the caller's no-op — whenever no bound volume is
+// emissive, which is what keeps every pre-existing dust scene on the path it
+// had before this function existed.
+float pdEmissiveLeg(vec3 ro, vec3 rd, float tMax, out vec3 emis) {
+    emis = vec3(0.0);
+    const uint n = min(pd.counts.x, uint(kMaxDensityFields));
+    if (n == 0u || pd.counts.y == 0u) return 1.0;
+
+    // Union of the ray's box overlaps — one interval, as applyParticleFog
+    // does it, so two plumes that share a yard share the step budget.
+    float t0 = tMax, t1 = 0.0;
+    const vec3 inv = 1.0 / rd;// ±inf on axis-parallel components is fine below
+    for (uint i = 0u; i < n; ++i) {
+        const vec3  bmin  = pd.boxMin[i].xyz;
+        const vec3  bsize = 1.0 / pd.boxInvSize[i].xyz;
+        const vec3  ta = (bmin - ro) * inv;
+        const vec3  tb = (bmin + bsize - ro) * inv;
+        const vec3  lo = min(ta, tb), hi = max(ta, tb);
+        const float e = max(max(lo.x, lo.y), max(lo.z, 0.0));
+        const float x = min(min(hi.x, hi.y), min(hi.z, tMax));
+        if (x > e) { t0 = min(t0, e); t1 = max(t1, x); }
+    }
+    if (t1 <= t0) return 1.0;
+
+    const float dt = (t1 - t0) / float(kPdLegSteps);
+    float tau = 0.0;
+    for (int s = 0; s < kPdLegSteps; ++s) {
+        const vec3 x = ro + rd * (t0 + (float(s) + 0.5) * dt);
+        float sig = 0.0;
+        vec3  em  = vec3(0.0);
+        for (uint i = 0u; i < n; ++i) {
+            const vec3 tt = (x - pd.boxMin[i].xyz) * pd.boxInvSize[i].xyz;
+            if (any(lessThan(tt, vec3(0.0))) || any(greaterThan(tt, vec3(1.0)))) continue;
+            const float si = texture(particleDensityLinTex[i], tt).r;
+            sig += si;
+            if (pd.emission[i].x > 0.0) em += pdEmissionAt(i, tt.y, si);
+        }
+        if (sig <= 0.0) continue;
+        // Same order as the primary march: this step's emission is attenuated
+        // by the medium IN FRONT of it, not including its own slab.
+        const float tr = exp(-tau);
+        tau  += sig * dt;
+        emis += em * (tr * dt);
+        if (tau > 8.0) break;// e^-8: nothing behind this survives
+    }
+    return exp(-tau);
 }
 #endif
 

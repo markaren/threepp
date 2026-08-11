@@ -272,16 +272,11 @@ vec3 applyParticleFog(vec3 col, vec3 ro, vec3 rd, float tMax) {
                 albStep += pd.albedoAniso[i].rgb * si;
                 gStep   += pd.albedoAniso[i].a * si;
             }
-            if (emissive && pd.emission[i].x > 0.0) {
-                // Blackbody temperature from the height fraction inside THIS
-                // volume's box. tt.y is already clamped to [0,1] by the skip
-                // above, so the pow's base is never negative (float pow of a
-                // negative base is undefined and has produced NaN in this tree
-                // before — feedback_float_pi_sin_pow_nan).
-                const float T = mix(pd.emission[i].y, pd.emission[i].z,
-                                    pow(tt.y, pd.emission[i].w));
-                emStep += (pd.emission[i].x * si) * blackbodyRGB(T);
-            }
+            // Blackbody ramp over the height fraction inside THIS volume's
+            // box. The expression itself lives in particle_density.glsl so
+            // that the reflected-leg march (pdEmissiveLeg) cannot drift away
+            // from it — ONE emission model, called twice.
+            if (emissive && pd.emission[i].x > 0.0) emStep += pdEmissionAt(i, tt.y, si);
         }
         if (sig <= 0.0) continue;
         const float tr = exp(-tau);
