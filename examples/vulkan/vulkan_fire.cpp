@@ -353,6 +353,14 @@ int main(int argc, char** argv) {
     FireEffect::Params fp;
     fp.height = 1.05f;
     fp.radius = 0.25f;
+    // ── THIS SCENE'S WIND, stated rather than inherited ─────────────────────
+    // One demo, one wind: a light breeze across a clearing at dusk. It is the
+    // value FireEffect has always defaulted to, written out here because a
+    // world's wind belongs to the world and not to the effect — the fjord's
+    // campfire, its chimney, its waves, its meadow and its snowfall now all
+    // read one vector, and this demo says its own out loud for the same reason.
+    // Unchanged numbers, so the campfire is the campfire F1 shipped.
+    fp.wind.set(0.22f, 0.f, 0.09f);
     fp.embers = !noEmbers;
     // --legacy-embers loads the old sprite; the F3 ember field needs no asset
     // at all (the billboard fragment shader draws a procedural spark).

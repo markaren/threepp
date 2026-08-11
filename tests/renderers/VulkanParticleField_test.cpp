@@ -49,7 +49,9 @@
 #include "threepp/geometries/BoxGeometry.hpp"
 #include "threepp/geometries/PlaneGeometry.hpp"
 #include "threepp/materials/MeshStandardMaterial.hpp"
+#include "threepp/extras/effects/FireEffect.hpp"
 #include "threepp/objects/ParticleField.hpp"
+#include "threepp/objects/ParticleSystem.hpp"
 #include "threepp/renderers/VulkanRenderer.hpp"
 #include "threepp/renderers/vulkan/ValidationReport.hpp"
 
@@ -2271,6 +2273,348 @@ int main(int argc, char** argv) {
         camera->position.copy(camWas2);
         camera->lookAt(Vector3(0.f, 0.8f, 0.f));
         for (int i = 0; i < 4; ++i) frame();
+    }
+
+    // ── DEFECT FIXES, 2026-08-11 (the "all fake" round) ─────────────────────
+    //
+    // Three user-reported defects in the F4 fjord scene, all sharing one root:
+    // the atmosphere pieces did not participate in one world. Their fixes are
+    // asserted here.
+    {
+        const auto bytesDiff = [](const std::vector<unsigned char>& a,
+                                  const std::vector<unsigned char>& b) -> long long {
+            if (a.size() != b.size() || a.empty()) return -1;
+            long long d = 0;
+            for (std::size_t i = 0; i < a.size(); ++i)
+                if (a[i] != b[i]) ++d;
+            return d;
+        };
+
+        // ── DEFECT 1: the snowfall was a fixed patch ────────────────────────
+        // EmitterParams::follow wraps the trajectory toroidally into a box
+        // around a moving centre. Three claims, in rising order of strength.
+        {
+            // (i) The setter belongs to the Renderer half of the API, like
+            // setEmitter/setEmitterTime — a silent no-op on a HostRing field
+            // would be a field that never follows and never says why.
+            ParticleField::Config hcfg;
+            hcfg.capacity  = 16;
+            hcfg.ownership = ParticleField::Ownership::HostRing;
+            auto host = ParticleField::create(hcfg);
+            bool threw = false;
+            try { host->setFollowCenter(Vector3(1.f, 2.f, 3.f)); }
+            catch (const std::invalid_argument&) { threw = true; }
+            check(threw, "setFollowCenter() on a HostRing field throws");
+
+            constexpr std::uint32_t kFollow = 20'000;
+            ParticleField::Config fcfg;
+            fcfg.capacity      = kFollow;
+            fcfg.ownership     = ParticleField::Ownership::Renderer;
+            fcfg.wSemantic     = ParticleField::WSemantic::Radius;
+            fcfg.uniformRadius = 0.03f;
+            auto flakes = ParticleField::create(fcfg);
+
+            ParticleField::EmitterParams fe;
+            fe.spawnCenter.set(0.f, 6.f, 0.f);
+            fe.spawnHalfExtent.set(5.f, 0.2f, 5.f);
+            fe.velocity.set(0.f, -1.f, 0.f);
+            fe.lifetime = 8.f;
+            fe.size     = 0.03f;
+            fe.seed     = 20260815u;
+            fe.follow     = true;
+            fe.followSnap = 4.f;
+            flakes->setEmitter(fe);
+            flakes->setEmitterTime(4.0f, 0.f);// frozen: the camera is the variable
+
+            // (ii) THE SNAP IS A PURE FUNCTION, which is the whole determinism
+            // argument: under a scripted camera the pose is a closed form in
+            // the frame index, so floor(pose / grid) * grid is one too, and a
+            // --shot / --seq capture stays a function of its frame index alone.
+            // Asserted as an identity rather than trusted as a comment.
+            flakes->setFollowCenter(Vector3(7.9f, 1.f, -0.1f));
+            const Vector3 snapA = flakes->followCenter();
+            flakes->setFollowCenter(Vector3(7.9f, 1.f, -0.1f));
+            const Vector3 snapB = flakes->followCenter();
+            check(snapA.x == snapB.x && snapA.z == snapB.z,
+                  "setFollowCenter() is a pure function of its argument");
+            check(std::abs(snapA.x - 4.f) < 1e-4f && std::abs(snapA.z + 4.f) < 1e-4f,
+                  "the follow centre snaps DOWN to the lattice (floor, not round: "
+                  "round's tie at .5 lets float noise flip a whole box of snow "
+                  "back and forth between two frames)");
+
+            // (iii) THE FIELD ACTUALLY MOVES. The field sits at the origin and
+            // its trajectories are field-local, so before this fix a camera 300 m
+            // away saw nothing at all — which is the defect, stated as a
+            // measurement. With the wrap on and the centre at the camera, the
+            // same 20k slots tile the plane and the weather is there.
+            scene.add(flakes);
+            const Vector3 camWas3 = camera->position;
+            const float   sunWas3 = light->intensity;
+            box->visible    = false;
+            ground->visible = false;
+            camera->position.set(300.f, 3.f, 300.f);
+            camera->lookAt(Vector3(300.f, 4.f, 292.f));
+
+            flakes->meshRepr();// (no proxy yet — the billboard half is enough here)
+            flakes->setBillboardRepr(Color(0.95f, 0.96f, 1.f), Color(0.9f, 0.92f, 0.96f),
+                                     /*intensity*/ 1.2f, /*sizeScale*/ 1.4f);
+            flakes->billboardRepr().fadePower = 0.f;
+            flakes->billboardRepr().sizeTaper = 0.f;
+
+            // Leg 1: follow OFF — the pre-fix behaviour, in the same binary.
+            {
+                auto e = flakes->emitter();
+                e.follow = false;
+                flakes->setEmitter(e);
+            }
+            for (int i = 0; i < 20; ++i) frame();
+            const auto awayNoFollow = renderer.readRGBPixels();
+            // Control for the run-to-run floor of THIS scene, measured the same
+            // way the F0 amendment insists on.
+            for (int i = 0; i < 8; ++i) frame();
+            const auto awayNoFollowB = renderer.readRGBPixels();
+
+            // Leg 2: follow ON, centred on the camera.
+            {
+                auto e = flakes->emitter();
+                e.follow = true;
+                flakes->setEmitter(e);
+            }
+            flakes->setFollowCenter(camera->position);
+            for (int i = 0; i < 20; ++i) frame();
+            const auto awayFollow = renderer.readRGBPixels();
+
+            const long long followDiff = bytesDiff(awayNoFollow, awayFollow);
+            const long long followCtl  = bytesDiff(awayNoFollow, awayNoFollowB);
+            std::printf("[info] follow wrap at 300 m from the field: %lld bytes "
+                        "differ (same-scene control %lld)\n", followDiff, followCtl);
+            check(followDiff > 10 * std::max<long long>(followCtl, 1) &&
+                          followDiff > long long(awayNoFollow.size()) / 200,
+                  "EmitterParams::follow puts the weather AROUND the camera 300 m "
+                  "from the field's own position — the fixed-patch defect, measured");
+
+            scene.remove(*flakes);
+            camera->position.copy(camWas3);
+            camera->lookAt(Vector3(0.f, 0.8f, 0.f));
+            light->intensity = sunWas3;
+            box->visible     = true;
+            ground->visible  = true;
+            for (int i = 0; i < 6; ++i) frame();
+        }
+
+        // ── DEFECT 2: legacy lit billboards ignored particle density ────────
+        //
+        // The fjord's chimney smoke read straight THROUGH 40 m of snowfall at
+        // full contrast while every surface behind the same snow was hazed:
+        // particle_light.comp's fog model predates ParticleField density and
+        // carried the height fog and the murk only. It now marches the density
+        // volumes over the same camera leg.
+        //
+        // DELIBERATE DEVIATION, recorded here as well as in the plan: the
+        // parent plan requires the legacy ParticleSystem path UNTOUCHED, and
+        // this fix touches it. The model was INCOMPLETE, not different — it
+        // already composes extinction and in-scatter for every other medium in
+        // the scene, sequentially, and this is a third medium composed the same
+        // way. What keeps that honest is the first assertion below.
+        //
+        // WHY THE FIRST ASSERTION IS AGAINST A CONTROL AND NOT AGAINST ZERO:
+        // the legacy path owns an RNG and integrates per frame (F1 note 4), so
+        // it is the ONE non-reproducible element in this subsystem and an exact
+        // byte claim about it is not available to any test. The claim is
+        // therefore the F0 amendment's: adding a ParticleField whose volume is
+        // NOT bound must not move the image more than re-rendering the same
+        // scene does. (The exact claim lives in the shader, where the whole
+        // zero-density path is textually the pre-fix expression behind a
+        // uniform branch.)
+        {
+            const Vector3 camWas4 = camera->position;
+            const float   sunWas4 = light->intensity;
+            Color         clearWas4;
+            renderer.getClearColor(clearWas4);
+            // ── THE MEDIUM IS A PURE ABSORBER OVER A BLACK BACKGROUND ───────
+            // and that is the difference between a test and a coincidence. The
+            // puffs are ALPHA-BLENDED, so what they add to the frame is
+            // alpha·(puff − background): brighten the background and their
+            // "contribution" shrinks with the fix nowhere in sight. A scattering
+            // medium brightens the background (that is what in-scatter is), so
+            // the obvious four-capture test passes on an UNFIXED build — it did,
+            // at a ratio of 0.405, which is how this note got written.
+            //
+            // Albedo 0 and a black clear colour remove the confound at the root:
+            // the background is ~0 with and without the medium (asserted below,
+            // as the control), so the only thing the medium can change is the
+            // transmittance the lit billboards are multiplied by.
+            renderer.setClearColor(Color(0.f, 0.f, 0.f));
+            light->intensity = 0.02f;
+            box->visible     = false;
+            ground->visible  = false;
+            camera->position.set(0.f, 1.2f, 5.0f);
+            camera->lookAt(Vector3(0.f, 1.2f, 0.f));
+
+            auto puffs = std::make_shared<ParticleSystem>();
+            {
+                auto& s = puffs->settings();
+                s.makeDefault();
+                s.positionStyle  = ParticleSystem::Type::BOX;
+                s.positionBase   = Vector3(0.f, 1.2f, -1.0f);
+                s.positionSpread = Vector3(0.8f, 0.5f, 0.3f);
+                s.velocityStyle  = ParticleSystem::Type::BOX;
+                s.velocityBase   = Vector3(0.f, 0.05f, 0.f);
+                s.velocitySpread = Vector3(0.05f, 0.05f, 0.05f);
+                s.particlesPerSecond = 400;
+                s.particleDeathAge   = 4.0f;
+                s.emitterDeathAge    = 1e9f;
+                s.colorBase          = Vector3(0.f, 0.f, 0.85f);// HSL: pale grey
+                s.setOpacityTween({0.f, 0.4f, 4.0f}, {0.f, 0.9f, 0.9f})
+                        .setSizeTween({0.f, 4.0f}, {0.5f, 0.7f});
+                puffs->initialize();
+            }
+            scene.add(puffs);
+            const auto warm = [&](int n) {
+                for (int i = 0; i < n; ++i) { puffs->update(1.f / 60.f); frame(); }
+            };
+            // Long warm: the legacy emitter integrates, so the puff cloud only
+            // reaches steady state after particleDeathAge worth of frames.
+            warm(300);
+            const auto lumaOf = [&](const std::vector<unsigned char>& px) {
+                double s = 0.0;
+                for (std::size_t i = 0; i + 2 < px.size(); i += 3)
+                    s += 0.2126 * px[i] + 0.7152 * px[i + 1] + 0.0722 * px[i + 2];
+                return s / double(px.size() / 3);
+            };
+            const double lumaA = lumaOf(renderer.readRGBPixels());
+            warm(60);
+            const double lumaB = lumaOf(renderer.readRGBPixels());
+            const double floorL = std::abs(lumaA - lumaB);
+
+            // A density field BETWEEN the camera and the puffs, parked first.
+            constexpr std::uint32_t kHaze = 60'000;
+            ParticleField::Config zcfg;
+            zcfg.capacity      = kHaze;
+            zcfg.ownership     = ParticleField::Ownership::Renderer;
+            zcfg.uniformRadius = 0.02f;
+            auto haze = ParticleField::create(zcfg);
+            ParticleField::EmitterParams ze;
+            ze.spawnCenter.set(0.f, 1.2f, 2.2f);
+            ze.spawnHalfExtent.set(1.6f, 1.2f, 1.4f);
+            ze.velocity.set(0.f, -0.05f, 0.f);
+            ze.lifetime = 30.f;
+            ze.size     = 0.02f;
+            ze.seed     = 20260816u;
+            haze->setEmitter(ze);
+            haze->setEmitterTime(5.f, 0.f);
+            // sigma per PARTICLE, and the number to reason with is total optical
+            // mass: the splat conserves N·sigma, so the mean sigma inside the
+            // body is N·sigma / (occupied voxels) and the marched depth is that
+            // times the chord. At 48^3 over a 3.6 m box the cloud occupies ~7e4
+            // voxels, so 0.02 (a dust value) gives tau ~0.05 — a 2% effect that
+            // no assertion could separate from noise. 0.8 puts tau near 2, i.e.
+            // the 40 m of snowfall the defect was reported through.
+            haze->setDensityRepr(Vector3(0.f, 1.2f, 2.2f), Vector3(1.8f, 1.4f, 1.6f),
+                                 /*sigmaPerParticle*/ 0.8f, /*resolution*/ 48);
+            haze->densityRepr().albedo     = Color(0.f, 0.f, 0.f);// pure absorber
+            haze->densityRepr().anisotropy = 0.f;
+            haze->setLiveCount(0);// PARKED: no volume is bound, pd.counts.x == 0
+            scene.add(haze);
+            warm(60);
+            const double lumaParked = lumaOf(renderer.readRGBPixels());
+
+            // The puffs' own contribution in clear air, measured BEFORE the
+            // medium is bound: it is both the signal below and the yardstick the
+            // parked-field claim is scaled against. An absolute tolerance would
+            // mean nothing here — the background is black by construction.
+            puffs->visible = false;
+            warm(30);
+            const double clearNoPuffs = lumaOf(renderer.readRGBPixels());
+            puffs->visible = true;
+            warm(30);
+            const double clearWithPuffs = lumaOf(renderer.readRGBPixels());
+            const double clearAdd = clearWithPuffs - clearNoPuffs;
+
+            std::printf("[info] lit-particle fog: luma %.4f / %.4f (floor %.4f), "
+                        "parked density field %.4f, puff contribution %.4f\n",
+                        lumaA, lumaB, floorL, lumaParked, clearAdd);
+            check(clearAdd > 0.05,
+                  "the legacy lit billboards contribute measurably at all "
+                  "(the signal every claim below is a fraction of)");
+            check(std::abs(lumaParked - lumaB) <= std::max(3.0 * floorL, 0.35 * clearAdd),
+                  "a ParticleField with NO bound volume leaves the legacy lit "
+                  "billboards where they were — the zero-density path is the "
+                  "pre-fix arithmetic, textually");
+
+            // Now bind it. The puffs sit BEHIND the volume, so their leg to the
+            // camera crosses it and their transmittance must fall.
+            haze->setLiveCount(kHaze);
+            warm(90);
+            const double lumaHazed = lumaOf(renderer.readRGBPixels());
+            puffs->visible = false;
+            warm(30);
+            const double hazedNoPuffs = lumaOf(renderer.readRGBPixels());
+            puffs->visible = true;
+            warm(20);
+
+            const double hazedAdd = lumaHazed - hazedNoPuffs;
+            std::printf("[info] lit-particle fog: background without puffs, clear "
+                        "%.4f vs behind the medium %.4f; puff contribution clear "
+                        "%.3f, behind the medium %.3f (ratio %.3f)\n",
+                        clearNoPuffs, hazedNoPuffs, clearAdd, hazedAdd,
+                        clearAdd != 0.0 ? hazedAdd / clearAdd : -1.0);
+            // THE CONTROL FIRST. Without it the ratio below proves nothing: it
+            // is what says the background did not move, so the only thing left
+            // that can have moved is the billboards' own transmittance.
+            check(std::abs(hazedNoPuffs - clearNoPuffs) < 0.25 * clearAdd,
+                  "the absorbing medium leaves the BACKGROUND where it was — "
+                  "without this control an alpha-blended billboard's apparent "
+                  "'contribution' shrinks whenever the background brightens, and "
+                  "the test passes on an unfixed build");
+            check(hazedAdd < clearAdd * 0.7,
+                  "a ParticleField density volume ATTENUATES the legacy lit "
+                  "billboards behind it (the chimney-through-the-snowfall defect)");
+
+            scene.remove(*haze);
+            scene.remove(*puffs);
+            camera->position.copy(camWas4);
+            camera->lookAt(Vector3(0.f, 0.8f, 0.f));
+            light->intensity = sunWas4;
+            box->visible     = true;
+            ground->visible  = true;
+            renderer.setClearColor(clearWas4);
+            for (int i = 0; i < 6; ++i) frame();
+        }
+
+        // ── DEFECT 3: FireEffect takes the WORLD's wind ─────────────────────
+        // CPU-only assertions: these are contracts about what setWind() has to
+        // reach, and every one of them was a thing that silently did not agree
+        // with the rest of the scene before.
+        {
+            FireEffect::Params dfl;
+            check(std::abs(dfl.wind.x - 0.22f) < 1e-6f &&
+                          std::abs(dfl.wind.z - 0.09f) < 1e-6f,
+                  "FireEffect's default wind is the value F1 shipped (a caller "
+                  "that says nothing gets the campfire vulkan_fire always drew)");
+            check(dfl.smokeLifeScale == 1.f && dfl.smokeTaper == 0.f,
+                  "the plume extension is opt-in: the defaults are the pre-fix "
+                  "column exactly");
+
+            FireEffect::Params fp;
+            fp.flameParticles = 256;
+            fp.smokeParticles = 256;
+            fp.embers         = true;
+            auto fire = FireEffect::create(fp);
+            const float halfWas   = fire->smokeField()->densityRepr().halfExtent.x;
+            const float emberVxW  = fire->emberField()->emitter().velocity.x;
+
+            fire->setWind(Vector3(3.f, 0.f, 0.f));
+            check(std::abs(fire->wind().x - 3.f) < 1e-6f, "setWind() stores the wind");
+            check(fire->smokeField()->densityRepr().halfExtent.x > halfWas + 1.f,
+                  "the smoke's density box GROWS downwind with the wind — a box "
+                  "that does not contain the plume clips its tail out of the "
+                  "volume, which draws smoke ending on an invisible plane");
+            check(std::abs(fire->emberField()->emitter().velocity.x - 3.f) < 1e-6f &&
+                          emberVxW != fire->emberField()->emitter().velocity.x,
+                  "setWind() reaches the EMBERS too — sparks and smoke leaning "
+                  "different ways inside one fire is the disagreement this fixes");
+        }
     }
 
     // ── PHASE 2, checkpoint (d): a dust-free scene costs no pixels ──────────

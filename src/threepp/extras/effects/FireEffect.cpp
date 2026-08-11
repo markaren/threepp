@@ -76,6 +76,88 @@ float FireEffect::flickerAt(float timeSec) const {
     return 1.f + p_.flicker * f;
 }
 
+// ── The smoke volume's box: it must CONTAIN the plume ───────────────────────
+// A DensityRepr box is not a framing device, it is the domain of the volume:
+// particle_density_scatter.comp DROPS a particle outside it. So a plume that
+// travels further downwind than the box reaches is not clipped softly, it stops
+// — a column of smoke ending on an invisible vertical plane in mid-air. That is
+// the geometry behind the "locked in place" report, and it is why this is
+// derived from the wind rather than authored.
+//
+// The far end of the plume sits at wind × periodMax (the longest-lived parcel's
+// full advection). An AABB therefore spans the segment from the fire to that
+// point, inflated by the column's own widened radius at both ends: centre it at
+// half the displacement and give it half the displacement plus the radius as a
+// half-extent, per axis. Axis-aligned means a diagonal wind pays for the
+// bounding rectangle of a diagonal plume, which is a handful of empty voxels
+// and not worth a rotated volume.
+//
+// FIXED PER WIND VALUE, not fitted per frame to the particles: a box that
+// tracked the actual bounds every frame would re-anchor the voxel lattice
+// continuously and the medium would swim inside its own grid. It changes only
+// when the wind does, which is a rare, deliberate event.
+void FireEffect::recomputeSmokeBox() {
+
+    // The longest period any parcel draws (emitSmoke's 3.2 + 2.4·u3, scaled).
+    const float periodMax = (3.2f + 2.4f) * std::max(p_.smokeLifeScale, 0.f);
+    const float smokeTop  = p_.height * 0.80f + p_.smokeHeight;
+    const float smokeBot  = p_.height * 0.55f;
+    const float smokeR    = p_.radius + p_.smokeSpread + 0.15f;
+    const float driftX    = p_.wind.x * periodMax;
+    const float driftZ    = p_.wind.z * periodMax;
+    smokeBoxLocal_ = Vector3(driftX * 0.5f, 0.5f * (smokeBot + smokeTop), driftZ * 0.5f);
+    smokeHalf_     = Vector3(smokeR + std::fabs(driftX) * 0.5f,
+                             0.5f * (smokeTop - smokeBot),
+                             smokeR + std::fabs(driftZ) * 0.5f);
+}
+
+// The ember emitter's parameters. Extracted so the constructor and setWind()
+// build the SAME block — sparks and smoke leaning different ways inside one
+// fire is the exact class of disagreement this whole change is about.
+ParticleField::EmitterParams FireEffect::emberEmitter() const {
+
+    ParticleField::EmitterParams e;
+    // Born in a thin disc-ish slab over the fuel bed, not through the whole
+    // flame volume: sparks are thrown off the burning surface.
+    e.spawnCenter.set(0.f, p_.height * 0.16f, 0.f);
+    e.spawnHalfExtent.set(p_.radius * 0.55f, p_.height * 0.06f, p_.radius * 0.55f);
+    // Buoyant: a spark leaves fast, keeps accelerating in the thermal
+    // column, and the wind pushes it the same way the smoke leans.
+    e.velocity.set(p_.wind.x, p_.emberRise, p_.wind.z);
+    e.speedSpread = p_.emberSpread;
+    e.accel.set(0.f, 0.45f, 0.f);
+    // driftGrowth 1: the base of the column is steady and the tips wander,
+    // which is what turns a cone of sparks into a plume of them.
+    e.driftAmplitude = 0.13f;
+    e.driftFrequency = 0.55f;
+    e.driftGrowth    = 1.f;
+    e.driftScale     = 0.7f;
+    e.lifetime = std::max(p_.emberLife, 0.05f);
+    // Wide, because sparks that all die at the same height give the plume a
+    // flat top. With 0.65 the ceiling is spread over 3:1 and the column
+    // thins out with height the way the flame's own per-parcel ceiling does.
+    e.lifetimeJitter = 0.65f;
+    // Duty < 1: a fraction of the slots are dead at any instant, so the
+    // spark count BREATHES instead of sitting at a constant N. This is what
+    // exercises the w < 0 sentinel in the scene the plan cares about.
+    e.dutyCycle  = 0.80f;
+    e.size       = std::max(p_.emberSize, 1e-4f);
+    e.sizeJitter = std::max(0.f, std::min(1.f, p_.emberSizeJitter));
+    e.seed       = p_.seed ^ 0x5bf03635u;
+    return e;
+}
+
+void FireEffect::setWind(const Vector3& worldWind) {
+
+    p_.wind.copy(worldWind);
+    recomputeSmokeBox();
+    // The BOX moves; the volume's centre is re-published from it in update(),
+    // which is where the effect's world position is also read. Nothing here
+    // touches the volume's resolution, which stays latched (churn contract).
+    smoke_->densityRepr().halfExtent.copy(smokeHalf_);
+    if (embers_) embers_->setEmitter(emberEmitter());
+}
+
 FireEffect::FireEffect(const Params& params): p_(params) {
 
     // ── The boxes ───────────────────────────────────────────────────────────
@@ -90,14 +172,7 @@ FireEffect::FireEffect(const Params& params): p_(params) {
     flameBoxLocal_ = Vector3(0.f, p_.height * 0.5f, 0.f);
     flameHalf_     = Vector3(flameR, p_.height * 0.5f + 0.04f, flameR);
 
-    const float smokeTop = p_.height * 0.80f + p_.smokeHeight;
-    const float smokeBot = p_.height * 0.55f;
-    const float smokeR   = p_.radius + p_.smokeSpread + 0.15f;
-    const float driftX   = std::fabs(p_.wind.x) * p_.smokeHeight * 0.55f;
-    const float driftZ   = std::fabs(p_.wind.z) * p_.smokeHeight * 0.55f;
-    smokeBoxLocal_ = Vector3(driftX * 0.5f, 0.5f * (smokeBot + smokeTop), driftZ * 0.5f);
-    smokeHalf_     = Vector3(smokeR + driftX * 0.5f, 0.5f * (smokeTop - smokeBot),
-                             smokeR + driftZ * 0.5f);
+    recomputeSmokeBox();
 
     // ── The fields. Created ONCE, at final capacity, PARKED ─────────────────
     {
@@ -179,35 +254,7 @@ FireEffect::FireEffect(const Params& params): p_(params) {
         embers_ = ParticleField::create(cfg);
         embers_->name = "fire.embers";
 
-        ParticleField::EmitterParams e;
-        // Born in a thin disc-ish slab over the fuel bed, not through the whole
-        // flame volume: sparks are thrown off the burning surface.
-        e.spawnCenter.set(0.f, p_.height * 0.16f, 0.f);
-        e.spawnHalfExtent.set(p_.radius * 0.55f, p_.height * 0.06f, p_.radius * 0.55f);
-        // Buoyant: a spark leaves fast, keeps accelerating in the thermal
-        // column, and the wind pushes it the same way the smoke leans.
-        e.velocity.set(p_.wind.x, p_.emberRise, p_.wind.z);
-        e.speedSpread = p_.emberSpread;
-        e.accel.set(0.f, 0.45f, 0.f);
-        // driftGrowth 1: the base of the column is steady and the tips wander,
-        // which is what turns a cone of sparks into a plume of them.
-        e.driftAmplitude = 0.13f;
-        e.driftFrequency = 0.55f;
-        e.driftGrowth    = 1.f;
-        e.driftScale     = 0.7f;
-        e.lifetime = std::max(p_.emberLife, 0.05f);
-        // Wide, because sparks that all die at the same height give the plume a
-        // flat top. With 0.65 the ceiling is spread over 3:1 and the column
-        // thins out with height the way the flame's own per-parcel ceiling does.
-        e.lifetimeJitter = 0.65f;
-        // Duty < 1: a fraction of the slots are dead at any instant, so the
-        // spark count BREATHES instead of sitting at a constant N. This is what
-        // exercises the w < 0 sentinel in the scene the plan cares about.
-        e.dutyCycle  = 0.80f;
-        e.size       = std::max(p_.emberSize, 1e-4f);
-        e.sizeJitter = std::max(0.f, std::min(1.f, p_.emberSizeJitter));
-        e.seed       = p_.seed ^ 0x5bf03635u;
-        embers_->setEmitter(e);
+        embers_->setEmitter(emberEmitter());
         embers_->setEmitterTime(0.f, 0.f);
 
         embers_->setBillboardRepr(blackbodyColor(p_.emberHotK),
@@ -373,9 +420,31 @@ void FireEffect::emitFlame(float t) {
 // plume cools and slows), a column that widens instead of pinching, and the
 // full wind drift, which is what makes the smoke lean away while the flame
 // stays put.
+//
+// ── THE PLUME STREAMS (defect fix, 2026-08-11) ──────────────────────────────
+// A parcel is followed for `period × smokeLifeScale` seconds and is advected
+// the whole time, so the plume's downwind reach is |wind| × period × scale.
+// At scale 1 every expression below is the pre-fix one, multiplied by 1.0f —
+// bit-identical, deliberately, so a scene that says nothing gets the campfire
+// it had. At the fjord's scale of ~4 with a 0.63 m/s wind the same parcels
+// stream 8-14 m downwind, spreading and thinning as they go.
+//
+// THE DISPERSAL COMES FREE, and it is worth being explicit about why no knob
+// was added for it: the density volume conserves total optical mass (the
+// trilinear splat is a partition of unity), so spreading the SAME N parcels
+// over a longer, wider plume divides the same σ over more voxels. The medium
+// thins out downwind by construction, with no per-particle opacity — which the
+// density representation could not express anyway.
+//
+// THE TAPER is the other half. Without it every parcel dies at the same age and
+// the plume ends on a plane; `smokeTaper` gives each parcel its own ceiling,
+// skewed so only a few reach the end. This is exactly F1 note 2's fix for the
+// flame's flat red cap, applied to the downwind end of the other field.
 void FireEffect::emitSmoke(float t) {
     const std::uint32_t n = smoke_->capacity();
     const float baseY = p_.height * 0.55f;
+    const float lifeScale = std::max(p_.smokeLifeScale, 0.f);
+    const float taper     = std::max(0.f, std::min(1.f, p_.smokeTaper));
     for (std::uint32_t i = 0; i < n; ++i) {
         const float u0 = rnd01(p_.seed, i, 16u);
         const float u1 = rnd01(p_.seed, i, 17u);
@@ -384,25 +453,68 @@ void FireEffect::emitSmoke(float t) {
         const float u4 = rnd01(p_.seed, i, 20u);
         const float u5 = rnd01(p_.seed, i, 21u);
 
-        const float period = 3.2f + 2.4f * u3;
+        const float period = (3.2f + 2.4f * u3) * lifeScale;
         const float cyc    = frac01(t / period + u0);
-        const float s      = cyc;// smoke has no duty gap: the column is continuous
+        // Per-parcel ceiling. taper == 0 leaves ceil at exactly 1.0 and cyc is
+        // strictly below 1 by frac01's contract, so the branch is never taken
+        // and no slot is lost — the pre-fix "no duty gap, the column is
+        // continuous" behaviour, textually.
+        if (taper > 0.f) {
+            const float u6 = rnd01(p_.seed, i, 22u);
+            // u6^1.5 skews the draw LOW, so most parcels give out early and a
+            // few carry on: the plume's end frays rather than stopping.
+            const float ceil = 1.f - taper * (1.f - std::pow(u6, 1.5f));
+            if (cyc >= ceil) {
+                smokeHost_[i] = {0.f, 0.f, 0.f, -1.f};
+                continue;
+            }
+        }
+        const float s = cyc;
 
-        const float rise = std::pow(s, 0.82f);
+        // ── THREE CLOCKS, NOT ONE — and this is what makes it a plume ───────
+        // The pre-fix form drove the rise, the widening AND the wind drift off
+        // the same `rise = s^0.82`, which has a consequence that is obvious in
+        // hindsight and was invisible at 0.22 m/s: if x and y are both
+        // proportional to rise then x/y is CONSTANT and the plume is a perfectly
+        // straight ray leaving the fire at a fixed angle. At the fjord's wind it
+        // rendered as a collimated white jet — a hard-edged cone, not smoke.
+        //
+        //   rise  = s^0.62  — buoyancy, DECELERATING: the parcel cools, loses
+        //                     its lift and levels off. The exponent came DOWN
+        //                     from 0.82 for the same reason: at 0.82 the climb
+        //                     is nearly linear, so even with a linear advection
+        //                     the plume left the fire at 22 degrees and arrived
+        //                     at 17 — a bend nobody can see. A bent-over plume's
+        //                     height goes as a low power of time (Briggs puts it
+        //                     near 1/3); 0.62 is inside that family and is what
+        //                     makes the column go UP first and lie over after.
+        //   age   = s·period — advection, LINEAR: the wind does not care how
+        //                     old the parcel is, it pushes it at wind speed the
+        //                     whole time.
+        //   disp  = s^0.55  — turbulent dispersion, ~sqrt(t): a plume keeps
+        //                     spreading long after it has stopped climbing.
+        //                     Tying the width to the rise made it stop widening
+        //                     the moment it levelled — the other half of "jet".
+        //
+        // With the three separated the column climbs steeply, bends over as the
+        // buoyancy gives out, and runs downwind widening and thinning — which is
+        // what a chimney plume in wind does, and what the one 30 m away in this
+        // same scene has always done.
+        const float age  = s * period;
+        const float rise = std::pow(s, 0.62f);
+        const float disp = std::pow(s, 0.55f);
         const float y    = baseY + p_.smokeHeight * rise;
-        // Widens with height AND fades out at the very top, where the plume has
-        // spread thin enough to disappear into the air.
-        const float r0 = (p_.radius * 0.55f + p_.smokeSpread * rise) * std::sqrt(u1);
+        const float r0 = (p_.radius * 0.55f + p_.smokeSpread * disp) * std::sqrt(u1);
         const float th = u2 * kTau + 0.9f * rise;
 
         const float ph1 = u4 * kTau, ph2 = u5 * kTau;
-        const float wob = 0.16f * p_.smokeSpread * rise;
+        const float wob = 0.16f * p_.smokeSpread * disp;
         const float sx  = std::sin(0.77f * t + ph1 + 2.1f * rise);
         const float sz  = std::cos(0.61f * t + ph2 + 1.7f * rise);
 
-        smokeHost_[i] = {r0 * std::cos(th) + wob * sx + p_.wind.x * period * rise,
+        smokeHost_[i] = {r0 * std::cos(th) + wob * sx + p_.wind.x * age,
                          y,
-                         r0 * std::sin(th) + wob * sz + p_.wind.z * period * rise,
+                         r0 * std::sin(th) + wob * sz + p_.wind.z * age,
                          1.f};
     }
     smoke_->submit(smokeHost_.data(), n);

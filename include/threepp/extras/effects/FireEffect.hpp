@@ -129,7 +129,46 @@ namespace threepp {
             // ── Smoke column ────────────────────────────────────────────────
             float smokeHeight = 2.20f;// above the flame tips
             float smokeSpread = 0.60f;// how far the column widens by the top
-            Vector3 wind{0.22f, 0.f, 0.09f};// horizontal drift, m/s
+
+            // ── THE WORLD'S WIND, not the fire's ────────────────────────────
+            // Horizontal air velocity in m/s, WORLD space. Every scene that has
+            // wind has exactly one, and this is where a fire is told about it:
+            // it leans the flame, advects the smoke plume, carries the embers,
+            // and (through smokeLifeScale below) sets how far downwind the
+            // plume reaches before it disperses.
+            //
+            // The defect this exists to fix: the fjord's campfire smoke read as
+            // "locked in place", rising inside a small authored box and
+            // stopping at an invisible edge, while the chimney plume and the
+            // trees in the same frame streamed with the scene's wind. The
+            // effect had a `wind` already — but it was a private authored
+            // constant that no caller ever set from the world's own wind, so
+            // there was nothing making the two agree. Pass the SAME vector the
+            // rest of the scene uses; setWind() exists so it can change.
+            //
+            // Default is the value F1 shipped, so a caller that says nothing
+            // gets exactly the campfire vulkan_fire has always drawn.
+            Vector3 wind{0.22f, 0.f, 0.09f};
+
+            // How long a smoke parcel is followed, as a MULTIPLE of the
+            // effect's own 3.2-5.6 s per-parcel period. 1 is the pre-fix column
+            // and is bit-identical to it; the plume's downwind reach is
+            // |wind| × period × this, so a 0.63 m/s wind at 4 gives roughly
+            // 8-14 m of streaming plume instead of 2-3.
+            //
+            // This is the knob a SCENE sets, not a physical constant: how far a
+            // plume stays coherent before it is mixed away is a property of the
+            // air, and a demo that wants to see its smoke travel says so.
+            float smokeLifeScale = 1.f;
+            // Fraction of the life the shortest-lived parcels give up, so the
+            // plume's downwind END THINS OUT instead of stopping on a plane.
+            // 0 = every parcel runs the full period (the pre-fix behaviour,
+            // exactly). This is F1 note 2's per-parcel ceiling — the thing that
+            // removed the flame's flat red cap — applied to the other end of
+            // the other field: without it a long plume terminates at a sharp
+            // edge in mid-air, which is precisely what "locked in place" looked
+            // like.
+            float smokeTaper = 0.f;
 
             // ── The light the fire casts ────────────────────────────────────
             // This is what makes fire light the WORLD. Intensity is modulated
@@ -247,6 +286,22 @@ namespace threepp {
         // hitch or a seek from launching every spark at once.)
         void update(float timeSec);
 
+        // ── Re-aim the fire at the world's wind ─────────────────────────────
+        // Free to call every frame: it writes a vector, recomputes the smoke
+        // volume's world box (three multiplies) and republishes the ember
+        // emitter's O(1) parameter block. Nothing structural — no field is
+        // created, resized or removed, so the churn contract is untouched.
+        //
+        // The smoke's DENSITY BOX is recomputed here rather than left authored,
+        // and that is the point: the box has to CONTAIN the plume, and where
+        // the plume goes is a function of the wind. A box that does not contain
+        // it clips the downwind tail out of the volume — the splat drops
+        // anything outside — which draws a plume that ends at an invisible
+        // plane in mid-air. (The pre-fix box did exactly that, mildly, even at
+        // the default wind.)
+        void setWind(const Vector3& worldWind);
+        [[nodiscard]] const Vector3& wind() const { return p_.wind; }
+
         // Un-park both fields and turn the light on. Cheap: no allocation, no
         // device idle, no TAA history clear — the fields already exist.
         void ignite();
@@ -314,6 +369,14 @@ namespace threepp {
 
         void emitFlame(float t);
         void emitSmoke(float t);
+        // The smoke volume's local box, derived from the wind and the plume
+        // length. Called from the constructor and from setWind().
+        void recomputeSmokeBox();
+        // The ember field's emitter parameters, rebuilt from p_. Called from
+        // the constructor and from setWind() — sparks ride the same air the
+        // smoke does, so a wind change has to reach both or the two disagree
+        // in one frame.
+        [[nodiscard]] ParticleField::EmitterParams emberEmitter() const;
     };
 
 }// namespace threepp

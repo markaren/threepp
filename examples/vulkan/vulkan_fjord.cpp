@@ -812,6 +812,12 @@ int main(int argc, char** argv) {
     std::string seqDir;
     int   seqFrames = 6, seqWarm = 160;
     float seqOrbit  = 10.f;// degrees per second about the look target
+    // --dolly M: metres per second STRAIGHT AHEAD along the ground, eye and
+    // target together, instead of orbiting. An orbit can never leave the middle
+    // of a weather patch, so it cannot see whether the weather follows; a walk
+    // can, and does it in the one way a user does — by going somewhere. Non-zero
+    // takes precedence over --orbit.
+    float seqDolly  = 0.f;
     bool  seqFreeze = false;
     // Day/night. The fjord already HAS a time of day (--time H, and the D key
     // now jumps between these two), so rather than bolting vulkan_fire's second
@@ -836,6 +842,7 @@ int main(int argc, char** argv) {
         else if (std::strcmp(argv[i], "--seqframes") == 0 && i + 1 < argc) seqFrames = std::atoi(argv[++i]);
         else if (std::strcmp(argv[i], "--warm") == 0 && i + 1 < argc) seqWarm = std::atoi(argv[++i]);
         else if (std::strcmp(argv[i], "--orbit") == 0 && i + 1 < argc) seqOrbit = static_cast<float>(std::atof(argv[++i]));
+        else if (std::strcmp(argv[i], "--dolly") == 0 && i + 1 < argc) seqDolly = static_cast<float>(std::atof(argv[++i]));
         else if (std::strcmp(argv[i], "--freeze") == 0) seqFreeze = true;
         else if (std::strcmp(argv[i], "--nofire") == 0) noFire = true;
         else if (std::strcmp(argv[i], "--nosnow") == 0) noSnow = true;
@@ -1018,6 +1025,38 @@ int main(int argc, char** argv) {
                   << std::chrono::duration<float>(t1 - t0).count() << " s" << std::endl;
     }
 
+    // ── ONE WIND, ONE WORLD ─────────────────────────────────────────────────
+    // Every moving air-driven thing in this scene reads the TWO numbers below,
+    // and that is a defect fix, not tidiness. Before this the fjord had two
+    // winds that had never been introduced: the ocean spectrum and the cloud
+    // deck drifted on heading 2.1 rad, while the meadow, the chimney plume, the
+    // campfire smoke and the snowfall each carried a privately authored vector
+    // around heading 0.5 rad — 90 degrees apart. The waves came from one
+    // quarter and the smoke leaned toward another, which is exactly the kind of
+    // disagreement that makes a picture read as a set of separate effects
+    // sharing a frame instead of one place. The user's verdict on the F4 scene
+    // was "all fake"; this is the root the three reported defects share.
+    //
+    // WHY THE ATMOSPHERE MOVED TO THE OCEAN'S HEADING and not the reverse: a
+    // fjord's swell is the most legible wind indicator in the frame (it covers
+    // a third of it and its direction is readable at any distance), and the
+    // whole cascade is calibrated against that heading. Rotating the plumes
+    // costs nothing but the direction they lean.
+    constexpr float kWindHeading = 2.1f;// radians in XZ — the ONE heading
+    const Vector3   windDir(std::cos(kWindHeading), 0.f, std::sin(kWindHeading));
+    // Surface wind is a FRACTION of the free stream the waves and the cloud
+    // deck see: a metre off the ground, inside a valley, behind a treeline, the
+    // air is doing a fraction of what it does at 400 m. 0.14 is not a
+    // measurement, it is the number that reproduces the plume speeds this scene
+    // was already authored with (0.63 m/s at the default 4.5 m/s wind) so the
+    // ONLY thing this unification changes is the DIRECTION they agree on.
+    constexpr float kGroundWindFactor = 0.14f;
+    const auto groundWindAt = [&](float speed) {
+        Vector3 w(windDir);
+        return w.multiplyScalar(speed * kGroundWindFactor);
+    };
+    const Vector3 groundWind0 = groundWindAt(startWind);
+
     // ── water ───────────────────────────────────────────────────────────────
     // A STATIC rectangle over the channel, not a camera-following 3200² sheet:
     // the S-curve centreline wanders ±~230 m and the waterline reaches ~166 m
@@ -1032,8 +1071,8 @@ int main(int argc, char** argv) {
     oo.sizeZ = 3200.f;
     oo.resolution = waterResX > 0 ? static_cast<uint32_t>(waterResX) : 192;
     oo.resolutionZ = waterResZ > 0 ? static_cast<uint32_t>(waterResZ) : 512;
-    oo.windSpeed = 4.5f;
-    oo.windTheta = 2.1f;
+    oo.windSpeed = startWind;// --wind, and the SAME number the plumes scale from
+    oo.windTheta = kWindHeading;
     oo.choppiness = 0.5f;
     oo.tileSize1 = 90.f;
     oo.tileSize2 = tile2Override >= 0.f ? tile2Override : 7.f;
@@ -1300,7 +1339,8 @@ int main(int argc, char** argv) {
         grassMat->envMapIntensity = 0.35f;
 
         GrassMesh::Params mp;
-        mp.windDir = Vector2(0.8f, 0.6f);
+        // The meadow leans the way the waves run and the smoke goes (one wind).
+        mp.windDir = Vector2(windDir.x, windDir.z);
         mp.windStrength = 0.16f;
         // Freeze the wind + BLAS refit on tiles whose nearest edge is farther
         // than this from the camera; ~4 tile widths keeps every visibly-swaying
@@ -1518,9 +1558,15 @@ int main(int argc, char** argv) {
         s.positionBase = tip;
         s.positionSpread = {0.15f, 0.05f, 0.15f};
         s.velocityStyle = ParticleSystem::Type::BOX;
-        s.velocityBase = {0.55f, 1.15f, 0.30f};
+        // ONE WIND: the plume's horizontal velocity IS the scene's surface wind.
+        // Latched here, at initialize() time, rather than driven by the slider —
+        // this is the legacy ParticleSystem path, whose spawn parameters are
+        // read when a particle is born and whose live puffs cannot be re-aimed.
+        // A wind change therefore reaches the chimney over one plume lifetime,
+        // which is also what a real plume does.
+        s.velocityBase = {groundWind0.x, 1.15f, groundWind0.z};
         s.velocitySpread = {0.35f, 0.35f, 0.35f};
-        s.accelerationBase = {0.10f, 0.10f, 0.05f};
+        s.accelerationBase = {groundWind0.x * 0.16f, 0.10f, groundWind0.z * 0.16f};
         s.particlesPerSecond = 24;
         s.particleDeathAge = 6.5f;
         s.emitterDeathAge = 1e9f;
@@ -1564,9 +1610,31 @@ int main(int argc, char** argv) {
         fp.emissiveIntensity = 40.f;
         fp.lightIntensity = 46.f;
         fp.lightRange = 22.f;
-        // The wind that leans the smoke column is the same direction the
-        // chimney's plume takes, so the two agree about which way the air moves.
-        fp.wind.set(0.55f, 0.f, 0.30f);
+        // ── ONE WIND ────────────────────────────────────────────────────────
+        // Not "a direction that happens to agree with the chimney's", which is
+        // what the F4 build had and what let the two drift apart the moment
+        // either was touched: the SAME vector object, from the scene's one
+        // wind. The slider drives it live through setWind() below.
+        fp.wind.copy(groundWind0);
+        // The plume STREAMS. A parcel is followed four times as long, so at
+        // this wind it travels ~9-15 m downwind, dispersing as it goes, instead
+        // of rising 3 m and stopping — the "locked in place" report. The taper
+        // frays the far end so it does not terminate on a plane, and the box
+        // that has to contain all of it is derived from the wind rather than
+        // authored (see FireEffect::recomputeSmokeBox).
+        fp.smokeLifeScale = 4.0f;
+        fp.smokeTaper     = 0.55f;
+        // A plume that travels 12 m has spread far wider than one that rose 3,
+        // and the volume conserves optical mass — so the same particles over a
+        // bigger box need more sigma each to stay a visible medium (F1 note 1's
+        // trap, arriving from the same direction a third time).
+        fp.smokeSpread     = 2.30f;
+        fp.smokeSigma      = 0.17f;
+        fp.smokeParticles  = 18'000;
+        // The box is now ~20 m long; 32³ over that is 0.6 m voxels, which is
+        // coarse enough to see. 48³ keeps it near the 0.4 m the vulkan_fire
+        // campfire has.
+        fp.smokeResolution = 48;
         fp.emberParticles = 260;
         fp.emberRise = 1.9f;
         fp.emberLife = 2.8f;
@@ -1597,6 +1665,10 @@ int main(int argc, char** argv) {
         fp.radius = 0.40f;
         fp.lightIntensity = 60.f;
         fp.lightRange = 26.f;
+        // Same wind (one world). Its density volumes are off, so the plume
+        // params below only reach its EMBERS — which is the whole reason it can
+        // exist at all under kMaxDensityFields.
+        fp.wind.copy(groundWind0);
         fp.emberParticles = 300;
         fp.emberRise = 2.2f;
         fp.emberLife = 3.2f;
@@ -1621,16 +1693,39 @@ int main(int argc, char** argv) {
     // device and particle_emit.comp rewrites them from a closed form every
     // frame, so 400k flakes cost the host two floats per frame and nothing else.
     //
-    // WORLD-ANCHORED PATCH, not a camera-following volume, and that is a
-    // deliberate limit rather than an oversight: the emitter's trajectories are
-    // FIELD-LOCAL, so re-anchoring the field to the camera would slide every
-    // flake with it. A patch centred on the shore covers the framing this demo
-    // exists for; making weather follow an arbitrary camera needs the closed
-    // form expressed in world space, which is where F5's surface interaction
-    // will have to take it anyway.
+    // IT FOLLOWS THE CAMERA (defect fix, 2026-08-11). F4 shipped this as a
+    // world-anchored 34 m patch and argued the limit was structural — the
+    // emitter's trajectories are field-local, so re-anchoring the field would
+    // slide every flake with the eye. The user's verdict was the answer to
+    // that: "a fixed grid that does nothing for the overall scene". The limit
+    // was not structural, it was in the wrong place. EmitterParams::follow
+    // wraps the trajectory's RESULT toroidally into a box around a moving
+    // centre, so the flakes keep flying their world-space paths — real
+    // parallax, honest motion vectors — while the SET of flakes tiles the plane
+    // around whoever is looking. See the wrap's own comment in
+    // particle_emit.comp for why the period must be the spawn slab and why the
+    // seam is invisible.
     std::shared_ptr<ParticleField> snowfall;
+    // The height at which the follow box's density volume is centred — hoisted
+    // out so the per-frame re-centre below cannot drift from the authored value.
+    float snowDensityY = 0.f;
     {
         constexpr float kHalf = 34.f, kTop = 26.f;
+        // The density volume covers the patch plus a 2 m margin, at 96³.
+        constexpr float kDensHalf  = kHalf + 2.f;
+        constexpr float kDensVoxel = 2.f * kDensHalf / 96.f;// 0.75 m
+        // ── THE SNAP GRID IS SIX DENSITY VOXELS, and that is the whole reason
+        // it is not just "4 m" ──────────────────────────────────────────────
+        // The volume follows the same centre as the wrap box, and a density
+        // volume is a LATTICE: shift it by a non-integer number of voxels and
+        // every splat lands in a different sub-voxel position, so the haze
+        // re-quantises against its own grid on every snap and visibly swims.
+        // An integer voxel count makes the snapped volume a translate of
+        // itself. 4.5 m is also coarse enough that a walking camera re-anchors
+        // a couple of times a second rather than every frame, and between
+        // snaps the field is EXACTLY world anchored — which is what keeps a
+        // slow pan honest instead of showing a volume glued to the eye.
+        constexpr float kSnap = 6.f * kDensVoxel;// 4.5 m
         ParticleField::Config cfg;
         cfg.capacity      = std::max(snowCount, 1u);
         cfg.ownership     = ParticleField::Ownership::Renderer;
@@ -1638,19 +1733,29 @@ int main(int argc, char** argv) {
         cfg.uniformRadius = 0.014f;
         snowfall = ParticleField::create(cfg);
         snowfall->name = "snowfall";
-        const float sx = xWater - 4.f, sz = kPadZ + 14.f;
-        snowfall->position.set(sx, 0.f, sz);
+        // The field's own xz placement is now IRRELEVANT — the wrap re-centres
+        // the whole set on the follow centre every frame, and the host cancels
+        // the field's world translation on the way in. Left at the origin so
+        // nothing suggests otherwise. Y still matters (the fall is not wrapped).
+        snowfall->position.set(0.f, 0.f, 0.f);
 
         ParticleField::EmitterParams e;
         // An EMISSION SLAB at the top, not a box the size of the volume: the
         // steady-state cloud is that slab swept along the trajectory, so a
         // full-height box would give a triangular density ramp instead of even
-        // snowfall (F2 amendment note 7).
-        e.spawnCenter.set(-6.f, kTop, -3.f);
+        // snowfall (F2 amendment note 7). CENTRED ON THE FIELD now that it
+        // follows: the slab's lateral extent IS the wrap period, and an offset
+        // slab would put the camera off-centre in its own weather.
+        e.spawnCenter.set(0.f, kTop, 0.f);
         e.spawnHalfExtent.set(kHalf, 0.35f, kHalf);
         e.velocity.set(0.f, -1.15f, 0.f);// terminal velocity, so no acceleration
         e.speedSpread = 0.12f;
-        e.wind.set(0.48f, 0.f, 0.24f);
+        // ONE WIND: the same surface wind that leans both fires' smoke, the
+        // chimney's plume and the meadow. A snowfall drifting across the
+        // chimney's smoke was the tell that these were separate effects.
+        e.wind.copy(groundWind0);
+        e.follow     = true;
+        e.followSnap = kSnap;
         e.driftAmplitude = 0.42f;
         e.driftFrequency = 0.14f;
         e.driftScale     = 13.f;
@@ -1690,15 +1795,20 @@ int main(int argc, char** argv) {
         br.fadePower    = 0.f;
         br.sizeTaper    = 0.f;
         br.brightJitter = 0.40f;
-        // The same field also feeds a world-anchored density volume, so the
-        // snowfall hazes what is behind it — one emit dispatch serving the mesh
-        // proxy, the quads and the volume, for every view.
-        snowfall->setDensityRepr(Vector3(sx, kTop * 0.45f, sz),
-                                 Vector3(kHalf + 2.f, kTop * 0.55f, kHalf + 2.f),
+        // The same field also feeds a density volume, so the snowfall HAZES
+        // what is behind it — one emit dispatch serving the mesh proxy, the
+        // quads and the volume, for every view. It follows the same snapped
+        // centre as the wrap box (re-set every frame below): DensityRepr's
+        // centre is documented live-editable, so a moving volume is free, and a
+        // volume that did NOT follow would leave the near flakes hazing and the
+        // camera walking out of its own haze.
+        snowfall->setDensityRepr(Vector3(0.f, kTop * 0.45f, 0.f),
+                                 Vector3(kDensHalf, kTop * 0.55f, kDensHalf),
                                  /*sigmaPerParticle*/ 0.030f, /*resolution*/ 96);
         auto& dr = snowfall->densityRepr();
         dr.albedo     = Color(0.90f, 0.93f, 0.98f);
         dr.anisotropy = 0.35f;
+        snowDensityY  = kTop * 0.45f;
         scene.add(snowfall);
         if (noSnow) snowfall->setLiveCount(0);
     }
@@ -1831,8 +1941,9 @@ int main(int argc, char** argv) {
     if (hasCamPos) camera.position.set(camPos[0], camPos[1], camPos[2]);
     if (hasCamLook) controls.target.set(camLook[0], camLook[1], camLook[2]);
     if (hasCamPos || hasCamLook) controls.update();
-    // The seq orbit's anchor: the pose the presets / overrides left behind.
-    const Vector3 seqEye0 = camera.position;
+    // The seq orbit / dolly anchor: the pose the presets / overrides left behind.
+    const Vector3 seqEye0    = camera.position;
+    const Vector3 seqTarget0 = controls.target;
     if (!seqDir.empty()) std::filesystem::create_directories(seqDir);
 
     // ── state + UI ──────────────────────────────────────────────────────────
@@ -1852,6 +1963,10 @@ int main(int argc, char** argv) {
     bool  appliedCloudsOn    = false;
     float appliedCloudCover  = -1.f;
     float appliedWindSpeed   = -1.f;
+    // The wind the fires/snowfall were last aimed with. Starts AT the initial
+    // value, not at -1: the effects were constructed with it, and re-publishing
+    // on frame 0 would be a no-op that only looked like one.
+    float appliedGroundWind  = startWind;
     float fps = 0.f, fpsAccum = 0.f;
     int fpsFrames = 0;
 
@@ -2031,7 +2146,7 @@ int main(int argc, char** argv) {
                 cl.coverage = cloudCover;
                 cl.bottomY = 250.f;
                 cl.topY = 750.f;
-                cl.wind.set(std::cos(2.1f), 0.f, std::sin(2.1f));
+                cl.wind.copy(windDir);
                 cl.wind.multiplyScalar(windSpeed * 3.f);
                 renderer.setClouds(cl);
             } else {
@@ -2041,6 +2156,23 @@ int main(int argc, char** argv) {
             appliedCloudsOn   = cloudsOn;
             appliedCloudCover = cloudCover;
             appliedWindSpeed  = windSpeed;
+        }
+
+        // ── ONE WIND, live ──────────────────────────────────────────────────
+        // The slider moves the waves, the clouds, the grass, both fires' smoke
+        // and the snowfall's drift TOGETHER, because they are all reading the
+        // same two numbers. On-change, not per frame: setWind() recomputes a
+        // volume box and republishes an emitter block, which is cheap but not
+        // free, and the wind does not change on a frame nobody touched it.
+        // (The chimney is the one exception and says why at its own site.)
+        if (windSpeed != appliedGroundWind) {
+            const Vector3 gw = groundWindAt(windSpeed);
+            campfire->setWind(gw);
+            farFire->setWind(gw);
+            auto se = snowfall->emitter();
+            se.wind.copy(gw);
+            snowfall->setEmitter(se);
+            appliedGroundWind = windSpeed;
         }
 
         // Window / lantern glow after sundown. emissiveIntensity is a plain
@@ -2069,7 +2201,7 @@ int main(int argc, char** argv) {
         tiles->update(camera.position);
 
         // Water, grass, smoke, boat.
-        ocean->setWind(windSpeed, 2.1f);
+        ocean->setWind(windSpeed, kWindHeading);
         // The water grid is STATIC (a channel-fitting rectangle, no camera
         // warp): the mesh never re-tessellates under the viewer, so per-vertex
         // motion vectors stay valid and the surface doesn't subtly reflow as
@@ -2121,6 +2253,23 @@ int main(int argc, char** argv) {
             controls.update();
         }
 
+        // ── The snowfall follows the camera ─────────────────────────────────
+        // Here, AFTER the camera has been placed for THIS frame and before the
+        // render that consumes it, so the weather and the eye never disagree by
+        // a frame. Two floats and a snap — cheaper than the branch that would
+        // try to skip it.
+        //
+        // DETERMINISM: the snapped centre is floor(camera.xz / 4.5) * 4.5, and
+        // under --shot / --seq / --view the camera pose is itself a closed form
+        // in the frame index, so the follow centre is too. Every reproducibility
+        // assertion this subsystem makes still holds — nothing here reads a
+        // clock, a random number or a previous frame.
+        {
+            snowfall->setFollowCenter(camera.position);
+            const Vector3& fc = snowfall->followCenter();
+            snowfall->densityRepr().center.set(fc.x, snowDensityY, fc.z);
+        }
+
         renderer.render(scene, camera);
 
         if (reproDumpRequest) {
@@ -2154,16 +2303,37 @@ int main(int argc, char** argv) {
             }
             ++shotFrame;
             if (shotFrame >= seqWarm + seqFrames) {
-                std::printf("[seq] %d frames -> %s (orbit %.1f deg/s, warm %d, effects %s)\n",
-                            seqFrames, seqDir.c_str(), double(seqOrbit), seqWarm,
-                            seqFreeze ? "FROZEN" : "running");
+                if (seqDolly != 0.f)
+                    std::printf("[seq] %d frames -> %s (dolly %.2f m/s, warm %d, effects %s)\n",
+                                seqFrames, seqDir.c_str(), double(seqDolly), seqWarm,
+                                seqFreeze ? "FROZEN" : "running");
+                else
+                    std::printf("[seq] %d frames -> %s (orbit %.1f deg/s, warm %d, effects %s)\n",
+                                seqFrames, seqDir.c_str(), double(seqOrbit), seqWarm,
+                                seqFreeze ? "FROZEN" : "running");
                 std::exit(0);
             }
-            const float ang = seqOrbit * (3.14159265f / 180.f) * float(shotFrame) * (1.f / 60.f);
-            const float dx = seqEye0.x - controls.target.x, dz = seqEye0.z - controls.target.z;
-            const float ca = std::cos(ang), sa = std::sin(ang);
-            camera.position.set(controls.target.x + dx * ca - dz * sa, seqEye0.y,
-                                controls.target.z + dx * sa + dz * ca);
+            const float tSeq = float(shotFrame) * (1.f / 60.f);
+            if (seqDolly != 0.f) {
+                // WALK. Eye and target translate together along the ground
+                // heading the shot pose was already looking down, so the framing
+                // is constant and the only thing changing is WHERE IN THE WORLD
+                // the camera stands — which is precisely the axis a
+                // camera-following weather field has to survive. Closed form in
+                // the frame index, like the orbit.
+                float hx = seqTarget0.x - seqEye0.x, hz = seqTarget0.z - seqEye0.z;
+                const float hl = std::sqrt(hx * hx + hz * hz);
+                if (hl > 1e-4f) { hx /= hl; hz /= hl; }
+                const float s = seqDolly * tSeq;
+                camera.position.set(seqEye0.x + hx * s, seqEye0.y, seqEye0.z + hz * s);
+                controls.target.set(seqTarget0.x + hx * s, seqTarget0.y, seqTarget0.z + hz * s);
+            } else {
+                const float ang = seqOrbit * (3.14159265f / 180.f) * tSeq;
+                const float dx = seqEye0.x - controls.target.x, dz = seqEye0.z - controls.target.z;
+                const float ca = std::cos(ang), sa = std::sin(ang);
+                camera.position.set(controls.target.x + dx * ca - dz * sa, seqEye0.y,
+                                    controls.target.z + dx * sa + dz * ca);
+            }
             camera.lookAt(controls.target);
         } else if (shotPath.empty()) {
             ui->render();
