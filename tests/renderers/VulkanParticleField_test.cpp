@@ -50,6 +50,7 @@
 #include "threepp/geometries/PlaneGeometry.hpp"
 #include "threepp/materials/MeshStandardMaterial.hpp"
 #include "threepp/extras/effects/FireEffect.hpp"
+#include "threepp/helpers/LidarTypes.hpp"
 #include "threepp/objects/Ocean.hpp"
 #include "threepp/objects/ParticleField.hpp"
 #include "threepp/objects/ParticleSystem.hpp"
@@ -3390,6 +3391,170 @@ int main(int argc, char** argv) {
                       "processes (closed form, hashed seed, caller's clock)");
             }
         }
+    }
+
+    // ── PHASE 3: LIDAR THROUGH THE DENSITY VOLUMES ──────────────────────────
+    // parent plan §5 phase 3. Three assertions and no more, because the
+    // checkpoint is three things: the density-free scan is unchanged, the
+    // seeded scan is exactly reproducible, and the degradation SCALES.
+    {
+        // A clean slate: anything a previous phase left in the scene would put
+        // its own sigma in front of the beams.
+        {
+            std::vector<Object3D*> leftovers;
+            for (auto* c : scene.children)
+                if (dynamic_cast<ParticleField*>(c)) leftovers.push_back(c);
+            for (auto* c : leftovers) scene.remove(*c);
+        }
+
+        // Sensor at +z firing down -z at a wall 18 m away, with the curtain
+        // hung across the middle of that gap. One axis, one obstacle: whatever
+        // moves in the returns came from the medium.
+        constexpr float kSensorZ = 4.f, kSensorY = 1.5f;
+        constexpr float kWallZ = -14.f;
+        auto wall = Mesh::create(BoxGeometry::create(24.f, 8.f, 0.5f),
+                                 MeshStandardMaterial::create());
+        wall->position.set(0.f, 2.f, kWallZ);
+        scene.add(wall);
+
+        std::vector<LidarBeam> beams;
+        for (int ix = 0; ix < 24; ++ix) {
+            for (int iy = 0; iy < 12; ++iy) {
+                const float ax = (float(ix) / 23.f - 0.5f) * 0.24f;
+                const float ay = (float(iy) / 11.f - 0.5f) * 0.16f;
+                Vector3 d(std::sin(ax), std::sin(ay), -1.f);
+                beams.push_back({Vector3(0.f, kSensorY, kSensorZ), d.normalize()});
+            }
+        }
+        LidarParams lp;
+        lp.maxRange = 40.f;
+        lp.referenceRange = 5.f;
+        lp.detectorThreshold = 0.005f;
+        lp.pairedCleanTrace = true;
+
+        const auto sameRow = [](const LidarReturn& a, const LidarReturn& b) {
+            return a.position.x == b.position.x && a.position.y == b.position.y &&
+                   a.position.z == b.position.z &&
+                   a.normal.x == b.normal.x && a.normal.y == b.normal.y &&
+                   a.normal.z == b.normal.z &&
+                   a.distance == b.distance && a.intensity == b.intensity &&
+                   a.hitInstanceId == b.hitInstanceId && a.returnNo == b.returnNo &&
+                   a.returnKind == b.returnKind;
+        };
+
+        std::vector<LidarReturn> deg, clean;
+        for (int i = 0; i < 4; ++i) frame();
+
+        // ── (1) THE GATE: no bound volume ⇒ the particle path is a NO-OP ────
+        // The clean leg of the paired trace runs with pdActive == false, which
+        // is the pre-phase-3 arithmetic textually — so "degraded == clean, bit
+        // for bit, on a scene with no density field" is exactly the
+        // byte-identity claim the checkpoint asks for, measured in-process and
+        // re-measured on every run instead of once against an old binary.
+        renderer.scanLidar(beams, deg, lp, &clean);
+        {
+            std::size_t differing = 0;
+            for (std::size_t i = 0; i < std::min(deg.size(), clean.size()); ++i)
+                if (!sameRow(deg[i], clean[i])) ++differing;
+            std::printf("[info] lidar: density-free paired scan, %zu beams, "
+                        "%zu rows differ between the legs\n",
+                        beams.size(), differing);
+            check(!deg.empty() && deg.size() == clean.size() && differing == 0,
+                  "with no density volume bound, a scan is bit-identical to the "
+                  "same scan with the particle medium disabled");
+        }
+
+        // The curtain: 3 m thick, straight across the beam bundle. Positions
+        // are authored once from a fixed seed — the medium is scene data, not
+        // a simulation, so the only thing that varies below is sigma.
+        constexpr std::uint32_t kDustRes = 32;
+        constexpr std::uint32_t kDust    = 131'072;// 4 per voxel
+        ParticleField::Config dcfg;
+        dcfg.capacity      = kDust;
+        dcfg.wSemantic     = ParticleField::WSemantic::Radius;
+        dcfg.uniformRadius = 0.01f;
+        auto dust = ParticleField::create(dcfg);
+        {
+            std::mt19937 rng(20260811u);
+            std::uniform_real_distribution<float> u(-1.f, 1.f);
+            std::vector<ParticlePos> pos(kDust);
+            for (std::uint32_t i = 0; i < kDust; ++i)
+                pos[i] = {5.f * u(rng), 1.5f + 2.5f * u(rng), -5.f + 1.5f * u(rng), 0.01f};
+            dust->submit(pos.data(), kDust);
+            dust->setLiveCount(kDust);
+        }
+        auto& ddr = dust->densityRepr();
+        ddr.enabled = true;
+        ddr.center.set(0.f, 1.5f, -5.f);
+        ddr.halfExtent.set(5.f, 2.5f, 1.5f);
+        ddr.resolution = kDustRes;
+        ddr.albedo = Color(0.7f, 0.7f, 0.7f);
+        ddr.anisotropy = 0.3f;
+        const float dustVoxels = float(kDustRes) * float(kDustRes) * float(kDustRes);
+        const auto setSigma = [&](float s) {
+            ddr.sigmaPerParticle = s * dustVoxels / float(kDust);
+        };
+        setSigma(0.4f);
+        scene.add(dust);
+        for (int i = 0; i < 4; ++i) frame();
+
+        // ── (2) SAME SEED, SAME BYTES ───────────────────────────────────────
+        // The GPU seed is the accumulation index, so two scans with no frame
+        // between them are the same seed over the same volume: delta tracking
+        // is stochastic, not non-deterministic, and the fixed-point volume it
+        // samples is integer-accumulated for exactly this reason.
+        {
+            std::vector<LidarReturn> a, b, ca, cb;
+            renderer.scanLidar(beams, a, lp, &ca);
+            renderer.scanLidar(beams, b, lp, &cb);
+            std::size_t differing = 0;
+            for (std::size_t i = 0; i < std::min(a.size(), b.size()); ++i)
+                if (!sameRow(a[i], b[i])) ++differing;
+            std::size_t vol = 0;
+            for (const auto& r : a)
+                if (r.returnNo > 0 && r.returnKind == 1) ++vol;
+            std::printf("[info] lidar: same-seed repeat through the curtain, "
+                        "%zu rows differ, %zu volume-scatter returns\n", differing, vol);
+            check(!a.empty() && a.size() == b.size() && differing == 0 && vol > 0,
+                  "two same-seed scans through a dust curtain are bit-identical, "
+                  "and the curtain does produce volume-scatter returns");
+        }
+
+        // ── (3) THE DEGRADATION SCALES WITH DENSITY ─────────────────────────
+        // Three sigmas, one scene, one beam set. More dust ⇒ more of the beam
+        // bundle terminates in the medium, and the mean reported range walks
+        // in from the wall toward the sensor.
+        {
+            const std::array<float, 3> sigmas{0.15f, 0.4f, 1.0f};
+            std::array<float, 3> volFrac{}, meanRange{};
+            for (std::size_t k = 0; k < sigmas.size(); ++k) {
+                setSigma(sigmas[k]);
+                for (int i = 0; i < 3; ++i) frame();
+                renderer.scanLidar(beams, deg, lp, &clean);
+                std::size_t vol = 0, hits = 0;
+                double sum = 0.0;
+                for (const auto& r : deg) {
+                    if (r.returnNo <= 0) continue;
+                    ++hits;
+                    sum += double(r.distance);
+                    if (r.returnKind == 1) ++vol;
+                }
+                volFrac[k]   = hits ? float(double(vol) / double(hits)) : 0.f;
+                meanRange[k] = hits ? float(sum / double(hits)) : 0.f;
+                std::printf("[info] lidar: sigma %.2f /m -> volume-scatter %.1f%% of "
+                            "returns, mean range %.2f m\n",
+                            double(sigmas[k]), double(volFrac[k]) * 100.0,
+                            double(meanRange[k]));
+            }
+            check(volFrac[0] < volFrac[1] && volFrac[1] < volFrac[2] &&
+                          meanRange[0] > meanRange[1] && meanRange[1] > meanRange[2],
+                  "volume-scatter share rises and mean reported range shortens "
+                  "monotonically with dust density");
+        }
+
+        scene.remove(*dust);
+        scene.remove(*wall);
+        for (int i = 0; i < 3; ++i) frame();
     }
 
     // ── (a) validation ──────────────────────────────────────────────────────
