@@ -436,8 +436,7 @@ int main(int argc, char** argv) {
     const capture::Args cap = capture::parseArgs(argc, argv);
 
     Canvas canvas("Vulkan Deferred - Snow",
-                  {{"title", std::string("Vulkan Deferred - Snow")},
-                   {"size", std::pair<int, int>{1280, 720}},
+                  {{"size", std::pair<int, int>{1280, 720}},
                    {"vsync", false},
                    {"headless", !shotPath.empty() || bench || benchLod || benchRest ||
                                         benchBake || mvProbe || !seqDir.empty()}});
