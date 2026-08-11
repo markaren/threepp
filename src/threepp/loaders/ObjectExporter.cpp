@@ -299,17 +299,22 @@ namespace {
     }
 
     // Writes the texture's pixels into the archive and fills in the entry's
-    // `url`. Two ways in, and they do not want the same row order on the way
+    // `url`. Three ways in, and they do not want the same row order on the way
     // back out (see ObjectLoader::decodeImage, which this is the other half of):
     //
     //   original bytes  the file the texture was loaded from, copied whole.
     //                   Re-reading it is an import like any other, so the loader
     //                   decodes it with flipY defaulted to true, exactly as
     //                   ImageStorage::Reference does with the same bytes on disk.
-    //   PNG fallback    a procedural texture, or a cube map, has no single file
-    //                   to copy. The rows are written in the order the texture
-    //                   holds them, so the entry says flipY: false — the same
-    //                   contract the base64 form has always had.
+    //   retained bytes  a texture that came out of a .glb has no file, but it
+    //                   does still have the encoded bytes it was decoded from.
+    //                   Just as original, and just as free — but the importer
+    //                   picked the row order (glTF decodes top-down), so the
+    //                   entry states it rather than taking the default.
+    //   PNG fallback    a procedural texture, or a cube map, has neither. The
+    //                   rows are written in the order the texture holds them, so
+    //                   the entry says flipY: false — the same contract the
+    //                   base64 form has always had.
     bool writeArchiveImage(const Texture& texture, const std::vector<Image>& images,
                            const std::string& imageUuid, json& entry, Meta& meta) {
 
@@ -328,6 +333,16 @@ namespace {
             meta.warn("texture '" + (texture.name.empty() ? texture.uuid() : texture.name) +
                       "': cannot read '" + texture.sourceFile.string() +
                       "' - the archive gets a re-encoded PNG of the pixels in memory instead");
+        }
+
+        // One blob is one image, so this is no use to a cube map's six faces.
+        if (const auto& encoded = texture.encodedSource; !encoded.empty() && images.size() != 6) {
+
+            const auto name = base + encoded.extension;
+            meta.archive->add(name, std::vector<unsigned char>{encoded.bytes->begin(), encoded.bytes->end()});
+            entry["url"] = name;
+            entry["flipY"] = encoded.flipY;
+            return true;
         }
 
         json urls = json::array();

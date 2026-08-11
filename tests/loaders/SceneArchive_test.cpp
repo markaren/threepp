@@ -3,6 +3,7 @@
 
 #include "threepp/geometries/BoxGeometry.hpp"
 #include "threepp/loaders/AssetSource.hpp"
+#include "threepp/loaders/ModelLoader.hpp"
 #include "threepp/loaders/ObjectExporter.hpp"
 #include "threepp/loaders/ObjectLoader.hpp"
 #include "threepp/loaders/TextureLoader.hpp"
@@ -36,6 +37,20 @@ namespace {
         std::ifstream in(path, std::ios::binary);
         return std::vector<unsigned char>{std::istreambuf_iterator<char>(in),
                                           std::istreambuf_iterator<char>()};
+    }
+
+    std::shared_ptr<Texture> firstMap(Object3D& root) {
+
+        std::shared_ptr<Texture> found;
+        root.traverse([&](Object3D& o) {
+            if (found) return;
+            if (auto* mesh = o.as<Mesh>()) {
+                if (auto* material = mesh->materialAs<MeshStandardMaterial>(); material && material->map) {
+                    found = material->map;
+                }
+            }
+        });
+        return found;
     }
 
 }// namespace
@@ -138,6 +153,63 @@ TEST_CASE("A scene saves and loads as one .tpz") {
     const auto again = dir / "again.tpz";
     exporter.save(*scene, again);
     CHECK(fileBytes(path) == fileBytes(again));
+}
+
+
+TEST_CASE("A texture that came out of a .glb keeps the bytes it came in as") {
+
+    // The texture with no file: a .glb carries its images inside itself, so the
+    // archive's copy-the-source-file path has nothing to copy and every one of
+    // them used to be re-encoded to PNG on every save. The encoded bytes are
+    // retained at import instead, and they are just as original as a file's.
+    const std::filesystem::path model =
+            std::filesystem::path(DATA_FOLDER) / "models" / "gltf" / "Soldier.glb";
+
+    ModelLoader models;
+    auto imported = models.load(model);
+    REQUIRE(imported != nullptr);
+
+    auto texture = firstMap(*imported);
+    REQUIRE(texture != nullptr);
+    REQUIRE_FALSE(texture->encodedSource.empty());
+    const std::vector<unsigned char> pixels = texture->image().data<unsigned char>();
+    REQUIRE(pixels.size() > 4);
+
+    auto scene = Scene::create();
+    scene->add(imported);
+
+    const auto dir = std::filesystem::temp_directory_path() / "threepp-scene-archive-glb-test";
+    std::filesystem::create_directories(dir);
+    const auto path = dir / "glb.tpz";
+
+    ObjectExporter exporter;
+    exporter.save(*scene, path);
+
+    // Stored under the format they actually are, and byte for byte what the
+    // .glb held — a re-encode would be a different file of a different length.
+    {
+        ZipReader archive(path);
+        const auto name = "images/" + texture->uuid() + "-image" + texture->encodedSource.extension;
+        REQUIRE(archive.has(name));
+        CHECK(archive.read(name) == *texture->encodedSource.bytes);
+    }
+
+    ObjectLoader loader;
+    auto parsed = loader.load(path);
+    REQUIRE(parsed != nullptr);
+
+    auto reloaded = firstMap(*parsed);
+    REQUIRE(reloaded != nullptr);
+
+    // The flipY contract, decided by a pixel rather than by argument: glTF
+    // decodes its images top-down, so the archive entry has to say so and the
+    // texture has to come back the same way up it went in. The corner is where
+    // a flip shows first; the whole array is the proof it is the same image.
+    const auto& back = reloaded->image().data<unsigned char>();
+    REQUIRE(back.size() == pixels.size());
+    CHECK(std::vector<unsigned char>(back.begin(), back.begin() + 4) ==
+          std::vector<unsigned char>(pixels.begin(), pixels.begin() + 4));
+    CHECK(back == pixels);
 }
 
 

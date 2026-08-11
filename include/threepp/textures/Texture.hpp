@@ -41,6 +41,42 @@ namespace threepp {
         // one can only ever be embedded.
         std::filesystem::path sourceFile;
 
+        // The already-encoded image this texture was decoded from, for pixels
+        // that arrived INSIDE another file (a .glb bufferView, an assimp
+        // aiTexture blob) and so have no `sourceFile` to point at. Kept whole so
+        // an archive export can store those original PNG/JPEG bytes instead of
+        // re-encoding the decoded pixels — which is what made an archive save of
+        // a texture-heavy .glb cost as much as the JSON it replaced.
+        //
+        // `flipY` is not a preference: it is the row order the bytes were
+        // decoded WITH, and importers disagree (glTF decodes top-down, the
+        // TextureLoader default is bottom-up). Anything decoding them again must
+        // pass this same flag or hand back a texture upside down against the one
+        // that was saved.
+        //
+        // shared_ptr because a texture is shared by every material sampling it
+        // and these blobs are megabytes; const because they are the source, and
+        // nothing may edit them behind a sharer's back.
+        struct EncodedImage {
+
+            std::shared_ptr<const std::vector<unsigned char>> bytes;
+            std::string extension;// ".png" / ".jpg", leading dot
+            bool flipY = true;
+
+            [[nodiscard]] bool empty() const { return !bytes || bytes->empty(); }
+
+            // Takes ownership of encoded bytes, naming the format by its own
+            // magic number and not by whatever the container called the image —
+            // an embedded texture's name is an id like "*0.png", and an archive
+            // storing JPEG bytes under a .png name would be a document that
+            // lies about itself. Anything other than PNG or JPEG comes back
+            // EMPTY: those two are what a .glb may carry, and retaining the
+            // rest would only pin memory no exporter can use.
+            static EncodedImage from(std::vector<unsigned char> bytes, bool flipY);
+        };
+
+        EncodedImage encodedSource;
+
         Mapping mapping = DEFAULT_MAPPING;
 
         TextureWrapping wrapS{TextureWrapping::ClampToEdge};

@@ -754,9 +754,15 @@ namespace threepp {
             //  Image / Texture loading
             // -----------------------------------------------------------------------
 
-            std::optional<Image> loadImageData(int imageIdx) {
+            // `embedded`, when given, receives the encoded bytes for an image
+            // the .glb carries INSIDE itself (a bufferView, or a data: uri) —
+            // the ones with no file anywhere for an exporter to point at. An
+            // image referenced by path keeps having a file, so it gets nothing
+            // and the caller stays on the path it always had.
+            std::optional<Image> loadImageData(int imageIdx, std::vector<uint8_t>* embedded = nullptr) {
                 const auto& imgDef = gltf["images"][imageIdx];
                 std::vector<uint8_t> raw;
+                bool isEmbedded = true;
 
                 if (imgDef.contains("bufferView")) {
                     int bvIdx = imgDef["bufferView"].get<int>();
@@ -776,13 +782,20 @@ namespace threepp {
                         std::ifstream f(p, std::ios::binary);
                         if (!f) throw std::runtime_error("Cannot open image: " + p.string());
                         raw = readAllBytes(f, p);
+                        isEmbedded = false;
                     }
                 } else {
                     throw std::runtime_error("Image " + std::to_string(imageIdx) + " has no source");
                 }
 
                 ImageLoader loader;
-                return loader.load(raw, 4, false);
+                // flipY false: glTF's UV origin is the top-left corner, so the
+                // rows are used in the order the file stores them. Whatever
+                // reads the retained bytes back has to agree.
+                auto image = loader.load(raw, 4, false);
+                if (image && embedded && isEmbedded) *embedded = std::move(raw);
+
+                return image;
             }
 
             std::shared_ptr<Texture> loadTexture(int texIdx, ColorSpace cs = ColorSpace::sRGB) {
@@ -794,7 +807,8 @@ namespace threepp {
                 int imageIdx = texDef.value("source", -1);
                 if (imageIdx < 0) return nullptr;
 
-                auto image = loadImageData(imageIdx);
+                std::vector<uint8_t> encoded;
+                auto image = loadImageData(imageIdx, &encoded);
                 if (!image) return nullptr;
 
                 // Move the decoded pixels straight into the texture — no copy and
@@ -805,6 +819,10 @@ namespace threepp {
                 // would inflate peak memory on texture-heavy scenes).
                 auto tex = Texture::create(std::vector<Image>{std::move(*image)});
                 tex->colorSpace = cs;
+                // The bytes this came in as, for a texture the .glb keeps inside
+                // itself and that therefore has no sourceFile. Carries the same
+                // flipY the decode above used (see Texture::encodedSource).
+                tex->encodedSource = Texture::EncodedImage::from(std::move(encoded), false);
                 tex->needsUpdate();
 
                 // glTF 2.0 §3.8.4: when sampler is undefined, repeat wrapping

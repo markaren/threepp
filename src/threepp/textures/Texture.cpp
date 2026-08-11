@@ -3,11 +3,27 @@
 
 #include "threepp/math/MathUtils.hpp"
 
+#include <algorithm>
 #include <cmath>
 #include <iostream>
 
 using namespace threepp;
 
+
+Texture::EncodedImage Texture::EncodedImage::from(std::vector<unsigned char> bytes, bool flipY) {
+
+    const auto is = [&](std::initializer_list<unsigned char> magic) {
+        return bytes.size() >= magic.size() &&
+               std::equal(magic.begin(), magic.end(), bytes.begin());
+    };
+
+    std::string extension;
+    if (is({0x89, 'P', 'N', 'G'})) extension = ".png";
+    else if (is({0xFF, 0xD8, 0xFF})) extension = ".jpg";
+    else return {};
+
+    return {std::make_shared<const std::vector<unsigned char>>(std::move(bytes)), std::move(extension), flipY};
+}
 
 Texture::Texture(std::vector<Image> image)
     : uuid_(math::generateUUID()),

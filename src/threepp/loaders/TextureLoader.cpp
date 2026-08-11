@@ -152,6 +152,12 @@ struct TextureLoader::Impl {
         texture->colorSpace = colorSpace;
         texture->needsUpdate();
 
+        // These pixels have no file of their own — that is what "from memory"
+        // means — so the bytes they were decoded from are kept instead, with the
+        // row order they were decoded under. An exporter then has something
+        // original to store; see Texture::encodedSource.
+        texture->encodedSource = Texture::EncodedImage::from(data, flipY);
+
         std::lock_guard<std::mutex> lock(mutex_);
         if (auto cachedTexture = checkCache(key)) {
             return cachedTexture;
