@@ -14,10 +14,27 @@
 // so the material-dependent intensity falloff is visible. Returns are
 // rendered as LineSegments overlaid on the rendered image, each
 // segment pointing along the surface normal and coloured by intensity.
+//
+// ── --dust: LIDAR THROUGH A PARTICLEFIELD DENSITY VOLUME ────────────────────
+// (parent plan phase 3.) `--dust [sigma]` hangs a curtain of dust between the
+// sensor and the west side of the scene — a plain hand-submitted HostRing
+// ParticleField with a DensityRepr and nothing else — and the beams that cross
+// it are delta-tracked through its sigma_t. What that looks like: returns
+// SHORTEN (a volume scatter beats the surface), returns DROP OUT (the surface
+// is still hit, its echo is extinguished below the detector threshold), and
+// both scale with sigma. The dust is a MEDIUM, not geometry: no BLAS, no ray
+// mask, no per-particle hit.
+//
+// `--paired` (implied by --dust) fires the same beam set twice in one dispatch,
+// the second time with the dust switched off, and prints the per-beam
+// degradation label the difference defines.
+//
+// Headless: vulkan_lidar --shot out.png [--frames N] [--dust 1.5] [--range r.png]
 
 #include "threepp/extras/imgui/ImguiContext.hpp"
 #include "threepp/helpers/LidarModel.hpp"
 #include "threepp/helpers/PathTracedLidarSensor.hpp"
+#include "threepp/objects/ParticleField.hpp"
 #include "threepp/renderers/VulkanRenderer.hpp"
 #include "threepp/textures/DataTexture.hpp"
 #include "threepp/threepp.hpp"
@@ -25,12 +42,75 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <cstdio>
+#include <cstdlib>
+#include <optional>
+#include <random>
+#include <string>
+
+// Linked in through imgui's stb copy; the scratch harnesses declare it the
+// same way rather than pulling the header into every translation unit.
+extern "C" int stbi_write_png(char const* filename, int w, int h, int comp,
+                              const void* data, int stride_in_bytes);
 
 using namespace threepp;
 
 namespace {
 
     constexpr int kMaxBeams = 250000;
+
+    // ── The dust curtain ────────────────────────────────────────────────────
+    // Deliberately the dullest possible field: HostRing ownership, positions
+    // authored once by the CPU from a fixed seed, density representation only.
+    // Nothing about the sensor result depends on the emitter, the billboards
+    // or the mesh proxies — only on sigma_t in the volume — so this is the
+    // smallest scene that exercises the whole path.
+    struct DustCurtain {
+        static constexpr std::uint32_t kRes   = 32;   // voxels/axis
+        static constexpr std::uint32_t kCount = 262144;// 8 per voxel
+        // Between the sensor at the origin and the west pillars/wall.
+        static constexpr float kCx = -9.f, kCy = 2.4f, kCz = 0.f;
+        static constexpr float kHx = 2.f, kHy = 2.2f, kHz = 7.f;
+    };
+
+    std::shared_ptr<ParticleField> makeDustCurtain(float sigma) {
+        ParticleField::Config cfg{};
+        cfg.capacity   = DustCurtain::kCount;
+        cfg.ownership  = ParticleField::Ownership::HostRing;
+        cfg.wSemantic  = ParticleField::WSemantic::Radius;
+        cfg.uniformRadius = 0.01f;
+        auto field = ParticleField::create(cfg);
+        field->name = "dust curtain";
+
+        // Uniform in the box, from a FIXED seed: the curtain is part of the
+        // scene definition, so two runs of the demo must scan the same dust.
+        std::mt19937 rng(20260811u);
+        std::uniform_real_distribution<float> u(-1.f, 1.f);
+        std::vector<float> pos(std::size_t(DustCurtain::kCount) * 4u);
+        for (std::uint32_t i = 0; i < DustCurtain::kCount; ++i) {
+            pos[i * 4 + 0] = DustCurtain::kCx + DustCurtain::kHx * u(rng);
+            pos[i * 4 + 1] = DustCurtain::kCy + DustCurtain::kHy * u(rng);
+            pos[i * 4 + 2] = DustCurtain::kCz + DustCurtain::kHz * u(rng);
+            pos[i * 4 + 3] = 0.01f;
+        }
+        field->submit(pos.data(), DustCurtain::kCount);
+        field->setLiveCount(DustCurtain::kCount);
+
+        auto& dr = field->densityRepr();
+        dr.enabled    = true;
+        dr.center.set(DustCurtain::kCx, DustCurtain::kCy, DustCurtain::kCz);
+        dr.halfExtent.set(DustCurtain::kHx, DustCurtain::kHy, DustCurtain::kHz);
+        dr.resolution = DustCurtain::kRes;
+        // The scatter splats sigmaPerParticle trilinearly, so the volume's
+        // total is count * sigmaPerParticle spread over res^3 voxels: dividing
+        // by the occupancy makes `--dust S` mean "sigma_t ~ S per metre in the
+        // curtain", which is the number worth reasoning about.
+        const float voxels = float(DustCurtain::kRes) * float(DustCurtain::kRes) * float(DustCurtain::kRes);
+        dr.sigmaPerParticle = sigma * voxels / float(DustCurtain::kCount);
+        dr.albedo = Color(0.72f, 0.70f, 0.66f);
+        dr.anisotropy = 0.35f;// real dust forward-scatters
+        return field;
+    }
 
     void setupScene(Scene& scene) {
         // Ground — slightly off-white concrete.
@@ -130,10 +210,33 @@ namespace {
 }// namespace
 
 
-int main() {
+int main(int argc, char** argv) {
+
+    // ── Flags ───────────────────────────────────────────────────────────────
+    float       dustSigma = 0.f;// --dust [sigma]; 0 = no curtain
+    bool        paired    = false;
+    std::string shotPath, rangePath;
+    int         shotFrames = 8;
+    for (int i = 1; i < argc; ++i) {
+        const std::string a = argv[i];
+        if (a == "--dust") {
+            dustSigma = 1.5f;
+            if (i + 1 < argc && argv[i + 1][0] != '-') dustSigma = float(std::atof(argv[++i]));
+            paired = true;
+        } else if (a == "--paired") {
+            paired = true;
+        } else if (a == "--shot" && i + 1 < argc) {
+            shotPath = argv[++i];
+        } else if (a == "--range" && i + 1 < argc) {
+            rangePath = argv[++i];
+        } else if (a == "--frames" && i + 1 < argc) {
+            shotFrames = std::atoi(argv[++i]);
+        }
+    }
+    const bool headless = !shotPath.empty();
 
     Canvas canvas("Vulkan Deferred - physically correct LIDAR",
-                  {{"vsync", false}, {"size", WindowSize{1600, 900}}});
+                  {{"vsync", false}, {"size", WindowSize{1600, 900}}, {"headless", headless}});
     VulkanRenderer renderer(canvas);
     renderer.toneMapping = ToneMapping::ACESFilmic;
     renderer.toneMappingExposure = 1.0f;
@@ -141,6 +244,12 @@ int main() {
     Scene scene;
     scene.background = Color(0.03f, 0.04f, 0.06f);
     setupScene(scene);
+
+    std::shared_ptr<ParticleField> dust;
+    if (dustSigma > 0.f) {
+        dust = makeDustCurtain(dustSigma);
+        scene.add(dust);
+    }
 
     auto camera = PerspectiveCamera::create(60.f, canvas.aspect(), 0.1f, 200.f);
     camera->position.set(18.f, 14.f, 22.f);
@@ -168,6 +277,7 @@ int main() {
     sensor->params.laserPower = 1.f;
     sensor->params.atmosphericExtinction = 0.f;
     sensor->params.detectorThreshold = 0.005f;
+    sensor->params.pairedCleanTrace = paired;
     scene.addRef(*sensor);
 
     // ── Visualisation: Points overlay ─────────────────────────────────
@@ -238,7 +348,12 @@ int main() {
     int lastReturns = 0;
     float lastScanMs = 0.f;
 
-    ImguiFunctionalContext ui(canvas, renderer, [&] {
+    int  lastDropped  = 0;
+    int  lastSpurious = 0;
+    float lastMeanShortening = 0.f;
+
+    std::optional<ImguiFunctionalContext> ui;
+    if (!headless) ui.emplace(canvas, renderer, [&] {
         ImGui::SetNextWindowPos({0, 0});
         ImGui::SetNextWindowSize({340, 460});
         ImGui::Begin("Vulkan LIDAR");
@@ -274,6 +389,13 @@ int main() {
             ImGui::Text("Yield:    %.1f %%", static_cast<double>(ratio));
             ImGui::Text("Scan:     %.2f ms", static_cast<double>(lastScanMs));
         }
+        if (dust) {
+            ImGui::Separator();
+            ImGui::Text("Dust curtain (paired ground truth)");
+            ImGui::Text("Dropped:  %d", lastDropped);
+            ImGui::Text("Spurious: %d", lastSpurious);
+            ImGui::Text("Mean shortening: %.2f m", static_cast<double>(lastMeanShortening));
+        }
         ImGui::End();
     });
 
@@ -291,6 +413,79 @@ int main() {
     Clock clock;
     int  cachedModelIndex = currentModel;
 
+    // ── Headless capture ────────────────────────────────────────────────────
+    // A fixed pose and a fixed yaw so the picture is reproducible, then the
+    // framebuffer (point cloud over the rendered scene) and optionally the
+    // beam grid at ONE PIXEL PER BEAM — native scale, no stretch, which is the
+    // only form in which a range image can honestly be looked at.
+    if (headless) {
+        sensor->rotation.set(pitch, 0.f, 0.f);
+        for (int i = 0; i < shotFrames; ++i) {
+            canvas.animateOnce([&] { renderer.render(scene, *camera); });
+            sensor->scan(renderer, returns);
+        }
+        updateLidarVisualization(*cloud, returns, colorGain);
+        canvas.animateOnce([&] { renderer.render(scene, *camera); });
+        renderer.writeFramebuffer(shotPath);
+
+        int hits = 0, volume = 0;
+        for (const auto& r : returns) {
+            if (r.returnNo > 0) ++hits;
+            if (r.returnNo > 0 && r.returnKind == 1) ++volume;
+        }
+        const auto& clean = sensor->cleanReturns();
+        int dropped = 0, spurious = 0, shortN = 0;
+        float shortSum = 0.f;
+        const size_t np = std::min(returns.size(), clean.size());
+        for (size_t k = 0; k < np; ++k) {
+            const LidarDegradation d = lidarDegradation(returns[k], clean[k]);
+            if (d.dropped) ++dropped;
+            if (d.spurious) ++spurious;
+            if (d.rangeError > 0.01f) { shortSum += d.rangeError; ++shortN; }
+        }
+        std::printf("[shot] %s  beams %u  returns %d  volume-scatter %d  "
+                    "dust sigma %.2f\n",
+                    shotPath.c_str(), sensor->beamCount(), hits, volume,
+                    double(dustSigma));
+        if (np > 0) {
+            std::printf("[paired] dropped %d  spurious %d  shortened %d "
+                        "(mean %.2f m)\n",
+                        dropped, spurious, shortN,
+                        shortN ? double(shortSum / float(shortN)) : 0.0);
+        }
+
+        if (!rangePath.empty()) {
+            const int numElev = static_cast<int>(model.elevationAngles.size());
+            const int numAz   = numElev > 0
+                                        ? static_cast<int>(returns.size()) / numElev
+                                        : 0;
+            if (numAz > 0) {
+                std::vector<unsigned char> px(std::size_t(numAz) * numElev * 3, 0u);
+                Color c;
+                for (size_t b = 0; b < returns.size(); ++b) {
+                    const auto& r = returns[b];
+                    const int ai = static_cast<int>(b) / numElev;
+                    const int ei = static_cast<int>(b) % numElev;
+                    if (ai >= numAz) break;
+                    const size_t o = (std::size_t(ei) * numAz + ai) * 3;
+                    if (r.returnNo <= 0) continue;// miss stays black
+                    // RANGE, not intensity: near = red, far = blue. A dust
+                    // curtain has to show up as a band that moved TOWARD the
+                    // sensor, and only a range ramp can show that.
+                    const float t = std::clamp(r.distance / sensor->params.maxRange, 0.f, 1.f);
+                    c.setHSL(t * 0.66f, 1.f, 0.5f);
+                    px[o + 0] = static_cast<unsigned char>(c.r * 255.f);
+                    px[o + 1] = static_cast<unsigned char>(c.g * 255.f);
+                    px[o + 2] = static_cast<unsigned char>(c.b * 255.f);
+                }
+                stbi_write_png(rangePath.c_str(), numAz, numElev, 3, px.data(), numAz * 3);
+                std::printf("[range] %s (%d x %d, one pixel per beam)\n",
+                            rangePath.c_str(), numAz, numElev);
+            }
+        }
+        return 0;
+    }
+
     canvas.animate([&] {
         const float dt = clock.getDelta();
         if (animateYaw) yaw += dt * yawRate;
@@ -304,7 +499,7 @@ int main() {
             auto next = std::make_unique<PathTracedLidarSensor>(model, sensor->params.maxRange);
             next->position.copy(sensor->position);
             next->rotation.copy(sensor->rotation);
-            next->params = sensor->params;
+            next->params = sensor->params;// carries pairedCleanTrace
             scene.remove(*sensor);
             sensor = std::move(next);
             scene.addRef(*sensor);
@@ -336,6 +531,24 @@ int main() {
         lastReturns = 0;
         for (const auto& r : returns) {
             if (r.returnNo > 0) ++lastReturns;
+        }
+
+        // ── The per-beam degradation label ──────────────────────────────────
+        // Row for row against the clean leg. This is not an estimate of what
+        // the dust did — the two legs differ in nothing else.
+        {
+            const auto& clean = sensor->cleanReturns();
+            lastDropped = lastSpurious = 0;
+            float shortSum = 0.f;
+            int   shortN   = 0;
+            const size_t n = std::min(returns.size(), clean.size());
+            for (size_t k = 0; k < n; ++k) {
+                const LidarDegradation d = lidarDegradation(returns[k], clean[k]);
+                if (d.dropped) ++lastDropped;
+                if (d.spurious) ++lastSpurious;
+                if (d.rangeError > 0.01f) { shortSum += d.rangeError; ++shortN; }
+            }
+            lastMeanShortening = shortN ? shortSum / float(shortN) : 0.f;
         }
 
         updateLidarVisualization(*cloud, returns, colorGain);
@@ -407,6 +620,6 @@ int main() {
             panelTex->needsUpdate();
         }
 
-        ui.render();
+        if (ui) ui->render();
     });
 }
