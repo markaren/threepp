@@ -73,7 +73,14 @@ namespace threepp::vulkan {
         // is only checkable if the per-particle half and the fixed froxel half
         // are two numbers. Recorded ONCE per frame for all views.
         TP_ParticleDensity = 17,
-        TP_COUNT          = 18,
+        // ParticleField DEVICE EMITTER (particle_emit.comp): the closed-form
+        // position + prevPosition write for every Ownership::Renderer field.
+        // Its own bracket rather than a share of TP_ParticleDensity because the
+        // F2 checkpoint is stated as a SPLIT — "emit + scatter < 1 ms, report
+        // the two" — and a combined number could hide either half growing.
+        // Recorded ONCE per frame for all views.
+        TP_ParticleEmit   = 18,
+        TP_COUNT          = 19,
     };
     inline constexpr uint32_t kTimingSlots = TP_COUNT * 2u;
 

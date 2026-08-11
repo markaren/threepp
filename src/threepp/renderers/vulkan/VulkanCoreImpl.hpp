@@ -2745,6 +2745,15 @@ namespace threepp {
         // Head of the frame command buffer, before any consumer reads it.
         void recordParticleFieldCounts(VkCommandBuffer cb);
 
+        // ── ParticleField device emitter (F2) ───────────────────────────────
+        // One dispatch per Ownership::Renderer field, at the head of the frame
+        // command buffer and BEFORE the density scatter, the counts copy and
+        // every view's raster pass — all of which read the positions it writes.
+        // Bracketed by TP_ParticleEmit so the F2 checkpoint ("emit + scatter
+        // under 1 ms at 300k") is two numbers rather than one. No-op without a
+        // Renderer-owned field.
+        void recordParticleFieldEmit(VkCommandBuffer cb, uint32_t frame);
+
         // ── ParticleField density (phase 2) ─────────────────────────────────
         // Clear + splat every density field into its world-anchored volume,
         // ONCE for all views. Bracketed by TP_ParticleDensity so the claim

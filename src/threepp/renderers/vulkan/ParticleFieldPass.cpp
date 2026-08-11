@@ -6,6 +6,7 @@
 
 #include "threepp/renderers/vulkan/shaders/particle_density_convert.comp.spv.h"
 #include "threepp/renderers/vulkan/shaders/particle_density_scatter.comp.spv.h"
+#include "threepp/renderers/vulkan/shaders/particle_emit.comp.spv.h"
 
 #include <algorithm>
 #include <cstring>
@@ -96,6 +97,45 @@ namespace {
     static_assert(sizeof(DensityScatterPc) == 120,
                   "particle_density_scatter push-constant drift");
 
+    constexpr std::uint32_t kEmitLocalSize = 64;// == particle_emit.comp
+
+    // MUST mirror the push block in particle_emit.comp under scalar layout,
+    // member for member and offset for offset. 128 B EXACTLY — the ceiling every
+    // Vulkan implementation guarantees — which is why the trailing reserve is
+    // spelled out rather than left to grow by accident: the next member added
+    // here without removing one is a device that cannot create the pipeline.
+    //
+    // The two uint64s sit first so the block's 8-byte alignment is satisfied at
+    // offset 0 and every float after them is naturally 4-aligned, making MSVC's
+    // layout and GLSL's scalar layout the same bytes by construction rather than
+    // by coincidence (the std140 tail-pack trap, feedback_vulkan_material_gpu_update).
+    struct EmitPc {
+        VkDeviceAddress posAddr;      //   0
+        VkDeviceAddress prevPosAddr;  //   8
+        float spawnCenter[3];         //  16
+        float lifetime;               //  28
+        float spawnHalf[3];           //  32
+        float lifetimeJitter;         //  44
+        float velocity[3];            //  48
+        float speedSpread;            //  60
+        float accel[3];               //  64
+        float duty;                   //  76
+        float driftAmp;               //  80
+        float driftFreq;              //  84
+        float driftGrowth;            //  88
+        float size;                   //  92
+        float sizeJitter;             //  96
+        float time;                   // 100
+        float dt;                     // 104
+        std::uint32_t capacity;       // 108
+        std::uint32_t seed;           // 112
+        float driftScale;             // 116
+        float _rsv0;                  // 120
+        float _rsv1;                  // 124
+    };
+    static_assert(sizeof(EmitPc) == 128, "particle_emit push-constant drift");
+    static_assert(offsetof(EmitPc, seed) == 112, "particle_emit push-constant layout drift");
+
 }// namespace
 
 ParticleFieldPass::ParticleFieldPass(VulkanContext& ctx, RetireBufferFn retireFn,
@@ -115,6 +155,8 @@ ParticleFieldPass::~ParticleFieldPass() {
     for (auto& b : descBufs_) destroyBuffer(ctx_.allocator(), b);
 
     const VkDevice d = ctx_.device();
+    if (emitPipe_)          vkDestroyPipeline(d, emitPipe_, nullptr);
+    if (emitPipeLayout_)    vkDestroyPipelineLayout(d, emitPipeLayout_, nullptr);
     if (densityPipe_)       vkDestroyPipeline(d, densityPipe_, nullptr);
     if (densityPipeLayout_) vkDestroyPipelineLayout(d, densityPipeLayout_, nullptr);
     if (convertPipe_)       vkDestroyPipeline(d, convertPipe_, nullptr);
@@ -144,11 +186,57 @@ void ParticleFieldPass::retireOrDestroy(Image2D& img) {
 void ParticleFieldPass::destroyState(State& st) {
 
     for (auto& b : st.positions) destroyBuffer(ctx_.allocator(), b);
+    destroyBuffer(ctx_.allocator(), st.devPositions);
+    destroyBuffer(ctx_.allocator(), st.devPrevPositions);
     for (auto& b : st.counts) destroyBuffer(ctx_.allocator(), b);
     for (auto& b : st.indirect) destroyBuffer(ctx_.allocator(), b);
     destroyBuffer(ctx_.allocator(), st.orientations);
     destroyImage2D(ctx_.allocator(), ctx_.device(), st.density);
     destroyImage2D(ctx_.allocator(), ctx_.device(), st.densityLin);
+}
+
+// The emitter pipeline: ONE compute stage, ZERO descriptor sets, one 128 B push
+// range. The absence of a descriptor set is the point — there is no set to
+// allocate, no pool to size, no handle to go stale and nothing that could ever
+// be written while a frame that names it is in flight (R6 / VUID-03047).
+void ParticleFieldPass::ensureEmitPipeline() {
+
+    if (emitPipe_ != VK_NULL_HANDLE) return;
+    const VkDevice d = ctx_.device();
+
+    VkPushConstantRange pc{};
+    pc.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+    pc.offset     = 0;
+    pc.size       = sizeof(EmitPc);
+    VkPipelineLayoutCreateInfo plci{};
+    plci.sType                  = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+    plci.setLayoutCount         = 0;
+    plci.pushConstantRangeCount = 1;
+    plci.pPushConstantRanges    = &pc;
+    check(vkCreatePipelineLayout(d, &plci, nullptr, &emitPipeLayout_),
+          "vkCreatePipelineLayout(particle emit)");
+
+    VkShaderModuleCreateInfo smci{};
+    smci.sType    = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
+    smci.codeSize = sizeof(kParticleEmitCompSpv);
+    smci.pCode    = kParticleEmitCompSpv;
+    VkShaderModule mod = VK_NULL_HANDLE;
+    check(vkCreateShaderModule(d, &smci, nullptr, &mod),
+          "vkCreateShaderModule(particle_emit)");
+
+    VkPipelineShaderStageCreateInfo stage{};
+    stage.sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+    stage.stage  = VK_SHADER_STAGE_COMPUTE_BIT;
+    stage.module = mod;
+    stage.pName  = "main";
+    VkComputePipelineCreateInfo cpci{};
+    cpci.sType  = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
+    cpci.stage  = stage;
+    cpci.layout = emitPipeLayout_;
+    const VkResult r = vkCreateComputePipelines(d, ctx_.pipelineCache(), 1, &cpci,
+                                                nullptr, &emitPipe_);
+    vkDestroyShaderModule(d, mod, nullptr);
+    check(r, "vkCreateComputePipelines(particle_emit)");
 }
 
 void ParticleFieldPass::ensureDensityPipeline() {
@@ -357,9 +445,35 @@ ParticleFieldPass::State& ParticleFieldPass::ensureState(const ParticleField& fi
     st->ownerTracked = !st->owner.expired();
 
     const VkDeviceSize bytes = VkDeviceSize(st->capacity) * sizeof(ParticlePos);
+    st->rendererOwned =
+            field.config().ownership == ParticleField::Ownership::Renderer;
+    if (st->rendererOwned) {
+        // ── NO RING (plan F-C) ──────────────────────────────────────────────
+        // Two DEVICE-LOCAL buffers, single-instance, never host-mapped. The ring
+        // below exists solely because a HOST memcpy for frame N would otherwise
+        // land in a buffer frames N-1 / N-2 are still reading; here the writer
+        // is particle_emit.comp, recorded into the same command buffer as every
+        // consumer and separated from them by a barrier in recordEmit, so the
+        // GPU's own dependency graph does the job three frames of latency were
+        // doing. Same argument, verbatim, as 5584d2ab's single interop buffer.
+        //
+        // No kHostWrite: this memory is never touched by the CPU, so it goes in
+        // device-local heap and a 1M-particle field costs 16 MB rather than the
+        // 48 MB three host-visible copies would.
+        st->devPositions = createBuffer(ctx_.allocator(), ctx_.device(), bytes,
+                                        kPositionUsage, VMA_MEMORY_USAGE_AUTO, 0);
+        st->devPrevPositions = createBuffer(ctx_.allocator(), ctx_.device(), bytes,
+                                            kPositionUsage, VMA_MEMORY_USAGE_AUTO, 0);
+    }
     for (std::uint32_t s = 0; s < kSlots; ++s) {
-        st->positions[s] = createBuffer(ctx_.allocator(), ctx_.device(), bytes,
-                                        kPositionUsage, VMA_MEMORY_USAGE_AUTO, kHostWrite);
+        if (!st->rendererOwned) {
+            st->positions[s] = createBuffer(ctx_.allocator(), ctx_.device(), bytes,
+                                            kPositionUsage, VMA_MEMORY_USAGE_AUTO, kHostWrite);
+        }
+        // The counts block stays ringed and host-visible for BOTH modes: it is
+        // 16 bytes, and under Ownership::Renderer it is written exactly once per
+        // slot (liveCount == capacity, and ParticleField::dataSerial never moves
+        // again) rather than once per frame.
         st->counts[s] = createBuffer(ctx_.allocator(), ctx_.device(), sizeof(FieldCountsGpu),
                                      kCountsUsage, VMA_MEMORY_USAGE_AUTO, kHostWrite);
         st->indirect[s] = createBuffer(ctx_.allocator(), ctx_.device(),
@@ -367,6 +481,7 @@ ParticleFieldPass::State& ParticleFieldPass::ensureState(const ParticleField& fi
                                        VMA_MEMORY_USAGE_AUTO, kHostWrite);
         st->slotSerial[s] = 0;// fresh allocation holds garbage
     }
+    if (st->rendererOwned) ensureEmitPipeline();
     if (field.config().orientations) {
         st->orientations = createBuffer(ctx_.allocator(), ctx_.device(),
                                         VkDeviceSize(st->capacity) * 8u, kOrientationUsage,
@@ -428,6 +543,7 @@ void ParticleFieldPass::prepareFrame(std::uint64_t serial, std::uint32_t frame,
     const std::vector<DensityVolumeDesc> prevVols = densityVols_;
     densityVols_.clear();
     densityDispatch_.clear();
+    emitDispatch_.clear();
     densityOverflow_ = 0;
 
     // Reclaim descriptor sets whose last referencing frame has provably
@@ -450,14 +566,18 @@ void ParticleFieldPass::prepareFrame(std::uint64_t serial, std::uint32_t frame,
         State& st = ensureState(*r.field);
         st.lastSeenSerial = serial;
 
+        const std::uint32_t live = std::min(r.field->liveCount(), st.capacity);
+
         // Positions + count into THIS frame's slot, version-gated. A static or
         // parked field re-sends nothing; a field the sim advanced re-sends the
-        // live prefix only. This is the design's ONLY per-particle CPU cost.
+        // live prefix only. This is the design's ONLY per-particle CPU cost —
+        // and under Ownership::Renderer even that is gone: there are no host
+        // positions to send, and the count is capacity, written once per slot
+        // and never again (dataSerial only moves on submit/setLiveCount).
         const std::uint64_t want = r.field->dataSerial();
         if (st.slotSerial[slot] != want) {
             st.slotSerial[slot] = want;
-            const std::uint32_t live = std::min(r.field->liveCount(), st.capacity);
-            if (live > 0) {
+            if (!st.rendererOwned && live > 0) {
                 uploadHostVisible(ctx_.allocator(), st.positions[slot],
                                   r.field->hostPositions().data(),
                                   VkDeviceSize(live) * sizeof(ParticlePos));
@@ -495,11 +615,20 @@ void ParticleFieldPass::prepareFrame(std::uint64_t serial, std::uint32_t frame,
         FieldDescGpu d{};
         const auto& world = r.field->matrixWorld->elements;
         std::memcpy(d.world, world.data(), sizeof(d.world));
-        d.posAddr = st.positions[slot].address;
-        // A slot that was never filled holds garbage, so the first two frames
-        // of a field's life reproject onto themselves (zero motion) rather than
-        // streaking in from uninitialised memory.
-        d.prevPosAddr = prevValid ? st.positions[prevSlot].address : d.posAddr;
+        if (st.rendererOwned) {
+            // Single instance, both of them, and prevPositions is a REAL
+            // previous state rather than an aliased ring slot: the emit
+            // dispatch writes f(t) and f(t - dt) into the two buffers from the
+            // same thread, earlier in this same command buffer.
+            d.posAddr     = st.devPositions.address;
+            d.prevPosAddr = st.devPrevPositions.address;
+        } else {
+            d.posAddr = st.positions[slot].address;
+            // A slot that was never filled holds garbage, so the first two
+            // frames of a field's life reproject onto themselves (zero motion)
+            // rather than streaking in from uninitialised memory.
+            d.prevPosAddr = prevValid ? st.positions[prevSlot].address : d.posAddr;
+        }
         d.oriAddr     = st.orientations.address;// 0 when no orientation buffer
         d.attrAddr    = 0;                      // Config::attributes, phase 4
         d.countAddr   = st.counts[slot].address;
@@ -514,6 +643,56 @@ void ParticleFieldPass::prepareFrame(std::uint64_t serial, std::uint32_t frame,
                      (r.field->tracedRepr().enabled ? 8u : 0u);
         d.classId = r.classId;
         descScratch_.push_back(d);
+
+        // ── The device emitter (plan F-C) ───────────────────────────────────
+        // O(1) host work per field: pack a 128 B push block. Nothing is
+        // version-gated because there is nothing to skip — the block is built
+        // fresh every frame and costs less than the branch that would decide
+        // not to. A PARKED Renderer field (setLiveCount(0)) records no dispatch
+        // at all, which is the one legitimate way to stop an emitter.
+        if (st.rendererOwned && live > 0 && emitPipe_ != VK_NULL_HANDLE) {
+            const auto& ep = r.field->emitter();
+            EmitPc pc{};
+            pc.posAddr     = st.devPositions.address;
+            pc.prevPosAddr = st.devPrevPositions.address;
+            pc.spawnCenter[0] = ep.spawnCenter.x;
+            pc.spawnCenter[1] = ep.spawnCenter.y;
+            pc.spawnCenter[2] = ep.spawnCenter.z;
+            pc.lifetime       = std::max(ep.lifetime, 1e-3f);
+            pc.spawnHalf[0]   = ep.spawnHalfExtent.x;
+            pc.spawnHalf[1]   = ep.spawnHalfExtent.y;
+            pc.spawnHalf[2]   = ep.spawnHalfExtent.z;
+            pc.lifetimeJitter = std::max(0.f, std::min(1.f, ep.lifetimeJitter));
+            // wind is summed into velocity HERE, not in the shader: they add
+            // linearly and the shader has no use for the distinction, so the
+            // API keeps two authorable knobs and the GPU sees one vector.
+            pc.velocity[0] = ep.velocity.x + ep.wind.x;
+            pc.velocity[1] = ep.velocity.y + ep.wind.y;
+            pc.velocity[2] = ep.velocity.z + ep.wind.z;
+            pc.speedSpread = std::max(ep.speedSpread, 0.f);
+            pc.accel[0]    = ep.accel.x;
+            pc.accel[1]    = ep.accel.y;
+            pc.accel[2]    = ep.accel.z;
+            pc.duty        = std::max(1e-3f, std::min(1.f, ep.dutyCycle));
+            pc.driftAmp    = ep.driftAmplitude;
+            pc.driftFreq   = ep.driftFrequency;
+            pc.driftGrowth = std::max(0.f, std::min(1.f, ep.driftGrowth));
+            pc.size        = std::max(ep.size, 0.f);
+            pc.sizeJitter  = std::max(0.f, std::min(1.f, ep.sizeJitter));
+            pc.time        = r.field->emitterTime();
+            // A negative dt would put prevPositions in the FUTURE and reverse
+            // every motion vector — the defect plan F2 says numbers will not
+            // catch. Floored on both sides of the API for that reason.
+            pc.dt         = std::max(r.field->emitterDt(), 0.f);
+            pc.capacity   = st.capacity;
+            pc.seed       = ep.seed;
+            pc.driftScale = std::max(ep.driftScale, 0.f);
+
+            EmitDispatch ed{};
+            ed.groups = (st.capacity + kEmitLocalSize - 1u) / kEmitLocalSize;
+            std::memcpy(ed.pc, &pc, sizeof(pc));
+            emitDispatch_.push_back(ed);
+        }
 
         // ── Density volume (plan §3.3) ──────────────────────────────────────
         // A field contributes density only while it has live particles: a
@@ -606,6 +785,8 @@ void ParticleFieldPass::prepareFrame(std::uint64_t serial, std::uint32_t frame,
         const bool dead = st.ownerTracked ? st.owner.expired() : absent;
         if (absent && dead) {
             for (auto& b : st.positions) retireOrDestroy(b);
+            retireOrDestroy(st.devPositions);
+            retireOrDestroy(st.devPrevPositions);
             for (auto& b : st.counts) retireOrDestroy(b);
             for (auto& b : st.indirect) retireOrDestroy(b);
             retireOrDestroy(st.orientations);
@@ -648,6 +829,51 @@ bool ParticleFieldPass::densityVolumeFor(const ParticleField& field,
     image = it->second->density.image;
     res   = it->second->densityRes;
     return true;
+}
+
+// The whole per-frame cost of Ownership::Renderer, and the whole per-frame
+// TRAFFIC too: one vkCmdPushConstants + one vkCmdDispatch per field, over a
+// domain the CPU has known since the field was created. Nothing is uploaded,
+// nothing is copied, no descriptor is written and no particle is touched by the
+// host — which is the thesis of the mode stated as a command stream.
+void ParticleFieldPass::recordEmit(VkCommandBuffer cb) {
+
+    if (emitDispatch_.empty() || emitPipe_ == VK_NULL_HANDLE) return;
+
+    vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, emitPipe_);
+    for (const EmitDispatch& ed : emitDispatch_) {
+        vkCmdPushConstants(cb, emitPipeLayout_, VK_SHADER_STAGE_COMPUTE_BIT,
+                           0, static_cast<std::uint32_t>(sizeof(EmitPc)), ed.pc);
+        vkCmdDispatch(cb, ed.groups, 1, 1);
+    }
+
+    // ONE barrier for every field, covering every consumer in this frame:
+    //   COMPUTE — the density scatter, recorded next;
+    //   VERTEX  — particlefield_gbuf.vert, which pulls positions AND
+    //             prevPositions through buffer_reference in every view's
+    //             G-buffer pass, all of which record later into this same
+    //             command buffer;
+    //   ACCELERATION_STRUCTURE_BUILD — nothing reads it yet (the procedural
+    //             AABB BLAS is parent phase 5, deferred), but a refit that
+    //             consumed these positions would sit in this same window, and
+    //             the stage is free to name now rather than a hazard to
+    //             rediscover later.
+    // Per-field barriers would serialise dispatches the scheduler is happy to
+    // overlap, and every consumer is downstream of ALL of them anyway.
+    VkMemoryBarrier2 mb{};
+    mb.sType         = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2;
+    mb.srcStageMask  = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+    mb.srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
+    mb.dstStageMask  = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT |
+                       VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT |
+                       VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR;
+    mb.dstAccessMask = VK_ACCESS_2_SHADER_STORAGE_READ_BIT |
+                       VK_ACCESS_2_ACCELERATION_STRUCTURE_READ_BIT_KHR;
+    VkDependencyInfo dep{};
+    dep.sType              = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
+    dep.memoryBarrierCount = 1;
+    dep.pMemoryBarriers    = &mb;
+    vkCmdPipelineBarrier2(cb, &dep);
 }
 
 void ParticleFieldPass::recordDensityScatter(VkCommandBuffer cb) {

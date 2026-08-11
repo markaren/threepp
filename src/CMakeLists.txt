@@ -1355,6 +1355,14 @@ if (THREEPP_WITH_VULKAN)
         "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/particle_density_convert.comp"
         kParticleDensityConvertCompSpv
         _particle_density_convert_spv_h)
+    # ParticleField DEVICE EMITTER (Ownership::Renderer,
+    # plans/particle-atmosphere.md F-C): one thread per slot evaluates a
+    # stateless closed-form trajectory and writes this frame's positions AND
+    # the prevPositions the motion vectors reproject through, in one dispatch.
+    compile_vulkan_shader(threepp
+        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/particle_emit.comp"
+        kParticleEmitCompSpv
+        _particle_emit_spv_h)
     compile_vulkan_shader(threepp
         "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/skinning.comp"
         kSkinningCompSpv

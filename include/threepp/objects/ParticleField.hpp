@@ -22,11 +22,36 @@
 // a valid Mesh that draws no pixels and crashes nothing — but it renders no
 // particles. Use an InstancedMesh under `--api gl`.
 //
-// ── PHASE 0 ──────────────────────────────────────────────────────────────────
-// This is the entity + the buffer, drawing nothing. `Ownership::HostRing` is
-// the only implemented mode; every representation below is stored and none is
-// yet consumed, so a field in a Vulkan scene flows through the whole frame and
-// produces zero pixels. Phase 1 turns MeshRepr into an indirect draw.
+// ── OWNERSHIP: WHO WRITES THE POSITIONS ──────────────────────────────────────
+// Two modes are implemented, and they divide the API cleanly in half. Calling
+// one mode's half on the other mode's field THROWS rather than silently doing
+// nothing — a field whose positions never arrive renders an empty scene, and
+// that is a bug worth an exception at the call site instead of a debugging
+// session at the capture.
+//
+//   Ownership::HostRing  — the CPU owns the positions. submit() memcpys them
+//     into a ring of kFramesInFlight + 1 host-visible buffers (the ring exists
+//     because a HOST write races an in-flight read). Its half of the API is
+//     submit() / setLiveCount(); setEmitter() and setEmitterTime() throw.
+//
+//   Ownership::Renderer  — the GPU owns the positions. A threepp compute pass
+//     (particle_emit.comp) writes ONE device-local position buffer and its
+//     prevPositions sibling at the head of every frame, from the closed-form
+//     trajectory EmitterParams describes. Nothing crosses the bus per frame and
+//     the CPU never walks a particle. Its half of the API is setEmitter() /
+//     setEmitterTime(); submit() throws.
+//
+//   Ownership::Interop   — declared, not implemented (CUDA zero-copy); create()
+//     still rejects it.
+//
+// setOrientations() belongs to NEITHER half: an orientation set is authored
+// once with the field and is orthogonal to who advances the positions, so a
+// Renderer field may still carry one.
+//
+// ── PHASE STATE ──────────────────────────────────────────────────────────────
+// MeshRepr (one indirect draw of a proxy per particle) and DensityRepr (a
+// world-anchored sigma_t volume, with an optional blackbody emission ramp) are
+// live. BillboardRepr and TracedRepr are stored and consumed by nothing.
 //
 // ── CHURN CONTRACT (read before calling create) ──────────────────────────────
 // A field is created ONCE at its final capacity and is never resized: there is
@@ -173,9 +198,110 @@ namespace threepp {
             bool  enabled     = false;
         };
 
+        // ── EMITTER (Ownership::Renderer) — plans/particle-atmosphere.md F-C ──
+        //
+        // The device emitter is STATELESS and CLOSED FORM: a slot's position is
+        // f(seed, slot, t), evaluated from scratch every frame by one compute
+        // thread. There is no integration, no ping-pong pair of buffers and no
+        // per-frame state anywhere, which is not an implementation detail but
+        // the reason the mode is worth having:
+        //
+        //   • DETERMINISM. The same params and the same t give the same bytes,
+        //     in this process and in the next one. An integrator's state is a
+        //     function of every frame that came before it; a closed form is a
+        //     function of nothing but its arguments.
+        //   • EXACT MOTION VECTORS. The same dispatch writes f(t) and f(t - dt)
+        //     into positions and prevPositions, so the two can never disagree
+        //     about which frame they describe — the whole staleness bug class
+        //     that copy-the-previous-buffer schemes carry (see the prevVertex
+        //     notes in the deforming-geometry path) simply does not exist.
+        //   • FREE SEEKING. setEmitterTime(8.f, dt) is valid with no warm-up, so
+        //     a headless capture can jump straight to t = 8 s.
+        //
+        // ARCHETYPES ARE PARAMETERS, NOT SHADER VARIANTS. Snow, rain, embers and
+        // dust motes are four points in this struct, not four shaders — which is
+        // what keeps the dispatch count at one per field however many kinds of
+        // weather a scene has.
+        //
+        //   snow  velocity {0,-1.1,0}, accel 0, driftAmplitude ~0.35,
+        //         driftFrequency ~0.12, lifetime = fall height / speed
+        //   rain  velocity {0,-9,0}, driftAmplitude ~0.02, short lifetime
+        //   ember velocity {0,+1.4,0}, accel {0,+0.4,0}, speedSpread ~0.5,
+        //         driftGrowth 1 (the tips wander, the base is steady), duty < 1
+        //   mote  velocity ~0, driftAmplitude ~0.15, driftFrequency ~0.05,
+        //         spawnHalfExtent = the whole room
+        //
+        // WHERE THE PARTICLES ARE. Positions are written in the FIELD'S LOCAL
+        // space; the field's matrixWorld is applied downstream by every consumer
+        // (the raster proxy's model matrix, the density splat's world matrix),
+        // exactly as it is for a HostRing field. So a Renderer field can be
+        // parented and moved and its emitter parameters do not change.
+        //
+        // THE STEADY-STATE CLOUD IS THE SPAWN BOX SWEPT ALONG THE TRAJECTORY.
+        // Slots are born uniformly in [spawnCenter ± spawnHalfExtent] with
+        // uniformly distributed ages, so at constant velocity the visible volume
+        // is that box smeared over velocity * lifetime. Author a SNOW field as a
+        // thin slab at the TOP of the volume with lifetime = height / speed —
+        // not as a box the size of the volume, which gives a triangular density
+        // ramp instead of an even snowfall.
+        struct EmitterParams {
+            // Birth region, field-local. A thin slab is an emission plane.
+            Vector3 spawnCenter{0.f, 0.f, 0.f};
+            Vector3 spawnHalfExtent{5.f, 0.1f, 5.f};
+
+            // Initial velocity (m/s) and its per-particle spread. speedSpread is
+            // an ISOTROPIC perturbation in m/s added to the vector, so it reads
+            // as a cone on a directional emitter and as a puff on a still one —
+            // one knob instead of a cone angle plus a speed jitter.
+            Vector3 velocity{0.f, -1.f, 0.f};
+            float   speedSpread = 0.f;
+            // Constant acceleration (m/s^2): gravity is -Y, buoyancy is +Y.
+            // Falling snow and rain use ZERO — they are at terminal velocity,
+            // which is a constant, and an accelerating flake is a bug you have
+            // to author around.
+            Vector3 accel{0.f, 0.f, 0.f};
+            // Uniform horizontal drift (m/s). Kept separate from `velocity`
+            // because it is a property of the SCENE (and is usually animated)
+            // rather than of the emitter; the two are summed on the way to the
+            // shader, so `velocity + wind` is what a particle actually flies.
+            Vector3 wind{0.f, 0.f, 0.f};
+
+            // ── Curl-style drift ────────────────────────────────────────────
+            // Sums of phase-shifted sines with incommensurate frequencies: a
+            // wandering, non-repeating displacement that is a PURE FUNCTION of
+            // t (no noise texture, no integrated turbulence, nothing to seek
+            // past). driftScale couples the phase to the particle's own
+            // position, which turns a field of independently wobbling flakes
+            // into gusts travelling through the volume.
+            float driftAmplitude = 0.f;// metres
+            float driftFrequency = 0.f;// Hz of the slowest term
+            float driftGrowth    = 0.f;// 0 = constant, 1 = ramps in over the life
+            float driftScale     = 0.f;// metres of spatial wavelength; 0 = per-slot phase only
+
+            // ── Life cycle ──────────────────────────────────────────────────
+            // A slot repeats with period `lifetime` (jittered per slot) and is
+            // ALIVE for the first `dutyCycle` of it. Outside that window it
+            // writes the w < 0 dead sentinel — the one liveness rule every
+            // consumer already tests — so duty < 1 gives a field whose mass
+            // breathes rather than sitting at a constant particle count.
+            float lifetime       = 4.f;
+            float lifetimeJitter = 0.f;// +/- fraction of lifetime, [0,1]
+            float dutyCycle      = 1.f;// alive fraction of the period, (0,1]
+
+            // Per-particle radius, written into w. Under
+            // WSemantic::Radius the mesh proxy scales by w / uniformRadius, so
+            // sizeJitter is where flake-size variety comes from; under
+            // WSemantic::InvMass w is only ever tested for the sentinel and the
+            // value is inert.
+            float size       = 0.02f;
+            float sizeJitter = 0.f;// +/- fraction of size, [0,1]
+
+            std::uint32_t seed = 20260812u;
+        };
+
         // Throws std::invalid_argument on capacity == 0 or on an ownership mode
-        // this phase does not implement (Interop / Renderer). See the churn
-        // contract in the file header before choosing a capacity.
+        // this phase does not implement (Interop). See the churn contract in the
+        // file header before choosing a capacity.
         static std::shared_ptr<ParticleField> create(const Config& config);
 
         [[nodiscard]] const Config& config() const { return config_; }
@@ -223,7 +349,37 @@ namespace threepp {
         // PxVec4). The ONLY per-particle CPU cost in the whole design, and it
         // is one memcpy, not a loop. n > capacity() is clamped to capacity.
         // Also sets the live count to n.
+        //
+        // THROWS on an Ownership::Renderer field: its positions live in device
+        // memory the host cannot map, and a silent no-op here would render an
+        // empty field with no diagnostic anywhere.
         void submit(const void* pxVec4Array, std::uint32_t n);
+
+        // ── Ownership::Renderer ─────────────────────────────────────────────
+        // Install the closed-form trajectory the device emitter evaluates. Free
+        // to call every frame — the parameters are O(1) bytes and are published
+        // to the GPU as push constants, so animating the wind costs nothing.
+        //
+        // THROWS on a HostRing / Interop field: there is no emitter there, and
+        // parameters that nothing reads are worse than an exception.
+        void setEmitter(const EmitterParams& params);
+        [[nodiscard]] const EmitterParams& emitter() const { return emitter_; }
+
+        // Advance the emitter to ABSOLUTE time `timeSec`. Not a delta: the
+        // trajectory is closed form in t, so any t is valid in any order and a
+        // capture may seek.
+        //
+        // `dtSec` is the interval the MOTION VECTORS are taken over — the same
+        // dispatch writes f(t) and f(t - dtSec) — so pass the frame's own delta.
+        // Pass 0 to freeze the field: every particle then reprojects onto itself
+        // and TAA converges completely, which is what a still capture wants.
+        //
+        // NEVER a wall clock: the caller owns the clock, so a headless capture
+        // is a function of its frame index and nothing else. THROWS on a
+        // non-Renderer field.
+        void setEmitterTime(float timeSec, float dtSec);
+        [[nodiscard]] float emitterTime() const { return emitTime_; }
+        [[nodiscard]] float emitterDt() const { return emitDt_; }
 
         // Per-particle orientation, as n quaternions in (x, y, z, w) order.
         // Requires Config::orientations. WRITE-ONCE by contract: the device
@@ -236,9 +392,18 @@ namespace threepp {
         // host floats per instance the InstancedMesh path carried).
         void setOrientations(const float* quatXyzw, std::uint32_t n);
 
-        // For Ownership::Renderer / Interop the count comes from the device and
-        // is never read back. For HostRing, submit() sets it; this setter exists
-        // to park a field (setLiveCount(0)) without re-submitting positions.
+        // For HostRing, submit() sets it; this setter exists to park a field
+        // (setLiveCount(0)) without re-submitting positions.
+        //
+        // For Ownership::Renderer the count is CAPACITY, set at construction and
+        // written to the device once: a stateless emitter has no compaction and
+        // no free list, so every slot is dispatched every frame and the ones
+        // outside their lifetime window identify themselves with the w < 0
+        // sentinel. Nothing is gained by tracking a second, redundant number
+        // that would have to be recomputed on the host from the same closed form
+        // the GPU is already evaluating. setLiveCount(0) still parks the field —
+        // that is the one legitimate use of this setter in Renderer mode, and it
+        // skips the emit dispatch entirely.
         void setLiveCount(std::uint32_t n);
         [[nodiscard]] std::uint32_t liveCount() const { return liveCount_; }
 
@@ -275,6 +440,13 @@ namespace threepp {
         BillboardRepr billboardRepr_;
         DensityRepr   densityRepr_;
         TracedRepr    tracedRepr_;
+
+        // Ownership::Renderer only. Deliberately NOT behind dataSerial_: the
+        // emitter's whole state is O(1) bytes that ride in a push constant, so
+        // there is nothing to version-gate and no upload to skip.
+        EmitterParams emitter_;
+        float         emitTime_ = 0.f;
+        float         emitDt_   = 1.f / 60.f;
     };
 
 }// namespace threepp

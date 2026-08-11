@@ -761,6 +761,13 @@ bool VulkanRenderer::Impl::beginDeferredFrame(Object3D& scene, Camera& camera) {
             {
                 THREEPP_CPUPROF("frame.M3_instExpandRec");
                 recordInstanceExpansion(cmdBuffers[currentFrame], currentFrame);
+                // The ParticleField device emitter, FIRST of the field block:
+                // one dispatch per Ownership::Renderer field writes this
+                // frame's positions AND its prevPositions, and everything below
+                // — the density scatter here, every view's G-buffer draw later
+                // — reads them. Once for all views, same world-anchored
+                // argument as the scatter.
+                recordParticleFieldEmit(cmdBuffers[currentFrame], currentFrame);
                 // Same place, same shape: a handful of 4-byte copies that give
                 // each ParticleField's draw command its instanceCount without
                 // the count ever being a CPU-visible value.

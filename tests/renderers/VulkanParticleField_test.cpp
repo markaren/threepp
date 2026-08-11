@@ -171,7 +171,12 @@ namespace {
     // turned on. Emission brings a per-PIXEL hash into the march (the banding
     // dither), so it is exactly the term that would break run-to-run
     // reproducibility if it were ever keyed on a frame index or a wall clock.
-    enum class DetMode { NoField, DensityOff, Parked, Dust, Fire };
+    // `Emit` is F2's determinism checkpoint: the SAME scene with a
+    // device-emitted field instead of a submitted one. A stateless closed form
+    // hashed from (seed, slot) and evaluated at a caller-supplied t has nothing
+    // in it that could differ between two processes — no RNG, no wall clock, no
+    // integration history — and this is what says so out loud.
+    enum class DetMode { NoField, DensityOff, Parked, Dust, Fire, Emit };
 
     std::vector<ParticlePos> makeDustSlab(std::uint32_t n, const Vector3& c, const Vector3& h) {
         std::vector<ParticlePos> out(n);
@@ -224,7 +229,36 @@ namespace {
         constexpr std::uint32_t kDust = 100'000;
         std::shared_ptr<ParticleField> field;
         std::vector<ParticlePos> dpos;
-        if (mode != DetMode::NoField) {
+        if (mode == DetMode::Emit) {
+            // A device-emitted, MESH-drawn field: the pixels come from
+            // particle_emit.comp's closed form and from nothing else. The clock
+            // is the frame index, never a wall clock, so the child's whole
+            // timeline is a function of kDetFrames alone.
+            ParticleField::Config cfg;
+            cfg.capacity      = 50'000;
+            cfg.ownership     = ParticleField::Ownership::Renderer;
+            cfg.wSemantic     = ParticleField::WSemantic::Radius;
+            cfg.uniformRadius = 0.03f;
+            field = ParticleField::create(cfg);
+            auto m = MeshStandardMaterial::create();
+            m->color = Color(0.92f, 0.94f, 0.98f);
+            field->setMeshRepr(BoxGeometry::create(0.06f, 0.06f, 0.06f), m);
+            ParticleField::EmitterParams ep;
+            ep.spawnCenter.set(0.f, 3.2f, 1.2f);
+            ep.spawnHalfExtent.set(3.0f, 0.1f, 1.6f);
+            ep.velocity.set(0.f, -1.3f, 0.f);
+            ep.wind.set(0.3f, 0.f, 0.f);
+            ep.driftAmplitude = 0.25f;
+            ep.driftFrequency = 0.2f;
+            ep.driftScale     = 4.f;
+            ep.lifetime   = 3.0f;
+            ep.dutyCycle  = 0.92f;
+            ep.size       = 0.03f;
+            ep.sizeJitter = 0.4f;
+            ep.seed       = 424242u;
+            field->setEmitter(ep);
+            scene.add(field);
+        } else if (mode != DetMode::NoField) {
             ParticleField::Config cfg;
             cfg.capacity = kDust;
             field = ParticleField::create(cfg);
@@ -249,6 +283,10 @@ namespace {
         camera->lookAt(Vector3(0.f, 0.8f, 0.f));
 
         for (int i = 0; i < kDetFrames; ++i) {
+            // Fixed dt, driven by the frame index: the emitter's clock is the
+            // caller's, and a capture must be a function of nothing else.
+            if (mode == DetMode::Emit)
+                field->setEmitterTime(float(i) * (1.f / 60.f), 1.f / 60.f);
             canvas.animateOnce([&] { renderer.render(scene, *camera); });
         }
         const auto px = renderer.readRGBPixels();
@@ -306,6 +344,7 @@ int main(int argc, char** argv) {
                                : ms == "densityoff" ? DetMode::DensityOff
                                : ms == "parked"     ? DetMode::Parked
                                : ms == "fire"       ? DetMode::Fire
+                               : ms == "emit"       ? DetMode::Emit
                                                     : DetMode::Dust;
             return runDetChild(mode, out);
         }
@@ -753,6 +792,433 @@ int main(int argc, char** argv) {
         ground->visible = true;
         box->visible = true;
         for (int i = 0; i < 4; ++i) frame();
+    }
+
+    // ── F2: Ownership::Renderer — the DEVICE EMITTER ────────────────────────
+    //
+    // plans/particle-atmosphere.md F-C. The mode's claim is that a field of N
+    // particles is written entirely on the device from a closed form, so the
+    // host neither allocates, walks nor uploads a single position. Five things
+    // are asserted, and the first is the API contract rather than a pixel:
+    //
+    //   (i)   THE MODE SPLIT IS ENFORCED. submit() on a Renderer field throws;
+    //         setEmitter()/setEmitterTime() on a HostRing field throw. A silent
+    //         no-op in either direction renders an empty field with no
+    //         diagnostic anywhere, which is a debugging session instead of an
+    //         exception at the call site.
+    //   (ii)  A Renderer field DRAWS — its particles paint pixels through the
+    //         same MeshRepr path a HostRing field uses, at one entry, with
+    //         per-particle indices in outIds.w. Nothing was submitted: every
+    //         position on screen was computed by particle_emit.comp.
+    //   (iii) MOTION VECTORS, which are the whole reason the emitter writes
+    //         f(t) and f(t - dt) in one dispatch. dt == 0 must give EXACTLY
+    //         zero motion (the frozen-capture contract), dt > 0 must give
+    //         motion whose SIGN says the previous position was above a falling
+    //         particle, and doubling dt must double it. Numbers cannot see a
+    //         smeared image, but they can see a reversed or dead velocity, and
+    //         that is the class this catches.
+    //   (iv)  Parking (setLiveCount(0)) stops the emitter and paints nothing.
+    //   (v)   A HostRing field in the SAME scene is unaffected — the two modes
+    //         share one pass and one draw path, so this is the regression test
+    //         for the fork inside it.
+    {
+        ground->visible = false;
+        box->visible    = false;
+        // Settle the entry list BEFORE the baseline is read: autoLodStats
+        // reports the last RENDERED frame, so hiding two meshes and reading the
+        // count in the same breath compares two different scenes.
+        for (int i = 0; i < 4; ++i) frame();
+
+        // (i) The mode split.
+        {
+            ParticleField::Config rc;
+            rc.capacity  = 64;
+            rc.ownership = ParticleField::Ownership::Renderer;
+            auto f = ParticleField::create(rc);
+            check(f->liveCount() == 64,
+                  "a Renderer field's live count is its CAPACITY at construction "
+                  "(dead slots self-identify with w < 0)");
+            bool threw = false;
+            try { std::vector<ParticlePos> p(4); f->submit(p.data(), 4); }
+            catch (const std::invalid_argument&) { threw = true; }
+            check(threw, "submit() on an Ownership::Renderer field throws");
+
+            threw = false;
+            try {
+                ParticleField::Config hc;
+                hc.capacity = 64;
+                auto hf = ParticleField::create(hc);
+                hf->setEmitter(ParticleField::EmitterParams{});
+            } catch (const std::invalid_argument&) { threw = true; }
+            check(threw, "setEmitter() on a HostRing field throws");
+
+            threw = false;
+            try {
+                ParticleField::Config hc;
+                hc.capacity = 64;
+                ParticleField::create(hc)->setEmitterTime(1.f, 0.016f);
+            } catch (const std::invalid_argument&) { threw = true; }
+            check(threw, "setEmitterTime() on a HostRing field throws");
+        }
+
+        // (ii) It draws. A slab of slots born across the top of the view and
+        // falling fast enough that one frame's displacement is several pixels —
+        // which is what makes the motion assertions below have something to
+        // measure.
+        constexpr std::uint32_t kEmit = 3'000;
+        constexpr float kFall = 3.0f;// m/s, downward
+        ParticleField::Config ecfg;
+        ecfg.capacity      = kEmit;
+        ecfg.ownership     = ParticleField::Ownership::Renderer;
+        ecfg.wSemantic     = ParticleField::WSemantic::Radius;
+        ecfg.uniformRadius = 0.05f;
+        auto emit = ParticleField::create(ecfg);
+        auto emitMat = MeshStandardMaterial::create();
+        emitMat->color = Color(0.15f, 0.85f, 0.35f);
+        emit->setMeshRepr(BoxGeometry::create(0.10f, 0.10f, 0.10f), emitMat);
+        {
+            ParticleField::EmitterParams ep;
+            ep.spawnCenter.set(0.f, 2.6f, 0.f);
+            ep.spawnHalfExtent.set(1.6f, 0.05f, 0.8f);
+            ep.velocity.set(0.f, -kFall, 0.f);
+            ep.lifetime  = 1.2f;// 3.6 m of fall — clears the frame
+            ep.dutyCycle = 1.f; // continuous, so every slot is alive
+            ep.size      = 0.05f;
+            ep.seed      = 7331u;
+            emit->setEmitter(ep);
+        }
+        emit->setEmitterTime(2.f, 1.f / 60.f);
+        const std::uint32_t entriesBeforeEmit = entryTotal(renderer);
+        scene.add(emit);
+        for (int i = 0; i < 10; ++i) {
+            emit->setEmitterTime(2.f + float(i) / 60.f, 1.f / 60.f);
+            frame();
+        }
+        check(baseEntries == 0 || entryTotal(renderer) == entriesBeforeEmit + 1,
+              "a Renderer-owned field is also EXACTLY ONE entry");
+
+        const auto readIds2 = [&](std::vector<std::uint16_t>& px, int& w, int& h) {
+            std::vector<std::uint8_t> raw;
+            int bw = 0, bh = 0, bpp = 0;
+            if (!renderer.readGBufferAOV(VulkanRenderer::GBufferAOV::Ids, raw, bw, bh, bpp))
+                return false;
+            w = bw; h = bh;
+            px.resize(std::size_t(bw) * std::size_t(bh) * 4u);
+            std::memcpy(px.data(), raw.data(), px.size() * sizeof(std::uint16_t));
+            return true;
+        };
+        std::vector<std::uint16_t> eids;
+        int ew = 0, eh = 0;
+        check(readIds2(eids, ew, eh), "ids AOV readback succeeded (device emitter)");
+        std::size_t emitPixels = 0, badId = 0;
+        std::uint16_t emitEntry = 0;
+        std::vector<std::uint8_t> seen(kEmit, 0);
+        for (std::size_t p = 0; p * 4u + 3u < eids.size(); ++p) {
+            if (eids[p * 4u + 0u] == 0) continue;
+            ++emitPixels;
+            if (emitEntry == 0) emitEntry = eids[p * 4u + 0u];
+            const std::uint16_t pid = eids[p * 4u + 3u];
+            // outIds.w is 16 bits, so a capacity above 65536 wraps by design —
+            // kEmit is below that, so an index out of range is a real fault.
+            if (eids[p * 4u + 0u] != emitEntry || pid >= kEmit) ++badId;
+            else seen[pid] = 1;
+        }
+        std::uint32_t distinctEmit = 0;
+        for (std::uint8_t s : seen) distinctEmit += s;
+        std::printf("[info] device emitter: %zu pixels, %u distinct particle indices "
+                    "(capacity %u), entry id %u\n",
+                    emitPixels, distinctEmit, kEmit, unsigned(emitEntry));
+        check(emitPixels > 500,
+              "a Renderer-owned field paints pixels with NOTHING submitted from the host");
+        check(badId == 0, "every emitted pixel is this field's entry with an index < capacity");
+        // Not all of them: the slab is wider than the frustum and slots occlude
+        // each other. A large fraction is what proves gl_InstanceIndex is the
+        // particle index rather than one shared value.
+        check(distinctEmit > kEmit / 8,
+              "outIds.w carries many distinct particle indices for a device-emitted field");
+
+        // (iii) Motion vectors out of the closed form.
+        const auto readMotion2 = [&](std::vector<float>& out, int& w, int& h) {
+            std::vector<std::uint8_t> raw;
+            int bw = 0, bh = 0, bpp = 0;
+            if (!renderer.readGBufferAOV(VulkanRenderer::GBufferAOV::Motion, raw, bw, bh, bpp))
+                return false;
+            w = bw; h = bh;
+            const std::size_t n = std::size_t(bw) * std::size_t(bh) * 4u;
+            out.resize(n);
+            const auto* hf = reinterpret_cast<const std::uint16_t*>(raw.data());
+            for (std::size_t i = 0; i < n; ++i) {
+                const std::uint16_t v = hf[i];
+                const std::uint32_t sign = std::uint32_t(v >> 15) << 31;
+                const std::int32_t exp = (v >> 10) & 0x1F;
+                const std::uint32_t man = v & 0x3FF;
+                std::uint32_t bits;
+                if (exp == 0) bits = sign;
+                else if (exp == 31) bits = sign | 0x7F800000u | (man << 13);
+                else bits = sign | (std::uint32_t(exp - 15 + 127) << 23) | (man << 13);
+                std::memcpy(&out[i], &bits, 4);
+            }
+            return true;
+        };
+        // Mean motion over the field's own pixels, segmented by the ids AOV.
+        const auto emitMotion = [&](float dt, double& meanY, double& meanMag) {
+            for (int i = 0; i < 8; ++i) {
+                emit->setEmitterTime(3.f, dt);
+                frame();
+            }
+            std::vector<float> mo;
+            std::vector<std::uint16_t> id2;
+            int mw = 0, mh = 0, iw2 = 0, ih2 = 0;
+            meanY = meanMag = 0.0;
+            if (!readMotion2(mo, mw, mh) || !readIds2(id2, iw2, ih2)) return false;
+            double sy = 0, sm = 0;
+            std::size_t n = 0;
+            for (std::size_t p = 0; p * 4u + 3u < id2.size(); ++p) {
+                if (id2[p * 4u + 0u] == 0) continue;
+                const double mx = mo[p * 4u + 0u], my = mo[p * 4u + 1u];
+                sy += my;
+                sm += std::sqrt(mx * mx + my * my);
+                ++n;
+            }
+            if (n == 0) return false;
+            meanY = sy / double(n);
+            meanMag = sm / double(n);
+            return true;
+        };
+
+        // Frozen: dt == 0 makes f(t) and f(t - dt) the SAME expression, so the
+        // two buffers are bit-identical and every particle reprojects onto
+        // itself. This is what lets a still capture converge under TAA, and it
+        // is exactly zero rather than merely small.
+        double y0 = 0, m0 = 0;
+        check(emitMotion(0.f, y0, m0), "motion AOV readback succeeded (emitter frozen)");
+        std::printf("[info] emitter dt = 0: mean |motion| over field pixels %.6f NDC\n", m0);
+        check(m0 < 1e-4, "dt = 0 freezes the field: every particle has ZERO motion");
+
+        double y1 = 0, m1 = 0, y2 = 0, m2 = 0;
+        check(emitMotion(1.f / 60.f, y1, m1), "motion AOV readback succeeded (dt = 1/60)");
+        check(emitMotion(2.f / 60.f, y2, m2), "motion AOV readback succeeded (dt = 2/60)");
+        std::printf("[info] emitter dt = 1/60: mean motion .y %+.5f, |motion| %.5f NDC\n", y1, m1);
+        std::printf("[info] emitter dt = 2/60: mean motion .y %+.5f, |motion| %.5f NDC\n", y2, m2);
+        // SIGN. The particles fall, so their PREVIOUS position is ABOVE the
+        // current one; the motion vector points current -> previous and the AOV
+        // is GL-Y-up NDC, so .y must be positive. A negative mean here is
+        // f(t + dt) instead of f(t - dt) — the reversed-velocity defect that no
+        // image metric can see (plan F2).
+        check(y1 > 0.0, "a falling particle's motion vector points UP (previous is above)");
+        check(m1 > 5e-3, "dt = 1/60 produces a measurable motion vector");
+        // LINEARITY. Twice the interval is twice the displacement, because the
+        // trajectory is very nearly linear over 33 ms. This is what proves dt is
+        // actually consumed rather than a constant hiding in the shader.
+        const double ratio = m1 > 0.0 ? m2 / m1 : 0.0;
+        std::printf("[info] |motion| ratio at 2x dt: %.3f (must be ~2)\n", ratio);
+        check(ratio > 1.7 && ratio < 2.3,
+              "the motion vector scales with the emitter's dt");
+
+        // (iv) Park.
+        emit->setLiveCount(0);
+        for (int i = 0; i < 6; ++i) { emit->setEmitterTime(3.f, 1.f / 60.f); frame(); }
+        check(readIds2(eids, ew, eh), "ids AOV readback succeeded (emitter parked)");
+        std::size_t parkedPixels = 0;
+        for (std::size_t p = 0; p * 4u + 3u < eids.size(); ++p)
+            if (eids[p * 4u + 0u] != 0) ++parkedPixels;
+        std::printf("[info] device emitter parked (liveCount 0): %zu pixels\n", parkedPixels);
+        check(parkedPixels == 0, "a parked Renderer field paints nothing and skips its dispatch");
+        emit->setLiveCount(kEmit);
+
+        // (iv-b) THE EXACT DETERMINISM CLAIM, where it is exactly true.
+        //
+        // A framebuffer comparison cannot state this: two runs of the SAME
+        // unmodified binary on this backend already differ by a percent or two
+        // of bytes (the F0 amendment measures the floor), and a field of moving
+        // particles keeps every temporal history in a permanent transient,
+        // which amplifies it. So the emitter's purity is asserted on the
+        // DENSITY VOLUME instead, which is integer fixed-point and therefore
+        // bit-reproducible by construction — exactly the split F0 used for
+        // emission.
+        //
+        // The test is a SEEK: evaluate at t, wander to a different t, come back
+        // to t. A stateless closed form gives the same bytes; anything with
+        // integration state, a frame counter or a wall clock in it cannot.
+        {
+            emit->setDensityRepr(Vector3(0.f, 1.6f, 0.f), Vector3(2.0f, 1.4f, 1.2f),
+                                 0.6f, /*resolution*/ 32);
+            const auto volAt = [&](float t, std::vector<std::uint32_t>& out) {
+                for (int i = 0; i < 4; ++i) { emit->setEmitterTime(t, 1.f / 60.f); frame(); }
+                std::uint32_t res = 0;
+                return renderer.readParticleDensityVolume(*emit, out, res);
+            };
+            std::vector<std::uint32_t> vA, vElsewhere, vBack;
+            const bool okSeek = volAt(4.25f, vA) && volAt(9.75f, vElsewhere) &&
+                                volAt(4.25f, vBack);
+            check(okSeek, "density volume readback succeeded for the device emitter");
+            if (okSeek) {
+                std::size_t occupied = 0, differ = 0, differElse = 0;
+                for (std::size_t i = 0; i < vA.size(); ++i) {
+                    if (vA[i] != 0) ++occupied;
+                    if (vA[i] != vBack[i]) ++differ;
+                    if (i < vElsewhere.size() && vA[i] != vElsewhere[i]) ++differElse;
+                }
+                std::printf("[info] emitter seek: %zu/%zu voxels occupied; t=4.25 revisited "
+                            "differs in %zu voxels; a DIFFERENT t differs in %zu\n",
+                            occupied, vA.size(), differ, differElse);
+                check(occupied > 100, "the device-emitted field fills its density volume");
+                check(differ == 0,
+                      "the device emitter is a PURE FUNCTION of t: seeking away and back "
+                      "reproduces the field BIT-IDENTICALLY");
+                // The negative control: without it, a volume that was simply
+                // never rewritten would pass the line above trivially.
+                check(differElse > 0,
+                      "a different t produces a different field (the seek test is not "
+                      "measuring a stale volume)");
+            }
+            emit->densityRepr().enabled = false;
+            for (int i = 0; i < 4; ++i) { emit->setEmitterTime(3.f, 1.f / 60.f); frame(); }
+        }
+
+        // (v) A HostRing field beside it. Disjoint in world space (and so on
+        // screen), so each one's pixels are attributable, and the assertion is
+        // that BOTH still paint: the two ownership modes share prepareFrame,
+        // the counts copy, the indirect draw and the vertex stage, and this is
+        // the regression test for the fork inside each of them.
+        ParticleField::Config hcfg;
+        hcfg.capacity      = 64;
+        hcfg.uniformRadius = 0.12f;
+        auto host = ParticleField::create(hcfg);
+        auto hostMat = MeshStandardMaterial::create();
+        hostMat->color = Color(0.90f, 0.25f, 0.15f);
+        host->setMeshRepr(BoxGeometry::create(0.24f, 0.24f, 0.24f), hostMat);
+        std::vector<ParticlePos> hostPos(64);
+        for (std::uint32_t i = 0; i < 64; ++i)
+            hostPos[i] = {-2.6f + 0.08f * float(i % 8), 0.5f + 0.30f * float(i / 8), 0.f, 1.f};
+        scene.add(host);
+        for (int i = 0; i < 8; ++i) {
+            host->submit(hostPos.data(), 64);
+            emit->setEmitterTime(3.f + float(i) / 60.f, 1.f / 60.f);
+            frame();
+        }
+        check(readIds2(eids, ew, eh), "ids AOV readback succeeded (both modes in one scene)");
+        std::size_t hostPixels = 0, devPixels = 0;
+        const std::uint16_t hostEntry = 0;
+        (void) hostEntry;
+        for (std::size_t p = 0; p * 4u + 3u < eids.size(); ++p) {
+            const std::uint16_t e = eids[p * 4u + 0u];
+            if (e == 0) continue;
+            if (e == emitEntry) ++devPixels;
+            else ++hostPixels;
+        }
+        std::printf("[info] one scene, both modes: HostRing %zu px, Renderer %zu px\n",
+                    hostPixels, devPixels);
+        check(hostPixels > 100, "a HostRing field still draws beside a Renderer field");
+        check(devPixels > 100, "a Renderer field still draws beside a HostRing field");
+
+        scene.remove(*host);
+        scene.remove(*emit);
+        ground->visible = true;
+        box->visible    = true;
+        for (int i = 0; i < 4; ++i) frame();
+    }
+
+    // ── F2 checkpoint (e): the mode's ENTIRE per-frame CPU cost ─────────────
+    //
+    // The phase-0 gate above proved a HostRing field is O(1) in entry
+    // bookkeeping — but it still pays one memcpy of capacity * 16 B per frame,
+    // which shows up in frame.P_particleFields and grows with capacity. A
+    // Renderer field pays NOTHING there: no host staging exists, the counts
+    // block is written once per ring slot and never again, and the emitter's
+    // whole state is a 128 B push constant. So this measures the phase directly
+    // and demands it be FLAT from 10k to 300k — the thesis of the mode, stated
+    // as a number rather than as a design intention.
+    {
+        constexpr int kMeasureFrames2 = 60;
+        constexpr std::uint32_t kSmallEmit = 10'000, kLargeEmit = 300'000;
+
+        const auto makeEmitter = [&](std::uint32_t cap) {
+            ParticleField::Config c;
+            c.capacity  = cap;
+            c.ownership = ParticleField::Ownership::Renderer;
+            c.wSemantic = ParticleField::WSemantic::Radius;
+            c.uniformRadius = 0.02f;
+            auto f = ParticleField::create(c);
+            auto m = MeshStandardMaterial::create();
+            f->setMeshRepr(BoxGeometry::create(0.04f, 0.04f, 0.04f), m);
+            ParticleField::EmitterParams ep;
+            ep.spawnCenter.set(0.f, 4.f, 0.f);
+            ep.spawnHalfExtent.set(4.f, 0.1f, 4.f);
+            ep.velocity.set(0.f, -1.2f, 0.f);
+            ep.lifetime = 5.f;
+            ep.size     = 0.02f;
+            f->setEmitter(ep);
+            return f;
+        };
+        auto emSmall = makeEmitter(kSmallEmit);
+        auto emLarge = makeEmitter(kLargeEmit);
+
+        struct EmitPhases { double lean = 0, tlas = 0, indirect = 0, fields = 0, emitMs = 0; };
+        const auto measureEmit = [&](const std::shared_ptr<ParticleField>& f) {
+            scene.add(f);
+            for (int i = 0; i < 14; ++i) { f->setEmitterTime(float(i) / 60.f, 1.f / 60.f); frame(); }
+            profReset();
+            double gpu = 0.0;
+            for (int i = 0; i < kMeasureFrames2; ++i) {
+                f->setEmitterTime(1.f + float(i) / 60.f, 1.f / 60.f);
+                frame();
+                gpu += renderer.lastFrameTimings().particleEmitMs;
+            }
+            EmitPhases p;
+            p.lean     = profMsPerFrame("scene.3_leanMatrixRefresh");
+            p.tlas     = profMsPerFrame("scene.7_tlasRefitFill");
+            p.indirect = profMsPerFrame("frame.D_buildIndirect");
+            p.fields   = profMsPerFrame("frame.P_particleFields");
+            p.emitMs   = gpu / double(kMeasureFrames2);
+            scene.remove(*f);
+            for (int i = 0; i < 4; ++i) frame();
+            return p;
+        };
+        // Interleaved, repo A/B rule.
+        EmitPhases lo{}, hi{};
+        for (int pair = 0; pair < 2; ++pair) {
+            const EmitPhases a = measureEmit(emSmall);
+            const EmitPhases b = measureEmit(emLarge);
+            lo.lean += a.lean; lo.tlas += a.tlas; lo.indirect += a.indirect;
+            lo.fields += a.fields; lo.emitMs += a.emitMs;
+            hi.lean += b.lean; hi.tlas += b.tlas; hi.indirect += b.indirect;
+            hi.fields += b.fields; hi.emitMs += b.emitMs;
+        }
+        const double hinv = 0.5;
+        lo.lean *= hinv; lo.tlas *= hinv; lo.indirect *= hinv; lo.fields *= hinv; lo.emitMs *= hinv;
+        hi.lean *= hinv; hi.tlas *= hinv; hi.indirect *= hinv; hi.fields *= hinv; hi.emitMs *= hinv;
+
+        std::printf("\n[gate] Ownership::Renderer CPU phases, ms/frame, 2 interleaved pairs "
+                    "of %d frames\n", kMeasureFrames2);
+        std::printf("  %-28s %10s %10s\n", "phase", "10k", "300k");
+        const auto erow = [&](const char* n, double a, double b) {
+            std::printf("  %-28s %10.5f %10.5f\n", n, a, b);
+        };
+        erow("scene.3_leanMatrixRefresh", lo.lean, hi.lean);
+        erow("scene.7_tlasRefitFill", lo.tlas, hi.tlas);
+        erow("frame.D_buildIndirect", lo.indirect, hi.indirect);
+        erow("frame.P_particleFields", lo.fields, hi.fields);
+        std::printf("  %-28s %10.5f %10.5f   (GPU)\n", "TP_ParticleEmit", lo.emitMs, hi.emitMs);
+
+        // The same generous bound the phase-0 gate uses, and for the same
+        // reason: these are microseconds, so an absolute floor is what keeps a
+        // ratio between two sub-20us numbers from being an assertion at all.
+        constexpr double kFloor2 = 0.020, kRatio2 = 3.0;
+        const auto flat2 = [&](const char* n, double a, double b) {
+            check(b <= kFloor2 || b <= kRatio2 * a,
+                  std::string(n) + " is flat from 10k to 300k (Renderer ownership)");
+        };
+        flat2("scene.3_leanMatrixRefresh", lo.lean, hi.lean);
+        flat2("scene.7_tlasRefitFill", lo.tlas, hi.tlas);
+        flat2("frame.D_buildIndirect", lo.indirect, hi.indirect);
+        flat2("frame.P_particleFields", lo.fields, hi.fields);
+        // The strong form: whatever the capacity, the per-frame host work for a
+        // device-emitted field is a push-constant fill. 20 us is 30x what it
+        // measures and still a hundredth of what a 300k host memcpy costs.
+        check(hi.fields < 0.020,
+              "a 300k Renderer field costs ~zero CPU in frame.P_particleFields");
+        check(hi.emitMs > 0.0, "the emit dispatch is bracketed (TP_ParticleEmit is nonzero)");
     }
 
     // ── PHASE 2: froxel density (dust) ──────────────────────────────────────
@@ -1532,6 +1998,12 @@ int main(int argc, char** argv) {
         // backend's pre-existing RT/GI non-reproducibility.
         const auto fireA = renderChild("fire", "a");
         const auto fireB = renderChild("fire", "b");
+        // F2 checkpoint (b): a DEVICE-emitted field, moving, in two processes.
+        // Everything about it is a hash of (seed, slot) evaluated at a
+        // caller-supplied t, so if it is ever not reproducible the cause is
+        // something that should not be in the shader at all.
+        const auto emitA = renderChild("emit", "a");
+        const auto emitB = renderChild("emit", "b");
         const long long control = diffBytes(noFieldA, noFieldB);
         if (control < 0) {
             std::printf("[skip] cross-process comparisons (a child could not render)\n");
@@ -1571,6 +2043,23 @@ int main(int argc, char** argv) {
                       "an EMISSIVE particle field renders reproducibly across "
                       "processes (the step dither is a pixel hash, not a "
                       "temporal jitter)");
+            }
+
+            const long long dEmit = diffBytes(emitA, emitB);
+            std::printf("[info]            emit    vs emit      : %lld / %lld bytes "
+                        "(F2 checkpoint b — the device emitter is deterministic)\n",
+                        dEmit, total);
+            if (dEmit < 0) {
+                std::printf("[skip] device-emitter determinism pair (a child could not render)\n");
+            } else {
+                // Same bound, same control. A field of 50k MOVING particles
+                // whose positions came off a compute shader lands inside the
+                // renderer's own run-to-run floor: no RNG state, no wall clock,
+                // no integration history, and the atomics that would have
+                // reordered are not in this path at all.
+                check(dEmit <= bound,
+                      "a DEVICE-EMITTED particle field renders reproducibly across "
+                      "processes (closed form, hashed seed, caller's clock)");
             }
         }
     }

@@ -48,7 +48,20 @@ ParticleField::ParticleField(const Config& config)
     : Mesh(makePlaceholderGeometry(), MeshBasicMaterial::create()),
       config_(config) {
 
-    host_.resize(config_.capacity);
+    if (config_.ownership == Ownership::Renderer) {
+        // No host staging at all: the positions are written by the device and
+        // the host never sees them. Allocating capacity * 16 B of unreachable
+        // staging for a 1M-particle weather field would be 16 MB of memory
+        // whose only purpose is to be ignored.
+        //
+        // liveCount = capacity, ONCE. A stateless emitter has no compaction:
+        // every slot is dispatched every frame and the ones outside their
+        // lifetime window write w < 0, which is the predicate every consumer
+        // already tests. See setLiveCount in the header.
+        liveCount_ = config_.capacity;
+    } else {
+        host_.resize(config_.capacity);
+    }
 }
 
 std::shared_ptr<ParticleField> ParticleField::create(const Config& config) {
@@ -59,17 +72,28 @@ std::shared_ptr<ParticleField> ParticleField::create(const Config& config) {
                 "its final capacity and is never resized (see the churn contract in "
                 "ParticleField.hpp)");
     }
-    if (config.ownership != Ownership::HostRing) {
+    if (config.ownership == Ownership::Interop) {
         throw std::invalid_argument(
-                "ParticleField::create: only Ownership::HostRing is implemented in this "
-                "phase; Ownership::Interop (CUDA zero-copy) and Ownership::Renderer "
-                "(compute-written) are declared but not yet wired");
+                "ParticleField::create: Ownership::Interop (CUDA zero-copy) is declared "
+                "but not yet wired; use Ownership::HostRing (a host memcpy per frame) or "
+                "Ownership::Renderer (a device compute emitter)");
     }
     return std::make_shared<ParticleField>(config);
 }
 
 void ParticleField::submit(const void* pxVec4Array, std::uint32_t n) {
 
+    // The mode split, enforced rather than documented. A Renderer field's
+    // positions are device-local — there is no host buffer to memcpy into and
+    // no mapping to write through — so accepting this call would leave the
+    // caller believing it had supplied positions that the emitter overwrites
+    // every frame anyway.
+    if (config_.ownership == Ownership::Renderer) {
+        throw std::invalid_argument(
+                "ParticleField::submit: this field is Ownership::Renderer — its positions "
+                "are written on the device by the emitter. Use setEmitter()/"
+                "setEmitterTime(), or create the field with Ownership::HostRing");
+    }
     if (n > config_.capacity) n = config_.capacity;
     if (n > 0) {
         if (!pxVec4Array) {
@@ -149,6 +173,40 @@ void ParticleField::setOrientations(const float* quatXyzw, std::uint32_t n) {
     // — the same "no pixels" collapse a dead slot gets, and unreachable anyway
     // because instanceCount never exceeds the live count.
     ++oriSerial_;
+}
+
+void ParticleField::setEmitter(const EmitterParams& params) {
+
+    if (config_.ownership != Ownership::Renderer) {
+        throw std::invalid_argument(
+                "ParticleField::setEmitter: the device emitter only exists for "
+                "Ownership::Renderer fields; a HostRing field's positions come from "
+                "submit()");
+    }
+    emitter_ = params;
+    // Floors, applied here rather than in the shader for the same reason
+    // DensityRepr::tempFalloff is clamped host-side: a division by a period of
+    // zero would poison every slot in the field, and the host pays for it once
+    // instead of once per particle per frame.
+    emitter_.lifetime       = std::max(emitter_.lifetime, 1e-3f);
+    emitter_.lifetimeJitter = std::max(0.f, std::min(1.f, emitter_.lifetimeJitter));
+    emitter_.dutyCycle      = std::max(1e-3f, std::min(1.f, emitter_.dutyCycle));
+    emitter_.driftGrowth    = std::max(0.f, std::min(1.f, emitter_.driftGrowth));
+    emitter_.sizeJitter     = std::max(0.f, std::min(1.f, emitter_.sizeJitter));
+    emitter_.size           = std::max(emitter_.size, 0.f);
+}
+
+void ParticleField::setEmitterTime(float timeSec, float dtSec) {
+
+    if (config_.ownership != Ownership::Renderer) {
+        throw std::invalid_argument(
+                "ParticleField::setEmitterTime: only an Ownership::Renderer field has an "
+                "emitter clock to advance");
+    }
+    emitTime_ = timeSec;
+    // A negative dt would put prevPositions in the FUTURE and reverse every
+    // motion vector — the exact defect the plan says numbers will not catch.
+    emitDt_ = std::max(dtSec, 0.f);
 }
 
 void ParticleField::setLiveCount(std::uint32_t n) {

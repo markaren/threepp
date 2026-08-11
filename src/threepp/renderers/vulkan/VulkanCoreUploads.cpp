@@ -1965,6 +1965,17 @@ void VulkanRenderer::Impl::recordParticleFieldCounts(VkCommandBuffer cb) {
             particleFieldPass_->recordCounts(cb);
         }
 
+// The device emitter. FIRST of the ParticleField block, because everything else
+// in it reads what this writes: the density scatter samples the positions, the
+// G-buffer draw pulls them per vertex, and the counts copy — while independent
+// — belongs after so the block reads in dependency order.
+void VulkanRenderer::Impl::recordParticleFieldEmit(VkCommandBuffer cb, uint32_t frame) {
+            if (!particleFieldPass_ || !particleFieldPass_->emitActive()) return;
+            gpuTimings_->begin(cb, vulkan::TP_ParticleEmit, frame);
+            particleFieldPass_->recordEmit(cb);
+            gpuTimings_->end(cb, vulkan::TP_ParticleEmit, frame);
+        }
+
 void VulkanRenderer::Impl::recordInstanceExpansion(VkCommandBuffer cb, uint32_t frame) {
             if (!gpuInstanceExpand_ || !instExpand_ || instExpandSpans_.empty()) return;
             gpuTimings_->begin(cb, vulkan::TP_InstanceExpand, frame);

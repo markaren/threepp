@@ -833,6 +833,13 @@ namespace threepp {
             // the scene has DensityRepr enabled with live particles). Recorded
             // once per frame however many cameras look at the dust.
             float particleDensityMs = 0.f;
+            // ParticleField device emitter — the closed-form position +
+            // prevPosition write for every Ownership::Renderer field (0 unless
+            // the scene has one with live particles). Like the scatter above it
+            // is recorded once per frame however many cameras look at the field,
+            // and it is the ENTIRE per-frame cost of such a field: there is no
+            // CPU counterpart to pair it with.
+            float particleEmitMs = 0.f;
             // GPU execution SPAN of the whole submitted command buffer — not a sum
             // of the fields above, and not busy time. It covers the passes that
             // have no timestamp bracket at all (TLAS refit, deformers, bloom/post,

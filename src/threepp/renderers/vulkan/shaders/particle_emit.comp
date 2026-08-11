@@ -1,0 +1,214 @@
+#version 460
+#extension GL_EXT_scalar_block_layout : require
+#extension GL_EXT_buffer_reference    : require
+#extension GL_EXT_buffer_reference2   : require
+#extension GL_EXT_shader_explicit_arithmetic_types_int64 : require
+
+// ParticleField DEVICE EMITTER — Ownership::Renderer, plan F-C.
+//
+// One thread per SLOT, evaluating a CLOSED-FORM trajectory
+//
+//     position = f(seed, slot, t)
+//
+// and writing BOTH f(t) and f(t - dt) — this frame's positions and the
+// prevPositions the motion vectors reproject through — in the same dispatch.
+// That last point is the whole design in one line, and it is worth being
+// explicit about why:
+//
+//   • NO INTEGRATION STATE. There is no velocity buffer, no ping-pong pair,
+//     nothing that has to survive from frame to frame. A field resumes from
+//     nothing, seeks to any t, and gives the same bytes in two processes.
+//     Every value below is a pure function of this thread's slot index, the
+//     seed and t; the only inputs that are not compile-time constants arrive
+//     in a push constant.
+//   • MOTION VECTORS CANNOT GO STALE. The usual scheme — copy positions into
+//     prevPositions at the head of the frame — makes correctness depend on a
+//     copy landing in the right place in the command stream, which is the bug
+//     class feedback_vulkan_dynamic_geom_blas is about. Two evaluations of one
+//     function at two times cannot disagree about which frame they describe.
+//   • NO RING. The HostRing mode carries kFramesInFlight + 1 position buffers
+//     because a HOST write races an in-flight read. Here the writer is this
+//     dispatch, recorded into the same command buffer as every consumer and
+//     ordered against them by a barrier, so ONE device-local buffer is correct
+//     — the same argument the CUDA interop path makes for its single
+//     ExternalBuffer (commit 5584d2ab: "the GPU-to-GPU overlap is benign").
+//
+// ARCHETYPES ARE PARAMETERS, NOT VARIANTS. Snow, rain, embers and dust motes
+// are four points in the push block, so a scene with all four still records
+// four dispatches of this one pipeline.
+//
+// DISPATCH DOMAIN is the CPU-CONSTANT capacity (plan §1.3): the command buffer
+// never changes shape as particles come and go, because none of them ever do —
+// a slot outside its lifetime window writes the w < 0 sentinel and every
+// consumer drops it on the predicate it already tests.
+//
+// The positions written here are FIELD-LOCAL. Every consumer applies the
+// field's matrixWorld itself (the raster proxy's DrawInfo::model, the density
+// splat's pc.world), exactly as it does for a HostRing field, so a Renderer
+// field can be parented and moved without touching a parameter.
+
+layout(local_size_x = 64) in;
+
+// ParticlePos / physx::PxVec4 / GLSL vec4 under scalar layout are the same
+// 16 bytes — the identity the whole buffer contract is built on.
+layout(buffer_reference, scalar, buffer_reference_align = 16) writeonly buffer PosBuf { vec4 v[]; };
+
+// Everything rides in the push block and this pipeline has NO descriptor set at
+// all. Deliberate: a per-field descriptor write per frame is exactly the
+// VUID-03047 exposure ParticleFieldPass exists to avoid, and the whole emitter
+// state is O(1) bytes. The block is 128 B — the minimum every Vulkan
+// implementation guarantees — with two reserved floats left for F3.
+layout(push_constant, scalar) uniform Pc {
+    uint64_t posAddr;        // ParticlePos[capacity], device-local, single instance
+    uint64_t prevPosAddr;    // its sibling; written by THIS dispatch, same thread
+
+    vec3  spawnCenter;       // field-LOCAL birth box
+    float lifetime;          // period of one slot's cycle, seconds
+
+    vec3  spawnHalf;
+    float lifetimeJitter;    // +/- fraction of the period, per slot
+
+    vec3  velocity;          // EmitterParams::velocity + wind, summed host-side
+    float speedSpread;       // isotropic per-particle perturbation, m/s
+
+    vec3  accel;             // constant acceleration, m/s^2 (gravity / buoyancy)
+    float duty;              // alive fraction of the period, (0,1]
+
+    float driftAmp;          // metres
+    float driftFreq;         // Hz of the slowest sine
+    float driftGrowth;       // 0 = constant amplitude, 1 = ramps in over the life
+    float size;              // radius written into w
+
+    float sizeJitter;        // +/- fraction of size, per slot
+    float time;              // ABSOLUTE seconds, from the caller's clock. Never
+                             // a wall clock read inside the renderer: a capture
+                             // must be a function of its frame index alone.
+    float dt;                // the motion-vector interval; 0 freezes the field
+    uint  capacity;
+
+    uint  seed;
+    float driftScale;        // spatial wavelength, metres; 0 = per-slot phase only
+    float _rsv0;             // reserved for F3 (billboard stretch / sprite index)
+    float _rsv1;
+} pc;
+
+const float kTau = 6.28318530718;
+
+// ── The hash ────────────────────────────────────────────────────────────────
+// Bit-for-bit the same lowbias32 finaliser and the same stream mixing as
+// FireEffect.cpp's hashU/rnd01 on the host. Shared on purpose: F1's CPU emitter
+// and this one are the SAME model, so the port between them is a port and not a
+// redesign. No RNG object, no state, no order dependence — which a device
+// emitter cannot have anyway, since its threads run in whatever order they run
+// in, and which is what makes the field bit-reproducible.
+uint hashU(uint x) {
+    x ^= x >> 16;
+    x *= 0x7feb352du;
+    x ^= x >> 15;
+    x *= 0x846ca68bu;
+    x ^= x >> 16;
+    return x;
+}
+
+// 24 bits -> [0,1). Exact in fp32, and never reaches 1.0.
+float rnd01(uint slot, uint stream) {
+    return float(hashU(slot * 0x9e3779b9u + stream * 0x85ebca6bu + pc.seed) >> 8) *
+           (1.0 / 16777216.0);
+}
+
+// Symmetric, [-1,1).
+float rndS(uint slot, uint stream) { return rnd01(slot, stream) * 2.0 - 1.0; }
+
+// Everything about a slot that does NOT depend on t. Drawn once and handed to
+// both evaluations, so the two samples are guaranteed to describe the same
+// particle — the failure mode a re-hash per call would invite.
+struct Slot {
+    vec3  spawn;
+    vec3  vel;
+    float period;
+    float life;
+    float birth;  // phase offset into the period, [0,1)
+    float ph1, ph2, ph3;
+    float fscale; // per-slot drift frequency scale
+    float kSpat;  // spatial wavenumber of the drift, 0 = decoupled
+};
+
+// The trajectory. Ballistic base plus a wandering displacement.
+//
+// `cycle` is the index of the slot's current repetition and is an OUTPUT
+// because the caller has to compare it across the two sample times: a slot that
+// crossed a cycle boundary between t - dt and t did not MOVE from its old
+// position to its new one, it was REBORN, and reprojecting across that
+// discontinuity paints one frame of a full-length streak through the scene.
+vec3 evalAt(Slot s, float t, out bool alive, out float cycle) {
+    const float u   = t / s.period + s.birth;
+    const float n   = floor(u);// correct for negative t: u - floor(u) is in [0,1)
+    const float age = (u - n) * s.period;
+    cycle = n;
+    alive = age < s.life;
+
+    const vec3 p = s.spawn + s.vel * age + (0.5 * age * age) * pc.accel;
+
+    // Sines with incommensurate frequencies: never repeats, needs no state, and
+    // is a pure function of t so a seek is free. The phase is offset by the
+    // BALLISTIC position (not the drifted one — that would be circular), which
+    // is what makes neighbouring particles wander together and reads as gusts
+    // moving through the volume rather than as per-flake jitter.
+    const float w = kTau * pc.driftFreq * s.fscale;
+    const vec3  q = p * s.kSpat;
+    // driftGrowth 0 keeps the amplitude constant (snow wobbles the same all the
+    // way down); 1 ramps it in over the life (an ember's base is steady and its
+    // tip wanders).
+    const float g = mix(1.0, clamp(age / max(s.life, 1e-4), 0.0, 1.0), pc.driftGrowth);
+    vec3 d;
+    d.x = 0.62 * sin(w * t + s.ph1 + q.z) + 0.38 * sin(1.73 * w * t + s.ph2 - q.x);
+    d.y = 0.30 * sin(1.21 * w * t + s.ph3 + q.x);
+    d.z = 0.62 * cos(0.91 * w * t + s.ph2 + q.x) + 0.38 * sin(1.37 * w * t + s.ph3 - q.z);
+    return p + (pc.driftAmp * g) * d;
+}
+
+void main() {
+    const uint i = gl_GlobalInvocationID.x;
+    if (i >= pc.capacity) return;
+
+    Slot s;
+    s.spawn = pc.spawnCenter +
+              pc.spawnHalf * vec3(rndS(i, 1u), rndS(i, 2u), rndS(i, 3u));
+    // Period floor: the host clamps `lifetime`, but lifetimeJitter == 1 would
+    // still reach zero on the unlucky slot, and a zero period is a division by
+    // zero that turns that particle into a NaN — which then defeats every
+    // downstream bounds check (feedback_float_pi_sin_pow_nan).
+    s.period = max(pc.lifetime * (1.0 + pc.lifetimeJitter * rndS(i, 4u)), 1e-4);
+    s.life   = s.period * pc.duty;
+    s.vel    = pc.velocity +
+               pc.speedSpread * vec3(rndS(i, 5u), rndS(i, 6u), rndS(i, 7u));
+    s.birth  = rnd01(i, 0u);
+    s.ph1    = rnd01(i, 8u) * kTau;
+    s.ph2    = rnd01(i, 9u) * kTau;
+    s.ph3    = rnd01(i, 10u) * kTau;
+    // Without a per-slot frequency scale every particle wobbles at the same
+    // rate and a large field visibly pulses in lockstep. 0.75..1.25 decorrelates
+    // them while keeping the field one weather rather than a crowd.
+    s.fscale = 0.75 + 0.5 * rnd01(i, 11u);
+    s.kSpat  = (pc.driftScale > 0.0) ? (kTau / pc.driftScale) : 0.0;
+
+    const float radius = max(pc.size * (1.0 + pc.sizeJitter * rndS(i, 12u)), 0.0);
+
+    bool  aliveNow, alivePrev;
+    float cycNow, cycPrev;
+    const vec3 pNow  = evalAt(s, pc.time, aliveNow, cycNow);
+    vec3       pPrev = evalAt(s, pc.time - pc.dt, alivePrev, cycPrev);
+
+    // Reborn between the two samples: report zero motion rather than a streak
+    // from wherever the previous cycle ended. The same choice, for the same
+    // reason, that particlefield_gbuf.vert makes when a slot was dead last
+    // frame. At a 6 s lifetime and 60 Hz this is 0.3% of slots per frame.
+    if (cycNow != cycPrev) { pPrev = pNow; alivePrev = aliveNow; }
+
+    // w carries the radius when alive and the DEAD SENTINEL when not. Under
+    // WSemantic::InvMass the value is inert and only the sign is read; under
+    // WSemantic::Radius the mesh proxy scales by w / uniformRadius, which is
+    // where per-flake size variety comes from.
+    PosBuf(pc.posAddr).v[i]     = vec4(pNow,  aliveNow  ? radius : -1.0);
+    PosBuf(pc.prevPosAddr).v[i] = vec4(pPrev, alivePrev ? radius : -1.0);
+}

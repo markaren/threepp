@@ -35,6 +35,10 @@
 // Ownership::Interop (§1.4a) will NOT use this ring — one ExternalBuffer,
 // single-instance across all slots, because that overlap is GPU-to-GPU and
 // benign. The ring exists only because a HOST write races an in-flight read.
+//
+// Ownership::Renderer does not use it either, for exactly the same reason: its
+// writer is particle_emit.comp, recorded into the same command buffer as every
+// consumer and ordered against them by a barrier. See ensureState.
 
 #ifndef THREEPP_VULKAN_PARTICLE_FIELD_PASS_HPP
 #define THREEPP_VULKAN_PARTICLE_FIELD_PASS_HPP
@@ -210,6 +214,23 @@ namespace threepp::vulkan {
         // of the frame's command buffer, before any consumer.
         void recordCounts(VkCommandBuffer cb);
 
+        // ── F2: the device emitter (Ownership::Renderer) ────────────────────
+        // ONE dispatch per Renderer field, for ALL views — the positions are
+        // field-local and view-independent, the same world-anchored argument the
+        // density scatter makes (plan R9). Recorded at the HEAD of the frame's
+        // command buffer, before recordCounts / recordDensityScatter and before
+        // any view's raster pass, and closed with a barrier that covers every
+        // consumer: the density scatter (compute), the G-buffer draw (vertex)
+        // and, when a BLAS ever exists, the acceleration-structure build.
+        //
+        // No-op when no field is Renderer-owned — not one command is written.
+        void recordEmit(VkCommandBuffer cb);
+
+        // Any Renderer-owned field will dispatch this frame. Lets the renderer
+        // skip the timestamp bracket (and therefore keep the timing honest) on
+        // the overwhelmingly common frame that has no emitter.
+        [[nodiscard]] bool emitActive() const { return !emitDispatch_.empty(); }
+
         // ── PHASE 2 ─────────────────────────────────────────────────────────
         // Zero the density volumes and splat this frame's live particles into
         // them. ONE dispatch per field for ALL views (plan R9): the volume is
@@ -268,7 +289,30 @@ namespace threepp::vulkan {
             std::weak_ptr<Object3D> owner;
             bool          ownerTracked = false;
             std::uint32_t capacity     = 0;
+            bool          rendererOwned = false;
             Buffer        positions[kSlots]{};
+            // ── Ownership::Renderer: ONE device-local buffer, plus its
+            // prevPositions sibling. NOT the kSlots ring.
+            //
+            // The ring above exists for exactly one reason (ParticleFieldPass
+            // header, "RING DEPTH"): a HOST memcpy for frame N must not land in
+            // a buffer frames N-1 / N-2 are still reading. A Renderer field has
+            // no host write at all. Its writer is particle_emit.comp, recorded
+            // into the SAME command buffer as every consumer and separated from
+            // them by a barrier, so the write and the reads are ordered by the
+            // GPU's own dependency graph rather than by three frames of
+            // latency. The overlap that remains is GPU-to-GPU and benign — the
+            // identical argument commit 5584d2ab records for the CUDA interop
+            // buffer ("the interop buffer stays single-instance across all
+            // slots"). Three copies would cost 3x the VRAM of a 1M-particle
+            // field (48 MB) to solve a race that does not exist.
+            //
+            // prevPositions is non-negotiable for a raster-drawn field (plan
+            // §1.2) and is written by the SAME dispatch and the SAME thread as
+            // positions, from f(t - dt) — so there is no copy to order and no
+            // way for the two to describe different frames.
+            Buffer        devPositions{};
+            Buffer        devPrevPositions{};
             Buffer        counts[kSlots]{};
             // One VkDrawIndirectCommand per slot. Per-slot rather than shared
             // because its instanceCount is written by a device copy inside the
@@ -300,6 +344,14 @@ namespace threepp::vulkan {
             VkDescriptorSet convertSet = VK_NULL_HANDLE;
         };
 
+        // One field's emit dispatch, resolved in prepareFrame so recording
+        // touches no ParticleField and no map. `pc` is the shader's push block
+        // verbatim — see EmitPc in the .cpp, which mirrors particle_emit.comp.
+        struct EmitDispatch {
+            std::uint32_t groups = 0;// ceil(capacity / 64)
+            unsigned char pc[128]{}; // EmitPc, prebuilt
+        };
+
         // One field's scatter dispatch, resolved in prepareFrame so recording
         // touches no ParticleField and no map.
         struct DensityDispatch {
@@ -329,6 +381,15 @@ namespace threepp::vulkan {
         std::uint32_t descCount_    = 0;
         std::vector<FieldDescGpu> descScratch_;
         std::vector<DrawState>    draws_;
+
+        // Device emitter (F-C). Created lazily, on the first Renderer-owned
+        // field, so a scene of HostRing fields allocates nothing. NO descriptor
+        // set layout and NO pool: the two buffer addresses and the whole
+        // parameter block ride in a 128 B push constant, which is what keeps
+        // this pass entirely out of the VUID-03047 zone.
+        VkPipelineLayout emitPipeLayout_ = VK_NULL_HANDLE;
+        VkPipeline       emitPipe_       = VK_NULL_HANDLE;
+        std::vector<EmitDispatch> emitDispatch_;
 
         // Density scatter pipeline — created lazily, on the first field that
         // asks for a volume, so a scene without dust allocates nothing.
@@ -364,6 +425,7 @@ namespace threepp::vulkan {
         void   destroyState(State& st);
         void   retireOrDestroy(Buffer& b);
         void   retireOrDestroy(Image2D& img);
+        void   ensureEmitPipeline();
         void   ensureDensityPipeline();
         // Allocates the field's volume on first use; false when the field's
         // DensityRepr is off or the volume could not be created.

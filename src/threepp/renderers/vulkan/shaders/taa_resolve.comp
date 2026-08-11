@@ -363,18 +363,22 @@ void main() {
     const vec2 motionPx = motionGL * 0.5 * vec2(pc.width, pc.height);
     const float motionLen = length(motionPx);
 
-    // DILATED motion: max |motion| over the 3×3 input neighbourhood. A pixel
+    // DILATED motion: max |motion| over the input neighbourhood. A pixel
     // an object edge just vacated reads ZERO motion itself when the revealed
     // background writes none (sky has no geometry) — but the edge that left
     // it is still adjacent and carries real motion vectors. Dilation gives
     // the vacated pixel that motion context; a truly static neighbourhood
     // (camera + scene still) stays at zero.
+    //
+    // The ±1 ring holds for a silhouette drifting at ~1 px/frame. It is FALSE
+    // for a small fast mover, and the wide fallback in the depth-disocclusion
+    // block below is what covers that case — see the comment there.
+    const vec2 motionInTexel = 1.0 / vec2(textureSize(gbufMotionTex, 0));
     float dilatedMotionPx = motionLen;
     {
-        const vec2 inTexel = 1.0 / vec2(textureSize(gbufMotionTex, 0));
         for (int dy = -1; dy <= 1; ++dy)
             for (int dx = -1; dx <= 1; ++dx) {
-                const vec2 mv = texture(gbufMotionTex, uvInJ + vec2(dx, dy) * inTexel).rg;
+                const vec2 mv = texture(gbufMotionTex, uvInJ + vec2(dx, dy) * motionInTexel).rg;
                 dilatedMotionPx = max(dilatedMotionPx,
                                       length(mv * 0.5 * vec2(pc.width, pc.height)));
             }
@@ -399,6 +403,46 @@ void main() {
         const float bufD  = texture(gbufDepthPrevTex, prevUv * inScale).x;// prev depth buffer at reproject
         const float svz   = linZ(surfD);
         const bool  mismatch = abs(svz - linZ(bufD)) > 0.1 * max(abs(svz), 1e-3);
+
+        // ── WIDE MOTION SEARCH, for SMALL FAST MOVERS ───────────────────────
+        // Every gate in this pass — depthDisocc here, instantDev and
+        // motionRelax below — is multiplied by dilatedMotionPx, and the ±1
+        // dilation above finds it on the assumption that "the edge that
+        // vacated this pixel is still adjacent". That assumption fails hard for
+        // a 3-px snowflake crossing 3 px in a frame: it has left the 3×3
+        // neighbourhood entirely by the time the pixel it vacated is resolved,
+        // so that pixel sees zero motion context, every gate stays shut, and
+        // its stale history decays only at the blend alpha — a ten-frame comet
+        // tail behind every flake. plans/particle-atmosphere.md F2 found this
+        // with 300k device-emitted particles; DLSS, fed the IDENTICAL motion
+        // vectors, resolved the same scene cleanly, which is what proves the
+        // defect was never in the vectors but in how far this pass looked.
+        //
+        // Gated twice, and both gates are close to free:
+        //   · `mismatch` — a static view has no depth mismatch outside
+        //     jittering silhouettes, and there every tap reads zero anyway, so
+        //     a still scene (which is what every golden capture is) resolves
+        //     to the identical value with or without this block.
+        //   · `dilatedMotionPx < 1.7` — depthDisocc SATURATES at 1/0.6 = 1.67
+        //     px, so above that the search could not change this term at all;
+        //     a moving camera, whose ±1 ring already finds motion everywhere,
+        //     therefore skips the taps. What is left is exactly the
+        //     disocclusion rim of a fast SMALL object — a mover larger than its
+        //     own per-frame step keeps the vacated pixel adjacent to its body
+        //     and never reaches here.
+        if (mismatch && dilatedMotionPx < 1.7) {
+            // 7x7 at stride 2: ±6 texels covered continuously once the
+            // bilinear fetch's own half-texel reach is counted. ±6 is what it
+            // took to clear the tail on 1.25 m/s snow at 2-4 px/frame; ±3 left
+            // two or three ghosts behind every flake.
+            for (int dy = -6; dy <= 6; dy += 2)
+                for (int dx = -6; dx <= 6; dx += 2) {
+                    const vec2 mv = texture(gbufMotionTex,
+                                            uvInJ + vec2(dx, dy) * motionInTexel).rg;
+                    dilatedMotionPx = max(dilatedMotionPx,
+                                          length(mv * 0.5 * vec2(pc.width, pc.height)));
+                }
+        }
         depthDisocc = mismatch ? clamp(dilatedMotionPx * 0.6, 0.0, 1.0) : 0.0;
     }
 
