@@ -31,6 +31,10 @@
 //            vulkan_snow --bench-lod       interleaved A/B of the F4 LOD split
 //            vulkan_snow --no-lod          mesh proxies at every distance (pre-F4)
 //            vulkan_snow --rain            the second archetype, same emitter
+//            vulkan_snow --rest            F5: flakes REST on a baked height map
+//            vulkan_snow --splash          F5: rain, landing as expanding rings
+//            vulkan_snow --follow          toroidal wrap; the bake re-anchors with it
+//            vulkan_snow --seq DIR --dolly M/S   straight-line walk (for --follow)
 //            vulkan_snow --mv              motion-AOV probe (magnitude AND SIGN)
 //            vulkan_snow --msaa N          MSAA G-buffer instead of the default
 //            vulkan_snow --no-haze         mesh flakes only, no density volume
@@ -186,6 +190,60 @@ namespace {
         return g;
     }
 
+    // ── F5: something to rest ON ────────────────────────────────────────────
+    // Added ONLY in --rest / --splash, deliberately. vulkan_snow's benches and
+    // its --mv probe are diagnostics that read a field at a known, constant
+    // world position against a known scene; dropping new geometry into every
+    // mode would quietly change what all of them measure. Modes get added here,
+    // they do not get repurposed.
+    //
+    // A lean-to is the shape that makes surface interaction legible in one
+    // frame: flakes settle on the slab, and the ground UNDER it stays bare,
+    // because a top-down height map says the first thing below the cloud at
+    // those texels is the roof. The crates give a second, lower tier so the
+    // resting height is visibly a function of position rather than a constant.
+    // First-party primitives only.
+    std::shared_ptr<Group> makeShelter() {
+        auto g = Group::create();
+        auto wood  = matteMat(Color(0.14f, 0.11f, 0.09f), 0.9f);
+        auto plank = matteMat(Color(0.19f, 0.16f, 0.13f), 0.92f);
+
+        const float rx = 1.75f, rz = 1.55f, hy = 2.15f;
+        for (int i = 0; i < 4; ++i) {
+            const float sx = (i & 1) ? 1.f : -1.f;
+            const float sz = (i & 2) ? 1.f : -1.f;
+            auto post = Mesh::create(BoxGeometry::create(0.14f, hy, 0.14f), wood);
+            post->position.set(sx * (rx - 0.09f), hy * 0.5f, sz * (rz - 0.09f));
+            g->add(post);
+        }
+        auto roof = Mesh::create(BoxGeometry::create(2.f * rx, 0.16f, 2.f * rz), plank);
+        roof->position.y = hy + 0.08f;
+        g->add(roof);
+        // A low bench inside it: a surface the roof shelters, so the shelter
+        // reads as a roof rather than as a floating slab.
+        auto bench = Mesh::create(BoxGeometry::create(2.2f, 0.12f, 0.55f), plank);
+        bench->position.set(0.f, 0.52f, -0.55f);
+        g->add(bench);
+        g->position.set(0.6f, 0.f, 2.6f);
+        g->rotation.y = -0.22f;
+
+        auto crates = Group::create();
+        const float cx[] = {2.85f, 3.35f, 2.70f};
+        const float cz[] = {4.65f, 5.45f, 5.60f};
+        const float cs[] = {0.62f, 0.50f, 0.44f};
+        const float cy[] = {0.00f, 0.00f, 0.62f};
+        for (int i = 0; i < 3; ++i) {
+            auto box = Mesh::create(BoxGeometry::create(cs[i], cs[i], cs[i]), plank);
+            box->position.set(cx[i], cy[i] + cs[i] * 0.5f, cz[i]);
+            box->rotation.y = 0.31f * float(i) - 0.2f;
+            crates->add(box);
+        }
+        auto out = Group::create();
+        out->add(g);
+        out->add(crates);
+        return out;
+    }
+
     // ── The two archetypes ──────────────────────────────────────────────────
     // Snow and rain differ ONLY in these numbers. No second shader, no second
     // code path, no branch anywhere in the renderer — which is the claim F-C
@@ -317,6 +375,12 @@ int main(int argc, char** argv) {
     bool  noLod      = false;// --no-lod: the pre-F4 mesh-everywhere behaviour
     bool  rain       = false;
     bool  noHaze     = false;
+    // ── F5 ──────────────────────────────────────────────────────────────────
+    bool  rest       = false;// snow rests on the baked surface and fades
+    bool  splash     = false;// rain + splash rings (implies --rain)
+    bool  noLand     = false;// --no-land: the same scene with the solve OFF
+    bool  follow     = false;// toroidal follow, to exercise the bake re-anchor
+    float dollyMps   = 0.f;  // --seq: walk the camera in a straight line
     std::uint32_t count = 300'000;
     // --rain default. A streaked drop covers two orders of magnitude more
     // pixels than a 1.6 cm flake proxy, so 300k of them is not "the same
@@ -347,6 +411,14 @@ int main(int argc, char** argv) {
         else if (a == "--no-lod") noLod = true;
         else if (a == "--rain") rain = true;
         else if (a == "--no-haze") noHaze = true;
+        else if (a == "--rest") rest = true;
+        // The A/B leg for --rest / --splash: the same scene, the same pose, the
+        // same lifetimes, with the landing solve switched OFF. One binary, one
+        // seed, the pattern --no-lod set for F4.
+        else if (a == "--no-land") noLand = true;
+        else if (a == "--splash") { splash = true; rain = true; }
+        else if (a == "--follow") follow = true;
+        else if (a == "--dolly" && i + 1 < argc) dollyMps = float(std::atof(argv[++i]));
         else if (a == "--upscaler" && i + 1 < argc) upscaler = argv[++i];
         else if (a == "--msaa" && i + 1 < argc) msaa = std::atoi(argv[++i]);
         else if (a == "--mv") mvProbe = true;
@@ -372,6 +444,7 @@ int main(int argc, char** argv) {
     Scene scene;
     scene.add(makeGround());
     scene.add(makeProps());
+    if (rest || splash) scene.add(makeShelter());
 
     auto sun = DirectionalLight::create();
     sun->castShadow = true;
@@ -379,6 +452,17 @@ int main(int argc, char** argv) {
     auto ambient = AmbientLight::create();
     scene.add(ambient);
     applySky(renderer, scene, *sun, *ambient, rain);
+    if (rest || splash) {
+        // Same argument as the thinner density above: the F5 pose looks DOWN a
+        // short leg at pale surfaces, and the falling column's air haze buys
+        // nothing there but contrast it takes away.
+        VulkanRenderer::HeightFogSettings hf;
+        hf.baseY       = 0.f;
+        hf.density     = 0.005f;
+        hf.falloff     = 2.2f;
+        hf.noiseAmount = 0.35f;
+        renderer.setHeightFog(hf);
+    }
 
     // ── The field ───────────────────────────────────────────────────────────
     // Ownership::Renderer: the positions are device-local and are written by
@@ -474,7 +558,15 @@ int main(int argc, char** argv) {
         // 2-5 px across and a hexagon and a disc are the same picture. The
         // shape would be information the frame cannot carry, paid for in a
         // fragment branch on the representation that exists to be cheap.)
-        constexpr float kLodNear = 5.5f, kLodFar = 8.0f;
+        // F5: the rest mode's SUBJECT — a lean-to roof, crates, the ground at
+        // the camera's feet — sits between 5 and 12 m, which is precisely the
+        // pre-F5 crossover band. Left alone, every flake that settles on the
+        // roof is shrunk to 12% of its size and handed to a faint additive
+        // sprite, and the feature looks like it did not work. The band moves
+        // out; --bench-lod and --no-lod keep the tuned one, because they are
+        // the measurements it was tuned for.
+        const float kLodNear = rest ? 16.0f : 5.5f;
+        const float kLodFar  = rest ? 22.0f : 8.0f;
         auto& mr = snow->meshRepr();
         mr.lodFar  = kLodFar;
         mr.lodFade = kLodFar - kLodNear;
@@ -527,23 +619,129 @@ int main(int argc, char** argv) {
         // this field has fifty times the particles spread over a thousand times
         // the volume. 0.055 puts the optical depth to the fence at ~0.3 — a
         // veil that greys the far trees, not a wall.
+        // F5 modes run THINNER. Two reasons, and both are about being able to
+        // see the thing the mode exists for. The falling column's haze is tuned
+        // to grey the far trees, and at the rest pose — higher, closer, looking
+        // down at a pale ground — the same optical depth washes the whole frame
+        // to paper, which is precisely the F2 authoring trap ("white things lit
+        // by a white sky") arriving through the medium instead of the albedo.
+        // And resting flakes CONCENTRATE: they leave the 17 m column and pile
+        // into a one-voxel-thick layer on the surfaces, so the same sigma per
+        // particle buys an order of magnitude more optical depth down there.
+        const float sigma = rain ? 0.014f : ((rest || splash) ? 0.026f : 0.055f);
         snow->setDensityRepr(Vector3(0.f, 6.f, -2.f), Vector3(26.f, 7.5f, 26.f),
-                             rain ? 0.014f : 0.055f, /*resolution*/ 96);
+                             sigma, /*resolution*/ 96);
         auto& dr = snow->densityRepr();
         // Snow scatters brightly and forward; rain is water, and a rain curtain
         // is DARK — the same haze albedo would turn a downpour into a whiteout.
         dr.albedo     = rain ? Color(0.42f, 0.46f, 0.52f) : Color(0.90f, 0.93f, 0.98f);
         dr.anisotropy = 0.35f;
     }
-    snow->setEmitter(rain ? rainParams() : snowParams());
+    // ── F5: analytic surface interaction ────────────────────────────────────
+    // Everything here is emitter PARAMETERS. There is no collision pass, no
+    // per-particle state and no new per-frame CPU cost: the renderer bakes a
+    // top-down height map of this scene over the field's footprint once, and
+    // particle_emit.comp solves each slot's landing against it inside the same
+    // closed form it was already evaluating. Determinism, seeking and exact
+    // motion vectors all survive, which is why it is worth doing this way.
+    auto ep = rain ? rainParams() : snowParams();
+    if (rest || splash) {
+        auto& sf      = ep.surface;
+        sf.enabled    = !noLand;
+        // 48 m of footprint over 512 texels is 9.4 cm each — fine enough that
+        // the lean-to's roof edge is a clean line rather than a staircase.
+        sf.resolution = 512;
+        if (splash) {
+            // A drop at 9 m/s from y = 13 lands at 1.44 s, and the pre-F5
+            // lifetime leaves only 0.3 s after that — exactly the splash, with
+            // no margin. Lengthened so the ring finishes before the slot
+            // recycles instead of being cut off mid-expansion.
+            ep.lifetime      = 2.4f;
+            sf.splashSeconds = 0.30f;
+            sf.splashGrow    = 12.f; // ~20 cm ring from a 1.7 cm drop
+            sf.bias          = 0.010f;
+            sf.restSeconds   = 0.f;
+            sf.fadeSeconds   = 0.05f;
+        } else {
+            // The lifetime now has to CONTAIN the whole story: fall, rest,
+            // fade. A flake born at y = 12.5 reaches the ground at ~10 s, holds
+            // for up to 2.2 x 1.6 s and fades for 1.0 more, so it is finished
+            // at ~14.8 s — inside lifetime * dutyCycle = 15.98. Leave the
+            // pre-F5 14 s in place and every ground flake is cut off mid-rest,
+            // which reads as the whole carpet blinking.
+            ep.lifetime    = 17.f;
+            sf.restSeconds = 2.2f;
+            sf.restJitter  = 0.6f;
+            sf.fadeSeconds = 1.0f;
+            // A flake is a solid with a radius; 0 buries half of it in the
+            // surface it landed on.
+            sf.bias        = 0.012f;
+            // BIGGER FLAKES, and this is what the mode is for rather than a
+            // cheat. A 1.6 cm flake at 7 m is two pixels; two pixels of white
+            // lying on a white surface under an overcast sky is a picture that
+            // cannot show whether anything settled. 2.8 cm is still a real wet
+            // flake, it is four pixels, and MeshRepr::nearCull already caps
+            // what the nearest one may grow to. The falling modes keep 1.6 cm
+            // because their subject is a column of motion, not a surface.
+            ep.size        = 0.028f;
+        }
+    }
+    if (follow) {
+        ep.follow = true;
+        // An integer number of DENSITY VOXELS, per the F4 defect amendment's
+        // note 4 — the volume below is 52 m across 96 voxels, so 8 voxels is
+        // 4.333 m and half a voxel of snap would re-phase every splat against
+        // the lattice and make the haze swim. F5 adds a second consumer of the
+        // same number: the height bake re-anchors on this snapped centre and
+        // ONLY on its snaps, so one grid keeps both honest.
+        ep.followSnap = 8.f * (52.f / 96.f);
+    }
+    snow->setEmitter(ep);
     snow->setEmitterTime(0.f, 1.f / 60.f);
+    if (splash) {
+        auto& br = snow->billboardRepr();
+        // A ring is a thin rim of water lit by the sky, spread over ~20 cm
+        // instead of a 1.7 cm streak — so at the drop's own intensity it is
+        // invisible. This is the splash's brightness, and it is the drops that
+        // then look faint beside it, which is the right way round.
+        br.intensity       = 0.30f;
+        br.splashRingWidth = 0.28f;
+        // The near fade would eat the rings closest to the camera, which are
+        // the ones worth looking at; a ring is not a 1/d streak and does not
+        // need the same protection.
+        br.nearFade        = 0.45f;
+    }
     scene.add(snow);
 
     PerspectiveCamera camera(48.f, canvas.aspect(), 0.05f, 300.f);
     camera.position.set(5.6f, 2.15f, 9.2f);
+    // F5 needs to SEE the surfaces. The default pose is at flake height looking
+    // level, which is right for judging falling snow and wrong for judging
+    // where it settles — the lean-to's roof is edge-on from there and the
+    // ground is a sliver. The rest/splash modes therefore stand higher and look
+    // DOWN, and --campos still overrides.
+    if (rest || splash) camera.position.set(5.2f, 4.35f, 8.4f);
     if (cap.camPos) camera.position.copy(*cap.camPos);
-    const Vector3 target = cap.camTarget.value_or(Vector3(0.f, 1.7f, 0.f));
+    const Vector3 target = cap.camTarget.value_or(
+            (rest || splash) ? Vector3(0.55f, 0.75f, 2.20f) : Vector3(0.f, 1.7f, 0.f));
     camera.lookAt(target);
+
+    // ── F4/F5: the follow centre, and the two things that must agree with it ─
+    // setFollowCenter SNAPS, and followCenter() reads the snapped point back.
+    // Everything that has to line up with the wrap box takes it from there
+    // rather than snapping the camera position a second time — two expressions
+    // for one number is exactly how they drift apart. The height bake anchors
+    // on the same snapped point inside the renderer, so the wrap, the density
+    // lattice and the surface the flakes rest on all move together, and only on
+    // a snap.
+    const auto trackCamera = [&] {
+        if (!follow) return;
+        snow->setFollowCenter(camera.position);
+        const Vector3& fc = snow->followCenter();
+        auto& dr = snow->densityRepr();
+        dr.center.set(fc.x, dr.center.y, fc.z);
+    };
+    trackCamera();
 
     bool falling = true;
     std::unique_ptr<OrbitControls> controls;
@@ -736,9 +934,21 @@ int main(int argc, char** argv) {
         const float rate = orbitDeg * (kTau / 360.f);
         for (int i = 0; i < seqWarm + seqFrames; ++i) {
             const float t = float(i) * kDt;
-            const float a = a0 + rate * t;
-            camera.position.set(target.x + r0 * std::cos(a), eye0.y, target.z + r0 * std::sin(a));
-            camera.lookAt(target);
+            if (dollyMps != 0.f) {
+                // A STRAIGHT LINE, for --follow. An orbit can never leave the
+                // middle of the patch, so it structurally cannot see whether
+                // the weather follows or whether the height bake re-anchored
+                // with it — the same reason vulkan_fjord grew a dolly.
+                camera.position.set(eye0.x + dollyMps * t, eye0.y, eye0.z);
+                camera.lookAt(Vector3(camera.position.x - (eye0.x - target.x),
+                                      target.y, target.z));
+            } else {
+                const float a = a0 + rate * t;
+                camera.position.set(target.x + r0 * std::cos(a), eye0.y,
+                                    target.z + r0 * std::sin(a));
+                camera.lookAt(target);
+            }
+            trackCamera();
             // --t freezes the field: dt 0 makes every particle reproject onto
             // itself, so anything still moving in the sequence is the camera.
             if (shotTime >= 0.f) snow->setEmitterTime(shotTime, 0.f);
@@ -825,6 +1035,7 @@ int main(int argc, char** argv) {
         for (int i = 0; i < frames; ++i) {
             if (shotTime >= 0.f) snow->setEmitterTime(shotTime, 0.f);
             else snow->setEmitterTime(float(i) * kDt, kDt);
+            trackCamera();
             canvas.animateOnce([&] { renderer.render(scene, camera); });
         }
         renderer.writeFramebuffer(shotPath);
@@ -844,6 +1055,7 @@ int main(int argc, char** argv) {
         t += dt;
         // THE ENTIRE PER-FRAME CPU COST OF 300k PARTICLES.
         snow->setEmitterTime(t, dt);
+        trackCamera();
         renderer.render(scene, camera);
         if (ui) ui->render();
     });
