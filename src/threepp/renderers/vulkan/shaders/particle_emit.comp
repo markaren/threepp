@@ -84,12 +84,20 @@ layout(push_constant, scalar) uniform Pc {
                              // a wall clock read inside the renderer: a capture
                              // must be a function of its frame index alone.
     float dt;                // the motion-vector interval; 0 freezes the field
-    uint  capacity;
+    // Slot count in bits 0..30; BIT 31 IS THE FOLLOW FLAG. Stealing a bit off a
+    // count that can never exceed a few million is what keeps this block at the
+    // 128 B EVERY implementation guarantees — the property the zero-descriptor
+    // design above is built on, and one a bool would have had to spend 4 B and
+    // a whole padding word to add.
+    uint  capacityAndFollow;
 
     uint  seed;
     float driftScale;        // spatial wavelength, metres; 0 = per-slot phase only
-    float _rsv0;             // reserved for F3 (billboard stretch / sprite index)
-    float _rsv1;
+    // Centre of the toroidal follow box, in FIELD-LOCAL space (the host
+    // subtracts the field's world translation). Read only when bit 31 above is
+    // set; the two floats were F2's reserve and this is what they went to.
+    float followX;
+    float followZ;
 } pc;
 
 const float kTau = 6.28318530718;
@@ -167,9 +175,54 @@ vec3 evalAt(Slot s, float t, out bool alive, out float cycle) {
     return p + (pc.driftAmp * g) * d;
 }
 
+// ── THE FOLLOW WRAP — weather that surrounds a MOVING camera ────────────────
+// The trajectory above is evaluated exactly as it always was; this folds the
+// RESULT into a lateral box centred on pc.follow*, so a field of finite extent
+// tiles the plane and the camera can walk out of it forever without leaving it.
+// F4 shipped the snowfall as a fixed 34 m patch and the user's verdict on the
+// scene was "a fixed grid that does nothing for the overall scene" — this is
+// that defect, and the closed form is where it gets fixed rather than by
+// re-anchoring the field (which slides every flake with the eye).
+//
+// WHY THE PERIOD IS THE SPAWN SLAB. mod() folds the real line onto one period,
+// and a distribution uniform over EXACTLY one period folds to a uniform
+// distribution. The spawn slab is uniform over [centre − half, centre + half]
+// in xz, so with period == 2·spawnHalf.xz the wrapped field is as even as the
+// unwrapped one, everywhere, forever. Any other period would fold two
+// half-densities onto one strip and leave a visible seam of double snowfall.
+// (The wind advection is a rigid translation of the whole field, which mod
+// likewise leaves uniform; the per-slot sine drift is a small smooth
+// perturbation that does not measurably bias it.)
+//
+// WHY BOTH SAMPLES USE THE SAME ORIGIN. A flake that does not cross the seam
+// between t − dt and t is displaced by exactly one lattice vector at both
+// samples, so pos − prevPos is EXACT: the motion vector is untouched by the
+// wrap and TAA sees the true velocity. A flake that DOES cross wraps at one
+// sample and not the other, and reports one frame of a box-length streak. That
+// is the cost, it is paid once per flake per crossing, and it is invisible:
+// the seam sits at the box edge, half the lateral extent away from the centre
+// (30+ m for a weather field), where every flake is past the mesh/billboard LOD
+// split and is drawn by the post-upscaler billboard pass — which has no
+// temporal history at all (F3 note 1). The pixels that could show the streak
+// are not in TAA.
+//
+// Y IS NOT WRAPPED, deliberately: falling is the trajectory, and a torus in y
+// would make a flake reappear at its own feet.
+vec2 wrapFollow(vec2 xz) {
+    // 1e-3 floor: mod() by zero is a NaN, and a NaN position defeats every
+    // downstream bounds check instead of showing up as one bad flake
+    // (feedback_float_pi_sin_pow_nan). A degenerate spawn slab is an authoring
+    // error, not a reason to poison the field.
+    const vec2 period = max(2.0 * pc.spawnHalf.xz, vec2(1e-3));
+    const vec2 lo     = vec2(pc.followX, pc.followZ) - 0.5 * period;
+    return lo + mod(xz - lo, period);
+}
+
 void main() {
-    const uint i = gl_GlobalInvocationID.x;
-    if (i >= pc.capacity) return;
+    const uint i        = gl_GlobalInvocationID.x;
+    const uint capacity = pc.capacityAndFollow & 0x7fffffffu;
+    const bool follow   = (pc.capacityAndFollow & 0x80000000u) != 0u;
+    if (i >= capacity) return;
 
     Slot s;
     s.spawn = pc.spawnCenter +
@@ -196,7 +249,7 @@ void main() {
 
     bool  aliveNow, alivePrev;
     float cycNow, cycPrev;
-    const vec3 pNow  = evalAt(s, pc.time, aliveNow, cycNow);
+    vec3       pNow  = evalAt(s, pc.time, aliveNow, cycNow);
     vec3       pPrev = evalAt(s, pc.time - pc.dt, alivePrev, cycPrev);
 
     // Reborn between the two samples: report zero motion rather than a streak
@@ -204,6 +257,14 @@ void main() {
     // reason, that particlefield_gbuf.vert makes when a slot was dead last
     // frame. At a 6 s lifetime and 60 Hz this is 0.3% of slots per frame.
     if (cycNow != cycPrev) { pPrev = pNow; alivePrev = aliveNow; }
+
+    // AFTER the rebirth collapse, so a reborn slot's two samples stay exactly
+    // equal (the same lattice vector applied to the same point) and still
+    // report zero motion.
+    if (follow) {
+        pNow.xz  = wrapFollow(pNow.xz);
+        pPrev.xz = wrapFollow(pPrev.xz);
+    }
 
     // w carries the radius when alive and the DEAD SENTINEL when not. Under
     // WSemantic::InvMass the value is inert and only the sign is read; under

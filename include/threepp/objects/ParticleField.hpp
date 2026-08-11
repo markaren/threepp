@@ -442,6 +442,46 @@ namespace threepp {
             float size       = 0.02f;
             float sizeJitter = 0.f;// +/- fraction of size, [0,1]
 
+            // ── CAMERA FOLLOW: the field as a TORUS around a moving centre ──
+            // A weather field is a patch of world by default, which is right for
+            // a snow flurry over one shore and wrong for weather — walk out of
+            // the patch and the snow stops, and F4 shipped exactly that ("a
+            // fixed grid that does nothing for the overall scene").
+            //
+            // With `follow` on, the trajectory is evaluated in world space
+            // EXACTLY as before and the result is then WRAPPED TOROIDALLY into
+            // a lateral box centred on followCenter():
+            //
+            //     xz = boxMin.xz + mod(xz - boxMin.xz, boxSize.xz)
+            //
+            // The wrap PERIOD is the spawn slab's own lateral size
+            // (2·spawnHalfExtent.xz) and that is not a convenience — a uniform
+            // distribution over exactly one period folds to a uniform
+            // distribution, so the wrap is measure preserving and the snowfall
+            // stays even. Any other period would bunch the flakes.
+            //
+            // Y IS NEVER WRAPPED. The fall is what makes snow snow; only the
+            // lateral extent is a tiling of the same weather.
+            //
+            // Nothing about the trajectory changes, so determinism, seeking and
+            // exact motion vectors all survive: the wrap is a pure function of
+            // the position and the centre, applied identically to f(t) and
+            // f(t − dt).
+            bool follow = false;
+            // The centre is SNAPPED to this lattice (metres, 0 = no snapping)
+            // before it reaches the shader. Between snaps the field is exactly
+            // world anchored — a slow pan shows real parallax rather than a
+            // volume sliding with the eye — and the wrap seam sits still
+            // instead of churning with every camera jiggle.
+            //
+            // CHOOSE IT AS AN INTEGER NUMBER OF DENSITY VOXELS when the field
+            // also carries a DensityRepr that follows the same centre: a snap
+            // of half a voxel re-phases the whole volume against its own
+            // lattice and the haze visibly swims. (Same class of error as a
+            // per-frame-fitted density box, which is why FireEffect's boxes are
+            // fixed.)
+            float followSnap = 4.f;
+
             std::uint32_t seed = 20260812u;
         };
 
@@ -537,6 +577,26 @@ namespace threepp {
         [[nodiscard]] float emitterTime() const { return emitTime_; }
         [[nodiscard]] float emitterDt() const { return emitDt_; }
 
+        // Move the centre of the toroidal follow box (EmitterParams::follow).
+        // Pass the CAMERA's world position — snowfall that follows anything
+        // else is not weather. WORLD space; the backend converts to the field's
+        // own space with the field's world matrix.
+        //
+        // The value is snapped to EmitterParams::followSnap here, and
+        // followCenter() reads back the SNAPPED point, which is the number a
+        // caller must use to place anything that has to agree with the wrap box
+        // — above all the field's own DensityRepr::center. Reading the camera
+        // position twice and snapping it twice would work until someone changed
+        // one of the two expressions.
+        //
+        // Free to call every frame (it writes two floats) and DETERMINISTIC by
+        // construction: under a scripted camera the snapped centre is a pure
+        // function of the frame index, so a --shot/--seq capture is still a
+        // function of its frame index and nothing else. THROWS on a
+        // non-Renderer field.
+        void setFollowCenter(const Vector3& worldCenter);
+        [[nodiscard]] const Vector3& followCenter() const { return followCenter_; }
+
         // Per-particle orientation, as n quaternions in (x, y, z, w) order.
         // Requires Config::orientations. WRITE-ONCE by contract: the device
         // buffer is a single instance (not ringed), because the plan's model is
@@ -603,6 +663,11 @@ namespace threepp {
         EmitterParams emitter_;
         float         emitTime_ = 0.f;
         float         emitDt_   = 1.f / 60.f;
+        // SNAPPED world centre of the follow box. Its default of the origin is
+        // the honest one: a follow field nobody drives is a patch centred on
+        // the world origin, i.e. exactly the pre-follow behaviour of a field
+        // sitting at its own position.
+        Vector3       followCenter_{0.f, 0.f, 0.f};
     };
 
 }// namespace threepp

@@ -127,11 +127,12 @@ namespace {
         float sizeJitter;             //  96
         float time;                   // 100
         float dt;                     // 104
-        std::uint32_t capacity;       // 108
+        // Slot count in bits 0..30, follow flag in bit 31 — see the shader.
+        std::uint32_t capacityAndFollow;// 108
         std::uint32_t seed;           // 112
         float driftScale;             // 116
-        float _rsv0;                  // 120
-        float _rsv1;                  // 124
+        float followX;                // 120  field-LOCAL follow centre
+        float followZ;                // 124
     };
     static_assert(sizeof(EmitPc) == 128, "particle_emit push-constant drift");
     static_assert(offsetof(EmitPc, seed) == 112, "particle_emit push-constant layout drift");
@@ -743,9 +744,28 @@ void ParticleFieldPass::prepareFrame(std::uint64_t serial, std::uint32_t frame,
             // every motion vector — the defect plan F2 says numbers will not
             // catch. Floored on both sides of the API for that reason.
             pc.dt         = std::max(r.field->emitterDt(), 0.f);
-            pc.capacity   = st.capacity;
+            pc.capacityAndFollow = st.capacity;
             pc.seed       = ep.seed;
             pc.driftScale = std::max(ep.driftScale, 0.f);
+            // ── The toroidal follow centre ──────────────────────────────────
+            // Bit 31 of the count carries the mode (see EmitPc), so a field
+            // that does not follow pushes the identical bytes it pushed before
+            // this existed — capacity is a slot count and cannot reach 2^31.
+            //
+            // WORLD → FIELD-LOCAL here, not on the API, because this is the
+            // only place the field's world matrix is guaranteed current, and
+            // the shader's positions are field-local by the mode's contract.
+            // Translation only: a weather field with a ROTATED world matrix
+            // would need the inverse basis applied to the wrap box as well,
+            // and an axis-aligned torus around a tilted field is not a thing
+            // this asks for — the rotation is ignored, which is the honest
+            // degradation (the box stays world-axis-aligned).
+            if (ep.follow) {
+                pc.capacityAndFollow |= 0x80000000u;
+                const Vector3& fc = r.field->followCenter();
+                pc.followX = fc.x - world[12];
+                pc.followZ = fc.z - world[14];
+            }
 
             EmitDispatch ed{};
             ed.groups = (st.capacity + kEmitLocalSize - 1u) / kEmitLocalSize;

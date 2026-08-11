@@ -229,6 +229,27 @@ void ParticleField::setEmitterTime(float timeSec, float dtSec) {
     emitDt_ = std::max(dtSec, 0.f);
 }
 
+void ParticleField::setFollowCenter(const Vector3& worldCenter) {
+
+    if (config_.ownership != Ownership::Renderer) {
+        throw std::invalid_argument(
+                "ParticleField::setFollowCenter: only an Ownership::Renderer field has a "
+                "device emitter to re-centre");
+    }
+    // floor(), not round(): floor is monotone and has no tie, so a camera
+    // creeping across a lattice line crosses it ONCE. round()'s tie at .5 puts
+    // the boundary where float noise can flip it back and forth between two
+    // frames, which is a whole box of snow teleporting twice for no motion.
+    const float g = emitter_.followSnap;
+    if (g > 1e-4f) {
+        followCenter_.set(std::floor(worldCenter.x / g) * g,
+                          worldCenter.y,// unsnapped: the wrap is lateral only
+                          std::floor(worldCenter.z / g) * g);
+    } else {
+        followCenter_.copy(worldCenter);
+    }
+}
+
 void ParticleField::setLiveCount(std::uint32_t n) {
 
     if (n > config_.capacity) n = config_.capacity;
