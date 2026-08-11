@@ -28,6 +28,8 @@
 // Headless:  vulkan_snow --shot out.png [--frames N] [--t SECONDS] [--count N]
 //            vulkan_snow --seq DIR [--orbit deg/s] [--warm N] [--seqframes N]
 //            vulkan_snow --bench           interleaved A/B of the field's cost
+//            vulkan_snow --bench-lod       interleaved A/B of the F4 LOD split
+//            vulkan_snow --no-lod          mesh proxies at every distance (pre-F4)
 //            vulkan_snow --rain            the second archetype, same emitter
 //            vulkan_snow --mv              motion-AOV probe (magnitude AND SIGN)
 //            vulkan_snow --msaa N          MSAA G-buffer instead of the default
@@ -307,6 +309,12 @@ int main(int argc, char** argv) {
     int   shotFrames = 240;
     float shotTime   = -1.f;// >= 0: freeze the emitter at this absolute t
     bool  bench      = false;
+    // F4 (3): the LOD split's own A/B. The legs differ only in whether the
+    // mesh/billboard distance gates are set, with the field FALLING in both, so
+    // the delta is the split and nothing else — the parked/falling bench above
+    // cannot express that. One binary, one seed, interleaved.
+    bool  benchLod   = false;
+    bool  noLod      = false;// --no-lod: the pre-F4 mesh-everywhere behaviour
     bool  rain       = false;
     bool  noHaze     = false;
     std::uint32_t count = 300'000;
@@ -335,6 +343,8 @@ int main(int argc, char** argv) {
         else if (a == "--t" && i + 1 < argc) shotTime = float(std::atof(argv[++i]));
         else if (a == "--count" && i + 1 < argc) { count = std::uint32_t(std::atoi(argv[++i])); countExplicit = true; }
         else if (a == "--bench") bench = true;
+        else if (a == "--bench-lod") benchLod = true;
+        else if (a == "--no-lod") noLod = true;
         else if (a == "--rain") rain = true;
         else if (a == "--no-haze") noHaze = true;
         else if (a == "--upscaler" && i + 1 < argc) upscaler = argv[++i];
@@ -353,7 +363,7 @@ int main(int argc, char** argv) {
                   {{"title", std::string("Vulkan Deferred - Snow")},
                    {"size", std::pair<int, int>{1280, 720}},
                    {"vsync", false},
-                   {"headless", !shotPath.empty() || bench || mvProbe || !seqDir.empty()}});
+                   {"headless", !shotPath.empty() || bench || benchLod || mvProbe || !seqDir.empty()}});
     VulkanRenderer renderer(canvas);
     renderer.setDlss(upscaler == "dlss");
     renderer.setFsr(upscaler == "fsr");
@@ -420,6 +430,25 @@ int main(int argc, char** argv) {
         br.fadePower    = 0.f;  // a drop does not fade; it lands
         br.sizeTaper    = 0.f;
         br.brightJitter = 0.55f;
+        // ── F4 (4): the near-camera streak, killed at its cause ─────────────
+        // The F3 sequence shows exactly one anomalously bright bar per frame,
+        // and it is always the nearest drop. Nothing is wrong with the streak:
+        // stretchMax caps its length in METRES, correctly, and then 1/d turns
+        // that legal 12 cm into a quarter of the frame while 1/d^2 makes it the
+        // brightest thing in it. Both caps below are that same compounding,
+        // clamped in the two domains it shows up in.
+        //   • 4.5% of the frame HEIGHT is about 32 px here — long enough to
+        //     read as motion smear, short enough never to draw the eye.
+        //   • the near fade takes the last 1.2 m to zero, which is where a real
+        //     lens has nothing in focus anyway.
+        br.stretchMaxScreen = 0.045f;
+        br.nearFade         = 1.20f;
+        // Re-tuned against the fog (F3 note iii). With the drops now drawn as
+        // faint streaks the density volume's haze is doing proportionally more
+        // of the work, and it is doing it TWICE now that the quads are fogged
+        // too — so the streak comes down again rather than fighting the murk
+        // it is supposed to sit inside.
+        br.intensity = 0.070f;
     } else {
         auto flakeMat = MeshStandardMaterial::create(
                 MeshStandardMaterial::Params{}
@@ -427,6 +456,66 @@ int main(int argc, char** argv) {
                         .roughness(0.85f)
                         .metalness(0.f));
         snow->setMeshRepr(OctahedronGeometry::create(cfg.uniformRadius, 0), flakeMat);
+
+        // ── F4 (3): the LOD split, and the near cull ────────────────────────
+        // ONE field, ONE position buffer, TWO vertex stages with complementary
+        // distance gates — no CPU work, no compaction pass, no second field.
+        // The mesh proxy shrinks out over [kLodNear, kLodFar] and the billboard
+        // fades in over exactly the same band, so a flake crossing the boundary
+        // cross-dissolves between representations instead of popping.
+        //
+        // WHY: past ~8 m a flake is under 5 px and the octahedron is buying
+        // nothing but cost — the 5M bench put 11 of 16.8 ms in G-buffer raster
+        // plus the deferred shade of flakes that small. A soft additive sprite
+        // carries the same 5 px for a fraction of the fill.
+        //
+        // (The plan asks for a procedural HEX-flake sprite out there. Not done,
+        // deliberately: at the distance the billboard takes over, a flake is
+        // 2-5 px across and a hexagon and a disc are the same picture. The
+        // shape would be information the frame cannot carry, paid for in a
+        // fragment branch on the representation that exists to be cheap.)
+        constexpr float kLodNear = 5.5f, kLodFar = 8.0f;
+        auto& mr = snow->meshRepr();
+        mr.lodFar  = kLodFar;
+        mr.lodFade = kLodFar - kLodNear;
+        // The F3 capture's "giant flake". Not a size-hash outlier — the
+        // emitter's `size * (1 + sizeJitter * rndS)` is bounded to 2x by
+        // construction and cannot overshoot — but a flake 40 cm from the lens,
+        // which subtends ~100 px and reads as a floating crystal. A real camera
+        // resolves nothing at that distance either.
+        //
+        // The value is larger than "the distance a flake stops being resolvable"
+        // because of what the LINEAR ramp does: scale rises as d/nearCull while
+        // apparent size falls as 1/d, so inside the band the two cancel exactly
+        // and every flake projects to the SAME apparent size, r/nearCull rad.
+        // The knob is therefore "how big may the nearest flake get" — 3 m caps
+        // a 2.4 cm flake at about 13 px — and it is a cap rather than a hole,
+        // which is why no empty bubble opens around the camera.
+        mr.nearCull = 3.00f;
+
+        // The far representation. Faint and slightly blue-white, because at
+        // this size the flake is a highlight on the overcast sky rather than a
+        // lit solid — and additive, because that is the only blend this slice
+        // has (a normal-blend field billboard needs the deferred radix sort,
+        // still deferred).
+        snow->setBillboardRepr(Color(0.88f, 0.91f, 0.97f), Color(0.80f, 0.84f, 0.92f),
+                               /*intensity*/ 0.30f, /*sizeScale*/ 1.00f);
+        auto& br = snow->billboardRepr();
+        br.lodNear     = kLodNear;
+        br.lodFade     = kLodFar - kLodNear;
+        br.softness    = 0.62f;// a flake is soft-edged at 3 px, not a hard dot
+        br.fadePower   = 0.f;  // a flake does not burn out
+        br.sizeTaper   = 0.f;
+        br.brightJitter = 0.40f;
+
+        // --no-lod restores the pre-F4 picture exactly: mesh proxies at every
+        // distance, no near cull, no quads. The billboard representation is
+        // switched OFF rather than pushed out of range, so the A/B leg records
+        // no overlay draw at all.
+        if (noLod) {
+            mr.lodFar = mr.lodFade = mr.nearCull = 0.f;
+            br.enabled = false;
+        }
     }
 
     // The SAME field also feeds the world-anchored density volume, so the
@@ -460,7 +549,7 @@ int main(int argc, char** argv) {
     std::unique_ptr<OrbitControls> controls;
     std::unique_ptr<RendererSettingsUi> ui;
     std::unique_ptr<KeyAdapter> keys;
-    if (shotPath.empty() && !bench && !mvProbe && seqDir.empty()) {
+    if (shotPath.empty() && !bench && !benchLod && !mvProbe && seqDir.empty()) {
         controls = std::make_unique<OrbitControls>(camera, canvas);
         controls->target.copy(target);
         controls->update();
@@ -562,6 +651,74 @@ int main(int argc, char** argv) {
         row("CPU whole frame", offA.cpu, onA.cpu);
         std::printf("  emit + scatter: %.4f ms  (F2 checkpoint (a) budget: 1.0 ms)\n",
                     (onA.emit + onA.density) * inv);
+        return 0;
+    }
+
+    // ── Bench: what does the F4 LOD SPLIT buy? ──────────────────────────────
+    // Both legs have the field falling; they differ only in whether the
+    // distance gates are set. That is the honest comparison for a LOD, and it
+    // is a comparison the parked/falling bench above structurally cannot make.
+    // The gates are read from MeshRepr / BillboardRepr every frame, so a leg is
+    // four float writes and no structural change — no rebuild, no device idle,
+    // no TAA history clear between legs beyond the warm-up each leg runs.
+    if (benchLod) {
+        constexpr int kPairs = 6, kWarm = 40, kMeasure = 90;
+        constexpr float kDt = 1.f / 60.f;
+        struct Acc { double gbuf = 0, shade = 0, taa = 0, overlay = 0, gpu = 0, cpu = 0; };
+        Acc onA{}, offA{};
+        auto& mr = snow->meshRepr();
+        auto& br = snow->billboardRepr();
+        const float lodFar = mr.lodFar, lodFade = mr.lodFade, nearCull = mr.nearCull;
+        const bool  bbOn   = br.enabled;
+        int frame = 0;
+        const auto leg = [&](bool lod, Acc& acc) {
+            mr.lodFar   = lod ? lodFar : 0.f;
+            mr.lodFade  = lod ? lodFade : 0.f;
+            mr.nearCull = lod ? nearCull : 0.f;
+            br.enabled  = lod && bbOn;
+            for (int i = 0; i < kWarm; ++i) {
+                snow->setEmitterTime(float(frame++) * kDt, kDt);
+                canvas.animateOnce([&] { renderer.render(scene, camera); });
+            }
+            Acc a{};
+            for (int i = 0; i < kMeasure; ++i) {
+                snow->setEmitterTime(float(frame++) * kDt, kDt);
+                canvas.animateOnce([&] { renderer.render(scene, camera); });
+                const auto t = renderer.lastFrameTimings();
+                a.gbuf += t.rasterGbufMs;
+                a.shade += t.pathTraceMs;
+                a.taa += t.taaMs;
+                a.overlay += t.overlayMs;
+                a.gpu += t.gpuTotalMs;
+                a.cpu += t.cpuFrameMs;
+            }
+            acc.gbuf += a.gbuf / kMeasure;
+            acc.shade += a.shade / kMeasure;
+            acc.taa += a.taa / kMeasure;
+            acc.overlay += a.overlay / kMeasure;
+            acc.gpu += a.gpu / kMeasure;
+            acc.cpu += a.cpu / kMeasure;
+        };
+        for (int p = 0; p < kPairs; ++p) {// A B A B ...
+            leg(false, offA);
+            leg(true, onA);
+        }
+        const double inv = 1.0 / double(kPairs);
+        const auto sz = renderer.size();
+        std::printf("\n[bench-lod] %dx%d, %u particles, %d interleaved pairs of %d frames, "
+                    "AE pinned, vsync off\n", sz.width(), sz.height(), unsigned(count),
+                    kPairs, kMeasure);
+        std::printf("  %-24s %10s %10s %10s\n", "ms/frame", "mesh-only", "LOD split", "delta");
+        const auto row = [&](const char* n, double off, double on) {
+            std::printf("  %-24s %10.4f %10.4f %10.4f\n", n, off * inv, on * inv,
+                        (on - off) * inv);
+        };
+        row("GPU raster gbuf", offA.gbuf, onA.gbuf);
+        row("GPU deferred shade", offA.shade, onA.shade);
+        row("GPU taa resolve", offA.taa, onA.taa);
+        row("GPU overlay (billboards)", offA.overlay, onA.overlay);
+        row("GPU whole frame", offA.gpu, onA.gpu);
+        row("CPU whole frame", offA.cpu, onA.cpu);
         return 0;
     }
 
