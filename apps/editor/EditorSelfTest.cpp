@@ -4421,7 +4421,7 @@ int EditorApp::runSelfTest() {
 
     // With a model path on the command line, exercise the async import path
     // end to end: queue -> worker -> finalize -> selected group in the scene.
-    if (!options_.openOnStart.empty() && options_.openOnStart.extension() != ".json") {
+    if (!options_.openOnStart.empty() && !formats::isScene(options_.openOnStart)) {
         const auto childrenBefore = document_.scene().children.size();
         importModel(options_.openOnStart);
         int budget = 3000;// frames; the worker is genuinely asynchronous
@@ -4523,6 +4523,37 @@ int EditorApp::runSelfTest() {
             newScene();
             step(2);
         }
+    }
+
+    // --- One file: the .tpz archive -------------------------------------------
+    // Nothing in the editor decides this: DocumentFormat::Auto reads the name it
+    // is given, so Save As with an archive name has to write an archive and Open
+    // has to take it back without being told which of the two it is.
+    {
+        newScene();
+        step(2);
+
+        auto* subject = document_.scene().children.empty() ? nullptr : document_.scene().children.front();
+        const auto uuid = subject ? subject->uuid : std::string{};
+
+        const auto archivePath = std::filesystem::temp_directory_path() / "threepp_editor_archive.tpz";
+        std::error_code ec;
+        std::filesystem::remove(archivePath, ec);
+
+        saveSceneAs(archivePath);
+        step();
+        check(std::filesystem::exists(archivePath, ec) && std::filesystem::file_size(archivePath, ec) > 0,
+              "Save As with a .tpz name writes an archive");
+
+        openScene(archivePath);
+        step(2);
+        check(document_.path() == archivePath, "and Open takes it back as the document");
+        check(!uuid.empty() && findByUuid(document_.scene(), uuid) != nullptr,
+              "with the scene that went into it");
+
+        std::filesystem::remove(archivePath, ec);
+        newScene();
+        step(2);
     }
 
     // --- The look rides with the document -------------------------------------

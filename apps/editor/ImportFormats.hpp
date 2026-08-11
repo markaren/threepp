@@ -107,6 +107,19 @@ namespace threepp::editor::formats {
         return list;
     }
 
+    // Scene documents — what File ▸ Save writes and File ▸ Open reads: the
+    // loose three.js JSON, or the .tpz archive carrying the same document next
+    // to its images and geometry. One document, two containers; ObjectLoader
+    // tells them apart by sniffing and ObjectExporter by the name it is given.
+    //
+    // ".json" stays FIRST: a Save dialog adopts the first extension when no
+    // extension is typed, and the loose document is the one that diffs.
+    inline const std::vector<std::string>& scenes() {
+
+        static const std::vector<std::string> list{".json", ".tpz"};
+        return list;
+    }
+
     // Everything the Import action accepts: mesh, robot and splat alike.
     inline const std::vector<std::string>& importable() {
 
@@ -139,6 +152,11 @@ namespace threepp::editor::formats {
     inline bool isImportable(const std::filesystem::path& path) {
 
         return contains(importable(), extensionOf(path));
+    }
+
+    inline bool isScene(const std::filesystem::path& path) {
+
+        return contains(scenes(), extensionOf(path));
     }
 
     inline bool isEnvironment(const std::string& extension) {

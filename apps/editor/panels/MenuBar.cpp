@@ -79,7 +79,7 @@ void EditorApp::drawMenuBar() {
             if (ImGui::MenuItem("Save As...", nullptr, false, editable)) {
                 pendingDialog_ = PendingDialog::SaveAs;
                 fileBrowser_.open("Save Scene As", FileBrowser::Mode::Save,
-                                  settings_.sceneDir, {".json"},
+                                  settings_.sceneDir, formats::scenes(),
                                   document_.hasPath() ? document_.path().filename().string()
                                                       : std::string("scene.json"));
             }

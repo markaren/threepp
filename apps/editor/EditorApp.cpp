@@ -690,7 +690,7 @@ EditorApp::EditorApp(const Options& options)
 
     if (!options_.example.empty()) {
         openExample(options_.example);
-    } else if (!options_.openOnStart.empty() && options_.openOnStart.extension() == ".json") {
+    } else if (!options_.openOnStart.empty() && formats::isScene(options_.openOnStart)) {
         openScene(options_.openOnStart);
     } else {
         buildTemplateScene();
@@ -1009,7 +1009,7 @@ void EditorApp::drawUi() {
             case PendingAction::Open:
                 pendingDialog_ = PendingDialog::Open;
                 fileBrowser_.open("Open Scene", FileBrowser::Mode::Open,
-                                  settings_.sceneDir, {".json"});
+                                  settings_.sceneDir, formats::scenes());
                 break;
             case PendingAction::OpenPath: openScene(pendingPath_); break;
             case PendingAction::OpenExample: openExample(pendingExample_); break;
@@ -1334,7 +1334,7 @@ void EditorApp::saveScene() {
     if (!document_.hasPath()) {
         pendingDialog_ = PendingDialog::SaveAs;
         fileBrowser_.open("Save Scene As", FileBrowser::Mode::Save,
-                          settings_.sceneDir, {".json"}, "scene.json");
+                          settings_.sceneDir, formats::scenes(), "scene.json");
         return;
     }
     saveSceneAs(document_.path());
@@ -4041,7 +4041,7 @@ void EditorApp::handleFileDrop(const std::vector<std::string>& paths) {
             continue;
         }
 
-        if (extension == ".json") {
+        if (formats::contains(formats::scenes(), extension)) {
             if (document_.dirty()) {
                 pendingAction_ = PendingAction::OpenPath;
                 pendingPath_ = path;
