@@ -64,6 +64,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <filesystem>
 #include <memory>
 #include <random>
 #include <string>
@@ -353,8 +354,12 @@ int main(int argc, char** argv) {
     }
     const std::string selfExe = argc > 0 ? std::string(argv[0]) : std::string();
     // Where the demonstration PNGs and the child processes' raw captures go.
-    // Unset = no captures written and the cross-process comparisons fall back
-    // to the working directory.
+    // Unset = no PNGs written, and the cross-process comparisons put their raw
+    // intermediates in the OS temp directory and delete them again (see
+    // renderChild). It used to fall back to the WORKING DIRECTORY and keep
+    // them, which meant every run of this test left eight det_*.raw blobs
+    // wherever it was invoked from — the repo root, for anyone running the
+    // binary the obvious way. A test's scratch is not the caller's problem.
     const char* capDirForDet = std::getenv("THREEPP_PF_CAPTURE_DIR");
 
     // Before the Canvas: the profiler registry latches its flags on first use,
@@ -2642,11 +2647,27 @@ int main(int argc, char** argv) {
         std::printf("\n[note] argv[0] unavailable — the cross-process comparisons "
                     "are skipped.\n");
     } else {
-        const std::string tmp = capDirForDet ? std::string(capDirForDet) : std::string(".");
+        // The raw blobs are pure INTERMEDIATES: a child process writes one, the
+        // parent reads it back immediately, and nothing downstream wants it
+        // again. So they go to the OS temp directory and are deleted as soon as
+        // they have been read — unless THREEPP_PF_CAPTURE_DIR names a directory,
+        // which is the explicit "I am debugging this, keep the artefacts" opt-in
+        // and is honoured as such.
+        namespace fs = std::filesystem;
+        std::error_code ec;
+        const bool keepRaw = capDirForDet != nullptr;
+        const std::string tmp = keepRaw ? std::string(capDirForDet)
+                                        : fs::temp_directory_path(ec).string();
         const auto renderChild = [&](const char* mode, const char* tag) {
             const std::string p = tmp + "/det_" + mode + "_" + tag + ".raw";
             const int rc = spawnDetChild(selfExe, mode, p);
-            return rc == kSkipCode ? std::vector<unsigned char>{} : readFileBytes(p);
+            if (rc == kSkipCode) return std::vector<unsigned char>{};
+            auto bytes = readFileBytes(p);
+            if (!keepRaw) {
+                std::error_code rm;
+                fs::remove(p, rm);// best effort: a leftover blob is not a failure
+            }
+            return bytes;
         };
         const auto diffBytes = [](const std::vector<unsigned char>& a,
                                   const std::vector<unsigned char>& b) -> long long {
