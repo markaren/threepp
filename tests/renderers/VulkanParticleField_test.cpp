@@ -429,14 +429,34 @@ int main(int argc, char** argv) {
         } catch (const std::invalid_argument&) { threw = true; }
         check(threw, "create() rejects capacity == 0");
 
-        threw = false;
-        try {
-            ParticleField::Config bad;
-            bad.capacity = 16;
-            bad.ownership = ParticleField::Ownership::Interop;
-            (void) ParticleField::create(bad);
-        } catch (const std::invalid_argument&) { threw = true; }
-        check(threw, "create() rejects Ownership::Interop in this phase");
+        // ── F6: the Interop half of the API split ───────────────────────────
+        // No CUDA and no exported buffer needed to assert the CONTRACT: an
+        // Interop field's positions are written by the foreign device API, so
+        // host bytes handed to submit() would go nowhere — and a field that
+        // renders nothing while silently accepting them is the failure this
+        // throw exists to convert into a stack trace at the call site.
+        {
+            ParticleField::Config cfg;
+            cfg.capacity  = 16;
+            cfg.ownership = ParticleField::Ownership::Interop;
+            auto interop  = ParticleField::create(cfg);
+            check(interop != nullptr, "create() accepts Ownership::Interop (F6)");
+
+            const std::vector<ParticlePos> pos(16);
+            threw = false;
+            try {
+                interop->submit(pos.data(), 16);
+            } catch (const std::invalid_argument&) { threw = true; }
+            check(threw, "submit() throws on an Interop field");
+
+            // ...unless the renderer (or a failed foreign import) has switched
+            // the field to the host ring, which is the documented fallback and
+            // the only reason submit() is ever legal here.
+            interop->setHostFallback();
+            interop->submit(pos.data(), 16);
+            check(interop->liveCount() == 16,
+                  "submit() feeds an Interop field once hostFallback() is set");
+        }
     }
     check(sizeof(ParticlePos) == 16, "ParticlePos is 16 B");
 
