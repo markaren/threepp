@@ -9,6 +9,8 @@
 #include "threepp/constants.hpp"
 #include "threepp/core/BufferAttribute.hpp"
 
+#include <algorithm>
+#include <filesystem>
 #include <string>
 
 namespace threepp::objectjson {
@@ -153,6 +155,48 @@ namespace threepp::objectjson {
     inline constexpr const char* archiveDocument = "scene.json";
     inline constexpr const char* archiveImageDir = "images/";
     inline constexpr const char* archiveBufferDir = "buffers/";
+    // A linked model travels inside the archive as assets/<n>_<filename>, where
+    // n numbers the scene's sources in sorted order — so the same scene always
+    // produces the same names, and however many subtrees point at one file it is
+    // stored once.
+    inline constexpr const char* archiveAssetDir = "assets/";
+
+    // What ObjectLoader stamps on a subtree it re-imported OUT of an archive:
+    // "<absolute archive path>|<entry name>". The '|' is the whole trick — it
+    // cannot occur in a Windows path — so an exporter can always tell a mark
+    // from an ordinary path and copy the bytes archive-to-archive instead of
+    // hunting for a file that never existed on disk.
+    inline constexpr char archiveAssetMark = '|';
+
+    // Splits a mark into its two halves. False when `text` is an ordinary path,
+    // which is the common case and not an error.
+    inline bool splitArchiveAsset(const std::string& text, std::string& archive, std::string& entry) {
+
+        const auto bar = text.find(archiveAssetMark);
+        if (bar == std::string::npos) return false;
+
+        archive = text.substr(0, bar);
+        entry = text.substr(bar + 1);
+
+        return !archive.empty() && !entry.empty();
+    }
+
+    // The one format allowed inside an archive. Everything else references
+    // siblings the archive does not carry — an .fbx its textures, an .obj its
+    // .mtl, a .urdf a whole package tree — and would come back quietly poorer
+    // than it went in. Refuse rather than guess; those subtrees keep being
+    // written out in full, which the binary sections make cheap anyway.
+    inline bool travelsInArchive(const std::string& source) {
+
+        std::string archive, entry;
+        const std::string& name = splitArchiveAsset(source, archive, entry) ? entry : source;
+
+        auto extension = std::filesystem::path(name).extension().string();
+        std::transform(extension.begin(), extension.end(), extension.begin(),
+                       [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+
+        return extension == ".glb";
+    }
 
 }// namespace threepp::objectjson
 

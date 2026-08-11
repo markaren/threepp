@@ -25,6 +25,7 @@
 #include "threepp/loaders/URDFLoader.hpp"
 #include "threepp/loaders/Xacro.hpp"
 #include "threepp/materials/materials.hpp"
+#include "threepp/math/MathUtils.hpp"
 #include "threepp/materials/MeshDepthMaterial.hpp"
 #include "threepp/materials/MeshMatcapMaterial.hpp"
 #include "threepp/materials/MeshToonMaterial.hpp"
@@ -1129,6 +1130,11 @@ namespace {
         // Base directory for the paths of referenced assets, same as for
         // referenced images.
         const std::filesystem::path& resourcePath;
+        // The archive this document came out of, and where it is. A linked
+        // asset may be a member of it, and re-importing one has to be able to
+        // say which archive it came from — see resolveLinkedAsset.
+        const ZipReader* archive{nullptr};
+        const std::filesystem::path& archivePath;
     };
 
     std::shared_ptr<BufferGeometry> lookupGeometry(const json& j, const ParseContext& ctx) {
@@ -1601,6 +1607,49 @@ namespace {
         }
     }
 
+    // One archive member, written to a temp file for the length of an import.
+    //
+    // Every importer in the tree takes a path, and giving them all a second
+    // entry point that takes bytes would be a far larger change than writing
+    // the bytes down — which is also why only self-contained formats may travel
+    // in an archive: a file whose siblings are missing would import to
+    // something quietly wrong. The extension is kept because that is what
+    // importAsset dispatches on, and the uuid is what keeps two loads (or two
+    // processes) out of each other's way.
+    class TempAsset {
+
+    public:
+        explicit TempAsset(const std::string& entry, const std::vector<unsigned char>& bytes) {
+
+            const std::filesystem::path name{entry};
+            path_ = std::filesystem::temp_directory_path() /
+                    ("threepp-asset-" + math::generateUUID() + name.extension().string());
+
+            std::ofstream out(path_, std::ios::binary | std::ios::trunc);
+            if (!out) return;
+            if (!bytes.empty()) out.write(reinterpret_cast<const char*>(bytes.data()),
+                                          static_cast<std::streamsize>(bytes.size()));
+            ok_ = out.good();
+        }
+
+        TempAsset(const TempAsset&) = delete;
+        TempAsset& operator=(const TempAsset&) = delete;
+
+        ~TempAsset() {
+
+            std::error_code ec;
+            std::filesystem::remove(path_, ec);
+        }
+
+        [[nodiscard]] bool ok() const { return ok_; }
+
+        [[nodiscard]] const std::filesystem::path& path() const { return path_; }
+
+    private:
+        std::filesystem::path path_;
+        bool ok_{false};
+    };
+
     // Returns the re-imported subtree, or nullptr when the asset could not be
     // loaded — in which case the caller keeps the empty placeholder, so the
     // rest of the scene still opens.
@@ -1613,14 +1662,64 @@ namespace {
             return nullptr;
         }
 
-        std::filesystem::path path{stored};
-        if (path.is_relative() && !ctx.resourcePath.empty()) path = ctx.resourcePath / path;
+        // An asset that lives inside an archive: a member of the one this
+        // document came out of, or one named by a "<archive>|<entry>" mark that
+        // an earlier load left behind — a document saved loose can still point
+        // into an archive, and that path means what it says wherever it is read.
+        std::string markArchive, markEntry;
+        std::optional<ZipReader> other;
+        const ZipReader* holder = nullptr;
 
-        // Normalised so that re-saving this document writes the same relative
-        // path it was loaded from, rather than one with a '..' baked in.
-        std::error_code ec;
-        if (auto canonical = std::filesystem::weakly_canonical(path, ec); !ec && !canonical.empty()) {
-            path = canonical;
+        if (splitArchiveAsset(stored, markArchive, markEntry)) {
+
+            try {
+
+                other.emplace(markArchive);
+                holder = &*other;
+
+            } catch (const std::exception& e) {
+                ctx.warnings.add("could not open archive '" + markArchive + "' for linked asset '" +
+                                 placeholder.name + "': " + e.what());
+                return nullptr;
+            }
+
+        } else if (ctx.archive && ctx.archive->has(stored)) {
+
+            markArchive = ctx.archivePath.generic_string();
+            markEntry = stored;
+            holder = ctx.archive;
+        }
+
+        std::optional<TempAsset> extracted;
+        if (holder) {
+
+            if (!holder->has(markEntry)) {
+                ctx.warnings.add("archive '" + markArchive + "' has no entry '" + markEntry + "'");
+                return nullptr;
+            }
+
+            extracted.emplace(markEntry, holder->read(markEntry));
+            if (!extracted->ok()) {
+                ctx.warnings.add("could not extract '" + markEntry + "' from '" + markArchive + "'");
+                return nullptr;
+            }
+        }
+
+        std::filesystem::path path{stored};
+        if (extracted) {
+
+            path = extracted->path();
+
+        } else {
+
+            if (path.is_relative() && !ctx.resourcePath.empty()) path = ctx.resourcePath / path;
+
+            // Normalised so that re-saving this document writes the same relative
+            // path it was loaded from, rather than one with a '..' baked in.
+            std::error_code ec;
+            if (auto canonical = std::filesystem::weakly_canonical(path, ec); !ec && !canonical.empty()) {
+                path = canonical;
+            }
         }
 
         std::shared_ptr<Object3D> imported;
@@ -1654,8 +1753,11 @@ namespace {
         imported->userData = placeholder.userData;
 
         // Where the asset actually is now, which is not necessarily where the
-        // machine that saved the document had it.
-        setAssetSource(*imported, path);
+        // machine that saved the document had it — and for one that came out of
+        // an archive, the archive and the entry rather than the temp file this
+        // import read, which is gone by the time anything asks. That mark is
+        // what lets a re-save copy the bytes straight across.
+        setAssetSource(*imported, extracted ? markArchive + archiveAssetMark + markEntry : path.string());
 
         if (ref.contains("nodes")) applyAssetOverrides(*imported, ref["nodes"], ctx.warnings);
 
@@ -1866,7 +1968,8 @@ std::shared_ptr<Object3D> ObjectLoader::parse(const std::string& jsonText) {
     const auto textures = parseTextures(j.contains("textures") ? j["textures"] : json(), images);
     const auto materials = parseMaterials(j.contains("materials") ? j["materials"] : json(), textures, warnings);
 
-    const ParseContext ctx{geometries, materials, textures, animations, warnings, resourcePath_};
+    const ParseContext ctx{geometries, materials, textures, animations, warnings,
+                           resourcePath_, archive_.get(), archivePath_};
 
     auto object = parseObject(j["object"], ctx);
 
@@ -1909,6 +2012,12 @@ std::shared_ptr<Object3D> ObjectLoader::load(const std::filesystem::path& path) 
         const auto bytes = archive_->read(objectjson::archiveDocument);
         text.assign(bytes.begin(), bytes.end());
 
+        // Absolute, because it goes into the assetSource mark of anything
+        // re-imported out of it and that mark outlives this call.
+        std::error_code ec;
+        auto absolute = std::filesystem::weakly_canonical(path, ec);
+        archivePath_ = ec || absolute.empty() ? path : absolute;
+
     } else {
 
         std::ifstream in(path, std::ios::binary);
@@ -1932,6 +2041,7 @@ std::shared_ptr<Object3D> ObjectLoader::load(const std::filesystem::path& path) 
 
     resourcePath_ = configured;
     archive_.reset();
+    archivePath_.clear();
 
     return object;
 }

@@ -45,8 +45,11 @@ namespace threepp {
     private:
         std::filesystem::path resourcePath_;
         // Set only for the duration of an archive load(); parse() on its own has
-        // nothing but the text it was handed.
+        // nothing but the text it was handed. The path travels with the reader
+        // because a subtree re-imported out of the archive has to record which
+        // archive that was, not just that it was one.
         std::shared_ptr<ZipReader> archive_;
+        std::filesystem::path archivePath_;
         std::vector<std::string> warnings_;
     };
 

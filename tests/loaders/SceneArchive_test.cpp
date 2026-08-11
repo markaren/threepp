@@ -213,10 +213,83 @@ TEST_CASE("A texture that came out of a .glb keeps the bytes it came in as") {
 }
 
 
-TEST_CASE("A linked subtree is embedded in an archive, and says so") {
+TEST_CASE("A linked .glb rides inside the archive and comes back linked") {
 
-    // Re-importing a .glb from inside a zip needs memory-based import plumbing
-    // that does not exist, so an archive writes the subtree out in full — which
+    const std::filesystem::path model = std::filesystem::path(DATA_FOLDER) /
+                                        "models" / "gltf" / "LeePerrySmith" / "LeePerrySmith.glb";
+
+    ModelLoader models;
+    auto imported = models.load(model);
+    REQUIRE(imported != nullptr);
+    setAssetSource(*imported, std::filesystem::weakly_canonical(model));
+
+    imported->name = "head";
+    imported->position.set(1, 2, 3);
+
+    // An edit INSIDE the subtree, which is the reason a reference carries a
+    // table of overrides and not just a path.
+    std::vector<Object3D*> nodes;
+    imported->traverse([&](Object3D& o) { if (&o != imported.get()) nodes.push_back(&o); });
+    REQUIRE_FALSE(nodes.empty());
+    nodes.back()->visible = false;
+    const auto nodeCount = nodes.size();
+
+    auto scene = Scene::create();
+    scene->add(imported);
+
+    const auto dir = std::filesystem::temp_directory_path() / "threepp-scene-archive-asset-test";
+    std::filesystem::create_directories(dir);
+    const auto path = dir / "linked.tpz";
+
+    ObjectExporterOptions options;
+    options.models = ModelStorage::Reference;
+
+    ObjectExporter exporter;
+    exporter.save(*scene, path, options);
+    CHECK(exporter.warnings().empty());
+
+    // The asset itself is a member of the archive, and none of its vertices are
+    // in the document: a reference inside an archive is a reference to the
+    // archive's own copy.
+    {
+        ZipReader archive(path);
+        const auto names = archive.names();
+        CHECK(std::find(names.begin(), names.end(), "assets/0_LeePerrySmith.glb") != names.end());
+
+        const auto document = archive.read("scene.json");
+        const std::string text{document.begin(), document.end()};
+        CHECK(text.find("\"geometries\"") == std::string::npos);
+    }
+
+    ObjectLoader loader;
+    auto parsed = loader.load(path);
+    REQUIRE(parsed != nullptr);
+    REQUIRE(parsed->children.size() == 1);
+
+    auto* restored = parsed->children.front();
+    std::vector<Object3D*> back;
+    restored->traverse([&](Object3D& o) { if (&o != restored) back.push_back(&o); });
+
+    CHECK(restored->name == "head");
+    CHECK(back.size() == nodeCount);
+    CHECK(!back.empty());
+    CHECK((!back.empty() && !back.back()->visible));
+
+    // Re-saving copies the asset straight out of the archive it was loaded from
+    // and into the new one — which is what the '|' mark on the restored subtree
+    // is for, and which has to land on the same bytes as the first save.
+    const auto again = dir / "again.tpz";
+    ObjectExporter resave;
+    resave.save(*parsed, again, options);
+    CHECK(resave.warnings().empty());
+    CHECK(fileBytes(path) == fileBytes(again));
+}
+
+
+TEST_CASE("A linked subtree an archive cannot carry is embedded, and says so") {
+
+    // Only a self-contained format may travel in an archive, and only when its
+    // bytes can actually be read. Anything else is written out in full — which
     // the binary sections make cheap, and which is the whole point. The caller
     // asked for a reference and did not get one, so it has to be told which.
     const auto dir = std::filesystem::temp_directory_path() / "threepp-scene-archive-linked-test";

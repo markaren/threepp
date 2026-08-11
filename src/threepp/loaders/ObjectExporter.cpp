@@ -37,6 +37,7 @@
 #include "ObjectJsonConstants.hpp"
 #include "threepp/loaders/AssetSource.hpp"
 #include "threepp/utils/Base64.hpp"
+#include "threepp/utils/ZipReader.hpp"
 #include "threepp/utils/ZipWriter.hpp"
 
 #include <nlohmann/json.hpp>
@@ -51,6 +52,9 @@
 #include <fstream>
 #include <functional>
 #include <iostream>
+#include <map>
+#include <optional>
+#include <set>
 #include <unordered_set>
 
 // ordered_json keeps object keys in insertion order, so the same scene always
@@ -83,6 +87,13 @@ namespace {
         std::vector<std::string> warnings;
 
         std::unordered_set<std::string> seen;
+
+        // The linked assets that travel inside this archive: source (a path, or
+        // a "<archive>|<entry>" mark) -> entry name. Filled in one pass before
+        // the walk, because the numbering is over the whole scene's sources and
+        // because a file pointed at by three subtrees still goes in once. Empty
+        // unless writing an archive under ModelStorage::Reference.
+        std::map<std::string, std::string> assetEntries;
 
         // Path as it should appear in the document: relative to resourcePath
         // when that is possible, so a scene and its assets can be moved or
@@ -1229,6 +1240,71 @@ namespace {
         return out;
     }
 
+    // ------------------------------------------------ linked assets in an archive
+
+    // Copies every linked asset the archive is allowed to carry into it, and
+    // records the entry name each source got. Runs before the object walk: the
+    // names are numbered over the scene's sorted sources, so they cannot be
+    // decided one subtree at a time.
+    //
+    // A source that is already an archive entry (the "<archive>|<entry>" mark of
+    // an earlier load) keeps the name it had. That is what makes re-saving a
+    // loaded archive produce the same bytes rather than a renumbered copy, and
+    // it is safe over the file being read: ZipWriter builds in memory and
+    // renames a temp file over the target, so the old archive stays whole and
+    // readable for the whole export.
+    void writeArchiveAssets(Object3D& root, Meta& meta) {
+
+        std::set<std::string> sources;
+        root.traverse([&](Object3D& object) {
+            if (const auto asset = assetSource(object); !asset.empty()) {
+                sources.insert(asset.generic_string());
+            }
+        });
+
+        std::size_t index = 0;
+        std::unordered_set<std::string> taken;
+        for (const auto& source : sources) {
+
+            const auto n = index++;
+            if (!travelsInArchive(source)) continue;
+
+            std::string archivePath, entryName;
+            const bool fromArchive = splitArchiveAsset(source, archivePath, entryName);
+
+            std::optional<std::vector<unsigned char>> bytes;
+            if (fromArchive) {
+
+                try {
+
+                    ZipReader reader{archivePath};
+                    if (reader.has(entryName)) bytes = reader.read(entryName);
+
+                } catch (const std::exception&) {
+                    // Gone, or no longer an archive. The subtree is embedded
+                    // instead and writeObject says so, which is the same answer
+                    // a missing file gets.
+                }
+
+            } else {
+
+                bytes = readFile(source);
+            }
+
+            if (!bytes) continue;
+
+            // The numbered name only has to be unique and stable; a retained one
+            // that some other source already claimed falls back to it.
+            const auto filename = std::filesystem::path(fromArchive ? entryName : source).filename().string();
+            auto name = std::string(archiveAssetDir) + std::to_string(n) + "_" + filename;
+            if (fromArchive && !taken.contains(entryName)) name = entryName;
+
+            taken.insert(name);
+            meta.archive->add(name, std::move(*bytes));
+            meta.assetEntries[source] = name;
+        }
+    }
+
     // -------------------------------------------------------------- objects
 
     json writeObject(Object3D& object, Meta& meta, bool includeMatrix = true);
@@ -1257,18 +1333,32 @@ namespace {
         const auto asset = meta.modelStorage == ModelStorage::Reference
                                    ? assetSource(object)
                                    : std::filesystem::path{};
-        const bool linked = !asset.empty() && !meta.archive;
+        const auto source = asset.generic_string();
 
-        // An archive is one file, and re-importing a .glb from inside it needs
-        // memory-based import plumbing that does not exist yet. The subtree is
-        // written out in full instead — which the binary sections make cheap,
-        // and which is what the archive is for — but the caller asked for a
-        // reference and did not get one, so say which ones.
-        if (!asset.empty() && meta.archive) {
+        // Inside an archive the reference points at a member of that archive,
+        // which writeArchiveAssets has already put there — for the formats that
+        // can travel in one. The rest keep the old behaviour.
+        std::string archiveEntry;
+        if (meta.archive && !asset.empty()) {
+
+            if (const auto it = meta.assetEntries.find(source); it != meta.assetEntries.end()) {
+                archiveEntry = it->second;
+            }
+        }
+
+        const bool linked = !asset.empty() && (!meta.archive || !archiveEntry.empty());
+
+        // A subtree the archive could not carry is written out in full instead —
+        // which the binary sections make cheap, and which is what the archive is
+        // for — but the caller asked for a reference and did not get one, so say
+        // which ones, and why.
+        if (!asset.empty() && !linked) {
 
             meta.warn("'" + (object.name.empty() ? object.uuid : object.name) +
-                      "' is linked to '" + asset.generic_string() +
-                      "' - an archive embeds it instead, references into an archive are not supported yet");
+                      "' is linked to '" + source + "' - an archive embeds it instead: " +
+                      (travelsInArchive(source)
+                               ? "its bytes could not be read"
+                               : "only self-contained formats (.glb) can travel inside an archive"));
         }
 
         data["uuid"] = object.uuid;
@@ -1310,7 +1400,12 @@ namespace {
             }
 
             json ref;
-            ref["path"] = meta.reference(asset);
+            // A mark is written as it stands: it names an archive elsewhere on
+            // this machine, and making it relative to the document would leave a
+            // path that no longer splits into an archive and an entry.
+            ref["path"] = !archiveEntry.empty()              ? archiveEntry
+                          : source.find(archiveAssetMark) != std::string::npos ? source
+                                                             : meta.reference(asset);
             ref["nodes"] = writeAssetOverrides(object, meta);
             data["threeppAsset"] = ref;
 
@@ -1500,6 +1595,10 @@ std::string ObjectExporter::write(Object3D& object, const ObjectExporterOptions&
     meta.modelStorage = options.models;
     meta.resourcePath = options.resourcePath;
     meta.archive = archive;
+
+    // Before the walk: the asset entry names are numbered over the whole
+    // scene's sources, and writeObject only ever sees one subtree at a time.
+    if (archive && options.models == ModelStorage::Reference) writeArchiveAssets(object, meta);
 
     json output;
     output["metadata"] = json{
