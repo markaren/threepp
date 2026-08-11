@@ -16,6 +16,20 @@ if (TARGET physx_granular_conveyor AND THREEPP_WITH_VULKAN)
     target_compile_definitions(physx_granular_conveyor PRIVATE THREEPP_WITH_VULKAN=1)
 endif ()
 
+# The same bridge for the GPU PBD grains (plans/particle-atmosphere.md F6):
+# PhysX's solver positions are copied device→device into the Vulkan renderer's
+# exported ParticleField position buffer — no DtoH pull, no host submit. Needs
+# the Vulkan backend + the CUDA toolkit (driver API) at build time; without
+# either, --feed dtod declines out loud and the demo keeps the pull path.
+if (TARGET physx_granular_conveyor AND THREEPP_WITH_VULKAN)
+    find_package(CUDAToolkit QUIET)
+    if (CUDAToolkit_FOUND)
+        target_compile_definitions(physx_granular_conveyor PRIVATE THREEPP_PHYSX_CUDA_VK_INTEROP)
+        target_link_libraries(physx_granular_conveyor PRIVATE CUDA::cuda_driver)
+        message(STATUS "physx_granular_conveyor: CUDA->Vulkan particle interop enabled")
+    endif ()
+endif ()
+
 # CUDA→Vulkan zero-copy interop for the soft-body tet positions (optional):
 # PhysX's deformed positions are copied device→device into the Vulkan
 # renderer's exported tet-skinning buffer — no host round-trip. Needs the

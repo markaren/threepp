@@ -28,6 +28,9 @@
 //   granular_conveyor --gpu-instances off   A/B the GPU per-instance passes
 //   granular_conveyor --field im            InstancedMesh field (Vulkan A/B control)
 //   granular_conveyor --field pf            ParticleField (Vulkan default)
+//   granular_conveyor --feed dtod|pull      how a ParticleField is fed: CUDA
+//                                           device-to-device (default) or the
+//                                           DtoH pull + host submit (A/B leg)
 //   ... --cam 6,3,7 --look 4,0.5,-3 --fov 40    reframe without rebuilding
 //
 // Each lane turns 45 degrees away from its neighbour on the way to its
@@ -286,20 +289,44 @@ namespace {
     // Orientations are written ONCE, at construction, as 8 B of snorm16x4 per
     // grain on the device — against GrainField's 36 B of host floats per grain
     // plus the claim-time write into the instance matrix.
+    // ── HOW THE POSITIONS GET THERE: --feed dtod|pull ────────────────────────
+    //
+    // Both legs end with the same 16 bytes per grain in the same device buffer.
+    // What differs is the route, and that is the whole of F6:
+    //
+    //   pull  PbdParticles::pull() copies the solver's positions DtoH into
+    //         pinned host memory (a blocking CUDA sync), then submit() memcpys
+    //         them into the field's host-visible ring slot, and the renderer
+    //         reads that. Two crossings of the bus per frame.
+    //   dtod  The renderer exports the field's positions as a dedicated
+    //         allocation, PhysX's CUDA context imports it once, and one
+    //         cuMemcpyDtoD per frame moves the solver's block straight into it.
+    //         The host learns nothing but the COUNT (a uint), and pull() is
+    //         then called only on the frames the demo's own telemetry needs it
+    //         — 2 Hz — rather than every frame.
+    //
+    // Kept selectable in one binary for the reason --field is: an A/B has to be
+    // interleaved to be worth anything.
     class PfField: public IGrainVisual {
 
     public:
         PfField(const std::shared_ptr<BufferGeometry>& geometry,
                 const std::shared_ptr<Material>& material, unsigned capacity,
-                unsigned seed, float radius) {
+                unsigned seed, float radius, bool interop) {
 
             ParticleField::Config cfg;
             cfg.capacity = capacity;
-            cfg.ownership = ParticleField::Ownership::HostRing;
+            // Ownership is fixed at create, like capacity — so the --feed
+            // choice is made HERE and never changes for the field's life. An
+            // Interop field that turns out to be on a device with no external
+            // memory reports hostFallback() and takes submit() after all; that
+            // is the one runtime transition, and the renderer prints why.
+            cfg.ownership = interop ? ParticleField::Ownership::Interop
+                                    : ParticleField::Ownership::HostRing;
             // PhysX writes inverse mass into w, which says nothing about size,
             // so the proxy geometry (authored at `radius`) draws at scale 1 and
-            // a negative w is the dead-slot predicate. Interop mode will hand
-            // this same buffer straight to CUDA.
+            // a negative w is the dead-slot predicate. Under Interop this is
+            // exactly why no repack is needed: PxVec4 IS ParticlePos.
             cfg.wSemantic = ParticleField::WSemantic::InvMass;
             cfg.uniformRadius = radius;
             cfg.orientations = true;
@@ -321,16 +348,65 @@ namespace {
         }
 
         void update(const ::physx::PxVec4* positions, unsigned n) override {
-            // The entire per-frame CPU cost of the representation. No loop, no
-            // count step, no entry-list consequence.
+            if (dtod_) {
+                // The entire per-frame host cost of an Interop field: ONE
+                // integer. The positions were already moved device to device by
+                // the copy the renderer invoked, and `positions` here is a
+                // pointer to a host mirror nothing filled this frame.
+                field_->setLiveCount(n);
+                return;
+            }
+            // The entire per-frame CPU cost of the host-fed representation. No
+            // loop, no count step, no entry-list consequence.
             field_->submit(positions, n);
         }
+
+        // Arm the device-to-device feed for this lane's group: export the
+        // field's positions, import them into PhysX's CUDA context, and hand
+        // the renderer the copy to invoke each frame. Returns false when the
+        // path is unavailable for any reason, and the caller then keeps
+        // pulling — which is exactly what the --feed pull leg does anyway, so
+        // the fallback is a flag flip and not a second code path.
+#ifdef THREEPP_WITH_VULKAN
+        bool armInterop([[maybe_unused]] VulkanRenderer& vk,
+                        [[maybe_unused]] PbdParticles::Group& group) {
+#ifdef THREEPP_PHYSX_CUDA_VK_INTEROP
+            if (field_->config().ownership != ParticleField::Ownership::Interop) return false;
+            auto* g = &group;
+            const auto h = vk.enableParticleFieldInterop(
+                    *field_, [g] { g->copyPositionsToVulkan(); });
+            if (!h.osHandle) return false;// no external memory; hostFallback() is set
+            if (!group.registerVulkanMemory(h.osHandle, h.sizeBytes)) {
+                std::cout << "  CUDA import of the exported positions FAILED — "
+                             "falling back to the host pull for this lane\n";
+                // Exactly the situation the renderer's own no-external-memory
+                // fallback describes, arrived at from the other side: nothing
+                // will ever write the exported buffer, so let submit() through
+                // and let the pull leg feed this field. An empty lane with no
+                // explanation is the one outcome worth ruling out.
+                field_->setHostFallback();
+                return false;
+            }
+            dtod_ = true;
+            return true;
+#else
+            return false;
+#endif
+        }
+#endif
+
+        [[nodiscard]] bool dtod() const { return dtod_; }
+        [[nodiscard]] ParticleField& field() const { return *field_; }
 
         Object3D& object() override { return *field_; }
         [[nodiscard]] std::shared_ptr<Object3D> shared() const override { return field_; }
 
     private:
         std::shared_ptr<ParticleField> field_;
+        // The device-to-device feed is LIVE (exported, imported, armed). False
+        // on the pull leg, on a device with no external memory, and on a build
+        // without the CUDA driver API.
+        bool dtod_ = false;
     };
 
     // ── Discharge dust (--dust, Vulkan only) ─────────────────────────────────
@@ -922,6 +998,10 @@ int main(int argc, char** argv) {
     // implementation, by decision — see its class header). Both are selectable
     // on Vulkan in this one binary because an A/B has to be interleaved.
     bool useParticleField = true;
+    // --feed dtod|pull. Only meaningful with --field pf on Vulkan; the
+    // InstancedMesh path is host-fed by construction (it writes instance
+    // matrices) and --api gl never reaches either branch.
+    bool wantDtoD = true;
     // --cam / --look come from the shared capture harness, so reframing a
     // beauty shot never needs a rebuild.
     const capture::Args cap = capture::parseArgs(argc, argv);
@@ -952,6 +1032,10 @@ int main(int argc, char** argv) {
             const char* a = argv[++i];
             useParticleField = !(std::strcmp(a, "im") == 0 ||
                                  std::strcmp(a, "instanced") == 0);
+        }
+        else if (std::strcmp(argv[i], "--feed") == 0 && i + 1 < argc) {
+            const char* a = argv[++i];
+            wantDtoD = !(std::strcmp(a, "pull") == 0 || std::strcmp(a, "host") == 0);
         }
         else if (std::strcmp(argv[i], "--gpu-instances") == 0 && i + 1 < argc) {
             const char* a = argv[++i];
@@ -1130,15 +1214,39 @@ int main(int argc, char** argv) {
 #else
     const bool pfFields = false;
 #endif
+    // The CUDA driver API is a BUILD-time dependency of this file, not of the
+    // library: without it there is no import side and no copy to hand the
+    // renderer, so the field is created HostRing and the pull leg runs.
+#ifdef THREEPP_PHYSX_CUDA_VK_INTEROP
+    const bool interopBuilt = true;
+#else
+    const bool interopBuilt = false;
+#endif
+    const bool pfInterop = pfFields && wantDtoD && interopBuilt;
+    // Every PfField this run makes, so the arm pass below can reach them
+    // without a downcast at each site. Empty on the im / GL paths.
+    std::vector<PfField*> pfLanes;
     const auto makeField = [&](const std::shared_ptr<BufferGeometry>& geom,
                                const std::shared_ptr<Material>& mat, unsigned cap,
                                unsigned seed) -> std::unique_ptr<IGrainVisual> {
-        if (pfFields) return std::make_unique<PfField>(geom, mat, cap, seed, radius);
+        if (pfFields) {
+            auto f = std::make_unique<PfField>(geom, mat, cap, seed, radius, pfInterop);
+            pfLanes.push_back(f.get());
+            return f;
+        }
         return std::make_unique<GrainField>(geom, mat, cap, seed);
     };
     std::cout << "grain field: " << (pfFields ? "ParticleField (one entry per lane)"
                                               : "InstancedMesh (one entry per grain)")
               << std::endl;
+    if (pfFields) {
+        std::cout << "grain feed:  "
+                  << (pfInterop ? "CUDA device-to-device (--feed dtod)"
+                                : (wantDtoD && !interopBuilt
+                                           ? "host pull + submit (no CUDA driver API in this build)"
+                                           : "host pull + submit (--feed pull)"))
+                  << std::endl;
+    }
 
     std::vector<Lane> lanes;
     if (dropMode) {
@@ -1266,6 +1374,30 @@ int main(int argc, char** argv) {
     std::cout << "granular_conveyor: " << lanes.size() << " lane(s), capacity "
               << lanes[0].group->capacity() << "/lane, radius " << radius << " m, rate " << rate
               << "/s/lane, GPU heap " << ws.gpuHeapCapacityMB << " MB" << std::endl;
+
+    // ── F6: arm the device-to-device feed ────────────────────────────────────
+    // BEFORE the first frame, deliberately: the exported allocation is created
+    // together with the field's device state, so there is no window in which an
+    // Interop field sits in the scene with nothing writing it. One export + one
+    // CUDA import per lane, once; the renderer invokes the copy itself from
+    // then on and this file never touches the positions again.
+    bool dtodLive = false;
+#ifdef THREEPP_WITH_VULKAN
+    if (vk && pfInterop && pfLanes.size() == lanes.size()) {
+        dtodLive = !pfLanes.empty();
+        for (std::size_t i = 0; i < pfLanes.size(); ++i)
+            dtodLive = pfLanes[i]->armInterop(*vk, *lanes[i].group) && dtodLive;
+        std::cout << "grain feed:  device-to-device "
+                  << (dtodLive ? "ARMED" : "UNAVAILABLE - host pull") << " ("
+                  << pfLanes.size() << " lane(s))" << std::endl;
+    }
+#endif
+    // pull() is a blocking DtoH of every live grain. Three consumers want it:
+    // the InstancedMesh path, the submit() leg, and this file's own telemetry.
+    // Under the device-to-device feed only the telemetry is left, and it
+    // samples at 2 Hz — so the pull moves to the stats site and stops happening
+    // on 29 frames out of 30.
+    const bool pullEveryFrame = !dtodLive;
 
     // ── Loop ─────────────────────────────────────────────────────────────────
     // Fixed dt, so a headless run is frame-for-frame reproducible and "frame N"
@@ -1412,7 +1544,11 @@ int main(int argc, char** argv) {
 
         const auto tSim = std::chrono::high_resolution_clock::now();
         world->step(kDt);
-        particles->pull();
+        // The pull is IN the sim timer on the host-fed leg and gone from it on
+        // the device-to-device one — which is the A/B this column reports. What
+        // replaces it is not free either: the cuMemcpyDtoD lands inside
+        // render(), so it shows up in `rend`/`frame` instead.
+        if (pullEveryFrame) particles->pull();
         const double simMs = std::chrono::duration<double, std::milli>(
                                      std::chrono::high_resolution_clock::now() - tSim)
                                      .count();
@@ -1508,6 +1644,13 @@ int main(int argc, char** argv) {
         const auto tStats = Clk::now();
         const bool sample = frame % 30 == 0 || frame == kCohortStart ||
                             frame == kCohortStart + kCohortSpan || frame >= frames;
+        // Under the device-to-device feed the host mirror is nobody's but this
+        // block's, so the DtoH that fills it belongs here, on the same 2 Hz
+        // gate, and inside this timer: the pull has stopped being a rendering
+        // cost and become a TELEMETRY cost, which is exactly what the column
+        // should say. (Correct as well as tidy: no step happened between the
+        // sim block above and here, so these are this frame's positions.)
+        if (sample && !pullEveryFrame) particles->pull();
         unsigned total = 0;
         for (auto& l : lanes) {
             if (sample) l.stats = measure(l.group->positions(), l.group->active(), l.geom);

@@ -23,9 +23,13 @@
 //     to un-mix when driving an InstancedMesh.
 //   • Positions come back through pinned host mirrors, one async DtoH per group
 //     on a private stream with a single synchronize — the same batched drain
-//     PhysxWorld::syncSoftBodies() uses. Zero-copy (CUDA→Vulkan) is deliberately
-//     NOT here; it belongs with the renderer's exported buffers, and the copy is
-//     not the bottleneck at these counts (measured: ~0.5 ms for 200k).
+//     PhysxWorld::syncSoftBodies() uses. That is pull(), and it is what a host
+//     consumer (an InstancedMesh, the demo's own telemetry) needs.
+//   • A RENDERER consumer does not need the host at all: Group::
+//     registerVulkanMemory + copyPositionsToVulkan (F6) import the Vulkan
+//     renderer's exported ParticleField positions allocation and copy into it
+//     device to device, so nothing crosses the bus. pull() then exists only for
+//     whoever actually wants the numbers on the CPU.
 //
 // The world is BORROWED, with the same contract as ConveyorPhysics: destroy
 // this while the world is still alive (the destructor releases the particle
@@ -39,6 +43,14 @@
 
 #include <PxPhysicsAPI.h>
 #include <extensions/PxCudaHelpersExt.h>
+
+#ifdef THREEPP_PHYSX_CUDA_VK_INTEROP
+// CUDA driver API for external-memory import — the zero-copy bridge into the
+// Vulkan renderer's EXPORTED ParticleField position buffer
+// (VulkanRenderer::enableParticleFieldInterop). Needs the CUDA toolkit headers
+// + driver library (CUDA::cuda_driver); see the Physics example CMake wiring.
+#include <cuda.h>
+#endif
 
 #include <algorithm>
 #include <memory>
@@ -129,6 +141,21 @@ namespace threepp {
 
             ~Group() {
                 if (!cuda_) return;
+#ifdef THREEPP_PHYSX_CUDA_VK_INTEROP
+                if (vkExtMem_) {
+                    // CUDA side first, and the mapped buffer before the memory
+                    // that backs it — the same order PhysxSoftBody's destructor
+                    // documents. The renderer's own allocation outlives this:
+                    // it goes when the field is swept or the device torn down.
+                    ::physx::PxScopedCudaLock _lock(*cuda_);
+                    if (vkPosPtr_) {
+                        cuMemFree(vkPosPtr_);
+                        vkPosPtr_ = 0;
+                    }
+                    cuDestroyExternalMemory(vkExtMem_);
+                    vkExtMem_ = nullptr;
+                }
+#endif
                 PX_EXT_PINNED_MEMORY_FREE(*cuda_, positions_);
                 PX_EXT_PINNED_MEMORY_FREE(*cuda_, velocityChunk_);
                 PX_EXT_PINNED_MEMORY_FREE(*cuda_, phaseChunk_);
@@ -202,6 +229,82 @@ namespace threepp {
             [[nodiscard]] ::physx::PxPBDMaterial& material() { return *material_; }
             [[nodiscard]] ::physx::PxParticleBuffer& buffer() { return *buffer_; }
 
+#ifdef THREEPP_PHYSX_CUDA_VK_INTEROP
+            // ── CUDA → Vulkan zero-copy (plans/particle-atmosphere.md F6) ────
+            // The particle twin of PhysxSoftBody::registerVulkanMemory /
+            // copyTetToVulkan, and deliberately the same shape: the renderer
+            // backs an Ownership::Interop ParticleField's positions with an
+            // EXPORTED dedicated allocation, this imports it once, and
+            // copyPositionsToVulkan() — handed to the renderer as its per-frame
+            // deviceCopy callback — moves the solver's positions device to
+            // device. No DtoH pull, no pinned mirror, no host memcpy.
+            //
+            // Glue (after the first render, polled in the render loop):
+            //   if (g->needsVkInteropRegister()) {
+            //       auto h = vk->enableParticleFieldInterop(*field,
+            //                        [g] { g->copyPositionsToVulkan(); });
+            //       if (!h.osHandle || !g->registerVulkanMemory(h.osHandle, h.sizeBytes))
+            //           ...keep the pull path...
+            //   }
+            [[nodiscard]] bool needsVkInteropRegister() const {
+                return !vkInteropRegistered_ && !vkInteropTried_;
+            }
+            [[nodiscard]] bool vkInteropRegistered() const { return vkInteropRegistered_; }
+
+            bool registerVulkanMemory(void* osHandle, std::size_t sizeBytes) {
+
+                if (vkInteropRegistered_ || vkInteropTried_ || !osHandle || sizeBytes == 0)
+                    return false;
+                vkInteropTried_ = true;// attempt once; on failure the caller keeps pull()
+                ::physx::PxScopedCudaLock _lock(*cuda_);
+                CUDA_EXTERNAL_MEMORY_HANDLE_DESC hd{};
+#ifdef _WIN32
+                hd.type = CU_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_WIN32;
+                hd.handle.win32.handle = osHandle;// NT handle stays the renderer's (CUDA dups it)
+#else
+                hd.type = CU_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_FD;// fd ownership transfers
+                hd.handle.fd = static_cast<int>(reinterpret_cast<std::intptr_t>(osHandle));
+#endif
+                hd.size  = sizeBytes;
+                hd.flags = CUDA_EXTERNAL_MEMORY_DEDICATED;// the export is a dedicated VkDeviceMemory
+                if (cuImportExternalMemory(&vkExtMem_, &hd) != CUDA_SUCCESS) {
+                    vkExtMem_ = nullptr;
+                    return false;
+                }
+                CUDA_EXTERNAL_MEMORY_BUFFER_DESC bd{};
+                bd.offset = 0;
+                bd.size   = sizeBytes;
+                if (cuExternalMemoryGetMappedBuffer(&vkPosPtr_, vkExtMem_, &bd) != CUDA_SUCCESS) {
+                    cuDestroyExternalMemory(vkExtMem_);
+                    vkExtMem_ = nullptr;
+                    vkPosPtr_ = 0;
+                    return false;
+                }
+                vkInteropRegistered_ = true;
+                return true;
+            }
+
+            // The renderer's per-frame deviceCopy callback. The solver's
+            // positionInvMass block IS PxVec4 = {pos.xyz, invMass}, which is
+            // byte-identical to threepp::ParticlePos, so this is a straight
+            // device-to-device memcpy of the live prefix with no repack.
+            //
+            // SYNCHRONIZED before returning, and that is a contract rather than
+            // caution: the renderer records the snapshot that reads this memory
+            // into a command buffer it submits after the callback returns, so
+            // "the copy has landed by then" is the entire ordering guarantee in
+            // the absence of a shared Vulkan/CUDA semaphore. Same host-ordering
+            // contract as the pull() + submit() it replaces.
+            void copyPositionsToVulkan() const {
+                if (!vkInteropRegistered_ || active_ == 0) return;
+                ::physx::PxScopedCudaLock _lock(*cuda_);
+                cuMemcpyDtoDAsync(vkPosPtr_,
+                                  reinterpret_cast<CUdeviceptr>(buffer_->getPositionInvMasses()),
+                                  std::size_t(active_) * sizeof(::physx::PxVec4), nullptr);
+                cuStreamSynchronize(nullptr);
+            }
+#endif
+
         private:
             friend class PbdParticles;
 
@@ -220,6 +323,13 @@ namespace threepp {
             ::physx::PxVec4* positions_ = nullptr;     // pinned, capacity
             ::physx::PxVec4* velocityChunk_ = nullptr; // pinned, kEmitChunk
             ::physx::PxU32* phaseChunk_ = nullptr;     // pinned, kEmitChunk
+
+#ifdef THREEPP_PHYSX_CUDA_VK_INTEROP
+            CUexternalMemory vkExtMem_ = nullptr;// imported Vulkan positions allocation
+            CUdeviceptr      vkPosPtr_ = 0;      // its device pointer (the copy's dst)
+            bool vkInteropRegistered_ = false;
+            bool vkInteropTried_      = false;
+#endif
         };
 
         // Throws when the world has no CUDA context — PBD has no CPU fallback
