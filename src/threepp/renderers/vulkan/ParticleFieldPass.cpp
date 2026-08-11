@@ -914,7 +914,7 @@ void ParticleFieldPass::prepareFrame(std::uint64_t serial, std::uint32_t frame,
         State& st = ensureState(*r.field);
         st.lastSeenSerial = serial;
 
-        const std::uint32_t live = std::min(r.field->liveCount(), st.capacity);
+        std::uint32_t live = std::min(r.field->liveCount(), st.capacity);
 
         // Positions + count into THIS frame's slot, version-gated. A static or
         // parked field re-sends nothing; a field the sim advanced re-sends the
@@ -922,6 +922,12 @@ void ParticleFieldPass::prepareFrame(std::uint64_t serial, std::uint32_t frame,
         // and under Ownership::Renderer even that is gone: there are no host
         // positions to send, and the count is capacity, written once per slot
         // and never again (dataSerial only moves on submit/setLiveCount).
+        // True for an Interop field whose copy is not registered: the count
+        // published to the device is 0 this frame, whatever the host asked for,
+        // and the slot's serial is invalidated so the REAL count is re-sent on
+        // the first frame after the application arms it.
+        bool parkedUnarmed = false;
+
         // ── F6: the foreign device copy, and this frame's snapshot ──────────
         // The callback is invoked HERE — post-fence, pre-record — and is
         // required to be synchronous, so by the time it returns the exported
@@ -935,13 +941,25 @@ void ParticleFieldPass::prepareFrame(std::uint64_t serial, std::uint32_t frame,
         if (st.interopOwned) {
             if (st.deviceCopy) {
                 st.deviceCopy();
-            } else if (!st.interopUnarmedLogged) {
-                st.interopUnarmedLogged = true;
-                std::fprintf(stderr,
-                             "[ParticleField] an Ownership::Interop field is in the scene but "
-                             "no device copy is registered — it will render nothing. Call "
-                             "VulkanRenderer::enableParticleFieldInterop(field, copy) once, "
-                             "after importing the handle it returns.\n");
+            } else {
+                // PARK the field for this frame rather than snapshot memory
+                // nothing has written. The exported allocation is uninitialised
+                // until the foreign API first writes it, and uninitialised
+                // device memory is not zeros — it is arbitrary bit patterns
+                // that decode to NaNs and 1e38 positions, i.e. a field of
+                // grains smeared across the world and a world AABB to match.
+                // Zero instances is both the safe answer and the true one, so
+                // the diagnostic below can promise it.
+                live = 0;
+                parkedUnarmed = true;
+                if (!st.interopUnarmedLogged) {
+                    st.interopUnarmedLogged = true;
+                    std::fprintf(stderr,
+                                 "[ParticleField] an Ownership::Interop field is in the scene "
+                                 "but no device copy is registered — it renders nothing. Call "
+                                 "VulkanRenderer::enableParticleFieldInterop(field, copy) "
+                                 "once, and import the handle it returns.\n");
+                }
             }
             if (live > 0) {
                 // The live PREFIX only, so a 300k-capacity field pouring its
@@ -955,8 +973,12 @@ void ParticleFieldPass::prepareFrame(std::uint64_t serial, std::uint32_t frame,
         }
 
         const std::uint64_t want = r.field->dataSerial();
-        if (st.slotSerial[slot] != want) {
-            st.slotSerial[slot] = want;
+        if (st.slotSerial[slot] != want || parkedUnarmed) {
+            // 0 while parked: dataSerial never moves when the only thing that
+            // changed is "a copy got registered", so a slot that recorded the
+            // real serial while publishing a zero count would keep publishing
+            // it forever.
+            st.slotSerial[slot] = parkedUnarmed ? 0u : want;
             if (!st.rendererOwned && !st.interopOwned && live > 0) {
                 uploadHostVisible(ctx_.allocator(), st.positions[slot],
                                   r.field->hostPositions().data(),
