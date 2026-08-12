@@ -8133,6 +8133,81 @@ int EditorApp::runSelfTest() {
 
         const bool bakeable = editor::SplatSurfaceCache::available(renderer_.get());
 
+        // The edit-mode preview: the inspector's "Show surface" puts the memo's
+        // triangles in the viewport as editor chrome (SplatSurfaceOverlay.cpp).
+        // Driven by the same two steps the checkbox takes — set the view flag,
+        // bake once through the memo Play is about to hit.
+        if (bakeable) {
+            splatSurfacePreview_ = true;
+            bakeSplatSurface(*scan);
+            step(2);
+
+            const auto drawn = splatSurfacePreviews_.find(scan->uuid);
+            std::size_t previewTris = 0;
+            std::size_t segments = 0;
+            if (drawn != splatSurfacePreviews_.end() && drawn->second.mesh) {
+                previewTris = drawn->second.triangles;
+                if (const auto* position =
+                            drawn->second.mesh->geometry()->getAttribute<float>("position")) {
+                    segments = static_cast<std::size_t>(position->count()) / 2;
+                }
+            }
+            std::size_t memoTris = 0;
+            if (const auto* mesh = splatSurfaces_->find(*scan, surfaceConfig)) {
+                memoTris = mesh->triangleCount();
+            }
+            std::cout << "[selftest] surface preview: " << previewTris << " triangles as "
+                      << segments << " edges, memo " << memoTris << ", bakes "
+                      << splatSurfaces_->bakeCount() << std::endl;
+            check(memoTris > 0 && previewTris == memoTris && segments > memoTris,
+                  "Show surface draws the memo's baked triangles over the scan");
+
+            const auto bakes = splatSurfaces_->bakeCount();
+            step(2);
+            check(splatSurfaces_->bakeCount() == bakes,
+                  "and the preview asks the memo every frame rather than baking again");
+
+            // The picture the feature exists for: the wireframe standing on the
+            // scan it was fused from. shootTo photographs overlay children (it
+            // is how the physics debug lines are photographed above), and the
+            // OFF shot at the same pose is its control — a scan is a mass of
+            // white splats, so "the wireframe is visible" is a claim that has to
+            // be checkable against the same frame without it.
+            {
+                const bool bottomPanelWas = bottomPanelOpen_;
+                bottomPanelOpen_ = false;
+                camera_.position.set(5.f, 7.5f, 7.f);
+                orbit_->target.set(0.f, 4.f, 0.f);
+                step(4);
+                shootTo(std::filesystem::temp_directory_path() / "threepp_editor_splat_surface.png");
+                if (const auto shot = splatSurfacePreviews_.find(scan->uuid);
+                    shot != splatSurfacePreviews_.end() && shot->second.mesh) {
+                    const auto geometry = shot->second.mesh->geometry();
+                    geometry->computeBoundingSphere();
+                    const auto sphere = *geometry->boundingSphere;
+                    std::cout << "[selftest] preview node: visible " << shot->second.mesh->visible
+                              << ", parent " << (shot->second.mesh->parent
+                                                         ? shot->second.mesh->parent->name
+                                                         : std::string("none"))
+                              << ", bounds c(" << sphere.center.x << "," << sphere.center.y << ","
+                              << sphere.center.z << ") r " << sphere.radius << std::endl;
+                }
+                splatSurfacePreview_ = false;
+                step(2);
+                shootTo(std::filesystem::temp_directory_path() / "threepp_editor_splat_surface_off.png");
+                splatSurfacePreview_ = true;
+                step(2);
+                bottomPanelOpen_ = bottomPanelWas;
+            }
+
+            splatSurfacePreview_ = false;
+            step(1);
+            check(splatSurfacePreviews_.empty(),
+                  "and toggling it off takes the wireframe back out of the viewport");
+            splatSurfacePreview_ = true;// left on, so the Play below has one to hide
+            step(1);
+        }
+
         startPlay();
         stepFixed(240);
 
@@ -8166,6 +8241,8 @@ int EditorApp::runSelfTest() {
                   "the sensor-only master is on while the surface plays");
             check(splatSurfaces_ && splatSurfaces_->bakeCount() == 1,
                   "one bake, memoized - Play did not re-fuse what the memo holds");
+            check(splatSurfacePreviews_.empty(),
+                  "and Play hides the edit-mode preview - its sensor twin is the surface now");
         } else {
             check(splatSurfaceSession_ == nullptr || splatSurfaceSession_->surfaceCount() == 0,
                   "no surface is baked on a backend that has no depth AOV");
@@ -8184,6 +8261,11 @@ int EditorApp::runSelfTest() {
         }
         check(sensorMeshes == 0 && masterOff,
               "and Stop takes the sensor surface out of the scene and the master back off");
+
+        // A view flag survives a scene replace; the cases below author no
+        // surfaces, but leaving it on would leave this case's state in theirs.
+        splatSurfacePreview_ = false;
+        step(1);
     }
 #endif
 

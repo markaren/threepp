@@ -33,6 +33,7 @@ add_executable(threepp_editor
         ParticleOverlay.cpp
         PhysicsDebugOverlay.cpp
         SensorOverlay.cpp
+        SplatSurfaceOverlay.cpp
         SplineOverlay.cpp
         ToolPalette.cpp
         TreeOverlay.cpp

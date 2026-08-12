@@ -116,13 +116,12 @@ namespace threepp::editor {
         // excuse.
         void clear() { entries_.clear(); }
 
-    private:
-        struct Entry {
-            std::string key;
-            splats::SurfaceMesh mesh;
-        };
-
-        static std::string keyFor(SplatCloud& cloud, const SplatSurfaceConfig& config) {
+        // The key find() matches on, for a consumer that CACHES what a hit gave
+        // it: a find() that succeeds says the mesh is current, not that it is
+        // the same mesh as last frame (a re-bake under new knobs replaces the
+        // entry in place). The editor's viewport preview keys its geometry on
+        // this string for exactly that reason.
+        [[nodiscard]] static std::string keyFor(SplatCloud& cloud, const SplatSurfaceConfig& config) {
 
             cloud.updateWorldMatrix(true, false);
             std::string key = std::to_string(cloud.splatCount()) + "|" + config.encode() + "|m=";
@@ -132,6 +131,12 @@ namespace threepp::editor {
             }
             return key;
         }
+
+    private:
+        struct Entry {
+            std::string key;
+            splats::SurfaceMesh mesh;
+        };
 
         std::unordered_map<std::string, Entry> entries_;// by cloud uuid
         std::size_t bakeCount_ = 0;

@@ -672,6 +672,12 @@ namespace threepp::editor {
         void applyConveyorRadiusDrag(const Vector3& rayOrigin, const Vector3& rayDirection);
         void beginConveyorRadiusDrag(const Vector3& rayOrigin, const Vector3& rayDirection);
         void endConveyorRadiusDrag();
+        // --- baked scan surfaces (apps/editor/SplatSurfaceOverlay.cpp) -------
+        // The wireframe of what a scan's surface bake captured, over the scan,
+        // while it is authored. Asks the memo and never bakes; hidden for the
+        // duration of a Play, which adds its own twin of the same triangles.
+        void syncSplatSurfacePreviews();
+        void clearSplatSurfacePreviews();
         // --- physics collider overlay (apps/editor/PhysicsDebugOverlay.cpp) --
         // PhysX's own debug lines for every collider in the playing world,
         // drawn as one LineSegments under the overlay. The answer to "where is
@@ -1201,6 +1207,19 @@ namespace threepp::editor {
         // can show what it produced without re-reading a mesh it does not own.
         std::string splatBakeNode_;
         std::string splatBakeStats_;
+        // Draw the baked surface over the scans that carry one. A view state
+        // like physicsDebug_ — never serialized, never on the undo stack, and
+        // not a document property (SplatSurfaceOverlay.cpp).
+        bool splatSurfacePreview_ = false;
+        // One wireframe per previewed node, keyed by the node's uuid and by the
+        // MEMO's key: a hit says the mesh is current, not that it is the same
+        // mesh, so the geometry is rebuilt whenever the key moves.
+        struct SplatSurfacePreview {
+            std::shared_ptr<LineSegments> mesh;
+            std::string key;
+            std::size_t triangles = 0;// what the memo held when it was built
+        };
+        std::unordered_map<std::string, SplatSurfacePreview> splatSurfacePreviews_;
         std::shared_ptr<LineSegments> physicsDebugLines_;
         int physicsDebugCapacity_ = 0;
         bool physicsDebug_ = false;

@@ -1269,6 +1269,21 @@ void EditorApp::drawSplatSection(Object3D& object) {
             ImGui::TextColored(warm ? theme::accent() : theme::muted(),
                                warm ? "cached" : "not baked yet");
 
+            // A view state, not a document property: no command, no dirty flag,
+            // nothing saved (SplatSurfaceOverlay.cpp). Turning it on bakes
+            // through the SAME memo the button and Play use, so a warm scan is
+            // instant and a cold one pays the pose loop exactly once.
+            bool preview = splatSurfacePreview_;
+            ImGui::BeginDisabled(!canBake);
+            if (ImGui::Checkbox("Show surface", &preview)) {
+                splatSurfacePreview_ = preview;
+                if (preview && !warm) bakeSplatSurface(object);
+            }
+            ImGui::EndDisabled();
+            ImGui::TextColored(theme::muted(),
+                               "Editor-only wireframe over the scan. Hidden while playing, and "
+                               "gone until you re-bake once the scan moves or a knob changes.");
+
             if (splatBakeNode_ == object.uuid && !splatBakeStats_.empty()) {
                 ImGui::TextWrapped("%s", splatBakeStats_.c_str());
             }

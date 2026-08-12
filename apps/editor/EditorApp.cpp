@@ -551,6 +551,9 @@ EditorApp::EditorApp(const Options& options)
         if (splatSurfaces_) splatSurfaces_->clear();
         splatBakeNode_.clear();
         splatBakeStats_.clear();
+        // The previews drew those meshes, and they hang off the surviving
+        // overlay rather than off the outgoing graph.
+        clearSplatSurfacePreviews();
         if (cameraHelper_) {
             cameraHelper_->removeFromParent();
             cameraHelper_.reset();
@@ -3314,6 +3317,7 @@ void EditorApp::refreshSelectionHelpers(float dt) {
     syncConveyorOverlays();
     syncParticleOverlays(dt);
     syncTreeOverlays();
+    syncSplatSurfacePreviews();
     syncPhysicsDebug();
     syncDebugDraw();
     syncSensorOverlay();
