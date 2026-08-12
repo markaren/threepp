@@ -15,6 +15,7 @@ uint32_t VulkanRenderer::Impl::snapMeshFlags(Mesh& m, const MaterialWithWirefram
             if (wf && wf->wireframe) fl |= kSnapWire;
             if (overlayLayer_ >= 0 &&
                 m.layers.isEnabled(static_cast<unsigned>(overlayLayer_))) fl |= kSnapOverlay;
+            if (m.layers.isEnabled(VulkanRenderer::kSensorOnlyLayer)) fl |= kSnapSensorOnly;
             if (auto mat = m.material(); mat && mat->tetSkinning && mat->tetTexture) fl |= kSnapTet;
             // Unlit transparent flat-color mesh → raster overlay routing (see
             // kSnapUiBlend). Textured / vertex-colored basics stay traced —
@@ -85,6 +86,7 @@ bool VulkanRenderer::Impl::sceneSnapshotMatches(Object3D& scene, Camera& camera)
                 const bool wire = sn.wf && sn.wf->wireframe;
                 const bool over = overlayLayer_ >= 0 &&
                                   o.layers.isEnabled(static_cast<unsigned>(overlayLayer_));
+                const bool sensor = o.layers.isEnabled(VulkanRenderer::kSensorOnlyLayer);
                 const bool tet = sn.mat && sn.mat->tetSkinning && sn.mat->tetTexture != nullptr;
                 const bool particle = sn.mat && sn.mat->name == kParticleMaterialName;
                 const bool uiBlend = !wire && sn.basic && sn.basic->transparent &&
@@ -94,6 +96,7 @@ bool VulkanRenderer::Impl::sceneSnapshotMatches(Object3D& scene, Camera& camera)
                 const bool matHidden = sn.mat && !sn.mat->visible;
                 if (wire != ((sn.flags & kSnapWire) != 0u) ||
                     over != ((sn.flags & kSnapOverlay) != 0u) ||
+                    sensor != ((sn.flags & kSnapSensorOnly) != 0u) ||
                     tet != ((sn.flags & kSnapTet) != 0u) ||
                     particle != ((sn.flags & kSnapParticle) != 0u) ||
                     uiBlend != ((sn.flags & kSnapUiBlend) != 0u) ||
@@ -671,6 +674,11 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                 // overlay-mesh loop skips them.
                 const bool isParticle = (sn.flags & kSnapParticle) != 0u;
                 const bool isOverlay = (sn.flags & (kSnapWire | kSnapOverlay | kSnapParticle | kSnapUiBlend)) != 0u;
+                // Sensor-only geometry (kSensorOnlyLayer): still a full scene
+                // entry — BLAS, descs, TLAS instance — because the lidar reads
+                // those tables. Only the raster views it reaches and the ray
+                // masks that include it differ.
+                const bool sensorOnly = (sn.flags & kSnapSensorOnly) != 0u;
                 // One-shot type probes: an N-instance InstancedMesh costs 3
                 // dynamic_casts total, not 3·N — and on snapshot-match frames
                 // none at all (the cached entry flags are reused). Consumed by
@@ -783,6 +791,7 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                         e.isTet        = isTet;
                         e.isInstanced  = true;
                         e.camAttached  = camAttached;
+                        e.sensorOnly   = sensorOnly;
                         setLodCaches(e);
                         std::memcpy(e.worldMatrix.data(), world.elements.data(), 64);
                         built.push_back(e);
@@ -800,6 +809,7 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                     e.isTet        = isTet;
                     e.isParticleField = isParticleField;
                     e.camAttached  = camAttached;
+                    e.sensorOnly   = sensorOnly;
                     setLodCaches(e);
                     std::memcpy(e.worldMatrix.data(), m->matrixWorld->elements.data(), 64);
                     built.push_back(e);
@@ -1793,6 +1803,8 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                                     spanMask = kRayMaskAlpha;
                             }
                             if (e0.camAttached) spanMask = kRayMaskNoShadow;
+                            if (e0.sensorOnly)
+                                spanMask = sensorOnlySurfaces_ ? kRayMaskSensorOnly : 0u;
                             const bool isDeformer = e0.isSkinned || e0.isDisplaced ||
                                                     e0.isGrass || e0.isTet || e0.isMorphed;
                             BlasRecord* rec = nullptr;
@@ -2594,7 +2606,11 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                 // is handled by its volumetrics, not pass-through.
                 if (!instances.empty()) {
                     instances.back().mask =
-                            en.camAttached
+                            en.sensorOnly
+                                    // Sensors only, and only once opted in: mask 0
+                                    // is hit by no ray at all.
+                                    ? (sensorOnlySurfaces_ ? kRayMaskSensorOnly : 0u)
+                            : en.camAttached
                                     ? kRayMaskNoShadow// FP viewmodel: visible, never occludes
                                     : (!en.isDisplaced && (md.transmission > 0.0f || md.alphaCutoff < 0.0f))
                                               ? kRayMaskAlpha

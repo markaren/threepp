@@ -33,9 +33,20 @@
 // occlusion cullMask includes 0x04 it casts no shadow and blocks no sky/GI
 // light — otherwise the sun paints a pair of floating hands and a gun on the
 // ground beside the player.
-#define kRayMaskOpaque   0x01u
-#define kRayMaskAlpha    0x02u
-#define kRayMaskNoShadow 0x04u
+// kRayMaskSensorOnly is geometry that exists FOR THE SENSORS and for nothing
+// else: a surface baked out of a Gaussian-splat scan (threepp::splats::
+// bakeSurface), which must return lidar ranges without appearing in the
+// picture the splat rasterizer already draws there. No radiance trace includes
+// it — that is what kRayMaskAll is for, the "everything the camera may see"
+// mask that the primary/reflection/refraction traces use where they used to
+// pass 0xFF. The LIDAR pass keeps cullMask 0xFF and is therefore the only
+// consumer that sees the group. Instances carry mask 0 (hit by nothing) until
+// VulkanRenderer::setSensorOnlySurfaces(true) opts the scene in.
+#define kRayMaskOpaque     0x01u
+#define kRayMaskAlpha      0x02u
+#define kRayMaskNoShadow   0x04u
+#define kRayMaskSensorOnly 0x08u
+#define kRayMaskAll        0x07u
 
 // Per-instance flag word — packed host-side (VulkanCoreIndirect.cpp) into
 // DrawInfo.flags, carried through gbuffer.vert into the gbuffer IDs

@@ -801,6 +801,30 @@ namespace threepp {
         void setOverlayLayer(int channel);
         [[nodiscard]] int overlayLayer() const;
 
+        // ── Sensor-only surfaces ─────────────────────────────────────────
+        // Geometry the SENSORS may perceive and the camera may not. A surface
+        // baked out of a Gaussian-splat scan (threepp::splats::bakeSurface) is
+        // the case this exists for: the splat rasterizer already draws that
+        // scan in the picture, so the mesh must return lidar ranges and depth
+        // WITHOUT appearing next to the cloud it approximates.
+        //
+        // A mesh opts in by enabling kSensorOnlyLayer (splats::makeSensorMesh
+        // does it for a baked surface). From then on, unconditionally: the
+        // primary view never rasterizes it, no radiance trace — reflection,
+        // refraction, shadow, GI, emissive NEE — has it in its cull mask, and
+        // it does not move the GI probe grid. What setSensorOnlySurfaces(true)
+        // then adds is PERCEPTION: secondary views (addView — a depth sensor's
+        // G-buffer) rasterize it, and scanLidar's beams hit it. OFF, the
+        // default, its TLAS instance carries mask 0 and nothing at all sees
+        // it — a scene that never opts in senses and renders exactly as it did
+        // before the feature existed.
+        //
+        // Scene-wide, not per-sensor: every secondary view sees the surface
+        // once the scene opts in.
+        static constexpr unsigned kSensorOnlyLayer = 31u;
+        void setSensorOnlySurfaces(bool enabled);
+        [[nodiscard]] bool sensorOnlySurfaces() const;
+
         // Day-1 / debug visualization: blit one G-buffer channel to the swapchain.
         //   0 = off, 1 = normal, 2 = motion, 3 = instance id, 4 = albedo
         void setHybridDebugView(int view);

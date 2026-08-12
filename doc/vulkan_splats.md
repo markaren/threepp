@@ -138,6 +138,25 @@ the pre-feature frame byte-exactly. See `splat_volume.glsl`, the `--water` /
 `--metal` flags on the `gaussian_splats` example, and `VulkanSplatVolume_test`
 for the asserted A/B.
 
+The RT sensors left the list next, and through a proxy rather than a crack in
+the pass: `threepp::splats::bakeSurface` fuses the median-depth AOV below into
+a triangle mesh, `splats::makeSensorMesh` marks that mesh
+`VulkanRenderer::kSensorOnlyLayer`, and
+`VulkanRenderer::setSensorOnlySurfaces(true)` lets the scene's lidar beams hit
+it and its secondary views rasterize it — measured at 3.4 mm of range error
+against a 5 cm-voxel bake of a synthetic plane (`VulkanSplatSurface_test`).
+
+What that does NOT breach, and the reason the wording above is "through a
+proxy": no sensor sees the splats. It sees a mesh baked from them, at voxel
+resolution, with no colour — RGB sensor imagery of a scan still needs the real
+rasterizer per sensor view and is still out of scope. The splat pass remains
+primary-only and in no acceleration structure. The primary camera never
+rasterizes a sensor-only mesh and no radiance trace — reflection, refraction,
+shadow, GI, emissive NEE — carries it in its cull mask, so the picture stays
+the splats' own. And the opt-in defaults OFF: until it is taken, the mesh's
+TLAS instance carries mask 0, nothing renders or senses it, and a scene that
+never asks is byte-unchanged.
+
 ## The depth AOV: expected and median
 
 `VulkanRenderer::setSplatDepthAov(true)` — or, since P0 of

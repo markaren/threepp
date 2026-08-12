@@ -76,6 +76,14 @@ namespace threepp::vulkan::impl {
         // Object3D and no loader sets it, so honouring the flag in the RT
         // path would delete the shadows of every loaded scene.
         bool     camAttached = false;
+        // Mesh on VulkanRenderer::kSensorOnlyLayer: geometry the SENSORS may
+        // perceive and the camera may not (a surface baked from a splat scan —
+        // threepp::splats::bakeSurface). Never rasterized into the primary
+        // view and never in a radiance trace's cull mask; rasterized into
+        // secondary views and hit by the lidar's 0xFF only once
+        // setSensorOnlySurfaces(true) opts the scene in, before which its TLAS
+        // instance carries mask 0 and nothing at all can see it.
+        bool     sensorOnly = false;
         // Cached type probes. Resolved once per Mesh in ensureSceneBuilt's
         // traverseVisible callback (before the InstancedMesh fork so an
         // N-instance mesh costs 3 dynamic_casts, not 3·N). Consumers

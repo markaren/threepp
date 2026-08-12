@@ -3,7 +3,9 @@
 
 #include "threepp/cameras/PerspectiveCamera.hpp"
 #include "threepp/extras/pointcloud/MarchingCubes.hpp"// the standard MC tables
+#include "threepp/materials/MeshStandardMaterial.hpp"
 #include "threepp/math/MathUtils.hpp"
+#include "threepp/objects/Mesh.hpp"
 #include "threepp/objects/SplatCloud.hpp"
 #include "threepp/renderers/VulkanRenderer.hpp"
 #include "threepp/scenes/Scene.hpp"
@@ -659,6 +661,29 @@ namespace threepp::splats {
         }
         out.stats.meshMs = std::chrono::duration<double, std::milli>(clock::now() - t2).count();
         return out;
+    }
+
+    std::shared_ptr<Mesh> makeSensorMesh(const SurfaceMesh& surface) {
+
+        if (surface.empty()) return nullptr;
+
+        auto geom = BufferGeometry::create();
+        geom->setAttribute("position", FloatBufferAttribute::create(surface.positions, 3));
+        geom->setIndex(std::vector<unsigned int>(surface.indices.begin(), surface.indices.end()));
+        // The renderer drops a mesh with no normal attribute from the scene
+        // entirely, and the depth sensor's G-buffer wants shaded normals for
+        // the same surface the lidar's rchit derives from the triangle.
+        geom->computeVertexNormals();
+
+        auto mat = MeshStandardMaterial::create();
+        mat->roughness = 1.f;
+        mat->metalness = 0.f;
+        mat->side = Side::Double;// a scan's shell may be seen from either face
+
+        auto mesh = Mesh::create(geom, mat);
+        mesh->name = "splat-sensor-surface";
+        mesh->layers.set(VulkanRenderer::kSensorOnlyLayer);
+        return mesh;
     }
 
 }// namespace threepp::splats

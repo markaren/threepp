@@ -187,7 +187,7 @@ vec3 shadeWater(vec3 P, vec3 N, vec3 V, MaterialDesc pm, int instIdx,
             dRef = normalize(dRef);
             const vec3 uwOrigin = P - N * SHADOW_EPS;
             rayQueryEXT rq;
-            rayQueryInitializeEXT(rq, topAS, gl_RayFlagsOpaqueEXT, 0xFFu,
+            rayQueryInitializeEXT(rq, topAS, gl_RayFlagsOpaqueEXT, kRayMaskAll,
                                   uwOrigin, 1e-3, dRef, maxVis);
             while (rayQueryProceedEXT(rq)) {}
             if (rayQueryGetIntersectionTypeEXT(rq, true) != gl_RayQueryCommittedIntersectionNoneEXT) {
@@ -408,7 +408,7 @@ void traceGlassInterior(vec3 origin, vec3 dir, float maxLod, bool doShadows, ino
     hitP = origin; hitN = vec3(0.0, 1.0, 0.0); dist = 0.0;
     for (int s = 0; s < 4; ++s) {
         rayQueryEXT rq;
-        rayQueryInitializeEXT(rq, topAS, gl_RayFlagsOpaqueEXT, 0xFFu, o, 1e-3, dir, 1e30);
+        rayQueryInitializeEXT(rq, topAS, gl_RayFlagsOpaqueEXT, kRayMaskAll, o, 1e-3, dir, 1e30);
         while (rayQueryProceedEXT(rq)) {}
         if (rayQueryGetIntersectionTypeEXT(rq, true) == gl_RayQueryCommittedIntersectionNoneEXT) {
             miss = true; hitP = o; dist = travelled;

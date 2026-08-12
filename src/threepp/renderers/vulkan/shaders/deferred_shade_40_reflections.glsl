@@ -191,7 +191,7 @@ vec3 traceRadiance(vec3 origin, vec3 dir, bool doShadows, float maxLod, float mi
     int step = 0;// every ray segment (bounces + pass-throughs); the loop guard
     for (; step < REFL_MAX_STEPS; ++step) {
         rayQueryEXT rq;
-        rayQueryInitializeEXT(rq, topAS, gl_RayFlagsOpaqueEXT, 0xFFu, o, 1e-3, d, 1e30);
+        rayQueryInitializeEXT(rq, topAS, gl_RayFlagsOpaqueEXT, kRayMaskAll, o, 1e-3, d, 1e30);
         while (rayQueryProceedEXT(rq)) {}
         if (rayQueryGetIntersectionTypeEXT(rq, true) == gl_RayQueryCommittedIntersectionNoneEXT) {
             radiance += tput * sampleEnvLod(d, curMissLod);// escaped → environment

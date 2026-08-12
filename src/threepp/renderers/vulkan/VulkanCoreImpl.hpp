@@ -738,6 +738,11 @@ namespace threepp {
         // surfaces nor tie-break exactly-coplanar layers (equal ray t), so
         // GL-parity layering is only reachable by rasterizing in order.
         static constexpr uint32_t kSnapUiBlend    = 1024u;
+        // Mesh on VulkanRenderer::kSensorOnlyLayer (MeshEntry::sensorOnly).
+        // A snapshot bit like every other routing decision, so enabling or
+        // disabling the layer on a live mesh forces the re-expansion that
+        // moves it in or out of the sensor group.
+        static constexpr uint32_t kSnapSensorOnly = 2048u;
         std::vector<SnapNode> sceneSnapshot_;
 
         // Classification-routing flags for a mesh — shared by the snapshot
@@ -2078,6 +2083,12 @@ namespace threepp {
         // (alongside auto-detected wireframe materials + Line/LineSegments).
         // -1 disables layer-based selection.
         int overlayLayer_ = -1;
+        // Sensor-only surfaces: the per-scene opt-in for meshes on
+        // VulkanRenderer::kSensorOnlyLayer. OFF means they are hit by nothing —
+        // no raster in any view, TLAS instance mask 0 — so a scene that never
+        // opts in senses and renders exactly as it did before the feature
+        // existed. Toggling it clears sceneBuilt_: the masks live in the TLAS.
+        bool sensorOnlySurfaces_ = false;
         // True when the scene has any content the post-TAA overlay pass will
         // draw this frame: an overlay-tagged mesh, or any Line/LineSegments/
         // Points entry (those always render via the overlay path). The

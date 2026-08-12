@@ -671,6 +671,7 @@ bool VulkanRenderer::Impl::recordGbufferStage(VkCommandBuffer cb, uint32_t image
                     for (size_t i = 0; i < lastVisibleEntries_.size(); ++i) {
                         const auto& en = lastVisibleEntries_[i];
                         if (en.isOverlay) continue;// overlay meshes drawn by overlay pass instead
+                        if (en.sensorOnly) continue;// primary-only pass, and the primary never sees them
                         // Frustum cull, same lever as the gbuf prepass — read
                         // from THIS view's results. The overlay only ever runs
                         // for the primary, and this is the reader that a shared

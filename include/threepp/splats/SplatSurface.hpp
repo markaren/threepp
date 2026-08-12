@@ -24,10 +24,12 @@
 #include "threepp/math/Vector3.hpp"
 
 #include <cstdint>
+#include <memory>
 #include <vector>
 
 namespace threepp {
 
+    class Mesh;
     class SplatCloud;
     class VulkanRenderer;
 
@@ -159,6 +161,19 @@ namespace threepp::splats {
     // read back.
     SurfaceMesh bakeSurface(VulkanRenderer& renderer, SplatCloud& cloud,
                             const SurfaceBakeOptions& options = {});
+
+    // The baked surface as a scene object that ONLY THE SENSORS perceive: an
+    // ordinary Mesh (world-space vertices, so add it at the scene root, not
+    // under the cloud) marked with VulkanRenderer::kSensorOnlyLayer. The
+    // primary camera never draws it — the real splats render there — and no
+    // radiance trace can see it; the scene's lidar and its depth views can,
+    // once the scene calls VulkanRenderer::setSensorOnlySurfaces(true). Until
+    // it does, the mesh is inert: nothing renders it and nothing senses it.
+    //
+    // The layer is set EXCLUSIVELY (Layers::set), which is also what keeps the
+    // GL renderer — which honours camera-vs-object layers — from drawing it to
+    // a default camera. Empty mesh in, nullptr out.
+    std::shared_ptr<Mesh> makeSensorMesh(const SurfaceMesh& surface);
 
 }// namespace threepp::splats
 

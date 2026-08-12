@@ -167,6 +167,37 @@ namespace {
         return out;
     }
 
+    // Depth-sensor camera clip range. The G-buffer's Depth AOV is REVERSED-Z
+    // NDC (see readGBufferAOV), which the renderer builds from the camera's own
+    // GL projection as z' = 0.5w - 0.5z; inverting that for a perspective
+    // camera gives the view-space distance below.
+    constexpr float kNear = 0.1f, kFar = 20.f;
+
+    double viewDistanceFromNdc(double d) {
+        return double(kFar) * double(kNear) / (d * (double(kFar) - double(kNear)) + double(kNear));
+    }
+
+    // The centre pixel of a view's depth AOV, as a view-space distance. 0 where
+    // nothing was drawn (reversed-Z far plane).
+    double viewCentreDistance(VulkanRenderer& renderer, uint32_t viewHandle) {
+        std::vector<uint8_t> aov;
+        int w = 0, h = 0, bpp = 0;
+        if (!renderer.readViewGBufferAOV(viewHandle, VulkanRenderer::GBufferAOV::Depth, aov, w, h, bpp))
+            return 0.0;
+        if (bpp != 4 || w <= 0 || h <= 0) return 0.0;
+        float d = 0.f;
+        std::memcpy(&d, aov.data() + (size_t(h / 2) * size_t(w) + size_t(w / 2)) * 4u, 4);
+        return d > 0.f ? viewDistanceFromNdc(double(d)) : 0.0;
+    }
+
+    int maxDelta(const std::vector<unsigned char>& a, const std::vector<unsigned char>& b) {
+        if (a.size() != b.size() || a.empty()) return 255;
+        int m = 0;
+        for (size_t i = 0; i < a.size(); ++i)
+            m = std::max(m, std::abs(int(a[i]) - int(b[i])));
+        return m;
+    }
+
     struct PlaneFit {
         double meanY{0}, rmsY{0}, maxAbs{0};
         size_t n{0};
@@ -339,6 +370,93 @@ int main(int argc, char** argv) {
            "and the mesh's AABB is not inflated by them");
     report(above * 100 < stray.vertexCount(),
            "under 1% of the surface survives above the plane");
+
+    // ── 5. the sensor world (P2) ────────────────────────────────────────────
+    // The baked plane joins the scene as a sensor-only mesh. The primary camera
+    // must not see it (the splats are what renders there), a lidar beam and a
+    // secondary depth view must — and only once the scene opts in.
+    {
+        auto camera = PerspectiveCamera::create(55.f, float(kW) / float(kH), 0.1f, 100.f);
+        camera->position.set(0.f, 2.2f, 3.2f);
+        camera->lookAt(0.f, 0.f, 0.f);
+        auto draw = [&](int n) {
+            for (int i = 0; i < n; ++i) renderer.render(*scene, *camera);
+        };
+        // Looking straight down, so up must not be the view direction.
+        auto depthCam = PerspectiveCamera::create(40.f, 1.f, kNear, kFar);
+        depthCam->up.set(0.f, 0.f, -1.f);
+        depthCam->position.set(0.f, 2.f, 0.f);
+        depthCam->lookAt(0.f, 0.f, 0.f);
+
+        draw(1);// addView needs a rendered frame to share pipelines with
+        const uint32_t viewH = renderer.addView(*depthCam, 256, 256);
+        report(viewH != 0u, "the depth sensor view attaches");
+
+        draw(8);
+        const auto imgA = renderer.readRGBPixels();
+        draw(8);
+        const auto imgControl = renderer.readRGBPixels();
+        // The renderer's own frame-to-frame noise on an unchanged scene: the
+        // bar the sensor mesh has to clear, measured rather than assumed.
+        const int noise = maxDelta(imgA, imgControl);
+
+        auto surface = splats::makeSensorMesh(bake1);
+        report(surface != nullptr, "the baked surface becomes a sensor mesh");
+        scene->add(surface);
+
+        const double planeY = pf.meanY;
+        std::vector<LidarBeam> beams;
+        for (int i = 0; i < 9; ++i)
+            beams.push_back({Vector3{-0.25f + 0.25f * float(i % 3), 2.f, -0.25f + 0.25f * float(i / 3)},
+                             Vector3{0.f, -1.f, 0.f}});
+
+        // Absence: added, not opted in. Nothing perceives it.
+        draw(8);
+        const int deltaOff = maxDelta(imgControl, renderer.readRGBPixels());
+        std::vector<LidarReturn> retsOff;
+        renderer.scanLidar(beams, retsOff);
+        size_t hitsOff = 0;
+        for (const auto& r : retsOff)
+            if (r.returnNo > 0) ++hitsOff;
+        double depthOff = viewCentreDistance(renderer, viewH);
+        report(hitsOff == 0, "not opted in: the lidar sees nothing where the surface is");
+        report(depthOff == 0.0, "not opted in: the depth view sees nothing there either");
+
+        // Opted in.
+        renderer.setSensorOnlySurfaces(true);
+        draw(8);
+        const auto imgOn = renderer.readRGBPixels();
+        const int deltaOn = maxDelta(imgControl, imgOn);
+        std::vector<LidarReturn> rets;
+        renderer.scanLidar(beams, rets);
+        double rangeErr = 0;
+        size_t hits = 0;
+        for (const auto& r : rets) {
+            if (r.returnNo <= 0) continue;
+            ++hits;
+            rangeErr = std::max(rangeErr, std::abs(static_cast<double>(r.distance) - (2.0 - planeY)));
+        }
+        const double depthOn = viewCentreDistance(renderer, viewH);
+        const double depthErr = std::abs(depthOn - (2.0 - planeY));
+
+        std::printf("       lidar %zu/%zu beams return, max |range - (2 - %.4f)| %.4f  (voxel %.3f)\n",
+                    hits, beams.size(), planeY, rangeErr, kVoxel);
+        std::printf("       depth view centre %.4f vs %.4f -> err %.4f;  off %.4f\n",
+                    depthOn, 2.0 - planeY, depthErr, depthOff);
+        std::printf("       primary maxDelta: control %d, mesh-off %d, mesh-on %d\n",
+                    noise, deltaOff, deltaOn);
+
+        report(hits == beams.size() && rangeErr < kVoxel,
+               "opted in: every beam returns the baked plane's range, within a voxel");
+        report(depthOn > 0.0 && depthErr < kVoxel,
+               "opted in: the depth view sees the plane at the right distance");
+        report(deltaOn <= noise && deltaOff <= noise,
+               "and the primary image is unchanged by the mesh, opted in or not");
+
+        renderer.setSensorOnlySurfaces(false);
+        renderer.removeView(viewH);
+        scene->remove(*surface);
+    }
 
     if (sweep) {
         // The tables that placed the defaults. Not assertions — they are the

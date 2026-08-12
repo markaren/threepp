@@ -359,6 +359,7 @@ namespace threepp {
         for (const auto& sp : entrySpans_) {
             const auto& e0 = entries[sp.first];
             if (e0.isOverlay) continue;// raster-overlay only — no emissive contribution to the traced scene
+            if (e0.sensorOnly) continue;// sensor target — lights nothing
             if (!e0.mesh) continue;
             const MaterialWithEmissive* em = e0.lodEmissive;
             if (!em) continue;

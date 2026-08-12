@@ -2096,6 +2096,19 @@ namespace threepp {
         return core()->overlayLayer_;
     }
 
+    void VulkanRenderer::setSensorOnlySurfaces(bool enabled) {
+        if (core()->sensorOnlySurfaces_ == enabled) return;
+        core()->sensorOnlySurfaces_ = enabled;
+        // The opt-in is carried by TLAS instance masks, which only a full
+        // expansion rewrites — the snapshot fast path would keep handing the
+        // old ones back.
+        core()->sceneBuilt_ = false;
+    }
+
+    bool VulkanRenderer::sensorOnlySurfaces() const {
+        return core()->sensorOnlySurfaces_;
+    }
+
     void VulkanRenderer::setHybridDebugView(int view) {
         using V = Impl::HybridDebugView;
         switch (view) {

@@ -180,6 +180,10 @@ namespace threepp {
         for (size_t i = 0; i < lastVisibleEntries_.size(); ++i) {
             const auto& en = lastVisibleEntries_[i];
             if (en.isOverlay)  continue;
+            // Sensor-only surfaces rasterize into SECONDARY views (a depth
+            // sensor's G-buffer) and never into the primary, whose picture of
+            // the same scan is the splat rasterizer's. Off ⇒ no view draws it.
+            if (en.sensorOnly && !(sensorOnlySurfaces_ && view().secondary)) continue;
             if (!viewCulled(i)) continue;
             if (en.mesh != memoMesh) {
                 memoMesh     = en.mesh;

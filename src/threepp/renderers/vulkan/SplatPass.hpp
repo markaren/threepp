@@ -75,6 +75,18 @@
 // picking, median depth for surface fusion — plans/splat-surface-bake.md), and
 // the note on setSplatDepthAov for what each value is and is not.
 //
+// And the second crack, the one plans/splat-surface-bake.md's P2 opened: a
+// scan can now return LIDAR RANGES AND SENSOR DEPTH, through a proxy.
+// threepp::splats::bakeSurface fuses that median depth into a triangle mesh,
+// splats::makeSensorMesh marks it VulkanRenderer::kSensorOnlyLayer, and
+// setSensorOnlySurfaces(true) lets the scene's lidar beams and secondary
+// views perceive it. The walls that still stand: no sensor sees the SPLATS —
+// what it sees is a mesh baked from them, at voxel resolution, with no colour;
+// the splat pass is still primary-only and still absent from every
+// acceleration structure; and the opt-in defaults OFF, with the mesh's TLAS
+// instance carrying mask 0 until it is taken, so a scene that does not ask
+// renders and senses exactly as it did before.
+//
 // ENVIRONMENT KNOBS, all off by default and all A/B switches rather than
 // settings — each one turns off a term so its contribution can be MEASURED
 // rather than asserted (which is how the motion-vector +2.4 dB and the

@@ -420,6 +420,7 @@ void VulkanRenderer::Impl::fitProbeGridToScene() {
             Box3 sceneBox;
             for (const auto& en : lastVisibleEntries_) {
                 if (en.isOverlay || en.isParticle) continue;
+                if (en.sensorOnly) continue;// must not move the GI grid the camera sees
                 auto geom = en.mesh->geometry();
                 if (!geom) continue;
                 if (!geom->boundingBox) geom->computeBoundingBox();
