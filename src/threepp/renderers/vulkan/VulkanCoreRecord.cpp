@@ -968,10 +968,15 @@ void VulkanRenderer::Impl::recordSplats(VkCommandBuffer cb) {
             // (so bokeh, bloom, tone mapping and TAA all act on splats without
             // any of it being re-derived here). See vulkan/SplatPass.hpp.
             //
-            // PRIMARY ONLY: one shared set of scratch buffers, sized to the
-            // extent the pass was last resized to, and no secondary view has
-            // asked to have splats in its AOVs.
-            if (!splat_ || view().secondary) return;
+            // A secondary view renders splats only if it ASKED (setViewSplats)
+            // and got a target slot. The scratch is shared and reused
+            // sequentially, exactly as it already is across clouds — see
+            // SplatPass::resize.
+            if (!splat_) return;
+            if (view().secondary) {
+                recordSecondaryViewSplats(cb);
+                return;
+            }
 
             // Before the hasClouds() test, not after: the depth AOV
             // describes THIS frame, and a frame that draws no splats has to
@@ -1041,6 +1046,89 @@ void VulkanRenderer::Impl::recordSplats(VkCommandBuffer cb) {
             splat_->record(cb, currentFrame, p);
             gpuTimings_->end(cb, TP_Splat, currentFrame);
 
+}
+
+void VulkanRenderer::Impl::recordSecondaryViewSplats(VkCommandBuffer cb) {
+            // ── Splats into a secondary view's linear-HDR scene ─────────────────
+            // Same slot in the frame as the primary's (after the shade, before
+            // the bloom pyramid) and the same pipeline, on this view's own
+            // target slot. Opt-in per view: the sort scales with SPLAT COUNT
+            // rather than view size, so a second view is a second full sort and
+            // that is the caller's call to make.
+            //
+            // Primary-only here, deliberately: the depth AOV (a secondary's AOV
+            // image is 1x1 by construction) and the debug checksum (one readback
+            // buffer per frame slot, which a second writer would overwrite).
+            ViewContext& v = view();
+            if (!v.splats || v.splatTarget == vulkan::SplatPass::kNoTarget) return;
+            if (!v.camera || !splat_->hasClouds()) return;
+
+            // The cloud list, the model matrices and the per-cloud percentile
+            // interval were all built by collectSplatClouds for the PRIMARY
+            // camera and are reused verbatim. Only the percentiles are camera-
+            // dependent, and they are a sort-key content interval rather than a
+            // clamp — the exact min/max still come from this view's own
+            // projection pass, so a splat outside the interval lands in a
+            // monotone tail bucket instead of collapsing onto the end.
+            Camera& cam = *v.camera;
+            auto p = splatParams_;
+            p.target      = v.splatTarget;
+            p.depthAov    = false;
+            p.depthMedian = false;
+            p.checksum    = false;
+            p.timings     = nullptr;// suppressed for secondaries, like every other pass
+            std::memcpy(p.view, cam.matrixWorldInverse.elements.data(), 64);
+            std::memcpy(p.proj, cam.projectionMatrix.elements.data(), 64);
+            std::memcpy(p.camWorld, cam.matrixWorld->elements.data(), 64);
+            const Matrix4 projRev = reverseZVk(cam.projectionMatrix);
+            Matrix4 projInv;
+            projInv.copy(projRev).invert();
+            std::memcpy(p.projInverse, projInv.elements.data(), 64);
+            const auto& cw = cam.matrixWorld->elements;
+            p.camPos[0] = cw[12];
+            p.camPos[1] = cw[13];
+            p.camPos[2] = cw[14];
+            p.camFwd[0] = -cw[8];
+            p.camFwd[1] = -cw[9];
+            p.camFwd[2] = -cw[10];
+            p.orthographic = v.orthoFrame_;
+            if (auto* pc = dynamic_cast<PerspectiveCamera*>(&cam))       p.nearPlane = pc->nearPlane;
+            else if (auto* oc = dynamic_cast<OrthographicCamera*>(&cam)) p.nearPlane = oc->nearPlane;
+
+            // This view's own jitter, and this view's own previous VP: a
+            // secondary runs the built-in TAA (VulkanCoreFrame.cpp's tail), so
+            // the splats have to be jittered with the raster they are composited
+            // over and reprojected with the history they are resolved against.
+            const VkExtent2D ext = v.renderExt;
+            const float jClipX = 2.f * v.taaJitterTexels_[0] / static_cast<float>(ext.width);
+            const float jClipY = 2.f * v.taaJitterTexels_[1] / static_cast<float>(ext.height);
+            if (v.orthoFrame_) {
+                p.proj[12] -= jClipX;
+                p.proj[13] -= jClipY;
+                p.jitterClip[0] = -jClipX;
+                p.jitterClip[1] = -jClipY;
+            } else {
+                p.proj[8] += jClipX;
+                p.proj[9] += jClipY;
+                p.jitterClip[0] = jClipX;
+                p.jitterClip[1] = jClipY;
+            }
+            {
+                Matrix4 sky, prev;
+                std::memcpy(sky.elements.data(), v.taaSkyReproj_.data(), 64);
+                prev.multiplyMatrices(sky, projRev);
+                std::memcpy(p.prevVPfromView, prev.elements.data(), 64);
+            }
+
+            p.fog = (heightFogEnabled_ && heightFogDensity_ > 0.f) || murkDensity_ > 0.f;
+            if (const char* e = std::getenv("THREEPP_VK_SPLAT_NOMOTION"); e && *e && *e != '0')
+                p.motionVectors = false;
+            if (const char* e = std::getenv("THREEPP_VK_SPLAT_NOFOG"); e && *e && *e != '0')
+                p.fog = false;
+            p.preExposure    = preExposure();
+            p.bgIsSolidColor = envIsBgColor;
+
+            splat_->record(cb, currentFrame, p);
 }
 
 void VulkanRenderer::Impl::recordDepthOfField(VkCommandBuffer cb) {

@@ -2118,6 +2118,15 @@ namespace threepp {
         return v && v->secondary && v->sensorSurfaces;
     }
 
+    bool VulkanRenderer::setViewSplats(uint32_t handle, bool enabled) {
+        return core()->setViewSplatsImpl(handle, enabled);
+    }
+
+    bool VulkanRenderer::viewSplats(uint32_t handle) const {
+        auto* v = const_cast<Impl*>(core())->findView(handle);
+        return v && v->secondary && v->splats;
+    }
+
     void VulkanRenderer::setHybridDebugView(int view) {
         using V = Impl::HybridDebugView;
         switch (view) {

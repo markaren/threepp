@@ -1441,6 +1441,13 @@ void VulkanRenderer::Impl::destroySecondaryViewResources(ViewContext& v) {
             // One pool destroy frees every set allocated from it.
             if (v.rasterDescPool) vkDestroyDescriptorPool(d, v.rasterDescPool, nullptr);
             v.rasterDescPool = VK_NULL_HANDLE;
+            // The splat target names images that were just destroyed; hand the
+            // slot back so the next view that asks can have it. Its descriptor
+            // sets are per (cloud, target) and are rewritten on the claim.
+            if (splat_ && v.splatTarget != vulkan::SplatPass::kNoTarget) {
+                splat_->releaseTarget(v.splatTarget);
+                v.splatTarget = vulkan::SplatPass::kNoTarget;
+            }
         }
 
 void VulkanRenderer::Impl::applyPendingViewChanges() {
@@ -1467,6 +1474,15 @@ void VulkanRenderer::Impl::applyPendingViewChanges() {
                 std::fprintf(stderr, "[threepp] view %u: %ux%u, %.1f MB\n",
                              v->id, v->outExt.width, v->outExt.height,
                              static_cast<double>(v->allocatedBytes) / (1024.0 * 1024.0));
+            }
+            // A view whose splat flag was set after it was created: claim its
+            // SplatPass target here, where the device is drained, rather than
+            // from the setter (which is routinely called mid-frame).
+            for (auto& v : views_) {
+                if (!v->secondary || !v->splats || !v->bloom_) continue;
+                if (v->splatTarget != vulkan::SplatPass::kNoTarget) continue;
+                curView_ = v.get();
+                ensureSplatTarget();
             }
             curView_ = views_[0].get();
             pendingViewChanges_ = false;
@@ -1583,6 +1599,13 @@ void VulkanRenderer::Impl::recordSecondaryViews(VkCommandBuffer cb) {
                 const float preExp = preExposure();
 
                 recordSceneDispatch(cb, currentFrame, ext, ptExt, exposureBits);
+
+                // Gaussian splats, if this view asked for them: the same place
+                // in the frame as the primary's (sceneHdr still linear HDR, the
+                // G-buffer depth it tests against final), on this view's own
+                // SplatPass target. No-op — not even a barrier — unless
+                // setViewSplats(handle, true) was called on this view.
+                recordSplats(cb);
 
                 // Built-in TAA tail only — no DLSS, no FSR, no DoF, no overlay,
                 // no lens/sensor stage. All of those are primary-only by scope,
@@ -1724,6 +1747,20 @@ bool VulkanRenderer::Impl::setViewSensorSurfacesImpl(uint32_t handle, bool enabl
             // handle 0 case to grant: refuse rather than pretend.
             if (!v || !v->secondary) return false;
             v->sensorSurfaces = enabled;
+            return true;
+        }
+
+bool VulkanRenderer::Impl::setViewSplatsImpl(uint32_t handle, bool enabled) {
+            ViewContext* v = findView(handle);
+            // The primary always draws splats, so there is nothing to grant on
+            // handle 0: refuse rather than pretend.
+            if (!v || !v->secondary) return false;
+            v->splats = enabled;
+            // Claiming a target slot resizes a shared buffer and writes
+            // descriptor sets, so it happens where addView's own resources do —
+            // next frame boundary, post-fence, device drained.
+            if (enabled && v->splatTarget == vulkan::SplatPass::kNoTarget)
+                pendingViewChanges_ = true;
             return true;
         }
 

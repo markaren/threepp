@@ -187,6 +187,16 @@ namespace threepp::vulkan::impl {
         // sees them only if it asks AND the scene opted in
         // (Impl::sensorOnlySurfaces_).
         bool    sensorSurfaces = false;
+        // May this view rasterize SplatClouds (VulkanRenderer::setViewSplats)?
+        // Off by default because the splat sort scales with splat count rather
+        // than view size, so a second view is a second full sort — an RGB
+        // camera sensor pointed at a scan wants that and an editor pane may
+        // not. `splatTarget` is the slot this view claimed in SplatPass's
+        // target table (kNoTarget = none yet, or the table was full); it is
+        // claimed on the first frame the view renders with the flag set and
+        // returned when the view is destroyed.
+        bool     splats      = false;
+        uint32_t splatTarget = 0xFFFFFFFFu;// == SplatPass::kNoTarget
         // Zero means "this view's own size" — the copy path is a straight
         // vkCmdCopyImage then, with no filtering to argue about.
         int32_t dispW = 0, dispH = 0;

@@ -35,6 +35,7 @@
 #include "threepp/geometries/TorusKnotGeometry.hpp"
 #include "threepp/materials/MeshBasicMaterial.hpp"
 #include "threepp/materials/MeshStandardMaterial.hpp"
+#include "threepp/objects/SplatCloud.hpp"
 #include "threepp/renderers/VulkanRenderer.hpp"
 
 #include "capture_util.hpp"// examples/vulkan (shared via target include dir)
@@ -435,6 +436,192 @@ namespace {
         runFrames(canvas, r, scene, primaryCam, 3);
     }
 
+    // ── Gate: splats are per-view, opt-in ───────────────────────────────────
+    // The splat pass was primary-only: a secondary view (which is what a
+    // CameraSensor is) saw EMPTY SPACE where a scan stood. setViewSplats
+    // lifts that per view, and the whole point is that it is per view — two
+    // views at the SAME pose in the SAME frame, differing only in the flag,
+    // must differ only by the cloud.
+    //
+    // Unjittered raster (setGbufferMsaa(2), VulkanSplat_test's trick) for the
+    // determinism half: with jitter on, consecutive frames legitimately differ
+    // by a sub-pixel projection offset and "the same frame twice" is not.
+    void gateSplats(Canvas& canvas, VulkanRenderer& r, Scene& scene, Camera& primaryCam) {
+        std::printf("\n[splats] a secondary view renders a SplatCloud only if it asks\n");
+
+        // High above the rest of the scene, so the cloud stands against the
+        // background and coverage is countable without segmenting geometry.
+        SplatGenerator::Options o;
+        o.count = 60000;
+        o.seed = 90210u;
+        o.shDegree = 0;
+        o.extent.set(1.6f, 1.0f, 1.6f);
+        o.minScale = 0.05f;
+        o.maxScale = 0.12f;
+        o.minOpacity = 0.5f;
+        o.maxOpacity = 0.95f;
+        auto data = SplatGenerator::generate(o);
+        for (size_t i = 0; i < data.count(); ++i) data.setDcColor(i, Vector3{0.95f, 0.35f, 0.10f});
+        auto cloud = SplatCloud::create(data);
+        cloud->position.set(0.f, 20.f, 0.f);
+        scene.add(cloud);
+
+        const uint32_t savedMsaa = r.gbufferMsaa();
+        r.setGbufferMsaa(2);
+
+        // Same pose, same size, same frame — the flag is the only difference.
+        auto camOn  = makeCam(Vector3(0.f, 20.f, 6.f), Vector3(0.f, 20.f, 0.f));
+        auto camOff = makeCam(Vector3(0.f, 20.f, 6.f), Vector3(0.f, 20.f, 0.f));
+        constexpr int kVW = 256, kVH = 192;
+        const uint32_t hOn  = r.addView(*camOn, kVW, kVH);
+        const uint32_t hOff = r.addView(*camOff, kVW, kVH);
+        check(hOn != 0 && hOff != 0, "splats: addView returned handles");
+        check(r.setViewSplats(hOn, true) && !r.setViewSplats(0u, true),
+              "setViewSplats takes a secondary handle and refuses the primary");
+        check(r.viewSplats(hOn) && !r.viewSplats(hOff), "the flag reads back per view");
+
+        runFrames(canvas, r, scene, primaryCam, 90);
+
+        // Coverage: anything materially brighter than the background, which is
+        // all these two views contain besides the cloud.
+        const auto coverage = [](const std::vector<unsigned char>& img) {
+            long n = 0;
+            for (size_t i = 0; i + 2 < img.size(); i += 3)
+                if (img[i] > 70 && img[i] > img[i + 2] + 25) ++n;
+            return n;
+        };
+        const auto imgOn  = r.readViewRGBPixels(hOn);
+        const auto imgOff = r.readViewRGBPixels(hOff);
+        const long covOn = coverage(imgOn), covOff = coverage(imgOff);
+        std::printf("  flagged view %ld / %d px carry the cloud, unflagged %ld\n",
+                    covOn, kVW * kVH, covOff);
+        check(covOn > 500 && covOff == 0,
+              "the flagged view sees the cloud; the view beside it sees nothing");
+
+        // Byte-identical across two renders: the sensor contract. Same camera,
+        // same scene, converged, unjittered.
+        runFrames(canvas, r, scene, primaryCam, 1);
+        const auto again = r.readViewRGBPixels(hOn);
+        check(again.size() == imgOn.size() && !again.empty() &&
+                      std::memcmp(again.data(), imgOn.data(), imgOn.size()) == 0,
+              "the flagged view's capture is byte-identical across two renders");
+
+        // The primary must not move because a SECONDARY took the flag. Bounded
+        // by a measured self-control rather than asserted byte-exact: this
+        // scene's GI/reflections are stochastic and the renderer moves the
+        // primary on its own between any two frames (plans/splat-surface-bake.md
+        // P2 measured the same thing).
+        const auto capturePrimary = [&] {
+            runFrames(canvas, r, scene, primaryCam, 1);
+            return r.readRGBPixels();
+        };
+        const auto maxDelta = [](const std::vector<unsigned char>& a,
+                                 const std::vector<unsigned char>& b) {
+            return a.size() == b.size() && !a.empty() ? capture::imageDiff(a, b).maxD : 255;
+        };
+        // The control has to carry the SAME churn as the measurement — the same
+        // frame gap and the same setter call — or it measures a shorter interval
+        // than the thing it is bounding.
+        const auto step = [&](bool on) {
+            (void) r.setViewSplats(hOn, on);
+            runFrames(canvas, r, scene, primaryCam, 4);
+            return capturePrimary();
+        };
+        const auto pOffA = step(false);
+        const auto pOffB = step(false);
+        const int control = maxDelta(pOffA, pOffB);
+        const auto pOn = step(true);
+        const int dFlag = maxDelta(pOffB, pOn);
+        std::printf("  primary maxDelta: control %d, flag off vs on %d\n", control, dFlag);
+
+        // Bounded by its own control rather than asserted byte-exact, and that
+        // is a property of the renderer, not of this feature: two captures of
+        // this static scene already differ by `control` counts on their own
+        // (stochastic GI/ReSTIR plus the temporal resolve), and turning the flag
+        // on changes frame time, which feeds the TAA's dt-scaled blend — see
+        // this file's header. What the flag must not do is move the primary MORE
+        // than the renderer moves it by itself. Measured: control ~10-15,
+        // flag ~17-18 — the gap is the frame-time change (an opted-in view is
+        // ~2.7 ms, printed below) feeding that dt-scaled blend, and it is why
+        // the margin is this wide rather than 2. A real leak is not subtle: the
+        // flagged view above puts 12000 bright pixels on screen.
+        check(dFlag <= control + 12, "the primary image does not move with the flag");
+
+        // The byte-exact half of the absence contract, aimed at the mechanism
+        // that is actually at risk: the two targets SHARE the sort scratch, the
+        // tile range buffer and one UBO allocation, so a secondary's dispatch
+        // disturbing the primary's would land here first. The primary needs a
+        // cloud of its own for this to say anything.
+        //
+        // The EXPANSION COUNT is the quantity: it is the primary's own
+        // (splat, tile) pair count, a pure function of its projection. Not the
+        // composited-pixel hash — that is taken over sceneHdr AFTER the shade
+        // wrote it, so it inherits the shade's stochastic GI and is not equal
+        // even between two consecutive frames here (it is printed, so the
+        // difference is visible rather than assumed).
+        auto primaryCloud = SplatCloud::create(data);
+        primaryCloud->position.set(0.f, 1.6f, 2.6f);
+        scene.add(primaryCloud);
+        r.setSplatDebugChecksum(true);
+        std::uint64_t sA[4]{}, sB[4]{}, sOn[4]{};
+        const auto csum = [&](bool on, std::uint64_t out[4]) {
+            (void) r.setViewSplats(hOn, on);
+            // Warmed: the shared expansion budget grows once, on a truncated
+            // frame, and that frame is genuinely different from the rest.
+            runFrames(canvas, r, scene, primaryCam, 12);
+            return r.splatDebugChecksum(out);
+        };
+        const bool got = csum(false, sA) && csum(false, sB) && csum(true, sOn);
+        r.setSplatDebugChecksum(false);
+        std::printf("  primary splat entries %llu; pixel hash: control %s, flag on %s\n",
+                    (unsigned long long) sOn[3],
+                    sA[2] == sB[2] ? "equal" : "differs",
+                    sB[2] == sOn[2] ? "equal" : "differs");
+        check(got && sA[3] > 0 && sA[3] == sB[3] && sB[3] == sOn[3],
+              "the PRIMARY's own splat expansion is identical, flag on vs off");
+        scene.remove(*primaryCloud);
+
+        // ── measured, not asserted: what an opted-in view costs ─────────────
+        // Interleaved A/B on the same binary, same frame, same everything but
+        // the flag. Blocks rather than single frames so the TAA's dt-scaled
+        // constants are not the thing being measured.
+        const auto blockMs = [&](bool on, int n) {
+            (void) r.setViewSplats(hOn, on);
+            runFrames(canvas, r, scene, primaryCam, 8);
+            const auto t0 = std::chrono::steady_clock::now();
+            runFrames(canvas, r, scene, primaryCam, n);
+            const auto t1 = std::chrono::steady_clock::now();
+            return std::chrono::duration<double, std::milli>(t1 - t0).count() / n;
+        };
+        const auto measure = [&](const char* what) {
+            double onMs = 0, offMs = 0;
+            for (int rep = 0; rep < 2; ++rep) {
+                offMs += blockMs(false, 40);
+                onMs += blockMs(true, 40);
+            }
+            std::printf("  cost %-12s off %.3f ms/frame, on %.3f ms/frame, "
+                        "per-view splat cost %.3f ms\n",
+                        what, offMs / 2, onMs / 2, (onMs - offMs) / 2);
+        };
+        measure("60k splats");
+
+        SplatGenerator::Options big = o;
+        big.count = 500000;
+        big.seed = 1337u;
+        auto bigCloud = SplatCloud::create(SplatGenerator::generate(big));
+        bigCloud->position.set(0.f, 20.f, 0.f);
+        scene.remove(*cloud);
+        scene.add(bigCloud);
+        runFrames(canvas, r, scene, primaryCam, 10);
+        measure("500k splats");
+
+        scene.remove(*bigCloud);
+        (void) r.removeView(hOn);
+        (void) r.removeView(hOff);
+        r.setGbufferMsaa(savedMsaa);
+        runFrames(canvas, r, scene, primaryCam, 3);
+    }
+
     // ── Gate: G-buffer MSAA + secondary views coexist ───────────────────────
     // setGbufferMsaa routes the raster through an MS pass whose dominant-sample
     // resolve is ONE shared GbufResolve instance with descriptors naming the
@@ -644,6 +831,7 @@ int main(int argc, char** argv) {
     gateCullIsolation(canvas, renderer, scene, *primaryCam);
     gateAov(canvas, renderer, scene, *primaryCam);
     gateMsaa(canvas, renderer, scene, *primaryCam);
+    gateSplats(canvas, renderer, scene, *primaryCam);
 
     std::printf("\nmulti-view: %d failed\n", failures);
     return failures == 0 ? 0 : 1;

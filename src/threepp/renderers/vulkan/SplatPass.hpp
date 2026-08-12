@@ -55,9 +55,20 @@
 //   splat_raster    one 16x16 workgroup per tile, one thread per pixel,
 //                   front-to-back with transmittance early-out
 //
-// SCOPE. Primary view only: secondary views (addView) skip the splat pass
-// entirely rather than silently painting splats into a sensor AOV. Splats cast
-// no shadows, contribute to no probe and are invisible to the RT sensors —
+// SCOPE. The primary view always; a secondary view (addView) only if it ASKS,
+// one by one (VulkanRenderer::setViewSplats), because "secondary" does not mean
+// "wants splats" — an RGB camera sensor pointed at a scan does, an editor
+// viewport pane costs the same sort and may not. Default OFF everywhere, so a
+// scene that does not ask renders byte-identically to before this existed. What
+// an opted-in view buys is a SECOND run of the whole pipeline below at its own
+// extent: the radix sort scales with SPLAT COUNT, not view size, so a 640x480
+// sensor on a 5M-splat town costs the same ~8-13 ms the primary does. That is
+// the caller's choice to make, which is why it is a per-view switch and not a
+// renderer mode. The depth AOV stays PRIMARY-ONLY (a secondary's AOV image is
+// 1x1 by construction), and so does the debug checksum readback.
+//
+// Splats still cast no shadows, contribute to no probe and are invisible to the
+// RT sensors —
 // all deliberate, all documented as out of scope in
 // plans/gaussian-splats-vulkan.md. Reflections crossed that wall on purpose
 // (plans/splat-volume-reflections.md): every upload also BAKES the cloud into
@@ -84,8 +95,9 @@
 // RGB camera preview and an editor viewport pane are secondary views too and
 // the shell must not stand in front of the splats there. The walls that still
 // stand: no sensor sees the SPLATS —
-// what it sees is a mesh baked from them, at voxel resolution, with no colour;
-// the splat pass is still primary-only and still absent from every
+// what it sees is a mesh baked from them, at voxel resolution, with no colour
+// (an RGB view that wants the real thing takes setViewSplats above, which is a
+// raster, not a trace); the splat pass is still absent from every
 // acceleration structure; and the opt-in defaults OFF, with the mesh's TLAS
 // instance carrying mask 0 until it is taken, so a scene that does not ask
 // renders and senses exactly as it did before.
@@ -130,6 +142,7 @@
 
 #include <vulkan/vulkan.h>
 
+#include <array>
 #include <cstdint>
 #include <functional>
 #include <memory>
@@ -265,9 +278,31 @@ namespace threepp::vulkan {
             VkSampler          envSampler = VK_NULL_HANDLE;
             uint32_t           envMips    = 1;
         };
-        void resize(uint32_t width, uint32_t height, const ResizeInputs& in);
+        // `target` picks which composite destination these images describe:
+        // 0 is the primary and always exists; a secondary view that opted into
+        // splats owns one of the remaining slots (acquireTarget). Every target
+        // carries its own extent, tile grid and descriptor sets; they SHARE the
+        // sort scratch, which is safe because the pass already reuses it
+        // sequentially across clouds behind its own barriers.
+        void resize(uint32_t width, uint32_t height, const ResizeInputs& in,
+                    uint32_t target = 0);
 
-        [[nodiscard]] bool valid() const { return width_ > 0 && sampler_ != VK_NULL_HANDLE; }
+        // Claim a non-primary target slot, kNoTarget when the table is full.
+        // Slots are claimed for a view's lifetime and returned by releaseTarget;
+        // the descriptor sets they name are per (cloud, target, frame) and are
+        // written by resize/uploadCloud, never mid-frame.
+        static constexpr uint32_t kMaxTargets = 4;
+        static constexpr uint32_t kNoTarget   = 0xFFFFFFFFu;
+        [[nodiscard]] uint32_t acquireTarget();
+        void releaseTarget(uint32_t target);
+        // Does this slot have images to composite into? False until its first
+        // resize, which is what keeps a view that opted in before its resources
+        // existed from recording a dispatch against unwritten sets.
+        [[nodiscard]] bool targetValid(uint32_t target) const;
+
+        [[nodiscard]] bool valid() const {
+            return targets_[0].width > 0 && sampler_ != VK_NULL_HANDLE;
+        }
 
         // What the driver needs that only the frame knows. Matrices are
         // column-major, threepp/GL convention (the projection is the camera's
@@ -307,6 +342,12 @@ namespace threepp::vulkan {
             // Hash the sorted key/payload arrays and the composited pixels
             // (VulkanRenderer::setSplatDebugChecksum).
             bool  checksum = false;
+            // Which composite target this dispatch writes (see resize). 0 is
+            // the primary; a secondary view that opted into splats passes the
+            // slot it acquired. Only the target's images, extent and UBO region
+            // change — the sort scratch, and therefore the determinism
+            // argument, are the same ones the primary uses.
+            uint32_t target = 0;
             // Optional per-stage timestamps. The caller already brackets the
             // whole pass with TP_Splat; handing the pool in lets the pass split
             // that into project / sort / raster from the inside, where the stage
@@ -490,11 +531,26 @@ namespace threepp::vulkan {
         // re-shown. Predictable stall beats unbounded leak.
         void retireStale();
 
+        // One composite destination. Slot 0 is the primary and is claimed from
+        // construction; the rest are handed to secondary views that asked for
+        // splats. Everything here is per-VIEW state — the sort scratch below is
+        // deliberately not, because it is written and consumed inside one
+        // dispatch chain and the targets record sequentially.
+        struct Target {
+            bool     claimed = false;// slot 0 always; the others on request
+            uint32_t width = 0, height = 0;
+            uint32_t tilesX = 0, tilesY = 0;
+            // Cached per-frame image views so a cloud added mid-run can have its
+            // freshly-allocated sets written without another resize() round trip.
+            std::vector<VkImageView> sceneHdrViews, depthViews, motionViews, idsViews;
+            std::vector<VkImageView> splatDepthViews;
+            std::vector<VkImage>     motionImages, splatDepthImages;
+        };
+        std::array<Target, kMaxTargets> targets_{};
+
         VulkanContext& ctx_;
         VkCommandPool  cmdPool_;
         uint32_t       framesInFlight_;
-        uint32_t       width_ = 0, height_ = 0;
-        uint32_t       tilesX_ = 0, tilesY_ = 0;
         uint64_t       syncSerial_ = 0;
 
         std::unordered_map<const SplatCloud*, std::unique_ptr<Cloud>> resident_;
@@ -573,11 +629,6 @@ namespace threepp::vulkan {
         uint32_t volMaxRes_ = 128;// == kVolMaxResDefault; env-clamped in ctor
         uint64_t volumeGen_ = 0;
 
-        // Cached per-frame image views so a cloud added mid-run can have its
-        // freshly-allocated sets written without another resize() round trip.
-        std::vector<VkImageView> sceneHdrViews_, depthViews_, motionViews_, idsViews_;
-        std::vector<VkImageView> splatDepthViews_;
-        std::vector<VkImage>     motionImages_, splatDepthImages_;
         std::vector<VkBuffer>    fogUbos_, cloudUbos_, lightsUbos_;
         VkImageView envView_    = VK_NULL_HANDLE;
         bool        envDirty_   = false;// sets hold a dead env view; rewrite post-idle
@@ -590,7 +641,14 @@ namespace threepp::vulkan {
         void createPipelines();
         void createDescriptorPool();
         void allocateScratch(uint32_t maxSplats, uint32_t entryBudget);
+        // Every claimed target's sets, or one target's. The one-target flavour
+        // exists so a slot claimed while other targets' sets are IN FLIGHT can
+        // be written without touching them (VUID-…-03047 is a scar here).
         void writeSets(Cloud& c);
+        void writeSets(Cloud& c, uint32_t target);
+        // rangeBuf_ is sized from the tile grid, and the targets do not share
+        // an extent — so it is sized to the largest CLAIMED one.
+        void resizeTileRange();
         void uploadCloud(Cloud& c, const SplatCloud& src);
         // Everything a resident cloud owns. Three sites destroy clouds (the
         // destructor, retireStale, and syncClouds' recycled-address branch) and

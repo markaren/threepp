@@ -125,10 +125,7 @@ changing what a tile fetches.
 ## Out of scope, on purpose
 
 Splats cast no shadows, contribute to no probe GI, do not participate in
-froxel fog or MSAA, and are invisible to the RT sensors. Secondary views
-(`addView`) skip the pass entirely rather than paint splats into a sensor AOV
-nobody asked for — and the sensor-only proxy mesh below is symmetric about it:
-a secondary view rasterizes that mesh only when it explicitly asks.
+froxel fog or MSAA, and are invisible to the RT sensors.
 
 Reflections left this list on purpose: each cloud upload also bakes a small
 rgba16f density/radiance volume, and the deferred shade's traced reflection
@@ -159,15 +156,59 @@ list is already a per-consumer choice: whoever calls `scanLidar` asked for
 those beams.
 
 What that does NOT breach, and the reason the wording above is "through a
-proxy": no sensor sees the splats. It sees a mesh baked from them, at voxel
-resolution, with no colour — RGB sensor imagery of a scan still needs the real
-rasterizer per sensor view and is still out of scope. The splat pass remains
-primary-only and in no acceleration structure. The primary camera never
+proxy": no sensor TRACE sees the splats. It sees a mesh baked from them, at
+voxel resolution, with no colour. An RGB view that wants the real thing takes
+the raster instead — `setViewSplats`, below. The splat pass remains absent from
+every acceleration structure. The primary camera never
 rasterizes a sensor-only mesh and no radiance trace — reflection, refraction,
 shadow, GI, emissive NEE — carries it in its cull mask, so the picture stays
 the splats' own. And the opt-in defaults OFF: until it is taken, the mesh's
 TLAS instance carries mask 0, nothing renders or senses it, and a scene that
 never asks is byte-unchanged.
+
+## Splats in a secondary view (`setViewSplats`, off by default)
+
+The splat pass was PRIMARY-ONLY, and the reason was cost rather than
+correctness: the radix sort scales with SPLAT COUNT, not view size, so a
+640x480 sensor on the 5M-splat town pays the same 8-13 ms the primary does. The
+consequence was that an RGB `CameraSensor` — a secondary view — saw EMPTY SPACE
+where a scan stood, even after `bakeSurface` gave physics and lidar something to
+touch.
+
+That wall is now per view and opt-in:
+
+```cpp
+bool setViewSplats(uint32_t handle, bool enabled);// default false
+bool viewSplats(uint32_t handle) const;
+```
+
+On, the view composites every cloud with the SAME deterministic compute
+rasterizer the primary uses, at the same point in its own frame (linear HDR,
+before its bloom / tonemap / TAA tail). `SplatPass` grew a small TARGET table
+for it: slot 0 is the primary and the rest are handed to views that ask, each
+with its own extent, tile grid, descriptor sets and UBO region. They SHARE the
+sort scratch, which is safe for the same reason the pass already reuses it
+across clouds — the stages are separated by its own compute→compute barriers,
+and the targets record sequentially inside one command buffer.
+
+Measured (RTX 4070, `VulkanMultiView_test`, one 256x192 secondary view):
+
+| cloud | frame, flag off | frame, flag on | per-view splat cost |
+|---|---|---|---|
+| 60k splats | 2.40 ms | 5.05 ms | 2.66 ms |
+| 500k splats | 2.54 ms | 9.90 ms | 7.35 ms |
+
+The walls that stand. Default OFF for every view, so a scene that does not ask
+is byte-unchanged (asserted: the primary's own splat expansion is identical with
+a secondary opted in). The DEPTH AOV stays primary-only — a secondary view's AOV
+image is 1x1 by construction — and so does the debug checksum, which has one
+readback buffer per frame slot. At most three views may hold the flag at once; a
+fourth is refused on stderr. And the town-scale cost above is the CALLER's
+choice, which is why this is a per-view switch and not a renderer mode: a
+dynamic-LOD app can quarter it by submitting coarser chunks, but the submission
+ranges are per-CLOUD state (`SplatCloud::setSubmitRanges`), so today a secondary
+view draws whatever the app selected for the PRIMARY this frame. Per-view LOD
+selection is the follow-up, recorded in `plans/splat-surface-bake.md`.
 
 ## The depth AOV: expected and median
 

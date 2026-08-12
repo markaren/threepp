@@ -847,6 +847,30 @@ namespace threepp {
         bool setViewSensorSurfaces(uint32_t handle, bool enabled);
         [[nodiscard]] bool viewSensorSurfaces(uint32_t handle) const;
 
+        // Per-view permission to rasterize SplatClouds. OFF by default, for
+        // every view: the splat pass was primary-only until this existed, and
+        // the reason was cost, not correctness. The radix sort scales with
+        // SPLAT COUNT rather than view size, so an opted-in view is a second
+        // full sort — trivial on a 60k-splat object scan (~0.3 ms), ~8-13 ms on
+        // a 5M-splat town whatever the sensor's resolution. Which views can
+        // afford that is the caller's call, which is why this is per view.
+        //
+        // On, the view composites the clouds with the SAME deterministic
+        // compute rasterizer the primary uses, at the same point in its frame
+        // (linear HDR, before its bloom/tonemap/TAA tail) — an RGB CameraSensor
+        // pointed at a scan sees the scan. It draws what the app selected this
+        // frame: SplatCloud::setSubmitRanges is per-cloud state, so a
+        // dynamic-LOD app's secondary views inherit the PRIMARY's level
+        // selection rather than choosing their own.
+        //
+        // The splat depth AOV stays primary-only (a secondary view's AOV image
+        // is 1x1), and so does the debug checksum. False for an unknown handle,
+        // and for handle 0 — the primary always draws splats. At most
+        // three views may hold the flag at once; a fourth is refused on stderr
+        // and renders without splats. Takes effect at the next frame boundary.
+        bool setViewSplats(uint32_t handle, bool enabled);
+        [[nodiscard]] bool viewSplats(uint32_t handle) const;
+
         // Day-1 / debug visualization: blit one G-buffer channel to the swapchain.
         //   0 = off, 1 = normal, 2 = motion, 3 = instance id, 4 = albedo
         void setHybridDebugView(int view);

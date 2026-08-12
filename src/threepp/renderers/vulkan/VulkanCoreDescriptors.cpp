@@ -108,47 +108,74 @@ void VulkanRenderer::Impl::rewriteBloomDescriptors() {
                 dof_->resize(renderExtent().width, renderExtent().height, din);
             }
 
-            // Splats track the same lifetimes as DoF (sceneHdr, the raster
-            // depth, the render extent) and are primary-only for the same
-            // reason — see recordSplats.
-            if (splat_ && !view().secondary) {
-                std::array<VkImageView, kFramesInFlight> depthViews{};
-                std::array<VkImageView, kFramesInFlight> motionViews{};
-                std::array<VkImageView, kFramesInFlight> idsViews{};
-                std::array<VkImage, kFramesInFlight>     motionImgs{};
-                std::array<VkBuffer, kFramesInFlight>    fogBufs{};
-                std::array<VkBuffer, kFramesInFlight>    cloudBufs{};
-                std::array<VkBuffer, kFramesInFlight>    lightBufs{};
-                std::array<VkImageView, kFramesInFlight> splatDepthViews{};
-                std::array<VkImage, kFramesInFlight>     splatDepthImgs{};
-                for (uint32_t f = 0; f < kFramesInFlight; ++f) {
-                    depthViews[f]  = view().rasterGbufs[f].depth.view;
-                    motionViews[f] = view().rasterGbufs[f].motion.view;
-                    motionImgs[f]  = view().rasterGbufs[f].motion.image;
-                    idsViews[f]    = view().rasterGbufs[f].ids.view;
-                    splatDepthViews[f] = view().rasterGbufs[f].splatDepth.view;
-                    splatDepthImgs[f]  = view().rasterGbufs[f].splatDepth.image;
-                    fogBufs[f]     = fogUbos[f].handle;
-                    cloudBufs[f]   = cloudUbos[f].handle;
-                    lightBufs[f]   = lightsUbos[f].handle;
-                }
-                vulkan::SplatPass::ResizeInputs sin{};
-                sin.sceneHdrPerFrame = sceneViews.data();
-                sin.depthPerFrame    = depthViews.data();
-                sin.motionPerFrame   = motionViews.data();
-                sin.motionImages     = motionImgs.data();
-                sin.idsPerFrame      = idsViews.data();
-                sin.splatDepthPerFrame = splatDepthViews.data();
-                sin.splatDepthImages   = splatDepthImgs.data();
-                sin.fogUbos          = fogBufs.data();
-                sin.cloudUbos        = cloudBufs.data();
-                sin.lightsUbos       = lightBufs.data();
-                sin.envView          = envImage.view;
-                sin.envSampler       = envImage.sampler;
-                sin.envMips          = envImage.mipLevels;
-                splat_->resize(renderExtent().width, renderExtent().height, sin);
-            }
+            // Splats: this view's own target slot, pointed at this view's
+            // images. Not primary-only (unlike DoF above) — see
+            // ensureSplatTarget.
+            ensureSplatTarget();
 
+        }
+
+// A view's SplatPass target: claim a slot if this view asked for splats and has
+// none, then point it at this view's sceneHdr / G-buffer / AOV images.
+//
+// The primary is slot 0 and always has one. A secondary view claims one only
+// when setViewSplats(handle, true) was called on it, and keeps it for its
+// lifetime — turning the flag back off stops the recording, it does not return
+// the slot, because releasing one resizes the shared tile-range buffer and that
+// wants a drained device. Called from rewriteBloomDescriptors (the view's
+// images just changed) and from applyPendingViewChanges (the flag just
+// changed), both of which run post-fence with the device idle.
+void VulkanRenderer::Impl::ensureSplatTarget() {
+            if (!splat_ || !view().bloom_) return;
+            if (view().secondary && view().splats &&
+                view().splatTarget == vulkan::SplatPass::kNoTarget) {
+                view().splatTarget = splat_->acquireTarget();
+                if (view().splatTarget == vulkan::SplatPass::kNoTarget)
+                    std::cerr << "[threepp] setViewSplats: no free splat target ("
+                              << vulkan::SplatPass::kMaxTargets - 1
+                              << " secondary views already hold one); view "
+                              << view().id << " renders without splats" << std::endl;
+            }
+            const uint32_t splatTarget = view().secondary ? view().splatTarget : 0u;
+            if (splatTarget == vulkan::SplatPass::kNoTarget) return;
+
+            std::array<VkImageView, kFramesInFlight> sceneViews{};
+            std::array<VkImageView, kFramesInFlight> depthViews{};
+            std::array<VkImageView, kFramesInFlight> motionViews{};
+            std::array<VkImageView, kFramesInFlight> idsViews{};
+            std::array<VkImage, kFramesInFlight>     motionImgs{};
+            std::array<VkBuffer, kFramesInFlight>    fogBufs{};
+            std::array<VkBuffer, kFramesInFlight>    cloudBufs{};
+            std::array<VkBuffer, kFramesInFlight>    lightBufs{};
+            std::array<VkImageView, kFramesInFlight> splatDepthViews{};
+            std::array<VkImage, kFramesInFlight>     splatDepthImgs{};
+            for (uint32_t f = 0; f < kFramesInFlight; ++f) {
+                sceneViews[f]  = view().bloom_->sceneHdrView(f);
+                depthViews[f]  = view().rasterGbufs[f].depth.view;
+                motionViews[f] = view().rasterGbufs[f].motion.view;
+                motionImgs[f]  = view().rasterGbufs[f].motion.image;
+                idsViews[f]    = view().rasterGbufs[f].ids.view;
+                splatDepthViews[f] = view().rasterGbufs[f].splatDepth.view;
+                splatDepthImgs[f]  = view().rasterGbufs[f].splatDepth.image;
+                fogBufs[f]     = fogUbos[f].handle;
+                cloudBufs[f]   = cloudUbos[f].handle;
+                lightBufs[f]   = lightsUbos[f].handle;
+            }
+            vulkan::SplatPass::ResizeInputs sin{};
+            sin.sceneHdrPerFrame = sceneViews.data();
+            sin.depthPerFrame    = depthViews.data();
+            sin.motionPerFrame   = motionViews.data();
+            sin.motionImages     = motionImgs.data();
+            sin.idsPerFrame      = idsViews.data();
+            sin.splatDepthPerFrame = splatDepthViews.data();
+            sin.splatDepthImages   = splatDepthImgs.data();
+            sin.fogUbos          = fogBufs.data();
+            sin.cloudUbos        = cloudBufs.data();
+            sin.lightsUbos       = lightBufs.data();
+            sin.envView          = envImage.view;
+            sin.envSampler       = envImage.sampler;
+            sin.envMips          = envImage.mipLevels;
+            splat_->resize(renderExtent().width, renderExtent().height, sin, splatTarget);
         }
 
 void VulkanRenderer::Impl::rewriteDeferredDescriptors(int onlyFrame) {

@@ -263,8 +263,12 @@ namespace threepp::vulkan {
         uboBuf_.resize(framesInFlight_);
         debugBuf_.resize(framesInFlight_);
         for (uint32_t f = 0; f < framesInFlight_; ++f) {
+            // One region per (target, cloud): two views recording in the same
+            // frame write DIFFERENT matrices for the same cloud, host-side,
+            // before either dispatch executes — sharing a slot would hand both
+            // of them whichever view recorded last.
             uboBuf_[f] = createBuffer(ctx_.allocator(), ctx_.device(),
-                                      uboStride_ * kMaxClouds,
+                                      uboStride_ * kMaxClouds * kMaxTargets,
                                       VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
                                       VMA_MEMORY_USAGE_AUTO,
                                       VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT |
@@ -455,7 +459,7 @@ namespace threepp::vulkan {
     }
 
     void SplatPass::createDescriptorPool() {
-        const uint32_t sets = kMaxClouds * framesInFlight_;
+        const uint32_t sets = kMaxClouds * framesInFlight_ * kMaxTargets;
         VkDescriptorPoolSize sz[4]{};
         sz[0].type            = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
         sz[0].descriptorCount = sets * 4;// splat + fog + clouds + lights
@@ -832,16 +836,26 @@ namespace threepp::vulkan {
     }
 
     void SplatPass::writeSets(Cloud& c) {
+        for (uint32_t t = 0; t < kMaxTargets; ++t)
+            if (targets_[t].claimed) writeSets(c, t);
+    }
+
+    void SplatPass::writeSets(Cloud& c, uint32_t target) {
         // Every binding needs a real object: descriptorBindingPartiallyBound is
         // not enabled on this device, so a VK_NULL_HANDLE anywhere in the set
         // is a validation error, not a "don't sample it".
-        if (sceneHdrViews_.empty() || c.sets.empty() || envView_ == VK_NULL_HANDLE ||
+        if (target >= kMaxTargets) return;
+        const Target& tg = targets_[target];
+        if (tg.sceneHdrViews.empty() || c.sets.size() < (target + 1u) * framesInFlight_ ||
+            envView_ == VK_NULL_HANDLE ||
             fogUbos_.empty() || cloudUbos_.empty() || lightsUbos_.empty() ||
-            splatDepthViews_.empty())
+            tg.splatDepthViews.empty())
             return;
 
         for (uint32_t f = 0; f < framesInFlight_; ++f) {
-            VkDescriptorBufferInfo ubo{uboBuf_[f].handle, uboStride_ * c.slot, sizeof(SplatUboData)};
+            VkDescriptorBufferInfo ubo{uboBuf_[f].handle,
+                                       uboStride_ * (target * kMaxClouds + c.slot),
+                                       sizeof(SplatUboData)};
             const VkBuffer ssbo[13] = {
                     c.geom.handle, c.sh.handle, projBuf_.handle, countBuf_.handle,
                     offsetBuf_.handle, keyA_.handle, valA_.handle, keyB_.handle,
@@ -852,7 +866,7 @@ namespace threepp::vulkan {
             std::array<VkWriteDescriptorSet, kBindings> w{};
             for (uint32_t i = 0; i < kBindings; ++i) {
                 w[i].sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-                w[i].dstSet          = c.sets[f];
+                w[i].dstSet          = c.sets[target * framesInFlight_ + f];
                 w[i].dstBinding      = i;
                 w[i].descriptorCount = 1;
             }
@@ -864,11 +878,11 @@ namespace threepp::vulkan {
                 w[i + 1].pBufferInfo    = &bi[i];
             }
 
-            VkDescriptorImageInfo hdr{VK_NULL_HANDLE, sceneHdrViews_[f], VK_IMAGE_LAYOUT_GENERAL};
-            VkDescriptorImageInfo dep{sampler_, depthViews_[f],
+            VkDescriptorImageInfo hdr{VK_NULL_HANDLE, tg.sceneHdrViews[f], VK_IMAGE_LAYOUT_GENERAL};
+            VkDescriptorImageInfo dep{sampler_, tg.depthViews[f],
                                       VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL};
-            VkDescriptorImageInfo mot{VK_NULL_HANDLE, motionViews_[f], VK_IMAGE_LAYOUT_GENERAL};
-            VkDescriptorImageInfo ids{sampler_, idsViews_[f],
+            VkDescriptorImageInfo mot{VK_NULL_HANDLE, tg.motionViews[f], VK_IMAGE_LAYOUT_GENERAL};
+            VkDescriptorImageInfo ids{sampler_, tg.idsViews[f],
                                       VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
             w[14].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
             w[14].pImageInfo     = &hdr;
@@ -900,7 +914,7 @@ namespace threepp::vulkan {
             // and back around its copy. Full-res when the AOV is on, 1x1 when
             // it is off — either way a real image, which is what the opening
             // comment of this function is about.
-            VkDescriptorImageInfo sd{VK_NULL_HANDLE, splatDepthViews_[f],
+            VkDescriptorImageInfo sd{VK_NULL_HANDLE, tg.splatDepthViews[f],
                                      VK_IMAGE_LAYOUT_GENERAL};
             w[23].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
             w[23].pImageInfo     = &sd;
@@ -1110,13 +1124,19 @@ namespace threepp::vulkan {
                     c->slot = slotsUsed_++;
                     uploadCloud(*c, *e.cloud);
 
-                    std::vector<VkDescriptorSetLayout> layouts(framesInFlight_, dsLayout_);
+                    // One set per (target, frame-in-flight): a target's images
+                    // are its own, so the set that names them is too. Allocated
+                    // for every slot up front — the pool is sized for it and an
+                    // allocation is not where a view opting in later should
+                    // discover it came too late.
+                    const uint32_t nSets = framesInFlight_ * kMaxTargets;
+                    std::vector<VkDescriptorSetLayout> layouts(nSets, dsLayout_);
                     VkDescriptorSetAllocateInfo ai{};
                     ai.sType              = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
                     ai.descriptorPool     = descPool_;
-                    ai.descriptorSetCount = framesInFlight_;
+                    ai.descriptorSetCount = nSets;
                     ai.pSetLayouts        = layouts.data();
-                    c->sets.resize(framesInFlight_);
+                    c->sets.resize(nSets);
                     check(vkAllocateDescriptorSets(ctx_.device(), &ai, c->sets.data()),
                           "vkAllocateDescriptorSets(splat)");
                 }
@@ -1206,20 +1226,62 @@ namespace threepp::vulkan {
         }
     }
 
-    void SplatPass::resize(uint32_t width, uint32_t height, const ResizeInputs& in) {
+    uint32_t SplatPass::acquireTarget() {
+        // Slot 0 is the primary's for the pass's lifetime — never handed out.
+        for (uint32_t t = 1; t < kMaxTargets; ++t) {
+            if (targets_[t].claimed) continue;
+            targets_[t].claimed = true;
+            return t;
+        }
+        return kNoTarget;
+    }
+
+    void SplatPass::releaseTarget(uint32_t target) {
+        if (target == 0 || target >= kMaxTargets) return;
+        targets_[target] = Target{};
+        // The descriptor sets stay allocated and stay pointed at a dead view
+        // until the slot is claimed again, which is exactly when they are
+        // rewritten — nothing records against an unclaimed slot.
+        resizeTileRange();
+    }
+
+    bool SplatPass::targetValid(uint32_t target) const {
+        return target < kMaxTargets && targets_[target].claimed &&
+               targets_[target].width > 0 && !targets_[target].sceneHdrViews.empty();
+    }
+
+    void SplatPass::resizeTileRange() {
+        uint32_t tiles = 0;
+        for (const auto& t : targets_)
+            if (t.claimed) tiles = std::max(tiles, t.tilesX * t.tilesY);
+        if (tiles == 0) return;
+        const VkDeviceSize want = VkDeviceSize(tiles) * 8;
+        if (rangeBuf_.handle != VK_NULL_HANDLE && rangeBuf_.size >= want) return;
+        destroyBuffer(ctx_.allocator(), rangeBuf_);
+        rangeBuf_ = createBuffer(ctx_.allocator(), ctx_.device(), want,
+                                 VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
+                                         VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+                                 VMA_MEMORY_USAGE_AUTO);
+        ctx_.setObjectName(rangeBuf_.handle, "splat.tileRange");
+    }
+
+    void SplatPass::resize(uint32_t width, uint32_t height, const ResizeInputs& in,
+                           uint32_t target) {
         if (!in.sceneHdrPerFrame || !in.depthPerFrame) return;
+        if (target >= kMaxTargets) return;
+        Target& tg = targets_[target];
+        tg.claimed = true;
 
         const uint32_t tx = divUp(std::max(width, 1u), kTileW);
         const uint32_t ty = divUp(std::max(height, 1u), kTileH);
-        const bool sameExtent = (width == width_ && height == height_);
 
-        width_  = width;
-        height_ = height;
-        tilesX_ = tx;
-        tilesY_ = ty;
+        tg.width  = width;
+        tg.height = height;
+        tg.tilesX = tx;
+        tg.tilesY = ty;
 
-        sceneHdrViews_.assign(in.sceneHdrPerFrame, in.sceneHdrPerFrame + framesInFlight_);
-        depthViews_.assign(in.depthPerFrame, in.depthPerFrame + framesInFlight_);
+        tg.sceneHdrViews.assign(in.sceneHdrPerFrame, in.sceneHdrPerFrame + framesInFlight_);
+        tg.depthViews.assign(in.depthPerFrame, in.depthPerFrame + framesInFlight_);
         if (in.fogUbos)    fogUbos_.assign(in.fogUbos, in.fogUbos + framesInFlight_);
         if (in.cloudUbos)  cloudUbos_.assign(in.cloudUbos, in.cloudUbos + framesInFlight_);
         if (in.lightsUbos) lightsUbos_.assign(in.lightsUbos, in.lightsUbos + framesInFlight_);
@@ -1228,40 +1290,35 @@ namespace threepp::vulkan {
             envSampler_ = in.envSampler;
             envMips_    = std::max(in.envMips, 1u);
         }
-        if (in.motionPerFrame) motionViews_.assign(in.motionPerFrame, in.motionPerFrame + framesInFlight_);
-        else                   motionViews_ = sceneHdrViews_;
-        if (in.motionImages) motionImages_.assign(in.motionImages, in.motionImages + framesInFlight_);
-        else                 motionImages_.assign(framesInFlight_, VK_NULL_HANDLE);
-        if (in.idsPerFrame) idsViews_.assign(in.idsPerFrame, in.idsPerFrame + framesInFlight_);
-        else                idsViews_ = depthViews_;
+        if (in.motionPerFrame) tg.motionViews.assign(in.motionPerFrame, in.motionPerFrame + framesInFlight_);
+        else                   tg.motionViews = tg.sceneHdrViews;
+        if (in.motionImages) tg.motionImages.assign(in.motionImages, in.motionImages + framesInFlight_);
+        else                 tg.motionImages.assign(framesInFlight_, VK_NULL_HANDLE);
+        if (in.idsPerFrame) tg.idsViews.assign(in.idsPerFrame, in.idsPerFrame + framesInFlight_);
+        else                tg.idsViews = tg.depthViews;
         // No fallback to another image here, the way motion/ids fall back
         // above: binding 23 is declared r32f and those are not, and a storage
         // image whose view format disagrees with the shader's format qualifier
         // is undefined behaviour rather than a wasted write. Without a real
         // image the sets simply are not written (writeSets returns early).
         if (in.splatDepthPerFrame) {
-            splatDepthViews_.assign(in.splatDepthPerFrame, in.splatDepthPerFrame + framesInFlight_);
+            tg.splatDepthViews.assign(in.splatDepthPerFrame, in.splatDepthPerFrame + framesInFlight_);
         } else {
-            splatDepthViews_.clear();
+            tg.splatDepthViews.clear();
         }
         if (in.splatDepthImages) {
-            splatDepthImages_.assign(in.splatDepthImages, in.splatDepthImages + framesInFlight_);
+            tg.splatDepthImages.assign(in.splatDepthImages, in.splatDepthImages + framesInFlight_);
         } else {
-            splatDepthImages_.assign(framesInFlight_, VK_NULL_HANDLE);
+            tg.splatDepthImages.assign(framesInFlight_, VK_NULL_HANDLE);
         }
 
-        if (!sameExtent || rangeBuf_.handle == VK_NULL_HANDLE) {
-            destroyBuffer(ctx_.allocator(), rangeBuf_);
-            rangeBuf_ = createBuffer(ctx_.allocator(), ctx_.device(),
-                                     VkDeviceSize(tx) * ty * 8,
-                                     VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
-                                             VK_BUFFER_USAGE_TRANSFER_DST_BIT,
-                                     VMA_MEMORY_USAGE_AUTO);
-            ctx_.setObjectName(rangeBuf_.handle, "splat.tileRange");
-        }
+        resizeTileRange();
         if (maxSplats_ == 0) allocateScratch(1, kEntriesPerSplat);
 
-        for (auto& kv : resident_) writeSets(*kv.second);
+        // This target's sets only: the others may be in flight, and every call
+        // site that legitimately rewrites them all (upload, env swap) has its
+        // own drained-device argument.
+        for (auto& kv : resident_) writeSets(*kv.second, target);
     }
 
     void SplatPass::barrierIndirect(VkCommandBuffer cb) const {
@@ -1330,8 +1387,10 @@ namespace threepp::vulkan {
     }
 
     void SplatPass::clearDepthAov(VkCommandBuffer cb, uint32_t frame) {
-        if (frame >= splatDepthImages_.size()) return;
-        const VkImage img = splatDepthImages_[frame];
+        // Primary target only — the AOV is primary-only by scope, and a
+        // secondary view's AOV image is 1x1 by construction.
+        if (frame >= targets_[0].splatDepthImages.size()) return;
+        const VkImage img = targets_[0].splatDepthImages[frame];
         if (img == VK_NULL_HANDLE) return;
 
         // Zero is "no cloud owns this pixel" — the sentinel the raster's
@@ -1364,6 +1423,8 @@ namespace threepp::vulkan {
 
     void SplatPass::record(VkCommandBuffer cb, uint32_t frame, const RecordParams& p) {
         if (frameClouds_.empty() || !valid()) return;
+        if (!targetValid(p.target)) return;
+        const Target& tg = targets_[p.target];
         lastFrame_ = frame;
 
         // Debug hashes cost a full extra pass over the key list and an atomic
@@ -1414,8 +1475,8 @@ namespace threepp::vulkan {
             u.camFwdWs[0] = p.camFwd[0];
             u.camFwdWs[1] = p.camFwd[1];
             u.camFwdWs[2] = p.camFwd[2];
-            u.viewport[0] = static_cast<float>(width_);
-            u.viewport[1] = static_cast<float>(height_);
+            u.viewport[0] = static_cast<float>(tg.width);
+            u.viewport[1] = static_cast<float>(tg.height);
             u.focal[0]    = 0.5f * u.viewport[0] * p.proj[0];
             u.focal[1]    = 0.5f * u.viewport[1] * p.proj[5];
             u.percentile[0] = fc.pLo;
@@ -1437,9 +1498,9 @@ namespace threepp::vulkan {
             }
             u.shCoeffs    = c.shCoeffs;
             u.shDegree    = c.shDegree;
-            u.tilesX      = tilesX_;
-            u.tilesY      = tilesY_;
-            u.tileBits    = tileBitsFor(tilesX_ * tilesY_);
+            u.tilesX      = tg.tilesX;
+            u.tilesY      = tg.tilesY;
+            u.tileBits    = tileBitsFor(tg.tilesX * tg.tilesY);
             u.depthBits   = 32u - u.tileBits;
             u.budget      = entryBudget_;
             u.flags       = (p.orthographic ? kSplatFlagOrtho : 0u) |
@@ -1451,17 +1512,17 @@ namespace threepp::vulkan {
                       (p.fog ? kSplatFlagFog : 0u) |
                       // Belt and braces: without a real image bound the sets
                       // were never written, so the flag must not be set either.
-                      (p.depthAov && !splatDepthViews_.empty() ? kSplatFlagDepthAov : 0u) |
+                      (p.depthAov && !tg.splatDepthViews.empty() ? kSplatFlagDepthAov : 0u) |
                       (p.depthMedian ? kSplatFlagDepthMed : 0u);
 
+            const VkDeviceSize uboOff = uboStride_ * (p.target * kMaxClouds + c.slot);
             VmaAllocationInfo ui{};
             vmaGetAllocationInfo(ctx_.allocator(), uboBuf_[frame].alloc, &ui);
-            std::memcpy(static_cast<uint8_t*>(ui.pMappedData) + uboStride_ * c.slot, &u, sizeof(u));
-            flushHostWrites(ctx_.allocator(), uboBuf_[frame].alloc,
-                            uboStride_ * c.slot, sizeof(u));
+            std::memcpy(static_cast<uint8_t*>(ui.pMappedData) + uboOff, &u, sizeof(u));
+            flushHostWrites(ctx_.allocator(), uboBuf_[frame].alloc, uboOff, sizeof(u));
 
             vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_COMPUTE, pipeLayout_, 0, 1,
-                                    &c.sets[frame], 0, nullptr);
+                                    &c.sets[p.target * framesInFlight_ + frame], 0, nullptr);
 
             // ── clear the frame's GPU-owned state ────────────────────────────
             // minDistBits starts at +inf's bit pattern so the atomicMin has
@@ -1470,7 +1531,7 @@ namespace threepp::vulkan {
             g0[0] = 0x7F7FFFFFu;// FLT_MAX
             g0[1] = 0u;
             vkCmdUpdateBuffer(cb, globalBuf_.handle, 0, sizeof(g0), g0);
-            vkCmdFillBuffer(cb, rangeBuf_.handle, 0, VkDeviceSize(tilesX_) * tilesY_ * 8, 0u);
+            vkCmdFillBuffer(cb, rangeBuf_.handle, 0, VkDeviceSize(tg.tilesX) * tg.tilesY * 8, 0u);
             barrier(cb);
 
             const uint32_t radixBlocks = divUp(entryBudget_, kRadixBlock);
@@ -1598,7 +1659,7 @@ namespace threepp::vulkan {
             // flip it back — leaving it in GENERAL would be a silent lie to
             // every consumer downstream that samples it in the layout the
             // render pass promised.
-            const bool flipMotion = p.motionVectors && motionImages_[frame] != VK_NULL_HANDLE;
+            const bool flipMotion = p.motionVectors && tg.motionImages[frame] != VK_NULL_HANDLE;
             auto motionLayout = [&](VkImageLayout from, VkImageLayout to,
                                     VkAccessFlags2 srcAccess, VkAccessFlags2 dstAccess) {
                 VkImageMemoryBarrier2 b{};
@@ -1612,7 +1673,7 @@ namespace threepp::vulkan {
                 b.newLayout     = to;
                 b.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
                 b.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-                b.image         = motionImages_[frame];
+                b.image         = tg.motionImages[frame];
                 b.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
                 b.subresourceRange.levelCount = 1;
                 b.subresourceRange.layerCount = 1;
@@ -1631,7 +1692,7 @@ namespace threepp::vulkan {
             vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, rasterPipe_);
             pc = {0, 0, 0, 0, 0, 0, 0, 0};
             vkCmdPushConstants(cb, pipeLayout_, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(pc), &pc);
-            vkCmdDispatch(cb, tilesX_, tilesY_, 1);
+            vkCmdDispatch(cb, tg.tilesX, tg.tilesY, 1);
             barrier(cb);
             stageEnd(TP_SplatRaster);
             stagesWritten = stagesWritten || timing;
@@ -1641,8 +1702,16 @@ namespace threepp::vulkan {
                              VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
                              VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
 
-            VkBufferCopy copy{0, 0, kGlobalWords * sizeof(uint32_t)};
-            vkCmdCopyBuffer(cb, globalBuf_.handle, debugBuf_[frame].handle, 1, &copy);
+            // PRIMARY TARGET ONLY. One readback buffer per frame slot, and a
+            // secondary view records into the same one AFTER the primary — so
+            // without this gate readDebug()/lastOverflow() would describe
+            // whichever view happened to record last the moment any view opted
+            // into splats, which is a silent change to what an existing test
+            // measures.
+            if (p.target == 0) {
+                VkBufferCopy copy{0, 0, kGlobalWords * sizeof(uint32_t)};
+                vkCmdCopyBuffer(cb, globalBuf_.handle, debugBuf_[frame].handle, 1, &copy);
+            }
         }
     }
 

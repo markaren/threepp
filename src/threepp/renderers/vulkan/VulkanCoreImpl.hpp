@@ -3649,6 +3649,7 @@ namespace threepp {
         // the raster's sub-pixel jitter, which is only decided later (in
         // uploadRasterCameraUbo) and is folded in here.
         void recordSplats(VkCommandBuffer cb);
+        void recordSecondaryViewSplats(VkCommandBuffer cb);
 
         // Line geometry cache for the 3D hybrid overlay (recordCommandBuffer's
         // line-draw section). Keyed on raw BufferGeometry*; geomId in LineRec
@@ -3711,6 +3712,7 @@ namespace threepp {
         // sky bypass, writes the per-frame TAA input). Call after bloom_->
         // createImages OR after the gbuffer / TAA images are reallocated.
         void rewriteBloomDescriptors();
+        void ensureSplatTarget();
 
         // Raster-first deferred shade reads the camera + lights UBOs, the env
         // PMREM, the raster material G-buffer (normal+rough / albedo+metal /
@@ -4211,6 +4213,7 @@ namespace threepp {
         // next frame with nothing to invalidate. The lidar's TLAS masks are a
         // separate, scene-level decision (sensorOnlySurfaces_).
         bool setViewSensorSurfacesImpl(uint32_t handle, bool enabled);
+        bool setViewSplatsImpl(uint32_t handle, bool enabled);
         // Copy a secondary view's finished colour target to host memory as
         // tightly-packed RGB8, top-down (matching readRGBPixels — the Vulkan
         // readback is already top-down and must NOT be flipped).
