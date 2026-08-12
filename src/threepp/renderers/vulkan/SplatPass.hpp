@@ -79,8 +79,11 @@
 // scan can now return LIDAR RANGES AND SENSOR DEPTH, through a proxy.
 // threepp::splats::bakeSurface fuses that median depth into a triangle mesh,
 // splats::makeSensorMesh marks it VulkanRenderer::kSensorOnlyLayer, and
-// setSensorOnlySurfaces(true) lets the scene's lidar beams and secondary
-// views perceive it. The walls that still stand: no sensor sees the SPLATS —
+// setSensorOnlySurfaces(true) lets the scene's lidar beams perceive it — plus
+// the secondary views that ASK, one by one (setViewSensorSurfaces), because an
+// RGB camera preview and an editor viewport pane are secondary views too and
+// the shell must not stand in front of the splats there. The walls that still
+// stand: no sensor sees the SPLATS —
 // what it sees is a mesh baked from them, at voxel resolution, with no colour;
 // the splat pass is still primary-only and still absent from every
 // acceleration structure; and the opt-in defaults OFF, with the mesh's TLAS

@@ -374,7 +374,9 @@ int main(int argc, char** argv) {
     // ── 5. the sensor world (P2) ────────────────────────────────────────────
     // The baked plane joins the scene as a sensor-only mesh. The primary camera
     // must not see it (the splats are what renders there), a lidar beam and a
-    // secondary depth view must — and only once the scene opts in.
+    // secondary depth view must — and only once the scene opts in AND, on the
+    // raster side, that view asks. A second secondary view at the same pose is
+    // the control for the per-view half: it never asks and must stay blind.
     {
         auto camera = PerspectiveCamera::create(55.f, float(kW) / float(kH), 0.1f, 100.f);
         camera->position.set(0.f, 2.2f, 3.2f);
@@ -391,6 +393,14 @@ int main(int argc, char** argv) {
         draw(1);// addView needs a rendered frame to share pipelines with
         const uint32_t viewH = renderer.addView(*depthCam, 256, 256);
         report(viewH != 0u, "the depth sensor view attaches");
+        // The control for the per-view rule: same camera, same size, same
+        // frame — everything about it equals the depth view except that it
+        // never asks for sensor surfaces. This is the RGB camera preview and
+        // the editor viewport pane, both of which are secondary views too.
+        const uint32_t rgbH = renderer.addView(*depthCam, 256, 256);
+        report(rgbH != 0u && rgbH != viewH, "an RGB preview view attaches alongside it");
+        report(renderer.setViewSensorSurfaces(viewH, true) && !renderer.setViewSensorSurfaces(0u, true),
+               "the depth view can ask for sensor surfaces; the primary cannot");
 
         draw(8);
         const auto imgA = renderer.readRGBPixels();
@@ -420,7 +430,9 @@ int main(int argc, char** argv) {
             if (r.returnNo > 0) ++hitsOff;
         double depthOff = viewCentreDistance(renderer, viewH);
         report(hitsOff == 0, "not opted in: the lidar sees nothing where the surface is");
-        report(depthOff == 0.0, "not opted in: the depth view sees nothing there either");
+        // The view asked and the scene did not: the master is a veto, not a
+        // default the flag can override.
+        report(depthOff == 0.0, "not opted in: even a flagged depth view sees nothing there");
 
         // Opted in.
         renderer.setSensorOnlySurfaces(true);
@@ -438,22 +450,27 @@ int main(int argc, char** argv) {
         }
         const double depthOn = viewCentreDistance(renderer, viewH);
         const double depthErr = std::abs(depthOn - (2.0 - planeY));
+        // Same instant, same pose, same size — only the flag differs.
+        const double depthRgb = viewCentreDistance(renderer, rgbH);
 
         std::printf("       lidar %zu/%zu beams return, max |range - (2 - %.4f)| %.4f  (voxel %.3f)\n",
                     hits, beams.size(), planeY, rangeErr, kVoxel);
-        std::printf("       depth view centre %.4f vs %.4f -> err %.4f;  off %.4f\n",
-                    depthOn, 2.0 - planeY, depthErr, depthOff);
+        std::printf("       depth view centre %.4f vs %.4f -> err %.4f;  off %.4f;  unflagged view %.4f\n",
+                    depthOn, 2.0 - planeY, depthErr, depthOff, depthRgb);
         std::printf("       primary maxDelta: control %d, mesh-off %d, mesh-on %d\n",
                     noise, deltaOff, deltaOn);
 
         report(hits == beams.size() && rangeErr < kVoxel,
                "opted in: every beam returns the baked plane's range, within a voxel");
         report(depthOn > 0.0 && depthErr < kVoxel,
-               "opted in: the depth view sees the plane at the right distance");
+               "opted in: the flagged depth view sees the plane at the right distance");
+        report(depthRgb == 0.0,
+               "and the unflagged view beside it sees nothing, same instant and pose");
         report(deltaOn <= noise && deltaOff <= noise,
                "and the primary image is unchanged by the mesh, opted in or not");
 
         renderer.setSensorOnlySurfaces(false);
+        renderer.removeView(rgbH);
         renderer.removeView(viewH);
         scene->remove(*surface);
     }

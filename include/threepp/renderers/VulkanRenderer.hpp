@@ -813,17 +813,39 @@ namespace threepp {
         // primary view never rasterizes it, no radiance trace — reflection,
         // refraction, shadow, GI, emissive NEE — has it in its cull mask, and
         // it does not move the GI probe grid. What setSensorOnlySurfaces(true)
-        // then adds is PERCEPTION: secondary views (addView — a depth sensor's
-        // G-buffer) rasterize it, and scanLidar's beams hit it. OFF, the
+        // then adds is PERCEPTION: scanLidar's beams hit it, and the secondary
+        // views that ASK for it (setViewSensorSurfaces) rasterize it. OFF, the
         // default, its TLAS instance carries mask 0 and nothing at all sees
         // it — a scene that never opts in senses and renders exactly as it did
         // before the feature existed.
         //
-        // Scene-wide, not per-sensor: every secondary view sees the surface
-        // once the scene opts in.
+        // This bool is the scene master. On the RASTER side it is necessary
+        // and not sufficient: see setViewSensorSurfaces. On the LIDAR side it
+        // is the whole decision, because a beam list is already a per-consumer
+        // choice — whoever calls scanLidar asked for those beams.
         static constexpr unsigned kSensorOnlyLayer = 31u;
         void setSensorOnlySurfaces(bool enabled);
         [[nodiscard]] bool sensorOnlySurfaces() const;
+
+        // Per-view raster permission for sensor-only surfaces. OFF by default,
+        // for every view, because "secondary" does not mean "sensor": an RGB
+        // camera preview (CameraSensor) and an editor viewport pane are
+        // addView views too, and a bake shell standing untextured in front of
+        // the splats it approximates is a defect in both. A DEPTH consumer —
+        // one reading GBufferAOV::Depth off this view — is the caller that
+        // should turn it on.
+        //
+        // A view rasterizes the surface only if this is set AND the scene
+        // called setSensorOnlySurfaces(true). Raster state only: it takes
+        // effect on the next render and invalidates nothing. False for an
+        // unknown handle, and for handle 0 — the primary never draws sensor
+        // surfaces at all.
+        //
+        // A view that serves BOTH RGB and depth for one sensor cannot have it
+        // both ways; leave it off (the picture stays honest) and read depth
+        // from a lidar scan or a second view.
+        bool setViewSensorSurfaces(uint32_t handle, bool enabled);
+        [[nodiscard]] bool viewSensorSurfaces(uint32_t handle) const;
 
         // Day-1 / debug visualization: blit one G-buffer channel to the swapchain.
         //   0 = off, 1 = normal, 2 = motion, 3 = instance id, 4 = albedo

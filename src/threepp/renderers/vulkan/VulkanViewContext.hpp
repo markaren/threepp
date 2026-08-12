@@ -178,6 +178,15 @@ namespace threepp::vulkan::impl {
         // upload and a texture.
         bool    displayed = false;
         int32_t dispX = 0, dispY = 0;
+        // May this view rasterize sensor-only surfaces (meshes on
+        // VulkanRenderer::kSensorOnlyLayer)? A DEPTH sensor's view wants them;
+        // an RGB camera preview and an editor viewport pane must never show
+        // them — they are untextured bake shells standing in front of the
+        // splat cloud they approximate. Both are secondary views, so
+        // `secondary` cannot be the gate and this flag is. Default off: a view
+        // sees them only if it asks AND the scene opted in
+        // (Impl::sensorOnlySurfaces_).
+        bool    sensorSurfaces = false;
         // Zero means "this view's own size" — the copy path is a straight
         // vkCmdCopyImage then, with no filtering to argue about.
         int32_t dispW = 0, dispH = 0;

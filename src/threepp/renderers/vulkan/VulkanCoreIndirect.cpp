@@ -180,10 +180,13 @@ namespace threepp {
         for (size_t i = 0; i < lastVisibleEntries_.size(); ++i) {
             const auto& en = lastVisibleEntries_[i];
             if (en.isOverlay)  continue;
-            // Sensor-only surfaces rasterize into SECONDARY views (a depth
-            // sensor's G-buffer) and never into the primary, whose picture of
-            // the same scan is the splat rasterizer's. Off ⇒ no view draws it.
-            if (en.sensorOnly && !(sensorOnlySurfaces_ && view().secondary)) continue;
+            // Sensor-only surfaces rasterize into the secondary views that ASK
+            // (setViewSensorSurfaces — a depth sensor's G-buffer) and never
+            // into the primary, whose picture of the same scan is the splat
+            // rasterizer's. Per view, because an RGB camera preview and an
+            // editor viewport pane are secondary views too and must not show
+            // the bake shell. Scene opt-in off ⇒ no view draws it.
+            if (en.sensorOnly && !(sensorOnlySurfaces_ && view().secondary && view().sensorSurfaces)) continue;
             if (!viewCulled(i)) continue;
             if (en.mesh != memoMesh) {
                 memoMesh     = en.mesh;

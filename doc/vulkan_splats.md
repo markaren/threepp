@@ -127,7 +127,8 @@ changing what a tile fetches.
 Splats cast no shadows, contribute to no probe GI, do not participate in
 froxel fog or MSAA, and are invisible to the RT sensors. Secondary views
 (`addView`) skip the pass entirely rather than paint splats into a sensor AOV
-nobody asked for.
+nobody asked for — and the sensor-only proxy mesh below is symmetric about it:
+a secondary view rasterizes that mesh only when it explicitly asks.
 
 Reflections left this list on purpose: each cloud upload also bakes a small
 rgba16f density/radiance volume, and the deferred shade's traced reflection
@@ -143,8 +144,19 @@ the pass: `threepp::splats::bakeSurface` fuses the median-depth AOV below into
 a triangle mesh, `splats::makeSensorMesh` marks that mesh
 `VulkanRenderer::kSensorOnlyLayer`, and
 `VulkanRenderer::setSensorOnlySurfaces(true)` lets the scene's lidar beams hit
-it and its secondary views rasterize it — measured at 3.4 mm of range error
-against a 5 cm-voxel bake of a synthetic plane (`VulkanSplatSurface_test`).
+it — measured at 3.4 mm of range error against a 5 cm-voxel bake of a synthetic
+plane (`VulkanSplatSurface_test`).
+
+**Raster visibility is PER VIEW, and off by default.** "Secondary view" is not
+a synonym for "sensor": an RGB camera preview (`CameraSensor`) and an editor
+viewport pane are `addView` views too, and an untextured bake shell standing in
+front of the cloud it approximates is a defect in both. So a secondary view
+rasterizes sensor-only meshes only if it asked —
+`setViewSensorSurfaces(handle, true)`, the caller reading depth off that
+view — AND the scene master above is on. Both conditions, no exceptions, and no
+view is granted it implicitly. The lidar side stays scene-level because a beam
+list is already a per-consumer choice: whoever calls `scanLidar` asked for
+those beams.
 
 What that does NOT breach, and the reason the wording above is "through a
 proxy": no sensor sees the splats. It sees a mesh baked from them, at voxel

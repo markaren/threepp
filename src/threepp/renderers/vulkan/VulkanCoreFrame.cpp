@@ -1718,6 +1718,15 @@ void VulkanRenderer::Impl::recordSecondaryViews(VkCommandBuffer cb) {
             curView_         = views_[0].get();
         }
 
+bool VulkanRenderer::Impl::setViewSensorSurfacesImpl(uint32_t handle, bool enabled) {
+            ViewContext* v = findView(handle);
+            // The primary never rasterizes sensor-only geometry, so there is no
+            // handle 0 case to grant: refuse rather than pretend.
+            if (!v || !v->secondary) return false;
+            v->sensorSurfaces = enabled;
+            return true;
+        }
+
 bool VulkanRenderer::Impl::setViewDisplayRectImpl(uint32_t handle, int x, int y, int w, int h) {
             ViewContext* v = findView(handle);
             if (!v || !v->secondary) return false;

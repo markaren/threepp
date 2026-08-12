@@ -166,9 +166,11 @@ namespace threepp::splats {
     // ordinary Mesh (world-space vertices, so add it at the scene root, not
     // under the cloud) marked with VulkanRenderer::kSensorOnlyLayer. The
     // primary camera never draws it — the real splats render there — and no
-    // radiance trace can see it; the scene's lidar and its depth views can,
-    // once the scene calls VulkanRenderer::setSensorOnlySurfaces(true). Until
-    // it does, the mesh is inert: nothing renders it and nothing senses it.
+    // radiance trace can see it; the scene's lidar can, once the scene calls
+    // VulkanRenderer::setSensorOnlySurfaces(true), and so can any secondary
+    // view that also asks with VulkanRenderer::setViewSensorSurfaces (a depth
+    // consumer; an RGB preview leaves it off). Until the scene opts in, the
+    // mesh is inert: nothing renders it and nothing senses it.
     //
     // The layer is set EXCLUSIVELY (Layers::set), which is also what keeps the
     // GL renderer — which honours camera-vs-object layers — from drawing it to

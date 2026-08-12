@@ -2109,6 +2109,15 @@ namespace threepp {
         return core()->sensorOnlySurfaces_;
     }
 
+    bool VulkanRenderer::setViewSensorSurfaces(uint32_t handle, bool enabled) {
+        return core()->setViewSensorSurfacesImpl(handle, enabled);
+    }
+
+    bool VulkanRenderer::viewSensorSurfaces(uint32_t handle) const {
+        auto* v = const_cast<Impl*>(core())->findView(handle);
+        return v && v->secondary && v->sensorSurfaces;
+    }
+
     void VulkanRenderer::setHybridDebugView(int view) {
         using V = Impl::HybridDebugView;
         switch (view) {

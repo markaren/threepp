@@ -2088,6 +2088,8 @@ namespace threepp {
         // no raster in any view, TLAS instance mask 0 — so a scene that never
         // opts in senses and renders exactly as it did before the feature
         // existed. Toggling it clears sceneBuilt_: the masks live in the TLAS.
+        // ON is necessary and not sufficient on the raster side: a secondary
+        // view also has to ask (ViewContext::sensorSurfaces).
         bool sensorOnlySurfaces_ = false;
         // True when the scene has any content the post-TAA overlay pass will
         // draw this frame: an overlay-tagged mesh, or any Line/LineSegments/
@@ -4204,6 +4206,11 @@ namespace threepp {
         // sprites still draw on top.
         void recordViewComposite(VkCommandBuffer cb, uint32_t imageIndex);
         bool setViewDisplayRectImpl(uint32_t handle, int x, int y, int w, int h);
+        // Per-view permission to rasterize sensor-only surfaces. Raster state
+        // only — read while the draw list is built, so it takes effect on the
+        // next frame with nothing to invalidate. The lidar's TLAS masks are a
+        // separate, scene-level decision (sensorOnlySurfaces_).
+        bool setViewSensorSurfacesImpl(uint32_t handle, bool enabled);
         // Copy a secondary view's finished colour target to host memory as
         // tightly-packed RGB8, top-down (matching readRGBPixels — the Vulkan
         // readback is already top-down and must NOT be flipped).
