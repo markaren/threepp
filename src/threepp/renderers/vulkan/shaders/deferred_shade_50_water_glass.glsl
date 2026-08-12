@@ -110,6 +110,21 @@ vec3 shadeWater(vec3 P, vec3 N, vec3 V, MaterialDesc pm, int instIdx,
     }
 #endif
 
+    // ── SPLATS IN THE MIRROR ─────────────────────────────────────────────────
+    // Same argument, same ray, different medium: a SplatCloud is composited by
+    // SplatPass's tile rasterizer AFTER this shade, so the traced leg above
+    // cannot see it even in principle — and a cloud behind the camera, the case
+    // that motivates the whole design, is out of reach of any screen-space
+    // scheme. svLeg marches the volume SplatPass baked for exactly this
+    // (plans/splat-volume-reflections.md); flags bit 12 is the single uniform
+    // gate, set only for the PRIMARY view, so a splat-free scene — and every
+    // secondary/sensor view — runs the pre-change arithmetic textually.
+    if ((pc.flags & 4096u) != 0u) {
+        vec3 svEmis;
+        const float svT = svLeg(reflOrig, R, gTraceHitT > 0.0 ? gTraceHitT : 1e30, svEmis);
+        reflectColor = reflectColor * svT + svEmis;
+    }
+
     // Transmission, two terms:
     //
     // 1) ANALYTIC deep-water body — deliberately NOT a refraction ray for the
@@ -516,9 +531,22 @@ vec3 shadeGlass(vec3 P, vec3 N, vec3 V, MaterialDesc pm, vec3 albedo,
 
         // Reflection (sky + scene) — multi-bounce / recursive.
         const vec3 R = reflect(-V, Ns);
-        const vec3 reflectColor = traceRadiance(P + N * SHADOW_EPS, R, doShadows, maxLod, missLod, seed,
-                                                /*cheapHits=*/false,// glass shows hits SHARP — deterministic shading
-                                                /*probeHitFill=*/true);
+        const vec3 reflOrig = P + N * SHADOW_EPS;
+        // NOT const: the splat-volume leg below composites into it. Same value,
+        // same expression — the write is behind a uniform flag that is 0 on
+        // every splat-free scene.
+        vec3 reflectColor = traceRadiance(reflOrig, R, doShadows, maxLod, missLod, seed,
+                                          /*cheapHits=*/false,// glass shows hits SHARP — deterministic shading
+                                          /*probeHitFill=*/true);
+        // Splats in the mirror, the glass leg — the shadeWater block's twin, on
+        // this path's own origin/direction and bounded by its own traced hit
+        // distance. See that block for the argument; flags bit 12 is the same
+        // single uniform gate, primary view only.
+        if ((pc.flags & 4096u) != 0u) {
+            vec3 svEmis;
+            const float svT = svLeg(reflOrig, R, gTraceHitT > 0.0 ? gTraceHitT : 1e30, svEmis);
+            reflectColor = reflectColor * svT + svEmis;
+        }
 
         vec3 transmitColor;
         if (pm.thinWalled != 0) {

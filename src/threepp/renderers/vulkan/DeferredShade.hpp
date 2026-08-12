@@ -151,6 +151,18 @@ namespace threepp::vulkan {
             const VkImageView* particleDensityLin = nullptr;// [kMaxDensityFields]
             uint32_t           particleDensityCount = 0;    // == kMaxDensityFields
             const VkBuffer*    particleDensityUbo = nullptr;// [framesInFlight]
+            // Splat reflection volumes (bindings 70/71) —
+            // plans/splat-volume-reflections.md. A SECOND, parallel table to
+            // the density one above: a fixed-size array of rgba16f 3D images
+            // SplatPass baked once per cloud, LINEAR-sampled by svLeg on the
+            // water/glass reflection legs, plus the std140 UBO carrying each
+            // one's world→UVW matrix and conservative world AABB. Same
+            // always-bound / dummy-fill contract, and world-anchored the same
+            // way — the handles are shared by every view, and only the shade's
+            // flags bit 12 differs per view (splats stay invisible to sensors).
+            const VkImageView* splatVolume      = nullptr;// [kMaxSplatVolumes]
+            uint32_t           splatVolumeCount = 0;      // == kMaxSplatVolumes
+            const VkBuffer*    splatVolumeUbo   = nullptr;// [framesInFlight]
         };
         // onlyFrame >= 0 rewrites just that frame-in-flight slot's set (the
         // caller has fence-proven that slot is idle — used by the per-FIF
@@ -232,6 +244,18 @@ namespace threepp::vulkan {
             // scene without dust the term is an early return, not merely a
             // multiply by 1.
             bool particleDensity = false;
+            // A baked splat reflection volume is live this frame (flags bit 12).
+            // Gates the svLeg marches on the water and glass reflection legs.
+            //
+            // PRIMARY VIEW ONLY. The descriptors are world-anchored and shared
+            // across views harmlessly (exactly like the density table), but the
+            // FLAG is what turns the march on, and doc/vulkan_splats.md's scope
+            // wall says splats are invisible to the RT sensors and that
+            // secondary views skip the pass rather than paint splats into an
+            // AOV nobody asked for. A sensor's water reflection suddenly showing
+            // a cloud would be a silent scope change — so the caller clears this
+            // for every secondary view (VulkanRenderer.cpp, recordSceneDispatch).
+            bool splatVolume = false;
         };
         // Dispatch the deferred shade over the render extent.
         void recordDispatch(VkCommandBuffer cb, uint32_t frame, const DispatchParams& p);

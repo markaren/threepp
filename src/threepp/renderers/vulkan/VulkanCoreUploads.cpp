@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <cstdlib>// std::getenv / std::strtof (THREEPP_VK_SPLATVOL_SIGMA)
 #include <cstring>
 
 namespace threepp {
@@ -1948,6 +1949,213 @@ void VulkanRenderer::Impl::updateParticleDensityUbo(uint32_t frame) {
             // the others so they refresh at the top of their own frames.
             const uint64_t gen = particleFieldPass_->densityGeneration();
             if (particleDensityDescGen_[frame] != gen) {
+                for (uint32_t f = 0; f < kFramesInFlight; ++f)
+                    if (f != frame) deferredDescDirty_[f] = true;
+                forEachLiveView([&] { rewriteDeferredDescriptors(static_cast<int>(frame)); });
+            }
+        }
+
+// ── Splat reflection volumes (plans/splat-volume-reflections.md, Part 2) ─────
+// The two handles bindings 70/71 always name. The particle-density pair above,
+// copied — created once, never resized, and owned HERE rather than by SplatPass
+// for the same reason: the deferred descriptor sets are written before any
+// cloud exists and go on being written on every scene that never gets one.
+void VulkanRenderer::Impl::ensureSplatVolumeResources() {
+            if (splatVolumeUbos_[0].handle == VK_NULL_HANDLE) {
+                vulkan::SplatVolumeUboGpu zero{};
+                for (uint32_t f = 0; f < kFramesInFlight; ++f) {
+                    splatVolumeUbos_[f] = createBuffer(
+                            ctx->allocator(), ctx->device(), sizeof(zero),
+                            VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, VMA_MEMORY_USAGE_AUTO,
+                            VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT);
+                    // counts.x == 0 ⇒ svLeg returns EXACTLY 1.0 / vec3(0) before
+                    // a single cloud exists, so the very first frame is already
+                    // the splat-free answer rather than whatever VMA handed us.
+                    uploadHostVisible(ctx->allocator(), splatVolumeUbos_[f], &zero, sizeof(zero));
+                }
+            }
+            if (splatVolumeDummy_.image == VK_NULL_HANDLE) {
+                // rgba16f, matching the baked volumes — the array is one
+                // descriptor type and one format for live and unused slots
+                // alike. SAMPLED only: nothing ever writes this one.
+                splatVolumeDummy_ = createImage3D(
+                        1u, 1u, 1u, VK_FORMAT_R16G16B16A16_SFLOAT,
+                        VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT,
+                        "splatVolumeDummy (1x1x1, binding 70 placeholder)");
+                // GENERAL, matching what SplatPass::Cloud::volume declares for
+                // its whole life, and cleared to 0 so a slot that is bound but
+                // never written reads as "no cloud" rather than as uninitialised
+                // device memory. The shader never samples an unused slot
+                // (counts.x gates it), but a descriptor whose image has never
+                // been transitioned is a validation error the moment the set is
+                // bound — the particleDensityDummy_ contract, copied.
+                VkCommandBuffer cb = beginOneShot();
+                VkImageMemoryBarrier imb{};
+                imb.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+                imb.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+                imb.newLayout = VK_IMAGE_LAYOUT_GENERAL;
+                imb.srcAccessMask = 0;
+                imb.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+                imb.image = splatVolumeDummy_.image;
+                imb.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+                imb.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+                imb.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+                vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+                                     VK_PIPELINE_STAGE_TRANSFER_BIT,
+                                     0, 0, nullptr, 0, nullptr, 1, &imb);
+                VkClearColorValue zero{};
+                VkImageSubresourceRange range{VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+                vkCmdClearColorImage(cb, splatVolumeDummy_.image,
+                                     VK_IMAGE_LAYOUT_GENERAL, &zero, 1, &range);
+                endAndSubmitOneShot(cb);
+            }
+        }
+
+// The eight views binding 70 names right now. ONE producer for both consumers
+// (the descriptor write and the staleness key), so they cannot disagree.
+void VulkanRenderer::Impl::splatVolumeBindViews(
+        std::array<VkImageView, vulkan::kMaxSplatVolumes>& out) {
+            ensureSplatVolumeResources();
+            uint32_t n = 0;
+            if (splat_) {
+                for (const auto& v : splat_->volumeEntries()) {
+                    if (n >= vulkan::kMaxSplatVolumes) break;
+                    out[n++] = v.view;
+                }
+            }
+            for (uint32_t i = n; i < vulkan::kMaxSplatVolumes; ++i)
+                out[i] = splatVolumeDummy_.view;
+        }
+
+// FNV-1a over (generation, the eight bound handles). See the declaration for
+// why the handles and not the generation alone.
+uint64_t VulkanRenderer::Impl::splatVolumeBindKey() {
+            std::array<VkImageView, vulkan::kMaxSplatVolumes> views{};
+            splatVolumeBindViews(views);
+            uint64_t h = 0xcbf29ce484222325ull;
+            auto mix = [&h](uint64_t v) { h ^= v; h *= 0x100000001b3ull; };
+            mix(splat_ ? splat_->volumeGeneration() : 0ull);
+            for (VkImageView v : views) {
+                // memcpy, not a cast: a non-dispatchable handle is a pointer on
+                // 64-bit and a uint64_t on 32-bit, and only one of those casts
+                // compiles on each.
+                std::uint64_t raw = 0;
+                static_assert(sizeof(VkImageView) <= sizeof(raw));
+                std::memcpy(&raw, &v, sizeof(v));
+                mix(raw);
+            }
+            return h;
+        }
+
+// Publish this frame's splat volumes. O(volumes), post-fence / pre-record, and
+// after collectSplatClouds' syncClouds — which is what guarantees a cloud
+// uploaded this frame is already BAKED before the UBO names it.
+//
+// Everything the shader needs is composed HERE rather than there: worldToUvw is
+// an inverse, the world AABB is eight transformed corners, and both belong on
+// the host where they are paid once per volume per frame instead of once per
+// step per pixel.
+void VulkanRenderer::Impl::updateSplatVolumeUbo(uint32_t frame) {
+            splatVolumeActiveThisFrame_ = false;
+            if (!splat_) return;
+            ensureSplatVolumeResources();
+
+            // THREEPP_VK_SPLATVOL_SIGMA — the ONE calibration knob (an A/B
+            // lever, not authored data). Read once: it multiplies sigma at
+            // SAMPLE time, so a run must not be able to change it mid-flight and
+            // leave two frames disagreeing about the same cloud.
+            static const float sigmaScale = [] {
+                const char* e = std::getenv("THREEPP_VK_SPLATVOL_SIGMA");
+                if (!e || !*e) return 1.f;
+                const float v = std::strtof(e, nullptr);
+                return (std::isfinite(v) && v > 0.f) ? v : 1.f;
+            }();
+
+            vulkan::SplatVolumeUboGpu ubo{};
+            const auto entries = splat_->volumeEntries();
+            const uint32_t n = std::min<uint32_t>(
+                    static_cast<uint32_t>(entries.size()), vulkan::kMaxSplatVolumes);
+            // Unbound slots keep the zero-initialised matrices/boxes of the
+            // struct: the shader never indexes past counts.x, but a stale matrix
+            // in a slot a future frame promotes to live is exactly the class of
+            // bug that only shows up under churn (the density table's reason,
+            // verbatim).
+            for (uint32_t i = 0; i < n; ++i) {
+                const auto& e = entries[i];
+                Matrix4 model;
+                std::memcpy(model.elements.data(), e.model, 64);
+
+                // world -> UVW = boxNormalise(localBoxMin, localBoxSize) *
+                // inverse(model). The normalisation is folded in on the host so
+                // the per-step transform is one mat4 multiply.
+                Matrix4 inv;
+                inv.copy(model).invert();
+                Matrix4 norm;// identity by construction
+                for (int a = 0; a < 3; ++a) {
+                    const float s = (e.localBoxSize[a] > 0.f) ? e.localBoxSize[a] : 1.f;
+                    norm.elements[static_cast<size_t>(a * 5)]   = 1.f / s;// diag(a,a)
+                    norm.elements[static_cast<size_t>(12 + a)]  = -e.localBoxMin[a] / s;
+                }
+                Matrix4 worldToUvw;
+                worldToUvw.multiplyMatrices(norm, inv);
+                std::memcpy(ubo.worldToUvw[i], worldToUvw.elements.data(), 64);
+
+                // Conservative world AABB of the OBB: the 8 transformed corners.
+                // Only the interval clip uses it; the exact membership test is
+                // the in-UVW one the shader runs after the matrix, so "too big"
+                // costs steps outside the cloud and never a wrong pixel.
+                float mn[3] = {1e30f, 1e30f, 1e30f};
+                float mx[3] = {-1e30f, -1e30f, -1e30f};
+                const auto& m = model.elements;
+                for (int c = 0; c < 8; ++c) {
+                    const float lx = e.localBoxMin[0] + ((c & 1) ? e.localBoxSize[0] : 0.f);
+                    const float ly = e.localBoxMin[1] + ((c & 2) ? e.localBoxSize[1] : 0.f);
+                    const float lz = e.localBoxMin[2] + ((c & 4) ? e.localBoxSize[2] : 0.f);
+                    const float wx = m[0] * lx + m[4] * ly + m[8] * lz + m[12];
+                    const float wy = m[1] * lx + m[5] * ly + m[9] * lz + m[13];
+                    const float wz = m[2] * lx + m[6] * ly + m[10] * lz + m[14];
+                    mn[0] = std::min(mn[0], wx); mx[0] = std::max(mx[0], wx);
+                    mn[1] = std::min(mn[1], wy); mx[1] = std::max(mx[1], wy);
+                    mn[2] = std::min(mn[2], wz); mx[2] = std::max(mx[2], wz);
+                }
+                for (int a = 0; a < 3; ++a) {
+                    ubo.worldBoxMin[i][a] = mn[a];
+                    ubo.worldBoxMax[i][a] = mx[a];
+                }
+
+                // sigma is baked per LOCAL metre, so a scaled cloud needs it
+                // re-expressed per WORLD metre: divide by the uniform-equivalent
+                // scale s = cbrt(|det model3x3|). Exact for uniform scale, a
+                // stated approximation otherwise (the plan says so out loud).
+                const float det = m[0] * (m[5] * m[10] - m[9] * m[6]) -
+                                  m[4] * (m[1] * m[10] - m[9] * m[2]) +
+                                  m[8] * (m[1] * m[6] - m[5] * m[2]);
+                const float s = std::cbrt(std::fabs(det));
+                // A degenerate (zero-scale, mirrored-to-flat) matrix would make
+                // this Inf; 1.0 keeps the volume readable instead of poisoning
+                // every reflection that taps it.
+                ubo.params[i][0] = sigmaScale / ((std::isfinite(s) && s > 1e-6f) ? s : 1.f);
+            }
+            ubo.counts[0] = n;
+            uploadHostVisible(ctx->allocator(), splatVolumeUbos_[frame], &ubo, sizeof(ubo));
+            splatVolumeActiveThisFrame_ = n > 0;
+
+            // The bound volume LIST changed (a bake completed, a cloud stopped
+            // being visible, a cloud was freed): every view's set names the
+            // wrong views. Refresh THIS slot now — its fence has signaled,
+            // which is what makes the write legal — and mark the others so they
+            // refresh at the top of their own frames. Churn under promotion is
+            // the whole point: a cloud that appears and disappears rewrites two
+            // sets rather than stalling the device.
+            //
+            // Keyed on the HANDLES, not on volumeGeneration() alone — see
+            // splatVolumeBindKey. Dropping a hidden cloud's view here is what
+            // gives retireStale the framesInFlight+1 margin its own timing
+            // argument assumes; on the generation alone the set still named the
+            // view at the moment SplatPass destroyed it, which the validation
+            // gate reports as VUID-vkDestroyImageView-imageView-01026.
+            const uint64_t key = splatVolumeBindKey();
+            if (splatVolumeDescKey_[frame] != key) {
                 for (uint32_t f = 0; f < kFramesInFlight; ++f)
                     if (f != frame) deferredDescDirty_[f] = true;
                 forEachLiveView([&] { rewriteDeferredDescriptors(static_cast<int>(frame)); });

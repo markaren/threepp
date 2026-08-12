@@ -1264,6 +1264,19 @@ if (THREEPP_WITH_VULKAN)
         "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/splat_checksum.comp"
         kSplatChecksumCompSpv
         _splat_checksum_spv_h)
+    # Splat VOLUME BAKE — off the frame path entirely: one scatter + one resolve
+    # recorded inside SplatPass::uploadCloud's staging one-shot, voxelizing a
+    # rigid cloud once into the rgba16f medium that reflection legs march.
+    # Own descriptor set layout (shaders/splat_bake_common.glsl), nothing shared
+    # with the raster above. See plans/splat-volume-reflections.md.
+    compile_vulkan_shader(threepp
+        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/splat_bake_scatter.comp"
+        kSplatBakeScatterCompSpv
+        _splat_bake_scatter_spv_h)
+    compile_vulkan_shader(threepp
+        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/splat_bake_resolve.comp"
+        kSplatBakeResolveCompSpv
+        _splat_bake_resolve_spv_h)
     # Auto-exposure: log2-luma histogram over sceneHdr. See AutoExposure.{hpp,cpp}.
     compile_vulkan_shader(threepp
         "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/lum_histogram.comp"

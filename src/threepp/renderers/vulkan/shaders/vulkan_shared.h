@@ -275,7 +275,9 @@ struct MaterialDesc {
 // 3 = ReSTIR DI, 4 = volumetric dir-light fog, 5-6 = G-buffer MSAA code
 // (0 = 1x, 1 = 2x, 2 = 4x), 7 = dispatch B runs this frame, 8 = froxel LUT
 // valid this frame, 9 = shadow-dwell kill switch, 10 = solid display-
-// referred background (sky store skips the pre-exposure).
+// referred background (sky store skips the pre-exposure), 11 = a ParticleField
+// density volume is live, 12 = a baked splat reflection volume is live
+// (PRIMARY view only — see DeferredShade::DispatchParams::splatVolume).
 //
 // NO default member initializers on the C++ side: `ShadePush p{};` must
 // zero-fill, exactly like the positional `uint32_t pc[19] = {}` blocks it

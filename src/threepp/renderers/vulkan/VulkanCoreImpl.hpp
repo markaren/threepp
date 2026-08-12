@@ -1912,6 +1912,30 @@ namespace threepp {
         // retired) volume view and must be rewritten before it is recorded.
         uint64_t particleDensityDescGen_[kFramesInFlight]{};
 
+        // ── Splat reflection volumes (plans/splat-volume-reflections.md) ────
+        // Bindings 70/71 of EVERY view's deferred set. The particle-density
+        // block above, mirrored member for member and for the same reasons:
+        // both handles are owned HERE rather than by SplatPass because they
+        // must be valid from the renderer's first descriptor write, which
+        // happens before any cloud exists and keeps happening on scenes that
+        // never get one.
+        //
+        //   splatVolumeUbos_  — per-FIF SplatVolumeUboGpu (std140, 912 B),
+        //                       rewritten every frame; handle never changes.
+        //   splatVolumeDummy_ — 1x1x1 RGBA16F in GENERAL, bound to every array
+        //                       slot no live volume occupies.
+        Buffer  splatVolumeUbos_[kFramesInFlight]{};
+        Image2D splatVolumeDummy_{};
+        // At least one baked volume is bound this frame. Feeds the shade's
+        // flags bit 12 — and ONLY on the primary view (recordSceneDispatch),
+        // because doc/vulkan_splats.md's scope wall keeps splats out of sensor
+        // AOVs and a secondary's water reflection is a sensor AOV.
+        bool     splatVolumeActiveThisFrame_ = false;
+        // splatVolumeBindKey() each FIF's deferred set was last written with.
+        // Not equal ⇒ that set names the wrong volume views and must be
+        // rewritten before it is recorded.
+        uint64_t splatVolumeDescKey_[kFramesInFlight]{};
+
         // ── GPU per-instance world matrices (stage 1: producer only) ─────────
         // instance_expand.comp recomputes, per InstancedMesh span, exactly what
         // ensureSceneBuilt's lean refresh bakes into MeshEntry::worldMatrix. No
@@ -2894,6 +2918,39 @@ namespace threepp {
         // list. Post-fence, pre-record; also refreshes the deferred descriptor
         // sets when the volume LIST changed (generation bump).
         void updateParticleDensityUbo(uint32_t frame);
+
+        // ── Splat reflection volumes (plans/splat-volume-reflections.md) ────
+        // Per-FIF SplatVolumeUbo (binding 71) + the 1x1x1 dummy volume for the
+        // unused slots of binding 70. Both created once and never resized —
+        // the two functions above, mirrored.
+        void ensureSplatVolumeResources();
+        // The eight image views binding 70 names: live volumes first, the
+        // 1x1x1 dummy for the rest. ONE producer, used by both the descriptor
+        // write and the staleness key below, so the two cannot disagree about
+        // what "the current list" is.
+        void splatVolumeBindViews(std::array<VkImageView, vulkan::kMaxSplatVolumes>& out);
+        // Identifies that exact list. Keyed on the VIEW HANDLES and not on
+        // SplatPass::volumeGeneration() alone, and the difference is the whole
+        // reason this exists: the generation bumps when a volume is BAKED or
+        // FREED, and the free happens inside syncClouds — by which time a
+        // descriptor set that still named the view has already been recorded
+        // into a command buffer that may still be executing
+        // (VUID-vkDestroyImageView-imageView-01026, caught by the validation
+        // gate). The handle list changes the moment a cloud stops being
+        // VISIBLE, which is framesInFlight+1 syncs before retireStale destroys
+        // anything — exactly the margin retireStale's own timing argument
+        // assumes every consumer has. The generation is mixed in anyway, so a
+        // rebake that happens to be handed the same handle back still counts as
+        // a change. The cost is a rewrite whenever a cloud is shown or hidden;
+        // the density table accepts the same churn for the same reason.
+        [[nodiscard]] uint64_t splatVolumeBindKey();
+        // Rewrite the frame's SplatVolumeUbo from SplatPass::volumeEntries():
+        // world→UVW and the conservative world AABB composed on the HOST from
+        // each cloud's model matrix and local bake box. Post-fence, pre-record,
+        // and AFTER collectSplatClouds' syncClouds (so a cloud uploaded this
+        // frame is baked before the UBO names it); also refreshes the deferred
+        // descriptor sets when the volume LIST changed (generation bump).
+        void updateSplatVolumeUbo(uint32_t frame);
 
         // One vkCmdDrawIndirect per visible ParticleField, inside the G-buffer
         // render pass and after every ordinary bucket. Separate pipeline, and

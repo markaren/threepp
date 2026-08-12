@@ -743,6 +743,21 @@ bool VulkanRenderer::Impl::beginDeferredFrame(Object3D& scene, Camera& camera) {
             // same reason (R6): this writes this slot's host-visible buffers,
             // and phase 1's descriptor write lands here too.
             prepareParticleFields(currentFrame);
+            // Splat reflection volumes (plans/splat-volume-reflections.md).
+            // Beside prepareParticleFields because it is the same kind of work
+            // for the same reason (R6): it writes THIS slot's host-visible UBO
+            // and can rewrite this slot's descriptor set, and both are legal
+            // only inside the post-fence window.
+            //
+            // The plan names collectSplatClouds' syncClouds call as the site,
+            // for the ordering it guarantees — a cloud uploaded this frame is
+            // BAKED before the UBO names it. That ordering still holds here
+            // (collectSplatClouds runs before renderFrame in the same render()
+            // call), and this site adds the guarantee that one cannot give:
+            // syncClouds runs BEFORE the inFlight[currentFrame] fence wait, so
+            // writing this slot's UBO or descriptor set there would touch
+            // resources the GPU may still be reading.
+            updateSplatVolumeUbo(currentFrame);
             // F4: the billboard glow chain, which prepareParticleFields has just
             // told us whether any field wants. Created here rather than during
             // recording so the one-off pipeline compile and image allocation

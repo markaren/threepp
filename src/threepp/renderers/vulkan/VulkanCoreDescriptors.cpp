@@ -362,6 +362,23 @@ void VulkanRenderer::Impl::rewriteDeferredDescriptors(int onlyFrame) {
             in.particleDensityLin   = pdLinViews.data();
             in.particleDensityCount = vulkan::kMaxDensityFields;
             in.particleDensityUbo   = pdUbos.data();
+            // Splat reflection volumes (bindings 70/71) — the pdViews block
+            // above, copied. World-anchored like the density volumes and
+            // therefore SHARED by every view: the same handles go into the
+            // primary's set and each secondary's, which is harmless because
+            // what actually turns the march on is the shade's flags bit 12,
+            // and that is set for the primary only (recordSceneDispatch).
+            // Every slot is filled — live volumes first, the 1×1×1 dummy for
+            // the rest — so the set is complete on a scene that has no splats
+            // and on one that just lost its last cloud.
+            std::array<VkImageView, vulkan::kMaxSplatVolumes> svViews{};
+            splatVolumeBindViews(svViews);
+            std::array<VkBuffer, kFramesInFlight> svUbos{};
+            for (uint32_t f = 0; f < kFramesInFlight; ++f)
+                svUbos[f] = splatVolumeUbos_[f].handle;
+            in.splatVolume      = svViews.data();
+            in.splatVolumeCount = vulkan::kMaxSplatVolumes;
+            in.splatVolumeUbo   = svUbos.data();
             view().deferredShade_->rewriteDescriptors(in, onlyFrame);
             // The set now names the pass's CURRENT volume list; record that so
             // the per-frame check in updateParticleDensityUbo can tell an
@@ -370,6 +387,15 @@ void VulkanRenderer::Impl::rewriteDeferredDescriptors(int onlyFrame) {
                 const uint64_t gen = particleFieldPass_ ? particleFieldPass_->densityGeneration() : 0u;
                 if (onlyFrame >= 0) particleDensityDescGen_[onlyFrame] = gen;
                 else for (auto& g : particleDensityDescGen_) g = gen;
+            }
+            // Same bookkeeping for the splat volume table — but keyed on the
+            // BOUND VIEW LIST, not on the generation alone. See
+            // splatVolumeBindKey for why the difference is load-bearing rather
+            // than cosmetic.
+            {
+                const uint64_t key = splatVolumeBindKey();
+                if (onlyFrame >= 0) splatVolumeDescKey_[onlyFrame] = key;
+                else for (auto& k : splatVolumeDescKey_) k = key;
             }
             // The probe UPDATE pass consumes the same scene inputs (TLAS,
             // lights, env, material/geometry/emissive buffers) — keep its set

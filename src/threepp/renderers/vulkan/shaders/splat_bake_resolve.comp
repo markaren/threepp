@@ -1,0 +1,66 @@
+#version 460
+#extension GL_EXT_scalar_block_layout : require
+#extension GL_GOOGLE_include_directive : enable
+
+// Splat volume bake, stage 2 — one thread per voxel: divide the scatter's
+// sigma-weighted colour sums by the sigma sum, soft-cap sigma, store rgba16f
+// (plans/splat-volume-reflections.md, Part 1, "determinism").
+//
+// This is where the fixed-point scratch dies: the Q20.12 scale cancels in the
+// colour ratio, and sigma is the one value that has to be decoded. Nothing here
+// goes through uintBitsToFloat — float(u) * scale is exact for every u < 2^24
+// and correctly rounded above it, which is the same reason the dust volume's
+// sampler decodes rather than reinterprets (particle_density.glsl).
+//
+// ONE image, not two: rgb = mean linear radiance, a = sigma_t per LOCAL metre.
+// A single texture() tap per march step per volume then feeds both terms of the
+// leg — the transmittance and the emission — which is what keeps the consumer
+// side at pdEmissiveLeg's cost rather than twice it.
+
+layout(local_size_x = 4, local_size_y = 4, local_size_z = 4) in;
+
+#include "splat_bake_common.glsl"
+
+layout(set = 0, binding = 3, rgba16f) uniform writeonly image3D volumeImage;
+
+// The soft cap. IDENTITY below the knee — the tau = -ln(1-alpha) calibration
+// must not be bent in the range that decides how a cloud reads — then a smooth,
+// C1 saturation to the ceiling above it. e^-8 is already opaque, so at any
+// voxel size a 16-step leg will ever use, nothing past the knee can change an
+// image; what the cap buys is that a thousand splats stacked in one voxel
+// cannot come out of the bake as a number the march has to defend against.
+const float kSplatVolSigmaKnee = 32.0;
+const float kSplatVolSigmaCap  = 64.0;
+
+// rgba16f tops out at 65504, and an Inf in the volume propagates into every
+// reflection that taps it. The ratio below is a weighted MEAN of per-splat
+// radiances, so this only bites on data that was already absurd.
+const float kSplatVolMaxRadiance = 60000.0;
+
+float svSoftCapSigma(float s) {
+    if (s <= kSplatVolSigmaKnee) return s;
+    const float d = kSplatVolSigmaCap - kSplatVolSigmaKnee;
+    return kSplatVolSigmaCap - d * exp(-(s - kSplatVolSigmaKnee) / d);
+}
+
+void main() {
+    const uvec3 c = gl_GlobalInvocationID.xyz;
+    if (any(greaterThanEqual(c, pc.res))) return;
+
+    const uint idx = 4u * svVoxelIndex(c);
+    const uint s   = scratch[idx];
+
+    vec4 texel = vec4(0.0);
+    if (s != 0u) {
+        // Q20.12 cancels in the ratio, so only sigma is decoded. A voxel whose
+        // sigma sum is a handful of quanta gets a coarsely quantised colour —
+        // and contributes essentially nothing to a march, which is why that is
+        // left alone rather than paid for with a second scale.
+        const vec3 rgb = vec3(float(scratch[idx + 1u]),
+                              float(scratch[idx + 2u]),
+                              float(scratch[idx + 3u])) / float(s);
+        texel = vec4(min(rgb, vec3(kSplatVolMaxRadiance)),
+                     svSoftCapSigma(float(s) * kSplatVolInvFixedScale));
+    }
+    imageStore(volumeImage, ivec3(c), texel);
+}

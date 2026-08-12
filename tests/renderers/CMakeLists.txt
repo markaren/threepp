@@ -50,6 +50,32 @@ if (THREEPP_WITH_VULKAN AND THREEPP_WITH_GLFW)
     add_test(NAME VulkanSplat_test COMMAND VulkanSplat_test)
     set_tests_properties(VulkanSplat_test PROPERTIES SKIP_RETURN_CODE 42)
 
+    # Splats in the mirror (plans/splat-volume-reflections.md, test-ladder items
+    # 3 and 4): the two claims only a rendered frame can settle — a cloud shows
+    # up in the water below it (grazing pose; face-on Fresnel is ~0.02 and hides
+    # the whole feature), and a cloud with NO reflector in the scene changes
+    # nothing, because the primary leg never marches the volume. Region
+    # statistics against a same-scene control, not a stored reference: an Ocean
+    # advances on the wall clock and is never byte-reproducible.
+    #
+    # REGISTERED TWICE, and the pair IS the A/B: the .off run asserts the
+    # opposite of what the default run asserts, so the effect is pinned to
+    # svLeg rather than to "the image changed".
+    add_executable(VulkanSplatVolume_test VulkanSplatVolume_test.cpp)
+    target_link_libraries(VulkanSplatVolume_test PRIVATE threepp)
+    target_include_directories(VulkanSplatVolume_test PRIVATE
+            "${PROJECT_SOURCE_DIR}/src"
+            "${PROJECT_SOURCE_DIR}/examples/vulkan")# capture_util.hpp
+    target_compile_definitions(VulkanSplatVolume_test PRIVATE
+            DATA_FOLDER="${THREEPP_DATA_DIR}"
+            PROJECT_FOLDER="${PROJECT_SOURCE_DIR}")
+    add_test(NAME VulkanSplatVolume_test COMMAND VulkanSplatVolume_test)
+    set_tests_properties(VulkanSplatVolume_test PROPERTIES SKIP_RETURN_CODE 42)
+    add_test(NAME VulkanSplatVolume_test.off COMMAND VulkanSplatVolume_test)
+    set_tests_properties(VulkanSplatVolume_test.off PROPERTIES
+            SKIP_RETURN_CODE 42
+            ENVIRONMENT "THREEPP_VK_SPLATVOL_OFF=1")
+
     # The cross-hardware gate. Asserts zero VALIDATION errors over a sequence of
     # reconfigurations (AOV resolves, view add/remove, render-scale and MSAA
     # realloc, swapchain recreate, entry-list churn) — a claim every conformant

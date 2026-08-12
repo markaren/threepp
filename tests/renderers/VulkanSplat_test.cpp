@@ -224,6 +224,30 @@ int main(int argc, char** argv) {
         }
     }
 
+    // ── 3b. the reflection volume: baked, sized, non-empty ──────────────────
+    // Each resident cloud is voxelized ONCE at upload into an rgba16f medium
+    // (rgb = linear radiance, a = sigma_t per local metre) that reflection legs
+    // march — the splat counterpart of the fire-in-the-mirror density volume,
+    // and the reason a cloud BEHIND the camera can show up in water. Nothing on
+    // the primary leg reads it, so none of the goldens above can move.
+    std::uint64_t vol1[3]{};
+    renderer.splatVolumeHash(vol1);
+    const std::uint64_t volBytes1 = renderer.splatVolumeBytes();
+    const std::uint64_t volGen1   = renderer.splatVolumeGeneration();
+    std::printf("       volume  hash %llu  texels %llu  occupied %llu  bytes %llu  gen %llu\n",
+                static_cast<unsigned long long>(vol1[0]), static_cast<unsigned long long>(vol1[1]),
+                static_cast<unsigned long long>(vol1[2]),
+                static_cast<unsigned long long>(volBytes1),
+                static_cast<unsigned long long>(volGen1));
+    report(vol1[1] > 0, "the cloud was baked into a reflection volume");
+    // rgba16f is 8 bytes a texel, and volumeBytes() is the assertable form of
+    // "the volume is resident" the way residentCount() is for the buffers.
+    report(volBytes1 == vol1[1] * 8, "and volumeBytes() agrees with the texel count");
+    // A bake that deposited NOTHING would be reproducibly empty and would sail
+    // through the determinism check below, so the occupancy is asserted first.
+    report(vol1[2] > 1000, "with splats actually deposited into it");
+    report(volGen1 > 0, "and the bake bumped the volume generation");
+
     // ── 2. splat-behind-mesh occlusion ──────────────────────────────────────
     // A slab across the LEFT half of the cloud, close to the camera. The left
     // half must lose most of its lit pixels; the right half must keep them.
@@ -396,6 +420,31 @@ int main(int argc, char** argv) {
     report(countLit(reloaded, 0, kW / 6) < 200,
            "with nothing left where the dead cloud stood");
 
+    // The BAKE DETERMINISM gate. `second` carries the same SplatData (a
+    // fixed-seed generator) uploaded into a fresh residency after the first
+    // cloud's was evicted, so the two volumes are two independent runs of a
+    // massively parallel scatter over identical input. They must be BYTE-
+    // IDENTICAL, and they are only because the scatter accumulates with integer
+    // atomicAdd: integer adds are associative, so a voxel's counters do not
+    // depend on how the GPU scheduled them. A float accumulator passes every
+    // visual check and fails exactly here — the same argument, and the same
+    // test, particle_density.glsl's r32ui volume is built on.
+    //
+    // The volume is cloud-LOCAL, so `second`'s +2 in x must not move a texel
+    // either; if the bake had crept into world space this is where it shows.
+    std::uint64_t vol2[3]{};
+    renderer.splatVolumeHash(vol2);
+    std::printf("       volume  hash %llu  texels %llu  occupied %llu  gen %llu\n",
+                static_cast<unsigned long long>(vol2[0]), static_cast<unsigned long long>(vol2[1]),
+                static_cast<unsigned long long>(vol2[2]),
+                static_cast<unsigned long long>(renderer.splatVolumeGeneration()));
+    report(vol2[1] == vol1[1] && vol2[2] == vol1[2],
+           "the re-uploaded cloud bakes a volume of the same extent and occupancy");
+    report(vol2[0] == vol1[0],
+           "with BYTE-IDENTICAL texels - the integer-atomic bake is deterministic");
+    report(renderer.splatVolumeGeneration() > volGen1,
+           "and evicting then re-baking bumped the volume generation");
+
     // A Vulkan-only cloud must never pay the GL copy: the data textures and
     // sorted-index attribute are ~1 GB at scan scale, they are CPU-side, and
     // every undo-history copy of a cloud retains them too. Lazy means a cloud
@@ -428,6 +477,49 @@ int main(int argc, char** argv) {
     report(renderer.splatResidentClouds() == 0, "removal from the scene still evicts");
     report(renderer.splatScratchSplats() <= 1,
            "and the last eviction releases the shared sort scratch");
+    // The volume is just another member of the thing retireStale already
+    // manages, so eviction has to take it with the geometry and SH buffers —
+    // 16 MB a cloud that would otherwise sit on the device forever.
+    report(renderer.splatVolumeBytes() == 0,
+           "and the reflection volume is freed with the cloud");
+
+    // ── 5. the bake's OTHER branch: splat smaller than a voxel ──────────────
+    // Everything above bakes through the footprint loop — the test cloud's
+    // splats are several voxels across at 128^3 over a 3-unit box. The branch
+    // that actually runs at SCAN scale is the opposite one: voxels of 10-30 cm,
+    // splats of 1-5 cm, deposited as an 8-tap trilinear splat of the mean. A
+    // wide, finely-grained cloud puts every splat on that path, and without it
+    // the common case would ship untested.
+    {
+        SplatGenerator::Options o;
+        o.count = 20000;
+        o.seed = 909u;
+        o.shDegree = 0;
+        o.extent.set(8.f, 8.f, 8.f);
+        o.minScale = 0.003f;
+        o.maxScale = 0.006f;
+        o.anisotropy = 1.f;
+        o.minOpacity = 0.5f;
+        o.maxOpacity = 0.95f;
+        auto fine = SplatCloud::create(SplatGenerator::generate(o));
+        scene->add(fine);
+        for (int i = 0; i < 8; ++i) draw();
+
+        std::uint64_t vol3[3]{};
+        renderer.splatVolumeHash(vol3);
+        std::printf("       fine-grained volume  texels %llu  occupied %llu\n",
+                    static_cast<unsigned long long>(vol3[1]),
+                    static_cast<unsigned long long>(vol3[2]));
+        // 20k splats, each landing on up to 8 corners of one voxel, spread over
+        // a box 8 units wide: a few thousand occupied voxels. Zero would mean
+        // the sub-voxel branch deposits nothing at all.
+        report(vol3[2] > 2000, "sub-voxel splats deposit through the trilinear path");
+
+        scene->remove(*fine);
+        fine.reset();
+        for (int i = 0; i < 10; ++i) draw();
+        report(renderer.splatVolumeBytes() == 0, "and that volume is freed too");
+    }
 
     std::printf(failures == 0 ? "\nALL CHECKS PASSED\n" : "\n%d CHECK(S) FAILED\n", failures);
     return failures == 0 ? 0 : 1;

@@ -5,6 +5,8 @@
 #include "threepp/renderers/vulkan/GpuTimings.hpp"
 #include "threepp/renderers/vulkan/VulkanContext.hpp"
 
+#include "threepp/renderers/vulkan/shaders/splat_bake_resolve.comp.spv.h"
+#include "threepp/renderers/vulkan/shaders/splat_bake_scatter.comp.spv.h"
 #include "threepp/renderers/vulkan/shaders/splat_checksum.comp.spv.h"
 #include "threepp/renderers/vulkan/shaders/splat_expand.comp.spv.h"
 #include "threepp/renderers/vulkan/shaders/splat_indirect.comp.spv.h"
@@ -18,6 +20,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <cstdlib>
 #include <cstring>
 #include <iostream>
@@ -55,6 +58,87 @@ namespace threepp::vulkan {
             uint32_t count, srcOff, dstOff, sumOff;
             uint32_t arg0, arg1, arg2, arg3;
         };
+
+        // ── Volume bake (plans/splat-volume-reflections.md, Part 1) ──────────
+        // Longest axis 128 voxels, the others proportional and even, floored at
+        // 16 so a thin scan still has a usable third dimension. 128^3 rgba16f
+        // is 16 MB, and kMaxClouds bounds the worst case at 128 MB — against
+        // clouds that themselves cost ~240 B/splat, proportionally small and
+        // resident exactly as long as the cloud is.
+        constexpr uint32_t kVolMaxRes = 128;
+        constexpr uint32_t kVolMinRes = 16;
+        // The extent estimator's sample size — the SAME fixed-stride ~8192 the
+        // collector uses for the sort interval (VulkanCoreScene.cpp:2893), and
+        // for the same reason: both ends have to agree on what "the subject" is
+        // or the box and the depth buckets would describe different clouds.
+        constexpr size_t   kVolSampleTarget = 8192;
+        constexpr VkFormat kVolFormat       = VK_FORMAT_R16G16B16A16_SFLOAT;
+        constexpr uint32_t kVolTexelBytes   = 8;
+        constexpr uint32_t kVolCounters     = 4;// sigma, sigma*r, sigma*g, sigma*b
+        constexpr uint32_t kBakeBindings    = 4;// geom, sh, scratch, out image
+
+        // Mirrors SplatBakePc in splat_bake_common.glsl (scalar layout: vec3
+        // packs to 12 bytes at 4-byte alignment, so the block is 60).
+        struct SplatBakePc {
+            float    boxMin[3];
+            float    boxSize[3];
+            float    voxelSize[3];
+            uint32_t res[3];
+            uint32_t splatCount;
+            uint32_t shCoeffs;
+            float    voxelVolume;
+        };
+        static_assert(sizeof(SplatBakePc) == 60,
+                      "SplatBakePc must match splat_bake_common.glsl's push-constant block");
+
+        // A 3D image, built straight off the context the way SplatPass builds
+        // its sampler and every one of its buffers. ParticleFieldPass takes a
+        // CreateImage3DFn from the renderer instead, because it needs the
+        // renderer's retire-on-generation machinery; this pass owns its images
+        // outright and frees them with the cloud, so injection would buy a
+        // constructor parameter and nothing else.
+        Image2D createVolumeImage(VulkanContext& ctx, uint32_t w, uint32_t h, uint32_t d,
+                                  const char* name) {
+            Image2D out{};
+            out.width  = w;
+            out.height = h;
+            out.format = kVolFormat;
+
+            VkImageCreateInfo ici{};
+            ici.sType         = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+            ici.imageType     = VK_IMAGE_TYPE_3D;
+            ici.format        = kVolFormat;
+            ici.extent        = {w, h, d};
+            ici.mipLevels     = 1;
+            ici.arrayLayers   = 1;
+            ici.samples       = VK_SAMPLE_COUNT_1_BIT;
+            ici.tiling        = VK_IMAGE_TILING_OPTIMAL;
+            // STORAGE for the resolve's imageStore, SAMPLED for the marches
+            // that consume it, TRANSFER_SRC for the test-only hash readback.
+            ici.usage         = VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT |
+                                VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
+            ici.sharingMode   = VK_SHARING_MODE_EXCLUSIVE;
+            ici.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+
+            VmaAllocationCreateInfo aci{};
+            aci.usage = VMA_MEMORY_USAGE_AUTO;
+            check(vmaCreateImage(ctx.allocator(), &ici, &aci, &out.image, &out.alloc, nullptr),
+                  "vmaCreateImage(splat volume)");
+
+            VkImageViewCreateInfo vci{};
+            vci.sType    = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+            vci.image    = out.image;
+            vci.viewType = VK_IMAGE_VIEW_TYPE_3D;
+            vci.format   = kVolFormat;
+            vci.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+            vci.subresourceRange.levelCount = 1;
+            vci.subresourceRange.layerCount = 1;
+            check(vkCreateImageView(ctx.device(), &vci, nullptr, &out.view),
+                  "vkCreateImageView(splat volume)");
+            ctx.setObjectName(out.image, name);
+            ctx.setObjectName(out.view, name);
+            return out;
+        }
 
         // Mirrors SplatUbo in splat_common.glsl (scalar layout: no vec3
         // padding surprises, but mat4 is still 64 B and vec2/vec4 keep their
@@ -143,6 +227,13 @@ namespace threepp::vulkan {
     SplatPass::SplatPass(VulkanContext& ctx, VkCommandPool cmdPool, uint32_t framesInFlight)
         : ctx_(ctx), cmdPool_(cmdPool), framesInFlight_(framesInFlight) {
 
+        // Read ONCE, before anything is created: with the volume off there is
+        // to be no image, no pipeline and no dispatch anywhere in the pass, so
+        // a frame is byte-exact what it was before the bake existed. A knob
+        // sampled per upload could not promise that across one run.
+        if (const char* e = std::getenv("THREEPP_VK_SPLATVOL_OFF"); e && *e && *e != '0')
+            volumeOff_ = true;
+
         VkPhysicalDeviceProperties props{};
         vkGetPhysicalDeviceProperties(ctx_.physicalDevice(), &props);
         const VkDeviceSize align = std::max<VkDeviceSize>(
@@ -191,10 +282,7 @@ namespace threepp::vulkan {
     SplatPass::~SplatPass() {
         VkDevice d = ctx_.device();
         VmaAllocator a = ctx_.allocator();
-        for (auto& kv : resident_) {
-            destroyBuffer(a, kv.second->geom);
-            destroyBuffer(a, kv.second->sh);
-        }
+        for (auto& kv : resident_) destroyCloudResources(*kv.second);
         resident_.clear();
         for (auto* b : {&projBuf_, &countBuf_, &offsetBuf_, &keyA_, &valA_, &keyB_, &valB_,
                         &rangeBuf_, &globalBuf_, &histBuf_, &scanBuf_, &indirectBuf_})
@@ -203,12 +291,28 @@ namespace threepp::vulkan {
         for (auto& b : debugBuf_) destroyBuffer(a, b);
 
         for (VkPipeline p : {projectPipe_, scanPipe_, scanAddPipe_, expandPipe_, indirectPipe_,
-                             histPipe_, scatterPipe_, rangePipe_, rasterPipe_, checksumPipe_})
+                             histPipe_, scatterPipe_, rangePipe_, rasterPipe_, checksumPipe_,
+                             bakeScatterPipe_, bakeResolvePipe_})
             if (p) vkDestroyPipeline(d, p, nullptr);
         if (pipeLayout_) vkDestroyPipelineLayout(d, pipeLayout_, nullptr);
         if (dsLayout_)   vkDestroyDescriptorSetLayout(d, dsLayout_, nullptr);
         if (descPool_)   vkDestroyDescriptorPool(d, descPool_, nullptr);
+        if (bakePipeLayout_) vkDestroyPipelineLayout(d, bakePipeLayout_, nullptr);
+        if (bakeDsLayout_)   vkDestroyDescriptorSetLayout(d, bakeDsLayout_, nullptr);
+        if (bakeDescPool_)   vkDestroyDescriptorPool(d, bakeDescPool_, nullptr);
         if (sampler_)    vkDestroySampler(d, sampler_, nullptr);
+    }
+
+    void SplatPass::destroyCloudResources(Cloud& c) {
+        destroyBuffer(ctx_.allocator(), c.geom);
+        destroyBuffer(ctx_.allocator(), c.sh);
+        if (c.volume.image != VK_NULL_HANDLE) {
+            destroyImage2D(ctx_.allocator(), ctx_.device(), c.volume);
+            c.volRes[0] = c.volRes[1] = c.volRes[2] = 0;
+            // The SET of baked volumes just changed, so every consumer holding
+            // this view in a descriptor has to rewrite before it binds again.
+            ++volumeGen_;
+        }
     }
 
     void SplatPass::createPipelines() {
@@ -291,6 +395,46 @@ namespace threepp::vulkan {
                                         sizeof(kSplatRasterCompSpv), "splat_raster");
         checksumPipe_ = makeComputePipe(d, cache, pipeLayout_, kSplatChecksumCompSpv,
                                         sizeof(kSplatChecksumCompSpv), "splat_checksum");
+
+        // ── the volume bake's own layout ─────────────────────────────────────
+        // Four bindings, none of them one the frame binds. Under
+        // THREEPP_VK_SPLATVOL_OFF nothing here is created at all, which is what
+        // makes "never bake" a statement about the pipeline cache as well as
+        // about VRAM.
+        if (volumeOff_) return;
+
+        std::array<VkDescriptorSetLayoutBinding, kBakeBindings> bb{};
+        for (uint32_t i = 0; i < kBakeBindings; ++i) {
+            bb[i].binding         = i;
+            bb[i].descriptorCount = 1;
+            bb[i].stageFlags      = VK_SHADER_STAGE_COMPUTE_BIT;
+            bb[i].descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        }
+        bb[3].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;// the rgba16f volume
+
+        VkDescriptorSetLayoutCreateInfo bdlci{};
+        bdlci.sType        = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+        bdlci.bindingCount = kBakeBindings;
+        bdlci.pBindings    = bb.data();
+        check(vkCreateDescriptorSetLayout(d, &bdlci, nullptr, &bakeDsLayout_),
+              "vkCreateDescriptorSetLayout(splat bake)");
+
+        VkPushConstantRange bpc{};
+        bpc.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+        bpc.size       = sizeof(SplatBakePc);
+        VkPipelineLayoutCreateInfo bplci{};
+        bplci.sType                  = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+        bplci.setLayoutCount         = 1;
+        bplci.pSetLayouts            = &bakeDsLayout_;
+        bplci.pushConstantRangeCount = 1;
+        bplci.pPushConstantRanges    = &bpc;
+        check(vkCreatePipelineLayout(d, &bplci, nullptr, &bakePipeLayout_),
+              "vkCreatePipelineLayout(splat bake)");
+
+        bakeScatterPipe_ = makeComputePipe(d, cache, bakePipeLayout_, kSplatBakeScatterCompSpv,
+                                           sizeof(kSplatBakeScatterCompSpv), "splat_bake_scatter");
+        bakeResolvePipe_ = makeComputePipe(d, cache, bakePipeLayout_, kSplatBakeResolveCompSpv,
+                                           sizeof(kSplatBakeResolveCompSpv), "splat_bake_resolve");
     }
 
     void SplatPass::createDescriptorPool() {
@@ -312,9 +456,37 @@ namespace threepp::vulkan {
         dpci.pPoolSizes    = sz;
         check(vkCreateDescriptorPool(ctx_.device(), &dpci, nullptr, &descPool_),
               "vkCreateDescriptorPool(splat)");
+
+        if (volumeOff_) return;
+
+        // ONE bake set, for every cloud ever uploaded: uploadCloud's one-shot
+        // waits on the queue before returning, so the set is provably idle when
+        // the next upload rewrites it. Nothing here is per frame-in-flight
+        // because nothing here happens on a frame.
+        VkDescriptorPoolSize bsz[2]{};
+        bsz[0].type            = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        bsz[0].descriptorCount = 3;// geom + sh + scratch
+        bsz[1].type            = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+        bsz[1].descriptorCount = 1;// the volume
+
+        VkDescriptorPoolCreateInfo bdpci{};
+        bdpci.sType         = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+        bdpci.maxSets       = 1;
+        bdpci.poolSizeCount = 2;
+        bdpci.pPoolSizes    = bsz;
+        check(vkCreateDescriptorPool(ctx_.device(), &bdpci, nullptr, &bakeDescPool_),
+              "vkCreateDescriptorPool(splat bake)");
+
+        VkDescriptorSetAllocateInfo bai{};
+        bai.sType              = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+        bai.descriptorPool     = bakeDescPool_;
+        bai.descriptorSetCount = 1;
+        bai.pSetLayouts        = &bakeDsLayout_;
+        check(vkAllocateDescriptorSets(ctx_.device(), &bai, &bakeSet_),
+              "vkAllocateDescriptorSets(splat bake)");
     }
 
-    void SplatPass::oneShot(const std::function<void(VkCommandBuffer)>& body) {
+    void SplatPass::oneShot(const std::function<void(VkCommandBuffer)>& body) const {
         VkCommandBufferAllocateInfo ai{};
         ai.sType              = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
         ai.commandPool        = cmdPool_;
@@ -407,15 +579,204 @@ namespace threepp::vulkan {
         ctx_.setObjectName(c.geom.handle, "splat.geom");
         ctx_.setObjectName(c.sh.handle, "splat.sh");
 
+        // ── the reflection volume's extent, resolution and scratch ───────────
+        // Everything the bake needs from the CPU is decided here; the bake
+        // itself reads the DEVICE-LOCAL buffers copied above, so there is no
+        // second pass over the splats and no second staging allocation.
+        Buffer scratch{};
+        if (!volumeOff_ && bakeScatterPipe_ != VK_NULL_HANDLE) {
+            planVolume(c, data);
+            if (c.volRes[0] > 0) {
+                c.volume = createVolumeImage(ctx_, c.volRes[0], c.volRes[1], c.volRes[2],
+                                             "splat.volume");
+                const VkDeviceSize voxels = VkDeviceSize(c.volRes[0]) * c.volRes[1] * c.volRes[2];
+                scratch = createBuffer(ctx_.allocator(), ctx_.device(),
+                                       voxels * kVolCounters * sizeof(uint32_t),
+                                       VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
+                                               VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+                                       VMA_MEMORY_USAGE_AUTO);
+                ctx_.setObjectName(scratch.handle, "splat.volumeScratch");
+            }
+        }
+
         oneShot([&](VkCommandBuffer cb) {
             VkBufferCopy cg{0, 0, geomBytes};
             VkBufferCopy cs{0, 0, shBytes};
             vkCmdCopyBuffer(cb, stageGeom.handle, c.geom.handle, 1, &cg);
             vkCmdCopyBuffer(cb, stageSh.handle, c.sh.handle, 1, &cs);
+            // Same command buffer as the copies, after them: a 5M-splat bake is
+            // tens of milliseconds hidden inside an upload that already moves
+            // ~1.2 GB, and it is off the frame path entirely.
+            if (scratch.handle != VK_NULL_HANDLE) recordBake(cb, c, scratch);
         });
 
         destroyBuffer(ctx_.allocator(), stageGeom);
         destroyBuffer(ctx_.allocator(), stageSh);
+        // Transient by contract: oneShot waits on the queue, so the scratch's
+        // last reader has retired and 16 B/voxel goes straight back.
+        destroyBuffer(ctx_.allocator(), scratch);
+
+        if (c.volume.image != VK_NULL_HANDLE) ++volumeGen_;
+    }
+
+    void SplatPass::planVolume(Cloud& c, const SplatData& data) {
+        c.volRes[0] = c.volRes[1] = c.volRes[2] = 0;
+
+        const size_t n = data.count();
+        if (n == 0 || data.scales.size() != n) return;
+
+        // Cloud-local AABB over the means, ROBUST TO FLOATERS: p1/p99 per axis
+        // over a fixed-stride ~8192 sample — the exact estimator, sample size
+        // and percentiles the collector already uses for the sort interval
+        // (VulkanCoreScene.cpp:2893), reused so both ends agree on what "the
+        // subject" is. A stride sample is exact-repeatable (no RNG, no state),
+        // which the determinism contract needs as much as the shader does.
+        const size_t stride = std::max<size_t>(1, n / kVolSampleTarget);
+        std::vector<float> ax[3], sig;
+        for (size_t i = 0; i < n; i += stride) {
+            const auto& m = data.means[i];
+            if (!std::isfinite(m.x) || !std::isfinite(m.y) || !std::isfinite(m.z)) continue;
+            ax[0].push_back(m.x);
+            ax[1].push_back(m.y);
+            ax[2].push_back(m.z);
+            // trace(Sigma) is rotation-invariant, so the mean 1-sigma extent is
+            // the scales alone — the same sigbar splat_bake_scatter.comp
+            // derives from the uploaded covariance.
+            const auto& s = data.scales[i];
+            sig.push_back(std::sqrt((s.x * s.x + s.y * s.y + s.z * s.z) / 3.f));
+        }
+        if (ax[0].size() < 3) return;// nothing to bound; leave the cloud unbaked
+
+        const auto pct = [](std::vector<float>& v, float q) {
+            const auto rank = static_cast<size_t>(q * static_cast<float>(v.size() - 1));
+            std::nth_element(v.begin(), v.begin() + static_cast<std::ptrdiff_t>(rank), v.end());
+            return v[rank];
+        };
+
+        // Pad by the p99 splat's own 3 sigma, so the splats that DEFINED the
+        // box are inside it rather than clipped by it — and by a robust sigma,
+        // so one background-sky Gaussian cannot inflate the box (and with it
+        // the voxel size) for the whole scan.
+        const float pad = 3.f * pct(sig, 0.99f);
+
+        float size[3]{};
+        float maxSize = 0.f;
+        for (int a = 0; a < 3; ++a) {
+            const float lo = pct(ax[a], 0.01f) - pad;
+            const float hi = pct(ax[a], 0.99f) + pad;
+            c.localBoxMin[a] = lo;
+            // A planar cloud (or a single splat with no extent) still needs a
+            // positive size for the voxel size to mean anything.
+            size[a] = std::max(hi - lo, 1e-4f);
+            maxSize = std::max(maxSize, size[a]);
+        }
+        if (!(maxSize > 0.f) || !std::isfinite(maxSize)) return;
+
+        for (int a = 0; a < 3; ++a) {
+            c.localBoxSize[a] = size[a];
+            // Longest axis kVolMaxRes, the others proportional, snapped even
+            // and floored — total is bounded by kVolMaxRes^3 by construction.
+            auto r = static_cast<uint32_t>(std::lround(
+                    double(kVolMaxRes) * double(size[a]) / double(maxSize)));
+            r = std::clamp(r, kVolMinRes, kVolMaxRes) & ~1u;
+            c.volRes[a] = std::max(r, kVolMinRes);
+        }
+    }
+
+    void SplatPass::recordBake(VkCommandBuffer cb, Cloud& c, const Buffer& scratch) {
+        SplatBakePc pc{};
+        for (int a = 0; a < 3; ++a) {
+            pc.boxMin[a]    = c.localBoxMin[a];
+            pc.boxSize[a]   = c.localBoxSize[a];
+            pc.res[a]       = c.volRes[a];
+            pc.voxelSize[a] = c.localBoxSize[a] / float(c.volRes[a]);
+        }
+        pc.splatCount  = c.count;
+        pc.shCoeffs    = c.shCoeffs;
+        pc.voxelVolume = pc.voxelSize[0] * pc.voxelSize[1] * pc.voxelSize[2];
+
+        VkDescriptorBufferInfo bi[3] = {{c.geom.handle, 0, VK_WHOLE_SIZE},
+                                        {c.sh.handle, 0, VK_WHOLE_SIZE},
+                                        {scratch.handle, 0, VK_WHOLE_SIZE}};
+        VkDescriptorImageInfo img{VK_NULL_HANDLE, c.volume.view, VK_IMAGE_LAYOUT_GENERAL};
+        std::array<VkWriteDescriptorSet, kBakeBindings> w{};
+        for (uint32_t i = 0; i < kBakeBindings; ++i) {
+            w[i].sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            w[i].dstSet          = bakeSet_;
+            w[i].dstBinding      = i;
+            w[i].descriptorCount = 1;
+            w[i].descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+            w[i].pBufferInfo     = &bi[i];
+        }
+        w[3].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+        w[3].pBufferInfo    = nullptr;
+        w[3].pImageInfo     = &img;
+        vkUpdateDescriptorSets(ctx_.device(), kBakeBindings, w.data(), 0, nullptr);
+
+        // UNDEFINED -> GENERAL, and GENERAL for the rest of the image's life:
+        // the consumer table binds live volumes and dummy slots through one
+        // sampler array, and the dust table's dummy is GENERAL too
+        // (ParticleFieldPass.cpp:501) — one layout across every slot is one
+        // less thing a descriptor write can get wrong.
+        VkImageMemoryBarrier2 ib{};
+        ib.sType         = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
+        ib.srcStageMask  = VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT;
+        ib.srcAccessMask = 0;
+        ib.dstStageMask  = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+        ib.dstAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
+        ib.oldLayout     = VK_IMAGE_LAYOUT_UNDEFINED;
+        ib.newLayout     = VK_IMAGE_LAYOUT_GENERAL;
+        ib.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        ib.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        ib.image         = c.volume.image;
+        ib.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        ib.subresourceRange.levelCount = 1;
+        ib.subresourceRange.layerCount = 1;
+        VkDependencyInfo di{};
+        di.sType                   = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
+        di.imageMemoryBarrierCount = 1;
+        di.pImageMemoryBarriers    = &ib;
+        vkCmdPipelineBarrier2(cb, &di);
+
+        // The counters must start at zero, and the staging copies above must
+        // have landed before the scatter reads geom/sh — barrier() covers both
+        // directions (transfer -> compute, compute -> compute).
+        vkCmdFillBuffer(cb, scratch.handle, 0, scratch.size, 0u);
+        barrier(cb);
+
+        vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_COMPUTE, bakePipeLayout_, 0, 1,
+                                &bakeSet_, 0, nullptr);
+        vkCmdPushConstants(cb, bakePipeLayout_, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(pc), &pc);
+
+        vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, bakeScatterPipe_);
+        vkCmdDispatch(cb, divUp(c.count, 256), 1, 1);
+        barrier(cb);
+
+        vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, bakeResolvePipe_);
+        vkCmdDispatch(cb, divUp(c.volRes[0], 4), divUp(c.volRes[1], 4), divUp(c.volRes[2], 4));
+
+        // The resolve's imageStore -> every later SAMPLE of this image. It is
+        // the last thing the one-shot does, so this is the handover to whatever
+        // frame binds the volume next.
+        //
+        // ALL_COMMANDS rather than an enumerated destination: the consumers are
+        // a compute shade today and a .rgen sensor tomorrow, and naming
+        // RAY_TRACING_SHADER here would be a VALIDATION ERROR on a device where
+        // rayTracingPipeline is off (VulkanContext only enables it under
+        // rayTracingEnabled_ — lavapipe, which the cross-hardware validation
+        // gate runs on, is exactly that device). This barrier executes once per
+        // upload at the tail of a one-shot, so the breadth costs nothing.
+        VkMemoryBarrier2 mb{};
+        mb.sType         = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2;
+        mb.srcStageMask  = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+        mb.srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
+        mb.dstStageMask  = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
+        mb.dstAccessMask = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT;
+        VkDependencyInfo fi{};
+        fi.sType              = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
+        fi.memoryBarrierCount = 1;
+        fi.pMemoryBarriers    = &mb;
+        vkCmdPipelineBarrier2(cb, &fi);
     }
 
     void SplatPass::allocateScratch(uint32_t maxSplats, uint32_t entryBudget) {
@@ -543,8 +904,7 @@ namespace threepp::vulkan {
     void SplatPass::retireStale() {
         for (auto it = resident_.begin(); it != resident_.end();) {
             if (it->second->lastSeen + framesInFlight_ + 1 <= syncSerial_) {
-                destroyBuffer(ctx_.allocator(), it->second->geom);
-                destroyBuffer(ctx_.allocator(), it->second->sh);
+                destroyCloudResources(*it->second);
                 freeSlots_.emplace_back(it->second->slot, std::move(it->second->sets));
                 it = resident_.erase(it);
             } else {
@@ -691,8 +1051,7 @@ namespace threepp::vulkan {
                     }
                 }
                 if (recycled) {
-                    destroyBuffer(ctx_.allocator(), it->second->geom);
-                    destroyBuffer(ctx_.allocator(), it->second->sh);
+                    destroyCloudResources(*it->second);
                     freeSlots_.emplace_back(it->second->slot, std::move(it->second->sets));
                     it = resident_.erase(it);
                 } else {
@@ -1273,6 +1632,120 @@ namespace threepp::vulkan {
         out[1] = w[8]; // hashVal
         out[2] = w[9]; // hashColor
         out[3] = w[2]; // entryCount
+    }
+
+    std::vector<SplatPass::VolumeEntry> SplatPass::volumeEntries() const {
+        std::vector<VolumeEntry> out;
+        if (volumeOff_) return out;
+        out.reserve(frameClouds_.size());
+        for (const auto& fc : frameClouds_) {
+            const Cloud& c = *fc.cloud;
+            if (c.volume.view == VK_NULL_HANDLE) continue;
+            VolumeEntry e{};
+            e.view = c.volume.view;
+            std::memcpy(e.model, fc.model, sizeof(e.model));
+            std::memcpy(e.localBoxMin, c.localBoxMin, sizeof(e.localBoxMin));
+            std::memcpy(e.localBoxSize, c.localBoxSize, sizeof(e.localBoxSize));
+            e.count = c.count;
+            out.push_back(e);
+        }
+        return out;
+    }
+
+    std::uint64_t SplatPass::volumeBytes() const {
+        std::uint64_t bytes = 0;
+        for (const auto& kv : resident_) {
+            const Cloud& c = *kv.second;
+            if (c.volume.image == VK_NULL_HANDLE) continue;
+            bytes += std::uint64_t(c.volRes[0]) * c.volRes[1] * c.volRes[2] * kVolTexelBytes;
+        }
+        return bytes;
+    }
+
+    void SplatPass::readVolumeHash(std::uint64_t out[3]) const {
+        out[0] = 0xcbf29ce484222325ull;// FNV-1a offset basis
+        out[1] = out[2] = 0;
+        if (volumeOff_) return;
+
+        // Ascending SLOT order, not resident_ order: the map is unordered, so
+        // without an imposed order the hash would not be stable even between
+        // two reads of the same device state.
+        std::vector<const Cloud*> ordered;
+        for (const auto& kv : resident_)
+            if (kv.second->volume.image != VK_NULL_HANDLE) ordered.push_back(kv.second.get());
+        if (ordered.empty()) return;
+        std::sort(ordered.begin(), ordered.end(),
+                  [](const Cloud* a, const Cloud* b) { return a->slot < b->slot; });
+
+        // The device is drained so every bake has provably landed; this is a
+        // test accessor and never on the render path (readDebug's contract).
+        check(vkDeviceWaitIdle(ctx_.device()), "vkDeviceWaitIdle(splat readVolumeHash)");
+
+        for (const Cloud* c : ordered) {
+            const VkDeviceSize voxels =
+                    VkDeviceSize(c->volRes[0]) * c->volRes[1] * c->volRes[2];
+            const VkDeviceSize bytes = voxels * kVolTexelBytes;
+            Buffer rb = createBuffer(ctx_.allocator(), ctx_.device(), bytes,
+                                     VK_BUFFER_USAGE_TRANSFER_DST_BIT, VMA_MEMORY_USAGE_AUTO,
+                                     VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT |
+                                             VMA_ALLOCATION_CREATE_MAPPED_BIT);
+
+            oneShot([&](VkCommandBuffer cb) {
+                // The bake wrote this image in an EARLIER submission. Queue
+                // order supplies the execution dependency; the memory one is
+                // still this barrier's job, and a hash that reads a stale cache
+                // line would look exactly like the non-determinism the test is
+                // hunting for.
+                VkImageMemoryBarrier2 ib{};
+                ib.sType         = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
+                ib.srcStageMask  = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+                ib.srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
+                ib.dstStageMask  = VK_PIPELINE_STAGE_2_COPY_BIT;
+                ib.dstAccessMask = VK_ACCESS_2_TRANSFER_READ_BIT;
+                ib.oldLayout     = VK_IMAGE_LAYOUT_GENERAL;
+                ib.newLayout     = VK_IMAGE_LAYOUT_GENERAL;
+                ib.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+                ib.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+                ib.image         = c->volume.image;
+                ib.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+                ib.subresourceRange.levelCount = 1;
+                ib.subresourceRange.layerCount = 1;
+                VkDependencyInfo di{};
+                di.sType                   = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
+                di.imageMemoryBarrierCount = 1;
+                di.pImageMemoryBarriers    = &ib;
+                vkCmdPipelineBarrier2(cb, &di);
+
+                VkBufferImageCopy r{};
+                r.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+                r.imageSubresource.layerCount = 1;
+                r.imageExtent = {c->volRes[0], c->volRes[1], c->volRes[2]};
+                // The volume lives in GENERAL, which is a legal source layout
+                // for a copy — so nothing has to be transitioned back, and a
+                // reader that stalls the device cannot leave the image in a
+                // layout the next frame did not expect.
+                vkCmdCopyImageToBuffer(cb, c->volume.image, VK_IMAGE_LAYOUT_GENERAL,
+                                       rb.handle, 1, &r);
+            });
+
+            VmaAllocationInfo ai{};
+            vmaGetAllocationInfo(ctx_.allocator(), rb.alloc, &ai);
+            invalidateHostReads(ctx_.allocator(), rb.alloc);
+            if (const auto* p = static_cast<const uint8_t*>(ai.pMappedData)) {
+                std::uint64_t h = out[0];
+                for (VkDeviceSize i = 0; i < bytes; ++i) {
+                    h ^= p[i];
+                    h *= 0x100000001b3ull;
+                }
+                out[0] = h;
+                out[1] += voxels;
+                // Alpha is sigma_t and sits in the last half of each rgba16f
+                // texel; a zero there is a voxel no splat reached.
+                for (VkDeviceSize v = 0; v < voxels; ++v)
+                    if (p[v * kVolTexelBytes + 6] != 0 || p[v * kVolTexelBytes + 7] != 0) ++out[2];
+            }
+            destroyBuffer(ctx_.allocator(), rb);
+        }
     }
 
     uint32_t SplatPass::lastOverflow() const {

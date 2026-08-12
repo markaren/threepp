@@ -10,6 +10,15 @@
 //   --cam x,y,z --look x,y,z               reframe a capture without rebuilding
 //   --occluder                             a box through the middle of the cloud
 //                                          (the splat-behind-mesh depth test)
+//   --water                                a calm pond under the cloud (Vulkan
+//                                          only): the splat-in-the-mirror check —
+//                                          the traced water reflection marches the
+//                                          cloud's baked volume (svLeg), so the
+//                                          scan must appear in the pond
+//   --metal                                a polished metal sphere beside the
+//                                          cloud (Vulkan only): the same check on
+//                                          the GLOSSY reflection path — the scan
+//                                          must appear on the sphere
 //   --no-flip                              keep a loaded file's own axes
 //   --no-cull                              keep a loaded file's outlier splats
 //   --morton                               Morton-reorder storage (see below)
@@ -78,9 +87,11 @@
 
 #include "capture_util.hpp"
 
+#include "threepp/loaders/RGBELoader.hpp"
 #include "threepp/loaders/SogLoader.hpp"
 #include "threepp/splats/SplatLod.hpp"
 #include "threepp/loaders/SplatLoader.hpp"
+#include "threepp/objects/Ocean.hpp"
 #include "threepp/objects/SplatCloud.hpp"
 #include "threepp/threepp.hpp"
 
@@ -214,6 +225,8 @@ int main(int argc, char** argv) {
     bool debugNaN = false;
     bool fog = false;
     bool addSun = false;
+    bool water = false;
+    bool metal = false;
     // --level picks a SOG detail level; --upscaler lifts the GL-parity clamp
     // below so the pass can be measured at a render scale a real app would use.
     int lodLevel = 0;
@@ -233,6 +246,10 @@ int main(int argc, char** argv) {
             occluder = true;
         } else if (arg == "--fog") {
             fog = true;
+        } else if (arg == "--water") {
+            water = true;
+        } else if (arg == "--metal") {
+            metal = true;
         } else if (arg == "--sun") {
             addSun = true;
         } else if (arg == "--level" && i + 1 < argc) {
@@ -274,6 +291,18 @@ int main(int argc, char** argv) {
         std::cerr << "--lod-dynamic needs --vulkan (the GL path draws every resident level);"
                      " loading level 0 only" << std::endl;
         lodDynamic = false;
+    }
+
+    // The pond exists to exercise the deferred water's traced reflection leg,
+    // which is a Vulkan pass; on GL there is no reflection to put the cloud in.
+    if (water && !useVulkan) {
+        std::cerr << "--water needs --vulkan (the reflection march is a deferred-shade"
+                     " feature); ignoring it" << std::endl;
+        water = false;
+    }
+    if (metal && !useVulkan) {
+        std::cerr << "--metal needs --vulkan (same reason as --water); ignoring it" << std::endl;
+        metal = false;
     }
 
     SplatData data;
@@ -470,6 +499,13 @@ int main(int argc, char** argv) {
         // pre-post, but it is not a GL comparison any more.
         vkRenderer->toneMapping = ToneMapping::None;
         vkRenderer->toneMappingExposure = 1.f;
+        // --water is a beauty/interaction shot, not a GL comparison: the HDR
+        // sky it loads would clip hard through the identity curve, so it takes
+        // the ocean examples' ACES + 0.7 instead and gives up GL parity.
+        if (water) {
+            vkRenderer->toneMapping = ToneMapping::ACESFilmic;
+            vkRenderer->toneMappingExposure = 0.7f;
+        }
         // Render scale 1 with both upscalers off is a GL-PARITY clamp, not a
         // recommendation: the comparison has to be of rasterizers at the same
         // pixel count. It also means the default bench measures the splat pass
@@ -595,6 +631,83 @@ int main(int argc, char** argv) {
     fit.center.applyMatrix4(*cloud->matrixWorld);
 
     for (auto& p : parts) scene->add(p);
+
+    // --water: a calm pond under the cloud, scaled from the fit sphere so a
+    // unit-radius toy and a metres-scale scan both float over water instead of
+    // in it. The point is the reflection: the deferred water's traced leg
+    // marches the cloud's baked volume (splat_volume.glsl's svLeg), so the
+    // scan must appear in the pond — a still frame answers it, which is why
+    // this is a flag here rather than a scene of its own.
+    if (water) {
+
+        // An HDR sky, for two reasons: the water surface needs an environment
+        // worth reflecting around the cloud, and the env-miss leg of the
+        // traced reflection is what the splat march composites in front of.
+        RGBELoader rgbe;
+        if (auto env = rgbe.load(std::string(DATA_FOLDER) +
+                                 "/textures/env/autumn_field_puresky_2k.hdr")) {
+            scene->background = env;
+            scene->environment = env;
+        }
+
+        // Surface just under the cloud's content. 1.25x the p90 radius keeps
+        // the bulk of the splats dry (the fit radius is a percentile, so a few
+        // low strays may pierce the surface — visually that reads as intended).
+        const float waterY = fit.center.y - fit.radius * 1.25f;
+
+        Ocean::Options opts;
+        opts.size = std::max(20.f, fit.radius * 30.f);// pond dwarfs the subject
+        opts.windSpeed = 2.5f;// calm: a readable mirror, not a seascape
+        auto ocean = Ocean::create(opts);
+        ocean->position.y = waterY;
+        scene->add(ocean);
+
+        // Near-black bottom well below: the analytic deep-water body dominates
+        // and the surface reads as water, not as a textured floor seen through
+        // glass (same rationale as vulkan_ocean_minimal's deep preset).
+        auto floorMat = MeshStandardMaterial::create(
+                MeshStandardMaterial::Params{}.color(Color(0.02f, 0.02f, 0.02f)).roughness(1.0f));
+        auto floor = Mesh::create(PlaneGeometry::create(opts.size, opts.size), floorMat);
+        floor->rotation.x = -math::PI / 2.f;
+        floor->position.y = waterY - std::max(2.f, fit.radius * 3.f);
+        scene->add(floor);
+
+        addSun = true;// the water body and any strays need a light
+        std::cout << "  pond surface at y " << waterY << " (size " << opts.size << ")"
+                  << std::endl;
+    }
+
+    // --metal: the glossy-path twin of --water. A polished sphere beside the
+    // cloud reflects it through deferred_shade.comp's traced reflection leg —
+    // the OTHER svLeg call site — with the reflection denoiser's
+    // roughness-scaled blur on top. Slightly rough on purpose: a soft
+    // volumetric ghost inside an already-filtered reflection is the look the
+    // design promises; a perfect mirror would only showcase its stated limit.
+    if (metal) {
+
+        if (!scene->environment) {
+            // Without --water there is no sky yet, and a chrome ball in a void
+            // reflects the void. Same HDR, same two reasons.
+            RGBELoader rgbe;
+            if (auto env = rgbe.load(std::string(DATA_FOLDER) +
+                                     "/textures/env/autumn_field_puresky_2k.hdr")) {
+                scene->background = env;
+                scene->environment = env;
+            }
+        }
+
+        auto ballMat = MeshStandardMaterial::create(MeshStandardMaterial::Params{}
+                                                            .color(Color(0.95f, 0.95f, 0.95f))
+                                                            .metalness(1.f)
+                                                            .roughness(0.15f));
+        auto ball = Mesh::create(SphereGeometry::create(fit.radius * 0.8f, 48, 32), ballMat);
+        ball->position.set(fit.center.x + fit.radius * 2.1f, fit.center.y,
+                           fit.center.z);
+        scene->add(ball);
+
+        addSun = true;
+        std::cout << "  polished metal sphere beside the cloud" << std::endl;
+    }
 
     // --occluder: an opaque slab driven through the middle of the cloud. The
     // splat compositor has no hardware depth test — it reads the G-buffer depth

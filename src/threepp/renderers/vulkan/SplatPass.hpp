@@ -57,9 +57,13 @@
 //
 // SCOPE. Primary view only: secondary views (addView) skip the splat pass
 // entirely rather than silently painting splats into a sensor AOV. Splats cast
-// no shadows, appear in no reflection, contribute to no probe and are invisible
-// to the RT sensors — all deliberate, all documented as out of scope in
-// plans/gaussian-splats-vulkan.md.
+// no shadows, contribute to no probe and are invisible to the RT sensors —
+// all deliberate, all documented as out of scope in
+// plans/gaussian-splats-vulkan.md. Reflections crossed that wall on purpose
+// (plans/splat-volume-reflections.md): every upload also BAKES the cloud into
+// a small rgba16f volume (splat_bake_*.comp) that the deferred shade's traced
+// reflection legs march (splat_volume.glsl's svLeg, water/glass and glossy) —
+// primary view only, behind flags bit 12, so the sensor wall stands.
 //
 // The one crack in that wall is the EXPECTED-DEPTH AOV
 // (VulkanRenderer::setSplatDepthAov). It does not put splats in an
@@ -81,6 +85,18 @@
 //                                 keys really are non-decreasing)
 //   THREEPP_VK_SPLAT_NOMOTION=1   skip the gbufMotion write
 //   THREEPP_VK_SPLAT_NOFOG=1      skip the per-splat fog
+//   THREEPP_VK_SPLATVOL_OFF=1     never bake the reflection volume: no image,
+//                                 no dispatch, no VRAM, volumeEntries() empty.
+//                                 Read ONCE at construction, so it is an A/B
+//                                 lever for a whole run rather than a setting.
+//
+// THE VOLUME BAKE. Separate from everything above and off the frame path:
+// uploadCloud voxelizes each cloud once, in cloud-local space, into an rgba16f
+// 3D image (rgb = linear radiance, a = sigma_t per local metre) that rays the
+// tile rasterizer cannot serve — reflection legs first — march as a
+// participating medium. The primary camera leg must NEVER march it: SplatPass
+// already composites the real thing there and a second contribution would
+// double-count every visible cloud. See plans/splat-volume-reflections.md.
 
 #ifndef THREEPP_VULKAN_SPLAT_PASS_HPP
 #define THREEPP_VULKAN_SPLAT_PASS_HPP
@@ -98,12 +114,35 @@
 
 namespace threepp {
     class SplatCloud;
+    struct SplatData;
 }
 
 namespace threepp::vulkan {
 
     class VulkanContext;
     class GpuTimings;
+
+    // ── The reflection-volume table (plans/splat-volume-reflections.md) ──────
+    // Volumes bound to the deferred set at once. KEEP IN SYNC with
+    // kMaxSplatVolumes in shaders/splat_volume.glsl, with kMaxSplatVolumeSlots
+    // in DeferredShade.cpp, and with SplatPass::kMaxClouds — the cap exists so
+    // no resident cloud can fail to get a slot.
+    inline constexpr std::uint32_t kMaxSplatVolumes = 8;
+
+    // Binding 71 of the deferred set. MUST match SplatVolumeUbo in
+    // shaders/splat_volume.glsl, which is std140 (NOT scalar) because the header
+    // is pulled into shaders that do not all enable GL_EXT_scalar_block_layout —
+    // everything here is a mat4/vec4/uvec4, so the two layouts coincide anyway.
+    // That every member is 16-byte-aligned is the invariant the assert guards:
+    // 8*64 + 3*8*16 + 16 = 912.
+    struct SplatVolumeUboGpu {
+        float         worldToUvw[kMaxSplatVolumes][16]; // world point -> [0,1]^3, column-major
+        float         worldBoxMin[kMaxSplatVolumes][4]; // conservative world AABB of the OBB…
+        float         worldBoxMax[kMaxSplatVolumes][4]; // …used only for the interval clip
+        float         params[kMaxSplatVolumes][4];      // x = sigmaScale / cbrt(|det model3x3|)
+        std::uint32_t counts[4];                        // x = active volumes
+    };
+    static_assert(sizeof(SplatVolumeUboGpu) == 912, "SplatVolumeUbo layout drift");
 
     class SplatPass {
 
@@ -263,6 +302,57 @@ namespace threepp::vulkan {
         // claim, and VRAM is not assertable; this is.
         [[nodiscard]] uint32_t scratchSplats() const { return maxSplats_; }
 
+        // ── The reflection volume (plans/splat-volume-reflections.md) ────────
+
+        // One baked cloud, as a consumer of the volume table needs it. The
+        // struct is deliberately minimal: worldToUvw and the world AABB are
+        // composed on the HOST from `model` and the local box, because the
+        // shader side wants one mat4 per entry and the host is where the
+        // inverse belongs.
+        struct VolumeEntry {
+            VkImageView view = VK_NULL_HANDLE;// rgba16f sampler3D source, GENERAL
+            float    model[16]{};      // cloud local -> world, column-major
+            float    localBoxMin[3]{}; // the bake box, cloud-local
+            float    localBoxSize[3]{};// strictly positive
+            uint32_t count = 0;        // splats in the cloud
+        };
+
+        // The volumes to bind THIS frame, built from frameClouds_ — so the
+        // collector's own test decides membership, and that test is a
+        // VISIBILITY test, not a frustum test (VulkanCoreScene.cpp:2848
+        // traverses everything and only parks what is hidden). That is
+        // load-bearing rather than incidental: a cloud BEHIND the camera still
+        // has to appear in the mirror, which is precisely the failure mode
+        // screen-space reflections cannot fix and this whole design exists to
+        // avoid. Hidden/parked clouds are absent by construction, so an
+        // invisible cloud does not haunt the water either.
+        //
+        // Empty under THREEPP_VK_SPLATVOL_OFF, and empty until the first bake.
+        [[nodiscard]] std::vector<VolumeEntry> volumeEntries() const;
+
+        // Bumped whenever the SET of baked volumes changes — a bake completes,
+        // a cloud is retired. Image bindings change only then; model matrices
+        // and per-frame params ride the UBO without touching descriptors. The
+        // same role ParticleFieldPass::densityGeneration() plays for the dust
+        // table, and consumed the same way (compare, rewrite, dirty the rest).
+        [[nodiscard]] std::uint64_t volumeGeneration() const { return volumeGen_; }
+
+        // Resident volume VRAM. The third of the assertable-VRAM surfaces next
+        // to residentCount() / scratchSplats(), and for the same reason: "the
+        // volume was freed with its cloud" is a VRAM claim, VRAM is not
+        // assertable, and this is. Exactly 0 under THREEPP_VK_SPLATVOL_OFF.
+        [[nodiscard]] std::uint64_t volumeBytes() const;
+
+        // Test surface. [0] = FNV-1a hash of every resident volume's texels, in
+        // ascending slot order (resident_ is unordered, so the ORDER has to be
+        // imposed or the hash would not even be stable within one run); [1] =
+        // total texels hashed; [2] = texels whose sigma is non-zero, so a bake
+        // that deposited NOTHING cannot pass a determinism assertion by being
+        // reproducibly empty. Stalls the device and allocates a readback buffer
+        // the size of the volume — a test accessor, in readDebug's style, never
+        // on the render path.
+        void readVolumeHash(std::uint64_t out[3]) const;
+
     private:
         // The expanded key list is the sum of tiles covered per splat, and that
         // is DATA, not a constant. So this is only the FIRST GUESS: the
@@ -298,6 +388,10 @@ namespace threepp::vulkan {
         // set per frame-in-flight and a UBO slot; the cap exists so the pool
         // and the UBO can be sized up front, and 8 is well past what a scene
         // that also has to fit in VRAM will hold.
+        //
+        // KEEP IN SYNC with kMaxSplatVolumes above: the reflection-volume table
+        // has one slot per resident cloud, so a cloud that could be resident and
+        // could not be bound would be a scan that renders but never reflects.
         static constexpr uint32_t kMaxClouds = 8;
 
         struct Cloud {
@@ -316,6 +410,22 @@ namespace threepp::vulkan {
             // scan with the new transform and no error anywhere. The overlay
             // line cache had exactly this bug. uuid is the identity check.
             std::string uuid;
+
+            // ── The reflection volume, baked once by uploadCloud ─────────────
+            // Image2D is this tree's 3D-image record too — ParticleFieldPass
+            // holds its density volumes in one (ParticleFieldPass.hpp:678,
+            // built by Impl::createImage3D) — so the depth rides alongside in
+            // volRes rather than in a type that does not exist. Null image =
+            // not baked (THREEPP_VK_SPLATVOL_OFF, or a zero-splat cloud).
+            //
+            // Lives in GENERAL for its whole life, matching the dust volumes
+            // (ParticleFieldPass.cpp:501): the consumer table binds live slots
+            // and dummy slots through one array, and one layout across all of
+            // them is one less thing for that write to get wrong.
+            Image2D  volume{};
+            uint32_t volRes[3]{};
+            float    localBoxMin[3]{};
+            float    localBoxSize[3]{};
         };
 
         // Retire every resident entry whose cloud was not submitted for
@@ -398,6 +508,25 @@ namespace threepp::vulkan {
         VkPipeline rasterPipe_   = VK_NULL_HANDLE;
         VkPipeline checksumPipe_ = VK_NULL_HANDLE;
 
+        // ── Volume bake: its own layout, pool and single set ─────────────────
+        // The bake binds NOTHING the frame binds (geom SSBO, sh SSBO, a
+        // transient scratch SSBO, the out image), so it gets its own four-
+        // binding layout rather than a tenth user of the raster's twenty-four.
+        //
+        // ONE descriptor set for every cloud ever uploaded: uploadCloud's
+        // one-shot waits on the queue before it returns, so the set is provably
+        // not in flight when the next upload rewrites it. All null under
+        // THREEPP_VK_SPLATVOL_OFF — the pipelines are not even created.
+        VkDescriptorSetLayout bakeDsLayout_  = VK_NULL_HANDLE;
+        VkPipelineLayout      bakePipeLayout_ = VK_NULL_HANDLE;
+        VkDescriptorPool      bakeDescPool_  = VK_NULL_HANDLE;
+        VkDescriptorSet       bakeSet_       = VK_NULL_HANDLE;
+        VkPipeline            bakeScatterPipe_ = VK_NULL_HANDLE;
+        VkPipeline            bakeResolvePipe_ = VK_NULL_HANDLE;
+        // THREEPP_VK_SPLATVOL_OFF, read once at construction.
+        bool     volumeOff_ = false;
+        uint64_t volumeGen_ = 0;
+
         // Cached per-frame image views so a cloud added mid-run can have its
         // freshly-allocated sets written without another resize() round trip.
         std::vector<VkImageView> sceneHdrViews_, depthViews_, motionViews_, idsViews_;
@@ -417,7 +546,23 @@ namespace threepp::vulkan {
         void allocateScratch(uint32_t maxSplats, uint32_t entryBudget);
         void writeSets(Cloud& c);
         void uploadCloud(Cloud& c, const SplatCloud& src);
-        void oneShot(const std::function<void(VkCommandBuffer)>& body);
+        // Everything a resident cloud owns. Three sites destroy clouds (the
+        // destructor, retireStale, and syncClouds' recycled-address branch) and
+        // the volume is easy to forget in any one of them, so they share this.
+        // Bumps volumeGeneration when the cloud had a volume to free.
+        void destroyCloudResources(Cloud& c);
+        // Decides the cloud's bake box and per-axis resolution on the CPU (the
+        // only part of the bake that reads the SplatData at all). Leaves
+        // volRes zeroed — "do not bake this cloud" — for a cloud it cannot
+        // bound.
+        void planVolume(Cloud& c, const SplatData& data);
+        // Records the scatter + resolve dispatches into the caller's one-shot,
+        // after the staging copies. `scratch` is the caller's transient buffer,
+        // destroyed once the one-shot's wait returns.
+        void recordBake(VkCommandBuffer cb, Cloud& c, const Buffer& scratch);
+        // const because it touches no member state of its own — the readback
+        // accessors are const and record through it too.
+        void oneShot(const std::function<void(VkCommandBuffer)>& body) const;
         void barrier(VkCommandBuffer cb) const;
         // The compute write -> vkCmdDispatchIndirect read hazard. barrier()
         // covers compute and transfer only; indirect command fetch is its own

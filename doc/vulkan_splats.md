@@ -124,11 +124,19 @@ changing what a tile fetches.
 
 ## Out of scope, on purpose
 
-Splats cast no shadows, appear in no reflection, contribute to no probe GI, do
-not participate in froxel fog or MSAA, are invisible to the RT sensors, and are
-not exposed to Python, the editor or serialization. Secondary views (`addView`)
-skip the pass entirely rather than paint splats into a sensor AOV nobody asked
-for.
+Splats cast no shadows, contribute to no probe GI, do not participate in
+froxel fog or MSAA, and are invisible to the RT sensors. Secondary views
+(`addView`) skip the pass entirely rather than paint splats into a sensor AOV
+nobody asked for.
+
+Reflections left this list on purpose: each cloud upload also bakes a small
+rgba16f density/radiance volume, and the deferred shade's traced reflection
+legs (water, glass, and the glossy path) march it — so a scan appears in a
+pond or a chrome sphere, as a soft volumetric image, at ~0.03 ms. Primary
+view only; the sensor wall above stands. `THREEPP_VK_SPLATVOL_OFF=1` restores
+the pre-feature frame byte-exactly. See `splat_volume.glsl`, the `--water` /
+`--metal` flags on the `gaussian_splats` example, and `VulkanSplatVolume_test`
+for the asserted A/B.
 
 ## The expected-depth AOV
 

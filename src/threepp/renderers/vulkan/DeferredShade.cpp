@@ -24,19 +24,26 @@
 namespace threepp::vulkan {
 
     // Number of descriptor bindings in the deferred set. Binding NUMBERS run
-    // 0..66 with 56 retired, so the table has 66 entries and the highest
-    // binding number is 66 — they are not the same quantity, which is exactly
+    // 0..71 with 56 retired, so the table has 71 entries and the highest
+    // binding number is 71 — they are not the same quantity, which is exactly
     // how the two exact-fit stack arrays below used to drift: adding binding 67
     // to a 66-entry array wrote one element past the end (a silent stack smash
     // that no validation layer can see). Both tables are std::array of this
     // size now, filled through .at(), and the fill count is checked, so the
     // failure mode is a loud throw at init instead.
-    constexpr uint32_t kDeferredBindingCount = 69;
+    constexpr uint32_t kDeferredBindingCount = 71;
 
     // ParticleField density volumes bound at once (binding 67 is an array of
     // this many). KEEP IN SYNC with kMaxDensityFields in
     // shaders/particle_density.glsl and ParticleFieldPass.hpp.
     constexpr uint32_t kMaxDensityVolumes = 4;
+
+    // Splat reflection volumes bound at once (binding 70 is an array of this
+    // many). KEEP IN SYNC with kMaxSplatVolumes in shaders/splat_volume.glsl
+    // and SplatPass.hpp. Declared here rather than pulled in from SplatPass.hpp
+    // for the same reason kMaxDensityVolumes is: this pass knows the size of an
+    // array in its own layout, not the class that fills it.
+    constexpr uint32_t kMaxSplatVolumeSlots = 8;
 
     DeferredShade::DeferredShade(VulkanContext& ctx, uint32_t framesInFlight)
         : ctx_(ctx), framesInFlight_(framesInFlight) {
@@ -195,6 +202,17 @@ namespace threepp::vulkan {
         // fetch per step where the integer volume would force 8 texelFetches.
         set(69, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER); // particle density r16f mirrors...
         b[nb - 1].descriptorCount = kMaxDensityVolumes;     // ...same fixed-size array
+        // Splat reflection volumes (plans/splat-volume-reflections.md): a
+        // SECOND, parallel table — array of rgba16f 3D images baked once per
+        // cloud by SplatPass, plus the std140 UBO that carries each one's
+        // world->UVW matrix and conservative world AABB. rgba16f IS filterable,
+        // so unlike the integer dust volumes above these are LINEAR-sampled
+        // (lutSampler_) and the march is one hardware tap per step per volume.
+        // Same always-bound contract: unused slots get the renderer's 1×1×1
+        // dummy, so a scene with no splats is still a complete descriptor set.
+        set(70, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER); // splat reflection volumes...
+        b[nb - 1].descriptorCount = kMaxSplatVolumeSlots;   // ...fixed-size array
+        set(71, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER);         // SplatVolumeUbo (worldToUvw + world AABBs)
 
         // Exact fit is the contract: a new binding must bump
         // kDeferredBindingCount, and rewriteDescriptors must gain the matching
@@ -848,6 +866,32 @@ namespace threepp::vulkan {
             w[68].descriptorCount = kMaxDensityVolumes;
             w[68].descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
             w[68].pImageInfo      = pdLinInfos.data();
+            // Splat reflection volumes: same whole-array-in-one-write shape as
+            // the density table, LINEAR (lutSampler_) because the baked volume
+            // is rgba16f and svLeg wants one hardware trilinear tap per step.
+            // GENERAL for their whole life (SplatPass::Cloud::volume) and the
+            // dummy is created in GENERAL too, so one layout covers live and
+            // unused slots alike.
+            std::array<VkDescriptorImageInfo, kMaxSplatVolumeSlots> svInfos{};
+            for (uint32_t i = 0; i < kMaxSplatVolumeSlots; ++i) {
+                svInfos[i].sampler     = lutSampler_;
+                svInfos[i].imageView   = (in.splatVolume && i < in.splatVolumeCount)
+                                                 ? in.splatVolume[i]
+                                                 : VK_NULL_HANDLE;
+                svInfos[i].imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+            }
+            w[69].sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            w[69].dstSet          = sets_[f];
+            w[69].dstBinding      = 70;
+            w[69].dstArrayElement = 0;
+            w[69].descriptorCount = kMaxSplatVolumeSlots;
+            w[69].descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+            w[69].pImageInfo      = svInfos.data();
+            VkDescriptorBufferInfo svUboInfo{};
+            svUboInfo.buffer = in.splatVolumeUbo ? in.splatVolumeUbo[f] : VK_NULL_HANDLE;
+            svUboInfo.offset = 0;
+            svUboInfo.range  = VK_WHOLE_SIZE;
+            setw(70, 71, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, nullptr, &svUboInfo);
             vkUpdateDescriptorSets(ctx_.device(), static_cast<uint32_t>(w.size()), w.data(), 0, nullptr);
         }
     }
@@ -895,7 +939,8 @@ namespace threepp::vulkan {
                    | (p.froxelsActive ? 256u : 0u)  // froxel LUT valid this frame
                    | (shadowDwellOff ? 512u : 0u)   // bit 9: shadow dwell kill switch (was SSR)
                    | (p.bgIsSolidColor ? 1024u : 0u) // solid bg: sky store NOT pre-exposed
-                   | (p.particleDensity ? 2048u : 0u);// bit 11: ParticleField dust live
+                   | (p.particleDensity ? 2048u : 0u) // bit 11: ParticleField dust live
+                   | (p.splatVolume ? 4096u : 0u);    // bit 12: splat reflection volume live
         push.frame              = p.frameCounter;
         push.emissiveCount      = p.emissiveCount;
         push.emissiveTotalPower = p.emissiveTotalPower;

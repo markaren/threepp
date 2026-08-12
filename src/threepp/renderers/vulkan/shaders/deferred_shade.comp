@@ -397,6 +397,12 @@ layout(set = 0, binding = 65) uniform sampler2D cloudShadowTex;
 // keeps dust view-independent and sharper than the froxel grid.
 #include "particle_density.glsl"
 
+// Splat reflection volumes (bindings 70/71) — the SECOND density table, baked
+// once per SplatCloud by SplatPass and marched by svLeg on the traced
+// reflection legs only. Never on the primary leg: SplatPass composites the real
+// thing there (see the header for the double-count this avoids).
+#include "splat_volume.glsl"
+
 #include "probe_common.glsl"// probeIrradiance()
 
 // Shared ShadePush block (vulkan_shared.h) — field docs + the flags bit
@@ -1355,6 +1361,19 @@ void main() {
         vec3 r = traceRadiance(shadowOrig, Rd, shadowsOn, maxLod, missLod, reflSeed,
                                /*cheapHits=*/true,// reflection channel: blur+temporal absorb
                                /*probeHitFill=*/true);
+        // SPLATS IN THE MIRROR, glossy path — the water/glass legs' block
+        // (deferred_shade_50_water_glass.glsl:113), verbatim on this path's own
+        // ray and hit: the traced leg cannot see a SplatCloud (composited AFTER
+        // this shade), so the baked volume stands in for it. BEFORE the
+        // roughness clamp on purpose — the splat is reflected CONTENT, and a
+        // bright cloud takes the same anti-speckle ceiling as a bright sun
+        // texel. gTraceHitT is read before reflHitT latches it, and svLeg
+        // leaves it untouched.
+        if ((pc.flags & 4096u) != 0u) {
+            vec3 svEmis;
+            const float svT = svLeg(shadowOrig, Rd, gTraceHitT > 0.0 ? gTraceHitT : 1e30, svEmis);
+            r = r * svT + svEmis;
+        }
         // Reflected-content distance for the denoiser's gloss-blur footprint:
         // env miss → 0 (already lobe-filtered via missLod — no extra blur),
         // geometry hit → its distance.

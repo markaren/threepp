@@ -1116,6 +1116,24 @@ namespace threepp {
         // of sort scratch" is a VRAM claim, and this is the assertable form.
         [[nodiscard]] std::size_t splatScratchSplats() const;
 
+        // ── The splat reflection volume (plans/splat-volume-reflections.md) ──
+        // Each resident cloud is voxelized once, at upload, into an rgba16f
+        // medium that reflection legs march. These three are its test surface,
+        // in the same style as the two above.
+        //
+        //   splatVolumeBytes()      resident volume VRAM; 0 once the clouds are
+        //                           evicted, and 0 under THREEPP_VK_SPLATVOL_OFF
+        //   splatVolumeGeneration() bumped when the SET of baked volumes changes
+        //   splatVolumeHash(out)    out[0] = FNV-1a of every volume's texels,
+        //                           out[1] = texels hashed, out[2] = texels a
+        //                           splat actually reached. The bake accumulates
+        //                           with integer atomics precisely so this is
+        //                           reproducible; DRAINS THE DEVICE and copies
+        //                           the whole volume back, so it is a test call.
+        [[nodiscard]] std::uint64_t splatVolumeBytes() const;
+        [[nodiscard]] std::uint64_t splatVolumeGeneration() const;
+        void splatVolumeHash(std::uint64_t out[3]) const;
+
         // ── GPU per-instance world matrices ───────────────────────────────────
         // A compute pass (instance_expand.comp) that recomputes, per
         // InstancedMesh span, the world matrix the CPU bakes into every

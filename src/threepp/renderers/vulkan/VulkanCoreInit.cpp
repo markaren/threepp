@@ -225,6 +225,11 @@ VulkanRenderer::Impl::~Impl() {
             for (auto& b : particleDensityUbos_) destroyBuffer(ctx->allocator(), b);
             destroyImage2D(ctx->allocator(), d, particleDensityDummy_);
             destroyImage2D(ctx->allocator(), d, particleDensityLinDummy_);
+            // The splat reflection table's two renderer-owned handles, beside
+            // their density twins and for the same reason (the baked volumes
+            // themselves belong to SplatPass and die with their clouds).
+            for (auto& b : splatVolumeUbos_) destroyBuffer(ctx->allocator(), b);
+            destroyImage2D(ctx->allocator(), d, splatVolumeDummy_);
 
             if (tlas) ctx->rt().destroyAccelerationStructure(d, tlas, nullptr);
             destroyBuffer(ctx->allocator(), tlasBuffer);

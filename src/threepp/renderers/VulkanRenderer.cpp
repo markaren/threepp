@@ -263,6 +263,17 @@ namespace threepp {
         shadeParams.clusterLightCount  = clusterLightCountThisFrame_;
         shadeParams.froxelsActive      = froxelsActive;
         shadeParams.particleDensity    = densityActive;
+        // ── Splats in the mirror: PRIMARY VIEW ONLY ──────────────────────────
+        // The volume descriptors are world-anchored and shared by every view's
+        // set (harmlessly — exactly like the particle density table). This FLAG
+        // is what actually turns the svLeg marches on, and it is where the scope
+        // wall is enforced: doc/vulkan_splats.md says splats "are invisible to
+        // the RT sensors" and that secondary views "skip the pass entirely
+        // rather than paint splats into a sensor AOV nobody asked for". A
+        // secondary's water reflection is a sensor AOV, so a cloud appearing in
+        // it would be a silent scope change and a golden risk. Clearing the flag
+        // here leaves every secondary on the pre-change arithmetic textually.
+        shadeParams.splatVolume        = splatVolumeActiveThisFrame_ && !view().secondary;
         shadeParams.preExpBits         = preExpBits_;
         shadeParams.bgIsSolidColor     = envIsBgColor;
 
@@ -1590,6 +1601,19 @@ namespace threepp {
 
     std::size_t VulkanRenderer::splatScratchSplats() const {
         return core()->splat_ ? core()->splat_->scratchSplats() : 0;
+    }
+
+    std::uint64_t VulkanRenderer::splatVolumeBytes() const {
+        return core()->splat_ ? core()->splat_->volumeBytes() : 0;
+    }
+
+    std::uint64_t VulkanRenderer::splatVolumeGeneration() const {
+        return core()->splat_ ? core()->splat_->volumeGeneration() : 0;
+    }
+
+    void VulkanRenderer::splatVolumeHash(std::uint64_t out[3]) const {
+        out[0] = out[1] = out[2] = 0;
+        if (core()->splat_) core()->splat_->readVolumeHash(out);
     }
 
     void VulkanRenderer::setGpuInstanceExpansion(bool enabled) {
