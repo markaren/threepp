@@ -166,7 +166,7 @@ the splats' own. And the opt-in defaults OFF: until it is taken, the mesh's
 TLAS instance carries mask 0, nothing renders or senses it, and a scene that
 never asks is byte-unchanged.
 
-## Splats in a secondary view (`setViewSplats`, off by default)
+## Splats in a secondary view (`setViewSplats`, the consumers default it ON)
 
 The splat pass was PRIMARY-ONLY, and the reason was cost rather than
 correctness: the radix sort scales with SPLAT COUNT, not view size, so a
@@ -191,14 +191,36 @@ sort scratch, which is safe for the same reason the pass already reuses it
 across clouds — the stages are separated by its own compute→compute barriers,
 and the targets record sequentially inside one command buffer.
 
-Measured (RTX 4070, `VulkanMultiView_test`, one 256x192 secondary view):
+Measured (RTX 4070, `VulkanMultiView_test`, one 256x192 secondary view, idle
+GPU):
 
 | cloud | frame, flag off | frame, flag on | per-view splat cost |
 |---|---|---|---|
-| 60k splats | 2.40 ms | 5.05 ms | 2.66 ms |
-| 500k splats | 2.54 ms | 9.90 ms | 7.35 ms |
+| 60k splats | 2.18 ms | 4.74 ms | 2.57 ms |
+| 500k splats | 2.34 ms | 9.50 ms | 7.16 ms |
 
-The walls that stand. Default OFF for every view, so a scene that does not ask
+**The RENDERER defaults it off; the two consumers that are pictures turn it
+on.** "Secondary view" covers both a sensor and a viewport, and for anything
+whose output a HUMAN or a perception policy looks at, an empty space where a
+scan stands is a defect rather than a saving — the more so because the OpenGL
+backend draws a `SplatCloud` as an ordinary instanced mesh and has never had
+this wall, so off-by-default there would have been a backend divergence, not a
+policy. So:
+
+- `CameraSensor` takes the flag for its view. `CameraSensor::renderSplats`
+  (public, default true, read on every capture) is the opt-out, for a sensor
+  that cannot afford the sort.
+- The editor's `VulkanViewPane` takes it unconditionally: the primary viewport
+  beside the pane draws splats, and so does the same pane on OpenGL.
+
+Cost is the reason the switch exists, and on a heavy scene it is not small: the
+sort scales with SPLAT COUNT, not view size, so a 128x96 wrist camera on the 5M
+town pays the same ~8-13 ms the primary does, per opted-in view, per frame.
+Three such views at once is the ceiling, and a fourth is refused. A sensor rig
+over a town-scale scan should clear `renderSplats` on the views that only need
+geometry and read the baked surface instead (above).
+
+The walls that stand. Default OFF at the RENDERER, so a scene that does not ask
 is byte-unchanged (asserted: the primary's own splat expansion is identical with
 a secondary opted in). The DEPTH AOV stays primary-only — a secondary view's AOV
 image is 1x1 by construction — and so does the debug checksum, which has one

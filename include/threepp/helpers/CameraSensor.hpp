@@ -107,6 +107,19 @@ namespace threepp {
         // (an intrinsics-matched frustum, say).
         Camera& getCamera() { return camera_; }
 
+        // Do SplatClouds appear in the picture? ON, because a camera that does
+        // not see what the viewport sees is not a camera — and because the GL
+        // path has no such switch to begin with, so OFF would be a backend
+        // divergence rather than a policy.
+        //
+        // Vulkan only, where splats are a per-view opt-in
+        // (VulkanRenderer::setViewSplats) whose cost is a second radix sort
+        // over the whole cloud: ~0.3 ms on a 60k-splat object scan, ~8-13 ms on
+        // a 5M-splat town, whatever this sensor's resolution. Clearing it is
+        // the opt-out for a sensor that cannot afford that. Read on every
+        // capture, so it may be flipped at any time.
+        bool renderSplats = true;
+
         /**
          * Write the newest frame to a .png/.jpg/.bmp, creating parent
          * directories. False when there is no frame yet, on an unsupported

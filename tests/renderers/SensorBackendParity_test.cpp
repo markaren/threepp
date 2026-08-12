@@ -29,8 +29,10 @@
 
 #include "threepp/threepp.hpp"
 
+#include "threepp/helpers/CameraSensor.hpp"
 #include "threepp/helpers/DepthSensor.hpp"
 #include "threepp/helpers/LidarSensor.hpp"
+#include "threepp/objects/SplatCloud.hpp"
 #include "threepp/renderers/VulkanRenderer.hpp"
 
 #include <algorithm>
@@ -207,6 +209,90 @@ namespace {
         return summarise(points);
     }
 
+    // ── A colour camera must SEE a splat cloud, on both backends ────────────
+    // GL renders a SplatCloud as an ordinary instanced Mesh, so it has always
+    // appeared in a CameraSensor's frame. Vulkan rasterizes splats in a compute
+    // pass that was PRIMARY-ONLY, and a CameraSensor there is a secondary view:
+    // the user-visible symptom was a sensor that saw empty space where a scan
+    // stood. The renderer's per-view opt-in (setViewSplats) closed the wall;
+    // CameraSensor::renderSplats takes it by default, which is what this gate
+    // holds in place.
+    //
+    // PRESENCE parity only. Two different rasterizers (an instanced quad with
+    // GL blending vs a tiled compute sort) do not produce comparable pixels,
+    // so the claim is "the cloud is in the picture on both", never a diff.
+
+    // The cloud stands in a clear part of the room, off the axis the probe
+    // objects sit on, so nothing occludes it and nothing else in frame is
+    // orange.
+    // Far enough back that the cloud covers a THIRD of the frame rather than
+    // all of it: a full-frame cloud would pass the coverage check without ever
+    // showing that the background is still the background.
+    const Vector3 kCloudAt{-2.f, 1.5f, 0.f};
+    const Vector3 kSensorAt{-2.f, 1.5f, 4.2f};
+
+    std::shared_ptr<SplatCloud> makeCloud() {
+        SplatGenerator::Options o;
+        o.count = 60000;
+        o.seed = 90210u;
+        o.shDegree = 0;
+        // Small: a splat's skirt reaches several times its scale, and
+        // anisotropy stretches it further, so a cloud sized by its extent alone
+        // ends up filling the frame.
+        o.extent.set(0.9f, 0.7f, 0.5f);
+        o.minScale = 0.02f;
+        o.maxScale = 0.05f;
+        o.minOpacity = 0.5f;
+        o.maxOpacity = 0.95f;
+        auto data = SplatGenerator::generate(o);
+        // One flat colour no wall, box or light in this scene can be mistaken
+        // for, which is what makes coverage countable without segmentation.
+        for (std::size_t i = 0; i < data.count(); ++i) data.setDcColor(i, Vector3{0.95f, 0.35f, 0.10f});
+        auto cloud = SplatCloud::create(std::move(data));
+        cloud->position.copy(kCloudAt);
+        return cloud;
+    }
+
+    // Percentage of the frame carrying the cloud's orange. The room is white
+    // under a white key light, so red-over-blue is the cloud and only the cloud.
+    double orangePct(const std::vector<unsigned char>& img) {
+        if (img.empty()) return 0.0;
+        long n = 0;
+        for (std::size_t i = 0; i + 2 < img.size(); i += 3)
+            if (img[i] > 70 && img[i] > img[i + 2] + 25) ++n;
+        return 100.0 * static_cast<double>(n) * 3.0 / static_cast<double>(img.size());
+    }
+
+    std::unique_ptr<CameraSensor> makeSensor() {
+        auto sensor = std::make_unique<CameraSensor>(/*fovY*/ 45.f, 128, 96, 0.1f, 50.f);
+        sensor->position.copy(kSensorAt);// looks down its own -Z, at the cloud
+        sensor->updateMatrixWorld(true); // not parented to the scene
+        return sensor;
+    }
+
+    // Vulkan: the sensor is a secondary VIEW, so its picture is whatever the
+    // last render() drew, the first captures come back empty while the view
+    // warms up, and frames arrive through the canvas (headless frame model).
+    double splatCoverageVk(Canvas& canvas, VulkanRenderer& renderer, Scene& scene, Camera& camera) {
+        auto sensor = makeSensor();
+        for (int i = 0; i < 24; ++i) {
+            canvas.animateOnce([&] { renderer.render(scene, camera); });
+            (void) sensor->capture(renderer, scene);
+        }
+        return orangePct(sensor->image());
+    }
+
+    // GL: capture() renders the sensor's own camera into the sensor's own
+    // target, this instant. update() is the splat draw-order sort (SplatCloud's
+    // header); without it the order lands a frame late, which for a
+    // single-frame capture is the wrong order.
+    double splatCoverageGl(Renderer& renderer, Scene& scene, SplatCloud& cloud) {
+        auto sensor = makeSensor();
+        cloud.update(sensor->getCamera());
+        (void) sensor->capture(renderer, scene);
+        return orangePct(sensor->image());
+    }
+
     Stats scanDepth(Renderer& renderer, Scene& scene, Camera& camera) {
         renderer.render(scene, camera);
 
@@ -234,14 +320,25 @@ int main() {
     camera->position.set(0, 2, 4);
     camera->lookAt(0, 0, 0);
 
+    // The cloud is added AFTER the ranging scans on each backend, so those
+    // scans see exactly the scene they always did (splats are in no
+    // acceleration structure, but the goldens they are judged against predate
+    // this object either way).
+    auto cloud = makeCloud();
+
     // ── Vulkan first: a Vulkan canvas must precede the GL one (CanvasApiOrder) ──
     Stats vkLidar, vkDepth;
+    double vkSplatPct = 0.0;
     try {
         Canvas vkCanvas(Canvas::Parameters().title("SensorParity-vk").size(kW, kH).vsync(false).headless(true));
         VulkanRenderer vkRenderer(vkCanvas);
 
         vkLidar = scanLidar(vkRenderer, *scene, *camera);
         vkDepth = scanDepth(vkRenderer, *scene, *camera);
+
+        scene->add(cloud);
+        vkSplatPct = splatCoverageVk(vkCanvas, vkRenderer, *scene, *camera);
+        scene->remove(*cloud);
     } catch (const std::exception& e) {
         std::printf("[skip] Vulkan GPU unavailable: %s\n", e.what());
         return kSkipCode;
@@ -249,6 +346,7 @@ int main() {
 
     // ── GL second ───────────────────────────────────────────────────────────
     Stats glLidar, glDepth;
+    double glSplatPct = 0.0;
     try {
         Canvas glCanvas(Canvas::Parameters().title("SensorParity-gl").size(kW, kH).headless(true));
         GLRenderer glRenderer(glCanvas);
@@ -256,6 +354,10 @@ int main() {
 
         glLidar = scanLidar(glRenderer, *scene, *camera);
         glDepth = scanDepth(glRenderer, *scene, *camera);
+
+        scene->add(cloud);
+        glSplatPct = splatCoverageGl(glRenderer, *scene, *cloud);
+        scene->remove(*cloud);
     } catch (const std::exception& e) {
         check(false, std::string("the GL scans ran (threw: ") + e.what() + ")");
         std::printf("\n%d CHECK(S) FAILED\n", failures);
@@ -274,6 +376,10 @@ int main() {
     checkShell("depth", "GL", glDepth);
     checkShell("depth", "VK", vkDepth);
     checkParity("depth", glDepth, vkDepth);
+
+    std::printf("  [ .. ] camera splats : GL %.1f%% of the frame, VK %.1f%%\n", glSplatPct, vkSplatPct);
+    check(glSplatPct > 5.0, "camera GL: the splat cloud is in the sensor's picture");
+    check(vkSplatPct > 5.0, "camera VK: the splat cloud is in the sensor's picture");
 
     std::printf(failures == 0 ? "\nOK\n" : "\n%d CHECK(S) FAILED\n", failures);
     return failures == 0 ? 0 : 1;

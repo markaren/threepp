@@ -82,6 +82,11 @@ void VulkanViewPane::sync(Camera* camera, int x, int y, int w, int h) {
         h_ = h;
         renders_ = 0;
         if (handle_ == 0) return;// pre-first-render; retried next frame
+        // A pane is a VIEWPORT, and the primary viewport beside it draws
+        // splats — as does this pane on the OpenGL backend, which has no such
+        // switch. The cost (a second sort over the whole cloud) is the price of
+        // a pane that shows the document.
+        vk_->setViewSplats(handle_, true);
     }
     if (handle_ == 0) return;
 

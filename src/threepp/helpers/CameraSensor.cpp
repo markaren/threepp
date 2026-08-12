@@ -82,12 +82,21 @@ bool CameraSensor::capture(Renderer& renderer, Scene& scene) {
         if (viewHandle_ == 0) {
             viewHandle_ = vk->addView(camera_, static_cast<int>(width_),
                                       static_cast<int>(height_));
-            if (viewHandle_ != 0) viewRenderer_ = vk;
+            if (viewHandle_ != 0) {
+                viewRenderer_ = vk;
+                vk->setViewSplats(viewHandle_, renderSplats);
+            }
             // 0 means render() has not run yet; retried on the next capture.
             // Either way there is nothing to read until a LATER frame has
             // drawn the view, so this capture reports no new frame.
             return false;
         }
+
+        // Re-applied rather than set once: renderSplats is public and may be
+        // flipped after the view exists. Guarded because taking the flag claims
+        // a splat target at the next frame boundary.
+        if (vk->viewSplats(viewHandle_) != renderSplats)
+            vk->setViewSplats(viewHandle_, renderSplats);
 
         auto pixels = vk->readViewRGBPixels(viewHandle_);
         const auto expected = static_cast<std::size_t>(width_) * height_ * 3;
