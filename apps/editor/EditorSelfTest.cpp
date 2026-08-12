@@ -8117,6 +8117,15 @@ int EditorApp::runSelfTest() {
         check(readBack && *readBack == surfaceConfig,
               "the surface-bake config round-trips on the splat node");
 
+        // The pose-set flag, which the plane below must NOT carry: this scan is
+        // a floor seen from outside, and an interior bake of it would stand the
+        // cameras in the slab. Round-trip only.
+        auto interiorConfig = surfaceConfig;
+        interiorConfig.interior = true;
+        const auto interiorBack = editor::SplatSurfaceConfig::decode(interiorConfig.encode());
+        check(interiorBack && *interiorBack == interiorConfig && interiorConfig != surfaceConfig,
+              "the Interior pose-set flag round-trips through the config codec");
+
         auto ball = Mesh::create(SphereGeometry::create(0.15f, 16, 12),
                                  MeshStandardMaterial::create());
         ball->name = "Scan Ball";

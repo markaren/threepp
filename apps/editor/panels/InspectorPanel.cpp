@@ -1253,6 +1253,17 @@ void EditorApp::drawSplatSection(Object3D& object) {
             ImGui::PopItemWidth();
             ImGui::TextColored(theme::muted(), "Voxel 0 sizes itself from the scan; poses 0 uses 26.");
 
+            bool interior = config.interior;
+            if (ImGui::Checkbox("Interior", &interior)) {
+                auto after = config;
+                after.interior = interior;
+                commit(std::move(after), interior ? "Splat Surface Interior" : "Splat Surface Orbit");
+            }
+            ImGui::TextColored(theme::muted(),
+                               "Tick for a scan of the INSIDE of a room: the cameras stand in the "
+                               "scan and look out. Orbited from outside, a room bakes the OUTSIDE "
+                               "of its walls and nothing can walk in it.");
+
             const bool canBake = editor::SplatSurfaceCache::available(renderer_.get());
             if (!canBake) {
                 // The depth AOV the bake reads is a Vulkan G-buffer attachment.

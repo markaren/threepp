@@ -88,6 +88,8 @@ namespace threepp::editor {
             options.voxelSize = config.voxelSize;
             if (config.minComponentVoxels > 0) options.minComponentVoxels = config.minComponentVoxels;
             if (config.poseCount > 0) options.poseCount = config.poseCount;
+            options.poseSet = config.interior ? splats::SurfaceBakeOptions::PoseSet::Interior
+                                              : splats::SurfaceBakeOptions::PoseSet::Orbit;
 
             auto mesh = splats::bakeSurface(*vulkan, cloud, options);
             ++bakeCount_;

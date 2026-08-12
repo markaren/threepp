@@ -25,6 +25,8 @@ std::string SplatSurfaceConfig::encode() const {
     out += std::to_string(minComponentVoxels);
     out += ";poses=";
     out += std::to_string(poseCount);
+    out += ";interior=";
+    out += interior ? "1" : "0";
     return out;
 }
 
@@ -41,6 +43,8 @@ std::optional<SplatSurfaceConfig> SplatSurfaceConfig::decode(const std::string& 
             config.minComponentVoxels = toInt(value, config.minComponentVoxels);
         } else if (key == "poses") {
             config.poseCount = toInt(value, config.poseCount);
+        } else if (key == "interior") {
+            config.interior = toBool(value, config.interior);
         }
     });
 

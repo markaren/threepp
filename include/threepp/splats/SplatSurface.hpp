@@ -76,7 +76,12 @@ namespace threepp::splats {
 
         // Allocation gate, in world units of view-axis distance: a depth sample
         // farther than this allocates NOTHING. 0 = 2.5 * the pose distance
-        // (itself 2.2 * the fit radius unless poseDistance says otherwise).
+        // (itself 2.2 * the fit radius unless poseDistance says otherwise), or
+        // 2.5 * the FIT RADIUS under PoseSet::Interior, where a pose distance is
+        // not a length in the scan at all — the camera is standing at the centre
+        // of the thing it is measuring, so the extents are the only scale there
+        // is. 2.5 radii reaches the far wall of a room whose fit radius is about
+        // half its own diagonal.
         //
         // A pose camera sees PAST its subject — its far plane is 20 fit radii —
         // so an outdoor scan returns depths on background splats far outside the
@@ -105,14 +110,36 @@ namespace threepp::splats {
         // them is reserved against this same cap, so growth cannot overshoot it.
         uint64_t maxBlockBytes{1ull << 30};
 
-        // Empty = generated: a Fibonacci sphere of `poseCount` viewpoints around
-        // the fit sphere for a compact scan, a ring plus a top-down grid for one
-        // wider than it is tall. Supplying poses is the point for interiors and
-        // for replaying a real capture trajectory — a sphere of poses looking
-        // inward at a room sees the outside of its walls.
+        // Where the generated cameras STAND, which is the difference between
+        // baking a room and baking the block it is inside.
+        //
+        // Orbit (the default, and byte-identical to every bake before this
+        // option existed): outside the fit sphere looking IN — a Fibonacci
+        // sphere of `poseCount` viewpoints for a compact scan, a ring plus a
+        // top-down grid for one wider than it is tall. Right for an object, a
+        // facade, an outdoor site.
+        //
+        // Interior: inside the scan looking OUT — the fit centre plus a few
+        // deterministically jittered stations at a fraction of the fit
+        // half-extents (a single station sees only what is not behind
+        // furniture), each fanning a Fibonacci sphere of directions with
+        // straight up and straight down INCLUDED, because a room's floor and
+        // ceiling are the two surfaces a robot needs most and the pole-avoiding
+        // form of that sphere points at neither. Orbiting a scan that models the
+        // inside of a room reconstructs the OUTSIDE of its walls: free space
+        // carved outside, surface on the outer skin, the walkable volume never
+        // observed at all. Stats::beyondCentreSamples is the tell for a bake
+        // that made that mistake.
+        //
+        // `poses` overrides both: supplying them is still the answer for
+        // replaying a real capture trajectory.
+        enum class PoseSet { Orbit, Interior };
+        PoseSet poseSet{PoseSet::Orbit};
+
         std::vector<BakePose> poses;
         int poseCount{26};
-        // 0 = 2.2 * fit radius.
+        // 0 = 2.2 * fit radius. Orbit only — an Interior station stands AT the
+        // fit centre, so there is no distance to place.
         float poseDistance{0.f};
 
         // Islands smaller than this many surface CELLS are dropped: what
@@ -167,6 +194,25 @@ namespace threepp::splats {
             uint64_t refusedBlocks{0};   // allocations refused by maxBlockBytes
                                          //   (a repeat request counts again)
             uint64_t observedVoxels{0};  // voxels with weight >= weightFloor
+
+            // "YOUR SCAN MAY BE AN INTERIOR" — report only, nothing depends on
+            // it. Counts depth samples landing FARTHER than the pose's own
+            // distance to the fit centre: rays that reached the far side of a
+            // hollow subject, through whatever openings it has. An interior scan
+            // baked with PoseSet::Orbit is exactly that geometry seen inside
+            // out, and a high fraction of depthSamples is what it looks like
+            // from here. 0 under PoseSet::Interior, where every sample is beyond
+            // a station that stands at the centre and the statistic says nothing.
+            //
+            // Read it with the subject's SHAPE in hand rather than as a verdict:
+            // a WIDE FLAT subject reports a high fraction too, because its far
+            // rim genuinely does lie past its own centre. Measured on the
+            // synthetic clouds at 16 poses (VulkanSplatSurface_test): closed
+            // sphere shell 0 of 3485616 samples, flat plane 370000 of 2145163
+            // (17.25 %, from the ring poses' view across the slab). So the
+            // heuristic is SILENT on the legitimate orbit of a closed subject,
+            // which is the case it must not cry wolf on.
+            uint64_t beyondCentreSamples{0};
 
             // The carve pass, in blocks visited summed over POSES. The two fast
             // paths are bit-exact restatements of the per-voxel one (see the

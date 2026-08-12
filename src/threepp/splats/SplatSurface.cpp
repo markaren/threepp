@@ -153,7 +153,7 @@ namespace {
         return fit;
     }
 
-    std::vector<splats::BakePose> autoPoses(const Fit& fit, int count, float distance) {
+    std::vector<splats::BakePose> orbitPoses(const Fit& fit, int count, float distance) {
 
         std::vector<splats::BakePose> out;
         count = std::max(4, count);
@@ -205,6 +205,87 @@ namespace {
             // Straight up or down would give lookAt a degenerate up vector.
             if (std::abs(z) > 0.999f) p.up.set(0.f, 0.f, -1.f);
             out.push_back(p);
+        }
+        return out;
+    }
+
+    // Van der Corput radical inverse: the deterministic, INDEX-DERIVED sequence
+    // the interior stations step along. The bake's determinism contract
+    // (SplatSurface.hpp) forbids an RNG, and it does not need one — the pose
+    // list has to be a pure function of (fit, count) and nothing else.
+    inline float radicalInverse(uint32_t i, uint32_t base) {
+        const float inv = 1.f / static_cast<float>(base);
+        float f = inv, r = 0.f;
+        while (i) {
+            r += static_cast<float>(i % base) * f;
+            i /= base;
+            f *= inv;
+        }
+        return r;
+    }
+
+    // Cameras INSIDE the scan, looking out. The three numbers below are
+    // properties of that geometry rather than tastes, which is why they are
+    // constants here and not options:
+    //
+    // kInteriorFov — from one point the directions have to OVERLAP or the TSDF's
+    // weight floor (2 poses per voxel, SurfaceBakeOptions::weightFloor) is never
+    // met: a fan of narrow cones from a station tiles the sphere without any
+    // patch being seen twice, and the whole capture meshes to nothing. At 90
+    // degrees each direction's footprint is about 2.1 sr against the sphere's
+    // 12.6, so eight of them cover it with the overlap the floor needs.
+    // kInteriorMinDirs is the other half of that argument.
+    //
+    // kInteriorJitter — station offset as a fraction of the fit's PER-AXIS half
+    // extents: far enough that a second station sees round the furniture the
+    // first one was behind, near enough that no station can end up inside a wall
+    // (the half extents are 90th percentiles, so 0.35 of one is well short of
+    // the surface it describes).
+    constexpr float kInteriorFov = 90.f;
+    constexpr float kInteriorJitter = 0.35f;
+    constexpr int kInteriorMinDirs = 8;
+
+    std::vector<splats::BakePose> interiorPoses(const Fit& fit, int count) {
+
+        std::vector<splats::BakePose> out;
+        count = std::max(kInteriorMinDirs, count);
+        // At least two stations always: one is the centre, and a room is exactly
+        // the subject where a single viewpoint has things standing in front of it.
+        const int stations = std::clamp(1 + count / 24, 2, 8);
+        const int dirs = std::max(kInteriorMinDirs, count / stations);
+
+        const float golden = math::PI * (3.f - std::sqrt(5.f));
+        for (int s = 0; s < stations; ++s) {
+
+            Vector3 pos = fit.center;
+            if (s > 0) {
+                // Station 0 IS the centre; the rest walk a Halton sequence,
+                // symmetric about it. Symmetric and not one-sided because
+                // neither direction guards an invariant here — both are inside.
+                pos.x += (2.f * radicalInverse(static_cast<uint32_t>(s), 2) - 1.f) * kInteriorJitter * fit.half.x;
+                pos.y += (2.f * radicalInverse(static_cast<uint32_t>(s), 3) - 1.f) * kInteriorJitter * fit.half.y;
+                pos.z += (2.f * radicalInverse(static_cast<uint32_t>(s), 5) - 1.f) * kInteriorJitter * fit.half.z;
+            }
+
+            for (int i = 0; i < dirs; ++i) {
+                // The orbit's own Fibonacci arithmetic with the ENDPOINTS kept:
+                // z runs 1 .. -1 inclusive instead of stepping inside the poles,
+                // so one direction looks straight up and one straight down. A
+                // room's floor is what a robot stands on and its ceiling is what
+                // a lidar sees first; the pole-avoiding form points at neither.
+                const float z = (dirs > 1)
+                                        ? 1.f - 2.f * static_cast<float>(i) / static_cast<float>(dirs - 1)
+                                        : 0.f;
+                const float r = std::sqrt(std::max(0.f, 1.f - z * z));
+                const float phi = golden * static_cast<float>(i);
+                splats::BakePose p;
+                p.position = pos;
+                p.target.set(pos.x + r * std::cos(phi), pos.y + z, pos.z + r * std::sin(phi));
+                p.fov = kInteriorFov;
+                // Straight up or down would give lookAt a degenerate up vector.
+                if (std::abs(z) > 0.999f) p.up.set(0.f, 0.f, -1.f);
+                out.push_back(p);
+            }
         }
         return out;
     }
@@ -287,17 +368,27 @@ namespace threepp::splats {
         out.stats.voxelSize = voxel;
         out.stats.truncation = trunc;
 
+        const bool interior = options.poseSet == SurfaceBakeOptions::PoseSet::Interior;
+
         // The allocation gate. Derived from the pose distance rather than from
         // the far plane, because what a pose is CLOSE ENOUGH to fuse is the
         // subject it was placed around; the far plane's job is only to let the
         // subject's own back side render.
+        //
+        // Standing INSIDE, that argument has no distance to make: the station is
+        // at the centre of the subject, so the fit's own extents are the only
+        // scale in the problem.
         const float poseDist = options.poseDistance > 0.f ? options.poseDistance : fit.radius * 2.2f;
-        const float maxDepth = options.maxDepth > 0.f ? options.maxDepth : 2.5f * poseDist;
+        const float maxDepth = options.maxDepth > 0.f
+                                       ? options.maxDepth
+                                       : (interior ? 2.5f * fit.radius : 2.5f * poseDist);
         out.stats.maxDepth = maxDepth;
 
         const std::vector<BakePose> poses =
-                options.poses.empty() ? autoPoses(fit, options.poseCount, options.poseDistance)
-                                      : options.poses;
+                options.poses.empty()
+                        ? (interior ? interiorPoses(fit, options.poseCount)
+                                    : orbitPoses(fit, options.poseCount, options.poseDistance))
+                        : options.poses;
         out.stats.poses = static_cast<int>(poses.size());
         if (poses.empty()) return out;
 
@@ -394,8 +485,18 @@ namespace threepp::splats {
             std::memcpy(depth.data(), raw.data(), depth.size() * sizeof(float));
             for (auto& d : depth)
                 if (!(d > 0.f) || !std::isfinite(d)) d = 0.f;
-            for (const auto d : depth)
-                if (d > 0.f) ++out.stats.depthSamples;
+            // The wrong-mode tell. A ray landing past the pose's own distance to
+            // the fit centre went THROUGH the near side of a hollow subject and
+            // found its far side — which is what an interior scan looks like
+            // when it is orbited from outside. Report only; it changes nothing.
+            // Compared against the view-AXIS distance the AOV exports, which is
+            // shorter than the euclidean one off-axis, so the count errs quiet.
+            const float centreDist = pose.position.distanceTo(fit.center);
+            for (const auto d : depth) {
+                if (!(d > 0.f)) continue;
+                ++out.stats.depthSamples;
+                if (!interior && d > centreDist) ++out.stats.beyondCentreSamples;
+            }
             guardDepth(depth, aw, ah, options.fringeErode, options.outlierTolerance * trunc,
                        out.stats.skippedFringe, out.stats.skippedOutlier);
 

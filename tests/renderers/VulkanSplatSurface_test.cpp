@@ -362,6 +362,72 @@ int main(int argc, char** argv) {
     report(sn > 0 && std::abs(rMean - 1.0) < kVoxel, "the fused sphere shell has the radius it was built with");
     report(rRms < kVoxel, "and is round to within a voxel");
 
+    // ── 2b. the pose set: orbit bakes the outside, interior bakes the inside ──
+    // The defect this exists for: a scan modelling the INSIDE of a room, orbited
+    // from outside, reconstructs the outside of its walls — free space carved
+    // outside, colliders on the outer skin, the walkable volume unobserved. The
+    // sphere shell is the smallest cloud that can be baked either way, and the
+    // two answers are DIFFERENT SURFACES of it: the orbit finds the outer skin
+    // (radius above the shell's), stations at the centre find the inner one
+    // (radius below). Signed volume is the orientation oracle no radius can be —
+    // marching cubes winds triangles toward the FREE side, so a shell fused from
+    // inside comes out inside-out relative to one fused from outside.
+    {
+        auto interiorOpts = opts;
+        interiorOpts.poseSet = splats::SurfaceBakeOptions::PoseSet::Interior;
+        const auto inside = splats::bakeSurface(renderer, *shellCloud, interiorOpts);
+        const auto inside2 = splats::bakeSurface(renderer, *shellCloud, interiorOpts);
+
+        double rIn = 0;
+        for (size_t i = 0; i < inside.positions.size(); i += 3)
+            rIn += std::sqrt(inside.positions[i] * inside.positions[i] +
+                             inside.positions[i + 1] * inside.positions[i + 1] +
+                             inside.positions[i + 2] * inside.positions[i + 2]);
+        if (inside.vertexCount()) rIn /= static_cast<double>(inside.vertexCount());
+
+        // Sum of scalar triple products over the triangles, /6: positive when
+        // the winding faces outward, negative when it faces in. Cheap, and it
+        // reads the one property the radius cannot.
+        const auto signedVolume = [](const splats::SurfaceMesh& m) {
+            double v = 0;
+            const auto* p = m.positions.data();
+            for (size_t t = 0; t + 2 < m.indices.size(); t += 3) {
+                const uint32_t a = m.indices[t] * 3, b = m.indices[t + 1] * 3, c = m.indices[t + 2] * 3;
+                v += double(p[a]) * (double(p[b + 1]) * double(p[c + 2]) - double(p[b + 2]) * double(p[c + 1])) +
+                     double(p[a + 1]) * (double(p[b + 2]) * double(p[c]) - double(p[b]) * double(p[c + 2])) +
+                     double(p[a + 2]) * (double(p[b]) * double(p[c + 1]) - double(p[b + 1]) * double(p[c]));
+            }
+            return v / 6.0;
+        };
+        const double volOut = signedVolume(shell), volIn = signedVolume(inside);
+
+        std::printf("       interior shell  %zu verts  %zu tris  %d poses  gate %.2f"
+                    "  radius %.4f  (orbit %.4f, built 1.000)\n",
+                    inside.vertexCount(), inside.triangleCount(), inside.stats.poses,
+                    inside.stats.maxDepth, rIn, rMean);
+        std::printf("       signed volume  orbit %+.4f  interior %+.4f  (sphere of r 1 = %+.4f)\n",
+                    volOut, volIn, 4.0 / 3.0 * 3.14159265358979);
+        std::printf("       wrong-mode tell: shell orbit %llu of %llu samples beyond the centre"
+                    " (%.2f %%), plane %llu of %llu (%.2f %%), interior %llu\n",
+                    static_cast<unsigned long long>(shell.stats.beyondCentreSamples),
+                    static_cast<unsigned long long>(shell.stats.depthSamples),
+                    100.0 * double(shell.stats.beyondCentreSamples) / std::max<double>(1.0, double(shell.stats.depthSamples)),
+                    static_cast<unsigned long long>(bake1.stats.beyondCentreSamples),
+                    static_cast<unsigned long long>(bake1.stats.depthSamples),
+                    100.0 * double(bake1.stats.beyondCentreSamples) / std::max<double>(1.0, double(bake1.stats.depthSamples)),
+                    static_cast<unsigned long long>(inside.stats.beyondCentreSamples));
+        std::printf("       interior hash %llu / %llu\n",
+                    static_cast<unsigned long long>(hashMesh(inside)),
+                    static_cast<unsigned long long>(hashMesh(inside2)));
+
+        report(inside.vertexCount() > 0 && rIn < 1.0 && rMean > 1.0 && (rMean - rIn) < 4.0 * kVoxel,
+               "the interior pose set finds the shell's INSIDE where the orbit finds its outside");
+        report(volOut > 0.0 && volIn < 0.0,
+               "and winds it the other way round: the signed volumes have opposite sign");
+        report(inside.positions == inside2.positions && inside.indices == inside2.indices,
+               "an interior bake is deterministic, vertex and index");
+    }
+
     // ── 3. collider ─────────────────────────────────────────────────────────
 #ifdef THREEPP_TEST_WITH_PHYSX
     {

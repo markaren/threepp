@@ -53,6 +53,15 @@ namespace threepp::editor {
         // floor of 2 means every triangle was seen by two of them.
         int poseCount = 0;
 
+        // Where those viewpoints stand: false orbits the scan from outside,
+        // true stands INSIDE it and looks out
+        // (SurfaceBakeOptions::PoseSet::Interior). A scan of the inside of a
+        // room baked with the orbit reconstructs the outside of its walls — free
+        // space carved outside, colliders on the outer skin, the walkable volume
+        // never observed — which is a mistake nothing about the result announces
+        // except that a robot cannot walk in it.
+        bool interior = false;
+
         static constexpr const char* userDataKey = "splatSurface";
 
         [[nodiscard]] std::string encode() const;
@@ -69,7 +78,8 @@ namespace threepp::editor {
 
         bool operator==(const SplatSurfaceConfig& other) const {
             return enabled == other.enabled && voxelSize == other.voxelSize &&
-                   minComponentVoxels == other.minComponentVoxels && poseCount == other.poseCount;
+                   minComponentVoxels == other.minComponentVoxels && poseCount == other.poseCount &&
+                   interior == other.interior;
         }
         bool operator!=(const SplatSurfaceConfig& other) const { return !(*this == other); }
     };

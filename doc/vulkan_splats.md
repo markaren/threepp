@@ -144,6 +144,21 @@ a triangle mesh, `splats::makeSensorMesh` marks that mesh
 it — measured at 3.4 mm of range error against a 5 cm-voxel bake of a synthetic
 plane (`VulkanSplatSurface_test`).
 
+**Where the bake's cameras STAND is a choice, and the default is outside.**
+`SurfaceBakeOptions::poseSet` is `Orbit` — a Fibonacci sphere around the fit
+sphere, or a ring plus a top-down grid for a scan wider than tall — which is
+right for an object, a facade or a site and WRONG for a scan of the inside of a
+room: orbited, a room reconstructs the outside of its walls, and colliders end up
+where nothing can walk. `PoseSet::Interior` stands the cameras in the scan
+instead (the fit centre plus a few deterministically jittered stations, each
+fanning directions that include straight up and straight down) and derives its
+allocation gate from the fit extents rather than from a pose distance that no
+longer means anything. Measured on the synthetic shell built at radius 1.000:
+the orbit finds 1.0338, the interior finds 0.9818, and their signed volumes have
+opposite sign — they are two different surfaces of one cloud, not two estimates
+of one. `SurfaceMesh::Stats::beyondCentreSamples` is the report-only tell that an
+orbit bake was the wrong call; `plans/splat-surface-bake.md` P6 has the numbers.
+
 **Raster visibility is PER VIEW, and off by default.** "Secondary view" is not
 a synonym for "sensor": an RGB camera preview (`CameraSensor`) and an editor
 viewport pane are `addView` views too, and an untextured bake shell standing in
