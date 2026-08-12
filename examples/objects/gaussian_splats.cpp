@@ -811,6 +811,12 @@ int main(int argc, char** argv) {
     // the two things a 5M-splat cloud is actually being asked about here.
     const float orbitRadians = benching ? (0.35f / static_cast<float>(std::max(1, benchFrames))) : 0.f;
 
+    // Printed once, after the first render: the bake runs inside the first
+    // frame's cloud upload, so the number does not exist before it. The same
+    // cloud under the same knobs bakes the same volume everywhere (the bake is
+    // deterministic), so this is also the editor's number for this file.
+    bool volPrinted = false;
+
     canvas.animate([&] {
         if (benching) {
 
@@ -842,6 +848,18 @@ int main(int argc, char** argv) {
             for (auto& p : parts) p->update(*camera);
 
         renderer->render(*scene, *camera);
+
+#if defined(THREEPP_WITH_VULKAN)
+        if (vkRenderer && !volPrinted) {
+            if (const auto bytes = vkRenderer->splatVolumeBytes(); bytes > 0) {
+                std::cout << std::fixed << std::setprecision(1)
+                          << "  reflection volume " << bytes << " bytes ("
+                          << static_cast<double>(bytes) / (1024.0 * 1024.0) << " MB)"
+                          << std::endl;
+                volPrinted = true;
+            }
+        }
+#endif
 
         if (shotPath.empty() && !benching) return;
 
