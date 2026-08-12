@@ -972,17 +972,18 @@ void VulkanRenderer::Impl::recordSplats(VkCommandBuffer cb) {
             // asked to have splats in its AOVs.
             if (!splat_ || view().secondary) return;
 
-            // Before the hasClouds() test, not after: the expected-depth AOV
+            // Before the hasClouds() test, not after: the depth AOV
             // describes THIS frame, and a frame that draws no splats has to
             // leave an empty one rather than whatever the previous user of
             // this frame-in-flight slot wrote. Cheap when the AOV is off —
             // the image is one texel then.
-            if (splatDepthAov_) splat_->clearDepthAov(cb, currentFrame);
+            if (splatDepthAov()) splat_->clearDepthAov(cb, currentFrame);
 
             if (!splat_->hasClouds()) return;
 
             auto p = splatParams_;
-            p.depthAov = splatDepthAov_;
+            p.depthAov    = splatDepthAov();
+            p.depthMedian = splatDepthMode_ == SplatDepthMode::Median;
             // Same sub-pixel jitter the raster prepass used this frame,
             // reapplied as the same projection shear (uploadRasterCameraUbo):
             // without it the splats sit a fraction of a pixel off the geometry

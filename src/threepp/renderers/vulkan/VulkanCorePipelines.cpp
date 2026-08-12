@@ -552,7 +552,7 @@ void VulkanRenderer::Impl::createRasterGbufImages(uint32_t w, uint32_t h) {
                 g.cloudShadow = createAttachmentImage2D(512, 512, VK_FORMAT_R8_UNORM,
                                                         VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
                                                         VK_IMAGE_ASPECT_COLOR_BIT, N("cloudShadow"));
-                // Gaussian-splat expected-depth AOV. Splats are PRIMARY-view
+                // Gaussian-splat depth AOV. Splats are PRIMARY-view
                 // only (SplatPass.hpp's SCOPE note), so a secondary view gets
                 // the one-texel version even with the AOV on — same reasoning
                 // as the MS attachments below, and the same shape: allocate
@@ -560,7 +560,7 @@ void VulkanRenderer::Impl::createRasterGbufImages(uint32_t w, uint32_t h) {
                 // descriptor set needs a real r32f image whether or not the
                 // shader writes it, and a separate dummy with its own
                 // lifetime is more moving parts than one texel.
-                const bool wantSplatDepth = splatDepthAov_ && !view().secondary;
+                const bool wantSplatDepth = splatDepthAov() && !view().secondary;
                 g.splatDepth = createAttachmentImage2D(
                         wantSplatDepth ? w : 1u, wantSplatDepth ? h : 1u,
                         VK_FORMAT_R32_SFLOAT,

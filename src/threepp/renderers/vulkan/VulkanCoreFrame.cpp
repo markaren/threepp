@@ -522,9 +522,14 @@ void VulkanRenderer::Impl::setGbufferMsaa(uint32_t samples) {
             reallocateRenderExtentResources();
         }
 
-void VulkanRenderer::Impl::setSplatDepthAov(bool enabled) {
-            if (enabled == splatDepthAov_) return;
-            splatDepthAov_ = enabled;
+void VulkanRenderer::Impl::setSplatDepthAov(SplatDepthMode mode) {
+            if (mode == splatDepthMode_) return;
+            const bool wasOn = splatDepthAov();
+            splatDepthMode_ = mode;
+            // Only the STATISTIC changed: it rides the per-frame UBO flags, and
+            // reallocating the render extent for it would stall the device for
+            // a bit that costs nothing to flip.
+            if (wasOn == splatDepthAov()) return;
             // ensureHybridResources only recreates the G-buffer images when the
             // EXTENT changed, and this toggle changes a FORMAT decision at the
             // same extent — so without this the AOV image stays whatever size

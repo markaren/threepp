@@ -186,7 +186,8 @@ const uint kSplatFlagMotion     = 8u;// write gbufMotion + reactivity (V2)
 const uint kSplatFlagFog        = 16u;// apply height fog per splat (V2)
 const uint kSplatFlagChecksum   = 32u;// hash the composited result (determinism test)
 const uint kSplatFlagBgSolid    = 64u;// scene background is a solid colour
-const uint kSplatFlagDepthAov   = 128u;// export the expected view distance to splatDepth
+const uint kSplatFlagDepthAov   = 128u;// export a view distance to splatDepth
+const uint kSplatFlagDepthMed   = 256u;// that AOV carries the MEDIAN, not the expected, distance
 
 // Per-dispatch scalars. One block, shared by every stage — the scan and the
 // radix run the same shader many times over different regions, and a push
@@ -295,9 +296,10 @@ layout(set = 0, binding = 21) uniform sampler2D envTex;// prefiltered PMREM chai
 // submission — so it is one buffer, not one per frame in flight.
 layout(set = 0, binding = 22, scalar) buffer IndirectBuf { uint indirect[]; };
 
-// Expected-depth AOV: the alpha-weighted view distance the raster's
-// accumulation loop already produces, in WORLD UNITS (positive, view-space),
-// for the pixels a cloud owns. Written only under kSplatFlagDepthAov; a 1x1
+// Depth AOV: a per-pixel view distance in WORLD UNITS (positive, view-space)
+// for the pixels a cloud owns — the alpha-weighted EXPECTED distance the
+// accumulation loop already produces, or the MEDIAN one (the transmittance-0.5
+// crossing) under kSplatFlagDepthMed. Written only under kSplatFlagDepthAov; a 1x1
 // image is bound when the AOV is off, because every binding in this set needs
 // a real object either way (writeSets' opening comment). See splat_raster.comp
 // for the coverage gate and the nearest-wins rule.

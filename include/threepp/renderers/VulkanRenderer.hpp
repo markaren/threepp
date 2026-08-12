@@ -120,9 +120,10 @@ namespace threepp {
         //   Motion (8)  4x float16 : screen-space motion (prevNDC - currNDC) in xy, prevDepth in z
         //   Ids    (8)  4x uint16  : x = instanceCustomIndex+1 (0 = sky/no-hit), y = meshId, z = flag bits
         //   Albedo (4)  4x unorm8  : linear base colour in rgb, metalness in a
-        //   SplatDepth (4) 1x float32 : Gaussian-splat expected VIEW DISTANCE in
-        //                  world units (positive, NOT reversed-Z NDC), 0 where no
-        //                  splat cloud owns the pixel. Requires setSplatDepthAov.
+        //   SplatDepth (4) 1x float32 : Gaussian-splat VIEW DISTANCE in world
+        //                  units (positive, NOT reversed-Z NDC), 0 where no
+        //                  splat cloud owns the pixel. Requires setSplatDepthAov;
+        //                  which statistic it carries is that call's mode.
         enum class GBufferAOV { Depth, Normal, Motion, Ids, Albedo, SplatDepth };
         [[nodiscard]] bool readGBufferAOV(GBufferAOV aov, std::vector<uint8_t>& out,
                                           int& width, int& height, int& bytesPerPixel);
@@ -148,7 +149,7 @@ namespace threepp {
                                                      std::vector<uint32_t>& out,
                                                      uint32_t& resolution);
 
-        // ── Gaussian-splat expected depth ────────────────────────────────
+        // ── Gaussian-splat depth AOV ─────────────────────────────────────
         // A splat cloud is composited by a compute tile rasterizer and is in no
         // acceleration structure, so it writes no G-buffer depth and every
         // ray-traced consumer — the RT sensors, reflections, shadows — passes
@@ -156,24 +157,37 @@ namespace threepp {
         // expected view distance per pixel (it is what makes the cloud's motion
         // vectors computable); this switch exports it.
         //
-        // What it is: for each pixel a cloud owns, sum(dist * alpha * T) /
+        // What Expected is: for each pixel a cloud owns, sum(dist * alpha * T) /
         // (1 - T) — the depth of the cloud's opacity centroid along that ray.
         // Only where accumulated coverage exceeds 0.5, because below that the
         // geometry behind the translucent fringe is the better answer; the rest
         // reads 0. Nearest cloud wins where several overlap.
         //
-        // What it is NOT: a surface. The expected value sits behind the visible
-        // front of a splat by roughly the cloud's own thickness along the ray,
-        // so it localizes a wall well and a foliage canopy poorly. For picking
-        // and for coarse occupancy it is the right number; for metric ranging
-        // against thin structure it is biased, knowingly.
+        // What Expected is NOT: a surface. The expected value sits behind the
+        // visible front of a splat by roughly the cloud's own thickness along
+        // the ray, so it localizes a wall well and a foliage canopy poorly. For
+        // picking and for coarse occupancy it is the right number; for metric
+        // ranging against thin structure it is biased, knowingly.
         //
-        // OFF by default and a SETUP knob: enabling it reallocates the render
-        // targets (a full-res r32f per frame in flight), so set it once before
-        // the render loop rather than per frame. Primary view only — splats are
-        // not drawn into secondary views at all.
+        // Median is the unbiased-for-surfaces statistic: the view distance at
+        // which accumulated transmittance crosses 0.5, interpolated between the
+        // two splats that straddle the crossing. Same coverage gate, same
+        // nearest-cloud-wins rule, same image — only the statistic changes, and
+        // only for the AOV (motion vectors and per-splat fog keep using the
+        // expected value they have always used). It is what depth fusion wants
+        // (plans/splat-surface-bake.md).
+        //
+        // OFF by default and a SETUP knob: turning the AOV on or off
+        // reallocates the render targets (a full-res r32f per frame in flight),
+        // so set it once before the render loop rather than per frame. Changing
+        // only the statistic is a per-frame flag and reallocates nothing.
+        // Primary view only — splats are not drawn into secondary views at all.
+        enum class SplatDepthMode { Off, Expected, Median };
+        void setSplatDepthAov(SplatDepthMode mode);
+        // Expected, the statistic every pre-mode caller got.
         void setSplatDepthAov(bool enabled);
         [[nodiscard]] bool splatDepthAov() const;
+        [[nodiscard]] SplatDepthMode splatDepthAovMode() const;
 
         // ── Multi-view: N cameras per frame ──────────────────────────────
         // A camera rig — a robot's cameras, a multi-sensor capture setup —

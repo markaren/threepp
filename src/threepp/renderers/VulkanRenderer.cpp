@@ -1042,7 +1042,7 @@ namespace threepp {
                 // successful read of a one-pixel image, which reads as "the
                 // frame had no splats in it" instead of "you never asked for
                 // this AOV".
-                if (!impl.splatDepthAov_) return false;
+                if (!impl.splatDepthAov()) return false;
                 img = &g.splatDepth; restLayout = VK_IMAGE_LAYOUT_GENERAL; break;
         }
         if (!img || img->image == VK_NULL_HANDLE || img->width == 0 || img->height == 0) {
@@ -1576,12 +1576,20 @@ namespace threepp {
         return pimpl_->gbufferMsaa();
     }
 
+    void VulkanRenderer::setSplatDepthAov(SplatDepthMode mode) {
+        pimpl_->setSplatDepthAov(mode);
+    }
+
     void VulkanRenderer::setSplatDepthAov(bool enabled) {
-        pimpl_->setSplatDepthAov(enabled);
+        pimpl_->setSplatDepthAov(enabled ? SplatDepthMode::Expected : SplatDepthMode::Off);
     }
 
     bool VulkanRenderer::splatDepthAov() const {
         return core()->splatDepthAov();
+    }
+
+    VulkanRenderer::SplatDepthMode VulkanRenderer::splatDepthAovMode() const {
+        return core()->splatDepthAovMode();
     }
 
     void VulkanRenderer::setSplatDebugChecksum(bool enabled) {

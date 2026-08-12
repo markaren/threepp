@@ -53,6 +53,7 @@ namespace threepp::vulkan {
         constexpr uint32_t kSplatFlagChecksum  = 32u;
         constexpr uint32_t kSplatFlagBgSolid   = 64u;
         constexpr uint32_t kSplatFlagDepthAov  = 128u;
+        constexpr uint32_t kSplatFlagDepthMed  = 256u;
 
         struct SplatPc {
             uint32_t count, srcOff, dstOff, sumOff;
@@ -369,7 +370,7 @@ namespace threepp::vulkan {
         bnd[19].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;// clouds
         bnd[20].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;// lights (ambient + suns)
         bnd[21].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;// env
-        bnd[23].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;// expected-depth AOV
+        bnd[23].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;// the splat depth AOV
 
         VkDescriptorSetLayoutCreateInfo dlci{};
         dlci.sType        = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
@@ -1450,7 +1451,8 @@ namespace threepp::vulkan {
                       (p.fog ? kSplatFlagFog : 0u) |
                       // Belt and braces: without a real image bound the sets
                       // were never written, so the flag must not be set either.
-                      (p.depthAov && !splatDepthViews_.empty() ? kSplatFlagDepthAov : 0u);
+                      (p.depthAov && !splatDepthViews_.empty() ? kSplatFlagDepthAov : 0u) |
+                      (p.depthMedian ? kSplatFlagDepthMed : 0u);
 
             VmaAllocationInfo ui{};
             vmaGetAllocationInfo(ctx_.allocator(), uboBuf_[frame].alloc, &ui);

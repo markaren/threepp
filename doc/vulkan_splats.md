@@ -138,9 +138,12 @@ the pre-feature frame byte-exactly. See `splat_volume.glsl`, the `--water` /
 `--metal` flags on the `gaussian_splats` example, and `VulkanSplatVolume_test`
 for the asserted A/B.
 
-## The expected-depth AOV
+## The depth AOV: expected and median
 
-`VulkanRenderer::setSplatDepthAov(true)` exports what the raster already
+`VulkanRenderer::setSplatDepthAov(true)` — or, since P0 of
+`plans/splat-surface-bake.md`, `setSplatDepthAov(SplatDepthMode::Expected |
+::Median | ::Off)`, the bool being `Expected` so every pre-mode caller is
+untouched — exports what the raster already
 computes. The accumulation loop carries `D += viewDist * alpha * T` alongside
 the colour — it has to, because a rigid cloud's motion vectors are pure camera
 reprojection of a depth and this is that depth — and `expDist = D / (1 - T)`
@@ -165,18 +168,35 @@ cloud is its own dispatch with a barrier between, so the read-modify-write
 races nothing; without the compare, submission order rather than geometry would
 decide what a sensor sees.
 
-What it is *not* is a surface. The expected value sits behind the visible front
+What the expected value is *not* is a surface. It sits behind the visible front
 of a cloud by roughly its own thickness along the ray, so it localizes a wall
-well and a canopy poorly. The unbiased-for-surfaces alternative is the MEDIAN
-depth — the `t` where transmittance crosses 0.5 — which costs one more
-comparison in the same loop and is the obvious next step if metric ranging
-against thin structure turns out to matter.
+well and a canopy poorly. That is why `Median` exists: the view distance at
+which accumulated transmittance crosses 0.5, one compare per contributing splat
+in the same loop, LERPED between the two splats that straddle the crossing
+(linear in `T`, which is all that is known between two samples — first-crossing
+alone quantizes the answer to whichever splat happened to tip the sum, and
+always to the far side of the interval). Same coverage gate, same nearest-wins
+rule, same `r32f` image; and only the AOV changes — motion vectors and the
+per-splat fog keep using the expected value they are defined against, so
+switching statistic cannot move a pixel.
+
+Measured on `VulkanSplat_test`'s synthetic cloud, over its 13 987 covered
+pixels: the median is in front of the expected value at 80.8 % of them, by
++0.011 world units typically and +0.32 at most. The mean difference is −0.0001,
+and that sign flip is worth stating because a fusion consumer will meet it: as
+coverage falls toward the 0.5 gate the crossing degenerates to the LAST
+contributing splat and lands *behind* the expected value — up to 2.0 units
+behind on this cloud. It is a property of the statistic, not a defect: near the
+gate half the light is still getting through, and there is no surface there to
+find. Weight fused samples by coverage, or gate harder than 0.5, rather than
+trusting a near-gate median.
 
 Off by default, and off means the backing image is one texel: full-res `r32f`
 per frame in flight is ~25 MB at 1080p that a scene without splats would never
-read. Toggling reallocates the render-extent resources, so it is a setup knob
-like `setGbufferMsaa`, not a per-frame one. With it off the frame is unchanged
-— the golden in `VulkanSplat_test` matches byte-exact across the change.
+read. Crossing `Off` reallocates the render-extent resources, so it is a setup
+knob like `setGbufferMsaa`, not a per-frame one; changing only the statistic is
+a UBO flag and reallocates nothing. With it off the frame is unchanged — the
+golden in `VulkanSplat_test` matches byte-exact across the change.
 
 Every fog term that carries light back INTO the camera→splat leg is mirrored:
 analytic height fog, the murk below a water surface, and the sun's single-

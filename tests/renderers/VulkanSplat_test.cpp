@@ -357,6 +357,78 @@ int main(int argc, char** argv) {
             report(rightCov > 50, "the AOV is populated beside the slab");
             report(leftCov * 4 < rightCov,
                    "and the slab occludes the AOV as it occludes the colour");
+
+            // ── 2c. the MEDIAN statistic (plans/splat-surface-bake.md P0) ───
+            // Expected depth is the cloud's opacity centroid along the ray, so
+            // it sits BEHIND the visible front by roughly the cloud's own
+            // thickness; the median — the transmittance-0.5 crossing — is the
+            // surface estimate depth fusion needs. The bias between them is
+            // one-signed, which is the part worth asserting rather than the
+            // magnitude, which is the cloud's thickness and nothing else.
+            const std::vector<float> dExp = d;
+            const std::vector<uint8_t> expBytes = aov;
+
+            // The same frame twice: the raster is unjittered here (MSAA 2), so
+            // "deterministic" means bit-identical, not close.
+            std::vector<uint8_t> again;
+            int rw = 0, rh = 0, rb = 0;
+            draw();
+            const bool detExpected =
+                    renderer.readGBufferAOV(VulkanRenderer::GBufferAOV::SplatDepth,
+                                            again, rw, rh, rb) &&
+                    again == expBytes;
+
+            renderer.setSplatDepthAov(VulkanRenderer::SplatDepthMode::Median);
+            for (int i = 0; i < 4; ++i) draw();
+            std::vector<uint8_t> med1, med2;
+            const bool gotMed = renderer.readGBufferAOV(VulkanRenderer::GBufferAOV::SplatDepth,
+                                                        med1, rw, rh, rb);
+            draw();
+            const bool detMedian =
+                    gotMed && med1.size() == expBytes.size() &&
+                    renderer.readGBufferAOV(VulkanRenderer::GBufferAOV::SplatDepth,
+                                            med2, rw, rh, rb) &&
+                    med2 == med1;
+
+            if (gotMed && med1.size() == expBytes.size()) {
+                std::vector<float> dMed(dExp.size());
+                std::memcpy(dMed.data(), med1.data(), med1.size());
+
+                std::vector<float> diff;
+                diff.reserve(dExp.size());
+                long long inFront = 0;
+                double sumDiff = 0;
+                for (size_t i = 0; i < dExp.size(); ++i) {
+                    if (!(dExp[i] > 0.f) || !(dMed[i] > 0.f)) continue;
+                    diff.push_back(dExp[i] - dMed[i]);
+                    sumDiff += diff.back();
+                    if (diff.back() > 1e-4f) ++inFront;
+                }
+                const long long both = static_cast<long long>(diff.size());
+                std::sort(diff.begin(), diff.end());
+                const double meanDiff = both ? sumDiff / static_cast<double>(both) : 0.0;
+                const double midDiff  = both ? diff[diff.size() / 2] : 0.0;
+                const double frontFrac = both ? static_cast<double>(inFront) / static_cast<double>(both) : 0.0;
+                std::printf("       expected - median: %lld px  typical %+.4f  mean %+.4f"
+                            "  range [%+.4f, %+.4f]  in front %.1f%%\n",
+                            both, midDiff, meanDiff, both ? diff.front() : 0.f,
+                            both ? diff.back() : 0.f, 100.0 * frontFrac);
+                // The TYPICAL difference, not the mean: as coverage approaches
+                // the 0.5 gate from above, the transmittance-0.5 crossing
+                // degenerates to the LAST contributing splat and lands behind
+                // the expected value — a real property of the statistic, not a
+                // bug, and the reason the mean over covered pixels is ~0 while
+                // four pixels in five have the median in front. A fusion
+                // consumer weights by coverage; this test only asserts the
+                // sign of the bias where the cloud is solid.
+                report(both > 2000 && midDiff > 0.005 && frontFrac > 0.7,
+                       "the median depth sits in front of the expected depth");
+            } else {
+                report(false, "the median-mode AOV reads back at the same extent");
+            }
+            report(detExpected && detMedian,
+                   "both AOV modes are bit-identical across two renders");
+            renderer.setSplatDepthAov(VulkanRenderer::SplatDepthMode::Expected);
         }
     }
 

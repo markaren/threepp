@@ -71,6 +71,16 @@ void main() {
     // computable at all: the cloud is rigid, so per-pixel motion is pure camera
     // reprojection of a depth — and this is the depth.
     float D = 0.0;
+    // MEDIAN view distance: where transmittance crosses 0.5, interpolated
+    // between the two splats that straddle the crossing (linear in T, which is
+    // the only thing known between two samples). The lerp costs one fused
+    // multiply-add ONCE per pixel; the compare that finds the crossing is the
+    // per-splat cost, and it is the whole difference between a statistic that
+    // tracks a surface and one that quantizes to whichever splat happened to
+    // tip the sum. 0 = not crossed; the coverage > 0.5 gate below is exactly
+    // the condition that it was.
+    float medDist  = 0.0;
+    float prevDist = -1.0;// distance of the last contributing splat; < 0 = none
     bool  done = !inside;
 
     uint i = range.x;
@@ -108,7 +118,15 @@ void main() {
 
                 C += sColor[k] * (alpha * T);
                 D += sDist[k] * (alpha * T);
+                const float Tprev = T;
                 T *= (1.0 - alpha);
+                if (medDist == 0.0 && T < 0.5) {
+                    // Tprev >= 0.5 by construction: medDist is set the first
+                    // time T dips below, and T only decreases.
+                    const float w = (Tprev - 0.5) / max(Tprev - T, 1e-8);
+                    medDist = prevDist < 0.0 ? sDist[k] : mix(prevDist, sDist[k], w);
+                }
+                prevDist = sDist[k];
                 if (T < kMinAlpha) { done = true; break; }
             }
         }
@@ -203,10 +221,11 @@ void main() {
         }
     }
 
-    // ── expected-depth AOV ──────────────────────────────────────────────────
-    // expDist, exported. The accumulation loop computes it either way (the
-    // motion vectors above cannot exist without it), so the AOV costs one
-    // guarded read-modify-write per covered pixel and nothing anywhere else.
+    // ── depth AOV ───────────────────────────────────────────────────────────
+    // expDist, exported — or medDist under kSplatFlagDepthMed. The accumulation
+    // loop computes the first either way (the motion vectors above cannot exist
+    // without it), so the AOV costs one guarded read-modify-write per covered
+    // pixel and nothing anywhere else.
     // It is what a consumer OUTSIDE the renderer needs, because a splat cloud
     // is in no BLAS: every ray-traced consumer — picking, lidar, the RT
     // sensors — misses the cloud entirely, and this image is the only place
@@ -228,10 +247,19 @@ void main() {
     // read-modify-write races nothing; without the comparison the LAST cloud
     // submitted would own every pixel two clouds share, which is submission
     // order — not geometry — deciding what the sensor sees.
+    //
+    // MEDIAN is the same image and the same rules, one statistic further
+    // forward: the expected value sits behind the visible front of a cloud by
+    // roughly its own thickness along the ray, which localizes a wall and
+    // misplaces a surface. Depth fusion wants the surface
+    // (plans/splat-surface-bake.md).
     if ((ubo.flags & kSplatFlagDepthAov) != 0u && coverage > 0.5) {
+        // coverage > 0.5 IS T < 0.5, so the crossing happened and medDist is
+        // set — the gate and the median's existence are the same condition.
+        const float aovDist = (ubo.flags & kSplatFlagDepthMed) != 0u ? medDist : expDist;
         const float prev = imageLoad(splatDepth, px).x;
-        if (!(prev > 0.0) || expDist < prev) {
-            imageStore(splatDepth, px, vec4(expDist));
+        if (!(prev > 0.0) || aovDist < prev) {
+            imageStore(splatDepth, px, vec4(aovDist));
         }
     }
 

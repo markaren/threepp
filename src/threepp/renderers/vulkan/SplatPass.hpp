@@ -65,14 +65,15 @@
 // reflection legs march (splat_volume.glsl's svLeg, water/glass and glossy) —
 // primary view only, behind flags bit 12, so the sensor wall stands.
 //
-// The one crack in that wall is the EXPECTED-DEPTH AOV
+// The one crack in that wall is the DEPTH AOV
 // (VulkanRenderer::setSplatDepthAov). It does not put splats in an
 // acceleration structure — nothing here does — but it does let a consumer
 // outside the renderer find out that a cloud was in front of a given pixel and
 // how far away, which is what picking needs and what a coarse occupancy build
-// can start from. Off by default; see splat_raster.comp for the coverage gate
-// and the nearest-wins rule, and the note on setSplatDepthAov for what the
-// expected value is and is not.
+// can start from. Off by default; see splat_raster.comp for the coverage gate,
+// the nearest-wins rule and the two statistics it can carry (expected depth for
+// picking, median depth for surface fusion — plans/splat-surface-bake.md), and
+// the note on setSplatDepthAov for what each value is and is not.
 //
 // ENVIRONMENT KNOBS, all off by default and all A/B switches rather than
 // settings — each one turns off a term so its contribution can be MEASURED
@@ -275,10 +276,16 @@ namespace threepp::vulkan {
             bool  depthTest    = true;
             bool  motionVectors = true;// write gbufMotion + the reactivity flag
             bool  fog           = false;// a medium is active this frame
-            // Export the accumulated expected view distance to the depth AOV
+            // Export a per-pixel view distance to the depth AOV
             // (VulkanRenderer::setSplatDepthAov). Off by default: the image is
             // 1x1 unless the renderer was asked for it.
             bool  depthAov      = false;
+            // Which statistic that AOV carries: the MEDIAN view distance (the
+            // transmittance-0.5 crossing) instead of the expected one. Only the
+            // AOV changes — motion vectors and per-splat fog keep using the
+            // expected value, which is the depth their reprojection is defined
+            // against. See plans/splat-surface-bake.md.
+            bool  depthMedian   = false;
             // The scene background is a flat colour, so PostComposite hands
             // those pixels back verbatim and the shade never pre-exposed them.
             bool  bgIsSolidColor = false;
@@ -293,7 +300,7 @@ namespace threepp::vulkan {
         };
         void record(VkCommandBuffer cb, uint32_t frame, const RecordParams& p);
 
-        // Zero the expected-depth AOV for this frame slot. Separate from
+        // Zero the depth AOV for this frame slot. Separate from
         // record() and called BEFORE it, because record() is skipped outright
         // on a frame with no clouds and the AOV still has to describe THAT
         // frame — an empty one. No-op when no AOV image was supplied.

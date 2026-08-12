@@ -3952,16 +3952,19 @@ namespace threepp {
             return (mask & static_cast<VkSampleCountFlags>(samples)) != 0;
         }
 
-        // Gaussian-splat expected-depth AOV. OFF by default, and off means the
-        // backing image is one texel: a full-res r32f per frame in flight is
-        // ~25 MB at 1080p that a scene with no splats in it would never read,
-        // and this renderer's fixed footprint is already the thing being
-        // watched. Toggling reallocates the render-extent resources, exactly
-        // like setGbufferMsaa — a setup knob, not a per-frame one.
-        void setSplatDepthAov(bool enabled);
+        // Gaussian-splat depth AOV. OFF by default, and off means the backing
+        // image is one texel: a full-res r32f per frame in flight is ~25 MB at
+        // 1080p that a scene with no splats in it would never read, and this
+        // renderer's fixed footprint is already the thing being watched.
+        // Crossing Off reallocates the render-extent resources, exactly like
+        // setGbufferMsaa — a setup knob, not a per-frame one. Expected <->
+        // Median is a UBO flag and reallocates nothing.
+        using SplatDepthMode = VulkanRenderer::SplatDepthMode;
+        void setSplatDepthAov(SplatDepthMode mode);
 
-        [[nodiscard]] bool splatDepthAov() const { return splatDepthAov_; }
-        bool splatDepthAov_ = false;
+        [[nodiscard]] bool splatDepthAov() const { return splatDepthMode_ != SplatDepthMode::Off; }
+        [[nodiscard]] SplatDepthMode splatDepthAovMode() const { return splatDepthMode_; }
+        SplatDepthMode splatDepthMode_ = SplatDepthMode::Off;
 
         // ── Auto-exposure state ───────────────────────────────────────────────
         std::unique_ptr<vulkan::AutoExposure> autoExposure_;
