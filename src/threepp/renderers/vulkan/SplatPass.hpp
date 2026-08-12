@@ -198,6 +198,14 @@ namespace threepp::vulkan {
         // syncClouds treats that as structural and rewrites them post-idle.
         void setEnvironment(VkImageView view, VkSampler sampler, uint32_t mips);
 
+        // The immediate flavour, for the one call site that destroys the old
+        // environment MID-FRAME (beginDeferredFrame's env swap, device already
+        // drained): setEnvironment alone leaves the resident sets naming the
+        // freed view until the NEXT syncClouds, and the splat dispatch recorded
+        // later this same frame would bind them (VUID-vkCmdDispatch-None-08114).
+        // Rewrites every resident set now and clears the dirty flag.
+        void rewriteEnvironment(VkImageView view, VkSampler sampler, uint32_t mips);
+
         // Upload anything new, evict anything gone, size the shared scratch to
         // what this frame actually SUBMITS — growing for a bigger cloud and
         // shrinking (with hysteresis) when the demand halves, because after

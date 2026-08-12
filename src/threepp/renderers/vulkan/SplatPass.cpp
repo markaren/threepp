@@ -917,6 +917,17 @@ namespace threepp::vulkan {
         envDirty_   = true;
     }
 
+    void SplatPass::rewriteEnvironment(VkImageView view, VkSampler sampler, uint32_t mips) {
+        if (view == VK_NULL_HANDLE) return;// nothing to point at yet
+        envView_    = view;
+        envSampler_ = sampler;
+        envMips_    = std::max(mips, 1u);
+        // Caller has drained the device; the old env image is already freed,
+        // so every resident set holds a dead view until this lands.
+        for (auto& kv : resident_) writeSets(*kv.second);
+        envDirty_ = false;
+    }
+
     void SplatPass::retireStale() {
         for (auto it = resident_.begin(); it != resident_.end();) {
             if (it->second->lastSeen + framesInFlight_ + 1 <= syncSerial_) {

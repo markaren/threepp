@@ -814,6 +814,15 @@ bool VulkanRenderer::Impl::beginDeferredFrame(Object3D& scene, Camera& camera) {
                     rewriteDeferredDescriptors();
                     clearGbufImages();
                 });
+                // The splat sets too: collectSplatClouds ran BEFORE this frame
+                // began and wrote them against the env image retired above —
+                // on the very first frame that is the default 1x1 env, freed
+                // by the flush while this frame's splat dispatch is still to
+                // be recorded. setEnvironment's dirty flag only rewrites at
+                // the NEXT syncClouds, one frame too late.
+                if (splat_)
+                    splat_->rewriteEnvironment(envImage.view, envImage.sampler,
+                                               envImage.mipLevels);
             }
 
             // Per-FIF deferred-descriptor refresh: a material texture swapped in
