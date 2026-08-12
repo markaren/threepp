@@ -457,6 +457,24 @@ void VulkanRenderer::Impl::reallocateRenderExtentResources() {
 
 void VulkanRenderer::Impl::recreateSwapchainAndDescriptors() {
             ctx->recreateSwapchain();// device-idles internally
+            // imageCount_ is pinned, not refreshed — see its declaration for why
+            // (TaaResolve's set arrays were SIZED from it at construction, so the
+            // scalar and the arrays have to move together or not at all). Nothing
+            // in the negotiation can change across a recreate on this surface, but
+            // "cannot happen" is worth one comparison per resize: a silently
+            // changed count means every `frame * imageCount + imageIndex` in
+            // TaaResolve addresses a set array that was never resized to match,
+            // which is out-of-range reads at best and the wrong swapchain image at
+            // worst. Fail loudly instead of rendering through it.
+            const auto newImageCount = static_cast<uint32_t>(ctx->swapchainImages().size());
+            if (newImageCount != imageCount_) {
+                throw std::runtime_error(
+                        "[VulkanRenderer] swapchain recreate changed the image count (" +
+                        std::to_string(imageCount_) + " -> " + std::to_string(newImageCount) +
+                        "); the TAA resolve's descriptor sets are sized for the original "
+                        "count and would be indexed out of range. Rebuild the primary "
+                        "view's TaaResolve here to support this.");
+            }
             createRenderFinishedSemaphores();
             reallocateRenderExtentResources();
             size = WindowSize{static_cast<int>(ctx->swapchainExtent().width),

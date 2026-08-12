@@ -2560,9 +2560,15 @@ void VulkanRenderer::Impl::recordCommandBuffer(VkCommandBuffer cb, uint32_t imag
             // split-screen clear.
             recordSwapchainPrepare(cb, imageIndex);
 
-            // Per-frame set index (unused by the deferred leaf, which drives
-            // DeferredShade from currentFrame; kept for the dispatch signature).
-            const uint32_t setIdx = currentFrame * imageCount_ + imageIndex;
+            // Per-frame set index. Was `currentFrame * imageCount_ + imageIndex`,
+            // which read as live per-(frame, image) indexing but was neither: the
+            // deferred leaf ignores the argument entirely and drives DeferredShade
+            // from currentFrame, and the other recordSceneDispatch call site
+            // (VulkanCoreFrame's secondary-view path) already passes currentFrame
+            // straight through. Composing an index nothing consumed was the only
+            // thing making imageCount_ look like frame-loop state that a swapchain
+            // recreate had to keep current — see its declaration.
+            const uint32_t setIdx = currentFrame;
 
             // Extents + exposure are shared by both render modes and by the
             // bloom/TAA tail below, so hoist them out of the mode branch.

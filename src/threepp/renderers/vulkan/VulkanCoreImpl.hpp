@@ -2108,6 +2108,25 @@ namespace threepp {
 
         // (cameraUbos moved to ViewContext.)
 
+        // Swapchain image count, sampled ONCE in createSwapchainDependents and
+        // deliberately never refreshed: it is pinned for the renderer's lifetime,
+        // not merely for the current swapchain's. Its one consumer is the primary
+        // view's TaaResolve, constructed with this value — and TaaResolve sizes its
+        // descriptor pool and all six set vectors from it at construction, then
+        // indexes them `frame * imageCount + imageIndex` forever after. Refreshing
+        // this scalar on a swapchain recreate would therefore make things WORSE,
+        // not better: the index would move while the arrays it addresses stayed the
+        // size they were allocated at.
+        //
+        // A recreate producing a different count is legal in principle (the count
+        // is negotiated with the surface, and presentSuppressed_ asks for a deeper
+        // swapchain) but cannot happen here: every input to the negotiation —
+        // vsync_, presentSuppressed_, and the surface itself — is fixed at context
+        // construction, leaving only caps.min/maxImageCount, which no driver we run
+        // varies across the life of one surface. recreateSwapchainAndDescriptors
+        // verifies that rather than trusting it. If it ever fires, the fix is to
+        // rebuild the primary view's TaaResolve there (pool and set vectors and
+        // all), not to assign a new value here.
         uint32_t imageCount_ = 0;
 
         // Per-frame command resources.
