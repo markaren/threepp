@@ -231,6 +231,8 @@ int main(int argc, char** argv) {
     // toward a true mirror, which is how the VOLUME's resolution is judged
     // without the reflection denoiser's gloss blur on top.
     float metalRough = 0.15f;
+    Vector3 metalPos;
+    bool metalPosSet = false;
     // --level picks a SOG detail level; --upscaler lifts the GL-parity clamp
     // below so the pass can be measured at a render scale a real app would use.
     int lodLevel = 0;
@@ -257,6 +259,15 @@ int main(int argc, char** argv) {
         } else if (arg == "--metal-rough" && i + 1 < argc) {
             metal = true;
             metalRough = std::clamp(static_cast<float>(std::atof(argv[++i])), 0.f, 1.f);
+        } else if (arg == "--metal-pos" && i + 1 < argc) {
+            // World position for the sphere. The default "beside the cloud"
+            // placement assumes empty space there, which a town scan with a
+            // wooded hill does not honour — this is the override for real
+            // captures, like --cam is for the camera.
+            metal = true;
+            if (std::sscanf(argv[++i], "%f,%f,%f",
+                            &metalPos.x, &metalPos.y, &metalPos.z) == 3)
+                metalPosSet = true;
         } else if (arg == "--sun") {
             addSun = true;
         } else if (arg == "--level" && i + 1 < argc) {
@@ -708,8 +719,11 @@ int main(int argc, char** argv) {
                                                             .metalness(1.f)
                                                             .roughness(metalRough));
         auto ball = Mesh::create(SphereGeometry::create(fit.radius * 0.8f, 48, 32), ballMat);
-        ball->position.set(fit.center.x + fit.radius * 2.1f, fit.center.y,
-                           fit.center.z);
+        if (metalPosSet)
+            ball->position.copy(metalPos);
+        else
+            ball->position.set(fit.center.x + fit.radius * 2.1f, fit.center.y,
+                               fit.center.z);
         scene->add(ball);
 
         addSun = true;
