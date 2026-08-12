@@ -29,6 +29,8 @@
 #include "threepp/extras/editor/SensorConfig.hpp"
 #include "threepp/extras/editor/SoundConfig.hpp"
 #include "threepp/extras/editor/SplatImportConfig.hpp"
+#include "threepp/extras/editor/SplatSurfaceCache.hpp"
+#include "threepp/extras/editor/SplatSurfaceConfig.hpp"
 #include "threepp/extras/editor/SplineConfig.hpp"
 #include "threepp/extras/editor/TextConfig.hpp"
 #include "threepp/extras/editor/TreeConfig.hpp"
@@ -45,6 +47,9 @@
 #include "threepp/extras/editor/GranularPlaySession.hpp"
 #include "threepp/extras/editor/PhysicsPlaySession.hpp"
 #include "threepp/extras/editor/PhysxSensorPlaySession.hpp"
+#ifdef THREEPP_WITH_VULKAN
+#include "threepp/extras/editor/SplatSurfacePlaySession.hpp"
+#endif
 #endif
 
 #include "threepp/extras/editor/ConveyorConfig.hpp"
@@ -53,6 +58,7 @@
 #include "threepp/extras/curves/CatmullRomCurve3.hpp"
 #include "threepp/extras/editor/GeneratorConfig.hpp"
 #include "threepp/geometries/BoxGeometry.hpp"
+#include "threepp/geometries/SphereGeometry.hpp"
 #include "threepp/helpers/CameraHelper.hpp"
 #include "threepp/lights/Light.hpp"
 #include "threepp/loaders/AssetSource.hpp"
@@ -8062,6 +8068,124 @@ int EditorApp::runSelfTest() {
         check(document_.scene().getObjectByName("Procedural Splats") == nullptr,
               "and Stop drops it, which is the gap the warning is about");
     }
+
+    // A scan becomes a FLOOR. The cloud carries a surface-bake config, Play
+    // fuses it into a triangle mesh (plans/splat-surface-bake.md), cooks that
+    // into the PhysX world and hangs the sensor-only twin off the scene root —
+    // and a dropped ball lands on the scan rather than through it. The scan is
+    // a flat slab of splats, so "landed on it" is a NUMBER: the ball's rest
+    // height against the fused plane's own mean, within a voxel, which is the
+    // accuracy the whole bake is quoted at.
+    //
+    // Vulkan-only, asserted in both directions like the particle-field gate: the
+    // depth AOV the fusion reads is a Vulkan G-buffer attachment, so a GL
+    // session must author the config and bake NOTHING.
+#if defined(THREEPP_EDITOR_WITH_PHYSX) && defined(THREEPP_WITH_VULKAN)
+    {
+        newScene();
+        selectObject(nullptr);
+
+        // The synthetic plane VulkanSplatSurface_test bakes, at the height its
+        // ball is dropped from — 4 m of clear air under it, so nothing in the
+        // template scene is what the ball is resting on.
+        SplatGenerator::Options options;
+        options.count = 40000;
+        options.seed = 7u;
+        options.shDegree = 0;
+        options.extent.set(4.f, 0.02f, 4.f);
+        options.minScale = 0.02f;
+        options.maxScale = 0.035f;
+        options.anisotropy = 1.2f;
+        options.minOpacity = 0.85f;
+        options.maxOpacity = 1.f;
+        auto scanData = SplatGenerator::generate(options);
+        for (std::size_t i = 0; i < scanData.count(); ++i) {
+            scanData.setDcColor(i, Vector3{0.8f, 0.8f, 0.8f});
+        }
+        auto scan = SplatCloud::create(std::move(scanData));
+        scan->name = "Scan Floor";
+        scan->position.set(0.f, 4.f, 0.f);
+        addObject(scan, document_.scene(), "Add Splats");
+        selectObject(nullptr);
+
+        editor::SplatSurfaceConfig surfaceConfig;
+        surfaceConfig.enabled = true;
+        surfaceConfig.voxelSize = 0.05f;
+        surfaceConfig.poseCount = 16;// the pose count the P1 measurements used
+        surfaceConfig.write(*scan);
+        const auto readBack = editor::SplatSurfaceConfig::read(*scan);
+        check(readBack && *readBack == surfaceConfig,
+              "the surface-bake config round-trips on the splat node");
+
+        auto ball = Mesh::create(SphereGeometry::create(0.15f, 16, 12),
+                                 MeshStandardMaterial::create());
+        ball->name = "Scan Ball";
+        ball->position.set(0.1f, 5.4f, -0.1f);
+        PhysicsConfig ballPhysics;
+        ballPhysics.enabled = true;
+        ballPhysics.body = PhysicsConfig::Body::Dynamic;
+        ballPhysics.shape = PhysicsConfig::Shape::Sphere;
+        ballPhysics.restitution = 0.f;// it has 4 s to settle, not to bounce
+        ballPhysics.write(*ball);
+        addObject(ball, document_.scene(), "Add Ball");
+        selectObject(nullptr);
+        step(2);
+
+        const bool bakeable = editor::SplatSurfaceCache::available(renderer_.get());
+
+        startPlay();
+        stepFixed(240);
+
+        if (bakeable) {
+            check(splatSurfaceSession_ && splatSurfaceSession_->surfaceCount() == 1 &&
+                          splatSurfaceSession_->colliderCount() == 1,
+                  "Play bakes the scan and cooks it into one static collider");
+
+            // The plane the ball is graded against is the very mesh the session
+            // used — read back out of the memo, not re-derived.
+            double meanY = 0.0;
+            std::size_t verts = 0;
+            if (const auto* mesh = splatSurfaces_->find(*scan, surfaceConfig)) {
+                for (std::size_t i = 1; i < mesh->positions.size(); i += 3) {
+                    meanY += mesh->positions[i];
+                    ++verts;
+                }
+                if (verts) meanY /= static_cast<double>(verts);
+                std::cout << "[selftest] baked scan: " << mesh->triangleCount()
+                          << " tris, render " << mesh->stats.renderMs << " ms, fuse "
+                          << mesh->stats.fuseMs << " ms, mesh " << mesh->stats.meshMs << " ms"
+                          << std::endl;
+            }
+            const double rest = ball->position.y;
+            std::cout << "[selftest] ball rests at y " << rest << " (plane " << meanY
+                      << " + r 0.15 -> err " << std::abs(rest - (meanY + 0.15))
+                      << ", voxel 0.05)" << std::endl;
+            check(verts > 0 && std::abs(rest - (meanY + 0.15)) < 0.05,
+                  "and a dropped ball rests on the baked scan, within a voxel");
+            check(splatSurfaceSession_ && splatSurfaceSession_->sensorSurfaces(),
+                  "the sensor-only master is on while the surface plays");
+            check(splatSurfaces_ && splatSurfaces_->bakeCount() == 1,
+                  "one bake, memoized - Play did not re-fuse what the memo holds");
+        } else {
+            check(splatSurfaceSession_ == nullptr || splatSurfaceSession_->surfaceCount() == 0,
+                  "no surface is baked on a backend that has no depth AOV");
+        }
+
+        stopPlay();
+        step(2);
+
+        std::size_t sensorMeshes = 0;
+        document_.scene().traverse([&](Object3D& o) {
+            if (o.layers.isEnabled(VulkanRenderer::kSensorOnlyLayer)) ++sensorMeshes;
+        });
+        bool masterOff = true;
+        if (auto* vk = dynamic_cast<VulkanRenderer*>(renderer_.get())) {
+            masterOff = !vk->sensorOnlySurfaces();
+        }
+        check(sensorMeshes == 0 && masterOff,
+              "and Stop takes the sensor surface out of the scene and the master back off");
+    }
+#endif
 
     // Delete a splat cloud, then bring in another one — a user-reported crash.
     // The second cloud is bigger than the first so the import forces the

@@ -19,6 +19,8 @@
 #include "threepp/extras/editor/SensorConfig.hpp"
 #include "threepp/extras/editor/SoundConfig.hpp"
 #include "threepp/extras/editor/SplatImportConfig.hpp"
+#include "threepp/extras/editor/SplatSurfaceCache.hpp"
+#include "threepp/extras/editor/SplatSurfaceConfig.hpp"
 #include "threepp/extras/editor/SplineConfig.hpp"
 #include "threepp/extras/editor/TextConfig.hpp"
 #include "threepp/extras/editor/TreeConfig.hpp"
@@ -31,6 +33,7 @@
 
 #include "threepp/cameras/PerspectiveCamera.hpp"
 #include "threepp/core/BufferGeometry.hpp"
+#include "threepp/core/Clock.hpp"
 #include "threepp/lights/HemisphereLight.hpp"
 #include "threepp/lights/Light.hpp"
 #include "threepp/lights/PointLight.hpp"
@@ -1180,6 +1183,98 @@ void EditorApp::drawSplatSection(Object3D& object) {
         }
     }
 
+    // --- surface bake -------------------------------------------------------
+    // The one authoring verb a scan has: fuse it into a triangle surface that
+    // PhysX collides with and the sensors return from (plans/splat-surface-bake.md).
+    // The mesh is never saved — the bake is deterministic in the cloud, this
+    // config and the node's transform, so the config IS the mesh (see
+    // SplatSurfaceConfig).
+    {
+        using Config = editor::SplatSurfaceConfig;
+
+        auto* target = &object;
+        const auto config = Config::read(object).value_or(Config{});
+
+        const auto commit = [&](Config after, std::string label) {
+            commands_.execute(makeProperty<Config>(
+                    std::move(label), "splatSurface:" + object.uuid,
+                    [target](const Config& value) { value.write(*target); },
+                    config, std::move(after)));
+            document_.setDirty(true);
+        };
+
+        ImGui::SeparatorText("Surface");
+
+        bool enabled = config.enabled;
+        if (ImGui::Checkbox("Collide and sense", &enabled)) {
+            auto after = config;
+            after.enabled = enabled;
+            commit(std::move(after), enabled ? "Enable Splat Surface" : "Disable Splat Surface");
+        }
+        ImGui::TextColored(theme::muted(),
+                           "Play bakes a triangle surface from the scan: a PhysX static "
+                           "collider, and a target the lidar and depth sensors see.");
+
+        if (config.enabled) {
+            ImGui::PushItemWidth(-130 * contentScale_);
+            {
+                float voxel = config.voxelSize;
+                const bool changed = ImGui::DragFloat("Voxel (m)", &voxel, 0.002f, 0.f, 0.5f, "%.3f");
+                if (ImGui::IsItemActivated()) commands_.beginTransaction();
+                if (changed) {
+                    auto after = config;
+                    after.voxelSize = std::clamp(voxel, 0.f, 0.5f);
+                    commit(std::move(after), "Splat Surface Voxel");
+                }
+                if (ImGui::IsItemDeactivated()) commands_.endTransaction();
+            }
+            {
+                int island = config.minComponentVoxels;
+                const bool changed = ImGui::DragInt("Island cells", &island, 8.f, 0, 100000);
+                if (ImGui::IsItemActivated()) commands_.beginTransaction();
+                if (changed) {
+                    auto after = config;
+                    after.minComponentVoxels = std::max(island, 0);
+                    commit(std::move(after), "Splat Surface Islands");
+                }
+                if (ImGui::IsItemDeactivated()) commands_.endTransaction();
+            }
+            {
+                int poses = config.poseCount;
+                const bool changed = ImGui::DragInt("Poses", &poses, 0.5f, 0, 256);
+                if (ImGui::IsItemActivated()) commands_.beginTransaction();
+                if (changed) {
+                    auto after = config;
+                    after.poseCount = std::clamp(poses, 0, 256);
+                    commit(std::move(after), "Splat Surface Poses");
+                }
+                if (ImGui::IsItemDeactivated()) commands_.endTransaction();
+            }
+            ImGui::PopItemWidth();
+            ImGui::TextColored(theme::muted(), "Voxel 0 sizes itself from the scan; poses 0 uses 26.");
+
+            const bool canBake = editor::SplatSurfaceCache::available(renderer_.get());
+            if (!canBake) {
+                // The depth AOV the bake reads is a Vulkan G-buffer attachment.
+                ImGui::TextColored(theme::warning(),
+                                   "The bake needs the Vulkan backend - restart with --vulkan.");
+            }
+            ImGui::BeginDisabled(!canBake);
+            if (ImGui::Button("Bake now")) bakeSplatSurface(object);
+            ImGui::EndDisabled();
+            ImGui::SameLine();
+            // Warm means Play is instant; cold means Play pays the bake, with
+            // the viewport flashing through the pose loop while it does.
+            const bool warm = splatSurfaces_ && splatSurfaces_->find(*cloud, config) != nullptr;
+            ImGui::TextColored(warm ? theme::accent() : theme::muted(),
+                               warm ? "cached" : "not baked yet");
+
+            if (splatBakeNode_ == object.uuid && !splatBakeStats_.empty()) {
+                ImGui::TextWrapped("%s", splatBakeStats_.c_str());
+            }
+        }
+    }
+
     ImGui::Separator();
     // The limitation, on the object it applies to. The console and the status
     // bar say it at Play and at Save; this is where you find out why without
@@ -1189,6 +1284,57 @@ void EditorApp::drawSplatSection(Object3D& object) {
                        "Re-import the .ply after Stop.");
 
     ImGui::TreePop();
+}
+
+
+// Bake the cloud's surface into the app's memo, right now.
+//
+// The editor has no busy modal to hide behind, and this is honest about that:
+// the bake blocks the frame it was pressed on (~0.4 s on a synthetic cloud) and
+// the viewport visibly flashes through the pose loop, because bakeSurface drives
+// the PRIMARY view. The button is inside the inspector's play lock, so it cannot
+// run while a session is holding the graph.
+void EditorApp::bakeSplatSurface(Object3D& object) {
+
+#ifdef THREEPP_WITH_VULKAN
+    auto* cloud = object.as<SplatCloud>();
+    if (!cloud || !splatSurfaces_) return;
+
+    const auto config = editor::SplatSurfaceConfig::read(object)
+                                .value_or(editor::SplatSurfaceConfig{});
+
+    Clock clock;
+    clock.start();
+    std::string problem;
+    const auto* mesh = splatSurfaces_->bake(renderer_.get(), *cloud, config, &problem);
+    const float seconds = clock.getElapsedTime();
+
+    splatBakeNode_ = object.uuid;
+    if (!mesh) {
+        splatBakeStats_ = "Bake failed: " + problem;
+        log("splat surface: \"" + object.name + "\" - " + problem);
+        flashStatus("Surface bake failed");
+        return;
+    }
+
+    // What it produced AND what it dropped, which is the contract every bounded
+    // thing in this repo keeps.
+    char line[256];
+    std::snprintf(line, sizeof(line),
+                  "%zu triangles, %.3f m voxels, %d poses, %.2f s "
+                  "(dropped %llu fringe, %llu outlier of %llu samples)",
+                  mesh->triangleCount(), static_cast<double>(mesh->stats.voxelSize),
+                  mesh->stats.poses, static_cast<double>(seconds),
+                  static_cast<unsigned long long>(mesh->stats.skippedFringe),
+                  static_cast<unsigned long long>(mesh->stats.skippedOutlier),
+                  static_cast<unsigned long long>(mesh->stats.depthSamples));
+    splatBakeStats_ = line;
+    log("splat surface: \"" + object.name + "\" baked - " + splatBakeStats_);
+    flashStatus("Surface baked");
+#else
+    (void) object;
+    log("splat surface: this build has no Vulkan backend to bake with");
+#endif
 }
 
 

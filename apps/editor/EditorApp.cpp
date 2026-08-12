@@ -16,6 +16,8 @@
 #include "threepp/extras/editor/ScriptConfig.hpp"
 #include "threepp/extras/editor/ScriptWorkspace.hpp"
 #include "threepp/extras/editor/SplatImportConfig.hpp"
+#include "threepp/extras/editor/SplatSurfaceCache.hpp"
+#include "threepp/extras/editor/SplatSurfaceConfig.hpp"
 #include "threepp/extras/editor/SplineConfig.hpp"
 #include "threepp/extras/editor/ViewSpec.hpp"
 #include "threepp/extras/imgui/ImguiContext.hpp"
@@ -37,6 +39,9 @@
 #include "threepp/extras/editor/GranularPlaySession.hpp"
 #include "threepp/extras/editor/PhysicsPlaySession.hpp"
 #include "threepp/extras/editor/PhysxSensorPlaySession.hpp"
+#ifdef THREEPP_WITH_VULKAN
+#include "threepp/extras/editor/SplatSurfacePlaySession.hpp"
+#endif
 #endif
 
 #include "threepp/canvas/Monitor.hpp"
@@ -540,6 +545,12 @@ EditorApp::EditorApp(const Options& options)
         // Thumbnails are keyed by texture uuid, and the restored scene rebuilds
         // its textures — same uuid, different object. Nothing stale survives.
         clearThumbnailCache();
+        // Baked scan surfaces are keyed by the outgoing clouds' uuids, and a
+        // splat cloud never survives a scene replace in the first place (it is
+        // not serialized yet), so every entry is now unreachable megabytes.
+        if (splatSurfaces_) splatSurfaces_->clear();
+        splatBakeNode_.clear();
+        splatBakeStats_.clear();
         if (cameraHelper_) {
             cameraHelper_->removeFromParent();
             cameraHelper_.reset();
@@ -615,6 +626,11 @@ EditorApp::EditorApp(const Options& options)
         if (!present) selectObject(nullptr);
     });
 
+    // The surface-bake memo. Built in every configuration, because the
+    // inspector authors and reports in every configuration; it declines to bake
+    // where it cannot (see SplatSurfaceCache).
+    splatSurfaces_ = std::make_shared<editor::SplatSurfaceCache>();
+
 #ifdef THREEPP_EDITOR_WITH_PHYSX
     // Kept as a member too: the collider overlay reads the world it builds.
     physics_ = std::make_shared<PhysicsPlaySession>();
@@ -659,6 +675,20 @@ EditorApp::EditorApp(const Options& options)
     granularSession_->setRenderer(renderer_.get());
     granularSession_->setLogger([this](const std::string& message) { log(message); });
     play_.addSession(granularSession_);
+
+#ifdef THREEPP_WITH_VULKAN
+    // Baked scan surfaces, right after the grains and still inside the PhysX
+    // guard: the collider is cooked into the world physics_ built, so the same
+    // borrow-and-stop-first ordering applies. The memo it bakes into is the
+    // app's — the inspector's "Bake now" fills the very same one, which is what
+    // makes a warmed bake instant at Play.
+    splatSurfaceSession_ = std::make_shared<SplatSurfacePlaySession>();
+    splatSurfaceSession_->setPhysics(physics_.get());
+    splatSurfaceSession_->setRenderer(renderer_.get());
+    splatSurfaceSession_->setCache(splatSurfaces_.get());
+    splatSurfaceSession_->setLogger([this](const std::string& message) { log(message); });
+    play_.addSession(splatSurfaceSession_);
+#endif
 #endif
 
     play_.addSession(std::make_shared<AnimationPlaySession>());

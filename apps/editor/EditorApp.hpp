@@ -100,6 +100,11 @@ namespace threepp::editor {
     // EditorApp.cpp), but still heavy — it pulls in the depth/lidar sensors and
     // the renderer, which the panels have no business recompiling against.
     class SensorPlaySession;
+    // Baked scan surfaces during Play. Forward-declared for both reasons at
+    // once (PhysX SDK + the Vulkan renderer), and the memo beside it because it
+    // carries SplatCloud and the bake.
+    class SplatSurfacePlaySession;
+    class SplatSurfaceCache;
     // Sounds during Play. Only exists in a THREEPP_WITH_AUDIO build — that
     // macro is PUBLIC on the threepp target, so every TU that includes this
     // header agrees on whether the member below is there.
@@ -218,11 +223,17 @@ namespace threepp::editor {
         void drawMaterialSection(Object3D& object);
         void drawGeometrySection(Object3D& object);
         void drawGeneratorSection(Object3D& object);
-        // Read-only: what the cloud IS (splats, SH degree), where it came from,
-        // and the fact that none of it is saved yet. No authoring verbs — a
-        // scan is imported, looked at and placed, and the placement is the
-        // transform section's job like everything else's.
+        // What the cloud IS (splats, SH degree), where it came from, and the
+        // fact that none of it is saved yet — plus the one authoring verb a
+        // scan has: the surface bake that makes it collide and return beams.
+        // Placement stays the transform section's job like everything else's.
         void drawSplatSection(Object3D& object);
+        // Bake the selected cloud's surface NOW, straight into the memo the
+        // play session reads. Blocking and visibly so: the bake reparents the
+        // cloud and renders the pose loop through the primary view, so the
+        // viewport flashes for the ~0.4 s it takes. Reports through the log and
+        // the status flash.
+        void bakeSplatSurface(Object3D& object);
         void drawInstancingSection(Object3D& object);
         void drawLightSection(Object3D& object);
         void drawLightShadowSection(Object3D& object);
@@ -1176,6 +1187,20 @@ namespace threepp::editor {
         // the PhysX guard, so its stop comes before physics' — the world is
         // still alive to release the particle actor into.
         std::shared_ptr<GranularPlaySession> granularSession_;
+        // Scanned surfaces made solid and sensable during Play. Registered
+        // inside the PhysX guard right after the grains, for the same reason:
+        // its colliders are cooked into the world physics_ built, and stopping
+        // in reverse order tears them down first.
+        std::shared_ptr<SplatSurfacePlaySession> splatSurfaceSession_;
+        // The bake memo, shared between that session and the inspector's "Bake
+        // now" — which is why it is the APP's and not the session's (see
+        // SplatSurfaceCache.hpp). shared_ptr so this header can leave the type
+        // incomplete.
+        std::shared_ptr<SplatSurfaceCache> splatSurfaces_;
+        // The last bake's stats line and the node it was for, so the inspector
+        // can show what it produced without re-reading a mesh it does not own.
+        std::string splatBakeNode_;
+        std::string splatBakeStats_;
         std::shared_ptr<LineSegments> physicsDebugLines_;
         int physicsDebugCapacity_ = 0;
         bool physicsDebug_ = false;
