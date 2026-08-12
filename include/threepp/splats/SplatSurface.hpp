@@ -74,6 +74,37 @@ namespace threepp::splats {
         float maxWeight{32.f};
         float weightFloor{2.f};
 
+        // Allocation gate, in world units of view-axis distance: a depth sample
+        // farther than this allocates NOTHING. 0 = 2.5 * the pose distance
+        // (itself 2.2 * the fit radius unless poseDistance says otherwise).
+        //
+        // A pose camera sees PAST its subject — its far plane is 20 fit radii —
+        // so an outdoor scan returns depths on background splats far outside the
+        // subject, and each of those scatters blocks along its whole truncation
+        // band across a volume nobody asked to fuse. Measured on a scan with a
+        // 30 m backdrop shell around a 4 m plane: unfenced it is the difference
+        // between a bounded bake and one that exhausts system memory.
+        //
+        // The gate is on ALLOCATION ONLY. The update pass keeps using far
+        // depths, because a ray that punches through to the background carves
+        // the near free space it crossed on the way, and that carving is the
+        // whole reason floaters die.
+        float maxDepth{0.f};
+
+        // The carve pass's whole-block fast paths. They are bit-exact
+        // restatements of the per-voxel path, never approximations, so this is
+        // not a quality knob — it is the A/B that PROVES the claim, and
+        // VulkanSplatSurface_test bakes a scan both ways and compares the
+        // meshes. Turning it off is correct and slow.
+        bool carveFastPaths{true};
+
+        // Hard ceiling on TSDF block storage. Past it no NEW block is allocated
+        // (the ones that exist keep integrating) and the refusals are counted:
+        // a bounded thing says what it dropped. Integration is sequential in
+        // pose order, so WHICH blocks fit is deterministic. The vector holding
+        // them is reserved against this same cap, so growth cannot overshoot it.
+        uint64_t maxBlockBytes{1ull << 30};
+
         // Empty = generated: a Fibonacci sphere of `poseCount` viewpoints around
         // the fit sphere for a compact scan, a ring plus a top-down grid for one
         // wider than it is tall. Supplying poses is the point for interiors and
@@ -123,12 +154,27 @@ namespace threepp::splats {
             int poses{0};
             float voxelSize{0.f};
             float truncation{0.f};
+            float maxDepth{0.f};// the allocation gate actually used
 
             uint64_t depthSamples{0};    // covered pixels offered to fusion
             uint64_t skippedFringe{0};   // ... dropped by the fringe erode
             uint64_t skippedOutlier{0};  // ... dropped as behind-neighbourhood
-            uint64_t blocks{0};          // 8^3 blocks allocated
+            uint64_t skippedFar{0};      // ... past maxDepth: allocated nothing
+                                         //     (still integrated: they carve)
+            uint64_t blocks{0};          // 8^3 blocks allocated; nothing is ever
+                                         //   freed, so this is also the peak
+            uint64_t peakBlockBytes{0};  // ... what they cost
+            uint64_t refusedBlocks{0};   // allocations refused by maxBlockBytes
+                                         //   (a repeat request counts again)
             uint64_t observedVoxels{0};  // voxels with weight >= weightFloor
+
+            // The carve pass, in blocks visited summed over POSES. The two fast
+            // paths are bit-exact restatements of the per-voxel one (see the
+            // .cpp) — they exist to bound the O(poses x blocks x 512) walk, not
+            // to approximate it, and the determinism test is what says so.
+            uint64_t carveSkippedBlocks{0};// provably a no-op for all 512 voxels
+            uint64_t carveBulkBlocks{0};   // provably s = 1 for all 512 voxels
+            uint64_t carveVoxelBlocks{0};  // the full per-voxel path
 
             uint32_t components{0};
             uint32_t culledComponents{0};

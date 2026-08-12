@@ -15,6 +15,7 @@
 #include <chrono>
 #include <cmath>
 #include <cstring>
+#include <limits>
 #include <memory>
 #include <unordered_map>
 #include <unordered_set>
@@ -29,6 +30,10 @@ namespace {
     // cloud's sort), the second is the frame that is read back, so the AOV can
     // never be the previous pose's.
     constexpr int kFramesPerPose = 2;
+    // Depth-summary tile edge, in pixels. Only the carve pass's fast paths read
+    // it: bigger tiles summarise more coarsely (fewer blocks classify) and cost
+    // less to build, and 16 is where a 512x512 capture's summary is 1024 entries.
+    constexpr int kTile = 16;
 
     struct Block {
 
@@ -60,22 +65,33 @@ namespace {
 
         std::unordered_map<uint64_t, uint32_t> index;
         std::vector<Block> blocks;
+        size_t maxBlocks{~size_t(0)};
+        uint64_t refused{0};
 
         Block* find(uint64_t key) {
             const auto it = index.find(key);
             return it == index.end() ? nullptr : &blocks[it->second];
         }
 
-        Block& ensure(uint64_t key, int bx, int by, int bz) {
-            const auto it = index.find(key);
-            if (it != index.end()) return blocks[it->second];
+        // Refuses past the budget rather than growing until the machine gives
+        // out. Reserving geometrically but CLAMPED to the cap keeps the vector's
+        // own growth from overshooting it on the last doubling.
+        void ensure(uint64_t key, int bx, int by, int bz) {
+            if (index.find(key) != index.end()) return;
+            if (blocks.size() >= maxBlocks) {
+                ++refused;
+                return;
+            }
+            if (blocks.size() == blocks.capacity()) {
+                const size_t want = std::max<size_t>(64, blocks.capacity() + blocks.capacity() / 2);
+                blocks.reserve(std::min(maxBlocks, want));
+            }
             index.emplace(key, static_cast<uint32_t>(blocks.size()));
             blocks.push_back(Block{});
             Block& b = blocks.back();
             b.bx = bx;
             b.by = by;
             b.bz = bz;
-            return b;
         }
     };
 
@@ -271,6 +287,14 @@ namespace threepp::splats {
         out.stats.voxelSize = voxel;
         out.stats.truncation = trunc;
 
+        // The allocation gate. Derived from the pose distance rather than from
+        // the far plane, because what a pose is CLOSE ENOUGH to fuse is the
+        // subject it was placed around; the far plane's job is only to let the
+        // subject's own back side render.
+        const float poseDist = options.poseDistance > 0.f ? options.poseDistance : fit.radius * 2.2f;
+        const float maxDepth = options.maxDepth > 0.f ? options.maxDepth : 2.5f * poseDist;
+        out.stats.maxDepth = maxDepth;
+
         const std::vector<BakePose> poses =
                 options.poses.empty() ? autoPoses(fit, options.poseCount, options.poseDistance)
                                       : options.poses;
@@ -309,9 +333,24 @@ namespace threepp::splats {
                                      : 1.f;
 
         Volume vol;
+        vol.maxBlocks = std::max<uint64_t>(1ull, options.maxBlockBytes / sizeof(Block));
         std::vector<float> depth;
         std::vector<uint8_t> raw;
+        // Per-pose depth summary, one entry per kTile x kTile pixel tile: the
+        // range of the covered depths in it and whether it is covered
+        // everywhere. The carve pass's whole-block fast paths read nothing else.
+        std::vector<float> tileMin, tileMax;
+        std::vector<uint8_t> tileFull;
         double renderMs = 0, fuseMs = 0;
+
+        // KinectFusion's weighted running average, written ONCE so that the
+        // carve pass's bulk fast path cannot drift from its per-voxel path by so
+        // much as a contraction: both call this, with the same operand types.
+        const auto integrate = [&options](Block& blk, int idx, float s) {
+            const float wOld = blk.w[idx];
+            blk.tsdf[idx] = (blk.tsdf[idx] * wOld + s) / (wOld + 1.f);
+            blk.w[idx] = std::min(options.maxWeight, wOld + 1.f);
+        };
 
         auto poseCamera = [&](const BakePose& pose) {
             auto camera = PerspectiveCamera::create(pose.fov, aspect,
@@ -379,11 +418,19 @@ namespace threepp::splats {
                                mx.z * vx + my.z * vy - mz.z};
             };
 
-            // 1. Allocation: blocks within +-truncation of an observed hit.
+            // 1. Allocation: blocks within +-truncation of an observed hit, and
+            // only for a hit NEAR ENOUGH to be the subject. Past maxDepth the
+            // sample allocates nothing at all — it still gets to carve in the
+            // update pass below, which is the half of its information that costs
+            // no memory.
             for (int y = 0; y < ah; ++y)
                 for (int x = 0; x < aw; ++x) {
                     const float d = depth[static_cast<size_t>(y) * aw + x];
                     if (!(d > 0.f)) continue;
+                    if (d > maxDepth) {
+                        ++out.stats.skippedFar;
+                        continue;
+                    }
                     const Vector3 dir = worldDir(x, y);
                     uint64_t last = ~0ull;
                     for (float t = d - trunc; t <= d + trunc + 1e-6f; t += voxel) {
@@ -408,6 +455,32 @@ namespace threepp::splats {
             const Vector3 ez{V[8] * voxel, V[9] * voxel, V[10] * voxel};
             const float nearZ = camera->nearPlane;
 
+            // The summary the fast paths below classify blocks against. An edge
+            // tile summarises only its IN-IMAGE pixels, which is conservative
+            // for both tests: a min over a superset is lower and a max over a
+            // superset is higher, so a rect that clears the summary clears its
+            // own subset of it too.
+            const int tilesX = (aw + kTile - 1) / kTile, tilesY = (ah + kTile - 1) / kTile;
+            constexpr float kInf = std::numeric_limits<float>::infinity();
+            tileMin.assign(static_cast<size_t>(tilesX) * tilesY, kInf);
+            tileMax.assign(static_cast<size_t>(tilesX) * tilesY, -kInf);
+            tileFull.assign(static_cast<size_t>(tilesX) * tilesY, 1);
+            for (int ty = 0; ty < tilesY; ++ty)
+                for (int tx = 0; tx < tilesX; ++tx) {
+                    const size_t t = static_cast<size_t>(ty) * tilesX + tx;
+                    const int x1 = std::min(aw, (tx + 1) * kTile), y1 = std::min(ah, (ty + 1) * kTile);
+                    for (int y = ty * kTile; y < y1; ++y)
+                        for (int x = tx * kTile; x < x1; ++x) {
+                            const float d = depth[static_cast<size_t>(y) * aw + x];
+                            if (d > 0.f) {
+                                tileMin[t] = std::min(tileMin[t], d);
+                                tileMax[t] = std::max(tileMax[t], d);
+                            } else {
+                                tileFull[t] = 0;
+                            }
+                        }
+                }
+
             for (auto& b : vol.blocks) {
 
                 const float ox = (static_cast<float>(b.bx * kB) + 0.5f) * voxel;
@@ -416,6 +489,119 @@ namespace threepp::splats {
                 Vector3 base{V[0] * ox + V[4] * oy + V[8] * oz + V[12],
                              V[1] * ox + V[5] * oy + V[9] * oz + V[13],
                              V[2] * ox + V[6] * oy + V[10] * oz + V[14]};
+
+                // ── whole-block fast paths ──────────────────────────────────
+                // Every one of them is a RESTATEMENT of the per-voxel loop
+                // below, never an approximation: either it proves the loop
+                // changes nothing for all 512 voxels (skip) or it proves the
+                // loop takes the s == 1 branch for all 512 and does that
+                // arithmetic verbatim (bulk). The mesh hash is what enforces it.
+                //
+                // The bounds: the 512 voxel centres are an affine lattice, so
+                // view-space z is affine over them and its extremes are AT the
+                // corners; the projection is projective, so a box wholly in
+                // front of the near plane maps into the convex hull of its
+                // projected corners, and their screen AABB contains every
+                // voxel's pixel. The margins absorb float rounding on the
+                // interior points, and they only ever make a fast path rarer.
+                if (options.carveFastPaths) {
+
+                    const auto vpAt = [&](float i, float j, float k) {
+                        return Vector3{base.x + ex.x * i + ey.x * j + ez.x * k,
+                                       base.y + ex.y * i + ey.y * j + ez.y * k,
+                                       base.z + ex.z * i + ey.z * j + ez.z * k};
+                    };
+                    Vector3 corner[8];
+                    float zLo = kInf, zHi = -kInf;
+                    for (int c = 0; c < 8; ++c) {
+                        corner[c] = vpAt((c & 1) ? float(kB - 1) : 0.f,
+                                         (c & 2) ? float(kB - 1) : 0.f,
+                                         (c & 4) ? float(kB - 1) : 0.f);
+                        const float z = -corner[c].z;
+                        zLo = std::min(zLo, z);
+                        zHi = std::max(zHi, z);
+                    }
+                    const float zEps = 1e-4f * std::max(1.f, std::abs(zHi));
+
+                    // Wholly behind the near plane: `z <= nearZ` for every voxel.
+                    if (zHi <= nearZ - zEps) {
+                        ++out.stats.carveSkippedBlocks;
+                        continue;
+                    }
+                    if (zLo > nearZ + zEps) {
+
+                        float pxLo = kInf, pxHi = -kInf, pyLo = kInf, pyHi = -kInf;
+                        for (int c = 0; c < 8; ++c) {
+                            const float z = -corner[c].z;
+                            const float px = (P[0] * corner[c].x / z * 0.5f + 0.5f) * static_cast<float>(aw);
+                            const float py = (0.5f - P[5] * corner[c].y / z * 0.5f) * static_cast<float>(ah);
+                            pxLo = std::min(pxLo, px);
+                            pxHi = std::max(pxHi, px);
+                            pyLo = std::min(pyLo, py);
+                            pyHi = std::max(pyHi, py);
+                        }
+                        constexpr float kPixEps = 1.f;
+                        pxLo -= kPixEps;
+                        pxHi += kPixEps;
+                        pyLo -= kPixEps;
+                        pyHi += kPixEps;
+
+                        // Wholly outside the image. -1 and not 0 on the low side
+                        // because the per-voxel bounds test truncates toward
+                        // zero: px == -0.5 gives u == 0, which is IN bounds and
+                        // samples column 0.
+                        if (pxHi <= -1.f || pyHi <= -1.f ||
+                            pxLo >= static_cast<float>(aw) || pyLo >= static_cast<float>(ah)) {
+                            ++out.stats.carveSkippedBlocks;
+                            continue;
+                        }
+
+                        const auto pixClamp = [](float v, int n) { return std::clamp(v, -2.f, static_cast<float>(n) + 2.f); };
+                        const int x0 = std::max(0, static_cast<int>(std::floor(pixClamp(pxLo, aw))));
+                        const int x1 = std::min(aw - 1, static_cast<int>(std::floor(pixClamp(pxHi, aw))));
+                        const int y0 = std::max(0, static_cast<int>(std::floor(pixClamp(pyLo, ah))));
+                        const int y1 = std::min(ah - 1, static_cast<int>(std::floor(pixClamp(pyHi, ah))));
+                        if (x0 <= x1 && y0 <= y1) {
+
+                            float dLo = kInf, dHi = -kInf;
+                            bool full = true;
+                            for (int ty = y0 / kTile; ty <= y1 / kTile; ++ty)
+                                for (int tx = x0 / kTile; tx <= x1 / kTile; ++tx) {
+                                    const size_t t = static_cast<size_t>(ty) * tilesX + tx;
+                                    dLo = std::min(dLo, tileMin[t]);
+                                    dHi = std::max(dHi, tileMax[t]);
+                                    if (!tileFull[t]) full = false;
+                                }
+                            const float dEps = 1e-4f * std::max(1.f, std::max(std::abs(zHi), dHi > 0.f ? dHi : 0.f));
+
+                            // Wholly behind every depth this block can read (dHi
+                            // is -inf when it can read none): `sdf < -trunc` for
+                            // every voxel, so every voxel continues. Needs no
+                            // coverage flag — an uncovered pixel continues too.
+                            if (dHi < zLo - trunc - dEps) {
+                                ++out.stats.carveSkippedBlocks;
+                                continue;
+                            }
+
+                            // Wholly in free space, and every pixel it can read
+                            // is covered and in the image: `sdf >= trunc` for
+                            // every voxel, so `s = min(1, sdf/trunc)` is EXACTLY
+                            // 1.0f — the quotient of a value >= trunc is >= 1 in
+                            // reals and rounding to nearest is monotone, so it
+                            // cannot land under 1. The update is then the
+                            // per-voxel one with s substituted, which is why
+                            // both go through the same `integrate`.
+                            const bool inside = pxLo >= 0.f && pxHi < static_cast<float>(aw) &&
+                                                pyLo >= 0.f && pyHi < static_cast<float>(ah);
+                            if (inside && full && dLo - zHi > trunc + dEps) {
+                                for (int idx = 0; idx < kBV; ++idx) integrate(b, idx, 1.f);
+                                ++out.stats.carveBulkBlocks;
+                                continue;
+                            }
+                        }
+                    }
+                }
+                ++out.stats.carveVoxelBlocks;
 
                 for (int k = 0; k < kB; ++k)
                     for (int j = 0; j < kB; ++j)
@@ -436,11 +622,7 @@ namespace threepp::splats {
                             const float sdf = d - z;
                             if (sdf < -trunc) continue;// behind the surface: unobserved
                             const float s = std::min(1.f, sdf / trunc);
-                            const int idx = i + j * kB + k * kB * kB;
-                            const float wOld = b.w[idx];
-                            const float wNew = std::min(options.maxWeight, wOld + 1.f);
-                            b.tsdf[idx] = (b.tsdf[idx] * wOld + s) / (wOld + 1.f);
-                            b.w[idx] = wNew;
+                            integrate(b, i + j * kB + k * kB * kB, s);
                         }
             }
             fuseMs += std::chrono::duration<double, std::milli>(clock::now() - t1).count();
@@ -458,6 +640,8 @@ namespace threepp::splats {
         }
 
         out.stats.blocks = vol.blocks.size();
+        out.stats.peakBlockBytes = static_cast<uint64_t>(vol.blocks.size()) * sizeof(Block);
+        out.stats.refusedBlocks = vol.refused;
         out.stats.renderMs = renderMs;
         out.stats.fuseMs = fuseMs;
         if (vol.blocks.empty()) return out;

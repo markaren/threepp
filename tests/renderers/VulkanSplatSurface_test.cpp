@@ -167,6 +167,41 @@ namespace {
         return out;
     }
 
+    // What an OUTDOOR scan has behind its subject: a distant backdrop the pose
+    // cameras see straight past the subject into. Big sparse splats on a shell
+    // far outside it, appended to the near cloud so both live in ONE SplatCloud
+    // the way a real scan does. Kept under 10 % of the cloud, so the robust fit
+    // — a 90th-percentile radius — still describes the subject; a backdrop that
+    // moved the fit would be a different scan, not a backdrop.
+    SplatData withBackdrop(const SplatData& base, float r, size_t count = 3000, unsigned seed = 23u) {
+
+        SplatGenerator::Options o;
+        o.count = count;
+        o.seed = seed;
+        o.shDegree = 0;
+        o.extent.set(2.f, 2.f, 2.f);
+        o.minScale = 2.0f;
+        o.maxScale = 3.0f;
+        o.anisotropy = 1.f;
+        o.minOpacity = 0.9f;
+        o.maxOpacity = 1.f;
+        auto s = SplatGenerator::generate(o);
+
+        SplatData out = base;
+        const size_t first = out.count();
+        for (size_t i = 0; i < s.count(); ++i) {
+            Vector3 m = s.means[i];
+            const float len = m.length();
+            out.means.push_back((len > 1e-4f) ? m * (r / len) : Vector3{r, 0.f, 0.f});
+            out.scales.push_back(s.scales[i]);
+            out.rotations.push_back(s.rotations[i]);
+            out.opacities.push_back(s.opacities[i]);
+            for (int c = 0; c < 3; ++c) out.sh.push_back(0.f);
+        }
+        for (size_t i = first; i < out.count(); ++i) out.setDcColor(i, Vector3{0.35f, 0.4f, 0.45f});
+        return out;
+    }
+
     // Depth-sensor camera clip range. The G-buffer's Depth AOV is REVERSED-Z
     // NDC (see readGBufferAOV), which the renderer builds from the camera's own
     // GL projection as z' = 0.5w - 0.5z; inverting that for a perspective
@@ -257,10 +292,24 @@ int main(int argc, char** argv) {
                 static_cast<unsigned long long>(bake1.stats.blocks),
                 static_cast<unsigned long long>(bake1.stats.observedVoxels),
                 bake1.stats.renderMs, bake1.stats.fuseMs, bake1.stats.meshMs);
-    std::printf("       samples %llu  dropped fringe %llu  behind-neighbours %llu\n",
+    std::printf("       samples %llu  dropped fringe %llu  behind-neighbours %llu  far %llu"
+                "  (gate %.2f)\n",
                 static_cast<unsigned long long>(bake1.stats.depthSamples),
                 static_cast<unsigned long long>(bake1.stats.skippedFringe),
-                static_cast<unsigned long long>(bake1.stats.skippedOutlier));
+                static_cast<unsigned long long>(bake1.stats.skippedOutlier),
+                static_cast<unsigned long long>(bake1.stats.skippedFar),
+                bake1.stats.maxDepth);
+    std::printf("       carve blocks: %llu per-voxel, %llu bulk, %llu skipped"
+                "  -> fast path %.1f%%   peak %.1f MB, %llu refused\n",
+                static_cast<unsigned long long>(bake1.stats.carveVoxelBlocks),
+                static_cast<unsigned long long>(bake1.stats.carveBulkBlocks),
+                static_cast<unsigned long long>(bake1.stats.carveSkippedBlocks),
+                100.0 * double(bake1.stats.carveBulkBlocks + bake1.stats.carveSkippedBlocks) /
+                        std::max<double>(1.0, double(bake1.stats.carveVoxelBlocks +
+                                                     bake1.stats.carveBulkBlocks +
+                                                     bake1.stats.carveSkippedBlocks)),
+                double(bake1.stats.peakBlockBytes) / (1024.0 * 1024.0),
+                static_cast<unsigned long long>(bake1.stats.refusedBlocks));
     report(!bake1.empty(), "the plane cloud bakes to a non-empty surface");
     report(bake1.positions == bake2.positions && bake1.indices == bake2.indices,
            "the same cloud baked twice is identical, vertex and index");
@@ -473,6 +522,123 @@ int main(int argc, char** argv) {
         renderer.removeView(rgbH);
         renderer.removeView(viewH);
         scene->remove(*surface);
+    }
+
+    // ── 6. a distant backdrop is not fused ──────────────────────────────────
+    // The defect this case exists for: the pose cameras' far plane is 20 fit
+    // radii, so an outdoor scan returns depths on background splats far outside
+    // the subject, and unfenced EVERY one of them allocated blocks along its
+    // whole truncation band — gigabytes of TSDF over a volume nobody asked to
+    // fuse, and then an O(poses x blocks x 512) carve over all of it. The gate
+    // is on ALLOCATION only, so those samples still carve; they just do not buy
+    // storage.
+    //
+    // The claims are counters, not seconds: they are exact functions of the
+    // input and immune to whatever else is using the GPU. The wall times are
+    // printed for orientation and asserted on by nothing.
+    {
+        auto backCloud = SplatCloud::create(withBackdrop(makePlane(), 30.f));
+        auto backScene = Scene::create();
+        backScene->add(backCloud);
+        const auto back = splats::bakeSurface(renderer, *backCloud, opts);
+
+        const auto work = [](const splats::SurfaceMesh& m) {
+            return m.stats.carveVoxelBlocks + m.stats.carveBulkBlocks + m.stats.carveSkippedBlocks;
+        };
+        std::printf("       backdrop  %zu tris  gate %.2f  far samples %llu of %llu"
+                    "  peak %.1f MB (plane %.1f)  refused %llu\n",
+                    back.triangleCount(), back.stats.maxDepth,
+                    static_cast<unsigned long long>(back.stats.skippedFar),
+                    static_cast<unsigned long long>(back.stats.depthSamples + back.stats.skippedFar),
+                    double(back.stats.peakBlockBytes) / (1024.0 * 1024.0),
+                    double(bake1.stats.peakBlockBytes) / (1024.0 * 1024.0),
+                    static_cast<unsigned long long>(back.stats.refusedBlocks));
+        std::printf("       backdrop carve blocks: %llu per-voxel, %llu bulk, %llu skipped"
+                    " (%llu total)   vs plane %llu / %llu / %llu\n",
+                    static_cast<unsigned long long>(back.stats.carveVoxelBlocks),
+                    static_cast<unsigned long long>(back.stats.carveBulkBlocks),
+                    static_cast<unsigned long long>(back.stats.carveSkippedBlocks),
+                    static_cast<unsigned long long>(work(back)),
+                    static_cast<unsigned long long>(bake1.stats.carveVoxelBlocks),
+                    static_cast<unsigned long long>(bake1.stats.carveBulkBlocks),
+                    static_cast<unsigned long long>(bake1.stats.carveSkippedBlocks));
+
+        // The fast paths' own correctness instrument. They claim to be bit-exact
+        // restatements of the per-voxel path, and this is the only case where
+        // all THREE fire — a flat plane's blocks all straddle its own surface,
+        // so nothing there is ever provably free space; a backdrop 30 m behind
+        // it is what puts whole blocks a truncation clear of what they can see.
+        auto slowOpts = opts;
+        slowOpts.carveFastPaths = false;
+        const auto slow = splats::bakeSurface(renderer, *backCloud, slowOpts);
+        report(back.stats.carveBulkBlocks > 0 && back.stats.carveSkippedBlocks > 0,
+               "the backdrop case fires both whole-block fast paths");
+        report(back.positions == slow.positions && back.indices == slow.indices,
+               "and the mesh is bit-identical to the same bake with them off");
+        std::printf("       fast-path A/B hash %llu / %llu  (%llu blocks per-voxel with them off)\n",
+                    static_cast<unsigned long long>(hashMesh(back)),
+                    static_cast<unsigned long long>(hashMesh(slow)),
+                    static_cast<unsigned long long>(slow.stats.carveVoxelBlocks));
+        std::printf("       backdrop aabb [%.2f %.2f %.2f]..[%.2f %.2f %.2f]"
+                    " vs plane [%.2f %.2f %.2f]..[%.2f %.2f %.2f]\n",
+                    back.stats.aabbMin.x, back.stats.aabbMin.y, back.stats.aabbMin.z,
+                    back.stats.aabbMax.x, back.stats.aabbMax.y, back.stats.aabbMax.z,
+                    bake1.stats.aabbMin.x, bake1.stats.aabbMin.y, bake1.stats.aabbMin.z,
+                    bake1.stats.aabbMax.x, bake1.stats.aabbMax.y, bake1.stats.aabbMax.z);
+        // Printed, never asserted on. Seconds measure whatever else is using the
+        // GPU as much as they measure this code; the claims below are counters,
+        // which are exact functions of the input.
+        std::printf("       wall (indicative only): backdrop"
+                    " render %.0f fuse %.0f mesh %.0f ms  vs plane %.0f / %.0f / %.0f\n",
+                    back.stats.renderMs, back.stats.fuseMs, back.stats.meshMs,
+                    bake1.stats.renderMs, bake1.stats.fuseMs, bake1.stats.meshMs);
+
+        // The backdrop mesh is BIGGER than the plane's (measured: 18517 tris vs
+        // 13460, reaching a truncation below it) and that is the fusion working,
+        // not leaking: rays that pass the plane's silhouette now END somewhere
+        // instead of nowhere, so the space beside and under the rim becomes
+        // OBSERVED free space and the slab closes. The tolerance is therefore
+        // one truncation plus a voxel, not a hair — what must not happen is
+        // geometry out at the backdrop, 30 m away.
+        const float pad = 4.f * kVoxel + kVoxel;
+        const bool tight = !back.empty() &&
+                           back.stats.aabbMin.x > bake1.stats.aabbMin.x - pad &&
+                           back.stats.aabbMin.y > bake1.stats.aabbMin.y - pad &&
+                           back.stats.aabbMin.z > bake1.stats.aabbMin.z - pad &&
+                           back.stats.aabbMax.x < bake1.stats.aabbMax.x + pad &&
+                           back.stats.aabbMax.y < bake1.stats.aabbMax.y + pad &&
+                           back.stats.aabbMax.z < bake1.stats.aabbMax.z + pad;
+        report(tight, "a scan with a distant backdrop meshes only the near subject");
+        // 4x and not 2x because the backdrop also DEFEATS the fringe erode — it
+        // infers coverage from the mask, and a full mask has no silhouette — so
+        // the plane's own near-gate rim samples survive and allocate behind it.
+        // The bound that matters is against the unfenced cost, which --sweep
+        // prints: without the gate this same scan allocates two orders of
+        // magnitude more.
+        report(back.stats.skippedFar > 0 && back.stats.refusedBlocks == 0 &&
+                       back.stats.peakBlockBytes < 4 * bake1.stats.peakBlockBytes,
+               "the far samples are gated out of ALLOCATION and the volume stays plane-sized");
+        report(work(back) < 5 * work(bake1) && back.stats.carveVoxelBlocks < 5 * bake1.stats.carveVoxelBlocks,
+               "and the carve pass does the same order of work as the plane alone");
+
+        if (sweep) {
+            // The A/B that placed the gate: the same scan with allocation
+            // unfenced. Not asserted — it is the measurement, and on a real
+            // outdoor scan it is what exhausts the machine.
+            auto o = opts;
+            o.maxDepth = 1e6f;
+            const auto unfenced = splats::bakeSurface(renderer, *backCloud, o);
+            std::printf("       backdrop UNFENCED: %llu blocks (%.1f MB), carve %llu blocks,"
+                        " %zu tris, fuse %.0f ms   vs gated %llu (%.1f MB) / %llu / %zu / %.0f ms\n",
+                        static_cast<unsigned long long>(unfenced.stats.blocks),
+                        double(unfenced.stats.peakBlockBytes) / (1024.0 * 1024.0),
+                        static_cast<unsigned long long>(work(unfenced)),
+                        unfenced.triangleCount(), unfenced.stats.fuseMs,
+                        static_cast<unsigned long long>(back.stats.blocks),
+                        double(back.stats.peakBlockBytes) / (1024.0 * 1024.0),
+                        static_cast<unsigned long long>(work(back)),
+                        back.triangleCount(), back.stats.fuseMs);
+        }
     }
 
     if (sweep) {
