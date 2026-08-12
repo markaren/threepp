@@ -76,6 +76,30 @@ if (THREEPP_WITH_VULKAN AND THREEPP_WITH_GLFW)
             SKIP_RETURN_CODE 42
             ENVIRONMENT "THREEPP_VK_SPLATVOL_OFF=1")
 
+    # Depth fusion of a splat scan into a triangle surface
+    # (plans/splat-surface-bake.md P1): determinism of the bake, the metric
+    # accuracy of a fused plane and sphere shell, the mesh's usability as a
+    # cooked PhysX collider, and the floater defenses. Plain exit-code + skip-42
+    # like the goldens; --sweep prints the weight-floor and guard tables that
+    # placed the defaults and asserts nothing.
+    #
+    # The collider case needs the PhysX SDK, an optional vcpkg feature. Look for
+    # it here rather than relying on tests/extras having done so — that subdir is
+    # added after this one, and tests must configure standalone.
+    add_executable(VulkanSplatSurface_test VulkanSplatSurface_test.cpp)
+    target_link_libraries(VulkanSplatSurface_test PRIVATE threepp)
+    target_include_directories(VulkanSplatSurface_test PRIVATE "${PROJECT_SOURCE_DIR}/src")
+    if (NOT TARGET unofficial::omniverse-physx-sdk::sdk)
+        find_package(unofficial-omniverse-physx-sdk CONFIG QUIET)
+    endif ()
+    threepp_fix_physx_static_link_order()
+    if (TARGET unofficial::omniverse-physx-sdk::sdk)
+        target_link_libraries(VulkanSplatSurface_test PRIVATE unofficial::omniverse-physx-sdk::sdk)
+        target_compile_definitions(VulkanSplatSurface_test PRIVATE THREEPP_TEST_WITH_PHYSX=1)
+    endif ()
+    add_test(NAME VulkanSplatSurface_test COMMAND VulkanSplatSurface_test)
+    set_tests_properties(VulkanSplatSurface_test PROPERTIES SKIP_RETURN_CODE 42)
+
     # The cross-hardware gate. Asserts zero VALIDATION errors over a sequence of
     # reconfigurations (AOV resolves, view add/remove, render-scale and MSAA
     # realloc, swapchain recreate, entry-list churn) — a claim every conformant

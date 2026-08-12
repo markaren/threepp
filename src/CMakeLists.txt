@@ -857,6 +857,9 @@ if (THREEPP_WITH_VULKAN)
             # PRIVATE Vulkan/VMA include paths this target keeps to itself.
             "threepp/renderers/vulkan/ValidationReport.hpp"
             "threepp/helpers/PathTracedLidarSensor.hpp"
+            # Depth fusion of a splat scan into a triangle surface: it reads the
+            # Vulkan depth AOV, so it lives with the renderer that exports it.
+            "threepp/splats/SplatSurface.hpp"
             # FFT-displaced ocean: the renderer is the only consumer (recognised
             # via dynamic_cast), so the object types live with it under Vulkan.
             "threepp/objects/DisplacedMesh.hpp"
@@ -890,6 +893,7 @@ if (THREEPP_WITH_VULKAN)
     list(APPEND sources
             "threepp/renderers/VulkanRenderer.cpp"
             "threepp/helpers/PathTracedLidarSensor.cpp"
+            "threepp/splats/SplatSurface.cpp"
             "threepp/objects/DisplacedMesh.cpp"
             "threepp/objects/Ocean.cpp"
             "threepp/renderers/vulkan/VmaImpl.cpp"
