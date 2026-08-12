@@ -2134,7 +2134,13 @@ void VulkanRenderer::Impl::updateSplatVolumeUbo(uint32_t frame) {
                 // A degenerate (zero-scale, mirrored-to-flat) matrix would make
                 // this Inf; 1.0 keeps the volume readable instead of poisoning
                 // every reflection that taps it.
-                ubo.params[i][0] = sigmaScale / ((std::isfinite(s) && s > 1e-6f) ? s : 1.f);
+                const float sSafe = (std::isfinite(s) && s > 1e-6f) ? s : 1.f;
+                ubo.params[i][0] = sigmaScale / sSafe;
+                // The voxel edge goes the OTHER way through the same scale:
+                // sigma per local metre shrinks by s, a local length grows by
+                // it. The march reads this as its resolution floor
+                // (splat_volume.glsl, adaptive step count).
+                ubo.params[i][1] = e.voxelLocal * sSafe;
             }
             ubo.counts[0] = n;
             uploadHostVisible(ctx->allocator(), splatVolumeUbos_[frame], &ubo, sizeof(ubo));

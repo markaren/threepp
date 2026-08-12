@@ -227,6 +227,10 @@ int main(int argc, char** argv) {
     bool addSun = false;
     bool water = false;
     bool metal = false;
+    // 0.15 by default (see the --metal block for why); --metal-rough drops it
+    // toward a true mirror, which is how the VOLUME's resolution is judged
+    // without the reflection denoiser's gloss blur on top.
+    float metalRough = 0.15f;
     // --level picks a SOG detail level; --upscaler lifts the GL-parity clamp
     // below so the pass can be measured at a render scale a real app would use.
     int lodLevel = 0;
@@ -250,6 +254,9 @@ int main(int argc, char** argv) {
             water = true;
         } else if (arg == "--metal") {
             metal = true;
+        } else if (arg == "--metal-rough" && i + 1 < argc) {
+            metal = true;
+            metalRough = std::clamp(static_cast<float>(std::atof(argv[++i])), 0.f, 1.f);
         } else if (arg == "--sun") {
             addSun = true;
         } else if (arg == "--level" && i + 1 < argc) {
@@ -699,7 +706,7 @@ int main(int argc, char** argv) {
         auto ballMat = MeshStandardMaterial::create(MeshStandardMaterial::Params{}
                                                             .color(Color(0.95f, 0.95f, 0.95f))
                                                             .metalness(1.f)
-                                                            .roughness(0.15f));
+                                                            .roughness(metalRough));
         auto ball = Mesh::create(SphereGeometry::create(fit.radius * 0.8f, 48, 32), ballMat);
         ball->position.set(fit.center.x + fit.radius * 2.1f, fit.center.y,
                            fit.center.z);

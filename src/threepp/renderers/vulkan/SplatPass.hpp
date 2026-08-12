@@ -89,6 +89,15 @@
 //                                 no dispatch, no VRAM, volumeEntries() empty.
 //                                 Read ONCE at construction, so it is an A/B
 //                                 lever for a whole run rather than a setting.
+//   THREEPP_VK_SPLATVOL_RES=N     longest-axis voxel budget for the bake,
+//                                 default 128, clamped to [16, 256]. 256 is
+//                                 8x the VRAM (128 MB/cloud resident, 268 MB
+//                                 transient bake scratch) and buys metre ->
+//                                 half-metre voxels on a building-scale scan.
+//                                 Read once, like the others: two clouds baked
+//                                 under different budgets in one run would
+//                                 hash differently for reasons no test could
+//                                 name.
 //
 // THE VOLUME BAKE. Separate from everything above and off the frame path:
 // uploadCloud voxelizes each cloud once, in cloud-local space, into an rgba16f
@@ -314,6 +323,12 @@ namespace threepp::vulkan {
             float    model[16]{};      // cloud local -> world, column-major
             float    localBoxMin[3]{}; // the bake box, cloud-local
             float    localBoxSize[3]{};// strictly positive
+            // Smallest voxel edge, cloud-LOCAL metres (min over axes of
+            // size/res). The march scales its step count to this so a
+            // building-scale volume is sampled at its own resolution instead
+            // of a fixed 16 (splat_volume.glsl, params[i].y — the consumer
+            // multiplies by the model scale on the way in, like sigma).
+            float    voxelLocal = 0.f;
             uint32_t count = 0;        // splats in the cloud
         };
 
@@ -523,8 +538,9 @@ namespace threepp::vulkan {
         VkDescriptorSet       bakeSet_       = VK_NULL_HANDLE;
         VkPipeline            bakeScatterPipe_ = VK_NULL_HANDLE;
         VkPipeline            bakeResolvePipe_ = VK_NULL_HANDLE;
-        // THREEPP_VK_SPLATVOL_OFF, read once at construction.
+        // THREEPP_VK_SPLATVOL_OFF / _RES, read once at construction.
         bool     volumeOff_ = false;
+        uint32_t volMaxRes_ = 128;// == kVolMaxResDefault; env-clamped in ctor
         uint64_t volumeGen_ = 0;
 
         // Cached per-frame image views so a cloud added mid-run can have its

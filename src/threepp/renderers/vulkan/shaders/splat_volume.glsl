@@ -27,9 +27,10 @@
 //
 // ── WHAT THE MARCH IS AND IS NOT ─────────────────────────────────────────────
 // svLeg is pdEmissiveLeg's structural twin: the same union-of-intervals clip,
-// the same 16 fixed steps, the same midpoint phase, no jitter, the same
-// Beer-Lambert ordering, the same tau > 8 early-out, the same skip-don't-clamp
-// in-box test. What it DELIBERATELY OMITS is exactly what pdEmissiveLeg omits,
+// the same midpoint phase, no jitter, the same Beer-Lambert ordering, the same
+// tau > 8 early-out, the same skip-don't-clamp in-box test. The one divergence
+// is the step COUNT, adaptive 16..64 (see kSvLegSteps below for why fixed 16
+// starved building-scale volumes). What it DELIBERATELY OMITS is exactly what pdEmissiveLeg omits,
 // under the same house rule — ONE medium model, no second differently-wrong
 // copy of the full march (see pdEmissiveLeg's header, "WHAT IS DELIBERATELY
 // OMITTED"): no sun in-scatter, no ambient/env in-scatter, no per-step
@@ -81,18 +82,31 @@ layout(set = 0, binding = 71) uniform SplatVolumeUbo {
     vec4  worldBoxMax[kMaxSplatVolumes];
     // x = sigmaScale / cbrt(|det model3x3|): sigma is stored per LOCAL metre,
     // so a scaled cloud needs it re-expressed per WORLD metre. Exact for
-    // uniform scale, a stated approximation otherwise. yzw reserved.
+    // uniform scale, a stated approximation otherwise.
+    // y = the volume's smallest voxel edge in WORLD metres — the march's
+    //     resolution floor, which is what the step count below adapts to.
+    // zw reserved.
     vec4  params[kMaxSplatVolumes];
     uvec4 counts;// x = active volume count, yzw reserved
 } sv;
 
-// 16, for pdEmissiveLeg's reason and not by coincidence: a reflected image is
-// Fresnel-weighted (F ~ 0.02 face-on), perturbed by the wave normals that
-// already dither the sampling across neighbouring pixels, and never the subject
-// of the frame. Fixed step count, midpoint phase, NO temporal jitter — the
-// determinism contract. If a banding shell ever shows, the sanctioned answer is
-// a per-PIXEL hash offset (spatial dither, no frame term), not jitter.
-const int kSvLegSteps = 16;
+// ADAPTIVE step count, 16 to 64. pdEmissiveLeg's fixed 16 was carried over
+// verbatim and then MEASURED against a building-scale scan: on the Sanctuaire's
+// ~100 m box, 16 steps is ~6 m of sampling against metre-scale voxels — the
+// march was throwing away resolution the bake had already paid for, while the
+// basket-sized case (0.3 m box, mm voxels) was over-resolved at the same
+// count. So the count follows the ray: enough steps to sample at half the
+// smallest intersected volume's voxel edge (params[i].y), floored at 16
+// (short grazing clips), capped at 64 (a step is one rgba16f tap per live
+// volume, so the cap bounds the worst reflective pixel at 4x the old cost —
+// against a march measured at 0.028 ms, headroom, not a budget).
+//
+// The count is a pure function of the ray interval and the UBO — no frame
+// term, no jitter, midpoint phase — so the determinism contract holds exactly
+// as it did at fixed 16. If a banding shell ever shows, the sanctioned answer
+// is a per-PIXEL hash offset (spatial dither, no frame term), not jitter.
+const int kSvLegSteps    = 16;
+const int kSvLegStepsMax = 64;
 
 // Transmittance of the leg [ro, ro + rd*tMax]; `emis` receives the radiance
 // emitted along it, already self-occluded by the medium in front of it.
@@ -109,8 +123,11 @@ float svLeg(vec3 ro, vec3 rd, float tMax, out vec3 emis) {
     if (n == 0u) return 1.0;
 
     // Union of the ray's box overlaps — ONE interval, as pdEmissiveLeg does it,
-    // so two clouds that share a courtyard share the step budget.
+    // so two clouds that share a courtyard share the step budget. The smallest
+    // voxel among the volumes that actually overlap THIS ray sets the sampling
+    // target; a volume the ray misses must not shrink another volume's steps.
     float t0 = tMax, t1 = 0.0;
+    float minVox = 1e30;
     const vec3 inv = 1.0 / rd;// ±inf on axis-parallel components is fine below
     for (uint i = 0u; i < n; ++i) {
         const vec3  ta = (sv.worldBoxMin[i].xyz - ro) * inv;
@@ -118,13 +135,25 @@ float svLeg(vec3 ro, vec3 rd, float tMax, out vec3 emis) {
         const vec3  lo = min(ta, tb), hi = max(ta, tb);
         const float e = max(max(lo.x, lo.y), max(lo.z, 0.0));
         const float x = min(min(hi.x, hi.y), min(hi.z, tMax));
-        if (x > e) { t0 = min(t0, e); t1 = max(t1, x); }
+        if (x > e) {
+            t0 = min(t0, e);
+            t1 = max(t1, x);
+            minVox = min(minVox, sv.params[i].y);
+        }
     }
     if (t1 <= t0) return 1.0;
 
-    const float dt = (t1 - t0) / float(kSvLegSteps);
+    // Half-voxel sampling where the interval affords it, clamped to the
+    // [16, 64] band above. A zero/unset voxel size (an old UBO, a degenerate
+    // box) degrades to the fixed-16 march rather than to a huge loop.
+    int steps = kSvLegSteps;
+    if (minVox > 1e-6 && minVox < 1e29) {
+        steps = clamp(int(ceil((t1 - t0) / (0.5 * minVox))), kSvLegSteps, kSvLegStepsMax);
+    }
+
+    const float dt = (t1 - t0) / float(steps);
     float tau = 0.0;
-    for (int s = 0; s < kSvLegSteps; ++s) {
+    for (int s = 0; s < steps; ++s) {
         const vec3 x = ro + rd * (t0 + (float(s) + 0.5) * dt);
         float sig = 0.0;
         vec3  em  = vec3(0.0);

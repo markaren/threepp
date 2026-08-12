@@ -65,8 +65,13 @@ namespace threepp::vulkan {
         // is 16 MB, and kMaxClouds bounds the worst case at 128 MB — against
         // clouds that themselves cost ~240 B/splat, proportionally small and
         // resident exactly as long as the cloud is.
-        constexpr uint32_t kVolMaxRes = 128;
-        constexpr uint32_t kVolMinRes = 16;
+        // The DEFAULT longest-axis budget; THREEPP_VK_SPLATVOL_RES moves it
+        // (SplatPass ctor), capped at kVolResCap because the bake scratch is
+        // 16 B/voxel transient — 268 MB at 256^3, which an 8 GB card absorbs
+        // inside an upload and 512^3's 2.1 GB would not.
+        constexpr uint32_t kVolMaxResDefault = 128;
+        constexpr uint32_t kVolResCap        = 256;
+        constexpr uint32_t kVolMinRes        = 16;
         // The extent estimator's sample size — the SAME fixed-stride ~8192 the
         // collector uses for the sort interval (VulkanCoreScene.cpp:2893), and
         // for the same reason: both ends have to agree on what "the subject" is
@@ -233,6 +238,17 @@ namespace threepp::vulkan {
         // sampled per upload could not promise that across one run.
         if (const char* e = std::getenv("THREEPP_VK_SPLATVOL_OFF"); e && *e && *e != '0')
             volumeOff_ = true;
+
+        // The resolution budget, read once for the OFF knob's reason: a knob
+        // sampled per upload would let two clouds in one run bake under
+        // different budgets and hash differently for reasons no test could
+        // name. Clamped, not trusted — see kVolResCap for what 512 would cost.
+        volMaxRes_ = kVolMaxResDefault;
+        if (const char* e = std::getenv("THREEPP_VK_SPLATVOL_RES"); e && *e) {
+            const long v = std::strtol(e, nullptr, 10);
+            if (v > 0)
+                volMaxRes_ = std::clamp(static_cast<uint32_t>(v), kVolMinRes, kVolResCap);
+        }
 
         VkPhysicalDeviceProperties props{};
         vkGetPhysicalDeviceProperties(ctx_.physicalDevice(), &props);
@@ -674,11 +690,11 @@ namespace threepp::vulkan {
 
         for (int a = 0; a < 3; ++a) {
             c.localBoxSize[a] = size[a];
-            // Longest axis kVolMaxRes, the others proportional, snapped even
-            // and floored — total is bounded by kVolMaxRes^3 by construction.
+            // Longest axis volMaxRes_, the others proportional, snapped even
+            // and floored — total is bounded by volMaxRes_^3 by construction.
             auto r = static_cast<uint32_t>(std::lround(
-                    double(kVolMaxRes) * double(size[a]) / double(maxSize)));
-            r = std::clamp(r, kVolMinRes, kVolMaxRes) & ~1u;
+                    double(volMaxRes_) * double(size[a]) / double(maxSize)));
+            r = std::clamp(r, kVolMinRes, volMaxRes_) & ~1u;
             c.volRes[a] = std::max(r, kVolMinRes);
         }
     }
@@ -1646,6 +1662,9 @@ namespace threepp::vulkan {
             std::memcpy(e.model, fc.model, sizeof(e.model));
             std::memcpy(e.localBoxMin, c.localBoxMin, sizeof(e.localBoxMin));
             std::memcpy(e.localBoxSize, c.localBoxSize, sizeof(e.localBoxSize));
+            e.voxelLocal = c.localBoxSize[0] / float(c.volRes[0]);
+            for (int a = 1; a < 3; ++a)
+                e.voxelLocal = std::min(e.voxelLocal, c.localBoxSize[a] / float(c.volRes[a]));
             e.count = c.count;
             out.push_back(e);
         }
