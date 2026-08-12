@@ -7545,9 +7545,17 @@ int EditorApp::runSelfTest() {
                 playing->getWorldPosition(world);
                 // It is holding a 2.2 m hover over a floor whose top is y = 0,
                 // hands off, on the noisy IMU. Anything outside this band is a
-                // controller that has stopped controlling.
+                // controller that has stopped controlling. The controller is one
+                // of the example's Python scripts, so a Python-less build has
+                // nothing flying the drone and the band is not a promise it can
+                // make — same guard as the script checks just below.
+#ifdef THREEPP_EDITOR_WITH_PYTHON
                 check(world.y > 1.4f && world.y < 3.2f, "and holds its hover band");
                 check(std::abs(world.y - before) < 1.5f, "without drifting off its start height");
+#else
+                (void) world;
+                (void) before;
+#endif
             }
 #ifdef THREEPP_EDITOR_WITH_PYTHON
             check(scripts_ && scripts_->errorCount() == 0, "with no script errors");
