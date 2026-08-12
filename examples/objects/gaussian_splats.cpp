@@ -91,11 +91,11 @@
 #include "threepp/loaders/SogLoader.hpp"
 #include "threepp/splats/SplatLod.hpp"
 #include "threepp/loaders/SplatLoader.hpp"
-#include "threepp/objects/Ocean.hpp"
 #include "threepp/objects/SplatCloud.hpp"
 #include "threepp/threepp.hpp"
 
 #if defined(THREEPP_WITH_VULKAN)
+#include "threepp/objects/Ocean.hpp"
 #include "threepp/renderers/VulkanRenderer.hpp"
 #endif
 
@@ -656,6 +656,11 @@ int main(int argc, char** argv) {
     // marches the cloud's baked volume (splat_volume.glsl's svLeg), so the
     // scan must appear in the pond — a still frame answers it, which is why
     // this is a flag here rather than a scene of its own.
+    //
+    // Vulkan builds only: Ocean lives with the Vulkan renderer, so a GL-only
+    // build has no Ocean::create to LINK against — the runtime refusal above
+    // (--water needs --vulkan) cannot save the linker.
+#if defined(THREEPP_WITH_VULKAN)
     if (water) {
 
         // An HDR sky, for two reasons: the water surface needs an environment
@@ -694,6 +699,7 @@ int main(int argc, char** argv) {
         std::cout << "  pond surface at y " << waterY << " (size " << opts.size << ")"
                   << std::endl;
     }
+#endif// THREEPP_WITH_VULKAN
 
     // --metal: the glossy-path twin of --water. A polished sphere beside the
     // cloud reflects it through deferred_shade.comp's traced reflection leg —
