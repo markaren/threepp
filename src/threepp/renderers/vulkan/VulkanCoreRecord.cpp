@@ -983,13 +983,13 @@ void VulkanRenderer::Impl::recordSplats(VkCommandBuffer cb) {
             // leave an empty one rather than whatever the previous user of
             // this frame-in-flight slot wrote. Cheap when the AOV is off —
             // the image is one texel then.
-            if (splatDepthAov()) splat_->clearDepthAov(cb, currentFrame);
+            if (splatDepthAovAllocated()) splat_->clearDepthAov(cb, currentFrame);
 
             if (!splat_->hasClouds()) return;
 
             auto p = splatParams_;
-            p.depthAov    = splatDepthAov();
-            p.depthMedian = splatDepthMode_ == SplatDepthMode::Median;
+            p.depthAov    = splatDepthAovAllocated();
+            p.depthMedian = splatDepthMedian();
             // Same sub-pixel jitter the raster prepass used this frame,
             // reapplied as the same projection shear (uploadRasterCameraUbo):
             // without it the splats sit a fraction of a pixel off the geometry
@@ -1046,6 +1046,169 @@ void VulkanRenderer::Impl::recordSplats(VkCommandBuffer cb) {
             splat_->record(cb, currentFrame, p);
             gpuTimings_->end(cb, TP_Splat, currentFrame);
 
+}
+
+void VulkanRenderer::Impl::recordSplatOverlayDepthStamp(VkCommandBuffer cb) {
+            // ── Splat depth -> the overlay's depth attachment ───────────────────
+            // The one write that makes a cloud occlude the post-resolve overlay.
+            // Everything the overlay pass draws — wireframe meshes, Lines,
+            // world sprites, particle billboards — is rasterized AFTER the
+            // splats are composited, and depth-tests against a prepass buffer
+            // filled from scene geometry only. The compositor is a compute pass
+            // with no depth attachment, so it reads that buffer and never adds
+            // to it: a line behind a cloud passed the test and drew over the
+            // cloud at full strength. GL has no such gap — it draws the cloud
+            // LAST, in the transparent pass, over the lines. See
+            // shaders/splat_overlay_depth.frag.
+            //
+            // Gated exactly like the pass it feeds. The AOV gate is the one
+            // that matters: without it the image is one texel, and
+            // splatOverlayDepth_ (latched in collectSplatClouds) is what turns
+            // it on for scenes that need this.
+            if (splatStampPipeline_ == VK_NULL_HANDLE) return;
+            if (view().secondary) return;// overlay pass is primary-only by scope
+            if (!splat_ || !splat_->hasClouds()) return;
+            if (!splatDepthAovAllocated()) return;
+            if (!sceneHasOverlayContent()) return;
+            if (overlayDepthPrepassPipeline == VK_NULL_HANDLE) return;
+
+            const bool  overlayMsaa = overlaySamples() > 1;
+            const VkImage depthImg  = overlayMsaa ? overlayMsDepth_.image
+                                                  : view().rasterGbufs[currentFrame].unjitDepth.image;
+            const VkImageView depthView = overlayMsaa ? overlayMsDepth_.view
+                                                      : view().rasterGbufs[currentFrame].unjitDepth.view;
+            if (depthImg == VK_NULL_HANDLE || depthView == VK_NULL_HANDLE) return;
+
+            const auto& g = view().rasterGbufs[currentFrame];
+            if (g.splatDepth.view == VK_NULL_HANDLE) return;
+
+            // Per-frame-in-flight set, rewritten only when the AOV view handle
+            // actually changed (a resize / render-scale realloc). The set for
+            // THIS frame slot cannot be in flight — its fence was waited on
+            // before recording began — so the update is safe where a shared set
+            // would be VUID-vkCmdBindDescriptorSets-...-03047 material.
+            if (splatStampSetViews_[currentFrame] != g.splatDepth.view) {
+                VkDescriptorImageInfo ii{VK_NULL_HANDLE, g.splatDepth.view, VK_IMAGE_LAYOUT_GENERAL};
+                VkWriteDescriptorSet w{};
+                w.sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+                w.dstSet          = splatStampSets_[currentFrame];
+                w.dstBinding      = 0;
+                w.descriptorCount = 1;
+                w.descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+                w.pImageInfo      = &ii;
+                vkUpdateDescriptorSets(ctx->device(), 1, &w, 0, nullptr);
+                splatStampSetViews_[currentFrame] = g.splatDepth.view;
+            }
+
+            // No timing bracket: TP_OverlayDepth's slot pair is already spent
+            // by the prepass this frame, and writing it twice is
+            // VUID-vkCmdWriteTimestamp2-None-03864 plus a meaningless number.
+            // One fullscreen depth-only draw is not worth its own pass slot;
+            // it lands inside TP_Frame like the rest of the unbracketed work.
+
+            // The AOV's stores (compute) -> this pass's fragment reads. The
+            // image stays in GENERAL throughout the frame, so this is an
+            // execution + visibility barrier only, no transition.
+            VkMemoryBarrier2 aovVis{};
+            aovVis.sType         = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2;
+            aovVis.srcStageMask  = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+            aovVis.srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
+            aovVis.dstStageMask  = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT;
+            aovVis.dstAccessMask = VK_ACCESS_2_SHADER_STORAGE_READ_BIT;
+
+            // ...and the depth attachment back from the read-only layout the
+            // prepass left it in, so this pass can write it.
+            VkImageMemoryBarrier2 toWrite{};
+            toWrite.sType         = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
+            toWrite.srcStageMask  = VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT |
+                                    VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT;
+            toWrite.srcAccessMask = VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_READ_BIT;
+            toWrite.dstStageMask  = VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT |
+                                    VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT;
+            toWrite.dstAccessMask = VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT |
+                                    VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_READ_BIT;
+            toWrite.oldLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
+            toWrite.newLayout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
+            toWrite.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+            toWrite.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+            toWrite.image = depthImg;
+            toWrite.subresourceRange.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT;
+            toWrite.subresourceRange.levelCount = 1;
+            toWrite.subresourceRange.layerCount = 1;
+
+            VkDependencyInfo di{};
+            di.sType                    = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
+            di.memoryBarrierCount       = 1;
+            di.pMemoryBarriers          = &aovVis;
+            di.imageMemoryBarrierCount  = 1;
+            di.pImageMemoryBarriers     = &toWrite;
+            vkCmdPipelineBarrier2(cb, &di);
+
+            VkRenderingAttachmentInfo att{};
+            att.sType       = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+            att.imageView   = depthView;
+            att.imageLayout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
+            att.loadOp      = VK_ATTACHMENT_LOAD_OP_LOAD;// the prepass's geometry depth
+            att.storeOp     = VK_ATTACHMENT_STORE_OP_STORE;
+
+            VkRenderingInfo ri{};
+            ri.sType                = VK_STRUCTURE_TYPE_RENDERING_INFO;
+            ri.renderArea.offset    = {0, 0};
+            ri.renderArea.extent    = viewOutExtent();
+            ri.layerCount           = 1;
+            ri.colorAttachmentCount = 0;
+            ri.pDepthAttachment     = &att;
+            vkCmdBeginRendering(cb, &ri);
+
+            vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, splatStampPipeline_);
+            vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                                    splatStampPipelineLayout_, 0, 1,
+                                    &splatStampSets_[currentFrame], 0, nullptr);
+            // Split-screen: the same pane the depth prepass laid its occluders
+            // into, and the same one the TAA wrote this view's image to.
+            VkViewport vp{float(regionDstX_), float(regionDstY_),
+                          float(regionSwapExt_.width), float(regionSwapExt_.height), 0.f, 1.f};
+            vkCmdSetViewport(cb, 0, 1, &vp);
+            VkRect2D sc{{regionDstX_, regionDstY_}, regionSwapExt_};
+            vkCmdSetScissor(cb, 0, 1, &sc);
+
+            SplatStampPC pc{};
+            const VkExtent2D aov = renderExtent();
+            pc.aovScale[0]   = float(aov.width) / float(std::max(regionSwapExt_.width, 1u));
+            pc.aovScale[1]   = float(aov.height) / float(std::max(regionSwapExt_.height, 1u));
+            pc.paneOrigin[0] = float(regionDstX_);
+            pc.paneOrigin[1] = float(regionDstY_);
+            pc.aovLimit[0]   = float(aov.width) - 1.f;
+            pc.aovLimit[1]   = float(aov.height) - 1.f;
+            // The reverse-Z projection the raster depth (and therefore the
+            // prepass buffer this stamp competes with) was written with. Only
+            // the z row is read, and the TAA jitter lives in the x/y shear —
+            // so the jittered and unjittered forms agree here, which is why
+            // this can use the splat pass's own matrix.
+            pc.projA = splatProjRevZ_[10];
+            pc.projB = splatProjRevZ_[14];
+            pc.ortho = view().orthoFrame_ ? 1u : 0u;
+            vkCmdPushConstants(cb, splatStampPipelineLayout_, VK_SHADER_STAGE_FRAGMENT_BIT,
+                               0, sizeof(pc), &pc);
+            vkCmdDraw(cb, 3, 1, 0, 0);
+            vkCmdEndRendering(cb);
+
+            // Back to the read-only layout the overlay pass expects to find it
+            // in — this pass is a detour between the prepass and that draw, and
+            // it has to hand the attachment back the way it borrowed it.
+            VkImageMemoryBarrier2 toRead = toWrite;
+            toRead.srcStageMask  = VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT;
+            toRead.srcAccessMask = VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+            toRead.dstStageMask  = VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT |
+                                   VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT;
+            toRead.dstAccessMask = VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_READ_BIT;
+            toRead.oldLayout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
+            toRead.newLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
+            VkDependencyInfo diBack{};
+            diBack.sType                   = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
+            diBack.imageMemoryBarrierCount = 1;
+            diBack.pImageMemoryBarriers    = &toRead;
+            vkCmdPipelineBarrier2(cb, &diBack);
 }
 
 void VulkanRenderer::Impl::recordSecondaryViewSplats(VkCommandBuffer cb) {
@@ -2705,6 +2868,12 @@ void VulkanRenderer::Impl::recordCommandBuffer(VkCommandBuffer cb, uint32_t imag
             // chain cannot be recorded inside a render-pass instance). No-op
             // unless a visible field asked for a glow.
             recordFieldBillboardGlow(cb);
+
+            // Splat clouds into the overlay's depth buffer. Between the two
+            // because that is the only window where both exist: the depth
+            // prepass ran before the shade, the AOV was written by the splat
+            // composite after it, and the draw below is what reads the result.
+            recordSplatOverlayDepthStamp(cb);
 
             // Post-TAA wireframe / line / particle / sprite overlays.
             recordHybridOverlay(cb, imageIndex);

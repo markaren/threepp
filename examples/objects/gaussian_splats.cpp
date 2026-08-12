@@ -10,6 +10,15 @@
 //   --cam x,y,z --look x,y,z               reframe a capture without rebuilding
 //   --occluder                             a box through the middle of the cloud
 //                                          (the splat-behind-mesh depth test)
+//   --wireframe                            the same box, wireframe: the same test
+//                                          for the post-resolve OVERLAY path,
+//                                          where the lines behind the cloud must
+//                                          be hidden by it
+//   --msaa N                               canvas antialiasing (0 = off, the
+//                                          default, for GL parity). On Vulkan
+//                                          N > 1 moves the overlay onto its
+//                                          hardware-MSAA depth attachment —
+//                                          pair with --wireframe to test it
 //   --water                                a calm pond under the cloud (Vulkan
 //                                          only): the splat-in-the-mirror check —
 //                                          the traced water reflection marches the
@@ -222,6 +231,11 @@ int main(int argc, char** argv) {
     int benchFrames = 0;
     bool useVulkan = false;
     bool occluder = false;
+    bool wireOccluder = false;
+    // Canvas antialiasing. 0 by default for GL parity in captures; raising it
+    // puts the Vulkan overlay pass on its hardware-MSAA path, which is the
+    // other depth attachment the splat depth stamp has to write.
+    int msaa = 0;
     bool debugNaN = false;
     bool fog = false;
     bool addSun = false;
@@ -250,6 +264,11 @@ int main(int argc, char** argv) {
             debugNaN = true;
         } else if (arg == "--occluder") {
             occluder = true;
+        } else if (arg == "--msaa" && i + 1 < argc) {
+            msaa = std::atoi(argv[++i]);
+        } else if (arg == "--wireframe") {
+            occluder = true;
+            wireOccluder = true;
         } else if (arg == "--fog") {
             fog = true;
         } else if (arg == "--water") {
@@ -500,7 +519,7 @@ int main(int argc, char** argv) {
     // times, and a 60 Hz clamp would report the monitor rather than the renderer.
     Canvas canvas(Canvas::Parameters()
                           .title("Gaussian splats")
-                          .antialiasing(0)
+                          .antialiasing(msaa)
                           .vsync(shotPath.empty() && benchFrames <= 0));
 
     std::unique_ptr<GLRenderer> glRenderer;
@@ -744,14 +763,24 @@ int main(int argc, char** argv) {
     // from the fit sphere so it works on a procedural toy and a scan alike.
     if (occluder) {
 
+        auto boxMat = MeshStandardMaterial::create({{"color", Color(0xE8E4D8)},
+                                                    {"roughness", 0.85f}});
+        // --wireframe asks the same question of the OVERLAY path. A wireframe
+        // mesh does not go through the G-buffer on Vulkan; it is drawn after
+        // the temporal resolve, depth-tested against a prepass depth buffer
+        // that the splat compositor never wrote to. So the half of the slab
+        // BEHIND the cloud is where a wrong answer shows: it must be hidden by
+        // the splats, exactly as GL's transparent-pass ordering hides it.
+        boxMat->wireframe = wireOccluder;
         auto box = Mesh::create(BoxGeometry::create(fit.radius * 0.35f,
                                                     fit.radius * 2.4f,
                                                     fit.radius * 2.4f),
-                                MeshStandardMaterial::create({{"color", Color(0xE8E4D8)},
-                                                              {"roughness", 0.85f}}));
+                                boxMat);
         box->position.copy(fit.center);
         scene->add(box);
-        std::cout << "  occluder slab through the cloud centre" << std::endl;
+        std::cout << (wireOccluder ? "  WIREFRAME occluder slab through the cloud centre"
+                                   : "  occluder slab through the cloud centre")
+                  << std::endl;
     }
 
     // A sun, for either of two reasons. The occluder slab needs something to be

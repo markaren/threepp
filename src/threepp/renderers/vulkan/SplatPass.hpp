@@ -31,7 +31,12 @@
 //     particle_light.comp does it for billboards.
 //  4. DEPTH. The G-buffer depth is REVERSED-Z; the tile loop linearizes it
 //     through the camera's projection inverse and stops accumulating behind
-//     opaque geometry — depth-test on, depth-write off, in software.
+//     opaque geometry — depth-test on, depth-write off, in software. Depth
+//     WRITE has one consumer that needs it back: the post-TAA overlay pass
+//     draws after this one and tests against a depth buffer nothing here
+//     touched, so a wireframe behind a cloud drew over it. The depth AOV is
+//     stamped into that buffer by VulkanCoreRecord::recordSplatOverlayDepthStamp
+//     (shaders/splat_overlay_depth.frag) to close it.
 //  5. DETERMINISM. Sensor goldens depend on it and "RT is never bit-exact" is
 //     already a scar in this tree. The danger is the tile EXPANSION: an
 //     atomic-append expansion produces a different order every run. This one

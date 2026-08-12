@@ -307,6 +307,35 @@ knob like `setGbufferMsaa`, not a per-frame one; changing only the statistic is
 a UBO flag and reallocates nothing. With it off the frame is unchanged — the
 golden in `VulkanSplat_test` matches byte-exact across the change.
 
+### The renderer's own consumer: overlay occlusion
+
+The compositor is compute and owns no depth attachment, so it reads the
+G-buffer depth and writes nothing back. That is invisible until something is
+drawn AFTER it against a depth buffer: the post-TAA overlay pass — wireframe
+meshes, `Line`/`LineSegments`, world `Sprite`s, particle billboards — depth-
+tests against the unjittered prepass buffer, which holds scene geometry only.
+A gizmo behind a cloud therefore passed that test and drew over the cloud at
+full strength, while GL, which draws the cloud last in its transparent pass,
+blends it away.
+
+`splat_overlay_depth.frag` closes it: one fullscreen depth-only draw between
+the splat composite and the overlay draw, re-expressing the AOV's view-space
+distance as the reverse-Z depth the overlay compares against, with the test set
+to `GREATER` so a cloud behind a wall leaves the wall's depth alone. It runs on
+the same attachment the overlay uses, hardware-MSAA path included.
+
+Two consequences worth naming. The AOV turns itself **on** the first frame a
+scene holds both clouds and overlay content — the stamp has nothing to read
+otherwise — and stays on (the latch is sticky: turning it off again is a device
+idle every time a gizmo is hidden). It reports `Median` when it was enabled for
+this reason alone, since the front of the cloud is what an occlusion test wants;
+an app that asked for `Expected` keeps `Expected`, one image and one statistic.
+And the answer is **binary at the AOV's `coverage > 0.5` gate** — a pixel the
+cloud more than half owns hides the overlay, one it owns less does not. GL
+attenuates instead, so a fringe a pixel or two wide differs. A depth buffer has
+no vocabulary for "60 % hidden", and the alternative is every overlay shader
+sampling splat transmittance and blending against it.
+
 Every fog term that carries light back INTO the camera→splat leg is mirrored:
 analytic height fog, the murk below a water surface, and the sun's single-
 scattering glow. The sun term is **closed form** rather than the surface path's

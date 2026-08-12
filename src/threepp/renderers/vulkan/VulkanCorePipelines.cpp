@@ -13,6 +13,7 @@
 #include "threepp/renderers/vulkan/shaders/overlay_inject.frag.spv.h"
 #include "threepp/renderers/vulkan/shaders/overlay_depth.vert.spv.h"
 #include "threepp/renderers/vulkan/shaders/overlay_depth.frag.spv.h"
+#include "threepp/renderers/vulkan/shaders/splat_overlay_depth.frag.spv.h"
 #include "threepp/renderers/vulkan/shaders/overlay_color.vert.spv.h"
 #include "threepp/renderers/vulkan/shaders/overlay_color.frag.spv.h"
 #include "threepp/renderers/vulkan/shaders/overlay_point.vert.spv.h"
@@ -560,7 +561,7 @@ void VulkanRenderer::Impl::createRasterGbufImages(uint32_t w, uint32_t h) {
                 // descriptor set needs a real r32f image whether or not the
                 // shader writes it, and a separate dummy with its own
                 // lifetime is more moving parts than one texel.
-                const bool wantSplatDepth = splatDepthAov() && !view().secondary;
+                const bool wantSplatDepth = splatDepthAovAllocated() && !view().secondary;
                 g.splatDepth = createAttachmentImage2D(
                         wantSplatDepth ? w : 1u, wantSplatDepth ? h : 1u,
                         VK_FORMAT_R32_SFLOAT,
@@ -1998,6 +1999,147 @@ void VulkanRenderer::Impl::createOverlayPipeline() {
 
                 vkDestroyShaderModule(ctx->device(), avert, nullptr);
                 vkDestroyShaderModule(ctx->device(), afrag, nullptr);
+            }
+
+            // ── Splat depth stamp pipeline ──────────────────────────────────
+            // Runs between the splat composite and the overlay draw, writing
+            // the cloud's front-surface depth into the overlay's depth
+            // attachment so the overlay is occluded by it. Built here because
+            // it must match this pass's sample count exactly (the attachment
+            // is overlayMsDepth_ at N samples, unjitDepth at one) and
+            // overlaySamples() is fixed for the run — same reasoning as the
+            // depth prepass above. See shaders/splat_overlay_depth.frag.
+            {
+                VkDescriptorSetLayoutBinding sBind{};
+                sBind.binding         = 0;
+                sBind.descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+                sBind.descriptorCount = 1;
+                sBind.stageFlags      = VK_SHADER_STAGE_FRAGMENT_BIT;
+                VkDescriptorSetLayoutCreateInfo sDslci{};
+                sDslci.sType        = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+                sDslci.bindingCount = 1;
+                sDslci.pBindings    = &sBind;
+                check(vkCreateDescriptorSetLayout(ctx->device(), &sDslci, nullptr, &splatStampSetLayout_),
+                      "vkCreateDescriptorSetLayout(splatStamp)");
+
+                VkDescriptorPoolSize sPs{};
+                sPs.type            = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+                sPs.descriptorCount = kFramesInFlight;
+                VkDescriptorPoolCreateInfo sDpci{};
+                sDpci.sType         = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+                sDpci.maxSets       = kFramesInFlight;
+                sDpci.poolSizeCount = 1;
+                sDpci.pPoolSizes    = &sPs;
+                check(vkCreateDescriptorPool(ctx->device(), &sDpci, nullptr, &splatStampPool_),
+                      "vkCreateDescriptorPool(splatStamp)");
+                std::array<VkDescriptorSetLayout, kFramesInFlight> sLayouts{};
+                sLayouts.fill(splatStampSetLayout_);
+                VkDescriptorSetAllocateInfo sDsai{};
+                sDsai.sType              = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+                sDsai.descriptorPool     = splatStampPool_;
+                sDsai.descriptorSetCount = kFramesInFlight;
+                sDsai.pSetLayouts        = sLayouts.data();
+                check(vkAllocateDescriptorSets(ctx->device(), &sDsai, splatStampSets_.data()),
+                      "vkAllocateDescriptorSets(splatStamp)");
+
+                VkPushConstantRange sPcr{};
+                sPcr.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+                sPcr.offset     = 0;
+                sPcr.size       = sizeof(SplatStampPC);
+                VkPipelineLayoutCreateInfo sPlci{};
+                sPlci.sType                  = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+                sPlci.setLayoutCount         = 1;
+                sPlci.pSetLayouts            = &splatStampSetLayout_;
+                sPlci.pushConstantRangeCount = 1;
+                sPlci.pPushConstantRanges    = &sPcr;
+                check(vkCreatePipelineLayout(ctx->device(), &sPlci, nullptr, &splatStampPipelineLayout_),
+                      "vkCreatePipelineLayout(splatStamp)");
+
+                VkShaderModuleCreateInfo svsmci{};
+                svsmci.sType    = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
+                svsmci.codeSize = sizeof(kOverlayFullscreenVertSpv);
+                svsmci.pCode    = kOverlayFullscreenVertSpv;
+                VkShaderModule svert = VK_NULL_HANDLE;
+                check(vkCreateShaderModule(ctx->device(), &svsmci, nullptr, &svert),
+                      "vkCreateShaderModule(overlay_fullscreen.vert)");
+                VkShaderModuleCreateInfo sfsmci{};
+                sfsmci.sType    = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
+                sfsmci.codeSize = sizeof(kSplatOverlayDepthFragSpv);
+                sfsmci.pCode    = kSplatOverlayDepthFragSpv;
+                VkShaderModule sfrag = VK_NULL_HANDLE;
+                check(vkCreateShaderModule(ctx->device(), &sfsmci, nullptr, &sfrag),
+                      "vkCreateShaderModule(splat_overlay_depth.frag)");
+
+                VkPipelineShaderStageCreateInfo sStages[2]{};
+                sStages[0].sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+                sStages[0].stage  = VK_SHADER_STAGE_VERTEX_BIT;
+                sStages[0].module = svert;
+                sStages[0].pName  = "main";
+                sStages[1].sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+                sStages[1].stage  = VK_SHADER_STAGE_FRAGMENT_BIT;
+                sStages[1].module = sfrag;
+                sStages[1].pName  = "main";
+
+                VkPipelineVertexInputStateCreateInfo svi{};
+                svi.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
+                VkPipelineInputAssemblyStateCreateInfo sia{};
+                sia.sType    = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
+                sia.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+                VkPipelineViewportStateCreateInfo svp{};
+                svp.sType         = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO;
+                svp.viewportCount = 1;
+                svp.scissorCount  = 1;
+                VkPipelineRasterizationStateCreateInfo srs{};
+                srs.sType       = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
+                srs.polygonMode = VK_POLYGON_MODE_FILL;
+                srs.cullMode    = VK_CULL_MODE_NONE;
+                srs.frontFace   = VK_FRONT_FACE_COUNTER_CLOCKWISE;
+                srs.lineWidth   = 1.0f;
+                VkPipelineMultisampleStateCreateInfo sms{};
+                sms.sType                = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
+                sms.rasterizationSamples = overlaySampleBits();
+                // GREATER, reverse-Z: the cloud claims a pixel only where it is
+                // in front of whatever the prepass put there. A cloud behind a
+                // wall must leave the wall's depth alone, or an overlay drawn
+                // on the near side of that wall would vanish.
+                VkPipelineDepthStencilStateCreateInfo sds{};
+                sds.sType            = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
+                sds.depthTestEnable  = VK_TRUE;
+                sds.depthWriteEnable = VK_TRUE;
+                sds.depthCompareOp   = VK_COMPARE_OP_GREATER;
+                VkPipelineColorBlendStateCreateInfo scb{};
+                scb.sType           = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
+                scb.attachmentCount = 0;// depth-only, like the prepass
+                VkDynamicState sdyns[2] = {VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR};
+                VkPipelineDynamicStateCreateInfo sdyn{};
+                sdyn.sType             = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO;
+                sdyn.dynamicStateCount = 2;
+                sdyn.pDynamicStates    = sdyns;
+
+                VkPipelineRenderingCreateInfo sprci{};
+                sprci.sType                 = VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO;
+                sprci.depthAttachmentFormat = VK_FORMAT_D32_SFLOAT;
+
+                VkGraphicsPipelineCreateInfo sgpci{};
+                sgpci.sType               = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
+                sgpci.pNext               = &sprci;
+                sgpci.stageCount          = 2;
+                sgpci.pStages             = sStages;
+                sgpci.pVertexInputState   = &svi;
+                sgpci.pInputAssemblyState = &sia;
+                sgpci.pViewportState      = &svp;
+                sgpci.pRasterizationState = &srs;
+                sgpci.pMultisampleState   = &sms;
+                sgpci.pDepthStencilState  = &sds;
+                sgpci.pColorBlendState    = &scb;
+                sgpci.pDynamicState       = &sdyn;
+                sgpci.layout              = splatStampPipelineLayout_;
+                check(vkCreateGraphicsPipelines(ctx->device(), ctx->pipelineCache(), 1, &sgpci, nullptr,
+                                                &splatStampPipeline_),
+                      "vkCreateGraphicsPipelines(splatStamp)");
+
+                vkDestroyShaderModule(ctx->device(), svert, nullptr);
+                vkDestroyShaderModule(ctx->device(), sfrag, nullptr);
             }
         }
 

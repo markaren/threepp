@@ -1327,6 +1327,39 @@ namespace threepp {
         VkPipelineLayout      overlayInjectPipelineLayout_ = VK_NULL_HANDLE;
         VkPipeline            overlayInjectPipeline_       = VK_NULL_HANDLE;
 
+        // ── Splat depth stamp ──────────────────────────────────────────────
+        // Writes the Gaussian-splat depth AOV into the overlay's depth
+        // attachment between the splat composite and the overlay draw, so a
+        // wireframe / line / sprite BEHIND a cloud is occluded by it. See
+        // shaders/splat_overlay_depth.frag and recordSplatOverlayDepthStamp.
+        // One descriptor set per frame in flight (each names that frame's AOV
+        // image and is rewritten only when the view handle changes, so the
+        // update never lands on a set the GPU is still reading).
+        // Mirrors the push_constant block of splat_overlay_depth.frag — the
+        // two move together.
+        struct SplatStampPC {
+            float    aovScale[2];
+            float    paneOrigin[2];
+            float    aovLimit[2];
+            float    projA;
+            float    projB;
+            uint32_t ortho;
+        };
+        VkDescriptorSetLayout splatStampSetLayout_      = VK_NULL_HANDLE;
+        VkDescriptorPool      splatStampPool_           = VK_NULL_HANDLE;
+        VkPipelineLayout      splatStampPipelineLayout_ = VK_NULL_HANDLE;
+        VkPipeline            splatStampPipeline_       = VK_NULL_HANDLE;
+        std::array<VkDescriptorSet, kFramesInFlight> splatStampSets_{};
+        std::array<VkImageView, kFramesInFlight>     splatStampSetViews_{};
+        // Sticky: set the first frame a scene holds BOTH splat clouds and
+        // overlay content, and never cleared. It forces the depth AOV on
+        // (splatDepthAov()) because the stamp has nothing to read otherwise.
+        // Sticky rather than per-frame because turning the AOV off again means
+        // reallocating the render-extent resources — a device idle — every
+        // time a gizmo is hidden and shown. The cost of leaving it on is one
+        // R32 image per frame in flight plus a guarded store per covered pixel.
+        bool splatOverlayDepth_ = false;
+
         // Canvas antialiasing rounded DOWN to a power of two the device can
         // actually use for BOTH a color and a depth framebuffer attachment,
         // capped at 8. Resolved once (the answer can't change: it depends only
@@ -3651,6 +3684,15 @@ namespace threepp {
         void recordSplats(VkCommandBuffer cb);
         void recordSecondaryViewSplats(VkCommandBuffer cb);
 
+        // Stamp the splat depth AOV into the overlay's depth attachment, so
+        // the post-resolve overlay draw (wireframe, lines, world sprites,
+        // particle billboards) is occluded by a cloud in front of it. Recorded
+        // between the upscale/post tail and recordHybridOverlay, which is the
+        // only window where both the AOV and the overlay's depth buffer exist.
+        // No-op unless this frame has clouds AND overlay content — see
+        // splatOverlayDepth_ for the latch that turns the AOV on for it.
+        void recordSplatOverlayDepthStamp(VkCommandBuffer cb);
+
         // Line geometry cache for the 3D hybrid overlay (recordCommandBuffer's
         // line-draw section). Keyed on raw BufferGeometry*; geomId in LineRec
         // guards against recycled-pointer aliasing. (OverlayPass owns a separate
@@ -3977,7 +4019,27 @@ namespace threepp {
         using SplatDepthMode = VulkanRenderer::SplatDepthMode;
         void setSplatDepthAov(SplatDepthMode mode);
 
+        // What the APP asked for — the answer VulkanRenderer::splatDepthAov()
+        // and the readGBufferAOV(SplatDepth) gate hand back, unchanged by the
+        // renderer's own use of the same image below.
         [[nodiscard]] bool splatDepthAov() const { return splatDepthMode_ != SplatDepthMode::Off; }
+        // Whether the AOV image is REAL (full-res, written) this frame.
+        // splatOverlayDepth_ is the renderer's own reason to want it — the
+        // overlay depth stamp reads it — and it feeds the same image, so every
+        // allocate/clear/write decision has to consult both. A caller who
+        // never asked still gets "you never asked" from the public getter.
+        [[nodiscard]] bool splatDepthAovAllocated() const {
+            return splatDepthAov() || splatOverlayDepth_;
+        }
+        // The statistic the raster exports. Median is the front of the cloud,
+        // which is what an occlusion test wants; the expected value sits a
+        // cloud-thickness behind it. So when the AOV exists ONLY for the stamp
+        // the mode is Median, and when the app asked for it the app's choice
+        // wins — one image, and a sensor's answer is not ours to redefine.
+        [[nodiscard]] bool splatDepthMedian() const {
+            return splatDepthMode_ == SplatDepthMode::Median ||
+                   (splatDepthMode_ == SplatDepthMode::Off && splatOverlayDepth_);
+        }
         [[nodiscard]] SplatDepthMode splatDepthAovMode() const { return splatDepthMode_; }
         SplatDepthMode splatDepthMode_ = SplatDepthMode::Off;
 

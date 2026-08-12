@@ -404,6 +404,11 @@ VulkanRenderer::Impl::~Impl() {
             if (overlayInjectPipelineLayout_) vkDestroyPipelineLayout(d, overlayInjectPipelineLayout_, nullptr);
             if (overlayInjectSetLayout_)      vkDestroyDescriptorSetLayout(d, overlayInjectSetLayout_, nullptr);
             if (overlayInjectPool_)           vkDestroyDescriptorPool(d, overlayInjectPool_, nullptr);
+            // Splat depth stamp (created alongside the overlay pipelines).
+            if (splatStampPipeline_)          vkDestroyPipeline(d, splatStampPipeline_, nullptr);
+            if (splatStampPipelineLayout_)    vkDestroyPipelineLayout(d, splatStampPipelineLayout_, nullptr);
+            if (splatStampSetLayout_)         vkDestroyDescriptorSetLayout(d, splatStampSetLayout_, nullptr);
+            if (splatStampPool_)              vkDestroyDescriptorPool(d, splatStampPool_, nullptr);
             if (overlayMsColor_.image != VK_NULL_HANDLE)
                 destroyImage2D(ctx->allocator(), d, overlayMsColor_);
             if (overlayMsDepth_.image != VK_NULL_HANDLE)

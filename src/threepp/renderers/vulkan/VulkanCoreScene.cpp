@@ -2967,6 +2967,32 @@ void VulkanRenderer::Impl::collectSplatClouds(Object3D& scene, Camera& camera) {
             // view into fresh descriptor sets at the next cloud upload.
             splat_->setEnvironment(envImage.view, envImage.sampler, envImage.mipLevels);
             splat_->syncClouds(lastVisibleSplats_, lastParkedSplats_);
+
+            // ── Overlay occlusion latch ────────────────────────────────────
+            // The post-resolve overlay (wireframe, lines, world sprites,
+            // particle billboards) is depth-tested against a buffer the splat
+            // compositor never writes, so a cloud in front of an overlay does
+            // not hide it. recordSplatOverlayDepthStamp fixes that by stamping
+            // the depth AOV into that buffer — which means the AOV has to
+            // EXIST the moment a scene holds both, whether or not the app ever
+            // asked for it.
+            //
+            // Here rather than in the recorder because turning it on
+            // reallocates the render-extent resources (the AOV image is 1x1
+            // while off), and this runs before renderFrame in the same
+            // render() call — so the pending-realloc gate beginDeferredFrame
+            // already owns applies it to THIS frame, at the point where the
+            // device is idled. Sticky: see splatOverlayDepth_.
+            if (!splatOverlayDepth_ && !lastVisibleSplats_.empty() && sceneHasOverlayContent()) {
+                splatOverlayDepth_ = true;
+                primaryView().rasterGbufs[0].width = 0;// force the image rebuild
+                if (frameState_ != FrameState::Idle) {
+                    pendingRenderScaleRealloc_ = true;
+                } else {
+                    vkDeviceWaitIdle(ctx->device());
+                    reallocateRenderExtentResources();
+                }
+            }
         }
 
 
