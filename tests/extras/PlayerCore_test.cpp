@@ -23,11 +23,12 @@
 
 #include "PlayerCore.hpp"
 
+#include "threepp/extras/editor/ObjectFactory.hpp"
+#include "threepp/extras/editor/ParticleFieldConfig.hpp"
 #include "threepp/extras/editor/PhysicsConfig.hpp"
 #include "threepp/extras/editor/SceneDocument.hpp"
 #ifdef THREEPP_EDITOR_WITH_PHYSX
 #include "threepp/extras/editor/ConveyorConfig.hpp"
-#include "threepp/extras/editor/ObjectFactory.hpp"
 #endif
 #include "threepp/extras/editor/ScriptConfig.hpp"
 #include "threepp/extras/editor/SensorConfig.hpp"
@@ -159,6 +160,25 @@ class Drawer:
         auto* subject = core.scene().getObjectByName("Subject");
         REQUIRE(subject != nullptr);
         return subject->position.y;
+    }
+
+    // The smallest document with weather in it: one Group carrying the snow
+    // preset in userData["particles"], and no ParticleField anywhere — the type
+    // is never a document node. Authored through the factory, so what the player
+    // rebuilds is exactly what the editor's add menu writes.
+    std::string particleDocumentJson() {
+
+        SceneDocument authoring;
+        auto& scene = authoring.scene();
+
+        auto field = ObjectFactory::createParticleField(scene);
+        field->name = "Weather";
+        scene.add(field);
+
+        std::string error;
+        auto json = authoring.toJson(false, &error);
+        REQUIRE(error.empty());
+        return json;
     }
 
 #ifdef THREEPP_EDITOR_WITH_PHYSX
@@ -452,6 +472,51 @@ TEST_CASE("an authored conveyor conveys under the player, as it does under Play"
 }
 
 #endif// THREEPP_EDITOR_WITH_PHYSX
+
+TEST_CASE("an authored particle field is counted even where it cannot be drawn", "[player]") {
+
+    // ParticleField is Vulkan-only by decision, and this test is headless — so
+    // the session builds no field at all and says so once. What it must NOT do
+    // is report nothing: the count is what the DOCUMENT contains, and a CI log
+    // that says zero for a scene full of snow is the regression the counter
+    // exists for (see EpisodeResult). The episode has to run clean either way,
+    // which is the other half — declining to draw is not a reason to fail.
+    PlayerCore core;
+    std::string log;
+    core.setLogger([&](const std::string& message) { log += message + "\n"; });
+    std::string error;
+    REQUIRE(core.openJson(particleDocumentJson(), &error));
+
+    const auto result = core.runEpisode(0, 30, kFrame);
+
+    // Said out loud, once per episode: a run that drew no weather has to be
+    // distinguishable from a document that had none.
+    INFO(log);
+    CHECK(log.find("particles: 1 field(s) need the Vulkan backend") != std::string::npos);
+
+    CHECK(result.started);
+    CHECK(result.error.empty());
+    CHECK(result.particleFieldCount == 1);
+    CHECK(result.ok());
+    CHECK(core.exitCode() == 0);
+
+    // The authored node is a plain Group carrying one userData entry, and it is
+    // the only thing the document ever held: a ParticleField is session content,
+    // dropped with the snapshot restore.
+    auto* authored = core.scene().getObjectByName("Weather");
+    REQUIRE(authored != nullptr);
+    CHECK(ParticleFieldConfig::isParticleField(*authored));
+    std::size_t fields = 0;
+    core.scene().traverse([&](Object3D& object) {
+        if (object.type() == "ParticleField") ++fields;
+    });
+    CHECK(fields == 0);
+
+    // A second episode starts from the same document and counts the same node.
+    const auto again = core.runEpisode(1, 30, kFrame);
+    CHECK(again.particleFieldCount == 1);
+    CHECK(again.ok());
+}
 
 TEST_CASE("an episode cannot be started twice", "[player]") {
 

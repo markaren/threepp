@@ -2,7 +2,9 @@
 #include "threepp/extras/editor/ObjectFactory.hpp"
 
 #include "threepp/extras/editor/ConveyorConfig.hpp"
+#include "threepp/extras/editor/GranularConfig.hpp"
 #include "threepp/extras/editor/JointConfig.hpp"
+#include "threepp/extras/editor/ParticleFieldConfig.hpp"
 #include "threepp/extras/editor/SoundConfig.hpp"
 #include "threepp/extras/editor/SplineConfig.hpp"
 #include "threepp/extras/editor/TextConfig.hpp"
@@ -439,6 +441,35 @@ std::shared_ptr<Object3D> ObjectFactory::createConveyorWallPoint(const Object3D&
     auto point = Object3D::create();
     point->name = uniqueName(wall, "Wall Point");
     return point;
+}
+
+std::shared_ptr<Group> ObjectFactory::createParticleField(const Object3D& root) {
+
+    auto field = Group::create();
+    field->name = uniqueName(root, "Particles");
+
+    const auto config = ParticleFieldConfig::snow();
+    config.write(*field);
+
+    // The node IS the emitter frame, and the preset's spawn slab is a thin
+    // ceiling the flakes fall from — at the floor it would pour the whole
+    // column through the ground. Lifted to the top of one lifetime of fall.
+    field->position.y = config.lifetime * -config.velocity.y;
+
+    return field;
+}
+
+std::shared_ptr<Group> ObjectFactory::createGranular(const Object3D& root) {
+
+    auto granular = Group::create();
+    granular->name = uniqueName(root, "Granular");
+    GranularConfig{}.write(*granular);
+
+    // A chute pours DOWN from where it stands, so it needs to stand somewhere:
+    // at the origin the grains spawn inside the floor.
+    granular->position.y = 2.f;
+
+    return granular;
 }
 
 std::shared_ptr<Object3D> ObjectFactory::createSplinePoint(const Object3D& spline) {

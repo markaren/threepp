@@ -16,7 +16,9 @@
 #include "EditorTheme.hpp"
 
 #include "threepp/extras/editor/ConveyorConfig.hpp"
+#include "threepp/extras/editor/GranularConfig.hpp"
 #include "threepp/extras/editor/JointConfig.hpp"
+#include "threepp/extras/editor/ParticleFieldConfig.hpp"
 #include "threepp/extras/editor/SensorConfig.hpp"
 #include "threepp/extras/editor/SoundConfig.hpp"
 #include "threepp/extras/editor/SplineConfig.hpp"
@@ -72,6 +74,8 @@ namespace {
         Sound,
         Joint,
         Vehicle,
+        Particles,
+        Granular,
         kCount
     };
 
@@ -180,6 +184,30 @@ namespace {
 <path d="M17 13.9 C18.44 13.9 19.6 15.06 19.6 16.5 C19.6 17.94 18.44 19.1 17 19.1 C15.56 19.1 14.4 17.94 14.4 16.5 C14.4 15.06 15.56 13.9 17 13.9 Z M17 15.3 C16.34 15.3 15.8 15.84 15.8 16.5 C15.8 17.16 16.34 17.7 17 17.7 C17.66 17.7 18.2 17.16 18.2 16.5 C18.2 15.84 17.66 15.3 17 15.3 Z"/>
 </svg>)";
 
+            // A six-armed flake with a hub, plus two falling specks. A particle
+            // field draws nothing at its own origin (its Mesh geometry is a
+            // zero-area placeholder), so this icon is the ONLY thing standing
+            // where the emitter is — and on OpenGL it is the only thing at all.
+            case Icon::Particles:
+                return R"(<svg viewBox="0 0 24 24">
+<path d="M8.6 3.6 L10.9 5.9 L10.9 3 L13.1 3 L13.1 5.9 L15.4 3.6 L16.95 5.15 L13.1 9 L13.1 10.9 L15 10.9 L18.85 7.05 L20.4 8.6 L18.1 10.9 L21 10.9 L21 13.1 L18.1 13.1 L20.4 15.4 L18.85 16.95 L15 13.1 L13.1 13.1 L13.1 15 L16.95 18.85 L15.4 20.4 L13.1 18.1 L13.1 21 L10.9 21 L10.9 18.1 L8.6 20.4 L7.05 18.85 L10.9 15 L10.9 13.1 L9 13.1 L5.15 16.95 L3.6 15.4 L5.9 13.1 L3 13.1 L3 10.9 L5.9 10.9 L3.6 8.6 L5.15 7.05 L9 10.9 L10.9 10.9 L10.9 9 L7.05 5.15 Z"/>
+</svg>)";
+
+            // A heap over a pour mouth: grains falling from a chute onto the
+            // pile they make. The pile is the whole point of the object, and it
+            // only exists while playing.
+            case Icon::Granular:
+                return R"(<svg viewBox="0 0 24 24">
+<path d="M8 2.5 L16 2.5 L16 4.3 L8 4.3 Z"/>
+<path d="M11.1 6 L12.9 6 L12.9 8.2 L11.1 8.2 Z"/>
+<path d="M8.2 6.6 L9.8 6.6 L9.8 8.2 L8.2 8.2 Z"/>
+<path d="M14.2 6.6 L15.8 6.6 L15.8 8.2 L14.2 8.2 Z"/>
+<path d="M11.1 10 L12.9 10 L12.9 12 L11.1 12 Z"/>
+<path d="M7.9 10.4 L9.5 10.4 L9.5 12 L7.9 12 Z"/>
+<path d="M14.5 10.4 L16.1 10.4 L16.1 12 L14.5 12 Z"/>
+<path d="M12 13.2 L21 20.5 L3 20.5 Z"/>
+</svg>)";
+
             // A fence: two posts and a rail — a conveyor wall's point. Says
             // "this drags a barrier" before it is clicked.
             case Icon::WallPoint:
@@ -228,6 +256,11 @@ namespace {
         // sensor's argument — "this drives" is otherwise only discoverable by
         // selecting everything in turn.
         if (VehicleConfig::isVehicle(object)) return Icon::Vehicle;
+        // Both are plain Groups whose userData entry IS their whole identity,
+        // and both draw nothing of their own in edit mode — the marker is the
+        // only way to click one.
+        if (ParticleFieldConfig::isParticleField(object)) return Icon::Particles;
+        if (GranularConfig::isGranular(object)) return Icon::Granular;
         // Before the type checks: a control point is an ordinary Object3D and
         // is told apart by its parent, not by what it is.
         if (SplineConfig::splineOf(object)) return Icon::SplinePoint;
@@ -381,7 +414,11 @@ void EditorApp::syncViewportMarkers() {
         if (object.as<Camera>() || object.as<Light>() || SplineConfig::splineOf(object) ||
             ConveyorConfig::conveyorOf(object) || ConveyorWallConfig::wallOf(object) ||
             (sensor && sensor->enabled) || SoundConfig::isSound(object) ||
-            JointConfig::isJoint(object) || VehicleConfig::isVehicle(object)) {
+            JointConfig::isJoint(object) || VehicleConfig::isVehicle(object) ||
+            // Both are empty Groups: they bound to nothing, so selectObject
+            // builds no outline for them and the icon is the selection path.
+            ParticleFieldConfig::isParticleField(object) ||
+            GranularConfig::isGranular(object)) {
             owners.push_back(&object);
         }
     });

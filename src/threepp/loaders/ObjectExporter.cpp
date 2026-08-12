@@ -125,29 +125,45 @@ namespace {
     // Object types this format cannot carry, dropped with a warning rather than
     // written out to be thrown away on load.
     //
-    // SplatCloud is the only one. Without this it takes the InstancedMesh
-    // branch below and writes one 16-float instanceMatrix per splat — 14 MB of
-    // identity matrices for a 216k-splat scan, because that class keeps them
-    // identity on purpose and puts the real per-splat data (means, covariances,
-    // spherical harmonics) in DataTextures hanging off a RawShaderMaterial's
-    // uniforms, which are not serialized either. ObjectLoader has no
-    // "SplatCloud" case and rejects the type outright, so every one of those
-    // bytes is written to be discarded. A splat cloud belongs in its own .ply,
-    // referenced — that is the serialization pass, and it is not this one.
+    // SplatCloud: without this it takes the InstancedMesh branch below and
+    // writes one 16-float instanceMatrix per splat — 14 MB of identity matrices
+    // for a 216k-splat scan, because that class keeps them identity on purpose
+    // and puts the real per-splat data (means, covariances, spherical
+    // harmonics) in DataTextures hanging off a RawShaderMaterial's uniforms,
+    // which are not serialized either. ObjectLoader has no "SplatCloud" case
+    // and rejects the type outright, so every one of those bytes is written to
+    // be discarded. A splat cloud belongs in its own .ply, referenced — that is
+    // the serialization pass, and it is not this one.
+    //
+    // ParticleField: the failure is quieter and worse. It IS a Mesh, so the
+    // mesh branch below writes it happily — and what it writes is the zero-area
+    // placeholder triangle the type carries on purpose (see ParticleField.hpp),
+    // because the particles live in device memory and the capacity, emitter and
+    // representations are not serializable state. ObjectLoader has no case for
+    // it either, so the node vanishes on load having cost bytes. Authored
+    // particles are a Group carrying ParticleFieldConfig; the field itself is
+    // runtime content that overlays and play sessions own, and one reaching the
+    // document at all is a bug this net catches rather than permits.
     //
     // Matched on type() rather than by dynamic_cast, for symmetry with
     // ObjectLoader's dispatch (a type() string table) and so the exporter does
-    // not have to include the splat headers to know what it cannot write.
+    // not have to include the splat or particle headers to know what it cannot
+    // write.
     bool isUnexportable(const Object3D& object) {
 
-        return object.type() == "SplatCloud";
+        return object.type() == "SplatCloud" || object.type() == "ParticleField";
     }
 
     std::string unexportableReason(const Object3D& object) {
 
+        const std::string what =
+                object.type() == "ParticleField"
+                        ? "particle fields are runtime content built from userData[\"particles\"], not document nodes"
+                        : "splat clouds are not serialized yet";
+
         return "skipping " + object.type() + " '" +
                (object.name.empty() ? object.uuid : object.name) +
-               "': splat clouds are not serialized yet, it will not be in the saved document";
+               "': " + what + ", it will not be in the saved document";
     }
 
     // Deterministic iteration over threepp's unordered maps.

@@ -71,6 +71,10 @@ namespace threepp {
     class Material;
     class MeshBasicMaterial;
     class ObjectWithMorphTargetInfluences;
+    // The edit-mode particle previews. Forward-declared like the play sessions
+    // below: every panel includes this header and none of them has any business
+    // recompiling against the renderer-facing particle type.
+    class ParticleField;
     class Points;
     class Robot;
     class Texture;
@@ -85,6 +89,13 @@ namespace threepp::editor {
     class PhysicsPlaySession;
     // Forward-declared for the same reason (it includes PhysicsPlaySession).
     class ConveyorPlaySession;
+    // The play-mode particle fields. PhysX-free, but it includes the
+    // renderer-facing particle type and the Vulkan renderer — neither of which
+    // a panel has any business recompiling against.
+    class ParticleFieldPlaySession;
+    // The play-mode grain piles. Forward-declared for both reasons at once: it
+    // includes PhysicsPlaySession (the whole PhysX SDK) and the particle types.
+    class GranularPlaySession;
     // PhysX-free (the PhysX half is PhysxSensorPlaySession, constructed in
     // EditorApp.cpp), but still heavy — it pulls in the depth/lidar sensors and
     // the renderer, which the panels have no business recompiling against.
@@ -274,6 +285,15 @@ namespace threepp::editor {
         // The conveyor twin: shown for a conveyor group and, in its waypoint
         // form, for one of its waypoints (arc centre / segment surface).
         void drawConveyorSection(Object3D& object);
+        // Shown for a node carrying a ParticleFieldConfig: the four presets,
+        // the structural block that rebuilds the preview field, and one group
+        // per representation. Edits write the CONFIG only — the preview field
+        // is derived state syncParticleOverlays follows.
+        void drawParticleFieldSection(Object3D& object);
+        // The PhysX PBD twin: shown for a node carrying a GranularConfig. The
+        // grains only exist while playing, so this section is the chute and
+        // nothing else.
+        void drawGranularSection(Object3D& object);
         // `owner` is the object the material hangs off; the slot is identified
         // by (owner uuid, label) whenever it has to outlive the frame.
         void drawTextureSlot(const Object3D& owner, Material& material, const char* label,
@@ -555,7 +575,9 @@ namespace threepp::editor {
         // the whole object, because one instance is not an Object3D and has
         // nothing to carry a transform edit on.
         void selectObject(Object3D* object, std::optional<int> instance = std::nullopt);
-        void refreshSelectionHelpers();
+        // `dt` is the frame's own delta: the particle previews advance a clock
+        // here, and everything else in the pass ignores it.
+        void refreshSelectionHelpers(float dt = 0.f);
         // World-space bounds of `instance` of `mesh`: the geometry's own box
         // through matrixWorld * instanceMatrix[instance]. Empty when the index
         // is out of range or the geometry has no bounds to take.
@@ -603,6 +625,26 @@ namespace threepp::editor {
         // the conveyor twin of the spline overlay pass.
         void syncConveyorOverlays();
         void clearConveyorOverlays();
+        // --- particle previews (apps/editor/ParticleOverlay.cpp) ------------
+        // One ParticleField per authored node, built through the same
+        // ParticleFieldBuild the play session uses and advanced on the editor's
+        // own clock so the weather falls while it is authored. Two-tier change
+        // detection: the structural key rebuilds, everything else is pushed in
+        // place. Vulkan only — the map stays empty on OpenGL.
+        void syncParticleOverlays(float dt);
+        void clearParticleOverlays();
+        // The spawn slab (or a chute's pour mouth) and the flight direction for
+        // the SELECTED node, same selected-only rule as the sound rings. Drawn
+        // on every backend: where particles are born is an authoring fact.
+        void syncParticleHelper();
+        // Whether this session can draw a particle field at all, i.e. whether
+        // it is running the Vulkan backend. Read by the inspector too, which
+        // says so rather than showing an empty preview.
+        [[nodiscard]] bool particlePreviewAvailable() const;
+        // Density volumes authored in the whole document, counted by the last
+        // sync — the inspector's budget warning (ParticleFieldConfig::
+        // maxDensityFields) reads it.
+        [[nodiscard]] int particleDensityCount() const { return particleDensityCount_; }
         // --- procedural trees (apps/editor/TreeOverlay.cpp) -----------------
         // Regrows the trunk and foliage meshes an authored TreeConfig
         // describes. No editor furniture of its own: unlike the two passes
@@ -1076,6 +1118,29 @@ namespace threepp::editor {
         std::vector<TreeOverlay> treeOverlays_;
         std::shared_ptr<Group> conveyors_;
 
+        // Particle-field previews, keyed by the AUTHORED NODE'S uuid rather
+        // than by pointer: unlike the overlays above, an entry has to survive
+        // being looked up from a frame in which the graph was rebuilt. The two
+        // keys are the two tiers — `structural` is what forces a destroy and
+        // rebuild (the churn contract), `mutable` is the encoded config and
+        // decides whether new parameters have to be pushed at all.
+        struct ParticlePreview {
+            std::shared_ptr<ParticleField> field;
+            std::string structuralKey;
+            std::string mutableKey;
+        };
+        std::shared_ptr<Group> particles_;
+        std::unordered_map<std::string, ParticlePreview> particlePreviews_;
+        // The clock the previews run on. Wall time while editing, frozen for
+        // the duration of a Play (the previews are parked then, and the play
+        // session owns its own deterministic clock).
+        float particleTime_ = 0.f;
+        int particleDensityCount_ = 0;
+        // Spawn slab + flight arrow for the selected particle or granular node.
+        // Same lifetime and keying rules as the joint helper.
+        std::shared_ptr<LineSegments> particleHelper_;
+        std::string particleHelperKey_;
+
         // The corner-radius handle: one ball, re-aimed at whichever corner
         // waypoint is selected (see ConveyorOverlay.cpp). Dragging it along
         // the corner's bisector writes the waypoint's cornerRadius through the
@@ -1101,6 +1166,16 @@ namespace threepp::editor {
         // meshes. Registered right after physics (start order), which also puts
         // its stop BEFORE physics' — the world is still alive to unregister from.
         std::shared_ptr<ConveyorPlaySession> conveyorSession_;
+        // The fields an authored particle node runs during Play — the previews
+        // above are parked while it does. Kept as a member for the selftest and
+        // the status readout, like the sessions beside it; registered in every
+        // build, since a field wants a renderer rather than a world.
+        std::shared_ptr<ParticleFieldPlaySession> particleSession_;
+        // The PBD grains an authored chute pours during Play, in the world
+        // physics_ built. Registered right after the fields above and inside
+        // the PhysX guard, so its stop comes before physics' — the world is
+        // still alive to release the particle actor into.
+        std::shared_ptr<GranularPlaySession> granularSession_;
         std::shared_ptr<LineSegments> physicsDebugLines_;
         int physicsDebugCapacity_ = 0;
         bool physicsDebug_ = false;

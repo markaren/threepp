@@ -95,6 +95,19 @@ namespace threepp::editor {
         // A new point for `wall` — same contract as the other point factories.
         static std::shared_ptr<Object3D> createConveyorWallPoint(const Object3D& wall);
 
+        // A Group carrying ParticleFieldConfig's SNOW preset. The node's
+        // transform is the emitter frame, so it is added lifted to the top of
+        // the spawn slab's fall — a field at the floor pours its snow through
+        // it. The ParticleField itself is never a document node: the overlay
+        // and the play session build one from this entry (see
+        // ParticleFieldConfig), and on the GL backend neither does.
+        static std::shared_ptr<Group> createParticleField(const Object3D& root);
+
+        // A Group carrying a default GranularConfig — the chute frame, poured
+        // along -Y. Nothing is generated under it: the grains are a PhysX PBD
+        // simulation that only exists while playing.
+        static std::shared_ptr<Group> createGranular(const Object3D& root);
+
         // "Box" if free, else "Box 2", "Box 3", ... Matching is exact, so a
         // user-typed "Box copy" never blocks "Box".
         static std::string uniqueName(const Object3D& root, const std::string& base);

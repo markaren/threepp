@@ -113,6 +113,22 @@ void EditorApp::drawAddMenu(Object3D& parent) {
             addObject(ObjectFactory::createConveyor(document_.scene()), *target, "Add Conveyor");
         };
     }
+    // Neither of these is gated on a build option: authoring is a userData
+    // entry and works everywhere. Only what they DO degrades — a particle field
+    // previews and renders on Vulkan, granular grains need a CUDA PhysX world —
+    // and both say so in the inspector.
+    if (ImGui::MenuItem("Particle Field")) {
+        deferred_ = [this, target] {
+            addObject(ObjectFactory::createParticleField(document_.scene()), *target,
+                      "Add Particle Field");
+        };
+    }
+    if (ImGui::MenuItem("Granular Particles")) {
+        deferred_ = [this, target] {
+            addObject(ObjectFactory::createGranular(document_.scene()), *target,
+                      "Add Granular Particles");
+        };
+    }
 }
 
 void EditorApp::drawHierarchyNode(Object3D& object) {

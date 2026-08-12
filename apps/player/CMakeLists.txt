@@ -52,6 +52,18 @@ else ()
     message(STATUS "threepp_player: physx not found, documents play without physics")
 endif ()
 
+# THREEPP_WITH_VULKAN is PRIVATE on the threepp lib, so the play core has to
+# state it too — and PUBLIC, for the same ODR reason PhysX is stated PUBLIC
+# above: ParticleFieldPlaySession.hpp is header-only and its inline methods
+# branch on this macro (a ParticleField draws on Vulkan and nowhere else), so
+# every target sharing a binary with this one must compile it identically.
+# Without it here the session would compile blind in the core library and skip
+# the visuals even under --vulkan, which is exactly the editor/player
+# divergence this app exists not to have.
+if (THREEPP_WITH_VULKAN)
+    target_compile_definitions(threepp_player_core PUBLIC THREEPP_WITH_VULKAN=1)
+endif ()
+
 # Python scripting. Declared by apps/editor, which is where the embedded
 # interpreter and the bind_*.cpp translation units live; PUBLIC on that target
 # carries THREEPP_EDITOR_WITH_PYTHON and the scripting include directory here.

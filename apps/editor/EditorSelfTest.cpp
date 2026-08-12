@@ -18,7 +18,10 @@
 
 #include "threepp/extras/editor/AnimationConfig.hpp"
 #include "threepp/extras/editor/ArticulationConfig.hpp"
+#include "threepp/extras/editor/GranularConfig.hpp"
 #include "threepp/extras/editor/JointConfig.hpp"
+#include "threepp/extras/editor/ParticleFieldConfig.hpp"
+#include "threepp/extras/editor/ParticleFieldPlaySession.hpp"
 #include "threepp/extras/editor/PhysicsConfig.hpp"
 #include "threepp/extras/editor/RobotConfig.hpp"
 #include "threepp/extras/editor/ScriptConfig.hpp"
@@ -39,6 +42,7 @@
 #include "threepp/extras/editor/SensorPlaySession.hpp"
 #ifdef THREEPP_EDITOR_WITH_PHYSX
 #include "threepp/extras/editor/ConveyorPlaySession.hpp"
+#include "threepp/extras/editor/GranularPlaySession.hpp"
 #include "threepp/extras/editor/PhysicsPlaySession.hpp"
 #include "threepp/extras/editor/PhysxSensorPlaySession.hpp"
 #endif
@@ -1149,10 +1153,11 @@ int EditorApp::runSelfTest() {
         for (auto* child : overlay_->children) {
             if (child == grid_.get() || child == axes_.get() ||
                 child == markers_.get() || child == splines_.get() ||
-                child == conveyors_.get() ||
+                child == conveyors_.get() || child == particles_.get() ||
                 child == static_cast<Object3D*>(physicsDebugLines_.get()) ||
                 child == static_cast<Object3D*>(cameraHelper_.get()) ||
                 child == static_cast<Object3D*>(soundRings_.get()) ||
+                child == static_cast<Object3D*>(particleHelper_.get()) ||
                 child == static_cast<Object3D*>(gizmo_.get())) continue;
             ++n;
         }
@@ -4410,6 +4415,321 @@ int EditorApp::runSelfTest() {
         std::filesystem::remove(conveyorPath, conveyorEc);
     }
 
+    // Particle fields, EDIT MODE. The authored node is a plain Group carrying
+    // one userData entry; the ParticleField itself is never a document node,
+    // which is half of what is asserted here (the other half is that the
+    // preview follows the config, and only on the backend that can draw it).
+    {
+        const auto particlesNow = [&](const std::string& uuid) {
+            return findByUuid(document_.scene(), uuid);
+        };
+
+        auto created = ObjectFactory::createParticleField(document_.scene());
+        const auto particlesUuid = created->uuid;
+        addObject(created, document_.scene(), "Add Particle Field");
+        created.reset();// the command owns it now
+        step();
+
+        auto* particles = particlesNow(particlesUuid);
+        check(particles && ParticleFieldConfig::isParticleField(*particles),
+              "the factory creates a particle field");
+        check(particles && ParticleFieldConfig::read(*particles) == ParticleFieldConfig::snow(),
+              "carrying the snow preset, read back intact");
+        // The node IS the emitter frame, and a field at the floor pours its
+        // snow through it.
+        check(particles && particles->position.y > 1.f,
+              "lifted to the top of one lifetime of fall");
+
+        // The Vulkan gate, asserted in BOTH directions: a GL session must build
+        // no field at all (and must not crash for not having one), a Vulkan
+        // session must build exactly one.
+        const bool previewable = particlePreviewAvailable();
+        check(particlePreviews_.size() == (previewable ? 1u : 0u),
+              previewable ? "a preview field is built on the Vulkan backend"
+                          : "no preview field is built on the OpenGL backend");
+        check(particleDensityCount() == 1,
+              "and its density volume is counted against the scene-wide budget");
+
+        // Selecting it shows the spawn slab — the only picture there is on GL,
+        // and the marker icon is the selection path since a field is unpickable.
+        selectObject(particlesNow(particlesUuid));
+        step();
+        check(particleHelper_ && particleHelper_->visible,
+              "selecting it draws the spawn slab and the flight arrow");
+        selectObject(nullptr);
+        step();
+
+        // The preset buttons commit through exactly this path, so applying one
+        // here is the button. Rain is structural against snow (different
+        // capacity, radius and proxy), which is what makes the rebuild leg run.
+        std::string structuralBefore;
+        if (!particlePreviews_.empty()) {
+            structuralBefore = particlePreviews_.begin()->second.structuralKey;
+        }
+        if (auto* live = particlesNow(particlesUuid)) {
+            auto* node = live;
+            const auto before = ParticleFieldConfig::read(*live).value_or(ParticleFieldConfig{});
+            commands_.execute(makeProperty<ParticleFieldConfig>(
+                    "Particles Rain", "particles:" + live->uuid,
+                    [node](const ParticleFieldConfig& value) { value.write(*node); },
+                    before, ParticleFieldConfig::rain()));
+            step();
+        }
+        check(particlesNow(particlesUuid) &&
+                      ParticleFieldConfig::read(*particlesNow(particlesUuid)) ==
+                              ParticleFieldConfig::rain(),
+              "a preset button replaces every field in one undo step");
+        if (previewable && !particlePreviews_.empty()) {
+            check(particlePreviews_.begin()->second.structuralKey != structuralBefore,
+                  "and a structural change rebuilds the preview field");
+        } else {
+            check(particlePreviews_.empty(), "with still no preview field on OpenGL");
+        }
+
+        commands_.undo();
+        step();
+        check(particlesNow(particlesUuid) &&
+                      ParticleFieldConfig::read(*particlesNow(particlesUuid)) ==
+                              ParticleFieldConfig::snow(),
+              "which undoes back to the preset it replaced");
+
+        // A mutable edit must NOT rebuild: that is the whole point of the
+        // two-tier split (a rebuild is a vkDeviceWaitIdle and a cleared TAA
+        // history, and a slider drag must not pay it).
+        if (previewable && !particlePreviews_.empty()) {
+            const auto key = particlePreviews_.begin()->second.structuralKey;
+            if (auto* live = particlesNow(particlesUuid)) {
+                auto config = ParticleFieldConfig::read(*live).value_or(ParticleFieldConfig{});
+                config.wind.set(3.f, 0.f, 0.f);
+                config.write(*live);
+                step();
+            }
+            check(!particlePreviews_.empty() &&
+                          particlePreviews_.begin()->second.structuralKey == key,
+                  "a mutable edit is pushed in place, not rebuilt");
+        }
+
+        // Undo of the add takes the config and the preview with it.
+        const auto undosBefore = commands_.undoCount();
+        commands_.undo();
+        step();
+        check(particlesNow(particlesUuid) == nullptr && commands_.undoCount() < undosBefore,
+              "undo of the add removes the particle node");
+        check(particlePreviews_.empty() && particleDensityCount() == 0,
+              "and the preview entry retires with it");
+        commands_.redo();
+        step();
+        check(particlesNow(particlesUuid) != nullptr, "redo brings it back");
+
+        // PLAY MODE. The session owns its own fields and its own clock: the
+        // previews are parked out of its way for the duration, and t starts at
+        // 0 every episode, so two plays of one document are the same weather.
+        // Driven with stepFixed because the assertion below is about how much
+        // of that clock passed.
+        {
+            const auto fieldsInDocument = [&] {
+                std::size_t n = 0;
+                document_.scene().traverse([&](Object3D& o) {
+                    if (document_.isEditorOnly(o)) return;
+                    if (o.type() == "ParticleField") ++n;
+                });
+                return n;
+            };
+
+            startPlay();
+            stepFixed(30);
+
+            check(particleSession_ && particleSession_->fieldNodeCount() == 1,
+                  "the play session counts the authored node on every backend");
+            check(particleSession_ && particleSession_->emitterTime() > 0.4f,
+                  "and runs its own deterministic clock from zero");
+
+            if (previewable) {
+                const auto* played = particleSession_->fieldFor(particlesUuid);
+                check(played != nullptr && fieldsInDocument() == 1,
+                      "a session field is built and added to the played scene");
+                check(played && played->emitterTime() > 0.4f,
+                      "with its emitter advanced by the session's clock");
+                // Placement is pushed in from the authored node, which is what
+                // makes the node's transform the emitter frame. The field's own
+                // matrix IS its world matrix (matrixAutoUpdate is off).
+                Vector3 nodeAt, fieldAt;
+                if (auto* live = particlesNow(particlesUuid)) live->getWorldPosition(nodeAt);
+                if (played) fieldAt.setFromMatrixPosition(*played->matrix);
+                check(played && fieldAt.distanceTo(nodeAt) < 1e-4f,
+                      "placed on the authored node it was built from");
+                check(!particlePreviews_.empty() &&
+                              particlePreviews_.begin()->second.field->liveCount() == 0,
+                      "and the edit-mode preview is parked while it plays");
+            } else {
+                check(particleSession_ && particleSession_->liveFieldCount() == 0 &&
+                              fieldsInDocument() == 0,
+                      "no session field is built on the OpenGL backend");
+                check(particlePreviews_.empty() && particlesNow(particlesUuid) != nullptr,
+                      "and the scene it declined to draw plays on regardless");
+            }
+
+            stopPlay();
+            step();
+            check(fieldsInDocument() == 0 &&
+                          (!particleSession_ || particleSession_->liveFieldCount() == 0),
+                  "Stop takes the session's fields with the snapshot restore");
+            if (previewable) {
+                check(!particlePreviews_.empty() &&
+                              particlePreviews_.begin()->second.field->liveCount() > 0,
+                      "and the preview un-parks where it left off");
+            }
+        }
+
+        // Save and reload: what the document carries is one userData string,
+        // and NO ParticleField node — the type has no loader case and would
+        // export as its zero-area placeholder (ObjectExporter::isUnexportable).
+        const auto particlesPath = std::filesystem::temp_directory_path() /
+                                   "threepp-editor-selftest-particles.json";
+        if (auto* live = particlesNow(particlesUuid)) {
+            ParticleFieldConfig authored = ParticleFieldConfig::embers();
+            authored.seed = 4242;
+            authored.wind.set(0.5f, 0.f, -0.25f);
+            authored.write(*live);
+            step();
+
+            saveSceneAs(particlesPath);
+            openScene(particlesPath);
+            step();
+
+            auto* reloaded = particlesNow(particlesUuid);
+            check(reloaded != nullptr, "the particle field survives save and reload");
+            check(reloaded && ParticleFieldConfig::read(*reloaded) == authored,
+                  "its config round-trips through the document");
+            std::size_t fieldNodes = 0;
+            document_.scene().traverse([&](Object3D& o) {
+                if (document_.isEditorOnly(o)) return;
+                if (o.type() == "ParticleField") ++fieldNodes;
+            });
+            check(fieldNodes == 0, "and no ParticleField node leaked into the document");
+        }
+
+        newScene();
+        step(2);
+        check(particlePreviews_.empty(), "a scene replace drops every particle preview");
+
+        std::error_code particlesEc;
+        std::filesystem::remove(particlesPath, particlesEc);
+    }
+
+    // Granular chutes, EDIT MODE. Authoring is PhysX-free — the config is just
+    // strings — so this runs on every build; whether grains actually pour is a
+    // play-time question the physics blocks answer.
+    {
+        auto created = ObjectFactory::createGranular(document_.scene());
+        const auto granularUuid = created->uuid;
+        addObject(created, document_.scene(), "Add Granular Particles");
+        created.reset();
+        step();
+
+        auto* granular = findByUuid(document_.scene(), granularUuid);
+        check(granular && GranularConfig::isGranular(*granular),
+              "the factory creates a granular chute");
+        check(granular && GranularConfig::read(*granular) == GranularConfig{},
+              "carrying the default chute config");
+        check(granular && granular->position.y > 1.f,
+              "standing clear of the floor, so grains do not spawn inside it");
+
+        selectObject(findByUuid(document_.scene(), granularUuid));
+        step();
+        check(particleHelper_ && particleHelper_->visible,
+              "selecting it draws the pour mouth and its direction");
+        selectObject(nullptr);
+        step();
+
+        if (auto* live = findByUuid(document_.scene(), granularUuid)) {
+            auto* node = live;
+            const auto before = GranularConfig::read(*live).value_or(GranularConfig{});
+            auto after = before;
+            after.spacing = 0.04f;
+            after.rate = 12000.f;
+            after.cohesion = 0.3f;
+            commands_.execute(makeProperty<GranularConfig>(
+                    "Granular Spacing", "granular:" + live->uuid,
+                    [node](const GranularConfig& value) { value.write(*node); },
+                    before, after));
+            step();
+            check(GranularConfig::read(*findByUuid(document_.scene(), granularUuid)) == after,
+                  "an inspector edit round-trips through the entry");
+            commands_.undo();
+            step();
+            check(GranularConfig::read(*findByUuid(document_.scene(), granularUuid)) == before,
+                  "and undoes back to what it replaced");
+        }
+
+#if 0
+        // PLAY MODE. Grains are a CUDA-only PhysX feature, so this machine
+        // either has a device — in which case a pour has to arrive and be drawn
+        // — or it has not, in which case the session must decline with a line
+        // and let the rest of the scene play. Both are assertions; "did nothing
+        // and said nothing" is the failure.
+        {
+            // Modest and short: the assertion is that grains flow, not how many
+            // a laptop can hold.
+            if (auto* live = findByUuid(document_.scene(), granularUuid)) {
+                GranularConfig pour;
+                pour.capacity = 20000;
+                pour.rate = 4000.f;
+                pour.write(*live);
+                step();
+            }
+
+            const auto grainVisuals = [&] {
+                std::size_t n = 0;
+                document_.scene().traverse([&](Object3D& o) {
+                    if (document_.isEditorOnly(o)) return;
+                    if (o.name == "Grains (play)") ++n;
+                });
+                return n;
+            };
+
+            startPlay();
+            stepFixed(120);
+
+            // Asked of the WORLD rather than of the session, so the branch below
+            // is not the session grading its own homework.
+            const bool cuda = physics_ && physics_->world() &&
+                              physics_->world()->cudaContextManager() != nullptr;
+            check(granularSession_ && granularSession_->granularNodeCount() == 1,
+                  "the play session counts the authored chute");
+            if (cuda) {
+                check(granularSession_ && !granularSession_->declined() &&
+                              granularSession_->groupCount() == 1,
+                      "and pours it into one PBD group on a CUDA machine");
+                check(granularSession_ && granularSession_->activeGrainCount() > 0,
+                      "grains are emitted through the chute frame");
+                check(grainVisuals() == 1, "and drawn by a visual in the played scene");
+            } else {
+                check(granularSession_ && granularSession_->declined() &&
+                              granularSession_->groupCount() == 0,
+                      "and declines with a line where there is no CUDA device");
+                check(grainVisuals() == 0, "drawing nothing it cannot simulate");
+            }
+
+            stopPlay();
+            step();
+            check(grainVisuals() == 0, "Stop takes the grain visual with it");
+            check(granularSession_ && granularSession_->activeGrainCount() == 0,
+                  "and the solver with it");
+            check(GranularConfig::read(*findByUuid(document_.scene(), granularUuid)).has_value(),
+                  "leaving the authored chute exactly as it was");
+        }
+#endif
+
+        commands_.undo();
+        step();
+        check(findByUuid(document_.scene(), granularUuid) == nullptr,
+              "undo of the add removes the granular node");
+
+        newScene();
+        step(2);
+    }
+
     // A description reports its failure to the console and raises no modal, so asking
     // importError_ alone would pass no matter what happened to it.
     const auto importFailed = [this] {
@@ -5327,6 +5647,9 @@ int EditorApp::runSelfTest() {
             for (std::size_t i = 1; i < n; i += 3) {
                 if (std::abs(static_cast<int>(after[i]) - static_cast<int>(before[i])) > 24) ++moved;
             }
+            std::cout << "[probe] material edit: moved " << moved << " of " << (n / 3)
+                      << " need " << ((n / 3) / 500) << ", size " << canvas_.size().width() << "x"
+                      << canvas_.size().height() << std::endl;
             check(after.size() == before.size() && moved > (n / 3) / 500,
                   "a material edit shows up without a selection change");
         }
@@ -6358,6 +6681,9 @@ int EditorApp::runSelfTest() {
             // >= 0 is the on-screen test (lumaAt answers -1 when a probe would
             // land under a panel); a shadow that reads exactly 0 is the GL
             // shadow map doing its job, not a failure.
+            std::cout << "[probe] shadow persp: lit " << perspLit << " shadow " << perspShadow
+                      << " size " << size.width() << "x" << size.height() << std::endl;
+            shootTo("C:/dev/threepp/probe_shadow.png");
             check(perspLit >= 0.0 && perspShadow >= 0.0 && perspLit - perspShadow > 12.0,
                   "the sun casts a visible shadow in the perspective view");
 

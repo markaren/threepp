@@ -49,6 +49,8 @@ namespace threepp::editor {
 
     class AudioPlaySession;
     class ConveyorPlaySession;
+    class GranularPlaySession;
+    class ParticleFieldPlaySession;
     class PhysicsPlaySession;
     class ScriptPlaySession;
     class SensorPlaySession;
@@ -89,6 +91,16 @@ namespace threepp::player {
         // zero for a document with none — but a document that HAS one and
         // reports zero is the regression this exists to make visible in a log.
         std::size_t conveyorCount = 0;
+        // Authored particle-field nodes the play session saw. Counted on EVERY
+        // backend, including the ones that draw no particles at all (the type is
+        // Vulkan-only): what this reports is what the DOCUMENT contains, and a
+        // headless run that reports zero for a scene full of snow is the same
+        // regression as above.
+        std::size_t particleFieldCount = 0;
+        // Authored granular chutes the play session saw. Counted whether or not
+        // the machine could pour them — grains are CUDA-only, and a run that
+        // declined still ran a document that HAS a chute in it.
+        std::size_t granularCount = 0;
 
         [[nodiscard]] bool ok() const {
             return started && error.empty() && scriptErrors == 0;
@@ -131,6 +143,14 @@ namespace threepp::player {
         // leaves the listener at the origin, which is what a run with nobody
         // listening wants. No-op in a build without audio.
         void setAudioListenerHost(Object3D* host);
+
+        // Where the viewpoint is, for particle fields authored to FOLLOW it: a
+        // weather field wraps its spawn box toroidally about the camera so a
+        // few thousand particles cover a whole scene. Same contract as the
+        // listener host above — borrowed, read per frame, and null (the
+        // headless default) leaves the box where the authored node put it,
+        // since a run with nobody looking has no viewpoint to wrap about.
+        void setViewpointHost(Object3D* host);
 
         // Who empties scripting::debugDraw() at the end of each step.
         //
@@ -204,6 +224,8 @@ namespace threepp::player {
 
         std::shared_ptr<editor::PhysicsPlaySession> physics_;
         std::shared_ptr<editor::ConveyorPlaySession> conveyor_;
+        std::shared_ptr<editor::ParticleFieldPlaySession> particles_;
+        std::shared_ptr<editor::GranularPlaySession> granular_;
         std::shared_ptr<editor::AudioPlaySession> audio_;
         std::shared_ptr<editor::SensorPlaySession> sensors_;
         std::shared_ptr<editor::ScriptPlaySession> scripts_;
@@ -213,6 +235,9 @@ namespace threepp::player {
 
         std::function<void(const std::string&)> logger_;
         std::function<void()> drain_;
+        // Borrowed, and only read from the particle session's per-frame
+        // callback — never dereferenced between episodes.
+        Object3D* viewpointHost_ = nullptr;
 
         std::filesystem::path recordRoot_;
         bool recording_ = false;

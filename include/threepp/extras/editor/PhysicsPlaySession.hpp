@@ -17,11 +17,21 @@
 // no CUDA device is available, rather than failing the whole play attempt. A
 // soft body rewrites its mesh's vertex positions every step, which the snapshot
 // undoes on Stop exactly like a moved transform.
+//
+// An authored granular chute (GranularConfig) escalates the world the same way
+// and for the same reason, and additionally sizes the GPU heap from the grain
+// count it asks for. The grains are poured by GranularPlaySession, which
+// borrows this world and declines with one line when the fallback above left it
+// without a CUDA context.
 
 #ifndef THREEPP_EDITOR_PHYSICSPLAYSESSION_HPP
 #define THREEPP_EDITOR_PHYSICSPLAYSESSION_HPP
 
 #include "threepp/extras/editor/ArticulationConfig.hpp"
+// Read here for the GPU escalation only: a granular chute needs the same CUDA
+// world a soft body does, and a heap sized for the grains it authored. The
+// grains themselves are GranularPlaySession's, one session over.
+#include "threepp/extras/editor/GranularConfig.hpp"
 #include "threepp/extras/editor/JointConfig.hpp"
 #include "threepp/extras/editor/PhysicsConfig.hpp"
 #include "threepp/extras/editor/PlaySession.hpp"
@@ -564,7 +574,17 @@ namespace threepp::editor {
 
             std::vector<Object3D*> targets;
             bool wantsSoftBodies = false;
+            // Granular chutes want the same CUDA world soft bodies do, and they
+            // want a GPU HEAP sized for the grains they authored. A chute is a
+            // plain Group carrying one userData entry — never a rigid body — so
+            // this rides the same walk without touching the branch below.
+            bool wantsParticles = false;
+            std::size_t grainCapacity = 0;
             scene.traverse([&](Object3D& object) {
+                if (const auto granular = GranularConfig::read(object)) {
+                    wantsParticles = true;
+                    grainCapacity += static_cast<std::size_t>(std::max(1, granular->capacity));
+                }
                 if (const auto config = PhysicsConfig::read(object); config && config->enabled) {
                     // A node inside an articulated robot's subtree is already a
                     // simulated link; a second rigid body over it would double the
@@ -577,7 +597,7 @@ namespace threepp::editor {
                 }
             });
 
-            createWorld(wantsSoftBodies);
+            createWorld(wantsSoftBodies, wantsParticles, grainCapacity);
             lifetime_ = std::make_shared<const char>('\0');
             active_ = this;
 
@@ -1295,11 +1315,25 @@ namespace threepp::editor {
         // it costs a CUDA context (and the PhysX GPU DLLs) on every Play press,
         // and a machine without a CUDA device cannot create one at all. If the
         // GPU world fails to come up, the rigid bodies still get to run.
-        void createWorld(bool wantsSoftBodies) {
+        void createWorld(bool wantsSoftBodies, bool wantsParticles, std::size_t grainCapacity) {
 
             auto settings = settings_;
-            gpu_ = settings.enableGpuDynamics || wantsSoftBodies;
+            gpu_ = settings.enableGpuDynamics || wantsSoftBodies || wantsParticles;
             settings.enableGpuDynamics = gpu_;
+
+            if (wantsParticles) {
+                // A PBD system allocates its particle state, its neighbourhood
+                // grid and its contact buffers out of the GPU heap, and the
+                // 64 MB default is a handful of grains. Sized by the authored
+                // total, in powers of two because that is what the setting is
+                // (PhysxWorld multiplies it into PxgDynamicsMemoryConfig::
+                // heapCapacity) — and never DOWN from what the caller asked
+                // for, which may have been sized for something else entirely.
+                const unsigned wanted = grainCapacity <= 250000 ? 512u
+                                      : grainCapacity <= 1000000 ? 1024u
+                                                                 : 2048u;
+                settings.gpuHeapCapacityMB = std::max(settings.gpuHeapCapacityMB, wanted);
+            }
 
             if (!gpu_) {
                 world_ = std::make_unique<PhysxWorld>(settings);
@@ -1311,7 +1345,7 @@ namespace threepp::editor {
                 gpu_ = false;
                 settings.enableGpuDynamics = false;
                 world_ = std::make_unique<PhysxWorld>(settings);
-                log(std::string("physics: soft bodies need a CUDA GPU (") + e.what() +
+                log(std::string("physics: soft bodies / granular need a CUDA GPU (") + e.what() +
                     ") - playing the rigid bodies only");
             }
         }

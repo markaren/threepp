@@ -11,6 +11,7 @@
 #include "threepp/extras/editor/SoundConfig.hpp"
 #include "threepp/extras/editor/GeneratorConfig.hpp"
 #include "threepp/extras/editor/MaterialTextureSlots.hpp"
+#include "threepp/extras/editor/ParticleFieldPlaySession.hpp"
 #include "threepp/extras/editor/RobotConfig.hpp"
 #include "threepp/extras/editor/ScriptConfig.hpp"
 #include "threepp/extras/editor/ScriptWorkspace.hpp"
@@ -33,6 +34,7 @@
 #include "threepp/extras/editor/SensorPlaySession.hpp"
 #ifdef THREEPP_EDITOR_WITH_PHYSX
 #include "threepp/extras/editor/ConveyorPlaySession.hpp"
+#include "threepp/extras/editor/GranularPlaySession.hpp"
 #include "threepp/extras/editor/PhysicsPlaySession.hpp"
 #include "threepp/extras/editor/PhysxSensorPlaySession.hpp"
 #endif
@@ -436,6 +438,13 @@ EditorApp::EditorApp(const Options& options)
     conveyors_->name = "__editor_conveyors";
     overlay_->add(conveyors_);
 
+    // The preview fields. Editor-only through the overlay, so a ParticleField —
+    // which has no ObjectLoader case and would export as its zero-area
+    // placeholder — can never reach a saved document.
+    particles_ = Group::create();
+    particles_->name = "__editor_particles";
+    overlay_->add(particles_);
+
     // Editor-only like the overlay, but a SIBLING of it rather than a child: the
     // overlay is hidden for the duration of every sensor scan (a depth camera
     // pointed at the grid otherwise measures the grid), and a sensor must not be
@@ -509,6 +518,10 @@ EditorApp::EditorApp(const Options& options)
         clearViewportMarkers();
         clearSplineOverlays();
         clearConveyorOverlays();
+        // Keyed by the outgoing scene's uuids, and each preview field is a
+        // structural scene change the next sync rebuilds from whatever the new
+        // graph authored.
+        clearParticleOverlays();
         clearTreeOverlays();
         // The rings are keyed by the outgoing scene's uuid; the audition is
         // playing a file for a node that is about to stop existing.
@@ -616,6 +629,38 @@ EditorApp::EditorApp(const Options& options)
     conveyorSession_->setPhysics(physics_.get());
     play_.addSession(conveyorSession_);
 #endif
+    // Right after the conveyor, and OUTSIDE its guard: a particle field needs a
+    // renderer rather than a physics world, so it plays in every build. The
+    // previews are parked for the duration (ParticleOverlay) and this session
+    // owns its own fields and its own clock from t = 0.
+    particleSession_ = std::make_shared<ParticleFieldPlaySession>();
+    particleSession_->setRenderer(renderer_.get());
+    // The viewport camera, asked for per frame rather than pinned: the ortho
+    // views have cameras of their own, and the preview overlay follows the same
+    // one (syncParticleOverlays), so a follow field wraps about the same point
+    // whether the scene is being authored or played.
+    particleSession_->setViewpoint([this] {
+        Vector3 position;
+        viewCamera().getWorldPosition(position);
+        return position;
+    });
+    particleSession_->setLogger([this](const std::string& message) { log(message); });
+    play_.addSession(particleSession_);
+
+#ifdef THREEPP_EDITOR_WITH_PHYSX
+    // Right after the particle fields and back inside the PhysX guard: grains
+    // are a PBD simulation in the world physics built, so this borrows that
+    // world exactly as the conveyor does — and emits BETWEEN steps, which is
+    // what registering after the physics session buys. It needs the renderer
+    // too, but only to ask which backend it is: that resolves the authored
+    // "auto" visual to a particle field on Vulkan and an InstancedMesh on GL.
+    granularSession_ = std::make_shared<GranularPlaySession>();
+    granularSession_->setPhysics(physics_.get());
+    granularSession_->setRenderer(renderer_.get());
+    granularSession_->setLogger([this](const std::string& message) { log(message); });
+    play_.addSession(granularSession_);
+#endif
+
     play_.addSession(std::make_shared<AnimationPlaySession>());
 #ifdef THREEPP_WITH_AUDIO
     // Sounds. Kept as a member for the status readout and the selftest. Its
@@ -828,7 +873,7 @@ void EditorApp::frame(float dt) {
     // the camera, so it is re-derived every frame rather than on view changes.
     updateGridPlacement();
 
-    refreshSelectionHelpers();
+    refreshSelectionHelpers(dt);
 
     // Dynamic splat LOD, before the render so this frame draws the choice.
     // Only clouds imported with a multi-level table participate (lodTable()
@@ -3216,7 +3261,7 @@ void EditorApp::renderCameraPreview() {
     preview_.active = true;
 }
 
-void EditorApp::refreshSelectionHelpers() {
+void EditorApp::refreshSelectionHelpers(float dt) {
 
     if (selectionBox_ && selection_.get()) {
         selectionBox_->update();
@@ -3237,6 +3282,7 @@ void EditorApp::refreshSelectionHelpers() {
     syncViewportMarkers();
     syncSplineOverlays();
     syncConveyorOverlays();
+    syncParticleOverlays(dt);
     syncTreeOverlays();
     syncPhysicsDebug();
     syncDebugDraw();
@@ -3895,6 +3941,10 @@ void EditorApp::applyAuthoringVisibility() {
     if (jointHelper_ && !visible) jointHelper_->visible = false;
     // And the wheel rings, through syncVehicleHelper.
     if (vehicleHelper_ && !visible) vehicleHelper_->visible = false;
+    // And the spawn slab, through syncParticleHelper. The preview FIELDS are
+    // deliberately not here: they are the scene's weather, not a statement
+    // about what is being edited, and Play parks them by count instead.
+    if (particleHelper_ && !visible) particleHelper_->visible = false;
 }
 
 bool EditorApp::gizmoActive() const {

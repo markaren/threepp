@@ -193,6 +193,10 @@ void PlayerApp::buildView() {
         // still load and still play, they are just not spatialized around
         // anyone.
         core_.setAudioListenerHost(&camera_);
+        // And the same camera is the viewpoint a follow-authored particle field
+        // wraps its spawn box about — the editor's Play follows its viewport
+        // camera for the same reason.
+        core_.setViewpointHost(&camera_);
 
         canvas_->onWindowResize([this](WindowSize size) {
             camera_.aspect = size.aspect();

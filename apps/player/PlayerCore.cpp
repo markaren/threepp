@@ -2,10 +2,12 @@
 #include "PlayerCore.hpp"
 
 #include "threepp/extras/editor/AnimationPlaySession.hpp"
+#include "threepp/extras/editor/ParticleFieldPlaySession.hpp"
 #include "threepp/extras/editor/SensorPlaySession.hpp"
 
 #ifdef THREEPP_EDITOR_WITH_PHYSX
 #include "threepp/extras/editor/ConveyorPlaySession.hpp"
+#include "threepp/extras/editor/GranularPlaySession.hpp"
 #include "threepp/extras/editor/PhysicsPlaySession.hpp"
 #include "threepp/extras/editor/PhysxSensorPlaySession.hpp"
 #endif
@@ -79,6 +81,32 @@ PlayerCore::PlayerCore() {
     play_.addSession(conveyor_);
 #endif
 
+    // Right after the conveyor and outside its guard, exactly as in the editor:
+    // an authored particle field needs a renderer rather than a physics world,
+    // so it plays in every build. On a backend that cannot draw it — which is
+    // every headless run — the session says so once and still COUNTS the nodes,
+    // because a document that has a field and reports none is the regression.
+    particles_ = std::make_shared<editor::ParticleFieldPlaySession>();
+    particles_->setLogger([this](const std::string& message) { log(message); });
+    particles_->setViewpoint([this] {
+        Vector3 position;
+        if (viewpointHost_) viewpointHost_->getWorldPosition(position);
+        return position;
+    });
+    play_.addSession(particles_);
+
+#ifdef THREEPP_EDITOR_WITH_PHYSX
+    // Right after the fields and back inside the PhysX guard, as in the editor:
+    // grains are a PBD simulation in the world physics built, borrowed the same
+    // way the belts are, and emitted between its steps. No renderer is set here
+    // — a headless run has none — which resolves the authored "auto" visual to
+    // the InstancedMesh, the one that does not need Vulkan.
+    granular_ = std::make_shared<editor::GranularPlaySession>();
+    granular_->setPhysics(physics_.get());
+    granular_->setLogger([this](const std::string& message) { log(message); });
+    play_.addSession(granular_);
+#endif
+
     play_.addSession(std::make_shared<editor::AnimationPlaySession>());
 
 #ifdef THREEPP_WITH_AUDIO
@@ -138,6 +166,8 @@ PlayerCore::~PlayerCore() {
     scripts_.reset();
     sensors_.reset();
     audio_.reset();
+    granular_.reset();
+    particles_.reset();
     conveyor_.reset();
     physics_.reset();
 
@@ -159,6 +189,20 @@ void PlayerCore::setLogger(std::function<void(const std::string&)> logger) {
 void PlayerCore::setRenderer(Renderer* renderer) {
 
     if (sensors_) sensors_->setRenderer(renderer);
+    // The particle session only ever asks the renderer WHICH BACKEND it is:
+    // ParticleField draws on Vulkan and nowhere else, so a headless run (null)
+    // and a GL run both take the skip-visuals path.
+    if (particles_) particles_->setRenderer(renderer);
+#ifdef THREEPP_EDITOR_WITH_PHYSX
+    // Same question, different answer: the granular session has an InstancedMesh
+    // to fall back on, so what the backend picks is which visual, not whether.
+    if (granular_) granular_->setRenderer(renderer);
+#endif
+}
+
+void PlayerCore::setViewpointHost(Object3D* host) {
+
+    viewpointHost_ = host;
 }
 
 void PlayerCore::setAudioListenerHost(Object3D* host) {
@@ -258,9 +302,11 @@ bool PlayerCore::beginEpisode(int index, std::string* error) {
 
     // Read while the sessions are up: stop() drops the entries these count.
     if (sensors_) current_.sensorCount = sensors_->sensorCount();
+    if (particles_) current_.particleFieldCount = particles_->fieldNodeCount();
 #ifdef THREEPP_EDITOR_WITH_PHYSX
     if (physics_) current_.bodyCount = physics_->bodyCount();
     if (conveyor_) current_.conveyorCount = conveyor_->conveyorCount();
+    if (granular_) current_.granularCount = granular_->granularNodeCount();
 #endif
 #ifdef THREEPP_EDITOR_WITH_PYTHON
     if (scripts_) current_.scriptInstances = scripts_->instanceCount();

@@ -8,9 +8,11 @@
 #include "threepp/extras/editor/ArticulationConfig.hpp"
 #include "threepp/extras/editor/ConveyorConfig.hpp"
 #include "threepp/extras/editor/GeneratorConfig.hpp"
+#include "threepp/extras/editor/GranularConfig.hpp"
 #include "threepp/extras/editor/JointConfig.hpp"
 #include "threepp/extras/editor/MaterialTextureSlots.hpp"
 #include "threepp/extras/editor/ObjectFactory.hpp"
+#include "threepp/extras/editor/ParticleFieldConfig.hpp"
 #include "threepp/extras/editor/PhysicsConfig.hpp"
 #include "threepp/extras/editor/RobotConfig.hpp"
 #include "threepp/extras/editor/ScriptConfig.hpp"
@@ -284,6 +286,8 @@ void EditorApp::drawInspector() {
         drawJointsSection(*selected);
         drawSplineSection(*selected);
         drawConveyorSection(*selected);
+        drawParticleFieldSection(*selected);
+        drawGranularSection(*selected);
         drawSoundSection(*selected);
         drawTextSection(*selected);
         drawTreeSection(*selected);
@@ -3939,6 +3943,417 @@ void EditorApp::drawConveyorSection(Object3D& object) {
     ImGui::TextColored(theme::muted(), "Pick a waypoint for rounded corners and per-segment surfaces.");
     ImGui::TextColored(theme::muted(), "Play drives the belt; bodies and soft bodies convey.");
     ImGui::TextColored(theme::muted(), "Stored in userData[\"conveyor\"]");
+
+    ImGui::TreePop();
+}
+
+
+// ---------------------------------------------------------------- particles
+
+void EditorApp::drawParticleFieldSection(Object3D& object) {
+
+    if (!ParticleFieldConfig::isParticleField(object)) return;
+    if (!section("Particle Field")) return;
+
+    using Config = ParticleFieldConfig;
+
+    auto* target = &object;
+    const auto config = Config::read(object).value_or(Config{});
+
+    // Only the config is edited here. The preview FIELD is derived state
+    // syncParticleOverlays follows — which is also what keeps undo cheap and
+    // what makes a structural edit (capacity, radius, proxy, resolution) an
+    // ordinary property write rather than a special case.
+    const auto commit = [&](Config after, std::string label) {
+        commands_.execute(makeProperty<Config>(
+                std::move(label), "particles:" + object.uuid,
+                [target](const Config& value) { value.write(*target); },
+                config, std::move(after)));
+        document_.setDirty(true);
+    };
+
+    // The widget shapes, written once and driven by pointer-to-member: this
+    // config has seventy knobs, and seventy hand-inlined copies of the
+    // transaction dance is how one of them ends up missing its
+    // beginTransaction (the tree section's argument, at twice the scale).
+    const auto dragFloat = [&](const char* label, float Config::* field, float step,
+                               float lo, float hi, const char* format = "%.3f") {
+        float value = config.*field;
+        const bool changed = ImGui::DragFloat(label, &value, step, lo, hi, format);
+        if (ImGui::IsItemActivated()) commands_.beginTransaction();
+        if (changed) {
+            auto after = config;
+            after.*field = std::clamp(value, lo, hi);
+            commit(std::move(after), std::string("Particles ") + label);
+        }
+        if (ImGui::IsItemDeactivated()) commands_.endTransaction();
+    };
+
+    const auto dragVec3 = [&](const char* label, Vector3 Config::* field, float step,
+                              float lo, float hi) {
+        const Vector3& current = config.*field;
+        float value[3]{current.x, current.y, current.z};
+        const bool changed = ImGui::DragFloat3(label, value, step, lo, hi, "%.3f");
+        if (ImGui::IsItemActivated()) commands_.beginTransaction();
+        if (changed) {
+            auto after = config;
+            (after.*field).set(std::clamp(value[0], lo, hi), std::clamp(value[1], lo, hi),
+                               std::clamp(value[2], lo, hi));
+            commit(std::move(after), std::string("Particles ") + label);
+        }
+        if (ImGui::IsItemDeactivated()) commands_.endTransaction();
+    };
+
+    const auto colorField = [&](const char* label, Color Config::* field) {
+        float value[3];
+        toSrgbFloats(config.*field, value);
+        const bool changed = ImGui::ColorEdit3(label, value);
+        if (ImGui::IsItemActivated()) commands_.beginTransaction();
+        if (changed) {
+            auto after = config;
+            after.*field = fromSrgbFloats(value);
+            commit(std::move(after), std::string("Particles ") + label);
+        }
+        if (ImGui::IsItemDeactivated()) commands_.endTransaction();
+    };
+
+    // Checkboxes are one click, one undo step — no transaction.
+    const auto toggle = [&](const char* label, bool Config::* field) {
+        bool value = config.*field;
+        if (ImGui::Checkbox(label, &value)) {
+            auto after = config;
+            after.*field = value;
+            commit(std::move(after), std::string("Particles ") + label);
+        }
+        return config.*field;
+    };
+
+    // --- presets ----------------------------------------------------------
+    // Buttons rather than a combo showing the current one: a preset replaces
+    // every field, so after one edit the config no longer names a preset and a
+    // combo would have to lie about which.
+    struct Preset {
+        const char* label;
+        Config (*make)();
+    };
+    static constexpr Preset presets[]{{"Snow", &Config::snow},
+                                      {"Rain", &Config::rain},
+                                      {"Embers", &Config::embers},
+                                      {"Motes", &Config::motes}};
+    ImGui::TextUnformatted("Preset");
+    for (const auto& preset : presets) {
+        ImGui::SameLine();
+        if (ImGui::Button(preset.label)) {
+            commit(preset.make(), std::string("Particles ") + preset.label);
+        }
+        // Inside the loop: IsItemHovered() reads the item just submitted.
+        if (ImGui::IsItemHovered()) {
+            ImGui::SetTooltip("%s. Four points in one parameter space - this replaces "
+                              "every field.",
+                              preset.label);
+        }
+    }
+
+    if (!particlePreviewAvailable()) {
+        ImGui::TextColored(theme::muted(),
+                           "Particles render on the Vulkan backend only - preview disabled (--vulkan)");
+    }
+
+    ImGui::PushItemWidth(-130 * contentScale_);
+
+    // --- structural -------------------------------------------------------
+    // A field is created once at its final capacity and never resized, and a
+    // density volume's resolution is latched at first enable, so these four
+    // destroy and rebuild the preview instead of being pushed into it. Edits
+    // still just work; the rebuild absorbs them.
+    ImGui::SeparatorText("Rebuild");
+    {
+        int capacity = config.capacity;
+        const bool changed = ImGui::DragInt("Capacity", &capacity, 250.f, 1, 5000000);
+        if (ImGui::IsItemActivated()) commands_.beginTransaction();
+        if (changed) {
+            auto after = config;
+            after.capacity = std::max(capacity, 1);
+            commit(std::move(after), "Particles Capacity");
+        }
+        if (ImGui::IsItemDeactivated()) commands_.endTransaction();
+    }
+    dragFloat("Radius", &Config::radius, 0.001f, 0.0001f, 1.f, "%.4f");
+    {
+        int proxy = static_cast<int>(config.proxy);
+        if (ImGui::Combo("Proxy", &proxy, "None\0Sphere\0Flake\0")) {
+            auto after = config;
+            after.proxy = static_cast<Config::Proxy>(proxy);
+            commit(std::move(after), "Particles Proxy");
+        }
+    }
+    {
+        int resolution = config.densityResolution;
+        const bool changed = ImGui::DragInt("Density Res", &resolution, 1.f, 8, 256);
+        if (ImGui::IsItemActivated()) commands_.beginTransaction();
+        if (changed) {
+            auto after = config;
+            after.densityResolution = std::clamp(resolution, 8, 256);
+            commit(std::move(after), "Particles Density Res");
+        }
+        if (ImGui::IsItemDeactivated()) commands_.endTransaction();
+    }
+
+    // --- emitter ----------------------------------------------------------
+    ImGui::SeparatorText("Emitter");
+    dragVec3("Velocity", &Config::velocity, 0.05f, -100.f, 100.f);
+    dragFloat("Speed Spread", &Config::speedSpread, 0.01f, 0.f, 10.f);
+    dragVec3("Accel", &Config::accel, 0.01f, -50.f, 50.f);
+    dragVec3("Wind", &Config::wind, 0.01f, -50.f, 50.f);
+    dragVec3("Spawn Extent", &Config::spawnHalfExtent, 0.05f, 0.001f, 500.f);
+    ImGui::TextColored(theme::muted(),
+                       "A THIN slab swept over velocity x lifetime is the steady cloud.");
+    dragFloat("Lifetime", &Config::lifetime, 0.05f, 0.001f, 600.f, "%.2f");
+    dragFloat("Life Jitter", &Config::lifetimeJitter, 0.01f, 0.f, 1.f);
+    dragFloat("Duty Cycle", &Config::dutyCycle, 0.01f, 0.001f, 1.f);
+    dragFloat("Size", &Config::size, 0.001f, 0.f, 10.f, "%.4f");
+    dragFloat("Size Jitter", &Config::sizeJitter, 0.01f, 0.f, 1.f);
+    dragFloat("Drift Amplitude", &Config::driftAmplitude, 0.01f, 0.f, 20.f);
+    dragFloat("Drift Frequency", &Config::driftFrequency, 0.01f, 0.f, 20.f);
+    dragFloat("Drift Growth", &Config::driftGrowth, 0.01f, 0.f, 1.f);
+    dragFloat("Drift Scale", &Config::driftScale, 0.1f, 0.f, 200.f, "%.2f");
+    {
+        int seed = config.seed;
+        if (ImGui::InputInt("Seed", &seed)) {
+            auto after = config;
+            after.seed = std::max(seed, 0);
+            commit(std::move(after), "Particles Seed");
+        }
+    }
+    if (toggle("Follow Camera", &Config::follow)) {
+        dragFloat("Follow Snap", &Config::followSnap, 0.05f, 0.f, 100.f, "%.2f");
+        ImGui::TextColored(theme::muted(),
+                           "Snap an INTEGER number of density voxels, or the haze swims.");
+    }
+
+    // --- surface landing --------------------------------------------------
+    ImGui::SeparatorText("Surface Landing");
+    if (toggle("Land on Surfaces", &Config::surface)) {
+        dragFloat("Rest Seconds", &Config::surfaceRest, 0.05f, 0.f, 60.f, "%.2f");
+        dragFloat("Rest Jitter", &Config::surfaceRestJitter, 0.01f, 0.f, 1.f);
+        dragFloat("Fade Seconds", &Config::surfaceFade, 0.05f, 0.f, 60.f, "%.2f");
+        dragFloat("Bias", &Config::surfaceBias, 0.001f, 0.f, 1.f, "%.4f");
+        dragFloat("Splash Seconds", &Config::surfaceSplash, 0.01f, 0.f, 10.f);
+        if (config.surfaceSplash > 0.f) {
+            dragFloat("Splash Grow", &Config::surfaceSplashGrow, 0.1f, 1.f, 64.f, "%.2f");
+        }
+        {
+            int resolution = config.surfaceResolution;
+            const bool changed = ImGui::DragInt("Bake Res", &resolution, 1.f, 16, 1024);
+            if (ImGui::IsItemActivated()) commands_.beginTransaction();
+            if (changed) {
+                auto after = config;
+                after.surfaceResolution = std::clamp(resolution, 16, 1024);
+                commit(std::move(after), "Particles Bake Res");
+            }
+            if (ImGui::IsItemDeactivated()) commands_.endTransaction();
+        }
+        ImGui::TextColored(theme::muted(), "Particles rest and FADE; they do not pile up.");
+    }
+
+    // --- representations --------------------------------------------------
+    ImGui::SeparatorText("Mesh Proxy");
+    if (toggle("Draw Proxies", &Config::mesh)) {
+        if (config.proxy == Config::Proxy::None) {
+            ImGui::TextColored(theme::warning(), "Proxy is None - nothing to draw.");
+        }
+        dragFloat("LOD Far", &Config::meshLodFar, 0.1f, 0.f, 500.f, "%.2f");
+        dragFloat("LOD Fade", &Config::meshLodFade, 0.1f, 0.f, 500.f, "%.2f");
+        dragFloat("Near Cull", &Config::meshNearCull, 0.05f, 0.f, 50.f, "%.2f");
+        if (config.billboard && config.meshLodFar > 0.f) {
+            ImGui::TextColored(theme::muted(),
+                               "Sprites fade in over the same band the proxies shrink out over.");
+        }
+    }
+
+    ImGui::SeparatorText("Billboard");
+    if (toggle("Draw Sprites", &Config::billboard)) {
+        colorField("Hot Color", &Config::colorHot);
+        colorField("Cool Color", &Config::colorCool);
+        dragFloat("Intensity", &Config::billboardIntensity, 0.01f, 0.f, 100.f, "%.3f");
+        dragFloat("Sprite Size", &Config::billboardSize, 0.01f, 0.0001f, 50.f);
+        dragFloat("Softness", &Config::billboardSoftness, 0.01f, 0.f, 1.f);
+        dragFloat("Fade Power", &Config::billboardFade, 0.01f, 0.f, 8.f);
+        dragFloat("Bright Jitter", &Config::billboardJitter, 0.01f, 0.f, 1.f);
+        dragFloat("Size Taper", &Config::billboardTaper, 0.01f, 0.f, 1.f);
+        dragFloat("Stretch (s)", &Config::billboardStretch, 0.001f, 0.f, 1.f, "%.4f");
+        if (config.billboardStretch > 0.f) {
+            dragFloat("Stretch Max", &Config::billboardStretchMax, 0.5f, 1.f, 200.f, "%.1f");
+        }
+        dragFloat("Near Fade", &Config::billboardNearFade, 0.01f, 0.f, 20.f);
+        dragFloat("Glow", &Config::billboardGlow, 0.1f, 0.f, 64.f, "%.2f");
+        if (config.billboardGlow > 0.f) {
+            dragFloat("Glow Threshold", &Config::billboardGlowThreshold, 0.01f, 0.f, 20.f);
+        }
+        ImGui::TextColored(theme::muted(), "Additive and unlit - an ember IS the light source.");
+    }
+
+    ImGui::SeparatorText("Density Volume");
+    if (toggle("Scatter into a Volume", &Config::density)) {
+        dragFloat("Sigma / Particle", &Config::sigma, 0.001f, 0.0001f, 100.f, "%.4f");
+        colorField("Albedo", &Config::albedo);
+        dragFloat("Anisotropy", &Config::anisotropy, 0.01f, -0.95f, 0.95f);
+        dragVec3("Volume Extent", &Config::densityHalfExtent, 0.1f, 0.001f, 500.f);
+
+        // Warning only, and deliberately: the renderer REPORTS an overflow
+        // rather than dropping a volume, so refusing the fifth here would be
+        // stricter than the thing it is warning about.
+        const int used = particleDensityCount();
+        if (used > Config::maxDensityFields) {
+            ImGui::TextColored(theme::warning(), "%d of %d density volumes in scene",
+                               used, Config::maxDensityFields);
+        } else {
+            ImGui::TextColored(theme::muted(), "%d of %d density volumes in scene",
+                               used, Config::maxDensityFields);
+        }
+
+        // Fire, and only fire, needs these — a dust or snow field has no
+        // emission path at all while emissiveIntensity is 0.
+        if (ImGui::TreeNodeEx("Advanced", ImGuiTreeNodeFlags_SpanAvailWidth)) {
+            dragFloat("Emissive", &Config::emissiveIntensity, 0.5f, 0.f, 500.f, "%.1f");
+            if (config.emissiveIntensity > 0.f) {
+                dragFloat("Temp Bottom (K)", &Config::tempBottom, 10.f, 300.f, 6000.f, "%.0f");
+                dragFloat("Temp Top (K)", &Config::tempTop, 10.f, 300.f, 6000.f, "%.0f");
+                dragFloat("Temp Falloff", &Config::tempFalloff, 0.05f, 0.05f, 8.f, "%.2f");
+            }
+            ImGui::TreePop();
+        }
+    }
+
+    ImGui::PopItemWidth();
+
+    ImGui::TextColored(theme::muted(), "The node's transform IS the emitter frame.");
+    ImGui::TextColored(theme::muted(), "Stored in userData[\"particles\"]");
+
+    ImGui::TreePop();
+}
+
+void EditorApp::drawGranularSection(Object3D& object) {
+
+    if (!GranularConfig::isGranular(object)) return;
+    if (!section("Granular Particles")) return;
+
+    using Config = GranularConfig;
+
+    auto* target = &object;
+    const auto config = Config::read(object).value_or(Config{});
+
+    const auto commit = [&](Config after, std::string label) {
+        commands_.execute(makeProperty<Config>(
+                std::move(label), "granular:" + object.uuid,
+                [target](const Config& value) { value.write(*target); },
+                config, std::move(after)));
+        document_.setDirty(true);
+    };
+
+    const auto dragFloat = [&](const char* label, float Config::* field, float step,
+                               float lo, float hi, const char* format = "%.3f") {
+        float value = config.*field;
+        const bool changed = ImGui::DragFloat(label, &value, step, lo, hi, format);
+        if (ImGui::IsItemActivated()) commands_.beginTransaction();
+        if (changed) {
+            auto after = config;
+            after.*field = std::clamp(value, lo, hi);
+            commit(std::move(after), std::string("Granular ") + label);
+        }
+        if (ImGui::IsItemDeactivated()) commands_.endTransaction();
+    };
+
+    ImGui::PushItemWidth(-130 * contentScale_);
+
+    ImGui::SeparatorText("Grains");
+    // Grain diameter: the render radius is half of it and everything else
+    // derives from it, which is why it is the first knob and not a detail.
+    dragFloat("Spacing", &Config::spacing, 0.002f, 0.002f, 1.f, "%.4f");
+    {
+        int capacity = config.capacity;
+        const bool changed = ImGui::DragInt("Capacity", &capacity, 250.f, 1, 4000000);
+        if (ImGui::IsItemActivated()) commands_.beginTransaction();
+        if (changed) {
+            auto after = config;
+            after.capacity = std::max(capacity, 1);
+            commit(std::move(after), "Granular Capacity");
+        }
+        if (ImGui::IsItemDeactivated()) commands_.endTransaction();
+    }
+    {
+        int iterations = config.iterations;
+        const bool changed = ImGui::DragInt("Iterations", &iterations, 0.25f, 1, 32);
+        if (ImGui::IsItemActivated()) commands_.beginTransaction();
+        if (changed) {
+            auto after = config;
+            after.iterations = std::clamp(iterations, 1, 32);
+            commit(std::move(after), "Granular Iterations");
+        }
+        if (ImGui::IsItemDeactivated()) commands_.endTransaction();
+    }
+    dragFloat("Max Velocity", &Config::maxVelocity, 0.1f, 0.f, 200.f, "%.2f");
+    ImGui::TextColored(theme::muted(), "Max Velocity 0 derives a clamp from the spacing.");
+
+    ImGui::SeparatorText("Material");
+    // The repose angle of a heap IS its internal friction; cohesion is the
+    // other half of how steep a pile stands.
+    dragFloat("Friction", &Config::friction, 0.01f, 0.f, 2.f);
+    dragFloat("Damping", &Config::damping, 0.01f, 0.f, 10.f);
+    dragFloat("Adhesion", &Config::adhesion, 0.01f, 0.f, 10.f);
+    dragFloat("Cohesion", &Config::cohesion, 0.01f, 0.f, 10.f);
+    dragFloat("Viscosity", &Config::viscosity, 0.01f, 0.f, 10.f);
+    dragFloat("Gravity Scale", &Config::gravityScale, 0.01f, -4.f, 4.f);
+
+    ImGui::SeparatorText("Chute");
+    dragFloat("Mouth X", &Config::emitExtentX, 0.01f, 0.001f, 20.f);
+    dragFloat("Mouth Z", &Config::emitExtentZ, 0.01f, 0.001f, 20.f);
+    dragFloat("Rate (/s)", &Config::rate, 25.f, 0.f, 500000.f, "%.0f");
+    {
+        const Vector3& current = config.emitVelocity;
+        float value[3]{current.x, current.y, current.z};
+        const bool changed = ImGui::DragFloat3("Pour Velocity", value, 0.05f, -50.f, 50.f, "%.3f");
+        if (ImGui::IsItemActivated()) commands_.beginTransaction();
+        if (changed) {
+            auto after = config;
+            after.emitVelocity.set(value[0], value[1], value[2]);
+            commit(std::move(after), "Granular Pour Velocity");
+        }
+        if (ImGui::IsItemDeactivated()) commands_.endTransaction();
+    }
+    dragFloat("Mass", &Config::mass, 0.01f, 0.f, 100.f);
+    dragFloat("Pour For (s)", &Config::emitFor, 0.1f, 0.f, 600.f, "%.2f");
+    dragFloat("Lattice Jitter", &Config::jitter, 0.01f, 0.f, 1.f);
+    ImGui::TextColored(theme::muted(), "Mass 0 = 1 kg; Pour For 0 = until capacity.");
+
+    ImGui::SeparatorText("Visual");
+    {
+        int visual = static_cast<int>(config.visual);
+        if (ImGui::Combo("Draw As", &visual, "Auto\0Instanced\0Field\0")) {
+            auto after = config;
+            after.visual = static_cast<Config::Visual>(visual);
+            commit(std::move(after), "Granular Visual");
+        }
+    }
+    {
+        float value[3];
+        toSrgbFloats(config.color, value);
+        const bool changed = ImGui::ColorEdit3("Grain Color", value);
+        if (ImGui::IsItemActivated()) commands_.beginTransaction();
+        if (changed) {
+            auto after = config;
+            after.color = fromSrgbFloats(value);
+            commit(std::move(after), "Granular Grain Color");
+        }
+        if (ImGui::IsItemDeactivated()) commands_.endTransaction();
+    }
+    dragFloat("Roughness", &Config::roughness, 0.01f, 0.f, 1.f);
+
+    ImGui::PopItemWidth();
+
+    ImGui::TextColored(theme::muted(), "The node's transform IS the chute frame; -Y pours down.");
+    ImGui::TextColored(theme::muted(), "Grains are a PhysX PBD sim - they exist only while playing.");
+    ImGui::TextColored(theme::muted(), "Stored in userData[\"granular\"]");
 
     ImGui::TreePop();
 }
