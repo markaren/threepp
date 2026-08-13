@@ -2,13 +2,67 @@
 """Automated GUIDED flight test against the threepp SITL backend.
 
 Connects to ArduCopter SITL (started with --no-mavproxy), waits for EKF,
-then: GUIDED -> arm -> takeoff 10 m -> 3 m/s north for 5 s -> LAND.
+then: GUIDED -> arm -> takeoff 10 m -> 3 m/s north for 5 s -> RTL.
 Exit 0 on a completed round trip, 1 on any timeout.
+
+With --tour: uploads a scenic waypoint loop over the valley (climbing to
+160 m — through the Vulkan cloud base) and flies it in AUTO at 8 m/s,
+ending with RTL onto the pad.
 """
 import sys
 import time
 
 from pymavlink import mavutil
+
+# Tour waypoints as (north, east, alt-above-home) metres. The terrain rises
+# to ~65 m above home outside the apron and waypoint altitudes are relative
+# to HOME (no terrain following), so every en-route leg stays >= 90 m; only
+# the final fix over the flat pad apron descends below that.
+TOUR = [
+    (180, 0, 95),
+    (180, 180, 110),
+    (0, 260, 130),
+    (-200, 180, 160),
+    (-200, -120, 120),
+    (60, -160, 100),
+    (0, 0, 40),
+]
+
+
+def upload_tour(m, home_lat, home_lon):
+    """Upload TOUR as a mission: takeoff, waypoints, RTL."""
+    import math
+    dlat = 1.0 / 111111.0
+    dlon = 1.0 / (111111.0 * math.cos(math.radians(home_lat / 1e7)))
+
+    def item(seq, cmd, n=0.0, e=0.0, alt=0.0):
+        return m.mav.mission_item_int_encode(
+                m.target_system, m.target_component, seq,
+                mavutil.mavlink.MAV_FRAME_GLOBAL_RELATIVE_ALT_INT, cmd,
+                0, 1, 0, 0, 0, 0,
+                int(home_lat + n * dlat * 1e7),
+                int(home_lon + e * dlon * 1e7),
+                alt)
+
+    items = [item(0, mavutil.mavlink.MAV_CMD_NAV_WAYPOINT),  # home placeholder
+             item(1, mavutil.mavlink.MAV_CMD_NAV_TAKEOFF, alt=30)]
+    for i, (n, e, alt) in enumerate(TOUR):
+        items.append(item(2 + i, mavutil.mavlink.MAV_CMD_NAV_WAYPOINT, n, e, alt))
+    items.append(item(len(items), mavutil.mavlink.MAV_CMD_NAV_RETURN_TO_LAUNCH))
+
+    m.mav.mission_count_send(m.target_system, m.target_component, len(items))
+    sent = 0
+    t0 = time.time()
+    while sent < len(items) and time.time() - t0 < 30:
+        msg = m.recv_match(type=["MISSION_REQUEST", "MISSION_REQUEST_INT", "MISSION_ACK"],
+                           blocking=True, timeout=5)
+        if msg is None:
+            continue
+        if msg.get_type() == "MISSION_ACK":
+            break
+        m.mav.send(items[msg.seq])
+        sent = max(sent, msg.seq + 1)
+    print(f"[fly] mission uploaded ({len(items)} items)")
 
 
 def wait_for(cond, timeout, what, tick=None):
@@ -25,7 +79,9 @@ def wait_for(cond, timeout, what, tick=None):
 
 
 def main():
-    url = sys.argv[1] if len(sys.argv) > 1 else "tcp:127.0.0.1:5760"
+    tour = "--tour" in sys.argv
+    args = [a for a in sys.argv[1:] if not a.startswith("--")]
+    url = args[0] if args else "tcp:127.0.0.1:5760"
     m = mavutil.mavlink_connection(url)
     print("[fly] waiting for autopilot heartbeat...")
     t0 = time.time()
@@ -42,7 +98,8 @@ def main():
     m.mav.request_data_stream_send(m.target_system, m.target_component,
                                    mavutil.mavlink.MAV_DATA_STREAM_ALL, 4, 1)
 
-    state = {"alt": 0.0, "armed": False, "ekf_ok": False, "mode": "", "rc_t": 0.0}
+    state = {"alt": 0.0, "armed": False, "ekf_ok": False, "mode": "", "rc_t": 0.0,
+             "lat": 0, "lon": 0, "wp": -1}
 
     def pump():
         # ArduPilot refuses to arm with no RC source ("throttle below
@@ -59,6 +116,12 @@ def main():
             t = msg.get_type()
             if t == "GLOBAL_POSITION_INT":
                 state["alt"] = msg.relative_alt / 1000.0
+                if state["lat"] == 0:
+                    state["lat"], state["lon"] = msg.lat, msg.lon
+            elif t == "MISSION_CURRENT":
+                if msg.seq != state["wp"]:
+                    state["wp"] = msg.seq
+                    print(f"[fly] waypoint {msg.seq}")
             elif t == "HEARTBEAT":
                 state["armed"] = bool(msg.base_mode & mavutil.mavlink.MAV_MODE_FLAG_SAFETY_ARMED)
                 state["mode"] = mavutil.mode_string_v10(msg)
@@ -103,23 +166,39 @@ def main():
     if not wait_for(lambda: state["alt"] > 9.0, 60, "reached 10 m", pump):
         return 1
 
-    # 3 m/s north for 5 s (velocity setpoint in LOCAL_NED)
-    print("[fly] velocity 3 m/s north for 5 s")
-    t0 = time.time()
-    while time.time() - t0 < 5:
-        m.mav.set_position_target_local_ned_send(
-                0, m.target_system, m.target_component,
-                mavutil.mavlink.MAV_FRAME_LOCAL_NED,
-                0b0000111111000111,  # velocity only
-                0, 0, 0, 3, 0, 0, 0, 0, 0, 0, 0)
-        pump()
-        time.sleep(0.2)
+    if tour:
+        # Scenic AUTO loop: mission was flyable-uploaded pre-arm would also
+        # work, but uploading now keeps the simple path identical to the
+        # basic test. A brisk pace makes the tour watchable.
+        if not wait_for(lambda: state["lat"] != 0, 20, "home position", pump):
+            return 1
+        m.mav.param_set_send(m.target_system, m.target_component,
+                             b"WPNAV_SPEED", 800, mavutil.mavlink.MAV_PARAM_TYPE_REAL32)
+        upload_tour(m, state["lat"], state["lon"])
+        m.set_mode_apm("AUTO")
+        if not wait_for(lambda: state["mode"] == "AUTO", 20, "mode AUTO", pump):
+            return 1
+        if not wait_for(lambda: not state["armed"] and state["alt"] < 0.5, 600,
+                        "tour flown, landed and disarmed", pump):
+            return 1
+    else:
+        # 3 m/s north for 5 s (velocity setpoint in LOCAL_NED)
+        print("[fly] velocity 3 m/s north for 5 s")
+        t0 = time.time()
+        while time.time() - t0 < 5:
+            m.mav.set_position_target_local_ned_send(
+                    0, m.target_system, m.target_component,
+                    mavutil.mavlink.MAV_FRAME_LOCAL_NED,
+                    0b0000111111000111,  # velocity only
+                    0, 0, 0, 3, 0, 0, 0, 0, 0, 0, 0)
+            pump()
+            time.sleep(0.2)
 
-    # Return to launch (flies back to the pad) + wait for disarm
-    m.set_mode_apm("RTL")
-    if not wait_for(lambda: not state["armed"] and state["alt"] < 0.5, 180,
-                    "returned, landed and disarmed", pump):
-        return 1
+        # Return to launch (flies back to the pad) + wait for disarm
+        m.set_mode_apm("RTL")
+        if not wait_for(lambda: not state["armed"] and state["alt"] < 0.5, 180,
+                        "returned, landed and disarmed", pump):
+            return 1
 
     print("[fly] PASS")
     return 0

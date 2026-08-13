@@ -20,7 +20,12 @@
 
 #include "threepp/extras/imgui/ImguiContext.hpp"
 #include "threepp/extras/terrain/DetailTexture.hpp"
+#include "threepp/extras/terrain/RockGeometry.hpp"
 #include "threepp/extras/terrain/TerrainGenerator.hpp"
+#include "threepp/extras/vegetation/GrassTiles.hpp"
+#ifdef THREEPP_WITH_VULKAN
+#include "threepp/renderers/VulkanRenderer.hpp"
+#endif
 #include "threepp/lights/AmbientLight.hpp"
 #include "threepp/lights/DirectionalLight.hpp"
 #include "threepp/materials/ShaderMaterial.hpp"
@@ -32,6 +37,7 @@
 #include <cstdio>
 #include <cstring>
 #include <limits>
+#include <random>
 #include <string>
 
 using namespace threepp;
@@ -289,6 +295,21 @@ int main(int argc, char** argv) {
     }
     scene.add(AmbientLight::create(Color(0.55f, 0.65f, 0.8f), 0.35f));
 
+#ifdef THREEPP_WITH_VULKAN
+    // Volumetric cloud deck (Vulkan deferred only). The base sits at 140 m so
+    // the mission tour's high leg brushes the bottom of the clouds.
+    if (auto* vk = dynamic_cast<VulkanRenderer*>(renderer.get())) {
+        VulkanRenderer::CloudSettings clouds;
+        clouds.coverage = 0.45f;
+        clouds.density = 1.0f;
+        clouds.bottomY = 140.f;
+        clouds.topY = 520.f;
+        clouds.wind = Vector3(10.f, 0.f, 4.f);
+        clouds.evolveSpeed = 1.0f;
+        vk->setClouds(clouds);
+    }
+#endif
+
     // Rolling-hills terrain, gentle at the center where the drone homes.
     // Hydraulic erosion carves drainage into the slopes (the ~1 s pass); all
     // home-height queries sample the eroded GEOMETRY, never heightAt(), which
@@ -341,19 +362,38 @@ int main(int argc, char** argv) {
             }
         }
     }
+    // Pond site (threepp coords, ~90 m northeast-ish of home).
+    constexpr float pondX = 70.f, pondZ = 55.f, pondR = 14.f;
+    float pondGroundY = 0.f;// terrain height at the pond centre, pre-carve
     {
-        // Level a helipad apron around home: within 4 m the ground is exactly
-        // h0 (so the pad never pokes through a rising slope), blending back to
-        // the raw terrain by 16 m. The physics trimesh is built from this same
-        // geometry, so contacts match the picture.
         auto* pos = terrainGeo->getAttribute<float>("position");
         auto& a = pos->array();
+
+        float best = std::numeric_limits<float>::max();
+        for (int i = 0; i < pos->count(); ++i) {
+            const float d = std::abs(a[i * 3 + 0] - pondX) + std::abs(a[i * 3 + 2] - pondZ);
+            if (d < best) {
+                best = d;
+                pondGroundY = a[i * 3 + 1];
+            }
+        }
+
+        // Level a helipad apron around home: within 4 m the ground is exactly
+        // h0 (so the pad never pokes through a rising slope), blending back to
+        // the raw terrain by 16 m. Then scoop the pond basin. The physics
+        // trimesh is built from this same geometry, so contacts (including a
+        // splash-less "landing" on the pond bed) match the picture.
         for (int i = 0; i < pos->count(); ++i) {
             const float x = a[i * 3 + 0], z = a[i * 3 + 2];
             const float r = std::sqrt(x * x + z * z);
             if (r < 16.f) {
                 const float t = math::smoothstep(4.f, 16.f, r);
                 a[i * 3 + 1] = h0 + (a[i * 3 + 1] - h0) * t;
+            }
+            const float pr = std::sqrt((x - pondX) * (x - pondX) + (z - pondZ) * (z - pondZ));
+            if (pr < pondR + 6.f) {
+                const float depth = 2.2f * (1.f - math::smoothstep(pondR * 0.55f, pondR + 6.f, pr));
+                a[i * 3 + 1] = std::min(a[i * 3 + 1], pondGroundY - depth);
             }
         }
         pos->needsUpdate();
@@ -366,6 +406,100 @@ int main(int argc, char** argv) {
     // Home ground exactly at y=0 so NED altitude 0 = spawn ground level.
     terrainMesh->position.y = -h0;
     scene.add(terrainMesh);
+
+    // Exact-grid height sampler over the FINAL (apron+pond) geometry; world
+    // y = sample - h0 because the mesh is offset so home ground sits at 0.
+    const auto groundY = [&, dim = tp.resolution + 1,
+                          half = tp.worldSize * 0.5f,
+                          step = tp.worldSize / static_cast<float>(tp.resolution)](float x, float z) {
+        auto* pos = terrainGeo->getAttribute<float>("position");
+        const int ix = std::clamp(static_cast<int>(std::lround((x + half) / step)), 0, dim - 1);
+        const int iz = std::clamp(static_cast<int>(std::lround((z + half) / step)), 0, dim - 1);
+        return pos->array()[(static_cast<std::size_t>(iz) * dim + ix) * 3 + 1] - h0;
+    };
+
+    // Pond water: a still disc slightly below the original shoreline.
+    {
+        const float waterY = pondGroundY - h0 - 0.45f;
+        auto waterMat = MeshStandardMaterial::create(MeshStandardMaterial::Params{}
+                                                             .color(Color(0.05f, 0.16f, 0.20f))
+                                                             .roughness(0.06f)
+                                                             .metalness(0.f));
+        auto water = Mesh::create(CircleGeometry::create(pondR + 2.5f, 40), waterMat);
+        water->rotation.x = -math::PI / 2.f;
+        water->position.set(pondX, waterY, pondZ);
+        scene.add(water);
+    }
+
+    // Scattered stones: unique low-poly rocks, denser near home, none in the
+    // pad apron or the pond.
+    {
+        auto rockMat = MeshStandardMaterial::create(MeshStandardMaterial::Params{}
+                                                            .color(Color(0.44f, 0.42f, 0.40f))
+                                                            .roughness(0.95f)
+                                                            .metalness(0.f));
+        std::mt19937 rng(7);
+        std::uniform_real_distribution<float> u01(0.f, 1.f);
+        for (int i = 0; i < 60; ++i) {
+            const float r = 22.f + std::pow(u01(rng), 1.6f) * 520.f;
+            const float a = u01(rng) * 2.f * math::PI;
+            const float x = std::cos(a) * r, z = std::sin(a) * r;
+            if (std::hypot(x - pondX, z - pondZ) < pondR + 8.f) continue;
+            const float s = 0.25f + std::pow(u01(rng), 2.f) * 1.5f;
+            auto rock = Mesh::create(terrain::makeRockGeometry(1000 + i), rockMat);
+            rock->scale.set(s * (0.8f + 0.4f * u01(rng)), s * (0.6f + 0.3f * u01(rng)),
+                            s * (0.8f + 0.4f * u01(rng)));
+            rock->position.set(x, groundY(x, z) - 0.08f * s, z);
+            rock->rotation.y = u01(rng) * 2.f * math::PI;
+            rock->castShadow = r < 130.f;// keep the shadow map honest
+            rock->receiveShadow = true;
+            scene.add(rock);
+        }
+    }
+
+    // Meadow grass around home — merged GrassMesh tiles (Vulkan animates the
+    // sway and culls/freezes far tiles; GL draws them as static grass).
+    {
+        std::mt19937 rng(11);
+        std::uniform_real_distribution<float> u01(0.f, 1.f);
+        std::vector<vegetation::GrassBlade> blades;
+        blades.reserve(30000);
+        const Vector3 up(0, 1, 0);
+        int attempts = 0;
+        while (blades.size() < 30000 && ++attempts < 200000) {
+            const float r = 6.f + std::sqrt(u01(rng)) * 114.f;
+            const float a = u01(rng) * 2.f * math::PI;
+            const float x = std::cos(a) * r, z = std::sin(a) * r;
+            if (std::hypot(x - pondX, z - pondZ) < pondR + 5.f) continue;
+            // Meadow, not mountainside: reject steep ground and high ground
+            // (grass on a 40-degree eroded slope floats on one side and reads
+            // as a rendering bug).
+            const float y = groundY(x, z);
+            if (y > 22.f) continue;
+            const float slope = std::abs(groundY(x + 3.f, z) - groundY(x - 3.f, z)) +
+                                std::abs(groundY(x, z + 3.f) - groundY(x, z - 3.f));
+            if (slope > 2.2f) continue;// ~20 degrees combined
+            vegetation::GrassBlade bl;
+            bl.position.set(x, groundY(x, z) - 0.04f, z);
+            const float s = 0.5f + u01(rng) * 0.5f;
+            bl.scale.set(s, 0.28f + u01(rng) * 0.38f, s);
+            bl.yaw.setFromAxisAngle(up, u01(rng) * 2.f * math::PI);
+            blades.push_back(bl);
+        }
+        auto grassMat = MeshStandardMaterial::create(MeshStandardMaterial::Params{}
+                                                             .color(Color(0.42f, 0.50f, 0.26f))
+                                                             .roughness(1.f)
+                                                             .metalness(0.f));
+        grassMat->vertexColors = true;
+        grassMat->side = Side::Double;
+        GrassMesh::Params mp;
+        mp.windDir = Vector2(0.8f, 0.6f);
+        mp.windStrength = 0.16f;
+        mp.maxAnimDistance = 95.f;
+        for (auto& tile : vegetation::buildGrassTiles(blades, 40.f, grassMat, mp)) {
+            scene.add(tile);
+        }
+    }
 
     // Landing pad at home.
     auto pad = Mesh::create(CylinderGeometry::create(1.6f, 1.6f, 0.04f),
@@ -407,6 +541,7 @@ int main(int argc, char** argv) {
     sitl::FdmState lastState{};
     sitl::ServoInput lastServo{};
     std::uint32_t resets = 0;
+    float windSpeed = 0.f, windFromDeg = 270.f, windGust = 0.3f;// HUD-driven
 
     canvas.onWindowResize([&](WindowSize size) {
         camera.aspect = size.aspect();
@@ -452,6 +587,14 @@ int main(int argc, char** argv) {
         ImGui::Text("yaw          %.1f deg", lastState.attitudeRpy[2] * 57.2958);
         ImGui::Text("vel NED      %+.1f %+.1f %+.1f m/s", lastState.velocityNed[0],
                     lastState.velocityNed[1], lastState.velocityNed[2]);
+        if (!std::isnan(lastState.airspeed)) {
+            ImGui::Text("airspeed     %.1f m/s", lastState.airspeed);
+        }
+        ImGui::Separator();
+        ImGui::TextUnformatted("wind");
+        ImGui::SliderFloat("m/s", &windSpeed, 0.f, 12.f, "%.1f");
+        ImGui::SliderFloat("from deg", &windFromDeg, 0.f, 360.f, "%.0f");
+        ImGui::SliderFloat("gust", &windGust, 0.f, 1.f, "%.2f");
         ImGui::Separator();
         const bool armed = lastServo.pwm[0] > 1050 || lastServo.pwm[1] > 1050 ||
                            lastServo.pwm[2] > 1050 || lastServo.pwm[3] > 1050;
@@ -467,6 +610,15 @@ int main(int argc, char** argv) {
     Clock clock;
     canvas.animate([&] {
         const float dtRender = clock.getDelta();
+
+        // Wind blows FROM windFromDeg (compass, 0 = from north), toward the
+        // opposite heading — the meteorological convention.
+        {
+            const float toRad = math::degToRad(windFromDeg + 180.f);
+            quad->setWind(sitl::frame::nedToTp(windSpeed * std::cos(toRad),
+                                               windSpeed * std::sin(toRad), 0.0),
+                          windGust);
+        }
 
         // Service the SITL link under a time budget: each Frame is one
         // lock-step physics substep + reply. Lock-step means there is never

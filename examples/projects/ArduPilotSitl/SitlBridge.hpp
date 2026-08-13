@@ -79,6 +79,8 @@ namespace sitl {
         double velocityNed[3] = {};
         double attitudeRpy[3] = {};///< roll, pitch, yaw [rad]
         double rangefinderM = NAN; ///< downward AGL -> "rng_1"
+        double airspeed = NAN;     ///< |v - wind| [m/s]
+        double windNed[3] = {NAN, 0, 0};///< -> "velocity_wind"; NaN first = omit
         double batteryV = NAN, batteryA = NAN;
     };
 
@@ -221,6 +223,14 @@ namespace sitl {
                     s.attitudeRpy[0], s.attitudeRpy[1], s.attitudeRpy[2]);
             if (!std::isnan(s.rangefinderM)) {
                 len += std::snprintf(json + len, sizeof json - len, ",\"rng_1\":%.3f", s.rangefinderM);
+            }
+            if (!std::isnan(s.airspeed)) {
+                len += std::snprintf(json + len, sizeof json - len, ",\"airspeed\":%.3f", s.airspeed);
+            }
+            if (!std::isnan(s.windNed[0])) {
+                len += std::snprintf(json + len, sizeof json - len,
+                                     ",\"velocity_wind\":[%.3f,%.3f,%.3f]",
+                                     s.windNed[0], s.windNed[1], s.windNed[2]);
             }
             if (!std::isnan(s.batteryV)) {
                 len += std::snprintf(json + len, sizeof json - len,
