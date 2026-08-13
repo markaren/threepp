@@ -449,12 +449,34 @@ namespace threepp::vulkan {
             extensions.push_back(VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
         }
 
+        // A portability driver — MoltenVK, or any other non-conformant
+        // implementation — is hidden by the Khronos loader unless the
+        // application opts in. Without the opt-in vkCreateInstance fails with
+        // VK_ERROR_INCOMPATIBLE_DRIVER outright, or (loader version depending)
+        // succeeds and then enumerates zero physical devices. Queried rather
+        // than keyed on __APPLE__ so it holds for any portability
+        // implementation on any platform.
+        //
+        // This is spec compliance, not macOS support: the renderer still needs
+        // KHR ray tracing, which MoltenVK does not provide (see
+        // pickPhysicalDevice). It only buys an honest failure further in.
+#ifdef VK_KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME
+        const bool portability =
+                hasInstanceExtension(VK_KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME);
+        if (portability) {
+            extensions.push_back(VK_KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME);
+        }
+#endif
+
         std::vector<const char*> layers;
         if (enableValidation) layers.push_back(kValidationLayer);
 
         VkInstanceCreateInfo ci{};
         ci.sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO;
         ci.pApplicationInfo = &app;
+#ifdef VK_KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME
+        if (portability) ci.flags |= VK_INSTANCE_CREATE_ENUMERATE_PORTABILITY_BIT_KHR;
+#endif
         ci.enabledExtensionCount = static_cast<uint32_t>(extensions.size());
         ci.ppEnabledExtensionNames = extensions.data();
         ci.enabledLayerCount = static_cast<uint32_t>(layers.size());
@@ -537,9 +559,31 @@ namespace threepp::vulkan {
             }
         }
         if (physicalDevice_ == VK_NULL_HANDLE) {
-            throw std::runtime_error(rayTracingEnabled_
-                ? "[VulkanContext] no GPU with ray-tracing extensions found"
-                : "[VulkanContext] no GPU with swapchain support found");
+            if (!rayTracingEnabled_) {
+                throw std::runtime_error("[VulkanContext] no GPU with swapchain support found");
+            }
+            // Name the requirement rather than just the symptom. This renderer
+            // shades through ray query — deferred_shade.comp traces for
+            // shadows, reflections and GI, and probe/froxel/particle passes do
+            // the same — so a device without KHR ray tracing cannot run it at
+            // all. There is no raster fallback to degrade to.
+            std::string msg =
+                    "[VulkanContext] no GPU with ray-tracing extensions found. The Vulkan "
+                    "backend requires VK_KHR_ray_tracing_pipeline, VK_KHR_acceleration_structure, "
+                    "VK_KHR_deferred_host_operations and VK_KHR_buffer_device_address; its shading "
+                    "path traces rays for shadows, reflections and GI and has no raster fallback.";
+            msg += "\n[VulkanContext] devices seen:";
+            for (auto d : devs) {
+                VkPhysicalDeviceProperties props{};
+                vkGetPhysicalDeviceProperties(d, &props);
+                msg += "\n  - ";
+                msg += props.deviceName;
+            }
+#ifdef __APPLE__
+            msg += "\n[VulkanContext] MoltenVK implements none of the KHR ray-tracing extensions, "
+                   "so the Vulkan backend cannot run on macOS. Use GLRenderer there.";
+#endif
+            throw std::runtime_error(msg);
         }
 
         VkPhysicalDeviceProperties props{};
@@ -645,6 +689,14 @@ namespace threepp::vulkan {
             if (rayQuerySupported_) {
                 extensions.push_back(VK_KHR_RAY_QUERY_EXTENSION_NAME);
             }
+        }
+        // Required by the spec (VUID-VkDeviceCreateInfo-pProperties-04451)
+        // whenever the physical device advertises it: a portability
+        // implementation must refuse vkCreateDevice without it. Spelled out as
+        // a literal because VK_KHR_PORTABILITY_SUBSET_EXTENSION_NAME lives in
+        // vulkan_beta.h, behind VK_ENABLE_BETA_EXTENSIONS.
+        if (hasExtension(deviceExtensions(physicalDevice_), "VK_KHR_portability_subset")) {
+            extensions.push_back("VK_KHR_portability_subset");
         }
         if (externalMemorySupported_) {
 #ifdef _WIN32

@@ -93,6 +93,10 @@ and it is what the stability warning above is really about.
 A few limits worth knowing before you start:
 
 * The Vulkan backend evolves fastest and breaks most often. OpenGL is the conservative choice.
+* **The Vulkan backend does not run on macOS**, and is unlikely to. Its shading path is ray-query
+  based — shadows, reflections and GI all trace, with no raster fallback — and MoltenVK implements
+  none of the KHR ray-tracing extensions. It still compiles there, so it is usable as a compile
+  check; at runtime it fails at device selection with an explanation. Use `GLRenderer` on macOS.
 * Gaussian splat clouds are a backdrop, not a simulation asset: they cast no shadows, appear in
   no reflection, contribute nothing to GI, are invisible to the ray-traced sensors, and are not
   serialized.

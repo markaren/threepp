@@ -18,6 +18,16 @@ option(THREEPP_WITH_PYTHON "Build the pybind11 Python bindings (threepp module)"
 
 option(THREEPP_TREAT_WARNINGS_AS_ERRORS "Treat warnings as errors" OFF)
 option(THREEPP_WITH_VULKAN "Build with Vulkan backend (requires Vulkan SDK)" OFF)
+# The backend builds on macOS but cannot run there: its shading path is ray-query
+# based (shadows, reflections and GI all trace) and MoltenVK implements none of
+# the KHR ray-tracing extensions. A warning rather than a hard error — building
+# it is still useful as a compile check, and the runtime failure now says so
+# plainly (VulkanContext::pickPhysicalDevice).
+if (THREEPP_WITH_VULKAN AND APPLE)
+    message(WARNING
+        "THREEPP_WITH_VULKAN builds on macOS but will not run: the renderer requires "
+        "KHR ray tracing, which MoltenVK does not implement. Use GLRenderer on macOS.")
+endif ()
 # AMD FidelityFX FSR 3.1 temporal upscaler for the Vulkan backend. Windows-only:
 # the FidelityFX SDK bundles a Windows shader compiler + builds a Vulkan backend
 # with MSVC. When OFF (or off-Windows) the renderer uses its built-in TAA
