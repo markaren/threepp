@@ -1048,7 +1048,7 @@ void VulkanRenderer::Impl::recordSplats(VkCommandBuffer cb) {
 
 }
 
-void VulkanRenderer::Impl::recordSplatOverlayDepthStamp(VkCommandBuffer cb) {
+bool VulkanRenderer::Impl::splatStampPrepare(VkCommandBuffer cb) {
             // ── Splat depth -> the overlay's depth attachment ───────────────────
             // The one write that makes a cloud occlude the post-resolve overlay.
             // Everything the overlay pass draws — wireframe meshes, Lines,
@@ -1061,26 +1061,31 @@ void VulkanRenderer::Impl::recordSplatOverlayDepthStamp(VkCommandBuffer cb) {
             // LAST, in the transparent pass, over the lines. See
             // shaders/splat_overlay_depth.frag.
             //
+            // This half gates and issues the pre-pass barriers, called before
+            // the hybrid overlay pass begins; true means that pass must attach
+            // its depth WRITABLE and record recordSplatStampDraw at the
+            // exempt/occluded boundary of its draw order.
+            //
             // Gated exactly like the pass it feeds. The AOV gate is the one
             // that matters: without it the image is one texel, and
             // splatOverlayDepth_ (latched in collectSplatClouds) is what turns
             // it on for scenes that need this.
-            if (splatStampPipeline_ == VK_NULL_HANDLE) return;
-            if (view().secondary) return;// overlay pass is primary-only by scope
-            if (!splat_ || !splat_->hasClouds()) return;
-            if (!splatDepthAovAllocated()) return;
-            if (!sceneHasOverlayContent()) return;
-            if (overlayDepthPrepassPipeline == VK_NULL_HANDLE) return;
+            if (splatStampPipeline_ == VK_NULL_HANDLE) return false;
+            if (view().secondary) return false;// overlay pass is primary-only by scope
+            if (!splat_ || !splat_->hasClouds()) return false;
+            if (!splatDepthAovAllocated()) return false;
+            if (!sceneHasOverlayContent()) return false;
+            if (overlayDepthPrepassPipeline == VK_NULL_HANDLE) return false;
 
             const bool  overlayMsaa = overlaySamples() > 1;
             const VkImage depthImg  = overlayMsaa ? overlayMsDepth_.image
                                                   : view().rasterGbufs[currentFrame].unjitDepth.image;
             const VkImageView depthView = overlayMsaa ? overlayMsDepth_.view
                                                       : view().rasterGbufs[currentFrame].unjitDepth.view;
-            if (depthImg == VK_NULL_HANDLE || depthView == VK_NULL_HANDLE) return;
+            if (depthImg == VK_NULL_HANDLE || depthView == VK_NULL_HANDLE) return false;
 
             const auto& g = view().rasterGbufs[currentFrame];
-            if (g.splatDepth.view == VK_NULL_HANDLE) return;
+            if (g.splatDepth.view == VK_NULL_HANDLE) return false;
 
             // Per-frame-in-flight set, rewritten only when the AOV view handle
             // actually changed (a resize / render-scale realloc). The set for
@@ -1106,7 +1111,7 @@ void VulkanRenderer::Impl::recordSplatOverlayDepthStamp(VkCommandBuffer cb) {
             // One fullscreen depth-only draw is not worth its own pass slot;
             // it lands inside TP_Frame like the rest of the unbracketed work.
 
-            // The AOV's stores (compute) -> this pass's fragment reads. The
+            // The AOV's stores (compute) -> the stamp's fragment reads. The
             // image stays in GENERAL throughout the frame, so this is an
             // execution + visibility barrier only, no transition.
             VkMemoryBarrier2 aovVis{};
@@ -1116,8 +1121,12 @@ void VulkanRenderer::Impl::recordSplatOverlayDepthStamp(VkCommandBuffer cb) {
             aovVis.dstStageMask  = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT;
             aovVis.dstAccessMask = VK_ACCESS_2_SHADER_STORAGE_READ_BIT;
 
-            // ...and the depth attachment back from the read-only layout the
-            // prepass left it in, so this pass can write it.
+            // ...and the depth attachment out of the read-only layout the
+            // prepass left it in: the overlay pass will attach it WRITABLE so
+            // the stamp draw inside it can write. Nothing reads it between the
+            // end of that pass and the next frame's prepass, and the prepass
+            // transitions from UNDEFINED (it clears), so the layout is not
+            // handed back.
             VkImageMemoryBarrier2 toWrite{};
             toWrite.sType         = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
             toWrite.srcStageMask  = VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT |
@@ -1143,23 +1152,16 @@ void VulkanRenderer::Impl::recordSplatOverlayDepthStamp(VkCommandBuffer cb) {
             di.imageMemoryBarrierCount  = 1;
             di.pImageMemoryBarriers     = &toWrite;
             vkCmdPipelineBarrier2(cb, &di);
+            return true;
+}
 
-            VkRenderingAttachmentInfo att{};
-            att.sType       = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
-            att.imageView   = depthView;
-            att.imageLayout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
-            att.loadOp      = VK_ATTACHMENT_LOAD_OP_LOAD;// the prepass's geometry depth
-            att.storeOp     = VK_ATTACHMENT_STORE_OP_STORE;
-
-            VkRenderingInfo ri{};
-            ri.sType                = VK_STRUCTURE_TYPE_RENDERING_INFO;
-            ri.renderArea.offset    = {0, 0};
-            ri.renderArea.extent    = viewOutExtent();
-            ri.layerCount           = 1;
-            ri.colorAttachmentCount = 0;
-            ri.pDepthAttachment     = &att;
-            vkCmdBeginRendering(cb, &ri);
-
+void VulkanRenderer::Impl::recordSplatStampDraw(VkCommandBuffer cb) {
+            // The stamp draw itself, recorded INSIDE the hybrid overlay pass —
+            // after the overlays that kSplatUnoccludedOverlayLayer exempts,
+            // before everything else — so "occluded by a cloud" is a position
+            // in the pass's draw order rather than a property of the whole
+            // pass. splatStampPrepare gated this frame and issued the
+            // barriers; here is only the draw.
             vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, splatStampPipeline_);
             vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_GRAPHICS,
                                     splatStampPipelineLayout_, 0, 1,
@@ -1191,24 +1193,6 @@ void VulkanRenderer::Impl::recordSplatOverlayDepthStamp(VkCommandBuffer cb) {
             vkCmdPushConstants(cb, splatStampPipelineLayout_, VK_SHADER_STAGE_FRAGMENT_BIT,
                                0, sizeof(pc), &pc);
             vkCmdDraw(cb, 3, 1, 0, 0);
-            vkCmdEndRendering(cb);
-
-            // Back to the read-only layout the overlay pass expects to find it
-            // in — this pass is a detour between the prepass and that draw, and
-            // it has to hand the attachment back the way it borrowed it.
-            VkImageMemoryBarrier2 toRead = toWrite;
-            toRead.srcStageMask  = VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT;
-            toRead.srcAccessMask = VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
-            toRead.dstStageMask  = VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT |
-                                   VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT;
-            toRead.dstAccessMask = VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_READ_BIT;
-            toRead.oldLayout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
-            toRead.newLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
-            VkDependencyInfo diBack{};
-            diBack.sType                   = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
-            diBack.imageMemoryBarrierCount = 1;
-            diBack.pImageMemoryBarriers    = &toRead;
-            vkCmdPipelineBarrier2(cb, &diBack);
 }
 
 void VulkanRenderer::Impl::recordSecondaryViewSplats(VkCommandBuffer cb) {
@@ -1926,6 +1910,13 @@ void VulkanRenderer::Impl::recordHybridOverlay(VkCommandBuffer cb, uint32_t imag
                     // overlayMs* do not.
                     const bool overlayMsaa = overlaySamples() > 1;
 
+                    // Splat depth stamp: gates and pre-pass barriers now, the
+                    // draw itself inside the pass below, between the overlays
+                    // kSplatUnoccludedOverlayLayer exempts and everything
+                    // else. True also means the depth attachment must be
+                    // WRITABLE — the stamp is the pass's one depth write.
+                    const bool stampActive = splatStampPrepare(cb);
+
                     if (overlayMsaa) {
                         // The swapchain holds the composited scene and becomes
                         // the RESOLVE TARGET, so it can neither be loaded into
@@ -2065,18 +2056,23 @@ void VulkanRenderer::Impl::recordHybridOverlay(VkCommandBuffer cb, uint32_t imag
                         colorAtt.storeOp     = VK_ATTACHMENT_STORE_OP_STORE;
                     }
 
-                    // Read-only depth from the overlay depth prepass. Was
-                    // transitioned to DEPTH_STENCIL_READ_ONLY_OPTIMAL at the
-                    // end of the prepass; LOAD_OP_LOAD reads the prepass
-                    // values, STORE_OP_NONE leaves them alone (overlay
-                    // doesn't write depth).
+                    // Depth from the overlay depth prepass, LOAD_OP_LOAD both
+                    // ways. Read-only when nothing writes it (the overlay
+                    // draws never do — STORE_OP_NONE says so). When the splat
+                    // stamp draws inside this pass, splatStampPrepare already
+                    // transitioned the image to DEPTH_ATTACHMENT_OPTIMAL and
+                    // the stamp's write must be kept (STORE) — the next
+                    // consumer is the next frame's prepass, which clears from
+                    // UNDEFINED, so the writable layout is never handed back.
                     VkRenderingAttachmentInfo depthAtt{};
                     depthAtt.sType       = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
                     depthAtt.imageView   = overlayMsaa ? overlayMsDepth_.view
                                                        : view().rasterGbufs[currentFrame].unjitDepth.view;
-                    depthAtt.imageLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
+                    depthAtt.imageLayout = stampActive ? VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL
+                                                       : VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
                     depthAtt.loadOp      = VK_ATTACHMENT_LOAD_OP_LOAD;
-                    depthAtt.storeOp     = VK_ATTACHMENT_STORE_OP_NONE;
+                    depthAtt.storeOp     = stampActive ? VK_ATTACHMENT_STORE_OP_STORE
+                                                       : VK_ATTACHMENT_STORE_OP_NONE;
 
                     VkRenderingInfo ri{};
                     ri.sType = VK_STRUCTURE_TYPE_RENDERING_INFO;
@@ -2369,6 +2365,7 @@ void VulkanRenderer::Impl::recordHybridOverlay(VkCommandBuffer cb, uint32_t imag
                         bool  isLine;
                         size_t idx;
                         bool  transparent;
+                        bool  preStamp;// kSplatUnoccludedOverlayLayer: draws before the splat stamp
                         int   renderOrder;
                         float viewZ;// camera-space z (negative in front; smaller = farther)
                     };
@@ -2394,7 +2391,9 @@ void VulkanRenderer::Impl::recordHybridOverlay(VkCommandBuffer cb, uint32_t imag
                             auto* mw = dynamic_cast<MaterialWithWireframe*>(m);
                             tr = m->transparent && !(mw && mw->wireframe);
                         }
-                        overlayItems.push_back({false, i, tr, en.mesh->renderOrder,
+                        overlayItems.push_back({false, i, tr,
+                                                en.mesh->layers.isEnabled(kSplatUnoccludedOverlayLayer),
+                                                en.mesh->renderOrder,
                                                 viewZOf(en.worldMatrix)});
                     }
                     for (size_t i = 0; i < lastVisibleLines_.size(); ++i) {
@@ -2405,6 +2404,7 @@ void VulkanRenderer::Impl::recordHybridOverlay(VkCommandBuffer cb, uint32_t imag
                                                     ? (le.points ? le.points->material().get() : nullptr)
                                                     : (le.line ? le.line->material().get() : nullptr);
                         overlayItems.push_back({true, i, m && m->transparent,
+                                                obj && obj->layers.isEnabled(kSplatUnoccludedOverlayLayer),
                                                 obj ? obj->renderOrder : 0,
                                                 viewZOf(le.worldMatrix)});
                     }
@@ -2419,9 +2419,28 @@ void VulkanRenderer::Impl::recordHybridOverlay(VkCommandBuffer cb, uint32_t imag
                                          if (!a.transparent) return false;// opaque: keep traversal order
                                          return a.viewZ < b.viewZ;         // transparent: back-to-front
                                      });
-                    for (const auto& it : overlayItems) {
+                    // Exempt overlays first — a picture OF a splat surface must
+                    // not be occluded BY the splat surface (see
+                    // kSplatUnoccludedOverlayLayer) — then the stamp, whose
+                    // depth write occludes everything after it that a cloud
+                    // stands in front of. Drawn first even when no stamp runs
+                    // this frame, so flagging an overlay never changes its
+                    // composite position between cloudy and cloudless frames.
+                    const auto drawItem = [&](const OverlayItem& it) {
                         if (it.isLine) drawOverlayLine(lastVisibleLines_[it.idx]);
                         else           drawOverlayMesh(lastVisibleEntries_[it.idx]);
+                    };
+                    for (const auto& it : overlayItems) {
+                        if (it.preStamp) drawItem(it);
+                    }
+                    if (stampActive) {
+                        recordSplatStampDraw(cb);
+                        // The stamp bound its own pipeline; the cache must not
+                        // skip the next draw's re-bind.
+                        curPipeline = VK_NULL_HANDLE;
+                    }
+                    for (const auto& it : overlayItems) {
+                        if (!it.preStamp) drawItem(it);
                     }
 
                     // ── Particle billboards ────────────────────────────────
@@ -2869,13 +2888,10 @@ void VulkanRenderer::Impl::recordCommandBuffer(VkCommandBuffer cb, uint32_t imag
             // unless a visible field asked for a glow.
             recordFieldBillboardGlow(cb);
 
-            // Splat clouds into the overlay's depth buffer. Between the two
-            // because that is the only window where both exist: the depth
-            // prepass ran before the shade, the AOV was written by the splat
-            // composite after it, and the draw below is what reads the result.
-            recordSplatOverlayDepthStamp(cb);
-
-            // Post-TAA wireframe / line / particle / sprite overlays.
+            // Post-TAA wireframe / line / particle / sprite overlays. The
+            // splat depth stamp records INSIDE this pass now (splatStampPrepare
+            // / recordSplatStampDraw), between the overlays that
+            // kSplatUnoccludedOverlayLayer exempts and everything else.
             recordHybridOverlay(cb, imageIndex);
 
             // ── Camera image formation: lens distortion + sensor noise ─────────

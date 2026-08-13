@@ -39,6 +39,10 @@
 #include "threepp/objects/SplatCloud.hpp"
 #include "threepp/scenes/Scene.hpp"
 
+#ifdef THREEPP_WITH_VULKAN
+#include "threepp/renderers/VulkanRenderer.hpp"// kSplatUnoccludedOverlayLayer
+#endif
+
 #include <imgui.h>// theme colours are ImVec4
 
 #include <algorithm>
@@ -125,15 +129,21 @@ void EditorApp::syncSplatSurfacePreviews() {
             auto material = LineBasicMaterial::create();
             material->color.setRGB(tint.x, tint.y, tint.z);
             material->toneMapped = false;
-            // The spawn slab's rule (syncParticleHelper), for the same reason
-            // and a stronger one: this shell is fused from the inside of a cloud
-            // of splats and sits within a voxel of their front, so a depth-
-            // tested preview is a preview nobody can see.
-            material->depthTest = false;
+            // Depth-tested, unlike the spawn slab: a wall in front of the scan
+            // must hide this preview exactly as it hides the grid.
+            material->depthTest = true;
 
             preview.triangles = mesh->triangleCount();
             preview.mesh = LineSegments::create(geometry, material);
             preview.mesh->name = "__editor_splat_surface_preview";
+            // ...but never depth-tested against the CLOUD it is a picture of.
+            // This shell hugs the cloud's front within a voxel, and the splat
+            // overlay-depth stamp is re-expressed from the jittered raster's
+            // AOV — at a grazing view from a distance that comparison flickers
+            // per frame however it is biased (measured, and the numbers are in
+            // SplatOverlayFlicker_probe). The layer draws these lines before
+            // the stamp: occluded by geometry, never by splats.
+            preview.mesh->layers.enable(VulkanRenderer::kSplatUnoccludedOverlayLayer);
             // splats::bakeSurface emits WORLD-space vertices (the play session
             // parents its twin at the scene root for this reason), so the
             // preview must carry no transform of its own.

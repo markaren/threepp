@@ -827,6 +827,23 @@ namespace threepp {
         void setSensorOnlySurfaces(bool enabled);
         [[nodiscard]] bool sensorOnlySurfaces() const;
 
+        // ── Overlays exempt from splat occlusion ─────────────────────────
+        // An overlay (wireframe mesh, Line/LineSegments, Points) that ENABLES
+        // this layer draws BEFORE the splat depth stamp: it is depth-tested
+        // against scene geometry only, and a Gaussian-splat cloud never
+        // occludes it. For an overlay that IS a picture of a splat surface —
+        // the editor's baked-surface preview hugs the cloud's front within a
+        // voxel by construction — this is the only stable choice: the stamp
+        // is re-expressed from the jittered splat raster's depth AOV, so at a
+        // grazing view from a distance both its coverage gate and its depth
+        // wobble per frame by more than the gap between the preview and the
+        // cloud, and any depth test between the two flickers (measured:
+        // SplatOverlayFlicker_probe). ENABLE the bit (Layers::enable), do not
+        // set it exclusively — the object still needs its camera layer.
+        // Ordinary overlays should not use this: a grid behind a cloud is
+        // behind it, and this layer would put it on top.
+        static constexpr unsigned kSplatUnoccludedOverlayLayer = 30u;
+
         // Per-view raster permission for sensor-only surfaces. OFF by default,
         // for every view, because "secondary" does not mean "sensor": an RGB
         // camera preview (CameraSensor) and an editor viewport pane are

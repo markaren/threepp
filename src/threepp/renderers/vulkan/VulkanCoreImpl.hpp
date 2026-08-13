@@ -3686,12 +3686,16 @@ namespace threepp {
 
         // Stamp the splat depth AOV into the overlay's depth attachment, so
         // the post-resolve overlay draw (wireframe, lines, world sprites,
-        // particle billboards) is occluded by a cloud in front of it. Recorded
-        // between the upscale/post tail and recordHybridOverlay, which is the
-        // only window where both the AOV and the overlay's depth buffer exist.
-        // No-op unless this frame has clouds AND overlay content — see
-        // splatOverlayDepth_ for the latch that turns the AOV on for it.
-        void recordSplatOverlayDepthStamp(VkCommandBuffer cb);
+        // particle billboards) is occluded by a cloud in front of it — split
+        // in two so the stamp can be a DRAW inside the hybrid overlay pass,
+        // ordered after the overlays kSplatUnoccludedOverlayLayer exempts.
+        // splatStampPrepare gates (clouds AND overlay content this frame —
+        // see splatOverlayDepth_ for the latch that turns the AOV on for it)
+        // and issues the pre-pass barriers; true obliges the overlay pass to
+        // attach depth WRITABLE and record recordSplatStampDraw at the
+        // exempt/occluded boundary.
+        bool splatStampPrepare(VkCommandBuffer cb);
+        void recordSplatStampDraw(VkCommandBuffer cb);
 
         // Line geometry cache for the 3D hybrid overlay (recordCommandBuffer's
         // line-draw section). Keyed on raw BufferGeometry*; geomId in LineRec

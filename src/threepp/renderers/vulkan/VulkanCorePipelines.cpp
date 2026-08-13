@@ -2002,13 +2002,16 @@ void VulkanRenderer::Impl::createOverlayPipeline() {
             }
 
             // ── Splat depth stamp pipeline ──────────────────────────────────
-            // Runs between the splat composite and the overlay draw, writing
-            // the cloud's front-surface depth into the overlay's depth
-            // attachment so the overlay is occluded by it. Built here because
-            // it must match this pass's sample count exactly (the attachment
-            // is overlayMsDepth_ at N samples, unjitDepth at one) and
-            // overlaySamples() is fixed for the run — same reasoning as the
-            // depth prepass above. See shaders/splat_overlay_depth.frag.
+            // A draw INSIDE the overlay pass, ordered between the overlays
+            // exempted by kSplatUnoccludedOverlayLayer and everything else:
+            // writes the cloud's front-surface depth into the pass's depth
+            // attachment so the draws after it are occluded by clouds. Built
+            // here because it must match the pass exactly — its color format
+            // (attached with every write masked off: this draw touches depth
+            // only) and its sample count (overlayMsColor_/overlayMsDepth_ at
+            // N samples, swapchain/unjitDepth at one), fixed for the run —
+            // same reasoning as the depth prepass above. See
+            // shaders/splat_overlay_depth.frag.
             {
                 VkDescriptorSetLayoutBinding sBind{};
                 sBind.binding         = 0;
@@ -2107,18 +2110,26 @@ void VulkanRenderer::Impl::createOverlayPipeline() {
                 sds.depthTestEnable  = VK_TRUE;
                 sds.depthWriteEnable = VK_TRUE;
                 sds.depthCompareOp   = VK_COMPARE_OP_GREATER;
+                // The pass has a color attachment; this draw must declare it
+                // and write none of it.
+                VkPipelineColorBlendAttachmentState scba{};
+                scba.colorWriteMask = 0;
                 VkPipelineColorBlendStateCreateInfo scb{};
                 scb.sType           = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
-                scb.attachmentCount = 0;// depth-only, like the prepass
+                scb.attachmentCount = 1;
+                scb.pAttachments    = &scba;
                 VkDynamicState sdyns[2] = {VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR};
                 VkPipelineDynamicStateCreateInfo sdyn{};
                 sdyn.sType             = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO;
                 sdyn.dynamicStateCount = 2;
                 sdyn.pDynamicStates    = sdyns;
 
+                const VkFormat sFmts[1] = {ctx->swapchainFormat()};
                 VkPipelineRenderingCreateInfo sprci{};
-                sprci.sType                 = VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO;
-                sprci.depthAttachmentFormat = VK_FORMAT_D32_SFLOAT;
+                sprci.sType                   = VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO;
+                sprci.colorAttachmentCount    = 1;
+                sprci.pColorAttachmentFormats = sFmts;
+                sprci.depthAttachmentFormat   = VK_FORMAT_D32_SFLOAT;
 
                 VkGraphicsPipelineCreateInfo sgpci{};
                 sgpci.sType               = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
