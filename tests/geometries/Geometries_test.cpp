@@ -23,8 +23,10 @@
 
 #include <cmath>
 #include <functional>
+#include <map>
 #include <memory>
 #include <string>
+#include <tuple>
 #include <vector>
 
 using namespace threepp;
@@ -188,6 +190,68 @@ TEST_CASE("Geometry generators satisfy structural invariants") {
         REQUIRE(geometry->boundingSphere.has_value());
         CHECK(std::isfinite(geometry->boundingSphere->radius));
         CHECK(geometry->boundingSphere->radius > 0);
+    }
+}
+
+// A closed solid must be watertight: after welding coincident vertices (the
+// generators duplicate seam/cap vertices for uv/normal reasons), every edge
+// must be shared by exactly two triangles. A generator that fails to loop the
+// last segment back to the first (the classic missing-wedge cylinder cap)
+// leaves boundary edges, which this counts.
+TEST_CASE("Closed solids are watertight after position welding") {
+
+    struct Solid {
+        const char* name;
+        std::shared_ptr<BufferGeometry> geometry;
+    };
+    const Solid solids[] = {
+            {"Cylinder(1.6,1.6,0.04,16)", CylinderGeometry::create(1.6f, 1.6f, 0.04f, 16)},
+            {"Cylinder(1,2,3,16,4)", CylinderGeometry::create(1, 2, 3, 16, 4)},
+            {"Cone(0,1,2,12)", CylinderGeometry::create(0, 1, 2, 12)},
+            {"Box", BoxGeometry::create(1, 2, 3)},
+            {"Sphere", SphereGeometry::create(1, 12, 8)},
+    };
+
+    for (const auto& s : solids) {
+        INFO("solid: " << s.name);
+        auto* position = s.geometry->getAttribute<float>("position");
+        REQUIRE(position);
+        REQUIRE(s.geometry->hasIndex());
+
+        // Weld: map every vertex to a canonical id by quantized position.
+        std::map<std::tuple<long, long, long>, unsigned int> canonical;
+        std::vector<unsigned int> weld(position->count());
+        for (int i = 0; i < position->count(); ++i) {
+            const auto key = std::make_tuple(std::lround(position->getX(i) * 1e5),
+                                             std::lround(position->getY(i) * 1e5),
+                                             std::lround(position->getZ(i) * 1e5));
+            const auto [it, inserted] = canonical.try_emplace(key, static_cast<unsigned int>(i));
+            weld[i] = it->second;
+        }
+
+        // Count directed edges per undirected pair; skip triangles that weld
+        // degenerate (cap fans around a cone apex produce none, but guard).
+        std::map<std::pair<unsigned int, unsigned int>, int> edges;
+        const auto& idx = s.geometry->getIndex()->array();
+        for (std::size_t t = 0; t + 2 < idx.size(); t += 3) {
+            const unsigned int a = weld[idx[t]], b = weld[idx[t + 1]], c = weld[idx[t + 2]];
+            if (a == b || b == c || c == a) continue;
+            const auto edge = [&](unsigned int u, unsigned int v) {
+                edges[{std::min(u, v), std::max(u, v)}]++;
+            };
+            edge(a, b);
+            edge(b, c);
+            edge(c, a);
+        }
+
+        int boundary = 0, nonManifold = 0;
+        for (const auto& [e, n] : edges) {
+            if (n == 1) ++boundary;
+            else if (n > 2) ++nonManifold;
+        }
+        INFO(boundary << " boundary and " << nonManifold << " non-manifold edges of " << edges.size());
+        CHECK(boundary == 0);
+        CHECK(nonManifold == 0);
     }
 }
 

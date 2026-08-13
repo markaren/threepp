@@ -1,0 +1,129 @@
+#!/usr/bin/env python3
+"""Automated GUIDED flight test against the threepp SITL backend.
+
+Connects to ArduCopter SITL (started with --no-mavproxy), waits for EKF,
+then: GUIDED -> arm -> takeoff 10 m -> 3 m/s north for 5 s -> LAND.
+Exit 0 on a completed round trip, 1 on any timeout.
+"""
+import sys
+import time
+
+from pymavlink import mavutil
+
+
+def wait_for(cond, timeout, what, tick=None):
+    t0 = time.time()
+    while time.time() - t0 < timeout:
+        if cond():
+            print(f"[fly] {what}: ok ({time.time() - t0:.1f} s)")
+            return True
+        if tick:
+            tick()
+        time.sleep(0.2)
+    print(f"[fly] {what}: TIMEOUT after {timeout} s")
+    return False
+
+
+def main():
+    url = sys.argv[1] if len(sys.argv) > 1 else "tcp:127.0.0.1:5760"
+    m = mavutil.mavlink_connection(url)
+    print("[fly] waiting for autopilot heartbeat...")
+    t0 = time.time()
+    while time.time() - t0 < 120:
+        hb = m.wait_heartbeat(timeout=120)
+        if hb and m.target_system > 0 and hb.type != mavutil.mavlink.MAV_TYPE_GCS:
+            break
+    if m.target_system <= 0:
+        print("[fly] no autopilot heartbeat")
+        return 1
+    print(f"[fly] heartbeat from sys {m.target_system} comp {m.target_component}")
+
+    # Nothing sets stream rates on a raw TCP link; ask for them explicitly.
+    m.mav.request_data_stream_send(m.target_system, m.target_component,
+                                   mavutil.mavlink.MAV_DATA_STREAM_ALL, 4, 1)
+
+    state = {"alt": 0.0, "armed": False, "ekf_ok": False, "mode": "", "rc_t": 0.0}
+
+    def pump():
+        # ArduPilot refuses to arm with no RC source ("throttle below
+        # failsafe"); feed centred sticks with low throttle like MAVProxy does.
+        if time.time() - state["rc_t"] > 0.5:
+            m.mav.rc_channels_override_send(m.target_system, m.target_component,
+                                            1500, 1500, 1000, 1500,
+                                            65535, 65535, 65535, 65535)
+            state["rc_t"] = time.time()
+        while True:
+            msg = m.recv_match(blocking=False)
+            if msg is None:
+                return
+            t = msg.get_type()
+            if t == "GLOBAL_POSITION_INT":
+                state["alt"] = msg.relative_alt / 1000.0
+            elif t == "HEARTBEAT":
+                state["armed"] = bool(msg.base_mode & mavutil.mavlink.MAV_MODE_FLAG_SAFETY_ARMED)
+                state["mode"] = mavutil.mode_string_v10(msg)
+            elif t == "STATUSTEXT":
+                print(f"[ap] {msg.text}")
+            elif t == "EKF_STATUS_REPORT":
+                good = (mavutil.mavlink.EKF_ATTITUDE
+                        | mavutil.mavlink.EKF_VELOCITY_HORIZ
+                        | mavutil.mavlink.EKF_POS_HORIZ_REL)
+                state["ekf_ok"] = (msg.flags & good) == good
+
+    if not wait_for(lambda: state["ekf_ok"], 90, "EKF ready", pump):
+        print("[fly] no EKF report stream; relying on arming checks instead")
+
+    # GUIDED
+    m.set_mode_apm("GUIDED")
+    if not wait_for(lambda: state["mode"] == "GUIDED", 20, "mode GUIDED", pump):
+        return 1
+
+    # Arm (retry: prearm checks can lag the EKF report slightly)
+    def try_arm():
+        m.mav.command_long_send(m.target_system, m.target_component,
+                                mavutil.mavlink.MAV_CMD_COMPONENT_ARM_DISARM,
+                                0, 1, 0, 0, 0, 0, 0, 0)
+
+    t_last = [0.0]
+
+    def arm_tick():
+        pump()
+        if time.time() - t_last[0] > 3:
+            try_arm()
+            t_last[0] = time.time()
+
+    try_arm()
+    if not wait_for(lambda: state["armed"], 60, "armed", arm_tick):
+        return 1
+
+    # Takeoff 10 m
+    m.mav.command_long_send(m.target_system, m.target_component,
+                            mavutil.mavlink.MAV_CMD_NAV_TAKEOFF,
+                            0, 0, 0, 0, 0, 0, 0, 10)
+    if not wait_for(lambda: state["alt"] > 9.0, 60, "reached 10 m", pump):
+        return 1
+
+    # 3 m/s north for 5 s (velocity setpoint in LOCAL_NED)
+    print("[fly] velocity 3 m/s north for 5 s")
+    t0 = time.time()
+    while time.time() - t0 < 5:
+        m.mav.set_position_target_local_ned_send(
+                0, m.target_system, m.target_component,
+                mavutil.mavlink.MAV_FRAME_LOCAL_NED,
+                0b0000111111000111,  # velocity only
+                0, 0, 0, 3, 0, 0, 0, 0, 0, 0, 0)
+        pump()
+        time.sleep(0.2)
+
+    # Return to launch (flies back to the pad) + wait for disarm
+    m.set_mode_apm("RTL")
+    if not wait_for(lambda: not state["armed"] and state["alt"] < 0.5, 180,
+                    "returned, landed and disarmed", pump):
+        return 1
+
+    print("[fly] PASS")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

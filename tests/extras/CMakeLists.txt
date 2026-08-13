@@ -25,6 +25,15 @@ add_test_executable(PointCloud_test)
 add_test_executable(Sensor_test)
 add_test_executable(VisionSensor_test)
 
+# The ArduPilot SITL bridge is example-local (examples/projects/ArduPilotSitl)
+# but its codec + frame mapping are pure headers, so they test PhysX-free here.
+add_test_executable(SitlBridge_test)
+target_include_directories(SitlBridge_test
+        PRIVATE "${PROJECT_SOURCE_DIR}/examples/projects/ArduPilotSitl")
+if (WIN32)
+    target_link_libraries(SitlBridge_test PRIVATE ws2_32)
+endif ()
+
 # Imu_test needs the PhysX SDK, which is an optional vcpkg dependency (feature
 # "physx"). Look for it here rather than relying on the examples having already
 # done so — tests must configure standalone.

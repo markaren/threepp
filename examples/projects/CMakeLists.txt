@@ -13,6 +13,7 @@ if (TARGET unofficial::omniverse-physx-sdk::sdk)
     add_subdirectory(Shooter)
     add_subdirectory(FPS)
     add_subdirectory(Spot)
+    add_subdirectory(ArduPilotSitl)
 endif ()
 
 if (TARGET rltools)
