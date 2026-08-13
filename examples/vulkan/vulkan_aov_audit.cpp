@@ -106,11 +106,30 @@ int main(int argc, char** argv) {
     // timing (a stale-frame readback), not pixel content; if individual frames
     // differ at the same index, the renderer itself diverged there.
     std::string rgbTracePath;
+    // Divergence-bisection toggles: each turns off one pass group suspected of
+    // carrying run-varying state into the frame. The AOV rows are already
+    // proven exact, so whatever breaks rgb replay enters downstream of the
+    // G-buffer — find the minimal configuration that replays, then re-enable
+    // one group at a time.
+    bool noDenoise = false; // setDenoise(false): the inline deterministic shading path
+    bool noRestir = false;  // setRestirDIEnabled(false): no reservoir feedback
+    bool noOccl = false;    // setOcclusionCulling(false)
+    bool noLod = false;     // setAutoLod(false)
+    bool hardSun = false;   // setSunAngularRadius(0): no shadow-ray cone jitter
+    bool staticScene = false;// --static: no scripted motion → no BLAS refit /
+                             // TLAS update. Discriminates acceleration-structure
+                             // rebuild nondeterminism from everything else.
     for (int i = 1; i < argc; ++i) {
         const std::string arg = argv[i];
         if (arg == "--frames" && i + 1 < argc) frames = std::atoi(argv[++i]);
         else if (arg == "--out" && i + 1 < argc) outPath = argv[++i];
         else if (arg == "--rgbtrace" && i + 1 < argc) rgbTracePath = argv[++i];
+        else if (arg == "--no-denoise") noDenoise = true;
+        else if (arg == "--no-restir") noRestir = true;
+        else if (arg == "--no-occl") noOccl = true;
+        else if (arg == "--no-lod") noLod = true;
+        else if (arg == "--hard-sun") hardSun = true;
+        else if (arg == "--static") staticScene = true;
         else if (arg == "--compare" && i + 2 < argc) return compare(argv[i + 1], argv[i + 2]);
     }
 
@@ -130,6 +149,11 @@ int main(int argc, char** argv) {
     renderer.setSceneCaptureEnabled(true);
     renderer.setDlss(false);
     renderer.setFsr(false);
+    if (noDenoise) renderer.setDenoise(false);
+    if (noRestir) renderer.setRestirDIEnabled(false);
+    if (noOccl) renderer.setOcclusionCulling(false);
+    if (noLod) renderer.setAutoLod(false);
+    if (hardSun) renderer.setSunAngularRadius(0.f);
 
     Scene scene;
     scene.background = Color(0x304050);
@@ -198,10 +222,12 @@ int main(int argc, char** argv) {
 
     for (int f = 0; f < frames; ++f) {
         const double t = f * kDt;
-        mover->position.set(static_cast<float>(2.0 * std::sin(t * 1.3)), 1.f,
-                            static_cast<float>(1.5 * std::cos(t * 0.9)));
-        mover->rotation.y = static_cast<float>(t * 1.7);
-        spinner->rotation.x = static_cast<float>(t * 2.3);
+        if (!staticScene) {
+            mover->position.set(static_cast<float>(2.0 * std::sin(t * 1.3)), 1.f,
+                                static_cast<float>(1.5 * std::cos(t * 0.9)));
+            mover->rotation.y = static_cast<float>(t * 1.7);
+            spinner->rotation.x = static_cast<float>(t * 2.3);
+        }
 
         renderer.render(scene, *camera);
 
