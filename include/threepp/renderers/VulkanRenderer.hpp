@@ -314,6 +314,31 @@ namespace threepp {
 
         void dispose() override;
 
+        // ── Deterministic frame clock ─────────────────────────────────────
+        // Pins every wall-clock read the frame path makes — the TAA blend dt,
+        // the shade's animation timeSec, DLSS/FSR frame deltas, ocean foam
+        // decay, deform timestamps, the cloud clock — to an app-supplied
+        // simulation time. Call once per frame BEFORE render() with a
+        // monotonically non-decreasing value; stepping it by a fixed dt makes
+        // the rendered output replayable bit-for-bit across runs (raster AOVs
+        // already are; the beauty frame additionally needs this because its
+        // temporal-blend weights are otherwise functions of real frame time).
+        // Negative disables and returns to the wall clock (the default).
+        // Sensor pipelines should drive this with the same sim clock that
+        // stamps their measurements (see extras/sensors/Sensor.hpp).
+        void setSimTime(double seconds);
+        [[nodiscard]] double simTime() const;
+
+        // Debug/audit readback of the temporal-resolve endpoints for the LAST
+        // completed frame: `input` = the TAA input image (the shade → bloom →
+        // post-composite product; BGRA8 at the render extent), `history` = the
+        // history slot that frame wrote (RGBA16F at the output extent).
+        // Splits "the shading diverged" from "the temporal resolve diverged"
+        // in the determinism audit (examples/vulkan/vulkan_aov_audit.cpp).
+        // Full device sync per call — an audit instrument, not a capture path.
+        bool readTaaDebugImages(std::vector<uint8_t>& input, int& inW, int& inH,
+                                std::vector<uint8_t>& history, int& histW, int& histH);
+
         // ImGui integration handles (Vulkan types erased to void* / uint32_t).
         [[nodiscard]] void* nativeInstance() const;
         [[nodiscard]] void* nativePhysicalDevice() const;

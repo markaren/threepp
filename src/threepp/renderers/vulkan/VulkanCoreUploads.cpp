@@ -1403,9 +1403,16 @@ namespace threepp {
         ubo.bottomY     = cloudBottomY_;
         ubo.topY        = cloudTopY_;
         ubo.evolveSpeed = cloudEvolveSpeed_;
-        static const auto cloudEpoch = std::chrono::steady_clock::now();
-        ubo.timeSec     = std::chrono::duration<float>(
-                                  std::chrono::steady_clock::now() - cloudEpoch).count();
+        // Sim-time override first (setSimTime starts at whatever the app's
+        // clock says, typically 0 — small floats, no epoch needed). The wall
+        // fallback keeps the process-start epoch so the float stays small.
+        if (simTimeSec_ >= 0.0) {
+            ubo.timeSec = static_cast<float>(simTimeSec_);
+        } else {
+            static const auto cloudEpoch = std::chrono::steady_clock::now();
+            ubo.timeSec     = std::chrono::duration<float>(
+                                      std::chrono::steady_clock::now() - cloudEpoch).count();
+        }
         // Heterogeneous near-field froxels run whenever an AIR medium exists this
         // frame — Phase 2: scene.fog alone is enough (the resolved medium below),
         // not only the explicit setHeightFog. The froxel medium is the height-fog

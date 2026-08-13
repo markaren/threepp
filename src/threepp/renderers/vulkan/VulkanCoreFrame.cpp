@@ -64,6 +64,13 @@ VkResult VulkanRenderer::Impl::acquireOrReuseSwapchainImage(uint32_t& imageIndex
                 acquireSemPending_[currentFrame] = true;
                 if (ctx->presentSuppressed()) pinnedSwapImage_[currentFrame] = imageIndex;
             }
+            // Determinism forensics: the acquire order is presentation-engine
+            // timing, i.e. wall clock — if any shading input ever depends on
+            // imageIndex, this trace is how the leak shows itself (two runs
+            // print different sequences at the frame the pixels diverge).
+            if (const char* e = std::getenv("THREEPP_VK_TRACE_ACQUIRE"); e && *e && *e != '0') {
+                std::cout << "acquire frame=" << frameSerial_ << " img=" << imageIndex << "\n";
+            }
             return r;
         }
 
@@ -849,7 +856,7 @@ bool VulkanRenderer::Impl::beginDeferredFrame(Object3D& scene, Camera& camera) {
             // safe only after the current slot's prior GPU work is retired (fence above).
             {
                 THREEPP_CPUPROF("frame.3_onBeginHook");
-                const double now = glfwGetTime();
+                const double now = frameNowSec();
                 const float  dt  = (lastFrameTime_ > 0.0)
                                    ? static_cast<float>(now - lastFrameTime_) : 0.016f;
                 lastFrameTime_ = now;

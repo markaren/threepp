@@ -1329,7 +1329,11 @@ void VulkanRenderer::Impl::recordUpscaleAndPost(VkCommandBuffer cb, uint32_t ima
                                      // low fps leaves discrete stale edge bands
                                      // (one per ramp frame) behind moving objects.
             {
-                const double now = glfwGetTime();
+                // frameNowSec, not glfwGetTime: this dt sets the history blend
+                // weight, so wall time here made the beauty frame irreproducible
+                // — every run blended with different alphas from the first
+                // history frame onward (found by the replay-audit harness).
+                const double now = frameNowSec();
                 if (taaPrevTimeSec_ >= 0.0) {
                     const double dt = now - taaPrevTimeSec_;
                     if (dt > 0.0) {
@@ -1375,7 +1379,7 @@ void VulkanRenderer::Impl::recordUpscaleAndPost(VkCommandBuffer cb, uint32_t ima
                 // computed on this path).
                 float dlssDtMs = 16.6f;
                 {
-                    const double now = glfwGetTime();
+                    const double now = frameNowSec();
                     if (dlssPrevTimeSec_ >= 0.0) {
                         const double dt = now - dlssPrevTimeSec_;
                         if (dt > 0.0) dlssDtMs = static_cast<float>(dt * 1000.0);
@@ -1488,7 +1492,7 @@ void VulkanRenderer::Impl::recordUpscaleAndPost(VkCommandBuffer cb, uint32_t ima
                 // computed on this path).
                 float fsrDtMs = 16.6f;
                 {
-                    const double now = glfwGetTime();
+                    const double now = frameNowSec();
                     if (fsrPrevTimeSec_ >= 0.0) {
                         const double dt = now - fsrPrevTimeSec_;
                         if (dt > 0.0) fsrDtMs = static_cast<float>(dt * 1000.0);
