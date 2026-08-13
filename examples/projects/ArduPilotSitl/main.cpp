@@ -19,6 +19,7 @@
 #include "SitlBridge.hpp"
 
 #include "threepp/extras/imgui/ImguiContext.hpp"
+#include "threepp/extras/terrain/DetailTexture.hpp"
 #include "threepp/extras/terrain/TerrainGenerator.hpp"
 #include "threepp/lights/AmbientLight.hpp"
 #include "threepp/lights/DirectionalLight.hpp"
@@ -30,6 +31,7 @@
 #include <chrono>
 #include <cstdio>
 #include <cstring>
+#include <limits>
 #include <string>
 
 using namespace threepp;
@@ -242,26 +244,34 @@ int main(int argc, char** argv) {
 
     Scene scene;
 
-    // Sky + sun.
-    auto sky = Sky::create();
-    sky->scale.setScalar(9000);
-    {
+    // Sky + sun. The Preetham Sky dome is a GL ShaderMaterial the Vulkan
+    // deferred renderer can't shade — there it would render as a black sphere
+    // enclosing the camera (the whole frame goes black). On Vulkan use a flat
+    // sky-color background instead (the mountains demo's fallback idiom); the
+    // volumetric-cloud/env-map treatment is the future showpiece pass.
+    const bool vulkan = canvas.graphicsApi() == GraphicsAPI::Vulkan;
+    if (!vulkan) {
+        auto sky = Sky::create();
+        sky->scale.setScalar(9000);
         auto& u = sky->materialAs<ShaderMaterial>()->uniforms;
         u.at("turbidity").value<float>() = 6;
         u.at("rayleigh").value<float>() = 1.2f;
         u.at("mieCoefficient").value<float>() = 0.006f;
         u.at("mieDirectionalG").value<float>() = 0.8f;
+        u.at("sunPosition").value<Vector3>().setFromSphericalCoords(
+                1.f, math::degToRad(90 - 28), math::degToRad(135));
+        scene.add(sky);
+    } else {
+        scene.background = Color(0.55f, 0.72f, 0.92f);
     }
-    scene.add(sky);
 
     auto sun = DirectionalLight::create(Color(1.f, 0.96f, 0.90f), 2.2f);
     Vector3 sunDir;// unit vector toward the sun; the light rig follows the drone
     auto sunTarget = Object3D::create();
     {
-        const float phi = math::degToRad(90 - 28);// elevation 28 deg
+        const float phi = math::degToRad(90 - 28);// elevation 28 deg, matches the sky dome
         const float theta = math::degToRad(135);
         sunDir.setFromSphericalCoords(1.f, phi, theta);
-        sky->materialAs<ShaderMaterial>()->uniforms.at("sunPosition").value<Vector3>().copy(sunDir);
         sun->position.copy(sunDir).multiplyScalar(300.f);
         sun->castShadow = true;
         // A tight frustum that tracks the drone (see the animate loop) buys far
@@ -279,18 +289,21 @@ int main(int argc, char** argv) {
     }
     scene.add(AmbientLight::create(Color(0.55f, 0.65f, 0.8f), 0.35f));
 
-    // Rolling-hills terrain, gentle at the center where the drone homes. No
-    // erosion, so heightAt() agrees exactly with the baked mesh.
+    // Rolling-hills terrain, gentle at the center where the drone homes.
+    // Hydraulic erosion carves drainage into the slopes (the ~1 s pass); all
+    // home-height queries sample the eroded GEOMETRY, never heightAt(), which
+    // knows nothing of erosion.
     terrain::TerrainParams tp;
     tp.worldSize = 1500.f;
-    tp.resolution = 256;
-    tp.amplitude = 55.f;
+    tp.resolution = 512;
+    tp.amplitude = 65.f;
     tp.featureScale = 420.f;
-    tp.octaves = 5;
+    tp.octaves = 6;
     tp.falloff = terrain::Falloff::Radial;
-    tp.erosion = terrain::ErosionType::None;
+    tp.erosion = terrain::ErosionType::Hydraulic;
     terrain::TerrainGenerator gen(1337);
     gen.buildField(tp);
+    gen.erode(tp);
 
     auto terrainMat = MeshStandardMaterial::create(
             MeshStandardMaterial::Params{}.color(Color::white).roughness(0.95f).metalness(0.f));
@@ -301,8 +314,33 @@ int main(int argc, char** argv) {
     terrainTex->magFilter = Filter::Linear;
     terrainTex->minFilter = Filter::Linear;
     terrainMat->map = terrainTex;
+    {
+        // Cm-scale tiled detail (albedo breakup + normal relief + roughness),
+        // consumed by the Vulkan deferred renderer; GL ignores these slots.
+        const terrain::DetailMaps dm = terrain::makeDetailMaps({});
+        terrainMat->detailMap = dm.albedo;
+        terrainMat->detailNormalMap = dm.normalRough;
+        terrainMat->detailRepeat = 0.5f;// one repeat per 2 m
+        terrainMat->detailStrength = 0.5f;
+        terrainMat->detailNormalScale = 1.2f;
+        terrainMat->detailRoughStrength = 0.5f;
+    }
     auto terrainGeo = gen.makeGeometry(tp);
-    const float h0 = gen.heightAt(0.f, 0.f, tp);
+    // Home ground height = the eroded mesh's center vertex (the grid is
+    // (res+1)^2 with odd side, so an exact (0,0) vertex exists).
+    float h0 = 0.f;
+    {
+        auto* pos = terrainGeo->getAttribute<float>("position");
+        auto& a = pos->array();
+        float best = std::numeric_limits<float>::max();
+        for (int i = 0; i < pos->count(); ++i) {
+            const float d = std::abs(a[i * 3 + 0]) + std::abs(a[i * 3 + 2]);
+            if (d < best) {
+                best = d;
+                h0 = a[i * 3 + 1];
+            }
+        }
+    }
     {
         // Level a helipad apron around home: within 4 m the ground is exactly
         // h0 (so the pad never pokes through a rising slope), blending back to

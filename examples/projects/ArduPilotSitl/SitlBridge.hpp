@@ -173,6 +173,7 @@ namespace sitl {
 
             const bool newPeer = from.sin_addr.s_addr != peer_.sin_addr.s_addr ||
                                  from.sin_port != peer_.sin_port;
+            const sockaddr_in prevPeer = peer_;
             peer_ = from;
             connected_ = true;
             trackRate();
@@ -182,6 +183,19 @@ namespace sitl {
             // is a retry, not a restart.
             const bool restarted = (newPeer && haveFrame_) ||
                                    (haveFrame_ && out.frameCount < lastFrameCount_);
+            if (restarted) {
+                // Name the trigger: an alternating peer means TWO SITL
+                // instances are feeding this port — a reset storm that looks
+                // like endless restarts. Kill the stray one.
+                char oldIp[INET_ADDRSTRLEN] = {}, newIp[INET_ADDRSTRLEN] = {};
+                inet_ntop(AF_INET, &prevPeer.sin_addr, oldIp, sizeof oldIp);
+                inet_ntop(AF_INET, &from.sin_addr, newIp, sizeof newIp);
+                std::fprintf(stderr,
+                             "[sitl] reset: %s (peer %s:%u -> %s:%u, frame %u -> %u)\n",
+                             newPeer ? "PEER CHANGED" : "frame_count rollback",
+                             oldIp, ntohs(prevPeer.sin_port), newIp, ntohs(from.sin_port),
+                             lastFrameCount_, out.frameCount);
+            }
             haveFrame_ = true;
             lastFrameCount_ = out.frameCount;
             return restarted ? Event::Reset : Event::Frame;

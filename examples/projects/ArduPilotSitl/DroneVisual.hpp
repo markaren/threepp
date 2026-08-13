@@ -11,6 +11,7 @@
 #include "threepp/core/Object3D.hpp"
 #include "threepp/geometries/BoxGeometry.hpp"
 #include "threepp/geometries/CylinderGeometry.hpp"
+#include "threepp/materials/MeshBasicMaterial.hpp"
 #include "threepp/materials/MeshStandardMaterial.hpp"
 #include "threepp/objects/Group.hpp"
 #include "threepp/objects/Mesh.hpp"
@@ -59,8 +60,12 @@ namespace sitl {
             nose->position.set(0.f, 0.065f, -hullZ / 2.f - 0.02f);
             root_->add(nose);
 
-            auto blurMat = MeshStandardMaterial::create(
-                    MeshStandardMaterial::Params{}.color(Color(0.25f, 0.25f, 0.27f)).roughness(0.4f));
+            // MeshBASIC, not Standard: the Vulkan deferred renderer shades
+            // Standard materials through the opaque G-buffer where opacity is
+            // meaningless (the disc rendered solid); unlit transparent meshes
+            // go through its blended overlay pass, matching GL.
+            auto blurMat = MeshBasicMaterial::create();
+            blurMat->color = Color(0.22f, 0.22f, 0.24f);
             blurMat->transparent = true;
             blurMat->opacity = 0.f;// faded in with throttle (shared by all four)
             blurMat->depthWrite = false;
@@ -90,7 +95,9 @@ namespace sitl {
                     prop->add(blade);
                 }
                 auto blur = Mesh::create(CylinderGeometry::create(0.13f, 0.13f, 0.002f), blurMat);
+                blur->visible = false;// only while spinning fast (see setMotors)
                 prop->add(blur);
+                blurs_[i] = blur.get();
                 root_->add(prop);
                 props_[i] = prop.get();
             }
@@ -105,6 +112,7 @@ namespace sitl {
             for (int i = 0; i < 4; ++i) {
                 props_[i]->rotation.y +=
                         spinDir_[i] * (2.f + 110.f * throttle[i]) * dtRender;
+                blurs_[i]->visible = throttle[i] > 0.25f;
                 maxT = std::max(maxT, throttle[i]);
             }
             // Blades smear into a translucent disc as the motors spin up.
@@ -114,8 +122,9 @@ namespace sitl {
     private:
         std::shared_ptr<threepp::Mesh> root_;
         std::array<threepp::Group*, 4> props_{};
+        std::array<threepp::Mesh*, 4> blurs_{};
         std::array<float, 4> spinDir_{};
-        threepp::MeshStandardMaterial* blurMat_ = nullptr;
+        threepp::MeshBasicMaterial* blurMat_ = nullptr;
     };
 
 }// namespace sitl
