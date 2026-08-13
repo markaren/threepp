@@ -510,6 +510,68 @@ int main(int argc, char** argv) {
     pad->receiveShadow = true;
     scene.add(pad);
 
+    // Windsock beside the pad: yaw pivot -> droop pivot -> cone along +X.
+    // Driven every frame from the sim's instantaneous (gusty) wind: hangs
+    // limp in calm, flies horizontal by ~8 m/s, flutters with the gusts.
+    Object3D* sockYaw = nullptr;
+    Object3D* sockDroop = nullptr;
+    {
+        auto poleMat = MeshStandardMaterial::create(
+                MeshStandardMaterial::Params{}.color(Color(0.75f, 0.76f, 0.78f)).roughness(0.4f));
+        auto sockMat = MeshStandardMaterial::create(
+                MeshStandardMaterial::Params{}.color(Color(0.95f, 0.45f, 0.05f)).roughness(0.7f));
+        sockMat->side = Side::Double;
+
+        auto pole = Mesh::create(CylinderGeometry::create(0.03f, 0.04f, 4.f), poleMat);
+        pole->position.set(3.2f, 2.f, -3.2f);
+        pole->castShadow = true;
+        scene.add(pole);
+
+        auto yaw = Group::create();
+        yaw->position.set(3.2f, 3.95f, -3.2f);
+        auto droop = Group::create();
+        // Truncated cone, open ended, axis +Y; rotate so it opens along +X.
+        auto cone = Mesh::create(CylinderGeometry::create(0.09f, 0.22f, 1.1f, 12, 1, true), sockMat);
+        cone->rotation.z = math::PI / 2.f;// +Y -> +X (wide mouth at the pivot)
+        cone->position.x = 0.55f;
+        cone->castShadow = true;
+        droop->add(cone);
+        yaw->add(droop);
+        scene.add(yaw);
+        sockYaw = yaw.get();
+        sockDroop = droop.get();
+    }
+
+    // Air streaks: faint drifting dashes that advect with the wind inside a
+    // bubble around the drone. Unlit transparent material so both renderers
+    // blend them (see the rotor-blur note in DroneVisual).
+    struct Streak {
+        Mesh* mesh;
+        Vector3 pos;
+        float speedJitter;
+    };
+    std::vector<Streak> streaks;
+    {
+        auto streakGeo = BoxGeometry::create(1.f, 0.02f, 0.02f);
+        auto streakMat = MeshBasicMaterial::create();
+        streakMat->color = Color(0.9f, 0.93f, 1.f);
+        streakMat->transparent = true;
+        streakMat->opacity = 0.16f;
+        streakMat->depthWrite = false;
+        std::mt19937 rng(23);
+        std::uniform_real_distribution<float> u01(0.f, 1.f);
+        streaks.reserve(140);
+        for (int i = 0; i < 140; ++i) {
+            auto m = Mesh::create(streakGeo, streakMat);
+            m->visible = false;
+            scene.add(m);
+            streaks.push_back({m.get(),
+                               Vector3((u01(rng) - 0.5f) * 140.f, u01(rng) * 60.f,
+                                       (u01(rng) - 0.5f) * 140.f),
+                               0.75f + 0.5f * u01(rng)});
+        }
+    }
+
     // Drone.
     sitl::DroneVisual drone;
     drone.root()->position.y = 0.04f + sitl::DroneVisual::hullY / 2.f;// on the pad
@@ -607,6 +669,11 @@ int main(int argc, char** argv) {
         ImGui::End();
     });
 
+    IOCapture cap;
+    cap.preventMouseEvent = [] {
+        return ImGui::GetIO().WantCaptureKeyboard;
+    };
+
     Clock clock;
     canvas.animate([&] {
         const float dtRender = clock.getDelta();
@@ -653,6 +720,43 @@ int main(int argc, char** argv) {
             for (int i = 0; i < 4; ++i) levels[i] = quad->motorLevel(i);
         }
         drone.setMotors(levels, dtRender);
+
+        // Make the wind visible: windsock attitude + advecting air streaks,
+        // both reading the sim's instantaneous gusty wind.
+        {
+            const Vector3 w = quad->windNow();
+            const float speed = std::hypot(w.x, w.z);
+
+            if (speed > 0.05f) {
+                sockYaw->rotation.y = std::atan2(-w.z, w.x);
+            }
+            const float fly = std::min(speed / 8.f, 1.f);
+            const float flutter = windGust * 0.07f *
+                                  std::sin(static_cast<float>(clock.elapsedTime) * 7.f);
+            sockDroop->rotation.z = -(1.f - fly) * 1.4f + flutter * fly;
+
+            const bool showStreaks = speed > 0.5f;
+            const Vector3 center = drone.root()->position;
+            const float yawStreak = std::atan2(-w.z, w.x);
+            for (auto& s : streaks) {
+                s.mesh->visible = showStreaks;
+                if (!showStreaks) continue;
+                s.pos.x += w.x * s.speedJitter * dtRender;
+                s.pos.z += w.z * s.speedJitter * dtRender;
+                // Wrap inside the bubble that follows the drone.
+                const auto wrap = [](float v, float c, float half) {
+                    while (v - c > half) v -= 2 * half;
+                    while (v - c < -half) v += 2 * half;
+                    return v;
+                };
+                s.pos.x = wrap(s.pos.x, center.x, 70.f);
+                s.pos.y = wrap(s.pos.y, std::max(center.y, 20.f), 40.f);
+                s.pos.z = wrap(s.pos.z, center.z, 70.f);
+                s.mesh->position.copy(s.pos);
+                s.mesh->rotation.y = yawStreak;
+                s.mesh->scale.x = 0.8f + 0.45f * speed;
+            }
+        }
 
         // The sun rig follows the drone so the tight shadow frustum always
         // covers the action.

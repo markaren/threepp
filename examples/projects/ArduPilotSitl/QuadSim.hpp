@@ -188,6 +188,14 @@ namespace sitl {
             gustiness_ = std::clamp(gustiness, 0.f, 1.f);
         }
 
+        /// The instantaneous (gusty) wind, threepp world frame — for the
+        /// windsock and air-streak visuals, so they show the SAME air the
+        /// airframe feels.
+        [[nodiscard]] threepp::Vector3 windNow() const {
+            const auto w = currentWind();
+            return {w.x, w.y, w.z};
+        }
+
         /// SITL restarted: back to the spawn pose, everything zeroed.
         void reset() {
             using namespace ::physx;
