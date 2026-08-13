@@ -106,6 +106,16 @@ int main(int argc, char** argv) {
     // timing (a stale-frame readback), not pixel content; if individual frames
     // differ at the same index, the renderer itself diverged there.
     std::string rgbTracePath;
+    // --dumprgb <prefix>: write raw rgb bytes of frames 2..9 to
+    // <prefix>_f<N>.raw so two runs can be diffed spatially — WHERE pixels
+    // differ says what class of pass diverged (edges = reprojection, scattered
+    // singles = ray order, whole-frame LSB = a blend/exposure factor).
+    std::string dumpPrefix;
+    // --taasplit: additionally hash the TAA INPUT image (the shade→bloom→post
+    // product) and the written HISTORY slot per frame, as manifest rows
+    // taa.input / taa.history with per-frame traces on stdout. Splits "the
+    // shading diverged" from "the temporal resolve diverged".
+    bool taaSplit = false;
     // Divergence-bisection toggles: each turns off one pass group suspected of
     // carrying run-varying state into the frame. The AOV rows are already
     // proven exact, so whatever breaks rgb replay enters downstream of the
@@ -124,6 +134,8 @@ int main(int argc, char** argv) {
         if (arg == "--frames" && i + 1 < argc) frames = std::atoi(argv[++i]);
         else if (arg == "--out" && i + 1 < argc) outPath = argv[++i];
         else if (arg == "--rgbtrace" && i + 1 < argc) rgbTracePath = argv[++i];
+        else if (arg == "--dumprgb" && i + 1 < argc) dumpPrefix = argv[++i];
+        else if (arg == "--taasplit") taaSplit = true;
         else if (arg == "--no-denoise") noDenoise = true;
         else if (arg == "--no-restir") noRestir = true;
         else if (arg == "--no-occl") noOccl = true;
@@ -218,10 +230,15 @@ int main(int argc, char** argv) {
     constexpr double kDt = 1.0 / 60.0;// scripted clock — never wall time
     std::vector<std::uint8_t> buf;
     std::ostringstream rgbTrace;
+    Stream taaIn, taaHist;
+    std::vector<std::uint8_t> taaInBuf, taaHistBuf;
     int failures = 0;
 
     for (int f = 0; f < frames; ++f) {
         const double t = f * kDt;
+        // The deterministic frame clock: with it, the TAA blend weights and
+        // every other formerly-wall-clock input advance on this scripted time.
+        renderer.setSimTime(t);
         if (!staticScene) {
             mover->position.set(static_cast<float>(2.0 * std::sin(t * 1.3)), 1.f,
                                 static_cast<float>(1.5 * std::cos(t * 0.9)));
@@ -253,6 +270,28 @@ int main(int argc, char** argv) {
                 one.bytes(pixels.data(), pixels.size());
                 rgbTrace << "f" << f << " " << std::hex << one.value() << std::dec << "\n";
             }
+            if (taaSplit) {
+                int iw = 0, ih = 0, hw = 0, hh = 0;
+                if (renderer.readTaaDebugImages(taaInBuf, iw, ih, taaHistBuf, hw, hh)) {
+                    Fnv i1, h1;
+                    i1.bytes(taaInBuf.data(), taaInBuf.size());
+                    h1.bytes(taaHistBuf.data(), taaHistBuf.size());
+                    std::cout << "taasplit f" << f << " in=" << std::hex << i1.value()
+                              << " hist=" << h1.value() << std::dec << "\n";
+                    taaIn.hash.bytes(taaInBuf.data(), taaInBuf.size());
+                    taaIn.bytes += taaInBuf.size();
+                    ++taaIn.frames;
+                    taaHist.hash.bytes(taaHistBuf.data(), taaHistBuf.size());
+                    taaHist.bytes += taaHistBuf.size();
+                    ++taaHist.frames;
+                }
+            }
+            if (!dumpPrefix.empty() && f >= 2 && f <= 9) {
+                std::ofstream df(dumpPrefix + "_f" + std::to_string(f) + ".raw",
+                                 std::ios::binary);
+                df.write(reinterpret_cast<const char*>(pixels.data()),
+                         static_cast<std::streamsize>(pixels.size()));
+            }
         }
     }
     if (!rgbTracePath.empty()) {
@@ -267,6 +306,10 @@ int main(int argc, char** argv) {
     };
     for (auto& row : rows) emit(row.name, row.stream);
     emit("rgb", rgb);
+    if (taaSplit) {
+        emit("taa.input", taaIn);
+        emit("taa.history", taaHist);
+    }
 
     std::cout << "vulkan_aov_audit: " << frames << " frames";
     if (failures) {

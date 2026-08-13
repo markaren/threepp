@@ -76,8 +76,11 @@ namespace threepp::vulkan {
         // is a spec violation (VUID-vkCmdClearColorImage-image-00002) unless
         // the usage bit is here, since the clear is issued by the SDK and can't
         // be routed through a render-pass loadOp on our side.
+        // TRANSFER_SRC for the determinism audit's host readback
+        // (VulkanRenderer::readTaaDebugImages) — a usage bit is free.
         ici.usage         = VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT |
-                            VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+                            VK_IMAGE_USAGE_TRANSFER_DST_BIT |
+                            VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
         ici.sharingMode   = VK_SHARING_MODE_EXCLUSIVE;
         ici.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
 
