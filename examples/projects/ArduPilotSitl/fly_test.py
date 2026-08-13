@@ -6,7 +6,7 @@ then: GUIDED -> arm -> takeoff 10 m -> 3 m/s north for 5 s -> RTL.
 Exit 0 on a completed round trip, 1 on any timeout.
 
 With --tour: uploads a scenic waypoint loop over the valley (climbing to
-160 m — through the Vulkan cloud base) and flies it in AUTO at 8 m/s,
+145 m — into the Vulkan cloud base) and flies it in AUTO at 8 m/s,
 ending with RTL onto the pad.
 """
 import sys
@@ -18,14 +18,20 @@ from pymavlink import mavutil
 # to ~65 m above home outside the apron and waypoint altitudes are relative
 # to HOME (no terrain following), so every en-route leg stays >= 90 m; only
 # the final fix over the flat pad apron descends below that.
+#
+# Kept deliberately COMPACT (~650 m of track, ~80 s at 8 m/s, versus ~1520 m
+# before) so the loop fits a single continuous take. Shrinking the footprint
+# does not buy any altitude margin -- the radial falloff leaves the terrain
+# near home at full amplitude, so the >= 90 m floor still applies -- but the
+# drone now stays inside a ~130 m radius, which keeps it large in frame from
+# a chase camera instead of shrinking to a dot on the long legs.
 TOUR = [
-    (180, 0, 95),
-    (180, 180, 110),
-    (0, 260, 130),
-    (-200, 180, 160),
-    (-200, -120, 120),
-    (60, -160, 100),
-    (0, 0, 40),
+    (90, 0, 90),
+    (90, 90, 110),
+    (0, 130, 145),# peak leg, into the 140 m cloud base
+    (-100, 90, 120),
+    (-100, -60, 95),
+    (0, 0, 35),
 ]
 
 
@@ -52,17 +58,30 @@ def upload_tour(m, home_lat, home_lon):
 
     # Post the route to the demo's waypoint-marker port so the scene can SHOW
     # the mission (fire-and-forget; harmless if the demo isn't listening).
+    #
+    # Sent to every plausible address for the Windows host rather than one
+    # guess, because which one is right depends on how WSL2 is networked and
+    # nothing here can tell: under the default NAT the host is the default
+    # gateway, but under `networkingMode=mirrored` that gateway is the physical
+    # ROUTER and the datagram vanishes silently (the mission simply never
+    # appears, with no error anywhere). These are unconnected UDP sends to a
+    # port nothing else uses, so the wrong one costs a discarded packet.
+    text = "0,0,30;" + ";".join(f"{n},{e},{alt}" for n, e, alt in TOUR) + ";"
+    hosts = ["127.0.0.1"]  # mirrored networking, and native Linux
     try:
-        import socket
         import subprocess
-        host = subprocess.check_output(["sh", "-c", "ip route show default"],
-                                       text=True).split()[2]
-        text = "0,0,30;" + ";".join(f"{n},{e},{alt}" for n, e, alt in TOUR) + ";"
-        socket.socket(socket.AF_INET, socket.SOCK_DGRAM).sendto(
-                text.encode(), (host, 9008))
-        print(f"[fly] waypoint markers sent to {host}:9008")
-    except Exception as exc:  # pragma: no cover - cosmetic path
-        print(f"[fly] marker send skipped: {exc}")
+        hosts.append(subprocess.check_output(["sh", "-c", "ip route show default"],
+                                             text=True).split()[2])  # NAT
+    except Exception:  # pragma: no cover - no default route
+        pass
+    for host in hosts:
+        try:
+            import socket
+            socket.socket(socket.AF_INET, socket.SOCK_DGRAM).sendto(
+                    text.encode(), (host, 9008))
+        except Exception as exc:  # pragma: no cover - cosmetic path
+            print(f"[fly] marker send to {host} skipped: {exc}")
+    print(f"[fly] waypoint markers sent to {', '.join(hosts)} :9008")
 
     m.mav.mission_count_send(m.target_system, m.target_component, len(items))
     sent = 0

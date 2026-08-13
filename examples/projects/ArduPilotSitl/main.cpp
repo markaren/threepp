@@ -19,6 +19,7 @@
 #include "SitlBridge.hpp"
 
 #include "threepp/extras/imgui/ImguiContext.hpp"
+#include "threepp/extras/imgui/RendererSettings.hpp"
 #include "threepp/extras/terrain/DetailTexture.hpp"
 #include "threepp/extras/terrain/RockGeometry.hpp"
 #include "threepp/extras/terrain/TerrainGenerator.hpp"
@@ -522,18 +523,21 @@ int main(int argc, char** argv) {
                 MeshStandardMaterial::Params{}.color(Color(0.95f, 0.45f, 0.05f)).roughness(0.7f));
         sockMat->side = Side::Double;
 
-        auto pole = Mesh::create(CylinderGeometry::create(0.03f, 0.04f, 4.f), poleMat);
-        pole->position.set(3.2f, 2.f, -3.2f);
+        // Scaled up ~1.8x over a realistic sock: from a chase camera framing a
+        // 0.5 m quad, a to-scale windsock is a few pixels of orange and the
+        // wind direction is unreadable on video.
+        auto pole = Mesh::create(CylinderGeometry::create(0.05f, 0.07f, 6.f), poleMat);
+        pole->position.set(3.2f, 3.f, -3.2f);
         pole->castShadow = true;
         scene.add(pole);
 
         auto yaw = Group::create();
-        yaw->position.set(3.2f, 3.95f, -3.2f);
+        yaw->position.set(3.2f, 5.9f, -3.2f);
         auto droop = Group::create();
         // Truncated cone, open ended, axis +Y; rotate so it opens along +X.
-        auto cone = Mesh::create(CylinderGeometry::create(0.09f, 0.22f, 1.1f, 12, 1, true), sockMat);
+        auto cone = Mesh::create(CylinderGeometry::create(0.16f, 0.40f, 2.f, 12, 1, true), sockMat);
         cone->rotation.z = math::PI / 2.f;// +Y -> +X (wide mouth at the pivot)
-        cone->position.x = 0.55f;
+        cone->position.x = 1.f;
         cone->castShadow = true;
         droop->add(cone);
         yaw->add(droop);
@@ -550,24 +554,30 @@ int main(int argc, char** argv) {
         Vector3 pos;
         float speedJitter;
     };
+    // Sized for the camera, not for realism: on video a sparse scatter of
+    // hairline dashes reads as compression noise, so the field is 3x denser,
+    // the dashes are thicker and brighter, and the bubble is wider than the
+    // chase framing so streaks enter from off-screen rather than popping in.
+    constexpr int streakCount = 420;
+    constexpr float streakBubble = 90.f;// half-extent in x/z; y uses 40
     std::vector<Streak> streaks;
     {
-        auto streakGeo = BoxGeometry::create(1.f, 0.02f, 0.02f);
+        auto streakGeo = BoxGeometry::create(1.f, 0.05f, 0.05f);
         auto streakMat = MeshBasicMaterial::create();
         streakMat->color = Color(0.9f, 0.93f, 1.f);
         streakMat->transparent = true;
-        streakMat->opacity = 0.16f;
+        streakMat->opacity = 0.3f;
         streakMat->depthWrite = false;
         std::mt19937 rng(23);
         std::uniform_real_distribution<float> u01(0.f, 1.f);
-        streaks.reserve(140);
-        for (int i = 0; i < 140; ++i) {
+        streaks.reserve(streakCount);
+        for (int i = 0; i < streakCount; ++i) {
             auto m = Mesh::create(streakGeo, streakMat);
             m->visible = false;
             scene.add(m);
             streaks.push_back({m.get(),
-                               Vector3((u01(rng) - 0.5f) * 140.f, u01(rng) * 60.f,
-                                       (u01(rng) - 0.5f) * 140.f),
+                               Vector3((u01(rng) - 0.5f) * streakBubble * 2.f, u01(rng) * 80.f,
+                                       (u01(rng) - 0.5f) * streakBubble * 2.f),
                                0.75f + 0.5f * u01(rng)});
         }
     }
@@ -580,6 +590,11 @@ int main(int argc, char** argv) {
     PerspectiveCamera camera(60.f, canvas.aspect(), 0.1f, 10000.f);
     camera.position.set(2.2f, 1.3f, 2.9f);
     OrbitControls controls{camera, canvas};
+    // Chase state: the drone position the camera was last reconciled against.
+    // Seeded from the drone so the first frame contributes no displacement.
+    Vector3 chaseAnchor{drone.root()->position};
+    controls.target.copy(drone.root()->position);
+    bool followDrone = true;
 
     // SITL link. The servo packet carries a frame_rate SITL would LIKE, but it
     // is dynamic (SITL ramps it while syncing its speedup) and the protocol
@@ -682,6 +697,7 @@ int main(int argc, char** argv) {
         renderer->setSize(size);
     });
 
+    RendererSettings rendererSettings(*renderer);
     ImguiFunctionalContext ui(canvas, *renderer, [&] {
         if (!bridge.connected()) {
             ImGui::SetNextWindowPos({ImGui::GetIO().DisplaySize.x * 0.5f,
@@ -737,6 +753,12 @@ int main(int argc, char** argv) {
             std::snprintf(label, sizeof label, "M%d %u", i + 1, lastServo.pwm[i]);
             ImGui::ProgressBar((lastServo.pwm[i] - 1000.f) / 1000.f, ImVec2(180, 0), label);
         }
+        ImGui::Separator();
+        // Unlock to leave the camera behind for a fly-past, then re-lock: the
+        // rig resumes from wherever the drone is, it does not snap back.
+        ImGui::Checkbox("camera follows drone", &followDrone);
+        ImGui::Separator();
+        rendererSettings.drawCollapsed();
         ImGui::End();
     });
 
@@ -831,12 +853,12 @@ int main(int argc, char** argv) {
                     while (v - c < -half) v += 2 * half;
                     return v;
                 };
-                s.pos.x = wrap(s.pos.x, center.x, 70.f);
+                s.pos.x = wrap(s.pos.x, center.x, streakBubble);
                 s.pos.y = wrap(s.pos.y, std::max(center.y, 20.f), 40.f);
-                s.pos.z = wrap(s.pos.z, center.z, 70.f);
+                s.pos.z = wrap(s.pos.z, center.z, streakBubble);
                 s.mesh->position.copy(s.pos);
                 s.mesh->rotation.y = yawStreak;
-                s.mesh->scale.x = 0.8f + 0.45f * speed;
+                s.mesh->scale.x = 1.3f + 0.9f * speed;
             }
         }
 
@@ -845,18 +867,32 @@ int main(int argc, char** argv) {
         sunTarget->position.copy(drone.root()->position);
         sun->position.copy(sunDir).multiplyScalar(300.f).add(sunTarget->position);
 
-        // Chase: orbit stays user-controlled, but the camera is towed along
-        // whenever the drone pulls further than a leash length away.
-        controls.target.copy(drone.root()->position);
+        // Chase: RIGID follow, not a leash. Each frame the drone's displacement
+        // since the last frame is added to BOTH the orbit target and the camera
+        // eye, which translates the whole rig without touching the vector
+        // between them. That vector is exactly what OrbitControls encodes, so
+        // every part of the user's framing survives the vehicle moving under it
+        // -- orbit angle, dolly distance, AND any right-drag pan offset, since
+        // panning displaces target and eye together and the shared translation
+        // preserves that too.
+        //
+        // The old code instead slammed `target = dronePos` every frame, which
+        // discarded pan outright and let the camera fall behind until a 14 m
+        // leash yanked it; on video that reads as a stutter every time the
+        // drone accelerates. Deltas also make a SITL restart free: the vehicle
+        // teleports home and the camera rides along, keeping the shot.
         {
-            Vector3 toCam = camera.position;
-            toCam.sub(controls.target);
-            const float dist = toCam.length();
-            constexpr float leash = 14.f;
-            if (dist > leash) {
-                toCam.multiplyScalar(leash / dist);
-                camera.position.copy(controls.target).add(toCam);
+            const Vector3& dronePos = drone.root()->position;
+            if (followDrone) {
+                Vector3 delta = dronePos;
+                delta.sub(chaseAnchor);
+                camera.position.add(delta);
+                controls.target.add(delta);
             }
+            // Tracked even while unlocked, so re-enabling follow resumes from
+            // where the drone is now instead of teleporting the camera by the
+            // whole distance it covered meanwhile.
+            chaseAnchor.copy(dronePos);
         }
         controls.update();
 
