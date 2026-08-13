@@ -605,6 +605,77 @@ int main(int argc, char** argv) {
     std::uint32_t resets = 0;
     float windSpeed = 0.f, windFromDeg = 270.f, windGust = 0.3f;// HUD-driven
 
+    // Waypoint marker channel: the mission lives inside ArduPilot and the
+    // physics protocol never mentions it, so fly_test.py posts its route here
+    // as one plain-text datagram — "N,E,ALT;N,E,ALT;..." (home-relative
+    // metres, NED) on UDP port+6 (9008 by default; SITL's own side ports sit
+    // at 9003-9005). Empty datagram clears the markers.
+    sitl::socket_t markerSock = ::socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+    {
+        sockaddr_in addr{};
+        addr.sin_family = AF_INET;
+        addr.sin_addr.s_addr = htonl(INADDR_ANY);
+        addr.sin_port = htons(static_cast<std::uint16_t>(port + 6));
+#ifdef _WIN32
+        u_long nb = 1;
+        ::bind(markerSock, reinterpret_cast<sockaddr*>(&addr), sizeof addr);
+        ioctlsocket(markerSock, FIONBIO, &nb);
+#else
+        ::bind(markerSock, reinterpret_cast<sockaddr*>(&addr), sizeof addr);
+        fcntl(markerSock, F_SETFL, fcntl(markerSock, F_GETFL, 0) | O_NONBLOCK);
+#endif
+    }
+    auto markerGroup = Group::create();
+    scene.add(markerGroup);
+    const auto rebuildMarkers = [&](const std::string& text) {
+        markerGroup->clear();
+        auto ringMat = MeshBasicMaterial::create();
+        ringMat->color = Color(1.f, 0.72f, 0.1f);
+        auto beamMat = MeshBasicMaterial::create();
+        beamMat->color = Color(1.f, 0.72f, 0.1f);
+        beamMat->transparent = true;
+        beamMat->opacity = 0.22f;
+        beamMat->depthWrite = false;
+        auto pathMat = MeshBasicMaterial::create();
+        pathMat->color = Color(0.35f, 0.75f, 1.f);
+        pathMat->transparent = true;
+        pathMat->opacity = 0.35f;
+        pathMat->depthWrite = false;
+
+        std::vector<Vector3> pts;
+        double n, e, alt;
+        const char* p = text.c_str();
+        int consumed;
+        while (std::sscanf(p, "%lf,%lf,%lf;%n", &n, &e, &alt, &consumed) == 3) {
+            pts.push_back(sitl::frame::nedToTp(n, e, -alt));
+            p += consumed;
+        }
+        const Vector3 up(0, 1, 0);
+        for (const auto& wp : pts) {
+            auto ring = Mesh::create(TorusGeometry::create(3.f, 0.28f, 10, 28), ringMat);
+            ring->rotation.x = math::PI / 2.f;// horizontal halo at the waypoint altitude
+            ring->position.copy(wp);
+            markerGroup->add(ring);
+            const float ground = groundY(wp.x, wp.z);
+            auto beam = Mesh::create(
+                    CylinderGeometry::create(0.12f, 0.12f, wp.y - ground), beamMat);
+            beam->position.set(wp.x, (wp.y + ground) * 0.5f, wp.z);
+            markerGroup->add(beam);
+        }
+        for (std::size_t i = 1; i < pts.size(); ++i) {
+            Vector3 dir = pts[i];
+            dir.sub(pts[i - 1]);
+            const float len = dir.length();
+            if (len < 1e-3f) continue;
+            dir.divideScalar(len);
+            auto seg = Mesh::create(CylinderGeometry::create(0.15f, 0.15f, len, 6), pathMat);
+            seg->position.copy(pts[i - 1]).add(pts[i]).multiplyScalar(0.5f);
+            seg->quaternion.setFromUnitVectors(up, dir);
+            markerGroup->add(seg);
+        }
+        std::fprintf(stderr, "[markers] %zu waypoints\n", pts.size());
+    };
+
     canvas.onWindowResize([&](WindowSize size) {
         camera.aspect = size.aspect();
         camera.updateProjectionMatrix();
@@ -671,12 +742,23 @@ int main(int argc, char** argv) {
 
     IOCapture cap;
     cap.preventMouseEvent = [] {
-        return ImGui::GetIO().WantCaptureKeyboard;
+        return ImGui::GetIO().WantCaptureMouse;
     };
+    canvas.setIOCapture(&cap);
 
     Clock clock;
     canvas.animate([&] {
         const float dtRender = clock.getDelta();
+
+        // Waypoint-marker channel (one datagram per mission upload; cheap poll).
+        {
+            char buf[2048];
+            const auto n = ::recvfrom(markerSock, buf, sizeof buf - 1, 0, nullptr, nullptr);
+            if (n >= 0) {
+                buf[n] = '\0';
+                rebuildMarkers(buf);
+            }
+        }
 
         // Wind blows FROM windFromDeg (compass, 0 = from north), toward the
         // opposite heading — the meteorological convention.

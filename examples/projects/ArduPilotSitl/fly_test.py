@@ -50,6 +50,20 @@ def upload_tour(m, home_lat, home_lon):
         items.append(item(2 + i, mavutil.mavlink.MAV_CMD_NAV_WAYPOINT, n, e, alt))
     items.append(item(len(items), mavutil.mavlink.MAV_CMD_NAV_RETURN_TO_LAUNCH))
 
+    # Post the route to the demo's waypoint-marker port so the scene can SHOW
+    # the mission (fire-and-forget; harmless if the demo isn't listening).
+    try:
+        import socket
+        import subprocess
+        host = subprocess.check_output(["sh", "-c", "ip route show default"],
+                                       text=True).split()[2]
+        text = "0,0,30;" + ";".join(f"{n},{e},{alt}" for n, e, alt in TOUR) + ";"
+        socket.socket(socket.AF_INET, socket.SOCK_DGRAM).sendto(
+                text.encode(), (host, 9008))
+        print(f"[fly] waypoint markers sent to {host}:9008")
+    except Exception as exc:  # pragma: no cover - cosmetic path
+        print(f"[fly] marker send skipped: {exc}")
+
     m.mav.mission_count_send(m.target_system, m.target_component, len(items))
     sent = 0
     t0 = time.time()
