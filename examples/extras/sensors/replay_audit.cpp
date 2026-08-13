@@ -132,12 +132,23 @@ int main(int argc, char** argv) {
     // across islands and may; with --enhanced it must not.
     bool bystander = false;
     bool enhanced = false;
+    // --threads: solver worker count (Settings::numThreads). The question this
+    // knob asks: is the simulation bit-exact ACROSS thread counts, and does
+    // eENABLE_ENHANCED_DETERMINISM change the answer?
+    unsigned threads = 2;
+    // --seed: offsets the IMU noise seeds. Instrument validation, not an
+    // experiment: a changed seed MUST flip the imu row and MUST NOT touch the
+    // noiseless streams — a hash that can't detect change proves nothing when
+    // it matches.
+    std::uint64_t seedOffset = 0;
     for (int i = 1; i < argc; ++i) {
         const std::string arg = argv[i];
         if (arg == "--seconds" && i + 1 < argc) seconds = std::atof(argv[++i]);
         else if (arg == "--out" && i + 1 < argc) outPath = argv[++i];
         else if (arg == "--bystander") bystander = true;
         else if (arg == "--enhanced") enhanced = true;
+        else if (arg == "--threads" && i + 1 < argc) threads = static_cast<unsigned>(std::atoi(argv[++i]));
+        else if (arg == "--seed" && i + 1 < argc) seedOffset = static_cast<std::uint64_t>(std::atoll(argv[++i]));
         else if (arg == "--compare" && i + 2 < argc) return compare(argv[i + 1], argv[i + 2]);
     }
 
@@ -155,6 +166,7 @@ int main(int argc, char** argv) {
     settings.fixedTimestep = kSubstep;
     settings.maxSubSteps = 8;
     settings.enhancedDeterminism = enhanced;
+    settings.numThreads = threads;
     PhysxWorld world(settings);
 
     auto ground = limb(40, 1, 40);
@@ -192,9 +204,14 @@ int main(int argc, char** argv) {
                             false, 0.f, 0.f, 3000.f, 350.f, 1e6f, 0.f, "revolute", 0.f, nullptr);
     leg.finalize();
 
-    // Noise ON, sensor_rig's exact seeds: seeded noise replaying bit-for-bit
-    // is part of what is under test.
+    // Noise ON, sensor_rig's exact seeds (plus any --seed offset): seeded
+    // noise replaying bit-for-bit is part of what is under test.
     Imu imu(*shinMesh, 200.0);
+    if (seedOffset) {
+        imu.gyroNoise.seed += seedOffset;
+        imu.accelNoise.seed += seedOffset;
+        imu.reset();
+    }
     JointEncoder hipEnc(*thighMesh, thigh, 100.0);
     JointEncoder kneeEnc(*shinMesh, shin, 100.0);
     hipEnc.setCountsPerRev(1024);
@@ -291,8 +308,10 @@ int main(int argc, char** argv) {
 
     std::cout << "replay_audit: " << steps << " substeps @ " << 1.f / kSubstep << " Hz ("
               << seconds << " s sim)"
+              << " [threads=" << threads << "]"
               << (enhanced ? " [enhancedDeterminism]" : "")
-              << (bystander ? " [bystander]" : "") << "\n";
+              << (bystander ? " [bystander]" : "")
+              << (seedOffset ? " [seedOffset]" : "") << "\n";
     if (box) {
         // Config echo, stdout only (NOT the manifest — the manifest must stay
         // comparable across configs). A box that never simulated would still
