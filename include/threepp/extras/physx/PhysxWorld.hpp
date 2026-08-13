@@ -550,6 +550,19 @@ namespace threepp {
             // policy sees, which is a primary sim-to-sim (GPU train -> CPU deploy)
             // transfer gap. No effect (already implied) when enableGpuDynamics is set.
             bool enableTgsPcm = false;
+            // PxSceneFlag::eENABLE_ENHANCED_DETERMINISM. What it adds — and all
+            // it adds: island-order invariance. WITHOUT it PhysX already
+            // guarantees replay determinism (same scene, same insertion order,
+            // same substeps, same binary → identical results; the replay_audit
+            // harness proves that end-to-end through the sensor suite), but the
+            // solver batches constraints ACROSS islands, so an unrelated actor
+            // elsewhere in the scene can perturb this robot's impulses in the
+            // last ULP. With it, each island solves alone: a prop added 50 m
+            // away can no longer change a sensor log. Costs solver parallelism
+            // (per NVIDIA, "at the expense of performance"); off by default,
+            // opt in for recorded-dataset / replay work. CPU pipeline only —
+            // GPU dynamics makes no determinism promise at all.
+            bool enhancedDeterminism = false;
             // Existing CUDA context for PhysX to adopt (instead of creating its own).
             // Pass the host framework's context (e.g. PyTorch's device primary context)
             // so PhysX and that framework share ONE context — required for correctness
@@ -654,6 +667,9 @@ namespace threepp {
                 desc.solverType = PxSolverType::eTGS;
                 desc.flags |= PxSceneFlag::eENABLE_PCM;
                 desc.flags |= PxSceneFlag::eENABLE_STABILIZATION;
+            }
+            if (settings_.enhancedDeterminism) {
+                desc.flags |= PxSceneFlag::eENABLE_ENHANCED_DETERMINISM;
             }
             if (settings_.enableGpuDynamics) {
                 desc.cudaContextManager = cuda_;
