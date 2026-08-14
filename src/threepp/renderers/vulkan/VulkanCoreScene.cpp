@@ -1574,7 +1574,7 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                         // work, tens of ms on large scenes). The CPU height-
                         // field mirror reads the last completed frame's
                         // readback here instead — one frame of latency.
-                        const float now = static_cast<float>(glfwGetTime());
+                        const float now = static_cast<float>(frameNowSec());
                         for (size_t i = 0; i < entries.size(); ++i) {
                             if (!entryDisplacedDirty[i]) continue;
                             auto* dm = static_cast<DisplacedMesh*>(entries[i].mesh);
@@ -2370,13 +2370,13 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                         // content for this frame's TLAS (imperceptible for water);
                         // recordCommandBuffer refits it before the shade trace.
                         mirrorDisplacedHeightfields(*dm, *st);
-                        pendingDisplacedDeforms_.emplace_back(dm, st, static_cast<float>(glfwGetTime()));
+                        pendingDisplacedDeforms_.emplace_back(dm, st, static_cast<float>(frameNowSec()));
                         ++dm->frameTick;
                     } else {
                         // First creation: prime synchronously so the very first
                         // TLAS build + ray-trace see the displaced surface, not
                         // the rest grid.
-                        refreshDisplacedBlas(*dm, *st, static_cast<float>(glfwGetTime()));
+                        refreshDisplacedBlas(*dm, *st, static_cast<float>(frameNowSec()));
                     }
                 } else if (en.isGrass) {
                     auto* gm = static_cast<GrassMesh*>(m);
@@ -2399,7 +2399,7 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                         }
                     } else {
                         // Prime the BLAS with the first wind pose before the first trace.
-                        refreshGrassBlas(*gm, *st, static_cast<float>(glfwGetTime()));
+                        refreshGrassBlas(*gm, *st, static_cast<float>(frameNowSec()));
                     }
                 } else if (en.isTet) {
                     auto* st = ensureTetBlas(*m);

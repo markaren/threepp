@@ -2044,6 +2044,22 @@ namespace threepp {
         // so only this base weight needs the correction.
         double taaPrevTimeSec_ = -1.0;
 
+        // ── Deterministic frame clock ───────────────────────────────────
+        // The one time source every frame-path wall-clock read goes through.
+        // Negative (the default) = wall clock, behaviour unchanged. When the
+        // app drives it (VulkanRenderer::setSimTime, once per frame before
+        // render()), TAA/DLSS/FSR frame-dt, the shade's timeSec, foam decay,
+        // deform timestamps and the cloud clock all advance on SIMULATION
+        // time — which is what makes two same-seed runs produce the same
+        // pixels. Wall time in shading math was found as the source of
+        // fresh-process rgb divergence (replay-audit branch): the TAA blend
+        // alpha was a function of real frame time, so every run blended
+        // differently from the first history frame onward.
+        double simTimeSec_ = -1.0;
+        [[nodiscard]] double frameNowSec() const {
+            return simTimeSec_ >= 0.0 ? simTimeSec_ : glfwGetTime();
+        }
+
         // (rasterMatTexValid_ — the binding-3 texture-table gate — lives on
         // ViewContext: the raster sets it guards are per-view.)
 

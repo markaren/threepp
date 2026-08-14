@@ -314,6 +314,53 @@ namespace threepp {
 
         void dispose() override;
 
+        // ── Deterministic frame clock ─────────────────────────────────────
+        // Pins every wall-clock read the frame path makes — the TAA blend dt,
+        // the shade's animation timeSec, DLSS/FSR frame deltas, ocean foam
+        // decay, deform timestamps, the cloud clock — to an app-supplied
+        // simulation time. Call once per frame BEFORE render() with a
+        // monotonically non-decreasing value; stepping it by a fixed dt makes
+        // the rendered output replayable bit-for-bit across runs (raster AOVs
+        // already are; the beauty frame additionally needs this because its
+        // temporal-blend weights are otherwise functions of real frame time).
+        // Negative disables and returns to the wall clock (the default).
+        // Sensor pipelines should drive this with the same sim clock that
+        // stamps their measurements (see extras/sensors/Sensor.hpp).
+        void setSimTime(double seconds);
+        [[nodiscard]] double simTime() const;
+
+        // Debug/audit readback of the temporal-resolve endpoints for the LAST
+        // completed frame: `input` = the TAA input image (the shade → bloom →
+        // post-composite product; BGRA8 at the render extent), `history` = the
+        // history slot that frame wrote (RGBA16F at the output extent).
+        // Splits "the shading diverged" from "the temporal resolve diverged"
+        // in the determinism audit (examples/vulkan/vulkan_aov_audit.cpp).
+        // Full device sync per call — an audit instrument, not a capture path.
+        bool readTaaDebugImages(std::vector<uint8_t>& input, int& inW, int& inH,
+                                std::vector<uint8_t>& history, int& histW, int& histH);
+
+        // Same instrument one stage earlier: the linear-HDR scene image the
+        // shade/denoise chain wrote this frame (bloom's sceneHdr; RGBA16F at
+        // the render extent), BEFORE bloom and the post composite touch it.
+        // taa.input diverging while sceneHdr is exact indicts bloom/post;
+        // sceneHdr diverging under --no-denoise indicts the shade dispatch
+        // itself. Full device sync per call — audit instrument, not capture.
+        bool readSceneHdrDebug(std::vector<uint8_t>& hdr, int& w, int& h);
+
+        // The finest split: FNV-1a hash of each deferred-shade temporal image
+        // for the last completed frame — {indirect, momentsSq, reflect,
+        // reflAux, shadowVis, directU}. The first name whose hash differs
+        // between two same-seed runs is the pass the divergence enters at.
+        // directU is the control: analytic direct light, no rays, no history —
+        // if IT diverges the shade dispatch itself is non-deterministic.
+        // Empty result before the first frame. Full device sync per call.
+        std::vector<std::pair<std::string, uint64_t>> debugHashShadeImages();
+
+        // Raw dump of the probe-GI SH-L1 store (kProbeCount × 4 × vec4) for
+        // byte-level divergence forensics: which probe, which SH band, how
+        // large. Audit instrument; full device sync per call.
+        bool readProbeShDebug(std::vector<uint8_t>& sh);
+
         // ImGui integration handles (Vulkan types erased to void* / uint32_t).
         [[nodiscard]] void* nativeInstance() const;
         [[nodiscard]] void* nativePhysicalDevice() const;

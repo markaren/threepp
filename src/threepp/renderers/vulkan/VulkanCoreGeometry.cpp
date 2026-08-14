@@ -1407,7 +1407,7 @@ void VulkanRenderer::Impl::recordDisplacedDeform(VkCommandBuffer cb, DisplacedMe
                 // τ = 2 s reproduces the old look at 60 fps. dt clamped so an
                 // alt-tab / loading stall can't wipe the accumulator in one
                 // frame.
-                const double nowSec = glfwGetTime();
+                const double nowSec = frameNowSec();
                 float foamDecay = 0.992f;// first frame: no dt reference yet
                 if (st.foamPrevTimeSec >= 0.0) {
                     const float dt = std::clamp(

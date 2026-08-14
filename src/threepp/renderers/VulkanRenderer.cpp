@@ -255,7 +255,7 @@ namespace threepp {
         shadeParams.starIntensity      = deferredStarIntensity_;
         shadeParams.camDeltaLen        = view().deferredCamDeltaLen_;
         shadeParams.camRotAngle        = deferredCamRotAngle_;
-        shadeParams.timeSec            = static_cast<float>(glfwGetTime());
+        shadeParams.timeSec            = static_cast<float>(frameNowSec());
         shadeParams.sunTanHalfAngle    = std::tan(sunAngularRadiusDeg_ * 0.017453292519943295f);
         shadeParams.gbufMsaaSamples    = gbufMsaaSamples_;
         shadeParams.shadeMode          = 0u;// dispatch A
@@ -1518,6 +1518,427 @@ namespace threepp {
 
     float VulkanRenderer::textureAnisotropy() const {
         return core()->textureAnisoOverride_;
+    }
+
+    bool VulkanRenderer::readTaaDebugImages(std::vector<uint8_t>& input, int& inW, int& inH,
+                                            std::vector<uint8_t>& history, int& histW, int& histH) {
+        auto& impl = *core();
+        auto* ctx  = impl.ctx.get();
+        if (!ctx) return false;
+        if (impl.frameSerial_ == 0 || !impl.sceneBuilt_) return false;
+        auto* taa = impl.primaryView().taa_.get();
+        if (!taa) return false;
+
+        // Same slot arithmetic as readViewGBufferAOV: the last completed
+        // frame's images live in the slot BEFORE currentFrame.
+        const uint32_t slot = (impl.currentFrame + kFramesInFlight - 1u) % kFramesInFlight;
+        const auto& in   = taa->inputImage2D(slot);
+        const auto& hist = taa->historyImage2D(vulkan::TaaResolve::writeSlotFor(slot));
+        if (in.image == VK_NULL_HANDLE || hist.image == VK_NULL_HANDLE) return false;
+
+        vkDeviceWaitIdle(ctx->device());
+
+        // Both images rest in GENERAL for their whole lives (TaaResolve
+        // allocates and keeps them there), which is a legal transfer source —
+        // no layout round-trip needed; one global barrier makes the retired
+        // writes visible to the transfer stage.
+        const VkDeviceSize inBytes   = static_cast<VkDeviceSize>(in.width) * in.height * 4;  // BGRA8
+        const VkDeviceSize histBytes = static_cast<VkDeviceSize>(hist.width) * hist.height * 8;// RGBA16F
+
+        vulkan::Buffer staging = vulkan::createBuffer(
+                ctx->allocator(), ctx->device(), inBytes + histBytes,
+                VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+                VMA_MEMORY_USAGE_AUTO_PREFER_HOST,
+                VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT |
+                        VMA_ALLOCATION_CREATE_MAPPED_BIT);
+
+        VkCommandPoolCreateInfo cpci{};
+        cpci.sType            = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
+        cpci.flags            = VK_COMMAND_POOL_CREATE_TRANSIENT_BIT;
+        cpci.queueFamilyIndex = ctx->queueFamilies().graphics;
+        VkCommandPool cpool = VK_NULL_HANDLE;
+        vulkan::check(vkCreateCommandPool(ctx->device(), &cpci, nullptr, &cpool),
+                      "vkCreateCommandPool(readTaaDebugImages)");
+        VkCommandBufferAllocateInfo cbai{};
+        cbai.sType              = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+        cbai.commandPool        = cpool;
+        cbai.level              = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+        cbai.commandBufferCount = 1;
+        VkCommandBuffer cb = VK_NULL_HANDLE;
+        vulkan::check(vkAllocateCommandBuffers(ctx->device(), &cbai, &cb),
+                      "vkAllocateCommandBuffers(readTaaDebugImages)");
+        VkCommandBufferBeginInfo bi{};
+        bi.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+        bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+        vulkan::check(vkBeginCommandBuffer(cb, &bi), "vkBeginCommandBuffer(readTaaDebugImages)");
+
+        VkMemoryBarrier mb{};
+        mb.sType         = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
+        mb.srcAccessMask = VK_ACCESS_MEMORY_WRITE_BIT;
+        mb.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+        vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
+                             VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 1, &mb, 0, nullptr, 0, nullptr);
+
+        VkBufferImageCopy region{};
+        region.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        region.imageSubresource.layerCount = 1;
+        region.imageExtent                 = {in.width, in.height, 1};
+        vkCmdCopyImageToBuffer(cb, in.image, VK_IMAGE_LAYOUT_GENERAL, staging.handle, 1, &region);
+        region.bufferOffset = inBytes;
+        region.imageExtent  = {hist.width, hist.height, 1};
+        vkCmdCopyImageToBuffer(cb, hist.image, VK_IMAGE_LAYOUT_GENERAL, staging.handle, 1, &region);
+
+        vulkan::check(vkEndCommandBuffer(cb), "vkEndCommandBuffer(readTaaDebugImages)");
+        VkFenceCreateInfo fci{};
+        fci.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
+        VkFence fence = VK_NULL_HANDLE;
+        vulkan::check(vkCreateFence(ctx->device(), &fci, nullptr, &fence),
+                      "vkCreateFence(readTaaDebugImages)");
+        VkSubmitInfo si{};
+        si.sType              = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+        si.commandBufferCount = 1;
+        si.pCommandBuffers    = &cb;
+        vulkan::check(vkQueueSubmit(ctx->graphicsQueue(), 1, &si, fence),
+                      "vkQueueSubmit(readTaaDebugImages)");
+        vulkan::check(vkWaitForFences(ctx->device(), 1, &fence, VK_TRUE, UINT64_MAX),
+                      "vkWaitForFences(readTaaDebugImages)");
+
+        input.resize(static_cast<size_t>(inBytes));
+        history.resize(static_cast<size_t>(histBytes));
+        void* mapped = nullptr;
+        vulkan::check(vmaMapMemory(ctx->allocator(), staging.alloc, &mapped),
+                      "vmaMapMemory(readTaaDebugImages)");
+        vulkan::invalidateHostReads(ctx->allocator(), staging.alloc, 0, inBytes + histBytes);
+        std::memcpy(input.data(), mapped, static_cast<size_t>(inBytes));
+        std::memcpy(history.data(), static_cast<const uint8_t*>(mapped) + inBytes,
+                    static_cast<size_t>(histBytes));
+        vmaUnmapMemory(ctx->allocator(), staging.alloc);
+
+        vkDestroyFence(ctx->device(), fence, nullptr);
+        vkDestroyCommandPool(ctx->device(), cpool, nullptr);
+        vulkan::destroyBuffer(ctx->allocator(), staging);
+
+        inW   = static_cast<int>(in.width);
+        inH   = static_cast<int>(in.height);
+        histW = static_cast<int>(hist.width);
+        histH = static_cast<int>(hist.height);
+        return true;
+    }
+
+    bool VulkanRenderer::readSceneHdrDebug(std::vector<uint8_t>& hdr, int& w, int& h) {
+        auto& impl = *core();
+        auto* ctx  = impl.ctx.get();
+        if (!ctx) return false;
+        if (impl.frameSerial_ == 0 || !impl.sceneBuilt_) return false;
+        auto* bloom = impl.primaryView().bloom_.get();
+        if (!bloom) return false;
+
+        const uint32_t slot = (impl.currentFrame + kFramesInFlight - 1u) % kFramesInFlight;
+        const auto& img = bloom->sceneHdrImage2D(slot);
+        if (img.image == VK_NULL_HANDLE || img.width == 0) return false;
+
+        vkDeviceWaitIdle(ctx->device());
+
+        const VkDeviceSize bytes = static_cast<VkDeviceSize>(img.width) * img.height * 8;// RGBA16F
+        vulkan::Buffer staging = vulkan::createBuffer(
+                ctx->allocator(), ctx->device(), bytes,
+                VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+                VMA_MEMORY_USAGE_AUTO_PREFER_HOST,
+                VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT |
+                        VMA_ALLOCATION_CREATE_MAPPED_BIT);
+
+        VkCommandPoolCreateInfo cpci{};
+        cpci.sType            = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
+        cpci.flags            = VK_COMMAND_POOL_CREATE_TRANSIENT_BIT;
+        cpci.queueFamilyIndex = ctx->queueFamilies().graphics;
+        VkCommandPool cpool = VK_NULL_HANDLE;
+        vulkan::check(vkCreateCommandPool(ctx->device(), &cpci, nullptr, &cpool),
+                      "vkCreateCommandPool(readSceneHdrDebug)");
+        VkCommandBufferAllocateInfo cbai{};
+        cbai.sType              = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+        cbai.commandPool        = cpool;
+        cbai.level              = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+        cbai.commandBufferCount = 1;
+        VkCommandBuffer cb = VK_NULL_HANDLE;
+        vulkan::check(vkAllocateCommandBuffers(ctx->device(), &cbai, &cb),
+                      "vkAllocateCommandBuffers(readSceneHdrDebug)");
+        VkCommandBufferBeginInfo bi{};
+        bi.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+        bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+        vulkan::check(vkBeginCommandBuffer(cb, &bi), "vkBeginCommandBuffer(readSceneHdrDebug)");
+
+        VkMemoryBarrier mb{};
+        mb.sType         = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
+        mb.srcAccessMask = VK_ACCESS_MEMORY_WRITE_BIT;
+        mb.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+        vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
+                             VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 1, &mb, 0, nullptr, 0, nullptr);
+
+        VkBufferImageCopy region{};
+        region.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        region.imageSubresource.layerCount = 1;
+        region.imageExtent                 = {img.width, img.height, 1};
+        vkCmdCopyImageToBuffer(cb, img.image, VK_IMAGE_LAYOUT_GENERAL, staging.handle, 1, &region);
+
+        vulkan::check(vkEndCommandBuffer(cb), "vkEndCommandBuffer(readSceneHdrDebug)");
+        VkFenceCreateInfo fci{};
+        fci.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
+        VkFence fence = VK_NULL_HANDLE;
+        vulkan::check(vkCreateFence(ctx->device(), &fci, nullptr, &fence),
+                      "vkCreateFence(readSceneHdrDebug)");
+        VkSubmitInfo si{};
+        si.sType              = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+        si.commandBufferCount = 1;
+        si.pCommandBuffers    = &cb;
+        vulkan::check(vkQueueSubmit(ctx->graphicsQueue(), 1, &si, fence),
+                      "vkQueueSubmit(readSceneHdrDebug)");
+        vulkan::check(vkWaitForFences(ctx->device(), 1, &fence, VK_TRUE, UINT64_MAX),
+                      "vkWaitForFences(readSceneHdrDebug)");
+
+        hdr.resize(static_cast<size_t>(bytes));
+        void* mapped = nullptr;
+        vulkan::check(vmaMapMemory(ctx->allocator(), staging.alloc, &mapped),
+                      "vmaMapMemory(readSceneHdrDebug)");
+        vulkan::invalidateHostReads(ctx->allocator(), staging.alloc, 0, bytes);
+        std::memcpy(hdr.data(), mapped, static_cast<size_t>(bytes));
+        vmaUnmapMemory(ctx->allocator(), staging.alloc);
+
+        vkDestroyFence(ctx->device(), fence, nullptr);
+        vkDestroyCommandPool(ctx->device(), cpool, nullptr);
+        vulkan::destroyBuffer(ctx->allocator(), staging);
+
+        w = static_cast<int>(img.width);
+        h = static_cast<int>(img.height);
+        return true;
+    }
+
+    std::vector<std::pair<std::string, uint64_t>> VulkanRenderer::debugHashShadeImages() {
+        auto& impl = *core();
+        auto* ctx  = impl.ctx.get();
+        if (!ctx) return {};
+        if (impl.frameSerial_ == 0 || !impl.sceneBuilt_) return {};
+
+        const uint32_t n    = static_cast<uint32_t>(impl.primaryView().rasterGbufs.size());
+        const uint32_t slot = (impl.currentFrame + n - 1u) % n;
+        auto& g             = impl.primaryView().rasterGbufs[slot];
+
+        // All six are compute storage images that live in GENERAL for their
+        // whole lives; every format here is 8 bytes/px (rgba16f or rg32f).
+        const std::pair<const char*, const vulkan::Image2D*> imgs[] = {
+                {"indirect", &g.indirect},   {"momentsSq", &g.momentsSq},
+                {"reflect", &g.reflect},     {"reflAux", &g.reflAux},
+                {"shadowVis", &g.shadowVis}, {"directU", &g.directU},
+        };
+        constexpr VkDeviceSize kBpp = 8;
+
+        VkDeviceSize total = 0;
+        for (const auto& [name, img] : imgs) {
+            if (img->image == VK_NULL_HANDLE || img->width == 0) return {};
+            total += static_cast<VkDeviceSize>(img->width) * img->height * kBpp;
+        }
+        // Probe SH store rides along (a buffer, not an image): the row that
+        // says whether the probe atlas is the divergence carrier or a victim.
+        const VkDeviceSize probeShBytes =
+                impl.probeGI_ ? static_cast<VkDeviceSize>(vulkan::ProbeGI::kProbeCount) * 4 * 16
+                              : 0;
+        total += probeShBytes;
+        // probeDepth = pure ray GEOMETRY (Chebyshev hit distances). probeSh
+        // diverging while probeDepth stays exact means the probe rays hit the
+        // same surfaces at the same distances and only the RADIANCE evaluation
+        // differs; both diverging means the rays themselves differ.
+        const VkDeviceSize probeDepthBytes =
+                impl.probeGI_ ? static_cast<VkDeviceSize>(vulkan::ProbeGI::kProbeCount) *
+                                        vulkan::ProbeGI::kDepthTexels * 4
+                              : 0;
+        total += probeDepthBytes;
+
+        vkDeviceWaitIdle(ctx->device());
+
+        vulkan::Buffer staging = vulkan::createBuffer(
+                ctx->allocator(), ctx->device(), total,
+                VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+                VMA_MEMORY_USAGE_AUTO_PREFER_HOST,
+                VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT |
+                        VMA_ALLOCATION_CREATE_MAPPED_BIT);
+
+        VkCommandPoolCreateInfo cpci{};
+        cpci.sType            = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
+        cpci.flags            = VK_COMMAND_POOL_CREATE_TRANSIENT_BIT;
+        cpci.queueFamilyIndex = ctx->queueFamilies().graphics;
+        VkCommandPool cpool = VK_NULL_HANDLE;
+        vulkan::check(vkCreateCommandPool(ctx->device(), &cpci, nullptr, &cpool),
+                      "vkCreateCommandPool(debugHashShadeImages)");
+        VkCommandBufferAllocateInfo cbai{};
+        cbai.sType              = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+        cbai.commandPool        = cpool;
+        cbai.level              = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+        cbai.commandBufferCount = 1;
+        VkCommandBuffer cb = VK_NULL_HANDLE;
+        vulkan::check(vkAllocateCommandBuffers(ctx->device(), &cbai, &cb),
+                      "vkAllocateCommandBuffers(debugHashShadeImages)");
+        VkCommandBufferBeginInfo bi{};
+        bi.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+        bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+        vulkan::check(vkBeginCommandBuffer(cb, &bi), "vkBeginCommandBuffer(debugHashShadeImages)");
+
+        VkMemoryBarrier mb{};
+        mb.sType         = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
+        mb.srcAccessMask = VK_ACCESS_MEMORY_WRITE_BIT;
+        mb.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+        vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
+                             VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 1, &mb, 0, nullptr, 0, nullptr);
+
+        VkDeviceSize offset = 0;
+        for (const auto& [name, img] : imgs) {
+            VkBufferImageCopy region{};
+            region.bufferOffset                = offset;
+            region.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+            region.imageSubresource.layerCount = 1;
+            region.imageExtent                 = {img->width, img->height, 1};
+            vkCmdCopyImageToBuffer(cb, img->image, VK_IMAGE_LAYOUT_GENERAL,
+                                   staging.handle, 1, &region);
+            offset += static_cast<VkDeviceSize>(img->width) * img->height * kBpp;
+        }
+        if (probeShBytes > 0) {
+            VkBufferCopy bc{};
+            bc.dstOffset = offset;
+            bc.size      = probeShBytes;
+            vkCmdCopyBuffer(cb, impl.probeGI_->shBuffer(), staging.handle, 1, &bc);
+            bc.dstOffset = offset + probeShBytes;
+            bc.size      = probeDepthBytes;
+            vkCmdCopyBuffer(cb, impl.probeGI_->depthBuffer(), staging.handle, 1, &bc);
+        }
+
+        vulkan::check(vkEndCommandBuffer(cb), "vkEndCommandBuffer(debugHashShadeImages)");
+        VkFenceCreateInfo fci{};
+        fci.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
+        VkFence fence = VK_NULL_HANDLE;
+        vulkan::check(vkCreateFence(ctx->device(), &fci, nullptr, &fence),
+                      "vkCreateFence(debugHashShadeImages)");
+        VkSubmitInfo si{};
+        si.sType              = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+        si.commandBufferCount = 1;
+        si.pCommandBuffers    = &cb;
+        vulkan::check(vkQueueSubmit(ctx->graphicsQueue(), 1, &si, fence),
+                      "vkQueueSubmit(debugHashShadeImages)");
+        vulkan::check(vkWaitForFences(ctx->device(), 1, &fence, VK_TRUE, UINT64_MAX),
+                      "vkWaitForFences(debugHashShadeImages)");
+
+        void* mapped = nullptr;
+        vulkan::check(vmaMapMemory(ctx->allocator(), staging.alloc, &mapped),
+                      "vmaMapMemory(debugHashShadeImages)");
+        vulkan::invalidateHostReads(ctx->allocator(), staging.alloc, 0, total);
+
+        std::vector<std::pair<std::string, uint64_t>> out;
+        const auto* base = static_cast<const unsigned char*>(mapped);
+        auto fnv = [&](VkDeviceSize off, VkDeviceSize sz) {
+            uint64_t hsh = 0xCBF29CE484222325ULL;
+            for (VkDeviceSize i = 0; i < sz; ++i) {
+                hsh ^= base[off + i];
+                hsh *= 0x100000001B3ULL;
+            }
+            return hsh;
+        };
+        offset = 0;
+        for (const auto& [name, img] : imgs) {
+            const VkDeviceSize sz = static_cast<VkDeviceSize>(img->width) * img->height * kBpp;
+            out.emplace_back(name, fnv(offset, sz));
+            offset += sz;
+        }
+        if (probeShBytes > 0) {
+            out.emplace_back("probeSh", fnv(offset, probeShBytes));
+            out.emplace_back("probeDepth", fnv(offset + probeShBytes, probeDepthBytes));
+        }
+        vmaUnmapMemory(ctx->allocator(), staging.alloc);
+
+        vkDestroyFence(ctx->device(), fence, nullptr);
+        vkDestroyCommandPool(ctx->device(), cpool, nullptr);
+        vulkan::destroyBuffer(ctx->allocator(), staging);
+        return out;
+    }
+
+    bool VulkanRenderer::readProbeShDebug(std::vector<uint8_t>& sh) {
+        auto& impl = *core();
+        auto* ctx  = impl.ctx.get();
+        if (!ctx || !impl.probeGI_) return false;
+        if (impl.frameSerial_ == 0) return false;
+
+        const VkDeviceSize bytes =
+                static_cast<VkDeviceSize>(vulkan::ProbeGI::kProbeCount) * 4 * 16;
+        vkDeviceWaitIdle(ctx->device());
+
+        vulkan::Buffer staging = vulkan::createBuffer(
+                ctx->allocator(), ctx->device(), bytes,
+                VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+                VMA_MEMORY_USAGE_AUTO_PREFER_HOST,
+                VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT |
+                        VMA_ALLOCATION_CREATE_MAPPED_BIT);
+
+        VkCommandPoolCreateInfo cpci{};
+        cpci.sType            = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
+        cpci.flags            = VK_COMMAND_POOL_CREATE_TRANSIENT_BIT;
+        cpci.queueFamilyIndex = ctx->queueFamilies().graphics;
+        VkCommandPool cpool = VK_NULL_HANDLE;
+        vulkan::check(vkCreateCommandPool(ctx->device(), &cpci, nullptr, &cpool),
+                      "vkCreateCommandPool(readProbeShDebug)");
+        VkCommandBufferAllocateInfo cbai{};
+        cbai.sType              = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+        cbai.commandPool        = cpool;
+        cbai.level              = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+        cbai.commandBufferCount = 1;
+        VkCommandBuffer cb = VK_NULL_HANDLE;
+        vulkan::check(vkAllocateCommandBuffers(ctx->device(), &cbai, &cb),
+                      "vkAllocateCommandBuffers(readProbeShDebug)");
+        VkCommandBufferBeginInfo bi{};
+        bi.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+        bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+        vulkan::check(vkBeginCommandBuffer(cb, &bi), "vkBeginCommandBuffer(readProbeShDebug)");
+
+        VkMemoryBarrier mb{};
+        mb.sType         = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
+        mb.srcAccessMask = VK_ACCESS_MEMORY_WRITE_BIT;
+        mb.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+        vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
+                             VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 1, &mb, 0, nullptr, 0, nullptr);
+        VkBufferCopy bc{};
+        bc.size = bytes;
+        vkCmdCopyBuffer(cb, impl.probeGI_->shBuffer(), staging.handle, 1, &bc);
+
+        vulkan::check(vkEndCommandBuffer(cb), "vkEndCommandBuffer(readProbeShDebug)");
+        VkFenceCreateInfo fci{};
+        fci.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
+        VkFence fence = VK_NULL_HANDLE;
+        vulkan::check(vkCreateFence(ctx->device(), &fci, nullptr, &fence),
+                      "vkCreateFence(readProbeShDebug)");
+        VkSubmitInfo si{};
+        si.sType              = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+        si.commandBufferCount = 1;
+        si.pCommandBuffers    = &cb;
+        vulkan::check(vkQueueSubmit(ctx->graphicsQueue(), 1, &si, fence),
+                      "vkQueueSubmit(readProbeShDebug)");
+        vulkan::check(vkWaitForFences(ctx->device(), 1, &fence, VK_TRUE, UINT64_MAX),
+                      "vkWaitForFences(readProbeShDebug)");
+
+        sh.resize(static_cast<size_t>(bytes));
+        void* mapped = nullptr;
+        vulkan::check(vmaMapMemory(ctx->allocator(), staging.alloc, &mapped),
+                      "vmaMapMemory(readProbeShDebug)");
+        vulkan::invalidateHostReads(ctx->allocator(), staging.alloc, 0, bytes);
+        std::memcpy(sh.data(), mapped, static_cast<size_t>(bytes));
+        vmaUnmapMemory(ctx->allocator(), staging.alloc);
+
+        vkDestroyFence(ctx->device(), fence, nullptr);
+        vkDestroyCommandPool(ctx->device(), cpool, nullptr);
+        vulkan::destroyBuffer(ctx->allocator(), staging);
+        return true;
+    }
+
+    void VulkanRenderer::setSimTime(double seconds) {
+        core()->simTimeSec_ = seconds;
+    }
+
+    double VulkanRenderer::simTime() const {
+        return core()->simTimeSec_;
     }
 
     void VulkanRenderer::setDenoise(bool enabled) {

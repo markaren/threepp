@@ -28,10 +28,13 @@ namespace threepp::vulkan {
         : ctx_(ctx), framesInFlight_(framesInFlight) {
         // SH-L1 store: 4 vec4 per probe. TRANSFER_DST for the zero-fill on
         // (re)fit; STORAGE for the update pass + deferred_shade's reads.
+        // TRANSFER_SRC: the determinism audit hashes this buffer per frame
+        // (debugHashShadeImages' probeSh row) — pure capability bit.
         shBuf_ = createBuffer(ctx_.allocator(), ctx_.device(),
                               static_cast<VkDeviceSize>(kProbeCount) * 4 * 16,
                               VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
-                                      VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+                                      VK_BUFFER_USAGE_TRANSFER_DST_BIT |
+                                      VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
                               VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE);
         // Chebyshev depth store: kDepthTexels × packHalf2x16(mean, mean²) per
         // probe = 4 MB. Cleared alongside the SH on every grid (re)fit — 0u is
@@ -39,8 +42,20 @@ namespace threepp::vulkan {
         depthBuf_ = createBuffer(ctx_.allocator(), ctx_.device(),
                                  static_cast<VkDeviceSize>(kProbeCount) * kDepthTexels * 4,
                                  VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
-                                         VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+                                         VK_BUFFER_USAGE_TRANSFER_DST_BIT |
+                                         VK_BUFFER_USAGE_TRANSFER_SRC_BIT,// audit readback
                                  VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE);
+        // Snapshot twins (see the header comment): copy targets, shader reads.
+        prevShBuf_ = createBuffer(ctx_.allocator(), ctx_.device(),
+                                  static_cast<VkDeviceSize>(kProbeCount) * 4 * 16,
+                                  VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
+                                          VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+                                  VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE);
+        prevDepthBuf_ = createBuffer(ctx_.allocator(), ctx_.device(),
+                                     static_cast<VkDeviceSize>(kProbeCount) * kDepthTexels * 4,
+                                     VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
+                                             VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+                                     VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE);
         gridUbos_.resize(framesInFlight_);
         gridUboHandles_.resize(framesInFlight_);
         for (uint32_t f = 0; f < framesInFlight_; ++f) {
@@ -65,12 +80,14 @@ namespace threepp::vulkan {
         for (auto& b : gridUbos_) destroyBuffer(ctx_.allocator(), b);
         destroyBuffer(ctx_.allocator(), shBuf_);
         destroyBuffer(ctx_.allocator(), depthBuf_);
+        destroyBuffer(ctx_.allocator(), prevShBuf_);
+        destroyBuffer(ctx_.allocator(), prevDepthBuf_);
     }
 
     void ProbeGI::createPipeline() {
         VkDevice d = ctx_.device();
 
-        VkDescriptorSetLayoutBinding b[10]{};
+        VkDescriptorSetLayoutBinding b[12]{};
         auto set = [&](uint32_t i, VkDescriptorType t) {
             b[i].binding = i;
             b[i].descriptorType = t;
@@ -86,12 +103,14 @@ namespace threepp::vulkan {
         set(6, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER);    // bindless material textures...
         b[6].descriptorCount = kMaxMaterialTextures;          // ...fixed-size array
         set(7, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER);            // EmTri[]
-        set(8, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER);            // SH probe store (r/w)
-        set(9, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER);            // Chebyshev depth store (r/w)
+        set(8, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER);            // SH probe store (write side)
+        set(9, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER);            // Chebyshev depth store (write side)
+        set(10, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER);           // SH snapshot (read side)
+        set(11, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER);           // depth snapshot (read side)
 
         VkDescriptorSetLayoutCreateInfo dlci{};
         dlci.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-        dlci.bindingCount = 10;
+        dlci.bindingCount = 12;
         dlci.pBindings = b;
         check(vkCreateDescriptorSetLayout(d, &dlci, nullptr, &dsLayout_),
               "vkCreateDescriptorSetLayout(probeGI)");
@@ -138,7 +157,7 @@ namespace threepp::vulkan {
         sizes[1].type            = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
         sizes[1].descriptorCount = framesInFlight_ * (1 + kMaxMaterialTextures);// env + bindless
         sizes[2].type            = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-        sizes[2].descriptorCount = framesInFlight_ * 5;// materials + geometry + emissive + SH + depth
+        sizes[2].descriptorCount = framesInFlight_ * 7;// materials + geometry + emissive + SH/depth write + SH/depth snapshot
         sizes[3].type            = VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR;
         sizes[3].descriptorCount = framesInFlight_ * 1;
 
@@ -189,6 +208,12 @@ namespace threepp::vulkan {
             VkDescriptorBufferInfo depthInfo{};
             depthInfo.buffer = depthBuf_.handle;
             depthInfo.range  = VK_WHOLE_SIZE;
+            VkDescriptorBufferInfo shPrevInfo{};
+            shPrevInfo.buffer = prevShBuf_.handle;
+            shPrevInfo.range  = VK_WHOLE_SIZE;
+            VkDescriptorBufferInfo depthPrevInfo{};
+            depthPrevInfo.buffer = prevDepthBuf_.handle;
+            depthPrevInfo.range  = VK_WHOLE_SIZE;
 
             VkAccelerationStructureKHR tlasLocal = in.tlas;
             VkWriteDescriptorSetAccelerationStructureKHR asInfo{};
@@ -196,7 +221,7 @@ namespace threepp::vulkan {
             asInfo.accelerationStructureCount = 1;
             asInfo.pAccelerationStructures = &tlasLocal;
 
-            VkWriteDescriptorSet w[10]{};
+            VkWriteDescriptorSet w[12]{};
             auto setw = [&](int n, uint32_t bind, VkDescriptorType t,
                             const VkDescriptorImageInfo* img, const VkDescriptorBufferInfo* buf) {
                 w[n].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
@@ -223,7 +248,9 @@ namespace threepp::vulkan {
             setw(7, 7, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,         nullptr,  &emInfo);
             setw(8, 8, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,         nullptr,  &shInfo);
             setw(9, 9, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,         nullptr,  &depthInfo);
-            vkUpdateDescriptorSets(ctx_.device(), 10, w, 0, nullptr);
+            setw(10, 10, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,       nullptr,  &shPrevInfo);
+            setw(11, 11, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,       nullptr,  &depthPrevInfo);
+            vkUpdateDescriptorSets(ctx_.device(), 12, w, 0, nullptr);
         }
     }
 
@@ -324,6 +351,47 @@ namespace threepp::vulkan {
             dep.pMemoryBarriers = &bar;
             vkCmdPipelineBarrier2(cb, &dep);
             needsClear_ = false;
+        }
+
+        // Snapshot the canonical stores for this update's reads. Barrier 1:
+        // whatever wrote them last (the previous update's compute, or the
+        // needsClear_ fill above) must be visible to the transfer; barrier 2:
+        // the copies must land before the dispatch reads the snapshots, and
+        // the canonical stores' transfer-READ must retire before the dispatch
+        // WRITES them (WAR — execution ordering, covered by the same barrier).
+        {
+            VkMemoryBarrier2 toCopy{};
+            toCopy.sType         = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2;
+            toCopy.srcStageMask  = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT |
+                                   VK_PIPELINE_STAGE_2_TRANSFER_BIT;
+            toCopy.srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT |
+                                   VK_ACCESS_2_TRANSFER_WRITE_BIT;
+            toCopy.dstStageMask  = VK_PIPELINE_STAGE_2_TRANSFER_BIT;
+            toCopy.dstAccessMask = VK_ACCESS_2_TRANSFER_READ_BIT |
+                                   VK_ACCESS_2_TRANSFER_WRITE_BIT;
+            VkDependencyInfo dep{};
+            dep.sType              = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
+            dep.memoryBarrierCount = 1;
+            dep.pMemoryBarriers    = &toCopy;
+            vkCmdPipelineBarrier2(cb, &dep);
+
+            VkBufferCopy shCopy{};
+            shCopy.size = static_cast<VkDeviceSize>(kProbeCount) * 4 * 16;
+            vkCmdCopyBuffer(cb, shBuf_.handle, prevShBuf_.handle, 1, &shCopy);
+            VkBufferCopy depthCopy{};
+            depthCopy.size = static_cast<VkDeviceSize>(kProbeCount) * kDepthTexels * 4;
+            vkCmdCopyBuffer(cb, depthBuf_.handle, prevDepthBuf_.handle, 1, &depthCopy);
+
+            VkMemoryBarrier2 toCompute{};
+            toCompute.sType         = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2;
+            toCompute.srcStageMask  = VK_PIPELINE_STAGE_2_TRANSFER_BIT;
+            toCompute.srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT |
+                                      VK_ACCESS_2_TRANSFER_READ_BIT;
+            toCompute.dstStageMask  = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+            toCompute.dstAccessMask = VK_ACCESS_2_SHADER_STORAGE_READ_BIT |
+                                      VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
+            dep.pMemoryBarriers = &toCompute;
+            vkCmdPipelineBarrier2(cb, &dep);
         }
 
         vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, pipe_);

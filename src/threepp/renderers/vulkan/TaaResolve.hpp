@@ -142,6 +142,14 @@ namespace threepp::vulkan {
         [[nodiscard]] VkImageView historyView(uint32_t slot) const {
             return historyImagesPP_[slot].view;
         }
+        // Whole-struct access (image + extent + format) for the determinism
+        // audit's host readback (VulkanRenderer::readTaaDebugImages).
+        [[nodiscard]] const Image2D& inputImage2D(uint32_t frame) const {
+            return inputImagesPP_[frame];
+        }
+        [[nodiscard]] const Image2D& historyImage2D(uint32_t slot) const {
+            return historyImagesPP_[slot];
+        }
         // The history slot THIS frame-in-flight's recordResolve call writes
         // (rewriteDescriptors' writeSlot formula) — a pure function of the
         // frame-in-flight index, so callers can precompute which slot to bind
