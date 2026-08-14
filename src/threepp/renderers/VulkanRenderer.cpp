@@ -1742,6 +1742,15 @@ namespace threepp {
                 impl.probeGI_ ? static_cast<VkDeviceSize>(vulkan::ProbeGI::kProbeCount) * 4 * 16
                               : 0;
         total += probeShBytes;
+        // probeDepth = pure ray GEOMETRY (Chebyshev hit distances). probeSh
+        // diverging while probeDepth stays exact means the probe rays hit the
+        // same surfaces at the same distances and only the RADIANCE evaluation
+        // differs; both diverging means the rays themselves differ.
+        const VkDeviceSize probeDepthBytes =
+                impl.probeGI_ ? static_cast<VkDeviceSize>(vulkan::ProbeGI::kProbeCount) *
+                                        vulkan::ProbeGI::kDepthTexels * 4
+                              : 0;
+        total += probeDepthBytes;
 
         vkDeviceWaitIdle(ctx->device());
 
@@ -1795,6 +1804,9 @@ namespace threepp {
             bc.dstOffset = offset;
             bc.size      = probeShBytes;
             vkCmdCopyBuffer(cb, impl.probeGI_->shBuffer(), staging.handle, 1, &bc);
+            bc.dstOffset = offset + probeShBytes;
+            bc.size      = probeDepthBytes;
+            vkCmdCopyBuffer(cb, impl.probeGI_->depthBuffer(), staging.handle, 1, &bc);
         }
 
         vulkan::check(vkEndCommandBuffer(cb), "vkEndCommandBuffer(debugHashShadeImages)");
@@ -1833,13 +1845,92 @@ namespace threepp {
             out.emplace_back(name, fnv(offset, sz));
             offset += sz;
         }
-        if (probeShBytes > 0) out.emplace_back("probeSh", fnv(offset, probeShBytes));
+        if (probeShBytes > 0) {
+            out.emplace_back("probeSh", fnv(offset, probeShBytes));
+            out.emplace_back("probeDepth", fnv(offset + probeShBytes, probeDepthBytes));
+        }
         vmaUnmapMemory(ctx->allocator(), staging.alloc);
 
         vkDestroyFence(ctx->device(), fence, nullptr);
         vkDestroyCommandPool(ctx->device(), cpool, nullptr);
         vulkan::destroyBuffer(ctx->allocator(), staging);
         return out;
+    }
+
+    bool VulkanRenderer::readProbeShDebug(std::vector<uint8_t>& sh) {
+        auto& impl = *core();
+        auto* ctx  = impl.ctx.get();
+        if (!ctx || !impl.probeGI_) return false;
+        if (impl.frameSerial_ == 0) return false;
+
+        const VkDeviceSize bytes =
+                static_cast<VkDeviceSize>(vulkan::ProbeGI::kProbeCount) * 4 * 16;
+        vkDeviceWaitIdle(ctx->device());
+
+        vulkan::Buffer staging = vulkan::createBuffer(
+                ctx->allocator(), ctx->device(), bytes,
+                VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+                VMA_MEMORY_USAGE_AUTO_PREFER_HOST,
+                VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT |
+                        VMA_ALLOCATION_CREATE_MAPPED_BIT);
+
+        VkCommandPoolCreateInfo cpci{};
+        cpci.sType            = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
+        cpci.flags            = VK_COMMAND_POOL_CREATE_TRANSIENT_BIT;
+        cpci.queueFamilyIndex = ctx->queueFamilies().graphics;
+        VkCommandPool cpool = VK_NULL_HANDLE;
+        vulkan::check(vkCreateCommandPool(ctx->device(), &cpci, nullptr, &cpool),
+                      "vkCreateCommandPool(readProbeShDebug)");
+        VkCommandBufferAllocateInfo cbai{};
+        cbai.sType              = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+        cbai.commandPool        = cpool;
+        cbai.level              = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+        cbai.commandBufferCount = 1;
+        VkCommandBuffer cb = VK_NULL_HANDLE;
+        vulkan::check(vkAllocateCommandBuffers(ctx->device(), &cbai, &cb),
+                      "vkAllocateCommandBuffers(readProbeShDebug)");
+        VkCommandBufferBeginInfo bi{};
+        bi.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+        bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+        vulkan::check(vkBeginCommandBuffer(cb, &bi), "vkBeginCommandBuffer(readProbeShDebug)");
+
+        VkMemoryBarrier mb{};
+        mb.sType         = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
+        mb.srcAccessMask = VK_ACCESS_MEMORY_WRITE_BIT;
+        mb.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+        vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
+                             VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 1, &mb, 0, nullptr, 0, nullptr);
+        VkBufferCopy bc{};
+        bc.size = bytes;
+        vkCmdCopyBuffer(cb, impl.probeGI_->shBuffer(), staging.handle, 1, &bc);
+
+        vulkan::check(vkEndCommandBuffer(cb), "vkEndCommandBuffer(readProbeShDebug)");
+        VkFenceCreateInfo fci{};
+        fci.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
+        VkFence fence = VK_NULL_HANDLE;
+        vulkan::check(vkCreateFence(ctx->device(), &fci, nullptr, &fence),
+                      "vkCreateFence(readProbeShDebug)");
+        VkSubmitInfo si{};
+        si.sType              = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+        si.commandBufferCount = 1;
+        si.pCommandBuffers    = &cb;
+        vulkan::check(vkQueueSubmit(ctx->graphicsQueue(), 1, &si, fence),
+                      "vkQueueSubmit(readProbeShDebug)");
+        vulkan::check(vkWaitForFences(ctx->device(), 1, &fence, VK_TRUE, UINT64_MAX),
+                      "vkWaitForFences(readProbeShDebug)");
+
+        sh.resize(static_cast<size_t>(bytes));
+        void* mapped = nullptr;
+        vulkan::check(vmaMapMemory(ctx->allocator(), staging.alloc, &mapped),
+                      "vmaMapMemory(readProbeShDebug)");
+        vulkan::invalidateHostReads(ctx->allocator(), staging.alloc, 0, bytes);
+        std::memcpy(sh.data(), mapped, static_cast<size_t>(bytes));
+        vmaUnmapMemory(ctx->allocator(), staging.alloc);
+
+        vkDestroyFence(ctx->device(), fence, nullptr);
+        vkDestroyCommandPool(ctx->device(), cpool, nullptr);
+        vulkan::destroyBuffer(ctx->allocator(), staging);
+        return true;
     }
 
     void VulkanRenderer::setSimTime(double seconds) {

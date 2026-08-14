@@ -143,6 +143,9 @@ int main(int argc, char** argv) {
     bool noProbes = false;   // --no-probes: setProbeGI(false). The falsification
                              // test for "probe_update is the carrier": with the
                              // atlas out of the chain, rgb must replay bit-exact.
+    // --dumpprobes <prefix>: raw probeSh dump per frame (frames 0..5) for
+    // byte-level forensics — which probe index, which SH band, what magnitude.
+    std::string probeDumpPrefix;
     for (int i = 1; i < argc; ++i) {
         const std::string arg = argv[i];
         if (arg == "--frames" && i + 1 < argc) frames = std::atoi(argv[++i]);
@@ -159,6 +162,7 @@ int main(int argc, char** argv) {
         else if (arg == "--hard-sun") hardSun = true;
         else if (arg == "--static") staticScene = true;
         else if (arg == "--no-probes") noProbes = true;
+        else if (arg == "--dumpprobes" && i + 1 < argc) probeDumpPrefix = argv[++i];
         else if (arg == "--compare" && i + 2 < argc) return compare(argv[i + 1], argv[i + 2]);
     }
 
@@ -320,6 +324,15 @@ int main(int argc, char** argv) {
                 for (const auto& [nm, hsh] : renderer.debugHashShadeImages()) {
                     std::cout << "shadesplit f" << f << " " << nm << "=" << std::hex << hsh
                               << std::dec << "\n";
+                }
+            }
+            if (!probeDumpPrefix.empty() && f <= 5) {
+                std::vector<std::uint8_t> shRaw;
+                if (renderer.readProbeShDebug(shRaw)) {
+                    std::ofstream pf(probeDumpPrefix + "_f" + std::to_string(f) + ".raw",
+                                     std::ios::binary);
+                    pf.write(reinterpret_cast<const char*>(shRaw.data()),
+                             static_cast<std::streamsize>(shRaw.size()));
                 }
             }
             if (!dumpPrefix.empty() && f >= 2 && f <= 9) {

@@ -356,6 +356,11 @@ namespace threepp {
         // Empty result before the first frame. Full device sync per call.
         std::vector<std::pair<std::string, uint64_t>> debugHashShadeImages();
 
+        // Raw dump of the probe-GI SH-L1 store (kProbeCount × 4 × vec4) for
+        // byte-level divergence forensics: which probe, which SH band, how
+        // large. Audit instrument; full device sync per call.
+        bool readProbeShDebug(std::vector<uint8_t>& sh);
+
         // ImGui integration handles (Vulkan types erased to void* / uint32_t).
         [[nodiscard]] void* nativeInstance() const;
         [[nodiscard]] void* nativePhysicalDevice() const;

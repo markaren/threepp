@@ -42,7 +42,8 @@ namespace threepp::vulkan {
         depthBuf_ = createBuffer(ctx_.allocator(), ctx_.device(),
                                  static_cast<VkDeviceSize>(kProbeCount) * kDepthTexels * 4,
                                  VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
-                                         VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+                                         VK_BUFFER_USAGE_TRANSFER_DST_BIT |
+                                         VK_BUFFER_USAGE_TRANSFER_SRC_BIT,// audit readback
                                  VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE);
         gridUbos_.resize(framesInFlight_);
         gridUboHandles_.resize(framesInFlight_);
