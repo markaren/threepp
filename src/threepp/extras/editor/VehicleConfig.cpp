@@ -234,11 +234,7 @@ std::optional<VehicleConfig> VehicleConfig::decode(const std::string& text) {
 
 std::optional<VehicleConfig> VehicleConfig::read(const Object3D& object) {
 
-    const auto it = object.userData.find(userDataKey);
-    if (it == object.userData.end()) return std::nullopt;
-    if (it->second.type() != typeid(std::string)) return std::nullopt;
-
-    auto config = decode(std::any_cast<const std::string&>(it->second));
+    auto config = readEntry<VehicleConfig>(object, userDataKey);
     if (config) {
         for (int i = 0; i < 4; ++i) {
             config->wheels[i] = readString(object, wheelKeys[i]);
@@ -249,8 +245,7 @@ std::optional<VehicleConfig> VehicleConfig::read(const Object3D& object) {
 
 bool VehicleConfig::isVehicle(const Object3D& object) {
 
-    const auto it = object.userData.find(userDataKey);
-    return it != object.userData.end() && it->second.type() == typeid(std::string);
+    return hasEntry(object, userDataKey);
 }
 
 void VehicleConfig::write(Object3D& object) const {

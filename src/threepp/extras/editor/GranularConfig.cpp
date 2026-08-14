@@ -172,10 +172,7 @@ std::optional<GranularConfig> GranularConfig::decode(const std::string& text) {
 
 std::optional<GranularConfig> GranularConfig::read(const Object3D& object) {
 
-    const auto it = object.userData.find(userDataKey);
-    if (it == object.userData.end()) return std::nullopt;
-    if (it->second.type() != typeid(std::string)) return std::nullopt;
-    return decode(std::any_cast<const std::string&>(it->second));
+    return readEntry<GranularConfig>(object, userDataKey);
 }
 
 void GranularConfig::write(Object3D& object) const {
@@ -190,8 +187,7 @@ void GranularConfig::erase(Object3D& object) {
 
 bool GranularConfig::isGranular(const Object3D& object) {
 
-    const auto it = object.userData.find(userDataKey);
-    return it != object.userData.end() && it->second.type() == typeid(std::string);
+    return hasEntry(object, userDataKey);
 }
 
 const char* GranularConfig::label(Visual visual) {

@@ -502,11 +502,10 @@ RenderConfig RenderConfig::decode(const std::string& text, const RenderConfig& b
 
 std::optional<RenderConfig> RenderConfig::read(const Object3D& object, const RenderConfig& base) {
 
-    const auto it = object.userData.find(userDataKey);
-    if (it == object.userData.end()) return std::nullopt;
-    if (it->second.type() != typeid(std::string)) return std::nullopt;
-
-    return decode(std::any_cast<const std::string&>(it->second), base);
+    // decode() needs the inherited base, so this one cannot go through
+    // readEntry — the presence check is the shared half.
+    if (!hasEntry(object, userDataKey)) return std::nullopt;
+    return decode(readString(object, userDataKey), base);
 }
 
 void RenderConfig::write(Object3D& object, const RenderConfig& base) const {

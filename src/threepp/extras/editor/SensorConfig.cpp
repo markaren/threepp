@@ -235,11 +235,7 @@ std::optional<SensorConfig> SensorConfig::decode(const std::string& text) {
 
 std::optional<SensorConfig> SensorConfig::read(const Object3D& object) {
 
-    const auto it = object.userData.find(userDataKey);
-    if (it == object.userData.end()) return std::nullopt;
-    if (it->second.type() != typeid(std::string)) return std::nullopt;
-
-    return decode(std::any_cast<const std::string&>(it->second));
+    return readEntry<SensorConfig>(object, userDataKey);
 }
 
 void SensorConfig::write(Object3D& object) const {

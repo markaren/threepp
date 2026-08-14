@@ -75,11 +75,7 @@ std::optional<AnimationConfig> AnimationConfig::decode(const std::string& text) 
 
 std::optional<AnimationConfig> AnimationConfig::read(const Object3D& object) {
 
-    const auto it = object.userData.find(userDataKey);
-    if (it == object.userData.end()) return std::nullopt;
-    if (it->second.type() != typeid(std::string)) return std::nullopt;
-
-    return decode(std::any_cast<const std::string&>(it->second));
+    return readEntry<AnimationConfig>(object, userDataKey);
 }
 
 void AnimationConfig::write(Object3D& object) const {

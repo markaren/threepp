@@ -68,11 +68,7 @@ std::optional<ArticulationConfig> ArticulationConfig::decode(const std::string& 
 
 std::optional<ArticulationConfig> ArticulationConfig::read(const Object3D& object) {
 
-    const auto it = object.userData.find(userDataKey);
-    if (it == object.userData.end()) return std::nullopt;
-    if (it->second.type() != typeid(std::string)) return std::nullopt;
-
-    return decode(std::any_cast<const std::string&>(it->second));
+    return readEntry<ArticulationConfig>(object, userDataKey);
 }
 
 void ArticulationConfig::write(Object3D& object) const {

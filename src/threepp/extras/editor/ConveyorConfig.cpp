@@ -77,10 +77,9 @@ ConveyorWaypointConfig ConveyorWaypointConfig::decode(const std::string& text) {
 
 ConveyorWaypointConfig ConveyorWaypointConfig::read(const Object3D& object) {
 
-    const auto it = object.userData.find(userDataKey);
-    if (it == object.userData.end()) return {};
-    if (it->second.type() != typeid(std::string)) return {};
-    return decode(std::any_cast<const std::string&>(it->second));
+    // A waypoint with no entry IS the default waypoint, so unlike the configs
+    // that return an optional this one collapses absent onto default.
+    return readEntry<ConveyorWaypointConfig>(object, userDataKey).value_or(ConveyorWaypointConfig{});
 }
 
 void ConveyorWaypointConfig::write(Object3D& object) const {
@@ -134,10 +133,7 @@ ConveyorWallConfig ConveyorWallConfig::decode(const std::string& text) {
 
 std::optional<ConveyorWallConfig> ConveyorWallConfig::read(const Object3D& object) {
 
-    const auto it = object.userData.find(userDataKey);
-    if (it == object.userData.end()) return std::nullopt;
-    if (it->second.type() != typeid(std::string)) return std::nullopt;
-    return decode(std::any_cast<const std::string&>(it->second));
+    return readEntry<ConveyorWallConfig>(object, userDataKey);
 }
 
 void ConveyorWallConfig::write(Object3D& object) const {
@@ -147,8 +143,7 @@ void ConveyorWallConfig::write(Object3D& object) const {
 
 bool ConveyorWallConfig::isWall(const Object3D& object) {
 
-    const auto it = object.userData.find(userDataKey);
-    return it != object.userData.end() && it->second.type() == typeid(std::string);
+    return hasEntry(object, userDataKey);
 }
 
 Object3D* ConveyorWallConfig::wallOf(const Object3D& object) {
@@ -229,10 +224,7 @@ std::optional<ConveyorConfig> ConveyorConfig::decode(const std::string& text) {
 
 std::optional<ConveyorConfig> ConveyorConfig::read(const Object3D& object) {
 
-    const auto it = object.userData.find(userDataKey);
-    if (it == object.userData.end()) return std::nullopt;
-    if (it->second.type() != typeid(std::string)) return std::nullopt;
-    return decode(std::any_cast<const std::string&>(it->second));
+    return readEntry<ConveyorConfig>(object, userDataKey);
 }
 
 void ConveyorConfig::write(Object3D& object) const {
@@ -247,8 +239,7 @@ void ConveyorConfig::erase(Object3D& object) {
 
 bool ConveyorConfig::isConveyor(const Object3D& object) {
 
-    const auto it = object.userData.find(userDataKey);
-    return it != object.userData.end() && it->second.type() == typeid(std::string);
+    return hasEntry(object, userDataKey);
 }
 
 Object3D* ConveyorConfig::conveyorOf(const Object3D& object) {

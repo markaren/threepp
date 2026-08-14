@@ -48,10 +48,7 @@ std::optional<AcousticSurfaceConfig> AcousticSurfaceConfig::decode(const std::st
 
 std::optional<AcousticSurfaceConfig> AcousticSurfaceConfig::read(const Object3D& object) {
 
-    const auto it = object.userData.find(userDataKey);
-    if (it == object.userData.end()) return std::nullopt;
-    if (it->second.type() != typeid(std::string)) return std::nullopt;
-    return decode(std::any_cast<const std::string&>(it->second));
+    return readEntry<AcousticSurfaceConfig>(object, userDataKey);
 }
 
 void AcousticSurfaceConfig::write(Object3D& object) const {

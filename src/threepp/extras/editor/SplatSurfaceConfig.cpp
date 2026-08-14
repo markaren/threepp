@@ -59,10 +59,7 @@ std::optional<SplatSurfaceConfig> SplatSurfaceConfig::decode(const std::string& 
 
 std::optional<SplatSurfaceConfig> SplatSurfaceConfig::read(const Object3D& object) {
 
-    const auto it = object.userData.find(userDataKey);
-    if (it == object.userData.end()) return std::nullopt;
-    if (it->second.type() != typeid(std::string)) return std::nullopt;
-    return decode(std::any_cast<const std::string&>(it->second));
+    return readEntry<SplatSurfaceConfig>(object, userDataKey);
 }
 
 void SplatSurfaceConfig::write(Object3D& object) const {

@@ -176,11 +176,7 @@ std::optional<PhysicsConfig> PhysicsConfig::decode(const std::string& text) {
 
 std::optional<PhysicsConfig> PhysicsConfig::read(const Object3D& object) {
 
-    const auto it = object.userData.find(userDataKey);
-    if (it == object.userData.end()) return std::nullopt;
-    if (it->second.type() != typeid(std::string)) return std::nullopt;
-
-    return decode(std::any_cast<const std::string&>(it->second));
+    return readEntry<PhysicsConfig>(object, userDataKey);
 }
 
 void PhysicsConfig::write(Object3D& object) const {

@@ -1,4 +1,5 @@
 
+#include "../ConfigFields.hpp"
 #include "../EditorApp.hpp"
 #include "../EditorTheme.hpp"
 #include "../ImportFormats.hpp"
@@ -70,26 +71,9 @@ namespace {
         return ImGui::TreeNodeEx(label, flags);
     }
 
-    // threepp keeps colors in the renderer's LINEAR working space; a color
-    // picker must show what the user typed in, so both directions go through
-    // the sRGB hex accessors rather than touching r/g/b.
-    void toSrgbFloats(const Color& color, float out[3]) {
-
-        const unsigned int hex = color.getHex();
-        out[0] = static_cast<float>((hex >> 16) & 0xff) / 255.f;
-        out[1] = static_cast<float>((hex >> 8) & 0xff) / 255.f;
-        out[2] = static_cast<float>(hex & 0xff) / 255.f;
-    }
-
-    Color fromSrgbFloats(const float in[3]) {
-
-        const auto channel = [](float v) {
-            return static_cast<unsigned int>(std::lround(std::clamp(v, 0.f, 1.f) * 255.f));
-        };
-        Color color;
-        color.setHex((channel(in[0]) << 16) | (channel(in[1]) << 8) | channel(in[2]));
-        return color;
-    }
+    // toSrgbFloats / fromSrgbFloats live in ConfigFields.hpp — the color field
+    // there needs them too, and one copy of a color-space conversion is the
+    // only safe number of copies.
 
     // --- texture thumbnails --------------------------------------------------
     // Drawn as a mosaic of filled rects sampled from the texture's CPU-side
@@ -362,15 +346,13 @@ void EditorApp::drawObjectSection(Object3D& object) {
     int renderOrder = object.renderOrder;
     ImGui::SetNextItemWidth(-90 * contentScale_);
     const bool changed = ImGui::DragInt("Render order", &renderOrder, 0.1f);
-    if (ImGui::IsItemActivated()) commands_.beginTransaction();
-    if (changed) {
+    committed(commands_, changed, [&] {
         commands_.execute(makeProperty<int>(
                 "Render Order", "renderOrder:" + object.uuid,
                 [target](const int& v) { target->renderOrder = v; },
                 object.renderOrder, renderOrder));
         document_.setDirty(true);
-    }
-    if (ImGui::IsItemDeactivated()) commands_.endTransaction();
+    });
 
     ImGui::TreePop();
 }
@@ -396,13 +378,11 @@ void EditorApp::drawTransformSection(Object3D& object) {
     {
         float position[3]{object.position.x, object.position.y, object.position.z};
         const bool changed = ImGui::DragFloat3("Position", position, speed, 0, 0, "%.3f");
-        if (ImGui::IsItemActivated()) commands_.beginTransaction();
-        if (changed) {
+        committed(commands_, changed, [&] {
             auto after = before;
             after.position.set(position[0], position[1], position[2]);
             commit(after, "Move");
-        }
-        if (ImGui::IsItemDeactivated()) commands_.endTransaction();
+        });
     }
 
     {
@@ -413,22 +393,19 @@ void EditorApp::drawTransformSection(Object3D& object) {
                 math::radToDeg(object.rotation.y),
                 math::radToDeg(object.rotation.z)};
         const bool changed = ImGui::DragFloat3("Rotation", degrees, 0.5f, 0, 0, "%.2f deg");
-        if (ImGui::IsItemActivated()) commands_.beginTransaction();
-        if (changed) {
+        committed(commands_, changed, [&] {
             Euler euler(math::degToRad(degrees[0]), math::degToRad(degrees[1]),
                         math::degToRad(degrees[2]), object.rotation.getOrder());
             auto after = before;
             after.quaternion.setFromEuler(euler);
             commit(after, "Rotate");
-        }
-        if (ImGui::IsItemDeactivated()) commands_.endTransaction();
+        });
     }
 
     {
         float scale[3]{object.scale.x, object.scale.y, object.scale.z};
         const bool changed = ImGui::DragFloat3("Scale", scale, speed, 0, 0, "%.3f");
-        if (ImGui::IsItemActivated()) commands_.beginTransaction();
-        if (changed) {
+        committed(commands_, changed, [&] {
             auto after = before;
             // A zero scale produces a singular matrix — decompose() then hands
             // back garbage and the object can never be scaled up again.
@@ -436,8 +413,7 @@ void EditorApp::drawTransformSection(Object3D& object) {
                             std::abs(scale[1]) < 1e-4f ? 1e-4f : scale[1],
                             std::abs(scale[2]) < 1e-4f ? 1e-4f : scale[2]);
             commit(after, "Scale");
-        }
-        if (ImGui::IsItemDeactivated()) commands_.endTransaction();
+        });
     }
 
     ImGui::PopItemWidth();
@@ -548,13 +524,11 @@ void EditorApp::drawUvTransformBlock(Material& material,
                                     : "Tiling###tiling";
         float repeat[2]{current.repeat.x, current.repeat.y};
         const bool changed = ImGui::DragFloat2(title, repeat, 0.01f);
-        if (ImGui::IsItemActivated()) commands_.beginTransaction();
-        if (changed) {
+        committed(commands_, changed, [&] {
             auto after = current;
             after.repeat.set(repeat[0], repeat[1]);
             applyUvTransform(material, textures, after, "Tiling");
-        }
-        if (ImGui::IsItemDeactivated()) commands_.endTransaction();
+        });
         if (ImGui::IsItemHovered()) {
             ImGui::SetTooltip("How many times the image repeats across the surface.\n"
                               "Above 1 it only tiles when Wrap is Repeat - see the\n"
@@ -570,13 +544,11 @@ void EditorApp::drawUvTransformBlock(Material& material,
                                     : "Offset###offset";
         float offset[2]{current.offset.x, current.offset.y};
         const bool changed = ImGui::DragFloat2(title, offset, 0.005f);
-        if (ImGui::IsItemActivated()) commands_.beginTransaction();
-        if (changed) {
+        committed(commands_, changed, [&] {
             auto after = current;
             after.offset.set(offset[0], offset[1]);
             applyUvTransform(material, textures, after, "Offset");
-        }
-        if (ImGui::IsItemDeactivated()) commands_.endTransaction();
+        });
     }
 
     {
@@ -585,8 +557,7 @@ void EditorApp::drawUvTransformBlock(Material& material,
                                     : "Rotation###rotation";
         float degrees = math::radToDeg(current.rotation);
         const bool changed = ImGui::DragFloat(title, &degrees, 0.5f, -360.f, 360.f, "%.1f deg");
-        if (ImGui::IsItemActivated()) commands_.beginTransaction();
-        if (changed) {
+        committed(commands_, changed, [&] {
             auto after = current;
             after.rotation = math::degToRad(degrees);
             // Turning a map about its (0,0) corner swings it off the surface,
@@ -598,8 +569,7 @@ void EditorApp::drawUvTransformBlock(Material& material,
                 after.center.set(0.5f, 0.5f);
             }
             applyUvTransform(material, textures, after, "Rotation");
-        }
-        if (ImGui::IsItemDeactivated()) commands_.endTransaction();
+        });
         if (ImGui::IsItemHovered()) {
             ImGui::SetTooltip("Turns the maps about the middle of a tile.");
         }
@@ -810,55 +780,43 @@ void EditorApp::drawMaterialSection(Object3D& object) {
         float rgb[3];
         toSrgbFloats(withColor->color, rgb);
         const bool changed = ImGui::ColorEdit3("Color", rgb);
-        if (ImGui::IsItemActivated()) commands_.beginTransaction();
-        if (changed) {
+        committed(commands_, changed, [&] {
             commands_.execute(makeProperty<Color>(
                     "Color", "color:" + raw->uuid(),
                     sync([withColor](const Color& v) { withColor->color = v; }),
                     withColor->color, fromSrgbFloats(rgb)));
             touched();
-        }
-        if (ImGui::IsItemDeactivated()) commands_.endTransaction();
+        });
     }
 
     if (auto* withEmissive = dynamic_cast<MaterialWithEmissive*>(raw)) {
         float rgb[3];
         toSrgbFloats(withEmissive->emissive, rgb);
         const bool changed = ImGui::ColorEdit3("Emissive", rgb);
-        if (ImGui::IsItemActivated()) commands_.beginTransaction();
-        if (changed) {
+        committed(commands_, changed, [&] {
             commands_.execute(makeProperty<Color>(
                     "Emissive", "emissive:" + raw->uuid(),
                     sync([withEmissive](const Color& v) { withEmissive->emissive = v; }),
                     withEmissive->emissive, fromSrgbFloats(rgb)));
             touched();
-        }
-        if (ImGui::IsItemDeactivated()) commands_.endTransaction();
+        });
 
         float intensity = withEmissive->emissiveIntensity;
         const bool ch = ImGui::DragFloat("Emissive intensity", &intensity, 0.01f, 0.f, 100.f);
-        if (ImGui::IsItemActivated()) commands_.beginTransaction();
-        if (ch) {
+        committed(commands_, ch, [&] {
             commands_.execute(makeProperty<float>(
                     "Emissive Intensity", "emissiveIntensity:" + raw->uuid(),
                     sync([withEmissive](const float& v) { withEmissive->emissiveIntensity = v; }),
                     withEmissive->emissiveIntensity, intensity));
             touched();
-        }
-        if (ImGui::IsItemDeactivated()) commands_.endTransaction();
+        });
     }
 
     const auto floatField = [&](const char* label, const std::string& key, float* value,
                                 float speed, float min, float max,
                                 const std::function<void(const float&)>& setter) {
-        float edited = *value;
-        const bool changed = ImGui::DragFloat(label, &edited, speed, min, max);
-        if (ImGui::IsItemActivated()) commands_.beginTransaction();
-        if (changed) {
-            commands_.execute(makeProperty<float>(label, key + raw->uuid(), sync(setter), *value, edited));
-            touched();
-        }
-        if (ImGui::IsItemDeactivated()) commands_.endTransaction();
+        dragProperty(commands_, label, key + raw->uuid(), value, speed, min, max,
+                     sync(setter), touched);
     };
 
     if (auto* withRoughness = dynamic_cast<MaterialWithRoughness*>(raw)) {
@@ -1222,35 +1180,29 @@ void EditorApp::drawSplatSection(Object3D& object) {
             {
                 float voxel = config.voxelSize;
                 const bool changed = ImGui::DragFloat("Voxel (m)", &voxel, 0.002f, 0.f, 0.5f, "%.3f");
-                if (ImGui::IsItemActivated()) commands_.beginTransaction();
-                if (changed) {
+                committed(commands_, changed, [&] {
                     auto after = config;
                     after.voxelSize = std::clamp(voxel, 0.f, 0.5f);
                     commit(std::move(after), "Splat Surface Voxel");
-                }
-                if (ImGui::IsItemDeactivated()) commands_.endTransaction();
+                });
             }
             {
                 int island = config.minComponentVoxels;
                 const bool changed = ImGui::DragInt("Island cells", &island, 8.f, 0, 100000);
-                if (ImGui::IsItemActivated()) commands_.beginTransaction();
-                if (changed) {
+                committed(commands_, changed, [&] {
                     auto after = config;
                     after.minComponentVoxels = std::max(island, 0);
                     commit(std::move(after), "Splat Surface Islands");
-                }
-                if (ImGui::IsItemDeactivated()) commands_.endTransaction();
+                });
             }
             {
                 int poses = config.poseCount;
                 const bool changed = ImGui::DragInt("Poses", &poses, 0.5f, 0, 256);
-                if (ImGui::IsItemActivated()) commands_.beginTransaction();
-                if (changed) {
+                committed(commands_, changed, [&] {
                     auto after = config;
                     after.poseCount = std::clamp(poses, 0, 256);
                     commit(std::move(after), "Splat Surface Poses");
-                }
-                if (ImGui::IsItemDeactivated()) commands_.endTransaction();
+                });
             }
             ImGui::PopItemWidth();
             ImGui::TextColored(theme::muted(), "Voxel 0 sizes itself from the scan; poses 0 uses 26.");
@@ -1407,28 +1359,20 @@ void EditorApp::drawLightSection(Object3D& object) {
         float rgb[3];
         toSrgbFloats(light->color, rgb);
         const bool changed = ImGui::ColorEdit3("Color", rgb);
-        if (ImGui::IsItemActivated()) commands_.beginTransaction();
-        if (changed) {
+        committed(commands_, changed, [&] {
             commands_.execute(makeProperty<Color>(
                     "Light Color", "lightColor:" + object.uuid,
                     [light](const Color& v) { light->color = v; },
                     light->color, fromSrgbFloats(rgb)));
             document_.setDirty(true);
-        }
-        if (ImGui::IsItemDeactivated()) commands_.endTransaction();
+        });
     }
 
     const auto floatField = [&](const char* label, const std::string& key, float* value,
                                 float speed, float min, float max,
                                 const std::function<void(const float&)>& setter) {
-        float edited = *value;
-        const bool changed = ImGui::DragFloat(label, &edited, speed, min, max);
-        if (ImGui::IsItemActivated()) commands_.beginTransaction();
-        if (changed) {
-            commands_.execute(makeProperty<float>(label, key + object.uuid, setter, *value, edited));
-            document_.setDirty(true);
-        }
-        if (ImGui::IsItemDeactivated()) commands_.endTransaction();
+        dragProperty(commands_, label, key + object.uuid, value, speed, min, max, setter,
+                     [this] { document_.setDirty(true); });
     };
 
     floatField("Intensity", "intensity:", &light->intensity, 0.02f, 0.f, 1000.f,
@@ -1446,15 +1390,13 @@ void EditorApp::drawLightSection(Object3D& object) {
                    [spot](const float& v) { spot->distance = v; });
         float angleDegrees = math::radToDeg(spot->angle);
         const bool changed = ImGui::DragFloat("Angle", &angleDegrees, 0.2f, 1.f, 89.f, "%.1f deg");
-        if (ImGui::IsItemActivated()) commands_.beginTransaction();
-        if (changed) {
+        committed(commands_, changed, [&] {
             commands_.execute(makeProperty<float>(
                     "Angle", "angle:" + object.uuid,
                     [spot](const float& v) { spot->angle = v; },
                     spot->angle, math::degToRad(angleDegrees)));
             document_.setDirty(true);
-        }
-        if (ImGui::IsItemDeactivated()) commands_.endTransaction();
+        });
 
         floatField("Penumbra", "penumbra:", &spot->penumbra, 0.005f, 0.f, 1.f,
                    [spot](const float& v) { spot->penumbra = v; });
@@ -1552,12 +1494,10 @@ void EditorApp::drawLightShadowSection(Object3D& object) {
                                  const std::function<void(const float&)>& setter) {
         float edited = *value;
         const bool changed = ImGui::DragFloat(label, &edited, speed, min, max);
-        if (ImGui::IsItemActivated()) commands_.beginTransaction();
-        if (changed) {
+        committed(commands_, changed, [&] {
             commands_.execute(makeProperty<float>(label, key + object.uuid, setter, *value, edited));
             document_.setDirty(true);
-        }
-        if (ImGui::IsItemDeactivated()) commands_.endTransaction();
+        });
     };
 
     // One extent rather than four edges: a square shadow camera is what keeps
@@ -1565,8 +1505,7 @@ void EditorApp::drawLightShadowSection(Object3D& object) {
     // swims as the light turns.
     float extent = camera->right;
     const bool extentChanged = ImGui::DragFloat("Extent", &extent, 0.25f, 0.1f, 5000.f);
-    if (ImGui::IsItemActivated()) commands_.beginTransaction();
-    if (extentChanged) {
+    committed(commands_, extentChanged, [&] {
         commands_.execute(makeProperty<float>(
                 "Shadow Extent", "shadowextent:" + object.uuid,
                 [camera](const float& v) {
@@ -1578,8 +1517,7 @@ void EditorApp::drawLightShadowSection(Object3D& object) {
                 },
                 camera->right, extent));
         document_.setDirty(true);
-    }
-    if (ImGui::IsItemDeactivated()) commands_.endTransaction();
+    });
 
     cameraField("Near", "shadownear:", &camera->nearPlane, 0.05f, 0.01f, 1000.f,
                 [camera](const float& v) { camera->nearPlane = v; camera->updateProjectionMatrix(); });
@@ -1628,14 +1566,8 @@ void EditorApp::drawCameraSection(Object3D& object) {
     const auto floatField = [&](const char* label, const std::string& key, float* value,
                                 float speed, float min, float max,
                                 const std::function<void(const float&)>& setter) {
-        float edited = *value;
-        const bool changed = ImGui::DragFloat(label, &edited, speed, min, max);
-        if (ImGui::IsItemActivated()) commands_.beginTransaction();
-        if (changed) {
-            commands_.execute(makeProperty<float>(label, key + object.uuid, setter, *value, edited));
-            document_.setDirty(true);
-        }
-        if (ImGui::IsItemDeactivated()) commands_.endTransaction();
+        dragProperty(commands_, label, key + object.uuid, value, speed, min, max, setter,
+                     [this] { document_.setDirty(true); });
     };
 
     floatField("FOV", "fov:", &camera->fov, 0.2f, 1.f, 179.f,
@@ -1724,13 +1656,11 @@ void EditorApp::drawAnimationSection(Object3D& object) {
     {
         float speed = config.speed;
         const bool changed = ImGui::DragFloat("Speed", &speed, 0.01f, 0.05f, 5.f, "%.2fx");
-        if (ImGui::IsItemActivated()) commands_.beginTransaction();
-        if (changed) {
+        committed(commands_, changed, [&] {
             auto after = config;
             after.speed = speed;
             commit(after, "Animation Speed");
-        }
-        if (ImGui::IsItemDeactivated()) commands_.endTransaction();
+        });
     }
 
     ImGui::PopItemWidth();
@@ -1762,96 +1692,40 @@ void EditorApp::drawAnimationSection(Object3D& object) {
 
 void EditorApp::drawArticulationBlock(Object3D& object, Robot& robot) {
 
-    auto* target = &object;
-    auto config = ArticulationConfig::read(object).value_or(ArticulationConfig{});
-    const auto before = config;
+    using Config = ArticulationConfig;
 
-    const auto commit = [&](ArticulationConfig after, const char* label) {
-        commands_.execute(makeProperty<ArticulationConfig>(
-                label, "articulation:" + object.uuid,
-                [target](const ArticulationConfig& value) { value.write(*target); },
-                before, after));
-        document_.setDirty(true);
-    };
+    ConfigFields<Config> fields(commands_, object, Config::read(object).value_or(Config{}),
+                                "articulation:" + object.uuid, "Articulation",
+                                [this] { document_.setDirty(true); });
 
     ImGui::Spacing();
 
-    bool simulate = config.enabled;
-    if (ImGui::Checkbox("Simulate", &simulate)) {
-        auto after = config;
-        after.enabled = simulate;
-        commit(after, simulate ? "Simulate Robot" : "Stop Simulating Robot");
-        config.enabled = simulate;// so the widgets below reflect the toggle this frame
-    }
+    fields.check("Simulate", &Config::enabled, "Simulate Robot", "Stop Simulating Robot");
     if (ImGui::IsItemHovered()) {
         ImGui::SetTooltip("Play as a PhysX reduced-coordinate articulation.\n"
                           "Colliders are primitive/bbox approximations, not the visual meshes.");
     }
 
-    if (!config.enabled) return;
+    if (!fields->enabled) return;
 
     ImGui::PushItemWidth(-110 * contentScale_);
 
-    bool fixedBase = config.fixedBase;
-    if (ImGui::Checkbox("Fixed Base", &fixedBase)) {
-        auto after = config;
-        after.fixedBase = fixedBase;
-        commit(after, "Articulation Fixed Base");
-    }
+    fields.check("Fixed Base", &Config::fixedBase);
     if (ImGui::IsItemHovered()) {
         ImGui::SetTooltip("On: the base is bolted to the world (an arm).\n"
                           "Off: the base floats free (a quadruped, a drone).");
     }
 
-    const auto floatField = [&](const char* label, float value, float speed, float min, float max,
-                                void (*assign)(ArticulationConfig&, float), const char* action,
-                                ImGuiSliderFlags flags = 0) {
-        float edited = value;
-        const bool changed = ImGui::DragFloat(label, &edited, speed, min, max, "%.3f", flags);
-        if (ImGui::IsItemActivated()) commands_.beginTransaction();
-        if (changed) {
-            auto after = config;
-            assign(after, edited);
-            commit(after, action);
-        }
-        if (ImGui::IsItemDeactivated()) commands_.endTransaction();
-    };
-
-    floatField(
-            "Stiffness", config.stiffness, 1.f, 0.f, 100000.f,
-            [](ArticulationConfig& c, float v) { c.stiffness = v; }, "Articulation Stiffness",
-            ImGuiSliderFlags_Logarithmic);
-    floatField(
-            "Damping", config.damping, 0.5f, 0.f, 10000.f,
-            [](ArticulationConfig& c, float v) { c.damping = v; }, "Articulation Damping",
-            ImGuiSliderFlags_Logarithmic);
-    floatField(
-            "Max Force", config.maxForce, 100.f, 0.f, 1e7f,
-            [](ArticulationConfig& c, float v) { c.maxForce = v; }, "Articulation Max Force",
-            ImGuiSliderFlags_Logarithmic);
-
-    bool selfCollision = config.selfCollision;
-    if (ImGui::Checkbox("Self Collision", &selfCollision)) {
-        auto after = config;
-        after.selfCollision = selfCollision;
-        commit(after, "Articulation Self Collision");
-    }
-
-    {
-        int edited = config.iterations;
-        const bool changed = ImGui::DragInt("Iterations", &edited, 0.2f, 1, 255);
-        if (ImGui::IsItemActivated()) commands_.beginTransaction();
-        if (changed) {
-            auto after = config;
-            after.iterations = edited;
-            commit(after, "Articulation Iterations");
-        }
-        if (ImGui::IsItemDeactivated()) commands_.endTransaction();
-    }
-
-    floatField(
-            "Density", config.density, 5.f, 1.f, 100000.f,
-            [](ArticulationConfig& c, float v) { c.density = v; }, "Articulation Density");
+    // Stiffness, damping and force span decades, so they drag logarithmically.
+    fields.dragFloat("Stiffness", &Config::stiffness, 1.f, 0.f, 100000.f, "%.3f", nullptr,
+                     ImGuiSliderFlags_Logarithmic);
+    fields.dragFloat("Damping", &Config::damping, 0.5f, 0.f, 10000.f, "%.3f", nullptr,
+                     ImGuiSliderFlags_Logarithmic);
+    fields.dragFloat("Max Force", &Config::maxForce, 100.f, 0.f, 1e7f, "%.3f", nullptr,
+                     ImGuiSliderFlags_Logarithmic);
+    fields.check("Self Collision", &Config::selfCollision);
+    fields.dragInt("Iterations", &Config::iterations, 0.2f, 1, 255);
+    fields.dragFloat("Density", &Config::density, 5.f, 1.f, 100000.f);
 
     ImGui::PopItemWidth();
 
@@ -1926,8 +1800,7 @@ void EditorApp::drawJointsSection(Object3D& object) {
         const auto label = info[i].name.empty() ? "joint " + std::to_string(i + 1) : info[i].name;
         const bool changed = ImGui::SliderFloat(label.c_str(), &shown, min, max,
                                                 revolute ? "%.1f deg" : "%.3f m");
-        if (ImGui::IsItemActivated()) commands_.beginTransaction();
-        if (changed) {
+        committed(commands_, changed, [&] {
             auto* target = robot;
             const float before = robot->getJointValue(i);
             const float after = revolute ? math::degToRad(shown) : shown;
@@ -1936,8 +1809,7 @@ void EditorApp::drawJointsSection(Object3D& object) {
                     [this, target, i](const float& value) { setJointValue(*target, i, value); },
                     before, after));
             document_.setDirty(true);
-        }
-        if (ImGui::IsItemDeactivated()) commands_.endTransaction();
+        });
     }
 
     ImGui::PopItemWidth();
@@ -2075,13 +1947,11 @@ void EditorApp::drawJointAuthoringSection(Object3D& object) {
                                 ImGuiSliderFlags flags = 0) {
         float edited = value;
         const bool changed = ImGui::DragFloat(label, &edited, speed, min, max, format, flags);
-        if (ImGui::IsItemActivated()) commands_.beginTransaction();
-        if (changed) {
+        committed(commands_, changed, [&] {
             auto after = config;
             assign(after, edited);
             commit(after, action, field);
-        }
-        if (ImGui::IsItemDeactivated()) commands_.endTransaction();
+        });
     };
 
     // --- motion range. Angles are shown in degrees and stored in radians,
@@ -2446,13 +2316,11 @@ void EditorApp::drawVehicleSection(Object3D& object) {
                                 const char* action, const char* field) {
         float edited = value;
         const bool changed = ImGui::DragFloat(label, &edited, speed, min, max, format);
-        if (ImGui::IsItemActivated()) commands_.beginTransaction();
-        if (changed) {
+        committed(commands_, changed, [&] {
             auto after = config;
             assign(after, edited);
             commit(after, action, field);
-        }
-        if (ImGui::IsItemDeactivated()) commands_.endTransaction();
+        });
     };
 
     // --- geometry. Derived from the picks while Auto is on, and shown, so
@@ -2775,21 +2643,17 @@ void EditorApp::drawScriptSection(Object3D& object) {
                     case ScriptField::Type::Int: {
                         int value = ScriptConfig::toInt(stored);
                         const bool changed = ImGui::DragInt(label.c_str(), &value, 0.1f);
-                        if (ImGui::IsItemActivated()) commands_.beginTransaction();
-                        if (changed) {
+                        committed(commands_, changed, [&] {
                             commit(edited(field.name, ScriptConfig::toText(value)), "Script " + label);
-                        }
-                        if (ImGui::IsItemDeactivated()) commands_.endTransaction();
+                        });
                         break;
                     }
                     case ScriptField::Type::Float: {
                         float value = ScriptConfig::toFloat(stored);
                         const bool changed = ImGui::DragFloat(label.c_str(), &value, 0.01f);
-                        if (ImGui::IsItemActivated()) commands_.beginTransaction();
-                        if (changed) {
+                        committed(commands_, changed, [&] {
                             commit(edited(field.name, ScriptConfig::toText(value)), "Script " + label);
-                        }
-                        if (ImGui::IsItemDeactivated()) commands_.endTransaction();
+                        });
                         break;
                     }
                     case ScriptField::Type::String: {
@@ -2845,26 +2709,16 @@ void EditorApp::drawPhysicsSection(Object3D& object) {
     ImGui::Spacing();
 #endif
 
-    auto* target = &object;
-    auto config = PhysicsConfig::read(object).value_or(PhysicsConfig{});
-    const auto before = config;
+    using Config = PhysicsConfig;
 
-    const auto commit = [&](PhysicsConfig after, const char* label) {
-        commands_.execute(makeProperty<PhysicsConfig>(
-                label, "physics:" + object.uuid,
-                [target](const PhysicsConfig& value) { value.write(*target); },
-                before, after));
-        document_.setDirty(true);
-    };
+    ConfigFields<Config> fields(commands_, object, Config::read(object).value_or(Config{}),
+                                "physics:" + object.uuid, "Physics",
+                                [this] { document_.setDirty(true); });
+    const auto& config = fields.value();
 
-    bool enabled = config.enabled;
-    if (ImGui::Checkbox("Enabled", &enabled)) {
-        auto after = config;
-        after.enabled = enabled;
-        // A body that has never been configured starts as a dynamic box, which
-        // is what "make this fall" means to almost everyone.
-        commit(after, enabled ? "Enable Physics" : "Disable Physics");
-    }
+    // A body that has never been configured starts as a dynamic box, which is
+    // what "make this fall" means to almost everyone.
+    fields.check("Enabled", &Config::enabled, "Enable Physics", "Disable Physics");
 
     if (!config.enabled) {
         ImGui::TreePop();
@@ -2875,29 +2729,18 @@ void EditorApp::drawPhysicsSection(Object3D& object) {
 
     {
         static const char* bodies[] = {"Static", "Dynamic", "Kinematic", "Soft"};
-        int body = static_cast<int>(config.body);
-        if (ImGui::Combo("Body", &body, bodies, IM_ARRAYSIZE(bodies))) {
-            auto after = config;
-            after.body = static_cast<PhysicsConfig::Body>(body);
-            commit(after, "Physics Body Type");
-        }
+        fields.combo("Body", &Config::body, bodies, IM_ARRAYSIZE(bodies), "Physics Body Type");
     }
 
-    const bool soft = config.body == PhysicsConfig::Body::Soft;
+    const bool soft = config.body == Config::Body::Soft;
 
     // A soft body's collider is always a tetrahedral volume cooked from the
     // mesh, so the shape picker has nothing to offer it.
     if (!soft) {
         static const char* shapes[] = {"Auto", "Box", "Sphere", "Capsule",
                                        "Convex", "TriMesh", "Convex Pieces"};
-        int shape = static_cast<int>(config.shape);
-        if (ImGui::Combo("Shape", &shape, shapes, IM_ARRAYSIZE(shapes))) {
-            auto after = config;
-            after.shape = static_cast<PhysicsConfig::Shape>(shape);
-            commit(after, "Physics Shape");
-        }
-        if (config.shape == PhysicsConfig::Shape::TriMesh &&
-            config.body != PhysicsConfig::Body::Static) {
+        fields.combo("Shape", &Config::shape, shapes, IM_ARRAYSIZE(shapes), "Physics Shape");
+        if (config.shape == Config::Shape::TriMesh && config.body != Config::Body::Static) {
             ImGui::TextColored(theme::warning(), "TriMesh is static-only");
         }
 
@@ -2905,94 +2748,39 @@ void EditorApp::drawPhysicsSection(Object3D& object) {
         // is cooked as an overlap volume instead of a collider. Hidden for a
         // soft body (whose collider is the cooked tet volume — see below), and
         // the key still round-trips, so the tick survives a trip through Soft.
-        bool trigger = config.trigger;
-        if (ImGui::Checkbox("Trigger", &trigger)) {
-            auto after = config;
-            after.trigger = trigger;
-            commit(after, trigger ? "Make Trigger Volume" : "Clear Trigger Volume");
-        }
+        fields.check("Trigger", &Config::trigger, "Make Trigger Volume", "Clear Trigger Volume");
     }
 
-    const auto floatField = [&](const char* label, float value, float speed, float min, float max,
-                                void (*assign)(PhysicsConfig&, float), const char* action,
-                                ImGuiSliderFlags flags = 0) {
-        float edited = value;
-        const bool changed = ImGui::DragFloat(label, &edited, speed, min, max, "%.3f", flags);
-        if (ImGui::IsItemActivated()) commands_.beginTransaction();
-        if (changed) {
-            auto after = config;
-            assign(after, edited);
-            commit(after, action);
-        }
-        if (ImGui::IsItemDeactivated()) commands_.endTransaction();
-    };
-
-    const auto intField = [&](const char* label, int value, float speed, int min, int max,
-                              void (*assign)(PhysicsConfig&, int), const char* action) {
-        int edited = value;
-        const bool changed = ImGui::DragInt(label, &edited, speed, min, max);
-        if (ImGui::IsItemActivated()) commands_.beginTransaction();
-        if (changed) {
-            auto after = config;
-            assign(after, edited);
-            commit(after, action);
-        }
-        if (ImGui::IsItemDeactivated()) commands_.endTransaction();
-    };
-
-    if (config.body == PhysicsConfig::Body::Dynamic || soft) {
-        floatField(
-                "Mass (kg)", config.mass, 0.05f, 0.001f, 10000.f,
-                [](PhysicsConfig& c, float v) { c.mass = v; }, "Physics Mass");
+    if (config.body == Config::Body::Dynamic || soft) {
+        fields.dragFloat("Mass (kg)", &Config::mass, 0.05f, 0.001f, 10000.f, "%.3f", "Physics Mass");
     }
-    floatField(
-            "Friction", config.friction, 0.005f, 0.f, 2.f,
-            [](PhysicsConfig& c, float v) { c.friction = v; }, "Physics Friction");
+    fields.dragFloat("Friction", &Config::friction, 0.005f, 0.f, 2.f);
     if (!soft) {
-        floatField(
-                "Restitution", config.restitution, 0.005f, 0.f, 1.f,
-                [](PhysicsConfig& c, float v) { c.restitution = v; }, "Physics Restitution");
+        fields.dragFloat("Restitution", &Config::restitution, 0.005f, 0.f, 1.f);
     }
 
     // Convex-pieces (V-HACD) parameters, shown only while that shape is picked —
     // the same reveal-on-selection the soft-body section uses.
-    if (!soft && config.shape == PhysicsConfig::Shape::Pieces) {
+    if (!soft && config.shape == Config::Shape::Pieces) {
         ImGui::Spacing();
-        intField(
-                "Max Hulls", config.hulls, 0.2f, 1, 128,
-                [](PhysicsConfig& c, int v) { c.hulls = v; }, "Convex Pieces Hulls");
-        intField(
-                "Verts / Hull", config.hullVerts, 0.2f, 8, 64,
-                [](PhysicsConfig& c, int v) { c.hullVerts = v; }, "Convex Pieces Hull Verts");
-        intField(
-                "Voxel Res", config.voxels, 500.f, 10000, 1000000,
-                [](PhysicsConfig& c, int v) { c.voxels = v; }, "Convex Pieces Resolution");
+        fields.dragInt("Max Hulls", &Config::hulls, 0.2f, 1, 128, "Convex Pieces Hulls");
+        fields.dragInt("Verts / Hull", &Config::hullVerts, 0.2f, 8, 64, "Convex Pieces Hull Verts");
+        fields.dragInt("Voxel Res", &Config::voxels, 500.f, 10000, 1000000,
+                       "Convex Pieces Resolution");
     }
 
     if (soft) {
         ImGui::Spacing();
         // Stiffness spans four decades between jelly and hard rubber, so the
         // drag is logarithmic — a linear one is unusable at the soft end.
-        floatField(
-                "Stiffness (Pa)", config.youngsModulus, 0.01f, 1e3f, 1e9f,
-                [](PhysicsConfig& c, float v) { c.youngsModulus = v; }, "Soft Body Stiffness",
-                ImGuiSliderFlags_Logarithmic);
-        floatField(
-                "Poisson Ratio", config.poissonsRatio, 0.002f, 0.f, 0.49f,
-                [](PhysicsConfig& c, float v) { c.poissonsRatio = v; }, "Soft Body Poisson Ratio");
-        intField(
-                "Resolution", config.voxelResolution, 0.1f, 2, 64,
-                [](PhysicsConfig& c, int v) { c.voxelResolution = v; }, "Soft Body Resolution");
-        intField(
-                "Iterations", config.solverIterations, 0.2f, 1, 255,
-                [](PhysicsConfig& c, int v) { c.solverIterations = v; }, "Soft Body Iterations");
-
-        bool selfCollision = config.selfCollision;
-        if (ImGui::Checkbox("Self Collision", &selfCollision)) {
-            auto after = config;
-            after.selfCollision = selfCollision;
-            commit(after, "Soft Body Self Collision");
-        }
+        fields.dragFloat("Stiffness (Pa)", &Config::youngsModulus, 0.01f, 1e3f, 1e9f, "%.3f",
+                         "Soft Body Stiffness", ImGuiSliderFlags_Logarithmic);
+        fields.dragFloat("Poisson Ratio", &Config::poissonsRatio, 0.002f, 0.f, 0.49f, "%.3f",
+                         "Soft Body Poisson Ratio");
+        fields.dragInt("Resolution", &Config::voxelResolution, 0.1f, 2, 64, "Soft Body Resolution");
+        fields.dragInt("Iterations", &Config::solverIterations, 0.2f, 1, 255,
+                       "Soft Body Iterations");
+        fields.check("Self Collision", &Config::selfCollision, "Soft Body Self Collision");
     }
 
     ImGui::PopItemWidth();
@@ -3075,68 +2863,30 @@ void EditorApp::drawSplineSection(Object3D& object) {
     if (!SplineConfig::isSpline(object)) return;
     if (!section("Spline")) return;
 
-    auto* target = &object;
-    auto config = SplineConfig::read(object).value_or(SplineConfig{});
-    const auto before = config;
+    using Config = SplineConfig;
 
-    const auto commit = [&](SplineConfig after, const char* label) {
-        commands_.execute(makeProperty<SplineConfig>(
-                label, "spline:" + object.uuid,
-                [target](const SplineConfig& value) { value.write(*target); },
-                before, after));
-        document_.setDirty(true);
-    };
+    ConfigFields<Config> fields(commands_, object, Config::read(object).value_or(Config{}),
+                                "spline:" + object.uuid, "Spline",
+                                [this] { document_.setDirty(true); });
+    const auto& config = fields.value();
 
     ImGui::PushItemWidth(-100 * contentScale_);
 
     {
         static const char* types[] = {"Centripetal", "Chordal", "CatmullRom"};
-        int type = static_cast<int>(config.type);
-        if (ImGui::Combo("Type", &type, types, IM_ARRAYSIZE(types))) {
-            auto after = config;
-            after.type = static_cast<SplineConfig::Type>(type);
-            commit(after, "Spline Type");
-        }
+        fields.combo("Type", &Config::type, types, IM_ARRAYSIZE(types));
     }
 
-    {
-        float tension = config.tension;
-        const bool changed = ImGui::DragFloat("Tension", &tension, 0.005f, 0.f, 1.f);
-        if (ImGui::IsItemActivated()) commands_.beginTransaction();
-        if (changed) {
-            auto after = config;
-            after.tension = tension;
-            commit(after, "Spline Tension");
-        }
-        if (ImGui::IsItemDeactivated()) commands_.endTransaction();
-        // Shown regardless, because that is three.js's own semantics: the value
-        // is stored and does nothing until the type is CatmullRom.
-        if (config.type != SplineConfig::Type::CatmullRom) {
-            ImGui::TextColored(theme::muted(), "Tension applies to CatmullRom only");
-        }
+    fields.dragFloat("Tension", &Config::tension, 0.005f, 0.f, 1.f);
+    // Shown regardless, because that is three.js's own semantics: the value is
+    // stored and does nothing until the type is CatmullRom.
+    if (config.type != Config::Type::CatmullRom) {
+        ImGui::TextColored(theme::muted(), "Tension applies to CatmullRom only");
     }
 
-    {
-        bool closed = config.closed;
-        if (ImGui::Checkbox("Closed", &closed)) {
-            auto after = config;
-            after.closed = closed;
-            commit(after, closed ? "Close Spline" : "Open Spline");
-        }
-    }
-
-    {
-        int samples = config.samples;
-        const bool changed = ImGui::DragInt("Samples/Segment", &samples, 0.25f, 1,
-                                            SplineConfig::maxSamples);
-        if (ImGui::IsItemActivated()) commands_.beginTransaction();
-        if (changed) {
-            auto after = config;
-            after.samples = std::clamp(samples, 1, SplineConfig::maxSamples);
-            commit(after, "Spline Samples");
-        }
-        if (ImGui::IsItemDeactivated()) commands_.endTransaction();
-    }
+    fields.check("Closed", &Config::closed, "Close Spline", "Open Spline");
+    fields.dragInt("Samples/Segment", &Config::samples, 0.25f, 1, Config::maxSamples,
+                   "Spline Samples");
 
     // --- generated geometry ------------------------------------------------
     // Only the config is edited here. The mesh itself is derived state that the
@@ -3145,40 +2895,13 @@ void EditorApp::drawSplineSection(Object3D& object) {
     ImGui::Spacing();
     {
         static const char* kinds[] = {"None", "Tube"};
-        int mesh = static_cast<int>(config.mesh);
-        if (ImGui::Combo("Mesh", &mesh, kinds, IM_ARRAYSIZE(kinds))) {
-            auto after = config;
-            after.mesh = static_cast<SplineConfig::MeshKind>(mesh);
-            commit(after, "Spline Mesh");
-        }
+        fields.combo("Mesh", &Config::mesh, kinds, IM_ARRAYSIZE(kinds));
     }
 
-    const auto floatField = [&](const char* label, float value, float step, float lo, float hi,
-                                void (*apply)(SplineConfig&, float), const char* undoLabel) {
-        const bool changed = ImGui::DragFloat(label, &value, step, lo, hi);
-        if (ImGui::IsItemActivated()) commands_.beginTransaction();
-        if (changed) {
-            auto after = config;
-            apply(after, std::clamp(value, lo, hi));
-            commit(after, undoLabel);
-        }
-        if (ImGui::IsItemDeactivated()) commands_.endTransaction();
-    };
-
-    if (config.mesh == SplineConfig::MeshKind::Tube) {
-        floatField(
-                "Radius", config.radius, 0.005f, 0.001f, 100.f,
-                [](SplineConfig& c, float v) { c.radius = v; }, "Tube Radius");
-
-        int segments = config.radialSegments;
-        const bool changed = ImGui::DragInt("Radial Segments", &segments, 0.1f, 3, 64);
-        if (ImGui::IsItemActivated()) commands_.beginTransaction();
-        if (changed) {
-            auto after = config;
-            after.radialSegments = std::clamp(segments, 3, 64);
-            commit(after, "Tube Radial Segments");
-        }
-        if (ImGui::IsItemDeactivated()) commands_.endTransaction();
+    if (config.mesh == Config::MeshKind::Tube) {
+        fields.dragFloat("Radius", &Config::radius, 0.005f, 0.001f, 100.f, "%.3f", "Tube Radius");
+        fields.dragInt("Radial Segments", &Config::radialSegments, 0.1f, 3, 64,
+                       "Tube Radial Segments");
     }
 
     ImGui::PopItemWidth();
@@ -3325,25 +3048,21 @@ void EditorApp::drawSoundSection(Object3D& object) {
     {
         float volume = config.volume;
         const bool changed = ImGui::SliderFloat("Volume", &volume, 0.f, 1.f, "%.2f");
-        if (ImGui::IsItemActivated()) commands_.beginTransaction();
-        if (changed) {
+        committed(commands_, changed, [&] {
             auto after = config;
             after.volume = std::clamp(volume, 0.f, 1.f);
             commit(after, "Sound Volume");
-        }
-        if (ImGui::IsItemDeactivated()) commands_.endTransaction();
+        });
     }
 
     {
         float rate = config.rate;
         const bool changed = ImGui::SliderFloat("Playback rate", &rate, 0.25f, 4.f, "%.2fx");
-        if (ImGui::IsItemActivated()) commands_.beginTransaction();
-        if (changed) {
+        committed(commands_, changed, [&] {
             auto after = config;
             after.rate = std::clamp(rate, 0.25f, 4.f);
             commit(after, "Sound Rate");
-        }
-        if (ImGui::IsItemDeactivated()) commands_.endTransaction();
+        });
         if (ImGui::IsItemHovered()) {
             ImGui::SetTooltip("Speed and pitch together, like a tape machine.");
         }
@@ -3366,13 +3085,11 @@ void EditorApp::drawSoundSection(Object3D& object) {
             if (noFalloff) ImGui::BeginDisabled();
             float minDistance = config.minDistance;
             const bool changed = ImGui::DragFloat("Min distance", &minDistance, 0.05f, 0.01f, 10000.f, "%.2f m");
-            if (ImGui::IsItemActivated()) commands_.beginTransaction();
-            if (changed) {
+            committed(commands_, changed, [&] {
                 auto after = config;
                 after.minDistance = std::max(minDistance, 0.01f);
                 commit(after, "Sound Min Distance");
-            }
-            if (ImGui::IsItemDeactivated()) commands_.endTransaction();
+            });
             if (ImGui::IsItemHovered()) {
                 ImGui::SetTooltip("Inside this radius the sound plays at full volume.");
             }
@@ -3382,13 +3099,11 @@ void EditorApp::drawSoundSection(Object3D& object) {
         {
             float maxDistance = config.maxDistance;
             const bool changed = ImGui::DragFloat("Max distance", &maxDistance, 0.5f, 0.01f, 100000.f, "%.2f m");
-            if (ImGui::IsItemActivated()) commands_.beginTransaction();
-            if (changed) {
+            committed(commands_, changed, [&] {
                 auto after = config;
                 after.maxDistance = std::max(maxDistance, after.minDistance);
                 commit(after, "Sound Max Distance");
-            }
-            if (ImGui::IsItemDeactivated()) commands_.endTransaction();
+            });
             if (ImGui::IsItemHovered()) {
                 ImGui::SetTooltip("The sound is silent past this distance, whatever the model\n"
                                   "- the last stretch eases out so crossing the ring never\n"
@@ -3400,13 +3115,11 @@ void EditorApp::drawSoundSection(Object3D& object) {
             if (noFalloff) ImGui::BeginDisabled();
             float rolloff = config.rolloff;
             const bool changed = ImGui::DragFloat("Rolloff", &rolloff, 0.01f, 0.f, 20.f, "%.2f");
-            if (ImGui::IsItemActivated()) commands_.beginTransaction();
-            if (changed) {
+            committed(commands_, changed, [&] {
                 auto after = config;
                 after.rolloff = std::clamp(rolloff, 0.f, 20.f);
                 commit(after, "Sound Rolloff");
-            }
-            if (ImGui::IsItemDeactivated()) commands_.endTransaction();
+            });
             if (ImGui::IsItemHovered()) {
                 ImGui::SetTooltip("How fast the volume drops once you are past the min\n"
                                   "distance. Higher = steeper; 0 = no drop at all.");
@@ -3493,13 +3206,11 @@ void EditorApp::drawAcousticsSection(Object3D& object) {
     {
         float transmission = config.transmission;
         const bool changed = ImGui::DragFloat("Transmission", &transmission, 0.005f, 0.f, 1.f, "%.2f");
-        if (ImGui::IsItemActivated()) commands_.beginTransaction();
-        if (changed) {
+        committed(commands_, changed, [&] {
             auto after = config;
             after.transmission = std::clamp(transmission, 0.f, 1.f);
             commit(after, "Acoustic Transmission");
-        }
-        if (ImGui::IsItemDeactivated()) commands_.endTransaction();
+        });
     }
     if (ImGui::IsItemHovered()) {
         ImGui::SetTooltip("How much sound gets THROUGH. 0 is concrete, 0.6 a curtain,\n"
@@ -3508,13 +3219,11 @@ void EditorApp::drawAcousticsSection(Object3D& object) {
     {
         float absorption = config.absorption;
         const bool changed = ImGui::DragFloat("Absorption", &absorption, 0.005f, 0.f, 1.f, "%.2f");
-        if (ImGui::IsItemActivated()) commands_.beginTransaction();
-        if (changed) {
+        committed(commands_, changed, [&] {
             auto after = config;
             after.absorption = std::clamp(absorption, 0.f, 1.f);
             commit(after, "Acoustic Absorption");
-        }
-        if (ImGui::IsItemDeactivated()) commands_.endTransaction();
+        });
     }
     if (ImGui::IsItemHovered()) {
         ImGui::SetTooltip("How much a REFLECTION loses here, which is what sets the\n"
@@ -3535,20 +3244,15 @@ void EditorApp::drawTextSection(Object3D& object) {
     if (!TextConfig::isText(object)) return;
     if (!section("Text")) return;
 
-    auto* target = &object;
-    const auto config = TextConfig::read(object).value_or(TextConfig{});
+    using Config = TextConfig;
 
-    // Same shape every other config section uses — one undoable property write
-    // per edit, merge-keyed so typing is not one undo step per keystroke. The
-    // setter goes through apply(), so execute, undo and redo all rebuild the
-    // geometry the entries describe.
-    const auto commit = [&](TextConfig after, const char* label) {
-        commands_.execute(makeProperty<TextConfig>(
-                label, "text:" + object.uuid,
-                [target](const TextConfig& value) { value.apply(*target); },
-                config, std::move(after)));
-        document_.setDirty(true);
-    };
+    // The writer goes through apply() rather than write(), so execute, undo and
+    // redo all rebuild the geometry the entries describe.
+    ConfigFields<Config> fields(commands_, object, Config::read(object).value_or(Config{}),
+                                "text:" + object.uuid, "Text",
+                                [this] { document_.setDirty(true); });
+    fields.writeWith([](const Config& value, Object3D& target) { value.apply(target); });
+    const auto& config = fields.value();
 
     // The content. Modest height: a label is a line or three, and the box
     // grows nothing by being tall.
@@ -3558,7 +3262,7 @@ void EditorApp::drawTextSection(Object3D& object) {
                                   {-1.f, ImGui::GetTextLineHeight() * 3.5f})) {
         auto after = config;
         after.text = buffer.c_str();
-        commit(std::move(after), "Edit Text");
+        fields.commit(std::move(after), "Edit Text");
     }
     if (config.text.empty()) {
         ImGui::TextColored(theme::muted(), "Empty text draws nothing.");
@@ -3566,59 +3270,22 @@ void EditorApp::drawTextSection(Object3D& object) {
 
     ImGui::PushItemWidth(-100 * contentScale_);
 
-    {
-        float size = config.size;
-        const bool changed = ImGui::DragFloat("Size", &size, 0.01f, 0.01f, 100.f);
-        if (ImGui::IsItemActivated()) commands_.beginTransaction();
-        if (changed) {
-            auto after = config;
-            after.size = std::clamp(size, 0.01f, 100.f);
-            commit(std::move(after), "Text Size");
-        }
-        if (ImGui::IsItemDeactivated()) commands_.endTransaction();
-    }
-
-    {
-        float depth = config.depth;
-        const bool changed = ImGui::DragFloat("Depth", &depth, 0.005f, 0.f, 100.f);
-        if (ImGui::IsItemActivated()) commands_.beginTransaction();
-        if (changed) {
-            auto after = config;
-            after.depth = std::clamp(depth, 0.f, 100.f);
-            commit(std::move(after), "Text Depth");
-        }
-        if (ImGui::IsItemDeactivated()) commands_.endTransaction();
-        if (config.depth <= 0.f) {
-            ImGui::TextColored(theme::muted(), "Depth 0 is flat - a sign, not solid type.");
-        }
+    fields.dragFloat("Size", &Config::size, 0.01f, 0.01f, 100.f);
+    fields.dragFloat("Depth", &Config::depth, 0.005f, 0.f, 100.f);
+    if (config.depth <= 0.f) {
+        ImGui::TextColored(theme::muted(), "Depth 0 is flat - a sign, not solid type.");
     }
 
     {
         static const char* aligns[] = {"Left", "Center", "Right"};
-        int align = static_cast<int>(config.align);
-        if (ImGui::Combo("Align", &align, aligns, IM_ARRAYSIZE(aligns))) {
-            auto after = config;
-            after.align = static_cast<TextConfig::Align>(align);
-            commit(std::move(after), "Text Align");
-        }
+        fields.combo("Align", &Config::align, aligns, IM_ARRAYSIZE(aligns));
         if (ImGui::IsItemHovered()) {
             ImGui::SetTooltip("Where the origin sits on the block:\n"
                               "what the gizmo grabs, and what Position means.");
         }
     }
 
-    {
-        int segments = config.curveSegments;
-        const bool changed = ImGui::DragInt("Curve Segments", &segments, 0.1f, 1,
-                                            TextConfig::maxCurveSegments);
-        if (ImGui::IsItemActivated()) commands_.beginTransaction();
-        if (changed) {
-            auto after = config;
-            after.curveSegments = std::clamp(segments, 1, TextConfig::maxCurveSegments);
-            commit(std::move(after), "Text Curve Segments");
-        }
-        if (ImGui::IsItemDeactivated()) commands_.endTransaction();
-    }
+    fields.dragInt("Curve Segments", &Config::curveSegments, 0.1f, 1, Config::maxCurveSegments);
 
     ImGui::PopItemWidth();
 
@@ -3664,37 +3331,31 @@ void EditorApp::drawTreeSection(Object3D& object) {
                                  float min, float max, const char* format = "%.2f") {
         float value = config.params.*field;
         const bool changed = ImGui::SliderFloat(label, &value, min, max, format);
-        if (ImGui::IsItemActivated()) commands_.beginTransaction();
-        if (changed) {
+        committed(commands_, changed, [&] {
             auto after = config;
             after.params.*field = std::clamp(value, min, max);
             commit(std::move(after), std::string("Tree ") + label);
-        }
-        if (ImGui::IsItemDeactivated()) commands_.endTransaction();
+        });
     };
 
     const auto sliderInt = [&](const char* label, int TreeParams::* field, int min, int max) {
         int value = config.params.*field;
         const bool changed = ImGui::SliderInt(label, &value, min, max);
-        if (ImGui::IsItemActivated()) commands_.beginTransaction();
-        if (changed) {
+        committed(commands_, changed, [&] {
             auto after = config;
             after.params.*field = std::clamp(value, min, max);
             commit(std::move(after), std::string("Tree ") + label);
-        }
-        if (ImGui::IsItemDeactivated()) commands_.endTransaction();
+        });
     };
 
     const auto colorEdit = [&](const char* label, std::array<float, 3> TreeParams::* field) {
         std::array<float, 3> value = config.params.*field;
         const bool changed = ImGui::ColorEdit3(label, value.data());
-        if (ImGui::IsItemActivated()) commands_.beginTransaction();
-        if (changed) {
+        committed(commands_, changed, [&] {
             auto after = config;
             after.params.*field = value;
             commit(std::move(after), std::string("Tree ") + label);
-        }
-        if (ImGui::IsItemDeactivated()) commands_.endTransaction();
+        });
     };
 
     // Combos are not draggable, so they need no transaction — one click, one
@@ -3910,13 +3571,11 @@ void EditorApp::drawConveyorSection(Object3D& object) {
         {
             float height = before.height;
             const bool changed = ImGui::DragFloat("Height", &height, 0.005f, 0.02f, 3.f);
-            if (ImGui::IsItemActivated()) commands_.beginTransaction();
-            if (changed) {
+            committed(commands_, changed, [&] {
                 auto after = before;
                 after.height = std::clamp(height, 0.02f, 3.f);
                 commitWall(after, "Wall Height");
-            }
-            if (ImGui::IsItemDeactivated()) commands_.endTransaction();
+            });
         }
         ImGui::PopItemWidth();
 
@@ -3982,13 +3641,11 @@ void EditorApp::drawConveyorSection(Object3D& object) {
             ImGui::PushItemWidth(-110 * contentScale_);
             float radius = wpBefore.cornerRadius;
             const bool changed = ImGui::DragFloat("Corner Radius", &radius, 0.01f, 0.f, 50.f);
-            if (ImGui::IsItemActivated()) commands_.beginTransaction();
-            if (changed) {
+            committed(commands_, changed, [&] {
                 auto after = wpBefore;
                 after.cornerRadius = std::max(radius, 0.f);
                 commitWp(after, "Corner Radius");
-            }
-            if (ImGui::IsItemDeactivated()) commands_.endTransaction();
+            });
             ImGui::PopItemWidth();
             ImGui::TextColored(theme::muted(),
                                wpBefore.cornerRadius > 1e-4f
@@ -4044,90 +3701,31 @@ void EditorApp::drawConveyorSection(Object3D& object) {
     if (!ConveyorConfig::isConveyor(object)) return;
     if (!section("Conveyor")) return;
 
-    auto* target = &object;
-    auto config = ConveyorConfig::read(object).value_or(ConveyorConfig{});
-    const auto before = config;
+    using Config = ConveyorConfig;
 
-    const auto commit = [&](ConveyorConfig after, const char* label) {
-        commands_.execute(makeProperty<ConveyorConfig>(
-                label, "conveyor:" + object.uuid,
-                [target](const ConveyorConfig& value) { value.write(*target); },
-                before, after));
-        document_.setDirty(true);
-    };
+    ConfigFields<Config> fields(commands_, object, Config::read(object).value_or(Config{}),
+                                "conveyor:" + object.uuid, "Conveyor",
+                                [this] { document_.setDirty(true); });
+    const Config& config = fields.value();
 
     ImGui::PushItemWidth(-110 * contentScale_);
 
-    const auto floatField = [&](const char* label, float value, float step, float lo, float hi,
-                                void (*apply)(ConveyorConfig&, float), const char* undoLabel) {
-        const bool changed = ImGui::DragFloat(label, &value, step, lo, hi);
-        if (ImGui::IsItemActivated()) commands_.beginTransaction();
-        if (changed) {
-            auto after = config;
-            apply(after, std::clamp(value, lo, hi));
-            commit(after, undoLabel);
-        }
-        if (ImGui::IsItemDeactivated()) commands_.endTransaction();
-    };
-
-    {
-        bool separator = config.separator;
-        if (ImGui::Checkbox("Separator (wall, no belt)", &separator)) {
-            auto after = config;
-            after.separator = separator;
-            commit(after, separator ? "Make Separator" : "Make Belt");
-            config = ConveyorConfig::read(object).value_or(config);
-        }
-    }
+    fields.check("Separator (wall, no belt)", &Config::separator, "Make Separator", "Make Belt");
 
     if (config.separator) {
-        floatField(
-                "Wall Height", config.wallHeight, 0.01f, 0.05f, 5.f,
-                [](ConveyorConfig& c, float v) { c.wallHeight = v; }, "Wall Height");
+        fields.dragFloat("Wall Height", &Config::wallHeight, 0.01f, 0.05f, 5.f, "%.3f", "Wall Height");
     } else {
-        floatField(
-                "Belt Width", config.width, 0.01f, 0.05f, 5.f,
-                [](ConveyorConfig& c, float v) { c.width = v; }, "Belt Width");
-        floatField(
-                "Belt Speed (m/s)", config.speed, 0.01f, 0.f, 10.f,
-                [](ConveyorConfig& c, float v) { c.speed = v; }, "Belt Speed");
+        fields.dragFloat("Belt Width", &Config::width, 0.01f, 0.05f, 5.f, "%.3f", "Belt Width");
+        fields.dragFloat("Belt Speed (m/s)", &Config::speed, 0.01f, 0.f, 10.f, "%.3f", "Belt Speed");
 
-        bool reverse = config.reverse;
-        if (ImGui::Checkbox("Reverse Flow", &reverse)) {
-            auto after = config;
-            after.reverse = reverse;
-            commit(after, "Reverse Flow");
-        }
+        fields.check("Reverse Flow", &Config::reverse, "Reverse Flow");
         ImGui::SameLine();
-        bool frame = config.frame;
-        if (ImGui::Checkbox("Frame", &frame)) {
-            auto after = config;
-            after.frame = frame;
-            commit(after, frame ? "Add Frame" : "Remove Frame");
-        }
+        fields.check("Frame", &Config::frame, "Add Frame", "Remove Frame");
     }
 
-    {
-        bool smooth = config.smooth;
-        if (ImGui::Checkbox("Smooth (spline)", &smooth)) {
-            auto after = config;
-            after.smooth = smooth;
-            commit(after, "Conveyor Smoothing");
-        }
-    }
-
-    {
-        int samples = config.samples;
-        const bool changed = ImGui::DragInt("Samples/Segment", &samples, 0.25f, 2,
-                                            ConveyorConfig::maxSamples);
-        if (ImGui::IsItemActivated()) commands_.beginTransaction();
-        if (changed) {
-            auto after = config;
-            after.samples = std::clamp(samples, 2, ConveyorConfig::maxSamples);
-            commit(after, "Conveyor Samples");
-        }
-        if (ImGui::IsItemDeactivated()) commands_.endTransaction();
-    }
+    fields.check("Smooth (spline)", &Config::smooth, "Conveyor Smoothing");
+    fields.dragInt("Samples/Segment", &Config::samples, 0.25f, 2, Config::maxSamples,
+                   "Conveyor Samples");
 
     // Tuning for whichever segments opt into rollers / cleats (chosen per
     // waypoint). Shown only when at least one segment uses them.
@@ -4140,17 +3738,11 @@ void EditorApp::drawConveyorSection(Object3D& object) {
             else if (wp.segKind == conveyor::SegKind::Cleats) anyCleats = true;
         }
         if (anyRollers) {
-            floatField(
-                    "Roller Radius", config.rollerRadius, 0.002f, 0.01f, 0.5f,
-                    [](ConveyorConfig& c, float v) { c.rollerRadius = v; }, "Roller Radius");
+            fields.dragFloat("Roller Radius", &Config::rollerRadius, 0.002f, 0.01f, 0.5f, "%.3f", "Roller Radius");
         }
         if (anyCleats) {
-            floatField(
-                    "Cleat Height", config.cleatHeight, 0.005f, 0.02f, 1.f,
-                    [](ConveyorConfig& c, float v) { c.cleatHeight = v; }, "Cleat Height");
-            floatField(
-                    "Cleat Spacing", config.cleatSpacing, 0.01f, 0.1f, 5.f,
-                    [](ConveyorConfig& c, float v) { c.cleatSpacing = v; }, "Cleat Spacing");
+            fields.dragFloat("Cleat Height", &Config::cleatHeight, 0.005f, 0.02f, 1.f, "%.3f", "Cleat Height");
+            fields.dragFloat("Cleat Spacing", &Config::cleatSpacing, 0.01f, 0.1f, 5.f, "%.3f", "Cleat Spacing");
         }
     }
 
@@ -4205,74 +3797,22 @@ void EditorApp::drawParticleFieldSection(Object3D& object) {
 
     using Config = ParticleFieldConfig;
 
-    auto* target = &object;
-    const auto config = Config::read(object).value_or(Config{});
-
     // Only the config is edited here. The preview FIELD is derived state
     // syncParticleOverlays follows — which is also what keeps undo cheap and
     // what makes a structural edit (capacity, radius, proxy, resolution) an
     // ordinary property write rather than a special case.
-    const auto commit = [&](Config after, std::string label) {
-        commands_.execute(makeProperty<Config>(
-                std::move(label), "particles:" + object.uuid,
-                [target](const Config& value) { value.write(*target); },
-                config, std::move(after)));
-        document_.setDirty(true);
-    };
+    //
+    // Seventy knobs go through ConfigFields rather than seventy hand-inlined
+    // copies of the transaction dance — which is how one of them ends up
+    // silently missing its beginTransaction.
+    ConfigFields<Config> fields(commands_, object, Config::read(object).value_or(Config{}),
+                                "particles:" + object.uuid, "Particles",
+                                [this] { document_.setDirty(true); });
+    const auto& config = fields.value();
 
-    // The widget shapes, written once and driven by pointer-to-member: this
-    // config has seventy knobs, and seventy hand-inlined copies of the
-    // transaction dance is how one of them ends up missing its
-    // beginTransaction (the tree section's argument, at twice the scale).
-    const auto dragFloat = [&](const char* label, float Config::* field, float step,
-                               float lo, float hi, const char* format = "%.3f") {
-        float value = config.*field;
-        const bool changed = ImGui::DragFloat(label, &value, step, lo, hi, format);
-        if (ImGui::IsItemActivated()) commands_.beginTransaction();
-        if (changed) {
-            auto after = config;
-            after.*field = std::clamp(value, lo, hi);
-            commit(std::move(after), std::string("Particles ") + label);
-        }
-        if (ImGui::IsItemDeactivated()) commands_.endTransaction();
-    };
-
-    const auto dragVec3 = [&](const char* label, Vector3 Config::* field, float step,
-                              float lo, float hi) {
-        const Vector3& current = config.*field;
-        float value[3]{current.x, current.y, current.z};
-        const bool changed = ImGui::DragFloat3(label, value, step, lo, hi, "%.3f");
-        if (ImGui::IsItemActivated()) commands_.beginTransaction();
-        if (changed) {
-            auto after = config;
-            (after.*field).set(std::clamp(value[0], lo, hi), std::clamp(value[1], lo, hi),
-                               std::clamp(value[2], lo, hi));
-            commit(std::move(after), std::string("Particles ") + label);
-        }
-        if (ImGui::IsItemDeactivated()) commands_.endTransaction();
-    };
-
-    const auto colorField = [&](const char* label, Color Config::* field) {
-        float value[3];
-        toSrgbFloats(config.*field, value);
-        const bool changed = ImGui::ColorEdit3(label, value);
-        if (ImGui::IsItemActivated()) commands_.beginTransaction();
-        if (changed) {
-            auto after = config;
-            after.*field = fromSrgbFloats(value);
-            commit(std::move(after), std::string("Particles ") + label);
-        }
-        if (ImGui::IsItemDeactivated()) commands_.endTransaction();
-    };
-
-    // Checkboxes are one click, one undo step — no transaction.
+    // Reads the toggle back so a revealed block draws the frame it is turned on.
     const auto toggle = [&](const char* label, bool Config::* field) {
-        bool value = config.*field;
-        if (ImGui::Checkbox(label, &value)) {
-            auto after = config;
-            after.*field = value;
-            commit(std::move(after), std::string("Particles ") + label);
-        }
+        fields.check(label, field);
         return config.*field;
     };
 
@@ -4292,7 +3832,7 @@ void EditorApp::drawParticleFieldSection(Object3D& object) {
     for (const auto& preset : presets) {
         ImGui::SameLine();
         if (ImGui::Button(preset.label)) {
-            commit(preset.make(), std::string("Particles ") + preset.label);
+            fields.commit(preset.make(), std::string("Particles ") + preset.label);
         }
         // Inside the loop: IsItemHovered() reads the item just submitted.
         if (ImGui::IsItemHovered()) {
@@ -4318,63 +3858,59 @@ void EditorApp::drawParticleFieldSection(Object3D& object) {
     {
         int capacity = config.capacity;
         const bool changed = ImGui::DragInt("Capacity", &capacity, 250.f, 1, 5000000);
-        if (ImGui::IsItemActivated()) commands_.beginTransaction();
-        if (changed) {
+        committed(commands_, changed, [&] {
             auto after = config;
             after.capacity = std::max(capacity, 1);
-            commit(std::move(after), "Particles Capacity");
-        }
-        if (ImGui::IsItemDeactivated()) commands_.endTransaction();
+            fields.commit(std::move(after), "Particles Capacity");
+        });
     }
-    dragFloat("Radius", &Config::radius, 0.001f, 0.0001f, 1.f, "%.4f");
+    fields.dragFloat("Radius", &Config::radius, 0.001f, 0.0001f, 1.f, "%.4f");
     {
         int proxy = static_cast<int>(config.proxy);
         if (ImGui::Combo("Proxy", &proxy, "None\0Sphere\0Flake\0")) {
             auto after = config;
             after.proxy = static_cast<Config::Proxy>(proxy);
-            commit(std::move(after), "Particles Proxy");
+            fields.commit(std::move(after), "Particles Proxy");
         }
     }
     {
         int resolution = config.densityResolution;
         const bool changed = ImGui::DragInt("Density Res", &resolution, 1.f, 8, 256);
-        if (ImGui::IsItemActivated()) commands_.beginTransaction();
-        if (changed) {
+        committed(commands_, changed, [&] {
             auto after = config;
             after.densityResolution = std::clamp(resolution, 8, 256);
-            commit(std::move(after), "Particles Density Res");
-        }
-        if (ImGui::IsItemDeactivated()) commands_.endTransaction();
+            fields.commit(std::move(after), "Particles Density Res");
+        });
     }
 
     // --- emitter ----------------------------------------------------------
     ImGui::SeparatorText("Emitter");
-    dragVec3("Velocity", &Config::velocity, 0.05f, -100.f, 100.f);
-    dragFloat("Speed Spread", &Config::speedSpread, 0.01f, 0.f, 10.f);
-    dragVec3("Accel", &Config::accel, 0.01f, -50.f, 50.f);
-    dragVec3("Wind", &Config::wind, 0.01f, -50.f, 50.f);
-    dragVec3("Spawn Extent", &Config::spawnHalfExtent, 0.05f, 0.001f, 500.f);
+    fields.dragVector3("Velocity", &Config::velocity, 0.05f, -100.f, 100.f);
+    fields.dragFloat("Speed Spread", &Config::speedSpread, 0.01f, 0.f, 10.f);
+    fields.dragVector3("Accel", &Config::accel, 0.01f, -50.f, 50.f);
+    fields.dragVector3("Wind", &Config::wind, 0.01f, -50.f, 50.f);
+    fields.dragVector3("Spawn Extent", &Config::spawnHalfExtent, 0.05f, 0.001f, 500.f);
     ImGui::TextColored(theme::muted(),
                        "A THIN slab swept over velocity x lifetime is the steady cloud.");
-    dragFloat("Lifetime", &Config::lifetime, 0.05f, 0.001f, 600.f, "%.2f");
-    dragFloat("Life Jitter", &Config::lifetimeJitter, 0.01f, 0.f, 1.f);
-    dragFloat("Duty Cycle", &Config::dutyCycle, 0.01f, 0.001f, 1.f);
-    dragFloat("Size", &Config::size, 0.001f, 0.f, 10.f, "%.4f");
-    dragFloat("Size Jitter", &Config::sizeJitter, 0.01f, 0.f, 1.f);
-    dragFloat("Drift Amplitude", &Config::driftAmplitude, 0.01f, 0.f, 20.f);
-    dragFloat("Drift Frequency", &Config::driftFrequency, 0.01f, 0.f, 20.f);
-    dragFloat("Drift Growth", &Config::driftGrowth, 0.01f, 0.f, 1.f);
-    dragFloat("Drift Scale", &Config::driftScale, 0.1f, 0.f, 200.f, "%.2f");
+    fields.dragFloat("Lifetime", &Config::lifetime, 0.05f, 0.001f, 600.f, "%.2f");
+    fields.dragFloat("Life Jitter", &Config::lifetimeJitter, 0.01f, 0.f, 1.f);
+    fields.dragFloat("Duty Cycle", &Config::dutyCycle, 0.01f, 0.001f, 1.f);
+    fields.dragFloat("Size", &Config::size, 0.001f, 0.f, 10.f, "%.4f");
+    fields.dragFloat("Size Jitter", &Config::sizeJitter, 0.01f, 0.f, 1.f);
+    fields.dragFloat("Drift Amplitude", &Config::driftAmplitude, 0.01f, 0.f, 20.f);
+    fields.dragFloat("Drift Frequency", &Config::driftFrequency, 0.01f, 0.f, 20.f);
+    fields.dragFloat("Drift Growth", &Config::driftGrowth, 0.01f, 0.f, 1.f);
+    fields.dragFloat("Drift Scale", &Config::driftScale, 0.1f, 0.f, 200.f, "%.2f");
     {
         int seed = config.seed;
         if (ImGui::InputInt("Seed", &seed)) {
             auto after = config;
             after.seed = std::max(seed, 0);
-            commit(std::move(after), "Particles Seed");
+            fields.commit(std::move(after), "Particles Seed");
         }
     }
     if (toggle("Follow Camera", &Config::follow)) {
-        dragFloat("Follow Snap", &Config::followSnap, 0.05f, 0.f, 100.f, "%.2f");
+        fields.dragFloat("Follow Snap", &Config::followSnap, 0.05f, 0.f, 100.f, "%.2f");
         ImGui::TextColored(theme::muted(),
                            "Snap an INTEGER number of density voxels, or the haze swims.");
     }
@@ -4382,24 +3918,22 @@ void EditorApp::drawParticleFieldSection(Object3D& object) {
     // --- surface landing --------------------------------------------------
     ImGui::SeparatorText("Surface Landing");
     if (toggle("Land on Surfaces", &Config::surface)) {
-        dragFloat("Rest Seconds", &Config::surfaceRest, 0.05f, 0.f, 60.f, "%.2f");
-        dragFloat("Rest Jitter", &Config::surfaceRestJitter, 0.01f, 0.f, 1.f);
-        dragFloat("Fade Seconds", &Config::surfaceFade, 0.05f, 0.f, 60.f, "%.2f");
-        dragFloat("Bias", &Config::surfaceBias, 0.001f, 0.f, 1.f, "%.4f");
-        dragFloat("Splash Seconds", &Config::surfaceSplash, 0.01f, 0.f, 10.f);
+        fields.dragFloat("Rest Seconds", &Config::surfaceRest, 0.05f, 0.f, 60.f, "%.2f");
+        fields.dragFloat("Rest Jitter", &Config::surfaceRestJitter, 0.01f, 0.f, 1.f);
+        fields.dragFloat("Fade Seconds", &Config::surfaceFade, 0.05f, 0.f, 60.f, "%.2f");
+        fields.dragFloat("Bias", &Config::surfaceBias, 0.001f, 0.f, 1.f, "%.4f");
+        fields.dragFloat("Splash Seconds", &Config::surfaceSplash, 0.01f, 0.f, 10.f);
         if (config.surfaceSplash > 0.f) {
-            dragFloat("Splash Grow", &Config::surfaceSplashGrow, 0.1f, 1.f, 64.f, "%.2f");
+            fields.dragFloat("Splash Grow", &Config::surfaceSplashGrow, 0.1f, 1.f, 64.f, "%.2f");
         }
         {
             int resolution = config.surfaceResolution;
             const bool changed = ImGui::DragInt("Bake Res", &resolution, 1.f, 16, 1024);
-            if (ImGui::IsItemActivated()) commands_.beginTransaction();
-            if (changed) {
+            committed(commands_, changed, [&] {
                 auto after = config;
                 after.surfaceResolution = std::clamp(resolution, 16, 1024);
-                commit(std::move(after), "Particles Bake Res");
-            }
-            if (ImGui::IsItemDeactivated()) commands_.endTransaction();
+                fields.commit(std::move(after), "Particles Bake Res");
+            });
         }
         ImGui::TextColored(theme::muted(), "Particles rest and FADE; they do not pile up.");
     }
@@ -4410,9 +3944,9 @@ void EditorApp::drawParticleFieldSection(Object3D& object) {
         if (config.proxy == Config::Proxy::None) {
             ImGui::TextColored(theme::warning(), "Proxy is None - nothing to draw.");
         }
-        dragFloat("LOD Far", &Config::meshLodFar, 0.1f, 0.f, 500.f, "%.2f");
-        dragFloat("LOD Fade", &Config::meshLodFade, 0.1f, 0.f, 500.f, "%.2f");
-        dragFloat("Near Cull", &Config::meshNearCull, 0.05f, 0.f, 50.f, "%.2f");
+        fields.dragFloat("LOD Far", &Config::meshLodFar, 0.1f, 0.f, 500.f, "%.2f");
+        fields.dragFloat("LOD Fade", &Config::meshLodFade, 0.1f, 0.f, 500.f, "%.2f");
+        fields.dragFloat("Near Cull", &Config::meshNearCull, 0.05f, 0.f, 50.f, "%.2f");
         if (config.billboard && config.meshLodFar > 0.f) {
             ImGui::TextColored(theme::muted(),
                                "Sprites fade in over the same band the proxies shrink out over.");
@@ -4421,32 +3955,32 @@ void EditorApp::drawParticleFieldSection(Object3D& object) {
 
     ImGui::SeparatorText("Billboard");
     if (toggle("Draw Sprites", &Config::billboard)) {
-        colorField("Hot Color", &Config::colorHot);
-        colorField("Cool Color", &Config::colorCool);
-        dragFloat("Intensity", &Config::billboardIntensity, 0.01f, 0.f, 100.f, "%.3f");
-        dragFloat("Sprite Size", &Config::billboardSize, 0.01f, 0.0001f, 50.f);
-        dragFloat("Softness", &Config::billboardSoftness, 0.01f, 0.f, 1.f);
-        dragFloat("Fade Power", &Config::billboardFade, 0.01f, 0.f, 8.f);
-        dragFloat("Bright Jitter", &Config::billboardJitter, 0.01f, 0.f, 1.f);
-        dragFloat("Size Taper", &Config::billboardTaper, 0.01f, 0.f, 1.f);
-        dragFloat("Stretch (s)", &Config::billboardStretch, 0.001f, 0.f, 1.f, "%.4f");
+        fields.color("Hot Color", &Config::colorHot);
+        fields.color("Cool Color", &Config::colorCool);
+        fields.dragFloat("Intensity", &Config::billboardIntensity, 0.01f, 0.f, 100.f, "%.3f");
+        fields.dragFloat("Sprite Size", &Config::billboardSize, 0.01f, 0.0001f, 50.f);
+        fields.dragFloat("Softness", &Config::billboardSoftness, 0.01f, 0.f, 1.f);
+        fields.dragFloat("Fade Power", &Config::billboardFade, 0.01f, 0.f, 8.f);
+        fields.dragFloat("Bright Jitter", &Config::billboardJitter, 0.01f, 0.f, 1.f);
+        fields.dragFloat("Size Taper", &Config::billboardTaper, 0.01f, 0.f, 1.f);
+        fields.dragFloat("Stretch (s)", &Config::billboardStretch, 0.001f, 0.f, 1.f, "%.4f");
         if (config.billboardStretch > 0.f) {
-            dragFloat("Stretch Max", &Config::billboardStretchMax, 0.5f, 1.f, 200.f, "%.1f");
+            fields.dragFloat("Stretch Max", &Config::billboardStretchMax, 0.5f, 1.f, 200.f, "%.1f");
         }
-        dragFloat("Near Fade", &Config::billboardNearFade, 0.01f, 0.f, 20.f);
-        dragFloat("Glow", &Config::billboardGlow, 0.1f, 0.f, 64.f, "%.2f");
+        fields.dragFloat("Near Fade", &Config::billboardNearFade, 0.01f, 0.f, 20.f);
+        fields.dragFloat("Glow", &Config::billboardGlow, 0.1f, 0.f, 64.f, "%.2f");
         if (config.billboardGlow > 0.f) {
-            dragFloat("Glow Threshold", &Config::billboardGlowThreshold, 0.01f, 0.f, 20.f);
+            fields.dragFloat("Glow Threshold", &Config::billboardGlowThreshold, 0.01f, 0.f, 20.f);
         }
         ImGui::TextColored(theme::muted(), "Additive and unlit - an ember IS the light source.");
     }
 
     ImGui::SeparatorText("Density Volume");
     if (toggle("Scatter into a Volume", &Config::density)) {
-        dragFloat("Sigma / Particle", &Config::sigma, 0.001f, 0.0001f, 100.f, "%.4f");
-        colorField("Albedo", &Config::albedo);
-        dragFloat("Anisotropy", &Config::anisotropy, 0.01f, -0.95f, 0.95f);
-        dragVec3("Volume Extent", &Config::densityHalfExtent, 0.1f, 0.001f, 500.f);
+        fields.dragFloat("Sigma / Particle", &Config::sigma, 0.001f, 0.0001f, 100.f, "%.4f");
+        fields.color("Albedo", &Config::albedo);
+        fields.dragFloat("Anisotropy", &Config::anisotropy, 0.01f, -0.95f, 0.95f);
+        fields.dragVector3("Volume Extent", &Config::densityHalfExtent, 0.1f, 0.001f, 500.f);
 
         // Warning only, and deliberately: the renderer REPORTS an overflow
         // rather than dropping a volume, so refusing the fifth here would be
@@ -4463,11 +3997,11 @@ void EditorApp::drawParticleFieldSection(Object3D& object) {
         // Fire, and only fire, needs these — a dust or snow field has no
         // emission path at all while emissiveIntensity is 0.
         if (ImGui::TreeNodeEx("Advanced", ImGuiTreeNodeFlags_SpanAvailWidth)) {
-            dragFloat("Emissive", &Config::emissiveIntensity, 0.5f, 0.f, 500.f, "%.1f");
+            fields.dragFloat("Emissive", &Config::emissiveIntensity, 0.5f, 0.f, 500.f, "%.1f");
             if (config.emissiveIntensity > 0.f) {
-                dragFloat("Temp Bottom (K)", &Config::tempBottom, 10.f, 300.f, 6000.f, "%.0f");
-                dragFloat("Temp Top (K)", &Config::tempTop, 10.f, 300.f, 6000.f, "%.0f");
-                dragFloat("Temp Falloff", &Config::tempFalloff, 0.05f, 0.05f, 8.f, "%.2f");
+                fields.dragFloat("Temp Bottom (K)", &Config::tempBottom, 10.f, 300.f, 6000.f, "%.0f");
+                fields.dragFloat("Temp Top (K)", &Config::tempTop, 10.f, 300.f, 6000.f, "%.0f");
+                fields.dragFloat("Temp Falloff", &Config::tempFalloff, 0.05f, 0.05f, 8.f, "%.2f");
             }
             ImGui::TreePop();
         }
@@ -4488,114 +4022,46 @@ void EditorApp::drawGranularSection(Object3D& object) {
 
     using Config = GranularConfig;
 
-    auto* target = &object;
-    const auto config = Config::read(object).value_or(Config{});
-
-    const auto commit = [&](Config after, std::string label) {
-        commands_.execute(makeProperty<Config>(
-                std::move(label), "granular:" + object.uuid,
-                [target](const Config& value) { value.write(*target); },
-                config, std::move(after)));
-        document_.setDirty(true);
-    };
-
-    const auto dragFloat = [&](const char* label, float Config::* field, float step,
-                               float lo, float hi, const char* format = "%.3f") {
-        float value = config.*field;
-        const bool changed = ImGui::DragFloat(label, &value, step, lo, hi, format);
-        if (ImGui::IsItemActivated()) commands_.beginTransaction();
-        if (changed) {
-            auto after = config;
-            after.*field = std::clamp(value, lo, hi);
-            commit(std::move(after), std::string("Granular ") + label);
-        }
-        if (ImGui::IsItemDeactivated()) commands_.endTransaction();
-    };
+    ConfigFields<Config> fields(commands_, object, Config::read(object).value_or(Config{}),
+                                "granular:" + object.uuid, "Granular",
+                                [this] { document_.setDirty(true); });
 
     ImGui::PushItemWidth(-130 * contentScale_);
 
     ImGui::SeparatorText("Grains");
     // Grain diameter: the render radius is half of it and everything else
     // derives from it, which is why it is the first knob and not a detail.
-    dragFloat("Spacing", &Config::spacing, 0.002f, 0.002f, 1.f, "%.4f");
-    {
-        int capacity = config.capacity;
-        const bool changed = ImGui::DragInt("Capacity", &capacity, 250.f, 1, 4000000);
-        if (ImGui::IsItemActivated()) commands_.beginTransaction();
-        if (changed) {
-            auto after = config;
-            after.capacity = std::max(capacity, 1);
-            commit(std::move(after), "Granular Capacity");
-        }
-        if (ImGui::IsItemDeactivated()) commands_.endTransaction();
-    }
-    {
-        int iterations = config.iterations;
-        const bool changed = ImGui::DragInt("Iterations", &iterations, 0.25f, 1, 32);
-        if (ImGui::IsItemActivated()) commands_.beginTransaction();
-        if (changed) {
-            auto after = config;
-            after.iterations = std::clamp(iterations, 1, 32);
-            commit(std::move(after), "Granular Iterations");
-        }
-        if (ImGui::IsItemDeactivated()) commands_.endTransaction();
-    }
-    dragFloat("Max Velocity", &Config::maxVelocity, 0.1f, 0.f, 200.f, "%.2f");
+    fields.dragFloat("Spacing", &Config::spacing, 0.002f, 0.002f, 1.f, "%.4f");
+    fields.dragInt("Capacity", &Config::capacity, 250.f, 1, 4000000);
+    fields.dragInt("Iterations", &Config::iterations, 0.25f, 1, 32);
+    fields.dragFloat("Max Velocity", &Config::maxVelocity, 0.1f, 0.f, 200.f, "%.2f");
     ImGui::TextColored(theme::muted(), "Max Velocity 0 derives a clamp from the spacing.");
 
     ImGui::SeparatorText("Material");
     // The repose angle of a heap IS its internal friction; cohesion is the
     // other half of how steep a pile stands.
-    dragFloat("Friction", &Config::friction, 0.01f, 0.f, 2.f);
-    dragFloat("Damping", &Config::damping, 0.01f, 0.f, 10.f);
-    dragFloat("Adhesion", &Config::adhesion, 0.01f, 0.f, 10.f);
-    dragFloat("Cohesion", &Config::cohesion, 0.01f, 0.f, 10.f);
-    dragFloat("Viscosity", &Config::viscosity, 0.01f, 0.f, 10.f);
-    dragFloat("Gravity Scale", &Config::gravityScale, 0.01f, -4.f, 4.f);
+    fields.dragFloat("Friction", &Config::friction, 0.01f, 0.f, 2.f);
+    fields.dragFloat("Damping", &Config::damping, 0.01f, 0.f, 10.f);
+    fields.dragFloat("Adhesion", &Config::adhesion, 0.01f, 0.f, 10.f);
+    fields.dragFloat("Cohesion", &Config::cohesion, 0.01f, 0.f, 10.f);
+    fields.dragFloat("Viscosity", &Config::viscosity, 0.01f, 0.f, 10.f);
+    fields.dragFloat("Gravity Scale", &Config::gravityScale, 0.01f, -4.f, 4.f);
 
     ImGui::SeparatorText("Chute");
-    dragFloat("Mouth X", &Config::emitExtentX, 0.01f, 0.001f, 20.f);
-    dragFloat("Mouth Z", &Config::emitExtentZ, 0.01f, 0.001f, 20.f);
-    dragFloat("Rate (/s)", &Config::rate, 25.f, 0.f, 500000.f, "%.0f");
-    {
-        const Vector3& current = config.emitVelocity;
-        float value[3]{current.x, current.y, current.z};
-        const bool changed = ImGui::DragFloat3("Pour Velocity", value, 0.05f, -50.f, 50.f, "%.3f");
-        if (ImGui::IsItemActivated()) commands_.beginTransaction();
-        if (changed) {
-            auto after = config;
-            after.emitVelocity.set(value[0], value[1], value[2]);
-            commit(std::move(after), "Granular Pour Velocity");
-        }
-        if (ImGui::IsItemDeactivated()) commands_.endTransaction();
-    }
-    dragFloat("Mass", &Config::mass, 0.01f, 0.f, 100.f);
-    dragFloat("Pour For (s)", &Config::emitFor, 0.1f, 0.f, 600.f, "%.2f");
-    dragFloat("Lattice Jitter", &Config::jitter, 0.01f, 0.f, 1.f);
+    fields.dragFloat("Mouth X", &Config::emitExtentX, 0.01f, 0.001f, 20.f);
+    fields.dragFloat("Mouth Z", &Config::emitExtentZ, 0.01f, 0.001f, 20.f);
+    fields.dragFloat("Rate (/s)", &Config::rate, 25.f, 0.f, 500000.f, "%.0f");
+    fields.dragVector3("Pour Velocity", &Config::emitVelocity, 0.05f, -50.f, 50.f, "%.3f",
+                       "Granular Pour Velocity");
+    fields.dragFloat("Mass", &Config::mass, 0.01f, 0.f, 100.f);
+    fields.dragFloat("Pour For (s)", &Config::emitFor, 0.1f, 0.f, 600.f, "%.2f");
+    fields.dragFloat("Lattice Jitter", &Config::jitter, 0.01f, 0.f, 1.f);
     ImGui::TextColored(theme::muted(), "Mass 0 = 1 kg; Pour For 0 = until capacity.");
 
     ImGui::SeparatorText("Visual");
-    {
-        int visual = static_cast<int>(config.visual);
-        if (ImGui::Combo("Draw As", &visual, "Auto\0Instanced\0Field\0")) {
-            auto after = config;
-            after.visual = static_cast<Config::Visual>(visual);
-            commit(std::move(after), "Granular Visual");
-        }
-    }
-    {
-        float value[3];
-        toSrgbFloats(config.color, value);
-        const bool changed = ImGui::ColorEdit3("Grain Color", value);
-        if (ImGui::IsItemActivated()) commands_.beginTransaction();
-        if (changed) {
-            auto after = config;
-            after.color = fromSrgbFloats(value);
-            commit(std::move(after), "Granular Grain Color");
-        }
-        if (ImGui::IsItemDeactivated()) commands_.endTransaction();
-    }
-    dragFloat("Roughness", &Config::roughness, 0.01f, 0.f, 1.f);
+    fields.combo("Draw As", &Config::visual, "Auto\0Instanced\0Field\0", 3, "Granular Visual");
+    fields.color("Grain Color", &Config::color, "Granular Grain Color");
+    fields.dragFloat("Roughness", &Config::roughness, 0.01f, 0.f, 1.f);
 
     ImGui::PopItemWidth();
 
@@ -4614,7 +4080,6 @@ void EditorApp::drawSensorSection(Object3D& object) {
     if (object.is<Scene>()) return;
     if (!section("Sensor", false)) return;
 
-    auto* target = &object;
     // The host gates what can live here: a Camera hosts the pinhole sensors —
     // its frustum IS their pose and optics — and everything else hosts the
     // rest. Authoring-side only: SensorPlaySession builds whatever it finds,
@@ -4636,45 +4101,42 @@ void EditorApp::drawSensorSection(Object3D& object) {
         config.write(object);
         document_.setDirty(true);
     }
-    const auto before = config;
+    using Config = SensorConfig;
 
-    const auto commit = [&](SensorConfig after, const char* label) {
-        // On a camera host the camera's frustum is the truth (the play session
-        // reads it directly); stamp it into the flat string on every write so
-        // userData never drifts from what Play will build.
-        if (hostCamera && SensorConfig::isPinhole(after.type)) {
-            after.fovY = hostCamera->fov;
-            after.nearPlane = hostCamera->nearPlane;
-            after.farPlane = hostCamera->farPlane;
-        }
-        commands_.execute(makeProperty<SensorConfig>(
-                label, "sensor:" + object.uuid,
-                [target](const SensorConfig& value) { value.write(*target); },
-                before, after));
-        document_.setDirty(true);
-    };
+    // On a camera host the camera's frustum is the truth (the play session
+    // reads it directly); the normalizer stamps it into the flat string on
+    // every write, so userData never drifts from what Play will build.
+    ConfigFields<Config> fields(commands_, object, config, "sensor:" + object.uuid, "Sensor",
+                                [this] { document_.setDirty(true); });
+    fields.normalizeWith([hostCamera](Config& after) {
+        if (!hostCamera || !Config::isPinhole(after.type)) return;
+        after.fovY = hostCamera->fov;
+        after.nearPlane = hostCamera->nearPlane;
+        after.farPlane = hostCamera->farPlane;
+    });
+    // ConfigFields keeps this current across every commit below, which is why
+    // none of them re-reads: drawing the rest of a frame from the pre-click
+    // value would show the wrong fields for one frame (and, on Remove, fields
+    // for an entry that is gone).
+    const Config& live = fields.value();
 
     // Add/Remove is a userData edit, not a graph edit, so it goes straight
     // through the property command like the physics Enabled box — nothing here
     // can invalidate `object`, which is why this one does not need the deferred
     // re-resolve the spline section's Insert buttons do.
-    bool enabled = config.enabled;
+    bool enabled = live.enabled;
     if (ImGui::Checkbox("Enabled", &enabled)) {
-        auto after = config;
+        auto after = live;
         after.enabled = enabled;
         // A camera's default sensor is itself: the colour camera. The generic
         // default (IMU) belongs to the link-shaped hosts.
-        if (enabled && hostCamera && !SensorConfig::isPinhole(after.type)) {
-            after.type = SensorConfig::Type::Camera;
+        if (enabled && hostCamera && !Config::isPinhole(after.type)) {
+            after.type = Config::Type::Camera;
         }
-        commit(after, enabled ? "Add Sensor" : "Remove Sensor");
-        // Re-read: the click already changed the document, and drawing the rest
-        // of this frame from the pre-click value would show the wrong fields for
-        // one frame (and, on Remove, fields for an entry that is gone).
-        config = SensorConfig::read(object).value_or(SensorConfig{});
+        fields.commit(std::move(after), enabled ? "Add Sensor" : "Remove Sensor");
     }
 
-    if (!config.enabled) {
+    if (!live.enabled) {
         if (hostCamera) {
             ImGui::TextColored(theme::muted(),
                                "Records this camera's frustum. Aim the camera; the dock "
@@ -4703,19 +4165,18 @@ void EditorApp::drawSensorSection(Object3D& object) {
         int current = 0;
         for (const auto candidate : all) {
             const bool belongs = SensorConfig::isPinhole(candidate) == (hostCamera != nullptr);
-            if (!belongs && candidate != config.type) continue;
-            if (candidate == config.type) current = static_cast<int>(offered.size());
+            if (!belongs && candidate != live.type) continue;
+            if (candidate == live.type) current = static_cast<int>(offered.size());
             offered.push_back(candidate);
             names.push_back(SensorConfig::label(candidate));
         }
         if (ImGui::Combo("Type", &current, names.data(), static_cast<int>(names.size()))) {
-            auto after = config;
+            auto after = live;
             after.type = offered[static_cast<std::size_t>(current)];
             // Only the type changes. Every other key is written regardless of
             // type (see SensorConfig), so the settings of the type being left
             // behind are still there when the user comes back to it.
-            commit(after, "Sensor Type");
-            config = SensorConfig::read(object).value_or(config);
+            fields.commit(after, "Sensor Type");
         }
     }
 
@@ -4723,10 +4184,10 @@ void EditorApp::drawSensorSection(Object3D& object) {
     // moved onto cameras. It still plays — the gate is authoring-side — but
     // everything a camera host gives (the frustum helper, the dock preview,
     // fov/near/far in one place) is one click away.
-    if (!hostCamera && SensorConfig::isPinhole(config.type)) {
+    if (!hostCamera && SensorConfig::isPinhole(live.type)) {
         ImGui::TextColored(theme::warning(),
                            "%s sensors live on a Camera object now.",
-                           SensorConfig::label(config.type));
+                           SensorConfig::label(live.type));
         const auto uuid = object.uuid;
         if (ImGui::SmallButton("Move To Camera Child")) {
             // Deferred like every graph edit launched from a panel: the add
@@ -4738,33 +4199,6 @@ void EditorApp::drawSensorSection(Object3D& object) {
             };
         }
     }
-
-    const auto floatField = [&](const char* label, float value, float speed, float min, float max,
-                                void (*assign)(SensorConfig&, float), const char* action,
-                                const char* format = "%.4f") {
-        float edited = value;
-        const bool changed = ImGui::DragFloat(label, &edited, speed, min, max, format);
-        if (ImGui::IsItemActivated()) commands_.beginTransaction();
-        if (changed) {
-            auto after = config;
-            assign(after, std::clamp(edited, min, max));
-            commit(after, action);
-        }
-        if (ImGui::IsItemDeactivated()) commands_.endTransaction();
-    };
-
-    const auto intField = [&](const char* label, int value, float speed, int min, int max,
-                              void (*assign)(SensorConfig&, int), const char* action) {
-        int edited = value;
-        const bool changed = ImGui::DragInt(label, &edited, speed, min, max);
-        if (ImGui::IsItemActivated()) commands_.beginTransaction();
-        if (changed) {
-            auto after = config;
-            assign(after, std::clamp(edited, min, max));
-            commit(after, action);
-        }
-        if (ImGui::IsItemDeactivated()) commands_.endTransaction();
-    };
 
     // The joint an Encoder / Force-Torque sensor measures. Walk up to the Robot
     // this sensor is authored on and offer its articulated joints by name; a
@@ -4810,13 +4244,13 @@ void EditorApp::drawSensorSection(Object3D& object) {
         if (offerAll) names.push_back("All joints");
         const int base = offerAll ? 2 : 1;
         int current = 0;
-        if (offerAll && config.joint == SensorConfig::allJoints) current = 1;
+        if (offerAll && live.joint == SensorConfig::allJoints) current = 1;
         for (std::size_t i = 0; i < info.size(); ++i) {
             names.push_back(info[i].name.c_str());
-            if (info[i].name == config.joint) current = static_cast<int>(i) + base;
+            if (info[i].name == live.joint) current = static_cast<int>(i) + base;
         }
         if (ImGui::Combo("Joint", &current, names.data(), static_cast<int>(names.size()))) {
-            auto after = config;
+            auto after = live;
             if (current == 0) {
                 after.joint.clear();
             } else if (offerAll && current == 1) {
@@ -4824,12 +4258,11 @@ void EditorApp::drawSensorSection(Object3D& object) {
             } else {
                 after.joint = info[static_cast<std::size_t>(current - base)].name;
             }
-            commit(after, "Sensor Joint");
-            config = SensorConfig::read(object).value_or(config);
+            fields.commit(after, "Sensor Joint");
         }
-        if (config.joint.empty()) {
+        if (live.joint.empty()) {
             ImGui::TextColored(theme::muted(), "Pick which joint this sensor reads.");
-        } else if (config.joint == SensorConfig::allJoints) {
+        } else if (live.joint == SensorConfig::allJoints) {
             if (offerAll) {
                 ImGui::TextColored(theme::muted(),
                                    "One live encoder per articulated DOF at Play.");
@@ -4844,51 +4277,34 @@ void EditorApp::drawSensorSection(Object3D& object) {
         }
     };
 
-    floatField(
-            "Rate (Hz)", config.rateHz, 0.25f, 0.f, 2000.f,
-            [](SensorConfig& c, float v) { c.rateHz = v; }, "Sensor Rate", "%.1f");
-    if (config.rateHz <= 0.f) {
+    fields.dragFloat("Rate (Hz)", &Config::rateHz, 0.25f, 0.f, 2000.f, "%.1f", "Sensor Rate");
+    if (live.rateHz <= 0.f) {
         ImGui::TextColored(theme::muted(),
-                           SensorConfig::isVision(config.type)
+                           SensorConfig::isVision(live.type)
                                    ? "0 = scan every frame (expensive)"
                                    : "0 = sample every physics substep");
     }
-    intField(
-            "Seed", config.seed, 1.f, 0, 1000000,
-            [](SensorConfig& c, int v) { c.seed = v; }, "Sensor Seed");
+    fields.dragInt("Seed", &Config::seed, 1.f, 0, 1000000, "Sensor Seed");
 
     ImGui::Spacing();
 
-    switch (config.type) {
+    switch (live.type) {
 
         case SensorConfig::Type::Imu: {
             // Continuous-time densities, the way a spec sheet quotes them, so the
             // authored numbers are rate-independent.
-            floatField(
-                    "Gyro Density", config.gyroNoiseDensity, 0.0002f, 0.f, 1.f,
-                    [](SensorConfig& c, float v) { c.gyroNoiseDensity = v; },
-                    "IMU Gyro Noise", "%.5f");
-            floatField(
-                    "Gyro Bias Walk", config.gyroRandomWalk, 1e-5f, 0.f, 0.1f,
-                    [](SensorConfig& c, float v) { c.gyroRandomWalk = v; },
-                    "IMU Gyro Bias Walk", "%.6f");
-            floatField(
-                    "Accel Density", config.accelNoiseDensity, 0.002f, 0.f, 10.f,
-                    [](SensorConfig& c, float v) { c.accelNoiseDensity = v; },
-                    "IMU Accel Noise", "%.5f");
-            floatField(
-                    "Accel Bias Walk", config.accelRandomWalk, 0.0002f, 0.f, 1.f,
-                    [](SensorConfig& c, float v) { c.accelRandomWalk = v; },
-                    "IMU Accel Bias Walk", "%.6f");
+            fields.dragFloat("Gyro Density", &Config::gyroNoiseDensity, 0.0002f, 0.f, 1.f, "%.5f", "IMU Gyro Noise");
+            fields.dragFloat("Gyro Bias Walk", &Config::gyroRandomWalk, 1e-5f, 0.f, 0.1f, "%.6f", "IMU Gyro Bias Walk");
+            fields.dragFloat("Accel Density", &Config::accelNoiseDensity, 0.002f, 0.f, 10.f, "%.5f", "IMU Accel Noise");
+            fields.dragFloat("Accel Bias Walk", &Config::accelRandomWalk, 0.0002f, 0.f, 1.f, "%.6f", "IMU Accel Bias Walk");
 
             if (ImGui::SmallButton("Perfect")) {
-                auto after = config;
+                auto after = live;
                 after.gyroNoiseDensity = 0.f;
                 after.gyroRandomWalk = 0.f;
                 after.accelNoiseDensity = 0.f;
                 after.accelRandomWalk = 0.f;
-                commit(after, "Perfect IMU");
-                config = SensorConfig::read(object).value_or(config);
+                fields.commit(after, "Perfect IMU");
             }
             ImGui::SameLine();
             ImGui::TextColored(theme::muted(), "zero noise = ground truth");
@@ -4899,31 +4315,19 @@ void EditorApp::drawSensorSection(Object3D& object) {
             // On a camera host the frustum is the camera's; only the image
             // dimensions are the sensor's own.
             if (!hostCamera) {
-                floatField(
-                        "FOV (deg)", config.fovY, 0.25f, 1.f, 179.f,
-                        [](SensorConfig& c, float v) { c.fovY = v; }, "Depth FOV", "%.1f");
+                fields.dragFloat("FOV (deg)", &Config::fovY, 0.25f, 1.f, 179.f, "%.1f", "Depth FOV");
             }
-            intField(
-                    "Width", config.width, 1.f, 8, SensorConfig::maxImageSize,
-                    [](SensorConfig& c, int v) { c.width = v; }, "Depth Width");
-            intField(
-                    "Height", config.height, 1.f, 8, SensorConfig::maxImageSize,
-                    [](SensorConfig& c, int v) { c.height = v; }, "Depth Height");
+            fields.dragInt("Width", &Config::width, 1.f, 8, SensorConfig::maxImageSize, "Depth Width");
+            fields.dragInt("Height", &Config::height, 1.f, 8, SensorConfig::maxImageSize, "Depth Height");
             break;
         }
 
         case SensorConfig::Type::Camera: {
             if (!hostCamera) {
-                floatField(
-                        "FOV (deg)", config.fovY, 0.25f, 1.f, 179.f,
-                        [](SensorConfig& c, float v) { c.fovY = v; }, "Camera FOV", "%.1f");
+                fields.dragFloat("FOV (deg)", &Config::fovY, 0.25f, 1.f, 179.f, "%.1f", "Camera FOV");
             }
-            intField(
-                    "Width", config.width, 1.f, 8, SensorConfig::maxImageSize,
-                    [](SensorConfig& c, int v) { c.width = v; }, "Camera Width");
-            intField(
-                    "Height", config.height, 1.f, 8, SensorConfig::maxImageSize,
-                    [](SensorConfig& c, int v) { c.height = v; }, "Camera Height");
+            fields.dragInt("Width", &Config::width, 1.f, 8, SensorConfig::maxImageSize, "Camera Width");
+            fields.dragInt("Height", &Config::height, 1.f, 8, SensorConfig::maxImageSize, "Camera Height");
             ImGui::TextColored(theme::muted(),
                                "Looks down this object's -Z. Read it from a script with "
                                "editor.camera_from_object(obj).image");
@@ -4934,16 +4338,9 @@ void EditorApp::drawSensorSection(Object3D& object) {
 
         case SensorConfig::Type::Lidar: {
             static const char* beams[] = {"Dense Grid", "VLP-16", "HDL-32E", "OS1-64", "OS0-128"};
-            int pattern = static_cast<int>(config.beams);
-            if (ImGui::Combo("Beams", &pattern, beams, IM_ARRAYSIZE(beams))) {
-                auto after = config;
-                after.beams = static_cast<SensorConfig::Beams>(pattern);
-                commit(after, "LIDAR Beam Pattern");
-                config = SensorConfig::read(object).value_or(config);
-            }
-            intField(
-                    "Face Size", config.faceSize, 2.f, 16, SensorConfig::maxFaceSize,
-                    [](SensorConfig& c, int v) { c.faceSize = v; }, "LIDAR Face Size");
+            fields.combo("Beams", &Config::beams, beams, IM_ARRAYSIZE(beams),
+                         "LIDAR Beam Pattern");
+            fields.dragInt("Face Size", &Config::faceSize, 2.f, 16, SensorConfig::maxFaceSize, "LIDAR Face Size");
             ImGui::TextColored(theme::muted(),
                                "Six 90-degree depth passes per scan - face size is each "
                                "one's resolution.");
@@ -4952,19 +4349,13 @@ void EditorApp::drawSensorSection(Object3D& object) {
 
         case SensorConfig::Type::Encoder: {
             jointPicker(true);
-            floatField(
-                    "Resolution", config.encoderResolution, 1e-5f, 0.f, 1.f,
-                    [](SensorConfig& c, float v) { c.encoderResolution = v; },
-                    "Encoder Resolution", "%.6f");
+            fields.dragFloat("Resolution", &Config::encoderResolution, 1e-5f, 0.f, 1.f, "%.6f", "Encoder Resolution");
             ImGui::TextColored(theme::muted(), "rad (or m) per tick; 0 = ideal");
             break;
         }
 
         case SensorConfig::Type::Contact: {
-            floatField(
-                    "Force Threshold", config.contactForceThreshold, 0.05f, 0.f, 10000.f,
-                    [](SensorConfig& c, float v) { c.contactForceThreshold = v; },
-                    "Contact Force Threshold", "%.2f");
+            fields.dragFloat("Force Threshold", &Config::contactForceThreshold, 0.05f, 0.f, 10000.f, "%.2f", "Contact Force Threshold");
             break;
         }
 
@@ -4979,9 +4370,9 @@ void EditorApp::drawSensorSection(Object3D& object) {
     // Shared by both ranging sensors: the frustum they see through and the
     // per-return noise. Not a density — one laser pulse's uncertainty does not
     // depend on how long ago the previous scan was.
-    if (SensorConfig::isVision(config.type)) {
+    if (SensorConfig::isVision(live.type)) {
         ImGui::Spacing();
-        if (hostCamera && SensorConfig::isPinhole(config.type)) {
+        if (hostCamera && SensorConfig::isPinhole(live.type)) {
             // One source of truth: the Camera section above is where the
             // frustum is edited, so these numbers are shown, not editable —
             // two drag fields for the same plane would fight.
@@ -4990,13 +4381,9 @@ void EditorApp::drawSensorSection(Object3D& object) {
                                hostCamera->fov, hostCamera->nearPlane, hostCamera->farPlane);
             ImGui::TextColored(theme::muted(), "Edit them in the Camera section.");
         } else {
-            floatField(
-                    "Near (m)", config.nearPlane, 0.005f, 0.001f, 100.f,
-                    [](SensorConfig& c, float v) { c.nearPlane = v; }, "Sensor Near", "%.3f");
-            floatField(
-                    "Far (m)", config.farPlane, 0.25f, 0.01f, 10000.f,
-                    [](SensorConfig& c, float v) { c.farPlane = v; }, "Sensor Far", "%.2f");
-            if (config.farPlane <= config.nearPlane) {
+            fields.dragFloat("Near (m)", &Config::nearPlane, 0.005f, 0.001f, 100.f, "%.3f", "Sensor Near");
+            fields.dragFloat("Far (m)", &Config::farPlane, 0.25f, 0.01f, 10000.f, "%.2f", "Sensor Far");
+            if (live.farPlane <= live.nearPlane) {
                 ImGui::TextColored(theme::warning(), "Far must be beyond Near");
             }
         }
@@ -5005,17 +4392,10 @@ void EditorApp::drawSensorSection(Object3D& object) {
     // Range noise is a RANGING sensor's, not every vision sensor's: a sigma in
     // metres has nothing to say about a colour pixel. The Camera shares the
     // frustum above and stops there.
-    if (SensorConfig::isRanging(config.type)) {
-        floatField(
-                "Range Sigma (m)", config.rangeStddev, 0.001f, 0.f, 5.f,
-                [](SensorConfig& c, float v) { c.rangeStddev = v; }, "Range Noise", "%.4f");
-        floatField(
-                "Sigma per m", config.rangeStddevPerMetre, 0.0002f, 0.f, 1.f,
-                [](SensorConfig& c, float v) { c.rangeStddevPerMetre = v; },
-                "Range Noise per Metre", "%.5f");
-        floatField(
-                "Range Bias (m)", config.rangeBias, 0.001f, -5.f, 5.f,
-                [](SensorConfig& c, float v) { c.rangeBias = v; }, "Range Bias", "%.4f");
+    if (SensorConfig::isRanging(live.type)) {
+        fields.dragFloat("Range Sigma (m)", &Config::rangeStddev, 0.001f, 0.f, 5.f, "%.4f", "Range Noise");
+        fields.dragFloat("Sigma per m", &Config::rangeStddevPerMetre, 0.0002f, 0.f, 1.f, "%.5f", "Range Noise per Metre");
+        fields.dragFloat("Range Bias (m)", &Config::rangeBias, 0.001f, -5.f, 5.f, "%.4f", "Range Bias");
     }
 
     ImGui::PopItemWidth();
@@ -5024,7 +4404,7 @@ void EditorApp::drawSensorSection(Object3D& object) {
     // The mistake that authors cleanly and measures nothing: a proprioceptive
     // sensor with no rigid body under it. Cheap to answer here, and Play would
     // otherwise be the first place it shows up.
-    if (config.type == SensorConfig::Type::Imu || config.type == SensorConfig::Type::Contact) {
+    if (live.type == SensorConfig::Type::Imu || live.type == SensorConfig::Type::Contact) {
         bool onBody = false;
         for (const Object3D* node = &object; node && !onBody; node = node->parent) {
             const auto physics = PhysicsConfig::read(*node);

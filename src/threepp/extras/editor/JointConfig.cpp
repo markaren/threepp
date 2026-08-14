@@ -132,19 +132,14 @@ std::optional<JointConfig> JointConfig::decode(const std::string& text) {
 
 std::optional<JointConfig> JointConfig::read(const Object3D& object) {
 
-    const auto it = object.userData.find(userDataKey);
-    if (it == object.userData.end()) return std::nullopt;
-    if (it->second.type() != typeid(std::string)) return std::nullopt;
-
-    auto config = decode(std::any_cast<const std::string&>(it->second));
+    auto config = readEntry<JointConfig>(object, userDataKey);
     if (config) config->body = readString(object, bodyKey);
     return config;
 }
 
 bool JointConfig::isJoint(const Object3D& object) {
 
-    const auto it = object.userData.find(userDataKey);
-    return it != object.userData.end() && it->second.type() == typeid(std::string);
+    return hasEntry(object, userDataKey);
 }
 
 void JointConfig::write(Object3D& object) const {

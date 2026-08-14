@@ -134,11 +134,7 @@ std::optional<SplineConfig> SplineConfig::decode(const std::string& text) {
 
 std::optional<SplineConfig> SplineConfig::read(const Object3D& object) {
 
-    const auto it = object.userData.find(userDataKey);
-    if (it == object.userData.end()) return std::nullopt;
-    if (it->second.type() != typeid(std::string)) return std::nullopt;
-
-    return decode(std::any_cast<const std::string&>(it->second));
+    return readEntry<SplineConfig>(object, userDataKey);
 }
 
 void SplineConfig::write(Object3D& object) const {
@@ -153,8 +149,7 @@ void SplineConfig::erase(Object3D& object) {
 
 bool SplineConfig::isSpline(const Object3D& object) {
 
-    const auto it = object.userData.find(userDataKey);
-    return it != object.userData.end() && it->second.type() == typeid(std::string);
+    return hasEntry(object, userDataKey);
 }
 
 Object3D* SplineConfig::splineOf(const Object3D& object) {

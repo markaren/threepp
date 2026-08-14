@@ -115,8 +115,7 @@ void TextConfig::write(Object3D& object) const {
 
 bool TextConfig::isText(const Object3D& object) {
 
-    const auto it = object.userData.find(textKey);
-    return it != object.userData.end() && it->second.type() == typeid(std::string);
+    return hasEntry(object, textKey);
 }
 
 std::shared_ptr<BufferGeometry> TextConfig::buildGeometry() const {

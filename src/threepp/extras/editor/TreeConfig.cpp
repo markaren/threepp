@@ -341,11 +341,7 @@ std::optional<TreeConfig> TreeConfig::decode(const std::string& text) {
 
 std::optional<TreeConfig> TreeConfig::read(const Object3D& object) {
 
-    const auto it = object.userData.find(userDataKey);
-    if (it == object.userData.end()) return std::nullopt;
-    if (it->second.type() != typeid(std::string)) return std::nullopt;
-
-    return decode(std::any_cast<const std::string&>(it->second));
+    return readEntry<TreeConfig>(object, userDataKey);
 }
 
 void TreeConfig::write(Object3D& object) const {
@@ -360,8 +356,7 @@ void TreeConfig::erase(Object3D& object) {
 
 bool TreeConfig::isTree(const Object3D& object) {
 
-    const auto it = object.userData.find(userDataKey);
-    return it != object.userData.end() && it->second.type() == typeid(std::string);
+    return hasEntry(object, userDataKey);
 }
 
 

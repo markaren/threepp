@@ -17,6 +17,7 @@
 
 #include <any>
 #include <cstdio>
+#include <optional>
 #include <string>
 #include <string_view>
 
@@ -69,6 +70,31 @@ namespace threepp::editor::codec {
         if (it == object.userData.end()) return {};
         if (it->second.type() != typeid(std::string)) return {};
         return std::any_cast<const std::string&>(it->second);
+    }
+
+    // True when the object carries a string entry under `key`. This is the
+    // whole of every isConveyor / isGranular / isParticleField: the entry's
+    // PRESENCE is what makes a node one of those things, never its contents.
+    inline bool hasEntry(const Object3D& object, const char* key) {
+
+        const auto it = object.userData.find(key);
+        return it != object.userData.end() && it->second.type() == typeid(std::string);
+    }
+
+    // Decode the entry under `key` through Config::decode.
+    //
+    // nullopt means "this object carries no such entry", which every read()
+    // distinguishes from "carries one that decodes to the defaults" — the two
+    // are different documents, and the erase-at-defaults write rule depends on
+    // the difference. A present-but-unparsable entry still decodes (to the
+    // defaults), because a newer editor's keys must not erase an older one's.
+    template<class Config>
+    std::optional<Config> readEntry(const Object3D& object, const char* key) {
+
+        const auto it = object.userData.find(key);
+        if (it == object.userData.end()) return std::nullopt;
+        if (it->second.type() != typeid(std::string)) return std::nullopt;
+        return Config::decode(std::any_cast<const std::string&>(it->second));
     }
 
     // Walk a flat `key=value;…` string, calling `apply(key, value)` per pair.
