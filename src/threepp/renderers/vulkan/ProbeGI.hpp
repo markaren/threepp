@@ -113,6 +113,13 @@ namespace threepp::vulkan {
 
         Buffer                shBuf_{};   // kProbeCount × 4 × vec4 SH-L1 store
         Buffer                depthBuf_{};// kProbeCount × kDepthTexels × uint Chebyshev depth
+        // Start-of-dispatch snapshots (recordDispatch copies canonical → prev
+        // before every update). The update's feedback tap / EMA history reads
+        // go here, its writes to the canonical stores above — race-free, so
+        // two same-seed runs produce bit-identical grids. Consumers keep
+        // reading the canonical stores; no plumbing outside this class.
+        Buffer                prevShBuf_{};
+        Buffer                prevDepthBuf_{};
         std::vector<Buffer>   gridUbos_;        // [framesInFlight]
         std::vector<VkBuffer> gridUboHandles_;  // handles view for DeferredShade
 

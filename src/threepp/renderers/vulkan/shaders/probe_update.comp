@@ -26,10 +26,16 @@
 // (mean/mean², same α) — the Chebyshev visibility test probeIrradiance runs
 // per tap to stop irradiance leaking through walls (see probe_common.glsl).
 //
-// The feedback tap reads probes the SAME dispatch may be writing — a benign
-// race: a torn read mixes an old and a new estimate of the SAME quantity,
-// off by one EMA step, and the next update washes it out. (DDGI ping-pongs
-// instead; with a round-robin window the extra buffer isn't worth it.)
+// The feedback tap reads a START-OF-DISPATCH SNAPSHOT of the probe stores
+// (bindings 10/11, copied host-side each update), never the buffers this
+// dispatch writes. The single-buffer form this replaces called its
+// tap-reads-what-we-write overlap "a benign race" — visually it was, but
+// which estimate a tap read depended on workgroup scheduling order, so two
+// same-seed runs produced different grids: the EMA integrated the torn reads
+// (they never washed out) and the multi-bounce feedback spread them
+// (measured: 321 → 4515 divergent probes in four sweeps). Snapshot reads are
+// DDGI's ping-pong semantics, and the ~5 MB/update copy is what bit-exact
+// replay costs.
 //
 // Hit shading is copied from deferred_shade.comp (giRadiance and its helpers)
 // in the house "copied verbatim" style — keep the two in lockstep.
@@ -127,11 +133,22 @@ struct EmTri {
 };
 layout(set = 0, binding = 7, scalar) readonly buffer EmissiveTriBuf { EmTri emissiveTris[]; };
 
-// SH-L1 probe store (4 vec4/probe — see probe_common.glsl for the layout).
-layout(set = 0, binding = 8, scalar) buffer ProbeShBuf { vec4 probeSh[]; };
-// Octahedral depth store (kProbeDepthTexels × packHalf2x16(mean, mean²) per
-// probe, normalized by probeMaxDist() — see probe_common.glsl).
-layout(set = 0, binding = 9, scalar) buffer ProbeDepthBuf { uint probeDepth[]; };
+// SH-L1 probe store, WRITE side (4 vec4/probe — see probe_common.glsl for the
+// layout). This dispatch writes ONLY its round-robin window here; every read —
+// the feedback tap, the EMA history, sHist — goes through the prev snapshot
+// below, so the update is race-free and bit-reproducible (the replay-audit
+// work proved the old single-buffer form non-deterministic: which estimate a
+// tap read depended on workgroup scheduling order).
+layout(set = 0, binding = 8, scalar) writeonly buffer ProbeShOutBuf { vec4 probeShOut[]; };
+// Octahedral depth store, WRITE side (kProbeDepthTexels ×
+// packHalf2x16(mean, mean²) per probe, normalized by probeMaxDist()).
+layout(set = 0, binding = 9, scalar) writeonly buffer ProbeDepthOutBuf { uint probeDepthOut[]; };
+// READ side: the start-of-dispatch snapshot the host copied from the canonical
+// stores (ProbeGI::recordDispatch). Declared under the names probe_common.glsl
+// expects, so the feedback tap reads the frozen sweep — DDGI ping-pong
+// semantics without touching any consumer's bindings.
+layout(set = 0, binding = 10, scalar) readonly buffer ProbeShBuf { vec4 probeSh[]; };
+layout(set = 0, binding = 11, scalar) readonly buffer ProbeDepthBuf { uint probeDepth[]; };
 layout(set = 0, binding = 0, scalar) uniform ProbeGridUbo {
     vec3  origin;  float enabled;// enabled gates SAMPLING (deferred_shade); the
                                  // update dispatch is simply skipped when off
@@ -519,7 +536,7 @@ void main() {
             // SH's α=1 bootstrap; blending against the sentinel would smear
             // "all clear" into real walls for a whole EMA tail.
             const vec2 dOld = (bits == 0u) ? dNew : unpackHalf2x16(bits);
-            probeDepth[di] = packHalf2x16(mix(dOld, dNew, alpha));
+            probeDepthOut[di] = packHalf2x16(mix(dOld, dNew, alpha));
         }
     }
 
@@ -552,8 +569,8 @@ void main() {
     const vec4 o1 = probeSh[pIdx * 4u + 1u];
     const vec4 o2 = probeSh[pIdx * 4u + 2u];
     const vec4 o3 = probeSh[pIdx * 4u + 3u];
-    probeSh[pIdx * 4u + 0u] = vec4(mix(o0.rgb, c0, alpha), mix(o0.a, validity, alpha));
-    probeSh[pIdx * 4u + 1u] = vec4(mix(o1.rgb, cx, alpha), min(hist + 1.0, 4096.0));
-    probeSh[pIdx * 4u + 2u] = vec4(mix(o2.rgb, cy, alpha), 0.0);
-    probeSh[pIdx * 4u + 3u] = vec4(mix(o3.rgb, cz, alpha), 0.0);
+    probeShOut[pIdx * 4u + 0u] = vec4(mix(o0.rgb, c0, alpha), mix(o0.a, validity, alpha));
+    probeShOut[pIdx * 4u + 1u] = vec4(mix(o1.rgb, cx, alpha), min(hist + 1.0, 4096.0));
+    probeShOut[pIdx * 4u + 2u] = vec4(mix(o2.rgb, cy, alpha), 0.0);
+    probeShOut[pIdx * 4u + 3u] = vec4(mix(o3.rgb, cz, alpha), 0.0);
 }
