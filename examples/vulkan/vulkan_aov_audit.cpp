@@ -121,6 +121,12 @@ int main(int argc, char** argv) {
     // touch it) as manifest row shade.hdr with a per-frame trace. Pairs with
     // --no-denoise to split the shade dispatch from the denoiser chain.
     bool hdrSplit = false;
+    // --shadesplit: per-frame hash of each deferred-shade temporal image
+    // (indirect / momentsSq / reflect / reflAux / shadowVis / directU) via
+    // debugHashShadeImages. The first name to differ between two runs is the
+    // pass the divergence enters at; directU (no rays, no history) is the
+    // control that indicts the dispatch itself if it moves.
+    bool shadeSplit = false;
     // Divergence-bisection toggles: each turns off one pass group suspected of
     // carrying run-varying state into the frame. The AOV rows are already
     // proven exact, so whatever breaks rgb replay enters downstream of the
@@ -134,6 +140,9 @@ int main(int argc, char** argv) {
     bool staticScene = false;// --static: no scripted motion → no BLAS refit /
                              // TLAS update. Discriminates acceleration-structure
                              // rebuild nondeterminism from everything else.
+    bool noProbes = false;   // --no-probes: setProbeGI(false). The falsification
+                             // test for "probe_update is the carrier": with the
+                             // atlas out of the chain, rgb must replay bit-exact.
     for (int i = 1; i < argc; ++i) {
         const std::string arg = argv[i];
         if (arg == "--frames" && i + 1 < argc) frames = std::atoi(argv[++i]);
@@ -142,12 +151,14 @@ int main(int argc, char** argv) {
         else if (arg == "--dumprgb" && i + 1 < argc) dumpPrefix = argv[++i];
         else if (arg == "--taasplit") taaSplit = true;
         else if (arg == "--hdrsplit") hdrSplit = true;
+        else if (arg == "--shadesplit") shadeSplit = true;
         else if (arg == "--no-denoise") noDenoise = true;
         else if (arg == "--no-restir") noRestir = true;
         else if (arg == "--no-occl") noOccl = true;
         else if (arg == "--no-lod") noLod = true;
         else if (arg == "--hard-sun") hardSun = true;
         else if (arg == "--static") staticScene = true;
+        else if (arg == "--no-probes") noProbes = true;
         else if (arg == "--compare" && i + 2 < argc) return compare(argv[i + 1], argv[i + 2]);
     }
 
@@ -172,6 +183,7 @@ int main(int argc, char** argv) {
     if (noOccl) renderer.setOcclusionCulling(false);
     if (noLod) renderer.setAutoLod(false);
     if (hardSun) renderer.setSunAngularRadius(0.f);
+    if (noProbes) renderer.setProbeGI(false);
 
     Scene scene;
     scene.background = Color(0x304050);
@@ -302,6 +314,12 @@ int main(int argc, char** argv) {
                     shadeHdr.hash.bytes(hdrBuf.data(), hdrBuf.size());
                     shadeHdr.bytes += hdrBuf.size();
                     ++shadeHdr.frames;
+                }
+            }
+            if (shadeSplit) {
+                for (const auto& [nm, hsh] : renderer.debugHashShadeImages()) {
+                    std::cout << "shadesplit f" << f << " " << nm << "=" << std::hex << hsh
+                              << std::dec << "\n";
                 }
             }
             if (!dumpPrefix.empty() && f >= 2 && f <= 9) {

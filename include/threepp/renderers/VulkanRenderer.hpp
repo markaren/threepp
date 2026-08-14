@@ -347,6 +347,15 @@ namespace threepp {
         // itself. Full device sync per call — audit instrument, not capture.
         bool readSceneHdrDebug(std::vector<uint8_t>& hdr, int& w, int& h);
 
+        // The finest split: FNV-1a hash of each deferred-shade temporal image
+        // for the last completed frame — {indirect, momentsSq, reflect,
+        // reflAux, shadowVis, directU}. The first name whose hash differs
+        // between two same-seed runs is the pass the divergence enters at.
+        // directU is the control: analytic direct light, no rays, no history —
+        // if IT diverges the shade dispatch itself is non-deterministic.
+        // Empty result before the first frame. Full device sync per call.
+        std::vector<std::pair<std::string, uint64_t>> debugHashShadeImages();
+
         // ImGui integration handles (Vulkan types erased to void* / uint32_t).
         [[nodiscard]] void* nativeInstance() const;
         [[nodiscard]] void* nativePhysicalDevice() const;

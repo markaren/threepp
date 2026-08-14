@@ -28,10 +28,13 @@ namespace threepp::vulkan {
         : ctx_(ctx), framesInFlight_(framesInFlight) {
         // SH-L1 store: 4 vec4 per probe. TRANSFER_DST for the zero-fill on
         // (re)fit; STORAGE for the update pass + deferred_shade's reads.
+        // TRANSFER_SRC: the determinism audit hashes this buffer per frame
+        // (debugHashShadeImages' probeSh row) — pure capability bit.
         shBuf_ = createBuffer(ctx_.allocator(), ctx_.device(),
                               static_cast<VkDeviceSize>(kProbeCount) * 4 * 16,
                               VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
-                                      VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+                                      VK_BUFFER_USAGE_TRANSFER_DST_BIT |
+                                      VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
                               VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE);
         // Chebyshev depth store: kDepthTexels × packHalf2x16(mean, mean²) per
         // probe = 4 MB. Cleared alongside the SH on every grid (re)fit — 0u is
