@@ -116,6 +116,11 @@ int main(int argc, char** argv) {
     // taa.input / taa.history with per-frame traces on stdout. Splits "the
     // shading diverged" from "the temporal resolve diverged".
     bool taaSplit = false;
+    // --hdrsplit: additionally hash the linear-HDR scene image (bloom's
+    // sceneHdr — what the shade/denoise chain wrote, BEFORE bloom and post
+    // touch it) as manifest row shade.hdr with a per-frame trace. Pairs with
+    // --no-denoise to split the shade dispatch from the denoiser chain.
+    bool hdrSplit = false;
     // Divergence-bisection toggles: each turns off one pass group suspected of
     // carrying run-varying state into the frame. The AOV rows are already
     // proven exact, so whatever breaks rgb replay enters downstream of the
@@ -136,6 +141,7 @@ int main(int argc, char** argv) {
         else if (arg == "--rgbtrace" && i + 1 < argc) rgbTracePath = argv[++i];
         else if (arg == "--dumprgb" && i + 1 < argc) dumpPrefix = argv[++i];
         else if (arg == "--taasplit") taaSplit = true;
+        else if (arg == "--hdrsplit") hdrSplit = true;
         else if (arg == "--no-denoise") noDenoise = true;
         else if (arg == "--no-restir") noRestir = true;
         else if (arg == "--no-occl") noOccl = true;
@@ -230,8 +236,8 @@ int main(int argc, char** argv) {
     constexpr double kDt = 1.0 / 60.0;// scripted clock — never wall time
     std::vector<std::uint8_t> buf;
     std::ostringstream rgbTrace;
-    Stream taaIn, taaHist;
-    std::vector<std::uint8_t> taaInBuf, taaHistBuf;
+    Stream taaIn, taaHist, shadeHdr;
+    std::vector<std::uint8_t> taaInBuf, taaHistBuf, hdrBuf;
     int failures = 0;
 
     for (int f = 0; f < frames; ++f) {
@@ -286,6 +292,18 @@ int main(int argc, char** argv) {
                     ++taaHist.frames;
                 }
             }
+            if (hdrSplit) {
+                int hw = 0, hh = 0;
+                if (renderer.readSceneHdrDebug(hdrBuf, hw, hh)) {
+                    Fnv h1;
+                    h1.bytes(hdrBuf.data(), hdrBuf.size());
+                    std::cout << "hdrsplit f" << f << " hdr=" << std::hex << h1.value()
+                              << std::dec << "\n";
+                    shadeHdr.hash.bytes(hdrBuf.data(), hdrBuf.size());
+                    shadeHdr.bytes += hdrBuf.size();
+                    ++shadeHdr.frames;
+                }
+            }
             if (!dumpPrefix.empty() && f >= 2 && f <= 9) {
                 std::ofstream df(dumpPrefix + "_f" + std::to_string(f) + ".raw",
                                  std::ios::binary);
@@ -310,6 +328,7 @@ int main(int argc, char** argv) {
         emit("taa.input", taaIn);
         emit("taa.history", taaHist);
     }
+    if (hdrSplit) emit("shade.hdr", shadeHdr);
 
     std::cout << "vulkan_aov_audit: " << frames << " frames";
     if (failures) {

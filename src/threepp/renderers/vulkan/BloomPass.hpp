@@ -57,6 +57,11 @@ namespace threepp::vulkan {
         [[nodiscard]] VkImage sceneHdrImage(uint32_t frame) const {
             return sceneHdr_[frame].image;
         }
+        // Whole-struct access (image + extent + format) for the determinism
+        // audit's host readback (VulkanRenderer::readSceneHdrDebug).
+        [[nodiscard]] const Image2D& sceneHdrImage2D(uint32_t frame) const {
+            return sceneHdr_[frame];
+        }
 
         // Pyramid level 0 (half res, all levels accumulated) — what the
         // PostComposite samples as the bloom buffer.

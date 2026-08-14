@@ -339,6 +339,14 @@ namespace threepp {
         bool readTaaDebugImages(std::vector<uint8_t>& input, int& inW, int& inH,
                                 std::vector<uint8_t>& history, int& histW, int& histH);
 
+        // Same instrument one stage earlier: the linear-HDR scene image the
+        // shade/denoise chain wrote this frame (bloom's sceneHdr; RGBA16F at
+        // the render extent), BEFORE bloom and the post composite touch it.
+        // taa.input diverging while sceneHdr is exact indicts bloom/post;
+        // sceneHdr diverging under --no-denoise indicts the shade dispatch
+        // itself. Full device sync per call — audit instrument, not capture.
+        bool readSceneHdrDebug(std::vector<uint8_t>& hdr, int& w, int& h);
+
         // ImGui integration handles (Vulkan types erased to void* / uint32_t).
         [[nodiscard]] void* nativeInstance() const;
         [[nodiscard]] void* nativePhysicalDevice() const;
