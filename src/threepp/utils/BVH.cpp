@@ -1,4 +1,4 @@
-#include "BVH.hpp"
+#include "threepp/utils/BVH.hpp"
 
 #include "threepp/core/BufferGeometry.hpp"
 
@@ -6,6 +6,14 @@
 #include <functional>
 
 using namespace threepp;
+
+namespace {
+
+    // Keeps a segment query between two points that lie exactly on a surface
+    // from hitting the surfaces the endpoints sit on.
+    constexpr float rayEps = 1e-4f;
+
+}// namespace
 
 
 std::unique_ptr<BVH::BVHNode> BVH::buildNode(std::vector<int>& indices, int depth) {
@@ -274,6 +282,87 @@ bool BVH::intersects(const BVH& b1, const BVH& b2, const Matrix4& m1, const Matr
     };
 
     return testNodes(b1.root.get(), b2.root.get());
+}
+
+std::optional<BVH::RayHit> BVH::raycast(const Ray& ray, float maxDistance) const {
+    if (!root) return std::nullopt;
+
+    std::optional<RayHit> best;
+    float bestDistance = maxDistance - rayEps;
+
+    Vector3 point, boxPoint, edge1, edge2, normal;
+
+    std::function<void(const BVHNode*)> traverse = [&](const BVHNode* node) {
+        if (!node) return;
+
+        // A node entered farther away than the current best cannot improve it.
+        // The entry distance is only meaningful from outside the box.
+        if (!node->boundingBox.containsPoint(ray.origin)) {
+            ray.intersectBox(node->boundingBox, boxPoint);
+            if (boxPoint.isNan()) return;
+            if (boxPoint.distanceTo(ray.origin) > bestDistance) return;
+        }
+
+        if (node->isLeaf()) {
+
+            for (const int idx : node->triangleIndices) {
+                const Triangle& tri = triangles[idx];
+
+                if (!ray.intersectTriangle(tri.a(), tri.b(), tri.c(), false, point)) continue;
+
+                const float distance = point.distanceTo(ray.origin);
+                if (distance < rayEps || distance > bestDistance) continue;
+
+                edge1.subVectors(tri.b(), tri.a());
+                edge2.subVectors(tri.c(), tri.a());
+                normal.crossVectors(edge1, edge2).normalize();
+                if (normal.dot(ray.direction) > 0) normal.negate();
+
+                bestDistance = distance;
+                best = RayHit{distance, idx, point, normal};
+            }
+            return;
+        }
+
+        traverse(node->left.get());
+        traverse(node->right.get());
+    };
+
+    traverse(root.get());
+    return best;
+}
+
+bool BVH::raycastAny(const Ray& ray, float maxDistance) const {
+    if (!root) return false;
+
+    const float limit = maxDistance - rayEps;
+
+    Vector3 point;
+
+    std::function<bool(const BVHNode*)> traverse = [&](const BVHNode* node) -> bool {
+        if (!node) return false;
+
+        if (!ray.intersectsBox(node->boundingBox)) return false;
+
+        if (node->isLeaf()) {
+
+            for (const int idx : node->triangleIndices) {
+                const Triangle& tri = triangles[idx];
+
+                if (!ray.intersectTriangle(tri.a(), tri.b(), tri.c(), false, point)) continue;
+
+                const float distance = point.distanceTo(ray.origin);
+                if (distance < rayEps || distance > limit) continue;
+
+                return true;
+            }
+            return false;
+        }
+
+        return traverse(node->left.get()) || traverse(node->right.get());
+    };
+
+    return traverse(root.get());
 }
 
 void BVH::collectBoxes(std::vector<BVHBox3>& boxes) const {

@@ -62,6 +62,7 @@ set(publicHeaders
         "threepp/extras/curves/SplineCurve.hpp"
         "threepp/extras/curves/QuadraticBezierCurve.hpp"
         "threepp/extras/curves/QuadraticBezierCurve3.hpp"
+        "threepp/extras/editor/AcousticSurfaceConfig.hpp"
         "threepp/extras/editor/AnimationConfig.hpp"
         "threepp/extras/editor/AnimationPlaySession.hpp"
         "threepp/extras/editor/ArticulationConfig.hpp"
@@ -254,6 +255,7 @@ set(publicHeaders
         "threepp/textures/Texture.hpp"
 
         "threepp/utils/BufferGeometryUtils.hpp"
+        "threepp/utils/BVH.hpp"
         "threepp/utils/GeometryLod.hpp"
         "threepp/utils/ImageUtils.hpp"
         "threepp/utils/StringUtils.hpp"
@@ -513,6 +515,7 @@ set(sources
         "threepp/extras/curves/QuadraticBezierCurve.cpp"
         "threepp/extras/curves/QuadraticBezierCurve3.cpp"
         "threepp/extras/curves/SplineCurve.cpp"
+        "threepp/extras/editor/AcousticSurfaceConfig.cpp"
         "threepp/extras/editor/AnimationConfig.cpp"
         "threepp/extras/editor/AnimationPlaySession.cpp"
         "threepp/extras/editor/ArticulationConfig.cpp"
@@ -709,6 +712,7 @@ set(sources
 
         "threepp/utils/Base64.cpp"
         "threepp/utils/BufferGeometryUtils.cpp"
+        "threepp/utils/BVH.cpp"
         "threepp/utils/GeometryLod.cpp"
         "threepp/utils/ImageUtils.cpp"
         "threepp/utils/StbImageWrite.cpp"
@@ -792,11 +796,13 @@ endif ()
 
 if (THREEPP_WITH_AUDIO)
     list(APPEND publicHeaders
+            "threepp/audio/Acoustics.hpp"
             "threepp/audio/Audio.hpp"
             "threepp/extras/editor/AudioPlaySession.hpp"
     )
 
     list(APPEND sources
+            "threepp/audio/Acoustics.cpp"
             "threepp/audio/Audio.cpp"
             "threepp/extras/editor/AudioPlaySession.cpp"
     )

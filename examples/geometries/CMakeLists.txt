@@ -9,5 +9,3 @@ add_example(NAME "convex_geometry" WEB)
 add_example(NAME "dynamic" WEB)
 
 add_example(NAME "basic_geometries" LINK_IMGUI WEB)
-
-target_link_libraries(tube_geometry PRIVATE bvh)

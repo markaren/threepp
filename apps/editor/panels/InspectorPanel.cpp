@@ -4,6 +4,7 @@
 #include "../ImportFormats.hpp"
 #include "../PanelLayout.hpp"
 
+#include "threepp/extras/editor/AcousticSurfaceConfig.hpp"
 #include "threepp/extras/editor/AnimationConfig.hpp"
 #include "threepp/extras/editor/ArticulationConfig.hpp"
 #include "threepp/extras/editor/ConveyorConfig.hpp"
@@ -292,6 +293,7 @@ void EditorApp::drawInspector() {
         drawParticleFieldSection(*selected);
         drawGranularSection(*selected);
         drawSoundSection(*selected);
+        drawAcousticsSection(*selected);
         drawTextSection(*selected);
         drawTreeSection(*selected);
         drawScriptSection(*selected);
@@ -3447,6 +3449,80 @@ void EditorApp::drawSoundSection(Object3D& object) {
     }
 
     ImGui::TextColored(theme::muted(), "Stored in userData[\"sound\"] / [\"soundFile\"]");
+
+    ImGui::TreePop();
+}
+
+
+// ----------------------------------------------------------------- acoustics
+
+void EditorApp::drawAcousticsSection(Object3D& object) {
+
+    // Meshes only: an acoustic surface is a BVH over triangles, so there is
+    // nothing to author on a group, a light or a camera.
+    if (!object.as<Mesh>()) return;
+    if (!section("Acoustics", false)) return;
+
+    auto* target = &object;
+    const auto config = AcousticSurfaceConfig::read(object).value_or(AcousticSurfaceConfig{});
+
+    const auto commit = [&](AcousticSurfaceConfig after, const char* label) {
+        commands_.execute(makeProperty<AcousticSurfaceConfig>(
+                label, "acoustics:" + object.uuid,
+                [target](const AcousticSurfaceConfig& value) { value.write(*target); },
+                config, after));
+        document_.setDirty(true);
+    };
+
+    bool enabled = config.enabled;
+    if (ImGui::Checkbox("Acoustic surface", &enabled)) {
+        auto after = config;
+        after.enabled = enabled;
+        commit(after, enabled ? "Enable Acoustic Surface" : "Disable Acoustic Surface");
+    }
+    ImGui::TextColored(theme::muted(),
+                       "Play traces rays from the listener to every positional sound: "
+                       "flagged meshes muffle what is behind them and set the reverb.");
+
+    if (!config.enabled) {
+        ImGui::TreePop();
+        return;
+    }
+
+    ImGui::PushItemWidth(-130 * contentScale_);
+    {
+        float transmission = config.transmission;
+        const bool changed = ImGui::DragFloat("Transmission", &transmission, 0.005f, 0.f, 1.f, "%.2f");
+        if (ImGui::IsItemActivated()) commands_.beginTransaction();
+        if (changed) {
+            auto after = config;
+            after.transmission = std::clamp(transmission, 0.f, 1.f);
+            commit(after, "Acoustic Transmission");
+        }
+        if (ImGui::IsItemDeactivated()) commands_.endTransaction();
+    }
+    if (ImGui::IsItemHovered()) {
+        ImGui::SetTooltip("How much sound gets THROUGH. 0 is concrete, 0.6 a curtain,\n"
+                          "1 is a surface the sound does not notice.");
+    }
+    {
+        float absorption = config.absorption;
+        const bool changed = ImGui::DragFloat("Absorption", &absorption, 0.005f, 0.f, 1.f, "%.2f");
+        if (ImGui::IsItemActivated()) commands_.beginTransaction();
+        if (changed) {
+            auto after = config;
+            after.absorption = std::clamp(absorption, 0.f, 1.f);
+            commit(after, "Acoustic Absorption");
+        }
+        if (ImGui::IsItemDeactivated()) commands_.endTransaction();
+    }
+    if (ImGui::IsItemHovered()) {
+        ImGui::SetTooltip("How much a REFLECTION loses here, which is what sets the\n"
+                          "reverb tail. 0.05 is bare concrete, 0.6 soft furnishing.");
+    }
+    ImGui::PopItemWidth();
+
+    ImGui::TextColored(theme::muted(), "Stored in userData[\"acousticSurface\"]");
 
     ImGui::TreePop();
 }

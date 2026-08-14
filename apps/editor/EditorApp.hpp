@@ -284,6 +284,11 @@ namespace threepp::editor {
         void startAudition(const Object3D& object);
         void stopAudition();
         [[nodiscard]] bool isAuditioning(const Object3D& object) const;
+        // Shown for a mesh: whether sound has to get THROUGH it, and what it
+        // eats when sound bounces off it. Play traces rays against every
+        // flagged mesh (AcousticSurfaceConfig), so this is authored on the
+        // walls rather than on the sound.
+        void drawAcousticsSection(Object3D& object);
         // Shown for a text mesh (TextConfig): the content and the type
         // parameters, each edit rebuilding the geometry through the same
         // undoable property write every other config section uses.

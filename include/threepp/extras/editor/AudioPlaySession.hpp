@@ -11,6 +11,12 @@
 // skipped: a scene whose sound file moved must still play, exactly as a soft
 // body that cannot cook still leaves the rigid bodies simulating.
 //
+// Meshes flagged with an AcousticSurfaceConfig turn the session's positional
+// sounds into RAY-TRACED ones: an AcousticScene over the flagged geometry and
+// an AcousticsSystem over this session's listener and sounds, occluding through
+// walls and probing the room for reverb every tick. Both halves have to be
+// authored — flagged geometry and a positional sound — or nothing is built.
+//
 // Compiled only into builds configured with -DTHREEPP_WITH_AUDIO=ON, which is
 // also the macro (PUBLIC on the threepp target, so every consumer compiles the
 // same one) the editor gates its own audio code on.
@@ -29,6 +35,8 @@
 
 namespace threepp {
 
+    class AcousticScene;
+    class AcousticsSystem;
     class Audio;
     class AudioListener;
     class Object3D;
@@ -75,6 +83,18 @@ namespace threepp::editor {
         // Whether the sound authored on `uuid` is playing right now.
         [[nodiscard]] bool isPlaying(const std::string& uuid) const;
 
+        // --- acoustics ----------------------------------------------------
+        // Whether the ray-traced acoustics runtime came up. It needs BOTH
+        // halves: at least one mesh carrying an enabled AcousticSurfaceConfig
+        // and at least one positional sound to occlude. A scene missing either
+        // plays exactly as it did before acoustics existed.
+        [[nodiscard]] bool acousticsActive() const;
+        // Meshes registered as acoustic surfaces.
+        [[nodiscard]] std::size_t acousticSurfaceCount() const;
+        // Smoothed occlusion [0,1] on the sound authored on `uuid` — 0 when
+        // acoustics are not running, which is also what "unobstructed" reads as.
+        [[nodiscard]] float occlusionOf(const std::string& uuid) const;
+
         // The audibility bound update() enforces on every positional sound:
         // 1 inside max distance minus a short ease-out band, 0 at and past
         // max. miniaudio itself only CLAMPS its falloff at max — without this
@@ -107,6 +127,14 @@ namespace threepp::editor {
         // sound by construction, not by remembering to clear in order.
         std::unique_ptr<AudioListener> listener_;
         std::vector<Entry> entries_;
+
+        // Declared AFTER the two above so they are destroyed BEFORE them: the
+        // system borrows the listener and every sound it drives, and the scene
+        // borrows meshes out of the played graph. The system borrows the scene,
+        // hence this order between the pair.
+        std::unique_ptr<AcousticScene> acousticScene_;
+        std::unique_ptr<AcousticsSystem> acoustics_;
+        std::size_t surfaceCount_ = 0;
 
         Object3D* listenerHost_ = nullptr;
         std::filesystem::path resourcePath_;

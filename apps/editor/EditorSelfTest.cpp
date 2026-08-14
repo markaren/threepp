@@ -16,6 +16,7 @@
 
 #include "ImportFormats.hpp"
 
+#include "threepp/extras/editor/AcousticSurfaceConfig.hpp"
 #include "threepp/extras/editor/AnimationConfig.hpp"
 #include "threepp/extras/editor/ArticulationConfig.hpp"
 #include "threepp/extras/editor/GranularConfig.hpp"
@@ -6206,6 +6207,126 @@ int EditorApp::runSelfTest() {
 
         std::filesystem::remove(document, ec);
         std::filesystem::remove_all(soundDir, ec);
+    }
+
+    // --- acoustics ----------------------------------------------------------
+    // A wall between the listener and a sound. The config is authored on the
+    // MESH, undoes to nothing at all (an unflagged mesh leaves no entry),
+    // round-trips through the document like every sibling, and at Play turns
+    // the same audio session's positional sound into a ray-traced one.
+    {
+        newScene();
+        step(2);
+
+        auto wall = ObjectFactory::createPrimitive(Primitive::Box, document_.scene());
+        wall->name = "Wall";
+        wall->position.set(0.f, 1.f, 0.f);
+        wall->scale.set(8.f, 8.f, 0.2f);
+        const auto wallUuid = wall->uuid;
+        check(!AcousticSurfaceConfig::read(*wall).has_value(),
+              "a fresh mesh carries no acoustic entry");
+
+        addObject(wall, document_.scene(), "Add Wall");
+        step(2);
+
+        AcousticSurfaceConfig authored;
+        authored.enabled = true;
+        authored.transmission = 0.15f;
+        authored.absorption = 0.08f;
+
+        // The inspector's edit, verbatim.
+        {
+            auto* target = wall.get();
+            const auto before = AcousticSurfaceConfig::read(*wall).value_or(AcousticSurfaceConfig{});
+            commands_.execute(makeProperty<AcousticSurfaceConfig>(
+                    "Enable Acoustic Surface", "acoustics:" + wallUuid,
+                    [target](const AcousticSurfaceConfig& value) { value.write(*target); },
+                    before, authored));
+            step();
+        }
+        check(AcousticSurfaceConfig::read(*wall) == authored, "the edit writes the acoustic entry");
+
+        commands_.undo();
+        step();
+        check(!AcousticSurfaceConfig::read(*wall).has_value(),
+              "undo leaves the mesh with no entry at all, not a disabled one");
+        commands_.redo();
+        step();
+
+        const auto document = std::filesystem::temp_directory_path() / "threepp_editor_acoustics.json";
+        saveSceneAs(document);
+        openScene(document);
+        step();
+
+        auto* reloaded = findByUuid(document_.scene(), wallUuid);
+        check(reloaded != nullptr, "the wall survives save and reload");
+        check(reloaded && AcousticSurfaceConfig::read(*reloaded) == authored,
+              "and its acoustic surface round-trips through the document");
+
+        // Now put a sound behind it and press Play. The listener rides the
+        // perspective camera, so the three positions are what decide whether
+        // the wall is in the way.
+        const auto acousticDir = std::filesystem::temp_directory_path() / "threepp-editor-selftest-acoustics";
+        std::error_code ec2;
+        std::filesystem::create_directories(acousticDir, ec2);
+        const auto wav = acousticDir / "tone.wav";
+        const bool haveWav = writeTestWav(wav);
+
+        if (haveWav) {
+            auto source = ObjectFactory::createSound(document_.scene());
+            source->name = "Behind the wall";
+            source->position.set(0.f, 1.f, -6.f);
+            SoundConfig::setFile(*source, wav.generic_string());
+            const auto sourceUuid = source->uuid;
+            addObject(source, document_.scene(), "Add Sound");
+            step(2);
+
+            camera_.position.set(0.f, 1.f, 8.f);
+            orbit_->target.set(0.f, 1.f, 0.f);
+            step();
+
+            startPlay();
+            // Fixed steps: the assertion below is on a smoothed value, i.e. on
+            // how much SIMULATED time passed (tau is 60 ms).
+            stepFixed(30);
+            check(isPlaying(), "Play starts with an acoustic surface in the scene");
+#ifdef THREEPP_WITH_AUDIO
+            if (audio_ && audio_->listenerReady()) {
+                check(audio_->acousticsActive(), "the audio session brought up acoustics");
+                check(audio_->acousticSurfaceCount() == 1, "over the one flagged mesh");
+                // transmission 0.15 through a closed box is 0.15 of the energy,
+                // so the smoothed occlusion settles near 0.85.
+                check(audio_->occlusionOf(sourceUuid) > 0.5f,
+                      "and the wall muffles the sound behind it");
+            } else {
+                std::cout << "[selftest] SKIP no audio device - the acoustics play block "
+                             "did not run" << std::endl;
+            }
+#else
+            std::cout << "[selftest] SKIP built without audio - the acoustics play block "
+                         "did not run" << std::endl;
+#endif
+            stopPlay();
+            step(2);
+
+            // The other half of the contract: an unflagged scene must not build
+            // any of this, which is what keeps a document authored before
+            // acoustics existed playing exactly as it did.
+            if (auto* node = findByUuid(document_.scene(), wallUuid)) {
+                AcousticSurfaceConfig::erase(*node);
+            }
+            startPlay();
+            step(3);
+#ifdef THREEPP_WITH_AUDIO
+            check(audio_ && !audio_->acousticsActive(),
+                  "and a scene with no flagged mesh builds no acoustics at all");
+#endif
+            stopPlay();
+            step(2);
+        }
+
+        std::filesystem::remove(document, ec2);
+        std::filesystem::remove_all(acousticDir, ec2);
     }
 
     // --- joint authoring ----------------------------------------------------

@@ -1,13 +1,16 @@
 // Simple BVH implementation for threepp Geometries
 
-#ifndef THREEPPP_BVH_HPP
-#define THREEPPP_BVH_HPP
+#ifndef THREEPP_BVH_HPP
+#define THREEPP_BVH_HPP
 
 
+#include <limits>
 #include <memory>
+#include <optional>
 #include <vector>
 
 #include "threepp/math/Box3.hpp"
+#include "threepp/math/Ray.hpp"
 #include "threepp/math/Triangle.hpp"
 
 #include <threepp/math/Matrix4.hpp>
@@ -37,6 +40,13 @@ namespace threepp {
             Vector3 position;// Center of intersection region
         };
 
+        struct RayHit {
+            float distance;
+            int triangleIndex;
+            Vector3 point;
+            Vector3 normal;// geometric normal, flipped to face the ray origin
+        };
+
         explicit BVH(int maxTrianglesPerNode = 8, int maxSubdivisions = 10)
             : maxTrianglesPerNode(maxTrianglesPerNode), maxSubdivisions(maxSubdivisions) {}
 
@@ -52,6 +62,12 @@ namespace threepp {
 
         // Simple true/false intersection test with another BVH
         [[nodiscard]] static bool intersects(const BVH& b1, const BVH& b2, const Matrix4& m1 = Matrix4(), const Matrix4& m2 = Matrix4());
+
+        // Closest hit within maxDistance, or nullopt. The ray is in the BVH's local space.
+        [[nodiscard]] std::optional<RayHit> raycast(const Ray& ray, float maxDistance = std::numeric_limits<float>::infinity()) const;
+
+        // Early-out boolean occlusion query. The ray is in the BVH's local space.
+        [[nodiscard]] bool raycastAny(const Ray& ray, float maxDistance) const;
 
         void collectBoxes(std::vector<BVHBox3>& boxes) const;
 
@@ -90,4 +106,4 @@ namespace threepp {
 
 }// namespace threepp
 
-#endif//THREEPPP_BVH_HPP
+#endif//THREEPP_BVH_HPP

@@ -1,7 +1,7 @@
 
 #include "threepp/threepp.hpp"
 
-#include "bvh/BVH.hpp"
+#include "threepp/utils/BVH.hpp"
 
 #include <cmath>
 #include <iostream>

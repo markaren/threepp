@@ -20,6 +20,12 @@ namespace threepp {
 
         void setMasterVolume(float volume);
 
+        // Retunes the shared reverb bus every source sends to. `rt60` is the
+        // decay time in seconds, `wet` the bus output gain [0,1]. The bus is
+        // created on first use — see AcousticsSystem in
+        // threepp/audio/Acoustics.hpp for a probe that drives both.
+        void setReverb(float rt60, float wet);
+
         void updateMatrixWorld(bool force) override;
 
         ~AudioListener() override;
@@ -46,6 +52,11 @@ namespace threepp {
         void play();
 
         void setVolume(float volume);
+
+        // How much of this sound is copied onto the listener's reverb bus
+        // [0,1]. The dry signal keeps its own path to the endpoint, so this is
+        // a send, not a mix. Occluded sounds send their muffled selves.
+        void setReverbSend(float send);
 
         // Playback rate / pitch multiplier (1 = as recorded). Takes effect on
         // the next play(); re-rolling it per trigger keeps short one-shots
@@ -92,6 +103,11 @@ namespace threepp {
         void setRolloffFactor(float rolloff);
         // Selects the attenuation curve above.
         void setDistanceModel(DistanceModel model);
+
+        // 0 = unobstructed, 1 = fully occluded. Drives a low-pass filter and a
+        // gain dip on this sound. Call at most once per frame with a smoothed
+        // value — see AcousticsSystem in threepp/audio/Acoustics.hpp.
+        void setOcclusion(float occlusion);
 
         void updateMatrixWorld(bool force) override;
     };

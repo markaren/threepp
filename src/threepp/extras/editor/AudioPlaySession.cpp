@@ -1,9 +1,12 @@
 
 #include "threepp/extras/editor/AudioPlaySession.hpp"
 
+#include "threepp/extras/editor/AcousticSurfaceConfig.hpp"
 #include "threepp/extras/editor/SoundConfig.hpp"
 
+#include "threepp/audio/Acoustics.hpp"
 #include "threepp/audio/Audio.hpp"
+#include "threepp/objects/Mesh.hpp"
 #include "threepp/scenes/Scene.hpp"
 
 #include <algorithm>
@@ -70,7 +73,22 @@ void AudioPlaySession::start(Scene& scene) {
     };
     std::vector<Authored> authored;
 
+    // The acoustic geometry, gathered in the same walk. Only meshes: an
+    // AcousticScene entry is a BVH over a BufferGeometry.
+    struct Surface {
+        const Mesh* mesh;
+        AcousticSurface surface;
+    };
+    std::vector<Surface> surfaces;
+
     scene.traverse([&](Object3D& object) {
+        if (const auto* mesh = object.as<Mesh>()) {
+            const auto acoustic = AcousticSurfaceConfig::read(object);
+            if (acoustic && acoustic->enabled) {
+                surfaces.push_back({mesh, AcousticSurface{acoustic->transmission, acoustic->absorption}});
+            }
+        }
+
         const auto config = SoundConfig::read(object);
         if (!config) return;
 
@@ -147,9 +165,33 @@ void AudioPlaySession::start(Scene& scene) {
 
         entries_.push_back(std::move(entry));
     }
+
+    // Ray-traced acoustics, built only when both halves were authored: flagged
+    // geometry AND something spatialized to hear through it. Anything less and
+    // the session stays exactly what it was before acoustics existed — no BVH
+    // built, no per-frame casts.
+    const auto spatialCount = std::count_if(entries_.begin(), entries_.end(),
+                                            [](const Entry& entry) { return entry.spatial != nullptr; });
+
+    if (!surfaces.empty() && spatialCount > 0) {
+
+        acousticScene_ = std::make_unique<AcousticScene>();
+        for (const auto& item : surfaces) {
+            acousticScene_->add(*item.mesh, item.surface);
+        }
+        surfaceCount_ = surfaces.size();
+
+        acoustics_ = std::make_unique<AcousticsSystem>(*acousticScene_, *listener_);
+        for (auto& entry : entries_) {
+            if (entry.spatial) acoustics_->add(*entry.spatial);
+        }
+
+        log("acoustics: " + std::to_string(surfaces.size()) + " surface(s) occluding " +
+            std::to_string(spatialCount) + " positional sound(s)");
+    }
 }
 
-void AudioPlaySession::update(float) {
+void AudioPlaySession::update(float dt) {
 
     if (!listener_) return;
 
@@ -176,9 +218,18 @@ void AudioPlaySession::update(float) {
         const float gate = distanceGate(nodePos.distanceTo(listener_->position), entry.maxDistance);
         entry.sound->setVolume(entry.volume * gate);
     }
+
+    // After the gate, and it does not fight with it: occlusion is a separate
+    // factor inside the sound, so the authored volume this just wrote survives.
+    if (acoustics_) acoustics_->update(dt);
 }
 
 void AudioPlaySession::stop() {
+
+    // Acoustics first — it borrows the sounds and the meshes below.
+    acoustics_.reset();
+    acousticScene_.reset();
+    surfaceCount_ = 0;
 
     // Unlink before destroying: addRef leaves a raw pointer in the parent's
     // children list, so a sound freed while still parented strands it.
@@ -218,4 +269,24 @@ bool AudioPlaySession::isPlaying(const std::string& uuid) const {
         if (entry.uuid == uuid) return entry.sound && entry.sound->isPlaying();
     }
     return false;
+}
+
+bool AudioPlaySession::acousticsActive() const {
+
+    return acoustics_ != nullptr;
+}
+
+std::size_t AudioPlaySession::acousticSurfaceCount() const {
+
+    return surfaceCount_;
+}
+
+float AudioPlaySession::occlusionOf(const std::string& uuid) const {
+
+    if (!acoustics_) return 0.f;
+
+    for (const auto& entry : entries_) {
+        if (entry.uuid == uuid && entry.spatial) return acoustics_->occlusionOf(*entry.spatial);
+    }
+    return 0.f;
 }
