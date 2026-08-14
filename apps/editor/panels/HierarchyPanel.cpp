@@ -154,6 +154,11 @@ void EditorApp::drawHierarchyNode(Object3D& object) {
     if (scrollTo_ == &object) {
         ImGui::SetScrollHereY(0.5f);
         scrollTo_ = nullptr;
+    } else if (scrollTo_ && isDescendantOf(*scrollTo_, object)) {
+        // A reveal has to open the way down to the row it is revealing, or a
+        // collapsed ancestor quietly swallows the scroll (the walk never
+        // reaches the target and scrollTo_ stays armed).
+        ImGui::SetNextItemOpen(true);
     }
 
     bool open = false;
@@ -253,6 +258,15 @@ void EditorApp::drawHierarchyNode(Object3D& object) {
             }
             // Focus moves the camera, not the scene — it stays available.
             if (ImGui::MenuItem("Focus", "F")) focusSelected();
+            if (ImGui::MenuItem(object.visible ? "Hide" : "Show", nullptr, false, editable)) {
+                auto* target = &object;
+                const bool before = object.visible;
+                commands_.execute(makeProperty<bool>(
+                        before ? "Hide" : "Show", {},
+                        [target](const bool& value) { target->visible = value; },
+                        before, !before));
+                document_.setDirty(true);
+            }
             ImGui::Separator();
             if (ImGui::MenuItem("Delete", "Del", false, editable)) {
                 deferred_ = [this] { deleteSelected(); };

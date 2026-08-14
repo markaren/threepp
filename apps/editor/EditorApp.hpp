@@ -217,6 +217,10 @@ namespace threepp::editor {
         void drawHierarchyNode(Object3D& object);
         void drawAddMenu(Object3D& parent);
 
+        // Right-click in the viewport: object actions on whatever was picked,
+        // or the Add menu when the click landed on empty space.
+        void drawViewportContextMenu();
+
         // Inspector sections
         void drawObjectSection(Object3D& object);
         void drawTransformSection(Object3D& object);
@@ -737,7 +741,10 @@ namespace threepp::editor {
         // draws the picker via preview_. On Vulkan the pixels are already there
         // (see syncCameraDockPane) and this only fills preview_ in.
         void renderCameraPreview();
-        void pickAt(float mouseX, float mouseY);
+        // Selects what the ray under (mouseX, mouseY) hits and returns it, or
+        // nullptr on a miss. A miss deselects unless deselectOnMiss is false —
+        // the context menu keeps the selection and shows the Add menu instead.
+        Object3D* pickAt(float mouseX, float mouseY, bool deselectOnMiss = true);
         [[nodiscard]] Object3D* resolveSelectable(Object3D* hit) const;
 
         // --- viewport camera -------------------------------------------------
@@ -1610,6 +1617,11 @@ namespace threepp::editor {
         VulkanViewPane dockPane_;
         // Object3D* the hierarchy wants to scroll into view next frame.
         Object3D* scrollTo_ = nullptr;
+        // What the viewport context menu was opened on (nullptr = empty space).
+        // Checked against the selection every frame the popup is up: anything
+        // that re-points the selection (a delete, Play swapping the graph)
+        // closes the menu rather than acting through a stale pointer.
+        Object3D* viewportCtx_ = nullptr;
         // Structural edits requested from inside a tree walk (delete, reparent,
         // add) run here, after the walk, so nothing mutates the children vector
         // we are iterating.

@@ -1131,6 +1131,8 @@ void EditorApp::drawUi() {
         ImGui::EndPopup();
     }
 
+    drawViewportContextMenu();
+
     handleShortcuts();
 
     // After every panel has drawn, so the texture slot rows a drop may have
@@ -1158,6 +1160,20 @@ void EditorApp::drawUi() {
         const auto drag = ImGui::GetMouseDragDelta(ImGuiMouseButton_Left, 0.f);
         if (std::abs(drag.x) < 3.f * contentScale_ && std::abs(drag.y) < 3.f * contentScale_) {
             pickAt(io.MousePos.x, io.MousePos.y);
+        }
+    }
+
+    // Same gate for the right button, where the drag threshold separates a
+    // context click from the end of an orbit pan. A hit selects (so the menu,
+    // the outline and the inspector all agree on the subject); a miss keeps
+    // the selection and opens the menu for the empty space under the cursor.
+    if (!io.WantCaptureMouse && !fileBrowser_.isOpen() && !radiusDragOwnsMouse &&
+        !viewGizmoHovered_ && !toolPaletteHovered_ &&
+        ImGui::IsMouseReleased(ImGuiMouseButton_Right) && !gizmo_->isDragging()) {
+        const auto drag = ImGui::GetMouseDragDelta(ImGuiMouseButton_Right, 0.f);
+        if (std::abs(drag.x) < 3.f * contentScale_ && std::abs(drag.y) < 3.f * contentScale_) {
+            viewportCtx_ = pickAt(io.MousePos.x, io.MousePos.y, /*deselectOnMiss=*/false);
+            ImGui::OpenPopup("##viewportCtx");
         }
     }
 }
@@ -3375,12 +3391,12 @@ Object3D* EditorApp::resolveSelectable(Object3D* hit) const {
     return top;
 }
 
-void EditorApp::pickAt(float mouseX, float mouseY) {
+Object3D* EditorApp::pickAt(float mouseX, float mouseY, bool deselectOnMiss) {
 
     const auto* viewport = ImGui::GetMainViewport();
     const float width = viewport->Size.x;
     const float height = viewport->Size.y;
-    if (width <= 0.f || height <= 0.f) return;
+    if (width <= 0.f || height <= 0.f) return nullptr;
 
     const Vector2 ndc{
             ((mouseX - viewport->Pos.x) / width) * 2.f - 1.f,
@@ -3400,7 +3416,10 @@ void EditorApp::pickAt(float mouseX, float mouseY) {
             if (!hit.object) continue;
             if (auto* owner = markerOwnerOf(hit.object)) {
                 selectObject(owner);
-                return;
+                // Picking is the one selection route where the object was found
+                // by pointing at it, not at its row — bring the row to it.
+                scrollTo_ = owner;
+                return owner;
             }
         }
     }
@@ -3416,10 +3435,75 @@ void EditorApp::pickAt(float mouseX, float mouseY) {
         std::optional<int> instance;
         if (selectable == hit.object && hit.object->is<InstancedMesh>()) instance = hit.instanceId;
         selectObject(selectable, instance);
+        scrollTo_ = selectable;
+        return selectable;
+    }
+
+    if (deselectOnMiss) selectObject(nullptr);
+    return nullptr;
+}
+
+void EditorApp::drawViewportContextMenu() {
+
+    if (!ImGui::BeginPopup("##viewportCtx")) return;
+
+    // The stored pointer is only trusted while it is still THE selection:
+    // whoever removes an object re-points the selection first (see Selection),
+    // so a mismatch means the world changed under the open menu.
+    if (viewportCtx_ && selection_.get() != viewportCtx_) {
+        ImGui::CloseCurrentPopup();
+        ImGui::EndPopup();
         return;
     }
 
-    selectObject(nullptr);
+    const bool editable = !isPlaying();
+
+    if (auto* object = viewportCtx_) {
+        // The same actions as the hierarchy row's menu, on the same subject —
+        // two menus that disagree about what can be done to an object would
+        // read as two different editors.
+        if (ImGui::BeginMenu("Add", editable)) {
+            drawAddMenu(*object);
+            ImGui::EndMenu();
+        }
+        ImGui::Separator();
+        // The rename edit box lives in the hierarchy row; scrollTo_ makes sure
+        // that row is on screen when it appears.
+        if (ImGui::MenuItem("Rename", nullptr, false, editable)) {
+            renaming_ = object;
+            renameBuffer_ = object->name;
+            scrollTo_ = object;
+        }
+        if (ImGui::MenuItem("Copy Name", nullptr, false, !object->name.empty())) {
+            ImGui::SetClipboardText(object->name.c_str());
+        }
+        if (ImGui::MenuItem("Duplicate", "Ctrl+D", false, editable)) {
+            deferred_ = [this] { duplicateSelected(); };
+        }
+        if (ImGui::MenuItem("Focus", "F")) focusSelected();
+        if (ImGui::MenuItem(object->visible ? "Hide" : "Show", nullptr, false, editable)) {
+            auto* target = object;
+            const bool before = object->visible;
+            commands_.execute(makeProperty<bool>(
+                    before ? "Hide" : "Show", {},
+                    [target](const bool& value) { target->visible = value; },
+                    before, !before));
+            document_.setDirty(true);
+        }
+        ImGui::Separator();
+        if (ImGui::MenuItem("Delete", "Del", false, editable)) {
+            deferred_ = [this] { deleteSelected(); };
+        }
+    } else {
+        // Empty space: the click has nothing to act on, so the menu is about
+        // what could be here instead.
+        if (ImGui::BeginMenu("Add", editable)) {
+            drawAddMenu(document_.scene());
+            ImGui::EndMenu();
+        }
+    }
+
+    ImGui::EndPopup();
 }
 
 
