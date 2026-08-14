@@ -94,6 +94,7 @@ bool EditorSettings::load(const std::filesystem::path& path) {
     if (!j.is_object()) return false;
 
     sceneDir = getString(j, "sceneDir");
+    prefabDir = getString(j, "prefabDir");
     modelDir = getString(j, "modelDir");
     textureDir = getString(j, "textureDir");
     environmentDir = getString(j, "environmentDir");
@@ -141,6 +142,7 @@ bool EditorSettings::save(const std::filesystem::path& path) const {
 
     nlohmann::json j;
     j["sceneDir"] = sceneDir;
+    j["prefabDir"] = prefabDir;
     j["modelDir"] = modelDir;
     j["textureDir"] = textureDir;
     j["environmentDir"] = environmentDir;

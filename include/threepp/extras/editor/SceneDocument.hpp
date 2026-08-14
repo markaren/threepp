@@ -69,6 +69,15 @@ namespace threepp::editor {
         bool save(std::string* error = nullptr);
         bool saveAs(const std::filesystem::path& path, std::string* error = nullptr);
 
+        // Write `object` and everything under it as a document of its own — the
+        // editor's "save as prefab". Same exporter, same storage options, and
+        // the same editor-only detach, which is why it lives here: a grid or a
+        // gizmo must not reach a file, and there is one place that is enforced.
+        //
+        // What it is NOT is a save of the document you have open, so path_ and
+        // the dirty flag are deliberately untouched.
+        bool exportSubtree(Object3D& object, const std::filesystem::path& path, std::string* error = nullptr);
+
         // How much of the scene the file carries itself. The default embeds
         // everything, which is what a document you might hand to someone else
         // wants; referencing trades that for files that save and open in a

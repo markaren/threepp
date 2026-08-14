@@ -4883,6 +4883,126 @@ int EditorApp::runSelfTest() {
         step(2);
     }
 
+    // --- prefabs: a subtree saved as a document, and brought back -------------
+    // The whole feature rests on one non-obvious thing: a loaded prefab must be
+    // given fresh uuids. ObjectLoader adopts what it reads and ObjectExporter
+    // dedupes by uuid, so without that step two instances of the same file are
+    // one set of materials as far as the NEXT save is concerned — and the trap
+    // only springs on reload, which is why the third block below exists.
+    {
+        newScene();
+        step(2);
+
+        const auto prefabPath = std::filesystem::temp_directory_path() / "threepp_editor_prefab.json";
+        const auto reloadPath = std::filesystem::temp_directory_path() / "threepp_editor_prefab_scene.json";
+        std::error_code ec;
+        std::filesystem::remove(prefabPath, ec);
+        std::filesystem::remove(reloadPath, ec);
+
+        auto source = Group::create();
+        source->name = "PrefabSource";
+        auto sourceMaterial = MeshStandardMaterial::create(
+                MeshStandardMaterial::Params{}.color(0x3366cc));
+        sourceMaterial->name = "PrefabPaint";
+        auto sourceMesh = Mesh::create(BoxGeometry::create(1, 1, 1), sourceMaterial);
+        sourceMesh->name = "PrefabBody";
+        source->add(sourceMesh);
+        auto sourceTip = Group::create();
+        sourceTip->name = "PrefabTip";
+        sourceTip->position.y = 1.f;
+        source->add(sourceTip);
+
+        addObject(source, document_.scene(), "Add PrefabSource");
+        step();
+
+        const auto sourceUuid = source->uuid;
+        const auto sourceMeshUuid = sourceMesh->uuid;
+
+        savePrefab(*source, prefabPath);
+        step();
+        check(std::filesystem::exists(prefabPath, ec) && std::filesystem::file_size(prefabPath, ec) > 0,
+              "a subtree saves as a document of its own");
+
+        addPrefab(prefabPath, document_.scene());
+        step();
+        auto* first = selection_.get();
+        check(first != nullptr && first != source.get(), "loading it back adds a second subtree");
+        if (!first) {
+            check(false, "prefab instantiation produced a root");
+        } else {
+            check(first->children.size() == 2, "with the children it was saved with");
+            check(first->getObjectByName("PrefabBody") != nullptr &&
+                          first->getObjectByName("PrefabTip") != nullptr,
+                  "under the names it was saved with");
+            auto* firstMesh = first->getObjectByName("PrefabBody");
+            check(first->uuid != sourceUuid, "the instance is not the subtree it came from");
+            check(firstMesh && firstMesh->uuid != sourceMeshUuid,
+                  "and neither is anything under it");
+
+            // Second instantiation of the SAME file. Two objects that came from
+            // one document have to be two objects.
+            addPrefab(prefabPath, document_.scene());
+            step();
+            auto* second = selection_.get();
+            check(second != nullptr && second != first, "the same file instantiates twice");
+            auto* secondMesh = second ? second->getObjectByName("PrefabBody") : nullptr;
+            if (second) {
+                check(first->name != second->name, "each instance gets its own name");
+                check(first->uuid != second->uuid, "and its own identity");
+            }
+            Material* firstPaint = nullptr;
+            Material* secondPaint = nullptr;
+            if (auto* m = firstMesh ? firstMesh->as<Mesh>() : nullptr) firstPaint = m->material().get();
+            if (auto* m = secondMesh ? secondMesh->as<Mesh>() : nullptr) secondPaint = m->material().get();
+            check(firstPaint != nullptr && secondPaint != nullptr && firstPaint != secondPaint,
+                  "and its own material object");
+            check(firstPaint && secondPaint && firstPaint->uuid() != secondPaint->uuid(),
+                  "with an identity the exporter will not merge");
+
+            // The regression the uuid regeneration exists for. Save the scene
+            // holding both instances, read it back with the plain loader, and
+            // recolour one: shared uuids would have collapsed the two material
+            // entries into one on the way out, and the other instance would
+            // change colour with it.
+            const auto firstName = first->name;
+            const auto secondName = second ? second->name : std::string{};
+            saveSceneAs(reloadPath);
+            step();
+
+            ObjectLoader reloader;
+            auto reloaded = reloader.load(reloadPath);
+            check(reloaded != nullptr, "a scene holding two instances reloads");
+            auto* reloadedFirst = reloaded ? reloaded->getObjectByName(firstName) : nullptr;
+            auto* reloadedSecond = reloaded && !secondName.empty()
+                                           ? reloaded->getObjectByName(secondName)
+                                           : nullptr;
+            // Each search starts at the instance, so the two "PrefabBody"
+            // children cannot be confused for each other.
+            auto* reloadedFirstMesh = reloadedFirst ? reloadedFirst->getObjectByName("PrefabBody") : nullptr;
+            auto* reloadedSecondMesh = reloadedSecond ? reloadedSecond->getObjectByName("PrefabBody") : nullptr;
+            auto* a = reloadedFirstMesh ? reloadedFirstMesh->as<Mesh>() : nullptr;
+            auto* b = reloadedSecondMesh ? reloadedSecondMesh->as<Mesh>() : nullptr;
+            check(a != nullptr && b != nullptr && a->material() != b->material(),
+                  "and each instance still owns its material after the round trip");
+
+            auto* colourA = a ? dynamic_cast<MaterialWithColor*>(a->material().get()) : nullptr;
+            auto* colourB = b ? dynamic_cast<MaterialWithColor*>(b->material().get()) : nullptr;
+            if (colourA && colourB) {
+                const Color before = colourB->color;
+                colourA->color = Color(0xff0000);
+                check(colourB->color.equals(before),
+                      "so recolouring one instance leaves the other alone");
+            } else {
+                check(false, "reloaded prefab instances expose a colour to drive");
+            }
+        }
+
+        std::filesystem::remove(prefabPath, ec);
+        std::filesystem::remove(reloadPath, ec);
+        newScene();
+        step(2);
+    }
+
     // --- The look rides with the document -------------------------------------
     // What the Renderer Settings panel writes to is the renderer itself, so this
     // drives the renderer directly and then goes through Save / New / Open — the
@@ -6810,7 +6930,7 @@ int EditorApp::runSelfTest() {
             // shadow map doing its job, not a failure.
             std::cout << "[probe] shadow persp: lit " << perspLit << " shadow " << perspShadow
                       << " size " << size.width() << "x" << size.height() << std::endl;
-            shootTo("C:/dev/threepp/probe_shadow.png");
+            shootTo(std::filesystem::temp_directory_path() / "threepp_editor_shadow_probe.png");
             check(perspLit >= 0.0 && perspShadow >= 0.0 && perspLit - perspShadow > 12.0,
                   "the sun casts a visible shadow in the perspective view");
 

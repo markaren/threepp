@@ -164,6 +164,37 @@ bool SceneDocument::saveAs(const std::filesystem::path& path, std::string* error
     return true;
 }
 
+bool SceneDocument::exportSubtree(Object3D& object, const std::filesystem::path& path, std::string* error) {
+
+    warnings_.clear();
+
+    // The subtree is usually nowhere near the overlays, but "usually" is not an
+    // invariant: a helper registered under a scene object would ride along into
+    // the prefab. Detached for exactly the reason saveAs() detaches them.
+    detachEditorOnly();
+    ExportScope scope([this] { attachEditorOnly(); });
+
+    ObjectExporter exporter;
+    ObjectExporterOptions options;
+    options.images = imageStorage_;
+    options.models = modelStorage_;
+    // Auto, so a prefab named ".tpz" is an archive on the same terms a document
+    // is — a prefab IS a document, and nothing here gets to decide otherwise.
+    options.format = DocumentFormat::Auto;
+    options.prettyPrint = true;
+
+    try {
+        exporter.save(object, path, options);
+    } catch (const std::exception& e) {
+        if (error) *error = e.what();
+        warnings_ = exporter.warnings();
+        return false;
+    }
+
+    warnings_ = exporter.warnings();
+    return true;
+}
+
 std::string SceneDocument::toJson(bool prettyPrint, std::string* error) {
 
     warnings_.clear();

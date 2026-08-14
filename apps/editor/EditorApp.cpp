@@ -65,6 +65,7 @@
 #include "threepp/materials/interfaces.hpp"
 #include "threepp/math/Box3.hpp"
 #include "threepp/math/MathUtils.hpp"
+#include "threepp/objects/Group.hpp"
 #include "threepp/objects/LineSegments.hpp"
 #include "threepp/objects/Mesh.hpp"
 #include "threepp/objects/ObjectWithMaterials.hpp"
@@ -88,6 +89,7 @@
 #include <iomanip>
 #include <iostream>
 #include <sstream>
+#include <unordered_set>
 
 // GLFW's window-title setter. Declared rather than included: the GLFW headers
 // are private to the threepp target, but the symbol is linked into it and the
@@ -1058,6 +1060,27 @@ void EditorApp::drawUi() {
                 }
                 soundTargetUuid_.clear();
                 break;
+            case PendingDialog::SavePrefab:
+                settings_.prefabDir = fileBrowser_.directory().string();
+                if (auto* source = findByUuid(document_.scene(), prefabSourceUuid_)) {
+                    savePrefab(*source, path);
+                } else {
+                    log("prefab not saved - the object is no longer in the scene");
+                }
+                prefabSourceUuid_.clear();
+                break;
+            case PendingDialog::AddPrefab: {
+                settings_.prefabDir = fileBrowser_.directory().string();
+                // No target, or one that has gone away since the dialog opened:
+                // the scene root, which is where a prefab with nowhere else to
+                // go belongs — better than dropping it on the floor.
+                auto* parent = prefabTargetUuid_.empty()
+                                       ? nullptr
+                                       : findByUuid(document_.scene(), prefabTargetUuid_);
+                addPrefab(path, parent ? *parent : static_cast<Object3D&>(document_.scene()));
+                prefabTargetUuid_.clear();
+                break;
+            }
             case PendingDialog::RecordDir:
 #ifdef THREEPP_EDITOR_WITH_PHYSX
                 // The dialog picks a FILE (it has no directory mode); what the
@@ -2719,6 +2742,152 @@ void EditorApp::duplicateSelected() {
     addObject(copy, *selected->parent, "Duplicate " + copy->name);
 }
 
+
+// ------------------------------------------------------------------- prefabs
+
+namespace {
+
+    // The Save box's default name is the object's, and object names are free
+    // text: a mesh called "Wheel / FL" would otherwise arrive there as a path.
+    std::string prefabFileName(const Object3D& object) {
+
+        const auto& name = object.name.empty() ? object.type() : object.name;
+
+        std::string out;
+        out.reserve(name.size());
+        for (const unsigned char c : name) {
+            out.push_back(c < 0x20 || std::strchr("<>:\"/\\|?*", c) ? '_' : static_cast<char>(c));
+        }
+        // Windows also refuses a name ending in a dot or a space.
+        while (!out.empty() && (out.back() == '.' || out.back() == ' ')) out.pop_back();
+        if (out.empty()) out = "prefab";
+
+        return out + ".json";
+    }
+
+    // Fresh identity for a just-loaded prefab, and the reason the feature works
+    // at all when the same file is instantiated twice.
+    //
+    // ObjectLoader adopts serialized uuids verbatim and ObjectExporter dedupes
+    // by uuid. Two instances of one prefab therefore look like the same objects
+    // to the NEXT save of the scene: one material entry would be written for
+    // both, and reopening would hand both instances the same Material — where
+    // recolouring one recolours the other. That is precisely the trap
+    // duplicateSelected() clones materials to avoid, arriving by another road.
+    //
+    // GEOMETRY and TEXTURES deliberately keep their uuids, so the exporter's
+    // dedupe still merges identical vertex and pixel data across instances.
+    // That is the same sharing trade Duplicate already makes, and it is what
+    // keeps a scene full of one prefab from being a scene full of copies of its
+    // mesh data.
+    void reidentifyPrefab(Object3D& root) {
+
+        // One Material can sit on several meshes in the subtree; each DISTINCT
+        // one gets a new identity once, not once per mesh that holds it.
+        std::unordered_set<Material*> seen;
+
+        root.traverse([&seen](Object3D& object) {
+            object.uuid = math::generateUUID();
+
+            auto* withMaterials = dynamic_cast<ObjectWithMaterials*>(&object);
+            if (!withMaterials) return;
+            for (const auto& material : withMaterials->materials()) {
+                if (material && seen.insert(material.get()).second) {
+                    material->setUuid(math::generateUUID());
+                }
+            }
+        });
+    }
+
+}// namespace
+
+std::string EditorApp::prefabStartDir() const {
+
+    return settings_.prefabDir.empty() ? settings_.sceneDir : settings_.prefabDir;
+}
+
+void EditorApp::beginSavePrefab(Object3D& object) {
+
+    // The scene root is the document; saving it as a prefab is File ▸ Save As.
+    if (&object == &document_.scene() || document_.isEditorOnly(object)) return;
+
+    // By uuid, like every other dialog that spans frames: a Play/Stop in
+    // between replaces the whole graph and the pointer with it.
+    prefabSourceUuid_ = object.uuid;
+    pendingDialog_ = PendingDialog::SavePrefab;
+    fileBrowser_.open("Save as Prefab", FileBrowser::Mode::Save,
+                      prefabStartDir(), formats::scenes(), prefabFileName(object));
+}
+
+void EditorApp::savePrefab(Object3D& object, const std::filesystem::path& path) {
+
+    std::string error;
+    if (!document_.exportSubtree(object, path, &error)) {
+        log("prefab save failed: " + error);
+        return;
+    }
+    logWarnings();
+    log("saved prefab " + path.filename().string());
+}
+
+void EditorApp::beginAddPrefab(Object3D& parent) {
+
+    prefabTargetUuid_ = &parent == &document_.scene() ? std::string{} : parent.uuid;
+    pendingDialog_ = PendingDialog::AddPrefab;
+    fileBrowser_.open("Add Prefab", FileBrowser::Mode::Open,
+                      prefabStartDir(), formats::scenes());
+}
+
+void EditorApp::addPrefab(const std::filesystem::path& path, Object3D& parent) {
+
+    // addObject refuses too, but a parse only to throw the result away is worth
+    // skipping — and the console line then names the real reason.
+    if (rejectWhilePlaying("Add Prefab")) return;
+
+    ObjectLoader loader;
+    std::shared_ptr<Object3D> root;
+    std::string error;
+    try {
+        root = loader.load(path);
+    } catch (const std::exception& e) {
+        error = e.what();
+    }
+    if (!root) {
+        if (error.empty()) error = "not a scene document";
+        log("prefab failed: " + path.filename().string() + " - " + error);
+        importError_ = path.filename().string() + "\n\n" + error;
+        return;
+    }
+    for (const auto& warning : loader.warnings()) log("warning: " + warning);
+
+    const auto stem = path.stem().string();
+
+    // Somebody picked a whole scene, which is a perfectly good prefab — it is
+    // the same document — except that a Scene cannot be a child of one. Its
+    // content goes into a Group instead, so any saved scene can be dropped into
+    // another one.
+    if (auto scene = std::dynamic_pointer_cast<Scene>(root)) {
+        auto group = Group::create();
+        group->name = stem;
+        // Copied first: removeFromParent() edits the vector being walked, and
+        // the returned handle is what keeps each child alive across the move.
+        const auto children = scene->children;
+        for (auto* child : children) {
+            if (auto kept = child->removeFromParent()) group->add(kept);
+        }
+        root = group;
+    }
+
+    reidentifyPrefab(*root);
+
+    // A prefab whose root was never named answers to the file it came from.
+    if (root->name.empty()) root->name = stem;
+    root->name = ObjectFactory::uniqueName(document_.scene(), root->name);
+
+    addObject(root, parent, "Add Prefab " + root->name);
+    log("added prefab " + path.filename().string());
+}
+
 void EditorApp::focusSelected() {
 
     auto* selected = selection_.get();
@@ -3476,6 +3645,9 @@ void EditorApp::drawViewportContextMenu() {
         }
         if (ImGui::MenuItem("Copy Name", nullptr, false, !object->name.empty())) {
             ImGui::SetClipboardText(object->name.c_str());
+        }
+        if (ImGui::MenuItem("Save as Prefab...", nullptr, false, editable)) {
+            beginSavePrefab(*object);
         }
         if (ImGui::MenuItem("Duplicate", "Ctrl+D", false, editable)) {
             deferred_ = [this] { duplicateSelected(); };

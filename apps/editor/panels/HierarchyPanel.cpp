@@ -129,6 +129,15 @@ void EditorApp::drawAddMenu(Object3D& parent) {
                       "Add Granular Particles");
         };
     }
+
+    // Below the separator because everything above builds something from
+    // nothing and this one brings a saved subtree back. No `deferred_`: opening
+    // a dialog is not a structural edit, so it is safe inside the tree walk this
+    // menu is drawn from, and the instantiation happens frames later anyway.
+    ImGui::Separator();
+    if (ImGui::MenuItem("Prefab...")) {
+        beginAddPrefab(*target);
+    }
 }
 
 void EditorApp::drawHierarchyNode(Object3D& object) {
@@ -252,6 +261,11 @@ void EditorApp::drawHierarchyNode(Object3D& object) {
             // and retyping "Wheel_FL_mesh_003" by eye is how typos get in.
             if (ImGui::MenuItem("Copy Name", nullptr, false, !object.name.empty())) {
                 ImGui::SetClipboardText(object.name.c_str());
+            }
+            // Next to Duplicate on purpose: both answer "I want this again",
+            // one inside this document and one in every other.
+            if (ImGui::MenuItem("Save as Prefab...", nullptr, false, editable)) {
+                beginSavePrefab(object);
             }
             if (ImGui::MenuItem("Duplicate", "Ctrl+D", false, editable)) {
                 deferred_ = [this] { duplicateSelected(); };

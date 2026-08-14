@@ -570,6 +570,26 @@ namespace threepp::editor {
         void addConveyorWallPoint(Object3D& wall, std::size_t index, const std::string& label);
         void deleteSelected();
         void duplicateSelected();
+
+        // --- prefabs ---------------------------------------------------------
+        // A prefab is an ordinary scene document whose root happens to be a
+        // saved subtree. No second format, no registry: every scene the editor
+        // writes already doubles as one, and ObjectExporter writes exactly the
+        // geometries, materials and textures the subtree references.
+        //
+        // The begin* pair only opens the dialog; the work happens when it
+        // confirms, frames later, against whatever is in the scene by then.
+        void beginSavePrefab(Object3D& object);
+        void savePrefab(Object3D& object, const std::filesystem::path& path);
+        void beginAddPrefab(Object3D& parent);
+        // Loads `path`, gives the subtree fresh identity and adds it under
+        // `parent` through addObject — so undo, selection and the play gate are
+        // the ones every other Add gets.
+        void addPrefab(const std::filesystem::path& path, Object3D& parent);
+        // Where a prefab dialog opens: the prefab library once one has been
+        // used, and the scene directory until then.
+        [[nodiscard]] std::string prefabStartDir() const;
+
         void focusSelected();
         void reparent(Object3D& object, Object3D& newParent);
         // Undo/redo as editor operations rather than raw stack calls: they are
@@ -1323,6 +1343,11 @@ namespace threepp::editor {
             Texture,
             Script,
             Sound,
+            // A subtree on its way out to a document of its own, and one on its
+            // way back in. Both carry their subject as a uuid below, because
+            // either dialog can outlive the object it was opened for.
+            SavePrefab,
+            AddPrefab,
             // Where sensor recordings go. The browser has no directory mode, so
             // this is a Save dialog whose PARENT directory is what gets used —
             // the file name the user types is ignored (one CSV per sensor, named
@@ -1337,6 +1362,12 @@ namespace threepp::editor {
         std::string scriptTargetUuid_;
         // Same contract, for the Sound section's "Load..." button.
         std::string soundTargetUuid_;
+        // Which subtree "Save as Prefab..." is writing out.
+        std::string prefabSourceUuid_;
+        // Where an instantiated prefab will be parented. EMPTY means the scene
+        // root — not the scene's own uuid, because Play/Stop replaces the whole
+        // scene object and the root of the moment is the one that is meant.
+        std::string prefabTargetUuid_;
 
         // Which material slot an inspector "Load..." button is filling. This
         // cannot be the raw TextureSlotTarget the drop path below uses: that one

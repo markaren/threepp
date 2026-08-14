@@ -37,8 +37,11 @@ namespace threepp::editor {
         void addRecentFile(const std::filesystem::path& path);
         void clearRecentFiles() { recentFiles_.clear(); }
 
-        // Where the file browser starts for each kind of file.
+        // Where the file browser starts for each kind of file. `prefabDir` is
+        // its own entry rather than a reuse of sceneDir because a prefab library
+        // is somewhere else than the scene you are building with it.
         std::string sceneDir;
+        std::string prefabDir;
         std::string modelDir;
         std::string textureDir;
         std::string environmentDir;

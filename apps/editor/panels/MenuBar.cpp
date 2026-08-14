@@ -84,6 +84,19 @@ void EditorApp::drawMenuBar() {
                                                       : std::string("scene.json"));
             }
 
+            // A prefab is written by the same exporter into the same format —
+            // the only difference is which node is the root — so it belongs
+            // beside Save As rather than in a category of its own. The scene
+            // root is excluded because saving THAT is Save As.
+            {
+                auto* selected = selection_.get();
+                const bool subtree = selected != nullptr && selected != &document_.scene();
+                if (ImGui::MenuItem("Save Selection as Prefab...", nullptr, false,
+                                    editable && subtree)) {
+                    beginSavePrefab(*selected);
+                }
+            }
+
             // What Save actually writes. Embedding is the safe default — one
             // file you can hand to anyone — but on a scene with real imported
             // models it is also the reason saving and opening take as long as
