@@ -11,6 +11,7 @@
 #include "threepp/extras/editor/SoundConfig.hpp"
 #include "threepp/extras/editor/GeneratorConfig.hpp"
 #include "threepp/extras/editor/MaterialTextureSlots.hpp"
+#include "threepp/extras/editor/FlockPlaySession.hpp"
 #include "threepp/extras/editor/ParticleFieldPlaySession.hpp"
 #include "threepp/extras/editor/RobotConfig.hpp"
 #include "threepp/extras/editor/ScriptConfig.hpp"
@@ -697,6 +698,18 @@ EditorApp::EditorApp(const Options& options)
 #endif
 
     play_.addSession(std::make_shared<AnimationPlaySession>());
+    // Ambient flocks. Dependency-free (no PhysX, no renderer coupling) and
+    // stateless between plays. The mesh filter is NOT optional here: the
+    // editor scene carries overlay meshes (gizmo handles, light markers,
+    // waypoint pucks) in the same graph the perch bake traverses, and a
+    // marker hovering at altitude reads as the highest surface in its column
+    // — the whole flock then climbs to a phantom floor.
+    {
+        auto flockSession = std::make_shared<FlockPlaySession>();
+        flockSession->setMeshFilter(
+                [this](const Mesh& mesh) { return !document_.isEditorOnly(mesh); });
+        play_.addSession(flockSession);
+    }
 #ifdef THREEPP_WITH_AUDIO
     // Sounds. Kept as a member for the status readout and the selftest. Its
     // listener rides the perspective viewport camera, which is the closest

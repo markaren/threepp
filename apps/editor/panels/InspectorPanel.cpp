@@ -9,6 +9,7 @@
 #include "threepp/extras/editor/AnimationConfig.hpp"
 #include "threepp/extras/editor/ArticulationConfig.hpp"
 #include "threepp/extras/editor/ConveyorConfig.hpp"
+#include "threepp/extras/editor/FlockConfig.hpp"
 #include "threepp/extras/editor/GeneratorConfig.hpp"
 #include "threepp/extras/editor/GranularConfig.hpp"
 #include "threepp/extras/editor/JointConfig.hpp"
@@ -280,6 +281,7 @@ void EditorApp::drawInspector() {
         drawAcousticsSection(*selected);
         drawTextSection(*selected);
         drawTreeSection(*selected);
+        drawFlockSection(*selected);
         drawScriptSection(*selected);
         drawPhysicsSection(*selected);
         drawVehicleSection(*selected);
@@ -4068,6 +4070,57 @@ void EditorApp::drawGranularSection(Object3D& object) {
     ImGui::TextColored(theme::muted(), "The node's transform IS the chute frame; -Y pours down.");
     ImGui::TextColored(theme::muted(), "Grains are a PhysX PBD sim - they exist only while playing.");
     ImGui::TextColored(theme::muted(), "Stored in userData[\"granular\"]");
+
+    ImGui::TreePop();
+}
+
+
+// -------------------------------------------------------------------- flock
+
+void EditorApp::drawFlockSection(Object3D& object) {
+
+    if (!FlockConfig::isFlock(object)) return;
+    if (!section("Flock")) return;
+
+    using Config = FlockConfig;
+
+    ConfigFields<Config> fields(commands_, object, Config::read(object).value_or(Config{}),
+                                "flock:" + object.uuid, "Flock",
+                                [this] { document_.setDirty(true); });
+
+    ImGui::PushItemWidth(-130 * contentScale_);
+
+    ImGui::SeparatorText("Population");
+    fields.dragInt("Seed", &Config::seed, 1.f, 0, 999999);
+    // 18 reads as "a place where birds live"; 200 reads as "a bird
+    // simulation" — the config header carries the full warning.
+    fields.dragInt("Birds", &Config::birdCount, 0.25f, 0, 256);
+    fields.dragFloat("Body Mass (kg)", &Config::massKg, 0.001f, 0.01f, 1.f, "%.3f");
+
+    ImGui::SeparatorText("Territory");
+    fields.dragFloat("Roam Radius", &Config::roamRadius, 0.25f, 4.f, 500.f);
+    fields.dragFloat("Cruise Altitude", &Config::cruiseAltitude, 0.1f, 1.f, 200.f);
+    // The band the helper draws: each bird prefers ground + altitude ×
+    // (1 ± spread). 0 flies a plane — a formation, not a flock.
+    fields.dragFloat("Altitude Spread", &Config::altitudeSpread, 0.005f, 0.f, 1.f);
+    fields.dragFloat("Cruise Speed", &Config::cruiseSpeed, 0.05f, 1.f, 40.f);
+
+    ImGui::SeparatorText("Perching");
+    fields.check("Perching", &Config::perching, "Enable Flock Perching",
+                 "Disable Flock Perching");
+    fields.dragFloat("Max Perched", &Config::maxPerchedFraction, 0.01f, 0.f, 1.f);
+
+    ImGui::SeparatorText("Look");
+    fields.check("Cast Shadow", &Config::castShadow, "Enable Flock Shadows",
+                 "Disable Flock Shadows");
+    fields.dragFloat("Wind X", &Config::windX, 0.01f, -10.f, 10.f);
+    fields.dragFloat("Wind Z", &Config::windZ, 0.01f, -10.f, 10.f);
+
+    ImGui::PopItemWidth();
+
+    ImGui::TextColored(theme::muted(), "The node's position is the territory's home.");
+    ImGui::TextColored(theme::muted(), "Birds fly while playing; perches bake from the scene at Play.");
+    ImGui::TextColored(theme::muted(), "Stored in userData[\"flock\"]");
 
     ImGui::TreePop();
 }

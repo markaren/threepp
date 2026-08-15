@@ -19,6 +19,7 @@
 #include "threepp/extras/editor/AcousticSurfaceConfig.hpp"
 #include "threepp/extras/editor/AnimationConfig.hpp"
 #include "threepp/extras/editor/ArticulationConfig.hpp"
+#include "threepp/extras/editor/FlockConfig.hpp"
 #include "threepp/extras/editor/GranularConfig.hpp"
 #include "threepp/extras/editor/JointConfig.hpp"
 #include "threepp/extras/editor/ParticleFieldConfig.hpp"
@@ -4622,6 +4623,101 @@ int EditorApp::runSelfTest() {
 
         std::error_code particlesEc;
         std::filesystem::remove(particlesPath, particlesEc);
+    }
+
+    // Flocks. Authoring is a userData entry and the birds are renderer- and
+    // PhysX-free, so BOTH halves — the edit-mode round trip and the play-mode
+    // birds — run on every build.
+    {
+        auto created = ObjectFactory::createFlock(document_.scene());
+        const auto flockUuid = created->uuid;
+        addObject(created, document_.scene(), "Add Flock");
+        created.reset();// the command owns it now
+        step();
+
+        auto* flock = findByUuid(document_.scene(), flockUuid);
+        check(flock && FlockConfig::isFlock(*flock),
+              "the factory creates a flock node");
+        check(flock && FlockConfig::read(*flock) == FlockConfig{},
+              "carrying the default flock config");
+        check(flock && flock->position.y > 1.f,
+              "lifted to cruising height - home is a loiter volume, not a floor mark");
+
+        selectObject(findByUuid(document_.scene(), flockUuid));
+        step();
+        check(particleHelper_ && particleHelper_->visible,
+              "selecting it draws the territory rings and the wind");
+        selectObject(nullptr);
+        step();
+
+        // An inspector edit round-trips through the entry, undoably — and the
+        // helper follows it (its rebuild key carries the radius).
+        if (auto* live = findByUuid(document_.scene(), flockUuid)) {
+            auto* node = live;
+            const auto before = FlockConfig::read(*live).value_or(FlockConfig{});
+            auto after = before;
+            after.roamRadius = 12.f;
+            after.birdCount = 24;
+            commands_.execute(makeProperty<FlockConfig>(
+                    "Flock Roam Radius", "flock:" + live->uuid,
+                    [node](const FlockConfig& value) { value.write(*node); },
+                    before, after));
+            step();
+            check(FlockConfig::read(*findByUuid(document_.scene(), flockUuid)) == after,
+                  "an inspector edit round-trips through the entry");
+            commands_.undo();
+            step();
+            check(FlockConfig::read(*findByUuid(document_.scene(), flockUuid)) == before,
+                  "and undoes back to what it replaced");
+        }
+
+        const auto liveBirdMeshes = [&] {
+            std::size_t n = 0;
+            document_.scene().traverse([&](Object3D& o) {
+                if (o.type() == "Flock") ++n;
+            });
+            return n;
+        };
+
+        check(liveBirdMeshes() == 0, "no birds exist in edit mode");
+        startPlay();
+        check(liveBirdMeshes() == 1, "play builds one Flock per authored node");
+        stepFixed(240);
+        check(liveBirdMeshes() == 1, "and it survives four seconds of flight");
+        // The phantom-floor trap. The editor scene carries overlay meshes
+        // (gizmo handles, light markers) in the graph the perch bake walks;
+        // without the session's editor-only filter, a marker at altitude
+        // becomes the highest surface in its column and the whole flock
+        // climbs to it (measured: y=430 over a flat template). Home is at
+        // 12 and the default cruise band tops out near 31, so 60 is not a
+        // tuning number — only a poisoned bake reaches it.
+        {
+            Flock* liveFlock = nullptr;
+            document_.scene().traverse([&](Object3D& o) {
+                if (auto* f = dynamic_cast<Flock*>(&o)) liveFlock = f;
+            });
+            float maxY = -1e9f, minY = 1e9f;
+            if (liveFlock) {
+                for (int i = 0; i < liveFlock->birdCount(); ++i) {
+                    maxY = std::max(maxY, liveFlock->birdPosition(i).y);
+                    minY = std::min(minY, liveFlock->birdPosition(i).y);
+                }
+            }
+            check(liveFlock && maxY < 60.f,
+                  "the birds hold the authored cruise band, not a helper-mesh ceiling");
+            check(liveFlock && minY > -5.f,
+                  "and none of them sank through the floor");
+        }
+        stopPlay();
+        step();
+        check(liveBirdMeshes() == 0,
+              "stop restores a document that never saw the birds");
+
+        // Delete the node so later blocks meet the scene they always did.
+        if (auto* live = findByUuid(document_.scene(), flockUuid)) {
+            commands_.execute(std::make_unique<RemoveObjectCommand>(*live));
+            step();
+        }
     }
 
     // Granular chutes, EDIT MODE. Authoring is PhysX-free — the config is just

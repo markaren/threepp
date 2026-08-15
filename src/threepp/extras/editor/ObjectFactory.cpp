@@ -2,6 +2,7 @@
 #include "threepp/extras/editor/ObjectFactory.hpp"
 
 #include "threepp/extras/editor/ConveyorConfig.hpp"
+#include "threepp/extras/editor/FlockConfig.hpp"
 #include "threepp/extras/editor/GranularConfig.hpp"
 #include "threepp/extras/editor/JointConfig.hpp"
 #include "threepp/extras/editor/ParticleFieldConfig.hpp"
@@ -470,6 +471,22 @@ std::shared_ptr<Group> ObjectFactory::createGranular(const Object3D& root) {
     granular->position.y = 2.f;
 
     return granular;
+}
+
+std::shared_ptr<Group> ObjectFactory::createFlock(const Object3D& root) {
+
+    auto flock = Group::create();
+    flock->name = uniqueName(root, "Flock");
+    FlockConfig{}.write(*flock);
+
+    // The node's position is the territory's home — a loiter volume, not a
+    // floor marker. At the origin the birds would orbit through the ground.
+    // Exactly the default cruiseAltitude, so the helper's ground tick lands
+    // on y=0 — a fresh flock over a ground-at-origin scene reads as placed
+    // right, and a moved one shows its expectation.
+    flock->position.y = 14.f;
+
+    return flock;
 }
 
 std::shared_ptr<Object3D> ObjectFactory::createSplinePoint(const Object3D& spline) {
