@@ -108,6 +108,11 @@ namespace threepp::editor {
         // simulation that only exists while playing.
         static std::shared_ptr<Group> createGranular(const Object3D& root);
 
+        // A Group carrying a default FlockConfig. The node's position is the
+        // territory's home, so it is added lifted to cruising height; the
+        // birds themselves only exist while playing (see FlockPlaySession).
+        static std::shared_ptr<Group> createFlock(const Object3D& root);
+
         // "Box" if free, else "Box 2", "Box 3", ... Matching is exact, so a
         // user-typed "Box copy" never blocks "Box".
         static std::string uniqueName(const Object3D& root, const std::string& base);

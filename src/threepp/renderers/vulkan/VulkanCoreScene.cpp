@@ -936,7 +936,18 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                         // buffer (selectLodGeom reports the indexed-ness).
                         const uint32_t triCount =
                                 (rec.indexCount != 0u ? rec.indexCount : rec.vertexCount) / 3u;
-                        const bool eligible = triCount >= 1024u;
+                        // A chain enqueued while the geometry is being edited
+                        // is guaranteed stale on arrival: drainLodResults drops
+                        // it on the geomVersion mismatch, the dirty pass resets
+                        // lodState, selection re-enqueues — a full attribute
+                        // snapshot plus a wasted background simplification
+                        // EVERY frame, forever (the Flock churn). Wait out a
+                        // quiet window after the last edit, and never consider
+                        // a graduated per-frame deformer at all.
+                        const bool editQuiet =
+                                !rec.perFrameDynamic &&
+                                (frameSerial_ - rec.lastDirtyFrame) > BlasRecord::kLodDirtyQuietFrames;
+                        const bool eligible = triCount >= 1024u && editQuiet;
                         if (eligible && rec.lodState == BlasRecord::LodState::None) {
                             if ((lodIndexBytes_ + lodBlasBytes_) <= kLodByteBudget) {
                                 // The enqueue snapshots attribute data, so it needs
@@ -1654,11 +1665,18 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                         // everything device-wide before mutating shared BLAS
                         // buffers — skinned / displaced / morphed paths above
                         // submit on the same queue, so this one wait covers
-                        // them too.
-                        check(vkDeviceWaitIdle(ctx->device()), "vkDeviceWaitIdle (pre-BLAS-refresh)");
+                        // them too. Graduated per-frame dynamic records
+                        // (BlasRecord::perFrameDynamic) never take that drain:
+                        // their upload + refit records into the frame cb via
+                        // recordDynamicGeomRefits, behind the fence that
+                        // guarantees their staging slot is idle. So the wait
+                        // only fires when an OCCASIONAL edit needs the
+                        // host-write path — build the op lists first, decide
+                        // after.
                         bool topologyChanged = false;
                         std::unordered_set<const BufferGeometry*> refreshedGeoms;
                         std::vector<GeomRefreshOp> refreshOps;
+                        std::vector<BlasRecord*> lodChainDoomed;
                         refreshOps.reserve(entries.size());
                         for (size_t i = 0; i < entries.size(); ++i) {
                             if (!entryGeomDirty[i]) continue;
@@ -1684,34 +1702,103 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                                 break;
                             }
 
-                            // An in-place vertex rewrite invalidates any auto-LOD
-                            // chain: the level BLASes BAKE positions (a stale level
-                            // would ray-trace the pre-edit shape) and the chain's
-                            // error bounds measured the old surface. The device-wide
-                            // drain above makes the destroy safe. lodState=None ⇒
-                            // the selection pass re-enqueues against the new
-                            // geomVersion; selectLodGeom falls back to LOD0 for
-                            // every consumer meanwhile. lodChangedThisFrame_ must be
-                            // forced: selection already ran this frame and may have
-                            // left en.lodLevel > 0 — the EFFECTIVE level changes to
-                            // 0 right here, and without the flag the geomDescs GPU
-                            // patch would skip while the TLAS falls back, leaving a
-                            // stale per-level index address behind.
-                            if (rec.lodState != BlasRecord::LodState::None) {
-                                destroyBlasLodLevels(rec);
-                                lodChangedThisFrame_ = true;
+                            // Streak accounting for graduation: a record dirty
+                            // kDynamicGraduationStreak frames in a row is a
+                            // per-frame CPU deformer (Flock's merged birds, a
+                            // rewritten trail), not an occasional edit, and
+                            // moves to the frame-cb path for the rest of its
+                            // life.
+                            rec.dirtyStreak = (frameSerial_ - rec.lastDirtyFrame <= 1)
+                                    ? rec.dirtyStreak + 1u
+                                    : 1u;
+                            rec.lastDirtyFrame = frameSerial_;
+
+                            auto* nrmAttr = entries[i].mesh->geometry()->getAttribute<float>("normal");
+                            // The dynamic route needs normals (the same
+                            // requirement refreshGeomBlasBatch enforces) and a
+                            // record with no LOD chain. The quiet-window gate
+                            // in the selection pass stops re-enqueues while a
+                            // mesh deforms, so by graduation time the chain is
+                            // gone — if one exists anyway, the drained branch
+                            // below is the only place it can be destroyed
+                            // safely, so the record stays there this frame.
+                            const bool dynamicRoute =
+                                    nrmAttr && rec.lodState == BlasRecord::LodState::None &&
+                                    (rec.perFrameDynamic ||
+                                     rec.dirtyStreak >= BlasRecord::kDynamicGraduationStreak);
+                            if (dynamicRoute) {
+                                if (!rec.perFrameDynamic) {
+                                    // Graduate: allocate the staging ring, one
+                                    // slot per frame in flight, each holding
+                                    // positions then normals in the buffers'
+                                    // own (possibly packed) formats.
+                                    const VkDeviceSize nrmBytes = (rec.packedMask & 1u)
+                                            ? VkDeviceSize(rec.vertexCount) * sizeof(uint32_t)
+                                            : VkDeviceSize(nrmAttr->array().size()) * sizeof(float);
+                                    rec.dynStagingSlotBytes = rec.vbBytes + nrmBytes;
+                                    rec.dynStaging = createBuffer(
+                                            ctx->allocator(), ctx->device(),
+                                            rec.dynStagingSlotBytes * kFramesInFlight,
+                                            VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+                                            VMA_MEMORY_USAGE_AUTO,
+                                            VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT);
+                                    rec.perFrameDynamic = true;
+                                    // Settling now happens through the frame cb
+                                    // — the draining host-side resync pass must
+                                    // never touch this record again.
+                                    rec.prevVertexResyncPending = false;
+                                    std::cerr << "[VulkanRenderer] geometry ("
+                                              << rec.vertexCount << " verts) dirty "
+                                              << rec.dirtyStreak
+                                              << " frames in a row - graduated to the "
+                                                 "per-frame dynamic path (frame-cb refit, "
+                                                 "no drains)\n";
+                                }
+                                rec.dynPrevResyncPending = true;
+                                pendingDynamicGeomRefits_.push_back({geomKey, &rec});
+                            } else {
+                                // An in-place vertex rewrite invalidates any auto-LOD
+                                // chain: the level BLASes BAKE positions (a stale level
+                                // would ray-trace the pre-edit shape) and the chain's
+                                // error bounds measured the old surface. Destroyed
+                                // past the device-wide drain below — in-flight TLASes
+                                // may still reference a level BLAS. lodState=None ⇒
+                                // the selection pass re-enqueues against the new
+                                // geomVersion; selectLodGeom falls back to LOD0 for
+                                // every consumer meanwhile.
+                                if (rec.lodState != BlasRecord::LodState::None)
+                                    lodChainDoomed.push_back(&rec);
+                                refreshOps.push_back({geomKey, &rec});
                             }
-                            refreshOps.push_back({entries[i].mesh->geometry().get(), &rec});
                             refreshedGeoms.insert(geomKey);
                         }
                         if (topologyChanged) {
                             // Vertex/index count changed — can't reuse BLAS
                             // buffers. Fall through to the full structural
-                            // rebuild path below.
+                            // rebuild path below, and drop any dynamic ops
+                            // queued this pass: the rebuild destroys + re-admits
+                            // their records from current CPU data (their
+                            // geomVersion is only stamped at record time, so
+                            // the version mismatch guarantees the re-admit).
+                            pendingDynamicGeomRefits_.clear();
                             goto fullRebuild;
                         }
-                        refreshGeomBlasBatch(refreshOps);
-                        for (const auto& op : refreshOps) geomRefreshedThisFrame.insert(op.geom);
+                        if (!refreshOps.empty()) {
+                            check(vkDeviceWaitIdle(ctx->device()), "vkDeviceWaitIdle (pre-BLAS-refresh)");
+                            for (BlasRecord* doomed : lodChainDoomed) {
+                                // lodChangedThisFrame_ must be forced: selection
+                                // already ran this frame and may have left
+                                // en.lodLevel > 0 — the EFFECTIVE level changes
+                                // to 0 right here, and without the flag the
+                                // geomDescs GPU patch would skip while the TLAS
+                                // falls back, leaving a stale per-level index
+                                // address behind.
+                                destroyBlasLodLevels(*doomed);
+                                lodChangedThisFrame_ = true;
+                            }
+                            refreshGeomBlasBatch(refreshOps);
+                            for (const auto& op : refreshOps) geomRefreshedThisFrame.insert(op.geom);
+                        }
                     }
 
                     // ── prevVertex re-sync ──────────────────────────────────
@@ -1731,6 +1818,20 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                         std::vector<BlasRecord*> resyncRecs;
                         for (auto& [geomKey, recPtr] : blasCache) {
                             BlasRecord* rec = recPtr.get();
+                            // Graduated records settle through the frame cb — a
+                            // drain here would defeat the whole path. The first
+                            // CLEAN frame after a dirty run records one
+                            // vertex→prevVertex copy in recordDynamicGeomRefits
+                            // and motion collapses to zero, same contract as
+                            // the host-side pass below.
+                            if (rec->perFrameDynamic) {
+                                if (rec->dynPrevResyncPending &&
+                                    rec->lastDirtyFrame != frameSerial_) {
+                                    pendingDynamicPrevResyncs_.push_back(rec);
+                                    rec->dynPrevResyncPending = false;
+                                }
+                                continue;
+                            }
                             if (!rec->prevVertexResyncPending) continue;
                             // Re-snapshotted this frame → keep its change-frame
                             // motion; settle on the next clean frame instead.

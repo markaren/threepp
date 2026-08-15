@@ -312,6 +312,18 @@ namespace threepp {
         // pattern as pendingSkinnedRebuilds_. Cleared at end of recordCommandBuffer.
         std::vector<std::pair<GrassMesh*, GrassMeshState*>> pendingGrassDeforms_;
 
+        // Graduated per-frame dynamic plain meshes (BlasRecord::perFrameDynamic)
+        // whose attributes changed this frame — staging upload + GPU copy +
+        // batched BLAS refit recorded into the frame cb by
+        // recordDynamicGeomRefits, same pattern as pendingSkinnedRebuilds_.
+        // Cleared there.
+        std::vector<vulkan::impl::GeomRefreshOp> pendingDynamicGeomRefits_;
+        // Graduated records whose first CLEAN frame follows a dirty run —
+        // recordDynamicGeomRefits copies vertex→prevVertex once so their
+        // motion vectors collapse back to zero (frame-cb twin of the
+        // prevVertexResyncPending pass).
+        std::vector<vulkan::impl::BlasRecord*> pendingDynamicPrevResyncs_;
+
         // DisplacedMesh (FFT water) deforms queued in ensureSceneBuilt and
         // recorded into the frame command buffer by recordCommandBuffer — the
         // same no-mid-frame-submit pattern as pendingGrassDeforms_. The float
@@ -959,6 +971,7 @@ namespace threepp {
             destroyBuffer(ctx->allocator(), rec.color);
             destroyBuffer(ctx->allocator(), rec.prevVertex);
             destroyBuffer(ctx->allocator(), rec.blasScratch);
+            destroyBuffer(ctx->allocator(), rec.dynStaging);
         }
 
         // Cached CDF blob (16 floats per tri) reused across frames when no
@@ -2549,6 +2562,15 @@ namespace threepp {
         // drained in-flight GPU work; phase (2)'s host memcpys race in-flight
         // closest_hit reads of rec.vertex otherwise.
         void refreshGeomBlasBatch(const std::vector<GeomRefreshOp>& ops);
+
+        // Frame-cb twin of refreshGeomBlasBatch for graduated records
+        // (BlasRecord::perFrameDynamic): CPU-packs new positions/normals into
+        // this frame's staging slot, then records vertex→prevVertex snapshot,
+        // staging→vertex/normal copies and the batched BLAS refit into `cb`
+        // with barriers — zero extra submits, zero waits. Also records the
+        // one-frame prevVertex re-sync for pendingDynamicPrevResyncs_.
+        // Consumes (clears) both pending lists.
+        void recordDynamicGeomRefits(VkCommandBuffer cb);
 
         // ── Morph-target helpers ─────────────────────────────────────────
 

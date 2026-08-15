@@ -43,6 +43,15 @@ void VulkanRenderer::Impl::updatePaneRegion() {
 }
 
 void VulkanRenderer::Impl::recordDeformAndTlas(VkCommandBuffer cb) {
+            // ── Graduated per-frame dynamic plain meshes ───────────────────
+            // CPU deformers that rebake their vertices every frame (Flock's
+            // merged bird mesh) — staging upload + vertex/normal copies +
+            // batched BLAS refit, recorded like every other deformer here.
+            // The drain-based refreshGeomBlasBatch now only serves genuinely
+            // occasional edits. Internal barriers publish to the TLAS refit
+            // below and the raster/RT reads after it.
+            recordDynamicGeomRefits(cb);
+
             // ── Skinned-mesh GPU pipeline ──────────────────────────────────
             // ensureSceneBuilt populated pendingSkinnedRebuilds_ with the
             // states whose bones changed this frame and uploaded the new

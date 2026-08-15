@@ -314,6 +314,10 @@ namespace threepp::editor {
         // grains only exist while playing, so this section is the chute and
         // nothing else.
         void drawGranularSection(Object3D& object);
+        // Shown for a group carrying FlockConfig. Authoring only — the birds
+        // exist while playing (FlockPlaySession), so this section is the
+        // territory and the species knobs and nothing else.
+        void drawFlockSection(Object3D& object);
         // `owner` is the object the material hangs off; the slot is identified
         // by (owner uuid, label) whenever it has to outlive the frame.
         void drawTextureSlot(const Object3D& owner, Material& material, const char* label,

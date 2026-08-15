@@ -25,6 +25,7 @@
 #include "EditorApp.hpp"
 #include "EditorTheme.hpp"
 
+#include "threepp/extras/editor/FlockConfig.hpp"
 #include "threepp/extras/editor/GranularConfig.hpp"
 #include "threepp/extras/editor/ParticleFieldBuild.hpp"
 #include "threepp/extras/editor/ParticleFieldConfig.hpp"
@@ -235,11 +236,17 @@ void EditorApp::syncParticleHelper() {
     // bury the scene, and the numbers are in the inspector either way. Drawn on
     // every backend — where the particles are born is an authoring fact, not a
     // rendering one, and on GL it is the only picture there is.
+    //
+    // The flock shares the helper: its territory is the same kind of authored
+    // extent as a spawn slab, and while playing the birds themselves are the
+    // picture, so edit mode is exactly when the circle earns its place.
     auto* selected = selection_.get();
     const auto particles = selected ? ParticleFieldConfig::read(*selected) : std::nullopt;
     const auto granular = selected && !particles ? GranularConfig::read(*selected) : std::nullopt;
+    const auto flock = selected && !particles && !granular ? FlockConfig::read(*selected)
+                                                           : std::nullopt;
 
-    if (!particles && !granular) {
+    if (!particles && !granular && !flock) {
         if (particleHelper_) {
             particleHelper_->removeFromParent();
             particleHelper_.reset();
@@ -250,11 +257,16 @@ void EditorApp::syncParticleHelper() {
 
     // Keyed by uuid (a play/stop replaces the whole graph) plus the numbers the
     // picture is built from — a rebuild trigger, not a hash; the placement below
-    // runs every frame regardless.
-    const Vector3 extent = particles
-                                   ? particles->spawnHalfExtent
-                                   : Vector3(granular->emitExtentX, 0.f, granular->emitExtentZ);
-    Vector3 flight = particles ? particles->velocity : granular->emitVelocity;
+    // runs every frame regardless. The flock rides the same two slots: extent
+    // carries (roamRadius, cruiseAltitude, altitudeSpread), flight the wind.
+    const Vector3 extent = particles ? particles->spawnHalfExtent
+                           : granular
+                                   ? Vector3(granular->emitExtentX, 0.f, granular->emitExtentZ)
+                                   : Vector3(flock->roamRadius, flock->cruiseAltitude,
+                                             flock->altitudeSpread);
+    Vector3 flight = particles ? particles->velocity
+                     : granular ? granular->emitVelocity
+                                : Vector3(flock->windX, 0.f, flock->windZ);
     if (particles) flight.add(particles->wind);
 
     char key[224];
@@ -286,12 +298,48 @@ void EditorApp::syncParticleHelper() {
         std::vector<float> box, arrow;
         if (particles) {
             appendBox(box, extent);
-        } else {
+        } else if (granular) {
             // A chute has no vertical extent to draw: the pour mouth is a
             // rectangle in the node's own XZ plane.
             const Vector3 corners[4]{{-extent.x, 0.f, -extent.z}, {extent.x, 0.f, -extent.z},
                                      {extent.x, 0.f, extent.z}, {-extent.x, 0.f, extent.z}};
             for (int i = 0; i < 4; ++i) appendSegment(box, corners[i], corners[(i + 1) % 4]);
+        } else {
+            // The territory: the soft roam edge as a circle in the node's XZ
+            // plane (extent.x = roamRadius), a second ring at 0.75× where the
+            // bounds force starts to bite, and the SAME full circle again at
+            // expected-ground level (cruiseAltitude = extent.y below) — the
+            // loiter volume floats, but an editor camera looks down at a
+            // scene, and extents read against the ground it will be judged
+            // over. A drop line with a ground tick joins the two; the tick
+            // landing off the actual floor is the one spatial fact a
+            // misplaced flock node gets wrong. The band rings at
+            // ±cruiseAltitude·spread (extent.z) show the ALTITUDE BAND the
+            // birds hold: each bird prefers ground + cruiseAltitude·(1 ±
+            // spread), so with the ground where the tick claims, the flock
+            // flies between these two rings.
+            constexpr int kSegments = 48;
+            const auto appendRing = [&](float radius, float y) {
+                for (int i = 0; i < kSegments; ++i) {
+                    const float a0 = static_cast<float>(i) * math::TWO_PI / kSegments;
+                    const float a1 = static_cast<float>(i + 1) * math::TWO_PI / kSegments;
+                    appendSegment(box,
+                                  {radius * std::cos(a0), y, radius * std::sin(a0)},
+                                  {radius * std::cos(a1), y, radius * std::sin(a1)});
+                }
+            };
+            appendRing(extent.x, 0.f);
+            appendRing(extent.x * 0.75f, 0.f);
+            appendRing(extent.x, -extent.y);
+            const float band = extent.y * extent.z;
+            if (band > 0.01f) {
+                appendRing(extent.x * 0.9f, band);
+                appendRing(extent.x * 0.9f, -band);
+            }
+            appendSegment(box, {0.f, 0.f, 0.f}, {0.f, -extent.y, 0.f});
+            const float tick = std::max(extent.x * 0.05f, 0.5f);
+            appendSegment(box, {-tick, -extent.y, 0.f}, {tick, -extent.y, 0.f});
+            appendSegment(box, {0.f, -extent.y, -tick}, {0.f, -extent.y, tick});
         }
         appendArrow(arrow, flight, arrowLength(extent));
 

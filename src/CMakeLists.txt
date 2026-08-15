@@ -524,6 +524,7 @@ set(sources
         "threepp/extras/editor/EditorCommands.cpp"
         "threepp/extras/editor/EditorSettings.cpp"
         "threepp/extras/editor/GeneratorConfig.cpp"
+        "threepp/extras/editor/FlockConfig.cpp"
         "threepp/extras/editor/GranularConfig.cpp"
         "threepp/extras/editor/JointConfig.cpp"
         "threepp/extras/editor/MaterialTextureSlots.cpp"
