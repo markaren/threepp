@@ -123,14 +123,18 @@ std::unique_ptr<VulkanRenderer::Impl::BlasRecord> VulkanRenderer::Impl::buildBla
             // directly as vertex / index buffers — no duplication, no extra
             // upload, and the raster prepass + RT shadow rays warm the same
             // cache lines. TRANSFER_SRC_BIT for displaced meshes that need
-            // to vkCmdCopyBuffer the current vertex into prev each frame.
+            // to vkCmdCopyBuffer the current vertex into prev each frame;
+            // TRANSFER_DST_BIT for graduated per-frame dynamic records whose
+            // new positions arrive by GPU copy from staging instead of a
+            // host memcpy (recordDynamicGeomRefits).
             const VkBufferUsageFlags geomUsage =
                     VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR |
                     VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT |
                     VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
                     VK_BUFFER_USAGE_VERTEX_BUFFER_BIT |
                     VK_BUFFER_USAGE_INDEX_BUFFER_BIT |
-                    VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
+                    VK_BUFFER_USAGE_TRANSFER_SRC_BIT |
+                    VK_BUFFER_USAGE_TRANSFER_DST_BIT;
 
             auto rec = std::make_unique<BlasRecord>();
 
@@ -166,7 +170,8 @@ std::unique_ptr<VulkanRenderer::Impl::BlasRecord> VulkanRenderer::Impl::buildBla
                     ctx->allocator(), ctx->device(), nbBytes,
                     VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT |
                             VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
-                            VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
+                            VK_BUFFER_USAGE_VERTEX_BUFFER_BIT |
+                            VK_BUFFER_USAGE_TRANSFER_DST_BIT,
                     VMA_MEMORY_USAGE_AUTO,
                     VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT);
             uploadHostVisible(ctx->allocator(), rec->normal, nrmSrc, nbBytes);
@@ -1082,6 +1087,264 @@ void VulkanRenderer::Impl::refreshGeomBlasBatch(const std::vector<VulkanRenderer
             VkCommandBuffer cb = beginOneShot();
             ctx->rt().cmdBuildAccelerationStructures(cb, N, blasBuilds.data(), rangePtrs.data());
             endAndSubmitOneShot(cb, "refreshGeomBlasBatch (BLAS)");
+        }
+
+void VulkanRenderer::Impl::recordDynamicGeomRefits(VkCommandBuffer cb) {
+            if (pendingDynamicGeomRefits_.empty() && pendingDynamicPrevResyncs_.empty()) return;
+            THREEPP_CPUPROF("frame.dynGeomRefit");
+
+            // Phase 0 — same finite-position contract as refreshGeomBlasBatch's
+            // Phase A: a NaN reaching the BLAS build is VK_ERROR_DEVICE_LOST on
+            // NVIDIA. A bad op is dropped (its geomVersion stays stale, so a
+            // later structural rebuild picks it up) and last frame's geometry
+            // stays on screen.
+            std::vector<size_t> liveOps;
+            liveOps.reserve(pendingDynamicGeomRefits_.size());
+            for (size_t k = 0; k < pendingDynamicGeomRefits_.size(); ++k) {
+                const auto& geom = *pendingDynamicGeomRefits_[k].geom;
+                auto* posAttr = geom.getAttribute<float>("position");
+                if (!posAttr || !geom.getAttribute<float>("normal")) continue;
+                bool ok = true;
+                const auto& p = posAttr->array();
+                for (size_t i = 0; i < p.size(); ++i) {
+                    if (!std::isfinite(p[i])) {
+                        std::cerr << "[VulkanRenderer] recordDynamicGeomRefits: skipping geom - "
+                                  << "position[" << i << "] is non-finite (" << p[i] << ")\n";
+                        ok = false;
+                        break;
+                    }
+                }
+                if (ok) liveOps.push_back(k);
+            }
+
+            // Phase 1 — host: pack this frame's positions/normals into slot
+            // `currentFrame` of each record's staging ring. We are RECORDING,
+            // i.e. past the inFlight[currentFrame] fence wait, so this slot's
+            // previous consumer (frame currentFrame − kFramesInFlight) has
+            // fully executed its copies — the memcpy cannot race the GPU.
+            // That fence is the entire reason the staging ring exists: writing
+            // rec.vertex from the host directly is exactly the mid-flight
+            // mutation the drain-based path pays vkDeviceWaitIdle to avoid.
+            for (size_t k : liveOps) {
+                const auto& geom = *pendingDynamicGeomRefits_[k].geom;
+                auto& rec = *pendingDynamicGeomRefits_[k].rec;
+                auto* posAttr = geom.getAttribute<float>("position");
+                auto* nrmAttr = geom.getAttribute<float>("normal");
+                const VkDeviceSize slotOff = rec.dynStagingSlotBytes * currentFrame;
+                const VkDeviceSize posBytes = rec.vbBytes;
+                uploadHostVisible(ctx->allocator(), rec.dynStaging,
+                                  posAttr->array().data(), posBytes, slotOff);
+                if (rec.packedMask & 1u) {
+                    const auto& nrm = nrmAttr->array();
+                    std::vector<uint32_t> packed(rec.vertexCount);
+                    for (uint32_t v = 0; v < rec.vertexCount; ++v) {
+                        const auto [ox, oy] = octEncode(nrm[v * 3u + 0], nrm[v * 3u + 1], nrm[v * 3u + 2]);
+                        packed[v] = packSnorm2x16(ox, oy);
+                    }
+                    uploadHostVisible(ctx->allocator(), rec.dynStaging, packed.data(),
+                                      packed.size() * sizeof(uint32_t), slotOff + posBytes);
+                } else {
+                    uploadHostVisible(ctx->allocator(), rec.dynStaging, nrmAttr->array().data(),
+                                      nrmAttr->array().size() * sizeof(float), slotOff + posBytes);
+                }
+                // The whole array travels every frame on this path — consume
+                // updateRange exactly like the host-write path does, so "no
+                // range set later" keeps meaning "all of it" on both routes.
+                const_cast<FloatBufferAttribute*>(posAttr)->updateRange.count = -1;
+                const_cast<FloatBufferAttribute*>(nrmAttr)->updateRange.count = -1;
+                // Version bookkeeping here, not at enqueue: if a topology
+                // change elsewhere aborts to the structural rebuild after the
+                // enqueue, the stale version makes that rebuild re-admit this
+                // geometry from its current CPU data instead of trusting a
+                // buffer the cleared pending list never filled.
+                rec.geomVersion = geomVersionOf(geom);
+            }
+
+            const bool anyRefit = !liveOps.empty();
+            if (!anyRefit && pendingDynamicPrevResyncs_.empty()) {
+                pendingDynamicGeomRefits_.clear();
+                return;
+            }
+
+            // NO cross-frame WAR fence here, on purpose — and it was not an
+            // oversight the first time either. The prior frame may still be
+            // reading vertex/normal/prevVertex when these copies execute; a
+            // barrier wide enough to cover every reader (deferred_shade's
+            // ray-query fetches are COMPUTE, so the mask would have to fence
+            // compute) also fences the previous frame's entire post chain —
+            // measured +6 ms/frame, handing back everything the drain removal
+            // bought. The skinned/tet/displaced/grass deformers have always
+            // rewritten their BLAS vertex buffers here under exactly this
+            // exposure: the frame model (present-block at frame end, deforms
+            // recorded first) keeps the window closed in practice, and this
+            // path deliberately matches their contract rather than inventing
+            // a stricter one.
+
+            // Phase 3 — motion snapshot: vertex → prevVertex. For refit ops
+            // that is frame N−1's positions (the change frame's motion base);
+            // for resync-only ops vertex already holds the settled positions,
+            // so prevVertex == vertex and motion collapses back to zero — the
+            // frame-cb twin of the prevVertexResyncPending pass.
+            for (size_t k : liveOps) {
+                auto& rec = *pendingDynamicGeomRefits_[k].rec;
+                if (rec.prevVertex.handle == VK_NULL_HANDLE) continue;
+                VkBufferCopy region{};
+                region.size = rec.vbBytes;
+                vkCmdCopyBuffer(cb, rec.vertex.handle, rec.prevVertex.handle, 1, &region);
+            }
+            for (auto* rec : pendingDynamicPrevResyncs_) {
+                if (rec->prevVertex.handle == VK_NULL_HANDLE) continue;
+                VkBufferCopy region{};
+                region.size = rec->vbBytes;
+                vkCmdCopyBuffer(cb, rec->vertex.handle, rec->prevVertex.handle, 1, &region);
+            }
+
+            if (anyRefit) {
+                // Phase 4 — the snapshot READ vertex; the staging copy is about
+                // to WRITE it. Another execution-only WAR fence.
+                {
+                    VkMemoryBarrier2 mb{};
+                    mb.sType         = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2;
+                    mb.srcStageMask  = VK_PIPELINE_STAGE_2_COPY_BIT;
+                    mb.srcAccessMask = 0;
+                    mb.dstStageMask  = VK_PIPELINE_STAGE_2_COPY_BIT;
+                    mb.dstAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
+                    VkDependencyInfo dep{};
+                    dep.sType              = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
+                    dep.memoryBarrierCount = 1;
+                    dep.pMemoryBarriers    = &mb;
+                    vkCmdPipelineBarrier2(cb, &dep);
+                }
+                for (size_t k : liveOps) {
+                    auto& rec = *pendingDynamicGeomRefits_[k].rec;
+                    const VkDeviceSize slotOff = rec.dynStagingSlotBytes * currentFrame;
+                    VkBufferCopy pr{};
+                    pr.srcOffset = slotOff;
+                    pr.size      = rec.vbBytes;
+                    vkCmdCopyBuffer(cb, rec.dynStaging.handle, rec.vertex.handle, 1, &pr);
+                    VkBufferCopy nr{};
+                    nr.srcOffset = slotOff + rec.vbBytes;
+                    nr.size      = rec.dynStagingSlotBytes - rec.vbBytes;
+                    vkCmdCopyBuffer(cb, rec.dynStaging.handle, rec.normal.handle, 1, &nr);
+                }
+            }
+
+            // Phase 5 — publish the copies: the BLAS refit reads vertex as
+            // build input, the raster prepass reads vertex/normal/prevVertex
+            // as vertex attributes, chit/probe fetch them as storage.
+            {
+                VkMemoryBarrier2 mb{};
+                mb.sType         = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2;
+                mb.srcStageMask  = VK_PIPELINE_STAGE_2_COPY_BIT;
+                mb.srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
+                mb.dstStageMask  = VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR |
+                                   VK_PIPELINE_STAGE_2_VERTEX_ATTRIBUTE_INPUT_BIT |
+                                   VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR |
+                                   VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+                mb.dstAccessMask = VK_ACCESS_2_ACCELERATION_STRUCTURE_READ_BIT_KHR |
+                                   VK_ACCESS_2_VERTEX_ATTRIBUTE_READ_BIT |
+                                   VK_ACCESS_2_SHADER_STORAGE_READ_BIT;
+                VkDependencyInfo dep{};
+                dep.sType              = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
+                dep.memoryBarrierCount = 1;
+                dep.pMemoryBarriers    = &mb;
+                vkCmdPipelineBarrier2(cb, &dep);
+            }
+
+            if (anyRefit) {
+                // Phase 6 — batched BLAS refit, the recorded twin of
+                // refreshGeomBlasBatch's Phase D. The build-info structs are
+                // consumed at record time, so stack storage is enough here.
+                const uint32_t N = static_cast<uint32_t>(liveOps.size());
+                std::vector<VkAccelerationStructureGeometryTrianglesDataKHR> triDatas(N);
+                std::vector<VkAccelerationStructureGeometryKHR>              blasGeoms(N);
+                std::vector<VkAccelerationStructureBuildGeometryInfoKHR>     blasBuilds(N);
+                std::vector<VkAccelerationStructureBuildRangeInfoKHR>        ranges(N);
+                std::vector<const VkAccelerationStructureBuildRangeInfoKHR*> rangePtrs(N);
+                for (uint32_t kk = 0; kk < N; ++kk) {
+                    auto& rec = *pendingDynamicGeomRefits_[liveOps[kk]].rec;
+                    const bool indexed = rec.indexCount != 0u;
+                    const uint32_t primitiveCount =
+                            (indexed ? rec.indexCount : rec.vertexCount) / 3u;
+
+                    triDatas[kk].sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_TRIANGLES_DATA_KHR;
+                    triDatas[kk].vertexFormat = VK_FORMAT_R32G32B32_SFLOAT;
+                    triDatas[kk].vertexData.deviceAddress = rec.vertex.address;
+                    triDatas[kk].vertexStride = 3 * sizeof(float);
+                    triDatas[kk].maxVertex = rec.vertexCount - 1;
+                    if (indexed) {
+                        triDatas[kk].indexType = (rec.packedMask & 8u) ? VK_INDEX_TYPE_UINT16
+                                                                       : VK_INDEX_TYPE_UINT32;
+                        triDatas[kk].indexData.deviceAddress = rec.index.address;
+                    } else {
+                        triDatas[kk].indexType = VK_INDEX_TYPE_NONE_KHR;
+                    }
+
+                    blasGeoms[kk].sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_KHR;
+                    blasGeoms[kk].geometryType = VK_GEOMETRY_TYPE_TRIANGLES_KHR;
+                    blasGeoms[kk].geometry.triangles = triDatas[kk];
+                    blasGeoms[kk].flags = 0;
+
+                    const bool fullRebuild =
+                            rec.blasRefitCounter >= BlasRecord::kBlasFullRebuildInterval;
+                    rec.blasRefitCounter = fullRebuild ? 0u : (rec.blasRefitCounter + 1u);
+
+                    blasBuilds[kk].sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_GEOMETRY_INFO_KHR;
+                    blasBuilds[kk].type = VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR;
+                    blasBuilds[kk].flags = VK_BUILD_ACCELERATION_STRUCTURE_PREFER_FAST_TRACE_BIT_KHR |
+                                           VK_BUILD_ACCELERATION_STRUCTURE_ALLOW_UPDATE_BIT_KHR;
+                    blasBuilds[kk].mode = fullRebuild
+                            ? VK_BUILD_ACCELERATION_STRUCTURE_MODE_BUILD_KHR
+                            : VK_BUILD_ACCELERATION_STRUCTURE_MODE_UPDATE_KHR;
+                    blasBuilds[kk].geometryCount = 1;
+                    blasBuilds[kk].pGeometries = &blasGeoms[kk];
+                    blasBuilds[kk].srcAccelerationStructure = fullRebuild ? VK_NULL_HANDLE : rec.as;
+                    blasBuilds[kk].dstAccelerationStructure = rec.as;
+
+                    VkAccelerationStructureBuildSizesInfoKHR blasSizes{};
+                    blasSizes.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_SIZES_INFO_KHR;
+                    ctx->rt().getAccelerationStructureBuildSizes(
+                            ctx->device(),
+                            VK_ACCELERATION_STRUCTURE_BUILD_TYPE_DEVICE_KHR,
+                            &blasBuilds[kk], &primitiveCount, &blasSizes);
+                    // Scratch grows via retire(), never destroyBuffer: a still-
+                    // in-flight frame's refit may be reading the old one. Cold
+                    // path — graduation follows ≥3 drained refreshes, which
+                    // already sized it.
+                    if (rec.blasScratch.handle == VK_NULL_HANDLE ||
+                        rec.blasScratchSize < blasSizes.buildScratchSize) {
+                        retire(std::move(rec.blasScratch));
+                        rec.blasScratch = createAsScratchBuffer(
+                                ctx->allocator(), ctx->device(), blasSizes.buildScratchSize);
+                        rec.blasScratchSize = blasSizes.buildScratchSize;
+                    }
+                    blasBuilds[kk].scratchData.deviceAddress = rec.blasScratch.address;
+
+                    ranges[kk].primitiveCount = primitiveCount;
+                    rangePtrs[kk] = &ranges[kk];
+                }
+                ctx->rt().cmdBuildAccelerationStructures(cb, N, blasBuilds.data(), rangePtrs.data());
+
+                // Phase 7 — AS write → AS read: the TLAS refit recorded later
+                // in recordDeformAndTlas consumes these BLASes this same frame.
+                {
+                    VkMemoryBarrier2 mb{};
+                    mb.sType         = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2;
+                    mb.srcStageMask  = VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR;
+                    mb.srcAccessMask = VK_ACCESS_2_ACCELERATION_STRUCTURE_WRITE_BIT_KHR;
+                    mb.dstStageMask  = VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR |
+                                       VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR;
+                    mb.dstAccessMask = VK_ACCESS_2_ACCELERATION_STRUCTURE_READ_BIT_KHR;
+                    VkDependencyInfo dep{};
+                    dep.sType              = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
+                    dep.memoryBarrierCount = 1;
+                    dep.pMemoryBarriers    = &mb;
+                    vkCmdPipelineBarrier2(cb, &dep);
+                }
+            }
+
+            pendingDynamicGeomRefits_.clear();
+            pendingDynamicPrevResyncs_.clear();
         }
 
 void VulkanRenderer::Impl::refreshMorphedBlas(Mesh& mesh, MorphedMeshState& st) {

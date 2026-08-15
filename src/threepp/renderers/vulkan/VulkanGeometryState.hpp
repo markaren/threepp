@@ -113,6 +113,43 @@ namespace threepp::vulkan::impl {
         // (runtime-updated geometry stays noisy / visibly shakes).
         bool prevVertexResyncPending = false;
 
+        // ── Per-frame dynamic residency (graduated CPU deformers) ───
+        // A plain mesh whose attributes are rewritten + needsUpdate()ed
+        // EVERY frame (Flock's merged bird mesh, CPU trails) used to pay
+        // the occasional-edit price every frame: one device-wide drain
+        // plus two submit+wait one-shots (refreshGeomBlasBatch). After
+        // kDynamicGraduationStreak consecutive dirty frames the record
+        // graduates to the residency the skinned/displaced/grass
+        // deformers already have — staging upload + GPU copy + BLAS
+        // refit recorded into the frame command buffer, zero drains
+        // (recordDynamicGeomRefits). Graduation is one-way for the
+        // record's lifetime; a topology change destroys the record and
+        // its replacement starts cold.
+        uint64_t lastDirtyFrame = 0;// frameSerial_ of the latest geom-dirty frame
+        uint32_t dirtyStreak = 0;   // consecutive dirty frames ending at lastDirtyFrame
+        bool perFrameDynamic = false;
+        static constexpr uint32_t kDynamicGraduationStreak = 3;
+        // Auto-LOD stays out of a recently-edited geometry's way: a chain
+        // enqueued while the mesh deforms is guaranteed stale on arrival
+        // (drainLodResults drops it, selection re-enqueues, forever).
+        // Selection only considers a record this many frames after its
+        // last edit — and never a graduated one.
+        static constexpr uint64_t kLodDirtyQuietFrames = 8;
+        // Host-visible staging for the graduated path: kFramesInFlight
+        // slots of dynStagingSlotBytes (positions then normals, in the
+        // buffer's own — possibly packed — format). Slot `currentFrame`
+        // is written on the CPU at record time, i.e. past that slot's
+        // fence wait, so the write can never race the GPU copy a still-
+        // in-flight frame issued from the same slot.
+        Buffer dynStaging{};
+        VkDeviceSize dynStagingSlotBytes = 0;
+        // The graduated path snapshots vertex→prevVertex on every dirty
+        // frame; the first CLEAN frame afterwards re-syncs prevVertex to
+        // the settled positions (same shake-forever failure mode as
+        // prevVertexResyncPending above) — recorded into the frame cb,
+        // never through the draining host-side resync pass.
+        bool dynPrevResyncPending = false;
+
         // ── Automatic mesh LOD (setAutoLod) ─────────────────────────
         // One simplified INDEX buffer + its own static BLAS per chain
         // level, built beyond this record's own (LOD0) vertex/normal/uv/
