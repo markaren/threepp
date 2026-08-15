@@ -1,47 +1,12 @@
 
 #include "threepp/splats/SplatData.hpp"
 
+#include "threepp/math/Rng.hpp"
+
 #include <algorithm>
 #include <cstdint>
 
 using namespace threepp;
-
-namespace {
-
-    // Fixed xorshift32. Not a good generator, but a *reproducible* one: the
-    // state transition and the fixed-point conversion below are fully
-    // specified, so a seed maps to the same cloud on every platform and every
-    // standard library. See the note on SplatGenerator.
-    struct Rng {
-
-        explicit Rng(unsigned int seed)
-            : state_(seed ? seed : 0x9e3779b9u) {}
-
-        std::uint32_t next() {
-
-            state_ ^= state_ << 13;
-            state_ ^= state_ >> 17;
-            state_ ^= state_ << 5;
-            return state_;
-        }
-
-        // [0, 1) with 24 bits of mantissa — exactly representable as float.
-        float unit() {
-
-            return static_cast<float>(next() >> 8) * (1.f / 16777216.f);
-        }
-
-        float range(float lo, float hi) {
-
-            return lo + (hi - lo) * unit();
-        }
-
-    private:
-        std::uint32_t state_;
-    };
-
-}// namespace
-
 
 void SplatData::resize(size_t n, int degree) {
 
@@ -433,52 +398,59 @@ SplatData SplatGenerator::generate(const Options& options) {
     SplatData data;
     data.resize(options.count, options.shDegree);
 
-    Rng rng(options.seed);
+    math::Rng rng(options.seed);
 
     const int coeffs = data.coeffCount();
 
     for (size_t i = 0; i < options.count; ++i) {
 
-        data.means[i].set(
-                rng.range(-0.5f * options.extent.x, 0.5f * options.extent.x),
-                rng.range(-0.5f * options.extent.y, 0.5f * options.extent.y),
-                rng.range(-0.5f * options.extent.z, 0.5f * options.extent.z));
+        // Every multi-draw below is sequenced through named locals: draws in
+        // constructor argument lists happen in unspecified order, which is
+        // exactly how "same seed, same cloud on every platform" quietly
+        // becomes false. The old xorshift had this bug; don't reintroduce it.
+        const float mx = rng.nextFloatSpread(options.extent.x);
+        const float my = rng.nextFloatSpread(options.extent.y);
+        const float mz = rng.nextFloatSpread(options.extent.z);
+        data.means[i].set(mx, my, mz);
 
-        const float base = rng.range(options.minScale, options.maxScale);
-        data.scales[i].set(
-                base * rng.range(1.f, options.anisotropy),
-                base * rng.range(1.f, options.anisotropy),
-                base * rng.range(1.f, options.anisotropy));
+        const float base = rng.nextFloat(options.minScale, options.maxScale);
+        const float sx = rng.nextFloat(1.f, options.anisotropy);
+        const float sy = rng.nextFloat(1.f, options.anisotropy);
+        const float sz = rng.nextFloat(1.f, options.anisotropy);
+        data.scales[i].set(base * sx, base * sy, base * sz);
 
         // Uniform-ish random orientation, then optionally de-normalised so the
         // consumer has to deal with it.
-        SplatQuat q(rng.range(-1.f, 1.f), rng.range(-1.f, 1.f),
-                    rng.range(-1.f, 1.f), rng.range(-1.f, 1.f));
+        const float qx = rng.nextFloat(-1.f, 1.f);
+        const float qy = rng.nextFloat(-1.f, 1.f);
+        const float qz = rng.nextFloat(-1.f, 1.f);
+        const float qw = rng.nextFloat(-1.f, 1.f);
+        SplatQuat q(qx, qy, qz, qw);
         if (q.lengthSq() <= 1e-12f) q.set(0.f, 0.f, 0.f, 1.f);
         q.normalize();
         if (options.unnormalizedRotations) {
 
-            const float k = rng.range(0.3f, 3.f);
+            const float k = rng.nextFloat(0.3f, 3.f);
             q.set(q.x * k, q.y * k, q.z * k, q.w * k);
         }
         data.rotations[i] = q;
 
-        data.opacities[i] = rng.range(options.minOpacity, options.maxOpacity);
+        data.opacities[i] = rng.nextFloat(options.minOpacity, options.maxOpacity);
 
         // Saturated, well-separated colours: correctness is much easier to see
         // by eye when neighbouring splats are not all the same beige.
-        const Vector3 rgb{
-                0.15f + 0.85f * rng.unit(),
-                0.15f + 0.85f * rng.unit(),
-                0.15f + 0.85f * rng.unit()};
+        const float cr = rng.nextFloat();
+        const float cg = rng.nextFloat();
+        const float cb = rng.nextFloat();
+        const Vector3 rgb{0.15f + 0.85f * cr, 0.15f + 0.85f * cg, 0.15f + 0.85f * cb};
         data.setDcColor(i, rgb);
 
         auto* c = data.shAt(i);
         for (int k = 1; k < coeffs; ++k) {
 
-            c[k * 3 + 0] = options.higherOrderAmplitude * rng.range(-1.f, 1.f);
-            c[k * 3 + 1] = options.higherOrderAmplitude * rng.range(-1.f, 1.f);
-            c[k * 3 + 2] = options.higherOrderAmplitude * rng.range(-1.f, 1.f);
+            c[k * 3 + 0] = options.higherOrderAmplitude * rng.nextFloat(-1.f, 1.f);
+            c[k * 3 + 1] = options.higherOrderAmplitude * rng.nextFloat(-1.f, 1.f);
+            c[k * 3 + 2] = options.higherOrderAmplitude * rng.nextFloat(-1.f, 1.f);
         }
 
         if (options.includeDegenerates) {

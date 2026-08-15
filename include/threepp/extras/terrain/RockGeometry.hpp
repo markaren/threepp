@@ -9,11 +9,11 @@
 #define THREEPP_EXTRAS_TERRAIN_ROCKGEOMETRY_HPP
 
 #include "threepp/core/BufferGeometry.hpp"
+#include "threepp/math/Rng.hpp"
 
 #include <algorithm>
 #include <cmath>
 #include <memory>
-#include <random>
 #include <vector>
 
 namespace threepp::terrain {
@@ -21,9 +21,12 @@ namespace threepp::terrain {
     inline std::shared_ptr<BufferGeometry> makeRockGeometry(unsigned int seed,
                                                             int latSegs = 5, int lonSegs = 7) {
         constexpr float PI = 3.14159265358979f;
-        std::mt19937 rng(seed);
-        std::uniform_real_distribution<float> u(-PI, PI);
-        const float p1 = u(rng), p2 = u(rng), p3 = u(rng);
+        math::Rng rng(seed);
+        // Three draws, three statements: argument evaluation order must not
+        // decide what a seed means.
+        const float p1 = rng.nextFloat(-PI, PI);
+        const float p2 = rng.nextFloat(-PI, PI);
+        const float p3 = rng.nextFloat(-PI, PI);
 
         std::vector<float> pos, nrm, uv;
         std::vector<unsigned int> idx;

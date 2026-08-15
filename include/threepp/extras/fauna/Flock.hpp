@@ -89,6 +89,7 @@
 #include "threepp/math/MathUtils.hpp"
 #include "threepp/math/Matrix4.hpp"
 #include "threepp/math/Sphere.hpp"
+#include "threepp/math/Rng.hpp"
 #include "threepp/math/Vector2.hpp"
 #include "threepp/math/Vector3.hpp"
 #include "threepp/objects/Mesh.hpp"
@@ -101,7 +102,6 @@
 #include <functional>
 #include <limits>
 #include <memory>
-#include <random>
 #include <string>
 #include <utility>
 #include <vector>
@@ -704,21 +704,11 @@ namespace threepp {
         // A decision stream is a pure function of (seed, bird, sequence) and is
         // therefore independent of frame ordering, of how many frames a bake
         // took, and of wall time — none of which are reproducible.
-        [[nodiscard]] static std::uint32_t hashU(std::uint32_t x) {
-
-            x ^= x >> 16;
-            x *= 0x7feb352du;
-            x ^= x >> 15;
-            x *= 0x846ca68bu;
-            x ^= x >> 16;
-            return x;
-        }
-
         [[nodiscard]] static float rnd01(std::uint32_t seed, std::uint32_t slot, std::uint32_t stream) {
 
-            const std::uint32_t h = hashU(slot * 0x9e3779b9u + stream * 0x85ebca6bu + seed);
-            // 24 bits -> [0,1). Exact in fp32, and never reaches 1.0.
-            return static_cast<float>(h >> 8) * (1.f / 16777216.f);
+            // math::Rng's counter mode is this exact contract; the flock keeps
+            // only the (seed, slot, stream) call shape.
+            return math::Rng::hash01(seed, slot, stream);
         }
 
         // One draw for one bird, advancing that bird's own sequence. Never call
@@ -866,12 +856,11 @@ namespace threepp {
 
         void seedRng() {
 
-            std::mt19937 rng(params_.seed ? params_.seed : 1u);
-
-            // [0,1) by hand rather than through uniform_real_distribution, whose
-            // mapping is implementation-defined even though mt19937's output
-            // sequence is not. Same reasoning as makeFlockColors().
-            auto u01 = [&rng] { return static_cast<float>(rng() >> 8) * (1.f / 16777216.f); };
+            // math::Rng carries the explicit [0,1) conversion this function used
+            // to do by hand (uniform_real_distribution's mapping is
+            // implementation-defined). Same reasoning as makeFlockColors().
+            math::Rng rng(params_.seed ? params_.seed : 1u);
+            auto u01 = [&rng] { return rng.nextFloat(); };
 
             for (int m = 0; m < 3; ++m) {
                 // Every draw in its own named const. Three of them in one set()

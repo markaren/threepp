@@ -1,6 +1,6 @@
 #include "VulkanCoreImpl.hpp"
 
-#include <random>
+#include "threepp/math/Rng.hpp"
 
 namespace threepp {
 
@@ -292,10 +292,10 @@ std::vector<uint8_t> VulkanRenderer::Impl::generateBlueNoiseTile_() {
             // reproducible tiles.
             constexpr int kInitOnes = M / 10;
             {
-                std::mt19937 rng(0x12345678u);
+                math::Rng rng(0x12345678u);
                 int placed = 0;
                 while (placed < kInitOnes) {
-                    const int idx = static_cast<int>(rng() % static_cast<uint32_t>(M));
+                    const int idx = rng.nextInt(0, M - 1);
                     if (!binary[idx]) {
                         toggle(idx, true);
                         ++placed;

@@ -390,9 +390,10 @@ namespace threepp {
     // makes it useful beyond "some blobs appear".
     //
     // Determinism is not std::mt19937 + std::uniform_real_distribution — the
-    // distribution is free to differ between standard libraries. It is a
-    // fixed xorshift32 with an explicit fixed-point conversion, so the same
-    // seed gives bit-identical output on every platform.
+    // distribution is free to differ between standard libraries. Draws come
+    // from math::Rng (explicit fixed-point conversion, multi-draws sequenced
+    // through named locals), so the same seed gives bit-identical output on
+    // every platform.
     class SplatGenerator {
 
     public:

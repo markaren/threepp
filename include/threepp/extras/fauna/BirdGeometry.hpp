@@ -62,6 +62,7 @@
 #include "threepp/core/Assert.hpp"
 #include "threepp/math/Color.hpp"
 #include "threepp/math/MathUtils.hpp"
+#include "threepp/math/Rng.hpp"
 #include "threepp/math/Vector3.hpp"
 
 #include <algorithm>
@@ -69,7 +70,6 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
-#include <random>
 #include <vector>
 
 namespace threepp::fauna {
@@ -777,17 +777,17 @@ namespace threepp::fauna {
 
         // One draw per bird, hoisted into its own named const — two draws inside a
         // single expression would make "deterministic for a fixed seed" depend on
-        // the compiler's argument evaluation order. The [0,1) conversion is done
-        // by hand rather than through uniform_real_distribution, whose mapping is
-        // implementation-defined even though mt19937's output sequence is not.
-        std::mt19937 rng(seed ? seed : 1u);
+        // the compiler's argument evaluation order. math::Rng carries the
+        // explicit [0,1) conversion (uniform_real_distribution's mapping is
+        // implementation-defined).
+        math::Rng rng(seed ? seed : 1u);
         const float jitterRange = std::max(plumage.lightnessJitter, 0.f);
 
         out.resize(static_cast<std::size_t>(birdCount) * kVertsPerBird * 3u);
 
         for (int b = 0; b < birdCount; ++b) {
 
-            const float u = static_cast<float>(rng() >> 8) * (1.f / 16777216.f);
+            const float u = rng.nextFloat();
             const float jitter = (u * 2.f - 1.f) * jitterRange;
             const float k = 1.f + jitter;
 

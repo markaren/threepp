@@ -13,10 +13,11 @@
 #include "threepp/renderers/vulkan/shaders/ifft_vertical.comp.spv.h"
 #include "threepp/renderers/vulkan/shaders/ifft_permute.comp.spv.h"
 
+#include "threepp/math/Rng.hpp"
+
 #include <array>
 #include <cmath>
 #include <cstring>
-#include <random>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -246,16 +247,10 @@ namespace threepp::water {
     void PhillipsSpectrum::uploadNoise() {
         const uint32_t N = settings_.textureSize;
         std::vector<float> data(N * N * 2);
-        std::mt19937 rng(0xC0FFEEu);
-        std::uniform_real_distribution<float> uni(0.f, 1.f);
-        auto gauss = [&] {
-            const float u1 = std::max(uni(rng), 1e-6f);
-            const float u2 = uni(rng);
-            return std::cos(2.f * 3.14159265f * u2) * std::sqrt(-2.f * std::log(u1));
-        };
+        math::Rng rng(0xC0FFEEu);
         for (uint32_t i = 0; i < N * N; ++i) {
-            data[2 * i + 0] = gauss();
-            data[2 * i + 1] = gauss();
+            data[2 * i + 0] = rng.nextGaussian();
+            data[2 * i + 1] = rng.nextGaussian();
         }
 
         const VkDeviceSize bytes = data.size() * sizeof(float);

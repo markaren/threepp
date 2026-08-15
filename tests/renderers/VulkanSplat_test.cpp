@@ -96,14 +96,20 @@ namespace {
 
     // A deterministic cloud with enough overlap that ordering matters and
     // enough opacity that the occlusion check has something to occlude.
-    // SplatGenerator's xorshift is fixed-point by construction, so the same
-    // seed gives the same cloud on every platform.
+    // SplatGenerator draws from math::Rng (fixed-point by construction), so
+    // the same seed gives the same cloud on every platform.
+    //
+    // The x-extent is wider than the visible middle band ON PURPOSE: the
+    // outer-quarter AOV checks below need solidly-owned pixels beside the
+    // slab, and at 3.0 the outer quarters were covered only by whichever
+    // stretched fringe splats the seed happened to deal — a fixture that
+    // breaks on any RNG change without anything being wrong.
     SplatData makeCloud() {
         SplatGenerator::Options o;
         o.count = 6000;
         o.seed = 4242u;
         o.shDegree = 1;
-        o.extent.set(3.f, 2.f, 3.f);
+        o.extent.set(4.5f, 2.f, 3.f);
         o.minScale = 0.04f;
         o.maxScale = 0.11f;
         o.anisotropy = 3.f;

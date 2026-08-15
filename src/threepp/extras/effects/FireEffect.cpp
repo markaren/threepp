@@ -1,6 +1,7 @@
 
 #include "threepp/extras/effects/FireEffect.hpp"
 
+#include "threepp/math/Rng.hpp"
 #include "threepp/objects/ParticleSystem.hpp"
 #include "threepp/textures/Texture.hpp"
 
@@ -20,19 +21,10 @@ namespace {
     // the same VISUAL result and none of that, and would also make the emitter
     // order-dependent — which is exactly the property the device emitter (plan
     // F2) cannot have, since its threads run in whatever order they run in.
-    inline std::uint32_t hashU(std::uint32_t x) {
-        x ^= x >> 16;
-        x *= 0x7feb352du;
-        x ^= x >> 15;
-        x *= 0x846ca68bu;
-        x ^= x >> 16;
-        return x;
-    }
-    // stream lets one slot draw several independent numbers.
+    // The hash itself is math::Rng's counter mode; this alias keeps call
+    // sites short.
     inline float rnd01(std::uint32_t seed, std::uint32_t slot, std::uint32_t stream) {
-        const std::uint32_t h = hashU(slot * 0x9e3779b9u + stream * 0x85ebca6bu + seed);
-        // 24 bits -> [0,1). Exact in fp32, and never reaches 1.0.
-        return float(h >> 8) * (1.f / 16777216.f);
+        return math::Rng::hash01(seed, slot, stream);
     }
 
     // Fractional part in [0,1) for a possibly-negative argument. std::fmod

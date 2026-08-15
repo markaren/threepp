@@ -50,6 +50,7 @@
 #include "threepp/extras/terrain/TerrainTiles.hpp"// TerrainProvider
 #include "threepp/materials/MeshStandardMaterial.hpp"
 #include "threepp/math/MathUtils.hpp"
+#include "threepp/math/Rng.hpp"
 #include "threepp/objects/Group.hpp"
 #include "threepp/objects/InstancedMesh.hpp"
 
@@ -153,13 +154,10 @@ namespace threepp::terrain {
             return (static_cast<float>(c) + 0.5f) * o_.cellSize;
         }
 
+        // math::Rng's single-key counter hash; only the composite cell key
+        // below stays domain-specific.
         static float hash01(unsigned int x) {
-            x ^= x >> 16;
-            x *= 0x7feb352du;
-            x ^= x >> 15;
-            x *= 0x846ca68bu;
-            x ^= x >> 16;
-            return static_cast<float>(x & 0xffffffu) / static_cast<float>(0xffffff);
+            return math::Rng::hash01(static_cast<std::uint64_t>(x));
         }
         [[nodiscard]] float cellHash(int cx, int cz, int i, int ch) const {
             return hash01(static_cast<unsigned int>(cx * 73856093) ^

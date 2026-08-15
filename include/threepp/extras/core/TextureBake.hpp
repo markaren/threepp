@@ -1,23 +1,23 @@
 // Shared plumbing for the in-engine procedural texture generators
 // (architecture, vegetation, terrain dressing, ...): finishing a generated
 // DataTexture for sampling, converting a height field into a tangent-space
-// normal map, and the mt19937-lattice periodic value noise the terrain
+// normal map, and the Rng-lattice periodic value noise the terrain
 // detail/facade bakers tile with.
 //
-// Everything here is a verbatim extraction of code that existed (multiply)
-// in CabinTextures / DetailTexture / FacadeTexture — same arithmetic, same
-// draw order, so adopting these helpers changes no generated texel.
+// Extracted (multiply) from CabinTextures / DetailTexture / FacadeTexture;
+// draws now come from math::Rng, so texels differ from the mt19937 era but
+// are identical across platforms and standard libraries.
 
 #ifndef THREEPP_EXTRAS_CORE_TEXTUREBAKE_HPP
 #define THREEPP_EXTRAS_CORE_TEXTUREBAKE_HPP
 
 #include "threepp/extras/core/NoiseUtils.hpp"
+#include "threepp/math/Rng.hpp"
 #include "threepp/textures/DataTexture.hpp"
 
 #include <algorithm>
 #include <cmath>
 #include <memory>
-#include <random>
 #include <vector>
 
 namespace threepp::texgen {
@@ -83,7 +83,7 @@ namespace threepp::texgen {
         }
     }
 
-    // ── mt19937-lattice periodic value noise ─────────────────────────────
+    // ── Rng-lattice periodic value noise ─────────────────────────────────
     //
     // A cells x cells lattice of uniform draws, sampled with WRAPPED bilinear
     // interpolation so the field tiles. Unlike the hash-based noise::valueNoise
@@ -91,10 +91,9 @@ namespace threepp::texgen {
     // many draws preceded them, so call order is part of a generator's output
     // contract — preserve it when refactoring.
 
-    inline std::vector<float> noiseLattice(std::mt19937& rng, int cells) {
-        std::uniform_real_distribution<float> u01(0.f, 1.f);
+    inline std::vector<float> noiseLattice(math::Rng& rng, int cells) {
         std::vector<float> v(static_cast<size_t>(cells) * cells);
-        for (auto& x : v) x = u01(rng);
+        for (auto& x : v) x = rng.nextFloat();
         return v;
     }
 

@@ -68,6 +68,7 @@
 #include "threepp/math/Matrix3.hpp"
 #include "threepp/math/Matrix4.hpp"
 #include "threepp/math/Ray.hpp"
+#include "threepp/math/Rng.hpp"
 #include "threepp/math/Vector3.hpp"
 #include "threepp/objects/Mesh.hpp"
 #include "threepp/utils/BVH.hpp"
@@ -98,10 +99,10 @@ namespace threepp::fauna {
 
         inline std::uint64_t mix64(std::uint64_t x) {
 
-            x += 0x9e3779b97f4a7c15ULL;
-            x = (x ^ (x >> 30)) * 0xbf58476d1ce4e5b9ULL;
-            x = (x ^ (x >> 27)) * 0x94d049bb133111ebULL;
-            return x ^ (x >> 31);
+            // math::Rng::mixBits IS this function (one splitmix64 step);
+            // delegating keeps the bake bit-identical while retiring the
+            // private copy.
+            return math::Rng::mixBits(x);
         }
 
         // Spread the low 21 bits of `v` so that bit i lands at bit 3i.

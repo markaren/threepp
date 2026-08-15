@@ -24,6 +24,7 @@
 #define THREEPP_EXTRAS_TERRAIN_TERRAINGENERATOR_HPP
 
 #include "threepp/math/MathUtils.hpp"
+#include "threepp/math/Rng.hpp"
 #include "threepp/core/BufferGeometry.hpp"
 #include "threepp/geometries/PlaneGeometry.hpp"
 #include "threepp/utils/Parallel.hpp"
@@ -34,7 +35,6 @@
 #include <cstdint>
 #include <memory>
 #include <numeric>
-#include <random>
 #include <string>
 #include <vector>
 
@@ -135,10 +135,9 @@ namespace threepp::terrain {
         void reseed(unsigned int seed) {
             std::array<int, 256> p{};
             std::iota(p.begin(), p.end(), 0);
-            std::mt19937 rng(seed ? seed : 1u);
+            math::Rng rng(seed ? seed : 1u);
             for (int i = 255; i > 0; --i) {
-                std::uniform_int_distribution<int> d(0, i);
-                std::swap(p[i], p[d(rng)]);
+                std::swap(p[i], p[rng.nextInt(0, i)]);
             }
             for (int i = 0; i < 512; ++i) perm_[i] = p[i & 255];
             seed_ = seed;
@@ -394,8 +393,10 @@ namespace threepp::terrain {
                 }
             for (auto& w : brushW) w /= wsum;
 
-            std::mt19937 rng(seed_ ^ 0x9e3779b9u);
-            std::uniform_real_distribution<float> spawn(0.f, static_cast<float>(dim - 1));
+            // A fork, not the reseed stream: droplet spawns must not shift the
+            // permutation table, and vice versa.
+            math::Rng rng = math::Rng(seed_).fork(1);
+            const float spawnMax = static_cast<float>(dim - 1);
             const auto at = [dim](int x, int y) { return static_cast<size_t>(y) * dim + x; };
 
             const float inertia = tp.inertia, capF = tp.sedimentCapacity, minSlope = tp.minSlope;
@@ -405,7 +406,8 @@ namespace threepp::terrain {
             const int n = std::max(tp.droplets, 0);
 
             for (int d = 0; d < n; ++d) {
-                float posX = spawn(rng), posY = spawn(rng);
+                float posX = rng.nextFloat(0.f, spawnMax);
+                float posY = rng.nextFloat(0.f, spawnMax);
                 float dirX = 0.f, dirY = 0.f, speed = 1.f, water = 1.f, sediment = 0.f;
 
                 for (int life = 0; life < maxLife; ++life) {

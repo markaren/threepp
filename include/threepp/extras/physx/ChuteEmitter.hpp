@@ -25,13 +25,13 @@
 #define THREEPP_PHYSX_CHUTEEMITTER_HPP
 
 #include "threepp/math/Matrix4.hpp"
+#include "threepp/math/Rng.hpp"
 #include "threepp/math/Vector3.hpp"
 
 #include <algorithm>
 #include <cstddef>
 #include <limits>
 #include <numeric>
-#include <random>
 #include <vector>
 
 namespace threepp {
@@ -92,19 +92,24 @@ namespace threepp {
             const unsigned layers = (want + perLayer - 1) / perLayer;
             slots_.resize(std::size_t(perLayer) * layers);
             std::iota(slots_.begin(), slots_.end(), 0u);
-            std::shuffle(slots_.begin(), slots_.end(), rng_);
+            rng_.shuffle(slots_.begin(), slots_.end());
 
             const float amplitude = std::max(settings_.jitter, 0.f) * settings_.spacing;
-            std::uniform_real_distribution<float> jitter(-amplitude, amplitude);
             out_.reserve(want);
             for (unsigned i = 0; i < want; ++i) {
                 const unsigned s = slots_[i];
                 const unsigned ix = s % cellsX_;
                 const unsigned iz = (s / cellsX_) % cellsZ_;
                 const unsigned iy = s / perLayer;
-                Vector3 point((float(ix) - float(cellsX_ - 1) * 0.5f) * cell_ + jitter(rng_),
-                              float(iy) * cell_ + jitter(rng_),
-                              (float(iz) - float(cellsZ_ - 1) * 0.5f) * cell_ + jitter(rng_));
+                // Drawn as statements, not constructor arguments: argument
+                // evaluation order is unspecified, and a jitter that lands on
+                // x or z depending on the toolchain is not a seed contract.
+                const float jx = rng_.nextFloatSpread(2.f * amplitude);
+                const float jy = rng_.nextFloatSpread(2.f * amplitude);
+                const float jz = rng_.nextFloatSpread(2.f * amplitude);
+                Vector3 point((float(ix) - float(cellsX_ - 1) * 0.5f) * cell_ + jx,
+                              float(iy) * cell_ + jy,
+                              (float(iz) - float(cellsZ_ - 1) * 0.5f) * cell_ + jz);
                 // The full matrix, scale included: a scaled chute has a scaled
                 // mouth, the same way a scaled conveyor has scaled bends.
                 out_.push_back(point.applyMatrix4(chuteWorld));
@@ -119,7 +124,7 @@ namespace threepp {
 
     private:
         Settings settings_;
-        std::mt19937 rng_;
+        math::Rng rng_;
         float cell_ = 0.f;
         unsigned cellsX_ = 1, cellsZ_ = 1;
         float pending_ = 0.f;

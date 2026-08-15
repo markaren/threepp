@@ -21,6 +21,7 @@
 
 #include "threepp/core/BufferGeometry.hpp"
 #include "threepp/extras/vegetation/TreeTextures.hpp"// LeafShape (species blade outline)
+#include "threepp/math/Rng.hpp"
 #include "threepp/math/Vector3.hpp"
 
 #include <algorithm>
@@ -30,7 +31,6 @@
 #include <limits>
 #include <memory>
 #include <numeric>
-#include <random>
 #include <string>
 #include <vector>
 
@@ -194,7 +194,7 @@ namespace threepp::vegetation {
                 return;
             }
 
-            std::mt19937 rng(tp.seed ? tp.seed : 1u);
+            math::Rng rng(tp.seed ? tp.seed : 1u);
             nodes_.clear();
 
             // Grow the trunk as a chain of nodes from origin to crown base.
@@ -223,7 +223,7 @@ namespace threepp::vegetation {
             // Colonisation loop — ALL nodes participate every iteration.
             const float killDist2 = tp.killDistance * tp.killDistance;
             const float infDist2 = tp.influenceDistance * tp.influenceDistance;
-            std::uniform_real_distribution<float> jitter(-1.f, 1.f);
+            auto jitter = [](math::Rng& r) { return r.nextFloat(-1.f, 1.f); };
 
             for (int iter = 0; iter < tp.maxIterations && !attractors.empty(); ++iter) {
                 const int nodeCount = static_cast<int>(nodes_.size());
@@ -495,10 +495,10 @@ namespace threepp::vegetation {
         [[nodiscard]] std::shared_ptr<BufferGeometry> makeLeafGeometry(const TreeParams& tp) const {
             if (nodes_.empty()) return std::make_shared<BufferGeometry>();
 
-            std::mt19937 rng(tp.seed ^ 0xBEEF);
-            std::uniform_real_distribution<float> unit(0.f, 1.f);
-            std::uniform_real_distribution<float> angle(0.f, 6.28318530718f);
-            std::uniform_real_distribution<float> sizeVar(0.85f, 1.15f);
+            math::Rng rng(tp.seed ^ 0xBEEF);
+            auto unit = [](math::Rng& r) { return r.nextFloat(); };
+            auto angle = [](math::Rng& r) { return r.nextFloat(0.f, 6.28318530718f); };
+            auto sizeVar = [](math::Rng& r) { return r.nextFloat(0.85f, 1.15f); };
 
             std::vector<float> positions, normals, uvs, colors;
             std::vector<unsigned int> indices;
@@ -993,8 +993,8 @@ namespace threepp::vegetation {
         // ── Leaf positions for external instancing ───────────────────────
         [[nodiscard]] std::vector<Vector3> getLeafPositions(const TreeParams& tp) const {
             std::vector<Vector3> out;
-            std::mt19937 rng(tp.seed ^ 0xBEEF);
-            std::uniform_real_distribution<float> unit(0.f, 1.f);
+            math::Rng rng(tp.seed ^ 0xBEEF);
+            auto unit = [](math::Rng& r) { return r.nextFloat(); };
             for (auto& n : nodes_) {
                 if (!n.terminal) continue;
                 if (unit(rng) > tp.leafDensity) continue;
@@ -1216,10 +1216,10 @@ namespace threepp::vegetation {
         float bumpPhase_ = 0.f;// per-seed root-flare lobe phase
 
         // Derive the per-tree trunk curve + twist from the seed.
-        void makeTrunkShape(std::mt19937& rng, const TreeParams& tp,
+        void makeTrunkShape(math::Rng& rng, const TreeParams& tp,
                             float baseY, float spanY) {
-            std::uniform_real_distribution<float> u01(0.f, 1.f);
-            std::uniform_real_distribution<float> u11(-1.f, 1.f);
+            auto u01 = [](math::Rng& r) { return r.nextFloat(); };
+            auto u11 = [](math::Rng& r) { return r.nextFloat(-1.f, 1.f); };
             const float leanAz = u01(rng) * 6.28318530718f;
             const float leanAmt = spanY * tp.trunkLean * (0.4f + 0.6f * u01(rng));
             trunkShape_.leanX = std::cos(leanAz) * leanAmt;
@@ -1240,14 +1240,14 @@ namespace threepp::vegetation {
         // makeTrunkGeometry / computeRadii / makeLeafGeometry work unchanged.
         // Deterministic for a fixed seed.
         void buildWhorlSkeleton(const TreeParams& tp) {
-            std::mt19937 rng(tp.seed ? tp.seed : 1u);
+            math::Rng rng(tp.seed ? tp.seed : 1u);
             nodes_.clear();
 
             const float H = tp.trunkHeight + tp.crownHeight;// total tree height
             makeTrunkShape(rng, tp, 0.f, H);
 
-            std::uniform_real_distribution<float> u01(0.f, 1.f);
-            std::uniform_real_distribution<float> u11(-1.f, 1.f);
+            auto u01 = [](math::Rng& r) { return r.nextFloat(); };
+            auto u11 = [](math::Rng& r) { return r.nextFloat(-1.f, 1.f); };
 
             // 1) Monopodial trunk: one straight (curved) leader from the ground
             //    to the apex, following the per-seed trunk curve.
@@ -1330,11 +1330,11 @@ namespace threepp::vegetation {
         // Grow one drooping branch (a chain of nodes) outward from `startPos`,
         // attaching its first node to `parentNode`. Recurses once for second-
         // order side twigs. `order` = 1 primary branch, 2 side twig.
-        void growBranch(const TreeParams& tp, std::mt19937& rng, int parentNode,
+        void growBranch(const TreeParams& tp, math::Rng& rng, int parentNode,
                         const Vector3& startPos, Vector3 dir, float length,
                         int order, float crownT) {
-            std::uniform_real_distribution<float> u01(0.f, 1.f);
-            std::uniform_real_distribution<float> u11(-1.f, 1.f);
+            auto u01 = [](math::Rng& r) { return r.nextFloat(); };
+            auto u11 = [](math::Rng& r) { return r.nextFloat(-1.f, 1.f); };
             const int segs = std::max(1, static_cast<int>(std::round(length / tp.segmentLength)));
             const float step = length / static_cast<float>(segs);
             int prev = parentNode;
@@ -1389,11 +1389,11 @@ namespace threepp::vegetation {
         }
 
         // ── Scatter attraction points in the crown envelope ──────────────
-        void scatterAttractors(std::mt19937& rng, const TreeParams& tp,
+        void scatterAttractors(math::Rng& rng, const TreeParams& tp,
                                const Vector3& centre,
                                std::vector<Vector3>& out) const {
-            std::uniform_real_distribution<float> u01(0.f, 1.f);
-            std::uniform_real_distribution<float> angle(0.f, 6.28318530718f);
+            auto u01 = [](math::Rng& r) { return r.nextFloat(); };
+            auto angle = [](math::Rng& r) { return r.nextFloat(0.f, 6.28318530718f); };
             const float rx = tp.crownRadiusX;
             const float rz = tp.crownRadiusZ;
             const float hy = tp.crownHeight * 0.5f;

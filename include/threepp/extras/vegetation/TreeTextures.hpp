@@ -17,13 +17,13 @@
 
 #include "threepp/extras/core/NoiseUtils.hpp"
 #include "threepp/extras/core/TextureBake.hpp"
+#include "threepp/math/Rng.hpp"
 #include "threepp/textures/DataTexture.hpp"
 
 #include <algorithm>
 #include <array>
 #include <cmath>
 #include <cstdint>
-#include <random>
 #include <vector>
 
 namespace threepp::vegetation {
@@ -154,8 +154,8 @@ namespace threepp::vegetation {
         auto tex = DataTexture::create(4, size, size);
         auto& px = tex->image().data<unsigned char>();// zero → transparent
 
-        std::mt19937 rng(seed);
-        std::uniform_real_distribution<float> u01(0.f, 1.f);
+        math::Rng rng(seed);
+        auto u01 = [](math::Rng& r) { return r.nextFloat(); };
 
         const auto S = static_cast<float>(size);
         constexpr float PI = 3.14159265358979f;
@@ -426,8 +426,8 @@ namespace threepp::vegetation {
         auto tex = DataTexture::create(4, size, size);
         auto& px = tex->image().data<unsigned char>();// zero → transparent
 
-        std::mt19937 rng(seed);
-        std::uniform_real_distribution<float> u01(0.f, 1.f);
+        math::Rng rng(seed);
+        auto u01 = [](math::Rng& r) { return r.nextFloat(); };
 
         const auto S = static_cast<float>(size);
         const float vBase = 0.03f, vTip = 0.97f;

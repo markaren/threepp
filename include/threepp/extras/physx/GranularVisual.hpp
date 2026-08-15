@@ -38,6 +38,7 @@
 #include "threepp/math/MathUtils.hpp"
 #include "threepp/math/Matrix4.hpp"
 #include "threepp/math/Quaternion.hpp"
+#include "threepp/math/Rng.hpp"
 #include "threepp/objects/InstancedMesh.hpp"
 #include "threepp/objects/ParticleField.hpp"
 
@@ -47,7 +48,6 @@
 #include <cmath>
 #include <cstring>
 #include <memory>
-#include <random>
 #include <vector>
 
 namespace threepp {
@@ -73,10 +73,9 @@ namespace threepp {
         inline std::vector<Quaternion> grainOrientations(unsigned capacity, unsigned seed) {
 
             std::vector<Quaternion> out(capacity);
-            std::mt19937 rng{seed};
-            std::uniform_real_distribution<float> uni(0.f, 1.f);
+            math::Rng rng{seed};
             for (unsigned i = 0; i < capacity; ++i) {
-                const float u1 = uni(rng), u2 = uni(rng), u3 = uni(rng);
+                const float u1 = rng.nextFloat(), u2 = rng.nextFloat(), u3 = rng.nextFloat();
                 const float s1 = std::sqrt(1.f - u1), s2 = std::sqrt(u1);
                 out[i].set(s1 * std::sin(math::TWO_PI * u2), s1 * std::cos(math::TWO_PI * u2),
                            s2 * std::sin(math::TWO_PI * u3), s2 * std::cos(math::TWO_PI * u3));

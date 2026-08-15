@@ -24,6 +24,7 @@
 #define THREEPP_EXTRAS_TERRAIN_DETAILTEXTURE_HPP
 
 #include "threepp/math/MathUtils.hpp"
+#include "threepp/math/Rng.hpp"
 #include "threepp/extras/core/TextureBake.hpp"
 #include "threepp/textures/DataTexture.hpp"
 
@@ -31,7 +32,6 @@
 #include <array>
 #include <cmath>
 #include <memory>
-#include <random>
 #include <vector>
 
 namespace threepp::terrain {
@@ -133,7 +133,7 @@ namespace threepp::terrain {
         // Generic periodic value noise (same as makeDetailMaps, local seed).
         // Draw ORDER matters: the l8/l24/l8g fills consume the rng stream in
         // sequence, so reordering them reshuffles every texel.
-        std::mt19937 rng(seed);
+        math::Rng rng(seed);
         auto lattice = [&](int cells) { return texgen::noiseLattice(rng, cells); };
         const auto& sampleLat = texgen::sampleLattice;
         const auto l8 = lattice(8), l24 = lattice(24), l8g = lattice(8);
@@ -344,19 +344,20 @@ namespace threepp::terrain {
         const int D = std::max(o.dim, 8);
         // Periodic (wrapping) bilinear value noise — guarantees the map tiles.
         // Draw ORDER matters (see makeBandMaps).
-        std::mt19937 rng(o.seed);
+        math::Rng rng(o.seed);
         auto lattice = [&](int cells) { return texgen::noiseLattice(rng, cells); };
         const auto& sampleLat = texgen::sampleLattice;
         const auto l8 = lattice(8), l32 = lattice(32), l8g = lattice(8);
 
         // Shared heightfield in [0,1], periodic. Two octaves + fine speckle.
         std::vector<float> hf(static_cast<size_t>(D) * D);
-        std::mt19937 srng(o.seed ^ 0x9e3779b9u);
-        std::uniform_real_distribution<float> su(0.f, 1.f);
+        // Speckle stream forked off the seed so it cannot shift the lattice
+        // draws above (draw ORDER matters — see the comment on rng).
+        math::Rng srng = math::Rng(o.seed).fork(1);
         for (int j = 0; j < D; ++j)
             for (int i = 0; i < D; ++i) {
                 const float u = (static_cast<float>(i) + 0.5f) / D, v = (static_cast<float>(j) + 0.5f) / D;
-                const float n = 0.55f * sampleLat(l8, 8, u, v) + 0.30f * sampleLat(l32, 32, u, v) + 0.15f * su(srng);
+                const float n = 0.55f * sampleLat(l8, 8, u, v) + 0.30f * sampleLat(l32, 32, u, v) + 0.15f * srng.nextFloat();
                 hf[static_cast<size_t>(j) * D + i] = n;
             }
 

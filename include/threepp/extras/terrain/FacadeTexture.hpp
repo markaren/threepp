@@ -28,12 +28,12 @@
 #define THREEPP_EXTRAS_TERRAIN_FACADETEXTURE_HPP
 
 #include "threepp/extras/core/TextureBake.hpp"
+#include "threepp/math/Rng.hpp"
 #include "threepp/textures/DataTexture.hpp"
 
 #include <algorithm>
 #include <cmath>
 #include <memory>
-#include <random>
 #include <vector>
 
 namespace threepp::terrain {
@@ -62,7 +62,7 @@ namespace threepp::terrain {
         const int D = std::max(o.dim, 32);
 
         // Periodic value noise (same trick as DetailTexture) so tiles wrap.
-        std::mt19937 rng(o.seed);
+        math::Rng rng(o.seed);
         const auto l16 = texgen::noiseLattice(rng, 16), l48 = texgen::noiseLattice(rng, 48);
         auto noise = [&](float u, float v) {// [0,1], periodic, two octaves
             return 0.65f * texgen::sampleLattice(l16, 16, u, v) +
