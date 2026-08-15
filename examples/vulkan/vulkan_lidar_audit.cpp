@@ -32,6 +32,39 @@
 // subtraction — measuring the tracer's own range keeps the delta attributable
 // to the tracer. --noise-sigma turns it on for a domain-randomization check.
 //
+// ── --scene-edit: the perturbation refit-only dynamics never reach ──────────
+// The baseline script only ever moves instances: same topology, same instance
+// order. --scene-edit adds a mesh at frame 45 and removes it at frame 81, and at
+// those same two frames pulls an EXISTING mid-list object (the spinner) out and
+// later puts it back. The second half is what makes this a reordering test: an
+// appended entry removed from the tail shifts nothing behind it, whereas a
+// mid-list removal moves every later entry, and the re-add lands at the tail
+// rather than in the original slot. The post-revert scene therefore holds the
+// same five objects in a DIFFERENT order. All edits are keyed to the scripted
+// frame index, so every run performs them at the same points.
+//
+// In this mode the sensor's yaw is PINNED. A within-run id comparison needs the
+// pre-edit and post-revert scans to have been fired from the same pose;
+// otherwise the range gate below only selects surfaces whose range happens to
+// be rotationally invariant (the ground), and the pillar — the other static
+// instance, and the more interesting one — drops out of the sample.
+//
+// ── --idstability: does a return's instance id survive a rebuild ────────────
+// MEASURED ANSWER: no. LidarReturn::hitInstanceId is the renderer's internal
+// instance index, NOT the label set through setObjectInstanceId — the two are
+// different numbering schemes and the returns carry the former. Under the edit
+// script above the pillar's static, unmoved surface reports id 3 before the
+// churn and id 2 after it, on every one of the ~1.8k beams that struck it at an
+// identical range. Perception code that keys on hitInstanceId across a scene
+// edit is therefore keying on a number that moves under it.
+//
+// This mode measures it within one run: take a pre-edit scan and a post-revert
+// scan, keep the beams that returned in BOTH and whose |Δrange| < 1e-6 (same
+// unmoved surface — mover, spinner and waver are all in motion between the two
+// scans, so the range gate is what isolates the static geometry), and count how
+// many of those changed hitInstanceId. Any change is a real finding: the beam
+// demonstrably struck the same surface at the same distance.
+//
 // Returns carry hitInstanceId; it is preserved in the dump. The scene has no
 // fog, so no volume-scatter sentinels (hitInstanceId == -2) are expected — but
 // the compare reports instance-id disagreement separately, because a beam that
@@ -183,6 +216,20 @@ namespace {
                           << da->second << (da->second == db->second ? "" : " | ") << "\n";
                 if (da->second != db->second) std::cout << "         " << dirB << ":" << db->second << "\n";
             }
+            // tlas IS gating: the acceleration structure the beams walked has to
+            // have been built the same number of times, the same way. A
+            // divergence here means the two runs did not present the tracer with
+            // the same structure, and every point statistic below is then a
+            // comparison of two different experiments.
+            const auto ta = manA.find("tlas"), tb = manB.find("tlas");
+            if (ta == manA.end() || tb == manB.end() || ta->second != tb->second) {
+                std::cout << "MISMATCH tlas\n  " << dirA << ":"
+                          << (ta == manA.end() ? " <absent>" : ta->second) << "\n  " << dirB << ":"
+                          << (tb == manB.end() ? " <absent>" : tb->second) << "\n";
+                ++structural;
+            } else {
+                std::cout << "OK       tlas" << ta->second << "\n";
+            }
         }
 
         // Scan count comes from the manifests; a disagreement is structural.
@@ -311,6 +358,46 @@ namespace {
         return 1;
     }
 
+    // Within-run instance-id stability across the edit+revert. Returns 0 when
+    // every range-stable beam kept its id.
+    int idStability(const std::string& dir, int preIdx, int postIdx) {
+        Scan pre, post;
+        const std::string pa = scanFile(dir, preIdx), pb = scanFile(dir, postIdx);
+        if (!loadScan(pa, pre) || !loadScan(pb, post)) {
+            std::cout << "IO FAIL: cannot load " << pa << " / " << pb << "\n";
+            return 1;
+        }
+        if (pre.hdr.pointCount != post.hdr.pointCount) {
+            std::cout << "STRUCTURAL: point counts differ (" << pre.hdr.pointCount << " vs "
+                      << post.hdr.pointCount << ")\n";
+            return 1;
+        }
+        std::size_t hitBoth = 0, rangeStable = 0, idChanged = 0;
+        std::map<std::pair<std::int32_t, std::int32_t>, std::size_t> pairs;
+        for (std::size_t i = 0; i < pre.recs.size(); ++i) {
+            const auto& a = pre.recs[i];
+            const auto& b = post.recs[i];
+            if (a.returnNo <= 0 || b.returnNo <= 0) continue;
+            ++hitBoth;
+            if (std::abs(a.distance - b.distance) >= kDeltaEps) continue;// moved / different surface
+            ++rangeStable;
+            ++pairs[{a.hitInstanceId, b.hitInstanceId}];
+            if (a.hitInstanceId != b.hitInstanceId) ++idChanged;
+        }
+        std::cout << "idstability " << dir << "  pre=scan_" << std::setw(3) << std::setfill('0')
+                  << preIdx << " post=scan_" << std::setw(3) << postIdx << std::setfill(' ')
+                  << " (simTime " << pre.hdr.simTime << " -> " << post.hdr.simTime << ")\n"
+                  << "  beams=" << pre.hdr.pointCount << " hitBoth=" << hitBoth
+                  << " rangeStable=" << rangeStable << " idChanged=" << idChanged << "\n";
+        for (const auto& [p, n] : pairs) {
+            std::cout << "  id " << p.first << " -> " << p.second << "  " << n
+                      << (p.first == p.second ? "" : "   <-- CHANGED") << "\n";
+        }
+        std::cout << (idChanged ? "RESULT instance ids NOT stable across the rebuild\n"
+                                : "RESULT instance ids stable across the rebuild\n");
+        return idChanged ? 1 : 0;
+    }
+
 }// namespace
 
 int main(int argc, char** argv) {
@@ -324,10 +411,28 @@ int main(int argc, char** argv) {
     float noiseSigma = 0.f;// see file header: OFF by default, on purpose
     bool noLod = false;    // auto-LOD swaps geometry -> different TLAS content
     bool noOccl = false;
+    bool sceneEdit = false;
+    int editAddFrame = 45, editRemoveFrame = 81;
+    int idPre = 6, idPost = 15;// scan indices: frame 36 (pre-add), frame 90 (post-remove)
     for (int i = 1; i < argc; ++i) {
         const std::string arg = argv[i];
         if (arg == "--frames" && i + 1 < argc) frames = std::atoi(argv[++i]);
         else if (arg == "--out" && i + 1 < argc) outDir = argv[++i];
+        else if (arg == "--scene-edit") sceneEdit = true;
+        else if (arg == "--edit-add" && i + 1 < argc) editAddFrame = std::atoi(argv[++i]);
+        else if (arg == "--edit-remove" && i + 1 < argc) editRemoveFrame = std::atoi(argv[++i]);
+        else if (arg == "--pre" && i + 1 < argc) idPre = std::atoi(argv[++i]);
+        else if (arg == "--post" && i + 1 < argc) idPost = std::atoi(argv[++i]);
+        else if (arg == "--idstability" && i + 1 < argc) {
+            const std::string d = argv[++i];
+            // Trailing --pre/--post must be parsed before the mode runs.
+            for (int j = i + 1; j + 1 < argc; ++j) {
+                const std::string f = argv[j];
+                if (f == "--pre") idPre = std::atoi(argv[j + 1]);
+                else if (f == "--post") idPost = std::atoi(argv[j + 1]);
+            }
+            return idStability(d, idPre, idPost);
+        }
         else if (arg == "--scan-every" && i + 1 < argc) scanEvery = std::max(1, std::atoi(argv[++i]));
         else if (arg == "--seed" && i + 1 < argc) seed = std::strtoull(argv[++i], nullptr, 0);
         else if (arg == "--noise-sigma" && i + 1 < argc) noiseSigma = float(std::atof(argv[++i]));
@@ -336,8 +441,9 @@ int main(int argc, char** argv) {
         else if (arg == "--compare" && i + 2 < argc) return compare(argv[i + 1], argv[i + 2]);
     }
     if (outDir.empty()) {
-        std::cout << "usage: vulkan_lidar_audit --frames N --out <dir>\n"
-                  << "       vulkan_lidar_audit --compare <dirA> <dirB>\n";
+        std::cout << "usage: vulkan_lidar_audit --frames N [--scene-edit] --out <dir>\n"
+                  << "       vulkan_lidar_audit --compare <dirA> <dirB>\n"
+                  << "       vulkan_lidar_audit --idstability <dir> [--pre N] [--post N]\n";
         return 1;
     }
     std::error_code ec;
@@ -459,6 +565,15 @@ int main(int argc, char** argv) {
     sensor.rangeNoise = {noiseSigma, 0.f, 0.f, seed};
     sensor.resetNoise();
 
+    // The edit subject. Built up front so its geometry upload is not itself the
+    // event; the ADD at editAddFrame is what churns the entry list. Placed in
+    // clear line of sight at ~4.9 m and 1 m up — well inside the VLP-16's
+    // -15 deg row and not overlapping any scripted mover's path.
+    auto editBox = Mesh::create(BoxGeometry::create(1.f, 1.f, 1.f),
+                                MeshStandardMaterial::create(
+                                        MeshStandardMaterial::Params{}.color(Color(0xd0c060))));
+    editBox->position.set(3.5f, 1.0f, 3.5f);
+
     const int elevCount = static_cast<int>(model.elevationAngles.size());
     const int azSteps = elevCount > 0
                                 ? static_cast<int>(sensor.beamCount()) / elevCount
@@ -482,7 +597,32 @@ int main(int argc, char** argv) {
         mover->rotation.y = static_cast<float>(t * 1.7);
         spinner->rotation.x = static_cast<float>(t * 2.3);
         deform(t);
-        sensor.rotation.y = static_cast<float>(t * 0.35);
+        // Pinned in scene-edit mode: --idstability compares two scans of the
+        // same run, and that only isolates static geometry if both were fired
+        // from the same pose. See the file header.
+        sensor.rotation.y = sceneEdit ? 0.f : static_cast<float>(t * 0.35);
+
+        if (sceneEdit) {
+            if (f == editAddFrame) {
+                scene.add(editBox);
+                renderer.setObjectInstanceId(*editBox, 6);
+                renderer.setObjectClassId(*editBox, 2);
+                // The add alone appends, and removing an appended entry later
+                // is a TAIL removal — nothing behind it to shift, so it does
+                // not test reordering at all. Pulling the spinner out of the
+                // MIDDLE of the list is what forces every entry behind it
+                // (pillar, waver) to move, and re-adding it at editRemoveFrame
+                // sends it to the tail rather than back to its old slot. That
+                // asymmetry is the point: after the revert the scene holds the
+                // same five objects in a different order.
+                scene.remove(*spinner);
+            } else if (f == editRemoveFrame) {
+                scene.remove(*editBox);
+                scene.add(spinner);
+                renderer.setObjectInstanceId(*spinner, 3);
+                renderer.setObjectClassId(*spinner, 2);
+            }
+        }
 
         renderer.render(scene, *camera);
 
@@ -554,13 +694,23 @@ int main(int argc, char** argv) {
          << " maxRange=" << sensor.params.maxRange
          << " seed=0x" << std::hex << seed << std::dec
          << " noiseSigma=" << noiseSigma
-         << " lod=" << (noLod ? 0 : 1) << " occl=" << (noOccl ? 0 : 1) << "\n";
+         << " lod=" << (noLod ? 0 : 1) << " occl=" << (noOccl ? 0 : 1)
+         << " sceneEdit=" << (sceneEdit ? 1 : 0)
+         << " editAdd=" << (sceneEdit ? editAddFrame : -1)
+         << " editRemove=" << (sceneEdit ? editRemoveFrame : -1)
+         << " yaw=" << (sceneEdit ? "fixed" : "orbit") << "\n";
 
     const auto dyn = renderer.dynamicGeomStats();
     std::ostringstream dynRow;
     dynRow << "dyn.geom graduated=" << dyn.graduated
            << " refits=" << dyn.refitsRecorded
            << " rebuilds=" << dyn.fullRebuilds << "\n";
+    // The acceleration-structure counterpart: a scene edit must show up here as
+    // extra fullRebuilds, and both runs must agree on the count.
+    const auto tl = renderer.tlasStats();
+    dynRow << "tlas rebuilds=" << tl.fullRebuilds
+           << " updates=" << tl.updates
+           << " instances=" << tl.instances << "\n";
     if (dyn.graduated == 0) {
         std::cout << "DYNAMIC-GEOM PATH NEVER ENGAGED (deformer failed to graduate)\n";
         ++failures;

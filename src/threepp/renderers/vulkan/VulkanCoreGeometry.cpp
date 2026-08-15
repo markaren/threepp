@@ -2036,6 +2036,11 @@ void VulkanRenderer::Impl::buildTlas(const std::vector<VkAccelerationStructureIn
 
             VkCommandBuffer cb = beginOneShot();
             ctx->rt().cmdBuildAccelerationStructures(cb, 1, &tlasBuild, &pRange);
+            // Site 1 of 2: the structural build. Always MODE_BUILD — this path
+            // recreates the TLAS object itself, so instance ordering here is
+            // whatever the fresh build chooses.
+            ++tlasStats_.fullRebuilds;
+            tlasStats_.instances = instanceCount;
             endAndSubmitOneShot(cb, "buildTlas");
             destroyBuffer(ctx->allocator(), scratch);
             tlasBuiltInstanceCount_ = instanceCount;
@@ -2150,6 +2155,14 @@ void VulkanRenderer::Impl::recordTlasRefit(VkCommandBuffer cb,
             range.primitiveCount = instanceCount;
             const VkAccelerationStructureBuildRangeInfoKHR* pRange = &range;
             ctx->rt().cmdBuildAccelerationStructures(cb, 1, &tlasBuild, &pRange);
+            // Site 2 of 2: the per-frame refit. `fullBuild` here is either the
+            // caller's request or the count-mismatch promotion above, and it is
+            // the same MODE_BUILD the structural path uses — so it counts as a
+            // rebuild, not an update. The early returns above (count 0, no TLAS,
+            // oversize instance data, oversize promoted build) record nothing,
+            // deliberately: they record no command either.
+            ++(fullBuild ? tlasStats_.fullRebuilds : tlasStats_.updates);
+            tlasStats_.instances = instanceCount;
             if (fullBuild) tlasBuiltInstanceCount_ = instanceCount;
         }
 

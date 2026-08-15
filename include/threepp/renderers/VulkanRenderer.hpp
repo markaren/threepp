@@ -579,6 +579,18 @@ namespace threepp {
         };
         [[nodiscard]] DynamicGeomStats dynamicGeomStats() const;
 
+        // Top-level acceleration structure build bookkeeping. Counters only —
+        // nothing here feeds a decision. The distinction that matters to a
+        // determinism audit is fullRebuilds vs updates: a MODE_BUILD re-derives
+        // the TLAS from scratch and is free to order instances differently,
+        // while a MODE_UPDATE refits the existing topology in place.
+        struct TlasStats {
+            uint64_t fullRebuilds = 0;// MODE_BUILD (structural + promoted refits)
+            uint64_t updates = 0;     // MODE_UPDATE refits
+            uint32_t instances = 0;   // instance count of the most recent build/update
+        };
+        [[nodiscard]] TlasStats tlasStats() const;
+
         // HDR bloom, added in linear HDR before the tone-map curve. 0 disables.
         void setBloomIntensity(float intensity);
         [[nodiscard]] float bloomIntensity() const;

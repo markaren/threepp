@@ -2488,6 +2488,10 @@ namespace threepp {
         return core()->dynGeomStats_;
     }
 
+    VulkanRenderer::TlasStats VulkanRenderer::tlasStats() const {
+        return core()->tlasStats_;
+    }
+
     VulkanRenderer::FrameTimings VulkanRenderer::lastFrameTimings() const {
         return core()->gpuTimings_->timings();
     }

@@ -886,6 +886,7 @@ namespace threepp {
         uint32_t lodChainsQueuedCount_ = 0;
         VulkanRenderer::AutoLodStats autoLodStats_{};
         VulkanRenderer::DynamicGeomStats dynGeomStats_{};
+        VulkanRenderer::TlasStats tlasStats_{};
 
         void ensureLodWorkerStarted() {
             if (lodWorker_.joinable()) return;
