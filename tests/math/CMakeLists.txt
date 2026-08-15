@@ -1,4 +1,4 @@
-
+﻿
 add_test_executable(Box2_test)
 add_test_executable(Box3_test)
 add_test_executable(Color_test)
@@ -15,3 +15,4 @@ add_test_executable(Vector3_test)
 add_test_executable(Vector4_test)
 add_test_executable(Matrix4_test)
 add_test_executable(Quaternion_test)
+add_test_executable(Rng_test)
