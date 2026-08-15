@@ -244,6 +244,10 @@ namespace threepp {
               params_(sanitise(params)),
               tmpl_(fauna::makeBirdTemplate(params_.shape)) {
 
+            // The whole mesh is rebaked in place every update(), so any
+            // renderer-side LOD chain would simplify a pose that is one
+            // frame from gone. Self-managed detail, like terrain tiles.
+            autoLod = false;
             build();
         }
 
