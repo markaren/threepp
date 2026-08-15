@@ -18,6 +18,7 @@ add_example(NAME "vulkan_furnace_test" LINK_IMGUI)
 add_example(NAME "vulkan_lidar" LINK_IMGUI)
 add_example(NAME "vulkan_event_camera" LINK_IMGUI)
 add_example(NAME "vulkan_aov_audit")
+add_example(NAME "vulkan_lidar_audit")
 
 # Local scratch harnesses (capture / repro / profiling tools) are not tracked —
 # see scratch/README.md and .gitignore. Auto-register every scratch/*.cpp as its
