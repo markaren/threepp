@@ -1743,6 +1743,7 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                                             VMA_MEMORY_USAGE_AUTO,
                                             VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT);
                                     rec.perFrameDynamic = true;
+                                    ++dynGeomStats_.graduated;
                                     // Settling now happens through the frame cb
                                     // — the draining host-side resync pass must
                                     // never touch this record again.

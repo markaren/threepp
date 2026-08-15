@@ -233,6 +233,50 @@ int main(int argc, char** argv) {
     renderer.setObjectInstanceId(*pillar, 4);
     renderer.setObjectClassId(*pillar, 3);
 
+    // A CPU deformer: a grid whose position+normal attributes are rewritten
+    // and needsUpdate()ed EVERY frame, so it graduates to the per-frame
+    // dynamic-geometry path (staging upload + frame-cb BLAS refit + the
+    // vertex→prevVertex motion snapshot). Without this row the certificate
+    // silently excludes the refit machinery the flock and CPU trails run on;
+    // the dyn.geom manifest row below asserts the path actually engaged.
+    // The wave is a pure function of the scripted clock — never wall time.
+    auto waver = Mesh::create(PlaneGeometry::create(4.f, 4.f, 20, 20),
+                              MeshStandardMaterial::create(
+                                      MeshStandardMaterial::Params{}.color(Color(0xb03a48))));
+    waver->rotation.x = -math::PI / 2;
+    waver->position.set(-0.5f, 0.6f, 3.0f);
+    scene.add(waver);
+    renderer.setObjectInstanceId(*waver, 5);
+    renderer.setObjectClassId(*waver, 4);
+    auto* wavPos = waver->geometry()->getAttribute<float>("position");
+    auto* wavNrm = waver->geometry()->getAttribute<float>("normal");
+    wavPos->setUsage(DrawUsage::Dynamic);
+    wavNrm->setUsage(DrawUsage::Dynamic);
+    const std::vector<float> wavRest = wavPos->array();// rest-pose x,y copy
+    auto deform = [&](double t) {
+        auto& p = wavPos->array();
+        auto& n = wavNrm->array();
+        for (std::size_t v = 0; v < p.size() / 3; ++v) {
+            const float x = wavRest[3 * v + 0];
+            const float y = wavRest[3 * v + 1];
+            // Local z wave with analytic partials, so the normals are exact
+            // rather than re-derived from the mesh (cheaper, and one fewer
+            // spot for cross-run arithmetic to hide in).
+            const float ax = 2.0f * x + static_cast<float>(t) * 3.0f;
+            const float ay = 2.0f * y + static_cast<float>(t) * 2.0f;
+            const float z = 0.25f * std::sin(ax) * std::cos(ay);
+            const float dzdx = 0.50f * std::cos(ax) * std::cos(ay);
+            const float dzdy = -0.50f * std::sin(ax) * std::sin(ay);
+            p[3 * v + 2] = z;
+            const float inv = 1.f / std::sqrt(dzdx * dzdx + dzdy * dzdy + 1.f);
+            n[3 * v + 0] = -dzdx * inv;
+            n[3 * v + 1] = -dzdy * inv;
+            n[3 * v + 2] = inv;
+        }
+        wavPos->needsUpdate();
+        wavNrm->needsUpdate();
+    };
+
     // ---- render + hash ------------------------------------------------------
 
     struct AovRow {
@@ -266,6 +310,7 @@ int main(int argc, char** argv) {
                                 static_cast<float>(1.5 * std::cos(t * 0.9)));
             mover->rotation.y = static_cast<float>(t * 1.7);
             spinner->rotation.x = static_cast<float>(t * 2.3);
+            deform(t);
         }
 
         renderer.render(scene, *camera);
@@ -360,6 +405,18 @@ int main(int argc, char** argv) {
         emit("taa.history", taaHist);
     }
     if (hdrSplit) emit("shade.hdr", shadeHdr);
+
+    // The graduated-path proof: a manifest row both runs must agree on, and a
+    // hard failure if the deformer never graduated — a certificate that reads
+    // "deterministic" while the refit path sat idle would be a false claim.
+    const auto dyn = renderer.dynamicGeomStats();
+    manifest << "dyn.geom graduated=" << dyn.graduated
+             << " refits=" << dyn.refitsRecorded
+             << " rebuilds=" << dyn.fullRebuilds << "\n";
+    if (!staticScene && dyn.graduated == 0) {
+        std::cout << "DYNAMIC-GEOM PATH NEVER ENGAGED (deformer failed to graduate)\n";
+        ++failures;
+    }
 
     std::cout << "vulkan_aov_audit: " << frames << " frames";
     if (failures) {

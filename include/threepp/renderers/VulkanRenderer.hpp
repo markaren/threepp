@@ -566,6 +566,19 @@ namespace threepp {
         };
         [[nodiscard]] AutoLodStats autoLodStats() const;
 
+        // Debug/harness stats for the graduated per-frame dynamic-geometry
+        // path (a plain mesh whose attributes are rewritten + needsUpdate()ed
+        // every frame graduates to a frame-cb BLAS refit after a short dirty
+        // streak). Counters are cumulative since renderer construction. The
+        // determinism audit asserts they MOVED — a scene that was supposed to
+        // exercise the refit path but didn't would otherwise certify nothing.
+        struct DynamicGeomStats {
+            uint32_t graduated = 0;     // records promoted to the per-frame path
+            uint64_t refitsRecorded = 0;// BLAS ops recorded into frame command buffers
+            uint64_t fullRebuilds = 0;  // of those, periodic MODE_BUILD rebalances
+        };
+        [[nodiscard]] DynamicGeomStats dynamicGeomStats() const;
+
         // HDR bloom, added in linear HDR before the tone-map curve. 0 disables.
         void setBloomIntensity(float intensity);
         [[nodiscard]] float bloomIntensity() const;

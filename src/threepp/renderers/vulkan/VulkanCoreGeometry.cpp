@@ -1288,6 +1288,8 @@ void VulkanRenderer::Impl::recordDynamicGeomRefits(VkCommandBuffer cb) {
                     const bool fullRebuild =
                             rec.blasRefitCounter >= BlasRecord::kBlasFullRebuildInterval;
                     rec.blasRefitCounter = fullRebuild ? 0u : (rec.blasRefitCounter + 1u);
+                    ++dynGeomStats_.refitsRecorded;
+                    if (fullRebuild) ++dynGeomStats_.fullRebuilds;
 
                     blasBuilds[kk].sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_GEOMETRY_INFO_KHR;
                     blasBuilds[kk].type = VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR;
