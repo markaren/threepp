@@ -500,6 +500,7 @@ set(sources
         "threepp/extras/terrain/TerrainGenerator.cpp"
         "threepp/extras/terrain/GeoTerrainPack.cpp"
         "threepp/extras/uav/DownwashEffect.cpp"
+        "threepp/extras/uav/MavlinkOut.cpp"
         "threepp/extras/uav/SitlBridge.cpp"
         "threepp/extras/core/Curve.cpp"
         "threepp/extras/core/CurvePath.cpp"
@@ -996,8 +997,9 @@ if (UNIX)
 endif ()
 
 if (WIN32)
-    # extras/uav/SitlBridge.cpp keeps its winsock usage inside the library, so
-    # consumers of the header need neither <winsock2.h> nor this link.
+    # extras/uav/SitlBridge.cpp and MavlinkOut.cpp keep their winsock usage
+    # inside the library, so consumers of the headers need neither
+    # <winsock2.h> nor this link.
     target_link_libraries(threepp PRIVATE ws2_32)
 endif ()
 

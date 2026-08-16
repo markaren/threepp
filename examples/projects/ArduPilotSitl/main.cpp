@@ -11,6 +11,12 @@
 //                                 rotor-wash dust on the Vulkan backend
 //   ardupilot_sitl --seq DIR [--start T] [--seqframes N] [--warm N]
 //                                 headless deterministic brownout capture
+//   ardupilot_sitl --proximity [--proximity-port N]
+//                                 360-degree horizontal lidar fan -> MAVLink
+//                                 OBSTACLE_DISTANCE at 10 Hz, plus the spoke
+//                                 overlay. Combines with any mode above; the
+//                                 scan runs whether or not SITL ever answers.
+//                                 SITL side: --serial2=udpclient:<host>:14560
 //
 // The render loop and the physics never race: each animate frame drains the
 // socket under a time budget (SITL waits on our reply — that's the protocol —
@@ -43,6 +49,8 @@
 #include "threepp/extras/uav/DownwashEffect.hpp"
 #include "threepp/extras/uav/DroneVisual.hpp"
 #include "threepp/extras/uav/FrameConv.hpp"
+#include "threepp/extras/uav/MavlinkOut.hpp"
+#include "threepp/extras/uav/ProximityScan.hpp"
 #include "threepp/extras/uav/QuadSim.hpp"
 #include "threepp/extras/uav/SitlBridge.hpp"
 
@@ -375,10 +383,17 @@ int main(int argc, char** argv) {
     std::string seqDir;      // deterministic frame capture (implies --brownout)
     int seqFrames = 600, seqWarm = 30;
     float seqStart = 12.f;   // sim seconds to fast-forward before capturing
+    bool proximity = false;  // horizontal obstacle fan -> OBSTACLE_DISTANCE
+    std::uint16_t proxPort = 14560;// where SITL's udpclient dials in
     for (int i = 1; i < argc; ++i) {
         const std::string a = argv[i];
         if (a == "--selftest") return runSelftest();
         if (a == "--port" && i + 1 < argc) port = static_cast<std::uint16_t>(std::atoi(argv[++i]));
+        if (a == "--proximity") proximity = true;
+        if (a == "--proximity-port" && i + 1 < argc) {
+            proxPort = static_cast<std::uint16_t>(std::atoi(argv[++i]));
+            proximity = true;
+        }
         if (a == "--brownout") brownout = true;
         if (a == "--seq" && i + 1 < argc) { seqDir = argv[++i]; brownout = true; }
         if (a == "--seqframes" && i + 1 < argc) seqFrames = std::atoi(argv[++i]);
@@ -1107,6 +1122,150 @@ int main(int argc, char** argv) {
         if (std::isnan(lastState.rangefinderM) && !std::isnan(trueR)) ++rngDrops;
         else if (lastState.rangefinderM < trueR * 0.9) ++rngEarly;
     };
+    // ── Proximity fan -> MAVLink OBSTACLE_DISTANCE (--proximity) ────────────
+    // A 72-sector horizontal lidar, cast against the SAME PhysX scene the quad
+    // flies in, framed per MAV_FRAME_BODY_FRD and shipped at 10 Hz. Off by
+    // default: absent --proximity nothing below constructs, nothing is cast and
+    // nothing is drawn.
+    //
+    // The scan runs in BOTH step paths (scripted and SITL-driven), so the
+    // overlay is inspectable — and capturable — with no autopilot on the wire.
+    std::unique_ptr<uav::ProximityScan> prox;
+    std::unique_ptr<uav::MavlinkOut> mavout;
+    std::shared_ptr<BufferGeometry> proxGeom;
+    double nextProxScan = 0., nextProxBeat = 0., nextProxLog = 0.;
+    if (proximity) {
+        prox = std::make_unique<uav::ProximityScan>();
+        mavout = std::make_unique<uav::MavlinkOut>(proxPort);
+        if (!mavout->valid()) {
+            std::fprintf(stderr, "[prox] could not bind UDP :%u — scanning, sending nothing\n",
+                         proxPort);
+        } else {
+            std::fprintf(stderr,
+                         "[prox] listening on UDP :%u (SITL: --serial2=udpclient:<host>:%u)\n",
+                         mavout->port(), mavout->port());
+        }
+
+        // ONE geometry, updated in place forever after. Rebuilding a line
+        // geometry per scan hands the renderer a recycled pointer at the old
+        // key and the Vulkan line cache serves stale segments
+        // (feedback_vulkan_line_geom_cache_pointer_recycle).
+        proxGeom = BufferGeometry::create();
+        const std::size_t floats = uav::ProximityScan::sectors * 2 * 3;
+        proxGeom->setAttribute("position",
+                               FloatBufferAttribute::create(std::vector<float>(floats), 3));
+        proxGeom->setAttribute("color",
+                               FloatBufferAttribute::create(std::vector<float>(floats), 3));
+        proxGeom->getAttribute<float>("position")->setUsage(DrawUsage::Dynamic);
+        proxGeom->getAttribute<float>("color")->setUsage(DrawUsage::Dynamic);
+        // Unlit + transparent, so the Vulkan backend routes this to the overlay
+        // pass instead of trying to shade it deferred
+        // (feedback_vulkan_svg_ui_blend_overlay).
+        auto fanMat = LineBasicMaterial::create(LineBasicMaterial::Params{}
+                                                        .vertexColors(true)
+                                                        .transparent(true)
+                                                        .opacity(0.65f)
+                                                        .depthWrite(false));
+        auto fan = LineSegments::create(proxGeom, fanMat);
+        // Spokes are written in WORLD space while the node stays at the origin,
+        // so its bounds are permanently wrong — culling would blink the fan out.
+        fan->frustumCulled = false;
+        scene.add(fan);
+    }
+
+    // Rays hit the world, never the vehicle: trunks, rocks and terrain are
+    // STATIC and the drone body is dynamic, so the same eSTATIC filter
+    // QuadSim::raycastAgl uses keeps a ray that starts inside the hull from
+    // reporting 0 m in all 72 sectors. Horizontal, not down.
+    const uav::RayCaster proxCast = [&](const Vector3& o, const Vector3& d, float maxR) -> float {
+        using namespace ::physx;
+        PxRaycastBuffer hit;
+        PxQueryFilterData fd;
+        fd.flags = PxQueryFlag::eSTATIC;
+        if (quad->world().scene().raycast(PxVec3(o.x, o.y, o.z), PxVec3(d.x, d.y, d.z), maxR,
+                                          hit, PxHitFlag::eDEFAULT, fd) &&
+            hit.hasBlock) {
+            return hit.block.distance;
+        }
+        return -1.f;
+    };
+
+    // Paced on SIM time, not wall time: the capture path runs faster than real
+    // time and the SITL path runs at whatever rate the autopilot manages, so a
+    // wall clock would emit a different message stream in each and neither at
+    // 10 Hz as declared.
+    const auto serviceProximity = [&] {
+        if (!prox) return;
+        // Every tick, because SITL dials out to US — until one of its datagrams
+        // lands there is no return address to send to.
+        mavout->poll();
+
+        const double t = lastState.timestampSec;
+        if (t >= nextProxBeat) {
+            nextProxBeat = t + 1.0;// 1 Hz; a silent component is ignored
+            mavout->sendHeartbeat();
+        }
+        if (t < nextProxScan) return;
+        nextProxScan = t + 0.1;// 10 Hz
+
+        // The nose: DroneVisual authors forward as -Z, and root() hangs
+        // directly off the scene, so its local quaternion IS the world one.
+        // ProximityScan flattens this to a yaw — the fan never tilts with the
+        // vehicle, or a pitched-forward quad would scan into the dirt.
+        Vector3 fwd(0.f, 0.f, -1.f);
+        fwd.applyQuaternion(drone.root()->quaternion);
+        const auto& dist = prox->scan(proxCast, drone.root()->position, fwd);
+
+        mavout->sendObstacleDistance(static_cast<std::uint64_t>(t * 1e6), dist,
+                                     prox->minCm(), prox->maxCm(),
+                                     static_cast<std::uint8_t>(prox->params().incrementDeg),
+                                     0.f, uav::mavlink::frameBodyFrd);
+
+        auto* posAttr = proxGeom->getAttribute<float>("position");
+        auto* colAttr = proxGeom->getAttribute<float>("color");
+        const Vector3& o = drone.root()->position;
+        const std::uint16_t clearAt = prox->clearValue();
+        const Color blockedColor(1.f, 0.42f, 0.10f);
+        const Color clearColor(0.16f, 0.26f, 0.34f);
+        int blocked = 0;
+        float nearest = 0.f;
+        std::size_t nearestK = 0;
+        for (std::size_t k = 0; k < uav::ProximityScan::sectors; ++k) {
+            const bool isHit = dist[k] < clearAt;
+            // A clear sector still draws, but stubbed at 8 m: a full 50 m fan
+            // of free space is a white disc that hides the obstacles.
+            const float len = isHit ? static_cast<float>(dist[k]) * 0.01f : 8.f;
+            const Vector3 dir = prox->sectorDir(k);
+            const auto v = static_cast<int>(k) * 2;
+            posAttr->setXYZ(v, o.x, o.y, o.z);
+            posAttr->setXYZ(v + 1, o.x + dir.x * len, o.y, o.z + dir.z * len);
+            const Color& c = isHit ? blockedColor : clearColor;
+            colAttr->setXYZ(v, c.r, c.g, c.b);
+            colAttr->setXYZ(v + 1, c.r, c.g, c.b);
+            if (isHit && (blocked == 0 || len < nearest)) {
+                nearest = len;
+                nearestK = k;
+            }
+            blocked += isHit ? 1 : 0;
+        }
+        posAttr->needsUpdate();
+        colAttr->needsUpdate();
+
+        if (t >= nextProxLog) {
+            nextProxLog = t + 1.0;
+            char nearTxt[64];
+            if (blocked > 0) {
+                std::snprintf(nearTxt, sizeof nearTxt, "%.1f m @ %.0f deg", nearest,
+                              prox->sectorBearingDeg(nearestK));
+            } else {
+                std::snprintf(nearTxt, sizeof nearTxt, "all clear");
+            }
+            std::fprintf(stderr, "[prox] t=%.1f nearest %s, blocked %d/%zu, peer %s\n", t, nearTxt,
+                         blocked, uav::ProximityScan::sectors,
+                         mavout->hasPeer() ? mavout->peer().c_str() : "no");
+        }
+    };
+
     // One scripted physics substep at the sim rate.
     const auto scriptedStep = [&] {
         uav::ServoInput in{};
@@ -1117,6 +1276,7 @@ int main(int argc, char** argv) {
         for (int m = 0; m < 4; ++m) in.pwm[m] = pwm;
         quad->step(in, lastState);
         degradeRangefinder(in.frameCount);
+        serviceProximity();
         lastServo = in;
     };
     // Feed the dust from whatever just flew (scripted or SITL).
@@ -1484,6 +1644,7 @@ int main(int argc, char** argv) {
                 }
                 quad->step(servo, lastState);
                 degradeRangefinder(servo.frameCount);
+                serviceProximity();
                 bridge.sendState(lastState);
                 lastServo = servo;
             }

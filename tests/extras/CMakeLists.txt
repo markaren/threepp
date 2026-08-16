@@ -36,6 +36,10 @@ if (WIN32)
     target_link_libraries(SitlBridge_test PRIVATE ws2_32)
 endif ()
 
+# The MAVLink v2 framer and the sector geometry that feeds it — both pinned by
+# golden bytes / a synthetic caster, so no socket and no PhysX here.
+add_test_executable(MavlinkOut_test)
+
 # Imu_test needs the PhysX SDK, which is an optional vcpkg dependency (feature
 # "physx"). Look for it here rather than relying on the examples having already
 # done so — tests must configure standalone.
