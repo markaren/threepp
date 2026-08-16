@@ -557,27 +557,14 @@ int main(int argc, char** argv) {
             }
         }
     }
-    // Pond site (threepp coords, ~90 m northeast-ish of home).
-    constexpr float pondX = 70.f, pondZ = 55.f, pondR = 14.f;
-    float pondGroundY = 0.f;// terrain height at the pond centre, pre-carve
+    // Level a helipad apron around home: within 4 m the ground is exactly h0
+    // (so the pad never pokes through a rising slope), blending back to the raw
+    // terrain by 16 m. That is the ONLY place this demo sculpts the ground —
+    // the physics trimesh is built from this same geometry, so contacts match
+    // the picture.
     {
         auto* pos = terrainGeo->getAttribute<float>("position");
         auto& a = pos->array();
-
-        float best = std::numeric_limits<float>::max();
-        for (int i = 0; i < pos->count(); ++i) {
-            const float d = std::abs(a[i * 3 + 0] - pondX) + std::abs(a[i * 3 + 2] - pondZ);
-            if (d < best) {
-                best = d;
-                pondGroundY = a[i * 3 + 1];
-            }
-        }
-
-        // Level a helipad apron around home: within 4 m the ground is exactly
-        // h0 (so the pad never pokes through a rising slope), blending back to
-        // the raw terrain by 16 m. Then scoop the pond basin. The physics
-        // trimesh is built from this same geometry, so contacts (including a
-        // splash-less "landing" on the pond bed) match the picture.
         for (int i = 0; i < pos->count(); ++i) {
             const float x = a[i * 3 + 0], z = a[i * 3 + 2];
             const float r = std::sqrt(x * x + z * z);
@@ -585,25 +572,93 @@ int main(int argc, char** argv) {
                 const float t = math::smoothstep(4.f, 16.f, r);
                 a[i * 3 + 1] = h0 + (a[i * 3 + 1] - h0) * t;
             }
-            // The pond basin, in the CHEBYSHEV metric — square-symmetric on
-            // purpose, because the water is a square FFT sheet and every
-            // round-basin variant left a straight mesh edge or a corner
-            // floating over some trough. The terrain is pushed TO the profile
-            // (dig where nature is high, FILL where the hillside falls away —
-            // the downhill dam every real slope pond is built with), so the
-            // waterline contour closes around the sheet by construction.
-            const float cheb = std::max(std::abs(x - pondX), std::abs(z - pondZ));
-            if (cheb < 17.f) {
-                const float profile =
-                        pondGroundY - 1.8f * (1.f - math::smoothstep(8.f, 15.f, cheb));
-                const float t = 1.f - math::smoothstep(15.5f, 17.f, cheb);
-                a[i * 3 + 1] += (profile - a[i * 3 + 1]) * t;
-            }
         }
         pos->needsUpdate();
         terrainGeo->computeVertexNormals();
         terrainGeo->computeBoundingBox();
         terrainGeo->computeBoundingSphere();
+    }
+
+    // Pond site: FOUND in the eroded terrain, not carved into it. Hydraulic
+    // erosion leaves real hollows behind, and spot_slam simply goes looking for
+    // one — so this demo does too, asking the question the flat square sheet
+    // actually poses: for a candidate centre and half-width, how high can the
+    // water stand before it runs off the edge of its own mesh? That ceiling is
+    // the lowest point of the square's rim (the spill point), which buries
+    // every edge AND corner under shore by construction — the thing four rounds
+    // of berm-carving were trying to force. Score is open-water AREA, and the
+    // sizes are tried largest-first: the pond is as big as the valley will hold.
+    float pondX = 0.f, pondZ = 0.f, pondR = 0.f, pondWaterRaw = 0.f;
+    {
+        const int dim = tp.resolution + 1;
+        const float half = tp.worldSize * 0.5f;
+        const float step = tp.worldSize / static_cast<float>(tp.resolution);
+        const auto& a = terrainGeo->getAttribute<float>("position")->array();
+        const auto hAt = [&](int ix, int iz) {
+            return a[(static_cast<std::size_t>(iz) * dim + ix) * 3 + 1];
+        };
+        // Search an annulus: clear of the pad apron and the brownout site, close
+        // enough that the flight and the capture tripod actually see it.
+        constexpr float kNear = 45.f, kFar = 350.f;
+        constexpr float kFreeboard = 0.25f;// wave crests + z-fight margin
+        const int lo = static_cast<int>(std::lround((-kFar + half) / step));
+        const int hi = static_cast<int>(std::lround((kFar + half) / step));
+        float bestArea = 0.f;
+        // Half-widths ~70 m down to ~12 m. Measured on this terrain (seed 1337,
+        // 1500 m island, hydraulic erosion): NOTHING within 175 m of home holds
+        // more than 0.6 m of water — fluvial erosion carves open drainage and
+        // its droplets FILL hollows, so a young eroded massif has no ponds near
+        // its crown. The real water is down the flank, and it is a proper tarn.
+        for (int rad : {24, 20, 16, 13, 10, 8, 6, 5, 4}) {
+            const float W = rad * step;
+            const int stride = std::max(1, rad / 3);
+            for (int cz = lo; cz <= hi; cz += stride) {
+                for (int cx = lo; cx <= hi; cx += stride) {
+                    if (cx - rad < 0 || cx + rad >= dim || cz - rad < 0 || cz + rad >= dim) continue;
+                    const float x = cx * step - half, z = cz * step - half;
+                    const float r = std::hypot(x, z);
+                    if (r < kNear || r > kFar) continue;
+                    // The spill point: water above this hangs off the rim.
+                    float rim = std::numeric_limits<float>::max();
+                    for (int k = -rad; k <= rad; ++k) {
+                        rim = std::min(rim, std::min(std::min(hAt(cx + k, cz - rad),
+                                                              hAt(cx + k, cz + rad)),
+                                                     std::min(hAt(cx - rad, cz + k),
+                                                              hAt(cx + rad, cz + k))));
+                    }
+                    const float wl = rim - kFreeboard;
+                    float area = 0.f, vol = 0.f, deepest = 0.f;
+                    for (int jz = -rad + 1; jz < rad; ++jz) {
+                        for (int jx = -rad + 1; jx < rad; ++jx) {
+                            const float d = wl - hAt(cx + jx, cz + jz);
+                            if (d <= 0.f) continue;
+                            area += step * step;
+                            vol += d * step * step;
+                            deepest = std::max(deepest, d);
+                        }
+                    }
+                    // A pond, not a wet patch: deep somewhere, wide enough to
+                    // read, and not a film spread over a whole hillside.
+                    // A tarn, not a wet patch: deep somewhere, wide enough to
+                    // read from the air, and not a film smeared over a hillside.
+                    if (deepest < 1.2f || area < 400.f || vol < 0.35f * area) continue;
+                    if (area > bestArea) {
+                        bestArea = area;
+                        pondX = x;
+                        pondZ = z;
+                        pondR = W;
+                        pondWaterRaw = wl;
+                    }
+                }
+            }
+        }
+        if (pondR > 0.f) {
+            std::fprintf(stderr, "[pond] basin (%.0f, %.0f)  half-width %.1f m  "
+                                 "water %.2f m  open water %.0f m2\n",
+                         pondX, pondZ, pondR, pondWaterRaw - h0, bestArea);
+        } else {
+            std::fprintf(stderr, "[pond] no basin holds water in this terrain — dry valley\n");
+        }
     }
     auto terrainMesh = Mesh::create(terrainGeo, terrainMat);
     terrainMesh->receiveShadow = true;
@@ -611,7 +666,7 @@ int main(int argc, char** argv) {
     terrainMesh->position.y = -h0;
     scene.add(terrainMesh);
 
-    // Exact-grid height sampler over the FINAL (apron+pond) geometry; world
+    // Exact-grid height sampler over the FINAL (aproned) geometry; world
     // y = sample - h0 because the mesh is offset so home ground sits at 0.
     const auto groundY = [&, dim = tp.resolution + 1,
                           half = tp.worldSize * 0.5f,
@@ -622,22 +677,29 @@ int main(int argc, char** argv) {
         return pos->array()[(static_cast<std::size_t>(iz) * dim + ix) * 3 + 1] - h0;
     };
 
+    // Open water: below the waterline and under the sheet. The shoreline is
+    // whatever contour the terrain draws, so vegetation gates on THIS rather
+    // than on a radius — reeds and willows crowd the inlets, nothing stands in
+    // the pond (spot_slam's rule).
+    const float pondWaterY = pondWaterRaw - h0;
+    const auto inPond = [&](float x, float z) {
+        if (pondR <= 0.f) return false;
+        if (std::max(std::abs(x - pondX), std::abs(z - pondZ)) > pondR) return false;
+        return groundY(x, z) < pondWaterY + 0.15f;
+    };
+
     // Pond water. On Vulkan: spot_slam's REAL water — an FFT Ocean patch with
     // dm-scale ripples, traced reflections of the sky/forest, and shallow
     // freshwater shading veiled into a green-brown murk (the bottom is the
-    // carved basin, genuinely visible through the surface). GL keeps the flat
-    // disc: Ocean is a Vulkan-renderer object.
-    {
-        // 0.55 below the rim puts the waterline crossing at Chebyshev ~12.9 —
-        // inside the sheet's 13.8 half-width on every side AND corner (the
-        // square basin measures distance the same way the square sheet does).
-        const float waterY = pondGroundY - h0 - 0.55f;
+    // natural basin floor, genuinely visible through the surface). GL keeps the
+    // flat disc: Ocean is a Vulkan-renderer object.
+    if (pondR > 0.f) {
 #ifdef THREEPP_WITH_VULKAN
         if (vulkan) {
             Ocean::Options oo;
-            // Half-width 13.8 vs the waterline's Chebyshev crossing at ~12.9:
-            // every edge and corner tucks under the square basin's shore.
-            oo.size = 27.6f;
+            // The sheet spans exactly the square whose rim set the water level,
+            // so every edge and corner is buried under shore.
+            oo.size = 2.f * pondR;
             oo.resolution = 128;
             oo.windSpeed = 3.f;// a breeze: ripples, not a seascape
             oo.windTheta = 0.5f;
@@ -645,13 +707,15 @@ int main(int argc, char** argv) {
             oo.waveScale = 0.4f;
             oo.fftSize = 256;
             auto pond = Ocean::create(oo);
-            pond->position.set(pondX, waterY, pondZ);
-            // ~0.4-1.7 m deep: clear water at that depth reads as wet sand, so
-            // a short attenuation veils the bottom (spot_slam's murk numbers).
+            pond->position.set(pondX, pondWaterY, pondZ);
+            // spot_slam's green-brown murk, but stretched: its pond was 0.4 m
+            // deep and needed a 1.2 m veil to stop reading as wet sand. This
+            // basin is metres deep, so a longer attenuation keeps the shallows
+            // legibly green-brown while the middle goes properly dark.
             if (auto* pm = pond->materialAs<MeshPhysicalMaterial>()) {
                 pm->attenuationColor = Color(0x245238);
-                pm->attenuationDistance = 1.2f;
-                pm->thickness = 0.6f;
+                pm->attenuationDistance = 2.5f;
+                pm->thickness = 0.8f;
             }
             scene.add(pond);
         } else
@@ -661,9 +725,10 @@ int main(int argc, char** argv) {
                                                                  .color(Color(0.05f, 0.16f, 0.20f))
                                                                  .roughness(0.06f)
                                                                  .metalness(0.f));
-            auto water = Mesh::create(CircleGeometry::create(pondR + 2.5f, 40), waterMat);
+            // Inscribed in the same square: the disc edge dies under the rim.
+            auto water = Mesh::create(CircleGeometry::create(pondR * 0.98f, 48), waterMat);
             water->rotation.x = -math::PI / 2.f;
-            water->position.set(pondX, waterY, pondZ);
+            water->position.set(pondX, pondWaterY, pondZ);
             scene.add(water);
         }
     }
@@ -681,7 +746,7 @@ int main(int argc, char** argv) {
             const float r = 22.f + std::pow(u01(rng), 1.6f) * 520.f;
             const float a = u01(rng) * 2.f * math::PI;
             const float x = std::cos(a) * r, z = std::sin(a) * r;
-            if (std::hypot(x - pondX, z - pondZ) < pondR + 8.f) continue;
+            if (inPond(x, z)) continue;
             const float s = 0.25f + std::pow(u01(rng), 2.f) * 1.5f;
             auto rock = Mesh::create(terrain::makeRockGeometry(1000 + i), rockMat);
             rock->scale.set(s * (0.8f + 0.4f * u01(rng)), s * (0.6f + 0.3f * u01(rng)),
@@ -714,7 +779,7 @@ int main(int argc, char** argv) {
             const float r = 5.f + std::sqrt(u01(rng)) * 43.f;
             const float a = u01(rng) * 2.f * math::PI;
             const float x = std::cos(a) * r, z = std::sin(a) * r;
-            if (std::hypot(x - pondX, z - pondZ) < pondR + 5.f) continue;
+            if (inPond(x, z)) continue;
             // Valley floor only: low AND locally flat.
             const float y = groundY(x, z);
             if (y > 6.f) continue;
@@ -934,7 +999,7 @@ int main(int argc, char** argv) {
             const float r = 22.f + std::pow(u01f(rng), 0.8f) * 218.f;
             const float a = u01f(rng) * 2.f * math::PI;
             const float x = std::cos(a) * r, z = std::sin(a) * r;
-            if (std::hypot(x - pondX, z - pondZ) < pondR + 6.f) continue;
+            if (inPond(x, z)) continue;
             const float y = groundY(x, z);
             // Valley and lower slopes only: a tree standing on a ridge crest
             // draws itself on the skyline and reads as a cardboard cutout.
