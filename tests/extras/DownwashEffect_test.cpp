@@ -70,6 +70,29 @@ TEST_CASE("high hover entrains nothing; landing fills the field") {
     CHECK(std::abs(c.y) < fx->field()->densityRepr().halfExtent.y * 2.f);
 }
 
+TEST_CASE("dust is conserved: eroded from the pad, deposited downwind") {
+    auto fx = DownwashEffect::create();
+    fx->setWind(Vector3(1.4f, 0.f, 0.5f));
+
+    // A dusty low hover: quanta leave the ground for the air, exactly 1:1.
+    drive(*fx, 0.f, 5.f, 0.7f, 0.42f);
+    const double initial = fx->groundDustInitial();
+    REQUIRE(initial > 0.);
+    CHECK(fx->airborne() > 0);
+    CHECK(fx->groundDustQuanta() + static_cast<double>(fx->airborne()) == initial);
+
+    // The pad's source cell has been mined.
+    const float padAfterHover = fx->groundDustAt(0.f, 0.f);
+    CHECK(padAfterHover < fx->params().groundDustPerM2 *
+                                  fx->params().gridCell * fx->params().gridCell);
+
+    // Climb away and let every parcel settle: all mass returns to the GROUND,
+    // but not to where it came from — the wind carried it downwind.
+    drive(*fx, 5.f, 5.f + fx->params().life * 2.5f, 30.f, 0.41f);
+    CHECK(fx->airborne() == 0);
+    CHECK(fx->groundDustQuanta() == initial);
+}
+
 TEST_CASE("same update sequence, same bytes") {
     auto a = DownwashEffect::create();
     auto b = DownwashEffect::create();

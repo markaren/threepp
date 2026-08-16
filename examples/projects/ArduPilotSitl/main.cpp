@@ -933,13 +933,14 @@ int main(int argc, char** argv) {
             if (i % 20 == 0) {
                 const auto& dr = dust->field()->densityRepr();
                 std::fprintf(stderr,
-                             "[dust] t=%.2f alt=%.2f thr=%.2f str=%.2f live=%u "
+                             "[dust] t=%.2f alt=%.2f str=%.2f air=%u gnd=%.1f%% "
                              "box c=(%.1f %.1f %.1f) h=(%.1f %.1f %.1f)\n",
                              lastState.timestampSec, -lastState.positionNed[2],
-                             (quad->motorLevel(0) + quad->motorLevel(1) +
-                              quad->motorLevel(2) + quad->motorLevel(3)) *
-                                     0.25f,
-                             dust->dustiness(), dust->field()->liveCount(),
+                             dust->dustiness(), dust->airborne(),
+                             100.f * dust->groundDustAt(drone.root()->position.x,
+                                                        drone.root()->position.z) /
+                                     (dust->params().groundDustPerM2 *
+                                      dust->params().gridCell * dust->params().gridCell),
                              dr.center.x, dr.center.y, dr.center.z,
                              dr.halfExtent.x, dr.halfExtent.y, dr.halfExtent.z);
             }
@@ -1002,8 +1003,15 @@ int main(int argc, char** argv) {
             ImGui::Text("airspeed     %.1f m/s", lastState.airspeed);
         }
         if (dust) {
-            ImGui::Text("dust         %.0f%%  (%u parcels)", dust->dustiness() * 100.f,
-                        dust->field()->liveCount());
+            ImGui::Text("dust         %.0f%%  (%u parcels airborne)",
+                        dust->dustiness() * 100.f, dust->airborne());
+            // The conserved reservoir: watch the ground under the vehicle
+            // run dry over repeated landings.
+            ImGui::Text("loose soil   %.0f%% left under the vehicle",
+                        100.f * dust->groundDustAt(drone.root()->position.x,
+                                                   drone.root()->position.z) /
+                                (dust->params().groundDustPerM2 *
+                                 dust->params().gridCell * dust->params().gridCell));
         }
         ImGui::Separator();
         ImGui::TextUnformatted("wind");

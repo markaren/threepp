@@ -22,10 +22,20 @@
 // brownout. The model here is that shape as a closed form: parcels are born on
 // the impingement annulus under the vehicle, shoot outward with an
 // exponentially decelerating radial reach, lift into the rolled-up front as
-// they get there, wobble on phase-shifted sines (no two alike —
-// feedback_procedural_avoid_perfect_repetition), ride the world's wind once
-// they leave the jet, and die. Entrainment is gated on thrust x ground
-// proximity: no dust in a high hover, a wall of it in the last metres.
+// they get there, churn on per-lobe eddies and frequencies (no two alike, and
+// no shared beat — feedback_procedural_avoid_perfect_repetition), ride the
+// world's wind once they leave the jet, and die. Entrainment is gated on
+// thrust x ground proximity: no dust in a high hover, a wall of it in the
+// last metres.
+//
+// ── THE DUST IS CONSERVED ───────────────────────────────────────────────────
+// The ground carries a finite reservoir of loose soil (a 2D mass grid over
+// the landing site). Spawning a parcel ERODES one quantum from the cell under
+// its birth point — an exhausted cell spawns nothing — and a dying parcel
+// DEPOSITS its quantum wherever the wind carried it. Dust genuinely moves
+// from A to B: a hover slowly blows its own pad clean and the brownout fades,
+// the downwind band thickens, and ground + airborne totals stay exactly
+// equal to the initial seeding (the unit test holds this to the quantum).
 //
 // ── DETERMINISM: latched, not stateless ─────────────────────────────────────
 // FireEffect's emitter is a pure closed form f(seed, t) because a campfire
@@ -133,6 +143,19 @@ namespace threepp::uav {
             Color albedo{0.45f, 0.33f, 0.19f};
             float anisotropy = 0.62f;
 
+            // ── The ground reservoir (conservation) ─────────────────────────
+            // Loose soil available for entrainment, in parcel QUANTA per m²,
+            // held in a 2D grid anchored at the first landing site. Erosion
+            // takes a quantum per spawned parcel from the cell under its birth
+            // anchor; a dying parcel deposits its quantum where it ends up.
+            // Total dust (ground + airborne) is exactly conserved, so a long
+            // hover blows its pad clean and the brownout FADES — which is what
+            // real repeated landings do. At the defaults, the impingement
+            // annulus (~2.8 m², ~20k quanta/s at full strength) sustains
+            // roughly one full landing cycle before visibly thinning.
+            float groundDustPerM2 = 80'000.f;
+            float gridCell        = 0.8f;// metres per reservoir cell
+
             std::uint32_t seed = 20260816u;
         };
 
@@ -168,6 +191,20 @@ namespace threepp::uav {
         // number the visuals use.
         [[nodiscard]] float dustiness() const { return strengthNow_; }
 
+        // ── Reservoir readouts ──────────────────────────────────────────────
+        // Quanta on the ground / initially seeded (equal before first
+        // entrainment). The conservation invariant, and the thing a test can
+        // hold exactly: groundDustInitial() == groundDustQuanta() + airborne().
+        // DOUBLE, not float: the site totals ~10^8 quanta and float loses ±1
+        // arithmetic past 2^24 — the invariant drifted by exactly the lost
+        // increments until these were widened. Per-CELL masses stay float
+        // (they never leave the 10^5 range, where float counts exactly).
+        [[nodiscard]] double groundDustQuanta() const { return groundTotal_; }
+        [[nodiscard]] double groundDustInitial() const { return groundInitial_; }
+        [[nodiscard]] std::uint32_t airborne() const { return alive_; }
+        // Quanta in the reservoir cell under an effect-local ground point.
+        [[nodiscard]] float groundDustAt(float localX, float localZ) const;
+
         [[nodiscard]] const std::shared_ptr<ParticleField>& field() const { return field_; }
         [[nodiscard]] const Params& params() const { return p_; }
 
@@ -180,6 +217,10 @@ namespace threepp::uav {
         Params  p_;
         Vector3 wind_{0.f, 0.f, 0.f};
         float   strengthNow_ = 0.f;
+        // Slow-averaged wind magnitude (box sizing only — see setWind).
+        float windSlow_ = 0.f;
+        float lastT_ = 0.f;
+        bool  haveT_ = false;
 
         std::shared_ptr<ParticleField> field_;
         std::vector<ParticlePos>       host_;// staging, sized once
@@ -191,11 +232,21 @@ namespace threepp::uav {
         std::vector<float>         ax_, az_; // annulus anchor, effect-local xz
         std::vector<float>         gy_;      // ground height at latch, local y
         std::vector<std::uint32_t> cycle_;   // respawn counter → fresh hashes
-        // Parallel-emitter plumbing: chunk index list and per-chunk alive
-        // counts (a shared counter would contend; per-chunk keeps the loop's
-        // writes disjoint, which is Parallel.hpp's contract).
+        std::vector<float>         lifeI_;   // static per-slot life, baked once
+        // Parallel position-pass plumbing (the lifecycle pass is SERIAL — it
+        // owns the shared reservoir; see update()).
         std::vector<std::uint32_t> chunkIdx_;
-        std::vector<std::uint32_t> chunkAlive_;
+        std::uint32_t              alive_ = 0;
+
+        // ── The ground reservoir (see the .cpp note) ────────────────────────
+        std::vector<float> grid_;// parcel quanta per cell
+        int    gridN_ = 0;
+        float  gridAnchorX_ = 0.f, gridAnchorZ_ = 0.f;
+        double groundTotal_ = 0., groundInitial_ = 0.;
+        bool   gridValid_ = false;
+
+        void initGrid(float srcX, float srcZ);
+        [[nodiscard]] std::size_t cellOf(float x, float z) const;
 
         // Density-box ANCHOR, effect-local: xz = snapped source point, y = the
         // ground height there. The box CENTER is derived from this every
