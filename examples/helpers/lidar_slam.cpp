@@ -28,6 +28,12 @@
 //
 // Everything uses only threepp + the standard library + dear imgui (already
 // vendored), so there are no new dependencies.
+//
+// `--bench` runs the whole thing non-interactively at a fixed timestep and
+// prints trajectory error, so a front-end change is an A/B measurement rather
+// than an impression. See the Bench block below for what it has already
+// established about where this estimator breaks — in particular, that the
+// break is an observability failure and not something a motion sensor fixes.
 
 #include "threepp/extras/imgui/RendererSettings.hpp"
 #include "threepp/extras/pointcloud/Icp.hpp"
@@ -45,8 +51,10 @@
 #include "threepp/renderers/RendererFactory.hpp"
 #include "threepp/threepp.hpp"
 
+#include <algorithm>
 #include <array>
 #include <cmath>
+#include <cstdlib>
 #include <iostream>
 #include <random>
 #include <string>
@@ -132,6 +140,7 @@ namespace {
 
         const VoxelGrid& map() const { return map_; }
         const Matrix4& pose() const { return t_; }
+        const IcpResult& lastIcp() const { return lastIcp_; }
 
         // (Re)initialise the estimator. `initPose` anchors the SLAM global
         // frame to the ground-truth start pose so the estimated and true
@@ -152,18 +161,26 @@ namespace {
         // map points to `addedOut`. Returns the estimated pose.
         const Matrix4& process(const std::vector<Vector3>& regSrc,
                                const std::vector<Vector3>& mapSrc,
-                               std::vector<Vector3>& addedOut) {
+                               std::vector<Vector3>& addedOut,
+                               const Matrix4* bodyDeltaOverride = nullptr) {
             if (first_) {
                 first_ = false;// frame 0: trust the init pose, just seed the map
             } else {
-                // Constant-velocity prediction in the body frame.
-                Matrix4 inv;
-                inv.copy(prev2_).invert();
+                // Prediction: the body-frame motion since the last frame. With
+                // no better information that is the constant-velocity guess
+                // (replay the previous frame's delta); a motion sensor supplies
+                // a measured delta instead.
                 Matrix4 deltaBody;
-                deltaBody.multiplyMatrices(inv, prev_);
+                if (bodyDeltaOverride) {
+                    deltaBody.copy(*bodyDeltaOverride);
+                } else {
+                    Matrix4 inv;
+                    inv.copy(prev2_).invert();
+                    deltaBody.multiplyMatrices(inv, prev_);
+                }
                 t_.multiplyMatrices(prev_, deltaBody);
 
-                icpPointToPoint(regSrc, regMap_, t_, opts_);
+                lastIcp_ = icpPointToPoint(regSrc, regMap_, t_, opts_);
             }
 
             prev2_.copy(prev_);
@@ -186,26 +203,100 @@ namespace {
         Matrix4 t_;    // current estimated pose (local -> map)
         Matrix4 prev_; // pose at k-1
         Matrix4 prev2_;// pose at k-2
+        IcpResult lastIcp_{};
         bool first_{true};
     };
 
     // De-frame a scan into the sensor-local frame (via the inverse GT pose),
-    // dropping misses and self-returns. This "driver shim" is the only place
-    // ground truth enters the SLAM; the result is downsampled with the library's
-    // voxelDownsample() before registration.
+    // dropping misses, self-returns and anything past the detector's range.
+    // This "driver shim" is the only place ground truth enters the SLAM; the
+    // result is downsampled with the library's voxelDownsample() before
+    // registration.
     std::vector<Vector3> deframeScan(const std::vector<LidarReturn>& cloud,
-                                     const Matrix4& sensorInv, float minRange) {
+                                     const Matrix4& sensorInv, float minRange, float maxRange) {
         std::vector<Vector3> out;
         out.reserve(cloud.size());
         Vector3 p;
         for (const auto& r : cloud) {
             if (r.returnNo <= 0) continue;
-            if (r.distance < minRange) continue;
+            if (r.distance < minRange || r.distance > maxRange) continue;
             p = r.position;
             p.applyMatrix4(sensorInv);// world -> sensor-local
             out.push_back(p);
         }
         return out;
+    }
+
+    // Yaw of a pose, in radians. The robot only ever rotates about Y, so this
+    // is its heading.
+    float yawOf(const Matrix4& m) {
+        return std::atan2(m.elements[8], m.elements[10]);
+    }
+
+    float wrapPi(float a) {
+        while (a > math::PI) a -= 2.f * math::PI;
+        while (a < -math::PI) a += 2.f * math::PI;
+        return a;
+    }
+
+    // -----------------------------------------------------------------------
+    // Drift bench: a non-interactive, fixed-dt run that scripts the stress the
+    // interactive demo exposes through the "Max range" slider, and prints the
+    // trajectory error it produces. Fixed dt matters — with real frame times a
+    // front-end A/B measures the machine's frame pacing as much as the
+    // estimator.
+    //
+    //   lidar_slam --bench [--frames N] [--range R] [--range-at F]
+    //              [--oracle] [--min-h H]
+    //
+    // What it already established (so nobody re-runs it to find out):
+    //
+    //   range 30 (control)      meanDrift 0.021 m   maxDrift 0.107 m   yaw 0.49 deg
+    //   range 8 from frame 300  meanDrift 2.267 m   maxDrift 9.206 m   yaw 1.09 deg
+    //
+    // The failure is NOT the motion model and NOT the ground plane:
+    //
+    //   --oracle  seeds ICP with the exact ground-truth body delta — a perfect,
+    //             noiseless, drift-free motion sensor, i.e. the upper bound on
+    //             what any IMU could ever contribute. It buys 9.21 -> 8.05 m.
+    //             Effectively nothing: the prediction was never the problem.
+    //   --min-h   drops registration points below a sensor-frame height, so
+    //             -0.9 removes the floor. Also changes nothing (9.09 m).
+    //
+    // What it IS: at short range the robot drives along the +Z wall with
+    // nothing in range ahead or behind, so X becomes unobservable. Per-axis,
+    // estimated Z tracks truth to millimetres while X stays pinned near 4.5 as
+    // truth travels 8 m away. Point-to-point ICP cannot see this coming — its
+    // translation Jacobian is the identity for every correspondence, so the
+    // translation block of the normal matrix is (sum w) * I, isotropic no
+    // matter what the geometry looks like. Detecting the degenerate direction
+    // needs surface normals (point-to-plane), which VoxelGrid does not carry;
+    // only then is there a null space for a motion prior to fill.
+    // -----------------------------------------------------------------------
+    struct Bench {
+        bool on = false;
+        int frames = 900;   // ~15 s at the fixed 60 Hz step
+        float range = 8.f;  // detector max range applied at `rangeAt`
+        int rangeAt = 300;  // frame the range change lands on
+        bool oracle = false;// seed ICP with the TRUE body delta (see above)
+        float minRegHeight = -1e9f;// drop registration points below this sensor-frame height
+    };
+
+    Bench parseBench(int argc, char** argv) {
+        Bench b;
+        for (int i = 1; i < argc; ++i) {
+            const std::string a = argv[i];
+            auto val = [&](const char* flag) -> const char* {
+                return (a == flag && i + 1 < argc) ? argv[++i] : nullptr;
+            };
+            if (a == "--bench") b.on = true;
+            else if (a == "--oracle") b.oracle = true;
+            else if (const char* s = val("--frames")) b.frames = std::atoi(s);
+            else if (const char* s = val("--range")) b.range = static_cast<float>(std::atof(s));
+            else if (const char* s = val("--range-at")) b.rangeAt = std::atoi(s);
+            else if (const char* s = val("--min-h")) b.minRegHeight = static_cast<float>(std::atof(s));
+        }
+        return b;
     }
 
     // -----------------------------------------------------------------------
@@ -397,6 +488,7 @@ int main(int argc, char** argv) {
     if (argc > 1 && std::string(argv[1]) == "--selftest") {
         return runSelfTest();
     }
+    const Bench bench = parseBench(argc, argv);
 
     Canvas canvas("Lidar SLAM", {{"antialiasing", 4}, {"vsync", false}});
     auto renderer = createRenderer(canvas);
@@ -444,10 +536,17 @@ int main(int argc, char** argv) {
     std::unique_ptr<PathTracedLidarSensor> ptLidar;
 #endif
     Object3D* sensorObj = nullptr;
+    // Detector max range, live-tunable and shared by both backends: on Vulkan it
+    // shortens the traced beam (params.maxRange), on GL it gates the returns the
+    // SLAM is allowed to see. Shortening it is the demo's sharpest stress — once
+    // the scan no longer reaches far enough to see structure along the direction
+    // of travel, that axis stops being observable and the estimate walks away
+    // from truth along it (see the Bench block above).
+    float detectorRange = kSensorFar;
     auto buildSensor = [&] {
 #ifdef THREEPP_WITH_VULKAN
         if (isVulkan) {
-            ptLidar = std::make_unique<PathTracedLidarSensor>(makeModel(), kSensorFar);
+            ptLidar = std::make_unique<PathTracedLidarSensor>(makeModel(), detectorRange);
             ptLidar->params.referenceRange = 5.f;
             ptLidar->params.detectorThreshold = 0.005f;
             sensorObj = ptLidar.get();
@@ -653,11 +752,14 @@ int main(int argc, char** argv) {
             if (currentFaceIdx != prevFace) rebuildSensor();
             ImGui::SliderFloat("Range noise (m)", &rasterLidar->rangeNoise.stddev, 0.f, 0.1f);
         }
+        // On GL the raster sensor's depth far plane is fixed at kSensorFar, so
+        // there is nothing to see past it; only the ray-traced backend can be
+        // pushed further out.
+        if (ImGui::SliderFloat("Max range (m)", &detectorRange, 5.f, isVulkan ? 50.f : kSensorFar)) {
 #ifdef THREEPP_WITH_VULKAN
-        if (ptLidar) {
-            ImGui::SliderFloat("Max range (m)", &ptLidar->params.maxRange, 5.f, 50.f);
-        }
+            if (ptLidar) ptLidar->params.maxRange = detectorRange;
 #endif
+        }
 
         if (isVulkan) {
             // The path-traced backend can't draw the dynamic occupancy/surface
@@ -685,11 +787,30 @@ int main(int argc, char** argv) {
     std::vector<LidarReturn> cloud;
     std::vector<Vector3> added;
 
+    // Bench accumulators (unused in the interactive run).
+    Matrix4 prevGt;
+    bool hasPrevGt = false;
+    int benchFrame = 0;
+    double driftSum = 0.0;
+    float driftMax = 0.f;
+    float yawErrMax = 0.f;
+
     canvas.animate([&] {
         const float now = clock.getElapsedTime();
         float dt = now - prevTime;
         prevTime = now;
         dt = std::min(dt, 0.05f);
+
+        if (bench.on) {
+            dt = 1.f / 60.f;// fixed step: the A/B must measure the estimator, not frame pacing
+            if (benchFrame == bench.rangeAt) {
+                detectorRange = bench.range;
+#ifdef THREEPP_WITH_VULKAN
+                if (ptLidar) ptLidar->params.maxRange = detectorRange;
+#endif
+                std::cout << "# frame " << benchFrame << ": max range -> " << detectorRange << " m\n";
+            }
+        }
 
         // --- Advance the ground-truth robot pose along the loop ---
         // Ease in from rest so the constant-velocity model and the still-sparse
@@ -790,11 +911,16 @@ int main(int argc, char** argv) {
         // Vulkan keeps the robot in the TLAS, so use a wider self-return cut to
         // drop its near hits (the path stays >1.5 m from real geometry).
         const float selfRange = isVulkan ? 1.1f : kSelfReturnRange;
-        const auto localScan = deframeScan(cloud, mInv, selfRange);
+        const auto localScan = deframeScan(cloud, mInv, selfRange, detectorRange);
         const auto mapSrc = voxelDownsample(localScan, kDownsampleVoxel);
         // Chained: decimating the 0.25 m result at 0.4 m ≈ decimating the raw
         // ~50k-point scan at 0.4 m, minus one full pass over it.
-        const auto regSrc = voxelDownsample(mapSrc, kRegVoxel);
+        auto regSrc = voxelDownsample(mapSrc, kRegVoxel);
+        if (bench.minRegHeight > -1e8f) {
+            regSrc.erase(std::remove_if(regSrc.begin(), regSrc.end(),
+                                        [&](const Vector3& p) { return p.y < bench.minRegHeight; }),
+                         regSrc.end());
+        }
 
         // --- SLAM update ---
         const float slamT0 = clock.getElapsedTime();
@@ -803,7 +929,19 @@ int main(int argc, char** argv) {
             slamInitialised = true;
         }
         added.clear();
-        const Matrix4& estPose = slam.process(regSrc, mapSrc, added);
+        // Oracle diagnostic: the exact body-frame motion since the previous
+        // frame, i.e. a noiseless, drift-free motion sensor.
+        Matrix4 oracleDelta;
+        bool haveOracle = false;
+        if (bench.oracle && hasPrevGt) {
+            Matrix4 inv;
+            inv.copy(prevGt).invert();
+            oracleDelta.multiplyMatrices(inv, mGt);
+            haveOracle = true;
+        }
+        prevGt.copy(mGt);
+        hasPrevGt = true;
+        const Matrix4& estPose = slam.process(regSrc, mapSrc, added, haveOracle ? &oracleDelta : nullptr);
         slamMs = (clock.getElapsedTime() - slamT0) * 1000.f;
 
         // --- Grow the reconstruction display from newly added map points ---
@@ -839,6 +977,35 @@ int main(int argc, char** argv) {
         appendVertex(*gtTraj->geometry(), gtCount, gtPos);
         appendVertex(*estTraj->geometry(), estCount, estPos);
         drift = (estPos.clone().sub(gtPos)).length();
+
+        if (bench.on) {
+            const float yawErr = std::abs(wrapPi(yawOf(estPose) - yawOf(mGt))) * math::RAD2DEG;
+            driftSum += drift;
+            driftMax = std::max(driftMax, drift);
+            yawErrMax = std::max(yawErrMax, yawErr);
+            if (benchFrame % 60 == 0) {
+                // Per-axis, not just the magnitude: the whole diagnosis turned
+                // on seeing estimated Z track truth while X ran away.
+                const Vector3 err = estPos.clone().sub(gtPos);
+                std::cout << "frame " << benchFrame
+                          << "  gt (" << gtPos.x << ", " << gtPos.z << ")"
+                          << "  est (" << estPos.x << ", " << estPos.z << ")"
+                          << "  drift " << drift << " m"
+                          << " (dx " << err.x << ", dy " << err.y << ", dz " << err.z << ")"
+                          << "  yawErr " << yawErr << " deg"
+                          << "  scanPts " << localScan.size()
+                          << "  icp " << slam.lastIcp().iterations << "it/"
+                          << slam.lastIcp().correspondences << "corr" << std::endl;
+            }
+            if (++benchFrame >= bench.frames) {
+                std::cout << "BENCH range=" << bench.range << " at=" << bench.rangeAt
+                          << " frames=" << bench.frames
+                          << "  meanDrift " << (driftSum / benchFrame) << " m"
+                          << "  maxDrift " << driftMax << " m"
+                          << "  maxYawErr " << yawErrMax << " deg" << std::endl;
+                canvas.close();
+            }
+        }
 
         // --- Map view: point cloud / occupancy cubes / surface ---
         if (isVulkan) viewMode = 0;// mesh views are raster-only; never show them on Vulkan
