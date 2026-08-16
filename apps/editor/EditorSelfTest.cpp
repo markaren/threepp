@@ -6250,6 +6250,125 @@ int EditorApp::runSelfTest() {
                 step();
             }
         }
+
+#ifdef THREEPP_EDITOR_WITH_PHYSX
+        // The collider tracks the SCULPT. Static + Shape::Auto cooks a trimesh
+        // from the geometry as it stands, and the whole "the mesh is the truth"
+        // claim rests on that being the sculpted geometry rather than whatever
+        // the config would regenerate. Nothing here is terrain-specific code —
+        // that is the point, and it is why it has to be checked rather than
+        // assumed.
+        {
+            auto* terrain = findByUuid(document_.scene(), terrainUuid);
+            auto* mesh = terrain ? terrain->as<Mesh>() : nullptr;
+            if (mesh && mesh->geometry()) {
+                const auto lattice = TerrainLattice::of(*mesh->geometry(), config.dim());
+                auto heights = TerrainConfig::heightsOf(*mesh->geometry());
+
+                // A broad raised PLATEAU well clear of the ridge the shot
+                // carved, built through the real kernels: raise wide, then
+                // flatten the crown level. A cone would be a bad instrument —
+                // a sphere dropped on a 45 degree peak rolls off it over four
+                // seconds of sim and the test would be measuring gravity, not
+                // the collider. Level ground gives the probe somewhere to rest.
+                // ~8 m of lift dwarfs the +-2.6 m of base undulation, so the
+                // differential below cannot be base noise.
+                TerrainBrush brush;
+                brush.kind = TerrainBrush::Kind::Raise;
+                brush.radius = 26.f;
+                brush.strength = 20.f;
+                TerrainSculpt::Rect rect;
+                const auto note = [&rect](const TerrainSculpt::Rect& touched) {
+                    if (touched.empty()) return;
+                    rect.add(touched.x0, touched.z0);
+                    rect.add(touched.x1, touched.z1);
+                };
+                for (int i = 0; i < 4; ++i) {
+                    note(TerrainSculpt::apply(heights, lattice, brush, 22.f, 22.f, 0.1f, 0.f));
+                }
+                float crown = 0.f;
+                TerrainSculpt::sample(heights, lattice, 22.f, 22.f, crown);
+                brush.kind = TerrainBrush::Kind::Flatten;
+                brush.radius = 14.f;
+                brush.strength = 9.f;
+                for (int i = 0; i < 8; ++i) {
+                    note(TerrainSculpt::apply(heights, lattice, brush, 22.f, 22.f, 0.1f, crown));
+                }
+                TerrainSculpt::refresh(*mesh->geometry(), heights, lattice, rect);
+                mesh->geometry()->computeBoundingBox();
+                mesh->geometry()->computeBoundingSphere();
+
+                PhysicsConfig ground;
+                ground.enabled = true;
+                ground.body = PhysicsConfig::Body::Static;
+                ground.shape = PhysicsConfig::Shape::Auto;
+                ground.write(*terrain);
+
+                // Two spheres, same drop height: one over the mound, one over
+                // ground the brush never touched. A differential, not an
+                // absolute, so it cannot be satisfied by the terrain's own
+                // transform offset or by the base noise.
+                const auto dropSphere = [&](const char* name, float x, float z) {
+                    auto sphere = ObjectFactory::createPrimitive(Primitive::Sphere,
+                                                                 document_.scene());
+                    sphere->name = name;
+                    sphere->position.set(x, 30.f, z);
+                    PhysicsConfig body;
+                    body.enabled = true;
+                    body.body = PhysicsConfig::Body::Dynamic;
+                    body.shape = PhysicsConfig::Shape::Sphere;
+                    body.mass = 1.f;
+                    body.restitution = 0.f;
+                    body.write(*sphere);
+                    const auto uuid = sphere->uuid;
+                    addObject(sphere, document_.scene(), "Add Drop Probe");
+                    return uuid;
+                };
+                const auto moundUuid = dropSphere("Mound Probe", 22.f, 22.f);
+                const auto flatUuid = dropSphere("Flat Probe", -22.f, -22.f);
+
+                startPlay();
+                // Fixed dt: a resting height is a property of the sim, not of
+                // the frame rate.
+                stepFixed(240);
+
+                auto* moundProbe = findByUuid(document_.scene(), moundUuid);
+                auto* flatProbe = findByUuid(document_.scene(), flatUuid);
+                // Stronger than the differential: the probe has to rest where
+                // the LATTICE says the sculpted surface is, to within a
+                // fraction of a cell. That pins the cook to the actual heights
+                // rather than to some hull or slab that merely happens to be
+                // taller over there.
+                float crownHeight = 0.f;
+                TerrainSculpt::sample(heights, lattice, 22.f, 22.f, crownHeight);
+                const float expected = crownHeight + terrain->position.y + 0.5f;// + probe radius
+                check(moundProbe && std::abs(moundProbe->position.y - expected) < 0.1f,
+                      "the probe rests exactly where the sculpted lattice says the ground is");
+                check(moundProbe && flatProbe && moundProbe->position.y > -5.f &&
+                              flatProbe->position.y > -5.f,
+                      "both probes land on the terrain rather than falling through it");
+                check(moundProbe && flatProbe &&
+                              moundProbe->position.y > flatProbe->position.y + 6.f,
+                      "and the one over a sculpted mound rests higher - the collider "
+                      "cooks from the sculpted geometry");
+                stopPlay();
+                step();
+
+                // Leave the scene as the passes that follow expect it.
+                for (const auto& uuid : {moundUuid, flatUuid}) {
+                    if (auto* done = findByUuid(document_.scene(), uuid)) {
+                        selectObject(done);
+                        deleteSelected();
+                    }
+                }
+                if (auto* terrainNow = findByUuid(document_.scene(), terrainUuid)) {
+                    PhysicsConfig::erase(*terrainNow);
+                }
+                selectObject(nullptr);
+                step();
+            }
+        }
+#endif
     }
 
     // --- text objects ------------------------------------------------------
