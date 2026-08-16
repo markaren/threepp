@@ -26,6 +26,7 @@
 #include "threepp/extras/editor/ParticleFieldPlaySession.hpp"
 #include "threepp/extras/editor/PhysicsConfig.hpp"
 #include "threepp/extras/editor/RobotConfig.hpp"
+#include "threepp/extras/editor/TerrainSculpt.hpp"
 #include "threepp/extras/editor/ScriptConfig.hpp"
 #include "threepp/extras/editor/ScriptWorkspace.hpp"
 #include "threepp/extras/editor/SensorConfig.hpp"
@@ -6016,7 +6017,19 @@ int EditorApp::runSelfTest() {
         addObject(created, document_.scene(), "Add Terrain");
         step(2);
 
+        // The factory rolls a fresh seed per terrain (createTree's reason), which
+        // is right for authoring and wrong for a photograph: the shot at the end
+        // of this block would be a different landscape every run and nobody could
+        // tell a regression from a reroll. Pin it here, through the ordinary
+        // rebuild path.
+        {
+            const auto rolled = TerrainConfig::read(*created).value_or(TerrainConfig::makeDefault());
+            auto pinned = rolled;
+            pinned.params.seed = 20260816u;
+            TerrainConfig::rebuild(*created, rolled, pinned);
+        }
         const auto config = TerrainConfig::read(*created).value_or(TerrainConfig::makeDefault());
+        check(config.params.seed == 20260816u, "a terrain's seed is the config's to set");
 
         // Determinism is what makes delta recovery possible at all: base(config)
         // has to be the same lattice every time it is asked for, or the "sculpt"
@@ -6027,6 +6040,58 @@ int EditorApp::runSelfTest() {
             check(a.heights.size() == b.heights.size() && !a.heights.empty(),
                   "two bakes of one config produce the same lattice size");
             check(a.heights == b.heights, "and byte-identical heights");
+        }
+
+        // The brush kernels, headless. A stroke has to move what is under it,
+        // leave what is not, and undo has to put the heights back BIT-exactly —
+        // an undo that recomputes drifts a little further every cycle.
+        {
+            const auto lattice = TerrainLattice::of(*created->geometry(), config.dim());
+            check(lattice.valid(), "the height lattice reads off the geometry");
+
+            const auto before = TerrainConfig::heightsOf(*created->geometry());
+            auto heights = before;
+
+            TerrainBrush brush;
+            brush.kind = TerrainBrush::Kind::Raise;
+            brush.radius = 10.f;
+            brush.strength = 20.f;
+            // Straight over the middle of the patch, one tick of a tenth of a
+            // second — a real stroke is a few dozen of these.
+            const auto rect = TerrainSculpt::apply(heights, lattice, brush, 0.f, 0.f, 0.1f, 0.f);
+            check(!rect.empty(), "a raise stroke touches a rect of the lattice");
+
+            const int dim = config.dim();
+            const int centre = dim / 2;
+            const size_t inside = static_cast<size_t>(centre) * dim + centre;
+            check(heights[inside] > before[inside] + 1e-4f, "and lifts the ground inside the brush");
+            // A corner: the brush is 10 m across on a 160 m patch, so this is
+            // nowhere near it.
+            check(heights[0] == before[0] && heights.back() == before.back(),
+                  "while everything outside its radius is untouched");
+
+            // Shift digs with the same shape.
+            auto inverted = before;
+            brush.invert = true;
+            TerrainSculpt::apply(inverted, lattice, brush, 0.f, 0.f, 0.1f, 0.f);
+            check(inverted[inside] < before[inside] - 1e-4f, "and Shift inverts it into a dig");
+
+            // The stroke's undo entry: the tight rect plus both sides of it.
+            const auto patch = TerrainSculpt::diff(before, heights, dim);
+            check(!patch.empty() && patch.w < dim && patch.h < dim,
+                  "the stroke's undo patch is the rect that moved, not the whole mesh");
+            auto restored = heights;
+            TerrainSculpt::applyPatch(restored, dim, patch, true);
+            check(restored == before, "and undo restores byte-identical heights");
+
+            // The ray hit is a heightfield march, not a triangle raycast: a ray
+            // straight down over the middle has to land ON the surface there.
+            Vector3 hit;
+            const bool landed = TerrainSculpt::raycast(before, lattice, {0.f, 500.f, 0.f},
+                                                       {0.f, -1.f, 0.f}, 2000.f, hit);
+            check(landed, "a ray marched down onto the patch finds the surface");
+            check(landed && std::abs(hit.y - before[inside]) < lattice.cellSize(),
+                  "at the height the lattice says is there");
         }
 
         // Delta preservation: sculpt a bump by hand, move a noise parameter, and
@@ -6096,10 +6161,10 @@ int EditorApp::runSelfTest() {
             check(reloaded && TerrainConfig::albedoTexture(*reloaded) != nullptr,
                   "with the baked albedo back on the material");
 
-            // A picture of what the PASS lines cannot describe: whether the
-            // default parameters read as GROUND at the editor's scale, and
-            // whether a sculpted mound shows on it. The heights are all right in
-            // arithmetic long before they are right to look at.
+            // A picture of what the PASS lines cannot describe: whether Add
+            // Terrain gives you usable GROUND, and whether a brush stroke on it
+            // reads as a mound. The heights are all right in arithmetic long
+            // before they are right to look at.
             if (auto* mesh = reloaded ? reloaded->as<Mesh>() : nullptr) {
                 auto heights = TerrainConfig::heightsOf(*mesh->geometry());
                 const int dim = config.dim();
@@ -6108,30 +6173,52 @@ int EditorApp::runSelfTest() {
                 // needle through it. Put it back before drawing something meant
                 // to be looked at.
                 heights[100] -= 3.25f;
-                // A broad raised mound out on the low skirt, where a mound reads
-                // as a mound instead of disappearing into the ridge noise. Same
-                // smoothstep-ish falloff the brush kernels use.
-                const int cx = (dim * 5) / 8, cz = (dim * 7) / 8, radius = dim / 7;
-                for (int z = std::max(cz - radius, 0); z <= std::min(cz + radius, dim - 1); ++z) {
-                    for (int x = std::max(cx - radius, 0); x <= std::min(cx + radius, dim - 1); ++x) {
-                        const float dx = static_cast<float>(x - cx) / static_cast<float>(radius);
-                        const float dz = static_cast<float>(z - cz) / static_cast<float>(radius);
-                        const float d = std::sqrt(dx * dx + dz * dz);
-                        if (d >= 1.f) continue;
-                        heights[static_cast<size_t>(z) * dim + x] += 18.f * (1.f - d * d) * (1.f - d * d);
-                    }
+
+                // A real stroke, through the real kernels — not a hand-poked
+                // dome. This is the brush the plan is about, so it is the brush
+                // the acceptance picture has to show.
+                const auto lattice = TerrainLattice::of(*mesh->geometry(), dim);
+                TerrainBrush brush;
+                brush.kind = TerrainBrush::Kind::Raise;
+                brush.radius = 11.f;
+                brush.strength = 9.f;
+                TerrainSculpt::Rect stroke;
+                // Dragged along a short arc, the way a hand would: a single
+                // stamp is a cone, a stroke is a landform.
+                for (int i = 0; i <= 10; ++i) {
+                    const float t = static_cast<float>(i) / 10.f;
+                    const float sx = -14.f + 26.f * t;
+                    const float sz = 6.f - 12.f * t * t;
+                    const auto touched =
+                            TerrainSculpt::apply(heights, lattice, brush, sx, sz, 0.1f, 0.f);
+                    if (touched.empty()) continue;
+                    stroke.add(touched.x0, touched.z0);
+                    stroke.add(touched.x1, touched.z1);
                 }
-                TerrainConfig::setHeights(*mesh->geometry(), heights);
-                mesh->geometry()->computeVertexNormals();
-                if (auto* normal = mesh->geometry()->getAttribute<float>("normal")) normal->needsUpdate();
+                // Then the smooth brush over the same ground, so the picture
+                // shows both that a stroke piles material up and that the second
+                // brush settles it.
+                brush.kind = TerrainBrush::Kind::Smooth;
+                brush.radius = 14.f;
+                brush.strength = 6.f;
+                for (int i = 0; i < 4; ++i) {
+                    TerrainSculpt::apply(heights, lattice, brush, 0.f, 0.f, 0.1f, 0.f);
+                }
+                stroke.grow(2, dim);
+                TerrainSculpt::refresh(*mesh->geometry(), heights, lattice, stroke);
                 mesh->geometry()->computeBoundingBox();
                 mesh->geometry()->computeBoundingSphere();
+                // Stroke release: the splat follows the surface it now has.
+                {
+                    const auto field = config.fieldOf(*mesh->geometry(), heights);
+                    TerrainConfig::applyAlbedo(*reloaded, config.bakeAlbedo(field), dim);
+                }
 
                 const bool bottomPanelWas = bottomPanelOpen_;
                 bottomPanelOpen_ = false;
                 selectObject(reloaded);
-                camera_.position.set(90.f, 62.f, 105.f);
-                orbit_->target.set(0.f, 6.f, 0.f);
+                camera_.position.set(26.f, 15.f, 34.f);
+                orbit_->target.set(0.f, 0.f, 0.f);
                 step(4);
                 shootTo(std::filesystem::temp_directory_path() / "threepp_editor_terrain.png");
                 bottomPanelOpen_ = bottomPanelWas;

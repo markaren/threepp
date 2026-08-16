@@ -549,6 +549,7 @@ set(sources
         "threepp/extras/editor/SplatSurfaceConfig.cpp"
         "threepp/extras/editor/SplineConfig.cpp"
         "threepp/extras/editor/TerrainConfig.cpp"
+        "threepp/extras/editor/TerrainSculpt.cpp"
         "threepp/extras/editor/TextConfig.cpp"
         "threepp/extras/editor/TreeConfig.cpp"
         "threepp/extras/editor/VehicleConfig.cpp"

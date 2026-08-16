@@ -134,33 +134,35 @@ TerrainConfig TerrainConfig::makeDefault() {
     TerrainConfig config;
     auto& p = config.params;
 
-    // Editor scale, tuned by looking at the viewport (see the plan's LOOK
-    // step): 160 m across in a scene whose other objects are ~1 m, tens of
-    // metres of relief, and a radial falloff so the patch tucks under the
-    // surrounding ground instead of ending in a cliff-edged lip.
+    // A CANVAS, not a hero mountain. Add Terrain gives you ground to put a
+    // scene on and sculpt up from — a 160 m field with a couple of metres of
+    // gentle undulation, on which a 1 m box, a robot or a vehicle sits the way
+    // it would on a floor. The dramatic landscapes are one click away in the
+    // preset combo; a ridged massif as the DEFAULT fits nothing.
     p.worldSize = kEditorWorldSize;
+    // 0.6 m cells: fine enough that a brush stroke has something to shape,
+    // coarse enough to re-bake on a slider release without a stall.
     p.resolution = 256;
-    p.noiseType = NoiseType::Ridged;
-    p.featureScale = 70.f;// ≈ worldSize / 2.3 — two or three massifs, not noise
-    p.octaves = 6;
-    p.amplitude = 26.f;
-    p.warp = 0.4f;
-    p.ridgeSharpness = 0.55f;
-    p.heightExponent = 1.25f;
-    p.falloff = Falloff::Radial;
-    p.falloffStart = 0.45f;
+    p.noiseType = NoiseType::fBm;
+    p.featureScale = 55.f;
+    p.octaves = 4;
+    p.amplitude = 2.6f;
+    p.warp = 0.15f;
+    p.heightExponent = 1.f;
+    // No radial falloff: a canvas runs flat to its edges. Radial is for the
+    // island-and-plain look the presets ask for.
+    p.falloff = Falloff::None;
 
-    // Erosion is configured but not baked: Add Terrain must be instant.
-    p.erosion = ErosionType::Both;
-    p.droplets = 60000;
-    p.talusAngle = 40.f;
-    p.thermalIterations = 20;
+    // Erosion is configured but NOT baked — Add Terrain has to be instant, and
+    // there is nothing on a two-metre swell for a droplet to carve anyway.
+    p.erosion = ErosionType::None;
 
-    // At 26 m of relief a 0.5 snowline would put an alpine cap on a hill. Snow
-    // only on the very crests reads as height rather than as costume.
-    p.snowLine = 0.82f;
-    p.slopeGrassMax = 0.30f;
-    p.slopeRockMin = 0.55f;
+    // Above 1.0 the snow band can never open: at this relief a snowline would
+    // be costume. Grass to a generous slope, so the whole canvas reads as one
+    // continuous ground rather than a patchwork of bands.
+    p.snowLine = 1.2f;
+    p.slopeGrassMax = 0.45f;
+    p.slopeRockMin = 0.65f;
 
     config.eroded = false;
     return config;

@@ -197,6 +197,12 @@ std::shared_ptr<Mesh> ObjectFactory::createTerrain(const Object3D& root) {
     config.write(*mesh);
     TerrainConfig::applyAlbedo(*mesh, bake.albedo, bake.dim);
 
+    // The field runs 0..amplitude in local Y, so dropped in at the origin the
+    // whole canvas would float above it and every primitive the Add menu makes
+    // — all of which are lifted to stand ON y = 0 — would sit half buried.
+    // Sink it by half the relief and the average ground IS the floor.
+    mesh->position.y = -config.params.amplitude * 0.5f;
+
     return mesh;
 }
 
