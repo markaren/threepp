@@ -334,6 +334,9 @@ int VulkanRenderer::Impl::scanLidarBegin(const std::vector<LidarBeam>& beams,
             lidarRaw_[vulkan::LidarScanner::slotIndex(handle)].assign(
                     lidar_->resultSlots(handle), vulkan_lidar::LidarResult{});
             lidarPaired_[vulkan::LidarScanner::slotIndex(handle)] = params.pairedCleanTrace;
+            // Freeze the entry->stable-id table this dispatch will be read
+            // against. See lidarStableIds_: collect can land frames later.
+            lidarStableIds_[vulkan::LidarScanner::slotIndex(handle)] = entryStableIds_;
             return handle;
         }
 
@@ -368,12 +371,22 @@ bool VulkanRenderer::Impl::scanLidarCollect(int handle, std::vector<LidarReturn>
             // exactly the result it saw before pairing existed.
             const bool paired = lidarPaired_[vulkan::LidarScanner::slotIndex(handle)];
             const size_t legRows = paired ? raw.size() / 2u : raw.size();
-            auto unpack = [](const vulkan_lidar::LidarResult& r, LidarReturn& o) {
+            // The shader reports gl_InstanceCustomIndexEXT — the entry index,
+            // which renumbers whenever the entry list churns. The PUBLIC
+            // contract is the stable per-object id, the same number the raster
+            // Ids AOV writes, so translate here: one table lookup per return,
+            // no shader change, and the ray-generation / traversal / range path
+            // is untouched. Sentinels (< 0: -1 miss, -2 volume scatter) are
+            // passed through unmodified — they are not indices.
+            const auto& ids = lidarStableIds_[vulkan::LidarScanner::slotIndex(handle)];
+            auto unpack = [&ids](const vulkan_lidar::LidarResult& r, LidarReturn& o) {
                 o.position.set(r.position[0], r.position[1], r.position[2]);
                 o.normal.set(r.normal[0], r.normal[1], r.normal[2]);
                 o.distance      = r.distance;
                 o.intensity     = r.intensity;
-                o.hitInstanceId = r.instanceId;
+                o.hitInstanceId = r.instanceId < 0 || size_t(r.instanceId) >= ids.size()
+                                          ? r.instanceId
+                                          : static_cast<int32_t>(ids[size_t(r.instanceId)]);
                 o.returnNo      = r.returnNo;
                 o.returnKind    = r.returnKind;
             };

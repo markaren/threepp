@@ -2384,6 +2384,10 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
             // instance and are not drawn in the gbuffer (both skip on isOverlay).
             std::vector<GeometryDesc> geomDescs(entries.size());
             std::vector<MaterialDesc> matDescs(entries.size());
+            // Same index space, same lifetime — see entryStableIds_. Filled in
+            // the geomDescs loop below so a skipped/overlay entry keeps the 0
+            // its dummy slot already means.
+            entryStableIds_.assign(entries.size(), uint16_t(0));
 
             // Material-asset dedup. Meshes sharing one Material C++ pointer
             // get the same matAssetIdx so the deferred shade's bilinear
@@ -2627,6 +2631,9 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                 // seed it 0 here and carry the packed-attribute bits above it.
                 gdesc.flags = recPtr->packedMask << 1;
                 geomDescs[i] = gdesc;
+                // Read-only: assignment of auto ids stays in the indirect draw
+                // builder so this cannot renumber what the Ids AOV reports.
+                entryStableIds_[i] = stableIdIfAssigned(*en.mesh);
 
                 const Material* matKey = m->material().get();
                 MaterialDesc md;

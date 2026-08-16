@@ -845,6 +845,13 @@ namespace threepp {
         // place here; the per-frame ring flush (flushGeometryDescsIfDirty)
         // carries it to the GPU stall-free.
         std::vector<GeometryDesc> geomDescsCached_;
+        // Entry-index -> stable per-object instance id, built alongside
+        // geomDescs and therefore in the SAME index space and with the SAME
+        // lifetime: gl_InstanceCustomIndexEXT indexes both. If geomDescs are
+        // valid for a frame, so is this; if entries were renumbered, both were
+        // rebuilt together. Lets the lidar readback report the id the raster
+        // Ids AOV reports rather than the raw TLAS instance index.
+        std::vector<uint16_t> entryStableIds_;
         // Manual threepp::LOD subtrees, rebuilt every FULL scene expansion
         // (cleared at the start of the traverseVisible walk). A mesh entry
         // under one of these is exempt from auto-LOD — its levels are
@@ -3253,6 +3260,27 @@ namespace threepp {
             }
             return it->second;
         }
+        // Read-only sibling of stableIdForObject: same answer, but never
+        // ASSIGNS an auto id. The lidar's entry->id table (entryStableIds_) is
+        // filled from the TLAS build loop, which runs before the indirect draw
+        // builder in a frame; calling the assigning form there would renumber
+        // the auto ids into TLAS-entry order and silently change what the
+        // raster Ids AOV reports for unlabelled objects. So the assignment
+        // stays where it has always been and this only reads the result.
+        //
+        // 0 is returned for an object that has no user id AND has not been
+        // auto-numbered yet — which is the documented meaning of 0 (sky /
+        // unassigned), not a new sentinel. It self-heals after one frame for
+        // anything the draw builder visits.
+        [[nodiscard]] uint16_t stableIdIfAssigned(const Object3D& o) const {
+            if (!instanceIdOverride_.empty()) {
+                if (const auto it = instanceIdOverride_.find(o.id); it != instanceIdOverride_.end()) {
+                    return it->second;
+                }
+            }
+            const auto it = autoStableIds_.find(o.id);
+            return it == autoStableIds_.end() ? uint16_t(0) : it->second;
+        }
         uint16_t classIdForObject(const Object3D& o) const {
             if (classIds_.empty()) return 0;
             const auto it = classIds_.find(o.id);
@@ -3554,6 +3582,12 @@ namespace threepp {
         // i.e. whether its raw rows are two legs rather than one. Recorded at
         // dispatch because collect() cannot tell from the row count alone.
         std::array<bool, vulkan::LidarScanner::kScanSlots> lidarPaired_{};
+        // Entry-index -> stable id, snapshotted per slot AT DISPATCH. A scan
+        // fired with scanBegin() may be collected several frames later, by
+        // which time an edit can have renumbered the entry list; translating
+        // against the live table would then relabel returns that were traced
+        // against the older TLAS. The snapshot is a few KB at most.
+        std::array<std::vector<uint16_t>, vulkan::LidarScanner::kScanSlots> lidarStableIds_{};
 
         // ── Hybrid raster G-buffer prepass implementation ───────────────────
         // Lazy-initialized on first render().

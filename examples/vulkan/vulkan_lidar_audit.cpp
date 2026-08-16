@@ -50,13 +50,14 @@
 // instance, and the more interesting one — drops out of the sample.
 //
 // ── --idstability: does a return's instance id survive a rebuild ────────────
-// MEASURED ANSWER: no. LidarReturn::hitInstanceId is the renderer's internal
-// instance index, NOT the label set through setObjectInstanceId — the two are
-// different numbering schemes and the returns carry the former. Under the edit
-// script above the pillar's static, unmoved surface reports id 3 before the
-// churn and id 2 after it, on every one of the ~1.8k beams that struck it at an
-// identical range. Perception code that keys on hitInstanceId across a scene
-// edit is therefore keying on a number that moves under it.
+// This mode found the defect and now guards the fix. Returns originally carried
+// the raw TLAS instance index, so the pillar's static, unmoved surface reported
+// id 3 before the churn and id 2 after it, on every one of the ~1.8k beams that
+// struck it at an identical range — perception code keying on hitInstanceId
+// across a scene edit was keying on a number that moved under it. The renderer
+// now translates the index to the stable setObjectInstanceId label at readback,
+// so the ids printed below are the harness scene's own labels (ground = 1,
+// pillar = 4) and they must not move across the edit.
 //
 // This mode measures it within one run: take a pre-edit scan and a post-revert
 // scan, keep the beams that returned in BOTH and whose |Δrange| < 1e-6 (same

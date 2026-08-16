@@ -32,8 +32,15 @@ namespace threepp {
 
     /**
      * One LIDAR return. Sentinel values in `hitInstanceId`:
-     *    >= 0   surface hit; ID indexes the renderer's per-instance
-     *           MaterialDesc / GeometryDesc tables
+     *    >= 0   surface hit; the STABLE per-object instance id — the same
+     *           number `VulkanRenderer::setObjectInstanceId` assigns and the
+     *           same one the raster Ids AOV writes, so a return can be joined
+     *           against a segmentation image. It is NOT the TLAS instance
+     *           index: that renumbers whenever the entry list churns (adding
+     *           or removing an object shifts every entry behind it), and
+     *           returns used to carry it, which made ids unusable across a
+     *           scene edit. 0 = no id assigned (sky / unlabelled), matching
+     *           the AOV's convention
      *    -1     miss / sub-threshold / source can't tell
      *    -2     volume scatter event (fog / haze / participating media);
      *           `position` is the scatter location, `normal` points
