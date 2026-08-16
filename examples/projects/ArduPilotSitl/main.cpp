@@ -1201,6 +1201,16 @@ int main(int argc, char** argv) {
         mavout->poll();
 
         const double t = lastState.timestampSec;
+        // Sim time comes from SITL's frame counter, and a SITL REBOOT resets
+        // it to zero. Gates stranded minutes in the future would mute the fan
+        // until sim time caught back up — which ArduPilot reports as the
+        // maximally misleading "PreArm: PRX1: No Data". A gate more than one
+        // period ahead of now is only reachable by time running backwards.
+        if (nextProxScan > t + 0.1) {
+            nextProxScan = t;
+            nextProxBeat = t;
+            nextProxLog = t;
+        }
         if (t >= nextProxBeat) {
             nextProxBeat = t + 1.0;// 1 Hz; a silent component is ignored
             mavout->sendHeartbeat();
