@@ -61,7 +61,9 @@ struct EffectComposer::Impl {
         parameters.depthBuffer = options.depthBuffer;
         parameters.stencilBuffer = options.stencilBuffer;
         parameters.samples = options.samples;
-        if (options.type) parameters.type = *options.type;
+        // See Options::type: linear light in 8 bits bands under the output
+        // encode, so the intermediates are half float unless asked otherwise.
+        parameters.type = options.type.value_or(Type::HalfFloat);
 
         const auto w = effectiveWidth();
         const auto h = effectiveHeight();

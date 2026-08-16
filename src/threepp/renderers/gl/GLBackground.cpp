@@ -3,6 +3,7 @@
 #include "threepp/renderers/gl/GLCubeMaps.hpp"
 #include "threepp/renderers/gl/GLObjects.hpp"
 #include "threepp/renderers/gl/GLRenderLists.hpp"
+#include "threepp/renderers/RenderTarget.hpp"
 #include "threepp/renderers/Renderer.hpp"
 
 #include "threepp/renderers/shaders/ShaderLib.hpp"
@@ -163,6 +164,11 @@ void GLBackground::setClearAlpha(float alpha) {
     setClear(clearColor, clearAlpha);
 }
 
+void GLBackground::refreshClear() {
+
+    setClear(clearColor, clearAlpha);
+}
+
 void GLBackground::setClear(const Color& color, float alpha) {
 
     // Encode the clear color into the output color space before handing it to
@@ -171,9 +177,20 @@ void GLBackground::setClear(const Color& color, float alpha) {
     // clear color would render too dark. Mirrors three.js WebGLBackground.setClear,
     // which does color.getRGB(_rgb, getUnlitUniformColorSpace(renderer)).
     // When ColorManagement is disabled this is a no-op (legacy raw behaviour).
+    //
+    // Which space that is depends on what is bound, exactly as it does for the
+    // shader encode (GLRenderer::currentOutputColorSpace): a render target is
+    // an intermediate, normally linear, and only the screen wants the display
+    // encode. Reading the renderer's output space unconditionally put the sRGB
+    // encode into the clear of every offscreen pass — so an EffectComposer,
+    // whose final draw encodes again, showed its background twice-encoded and
+    // washed out while the geometry around it was right.
+    const auto* target = renderer.getRenderTarget();
+    const ColorSpace space = target ? target->texture->colorSpace : renderer.outputColorSpace;
+
     Color c;
     c.copy(color);
-    ColorManagement::workingToColorSpace(c, renderer.outputColorSpace);
+    ColorManagement::workingToColorSpace(c, space);
 
     state.colorBuffer.setClear(c.r, c.g, c.b, alpha, premultipliedAlpha);
 }

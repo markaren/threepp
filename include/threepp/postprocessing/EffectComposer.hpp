@@ -49,7 +49,20 @@ namespace threepp {
             // On by default because MaskPass needs somewhere to put its mask.
             bool stencilBuffer{true};
 
-            // HalfFloat keeps a chain from clipping at 1.0 between passes.
+            // Pixel type of the internal targets.
+            //
+            // HalfFloat by default, and not only so a chain stops clipping at
+            // 1.0 between passes: the intermediates hold *linear* light, and
+            // 8 bits of linear is not enough to survive the output encode. The
+            // encode expands the bottom of the range hard — the first three
+            // byte steps, 0/1/2, come out as 0, 13 and 22 — so a dark gradient
+            // written to a byte target arrives on screen as visible contour
+            // bands however smooth it was. Anything dim is mostly bottom of
+            // the range, which is why a byte chain bands where a direct render
+            // of the same scene does not.
+            //
+            // Set UnsignedByte to get the cheaper targets back; the banding
+            // comes with them.
             std::optional<Type> type;
 
             Options() = default;

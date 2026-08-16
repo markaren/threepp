@@ -13,6 +13,8 @@
 #include "threepp/postprocessing/postprocessing.hpp"
 
 #include <cmath>
+#include <optional>
+#include <set>
 #include <utility>
 
 namespace {
@@ -122,6 +124,119 @@ TEST_CASE("EffectComposer: output is sRGB-encoded like a direct render", "[postp
     INFO("direct " << direct.r << ", composed " << composed.r << " (expected ~188)");
     CHECK(std::abs(direct.r - 188.0) < 3.0);
     CHECK(std::abs(composed.r - 188.0) < 3.0);
+}
+
+// Geometry is encoded by the fragment shader, which threepp compiles against
+// the bound target — but a clear bypasses the shader, so the clear colour is
+// encoded on the CPU instead, and that encode has to read the same target. It
+// did not: it read the renderer's output space unconditionally, so the
+// background went into the linear intermediate already sRGB-encoded and the
+// composer's output draw encoded it a second time. Every other test in this
+// file clears to black, which is a fixed point of the encode and hides it
+// completely; a dark non-black background is where it shows, and it shows
+// large — 0x05050a arrived as (38,38,56) instead of (5,5,10).
+TEST_CASE("EffectComposer: the scene background survives the chain", "[postprocessing]") {
+
+    auto scene = Scene::create();
+    scene->background = Color(0.02f, 0.02f, 0.04f);// dark, where the encode error is biggest
+    auto camera = plateCamera();
+
+    GLRenderer renderer(glCanvas());
+    renderer.outputColorSpace = ColorSpace::sRGB;
+
+    renderer.render(*scene, *camera);
+    const auto direct = centerPixel(renderer.readRGBPixels(), RT_WIDTH, RT_HEIGHT);
+
+    EffectComposer composer(renderer);
+    composer.addPass(std::make_shared<RenderPass>(*scene, *camera));
+    composer.render();
+
+    const auto composed = centerPixel(renderer.readRGBPixels(), RT_WIDTH, RT_HEIGHT);
+
+    // sRGB encode of linear 0.02 is 0.1544 -> byte 39. Encoding twice lands at
+    // 106, which is what the composer used to show.
+    INFO("direct " << direct.r << ", composed " << composed.r << " (expected ~39, twice-encoded ~106)");
+    CHECK(std::abs(direct.r - 39.0) < 3.0);
+    CHECK(std::abs(composed.r - direct.r) < 3.0);
+}
+
+// The renderer's own clear colour takes the same path as a scene background,
+// and RenderPass clears with it immediately after binding the composer's
+// target — before anything re-encodes for that bind.
+TEST_CASE("EffectComposer: the renderer clear colour survives the chain", "[postprocessing]") {
+
+    auto scene = Scene::create();
+    auto camera = plateCamera();
+
+    GLRenderer renderer(glCanvas());
+    renderer.outputColorSpace = ColorSpace::sRGB;
+    renderer.setClearColor(Color(0.02f, 0.02f, 0.04f), 1.f);
+
+    EffectComposer composer(renderer);
+    composer.addPass(std::make_shared<RenderPass>(*scene, *camera));
+    composer.render();
+
+    const auto composed = centerPixel(renderer.readRGBPixels(), RT_WIDTH, RT_HEIGHT);
+
+    INFO("expected ~39, got " << composed.r);
+    CHECK(std::abs(composed.r - 39.0) < 3.0);
+}
+
+// The intermediates hold linear light, so their precision is what a dark ramp
+// has to survive. In 8 bits it does not: the output encode maps the first byte
+// steps to 0, 13, 22, and a smooth gradient arrives as a handful of flat
+// terraces. Measured as the number of distinct output values across a ramp
+// that spans the dark end, where byte targets have almost nothing to spend.
+TEST_CASE("EffectComposer: a dark gradient does not band", "[postprocessing]") {
+
+    auto scene = Scene::create();
+    scene->background = Color(0, 0, 0);
+    auto camera = plateCamera();
+
+    // A horizontal ramp over the bottom 4% of the linear range.
+    auto ramp = std::make_shared<ShaderPass>(Shader{
+            UniformMap{{"tDiffuse", Uniform()}},
+            R"(
+            varying vec2 vUv;
+            void main() {
+                vUv = uv;
+                gl_Position = projectionMatrix * modelViewMatrix * vec4( position, 1.0 );
+            })",
+            R"(
+            uniform sampler2D tDiffuse;
+            varying vec2 vUv;
+            void main() {
+                gl_FragColor = vec4( vec3( vUv.x * 0.04 ), 1.0 );
+            })"});
+
+    GLRenderer renderer(glCanvas());
+    renderer.outputColorSpace = ColorSpace::sRGB;
+
+    const auto levels = [&](const std::optional<Type>& type) {
+        EffectComposer::Options options;
+        options.type = type;
+
+        EffectComposer composer(renderer, options);
+        composer.addPass(std::make_shared<RenderPass>(*scene, *camera));
+        composer.addPass(ramp);
+        composer.render();
+
+        const auto px = renderer.readRGBPixels();
+        std::set<unsigned char> seen;
+        const int row = RT_HEIGHT / 2;
+        for (int x = 0; x < RT_WIDTH; ++x) seen.insert(px[(row * RT_WIDTH + x) * 3]);
+
+        return seen.size();
+    };
+
+    const auto banded = levels(Type::UnsignedByte);
+    const auto smooth = levels(std::nullopt);// the default: half float
+
+    // 64 pixels of ramp. Bytes can only reach the few linear codes below 0.04,
+    // so they collapse to a handful of terraces; half float keeps most of them.
+    INFO("byte targets " << banded << " levels, default " << smooth << " (of " << RT_WIDTH << " pixels)");
+    CHECK(banded <= 12);
+    CHECK(smooth > banded * 2);
 }
 
 // Two passes, and the second reads what the first wrote. If the ping-pong

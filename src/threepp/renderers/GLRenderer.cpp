@@ -1316,6 +1316,13 @@ struct GLRenderer::Impl {
         state.viewport(_currentViewport);
         state.scissor(_currentScissor);
         state.setScissorTest(_currentScissorTest.value_or(false));
+
+        // The clear colour is encoded for the target it will be cleared into
+        // (GLBackground::setClear), so the value glClearColor holds belongs to
+        // the target that was bound when it was set. Re-encode it here, or a
+        // clear() issued straight after a bind — which is what RenderPass does —
+        // uses the previous target's encode.
+        background.refreshClear();
     }
 
     void copyFramebufferToTexture(const Vector2& position, Texture& texture, int level) {

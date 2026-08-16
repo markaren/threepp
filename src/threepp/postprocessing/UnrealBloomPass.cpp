@@ -25,6 +25,13 @@ namespace {
         options.minFilter = Filter::Linear;
         options.magFilter = Filter::Linear;
         options.format = Format::RGBA;
+        // Half float, like the composer's own targets. A halo is a wide, very
+        // shallow ramp in linear light, which is the worst thing to put in 8
+        // bits: the steps land far apart once the output encode expands the
+        // dark end, and because the mips are upsampled the contours follow the
+        // low-resolution grid — so the banding reads as polygons around the
+        // glow rather than rings.
+        options.type = Type::HalfFloat;
         options.generateMipmaps = false;
         options.depthBuffer = false;
         options.stencilBuffer = false;

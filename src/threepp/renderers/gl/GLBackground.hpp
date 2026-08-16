@@ -33,6 +33,12 @@ namespace threepp {
 
             void setClearAlpha(float alpha);
 
+            // Re-encode the current clear colour for whatever render target is
+            // bound now. Called when the bound target changes: the encode
+            // depends on the target's colour space, so the value glClearColor
+            // holds goes stale on every bind.
+            void refreshClear();
+
 
         private:
             GLRenderer& renderer;

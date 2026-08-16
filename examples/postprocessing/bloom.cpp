@@ -2,9 +2,11 @@
 // progressively halved mips, add it back weighted.
 //
 // The threshold is applied to the tone-mapped image, which never reaches 1.0 -
-// so it sits below 1 here. A chain that wants to threshold true HDR values
-// instead should give the composer EffectComposer::Options::type = HalfFloat
-// and keep the tone mapping for the end.
+// so it sits below 1 here. The composer's targets are half float, so values
+// above 1 would survive the chain; what caps them is that the RenderPass tone
+// maps on the way in. A chain that wants to threshold true HDR values instead
+// has to take the tone mapping off the renderer and put it at the end of the
+// chain as a pass of its own.
 //
 //   1 / 2   strength down / up
 //   3 / 4   threshold down / up
