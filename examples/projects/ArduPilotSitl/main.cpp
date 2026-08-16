@@ -7,6 +7,10 @@
 //
 //   ardupilot_sitl [--port N]     interactive demo (default port 9002)
 //   ardupilot_sitl --selftest     headless fake-SITL loopback check, exit 0/1
+//   ardupilot_sitl --brownout     scripted landing loop, no SITL needed —
+//                                 rotor-wash dust on the Vulkan backend
+//   ardupilot_sitl --seq DIR [--start T] [--seqframes N] [--warm N]
+//                                 headless deterministic brownout capture
 //
 // The render loop and the physics never race: each animate frame drains the
 // socket under a time budget (SITL waits on our reply — that's the protocol —
@@ -36,6 +40,7 @@
 #include <unistd.h>
 #endif
 
+#include "threepp/extras/uav/DownwashEffect.hpp"
 #include "threepp/extras/uav/DroneVisual.hpp"
 #include "threepp/extras/uav/FrameConv.hpp"
 #include "threepp/extras/uav/QuadSim.hpp"
@@ -60,6 +65,7 @@
 #include <chrono>
 #include <cstdio>
 #include <cstring>
+#include <filesystem>
 #include <limits>
 #include <random>
 #include <string>
@@ -92,6 +98,24 @@ namespace {
         using namespace std::chrono;
         return duration<double>(steady_clock::now().time_since_epoch()).count();
     }
+
+    // ── Scripted brownout flight (closed form in sim time) ──────────────────
+    // A 26 s cycle: climb, hover, DECELERATING descent into touchdown (the
+    // final metres are slow, which is where ground effect makes the dust), a
+    // motors-cut pause while the cloud drifts off, then a spool-up on the pad
+    // that blasts what settled — and around again. Altitude target in metres;
+    // < 0 means the throttle is CUT this instant.
+    float scriptAlt(float c) {
+        if (c < 4.f) return 12.f * math::smoothstep(0.f, 4.f, c);
+        if (c < 8.f) return 12.f;
+        if (c < 19.f) {
+            const float u = (c - 8.f) / 11.f;
+            return 12.f * (1.f - u) * (1.f - u);
+        }
+        return -1.f;// cut (the pad spool below 24 s is handled by the caller)
+    }
+
+    constexpr float kScriptPeriod = 26.f;
 
     // --- selftest ----------------------------------------------------------
 
@@ -277,14 +301,30 @@ namespace {
 int main(int argc, char** argv) {
 
     std::uint16_t port = 9002;
+    bool brownout = false;   // scripted landing loop, no SITL required
+    std::string seqDir;      // deterministic frame capture (implies --brownout)
+    int seqFrames = 600, seqWarm = 30;
+    float seqStart = 12.f;   // sim seconds to fast-forward before capturing
     for (int i = 1; i < argc; ++i) {
         const std::string a = argv[i];
         if (a == "--selftest") return runSelftest();
         if (a == "--port" && i + 1 < argc) port = static_cast<std::uint16_t>(std::atoi(argv[++i]));
+        if (a == "--brownout") brownout = true;
+        if (a == "--seq" && i + 1 < argc) { seqDir = argv[++i]; brownout = true; }
+        if (a == "--seqframes" && i + 1 < argc) seqFrames = std::atoi(argv[++i]);
+        if (a == "--warm" && i + 1 < argc) seqWarm = std::atoi(argv[++i]);
+        if (a == "--start" && i + 1 < argc) seqStart = static_cast<float>(std::atof(argv[++i]));
     }
 
-    Canvas canvas("threepp - ArduPilot SITL", {{"aa", 4}});
-    auto renderer = createRenderer(canvas);
+    Canvas canvas("threepp - ArduPilot SITL",
+                  {{"aa", 4},
+                   {"size", std::pair<int, int>{1280, 720}},
+                   {"headless", !seqDir.empty()},
+                   {"vsync", seqDir.empty()}});
+    // A capture cannot answer the factory's interactive renderer prompt, and
+    // only the Vulkan backend renders the dust anyway.
+    auto renderer = seqDir.empty() ? createRenderer(canvas)
+                                   : createRenderer(canvas, GraphicsAPI::Vulkan);
     renderer->shadowMap().enabled = true;
     renderer->shadowMap().type = ShadowMap::PFCSoft;
 
@@ -362,6 +402,11 @@ int main(int argc, char** argv) {
     tp.octaves = 6;
     tp.falloff = terrain::Falloff::Radial;
     tp.erosion = terrain::ErosionType::Hydraulic;
+    // The radial island puts HOME on the height field's top, and the default
+    // snowline (0.5) is below it — so the whole landing area baked as SNOW and
+    // the scene read as arctic (and tan rotor-wash dust vanished, white on
+    // white). No snow anywhere: this is a summer meadow valley.
+    tp.snowLine = 2.f;
     terrain::TerrainGenerator gen(1337);
     gen.buildField(tp);
     gen.erode(tp);
@@ -657,7 +702,81 @@ int main(int argc, char** argv) {
     uav::FdmState lastState{};
     uav::ServoInput lastServo{};
     std::uint32_t resets = 0;
-    float windSpeed = 0.f, windFromDeg = 270.f, windGust = 0.3f;// HUD-driven
+    // HUD-driven. Brownout defaults: wind FROM the NW quadrant blows the cloud
+    // toward the tripod camera at (7.5, _, 7.5), which is what lets the shot
+    // end INSIDE the dust.
+    float windSpeed = brownout ? 1.6f : 0.f;
+    float windFromDeg = brownout ? 315.f : 270.f;
+    float windGust = brownout ? 0.35f : 0.3f;
+
+    // ── Rotor-wash dust (Vulkan only — DensityRepr has no GL path) ──────────
+    // Driven from the SAME quad state in both modes: an ArduPilot-flown
+    // landing browns out exactly like the scripted one.
+    std::shared_ptr<uav::DownwashEffect> dust;
+    if (vulkan) {
+        dust = uav::DownwashEffect::create();
+        scene.add(dust);
+    }
+
+    // The base HUD wind vector in threepp world space (blows FROM windFromDeg,
+    // meteorological convention).
+    const auto windBase = [&]() -> Vector3 {
+        const float toRad = math::degToRad(windFromDeg + 180.f);
+        return uav::frame::nedToTp(windSpeed * std::cos(toRad),
+                                   windSpeed * std::sin(toRad), 0.0);
+    };
+    // In brownout mode the QUAD flies calm air (there is no position-hold
+    // controller to fight a crosswind, and a drifting landing misses the pad)
+    // while the DUST, the windsock and the streaks ride a styled breeze —
+    // QuadSim's own gust model, mirrored. In SITL mode everything shares the
+    // quad's one air, and ArduPilot does the fighting.
+    const auto visualWindAt = [&](float t) -> Vector3 {
+        Vector3 w = windBase();
+        const float mag = 1.f + windGust * (0.45f * std::sin(0.9f * t) +
+                                            0.30f * std::sin(2.3f * t + 1.7f) +
+                                            0.20f * std::sin(5.1f * t + 0.4f));
+        w.multiplyScalar(mag);
+        return w;
+    };
+
+    // Scripted-flight throttle: altitude PD around the QuadSim hover point
+    // (thrust curve at expo 0.65 hovers at ~0.407 throttle => pwm ~1407).
+    std::uint32_t scriptFrame = 0;
+    const auto scriptedPwm = [&](double simT) -> std::uint16_t {
+        const float c = std::fmod(static_cast<float>(simT), kScriptPeriod);
+        if (c >= 24.f) return 1150;// spool on the pad: dust, no liftoff
+        const float altT = scriptAlt(c);
+        if (altT < 0.f) return 1000;// cut
+        const float altT2 = scriptAlt(std::min(c + 0.05f, 18.99f));
+        const float vT = (altT2 - altT) / 0.05f;
+        const float alt = static_cast<float>(-lastState.positionNed[2]);
+        const float vUp = static_cast<float>(-lastState.velocityNed[2]);
+        const float pwm = 1407.f + 150.f * (altT - alt) + 230.f * (vT - vUp);
+        return static_cast<std::uint16_t>(std::clamp(pwm, 1090.f, 1850.f));
+    };
+    // One scripted physics substep at the sim rate.
+    const auto scriptedStep = [&] {
+        uav::ServoInput in{};
+        in.frameRate = simRateHz;
+        in.frameCount = ++scriptFrame;
+        in.channels = 16;
+        const std::uint16_t pwm = scriptedPwm(lastState.timestampSec);
+        for (int m = 0; m < 4; ++m) in.pwm[m] = pwm;
+        quad->step(in, lastState);
+        lastServo = in;
+    };
+    // Feed the dust from whatever just flew (scripted or SITL).
+    const auto updateDust = [&] {
+        if (!dust) return;
+        const float t = static_cast<float>(lastState.timestampSec);
+        dust->setWind(brownout ? visualWindAt(t) : quad->windNow());
+        const float thrust = (quad->motorLevel(0) + quad->motorLevel(1) +
+                              quad->motorLevel(2) + quad->motorLevel(3)) * 0.25f;
+        const float agl = std::isnan(lastState.rangefinderM)
+                                  ? 1e9f
+                                  : static_cast<float>(lastState.rangefinderM);
+        dust->update(t, drone.root()->position, thrust, agl);
+    };
 
     // Waypoint marker channel: the mission lives inside ArduPilot and the
     // physics protocol never mentions it, so fly_test.py posts its route here
@@ -737,9 +856,108 @@ int main(int argc, char** argv) {
         renderer->setSize(size);
     });
 
+    // ── Deterministic brownout capture ──────────────────────────────────────
+    // Headless, fixed dt, closed-form flight, tripod camera, AE pinned
+    // (feedback_vulkan_capture_confounds: AE would cancel the very darkening
+    // the cloud causes). Two runs of the same command produce the same flight;
+    // frames land as f%03d.png for the LOOK pass.
+#ifdef THREEPP_WITH_VULKAN
+    if (!seqDir.empty()) {
+        auto* vk = dynamic_cast<VulkanRenderer*>(renderer.get());
+        if (!vk || !dust) {
+            std::fprintf(stderr, "--seq needs the Vulkan backend\n");
+            return 1;
+        }
+        // Auto-exposure stays ON, deliberately: this is a cinematic capture,
+        // not an A/B metric (where feedback_vulkan_capture_confounds says pin
+        // it), and a camera that meters — and gets fooled inside the cloud —
+        // is what a real landing video does. The scripted flight drives the
+        // same frames every run, so the metered exposure reproduces too.
+        vk->setVolumetricFog(true);// aerial perspective + the sun's dust shafts
+        // TAA, not DLSS: a vehicle descending THROUGH its own dust is the
+        // exact emitter-fog silhouette case the upscalers still ghost on
+        // (feedback_upscaler_emitter_fog_silhouettes) — under DLSS the drone
+        // drags a dark smeared trail through the cloud. Fire shipped gated on
+        // TAA for the same reason.
+        vk->setDlss(false);
+        vk->setFsr(false);
+        namespace fs = std::filesystem;
+        fs::create_directories(seqDir);
+        constexpr float kDt = 1.f / 60.f;
+        // Fast-forward the FLIGHT to --start without rendering, feeding the
+        // dust at frame cadence so the cloud's latched history is the one a
+        // full run would have.
+        {
+            int sub = 0;
+            while (lastState.timestampSec < seqStart) {
+                scriptedStep();
+                if (++sub == 20) {
+                    sub = 0;
+                    updateDust();
+                }
+            }
+        }
+        // Tripod: downwind of the pad, chest height, so the cloud rolls over
+        // the lens near touchdown. PERPENDICULAR to the sun azimuth, not
+        // opposite it: on the anti-solar axis the drone's volumetric shadow
+        // shaft through the dust points straight down the lens and reads as a
+        // dark smudge glued to the vehicle; from the side it reads as what it
+        // is — a slanted shadow beam in the cloud.
+        camera.position.set(5.6f, 1.4f, 5.6f);
+        const double t0 = lastState.timestampSec;
+        for (int i = 0; i < seqWarm + seqFrames; ++i) {
+            const double target = t0 + static_cast<double>(i + 1) * kDt;
+            while (lastState.timestampSec < target - 1e-9) scriptedStep();
+
+            float levels[4];
+            for (int m = 0; m < 4; ++m) levels[m] = quad->motorLevel(m);
+            drone.setMotors(levels, kDt);
+            updateDust();
+
+            // Windsock agrees with the dust's air (it may be in frame).
+            {
+                const Vector3 w = visualWindAt(static_cast<float>(lastState.timestampSec));
+                const float speed = std::hypot(w.x, w.z);
+                if (speed > 0.05f) sockYaw->rotation.y = std::atan2(-w.z, w.x);
+                sockDroop->rotation.z = -(1.f - std::min(speed / 8.f, 1.f)) * 1.4f;
+            }
+
+            sunTarget->position.copy(drone.root()->position);
+            sun->position.copy(sunDir).multiplyScalar(300.f).add(sunTarget->position);
+
+            Vector3 aim = drone.root()->position;
+            aim.y += 0.5f;
+            camera.lookAt(aim);
+
+            canvas.animateOnce([&] { renderer->render(scene, camera); });
+            if (i % 20 == 0) {
+                const auto& dr = dust->field()->densityRepr();
+                std::fprintf(stderr,
+                             "[dust] t=%.2f alt=%.2f thr=%.2f str=%.2f live=%u "
+                             "box c=(%.1f %.1f %.1f) h=(%.1f %.1f %.1f)\n",
+                             lastState.timestampSec, -lastState.positionNed[2],
+                             (quad->motorLevel(0) + quad->motorLevel(1) +
+                              quad->motorLevel(2) + quad->motorLevel(3)) *
+                                     0.25f,
+                             dust->dustiness(), dust->field()->liveCount(),
+                             dr.center.x, dr.center.y, dr.center.z,
+                             dr.halfExtent.x, dr.halfExtent.y, dr.halfExtent.z);
+            }
+            if (i >= seqWarm) {
+                char name[64];
+                std::snprintf(name, sizeof name, "f%03d.png", i - seqWarm);
+                vk->writeFramebuffer((fs::path(seqDir) / name).string());
+            }
+        }
+        std::printf("[seq] %d frames -> %s (warm %d, AE pinned)\n", seqFrames,
+                    seqDir.c_str(), seqWarm);
+        return 0;
+    }
+#endif
+
     RendererSettings rendererSettings(*renderer);
     ImguiFunctionalContext ui(canvas, *renderer, [&] {
-        if (!bridge.connected()) {
+        if (!bridge.connected() && !brownout) {
             ImGui::SetNextWindowPos({ImGui::GetIO().DisplaySize.x * 0.5f,
                                      ImGui::GetIO().DisplaySize.y * 0.14f},
                                     ImGuiCond_Always, {0.5f, 0.5f});
@@ -759,10 +977,14 @@ int main(int argc, char** argv) {
 
         ImGui::SetNextWindowPos({10, 10}, ImGuiCond_FirstUseEver);
         ImGui::Begin("SITL telemetry", nullptr, ImGuiWindowFlags_AlwaysAutoResize);
-        ImGui::Text("peer         %s", bridge.peer().c_str());
-        ImGui::Text("rate         %u Hz sim / %u Hz asked / %.0f Hz achieved",
-                    simRateHz, lastServo.frameRate, bridge.achievedRateHz());
-        ImGui::Text("frame        %u   (resets: %u)", bridge.lastFrameCount(), resets);
+        if (brownout) {
+            ImGui::TextUnformatted("SCRIPTED LANDING LOOP (--brownout)");
+        } else {
+            ImGui::Text("peer         %s", bridge.peer().c_str());
+            ImGui::Text("rate         %u Hz sim / %u Hz asked / %.0f Hz achieved",
+                        simRateHz, lastServo.frameRate, bridge.achievedRateHz());
+            ImGui::Text("frame        %u   (resets: %u)", bridge.lastFrameCount(), resets);
+        }
         ImGui::Text("sim time     %.2f s", lastState.timestampSec);
         ImGui::Separator();
         if (std::isnan(lastState.rangefinderM)) {
@@ -778,6 +1000,10 @@ int main(int argc, char** argv) {
                     lastState.velocityNed[1], lastState.velocityNed[2]);
         if (!std::isnan(lastState.airspeed)) {
             ImGui::Text("airspeed     %.1f m/s", lastState.airspeed);
+        }
+        if (dust) {
+            ImGui::Text("dust         %.0f%%  (%u parcels)", dust->dustiness() * 100.f,
+                        dust->field()->liveCount());
         }
         ImGui::Separator();
         ImGui::TextUnformatted("wind");
@@ -823,38 +1049,47 @@ int main(int argc, char** argv) {
         }
 
         // Wind blows FROM windFromDeg (compass, 0 = from north), toward the
-        // opposite heading — the meteorological convention.
-        {
+        // opposite heading — the meteorological convention. In brownout mode
+        // the quad keeps calm air (see visualWindAt's note).
+        if (!brownout) {
             const float toRad = math::degToRad(windFromDeg + 180.f);
             quad->setWind(uav::frame::nedToTp(windSpeed * std::cos(toRad),
                                                windSpeed * std::sin(toRad), 0.0),
                           windGust);
         }
 
-        // Service the SITL link under a time budget: each Frame is one
-        // lock-step physics substep + reply. Lock-step means there is never
-        // more than one packet in flight — the next one only arrives AFTER our
-        // reply — so on an empty socket we spin briefly (the turnaround is
-        // ~100 µs) instead of breaking, or the sim would be capped at one
-        // physics step per vsync. A 1.5 ms silence means SITL is idle/slow;
-        // then we stop burning the budget and go render.
-        const double budgetEnd = nowSec() + 0.008;
-        double lastActivity = nowSec();
-        uav::ServoInput servo{};
-        while (nowSec() < budgetEnd) {
-            const auto ev = bridge.poll(servo);
-            if (ev == uav::SitlBridge::Event::None) {
-                if (!bridge.connected() || nowSec() - lastActivity > 0.0015) break;
-                continue;
+        if (brownout) {
+            // Scripted landing loop: advance the sim by the render frame's own
+            // time (clamped so a window drag doesn't fast-forward the flight).
+            const double target =
+                    lastState.timestampSec + std::min(static_cast<double>(dtRender), 0.05);
+            while (lastState.timestampSec < target) scriptedStep();
+        } else {
+            // Service the SITL link under a time budget: each Frame is one
+            // lock-step physics substep + reply. Lock-step means there is never
+            // more than one packet in flight — the next one only arrives AFTER
+            // our reply — so on an empty socket we spin briefly (the turnaround
+            // is ~100 µs) instead of breaking, or the sim would be capped at
+            // one physics step per vsync. A 1.5 ms silence means SITL is
+            // idle/slow; then we stop burning the budget and go render.
+            const double budgetEnd = nowSec() + 0.008;
+            double lastActivity = nowSec();
+            uav::ServoInput servo{};
+            while (nowSec() < budgetEnd) {
+                const auto ev = bridge.poll(servo);
+                if (ev == uav::SitlBridge::Event::None) {
+                    if (!bridge.connected() || nowSec() - lastActivity > 0.0015) break;
+                    continue;
+                }
+                lastActivity = nowSec();
+                if (ev == uav::SitlBridge::Event::Reset) {
+                    quad->reset();
+                    ++resets;
+                }
+                quad->step(servo, lastState);
+                bridge.sendState(lastState);
+                lastServo = servo;
             }
-            lastActivity = nowSec();
-            if (ev == uav::SitlBridge::Event::Reset) {
-                quad->reset();
-                ++resets;
-            }
-            quad->step(servo, lastState);
-            bridge.sendState(lastState);
-            lastServo = servo;
         }
 
         // Visuals: the physics binding already synced the drone mesh; spin the
@@ -864,11 +1099,14 @@ int main(int argc, char** argv) {
             for (int i = 0; i < 4; ++i) levels[i] = quad->motorLevel(i);
         }
         drone.setMotors(levels, dtRender);
+        updateDust();
 
         // Make the wind visible: windsock attitude + advecting air streaks,
         // both reading the sim's instantaneous gusty wind.
         {
-            const Vector3 w = quad->windNow();
+            const Vector3 w = brownout
+                                      ? visualWindAt(static_cast<float>(lastState.timestampSec))
+                                      : quad->windNow();
             const float speed = std::hypot(w.x, w.z);
 
             if (speed > 0.05f) {
