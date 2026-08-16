@@ -3,6 +3,7 @@
 [![Build](https://github.com/markaren/threepp/actions/workflows/config.yml/badge.svg)](https://github.com/markaren/threepp/actions/workflows/config.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Conan Center](https://img.shields.io/conan/v/threepp)](https://conan.io/center/recipes/threepp)
+[![PyPI](https://img.shields.io/pypi/v/threepp)](https://pypi.org/project/threepp/)
 
 A cross-platform C++20 3D library with the high-level API of [three.js](https://github.com/mrdoob/three.js/) —
 and modern backends: portable OpenGL, and a deferred Vulkan renderer with ray-traced accents.
@@ -62,8 +63,9 @@ lights, the frame loop, loaders and the two backends.
 * **A scene editor and a headless player** — author scenes with physics, sensors and
   Python behaviour scripts, then replay them in CI. Documents are plain three.js JSON,
   so an authored scene runs in an ordinary threepp program with no editor present.
-* **Python bindings** — the scene graph, headless render-to-NumPy, PhysX, and
-  `threepp.rl` (a GPU-vectorized RL stack).
+* **Python bindings, on PyPI** — `pip install threepp`: the scene graph, headless
+  render-to-NumPy, PhysX, and `threepp.rl` (a GPU-vectorized RL stack). The editor
+  is `pip install threepp-editor`.
 * Built-in loaders — models [STL (binary & ASCII), OBJ/MTL, glTF/GLB incl. meshopt compression,
   COLLADA, SVG, URDF/xacro], images [PNG/JPEG, DDS, WebP, Radiance HDR, OpenEXR] and
   Gaussian-splat scans. `USDLoader` and `FBXLoader` are opt-in.
@@ -159,7 +161,8 @@ top-level GLFW build):
   editor-specific (physics, sensors, scripts, joints, vehicles, splines, conveyors, sound)
   in `userData`, so a saved document opens and runs in a plain threepp program with no
   editor present. Python behaviour scripts attach to objects Unity-style.
-  See [doc/editor.md](doc/editor.md).
+  Also shipped prebuilt on PyPI for Windows — `pip install threepp-editor`, then run
+  `threepp-editor`. See [doc/editor.md](doc/editor.md).
 * **`threepp_player`** — the same play runtime with no editing machinery: headless,
   independent episodes, sensor CSV recording, and a nonzero exit if any script raised or
   the document would not play. It registers the same play sessions the editor does, in the
@@ -271,7 +274,17 @@ code stays the same.
 
 ### Python
 
-The same scene graph is available from Python:
+The same scene graph is available from Python, and it is a pip install away:
+
+```shell
+pip install threepp
+```
+
+Prebuilt wheels cover CPython 3.10–3.14 on Windows x64 and manylinux x86_64, and carry
+the GL renderer, the Vulkan deferred renderer with its G-buffer AOVs, and CPU PhysX —
+no build tools, no SDKs. macOS has no wheel yet; `pip install` builds from source there
+(GL-only). Releases are dated: a `YYYY-MM-DD` tag publishes `YYYY.MM.DD`. Pin the one
+you tested — this is pre-1.0 and the API moves.
 
 ```python
 import threepp as tp
@@ -299,10 +312,16 @@ GPU-vectorized RL stack (`GpuSim`, `VecTask`, `PPO`) with no rl_games / rsl_rl /
 reading and writing PhysX state directly as CUDA tensors. Probe what a given build has with
 `tp.HAS_VULKAN` / `tp.HAS_PHYSX` / `tp.HAS_IMGUI` / `tp.HAS_AUDIO`.
 
-Build the wheel from source (OpenGL backend; Vulkan and PhysX remain opt-in CMake builds):
+Extras: `threepp[rl]` adds torch for the PPO trainer, and `threepp[editor]` pulls the
+editor package (Windows). Building the wheel yourself from a checkout gives the OpenGL
+backend by default — unlike the published wheels, Vulkan and PhysX have to be pointed
+at their SDKs:
 ```shell
 pip install .
 ```
+
+[python/README.md](python/README.md) is the full Python guide — install matrix, the AOV
+and PhysX walkthroughs, and what the GPU-physics paths need on top.
 
 Looking for more? [doc/getting_started.md](doc/getting_started.md) walks through the concepts
 behind the API, and the [examples](examples) folder is the de-facto documentation,
@@ -410,6 +429,10 @@ some headers will require additional dependencies to compile.
 Threepp is mainly a CMake package. `FetchContent` is the recommended route and the one the
 project tests; [conan](https://conan.io/) and [xmake](https://xmake.io/) are also possible —
 see [doc/package_managers.md](doc/package_managers.md).
+
+From Python there is nothing to build: [`threepp`](https://pypi.org/project/threepp/) and
+[`threepp-editor`](https://pypi.org/project/threepp-editor/) are on PyPI as prebuilt wheels
+(see [Python](#python) above).
 
 ### CMake FetchContent (recommended)
 

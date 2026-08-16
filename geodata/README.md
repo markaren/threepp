@@ -42,7 +42,6 @@ The examples default to `geodata/trollstigen` (driving) / `geodata/aalesund`
 
 ```
 norway_terrain [<pack-dir>]      # viewer  (or env THREEPP_REGION_PACK)
-norway_drive   [<pack-dir>]      # PhysX driving demo
 ```
 
 ## Attribution & licensing
