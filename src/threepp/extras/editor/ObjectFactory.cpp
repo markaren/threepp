@@ -8,6 +8,7 @@
 #include "threepp/extras/editor/ParticleFieldConfig.hpp"
 #include "threepp/extras/editor/SoundConfig.hpp"
 #include "threepp/extras/editor/SplineConfig.hpp"
+#include "threepp/extras/editor/TerrainConfig.hpp"
 #include "threepp/extras/editor/TextConfig.hpp"
 #include "threepp/extras/editor/TreeConfig.hpp"
 
@@ -166,6 +167,35 @@ std::shared_ptr<Mesh> ObjectFactory::createText(const Object3D& root) {
     mesh->geometry()->computeBoundingBox();
     const auto& box = mesh->geometry()->boundingBox;
     if (box && !box->isEmpty()) mesh->position.y = -box->min().y;
+
+    return mesh;
+}
+
+std::shared_ptr<Mesh> ObjectFactory::createTerrain(const Object3D& root) {
+
+    auto config = TerrainConfig::makeDefault();
+    // A fresh seed per terrain, for createTree's reason: a second Add Terrain
+    // is a different landscape, not the same hill twice. The seed lives in the
+    // config, so the terrain stays deterministic through undo, save and reload.
+    config.params.seed = std::random_device{}();
+
+    const auto bake = config.bake();
+
+    auto material = defaultMaterial();
+    // The splat albedo carries the colour, so the tint has to be neutral or the
+    // bands double-darken. Rough and non-metal: this is ground.
+    material->color = Color::white;
+    material->roughness = 0.93f;
+    material->metalness = 0.f;
+
+    auto mesh = Mesh::create(bake.geometry, material);
+    mesh->name = uniqueName(root, "Terrain");
+    // Ground receives; a heightfield casting into itself is all acne and no
+    // information at editor shadow-map resolutions.
+    mesh->castShadow = false;
+    mesh->receiveShadow = true;
+    config.write(*mesh);
+    TerrainConfig::applyAlbedo(*mesh, bake.albedo, bake.dim);
 
     return mesh;
 }

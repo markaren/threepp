@@ -5991,6 +5991,155 @@ int EditorApp::runSelfTest() {
         setViewPreset(ViewPreset::User);
     }
 
+    // --- terrain -----------------------------------------------------------
+    // A terrain is a Mesh whose triangles ARE the document (TerrainConfig): the
+    // config seeds them and makes them re-editable, but opening a scene never
+    // regenerates. What has to hold is that generation is deterministic, that a
+    // parameter edit carries the SCULPT layer across, and that the whole thing
+    // survives the file.
+    {
+        const auto terrainNow = [&](const std::string& uuid) {
+            return findByUuid(document_.scene(), uuid);
+        };
+
+        auto created = ObjectFactory::createTerrain(document_.scene());
+        const auto terrainUuid = created->uuid;
+        check(TerrainConfig::isTerrain(*created), "the factory's terrain carries the terrain entry");
+        {
+            const auto* position = created->geometry()
+                                           ? created->geometry()->getAttribute<float>("position")
+                                           : nullptr;
+            check(position && position->count() > 1000, "and a baked heightfield to show");
+            check(TerrainConfig::albedoTexture(*created) != nullptr,
+                  "with the splat albedo baked onto its material");
+        }
+        addObject(created, document_.scene(), "Add Terrain");
+        step(2);
+
+        const auto config = TerrainConfig::read(*created).value_or(TerrainConfig::makeDefault());
+
+        // Determinism is what makes delta recovery possible at all: base(config)
+        // has to be the same lattice every time it is asked for, or the "sculpt"
+        // recovered from it is noise.
+        {
+            const auto a = config.bake();
+            const auto b = config.bake();
+            check(a.heights.size() == b.heights.size() && !a.heights.empty(),
+                  "two bakes of one config produce the same lattice size");
+            check(a.heights == b.heights, "and byte-identical heights");
+        }
+
+        // Delta preservation: sculpt a bump by hand, move a noise parameter, and
+        // the bump has to still be there — the user does not lose an hour of
+        // sculpting because they touched a slider.
+        {
+            auto heights = TerrainConfig::heightsOf(*created->geometry());
+            const int dim = config.dim();
+            const size_t peak = static_cast<size_t>(dim / 2) * dim + dim / 2;
+            const float baseHeight = heights[peak];
+            constexpr float kBump = 7.5f;
+            heights[peak] += kBump;
+            TerrainConfig::setHeights(*created->geometry(), heights);
+
+            auto after = config;
+            after.params.warp = config.params.warp + 0.2f;
+            TerrainConfig::rebuild(*created, config, after);
+
+            const auto rebuilt = TerrainConfig::heightsOf(*created->geometry());
+            const auto plain = after.bake();
+            check(std::abs((rebuilt[peak] - plain.heights[peak]) - kBump) < 1e-3f,
+                  "a sculpted bump survives a parameter change intact");
+            check(std::abs(rebuilt[peak] - baseHeight - kBump) > 1e-4f ||
+                          std::abs(plain.heights[peak] - baseHeight) < 1e-6f,
+                  "and the parameter change itself still moved the ground under it");
+
+            // Resolution change resamples the delta rather than dropping it.
+            auto coarser = after;
+            coarser.params.resolution = after.params.resolution / 2;
+            TerrainConfig::rebuild(*created, after, coarser);
+            const auto resampled = TerrainConfig::heightsOf(*created->geometry());
+            const auto coarseBase = coarser.bake();
+            const int cdim = coarser.dim();
+            const size_t cpeak = static_cast<size_t>(cdim / 2) * cdim + cdim / 2;
+            check(resampled.size() == coarseBase.heights.size(),
+                  "a resolution change relattices the mesh");
+            check(resampled[cpeak] - coarseBase.heights[cpeak] > kBump * 0.4f,
+                  "and the bump survives the resample");
+
+            // Back to what the document should carry for the round trip.
+            TerrainConfig::rebuild(*created, coarser, config);
+        }
+
+        // Save and reload: the triangles are the truth, so they have to come
+        // back byte-identical — a terrain that regenerated on open would drop
+        // every sculpt in the file.
+        {
+            const auto terrainPath = std::filesystem::temp_directory_path() /
+                                     "threepp-editor-selftest-terrain.json";
+            auto sculpted = TerrainConfig::heightsOf(*created->geometry());
+            sculpted[100] += 3.25f;
+            TerrainConfig::setHeights(*created->geometry(), sculpted);
+
+            saveSceneAs(terrainPath);
+            openScene(terrainPath);
+            step();
+
+            auto* reloaded = terrainNow(terrainUuid);
+            check(reloaded && TerrainConfig::isTerrain(*reloaded),
+                  "the terrain survives save and reload");
+            check(reloaded && TerrainConfig::read(*reloaded) == config,
+                  "its config round-trips through the document");
+            const auto* asMesh = reloaded ? reloaded->as<Mesh>() : nullptr;
+            check(asMesh && asMesh->geometry() &&
+                          TerrainConfig::heightsOf(*asMesh->geometry()) == sculpted,
+                  "and its heights come back byte-identical, sculpt and all");
+            check(reloaded && TerrainConfig::albedoTexture(*reloaded) != nullptr,
+                  "with the baked albedo back on the material");
+
+            // A picture of what the PASS lines cannot describe: whether the
+            // default parameters read as GROUND at the editor's scale, and
+            // whether a sculpted mound shows on it. The heights are all right in
+            // arithmetic long before they are right to look at.
+            if (auto* mesh = reloaded ? reloaded->as<Mesh>() : nullptr) {
+                auto heights = TerrainConfig::heightsOf(*mesh->geometry());
+                const int dim = config.dim();
+                // The round-trip check above spiked ONE vertex to prove the
+                // document carries sculpts; leave it in and the picture has a
+                // needle through it. Put it back before drawing something meant
+                // to be looked at.
+                heights[100] -= 3.25f;
+                // A broad raised mound out on the low skirt, where a mound reads
+                // as a mound instead of disappearing into the ridge noise. Same
+                // smoothstep-ish falloff the brush kernels use.
+                const int cx = (dim * 5) / 8, cz = (dim * 7) / 8, radius = dim / 7;
+                for (int z = std::max(cz - radius, 0); z <= std::min(cz + radius, dim - 1); ++z) {
+                    for (int x = std::max(cx - radius, 0); x <= std::min(cx + radius, dim - 1); ++x) {
+                        const float dx = static_cast<float>(x - cx) / static_cast<float>(radius);
+                        const float dz = static_cast<float>(z - cz) / static_cast<float>(radius);
+                        const float d = std::sqrt(dx * dx + dz * dz);
+                        if (d >= 1.f) continue;
+                        heights[static_cast<size_t>(z) * dim + x] += 18.f * (1.f - d * d) * (1.f - d * d);
+                    }
+                }
+                TerrainConfig::setHeights(*mesh->geometry(), heights);
+                mesh->geometry()->computeVertexNormals();
+                if (auto* normal = mesh->geometry()->getAttribute<float>("normal")) normal->needsUpdate();
+                mesh->geometry()->computeBoundingBox();
+                mesh->geometry()->computeBoundingSphere();
+
+                const bool bottomPanelWas = bottomPanelOpen_;
+                bottomPanelOpen_ = false;
+                selectObject(reloaded);
+                camera_.position.set(90.f, 62.f, 105.f);
+                orbit_->target.set(0.f, 6.f, 0.f);
+                step(4);
+                shootTo(std::filesystem::temp_directory_path() / "threepp_editor_terrain.png");
+                bottomPanelOpen_ = bottomPanelWas;
+                step();
+            }
+        }
+    }
+
     // --- text objects ------------------------------------------------------
     // A text mesh is an ordinary Mesh whose geometry is built from its
     // userData (TextConfig): created by the factory, edited through the same

@@ -30,6 +30,7 @@
 #include "threepp/extras/editor/RenderConfig.hpp"
 #include "threepp/extras/editor/SceneDocument.hpp"
 #include "threepp/extras/editor/Selection.hpp"
+#include "threepp/extras/editor/TerrainConfig.hpp"
 
 #include "threepp/animation/AnimationMixer.hpp"
 #include "threepp/cameras/OrthographicCamera.hpp"
@@ -302,6 +303,16 @@ namespace threepp::editor {
         // the trunk and foliage meshes are derived state that syncTreeOverlays
         // regrows to follow it, which is also what makes undo cheap.
         void drawTreeSection(Object3D& object);
+        // Shown for a terrain mesh (TerrainConfig): the generator's knobs, the
+        // erosion pass behind its own button, and the splat bands. Unlike the
+        // tree, the MESH is the truth here — every commit goes through
+        // commitTerrain, which re-bakes and carries the sculpt layer across.
+        void drawTerrainSection(Object3D& object);
+        // One undo entry per terrain parameter edit, holding both generations
+        // of the geometry so undo restores byte-identical heights rather than
+        // re-deriving them (see the command in InspectorPanel.cpp).
+        void commitTerrain(Object3D& object, const editor::TerrainConfig& before,
+                           const editor::TerrainConfig& after, const std::string& label);
         // The conveyor twin: shown for a conveyor group and, in its waypoint
         // form, for one of its waypoints (arc centre / segment surface).
         void drawConveyorSection(Object3D& object);

@@ -55,6 +55,11 @@ namespace threepp::editor {
         // TreeConfig: the two tagged children ARE the tree, and the sync pass
         // keeps them following the config from there.
         static std::shared_ptr<Group> createTree(const Object3D& root);
+        // A Mesh carrying TerrainConfig, its heightfield and splat albedo
+        // already baked (raw noise — the erosion pass runs behind the
+        // inspector's Generate button, never on Add). See TerrainConfig: the
+        // triangles are the truth, the config is what makes them re-editable.
+        static std::shared_ptr<Mesh> createTerrain(const Object3D& root);
         // A plain Object3D carrying a default SoundConfig — a sound has no
         // geometry of its own; the viewport speaker marker is what shows it.
         // The file is attached afterwards, from the inspector.

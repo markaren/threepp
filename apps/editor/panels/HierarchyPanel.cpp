@@ -93,6 +93,11 @@ void EditorApp::drawAddMenu(Object3D& parent) {
             addObject(ObjectFactory::createTree(document_.scene()), *target, "Add Tree");
         };
     }
+    if (ImGui::MenuItem("Terrain")) {
+        deferred_ = [this, target] {
+            addObject(ObjectFactory::createTerrain(document_.scene()), *target, "Add Terrain");
+        };
+    }
     if (ImGui::MenuItem("Flock")) {
         deferred_ = [this, target] {
             addObject(ObjectFactory::createFlock(document_.scene()), *target, "Add Flock");

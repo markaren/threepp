@@ -25,6 +25,7 @@
 #include "threepp/extras/editor/SplatSurfaceCache.hpp"
 #include "threepp/extras/editor/SplatSurfaceConfig.hpp"
 #include "threepp/extras/editor/SplineConfig.hpp"
+#include "threepp/extras/editor/TerrainConfig.hpp"
 #include "threepp/extras/editor/TextConfig.hpp"
 #include "threepp/extras/editor/TreeConfig.hpp"
 #include "threepp/extras/editor/VehicleConfig.hpp"
@@ -58,6 +59,7 @@
 #include <cstring>
 #include <random>
 #include <unordered_map>
+#include <variant>
 #include <unordered_set>
 
 using namespace threepp;
@@ -281,6 +283,7 @@ void EditorApp::drawInspector() {
         drawAcousticsSection(*selected);
         drawTextSection(*selected);
         drawTreeSection(*selected);
+        drawTerrainSection(*selected);
         drawFlockSection(*selected);
         drawScriptSection(*selected);
         drawPhysicsSection(*selected);
@@ -3292,6 +3295,271 @@ void EditorApp::drawTextSection(Object3D& object) {
     ImGui::PopItemWidth();
 
     ImGui::TextColored(theme::muted(), "Stored in userData[\"text\"]");
+
+    ImGui::TreePop();
+}
+
+
+// ------------------------------------------------------------------- terrain
+
+namespace {
+
+    // A terrain parameter edit, as ONE undo entry that restores the exact
+    // heights it replaced.
+    //
+    // Recompute-based undo would be wrong here, not merely slow: the sculpt
+    // layer is recovered by subtracting a re-baked base, and re-baking on every
+    // undo/redo cycle walks the heights by float rounding until the mound the
+    // user carved has crept. So both generations are held as geometry
+    // SNAPSHOTS, exactly as EditorApp.cpp's RegenerateCommand holds both
+    // generations of a generator's output, and for the same reason. The albedo
+    // rides along: it is baked from the same heights.
+    class TerrainEditCommand: public Command {
+
+    public:
+        struct Snapshot {
+            std::shared_ptr<BufferGeometry> geometry;
+            std::vector<unsigned char> albedo;
+            int dim = 0;
+            TerrainConfig config;
+        };
+
+        TerrainEditCommand(Object3D& target, Snapshot before, Snapshot after, std::string label)
+            : target_(&target), before_(std::move(before)), after_(std::move(after)),
+              label_(std::move(label)), uuid_(target.uuid) {}
+
+        void redo() override { restore(after_); }
+        void undo() override { restore(before_); }
+
+        [[nodiscard]] std::string name() const override { return label_; }
+
+        // Two regenerations are two distinct landscapes; collapsing them would
+        // drop the middle one's geometry on the floor. Slider DRAGS still
+        // coalesce, because the inspector only commits on release.
+        bool mergeWith(const Command&) override { return false; }
+
+        [[nodiscard]] bool rebind(Object3D& root) override {
+
+            auto* found = findByUuid(root, uuid_);
+            if (!found) return false;
+            target_ = found;
+            return true;
+        }
+
+    private:
+        void restore(const Snapshot& snapshot) {
+
+            if (!target_ || !snapshot.geometry) return;
+            if (auto* mesh = target_->as<Mesh>()) mesh->setGeometry(snapshot.geometry);
+            TerrainConfig::applyAlbedo(*target_, snapshot.albedo, snapshot.dim);
+            snapshot.config.write(*target_);
+        }
+
+        Object3D* target_;
+        Snapshot before_;
+        Snapshot after_;
+        std::string label_;
+        std::string uuid_;
+    };
+
+    TerrainEditCommand::Snapshot snapshotTerrain(const Object3D& object, const TerrainConfig& config) {
+
+        TerrainEditCommand::Snapshot out;
+        out.config = config;
+        if (const auto* mesh = object.as<Mesh>()) out.geometry = mesh->geometry();
+        if (const auto texture = TerrainConfig::albedoTexture(object)) {
+            const auto& image = texture->image();
+            if (!image.isFloat() && !image.isHalfFloat()) {
+                out.albedo = image.data<unsigned char>();
+                out.dim = static_cast<int>(image.width());
+            }
+        }
+        return out;
+    }
+
+}// namespace
+
+void EditorApp::commitTerrain(Object3D& object, const TerrainConfig& before,
+                              const TerrainConfig& after, const std::string& label) {
+
+    if (rejectWhilePlaying(label.c_str())) return;
+
+    auto snapBefore = snapshotTerrain(object, before);
+    // rebuild() does the delta recovery: the sculpt layer is the difference
+    // between the mesh in front of us and what `before` would have produced,
+    // and it is carried onto the new bake.
+    TerrainConfig::rebuild(object, before, after);
+    auto snapAfter = snapshotTerrain(object, after);
+
+    commands_.execute(std::make_unique<TerrainEditCommand>(
+            object, std::move(snapBefore), std::move(snapAfter), label));
+    document_.setDirty(true);
+}
+
+void EditorApp::drawTerrainSection(Object3D& object) {
+
+    if (!TerrainConfig::isTerrain(object)) return;
+    if (!section("Terrain")) return;
+
+    using terrain::ErosionType;
+    using terrain::Falloff;
+    using terrain::NoiseType;
+    using terrain::TerrainParams;
+
+    auto* target = &object;
+    const auto config = TerrainConfig::read(object).value_or(TerrainConfig::makeDefault());
+
+    const auto commit = [&](TerrainConfig after, const std::string& label) {
+        // A slider commit re-bakes RAW. Erosion is a ~1 s pass and must never
+        // ride on a drag release — it lives behind Generate, and the flag drops
+        // to 0 until the user asks for it again.
+        after.eroded = false;
+        commitTerrain(*target, config, after, label);
+    };
+
+    // Pointer-to-member widgets, TreeConfig's reason verbatim: the generator has
+    // forty knobs and forty hand-inlined transaction dances is how one of them
+    // ends up silently missing its beginTransaction.
+    const auto sliderFloat = [&](const char* label, float TerrainParams::* field,
+                                 float min, float max, const char* format = "%.2f") {
+        float value = config.params.*field;
+        const bool changed = ImGui::SliderFloat(label, &value, min, max, format);
+        committed(commands_, changed, [&] {
+            auto after = config;
+            after.params.*field = std::clamp(value, min, max);
+            commit(std::move(after), std::string("Terrain ") + label);
+        });
+    };
+
+    const auto sliderInt = [&](const char* label, int TerrainParams::* field, int min, int max) {
+        int value = config.params.*field;
+        const bool changed = ImGui::SliderInt(label, &value, min, max);
+        committed(commands_, changed, [&] {
+            auto after = config;
+            after.params.*field = std::clamp(value, min, max);
+            commit(std::move(after), std::string("Terrain ") + label);
+        });
+    };
+
+    const auto colorEdit = [&](const char* label, std::array<float, 3> TerrainParams::* field) {
+        std::array<float, 3> value = config.params.*field;
+        const bool changed = ImGui::ColorEdit3(label, value.data());
+        committed(commands_, changed, [&] {
+            auto after = config;
+            after.params.*field = value;
+            commit(std::move(after), std::string("Terrain ") + label);
+        });
+    };
+
+    ImGui::PushItemWidth(-110 * contentScale_);
+
+    // --- seed / presets ---------------------------------------------------
+    {
+        int preset = 0;
+        if (ImGui::Combo("Preset", &preset, "Alpine\0Rolling Hills\0Desert Mesa\0Volcanic\0")) {
+            auto after = config;
+            after.applyPreset(preset);
+            commit(std::move(after), std::string("Terrain ") + TerrainConfig::presetLabel(preset));
+        }
+        if (ImGui::IsItemHovered()) {
+            ImGui::SetTooltip("Landscape character only - this terrain keeps its own\n"
+                              "size, resolution and seed.");
+        }
+    }
+    {
+        int seed = static_cast<int>(config.params.seed);
+        if (ImGui::InputInt("Seed", &seed)) {
+            auto after = config;
+            after.params.seed = static_cast<unsigned int>(std::max(seed, 0));
+            commit(std::move(after), "Terrain Seed");
+        }
+        ImGui::SameLine();
+        if (ImGui::SmallButton("Reroll")) {
+            auto after = config;
+            after.params.seed = std::random_device{}();
+            commit(std::move(after), "Terrain Reroll");
+        }
+    }
+
+    // --- shape -------------------------------------------------------------
+    sliderFloat("World Size", &TerrainParams::worldSize, 10.f, 2000.f, "%.0f m");
+    sliderInt("Resolution", &TerrainParams::resolution, 16, 512);
+    sliderFloat("Amplitude", &TerrainParams::amplitude, 0.5f, 600.f, "%.1f m");
+    {
+        static const char* kinds = "fBm\0Ridged\0Hybrid\0";
+        int value = static_cast<int>(config.params.noiseType);
+        if (ImGui::Combo("Noise", &value, kinds)) {
+            auto after = config;
+            after.params.noiseType = static_cast<NoiseType>(std::clamp(value, 0, 2));
+            commit(std::move(after), "Terrain Noise");
+        }
+    }
+    sliderFloat("Feature Scale", &TerrainParams::featureScale, 5.f, 800.f, "%.0f m");
+    sliderInt("Octaves", &TerrainParams::octaves, 1, 10);
+    sliderFloat("Lacunarity", &TerrainParams::lacunarity, 1.2f, 3.5f);
+    sliderFloat("Gain", &TerrainParams::gain, 0.2f, 0.8f);
+    sliderFloat("Warp", &TerrainParams::warp, 0.f, 1.f);
+    sliderFloat("Ridge Sharpness", &TerrainParams::ridgeSharpness, 0.f, 1.f);
+    sliderFloat("Height Exponent", &TerrainParams::heightExponent, 0.5f, 3.f);
+    sliderInt("Terraces", &TerrainParams::terraces, 0, 24);
+    {
+        static const char* kinds = "None\0Radial\0";
+        int value = static_cast<int>(config.params.falloff);
+        if (ImGui::Combo("Falloff", &value, kinds)) {
+            auto after = config;
+            after.params.falloff = static_cast<Falloff>(std::clamp(value, 0, 1));
+            commit(std::move(after), "Terrain Falloff");
+        }
+        if (ImGui::IsItemHovered()) {
+            ImGui::SetTooltip("Radial fades the patch into a plain and tucks its rim\n"
+                              "under the surrounding ground instead of leaving a lip.");
+        }
+    }
+    if (config.params.falloff == Falloff::Radial) {
+        sliderFloat("Falloff Start", &TerrainParams::falloffStart, 0.05f, 0.95f);
+    }
+
+    // --- erosion -----------------------------------------------------------
+    ImGui::SeparatorText("Erosion");
+    {
+        static const char* kinds = "None\0Hydraulic\0Thermal\0Both\0";
+        int value = static_cast<int>(config.params.erosion);
+        if (ImGui::Combo("Type", &value, kinds)) {
+            auto after = config;
+            after.params.erosion = static_cast<ErosionType>(std::clamp(value, 0, 3));
+            commit(std::move(after), "Terrain Erosion Type");
+        }
+    }
+    sliderInt("Droplets", &TerrainParams::droplets, 0, 250000);
+    sliderInt("Talus Sweeps", &TerrainParams::thermalIterations, 0, 80);
+    if (ImGui::Button("Generate (erode)", {-1.f, 0.f})) {
+        auto after = config;
+        after.eroded = after.params.erosion != ErosionType::None;
+        commitTerrain(object, config, after, "Terrain Erode");
+    }
+    if (ImGui::IsItemHovered()) {
+        ImGui::SetTooltip("Runs the erosion pass - about a second at this resolution.\n"
+                          "Slider edits re-bake the RAW field, never this.");
+    }
+    ImGui::TextColored(theme::muted(), config.eroded ? "Baked: eroded" : "Baked: raw noise");
+
+    // --- splat -------------------------------------------------------------
+    ImGui::SeparatorText("Surface");
+    sliderFloat("Snow Line", &TerrainParams::snowLine, 0.f, 1.2f);
+    sliderFloat("Snow Slope Max", &TerrainParams::snowSlopeMax, 0.f, 1.f);
+    sliderFloat("Grass Slope Max", &TerrainParams::slopeGrassMax, 0.f, 1.f);
+    sliderFloat("Rock Slope Min", &TerrainParams::slopeRockMin, 0.f, 1.f);
+    colorEdit("Grass", &TerrainParams::grassColor);
+    colorEdit("Scree", &TerrainParams::screeColor);
+    colorEdit("Rock", &TerrainParams::rockColor);
+    colorEdit("Snow", &TerrainParams::snowColor);
+
+    ImGui::PopItemWidth();
+
+    ImGui::TextColored(theme::muted(),
+                       "Geometry is baked into the document - sculpted edits survive\n"
+                       "parameter changes and opening a scene never regenerates.");
+    ImGui::TextColored(theme::muted(), "Stored in userData[\"terrain\"]");
 
     ImGui::TreePop();
 }
