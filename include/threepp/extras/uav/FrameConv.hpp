@@ -21,8 +21,8 @@
 // -Y), so one pair of vector functions serves world vectors and body vectors,
 // and attitudes convert by conjugation: q_tp = qT * q_ned * qT^-1.
 
-#ifndef THREEPP_EXAMPLE_SITL_FRAMECONV_HPP
-#define THREEPP_EXAMPLE_SITL_FRAMECONV_HPP
+#ifndef THREEPP_EXTRAS_UAV_FRAMECONV_HPP
+#define THREEPP_EXTRAS_UAV_FRAMECONV_HPP
 
 #include "threepp/math/Matrix4.hpp"
 #include "threepp/math/Quaternion.hpp"
@@ -30,7 +30,7 @@
 
 #include <cmath>
 
-namespace sitl::frame {
+namespace threepp::uav::frame {
 
     /// NED vector -> threepp vector (positions, velocities; also FRD body
     /// vector -> drone-node-local vector).
@@ -103,6 +103,6 @@ namespace sitl::frame {
         yaw = std::atan2(2.0 * (qw * qz + qx * qy), 1.0 - 2.0 * (qy * qy + qz * qz));
     }
 
-}// namespace sitl::frame
+}// namespace threepp::uav::frame
 
-#endif// THREEPP_EXAMPLE_SITL_FRAMECONV_HPP
+#endif// THREEPP_EXTRAS_UAV_FRAMECONV_HPP

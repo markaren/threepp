@@ -27,11 +27,10 @@ add_test_executable(PointCloud_test)
 add_test_executable(Sensor_test)
 add_test_executable(VisionSensor_test)
 
-# The ArduPilot SITL bridge is example-local (examples/projects/ArduPilotSitl)
-# but its codec + frame mapping are pure headers, so they test PhysX-free here.
+# extras/uav: SITL wire codec, loopback socket path, and the NED<->threepp
+# frame mapping — PhysX-free. The test drives its own raw UDP sender against
+# the bridge, hence ws2_32 (the bridge's own socket links inside libthreepp).
 add_test_executable(SitlBridge_test)
-target_include_directories(SitlBridge_test
-        PRIVATE "${PROJECT_SOURCE_DIR}/examples/projects/ArduPilotSitl")
 if (WIN32)
     target_link_libraries(SitlBridge_test PRIVATE ws2_32)
 endif ()

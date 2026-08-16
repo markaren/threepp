@@ -173,11 +173,14 @@ This exact sequence is the demo's live acceptance test.
 
 ## Files
 
+The SITL machinery is library code in `threepp::uav` (`extras/uav`); the demo
+keeps only the scene.
+
 | File | Role |
 |---|---|
-| `SitlBridge.hpp` | UDP + wire protocol, no threepp deps (reusable) |
-| `FrameConv.hpp` | the single NED/FRD ↔ threepp axis mapping |
-| `QuadSim.hpp` | PhysX lock-step airframe + `threepp::Imu` |
-| `DroneVisual.hpp` | primitive-built X-quad, spin-keyed rotors |
-| `main.cpp` | scene, HUD, drain-loop, `--selftest` |
-| `tests/extras/SitlBridge_test.cpp` | codec + frame-mapping unit tests |
+| `include/threepp/extras/uav/SitlBridge.hpp` | UDP + wire protocol; socket lives in `src/threepp/extras/uav/SitlBridge.cpp` so no winsock leaks |
+| `include/threepp/extras/uav/FrameConv.hpp` | the single NED/FRD ↔ threepp axis mapping |
+| `include/threepp/extras/uav/QuadSim.hpp` | PhysX lock-step airframe + `threepp::Imu` |
+| `include/threepp/extras/uav/DroneVisual.hpp` | primitive-built X-quad, spin-keyed rotors |
+| `examples/projects/ArduPilotSitl/main.cpp` | scene, HUD, drain-loop, `--selftest` |
+| `tests/extras/SitlBridge_test.cpp` | codec, loopback + frame-mapping unit tests |

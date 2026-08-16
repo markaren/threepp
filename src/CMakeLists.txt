@@ -499,6 +499,7 @@ set(sources
         "threepp/extras/ShapeUtils.cpp"
         "threepp/extras/terrain/TerrainGenerator.cpp"
         "threepp/extras/terrain/GeoTerrainPack.cpp"
+        "threepp/extras/uav/SitlBridge.cpp"
         "threepp/extras/core/Curve.cpp"
         "threepp/extras/core/CurvePath.cpp"
         "threepp/extras/core/Font.cpp"
@@ -991,6 +992,12 @@ target_compile_features(threepp PUBLIC "cxx_std_20")
 
 if (UNIX)
     target_link_libraries(threepp PRIVATE pthread dl)
+endif ()
+
+if (WIN32)
+    # extras/uav/SitlBridge.cpp keeps its winsock usage inside the library, so
+    # consumers of the header need neither <winsock2.h> nor this link.
+    target_link_libraries(threepp PRIVATE ws2_32)
 endif ()
 
 target_include_directories(threepp

@@ -1,12 +1,12 @@
-// Primitive-built X-quad visual, in the HoverArenaAuthor idiom (hull box,
-// crossed booms, rotor discs, amber nose marker). The ROOT mesh carries Box
-// geometry sized to the airframe so PhysxWorld::add() can infer the collider
-// from it directly; decorations are children and never touch physics.
+// Primitive-built X-quad visual (hull box, crossed booms, rotor discs, amber
+// nose marker). The ROOT mesh carries Box geometry sized to the airframe so
+// PhysxWorld::add() can infer the collider from it directly; decorations are
+// children and never touch physics.
 //
 // Authoring frame (must match FrameConv): forward = -Z, right = +X, up = +Y.
 
-#ifndef THREEPP_EXAMPLE_SITL_DRONEVISUAL_HPP
-#define THREEPP_EXAMPLE_SITL_DRONEVISUAL_HPP
+#ifndef THREEPP_EXTRAS_UAV_DRONEVISUAL_HPP
+#define THREEPP_EXTRAS_UAV_DRONEVISUAL_HPP
 
 #include "threepp/core/Object3D.hpp"
 #include "threepp/geometries/BoxGeometry.hpp"
@@ -21,7 +21,7 @@
 #include <cmath>
 #include <memory>
 
-namespace sitl {
+namespace threepp::uav {
 
     class DroneVisual {
     public:
@@ -127,6 +127,6 @@ namespace sitl {
         threepp::MeshBasicMaterial* blurMat_ = nullptr;
     };
 
-}// namespace sitl
+}// namespace threepp::uav
 
-#endif// THREEPP_EXAMPLE_SITL_DRONEVISUAL_HPP
+#endif// THREEPP_EXTRAS_UAV_DRONEVISUAL_HPP

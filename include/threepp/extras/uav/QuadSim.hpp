@@ -6,8 +6,14 @@
 // fixedTimestep = 1/frame_rate, maxSubSteps = 1, smoothTimestep = off and
 // always step by exactly fixedTimestep — the accumulator then drains to
 // precisely zero every call (same float added and subtracted). Because
-// Settings are constructor-only, the QuadSim is built lazily by main() once
-// the first packet has told us SITL's frame rate.
+// Settings are constructor-only, construct the QuadSim lazily once the first
+// packet has told you SITL's frame rate.
+//
+// The QuadSim OWNS its PhysxWorld: the lock-step contract is a world-level
+// setting (one substep per packet, no smoothing), which cannot be grafted
+// onto a world stepping at someone else's cadence. A variant that joins an
+// existing world is the editor-integration problem, deliberately not solved
+// here.
 //
 // The IMU reply reuses threepp::Imu, which computes exactly what SITL wants
 // (specific force incl. lever-arm terms, gyro, per-substep, in the attachment
@@ -25,11 +31,11 @@
 // reaction torque on the frame = positive FRD yaw.) Roll/pitch moments arise
 // naturally from the thrust offsets; only the yaw reaction is explicit.
 
-#ifndef THREEPP_EXAMPLE_SITL_QUADSIM_HPP
-#define THREEPP_EXAMPLE_SITL_QUADSIM_HPP
+#ifndef THREEPP_EXTRAS_UAV_QUADSIM_HPP
+#define THREEPP_EXTRAS_UAV_QUADSIM_HPP
 
-#include "FrameConv.hpp"
-#include "SitlBridge.hpp"
+#include "threepp/extras/uav/FrameConv.hpp"
+#include "threepp/extras/uav/SitlBridge.hpp"
 
 #include "threepp/extras/physx/PhysxWorld.hpp"
 #include "threepp/extras/sensors/Imu.hpp"
@@ -41,7 +47,7 @@
 #include <cmath>
 #include <memory>
 
-namespace sitl {
+namespace threepp::uav {
 
     struct QuadParams {
         float mass = 1.5f;      // [kg]
@@ -283,6 +289,6 @@ namespace sitl {
         std::uint64_t frames_ = 0;
     };
 
-}// namespace sitl
+}// namespace threepp::uav
 
-#endif// THREEPP_EXAMPLE_SITL_QUADSIM_HPP
+#endif// THREEPP_EXTRAS_UAV_QUADSIM_HPP

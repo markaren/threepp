@@ -3,8 +3,26 @@
 // copter on takeoff, so the frame cases are deliberately physical: "yaw 90
 // means the nose points East which renders as +X".
 
-#include "FrameConv.hpp"
-#include "SitlBridge.hpp"
+#include "threepp/extras/uav/FrameConv.hpp"
+#include "threepp/extras/uav/SitlBridge.hpp"
+
+// The loopback case drives its own raw UDP sender against the bridge; the
+// library header no longer leaks platform socket headers, so include them here.
+#ifdef _WIN32
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <winsock2.h>
+#include <ws2tcpip.h>
+#else
+#include <arpa/inet.h>
+#include <netinet/in.h>
+#include <sys/socket.h>
+#include <unistd.h>
+#endif
 
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
@@ -14,7 +32,7 @@
 #include <thread>
 
 using Catch::Approx;
-using namespace sitl;
+using namespace threepp::uav;
 
 namespace {
 
@@ -171,7 +189,7 @@ TEST_CASE("bridge loopback: frame, reply, reset detection") {
 }
 
 TEST_CASE("frame mapping: vectors") {
-    using namespace sitl::frame;
+    using namespace threepp::uav::frame;
 
     // North 100 m, 10 m above ground (D = -10) => threepp (0, 10, -100).
     const auto p = nedToTp(100, 0, -10);
@@ -199,7 +217,7 @@ TEST_CASE("frame mapping: vectors") {
 }
 
 TEST_CASE("frame mapping: attitude") {
-    using namespace sitl::frame;
+    using namespace threepp::uav::frame;
     const threepp::Vector3 nodeForward{0, 0, -1};// drone nose
     const threepp::Vector3 nodeRight{1, 0, 0};
     const threepp::Vector3 nodeUp{0, 1, 0};

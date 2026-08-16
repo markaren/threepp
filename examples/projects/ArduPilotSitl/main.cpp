@@ -13,10 +13,33 @@
 // so rendering simply pauses the autopilot for a frame's worth of wall time),
 // then draws the latest state.
 
-#include "DroneVisual.hpp"
-#include "FrameConv.hpp"
-#include "QuadSim.hpp"
-#include "SitlBridge.hpp"
+// Raw UDP for the demo's own side channels — the selftest's fake SITL and the
+// waypoint-marker feed. The library bridge keeps its socket behind a pimpl, so
+// the platform headers are this file's own business.
+#ifdef _WIN32
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX// windows.h min/max macros break PhysX and <algorithm>
+#endif
+#include <winsock2.h>
+#include <ws2tcpip.h>
+// windef.h's 16-bit relics; threepp cameras have members named near/far.
+#undef near
+#undef far
+#else
+#include <arpa/inet.h>
+#include <fcntl.h>
+#include <netinet/in.h>
+#include <sys/socket.h>
+#include <unistd.h>
+#endif
+
+#include "threepp/extras/uav/DroneVisual.hpp"
+#include "threepp/extras/uav/FrameConv.hpp"
+#include "threepp/extras/uav/QuadSim.hpp"
+#include "threepp/extras/uav/SitlBridge.hpp"
 
 #include "threepp/extras/imgui/ImguiContext.hpp"
 #include "threepp/extras/imgui/RendererSettings.hpp"
@@ -44,6 +67,26 @@
 using namespace threepp;
 
 namespace {
+
+#ifdef _WIN32
+    using socket_t = SOCKET;
+#else
+    using socket_t = int;
+    void closesocket(socket_t s) { ::close(s); }
+#endif
+
+    // Winsock wants a one-time init before the raw side-channel sockets;
+    // WSAStartup is refcounted, so calling it here as well as inside the
+    // library bridge is harmless.
+    void ensureSockets() {
+#ifdef _WIN32
+        static const int once = [] {
+            WSADATA data;
+            return WSAStartup(MAKEWORD(2, 2), &data);
+        }();
+        (void) once;
+#endif
+    }
 
     double nowSec() {
         using namespace std::chrono;
@@ -76,20 +119,20 @@ namespace {
             if (!ok) ++failures;
         };
 
-        sitl::SitlBridge bridge(0);// ephemeral port; never clashes with a live 9002
+        uav::SitlBridge bridge(0);// ephemeral port; never clashes with a live 9002
         check(bridge.valid(), "bridge binds an ephemeral UDP port");
 
-        sitl::DroneVisual visual;
-        visual.root()->position.y = sitl::DroneVisual::hullY / 2.f;
-        sitl::QuadSim quad(rate, *visual.root(), nullptr);// flat plane ground
+        uav::DroneVisual visual;
+        visual.root()->position.y = uav::DroneVisual::hullY / 2.f;
+        uav::QuadSim quad(rate, *visual.root(), nullptr);// flat plane ground
 
         // Fake SITL's own socket.
+        ensureSockets();
+        socket_t tx = ::socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
 #ifdef _WIN32
-        SOCKET tx = ::socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
         u_long nb = 1;
         ioctlsocket(tx, FIONBIO, &nb);
 #else
-        int tx = ::socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
         fcntl(tx, F_SETFL, fcntl(tx, F_GETFL, 0) | O_NONBLOCK);
 #endif
         sockaddr_in to{};
@@ -104,7 +147,7 @@ namespace {
         const auto exchange = [&](std::uint16_t pwm0, std::uint16_t pwm1,
                                   std::uint16_t pwm2, std::uint16_t pwm3,
                                   int channels = 16) -> bool {
-            sitl::ServoInput in{};
+            uav::ServoInput in{};
             in.frameRate = rate;
             in.frameCount = ++frameCount;
             in.channels = channels;
@@ -113,17 +156,17 @@ namespace {
             in.pwm[2] = pwm2;
             in.pwm[3] = pwm3;
             std::uint8_t buf[128];
-            const int n = sitl::SitlBridge::encode(in, buf);
+            const int n = uav::SitlBridge::encode(in, buf);
             ::sendto(tx, reinterpret_cast<const char*>(buf), n, 0,
                      reinterpret_cast<const sockaddr*>(&to), sizeof to);
 
             const double deadline = nowSec() + 1.0;
-            sitl::ServoInput servo{};
+            uav::ServoInput servo{};
             while (nowSec() < deadline) {
                 const auto ev = bridge.poll(servo);
-                if (ev == sitl::SitlBridge::Event::None) continue;
-                if (ev == sitl::SitlBridge::Event::Reset) quad.reset();
-                sitl::FdmState state{};
+                if (ev == uav::SitlBridge::Event::None) continue;
+                if (ev == uav::SitlBridge::Event::Reset) quad.reset();
+                uav::FdmState state{};
                 quad.step(servo, state);
                 bridge.sendState(state);
 
@@ -197,24 +240,24 @@ namespace {
 
         // 4: SITL restart detection: frame counter jumps backwards.
         frameCount = 0;
-        sitl::ServoInput servo{};
+        uav::ServoInput servo{};
         {
-            sitl::ServoInput in{};
+            uav::ServoInput in{};
             in.frameRate = rate;
             in.frameCount = 1;
             in.channels = 16;
             for (auto& p : in.pwm) p = 1000;
             std::uint8_t buf[128];
-            const int n = sitl::SitlBridge::encode(in, buf);
+            const int n = uav::SitlBridge::encode(in, buf);
             ::sendto(tx, reinterpret_cast<const char*>(buf), n, 0,
                      reinterpret_cast<const sockaddr*>(&to), sizeof to);
             const double deadline = nowSec() + 1.0;
-            auto ev = sitl::SitlBridge::Event::None;
+            auto ev = uav::SitlBridge::Event::None;
             while (nowSec() < deadline &&
-                   (ev = bridge.poll(servo)) == sitl::SitlBridge::Event::None) {}
-            check(ev == sitl::SitlBridge::Event::Reset, "frame_count rollback detected as restart");
+                   (ev = bridge.poll(servo)) == uav::SitlBridge::Event::None) {}
+            check(ev == uav::SitlBridge::Event::Reset, "frame_count rollback detected as restart");
             quad.reset();
-            sitl::FdmState state{};
+            uav::FdmState state{};
             quad.step(servo, state);
             bridge.sendState(state);
             check(std::abs(state.positionNed[2]) < 0.02, "reset re-homes the vehicle");
@@ -224,11 +267,7 @@ namespace {
         // 5: 32-channel packet accepted.
         check(exchange(1000, 1000, 1000, 1000, 32), "32-channel packet (magic 29569) accepted");
 
-#ifdef _WIN32
         closesocket(tx);
-#else
-        ::close(tx);
-#endif
         std::printf("[selftest] %s\n", failures == 0 ? "PASS" : "FAIL");
         return failures == 0 ? 0 : 1;
     }
@@ -583,8 +622,8 @@ int main(int argc, char** argv) {
     }
 
     // Drone.
-    sitl::DroneVisual drone;
-    drone.root()->position.y = 0.04f + sitl::DroneVisual::hullY / 2.f;// on the pad
+    uav::DroneVisual drone;
+    drone.root()->position.y = 0.04f + uav::DroneVisual::hullY / 2.f;// on the pad
     scene.add(drone.root());
 
     PerspectiveCamera camera(60.f, canvas.aspect(), 0.1f, 10000.f);
@@ -608,15 +647,15 @@ int main(int argc, char** argv) {
     // demands gyro sample rate >= 1.8x loop rate ("Gyro 0 rate 400Hz < loop
     // rate*1.8 720Hz"), and 3x the loop rate is what SITL itself asks for.
     constexpr std::uint16_t simRateHz = 1200;
-    sitl::SitlBridge bridge(port);
+    uav::SitlBridge bridge(port);
     if (!bridge.valid()) {
         std::fprintf(stderr, "[sitl] failed to bind UDP port %u — is another instance running?\n", port);
         return 1;
     }
-    auto quad = std::make_unique<sitl::QuadSim>(simRateHz, *drone.root(), terrainMesh.get());
+    auto quad = std::make_unique<uav::QuadSim>(simRateHz, *drone.root(), terrainMesh.get());
     quad->world().addStaticTrimesh(*pad);// land flush on the pad, not 4 cm inside it
-    sitl::FdmState lastState{};
-    sitl::ServoInput lastServo{};
+    uav::FdmState lastState{};
+    uav::ServoInput lastServo{};
     std::uint32_t resets = 0;
     float windSpeed = 0.f, windFromDeg = 270.f, windGust = 0.3f;// HUD-driven
 
@@ -625,7 +664,8 @@ int main(int argc, char** argv) {
     // as one plain-text datagram — "N,E,ALT;N,E,ALT;..." (home-relative
     // metres, NED) on UDP port+6 (9008 by default; SITL's own side ports sit
     // at 9003-9005). Empty datagram clears the markers.
-    sitl::socket_t markerSock = ::socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+    ensureSockets();
+    socket_t markerSock = ::socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
     {
         sockaddr_in addr{};
         addr.sin_family = AF_INET;
@@ -662,7 +702,7 @@ int main(int argc, char** argv) {
         const char* p = text.c_str();
         int consumed;
         while (std::sscanf(p, "%lf,%lf,%lf;%n", &n, &e, &alt, &consumed) == 3) {
-            pts.push_back(sitl::frame::nedToTp(n, e, -alt));
+            pts.push_back(uav::frame::nedToTp(n, e, -alt));
             p += consumed;
         }
         const Vector3 up(0, 1, 0);
@@ -786,7 +826,7 @@ int main(int argc, char** argv) {
         // opposite heading — the meteorological convention.
         {
             const float toRad = math::degToRad(windFromDeg + 180.f);
-            quad->setWind(sitl::frame::nedToTp(windSpeed * std::cos(toRad),
+            quad->setWind(uav::frame::nedToTp(windSpeed * std::cos(toRad),
                                                windSpeed * std::sin(toRad), 0.0),
                           windGust);
         }
@@ -800,15 +840,15 @@ int main(int argc, char** argv) {
         // then we stop burning the budget and go render.
         const double budgetEnd = nowSec() + 0.008;
         double lastActivity = nowSec();
-        sitl::ServoInput servo{};
+        uav::ServoInput servo{};
         while (nowSec() < budgetEnd) {
             const auto ev = bridge.poll(servo);
-            if (ev == sitl::SitlBridge::Event::None) {
+            if (ev == uav::SitlBridge::Event::None) {
                 if (!bridge.connected() || nowSec() - lastActivity > 0.0015) break;
                 continue;
             }
             lastActivity = nowSec();
-            if (ev == sitl::SitlBridge::Event::Reset) {
+            if (ev == uav::SitlBridge::Event::Reset) {
                 quad->reset();
                 ++resets;
             }
