@@ -125,6 +125,10 @@ namespace threepp::terrain {
         std::array<float, 3> grassColor = {0.29f, 0.33f, 0.19f};// muted olive ("low+flat" band; sand/ash for other presets)
         std::array<float, 3> screeColor = {0.49f, 0.46f, 0.42f};
         std::array<float, 3> snowColor = {0.90f, 0.91f, 0.93f};// faintly off-white (pure white reads plastic)
+
+        // Value semantics: an editor holding a before/after pair of these needs
+        // to know whether an edit actually changed anything.
+        bool operator==(const TerrainParams&) const = default;
     };
 
     class TerrainGenerator {
@@ -222,6 +226,18 @@ namespace threepp::terrain {
 
         // Raw [0,1] height field (dim×dim, row-major). Empty until buildField().
         [[nodiscard]] const std::vector<float>& getField() const { return field_; }
+
+        // Adopt a field from outside — the editor's sculpt layer, mainly: after a
+        // brush stroke the mesh's heights are no longer what buildField() would
+        // produce, and bakeSplatColors reads THIS field, so the albedo has to be
+        // re-baked from the sculpted surface or the snowline stays on the old
+        // ridge. Ignored unless the buffer is a square grid of at least 2×2.
+        void setField(std::vector<float> field) {
+            const auto n = static_cast<int>(std::lround(std::sqrt(static_cast<double>(field.size()))));
+            if (n < 2 || static_cast<size_t>(n) * n != field.size()) return;
+            field_ = std::move(field);
+            dim_ = n;
+        }
 
         // Single-sample procedural elevation in metres (no erosion). Useful for
         // physics/placement queries; the mesh path uses the eroded field.
@@ -323,6 +339,28 @@ namespace threepp::terrain {
             return out;
         }
 
+        // ── field ↔ world-height mapping ─────────────────────────────────────
+        // Y = field·amplitude − baseSink(x,z), so a caller holding displaced
+        // heights (the editor's sculpt layer) can invert back to field units and
+        // re-bake the splat from the surface it actually has. Public because that
+        // inversion has to agree with displaceTo exactly — a second copy of the
+        // rim-sink constant is a slow drift waiting to happen.
+
+        // Radial fade multiplier (1 = full height, 0 = base plane). 1 if None.
+        [[nodiscard]] static float falloffMul(float wx, float wz, const TerrainParams& tp) {
+            if (tp.falloff != Falloff::Radial) return 1.f;
+            const float half = tp.worldSize * 0.5f;
+            const float r = std::sqrt(wx * wx + wz * wz) / std::max(half, 1e-3f);
+            return math::smoothstep(1.0f, tp.falloffStart, r);
+        }
+
+        // Rim sink: drops the faded border below the surrounding ground plane so
+        // the finite square patch tucks under it instead of forming a lip.
+        [[nodiscard]] static float baseSink(float wx, float wz, const TerrainParams& tp) {
+            if (tp.falloff != Falloff::Radial) return 0.f;
+            return kRimSink * tp.amplitude * (1.f - falloffMul(wx, wz, tp));
+        }
+
     private:
         static constexpr float kHalfPi = 1.57079632679489661923f;
         static constexpr float kRimSink = 0.12f;// fraction of amplitude the faded rim tucks below 0
@@ -353,21 +391,6 @@ namespace threepp::terrain {
             }
             if (tp.heightExponent != 1.f) h = std::pow(h, tp.heightExponent);
             return h;
-        }
-
-        // Radial fade multiplier (1 = full height, 0 = base plane). 1 if None.
-        [[nodiscard]] static float falloffMul(float wx, float wz, const TerrainParams& tp) {
-            if (tp.falloff != Falloff::Radial) return 1.f;
-            const float half = tp.worldSize * 0.5f;
-            const float r = std::sqrt(wx * wx + wz * wz) / std::max(half, 1e-3f);
-            return math::smoothstep(1.0f, tp.falloffStart, r);
-        }
-
-        // Rim sink: drops the faded border below the surrounding ground plane so
-        // the finite square patch tucks under it instead of forming a lip.
-        [[nodiscard]] static float baseSink(float wx, float wz, const TerrainParams& tp) {
-            if (tp.falloff != Falloff::Radial) return 0.f;
-            return kRimSink * tp.amplitude * (1.f - falloffMul(wx, wz, tp));
         }
 
         // ── hydraulic (droplet) erosion ──────────────────────────────────────
