@@ -497,7 +497,11 @@ EditorApp::EditorApp(const Options& options)
         // The view gizmo draws on the background list, so ImGui's own capture
         // knows nothing about it - while the pointer is on it, a drag must
         // not orbit and a click must not pick.
-        return ImGui::GetIO().WantCaptureMouse || viewGizmoHovered_ || toolPaletteHovered_;
+        // Same reasoning for the sculpt brush: with it armed over the selected
+        // terrain, the press belongs to the stroke and the orbit must not spin
+        // the camera under it. A miss falls through and navigation is normal.
+        return ImGui::GetIO().WantCaptureMouse || viewGizmoHovered_ || toolPaletteHovered_ ||
+               sculptOwnsMouse();
     };
     ioCapture_.preventScrollEvent = [] { return ImGui::GetIO().WantCaptureMouse; };
     ioCapture_.preventKeyboardEvent = [] { return ImGui::GetIO().WantCaptureKeyboard; };
@@ -1187,9 +1191,16 @@ void EditorApp::drawUi() {
     // reselect and tear the handle out from under it.
     const bool radiusDragOwnsMouse = updateConveyorRadiusDrag();
 
+    // The brush, before the pick gate: a stroke that ended on this frame still
+    // owns the release, and re-picking under it would reselect out from under
+    // the terrain being sculpted.
+    const bool sculptOwnedPress = sculptOwnsMouse();
+    updateSculpt();
+
     // Picking runs last: it must see the WantCaptureMouse produced by every
     // panel drawn this frame.
     if (!io.WantCaptureMouse && !fileBrowser_.isOpen() && !radiusDragOwnsMouse &&
+        !sculptOwnedPress &&
         !viewGizmoHovered_ && !toolPaletteHovered_ &&
         ImGui::IsMouseReleased(ImGuiMouseButton_Left) && !gizmo_->isDragging()) {
         // A click, not the end of an orbit drag.

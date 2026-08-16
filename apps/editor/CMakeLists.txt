@@ -35,6 +35,7 @@ add_executable(threepp_editor
         SensorOverlay.cpp
         SplatSurfaceOverlay.cpp
         SplineOverlay.cpp
+        TerrainSculptTool.cpp
         ToolPalette.cpp
         TreeOverlay.cpp
         ViewGizmo.cpp

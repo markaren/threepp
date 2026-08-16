@@ -32,10 +32,10 @@ using namespace threepp::editor;
 
 namespace {
 
-    enum class Tool { Select, Move, Rotate, Scale, Space, Snap };
+    enum class Tool { Select, Move, Rotate, Scale, Sculpt, Space, Snap };
 
-    constexpr std::array<Tool, 6> kTools{Tool::Select, Tool::Move, Tool::Rotate,
-                                         Tool::Scale, Tool::Space, Tool::Snap};
+    constexpr std::array<Tool, 7> kTools{Tool::Select, Tool::Move, Tool::Rotate,
+                                         Tool::Scale, Tool::Sculpt, Tool::Space, Tool::Snap};
 
     // --- the sprites ------------------------------------------------------
     // Each draws into a cell centred on `c`, `h` the icon's half-extent,
@@ -109,6 +109,28 @@ namespace {
         const ImVec2 tip{c.x + 7.f * u, c.y - 7.f * u};
         draw->AddTriangleFilled(tip, {tip.x - 4.6f * u, tip.y + 1.2f * u},
                                 {tip.x - 1.2f * u, tip.y + 4.6f * u}, col);
+    }
+
+    void drawSculptIcon(ImDrawList* draw, const ImVec2& c, float h, float s, ImU32 col) {
+
+        // A mound with a brush coming down onto it. Both halves are convex
+        // primitives and the mound is a filled triangle rather than an arc:
+        // at 16 px a shallow curve rasterizes to a stepped smear, and a
+        // concave polygon melts (the select pointer's lesson).
+        const float u = h / 8.f;
+        // Ground line, with the mound standing on it.
+        draw->AddLine({c.x - 7.5f * u, c.y + 5.6f * u}, {c.x + 7.5f * u, c.y + 5.6f * u},
+                      col, 1.6f * s);
+        draw->AddTriangleFilled({c.x - 6.6f * u, c.y + 5.6f * u},
+                                {c.x + 1.2f * u, c.y + 5.6f * u},
+                                {c.x - 2.7f * u, c.y - 0.6f * u}, col);
+        // The brush: a straight shaft and a wedge tip, angled in from upper
+        // right. Square-ended - a rounded cap at this size reads as a dot.
+        draw->AddLine({c.x + 7.2f * u, c.y - 7.2f * u}, {c.x + 2.4f * u, c.y - 1.6f * u},
+                      col, 2.0f * s);
+        draw->AddTriangleFilled({c.x + 0.6f * u, c.y + 1.2f * u},
+                                {c.x + 1.4f * u, c.y - 3.2f * u},
+                                {c.x + 4.4f * u, c.y - 0.6f * u}, col);
     }
 
     void drawWorldIcon(ImDrawList* draw, const ImVec2& c, float h, float s, ImU32 col) {
@@ -241,14 +263,19 @@ void EditorApp::drawToolPalette() {
         // the whole palette sleeps with it - including Snap, which can affect
         // nothing while there is no gizmo to snap. (Shift stays the runtime
         // hold-to-snap override either way.)
-        const bool enabled = gizmoAvailable;
+        // Sculpt is the one tool with a subject requirement: it edits a height
+        // lattice, and there is no lattice under a selected box. Greyed rather
+        // than hidden, so the tool is discoverable before you have a terrain.
+        const bool enabled = gizmoAvailable &&
+                             (tool != Tool::Sculpt || sculptTarget() != nullptr);
 
         bool active = false;
         switch (tool) {
-            case Tool::Select: active = gizmoMode_ == "select"; break;
-            case Tool::Move: active = gizmoMode_ == "translate"; break;
-            case Tool::Rotate: active = gizmoMode_ == "rotate"; break;
-            case Tool::Scale: active = gizmoMode_ == "scale"; break;
+            case Tool::Select: active = gizmoMode_ == "select" && !sculptTool_; break;
+            case Tool::Move: active = gizmoMode_ == "translate" && !sculptTool_; break;
+            case Tool::Rotate: active = gizmoMode_ == "rotate" && !sculptTool_; break;
+            case Tool::Scale: active = gizmoMode_ == "scale" && !sculptTool_; break;
+            case Tool::Sculpt: active = sculptTool_; break;
             case Tool::Snap: active = snapEnabled_; break;
             // Both spaces are a state, not a mode - the icon says which.
             case Tool::Space: break;
@@ -282,6 +309,7 @@ void EditorApp::drawToolPalette() {
             case Tool::Move: drawMoveIcon(draw, centre, h, s, icon); break;
             case Tool::Rotate: drawRotateIcon(draw, centre, h, s, icon); break;
             case Tool::Scale: drawScaleIcon(draw, centre, h, s, icon); break;
+            case Tool::Sculpt: drawSculptIcon(draw, centre, h, s, icon); break;
             case Tool::Space:
                 if (gizmoWorldSpace_) {
                     drawWorldIcon(draw, centre, h, s, icon);
@@ -306,6 +334,11 @@ void EditorApp::drawToolPalette() {
             case Tool::Move: ImGui::SetTooltip("Move (W)"); break;
             case Tool::Rotate: ImGui::SetTooltip("Rotate (E)"); break;
             case Tool::Scale: ImGui::SetTooltip("Scale (R)"); break;
+            case Tool::Sculpt:
+                ImGui::SetTooltip("Sculpt the selected terrain's heights.\n"
+                                  "Drag to paint; hold Shift to invert raise/lower.\n"
+                                  "Brush type, radius and strength are in the inspector.");
+                break;
             case Tool::Space:
                 ImGui::SetTooltip(gizmoWorldSpace_
                                           ? "World space - the gizmo on the world axes (Q)"
@@ -320,10 +353,21 @@ void EditorApp::drawToolPalette() {
         if (!released) continue;
 
         switch (tool) {
-            case Tool::Select: gizmoMode_ = "select"; applyGizmoMode(); break;
-            case Tool::Move: gizmoMode_ = "translate"; applyGizmoMode(); break;
-            case Tool::Rotate: gizmoMode_ = "rotate"; applyGizmoMode(); break;
-            case Tool::Scale: gizmoMode_ = "scale"; applyGizmoMode(); break;
+            // Picking a transform tool leaves Sculpt: a gizmo and a brush both
+            // wanting the drag is one of them silently losing.
+            case Tool::Select: sculptTool_ = false; gizmoMode_ = "select"; applyGizmoMode(); break;
+            case Tool::Move: sculptTool_ = false; gizmoMode_ = "translate"; applyGizmoMode(); break;
+            case Tool::Rotate: sculptTool_ = false; gizmoMode_ = "rotate"; applyGizmoMode(); break;
+            case Tool::Scale: sculptTool_ = false; gizmoMode_ = "scale"; applyGizmoMode(); break;
+            case Tool::Sculpt:
+                sculptTool_ = !sculptTool_;
+                // The gizmo would sit on the terrain's origin, in the way of the
+                // ground being brushed; Select is the mode with no handles.
+                if (sculptTool_) {
+                    gizmoMode_ = "select";
+                    applyGizmoMode();
+                }
+                break;
             case Tool::Space: gizmoWorldSpace_ = !gizmoWorldSpace_; applyGizmoMode(); break;
             case Tool::Snap: snapEnabled_ = !snapEnabled_; break;
         }

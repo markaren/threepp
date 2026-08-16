@@ -31,6 +31,7 @@
 #include "threepp/extras/editor/SceneDocument.hpp"
 #include "threepp/extras/editor/Selection.hpp"
 #include "threepp/extras/editor/TerrainConfig.hpp"
+#include "threepp/extras/editor/TerrainSculpt.hpp"
 
 #include "threepp/animation/AnimationMixer.hpp"
 #include "threepp/cameras/OrthographicCamera.hpp"
@@ -1028,6 +1029,37 @@ namespace threepp::editor {
         // Its twin for the tool palette in the opposite corner, consumed by
         // the same two gates (ioCapture_ and the pick), for the same reason.
         bool toolPaletteHovered_ = false;
+
+        // --- terrain sculpt (TerrainSculptTool.cpp) --------------------------
+        // The Sculpt tool is a mode of the palette, not of the transform gizmo:
+        // it edits the MESH, not the transform, so it sits beside gizmoMode_
+        // rather than inside it.
+        bool sculptTool_ = false;
+        editor::TerrainBrush brush_;
+        // Whether the pointer is over the selected terrain this frame. Consumed
+        // by ioCapture on the NEXT event, which is how the press is owned before
+        // OrbitControls ever sees it — the palette's idiom exactly.
+        bool sculptHover_ = false;
+        Vector3 sculptHoverLocal_;
+        struct SculptStroke {
+            bool active = false;
+            std::string uuid;
+            int dim = 0;
+            // The whole Y column as it stood at press. One stroke, one undo
+            // entry; the release diffs this to a tight rect.
+            std::vector<float> before;
+            std::vector<float> heights;
+            float flattenTarget = 0.f;
+            editor::TerrainSculpt::Rect rect;
+        } sculptStroke_;
+
+        [[nodiscard]] bool sculptArmed() const;
+        [[nodiscard]] Object3D* sculptTarget() const;
+        // True while a stroke owns the pointer, or the frame before one starts.
+        [[nodiscard]] bool sculptOwnsMouse() const;
+        void updateSculpt();
+        void endSculptStroke();
+        void syncBrushRing();
         // Follow Selection (View menu, Shift+F). Session state on purpose: it
         // belongs to what is open and what is selected, not to the editor's
         // saved preferences.
@@ -1068,6 +1100,9 @@ namespace threepp::editor {
         // Editor-only scene content.
         std::shared_ptr<Group> overlay_;
         std::shared_ptr<Object3D> grid_;
+        // The brush cursor: a polyline conformed to the terrain, updated in
+        // place. Lives in overlay_ so it is excluded from export.
+        std::shared_ptr<Line> brushRing_;
         std::shared_ptr<Object3D> axes_;
         std::shared_ptr<BoxHelper> selectionBox_;
         // A selected InstancedMesh outlines the ONE instance that was picked,

@@ -3554,6 +3554,32 @@ void EditorApp::drawTerrainSection(Object3D& object) {
     colorEdit("Rock", &TerrainParams::rockColor);
     colorEdit("Snow", &TerrainParams::snowColor);
 
+    // --- sculpt ------------------------------------------------------------
+    // Only while the tool is armed: brush settings on a terrain nobody is
+    // painting are three widgets asking to be mistaken for parameters.
+    if (sculptTool_) {
+        ImGui::SeparatorText("Brush");
+        {
+            static const char* kinds = "Raise / Lower\0Smooth\0Flatten\0";
+            int value = static_cast<int>(brush_.kind);
+            if (ImGui::Combo("Brush", &value, kinds)) {
+                brush_.kind = static_cast<TerrainBrush::Kind>(
+                        std::clamp(value, 0, TerrainBrush::kindCount - 1));
+            }
+        }
+        ImGui::SliderFloat("Radius", &brush_.radius, 0.5f,
+                           std::max(config.params.worldSize * 0.25f, 5.f), "%.1f m");
+        ImGui::SliderFloat("Strength", &brush_.strength, 0.5f, 40.f, "%.1f");
+        if (brush_.kind == TerrainBrush::Kind::Raise) {
+            ImGui::Checkbox("Lower", &brush_.invert);
+            ImGui::SameLine();
+            ImGui::TextColored(theme::muted(), "(Shift inverts while dragging)");
+        }
+        ImGui::TextColored(theme::muted(),
+                           "One drag is one undo entry. Flatten levels to the\n"
+                           "height under the press.");
+    }
+
     ImGui::PopItemWidth();
 
     ImGui::TextColored(theme::muted(),

@@ -1167,6 +1167,7 @@ int EditorApp::runSelfTest() {
                 child == static_cast<Object3D*>(cameraHelper_.get()) ||
                 child == static_cast<Object3D*>(soundRings_.get()) ||
                 child == static_cast<Object3D*>(particleHelper_.get()) ||
+                child == static_cast<Object3D*>(brushRing_.get()) ||
                 child == static_cast<Object3D*>(gizmo_.get())) continue;
             ++n;
         }
@@ -6180,8 +6181,8 @@ int EditorApp::runSelfTest() {
                 const auto lattice = TerrainLattice::of(*mesh->geometry(), dim);
                 TerrainBrush brush;
                 brush.kind = TerrainBrush::Kind::Raise;
-                brush.radius = 11.f;
-                brush.strength = 9.f;
+                brush.radius = 9.f;
+                brush.strength = 26.f;
                 TerrainSculpt::Rect stroke;
                 // Dragged along a short arc, the way a hand would: a single
                 // stamp is a cone, a stroke is a landform.
@@ -6217,10 +6218,34 @@ int EditorApp::runSelfTest() {
                 const bool bottomPanelWas = bottomPanelOpen_;
                 bottomPanelOpen_ = false;
                 selectObject(reloaded);
-                camera_.position.set(26.f, 15.f, 34.f);
-                orbit_->target.set(0.f, 0.f, 0.f);
+
+                // Arm the tool so the palette shows its cell lit and the brush
+                // ring is in the picture: a brush with no cursor is a guess, and
+                // the ring is the half of the feature a PASS line cannot check.
+                const bool sculptWas = sculptTool_;
+                sculptTool_ = true;
+                brush_.radius = 11.f;
+                sculptHover_ = true;
+                sculptHoverLocal_.set(6.f, 0.f, -4.f);
+                TerrainSculpt::sample(heights, lattice, sculptHoverLocal_.x,
+                                      sculptHoverLocal_.z, sculptHoverLocal_.y);
+                syncBrushRing();
+                check(brushRing_ && brushRing_->visible,
+                      "the brush ring shows while the sculpt tool is armed over a terrain");
+
+                camera_.position.set(21.f, 13.f, 27.f);
+                orbit_->target.set(-1.f, 1.5f, -1.f);
                 step(4);
                 shootTo(std::filesystem::temp_directory_path() / "threepp_editor_terrain.png");
+
+                // Selection off the terrain drops the tool back rather than
+                // leaving a brush armed over nothing.
+                selectObject(nullptr);
+                updateSculpt();
+                check(!sculptTool_, "and the tool falls back when the selection leaves the terrain");
+                check(!brushRing_->visible, "taking its ring with it");
+
+                sculptTool_ = sculptWas;
                 bottomPanelOpen_ = bottomPanelWas;
                 step();
             }
