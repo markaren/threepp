@@ -71,7 +71,7 @@ if (THREEPP_WITH_FBX)
     FetchContent_Declare(
         openfbx
         GIT_REPOSITORY https://github.com/nem0/OpenFBX.git
-        GIT_TAG        master
+        GIT_TAG        4d4a45a0ed8f357d11ff83904b087530547a4071
         GIT_SHALLOW    TRUE
     )
     # Populate source only — do NOT call add_subdirectory (OpenFBX's CMakeLists
