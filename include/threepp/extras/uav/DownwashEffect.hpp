@@ -70,7 +70,15 @@ namespace threepp::uav {
             // Capacity, fixed for life (churn contract). 26k parcels splat a
             // smooth medium at resolution 96 well before the count reads as
             // grain; the CPU cost is ~26k closed-form evaluations + one memcpy.
-            std::uint32_t capacity   = 26'000;
+            // Sized TOGETHER with resolution by the fire plan's speckle rule:
+            // the particles are the only thing filling the volume, so the
+            // number that matters is splat taps per occupied voxel. The cloud
+            // occupies ~160k voxels at resolution 160; 90k parcels x 8-voxel
+            // trilinear splats ≈ 4.4 taps/voxel — smooth. 26k at the same
+            // resolution was 1.3 taps/voxel and rendered as coarse speckle.
+            // The emitter loop is parallel (disjoint per-slot state), so the
+            // CPU cost stays well under a millisecond.
+            std::uint32_t capacity   = 90'000;
             // Voxels per axis of the density volume. Latched at construction.
             // 160 over the ~21 m box is ~13 cm voxels — the difference between
             // fog and billow: at 96 the trilinear splat smears every lobe into
@@ -113,7 +121,10 @@ namespace threepp::uav {
             // as a solid steam bank — extinction saturated and every billow
             // vanished into one white mass; 0.55 keeps the core thick enough
             // to swallow the vehicle while the edges stay structured.
-            float sigmaPerParticle = 0.80f;
+            // Slightly above mass parity with the 26k x 0.8 build (= 0.24):
+            // the smooth field spreads the same mass over more voxels, so the
+            // peaks that used to carry the look need the small top-up.
+            float sigmaPerParticle = 0.30f;
             // Dry SOIL, not steam: real dirt albedo is dark (~0.2-0.35) and
             // warm, and the sky's pale in-scatter washes anything lighter to
             // white. Strong forward scatter keeps the sunward rim glowing and
@@ -180,6 +191,11 @@ namespace threepp::uav {
         std::vector<float>         ax_, az_; // annulus anchor, effect-local xz
         std::vector<float>         gy_;      // ground height at latch, local y
         std::vector<std::uint32_t> cycle_;   // respawn counter → fresh hashes
+        // Parallel-emitter plumbing: chunk index list and per-chunk alive
+        // counts (a shared counter would contend; per-chunk keeps the loop's
+        // writes disjoint, which is Parallel.hpp's contract).
+        std::vector<std::uint32_t> chunkIdx_;
+        std::vector<std::uint32_t> chunkAlive_;
 
         // Density-box ANCHOR, effect-local: xz = snapped source point, y = the
         // ground height there. The box CENTER is derived from this every
