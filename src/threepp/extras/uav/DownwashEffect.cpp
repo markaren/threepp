@@ -278,6 +278,7 @@ void DownwashEffect::update(float t, const Vector3& dronePosWorld,
     alive_ = alive;
 
     if (alive == 0) {
+        opticalDepth_ = 0.f;
         field_->setLiveCount(0);// parked: skip the scatter entirely
         return;
     }
@@ -292,7 +293,12 @@ void DownwashEffect::update(float t, const Vector3& dronePosWorld,
         chunkIdx_.resize(chunks);
         for (std::uint32_t c = 0; c < chunks; ++c) chunkIdx_[c] = c;
     }
+    if (chunkTau_.size() < chunks) chunkTau_.resize(chunks);
+    // The rangefinder column: parcels within this radius of the vertical ray
+    // under the vehicle count toward the cached optical depth.
+    constexpr float kTauR2 = 0.9f * 0.9f;
     parallelForEach(chunkIdx_.begin(), chunkIdx_.end(), [&](std::uint32_t c) {
+        float tauCount = 0.f;
         const std::uint32_t iEnd = std::min(n, (c + 1) * kChunk);
         for (std::uint32_t i = c * kChunk; i < iEnd; ++i) {
             if (strength_[i] <= 0.f) continue;// parked; sentinel already set
@@ -412,8 +418,49 @@ void DownwashEffect::update(float t, const Vector3& dronePosWorld,
                         std::max(y + wy + ey + d2 * spread * 0.55f, gy_[i] + 0.05f),
                         az_[i] + std::sin(th) * radial + wz + ez + d3 * spread + windZ * wAdv,
                         1.f};
+
+            // Rangefinder column census: is this parcel in the vertical ray
+            // under the vehicle?
+            const float cdx = host_[i].x - drone.x;
+            const float cdz = host_[i].z - drone.z;
+            if (cdx * cdx + cdz * cdz < kTauR2 && host_[i].y < drone.y) tauCount += 1.f;
         }
+        chunkTau_[c] = tauCount;
     });
 
+    // Column count -> one-way optical depth. Each parcel carries a field
+    // integral of sigmaPerParticle x one voxel volume (the trilinear splat's
+    // conserved mass); averaging that over the census cylinder's cross-section
+    // gives tau = N·sigma·Vvox / (pi·R²).
+    {
+        float count = 0.f;
+        for (std::uint32_t c = 0; c < chunks; ++c) count += chunkTau_[c];
+        const auto& he = field_->densityRepr().halfExtent;
+        const float res = static_cast<float>(p_.resolution);
+        const float vvox = (2.f * he.x / res) * (2.f * he.y / res) * (2.f * he.z / res);
+        opticalDepth_ = count * p_.sigmaPerParticle * vvox / (3.14159265f * kTauR2);
+    }
+
     field_->submit(host_.data(), n);// dead slots carry the w<0 sentinel
+}
+
+double DownwashEffect::degradedRange(double trueRangeM, std::uint32_t tick) const {
+    if (!std::isfinite(trueRangeM)) return trueRangeM;// no target in clean air either
+    const float tau2 = 2.f * opticalDepth_;// the beam crosses the cloud twice
+    if (tau2 < 0.8f) return trueRangeM;
+
+    // Chance this measurement fails rises with the two-way depth; a failed
+    // one is a DROPOUT (no return strong enough) or an EARLY return off the
+    // cloud body. Hashed on the physics tick: deterministic, uncorrelated
+    // between consecutive ticks — which is how a real unit misbehaves.
+    const float u = rnd01(p_.seed ^ 0x5EEDF00Du, tick, 0u);
+    const float pFail = math::smoothstep(0.8f, 2.6f, tau2);
+    if (u >= pFail) return trueRangeM;
+
+    const float u2 = rnd01(p_.seed ^ 0x5EEDF00Du, tick, 1u);
+    if (u2 < 0.55f) return NAN;// dropout; the JSON bridge omits the field
+    // Early return: the "surface" the beam sees is dust at a fraction of the
+    // true range.
+    const float u3 = rnd01(p_.seed ^ 0x5EEDF00Du, tick, 2u);
+    return trueRangeM * (0.15 + 0.55 * static_cast<double>(u3));
 }

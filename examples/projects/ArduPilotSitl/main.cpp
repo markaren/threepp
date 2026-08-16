@@ -52,6 +52,8 @@
 #include "threepp/extras/terrain/RockGeometry.hpp"
 #include "threepp/extras/terrain/TerrainGenerator.hpp"
 #include "threepp/extras/vegetation/GrassTiles.hpp"
+#include "threepp/extras/vegetation/TreeGenerator.hpp"
+#include "threepp/extras/vegetation/TreeTextures.hpp"
 #ifdef THREEPP_WITH_VULKAN
 #include "threepp/renderers/VulkanRenderer.hpp"
 #endif
@@ -699,6 +701,118 @@ int main(int argc, char** argv) {
     }
     auto quad = std::make_unique<uav::QuadSim>(simRateHz, *drone.root(), terrainMesh.get());
     quad->world().addStaticTrimesh(*pad);// land flush on the pad, not 4 cm inside it
+
+    // ── Forest ──────────────────────────────────────────────────────────────
+    // spot_slam's species mix (oak / spruce-heavy / birch), built the C++ way
+    // (forest_demo's variant pooling: a handful of fully-realized prototypes,
+    // every placement shares geometry + bark/leaf textures), scattered LARGER —
+    // a treeline ringing the meadow out to ~240 m. Each trunk drops a static
+    // box collider into the quad's world: the rangefinder raycast and any
+    // future obstacle-avoidance sensor see the same forest the camera does.
+    // Built after the quad so the colliders have a world to land in.
+    {
+        struct TreeVariant {
+            std::shared_ptr<BufferGeometry> trunkGeo, leafGeo;
+            std::shared_ptr<MeshStandardMaterial> barkMat, leafMat;
+            float trunkRadius;
+        };
+        const auto makeLeafMat = [](const std::shared_ptr<Texture>& map) {
+            auto m = MeshStandardMaterial::create(MeshStandardMaterial::Params{}
+                                                          .color(Color::white)
+                                                          .roughness(0.85f)
+                                                          .metalness(0.f));
+            m->map = map;
+            m->alphaTest = 0.4f;// forest_demo's mip-safe cutout threshold
+            m->side = Side::Double;
+            m->vertexColors = true;
+            m->translucency = 0.45f;// backlit canopy glow (Vulkan; no-op on GL)
+            m->translucencyColor = Color(0.55f, 0.85f, 0.30f);
+            return m;
+        };
+
+        std::vector<TreeVariant> variants;
+        // Presets: 0=oak, 1=spruce (x2 — spot_slam's spruce-heavy mix), 2=birch.
+        const int presets[] = {0, 1, 1, 2};
+        std::mt19937 vrng(4242);
+        for (int preset : presets) {
+            for (int k = 0; k < 2; ++k) {
+                const auto seed = static_cast<unsigned int>(vrng());
+                vegetation::TreeParams tpar;
+                vegetation::applyPreset(preset, tpar);
+                tpar.seed = seed;
+                vegetation::TreeGenerator tgen(seed);
+                tgen.buildSkeleton(tpar);
+
+                TreeVariant v;
+                v.trunkGeo = tgen.makeTrunkGeometry(tpar);
+                v.leafGeo = tgen.makeLeafGeometry(tpar);
+                auto bark = vegetation::makeBarkTextures(192, seed, tpar.barkColor,
+                                                         tpar.barkStyle);
+                bark.first->repeat.set(3.f, 0.5f);
+                bark.second->repeat.set(3.f, 0.5f);
+                v.barkMat = MeshStandardMaterial::create(MeshStandardMaterial::Params{}
+                                                                 .color(Color::white)
+                                                                 .roughness(0.92f)
+                                                                 .metalness(0.f));
+                v.barkMat->map = bark.first;
+                v.barkMat->normalMap = bark.second;
+                v.leafMat = makeLeafMat(
+                        tpar.leafStyle == vegetation::LeafStyle::Frond
+                                ? vegetation::makeNeedleFrondTexture(224, seed, tpar.leafColor)
+                                : vegetation::makeLeafClusterTexture(224, seed, tpar.leafColor,
+                                                                     tpar.leafShape));
+                v.trunkRadius = tpar.trunkRadius;
+                variants.push_back(std::move(v));
+            }
+        }
+
+        std::mt19937 rng(31);
+        std::uniform_real_distribution<float> u01f(0.f, 1.f);
+        int placed = 0;
+        for (int i = 0; i < 1400 && placed < 240; ++i) {
+            // Ring 22..240 m: a clear flight bowl around the pad, forest beyond.
+            const float r = 22.f + std::pow(u01f(rng), 0.8f) * 218.f;
+            const float a = u01f(rng) * 2.f * math::PI;
+            const float x = std::cos(a) * r, z = std::sin(a) * r;
+            if (std::hypot(x - pondX, z - pondZ) < pondR + 6.f) continue;
+            const float y = groundY(x, z);
+            if (y > 26.f) continue;// treeline
+            const float slope = std::abs(groundY(x + 3.f, z) - groundY(x - 3.f, z)) +
+                                std::abs(groundY(x, z + 3.f) - groundY(x, z - 3.f));
+            if (slope > 3.2f) continue;// no trees on cliffs
+
+            const auto& v = variants[rng() % variants.size()];
+            const float s = 0.85f + u01f(rng) * 0.75f;
+            auto trunk = Mesh::create(v.trunkGeo, v.barkMat);
+            trunk->position.set(x, y - 0.06f, z);
+            trunk->scale.setScalar(s);
+            trunk->rotation.y = u01f(rng) * 2.f * math::PI;
+            // The shadow frustum is a tight box tracking the drone, so only
+            // trees the flight can actually reach need to cast.
+            trunk->castShadow = r < 90.f;
+            trunk->receiveShadow = true;
+            auto leaves = Mesh::create(v.leafGeo, v.leafMat);
+            leaves->castShadow = trunk->castShadow;
+            trunk->add(leaves);
+            scene.add(trunk);
+
+            // The trunk stub the physics world sees (rangefinder, future
+            // avoidance). Canopy stays collider-free: a downward beam through
+            // leaves mostly gets ground, and the drone clipping a twig is not
+            // this demo's physics story.
+            {
+                using namespace ::physx;
+                const float hr = std::max(0.10f, v.trunkRadius * s * 1.2f);
+                const float hh = 2.6f * s;
+                quad->world().addStatic(
+                        PxBoxGeometry(hr, hh, hr),
+                        PxTransform(PxVec3(x, y + hh, z)));
+            }
+            ++placed;
+        }
+        std::fprintf(stderr, "[forest] placed %d trees (%zu variants)\n", placed,
+                     variants.size());
+    }
     uav::FdmState lastState{};
     uav::ServoInput lastServo{};
     std::uint32_t resets = 0;
@@ -754,6 +868,18 @@ int main(int argc, char** argv) {
         const float pwm = 1407.f + 150.f * (altT - alt) + 230.f * (vT - vUp);
         return static_cast<std::uint16_t>(std::clamp(pwm, 1090.f, 1850.f));
     };
+    // The rangefinder flies THROUGH the dust: degrade rng_1 from the cached
+    // optical depth before anyone consumes it. In SITL mode a NaN is omitted
+    // from the JSON, so ArduPilot's rangefinder driver genuinely times out —
+    // its landing logic and EKF experience the brownout, closed loop.
+    std::uint32_t rngDrops = 0, rngEarly = 0;// per-telemetry-window counters
+    const auto degradeRangefinder = [&](std::uint32_t tick) {
+        if (!dust) return;
+        const double trueR = lastState.rangefinderM;
+        lastState.rangefinderM = dust->degradedRange(trueR, tick);
+        if (std::isnan(lastState.rangefinderM) && !std::isnan(trueR)) ++rngDrops;
+        else if (lastState.rangefinderM < trueR * 0.9) ++rngEarly;
+    };
     // One scripted physics substep at the sim rate.
     const auto scriptedStep = [&] {
         uav::ServoInput in{};
@@ -763,6 +889,7 @@ int main(int argc, char** argv) {
         const std::uint16_t pwm = scriptedPwm(lastState.timestampSec);
         for (int m = 0; m < 4; ++m) in.pwm[m] = pwm;
         quad->step(in, lastState);
+        degradeRangefinder(in.frameCount);
         lastServo = in;
     };
     // Feed the dust from whatever just flew (scripted or SITL).
@@ -937,11 +1064,19 @@ int main(int argc, char** argv) {
             canvas.animateOnce([&] { renderer->render(scene, camera); });
             if (i % 20 == 0) {
                 const auto& dr = dust->field()->densityRepr();
+                char rng[16];
+                if (std::isnan(lastState.rangefinderM)) {
+                    std::snprintf(rng, sizeof rng, "DROP");
+                } else {
+                    std::snprintf(rng, sizeof rng, "%.2f", lastState.rangefinderM);
+                }
                 std::fprintf(stderr,
-                             "[dust] t=%.2f alt=%.2f str=%.2f air=%u gnd=%.1f%% "
+                             "[dust] t=%.2f alt=%.2f str=%.2f air=%u tau=%.2f rng=%s "
+                             "drops=%u early=%u gnd=%.1f%% "
                              "box c=(%.1f %.1f %.1f) h=(%.1f %.1f %.1f)\n",
                              lastState.timestampSec, -lastState.positionNed[2],
                              dust->dustiness(), dust->airborne(),
+                             dust->opticalDepthBelow(), rng, rngDrops, rngEarly,
                              100.f * dust->groundDustAt(drone.root()->position.x,
                                                         drone.root()->position.z) /
                                      (dust->params().groundDustPerM2 *
@@ -994,7 +1129,13 @@ int main(int argc, char** argv) {
         ImGui::Text("sim time     %.2f s", lastState.timestampSec);
         ImGui::Separator();
         if (std::isnan(lastState.rangefinderM)) {
-            ImGui::TextUnformatted("alt AGL      --  (out of range)");
+            if (dust && dust->opticalDepthBelow() > 0.4f) {
+                ImGui::TextColored({1.f, 0.55f, 0.25f, 1.f},
+                                   "alt AGL      --  DUST DROPOUT (tau %.1f)",
+                                   dust->opticalDepthBelow());
+            } else {
+                ImGui::TextUnformatted("alt AGL      --  (out of range)");
+            }
         } else {
             ImGui::Text("alt AGL      %.2f m", lastState.rangefinderM);
         }
@@ -1100,6 +1241,7 @@ int main(int argc, char** argv) {
                     ++resets;
                 }
                 quad->step(servo, lastState);
+                degradeRangefinder(servo.frameCount);
                 bridge.sendState(lastState);
                 lastServo = servo;
             }

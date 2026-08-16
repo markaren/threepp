@@ -94,6 +94,40 @@ TEST_CASE("dust is conserved: eroded from the pad, deposited downwind") {
     CHECK(fx->groundDustQuanta() == initial);
 }
 
+TEST_CASE("the rangefinder experiences the brownout") {
+    // Clean air: exact passthrough, NaN in = NaN out.
+    auto clean = DownwashEffect::create();
+    CHECK(clean->degradedRange(3.7, 42u) == 3.7);
+    CHECK(std::isnan(clean->degradedRange(NAN, 42u)));
+
+    // A deliberately opaque cloud (huge sigma) so the failure model is fully
+    // saturated and the branch fractions are testable without depending on
+    // the emitter's exact column density.
+    DownwashEffect::Params p;
+    p.sigmaPerParticle = 30.f;
+    auto fx = DownwashEffect::create(p);
+    drive(*fx, 0.f, 4.f, 0.5f, 0.42f);
+    REQUIRE(fx->opticalDepthBelow() * 2.f > 2.6f);// saturates pFail
+
+    int drops = 0, early = 0;
+    for (std::uint32_t tick = 0; tick < 2000; ++tick) {
+        const double r = fx->degradedRange(0.5, tick);
+        if (std::isnan(r)) ++drops;
+        else if (r < 0.45) ++early;
+    }
+    // pFail == 1 here: ~55% dropouts, ~45% early returns, nothing clean.
+    CHECK(drops > 900);
+    CHECK(early > 700);
+    CHECK(drops + early == 2000);
+
+    // Same tick, same verdict — the degradation replays with the flight.
+    for (std::uint32_t tick : {7u, 123u, 999u}) {
+        const double a = fx->degradedRange(0.5, tick);
+        const double b = fx->degradedRange(0.5, tick);
+        CHECK((std::isnan(a) ? std::isnan(b) : a == b));
+    }
+}
+
 TEST_CASE("same update sequence, same bytes") {
     auto a = DownwashEffect::create();
     auto b = DownwashEffect::create();

@@ -224,6 +224,24 @@ namespace threepp::uav {
         // Quanta in the reservoir cell under an effect-local ground point.
         [[nodiscard]] float groundDustAt(float localX, float localZ) const;
 
+        // ── The rangefinder closed loop ─────────────────────────────────────
+        // ONE-WAY vertical optical depth of the dust between the vehicle and
+        // the ground, estimated from the airborne parcels each update() (a
+        // ~0.9 m column under the vehicle; cached, free to read every substep).
+        [[nodiscard]] float opticalDepthBelow() const { return opticalDepth_; }
+
+        // What a downward lidar altimeter measures through the cloud: the
+        // true range in clean air, an EARLY return off the dust itself as the
+        // two-way optical depth climbs, and NaN (a dropout — the JSON bridge
+        // omits NaN fields, so ArduPilot's rangefinder driver genuinely times
+        // out) when the cloud is opaque. `tick` seeds the per-measurement
+        // hash: pass the physics frame counter and two runs of the same
+        // flight degrade identically. NaN in = NaN out.
+        //
+        // This is the first sensor the dust closes the loop on: ArduPilot's
+        // landing logic and EKF experience the brownout, not just the viewer.
+        [[nodiscard]] double degradedRange(double trueRangeM, std::uint32_t tick) const;
+
         [[nodiscard]] const std::shared_ptr<ParticleField>& field() const { return field_; }
         [[nodiscard]] const Params& params() const { return p_; }
 
@@ -256,7 +274,9 @@ namespace threepp::uav {
         // Parallel position-pass plumbing (the lifecycle pass is SERIAL — it
         // owns the shared reservoir; see update()).
         std::vector<std::uint32_t> chunkIdx_;
+        std::vector<float>         chunkTau_;// per-chunk optical-depth partials
         std::uint32_t              alive_ = 0;
+        float                      opticalDepth_ = 0.f;// cached, see opticalDepthBelow
 
         // ── The ground reservoir (see the .cpp note) ────────────────────────
         std::vector<float> grid_;// parcel quanta per cell
