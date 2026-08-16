@@ -21,6 +21,8 @@ Command line:
 | --- | --- |
 | `scene.json` | open this document on start |
 | `--vulkan` | use the Vulkan backend (OpenGL is the default and the supported path) |
+| `--selftest` | drive the editor through its acceptance suite and exit non-zero on a failure. Every failure line names its section and file:line, and the summary repeats them under the per-section wall times, so one run localizes |
+| `--selftest=<filter>` | run only the matching sections: comma-separated case-insensitive terms, each an exact section name or a substring (`--selftest=terrain,splat`). A filter matching no section lists the section names and exits non-zero |
 | `--urdf=<file>` | selftest only: also exercise the URDF import and round trip |
 | `--frames=N` | render N frames and exit — for smoke tests |
 | `--play` | press Play as soon as the scene is open — with `--frames`, a whole play session without a hand on the mouse |

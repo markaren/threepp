@@ -51,6 +51,9 @@ int main(int argc, char** argv) {
             options.maxFrames = std::atoi(argument + 9);
         } else if (std::strcmp(argument, "--selftest") == 0) {
             options.selfTest = true;
+        } else if (std::strncmp(argument, "--selftest=", 11) == 0) {
+            options.selfTest = true;
+            options.selfTestFilter = argument + 11;
         } else if (std::strcmp(argument, "--play") == 0) {
             options.play = true;
         } else if (std::strncmp(argument, "--urdf=", 7) == 0) {
@@ -90,6 +93,10 @@ int main(int argc, char** argv) {
                       << "  --play           press Play as soon as the scene is open\n"
                       << "  --selftest       drive the editor through its acceptance passes,\n"
                       << "                   print each one and exit non-zero on a failure\n"
+                      << "  --selftest=F     run only the sections matching F: comma-separated\n"
+                      << "                   terms, an exact section name or a substring\n"
+                      << "                   (--selftest=terrain,splat); a term matching no\n"
+                      << "                   section lists the sections and exits non-zero\n"
                       << "  --urdf=PATH      import a URDF on start\n"
                       << "  --environment=P  light the scene from a .hdr/.exr, as\n"
                       << "                   File > Set Environment does (background too)\n"

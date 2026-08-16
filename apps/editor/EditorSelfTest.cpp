@@ -5,6 +5,13 @@
 // scenario, plays it and writes PNGs to look at. Both run on whichever backend
 // the binary was started with, so `--selftest --vulkan` is a second full pass.
 //
+// The suite is cut into named sections (kSelfTestSections below), each timed
+// and each behind `--selftest=<filter>`, so a single failing area can be rerun
+// alone and a failure names its section and file:line without a rerun. The
+// sections run in declared order and each starts from the state it can find —
+// most open with newScene() or look their subjects up fresh — so a filtered
+// run is the same code the full run executes, minus the sections skipped.
+//
 // Its own translation unit because it is half the code EditorApp used to be and
 // none of the behaviour: the app and its acceptance harness now recompile
 // independently, and a change to one cannot conflict with a change to the
@@ -85,16 +92,22 @@
 #endif
 
 #include <algorithm>
+#include <cctype>
 #include <chrono>
 #include <cmath>
 #include <cstdio>
 #include <cstdint>
 #include <cstdlib>// std::getenv (THREEPP_BENCH_DISABLE)
+#include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <iomanip>
 #include <iostream>
 #include <limits>
+#include <source_location>
+#include <sstream>
 #include <string>
+#include <string_view>
 #include <thread>
 #include <vector>
 
@@ -102,6 +115,106 @@ using namespace threepp;
 using namespace threepp::editor;
 
 namespace {
+
+    // Every section of the selftest, in the order the run visits them. This
+    // table is the one place a section is registered: `--selftest=<filter>`
+    // matches against these names, the unmatched-filter error prints them, and
+    // section() in runSelfTest refuses a name that is not here — so the table
+    // cannot rot out from under the filter.
+    constexpr const char* kSelfTestSections[] = {
+            "boot",
+            "undo",
+            "play-lock",
+            "play-gizmo",
+            "play-overlays",
+            "follow-selection",
+            "follow-heading",
+            "texture-dialog",
+            "soft-body",
+            "script-rigid-body",
+            "script-fixed-update",
+            "script-collision",
+            "script-trigger",
+            "script-raycast",
+            "compound-collider",
+            "camera-dock",
+            "light-icons",
+            "python-scripting",
+            "two-scripts",
+            "external-edit",
+            "splines",
+            "conveyors",
+            "particle-fields",
+            "flocks",
+            "granular",
+            "import",
+            "tpz-archive",
+            "prefabs",
+            "renderer-look",
+            "urdf",
+            "urdf-scale",
+            "texture-drop",
+            "texture-settings",
+            "shadow-side",
+            "material-edit",
+            "ortho-views",
+            "view-gizmo",
+            "terrain",
+            "text",
+            "trees",
+            "sound",
+            "acoustics",
+            "joints",
+            "vehicle",
+            "ortho-shading",
+            "ortho-shadows",
+            "collider-overlay",
+            "sensors",
+            "camera-sensor",
+            "pinhole-migration",
+            "scene-userdata",
+            "generator",
+            "instancing",
+            "open-example",
+            "splats",
+            "splat-surface",
+            "splat-churn",
+            "sog-scan",
+    };
+
+    std::string lowered(std::string text) {
+        std::transform(text.begin(), text.end(), text.begin(),
+                       [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+        return text;
+    }
+
+    bool isRegisteredSection(const std::string& name) {
+        for (const char* candidate : kSelfTestSections) {
+            if (name == candidate) return true;
+        }
+        return false;
+    }
+
+    // `--selftest=terrain,splat` — comma-separated, case-insensitive terms. A
+    // term that names a section exactly selects that section alone ("text" is
+    // not the texture blocks); any other term is a substring ("splat" is every
+    // splat section, "script-" the scripting ones). An empty filter matches
+    // everything: the no-arg run is the full run it has always been.
+    bool sectionMatches(const std::string& filter, const char* name) {
+        if (filter.empty()) return true;
+        const std::string haystack = lowered(name);
+        std::istringstream terms(lowered(filter));
+        std::string term;
+        while (std::getline(terms, term, ',')) {
+            if (term.empty()) continue;
+            if (isRegisteredSection(term)) {
+                if (term == haystack) return true;
+            } else if (haystack.find(term) != std::string::npos) {
+                return true;
+            }
+        }
+        return false;
+    }
 
     // The radius a generated tube actually came out at: the FARTHEST any of its
     // vertices sits from the curve it was swept along. A tube is a ring of
@@ -1118,6 +1231,114 @@ int EditorApp::runSelfTest() {
 
     Clock clock;
     int failed = 0;
+    int checksRun = 0;
+
+    // ---- the harness ------------------------------------------------------
+    //
+    // Every top-level block below sits behind `if (section("name"))`, with the
+    // names registered once in kSelfTestSections. With no filter every section
+    // runs and the suite is what it always was; `--selftest=<filter>` runs only
+    // the matching ones. An unmatchable filter is answered with the list rather
+    // than a silent zero-section pass.
+    //
+    // The header line printed as a section is entered is deliberate crash
+    // forensics: when a run dies before the summary — the intermittent Vulkan
+    // exit -1 does exactly that — the last header in the log names the section
+    // that took it down.
+    struct SectionRun {
+        const char* name;
+        double seconds = 0.0;
+        int checks = 0;
+        int failed = 0;
+        bool closed = false;
+    };
+    std::vector<SectionRun> sections;
+    std::vector<std::string> failures;
+    const std::string& filter = options_.selfTestFilter;
+
+    if (!filter.empty()) {
+        bool matchesAny = false;
+        for (const char* name : kSelfTestSections) {
+            if (sectionMatches(filter, name)) matchesAny = true;
+        }
+        if (!matchesAny) {
+            std::cout << "[selftest] no section matches --selftest=" << filter
+                      << "\n[selftest] sections are:";
+            for (const char* name : kSelfTestSections) std::cout << ' ' << name;
+            std::cout << std::endl;
+            return 2;
+        }
+    }
+
+    using SectionClock = std::chrono::steady_clock;
+    const auto runBegan = SectionClock::now();
+    auto sectionBegan = runBegan;
+    int checksAtSectionStart = 0;
+    int failedAtSectionStart = 0;
+    int gatedSectionsRun = 0;
+
+    const auto closeSection = [&] {
+        if (sections.empty() || sections.back().closed) return;
+        auto& current = sections.back();
+        current.seconds = std::chrono::duration<double>(SectionClock::now() - sectionBegan).count();
+        current.checks = checksRun - checksAtSectionStart;
+        current.failed = failed - failedAtSectionStart;
+        current.closed = true;
+    };
+    // Only the file's name: source_location::file_name() is the full
+    // compile-time path, and every failure is in this file anyway.
+    const auto baseName = [](const char* path) {
+        const std::string_view text(path);
+        const auto slash = text.find_last_of("/\\");
+        return slash == std::string_view::npos ? text : text.substr(slash + 1);
+    };
+    const auto section = [&](const char* name,
+                             const std::source_location where = std::source_location::current()) {
+        closeSection();
+        if (!isRegisteredSection(name)) {
+            // A name missing from the table is a suite bug: the filter and the
+            // unmatched-filter listing would both lie about it. Refuse to run
+            // the block, and fail the run loudly enough to get fixed.
+            std::ostringstream line;
+            line << "[selftest] FAIL section '" << name << "' is not in kSelfTestSections ("
+                 << baseName(where.file_name()) << ':' << where.line() << ')';
+            std::cout << line.str() << std::endl;
+            failures.push_back(line.str());
+            ++failed;
+            return false;
+        }
+        if (!sectionMatches(filter, name)) return false;
+        sections.push_back({name});
+        sectionBegan = SectionClock::now();
+        checksAtSectionStart = checksRun;
+        failedAtSectionStart = failed;
+        ++gatedSectionsRun;
+        std::cout << "[selftest] --- " << name << " ---" << std::endl;
+        return true;
+    };
+    // The summary is the localization: per-section wall time (the suite's cost,
+    // stated so the sinks can be attacked with data), then every failure again
+    // with its section and file:line, so one run answers WHERE without a rerun.
+    const auto summary = [&] {
+        closeSection();
+        const double total =
+                std::chrono::duration<double>(SectionClock::now() - runBegan).count();
+        std::cout << "[selftest] --- summary ---" << std::endl;
+        for (const auto& ran : sections) {
+            std::ostringstream line;
+            line << "[selftest] " << std::setw(7) << std::fixed << std::setprecision(2)
+                 << ran.seconds << " s  " << ran.name;
+            if (ran.failed > 0) line << "  " << ran.failed << " FAILED";
+            std::cout << line.str() << '\n';
+        }
+        if (!filter.empty()) {
+            std::cout << "[selftest] filter '" << filter << "' ran " << sections.size()
+                      << " of " << std::size(kSelfTestSections) << " sections\n";
+        }
+        for (const auto& line : failures) std::cout << line << '\n';
+        std::cout << "[selftest] " << checksRun << " checks, " << failed << " failed, "
+                  << std::fixed << std::setprecision(1) << total << " s total" << std::endl;
+    };
 
     // Two steppers, and choosing between them is always the same question: does
     // the assertion measure how much SIMULATED time passed?
@@ -1144,9 +1365,22 @@ int EditorApp::runSelfTest() {
             canvas_.animateOnce([&] { frame(kFixedDt); });
         }
     };
-    const auto check = [&](bool ok, const char* what) {
-        std::cout << (ok ? "[selftest] PASS " : "[selftest] FAIL ") << what << std::endl;
-        if (!ok) ++failed;
+    const auto check = [&](bool ok, const char* what,
+                           const std::source_location where = std::source_location::current()) {
+        ++checksRun;
+        if (ok) {
+            std::cout << "[selftest] PASS " << what << std::endl;
+            return;
+        }
+        ++failed;
+        // The failure line carries everything a diagnosis needs — section and
+        // file:line — and the summary repeats it, so one run localizes.
+        std::ostringstream line;
+        line << "[selftest] FAIL " << what << "  ("
+             << (sections.empty() ? "?" : sections.back().name) << ", "
+             << baseName(where.file_name()) << ':' << where.line() << ')';
+        std::cout << line.str() << std::endl;
+        failures.push_back(line.str());
     };
     const auto inScene = [&](const Object3D* object) {
         bool found = false;
@@ -1174,97 +1408,108 @@ int EditorApp::runSelfTest() {
         return n;
     };
 
+    // "boot" is not gated: the template lookups below are the floor every other
+    // section stands on, so it runs whatever the filter says (and "boot" as the
+    // filter is the quickest possible smoke run).
+    sections.push_back({"boot"});
+    std::cout << "[selftest] --- boot ---" << std::endl;
+
     step(2);
 
     auto* box = document_.scene().getObjectByName("Box");
     auto* ground = document_.scene().getObjectByName("Ground");
     check(box != nullptr, "template Box exists");
     check(ground != nullptr, "template Ground exists");
-    if (!box || !ground) return 1;
-
-    // Outline-leak regression: re-selecting must not accumulate helpers.
-    selectObject(box);
-    step();
-    selectObject(ground);
-    step();
-    selectObject(box);
-    step();
-    check(selection_.get() == box, "selection is Box");
-    check(outlineCount() == 1, "one outline after repeated re-select");
-
-    // Wireframe + resize regression: flipping a material to wireframe moves the
-    // mesh out of the Vulkan TLAS (the overlay pass draws it instead). That
-    // flip must classify as STRUCTURAL — before it did, the next TLAS refit
-    // after a window resize was a MODE_UPDATE with the wrong instance count,
-    // which corrupts traversal (ray-query hang → 2 s TDR → device lost at the
-    // next submit). GL has no TLAS; there this pass just exercises the resize.
-    if (auto* wireMesh = box->as<Mesh>()) {
-        if (auto* mw = dynamic_cast<MaterialWithWireframe*>(wireMesh->material().get())) {
-            const auto sizeBefore = canvas_.size();
-            mw->wireframe = true;
-            wireMesh->material()->needsUpdate();
-            step(3);
-            canvas_.setSize({sizeBefore.width() - 160, sizeBefore.height() - 90});
-            step(3);
-            canvas_.setSize({sizeBefore.width(), sizeBefore.height()});
-            step(3);
-            mw->wireframe = false;
-            wireMesh->material()->needsUpdate();
-            step();
-            // Reaching this line is the assertion: a corrupted TLAS never
-            // returns from the resize's device-idle.
-            check(true, "wireframe Box survives a window resize");
-        }
+    if (!box || !ground) {
+        summary();
+        return 1;
     }
 
-    // Delete through the same member the Del key and menus call.
-    deleteSelected();
-    step();
-    check(!inScene(box), "delete removes Box from the scene");
-    check(selection_.get() == nullptr, "delete clears the selection");
-    check(outlineCount() == 0, "no outline after delete");
-    check(commands_.canUndo(), "delete is undoable");
-
-    commands_.undo();
-    step();
-    check(inScene(box), "undo restores Box");
-    commands_.redo();
-    step();
-    check(!inScene(box), "redo removes Box again");
-
-    // Undo across play: stop replaces the whole scene from the snapshot, so a
-    // pre-play edit must re-resolve by uuid instead of writing through a
-    // pointer into the destroyed graph. `box`/`ground` are stale after this
-    // block — every lookup below goes through the current scene.
-    commands_.undo();// Box back in the scene for the drive
-    step();
-    if (auto* target = document_.scene().getObjectByName("Box")) {
-        const auto before = SetTransformCommand::read(*target);
-        auto after = before;
-        after.position.x += 2.f;
-        commands_.execute(std::make_unique<SetTransformCommand>(*target, before, after, "Move"));
-        startPlay();
-        check(isPlaying(), "play starts for the undo-across-play drive");
-        step(3);
-        stopPlay();
+    if (section("undo")) {
+        // Outline-leak regression: re-selecting must not accumulate helpers.
+        selectObject(box);
         step();
-        check(!isPlaying(), "play stops and restores the scene");
-        check(commands_.canUndo(), "pre-play edit survives the scene swap");
+        selectObject(ground);
+        step();
+        selectObject(box);
+        step();
+        check(selection_.get() == box, "selection is Box");
+        check(outlineCount() == 1, "one outline after repeated re-select");
+
+        // Wireframe + resize regression: flipping a material to wireframe moves the
+        // mesh out of the Vulkan TLAS (the overlay pass draws it instead). That
+        // flip must classify as STRUCTURAL — before it did, the next TLAS refit
+        // after a window resize was a MODE_UPDATE with the wrong instance count,
+        // which corrupts traversal (ray-query hang → 2 s TDR → device lost at the
+        // next submit). GL has no TLAS; there this pass just exercises the resize.
+        if (auto* wireMesh = box->as<Mesh>()) {
+            if (auto* mw = dynamic_cast<MaterialWithWireframe*>(wireMesh->material().get())) {
+                const auto sizeBefore = canvas_.size();
+                mw->wireframe = true;
+                wireMesh->material()->needsUpdate();
+                step(3);
+                canvas_.setSize({sizeBefore.width() - 160, sizeBefore.height() - 90});
+                step(3);
+                canvas_.setSize({sizeBefore.width(), sizeBefore.height()});
+                step(3);
+                mw->wireframe = false;
+                wireMesh->material()->needsUpdate();
+                step();
+                // Reaching this line is the assertion: a corrupted TLAS never
+                // returns from the resize's device-idle.
+                check(true, "wireframe Box survives a window resize");
+            }
+        }
+
+        // Delete through the same member the Del key and menus call.
+        deleteSelected();
+        step();
+        check(!inScene(box), "delete removes Box from the scene");
+        check(selection_.get() == nullptr, "delete clears the selection");
+        check(outlineCount() == 0, "no outline after delete");
+        check(commands_.canUndo(), "delete is undoable");
+
         commands_.undo();
         step();
-        auto* restored = document_.scene().getObjectByName("Box");
-        check(restored != nullptr, "Box exists after stop");
-        check(restored && std::abs(restored->position.x - before.position.x) < 1e-4f,
-              "undo after stop restores the pre-edit position");
-    } else {
-        check(false, "Box available for the undo-across-play drive");
+        check(inScene(box), "undo restores Box");
+        commands_.redo();
+        step();
+        check(!inScene(box), "redo removes Box again");
+
+        // Undo across play: stop replaces the whole scene from the snapshot, so a
+        // pre-play edit must re-resolve by uuid instead of writing through a
+        // pointer into the destroyed graph. `box`/`ground` are stale after this
+        // block — every lookup below goes through the current scene.
+        commands_.undo();// Box back in the scene for the drive
+        step();
+        if (auto* target = document_.scene().getObjectByName("Box")) {
+            const auto before = SetTransformCommand::read(*target);
+            auto after = before;
+            after.position.x += 2.f;
+            commands_.execute(std::make_unique<SetTransformCommand>(*target, before, after, "Move"));
+            startPlay();
+            check(isPlaying(), "play starts for the undo-across-play drive");
+            step(3);
+            stopPlay();
+            step();
+            check(!isPlaying(), "play stops and restores the scene");
+            check(commands_.canUndo(), "pre-play edit survives the scene swap");
+            commands_.undo();
+            step();
+            auto* restored = document_.scene().getObjectByName("Box");
+            check(restored != nullptr, "Box exists after stop");
+            check(restored && std::abs(restored->position.x - before.position.x) < 1e-4f,
+                  "undo after stop restores the pre-edit position");
+        } else {
+            check(false, "Box available for the undo-across-play drive");
+        }
     }
 
     // Play is a viewer, not an editor. Every mutating entry point is driven
     // here directly rather than through its menu item, because greying a menu
     // is not the guarantee — the refusal in the operation is, and the shortcut
     // handler and file-drop path reach these with no menu in between.
-    {
+    if (section("play-lock")) {
         const auto countObjects = [&] {
             std::size_t n = 0;
             document_.scene().traverse([&](Object3D&) { ++n; });
@@ -1323,7 +1568,7 @@ int EditorApp::runSelfTest() {
     // handles on a body the solver is moving invite an edit that the gate would
     // refuse, so the attachment itself is what goes — and comes back on Stop
     // with the mode and the space it had, on the selection re-resolved by uuid.
-    {
+    if (section("play-gizmo")) {
         auto* target = document_.scene().getObjectByName("Box");
         auto* other = document_.scene().getObjectByName("Ground");
         check(target != nullptr && other != nullptr, "Box and Ground available for the gizmo drive");
@@ -1385,7 +1630,7 @@ int EditorApp::runSelfTest() {
     // what you are EDITING, and Play is when the viewport should be showing the
     // scene. Picking stays live, so the interesting case is the one below: a
     // selection made mid-play builds new nodes, and they must arrive hidden.
-    {
+    if (section("play-overlays")) {
         auto* target = document_.scene().getObjectByName("Box");
         auto* other = document_.scene().getObjectByName("Ground");
         check(target != nullptr && other != nullptr, "Box and Ground available for the furniture drive");
@@ -1499,7 +1744,7 @@ int EditorApp::runSelfTest() {
     // while a Play session owns the transform. Driven with a hand-moved object
     // rather than a simulated one so the assertion is about the CAMERA and not
     // about whatever a solver did this frame.
-    {
+    if (section("follow-selection")) {
         auto* subject = document_.scene().getObjectByName("Box");
         check(subject != nullptr, "Box available for the follow drive");
 
@@ -1574,7 +1819,7 @@ int EditorApp::runSelfTest() {
     // frame-rate measurement (it failed on GL and passed on Vulkan for exactly
     // that reason). At the fixed dt, 120 frames is two seconds: thirteen time
     // constants, on every machine.
-    {
+    if (section("follow-heading")) {
         auto* subject = document_.scene().getObjectByName("Box");
         check(subject != nullptr, "Box available for the heading drive");
         if (subject) {
@@ -1713,7 +1958,7 @@ int EditorApp::runSelfTest() {
     // rather than a Material*, so confirming after the graph has been rebuilt
     // resolves against the new one — or, when the object is gone, does nothing
     // at all. Before this it dereferenced a pointer into the destroyed scene.
-    {
+    if (section("texture-dialog")) {
         auto* target = document_.scene().getObjectByName("Box");
         check(target != nullptr, "Box available for the stale-texture-dialog drive");
 
@@ -1750,7 +1995,7 @@ int EditorApp::runSelfTest() {
     // and the renderer sees them move, which a transform check cannot observe.
     // The soft body is added and removed inside this block, so the passes below
     // still see the template scene they expect.
-    {
+    if (section("soft-body")) {
         auto ball = ObjectFactory::createPrimitive(Primitive::Sphere, document_.scene());
         ball->name = "Jelly";
         // Beside the template Box, not on top of it: the Box has no collider,
@@ -1907,7 +2152,7 @@ int EditorApp::runSelfTest() {
     // physics session is simulating. The two sessions know nothing about each
     // other, so this is the only pass that proves the seam between them holds
     // in the real app rather than in a test harness that starts both by hand.
-    {
+    if (section("script-rigid-body")) {
         auto thruster = ObjectFactory::createPrimitive(Primitive::Box, document_.scene());
         thruster->name = "Thruster";
         thruster->position.set(-2.f, 2.f, 0.f);
@@ -1964,7 +2209,7 @@ int EditorApp::runSelfTest() {
     // where the two sessions are started in registration order and know nothing
     // about each other. stepFixed makes one frame exactly one substep, so the
     // two counters must agree AND agree with the frame count.
-    {
+    if (section("script-fixed-update")) {
         auto ticker = ObjectFactory::createPrimitive(Primitive::Box, document_.scene());
         ticker->name = "Ticker";
         ticker->position.set(3.f, 2.f, 0.f);
@@ -2029,7 +2274,7 @@ int EditorApp::runSelfTest() {
     // script — the contact-report opt-in, the actor lookup and the queue are all
     // the session's doing — so this is the pass that proves Play alone is enough
     // to make the callbacks fire, through the real PlayController.
-    {
+    if (section("script-collision")) {
         // The template Ground is a plain mesh; give it a static collider for the
         // duration, exactly as the soft-body pass above does.
         PhysicsConfig floorConfig;
@@ -2122,7 +2367,7 @@ int EditorApp::runSelfTest() {
     // callback — plus the two things that make it a trigger rather than a
     // collider, that the body PASSED THROUGH and that the script hearing about
     // it is the one on the body that walked in, which is not itself a trigger.
-    {
+    if (section("script-trigger")) {
         auto gate = ObjectFactory::createPrimitive(Primitive::Box, document_.scene());
         gate->name = "Gate";
         // Off to one side, with nothing underneath: what the volume does NOT do
@@ -2213,7 +2458,7 @@ int EditorApp::runSelfTest() {
     // owns a body of its own — so the pass covers the case the API exists for,
     // a ground check cast from INSIDE the caller's own collider. Nothing here is
     // authored beyond a static floor and a falling box.
-    {
+    if (section("script-raycast")) {
         PhysicsConfig floorConfig;
         floorConfig.enabled = true;
         floorConfig.body = PhysicsConfig::Body::Static;
@@ -2308,7 +2553,7 @@ int EditorApp::runSelfTest() {
     // way the inspector authors it (physics on the GROUP), then played headlessly
     // with stepFixed for a determinstic drop. Added and removed inside this block
     // so the later passes still see the template scene.
-    {
+    if (section("compound-collider")) {
         // The template Ground is a plain mesh; give it a static box collider to
         // land on for the duration.
         PhysicsConfig floorConfig;
@@ -2392,250 +2637,144 @@ int EditorApp::runSelfTest() {
     // Viewport markers and the camera frustum. The marker count is also the
     // check that the embedded SVG parses — a failure there is silent by
     // design (the object stays selectable from the hierarchy).
-    step();
-    const auto lightMarkers = viewportMarkers_.size();
-    check(lightMarkers > 0, "template lights have marker icons");
+    if (section("camera-dock")) {
+        step();
+        const auto lightMarkers = viewportMarkers_.size();
+        check(lightMarkers > 0, "template lights have marker icons");
 
-    auto addedCamera = ObjectFactory::createCamera(document_.scene());
-    auto* cameraRaw = addedCamera.get();
-    addObject(addedCamera, document_.scene(), "Add Camera");
-    step();
-    check(viewportMarkers_.size() == lightMarkers + 1, "adding a camera adds a marker");
-    check(selection_.get() == cameraRaw, "the new camera is selected");
-    check(cameraHelper_ != nullptr, "selecting a camera shows the frustum helper");
-    check(!selectionBox_, "a camera gets no degenerate bounding box");
+        auto addedCamera = ObjectFactory::createCamera(document_.scene());
+        auto* cameraRaw = addedCamera.get();
+        addObject(addedCamera, document_.scene(), "Add Camera");
+        step();
+        check(viewportMarkers_.size() == lightMarkers + 1, "adding a camera adds a marker");
+        check(selection_.get() == cameraRaw, "the new camera is selected");
+        check(cameraHelper_ != nullptr, "selecting a camera shows the frustum helper");
+        check(!selectionBox_, "a camera gets no degenerate bounding box");
 
-    selectObject(nullptr);
-    step();
-    check(cameraHelper_ == nullptr, "deselecting drops the frustum helper");
-    check(viewportMarkers_.size() == lightMarkers + 1, "the marker outlives deselection");
-    // The dock is not a property of the selection. Adding a camera aimed it
-    // (adding selects), and letting go of the selection does not un-aim it.
-    check(dockCamera() == cameraRaw, "the dock holds its camera with nothing selected");
+        selectObject(nullptr);
+        step();
+        check(cameraHelper_ == nullptr, "deselecting drops the frustum helper");
+        check(viewportMarkers_.size() == lightMarkers + 1, "the marker outlives deselection");
+        // The dock is not a property of the selection. Adding a camera aimed it
+        // (adding selects), and letting go of the selection does not un-aim it.
+        check(dockCamera() == cameraRaw, "the dock holds its camera with nothing selected");
 
-    selectObject(cameraRaw);
-    step();
-
-    // --- the bottom panel is a size, not a switch --------------------------
-    // The height is a dragged preference, so everything laid out against the
-    // panel has to read it rather than a constant — the camera dock above all,
-    // since it shares the band and is drawn by the renderer, not by ImGui.
-    {
-        const float s = contentScale_;
-        // Saved and put back: this is a persisted preference the user has
-        // dragged, and a test run is not a reason to move it. Every height
-        // below is derived from the minimum rather than from theirs — someone
-        // who has already dragged the panel to the limit leaves no headroom to
-        // grow into, and that is a valid preference, not a failing editor.
-        const float userHeight = settings_.bottomPanelHeight;
-        float dockX = 0, dockY = 0, dockW = 0, dockH = 0;
-
-        settings_.bottomPanelHeight = EditorSettings::minBottomHeight;
+        selectObject(cameraRaw);
         step();
 
-        check(cameraDockRect(dockX, dockY, dockW, dockH) &&
-                      std::abs(dockH - bottomPanelPx()) < 0.5f,
-              "the camera dock is exactly as tall as the bottom panel");
-        check(std::abs(bottomBandPx() - bottomPanelPx()) < 0.5f,
-              "the side panels come down to the bottom panel with no seam between");
-
-        // Against the limit, not a round number: a test window on a 200% display
-        // has little room to spare, and the point here is that the panel takes
-        // the height it is given, not that any particular height fits.
-        const float taller = std::min(EditorSettings::minBottomHeight + 60.f, bottomHeightLimit());
-        settings_.bottomPanelHeight = taller;
-        step();
-        check(taller > EditorSettings::minBottomHeight &&
-                      std::abs(bottomPanelPx() - taller * s) < 0.5f,
-              "a taller panel is a taller panel");
-        check(cameraDockRect(dockX, dockY, dockW, dockH) &&
-                      std::abs(dockH - bottomPanelPx()) < 0.5f,
-              "the dock grows with it");
-
-        // A settings file (or a shrunken window) must not be able to push the
-        // viewport off the screen.
-        settings_.bottomPanelHeight = 100000.f;
-        step();
-        check(std::abs(bottomPanelPx() - bottomHeightLimit() * s) < 0.5f,
-              "an absurd height clamps to what the window can spare");
-        check(bottomPanelPx() < static_cast<float>(renderer_->size().height()) -
-                                        menuHeight_ - statusHeight_,
-              "the clamp leaves a viewport to look at");
-        check(settings_.bottomPanelHeight == 100000.f,
-              "clamping the layout does not rewrite the preference");
-
-        settings_.bottomPanelHeight = userHeight;
-        bottomPanelOpen_ = false;
-        step();
-        check(std::abs(bottomBandPx() - collapsedBottomPx()) < 0.5f,
-              "collapsed, the band is just the tab strip");
-        check(!cameraDockRect(dockX, dockY, dockW, dockH),
-              "and the camera dock collapses with it");
-
-        bottomPanelOpen_ = true;
-        step();
-    }
-
-    // --- the preview dock SHADES ------------------------------------------
-    // A selected camera renders its view through the renderer's secondary
-    // scissored pane. On Vulkan that path drew flat unlit fills with no clear
-    // — every mesh a silhouette in its base colour over whatever the frame
-    // already held. Flatness is measurable: point the camera at two faces of
-    // the template Box, one toward the sun and one away, and compare. A lit
-    // pane separates them (the away face has only the 0.35 ambient); a flat
-    // fill answers the same number twice.
-    {
-        cameraRaw->position.set(-5.f, 4.f, 0.f);
-        cameraRaw->lookAt(Vector3(0.f, 1.5f, 0.f));
-        // Wide enough that one frame holds all three probes: the box's two
-        // faces below the view axis and, above it, rays that clear the 20 m
-        // ground plane entirely (at the default 50° the ground fills the
-        // frustum from this close and no empty pixel exists to probe).
-        cameraRaw->fov = 70.f;
-        cameraRaw->updateProjectionMatrix();
-        step(8);
-
-        float dockX = 0, dockY = 0, dockW = 0, dockH = 0;
-        const bool dockVisible = cameraDockRect(dockX, dockY, dockW, dockH);
-        check(dockVisible, "the camera dock has a rect to probe");
-
-        bool bottomUp = true;
-#ifdef THREEPP_WITH_VULKAN
-        if (dynamic_cast<VulkanRenderer*>(renderer_.get())) bottomUp = false;
-#endif
-        // Mean luma of a 5x5 patch around where `world` lands in the DOCK —
-        // projected through the preview camera at the aspect the preview
-        // renders with (renderCameraPreview overrides it per frame and
-        // restores it, so it must be re-derived here).
-        const auto dockLuma = [&](const Vector3& world) -> double {
-            auto* cam = cameraRaw->as<PerspectiveCamera>();
-            if (!cam || dockW < 1.f || dockH < 1.f) return -1.0;
-            const float aspectBefore = cam->aspect;
-            cam->aspect = dockW / dockH;
-            cam->updateProjectionMatrix();
-            Vector3 ndc = world;
-            ndc.project(*cam);
-            cam->aspect = aspectBefore;
-            cam->updateProjectionMatrix();
-            if (std::abs(ndc.x) > 0.9f || std::abs(ndc.y) > 0.9f || ndc.z > 1.f) return -1.0;
-
-            const auto pixels = renderer_->readRGBPixels();
-            const auto size = renderer_->size();
-            const int w = size.width(), h = size.height();
-            if (pixels.size() < static_cast<std::size_t>(w) * h * 3) return -1.0;
-            const int cx = static_cast<int>(dockX + (ndc.x * 0.5f + 0.5f) * dockW);
-            const int cyTop = static_cast<int>(dockY + (0.5f - ndc.y * 0.5f) * dockH);
-            double sum = 0;
-            int n = 0;
-            for (int y = cyTop - 2; y <= cyTop + 2; ++y) {
-                for (int x = cx - 2; x <= cx + 2; ++x) {
-                    if (x < 0 || y < 0 || x >= w || y >= h) continue;
-                    const int row = bottomUp ? (h - 1 - y) : y;
-                    const std::size_t i = (static_cast<std::size_t>(row) * w + x) * 3;
-                    sum += 0.2126 * pixels[i] + 0.7152 * pixels[i + 1] + 0.0722 * pixels[i + 2];
-                    ++n;
-                }
-            }
-            return n > 0 ? sum / n : -1.0;
-        };
-
-        const double litFace  = dockLuma(Vector3(0.f, 1.f, 0.f));  // box top — faces the sun
-        const double darkFace = dockLuma(Vector3(-0.5f, 0.5f, 0.f));// -x face — ambient only
-        check(litFace > 0.0 && darkFace > 0.0, "both probe faces land inside the dock");
-        check(litFace > 0.0 && darkFace > 0.0 && litFace > darkFace * 1.3,
-              "the preview shades: the sunlit face outshines the unlit one");
-
-        // Empty preview pixels are the scene background, not a stale frame:
-        // an upward ray from a camera above the ground plane hits nothing
-        // and must read dark.
-        const double emptyPatch = dockLuma(Vector3(7.f, 4.4f, 0.f));
-        check(emptyPatch >= 0.0 && emptyPatch < 60.0,
-              "and its empty pixels read as background");
-
-        // With a texture environment, that same empty ray becomes SKY. The
-        // Vulkan pane samples the very equirect the deferred miss shows;
-        // a bright constant env turns the probe from ~30 (background clear)
-        // to near-white, so one threshold answers "is the sky there at all"
-        // on both backends without caring how each maps the texture.
+        // --- the bottom panel is a size, not a switch --------------------------
+        // The height is a dragged preference, so everything laid out against the
+        // panel has to read it rather than a constant — the camera dock above all,
+        // since it shares the band and is drawn by the renderer, not by ImGui.
         {
-            constexpr int W = 8, H = 4;// 2:1 equirect aspect
-            std::vector<float> data(static_cast<size_t>(W) * H * 4, 2.5f);
-            Image envImg{std::move(data), static_cast<unsigned>(W), static_cast<unsigned>(H), 0};
-            auto envTex = Texture::create(envImg);
-            envTex->format = Format::RGBA;
-            envTex->type = Type::Float;
-            envTex->colorSpace = ColorSpace::Linear;
-            envTex->mapping = Mapping::EquirectangularReflection;
-            envTex->needsUpdate();
-            document_.scene().background = envTex;
-            step(8);
+            const float s = contentScale_;
+            // Saved and put back: this is a persisted preference the user has
+            // dragged, and a test run is not a reason to move it. Every height
+            // below is derived from the minimum rather than from theirs — someone
+            // who has already dragged the panel to the limit leaves no headroom to
+            // grow into, and that is a valid preference, not a failing editor.
+            const float userHeight = settings_.bottomPanelHeight;
+            float dockX = 0, dockY = 0, dockW = 0, dockH = 0;
 
-            const double skyPatch = dockLuma(Vector3(7.f, 4.4f, 0.f));
-            check(skyPatch > 120.0, "a texture environment shows as the preview's sky");
+            settings_.bottomPanelHeight = EditorSettings::minBottomHeight;
+            step();
 
-            document_.scene().background = Color(0x1c1f24);// as the template had it
-            step(2);
+            check(cameraDockRect(dockX, dockY, dockW, dockH) &&
+                          std::abs(dockH - bottomPanelPx()) < 0.5f,
+                  "the camera dock is exactly as tall as the bottom panel");
+            check(std::abs(bottomBandPx() - bottomPanelPx()) < 0.5f,
+                  "the side panels come down to the bottom panel with no seam between");
+
+            // Against the limit, not a round number: a test window on a 200% display
+            // has little room to spare, and the point here is that the panel takes
+            // the height it is given, not that any particular height fits.
+            const float taller = std::min(EditorSettings::minBottomHeight + 60.f, bottomHeightLimit());
+            settings_.bottomPanelHeight = taller;
+            step();
+            check(taller > EditorSettings::minBottomHeight &&
+                          std::abs(bottomPanelPx() - taller * s) < 0.5f,
+                  "a taller panel is a taller panel");
+            check(cameraDockRect(dockX, dockY, dockW, dockH) &&
+                          std::abs(dockH - bottomPanelPx()) < 0.5f,
+                  "the dock grows with it");
+
+            // A settings file (or a shrunken window) must not be able to push the
+            // viewport off the screen.
+            settings_.bottomPanelHeight = 100000.f;
+            step();
+            check(std::abs(bottomPanelPx() - bottomHeightLimit() * s) < 0.5f,
+                  "an absurd height clamps to what the window can spare");
+            check(bottomPanelPx() < static_cast<float>(renderer_->size().height()) -
+                                            menuHeight_ - statusHeight_,
+                  "the clamp leaves a viewport to look at");
+            check(settings_.bottomPanelHeight == 100000.f,
+                  "clamping the layout does not rewrite the preference");
+
+            settings_.bottomPanelHeight = userHeight;
+            bottomPanelOpen_ = false;
+            step();
+            check(std::abs(bottomBandPx() - collapsedBottomPx()) < 0.5f,
+                  "collapsed, the band is just the tab strip");
+            check(!cameraDockRect(dockX, dockY, dockW, dockH),
+                  "and the camera dock collapses with it");
+
+            bottomPanelOpen_ = true;
+            step();
         }
 
-        // --- the dock is the REAL render, not an impression of one ---------
-        // On Vulkan the dock used to be an OverlayPass "lit pane": first
-        // directional light plus ambient, and by construction no shadows, no
-        // GI, no reflections. It is now a full secondary deferred view, and a
-        // cast shadow is the cheapest thing that only the real pipeline can
-        // produce. The template scene has what it takes already — a 1 m box
-        // that casts, a ground that receives, and a sun at (6,10,5), so the
-        // shadow falls toward -x-z and the sunward ground stays lit.
-        //
-        // Both backends are held to this: GL's dock has always been a real
-        // scissored render, so a shadow there is parity, not a new claim.
+        // --- the preview dock SHADES ------------------------------------------
+        // A selected camera renders its view through the renderer's secondary
+        // scissored pane. On Vulkan that path drew flat unlit fills with no clear
+        // — every mesh a silhouette in its base colour over whatever the frame
+        // already held. Flatness is measurable: point the camera at two faces of
+        // the template Box, one toward the sun and one away, and compare. A lit
+        // pane separates them (the away face has only the 0.35 ambient); a flat
+        // fill answers the same number twice.
         {
-            cameraRaw->position.set(-3.2f, 2.6f, -3.0f);
-            cameraRaw->lookAt(Vector3(0.f, 0.2f, 0.f));
-            cameraRaw->fov = 60.f;
+            cameraRaw->position.set(-5.f, 4.f, 0.f);
+            cameraRaw->lookAt(Vector3(0.f, 1.5f, 0.f));
+            // Wide enough that one frame holds all three probes: the box's two
+            // faces below the view axis and, above it, rays that clear the 20 m
+            // ground plane entirely (at the default 50° the ground fills the
+            // frustum from this close and no empty pixel exists to probe).
+            cameraRaw->fov = 70.f;
             cameraRaw->updateProjectionMatrix();
             step(8);
 
-            // Just off the box's -x-z corner, well inside the umbra, versus the
-            // sunward ground the box cannot reach. Both are ground pixels of
-            // one material, so the only thing that differs is the shadow.
-            //
-            // Both probes must survive ANY dock proportions: the dock rect is
-            // carved from whatever window and panel layout this machine has,
-            // and dockLuma rejects points outside NDC +-0.9. The shadowed
-            // probe projects to x = 0.01/aspect (dead centre); the sunlit one
-            // sits at x = 0.38/aspect, inside the margin down to an aspect of
-            // ~0.45. Its previous home at (-2.6, 1.9) was x = 1.20/aspect —
-            // outside the frame on any dock squarer than 4:3, which read as
-            // "no shadow" on machines whose dock band is narrower than the
-            // one this check was written against. Sunlit is still sunlit:
-            // the box's shadow sweeps -x-z from the sun at (6,10,5) and ends
-            // at z = 0.5, a couple of metres short of the probe, and the view
-            // ray to it clears the box entirely.
-            const double shadowed = dockLuma(Vector3(-0.85f, 0.01f, -0.75f));
-            const double sunlit = dockLuma(Vector3(0.4f, 0.01f, 2.4f));
-            check(shadowed >= 0.0 && sunlit >= 0.0, "both shadow probes land inside the dock");
-            check(shadowed >= 0.0 && sunlit >= 0.0 && sunlit > shadowed * 1.25,
-                  "the dock casts a shadow the lit pane could not");
-        }
+            float dockX = 0, dockY = 0, dockW = 0, dockH = 0;
+            const bool dockVisible = cameraDockRect(dockX, dockY, dockW, dockH);
+            check(dockVisible, "the camera dock has a rect to probe");
 
-        // --- one view, re-pointed --------------------------------------------
-        // Switching which camera the dock shows must be setViewCamera on the
-        // SAME view, not remove + add: a view is a whole deferred chain and
-        // ~46 MB, and churning one per selection click is what the pane class
-        // exists to prevent. The handle is the evidence.
-        {
-            const auto dockMeanLuma = [&]() -> double {
-                float dx = 0, dy = 0, dw = 0, dh = 0;
-                if (!cameraDockRect(dx, dy, dw, dh)) return -1.0;
+            bool bottomUp = true;
+#ifdef THREEPP_WITH_VULKAN
+            if (dynamic_cast<VulkanRenderer*>(renderer_.get())) bottomUp = false;
+#endif
+            // Mean luma of a 5x5 patch around where `world` lands in the DOCK —
+            // projected through the preview camera at the aspect the preview
+            // renders with (renderCameraPreview overrides it per frame and
+            // restores it, so it must be re-derived here).
+            const auto dockLuma = [&](const Vector3& world) -> double {
+                auto* cam = cameraRaw->as<PerspectiveCamera>();
+                if (!cam || dockW < 1.f || dockH < 1.f) return -1.0;
+                const float aspectBefore = cam->aspect;
+                cam->aspect = dockW / dockH;
+                cam->updateProjectionMatrix();
+                Vector3 ndc = world;
+                ndc.project(*cam);
+                cam->aspect = aspectBefore;
+                cam->updateProjectionMatrix();
+                if (std::abs(ndc.x) > 0.9f || std::abs(ndc.y) > 0.9f || ndc.z > 1.f) return -1.0;
+
                 const auto pixels = renderer_->readRGBPixels();
                 const auto size = renderer_->size();
                 const int w = size.width(), h = size.height();
                 if (pixels.size() < static_cast<std::size_t>(w) * h * 3) return -1.0;
+                const int cx = static_cast<int>(dockX + (ndc.x * 0.5f + 0.5f) * dockW);
+                const int cyTop = static_cast<int>(dockY + (0.5f - ndc.y * 0.5f) * dockH);
                 double sum = 0;
                 int n = 0;
-                // Inset so the dock's 1 px border never enters the average.
-                for (int y = static_cast<int>(dy) + 3; y < static_cast<int>(dy + dh) - 3; y += 2) {
-                    for (int x = static_cast<int>(dx) + 3; x < static_cast<int>(dx + dw) - 3; x += 2) {
+                for (int y = cyTop - 2; y <= cyTop + 2; ++y) {
+                    for (int x = cx - 2; x <= cx + 2; ++x) {
                         if (x < 0 || y < 0 || x >= w || y >= h) continue;
                         const int row = bottomUp ? (h - 1 - y) : y;
                         const std::size_t i = (static_cast<std::size_t>(row) * w + x) * 3;
@@ -2646,184 +2785,298 @@ int EditorApp::runSelfTest() {
                 return n > 0 ? sum / n : -1.0;
             };
 
-            const std::uint32_t handleBefore = dockPane_.handle();
-            const double lumaFirst = dockMeanLuma();
+            const double litFace  = dockLuma(Vector3(0.f, 1.f, 0.f));  // box top — faces the sun
+            const double darkFace = dockLuma(Vector3(-0.5f, 0.5f, 0.f));// -x face — ambient only
+            check(litFace > 0.0 && darkFace > 0.0, "both probe faces land inside the dock");
+            check(litFace > 0.0 && darkFace > 0.0 && litFace > darkFace * 1.3,
+                  "the preview shades: the sunlit face outshines the unlit one");
 
-            // A second camera pointed somewhere completely different — straight
-            // up at the empty background, which no framing of the lit scene can
-            // be confused with.
-            auto addedSecond = ObjectFactory::createCamera(document_.scene());
-            auto* secondRaw = addedSecond.get();
-            addObject(addedSecond, document_.scene(), "Add Second Camera");
-            secondRaw->position.set(0.f, 2.f, 0.f);
-            secondRaw->lookAt(Vector3(0.f, 12.f, 0.f));
-            secondRaw->updateMatrixWorld();
-            selectObject(secondRaw);
-            step(8);
+            // Empty preview pixels are the scene background, not a stale frame:
+            // an upward ray from a camera above the ground plane hits nothing
+            // and must read dark.
+            const double emptyPatch = dockLuma(Vector3(7.f, 4.4f, 0.f));
+            check(emptyPatch >= 0.0 && emptyPatch < 60.0,
+                  "and its empty pixels read as background");
 
-            const double lumaSecond = dockMeanLuma();
-            check(lumaFirst >= 0.0 && lumaSecond >= 0.0 && std::abs(lumaFirst - lumaSecond) > 4.0,
-                  "selecting another camera re-aims the dock at it");
-            if (dockPane_.supported()) {
-                check(dockPane_.handle() == handleBefore && handleBefore != 0,
-                      "and does it by re-pointing ONE view, not by churning a new one");
-            }
-
-            // Play and Stop replace the scene, and with it every camera object
-            // in it — behind the SAME uuid. A pane that cached the Camera* (or
-            // skipped the update when the uuid matched) would hand the renderer
-            // a pointer into freed memory, and it would survive the uuid check
-            // precisely because the uuid is what stayed the same.
-            // Every raw pointer into the scene dies here, so hold the uuids and
-            // re-resolve after — the same discipline the pane itself follows.
-            const std::string secondUuid = secondRaw->uuid;
-            const std::string firstUuid = cameraRaw->uuid;
-            startPlay();
-            step(6);
-            check(isPlaying(), "play starts with a camera docked");
-            stopPlay();
-            step(8);
-            check(!isPlaying(), "and stops again");
-            check(dockMeanLuma() >= 0.0, "the dock still renders across a scene replace");
-            if (dockPane_.supported()) {
-                check(dockPane_.handle() != 0, "the pane still holds its view after play/stop");
-            }
-
-            auto* secondLive = dynamic_cast<Camera*>(findByUuid(document_.scene(), secondUuid));
-            check(secondLive != nullptr, "the docked camera comes back from play by uuid");
-            // Nothing after this point is meaningful without it, and every
-            // later block navigates from these cameras.
-            if (!secondLive) return 1;
-
-            // --- the dock is NOT the selection ----------------------------
-            // The whole point of the dock is watching what a camera sees while
-            // you work on what it is pointed at — which means selecting that
-            // something. Deselecting, or selecting anything else, used to
-            // blank the dock; nothing about either is a statement about which
-            // camera you are framing with.
+            // With a texture environment, that same empty ray becomes SKY. The
+            // Vulkan pane samples the very equirect the deferred miss shows;
+            // a bright constant env turns the probe from ~30 (background clear)
+            // to near-white, so one threshold answers "is the sky there at all"
+            // on both backends without caring how each maps the texture.
             {
-                const double docked = dockMeanLuma();
+                constexpr int W = 8, H = 4;// 2:1 equirect aspect
+                std::vector<float> data(static_cast<size_t>(W) * H * 4, 2.5f);
+                Image envImg{std::move(data), static_cast<unsigned>(W), static_cast<unsigned>(H), 0};
+                auto envTex = Texture::create(envImg);
+                envTex->format = Format::RGBA;
+                envTex->type = Type::Float;
+                envTex->colorSpace = ColorSpace::Linear;
+                envTex->mapping = Mapping::EquirectangularReflection;
+                envTex->needsUpdate();
+                document_.scene().background = envTex;
+                step(8);
 
-                selectObject(nullptr);
-                step(4);
-                check(dockCamera() == secondLive, "deselecting leaves the dock camera alone");
-                check(docked >= 0.0 && std::abs(dockMeanLuma() - docked) < 2.0,
-                      "and the dock keeps rendering it");
+                const double skyPatch = dockLuma(Vector3(7.f, 4.4f, 0.f));
+                check(skyPatch > 120.0, "a texture environment shows as the preview's sky");
 
-                if (auto* box = document_.scene().getObjectByName("Box")) {
-                    selectObject(box);
+                document_.scene().background = Color(0x1c1f24);// as the template had it
+                step(2);
+            }
+
+            // --- the dock is the REAL render, not an impression of one ---------
+            // On Vulkan the dock used to be an OverlayPass "lit pane": first
+            // directional light plus ambient, and by construction no shadows, no
+            // GI, no reflections. It is now a full secondary deferred view, and a
+            // cast shadow is the cheapest thing that only the real pipeline can
+            // produce. The template scene has what it takes already — a 1 m box
+            // that casts, a ground that receives, and a sun at (6,10,5), so the
+            // shadow falls toward -x-z and the sunward ground stays lit.
+            //
+            // Both backends are held to this: GL's dock has always been a real
+            // scissored render, so a shadow there is parity, not a new claim.
+            {
+                cameraRaw->position.set(-3.2f, 2.6f, -3.0f);
+                cameraRaw->lookAt(Vector3(0.f, 0.2f, 0.f));
+                cameraRaw->fov = 60.f;
+                cameraRaw->updateProjectionMatrix();
+                step(8);
+
+                // Just off the box's -x-z corner, well inside the umbra, versus the
+                // sunward ground the box cannot reach. Both are ground pixels of
+                // one material, so the only thing that differs is the shadow.
+                //
+                // Both probes must survive ANY dock proportions: the dock rect is
+                // carved from whatever window and panel layout this machine has,
+                // and dockLuma rejects points outside NDC +-0.9. The shadowed
+                // probe projects to x = 0.01/aspect (dead centre); the sunlit one
+                // sits at x = 0.38/aspect, inside the margin down to an aspect of
+                // ~0.45. Its previous home at (-2.6, 1.9) was x = 1.20/aspect —
+                // outside the frame on any dock squarer than 4:3, which read as
+                // "no shadow" on machines whose dock band is narrower than the
+                // one this check was written against. Sunlit is still sunlit:
+                // the box's shadow sweeps -x-z from the sun at (6,10,5) and ends
+                // at z = 0.5, a couple of metres short of the probe, and the view
+                // ray to it clears the box entirely.
+                const double shadowed = dockLuma(Vector3(-0.85f, 0.01f, -0.75f));
+                const double sunlit = dockLuma(Vector3(0.4f, 0.01f, 2.4f));
+                check(shadowed >= 0.0 && sunlit >= 0.0, "both shadow probes land inside the dock");
+                check(shadowed >= 0.0 && sunlit >= 0.0 && sunlit > shadowed * 1.25,
+                      "the dock casts a shadow the lit pane could not");
+            }
+
+            // --- one view, re-pointed --------------------------------------------
+            // Switching which camera the dock shows must be setViewCamera on the
+            // SAME view, not remove + add: a view is a whole deferred chain and
+            // ~46 MB, and churning one per selection click is what the pane class
+            // exists to prevent. The handle is the evidence.
+            {
+                const auto dockMeanLuma = [&]() -> double {
+                    float dx = 0, dy = 0, dw = 0, dh = 0;
+                    if (!cameraDockRect(dx, dy, dw, dh)) return -1.0;
+                    const auto pixels = renderer_->readRGBPixels();
+                    const auto size = renderer_->size();
+                    const int w = size.width(), h = size.height();
+                    if (pixels.size() < static_cast<std::size_t>(w) * h * 3) return -1.0;
+                    double sum = 0;
+                    int n = 0;
+                    // Inset so the dock's 1 px border never enters the average.
+                    for (int y = static_cast<int>(dy) + 3; y < static_cast<int>(dy + dh) - 3; y += 2) {
+                        for (int x = static_cast<int>(dx) + 3; x < static_cast<int>(dx + dw) - 3; x += 2) {
+                            if (x < 0 || y < 0 || x >= w || y >= h) continue;
+                            const int row = bottomUp ? (h - 1 - y) : y;
+                            const std::size_t i = (static_cast<std::size_t>(row) * w + x) * 3;
+                            sum += 0.2126 * pixels[i] + 0.7152 * pixels[i + 1] + 0.0722 * pixels[i + 2];
+                            ++n;
+                        }
+                    }
+                    return n > 0 ? sum / n : -1.0;
+                };
+
+                const std::uint32_t handleBefore = dockPane_.handle();
+                const double lumaFirst = dockMeanLuma();
+
+                // A second camera pointed somewhere completely different — straight
+                // up at the empty background, which no framing of the lit scene can
+                // be confused with.
+                auto addedSecond = ObjectFactory::createCamera(document_.scene());
+                auto* secondRaw = addedSecond.get();
+                addObject(addedSecond, document_.scene(), "Add Second Camera");
+                secondRaw->position.set(0.f, 2.f, 0.f);
+                secondRaw->lookAt(Vector3(0.f, 12.f, 0.f));
+                secondRaw->updateMatrixWorld();
+                selectObject(secondRaw);
+                step(8);
+
+                const double lumaSecond = dockMeanLuma();
+                check(lumaFirst >= 0.0 && lumaSecond >= 0.0 && std::abs(lumaFirst - lumaSecond) > 4.0,
+                      "selecting another camera re-aims the dock at it");
+                if (dockPane_.supported()) {
+                    check(dockPane_.handle() == handleBefore && handleBefore != 0,
+                          "and does it by re-pointing ONE view, not by churning a new one");
+                }
+
+                // Play and Stop replace the scene, and with it every camera object
+                // in it — behind the SAME uuid. A pane that cached the Camera* (or
+                // skipped the update when the uuid matched) would hand the renderer
+                // a pointer into freed memory, and it would survive the uuid check
+                // precisely because the uuid is what stayed the same.
+                // Every raw pointer into the scene dies here, so hold the uuids and
+                // re-resolve after — the same discipline the pane itself follows.
+                const std::string secondUuid = secondRaw->uuid;
+                const std::string firstUuid = cameraRaw->uuid;
+                startPlay();
+                step(6);
+                check(isPlaying(), "play starts with a camera docked");
+                stopPlay();
+                step(8);
+                check(!isPlaying(), "and stops again");
+                check(dockMeanLuma() >= 0.0, "the dock still renders across a scene replace");
+                if (dockPane_.supported()) {
+                    check(dockPane_.handle() != 0, "the pane still holds its view after play/stop");
+                }
+
+                auto* secondLive = dynamic_cast<Camera*>(findByUuid(document_.scene(), secondUuid));
+                check(secondLive != nullptr, "the docked camera comes back from play by uuid");
+                // Nothing after this point is meaningful without it, and every
+                // later block navigates from these cameras.
+                if (!secondLive) {
+                    summary();
+                    return 1;
+                }
+
+                // --- the dock is NOT the selection ----------------------------
+                // The whole point of the dock is watching what a camera sees while
+                // you work on what it is pointed at — which means selecting that
+                // something. Deselecting, or selecting anything else, used to
+                // blank the dock; nothing about either is a statement about which
+                // camera you are framing with.
+                {
+                    const double docked = dockMeanLuma();
+
+                    selectObject(nullptr);
                     step(4);
-                    check(dockCamera() == secondLive,
-                          "selecting the object being framed does not take the camera away");
+                    check(dockCamera() == secondLive, "deselecting leaves the dock camera alone");
                     check(docked >= 0.0 && std::abs(dockMeanLuma() - docked) < 2.0,
-                          "and the dock still shows what that camera sees");
+                          "and the dock keeps rendering it");
+
+                    if (auto* box = document_.scene().getObjectByName("Box")) {
+                        selectObject(box);
+                        step(4);
+                        check(dockCamera() == secondLive,
+                              "selecting the object being framed does not take the camera away");
+                        check(docked >= 0.0 && std::abs(dockMeanLuma() - docked) < 2.0,
+                              "and the dock still shows what that camera sees");
+                    }
+                    selectObject(nullptr);
+                    step(2);
                 }
-                selectObject(nullptr);
-                step(2);
-            }
 
-            // --- the picker aims it, without touching the selection --------
-            {
-                auto* firstLive = dynamic_cast<PerspectiveCamera*>(
-                        findByUuid(document_.scene(), firstUuid));
-                check(firstLive != nullptr, "the first camera survives to be picked");
-                if (firstLive) {
-                    setDockCamera(firstLive);
-                    step(6);
-                    check(dockCamera() == firstLive, "the picker re-aims the dock");
-                    check(selection_.get() == nullptr,
-                          "and does not select anything to do it");
+                // --- the picker aims it, without touching the selection --------
+                {
+                    auto* firstLive = dynamic_cast<PerspectiveCamera*>(
+                            findByUuid(document_.scene(), firstUuid));
+                    check(firstLive != nullptr, "the first camera survives to be picked");
+                    if (firstLive) {
+                        setDockCamera(firstLive);
+                        step(6);
+                        check(dockCamera() == firstLive, "the picker re-aims the dock");
+                        check(selection_.get() == nullptr,
+                              "and does not select anything to do it");
 
-                    // "None" means none: the fallback that covers a deleted
-                    // camera must not undo a deliberate choice.
+                        // "None" means none: the fallback that covers a deleted
+                        // camera must not undo a deliberate choice.
+                        setDockCamera(nullptr);
+                        step(4);
+                        check(dockCamera() == nullptr, "None empties the dock and stays empty");
+                        if (dockPane_.supported()) {
+                            check(dockPane_.handle() == 0, "and hands the secondary view back");
+                        }
+
+                        setDockCamera(secondLive);
+                        step(6);
+                        check(dockCamera() == secondLive, "and the dock takes a camera again");
+                        if (dockPane_.supported()) {
+                            check(dockPane_.handle() != 0, "with a view to render it into");
+                        }
+                    }
+                }
+
+                // The crash a user found, at the churn rate the picker can now
+                // produce: None and back is release + create of a real allocation,
+                // every time.
+                for (int i = 0; i < 8; ++i) {
                     setDockCamera(nullptr);
-                    step(4);
-                    check(dockCamera() == nullptr, "None empties the dock and stays empty");
-                    if (dockPane_.supported()) {
-                        check(dockPane_.handle() == 0, "and hands the secondary view back");
-                    }
-
+                    step(2);
                     setDockCamera(secondLive);
-                    step(6);
-                    check(dockCamera() == secondLive, "and the dock takes a camera again");
-                    if (dockPane_.supported()) {
-                        check(dockPane_.handle() != 0, "with a view to render it into");
-                    }
+                    step(2);
                 }
-            }
+                check(dockMeanLuma() >= 0.0, "the dock survives repeated release/retake");
 
-            // The crash a user found, at the churn rate the picker can now
-            // produce: None and back is release + create of a real allocation,
-            // every time.
-            for (int i = 0; i < 8; ++i) {
-                setDockCamera(nullptr);
-                step(2);
-                setDockCamera(secondLive);
-                step(2);
-            }
-            check(dockMeanLuma() >= 0.0, "the dock survives repeated release/retake");
+                // A collapsed dock has no business holding a deferred chain.
+                if (dockPane_.supported()) {
+                    bottomPanelOpen_ = false;
+                    step(3);
+                    check(dockPane_.handle() == 0, "collapsing the dock frees its view");
+                    bottomPanelOpen_ = true;
+                    step(6);
+                    check(dockPane_.handle() != 0, "and reopening takes one back");
+                }
 
-            // A collapsed dock has no business holding a deferred chain.
-            if (dockPane_.supported()) {
-                bottomPanelOpen_ = false;
-                step(3);
-                check(dockPane_.handle() == 0, "collapsing the dock frees its view");
-                bottomPanelOpen_ = true;
-                step(6);
-                check(dockPane_.handle() != 0, "and reopening takes one back");
-            }
+                // An orthographic scene camera is a legal dock subject: secondary
+                // views claim ortho support, and the projection reaches the shaders
+                // through camAux rather than the eye-point idiom a perspective view
+                // can assume.
+                {
+                    auto ortho = OrthographicCamera::create(-4.f, 4.f, 3.f, -3.f, 0.1f, 100.f);
+                    ortho->name = "Ortho Camera";
+                    ortho->position.set(-4.f, 3.5f, 4.f);
+                    ortho->lookAt(Vector3(0.f, 0.5f, 0.f));
+                    ortho->updateMatrixWorld();
+                    auto* orthoRaw = ortho.get();
+                    const std::string orthoUuid = orthoRaw->uuid;
+                    addObject(ortho, document_.scene(), "Add Ortho Camera");
+                    selectObject(orthoRaw);
+                    step(10);
+                    check(dockMeanLuma() > 8.0, "an orthographic camera renders in the dock");
+                    selectObject(orthoRaw);
+                    deleteSelected();
+                    step(6);
+                    // A camera that leaves the scene must not take the dock down
+                    // with it: the dock falls back to another camera rather than
+                    // going dark on a delete (or on the undo of an Add).
+                    check(dockCamera() != nullptr && dockCamera()->uuid != orthoUuid,
+                          "deleting the docked camera falls the dock back to another");
+                    check(dockMeanLuma() >= 0.0, "and it keeps rendering");
+                }
 
-            // An orthographic scene camera is a legal dock subject: secondary
-            // views claim ortho support, and the projection reaches the shaders
-            // through camAux rather than the eye-point idiom a perspective view
-            // can assume.
-            {
-                auto ortho = OrthographicCamera::create(-4.f, 4.f, 3.f, -3.f, 0.1f, 100.f);
-                ortho->name = "Ortho Camera";
-                ortho->position.set(-4.f, 3.5f, 4.f);
-                ortho->lookAt(Vector3(0.f, 0.5f, 0.f));
-                ortho->updateMatrixWorld();
-                auto* orthoRaw = ortho.get();
-                const std::string orthoUuid = orthoRaw->uuid;
-                addObject(ortho, document_.scene(), "Add Ortho Camera");
-                selectObject(orthoRaw);
-                step(10);
-                check(dockMeanLuma() > 8.0, "an orthographic camera renders in the dock");
-                selectObject(orthoRaw);
+                selectObject(secondLive);
                 deleteSelected();
-                step(6);
-                // A camera that leaves the scene must not take the dock down
-                // with it: the dock falls back to another camera rather than
-                // going dark on a delete (or on the undo of an Add).
-                check(dockCamera() != nullptr && dockCamera()->uuid != orthoUuid,
-                      "deleting the docked camera falls the dock back to another");
-                check(dockMeanLuma() >= 0.0, "and it keeps rendering");
+                step(2);
+                // cameraRaw died with the scene replace above; the rest of this
+                // suite still expects to be holding the first camera.
+                cameraRaw = dynamic_cast<PerspectiveCamera*>(findByUuid(document_.scene(), firstUuid));
+                check(cameraRaw != nullptr, "and so does the camera the suite started with");
+                if (!cameraRaw) {
+                    summary();
+                    return 1;
+                }
+                selectObject(cameraRaw);
+                step(2);
             }
-
-            selectObject(secondLive);
-            deleteSelected();
-            step(2);
-            // cameraRaw died with the scene replace above; the rest of this
-            // suite still expects to be holding the first camera.
-            cameraRaw = dynamic_cast<PerspectiveCamera*>(findByUuid(document_.scene(), firstUuid));
-            check(cameraRaw != nullptr, "and so does the camera the suite started with");
-            if (!cameraRaw) return 1;
-            selectObject(cameraRaw);
-            step(2);
         }
-    }
 
-    deleteSelected();
-    step();
-    check(viewportMarkers_.size() == lightMarkers, "deleting the camera drops its marker");
-    check(cameraHelper_ == nullptr, "deleting the camera drops the frustum helper");
-    commands_.undo();// leave the scene as we found it
-    step();
+        deleteSelected();
+        step();
+        check(viewportMarkers_.size() == lightMarkers, "deleting the camera drops its marker");
+        check(cameraHelper_ == nullptr, "deleting the camera drops the frustum helper");
+        commands_.undo();// leave the scene as we found it
+        step();
+    }
 
     // Every light kind carries its own icon, and each is a separate SVG. One
     // marker per added light is what proves all of them parse — a broken path
     // set would silently produce no marker for just that kind.
-    {
+    if (section("light-icons")) {
         const LightKind kinds[] = {LightKind::Directional, LightKind::Point, LightKind::Spot,
                                    LightKind::Ambient, LightKind::Hemisphere};
         const auto baseline = viewportMarkers_.size();
@@ -2844,7 +3097,7 @@ int EditorApp::runSelfTest() {
     // let the inspector discover its fields, play, stop. Plus a script that
     // raises every frame, because the one thing scripting must never do is take
     // the editor down with it.
-    {
+    if (section("python-scripting")) {
         const auto dir = std::filesystem::current_path();
         const auto spinnerPath = dir / "spinner.py";
         const auto throwerPath = dir / "thrower.py";
@@ -3161,7 +3414,7 @@ int EditorApp::runSelfTest() {
     // scripts that talk to each other. Each open script now keeps its own tab,
     // its own buffer and its own syntax error, and the only thing the selection
     // does is raise a tab that already exists.
-    {
+    if (section("two-scripts")) {
         auto* first = document_.scene().getObjectByName("Box");
         auto* second = document_.scene().getObjectByName("Ground");
         if (first && second) {
@@ -3272,7 +3525,7 @@ int EditorApp::runSelfTest() {
     // Outside the Python guard on purpose: none of this needs an interpreter.
     // The compile check is the only part that does, and it is not what a file
     // watcher is for.
-    {
+    if (section("external-edit")) {
         const auto pump = [&](float seconds) {
             const auto deadline = std::chrono::steady_clock::now() +
                                   std::chrono::milliseconds(static_cast<int>(seconds * 1000));
@@ -3438,7 +3691,7 @@ int EditorApp::runSelfTest() {
     // Splines. A spline is a Group whose children are its control points, so
     // everything here runs against ordinary scene nodes and the commands that
     // already move them — which is the whole claim the design rests on.
-    {
+    if (section("splines")) {
         const auto splineNow = [&](const std::string& uuid) {
             return findByUuid(document_.scene(), uuid);
         };
@@ -3945,7 +4198,7 @@ int EditorApp::runSelfTest() {
     // Conveyors. Same authoring model as splines — a Group whose children are
     // its waypoints — plus generated content (belt, frame, rollers, cleats)
     // and, under Play, kinematic belt physics that CONVEYS bodies.
-    {
+    if (section("conveyors")) {
         const auto conveyorNow = [&](const std::string& uuid) {
             return findByUuid(document_.scene(), uuid);
         };
@@ -4429,7 +4682,7 @@ int EditorApp::runSelfTest() {
     // one userData entry; the ParticleField itself is never a document node,
     // which is half of what is asserted here (the other half is that the
     // preview follows the config, and only on the backend that can draw it).
-    {
+    if (section("particle-fields")) {
         const auto particlesNow = [&](const std::string& uuid) {
             return findByUuid(document_.scene(), uuid);
         };
@@ -4630,7 +4883,7 @@ int EditorApp::runSelfTest() {
     // Flocks. Authoring is a userData entry and the birds are renderer- and
     // PhysX-free, so BOTH halves — the edit-mode round trip and the play-mode
     // birds — run on every build.
-    {
+    if (section("flocks")) {
         auto created = ObjectFactory::createFlock(document_.scene());
         const auto flockUuid = created->uuid;
         addObject(created, document_.scene(), "Add Flock");
@@ -4725,7 +4978,7 @@ int EditorApp::runSelfTest() {
     // Granular chutes, EDIT MODE. Authoring is PhysX-free — the config is just
     // strings — so this runs on every build; whether grains actually pour is a
     // play-time question the physics blocks answer.
-    {
+    if (section("granular")) {
         auto created = ObjectFactory::createGranular(document_.scene());
         const auto granularUuid = created->uuid;
         addObject(created, document_.scene(), "Add Granular Particles");
@@ -4846,7 +5099,8 @@ int EditorApp::runSelfTest() {
 
     // With a model path on the command line, exercise the async import path
     // end to end: queue -> worker -> finalize -> selected group in the scene.
-    if (!options_.openOnStart.empty() && !formats::isScene(options_.openOnStart)) {
+    if (!options_.openOnStart.empty() && !formats::isScene(options_.openOnStart) &&
+        section("import")) {
         const auto childrenBefore = document_.scene().children.size();
         importModel(options_.openOnStart);
         int budget = 3000;// frames; the worker is genuinely asynchronous
@@ -4954,7 +5208,7 @@ int EditorApp::runSelfTest() {
     // Nothing in the editor decides this: DocumentFormat::Auto reads the name it
     // is given, so Save As with an archive name has to write an archive and Open
     // has to take it back without being told which of the two it is.
-    {
+    if (section("tpz-archive")) {
         newScene();
         step(2);
 
@@ -4987,7 +5241,7 @@ int EditorApp::runSelfTest() {
     // dedupes by uuid, so without that step two instances of the same file are
     // one set of materials as far as the NEXT save is concerned — and the trap
     // only springs on reload, which is why the third block below exists.
-    {
+    if (section("prefabs")) {
         newScene();
         step(2);
 
@@ -5105,7 +5359,7 @@ int EditorApp::runSelfTest() {
     // What the Renderer Settings panel writes to is the renderer itself, so this
     // drives the renderer directly and then goes through Save / New / Open — the
     // three app paths that have to carry, clear and restore it.
-    {
+    if (section("renderer-look")) {
         newScene();
         step(2);
 
@@ -5165,7 +5419,7 @@ int EditorApp::runSelfTest() {
     // URDF: import, drive a joint, and prove the pose survives a full document
     // round trip. Play/Stop is that round trip — it serialises the scene and
     // rebuilds it — so this covers re-articulation as the user meets it.
-    if (!options_.urdf.empty()) {
+    if (!options_.urdf.empty() && section("urdf")) {
 
         importModel(options_.urdf);
         int budget = 6000;
@@ -5502,7 +5756,7 @@ int EditorApp::runSelfTest() {
     // SIMULATE at the size it renders. A PhysX link has no scale of its own, so
     // the factor is folded into the URDF description at build time; before that
     // a scaled robot was refused outright and just sat there.
-    {
+    if (section("urdf-scale")) {
         newScene();
         step(2);
 
@@ -5591,7 +5845,7 @@ int EditorApp::runSelfTest() {
     // A file dropped from the OS carries no ImGui payload, so the slot has to
     // be worked out: from the row the cursor is over, else from the file name.
     // Until this existed every drop went to `map`, as sRGB, whatever it was.
-    {
+    if (section("texture-drop")) {
         newScene();
         step(2);
 
@@ -5692,7 +5946,7 @@ int EditorApp::runSelfTest() {
     // The two documents this leaves behind are as much the point as the
     // assertions: `--screenshot` over them is how a person LOOKS at what a
     // repeat of 4 did, without a bespoke scene having to be authored for it.
-    {
+    if (section("texture-settings")) {
         newScene();
         step(2);
 
@@ -5807,7 +6061,7 @@ int EditorApp::runSelfTest() {
     // moire. It is only worth exposing if it survives being written down, and
     // Play is the harshest test of that: the snapshot goes through the same
     // exporter/loader pair a saved scene does.
-    {
+    if (section("shadow-side")) {
         newScene();
         step(2);
 
@@ -5846,7 +6100,7 @@ int EditorApp::runSelfTest() {
     // exactly that (the selection outline enters or leaves the overlay), which
     // is why the edit appeared to need a click. Nothing but pixels can answer
     // this, so the check reads the frame rather than the material.
-    {
+    if (section("material-edit")) {
         newScene();
         selectObject(nullptr);// no outline: nothing else can force a rebuild
         step(4);              // and let the temporal history settle first
@@ -5885,7 +6139,7 @@ int EditorApp::runSelfTest() {
     // machine behind them holds — that the projection swaps without moving what
     // is framed, that picking still works through the ortho unprojection, and
     // that the label follows the camera rather than the last button pressed.
-    {
+    if (section("ortho-views")) {
         newScene();
         step(2);
 
@@ -5961,7 +6215,7 @@ int EditorApp::runSelfTest() {
     // the camera swings over a third of a second and lands exactly on the
     // axis, with the label following only at the end. Fixed steps, because
     // the flight is a function of time and the assertions of frame counts.
-    {
+    if (section("view-gizmo")) {
         setViewPreset(ViewPreset::Front);
         stepFixed(2);
 
@@ -5999,7 +6253,7 @@ int EditorApp::runSelfTest() {
     // regenerates. What has to hold is that generation is deterministic, that a
     // parameter edit carries the SCULPT layer across, and that the whole thing
     // survives the file.
-    {
+    if (section("terrain")) {
         const auto terrainNow = [&](const std::string& uuid) {
             return findByUuid(document_.scene(), uuid);
         };
@@ -6376,7 +6630,7 @@ int EditorApp::runSelfTest() {
     // userData (TextConfig): created by the factory, edited through the same
     // property command the inspector's Text section issues, and rebuilt on
     // undo exactly as on execute.
-    {
+    if (section("text")) {
         auto text = ObjectFactory::createText(document_.scene());
         check(TextConfig::isText(*text), "the factory's text mesh carries the text entry");
         addObject(text, document_.scene(), "Add Text");
@@ -6456,7 +6710,7 @@ int EditorApp::runSelfTest() {
     // an edit regrows them, undo regrows them back, a deleted half returns —
     // and a document that already carries them is ADOPTED rather than regrown,
     // which is what keeps opening a forest from costing seconds.
-    {
+    if (section("trees")) {
         const auto treeNow = [&](const std::string& uuid) {
             return findByUuid(document_.scene(), uuid);
         };
@@ -6622,7 +6876,7 @@ int EditorApp::runSelfTest() {
     // the inspector issues, a document round trip, and then Play — once with a
     // file that is NOT there (which must not stop the session) and once with a
     // real one (which must actually be playing).
-    {
+    if (section("sound")) {
         newScene();
         step(2);
 
@@ -6810,7 +7064,7 @@ int EditorApp::runSelfTest() {
     // MESH, undoes to nothing at all (an unflagged mesh leaves no entry),
     // round-trips through the document like every sibling, and at Play turns
     // the same audio session's positional sound into a ray-traced one.
-    {
+    if (section("acoustics")) {
         newScene();
         step(2);
 
@@ -6930,7 +7184,7 @@ int EditorApp::runSelfTest() {
     // marker and the axis helper it earns, an edit through the same property
     // command the inspector issues, a document round trip, and Play — where
     // the authored hinge must actually constrain the two bodies it names.
-    {
+    if (section("joints")) {
         newScene();
         step(2);
 
@@ -7097,7 +7351,7 @@ int EditorApp::runSelfTest() {
     // edit through the same property command the inspector issues, a document
     // round trip, and Play — where the teleop entry point must actually drive
     // it several metres.
-    {
+    if (section("vehicle")) {
         newScene();
         step(2);
 
@@ -7265,7 +7519,7 @@ int EditorApp::runSelfTest() {
     // so the two crops see the same scene; a tolerance of a quarter absorbs the
     // parallel-vs-converging difference in what a pixel covers while still
     // being a fraction of the gap a flat unlit fill opens up.
-    {
+    if (section("ortho-shading")) {
         newScene();
         selectObject(nullptr);
         camera_.position.set(-1.f, 14.f, 22.f);
@@ -7312,7 +7566,7 @@ int EditorApp::runSelfTest() {
     // float the template's Box, work out where the sun must put its shadow on
     // the ground, project THAT world point through whichever camera is live,
     // and read the pixel. Lit ground beside it is the control.
-    {
+    if (section("ortho-shadows")) {
         newScene();
         selectObject(nullptr);
 
@@ -7430,7 +7684,7 @@ int EditorApp::runSelfTest() {
     // and a body whose collider is somewhere else look identical, so the checks
     // are about the buffer being there, being emptied, and surviving the scene
     // replace that Stop performs under it.
-    {
+    if (section("collider-overlay")) {
         newScene();
         step(2);
 
@@ -7560,7 +7814,7 @@ int EditorApp::runSelfTest() {
     // then assertions about what came BACK. A sensor that authors cleanly and
     // measures nothing is the failure mode here, and nothing short of reading
     // the samples catches it.
-    {
+    if (section("sensors")) {
         newScene();
         step(2);
 
@@ -7939,7 +8193,7 @@ int EditorApp::runSelfTest() {
     //
     // Outside the PhysX block above on purpose: a picture needs a renderer and
     // a scene, so this runs in every build.
-    {
+    if (section("camera-sensor")) {
         newScene();
         step(2);
 
@@ -8110,7 +8364,7 @@ int EditorApp::runSelfTest() {
     // the config crosses whole, the camera is stamped from its numbers, the
     // child's identity transform preserves the aim the host's transform
     // encoded, and ONE undo restores the entire legacy shape.
-    {
+    if (section("pinhole-migration")) {
         newScene();
         step(2);
 
@@ -8172,7 +8426,7 @@ int EditorApp::runSelfTest() {
     // serialises and Stop reloads, which is the same path a save and open take,
     // so this answers the question for both. Multi-line values are the case
     // that matters — an inline script is newlines and quotes, not a scalar.
-    {
+    if (section("scene-userdata")) {
         newScene();
         step(2);
 
@@ -8241,7 +8495,7 @@ int EditorApp::runSelfTest() {
     // The whole point, driven through the real button path: author a script on
     // the scene, regenerate, and check that what the script built is in the
     // document as ordinary content.
-    {
+    if (section("generator")) {
         newScene();
         step(2);
 
@@ -8427,7 +8681,7 @@ int EditorApp::runSelfTest() {
     // pinning are that a pick can tell WHICH of the N it landed on, and that the
     // selection outline then boxes that one instead of the whole cloud. No
     // PhysX: this block sits outside the gate above so it runs in every build.
-    {
+    if (section("instancing")) {
         newScene();
         step(2);
 
@@ -8539,7 +8793,7 @@ int EditorApp::runSelfTest() {
     // the controller headlessly; what only this pass can see is the app half —
     // the open path, the untitled document, and a play session that actually
     // runs the sensors, because a vision sensor needs a renderer to scan with.
-    {
+    if (section("open-example")) {
         newScene();
         step(2);
         check(!followSelection(), "a new document follows nothing");
@@ -8662,7 +8916,7 @@ int EditorApp::runSelfTest() {
     // stepFixed throughout. Nothing here accumulates simulated time, but Play
     // and Stop do run a session, and the doctrine is cheaper to keep than to
     // decide about per call site.
-    {
+    if (section("splats")) {
         newScene();
         selectObject(nullptr);
 
@@ -8798,7 +9052,7 @@ int EditorApp::runSelfTest() {
     // depth AOV the fusion reads is a Vulkan G-buffer attachment, so a GL
     // session must author the config and bake NOTHING.
 #if defined(THREEPP_EDITOR_WITH_PHYSX) && defined(THREEPP_WITH_VULKAN)
-    {
+    if (section("splat-surface")) {
         newScene();
         selectObject(nullptr);
 
@@ -9003,7 +9257,7 @@ int EditorApp::runSelfTest() {
     // that the SECOND cloud is what draws, and that repeating the cycle does
     // not degrade — a residency cache that never evicts fails that last one
     // by running out of slots, silently or otherwise.
-    {
+    if (section("splat-churn")) {
         newScene();
         selectObject(nullptr);
 
@@ -9057,7 +9311,8 @@ int EditorApp::runSelfTest() {
     // because it is 90 MB at its smallest and nothing in the repo ships it; the
     // generative coverage lives in SogLoader_test, and what this adds is the
     // EDITOR path — the drop handler, the format dispatch and the import mark.
-    if (const char* scan = std::getenv("THREEPP_SOG_SCAN"); scan && *scan) {
+    if (const char* scan = std::getenv("THREEPP_SOG_SCAN"); scan && *scan &&
+        section("sog-scan")) {
 
         // getenv hands back bytes in the ANSI code page on Windows, NOT UTF-8,
         // so the narrow path constructor is the correct one here — decoding
@@ -9174,6 +9429,17 @@ int EditorApp::runSelfTest() {
                 }
             }
         }
+    }
+
+    summary();
+
+    // A filter that matched only sections this build compiled out, or that this
+    // invocation did not arm (import, urdf, sog-scan), ran nothing at all. That
+    // is not a pass — it is the silent no-op the filter must never turn into.
+    if (!filter.empty() && gatedSectionsRun == 0 && !sectionMatches(filter, "boot")) {
+        std::cout << "[selftest] the filter ran no section this build/invocation provides"
+                  << std::endl;
+        return 2;
     }
 
     std::cout << "[selftest] " << (failed == 0 ? "ALL PASS" : "FAILED") << std::endl;

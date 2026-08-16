@@ -124,6 +124,11 @@ namespace threepp::editor {
             // Drive select/delete/undo through the UI code paths and exit
             // non-zero on failure. Diagnostic, not part of the test suite.
             bool selfTest = false;
+            // Run only the selftest sections matching these comma-separated,
+            // case-insensitive terms (--selftest=terrain). An exact section
+            // name selects that section; anything else matches as a substring.
+            // Empty = the full suite.
+            std::string selfTestFilter;
             // Press Play as soon as the scene is open. With --frames this
             // makes a play session scriptable end to end: open, play, exit.
             bool play = false;
