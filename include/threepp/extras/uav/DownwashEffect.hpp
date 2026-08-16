@@ -151,14 +151,16 @@ namespace threepp::uav {
             // anchor; a dying parcel deposits its quantum where it ends up.
             // Total dust (ground + airborne) is exactly conserved.
             //
-            // Sized so ONE landing visibly strips its pad: the impingement
-            // disc (~6 m² at the widened birth annulus) holds roughly one
-            // landing's worth of turnover, so the cloud THINS in the final
-            // metres as the soil runs out and a second landing on the same
-            // spot raises only what the wind deposited back — depletion you
-            // can see, not just read off a counter. Raise this for dustier
-            // ground, at the cost of the story taking more cycles to tell.
-            float groundDustPerM2 = 40'000.f;
+            // Sized so the impingement disc (~6 m² at the widened birth
+            // annulus) holds roughly ONE big event's worth of turnover. The
+            // depth IS the narrative: at 40k/m² the site survived a takeoff
+            // AND a landing AND the next takeoff at full strength, so every
+            // event read as "spawning new dust" (user report, twice). At 20k
+            // a fresh-pad takeoff blasts the big cloud, the landing moments
+            // later raises visibly less from what the takeoff left, and the
+            // next cycle is thin — cleared means cleared. Raise this for
+            // dustier ground, at the cost of the story taking longer to tell.
+            float groundDustPerM2 = 20'000.f;
             float gridCell        = 0.8f;// metres per reservoir cell
 
             std::uint32_t seed = 20260816u;
