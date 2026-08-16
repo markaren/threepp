@@ -17,6 +17,7 @@
 //                                 overlay. Combines with any mode above; the
 //                                 scan runs whether or not SITL ever answers.
 //                                 SITL side: --serial2=udpclient:<host>:14560
+//   ardupilot_sitl --vulkan       pick the Vulkan backend without the prompt
 //
 // The render loop and the physics never race: each animate frame drains the
 // socket under a time budget (SITL waits on our reply — that's the protocol —
@@ -53,6 +54,8 @@
 #include "threepp/extras/uav/ProximityScan.hpp"
 #include "threepp/extras/uav/QuadSim.hpp"
 #include "threepp/extras/uav/SitlBridge.hpp"
+
+#include "threepp/helpers/LidarSensor.hpp"
 
 #include "threepp/extras/imgui/ImguiContext.hpp"
 #include "threepp/extras/imgui/RendererSettings.hpp"
@@ -385,9 +388,11 @@ int main(int argc, char** argv) {
     float seqStart = 12.f;   // sim seconds to fast-forward before capturing
     bool proximity = false;  // horizontal obstacle fan -> OBSTACLE_DISTANCE
     std::uint16_t proxPort = 14560;// where SITL's udpclient dials in
+    bool forceVulkan = false;// skip the interactive backend prompt
     for (int i = 1; i < argc; ++i) {
         const std::string a = argv[i];
         if (a == "--selftest") return runSelftest();
+        if (a == "--vulkan") forceVulkan = true;
         if (a == "--port" && i + 1 < argc) port = static_cast<std::uint16_t>(std::atoi(argv[++i]));
         if (a == "--proximity") proximity = true;
         if (a == "--proximity-port" && i + 1 < argc) {
@@ -407,9 +412,13 @@ int main(int argc, char** argv) {
                    {"headless", !seqDir.empty()},
                    {"vsync", seqDir.empty()}});
     // A capture cannot answer the factory's interactive renderer prompt, and
-    // only the Vulkan backend renders the dust anyway.
-    auto renderer = seqDir.empty() ? createRenderer(canvas)
-                                   : createRenderer(canvas, GraphicsAPI::Vulkan);
+    // only the Vulkan backend renders the dust anyway. --vulkan is the same
+    // escape for a scripted run that DOES have a window: piped stdin answers
+    // the prompt with EOF, which the factory reads as "GL", and the traced
+    // lidar the proximity fan wants exists only on Vulkan.
+    auto renderer = (seqDir.empty() && !forceVulkan)
+                            ? createRenderer(canvas)
+                            : createRenderer(canvas, GraphicsAPI::Vulkan);
     renderer->shadowMap().enabled = true;
     renderer->shadowMap().type = ShadowMap::PFCSoft;
 
@@ -1022,6 +1031,28 @@ int main(int argc, char** argv) {
             const float slope = std::abs(groundY(x + 3.f, z) - groundY(x - 3.f, z)) +
                                 std::abs(groundY(x, z + 3.f) - groundY(x, z - 3.f));
             if (slope > 2.4f) continue;// no trees on steep ground either
+            // Skyline intrusion is LOCAL PROMINENCE, not altitude. The absolute
+            // gates above miss the case the complaint was actually about: a
+            // tree on a spur crest at y = 8 still draws itself against the sky
+            // from the valley floor, while one halfway up a long 30 m slope
+            // never does — there is always more hill behind it. So ask the
+            // terrain the local question: sample 12 m out in the four
+            // cardinals, and refuse the site only if it stands more than 1.5 m
+            // above the LOWEST neighbour AND above at least three of the four.
+            // Both halves are needed — the drop alone also fires on a slope
+            // shoulder (high on one side, low on the other), which is exactly
+            // the ground trees should keep.
+            {
+                const float ring[4] = {groundY(x + 12.f, z), groundY(x - 12.f, z),
+                                       groundY(x, z + 12.f), groundY(x, z - 12.f)};
+                float lowest = ring[0];
+                int above = 0;
+                for (const float g : ring) {
+                    lowest = std::min(lowest, g);
+                    if (y > g) ++above;
+                }
+                if (y - lowest > 1.5f && above >= 3) continue;// a crest, not a slope
+            }
 
             const auto& v = variants[rng() % variants.size()];
             const float s = 0.85f + u01f(rng) * 0.75f;
@@ -1123,16 +1154,37 @@ int main(int argc, char** argv) {
         else if (lastState.rangefinderM < trueR * 0.9) ++rngEarly;
     };
     // ── Proximity fan -> MAVLink OBSTACLE_DISTANCE (--proximity) ────────────
-    // A 72-sector horizontal lidar, cast against the SAME PhysX scene the quad
-    // flies in, framed per MAV_FRAME_BODY_FRD and shipped at 10 Hz. Off by
-    // default: absent --proximity nothing below constructs, nothing is cast and
-    // nothing is drawn.
+    // A 72-sector horizontal fan, framed per MAV_FRAME_BODY_FRD and shipped at
+    // 10 Hz. Off by default: absent --proximity nothing below constructs,
+    // nothing is scanned and nothing is drawn.
+    //
+    // TWO SOURCES, and which one is live is a property of the backend:
+    //
+    //   Vulkan  a ray-traced LidarSensor, aimed at the renderer's own TLAS.
+    //   GL      PhysX raycasts against the scene the quad flies in.
+    //
+    // The PhysX rays only ever see COLLIDERS, and this demo's canopy is
+    // deliberately collider-free (a trunk stub is all the forest contributes) —
+    // so the fan reported a clear lane straight through foliage the camera was
+    // drawing at the time. A traced lidar sees what the renderer sees, leaves
+    // included, which is also what a real scanner on this airframe would.
     //
     // The scan runs in BOTH step paths (scripted and SITL-driven), so the
     // overlay is inspectable — and capturable — with no autopilot on the wire.
     std::unique_ptr<uav::ProximityScan> prox;
     std::unique_ptr<uav::MavlinkOut> mavout;
     std::shared_ptr<BufferGeometry> proxGeom;
+    // The traced source (Vulkan only) and its mount. The sensor hangs off the
+    // SCENE, not off the drone visual, because its orientation is a software
+    // gimbal: it rides the vehicle's position and yaw and ignores its attitude.
+    // Parented under a quad that pitches 25 degrees to accelerate, the rings
+    // would rake the dirt ahead and the horizon behind.
+    std::unique_ptr<LidarSensor> proxLidar;
+    std::vector<LidarReturn> proxCloud;
+    // The traced backend needs a TLAS, which exists only after the first
+    // render. --seq fast-forwards the whole flight before drawing anything, so
+    // this is a real ordering hazard and not a theoretical one.
+    bool renderedOnce = false;
     double nextProxScan = 0., nextProxBeat = 0., nextProxLog = 0.;
     if (proximity) {
         prox = std::make_unique<uav::ProximityScan>();
@@ -1170,13 +1222,39 @@ int main(int argc, char** argv) {
         // Spokes are written in WORLD space while the node stays at the origin,
         // so its bounds are permanently wrong — culling would blink the fan out.
         fan->frustumCulled = false;
+        // No self-hit risk from the overlay: Line/LineSegments are collected
+        // ahead of the mesh dispatch in the Vulkan scene walk and never reach
+        // the TLAS at all, so the fan cannot range on itself.
         scene.add(fan);
+
+        if (vulkan) {
+            // Five rings across +-8 degrees at 2.5 degree azimuth = 720 beams:
+            // enough vertical spread that a canopy edge or a trunk is caught by
+            // SOME ring while the drone bobs, and cheap enough to trace at
+            // 10 Hz. The slab filter downstream is what decides which of those
+            // rings' returns are obstacles rather than ground.
+            LidarModel model;
+            model.elevationAngles = {-8.f, -4.f, 0.f, 4.f, 8.f};
+            model.azimuthResolution = 2.5f;
+            // near = the blind SPHERE, and it is sized to swallow the airframe:
+            // hull, booms and prop discs all sit inside 0.45 m of the mount, so
+            // the vehicle cannot report itself as an obstacle at 0.2 m in every
+            // sector at once. far matches what we declare on the wire.
+            // faceSize is dead weight here (it sizes the GL cube-face targets,
+            // and this sensor only ever traces) — keep it small.
+            proxLidar = std::make_unique<LidarSensor>(model, 128u, 0.6f,
+                                                      prox->params().maxRange);
+            scene.addRef(*proxLidar);
+        }
+        std::fprintf(stderr, "[prox] source: %s\n",
+                     proxLidar ? "lidar (traced)" : "physx rays");
     }
 
-    // Rays hit the world, never the vehicle: trunks, rocks and terrain are
-    // STATIC and the drone body is dynamic, so the same eSTATIC filter
-    // QuadSim::raycastAgl uses keeps a ray that starts inside the hull from
-    // reporting 0 m in all 72 sectors. Horizontal, not down.
+    // The GL source. Rays hit the world, never the vehicle: trunks, rocks and
+    // terrain are STATIC and the drone body is dynamic, so the same eSTATIC
+    // filter QuadSim::raycastAgl uses keeps a ray that starts inside the hull
+    // from reporting 0 m in all 72 sectors. Horizontal, not down. Constructed
+    // unconditionally and simply unused when the traced lidar is live.
     const uav::RayCaster proxCast = [&](const Vector3& o, const Vector3& d, float maxR) -> float {
         using namespace ::physx;
         PxRaycastBuffer hit;
@@ -1224,7 +1302,40 @@ int main(int argc, char** argv) {
         // vehicle, or a pitched-forward quad would scan into the dirt.
         Vector3 fwd(0.f, 0.f, -1.f);
         fwd.applyQuaternion(drone.root()->quaternion);
-        const auto& dist = prox->scan(proxCast, drone.root()->position, fwd);
+
+        if (proxLidar && renderedOnce) {
+            const Vector3 mount(drone.root()->position.x,
+                                drone.root()->position.y + 0.12f,
+                                drone.root()->position.z);
+            // Take delivery of whatever the GPU finished since last tick. A
+            // refused or still-in-flight scan leaves proxCloud alone, so the
+            // wire keeps its 10 Hz cadence carrying a slightly older picture —
+            // which beats a gap: ArduPilot mutes avoidance on stale PRX data,
+            // and a 100 ms hole is the wrong way to earn that.
+            if (proxLidar->scanReady(*renderer)) proxLidar->scanCollect(*renderer, proxCloud);
+
+            // Bin against the CURRENT pose, not the pose the cloud was fired
+            // from: OBSTACLE_DISTANCE describes where the obstacles are
+            // relative to the vehicle NOW, and one tick of parallax (< 0.5 m at
+            // this demo's speeds) is smaller than the error of pretending the
+            // vehicle is still back where it fired.
+            prox->beginFrame(mount, fwd);
+            for (const auto& r : proxCloud) prox->feed(r.position);
+
+            // Aim and fire the next one. Software gimbal: position + yaw from
+            // the vehicle, attitude discarded, so the rings stay level and the
+            // slab filter has a level frame to cut against. Local -Z is the
+            // sensor's azimuth zero (LidarModel's convention), hence the sign.
+            proxLidar->position.copy(mount);
+            proxLidar->rotation.set(0.f, std::atan2(-fwd.x, -fwd.z), 0.f);
+            // The scene's own matrix update runs at render time, i.e. after
+            // this — force it, or the trace aims from last frame's pose.
+            proxLidar->updateMatrixWorld(true);
+            if (!proxLidar->scanPending()) proxLidar->scanBegin(*renderer, scene, proxCloud);
+        } else if (!proxLidar) {
+            prox->scan(proxCast, drone.root()->position, fwd);
+        }
+        const auto& dist = prox->distances();
 
         mavout->sendObstacleDistance(static_cast<std::uint64_t>(t * 1e6), dist,
                                      prox->minCm(), prox->maxCm(),
@@ -1270,8 +1381,10 @@ int main(int argc, char** argv) {
             } else {
                 std::snprintf(nearTxt, sizeof nearTxt, "all clear");
             }
-            std::fprintf(stderr, "[prox] t=%.1f nearest %s, blocked %d/%zu, peer %s\n", t, nearTxt,
-                         blocked, uav::ProximityScan::sectors,
+            std::fprintf(stderr,
+                         "[prox] t=%.1f nearest %s, blocked %d/%zu, returns %zu, peer %s\n", t,
+                         nearTxt, blocked, uav::ProximityScan::sectors,
+                         proxLidar ? proxCloud.size() : std::size_t{0},
                          mavout->hasPeer() ? mavout->peer().c_str() : "no");
         }
     };
@@ -1474,6 +1587,7 @@ int main(int argc, char** argv) {
             camera.lookAt(aim);
 
             canvas.animateOnce([&] { renderer->render(scene, camera); });
+            renderedOnce = true;// the TLAS exists now; the traced fan may fire
             if (i % 20 == 0) {
                 const auto& dr = dust->field()->densityRepr();
                 char rng[16];
@@ -1743,6 +1857,7 @@ int main(int argc, char** argv) {
         controls.update();
 
         renderer->render(scene, camera);
+        renderedOnce = true;// the TLAS exists now; the traced fan may fire
         ui.render();
     });
 

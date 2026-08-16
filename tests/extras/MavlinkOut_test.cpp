@@ -98,3 +98,50 @@ TEST_CASE("sectors map clockwise from the nose, in the yaw frame") {
     const auto& p = pitched.scan(east, Vector3(0.f, 5.f, 0.f), fwd);
     CHECK(p == d);
 }
+
+TEST_CASE("a fed return lands in the sector its bearing falls in") {
+    ProximityScan scan;
+    scan.beginFrame(Vector3(0.f, 5.f, 0.f), Vector3(0.f, 0.f, -1.f));// nose North
+    // Due East (+X), 10 m out, level with the sensor — the same wall the ray
+    // fan above reports, arriving as a point instead of a cast.
+    scan.feed(Vector3(10.f, 5.f, 0.f));
+
+    CHECK(scan.distances()[18] == 1000);
+    CHECK(scan.distances()[54] == scan.clearValue());// due West stays measured-clear
+}
+
+TEST_CASE("returns outside the elevation slab are ignored") {
+    ProximityScan scan;
+    scan.beginFrame(Vector3(0.f, 5.f, 0.f), Vector3(0.f, 0.f, -1.f));
+
+    // The same East point, 5 m BELOW the sensor: that is the ground a real
+    // scanner sees on every downward ring, and a wall is what it must not
+    // become.
+    scan.feed(Vector3(10.f, 0.f, 0.f));
+    CHECK(scan.distances()[18] == scan.clearValue());
+
+    // The canopy arching overhead is out on the other side.
+    scan.feed(Vector3(10.f, 12.f, 0.f));
+    CHECK(scan.distances()[18] == scan.clearValue());
+
+    // Inside the slab it counts, so the two above were rejected on height and
+    // not on some sector-arithmetic accident.
+    scan.feed(Vector3(10.f, 6.5f, 0.f));
+    CHECK(scan.distances()[18] == 1000);
+}
+
+TEST_CASE("the nearest return wins its sector") {
+    ProximityScan scan;
+    scan.beginFrame(Vector3(0.f, 5.f, 0.f), Vector3(0.f, 0.f, -1.f));
+
+    scan.feed(Vector3(10.f, 5.f, 0.f));
+    scan.feed(Vector3(4.f, 5.f, 0.f));
+    scan.feed(Vector3(12.f, 5.f, 0.f));// arrives last, must not win
+    CHECK(scan.distances()[18] == 400);
+
+    // HORIZONTAL distance: 4 m out and 2 m up is a thing 4 m ahead, not 4.47.
+    ProximityScan tilted;
+    tilted.beginFrame(Vector3(0.f, 5.f, 0.f), Vector3(0.f, 0.f, -1.f));
+    tilted.feed(Vector3(4.f, 7.f, 0.f));
+    CHECK(tilted.distances()[18] == 400);
+}

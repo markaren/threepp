@@ -17,6 +17,19 @@
 //     means "no data" in the spec, and a planner given no data will not plan
 //     through the gap; our rays genuinely measured that space as empty, so a
 //     clear sector reports max+1, the spec's "beyond max range" idiom.
+//
+// Two ways to fill the sectors, same arithmetic behind both:
+//
+//   scan()                         cast a fan of rays, one sweep per call.
+//   beginFrame() + feed()...       bin an existing point cloud (a real LIDAR).
+//
+// The second exists because a ray fan against a physics scene only sees what
+// has a collider, and a simulated canopy usually has none — the vehicle flies
+// into leaves the camera plainly draws. A traced LIDAR sees what the renderer
+// sees. What the cloud path CANNOT do is cast horizontally the way (1) does:
+// the returns arrive from wherever the sensor's rings pointed, including
+// straight at the ground five metres below. That is what the elevation slab
+// replaces the yaw-frame-casting trick with — see Params::slabBelow.
 
 #ifndef THREEPP_EXTRAS_UAV_PROXIMITYSCAN_HPP
 #define THREEPP_EXTRAS_UAV_PROXIMITYSCAN_HPP
@@ -50,6 +63,15 @@ namespace threepp::uav {
             float maxRange = 50.f;    ///< reported as max_distance
             int raysPerSector = 3;    ///< min of these wins the sector
             float raySpreadDeg = 1.7f;///< half-spread about the sector centre
+            // Elevation slab for the cloud path (feed()), relative to the
+            // sensor. A return outside it is not an obstacle THIS vehicle can
+            // hit at THIS height: the ground under the drone and the canopy
+            // arching overhead both fall out, and neither becomes a phantom
+            // wall in some sector. Asymmetric on purpose — a quad has more to
+            // fear from the branch it is about to climb into than from the
+            // field it is about to leave.
+            float slabBelow = -1.0f;  ///< metres below the sensor, inclusive
+            float slabAbove = 2.5f;   ///< metres above the sensor, inclusive
         };
 
         explicit ProximityScan(const Params& p = {}): params_(p) {
@@ -119,6 +141,54 @@ namespace threepp::uav {
             return distances_;
         }
 
+        /// Open a cloud-fed sweep: every sector back to "measured clear", the
+        /// yaw latched once so all of this frame's returns bin against ONE
+        /// heading. Follow with feed() per return; distances() is valid at any
+        /// point after (a half-filled frame reads as partly clear, never as
+        /// stale — which is the honest answer while the returns are arriving).
+        void beginFrame(const Vector3& positionWorld, const Vector3& forwardWorld) {
+            yaw_ = yawFromForward(forwardWorld, yaw_);
+            origin_ = positionWorld;
+            distances_.fill(clearValue());
+        }
+
+        /// Bin one world-space LIDAR return into its sector. Nearest wins.
+        void feed(const Vector3& hitWorld) {
+            const float dy = hitWorld.y - origin_.y;
+            if (dy < params_.slabBelow || dy > params_.slabAbove) return;
+
+            const float dx = hitWorld.x - origin_.x;
+            const float dz = hitWorld.z - origin_.z;
+            const float horiz = std::sqrt(dx * dx + dz * dz);
+            // Straight up or straight down has no bearing to bin it into, and
+            // atan2(0, 0) would silently hand it to whichever sector rounds
+            // first. It is also already inside the vehicle's own footprint.
+            if (horiz < 1e-4f) return;
+            // Past our declared max range is not an obstacle we report — it is
+            // the free space clearValue() already says it is. Clamping it in
+            // would plant a fake wall at exactly max range in every sector the
+            // sensor happens to out-range us in.
+            if (horiz > params_.maxRange) return;
+
+            // The sector the return's bearing FALLS IN, not the nearest sector
+            // centre: sector k spans [k, k+1) increments clockwise from the
+            // nose, exactly the span scan()'s rays sweep.
+            const float rel = std::atan2(dx, -dz) - yaw_;
+            const auto n = static_cast<int>(sectors);
+            int k = static_cast<int>(std::floor(rel / deg2rad(params_.incrementDeg))) % n;
+            if (k < 0) k += n;
+
+            // HORIZONTAL distance, not slant range: OBSTACLE_DISTANCE describes
+            // a horizontal fan, and a return 2 m up at 10 m out is a thing 10 m
+            // ahead — reporting its 10.2 m slant would have the planner brake
+            // slightly late, every time, in the direction that matters.
+            const auto cm = static_cast<std::uint16_t>(
+                    std::clamp(horiz * 100.f, 0.f, static_cast<float>(maxCm())));
+            if (cm < distances_[static_cast<std::size_t>(k)]) {
+                distances_[static_cast<std::size_t>(k)] = cm;
+            }
+        }
+
         /// Azimuth measured CLOCKWISE from North -> threepp world direction.
         /// a = 0 gives -Z (North); a = pi/2 gives +X (East). See FrameConv.
         static Vector3 dirFromAzimuth(float a) {
@@ -147,6 +217,7 @@ namespace threepp::uav {
         Params params_;
         Distances distances_{};
         float yaw_ = 0.f;
+        Vector3 origin_;///< sensor position of the open cloud frame (feed())
     };
 
 }// namespace threepp::uav
