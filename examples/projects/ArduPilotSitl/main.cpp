@@ -1056,6 +1056,12 @@ int main(int argc, char** argv) {
 
             const auto& v = variants[rng() % variants.size()];
             const float s = 0.85f + u01f(rng) * 0.75f;
+            // Mission planning against THIS forest needs the actual trunk
+            // map, not bearings squinted from fan telemetry (three avoidance
+            // test flights flew dead straight through guessed "treelines").
+            if (std::getenv("THREEPP_FOREST_DUMP")) {
+                std::fprintf(stderr, "[tree] %.1f %.1f s=%.2f y=%.1f\n", x, z, s, y);
+            }
             auto trunk = Mesh::create(v.trunkGeo, v.barkMat);
             trunk->position.set(x, y - 0.06f, z);
             trunk->scale.setScalar(s);
@@ -1235,7 +1241,11 @@ int main(int argc, char** argv) {
             // rings' returns are obstacles rather than ground.
             LidarModel model;
             model.elevationAngles = {-8.f, -4.f, 0.f, 4.f, 8.f};
-            model.azimuthResolution = 2.5f;
+            // 1 degree, not 2.5: at 2.5 a 0.4 m trunk subtends less than the
+            // beam spacing beyond ~9 m and can hide BETWEEN azimuth samples —
+            // measured as a 3.8 m pop-up that ended a BendyRuler flight in a
+            // crash. Real scanning lidars are denser still (VLP-16: 0.2).
+            model.azimuthResolution = 1.0f;
             // near = the blind SPHERE, and it is sized to swallow the airframe:
             // hull, booms and prop discs all sit inside 0.45 m of the mount, so
             // the vehicle cannot report itself as an obstacle at 0.2 m in every
@@ -1445,8 +1455,16 @@ int main(int argc, char** argv) {
     scene.add(markerGroup);
     const auto rebuildMarkers = [&](const std::string& text) {
         markerGroup->clear();
+        // TRANSPARENT on purpose, and not for looks: unlit transparent routes
+        // to the overlay pass, which never enters the TLAS — an opaque ring
+        // is a real 3 m torus at flight altitude that the lidar dutifully
+        // reports and the planner then avoids. The vehicle must never sense
+        // its own UI. (Observed live: BendyRuler refusing its own waypoint.)
         auto ringMat = MeshBasicMaterial::create();
         ringMat->color = Color(1.f, 0.72f, 0.1f);
+        ringMat->transparent = true;
+        ringMat->opacity = 0.9f;
+        ringMat->depthWrite = false;
         auto beamMat = MeshBasicMaterial::create();
         beamMat->color = Color(1.f, 0.72f, 0.1f);
         beamMat->transparent = true;
