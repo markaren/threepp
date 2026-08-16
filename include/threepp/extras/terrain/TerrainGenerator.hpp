@@ -104,8 +104,13 @@ namespace threepp::terrain {
         float slopeRockMin = 0.55f; // scree → rock slope
         float bandEdge = 0.07f;     // transition softness
         // Baked AO: darkens genuinely concave folds (gullies, terrace insets).
-        // Reduce aoStrength (or set to 0) when viewing without IBL — the term was
-        // tuned for a path-tracer scene with strong ambient fill.
+        //
+        // OFF by default, and TerrainSplat's runtime twin has always been. The
+        // term was tuned for a path-traced scene with strong ambient fill, and
+        // everywhere else it reads as dirt painted into the albedo — occlusion
+        // the renderer is already computing, baked in a second time and immune
+        // to the light moving. Callers that want it back set it (the mountains
+        // demo and GeoTerrain both do, and are unaffected by this default).
         //
         // The concavity measure is DUAL-SCALE + deadbanded (mirrors the hardened
         // treatment in TerrainSplat.hpp's aoConcavity; see the AO block in
@@ -116,7 +121,7 @@ namespace threepp::terrain {
         // deadbanding the weaker response at low gain, gates those off while
         // keeping broad hollows. aoStrength now multiplies a [0,1] concavity (cf.
         // the old raw-Laplacian ×40), so its scale changed — 0 disables the term.
-        float aoStrength = 0.5f;    // multiplies the [0,1] gated concavity (0 = off)
+        float aoStrength = 0.f;     // multiplies the [0,1] gated concavity (0 = off)
         float aoMax = 0.30f;        // maximum darkening fraction (0..1)
         float aoCurvScale = 60.f;   // curvature→response gain (low, avoids tanh saturation)
         float aoLo = 0.25f;         // deadband: no darkening below this response
