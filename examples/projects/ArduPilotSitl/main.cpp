@@ -55,8 +55,14 @@
 #include "threepp/extras/vegetation/TreeGenerator.hpp"
 #include "threepp/extras/vegetation/TreeTextures.hpp"
 #ifdef THREEPP_WITH_VULKAN
+#include "threepp/objects/Ocean.hpp"
 #include "threepp/renderers/VulkanRenderer.hpp"
 #endif
+#include "threepp/lights/HemisphereLight.hpp"
+#include "threepp/loaders/RGBELoader.hpp"
+#include "threepp/scenes/FogExp2.hpp"
+
+#include <cstdlib>
 #include "threepp/lights/AmbientLight.hpp"
 #include "threepp/lights/DirectionalLight.hpp"
 #include "threepp/materials/ShaderMaterial.hpp"
@@ -118,6 +124,68 @@ namespace {
     }
 
     constexpr float kScriptPeriod = 26.f;
+
+    // The noon_grass HDRI is a ground-level park photo: perfect LIGHT, wrong
+    // HORIZON — houses and 100 m photographic trees ring the band just above
+    // eye level, and the deferred renderer's one env image serves as both IBL
+    // and sky, so they would loom behind the valley. Fade the band (elevation
+    // −4°..+8°, feathered) toward each column's own sky sampled at +12°: the
+    // sun, the upper sky and the lawn's green ground bounce survive; the
+    // suburbs dissolve into horizon haze.
+    std::shared_ptr<Texture> fadeHorizonBand(const std::shared_ptr<Texture>& src) {
+        const Image& img = src->image();
+        if (!img.isFloat() || img.channels() != 4) return src;
+        const int W = static_cast<int>(img.width());
+        const int H = static_cast<int>(img.height());
+        std::vector<float> out = img.data<float>();// mutable copy
+        // Row iy carries elevation e = ((iy + 0.5)/H − 0.5)·180 (row 0 = down).
+        // The reference row sits at +30° — ABOVE the tallest photo trees (a
+        // +12° reference sat IN them, and per-column blending smeared their
+        // colours into vertical streaks) — and is azimuth-blurred wide, so the
+        // band fades into smooth sky haze while keeping the broad bright-side
+        // gradient toward the sun.
+        const int refRow = std::clamp(
+                static_cast<int>((30.f / 180.f + 0.5f) * H - 0.5f), 0, H - 1);
+        std::vector<float> ref(static_cast<std::size_t>(W) * 3);
+        {
+            const int blur = std::max(1, W / 16);// ±blur box, wraps in azimuth
+            for (int ix = 0; ix < W; ++ix) {
+                float acc[3] = {};
+                for (int k = -blur; k <= blur; ++k) {
+                    const int x = ((ix + k) % W + W) % W;
+                    const std::size_t r = (static_cast<std::size_t>(refRow) * W + x) * 4;
+                    for (int c = 0; c < 3; ++c) acc[c] += out[r + c];
+                }
+                for (int c = 0; c < 3; ++c)
+                    ref[static_cast<std::size_t>(ix) * 3 + c] = acc[c] / (2 * blur + 1);
+            }
+        }
+        for (int iy = 0; iy < H; ++iy) {
+            const float e = ((iy + 0.5f) / H - 0.5f) * 180.f;
+            const float w = math::smoothstep(-7.f, -4.f, e) *
+                            (1.f - math::smoothstep(24.f, 29.f, e));
+            if (w <= 0.f) continue;
+            for (int ix = 0; ix < W; ++ix) {
+                const std::size_t o = (static_cast<std::size_t>(iy) * W + ix) * 4;
+                for (int c = 0; c < 3; ++c) {
+                    const float r = ref[static_cast<std::size_t>(ix) * 3 + c];
+                    out[o + c] += (r - out[o + c]) * w;
+                }
+            }
+        }
+        Image outImg{ImageData(std::move(out)), static_cast<unsigned int>(W),
+                     static_cast<unsigned int>(H)};
+        auto tex = Texture::create(outImg);
+        tex->name = src->name + "_horizonfade";
+        tex->format = Format::RGBA;
+        tex->type = Type::Float;
+        tex->colorSpace = ColorSpace::Linear;
+        tex->mapping = Mapping::EquirectangularReflection;
+        tex->wrapS = src->wrapS;
+        tex->wrapT = src->wrapT;
+        tex->needsUpdate();
+        return tex;
+    }
 
     // --- selftest ----------------------------------------------------------
 
@@ -332,12 +400,15 @@ int main(int argc, char** argv) {
 
     Scene scene;
 
-    // Sky + sun. The Preetham Sky dome is a GL ShaderMaterial the Vulkan
-    // deferred renderer can't shade — there it would render as a black sphere
-    // enclosing the camera (the whole frame goes black). On Vulkan use a flat
-    // sky-color background instead (the mountains demo's fallback idiom); the
-    // volumetric-cloud/env-map treatment is the future showpiece pass.
+    // Sky + sun — spot_slam's atmosphere. On Vulkan: an HDR equirect
+    // environment drives image-based lighting and serves as the sky backdrop
+    // (the same noon_grass HDRI spot_slam caches; THREEPP_HDRI overrides the
+    // path), plus exponential-fog aerial perspective below. The Preetham dome
+    // stays the GL fallback (its ShaderMaterial can't shade on the deferred
+    // renderer), and a flat sky covers a Vulkan machine with no cached HDRI.
     const bool vulkan = canvas.graphicsApi() == GraphicsAPI::Vulkan;
+    float hemiIntensity = 0.9f;
+    bool hdrSky = false;
     if (!vulkan) {
         auto sky = Sky::create();
         sky->scale.setScalar(9000);
@@ -350,10 +421,40 @@ int main(int argc, char** argv) {
                 1.f, math::degToRad(90 - 28), math::degToRad(135));
         scene.add(sky);
     } else {
-        scene.background = Color(0.55f, 0.72f, 0.92f);
+        std::string hdrPath;
+        if (const char* p = std::getenv("THREEPP_HDRI")) {
+            hdrPath = p;
+        } else if (const char* home = std::getenv("USERPROFILE");
+                   home || (home = std::getenv("HOME"))) {
+            hdrPath = std::string(home) + "/.cache/threepp/hdri/noon_grass_2k.hdr";
+        }
+        RGBELoader rgbe;
+        std::shared_ptr<Texture> env;
+        if (!hdrPath.empty()) env = rgbe.load(hdrPath);
+        if (env) {
+            // The deferred renderer's one env image is BOTH the IBL and the
+            // sky, so the photo's horizon band is faded out first (see
+            // fadeHorizonBand) — sun, sky and ground bounce stay, the
+            // photographic suburbs go.
+            env = fadeHorizonBand(env);
+            scene.environment = env;
+            scene.background = env;
+            hemiIntensity = 0.25f;// the HDR provides the ambient fill
+            hdrSky = true;
+        } else {
+            std::fprintf(stderr, "[sky] no HDRI at %s — flat-sky fallback\n",
+                         hdrPath.c_str());
+            scene.background = Color(0.55f, 0.72f, 0.92f);
+        }
     }
+    // Volumetric exponential fog: on Vulkan this is THE single knob — froxel
+    // sun shafts and aerial glow follow the fog medium (spot_slam's look).
+    // Density scaled to this valley's 250 m vistas where spot_slam's 0.02
+    // suited a 25 m robot world; 0.0055 read as overcast soup at 10 m — this
+    // keeps the near action crisp and hazes the treeline (~78% at 100 m).
+    scene.fog = FogExp2(0x8ab4d4, 0.0025f);
 
-    auto sun = DirectionalLight::create(Color(1.f, 0.96f, 0.90f), 2.2f);
+    auto sun = DirectionalLight::create(Color(0xfff8e0), 2.8f);
     Vector3 sunDir;// unit vector toward the sun; the light rig follows the drone
     auto sunTarget = Object3D::create();
     {
@@ -375,20 +476,27 @@ int main(int argc, char** argv) {
         sun->setTarget(*sunTarget);
         scene.add(sun);
     }
-    scene.add(AmbientLight::create(Color(0.55f, 0.65f, 0.8f), 0.35f));
+    // Sky/ground hemisphere fill (spot_slam's): a touch beside the HDR's own
+    // ambient, the main fill on the fallbacks.
+    scene.add(HemisphereLight::create(Color(0xd0e8ff), Color(0x3a4820), hemiIntensity));
 
 #ifdef THREEPP_WITH_VULKAN
-    // Volumetric cloud deck (Vulkan deferred only). The base sits at 140 m so
-    // the mission tour's high leg brushes the bottom of the clouds.
     if (auto* vk = dynamic_cast<VulkanRenderer*>(renderer.get())) {
-        VulkanRenderer::CloudSettings clouds;
-        clouds.coverage = 0.45f;
-        clouds.density = 1.0f;
-        clouds.bottomY = 140.f;
-        clouds.topY = 520.f;
-        clouds.wind = Vector3(10.f, 0.f, 4.f);
-        clouds.evolveSpeed = 1.0f;
-        vk->setClouds(clouds);
+        // Forward scatter: the sun-ward glow and god-ray shafts through the
+        // trees live on the phase anisotropy (spot_slam sets the same).
+        vk->setFogAnisotropy(0.6f);
+        // Volumetric cloud deck over the flat-blue backdrop (the HDRI serves
+        // lighting only — see the environment note above).
+        {
+            VulkanRenderer::CloudSettings clouds;
+            clouds.coverage = 0.45f;
+            clouds.density = 1.0f;
+            clouds.bottomY = 140.f;
+            clouds.topY = 520.f;
+            clouds.wind = Vector3(10.f, 0.f, 4.f);
+            clouds.evolveSpeed = 1.0f;
+            vk->setClouds(clouds);
+        }
     }
 #endif
 
@@ -477,10 +585,19 @@ int main(int argc, char** argv) {
                 const float t = math::smoothstep(4.f, 16.f, r);
                 a[i * 3 + 1] = h0 + (a[i * 3 + 1] - h0) * t;
             }
-            const float pr = std::sqrt((x - pondX) * (x - pondX) + (z - pondZ) * (z - pondZ));
-            if (pr < pondR + 6.f) {
-                const float depth = 2.2f * (1.f - math::smoothstep(pondR * 0.55f, pondR + 6.f, pr));
-                a[i * 3 + 1] = std::min(a[i * 3 + 1], pondGroundY - depth);
+            // The pond basin, in the CHEBYSHEV metric — square-symmetric on
+            // purpose, because the water is a square FFT sheet and every
+            // round-basin variant left a straight mesh edge or a corner
+            // floating over some trough. The terrain is pushed TO the profile
+            // (dig where nature is high, FILL where the hillside falls away —
+            // the downhill dam every real slope pond is built with), so the
+            // waterline contour closes around the sheet by construction.
+            const float cheb = std::max(std::abs(x - pondX), std::abs(z - pondZ));
+            if (cheb < 17.f) {
+                const float profile =
+                        pondGroundY - 1.8f * (1.f - math::smoothstep(8.f, 15.f, cheb));
+                const float t = 1.f - math::smoothstep(15.5f, 17.f, cheb);
+                a[i * 3 + 1] += (profile - a[i * 3 + 1]) * t;
             }
         }
         pos->needsUpdate();
@@ -505,17 +622,50 @@ int main(int argc, char** argv) {
         return pos->array()[(static_cast<std::size_t>(iz) * dim + ix) * 3 + 1] - h0;
     };
 
-    // Pond water: a still disc slightly below the original shoreline.
+    // Pond water. On Vulkan: spot_slam's REAL water — an FFT Ocean patch with
+    // dm-scale ripples, traced reflections of the sky/forest, and shallow
+    // freshwater shading veiled into a green-brown murk (the bottom is the
+    // carved basin, genuinely visible through the surface). GL keeps the flat
+    // disc: Ocean is a Vulkan-renderer object.
     {
-        const float waterY = pondGroundY - h0 - 0.45f;
-        auto waterMat = MeshStandardMaterial::create(MeshStandardMaterial::Params{}
-                                                             .color(Color(0.05f, 0.16f, 0.20f))
-                                                             .roughness(0.06f)
-                                                             .metalness(0.f));
-        auto water = Mesh::create(CircleGeometry::create(pondR + 2.5f, 40), waterMat);
-        water->rotation.x = -math::PI / 2.f;
-        water->position.set(pondX, waterY, pondZ);
-        scene.add(water);
+        // 0.55 below the rim puts the waterline crossing at Chebyshev ~12.9 —
+        // inside the sheet's 13.8 half-width on every side AND corner (the
+        // square basin measures distance the same way the square sheet does).
+        const float waterY = pondGroundY - h0 - 0.55f;
+#ifdef THREEPP_WITH_VULKAN
+        if (vulkan) {
+            Ocean::Options oo;
+            // Half-width 13.8 vs the waterline's Chebyshev crossing at ~12.9:
+            // every edge and corner tucks under the square basin's shore.
+            oo.size = 27.6f;
+            oo.resolution = 128;
+            oo.windSpeed = 3.f;// a breeze: ripples, not a seascape
+            oo.windTheta = 0.5f;
+            oo.choppiness = 0.4f;
+            oo.waveScale = 0.4f;
+            oo.fftSize = 256;
+            auto pond = Ocean::create(oo);
+            pond->position.set(pondX, waterY, pondZ);
+            // ~0.4-1.7 m deep: clear water at that depth reads as wet sand, so
+            // a short attenuation veils the bottom (spot_slam's murk numbers).
+            if (auto* pm = pond->materialAs<MeshPhysicalMaterial>()) {
+                pm->attenuationColor = Color(0x245238);
+                pm->attenuationDistance = 1.2f;
+                pm->thickness = 0.6f;
+            }
+            scene.add(pond);
+        } else
+#endif
+        {
+            auto waterMat = MeshStandardMaterial::create(MeshStandardMaterial::Params{}
+                                                                 .color(Color(0.05f, 0.16f, 0.20f))
+                                                                 .roughness(0.06f)
+                                                                 .metalness(0.f));
+            auto water = Mesh::create(CircleGeometry::create(pondR + 2.5f, 40), waterMat);
+            water->rotation.x = -math::PI / 2.f;
+            water->position.set(pondX, waterY, pondZ);
+            scene.add(water);
+        }
     }
 
     // Scattered stones: unique low-poly rocks, denser near home, none in the
@@ -546,35 +696,45 @@ int main(int argc, char** argv) {
 
     // Meadow grass around home — merged GrassMesh tiles (Vulkan animates the
     // sway and culls/freezes far tiles; GL draws them as static grass).
+    // spot_slam's grass, transplanted: blades grow in TUFTS (real grass
+    // clumps; a uniform scatter reads as green static), SHORT (0.10-0.24 m
+    // meadow blades, not the knee-high 0.3-0.66 the first pass had), and stay
+    // on the valley floor — no tufts dotting the ridgelines.
     {
         std::mt19937 rng(11);
         std::uniform_real_distribution<float> u01(0.f, 1.f);
         std::vector<vegetation::GrassBlade> blades;
-        blades.reserve(30000);
+        constexpr int kTuft = 6;       // blades per tuft
+        constexpr float kSpread = 0.12f;// max in-tuft offset [m]
+        constexpr int kBladeTarget = 15000;
+        blades.reserve(kBladeTarget + kTuft);
         const Vector3 up(0, 1, 0);
         int attempts = 0;
-        while (blades.size() < 30000 && ++attempts < 200000) {
-            const float r = 6.f + std::sqrt(u01(rng)) * 114.f;
+        while (blades.size() < kBladeTarget && ++attempts < 60000) {
+            const float r = 5.f + std::sqrt(u01(rng)) * 43.f;
             const float a = u01(rng) * 2.f * math::PI;
             const float x = std::cos(a) * r, z = std::sin(a) * r;
             if (std::hypot(x - pondX, z - pondZ) < pondR + 5.f) continue;
-            // Meadow, not mountainside: reject steep ground and high ground
-            // (grass on a 40-degree eroded slope floats on one side and reads
-            // as a rendering bug).
+            // Valley floor only: low AND locally flat.
             const float y = groundY(x, z);
-            if (y > 22.f) continue;
+            if (y > 6.f) continue;
             const float slope = std::abs(groundY(x + 3.f, z) - groundY(x - 3.f, z)) +
                                 std::abs(groundY(x, z + 3.f) - groundY(x, z - 3.f));
-            if (slope > 2.2f) continue;// ~20 degrees combined
-            vegetation::GrassBlade bl;
-            bl.position.set(x, groundY(x, z) - 0.04f, z);
-            const float s = 0.5f + u01(rng) * 0.5f;
-            bl.scale.set(s, 0.28f + u01(rng) * 0.38f, s);
-            bl.yaw.setFromAxisAngle(up, u01(rng) * 2.f * math::PI);
-            blades.push_back(bl);
+            if (slope > 1.8f) continue;
+            // One height query per tuft: blades within a few cm of each other,
+            // the terrain is locally flat (spot_slam's exact economy).
+            for (int b = 0; b < kTuft; ++b) {
+                vegetation::GrassBlade bl;
+                bl.position.set(x + (u01(rng) - 0.5f) * 2.f * kSpread, y - 0.03f,
+                                z + (u01(rng) - 0.5f) * 2.f * kSpread);
+                const float s = 0.7f + u01(rng) * 0.6f;
+                bl.scale.set(s, 0.10f + u01(rng) * 0.14f, s);
+                bl.yaw.setFromAxisAngle(up, u01(rng) * 2.f * math::PI);
+                blades.push_back(bl);
+            }
         }
         auto grassMat = MeshStandardMaterial::create(MeshStandardMaterial::Params{}
-                                                             .color(Color(0.42f, 0.50f, 0.26f))
+                                                             .color(Color(0.30f, 0.40f, 0.16f))
                                                              .roughness(1.f)
                                                              .metalness(0.f));
         grassMat->vertexColors = true;
@@ -769,17 +929,19 @@ int main(int argc, char** argv) {
         std::mt19937 rng(31);
         std::uniform_real_distribution<float> u01f(0.f, 1.f);
         int placed = 0;
-        for (int i = 0; i < 1400 && placed < 240; ++i) {
+        for (int i = 0; i < 3200 && placed < 240; ++i) {
             // Ring 22..240 m: a clear flight bowl around the pad, forest beyond.
             const float r = 22.f + std::pow(u01f(rng), 0.8f) * 218.f;
             const float a = u01f(rng) * 2.f * math::PI;
             const float x = std::cos(a) * r, z = std::sin(a) * r;
             if (std::hypot(x - pondX, z - pondZ) < pondR + 6.f) continue;
             const float y = groundY(x, z);
-            if (y > 26.f) continue;// treeline
+            // Valley and lower slopes only: a tree standing on a ridge crest
+            // draws itself on the skyline and reads as a cardboard cutout.
+            if (y > 12.f) continue;
             const float slope = std::abs(groundY(x + 3.f, z) - groundY(x - 3.f, z)) +
                                 std::abs(groundY(x, z + 3.f) - groundY(x, z - 3.f));
-            if (slope > 3.2f) continue;// no trees on cliffs
+            if (slope > 2.4f) continue;// no trees on steep ground either
 
             const auto& v = variants[rng() % variants.size()];
             const float s = 0.85f + u01f(rng) * 0.75f;
@@ -1036,6 +1198,20 @@ int main(int argc, char** argv) {
         // dark smudge glued to the vehicle; from the side it reads as what it
         // is — a slanted shadow beam in the cloud.
         camera.position.set(5.6f, 1.4f, 5.6f);
+        // Scene-inspection override: THREEPP_SEQ_CAM="x,y,z[,tx,ty,tz]" moves
+        // the tripod (and optionally aims it somewhere other than the drone).
+        bool aimFixed = false;
+        Vector3 aimAt;
+        if (const char* c = std::getenv("THREEPP_SEQ_CAM")) {
+            float v[6];
+            const int got = std::sscanf(c, "%f,%f,%f,%f,%f,%f",
+                                        &v[0], &v[1], &v[2], &v[3], &v[4], &v[5]);
+            if (got >= 3) camera.position.set(v[0], v[1], v[2]);
+            if (got == 6) {
+                aimAt.set(v[3], v[4], v[5]);
+                aimFixed = true;
+            }
+        }
         const double t0 = lastState.timestampSec;
         for (int i = 0; i < seqWarm + seqFrames; ++i) {
             const double target = t0 + static_cast<double>(i + 1) * kDt;
@@ -1059,6 +1235,7 @@ int main(int argc, char** argv) {
 
             Vector3 aim = drone.root()->position;
             aim.y += 0.5f;
+            if (aimFixed) aim = aimAt;
             camera.lookAt(aim);
 
             canvas.animateOnce([&] { renderer->render(scene, camera); });
