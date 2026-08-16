@@ -7973,8 +7973,10 @@ int EditorApp::runSelfTest() {
         // (measured: 4.62550545 vs 4.62550735 m, and the ground's instance id
         // moves too). What the authored seed guarantees is the noise draw, not
         // the last bit of a hardware intersection — so there, assert the clouds
-        // agree far inside the noise sigma instead. A seed that failed to
-        // replay would deviate by ~sigma (0.02 m), 20x this bound.
+        // agree far inside the noise sigma instead. Measured across plays,
+        // scan 1 vs scan 1 agrees to 1.5e-5 m, 70x inside this bound; a seed
+        // that failed to replay would deviate by ~sigma (0.02 m), 20x outside
+        // it. Both failure modes stay far from the line.
         constexpr float kReplayTolerance = 1e-3f;
         const bool bitExactReplay = !options_.vulkan;
 
@@ -8014,9 +8016,9 @@ int EditorApp::runSelfTest() {
             check(sensors_ && sensors_->sensorCount() == 3, "all three authored sensors are built");
             check(sensors_ && sensors_->liveCount() == 3, "and all three come up live");
 
-            // The first scan of each vision sensor, hashed and nothing later:
-            // every scan draws from the range-noise stream, so scan N is only
-            // comparable with scan N of another run.
+            // The first scan of each vision sensor, LATCHED the moment it
+            // lands and nothing later: every scan draws from the range-noise
+            // stream, so scan N is only comparable with scan N of another run.
             //
             // Both sensors are ungated, so both FIRE on the first frame. Which
             // frame they are DELIVERED on is a property of the backend and of
@@ -8024,38 +8026,62 @@ int EditorApp::runSelfTest() {
             // blocking framebuffer reads), while on Vulkan the beams are traced
             // on the GPU and collected by a later frame's fence poll, because
             // blocking for a readback costs every frame already queued (see
-            // SensorPlaySession::scanAll). So step until the first scan has
-            // landed, exactly as the IMU wait below does and for the same
-            // reason. What the seed guarantees — the same cloud from the same
-            // pose — is asserted between the two passes and is untouched by
-            // which frame carried it.
+            // SensorPlaySession::scanAll). Worse, the two sensors' deliveries
+            // skew INDEPENDENTLY: a fence not ready on the polled frame delays
+            // that sensor's delivery by a frame — and the entry's cloud is
+            // rewritten in place per scan, so by the time both sensors have
+            // landed one, the faster one may already hold scan 2. Reading the
+            // live entries at any fixed point in the pass therefore compares
+            // scan N of one pass against scan M of the other — measured as
+            // pass 1 holding its 11th scan where pass 2 held its 12th, a
+            // fresh noise draw on every beam and a ~4 sigma max deviation,
+            // where scan 1 vs scan 1 of the same runs agreed to 1.4e-5 m. So:
+            // latch each sensor's cloud at the first moment its scan counter
+            // is 1, and compare only the latches. What the seed guarantees —
+            // the same cloud from the same pose — is untouched by which frame
+            // carried it.
             const auto* lidarEntry = entryFor(lidarUuid);
             const auto* depthEntry = entryFor(depthUuid);
+            std::vector<LidarReturn> scanReturns;// lidar scan 1, as delivered
+            std::vector<Vector3> scanCloud;      // depth scan 1, as delivered
+            bool lidarLatched = false;
+            bool depthLatched = false;
             for (int i = 0; i < 600; ++i) {
                 lidarEntry = entryFor(lidarUuid);
                 depthEntry = entryFor(depthUuid);
-                if (lidarEntry && lidarEntry->scans > 0 && depthEntry && depthEntry->scans > 0) break;
+                // Deliveries land at most one per frame per sensor, and the
+                // loop looks after every frame, so an unlatched sensor with
+                // scans > 0 is at exactly scan 1.
+                if (!lidarLatched && lidarEntry && lidarEntry->scans > 0) {
+                    scanReturns = lidarEntry->returns;
+                    lidarLatched = true;
+                }
+                if (!depthLatched && depthEntry && depthEntry->scans > 0) {
+                    scanCloud = depthEntry->cloud;
+                    depthLatched = true;
+                }
+                if (lidarLatched && depthLatched) break;
                 stepFixed();
             }
             check(lidarEntry != nullptr && lidarEntry->scans >= 1,
                   "the first frame of play fires a scan, and it is delivered");
-            const std::size_t scanHash = lidarEntry ? hashCloud(lidarEntry->returns) : 0;
-            const std::size_t scanPoints = lidarEntry ? lidarEntry->returns.size() : 0;
+            const std::size_t scanHash = hashCloud(scanReturns);
+            const std::size_t scanPoints = scanReturns.size();
 
             check(depthEntry != nullptr && depthEntry->scans >= 1,
                   "the depth camera's scan is delivered too");
-            const std::size_t depthHash = depthEntry ? hashPoints(depthEntry->cloud) : 0;
-            const std::size_t depthPoints = depthEntry ? depthEntry->cloud.size() : 0;
+            const std::size_t depthHash = hashPoints(scanCloud);
+            const std::size_t depthPoints = scanCloud.size();
             // Not empty ALSO proves the far plane is the camera's 20 m: the
             // config's 3.5 m shell ends short of the 4 m ground below.
             check(depthPoints > 0, "and its cloud is not empty");
             // And the fov is the camera's 110 degrees: the config's 60-degree
             // cone tops out at 5.55 m of slant range on this geometry, while
             // the wide cone reads past 8 m near the image's x edges.
-            if (depthEntry) {
+            {
                 float longest = 0.f;
                 const Vector3 eyeAt(-2.f, 4.f, 2.f);
-                for (const auto& p : depthEntry->cloud) {
+                for (const auto& p : scanCloud) {
                     longest = std::max(longest, p.distanceTo(eyeAt));
                 }
                 check(longest > 6.f,
@@ -8109,8 +8135,8 @@ int EditorApp::runSelfTest() {
                 firstPoints = scanPoints;
                 firstDepthHash = depthHash;
                 firstDepthPoints = depthPoints;
-                if (lidarEntry) firstReturns = lidarEntry->returns;
-                if (depthEntry) firstDepthCloud = depthEntry->cloud;
+                firstReturns = std::move(scanReturns);
+                firstDepthCloud = std::move(scanCloud);
                 check(firstPoints > 0, "the first scan has returns to compare");
             } else {
                 // Sensors are rebuilt from the authored seed on every Play. Two
@@ -8125,10 +8151,16 @@ int EditorApp::runSelfTest() {
                     check(scanHash == firstHash, "and an identical cloud - the seed replays");
                     check(depthHash == firstDepthHash, "and an identical depth cloud");
                 } else {
-                    const float lidarDev = lidarEntry
-                            ? maxDeviation(lidarEntry->returns, firstReturns, returnPos) : 1e9f;
-                    const float depthDev = depthEntry
-                            ? maxDeviation(depthEntry->cloud, firstDepthCloud, pointPos) : 1e9f;
+                    const float lidarDev = maxDeviation(scanReturns, firstReturns, returnPos);
+                    const float depthDev = maxDeviation(scanCloud, firstDepthCloud, pointPos);
+                    // The failure line alone cannot say how far off the clouds
+                    // were, and that number is the whole diagnosis: ~1e-5 is
+                    // the TLAS rebuild, ~sigma is a seed that did not replay.
+                    if (lidarDev >= kReplayTolerance || depthDev >= kReplayTolerance) {
+                        std::cout << "[selftest] replay deviation: lidar " << lidarDev
+                                  << " m, depth " << depthDev << " m (tolerance "
+                                  << kReplayTolerance << " m)" << std::endl;
+                    }
                     check(lidarDev < kReplayTolerance,
                           "and the same cloud within the traced path's tolerance - the seed replays");
                     check(depthDev < kReplayTolerance,
