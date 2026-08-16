@@ -67,6 +67,7 @@
 #include "threepp/math/Vector3.hpp"
 #include "threepp/objects/ParticleField.hpp"
 
+#include <algorithm>
 #include <cstdint>
 #include <memory>
 #include <vector>
@@ -148,12 +149,16 @@ namespace threepp::uav {
             // held in a 2D grid anchored at the first landing site. Erosion
             // takes a quantum per spawned parcel from the cell under its birth
             // anchor; a dying parcel deposits its quantum where it ends up.
-            // Total dust (ground + airborne) is exactly conserved, so a long
-            // hover blows its pad clean and the brownout FADES — which is what
-            // real repeated landings do. At the defaults, the impingement
-            // annulus (~2.8 m², ~20k quanta/s at full strength) sustains
-            // roughly one full landing cycle before visibly thinning.
-            float groundDustPerM2 = 80'000.f;
+            // Total dust (ground + airborne) is exactly conserved.
+            //
+            // Sized so ONE landing visibly strips its pad: the impingement
+            // disc (~6 m² at the widened birth annulus) holds roughly one
+            // landing's worth of turnover, so the cloud THINS in the final
+            // metres as the soil runs out and a second landing on the same
+            // spot raises only what the wind deposited back — depletion you
+            // can see, not just read off a counter. Raise this for dustier
+            // ground, at the cost of the story taking more cycles to tell.
+            float groundDustPerM2 = 40'000.f;
             float gridCell        = 0.8f;// metres per reservoir cell
 
             std::uint32_t seed = 20260816u;
@@ -181,10 +186,22 @@ namespace threepp::uav {
         void update(float timeSec, const Vector3& dronePosWorld,
                     float thrust01, float aglMetres);
 
-        // The scene's wind (world space, m/s). Advects airborne parcels and
-        // stretches the density box downwind. Free to call every frame.
+        // The scene's STEADY wind (world space, m/s). Advects airborne parcels
+        // and stretches the density box downwind. Free to call every frame.
+        //
+        // Pass the BASE wind, not a gust-modulated sample: a globally shared
+        // gust signal advects every parcel in sync and the whole cloud surges
+        // on the gust sines — "reads as waves", verbatim user report. Gusts
+        // belong to setGustiness below, where each LOBE draws its own.
         void setWind(const Vector3& worldWind);
         [[nodiscard]] const Vector3& wind() const { return wind_; }
+
+        // Gust strength [0..1]. Applied PER LOBE — each lobe modulates the
+        // steady wind's magnitude and direction on its own drawn frequencies
+        // and phases, so lobes surge independently (turbulence) instead of
+        // the cloud pumping as one body (a wave).
+        void setGustiness(float g) { gust_ = std::clamp(g, 0.f, 1.f); }
+        [[nodiscard]] float gustiness() const { return gust_; }
 
         // Current entrainment strength [0..~1.3] — 0 means clean air. Handy
         // for HUDs and for driving sensor-degradation stories off the same
@@ -217,6 +234,7 @@ namespace threepp::uav {
         Params  p_;
         Vector3 wind_{0.f, 0.f, 0.f};
         float   strengthNow_ = 0.f;
+        float   gust_ = 0.f;// per-lobe gust strength, see setGustiness
         // Slow-averaged wind magnitude (box sizing only — see setWind).
         float windSlow_ = 0.f;
         float lastT_ = 0.f;

@@ -241,10 +241,15 @@ void DownwashEffect::update(float t, const Vector3& dronePosWorld,
 
         bool spawned = false;
         if (strength > 0.02f && accept < strength * 1.25f * puffDuty) {
-            // Where the parcel WOULD be born, on the impingement annulus.
+            // Where the parcel WOULD be born — across the whole impingement
+            // DISC, not a thin ring: the jet scrubs everything under it, so
+            // the erosion footprint (~6 m²) is what a landing actually mines.
+            // A thin annulus left the pad's neighbours untouched and a second
+            // lift-off raised a full cloud from ground that should have read
+            // as blown clean.
             const float uR = rnd01(p_.seed + cycle_[i], i, 1u);
             const float uAa = rnd01(p_.seed + cycle_[i], i, 2u);
-            const float r0 = p_.sourceRadius * (0.35f + 0.75f * std::sqrt(uR));
+            const float r0 = p_.sourceRadius * (0.35f + 1.35f * std::sqrt(uR));
             const float a0 = uAa * kTau;
             const float bx = drone.x + std::cos(a0) * r0;
             const float bz = drone.z + std::sin(a0) * r0;
@@ -385,13 +390,27 @@ void DownwashEffect::update(float t, const Vector3& dronePosWorld,
 
             // Wind: a parcel picks the ambient wind up only once it has left
             // the jet (the jet's own momentum dominates near the source).
+            // Gusts are PER LOBE — magnitude and heading modulated on the
+            // lobe's own frequencies/phases. wind_ itself is the steady base;
+            // a globally shared gust signal made the whole cloud surge in
+            // sync, which is a wave, not weather.
             constexpr float tauW = 0.9f;
             const float wAdv = (tau - tauW * (1.f - std::exp(-tau / tauW))) *
                                (0.35f + 0.65f * front);
+            const float gf = 0.75f + 0.50f * puffDraw(27u);
+            const float gp1 = puffDraw(28u) * kTau;
+            const float gp2 = puffDraw(29u) * kTau;
+            const float gMag = 1.f + gust_ * (0.45f * std::sin(0.9f * gf * t + gp1) +
+                                              0.30f * std::sin(2.3f * gf * t + gp2) +
+                                              0.20f * std::sin(5.1f * gf * t + gp1 + 2.4f));
+            const float gAng = 0.30f * gust_ * std::sin(0.6f * gf * t + gp2);
+            const float gc = std::cos(gAng), gs = std::sin(gAng);
+            const float windX = (wind_.x * gc + wind_.z * gs) * gMag;
+            const float windZ = (-wind_.x * gs + wind_.z * gc) * gMag;
 
-            host_[i] = {ax_[i] + std::cos(th) * radial + wx + ex + d1 * spread + wind_.x * wAdv,
+            host_[i] = {ax_[i] + std::cos(th) * radial + wx + ex + d1 * spread + windX * wAdv,
                         std::max(y + wy + ey + d2 * spread * 0.55f, gy_[i] + 0.05f),
-                        az_[i] + std::sin(th) * radial + wz + ez + d3 * spread + wind_.z * wAdv,
+                        az_[i] + std::sin(th) * radial + wz + ez + d3 * spread + windZ * wAdv,
                         1.f};
         }
     });

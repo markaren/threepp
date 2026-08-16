@@ -24,6 +24,7 @@ namespace {
             // feeds its own output back (the box-climbs-4-m-per-frame bug)
             // only shows up under per-frame calls.
             fx.setWind(fx.wind());
+            fx.setGustiness(0.35f);
             fx.update(t, Vector3(groundPos.x, groundPos.y + agl, groundPos.z),
                       thrust, agl);
         }

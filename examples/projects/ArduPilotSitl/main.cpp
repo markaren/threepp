@@ -769,7 +769,12 @@ int main(int argc, char** argv) {
     const auto updateDust = [&] {
         if (!dust) return;
         const float t = static_cast<float>(lastState.timestampSec);
-        dust->setWind(brownout ? visualWindAt(t) : quad->windNow());
+        // STEADY wind + gustiness, never a gust-modulated sample: the effect
+        // draws per-lobe gusts internally. Feeding it the shared gusty vector
+        // advected every parcel in sync and the cloud surged on the gust
+        // sines — the "wavelike" report.
+        dust->setWind(windBase());
+        dust->setGustiness(windGust);
         const float thrust = (quad->motorLevel(0) + quad->motorLevel(1) +
                               quad->motorLevel(2) + quad->motorLevel(3)) * 0.25f;
         const float agl = std::isnan(lastState.rangefinderM)
