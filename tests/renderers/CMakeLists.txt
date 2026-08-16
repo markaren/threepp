@@ -150,6 +150,17 @@ if (THREEPP_WITH_VULKAN AND THREEPP_WITH_GLFW)
     add_test(NAME VulkanParticleField_test COMMAND VulkanParticleField_test)
     set_tests_properties(VulkanParticleField_test PROPERTIES SKIP_RETURN_CODE 42)
 
+    # The screenshot path's sizing. writeFramebuffer used to take w/h from the
+    # canvas's requested window size while the pixels came from the swapchain;
+    # a window the platform clamped (Windows work-area clamp) then over-read
+    # the readback buffer by the difference and crashed. Gates the odd-height
+    # case and the requested-vs-actual case, both against framebufferSize().
+    add_executable(VulkanFramebufferWrite_test VulkanFramebufferWrite_test.cpp)
+    target_link_libraries(VulkanFramebufferWrite_test PRIVATE threepp)
+    target_include_directories(VulkanFramebufferWrite_test PRIVATE "${PROJECT_SOURCE_DIR}/src")
+    add_test(NAME VulkanFramebufferWrite_test COMMAND VulkanFramebufferWrite_test)
+    set_tests_properties(VulkanFramebufferWrite_test PROPERTIES SKIP_RETURN_CODE 42)
+
     add_executable(VulkanCameraModel_test VulkanCameraModel_test.cpp)
     target_link_libraries(VulkanCameraModel_test PRIVATE threepp)
     target_include_directories(VulkanCameraModel_test PRIVATE "${PROJECT_SOURCE_DIR}/src")

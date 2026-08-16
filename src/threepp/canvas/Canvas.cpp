@@ -341,6 +341,22 @@ struct Canvas::Impl {
                     (api == GraphicsAPI::Vulkan ? "Vulkan" : "OpenGL") + ")");
         }
 
+        // NOTE, because it is the root of a crash that took a while to find:
+        // size_ is what was REQUESTED and the platform is free to disagree.
+        // Windows clamps a window's client area to the desktop work area (a
+        // 1200-tall window on a 1200-tall monitor comes back 1181 tall with a
+        // taskbar on screen) and enforces a minimum width (a 64-wide window is
+        // really 120 wide). GLFW fires no resize callback for a size it only
+        // ever set once, at creation, so size_ keeps describing a window that
+        // never existed. Syncing it from glfwGetWindowSize here is NOT safe:
+        // size_ also drives the GL viewport and the camera aspect, and the
+        // small offscreen-style canvases the GL tests render into would start
+        // rendering at the platform's minimum width instead of the size they
+        // asked for. Consumers that pair this number with a driver-sized
+        // buffer must therefore ask the driver, not the canvas — see
+        // VulkanRenderer::writeFramebuffer and Impl::Impl, which both size
+        // from the swapchain extent for exactly this reason.
+
 #ifndef __EMSCRIPTEN__
         if (borderless) {
             // Cover the primary monitor from its own origin (which is NOT

@@ -26,6 +26,17 @@ VulkanRenderer::Impl::Impl(Canvas& c) : canvas(c), size(c.size()) {
                     /*vsync*/ canvas.vsync(),
                     /*preferHeadlessSurface*/ canvas.headless());
 
+            // Pin `size` to the extent the surface actually granted. The
+            // canvas's size is what was asked for; the swapchain's is what
+            // exists, and every pixel this renderer hands back (readRGBPixels,
+            // writeFramebuffer) is swapchain-shaped. recreateSwapchainAndDescriptors
+            // already reconciles the two after a resize — do it at birth too,
+            // so a window the platform clamped on creation never gets a frame
+            // read back against the size it failed to get.
+            if (const VkExtent2D ext = ctx->swapchainExtent(); ext.width > 0 && ext.height > 0) {
+                size = WindowSize{static_cast<int>(ext.width), static_cast<int>(ext.height)};
+            }
+
             // The scene-dependent AS build runs lazily on the first render()
             // call. Everything below is scene-independent and safe at ctor time.
             createCommandResources();

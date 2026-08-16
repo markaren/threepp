@@ -661,9 +661,28 @@ namespace threepp {
         if (pixels.empty()) {
             throw std::runtime_error("VulkanRenderer::writeFramebuffer: no readable framebuffer");
         }
-        const auto sz = size();
+        // Size the write from the SWAPCHAIN extent, not size(). readRGBPixels
+        // copies the presented swapchain image, so the buffer it returns is
+        // framebufferSize()-shaped and nothing else. size() is the canvas's
+        // idea of the window, which the platform is free to disagree with: a
+        // 1920x1200 window on a 1920x1200 Windows desktop gets its client area
+        // clamped to the work area (1920x1181 with a taskbar), and GLFW fires
+        // no resize callback for a size it never changed. Sourcing w/h from
+        // size() then handed stb a 1200-row stride over an 1181-row buffer —
+        // a 19-row over-read straight off the end of the allocation.
+        const auto sz = framebufferSize();
         const int  w  = sz.width();
         const int  h  = sz.height();
+        // The invariant above is load-bearing (stb reads h*stride bytes with
+        // no bound of its own), so check it rather than trust it.
+        const auto expected = static_cast<std::size_t>(w) * static_cast<std::size_t>(h) * 3;
+        if (w <= 0 || h <= 0 || pixels.size() != expected) {
+            throw std::runtime_error(
+                    "VulkanRenderer::writeFramebuffer: readback is " +
+                    std::to_string(pixels.size()) + " bytes but " + std::to_string(w) + "x" +
+                    std::to_string(h) + " RGB needs " + std::to_string(expected) +
+                    "; refusing to write past the buffer");
+        }
         if (filename.has_parent_path() && !std::filesystem::exists(filename.parent_path())) {
             std::error_code ec;
             std::filesystem::create_directories(filename.parent_path(), ec);
