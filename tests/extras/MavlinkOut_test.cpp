@@ -130,6 +130,28 @@ TEST_CASE("returns outside the elevation slab are ignored") {
     CHECK(scan.distances()[18] == 1000);
 }
 
+TEST_CASE("the ground hint segments the floor out on a landing approach") {
+    // Descending through 0.8 m: the ground is now INSIDE the slab (slabBelow
+    // rides the sensor), which is how a landing quad came to read a sub-metre
+    // wall in all 72 sectors and fly avoidance against its own pad.
+    ProximityScan scan;
+    scan.beginFrame(Vector3(0.f, 0.8f, 0.f), Vector3(0.f, 0.f, -1.f), 0.f);// ground at y=0
+    scan.feed(Vector3(3.f, 0.3f, 0.f));
+    CHECK(scan.distances()[18] == scan.clearValue());
+
+    // Segmenting the ground does not blind the fan: a trunk at head height is
+    // still an obstacle 3 m East.
+    scan.feed(Vector3(3.f, 1.2f, 0.f));
+    CHECK(scan.distances()[18] == 300);
+
+    // No hint = no segmentation, so the rejection above was the ground plane
+    // and not the slab quietly doing it.
+    ProximityScan blind;
+    blind.beginFrame(Vector3(0.f, 0.8f, 0.f), Vector3(0.f, 0.f, -1.f));
+    blind.feed(Vector3(3.f, 0.3f, 0.f));
+    CHECK(blind.distances()[18] == 300);
+}
+
 TEST_CASE("the nearest return wins its sector") {
     ProximityScan scan;
     scan.beginFrame(Vector3(0.f, 5.f, 0.f), Vector3(0.f, 0.f, -1.f));

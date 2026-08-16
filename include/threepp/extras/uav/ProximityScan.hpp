@@ -29,7 +29,11 @@
 // sees. What the cloud path CANNOT do is cast horizontally the way (1) does:
 // the returns arrive from wherever the sensor's rings pointed, including
 // straight at the ground five metres below. That is what the elevation slab
-// replaces the yaw-frame-casting trick with — see Params::slabBelow.
+// replaces the yaw-frame-casting trick with — see Params::slabBelow. The slab
+// rides the sensor, so it stops holding the ground out once the sensor is
+// close to it; below about a metre AGL the floor is inside the slab. That case
+// gets the answer a perception stack gives — segment the ground and drop it —
+// via beginFrame()'s optional groundY hint.
 
 #ifndef THREEPP_EXTRAS_UAV_PROXIMITYSCAN_HPP
 #define THREEPP_EXTRAS_UAV_PROXIMITYSCAN_HPP
@@ -41,6 +45,7 @@
 #include <cmath>
 #include <cstdint>
 #include <functional>
+#include <limits>
 
 namespace threepp::uav {
 
@@ -72,6 +77,18 @@ namespace threepp::uav {
             // field it is about to leave.
             float slabBelow = -1.0f;  ///< metres below the sensor, inclusive
             float slabAbove = 2.5f;   ///< metres above the sensor, inclusive
+            // Ground segmentation, the other half of the cloud path's filter.
+            // The slab rides the SENSOR, so on a landing approach the ground
+            // climbs into it: below about a metre AGL every downward ring
+            // reports the floor as an in-slab return and all 72 sectors read a
+            // sub-metre wall — the autopilot then flies avoidance against the
+            // pad it is trying to touch. A perception stack answers this by
+            // labelling the ground plane and dropping it, which is exactly
+            // what beginFrame()'s groundY hint plus this margin do. The margin
+            // is what makes it segmentation rather than a plane subtraction:
+            // grass, gravel spray and the terrain's own centimetres of relief
+            // all sit above the fitted plane and none of them is an obstacle.
+            float groundClearance = 0.5f;///< metres above groundY that still reads as ground
         };
 
         explicit ProximityScan(const Params& p = {}): params_(p) {
@@ -146,9 +163,20 @@ namespace threepp::uav {
         /// heading. Follow with feed() per return; distances() is valid at any
         /// point after (a half-filled frame reads as partly clear, never as
         /// stale — which is the honest answer while the returns are arriving).
-        void beginFrame(const Vector3& positionWorld, const Vector3& forwardWorld) {
+        ///
+        /// `groundY` is the world-Y of the terrain under the vehicle — from a
+        /// downward altimeter, a heightmap query, whatever the caller trusts.
+        /// Finite values switch ground segmentation on for this frame (see
+        /// Params::groundClearance); NaN, the default, means "unknown" and
+        /// leaves the slab as the only height filter. Unknown deliberately
+        /// reads as the OLD behaviour rather than as ground at y=0: a hint
+        /// invented for a vehicle over a hillside would delete the obstacles
+        /// on the uphill side.
+        void beginFrame(const Vector3& positionWorld, const Vector3& forwardWorld,
+                        float groundY = std::numeric_limits<float>::quiet_NaN()) {
             yaw_ = yawFromForward(forwardWorld, yaw_);
             origin_ = positionWorld;
+            groundY_ = groundY;
             distances_.fill(clearValue());
         }
 
@@ -156,6 +184,13 @@ namespace threepp::uav {
         void feed(const Vector3& hitWorld) {
             const float dy = hitWorld.y - origin_.y;
             if (dy < params_.slabBelow || dy > params_.slabAbove) return;
+
+            // AND with the slab, not instead of it: the slab bounds what this
+            // vehicle can hit at this height, the ground plane bounds what is
+            // an obstacle at all. On descent the two disagree — the floor is
+            // inside the slab and is not an obstacle — and that disagreement
+            // is the phantom wall this rejects.
+            if (std::isfinite(groundY_) && hitWorld.y < groundY_ + params_.groundClearance) return;
 
             const float dx = hitWorld.x - origin_.x;
             const float dz = hitWorld.z - origin_.z;
@@ -218,6 +253,8 @@ namespace threepp::uav {
         Distances distances_{};
         float yaw_ = 0.f;
         Vector3 origin_;///< sensor position of the open cloud frame (feed())
+        /// Ground hint of the open cloud frame; NaN = unknown, see beginFrame.
+        float groundY_ = std::numeric_limits<float>::quiet_NaN();
     };
 
 }// namespace threepp::uav

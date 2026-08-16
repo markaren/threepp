@@ -7,10 +7,16 @@
 //
 //   ardupilot_sitl [--port N]     interactive demo (default port 9002)
 //   ardupilot_sitl --selftest     headless fake-SITL loopback check, exit 0/1
-//   ardupilot_sitl --brownout     scripted landing loop, no SITL needed —
-//                                 rotor-wash dust on the Vulkan backend
+//   ardupilot_sitl --brownout     scripted landing loop, no SITL needed. The
+//                                 rotor-wash dust is NOT this mode's feature —
+//                                 it runs in every mode on Vulkan, driven off
+//                                 the same quad state an ArduPilot flight has.
 //   ardupilot_sitl --seq DIR [--start T] [--seqframes N] [--warm N]
 //                                 headless deterministic brownout capture
+//   ardupilot_sitl --rec DIR [--recevery N] [--recframes M]
+//                                 film the LIVE SITL flight: every Nth drawn
+//                                 frame to DIR/f%05d.png, starting when the
+//                                 vehicle first lifts off. Excludes --seq.
 //   ardupilot_sitl --proximity [--proximity-port N]
 //                                 360-degree horizontal lidar fan -> MAVLink
 //                                 OBSTACLE_DISTANCE at 10 Hz, plus the spoke
@@ -389,6 +395,8 @@ int main(int argc, char** argv) {
     bool proximity = false;  // horizontal obstacle fan -> OBSTACLE_DISTANCE
     std::uint16_t proxPort = 14560;// where SITL's udpclient dials in
     bool forceVulkan = false;// skip the interactive backend prompt
+    std::string recDir;      // live capture of a SITL flight (see below)
+    int recEvery = 6, recFrames = 1400;
     for (int i = 1; i < argc; ++i) {
         const std::string a = argv[i];
         if (a == "--selftest") return runSelftest();
@@ -404,6 +412,17 @@ int main(int argc, char** argv) {
         if (a == "--seqframes" && i + 1 < argc) seqFrames = std::atoi(argv[++i]);
         if (a == "--warm" && i + 1 < argc) seqWarm = std::atoi(argv[++i]);
         if (a == "--start" && i + 1 < argc) seqStart = static_cast<float>(std::atof(argv[++i]));
+        if (a == "--rec" && i + 1 < argc) recDir = argv[++i];
+        if (a == "--recevery" && i + 1 < argc) recEvery = std::max(1, std::atoi(argv[++i]));
+        if (a == "--recframes" && i + 1 < argc) recFrames = std::max(1, std::atoi(argv[++i]));
+    }
+    // Two capture modes with two different flights behind them: --seq runs the
+    // scripted brownout headless at a fixed dt, --rec films whatever ArduPilot
+    // is flying live. Accepting both would silently give the caller the first
+    // one, and --seq returns before the render loop the recorder lives in.
+    if (!recDir.empty() && !seqDir.empty()) {
+        std::fprintf(stderr, "--rec and --seq are different captures; pick one\n");
+        return 1;
     }
 
     Canvas canvas("threepp - ArduPilot SITL",
@@ -1152,7 +1171,15 @@ int main(int argc, char** argv) {
     // from the JSON, so ArduPilot's rangefinder driver genuinely times out —
     // its landing logic and EKF experience the brownout, closed loop.
     std::uint32_t rngDrops = 0, rngEarly = 0;// per-telemetry-window counters
+    // The CLEAN range, latched before the dust is allowed to eat it. The
+    // proximity fan's ground hint is built from AGL, and reading it back off
+    // lastState after degradation would hand it a NaN precisely during the
+    // touchdown blast — i.e. lose ground segmentation in the one second of the
+    // flight it exists for. What the autopilot sees stays degraded; this is
+    // simulator ground truth and never goes on the wire.
+    double trueAglM = std::numeric_limits<double>::quiet_NaN();
     const auto degradeRangefinder = [&](std::uint32_t tick) {
+        trueAglM = lastState.rangefinderM;
         if (!dust) return;
         const double trueR = lastState.rangefinderM;
         lastState.rangefinderM = dust->degradedRange(trueR, tick);
@@ -1329,7 +1356,18 @@ int main(int argc, char** argv) {
             // relative to the vehicle NOW, and one tick of parallax (< 0.5 m at
             // this demo's speeds) is smaller than the error of pretending the
             // vehicle is still back where it fired.
-            prox->beginFrame(mount, fwd);
+            // Ground segmentation: hand the fan the terrain height under the
+            // vehicle, from the altimeter it already carries. Without it a
+            // landing reads the floor as a wall in every sector once the
+            // sensor drops inside a metre of it (the slab rides the sensor,
+            // so the ground climbs into it) and ArduPilot's avoidance fights
+            // the pad. NaN when nothing is in altimeter range — high cruise,
+            // where the slab alone is already right.
+            const float groundY = std::isnan(trueAglM)
+                                          ? std::numeric_limits<float>::quiet_NaN()
+                                          : drone.root()->position.y -
+                                                    static_cast<float>(trueAglM);
+            prox->beginFrame(mount, fwd, groundY);
             for (const auto& r : proxCloud) prox->feed(r.position);
 
             // Aim and fire the next one. Software gimbal: position + yaw from
@@ -1424,9 +1462,12 @@ int main(int argc, char** argv) {
         dust->setGustiness(windGust);
         const float thrust = (quad->motorLevel(0) + quad->motorLevel(1) +
                               quad->motorLevel(2) + quad->motorLevel(3)) * 0.25f;
-        const float agl = std::isnan(lastState.rangefinderM)
-                                  ? 1e9f
-                                  : static_cast<float>(lastState.rangefinderM);
+        // TRUE AGL, never the degraded rangefinder: the blast drops the
+        // sensor to NaN, NaN read as "very high" switches entrainment off,
+        // and the cloud starves itself mid-blast — dust physics consuming its
+        // own corrupted measurement. The wire still carries the degraded
+        // value; the ground does not move because the sensor got blinded.
+        const float agl = std::isnan(trueAglM) ? 1e9f : static_cast<float>(trueAglM);
         dust->update(t, drone.root()->position, thrust, agl);
     };
 
@@ -1732,6 +1773,20 @@ int main(int argc, char** argv) {
     };
     canvas.setIOCapture(&cap);
 
+    // ── Live capture of a SITL flight (--rec DIR) ───────────────────────────
+    // --seq cannot film this one: it flies the SCRIPTED loop, headless, at a
+    // fixed dt and returns before this render loop exists. A real mission is
+    // whatever ArduPilot decides to do, so the recorder rides the render loop
+    // and subsamples it — every --recevery-th drawn frame, ~10 fps against a
+    // 60 Hz vsync, which is a video rather than a disk-throughput experiment.
+    //
+    // ARMED at startup, STARTED by the vehicle first leaving the ground: a
+    // mission spends its opening minutes in pre-arm checks and GPS lock, and
+    // the whole frame budget would go to a parked quad on the pad.
+    int recTick = 0, recWritten = 0;
+    bool recArmed = !recDir.empty(), recRunning = false;
+    if (recArmed) std::filesystem::create_directories(recDir);
+
     Clock clock;
     canvas.animate([&] {
         const float dtRender = clock.getDelta();
@@ -1877,6 +1932,41 @@ int main(int argc, char** argv) {
         renderer->render(scene, camera);
         renderedOnce = true;// the TLAS exists now; the traced fan may fire
         ui.render();
+
+        if (recArmed) {
+            // The HUD's "alt home" (NED down, negated) is the trigger, NOT
+            // rng_1: rng_1 is the DEGRADED rangefinder and goes NaN inside the
+            // takeoff dust — the exact instant the trigger is waiting for.
+            const double alt = -lastState.positionNed[2];
+            if (!recRunning && std::isfinite(alt) && alt > 1.0) {
+                recRunning = true;
+                std::fprintf(stderr, "[rec] airborne — recording every %d frames to %s (max %d)\n",
+                             recEvery, recDir.c_str(), recFrames);
+            }
+            if (recRunning && recTick++ % recEvery == 0) {
+                char name[64];
+                std::snprintf(name, sizeof name, "f%05d.png", recWritten);
+                try {
+                    // The renderer's OWN readback + PNG writer, the same one
+                    // --seq uses: it sizes the write from framebufferSize(),
+                    // which is the only shape the pixel buffer ever has (the
+                    // window's idea of its size is a request the platform may
+                    // decline). A second readback here would re-earn that bug.
+                    renderer->writeFramebuffer(std::filesystem::path(recDir) / name);
+                    ++recWritten;
+                } catch (const std::exception& e) {
+                    // A capture that fails must not take the flight down with
+                    // it — SITL is on the other end of a lock-step link.
+                    std::fprintf(stderr, "[rec] stopped: %s\n", e.what());
+                    recArmed = recRunning = false;
+                }
+                if (recWritten >= recFrames) {
+                    recArmed = recRunning = false;
+                    std::fprintf(stderr, "[rec] %d frames -> %s (cap reached)\n", recWritten,
+                                 recDir.c_str());
+                }
+            }
+        }
     });
 
     return 0;
