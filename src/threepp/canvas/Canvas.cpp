@@ -212,6 +212,25 @@ namespace {
         }
     }
 
+    // The primary monitor's current video mode, in screen coordinates — the
+    // size a borderless-fullscreen window takes. Unlike monitor::monitorSize()
+    // this takes no GLFW reference of its own (it assumes glfwInit has already
+    // run, which it has by the time the Canvas ctor asks), so a fullscreen
+    // canvas still terminates GLFW when it is destroyed. Returns {0,0} if
+    // there is no monitor to ask, which the caller treats as "not fullscreen".
+    WindowSize primaryMonitorSize() {
+#ifdef __EMSCRIPTEN__
+        return monitor::monitorSize();
+#else
+        if (GLFWmonitor* m = glfwGetPrimaryMonitor()) {
+            if (const GLFWvidmode* mode = glfwGetVideoMode(m)) {
+                return {mode->width, mode->height};
+            }
+        }
+        return {0, 0};
+#endif
+    }
+
 }// namespace
 
 struct Canvas::Impl {
@@ -238,12 +257,24 @@ struct Canvas::Impl {
 
         initGLfw(params.headless_);
 
-        if (params.size_) {
+        // Fullscreen takes the monitor's size and ignores any requested one.
+        // Headless wins over it: there is no window to make borderless, and a
+        // display-less machine has no monitor to measure.
+        const WindowSize screen = borderlessFullscreen() ? primaryMonitorSize() : WindowSize{0, 0};
+        if (screen.width() > 0 && screen.height() > 0) {
+            size_ = screen;
+        } else if (params.size_) {
             size_ = *params.size_;
         } else {
             const auto fullSize = monitor::monitorSize();
             size_ = {fullSize.width() / 2, fullSize.height() / 2};
         }
+    }
+
+    // Borderless windowed fullscreen requested AND applicable. Headless has no
+    // window at all, so it wins; see Parameters::fullscreen.
+    [[nodiscard]] bool borderlessFullscreen() const {
+        return params_.fullscreen_ && !params_.headless_;
     }
 
     void initWindow(GraphicsAPI api) {
@@ -267,15 +298,30 @@ struct Canvas::Impl {
             glfwWindowHint(GLFW_OPENGL_FORWARD_COMPAT, GL_TRUE);
             glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
         }
-        glfwWindowHint(GLFW_RESIZABLE, params_.resizable_);
+        // Borderless windowed fullscreen: strip the decorations and pin the
+        // size. Deliberately NOT glfwCreateWindow(..., monitor, ...) — an
+        // exclusive-fullscreen window owns the display mode, cannot stay hidden
+        // until the first present (see deferShow below), and mode-switches the
+        // monitor on every alt-tab. An undecorated window covering the monitor
+        // looks the same and keeps all of that machinery intact.
+        const bool borderless = borderlessFullscreen();
+        if (borderless) {
+            glfwWindowHint(GLFW_DECORATED, GLFW_FALSE);
+        }
+        glfwWindowHint(GLFW_RESIZABLE, borderless ? GLFW_FALSE : params_.resizable_);
         // A Vulkan canvas starts hidden and is revealed by the renderer once it
         // has presented a first frame (Canvas::showWindow). Device and pipeline
         // setup leaves a visible window blank and unresponsive for seconds —
         // long enough that the user clicks back to whatever launched the app,
         // and the first real frame then surfaces in the background. GL windows
         // paint within the same frame they appear, so they stay visible-on-create.
+        // A borderless-fullscreen GL window is also created hidden, so that it
+        // can be moved onto the monitor origin before it is ever painted —
+        // otherwise it flashes at GLFW's default (centred) position first. It
+        // is revealed at the end of this function, unlike a Vulkan canvas,
+        // which stays hidden until its renderer has presented.
         const bool deferShow = params_.headless_ || api == GraphicsAPI::Vulkan;
-        glfwWindowHint(GLFW_VISIBLE, deferShow ? GLFW_FALSE : GLFW_TRUE);
+        glfwWindowHint(GLFW_VISIBLE, (deferShow || borderless) ? GLFW_FALSE : GLFW_TRUE);
 #else
         // Browser: OpenGL (WebGL2) needs GLFW to create the WebGL context.
         // Suppressing it left GLctx undefined and crashed the GL renderer on
@@ -294,6 +340,21 @@ struct Canvas::Impl {
                     "Canvas: glfwCreateWindow failed for '" + params_.title_ + "' (requested " +
                     (api == GraphicsAPI::Vulkan ? "Vulkan" : "OpenGL") + ")");
         }
+
+#ifndef __EMSCRIPTEN__
+        if (borderless) {
+            // Cover the primary monitor from its own origin (which is NOT
+            // (0,0) on a multi-monitor desktop whose primary sits to the right
+            // of another screen).
+            int mx = 0, my = 0;
+            if (GLFWmonitor* m = glfwGetPrimaryMonitor()) {
+                glfwGetMonitorPos(m, &mx, &my);
+            }
+            glfwSetWindowPos(window, mx, my);
+            // The reveal waits until the icon and callbacks are installed
+            // below — see the end of this function.
+        }
+#endif
 
 #ifdef __EMSCRIPTEN__
 #pragma GCC diagnostic push
@@ -340,6 +401,16 @@ struct Canvas::Impl {
             glEnable(GL_PROGRAM_POINT_SIZE);
 #endif
         }
+
+#ifndef __EMSCRIPTEN__
+        // A borderless-fullscreen window was created hidden only so it could be
+        // moved onto the monitor origin unseen; now that it is placed, iconed
+        // and wired up, reveal it. A canvas with a real reason to stay hidden
+        // (headless, or Vulkan waiting on its first present) is left alone.
+        if (borderless && !deferShow) {
+            glfwShowWindow(window);
+        }
+#endif
     }
 
     [[nodiscard]] const WindowSize& getSize() const {
@@ -685,6 +756,11 @@ Canvas::Parameters::Parameters(const std::unordered_map<std::string, ParameterVa
             headless(std::get<bool>(value));
             used = true;
 
+        } else if (key == "fullscreen") {
+
+            fullscreen(std::get<bool>(value));
+            used = true;
+
         }
 
         if (!used) {
@@ -759,6 +835,13 @@ Canvas::Parameters& Canvas::Parameters::exitOnKeyEscape(bool flag) {
 Canvas::Parameters& Canvas::Parameters::headless(bool flag) {
 
     headless_ = flag;
+
+    return *this;
+}
+
+Canvas::Parameters& Canvas::Parameters::fullscreen(bool flag) {
+
+    fullscreen_ = flag;
 
     return *this;
 }

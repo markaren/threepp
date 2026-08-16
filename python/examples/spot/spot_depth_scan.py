@@ -32,6 +32,11 @@ from spot_terrain_env import SCAN_GX, SCAN_GY, N_SCAN, scan_xy_np
 def _height_ramp(z, lo=0.0, hi=0.8):
     """Map height z (m) to a blue(low)->green->red(high) ramp -> per-point colors [N,3] for the cloud.
 
+    lo/hi are ABSOLUTE world heights, so callers must band them around whatever ground the robot is
+    standing on. Leaving the old lo=0/hi=0.8 defaults on terrain whose surface sits at z~7 m clamps
+    every point to t=1 and paints the whole cloud flat red — the ramp carries no information at all.
+    _update_viz bands them around h_here for exactly this reason.
+
     The ramp stops are authored as DISPLAY (sRGB) colors — (1, 0.25, 0) is meant
     to READ as deep red. threepp vertex colors are linear and every renderer
     output path applies the sRGB OETF (the Vulkan point overlay included, since
@@ -133,6 +138,14 @@ class ForwardDepthScanner:
             self.marker_group = grp
             scene.add(grp)
             self.hide.append(grp)
+            # Last colour pushed per marker. The Vulkan backend caches derived
+            # material state and re-reads it only when the material's version
+            # changes, so `mk.material.color = ...` alone is INVISIBLE there —
+            # every marker keeps its construction colour for the whole run.
+            # tp.flush_material() bumps the version (no-op on GL); tracking the
+            # last value keeps that to the handful of markers that actually
+            # changed shade this scan instead of all 45 every time.
+            self._mk_color = [0x22ff88] * N_SCAN
 
     def clear_map(self):
         """Forget the elevation map (call on any teleport so old terrain is not sampled under a new pose)."""
@@ -183,26 +196,24 @@ class ForwardDepthScanner:
         return best
 
     # ---------------------------------------------------------------- the scan
-    def scan(self, rs):
-        """rs = articulation root_state [x,y,z, qx,qy,qz,qw]. Returns (ahead[45] float32, h_here float).
-
-        Renders one depth frame from the body-mounted camera, fuses it into the elevation map, and reads
-        the 45-cell heading-relative scan + the height under the base out of the map.
-        """
+    def _place(self, rs):
+        """Put the sensor on its body mount from root state rs = [x,y,z, qx,qy,qz,qw]."""
         x, y, z = float(rs[0]), float(rs[1]), float(rs[2])
         R = _quat_to_R(rs[3:7])                                      # body->world
 
         wp = np.array([x, y, z]) + R @ self.mount_local
         self.sensor.position.set(float(wp[0]), float(wp[1]), float(wp[2]))
-        q = _quat_from_R(R @ self.R_mount)                          # camera-local -> world
+        q = _quat_from_R(R @ self.R_mount)                           # camera-local -> world
         self.sensor.quaternion.set(float(q[0]), float(q[1]), float(q[2]), float(q[3]))
 
-        saved = [(o, o.visible) for o in self.hide]                 # self-filter: hide robot + own viz
-        for o, _ in saved:
-            o.visible = False
-        pts = self.sensor.scan(self.renderer, self.scene)
-        for o, v in saved:
-            o.visible = v
+    def _process(self, pts, rs):
+        """Fuse a cloud into the map, then read the 45-cell scan at the pose rs. -> (ahead, h_here).
+
+        The map is world-anchored, so `pts` may come from a fire issued several frames ago; the QUERY
+        points must be built from the CURRENT rs, which is why the pose is passed in separately.
+        """
+        x, y = float(rs[0]), float(rs[1])
+        R = _quat_to_R(rs[3:7])
 
         self._accumulate(pts)
 
@@ -224,27 +235,104 @@ class ForwardDepthScanner:
         self._update_viz(pts, qpx, qpy, h_grid, h_here)
         return ahead, float(h_here)
 
+    def scan(self, rs):
+        """rs = articulation root_state [x,y,z, qx,qy,qz,qw]. Returns (ahead[45] float32, h_here float).
+
+        Renders one depth frame from the body-mounted camera, fuses it into the elevation map, and reads
+        the 45-cell heading-relative scan + the height under the base out of the map.
+
+        SYNCHRONOUS: on Vulkan this blocks until the GPU trace behind the in-flight frame retires
+        (~17-30 ms in the spot_slam scene). Interactive viewers should prefer scan_fire/scan_harvest.
+        """
+        self._place(rs)
+
+        saved = [(o, o.visible) for o in self.hide]                 # self-filter: hide robot + own viz
+        for o, _ in saved:
+            o.visible = False
+        pts = self.sensor.scan(self.renderer, self.scene)
+        for o, v in saved:
+            o.visible = v
+
+        return self._process(pts, rs)
+
+    # ---------------------------------------------------------------- pipelined scan (fire / harvest)
+    def scan_fire(self, rs):
+        """Place the sensor at rs and FIRE an async scan; the beams snapshot this pose now.
+
+        Intended frame pattern (Vulkan):
+
+            harvest = scanner.scan_harvest(rs)   # BEFORE render — free if a render happened since the fire
+            ...
+            rend.render(scene, camera)
+            if frame % SCAN_EVERY == 0:
+                scanner.scan_fire(rs)            # AFTER render — traces the TLAS this render just built
+
+        The fire and its harvest are separated by at least one render(), so the collect finds the trace
+        already retired and costs ~nothing instead of stalling on the in-flight frame. The elevation map
+        is world-anchored, so fusing a cloud that is a few frames old is correct; only the 45 query
+        points must be current-pose-relative, and scan_harvest builds them from the rs it is given.
+
+        Returns True if a scan was fired. A fire while one is still outstanding is REFUSED rather
+        than issued: scan_begin overwrites the sensor's handle, so the earlier scan's result slot
+        would never be collected and would stay checked out until the backend recycled it. Under a
+        fixed fire cadence that leaks a slot per missed harvest and eventually starves the sensor —
+        the scan simply stops updating. Harvest first, then fire.
+        """
+        if self.sensor.scan_pending:
+            return False
+        self._place(rs)
+        saved = [(o, o.visible) for o in self.hide]                 # self-filter: hide robot + own viz
+        for o, _ in saved:
+            o.visible = False
+        self.sensor.scan_begin(self.renderer, self.scene)
+        for o, v in saved:
+            o.visible = v
+        return True
+
+    def scan_harvest(self, rs):
+        """Collect a pending fire if it has landed. -> (ahead[45] float32, h_here float) or None.
+
+        Returns None (and does nothing) when no fire is outstanding or the trace has not been delivered
+        yet — the caller keeps using its cached scan for that frame. See scan_fire for the frame pattern.
+        """
+        if not self.sensor.scan_pending:
+            return None
+        if not self.sensor.scan_ready(self.renderer):
+            return None
+        pts = self.sensor.scan_collect(self.renderer)
+        return self._process(pts, rs)
+
     def _update_viz(self, pts, qpx, qpy, h_grid, h_here):
         if self.show_cloud and self.cloud is not None:
             self.cloud.visible = True
             n = min(int(pts.shape[0]), self.cap)
             if n:
                 self.cloud_geom.update_attribute("position", np.ascontiguousarray(pts[:n], np.float32))
-                self.cloud_geom.update_attribute("color", _height_ramp(pts[:n, 2]))
+                # Band the ramp around the ground the robot is standing on, not around z=0: this
+                # reads as "blue = a step down, green = level, red = an obstacle up to 35 cm high"
+                # at any terrain elevation, and follows the robot as it climbs.
+                self.cloud_geom.update_attribute(
+                    "color", _height_ramp(pts[:n, 2], lo=h_here - 0.35, hi=h_here + 0.35))
             self.cloud_geom.set_draw_range(0, n)
         elif self.cloud is not None:
             self.cloud.visible = False
 
         if self.show_grid and self.markers:
             self.marker_group.visible = True
+            dirty = []
             for i, mk in enumerate(self.markers):
                 hi = h_grid[i]
                 seen = not math.isnan(hi)
                 hz = float(hi) if seen else float(h_here)
                 mk.position.set(float(qpx[i]), float(qpy[i]), hz + 0.03)
-                if seen:
-                    mk.material.color = _delta_color(float(np.clip((hz - h_here) / 0.2, -1.0, 1.0)))
-                else:
-                    mk.material.color = 0x3a3f47                    # dim grey = not yet observed
+                col = (_delta_color(float(np.clip((hz - h_here) / 0.2, -1.0, 1.0))) if seen
+                       else 0x3a3f47)                               # dim grey = not yet observed
+                if col != self._mk_color[i]:
+                    mk.material.color = col
+                    self._mk_color[i] = col
+                    dirty.append(mk.material)
+            # Push the edits to the GPU (Vulkan caches material state by version; no-op on GL).
+            if dirty:
+                tp.flush_material(self.renderer, *dirty)
         elif self.markers:
             self.marker_group.visible = False

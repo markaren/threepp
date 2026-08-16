@@ -129,6 +129,16 @@ namespace threepp {
 
             Parameters& headless(bool flag);
 
+            /// Borderless windowed fullscreen: an undecorated, non-resizable
+            /// window the size of the primary monitor's current video mode,
+            /// placed at that monitor's origin. Any requested size() is
+            /// ignored. This is deliberately NOT exclusive fullscreen — the
+            /// display mode is never changed, alt-tab behaves like any other
+            /// window, and a Vulkan canvas can still stay hidden until its
+            /// first present. Ignored when headless(true): there is no window
+            /// to make fullscreen, and the size stays whatever was requested.
+            Parameters& fullscreen(bool flag);
+
         private:
             std::optional<WindowSize> size_;
             int antialiasing_{4};
@@ -137,6 +147,7 @@ namespace threepp {
             bool resizable_{true};
             bool exitOnKeyEscape_{true};
             bool headless_{false};
+            bool fullscreen_{false};
             GraphicsAPI graphicsApi_{GraphicsAPI::OpenGL};
             std::optional<std::filesystem::path> favicon_;
 

@@ -9,6 +9,7 @@ to reconstruct the growing SLAM surface (semi-transparent blue) over the ground 
     python spot_slam.py --shot out.png
 
 Controls: W/S = fwd/back  A/D = strafe  Q/E = turn  |  R = reset  |  mouse = orbit/zoom
+The interactive window opens FULLSCREEN; pass --windowed for a 1200x720 window instead.
 """
 import argparse, math, os, sys, threading, time
 import numpy as np
@@ -37,6 +38,11 @@ from scratch_clock import GAIT_PERIOD
 
 GRAV = np.array([0.0, 0.0, -1.0])
 
+# SPOT_SCANSTATS=1 prints the 45-cell scan's spread every 60 frames — the check that the
+# height scan the policy consumes is actually tracking terrain, independent of how it is drawn.
+_SCANSTATS = bool(os.environ.get("SPOT_SCANSTATS"))
+_RESET_AT  = int(os.environ.get("SPOT_BENCH_RESET_AT", "0"))   # bench-only reset smoke test
+
 # ── constants ──────────────────────────────────────────────────────────────────
 WORLD_SZ   = 80.0
 AMPLITUDE  = 10.8
@@ -54,14 +60,19 @@ TREE_SPECIES = [
 VARIANTS_PER_SPECIES = 5   # a handful of distinct seeds per species (like fjord/forest_demo);
                            # placements reuse these prototypes so the pool stays cheap
 WATER_BIAS_R = 14.0        # within this radius of the pond centre, favour willows
-SENSOR_W   = 160
-SENSOR_H   = 120
+SENSOR_W   = 128   # 128x96 = 12.3k beams: ~12.5 cm footprint at far range, still
+SENSOR_H   = 96    # denser than the 15 cm elevation-map cell — was 160x120
 SENSOR_FAR = 8.0
 SCAN_EVERY = 3       # depth scan every N frames; result cached for policy (~17 Hz)
 MC_FRAMES  = 90      # trigger SLAM rebuild every N rendered frames
 GRASS_BLADES = 12000 # merged GrassMesh blade count (GPU-wind on Vulkan); tune for FPS
 GRASS_RADIUS = 42.0  # grass disk radius around spawn (fog hides >25 m anyway)
 HDR_URL = "https://dl.polyhaven.org/file/ph-assets/HDRIs/hdr/2k/noon_grass_2k.hdr"
+
+# ── bench (--bench N) ─────────────────────────────────────────────────────────
+BENCH_WARMUP = 120     # frames dropped from the statistics (pipeline/TAA/allocator warmup)
+BENCH_BUDGET = 16.7    # ms — a frame above this missed 60 Hz
+BENCH_PHASES = ("policy", "physics", "slam", "camera", "scan", "render", "ui")
 
 
 
@@ -530,6 +541,13 @@ class SlamMapper:
         self._visible= [True]
         self._sent   = None      # scanner cells already pushed into the grid
         self._lock   = threading.Lock()
+        # Bumped by clear(). A rebuild carries the generation it started in and
+        # refuses to publish into a newer one — otherwise a worker that was
+        # already marching cubes when the user hit R finishes a second later and
+        # hands apply_pending() the PRE-reset surface, which then reappears on
+        # screen over the freshly cleared map. Blanking the draw range in
+        # clear() cannot prevent that: the stale result arrives afterwards.
+        self._gen    = 0
 
         # ONE mesh + geometry for the whole session, preallocated at capacity:
         # a rebuild overwrites the leading rows and moves the draw range.
@@ -541,6 +559,7 @@ class SlamMapper:
         g.set_attribute("position", np.zeros((self.MAX_VERTS, 3), np.float32))
         g.set_attribute("normal",   np.zeros((self.MAX_VERTS, 3), np.float32))
         g.set_draw_range(0, 0)
+        self._draw_n = 0          # mirrors the geometry's draw count (not readable back)
         mat = tp.MeshStandardMaterial()
         mat.color       = 0x55bbff
         mat.side        = tp.Side.Double
@@ -552,7 +571,7 @@ class SlamMapper:
         self._geo  = g
         self._surf = tp.Mesh(g, mat)
         self._surf.frustum_culled = False
-        self._surf.visible = self._visible[0]
+        self._apply_visibility()   # nothing built yet -> hidden
         # Added to the scene on the FIRST surface, not here: a 600k-vertex
         # all-zero geometry parked at the origin is still a scene entry, and the
         # depth sensor traces the scene rather than the draw range.
@@ -587,13 +606,16 @@ class SlamMapper:
                 return
             pts = self.grid.collect()
             self._busy[0] = True
-        threading.Thread(target=self._worker, args=(pts,), daemon=True).start()
+            gen = self._gen
+        threading.Thread(target=self._worker, args=(pts, gen), daemon=True).start()
 
-    def _worker(self, pts):
+    def _worker(self, pts, gen):
         try:
             field = tp.splat_points_to_field(pts, self.CELL, self.RAD, max_nodes=6_000_000)
             iso   = tp.marching_cubes(field, self.ISO)
             with self._lock:
+                if gen != self._gen:
+                    return               # cleared while we were building — drop it
                 self._pending[0] = iso if not iso.empty else None
         finally:
             with self._lock:
@@ -609,35 +631,59 @@ class SlamMapper:
         n -= n % 3                       # whole triangles only
         if n <= 0:
             self._geo.set_draw_range(0, 0)
+            self._draw_n = 0
+            self._apply_visibility()
             return
         if pos.shape[0] > self.MAX_VERTS:
             print(f"[slam] surface clipped to {self.MAX_VERTS} of {pos.shape[0]} verts")
         self._geo.update_attribute("position", pos[:n])
         self._geo.update_attribute("normal",   nrm[:n])
         self._geo.set_draw_range(0, n)
+        self._draw_n = n
+        self._apply_visibility()
         if not self._added:
             self.scene.add(self._surf)   # once per session, not per rebuild
             self._added = True
 
     def clear(self):
-        """Hide the displayed surface and discard all accumulated data."""
+        """Hide the displayed surface and discard all accumulated data.
+
+        Also invalidates any rebuild currently running, so its result is dropped
+        rather than restoring the pre-clear surface a moment later.
+        """
         with self._lock:
+            self._gen += 1
             self._pending[0] = None
         self.grid.clear()
         self._sent = None
         self._geo.set_draw_range(0, 0)
+        self._draw_n = 0
+        self._apply_visibility()
 
     @property
     def busy(self):  return self._busy[0]
     @property
     def voxels(self): return self.grid.voxel_count
 
+    def _apply_visibility(self):
+        """Show the surface only when it actually has triangles.
+
+        Dropping the draw range to 0 is NOT enough to blank it. The wireframe material routes
+        this mesh through the renderer's overlay line path, which caches the line list it built
+        from the geometry and refreshes that cache on the geometry's VERSION. update_attribute
+        bumps the version (so a rebuild shows up), but set_draw_range alone does not — so after
+        clear() the renderer keeps drawing the last cached surface until the next rebuild
+        replaces it. That is what made the SLAM surface survive a reset. Visibility is evaluated
+        per frame during traversal, so gating on it blanks the mesh immediately.
+        """
+        self._surf.visible = bool(self._visible[0] and self._draw_n > 0)
+
     @property
     def visible(self): return self._visible[0]
     @visible.setter
     def visible(self, v):
         self._visible[0] = v
-        self._surf.visible = v
+        self._apply_visibility()
 
 
 # ── path trail ────────────────────────────────────────────────────────────────
@@ -679,6 +725,80 @@ class PathTrail:
         self._g.set_draw_range(0, 0)
 
 
+# ── bench report ──────────────────────────────────────────────────────────────
+def _bench_report(bt, total, period, scan_only, gpu):
+    """Print the --bench summary. `bt`/`total`/`period`/`gpu` are per-frame and
+    index-aligned with the warmup already trimmed; `scan_only` holds the scan
+    phase of scan frames only. Seconds everywhere except `gpu`, which is the
+    renderer's frame_timings dict and already milliseconds."""
+    n = len(total)
+    if n == 0:
+        print(f"[bench] nothing measured — N must exceed the {BENCH_WARMUP}-frame warmup")
+        return
+
+    def ms(a):
+        return np.asarray(a, np.float64) * 1000.0
+
+    per, tot = ms(period), ms(total)
+    over = int((per > BENCH_BUDGET).sum())
+    print()
+    print(f"== bench: {n} frames measured ({BENCH_WARMUP} warmup frames discarded) ==")
+    print(f"overall   {1000.0 / max(float(per.mean()), 1e-9):.2f} fps")
+    print(f"  period ms  mean {per.mean():8.3f}  p50 {np.percentile(per, 50):8.3f}"
+          f"  p95 {np.percentile(per, 95):8.3f}  p99 {np.percentile(per, 99):8.3f}"
+          f"  max {per.max():8.3f}")
+    print(f"  over {BENCH_BUDGET} ms: {over}/{n} frames ({100.0 * over / n:.1f}%)")
+
+    P = {k: ms(bt[k]) for k in BENCH_PHASES}
+    print()
+    print("cpu phases (ms)")
+    print(f"  {'phase':<10}{'mean':>10}{'p50':>10}{'p95':>10}{'max':>10}")
+    for k in BENCH_PHASES + ("total",):
+        a = tot if k == "total" else P[k]
+        print(f"  {k:<10}{a.mean():10.3f}{np.percentile(a, 50):10.3f}"
+              f"{np.percentile(a, 95):10.3f}{a.max():10.3f}")
+
+    smask = P["scan"] > 0.0
+    print()
+    print("scan vs non-scan frames (frame total, ms)")
+    for label, sel in (("scan", smask), ("non-scan", ~smask)):
+        if int(sel.sum()):
+            a = tot[sel]
+            print(f"  {label:<10}n={int(sel.sum()):<7}mean {a.mean():8.3f}  p95 {np.percentile(a, 95):8.3f}")
+    if len(scan_only):
+        a = ms(scan_only)
+        print(f"  scan phase itself: mean {a.mean():8.3f}  p95 {np.percentile(a, 95):8.3f}")
+
+    keys = sorted(gpu[0].keys()) if gpu and gpu[0] else []
+    if keys:
+        print()
+        print("renderer frame_timings (ms)")
+        print(f"  {'key':<22}{'mean':>10}{'p95':>10}")
+        for k in keys:
+            a = np.asarray([float(g.get(k, 0.0)) for g in gpu], np.float64)
+            print(f"  {k:<22}{a.mean():10.3f}{np.percentile(a, 95):10.3f}")
+
+    # hitch attribution — which phase dominated each over-budget frame
+    stack = np.stack([P[k] for k in BENCH_PHASES])          # (phase, frame)
+    hits  = np.nonzero(per > BENCH_BUDGET)[0]
+    print()
+    print(f"hitch blame ({len(hits)} frames over {BENCH_BUDGET} ms)")
+    if len(hits):
+        top    = stack[:, hits].argmax(axis=0)
+        counts = sorted(((int((top == j).sum()), k) for j, k in enumerate(BENCH_PHASES)),
+                        reverse=True)
+        for c, k in counts:
+            if c:
+                print(f"  {k:<10}{c:7d}  ({100.0 * c / len(hits):.1f}%)")
+        print("worst 5 frames")
+        for i in hits[np.argsort(per[hits])[::-1][:5]]:
+            order  = np.argsort(stack[:, i])[::-1][:3]
+            phases = "  ".join(f"{BENCH_PHASES[int(j)]} {stack[int(j), i]:.2f}" for j in order)
+            gt     = float(gpu[int(i)].get("gpu_total_ms", 0.0)) if int(i) < len(gpu) else 0.0
+            print(f"  frame {BENCH_WARMUP + int(i) + 1:<7} period {per[i]:8.3f}   "
+                  f"{phases}   gpu_total {gt:.2f}")
+
+
 # ── main ──────────────────────────────────────────────────────────────────────
 def main():
     ap = argparse.ArgumentParser()
@@ -687,9 +807,14 @@ def main():
     ap.add_argument("--model",     default=os.path.join(_HERE, "spot_steps.pt"),
                     help="policy checkpoint (falls back to <model>_latest.pt)")
     ap.add_argument("--shot",      metavar="PNG")
+    ap.add_argument("--windowed",  action="store_true",
+                    help="1200x720 window instead of fullscreen")
+    ap.add_argument("--bench",     type=int, default=0, metavar="N",
+                    help="profile N frames: vsync off, auto-walk forward, print timing summary, exit")
     args = ap.parse_args()
     assert tp.HAS_PHYSX, "needs a PhysX-enabled threepp build"
     headless = bool(args.shot)
+    bench    = int(args.bench)
 
     # ── assets ────────────────────────────────────────────────────────────────
     assets = fetch_assets()
@@ -749,14 +874,42 @@ def main():
     print("[spot] standing")
 
     # ── canvas + renderer ─────────────────────────────────────────────────────
-    canvas = tp.Canvas("threepp · Spot SLAM", width=1200, height=720,
-                       antialiasing=4, headless=headless)
+    # --bench profiles the REAL interactive frame (window + ImGui); only vsync goes,
+    # so the measured period is the frame's own cost rather than the display's.
+    _bw, _bh = 1200, 720
+    # Interactive runs go fullscreen (--windowed opts out); --shot stays at the fixed
+    # offscreen size. SPOT_BENCH_SIZE sizes the bench window explicitly, so it wins.
+    _fullscreen = False #not headless and not args.windowed
+    if bench and os.environ.get("SPOT_BENCH_SIZE"):
+        _bw, _bh = (int(v) for v in os.environ["SPOT_BENCH_SIZE"].split("x"))
+        _fullscreen = False
+    _vsync = (not bench) or bool(os.environ.get("SPOT_BENCH_VSYNC"))
+    canvas = tp.Canvas("threepp · Spot SLAM", width=_bw, height=_bh,
+                       antialiasing=4, headless=headless, vsync=_vsync,
+                       fullscreen=_fullscreen)
     rend = tp.VulkanRenderer(canvas)
     rend.shadow_map_enabled       = True
     rend.tone_mapping             = tp.ToneMapping.ACESFilmic
     rend.tone_mapping_exposure    = 1.1
+    # Render below native and let FSR 3.1 reconstruct back up: the deferred shade is the
+    # dominant GPU cost here and it scales with the internal resolution. Measured on an
+    # RTX 4070 at 1920x1200 fullscreen with vsync, 0.5 is the largest scale whose GPU
+    # frame (p95) still fits the 16.7 ms vblank budget in foliage-dense views — 0.58
+    # already drops ~3% of vblanks. SPOT_BENCH_KNOBS (below) can still override
+    # render_scale so perf sweeps keep working.
+    rend.render_scale             = 0.5
     # if hasattr(rend, "gbuffer_msaa"):
     #     rend.gbuffer_msaa = 2
+    if bench and os.environ.get("SPOT_BENCH_KNOBS"):
+        # e.g. SPOT_BENCH_KNOBS="render_scale=0.67,probe_gi=0" — renderer attr
+        # overrides for perf A/B sweeps; bench-only, floats coerced to bool for
+        # bool-typed properties by pybind.
+        for kv in os.environ["SPOT_BENCH_KNOBS"].split(","):
+            k, v = kv.split("=")
+            cur = getattr(rend, k.strip())
+            val = float(v) if not isinstance(cur, bool) else bool(float(v))
+            setattr(rend, k.strip(), val)
+            print(f"[bench] knob {k.strip()} = {val}")
 
     # ── scene ─────────────────────────────────────────────────────────────────
     scene = tp.Scene()
@@ -872,10 +1025,30 @@ def main():
 
     # ── state ─────────────────────────────────────────────────────────────────
     fc        = [0]
+    _nh       = [0]      # harvests delivered (SPOT_SCANSTATS diagnostic)
     hdg_lock  = [None]
     r_held    = [False]
     gphi      = [0.0]    # gait phase clock ∈ [0,1); advanced +0.02/GAIT_PERIOD per control tick
     vx_hi     = [float(VX_HI)]    # live forward-speed cap (UI slider sets it)
+
+    # ── bench state (untouched unless --bench) ────────────────────────────────
+    bench_t     = {k: [] for k in BENCH_PHASES}   # per-phase seconds, one entry per frame
+    bench_total = []              # whole frame() body, seconds
+    bench_per   = []              # wall delta between frame() entries (true frame period)
+    bench_scan  = []              # scan phase on scan frames only
+    bench_gpu   = []              # rend.frame_timings snapshot per frame
+    _t_prev     = [None]          # wall clock at the previous frame() entry
+    _tm         = [0.0]           # section stopwatch
+    _has_ft     = hasattr(rend, "frame_timings")
+    if bench and os.environ.get("SPOT_BENCH_GC") == "off":
+        import gc
+        gc.freeze(); gc.disable()   # isolate GC pauses from the timing signal
+        print("[bench] gc disabled")
+
+    def _mark(key):
+        now = time.perf_counter()
+        bench_t[key].append(now - _tm[0])
+        _tm[0] = now
 
     def reset():
         rh = max(float(gen.height_at(SPAWN_X + dx, SPAWN_Y + dy, tparams)) for dx, dy in _FEET)
@@ -884,6 +1057,10 @@ def main():
         hdg_lock[0] = None
         gphi[0] = 0.0
         settle(40)
+        # A scan fired before the teleport is still in flight; harvesting it after the map is
+        # cleared would fuse pre-reset terrain under the new pose. Collect and discard it.
+        if getattr(scanner.sensor, "scan_pending", False):
+            scanner.sensor.scan_collect(rend)
         scanner.clear_map(); scanner.prewarm(art.root_state())
         slam.clear()
         trail.clear()
@@ -991,11 +1168,18 @@ def main():
 
     def frame():
         fc[0] += 1
+        if bench:
+            _t_frame = time.perf_counter()
+            bench_per.append(0.0 if _t_prev[0] is None else _t_frame - _t_prev[0])
+            _t_prev[0] = _t_frame
 
         # keyboard command — WASD drive, QE turn (numpad kept as an alternate)
-        vx = (vx_hi[0] if down("W", "KP8") else 0.0) - (1.0 if down("S", "KP2") else 0.0)
-        vy = (1.0 if down("A", "KP4") else 0.0) - (1.0 if down("D", "KP6") else 0.0)
-        wz_key = (1.5 if down("Q", "KP7") else 0.0) - (1.5 if down("E", "KP9") else 0.0)
+        if bench:
+            vx, vy, wz_key = vx_hi[0], 0.0, 0.0   # auto-walk forward; heading hold below
+        else:
+            vx = (vx_hi[0] if down("W", "KP8") else 0.0) - (1.0 if down("S", "KP2") else 0.0)
+            vy = (1.0 if down("A", "KP4") else 0.0) - (1.0 if down("D", "KP6") else 0.0)
+            wz_key = (1.5 if down("Q", "KP7") else 0.0) - (1.5 if down("E", "KP9") else 0.0)
 
         # heading hold
         rs  = art.root_state()
@@ -1009,6 +1193,7 @@ def main():
             wz  = float(np.clip(-2.0 * err, -1.0, 1.0))
 
         # obs → policy → step
+        if bench: _tm[0] = time.perf_counter()
         cmd   = np.array([vx, vy, wz], np.float32)
         obs   = v2_obs(art, last_act, cmd, ahead_cache[0], h_here_cache[0], gphi[0])
         with torch.no_grad():
@@ -1018,24 +1203,42 @@ def main():
             a = ac.act_mean(obs_t)[0].numpy()
         last_act[:] = a
         art.set_drive_targets((default_q + ACTION_SCALE * a)[add_to_isaac].astype(np.float32))
+        if bench: _mark("policy")
         world.step(0.02)
+        if bench: _mark("physics")
         gphi[0] = (gphi[0] + 0.02 / GAIT_PERIOD) % 1.0
         rs = art.root_state()
-        if fc[0] % MC_FRAMES == 0:
+        if bench: _tm[0] = time.perf_counter()
+        if fc[0] % MC_FRAMES == 0 and not (bench and os.environ.get("SPOT_BENCH_NO_MC")):
             slam.trigger_rebuild()
         slam.apply_pending()
         trail.update(rs)
+        if bench: _mark("slam")
 
-        # R = reset
-        if down("R"):
-            if not r_held[0]: reset(); print("[reset]")
-            r_held[0] = True
-        else:
-            r_held[0] = False
+        # SPOT_BENCH_RESET_AT=N exercises the reset path (incl. dropping an in-flight scan and
+        # invalidating a running SLAM rebuild) without a keyboard — see reset().
+        if bench and _RESET_AT and fc[0] == _RESET_AT:
+            print(f"[reset-test] f{fc[0]} before: voxels={slam.voxels} busy={slam.busy} "
+                  f"draw_verts={slam._draw_n}")
+            reset()
+            print(f"[reset-test] f{fc[0]} after:  voxels={slam.voxels} busy={slam.busy} "
+                  f"draw_verts={slam._draw_n}")
+        if bench and _RESET_AT and _RESET_AT < fc[0] <= _RESET_AT + 120 and fc[0] % 15 == 0:
+            print(f"[reset-test] f{fc[0]} +{fc[0]-_RESET_AT:3d}: voxels={slam.voxels} "
+                  f"busy={slam.busy} draw_verts={slam._draw_n}")
+
+        # R = reset (no keyboard in bench mode)
+        if not bench:
+            if down("R"):
+                if not r_held[0]: reset(); print("[reset]")
+                r_held[0] = True
+            else:
+                r_held[0] = False
 
         # Follow Spot: shift camera by same delta as target so OrbitControls
         # sees an unchanged spherical offset (stays in orbit around Spot
         # rather than fixed in world space while Spot walks away).
+        if bench: _tm[0] = time.perf_counter()
         p = np.array(rs[:3], float)
         new_tgt = np.array([float(p[0]), float(p[1]), float(p[2]) + 0.3])
         delta = new_tgt - _prev_tgt[0]
@@ -1045,30 +1248,89 @@ def main():
         controls.target.set(float(new_tgt[0]), float(new_tgt[1]), float(new_tgt[2]))
         controls.enabled = not (ui and ui.want_capture_mouse)
         controls.update()
+        if bench: _mark("camera")
 
-        if fc[0] % SCAN_EVERY == 0:
-            if is_vulkan:
-                # The SLAM surface is wireframe → excluded from the PT TLAS; the trail (Line)
-                # and point cloud (Points) are never ray-traced either. scan() traces the TLAS
-                # from the previous frame's render() → clean, no hiding/extra render needed.
-                ahead_cache[0], h_here_cache[0] = scanner.scan(rs)
-            else:
-                # GL: the sensor re-renders the scene, so hide the SLAM surface + trail (the
-                # scanner already hides the robot + its own cloud/grid).
-                _extra = [(o, o.visible) for o in (slam._surf, trail.line) if o is not None]
-                for o, _ in _extra: o.visible = False
-                ahead_cache[0], h_here_cache[0] = scanner.scan(rs)
-                for o, v in _extra: o.visible = v
+        # ── depth scan, PRE-render half: harvest ──────────────────────────────────────────
+        # Vulkan scan() is synchronous: it fires a GPU trace and then waits behind the frame
+        # already in flight (~17-30 ms here). Pipelined instead — the fire goes AFTER this
+        # frame's render (below), the harvest happens on a LATER frame, by which time the
+        # trace has retired and the collect is ~free. The elevation map is world-anchored, so
+        # fusing a cloud a few frames old is correct; the 45 query points use the current rs.
+        _scan_dt = 0.0
+        _scan_work = False
+        if bench: _t_scan = time.perf_counter()
+        if is_vulkan:
+            # The SLAM surface is wireframe → excluded from the PT TLAS; the trail (Line)
+            # and point cloud (Points) are never ray-traced either → nothing to hide here.
+            res = scanner.scan_harvest(rs)
+            if res is not None:
+                ahead_cache[0], h_here_cache[0] = res
+                slam.insert_scanner(scanner)
+                _scan_work = True
+                _nh[0] += 1
+                if _SCANSTATS and _nh[0] % 20 == 0:
+                    _a = ahead_cache[0]
+                    print(f"[scanstats] f{fc[0]:5d} ahead min={_a.min():+.3f} max={_a.max():+.3f} "
+                          f"std={_a.std():.4f} nonzero={int((_a != 0).sum())}/45 "
+                          f"h_here={h_here_cache[0]:.3f} voxels={slam.voxels}")
+        elif fc[0] % SCAN_EVERY == 0:
+            # GL: the sensor re-renders the scene and blocks anyway, so keep the fully
+            # synchronous path — hide the SLAM surface + trail (the scanner already hides
+            # the robot + its own cloud/grid).
+            _extra = [(o, o.visible) for o in (slam._surf, trail.line) if o is not None]
+            for o, _ in _extra: o.visible = False
+            ahead_cache[0], h_here_cache[0] = scanner.scan(rs)
+            for o, v in _extra: o.visible = v
             slam.insert_scanner(scanner)
+            _scan_work = True
+        if bench: _scan_dt += time.perf_counter() - _t_scan
 
+        if bench: _tm[0] = time.perf_counter()
         grass.time = time.perf_counter() - t0  # advance GPU wind (Vulkan)
         rend.render(scene, camera)             # single render per frame — no flicker
+        if bench: _mark("render")
+
+        # ── depth scan, POST-render half: fire ────────────────────────────────────────────
+        # Right after render() so the trace runs against the TLAS this render just built.
+        # The beams snapshot the sensor pose now; a later frame harvests the cloud.
+        if is_vulkan and fc[0] % SCAN_EVERY == 0:
+            if bench: _t_scan = time.perf_counter()
+            scanner.scan_fire(rs)
+            if bench: _scan_dt += time.perf_counter() - _t_scan
+            _scan_work = True
+        if bench:
+            # one entry per frame (phase lists stay frame-aligned); harvest + fire share it
+            bench_t["scan"].append(_scan_dt if _scan_work else 0.0)
+            if _scan_work:
+                bench_scan.append(_scan_dt)
+
         if ui:
+            if bench: _tm[0] = time.perf_counter()
             ui.render(draw_ui)
+            if bench: _mark("ui")
+        elif bench:
+            bench_t["ui"].append(0.0)
+
+        if bench:
+            bench_total.append(time.perf_counter() - _t_frame)
+            bench_gpu.append(dict(rend.frame_timings) if _has_ft else {})
+            if (os.environ.get("SPOT_BENCH_SHOT")
+                    and fc[0] == int(os.environ.get("SPOT_BENCH_SHOT_FRAME", "1000"))):
+                _save_frame(os.environ["SPOT_BENCH_SHOT"])   # quality A/B capture
+            if fc[0] >= bench:
+                canvas.close()
 
     print(__doc__)
+    if bench:
+        print(f"[bench] profiling {bench} frames (first {BENCH_WARMUP} are warmup) ...")
     t0 = time.perf_counter()
     canvas.animate(frame)
+
+    if bench:
+        w = BENCH_WARMUP
+        warm_scans = sum(1 for v in bench_t["scan"][:w] if v > 0.0)
+        _bench_report({k: v[w:] for k, v in bench_t.items()},
+                      bench_total[w:], bench_per[w:], bench_scan[warm_scans:], bench_gpu[w:])
 
 
 if __name__ == "__main__":

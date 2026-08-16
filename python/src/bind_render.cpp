@@ -23,8 +23,11 @@
 
 #include <cctype>
 #include <cstring>
+#include <mutex>
 #include <sstream>
 #include <string>
+#include <unordered_map>
+#include <vector>
 
 using namespace threepp;
 
@@ -124,16 +127,22 @@ namespace threepp_py {
         // exposed as keyword arguments rather than the fluent Parameters builder.
         py::class_<Canvas>(m, "Canvas")
                 .def(py::init([](const std::string& title, int width, int height, int antialiasing,
-                                 bool vsync, bool resizable, bool headless) {
+                                 bool vsync, bool resizable, bool headless, bool fullscreen) {
                     Canvas::Parameters p;
                     p.title(title);
                     if (width > 0 && height > 0) p.size(width, height);
-                    p.antialiasing(antialiasing).vsync(vsync).resizable(resizable).headless(headless);
+                    p.antialiasing(antialiasing).vsync(vsync).resizable(resizable).headless(headless).fullscreen(fullscreen);
                     return std::make_unique<Canvas>(p);
                 }),
                      py::arg("title") = "threepp", py::arg("width") = -1, py::arg("height") = -1,
                      py::arg("antialiasing") = 4, py::arg("vsync") = true,
-                     py::arg("resizable") = true, py::arg("headless") = false)
+                     py::arg("resizable") = true, py::arg("headless") = false,
+                     py::arg("fullscreen") = false,
+                     "A window (or a hidden surface when headless=True). width/height default to half "
+                     "the primary monitor. fullscreen=True gives BORDERLESS windowed fullscreen: an "
+                     "undecorated, non-resizable window covering the primary monitor, which ignores "
+                     "width/height and resizable. It never changes the display mode, so alt-tab behaves "
+                     "like any other window. headless=True wins over it (there is no window to show).")
                 .def("animate", &Canvas::animate, py::arg("callback"),
                      "Run the render loop, calling callback() every frame until the window closes.")
                 .def("animate_once", &Canvas::animateOnce, py::arg("callback"),
@@ -225,6 +234,24 @@ namespace threepp_py {
             }
             return pts;
         };
+        // The cloud a scan_begin() fires into and a later scan_collect() takes
+        // delivery of. It has to be ONE vector across the two calls: on a
+        // raster backend scan_begin does the whole scan and fills it there and
+        // then, and scan_collect merely hands it over — a fresh vector per call
+        // would silently return nothing on GL. Python has nowhere to park it
+        // (DepthSensor is bound with an existing shared_ptr holder, so
+        // py::dynamic_attr is not available), so the binding keeps it here,
+        // keyed by sensor. Bounded: at most one vector per sensor with an
+        // uncollected scan_begin outstanding, since scan_collect erases the
+        // entry — a sensor that is always collected holds nothing between
+        // frames, and one that is fired and abandoned holds exactly one cloud
+        // until its next collect. The mutex is belt-and-braces (the GIL already
+        // serializes these calls) and is never held across a call into Python.
+        struct PendingClouds {
+            std::mutex mtx;
+            std::unordered_map<const DepthSensor*, std::vector<Vector3>> clouds;
+        };
+        static PendingClouds pending;
         py::class_<DepthSensor, Object3D, Sensor, std::shared_ptr<DepthSensor>>(m, "DepthSensor")
                 .def(py::init([](float fov_y, unsigned int width, unsigned int height, float near, float far) {
                     return std::make_shared<DepthSensor>(fov_y, width, height, near, far);
@@ -272,6 +299,52 @@ namespace threepp_py {
                    "Depth scan -> (N,3) float32 world-space hit points (N = points that hit within far). "
                    "Works with a GLRenderer (raster depth) or a VulkanRenderer (path-traced through the "
                    "renderer's acceleration structure -- render() the scene at least once first).")
+                // ---- pipelined scan: fire on one frame, collect on a later one ----
+                .def("scan_begin", [](DepthSensor& self, const py::object& renderer, Scene& scene) {
+                    self.updateWorldMatrix(true, true);            // sync sensor + child camera pose
+                    std::lock_guard<std::mutex> lock(pending.mtx);
+                    return self.scanBegin(as_renderer(renderer), scene, pending.clouds[&self]);
+                }, py::arg("renderer"), py::arg("scene"),
+                   "Fire a scan without waiting for it. Call it AFTER render() on the frame you want "
+                   "sampled: the beams snapshot the sensor's pose (and stamp last_scan_time) here, not "
+                   "at scan_collect. Take delivery with scan_collect on a later frame — on Vulkan a "
+                   "collect with at least one intervening render() is essentially free, whereas scan() "
+                   "blocks on the readback and so pays for every frame already queued behind the fence.\n\n"
+                   "    if sensor.scan_due and not sensor.scan_pending:\n"
+                   "        sensor.scan_begin(renderer, scene)\n"
+                   "    if sensor.scan_ready(renderer):\n"
+                   "        pts = sensor.scan_collect(renderer)\n\n"
+                   "Returns True when the cloud is ALREADY complete — the raster (GLRenderer) path has "
+                   "nothing to pipeline, so it does the whole scan here. On Vulkan it returns False and "
+                   "the cloud arrives at a later scan_collect. Either way scan_collect is what hands the "
+                   "points over, so the loop above is correct on both backends; only the frame the cloud "
+                   "lands on differs.")
+                .def("scan_ready", [](const DepthSensor& self, const py::object& renderer) {
+                    return self.scanReady(as_renderer(renderer));
+                }, py::arg("renderer"),
+                   "True when a fired scan can be collected without waiting. A poll, never a wait. "
+                   "False when no scan is outstanding. Raster: True as soon as scan_begin has run.")
+                .def_property_readonly("scan_pending", &DepthSensor::scanPending,
+                                       "True between scan_begin and its scan_collect. Firing again while "
+                                       "one is outstanding throws the earlier scan away, so a driver on a "
+                                       "rate gate should skip a due scan while this is True.")
+                .def("scan_collect", [pts_to_numpy](DepthSensor& self, const py::object& renderer) {
+                    std::lock_guard<std::mutex> lock(pending.mtx);
+                    const auto it = pending.clouds.find(&self);
+                    // No entry means no scan_begin was ever fired on this sensor;
+                    // scanCollect then reports nothing outstanding and the scratch
+                    // cloud stays empty.
+                    std::vector<Vector3> scratch;
+                    std::vector<Vector3>& cloud = (it != pending.clouds.end()) ? it->second : scratch;
+                    const bool delivered = self.scanCollect(as_renderer(renderer), cloud);
+                    auto out = delivered ? pts_to_numpy(cloud) : pts_to_numpy(std::vector<Vector3>{});
+                    if (it != pending.clouds.end()) pending.clouds.erase(it);
+                    return out;
+                }, py::arg("renderer"),
+                   "Take delivery of a scan_begin -> (N,3) float32 world-space hit points, exactly like "
+                   "scan(). Returns an EMPTY (0,3) array when there was nothing to deliver: no scan "
+                   "outstanding, or a scan_begin the backend refused because too many traces were "
+                   "already in flight. Check scan_ready first (or accept the empty array as 'not yet').")
                 .def("scan_rgbd", [pts_to_numpy](DepthSensor& self, const py::object& renderer, Scene& scene) {
                     self.updateWorldMatrix(true, true);
                     std::vector<Vector3> cloud;

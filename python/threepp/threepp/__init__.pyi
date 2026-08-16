@@ -572,8 +572,10 @@ class CameraHelper(LineSegments):
     def update(self) -> None:
         ...
 class Canvas:
-    def __init__(self, title: str = 'threepp', width: typing.SupportsInt | typing.SupportsIndex = -1, height: typing.SupportsInt | typing.SupportsIndex = -1, antialiasing: typing.SupportsInt | typing.SupportsIndex = 4, vsync: bool = True, resizable: bool = True, headless: bool = False) -> None:
-        ...
+    def __init__(self, title: str = 'threepp', width: typing.SupportsInt | typing.SupportsIndex = -1, height: typing.SupportsInt | typing.SupportsIndex = -1, antialiasing: typing.SupportsInt | typing.SupportsIndex = 4, vsync: bool = True, resizable: bool = True, headless: bool = False, fullscreen: bool = False) -> None:
+        """
+        A window (or a hidden surface when headless=True). width/height default to half the primary monitor. fullscreen=True gives BORDERLESS windowed fullscreen: an undecorated, non-resizable window covering the primary monitor, which ignores width/height and resizable. It never changes the display mode, so alt-tab behaves like any other window. headless=True wins over it (there is no window to show).
+        """
     def animate(self, callback: collections.abc.Callable[[], None]) -> None:
         """
         Run the render loop, calling callback() every frame until the window closes.
@@ -1077,6 +1079,25 @@ class DepthSensor(Object3D, Sensor):
         """
         Depth scan -> (N,3) float32 world-space hit points (N = points that hit within far). Works with a GLRenderer (raster depth) or a VulkanRenderer (path-traced through the renderer's acceleration structure -- render() the scene at least once first).
         """
+    def scan_begin(self, renderer: typing.Any, scene: Scene) -> bool:
+        """
+        Fire a scan without waiting for it. Call it AFTER render() on the frame you want sampled: the beams snapshot the sensor's pose (and stamp last_scan_time) here, not at scan_collect. Take delivery with scan_collect on a later frame — on Vulkan a collect with at least one intervening render() is essentially free, whereas scan() blocks on the readback and so pays for every frame already queued behind the fence.
+
+            if sensor.scan_due and not sensor.scan_pending:
+                sensor.scan_begin(renderer, scene)
+            if sensor.scan_ready(renderer):
+                pts = sensor.scan_collect(renderer)
+
+        Returns True when the cloud is ALREADY complete — the raster (GLRenderer) path has nothing to pipeline, so it does the whole scan here. On Vulkan it returns False and the cloud arrives at a later scan_collect. Either way scan_collect is what hands the points over, so the loop above is correct on both backends; only the frame the cloud lands on differs.
+        """
+    def scan_collect(self, renderer: typing.Any) -> numpy.typing.NDArray[numpy.float32]:
+        """
+        Take delivery of a scan_begin -> (N,3) float32 world-space hit points, exactly like scan(). Returns an EMPTY (0,3) array when there was nothing to deliver: no scan outstanding, or a scan_begin the backend refused because too many traces were already in flight. Check scan_ready first (or accept the empty array as 'not yet').
+        """
+    def scan_ready(self, renderer: typing.Any) -> bool:
+        """
+        True when a fired scan can be collected without waiting. A poll, never a wait. False when no scan is outstanding. Raster: True as soon as scan_begin has run.
+        """
     def scan_rgbd(self, renderer: typing.Any, scene: Scene) -> tuple[numpy.typing.NDArray[numpy.float32], numpy.typing.NDArray[numpy.float32]]:
         """
         RGB-D scan -> (points (N,3) float32 world-space, colors (N,3) float32 in [0,1]). On GL the colors are sampled sRGB; on Vulkan they are LIDAR intensity as greyscale.
@@ -1118,6 +1139,11 @@ class DepthSensor(Object3D, Sensor):
     def scan_due(self) -> bool:
         """
         True when the rate gate says a scan is due (always true unless rate_hz is set and the sensor is registered with a PhysxWorld).
+        """
+    @property
+    def scan_pending(self) -> bool:
+        """
+        True between scan_begin and its scan_collect. Firing again while one is outstanding throws the earlier scan away, so a driver on a rate gate should skip a due scan while this is True.
         """
     @property
     def width(self) -> int:
