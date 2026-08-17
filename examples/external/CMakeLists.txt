@@ -16,5 +16,8 @@ if (THREEPP_WITH_VULKAN)
     find_package(Vulkan REQUIRED)
     target_sources(imgui PRIVATE "imgui/imgui_impl_vulkan.cpp")
     target_link_libraries(imgui PUBLIC Vulkan::Vulkan)
-    target_compile_definitions(imgui PUBLIC THREEPP_WITH_VULKAN=1)
+    # No THREEPP_WITH_VULKAN here: nothing in imgui reads it. This target used to
+    # hand it out PUBLIC, which is how most examples and the editor came to see
+    # the macro at all — a link edge to a UI helper deciding which backends a
+    # binary supports. The threepp target states it PUBLIC itself now.
 endif()

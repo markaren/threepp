@@ -1084,7 +1084,16 @@ endif ()
 
 if (THREEPP_WITH_VULKAN)
     find_package(Vulkan REQUIRED)
-    target_compile_definitions(threepp PRIVATE THREEPP_WITH_VULKAN=1)
+    # PUBLIC, because PUBLIC HEADERS branch on it: ImguiContext.hpp includes
+    # imgui_impl_vulkan.h + VulkanRenderer.hpp behind it, RendererSettings.hpp
+    # shows the Vulkan knobs behind it, and the header-only play sessions
+    # (ParticleField, Granular, SplatSurface) drive the Vulkan backend behind it.
+    # A consumer that does not see this macro therefore compiles a DIFFERENT
+    # version of those headers than the library was built against — it silently
+    # gets the OpenGL-only half, and two consumer targets in one binary that
+    # disagree about it violate the ODR. Vulkan::Vulkan is already PUBLIC here,
+    # so the include paths a consumer needs to compile those branches come along.
+    target_compile_definitions(threepp PUBLIC THREEPP_WITH_VULKAN=1)
     target_link_libraries(threepp PUBLIC Vulkan::Vulkan)
     message(STATUS "Vulkan SDK: ${Vulkan_VERSION} (${Vulkan_LIBRARY})")
 

@@ -53,15 +53,9 @@ add_executable(threepp_editor
 target_link_libraries(threepp_editor PRIVATE threepp imgui::imgui threepp_editor_examples)
 target_include_directories(threepp_editor PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
 
-# THREEPP_WITH_VULKAN is PRIVATE on the threepp lib. The editor has been
-# inheriting it by accident through imgui, which is a link edge that says
-# nothing about which backends this binary supports — stated here for the same
-# reason apps/player/CMakeLists.txt states it, so --vulkan's compile-time gates
-# (the renderer choice, the particle previews) do not turn off if that edge
-# ever moves.
-if (THREEPP_WITH_VULKAN)
-    target_compile_definitions(threepp_editor PRIVATE THREEPP_WITH_VULKAN=1)
-endif ()
+# --vulkan's compile-time gates (the renderer choice, the particle previews) come
+# from THREEPP_WITH_VULKAN, which is PUBLIC on the threepp target — linking the
+# library is what carries it. Nothing to restate here.
 
 # Where "Edit in VS Code" points Pylance: the PEP 561 stub package that ships
 # with the Python bindings (python/threepp/threepp/*.pyi). Baked in at build

@@ -16,11 +16,9 @@ add_example(NAME "points" LINK_IMGUI WEB)
 # "#version 330 core", which a WebGL2 build cannot compile.
 add_example(NAME "gaussian_splats")
 # The one example that drives BOTH backends from one scene, so the GL path can
-# be the Vulkan path's correctness oracle (--vulkan). THREEPP_WITH_VULKAN is
-# PRIVATE on the library target, so the flag has to be restated here.
-if (THREEPP_WITH_VULKAN)
-    target_compile_definitions(gaussian_splats PRIVATE THREEPP_WITH_VULKAN=1)
-endif ()
+# be the Vulkan path's correctness oracle (--vulkan). It needs no flag of its
+# own: THREEPP_WITH_VULKAN is PUBLIC on the threepp target, so linking it is
+# what tells a consumer which backends this build has.
 
 add_example(NAME "bones" LINK_IMGUI)
 add_example(NAME "decal" LINK_IMGUI)
