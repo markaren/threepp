@@ -615,6 +615,7 @@ namespace {
                 MeshStandardMaterial::Params{}.color(Color::white).roughness(0.92f).metalness(0.f));
         v.barkMat->map = bark.first;
         v.barkMat->normalMap = bark.second;
+        v.barkMat->vertexColors = true;// twig darkening, baked per-vertex
 
         v.leafMat = MeshStandardMaterial::create(
                 MeshStandardMaterial::Params{}.color(Color::white).roughness(0.85f).metalness(0.f));

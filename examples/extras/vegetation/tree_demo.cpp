@@ -239,6 +239,8 @@ int main(int argc, char** argv) {
                     .metalness(0.0f));
     barkMat->map = barkAlbedo;
     barkMat->normalMap = barkNormal;
+    // Twig darkening is baked per-vertex by makeTrunkGeometry.
+    barkMat->vertexColors = true;
 
     auto leafMat = MeshStandardMaterial::create(
             MeshStandardMaterial::Params{}

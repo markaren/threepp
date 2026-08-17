@@ -139,6 +139,7 @@ namespace {
                 MeshStandardMaterial::Params{}.color(Color::white).roughness(0.92f).metalness(0.f));
         v.barkMat->map = bark.first;
         v.barkMat->normalMap = bark.second;
+        v.barkMat->vertexColors = true;// twig darkening, baked per-vertex
 
         // Conifers want the needle spray, broadleaves the leaf sprig drawn with
         // that species' blade outline.

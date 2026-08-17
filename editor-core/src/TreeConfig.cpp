@@ -228,6 +228,10 @@ std::string TreeConfig::encode() const {
     addF("leafSpread", p.leafSpread);
     addF("leafClumping", p.leafClumping);
     addI("leafAtlasCells", p.leafAtlasCells);
+    addF("leafDroop", p.leafDroop);
+    addF("pendantLength", p.pendantLength);
+    addF("pendantDensity", p.pendantDensity);
+    addF("twigShade", p.twigShade);
     addF("foliageOcclusion", p.foliageOcclusion);
 
     add("barkColor", encodeColor(p.barkColor));
@@ -328,6 +332,14 @@ std::optional<TreeConfig> TreeConfig::decode(const std::string& text) {
             p.leafClumping = toFloat(value, p.leafClumping);
         } else if (key == "leafAtlasCells") {
             p.leafAtlasCells = toInt(value, p.leafAtlasCells);
+        } else if (key == "leafDroop") {
+            p.leafDroop = toFloat(value, p.leafDroop);
+        } else if (key == "pendantLength") {
+            p.pendantLength = toFloat(value, p.pendantLength);
+        } else if (key == "pendantDensity") {
+            p.pendantDensity = toFloat(value, p.pendantDensity);
+        } else if (key == "twigShade") {
+            p.twigShade = toFloat(value, p.twigShade);
         } else if (key == "foliageOcclusion") {
             p.foliageOcclusion = toFloat(value, p.foliageOcclusion);
         } else if (key == "barkColor") {
@@ -460,6 +472,7 @@ std::shared_ptr<MeshStandardMaterial> TreeConfig::makeBarkMaterial() const {
     const auto maps = textures();
     material->map = maps.barkAlbedo;
     material->normalMap = maps.barkNormal;
+    material->vertexColors = true;// twig darkening, baked per-vertex
     return material;
 }
 

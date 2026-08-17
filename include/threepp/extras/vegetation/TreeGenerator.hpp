@@ -91,6 +91,20 @@ namespace threepp::vegetation {
         float minBranchRadius = 0.006f;
         int radialSegments = 6;
 
+        // ── Pendulous shoots (Colonise mode) ─────────────────────────────
+        //
+        // The long whip shoots that hang off the limbs of a birch — the
+        // "pendula" in Betula pendula — and the trait that most identifies the
+        // species at a distance.
+        //
+        // They cannot come out of the colonisation loop itself: growth is
+        // steered by attractors, the crown envelope holds none BELOW the
+        // branches, and a downward bias there just fights the envelope and
+        // flattens the crown. So they are grown afterwards, hanging out of the
+        // tips the crown already reached.
+        float pendantLength = 0.f;  // world units; 0 disables
+        float pendantDensity = 0.7f;// 0..1 fraction of tips that carry one
+
         // ── Skeleton mode ────────────────────────────────────────────────
         BranchingMode branchingMode = BranchingMode::Colonise;
 
@@ -126,6 +140,16 @@ namespace threepp::vegetation {
         float rootFlareAsym = 0.5f;      // 0..1 buttress-lobe strength at the base
         // Surface character of the bark texture — see makeBarkTextures.
         BarkStyle barkStyle = BarkStyle::Furrowed;
+        // How dark the thinnest twigs go relative to the bole, written into the
+        // trunk mesh's vertex colours (1 = no change; needs vertexColors on the
+        // bark material).
+        //
+        // One bark texture over the whole skeleton paints twigs in bole colour,
+        // and on a birch that is wrong in the most visible way there is: the
+        // hanging shoots come out as bright white wires through the canopy,
+        // where the real thing is dark red-brown and only the trunk is white.
+        // The darkening is warm-biased, so twigs go brown rather than grey.
+        float twigShade = 1.0f;
 
         // ── Leaves ───────────────────────────────────────────────────────
         LeafStyle leafStyle = LeafStyle::CrossQuad;
@@ -155,6 +179,16 @@ namespace threepp::vegetation {
         // box half-extent — see makeLeafGeometry).
         float leafSpread = 0.5f;
         float leafClumping = 0.5f;// 0 = solid shell, →1 = clumped with sky-gaps
+        // How far the card leans from "upright" toward "follows the shoot".
+        //
+        // 0 stands every card up regardless of the twig it grows on — right for
+        // a canopy of ascending shoots. 1 aligns the card with the shoot, which
+        // on a pendulous species points DOWN, so the sprig hangs from its stem
+        // instead of standing on it. The atlas is drawn stem-at-low-v and the
+        // card spans v along this axis, so pointing the axis down is what puts
+        // the stem at the top and drapes the leaflets below it — no separate
+        // "upside down" texture needed.
+        float leafDroop = 0.f;
         // Strength of the baked canopy occlusion written into the leaf vertex
         // colours (see makeLeafGeometry). 0 disables it and leaves foliage lit
         // only by its own normals — flat, with no interior depth.
@@ -347,6 +381,9 @@ namespace threepp::vegetation {
                 attractors.resize(write);
             }
 
+            // Hang the whip shoots off the crown the loop just grew.
+            growPendants(tp, rng);
+
             // Mark terminals and compute radii.
             for (auto& n : nodes_) {
                 n.terminal = n.children.empty();
@@ -396,9 +433,23 @@ namespace threepp::vegetation {
                 }
             }
 
-            std::vector<float> positions, normals, uvs;
+            std::vector<float> positions, normals, uvs, colors;
             std::vector<unsigned int> indices;
             unsigned int baseVert = 0;
+
+            // Twig darkening ramp: full bole colour at a third of the trunk
+            // radius, fading to twigShade at twig scale. Always written, so the
+            // attribute is there whether or not a material reads it.
+            const float shadeHi = std::max(tp.trunkRadius * 0.33f, 1e-4f);
+            const float shadeLo = std::max(tp.minBranchRadius * 2.f, 1e-5f);
+            auto twigTint = [&](float r) {
+                float t = (r - shadeLo) / std::max(shadeHi - shadeLo, 1e-5f);
+                t = std::clamp(t, 0.f, 1.f);
+                t = t * t * (3.f - 2.f * t);// smoothstep — no visible band
+                const float s = tp.twigShade + (1.f - tp.twigShade) * t;
+                // Warm bias so a darkened twig reads as bark, not as shadow.
+                return Vector3{std::min(1.f, s * 1.06f), s * 0.88f, s * 0.78f};
+            };
 
             // Tree vertical extent — drives the non-axisymmetric root flare below.
             float treeMinY = std::numeric_limits<float>::max();
@@ -473,6 +524,7 @@ namespace threepp::vegetation {
                     const float aboveBase = nd.position.y - treeMinY;
                     float flareF = std::clamp((flareH - aboveBase) / flareH, 0.f, 1.f);
                     flareF *= flareF;
+                    const Vector3 tint = twigTint(r);
 
                     for (int j = 0; j <= R; ++j) {
                         const float a = static_cast<float>(j) / static_cast<float>(R) * 6.28318530718f;
@@ -499,6 +551,9 @@ namespace threepp::vegetation {
                         normals.push_back(nz);
                         uvs.push_back(static_cast<float>(j) / static_cast<float>(R));
                         uvs.push_back(v);
+                        colors.push_back(tint.x);
+                        colors.push_back(tint.y);
+                        colors.push_back(tint.z);
                     }
                 }
 
@@ -528,6 +583,7 @@ namespace threepp::vegetation {
             geo->setAttribute("position", FloatBufferAttribute::create(positions, 3));
             geo->setAttribute("normal", FloatBufferAttribute::create(normals, 3));
             geo->setAttribute("uv", FloatBufferAttribute::create(uvs, 2));
+            geo->setAttribute("color", FloatBufferAttribute::create(colors, 3));
             geo->computeBoundingBox();
             geo->computeBoundingSphere();
             return geo;
@@ -990,9 +1046,13 @@ namespace threepp::vegetation {
                         pos.copy(node.position);
                     }
 
+                    // leafDroop slides the card from "upright" (+0.5 of world up
+                    // mixed in) to "follows the shoot" (−0.5, i.e. hanging on a
+                    // pendulous twig). See TreeParams::leafDroop.
+                    const float upMix = 0.5f - std::clamp(tp.leafDroop, 0.f, 1.f);
                     Vector3 axis;
                     axis.set(branchDir.x * 0.5f,
-                             branchDir.y * 0.5f + 0.5f,
+                             branchDir.y * 0.5f + upMix,
                              branchDir.z * 0.5f);
                     if (axis.lengthSq() < 1e-8f) axis.set(0.f, 1.f, 0.f);
                     axis.normalize();
@@ -1520,6 +1580,76 @@ namespace threepp::vegetation {
             }
         }
 
+        // ── Pendulous whip shoots ────────────────────────────────────────
+        //
+        // Grown from the tips the colonisation loop finished on, each starting
+        // along the shoot that carries it and falling to vertical over its own
+        // length — a birch whip leaves the limb at whatever angle the limb ends
+        // at and is hanging straight down well before its tip. Gravity is
+        // integrated as a weight that RAMPS (t²) rather than a constant
+        // downward bias: a constant one bends the first segment as hard as the
+        // last, which reads as a branch that was aimed at the ground rather
+        // than one that fell to it.
+        //
+        // These carry foliage like any other thin twig (they are terminal, and
+        // deep), so the crown's lower fringe becomes the curtain of leaves that
+        // gives the species its silhouette.
+        void growPendants(const TreeParams& tp, math::Rng& rng) {
+            if (tp.pendantLength <= 0.f || tp.pendantDensity <= 0.f) return;
+
+            auto u01 = [](math::Rng& r) { return r.nextFloat(); };
+            auto u11 = [](math::Rng& r) { return r.nextFloat(-1.f, 1.f); };
+
+            const int segs = std::max(2, static_cast<int>(std::round(tp.pendantLength / tp.segmentLength)));
+            const float step = tp.pendantLength / static_cast<float>(segs);
+            // Snapshot the count: the pendants appended below are themselves
+            // tips, and letting them grow pendants of their own would run the
+            // crown into the ground one whip at a time.
+            const size_t tipCount = nodes_.size();
+
+            for (size_t ni = 0; ni < tipCount; ++ni) {
+                if (!nodes_[ni].children.empty()) continue;
+                if (u01(rng) > tp.pendantDensity) continue;
+                // Length varies per whip; a curtain of equal-length shoots
+                // hangs to a dead-level hem.
+                const float lengthScale = 0.55f + 0.75f * u01(rng);
+
+                Vector3 dir{0.f, 1.f, 0.f};
+                if (nodes_[ni].parent >= 0) {
+                    dir.subVectors(nodes_[ni].position,
+                                   nodes_[static_cast<size_t>(nodes_[ni].parent)].position);
+                    if (dir.lengthSq() > 1e-8f) dir.normalize();
+                    else dir.set(0.f, 1.f, 0.f);
+                }
+
+                Vector3 pos;
+                pos.copy(nodes_[ni].position);
+                int prev = static_cast<int>(ni);
+                for (int s = 0; s < segs; ++s) {
+                    const float t = (static_cast<float>(s) + 1.f) / static_cast<float>(segs);
+                    const float w = t * t;// gravity accumulates along the shoot
+                    Vector3 d;
+                    d.set(dir.x * (1.f - w),
+                          dir.y * (1.f - w) - w,
+                          dir.z * (1.f - w));
+                    d.x += u11(rng) * tp.randomness * 0.8f;
+                    d.z += u11(rng) * tp.randomness * 0.8f;
+                    if (d.lengthSq() < 1e-8f) d.set(0.f, -1.f, 0.f);
+                    d.normalize();
+
+                    detail::TreeNode n;
+                    n.position.copy(pos).addScaledVector(d, step * lengthScale);
+                    n.parent = prev;
+                    n.depth = nodes_[static_cast<size_t>(prev)].depth + 1;
+                    const int idx = static_cast<int>(nodes_.size());
+                    nodes_[static_cast<size_t>(prev)].children.push_back(idx);
+                    nodes_.push_back(n);
+                    prev = idx;
+                    pos.copy(n.position);
+                }
+            }
+        }
+
         // ── Scatter attraction points in the crown envelope ──────────────
         void scatterAttractors(math::Rng& rng, const TreeParams& tp,
                                const Vector3& centre,
@@ -1770,16 +1900,20 @@ namespace threepp::vegetation {
                 p.barkStyle = BarkStyle::Plated;
                 break;
             }
-            case 2: {// Birch — slender, upward branches
-                p.trunkHeight = 4.5f;
+            case 2: {// Birch — conical crown of pendulous shoots
                 // Slender is not a wire: at 0.08 over a 10 m tree the bole came
                 // out ~16 cm through, and under a 6 m crown that reads as a pole
                 // holding up a bush rather than a trunk.
                 p.trunkRadius = 0.12f;
-                p.crownShape = CrownShape::Ellipsoid;
-                p.crownRadiusX = 2.4f;
-                p.crownRadiusZ = 2.4f;
-                p.crownHeight = 6.0f;
+                // CONICAL, not a ball on a stick: a birch carries its widest
+                // limbs low and tapers to the leader, so the envelope has to
+                // taper too. An ellipsoid puts the widest ring at mid-height and
+                // pinches the bottom, which is the opposite of the tree.
+                p.crownShape = CrownShape::Cone;
+                p.crownRadiusX = 2.6f;
+                p.crownRadiusZ = 2.6f;
+                p.trunkHeight = 4.0f;
+                p.crownHeight = 7.0f;
                 // KILL DISTANCE IS THE TWIG-RESOLUTION KNOB, and it decides
                 // whether the canopy reads as leaves or as clumps.
                 //
@@ -1816,6 +1950,11 @@ namespace threepp::vegetation {
                 p.leafDensity = 0.9f;
                 p.leavesPerCluster = 3;
                 p.leafSpread = 0.16f;
+                // Betula PENDULA: whip shoots hanging off ascending limbs, with
+                // the foliage draping from them rather than standing on them.
+                p.pendantLength = 1.5f;
+                p.pendantDensity = 0.75f;
+                p.leafDroop = 0.85f;
                 p.barkColor = {0.85f, 0.82f, 0.78f};
                 p.leafColor = {0.38f, 0.52f, 0.18f};
                 // Birch: nearly smooth papery bark, faint spiral.
@@ -1823,6 +1962,9 @@ namespace threepp::vegetation {
                 p.barkBumpAmp2 = 0.02f; p.barkBumpLobes2 = 7;
                 p.rootFlareAsym = 0.25f; p.trunkTwist = 0.25f;
                 p.barkStyle = BarkStyle::Papery;// lenticels — the birch tell
+                // White bole, dark red-brown shoots. Without this the pendant
+                // whips hang through the canopy as bright white wires.
+                p.twigShade = 0.30f;
                 break;
             }
             case 3: {// Willow — drooping branches
