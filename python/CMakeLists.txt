@@ -43,7 +43,10 @@ pybind11_add_module(threepp_py
         src/bind_physx.cpp
         src/bind_sensors.cpp)
 
-target_link_libraries(threepp_py PRIVATE threepp)
+# threepp_editor_core: bind_editor.cpp binds the document model (SceneDocument,
+# the *Config components), which lives outside libthreepp precisely because it
+# is not installed engine API — this module is one of its four in-repo consumers.
+target_link_libraries(threepp_py PRIVATE threepp threepp_editor_core)
 target_compile_features(threepp_py PRIVATE cxx_std_20)
 
 # threepp is a static lib; linking it into this shared module requires every
@@ -54,6 +57,7 @@ target_compile_features(threepp_py PRIVATE cxx_std_20)
 # THREEPP_WITH_PYTHON is on, so the normal lib/examples/tests build is untouched.
 # No-op on Windows (DLLs have no PIC concept).
 set_target_properties(threepp PROPERTIES POSITION_INDEPENDENT_CODE ON)
+set_target_properties(threepp_editor_core PROPERTIES POSITION_INDEPENDENT_CODE ON)
 
 # Expose the Vulkan deferred renderer + G-buffer AOVs only when threepp has the
 # Vulkan backend; otherwise the module is GL-only and VulkanRenderer is absent.

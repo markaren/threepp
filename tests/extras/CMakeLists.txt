@@ -140,3 +140,29 @@ if (TARGET threepp_player_core)
 else ()
     message(STATUS "threepp_player not built, skipping PlayerCore_test..")
 endif ()
+
+# Every test above that includes threepp/extras/editor/* gets it from
+# threepp_editor_core — the document model and play runtime moved out of
+# libthreepp (editor-core/CMakeLists.txt has the why). Guarded per target
+# because half of these only exist when PhysX / scripting / the apps are on;
+# for the scripting- and player-linked tests the link arrives PUBLIC already,
+# and CMake dedups, but a direct include keeps a direct link here.
+foreach (name
+        EditorAnimation_test EditorArticulationConfig_test EditorArticulationPlay_test
+        EditorCharacterConfig_test EditorCommands_test EditorConvexDecomp_test
+        EditorConveyorConfig_test EditorConveyor_test EditorDocument_test
+        EditorExampleScene_test EditorFlockConfig_test EditorGranular_test
+        EditorJointConfig_test EditorJointPlay_test EditorParticleConfig_test
+        EditorPhysicsPlay_test EditorPlaySession_test EditorRenderConfig_test
+        EditorRobotTransplant_test EditorScriptClock_test EditorScriptCollision_test
+        EditorScriptCoroutine_test EditorScriptFixedUpdate_test EditorScriptLookup_test
+        EditorScriptPhysics_test EditorScriptPlay_test EditorScriptRaycast_test
+        EditorScriptSensors_test EditorScriptTrigger_test EditorScriptWorkspace_test
+        EditorScript_test EditorSensorConfig_test EditorSensorPlay_test
+        EditorShadowFit_test EditorSpline_test EditorTextureSlots_test
+        EditorUndoRebind_test EditorVehicleConfig_test EditorVehiclePlay_test
+        EditorVisionPlay_test EditorXacroArgs_test PlayerCore_test)
+    if (TARGET ${name})
+        target_link_libraries(${name} PRIVATE threepp_editor_core)
+    endif ()
+endforeach ()

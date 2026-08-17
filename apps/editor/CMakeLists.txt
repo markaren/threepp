@@ -50,7 +50,7 @@ add_executable(threepp_editor
         panels/StatusBar.cpp
 )
 
-target_link_libraries(threepp_editor PRIVATE threepp imgui::imgui threepp_editor_examples)
+target_link_libraries(threepp_editor PRIVATE threepp threepp_editor_core imgui::imgui threepp_editor_examples)
 target_include_directories(threepp_editor PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
 
 # --vulkan's compile-time gates (the renderer choice, the particle previews) come
@@ -211,7 +211,11 @@ if (THREEPP_EDITOR_WITH_PYTHON AND Python3_FOUND AND TARGET pybind11::headers)
         endif ()
     endif ()
 
-    target_link_libraries(threepp_editor_scripting PUBLIC threepp pybind11::headers Python3::Python)
+    # threepp_editor_core PUBLIC: the Script* sources and the bind_editor* TUs
+    # include the document model and play sessions, and so do the headers this
+    # library hands its consumers (ScriptPlaySession.hpp) — the tests that link
+    # this target compile them too.
+    target_link_libraries(threepp_editor_scripting PUBLIC threepp threepp_editor_core pybind11::headers Python3::Python)
     target_include_directories(threepp_editor_scripting
             PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/scripting"
             PRIVATE "${PROJECT_SOURCE_DIR}/python/src")

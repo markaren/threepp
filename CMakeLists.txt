@@ -131,6 +131,13 @@ include(cmake/PhysxStaticLinkFix.cmake)
 
 add_subdirectory(src)
 
+# The editor/player document model and play runtime — a static library outside
+# libthreepp and outside the install, because its headers change meaning under
+# per-consumer macros the installed library cannot own (see the file's header
+# comment). Before the editor gate on purpose: the Python bindings and the
+# tests consume it whether or not the apps are built.
+add_subdirectory(editor-core)
+
 # V-HACD convex decomposition, a small static library the editor and the PhysX
 # tests share. Self-gates on the PhysX SDK being present, so a build without
 # PhysX skips it entirely.

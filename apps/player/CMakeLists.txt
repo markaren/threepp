@@ -5,8 +5,8 @@
 # scripting library is declared there: threepp_editor_scripting is what makes a
 # document's scripts actually run, and hover_arena_author is the precedent for a
 # sibling executable that links it. The player links no part of the editor APP —
-# no ImGui, no panels — only the play core in libthreepp and that scripting
-# library.
+# no ImGui, no panels — only the play core (threepp_editor_core) and that
+# scripting library.
 #
 # Every optional half is gated the way the editor gates it, and the player builds
 # and runs without any of them: no PhysX means a document plays without physics
@@ -22,7 +22,9 @@
 add_library(threepp_player_core STATIC
         PlayerCore.cpp)
 
-target_link_libraries(threepp_player_core PUBLIC threepp)
+# threepp_editor_core PUBLIC: PlayerCore.hpp itself includes the document model
+# and play sessions, so anything compiling against this library needs them too.
+target_link_libraries(threepp_player_core PUBLIC threepp threepp_editor_core)
 target_include_directories(threepp_player_core PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}")
 target_compile_features(threepp_player_core PUBLIC cxx_std_20)
 

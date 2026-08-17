@@ -1,7 +1,7 @@
 // Small persistent preferences file for the editor: recent scenes and the
 // directories the file browser should open in.
 //
-// Lives in the library (not the app) so it can use the vendored nlohmann JSON
+// Lives in editor-core (not the app) so it can use the vendored nlohmann JSON
 // the rest of threepp already serializes with, rather than inventing a second
 // format or dragging a parser into the executable.
 //
