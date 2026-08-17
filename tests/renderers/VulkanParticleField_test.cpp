@@ -210,6 +210,20 @@ namespace {
         // PINNED: auto-exposure adapts on wall-clock dt, which is the one
         // genuinely non-reproducible input in the frame (repo perf/capture rule).
         renderer.setAutoExposure(false);
+        // PINNED, and for the same reason: without setSimTime() the renderer's
+        // frame clock is glfwGetTime(), and the TAA history blend weight is a
+        // function of the measured frame INTERVAL —
+        //     taaDtFrames = clamp(dt * 90, 1, 6);  effAlpha = 1-(1-alpha)^dtFrames
+        // — so any frame slower than 1/90 s blends with a weight nobody can
+        // reproduce. A cheap scene never crosses that threshold and looks
+        // perfectly deterministic; a heavy one (Fire's 32-step emissive march,
+        // Emit's 50k instances) crosses it whenever the machine is busy, and the
+        // capture then differs run to run by 1-4% of bytes at +/-1 LSB — a wash
+        // over the whole frame, which is what a different blend weight looks
+        // like and what a leaked frame index or wall clock in the PARTICLE path
+        // does not. This was the phase-2 flake; the clock is the input, not the
+        // field. (Same defect the replay-audit branch found and setSimTime was
+        // added for — see VulkanRenderer::Impl::frameNowSec.)
         renderer.setClearColor(Color(0.05f, 0.06f, 0.08f));
 
         Scene scene;
@@ -289,7 +303,12 @@ namespace {
 
         for (int i = 0; i < kDetFrames; ++i) {
             // Fixed dt, driven by the frame index: the emitter's clock is the
-            // caller's, and a capture must be a function of nothing else.
+            // caller's, and a capture must be a function of nothing else. The
+            // RENDERER's clock is pinned to the same 60 Hz timeline, so the TAA
+            // blend weight (and every other formerly-wall-clock frame input)
+            // advances on the frame index rather than on how busy the machine
+            // happened to be — see the setAutoExposure note above.
+            renderer.setSimTime(double(i) * (1.0 / 60.0));
             if (mode == DetMode::Emit)
                 field->setEmitterTime(float(i) * (1.f / 60.f), 1.f / 60.f);
             canvas.animateOnce([&] { renderer.render(scene, *camera); });
@@ -3263,15 +3282,23 @@ int main(int argc, char** argv) {
     // parts of the renderer (GI, ReSTIR, TAA history) are asked the same
     // question twice rather than two different ones.
     //
-    // It cannot be an exact byte comparison, and the CONTROL is what says so:
-    // rendering the identical scene in two processes already differs by ~1% of
-    // bytes on this backend, before any ParticleField exists. (That floor is a
-    // pre-existing property — `nofield` vs `nofield` measures it with no field
-    // in the scene at all — not something phase 2 introduced, and the exact
-    // determinism claim is asserted on the density VOLUME above, where it is
-    // both meaningful and exactly true.) So the assertion is that adding a
-    // dust-free ParticleField does not move the image MORE than re-running the
-    // same scene does.
+    // The comparison is a BOUND rather than an equality, and the CONTROL is what
+    // sets it: `nofield` vs `nofield` is the same scene rendered twice with no
+    // field in it at all, so whatever it measures is the backend's own
+    // run-to-run floor and not something phase 2 introduced.
+    //
+    // That floor is 0 bytes on this backend once the child's frame clock is
+    // pinned (runDetChild's setSimTime — read the note there before touching the
+    // bound). It was NOT always: the children used to run on the wall clock, and
+    // the TAA history blend weight is a function of the measured frame interval
+    // below 90 fps, so a heavy child — Fire's 32-step emissive march, Emit's 50k
+    // instances — blended differently in every process and diverged by 1-4% of
+    // bytes whenever the machine was busy. The control could never catch it: the
+    // field-free scene is cheap enough to stay above the threshold no matter what
+    // else is running, so it kept reporting a floor of 0 for a comparison that
+    // was drifting. The tolerance below stays as a cross-backend safety net —
+    // it is not a licence to let a floor reappear, and a nonzero control is a
+    // finding, not a baseline.
     //
     //   nofield    vs nofield     — the control: the renderer's own run-to-run floor.
     //   nofield    vs densityoff  — a field whose DensityRepr is off.
