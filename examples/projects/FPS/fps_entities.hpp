@@ -4,11 +4,26 @@
 //  Requires: fps_constants.hpp, PhysX and threepp types
 // ============================================================================
 
-// Dynamic physics prop (crate): mesh + body + home pose for restart.
+// A range prop: a real PhysX dynamic body with a mesh collider, its home pose,
+// and — for the steel plates — whether it is currently down.
+//
+// The whole demo turns on this being genuine rigid-body physics rather than a
+// scripted knock-over animation: a hit applies an impulse AT THE CONTACT
+// POINT, so where you hit a plate decides whether it tips, spins or barely
+// rocks, and a crate stack collapses the way its own masses say it should.
 struct Dynamic {
+    // Plates score and pop back up; props are scenery you can knock about.
+    enum class Kind { Plate, Prop };
+
     std::shared_ptr<Mesh> mesh;
     PxRigidDynamic* body;
     Vector3 home;
+    Quaternion homeRot;
+    Kind kind = Kind::Prop;
+    // Latched once the plate has tipped past kPlateDownCos, so one fall scores
+    // once however long it lies there.
+    bool down = false;
+    float resetIn = 0.f;// counts down while a downed plate waits to stand up
 };
 
 // Short-lived visual (tracer / flash / spark).
@@ -39,43 +54,4 @@ struct ParticleBurst {
     std::vector<Vector3> pos, vel;
     float ttl, life, gravity, drag;
     float maxOpacity = 1.f;// caps the fade-in peak; < 1 reads as a hazy/translucent cloud
-};
-
-// Named animation actions for the SWAT enemy. swat.glb ships the full Mixamo
-// rifle locomotion set, so the bots get a 6-way pick (see the AI loop) instead
-// of the run-or-idle pair they used to slide around on.
-struct EnemyAnims {
-    AnimationAction* idle = nullptr;     // rifle aiming idle
-    AnimationAction* walk = nullptr;     // walking
-    AnimationAction* run = nullptr;      // rifle run
-    AnimationAction* walkBack = nullptr; // walking backwards
-    AnimationAction* runBack = nullptr;  // run backwards
-    AnimationAction* strafeL = nullptr;  // strafe left
-    AnimationAction* strafeR = nullptr;  // strafe right
-    AnimationAction* strafeLFast = nullptr;// "strafe (2)" — fast left
-    AnimationAction* strafeRFast = nullptr;// "strafe"     — fast right
-    AnimationAction* fire = nullptr;     // firing rifle (additive overlay)
-    AnimationAction* reload = nullptr;   // reloading
-    AnimationAction* hit = nullptr;      // hit reaction
-};
-
-// Pooled SWAT visual: the 14 MB GLB is loaded once per slot at startup and
-// slots are recycled across enemy spawns (threepp has no skinned-mesh clone).
-struct EnemySlot {
-    std::shared_ptr<Group> rig;    // scene-level group, position driven from physics
-    std::shared_ptr<Object3D> model;// swat.glb scene (child of rig)
-    std::shared_ptr<Group> rifle;  // rifle.glb instance, pinned to the right hand
-    std::unique_ptr<AnimationMixer> mixer;
-    EnemyAnims anims;
-    AnimationAction* current = nullptr;
-    Object3D* handBone = nullptr;
-    Object3D* leftHandBone = nullptr;
-    Object3D* hipsBone = nullptr;
-    Vector3 hipsBind;
-    Vector3 muzzleLocal;// rifle-local barrel tip (tracer/flash origin)
-    std::shared_ptr<Sprite> flash;// per-slot muzzle-flash sprite (own material)
-    std::shared_ptr<SpriteMaterial> flashMat;
-    float flashT = 0.f;// >0 while the flash sprite is showing; independent of burst state
-    float fireW = 0.f;// smoothed additive fire-overlay weight
-    bool inUse = false;
 };

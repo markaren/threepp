@@ -1007,9 +1007,20 @@ while its keys are involved, so the two do not fight.
 
 ### Characters in `userData`
 
-Import a rigged character carrying a locomotion pack — threepp_data ships one,
-`models/gltf/xbot/xbot.glb`, baked from Mixamo by `scripts/mixamo_to_glb.py` —
-open its **Character** section (offered on any node with a `SkinnedMesh` under
+Import a rigged character carrying a locomotion pack — **bring your own**;
+threepp_data ships none, because the obvious sources (Mixamo above all) licence
+their content for use in a project but not for redistribution as raw asset
+files. `scripts/mixamo_to_glb.py` bakes a Mixamo character plus a folder of
+animation FBX into the single GLB this wants:
+
+```
+blender --background --python scripts/mixamo_to_glb.py -- <src_dir> <out.glb> "X Bot.fbx"
+```
+
+It prints each clip's measured m/s, which is a quick check that the bake landed
+in metres. Any rigged model works, not just Mixamo's: the clip matcher reads
+roles off root motion rather than filenames (see below), so a pack works
+whatever its author called the files. Then open the model's **Character** section (offered on any node with a `SkinnedMesh` under
 it), tick **Simulate as Character**, press Play, and walk: `W`/`S` walk and
 backpedal along the view, `A`/`D` strafe across it, `Shift` runs, `Space`
 jumps. The camera follows, and the body turns to face where the camera looks,

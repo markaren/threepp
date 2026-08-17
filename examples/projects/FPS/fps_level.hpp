@@ -128,8 +128,10 @@ struct Level {
     std::unordered_map<const PxRigidActor*, Mesh*> actorToMesh;  // collider -> visual (decals)
 };
 
-// Build the whole blockout arena into scene + world. Every static collider
-// registers in actorToMesh so shots can stamp decals on it.
+// Build the whole blockout RANGE into scene + world: floor, perimeter, a
+// backstop berm, three measured lanes, and the dynamic targets that fill them.
+// Every static collider registers in actorToMesh so shots can stamp decals on
+// it; every dynamic one lands in lvl.dynamics.
 Level buildLevel(Scene& scene, PhysxWorld& world) {
     Level lvl;
 
@@ -206,73 +208,110 @@ Level buildLevel(Scene& scene, PhysxWorld& world) {
         addTrim(glowPos, glowSize, matGlowCyan);
     }
 
-    // ---- corner towers -------------------------------------------------------
-    for (int sx = -1; sx <= 1; sx += 2)
-        for (int sz = -1; sz <= 1; sz += 2) {
-            addBox({sx * (kArena - 1.5f), 3.f, sz * (kArena - 1.5f)}, {4.f, 6.f, 4.f}, matWall);
-            addTrim({sx * (kArena - 1.5f), 6.08f, sz * (kArena - 1.5f)}, {4.1f, 0.12f, 4.1f}, matGlowOrange);
-        }
+    // ---- backstop berm at the far end ---------------------------------------
+    // Angled face, so rounds that get past a target bury themselves instead of
+    // skipping back down the range.
+    addBox({0, 2.2f, kRangeFarZ + 2.f}, {kArena * 2, 4.4f, 1.2f}, matDark);
+    addBox({0, 1.1f, kRangeFarZ}, {kArena * 2, 3.2f, 0.6f}, matAccent, 0.f, -0.5f);
+    addTrim({0, 4.45f, kRangeFarZ + 2.f}, {kArena * 2, 0.1f, 1.3f}, matGlowOrange);
 
-    // ---- central raised platform with two ramps (accent orange) -------------
-    {
-        const float ph = 1.5f, pw = 10.f, pd = 8.f;
-        addBox({0, ph * 0.5f, 0}, {pw, ph, pd}, matAccent);
-        addTrim({0, ph + 0.05f, 0}, {pw - 0.4f, 0.1f, pd - 0.4f}, matFloor);// lighter deck inlay
-        // ramps on the ±Z edges, pitched about X (pure pitch keeps the slope sane)
-        const float run = 6.f;
-        const float ang = std::atan2(ph, run);
-        addBox({0, ph * 0.5f - 0.12f, pd * 0.5f + run * 0.5f - 0.4f}, {4.f, 0.5f, run}, matAccent, 0.f, ang);
-        addBox({0, ph * 0.5f - 0.12f, -(pd * 0.5f + run * 0.5f - 0.4f)}, {4.f, 0.5f, run}, matAccent, 0.f, -ang);
-        // parapet blocks on the ±X platform edges (cover up top)
-        addBox({-pw * 0.5f + 0.5f, ph + 0.5f, 0}, {1.f, 1.f, 5.f}, matWall);
-        addBox({pw * 0.5f - 0.5f, ph + 0.5f, 0}, {1.f, 1.f, 5.f}, matWall);
+    // ---- firing line: a bench you shoot over, and the lane it stands in -----
+    addBox({0, 0.45f, kFiringLineZ}, {kLaneWidth * kLaneCount + 2.f, 0.9f, 0.5f}, matDark);
+    addTrim({0, 0.92f, kFiringLineZ}, {kLaneWidth * kLaneCount + 2.f, 0.06f, 0.55f}, matGlowCyan);
+
+    // ---- lane dividers + distance markers ------------------------------------
+    // Low walls between lanes, and an orange kerb every 10 m with an emissive
+    // strip on top: the range reads as measured rather than as an empty room.
+    for (int i = 0; i <= static_cast<int>(kLaneCount); ++i) {
+        const float x = (static_cast<float>(i) - kLaneCount * 0.5f) * kLaneWidth;
+        addBox({x, 0.35f, (kFiringLineZ + kRangeFarZ) * 0.5f}, {0.35f, 0.7f, kRangeFarZ - kFiringLineZ},
+               matWall);
+    }
+    for (int mark = 0; mark < 3; ++mark) {
+        const float z = kRangeNearZ + static_cast<float>(mark) * 10.f;
+        addTrim({0, 0.02f, z}, {kLaneWidth * kLaneCount, 0.04f, 0.18f}, matAccent);
+        addTrim({0, 0.03f, z}, {kLaneWidth * kLaneCount, 0.05f, 0.05f}, matGlowOrange);
     }
 
-    // ---- pillar clusters ------------------------------------------------------
-    for (int sx = -1; sx <= 1; sx += 2)
-        for (int sz = -1; sz <= 1; sz += 2)
-            addPillar(sx * 11.f, sz * 11.f, 0.6f, 5.f, matWall);
+    // ---- targets --------------------------------------------------------------
+    // Everything below is a REAL dynamic body. Nothing scripts a knock-over:
+    // the plates stand because a box on a flat post is stable, and they fall
+    // because a bullet impulse at the contact point tips them. PhysxWorld::add
+    // cooks Box / Sphere / Capsule, which is why the props are boxes and balls
+    // rather than the drums you might expect.
+    auto matPlate = MeshStandardMaterial::create(MeshStandardMaterial::Params{}.color(0xf2f4f7).roughness(0.35f).metalness(0.55f).map(gridTex));
 
-    // ---- L-covers + mid-lane blocks -------------------------------------------
-    auto addCornerCover = [&](float cx, float cz) {
-        const float ix = cx > 0 ? -1.f : 1.f, iz = cz > 0 ? -1.f : 1.f;
-        addBox({cx + ix * 2.f, 0.75f, cz}, {4.5f, 1.5f, 1.f}, matDark);
-        addBox({cx, 0.75f, cz + iz * 2.f}, {1.f, 1.5f, 4.5f}, matDark);
+    // One steel plate standing on a static post.
+    auto addPlate = [&](float x, float z, float plateW, float plateH, float postH) {
+        addBox({x, postH * 0.5f, z}, {plateW * 0.75f, postH, 0.35f}, matDark);// post
+        auto geo = BoxGeometry::create(plateW, plateH, 0.07f);
+        worldUvBox(*geo, plateW, plateH, 0.07f);
+        auto m = Mesh::create(geo, matPlate);
+        m->position.set(x, postH + plateH * 0.5f + 0.005f, z);
+        m->castShadow = true;
+        m->receiveShadow = true;
+        scene.add(m);
+        // Light, so a single round actually moves it.
+        auto* body = world.add(*m, 26.f);
+        lvl.actorToMesh[body] = m.get();
+        Dynamic d;
+        d.mesh = m;
+        d.body = body;
+        d.home = m->position.clone();
+        d.homeRot = m->quaternion.clone();
+        d.kind = Dynamic::Kind::Plate;
+        lvl.dynamics.push_back(std::move(d));
     };
-    addCornerCover(-17, -17);
-    addCornerCover(17, -17);
-    addCornerCover(-17, 17);
-    addCornerCover(17, 17);
-    addBox({16, 0.6f, 0}, {1.2f, 1.2f, 5.f}, matDark);
-    addBox({-16, 0.6f, 0}, {1.2f, 1.2f, 5.f}, matDark);
-    addBox({0, 0.6f, 16}, {5.f, 1.2f, 1.2f}, matDark);
-    addBox({0, 0.6f, -16}, {5.f, 1.2f, 1.2f}, matDark);
 
-    // ---- floating step blocks up to the corner towers (parkour flavour) -------
-    addBox({kArena - 6.5f, 0.5f, kArena - 3.f}, {2.f, 1.f, 2.f}, matAccent);
-    addBox({kArena - 4.5f, 1.2f, kArena - 5.5f}, {2.f, 1.f, 2.f}, matAccent);
+    auto addProp = [&](const std::shared_ptr<Mesh>& m, float density) {
+        m->castShadow = true;
+        m->receiveShadow = true;
+        scene.add(m);
+        auto* body = world.add(*m, density);
+        lvl.actorToMesh[body] = m.get();
+        Dynamic d;
+        d.mesh = m;
+        d.body = body;
+        d.home = m->position.clone();
+        d.homeRot = m->quaternion.clone();
+        d.kind = Dynamic::Kind::Prop;
+        lvl.dynamics.push_back(std::move(d));
+    };
 
-    // ---- dynamic crates (shootable / pushable) ---------------------------------
     auto spawnCrateStack = [&](float cx, float cz, int height, float side) {
         auto geo = BoxGeometry::create(side, side, side);
         worldUvBox(*geo, side, side, side);
         for (int y = 0; y < height; ++y) {
             auto m = Mesh::create(geo, matCrate);
-            m->position.set(cx + frand(-0.04f, 0.04f), side * 0.5f + y * (side + 0.002f), cz + frand(-0.04f, 0.04f));
-            m->castShadow = true;
-            m->receiveShadow = true;
-            scene.add(m);
-            auto* body = world.add(*m, 55.f);
-            lvl.actorToMesh[body] = m.get();
-            lvl.dynamics.push_back({m, body, m->position.clone()});
+            m->position.set(cx + frand(-0.04f, 0.04f), side * 0.5f + y * (side + 0.002f),
+                            cz + frand(-0.04f, 0.04f));
+            addProp(m, 55.f);
         }
     };
-    spawnCrateStack(8.5f, 8.5f, 2, 0.9f);
-    spawnCrateStack(-8.5f, 8.5f, 3, 0.8f);
-    spawnCrateStack(8.5f, -9.f, 2, 1.1f);
-    spawnCrateStack(-9.f, -8.5f, 2, 0.9f);
-    spawnCrateStack(13.f, -3.f, 1, 1.2f);
-    spawnCrateStack(-13.f, 3.f, 1, 1.2f);
+
+    // Three lanes, each with a plate rack at 10 / 20 / 30 m and cover to knock
+    // about. The lanes differ so the range is not three copies of one idea.
+    for (int lane = 0; lane < static_cast<int>(kLaneCount); ++lane) {
+        const float x = (static_cast<float>(lane) - (kLaneCount - 1) * 0.5f) * kLaneWidth;
+        // near / mid / far plates, smaller the further out
+        addPlate(x - 1.7f, kRangeNearZ, 0.8f, 0.95f, 0.75f);
+        addPlate(x, kRangeNearZ, 0.8f, 0.95f, 0.75f);
+        addPlate(x + 1.7f, kRangeNearZ, 0.8f, 0.95f, 0.75f);
+        addPlate(x, kRangeNearZ + 9.f, 0.7f, 0.8f, 1.05f);
+        addPlate(x - 1.9f, kRangeNearZ + 9.f, 0.55f, 0.65f, 1.35f);
+        addPlate(x + 1.9f, kRangeNearZ + 9.f, 0.55f, 0.65f, 1.35f);
+        addPlate(x, kRangeNearZ + 18.f, 0.5f, 0.6f, 1.5f);
+
+        // cover: a crate stack per lane, and a ball that rolls when clipped
+        spawnCrateStack(x - 2.2f, kRangeNearZ + 4.5f, lane == 1 ? 3 : 2, 0.85f);
+        auto ball = Mesh::create(SphereGeometry::create(0.32f, 20, 14), matAccent);
+        ball->position.set(x + 2.4f, 0.32f, kRangeNearZ + 4.f);
+        addProp(ball, 90.f);
+    }
+
+    // A couple of stacks off to the sides, out of the lanes, for stray rounds.
+    spawnCrateStack(-kArena + 5.f, 0.f, 2, 1.1f);
+    spawnCrateStack(kArena - 5.f, 0.f, 2, 1.1f);
 
     return lvl;
 }

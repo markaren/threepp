@@ -43,68 +43,30 @@ constexpr float kRecoilMax = 0.11f;     // cap on accumulated kick
 constexpr float kRecoilYawKick = 0.006f;// rad of random horizontal kick per shot
 constexpr float kRecoilRecover = 8.f;   // recovery rate toward zero (per second)
 
-// ---- enemies ---------------------------------------------------------------
-constexpr float kEnemyRunSpeed = 3.6f; // closing the distance / breaking contact
-constexpr float kEnemyWalkSpeed = 2.1f;// holding the fire band, strafing
-constexpr int kEnemyHp = 4;
-constexpr int kMaxEnemies = 4;
-constexpr float kEnemyFireRange = 17.f;// engages inside this (with LOS)
-constexpr float kEnemyFireInterval = 1.6f;
-constexpr float kEnemyBurst = 3;        // shots per burst
-constexpr float kEnemyBurstGap = 0.13f; // interval inside a burst
-constexpr int kEnemyDamage = 4;
-// ---- enemy behaviour -------------------------------------------------------
-// The bots used to be a two-state machine: beeline at the player, then stop
-// dead and plink from wherever they happened to arrive. These are the timers
-// for the three-state version (Advance / Engage / Reposition) in main.cpp.
-constexpr float kEnemyReaction = 0.42f; // s of unbroken LOS before the first burst
-constexpr float kEnemyIdealMin = 6.5f;  // engagement band: back off inside this,
-constexpr float kEnemyIdealMax = 12.5f; //  close in beyond this
-constexpr float kEnemyStrafeMin = 0.8f; // s per strafe leg before flipping
-constexpr float kEnemyStrafeMax = 2.2f;
-constexpr float kEnemyRepositionOdds = 0.5f;// chance of breaking contact after a burst
-constexpr float kEnemyRepositionTime = 1.8f;
-constexpr float kEnemyPostRadiusMin = 4.5f;// where a reposition post is looked for
-constexpr float kEnemyPostRadiusMax = 8.5f;
-constexpr int kEnemyMag = 12;          // rounds before a (fire-blocking) reload
-constexpr float kEnemyReloadTime = 2.2f;
-// ---- authored stride speeds of the swat.glb locomotion clips (m/s) ---------
-// Measured from each clip's Hips root-motion track: net horizontal hips
-// displacement / clip duration, x the 0.01 Armature scale x the demo's
-// kEnemyCharHeight rescale (0.979). Playing a clip at 1x while the bot travels
-// at some OTHER speed is exactly what makes the feet slide — the walk clip runs
-// at 0.97 m/s and the bots move at kEnemyWalkSpeed, a 2.2x mismatch, and
-// "strafe right" is authored at half the speed of "strafe left". Every
-// direction has a slow and a fast clip; the AI picks whichever sits closer to
-// the speed actually being travelled and time-scales away the remainder.
-constexpr float kClipWalk = 0.97f;      // "walking"            (+Y, forward)
-constexpr float kClipRun = 3.08f;       // "rifle run"          (+Y)
-constexpr float kClipWalkBack = 1.08f;  // "walking backwards"  (-Y)
-constexpr float kClipRunBack = 2.52f;   // "run backwards"      (-Y)
-constexpr float kClipStrafeL = 1.35f;   // "strafe left"        (+X, its left)
-constexpr float kClipStrafeLFast = 2.75f;// "strafe (2)"        (+X)
-constexpr float kClipStrafeR = 0.74f;   // "strafe right"       (-X)
-constexpr float kClipStrafeRFast = 3.22f;// "strafe"            (-X)
-constexpr float kGaitTimeScaleMin = 0.55f;// clamp on the residual time scale
-constexpr float kGaitTimeScaleMax = 1.7f;
-constexpr float kEnemyProbeDist = 1.9f;// local obstacle probe when steering off-field
-constexpr float kRegenDelay = 4.f;     // seconds without damage before regen kicks in
-constexpr float kRegenRate = 6.f;      // hp per second
-constexpr float kEnemyCharHeight = 1.75f;// SWAT skeleton span (m)
-// Unused pool rigs/rifles park here (kept visible: entry-list churn = deferred
-// renderer structural rebuild — see the pool-creation note in main.cpp).
-constexpr float kEnemyParkY = -80.f;
-// Enemies are a single capsule collider (no per-bone hitboxes), so a headshot
-// is approximated as any hit landing in the top slice of that capsule — the
-// head+neck region on a 1.75 m SWAT frame.
-constexpr float kHeadshotZone = 0.22f;
-
-// ---- enemy navigation (flow-field grid; built after the props are placed)
-constexpr float kNavCell = 1.0f;   // grid cell size (m)
-constexpr float kSeparation = 1.6f;// bots ease apart within this distance (m)
-
-// ---- death ragdoll ---------------------------------------------------------
-constexpr float kRagdollTtl = 25.f;// seconds a corpse lingers before removal
+// ---- shooting range ---------------------------------------------------------
+// The demo is a range, not a deathmatch: nothing shoots back. What it shows
+// instead is IMPACT — every target is a real PhysX dynamic body with a mesh
+// collider, so a hit transfers a genuine impulse at the contact point and the
+// thing topples, spins or rolls the way its mass and shape say it should.
+constexpr float kLaneCount = 3;
+constexpr float kLaneWidth = 7.f;      // centre-to-centre spacing
+constexpr float kFiringLineZ = -18.f;  // where the player starts, behind the bench
+constexpr float kRangeNearZ = -6.f;    // nearest target row
+constexpr float kRangeFarZ = 20.f;     // backstop
+// Impulse per hit, scaled by the round's momentum rather than tuned per prop:
+// a light plate flips, a loaded crate stack barely shifts, and neither needed
+// a number typed for it.
+constexpr float kBulletImpulse = 14.f;
+// A plate counts as DOWN once it has tipped this far off vertical. Measured
+// off the body's own up axis, so a plate knocked spinning still scores only
+// when it actually falls.
+constexpr float kPlateDownCos = 0.55f;// ~57 degrees
+// Knocked-down plates pop back up after this, so the range keeps giving you
+// something to shoot without a manual reset.
+constexpr float kPlateResetDelay = 3.5f;
+// Props that get shot off the range are recycled home rather than falling
+// forever.
+constexpr float kPropRecycleY = -8.f;
 
 // ---- palette (HUD) ---------------------------------------------------------
 constexpr int kHudCyan = 0x35c2ff;

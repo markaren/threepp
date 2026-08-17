@@ -1,6 +1,6 @@
 // ============================================================================
-//  threepp First-Person Shooter — an engine-blockout ("UE prototype grid")
-//  arena demo built around the animated AK-12 first-person rig.
+//  threepp Shooting Range — an engine-blockout ("UE prototype grid") range
+//  built around the animated AK-12 first-person rig and PhysX rigid bodies.
 // ============================================================================
 //
 //  What it shows, all at once:
@@ -12,16 +12,20 @@
 //      CC-BY by SlipS) as a camera-mounted viewmodel with procedural sway/bob,
 //      additive Shoot/Reload overlays, muzzle flash (additive sprite + point
 //      light) and spent brass ejected from the rig's own Eject bone.
-//    * SWAT enemies (the tps_shooter hero, swat.glb) that pursue through a
-//      BFS flow field, stop with line of sight and return fire in bursts —
-//      and on death hand their SKELETON to physics: capsule bodies + cone
-//      joints are built over the major bones and the animated character
-//      itself ragdolls. Their rifle drops as a separate physics prop.
-//    * Bullet-impact decals (DecalGeometry parented to the hit mesh), dust /
-//      blood sprite bursts, tracers, and procedurally synthesised audio.
+//    * A shooting range whose targets are REAL RIGID BODIES, not scripted
+//      knock-over animations: steel plates on posts, crate stacks and barrels,
+//      each a PhysX dynamic with a mesh collider. Every hit applies an impulse
+//      AT THE CONTACT POINT, so where you hit decides what happens — a plate
+//      caught on the edge spins off its post, one hit square tips straight
+//      back, and a crate stack collapses the way its own masses say it should.
+//      Plates score when they actually go down and stand themselves back up a
+//      few seconds later, so the range keeps feeding you targets.
+//    * Bullet-impact decals (DecalGeometry parented to the hit mesh — so they
+//      ride a crate you knock across the floor), dust bursts, tracers, and
+//      procedurally synthesised audio.
 //
 //  Controls:  WASD move   mouse look   LMB fire (full auto)   R reload
-//             SHIFT sprint   SPACE jump   ENTER restart (when dead)   ESC quit
+//             SHIFT sprint   SPACE jump   ENTER reset the range   ESC quit
 // ============================================================================
 
 #include "threepp/threepp.hpp"
@@ -91,52 +95,7 @@ namespace {
 #include "fps_hud.hpp"
 #include "fps_entities.hpp"
 #include "fps_level.hpp"
-#include "fps_ragdoll.hpp"
 // clang-format on
-
-// A live enemy = pooled SWAT visual + a locked capsule body; a dead one keeps
-// the visual and swaps the capsule for a skinned ragdoll.
-// Bot behaviour states. Advance closes on the player (flow field, so it routes
-// around cover); Engage holds the fire band and strafes; Reposition breaks
-// contact and runs to a chosen post — preferring one the player can't see.
-enum class AiState {
-    Advance,
-    Engage,
-    Reposition
-};
-
-struct Enemy {
-    EnemySlot* slot = nullptr;
-    std::shared_ptr<Mesh> proxy;// invisible physics capsule
-    PxRigidDynamic* body = nullptr;
-    int hp = kEnemyHp;
-    bool alive = true;
-    float deadTtl = 0.f;
-    float hitFlinch = 0.f;
-    float fireCd = 0.f;  // between bursts
-    int burstLeft = 0;   // shots remaining in the current burst
-    float burstCd = 0.f; // between shots inside a burst
-    float yaw = 0.f;     // smoothed facing
-    SkinnedRagdoll ragdoll;
-    PxRigidDynamic* rifleBody = nullptr;// dropped weapon (spawned at death)
-    // ---- AI ----------------------------------------------------------------
-    AiState state = AiState::Advance;
-    float stateT = 0.f;      // Reposition countdown / Engage re-decide cooldown
-    float losT = 0.f;        // seconds of UNBROKEN line of sight (reaction + aim spool)
-    float sinceSeen = 99.f;  // seconds since the player was last visible
-    Vector3 lastSeen;        // where that was (searched after contact breaks)
-    Vector3 post;            // Reposition destination
-    float strafeT = 0.f;     // seconds left on this strafe leg
-    float strafeSign = 1.f;
-    float flankSign = 1.f;   // which way this bot arcs in while closing
-    float aim = 0.f;         // 0..1 accuracy multiplier, spools with losT
-    int mag = kEnemyMag;
-    float reloadT = 0.f;     // >0 while reloading (blocks fire, plays the clip)
-};
-
-constexpr float kEnemyRadius = 0.35f;
-constexpr float kEnemyLen = 1.05f;
-constexpr float kEnemyHalf = kEnemyLen * 0.5f + kEnemyRadius;
 
 }// namespace
 
@@ -152,7 +111,6 @@ int main(int argc, char** argv) {
     bool shotAutoRun = false;
     bool shotSpin = false;
     bool shotFire = false;// hold LMB from frame 30 (muzzle flash / casings / decals repro)
-    bool shotKill = false;// kill the nearest enemy at frame 220 + track the corpse (ragdoll repro)
     bool timing = false; // print per-frame wall ms (stutter hunting)
     std::optional<float> shotYaw, shotPitch;// --look <yawDeg> <pitchDeg>
     std::optional<GraphicsAPI> apiOverride;
@@ -163,7 +121,6 @@ int main(int argc, char** argv) {
         else if (a == "--run") shotAutoRun = true;
         else if (a == "--spin") shotSpin = true;
         else if (a == "--fire") shotFire = true;
-        else if (a == "--killtest") shotKill = true;
         else if (a == "--look" && i + 2 < argc) {
             shotYaw = std::strtof(argv[++i], nullptr);
             shotPitch = std::strtof(argv[++i], nullptr);
@@ -256,55 +213,16 @@ int main(int argc, char** argv) {
     PhysxWorld world(physSettings);
     Level lvl = buildLevel(*scene, world);
     auto& actorToMesh = lvl.actorToMesh;
-
-    // ===== enemy navigation grid (BFS flow field, from tps_shooter) ==========
-    const int gridN = static_cast<int>(std::lround(kArena * 2.f / kNavCell));
-    auto navIdx = [&](int r, int c) { return static_cast<size_t>(r) * gridN + c; };
-    auto colOf = [&](float w) { return std::clamp(static_cast<int>((w + kArena) / kNavCell), 0, gridN - 1); };
-    auto cellCenter = [&](int c) { return -kArena + (static_cast<float>(c) + 0.5f) * kNavCell; };
-    std::vector<uint8_t> navBlocked(static_cast<size_t>(gridN) * gridN, 0);
-    {
-        PxOverlapBuffer ob;
-        const PxBoxGeometry probe(kNavCell * 0.45f, 0.7f, kNavCell * 0.45f);
-        PxQueryFilterData fd;
-        fd.flags = PxQueryFlags(PxQueryFlag::eSTATIC);
-        for (int gz = 0; gz < gridN; ++gz)
-            for (int gx = 0; gx < gridN; ++gx) {
-                const PxTransform pose(PxVec3(cellCenter(gx), 0.9f, cellCenter(gz)));
-                if (world.scene().overlap(probe, pose, ob, fd)) navBlocked[navIdx(gz, gx)] = 1;
-            }
-        for (auto& dyn : lvl.dynamics) navBlocked[navIdx(colOf(dyn.home.z), colOf(dyn.home.x))] = 1;
-    }
-    std::vector<int> navDist(static_cast<size_t>(gridN) * gridN, -1);
-    std::vector<int> navFrontier;
-    int navPlayerRow = -1, navPlayerCol = -1;
-    auto rebuildFlow = [&](int prow, int pcol) {
-        std::fill(navDist.begin(), navDist.end(), -1);
-        navFrontier.clear();
-        navDist[navIdx(prow, pcol)] = 0;
-        navFrontier.push_back(prow * gridN + pcol);
-        size_t head = 0;
-        while (head < navFrontier.size()) {
-            const int cur = navFrontier[head++];
-            const int r = cur / gridN, c = cur % gridN;
-            const int nd = navDist[navIdx(r, c)] + 1;
-            for (int dr = -1; dr <= 1; ++dr)
-                for (int dc = -1; dc <= 1; ++dc) {
-                    if (!dr && !dc) continue;
-                    const int nr = r + dr, nc = c + dc;
-                    if (nr < 0 || nr >= gridN || nc < 0 || nc >= gridN) continue;
-                    if (navBlocked[navIdx(nr, nc)] || navDist[navIdx(nr, nc)] != -1) continue;
-                    if (dr && dc && (navBlocked[navIdx(r, nc)] || navBlocked[navIdx(nr, c)])) continue;
-                    navDist[navIdx(nr, nc)] = nd;
-                    navFrontier.push_back(nr * gridN + nc);
-                }
-        }
-    };
+    // Actor -> target, wired HERE and not inside buildLevel: the props are
+    // pushed into a vector, and every push can move the ones already in it, so
+    // any pointer taken during the build would dangle. Done once the vector is
+    // final, it stays valid for the run.
+    for (auto& d : lvl.dynamics) d.body->userData = &d;
 
     // ===== player ============================================================
     auto playerProxy = Mesh::create(CapsuleGeometry::create(kPlayerRadius, kPlayerLen), MeshBasicMaterial::create());
     playerProxy->visible = false;
-    playerProxy->position.set(0, kPlayerHalf, 10.f);
+    playerProxy->position.set(0, kPlayerHalf, kFiringLineZ - 2.8f);
     scene->add(playerProxy);
     auto* playerBody = world.add(*playerProxy, 80.f);
     playerBody->setRigidDynamicLockFlags(
@@ -319,9 +237,11 @@ int main(int argc, char** argv) {
         if (sh) sh->setFlag(PxShapeFlag::eSCENE_QUERY_SHAPE, false);
     }
 
-    float camYaw = 0.f, camPitch = 0.f;
+    // Facing DOWN the range (+Z): the camera looks along its own -Z, so a
+    // half turn is what puts the lanes in front of the player at spawn.
+    float camYaw = math::PI, camPitch = 0.f;
     float recoilKick = 0.f, recoilYaw = 0.f;
-    Vector3 playerPos{0, kPlayerHalf, 10.f};
+    Vector3 playerPos{0, kPlayerHalf, kFiringLineZ - 2.8f};
     Vector3 aimDir{0, 0, -1};
     bool wasGrounded = true;
     float bobPhase = 0.f, bobAmp = 0.f;
@@ -476,13 +396,6 @@ int main(int argc, char** argv) {
     float vmFlashT = 0.f;
     auto vmLight = PointLight::create(0xffc36b, 0.f, 10.f);
     vmRig->add(vmLight);
-    // one shared flash light for whichever enemy fired last (a persistent
-    // light avoids the shader permutation churn of adding/removing lights)
-    auto enemyLight = PointLight::create(0xffc36b, 0.f, 9.f);
-    enemyLight->position.set(0, -50, 0);
-    scene->add(enemyLight);
-    float enemyLightT = 0.f;
-
     // ===== transient fx (tracers / flashes), casings, decals, particles ======
     std::vector<Ephemeral> fx;
     auto tracerMat = LineBasicMaterial::create();
@@ -495,6 +408,7 @@ int main(int argc, char** argv) {
             MeshStandardMaterial::Params{}.color(0xd8b04e).roughness(0.35f).metalness(0.85f).envMapIntensity(0.7f));
     std::vector<Casing> casings;
     const size_t kMaxCasings = 30;
+
     // Casing meshes are pooled: created once, kept in the scene, and recycled
     // by moving them. Adding/removing a mesh changes the deferred renderer's
     // entry list → full structural rebuild (device drain), and a mid-list
@@ -616,346 +530,6 @@ int main(int argc, char** argv) {
         b.drag = blood ? 2.2f : 3.0f;
         b.maxOpacity = blood ? 0.55f : 1.f;
         bursts.push_back(std::move(b));
-    };
-
-    // ===== enemy pool (SWAT + rifle, loaded once per slot) ====================
-    constexpr int kEnemyPool = kMaxEnemies + 3;// alive + a few lingering corpses
-    std::vector<std::unique_ptr<EnemySlot>> pool;
-    {
-        GLTFLoader loader;
-        const std::string swatPath = std::string(DATA_FOLDER) + "/models/gltf/swat.glb";
-        const std::string riflePath = std::string(DATA_FOLDER) + "/models/gltf/rifle.glb";
-        std::cout << "Loading enemy pool (" << kEnemyPool << "x swat.glb)..." << std::endl;
-        for (int i = 0; i < kEnemyPool; ++i) {
-            auto res = loader.load(swatPath);
-            if (!res) {
-                std::cerr << "Failed to load " << swatPath << "\n";
-                break;
-            }
-            auto slot = std::make_unique<EnemySlot>();
-            slot->rig = Group::create();
-            // Pooled rigs stay VISIBLE and are parked below the arena when
-            // unused: toggling visibility adds/removes their skinned meshes
-            // from the deferred renderer's entry list, and each spawn then
-            // paid a structural rebuild + first-visibility texture/BLAS
-            // upload (measured ~240 ms) while each despawn also reset the
-            // TAA/GI accumulation. Parked this way, spawn/despawn is a pure
-            // transform change. Idle rigs don't tick their mixer, so the
-            // parked skeletons cost no skinning/BLAS work per frame.
-            slot->rig->position.set(0.f, kEnemyParkY, 0.f);
-            scene->add(slot->rig);
-            auto& model = res->scene;
-            model->traverseType<Mesh>([](Mesh& m) {
-                m.castShadow = true;
-                m.frustumCulled = false;// skinned bounds are bind-pose; never cull
-            });
-            // normalise the skeleton's world span to the capsule height
-            model->updateMatrixWorld(true);
-            float minY = 1e9f, maxY = -1e9f;
-            model->traverse([&](Object3D& o) {
-                Vector3 wp;
-                wp.setFromMatrixPosition(*o.matrixWorld);
-                minY = std::min(minY, wp.y);
-                maxY = std::max(maxY, wp.y);
-            });
-            const float skelH = maxY - minY;
-            model->scale *= kEnemyCharHeight / (skelH > 1e-4f ? skelH : 1.f);
-            slot->model = model;
-            slot->rig->add(model);
-
-            slot->mixer = std::make_unique<AnimationMixer>(*model);
-            for (auto& c : res->animations) {
-                std::string n = c->name();
-                std::transform(n.begin(), n.end(), n.begin(), ::tolower);
-                if (n == "firing rifle") c->makeAdditive();
-            }
-            auto pick = [&](std::string want) -> AnimationAction* {
-                std::transform(want.begin(), want.end(), want.begin(), ::tolower);
-                for (auto& c : res->animations) {
-                    std::string n = c->name();
-                    std::transform(n.begin(), n.end(), n.begin(), ::tolower);
-                    if (n == want) return slot->mixer->clipAction(c);
-                }
-                return nullptr;
-            };
-            slot->anims.idle = pick("rifle aiming idle");
-            slot->anims.walk = pick("walking");
-            slot->anims.run = pick("rifle run");
-            if (!slot->anims.run) slot->anims.run = slot->anims.walk;
-            slot->anims.walkBack = pick("walking backwards");
-            slot->anims.runBack = pick("run backwards");
-            slot->anims.strafeL = pick("strafe left");
-            slot->anims.strafeR = pick("strafe right");
-            // Mixamo shipped a second, much faster strafe pair under these
-            // names — "strafe" goes -X (right), "strafe (2)" goes +X (left).
-            // They matter: the slow pair is authored at 1.35 / 0.74 m/s, way
-            // under the speeds the bots actually strafe at.
-            slot->anims.strafeRFast = pick("strafe");
-            slot->anims.strafeLFast = pick("strafe (2)");
-            slot->anims.fire = pick("firing rifle");
-            slot->anims.reload = pick("reloading");
-            slot->anims.hit = pick("hit reaction");
-            for (auto* a : {slot->anims.idle, slot->anims.walk, slot->anims.run,
-                            slot->anims.walkBack, slot->anims.runBack,
-                            slot->anims.strafeL, slot->anims.strafeR,
-                            slot->anims.strafeLFast, slot->anims.strafeRFast,
-                            slot->anims.fire, slot->anims.reload, slot->anims.hit})
-                if (a) a->setLoop(Loop::Repeat);
-            if (!slot->anims.idle && !res->animations.empty()) slot->anims.idle = slot->mixer->clipAction(res->animations.front());
-            slot->current = slot->anims.idle;
-            if (slot->current) slot->current->play();
-            if (slot->anims.fire) {
-                slot->anims.fire->play();
-                slot->anims.fire->setEffectiveWeight(0.f);
-            }
-
-            model->traverse([&](Object3D& o) {
-                if (o.name.empty()) return;
-                std::string n = o.name;
-                std::transform(n.begin(), n.end(), n.begin(), ::tolower);
-                if (!slot->handBone && n.find("righthand") != std::string::npos) slot->handBone = &o;
-                if (!slot->leftHandBone && n.find("lefthand") != std::string::npos) slot->leftHandBone = &o;
-                if (!slot->hipsBone && n.find("hips") != std::string::npos) {
-                    slot->hipsBone = &o;
-                    slot->hipsBind = o.position;
-                }
-            });
-
-            // rifle instance, pinned into the right hand each frame
-            slot->rifle = Group::create();
-            if (auto r = loader.load(riflePath)) {
-                auto& gun = r->scene;
-                gun->traverseType<Mesh>([](Mesh& m) { m.castShadow = true; });
-                gun->updateMatrixWorld(true);
-                Box3 gb;
-                gb.setFromObject(*gun);
-                const Vector3 gsz = gb.getSize();
-                const float gmax = std::max({gsz.x, gsz.y, gsz.z});
-                if (gmax > 1e-4f) gun->scale *= 0.72f / gmax;
-                slot->rifle->add(gun);
-                slot->rifle->updateMatrixWorld(true);
-                Box3 lb;
-                lb.setFromObject(*gun);
-                const Vector3 lc = lb.getCenter();
-                slot->muzzleLocal.set(lc.x, lc.y, lb.max().z);
-            }
-            slot->rifle->position.set(0.f, kEnemyParkY, 0.f);// parked, like the rig
-            scene->add(slot->rifle);
-
-            // per-slot muzzle flash sprite (world-space, at the rifle tip)
-            slot->flashMat = SpriteMaterial::create();
-            slot->flashMat->map = flashTex;
-            slot->flashMat->color = Color(0xffd9a0);
-            slot->flashMat->transparent = true;
-            slot->flashMat->depthWrite = false;
-            slot->flashMat->blending = Blending::Additive;
-            slot->flash = Sprite::create(slot->flashMat);
-            slot->flash->visible = false;
-            slot->flash->scale.set(0.5f, 0.5f, 1.f);
-            scene->add(slot->flash);
-            pool.push_back(std::move(slot));
-        }
-        std::cout << "Enemy pool ready (" << pool.size() << " slots)" << std::endl;
-    }
-
-    // ===== enemies ===========================================================
-    std::vector<std::unique_ptr<Enemy>> enemies;
-    std::unordered_set<const PxRigidActor*> ragdollActors;// corpse hits -> blood
-    auto enemyProxyGeo = CapsuleGeometry::create(kEnemyRadius, kEnemyLen);
-    float enemySpawnTimer = 1.f;
-
-    // ===== enemy perception / steering =======================================
-    // Static-only line of sight from an eye point to the player's chest.
-    auto seesPlayer = [&](const Vector3& from) {
-        Vector3 dir = (playerPos + Vector3(0, 0.35f, 0)) - from;
-        const float dl = dir.length();
-        if (dl < 1e-3f) return true;
-        dir.multiplyScalar(1.f / dl);
-        PxRaycastBuffer hb;
-        PxQueryFilterData fd;
-        fd.flags = PxQueryFlags(PxQueryFlag::eSTATIC);
-        return !(world.scene().raycast(toPxVec3(from), toPxVec3(dir), dl, hb,
-                                       PxHitFlags(PxHitFlag::eDEFAULT), fd) &&
-                 hb.hasBlock);
-    };
-    // Is there room to keep walking that way? (chest height, static only)
-    auto clearAhead = [&](const Vector3& from, const Vector3& dir) {
-        PxRaycastBuffer hb;
-        PxQueryFilterData fd;
-        fd.flags = PxQueryFlags(PxQueryFlag::eSTATIC);
-        return !(world.scene().raycast(toPxVec3(from), toPxVec3(dir), kEnemyProbeDist, hb,
-                                       PxHitFlags(PxHitFlag::eDEFAULT), fd) &&
-                 hb.hasBlock);
-    };
-    // Head for `goal`, sliding around whatever is in the way: the direct
-    // heading first, then progressively wider fans either side of it. Used off
-    // the flow field (which only ever points at the player).
-    auto steerTo = [&](const Vector3& from, const Vector3& goal) {
-        Vector3 want(goal.x - from.x, 0.f, goal.z - from.z);
-        if (want.length() < 1e-3f) return Vector3(0.f, 0.f, 0.f);
-        want.normalize();
-        static constexpr float kFan[] = {0.f, 0.45f, -0.45f, 0.95f, -0.95f, 1.6f, -1.6f};
-        for (float a : kFan) {
-            const float ca = std::cos(a), sa = std::sin(a);
-            const Vector3 d(want.x * ca + want.z * sa, 0.f, -want.x * sa + want.z * ca);
-            if (clearAhead(from, d)) return d;
-        }
-        return want;
-    };
-    // Choose somewhere to fall back to between bursts: reachable per the nav
-    // grid, inside the arena, and ideally OUT of the player's sight, biased
-    // around the player rather than straight backwards — that arc is what
-    // makes a squad look like it's working angles instead of queueing up.
-    auto pickPost = [&](const Vector3& from, float flankSign) {
-        const float bearingNow = std::atan2(from.x - playerPos.x, from.z - playerPos.z);
-        Vector3 best = from;
-        float bestScore = -1e9f;
-        for (int i = 0; i < 16; ++i) {
-            const float a = (static_cast<float>(i) / 16.f) * 2.f * math::PI;
-            const float rad = frand(kEnemyPostRadiusMin, kEnemyPostRadiusMax);
-            const Vector3 c(from.x + std::cos(a) * rad, from.y, from.z + std::sin(a) * rad);
-            if (std::abs(c.x) > kArena - 2.f || std::abs(c.z) > kArena - 2.f) continue;
-            const size_t ci = navIdx(colOf(c.z), colOf(c.x));
-            if (navBlocked[ci] || navDist[ci] < 0) continue;// blocked or unreachable
-            const float dp = Vector3(c.x - playerPos.x, 0.f, c.z - playerPos.z).length();
-            float score = seesPlayer(Vector3(c.x, c.y + 0.45f, c.z)) ? 0.f : 55.f;// cover wins
-            score -= std::abs(dp - (kEnemyIdealMin + kEnemyIdealMax) * 0.5f) * 3.f;
-            score += flankSign * 14.f *
-                     wrapPi(std::atan2(c.x - playerPos.x, c.z - playerPos.z) - bearingNow);
-            for (auto& o : enemies) {// don't pile onto a squadmate's post
-                if (!o->alive) continue;
-                if (Vector3(o->post.x - c.x, 0.f, o->post.z - c.z).length() < 2.5f) score -= 25.f;
-            }
-            if (score > bestScore) {
-                bestScore = score;
-                best = c;
-            }
-        }
-        return best;
-    };
-
-    auto removeEnemy = [&](Enemy* e) {
-        if (e->ragdoll.valid()) {
-            for (auto& p : e->ragdoll.parts) ragdollActors.erase(p.body);
-            e->ragdoll.destroy(world);
-        }
-        if (e->body) {
-            world.unbind(*e->proxy);
-            world.scene().removeActor(*e->body);
-            e->body->release();
-            e->body = nullptr;
-        }
-        if (e->rifleBody) {
-            world.removeActor(e->rifleBody);// also drops the rifle binding
-            e->rifleBody = nullptr;
-        }
-        if (e->proxy) scene->remove(*e->proxy);
-        if (e->slot) {
-            // park, don't hide — see the pool-creation comment
-            e->slot->rig->position.set(0.f, kEnemyParkY, 0.f);
-            e->slot->rifle->position.set(0.f, kEnemyParkY, 0.f);
-            e->slot->flash->visible = false;
-            e->slot->inUse = false;
-            e->slot = nullptr;
-        }
-    };
-
-    auto spawnEnemy = [&]() {
-        EnemySlot* slot = nullptr;
-        for (auto& s : pool)
-            if (!s->inUse) {
-                slot = s.get();
-                break;
-            }
-        if (!slot) {
-            // pool exhausted by lingering corpses — reclaim the oldest one
-            Enemy* oldest = nullptr;
-            for (auto& e : enemies)
-                if (!e->alive && (!oldest || e->deadTtl < oldest->deadTtl)) oldest = e.get();
-            if (!oldest) return;
-            removeEnemy(oldest);
-            enemies.erase(std::remove_if(enemies.begin(), enemies.end(),
-                                         [&](const std::unique_ptr<Enemy>& p) { return p.get() == oldest; }),
-                          enemies.end());
-            for (auto& s : pool)
-                if (!s->inUse) {
-                    slot = s.get();
-                    break;
-                }
-            if (!slot) return;
-        }
-
-        const float ang = frand(0.f, 2.f * math::PI);
-        const float r = frand(kArena * 0.55f, kArena - 3.f);
-        const Vector3 at(std::cos(ang) * r, kEnemyHalf, std::sin(ang) * r);
-
-        auto e = std::make_unique<Enemy>();
-        e->slot = slot;
-        slot->inUse = true;
-        slot->rig->position.copy(at);// unparked; physics re-drives it each frame
-        e->proxy = Mesh::create(enemyProxyGeo, MeshBasicMaterial::create());
-        e->proxy->visible = false;
-        e->proxy->position.copy(at);
-        scene->add(e->proxy);
-        e->body = world.add(*e->proxy, 60.f);
-        e->body->setRigidDynamicLockFlags(
-                PxRigidDynamicLockFlag::eLOCK_ANGULAR_X |
-                PxRigidDynamicLockFlag::eLOCK_ANGULAR_Y |
-                PxRigidDynamicLockFlag::eLOCK_ANGULAR_Z);
-        e->body->userData = e.get();
-        e->fireCd = frand(0.6f, 1.4f);
-        e->yaw = frand(-math::PI, math::PI);
-        e->flankSign = frand(-1.f, 1.f) < 0.f ? -1.f : 1.f;
-        e->lastSeen.copy(playerPos);
-        e->post.copy(at);
-        // reset the recycled slot's animation state
-        if (slot->current) {
-            slot->current->stop();
-        }
-        slot->current = slot->anims.idle;
-        if (slot->current) {
-            slot->current->reset();
-            slot->current->play();
-        }
-        if (slot->anims.fire) {
-            slot->anims.fire->reset();
-            slot->anims.fire->play();
-            slot->anims.fire->setEffectiveWeight(0.f);
-        }
-        slot->fireW = 0.f;
-        enemies.push_back(std::move(e));
-    };
-
-    auto killEnemy = [&](Enemy* e, const Vector3& hitPoint, const Vector3& impulseDir) {
-        e->alive = false;
-        e->deadTtl = kRagdollTtl;
-        Vector3 vel(0, 0, 0);
-        if (e->body) {
-            const PxVec3 v = e->body->getLinearVelocity();
-            vel.set(v.x, v.y, v.z);
-            world.unbind(*e->proxy);
-            world.scene().removeActor(*e->body);
-            e->body->release();
-            e->body = nullptr;
-        }
-        // hand the skeleton to physics. The impulse lands AT the wound (see
-        // fps_ragdoll.hpp) — modest, with only a little lift: a launched corpse
-        // reads as a cartoon, a corpse that buckles where it was hit does not.
-        e->ragdoll.build(world, *e->slot->model, vel, hitPoint,
-                         (impulseDir + Vector3(0, 0.12f, 0)) * 26.f);
-        for (auto& p : e->ragdoll.parts) ragdollActors.insert(p.body);
-        // the rifle drops out of the hand as its own prop
-        if (!e->rifleBody) {
-            e->slot->rifle->updateMatrixWorld(true);
-            Vector3 rp, rs;
-            Quaternion rq;
-            e->slot->rifle->matrixWorld->decompose(rp, rq, rs);
-            e->rifleBody = world.addDynamic(PxBoxGeometry(0.05f, 0.09f, 0.36f),
-                                            PxTransform(toPxVec3(rp), toPxQuat(rq)), 400.f);
-            e->rifleBody->setLinearVelocity(toPxVec3(vel + impulseDir * 1.5f));
-            e->rifleBody->setAngularVelocity(PxVec3(frand(-4.f, 4.f), frand(-4.f, 4.f), frand(-4.f, 4.f)));
-            world.bind(*e->slot->rifle, *e->rifleBody);
-        }
     };
 
     // ===== game state ========================================================
@@ -1091,39 +665,18 @@ int main(int argc, char** argv) {
         const Vector3 point = fromPxVec3(hitBuf.block.position);
         const Vector3 hitNormal = fromPxVec3(hitBuf.block.normal);
 
-        // live enemy?
+        // A steel plate? Score it, but only on the swing that actually puts it
+        // down — `down` latches, so a plate you keep hitting while it lies
+        // there does not farm points, and one that merely rocks scores nothing.
+        // The knockdown itself is left entirely to the impulse below: nothing
+        // here scripts the fall.
         if (actor && actor->userData) {
-            auto* e = static_cast<Enemy*>(actor->userData);
-            if (e->alive) {
-                spawnParticles(point, dir, hitNormal, /*blood*/ true);
-                // headshot: enemies are a single capsule collider, so approximate
-                // the head as the top slice of it — any hit there is a one-shot kill.
-                const float bodyTopY = fromPxVec3(actor->getGlobalPose().p).y + kEnemyHalf;
-                const bool headshot = point.y >= bodyTopY - kHeadshotZone;
-                if (headshot) e->hp = 0;
-                else e->hp--;
-                e->hitFlinch = 0.45f;
+            auto* d = static_cast<Dynamic*>(actor->userData);
+            if (d->kind == Dynamic::Kind::Plate && !d->down) {
                 hitMarkerT = 0.12f;
                 hitWasKill = false;
-                if (e->hp <= 0) {
-                    killEnemy(e, point, dir);
-                    score += 100;
-                    hitMarkerT = 0.25f;
-                    hitWasKill = true;
-                    scorePopT = 0.8f;
-                    sfx.kill.play(1.f, frand(0.95f, 1.05f));
-                } else {
-                    sfx.hit.play(frand(0.85f, 1.f), frand(0.92f, 1.08f));
-                }
-                return;
+                sfx.hit.play(frand(0.85f, 1.f), frand(0.92f, 1.08f));
             }
-        }
-        // corpse? blood + shove, no decal
-        if (ragdollActors.count(actor)) {
-            spawnParticles(point, dir, hitNormal, /*blood*/ true);
-            if (auto* rd = actor->is<PxRigidDynamic>())
-                PxRigidBodyExt::addForceAtPos(*rd, toPxVec3(dir * 90.f), hitBuf.block.position, PxForceMode::eIMPULSE);
-            return;
         }
 
         // environment: impact + dust + scorch decal (+ knock dynamics around)
@@ -1135,73 +688,6 @@ int main(int argc, char** argv) {
         if (auto* rd = actor ? actor->is<PxRigidDynamic>() : nullptr) {
             PxRigidBodyExt::addForceAtPos(*rd, toPxVec3(dir * 220.f), hitBuf.block.position, PxForceMode::eIMPULSE);
         }
-    };
-
-    // ===== enemy fire ========================================================
-    auto enemyShoot = [&](Enemy* e) {
-        EnemySlot* s = e->slot;
-        s->rifle->updateMatrixWorld(true);
-        Vector3 mw = s->muzzleLocal;
-        mw.applyMatrix4(*s->rifle->matrixWorld);
-        const Vector3 chest = playerPos + Vector3(0, 0.35f, 0);
-        Vector3 toP = chest - mw;
-        const float dist = toP.length();
-        toP.normalize();
-
-        sfx.enemyShot.playAt(mw, frand(0.92f, 1.02f));
-        s->flash->position.copy(mw);
-        const float fs = frand(0.35f, 0.5f);
-        s->flash->scale.set(fs, fs, 1.f);
-        s->flashMat->rotation = frand(0.f, math::PI * 2.f);
-        s->flash->visible = true;
-        s->flashT = 0.045f;
-        enemyLight->position.copy(mw);
-        enemyLight->intensity = 7.f;
-        enemyLightT = 0.05f;
-
-        // Hit chance falls with range and player speed, and is scaled by the
-        // shooter's own aim (Enemy::aim — spools up with unbroken line of
-        // sight, washes out while it moves or flinches). That is what makes a
-        // bot feel like it ACQUIRES you instead of being a hitscan dice roll:
-        // the first round out of a fresh burst is the one that misses.
-        e->mag = std::max(0, e->mag - 1);
-        const PxVec3 pv = playerBody->getLinearVelocity();
-        const float pSpeed = std::sqrt(pv.x * pv.x + pv.z * pv.z);
-        const float pHit = std::clamp((0.52f - dist * 0.014f - pSpeed * 0.05f) * e->aim,
-                                      0.04f, 0.5f);
-        Vector3 endPt;
-        if (!gameOver && frand(0.f, 1.f) < pHit) {
-            endPt = chest + Vector3(frand(-0.1f, 0.1f), frand(-0.2f, 0.2f), frand(-0.1f, 0.1f));
-            health -= kEnemyDamage;
-            healthF = static_cast<float>(health);
-            sinceHurt = 0.f;
-            sfx.hurt.play(1.f, frand(0.95f, 1.05f));
-            {
-                auto& slotArc = dmgArcs[dmgArcNext];
-                dmgArcNext = static_cast<int>((dmgArcNext + 1) % dmgArcs.size());
-                slotArc.t = 1.f;
-                slotArc.bearing = std::atan2(mw.x - playerPos.x, mw.z - playerPos.z);
-            }
-        } else {
-            // deliberate near-miss: aim past the player, land it on the level
-            Vector3 side(-toP.z, 0.f, toP.x);
-            Vector3 missDir = toP + side * frand(-0.09f, 0.09f) + Vector3(0, frand(-0.03f, 0.06f), 0);
-            missDir.normalize();
-            PxRaycastBuffer hb;
-            endPt = mw + missDir * 60.f;
-            if (world.scene().raycast(toPxVec3(mw + missDir * 0.6f), toPxVec3(missDir), 60.f, hb) && hb.hasBlock) {
-                endPt = fromPxVec3(hb.block.position);
-                const Vector3 n = fromPxVec3(hb.block.normal);
-                spawnParticles(endPt, missDir, n, /*blood*/ false);
-                if (auto it = actorToMesh.find(hb.block.actor); it != actorToMesh.end())
-                    stampDecal(it->second, endPt, n);
-            }
-        }
-        auto tg = BufferGeometry::create();
-        tg->setFromPoints(std::vector<Vector3>{mw, endPt});
-        auto tracer = Line::create(tg, tracerMat);
-        scene->add(tracer);
-        fx.push_back({tracer, 0.06f});
     };
 
     // ===== HUD (SVG overlay) =================================================
@@ -1244,38 +730,6 @@ int main(int argc, char** argv) {
     ui->add(crosshair);
     layout.add(crosshair, 0.5f, 0.5f, 0, 0, 0.5f);
 
-    // health bar with damage-lag chip (bottom-left)
-    {
-        auto fg = Group::create();
-        fg->add(panel(224, 26, 6, kPanel, 0.75f, kPanelEdge, 1.5f));
-        fg->scale.y = -1.f;
-        hudScale(fg);
-        ui->add(fg);
-        layout.add(fg, 0.f, 0.f, 22, 56, 0.1f);
-    }
-    auto chipFill = rect(216, 18, 0xffaa55, 0.55f);
-    {
-        auto cg = Group::create();
-        cg->add(chipFill.mesh);
-        cg->scale.y = -1.f;
-        hudScale(cg);
-        ui->add(cg);
-        layout.add(cg, 0.f, 0.f, 26, 52, 0.15f);
-    }
-    auto healthFill = rect(216, 18, kHudGood, 0.95f);
-    {
-        auto hg = Group::create();
-        hg->add(healthFill.mesh);
-        hg->scale.y = -1.f;
-        hudScale(hg);
-        ui->add(hg);
-        layout.add(hg, 0.f, 0.f, 26, 52, 0.2f);
-    }
-    auto healthTxt = makeText(font, "100", 0xffffff, 15, 0.f, 0.f, 134, 43,
-                              TextSprite::HorizontalAlignment::Center);
-    ui->add(healthTxt);
-    ui->add(makeText(font, "HP", kHudCyan, 12, 0.f, 0.f, 30, 70));
-
     // ammo (bottom-right) + magazine pips
     Readout ammoTxt{makeText(font, "", 0xffffff, 34, 1.f, 0.f, -40, 60,
                              TextSprite::HorizontalAlignment::Right)};
@@ -1297,7 +751,8 @@ int main(int argc, char** argv) {
     ui->add(magGroup);
     layout.add(magGroup, 1.f, 0.f, -40, 112, 0.2f);
 
-    // score + hostiles (top)
+    // score + plates standing (top). No health bar: nothing on a range shoots
+    // back, and a permanently full HP bar is dead pixels.
     Readout scoreTxt{makeText(font, "SCORE 0", kHudCyan, 22, 0.f, 1.f, 24, -34)};
     ui->add(scoreTxt.sprite);
     Readout aliveTxt{makeText(font, "", 0xffffff, 16, 1.f, 1.f, -24, -34,
@@ -1316,22 +771,6 @@ int main(int argc, char** argv) {
                              TextSprite::HorizontalAlignment::Left);
     scorePop->visible = false;
     ui->add(scorePop);
-
-    // damage-direction arcs
-    for (auto& a : dmgArcs) {
-        a.g = svgFromString(std::string(R"(<svg xmlns="http://www.w3.org/2000/svg"><path d=")") +
-                            wedgePath(56.f, 68.f, 26.f) + R"(" fill=)" + '"' + hex(kHudWarn) + R"("/></svg>)");
-        a.mats = svgMats(a.g);
-        a.g->visible = false;
-        hudScale(a.g);
-        ui->add(a.g);
-        layout.add(a.g, 0.5f, 0.5f, 0, 0, 0.55f);
-    }
-
-    // low-health vignette
-    auto vignette = rect(1, 1, kHudWarn, 0.f);
-    ui->add(vignette.mesh);
-    layout.addRaw([m = vignette.mesh](float W, float H) { m->scale.set(W, H, 1); m->position.set(0, 0, 0.05f); });
 
     ui->add(makeText(font, "WASD move    MOUSE look    LMB fire    R reload    SHIFT sprint    SPACE jump",
                      0x9fb6c8, 12, 0.5f, 0.f, 0, 20,
@@ -1389,21 +828,15 @@ int main(int argc, char** argv) {
             if (vmCurrent) vmCurrent->crossFadeTo(vmEquip, 0.1f);
             vmCurrent = vmEquip;
         }
-        for (auto& e : enemies) removeEnemy(e.get());
-        enemies.clear();
-        for (auto& c : casings) parkCasing(c.mesh);
-        casings.clear();
-        recoilKick = 0.f;
-        recoilYaw = 0.f;
         chipHealth = 100.f;
         scorePopT = 0.f;
         hitWasKill = false;
-        enemySpawnTimer = 1.f;
-        for (auto& a : dmgArcs) a.t = 0.f;
-        playerBody->setGlobalPose(toPxTransform(Vector3(0, kPlayerHalf, 10.f)));
+        playerBody->setGlobalPose(toPxTransform(Vector3(0, kPlayerHalf, kFiringLineZ - 2.8f)));
         playerBody->setLinearVelocity(PxVec3(0));
         for (auto& d : lvl.dynamics) {
-            d.body->setGlobalPose(toPxTransform(d.home));
+            d.down = false;
+            d.resetIn = 0.f;
+            d.body->setGlobalPose(PxTransform(toPxVec3(d.home), toPxQuat(d.homeRot)));
             d.body->setLinearVelocity(PxVec3(0));
             d.body->setAngularVelocity(PxVec3(0));
             d.body->wakeUp();
@@ -1487,18 +920,6 @@ int main(int argc, char** argv) {
             if (auto* vk = dynamic_cast<VulkanRenderer*>(renderer.get()))
                 std::cout << " overlayMs=" << vk->lastFrameTimings().overlayMs;
 #endif
-            // Bot state machine, one token per live enemy: <state><range>/<aim>.
-            // A/E/R = Advance/Engage/Reposition — a column of frozen tokens is
-            // the tell that a state stopped transitioning.
-            std::cout << " ai=";
-            for (auto& e : enemies) {
-                if (!e->alive) continue;
-                const PxVec3 bp = e->body->getGlobalPose().p;
-                std::cout << (e->state == AiState::Advance ? 'A' : e->state == AiState::Engage ? 'E' : 'R')
-                          << std::fixed << std::setprecision(1)
-                          << Vector3(bp.x - playerPos.x, 0.f, bp.z - playerPos.z).length()
-                          << '/' << std::setprecision(2) << e->aim << ' ';
-            }
             std::cout << std::defaultfloat << std::endl;
         }
         if (dt > 0.05f) dt = 0.05f;
@@ -1506,48 +927,14 @@ int main(int argc, char** argv) {
         if (shotSpin) camYaw += 1.2f * dt;
         if (shotFire) {
             firing = shotFrame > 30;
-            camYaw = math::PI;// face away from the ramp...
-            camPitch = -0.5f; // ...and down at the open floor ~3 m out (decal inspection)
+            camYaw = math::PI;  // down the range...
+            camPitch = -0.045f; // ...and just under level, onto the near plates
         }
         // --look <yawDeg> <pitchDeg>: pin the camera for a capture. Needed to
         // inspect the ground AT the player's feet (viewmodel shadow checks) —
         // at pitch 0 the nearest visible floor is already ~2.4 m out.
         if (shotYaw) camYaw = math::degToRad(*shotYaw);
         if (shotPitch) camPitch = math::degToRad(*shotPitch);
-        // --killtest: mid-run, execute the nearest enemy and keep the camera on
-        // the corpse so the capture shows the skinned ragdoll in motion.
-        static Enemy* killTarget = nullptr;
-        if (shotKill && shotFrame == 200) {
-            // grab the nearest live enemy and plant it 5 m in front of the camera
-            float best = 1e9f;
-            for (auto& e : enemies) {
-                if (!e->alive) continue;
-                const PxVec3 ep = e->body->getGlobalPose().p;
-                const float d = Vector3(ep.x - playerPos.x, 0, ep.z - playerPos.z).length();
-                if (d < best) {
-                    best = d;
-                    killTarget = e.get();
-                }
-            }
-            if (killTarget) {
-                // open floor behind the spawn point (the area ahead is the ramp)
-                const Vector3 at = playerPos + Vector3(1.5f, 0.f, 5.f);
-                killTarget->body->setGlobalPose(PxTransform(PxVec3(at.x, kEnemyHalf, at.z)));
-            }
-        }
-        if (shotKill && shotFrame == 230 && killTarget && killTarget->alive) {
-            const PxVec3 kp = killTarget->body->getGlobalPose().p;
-            killEnemy(killTarget, Vector3(kp.x, kp.y + 0.35f, kp.z),
-                      Vector3(-std::sin(camYaw), 0.f, -std::cos(camYaw)));
-            score += 100;
-        }
-        if (shotKill && killTarget && killTarget->slot) {
-            const Vector3 at = killTarget->slot->rig->position;
-            camYaw = std::atan2(playerPos.x - at.x, playerPos.z - at.z);
-            const float dist = Vector3(at.x - playerPos.x, 0, at.z - playerPos.z).length();
-            camPitch = std::atan2(0.4f - kEyeOffset - kPlayerHalf, std::max(1.f, dist));
-        }
-
         // --- player body / grounding ---
         const PxTransform pt = playerBody->getGlobalPose();
         playerPos.set(pt.p.x, pt.p.y, pt.p.z);
@@ -1665,349 +1052,48 @@ int main(int argc, char** argv) {
         vmFlashT -= dt;
         if (vmFlashT <= 0.f) vmFlash->visible = false;
         vmLight->intensity = std::max(0.f, vmLight->intensity - dt * 220.f);
-        enemyLightT -= dt;
-        if (enemyLightT <= 0.f) enemyLight->intensity = std::max(0.f, enemyLight->intensity - dt * 200.f);
-
-        // --- flow field refresh ---
-        {
-            const int pr = colOf(playerPos.z), pc = colOf(playerPos.x);
-            if (pr != navPlayerRow || pc != navPlayerCol) {
-                navPlayerRow = pr;
-                navPlayerCol = pc;
-                rebuildFlow(pr, pc);
-            }
-        }
-
-        // --- enemy spawn ---
-        if (!gameOver) {
-            enemySpawnTimer -= dt;
-            int aliveCount = 0;
-            for (auto& e : enemies)
-                if (e->alive) aliveCount++;
-            if (aliveCount < kMaxEnemies && enemySpawnTimer <= 0.f) {
-                spawnEnemy();
-                enemySpawnTimer = 1.6f;
-            }
-        }
-
-        // --- enemy AI ---
-        for (auto& e : enemies) {
-            if (!e->alive) {
-                e->deadTtl -= dt;
-                if (e->slot && e->slot->flash->visible) e->slot->flash->visible = false;
-                continue;
-            }
-            EnemySlot* s = e->slot;
-            const PxVec3 ep = e->body->getGlobalPose().p;
-            const Vector3 epv(ep.x, ep.y, ep.z);
-            Vector3 toPlayer(playerPos.x - ep.x, 0, playerPos.z - ep.z);
-            const float d = toPlayer.length();
-            const Vector3 fwd = d > 1e-3f ? toPlayer / d : Vector3(0.f, 0.f, 1.f);
-            const Vector3 lat(-fwd.z, 0.f, fwd.x);// perpendicular to the sightline
-
-            // --- perception ---------------------------------------------------
-            const bool los = seesPlayer(Vector3(ep.x, ep.y + 0.45f, ep.z));
-            if (los) {
-                e->losT += dt;
-                e->sinceSeen = 0.f;
-                e->lastSeen.copy(playerPos);
-            } else {
-                e->losT = 0.f;
-                e->sinceSeen += dt;
-            }
-            const bool canEngage = los && d < kEnemyFireRange;
-            e->stateT -= dt;
-            e->hitFlinch = std::max(0.f, e->hitFlinch - dt);
-            e->reloadT = std::max(0.f, e->reloadT - dt);
-            if (e->reloadT <= 0.f && e->mag <= 0) e->mag = kEnemyMag;
-
-            // Never shoot a squadmate in the back: anyone standing near our
-            // line to the player masks it (and makes us move, below).
-            bool friendlyInLine = false;
-            for (auto& o : enemies) {
-                if (o.get() == e.get() || !o->alive) continue;
-                const PxVec3 op = o->body->getGlobalPose().p;
-                const Vector3 rel(op.x - ep.x, 0.f, op.z - ep.z);
-                const float along = rel.dot(fwd);
-                if (along < 0.8f || along > d) continue;
-                if (std::abs(rel.dot(lat)) < 0.75f) {
-                    friendlyInLine = true;
-                    break;
-                }
-            }
-
-            // --- state transitions --------------------------------------------
-            switch (e->state) {
-                case AiState::Advance:
-                    if (canEngage) {
-                        e->state = AiState::Engage;
-                        e->strafeT = 0.f;
-                        e->stateT = 0.f;
-                    }
-                    break;
-                case AiState::Engage:
-                    if (!canEngage) {
-                        e->state = AiState::Advance;
-                    } else if (e->stateT <= 0.f && e->burstLeft == 0 &&
-                               (e->fireCd > 0.f || e->reloadT > 0.f || friendlyInLine)) {
-                        // Between bursts (or reloading, or masked by a mate):
-                        // break contact and take a new angle, or sit tight and
-                        // re-ask shortly. Taking fire makes moving far likelier.
-                        const float odds = (friendlyInLine || e->reloadT > 0.f) ? 0.95f
-                                           : e->hitFlinch > 0.f                ? 0.8f
-                                                                               : kEnemyRepositionOdds;
-                        if (frand(0.f, 1.f) < odds) {
-                            e->post.copy(pickPost(epv, e->flankSign));
-                            e->flankSign = -e->flankSign;// arc the other way next time
-                            e->state = AiState::Reposition;
-                            e->stateT = kEnemyRepositionTime + frand(0.f, 0.8f);
-                        } else {
-                            e->stateT = 1.f;
-                        }
-                    }
-                    break;
-                case AiState::Reposition:
-                    if (e->stateT <= 0.f ||
-                        Vector3(e->post.x - ep.x, 0.f, e->post.z - ep.z).length() < 1.1f)
-                        e->state = canEngage ? AiState::Engage : AiState::Advance;
-                    break;
-            }
-
-            // --- steering ------------------------------------------------------
-            Vector3 dir(0.f, 0.f, 0.f);
-            float speed = 0.f;
-            bool holding = false;// Engage: facing the player, cleared to fire
-            if (e->state == AiState::Engage) {
-                holding = true;
-                if (e->strafeT <= 0.f) {
-                    e->strafeT = frand(kEnemyStrafeMin, kEnemyStrafeMax);
-                    e->strafeSign = frand(-1.f, 1.f) < 0.f ? -1.f : 1.f;
-                }
-                e->strafeT -= dt;
-                // hold the band: close if too far, give ground if too close
-                float radial = 0.f;
-                if (d > kEnemyIdealMax) radial = 1.f;
-                else if (d < kEnemyIdealMin) radial = -1.f;
-                Vector3 strafe = lat * e->strafeSign;
-                if (!clearAhead(epv, strafe)) {// wall that side — turn around
-                    e->strafeSign = -e->strafeSign;
-                    e->strafeT = frand(kEnemyStrafeMin, kEnemyStrafeMax);
-                    strafe = lat * e->strafeSign;
-                }
-                dir = fwd * radial + strafe * 0.9f;
-                speed = kEnemyWalkSpeed;
-            } else if (e->state == AiState::Reposition) {
-                dir = steerTo(epv, e->post);
-                speed = kEnemyRunSpeed;
-            } else {
-                // Advance: down the flow field (routes around cover) with a
-                // tangential bias, so a squad converges from spread angles
-                // instead of single file.
-                dir.copy(fwd);
-                const int er = colOf(ep.z), ec = colOf(ep.x);
-                auto rawDist = [&](int r, int c) -> float {
-                    if (r < 0 || r >= gridN || c < 0 || c >= gridN) return 1e6f;
-                    const int dv = navDist[navIdx(r, c)];
-                    return dv < 0 ? 1e6f : static_cast<float>(dv);
-                };
-                const float here = rawDist(er, ec);
-                if (here < 1e6f) {
-                    auto g = [&](int r, int c) { return std::min(rawDist(r, c), here + 3.f); };
-                    Vector3 flow(g(er, ec - 1) - g(er, ec + 1), 0.f,
-                                 g(er - 1, ec) - g(er + 1, ec));
-                    if (flow.length() > 1e-3f) {
-                        flow.normalize();
-                        dir.copy(flow);
-                    }
-                }
-                // Arc in, but only once we're near enough for the angle to
-                // matter — biasing a bot that is still 20 m out just makes it
-                // orbit the arena instead of showing up.
-                dir += lat * (e->flankSign * (d > 18.f ? 0.f : d > 10.f ? 0.4f : 0.15f));
-                speed = d > 9.f ? kEnemyRunSpeed : kEnemyWalkSpeed;
-                // contact lost nearby: move up carefully. Far out there is
-                // nothing to be careful about yet — just close.
-                if (e->sinceSeen > 2.f && d < 14.f) speed *= 0.75f;
-            }
-            // squad spacing, in every state
-            for (auto& o : enemies) {
-                if (o.get() == e.get() || !o->alive) continue;
-                const PxVec3 op = o->body->getGlobalPose().p;
-                Vector3 away(ep.x - op.x, 0.f, ep.z - op.z);
-                const float sd = away.length();
-                if (sd > 1e-3f && sd < kSeparation)
-                    dir += away * ((kSeparation - sd) / sd * 0.6f);
-            }
-            PxVec3 v = e->body->getLinearVelocity();
-            if (speed > 0.f && dir.length() > 1e-3f) {
-                dir.normalize();
-                v.x = dir.x * speed;
-                v.z = dir.z * speed;
-            } else {
-                v.x = 0.f;
-                v.z = 0.f;
-            }
-            e->body->setLinearVelocity(v);
-
-            // --- aim + burst fire ----------------------------------------------
-            // Accuracy spools up with unbroken sight and washes out while the
-            // bot is moving or flinching, so one that just cleared a corner is
-            // beatable. kEnemyReaction gates the first round of the engagement.
-            const float settle = std::clamp((e->losT - kEnemyReaction) / 0.9f, 0.f, 1.f);
-            const float moving = std::min(1.f, std::sqrt(v.x * v.x + v.z * v.z) / kEnemyWalkSpeed);
-            e->aim = (0.4f + 0.6f * settle) * (1.f - 0.35f * moving) *
-                     (e->hitFlinch > 0.f ? 0.6f : 1.f);
-            e->fireCd = std::max(0.f, e->fireCd - dt);
-            const bool mayFire = holding && !gameOver && !friendlyInLine &&
-                                 e->reloadT <= 0.f && e->losT > kEnemyReaction;
-            if (e->burstLeft > 0) {
-                if (!mayFire) {
-                    e->burstLeft = 0;// contact broken mid-burst
-                } else {
-                    e->burstCd -= dt;
-                    if (e->burstCd <= 0.f) {
-                        enemyShoot(e.get());
-                        e->burstLeft--;
-                        e->burstCd = kEnemyBurstGap;
-                        if (e->mag <= 0) {// dry: reload, which blocks fire
-                            e->burstLeft = 0;
-                            e->reloadT = kEnemyReloadTime;
-                        }
-                    }
-                }
-            } else if (mayFire && e->fireCd <= 0.f) {
-                e->burstLeft = std::min(static_cast<int>(kEnemyBurst), std::max(1, e->mag));
-                e->burstCd = 0.f;
-                e->fireCd = kEnemyFireInterval + frand(0.f, 0.5f);
-            }
-
-            // facing: the player whenever they're visible (so the rifle tracks
-            // while strafing and backing off), else where we're headed, else
-            // the last place we saw them
-            {
-                float wantYaw = e->yaw;
-                if (los) wantYaw = std::atan2(toPlayer.x, toPlayer.z);
-                else if (std::abs(v.x) + std::abs(v.z) > 0.2f) wantYaw = std::atan2(v.x, v.z);
-                else if (e->sinceSeen < 6.f)
-                    wantYaw = std::atan2(e->lastSeen.x - ep.x, e->lastSeen.z - ep.z);
-                e->yaw += wrapPi(wantYaw - e->yaw) * std::min(1.f, dt * 8.f);
-            }
-
-            // Base anim: 6-way locomotion resolved in the BOT'S OWN frame, so a
-            // strafing bot plays a strafe and a retreating one backpedals
-            // instead of sliding around on the run cycle. Reload and flinch
-            // override; fire stays an additive overlay.
-            {
-                const float sy = std::sin(e->yaw), cy = std::cos(e->yaw);
-                const float sp = std::sqrt(v.x * v.x + v.z * v.z);
-                AnimationAction* want = s->anims.idle;
-                float gaitScale = 1.f;
-                if (e->reloadT > 0.f && s->anims.reload) {
-                    want = s->anims.reload;
-                } else if (e->hitFlinch > 0.f && s->anims.hit) {
-                    want = s->anims.hit;
-                } else if (sp > 0.35f) {
-                    const float f = (v.x * sy + v.z * cy) / sp;// forward-ness
-                    const float l = (v.x * cy - v.z * sy) / sp;// left-ness (see tps_shooter)
-                    // Of the two clips authored for this direction, take the one
-                    // whose own stride speed is nearer (in ratio) to what we're
-                    // actually travelling, and time-scale away the rest. See the
-                    // kClip* measurements in fps_constants.hpp.
-                    auto gait = [&](AnimationAction* slow, float slowSpd,
-                                    AnimationAction* fast, float fastSpd) {
-                        AnimationAction* a = slow;
-                        float ref = slowSpd;
-                        const bool preferFast =
-                                fast && (!slow || std::abs(std::log(sp / fastSpd)) <
-                                                          std::abs(std::log(sp / slowSpd)));
-                        if (preferFast) {
-                            a = fast;
-                            ref = fastSpd;
-                        } else if (!slow) {
-                            a = fast;
-                            ref = fastSpd;
-                        }
-                        if (a) gaitScale = std::clamp(sp / ref, kGaitTimeScaleMin, kGaitTimeScaleMax);
-                        return a;
-                    };
-                    if (f > 0.55f)
-                        want = gait(s->anims.walk, kClipWalk, s->anims.run, kClipRun);
-                    else if (f < -0.45f)
-                        want = gait(s->anims.walkBack, kClipWalkBack, s->anims.runBack, kClipRunBack);
-                    else if (l > 0.f)
-                        want = gait(s->anims.strafeL, kClipStrafeL, s->anims.strafeLFast, kClipStrafeLFast);
-                    else
-                        want = gait(s->anims.strafeR, kClipStrafeR, s->anims.strafeRFast, kClipStrafeRFast);
-                    if (!want) {
-                        want = s->anims.run ? s->anims.run : s->anims.idle;
-                        gaitScale = 1.f;
-                    }
-                }
-                if (want) want->setEffectiveTimeScale(gaitScale);
-                if (want && want != s->current) {
-                    want->reset();
-                    want->play();
-                    if (s->current) s->current->crossFadeTo(want, 0.18f);
-                    s->current = want;
-                }
-                const float fireTarget = (e->burstLeft > 0 && s->anims.fire) ? 1.f : 0.f;
-                s->fireW += (fireTarget - s->fireW) * std::min(1.f, dt * 15.f);
-                if (s->anims.fire) s->anims.fire->setEffectiveWeight(s->fireW);
-                s->mixer->update(dt);
-                // pin clip root motion — physics owns the position (see tps_shooter)
-                if (s->hipsBone) {
-                    s->hipsBone->position.x = s->hipsBind.x;
-                    s->hipsBone->position.y = s->hipsBind.y;
-                }
-            }
-
-            // place the rig + pin the rifle into the right hand
-            s->rig->position.set(ep.x, ep.y - kEnemyHalf, ep.z);
-            s->rig->rotation.y = e->yaw;
-            if (s->handBone) {
-                s->rig->updateMatrixWorld(true);
-                Vector3 hp, hs;
-                Quaternion hq;
-                s->handBone->matrixWorld->decompose(hp, hq, hs);
-                Vector3 off(0.f, 0.15f, 0.f);
-                off.applyQuaternion(hq);
-                s->rifle->position.copy(hp + off);
-                if (s->leftHandBone) {
-                    Vector3 lp, ls;
-                    Quaternion lq;
-                    s->leftHandBone->matrixWorld->decompose(lp, lq, ls);
-                    s->rifle->lookAt(lp);
-                } else {
-                    Vector3 fwd(std::sin(e->yaw), 0.f, std::cos(e->yaw));
-                    s->rifle->lookAt(s->rifle->position + fwd);
-                }
-                s->rifle->quaternion.multiply(
-                        Quaternion().setFromAxisAngle(Vector3(0.f, 1.f, 0.f), math::degToRad(-25.f)));
-            }
-        }
-        // expired corpses
-        for (auto it = enemies.begin(); it != enemies.end();) {
-            if (!(*it)->alive && (*it)->deadTtl <= 0.f) {
-                removeEnemy(it->get());
-                it = enemies.erase(it);
-            } else {
-                ++it;
-            }
-        }
-        if (health <= 0 && !gameOver) {
-            health = 0;
-            gameOver = true;
-            over->visible = true;
-            overScore.set("FINAL SCORE   " + std::to_string(score));
-            setCursorLocked(false);
-        }
 
         // --- physics ---
         world.step(dt);
 
-        // corpses: write the simulated bodies back into the skeletons
-        for (auto& e : enemies)
-            if (!e->alive && e->ragdoll.valid()) e->ragdoll.drive();
+        // --- targets: score the plates that went down, stand them back up ---
+        // "Down" is measured off the body's own up axis rather than off a hit
+        // count, so what scores is the plate actually falling — clip one hard
+        // enough to spin it off its post and that counts; graze one and it
+        // rocks back upright and does not.
+        for (auto& d : lvl.dynamics) {
+            const PxTransform pose = d.body->getGlobalPose();
+            if (d.kind == Dynamic::Kind::Plate) {
+                const PxVec3 up = pose.q.rotate(PxVec3(0, 1, 0));
+                if (!d.down && up.y < kPlateDownCos) {
+                    d.down = true;
+                    d.resetIn = kPlateResetDelay;
+                    score += 100;
+                    scorePopT = 0.8f;
+                    hitMarkerT = 0.25f;
+                    hitWasKill = true;
+                    sfx.kill.play(1.f, frand(0.95f, 1.05f));
+                } else if (d.down) {
+                    d.resetIn -= dt;
+                    if (d.resetIn <= 0.f) {
+                        d.down = false;
+                        d.body->setGlobalPose(PxTransform(toPxVec3(d.home), toPxQuat(d.homeRot)));
+                        d.body->setLinearVelocity(PxVec3(0));
+                        d.body->setAngularVelocity(PxVec3(0));
+                        d.body->wakeUp();
+                    }
+                }
+            }
+            // Anything shot clean off the range comes home rather than falling
+            // through the world forever.
+            if (pose.p.y < kPropRecycleY) {
+                d.body->setGlobalPose(PxTransform(toPxVec3(d.home), toPxQuat(d.homeRot)));
+                d.body->setLinearVelocity(PxVec3(0));
+                d.body->setAngularVelocity(PxVec3(0));
+                d.down = false;
+                d.resetIn = 0.f;
+            }
+        }
 
         // --- footsteps ---
         const bool justLanded = grounded && !wasGrounded;
@@ -2039,14 +1125,6 @@ int main(int argc, char** argv) {
                 ++it;
             }
         }
-        // enemy muzzle flashes: independent per-slot timer (NOT burstCd, which
-        // freezes once a burst ends — see fps_entities.hpp EnemySlot::flashT)
-        for (auto& s : pool) {
-            if (!s->flash->visible) continue;
-            s->flashT -= dt;
-            if (s->flashT <= 0.f) s->flash->visible = false;
-        }
-
         // --- casings (ballistic + tumble + damped bounce) ---
         for (auto it = casings.begin(); it != casings.end();) {
             auto& c = *it;
@@ -2108,22 +1186,8 @@ int main(int argc, char** argv) {
             ++it;
         }
 
-        // --- health regen (out-of-combat) ---
-        sinceHurt += dt;
-        if (!gameOver && health > 0 && health < 100 && sinceHurt > kRegenDelay) {
-            healthF = std::min(100.f, healthF + kRegenRate * dt);
-            health = static_cast<int>(healthF);
-        }
-
         // --- HUD ---
         hudT += dt;
-        healthFill.mesh->scale.x = std::max(0.001f, static_cast<float>(health) / 100.f);
-        healthFill.material->color = Color(health > 50 ? kHudGood : (health > 25 ? 0xffaa33 : kHudWarn));
-        healthFill.material->opacity = health <= 25 ? 0.7f + 0.25f * std::sin(hudT * 8.f) : 0.95f;
-        if (static_cast<float>(health) > chipHealth) chipHealth = static_cast<float>(health);
-        chipHealth = std::max(static_cast<float>(health), chipHealth - dt * 35.f);
-        chipFill.mesh->scale.x = std::max(0.001f, chipHealth / 100.f);
-        healthTxt->setText(std::to_string(health));
         {
             std::ostringstream os;
             os << ammo << " / " << kMagSize;
@@ -2144,10 +1208,13 @@ int main(int argc, char** argv) {
         }
         scoreTxt.set("SCORE " + std::to_string(score));
         {
-            int a = 0;
-            for (auto& e : enemies)
-                if (e->alive) a++;
-            aliveTxt.set("HOSTILES " + std::to_string(a));
+            int up = 0, plates = 0;
+            for (const auto& d : lvl.dynamics) {
+                if (d.kind != Dynamic::Kind::Plate) continue;
+                ++plates;
+                if (!d.down) ++up;
+            }
+            aliveTxt.set("PLATES " + std::to_string(up) + "/" + std::to_string(plates));
         }
         {
             const PxVec3 pv = playerBody->getLinearVelocity();
@@ -2171,15 +1238,6 @@ int main(int argc, char** argv) {
         scorePopT -= dt;
         scorePop->visible = scorePopT > 0.f;
         if (scorePop->visible) scorePop->position.set(30.f * uiScale, (14.f + (0.8f - scorePopT) * 55.f) * uiScale, 0.f);
-        for (auto& a : dmgArcs) {
-            a.t -= dt;
-            a.g->visible = a.t > 0.f;
-            if (!a.g->visible) continue;
-            a.g->rotation.z = wrapPi(a.bearing - camYaw);
-            const float o = std::clamp(a.t, 0.f, 1.f) * 0.8f;
-            for (auto& m : a.mats) m->opacity = o;
-        }
-        vignette.material->opacity = std::clamp((60.f - health) / 60.f, 0.f, 0.55f);
         overDim.material->opacity += ((gameOver ? 0.55f : 0.f) - overDim.material->opacity) * std::min(1.f, dt * 6.f);
         for (auto& m : chMats) m->color = Color(hitMarkerT > 0.f ? kHudWarn : 0xffffff);
 
@@ -2190,23 +1248,6 @@ int main(int argc, char** argv) {
         renderer->clearDepth();
         renderer->render(*ui, *uiCam);
 
-        if (!shotPath.empty() && shotKill && shotFrame == shotFrames - 1) {
-            std::cout << "player " << playerPos.x << "," << playerPos.z << " camYaw " << camYaw << std::endl;
-            for (auto& e : enemies) {
-                Vector3 hips;
-                if (e->slot && e->slot->hipsBone) hips.setFromMatrixPosition(*e->slot->hipsBone->matrixWorld);
-                std::cout << (e->alive ? "alive" : "DEAD ") << " rig "
-                          << e->slot->rig->position.x << "," << e->slot->rig->position.y << "," << e->slot->rig->position.z
-                          << "  hipsW " << hips.x << "," << hips.y << "," << hips.z << std::endl;
-            }
-            int slotIdx = 0;
-            for (auto& s : pool) {
-                Vector3 p;
-                p.setFromMatrixPosition(*s->rig->matrixWorld);
-                std::cout << "slot" << slotIdx++ << (s->inUse ? " USED " : " free ") << p.x << "," << p.y << "," << p.z
-                          << " vis=" << s->rig->visible << std::endl;
-            }
-        }
         if (!shotPath.empty() && ++shotFrame >= shotFrames) {
             const auto path = fs::path(PROJECT_FOLDER) / "aaa_caps" / shotPath;
             renderer->writeFramebuffer(path);
