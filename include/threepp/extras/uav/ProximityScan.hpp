@@ -91,7 +91,13 @@ namespace threepp::uav {
             float groundClearance = 0.5f;///< metres above groundY that still reads as ground
         };
 
-        explicit ProximityScan(const Params& p = {}): params_(p) {
+        // Two constructors rather than one with `= {}`: GCC 11 (the CI's
+        // compiler) cannot parse a defaulted brace-init of a nested aggregate
+        // in a complete-class context, and rejects both `= {}` and `= Params()`
+        // outright. Delegating from a real default constructor sidesteps it.
+        ProximityScan(): ProximityScan(Params{}) {}
+
+        explicit ProximityScan(const Params& p): params_(p) {
             distances_.fill(clearValue());
         }
 
