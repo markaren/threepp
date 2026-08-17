@@ -23,11 +23,29 @@ namespace threepp::vulkan {
     class SkinningPipeline {
 
     public:
-        // Max simultaneous skinned meshes. Each set holds 7 storage buffers
-        // (= 256 × 7 = 1792 descriptors at the pool level). Bump if scenes
-        // ever exceed; allocateMeshDescriptorSet throws a clearer error with
-        // the live count when the pool is exhausted.
+        // Max simultaneous skinned meshes. Each set holds 7 storage buffers.
+        // Bump if scenes ever exceed; allocateMeshDescriptorSet throws a
+        // clearer error with the live count when the pool is exhausted.
         static constexpr uint32_t kMaxSkinnedMeshes = 256;
+
+        // Bone-matrix ring depth, and the reason the pool is kBoneSlots times
+        // bigger than the mesh count.
+        //
+        // refreshSkinnedBlas memcpys the frame's bone matrices into a
+        // host-visible buffer from ensureSceneBuilt, which runs BEFORE
+        // renderFrame waits on inFlight[currentFrame] — so up to
+        // kFramesInFlight earlier frames may still have a skinning dispatch in
+        // flight reading it. One buffer means the CPU overwrites the pose a
+        // queued dispatch has not consumed yet: that frame skins with the NEXT
+        // frame's pose, and the picture shows one pose twice and then jumps.
+        // Judder at a rock-steady 60 FPS, and Vulkan-only — GL's driver renames
+        // its uniform storage under the same usage.
+        //
+        // kFramesInFlight + 1, not kFramesInFlight: the host write happens
+        // before this frame's fence wait, so the slot belonging to frame
+        // N - kFramesInFlight can still be in flight. Exactly the ring
+        // TetSkinningPipeline::kPosSlots is, for exactly the same reason.
+        static constexpr uint32_t kBoneSlots = 3;
 
         explicit SkinningPipeline(VulkanContext& ctx);
         ~SkinningPipeline();

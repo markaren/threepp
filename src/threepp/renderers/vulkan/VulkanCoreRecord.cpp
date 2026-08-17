@@ -96,7 +96,9 @@ void VulkanRenderer::Impl::recordDeformAndTlas(VkCommandBuffer cb) {
 
                 skinning_->bindPipeline(cb);
                 for (auto* st : pendingSkinnedRebuilds_) {
-                    skinning_->recordDispatch(cb, st->skinDescSet, st->vertexCount);
+                    // The set for the slot refreshSkinnedBlas wrote this frame.
+                    skinning_->recordDispatch(cb, st->skinDescSet[st->boneSlot],
+                                              st->vertexCount);
                 }
 
                 // Compute write → AS build read + vertex attribute read +

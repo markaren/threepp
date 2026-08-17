@@ -78,18 +78,19 @@ namespace threepp::vulkan {
               "vkCreateComputePipelines(skinning)");
         vkDestroyShaderModule(ctx_.device(), mod, nullptr);
 
-        // Descriptor pool sized for up to kMaxSkinnedMeshes meshes — each
-        // set holds 7 storage buffers. FREE_DESCRIPTOR_SET_BIT lets the
+        // Descriptor pool sized for up to kMaxSkinnedMeshes meshes, kBoneSlots
+        // sets each — the ring's slots differ only in which bone-matrix buffer
+        // binding 4 points at. FREE_DESCRIPTOR_SET_BIT lets the
         // per-frame liveCheck-expired erase loop call vkFreeDescriptorSets
         // when a SkinnedMeshState is destroyed; without it the slot leaks
         // until the pool exhausts on repeated remove/re-add.
         VkDescriptorPoolSize ps{};
         ps.type            = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-        ps.descriptorCount = kMaxSkinnedMeshes * 7;
+        ps.descriptorCount = kMaxSkinnedMeshes * kBoneSlots * 7;
         VkDescriptorPoolCreateInfo dpci{};
         dpci.sType         = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
         dpci.flags         = VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT;
-        dpci.maxSets       = kMaxSkinnedMeshes;
+        dpci.maxSets       = kMaxSkinnedMeshes * kBoneSlots;
         dpci.poolSizeCount = 1;
         dpci.pPoolSizes    = &ps;
         check(vkCreateDescriptorPool(ctx_.device(), &dpci, nullptr, &descPool_),
@@ -109,7 +110,8 @@ namespace threepp::vulkan {
                     "SkinningPipeline: descriptor pool exhausted - "
                     "scene has more than kMaxSkinnedMeshes=" +
                     std::to_string(kMaxSkinnedMeshes) + " SkinnedMesh instances "
-                    "(live count " + std::to_string(liveSetCount_) + "). "
+                    "(live count " + std::to_string(liveSetCount_) + " sets, " +
+                    std::to_string(kBoneSlots) + " per mesh). "
                     "Bump kMaxSkinnedMeshes in SkinningPipeline.hpp.");
         }
         check(r, "vkAllocateDescriptorSets(skinning)");

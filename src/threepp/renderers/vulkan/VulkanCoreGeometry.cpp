@@ -704,8 +704,14 @@ void VulkanRenderer::Impl::refreshSkinnedBlas(SkinnedMesh& sm, SkinnedMeshState&
             // host-visible boneMatrices buffer (skipping the [bindMat, bindInv]
             // prefix written once in ensureSkinnedBlas).
             const auto& skel = *sm.skeleton;
+            // Advance the ring FIRST: this write must not land in the slot an
+            // in-flight dispatch is still reading (see
+            // SkinnedMeshState::boneMatrices). recordCommandBuffer dispatches
+            // with skinDescSet[boneSlot], so the two stay in step.
+            st.boneSlot = (st.boneSlot + 1u) % SkinnedMeshState::kBoneSlots;
+            auto& slot = st.boneMatrices[st.boneSlot];
             void* mapped = nullptr;
-            vmaMapMemory(ctx->allocator(), st.boneMatrices.alloc, &mapped);
+            vmaMapMemory(ctx->allocator(), slot.alloc, &mapped);
             // mats[1] = bindMatrixInverse is NOT constant in attached bind mode:
             // SkinnedMesh::updateMatrixWorld recomputes it to matrixWorld^-1 every
             // frame so that (TLAS instance transform · bindMatrixInverse) collapses
@@ -724,8 +730,8 @@ void VulkanRenderer::Impl::refreshSkinnedBlas(SkinnedMesh& sm, SkinnedMeshState&
                 std::memcpy(dst + b * 16 * sizeof(float),
                             m.elements.data(), 16 * sizeof(float));
             }
-            flushHostWrites(ctx->allocator(), st.boneMatrices.alloc);
-            vmaUnmapMemory(ctx->allocator(), st.boneMatrices.alloc);
+            flushHostWrites(ctx->allocator(), slot.alloc);
+            vmaUnmapMemory(ctx->allocator(), slot.alloc);
 
             // Cache the canonical bone matrices for next-frame dirty detection
             // (still uses Skeleton::boneMatrices since that's the host-visible
@@ -2314,53 +2320,65 @@ VulkanRenderer::Impl::SkinnedMeshState* VulkanRenderer::Impl::ensureSkinnedBlas(
             // bindMatrix is constant. bindMatrixInverse is NOT (attached bind mode
             // ties it to the current matrixWorld) — refreshSkinnedBlas re-uploads
             // it every frame; seed both here.
+            // One per ring slot (see SkinnedMeshState::boneMatrices): the host
+            // write lands before this frame's fence wait, so the slot an
+            // earlier frame's dispatch is reading must not be the one being
+            // written.
             const VkDeviceSize matsBytes = (2 + boneCount) * 16 * sizeof(float);
-            state->boneMatrices = createBuffer(
-                    ctx->allocator(), ctx->device(), matsBytes,
-                    VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
-                    VMA_MEMORY_USAGE_AUTO,
-                    VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT);
-            {
+            for (auto& slot : state->boneMatrices) {
+                slot = createBuffer(
+                        ctx->allocator(), ctx->device(), matsBytes,
+                        VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+                        VMA_MEMORY_USAGE_AUTO,
+                        VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT);
                 void* mapped = nullptr;
-                vmaMapMemory(ctx->allocator(), state->boneMatrices.alloc, &mapped);
+                vmaMapMemory(ctx->allocator(), slot.alloc, &mapped);
                 std::memcpy(static_cast<char*>(mapped),
                             sm.bindMatrix.elements.data(),
                             16 * sizeof(float));
                 std::memcpy(static_cast<char*>(mapped) + 16 * sizeof(float),
                             sm.bindMatrixInverse.elements.data(),
                             16 * sizeof(float));
+                // The bones[..] region is left zeroed in every slot, as the
+                // single buffer was. No dispatch ever reads it: a state only
+                // reaches pendingSkinnedRebuilds_ through refreshSkinnedBlas,
+                // which advances the slot and fills it immediately before the
+                // dispatch that names it.
                 std::memset(static_cast<char*>(mapped) + 32 * sizeof(float),
                             0, boneCount * 16 * sizeof(float));
-                flushHostWrites(ctx->allocator(), state->boneMatrices.alloc);
-                vmaUnmapMemory(ctx->allocator(), state->boneMatrices.alloc);
+                flushHostWrites(ctx->allocator(), slot.alloc);
+                vmaUnmapMemory(ctx->allocator(), slot.alloc);
             }
 
-            // Descriptor set — wires base inputs + bone mats + BLAS outputs.
-            state->skinDescSet = skinning_->allocateMeshDescriptorSet();
-
+            // Descriptor sets — one per ring slot, identical except for
+            // binding 4 (the bone matrices).
             std::array<VkDescriptorBufferInfo, 7> bi{};
-            const Buffer* bufs[7] = {
-                    &state->baseVertex, &state->baseNormal,
-                    &state->skinIndex,  &state->skinWeight,
-                    &state->boneMatrices,
-                    &state->blas->vertex, &state->blas->normal,
-            };
             std::array<VkWriteDescriptorSet, 7> wr{};
-            for (uint32_t i = 0; i < 7; ++i) {
-                bi[i].buffer        = bufs[i]->handle;
-                bi[i].offset        = 0;
-                bi[i].range         = VK_WHOLE_SIZE;
-                wr[i]               = {};
-                wr[i].sType         = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-                wr[i].dstSet        = state->skinDescSet;
-                wr[i].dstBinding    = i;
-                wr[i].descriptorCount = 1;
-                wr[i].descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-                wr[i].pBufferInfo     = &bi[i];
+            for (uint32_t s = 0; s < SkinnedMeshState::kBoneSlots; ++s) {
+                state->skinDescSet[s] = skinning_->allocateMeshDescriptorSet();
+
+                const Buffer* bufs[7] = {
+                        &state->baseVertex, &state->baseNormal,
+                        &state->skinIndex,  &state->skinWeight,
+                        &state->boneMatrices[s],
+                        &state->blas->vertex, &state->blas->normal,
+                };
+                for (uint32_t i = 0; i < 7; ++i) {
+                    bi[i].buffer        = bufs[i]->handle;
+                    bi[i].offset        = 0;
+                    bi[i].range         = VK_WHOLE_SIZE;
+                    wr[i]               = {};
+                    wr[i].sType         = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+                    wr[i].dstSet        = state->skinDescSet[s];
+                    wr[i].dstBinding    = i;
+                    wr[i].descriptorCount = 1;
+                    wr[i].descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+                    wr[i].pBufferInfo     = &bi[i];
+                }
+                vkUpdateDescriptorSets(ctx->device(),
+                                       static_cast<uint32_t>(wr.size()),
+                                       wr.data(), 0, nullptr);
             }
-            vkUpdateDescriptorSets(ctx->device(),
-                                   static_cast<uint32_t>(wr.size()),
-                                   wr.data(), 0, nullptr);
 
             // BLAS rebuild scratch buffer (persistent — sized once, reused).
             VkAccelerationStructureGeometryTrianglesDataKHR triData{};

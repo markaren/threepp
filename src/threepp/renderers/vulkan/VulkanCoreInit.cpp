@@ -272,7 +272,7 @@ VulkanRenderer::Impl::~Impl() {
                 destroyBuffer(ctx->allocator(), st->baseNormal);
                 destroyBuffer(ctx->allocator(), st->skinIndex);
                 destroyBuffer(ctx->allocator(), st->skinWeight);
-                destroyBuffer(ctx->allocator(), st->boneMatrices);
+                for (auto& slot : st->boneMatrices) destroyBuffer(ctx->allocator(), slot);
                 destroyBuffer(ctx->allocator(), st->blasScratch);
                 if (st->blas) destroyBlasRecord(*st->blas);
             }

@@ -14,6 +14,7 @@
 
 #include "VulkanImplCommon.hpp"
 #include "VulkanResources.hpp"
+#include "SkinningPipeline.hpp"
 #include "TetSkinningPipeline.hpp"
 
 #include "threepp/core/BufferAttribute.hpp"
@@ -226,16 +227,33 @@ namespace threepp::vulkan::impl {
         Buffer skinWeight   {};// vec4<float>, count = vertexCount
         // Bone matrices buffer layout: [bindMatrix, bindMatrixInverse,
         // bones[0]...bones[N-1]] as mat4s. Host-visible so the per-frame
-        // upload is a small memcpy. bindMatrix/Inverse are written once
-        // at allocation; only the bones[..] portion changes each frame.
-        Buffer boneMatrices {};
+        // upload is a small memcpy. bindMatrix is written once at
+        // allocation; bindMatrixInverse and the bones[..] portion are
+        // rewritten every frame.
+        //
+        // A RING, not one buffer, and that is the whole fix for skinned
+        // animation juddering on Vulkan while GL ran smooth at the same 60
+        // FPS: the memcpy happens in ensureSceneBuilt, which runs BEFORE
+        // renderFrame waits on this frame's fence, so a single buffer gets
+        // overwritten while an earlier frame's skinning dispatch is still
+        // reading it — that frame skins with the wrong pose and the motion
+        // shows one pose twice, then jumps. refreshSkinnedBlas advances
+        // boneSlot once per frame and writes only that slot;
+        // recordCommandBuffer dispatches with the matching descriptor set.
+        // See SkinningPipeline::kBoneSlots for why it is +1 deep.
+        static constexpr uint32_t kBoneSlots = vulkan::SkinningPipeline::kBoneSlots;
+        static_assert(kBoneSlots >= kFramesInFlight + 1,
+                      "bone-matrix ring must cover all in-flight frames plus the one being recorded");
+        std::array<Buffer, kBoneSlots> boneMatrices {};
+        uint32_t boneSlot = 0;// slot written this frame (advanced by refreshSkinnedBlas)
         uint32_t vertexCount    = 0;
         uint32_t boneCount      = 0;
         uint32_t primitiveCount = 0;// for per-frame BLAS rebuild
         bool     indexed        = false;
-        // Per-mesh descriptor set wiring all of the above + the BLAS
-        // output buffers into the skinning pipeline's set 0.
-        VkDescriptorSet skinDescSet = VK_NULL_HANDLE;
+        // Per-mesh descriptor sets wiring all of the above + the BLAS
+        // output buffers into the skinning pipeline's set 0. One per ring
+        // slot; identical except for binding 4, the bone-matrix buffer.
+        std::array<VkDescriptorSet, kBoneSlots> skinDescSet {};
         // Persistent scratch buffer for BLAS rebuild. Sized at the
         // first ensureSkinnedBlas, reused every frame. Avoids per-frame
         // alloc/free that was the original oneshot cost.

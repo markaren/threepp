@@ -2221,18 +2221,21 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                         destroyBuffer(ctx->allocator(), it->second->baseNormal);
                         destroyBuffer(ctx->allocator(), it->second->skinIndex);
                         destroyBuffer(ctx->allocator(), it->second->skinWeight);
-                        destroyBuffer(ctx->allocator(), it->second->boneMatrices);
+                        for (auto& slot : it->second->boneMatrices) {
+                            destroyBuffer(ctx->allocator(), slot);
+                        }
                         destroyBuffer(ctx->allocator(), it->second->blasScratch);
                         // destroyBlasRecord, not a hand-rolled subset — the
                         // manual copy here missed rec->color + rec->blasScratch.
                         if (it->second->blas) destroyBlasRecord(*it->second->blas);
-                        // Return the skinning descriptor set to the pool, else
-                        // the slot leaks across remove/re-add cycles and the
+                        // Return every ring slot's descriptor set to the pool,
+                        // else they leak across remove/re-add cycles and the
                         // next allocateMeshDescriptorSet eventually hits
                         // VK_ERROR_OUT_OF_POOL_MEMORY.
-                        if (it->second->skinDescSet != VK_NULL_HANDLE) {
-                            skinning_->freeMeshDescriptorSet(it->second->skinDescSet);
-                            it->second->skinDescSet = VK_NULL_HANDLE;
+                        for (auto& ds : it->second->skinDescSet) {
+                            if (ds == VK_NULL_HANDLE) continue;
+                            skinning_->freeMeshDescriptorSet(ds);
+                            ds = VK_NULL_HANDLE;
                         }
                         it = skinnedMeshStates.erase(it);
                     } else {
