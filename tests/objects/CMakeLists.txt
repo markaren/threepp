@@ -1,2 +1,3 @@
 add_test_executable(InstancedMesh_test)
 add_test_executable(Robot_test)
+add_test_executable(SkinnedMeshRaycast_test)

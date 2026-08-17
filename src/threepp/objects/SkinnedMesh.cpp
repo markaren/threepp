@@ -83,6 +83,63 @@ void SkinnedMesh::updateMatrixWorld(bool force) {
     } else {
         this->bindMatrixInverse.copy(this->bindMatrix).invert();
     }
+
+    // The pose may have moved; the cached bounds describe the previous one.
+    // Only a flag here — recomputing walks every vertex, and most frames
+    // nobody asks (see posedBoundingBox).
+    posedBoundsDirty_ = true;
+}
+
+void SkinnedMesh::computePosedBounds() {
+
+    posedBoundsDirty_ = false;
+    posedBox_.makeEmpty();
+
+    const auto position = geometry_ ? geometry_->getAttribute<float>("position") : nullptr;
+    if (!position || !skeleton || skeleton->bones.empty()) {
+        // Not bound yet, or nothing to pose with: fall back to the geometry's
+        // own bounds, which is exactly right for an unskinned rest pose.
+        if (geometry_) {
+            if (!geometry_->boundingBox) geometry_->computeBoundingBox();
+            if (geometry_->boundingBox) posedBox_.copy(*geometry_->boundingBox);
+        }
+        posedBox_.getBoundingSphere(posedSphere_);
+        return;
+    }
+
+    Vector3 vertex;
+    for (unsigned i = 0, l = position->count(); i < l; ++i) {
+        boneTransform(i, vertex);
+        posedBox_.expandByPoint(vertex);
+    }
+    posedBox_.getBoundingSphere(posedSphere_);
+}
+
+const Box3& SkinnedMesh::posedBoundingBox() {
+
+    if (posedBoundsDirty_) computePosedBounds();
+    return posedBox_;
+}
+
+const Sphere& SkinnedMesh::posedBoundingSphere() {
+
+    if (posedBoundsDirty_) computePosedBounds();
+    return posedSphere_;
+}
+
+const Sphere* SkinnedMesh::raycastBoundingSphere() {
+
+    const auto& sphere = posedBoundingSphere();
+    // An empty box yields a negative radius, which intersectsSphere would read
+    // as "never hit". Decline the early-out instead and let the triangles
+    // answer.
+    return sphere.radius >= 0.f ? &sphere : nullptr;
+}
+
+const Box3* SkinnedMesh::raycastBoundingBox() {
+
+    const auto& box = posedBoundingBox();
+    return box.isEmpty() ? nullptr : &box;
 }
 
 void SkinnedMesh::boneTransform(size_t index, Vector3& target) {

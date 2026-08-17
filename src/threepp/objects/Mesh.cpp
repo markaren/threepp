@@ -195,14 +195,18 @@ void Mesh::raycast(const Raycaster& raycaster, std::vector<Intersection>& inters
 
     static thread_local Sphere _sphere{};
 
-    // Checking boundingSphere distance to ray
+    // Checking boundingSphere distance to ray. Through the virtual hook, not
+    // straight off the geometry: a SkinnedMesh answers with the bounds of its
+    // POSED self, because its geometry describes a bind pose that is not where
+    // its vertices are drawn (see raycastBoundingSphere).
 
-    if (!geometry_->boundingSphere) geometry_->computeBoundingSphere();
+    if (const auto* bounds = raycastBoundingSphere()) {
 
-    _sphere.copy(*geometry_->boundingSphere);
-    _sphere.applyMatrix4(*matrixWorld);
+        _sphere.copy(*bounds);
+        _sphere.applyMatrix4(*matrixWorld);
 
-    if (!raycaster.ray.intersectsSphere(_sphere)) return;
+        if (!raycaster.ray.intersectsSphere(_sphere)) return;
+    }
 
     //
 
@@ -214,9 +218,9 @@ void Mesh::raycast(const Raycaster& raycaster, std::vector<Intersection>& inters
 
     // Check boundingBox before continuing
 
-    if (geometry_->boundingBox) {
+    if (const auto* box = raycastBoundingBox()) {
 
-        if (!_ray.intersectsBox(*geometry_->boundingBox)) return;
+        if (!_ray.intersectsBox(*box)) return;
     }
 
     std::optional<Intersection> intersection;
@@ -382,6 +386,22 @@ void Mesh::copy(const Object3D& source, bool recursive) {
         materials_ = m->materials_;
         geometry_ = m->geometry_;
     }
+}
+
+const Sphere* Mesh::raycastBoundingSphere() {
+
+    if (!geometry_) return nullptr;
+    if (!geometry_->boundingSphere) geometry_->computeBoundingSphere();
+    return geometry_->boundingSphere ? &*geometry_->boundingSphere : nullptr;
+}
+
+const Box3* Mesh::raycastBoundingBox() {
+
+    // Not computed on demand, matching the behaviour this replaced: the box is
+    // a second, tighter reject after the sphere already passed, and paying to
+    // build one for every mesh that has never needed it is not worth it.
+    if (!geometry_ || !geometry_->boundingBox) return nullptr;
+    return &*geometry_->boundingBox;
 }
 
 std::shared_ptr<Object3D> Mesh::createDefault() {
