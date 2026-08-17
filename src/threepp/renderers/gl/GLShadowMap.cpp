@@ -37,6 +37,22 @@ namespace {
             {Side::Back, Side::Front},
             {Side::Double, Side::Double}};
 
+    // Bind a shadow target and clear it to white.
+    //
+    // White is depth 1 - the far plane - so a texel no caster wrote reads as
+    // lit. The white has to be set AFTER the bind, not once before the loop:
+    // GLRenderer::setRenderTarget re-encodes the background's clear colour for
+    // whatever is newly bound, so anything set beforehand is gone by the time
+    // clear() runs. Setting it once up front cleared every shadow map to the
+    // renderer's clear colour instead, and alpha carries almost all of
+    // unpackRGBAToDepth - so the default alpha of 0 meant depth 0, the near
+    // plane, and every receiver the light covered came back fully shadowed.
+    void bindAndClearShadowTarget(GLRenderer& renderer, RenderTarget* target) {
+
+        renderer.setRenderTarget(target);
+        renderer.state().colorBuffer.setClear(1, 1, 1, 1);
+        renderer.clear();
+    }
 
 }// namespace
 
@@ -92,8 +108,7 @@ struct GLShadowMap::Impl {
         shadowMaterialVertical->uniforms.at("shadow_pass").setValue(shadow->map->texture.get());
         shadowMaterialVertical->uniforms.at("resolution").value<Vector2>().copy(shadow->mapSize);
         shadowMaterialVertical->uniforms.at("radius").value<float>() = shadow->radius;
-        _renderer.setRenderTarget(shadow->mapPass.get());
-        _renderer.clear();
+        bindAndClearShadowTarget(_renderer, shadow->mapPass.get());
         _renderer.renderBufferDirect(camera, nullptr, geometry, shadowMaterialVertical.get(), fullScreenMesh.get(), std::nullopt);
 
         // horizontal pass
@@ -101,8 +116,7 @@ struct GLShadowMap::Impl {
         shadowMaterialHorizontal->uniforms.at("shadow_pass").setValue(shadow->mapPass->texture.get());
         shadowMaterialHorizontal->uniforms.at("resolution").value<Vector2>().copy(shadow->mapSize);
         shadowMaterialHorizontal->uniforms.at("radius").value<float>() = shadow->radius;
-        _renderer.setRenderTarget(shadow->map.get());
-        _renderer.clear();
+        bindAndClearShadowTarget(_renderer, shadow->map.get());
         _renderer.renderBufferDirect(camera, nullptr, geometry, shadowMaterialHorizontal.get(), fullScreenMesh.get(), std::nullopt);
 
         // The moments are final now, so build the mip chain the receiver will
@@ -321,9 +335,9 @@ struct GLShadowMap::Impl {
 
         auto& _state = _renderer.state();
 
-        // Set GL state for depth map.
+        // Set GL state for depth map. The clear colour is NOT part of this
+        // block - it belongs to each bind, see bindAndClearShadowTarget.
         _state.setBlending(Blending::None);
-        _state.colorBuffer.setClear(1, 1, 1, 1);
         _state.depthBuffer.setTest(true);
         _state.setScissorTest(false);
 
@@ -454,8 +468,7 @@ struct GLShadowMap::Impl {
                 shadow->camera->updateProjectionMatrix();
             }
 
-            _renderer.setRenderTarget(shadow->map.get());
-            _renderer.clear();
+            bindAndClearShadowTarget(_renderer, shadow->map.get());
 
             const auto viewportCount = shadow->getViewportCount();
 

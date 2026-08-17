@@ -8,11 +8,13 @@
 
 #include "gl_test_helpers.hpp"
 
+#include <catch2/generators/catch_generators.hpp>
 
 #include <cstdlib>
 
 #include "threepp/lights/AmbientLight.hpp"
 #include "threepp/lights/DirectionalLight.hpp"
+#include "threepp/lights/PointLight.hpp"
 #include "threepp/materials/MeshStandardMaterial.hpp"
 
 namespace {
@@ -25,14 +27,26 @@ namespace {
         std::shared_ptr<PerspectiveCamera> camera;
     };
 
-    ShadowScene makeShadowScene() {
+    enum class Sun { Directional,
+                     Point };
+
+    ShadowScene makeShadowScene(Sun sun = Sun::Directional) {
         auto scene = Scene::create();
         scene->background = Color(0, 0, 0);
 
-        auto light = DirectionalLight::create(0xffffff, 3.f);
-        light->position.set(2, 6, 2);
-        light->castShadow = true;
-        scene->add(light);
+        if (sun == Sun::Directional) {
+            auto light = DirectionalLight::create(0xffffff, 3.f);
+            light->position.set(2, 6, 2);
+            light->castShadow = true;
+            scene->add(light);
+        } else {
+            // Six cube faces packed into the viewports of one map, but the same
+            // single bind-and-clear as the directional case.
+            auto light = PointLight::create(0xffffff, 3.f);
+            light->position.set(2, 6, 2);
+            light->castShadow = true;
+            scene->add(light);
+        }
 
         // A little ambient so the unshadowed floor is clearly brighter than the
         // shadowed part rather than both being near-black.
@@ -68,6 +82,62 @@ namespace {
     }
 
 }// namespace
+
+// One caster's shadow is a local feature, not a global dimming.
+//
+// A shadow map is cleared to WHITE - depth 1, the far plane - so a texel no
+// caster wrote reads as lit. GLShadowMap set that white once before the light
+// loop, but GLRenderer::setRenderTarget re-encodes the background's clear
+// colour on every bind, and the bind sits between that set and the clear that
+// consumes it. So the map cleared to the renderer's clear colour instead, and
+// alpha carries almost all of unpackRGBAToDepth: the renderer's default
+// clearAlpha of 0 meant depth 0, the near plane, and every receiver the light
+// reached came back shadowed. Directional, spot and point alike - one shared
+// bind. Measured here with only the map's clear changing, nothing else: mean
+// frame brightness 194.3 cleared white against 68.6 stomped, out of 202.9 with
+// shadows off entirely.
+//
+// The other tests in this file all measure the region the box covers, which
+// darkens either way, and count dark pixels rather than weigh them - so a
+// frame that had gone almost entirely dark still read as "a shadow is
+// present". Hence a whole-frame measure here, and a ratio rather than a
+// threshold: whatever the scene's absolute brightness, adding one small box to
+// it may not cost three quarters of the light.
+TEST_CASE("A single caster does not darken the whole frame") {
+
+    const auto sun = GENERATE(Sun::Directional, Sun::Point);
+
+    const auto render = [&](bool shadows) {
+        auto s = makeShadowScene(sun);
+
+        GLRenderer renderer(glCanvas());
+        renderer.shadowMap().enabled = shadows;
+        renderer.shadowMap().type = ShadowMap::PFC;
+
+        renderer.render(*s.scene, *s.camera);
+        auto px = renderer.readRGBPixels();
+        renderer.dispose();
+
+        return px;
+    };
+
+    const auto off = render(false);
+    const auto on = render(true);
+
+    REQUIRE(off.size() == DATA_SIZE);
+    REQUIRE(on.size() == DATA_SIZE);
+
+    // Guard: there has to be a lit scene to darken, or this passes vacuously.
+    REQUIRE(avgBrightness(off) > 20.0);
+
+    INFO("mean brightness: shadows off " << avgBrightness(off)
+                                         << ", shadows on " << avgBrightness(on));
+
+    CHECK(avgBrightness(on) > avgBrightness(off) * 0.75);
+
+    // ...and the shadow still has to be there at all.
+    CHECK(countDarkPixels(on) > countDarkPixels(off));
+}
 
 TEST_CASE("Shadows disappear when shadowMap.enabled is turned off") {
 
