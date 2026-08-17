@@ -848,6 +848,13 @@ EditorApp::~EditorApp() {
     // already in the document; what is left on disk is a copy nobody will read.
     stopExternalEdit("the editor is closing");
 
+    // A window closed mid-Play never went through Stop. Run it now, while the
+    // sessions can still tear down in LIFO order: dropping them below unstopped
+    // would destroy the PhysX world under the character session's controller
+    // manager, and the foundation then refuses to release ("pending module
+    // references"). No-op when already stopped.
+    stopPlay();
+
     // The sensor session parents nodes into sensorRig_, which is a member of this
     // same object: member destruction order would take the rig down first and
     // leave the session's destructor unlinking from freed memory. Drop the
