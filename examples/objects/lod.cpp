@@ -1,4 +1,6 @@
 
+#include "renderer_factory.hpp"
+
 #include "threepp/objects/LOD.hpp"
 #include "threepp/canvas/Monitor.hpp"
 #include "threepp/objects/TextSprite.hpp"

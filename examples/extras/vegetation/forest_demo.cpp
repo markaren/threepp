@@ -12,6 +12,8 @@
 // rejected on steep slopes.  Lit by an outdoor-sky HDR (IBL) + a shadow-casting
 // sun, with distance fog for depth.
 
+#include "renderer_factory.hpp"
+
 #include "threepp/extras/imgui/RendererSettings.hpp"
 #include "threepp/extras/terrain/RockGeometry.hpp"
 #include "threepp/extras/terrain/TerrainGenerator.hpp"

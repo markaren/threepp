@@ -4,6 +4,8 @@
 // that re-generates the tree when parameters change.  Four species presets
 // (Oak, Pine, Birch, Willow) plus full manual control.
 
+#include "renderer_factory.hpp"
+
 #include "threepp/extras/imgui/RendererSettings.hpp"
 #include "threepp/extras/vegetation/TreeGenerator.hpp"
 #include "threepp/extras/vegetation/TreeTextures.hpp"

@@ -11,6 +11,7 @@
 // template machinery leaks into this file.
 
 #include "RLPendulumTrainer.hpp"
+#include "renderer_factory.hpp"
 
 #include "threepp/canvas/Monitor.hpp"
 #include "threepp/extras/imgui/RendererSettings.hpp"

@@ -4,6 +4,8 @@
 // Procedural audio (road/wind beds, impact one-shots, horn, reverse beeper)
 // driven by PhysX telemetry — see VehicleSounds.hpp.
 
+#include "renderer_factory.hpp"
+
 #include "threepp/threepp.hpp"
 
 #include "threepp/extras/imgui/RendererSettings.hpp"

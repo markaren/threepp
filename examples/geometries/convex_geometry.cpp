@@ -1,3 +1,5 @@
+#include "renderer_factory.hpp"
+
 #include "threepp/geometries/ConvexGeometry.hpp"
 #include "threepp/threepp.hpp"
 

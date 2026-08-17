@@ -1,6 +1,7 @@
 
 #include "DCMotor.hpp"
 #include "utility/Regulator.hpp"
+#include "renderer_factory.hpp"
 
 #include "threepp/extras/imgui/RendererSettings.hpp"
 #include "threepp/objects/TextSprite.hpp"

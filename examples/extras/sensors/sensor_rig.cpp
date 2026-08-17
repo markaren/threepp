@@ -22,6 +22,8 @@
 //
 // Controls: SPACE pause/resume, R reset the episode, mouse to orbit.
 
+#include "renderer_factory.hpp"
+
 #include "threepp/threepp.hpp"
 
 #include "threepp/extras/imgui/ImguiContext.hpp"

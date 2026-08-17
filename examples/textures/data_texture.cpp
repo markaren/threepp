@@ -1,4 +1,6 @@
 
+#include "renderer_factory.hpp"
+
 #include "threepp/textures/FramebufferTexture.hpp"
 #include "threepp/threepp.hpp"
 

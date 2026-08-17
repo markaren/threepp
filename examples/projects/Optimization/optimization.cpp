@@ -1,3 +1,5 @@
+#include "renderer_factory.hpp"
+
 #include "threepp/math/Lut.hpp"
 #include "threepp/math/MathUtils.hpp"
 #include "threepp/threepp.hpp"

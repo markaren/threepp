@@ -53,6 +53,8 @@
 #include <unistd.h>
 #endif
 
+#include "renderer_factory.hpp"
+
 #include "threepp/extras/uav/DownwashEffect.hpp"
 #include "threepp/extras/uav/DroneVisual.hpp"
 #include "threepp/extras/uav/FrameConv.hpp"

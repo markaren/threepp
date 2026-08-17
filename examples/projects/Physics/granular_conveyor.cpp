@@ -46,6 +46,8 @@
 // It wants a frame while the chute is still pouring: a lane empties in
 // (capacity/2)/rate seconds, so --frames past that shows a stopped machine.
 
+#include "renderer_factory.hpp"
+
 #include "threepp/threepp.hpp"
 
 #include "threepp/extras/conveyor/ConveyorPhysics.hpp"

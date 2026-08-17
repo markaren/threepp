@@ -1,4 +1,6 @@
 
+#include "renderer_factory.hpp"
+
 #include "threepp/extras/imgui/RendererSettings.hpp"
 #include "threepp/helpers/SkeletonHelper.hpp"
 #include "threepp/objects/SkinnedMesh.hpp"

@@ -1,4 +1,6 @@
 
+#include "renderer_factory.hpp"
+
 #include "threepp/geometries/BoxGeometry.hpp"
 #include "threepp/geometries/TorusKnotGeometry.hpp"
 #include "threepp/lights/RectAreaLight.hpp"

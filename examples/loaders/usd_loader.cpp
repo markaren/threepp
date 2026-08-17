@@ -1,4 +1,6 @@
 
+#include "renderer_factory.hpp"
+
 #include "threepp/loaders/RGBELoader.hpp"
 #include "threepp/loaders/USDLoader.hpp"
 #include "threepp/threepp.hpp"

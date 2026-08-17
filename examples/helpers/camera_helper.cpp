@@ -1,4 +1,6 @@
 
+#include "renderer_factory.hpp"
+
 #include "threepp/helpers/CameraHelper.hpp"
 #include <threepp/threepp.hpp>
 

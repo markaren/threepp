@@ -3,6 +3,8 @@
 // argument. The data pack bundles two more to try: urdf/crane3r.urdf (OBJ
 // visual meshes) and urdf/model.urdf (primitives only).
 
+#include "renderer_factory.hpp"
+
 #include <threepp/extras/imgui/RendererSettings.hpp>
 #include <threepp/loaders/URDFLoader.hpp>
 #include <threepp/threepp.hpp>

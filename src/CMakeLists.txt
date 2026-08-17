@@ -279,7 +279,6 @@ set(publicHeaders
         "threepp/lights/SpotLightShadow.hpp"
 
         "threepp/renderers/Renderer.hpp"
-        "threepp/renderers/RendererFactory.hpp"
         "threepp/renderers/GLRenderer.hpp"
         "threepp/renderers/RenderTarget.hpp"
         "threepp/renderers/GLRenderTarget.hpp"
@@ -730,7 +729,6 @@ set(sources
 
         "threepp/renderers/GLRenderer.cpp"
         "threepp/renderers/RenderTarget.cpp"
-        "threepp/renderers/RendererFactory.cpp"
 
         "threepp/postprocessing/BokehPass.cpp"
         "threepp/postprocessing/ClearPass.cpp"

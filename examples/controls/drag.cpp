@@ -1,4 +1,6 @@
 
+#include "renderer_factory.hpp"
+
 #include "threepp/controls/DragControls.hpp"
 #include "threepp/threepp.hpp"
 

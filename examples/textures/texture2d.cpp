@@ -1,4 +1,6 @@
 
+#include "renderer_factory.hpp"
+
 #include "threepp/objects/Reflector.hpp"
 #include "threepp/threepp.hpp"
 

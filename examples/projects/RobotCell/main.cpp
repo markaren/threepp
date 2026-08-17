@@ -46,6 +46,8 @@
 // robot root is rotated -90 deg about X. The HUD ortho camera is (0,W,H,0),
 // y-up; SVG widget groups are y-flipped (scale.y = -1), as in svg_ui.cpp.
 
+#include "renderer_factory.hpp"
+
 #include "threepp/threepp.hpp"
 
 #include "threepp/canvas/Monitor.hpp"

@@ -16,6 +16,8 @@
 // Sliders command either the joint angles directly or a tool position for the
 // solver to reach; WASD drives the base.
 
+#include "renderer_factory.hpp"
+
 #include "threepp/threepp.hpp"
 
 #include "Youbot.hpp"

@@ -1,4 +1,6 @@
 
+#include "renderer_factory.hpp"
+
 #include <threepp/loaders/AssimpLoader.hpp>
 #include <threepp/threepp.hpp>
 

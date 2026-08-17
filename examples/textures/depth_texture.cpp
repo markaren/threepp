@@ -1,4 +1,6 @@
 
+#include "renderer_factory.hpp"
+
 #include "threepp/materials/ShaderMaterial.hpp"
 #include "threepp/renderers/RenderTarget.hpp"
 #include "threepp/textures/DepthTexture.hpp"

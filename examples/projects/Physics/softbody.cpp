@@ -7,6 +7,8 @@
 // positions are copied device→device into the renderer's exported
 // tet-skinning buffer — the deformation never touches the CPU.
 
+#include "renderer_factory.hpp"
+
 #include "threepp/threepp.hpp"
 
 #include "threepp/extras/imgui/RendererSettings.hpp"

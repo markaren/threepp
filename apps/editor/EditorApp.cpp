@@ -75,7 +75,7 @@
 #include "threepp/objects/Robot.hpp"
 #include "threepp/objects/SplatCloud.hpp"
 #include "threepp/splats/SplatLod.hpp"
-#include "threepp/renderers/RendererFactory.hpp"
+#include "threepp/renderers/GLRenderer.hpp"
 #include "threepp/scenes/Scene.hpp"
 #ifdef THREEPP_WITH_VULKAN
 #include "threepp/renderers/VulkanRenderer.hpp"
@@ -90,6 +90,7 @@
 #include <fstream>
 #include <iomanip>
 #include <iostream>
+#include <memory>
 #include <sstream>
 #include <unordered_set>
 
@@ -144,20 +145,21 @@ namespace {
     }
 #endif
 
-    // Always names a backend. Handing createRenderer no preference makes it
-    // print a console menu and block on std::cin, which a windowed app must
-    // never do — it stalls the editor behind a prompt nobody sees and hangs
-    // any piped or scripted run.
-    GraphicsAPI requestedApi(bool vulkan) {
+    // The backend, named here in code. Deliberately NOT the examples' interactive
+    // createRenderer (examples/libs/renderer_factory.hpp): handed no preference it
+    // prints a console menu and blocks on std::cin, which a windowed app must
+    // never do — it stalls the editor behind a prompt nobody sees and hangs any
+    // piped or scripted run.
+    std::unique_ptr<Renderer> makeRenderer(Canvas& canvas, bool vulkan) {
 
 #ifdef THREEPP_WITH_VULKAN
-        if (vulkan) return GraphicsAPI::Vulkan;
+        if (vulkan) return std::make_unique<VulkanRenderer>(canvas);
 #else
         if (vulkan) {
             std::cerr << "threepp editor: built without Vulkan support, using OpenGL\n";
         }
 #endif
-        return GraphicsAPI::OpenGL;
+        return std::make_unique<GLRenderer>(canvas);
     }
 
     // Which way `object` is FACING, as an angle about world up: its forward axis
@@ -369,7 +371,7 @@ EditorApp::EditorApp(const Options& options)
                       // the refresh interval, which measures the monitor.
                       .vsync(benchWantsVsync(options))
                       .exitOnKeyEscape(false)),
-      renderer_(createRenderer(canvas_, requestedApi(options.vulkan))),
+      renderer_(makeRenderer(canvas_, options.vulkan)),
       camera_(55.f, canvas_.aspect(), 0.05f, 5000.f),
       ortho_(-1.f, 1.f, 1.f, -1.f, 0.05f, 10000.f) {
 

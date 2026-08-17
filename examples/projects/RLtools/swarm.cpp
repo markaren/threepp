@@ -9,6 +9,7 @@
 #include "env_acrobot.hpp"
 #include "env_pendulum.hpp"
 #include "RLSwarmTrainer.hpp"
+#include "renderer_factory.hpp"
 
 #include "threepp/canvas/Monitor.hpp"
 #include "threepp/extras/imgui/RendererSettings.hpp"

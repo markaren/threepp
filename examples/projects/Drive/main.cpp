@@ -20,6 +20,8 @@
 //   Backspace  respawn
 //   Mouse      left-drag orbits the camera around the car, wheel zooms
 
+#include "renderer_factory.hpp"
+
 #include "threepp/threepp.hpp"
 
 #include "threepp/extras/imgui/RendererSettings.hpp"

@@ -13,6 +13,8 @@
 //   • R      — reset
 // PxVehicle2 plugs into the same world via world.onPreSubstep — see physx_vehicle.
 
+#include "renderer_factory.hpp"
+
 #include "threepp/threepp.hpp"
 
 #include "threepp/core/Raycaster.hpp"

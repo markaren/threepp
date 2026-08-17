@@ -1,5 +1,6 @@
 
 #include "../../external/imgui/imgui.h"
+#include "renderer_factory.hpp"
 
 
 #include <threepp/controls/OrbitControls.hpp>

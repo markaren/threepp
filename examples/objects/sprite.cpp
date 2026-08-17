@@ -1,4 +1,6 @@
 
+#include "renderer_factory.hpp"
+
 #include "threepp/extras/SpriteInteractor.hpp"
 #include "threepp/threepp.hpp"
 

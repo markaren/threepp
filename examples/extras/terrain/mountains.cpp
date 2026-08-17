@@ -14,6 +14,7 @@
 //
 
 #include "capture_util.hpp"
+#include "renderer_factory.hpp"
 
 #include "threepp/extras/imgui/RendererSettings.hpp"
 #include "threepp/extras/terrain/DetailTexture.hpp"

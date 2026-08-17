@@ -3184,11 +3184,12 @@ measured, and exits nonzero if any script raised or the document would not play
   rects sampled from the CPU-side image. It reads correctly as a thumbnail at
   inspector size and behaves identically on every backend, but it is not a
   full-resolution image.
-* **Vulkan is best-effort.** `--vulkan` is wired through `createRenderer` and
+* **Vulkan is best-effort.** `--vulkan` picks the backend at startup and
   `ImguiContext` already supports the Vulkan backend, but OpenGL is the tested
-  and supported path. The editor always names its backend explicitly —
-  `createRenderer`'s "no preference" overload prints a console menu and blocks
-  on `std::cin`, which a windowed application must never do.
+  and supported path. The editor names its backend in code (`makeRenderer` in
+  `EditorApp.cpp`) rather than using the examples' interactive `createRenderer`,
+  whose "no preference" overload prints a console menu and blocks on
+  `std::cin` — something a windowed application must never do.
 * **Scripting needs the Python it was built against.** The editor embeds
   CPython rather than shipping it: a binary built against 3.14 loads
   `python314.dll` and the standard library from that installation, and on a

@@ -1,5 +1,7 @@
 // https://threejs.org/examples/?q=clipping#webgl_clipping
 
+#include "renderer_factory.hpp"
+
 #include "threepp/geometries/TorusKnotGeometry.hpp"
 #include "threepp/threepp.hpp"
 

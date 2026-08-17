@@ -1,4 +1,6 @@
 
+#include "renderer_factory.hpp"
+
 #include "threepp/geometries/TorusKnotGeometry.hpp"
 #include "threepp/helpers/SpotLightHelper.hpp"
 #include "threepp/threepp.hpp"

@@ -21,6 +21,7 @@
 //   default pack: <PROJECT_FOLDER>/geodata/trollstigen
 
 #include "capture_util.hpp"
+#include "renderer_factory.hpp"
 
 #include "threepp/threepp.hpp"
 

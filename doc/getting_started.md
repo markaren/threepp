@@ -745,17 +745,21 @@ GLRenderer renderer(canvas);       // OpenGL
 VulkanRenderer renderer(canvas);   // Vulkan deferred (requires THREEPP_WITH_VULKAN)
 ```
 
-Or let `createRenderer` decide — with no explicit API it prompts on stdin, which is how most
-examples let you pick at launch:
+To decide at runtime, hold the backend-neutral base:
 
 ```cpp
-auto renderer = createRenderer(canvas);                       // interactive prompt
-auto renderer = createRenderer(canvas, GraphicsAPI::OpenGL);  // explicit
+std::unique_ptr<Renderer> renderer = useVulkan
+        ? std::unique_ptr<Renderer>(new VulkanRenderer(canvas))
+        : std::unique_ptr<Renderer>(new GLRenderer(canvas));
 ```
 
-`createRenderer` returns `std::unique_ptr<Renderer>` — the backend-neutral base. Write against
-that and your program works on both. Reach for the concrete type only for backend-specific
-features:
+The examples do exactly that behind a small helper, `createRenderer` in
+`examples/libs/renderer_factory.hpp`, which with no explicit API prompts on stdin so you can pick
+a backend at launch. That prompt is a demo convenience, not library API — an application should
+name its backend in code rather than block on `std::cin` (see `apps/editor`, `apps/player`).
+
+Write against `Renderer` and your program works on both backends. Reach for the concrete type only
+for backend-specific features:
 
 ```cpp
 VulkanRenderer renderer(canvas);

@@ -14,7 +14,7 @@
 // RENDERING: one merged BufferGeometry rebaked on the CPU every frame, drawn as
 // a single Mesh with a stock MeshStandardMaterial. This is the one animated-mesh
 // shape both backends already agree on — the host picks GL or Vulkan at a
-// runtime prompt (RendererFactory.cpp:16-59), and the Vulkan backend has no
+// runtime prompt (examples/libs/renderer_factory.hpp), and the Vulkan backend has no
 // generic ShaderMaterial path, so anything shader-driven renders there as a
 // flat grey non-flapping blob with no warning at all. `flatShading` is likewise
 // never touched: it has zero occurrences in the Vulkan backend, so setting it

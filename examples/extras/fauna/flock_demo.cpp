@@ -39,6 +39,7 @@
 //   --cam x,y,z  --look x,y,z        override the capture framing (capture_util)
 
 #include "capture_util.hpp"
+#include "renderer_factory.hpp"
 
 #include "threepp/extras/fauna/Flock.hpp"
 #include "threepp/extras/imgui/RendererSettings.hpp"

@@ -1,4 +1,6 @@
 
+#include "renderer_factory.hpp"
+
 #include "threepp/helpers/BoxHelper.hpp"
 #include "threepp/helpers/PlaneHelper.hpp"
 #include "threepp/helpers/PolarGridHelper.hpp"

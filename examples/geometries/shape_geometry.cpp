@@ -1,3 +1,5 @@
+#include "renderer_factory.hpp"
+
 #include "threepp/geometries/EdgesGeometry.hpp"
 #include "threepp/geometries/ExtrudeGeometry.hpp"
 #include "threepp/threepp.hpp"

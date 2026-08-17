@@ -35,6 +35,8 @@
 // established about where this estimator breaks — in particular, that the
 // break is an observability failure and not something a motion sensor fixes.
 
+#include "renderer_factory.hpp"
+
 #include "threepp/extras/imgui/RendererSettings.hpp"
 #include "threepp/extras/pointcloud/Icp.hpp"
 #include "threepp/extras/pointcloud/MarchingCubes.hpp"
@@ -48,7 +50,6 @@
 #endif
 #include "threepp/objects/Line.hpp"
 #include "threepp/objects/Points.hpp"
-#include "threepp/renderers/RendererFactory.hpp"
 #include "threepp/threepp.hpp"
 
 #include <algorithm>

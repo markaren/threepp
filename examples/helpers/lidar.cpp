@@ -4,7 +4,6 @@
 #include "threepp/helpers/DepthSensor.hpp"
 #include "threepp/helpers/LidarSensor.hpp"
 #include "threepp/objects/Points.hpp"
-#include "threepp/renderers/RendererFactory.hpp"
 #include "threepp/threepp.hpp"
 
 #include <cmath>

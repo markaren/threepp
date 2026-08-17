@@ -15,14 +15,18 @@
 #include "threepp/extras/editor/ViewSpec.hpp"
 #include "threepp/math/Box3.hpp"
 #include "threepp/objects/Group.hpp"
-#include "threepp/renderers/RendererFactory.hpp"
+#include "threepp/renderers/GLRenderer.hpp"
 #include "threepp/scenes/Scene.hpp"
+#ifdef THREEPP_WITH_VULKAN
+#include "threepp/renderers/VulkanRenderer.hpp"
+#endif
 
 #include <algorithm>
 #include <any>
 #include <cmath>
 #include <exception>
 #include <iostream>
+#include <memory>
 #include <string>
 #include <utility>
 
@@ -36,21 +40,22 @@ namespace {
     // whatever it is simulating; the sim simply loses the time instead.
     constexpr float kMaxWallDt = 0.1f;
 
-    // Always names a backend — the editor's rule, for the editor's reason:
-    // handing createRenderer no preference makes it print a console menu and
-    // block on std::cin, which would hang every piped or scripted run this tool
-    // exists for.
-    GraphicsAPI requestedApi(bool vulkan) {
+    // The backend, named here in code — the editor's rule, for the editor's
+    // reason: the examples' interactive createRenderer
+    // (examples/libs/renderer_factory.hpp) prints a console menu and blocks on
+    // std::cin when handed no preference, which would hang every piped or
+    // scripted run this tool exists for.
+    std::unique_ptr<Renderer> makeRenderer(Canvas& canvas, bool vulkan) {
 
 #ifdef THREEPP_WITH_VULKAN
-        if (vulkan) return GraphicsAPI::Vulkan;
+        if (vulkan) return std::make_unique<VulkanRenderer>(canvas);
 #else
         if (vulkan) {
             std::cerr << "threepp player: built without Vulkan support, using OpenGL"
                       << std::endl;
         }
 #endif
-        return GraphicsAPI::OpenGL;
+        return std::make_unique<GLRenderer>(canvas);
     }
 
     // A flat userData string on the scene root, or "" when the document does not
@@ -148,7 +153,7 @@ void PlayerApp::buildView() {
                         .vsync(!options_.headless)
                         .headless(options_.headless)
                         .exitOnKeyEscape(true));
-        renderer_ = createRenderer(*canvas_, requestedApi(options_.vulkan));
+        renderer_ = makeRenderer(*canvas_, options_.vulkan);
     } catch (const std::exception& e) {
         std::cerr << "threepp player: no renderer (" << e.what()
                   << ") - vision sensors will not scan" << std::endl;

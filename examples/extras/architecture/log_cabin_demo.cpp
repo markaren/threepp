@@ -14,6 +14,8 @@
 // --orbit/--dist place the camera on a circle around the building at a fixed
 // eye height, which makes a four-shot turntable a one-liner.
 
+#include "renderer_factory.hpp"
+
 #include "threepp/extras/architecture/LogCabin.hpp"
 #include "threepp/extras/imgui/RendererSettings.hpp"
 #include "threepp/lights/AmbientLight.hpp"

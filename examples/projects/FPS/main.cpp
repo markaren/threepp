@@ -28,6 +28,8 @@
 //             SHIFT sprint   SPACE jump   ENTER reset the range   ESC quit
 // ============================================================================
 
+#include "renderer_factory.hpp"
+
 #include "threepp/threepp.hpp"
 
 #include "threepp/animation/AnimationMixer.hpp"

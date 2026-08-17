@@ -1,3 +1,5 @@
+#include "renderer_factory.hpp"
+
 #include "threepp/threepp.hpp"
 
 #include <cmath>

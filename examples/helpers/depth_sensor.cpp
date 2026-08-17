@@ -1,9 +1,10 @@
 
+#include "renderer_factory.hpp"
+
 #include "threepp/extras/imgui/RendererSettings.hpp"
 #include "threepp/helpers/AxesHelper.hpp"
 #include "threepp/helpers/DepthSensor.hpp"
 #include "threepp/objects/Points.hpp"
-#include "threepp/renderers/RendererFactory.hpp"
 #include "threepp/threepp.hpp"
 
 #include <cmath>

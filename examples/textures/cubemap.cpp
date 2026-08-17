@@ -1,4 +1,6 @@
 
+#include "renderer_factory.hpp"
+
 #include "threepp/loaders/CubeTextureLoader.hpp"
 #include "threepp/renderers/shaders/ShaderLib.hpp"
 #include "threepp/threepp.hpp"

@@ -18,6 +18,7 @@
 // DRIVE (body frame, +x fwd / +y left):  arrows move/strafe, N / M turn.
 
 #include "SpotScene.hpp"
+#include "renderer_factory.hpp"
 
 #include "threepp/threepp.hpp"
 #include "threepp/cameras/OrthographicCamera.hpp"
