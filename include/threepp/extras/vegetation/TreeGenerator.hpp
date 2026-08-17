@@ -136,6 +136,23 @@ namespace threepp::vegetation {
         float leafSize = 0.7f;// quad half-size (card), or puff radius for Blob
         float leafDensity = 0.9f;
         int leavesPerCluster = 5;
+        // The leaf map is an N×N grid of INDEPENDENT sprig variants; every card
+        // picks one cell and a random horizontal mirror (2·N² distinct cards).
+        //
+        // With one tile, every card in the forest is the same image at the same
+        // orientation, and a canopy stops reading as leaves the moment the
+        // viewer resolves a card: it becomes one square stamp repeated a
+        // thousand times. No amount of per-card tint or size jitter hides a
+        // repeated SILHOUETTE ([[procedural-avoid-perfect-repetition]]).
+        //
+        // Must match the `variants` argument the leaf texture was generated
+        // with — makeLeafClusterTexture / makeNeedleFrondTexture default to the
+        // same 2, so the pair agrees unless a caller supplies its own atlas.
+        // Set to 1 when using a hand-authored single-sprig texture.
+        int leafAtlasCells = 2;
+        // Radius of the per-leaf scatter about the twig axis (the cluster is
+        // strung ALONG the parent segment, so this is a cross-section, not a
+        // box half-extent — see makeLeafGeometry).
         float leafSpread = 0.5f;
         float leafClumping = 0.5f;// 0 = solid shell, →1 = clumped with sky-gaps
         // Strength of the baked canopy occlusion written into the leaf vertex
@@ -163,6 +180,15 @@ namespace threepp::vegetation {
             float radius = 0.f;
             int depth = 0;
             bool terminal = false;
+            // Multiplier on the foliage card size carried by this node.
+            //
+            // A conifer's apex sprays are SHORT — the crown profile takes branch
+            // length to nearly zero at the leader — but a card size fixed by
+            // leafSize alone stays full width there, so the top whorls end up
+            // wider than the branches holding them and the tree finishes in a
+            // club instead of a spire. The whorl builder tapers this with the
+            // crown profile; space colonisation leaves it at 1.
+            float leafScale = 1.f;
         };
     }// namespace detail
 
@@ -235,12 +261,28 @@ namespace threepp::vegetation {
                 std::vector<GrowInfo> grow(static_cast<size_t>(nodeCount));
                 std::vector<bool> killMask(attractors.size(), false);
 
-                // For each attractor find the single closest node (any node).
+                // For each attractor find the single closest node that can still
+                // fork. A node grows one child per iteration for as long as it
+                // keeps winning attractors, and NOTHING stopped it winning: a
+                // node sitting in the middle of a pocket of attractors stays the
+                // closest one to the points on every side it has not grown
+                // toward yet, so it spawns a child, and another, and another —
+                // measured at 248 children on one node. That is a hedgehog of
+                // stubs at a single point, which the pipe model then makes into
+                // an unusually thick branch, and which the leaf pass covers in a
+                // cluster per stub: the packed clump of foliage hanging off a
+                // fat limb. A real fork is 2- or 3-way, so cap it — and cap it
+                // by EXCLUDING saturated nodes from this search, not by skipping
+                // them when growing. Skipping at growth time leaves the
+                // attractor assigned to a node that cannot use it, and that
+                // region of the crown simply stops growing.
+                constexpr size_t kMaxChildren = 3;
                 for (size_t ai = 0; ai < attractors.size(); ++ai) {
                     const auto& ap = attractors[ai];
                     float bestDist2 = infDist2;
                     int bestNode = -1;
                     for (int ni = 0; ni < nodeCount; ++ni) {
+                        if (nodes_[static_cast<size_t>(ni)].children.size() >= kMaxChildren) continue;
                         const auto& np = nodes_[static_cast<size_t>(ni)].position;
                         const float dx = ap.x - np.x, dy = ap.y - np.y, dz = ap.z - np.z;
                         const float d2 = dx * dx + dy * dy + dz * dz;
@@ -610,9 +652,36 @@ namespace threepp::vegetation {
                 baseVert += static_cast<unsigned int>((latSegs + 1) * rowVerts);
             };
 
+            // Which cell of the leaf atlas a card samples, and whether it is
+            // mirrored. Drawn per card — see TreeParams::leafAtlasCells.
+            struct CardUv {
+                float u0 = 0.f, v0 = 0.f, du = 1.f, dv = 1.f;
+                bool mirror = false;
+            };
+            const int atlasN = std::max(1, tp.leafAtlasCells);
+            auto pickCard = [&](math::Rng& r) {
+                CardUv c;
+                if (atlasN > 1) {
+                    const int cells = atlasN * atlasN;
+                    const int cell = std::min(cells - 1,
+                            static_cast<int>(unit(r) * static_cast<float>(cells)));
+                    const float s = 1.f / static_cast<float>(atlasN);
+                    // Inset the sampled rect: coarse mips average across the
+                    // cell boundary, and without a margin a card picks up its
+                    // neighbour's leaflets as a fringe at distance.
+                    const float inset = s * 0.02f;
+                    c.u0 = static_cast<float>(cell % atlasN) * s + inset;
+                    c.v0 = static_cast<float>(cell / atlasN) * s + inset;
+                    c.du = s - 2.f * inset;
+                    c.dv = s - 2.f * inset;
+                }
+                c.mirror = unit(r) < 0.5f;
+                return c;
+            };
+
             auto emitQuad = [&](const Vector3& pos, const Vector3& r2,
                                 const Vector3& u2, const Vector3& qn, float hs,
-                                const Vector3& col) {
+                                const Vector3& col, const CardUv& uvc) {
                 Vector3 corners[4];
                 corners[0].copy(pos).addScaledVector(r2, -hs).addScaledVector(u2, -hs);
                 corners[1].copy(pos).addScaledVector(r2,  hs).addScaledVector(u2, -hs);
@@ -630,10 +699,13 @@ namespace threepp::vegetation {
                     colors.push_back(col.y);
                     colors.push_back(col.z);
                 }
-                uvs.push_back(0.f); uvs.push_back(0.f);
-                uvs.push_back(1.f); uvs.push_back(0.f);
-                uvs.push_back(1.f); uvs.push_back(1.f);
-                uvs.push_back(0.f); uvs.push_back(1.f);
+                const float uLo = uvc.mirror ? uvc.u0 + uvc.du : uvc.u0;
+                const float uHi = uvc.mirror ? uvc.u0 : uvc.u0 + uvc.du;
+                const float vLo = uvc.v0, vHi = uvc.v0 + uvc.dv;
+                uvs.push_back(uLo); uvs.push_back(vLo);
+                uvs.push_back(uHi); uvs.push_back(vLo);
+                uvs.push_back(uHi); uvs.push_back(vHi);
+                uvs.push_back(uLo); uvs.push_back(vHi);
 
                 // WIND THE CARD SO ITS FRONT FACE IS THE SIDE ITS NORMAL POINTS.
                 //
@@ -828,13 +900,19 @@ namespace threepp::vegetation {
                         const float f = (static_cast<float>(st) + 0.5f) / static_cast<float>(stations);
                         Vector3 base;
                         base.copy(parentPos).lerp(node.position, f);
-                        const float hs = tp.leafSize * 0.5f * sizeVar(rng);
+                        // node.leafScale tapers the spray with the crown profile:
+                        // full width on the long base whorls, roughly half that on
+                        // the apex shoots and the leader (see TreeNode::leafScale).
+                        const float hs = tp.leafSize * 0.5f * sizeVar(rng) * node.leafScale;
                         const Vector3 col = tintFor(base);
                         const float depthSep = tp.leafSize * 0.08f * (unit(rng) - 0.5f);
                         Vector3 posSep;
                         posSep.copy(base).addScaledVector(nShared, depthSep);
-                        emitQuad(posSep, sideWide, along, nShared, hs, col);
-                        emitQuad(posSep, sideRoll, along, nShared, hs, col);
+                        // The two blades of a station share a cell: they are the
+                        // same spray seen rolled, not two different sprays.
+                        const CardUv uvc = pickCard(rng);
+                        emitQuad(posSep, sideWide, along, nShared, hs, col, uvc);
+                        emitQuad(posSep, sideRoll, along, nShared, hs, col, uvc);
                     }
                     continue;
                 }
@@ -855,7 +933,7 @@ namespace threepp::vegetation {
                         // arguments unspecified — inline, the Blob path's output
                         // depends on the compiler, so a "deterministic for a
                         // given seed" tree differs between toolchains.
-                        const float puffR = tp.leafSize * sizeVar(rng);
+                        const float puffR = tp.leafSize * sizeVar(rng) * node.leafScale;
                         const Vector3 puffCol = tintFor(pos);
                         emitBlob(pos, puffR, puffCol);
                     }
@@ -866,26 +944,52 @@ namespace threepp::vegetation {
                                    tp.leafStyle == LeafStyle::CrossQuad)
                                           ? tp.leavesPerCluster
                                           : 1;
+                // Growth axis: branch direction blended toward up, so the card
+                // stands roughly upright like a spray of leaves. Per NODE, not
+                // per card — nothing about it depends on which leaf of the
+                // cluster this is.
+                Vector3 branchDir{0.f, 1.f, 0.f};
+                Vector3 parentPos = node.position;
+                if (node.parent >= 0) {
+                    parentPos = nodes_[static_cast<size_t>(node.parent)].position;
+                    branchDir.subVectors(node.position, parentPos);
+                    if (branchDir.lengthSq() > 1e-8f)
+                        branchDir.normalize();
+                    else
+                        branchDir.set(0.f, 1.f, 0.f);
+                }
+                // Frame for scattering the cluster ABOUT the twig axis.
+                Vector3 twigU, twigV;
+                buildFrame(branchDir, twigU, twigV);
+
                 for (int li = 0; li < count; ++li) {
+                    // LEAVES GROW ALONG A TWIG, NOT IN A BALL AT ITS END.
+                    //
+                    // The old scatter was an independent uniform offset per
+                    // axis, i.e. a CUBE centred on the node — so a cluster of
+                    // cards filled an axis-aligned box, and once the cards are
+                    // dense enough to close it the canopy shows the box: a
+                    // packed square of leaves, one per node, all the same size
+                    // and all aligned with the world axes. Walking the segment
+                    // from the parent node and scattering RADIALLY (a disc
+                    // about the twig, sqrt for uniform area) puts the foliage
+                    // where the wood is, covers the twig instead of drifting
+                    // off it, and has no flat sides to give away.
                     Vector3 pos;
-                    pos.copy(node.position);
                     if (count > 1) {
-                        pos.x += (unit(rng) - 0.5f) * tp.leafSpread * 2.f;
-                        pos.y += (unit(rng) - 0.5f) * tp.leafSpread * 2.f;
-                        pos.z += (unit(rng) - 0.5f) * tp.leafSpread * 2.f;
+                        const float f = std::clamp(
+                                (static_cast<float>(li) + 0.5f + (unit(rng) - 0.5f) * 0.8f) /
+                                        static_cast<float>(count),
+                                0.f, 1.f);
+                        pos.copy(parentPos).lerp(node.position, f);
+                        const float a = angle(rng);
+                        const float r = tp.leafSpread * std::sqrt(unit(rng));
+                        pos.addScaledVector(twigU, std::cos(a) * r)
+                                .addScaledVector(twigV, std::sin(a) * r);
+                    } else {
+                        pos.copy(node.position);
                     }
 
-                    // Growth axis: branch direction blended toward up, so the
-                    // card stands roughly upright like a spray of leaves.
-                    Vector3 branchDir{0.f, 1.f, 0.f};
-                    if (node.parent >= 0) {
-                        branchDir.subVectors(node.position,
-                                nodes_[static_cast<size_t>(node.parent)].position);
-                        if (branchDir.lengthSq() > 1e-8f)
-                            branchDir.normalize();
-                        else
-                            branchDir.set(0.f, 1.f, 0.f);
-                    }
                     Vector3 axis;
                     axis.set(branchDir.x * 0.5f,
                              branchDir.y * 0.5f + 0.5f,
@@ -913,7 +1017,7 @@ namespace threepp::vegetation {
                         perpB = b2;
                     }
 
-                    const float hs = tp.leafSize * 0.5f * sizeVar(rng);
+                    const float hs = tp.leafSize * 0.5f * sizeVar(rng) * node.leafScale;
                     const Vector3 col = tintFor(pos);
 
                     // Up-biased normals so foliage reads as lit from the sky
@@ -954,12 +1058,22 @@ namespace threepp::vegetation {
                         nShared.addVectors(nA, nB).normalize();
                         Vector3 posSep;
                         posSep.copy(pos).addScaledVector(nShared, depthSep);
-                        emitQuad(posSep, perpA, axis, nShared, hs, col);// spans perpA × axis
-                        emitQuad(posSep, perpB, axis, nShared, hs, col);// spans perpB × axis
+                        // ONE atlas cell for BOTH halves, for the same reason
+                        // they share the normal and the tint: at the seam the
+                        // two planes raster at near-equal depth and the jittered
+                        // winner alternates per frame, and the alternation is
+                        // only invisible while every G-buffer channel matches.
+                        // Give the halves different cells and the seam samples
+                        // two different sprigs — the flicker fixed in 9b598c5d,
+                        // back. The variety has to come from card to card, not
+                        // from the two halves of one card.
+                        const CardUv uvc = pickCard(rng);
+                        emitQuad(posSep, perpA, axis, nShared, hs, col, uvc);// spans perpA × axis
+                        emitQuad(posSep, perpB, axis, nShared, hs, col, uvc);// spans perpB × axis
                     } else {
                         Vector3 posSep;
                         posSep.copy(pos).addScaledVector(nA, depthSep);
-                        emitQuad(posSep, perpA, axis, nA, hs, col);
+                        emitQuad(posSep, perpA, axis, nA, hs, col, pickCard(rng));
                     }
                 }
             }
@@ -1249,6 +1363,21 @@ namespace threepp::vegetation {
             auto u01 = [](math::Rng& r) { return r.nextFloat(); };
             auto u11 = [](math::Rng& r) { return r.nextFloat(-1.f, 1.f); };
 
+            // Whorl band. Branches start above `trunkHeight` (the bare bole) and
+            // stop BELOW a bare leader shoot at the very top — a spruce tapers to
+            // a pointed apex, so the crown profile must reach ~zero at the top
+            // whorl (no length floor) and the topmost stretch of trunk stays
+            // branch-free except for tiny stubs.
+            const float whorlStart = tp.trunkHeight;
+            // Keep the bare leader SHORT. At 7% of tree height it left the top
+            // ~1m of trunk with no branches at all, and since the crown profile
+            // also drives branch length to ~0 near the top, the last whorls were
+            // then dropped by the stub test below — so a spruce ended in a bare
+            // wire poking out of the foliage.
+            const float leaderH = std::clamp(H * 0.035f, 0.20f, 0.55f);
+            const float whorlTop = H - leaderH;
+            const float whorlSpan = std::max(whorlTop - whorlStart, 1e-3f);
+
             // 1) Monopodial trunk: one straight (curved) leader from the ground
             //    to the apex, following the per-seed trunk curve.
             const int trunkSegs = std::max(2, static_cast<int>(std::round(H / tp.segmentLength)));
@@ -1261,25 +1390,20 @@ namespace threepp::vegetation {
                 n.position = {off.x, y, off.z};
                 n.parent = i > 0 ? trunkIdx[static_cast<size_t>(i - 1)] : -1;
                 n.depth = 0;// trunk stays depth 0 → radii/leaf gates treat it as trunk
+                // The leader is thin enough near the apex to carry foliage itself
+                // (that is what fills the spire instead of leaving a bare wire),
+                // but what grows there is a single young shoot — a narrow sleeve
+                // of needles, not the full spray a base branch carries. Left at 1
+                // it is the widest foliage on the tree sitting on its thinnest
+                // wood, which is most of the "overloaded on top" read.
+                n.leafScale = 0.45f + 0.35f * (1.f - std::clamp((y - whorlStart) / whorlSpan, 0.f, 1.f));
                 const int idx = static_cast<int>(nodes_.size());
                 if (i > 0) nodes_[static_cast<size_t>(trunkIdx[static_cast<size_t>(i - 1)])].children.push_back(idx);
                 trunkIdx[static_cast<size_t>(i)] = idx;
                 nodes_.push_back(n);
             }
 
-            // 2) Whorls of branches. Branches start above `trunkHeight` (the bare
-            //    bole) and stop BELOW a bare leader shoot at the very top — a
-            //    spruce tapers to a pointed apex, so the crown profile must reach
-            //    ~zero at the top whorl (no length floor) and the topmost stretch
-            //    of trunk stays branch-free except for tiny stubs.
-            const float whorlStart = tp.trunkHeight;
-            // Keep the bare leader SHORT. At 7% of tree height it left the top
-            // ~1m of trunk with no branches at all, and since the crown profile
-            // also drives branch length to ~0 near the top, the last whorls were
-            // then dropped by the stub test below — so a spruce ended in a bare
-            // wire poking out of the foliage.
-            const float leaderH = std::clamp(H * 0.035f, 0.20f, 0.55f);
-            const float whorlTop = H - leaderH;
+            // 2) Whorls of branches.
             const float baseLen = (tp.branchLength > 0.f) ? tp.branchLength
                                                           : std::max(tp.crownRadiusX, tp.crownRadiusZ);
             const float spacing = std::max(tp.whorlSpacing, tp.segmentLength * 0.5f);
@@ -1297,12 +1421,19 @@ namespace threepp::vegetation {
                 // The floor is a tiny stub (fraction of baseLen, NOT clamped up to
                 // a usable branch), so the last whorls serrate into the pointed
                 // leader instead of capping the tree with a rounded tuft.
-                const float tW = std::clamp((wy - whorlStart) / std::max(whorlTop - whorlStart, 1e-3f), 0.f, 1.f);
+                const float tW = std::clamp((wy - whorlStart) / whorlSpan, 0.f, 1.f);
                 const float lenScale = std::pow(1.f - tW, tp.crownProfileExponent);
                 // The floor has to leave the top whorls LONG enough to survive
                 // the stub test, or the apex loses its branches entirely.
                 const float branchLen = baseLen * (0.10f + 0.90f * lenScale);
                 if (branchLen < tp.segmentLength * 0.4f) continue;// too short even for a stub
+                // Foliage follows branch LENGTH, or the apex whorls carry sprays
+                // wider than the branches under them and the silhouette stops
+                // tapering (see TreeNode::leafScale). Through sqrt and off a high
+                // floor: the shelves have to keep OVERLAPPING as they shorten,
+                // and tracking the length profile directly opened bare trunk down
+                // the whole upper crown — a bottle brush for a club.
+                const float whorlLeafScale = 0.60f + 0.40f * std::sqrt(lenScale);
 
                 // Alternate the whorl's phase so successive rings interleave.
                 const float baseAz = static_cast<float>(whorlIdx) * 0.61803399f * 6.28318530718f;
@@ -1315,7 +1446,7 @@ namespace threepp::vegetation {
                     Vector3 dir{std::cos(az) * std::cos(pitch0), std::sin(pitch0), std::sin(az) * std::cos(pitch0)};
                     if (dir.lengthSq() < 1e-8f) dir.set(std::cos(az), 0.f, std::sin(az));
                     dir.normalize();
-                    growBranch(tp, rng, parentTrunk, trunkPos, dir, branchLen, 1, tW);
+                    growBranch(tp, rng, parentTrunk, trunkPos, dir, branchLen, 1, tW, whorlLeafScale);
                 }
             }
 
@@ -1332,7 +1463,7 @@ namespace threepp::vegetation {
         // order side twigs. `order` = 1 primary branch, 2 side twig.
         void growBranch(const TreeParams& tp, math::Rng& rng, int parentNode,
                         const Vector3& startPos, Vector3 dir, float length,
-                        int order, float crownT) {
+                        int order, float crownT, float leafScale) {
             auto u01 = [](math::Rng& r) { return r.nextFloat(); };
             auto u11 = [](math::Rng& r) { return r.nextFloat(-1.f, 1.f); };
             const int segs = std::max(1, static_cast<int>(std::round(length / tp.segmentLength)));
@@ -1359,6 +1490,7 @@ namespace threepp::vegetation {
                 n.position = next;
                 n.parent = prev;
                 n.depth = depthBase + s;
+                n.leafScale = leafScale;
                 const int idx = static_cast<int>(nodes_.size());
                 nodes_[static_cast<size_t>(prev)].children.push_back(idx);
                 nodes_.push_back(n);
@@ -1381,7 +1513,7 @@ namespace threepp::vegetation {
                     twigDir.normalize();
                     const float twigLen = length * (0.30f + 0.25f * u01(rng)) * (1.f - crownT * 0.4f);
                     if (twigLen > tp.segmentLength * 0.5f)
-                        growBranch(tp, rng, idx, next, twigDir, twigLen, 2, crownT);
+                        growBranch(tp, rng, idx, next, twigDir, twigLen, 2, crownT, leafScale);
                 }
                 prev = idx;
                 pos = next;
@@ -1552,14 +1684,19 @@ namespace threepp::vegetation {
                 p.trunkHeight = 3.5f;
                 p.trunkRadius = 0.18f;
                 p.crownShape = CrownShape::Sphere;
-                p.crownRadiusX = 4.0f;
-                p.crownRadiusZ = 4.0f;
+                // Envelopes grew to hold the crown SIZE steady: the foliage used
+                // to bulge a whole card-plus-spread past the attractor envelope,
+                // and shrinking the cards to twig scale took that padding with it.
+                p.crownRadiusX = 4.5f;
+                p.crownRadiusZ = 4.5f;
                 p.crownHeight = 5.0f;
-                p.attractorCount = 1000;
-                p.influenceDistance = 5.0f;
-                p.killDistance = 0.9f;
-                p.segmentLength = 0.35f;
-                p.maxIterations = 250;
+                // Twig resolution — see the birch case for why kill distance
+                // decides whether a canopy reads as leaves or as clumps.
+                p.attractorCount = 1800;
+                p.influenceDistance = 2.6f;
+                p.killDistance = 0.45f;
+                p.segmentLength = 0.24f;
+                p.maxIterations = 300;
                 p.randomness = 0.1f;
                 p.tropism = -0.01f;
                 p.radiusExponent = 2.2f;
@@ -1567,10 +1704,10 @@ namespace threepp::vegetation {
                 p.radialSegments = 8;
                 p.leafStyle = LeafStyle::CrossQuad;
                 p.leafShape = LeafShape::Lobed;// deeply scalloped oak blade
-                p.leafSize = 0.8f;
+                p.leafSize = 0.45f;
                 p.leafDensity = 0.9f;
-                p.leavesPerCluster = 5;
-                p.leafSpread = 0.6f;
+                p.leavesPerCluster = 3;
+                p.leafSpread = 0.20f;
                 p.barkColor = {0.30f, 0.22f, 0.15f};
                 p.leafColor = {0.24f, 0.44f, 0.13f};
                 // Oak: gnarly, deeply-ridged bark + strong buttress roots.
@@ -1583,7 +1720,7 @@ namespace threepp::vegetation {
             case 1: {// Pine / spruce — monopodial conifer (whorled branches)
                 p.branchingMode = BranchingMode::Whorl;
                 p.trunkHeight = 1.6f;   // short bare bole; whorls start low
-                p.trunkRadius = 0.13f;
+                p.trunkRadius = 0.17f;
                 p.crownShape = CrownShape::Cone;
                 p.crownRadiusX = 2.4f;
                 p.crownRadiusZ = 2.4f;
@@ -1618,6 +1755,14 @@ namespace threepp::vegetation {
                 // full strength took the crown to a near-black mass with almost
                 // no tonal range left.
                 p.foliageOcclusion = 0.72f;
+                // A conifer LEADER IS STRAIGHT. The default bend is written for
+                // broadleaves, where a wandering trunk is the point; scaled by
+                // tree height it puts well over a metre of lateral wander into a
+                // 13 m spruce, and every whorl above the bend rides along with
+                // it — the tree snakes. A monopodial conifer grows to the light
+                // in one shot, so keep only enough to break the ramrod look.
+                p.trunkBend = 0.12f;
+                p.trunkLean = 0.02f;
                 // Spruce bark: lightly plated, gentle spiral.
                 p.barkBumpAmp = 0.08f; p.barkBumpLobes = 4;
                 p.barkBumpAmp2 = 0.04f; p.barkBumpLobes2 = 9;
@@ -1627,16 +1772,29 @@ namespace threepp::vegetation {
             }
             case 2: {// Birch — slender, upward branches
                 p.trunkHeight = 4.5f;
-                p.trunkRadius = 0.08f;
+                // Slender is not a wire: at 0.08 over a 10 m tree the bole came
+                // out ~16 cm through, and under a 6 m crown that reads as a pole
+                // holding up a bush rather than a trunk.
+                p.trunkRadius = 0.12f;
                 p.crownShape = CrownShape::Ellipsoid;
-                p.crownRadiusX = 2.0f;
-                p.crownRadiusZ = 2.0f;
-                p.crownHeight = 5.5f;
-                p.attractorCount = 700;
-                p.influenceDistance = 3.5f;
-                p.killDistance = 0.6f;
-                p.segmentLength = 0.35f;
-                p.maxIterations = 220;
+                p.crownRadiusX = 2.4f;
+                p.crownRadiusZ = 2.4f;
+                p.crownHeight = 6.0f;
+                // KILL DISTANCE IS THE TWIG-RESOLUTION KNOB, and it decides
+                // whether the canopy reads as leaves or as clumps.
+                //
+                // At 0.6 the crown grows ~45 tips, so a 4 m-wide crown is built
+                // from about a hundred leaf-bearing nodes — each carrying a
+                // whole cluster, each cluster ~1.5 m across. That is a bag of
+                // balls, not foliage, and every ball is plainly visible as a
+                // packed clump sitting on the end of a limb. Halving it roughly
+                // eightfolds the tips, so the same leaf area is spread over
+                // many small sprays instead of a few big ones.
+                p.attractorCount = 1400;
+                p.influenceDistance = 2.0f;
+                p.killDistance = 0.30f;
+                p.segmentLength = 0.22f;
+                p.maxIterations = 260;
                 p.randomness = 0.07f;
                 p.tropism = 0.01f;
                 p.radiusExponent = 2.0f;
@@ -1644,10 +1802,20 @@ namespace threepp::vegetation {
                 p.radialSegments = 6;
                 p.leafStyle = LeafStyle::CrossQuad;
                 p.leafShape = LeafShape::Serrate;// small toothed birch blade
-                p.leafSize = 0.65f;
+                // A card is one SPRIG, so its world size is the size of a twig
+                // end, not of a branch. At 0.65 — and these get instanced at up
+                // to 2× in scenes — a single card spanned well over a metre and
+                // the canopy resolved into its individual squares.
+                // Card AREA goes as the square, so shrinking one has to be paid
+                // for in count or the canopy thins out and the white bark on the
+                // twigs shows straight through it — on a birch that is the most
+                // conspicuous way to lose canopy cover there is.
+                // Cards shrink with the twigs: total leaf AREA (and so overdraw)
+                // is about what it was, spread over ~4× the sprays.
+                p.leafSize = 0.36f;
                 p.leafDensity = 0.9f;
-                p.leavesPerCluster = 4;
-                p.leafSpread = 0.5f;
+                p.leavesPerCluster = 3;
+                p.leafSpread = 0.16f;
                 p.barkColor = {0.85f, 0.82f, 0.78f};
                 p.leafColor = {0.38f, 0.52f, 0.18f};
                 // Birch: nearly smooth papery bark, faint spiral.
@@ -1661,14 +1829,14 @@ namespace threepp::vegetation {
                 p.trunkHeight = 3.0f;
                 p.trunkRadius = 0.14f;
                 p.crownShape = CrownShape::Hemisphere;
-                p.crownRadiusX = 4.5f;
-                p.crownRadiusZ = 4.5f;
+                p.crownRadiusX = 4.9f;
+                p.crownRadiusZ = 4.9f;
                 p.crownHeight = 4.5f;
-                p.attractorCount = 900;
-                p.influenceDistance = 4.5f;
-                p.killDistance = 0.7f;
-                p.segmentLength = 0.3f;
-                p.maxIterations = 280;
+                p.attractorCount = 1800;
+                p.influenceDistance = 2.6f;
+                p.killDistance = 0.38f;
+                p.segmentLength = 0.22f;
+                p.maxIterations = 320;
                 p.randomness = 0.12f;
                 p.tropism = -0.08f;
                 p.radiusExponent = 2.0f;
@@ -1676,10 +1844,10 @@ namespace threepp::vegetation {
                 p.radialSegments = 6;
                 p.leafStyle = LeafStyle::CrossQuad;
                 p.leafShape = LeafShape::Lanceolate;// long narrow willow blade
-                p.leafSize = 0.6f;
+                p.leafSize = 0.38f;
                 p.leafDensity = 0.95f;
-                p.leavesPerCluster = 5;
-                p.leafSpread = 0.45f;
+                p.leavesPerCluster = 3;
+                p.leafSpread = 0.16f;
                 p.barkColor = {0.30f, 0.25f, 0.18f};
                 p.leafColor = {0.32f, 0.50f, 0.20f};
                 break;

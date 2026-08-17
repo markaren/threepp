@@ -992,7 +992,7 @@ int main(int argc, char** argv) {
                                                           .roughness(0.85f)
                                                           .metalness(0.f));
             m->map = map;
-            m->alphaTest = 0.4f;// forest_demo's mip-safe cutout threshold
+            m->alphaTest = vegetation::kLeafAlphaTest;
             m->side = Side::Double;
             m->vertexColors = true;
             m->translucency = 0.45f;// backlit canopy glow (Vulkan; no-op on GL)
@@ -1028,9 +1028,11 @@ int main(int argc, char** argv) {
                 v.barkMat->normalMap = bark.second;
                 v.leafMat = makeLeafMat(
                         tpar.leafStyle == vegetation::LeafStyle::Frond
-                                ? vegetation::makeNeedleFrondTexture(224, seed, tpar.leafColor)
+                                ? vegetation::makeNeedleFrondTexture(224, seed, tpar.leafColor,
+                                                                      tpar.leafAtlasCells)
                                 : vegetation::makeLeafClusterTexture(224, seed, tpar.leafColor,
-                                                                     tpar.leafShape));
+                                                                     tpar.leafShape, 8,
+                                                                     tpar.leafAtlasCells));
                 v.trunkRadius = tpar.trunkRadius;
                 variants.push_back(std::move(v));
             }

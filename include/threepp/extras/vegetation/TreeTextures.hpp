@@ -108,6 +108,47 @@ namespace threepp::vegetation {
 
         using noise::valueNoise;
 
+        // ── Variant atlas ────────────────────────────────────────────────
+        //
+        // Tile N×N INDEPENDENTLY SEEDED copies of a cutout tile into one
+        // texture, each cell rendered at the full requested resolution (the
+        // atlas is size·N square — a 2×2 grid of 256² sprigs costs 1 MB).
+        //
+        // Foliage cards all sample the same map with the same UVs, so with one
+        // tile every card in a forest is the same image: at any distance where
+        // a card resolves, the canopy reads as one square stamp repeated. Tint
+        // and size jitter do not hide that, because what repeats is the
+        // SILHOUETTE. The geometry side picks a cell per card
+        // (TreeParams::leafAtlasCells) and must agree on N.
+        template<typename MakeTile>
+        std::shared_ptr<DataTexture> tileVariants(unsigned int size, unsigned int seed,
+                                                  int variants, MakeTile&& makeTile) {
+            const int n = std::clamp(variants, 1, 4);
+            if (n == 1) return makeTile(size, seed);
+
+            const unsigned int N = static_cast<unsigned int>(n);
+            const unsigned int W = size * N;
+            auto atlas = DataTexture::create(4, W, W);
+            auto& dst = atlas->image().data<unsigned char>();
+            for (unsigned int cy = 0; cy < N; ++cy) {
+                for (unsigned int cx = 0; cx < N; ++cx) {
+                    // Decorrelate the cells: neighbouring seeds in a plain
+                    // counter produce visibly related sprigs with this Rng.
+                    const unsigned int s = seed * 2654435761u + (cy * N + cx) * 40503u + 1u;
+                    auto tile = makeTile(size, s ? s : 1u);
+                    const auto& src = tile->image().data<unsigned char>();
+                    for (unsigned int y = 0; y < size; ++y) {
+                        const unsigned char* sp = src.data() + static_cast<size_t>(y) * size * 4;
+                        unsigned char* dp = dst.data() +
+                                (static_cast<size_t>(cy * size + y) * W + cx * size) * 4;
+                        std::copy(sp, sp + static_cast<size_t>(size) * 4, dp);
+                    }
+                }
+            }
+            texgen::finishTexture(atlas, true, false);
+            return atlas;
+        }
+
     }// namespace detail
 
     // ── Leaf blade outline, per species ──────────────────────────────────
@@ -124,6 +165,28 @@ namespace threepp::vegetation {
         Serrate = 2,   // fine-toothed margin, small blade — birch
         Lanceolate = 3,// long and narrow — willow
     };
+
+    // ── Cutout threshold for the foliage atlases ─────────────────────────
+    //
+    // Pair this with makeLeafClusterTexture / makeNeedleFrondTexture, and note
+    // that it MUST sit BELOW the atlas's own coverage fraction (a sprig tile is
+    // ~22% opaque).
+    //
+    // Mip generation averages alpha, so a texel at mip N holds the local
+    // COVERAGE of the sprig, not an alpha. Once a card is a handful of pixels
+    // across, every one of its texels reads ~0.22 — a 0.4 cutoff then discards
+    // the ENTIRE canopy in one step, while the trunk and branch tubes are
+    // opaque geometry and survive: mid-distance broadleaves turn into bare
+    // white skeletons, which on a birch is unmissable. Below the coverage
+    // fraction the far mips pass instead, so a card that is 2 px across
+    // resolves to solid leaf colour — which is what a tree at that range
+    // should look like.
+    //
+    // The textbook fix is a coverage-preserving mip chain (rescale alpha per
+    // level so the passing fraction stays constant). That needs the renderer to
+    // upload a supplied chain rather than box-filtering its own, on both
+    // backends; this constant is what works with the chain they build today.
+    constexpr float kLeafAlphaTest = 0.18f;
 
     // ── Leaf-sprig alpha cutout ──────────────────────────────────────────
     //
@@ -144,12 +207,13 @@ namespace threepp::vegetation {
     //
     // Use on a material as:
     //   mat.map = tex;  mat.alphaTest = 0.4f;  mat.side = Side::Double;
-    inline std::shared_ptr<DataTexture> makeLeafClusterTexture(
-            unsigned int size = 256,
-            unsigned int seed = 1337,
-            const std::array<float, 3>& baseColor = {0.26f, 0.45f, 0.14f},
-            LeafShape shape = LeafShape::Ovate,
-            int leafletsPerTwig = 8) {
+    namespace detail {
+    inline std::shared_ptr<DataTexture> makeLeafClusterTile(
+            unsigned int size,
+            unsigned int seed,
+            const std::array<float, 3>& baseColor,
+            LeafShape shape,
+            int leafletsPerTwig) {
 
         auto tex = DataTexture::create(4, size, size);
         auto& px = tex->image().data<unsigned char>();// zero → transparent
@@ -194,14 +258,26 @@ namespace threepp::vegetation {
         // would leave most of the tile empty (a thin card = a sparse canopy);
         // fanning several twigs fills the tile while keeping every individual
         // leaf small — which is the whole point.
-        const int twigCount = 4;
-        const float stemTop = 0.13f;
+        // WHAT VARIES BETWEEN SEEDS HAS TO BE THE SHAPE, NOT THE DETAIL.
+        //
+        // With the fan pinned at 4 twigs over a fixed 1.45 rad and only the
+        // leaflet angles jittered, two seeds produce the same branchlet with
+        // different freckles: side by side in an atlas the cells are
+        // indistinguishable, and a canopy built from them repeats exactly as
+        // hard as one built from a single tile. Twig COUNT, fan WIDTH, the
+        // whole-sprig TILT and where the fan is rooted are what make one card
+        // read as a different piece of twig from the next.
+        const int twigCount = 3 + static_cast<int>(u01(rng) * 3.f);// 3..5
+        const float fanWidth = 1.05f + 0.85f * u01(rng);           // radians, tip to tip
+        const float fanTilt = (u01(rng) - 0.5f) * 0.55f;           // whole sprig leans
+        const float stemTop = 0.10f + 0.07f * u01(rng);
         std::vector<Twig> twigs;
         twigs.reserve(static_cast<size_t>(twigCount));
         for (int i = 0; i < twigCount; ++i) {
             const float f = (twigCount == 1) ? 0.5f
                                              : static_cast<float>(i) / static_cast<float>(twigCount - 1);
-            const float spread = (f - 0.5f) * 1.45f + (u01(rng) - 0.5f) * 0.28f;// radians off +v
+            const float spread = (f - 0.5f) * fanWidth + fanTilt +
+                                 (u01(rng) - 0.5f) * 0.28f;// radians off +v
             Twig tw;
             tw.bx = 0.5f + (f - 0.5f) * 0.05f;
             tw.by = stemTop;
@@ -209,8 +285,8 @@ namespace threepp::vegetation {
             tw.dy = std::cos(spread);
             // Ragged lengths: a fan of equal-length twigs gives the card a
             // manicured circular outline, and a canopy of those reads as topiary.
-            tw.length = (0.60f + 0.28f * u01(rng)) * (1.f - 0.12f * std::abs(f - 0.5f) * 2.f);
-            tw.curve = (u01(rng) - 0.5f) * 0.14f;
+            tw.length = (0.52f + 0.40f * u01(rng)) * (1.f - 0.12f * std::abs(f - 0.5f) * 2.f);
+            tw.curve = (u01(rng) - 0.5f) * 0.18f;
             twigs.push_back(tw);
         }
 
@@ -409,6 +485,22 @@ namespace threepp::vegetation {
         texgen::finishTexture(tex, true, false);
         return tex;
     }
+    }// namespace detail
+
+    // `variants` is the atlas grid side — see detail::tileVariants. It must
+    // match TreeParams::leafAtlasCells, which defaults to the same 2.
+    inline std::shared_ptr<DataTexture> makeLeafClusterTexture(
+            unsigned int size = 256,
+            unsigned int seed = 1337,
+            const std::array<float, 3>& baseColor = {0.26f, 0.45f, 0.14f},
+            LeafShape shape = LeafShape::Ovate,
+            int leafletsPerTwig = 8,
+            int variants = 2) {
+        return detail::tileVariants(size, seed, variants,
+                [&](unsigned int s, unsigned int sd) {
+                    return detail::makeLeafClusterTile(s, sd, baseColor, shape, leafletsPerTwig);
+                });
+    }
 
     // ── Needle frond alpha cutout (conifers) ─────────────────────────────
     //
@@ -418,10 +510,11 @@ namespace threepp::vegetation {
     // `map` on the LeafStyle::Frond cards (alphaTest + Side::Double), where the
     // card's long (v) axis is the branch direction and u spreads sideways — so
     // the drawn rachis lands along the branch and the needles fan out in-plane.
-    inline std::shared_ptr<DataTexture> makeNeedleFrondTexture(
-            unsigned int size = 256,
-            unsigned int seed = 1337,
-            const std::array<float, 3>& baseColor = {0.11f, 0.29f, 0.10f}) {
+    namespace detail {
+    inline std::shared_ptr<DataTexture> makeNeedleFrondTile(
+            unsigned int size,
+            unsigned int seed,
+            const std::array<float, 3>& baseColor) {
 
         auto tex = DataTexture::create(4, size, size);
         auto& px = tex->image().data<unsigned char>();// zero → transparent
@@ -448,7 +541,12 @@ namespace threepp::vegetation {
             float tint;
         };
 
-        const float twigCurve = (u01(rng) - 0.5f) * 0.05f;
+        // Per-tile shape, so an atlas of these is four different sprays rather
+        // than one spray with different jitter — same reasoning as the leaf
+        // sprig fan above.
+        const float twigCurve = (u01(rng) - 0.5f) * 0.14f;
+        const float sweepBase = 0.80f + 0.32f * u01(rng);// needle rake off the twig
+        const float needleLen = 0.86f + 0.30f * u01(rng);// spray width
         auto twigU = [&](float t) { return 0.5f + twigCurve * std::sin(t * 2.6f); };
 
         constexpr int rows = 46;// needle pairs down the twig
@@ -465,11 +563,11 @@ namespace threepp::vegetation {
                 n.by = by;
                 // Sweep toward the tip: ~55-70° off the twig, so needles rake
                 // forward the way they do on a real shoot.
-                const float a = 0.95f + 0.28f * u01(rng);
+                const float a = sweepBase + 0.28f * u01(rng);
                 const float side = (s == 0) ? -1.f : 1.f;
                 n.dx = side * std::sin(a);
                 n.dy = std::cos(a);
-                n.length = 0.34f * env * (0.78f + 0.44f * u01(rng));
+                n.length = 0.34f * needleLen * env * (0.78f + 0.44f * u01(rng));
                 n.halfWidth = 0.0085f * (0.75f + 0.5f * u01(rng));
                 n.tint = 0.72f + 0.52f * u01(rng);
                 needles.push_back(n);
@@ -566,6 +664,20 @@ namespace threepp::vegetation {
 
         texgen::finishTexture(tex, true, false);
         return tex;
+    }
+    }// namespace detail
+
+    // `variants` as in makeLeafClusterTexture — must match
+    // TreeParams::leafAtlasCells.
+    inline std::shared_ptr<DataTexture> makeNeedleFrondTexture(
+            unsigned int size = 256,
+            unsigned int seed = 1337,
+            const std::array<float, 3>& baseColor = {0.11f, 0.29f, 0.10f},
+            int variants = 2) {
+        return detail::tileVariants(size, seed, variants,
+                [&](unsigned int s, unsigned int sd) {
+                    return detail::makeNeedleFrondTile(s, sd, baseColor);
+                });
     }
 
     // ── Bark albedo + normal map (tiling) ────────────────────────────────

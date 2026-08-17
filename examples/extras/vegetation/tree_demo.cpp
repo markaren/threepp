@@ -44,17 +44,39 @@ int main(int argc, char** argv) {
     int shotSeed = -1;
     float aoArg = -1.f;// <0 → keep the preset's foliageOcclusion
     float envIntArg = -1.f;// <0 → leave leaf envMapIntensity at its default
+    // Canopy-outline knobs, overridable for the same reason --ao is: a scene
+    // (vulkan_fjord) overrides them per species, so reproducing what the SCENE
+    // draws needs them on the command line, not just on the ImGui panel.
+    float clumpArg = -1.f;  // <0 → keep the preset's leafClumping
+    float densityArg = -1.f;// <0 → keep the preset's leafDensity
+    // --stats: build the skeleton, print its shape, exit. A canopy defect that
+    // is really a SKELETON defect (a node with 40 children is a thick branch
+    // carrying 40 leaf clusters) is invisible in a render — you see the symptom,
+    // not the fan-out that caused it.
+    bool statsOnly = false;
     float camArg[3] = {8.f, 6.f, 8.f};
     float tgtArg[3] = {0.f, 4.f, 0.f};
     std::optional<GraphicsAPI> api;// unset → interactive backend menu
+    // Auto mesh LOD (Vulkan): default-on renderer feature that meshopt-simplifies
+    // static geometry by screen-space error. Foliage is a CLOUD OF CUTOUT CARDS,
+    // not a surface, so it is the content most likely to be damaged by a
+    // surface simplifier — `--lod 0|1` + `--loderr px` are the A/B that tells a
+    // generator bug from a simplifier artefact.
+    int optLod = -1;
+    float optLodErr = -1.f;
     std::string dumpTexPrefix;
     for (int i = 1; i < argc; ++i) {
         if (std::strcmp(argv[i], "--dump-tex") == 0 && i + 1 < argc) { dumpTexPrefix = argv[++i]; continue; }
+        if (std::strcmp(argv[i], "--lod") == 0 && i + 1 < argc) { optLod = std::atoi(argv[++i]); continue; }
+        if (std::strcmp(argv[i], "--loderr") == 0 && i + 1 < argc) { optLodErr = std::stof(argv[++i]); continue; }
         if (std::strcmp(argv[i], "--shot") == 0 && i + 1 < argc) shotPath = argv[++i];
         else if (std::strcmp(argv[i], "--frames") == 0 && i + 1 < argc) shotFrames = std::atoi(argv[++i]);
         else if (std::strcmp(argv[i], "--preset") == 0 && i + 1 < argc) shotPreset = std::atoi(argv[++i]);
         else if (std::strcmp(argv[i], "--seed") == 0 && i + 1 < argc) shotSeed = std::atoi(argv[++i]);
         else if (std::strcmp(argv[i], "--ao") == 0 && i + 1 < argc) aoArg = std::stof(argv[++i]);
+        else if (std::strcmp(argv[i], "--stats") == 0) statsOnly = true;
+        else if (std::strcmp(argv[i], "--clump") == 0 && i + 1 < argc) clumpArg = std::stof(argv[++i]);
+        else if (std::strcmp(argv[i], "--density") == 0 && i + 1 < argc) densityArg = std::stof(argv[++i]);
         else if (std::strcmp(argv[i], "--envint") == 0 && i + 1 < argc) envIntArg = std::stof(argv[++i]);
         else if (std::strcmp(argv[i], "--cam") == 0 && i + 3 < argc) {
             for (float& c : camArg) c = std::stof(argv[++i]);
@@ -65,8 +87,58 @@ int main(int argc, char** argv) {
     }
     const bool capturing = !shotPath.empty();
 
+    if (statsOnly) {
+        TreeParams sp;
+        applyPreset(std::clamp(shotPreset, 0, 3), sp);
+        if (shotSeed >= 0) sp.seed = static_cast<unsigned int>(shotSeed);
+        if (clumpArg >= 0.f) sp.leafClumping = clumpArg;
+        if (densityArg >= 0.f) sp.leafDensity = densityArg;
+
+        TreeGenerator g(sp.seed);
+        g.buildSkeleton(sp);
+        const auto& nodes = g.nodes();
+        std::vector<int> hist(16, 0);
+        size_t terminals = 0;
+        int maxChildren = 0;
+        for (const auto& n : nodes) {
+            const auto c = n.children.size();
+            hist[std::min<size_t>(c, hist.size() - 1)]++;
+            maxChildren = std::max(maxChildren, static_cast<int>(c));
+            if (n.children.empty()) ++terminals;
+        }
+        std::cout << "nodes=" << nodes.size() << " terminals=" << terminals
+                  << " maxChildren=" << maxChildren << "\n";
+        std::cout << "children histogram (count: nodes)\n";
+        for (size_t c = 0; c < hist.size(); ++c) {
+            if (hist[c]) std::cout << "  " << (c == hist.size() - 1 ? ">=" : "  ") << c
+                                   << ": " << hist[c] << "\n";
+        }
+        // The fattest forks, with the radius the pipe model gave them: a leaf
+        // clump sits on whichever of these the eye finds first.
+        std::vector<size_t> idx(nodes.size());
+        std::iota(idx.begin(), idx.end(), size_t{0});
+        std::partial_sort(idx.begin(), idx.begin() + std::min<size_t>(8, idx.size()), idx.end(),
+                [&](size_t a, size_t b) { return nodes[a].children.size() > nodes[b].children.size(); });
+        std::cout << "fattest forks (children, radius, y):\n";
+        for (size_t k = 0; k < std::min<size_t>(8, idx.size()); ++k) {
+            const auto& n = nodes[idx[k]];
+            std::cout << "  " << n.children.size() << "  r=" << n.radius
+                      << "  y=" << n.position.y << "\n";
+        }
+        auto leaf = g.makeLeafGeometry(sp);
+        const auto* pos = leaf->getAttribute<float>("position");
+        std::cout << "leaf cards=" << (pos ? pos->count() / 4 : 0) << std::endl;
+        return 0;
+    }
+
     Canvas canvas("Procedural Tree Generator", {{"vsync", !capturing}, {"aa", 4}});
     auto renderer = createRenderer(canvas, api);
+#ifdef THREEPP_WITH_VULKAN
+    if (auto* vk = dynamic_cast<VulkanRenderer*>(renderer.get())) {
+        if (optLod >= 0) vk->setAutoLod(optLod != 0);
+        if (optLodErr > 0.f) vk->setAutoLodError(optLodErr);
+    }
+#endif
     renderer->setClearColor(Color(0.18f, 0.22f, 0.28f));
     renderer->toneMapping = ToneMapping::ACESFilmic;
     renderer->toneMappingExposure = 1.0f;
@@ -105,16 +177,21 @@ int main(int argc, char** argv) {
     applyPreset(std::clamp(shotPreset, 0, 3), params);// start with Oak
     if (shotSeed >= 0) params.seed = static_cast<unsigned int>(shotSeed);
     if (aoArg >= 0.f) params.foliageOcclusion = aoArg;
+    if (clumpArg >= 0.f) params.leafClumping = clumpArg;
+    if (densityArg >= 0.f) params.leafDensity = densityArg;
 
     auto [barkAlbedo, barkNormal] = vegetation::makeBarkTextures(256, params.seed, params.barkColor, params.barkStyle);
     barkAlbedo->repeat.set(3.f, 0.5f);
     barkNormal->repeat.set(3.f, 0.5f);
     // Conifer fronds want the elongated needle cutout; broadleaf styles the
     // round leaf-cluster atlas.
+    // The atlas grid must match the one the cards were UV'd for — see
+    // TreeParams::leafAtlasCells.
     auto makeLeafTex = [](const TreeParams& p) {
         return p.leafStyle == LeafStyle::Frond
-                ? vegetation::makeNeedleFrondTexture(256, p.seed, p.leafColor)
-                : vegetation::makeLeafClusterTexture(256, p.seed, p.leafColor, p.leafShape);
+                ? vegetation::makeNeedleFrondTexture(256, p.seed, p.leafColor, p.leafAtlasCells)
+                : vegetation::makeLeafClusterTexture(256, p.seed, p.leafColor, p.leafShape,
+                                                     8, p.leafAtlasCells);
     };
     auto leafTex = makeLeafTex(params);
 
@@ -171,7 +248,7 @@ int main(int argc, char** argv) {
     leafMat->map = leafTex;
     // Below the antialiased margin of the thin leaflets/needles the atlases are
     // drawn from — at 0.5 a mipped distant card loses whole leaves.
-    leafMat->alphaTest = 0.4f;
+    leafMat->alphaTest = vegetation::kLeafAlphaTest;
     leafMat->side = Side::Double;
     leafMat->vertexColors = true;// per-card tonal variation (top-lit gradient)
     // Foliage translucency: backlit canopy glow (Vulkan deferred). Live-editable

@@ -227,6 +227,7 @@ std::string TreeConfig::encode() const {
     addI("leavesPerCluster", p.leavesPerCluster);
     addF("leafSpread", p.leafSpread);
     addF("leafClumping", p.leafClumping);
+    addI("leafAtlasCells", p.leafAtlasCells);
     addF("foliageOcclusion", p.foliageOcclusion);
 
     add("barkColor", encodeColor(p.barkColor));
@@ -325,6 +326,8 @@ std::optional<TreeConfig> TreeConfig::decode(const std::string& text) {
             p.leafSpread = toFloat(value, p.leafSpread);
         } else if (key == "leafClumping") {
             p.leafClumping = toFloat(value, p.leafClumping);
+        } else if (key == "leafAtlasCells") {
+            p.leafAtlasCells = toInt(value, p.leafAtlasCells);
         } else if (key == "foliageOcclusion") {
             p.foliageOcclusion = toFloat(value, p.foliageOcclusion);
         } else if (key == "barkColor") {
@@ -435,9 +438,12 @@ TreeConfig::Textures TreeConfig::textures() const {
     out.leaf = cached(key + "|leaf", [&] {
         // Conifer fronds want the elongated needle cutout; every other style
         // the round leaf-cluster atlas.
+        // The atlas grid has to be the one the cards were UV'd for, or every
+        // card samples a fraction of the wrong variant.
         return p.leafStyle == LeafStyle::Frond
-                       ? makeNeedleFrondTexture(kTextureSize, p.seed, p.leafColor)
-                       : makeLeafClusterTexture(kTextureSize, p.seed, p.leafColor, p.leafShape);
+                       ? makeNeedleFrondTexture(kTextureSize, p.seed, p.leafColor, p.leafAtlasCells)
+                       : makeLeafClusterTexture(kTextureSize, p.seed, p.leafColor, p.leafShape,
+                                                8, p.leafAtlasCells);
     });
 
     return out;
@@ -468,7 +474,7 @@ std::shared_ptr<MeshStandardMaterial> TreeConfig::makeLeafMaterial() const {
     material->map = textures().leaf;
     // Below the antialiased margin of the thin leaflets the atlases are drawn
     // with — at 0.5 a mipped distant card loses whole leaves.
-    material->alphaTest = 0.4f;
+    material->alphaTest = kLeafAlphaTest;
     material->side = Side::Double;
     // makeLeafGeometry bakes the canopy occlusion into the vertex colours;
     // without this the foliage is flat and has no interior depth.

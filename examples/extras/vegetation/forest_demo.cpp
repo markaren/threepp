@@ -144,8 +144,9 @@ namespace {
         // that species' blade outline.
         v.leafMat = makeLeafMaterial(
                 tp.leafStyle == vegetation::LeafStyle::Frond
-                        ? vegetation::makeNeedleFrondTexture(256, seed, tp.leafColor)
-                        : vegetation::makeLeafClusterTexture(256, seed, tp.leafColor, tp.leafShape));
+                        ? vegetation::makeNeedleFrondTexture(256, seed, tp.leafColor, tp.leafAtlasCells)
+                        : vegetation::makeLeafClusterTexture(256, seed, tp.leafColor, tp.leafShape,
+                                                             8, tp.leafAtlasCells));
         return v;
     }
 
@@ -191,7 +192,8 @@ namespace {
         v.barkMat->map = bark.first;
         v.barkMat->normalMap = bark.second;
         v.leafMat = makeLeafMaterial(
-                vegetation::makeLeafClusterTexture(256, seed, tp.leafColor, tp.leafShape));
+                vegetation::makeLeafClusterTexture(256, seed, tp.leafColor, tp.leafShape,
+                                                   8, tp.leafAtlasCells));
         return v;
     }
 
@@ -633,7 +635,7 @@ int main(int argc, char** argv) {
             auto mat = MeshStandardMaterial::create(
                     MeshStandardMaterial::Params{}.color(Color::white).roughness(0.9f).metalness(0.f));
             mat->map = vegetation::makeFlowerTexture(128, static_cast<unsigned int>(1 + fv));
-            mat->alphaTest = 0.5f;
+            mat->alphaTest = vegetation::kLeafAlphaTest;
             mat->side = Side::Double;
             mat->envMapIntensity = 0.6f;
 

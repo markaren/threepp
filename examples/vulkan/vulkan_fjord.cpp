@@ -546,10 +546,16 @@ namespace {
             // sky gaps between them, and a pointed apex (profile → 0 at the
             // top whorl + bare leader above it).
             tp.trunkHeight = 1.8f;
-            tp.trunkRadius = 0.17f;
+            // Scaled with the height: this spruce is 12.8 m against the preset's
+            // 9.6, and carrying the preset radius up made a 20 m tree stand on a
+            // pole. (The scatter then instances these at 1.3-2.1×.)
+            tp.trunkRadius = 0.22f;
             tp.crownRadiusX = tp.crownRadiusZ = 1.9f;
             tp.crownHeight = 11.f;
-            tp.whorlSpacing = 0.85f;
+            // Close enough that successive shelves overlap over the bole. At
+            // 0.85 the layers read as separate pancakes on a pole, and the
+            // thicker trunk this preset now carries made that reading worse.
+            tp.whorlSpacing = 0.72f;
             tp.branchesPerWhorl = 5;
             tp.branchDroop = 0.44f;
             tp.branchTipUpturn = 0.42f;
@@ -631,12 +637,16 @@ namespace {
         } else {
             // Conifer fronds use the elongated needle cutout; broadleaf the round
             // leaf-cluster atlas.
+            // The atlas grid must be the one the cards were UV'd for (see
+            // TreeParams::leafAtlasCells) — the cards pick a cell each, so a
+            // mismatch has every card sampling a fraction of the wrong variant.
             v.leafMat->map = (tp.leafStyle == vegetation::LeafStyle::Frond)
-                    ? vegetation::makeNeedleFrondTexture(256, seed, tp.leafColor)
-                    : vegetation::makeLeafClusterTexture(256, seed, tp.leafColor, tp.leafShape);
+                    ? vegetation::makeNeedleFrondTexture(256, seed, tp.leafColor, tp.leafAtlasCells)
+                    : vegetation::makeLeafClusterTexture(256, seed, tp.leafColor, tp.leafShape,
+                                                         8, tp.leafAtlasCells);
             // Below the antialiased margin of the thin leaflets/needles the
             // atlases are drawn from — 0.5 eats whole leaves off mipped cards.
-            v.leafMat->alphaTest = 0.4f;
+            v.leafMat->alphaTest = vegetation::kLeafAlphaTest;
             v.leafMat->side = Side::Double;
             v.leafMat->vertexColors = true;
         }
@@ -799,6 +809,9 @@ int main(int argc, char** argv) {
     int   waterResX = 0, waterResZ = 0;// --waterres X Z: override the water grid (scout: geometric-aliasing tests)
     int   winW = 0, winH = 0;   // --size W H: window/render size (default 960x600)
     int   debugView = 0;        // --debugview N: blit a G-buffer channel (1=normal 2=motion 3=id 4=albedo)
+    int   optLod = -1;          // --lod 0|1: auto mesh LOD (the vegetation A/B — the shot
+                                // line already prints lod=[...]; this is the OFF leg, so a
+                                // foliage artefact can be pinned on the simplifier or cleared)
     float tile2Override = -1.f; // --tile2 F: cascade-2 tile (0 disables the fine cascade)
     // --cam x,y,z / --look x,y,z: free camera override for shot mode —
     // (--cam is the capture_util convention every Vulkan demo shares; the
@@ -873,6 +886,7 @@ int main(int argc, char** argv) {
             winH = std::atoi(argv[++i]);
         }
         else if (std::strcmp(argv[i], "--debugview") == 0 && i + 1 < argc) debugView = std::atoi(argv[++i]);
+        else if (std::strcmp(argv[i], "--lod") == 0 && i + 1 < argc) optLod = std::atoi(argv[++i]);
         else if (std::strcmp(argv[i], "--tile2") == 0 && i + 1 < argc) tile2Override = static_cast<float>(std::atof(argv[++i]));
         else if (std::strcmp(argv[i], "--cam") == 0 && i + 1 < argc) hasCamPos = parseVec3(argv[++i], camPos);
         else if (std::strcmp(argv[i], "--campos") == 0 && i + 1 < argc) hasCamPos = parseVec3(argv[++i], camPos);// legacy alias
@@ -893,6 +907,7 @@ int main(int argc, char** argv) {
     renderer.toneMapping = ToneMapping::ACESFilmic;
     renderer.setAutoExposure(!noAutoExposure);
     if (debugView > 0) renderer.setHybridDebugView(debugView);
+    if (optLod >= 0) renderer.setAutoLod(optLod != 0);
     // Cap the upper end well below the default +3 EV: the eye should NOT
     // re-expose midnight back to daylight — night must stay dark.
     renderer.setAutoExposureRange(-2.5f, 1.5f);

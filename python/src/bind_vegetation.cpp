@@ -74,6 +74,7 @@ namespace threepp_py {
                 .def_readwrite("leaves_per_cluster", &TreeParams::leavesPerCluster)
                 .def_readwrite("leaf_spread",        &TreeParams::leafSpread)
                 .def_readwrite("leaf_clumping",      &TreeParams::leafClumping)
+                .def_readwrite("leaf_atlas_cells",   &TreeParams::leafAtlasCells)
                 .def_readwrite("foliage_occlusion",  &TreeParams::foliageOcclusion)
                 .def_readwrite("branching_mode",         &TreeParams::branchingMode)
                 .def_readwrite("whorl_spacing",          &TreeParams::whorlSpacing)
@@ -146,31 +147,36 @@ namespace threepp_py {
 
         m.def("make_leaf_texture",
               [](unsigned int size, unsigned int seed, const std::vector<float>& color,
-                 LeafShape shape, int leafletsPerTwig) -> std::shared_ptr<Texture> {
+                 LeafShape shape, int leafletsPerTwig, int variants) -> std::shared_ptr<Texture> {
                   std::array<float, 3> c = {color.size() > 0 ? color[0] : 0.26f,
                                             color.size() > 1 ? color[1] : 0.45f,
                                             color.size() > 2 ? color[2] : 0.14f};
                   py::gil_scoped_release release;
-                  return makeLeafClusterTexture(size, seed, c, shape, leafletsPerTwig);
+                  return makeLeafClusterTexture(size, seed, c, shape, leafletsPerTwig, variants);
               },
               py::arg("size") = 256u, py::arg("seed") = 1337u,
               py::arg("base_color") = std::vector<float>{0.26f, 0.45f, 0.14f},
               py::arg("shape") = LeafShape::Ovate, py::arg("leaflets_per_twig") = 8,
+              py::arg("variants") = 2,
               "RGBA leaf-sprig alpha-cutout DataTexture: a branchlet of small leaflets "
-              "with the given blade outline. Use mat.alpha_test = 0.4.");
+              "with the given blade outline. `variants` is the atlas grid side and must "
+              "match TreeParams.leaf_atlas_cells. Use mat.alpha_test = 0.4.");
 
         m.def("make_needle_frond_texture",
-              [](unsigned int size, unsigned int seed, const std::vector<float>& color) -> std::shared_ptr<Texture> {
+              [](unsigned int size, unsigned int seed, const std::vector<float>& color,
+                 int variants) -> std::shared_ptr<Texture> {
                   std::array<float, 3> c = {color.size() > 0 ? color[0] : 0.11f,
                                             color.size() > 1 ? color[1] : 0.29f,
                                             color.size() > 2 ? color[2] : 0.10f};
                   py::gil_scoped_release release;
-                  return makeNeedleFrondTexture(size, seed, c);
+                  return makeNeedleFrondTexture(size, seed, c, variants);
               },
               py::arg("size") = 256u, py::arg("seed") = 1337u,
               py::arg("base_color") = std::vector<float>{0.11f, 0.29f, 0.10f},
+              py::arg("variants") = 2,
               "RGBA conifer needle-frond alpha-cutout DataTexture. Pair with LeafStyle.Frond "
-              "+ BranchingMode.Whorl. Use mat.alpha_test = 0.5.");
+              "+ BranchingMode.Whorl. `variants` is the atlas grid side and must match "
+              "TreeParams.leaf_atlas_cells. Use mat.alpha_test = 0.5.");
 
         m.def("make_bark_textures",
               [](unsigned int size, unsigned int seed, const std::vector<float>& color,

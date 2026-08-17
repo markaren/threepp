@@ -93,8 +93,9 @@ namespace {
         v.barkMat->normalMap = bark.second;
         v.leafMat = MeshStandardMaterial::create(
                 MeshStandardMaterial::Params{}.color(Color::white).roughness(0.85f).metalness(0.f));
-        v.leafMat->map = vegetation::makeLeafClusterTexture(256, seed, tp.leafColor);
-        v.leafMat->alphaTest = 0.5f;
+        v.leafMat->map = vegetation::makeLeafClusterTexture(256, seed, tp.leafColor, tp.leafShape,
+                                                            8, tp.leafAtlasCells);
+        v.leafMat->alphaTest = vegetation::kLeafAlphaTest;
         v.leafMat->side = Side::Double;
         v.leafMat->vertexColors = true;
         return v;

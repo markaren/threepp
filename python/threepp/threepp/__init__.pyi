@@ -5286,6 +5286,12 @@ class TreeParams:
     def kill_distance(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
         ...
     @property
+    def leaf_atlas_cells(self) -> int:
+        ...
+    @leaf_atlas_cells.setter
+    def leaf_atlas_cells(self, arg0: typing.SupportsInt | typing.SupportsIndex) -> None:
+        ...
+    @property
     def leaf_clumping(self) -> float:
         ...
     @leaf_clumping.setter
@@ -6108,13 +6114,13 @@ def make_flower_texture(size: typing.SupportsInt | typing.SupportsIndex = 128, s
     """
     RGBA wildflower alpha-cutout Texture. seed % 5 selects petal colour.
     """
-def make_leaf_texture(size: typing.SupportsInt | typing.SupportsIndex = 256, seed: typing.SupportsInt | typing.SupportsIndex = 1337, base_color: collections.abc.Sequence[typing.SupportsFloat | typing.SupportsIndex] = [0.25999999046325684, 0.44999998807907104, 0.14000000059604645], shape: LeafShape = LeafShape.Ovate, leaflets_per_twig: typing.SupportsInt | typing.SupportsIndex = 8) -> Texture:
+def make_leaf_texture(size: typing.SupportsInt | typing.SupportsIndex = 256, seed: typing.SupportsInt | typing.SupportsIndex = 1337, base_color: collections.abc.Sequence[typing.SupportsFloat | typing.SupportsIndex] = [0.25999999046325684, 0.44999998807907104, 0.14000000059604645], shape: LeafShape = LeafShape.Ovate, leaflets_per_twig: typing.SupportsInt | typing.SupportsIndex = 8, variants: typing.SupportsInt | typing.SupportsIndex = 2) -> Texture:
     """
-    RGBA leaf-sprig alpha-cutout DataTexture: a branchlet of small leaflets with the given blade outline. Use mat.alpha_test = 0.4.
+    RGBA leaf-sprig alpha-cutout DataTexture: a branchlet of small leaflets with the given blade outline. `variants` is the atlas grid side and must match TreeParams.leaf_atlas_cells. Use mat.alpha_test = 0.4.
     """
-def make_needle_frond_texture(size: typing.SupportsInt | typing.SupportsIndex = 256, seed: typing.SupportsInt | typing.SupportsIndex = 1337, base_color: collections.abc.Sequence[typing.SupportsFloat | typing.SupportsIndex] = [0.10999999940395355, 0.28999999165534973, 0.10000000149011612]) -> Texture:
+def make_needle_frond_texture(size: typing.SupportsInt | typing.SupportsIndex = 256, seed: typing.SupportsInt | typing.SupportsIndex = 1337, base_color: collections.abc.Sequence[typing.SupportsFloat | typing.SupportsIndex] = [0.10999999940395355, 0.28999999165534973, 0.10000000149011612], variants: typing.SupportsInt | typing.SupportsIndex = 2) -> Texture:
     """
-    RGBA conifer needle-frond alpha-cutout DataTexture. Pair with LeafStyle.Frond + BranchingMode.Whorl. Use mat.alpha_test = 0.5.
+    RGBA conifer needle-frond alpha-cutout DataTexture. Pair with LeafStyle.Frond + BranchingMode.Whorl. `variants` is the atlas grid side and must match TreeParams.leaf_atlas_cells. Use mat.alpha_test = 0.5.
     """
 def map_linear(x: typing.SupportsFloat | typing.SupportsIndex, a1: typing.SupportsFloat | typing.SupportsIndex, a2: typing.SupportsFloat | typing.SupportsIndex, b1: typing.SupportsFloat | typing.SupportsIndex, b2: typing.SupportsFloat | typing.SupportsIndex) -> float:
     ...

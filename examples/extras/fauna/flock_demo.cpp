@@ -180,7 +180,7 @@ namespace {
         auto leafMat = MeshPhongMaterial::create(
                 MeshPhongMaterial::Params{}.color(Color::white).shininess(2.f));
         leafMat->map = vegetation::makeLeafClusterTexture(256, tp.seed, tp.leafColor, tp.leafShape);
-        leafMat->alphaTest = 0.4f;// below the antialiased margin of the leaflets
+        leafMat->alphaTest = vegetation::kLeafAlphaTest;
         leafMat->side = Side::Double;
         leafMat->vertexColors = true;// baked canopy occlusion
 
