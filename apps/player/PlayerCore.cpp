@@ -6,6 +6,7 @@
 #include "threepp/extras/editor/SensorPlaySession.hpp"
 
 #ifdef THREEPP_EDITOR_WITH_PHYSX
+#include "threepp/extras/editor/CharacterPlaySession.hpp"
 #include "threepp/extras/editor/ConveyorPlaySession.hpp"
 #include "threepp/extras/editor/GranularPlaySession.hpp"
 #include "threepp/extras/editor/PhysicsPlaySession.hpp"
@@ -105,9 +106,24 @@ PlayerCore::PlayerCore() {
     granular_->setPhysics(physics_.get());
     granular_->setLogger([this](const std::string& message) { log(message); });
     play_.addSession(granular_);
+
+    // Characters, borrowing the same world for the same reason. The player has
+    // no teleop of its own (nor does it drive vehicles), so an authored
+    // character stands its ground and plays its idle — but it is SIMULATED: it
+    // has its capsule, it is animated, and a script can drive it. Without this
+    // it would be a bind-pose statue, since the animation session below defers
+    // to it.
+    character_ = std::make_shared<editor::CharacterPlaySession>();
+    character_->setPhysics(physics_.get());
+    character_->setLogger([this](const std::string& message) { log(message); });
+    play_.addSession(character_);
 #endif
 
-    play_.addSession(std::make_shared<editor::AnimationPlaySession>());
+    {
+        auto animations = std::make_shared<editor::AnimationPlaySession>();
+        animations->setSkipCharacters(character_ != nullptr);
+        play_.addSession(animations);
+    }
 
 #ifdef THREEPP_WITH_AUDIO
     // Authored sound. A headless run leaves the listener host null, so the

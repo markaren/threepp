@@ -50,6 +50,7 @@ namespace threepp::editor {
     class AudioPlaySession;
     class ConveyorPlaySession;
     class GranularPlaySession;
+    class CharacterPlaySession;
     class ParticleFieldPlaySession;
     class PhysicsPlaySession;
     class ScriptPlaySession;
@@ -226,6 +227,9 @@ namespace threepp::player {
         std::shared_ptr<editor::ConveyorPlaySession> conveyor_;
         std::shared_ptr<editor::ParticleFieldPlaySession> particles_;
         std::shared_ptr<editor::GranularPlaySession> granular_;
+        // Authored characters, simulated but not driven: the player has no
+        // teleop, so they stand and idle unless a script moves them.
+        std::shared_ptr<editor::CharacterPlaySession> character_;
         std::shared_ptr<editor::AudioPlaySession> audio_;
         std::shared_ptr<editor::SensorPlaySession> sensors_;
         std::shared_ptr<editor::ScriptPlaySession> scripts_;

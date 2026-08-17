@@ -58,6 +58,8 @@ int main(int argc, char** argv) {
             options.play = true;
         } else if (std::strncmp(argument, "--urdf=", 7) == 0) {
             options.urdf = argument + 7;
+        } else if (std::strncmp(argument, "--character=", 12) == 0) {
+            options.character = argument + 12;
         } else if (std::strncmp(argument, "--environment=", 14) == 0) {
             options.environment = argument + 14;
         } else if (std::strncmp(argument, "--screenshot=", 13) == 0) {
@@ -98,6 +100,8 @@ int main(int argc, char** argv) {
                       << "                   (--selftest=terrain,splat); a term matching no\n"
                       << "                   section lists the sections and exits non-zero\n"
                       << "  --urdf=PATH      import a URDF on start\n"
+                      << "  --character=PATH run the selftest's character pass against this\n"
+                      << "                   rigged model (e.g. threepp_data's xbot.glb)\n"
                       << "  --environment=P  light the scene from a .hdr/.exr, as\n"
                       << "                   File > Set Environment does (background too)\n"
                       << "  --example=SLUG   open a scene that ships in the binary (hover-arena)\n"

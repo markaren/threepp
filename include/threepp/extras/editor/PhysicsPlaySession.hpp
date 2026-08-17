@@ -28,6 +28,10 @@
 #define THREEPP_EDITOR_PHYSICSPLAYSESSION_HPP
 
 #include "threepp/extras/editor/ArticulationConfig.hpp"
+// Read here only to EXCLUDE: a character's subtree is driven by its own
+// capsule controller (CharacterPlaySession), so a rigid body cooked over any
+// of it would double the collision at that spot — the vehicle rule, verbatim.
+#include "threepp/extras/editor/CharacterConfig.hpp"
 // Read here for the GPU escalation only: a granular chute needs the same CUDA
 // world a soft body does, and a heap sized for the grains it authored. The
 // grains themselves are GranularPlaySession's, one session over.
@@ -572,6 +576,13 @@ namespace threepp::editor {
                 if (VehicleConfig::isVehicle(object)) vehicleRoots.push_back(&object);
             });
 
+            // And the characters, for the same reason: a capsule controller
+            // already occupies that space.
+            std::vector<Object3D*> characterRoots;
+            scene.traverse([&](Object3D& object) {
+                if (CharacterConfig::isCharacter(object)) characterRoots.push_back(&object);
+            });
+
             std::vector<Object3D*> targets;
             bool wantsSoftBodies = false;
             // Granular chutes want the same CUDA world soft bodies do, and they
@@ -590,8 +601,10 @@ namespace threepp::editor {
                     // simulated link; a second rigid body over it would double the
                     // dynamics at that spot.
                     if (insideArticulatedRobot(object, articulatedRobots)) return;
-                    // Same rule for a vehicle's subtree (the root included).
-                    if (insideVehicle(object, vehicleRoots)) return;
+                    // Same rule for a vehicle's subtree (the root included),
+                    // and for a character's.
+                    if (insideAnyOf(object, vehicleRoots)) return;
+                    if (insideAnyOf(object, characterRoots)) return;
                     targets.push_back(&object);
                     if (config->body == PhysicsConfig::Body::Soft) wantsSoftBodies = true;
                 }
@@ -713,9 +726,10 @@ namespace threepp::editor {
             return false;
         }
 
-        // The same walk against the authored vehicle roots (roots included):
-        // everything under one is simulated by its vehicle.
-        static bool insideVehicle(const Object3D& object, const std::vector<Object3D*>& roots) {
+        // The same walk against a list of authored roots (roots included):
+        // everything under a vehicle is simulated by that vehicle, everything
+        // under a character by that character's capsule controller.
+        static bool insideAnyOf(const Object3D& object, const std::vector<Object3D*>& roots) {
 
             for (const Object3D* o = &object; o != nullptr; o = o->parent) {
                 for (const auto* root : roots) {

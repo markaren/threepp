@@ -158,6 +158,12 @@ meshes, press Play, and drive it with `W`/`S`/`A`/`D` — chassis, wheels, track
 and wheelbase are derived from the picks, so no number needs typing. See
 [Vehicles in `userData`](#vehicles-in-userdata).
 
+**Characters.** Import a rigged character with a locomotion pack, tick
+Simulate as Character, press Play, and walk it with `W`/`S`/`A`/`D` (`Shift`
+runs, `Space` jumps). Which clip is the walk, which is the run and which way a
+strafe goes are read off each clip's own root motion, so a pack works with
+nothing typed. See [Characters in `userData`](#characters-in-userdata).
+
 **Generators.** A scene can carry inline Python that BUILDS it: select `Scene`,
 write a rule, press Regenerate, and what the script creates becomes ordinary
 saved scene content. Editable in VS Code with completion, where a save re-runs it.
@@ -399,6 +405,7 @@ file untouched and a diff is something somebody authored.
 | `Ctrl+Z` | undo |
 | `Ctrl+Y`, `Ctrl+Shift+Z` | redo |
 | `Ctrl+N` / `Ctrl+O` / `Ctrl+S` | new / open / save |
+| `W`/`S`/`A`/`D`, `Shift`, `Space` | while playing: drive a vehicle, or walk a character |
 
 Shortcuts are suppressed whenever ImGui wants the keyboard (a text field has
 focus, a modal is open), and picking is suppressed whenever ImGui wants the
@@ -997,6 +1004,95 @@ anything under it — returns the live `Vehicle` handle: `set_throttle` /
 `rotation`. The controls are held pedals, not impulses, so a driving script
 sets them when they change rather than every frame — and teleop only writes
 while its keys are involved, so the two do not fight.
+
+### Characters in `userData`
+
+Import a rigged character carrying a locomotion pack — threepp_data ships one,
+`models/gltf/xbot/xbot.glb`, baked from Mixamo by `scripts/mixamo_to_glb.py` —
+open its **Character** section (offered on any node with a `SkinnedMesh` under
+it), tick **Simulate as Character**, press Play, and walk: `W`/`S` walk and
+backpedal along the view, `A`/`D` strafe across it, `Shift` runs, `Space`
+jumps. The camera follows, and the body turns to face where the camera looks,
+which is what makes a pack's strafe and backward clips play at all. That
+facing is authorable: **Movement** instead turns the body towards where it is
+going, so every direction plays the forward gait — the right answer for an NPC
+or a top-down game.
+
+The chase engages **by itself** — a character in the played scene is enough —
+and yields entirely to Follow Selection when that is on. Because it is
+automatic rather than a standing choice, **Stop puts the view back** where it
+stood before Play, alongside the scene it restores; the alternative is a
+camera left staring at the empty ground the character walked to before being
+returned to where it was authored. Orbiting, panning and zooming during play
+compose on top of the chase as usual.
+
+Nothing has to be typed for the first Play, and the reason is the same one the
+Vehicle section gives: everything is **derived from the model**.
+
+* The **capsule** is measured off the mesh — height from its standing extent,
+  radius from its *depth* floored at human proportion. Never its width: a
+  rigged character binds in a T-pose, so its X extent is an arm span, not a
+  body. A skinned mesh is measured through its **bones**, because glTF says a
+  skinned node's own transform must be ignored — measure through that instead
+  and a Mixamo rig's 0.01 armature scale reads a 1.8 m person as 1.8 cm.
+* **Which clip is which** is read off each clip's own **root motion**, not its
+  name. Names are useless as a key — one pack spells its clips
+  `walking` / `left strafe walking` / `left strafe`, another
+  `strafe left` / `strafe (2)` — so the roles come from the motion: every clip
+  moves the root bone somewhere, and measuring that says both the direction
+  (in the model's own frame: +Z forward, +X left) and the speed. Forward,
+  backward and the two strafes fall out of the direction; within each
+  direction the slower clip is the walk and the faster one is the run. A clip
+  that does not travel is a candidate for **Idle** or **Jump**, and only those
+  two are matched by name — standing still and jumping on the spot look
+  identical to a ruler. A clip whose speed **ramps** (a "start walking"
+  transition) is rejected outright: its average speed is one no controller
+  ever holds.
+* The **gait speeds** are those same measurements. This is not a curiosity —
+  playing a clip at 1x while the character travels at some *other* speed is
+  exactly what foot-sliding is. For each direction the session holds two
+  clips, takes whichever one's own speed is nearer *in ratio* to what is being
+  travelled, and time-scales away the remainder.
+
+The Clips list in the inspector is therefore a **readout first** — what the
+matcher decided, and at what speed — with a combo per gait to override the one
+it got wrong.
+
+Play gives the model a PhysX **capsule character controller**, not a rigid
+body, and the difference is the point: a capsule with a mass tips over,
+bounces down stairs and slides on any slope its friction cannot hold, whereas
+a kinematic collide-and-slide sweep with a step offset walks over a kerb and a
+slope limit climbs a ramp and slides off a cliff. Gravity and jumping are
+integrated by the session. Because the controller owns the position, the
+clip's own travel is removed each frame: the root bone's offset from its bind
+pose is projected onto the body's up axis and everything else discarded, which
+keeps the gait's vertical bob (animation) and drops the horizontal travel (now
+the controller's job).
+
+The authoring sits **on the model's root node**. One flat string for the
+scalars, plus one plain key per overridden clip *name* — user-typed, so free
+to contain the flat format's `=`/`;` delimiters, the same wall `jointBody`,
+the vehicle wheels and the sound file hit. An auto-matched gait writes no key
+at all, so an untouched character leaves the smaller document:
+
+```
+userData["character"]            facing=camera;autogeom=1;height=1.8;radius=0.3;autospeeds=1;walkspeed=1.6;runspeed=4.4;mass=75;jump=0.9;gravity=18;step=0.35;slope=0.87;turnrate=14;accel=14;blend=0.18
+userData["characterClipWalk"]    walking          (only when overridden)
+userData["characterClipRun"]     running
+...
+```
+
+`CharacterConfig` owns the format; presence of the entry is what makes the node
+a character, so a default config still writes. `CharacterPlaySession` turns it
+into a live controller, borrowing the world `PhysicsPlaySession` built exactly
+as the conveyor and the grains do. A character's subtree is excluded from the
+rigid-body pass (a capsule already occupies that space) and from the animation
+player (its clips belong to the controller, which crossfades between them by
+name).
+
+Without PhysX the section still authors and saves, and says so; the animation
+player then runs the character's clips itself rather than leaving it in its
+bind pose.
 
 ### Robots (URDF) in `userData`
 

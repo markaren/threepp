@@ -18,6 +18,7 @@ action authored in one file play correctly on the armature from another file
 """
 
 import bpy, sys, os, glob, json, struct, math, addon_utils
+from mathutils import Vector
 
 # Textures are downscaled to <= this (snapped to a power of two) and JPEG-packed.
 # Mixamo characters ship 2K PNGs; at TPS distance 1K is ample, and POT sizes
@@ -71,9 +72,14 @@ if character:
             arm = o
         elif o.type == 'MESH':
             mesh_objs.append(o)
+    # The character file's own action is the bind pose sampled over two frames.
+    # It is not a clip, and shipping it would put a 0.07 s nothing at the FRONT
+    # of the exported list — which is exactly what "play the first clip" picks
+    # up. Drop it; the rest pose the skin binds against comes from the
+    # armature, not from an action.
     for a in (set(bpy.data.actions) - before):
-        a.name = "base_" + os.path.splitext(character)[0]
-        a.use_fake_user = True
+        log("  - dropping the character's own bind action", a.name)
+        bpy.data.actions.remove(a)
     log("character armature:", arm.name if arm else None,
         "| meshes:", [m.name for m in mesh_objs])
     if arm:
@@ -114,6 +120,62 @@ for fbx in sorted(glob.glob(os.path.join(src_dir, "*.fbx"))):
 log("collected", len(collected), "clips")
 log("scene objects at export:", [o.name for o in bpy.context.scene.objects])
 log("actions in file:", len(bpy.data.actions))
+
+# --- measure what each clip actually travels ---------------------------------
+# A clip is authored at ONE speed. Playing it at 1x while the character moves at
+# some other speed is precisely what foot-sliding is, so the consumer needs the
+# authored number — and the only honest source for it is the clip itself. Read
+# here from the Hips bone's WORLD displacement across the clip (armature scale
+# and orientation included), so the figures are metres per second in the same
+# frame the exported GLB lands in.
+#
+# A turn clip gives itself away by the other column: near-zero travel and a
+# large net yaw.
+def measure_clips(arm):
+    if arm is None:
+        return
+    root = next((b for b in arm.pose.bones if b.parent is None), None)
+    if root is None:
+        return
+    scene = bpy.context.scene
+    fps = scene.render.fps / scene.render.fps_base
+    was = arm.animation_data.action if arm.animation_data else None
+    if arm.animation_data is None:
+        arm.animation_data_create()
+
+    def sample(frame):
+        scene.frame_set(int(round(frame)))
+        bpy.context.view_layer.update()
+        pb = arm.pose.bones[root.name]
+        m = arm.matrix_world @ pb.matrix
+        # Bone X in world, flattened: a stable heading reference for the hips.
+        ax = m.to_3x3() @ Vector((1.0, 0.0, 0.0))
+        return (arm.matrix_world @ pb.head), math.degrees(math.atan2(ax.y, ax.x))
+
+    log(f"  {'clip':<26}{'dur s':>7}{'travel m':>10}{'m/s':>8}{'net yaw':>9}")
+    for a in sorted(bpy.data.actions, key=lambda x: x.name):
+        arm.animation_data.action = a
+        try:
+            if a.slots:
+                arm.animation_data.action_slot = a.slots[0]
+        except Exception:
+            pass
+        f0, f1 = a.frame_range
+        dur = max((f1 - f0) / fps, 1e-6)
+        p0, y0 = sample(f0)
+        p1, y1 = sample(f1)
+        d = p1 - p0
+        travel = math.hypot(d.x, d.y)
+        dyaw = (y1 - y0 + 180.0) % 360.0 - 180.0
+        log(f"  {a.name:<26}{dur:7.2f}{travel:10.3f}{travel / dur:8.2f}{dyaw:8.0f}°")
+    if was is not None:
+        arm.animation_data.action = was
+
+
+try:
+    measure_clips(arm)
+except Exception as e:
+    log("clip measurement failed (harmless):", e)
 
 # --- shrink textures: downscale to POT <= TARGET_TEX -------------------------
 def pot(n):

@@ -522,6 +522,7 @@ set(sources
         "threepp/extras/editor/AnimationConfig.cpp"
         "threepp/extras/editor/AnimationPlaySession.cpp"
         "threepp/extras/editor/ArticulationConfig.cpp"
+        "threepp/extras/editor/CharacterConfig.cpp"
         "threepp/extras/editor/CommandStack.cpp"
         "threepp/extras/editor/ConveyorConfig.cpp"
         "threepp/extras/editor/EditorCommands.cpp"

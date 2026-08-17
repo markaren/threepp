@@ -98,6 +98,9 @@ namespace threepp::editor {
     // The play-mode grain piles. Forward-declared for both reasons at once: it
     // includes PhysicsPlaySession (the whole PhysX SDK) and the particle types.
     class GranularPlaySession;
+    // The play-mode character controllers. Forward-declared for the first
+    // reason (it includes PhysicsPlaySession, hence the whole PhysX SDK).
+    class CharacterPlaySession;
     // PhysX-free (the PhysX half is PhysxSensorPlaySession, constructed in
     // EditorApp.cpp), but still heavy — it pulls in the depth/lidar sensors and
     // the renderer, which the panels have no business recompiling against.
@@ -134,6 +137,12 @@ namespace threepp::editor {
             bool play = false;
             // Optional robot for the selftest's URDF pass.
             std::filesystem::path urdf;
+            // Optional rigged model for the selftest's CHARACTER pass. Without
+            // it that section builds a synthetic rig with known clip speeds
+            // (which is what CI runs); with it, the same checks run against a
+            // real asset — threepp_data's xbot.glb is the one it was written
+            // for — and the pass writes a photograph of the thing walking.
+            std::filesystem::path character;
             // Light the scene from this .hdr / .exr on start, as File > Set Environment does.
             // A document cannot carry a float environment of its own (its images go through the
             // 8-bit ImageLoader), so without this a --screenshot run could never be lit the way
@@ -267,6 +276,11 @@ namespace threepp::editor {
         // geometry is derived from the picks unless overridden. See
         // VehicleConfig.
         void drawVehicleSection(Object3D& object);
+        // Offered on any node with a SkinnedMesh under it; open once the node
+        // is an authored character. Everything it shows about clips is a
+        // READOUT of what CharacterConfig::derived matched, with a combo to
+        // override the one it got wrong.
+        void drawCharacterSection(Object3D& object);
         // Sensor authoring: type, rate, seed and the per-type noise model, all
         // written into userData["sensor"]. Fields for the types you are not on
         // are hidden, never dropped — see SensorConfig. The host gates the type
@@ -888,6 +902,33 @@ namespace threepp::editor {
         // forward/reverse.
         void updateVehicleTeleop(float dt);
 
+        // --- character teleop ------------------------------------------------
+        // While a played scene has characters, W/S walk and backpedal along the
+        // VIEW's forward, A/D strafe across it, Shift runs and Space jumps —
+        // and the character turns to face the way the camera looks, which is
+        // what makes a locomotion pack's strafe and backward clips play at all.
+        // Polled every frame before the sessions step, pushed through
+        // CharacterPlaySession::drive.
+        void updateCharacterTeleop(float dt);
+        // Keeps the played character in frame: the orbit target chases it and
+        // the camera rides along rigidly, so the user's own orbiting, panning
+        // and zooming still compose on top. Deliberately NOT the heading-
+        // rotating updateFollow — a character that faces the camera and a
+        // camera that rotates with the character chase each other in a circle.
+        // Yields entirely while the user's own Follow Selection is on.
+        void updateCharacterCamera(float dt);
+        // Where the view stood before the chase above took it over, and put
+        // back by Stop. The chase engages BY ITSELF (a character in the played
+        // scene is enough), so unlike Follow Selection it is not a standing
+        // choice the user made — leaving the camera wherever the character
+        // wandered to would be an automatic behaviour quietly rewriting editor
+        // state. Stop restores the scene; it restores the view with it.
+        void restoreCharacterCamera();
+        // The yaw the viewport camera is looking along, three.js convention
+        // (atan2(x, z)). What "forward" means to the character teleop.
+        // Non-const only because viewCamera() is (it picks the live camera).
+        [[nodiscard]] float viewYaw();
+
         // --- animation preview ---------------------------------------------
         // Edit-mode preview of one clip on one subtree. Every touched value
         // is recorded up front and put back on stop; no undo entries appear.
@@ -1280,6 +1321,11 @@ namespace threepp::editor {
         // the PhysX guard, so its stop comes before physics' — the world is
         // still alive to release the particle actor into.
         std::shared_ptr<GranularPlaySession> granularSession_;
+        // The capsule controllers an authored character walks on during Play,
+        // in the world physics_ built. Registered inside the PhysX guard after
+        // the grains, so its stop comes first and the controller manager is
+        // released while its scene is still alive.
+        std::shared_ptr<CharacterPlaySession> characterSession_;
         // Scanned surfaces made solid and sensable during Play. Registered
         // inside the PhysX guard right after the grains, for the same reason:
         // its colliders are cooked into the world physics_ built, and stopping
@@ -1326,6 +1372,23 @@ namespace threepp::editor {
         // Teleop wrote controls last frame, so one all-keys-released frame
         // still writes the zeros (and nothing after it does).
         bool vehicleTeleopActive_ = false;
+        // A character is being played this frame: same rule and same keys as
+        // the vehicle above, plus Shift to run and Space to jump. Unlike the
+        // vehicle's, the demand is written EVERY frame — letting go of W has to
+        // decelerate the character to a stop, and silence would leave it
+        // sprinting. Recomputed every frame; always false without PhysX.
+        bool characterDriving_ = false;
+        // Teleop wrote a demand last frame, so one all-keys-released frame
+        // still writes the zeros — and nothing after it does. Without the
+        // second half, a silent frame would overwrite whatever else is driving
+        // the character (a script, a test) with "stand still" forever.
+        bool characterTeleopActive_ = false;
+        // Set the first frame the chase camera actually moves the view, so a
+        // played scene with no character never touches it (see
+        // restoreCharacterCamera).
+        bool characterCameraSaved_ = false;
+        Vector3 characterCameraPosition_;
+        Vector3 characterCameraTarget_;
 
         // Script debug draw. Same in-place-rewrite contract as the collider
         // lines above, plus a colour attribute (each call picks its own). No

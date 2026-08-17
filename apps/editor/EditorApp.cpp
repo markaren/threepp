@@ -36,6 +36,7 @@
 
 #include "threepp/extras/editor/SensorPlaySession.hpp"
 #ifdef THREEPP_EDITOR_WITH_PHYSX
+#include "threepp/extras/editor/CharacterPlaySession.hpp"
 #include "threepp/extras/editor/ConveyorPlaySession.hpp"
 #include "threepp/extras/editor/GranularPlaySession.hpp"
 #include "threepp/extras/editor/PhysicsPlaySession.hpp"
@@ -699,9 +700,26 @@ EditorApp::EditorApp(const Options& options)
     splatSurfaceSession_->setLogger([this](const std::string& message) { log(message); });
     play_.addSession(splatSurfaceSession_);
 #endif
+
+    // Characters, last of the world-borrowers: each one is a capsule controller
+    // in the world physics_ built, so the same borrow-and-stop-first ordering
+    // applies. It updates AFTER the physics step (registration order), which is
+    // what a kinematic sweep wants — the world it sweeps through has already
+    // settled this frame.
+    characterSession_ = std::make_shared<CharacterPlaySession>();
+    characterSession_->setPhysics(physics_.get());
+    characterSession_->setLogger([this](const std::string& message) { log(message); });
+    play_.addSession(characterSession_);
 #endif
 
-    play_.addSession(std::make_shared<AnimationPlaySession>());
+    {
+        auto animations = std::make_shared<AnimationPlaySession>();
+        // Defer authored characters to the session registered above — but only
+        // when there IS one. Without PhysX nothing else would drive them, and
+        // an authored character would stand in its bind pose.
+        animations->setSkipCharacters(characterSession_ != nullptr);
+        play_.addSession(animations);
+    }
     // Ambient flocks. Dependency-free (no PhysX, no renderer coupling) and
     // stateless between plays. The mesh filter is NOT optional here: the
     // editor scene carries overlay meshes (gizmo handles, light markers,
@@ -889,7 +907,12 @@ void EditorApp::frame(float dt) {
 
     // Before the sessions step, so this frame's step drives on this frame's keys.
     updateVehicleTeleop(dt);
+    updateCharacterTeleop(dt);
     play_.update(dt);
+    // And after it, so the camera chases where the character ended up rather
+    // than where it started — a one-frame-stale chase reads as lag on top of
+    // the lag the filter is deliberately adding.
+    updateCharacterCamera(dt);
     // Before anything reads the graph: the Generator section asked for this last
     // frame, and it replaces a node the panel was drawing from.
     const auto resolveCarrier = [this](const std::string& uuid) -> Object3D* {
@@ -4205,6 +4228,110 @@ void EditorApp::updateVehicleTeleop(float dt) {
 #endif
 }
 
+float EditorApp::viewYaw() {
+
+    // The direction the view LOOKS, flattened to the ground plane, in the
+    // convention every yaw in this codebase uses (yaw of +Z is zero). Read
+    // from camera-to-target rather than from the camera's quaternion so a
+    // panned or orbited view still answers with what is on screen.
+    Vector3 forward;
+    forward.subVectors(orbit_->target, viewCamera().position);
+    forward.y = 0.f;
+    if (forward.lengthSq() < 1e-8f) return 0.f;
+    return std::atan2(forward.x, forward.z);
+}
+
+void EditorApp::updateCharacterTeleop(float dt) {
+
+    characterDriving_ = false;
+#ifdef THREEPP_EDITOR_WITH_PHYSX
+    if (!isPlaying() || !characterSession_ || characterSession_->characterCount() == 0) return;
+    // A character exists in the played scene, so the plain keys are the
+    // controls whether or not one is pressed right now — see handleShortcuts.
+    characterDriving_ = true;
+
+    // ImGui's key state, for the reason the vehicle teleop documents: the
+    // canvas's held-key set goes stale while a panel keeps focus.
+    const ImGuiIO& io = ImGui::GetIO();
+    const bool suppressed =
+            io.WantTextInput ||
+            ImGui::IsPopupOpen("", ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel) ||
+            fileBrowser_.isOpen();
+    const auto down = [&](ImGuiKey key) { return !suppressed && ImGui::IsKeyDown(key); };
+
+    CharacterPlaySession::Input input;
+    input.forward = (down(ImGuiKey_W) || down(ImGuiKey_UpArrow) ? 1.f : 0.f) -
+                    (down(ImGuiKey_S) || down(ImGuiKey_DownArrow) ? 1.f : 0.f);
+    // +strafe is the character's LEFT, which is what A asks for.
+    input.strafe = (down(ImGuiKey_A) || down(ImGuiKey_LeftArrow) ? 1.f : 0.f) -
+                   (down(ImGuiKey_D) || down(ImGuiKey_RightArrow) ? 1.f : 0.f);
+    input.run = !suppressed && io.KeyShift;
+    input.jump = down(ImGuiKey_Space);
+    input.viewYaw = viewYaw();
+
+    // Write while keys are involved, plus ONE released frame — the vehicle's
+    // rule and the vehicle's reason. The released frame is what decelerates
+    // the character to Idle (the session keeps applying the zero demand from
+    // then on), and stopping after it is what keeps a script or a test driving
+    // the same character from being overwritten by silence every frame.
+    const bool any = input.forward != 0.f || input.strafe != 0.f || input.run || input.jump;
+    if (!any && !characterTeleopActive_) return;
+    characterSession_->drive(input);
+    characterTeleopActive_ = any;
+#else
+    (void) dt;
+#endif
+}
+
+void EditorApp::updateCharacterCamera(float dt) {
+
+#ifdef THREEPP_EDITOR_WITH_PHYSX
+    if (!isPlaying() || !characterSession_) return;
+    // The user's own chase wins: Follow Selection is an explicit choice, and
+    // two filters pulling the same target apart is not a camera.
+    if (followSelection_) return;
+    const auto* player = characterSession_->player();
+    if (!player || !player->root) return;
+
+    // Aim at the chest rather than the feet: a target on the floor puts the
+    // horizon through the character's shins at any normal orbit pitch.
+    Vector3 world;
+    player->root->getWorldPosition(world);
+    world.y += 0.7f * player->height;
+
+    // First frame this actually takes the view over: remember where it stood,
+    // so Stop can put it back (see restoreCharacterCamera). Saved lazily
+    // rather than at startPlay, because a scene with no character must leave
+    // the view alone — and then have nothing to restore.
+    if (!characterCameraSaved_) {
+        characterCameraSaved_ = true;
+        characterCameraPosition_.copy(viewCamera().position);
+        characterCameraTarget_.copy(orbit_->target);
+    }
+
+    // Exponential approach on the same ~90 ms constant updateFollow uses, and
+    // framed the same way so the rate does not depend on the frame rate. The
+    // camera is then translated by exactly the delta the target moved, which
+    // is what leaves the user's orbit angle, pan and zoom untouched.
+    constexpr float kTau = 0.09f;
+    const float step = std::clamp(dt, 0.f, 0.1f);
+    Vector3 delta;
+    delta.subVectors(world, orbit_->target).multiplyScalar(1.f - std::exp(-step / kTau));
+    orbit_->target.add(delta);
+    viewCamera().position.add(delta);
+#else
+    (void) dt;
+#endif
+}
+
+void EditorApp::restoreCharacterCamera() {
+
+    if (!characterCameraSaved_) return;
+    characterCameraSaved_ = false;
+    viewCamera().position.copy(characterCameraPosition_);
+    orbit_->target.copy(characterCameraTarget_);
+}
+
 void EditorApp::stopPlay() {
 
     if (!isPlaying()) return;
@@ -4220,6 +4347,12 @@ void EditorApp::stopPlay() {
         return;
     }
     log("play stopped, scene restored");
+
+    // The chase camera put itself over the character; Stop puts the scene back,
+    // so the view goes back with it. Otherwise the camera is left staring at
+    // the empty ground the character walked to before being restored to where
+    // it was authored.
+    restoreCharacterCamera();
 
     // A save that arrived while playing was parked rather than committed; the
     // scene it belongs to exists again now, so take the poll off its accumulator
@@ -4315,6 +4448,9 @@ void EditorApp::handleShortcuts() {
     // Driving a played vehicle owns the same plain keys for the same reason:
     // W is the throttle, and it must not also switch the gizmo to translate.
     if (vehicleDriving_ && isPlaying() && !ctrl && !alt && !io.KeySuper) return;
+    // And a played character, for the same reason: W walks, and it must not
+    // also switch the gizmo to translate.
+    if (characterDriving_ && isPlaying() && !ctrl && !alt && !io.KeySuper) return;
 
     // --- viewpoints -------------------------------------------------------
     // The numpad bindings every 3D editor shares, with Ctrl for the opposite

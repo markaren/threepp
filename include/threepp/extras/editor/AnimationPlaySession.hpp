@@ -29,12 +29,24 @@ namespace threepp::editor {
         AnimationPlaySession();
         ~AnimationPlaySession() override;
 
+        // Leave authored characters alone: their clips belong to a
+        // CharacterPlaySession, which crossfades between them by name, and a
+        // second mixer playing "whatever clip is first" would fight it for
+        // every bone.
+        //
+        // Off by default, and set by the app that actually REGISTERED a
+        // character session — which is a PhysX-only session. A build without
+        // PhysX has nothing to defer to, and deferring anyway would leave an
+        // authored character standing in its bind pose.
+        void setSkipCharacters(bool skip) { skipCharacters_ = skip; }
+
         void start(Scene& scene) override;
         void update(float dt) override;
         void stop() override;
 
     private:
         std::vector<std::unique_ptr<AnimationMixer>> mixers_;
+        bool skipCharacters_ = false;
     };
 
 }// namespace threepp::editor

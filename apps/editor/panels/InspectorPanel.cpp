@@ -8,6 +8,7 @@
 #include "threepp/extras/editor/AcousticSurfaceConfig.hpp"
 #include "threepp/extras/editor/AnimationConfig.hpp"
 #include "threepp/extras/editor/ArticulationConfig.hpp"
+#include "threepp/extras/editor/CharacterConfig.hpp"
 #include "threepp/extras/editor/ConveyorConfig.hpp"
 #include "threepp/extras/editor/FlockConfig.hpp"
 #include "threepp/extras/editor/GeneratorConfig.hpp"
@@ -50,6 +51,7 @@
 #include "threepp/materials/interfaces.hpp"
 #include "threepp/math/MathUtils.hpp"
 #include "threepp/objects/Mesh.hpp"
+#include "threepp/objects/SkinnedMesh.hpp"
 #include "threepp/scenes/Scene.hpp"
 #include "threepp/textures/Texture.hpp"
 
@@ -288,6 +290,7 @@ void EditorApp::drawInspector() {
         drawScriptSection(*selected);
         drawPhysicsSection(*selected);
         drawVehicleSection(*selected);
+        drawCharacterSection(*selected);
         drawJointAuthoringSection(*selected);
         drawSensorSection(*selected);
 
@@ -2440,6 +2443,264 @@ void EditorApp::drawVehicleSection(Object3D& object) {
             "Susp. Damping", config.suspensionDamping, 10.f, 0.f, 100000.f, "%.0f Ns/m",
             [](VehicleConfig& c, float v) { c.suspensionDamping = v; },
             "Vehicle Suspension Damping", "damping");
+
+    ImGui::PopItemWidth();
+
+#ifndef THREEPP_EDITOR_WITH_PHYSX
+    ImGui::TextColored(theme::muted(), "Built without PhysX - authored and saved, not simulated.");
+#endif
+
+    ImGui::TreePop();
+}
+
+
+// ----------------------------------------------------------------- character
+
+void EditorApp::drawCharacterSection(Object3D& object) {
+
+    const bool authored = CharacterConfig::isCharacter(object);
+
+    // The section invites: a node with a SkinnedMesh under it is a rigged
+    // character and gets the checkbox. A box or a static prop is not, and
+    // stays uncluttered. (Clips alone are not enough — a swinging door has
+    // those too.)
+    if (!authored) {
+        bool skinned = false;
+        object.traverse([&](Object3D& node) {
+            if (!skinned && node.as<SkinnedMesh>()) skinned = true;
+        });
+        if (!skinned) return;
+    }
+
+    if (!section("Character", authored)) return;
+
+    auto* target = &object;
+
+    // Presence is the identity (CharacterConfig's rule), so the checkbox moves
+    // the whole authoring as one optional value — one undo step either way.
+    bool simulate = authored;
+    if (ImGui::Checkbox("Simulate as Character", &simulate)) {
+        const auto was = CharacterConfig::read(object);
+        commands_.execute(makeProperty<std::optional<CharacterConfig>>(
+                simulate ? "Add Character" : "Remove Character",
+                "character:" + object.uuid + ":presence",
+                [target](const std::optional<CharacterConfig>& value) {
+                    if (value) {
+                        value->write(*target);
+                    } else {
+                        CharacterConfig::erase(*target);
+                    }
+                },
+                was, simulate ? std::optional<CharacterConfig>(CharacterConfig{}) : std::nullopt));
+        document_.setDirty(true);
+    }
+    if (ImGui::IsItemHovered()) {
+        ImGui::SetTooltip("Play gives this model a PhysX capsule controller and drives\n"
+                          "its clips. W/S walk and backpedal, A/D strafe, SHIFT runs,\n"
+                          "SPACE jumps; the camera follows and the character faces it.\n"
+                          "Which clip is which is read off the clips' own root motion.");
+    }
+
+    if (!simulate) {
+        ImGui::TextColored(theme::muted(), "Not simulated as a character.");
+        ImGui::TreePop();
+        return;
+    }
+
+    auto config = CharacterConfig::read(object).value_or(CharacterConfig{});
+    const auto before = config;
+
+    const auto commit = [&](const CharacterConfig& after, const char* label, const char* field) {
+        commands_.execute(makeProperty<CharacterConfig>(
+                label, "character:" + object.uuid + ":" + field,
+                [target](const CharacterConfig& value) { value.write(*target); },
+                before, after));
+        document_.setDirty(true);
+    };
+
+    ImGui::PushItemWidth(-140 * contentScale_);
+
+    const auto geo = config.derived(object);
+
+    // --- how the body relates to the view ---------------------------------
+    if (ImGui::BeginCombo("Facing", CharacterConfig::label(config.facing))) {
+        for (const auto facing : CharacterConfig::facings) {
+            if (ImGui::Selectable(CharacterConfig::label(facing), facing == config.facing)) {
+                auto after = config;
+                after.facing = facing;
+                commit(after, "Character Facing", "facing");
+            }
+        }
+        ImGui::EndCombo();
+    }
+    if (ImGui::IsItemHovered()) {
+        ImGui::SetTooltip("Camera: the body turns to face the view, so A/D genuinely\n"
+                          "strafe and S backpedals - what a locomotion pack's side and\n"
+                          "backward clips are for.\n"
+                          "Movement: the body turns towards where it is going, so every\n"
+                          "direction plays the forward gait.");
+    }
+
+    const auto floatField = [&](const char* label, float value, float speed, float min, float max,
+                                const char* format, void (*assign)(CharacterConfig&, float),
+                                const char* action, const char* field) {
+        float edited = value;
+        const bool changed = ImGui::DragFloat(label, &edited, speed, min, max, format);
+        committed(commands_, changed, [&] {
+            auto after = config;
+            assign(after, edited);
+            commit(after, action, field);
+        });
+    };
+
+    // --- the capsule. Measured off the model while Auto is on, and shown, so
+    // the numbers Play will use are never a mystery.
+    ImGui::Spacing();
+    bool autoGeo = config.autoGeometry;
+    if (ImGui::Checkbox("Auto Capsule", &autoGeo)) {
+        auto after = config;
+        after.autoGeometry = autoGeo;
+        if (!autoGeo && geo.valid) {
+            after.height = geo.height;
+            after.radius = geo.radius;
+        }
+        commit(after, autoGeo ? "Character Auto Capsule" : "Character Manual Capsule", "autogeom");
+        config = after;
+    }
+    if (ImGui::IsItemHovered()) {
+        ImGui::SetTooltip("Measure the standing height and body radius off the model.\n"
+                          "Untick to type them instead (seeded with the derived values).");
+    }
+    if (config.autoGeometry) {
+        if (geo.valid) {
+            ImGui::TextColored(theme::muted(), "Capsule %.2f m tall, r %.2f m",
+                               static_cast<double>(geo.height), static_cast<double>(geo.radius));
+        } else {
+            ImGui::TextColored(theme::warning(), "%s", geo.problem.c_str());
+        }
+    } else {
+        floatField(
+                "Height", config.height, 0.01f, 0.2f, 5.f, "%.2f m",
+                [](CharacterConfig& c, float v) { c.height = v; },
+                "Character Height", "height");
+        floatField(
+                "Radius", config.radius, 0.005f, 0.05f, 2.f, "%.3f m",
+                [](CharacterConfig& c, float v) { c.radius = v; },
+                "Character Radius", "radius");
+    }
+
+    // --- the gait speeds, read off the clips ------------------------------
+    ImGui::Spacing();
+    bool autoSpeeds = config.autoSpeeds;
+    if (ImGui::Checkbox("Auto Speeds", &autoSpeeds)) {
+        auto after = config;
+        after.autoSpeeds = autoSpeeds;
+        if (!autoSpeeds) {
+            if (geo.slot(Gait::Walk).speed > 0.f) after.walkSpeed = geo.slot(Gait::Walk).speed;
+            if (geo.slot(Gait::Run).speed > 0.f) after.runSpeed = geo.slot(Gait::Run).speed;
+        }
+        commit(after, autoSpeeds ? "Character Auto Speeds" : "Character Manual Speeds", "autospeeds");
+        config = after;
+    }
+    if (ImGui::IsItemHovered()) {
+        ImGui::SetTooltip("Travel at the speed the walk and run clips were AUTHORED at.\n"
+                          "That is what stops the feet sliding; type your own only if\n"
+                          "you want the character faster than its animation.");
+    }
+    if (config.autoSpeeds) {
+        ImGui::TextColored(theme::muted(), "Walk %.2f m/s, run %.2f m/s",
+                           static_cast<double>(geo.slot(Gait::Walk).speed),
+                           static_cast<double>(geo.slot(Gait::Run).speed));
+    } else {
+        floatField(
+                "Walk Speed", config.walkSpeed, 0.05f, 0.1f, 20.f, "%.2f m/s",
+                [](CharacterConfig& c, float v) { c.walkSpeed = v; },
+                "Character Walk Speed", "walkspeed");
+        floatField(
+                "Run Speed", config.runSpeed, 0.05f, 0.1f, 30.f, "%.2f m/s",
+                [](CharacterConfig& c, float v) { c.runSpeed = v; },
+                "Character Run Speed", "runspeed");
+    }
+
+    // --- the always-authored scalars.
+    ImGui::Spacing();
+    floatField(
+            "Mass", config.mass, 1.f, 1.f, 500.f, "%.0f kg",
+            [](CharacterConfig& c, float v) { c.mass = v; }, "Character Mass", "mass");
+    floatField(
+            "Jump Height", config.jumpHeight, 0.01f, 0.f, 5.f, "%.2f m",
+            [](CharacterConfig& c, float v) { c.jumpHeight = v; },
+            "Character Jump Height", "jump");
+    floatField(
+            "Gravity", config.gravity, 0.1f, 0.1f, 60.f, "%.1f m/s2",
+            [](CharacterConfig& c, float v) { c.gravity = v; },
+            "Character Gravity", "gravity");
+    floatField(
+            "Step Offset", config.stepOffset, 0.005f, 0.f, 1.f, "%.3f m",
+            [](CharacterConfig& c, float v) { c.stepOffset = v; },
+            "Character Step Offset", "step");
+    floatField(
+            "Slope Limit", math::radToDeg(config.slopeLimit), 0.5f, 5.f, 85.f, "%.1f deg",
+            [](CharacterConfig& c, float v) { c.slopeLimit = math::degToRad(v); },
+            "Character Slope Limit", "slope");
+    floatField(
+            "Turn Rate", config.turnRate, 0.5f, 0.5f, 60.f, "%.1f /s",
+            [](CharacterConfig& c, float v) { c.turnRate = v; },
+            "Character Turn Rate", "turnrate");
+    floatField(
+            "Acceleration", config.accel, 0.5f, 0.5f, 60.f, "%.1f /s",
+            [](CharacterConfig& c, float v) { c.accel = v; },
+            "Character Acceleration", "accel");
+    floatField(
+            "Blend Time", config.blendTime, 0.005f, 0.f, 1.f, "%.3f s",
+            [](CharacterConfig& c, float v) { c.blendTime = v; },
+            "Character Blend Time", "blend");
+
+    // --- which clip is which -----------------------------------------------
+    // Auto-matched from each clip's own root motion (see CharacterConfig), so
+    // this list is a READOUT first and an override second: it shows what the
+    // matcher decided and at what speed, and a combo is there for the clip it
+    // got wrong.
+    ImGui::Spacing();
+    if (ImGui::TreeNodeEx("Clips", ImGuiTreeNodeFlags_SpanAvailWidth)) {
+        static constexpr const char* clipFields[kGaitCount] = {
+                "clipidle", "clipwalk", "cliprun", "clipwalkback", "cliprunback",
+                "clipstrafeleft", "clipstrafeleftfast", "clipstraferight",
+                "clipstraferightfast", "clipjump"};
+
+        for (std::size_t i = 0; i < kGaitCount; ++i) {
+            const auto& slot = geo.gaits[i];
+            const std::string matched = slot.clip ? slot.clip->name() : std::string("(none)");
+            const std::string shown =
+                    config.clips[i].empty() ? matched + "  (auto)" : config.clips[i];
+            if (ImGui::BeginCombo(CharacterConfig::gaitLabels[i], shown.c_str(),
+                                  ImGuiComboFlags_HeightLarge)) {
+                if (ImGui::Selectable("(auto)", config.clips[i].empty())) {
+                    auto after = config;
+                    after.clips[i].clear();
+                    commit(after, "Character Clip", clipFields[i]);
+                }
+                for (const auto& clip : object.animations) {
+                    if (!clip) continue;
+                    const auto name = clip->name();
+                    if (ImGui::Selectable(name.c_str(), name == config.clips[i])) {
+                        auto after = config;
+                        after.clips[i] = name;
+                        commit(after, "Character Clip", clipFields[i]);
+                    }
+                }
+                ImGui::EndCombo();
+            }
+            if (slot.clip && slot.speed > 0.f) {
+                ImGui::SameLine();
+                ImGui::TextColored(theme::muted(), "%.2f m/s", static_cast<double>(slot.speed));
+            }
+        }
+        ImGui::TreePop();
+    }
+    if (!geo.problem.empty()) {
+        ImGui::TextColored(theme::warning(), "%s", geo.problem.c_str());
+    }
 
     ImGui::PopItemWidth();
 

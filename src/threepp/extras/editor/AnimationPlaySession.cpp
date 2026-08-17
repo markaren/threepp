@@ -3,6 +3,7 @@
 
 #include "threepp/animation/AnimationMixer.hpp"
 #include "threepp/extras/editor/AnimationConfig.hpp"
+#include "threepp/extras/editor/CharacterConfig.hpp"
 #include "threepp/scenes/Scene.hpp"
 
 using namespace threepp;
@@ -17,6 +18,17 @@ void AnimationPlaySession::start(Scene& scene) {
 
     scene.traverse([this](Object3D& object) {
         if (object.animations.empty()) return;
+
+        // An authored character's clips belong to its own controller, which
+        // crossfades between them by name. A second mixer playing "whatever
+        // clip is first" over the top would fight it for every bone — so the
+        // whole subtree is left to CharacterPlaySession, when there is one
+        // (see setSkipCharacters).
+        if (skipCharacters_) {
+            for (const Object3D* o = &object; o != nullptr; o = o->parent) {
+                if (CharacterConfig::isCharacter(*o)) return;
+            }
+        }
 
         const auto config = AnimationConfig::read(object).value_or(AnimationConfig{});
         if (!config.autoplay) return;

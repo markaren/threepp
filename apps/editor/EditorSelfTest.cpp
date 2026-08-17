@@ -26,6 +26,7 @@
 #include "threepp/extras/editor/AcousticSurfaceConfig.hpp"
 #include "threepp/extras/editor/AnimationConfig.hpp"
 #include "threepp/extras/editor/ArticulationConfig.hpp"
+#include "threepp/extras/editor/CharacterConfig.hpp"
 #include "threepp/extras/editor/FlockConfig.hpp"
 #include "threepp/extras/editor/GranularConfig.hpp"
 #include "threepp/extras/editor/JointConfig.hpp"
@@ -53,6 +54,7 @@
 
 #include "threepp/extras/editor/SensorPlaySession.hpp"
 #ifdef THREEPP_EDITOR_WITH_PHYSX
+#include "threepp/extras/editor/CharacterPlaySession.hpp"
 #include "threepp/extras/editor/ConveyorPlaySession.hpp"
 #include "threepp/extras/editor/GranularPlaySession.hpp"
 #include "threepp/extras/editor/PhysicsPlaySession.hpp"
@@ -70,12 +72,15 @@
 #include "threepp/geometries/BoxGeometry.hpp"
 #include "threepp/geometries/SphereGeometry.hpp"
 #include "threepp/helpers/CameraHelper.hpp"
+#include "threepp/animation/AnimationClip.hpp"
+#include "threepp/animation/tracks/VectorKeyframeTrack.hpp"
 #include "threepp/lights/Light.hpp"
 #include "threepp/loaders/AssetSource.hpp"
 #include "threepp/materials/MeshBasicMaterial.hpp"
 #include "threepp/materials/MeshStandardMaterial.hpp"
 #include "threepp/materials/interfaces.hpp"
 #include "threepp/math/Box3.hpp"
+#include "threepp/objects/Bone.hpp"
 #include "threepp/objects/Group.hpp"
 #include "threepp/objects/LineSegments.hpp"
 #include "threepp/objects/Mesh.hpp"
@@ -166,6 +171,7 @@ namespace {
             "acoustics",
             "joints",
             "vehicle",
+            "character",
             "ortho-shading",
             "ortho-shadows",
             "collider-overlay",
@@ -7502,6 +7508,358 @@ int EditorApp::runSelfTest() {
 
         std::error_code ec;
         std::filesystem::remove(document, ec);
+    }
+
+    // --- a character WALKS, and plays the clip that matches how it moves ----
+    //
+    // The whole point of CharacterConfig is that nothing has to be typed: the
+    // capsule is measured off the model and every clip's ROLE is read off its
+    // own root motion. So this section builds a rig whose clips are known
+    // quantities — a 1.4 m/s walk, a 4 m/s run, a backpedal, two strafes, an
+    // idle, a jump, and one deliberately RAMPING "start walking" that must be
+    // rejected — and then asserts the matcher put each one where it belongs
+    // before ever pressing Play.
+    //
+    // With --character=PATH the same section runs against a real asset
+    // instead (the xbot.glb the mixamo bake produces), which is the pass that
+    // says the measurements survive a Mixamo rig's 0.01 armature scale and its
+    // rotated bone frames. The --urdf pattern, for the same reason: the editor
+    // configures standalone and must not learn where threepp_data lives.
+    if (section("character")) {
+        newScene();
+        // The chase camera yields to Follow Selection, and an earlier section
+        // may have left it on. Off, so this section exercises the chase.
+        setFollowSelection(false);
+        step(2);
+
+        // Ground to walk on: the template floor draws but has no collider.
+        auto ground = ObjectFactory::createPrimitive(Primitive::Box, document_.scene());
+        ground->name = "Ground";
+        ground->scale.set(200.f, 1.f, 200.f);
+        ground->position.set(0.f, -0.5f, 0.f);
+        {
+            PhysicsConfig config;
+            config.enabled = true;
+            config.body = PhysicsConfig::Body::Static;
+            config.shape = PhysicsConfig::Shape::Box;
+            config.write(*ground);
+        }
+        addObject(ground, document_.scene(), "Add Ground");
+        step();
+
+        Object3D* hero = nullptr;
+        std::string heroUuid;
+        const bool realAsset = !options_.character.empty();
+
+        if (realAsset) {
+            importModel(options_.character);
+            int budget = 12000;
+            while ((activeImport_ || !importQueue_.empty()) && budget-- > 0) step();
+            check(budget > 0 && !importFailed(), "the character model imported");
+            hero = selection_.get();
+            check(hero != nullptr, "and came in selected");
+        } else {
+            // --- the synthetic rig ------------------------------------------
+            // A box body 1.8 m tall and 0.3 m deep over one "Hips" bone, which
+            // is all the matcher needs: it measures the mesh for the capsule
+            // and the bone's position tracks for the clips.
+            auto rig = Group::create();
+            rig->name = "Hero";
+            auto body = ObjectFactory::createPrimitive(Primitive::Box, document_.scene());
+            body->name = "HeroBody";
+            body->scale.set(0.4f, 1.8f, 0.3f);
+            body->position.set(0.f, 0.9f, 0.f);
+            rig->add(body);
+            auto hips = Bone::create();
+            hips->name = "Hips";
+            hips->position.set(0.f, 0.9f, 0.f);
+            rig->add(hips);
+
+            // One clip per role. `travel` is (x, z) metres over `duration`, so
+            // the authored speed is |travel| / duration and the DIRECTION is
+            // what the matcher classifies on: +Z forward, +X left.
+            const auto clip = [](const std::string& name, float duration,
+                                 float dx, float dz, bool ramp = false) {
+                std::vector<float> times;
+                std::vector<float> values;
+                const int steps = ramp ? 4 : 1;
+                for (int i = 0; i <= steps; ++i) {
+                    const float u = static_cast<float>(i) / static_cast<float>(steps);
+                    // A ramp starts from a standstill and ends at speed, which
+                    // is what a "start walking" transition does — and what the
+                    // early-vs-late test must throw out.
+                    const float travelled = ramp ? u * u * u : u;
+                    times.push_back(u * duration);
+                    values.push_back(dx * travelled);
+                    values.push_back(0.9f);
+                    values.push_back(dz * travelled);
+                }
+                std::vector<std::shared_ptr<KeyframeTrack>> tracks{
+                        std::make_shared<VectorKeyframeTrack>("Hips.position", times, values)};
+                return std::make_shared<AnimationClip>(name, duration, tracks);
+            };
+            rig->animations = {
+                    clip("idle", 4.f, 0.f, 0.f),
+                    clip("walk", 1.f, 0.f, 1.4f),
+                    clip("run", 0.5f, 0.f, 2.f),
+                    clip("walkback", 1.f, 0.f, -1.1f),
+                    clip("jogback", 0.5f, 0.f, -1.3f),
+                    clip("strafeleft", 1.f, 1.2f, 0.f),
+                    clip("strafeleftfast", 0.5f, 1.6f, 0.f),
+                    clip("straferight", 1.f, -1.2f, 0.f),
+                    clip("straferightfast", 0.5f, -1.6f, 0.f),
+                    clip("jump", 1.f, 0.f, 0.f),
+                    clip("start walking", 2.f, 0.f, 2.4f, true),
+            };
+            addObject(rig, document_.scene(), "Add Hero");
+            hero = rig.get();
+        }
+        step();
+
+        if (!hero) {
+            check(false, "the character scene has a model to author");
+        } else {
+            heroUuid = hero->uuid;
+            CharacterConfig{}.write(*hero);
+            step();
+            check(CharacterConfig::isCharacter(*hero), "the model carries the character entry");
+
+            // --- what the matcher decided, before anything is simulated -----
+            const auto config = CharacterConfig::read(*hero).value_or(CharacterConfig{});
+            const auto geo = config.derived(*hero);
+            check(geo.valid, "the character geometry derives from the model");
+            check(geo.rootBone != nullptr, "and it found the rig's root bone");
+
+            const auto named = [&](Gait gait) {
+                const auto& slot = geo.slot(gait);
+                return slot.clip ? slot.clip->name() : std::string();
+            };
+            const auto speedOf = [&](Gait gait) { return geo.slot(gait).speed; };
+
+            if (realAsset) {
+                // The Mixamo pack's own numbers, measured at bake time: walking
+                // 1.67 m/s, running 4.38, walking backward 1.20, jog backward
+                // 2.38, the strafes 1.73 slow and ~4.5 fast. Asserted as BANDS,
+                // because what is being tested is that the 0.01 armature scale
+                // and the rotated bone frames come out in metres per second —
+                // not the animator's exact keyframes.
+                // A rigged glTF character measures through its BONES, never
+                // through the skinned mesh's own node — whose transform the
+                // spec says to ignore, and which on a Mixamo rig carries the
+                // armature's 0.01 unit scale. Get that wrong and a 1.8 m
+                // person gets an 18 mm capsule that walks under the furniture.
+                check(geo.height > 1.6f && geo.height < 2.f,
+                      "the capsule is a person's height, not the armature's unit scale");
+                check(geo.radius > 0.2f && geo.radius < 0.5f,
+                      "with a body-sized radius rather than the T-pose's arm span");
+                check(speedOf(Gait::Walk) > 1.f && speedOf(Gait::Walk) < 2.5f,
+                      "the walk clip measures a walking pace in m/s");
+                check(speedOf(Gait::Run) > speedOf(Gait::Walk) * 1.5f,
+                      "and the run clip is clearly faster than the walk");
+                check(speedOf(Gait::WalkBack) > 0.5f && speedOf(Gait::StrafeLeft) > 0.5f &&
+                              speedOf(Gait::StrafeRight) > 0.5f,
+                      "backward and both strafes were identified by direction");
+                check(!named(Gait::Idle).empty() && named(Gait::Idle).find("idle") != std::string::npos,
+                      "and the idle clip was found by name");
+                std::cout << "[selftest] character clips:";
+                for (std::size_t i = 0; i < kGaitCount; ++i) {
+                    std::cout << ' ' << CharacterConfig::gaitLabels[i] << '='
+                              << (geo.gaits[i].clip ? geo.gaits[i].clip->name() : "-");
+                }
+                std::cout << std::endl;
+            } else {
+                check(std::abs(geo.height - 1.8f) < 0.02f, "the capsule height is the model's");
+                check(std::abs(geo.radius - 0.306f) < 0.02f,
+                      "and its radius comes from the model's depth, not its arm span");
+
+                check(named(Gait::Walk) == "walk" && named(Gait::Run) == "run",
+                      "the slowest and fastest forward clips became walk and run");
+                check(std::abs(speedOf(Gait::Walk) - 1.4f) < 0.05f &&
+                              std::abs(speedOf(Gait::Run) - 4.f) < 0.05f,
+                      "measured at the speeds they were authored at");
+                check(named(Gait::WalkBack) == "walkback" && named(Gait::RunBack) == "jogback",
+                      "the backward pair was identified by direction alone");
+                check(named(Gait::StrafeLeft) == "strafeleft" &&
+                              named(Gait::StrafeLeftFast) == "strafeleftfast",
+                      "and so was the left strafe pair");
+                check(named(Gait::StrafeRight) == "straferight" &&
+                              named(Gait::StrafeRightFast) == "straferightfast",
+                      "and the right");
+                check(named(Gait::Idle) == "idle" && named(Gait::Jump) == "jump",
+                      "idle and jump were picked by name, since a ruler cannot tell them apart");
+
+                bool rampUsed = false;
+                for (const auto& slot : geo.gaits) {
+                    if (slot.clip && slot.clip->name() == "start walking") rampUsed = true;
+                }
+                check(!rampUsed,
+                      "the ramping transition clip was rejected - its average speed is one "
+                      "no controller ever holds");
+            }
+
+#ifdef THREEPP_EDITOR_WITH_PHYSX
+            // --- Play: it walks, and it walks where the view points ----------
+            // stepFixed throughout: "how far did it get" is a question about
+            // simulated time, and the controls go through the same entry point
+            // the W key does.
+            // --- it can be CLICKED ------------------------------------------
+            // A rigged character is a SkinnedMesh, and glTF says a skinned
+            // mesh's node transform is ignored — so the raycaster's bind-pose
+            // reject volume, pushed through a Mixamo armature's 0.01 scale, is
+            // a centimetre-wide bubble at the origin that no click ever hits.
+            // Selecting the model in the viewport is how a user reaches the
+            // Character section in the first place, so it gets a check.
+            {
+                Vector3 chest;
+                hero->getWorldPosition(chest);
+                chest.y += 1.f;
+                orbit_->target.copy(chest);
+                viewCamera().position.set(chest.x, chest.y + 0.2f, chest.z + 4.f);
+                selectObject(nullptr);
+                step(2);
+
+                const auto* viewport = ImGui::GetMainViewport();
+                auto* picked = pickAt(viewport->Pos.x + viewport->Size.x * 0.5f,
+                                      viewport->Pos.y + viewport->Size.y * 0.5f, false);
+                bool underHero = picked == hero;
+                for (const Object3D* o = picked; o && !underHero; o = o->parent) {
+                    if (o == hero) underHero = true;
+                }
+                check(picked != nullptr && underHero,
+                      "clicking the character in the viewport selects it");
+                selectObject(hero);
+                step();
+            }
+
+            // Where the view stands before Play. The chase camera takes it
+            // over by itself, so Stop owes it back — see the check at the end.
+            const Vector3 cameraBefore = viewCamera().position;
+            const Vector3 targetBefore = orbit_->target;
+
+            startPlay();
+            stepFixed(2);
+            check(isPlaying(), "Play starts with an authored character in the scene");
+            check(characterSession_ && characterSession_->characterCount() == 1,
+                  "the session built one capsule controller");
+
+            auto* playedHero = findByUuid(document_.scene(), heroUuid);
+            check(playedHero != nullptr, "the played scene still has the character");
+
+            const auto drive = [&](float forward, float strafe, bool run, bool jump,
+                                   float viewYawRad, int frames) {
+                CharacterPlaySession::Input input;
+                input.forward = forward;
+                input.strafe = strafe;
+                input.run = run;
+                input.jump = jump;
+                input.viewYaw = viewYawRad;
+                for (int i = 0; i < frames; ++i) {
+                    characterSession_->drive(input);
+                    stepFixed(1);
+                }
+            };
+
+            // Two seconds of walking with the view looking along +Z.
+            const float startZ = playedHero ? playedHero->position.z : 0.f;
+            drive(1.f, 0.f, false, false, 0.f, 120);
+            const float walkedZ = playedHero ? playedHero->position.z - startZ : 0.f;
+            check(walkedZ > 1.5f, "holding forward walked the character several metres");
+            {
+                const auto* played = characterSession_->player();
+                check(played != nullptr && played->grounded,
+                      "and it stayed on the ground the whole way");
+                // A clip is actually playing, and the walk role resolved — the
+                // demanded speed IS the walk clip's own, so that is the one
+                // the picker had to reach for.
+                check(played != nullptr && played->current != nullptr &&
+                              played->geo.slot(Gait::Walk).clip != nullptr,
+                      "with a locomotion clip playing");
+                // The anti-foot-slide invariant, stated as a number: the
+                // character travels at the WALK CLIP'S OWN speed, so the clip
+                // plays at ~1x and each footfall lands where the ground is
+                // moving. A still photograph cannot show sliding; this can.
+                check(played != nullptr && played->walkSpeed > 0.f &&
+                              std::abs(played->speed() - played->walkSpeed) <
+                                      0.15f * played->walkSpeed,
+                      "travelling at the walk clip's own authored speed");
+            }
+
+            // Now run, and cover more ground in the same time.
+            const float runFrom = playedHero ? playedHero->position.z : 0.f;
+            drive(1.f, 0.f, true, false, 0.f, 120);
+            const float ranZ = playedHero ? playedHero->position.z - runFrom : 0.f;
+            check(ranZ > walkedZ * 1.4f, "and Shift runs, covering noticeably more ground");
+
+            // Strafing goes SIDEWAYS in the view's frame while the body keeps
+            // facing the view — which is the whole reason the strafe clips
+            // exist.
+            const float strafeFromX = playedHero ? playedHero->position.x : 0.f;
+            drive(0.f, 1.f, false, false, 0.f, 90);
+            const float strafedX = playedHero ? playedHero->position.x - strafeFromX : 0.f;
+            check(strafedX > 0.8f, "A strafes to the character's left, across the view");
+            {
+                const auto* played = characterSession_->player();
+                check(played != nullptr &&
+                              std::abs(std::remainder(played->yaw, math::TWO_PI)) < 0.2f,
+                      "and the body still faces the way the camera looks");
+            }
+
+            // Turn the view a quarter turn: forward now means world +X.
+            const float turnFromX = playedHero ? playedHero->position.x : 0.f;
+            drive(1.f, 0.f, false, false, math::PI * 0.5f, 120);
+            check(playedHero && playedHero->position.x - turnFromX > 1.f,
+                  "turning the view turns what forward means");
+
+            // Photographs, because a state machine passing says nothing about
+            // whether the thing on screen looks like a person walking. One per
+            // gait, all from the same side-on vantage so the four are
+            // comparable: what should differ between them is the POSE, not the
+            // framing.
+            if (realAsset) {
+                const auto pose = [&](const char* tag, float forward, float strafe, bool run) {
+                    // Settle into the gait first, then frame and shoot: the
+                    // crossfade is 0.18 s and a photograph taken during it is
+                    // of neither clip.
+                    drive(forward, strafe, run, false, 0.f, 45);
+                    const Vector3 at = playedHero ? playedHero->position : Vector3();
+                    orbit_->target.set(at.x, 0.9f, at.z);
+                    viewCamera().position.set(at.x + 3.6f, 1.5f, at.z + 0.6f);
+                    drive(forward, strafe, run, false, 0.f, 2);
+                    shootTo(std::filesystem::temp_directory_path() /
+                            (std::string("threepp_editor_character_") + tag + ".png"));
+                };
+                pose("walk", 1.f, 0.f, false);
+                pose("run", 1.f, 0.f, true);
+                pose("strafe", 0.f, 1.f, false);
+                pose("back", -1.f, 0.f, false);
+                // And the one the reader looks at first: three-quarter view,
+                // walking.
+                drive(1.f, 0.f, false, false, 0.f, 45);
+                const Vector3 at = playedHero ? playedHero->position : Vector3();
+                orbit_->target.set(at.x, 1.f, at.z);
+                viewCamera().position.set(at.x + 2.6f, 1.8f, at.z + 3.2f);
+                drive(1.f, 0.f, false, false, 0.f, 2);
+                shootTo(std::filesystem::temp_directory_path() / "threepp_editor_character.png");
+            }
+
+            stopPlay();
+            step(2);
+            auto* restored = findByUuid(document_.scene(), heroUuid);
+            check(restored != nullptr && restored->position.length() < 0.01f,
+                  "and Stop puts the character back where it was authored");
+            // The chase moved the view several metres following the character
+            // (and the photo passes moved it further still). Stop restores the
+            // scene, so it restores the view with it — otherwise the camera is
+            // left staring at empty ground.
+            check(viewCamera().position.distanceTo(cameraBefore) < 0.01f &&
+                          orbit_->target.distanceTo(targetBefore) < 0.01f,
+                  "and puts the camera back where it stood before Play");
+#else
+            std::cout << "[selftest] SKIP built without PhysX - the character play block "
+                         "did not run"
+                      << std::endl;
+#endif
+        }
     }
 
     // --- the ortho view SHADES like the perspective one --------------------
