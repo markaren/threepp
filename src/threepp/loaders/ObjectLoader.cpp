@@ -680,6 +680,35 @@ namespace {
             getFloat("threeppDetailRoughStrength", m->detailRoughStrength);
         }
 
+        // Three.js r129 keys, but with no setValue() entry on the concrete
+        // materials — applied directly like the threepp-only fields above.
+        if (auto* m = dynamic_cast<MaterialWithMorphTargets*>(&material)) {
+            if (j.contains("morphTargets") && j["morphTargets"].is_boolean()) m->morphTargets = j["morphTargets"].get<bool>();
+            if (j.contains("morphNormals") && j["morphNormals"].is_boolean()) m->morphNormals = j["morphNormals"].get<bool>();
+        }
+
+        if (auto* m = dynamic_cast<MaterialWithTerrainMaps*>(&material)) {
+            getTexture("threeppTerrainWeightMap", m->terrainWeightMap);
+            getTexture("threeppTerrainNormalMap", m->terrainNormalMap);
+            for (int i = 0; i < MaterialWithTerrainMaps::kTerrainBands; i++) {
+                const auto suffix = std::to_string(i);
+                getTexture(("threeppTerrainBandAlbedo" + suffix).c_str(), m->terrainBandAlbedo[i]);
+                getTexture(("threeppTerrainBandNormalRough" + suffix).c_str(), m->terrainBandNormalRough[i]);
+            }
+            const auto getFloats = [&](const char* key, auto& target) {
+                if (!j.contains(key) || !j[key].is_array()) return;
+                const auto& arr = j[key];
+                for (size_t i = 0; i < target.size() && i < arr.size(); i++) {
+                    if (arr[i].is_number()) target[i] = arr[i].get<float>();
+                }
+            };
+            getFloats("threeppTerrainBandRepeat", m->terrainBandRepeat);
+            getFloats("threeppTerrainBandRoughness", m->terrainBandRoughness);
+            getFloat("threeppTerrainBandStrength", m->terrainBandStrength);
+            getFloat("threeppTerrainBandNormalScale", m->terrainBandNormalScale);
+            getFloat("threeppTerrainBandRoughStrength", m->terrainBandRoughStrength);
+            getFloat("threeppTerrainHeightBlend", m->terrainHeightBlend);
+        }
         if (auto* m = dynamic_cast<MaterialWithTranslucency*>(&material)) {
             getFloat("threeppTranslucency", m->translucency);
             if (j.contains("threeppTranslucencyColor") && j["threeppTranslucencyColor"].is_number()) {

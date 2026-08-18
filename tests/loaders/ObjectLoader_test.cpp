@@ -1023,6 +1023,8 @@ TEST_CASE("threepp-only material fields survive the round-trip") {
 
     auto material = MeshStandardMaterial::create();
     material->textureAnimatedHint = true;
+    material->morphTargets = true;
+    material->morphNormals = true;
     material->detailRepeat = 3.5f;
     material->detailStrength = 0.25f;
     material->detailNormalScale = 0.75f;
@@ -1041,12 +1043,71 @@ TEST_CASE("threepp-only material fields survive the round-trip") {
     REQUIRE(parsedMaterial != nullptr);
 
     CHECK(parsedMaterial->textureAnimatedHint);
+    CHECK(parsedMaterial->morphTargets);
+    CHECK(parsedMaterial->morphNormals);
     CHECK_THAT(parsedMaterial->detailRepeat, WithinAbs(3.5f, 1e-5));
     CHECK_THAT(parsedMaterial->detailStrength, WithinAbs(0.25f, 1e-5));
     CHECK_THAT(parsedMaterial->detailNormalScale, WithinAbs(0.75f, 1e-5));
     CHECK_THAT(parsedMaterial->detailRoughStrength, WithinAbs(0.4f, 1e-5));
     CHECK_THAT(parsedMaterial->translucency, WithinAbs(0.6f, 1e-5));
     CHECK(parsedMaterial->translucencyColor.getHex() == 0x22aa44);
+}
+
+
+TEST_CASE("Terrain splat material survives the round-trip") {
+
+    // Regression: MaterialWithTerrainMaps was absent from both serializer
+    // cascades, so a splat-terrain material saved to JSON/.tpz came back as a
+    // plain standard material with every band map null.
+    auto makeTexture = [](unsigned char v) {
+        const std::vector<unsigned char> px(2 * 2 * 4, v);
+        return DataTexture::create(px, 2, 2);
+    };
+
+    auto material = MeshStandardMaterial::create();
+    material->terrainWeightMap = makeTexture(10);
+    material->terrainNormalMap = makeTexture(20);
+    material->terrainBandAlbedo[0] = makeTexture(30);
+    material->terrainBandAlbedo[2] = makeTexture(40);// sparse on purpose — gaps must stay gaps
+    material->terrainBandNormalRough[0] = makeTexture(50);
+    material->terrainBandRepeat = {1.5f, 2.5f, 3.5f, 4.5f};
+    material->terrainBandRoughness = {0.1f, 0.2f, 0.3f, 0.4f};
+    material->terrainBandStrength = 0.8f;
+    material->terrainBandNormalScale = 1.25f;
+    material->terrainBandRoughStrength = 0.35f;
+    material->terrainHeightBlend = 9.f;
+    REQUIRE(material->terrainMapsActive());
+
+    auto mesh = Mesh::create(makeDataGeometry(), material);
+
+    ObjectExporter exporter;
+    ObjectLoader loader;
+    auto parsed = loader.parse(exporter.toJson(*mesh));
+    REQUIRE(parsed != nullptr);
+
+    auto parsedMaterial = std::dynamic_pointer_cast<MeshStandardMaterial>(parsed->material());
+    REQUIRE(parsedMaterial != nullptr);
+
+    REQUIRE(parsedMaterial->terrainWeightMap != nullptr);
+    CHECK(parsedMaterial->terrainWeightMap->uuid() == material->terrainWeightMap->uuid());
+    REQUIRE(parsedMaterial->terrainNormalMap != nullptr);
+    REQUIRE(parsedMaterial->terrainBandAlbedo[0] != nullptr);
+    CHECK(parsedMaterial->terrainBandAlbedo[1] == nullptr);
+    REQUIRE(parsedMaterial->terrainBandAlbedo[2] != nullptr);
+    CHECK(parsedMaterial->terrainBandAlbedo[2]->uuid() == material->terrainBandAlbedo[2]->uuid());
+    CHECK(parsedMaterial->terrainBandAlbedo[3] == nullptr);
+    REQUIRE(parsedMaterial->terrainBandNormalRough[0] != nullptr);
+    CHECK(parsedMaterial->terrainBandNormalRough[1] == nullptr);
+
+    CHECK_THAT(parsedMaterial->terrainBandRepeat[0], WithinAbs(1.5f, 1e-5));
+    CHECK_THAT(parsedMaterial->terrainBandRepeat[3], WithinAbs(4.5f, 1e-5));
+    CHECK_THAT(parsedMaterial->terrainBandRoughness[1], WithinAbs(0.2f, 1e-5));
+    CHECK_THAT(parsedMaterial->terrainBandStrength, WithinAbs(0.8f, 1e-5));
+    CHECK_THAT(parsedMaterial->terrainBandNormalScale, WithinAbs(1.25f, 1e-5));
+    CHECK_THAT(parsedMaterial->terrainBandRoughStrength, WithinAbs(0.35f, 1e-5));
+    CHECK_THAT(parsedMaterial->terrainHeightBlend, WithinAbs(9.f, 1e-5));
+
+    CHECK(parsedMaterial->terrainMapsActive());
 }
 
 

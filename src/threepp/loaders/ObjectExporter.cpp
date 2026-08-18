@@ -636,6 +636,21 @@ namespace {
             data["threeppDetailNormalScale"] = m->detailNormalScale;
             data["threeppDetailRoughStrength"] = m->detailRoughStrength;
         }
+        if (auto* m = dynamic_cast<MaterialWithTerrainMaps*>(&material)) {
+            writeTextureSlot(data, "threeppTerrainWeightMap", m->terrainWeightMap, meta);
+            writeTextureSlot(data, "threeppTerrainNormalMap", m->terrainNormalMap, meta);
+            for (int i = 0; i < MaterialWithTerrainMaps::kTerrainBands; i++) {
+                const auto suffix = std::to_string(i);
+                writeTextureSlot(data, ("threeppTerrainBandAlbedo" + suffix).c_str(), m->terrainBandAlbedo[i], meta);
+                writeTextureSlot(data, ("threeppTerrainBandNormalRough" + suffix).c_str(), m->terrainBandNormalRough[i], meta);
+            }
+            data["threeppTerrainBandRepeat"] = m->terrainBandRepeat;
+            data["threeppTerrainBandRoughness"] = m->terrainBandRoughness;
+            data["threeppTerrainBandStrength"] = m->terrainBandStrength;
+            data["threeppTerrainBandNormalScale"] = m->terrainBandNormalScale;
+            data["threeppTerrainBandRoughStrength"] = m->terrainBandRoughStrength;
+            data["threeppTerrainHeightBlend"] = m->terrainHeightBlend;
+        }
         if (auto* m = dynamic_cast<MaterialWithTranslucency*>(&material)) {
             data["threeppTranslucency"] = m->translucency;
             data["threeppTranslucencyColor"] = hex(m->translucencyColor);
@@ -680,6 +695,12 @@ namespace {
         }
         if (auto* m = dynamic_cast<MaterialWithFlatShading*>(&material)) {
             data["flatShading"] = m->flatShading;
+        }
+        if (auto* m = dynamic_cast<MaterialWithMorphTargets*>(&material)) {
+            // r129 keys. The GL program compiles morph support from these
+            // flags, so losing them freezes a morphing mesh on reload.
+            data["morphTargets"] = m->morphTargets;
+            data["morphNormals"] = m->morphNormals;
         }
         if (auto* m = dynamic_cast<MaterialWithVertexTangents*>(&material)) {
             data["vertexTangents"] = m->vertexTangents;
