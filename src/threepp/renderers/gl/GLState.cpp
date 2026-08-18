@@ -696,7 +696,7 @@ void gl::GLState::bindTexture(int glType, std::optional<int> glTexture) {
         currentBoundTextures[*currentTextureSlot] = boundTexture;
     }
 
-    auto boundTexture = currentBoundTextures.at(*currentTextureSlot);
+    auto& boundTexture = currentBoundTextures.at(*currentTextureSlot);
 
     if (boundTexture.type != glType || boundTexture.texture != glTexture) {
 
@@ -716,6 +716,26 @@ void gl::GLState::unbindTexture() {
         if (boundTexture.type) {
 
             glBindTexture(*boundTexture.type, 0);
+
+            boundTexture.type = std::nullopt;
+            boundTexture.texture = std::nullopt;
+        }
+    }
+}
+
+void gl::GLState::purgeTexture(GLint glTexture) {
+
+    // Call this whenever a texture name is deleted. GL reverts the binding to 0
+    // in every unit the name was bound to, and then hands the same name back out
+    // of glGenTextures — so a cache entry left behind here would make the *next*
+    // texture to inherit the name skip its bind and sample unit 0 instead.
+    //
+    // three.js has no equivalent and needs none: a WebGLTexture is an object
+    // identity that is never reused after deletion, so its bind cache cannot
+    // produce a false hit. GLuint names are recycled, so ours can.
+    for (auto& [slot, boundTexture] : currentBoundTextures) {
+
+        if (boundTexture.texture == glTexture) {
 
             boundTexture.type = std::nullopt;
             boundTexture.texture = std::nullopt;

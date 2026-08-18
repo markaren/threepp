@@ -328,7 +328,13 @@ void gl::GLTextures::deallocateTexture(Texture* texture) {
 
     if (!textureProperties->glInit) return;
 
+    const auto glTexture = textureProperties->glTexture.value();
+
     glDeleteTextures(1, &textureProperties->glTexture.value());
+
+    // The name is free for reuse the moment it is deleted — drop it from the
+    // bind cache or the next texture to be handed the same name is skipped.
+    state->purgeTexture(static_cast<int>(glTexture));
 
     properties->textureProperties.remove(texture);
 }
@@ -344,7 +350,11 @@ void gl::GLTextures::deallocateRenderTarget(GLRenderTarget* renderTarget) {
 
     if (textureProperties->glTexture) {
 
+        const auto glTexture = textureProperties->glTexture.value();
+
         glDeleteTextures(1, &textureProperties->glTexture.value());
+
+        state->purgeTexture(static_cast<int>(glTexture));
 
         info->memory.textures--;
     }
