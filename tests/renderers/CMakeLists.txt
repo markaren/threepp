@@ -23,6 +23,18 @@ if (THREEPP_WITH_VULKAN AND THREEPP_WITH_GLFW)
     add_test(NAME VulkanGolden_test COMMAND VulkanGolden_test)
     set_tests_properties(VulkanGolden_test PROPERTIES SKIP_RETURN_CODE 42)
 
+    # A/B probe for the analyticDirectSplit light pick. NOT a ctest: it needs
+    # two builds (old shader / new shader) to say anything, and it exists
+    # because the golden scenes above have zero analytic lights and so never
+    # execute that code path at all.
+    add_executable(VulkanShadowPick_probe VulkanShadowPick_probe.cpp)
+    target_link_libraries(VulkanShadowPick_probe PRIVATE threepp)
+    target_include_directories(VulkanShadowPick_probe PRIVATE
+            "${PROJECT_SOURCE_DIR}/src"
+            "${PROJECT_SOURCE_DIR}/examples/libs")# capture_util.hpp
+    target_compile_definitions(VulkanShadowPick_probe PRIVATE
+            DATA_FOLDER="${THREEPP_DATA_DIR}")
+
     # Multi-view deferred rendering: N cameras, one scene, one submission.
     # Parity against the primary, temporal-history independence, add/remove
     # lifecycle, the primary's overlay culling being immune to a secondary, and

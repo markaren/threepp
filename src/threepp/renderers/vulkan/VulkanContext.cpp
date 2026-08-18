@@ -633,6 +633,16 @@ namespace threepp::vulkan {
 #endif
             std::cerr << "[VulkanContext] external memory export: "
                       << (externalMemorySupported_ ? "enabled" : "unavailable") << "\n";
+
+            // Diagnostic only, and opt-in: capturing statistics changes how
+            // pipelines are compiled, so it must never be on by default.
+            if (const char* env = std::getenv("THREEPP_VULKAN_PIPELINE_STATS"); env && *env && *env != '0') {
+                pipelineStatsEnabled_ = hasExtension(exts, VK_KHR_PIPELINE_EXECUTABLE_PROPERTIES_EXTENSION_NAME);
+                std::cerr << "[VulkanContext] pipeline statistics: "
+                          << (pipelineStatsEnabled_ ? "ENABLED (diagnostic)"
+                                                    : "requested but VK_KHR_pipeline_executable_properties unavailable")
+                          << "\n";
+            }
         }
 
         // Find queue families.
@@ -697,6 +707,9 @@ namespace threepp::vulkan {
         // vulkan_beta.h, behind VK_ENABLE_BETA_EXTENSIONS.
         if (hasExtension(deviceExtensions(physicalDevice_), "VK_KHR_portability_subset")) {
             extensions.push_back("VK_KHR_portability_subset");
+        }
+        if (pipelineStatsEnabled_) {
+            extensions.push_back(VK_KHR_PIPELINE_EXECUTABLE_PROPERTIES_EXTENSION_NAME);
         }
         if (externalMemorySupported_) {
 #ifdef _WIN32
@@ -813,6 +826,16 @@ namespace threepp::vulkan {
                 fRQ.pNext = f13.pNext;// preserve any existing tail (currently null)
                 f13.pNext = &fRQ;
             }
+        }
+
+        // Diagnostic (THREEPP_VULKAN_PIPELINE_STATS): chained at the head of
+        // f13's tail so it coexists with the ray-query feature above.
+        VkPhysicalDevicePipelineExecutablePropertiesFeaturesKHR fPES{};
+        fPES.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PIPELINE_EXECUTABLE_PROPERTIES_FEATURES_KHR;
+        fPES.pipelineExecutableInfo = VK_TRUE;
+        if (pipelineStatsEnabled_) {
+            fPES.pNext = f13.pNext;
+            f13.pNext  = &fPES;
         }
 
         VkPhysicalDeviceFeatures2 features2{};
@@ -944,6 +967,56 @@ namespace threepp::vulkan {
             info.objectHandle = handle;
             info.pObjectName  = name;
             fn(device, &info);
+        }
+    }
+
+    void VulkanContext::dumpPipelineStats(VkPipeline pipe, const char* label) const {
+        if (!pipelineStatsEnabled_ || pipe == VK_NULL_HANDLE) return;
+
+        auto getProps = reinterpret_cast<PFN_vkGetPipelineExecutablePropertiesKHR>(
+                vkGetDeviceProcAddr(device_, "vkGetPipelineExecutablePropertiesKHR"));
+        auto getStats = reinterpret_cast<PFN_vkGetPipelineExecutableStatisticsKHR>(
+                vkGetDeviceProcAddr(device_, "vkGetPipelineExecutableStatisticsKHR"));
+        if (!getProps || !getStats) return;
+
+        VkPipelineInfoKHR pi{};
+        pi.sType    = VK_STRUCTURE_TYPE_PIPELINE_INFO_KHR;
+        pi.pipeline = pipe;
+
+        uint32_t nExec = 0;
+        if (getProps(device_, &pi, &nExec, nullptr) != VK_SUCCESS || nExec == 0) return;
+        std::vector<VkPipelineExecutablePropertiesKHR> execs(nExec);
+        for (auto& e : execs) e.sType = VK_STRUCTURE_TYPE_PIPELINE_EXECUTABLE_PROPERTIES_KHR;
+        getProps(device_, &pi, &nExec, execs.data());
+
+        for (uint32_t i = 0; i < nExec; ++i) {
+            VkPipelineExecutableInfoKHR ei{};
+            ei.sType           = VK_STRUCTURE_TYPE_PIPELINE_EXECUTABLE_INFO_KHR;
+            ei.pipeline        = pipe;
+            ei.executableIndex = i;
+
+            uint32_t nStats = 0;
+            if (getStats(device_, &ei, &nStats, nullptr) != VK_SUCCESS || nStats == 0) continue;
+            std::vector<VkPipelineExecutableStatisticKHR> stats(nStats);
+            for (auto& s : stats) s.sType = VK_STRUCTURE_TYPE_PIPELINE_EXECUTABLE_STATISTIC_KHR;
+            getStats(device_, &ei, &nStats, stats.data());
+
+            std::cerr << "[pipeline-stats] " << label << " / " << execs[i].name << ":\n";
+            for (const auto& s : stats) {
+                std::cerr << "    " << s.name << " = ";
+                switch (s.format) {
+                    case VK_PIPELINE_EXECUTABLE_STATISTIC_FORMAT_BOOL32_KHR:
+                        std::cerr << (s.value.b32 ? "true" : "false"); break;
+                    case VK_PIPELINE_EXECUTABLE_STATISTIC_FORMAT_INT64_KHR:
+                        std::cerr << s.value.i64; break;
+                    case VK_PIPELINE_EXECUTABLE_STATISTIC_FORMAT_UINT64_KHR:
+                        std::cerr << s.value.u64; break;
+                    case VK_PIPELINE_EXECUTABLE_STATISTIC_FORMAT_FLOAT64_KHR:
+                        std::cerr << s.value.f64; break;
+                    default: std::cerr << "?"; break;
+                }
+                std::cerr << "\n";
+            }
         }
     }
 

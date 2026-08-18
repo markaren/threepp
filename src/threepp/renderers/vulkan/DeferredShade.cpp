@@ -276,8 +276,17 @@ namespace threepp::vulkan {
         cpci.sType  = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
         cpci.stage  = stage;
         cpci.layout = pipeLayout_;
-        check(vkCreateComputePipelines(d, ctx_.pipelineCache(), 1, &cpci, nullptr, &pipe_),
+        // Diagnostic mode only (THREEPP_VULKAN_PIPELINE_STATS): ask the driver
+        // to keep per-executable statistics — register count, spill/scratch
+        // bytes, occupancy — so a shader change can be judged on what it did to
+        // the hardware rather than on wall-clock alone. The cache is bypassed
+        // here because a cached pipeline has no statistics to report.
+        const bool wantStats = ctx_.pipelineStatsEnabled();
+        if (wantStats) cpci.flags |= VK_PIPELINE_CREATE_CAPTURE_STATISTICS_BIT_KHR;
+        check(vkCreateComputePipelines(d, wantStats ? VK_NULL_HANDLE : ctx_.pipelineCache(),
+                                       1, &cpci, nullptr, &pipe_),
               "vkCreateComputePipelines(deferred_shade)");
+        ctx_.dumpPipelineStats(pipe_, "deferred_shade");
 
         // Filter + composite pipelines — GI SVGF and reflection gloss
         // reconstruction (formerly the two channels of deferred_denoise). Both

@@ -105,6 +105,22 @@ namespace threepp::vulkan {
             return externalMemorySupported_;
         }
 
+        // VK_KHR_pipeline_executable_properties — the DRIVER's own report of a
+        // pipeline's register count / scratch (spill) usage / occupancy, which
+        // is the only trustworthy way to tell whether a shader change moved
+        // occupancy rather than just wall-clock. Opt-in via
+        // THREEPP_VULKAN_PIPELINE_STATS=1 because capturing statistics forces
+        // pipelines to be compiled with an extra flag (and defeats the pipeline
+        // cache), so it is a diagnostic mode, not something to leave on.
+        bool pipelineStatsEnabled() const {
+            return pipelineStatsEnabled_;
+        }
+
+        // Print every executable's statistics for `pipe` to stdout, tagged with
+        // `label`. No-op unless pipelineStatsEnabled(). Call right after
+        // pipeline creation.
+        void dumpPipelineStats(VkPipeline pipe, const char* label) const;
+
         // Attach a debug-utils name to a Vulkan object so validation messages
         // and RenderDoc / Nsight reports identify it by label instead of by
         // raw uint64 handle. No-op when validation is off (the EXT extension
@@ -163,6 +179,7 @@ namespace threepp::vulkan {
         bool rayTracingEnabled_ = false;
         bool rayQuerySupported_ = false;
         bool externalMemorySupported_ = false;
+        bool pipelineStatsEnabled_ = false;
         VkPhysicalDeviceRayTracingPipelinePropertiesKHR rtPipelineProperties_{};
         RtFunctions rt_{};
         // Non-null only when VK_EXT_debug_utils is enabled (i.e. validation
