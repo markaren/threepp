@@ -495,11 +495,15 @@ namespace {
             const size_t pxCount = static_cast<size_t>(w) * h;
             const size_t ch = pxCount ? px.size() / pxCount : 3;// 3 (RGB) or 4 (RGBA)
             auto* dst = arr.mutable_data();
-            if (px.size() >= pxCount * ch && (ch == 3 || ch == 4)) {
+            if (px.size() >= pxCount * ch && ch == 3) {
+                // readRGBPixels hands back tightly packed RGB, so the channel
+                // pick below would be byte-for-byte a memcpy — do the memcpy.
+                std::memcpy(dst, px.data(), pxCount * 3);
+            } else if (px.size() >= pxCount * ch && ch == 4) {
                 for (size_t i = 0; i < pxCount; ++i) {
-                    dst[i * 3 + 0] = px[i * ch + 0];
-                    dst[i * 3 + 1] = px[i * ch + 1];
-                    dst[i * 3 + 2] = px[i * ch + 2];
+                    dst[i * 3 + 0] = px[i * 4 + 0];
+                    dst[i * 3 + 1] = px[i * 4 + 1];
+                    dst[i * 3 + 2] = px[i * 4 + 2];
                 }
             }
             return arr;
