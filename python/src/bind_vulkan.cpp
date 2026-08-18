@@ -129,13 +129,17 @@ namespace {
             //  - standalone/headless: there is no outer loop, so we drive the
             //    deferred frame-model ourselves (animateOnce x flush).
             if (canvas_.isInsideAnimateLoop()) {
+                // GIL released for the GPU frame. Python callbacks reachable
+                // from inside (window-resize etc.) arrive through pybind11's
+                // functional caster, which re-acquires per invocation.
+                py::gil_scoped_release release;
                 renderer_.render(scene, camera);
             } else {
-                drive_frames(scene, camera);
+                drive_frames(scene, camera);// releases the GIL itself
             }
         }
 
-        py::array_t<uint8_t> read_pixels() { return to_numpy(renderer_.readRGBPixels()); }
+        py::array_t<uint8_t> read_pixels() { return to_numpy(read_rgb_released()); }
 
         // Scene-only swapchain capture: the post-TAA / pre-overlay frame, WITHOUT
         // any sprite / ImGui overlays composited on top — what sensor pipelines
@@ -144,7 +148,7 @@ namespace {
         // copy costs only while enabled.
         void set_scene_capture(bool enabled) { renderer_.setSceneCaptureEnabled(enabled); }
         bool scene_capture() const { return renderer_.sceneCaptureEnabled(); }
-        py::array_t<uint8_t> read_scene_pixels() { return to_numpy(renderer_.readSceneRGBPixels()); }
+        py::array_t<uint8_t> read_scene_pixels() { return to_numpy(read_scene_rgb_released()); }
 
         // Viewport / scissor (forwarded to the native renderer; (x,y,w,h) overload).
         void set_viewport(int x, int y, int w, int h) { renderer_.setViewport(x, y, w, h); }
@@ -164,7 +168,7 @@ namespace {
         py::array_t<float> depth_last(Camera& camera) {
             std::vector<uint8_t> raw;
             int w = 0, h = 0, bpp = 0;
-            if (!renderer_.readGBufferAOV(VulkanRenderer::GBufferAOV::Depth, raw, w, h, bpp) ||
+            if (!read_aov_released(VulkanRenderer::GBufferAOV::Depth, raw, w, h, bpp) ||
                 w <= 0 || h <= 0) {
                 // ShapeContainer spelled out: a braced {0, 0} is ambiguous to
                 // gcc-14 (constant zeros also convert toward the buffer_info /
@@ -187,7 +191,7 @@ namespace {
         py::array_t<float> normals_last() {
             std::vector<uint8_t> raw;
             int w = 0, h = 0, bpp = 0;
-            if (!renderer_.readGBufferAOV(VulkanRenderer::GBufferAOV::Normal, raw, w, h, bpp) ||
+            if (!read_aov_released(VulkanRenderer::GBufferAOV::Normal, raw, w, h, bpp) ||
                 w <= 0 || h <= 0) {
                 return py::array_t<float>({py::ssize_t(0), py::ssize_t(0), py::ssize_t(3)});
             }
@@ -207,7 +211,7 @@ namespace {
         py::array_t<uint32_t> ids_last() {
             std::vector<uint8_t> raw;
             int w = 0, h = 0, bpp = 0;
-            if (!renderer_.readGBufferAOV(VulkanRenderer::GBufferAOV::Ids, raw, w, h, bpp) ||
+            if (!read_aov_released(VulkanRenderer::GBufferAOV::Ids, raw, w, h, bpp) ||
                 w <= 0 || h <= 0) {
                 return py::array_t<uint32_t>(py::array::ShapeContainer{0, 0});// see depth_last
             }
@@ -225,7 +229,7 @@ namespace {
         py::array_t<uint32_t> class_last() {
             std::vector<uint8_t> raw;
             int w = 0, h = 0, bpp = 0;
-            if (!renderer_.readGBufferAOV(VulkanRenderer::GBufferAOV::Ids, raw, w, h, bpp) ||
+            if (!read_aov_released(VulkanRenderer::GBufferAOV::Ids, raw, w, h, bpp) ||
                 w <= 0 || h <= 0) {
                 return py::array_t<uint32_t>(py::array::ShapeContainer{0, 0});// see depth_last
             }
@@ -243,7 +247,7 @@ namespace {
         py::array_t<float> motion_last() {
             std::vector<uint8_t> raw;
             int w = 0, h = 0, bpp = 0;
-            if (!renderer_.readGBufferAOV(VulkanRenderer::GBufferAOV::Motion, raw, w, h, bpp) ||
+            if (!read_aov_released(VulkanRenderer::GBufferAOV::Motion, raw, w, h, bpp) ||
                 w <= 0 || h <= 0) {
                 return py::array_t<float>({py::ssize_t(0), py::ssize_t(0), py::ssize_t(2)});
             }
@@ -265,7 +269,7 @@ namespace {
         py::array_t<uint8_t> albedo_last() {
             std::vector<uint8_t> raw;
             int w = 0, h = 0, bpp = 0;
-            if (!renderer_.readGBufferAOV(VulkanRenderer::GBufferAOV::Albedo, raw, w, h, bpp) ||
+            if (!read_aov_released(VulkanRenderer::GBufferAOV::Albedo, raw, w, h, bpp) ||
                 w <= 0 || h <= 0) {
                 return py::array_t<uint8_t>({py::ssize_t(0), py::ssize_t(0), py::ssize_t(4)});
             }
@@ -321,7 +325,7 @@ namespace {
                 } else if (name == "motion" || name == "flow") {
                     out[py::str(name)] = motion_last();
                 } else if (name == "rgb" || name == "shaded" || name == "color") {
-                    out[py::str(name)] = to_numpy(renderer_.readRGBPixels());
+                    out[py::str(name)] = to_numpy(read_rgb_released());
                 } else if (name == "albedo") {
                     out[py::str(name)] = albedo_last();
                 } else {
@@ -336,7 +340,7 @@ namespace {
             const int code = aov_code(aov);
             renderer_.setHybridDebugView(code);
             drive_frames(scene, camera);
-            auto arr = to_numpy(renderer_.readRGBPixels());
+            auto arr = to_numpy(read_rgb_released());
             renderer_.setHybridDebugView(0);// leave the renderer in shaded mode
             return arr;
         }
@@ -377,9 +381,33 @@ namespace {
 
     private:
         void drive_frames(Object3D& scene, Camera& camera) {
+            // Full GPU frames — see the GIL policy on the leaf helpers below.
+            py::gil_scoped_release release;
             for (int i = 0; i < flush_; ++i) {
                 canvas_.animateOnce([&] { renderer_.render(scene, camera); });
             }
+        }
+
+        // ── GIL policy ──────────────────────────────────────────────────
+        // Every def that stalls on the GPU (render, device-idle readbacks)
+        // releases the GIL for the stall, so torch inference, dataset writers
+        // and ROS spinners on other Python threads keep running. The release
+        // lives ONLY in these leaf helpers (and drive_frames/render above):
+        // pybind11's gil_scoped_release must not nest, so callers hold the
+        // GIL and never wrap them again. numpy arrays are always built with
+        // the GIL held.
+        bool read_aov_released(VulkanRenderer::GBufferAOV aov,
+                               std::vector<uint8_t>& raw, int& w, int& h, int& bpp) {
+            py::gil_scoped_release release;// vkDeviceWaitIdle + staging copy
+            return renderer_.readGBufferAOV(aov, raw, w, h, bpp);
+        }
+        std::vector<unsigned char> read_rgb_released() {
+            py::gil_scoped_release release;
+            return renderer_.readRGBPixels();
+        }
+        std::vector<unsigned char> read_scene_rgb_released() {
+            py::gil_scoped_release release;
+            return renderer_.readSceneRGBPixels();
         }
 
         py::array_t<uint8_t> to_numpy(const std::vector<unsigned char>& px) {

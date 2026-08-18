@@ -203,7 +203,13 @@ namespace threepp_py {
                 .def("read_pixels", [](GLRenderer& r, bool flip) {
                     auto s = r.size();
                     const int w = s.width(), h = s.height();
-                    std::vector<unsigned char> buf = r.readRGBPixels();
+                    std::vector<unsigned char> buf;
+                    {
+                        // glReadPixels drains the GL pipeline — GIL released
+                        // for the stall (numpy below is built with it held).
+                        py::gil_scoped_release release;
+                        buf = r.readRGBPixels();
+                    }
                     py::array_t<uint8_t> arr({static_cast<py::ssize_t>(h),
                                               static_cast<py::ssize_t>(w),
                                               static_cast<py::ssize_t>(3)});
@@ -292,8 +298,12 @@ namespace threepp_py {
                 .def_property_readonly("far", &DepthSensor::far)
                 .def("scan", [pts_to_numpy](DepthSensor& self, const py::object& renderer, Scene& scene) {
                     self.updateWorldMatrix(true, true);            // sync sensor + child camera pose
+                    Renderer& r = as_renderer(renderer);           // resolve the py handle with the GIL held
                     std::vector<Vector3> cloud;
-                    self.scan(as_renderer(renderer), scene, cloud);
+                    {
+                        py::gil_scoped_release release;// blocks on the depth render + readback
+                        self.scan(r, scene, cloud);
+                    }
                     return pts_to_numpy(cloud);
                 }, py::arg("renderer"), py::arg("scene"),
                    "Depth scan -> (N,3) float32 world-space hit points (N = points that hit within far). "
@@ -302,8 +312,21 @@ namespace threepp_py {
                 // ---- pipelined scan: fire on one frame, collect on a later one ----
                 .def("scan_begin", [](DepthSensor& self, const py::object& renderer, Scene& scene) {
                     self.updateWorldMatrix(true, true);            // sync sensor + child camera pose
+                    Renderer& r = as_renderer(renderer);
+                    // The raster backend does the ENTIRE scan inside scanBegin,
+                    // so the GIL is released for it — into a LOCAL cloud first:
+                    // pending.mtx must only ever be held with the GIL held, or
+                    // a second thread blocking on the mutex while holding the
+                    // GIL deadlocks against our re-acquire.
+                    std::vector<Vector3> cloud;
+                    bool immediate;
+                    {
+                        py::gil_scoped_release release;
+                        immediate = self.scanBegin(r, scene, cloud);
+                    }
                     std::lock_guard<std::mutex> lock(pending.mtx);
-                    return self.scanBegin(as_renderer(renderer), scene, pending.clouds[&self]);
+                    pending.clouds[&self] = std::move(cloud);
+                    return immediate;
                 }, py::arg("renderer"), py::arg("scene"),
                    "Fire a scan without waiting for it. Call it AFTER render() on the frame you want "
                    "sampled: the beams snapshot the sensor's pose (and stamp last_scan_time) here, not "
@@ -329,17 +352,27 @@ namespace threepp_py {
                                        "one is outstanding throws the earlier scan away, so a driver on a "
                                        "rate gate should skip a due scan while this is True.")
                 .def("scan_collect", [pts_to_numpy](DepthSensor& self, const py::object& renderer) {
-                    std::lock_guard<std::mutex> lock(pending.mtx);
-                    const auto it = pending.clouds.find(&self);
-                    // No entry means no scan_begin was ever fired on this sensor;
-                    // scanCollect then reports nothing outstanding and the scratch
-                    // cloud stays empty.
-                    std::vector<Vector3> scratch;
-                    std::vector<Vector3>& cloud = (it != pending.clouds.end()) ? it->second : scratch;
-                    const bool delivered = self.scanCollect(as_renderer(renderer), cloud);
-                    auto out = delivered ? pts_to_numpy(cloud) : pts_to_numpy(std::vector<Vector3>{});
-                    if (it != pending.clouds.end()) pending.clouds.erase(it);
-                    return out;
+                    Renderer& r = as_renderer(renderer);
+                    // Take the entry out under the lock (held with the GIL, see
+                    // scan_begin), then collect with the GIL released. No entry
+                    // means no scan_begin was ever fired on this sensor;
+                    // scanCollect then reports nothing outstanding and the
+                    // local cloud stays empty.
+                    std::vector<Vector3> cloud;
+                    {
+                        std::lock_guard<std::mutex> lock(pending.mtx);
+                        const auto it = pending.clouds.find(&self);
+                        if (it != pending.clouds.end()) {
+                            cloud = std::move(it->second);
+                            pending.clouds.erase(it);
+                        }
+                    }
+                    bool delivered;
+                    {
+                        py::gil_scoped_release release;// fence wait + readback
+                        delivered = self.scanCollect(r, cloud);
+                    }
+                    return delivered ? pts_to_numpy(cloud) : pts_to_numpy(std::vector<Vector3>{});
                 }, py::arg("renderer"),
                    "Take delivery of a scan_begin -> (N,3) float32 world-space hit points, exactly like "
                    "scan(). Returns an EMPTY (0,3) array when there was nothing to deliver: no scan "
@@ -347,9 +380,13 @@ namespace threepp_py {
                    "already in flight. Check scan_ready first (or accept the empty array as 'not yet').")
                 .def("scan_rgbd", [pts_to_numpy](DepthSensor& self, const py::object& renderer, Scene& scene) {
                     self.updateWorldMatrix(true, true);
+                    Renderer& r = as_renderer(renderer);
                     std::vector<Vector3> cloud;
                     std::vector<Color> colors;
-                    self.scan(as_renderer(renderer), scene, cloud, colors);
+                    {
+                        py::gil_scoped_release release;// blocks on depth + colour readbacks
+                        self.scan(r, scene, cloud, colors);
+                    }
                     py::array_t<float> col({static_cast<py::ssize_t>(colors.size()), static_cast<py::ssize_t>(3)});
                     auto* c = col.mutable_data();
                     for (size_t i = 0; i < colors.size(); ++i) {

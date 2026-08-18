@@ -20,6 +20,26 @@ namespace threepp_py {
 
     namespace py = pybind11;
 
+    // ── GIL policy ─────────────────────────────────────────────────────────
+    // Any def whose C++ body stalls the caller — PhysX step, a GPU frame, a
+    // device-idle readback, a sensor scan — releases the GIL for the stall so
+    // other Python threads (torch inference, dataset writers, ROS spinners)
+    // keep running. Rules, in order of how expensive they are to violate:
+    //  1. Never touch a py::* object (numpy arrays included) while released —
+    //     build numpy AFTER the release scope closes.
+    //  2. Callbacks that C++ may invoke while released must re-acquire:
+    //     manual py::function wraps take py::gil_scoped_acquire (see
+    //     bind_physx on_pre_substep); std::function params via
+    //     pybind11/functional.h re-acquire automatically.
+    //  3. gil_scoped_release does not nest. Release at the LEAF call only
+    //     (see PyVulkanRenderer's *_released helpers), never in a wrapper
+    //     around something that releases internally.
+    //  4. Never hold a C++ mutex across a release if any other def takes that
+    //     mutex with the GIL held — that is a lock-order deadlock (see the
+    //     scan_begin/scan_collect restructure in bind_render.cpp).
+    // Plain member-function defs with no py::* in the body can use
+    // py::call_guard<py::gil_scoped_release>() instead (PhysxWorld.step).
+
     // Returns `mat` wrapped as its concrete Python material type (so e.g.
     // mesh.material.roughness works), downcasting in C++ to dodge pybind11's
     // virtual-base limitation. Defined in bind_materials.cpp.

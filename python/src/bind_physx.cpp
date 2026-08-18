@@ -399,9 +399,15 @@ namespace threepp_py {
                      "(an existing CUcontext as an int, e.g. torch's primary context) makes PhysX "
                      "share that context instead of creating its own — required to mix PhysX GPU work "
                      "with the framework's cuBLAS/cuDNN on the same device.")
+                // GIL released for the whole step: PhysX simulate+fetch plus the
+                // transform sync are pure C++, and the substep callbacks below
+                // re-acquire per call — so torch inference or a dataset writer
+                // on another Python thread keeps running while physics steps.
                 .def("step", &PhysxWorld::step, py::arg("dt"),
+                     py::call_guard<py::gil_scoped_release>(),
                      "Advance the simulation by dt seconds (variable-rate caller, fixed-rate physics). "
-                     "After it returns, every bound mesh's transform reflects the new state.")
+                     "After it returns, every bound mesh's transform reflects the new state. "
+                     "Releases the GIL while stepping.")
                 .def("set_gravity", &PhysxWorld::setGravity, py::arg("gravity"))
                 .def("add", [](PhysxWorld& w, Mesh& mesh, float density, const py::object& material) {
                          ::physx::PxMaterial* mat = material.is_none() ? nullptr : material.cast<PhysxMaterial*>()->raw();
@@ -633,7 +639,9 @@ namespace threepp_py {
                 .def_property_readonly("max_dofs", [](threepp::PhysxGpuBatch& b) { return b.maxDofs(); })
                 .def_property_readonly("max_links", [](threepp::PhysxGpuBatch& b) { return b.maxLinks(); })
                 .def("step", &threepp::PhysxGpuBatch::step, py::arg("dt"),
-                     "Advance every articulation one substep on the GPU (no binding sync).")
+                     py::call_guard<py::gil_scoped_release>(),
+                     "Advance every articulation one substep on the GPU (no binding sync). "
+                     "Releases the GIL while stepping.")
                 // --- zero-copy path: pass the torch CUDA tensor (validated: cuda/float32/
                 //     contiguous/correct-numel) — NOT a raw .data_ptr() ---
                 .def("read_joint_pos", [cudaPtr](threepp::PhysxGpuBatch& b, const py::object& t) {
