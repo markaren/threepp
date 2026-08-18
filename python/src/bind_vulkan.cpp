@@ -162,14 +162,16 @@ namespace {
         // frame is already on screen (call render()/drive first); the public
         // read_* wrappers below drive a frame themselves for one-shot use.
 
+        // Each AOV is a pure decode over the fetched attachment bytes, shared
+        // by the single *_last() fetches and the batched read_aovs_typed —
+        // decodes run with the GIL held; only the fetch releases it.
+
         // Metric depth (H, W) float32 — distance from the camera in scene units.
         // Background (cleared to the far plane) reads as `far`. Full 32-bit
         // precision from the D32 depth buffer (the old path quantized to 24 bits).
-        py::array_t<float> depth_last(Camera& camera) {
-            std::vector<uint8_t> raw;
-            int w = 0, h = 0, bpp = 0;
-            if (!read_aov_released(VulkanRenderer::GBufferAOV::Depth, raw, w, h, bpp) ||
-                w <= 0 || h <= 0) {
+        static py::array_t<float> decode_depth(const std::vector<uint8_t>& raw, int w, int h,
+                                               const Camera& camera) {
+            if (raw.empty() || w <= 0 || h <= 0) {
                 // ShapeContainer spelled out: a braced {0, 0} is ambiguous to
                 // gcc-14 (constant zeros also convert toward the buffer_info /
                 // pointer overloads); non-zero shapes like {n, 7} are not.
@@ -187,12 +189,16 @@ namespace {
             return arr;
         }
 
-        // World-space unit normals (H, W, 3) float32, components in [-1, 1].
-        py::array_t<float> normals_last() {
+        py::array_t<float> depth_last(Camera& camera) {
             std::vector<uint8_t> raw;
             int w = 0, h = 0, bpp = 0;
-            if (!read_aov_released(VulkanRenderer::GBufferAOV::Normal, raw, w, h, bpp) ||
-                w <= 0 || h <= 0) {
+            if (!read_aov_released(VulkanRenderer::GBufferAOV::Depth, raw, w, h, bpp)) w = h = 0;
+            return decode_depth(raw, w, h, camera);
+        }
+
+        // World-space unit normals (H, W, 3) float32, components in [-1, 1].
+        static py::array_t<float> decode_normals(const std::vector<uint8_t>& raw, int w, int h) {
+            if (raw.empty() || w <= 0 || h <= 0) {
                 return py::array_t<float>({py::ssize_t(0), py::ssize_t(0), py::ssize_t(3)});
             }
             py::array_t<float> arr({static_cast<py::ssize_t>(h), static_cast<py::ssize_t>(w), py::ssize_t(3)});
@@ -205,15 +211,19 @@ namespace {
             return arr;
         }
 
+        py::array_t<float> normals_last() {
+            std::vector<uint8_t> raw;
+            int w = 0, h = 0, bpp = 0;
+            if (!read_aov_released(VulkanRenderer::GBufferAOV::Normal, raw, w, h, bpp)) w = h = 0;
+            return decode_normals(raw, w, h);
+        }
+
         // Stable, recoverable integer instance ids (H, W) uint32. 0 = sky / no
         // hit; otherwise a per-object id that persists across frames (outIds.y).
         // No hashing, no collisions. Assign specific ids with set_instance_id.
-        py::array_t<uint32_t> ids_last() {
-            std::vector<uint8_t> raw;
-            int w = 0, h = 0, bpp = 0;
-            if (!read_aov_released(VulkanRenderer::GBufferAOV::Ids, raw, w, h, bpp) ||
-                w <= 0 || h <= 0) {
-                return py::array_t<uint32_t>(py::array::ShapeContainer{0, 0});// see depth_last
+        static py::array_t<uint32_t> decode_ids(const std::vector<uint8_t>& raw, int w, int h) {
+            if (raw.empty() || w <= 0 || h <= 0) {
+                return py::array_t<uint32_t>(py::array::ShapeContainer{0, 0});// see decode_depth
             }
             py::array_t<uint32_t> arr({static_cast<py::ssize_t>(h), static_cast<py::ssize_t>(w)});
             auto* dst     = arr.mutable_data();
@@ -223,15 +233,19 @@ namespace {
             return arr;
         }
 
+        py::array_t<uint32_t> ids_last() {
+            std::vector<uint8_t> raw;
+            int w = 0, h = 0, bpp = 0;
+            if (!read_aov_released(VulkanRenderer::GBufferAOV::Ids, raw, w, h, bpp)) w = h = 0;
+            return decode_ids(raw, w, h);
+        }
+
         // Semantic class ids (H, W) uint32 from outIds.z bits 8..15. 0 = unset;
         // tag objects with set_class_id. Gives semantic segmentation alongside
         // the instance ids above, from the same G-buffer read.
-        py::array_t<uint32_t> class_last() {
-            std::vector<uint8_t> raw;
-            int w = 0, h = 0, bpp = 0;
-            if (!read_aov_released(VulkanRenderer::GBufferAOV::Ids, raw, w, h, bpp) ||
-                w <= 0 || h <= 0) {
-                return py::array_t<uint32_t>(py::array::ShapeContainer{0, 0});// see depth_last
+        static py::array_t<uint32_t> decode_class(const std::vector<uint8_t>& raw, int w, int h) {
+            if (raw.empty() || w <= 0 || h <= 0) {
+                return py::array_t<uint32_t>(py::array::ShapeContainer{0, 0});// see decode_depth
             }
             py::array_t<uint32_t> arr({static_cast<py::ssize_t>(h), static_cast<py::ssize_t>(w)});
             auto* dst     = arr.mutable_data();
@@ -241,14 +255,18 @@ namespace {
             return arr;
         }
 
+        py::array_t<uint32_t> class_last() {
+            std::vector<uint8_t> raw;
+            int w = 0, h = 0, bpp = 0;
+            if (!read_aov_released(VulkanRenderer::GBufferAOV::Ids, raw, w, h, bpp)) w = h = 0;
+            return decode_class(raw, w, h);
+        }
+
         // Screen-space motion vectors (H, W, 2) float32, in PIXELS: where each
         // surface was last frame minus where it is now (prev - curr). +x is
         // rightward; the y sign follows the Vulkan NDC (down-positive) convention.
-        py::array_t<float> motion_last() {
-            std::vector<uint8_t> raw;
-            int w = 0, h = 0, bpp = 0;
-            if (!read_aov_released(VulkanRenderer::GBufferAOV::Motion, raw, w, h, bpp) ||
-                w <= 0 || h <= 0) {
+        static py::array_t<float> decode_motion(const std::vector<uint8_t>& raw, int w, int h) {
+            if (raw.empty() || w <= 0 || h <= 0) {
                 return py::array_t<float>({py::ssize_t(0), py::ssize_t(0), py::ssize_t(2)});
             }
             py::array_t<float> arr({static_cast<py::ssize_t>(h), static_cast<py::ssize_t>(w), py::ssize_t(2)});
@@ -264,18 +282,29 @@ namespace {
             return arr;
         }
 
-        // Linear base colour + metalness (H, W, 4) uint8: rgb = linear albedo,
-        // a = metalness. Native G-buffer read (no debug-blit re-render).
-        py::array_t<uint8_t> albedo_last() {
+        py::array_t<float> motion_last() {
             std::vector<uint8_t> raw;
             int w = 0, h = 0, bpp = 0;
-            if (!read_aov_released(VulkanRenderer::GBufferAOV::Albedo, raw, w, h, bpp) ||
-                w <= 0 || h <= 0) {
+            if (!read_aov_released(VulkanRenderer::GBufferAOV::Motion, raw, w, h, bpp)) w = h = 0;
+            return decode_motion(raw, w, h);
+        }
+
+        // Linear base colour + metalness (H, W, 4) uint8: rgb = linear albedo,
+        // a = metalness. Native G-buffer read (no debug-blit re-render).
+        static py::array_t<uint8_t> decode_albedo(const std::vector<uint8_t>& raw, int w, int h) {
+            if (raw.empty() || w <= 0 || h <= 0) {
                 return py::array_t<uint8_t>({py::ssize_t(0), py::ssize_t(0), py::ssize_t(4)});
             }
             py::array_t<uint8_t> arr({static_cast<py::ssize_t>(h), static_cast<py::ssize_t>(w), py::ssize_t(4)});
             std::memcpy(arr.mutable_data(), raw.data(), raw.size());// RGBA8, tightly packed
             return arr;
+        }
+
+        py::array_t<uint8_t> albedo_last() {
+            std::vector<uint8_t> raw;
+            int w = 0, h = 0, bpp = 0;
+            if (!read_aov_released(VulkanRenderer::GBufferAOV::Albedo, raw, w, h, bpp)) w = h = 0;
+            return decode_albedo(raw, w, h);
         }
 
         py::array_t<float> read_depth(Object3D& scene, Camera& camera) {
@@ -312,22 +341,69 @@ namespace {
         py::dict read_aovs_typed(Object3D& scene, Camera& camera,
                                  const std::vector<std::string>& aovs) {
             drive_frames(scene, camera);
+
+            // Map the requested names onto the attachments they need —
+            // instance_ids and class_ids decode the SAME Ids read — and fetch
+            // every needed attachment from the same frame in one batched call:
+            // one device wait, one submit, one staging buffer, instead of a
+            // full drain per AOV.
+            using AOV     = VulkanRenderer::GBufferAOV;
+            auto requested = [&](std::initializer_list<const char*> names) {
+                for (const auto& n : aovs)
+                    for (const char* c : names)
+                        if (n == c) return true;
+                return false;
+            };
+            std::vector<AOV> wanted;
+            if (requested({"depth"})) wanted.push_back(AOV::Depth);
+            if (requested({"normals", "normal"})) wanted.push_back(AOV::Normal);
+            if (requested({"instance_ids", "ids", "segmentation",
+                           "class_ids", "class", "semantic"})) wanted.push_back(AOV::Ids);
+            if (requested({"motion", "flow"})) wanted.push_back(AOV::Motion);
+            if (requested({"albedo"})) wanted.push_back(AOV::Albedo);
+
+            std::vector<VulkanRenderer::AOVReadback> got;
+            if (!wanted.empty()) {
+                py::gil_scoped_release release;// one wait for the whole batch
+                (void) renderer_.readGBufferAOVs(wanted, got);
+            }
+            const auto find = [&](AOV a) -> const VulkanRenderer::AOVReadback* {
+                for (const auto& r : got)
+                    if (r.aov == a) return &r;
+                return nullptr;
+            };
+            // A missing entry decodes from an empty buffer, which yields the
+            // same empty-shaped arrays the *_last() fetch failures return.
+            static const std::vector<uint8_t> kEmpty;
+
             py::dict out;
             for (const auto& name : aovs) {
                 if (name == "depth") {
-                    out[py::str(name)] = depth_last(camera);
+                    const auto* r      = find(AOV::Depth);
+                    out[py::str(name)] = decode_depth(r ? r->data : kEmpty, r ? r->width : 0,
+                                                      r ? r->height : 0, camera);
                 } else if (name == "normals" || name == "normal") {
-                    out[py::str(name)] = normals_last();
+                    const auto* r      = find(AOV::Normal);
+                    out[py::str(name)] = decode_normals(r ? r->data : kEmpty, r ? r->width : 0,
+                                                        r ? r->height : 0);
                 } else if (name == "instance_ids" || name == "ids" || name == "segmentation") {
-                    out[py::str(name)] = ids_last();
+                    const auto* r      = find(AOV::Ids);
+                    out[py::str(name)] = decode_ids(r ? r->data : kEmpty, r ? r->width : 0,
+                                                    r ? r->height : 0);
                 } else if (name == "class_ids" || name == "class" || name == "semantic") {
-                    out[py::str(name)] = class_last();
+                    const auto* r      = find(AOV::Ids);
+                    out[py::str(name)] = decode_class(r ? r->data : kEmpty, r ? r->width : 0,
+                                                      r ? r->height : 0);
                 } else if (name == "motion" || name == "flow") {
-                    out[py::str(name)] = motion_last();
+                    const auto* r      = find(AOV::Motion);
+                    out[py::str(name)] = decode_motion(r ? r->data : kEmpty, r ? r->width : 0,
+                                                       r ? r->height : 0);
                 } else if (name == "rgb" || name == "shaded" || name == "color") {
                     out[py::str(name)] = to_numpy(read_rgb_released());
                 } else if (name == "albedo") {
-                    out[py::str(name)] = albedo_last();
+                    const auto* r      = find(AOV::Albedo);
+                    out[py::str(name)] = decode_albedo(r ? r->data : kEmpty, r ? r->width : 0,
+                                                       r ? r->height : 0);
                 } else {
                     throw std::invalid_argument("unknown typed AOV '" + name +
                             "' — use: depth, normals, instance_ids, class_ids, motion, rgb, albedo");

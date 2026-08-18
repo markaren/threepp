@@ -128,6 +128,22 @@ namespace threepp {
         [[nodiscard]] bool readGBufferAOV(GBufferAOV aov, std::vector<uint8_t>& out,
                                           int& width, int& height, int& bytesPerPixel);
 
+        // Batched form: read SEVERAL attachments of the same frame with ONE
+        // device wait, one command buffer (N copy regions) and one staging
+        // allocation, instead of paying the full drain per AOV — the multi-AOV
+        // dataset path calls this once per captured frame. `out` receives one
+        // entry per readable requested AOV (duplicates collapsed, unreadable
+        // ones — e.g. SplatDepth without setSplatDepthAov — omitted); match by
+        // the entry's `aov` field, layouts exactly as documented above. Returns
+        // false when nothing could be read at all.
+        struct AOVReadback {
+            GBufferAOV aov{};
+            std::vector<uint8_t> data;
+            int width = 0, height = 0, bytesPerPixel = 0;
+        };
+        [[nodiscard]] bool readGBufferAOVs(const std::vector<GBufferAOV>& aovs,
+                                           std::vector<AOVReadback>& out);
+
         // ── ParticleField density volume readback (TEST / DEBUG) ─────────
         // Copy a ParticleField's world-space density volume back to the host as
         // raw FIXED-POINT sigma_t: `out` is resolution^3 uint32 in x-fastest
@@ -270,6 +286,12 @@ namespace threepp {
         [[nodiscard]] bool readViewGBufferAOV(uint32_t viewHandle, GBufferAOV aov,
                                               std::vector<uint8_t>& out,
                                               int& width, int& height, int& bytesPerPixel);
+
+        // Batched per-view form — the implementation the two single-AOV reads
+        // above are a batch-of-one of. Same contract as readGBufferAOVs.
+        [[nodiscard]] bool readViewGBufferAOVs(uint32_t viewHandle,
+                                               const std::vector<GBufferAOV>& aovs,
+                                               std::vector<AOVReadback>& out);
 
         // ── Segmentation labels for the Ids AOV ──────────────────────────
         // The Ids attachment's .y channel is a STABLE per-object instance id,

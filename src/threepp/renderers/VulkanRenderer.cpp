@@ -1010,6 +1010,27 @@ namespace threepp {
     bool VulkanRenderer::readViewGBufferAOV(uint32_t viewHandle, GBufferAOV aov,
                                             std::vector<uint8_t>& out,
                                             int& width, int& height, int& bytesPerPixel) {
+        // A batch of one — the batched form owns the machinery, so the two
+        // entry points cannot drift apart.
+        std::vector<AOVReadback> res;
+        if (!readViewGBufferAOVs(viewHandle, {aov}, res) || res.empty()) return false;
+        out           = std::move(res.front().data);
+        width         = res.front().width;
+        height        = res.front().height;
+        bytesPerPixel = res.front().bytesPerPixel;
+        return true;
+    }
+
+    bool VulkanRenderer::readGBufferAOVs(const std::vector<GBufferAOV>& aovs,
+                                         std::vector<AOVReadback>& out) {
+        return readViewGBufferAOVs(0u, aovs, out);
+    }
+
+    bool VulkanRenderer::readViewGBufferAOVs(uint32_t viewHandle,
+                                             const std::vector<GBufferAOV>& aovs,
+                                             std::vector<AOVReadback>& out) {
+        out.clear();
+        if (aovs.empty()) return false;
         auto& impl = *core();
         auto* ctx  = impl.ctx.get();
         if (!ctx) return false;
@@ -1040,51 +1061,76 @@ namespace threepp {
         const uint32_t slot = (impl.currentFrame + n - 1u) % n;
         const auto& g       = src->rasterGbufs[slot];
 
-        // Select the attachment, its aspect, and the layout it rests in after a
-        // frame (the raster render pass' finalLayout; the MSAA resolve leaves the
-        // resolved single-sample images in the same layouts). Depth carries the
-        // depth aspect + DEPTH_STENCIL_READ_ONLY; every colour AOV is SHADER_READ_ONLY.
-        const vulkan::Image2D* img = nullptr;
-        VkImageAspectFlags aspect  = VK_IMAGE_ASPECT_COLOR_BIT;
-        VkImageLayout restLayout   = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-        switch (aov) {
-            case GBufferAOV::Depth:
-                img = &g.depth; aspect = VK_IMAGE_ASPECT_DEPTH_BIT;
-                restLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL; break;
-            case GBufferAOV::Normal: img = &g.normal; break;
-            case GBufferAOV::Motion: img = &g.motion; break;
-            case GBufferAOV::Ids:    img = &g.ids;    break;
-            case GBufferAOV::Albedo: img = &g.albedo; break;
-            case GBufferAOV::SplatDepth:
-                // Answer false rather than hand back the 1x1 placeholder: a
-                // caller who forgot setSplatDepthAov would otherwise get a
-                // successful read of a one-pixel image, which reads as "the
-                // frame had no splats in it" instead of "you never asked for
-                // this AOV".
-                if (!impl.splatDepthAov()) return false;
-                img = &g.splatDepth; restLayout = VK_IMAGE_LAYOUT_GENERAL; break;
-        }
-        if (!img || img->image == VK_NULL_HANDLE || img->width == 0 || img->height == 0) {
-            return false;// no frame rendered yet
-        }
+        // Select each attachment, its aspect, and the layout it rests in after
+        // a frame (the raster render pass' finalLayout; the MSAA resolve leaves
+        // the resolved single-sample images in the same layouts). Depth carries
+        // the depth aspect + DEPTH_STENCIL_READ_ONLY; every colour AOV is
+        // SHADER_READ_ONLY. Unreadable requests are SKIPPED, not failed — the
+        // batch delivers what it can and the caller matches entries by `aov`
+        // (through the batch-of-one forwarder above, a skip surfaces as the
+        // same `false` the single form always returned).
+        struct Slot {
+            GBufferAOV aov;
+            const vulkan::Image2D* img;
+            VkImageAspectFlags aspect;
+            VkImageLayout restLayout;
+            uint32_t bpp;
+            VkDeviceSize offset;
+        };
+        std::vector<Slot> slots;
+        slots.reserve(aovs.size());
+        VkDeviceSize total = 0;
+        for (const GBufferAOV aov : aovs) {
+            bool dup = false;
+            for (const auto& s : slots) dup = dup || s.aov == aov;
+            if (dup) continue;// duplicates collapse to one read
 
-        const uint32_t w = img->width;
-        const uint32_t h = img->height;
-        // Element size of the attachment format: RGBA16 (normal/motion/ids) = 8,
-        // D32_SFLOAT (depth) and RGBA8_UNORM (albedo) = 4.
-        uint32_t bpp = 4;
-        if (img->format == VK_FORMAT_R16G16B16A16_SFLOAT ||
-            img->format == VK_FORMAT_R16G16B16A16_UINT) {
-            bpp = 8;
+            const vulkan::Image2D* img = nullptr;
+            VkImageAspectFlags aspect  = VK_IMAGE_ASPECT_COLOR_BIT;
+            VkImageLayout restLayout   = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+            switch (aov) {
+                case GBufferAOV::Depth:
+                    img = &g.depth; aspect = VK_IMAGE_ASPECT_DEPTH_BIT;
+                    restLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL; break;
+                case GBufferAOV::Normal: img = &g.normal; break;
+                case GBufferAOV::Motion: img = &g.motion; break;
+                case GBufferAOV::Ids:    img = &g.ids;    break;
+                case GBufferAOV::Albedo: img = &g.albedo; break;
+                case GBufferAOV::SplatDepth:
+                    // Skip rather than hand back the 1x1 placeholder: a caller
+                    // who forgot setSplatDepthAov would otherwise get a
+                    // successful read of a one-pixel image, which reads as
+                    // "the frame had no splats in it" instead of "you never
+                    // asked for this AOV".
+                    if (!impl.splatDepthAov()) continue;
+                    img = &g.splatDepth; restLayout = VK_IMAGE_LAYOUT_GENERAL; break;
+            }
+            if (!img || img->image == VK_NULL_HANDLE || img->width == 0 || img->height == 0) {
+                continue;// no frame rendered yet
+            }
+            // Element size of the attachment format: RGBA16 (normal/motion/ids)
+            // = 8, D32_SFLOAT (depth) and RGBA8_UNORM (albedo) = 4.
+            uint32_t bpp = 4;
+            if (img->format == VK_FORMAT_R16G16B16A16_SFLOAT ||
+                img->format == VK_FORMAT_R16G16B16A16_UINT) {
+                bpp = 8;
+            }
+            // Regions pack back to back; offsets align to 8, a multiple of both
+            // texel sizes, which vkCmdCopyImageToBuffer's bufferOffset requires.
+            total = (total + 7) & ~VkDeviceSize(7);
+            slots.push_back({aov, img, aspect, restLayout, bpp, total});
+            total += VkDeviceSize(img->width) * img->height * bpp;
         }
-        const VkDeviceSize bytes = static_cast<VkDeviceSize>(w) * h * bpp;
+        if (slots.empty()) return false;
 
-        // Wait so the last frame's writes to this attachment are complete and no
-        // in-flight frame is still sampling it — same trade-off as readRGBPixels.
+        // Wait so the last frame's writes to these attachments are complete and
+        // no in-flight frame is still sampling them — same trade-off as
+        // readRGBPixels, paid ONCE for the whole batch (this wait, not the
+        // copies, is what made per-AOV reads expensive).
         vkDeviceWaitIdle(ctx->device());
 
         vulkan::Buffer staging = vulkan::createBuffer(
-                ctx->allocator(), ctx->device(), bytes,
+                ctx->allocator(), ctx->device(), total,
                 VK_BUFFER_USAGE_TRANSFER_DST_BIT,
                 VMA_MEMORY_USAGE_AUTO_PREFER_HOST,
                 VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT |
@@ -1112,44 +1158,55 @@ namespace threepp {
         bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
         vulkan::check(vkBeginCommandBuffer(cb, &bi), "vkBeginCommandBuffer(readGBufferAOV)");
 
-        // restLayout → TRANSFER_SRC for the copy. srcAccess 0 is safe: the prior
-        // vkDeviceWaitIdle already retired every access, so this barrier only
-        // performs the layout transition.
-        VkImageMemoryBarrier toSrc{};
-        toSrc.sType                       = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-        toSrc.oldLayout                   = restLayout;
-        toSrc.newLayout                   = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
-        toSrc.srcAccessMask               = 0;
-        toSrc.dstAccessMask               = VK_ACCESS_TRANSFER_READ_BIT;
-        toSrc.srcQueueFamilyIndex         = VK_QUEUE_FAMILY_IGNORED;
-        toSrc.dstQueueFamilyIndex         = VK_QUEUE_FAMILY_IGNORED;
-        toSrc.image                       = img->image;
-        toSrc.subresourceRange.aspectMask = aspect;
-        toSrc.subresourceRange.levelCount = 1;
-        toSrc.subresourceRange.layerCount = 1;
+        // restLayout → TRANSFER_SRC for every image in ONE barrier call.
+        // srcAccess 0 is safe: the prior vkDeviceWaitIdle already retired every
+        // access, so these barriers only perform the layout transitions.
+        std::vector<VkImageMemoryBarrier> toSrc(slots.size());
+        for (size_t i = 0; i < slots.size(); ++i) {
+            auto& b                     = toSrc[i];
+            b                           = VkImageMemoryBarrier{};
+            b.sType                     = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+            b.oldLayout                 = slots[i].restLayout;
+            b.newLayout                 = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+            b.srcAccessMask             = 0;
+            b.dstAccessMask             = VK_ACCESS_TRANSFER_READ_BIT;
+            b.srcQueueFamilyIndex       = VK_QUEUE_FAMILY_IGNORED;
+            b.dstQueueFamilyIndex       = VK_QUEUE_FAMILY_IGNORED;
+            b.image                     = slots[i].img->image;
+            b.subresourceRange.aspectMask = slots[i].aspect;
+            b.subresourceRange.levelCount = 1;
+            b.subresourceRange.layerCount = 1;
+        }
         vkCmdPipelineBarrier(cb,
                              VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT,
                              VK_PIPELINE_STAGE_TRANSFER_BIT,
-                             0, 0, nullptr, 0, nullptr, 1, &toSrc);
+                             0, 0, nullptr, 0, nullptr,
+                             static_cast<uint32_t>(toSrc.size()), toSrc.data());
 
-        VkBufferImageCopy region{};
-        region.imageSubresource.aspectMask = aspect;
-        region.imageSubresource.layerCount = 1;
-        region.imageExtent                 = {w, h, 1};
-        vkCmdCopyImageToBuffer(cb, img->image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-                               staging.handle, 1, &region);
+        for (const auto& s : slots) {
+            VkBufferImageCopy region{};
+            region.bufferOffset                = s.offset;
+            region.imageSubresource.aspectMask = s.aspect;
+            region.imageSubresource.layerCount = 1;
+            region.imageExtent                 = {s.img->width, s.img->height, 1};
+            vkCmdCopyImageToBuffer(cb, s.img->image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                                   staging.handle, 1, &region);
+        }
 
-        // Restore the resting layout so the next frame's consumers (deferred
-        // shade / TAA) find the attachment where they expect it.
-        VkImageMemoryBarrier toRest = toSrc;
-        toRest.oldLayout            = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
-        toRest.newLayout            = restLayout;
-        toRest.srcAccessMask        = VK_ACCESS_TRANSFER_READ_BIT;
-        toRest.dstAccessMask        = 0;
+        // Restore the resting layouts so the next frame's consumers (deferred
+        // shade / TAA) find the attachments where they expect them.
+        std::vector<VkImageMemoryBarrier> toRest = toSrc;
+        for (size_t i = 0; i < toRest.size(); ++i) {
+            toRest[i].oldLayout     = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+            toRest[i].newLayout     = slots[i].restLayout;
+            toRest[i].srcAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+            toRest[i].dstAccessMask = 0;
+        }
         vkCmdPipelineBarrier(cb,
                              VK_PIPELINE_STAGE_TRANSFER_BIT,
                              VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT,
-                             0, 0, nullptr, 0, nullptr, 1, &toRest);
+                             0, 0, nullptr, 0, nullptr,
+                             static_cast<uint32_t>(toRest.size()), toRest.data());
 
         vulkan::check(vkEndCommandBuffer(cb), "vkEndCommandBuffer(readGBufferAOV)");
 
@@ -1168,31 +1225,41 @@ namespace threepp {
         vulkan::check(vkWaitForFences(ctx->device(), 1, &fence, VK_TRUE, UINT64_MAX),
                       "vkWaitForFences(readGBufferAOV)");
 
-        out.resize(static_cast<size_t>(bytes));
         void* mapped = nullptr;
         vulkan::check(vmaMapMemory(ctx->allocator(), staging.alloc, &mapped),
                       "vmaMapMemory(readGBufferAOV)");
         // AFTER mapping — see readRGBPixels for the ordering rationale.
-        vulkan::invalidateHostReads(ctx->allocator(), staging.alloc, 0, bytes);
-        std::memcpy(out.data(), mapped, static_cast<size_t>(bytes));
+        vulkan::invalidateHostReads(ctx->allocator(), staging.alloc, 0, total);
+        out.reserve(slots.size());
+        for (const auto& s : slots) {
+            AOVReadback r;
+            r.aov              = s.aov;
+            r.width            = static_cast<int>(s.img->width);
+            r.height           = static_cast<int>(s.img->height);
+            r.bytesPerPixel    = static_cast<int>(s.bpp);
+            const size_t bytes = static_cast<size_t>(s.img->width) * s.img->height * s.bpp;
+            r.data.resize(bytes);
+            std::memcpy(r.data.data(), static_cast<const uint8_t*>(mapped) + s.offset, bytes);
+            out.push_back(std::move(r));
+        }
         vmaUnmapMemory(ctx->allocator(), staging.alloc);
 
         vkDestroyFence(ctx->device(), fence, nullptr);
         vkDestroyCommandPool(ctx->device(), cpool, nullptr);
         vulkan::destroyBuffer(ctx->allocator(), staging);
 
-        width         = static_cast<int>(w);
-        height        = static_cast<int>(h);
-        bytesPerPixel = static_cast<int>(bpp);
-
         // The G-buffer is rendered through a pinhole; the displayed image is
-        // not, once a lens is set (the RCAS stage warps it). Warp the AOV to
+        // not, once a lens is set (the RCAS stage warps it). Warp every AOV to
         // match, or the dataset ships distorted pixels with undistorted labels
         // — worse than shipping neither.
         if (impl.lens_.active()) {
             const float normK[4] = {0.5f * impl.projP0_, 0.5f * impl.projP5_,
                                     0.5f * (1.f - impl.projP8_), 0.5f * (1.f + impl.projP9_)};
-            warpAovForLens(impl.lens_, normK, impl.effectiveOverscan(), out, w, h, bpp);
+            for (auto& r : out) {
+                warpAovForLens(impl.lens_, normK, impl.effectiveOverscan(), r.data,
+                               static_cast<uint32_t>(r.width), static_cast<uint32_t>(r.height),
+                               static_cast<uint32_t>(r.bytesPerPixel));
+            }
         }
         return true;
     }
