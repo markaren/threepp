@@ -54,14 +54,14 @@ function(compile_vulkan_shader target shader_src var_name out_header_var)
     # is unchanged; they shrink the embedded SPIR-V and hand the driver a
     # cleaner starting point. Skipped for Debug builds so shader stepping in
     # Nsight / RenderDoc sees unoptimized SPIR-V; enabled for the optimized
-    # configs (Release, RelWithDebInfo, MinSizeRel). Empty/unset build type
-    # keeps the prior unoptimized behaviour.
-    set(_opt_flags "")
-    if (CMAKE_BUILD_TYPE STREQUAL "Release"
-            OR CMAKE_BUILD_TYPE STREQUAL "RelWithDebInfo"
-            OR CMAKE_BUILD_TYPE STREQUAL "MinSizeRel")
-        list(APPEND _opt_flags "-Os")
-    endif ()
+    # configs (Release, RelWithDebInfo, MinSizeRel). Gated with $<CONFIG>, not
+    # CMAKE_BUILD_TYPE, so multi-config generators (Visual Studio — what
+    # scikit-build-core uses for Windows wheels) also optimize; a single-config
+    # build with empty/unset build type stays unoptimized as before. Note the
+    # output header is shared across configs, so switching config in an
+    # existing build tree reuses the last-built SPIR-V until a dependency
+    # touches it.
+    set(_opt_flags "$<$<CONFIG:Release,RelWithDebInfo,MinSizeRel>:-Os>")
 
     # Depend on every .glsl/.h that sits beside the shader source, whatever its
     # name. Shaders in this dir #include each other freely (vulkan_shared.h,
@@ -88,7 +88,10 @@ function(compile_vulkan_shader target shader_src var_name out_header_var)
                 -o   "${_out_header}"
         DEPENDS "${shader_src}" ${_extra_deps}
         COMMENT "Compiling Vulkan shader ${_name} -> ${var_name}"
-        VERBATIM)
+        VERBATIM
+        # Required so the _opt_flags genex vanishes (instead of becoming a
+        # literal "" argument) in configs where it evaluates empty.
+        COMMAND_EXPAND_LISTS)
 
     target_sources(${target} PRIVATE "${_out_header}")
     target_include_directories(${target} PRIVATE "${CMAKE_BINARY_DIR}/generated")
