@@ -27,6 +27,12 @@
 //                   orbit target: the CPU/GPU wave-field parity check (spheres
 //                   must sit ON the surface), and a lazy-height-readback smoke
 //                   test in one flag.
+//   --bench <N>   — headless per-pass GPU timing: collect N frames after a
+//                   240-frame warm-up and print median/mean for each timestamp
+//                   bracket (ocean FFT/displace/foam/BLAS, TLAS refit, gbuffer,
+//                   shade, denoise, TAA) plus the unbracketed residual. Run with
+//                   THREEPP_VULKAN_SUPPRESS_PRESENT=1 so the wall columns mean
+//                   something.
 
 #include "threepp/loaders/RGBELoader.hpp"
 #include "threepp/materials/MeshStandardMaterial.hpp"
@@ -37,6 +43,7 @@
 #include "capture_util.hpp"
 
 #include <algorithm>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
@@ -54,6 +61,7 @@ int main(int argc, char** argv) {
     float wind2 = -1.f;       // ≥0 = setWind() to this halfway through a --shot run (live-wind test)
     bool probes = false;      // sampleHeight parity probes (debug)
     bool pond = false;        // 16 m pond preset: shallow bright bottom, calm wind
+    int benchFrames = 0;      // >0 = --bench: collect N per-pass GPU timing samples, print, exit
     for (int i = 1; i < argc; ++i) {
         if (std::strcmp(argv[i], "--shot") == 0 && i + 1 < argc) shotPath = argv[++i];
         else if (std::strcmp(argv[i], "--frames") == 0 && i + 1 < argc) shotFrames = std::atoi(argv[++i]);
@@ -61,11 +69,17 @@ int main(int argc, char** argv) {
         else if (std::strcmp(argv[i], "--wind2") == 0 && i + 1 < argc) wind2 = float(std::atof(argv[++i]));
         else if (std::strcmp(argv[i], "--probes") == 0) probes = true;
         else if (std::strcmp(argv[i], "--pond") == 0) pond = true;
+        else if (std::strcmp(argv[i], "--bench") == 0 && i + 1 < argc) benchFrames = std::atoi(argv[++i]);
     }
     const capture::Args capArgs = capture::parseArgs(argc, argv);
     if (capArgs.frames) shotFrames = *capArgs.frames;
 
-    Canvas canvas("Vulkan Deferred - Ocean (minimal)", {{"vsync", false}, {"size", WindowSize{1600, 900}}});
+    // --bench runs headless so THREEPP_VULKAN_SUPPRESS_PRESENT=1 can engage
+    // (present to a hidden window host-blocks ~a GPU frame and poisons the
+    // wall-clock columns; the per-pass GPU brackets don't care, but cpuFrame /
+    // gpuTotal do).
+    Canvas canvas("Vulkan Deferred - Ocean (minimal)",
+                  {{"vsync", false}, {"size", WindowSize{1600, 900}}, {"headless", benchFrames > 0}});
 
     auto renderer = VulkanRenderer(canvas);
     renderer.setDenoise(true);
@@ -217,6 +231,52 @@ int main(int argc, char** argv) {
         }
 
         renderer.render(scene, camera);
+
+        // --bench: after the warm-up (probe GI convergence, pipeline warm,
+        // BLAS refit cadence settling), collect lastFrameTimings() per frame
+        // and report median + mean per bracketed pass. The brackets open at
+        // TOP_OF_PIPE and close at ALL_COMMANDS, so back-to-back passes can
+        // overlap slightly — read each column as an upper bound on that pass
+        // alone, and the residual as a floor on the unbracketed work.
+        if (benchFrames > 0) {
+            static int benchTick = 0;
+            static std::vector<VulkanRenderer::FrameTimings> samples;
+            constexpr int kBenchWarmup = 240;
+            if (++benchTick > kBenchWarmup) {
+                samples.push_back(renderer.lastFrameTimings());
+                if (static_cast<int>(samples.size()) >= benchFrames) {
+                    auto stat = [&](const char* name, auto get) {
+                        std::vector<float> v;
+                        v.reserve(samples.size());
+                        for (const auto& t : samples) v.push_back(get(t));
+                        std::sort(v.begin(), v.end());
+                        double sum = 0;
+                        for (float x : v) sum += x;
+                        std::printf("  %-14s median %7.3f ms   mean %7.3f ms\n",
+                                    name, v[v.size() / 2], sum / double(v.size()));
+                    };
+                    using FT = VulkanRenderer::FrameTimings;
+                    std::printf("ocean bench: %zu samples after %d warm-up frames, %s, wind %.1f m/s\n",
+                                samples.size(), kBenchWarmup, pond ? "pond" : "ocean",
+                                ocean->params.windSpeed);
+                    stat("oceanFft",      [](const FT& t) { return t.oceanFftMs; });
+                    stat("oceanDisplace", [](const FT& t) { return t.oceanDisplaceMs; });
+                    stat("oceanFoam",     [](const FT& t) { return t.oceanFoamMs; });
+                    stat("oceanBlas",     [](const FT& t) { return t.oceanBlasMs; });
+                    stat("tlasRefit",     [](const FT& t) { return t.tlasRefitMs; });
+                    stat("rasterGbuf",    [](const FT& t) { return t.rasterGbufMs; });
+                    stat("deferredShade", [](const FT& t) { return t.pathTraceMs; });
+                    stat("denoise",       [](const FT& t) { return t.denoiseMs; });
+                    stat("taa",           [](const FT& t) { return t.taaMs; });
+                    stat("gpuPassSum",    [](const FT& t) { return t.gpuPassSumMs; });
+                    stat("gpuTotal",      [](const FT& t) { return t.gpuTotalMs; });
+                    stat("gpuResidual",   [](const FT& t) { return t.gpuTotalMs - t.gpuPassSumMs; });
+                    stat("cpuRecord",     [](const FT& t) { return t.cpuRecordMs; });
+                    stat("cpuFrame",      [](const FT& t) { return t.cpuFrameMs; });
+                    std::exit(0);
+                }
+            }
+        }
 
         if (!shotPath.empty() && ++shotFrame >= shotFrames) {
             const auto path = std::filesystem::path(PROJECT_FOLDER) / "aaa_caps" / shotPath;

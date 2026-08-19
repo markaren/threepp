@@ -53,9 +53,9 @@ namespace threepp::vulkan {
         // The WHOLE submitted command buffer: opened in beginFrame right after
         // the pool reset, closed in endFrame right before vkEndCommandBuffer.
         // Deliberately not a sum of the slots above — it also covers every pass
-        // that has no bracket at all (TLAS refit, deformers, bloom/post, RCAS,
-        // probe GI, cluster build, cloud march, auto-exposure, particle light,
-        // ImGui/present transition) AND every secondary view, whose timestamps
+        // that has no bracket at all (skinned/tet/grass deformers, bloom/post,
+        // RCAS, probe GI, cluster build, cloud march, auto-exposure, particle
+        // light, ImGui/present transition) AND every secondary view, whose timestamps
         // are suppressed. Read gpuTotalMs - gpuPassSumMs to see how much GPU work
         // is invisible to the bracketed passes. It is a SPAN, not busy time: the
         // TOP_OF_PIPE open is not covered by the imageAvailable wait's stage mask,
@@ -80,7 +80,23 @@ namespace threepp::vulkan {
         // the two" — and a combined number could hide either half growing.
         // Recorded ONCE per frame for all views.
         TP_ParticleEmit   = 18,
-        TP_COUNT          = 19,
+        // Ocean / DisplacedMesh per-frame update, split into the four stages
+        // recordDisplacedDeform records back-to-back so the "FFT water is
+        // expensive" claim can be attributed rather than inferred: the cascade
+        // spectrum+IFFT chains, the water_displace vertex/normal dispatch, the
+        // world-foam accumulator, and the in-place BLAS refit/rebuild. Written
+        // for the FIRST displaced mesh of the frame only (same single-slot
+        // constraint as the splat stages above); the one-shot structural
+        // first-build path records untimed.
+        TP_OceanFFT       = 19,
+        TP_OceanDisplace  = 20,
+        TP_OceanFoam      = 21,
+        TP_OceanBlas      = 22,
+        // Per-frame TLAS refit (recordTlasRefit on the frame cb). Bracketed
+        // because it sat on the "invisible to the brackets" list while claims
+        // were being made about it.
+        TP_TlasRefit      = 23,
+        TP_COUNT          = 24,
     };
     inline constexpr uint32_t kTimingSlots = TP_COUNT * 2u;
 

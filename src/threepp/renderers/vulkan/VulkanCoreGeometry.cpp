@@ -1439,7 +1439,7 @@ void VulkanRenderer::Impl::refreshMorphedBlas(Mesh& mesh, MorphedMeshState& st) 
             if (morphObj) st.prevInfluences = morphObj->morphTargetInfluences();
         }
 
-void VulkanRenderer::Impl::recordDisplacedDeform(VkCommandBuffer cb, DisplacedMesh& dm, DisplacedMeshState& st, float elapsedSeconds) {
+void VulkanRenderer::Impl::recordDisplacedDeform(VkCommandBuffer cb, DisplacedMesh& dm, DisplacedMeshState& st, float elapsedSeconds, bool timed) {
 
             // (0) Live wind. The Phillips h0 pass is normally one-shot, but
             // windSpeed/windTheta are plain Params fields — when they drift
@@ -1471,6 +1471,7 @@ void VulkanRenderer::Impl::recordDisplacedDeform(VkCommandBuffer cb, DisplacedMe
             // the single scratch image. Cascades dispatch back-to-back; the
             // Vulkan command buffer recording order plus the IFFT's internal
             // image-layout barriers serialize the work correctly.
+            if (timed) gpuTimings_->begin(cb, vulkan::TP_OceanFFT, currentFrame);
             for (uint32_t i = 0; i < 3; ++i) {
                 if (!(st.cascadeMask & (1u << i))) continue;
                 auto& c = st.cascades[i];
@@ -1542,6 +1543,7 @@ void VulkanRenderer::Impl::recordDisplacedDeform(VkCommandBuffer cb, DisplacedMe
                             0, 0, nullptr, 1, &bmb, 0, nullptr);
                 }
             }
+            if (timed) gpuTimings_->end(cb, vulkan::TP_OceanFFT, currentFrame);
 
             // (3.5) Per-vertex motion: copy current vertex positions into
             // prevVertex BEFORE water_displace overwrites them. Hybrid-only
@@ -1662,7 +1664,9 @@ void VulkanRenderer::Impl::recordDisplacedDeform(VkCommandBuffer cb, DisplacedMe
             pc.warpCoefA      = dm.warp.coefA;
             pc.wakeTrailAddr  = st.wakeTrailBuffer.address;
             pc.wakeTrailCount = wakeSampleCount;
+            if (timed) gpuTimings_->begin(cb, vulkan::TP_OceanDisplace, currentFrame);
             waterDisplace_->recordDispatch(cb, st.displaceDS, pc);
+            if (timed) gpuTimings_->end(cb, vulkan::TP_OceanDisplace, currentFrame);
 
             // (4c) World-space foam pass — same inputs as water_displace
             // (cascades, disturbances, hull/wake state) but evaluated per
@@ -1710,7 +1714,9 @@ void VulkanRenderer::Impl::recordDisplacedDeform(VkCommandBuffer cb, DisplacedMe
                 fpc.wakeTrailAddr  = st.wakeTrailBuffer.address;
                 fpc.wakeTrailCount = wakeSampleCount;
                 fpc.natFoamScale   = std::clamp(dm.params.foamAmount, 0.0f, 1.0f);
+                if (timed) gpuTimings_->begin(cb, vulkan::TP_OceanFoam, currentFrame);
                 foamWorld_->recordDispatch(cb, st.foamWorldDS, fpc);
+                if (timed) gpuTimings_->end(cb, vulkan::TP_OceanFoam, currentFrame);
 
                 // Barrier: compute WRITE → ray-trace shader READ on the foam
                 // image. chit (binding 44) samples it via a combined image-
@@ -1820,7 +1826,9 @@ void VulkanRenderer::Impl::recordDisplacedDeform(VkCommandBuffer cb, DisplacedMe
             VkAccelerationStructureBuildRangeInfoKHR range{};
             range.primitiveCount = primCount;
             const VkAccelerationStructureBuildRangeInfoKHR* pRange = &range;
+            if (timed) gpuTimings_->begin(cb, vulkan::TP_OceanBlas, currentFrame);
             ctx->rt().cmdBuildAccelerationStructures(cb, 1, &build, &pRange);
+            if (timed) gpuTimings_->end(cb, vulkan::TP_OceanBlas, currentFrame);
         }
 
 void VulkanRenderer::Impl::mirrorDisplacedHeightfields(DisplacedMesh& dm, DisplacedMeshState& st) {

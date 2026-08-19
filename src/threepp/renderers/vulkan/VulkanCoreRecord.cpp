@@ -308,8 +308,10 @@ void VulkanRenderer::Impl::recordDeformAndTlas(VkCommandBuffer cb) {
             // displace-compute writes → raster G-buffer vertex-attribute reads
             // (the one-shot's submit+wait used to serialize those implicitly).
             if (!pendingDisplacedDeforms_.empty() && waterDisplace_) {
+                bool timed = true;// TP_Ocean* slots: first displaced mesh only
                 for (auto& [dmPtr, stPtr, tsec] : pendingDisplacedDeforms_) {
-                    recordDisplacedDeform(cb, *dmPtr, *stPtr, tsec);
+                    recordDisplacedDeform(cb, *dmPtr, *stPtr, tsec, timed);
+                    timed = false;
                 }
                 VkMemoryBarrier2 mb{};
                 mb.sType         = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2;
@@ -364,7 +366,9 @@ void VulkanRenderer::Impl::recordDeformAndTlas(VkCommandBuffer cb) {
             // previous frame's path trace). One submit per frame; CPU/GPU
             // overlap restored.
             if (pendingTlasRefit_) {
+                gpuTimings_->begin(cb, vulkan::TP_TlasRefit, currentFrame);
                 recordTlasRefit(cb, pendingTlasInstances_, pendingTlasFullBuild_);
+                gpuTimings_->end(cb, vulkan::TP_TlasRefit, currentFrame);
                 VkMemoryBarrier2 mb{};
                 mb.sType         = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2;
                 mb.srcStageMask  = VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR;

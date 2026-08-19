@@ -2628,7 +2628,11 @@ namespace threepp {
         // (recordCommandBuffer draining pendingDisplacedDeforms_, the per-frame
         // path) or wraps it in a one-shot for the rare structural first build
         // (refreshDisplacedBlas below).
-        void recordDisplacedDeform(VkCommandBuffer cb, DisplacedMesh& dm, DisplacedMeshState& st, float elapsedSeconds);
+        // timed: write the TP_Ocean* timestamp brackets. Only the per-frame
+        // path may pass true, and only for the FIRST displaced mesh of the
+        // frame — the query pool has one slot pair per pass, and the one-shot
+        // first-build cb never reset those slots at all.
+        void recordDisplacedDeform(VkCommandBuffer cb, DisplacedMesh& dm, DisplacedMeshState& st, float elapsedSeconds, bool timed = false);
 
         // Mirror cascade height fields into DisplacedMesh for CPU sampling
         // (boat hydrodynamics etc.). On the batched per-frame path this reads

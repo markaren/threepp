@@ -1073,11 +1073,23 @@ namespace threepp {
             // and it is the ENTIRE per-frame cost of such a field: there is no
             // CPU counterpart to pair it with.
             float particleEmitMs = 0.f;
+            // Ocean / DisplacedMesh per-frame update, split into its four
+            // stages (0 unless the scene has a DisplacedMesh; first displaced
+            // mesh of the frame only): the cascade spectrum + IFFT chains, the
+            // water_displace vertex/normal dispatch, the world-foam
+            // accumulator, and the in-place BLAS refit/rebuild.
+            float oceanFftMs      = 0.f;
+            float oceanDisplaceMs = 0.f;
+            float oceanFoamMs     = 0.f;
+            float oceanBlasMs     = 0.f;
+            // Per-frame TLAS refit recorded on the frame command buffer
+            // (0 on frames with no refit).
+            float tlasRefitMs     = 0.f;
             // GPU execution SPAN of the whole submitted command buffer — not a sum
             // of the fields above, and not busy time. It covers the passes that
-            // have no timestamp bracket at all (TLAS refit, deformers, bloom/post,
-            // RCAS, probe GI, cluster build, cloud march, auto-exposure, particle
-            // light, ImGui/present transition) and every secondary view, whose
+            // have no timestamp bracket at all (skinned/tet/grass deformers,
+            // bloom/post, RCAS, probe GI, cluster build, cloud march, auto-exposure,
+            // particle light, ImGui/present transition) and every secondary view, whose
             // timestamps are suppressed. Read against cpuFrameMs to tell "the CPU
             // is the wall" from "the CPU is waiting".
             float gpuTotalMs     = 0.f;
