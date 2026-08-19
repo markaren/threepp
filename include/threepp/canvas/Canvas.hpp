@@ -44,6 +44,21 @@ namespace threepp {
 
         void setSize(std::pair<int, int> size);
 
+        /// Move the window so its OUTER top-left corner — decorations
+        /// included — lands at (x, y) in screen coordinates: {0, 0} puts the
+        /// whole window, title bar and all, in the corner (raw GLFW positions
+        /// the content area, which would tuck the title bar off-screen).
+        /// Records the position when the window is not yet created. No-op on
+        /// Wayland (the protocol has no client-side positioning; GLFW reports
+        /// the attempt through the error callback) and in the browser.
+        void setPosition(std::pair<int, int> position);
+
+        /// The outer top-left corner of the window in screen coordinates,
+        /// decorations included (matching setPosition). Before the window
+        /// exists this is the requested position, or {0, 0} when none was
+        /// requested.
+        [[nodiscard]] std::pair<int, int> position() const;
+
         void onWindowResize(std::function<void(WindowSize)> f);
 
         void onMonitorChange(std::function<void(int)> f) const;
@@ -117,6 +132,14 @@ namespace threepp {
 
             Parameters& size(int width, int height);
 
+            /// Place the window's outer top-left corner — decorations
+            /// included, see Canvas::setPosition — at (x, y) in screen
+            /// coordinates instead of letting the OS choose. Ignored when
+            /// fullscreen(true) — the window covers the primary monitor from
+            /// its own origin — and on Wayland, which has no client-side
+            /// window positioning.
+            Parameters& position(int x, int y);
+
             Parameters& antialiasing(int antialiasing);
 
             Parameters& vsync(bool flag);
@@ -131,8 +154,8 @@ namespace threepp {
 
             /// Borderless windowed fullscreen: an undecorated, non-resizable
             /// window the size of the primary monitor's current video mode,
-            /// placed at that monitor's origin. Any requested size() is
-            /// ignored. This is deliberately NOT exclusive fullscreen — the
+            /// placed at that monitor's origin. Any requested size() or
+            /// position() is ignored. This is deliberately NOT exclusive fullscreen — the
             /// display mode is never changed, alt-tab behaves like any other
             /// window, and a Vulkan canvas can still stay hidden until its
             /// first present. Ignored when headless(true): there is no window
@@ -141,6 +164,7 @@ namespace threepp {
 
         private:
             std::optional<WindowSize> size_;
+            std::optional<std::pair<int, int>> position_;
             int antialiasing_{4};
             std::string title_{"threepp"};
             bool vsync_{true};

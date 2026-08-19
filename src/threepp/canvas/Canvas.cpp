@@ -320,8 +320,18 @@ struct Canvas::Impl {
         // otherwise it flashes at GLFW's default (centred) position first. It
         // is revealed at the end of this function, unlike a Vulkan canvas,
         // which stays hidden until its renderer has presented.
+        // Manual placement. Fullscreen wins: it already owns the position (the
+        // monitor origin). Deliberately NOT the GLFW 3.4 position hints: those
+        // (like glfwSetWindowPos) place the CONTENT area, so (0, 0) tucks the
+        // title bar and border off the top of the screen. The API promises the
+        // OUTER frame instead, and the frame is only measurable once the window
+        // exists (glfwGetWindowFrameSize) — so placement always follows the
+        // borderless recipe: create hidden, measure, move, reveal. Wayland
+        // ignores the move (the protocol has no client-side positioning) and
+        // GLFW says so through the error callback.
+        const bool manualPos = params_.position_.has_value() && !borderless;
         const bool deferShow = params_.headless_ || api == GraphicsAPI::Vulkan;
-        glfwWindowHint(GLFW_VISIBLE, (deferShow || borderless) ? GLFW_FALSE : GLFW_TRUE);
+        glfwWindowHint(GLFW_VISIBLE, (deferShow || borderless || manualPos) ? GLFW_FALSE : GLFW_TRUE);
 #else
         // Browser: OpenGL (WebGL2) needs GLFW to create the WebGL context.
         // Suppressing it left GLctx undefined and crashed the GL renderer on
@@ -369,6 +379,10 @@ struct Canvas::Impl {
             glfwSetWindowPos(window, mx, my);
             // The reveal waits until the icon and callbacks are installed
             // below — see the end of this function.
+        } else if (manualPos) {
+            // The window was created hidden, so this move is never seen.
+            // Revealed at the end of this function.
+            moveFrameTo(params_.position_->first, params_.position_->second);
         }
 #endif
 
@@ -419,11 +433,12 @@ struct Canvas::Impl {
         }
 
 #ifndef __EMSCRIPTEN__
-        // A borderless-fullscreen window was created hidden only so it could be
-        // moved onto the monitor origin unseen; now that it is placed, iconed
-        // and wired up, reveal it. A canvas with a real reason to stay hidden
-        // (headless, or Vulkan waiting on its first present) is left alone.
-        if (borderless && !deferShow) {
+        // A borderless-fullscreen or manually placed window was created hidden
+        // only so it could be moved into place unseen; now that it is placed,
+        // iconed and wired up, reveal it. A canvas with a real reason to stay
+        // hidden (headless, or Vulkan waiting on its first present) is left
+        // alone.
+        if ((borderless || manualPos) && !deferShow) {
             glfwShowWindow(window);
         }
 #endif
@@ -442,6 +457,47 @@ struct Canvas::Impl {
         }
 
         glfwSetWindowSize(window, size.first, size.second);
+    }
+
+#ifndef __EMSCRIPTEN__
+    // Position (x, y) as the OUTER frame's top-left corner, decorations
+    // included. GLFW's coordinate is the content area, so a raw
+    // glfwSetWindowPos(0, 0) tucks the title bar off the top of the screen;
+    // offsetting by the frame size keeps the whole window on it. An
+    // undecorated window (borderless fullscreen) has a zero frame, so this is
+    // exact there too.
+    void moveFrameTo(int x, int y) const {
+
+        int frameLeft = 0, frameTop = 0, frameRight, frameBottom;
+        glfwGetWindowFrameSize(window, &frameLeft, &frameTop, &frameRight, &frameBottom);
+        glfwSetWindowPos(window, x + frameLeft, y + frameTop);
+    }
+#endif
+
+    void setPosition(std::pair<int, int> position) {
+
+        if (!window) {
+            params_.position(position.first, position.second);
+            return;
+        }
+
+#ifndef __EMSCRIPTEN__
+        moveFrameTo(position.first, position.second);
+#endif
+    }
+
+    [[nodiscard]] std::pair<int, int> getPosition() const {
+
+#ifndef __EMSCRIPTEN__
+        if (window) {
+            int x, y;
+            glfwGetWindowPos(window, &x, &y);
+            int frameLeft = 0, frameTop = 0, frameRight, frameBottom;
+            glfwGetWindowFrameSize(window, &frameLeft, &frameTop, &frameRight, &frameBottom);
+            return {x - frameLeft, y - frameTop};
+        }
+#endif
+        return params_.position_.value_or(std::pair<int, int>{0, 0});
     }
 
     bool animateOnce(const std::function<void()>& f) {
@@ -659,6 +715,16 @@ void Canvas::setSize(std::pair<int, int> size) {
     pimpl_->setSize(size);
 }
 
+void Canvas::setPosition(std::pair<int, int> position) {
+
+    pimpl_->setPosition(position);
+}
+
+std::pair<int, int> Canvas::position() const {
+
+    return pimpl_->getPosition();
+}
+
 void Canvas::onWindowResize(std::function<void(WindowSize)> f) {
 
     pimpl_->onWindowResize(std::move(f));
@@ -807,6 +873,13 @@ Canvas::Parameters& Canvas::Parameters::size(WindowSize size) {
 Canvas::Parameters& Canvas::Parameters::size(int width, int height) {
 
     return this->size({width, height});
+}
+
+Canvas::Parameters& Canvas::Parameters::position(int x, int y) {
+
+    this->position_ = {x, y};
+
+    return *this;
 }
 
 Canvas::Parameters& Canvas::Parameters::antialiasing(int antialiasing) {

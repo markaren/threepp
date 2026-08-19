@@ -127,22 +127,26 @@ namespace threepp_py {
         // exposed as keyword arguments rather than the fluent Parameters builder.
         py::class_<Canvas>(m, "Canvas")
                 .def(py::init([](const std::string& title, int width, int height, int antialiasing,
-                                 bool vsync, bool resizable, bool headless, bool fullscreen) {
+                                 bool vsync, bool resizable, bool headless, bool fullscreen,
+                                 std::optional<std::pair<int, int>> position) {
                     Canvas::Parameters p;
                     p.title(title);
                     if (width > 0 && height > 0) p.size(width, height);
+                    if (position) p.position(position->first, position->second);
                     p.antialiasing(antialiasing).vsync(vsync).resizable(resizable).headless(headless).fullscreen(fullscreen);
                     return std::make_unique<Canvas>(p);
                 }),
                      py::arg("title") = "threepp", py::arg("width") = -1, py::arg("height") = -1,
                      py::arg("antialiasing") = 4, py::arg("vsync") = true,
                      py::arg("resizable") = true, py::arg("headless") = false,
-                     py::arg("fullscreen") = false,
+                     py::arg("fullscreen") = false, py::arg("position") = py::none(),
                      "A window (or a hidden surface when headless=True). width/height default to half "
                      "the primary monitor. fullscreen=True gives BORDERLESS windowed fullscreen: an "
                      "undecorated, non-resizable window covering the primary monitor, which ignores "
                      "width/height and resizable. It never changes the display mode, so alt-tab behaves "
-                     "like any other window. headless=True wins over it (there is no window to show).")
+                     "like any other window. headless=True wins over it (there is no window to show). "
+                     "position=(x, y) places the window in screen coordinates instead of letting the OS "
+                     "choose (ignored with fullscreen=True; no-op on Wayland).")
                 .def("animate", &Canvas::animate, py::arg("callback"),
                      "Run the render loop, calling callback() every frame until the window closes.")
                 .def("animate_once", &Canvas::animateOnce, py::arg("callback"),
@@ -159,6 +163,13 @@ namespace threepp_py {
                     }
                 })
                 .def("set_size", [](Canvas& c, int w, int h) { c.setSize({w, h}); }, py::arg("width"), py::arg("height"))
+                .def("set_position", [](Canvas& c, int x, int y) { c.setPosition({x, y}); }, py::arg("x"), py::arg("y"),
+                     "Move the window's outer top-left corner (title bar included) to (x, y) in screen "
+                     "coordinates — (0, 0) keeps the whole window on screen. No-op on Wayland.")
+                .def("position", [](const Canvas& c) {
+                    auto p = c.position();
+                    return py::make_tuple(p.first, p.second);
+                })
                 .def("on_window_resize", [](Canvas& c, const std::function<void(int, int)>& cb) {
                     c.onWindowResize([cb](WindowSize s) { cb(s.width(), s.height()); });
                 }, py::arg("callback"),

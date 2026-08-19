@@ -6,6 +6,14 @@ add_subdirectory(gl)
 # sides must agree on.
 add_test_executable(BC7Encode_test)
 
+# Canvas manual placement, pre-window paths only: a requested position()
+# surfaces through the getter, and setPosition() before the window exists
+# records the request. The canvas is headless and never animated, so no window
+# is created and no GPU or display is needed.
+if (THREEPP_WITH_GLFW)
+    add_test_executable(CanvasPosition_test)
+endif ()
+
 # Vulkan deferred golden-image regression net. Plain exit-code program (not
 # Catch2): renders fixed deterministic scenes and compares to committed PPM
 # references via examples/vulkan/capture_util.hpp. Needs an RT-capable GPU at
