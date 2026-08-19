@@ -1089,7 +1089,8 @@ namespace threepp::vulkan {
                                                  uint32_t width, uint32_t height,
                                                  uint32_t gbufMsaaSamples, bool shadeBActive,
                                                  uint32_t preExpBits) {
-        // GI SVGF filter + recombine (the 4 à-trous passes below).
+        // GI SVGF filter + recombine (the à-trous passes below; count via
+        // THREEPP_DENOISE_ATROUS_PASSES, default 4).
         vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, giFilterPipe_);
         vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_COMPUTE,
                                 pipeLayout_, 0, 1, &sets_[frame], 0, nullptr);
@@ -1108,25 +1109,47 @@ namespace threepp::vulkan {
         // pixels — the shade pass stored only the coverage-weighted dominant
         // surface there, so a full-weight add was a bright rim on every edge.
         const uint32_t msaaInfo = (gbufMsaaSamples & 0x7u) | (shadeBActive ? 0x10u : 0u);
+        // THREEPP_DENOISE_ATROUS_PASSES: 2..4, default 4 — the pass-count
+        // knob. Each pass filters at a widening step (1,2,4,8), so dropping
+        // tail passes halves the filter's reach each time: 4 passes cover
+        // ±~30 px, 3 cover ±~14, 2 cover ±~6. The table derives from the
+        // count instead of being hand-written: pass 0 always reads the raw
+        // indirect (srcMode 0), pass 1 always carries the SVGF history
+        // feedback — count-invariant because feedback writes the pass's
+        // SOURCE (the first pass's filtered GI), not its destination — and
+        // the LAST pass recombines into sceneHdr (dstMode 2; valid alongside
+        // feedback, they touch different images). Floor is 2, not 1: a
+        // single pass has no srcMode-1 pass to feed the filtered history
+        // back, and losing that re-injection brings back the disocclusion
+        // dust tail the feedback exists to remove.
+        //   4 (default): {1,0,0,0} {2,1,1,1} {4,2,0,0} {8,1,2,0}
+        //   3:           {1,0,0,0} {2,1,1,1} {4,2,2,0}
+        //   2:           {1,0,0,0} {2,1,2,1}
+        static const int kAtrousPasses = [] {
+            const char* e = std::getenv("THREEPP_DENOISE_ATROUS_PASSES");
+            const int v = e ? std::atoi(e) : 4;
+            return std::clamp(v, 2, 4);
+        }();
         struct Pass { uint32_t step, srcMode, dstMode, feedback; };
-        const Pass passes[4] = {
-            {1u, 0u, 0u, 0u},// indirect → A  (step 1)
-            {2u, 1u, 1u, 1u},// A → B  (step 2) + feed A (1st-pass filtered) back as temporal history
-            {4u, 2u, 0u, 0u},// B → A  (step 4)
-            {8u, 1u, 2u, 0u},// A → recombine into sceneHdr (step 8)
-        };
+        Pass passes[4]{};
+        for (int p = 0; p < kAtrousPasses; ++p) {
+            passes[p].step     = 1u << p;
+            passes[p].srcMode  = (p == 0) ? 0u : ((p & 1) ? 1u : 2u);
+            passes[p].dstMode  = (p == kAtrousPasses - 1) ? 2u : ((p & 1) ? 1u : 0u);
+            passes[p].feedback = (p == 1) ? 1u : 0u;
+        }
         VkMemoryBarrier mb{};
         mb.sType         = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
         mb.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT | VK_ACCESS_SHADER_READ_BIT;// RAW (scratch) + WAR (history feedback writes indirect that pass 0 read)
         mb.dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
-        for (int p = 0; p < 4; ++p) {
+        for (int p = 0; p < kAtrousPasses; ++p) {
             // Slot [0] = preExpBits: the recombine's sceneHdr adds bake the
             // same pre-exposure the shade pass stored with (1.0 legacy).
             const uint32_t pc[10] = {preExpBits, width, height, passes[p].step,
                                      passes[p].srcMode, passes[p].dstMode, passes[p].feedback, 0u, msaaInfo, 0u};
             vkCmdPushConstants(cb, pipeLayout_, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(pc), pc);
             vkCmdDispatch(cb, (width + 7u) / 8u, (height + 7u) / 8u, 1);
-            if (p < 3)// make this pass's scratch write visible to the next pass's read
+            if (p < kAtrousPasses - 1)// make this pass's scratch write visible to the next pass's read
                 vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
                                      VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0,
                                      1, &mb, 0, nullptr, 0, nullptr);
