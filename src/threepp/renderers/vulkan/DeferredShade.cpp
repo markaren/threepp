@@ -1090,7 +1090,8 @@ namespace threepp::vulkan {
                                                  uint32_t gbufMsaaSamples, bool shadeBActive,
                                                  uint32_t preExpBits) {
         // GI SVGF filter + recombine (the à-trous passes below; count via
-        // THREEPP_DENOISE_ATROUS_PASSES, default 2).
+        // THREEPP_DENOISE_ATROUS_PASSES, default 4 — the wide passes
+        // self-gate per pixel, see deferred_gi_filter.comp).
         vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, giFilterPipe_);
         vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_COMPUTE,
                                 pipeLayout_, 0, 1, &sets_[frame], 0, nullptr);
@@ -1109,7 +1110,7 @@ namespace threepp::vulkan {
         // pixels — the shade pass stored only the coverage-weighted dominant
         // surface there, so a full-weight add was a bright rim on every edge.
         const uint32_t msaaInfo = (gbufMsaaSamples & 0x7u) | (shadeBActive ? 0x10u : 0u);
-        // THREEPP_DENOISE_ATROUS_PASSES: 2..4, DEFAULT 2 — the pass-count
+        // THREEPP_DENOISE_ATROUS_PASSES: 2..4, default 4 — the pass-count
         // knob. Each pass filters at a widening step (1,2,4,8), so dropping
         // tail passes halves the filter's reach each time: 4 passes cover
         // ±~30 px, 3 cover ±~14, 2 cover ±~6. The table derives from the
@@ -1122,25 +1123,25 @@ namespace threepp::vulkan {
         // single pass has no srcMode-1 pass to feed the filtered history
         // back, and losing that re-injection brings back the disocclusion
         // dust tail the feedback exists to remove.
-        //   4: {1,0,0,0} {2,1,1,1} {4,2,0,0} {8,1,2,0}
-        //   3: {1,0,0,0} {2,1,1,1} {4,2,2,0}
-        //   2 (default): {1,0,0,0} {2,1,2,1}
+        //   4 (default): {1,0,0,0} {2,1,1,1} {4,2,0,0} {8,1,2,0}
+        //   3:           {1,0,0,0} {2,1,1,1} {4,2,2,0}
+        //   2:           {1,0,0,0} {2,1,2,1}
         //
-        // Default dropped 4→2 (2026-08-19): the pass bench put this chain at
-        // 2.09 ms, 37% of the ocean scene's GPU frame and its biggest single
-        // item; each dropped pass is worth ~0.42 ms (frame 5.29→4.25 ms, −20%
-        // at 2). The quality gates run before the flip, all LOOKED at in 1:1
-        // crops: settled stills (dark-wall GI, penumbras), light-radius-step
-        // settle churn (MAD parity), rotating-object disocclusion, ocean
-        // body, and a 12 m/s forward dolly through the fjord's dense
-        // vegetation — frame edges and shadowed grass clean, within-sequence
-        // temporal churn at or below the 4-pass leg. Bump back to 3 or 4 for
-        // content that leans harder on the wide steps than anything measured
-        // here (large dim interiors under fast camera motion is the case to
-        // watch — the night-fjord leg was captured but not adjudicated).
+        // History (2026-08-19): the pass bench put this chain at 2.09 ms —
+        // 37% of the ocean scene's GPU frame — and each dropped pass is
+        // worth ~0.42 ms, so the default briefly went to 2. But the wide
+        // steps are load-bearing exactly where lighting is a small bright
+        // source in the dark (the emissive golden, the night fjord's cabin
+        // lamps), so instead of a global cut the wide passes are now
+        // SELF-GATING per pixel: deferred_gi_filter.comp skips the 25-tap
+        // loop at step ≥ 4 wherever both channels' propagated variance says
+        // the filter would be a near-identity, and passes the center
+        // through. Sky-lit converged scenes pay ~2 real passes; lamp-lit
+        // noise keeps the full ±30 px reach. The knob remains for A/B and
+        // for forcing the old global behavior.
         static const int kAtrousPasses = [] {
             const char* e = std::getenv("THREEPP_DENOISE_ATROUS_PASSES");
-            const int v = e ? std::atoi(e) : 2;
+            const int v = e ? std::atoi(e) : 4;
             return std::clamp(v, 2, 4);
         }();
         struct Pass { uint32_t step, srcMode, dstMode, feedback; };

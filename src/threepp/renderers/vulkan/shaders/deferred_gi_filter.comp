@@ -195,7 +195,31 @@ void main() {
     }
     const float visPhi = 4.0 * sqrt(max(varS, 0.0)) + 1e-3;// ratio range-stop scale
 
+    // SURGICAL WIDE PASSES. The wide steps (4, 8) exist for high-variance
+    // content — small bright emitters lighting a dark room, fresh
+    // disocclusions — but sky-lit converged pixels pay their full 25-tap
+    // cost for a near-identity: at tiny variance lumPhi collapses, the
+    // luminance stop admits only the local plateau, and the pass output
+    // ≈ its input. So at step ≥ 4, skip the tap loop when BOTH channels are
+    // quiet and pass the center through instead. The test is RELATIVE
+    // (√var against the pixel's own luminance) so it is exposure-invariant:
+    // a dim pixel that is noisy relative to its own brightness — the
+    // night-cabin lamp spill — keeps the full reach, while a bright
+    // converged sky plateau skips. The shadow ratio is bounded [0,1], so
+    // its threshold is absolute. No seam: near the threshold the filtered
+    // and pass-through values converge by construction, and skipped pixels
+    // still write their dst image, so the ping-pong stays
+    // generation-consistent. Warps skip coherently — variance is smooth.
+    const bool wideSkip = pc.step >= 4u &&
+            sqrt(variance) <= 0.02 * lumC + 1e-4 &&
+            sqrt(varS)     <= 0.02;
+
     const int st = int(max(pc.step, 1u));
+    vec3  fC  = cC.rgb;// pass-through defaults (wideSkip)
+    float fV  = variance;
+    float fS  = cS.x;
+    float fVS = varS;
+    if (!wideSkip) {
     vec3  sumC = vec3(0.0);
     float sumW = 0.0;
     float sumV = 0.0;
@@ -234,14 +258,15 @@ void main() {
         sumWS += wS;
         sumVS += wS * wS * vqS;
     }
-    const vec3  fC = sumW > 0.0 ? sumC / sumW : cC.rgb;
+    fC = sumW > 0.0 ? sumC / sumW : cC.rgb;
     // Variance propagation: pass 0 stores the center estimate (no neighbour
     // variance available); later passes carry the à-trous-filtered variance.
-    const float fV = (pc.srcMode == 0u) ? variance
-                   : (sumW > 0.0 ? sumV / (sumW * sumW) : variance);
-    const float fS  = sumWS > 0.0 ? sumS / sumWS : cS.x;
-    const float fVS = (pc.srcMode == 0u) ? varS
-                    : (sumWS > 0.0 ? sumVS / (sumWS * sumWS) : varS);
+    fV = (pc.srcMode == 0u) ? variance
+       : (sumW > 0.0 ? sumV / (sumW * sumW) : variance);
+    fS  = sumWS > 0.0 ? sumS / sumWS : cS.x;
+    fVS = (pc.srcMode == 0u) ? varS
+        : (sumWS > 0.0 ? sumVS / (sumWS * sumWS) : varS);
+    }// !wideSkip
 
     // SVGF HISTORY FEEDBACK: on the designated pass, write THIS pass's SOURCE (the
     // first à-trous pass's already-filtered GI) back into the indirect image as the
