@@ -156,9 +156,8 @@ if (THREEPP_BUILD_EXAMPLES OR THREEPP_BUILD_TESTS)
     include(FetchContent)
     FetchContent_Declare(
             threepp_data
-            GIT_REPOSITORY https://github.com/markaren/threepp_data.git
-            GIT_TAG 93069e76bfd6cd75e785d0334738cb303d4f555e
-            GIT_SHALLOW TRUE
+            URL https://github.com/markaren/threepp_data/archive/93069e76bfd6cd75e785d0334738cb303d4f555e.tar.gz
+            DOWNLOAD_EXTRACT_TIMESTAMP TRUE
     )
     FetchContent_MakeAvailable(threepp_data)
     set(THREEPP_DATA_DIR "${threepp_data_SOURCE_DIR}" CACHE INTERNAL "threepp-data asset path")
