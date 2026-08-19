@@ -572,9 +572,9 @@ class CameraHelper(LineSegments):
     def update(self) -> None:
         ...
 class Canvas:
-    def __init__(self, title: str = 'threepp', width: typing.SupportsInt | typing.SupportsIndex = -1, height: typing.SupportsInt | typing.SupportsIndex = -1, antialiasing: typing.SupportsInt | typing.SupportsIndex = 4, vsync: bool = True, resizable: bool = True, headless: bool = False, fullscreen: bool = False) -> None:
+    def __init__(self, title: str = 'threepp', width: typing.SupportsInt | typing.SupportsIndex = -1, height: typing.SupportsInt | typing.SupportsIndex = -1, antialiasing: typing.SupportsInt | typing.SupportsIndex = 4, vsync: bool = True, resizable: bool = True, headless: bool = False, fullscreen: bool = False, position: tuple[typing.SupportsInt | typing.SupportsIndex, typing.SupportsInt | typing.SupportsIndex] | None = None) -> None:
         """
-        A window (or a hidden surface when headless=True). width/height default to half the primary monitor. fullscreen=True gives BORDERLESS windowed fullscreen: an undecorated, non-resizable window covering the primary monitor, which ignores width/height and resizable. It never changes the display mode, so alt-tab behaves like any other window. headless=True wins over it (there is no window to show).
+        A window (or a hidden surface when headless=True). width/height default to half the primary monitor. fullscreen=True gives BORDERLESS windowed fullscreen: an undecorated, non-resizable window covering the primary monitor, which ignores width/height and resizable. It never changes the display mode, so alt-tab behaves like any other window. headless=True wins over it (there is no window to show). position=(x, y) places the window in screen coordinates instead of letting the OS choose (ignored with fullscreen=True; no-op on Wayland).
         """
     def animate(self, callback: collections.abc.Callable[[], None]) -> None:
         """
@@ -597,6 +597,12 @@ class Canvas:
     def on_window_resize(self, callback: collections.abc.Callable[[typing.SupportsInt | typing.SupportsIndex, typing.SupportsInt | typing.SupportsIndex], None]) -> None:
         """
         Register callback(width, height), called when the window is resized. Use it to update the camera aspect (+ update_projection_matrix) and the renderer size.
+        """
+    def position(self) -> tuple[int, int]:
+        ...
+    def set_position(self, x: typing.SupportsInt | typing.SupportsIndex, y: typing.SupportsInt | typing.SupportsIndex) -> None:
+        """
+        Move the window's outer top-left corner (title bar included) to (x, y) in screen coordinates — (0, 0) keeps the whole window on screen. No-op on Wayland.
         """
     def set_size(self, width: typing.SupportsInt | typing.SupportsIndex, height: typing.SupportsInt | typing.SupportsIndex) -> None:
         ...
@@ -1082,12 +1088,12 @@ class DepthSensor(Object3D, Sensor):
     def scan_begin(self, renderer: typing.Any, scene: Scene) -> bool:
         """
         Fire a scan without waiting for it. Call it AFTER render() on the frame you want sampled: the beams snapshot the sensor's pose (and stamp last_scan_time) here, not at scan_collect. Take delivery with scan_collect on a later frame — on Vulkan a collect with at least one intervening render() is essentially free, whereas scan() blocks on the readback and so pays for every frame already queued behind the fence.
-
+        
             if sensor.scan_due and not sensor.scan_pending:
                 sensor.scan_begin(renderer, scene)
             if sensor.scan_ready(renderer):
                 pts = sensor.scan_collect(renderer)
-
+        
         Returns True when the cloud is ALREADY complete — the raster (GLRenderer) path has nothing to pipeline, so it does the whole scan here. On Vulkan it returns False and the cloud arrives at a later scan_collect. Either way scan_collect is what hands the points over, so the loop above is correct on both backends; only the frame the cloud lands on differs.
         """
     def scan_collect(self, renderer: typing.Any) -> numpy.typing.NDArray[numpy.float32]:
@@ -1598,6 +1604,8 @@ class GLRenderer:
     def __init__(self, canvas: Canvas) -> None:
         ...
     def clear(self, color: bool = True, depth: bool = True, stencil: bool = True) -> None:
+        ...
+    def gl_buffer_id(self, geometry: BufferGeometry, attribute: str) -> typing.Any:
         ...
     def read_pixels(self, flip: bool = True) -> numpy.typing.NDArray[numpy.uint8]:
         ...
@@ -2533,6 +2541,12 @@ class LidarReturn:
         ...
     @intensity.setter
     def intensity(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def return_kind(self) -> int:
+        ...
+    @return_kind.setter
+    def return_kind(self, arg0: typing.SupportsInt | typing.SupportsIndex) -> None:
         ...
     @property
     def return_no(self) -> int:
@@ -3751,7 +3765,7 @@ class PhysxGpuBatch:
         ...
     def step(self, dt: typing.SupportsFloat | typing.SupportsIndex) -> None:
         """
-        Advance every articulation one substep on the GPU (no binding sync).
+        Advance every articulation one substep on the GPU (no binding sync). Releases the GIL while stepping.
         """
     def write_joint_force(self, tensor: typing.Any) -> None:
         """
@@ -3858,9 +3872,9 @@ class PhysxWorld:
         """
         Create a contact material. Defaults: friction 0.5/0.5, restitution 0 (no bounce — right for feet/locomotion, unlike the world's shared 0.2 default). combine modes ('average'|'min'|'multiply'|'max') control how two contacting materials' coefficients mix — use 'min' so a clean material governs a contact against a different one. The returned PhysxMaterial is mutable (per-env friction randomization). Keeps the world alive.
         """
-    def load_articulation(self, path: str, fixed_base: bool = False, base_position: typing.Annotated[collections.abc.Sequence[typing.SupportsFloat | typing.SupportsIndex], "FixedSize(3)"] = [0.0, 0.0, 0.0], default_density: typing.SupportsFloat | typing.SupportsIndex = 1000.0, stiffness: typing.SupportsFloat | typing.SupportsIndex = 0.0, damping: typing.SupportsFloat | typing.SupportsIndex = 0.0, max_force: typing.SupportsFloat | typing.SupportsIndex = 1000000.0, self_collision: bool = False, solver_position_iterations: typing.SupportsInt | typing.SupportsIndex = 12, render_visuals: bool = True, scale: typing.SupportsFloat | typing.SupportsIndex = 1.0) -> tuple[Articulation, list[Mesh], list[str]]:
+    def load_articulation(self, path: str, fixed_base: bool = False, base_position: typing.Annotated[collections.abc.Sequence[typing.SupportsFloat | typing.SupportsIndex], "FixedSize(3)"] = [0.0, 0.0, 0.0], default_density: typing.SupportsFloat | typing.SupportsIndex = 1000.0, stiffness: typing.SupportsFloat | typing.SupportsIndex = 0.0, damping: typing.SupportsFloat | typing.SupportsIndex = 0.0, max_force: typing.SupportsFloat | typing.SupportsIndex = 1000000.0, self_collision: bool = False, solver_position_iterations: typing.SupportsInt | typing.SupportsIndex = 12, render_visuals: bool = True, scale: typing.SupportsFloat | typing.SupportsIndex = 1.0, args: collections.abc.Mapping[str, str] = {}) -> tuple[Articulation, list[Mesh], list[str]]:
         """
-        Import a URDF/xacro as a finalized Articulation (one shared parser with the C++ URDFLoader — xacro supported). Returns (articulation, meshes, joint_names): the collider meshes are bound to the sim (add them to a scene to render), joint_names lists the actuated joints in drive-target order. Collision is primitive/bbox, mass from <inertial> (else default_density x volume); fixed joints are collapsed. stiffness/damping/max_force set a PD drive on every joint. scale reinterprets the file's length units (a millimetre URDF in a metre world is 0.001) - shapes, joint frames and prismatic limits are built scaled, masses stay as authored, and a prismatic DOF then reads and drives in the SCALED units.
+        Import a URDF/xacro as a finalized Articulation (one shared parser with the C++ URDFLoader — xacro supported). Returns (articulation, meshes, joint_names): the collider meshes are bound to the sim (add them to a scene to render), joint_names lists the actuated joints in drive-target order. Collision is primitive/bbox, mass from <inertial> (else default_density x volume); fixed joints are collapsed. stiffness/damping/max_force set a PD drive on every joint. scale reinterprets the file's length units (a millimetre URDF in a metre world is 0.001) - shapes, joint frames and prismatic limits are built scaled, masses stay as authored, and a prismatic DOF then reads and drives in the SCALED units. `args` are xacro argument overrides, the same name:=value pairs the xacro CLI takes - a parameterised description built without them expands to the FILE's defaults, which for many robots names config paths that do not exist.
         """
     def on_post_substep(self, callback: collections.abc.Callable) -> int:
         """
@@ -3886,7 +3900,7 @@ class PhysxWorld:
         ...
     def step(self, dt: typing.SupportsFloat | typing.SupportsIndex) -> None:
         """
-        Advance the simulation by dt seconds (variable-rate caller, fixed-rate physics). After it returns, every bound mesh's transform reflects the new state.
+        Advance the simulation by dt seconds (variable-rate caller, fixed-rate physics). After it returns, every bound mesh's transform reflects the new state. Releases the GIL while stepping.
         """
     def unregister_sensor(self, sensor: Sensor) -> None:
         """
@@ -5292,30 +5306,6 @@ class TreeParams:
     def leaf_atlas_cells(self, arg0: typing.SupportsInt | typing.SupportsIndex) -> None:
         ...
     @property
-    def leaf_droop(self) -> float:
-        ...
-    @leaf_droop.setter
-    def leaf_droop(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
-        ...
-    @property
-    def pendant_density(self) -> float:
-        ...
-    @pendant_density.setter
-    def pendant_density(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
-        ...
-    @property
-    def pendant_length(self) -> float:
-        ...
-    @pendant_length.setter
-    def pendant_length(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
-        ...
-    @property
-    def twig_shade(self) -> float:
-        ...
-    @twig_shade.setter
-    def twig_shade(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
-        ...
-    @property
     def leaf_clumping(self) -> float:
         ...
     @leaf_clumping.setter
@@ -5332,6 +5322,12 @@ class TreeParams:
         ...
     @leaf_density.setter
     def leaf_density(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def leaf_droop(self) -> float:
+        ...
+    @leaf_droop.setter
+    def leaf_droop(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
         ...
     @property
     def leaf_size(self) -> float:
@@ -5362,6 +5358,18 @@ class TreeParams:
         ...
     @min_branch_radius.setter
     def min_branch_radius(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def pendant_density(self) -> float:
+        ...
+    @pendant_density.setter
+    def pendant_density(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def pendant_length(self) -> float:
+        ...
+    @pendant_length.setter
+    def pendant_length(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
         ...
     @property
     def radial_segments(self) -> int:
@@ -5442,6 +5450,12 @@ class TreeParams:
     def trunk_twist(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
         ...
     @property
+    def twig_shade(self) -> float:
+        ...
+    @twig_shade.setter
+    def twig_shade(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
     def whorl_jitter(self) -> float:
         ...
     @whorl_jitter.setter
@@ -5456,37 +5470,37 @@ class TreeParams:
 class URDFLoader:
     def __init__(self) -> None:
         ...
-    @property
-    def last_error(self) -> str:
-        """
-        Why the most recent load/parse/parse_articulation failed: the errors it produced, joined into one message. Empty after a call that succeeded, and never empty after one that did not.
-
-        The raise already carries this. It is here for the caller that wants to report rather than propagate - a ROS node logging a bad /robot_description and carrying on, say.
-        """
-    @property
-    def diagnostics(self) -> list[str]:
-        """
-        Everything the most recent call had to say: warnings first, then errors, each group in the order it was produced.
-
-        Not the same as `last_error`, and the difference is the point: the warnings come from the XACRO expansion - a redefined macro, an undeclared attribute being ignored, a name resolved as an arg rather than a property - and a document that produces them still loads. They only ever went to stderr, where a script cannot see them and a GUI has nowhere to show them.
-
-        Cleared at the start of every call, so an empty list after a success means there was genuinely nothing to say.
-        """
     def load(self, path: str) -> Robot:
         """
         Load a .urdf/.xacro file into a Robot (meshes via ModelLoader).
-
+        
         Raises RuntimeError carrying the parser's own explanation - the same text `last_error` holds, which for a xacro failure includes the file and LINE. Read `diagnostics` afterwards for the warnings too, which a load that SUCCEEDS can also produce.
         """
     def parse(self, base_dir: str, xml: str) -> Robot:
         """
         Parse URDF XML from a string; base_dir resolves relative mesh paths.
-
+        
         Raises RuntimeError carrying the parser's own explanation, exactly as `load` does. This is the call a ROS node makes on /robot_description, where the XML came off a topic and there is no file to go and look at.
         """
     def set_args(self, args: collections.abc.Mapping[str, str]) -> None:
         """
         xacro arg overrides (equivalent to name:=value on the xacro CLI).
+        """
+    @property
+    def diagnostics(self) -> list[str]:
+        """
+        Everything the most recent call had to say: warnings first, then errors, each group in the order it was produced.
+        
+        Not the same as `last_error`, and the difference is the point: the warnings come from the XACRO expansion - a redefined macro, an undeclared attribute being ignored, a name resolved as an arg rather than a property - and a document that produces them still loads. They only ever went to stderr, where a script cannot see them and a GUI has nowhere to show them.
+        
+        Cleared at the start of every call, so an empty list after a success means there was genuinely nothing to say.
+        """
+    @property
+    def last_error(self) -> str:
+        """
+        Why the most recent load/parse/parse_articulation failed: the errors it produced, joined into one message. Empty after a call that succeeded, and never empty after one that did not.
+        
+        The raise already carries this. It is here for the caller that wants to report rather than propagate - a ROS node logging a bad /robot_description and carrying on, say.
         """
 class Vector2:
     __hash__: typing.ClassVar[None] = None

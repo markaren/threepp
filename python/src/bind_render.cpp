@@ -235,7 +235,24 @@ namespace threepp_py {
                     }
                     return arr;
                 }, py::arg("flip") = true)
-                .def("save_frame", [](GLRenderer& r, const std::string& path) { r.writeFramebuffer(path); }, py::arg("path"));
+                .def("save_frame", [](GLRenderer& r, const std::string& path) { r.writeFramebuffer(path); }, py::arg("path"))
+                // GL buffer object id (GLuint) backing a geometry attribute, or None
+                // until the first render uploads it. Exists for zero-copy CUDA/GL
+                // interop: an external GPU simulation (e.g. NVIDIA Warp) registers
+                // the VBO and writes vertex data in place. The attribute's CPU-side
+                // array goes stale by design — don't mix with update_attribute on
+                // the same attribute.
+                .def("gl_buffer_id", [](GLRenderer& r, BufferGeometry& g, const std::string& name) -> py::object {
+                    auto* attr = g.getAttribute(name);
+                    if (!attr) return py::none();
+                    try {
+                        const auto id = r.getGlBufferId(*attr);
+                        if (!id || *id == 0) return py::none();
+                        return py::int_(*id);
+                    } catch (const std::out_of_range&) {
+                        return py::none();
+                    }
+                }, py::arg("geometry"), py::arg("attribute"));
 
         // ---- DepthSensor (helpers/DepthSensor.hpp) ---------------------------
         // A GPU depth-render sensor: renders the scene from its own viewpoint, linearizes
