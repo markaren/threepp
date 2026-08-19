@@ -135,7 +135,7 @@ namespace threepp::vegetation {
                     // Decorrelate the cells: neighbouring seeds in a plain
                     // counter produce visibly related sprigs with this Rng.
                     const unsigned int s = seed * 2654435761u + (cy * N + cx) * 40503u + 1u;
-                    auto tile = makeTile(size, s ? s : 1u);
+                    const std::shared_ptr<DataTexture> tile = makeTile(size, s ? s : 1u);
                     const auto& src = tile->image().data<unsigned char>();
                     for (unsigned int y = 0; y < size; ++y) {
                         const unsigned char* sp = src.data() + static_cast<size_t>(y) * size * 4;
