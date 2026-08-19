@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdlib>
 #include <iostream>
 #include <utility>
 
@@ -1602,13 +1603,57 @@ void VulkanRenderer::Impl::recordDisplacedDeform(VkCommandBuffer cb, DisplacedMe
                         VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT);
                 ctx->setObjectName(st.foamDisturbBuffer.handle, "ocean.foamDisturb");
             }
-            const uint32_t disturbCount = static_cast<uint32_t>(std::min<size_t>(
-                    dm.foamDisturbances.size(),
-                    DisplacedMeshState::kMaxFoamDisturbances));
-            if (disturbCount > 0u) {
+            // Foam dispatch interval: THREEPP_OCEAN_FOAM_INTERVAL=N runs the
+            // foam_world accumulator every Nth frame (default 1 = every
+            // frame). The decay push constant is dt-aware, so a skipped frame
+            // just widens the next dispatch's decay step. Disturbance stamps
+            // supplied on skipped frames are latched in st.foamDisturbCarry
+            // and uploaded as a union with the next dispatch's list — the
+            // shader combines stamps with max(), so re-stamping a source that
+            // persists across frames is idempotent. water_displace's
+            // disturbAddr is dead plumbing (see water_displace.comp), so the
+            // buffer's only consumer is foam_world and a deferred upload
+            // changes nothing else.
+            static const uint32_t kFoamInterval = [] {
+                const char* e = std::getenv("THREEPP_OCEAN_FOAM_INTERVAL");
+                const long v = e ? std::atol(e) : 1L;
+                return static_cast<uint32_t>(std::max(v, 1L));
+            }();
+            const bool runFoam = (st.foamTick++ % kFoamInterval) == 0u;
+
+            static_assert(sizeof(DisplacedMeshState::FoamDisturbCarry) ==
+                                  sizeof(DisplacedMesh::FoamDisturbance),
+                          "carry layout must mirror FoamDisturbance (memcpy'd)");
+            auto latchDisturbances = [&] {
+                for (const auto& d : dm.foamDisturbances)
+                    st.foamDisturbCarry.push_back(
+                            {d.worldX, d.worldZ, d.radius, d.intensity});
+                if (st.foamDisturbCarry.size() >
+                    DisplacedMeshState::kMaxFoamDisturbances)
+                    st.foamDisturbCarry.erase(
+                            st.foamDisturbCarry.begin(),
+                            st.foamDisturbCarry.end() -
+                                    DisplacedMeshState::kMaxFoamDisturbances);
+            };
+            uint32_t disturbCount = 0;
+            if (!runFoam) {
+                latchDisturbances();
+            } else if (!st.foamDisturbCarry.empty()) {
+                latchDisturbances();// union: carried + this frame's list
+                disturbCount = static_cast<uint32_t>(st.foamDisturbCarry.size());
                 uploadHostVisible(ctx->allocator(), st.foamDisturbBuffer,
-                                  dm.foamDisturbances.data(),
+                                  st.foamDisturbCarry.data(),
                                   disturbCount * kFoamDisturbStride);
+                st.foamDisturbCarry.clear();
+            } else {
+                disturbCount = static_cast<uint32_t>(std::min<size_t>(
+                        dm.foamDisturbances.size(),
+                        DisplacedMeshState::kMaxFoamDisturbances));
+                if (disturbCount > 0u) {
+                    uploadHostVisible(ctx->allocator(), st.foamDisturbBuffer,
+                                      dm.foamDisturbances.data(),
+                                      disturbCount * kFoamDisturbStride);
+                }
             }
 
             // (4b) Wake-trail SSBO upload. Same pattern as disturbance buffer:
@@ -1674,8 +1719,11 @@ void VulkanRenderer::Impl::recordDisplacedDeform(VkCommandBuffer cb, DisplacedMe
             // vertex foam buffer that water_displace used to write. Run
             // AFTER water_displace finishes so we share the descriptor
             // pool's cascade-image bindings without a layout flip; the
-            // cascades stay in GENERAL throughout.
-            {
+            // cascades stay in GENERAL throughout. Skipped entirely on
+            // off-interval frames: the accumulator keeps last dispatch's
+            // content (reads need no barrier, layout stays GENERAL) and the
+            // next dispatch's dt-aware decay covers the gap.
+            if (runFoam) {
                 // Wall-clock foam persistence. The old fixed 0.992/frame tied
                 // the foam half-life to frame rate (≈1.4 s at 60 fps, half
                 // that at 120) — same bug class as the TAA temporal constants.
@@ -2808,16 +2856,25 @@ VulkanRenderer::Impl::DisplacedMeshState* VulkanRenderer::Impl::ensureDisplacedS
             // World-space foam image. Coverage equals the cascade-0 tile
             // (matches the FFT periodicity, so REPEAT-sampling at any
             // world XZ folds back into the same texture cell). Resolution
-            // targets ~0.5 m per texel — fine enough to carry the cascade-1
-            // whitecap detail foam_world.comp's fine Jacobian stencil
-            // extracts — capped at 2048² (a 1000 m tile → 0.49 m/texel,
-            // 16 MB R32F, exactly the historical footprint) and floored at
-            // 256² so a small pond isn't handed a 16 MB accumulator for a
-            // 16 m tile. R32F storage so both compute imageLoad/Store and
+            // targets ~1 m per texel — capped at 2048² and floored at 256²
+            // so a small pond isn't handed a giant accumulator. The target
+            // was 0.5 m/texel (1 km tile → 2048², 16 MB) until the 2026-08
+            // pass bench: foam_world was the ocean's single biggest GPU item
+            // at 0.74 ms/frame, 1 m/texel cuts it to 0.28 ms, and A/B
+            // captures at wind 10/16 (whitecap field, wake-trail sheet,
+            // vista) were indistinguishable — foam is a decayed accumulator
+            // sampled bilinearly, so the detail floor is the stamp widths,
+            // not the texel grid. THREEPP_OCEAN_FOAM_TEXEL=0.5 restores the
+            // old density. R32F storage so both compute imageLoad/Store and
             // chit linear sampling work without format conversions.
             {
+                static const float kFoamTexelTarget = [] {
+                    const char* e = std::getenv("THREEPP_OCEAN_FOAM_TEXEL");
+                    const float v = e ? static_cast<float>(std::atof(e)) : 1.0f;
+                    return v > 0.f ? v : 1.0f;
+                }();
                 uint32_t foamRes = 256u;
-                while (foamRes < 2048u && float(foamRes) * 0.5f < dm.params.tileSize0)
+                while (foamRes < 2048u && float(foamRes) * kFoamTexelTarget < dm.params.tileSize0)
                     foamRes *= 2u;
                 state->foamRes      = foamRes;
                 state->foamTileSize = dm.params.tileSize0;

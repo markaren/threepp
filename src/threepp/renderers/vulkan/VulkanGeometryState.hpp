@@ -427,6 +427,19 @@ namespace threepp::vulkan::impl {
         // Wall-clock timestamp of the previous foam dispatch — drives the
         // frame-rate-independent decay push constant (−1 = first frame).
         double   foamPrevTimeSec = -1.0;
+        // Foam dispatch-interval state (THREEPP_OCEAN_FOAM_INTERVAL=N runs
+        // foam_world every Nth frame; decay is dt-aware so skipped frames
+        // just widen the decay step). Disturbance stamps supplied on skipped
+        // frames are carried here and uploaded with the next dispatch — the
+        // shader combines stamps with max(), so a re-stamped persistent
+        // source is idempotent. Layout mirrors DisplacedMesh::FoamDisturbance
+        // (static_asserted at the upload site); capped at
+        // kMaxFoamDisturbances, newest kept.
+        struct FoamDisturbCarry {
+            float worldX, worldZ, radius, intensity;
+        };
+        uint32_t foamTick = 0;
+        std::vector<FoamDisturbCarry> foamDisturbCarry;
     };
 
     // ── GrassMesh (GPU wind-deformed foliage) ────────────────────────
