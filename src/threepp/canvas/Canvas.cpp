@@ -200,6 +200,24 @@ namespace {
             }
 #endif
             if (!glfwInit()) {
+#if !defined(__EMSCRIPTEN__) && defined(GLFW_PLATFORM) && !defined(_WIN32) && !defined(__APPLE__)
+                // DISPLAY/WAYLAND_DISPLAY being set was only ever a hint that a
+                // window system is reachable, and it can lie: a dead X server
+                // leaves the variable behind (observed on Colab, where a failed
+                // Xorg experiment left DISPLAY=:1 and glfwInit died on "Failed
+                // to open display" with the GPU perfectly able to render). A
+                // headless canvas never needed the window system it just failed
+                // to reach, so retry on the Null platform instead of giving up.
+                if (headless && !wantNull) {
+                    glfwInitHint(GLFW_PLATFORM, GLFW_PLATFORM_NULL);
+                    if (glfwInit()) {
+                        std::cerr << "Canvas: display server unreachable; headless "
+                                     "canvas continues on the GLFW Null platform"
+                                  << std::endl;
+                        return;
+                    }
+                }
+#endif
                 --glfwRefCount();
                 throw std::runtime_error("Canvas: glfwInit() failed");
             }
