@@ -217,6 +217,15 @@ namespace {
                         return;
                     }
                 }
+#elif !defined(__EMSCRIPTEN__) && !defined(_WIN32) && !defined(__APPLE__)
+                // Pre-3.4 GLFW has nowhere to fall back to. Say so, rather than
+                // leaving "glfwInit() failed" next to an X11 error on a machine
+                // whose only fault is having no display server.
+                if (headless) {
+                    std::cerr << "Canvas: a headless canvas needs a display server here - GLFW "
+                              << GLFW_VERSION_MAJOR << '.' << GLFW_VERSION_MINOR
+                              << " predates the Null platform (needs 3.4)" << std::endl;
+                }
 #endif
                 --glfwRefCount();
                 throw std::runtime_error("Canvas: glfwInit() failed");

@@ -12,6 +12,23 @@ add_test_executable(BC7Encode_test)
 # is created and no GPU or display is needed.
 if (THREEPP_WITH_GLFW)
     add_test_executable(CanvasPosition_test)
+    # Whether the GLFW being linked has the Null platform (3.4+). Without it a
+    # display-less Linux box cannot construct a canvas at all — glfwInit fails
+    # on X11 — and the test skips itself rather than reporting a defect in code
+    # it never reached. Ubuntu 22.04's libglfw3-dev is 3.3.x, which is what the
+    # ASan job (THREEPP_USE_EXTERNAL_GLFW=ON, no Xvfb) builds against.
+    set(_null_platform 1)
+    if (THREEPP_USE_EXTERNAL_GLFW AND glfw3_VERSION AND glfw3_VERSION VERSION_LESS 3.4)
+        set(_null_platform 0)
+    endif ()
+    target_compile_definitions(CanvasPosition_test PRIVATE
+            THREEPP_GLFW_HAS_NULL_PLATFORM=${_null_platform})
+    unset(_null_platform)
+    # Catch2 exits 4 when every one of its test cases skipped itself, which is
+    # what the guard above does on such a machine. The file holds three cases
+    # carrying one assertion each, so four failed assertions is not a number it
+    # can otherwise return.
+    set_tests_properties(CanvasPosition_test PROPERTIES SKIP_RETURN_CODE 4)
 endif ()
 
 # Vulkan deferred golden-image regression net. Plain exit-code program (not
