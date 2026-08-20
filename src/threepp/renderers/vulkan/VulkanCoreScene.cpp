@@ -249,8 +249,19 @@ void VulkanRenderer::Impl::cullEntriesAgainstFrustum(Camera& camera) {
                 // bound to test at all — not a stale one, none. A field is never
                 // frustum-culled at entry granularity; per-particle culling, if
                 // it is ever wanted, belongs in the expansion shader.
+                // enableVertexInterop meshes join for the ParticleField reason,
+                // not the deformer one: the shape on screen is whatever a foreign
+                // CUDA producer wrote into the exported buffer this frame, and the
+                // host `position` array these bounds are derived from was last
+                // meaningful (if ever) at build time. A producer writing an
+                // in-view triangle while its host array sits at y=-50 rendered
+                // NOTHING before this line existed — the span's world AABB was
+                // 50 m below the camera and the whole entry was culled out of the
+                // G-buffer. NB threepp's Object3D::frustumCulled does not help:
+                // the Vulkan backend never reads it (it is a GL-renderer flag),
+                // so this exemption list IS the only opt-out that exists here.
                 if (e0.isOverlay || e0.isSkinned || e0.isDisplaced || e0.isMorphed ||
-                    e0.isTet || e0.isParticleField)
+                    e0.isTet || e0.isParticleField || e0.isVertexInterop)
                     continue;
                 if (e0.isGrass) {
                     // Grass CAN be frustum-culled: unlike the other deformers, its
@@ -707,6 +718,18 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                 const bool isTet = !isSkinned && !isDisplaced && !isGrass && !isMorphed &&
                                    m->material() && m->material()->tetSkinning &&
                                    m->material()->tetTexture != nullptr;
+                // Zero-copy vertex interop (enableVertexInterop). One blasCache
+                // probe per MESH, not per instance — the same budget the three
+                // dynamic_casts above spend, and for the same payoff: the two
+                // CPU-bounds culls read a bool instead of hashing per entry.
+                bool isVertexInterop = false;
+                if (!isSkinned && !isDisplaced && !isGrass && !isMorphed && !isTet &&
+                    !isParticleField) {
+                    if (auto ig = m->geometry()) {
+                        auto ic = blasCache.find(ig.get());
+                        isVertexInterop = (ic != blasCache.end() && ic->second->interop);
+                    }
+                }
                 // Auto-LOD selection caches — once per Mesh, shared by every
                 // instance entry (see the MeshEntry field doc). manualLodLevelRoots_
                 // is complete for this mesh's ancestors: traverseVisible is
@@ -789,6 +812,7 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                         e.isGrass      = isGrass;
                         e.isMorphed    = isMorphed;
                         e.isTet        = isTet;
+                        e.isVertexInterop = isVertexInterop;
                         e.isInstanced  = true;
                         e.camAttached  = camAttached;
                         e.sensorOnly   = sensorOnly;
@@ -807,6 +831,7 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                     e.isGrass      = isGrass;
                     e.isMorphed    = isMorphed;
                     e.isTet        = isTet;
+                    e.isVertexInterop = isVertexInterop;
                     e.isParticleField = isParticleField;
                     e.camAttached  = camAttached;
                     e.sensorOnly   = sensorOnly;
@@ -1646,6 +1671,79 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                     // must SKIP these so their legitimate change-frame deformation
                     // motion survives — they settle on the next clean frame.
                     std::unordered_set<const BufferGeometry*> geomRefreshedThisFrame;
+
+                    // ── Zero-copy vertex interop: the UNCONDITIONAL enqueue ──
+                    // Everything else on this path is gated on the composite
+                    // BufferAttribute version (geomVersionOf, entryGeomDirty). A
+                    // foreign device producer bumps none of those — it writes
+                    // GPU memory the host never sees — so an interop record would
+                    // read "clean" forever, its BLAS would never refit, and the
+                    // ray-traced view (shadows, reflections, GI, lidar) would
+                    // quietly diverge from the rasterized one while the picture
+                    // looked fine. Same reasoning, same answer as the tet path
+                    // pushing pendingTetRebuilds_ every frame regardless.
+                    bool interopDirtyAny = false;
+                    if (!blasCache.empty()) {
+                        std::unordered_set<const BufferGeometry*> interopEnqueued;
+                        for (size_t i = 0; i < entries.size(); ++i) {
+                            if (entries[i].isSkinned || entries[i].isDisplaced ||
+                                entries[i].isGrass || entries[i].isTet) continue;
+                            const BufferGeometry* geomKey = entries[i].mesh->geometry().get();
+                            auto cIt = blasCache.find(geomKey);
+                            // Refresh MeshEntry::isVertexInterop IN PLACE, every
+                            // frame, for every plain entry — set AND clear. This
+                            // is the whole reason the flag can be trusted without
+                            // a structural rebuild behind it: arming interop
+                            // changes no pointer, matrix, material or attribute
+                            // version, so no fingerprint diff can see it, and the
+                            // snapshot fast path reuses last frame's MeshEntry
+                            // objects verbatim. Deriving it here — on the
+                            // canonical entry list, before cullEntriesAgainstFrustum
+                            // and buildIndirectDrawData run later this frame —
+                            // makes it live in both paths and stale in neither.
+                            const bool iop = (cIt != blasCache.end() && cIt->second->interop);
+                            entries[i].isVertexInterop = iop;
+                            if (!iop) continue;
+                            auto& rec = *cIt->second;
+
+                            // Interop requires FIXED-CAPACITY geometry: the
+                            // fullRebuild path destroys rec.vertex on any count
+                            // change, and with it the exported allocation a
+                            // foreign API has already imported — an OS handle
+                            // that keeps working while pointing at freed memory.
+                            // Tear the interop down HERE instead, so the exports
+                            // are released deliberately and the application is
+                            // told, rather than losing them inside a rebuild that
+                            // has no idea they existed.
+                            auto* posAttr = entries[i].mesh->geometry()->getAttribute<float>("position");
+                            auto* idxAttr = entries[i].mesh->geometry()->getIndex();
+                            const uint32_t curVtx = posAttr ? static_cast<uint32_t>(posAttr->count()) : 0u;
+                            const uint32_t curIdx = idxAttr ? static_cast<uint32_t>(idxAttr->count()) : 0u;
+                            if (posAttr && (curVtx != rec.vertexCount || curIdx != rec.indexCount)) {
+                                std::cerr << "[VulkanRenderer] vertex interop: geometry changed "
+                                             "topology (" << rec.vertexCount << " -> " << curVtx
+                                          << " verts) - interop needs fixed-capacity geometry, so "
+                                             "it is being DISABLED for this mesh. Allocate for the "
+                                             "maximum triangle count once and write degenerates "
+                                             "for the unused tail.\n";
+                                disableVertexInterop(*entries[i].mesh);
+                                continue;
+                            }
+                            if (!interopEnqueued.insert(geomKey).second) continue;
+
+                            pendingDynamicGeomRefits_.push_back({geomKey, &rec});
+                            rec.lastDirtyFrame = frameSerial_;
+                            rec.dynPrevResyncPending = true;
+                            interopDirtyAny = true;
+                            // The surface deforms every frame, so its pixels'
+                            // temporal history is invalid every frame — same bit
+                            // the tet loop above stamps for the same reason.
+                            const size_t w = i >> 5;
+                            if (w >= meshMovedBits_.size()) meshMovedBits_.resize(w + 1, 0u);
+                            meshMovedBits_[w] |= (1u << (i & 31u));
+                        }
+                    }
+
                     if (geomDirtyAny) {
                         // Re-upload vertex data for geometries whose
                         // BufferAttribute versions changed and rebuild their
@@ -1690,6 +1788,12 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                             auto cIt = blasCache.find(geomKey);
                             if (cIt == blasCache.end()) continue;
                             auto& rec = *cIt->second;
+                            // Already enqueued unconditionally above, and its
+                            // host attributes are stale by definition — letting
+                            // it fall through here would double-enqueue it and,
+                            // worse, take the host-pack branch that overwrites
+                            // the producer's data with those stale arrays.
+                            if (rec.interop) continue;
 
                             auto* posAttr = entries[i].mesh->geometry()->getAttribute<float>("position");
                             auto* idxAttr = entries[i].mesh->geometry()->getIndex();
@@ -1859,7 +1963,7 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                         }
                     }
 
-                    if (!matricesSame || bonesDirtyAny || displacedDirtyAny || grassDirtyAny || tetDirtyAny || geomDirtyAny || morphDirtyAny || lodChangedThisFrame_) {
+                    if (!matricesSame || bonesDirtyAny || displacedDirtyAny || grassDirtyAny || tetDirtyAny || geomDirtyAny || morphDirtyAny || interopDirtyAny || lodChangedThisFrame_) {
                         THREEPP_CPUPROF("scene.7_tlasRefitFill");
                         // TLAS refit: needed when instance transforms change
                         // (matricesSame=false) AND when any skinned BLAS was
@@ -2200,16 +2304,19 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                 for (auto it = blasCache.begin(); it != blasCache.end(); ) {
                     if (it->second->liveCheck.expired()) {
                         auto& rec = it->second;
+                        // destroyBlasRecord, not a hand-rolled subset — this copy
+                        // had already drifted (it missed dynStaging) and would
+                        // have leaked the interop exports too. The LOD chain is
+                        // still freed separately: blasCache is its only owner and
+                        // destroyBlasLodLevels keeps the lodBlasBytes_ accounting.
                         destroyBlasLodLevels(*rec);
-                        if (rec->as) ctx->rt().destroyAccelerationStructure(ctx->device(), rec->as, nullptr);
-                        destroyBuffer(ctx->allocator(), rec->storage);
-                        destroyBuffer(ctx->allocator(), rec->vertex);
-                        destroyBuffer(ctx->allocator(), rec->index);
-                        destroyBuffer(ctx->allocator(), rec->normal);
-                        destroyBuffer(ctx->allocator(), rec->uv);
-                        destroyBuffer(ctx->allocator(), rec->color);
-                        destroyBuffer(ctx->allocator(), rec->prevVertex);
-                        destroyBuffer(ctx->allocator(), rec->blasScratch);
+                        destroyBlasRecord(*rec);
+                        // Drop the force-unpacked mark with the geometry it names.
+                        // Same address-collision hazard this whole prune exists
+                        // for: the allocator can hand a fresh BufferGeometry the
+                        // dead one's address, and a stale mark would then quietly
+                        // un-pack an unrelated mesh.
+                        forceUnpackedGeoms_.erase(it->first);
                         it = blasCache.erase(it);
                     } else {
                         ++it;
@@ -2522,7 +2629,20 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                     auto it = blasCache.find(geomKey);
                     if (it != blasCache.end()) {
                         const unsigned int curVer = geomVersionOf(*m->geometry());
-                        if (it->second->geomVersion != curVer) {
+                        // A geometry marked for the unpacked rebuild whose record
+                        // is still packed. Belt and braces: enableVertexInterop
+                        // rebuilds inline behind a drain, so in practice a marked
+                        // geometry is already unpacked by the time it gets here.
+                        // This catches any future path that manages to build a
+                        // packed record for a marked geometry anyway — the
+                        // failure mode it prevents (a producer writing float xyz
+                        // into an snorm16x4 normal buffer) is silent garbage, not
+                        // a crash, so it is worth one integer test per rebuild.
+                        // Self-clearing: the replacement has packedMask == 0.
+                        const bool packedMismatch =
+                                (it->second->packedMask != 0u) &&
+                                forceUnpackedGeoms_.count(geomKey) != 0;
+                        if (it->second->geomVersion != curVer || packedMismatch) {
                             auto& old = it->second;
                             // Topology/positions changed under this geometry
                             // pointer — any existing LOD chain simplified the
@@ -2531,15 +2651,12 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                             // LodState::None and the selection pass re-
                             // enqueues a new chain next time it's eligible.
                             destroyBlasLodLevels(*old);
-                            if (old->as) ctx->rt().destroyAccelerationStructure(ctx->device(), old->as, nullptr);
-                            destroyBuffer(ctx->allocator(), old->storage);
-                            destroyBuffer(ctx->allocator(), old->vertex);
-                            destroyBuffer(ctx->allocator(), old->index);
-                            destroyBuffer(ctx->allocator(), old->normal);
-                            destroyBuffer(ctx->allocator(), old->uv);
-                            destroyBuffer(ctx->allocator(), old->color);
-                            destroyBuffer(ctx->allocator(), old->prevVertex);
-                            destroyBuffer(ctx->allocator(), old->blasScratch);
+                            // Same chokepoint as the prune above — and the reason
+                            // recordDynamicGeomRefits keeps an interop record's
+                            // geomVersion stamped: reaching this branch with one
+                            // would destroy an allocation a foreign API holds an
+                            // import of.
+                            destroyBlasRecord(*old);
                             blasCache.erase(it);
                             // erase() returns the next bucket entry, not end().
                             // Force a fresh lookup so the "missing → build" branch

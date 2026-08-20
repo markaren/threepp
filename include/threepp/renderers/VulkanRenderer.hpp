@@ -889,6 +889,70 @@ namespace threepp {
         ParticleFieldInteropHandle enableParticleFieldInterop(ParticleField& field,
                                                               std::function<void()> deviceCopy);
 
+        // ── Mesh-vertex zero-copy interop (CUDA → Vulkan) ────────────────────
+        // Export a plain Mesh's BLAS position + normal buffers and arm the
+        // per-frame device-to-device copy that fills them, so an external GPU
+        // producer (NVIDIA Warp, PhysX, torch) can write `position`/`normal` in
+        // place with no host round trip. Import the returned handles once
+        // (CU_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_WIN32 / _OPAQUE_FD,
+        // CUDA_EXTERNAL_MEMORY_DEDICATED) and write straight into them; the
+        // layout is tightly-packed float xyz, i.e. a 12-byte stride, NOT the
+        // vec4-padded layout the soft-body tet path uses.
+        //
+        // What the renderer does with them: the exports are copy SOURCES that
+        // no shader ever binds. Each frame the renderer runs `deviceCopy`, then
+        // copies posBytes/nrmBytes into the mesh's own BLAS buffers and refits
+        // the BLAS. It has to be a copy rather than a buffer substitution
+        // because five of the seven consumers of a mesh's vertex buffer reach
+        // it by device address, and an exported dedicated allocation cannot
+        // carry one (it is allocated without VK_MEMORY_ALLOCATE_DEVICE_ADDRESS_BIT).
+        //
+        // `deviceCopy` runs once per frame inside render(), post-fence and
+        // pre-record, and MUST be synchronous (e.g. wp.synchronize_device(), or
+        // cuMemcpyDtoDAsync + cuStreamSynchronize) — that host ordering is what
+        // sequences the foreign write against the frame that reads it, in the
+        // absence of a shared semaphore.
+        //
+        // `validate` (default true) runs a small compute pass over the exported
+        // positions before the copy, rewriting non-finite vertices into
+        // zero-area degenerates. It replaces the CPU finiteness scan that
+        // guards every other route into a BLAS build and cannot run here (the
+        // host attribute array is stale under interop). Leave it on unless the
+        // producer is trusted: a NaN reaching vkCmdBuildAccelerationStructures
+        // is VK_ERROR_DEVICE_LOST on NVIDIA — a GPU reset, not an error return.
+        //
+        // CALL IT AFTER THE FIRST render(): the mesh's BlasRecord is created on
+        // the frame the mesh is first seen. Same polling pattern as
+        // enableSoftBodyInterop; a null handle means "not yet, or not on this
+        // device", never an exception.
+        //
+        // FIXED-CAPACITY GEOMETRY ONLY. The renderer draws and refits
+        // `position.count` vertices; a producer whose triangle count varies must
+        // allocate for its maximum once and write zero-area degenerates for the
+        // unused tail. Changing the attribute counts after enabling tears the
+        // BLAS record down (and with it the allocation the foreign API imported),
+        // so the renderer disables interop for that mesh with a warning instead.
+        struct VertexInteropHandle {
+            void*  posHandle = nullptr;
+            size_t posBytes  = 0;
+            void*  nrmHandle = nullptr;
+            size_t nrmBytes  = 0;
+        };
+        // REGISTRATION-TIME call, not a per-frame one: arming (and disarming)
+        // pays a device drain plus a full structural scene rebuild on the next
+        // frame — toggling it per frame would stall the renderer hard. And
+        // never call it from inside another mesh's deviceCopy callback: enable
+        // may replace a blasCache record while the frame that invoked the
+        // callback is iterating records, which is a use-after-free, not a
+        // wrong picture.
+        VertexInteropHandle enableVertexInterop(const Mesh& mesh,
+                                                std::function<void()> deviceCopy,
+                                                bool validate = true);
+        // Release the exports and return the mesh to the normal CPU-driven
+        // attribute path. The caller must have stopped (or never started) the
+        // foreign writes into the exported memory first.
+        void disableVertexInterop(const Mesh& mesh);
+
         // Hybrid-mode raster overlay: post-TAA wireframe / Line / layer-tagged
         // meshes drawn over the shaded image, depth-tested against the raster
         // G-buffer. -1 (default) disables layer selection.
@@ -1085,6 +1149,14 @@ namespace threepp {
             // Per-frame TLAS refit recorded on the frame command buffer
             // (0 on frames with no refit).
             float tlasRefitMs     = 0.f;
+            // Per-frame dynamic-geometry refit on the frame command buffer:
+            // staging (or interop-export) → vertex/normal copies, the
+            // vertex→prevVertex motion snapshot, and the batched BLAS refit, for
+            // every graduated CPU deformer and every enableVertexInterop mesh.
+            // 0 on frames where none of them changed. Skinned / tet / displaced /
+            // grass deformers are NOT in here — they record their own dispatches
+            // and BLAS work elsewhere, and only the ocean's is bracketed.
+            float dynGeomRefitMs  = 0.f;
             // GPU execution SPAN of the whole submitted command buffer — not a sum
             // of the fields above, and not busy time. It covers the passes that
             // have no timestamp bracket at all (skinned/tet/grass deformers,

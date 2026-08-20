@@ -96,7 +96,14 @@ namespace threepp::vulkan {
         // because it sat on the "invisible to the brackets" list while claims
         // were being made about it.
         TP_TlasRefit      = 23,
-        TP_COUNT          = 24,
+        // Per-frame dynamic-geometry refit (recordDynamicGeomRefits on the frame
+        // cb): the staging→vertex/normal copies, the prevVertex snapshot and the
+        // batched BLAS refit for every graduated CPU deformer and every
+        // vertex-interop mesh. Bracketed because the "BLAS refit is cheap" claim
+        // was an extrapolation from the ocean's numbers — this work had no
+        // bracket at all and landed in the gpuTotal-minus-passSum residual.
+        TP_DynGeomRefit   = 24,
+        TP_COUNT          = 25,
     };
     inline constexpr uint32_t kTimingSlots = TP_COUNT * 2u;
 

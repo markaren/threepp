@@ -22,6 +22,16 @@
 
 #ifdef THREEPP_PY_HAS_VULKAN
 
+// functional.h is here for enable_vertex_interop's per-frame callback — the
+// first callback this file binds. It is deliberately the std::function caster
+// rather than the manual py::function + py::gil_scoped_acquire idiom used in
+// bind_physx.cpp: pybind11's func_handle re-acquires the GIL on BOTH invoke and
+// destruction, and both matter here. PyVulkanRenderer::render releases the GIL
+// for the whole frame, the callback fires inside it, and the renderer may also
+// DROP the callback from inside that same frame (a topology change disables
+// interop mid-ensureSceneBuilt) — which destroys the std::function with the GIL
+// released.
+#include <pybind11/functional.h>
 #include <pybind11/numpy.h>
 #include <pybind11/stl.h>
 
@@ -29,6 +39,7 @@
 #include "threepp/canvas/Canvas.hpp"
 #include "threepp/core/Object3D.hpp"
 #include "threepp/math/Color.hpp"
+#include "threepp/objects/Mesh.hpp"
 #include "threepp/renderers/VulkanRenderer.hpp"
 
 #include <array>
@@ -664,6 +675,11 @@ namespace threepp_py {
                                            d["dof_ms"] = t.dofMs;
                                            d["froxel_ms"] = t.froxelMs;
                                            d["instance_expand_ms"] = t.instanceExpandMs;
+                                           // Staging (or interop-export) -> vertex/normal copies +
+                                           // the batched BLAS refit, for every graduated CPU
+                                           // deformer and every enable_vertex_interop mesh. This is
+                                           // the column the interop path lands in.
+                                           d["dyn_geom_refit_ms"] = t.dynGeomRefitMs;
                                            d["gpu_total_ms"] = t.gpuTotalMs;
                                            d["gpu_pass_sum_ms"] = t.gpuPassSumMs;
                                            d["cpu_ensure_scene_ms"] = t.cpuEnsureSceneMs;
@@ -671,6 +687,72 @@ namespace threepp_py {
                                            d["cpu_frame_ms"] = t.cpuFrameMs;
                                            return d;
                                        })
+                // ── Zero-copy mesh-vertex interop (CUDA -> Vulkan) ────────────
+                // Export a mesh's position/normal buffers so an external GPU
+                // producer (Warp, PhysX, torch) writes them in place, with no
+                // host round trip. Pair with threepp.cuda_interop.VkInteropArray,
+                // which does the CUDA-side import and hands back wp.arrays.
+                .def("enable_vertex_interop",
+                     [](PyVulkanRenderer& r, const Mesh& mesh, std::function<void()> on_frame,
+                        bool validate) -> py::object {
+                         const auto h = r.native().enableVertexInterop(mesh, std::move(on_frame),
+                                                                       validate);
+                         // Null handle = "not ready, or not on this device" —
+                         // never an exception. Same None-when-not-ready contract
+                         // as GLRenderer.gl_buffer_id, and the caller polls the
+                         // same way: render once, then enable.
+                         if (!h.posHandle) return py::none();
+                         return py::make_tuple(
+                                 py::make_tuple(reinterpret_cast<uintptr_t>(h.posHandle),
+                                                h.posBytes),
+                                 py::make_tuple(reinterpret_cast<uintptr_t>(h.nrmHandle),
+                                                h.nrmBytes));
+                     },
+                     py::arg("mesh"), py::arg("on_frame"), py::arg("validate") = true,
+                     "Export mesh.geometry's position + normal buffers for a foreign GPU "
+                     "producer and arm the per-frame device write that fills them.\n\n"
+                     "Returns ((pos_handle, pos_bytes), (nrm_handle, nrm_bytes)) or None.\n\n"
+                     "POLL IT: the renderer's record for a mesh is created on the frame the "
+                     "mesh is first drawn, so this returns None until after the first "
+                     "render() — call render() once, then enable.\n\n"
+                     "FIXED-CAPACITY GEOMETRY ONLY: the renderer draws and refits "
+                     "position.count vertices and ignores set_draw_range for meshes, so a "
+                     "producer whose triangle count varies must allocate its maximum once and "
+                     "write zero-area degenerates over the unused tail. Changing an attribute's "
+                     "count after enabling DISABLES interop for that mesh (with a warning on "
+                     "stderr) rather than tearing down memory CUDA has imported.\n\n"
+                     "on_frame() runs INSIDE render(), once per frame while the mesh is "
+                     "visible, post-fence and pre-record, and MUST BE SYNCHRONOUS: every "
+                     "kernel writing the exported buffers has to have completed when it "
+                     "returns (wp.synchronize_device(device) as the last statement). That host "
+                     "ordering is the only thing sequencing the foreign write against the "
+                     "frame that reads it — there is no shared semaphore.\n\n"
+                     "The handles are OS handles owned by the RENDERER (Win32 NT handles on "
+                     "Windows): import them, but never CloseHandle them from Python — "
+                     "disable_vertex_interop / renderer teardown releases them. The layout is "
+                     "tightly-packed float xyz (12-byte stride, wp.vec3), and *_bytes is the "
+                     "ALLOCATION size, which may exceed count*12 — write only the real range.\n\n"
+                     "validate=True (default) runs a GPU finiteness pass over the exported "
+                     "positions each frame, rewriting non-finite vertices as degenerates. Leave "
+                     "it on unless the producer is trusted: a NaN reaching the BLAS build is a "
+                     "device-lost (GPU reset) on NVIDIA, not an error return.")
+                .def("disable_vertex_interop",
+                     [](PyVulkanRenderer& r, const Mesh& mesh) {
+                         // Drains the device — the exports may still be a
+                         // transfer source for an in-flight frame — so this is a
+                         // teardown call, not a per-frame one, and it releases
+                         // the GIL for the stall like every other stalling def
+                         // here. Dropping the Python callback happens inside:
+                         // pybind11's func_handle re-acquires the GIL to destroy
+                         // it, which is exactly why this file uses the
+                         // std::function caster.
+                         py::gil_scoped_release release;
+                         r.native().disableVertexInterop(mesh);
+                     },
+                     py::arg("mesh"),
+                     "Release the exports and return the mesh to the CPU attribute path. STOP "
+                     "the foreign writes first — nothing here can wait on a CUDA stream. Close "
+                     "the importing VkInteropArrays before calling this.")
                 // ── Physical camera + photometric light units ─────────────────
                 .def_property("physical_camera",
                               [](PyVulkanRenderer& r) { return r.native().physicalCamera(); },

@@ -72,6 +72,16 @@ std::unique_ptr<VulkanRenderer::Impl::BlasRecord> VulkanRenderer::Impl::buildBla
             // attribute buffer back to tightly-packed float, same binary.
             static const bool noPack = std::getenv("THREEPP_NO_PACK") != nullptr;
             allowPacked = allowPacked && !noPack;
+            // Per-geometry override, and deliberately HERE rather than at the
+            // call sites: this is the one funnel every record passes through, so
+            // a future caller cannot forget it. A geometry marked by
+            // enableVertexInterop must come back tightly-packed float, because
+            // that is the only layout a foreign device producer can be expected
+            // to write — see forceUnpackedGeoms_ for the packed→unpacked handoff
+            // this closes. Scoped to that one geometry: the rest of the scene
+            // keeps its packed normals/uv/color, so this is NOT THREEPP_NO_PACK
+            // by another name.
+            if (allowPacked && forceUnpackedGeoms_.count(&geom)) allowPacked = false;
 
             auto* posAttr = geom.getAttribute<float>("position");
             if (!posAttr) return nullptr;
@@ -829,6 +839,256 @@ void VulkanRenderer::Impl::disableSoftBodyInterop(const Mesh& mesh) {
             st.tetPosExternalCopy = nullptr;
         }
 
+// ── Zero-copy MESH VERTEX interop (plan W3) ─────────────────────────────────
+// The record a mesh's positions live in, or null. Only plain cached geometry
+// qualifies: every other flavour (skinned / tet / displaced / grass / morphed)
+// already has a per-frame producer writing the very buffers the foreign API
+// would write, so arming interop on one is a silent fight over the memory
+// rather than a feature. Refuse it at the door.
+vulkan::impl::BlasRecord* VulkanRenderer::Impl::interopRecordFor(const Mesh& mesh) {
+            // dynamic_cast rather than a pointer-value probe of each map: the
+            // maps are keyed by DIFFERENT static types, and casting a Mesh* to
+            // one of them just to call count() would be a lie whenever the mesh
+            // is not that type (and would compare an address that means nothing).
+            if (dynamic_cast<const SkinnedMesh*>(&mesh) ||
+                dynamic_cast<const DisplacedMesh*>(&mesh) ||
+                dynamic_cast<const GrassMesh*>(&mesh)) return nullptr;
+            if (tetMeshStates.count(&mesh) || morphedMeshStates.count(&mesh)) return nullptr;
+            const auto& geom = mesh.geometry();
+            if (!geom) return nullptr;
+            auto it = blasCache.find(geom.get());
+            return it == blasCache.end() ? nullptr : it->second.get();
+        }
+
+VulkanRenderer::VertexInteropHandle
+VulkanRenderer::Impl::enableVertexInterop(const Mesh& mesh, std::function<void()> deviceCopy,
+                                          bool validate) {
+            // Every failure is a NULL HANDLE, never a throw. The record only
+            // exists after the mesh's first render (buildBlasFor runs in
+            // ensureSceneBuilt), so "not yet" is the expected answer to a call
+            // made at setup time and the caller is documented to poll — the
+            // same contract the soft-body glue's needsVkInteropRegister() loop
+            // was built around.
+            BlasRecord* recPtr = interopRecordFor(mesh);
+            if (!recPtr || !ctx->externalMemorySupported()) return {};
+            if (recPtr->vertex.handle == VK_NULL_HANDLE ||
+                recPtr->normal.handle == VK_NULL_HANDLE || recPtr->vertexCount == 0u) return {};
+            // ── The packed → unpacked handoff ────────────────────────────────
+            // A packed record's normal buffer is oct-snorm16x2, not float xyz
+            // (packedMask bit 0), and uv/color are narrowed likewise. No foreign
+            // producer can be expected to write that encoding, so interop needs
+            // an UNPACKED record. And this is the COMMON case, not a corner one:
+            // every ordinary mesh reaches blasCache through
+            // buildBlasFor(geom, allowPacked=true) (VulkanCoreScene.cpp, the
+            // missing-record branch), so a plain static mesh — precisely the
+            // interop target — is packed by default. Rejecting here made the
+            // whole API unreachable outside THREEPP_NO_PACK=1.
+            //
+            // The mark is what makes the rebuild — and every LATER rebuild of this
+            // geometry — come back unpacked; buildBlasFor is the single funnel
+            // that reads it. It outlives this call deliberately: a subsequent
+            // geomVersion-mismatch rebuild that re-packed would silently break
+            // the producer's normal writes.
+            //
+            // The rebuild itself happens HERE, behind a device drain, rather than
+            // being deferred to the next frame's structural pass. The deferred
+            // shape was the first design and it is the safer-looking one, but it
+            // makes arming take TWO polls instead of one (record-exists, then
+            // record-unpacked), and callers written to the documented contract —
+            // "render once, then enable" — arm once and take the fallback branch
+            // on the null return. Registration-time teardown behind
+            // vkDeviceWaitIdle is not new ground: enableSoftBodyInterop does
+            // exactly this, for exactly this reason (a rare registration call, in
+            // exchange for not having to reason about in-flight readers).
+            //
+            // The drain retires every in-flight reader of the old buffers; the
+            // stale ADDRESSES that outlive them live only in host-side arrays
+            // (geomDescs / drawInfos / TLAS instances). lodChangedThisFrame_ plus
+            // the interop record's own unconditional per-frame enqueue (which sets
+            // the TLAS-refit gate) republish all three through the ordinary
+            // machinery before the next submit, so nothing here hand-rolls a
+            // descriptor update — and, unlike a forced structural rebuild, the
+            // interop enqueue still runs on that frame.
+            if (recPtr->packedMask != 0u) {
+                const auto geomSp = mesh.geometry();
+                forceUnpackedGeoms_.insert(geomSp.get());
+                check(vkDeviceWaitIdle(ctx->device()),
+                      "vkDeviceWaitIdle (vertex interop unpacked rebuild)");
+                flushRetireQueue();// device idle ⇒ reclaim now, don't carry across
+                auto fresh = buildBlasFor(*geomSp, /*allowPacked=*/true);// mark forces false
+                if (!fresh) {
+                    std::cerr << "[VulkanRenderer] enableVertexInterop: unpacked rebuild of the "
+                                 "geometry failed - the mesh keeps its CPU attribute path.\n";
+                    return {};
+                }
+                fresh->liveCheck = geomSp;
+                auto cIt = blasCache.find(geomSp.get());
+                if (cIt == blasCache.end()) return {};// cannot happen: rec came from here
+                // The LOD chain simplified the PACKED record's data and its level
+                // BLASes reference buffers about to die. destroyBlasLodLevels, not
+                // a hand-rolled free — it keeps the lodBlasBytes_ accounting.
+                destroyBlasLodLevels(*cIt->second);
+                destroyBlasRecord(*cIt->second);
+                cIt->second = std::move(fresh);
+                lodChangedThisFrame_ = true;// the effective LOD level just became 0
+                recPtr = cIt->second.get();
+            }
+            // Bound only now: the packed branch above may have replaced the record.
+            auto& rec = *recPtr;
+
+            if (rec.interop) {// already enabled — re-arm the copy, same allocations
+                rec.externalCopy = std::move(deviceCopy);
+                // A re-enable may turn validation ON after a first call left it
+                // off, so the set is allocated here too rather than only on the
+                // cold path. (Turning it off just stops dispatching; the set is
+                // kept, because the next re-enable is one bool away.)
+                if (validate && rec.sanitizeDS == VK_NULL_HANDLE) {
+                    if (!vertexSanitize_)
+                        vertexSanitize_ = std::make_unique<vulkan::VertexSanitizePipeline>(*ctx);
+                    rec.sanitizeDS = vertexSanitize_->allocateRecordDescriptorSet(rec.posExt.handle);
+                }
+                rec.interopValidate = validate && rec.sanitizeDS != VK_NULL_HANDLE;
+                return {vulkan::takeOsHandle(ctx->device(), rec.posExt),
+                        static_cast<size_t>(rec.posExt.size),
+                        vulkan::takeOsHandle(ctx->device(), rec.nrmExt),
+                        static_cast<size_t>(rec.nrmExt.size)};
+            }
+
+            // STORAGE | TRANSFER_SRC and deliberately NOT SHADER_DEVICE_ADDRESS:
+            // createExternalBuffer's dedicated allocation carries no
+            // VK_MEMORY_ALLOCATE_DEVICE_ADDRESS_BIT, and a buffer that asks for
+            // an address on memory not allocated for one is invalid. TRANSFER_SRC
+            // is what the renderer actually needs (these are copy sources);
+            // STORAGE is what the sanitize dispatch binds. Same reasoning, same
+            // flags as ParticleFieldPass::kExternalPositionUsage.
+            constexpr VkBufferUsageFlags kExtUsage =
+                    VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
+            // NO device drain at enable, and that is structural rather than an
+            // oversight — the same argument ParticleFieldPass::enableInterop
+            // makes. enableSoftBodyInterop drains because it SWAPS a buffer
+            // in-flight dispatches are already reading and rewrites the
+            // descriptor sets naming it. Here nothing is swapped and nothing is
+            // rebound: the exports are brand-new allocations no submitted
+            // command buffer can name, and rec.vertex/rec.normal keep every
+            // address they had. There is nothing in flight to wait for.
+            try {
+                rec.posExt = vulkan::createExternalBuffer(ctx->physicalDevice(), ctx->device(),
+                                                          rec.vertex.size, kExtUsage);
+                rec.nrmExt = vulkan::createExternalBuffer(ctx->physicalDevice(), ctx->device(),
+                                                          rec.normal.size, kExtUsage);
+            } catch (const std::exception& e) {
+                vulkan::destroyExternalBuffer(ctx->device(), rec.posExt);
+                vulkan::destroyExternalBuffer(ctx->device(), rec.nrmExt);
+                std::cerr << "[VulkanRenderer] enableVertexInterop: export failed (" << e.what()
+                          << ") - the mesh keeps its CPU attribute path.\n";
+                return {};
+            }
+
+            if (validate) {
+                if (!vertexSanitize_)
+                    vertexSanitize_ = std::make_unique<vulkan::VertexSanitizePipeline>(*ctx);
+                rec.sanitizeDS = vertexSanitize_->allocateRecordDescriptorSet(rec.posExt.handle);
+                if (rec.sanitizeDS == VK_NULL_HANDLE) {
+                    std::cerr << "[VulkanRenderer] enableVertexInterop: sanitize descriptor pool "
+                                 "exhausted (VertexSanitizePipeline::kMaxRecords) - this mesh runs "
+                                 "interop WITHOUT the finiteness guard.\n";
+                }
+            }
+            rec.interopValidate = validate && rec.sanitizeDS != VK_NULL_HANDLE;
+            rec.externalCopy = std::move(deviceCopy);
+            rec.interop = true;
+
+            // Force the graduated per-frame residency rather than waiting for
+            // kDynamicGraduationStreak dirty frames that will never arrive: the
+            // whole point of interop is that the CPU never touches the attributes
+            // again, so the streak counter can't graduate this record. The
+            // staging ring the normal graduation allocates is NOT allocated here
+            // — under interop the copy source is posExt/nrmExt and the host pack
+            // that fills dynStaging is skipped entirely (see
+            // recordDynamicGeomRefits).
+            rec.perFrameDynamic = true;
+            rec.prevVertexResyncPending = false;// settles through the frame cb now
+            // Pin the geometry unpacked for life: this record is unpacked now,
+            // but a later geomVersion-mismatch rebuild goes through
+            // buildBlasFor(geom, allowPacked=true) and would re-pack it,
+            // silently breaking the producer's normal writes. Idempotent — the
+            // packed branch above already inserted it on the path that got here
+            // by rebuilding.
+            forceUnpackedGeoms_.insert(mesh.geometry().get());
+            //
+            // NO structural rebuild is requested here, and that is load-bearing
+            // rather than an omission. The culls read MeshEntry::isVertexInterop,
+            // and the obvious way to refresh it is to force the entry list to be
+            // re-expanded — but forcing the fullRebuild path on the frame right
+            // after arming makes the fluid demo render an EMPTY BASIN from then
+            // on. ensureSceneBuilt's structural path does not run the
+            // unconditional interop enqueue (that lives on the incremental,
+            // structurally-same branch), so the arming frame publishes a TLAS,
+            // a set of GeometryDescs and a G-buffer draw built from the record's
+            // untouched CPU-side vertex buffer, and the producer's first write
+            // never gets folded in. The flag is instead refreshed IN PLACE every
+            // frame by that same enqueue loop in VulkanCoreScene.cpp, which is
+            // both cheaper and impossible to leave stale.
+            std::cerr << "[VulkanRenderer] vertex interop armed on a " << rec.vertexCount
+                      << "-vertex geometry (" << rec.vertex.size << " + " << rec.normal.size
+                      << " bytes exported, sanitize "
+                      << (rec.interopValidate ? "on" : "off") << ")\n";
+
+            return {vulkan::takeOsHandle(ctx->device(), rec.posExt),
+                    static_cast<size_t>(rec.posExt.size),
+                    vulkan::takeOsHandle(ctx->device(), rec.nrmExt),
+                    static_cast<size_t>(rec.nrmExt.size)};
+        }
+
+// Release the exports and hand the mesh back to the CPU-driven path. Mirrors
+// disableSoftBodyInterop: the caller is responsible for having stopped the
+// foreign writes first — nothing here can wait for a CUDA stream.
+//
+// perFrameDynamic is deliberately LEFT SET. It is one-way for a record's
+// lifetime by design (the comment on BlasRecord says so), and the graduated
+// path is strictly better than the drained one for a record whose attributes
+// were being rewritten every frame a moment ago. The record simply resumes
+// taking its data from the host arrays, gated on BufferAttribute::version like
+// any other graduated mesh — which means an application that disables interop
+// must call needsUpdate() again for its edits to land.
+void VulkanRenderer::Impl::disableVertexInterop(const Mesh& mesh) {
+            BlasRecord* recPtr = interopRecordFor(mesh);
+            if (!recPtr || !recPtr->interop) return;
+            auto& rec = *recPtr;
+            rec.interop = false;
+            rec.externalCopy = nullptr;
+            rec.interopValidate = false;
+            // MeshEntry::isVertexInterop goes back to false on its own: the
+            // enqueue loop in ensureSceneBuilt rewrites it from the record every
+            // frame, for every plain entry, clearing as well as setting. Nothing
+            // to invalidate here. (The forceUnpackedGeoms_ mark deliberately
+            // STAYS — re-packing the geometry would only buy back a few bytes
+            // and would break a re-arm.)
+            if (rec.sanitizeDS != VK_NULL_HANDLE && vertexSanitize_) {
+                vertexSanitize_->freeRecordDescriptorSet(rec.sanitizeDS);
+                rec.sanitizeDS = VK_NULL_HANDLE;
+            }
+            // Retire, don't destroy: an in-flight frame's head-of-frame copy may
+            // still be READING these as a transfer source. destroyExternalBuffer
+            // frees the VkDeviceMemory immediately, and there is no VMA-style
+            // deferred-free list for external allocations — so this one place
+            // does pay the drain enable skipped.
+            check(vkDeviceWaitIdle(ctx->device()), "vkDeviceWaitIdle (vertex interop disable)");
+            vulkan::destroyExternalBuffer(ctx->device(), rec.posExt);
+            vulkan::destroyExternalBuffer(ctx->device(), rec.nrmExt);
+            // The staging ring the graduated path needs was never allocated (the
+            // interop route skips the host pack), so allocate it now or the next
+            // host-driven refit copies from a null buffer.
+            if (rec.dynStaging.handle == VK_NULL_HANDLE && rec.vbBytes > 0) {
+                rec.dynStagingSlotBytes = rec.vbBytes + rec.normal.size;
+                rec.dynStaging = createBuffer(
+                        ctx->allocator(), ctx->device(),
+                        rec.dynStagingSlotBytes * kFramesInFlight,
+                        VK_BUFFER_USAGE_TRANSFER_SRC_BIT, VMA_MEMORY_USAGE_AUTO,
+                        VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT);
+            }
+        }
+
 void VulkanRenderer::Impl::refreshGeomBlasBatch(const std::vector<VulkanRenderer::Impl::GeomRefreshOp>& ops) {
             if (ops.empty()) return;
 
@@ -1105,10 +1365,24 @@ void VulkanRenderer::Impl::recordDynamicGeomRefits(VkCommandBuffer cb) {
             // NVIDIA. A bad op is dropped (its geomVersion stays stale, so a
             // later structural rebuild picks it up) and last frame's geometry
             // stays on screen.
+            //
+            // INTEROP RECORDS SKIP THIS SCAN. The array it walks is the host
+            // `position` attribute, and under interop a foreign device producer
+            // owns the positions — the host copy is whatever was there when the
+            // geometry was built, i.e. stale or empty. Scanning it would prove
+            // nothing about the bytes the BLAS is going to read. The guard is not
+            // dropped, it MOVES to the GPU: the sanitize dispatch below runs over
+            // the exported buffer, which is the memory that actually reaches the
+            // build. (Same reason interop records never fail the attribute test:
+            // a producer-owned geometry need not carry host arrays at all.)
             std::vector<size_t> liveOps;
             liveOps.reserve(pendingDynamicGeomRefits_.size());
             for (size_t k = 0; k < pendingDynamicGeomRefits_.size(); ++k) {
                 const auto& geom = *pendingDynamicGeomRefits_[k].geom;
+                if (pendingDynamicGeomRefits_[k].rec->interop) {
+                    liveOps.push_back(k);
+                    continue;
+                }
                 auto* posAttr = geom.getAttribute<float>("position");
                 if (!posAttr || !geom.getAttribute<float>("normal")) continue;
                 bool ok = true;
@@ -1132,9 +1406,43 @@ void VulkanRenderer::Impl::recordDynamicGeomRefits(VkCommandBuffer cb) {
             // That fence is the entire reason the staging ring exists: writing
             // rec.vertex from the host directly is exactly the mid-flight
             // mutation the drain-based path pays vkDeviceWaitIdle to avoid.
+            //
+            // ── AND THE ONE BRANCH THIS WHOLE FEATURE TURNS ON ──────────────
+            // An interop record must NOT take the pack. Doing so memcpys the
+            // stale host attribute arrays into the staging slot and Phase 4 then
+            // copies them straight over rec.vertex/rec.normal — silently
+            // clobbering everything the foreign producer just wrote, with no
+            // error and no visual clue beyond "the mesh never moves". That is
+            // exactly the trap a caller falls into by reaching for needsUpdate()
+            // to make the renderer notice a CUDA write.
+            //
+            // The replacement is the producer's own callback, invoked HERE:
+            // post-fence (recordCommandBuffer runs past this slot's fence),
+            // pre-record of the copies that consume it, pre-submit, and never
+            // inside a render pass. It is contractually SYNCHRONOUS, so when it
+            // returns the exported allocation holds this frame's data and the
+            // command buffer that will copy it has not been submitted. That host
+            // ordering is the entire synchronisation story — the same one the tet
+            // path (refreshTetBlas) and ParticleField F6 already run on, and the
+            // same standing decision not to introduce a shared timeline semaphore.
+            bool anySanitize = false;
             for (size_t k : liveOps) {
                 const auto& geom = *pendingDynamicGeomRefits_[k].geom;
                 auto& rec = *pendingDynamicGeomRefits_[k].rec;
+                if (rec.interop) {
+                    if (rec.externalCopy) rec.externalCopy();
+                    if (rec.interopValidate && vertexSanitize_) anySanitize = true;
+                    // Stamp the version even though nothing on the host moved it.
+                    // A structural rebuild elsewhere in the frame compares
+                    // geomVersionOf() against this field and DESTROYS the record
+                    // on a mismatch (VulkanCoreScene's ensureSceneBuilt), taking
+                    // the exported allocation — which a foreign API has already
+                    // imported — with it. Keeping the stamp current means a
+                    // caller who also calls needsUpdate() out of habit gets a
+                    // no-op instead of a teardown.
+                    rec.geomVersion = geomVersionOf(geom);
+                    continue;
+                }
                 auto* posAttr = geom.getAttribute<float>("position");
                 auto* nrmAttr = geom.getAttribute<float>("normal");
                 const VkDeviceSize slotOff = rec.dynStagingSlotBytes * currentFrame;
@@ -1173,6 +1481,11 @@ void VulkanRenderer::Impl::recordDynamicGeomRefits(VkCommandBuffer cb) {
                 return;
             }
 
+            // Everything from here down is RECORDED work, so it is what the
+            // bracket should cover — the host pack above is CPU time and belongs
+            // to THREEPP_CPUPROF("frame.dynGeomRefit"), not to a GPU column.
+            gpuTimings_->begin(cb, vulkan::TP_DynGeomRefit, currentFrame);
+
             // NO cross-frame WAR fence here, on purpose — and it was not an
             // oversight the first time either. The prior frame may still be
             // reading vertex/normal/prevVertex when these copies execute; a
@@ -1186,6 +1499,24 @@ void VulkanRenderer::Impl::recordDynamicGeomRefits(VkCommandBuffer cb) {
             // recorded first) keeps the window closed in practice, and this
             // path deliberately matches their contract rather than inventing
             // a stricter one.
+
+            // Phase 2 — GPU sanitize (interop only). Runs over the EXPORTED
+            // positions, before anything copies them into rec.vertex, so the
+            // buffer the BLAS build reads is finite by construction. This is the
+            // stand-in for the Phase 0 host scan these records skip; see
+            // shaders/vertex_sanitize.comp for the repair rule.
+            //
+            // Recording it before Phase 3's snapshot costs nothing (they touch
+            // different buffers — posExt vs vertex/prevVertex) and lets the
+            // compute→transfer dependency ride along on Phase 4's barrier, which
+            // already sits between the snapshot and the copies.
+            if (anySanitize) {
+                for (size_t k : liveOps) {
+                    auto& rec = *pendingDynamicGeomRefits_[k].rec;
+                    if (!rec.interop || !rec.interopValidate) continue;
+                    vertexSanitize_->recordDispatch(cb, rec.sanitizeDS, rec.vertexCount);
+                }
+            }
 
             // Phase 3 — motion snapshot: vertex → prevVertex. For refit ops
             // that is frame N−1's positions (the change frame's motion base);
@@ -1208,7 +1539,11 @@ void VulkanRenderer::Impl::recordDynamicGeomRefits(VkCommandBuffer cb) {
 
             if (anyRefit) {
                 // Phase 4 — the snapshot READ vertex; the staging copy is about
-                // to WRITE it. Another execution-only WAR fence.
+                // to WRITE it. Another execution-only WAR fence. When a sanitize
+                // dispatch ran it also carries the real compute-write → transfer-
+                // read dependency for posExt (hence the non-zero srcAccessMask on
+                // that path: the WAR half needs no access scope, the sanitize
+                // half does).
                 {
                     VkMemoryBarrier2 mb{};
                     mb.sType         = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2;
@@ -1216,6 +1551,11 @@ void VulkanRenderer::Impl::recordDynamicGeomRefits(VkCommandBuffer cb) {
                     mb.srcAccessMask = 0;
                     mb.dstStageMask  = VK_PIPELINE_STAGE_2_COPY_BIT;
                     mb.dstAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
+                    if (anySanitize) {
+                        mb.srcStageMask  |= VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+                        mb.srcAccessMask |= VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
+                        mb.dstAccessMask |= VK_ACCESS_2_TRANSFER_READ_BIT;
+                    }
                     VkDependencyInfo dep{};
                     dep.sType              = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
                     dep.memoryBarrierCount = 1;
@@ -1224,6 +1564,21 @@ void VulkanRenderer::Impl::recordDynamicGeomRefits(VkCommandBuffer cb) {
                 }
                 for (size_t k : liveOps) {
                     auto& rec = *pendingDynamicGeomRefits_[k].rec;
+                    if (rec.interop) {
+                        // Same two copies, different source: the exported
+                        // allocations the producer just filled, instead of this
+                        // frame's staging slot. Sizes come from the BLAS buffers
+                        // rather than from posExt.size — the export is the
+                        // ALLOCATION size, which the driver rounds up past the
+                        // destination's capacity (see ExternalBuffer::size).
+                        VkBufferCopy pr{};
+                        pr.size = rec.vertex.size;
+                        vkCmdCopyBuffer(cb, rec.posExt.handle, rec.vertex.handle, 1, &pr);
+                        VkBufferCopy nr{};
+                        nr.size = rec.normal.size;
+                        vkCmdCopyBuffer(cb, rec.nrmExt.handle, rec.normal.handle, 1, &nr);
+                        continue;
+                    }
                     const VkDeviceSize slotOff = rec.dynStagingSlotBytes * currentFrame;
                     VkBufferCopy pr{};
                     pr.srcOffset = slotOff;
@@ -1351,6 +1706,8 @@ void VulkanRenderer::Impl::recordDynamicGeomRefits(VkCommandBuffer cb) {
                     vkCmdPipelineBarrier2(cb, &dep);
                 }
             }
+
+            gpuTimings_->end(cb, vulkan::TP_DynGeomRefit, currentFrame);
 
             pendingDynamicGeomRefits_.clear();
             pendingDynamicPrevResyncs_.clear();

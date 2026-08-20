@@ -876,6 +876,7 @@ if (THREEPP_WITH_VULKAN)
             "threepp/renderers/vulkan/WaterDisplacePipeline.cpp"
             "threepp/renderers/vulkan/FoamWorldPipeline.cpp"
             "threepp/renderers/vulkan/GrassWindPipeline.cpp"
+            "threepp/renderers/vulkan/VertexSanitizePipeline.cpp"
             "threepp/renderers/vulkan/water/OceanFFT.cpp"
     )
     # AMD FidelityFX FSR 3.1 upscaler — compiled in only when enabled (it
@@ -1404,6 +1405,13 @@ if (THREEPP_WITH_VULKAN)
         "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/grass_wind.comp"
         kGrassWindCompSpv
         _grass_wind_spv_h)
+    # Zero-copy vertex interop: finiteness repair over the EXPORTED position
+    # buffer, the GPU stand-in for the CPU scan that guards every other BLAS
+    # build (the host array is stale under interop). See VertexSanitizePipeline.
+    compile_vulkan_shader(threepp
+        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/vertex_sanitize.comp"
+        kVertexSanitizeCompSpv
+        _vertex_sanitize_spv_h)
     # Hybrid raster G-buffer prepass — produces depth/normal/motion/IDs
     # for the path tracer to skip its primary BVH trace. See raygen.rgen
     # for the consumer side.

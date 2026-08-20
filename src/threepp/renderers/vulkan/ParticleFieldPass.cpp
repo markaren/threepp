@@ -643,7 +643,13 @@ ParticleFieldPass::enableInterop(ParticleField& field, std::function<void()> dev
     if (!st.interopOwned) return {};
 
     st.deviceCopy = std::move(deviceCopy);
-    return {st.posExt.osHandle, static_cast<std::size_t>(st.posExt.size)};
+    // takeOsHandle, not .osHandle: on POSIX the exported fd's ownership passes
+    // to the importer on a successful cuImportExternalMemory, so handing the
+    // stored value out a second time would give the second importer an fd the
+    // first one already closed. Windows is unchanged (CUDA duplicates the NT
+    // handle; we keep and close ours).
+    return {vulkan::takeOsHandle(ctx_.device(), st.posExt),
+            static_cast<std::size_t>(st.posExt.size)};
 }
 
 void ParticleFieldPass::ensureDescCapacity(std::uint32_t frame, std::uint32_t count) {

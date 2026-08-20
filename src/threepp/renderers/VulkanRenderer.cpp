@@ -2354,6 +2354,16 @@ namespace threepp {
         return core()->enableParticleFieldInterop(field, std::move(deviceCopy));
     }
 
+    VulkanRenderer::VertexInteropHandle
+    VulkanRenderer::enableVertexInterop(const Mesh& mesh, std::function<void()> deviceCopy,
+                                        bool validate) {
+        return core()->enableVertexInterop(mesh, std::move(deviceCopy), validate);
+    }
+
+    void VulkanRenderer::disableVertexInterop(const Mesh& mesh) {
+        core()->disableVertexInterop(mesh);
+    }
+
     void VulkanRenderer::setDeferredVolumetrics(float density, float anisotropy) {
         pimpl_->deferredVolDensity_ = std::max(density, 0.f);
         pimpl_->deferredVolAniso_   = std::clamp(anisotropy, -0.95f, 0.95f);

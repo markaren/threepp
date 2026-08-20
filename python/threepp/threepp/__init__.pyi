@@ -5748,6 +5748,26 @@ class VulkanRenderer:
         """
         Turn near-field height fog off (default).
         """
+    def disable_vertex_interop(self, mesh: Mesh) -> None:
+        """
+        Release the exports and return the mesh to the CPU attribute path. STOP the foreign writes first — nothing here can wait on a CUDA stream. Close the importing VkInteropArrays before calling this.
+        """
+    def enable_vertex_interop(self, mesh: Mesh, on_frame: collections.abc.Callable[[], None], validate: bool = True) -> typing.Any:
+        """
+        Export mesh.geometry's position + normal buffers for a foreign GPU producer and arm the per-frame device write that fills them.
+        
+        Returns ((pos_handle, pos_bytes), (nrm_handle, nrm_bytes)) or None.
+        
+        POLL IT: the renderer's record for a mesh is created on the frame the mesh is first drawn, so this returns None until after the first render() — call render() once, then enable.
+        
+        FIXED-CAPACITY GEOMETRY ONLY: the renderer draws and refits position.count vertices and ignores set_draw_range for meshes, so a producer whose triangle count varies must allocate its maximum once and write zero-area degenerates over the unused tail. Changing an attribute's count after enabling DISABLES interop for that mesh (with a warning on stderr) rather than tearing down memory CUDA has imported.
+        
+        on_frame() runs INSIDE render(), once per frame while the mesh is visible, post-fence and pre-record, and MUST BE SYNCHRONOUS: every kernel writing the exported buffers has to have completed when it returns (wp.synchronize_device(device) as the last statement). That host ordering is the only thing sequencing the foreign write against the frame that reads it — there is no shared semaphore.
+        
+        The handles are OS handles owned by the RENDERER (Win32 NT handles on Windows): import them, but never CloseHandle them from Python — disable_vertex_interop / renderer teardown releases them. The layout is tightly-packed float xyz (12-byte stride, wp.vec3), and *_bytes is the ALLOCATION size, which may exceed count*12 — write only the real range.
+        
+        validate=True (default) runs a GPU finiteness pass over the exported positions each frame, rewriting non-finite vertices as degenerates. Leave it on unless the producer is trusted: a NaN reaching the BLAS build is a device-lost (GPU reset) on NVIDIA, not an error return.
+        """
     def read_albedo(self, scene: Object3D, camera: Camera) -> numpy.typing.NDArray[numpy.uint8]:
         ...
     def read_aovs_typed(self, scene: Object3D, camera: Camera, aovs: collections.abc.Sequence[str] = ['rgb', 'depth', 'normals', 'instance_ids']) -> dict:

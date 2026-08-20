@@ -90,7 +90,6 @@ namespace threepp::vulkan {
                 VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_FD_BIT;
 #endif
         ExternalBuffer b{};
-        b.size = size;
 
         VkExternalMemoryBufferCreateInfo emb{};
         emb.sType = VK_STRUCTURE_TYPE_EXTERNAL_MEMORY_BUFFER_CREATE_INFO;
@@ -105,6 +104,12 @@ namespace threepp::vulkan {
 
         VkMemoryRequirements req{};
         vkGetBufferMemoryRequirements(device, b.handle, &req);
+        // The ALLOCATION size, not the requested one — see the ExternalBuffer
+        // comment. mai.allocationSize below is req.size, and that is the number
+        // a dedicated cuImportExternalMemory has to be told about; recording the
+        // caller's (smaller) `size` here is how an importer silently ends up
+        // mapping a short range.
+        b.size = req.size;
 
         // Device-local memory type from the requirement mask. CUDA's import maps
         // the same physical pages, so device-local is both the fast and the
@@ -172,6 +177,33 @@ namespace threepp::vulkan {
         b.osHandle = reinterpret_cast<void*>(static_cast<intptr_t>(fd));
 #endif
         return b;
+    }
+
+    void* takeOsHandle(VkDevice device, ExternalBuffer& b) {
+        if (b.memory == VK_NULL_HANDLE) return nullptr;
+#ifdef _WIN32
+        (void) device;// the NT handle is ours to keep — hand out the same value
+        return b.osHandle;
+#else
+        if (b.osHandle) {
+            void* h = b.osHandle;
+            b.osHandle = nullptr;// ownership transferred to the importer
+            return h;
+        }
+        // Second and later hand-outs: the previous fd belongs to (and has
+        // probably been closed by) an earlier importer, so mint a new one.
+        // vkGetMemoryFdKHR is documented to return a NEW fd on every call.
+        auto getFd = reinterpret_cast<PFN_vkGetMemoryFdKHR>(
+                vkGetDeviceProcAddr(device, "vkGetMemoryFdKHR"));
+        if (!getFd) return nullptr;
+        VkMemoryGetFdInfoKHR gfi{};
+        gfi.sType = VK_STRUCTURE_TYPE_MEMORY_GET_FD_INFO_KHR;
+        gfi.memory = b.memory;
+        gfi.handleType = VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_FD_BIT;
+        int fd = -1;
+        if (getFd(device, &gfi, &fd) != VK_SUCCESS) return nullptr;
+        return reinterpret_cast<void*>(static_cast<intptr_t>(fd));
+#endif
     }
 
     void destroyExternalBuffer(VkDevice device, ExternalBuffer& b) {

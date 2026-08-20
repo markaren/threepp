@@ -151,6 +151,49 @@ namespace threepp::vulkan::impl {
         // never through the draining host-side resync pass.
         bool dynPrevResyncPending = false;
 
+        // ── Zero-copy vertex interop (enableVertexInterop) ──────────
+        // A foreign device producer (CUDA: Warp, PhysX, torch) fills these
+        // EXPORTED allocations, and recordDynamicGeomRefits copies them into
+        // rec.vertex / rec.normal at head of frame.
+        //
+        // The copy is the whole point, and it is ParticleField F6's shape
+        // rather than the soft-body swap's. `vertex` has seven consumers,
+        // five of them by DEVICE ADDRESS (the bindless raster pull's
+        // DrawInfo::posAddr, the BLAS build/refit input, GeometryDesc::
+        // vertexAddress in chit/ray-query/probe/lidar, the prev-frame
+        // fallbacks) — and createExternalBuffer allocates its dedicated
+        // memory WITHOUT VK_MEMORY_ALLOCATE_DEVICE_ADDRESS_BIT, so an
+        // exported buffer can never carry one. Substituting the export FOR
+        // rec.vertex is therefore not merely awkward, it is invalid. The
+        // export stays a STORAGE|TRANSFER_SRC copy source that nothing binds,
+        // exactly as ParticleFieldPass::kExternalPositionUsage argues, and
+        // every downstream address keeps pointing at the same VMA allocation
+        // it always did. Cost: one device→device copy per attribute per frame.
+        //
+        // Second, independent reason to prefer the copy here: under the swap
+        // the foreign write would land in a buffer a BLAS BUILD reads, where a
+        // torn or non-finite read is VK_ERROR_DEVICE_LOST rather than one
+        // blended sim step.
+        vulkan::ExternalBuffer posExt{};// positions  — sized to vertex.size
+        vulkan::ExternalBuffer nrmExt{};// normals    — sized to normal.size
+        // The producer's synchronous device write, invoked once per frame
+        // post-fence / pre-record in recordDynamicGeomRefits (the same
+        // contract as TetMeshState::tetPosExternalCopy and ParticleField's
+        // deviceCopy: it MUST have completed when it returns).
+        std::function<void()> externalCopy;
+        bool interop = false;
+        // W4: run the GPU sanitize dispatch over posExt before the copy into
+        // rec.vertex. The CPU finiteness scan that guards every other BLAS
+        // build path reads the host attribute array, which under interop is
+        // stale or empty — this is its replacement, and it is ON by default
+        // because a non-finite position reaching a BLAS build is a device
+        // reset, not a warning. Producers that have earned the trust can turn
+        // it off for the dispatch back.
+        bool interopValidate = true;
+        // Descriptor set naming posExt for that dispatch (one per record,
+        // allocated from VertexSanitizePipeline's pool at enable time).
+        VkDescriptorSet sanitizeDS = VK_NULL_HANDLE;
+
         // ── Automatic mesh LOD (setAutoLod) ─────────────────────────
         // One simplified INDEX buffer + its own static BLAS per chain
         // level, built beyond this record's own (LOD0) vertex/normal/uv/

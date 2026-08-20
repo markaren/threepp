@@ -101,6 +101,20 @@ namespace threepp::vulkan::impl {
         // the device), so it is never frustum-culled at entry granularity and
         // carries the occlusion "always draw" bit, exactly like the deformers.
         bool     isParticleField = false;
+        // VulkanRenderer::enableVertexInterop is armed on this mesh's geometry
+        // (BlasRecord::interop). It belongs beside the deformer flags for the
+        // same reason isParticleField does, and for the STRONGER of the two
+        // reasons: a foreign device producer owns the positions, so the host
+        // `position` array — which is what every CPU bounds computation reads —
+        // describes a shape that is not on screen. Not merely stale like a
+        // skinned mesh's rest AABB, but arbitrary: a producer is free to leave
+        // the host array at the origin, or at y=-50, or empty. Both CPU-bounds
+        // culls therefore treat an interop entry the way they treat a deformer.
+        //
+        // Refreshed on the structural rebuild that enable/disableVertexInterop
+        // force, exactly as isMorphed is (see the snapshot note below) — the
+        // snapshot fast path never recomputes it.
+        bool     isVertexInterop = false;
         bool     isInstanced = false;// entry came from an InstancedMesh expansion
                                      // (the snapshot fast path recomputes its world
                                      // matrix as matrixWorld * getMatrixAt(i))

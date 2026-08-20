@@ -382,8 +382,13 @@ namespace threepp {
                 // ("records never move"), and a field's CPU-side world AABB is
                 // not merely stale but unknowable — the positions are on the
                 // device. Same escape the deformers take.
+                // isVertexInterop for the ParticleField reason, one step further:
+                // a foreign CUDA producer owns the positions, so the memoized
+                // object-space box below describes the host array, which under
+                // interop is not a conservative bound on anything. Always draw.
                 bool always = en.isSkinned || en.isDisplaced ||
-                              en.isMorphed || en.isTet || en.isParticleField;
+                              en.isMorphed || en.isTet || en.isParticleField ||
+                              en.isVertexInterop;
                 if (en.isGrass) {
                     Box3 worldAabb;
                     if (!grassSwayWorldAabb(en, worldAabb)) {

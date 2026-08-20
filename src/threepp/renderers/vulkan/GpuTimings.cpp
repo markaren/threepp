@@ -110,6 +110,7 @@ namespace threepp::vulkan {
         lastTimings_.oceanFoamMs     = 0.f;
         lastTimings_.oceanBlasMs     = 0.f;
         lastTimings_.tlasRefitMs     = 0.f;
+        lastTimings_.dynGeomRefitMs  = 0.f;
         lastTimings_.gpuTotalMs     = 0.f;
         lastTimings_.gpuPassSumMs   = 0.f;
         if (!timingsSupported_) return;
@@ -154,6 +155,7 @@ namespace threepp::vulkan {
         lastTimings_.oceanFoamMs     = pairMs(TP_OceanFoam);
         lastTimings_.oceanBlasMs     = pairMs(TP_OceanBlas);
         lastTimings_.tlasRefitMs     = pairMs(TP_TlasRefit);
+        lastTimings_.dynGeomRefitMs  = pairMs(TP_DynGeomRefit);
         lastTimings_.gpuTotalMs     = pairMs(TP_Frame);
         // The DISJOINT bracketed passes only. TP_SplatProject/Sort/Raster are
         // recorded INSIDE TP_Splat and partition it, so they are excluded or splat
@@ -172,7 +174,7 @@ namespace threepp::vulkan {
                 lastTimings_.particleEmitMs +
                 lastTimings_.oceanFftMs + lastTimings_.oceanDisplaceMs +
                 lastTimings_.oceanFoamMs + lastTimings_.oceanBlasMs +
-                lastTimings_.tlasRefitMs +
+                lastTimings_.tlasRefitMs + lastTimings_.dynGeomRefitMs +
                 pairMs(TP_SensorImage);
     }
 

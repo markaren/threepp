@@ -47,6 +47,7 @@
 #include "WaterDisplacePipeline.hpp"
 #include "FoamWorldPipeline.hpp"
 #include "GrassWindPipeline.hpp"
+#include "VertexSanitizePipeline.hpp"
 #include "shaders/vulkan_shared.h"// MaterialDesc + kMaxMaterialTextures — same source the shaders read
 
 #include "threepp/cameras/Camera.hpp"
@@ -323,6 +324,30 @@ namespace threepp {
         // motion vectors collapse back to zero (frame-cb twin of the
         // prevVertexResyncPending pass).
         std::vector<vulkan::impl::BlasRecord*> pendingDynamicPrevResyncs_;
+        // Geometries whose BLAS record must be built with allowPacked=false.
+        // Populated by enableVertexInterop when it finds an already-built PACKED
+        // record: a zero-copy producer writes tightly-packed float xyz normals,
+        // and a record built with allowPacked=true carries snorm16x4 ones
+        // (packedMask bit 0), an encoding no foreign producer knows. Rather than
+        // rejecting (the old behaviour, which made interop unusable on every
+        // ordinary mesh in a default build) or rebuilding inline inside enable
+        // (teardown of buffers in-flight frames still read), enable MARKS the
+        // geometry here, asks for a structural rebuild, and returns a null
+        // handle. buildBlasFor consults this set, so the rebuild produces an
+        // unpacked record through the ordinary machinery — descs, TLAS and every
+        // device address republished exactly as any other rebuild does — and the
+        // caller's next poll arms for real. Documented on enableVertexInterop as
+        // "call it after the first render()", which is the same contract.
+        //
+        // Entries live as long as the geometry does (pruned with the blasCache
+        // record whose liveCheck expired). NOT cleared once consumed: a later
+        // geomVersion-mismatch rebuild of the same geometry must stay unpacked,
+        // or interop would silently break under the producer.
+        std::unordered_set<const BufferGeometry*> forceUnpackedGeoms_;
+        // Lazily built on the first enableVertexInterop — most scenes never own
+        // one, and it costs a pipeline + descriptor pool. See
+        // vulkan/VertexSanitizePipeline.{hpp,cpp}.
+        std::unique_ptr<vulkan::VertexSanitizePipeline> vertexSanitize_;
 
         // DisplacedMesh (FFT water) deforms queued in ensureSceneBuilt and
         // recorded into the frame command buffer by recordCommandBuffer — the
@@ -981,6 +1006,22 @@ namespace threepp {
             destroyBuffer(ctx->allocator(), rec.prevVertex);
             destroyBuffer(ctx->allocator(), rec.blasScratch);
             destroyBuffer(ctx->allocator(), rec.dynStaging);
+            // Zero-copy vertex interop exports. Freed HERE and only here for the
+            // same reason the list above exists: five of the six BlasRecord
+            // owners used to hand-roll their teardown and four of them drifted.
+            // Note the asymmetry with the buffers above — a foreign API may
+            // still hold an IMPORT of this memory. Nothing in Vulkan can wait
+            // for that; the contract (documented on enableVertexInterop) is that
+            // the application stops its producer before dropping the geometry,
+            // exactly as it must for the soft-body and ParticleField exports.
+            if (rec.sanitizeDS != VK_NULL_HANDLE && vertexSanitize_) {
+                vertexSanitize_->freeRecordDescriptorSet(rec.sanitizeDS);
+                rec.sanitizeDS = VK_NULL_HANDLE;
+            }
+            vulkan::destroyExternalBuffer(ctx->device(), rec.posExt);
+            vulkan::destroyExternalBuffer(ctx->device(), rec.nrmExt);
+            rec.externalCopy = nullptr;
+            rec.interop = false;
         }
 
         // Cached CDF blob (16 floats per tri) reused across frames when no
@@ -2515,9 +2556,10 @@ namespace threepp {
             auto it = tetMeshStates.find(&mesh);
             if (it == tetMeshStates.end() || !ctx->externalMemorySupported()) return {};
             auto& st = *it->second;
-            if (st.tetPosExt.handle != VK_NULL_HANDLE) {// already enabled — same handle
+            if (st.tetPosExt.handle != VK_NULL_HANDLE) {// already enabled — same allocation
                 st.tetPosExternalCopy = std::move(deviceCopy);
-                return {st.tetPosExt.osHandle, static_cast<size_t>(st.tetPosExt.size)};
+                return {vulkan::takeOsHandle(ctx->device(), st.tetPosExt),
+                        static_cast<size_t>(st.tetPosExt.size)};
             }
             if (st.tetPosBytes == 0 || st.tetDescSet[0] == VK_NULL_HANDLE) return {};
             check(vkDeviceWaitIdle(ctx->device()), "vkDeviceWaitIdle (softbody interop enable)");
@@ -2528,7 +2570,10 @@ namespace threepp {
             for (auto& slot : st.tetPos)// CPU-path ring no longer read
                 destroyBuffer(ctx->allocator(), slot);
             st.tetPosExternalCopy = std::move(deviceCopy);
-            return {st.tetPosExt.osHandle, static_cast<size_t>(st.tetPosExt.size)};
+            // takeOsHandle, not .osHandle: on POSIX the fd's ownership passes to
+            // the importer, so the record must stop believing it owns it.
+            return {vulkan::takeOsHandle(ctx->device(), st.tetPosExt),
+                    static_cast<size_t>(st.tetPosExt.size)};
         }
 
         // Interop disable / CUDA-import-failure fallback: restore the host-visible
@@ -2550,6 +2595,21 @@ namespace threepp {
             const auto e = particleFieldPass_->enableInterop(field, std::move(deviceCopy));
             return {e.osHandle, e.sizeBytes};
         }
+
+        // Zero-copy MESH VERTEX interop — the same idea again, now on a plain
+        // mesh's position/normal attributes. Definitions in VulkanCoreGeometry.cpp
+        // beside the dynamic-refit machinery they hook into; the design notes
+        // live on BlasRecord::posExt (why a copy and not a buffer swap) and on
+        // VulkanRenderer::enableVertexInterop (the caller-facing contract).
+        VulkanRenderer::VertexInteropHandle
+        enableVertexInterop(const Mesh& mesh, std::function<void()> deviceCopy, bool validate);
+        void disableVertexInterop(const Mesh& mesh);
+        // The record backing `mesh` for interop purposes, or null. Interop is a
+        // plain-mesh feature: skinned / tet / displaced / grass / morphed meshes
+        // already have a per-frame GPU producer of their own that would overwrite
+        // whatever the foreign API wrote, so they are refused rather than
+        // silently fighting over the buffer.
+        BlasRecord* interopRecordFor(const Mesh& mesh);
 
         // Definition moved to VulkanGeometryState.hpp.
         using GeomRefreshOp = vulkan::impl::GeomRefreshOp;

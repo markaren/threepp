@@ -98,6 +98,15 @@ namespace threepp::vulkan {
     // in destroyExternalBuffer — CUDA's import duplicates it), a POSIX fd
     // elsewhere (ownership transfers to CUDA on successful import, so it is
     // set to null here once handed out and NOT closed by destroy).
+    //
+    // `size` is the ALLOCATION size (VkMemoryRequirements::size), NOT the size
+    // the caller asked for: the driver rounds allocations up, and CUDA's
+    // cuImportExternalMemory for a DEDICATED allocation wants the size of the
+    // VkDeviceMemory, not of the buffer bound to it. Importing with the smaller
+    // number succeeds and maps a SHORT range — writes past it are out of bounds
+    // with no error anywhere in the chain, which is why this field carries the
+    // number that keeps the import honest. Mapping the whole allocation from
+    // CUDA is legal; the extra tail is simply unused by Vulkan.
     struct ExternalBuffer {
         VkBuffer       handle   = VK_NULL_HANDLE;
         VkDeviceMemory memory   = VK_NULL_HANDLE;
@@ -110,6 +119,26 @@ namespace threepp::vulkan {
     // Throws on failure (same contract as the other helpers).
     ExternalBuffer createExternalBuffer(VkPhysicalDevice physicalDevice, VkDevice device,
                                         VkDeviceSize size, VkBufferUsageFlags usage);
+
+    // Hand the OS handle to an importer (CUDA). ALWAYS go through this rather
+    // than reading `b.osHandle` directly at a hand-out site, because the two
+    // platforms have opposite ownership rules:
+    //
+    //   Windows — the NT handle stays OURS. CUDA's import duplicates it, so the
+    //   same value may be handed out any number of times and destroyExternalBuffer
+    //   closes it exactly once. Returns b.osHandle unchanged.
+    //
+    //   POSIX — the fd's ownership TRANSFERS to the importer, which closes it.
+    //   Handing the same fd out twice therefore gives the second importer an fd
+    //   the first one already closed (or, worse, one the process has since
+    //   recycled for an unrelated file). So the stored fd is taken and nulled on
+    //   the first hand-out, and every later hand-out MINTS A FRESH fd from the
+    //   same VkDeviceMemory — each independently owned by its importer. That
+    //   keeps the "re-enable returns a usable handle" contract the interop
+    //   entry points advertise, which a bare null-and-return would break.
+    //
+    // Returns nullptr if the buffer has no memory (default-constructed record).
+    void* takeOsHandle(VkDevice device, ExternalBuffer& b);
 
     // Free an external buffer (idempotent; closes the Win32 handle).
     void destroyExternalBuffer(VkDevice device, ExternalBuffer& b);

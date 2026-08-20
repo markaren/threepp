@@ -3,6 +3,7 @@
 Skips entirely on a GL-only build (threepp.HAS_VULKAN is False). On a Vulkan
 build these require a Vulkan-capable GPU.
 """
+import importlib.util
 import math
 
 import numpy as np
@@ -288,3 +289,94 @@ def test_depthsensor_scan_is_reproducible(vk_renderer):
     sensor.advance_clock(0.25)
     sensor.scan(vk_renderer, scene)
     assert sensor.last_scan_time == pytest.approx(0.25)
+
+
+@pytest.mark.skipif(importlib.util.find_spec("warp") is None,
+                    reason="warp-lang not installed")
+def test_vertex_interop_cuda_write(vk_renderer):
+    """A CUDA producer writing the renderer's own vertex buffer changes the image.
+
+    Local-verification only: no CI job has both Vulkan and CUDA (the
+    python-bindings job builds a GL preset, the lavapipe job has no GPU), so
+    this never runs there.
+    """
+    import warp as wp
+
+    from threepp.cuda_interop import VkInteropArray
+
+    wp.init()
+    device = wp.get_preferred_device()
+    if not device.is_cuda:
+        pytest.skip("no CUDA device")
+
+    # Fixed capacity, as the contract requires: one live triangle plus a
+    # degenerate tail. The tail is what hides unused triangles — the Vulkan mesh
+    # path has no drawRange.
+    ntri, cap = 8, 8 * 3
+    # All vertices coincident, and deliberately PARKED FAR OFF-SCREEN at y=-50.
+    # Zero area, so nothing rasterises — and, more to the point, the host array
+    # describes a shape 50 m below the camera while the producer draws one at the
+    # origin. That is the honest shape of interop (the host copy is meaningless
+    # once a foreign device owns the buffer), and it is a regression gate: every
+    # CPU-bounds cull in the renderer must exempt an interop mesh, or the entry is
+    # culled out of the G-buffer and the CUDA-written triangle never appears. An
+    # array of zeros would pass by accident, because the origin is in view.
+    pos = np.zeros((cap, 3), np.float32)
+    pos[:, 1] = -50.0
+    geom = tp.BufferGeometry()
+    geom.set_attribute("position", pos)
+    geom.set_attribute("normal", np.tile(np.float32([0, 0, 1]), (cap, 1)))
+    mat = tp.MeshStandardMaterial()
+    mat.color = 0xffffff
+    mat.side = tp.Side.Double
+    mesh = tp.Mesh(geom, mat)
+    mesh.frustum_culled = False             # CPU bounds never see the GPU writes
+
+    scene = tp.Scene()
+    scene.background = 0x000000
+    scene.add(mesh)
+    scene.add(tp.AmbientLight(0xffffff, 3.0))
+    cam = tp.PerspectiveCamera(55, W / H, 0.1, 100)
+    cam.position.set(0, 0, 3)
+    cam.look_at(0, 0, 0)
+
+    # Depth, not colour: it answers "did the geometry land" without depending on
+    # how a one-triangle scene happens to shade.
+    blank = vk_renderer.read_depth(scene, cam)          # also builds the record
+    assert blank[H // 2, W // 2] > 50.0, "the degenerate tail drew something"
+    # Poll, exactly as the API documents. The first call can legitimately return
+    # None twice over: the BlasRecord does not exist until the mesh has been
+    # rendered once, and an ordinary mesh's first record is built with PACKED
+    # attributes, which no external producer can write — the renderer then
+    # schedules an unpacked rebuild and asks to be called again. Three frames is
+    # ample for both handoffs; anything more is a real failure, not a skip.
+    handles = None
+    for _ in range(3):
+        handles = vk_renderer.enable_vertex_interop(mesh, lambda: None)
+        if handles is not None:
+            break
+        vk_renderer.read_depth(scene, cam)              # let the rebuild land
+    assert handles is not None,         "vertex interop never armed after 3 frames of polling"
+    (pos_handle, pos_bytes), (nrm_handle, nrm_bytes) = handles
+    assert pos_bytes >= cap * 12 and nrm_bytes >= cap * 12
+
+    tri = pos.copy()
+    tri[0], tri[1], tri[2] = (-1, -1, 0), (1, -1, 0), (0, 1, 0)
+    ipos = VkInteropArray(pos_handle, pos_bytes, wp.vec3, cap, device)
+    inrm = VkInteropArray(nrm_handle, nrm_bytes, wp.vec3, cap, device)
+    try:
+        def on_frame():
+            ipos.array.assign(tri)
+            inrm.array.assign(np.tile(np.float32([0, 0, 1]), (cap, 1)))
+            wp.synchronize_device(device)   # MUST be synchronous — see the API doc
+
+        # Re-arm with the real callback now that the imports exist (same
+        # allocations, so the handles above stay valid).
+        assert vk_renderer.enable_vertex_interop(mesh, on_frame) is not None
+        drawn = vk_renderer.read_depth(scene, cam)
+        assert drawn[H // 2, W // 2] == pytest.approx(3.0, abs=0.05), \
+            "the CUDA-written triangle never reached the renderer's vertex buffer"
+    finally:
+        ipos.close()
+        inrm.close()
+        vk_renderer.disable_vertex_interop(mesh)

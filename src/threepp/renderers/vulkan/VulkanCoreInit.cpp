@@ -378,6 +378,11 @@ VulkanRenderer::Impl::~Impl() {
             // Grass-wind pipeline; per-mesh buffers freed in the grassStates
             // loop above.
             grassWind_.reset();
+            // Vertex-interop sanitize pipeline (lazy — null unless a mesh armed
+            // interop). Its descriptor sets live in BlasRecords, all of which the
+            // blasCache/state teardown above has already destroyed, so the pool
+            // goes down with no live set left in it.
+            vertexSanitize_.reset();
 
             // Hybrid raster G-buffer cleanup. Resources are lazy-created on
             // first render(); if render() was never called, all handles stay
