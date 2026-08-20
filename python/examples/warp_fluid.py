@@ -42,6 +42,17 @@ import warp as wp
 import threepp as tp
 from threepp.cuda_interop import VkInteropArray
 
+# Warp compiles with fast_math off, so nvrtc runs with -prec-div=true -prec-sqrt=true and
+# every wp.sqrt and divide in the neighbour loops is a multi-instruction IEEE sequence
+# instead of a single hardware op. Those loops run ~77M times a frame, and this is worth
+# 2.6 ms of an 17.8 ms sim at 337k. (There is no wp.rsqrt to reach for instead -- the
+# builtin does not exist; this flag is the only way to get the approximate form.) The fluid
+# has nothing subnormal-sensitive in it: the guards sit at 1e-9 and 1e-12 and the kernel
+# coefficients are ~1e12. --probe agrees the physics is unchanged -- mean compression
+# 13.931% -> 13.943%, same mean speed, same spray height. Module-scoped, so the marching
+# cubes module is untouched.
+wp.set_module_options({"fast_math": True})
+
 
 def cli_arg(flag, default, cast):
     if flag in sys.argv:
@@ -419,7 +430,16 @@ def shade_points(v: wp.array(dtype=wp.vec3), col: wp.array(dtype=wp.vec3)):
 
 # --- surfacing: particles -> density grid -> marching cubes -------------------
 
-CELL = 1.18 * D              # surface grid spacing (coarser than D, then blurred)
+CELL = 1.00 * D              # surface grid spacing (then blurred)
+                             # Marching cubes cannot emit a sheet thinner than
+                             # about 1.35 sigma of the combined splat+blur kernel:
+                             # thinner water does not thin, it VANISHES, and the
+                             # bulk closes over where it was. At the old 1.18*D
+                             # with two full blur rounds that floor was 15.5 mm,
+                             # which is what gave the surface its rounded, gel-like
+                             # lip. 1.00*D plus the narrowed second round below
+                             # takes it to ~11.6 mm. Costs ~1.4x triangles and
+                             # ~2.5 ms of surfacing at 590k (46.3 -> 50.1 ms/frame).
 GX0, GY0, GZ0 = X0 - 0.05, FLOOR - 0.035, Z0 - 0.05
 NGX = int((X1 + 0.05 - GX0) / CELL) + 1
 NGY = int((0.56 - GY0) / CELL) + 1   # paddle spray never gets near this
@@ -472,7 +492,11 @@ def splat(x: wp.array(dtype=wp.vec3), field: wp.array3d(dtype=float)):
 
 
 @wp.kernel
-def blur_axis(src: wp.array3d(dtype=float), dst: wp.array3d(dtype=float), axis: int):
+def blur_axis(src: wp.array3d(dtype=float), dst: wp.array3d(dtype=float), axis: int,
+              w: float):
+    # w is the side weight of the 3-tap kernel [w, 1-2w, w]. w = 0.25 is the
+    # binomial and annihilates grid-aligned checkerboard noise exactly; smaller
+    # w smooths less and keeps thin sheets alive.
     i, j, k = wp.tid()
     di = wp.where(axis == 0, 1, 0)
     dj = wp.where(axis == 1, 1, 0)
@@ -483,7 +507,7 @@ def blur_axis(src: wp.array3d(dtype=float), dst: wp.array3d(dtype=float), axis: 
     ip = wp.min(i + di, NGX - 1)
     jp = wp.min(j + dj, NGY - 1)
     kp = wp.min(k + dk, NGZ - 1)
-    dst[i, j, k] = 0.25 * src[im, jm, km] + 0.5 * src[i, j, k] + 0.25 * src[ip, jp, kp]
+    dst[i, j, k] = w * src[im, jm, km] + (1.0 - 2.0 * w) * src[i, j, k] + w * src[ip, jp, kp]
 
 
 @wp.kernel
@@ -620,6 +644,18 @@ def sim_step():
         prev = cur = xp
         spare = [xtmp, xprev]
         for k in range(ITERATIONS):
+            if k:
+                # Rebuild on the current iterate instead of reusing the grid predict
+                # left behind. A build is not overhead here, it is a locality
+                # investment: hash_grid_point_id hands every kernel a spatially sorted
+                # thread order, and a grid built on positions the solver has since moved
+                # gives the neighbour gathers a scrambled one. At 337k the extra builds
+                # cost 0.7 ms and return 0.9 ms in solve_lambda plus 1.1 ms in
+                # solve_delta; at 1M the same trade returns 10 ms. Rebuilding LESS often
+                # loses by the same mechanism, which is worth recording because it is the
+                # intuitive direction: one build per frame rather than per substep saves
+                # 0.19 ms of build and costs 2.2 ms of solver at 337k, 14.5 ms at 1M.
+                grid.build(points=cur, radius=H)
             out = spare.pop(0)
             wp.launch(solve_lambda, dim=N, device=device,
                       inputs=[cur, grid.id, RHO0, EPS_CFM, lam])
@@ -631,6 +667,9 @@ def sim_step():
             prev, cur = cur, out
         wp.launch(finalize, dim=N, device=device, inputs=[x, cur, v, dt])
         sim_time += dt
+    # Same trade for the two velocity passes, which query x -- a whole substep of
+    # projection away from the positions the last build saw. 0.14 ms of build, 0.29 ms back.
+    grid.build(points=x, radius=H)
     wp.launch(curl_and_viscosity, dim=N, device=device,
               inputs=[x, v, grid.id, RHO0, omega, vtmp])
     wp.launch(vorticity_confine, dim=N, device=device,
@@ -656,11 +695,13 @@ def build_surface():
     # Ping-pong the two grids instead of copying one onto the other: assign()
     # costs a full-grid copy per pass, which dominated the surfacing budget.
     # Six passes is even, so the result lands back in `field`.
+    # Round one stays binomial so grid-aligned noise is still killed outright;
+    # round two is narrowed, which buys thinness without a new noise source.
     a, b = field, field2
-    for _ in range(2):
+    for w in (0.25, 0.125):
         for axis in range(3):
             wp.launch(blur_axis, dim=(NGX, NGY, NGZ), device=device,
-                      inputs=[a, b, axis])
+                      inputs=[a, b, axis, w])
             a, b = b, a
     mc.surface(field, ISO)
     got = mc.indices.shape[0] // 3
@@ -691,10 +732,34 @@ if PROBE:
     sys.exit(0)
 
 
-# --- procedural HDR sky (numpy -> Radiance .hdr -> RGBELoader) -----------------
-# Adapted from examples/pbr_showcase.py so the demo downloads nothing. The
-# environment map is not decoration: with transmission, the sky reflection and
-# the Fresnel rim are most of what makes the surface read as water.
+# --- environment assets --------------------------------------------------------
+# The environment map is not decoration: what the water reflects and refracts IS
+# the water's look, and a bare grey sky makes grey water. The demo fetches an
+# indoor swimming pool HDRI (Poly Haven, CC0) and a mosaic tile texture
+# (Wikimedia Commons) once into the temp dir; offline, the procedural sky below
+# and a plain aqua liner stand in, so the demo still runs with no network.
+
+POOL_HDR_URL = ("https://dl.polyhaven.org/file/ph-assets/HDRIs/hdr/2k/"
+                "indoor_pool_2k.hdr")
+MOSAIC_URL = ("https://upload.wikimedia.org/wikipedia/commons/e/e8/"
+              "Baby_blue_aqua_mosaic_swimming_pool_square_seamless_tiled_"
+              "floor_texture.jpg")
+
+
+def fetch_asset(url, name):
+    """Cache a demo asset in the temp dir; None if offline."""
+    path = os.path.join(tempfile.gettempdir(), name)
+    if os.path.exists(path):
+        return path
+    try:
+        import urllib.request
+        req = urllib.request.Request(url, headers={"User-Agent": "threepp-demo"})
+        with urllib.request.urlopen(req, timeout=20) as r, open(path, "wb") as f:
+            f.write(r.read())
+        return path
+    except Exception as e:
+        print(f"  asset: {name} unavailable ({e}); using the built-in fallback")
+        return None
 
 SUN_DIR = np.array([0.42, 0.45, 0.79])
 SUN_DIR = SUN_DIR / np.linalg.norm(SUN_DIR)
@@ -729,7 +794,10 @@ def make_sky_hdr(path, W=2048, HH=1024):
     sky = np.array([0.62, 0.70, 0.82]) * (1.0 - t) + np.array([0.07, 0.22, 0.55]) * t
     glow = np.exp(-(y * y) / (2 * 0.006))[..., None]
     sky = sky + glow * np.array([1.0, 0.80, 0.55]) * 0.5
-    sky = np.where((y < 0)[..., None], np.array([0.16, 0.17, 0.19]), sky)
+    # Below-horizon matters more than it looks: wave facets tilted toward the
+    # camera reflect THIS hemisphere, and at 0.16 they all went near-black --
+    # most of what read as "dark grey water". 0.40 tracks the actual ground.
+    sky = np.where((y < 0)[..., None], np.array([0.40, 0.42, 0.46]), sky)
 
     d = np.stack([xx, y, zz], axis=-1)
     ang = np.arccos(np.clip((d * SUN_DIR).sum(-1), -1.0, 1.0))
@@ -765,10 +833,15 @@ else:
     renderer = tp.GLRenderer(canvas)
     renderer.shadow_map_enabled = True
 renderer.tone_mapping = tp.ToneMapping.ACESFilmic
-renderer.tone_mapping_exposure = 1.15
+renderer.tone_mapping_exposure = 0.95 if VULKAN else 1.15
 
 scene = tp.Scene()
-env = tp.RGBELoader().load(make_sky_hdr(
+# The indoor-pool HDRI is Vulkan-only: the ray-traced path turns its bright
+# warm interior into reflections, refracted light and sparkle. GL's screen-space
+# transmission just floods with it and washes the water out to cream, so GL
+# keeps the procedural sky it was tuned against.
+_pool_hdr = fetch_asset(POOL_HDR_URL, "threepp_indoor_pool_2k.hdr") if VULKAN else None
+env = tp.RGBELoader().load(_pool_hdr if _pool_hdr else make_sky_hdr(
     os.path.join(tempfile.gettempdir(), "threepp_fluid_sky.hdr")))
 scene.environment = env
 scene.background = env
@@ -793,6 +866,67 @@ floor_mesh = tp.Mesh(tp.BoxGeometry(X1 - X0 + 0.06, 0.03, Z1 - Z0 + 0.06), tank_
 floor_mesh.position.set(0.5 * (X0 + X1), FLOOR - 0.015, 0.5 * (Z0 + Z1))
 floor_mesh.receive_shadow = True
 scene.add(floor_mesh)
+
+# The pool liner, and it is not decoration. What the water refracts IS the water's
+# colour -- on Vulkan almost entirely so (see the material below) -- and a grey
+# floor can only ever produce grey water. It is inset inside the walls rather than
+# painted onto the floor box because that box's sides are exposed below the walls,
+# where a saturated colour reads as a bright stripe around the outside of the tank.
+# NO emissive on the liner. An emissive liner was tried to lift the body (the
+# ray-traced behind-hit shading lights surfaces dimmer than the rasterised
+# deferred path), but every emitter under the water grew soft circular DI blobs
+# on the calm surface. The indoor-pool environment map supplies that light
+# honestly instead -- and with it the blobs' cause is simply gone.
+_mosaic = fetch_asset(MOSAIC_URL, "threepp_pool_mosaic.jpg")
+TILE = 0.80            # world metres per mosaic sheet -> square tiles everywhere.
+                       # Not smaller: the ray-traced refraction samples the map
+                       # at LOD 0, one ray per pixel, so fine tiles shatter into
+                       # dark speckle under the rippled surface. At 0.80 the
+                       # pattern stays readable through the water.
+
+
+def liner_material(w, h, mosaic):
+    m = tp.MeshStandardMaterial()
+    m.color = 0xffffff if mosaic else 0x4ec9de
+    m.roughness = 0.5
+    m.metalness = 0.0
+    if mosaic:
+        t = tp.TextureLoader().load(_mosaic, tp.ColorSpace.SRGB)
+        t.wrap_s = t.wrap_t = tp.TextureWrapping.Repeat
+        t.repeat = tp.Vector2(w / TILE, h / TILE)
+        m.map = t
+    return m
+
+
+# Mosaic on the WALLS, plain aqua on the FLOOR. The floor is what the body of
+# the water refracts, and this mosaic's saturated navy average drags the whole
+# pool dark and busy; the plain aqua floor keeps the water luminous while the
+# walls carry the tiled-pool identity at the rim and waterline.
+liner = tp.Mesh(tp.PlaneGeometry(X1 - X0, Z1 - Z0),
+                liner_material(X1 - X0, Z1 - Z0, mosaic=False))
+liner.rotate_x(-math.pi / 2)
+liner.position.set(0.5 * (X0 + X1), FLOOR + 0.0015, 0.5 * (Z0 + Z1))
+liner.receive_shadow = True
+scene.add(liner)
+
+# The walls get the liner too. Refracted rays that miss the floor hit the tank's
+# inner faces, and grey walls put grey right back into the water body.
+for sx, sz in ((1, 0), (-1, 0), (0, 1), (0, -1)):
+    if sx:
+        wl = tp.Mesh(tp.PlaneGeometry(Z1 - Z0, 0.20),
+                     liner_material(Z1 - Z0, 0.20, mosaic=VULKAN and _mosaic is not None))
+        wl.rotate_y(-sx * math.pi / 2)
+        wl.position.set((X1 - 0.002) if sx > 0 else (X0 + 0.002), 0.10,
+                        0.5 * (Z0 + Z1))
+    else:
+        wl = tp.Mesh(tp.PlaneGeometry(X1 - X0, 0.20),
+                     liner_material(X1 - X0, 0.20, mosaic=VULKAN and _mosaic is not None))
+        if sz > 0:
+            wl.rotate_y(math.pi)
+        wl.position.set(0.5 * (X0 + X1), 0.10,
+                        (Z1 - 0.002) if sz > 0 else (Z0 + 0.002))
+    wl.receive_shadow = True
+    scene.add(wl)
 
 block_mat = tp.MeshStandardMaterial()
 block_mat.color = 0x6d7480
@@ -822,15 +956,25 @@ for sx, sz in ((1, 0), (-1, 0), (0, 1), (0, -1)):
     w.receive_shadow = True
     scene.add(w)
 
-ground_mat = tp.MeshStandardMaterial()
-ground_mat.color = 0x848b94
-ground_mat.roughness = 0.8
-ground_mat.metalness = 0.0
-ground = tp.Mesh(tp.PlaneGeometry(60, 60), ground_mat)
-ground.rotate_x(-math.pi / 2)
-ground.position.y = FLOOR - 0.032
-ground.receive_shadow = True
-scene.add(ground)
+# NO ground plane on Vulkan -- this one line is worth more than every material
+# knob above. Wave facets tilted toward the camera reflect DOWNWARD, and
+# refracted rays exiting the tank sweep BELOW it; a 60x60 grey plane there
+# funnels both through the ray-hit shading path (dim) and answers "grey" to
+# every one of them. With it gone the same rays MISS, and an env miss samples
+# the HDRI's below-horizon content at raw HDR radiance -- the pool hall's warm
+# tiles and its real turquoise water -- which is what makes the colours pop.
+# GL keeps the ground: its procedural sky is dull below the horizon, and its
+# screen-space refraction was tuned with the plane in place.
+if not VULKAN:
+    ground_mat = tp.MeshStandardMaterial()
+    ground_mat.color = 0x848b94
+    ground_mat.roughness = 0.8
+    ground_mat.metalness = 0.0
+    ground = tp.Mesh(tp.PlaneGeometry(60, 60), ground_mat)
+    ground.rotate_x(-math.pi / 2)
+    ground.position.y = FLOOR - 0.032
+    ground.receive_shadow = True
+    scene.add(ground)
 
 geometry = tp.BufferGeometry()
 reg_pos = None
@@ -875,12 +1019,38 @@ else:
     geometry.set_attribute("normal", np.tile(np.float32([0, 1, 0]), (cap, 1)))
     geometry.set_draw_range(0, 3)
     wmat = tp.MeshStandardMaterial() if OPAQUE else tp.MeshPhysicalMaterial()
-    wmat.color = 0x8fd6e8 if not OPAQUE else 0x3aa0c8
+    # The backends tint transmitted light through different models, so the water
+    # wants a different base colour on each.
+    #
+    # GL runs the glTF transmission chunk and really does consume thickness and
+    # attenuation below, so a tinted base is part of a tuned whole.
+    #
+    # Vulkan's glass path multiplies everything seen through the surface by the
+    # albedo ALONE. Its Beer-Lambert term is driven by a ray-traced interior chord
+    # (deferred_shade_50_water_glass.glsl:607) which measures ~0 for this mesh, so
+    # attenuation contributes nothing there -- attenuation_distance 0.10 and 10.0
+    # render byte-identical. Note also that colours are sRGB: 0x8fd6e8 linearises
+    # to (0.275, 0.672, 0.807), so on Vulkan it was cutting 73% of the red out of
+    # the refracted image at zero depth. That, not the geometry, is what made the
+    # water read as a dark gel. A near-white base lets the liner colour through.
+    if OPAQUE:
+        wmat.color = 0x3aa0c8
+    else:
+        # Vulkan: near-white with a whisper of cyan -- the body's colour comes
+        # from the liner it refracts, and a tinted base just dims that (sRGB:
+        # 0x8fd6e8 linearises to 0.275 red, a 73% red cut at zero depth).
+        # GL: keep the tinted base; its attenuation model is tuned around it,
+        # and a near-white base there reads as foam, not water.
+        wmat.color = 0xcfeef5 if VULKAN else 0x8fd6e8
     wmat.roughness = 0.04
     wmat.metalness = 0.0
     if not OPAQUE:
         wmat.transmission = 1.0      # real screen-space refraction on the GL path
         wmat.ior = 1.333
+        # GL-only, all four: the Vulkan glass path reads none of them for this
+        # mesh (thickness and clearcoat are only sampled by branches this material
+        # never reaches, and the attenuation pair is multiplied by a zero-length
+        # chord). Kept because they are exactly what makes the GL water work.
         wmat.thickness = 0.55
         wmat.attenuation_color = tp.Color(0x1d7d92)
         wmat.attenuation_distance = 0.30
@@ -1042,9 +1212,8 @@ def write_surface(ntris):
     geometry.set_draw_range(0, 3 * ntris)
 
 
-def frame():
-    """One simulation frame plus a refreshed surface."""
-    sim_step()
+def refresh_surface():
+    """Rebuild the render geometry from the current particle state."""
     if POINTS:
         wp.launch(shade_points, dim=N, device=device, inputs=[v, col])
         geometry.update_attribute("position", x.numpy())
@@ -1055,6 +1224,12 @@ def frame():
     ntris = build_surface()
     write_surface(ntris)
     return ntris
+
+
+def frame():
+    """One simulation frame plus a refreshed surface."""
+    sim_step()
+    return refresh_surface()
 
 
 # Neither backend's vertex buffers exist until the renderer has drawn the mesh
@@ -1138,13 +1313,21 @@ elif BENCH:
         renderer.save_frame("warp_fluid.png")
 elif SHOT:
     nt = 0
-    for _ in range(int(round(SHOT_TIME * 60))):
+    total = int(round(SHOT_TIME * 60))
+    # The Vulkan pipeline is TEMPORAL: probe GI, the reflection denoiser and the
+    # upscaler all converge over frames, and a single render after the sim loop
+    # captures frame ONE of all of them -- probes still dark, no history. That
+    # frame is systematically moodier than what the interactive window shows,
+    # and look-tuning against it produces water that washes out live. Render the
+    # last 1.5 s of frames so the shot is the CONVERGED image.
+    warm = min(total, 90) if VULKAN else 1
+    for i in range(total):
         nt = frame()
+        if i >= total - warm:
+            renderer.render(scene, camera)
     if VULKAN:
-        renderer.render(scene, camera)      # drives flush_frames full frames
         renderer.save_frame(scene, camera, "warp_fluid.png")
     else:
-        renderer.render(scene, camera)
         renderer.save_frame("warp_fluid.png")
     print(f"simulated {SHOT_TIME:.1f} s, {nt:,} triangles "
           f"[{'vulkan' if VULKAN else 'opengl'}], wrote warp_fluid.png")
@@ -1159,9 +1342,64 @@ else:
 
     canvas.on_window_resize(on_resize)
 
+    ui = tp.ImguiContext(canvas, renderer) if tp.HAS_IMGUI else None
+    route = vk_route if VULKAN else ("host copy" if POINTS else "zero-copy CUDA -> GL")
+    # The window is vsync'd, so the frame rate imgui reports is capped at the
+    # display and only tells the whole story once the sim is slower than a refresh.
+    # The phase columns are the uncapped truth, so they are worth the two syncs it
+    # takes to attribute them -- but a sync per frame would serialize the very
+    # pipeline being measured, so only every 30th frame is sampled.
+    SAMPLE_EVERY = 30
+    prof = {"sim": 0.0, "surface": 0.0, "render": 0.0, "tris": 0, "n": 0}
+
+    def draw_hud():
+        tp.imgui.set_next_window_pos(10, 10)
+        tp.imgui.set_next_window_size(272, 0)
+        tp.imgui.begin("Warp PBF fluid")
+        tp.imgui.text(f"{N:,} particles   {prof['tris']:,} tris")
+        tp.imgui.text(f"{'vulkan' if VULKAN else 'opengl'}  |  {route}")
+        tp.imgui.separator()
+        tp.imgui.text(f"{tp.imgui.get_framerate():6.1f} fps   (vsync capped)")
+        tp.imgui.separator()
+        total = prof["sim"] + prof["surface"] + prof["render"]
+        for name in ("sim", "surface", "render"):
+            tp.imgui.text(f"  {name:<8}{prof[name]:6.2f} ms")
+        if total > 0.0:
+            tp.imgui.text(f"  {'uncapped':<8}{total:6.2f} ms  = {1000.0 / total:.0f} fps")
+        tp.imgui.separator()
+        tp.imgui.text(f"solver: {SUBSTEPS} substeps x {ITERATIONS} iters, rho {RHO_CHEB:g}")
+        tp.imgui.text("drag = orbit, scroll = zoom")
+        tp.imgui.end()
+
     def animate():
-        frame()
+        prof["n"] += 1
+        if ui is not None:
+            # Don't orbit while the pointer is over the panel -- a drag that starts
+            # on a widget belongs to imgui, not to the camera.
+            controls.enabled = not ui.want_capture_mouse
+        if prof["n"] % SAMPLE_EVERY:
+            prof["tris"] = frame()
+            controls.update()
+            renderer.render(scene, camera)
+            return
+        t0 = time.perf_counter()
+        sim_step()
+        wp.synchronize_device(device)
+        t1 = time.perf_counter()
+        prof["tris"] = refresh_surface()
+        wp.synchronize_device(device)
+        t2 = time.perf_counter()
         controls.update()
         renderer.render(scene, camera)
+        # No sync after render: this is the CPU-side submit, the same figure
+        # --bench reports, not the GPU's own draw time.
+        t3 = time.perf_counter()
+        prof["sim"] = (t1 - t0) * 1000.0
+        prof["surface"] = (t2 - t1) * 1000.0
+        prof["render"] = (t3 - t2) * 1000.0
 
-    canvas.animate(animate)
+    def animate_with_ui():
+        animate()
+        ui.render(draw_hud)
+
+    canvas.animate(animate if ui is None else animate_with_ui)
