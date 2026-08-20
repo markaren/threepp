@@ -200,6 +200,16 @@ jobs:
           # is a hard requirement here, not a preference.
           CIBW_MANYLINUX_X86_64_IMAGE: manylinux_2_28
           # The vendored GLFW needs the X11/GL dev headers to compile on Linux.
+          #
+          # libxcb-devel + wayland-devel + pkgconfig are for the VULKAN LOADER,
+          # not for GLFW: vcpkg's vulkan-loader port exposes the loader's
+          # BUILD_WSI_* switches as opt-in features (now requested in vcpkg.json),
+          # and each one needs its platform headers — xcb and x11 are located
+          # through pkg-config, wayland by include alone. Without them the loader
+          # builds WSI-less and FILTERS every VK_KHR_*_surface extension out of
+          # vkEnumerateInstanceExtensionProperties, which is exactly what shipped
+          # in 2026.8.9. The repair step below fails the build if this regresses.
+          #
           # Then PhysX, built inside the container by a pinned vcpkg: the
           # x64-linux triplet is static, so the .a links straight into the
           # module — nothing extra for auditwheel to graft, and the wheel stays
@@ -208,7 +218,8 @@ jobs:
           # the /host mount, so actions/cache above covers this too.
           CIBW_BEFORE_ALL_LINUX: >
             yum install -y libX11-devel libXrandr-devel libXinerama-devel
-            libXcursor-devel libXi-devel mesa-libGL-devel zip unzip tar &&
+            libXcursor-devel libXi-devel mesa-libGL-devel libxcb-devel
+            wayland-devel pkgconfig zip unzip tar &&
             git clone --depth 1 --branch 2026.01.16 https://github.com/microsoft/vcpkg.git /opt/vcpkg &&
             /opt/vcpkg/bootstrap-vcpkg.sh -disableMetrics &&
             export VCPKG_DEFAULT_BINARY_CACHE=/host${{ github.workspace }}/vcpkg-cache &&
@@ -235,12 +246,25 @@ jobs:
             LD_LIBRARY_PATH="/opt/vcpkg_installed/x64-linux/lib"
           # GLFW links the system X11/GL libs; keep them external (the user's system
           # / GPU driver provides them) instead of bundling them into the wheel.
+          #
+          # Then patch_linux_wheel_loader.py, which undoes ONE thing auditwheel
+          # does: the hash-mangling of the vendored Vulkan loader's filename.
+          # GLFW dlopen()s the loader by soname rather than linking it, so under a
+          # mangled name it silently picks up the SYSTEM loader while the module
+          # uses the bundled one — two loaders, and a VkInstance from one handed
+          # to the other. The script restores libvulkan.so.1, repoints DT_NEEDED,
+          # and then ASSERTS the loader exports vkCreateXlibSurfaceKHR /
+          # XcbSurfaceKHR / WaylandSurfaceKHR, which is the only honest test that
+          # the WSI features took effect (the extension name strings are in the
+          # binary either way). A WSI-less loader fails the job here instead of
+          # shipping.
           CIBW_REPAIR_WHEEL_COMMAND_LINUX: >
             auditwheel repair -w {dest_dir} {wheel}
             --exclude libGL.so.1 --exclude libGLX.so.0 --exclude libOpenGL.so.0
             --exclude libEGL.so.1 --exclude libX11.so.6 --exclude libXrandr.so.2
             --exclude libXinerama.so.1 --exclude libXcursor.so.1 --exclude libXi.so.6
-            --exclude libXext.so.6 --exclude libxcb.so.1
+            --exclude libXext.so.6 --exclude libxcb.so.1 &&
+            python /project/python/scripts/patch_linux_wheel_loader.py {dest_dir}
           # Smoke-test where there's a usable runtime: import, ASSERT the wheel
           # has ImGui and PhysX (a silently failed vcpkg step must fail the job,
           # not ship a physics-less wheel), and run one second of CPU physics —
