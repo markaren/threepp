@@ -84,6 +84,10 @@ INTEROP = "--no-interop" not in sys.argv
 # --bench is headless, where Vulkan runs flush_frames full GPU frames per
 # render() call, so its render figure is not what a window costs.
 FRAMES = cli_arg("--frames", 0, int)
+# --video S renders S seconds at 60 fps to warp_fluid.mp4 (or PNG frames if
+# ffmpeg is absent). Offline: every sim frame is rendered, so the temporal
+# pipeline stays converged; works headless, which is what the Colab notebook runs.
+VIDEO = cli_arg("--video", 0.0, float)
 OPAQUE = "--opaque" in sys.argv   # debug: render the surface as a
                                   # plain lit solid, to separate a
                                   # geometry problem from a shading one
@@ -822,7 +826,8 @@ if VULKAN and not tp.vulkan_available():
     VULKAN = False
 
 canvas = tp.Canvas("threepp x warp - fluid", width=1280, height=800,
-                   antialiasing=4, headless=(SHOT or BENCH) and not FRAMES)
+                   antialiasing=4,
+                   headless=(SHOT or BENCH or VIDEO > 0) and not FRAMES)
 if VULKAN:
     renderer = tp.VulkanRenderer(canvas)
     # Capacity no longer needs a smaller ceiling here: with drawRange honoured
@@ -1331,6 +1336,42 @@ elif SHOT:
         renderer.save_frame("warp_fluid.png")
     print(f"simulated {SHOT_TIME:.1f} s, {nt:,} triangles "
           f"[{'vulkan' if VULKAN else 'opengl'}], wrote warp_fluid.png")
+elif VIDEO:
+    # Offline video: every simulated frame is rendered and saved, so the
+    # temporal pipeline is always converged and there is no vsync, screen
+    # capture, or window involved -- the same path works on a headless server.
+    # Frames land in a temp dir; ffmpeg (if present) muxes warp_fluid.mp4.
+    import shutil
+    import subprocess as _sp
+    outdir = tempfile.mkdtemp(prefix="warp_fluid_frames_")
+    total = int(round(VIDEO * 60))
+    warm = 30 if VULKAN else 1        # let dam-break settle history before frame 0
+    t0 = time.perf_counter()
+    for i in range(warm):
+        frame()
+        renderer.render(scene, camera)
+    for k in range(total):
+        frame()
+        p = os.path.join(outdir, f"f{k:05d}.png")
+        if VULKAN:
+            renderer.save_frame(scene, camera, p)   # renders + reads back
+        else:
+            renderer.render(scene, camera)
+            renderer.save_frame(p)
+        if k % 60 == 0:
+            el = time.perf_counter() - t0
+            print(f"  frame {k}/{total}  ({el:.0f}s elapsed)", flush=True)
+    print(f"rendered {total} frames in {time.perf_counter() - t0:.0f}s -> {outdir}")
+    ff = shutil.which("ffmpeg")
+    if ff:
+        _sp.run([ff, "-y", "-loglevel", "error", "-framerate", "60",
+                 "-i", os.path.join(outdir, "f%05d.png"),
+                 "-c:v", "libx264", "-pix_fmt", "yuv420p", "-crf", "18",
+                 "warp_fluid.mp4"], check=True)
+        print(f"wrote warp_fluid.mp4 ({VIDEO:.0f}s @ 60fps, "
+              f"{os.path.getsize('warp_fluid.mp4') // 1024} KB)")
+    else:
+        print("ffmpeg not found -- frames left as PNGs in", outdir)
 else:
     controls = tp.OrbitControls(camera, canvas)
     controls.enable_damping = True
