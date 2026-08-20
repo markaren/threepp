@@ -40,7 +40,10 @@ import numpy as np
 import warp as wp
 
 import threepp as tp
-from threepp.cuda_interop import VkInteropArray
+try:
+    from threepp.cuda_interop import VkInteropArray
+except ImportError:                  # threepp older than the interop (< 2026.8.9+)
+    VkInteropArray = None
 
 # Warp compiles with fast_math off, so nvrtc runs with -prec-div=true -prec-sqrt=true and
 # every wp.sqrt and divide in the neighbour loops is a multi-instruction IEEE sequence
@@ -992,6 +995,14 @@ vk_pending = None       # (rows, ntris, slot) copied last frame, not yet uploade
 vk_interop = None       # (positions, normals) VkInteropArray pair, or None
 vk_ntris = 0            # triangle count the in-render callback should expand
 vk_route = "pinned host copy"
+# Older threepp builds honour drawRange only on the line/points overlay, not on
+# the mesh path, and they are exactly the builds without enable_vertex_interop
+# (the mesh-side drawRange landed after the interop). Detect one, get the other.
+LEGACY_TAIL = VULKAN and not hasattr(renderer, "enable_vertex_interop")
+tail_high = 0           # high-water row count, only used when LEGACY_TAIL
+if LEGACY_TAIL:
+    print("  note: this threepp build predates drawRange on the Vulkan mesh "
+          "path -- padding the unused tail instead")
 
 if POINTS:
     geometry.set_attribute("position", p0)
@@ -1106,6 +1117,10 @@ def arm_vulkan_interop():
     """
     global vk_interop, vk_route, stage_pos, stage_nrm, host_pos, host_nrm
     global hview_pos, hview_nrm
+    if VkInteropArray is None or not hasattr(renderer, "enable_vertex_interop"):
+        print("  note: this threepp build predates the CUDA->Vulkan vertex "
+              "interop -- using the host route")
+        return False
     h = renderer.enable_vertex_interop(water, vk_on_frame)
     if h is None:
         print("  note: vulkan vertex interop did not arm -- falling back to the "
@@ -1186,6 +1201,16 @@ def write_surface(ntris):
         wp.synchronize_device(device)
         if vk_pending is not None:
             p_rows, p_tris, p_slot = vk_pending
+            if LEGACY_TAIL:
+                # This build's Vulkan mesh path ignores drawRange, so the rows
+                # past the live surface keep LAST frame's triangles and render
+                # as stale garbage. Collapse the shrinking tail to a point --
+                # degenerate triangles rasterise to nothing -- and upload
+                # through the high-water mark instead of the live count.
+                global tail_high
+                if p_rows < tail_high:
+                    hview_pos[p_slot][p_rows:tail_high] = 0.0
+                p_rows = tail_high = max(tail_high, p_rows)
             geometry.update_attribute("position", hview_pos[p_slot][:p_rows])
             geometry.update_attribute("normal", hview_nrm[p_slot][:p_rows])
             geometry.set_draw_range(0, 3 * p_tris)
@@ -1200,6 +1225,11 @@ def write_surface(ntris):
             vk_slot ^= 1
         return
     if reg_pos is None:
+        if not hasattr(renderer, "gl_buffer_id"):
+            raise SystemExit(
+                "This threepp build has no GLRenderer.gl_buffer_id, so the GL "
+                "zero-copy route is unavailable. Use --vulkan, or upgrade "
+                "threepp.")
         pid = renderer.gl_buffer_id(geometry, "position")
         nid = renderer.gl_buffer_id(geometry, "normal")
         if pid is None or nid is None:
