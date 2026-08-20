@@ -243,9 +243,16 @@ endif ()
 install(TARGETS threepp_py
         LIBRARY DESTINATION threepp COMPONENT python_module
         RUNTIME DESTINATION threepp COMPONENT python_module)
+# Every top-level file in python/threepp/ must be named here: one left out is
+# silently ABSENT from the wheel, with no build error. That is how the CUDA
+# interop shipped half-broken -- the module had enable_vertex_interop, but
+# `from threepp.cuda_interop import VkInteropArray` raised ImportError for every
+# wheel user, so the zero-copy path was unreachable outside a source checkout.
 install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/threepp/__init__.py"
               "${CMAKE_CURRENT_SOURCE_DIR}/threepp/urdf.py"
               "${CMAKE_CURRENT_SOURCE_DIR}/threepp/utils.py"
+              "${CMAKE_CURRENT_SOURCE_DIR}/threepp/cuda_interop.py"
+              "${CMAKE_CURRENT_SOURCE_DIR}/threepp/py.typed"
         DESTINATION threepp COMPONENT python_module)
 install(DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/threepp/rl"
         DESTINATION threepp COMPONENT python_module
