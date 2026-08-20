@@ -13,6 +13,7 @@
 
 #include "threepp/controls/FlyControls.hpp"
 #include "threepp/controls/OrbitControls.hpp"
+#include "threepp/controls/TrackballControls.hpp"
 
 #include "threepp/geometries/geometries.hpp"
 #include "threepp/scenes/Scene.hpp"

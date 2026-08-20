@@ -6,3 +6,4 @@ add_example(NAME "transform" WEB WEB_EMBED
 add_example(NAME "fly" WEB WEB_EMBED
         "${THREEPP_DATA_DIR}/textures/planets@data/textures/planets"
 )
+add_example(NAME "trackball" WEB)

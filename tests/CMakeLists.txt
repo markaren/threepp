@@ -9,6 +9,7 @@ endfunction()
 
 add_subdirectory(animation)
 add_subdirectory(cameras)
+add_subdirectory(controls)
 add_subdirectory(core)
 add_subdirectory(geometries)
 add_subdirectory(materials)

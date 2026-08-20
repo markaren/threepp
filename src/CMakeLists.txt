@@ -21,6 +21,7 @@ set(publicHeaders
         "threepp/controls/DragControls.hpp"
         "threepp/controls/FlyControls.hpp"
         "threepp/controls/OrbitControls.hpp"
+        "threepp/controls/TrackballControls.hpp"
         "threepp/controls/TransformControls.hpp"
 
         "threepp/core/Assert.hpp"
@@ -449,6 +450,7 @@ set(sources
         "threepp/controls/DragControls.cpp"
         "threepp/controls/FlyControls.cpp"
         "threepp/controls/OrbitControls.cpp"
+        "threepp/controls/TrackballControls.cpp"
         "threepp/controls/TransformControls.cpp"
 
         "threepp/core/AttributeView.cpp"
