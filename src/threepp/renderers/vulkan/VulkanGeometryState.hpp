@@ -27,6 +27,7 @@
 #include <array>
 #include <cstdint>
 #include <functional>
+#include <limits>
 #include <memory>
 #include <vector>
 
@@ -86,6 +87,24 @@ namespace threepp::vulkan::impl {
         unsigned int geomVersion = 0;
         uint32_t vertexCount = 0;
         uint32_t indexCount  = 0;
+        // BufferGeometry::drawRange snapshot, compared every frame by the
+        // enqueue loop in ensureSceneBuilt. drawRange is not covered by any
+        // BufferAttribute version, so without this the DrawInfo skip
+        // signature would happily reuse commands built for a stale range.
+        // Initialised to BufferGeometry's own default so an ordinary mesh
+        // never takes the bump. (int, not uint: DrawRange members are int.)
+        int lastDrawStart = 0;
+        int lastDrawCount = std::numeric_limits<int>::max() / 2;
+        // The primitive count the current AS was last built with. MODE_UPDATE
+        // is only legal against an identical count, so a drawRange change
+        // forces MODE_BUILD — the AS was sized for full capacity, which the
+        // spec allows to be built with any smaller count.
+        uint32_t blasBuiltPrims = 0;
+        // The flags of that build. An update must carry its source build's
+        // flags, and a record can change its preferred flags across paths
+        // (interop wants PREFER_FAST_BUILD, the CPU routes FAST_TRACE) — a
+        // mismatch forces MODE_BUILD to re-establish the lineage.
+        VkBuildAccelerationStructureFlagsKHR blasBuiltFlags = 0;
         // Persistent scratch buffer for per-frame refit. Sized to
         // buildScratchSize on first use (which is always >= updateScratchSize),
         // reused every frame to avoid the create+destroy pair that

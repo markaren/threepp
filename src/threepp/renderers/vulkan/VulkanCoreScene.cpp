@@ -1701,6 +1701,36 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                             // canonical entry list, before cullEntriesAgainstFrustum
                             // and buildIndirectDrawData run later this frame —
                             // makes it live in both paths and stale in neither.
+                            // BufferGeometry::drawRange is not covered by any
+                            // BufferAttribute version, so a set_draw_range-only
+                            // frame would sail through the DrawInfo skip
+                            // signature with commands built for the OLD range.
+                            // Compare against the record's snapshot here — the
+                            // same always-runs loop that keeps isVertexInterop
+                            // honest — and bump drawInputsVersion_ on change:
+                            // new DrawInfo inputs must (EntrySpan contract).
+                            // A non-interop record ALSO gets the geom-dirty
+                            // flags: its BLAS holds the old span, and the
+                            // refresh-op collection below runs the canonical
+                            // fix (drained rebuild for an occasional change,
+                            // graduation to the frame-cb refit for a mesh that
+                            // animates its range every frame). Interop records
+                            // need neither — their unconditional per-frame
+                            // enqueue reads drawRange at record time.
+                            if (cIt != blasCache.end()) {
+                                auto& r0 = *cIt->second;
+                                const auto& dr = geomKey->drawRange;
+                                if (r0.lastDrawStart != dr.start ||
+                                    r0.lastDrawCount != dr.count) {
+                                    r0.lastDrawStart = dr.start;
+                                    r0.lastDrawCount = dr.count;
+                                    ++drawInputsVersion_;
+                                    if (!r0.interop && r0.as != VK_NULL_HANDLE) {
+                                        geomDirtyAny = true;
+                                        entryGeomDirty[i] = true;
+                                    }
+                                }
+                            }
                             const bool iop = (cIt != blasCache.end() && cIt->second->interop);
                             entries[i].isVertexInterop = iop;
                             if (!iop) continue;

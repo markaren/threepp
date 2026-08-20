@@ -63,6 +63,30 @@ namespace {
         return {x, y};
     }
 
+    // BufferGeometry::drawRange resolved against the geometry's real element
+    // total — index count when indexed, vertex count otherwise, same units as
+    // GL's drawRange. elems is floored at 3 whenever the geometry is non-empty:
+    // an AS cannot be "emptied" by a range (a mesh is hidden via visibility,
+    // not drawRange), and a zero-primitive build range is driver roulette, so
+    // a degenerate range keeps one triangle alive instead.
+    struct DrawSpan {
+        uint32_t first = 0;// element index the range starts at
+        uint32_t elems = 0;// elements in the range (multiple-of-3 not enforced)
+    };
+    DrawSpan drawSpanOf(const threepp::BufferGeometry& geom, uint32_t totalElems) {
+        const auto& dr = geom.drawRange;
+        const auto start = dr.start > 0 ? static_cast<uint32_t>(dr.start) : 0u;
+        const auto count = dr.count > 0 ? static_cast<uint32_t>(dr.count) : 0u;
+        DrawSpan s;
+        s.first = std::min(start, totalElems);
+        s.elems = std::min(totalElems - s.first, count);
+        if (s.elems < 3u && totalElems >= 3u) {
+            s.first = std::min(s.first, totalElems - 3u);
+            s.elems = 3u;
+        }
+        return s;
+    }
+
 }// namespace
 
 namespace threepp {
@@ -377,8 +401,22 @@ std::unique_ptr<VulkanRenderer::Impl::BlasRecord> VulkanRenderer::Impl::buildBla
             blasBuild.dstAccelerationStructure = rec->as;
             blasBuild.scratchData.deviceAddress = scratch.address;
 
+            // The initial build honours BufferGeometry::drawRange: the AS and
+            // scratch above were sized for FULL capacity (the size query used
+            // primitiveCount), which the spec allows to be built with any
+            // smaller count — so only [0, start+count) is built. NOT the exact
+            // [start, start+count) sub-span: the chit/ray-query fetches resolve
+            // gl_PrimitiveID against the BUFFER BASE (GeometryDesc carries no
+            // offset), so a range with firstVertex/primitiveOffset would shade
+            // the wrong vertices. start is 0 in practice (over-allocated
+            // dynamic buffers); a start > 0 merely leaves the prefix visible
+            // to rays. Refits compare against blasBuiltPrims and force
+            // MODE_BUILD when the count moves (updating with a different
+            // count is invalid).
+            const DrawSpan span = drawSpanOf(
+                    geom, indexed ? static_cast<uint32_t>(idxAttr->count()) : vertexCount);
             VkAccelerationStructureBuildRangeInfoKHR range{};
-            range.primitiveCount = primitiveCount;
+            range.primitiveCount = (span.first + span.elems) / 3u;
             const VkAccelerationStructureBuildRangeInfoKHR* pRange = &range;
 
             // Per-vertex previous-pose buffer for the chit's per-vertex motion
@@ -420,6 +458,10 @@ std::unique_ptr<VulkanRenderer::Impl::BlasRecord> VulkanRenderer::Impl::buildBla
             rec->vertexCount = vertexCount;
             rec->indexCount  = indexed ? static_cast<uint32_t>(idxAttr->count()) : 0u;
             rec->vbBytes     = vbBytes;// for the prevVertex re-sync copy
+            rec->blasBuiltPrims = range.primitiveCount;
+            rec->blasBuiltFlags = blasBuild.flags;
+            rec->lastDrawStart  = geom.drawRange.start;
+            rec->lastDrawCount  = geom.drawRange.count;
 
             return rec;
         }
@@ -1064,16 +1106,19 @@ void VulkanRenderer::Impl::disableVertexInterop(const Mesh& mesh) {
             // to invalidate here. (The forceUnpackedGeoms_ mark deliberately
             // STAYS — re-packing the geometry would only buy back a few bytes
             // and would break a re-arm.)
-            if (rec.sanitizeDS != VK_NULL_HANDLE && vertexSanitize_) {
-                vertexSanitize_->freeRecordDescriptorSet(rec.sanitizeDS);
-                rec.sanitizeDS = VK_NULL_HANDLE;
-            }
             // Retire, don't destroy: an in-flight frame's head-of-frame copy may
             // still be READING these as a transfer source. destroyExternalBuffer
             // frees the VkDeviceMemory immediately, and there is no VMA-style
             // deferred-free list for external allocations — so this one place
-            // does pay the drain enable skipped.
+            // does pay the drain enable skipped. The sanitize descriptor set is
+            // freed AFTER the drain for the same reason: the last frame's
+            // sanitize dispatch may still name it (VUID-vkFreeDescriptorSets-
+            // pDescriptorSets-00309 at teardown otherwise).
             check(vkDeviceWaitIdle(ctx->device()), "vkDeviceWaitIdle (vertex interop disable)");
+            if (rec.sanitizeDS != VK_NULL_HANDLE && vertexSanitize_) {
+                vertexSanitize_->freeRecordDescriptorSet(rec.sanitizeDS);
+                rec.sanitizeDS = VK_NULL_HANDLE;
+            }
             vulkan::destroyExternalBuffer(ctx->device(), rec.posExt);
             vulkan::destroyExternalBuffer(ctx->device(), rec.nrmExt);
             // The staging ring the graduated path needs was never allocated (the
@@ -1282,9 +1327,11 @@ void VulkanRenderer::Impl::refreshGeomBlasBatch(const std::vector<VulkanRenderer
                 const auto* idxAttr = geom.getIndex();
                 const bool indexed = idxAttr != nullptr;
                 const uint32_t vertexCount = static_cast<uint32_t>(posAttr->count());
-                const uint32_t primitiveCount = indexed
-                        ? static_cast<uint32_t>(idxAttr->count() / 3)
-                        : vertexCount / 3;
+                // Only [0, drawRange start+count) is built — same clamp and
+                // same no-offset rationale as buildBlasFor.
+                const DrawSpan span = drawSpanOf(
+                        geom, indexed ? static_cast<uint32_t>(idxAttr->count()) : vertexCount);
+                const uint32_t primitiveCount = (span.first + span.elems) / 3u;
 
                 triDatas[kk].sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_TRIANGLES_DATA_KHR;
                 triDatas[kk].vertexFormat = VK_FORMAT_R32G32B32_SFLOAT;
@@ -1307,15 +1354,25 @@ void VulkanRenderer::Impl::refreshGeomBlasBatch(const std::vector<VulkanRenderer
                 // Periodic MODE_BUILD every kBlasFullRebuildInterval frames
                 // keeps the BVH balanced under sustained vertex motion (soft
                 // body collapse, particle swarms) where pure refits drift the
-                // tree away from optimal.
-                const bool fullRebuild =
+                // tree away from optimal. A count change (drawRange moved since
+                // the AS was last built) also forces BUILD — MODE_UPDATE
+                // against a different primitive count is invalid — as does a
+                // flags-lineage change (an update must carry its source
+                // build's flags; a record that just left the interop route
+                // was last built with PREFER_FAST_BUILD).
+                const VkBuildAccelerationStructureFlagsKHR wantFlags =
+                        VK_BUILD_ACCELERATION_STRUCTURE_PREFER_FAST_TRACE_BIT_KHR |
+                        VK_BUILD_ACCELERATION_STRUCTURE_ALLOW_UPDATE_BIT_KHR;
+                const bool fullRebuild = primitiveCount != rec.blasBuiltPrims ||
+                        wantFlags != rec.blasBuiltFlags ||
                         rec.blasRefitCounter >= BlasRecord::kBlasFullRebuildInterval;
                 rec.blasRefitCounter = fullRebuild ? 0u : (rec.blasRefitCounter + 1u);
+                rec.blasBuiltPrims = primitiveCount;
+                rec.blasBuiltFlags = wantFlags;
 
                 blasBuilds[kk].sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_GEOMETRY_INFO_KHR;
                 blasBuilds[kk].type = VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR;
-                blasBuilds[kk].flags = VK_BUILD_ACCELERATION_STRUCTURE_PREFER_FAST_TRACE_BIT_KHR |
-                                       VK_BUILD_ACCELERATION_STRUCTURE_ALLOW_UPDATE_BIT_KHR;
+                blasBuilds[kk].flags = wantFlags;
                 blasBuilds[kk].mode = fullRebuild
                         ? VK_BUILD_ACCELERATION_STRUCTURE_MODE_BUILD_KHR
                         : VK_BUILD_ACCELERATION_STRUCTURE_MODE_UPDATE_KHR;
@@ -1500,21 +1557,32 @@ void VulkanRenderer::Impl::recordDynamicGeomRefits(VkCommandBuffer cb) {
             // path deliberately matches their contract rather than inventing
             // a stricter one.
 
+            // Live vertex rows under BufferGeometry::drawRange, consumed by the
+            // interop sanitize/snapshot/copies below so a mostly-empty capacity
+            // buffer stops costing full-capacity bandwidth every frame.
+            // Non-indexed only: an index can reference ANY vertex, so indexed
+            // interop keeps the full-capacity copies.
+            const auto interopLiveVerts = [](const BufferGeometry& g,
+                                             const BlasRecord& r) -> uint32_t {
+                if (r.indexCount != 0u) return r.vertexCount;
+                const DrawSpan s = drawSpanOf(g, r.vertexCount);
+                return std::min(r.vertexCount, s.first + s.elems);
+            };
+
             // Phase 2 — GPU sanitize (interop only). Runs over the EXPORTED
             // positions, before anything copies them into rec.vertex, so the
             // buffer the BLAS build reads is finite by construction. This is the
             // stand-in for the Phase 0 host scan these records skip; see
-            // shaders/vertex_sanitize.comp for the repair rule.
-            //
-            // Recording it before Phase 3's snapshot costs nothing (they touch
-            // different buffers — posExt vs vertex/prevVertex) and lets the
-            // compute→transfer dependency ride along on Phase 4's barrier, which
-            // already sits between the snapshot and the copies.
+            // shaders/vertex_sanitize.comp for the repair rule. Only the live
+            // rows are dispatched: the tail is never copied out of the export,
+            // so nothing downstream can read whatever garbage it holds.
             if (anySanitize) {
                 for (size_t k : liveOps) {
                     auto& rec = *pendingDynamicGeomRefits_[k].rec;
                     if (!rec.interop || !rec.interopValidate) continue;
-                    vertexSanitize_->recordDispatch(cb, rec.sanitizeDS, rec.vertexCount);
+                    vertexSanitize_->recordDispatch(
+                            cb, rec.sanitizeDS,
+                            interopLiveVerts(*pendingDynamicGeomRefits_[k].geom, rec));
                 }
             }
 
@@ -1528,6 +1596,15 @@ void VulkanRenderer::Impl::recordDynamicGeomRefits(VkCommandBuffer cb) {
                 if (rec.prevVertex.handle == VK_NULL_HANDLE) continue;
                 VkBufferCopy region{};
                 region.size = rec.vbBytes;
+                if (rec.interop) {
+                    // Live rows only. A row revealed by a GROWING drawRange gets
+                    // one frame of stale prevVertex — a triangle that just
+                    // appeared has no valid history either way (the full-size
+                    // copy would hand it last frame's unrelated positions).
+                    region.size = VkDeviceSize(interopLiveVerts(
+                                          *pendingDynamicGeomRefits_[k].geom, rec)) *
+                                  3u * sizeof(float);
+                }
                 vkCmdCopyBuffer(cb, rec.vertex.handle, rec.prevVertex.handle, 1, &region);
             }
             for (auto* rec : pendingDynamicPrevResyncs_) {
@@ -1570,12 +1647,23 @@ void VulkanRenderer::Impl::recordDynamicGeomRefits(VkCommandBuffer cb) {
                         // frame's staging slot. Sizes come from the BLAS buffers
                         // rather than from posExt.size — the export is the
                         // ALLOCATION size, which the driver rounds up past the
-                        // destination's capacity (see ExternalBuffer::size).
+                        // destination's capacity (see ExternalBuffer::size) —
+                        // and are then trimmed to the drawRange's live rows:
+                        // nothing reads past them (the raster clamps its draw,
+                        // the BLAS builds only the live span), so the tail of an
+                        // over-allocated capacity buffer costs no bandwidth.
+                        const uint32_t live = interopLiveVerts(
+                                *pendingDynamicGeomRefits_[k].geom, rec);
                         VkBufferCopy pr{};
-                        pr.size = rec.vertex.size;
+                        pr.size = std::min<VkDeviceSize>(
+                                rec.vertex.size, VkDeviceSize(live) * 3u * sizeof(float));
                         vkCmdCopyBuffer(cb, rec.posExt.handle, rec.vertex.handle, 1, &pr);
                         VkBufferCopy nr{};
-                        nr.size = rec.normal.size;
+                        nr.size = std::min<VkDeviceSize>(
+                                rec.normal.size,
+                                rec.vertexCount ? rec.normal.size / rec.vertexCount *
+                                                          VkDeviceSize(live)
+                                                : rec.normal.size);
                         vkCmdCopyBuffer(cb, rec.nrmExt.handle, rec.normal.handle, 1, &nr);
                         continue;
                     }
@@ -1626,8 +1714,12 @@ void VulkanRenderer::Impl::recordDynamicGeomRefits(VkCommandBuffer cb) {
                 for (uint32_t kk = 0; kk < N; ++kk) {
                     auto& rec = *pendingDynamicGeomRefits_[liveOps[kk]].rec;
                     const bool indexed = rec.indexCount != 0u;
-                    const uint32_t primitiveCount =
-                            (indexed ? rec.indexCount : rec.vertexCount) / 3u;
+                    // Only [0, drawRange start+count) is built — same clamp
+                    // and same no-offset rationale as buildBlasFor.
+                    const DrawSpan span = drawSpanOf(
+                            *pendingDynamicGeomRefits_[liveOps[kk]].geom,
+                            indexed ? rec.indexCount : rec.vertexCount);
+                    const uint32_t primitiveCount = (span.first + span.elems) / 3u;
 
                     triDatas[kk].sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_TRIANGLES_DATA_KHR;
                     triDatas[kk].vertexFormat = VK_FORMAT_R32G32B32_SFLOAT;
@@ -1647,16 +1739,37 @@ void VulkanRenderer::Impl::recordDynamicGeomRefits(VkCommandBuffer cb) {
                     blasGeoms[kk].geometry.triangles = triDatas[kk];
                     blasGeoms[kk].flags = 0;
 
-                    const bool fullRebuild =
+                    // Interop records rebuild nearly every frame (a producer-
+                    // owned surface whose triangle count moves forces
+                    // MODE_BUILD), so they take PREFER_FAST_BUILD — the
+                    // standard choice for per-frame rebuilt geometry.
+                    // CPU-graduated records keep FAST_TRACE: their fixed
+                    // topology refits via MODE_UPDATE 63 frames of 64.
+                    const VkBuildAccelerationStructureFlagsKHR wantFlags = (rec.interop
+                            ? VK_BUILD_ACCELERATION_STRUCTURE_PREFER_FAST_BUILD_BIT_KHR
+                            : VK_BUILD_ACCELERATION_STRUCTURE_PREFER_FAST_TRACE_BIT_KHR) |
+                            VK_BUILD_ACCELERATION_STRUCTURE_ALLOW_UPDATE_BIT_KHR;
+                    // A count change forces MODE_BUILD: refitting against a
+                    // different primitive count than the AS was built with is
+                    // invalid. For a marching-cubes surface whose triangle
+                    // count moves every frame this makes most frames full
+                    // builds — of the LIVE count, which is cheaper than
+                    // refitting a padded capacity worth of degenerates. A
+                    // flags-lineage change (a record entering or leaving the
+                    // interop route) forces BUILD for the same
+                    // update-must-match-its-source reason.
+                    const bool fullRebuild = primitiveCount != rec.blasBuiltPrims ||
+                            wantFlags != rec.blasBuiltFlags ||
                             rec.blasRefitCounter >= BlasRecord::kBlasFullRebuildInterval;
                     rec.blasRefitCounter = fullRebuild ? 0u : (rec.blasRefitCounter + 1u);
+                    rec.blasBuiltPrims = primitiveCount;
+                    rec.blasBuiltFlags = wantFlags;
                     ++dynGeomStats_.refitsRecorded;
                     if (fullRebuild) ++dynGeomStats_.fullRebuilds;
 
                     blasBuilds[kk].sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_GEOMETRY_INFO_KHR;
                     blasBuilds[kk].type = VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR;
-                    blasBuilds[kk].flags = VK_BUILD_ACCELERATION_STRUCTURE_PREFER_FAST_TRACE_BIT_KHR |
-                                           VK_BUILD_ACCELERATION_STRUCTURE_ALLOW_UPDATE_BIT_KHR;
+                    blasBuilds[kk].flags = wantFlags;
                     blasBuilds[kk].mode = fullRebuild
                             ? VK_BUILD_ACCELERATION_STRUCTURE_MODE_BUILD_KHR
                             : VK_BUILD_ACCELERATION_STRUCTURE_MODE_UPDATE_KHR;

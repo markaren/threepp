@@ -177,6 +177,13 @@ namespace threepp {
         // Object-space bounds for the occl-meta Arvo transform.
         bool              memoBoundsValid = false;
         float             memoCenter[3]{}, memoHalf[3]{};
+        // BufferGeometry::drawRange, raw (clamped against the selected LOD's
+        // element total per entry below). Changes are folded into the skip
+        // signature by the drawRange compare in ensureSceneBuilt's enqueue
+        // loop, which bumps drawInputsVersion_ — new DrawInfo inputs always
+        // must (see the EntrySpan work).
+        uint32_t          memoDrawStart = 0u;
+        uint32_t          memoDrawCount = 0xFFFFFFFFu;
         for (size_t i = 0; i < lastVisibleEntries_.size(); ++i) {
             const auto& en = lastVisibleEntries_[i];
             if (en.isOverlay)  continue;
@@ -230,6 +237,8 @@ namespace threepp {
                 memoLodStatic = memoRec && memoRec->lodLevels.empty();
                 if (memoRec) memoLodSel0 = selectLodGeom(*memoRec, 0);
                 memoBoundsValid = false;
+                memoDrawStart = 0u;
+                memoDrawCount = 0xFFFFFFFFu;
                 if (auto geom = en.mesh->geometry()) {
                     if (!geom->boundingBox) geom->computeBoundingBox();
                     if (geom->boundingBox) {
@@ -239,6 +248,9 @@ namespace threepp {
                         memoHalf[0]   = h.x; memoHalf[1]   = h.y; memoHalf[2]   = h.z;
                         memoBoundsValid = true;
                     }
+                    const auto& dr = geom->drawRange;
+                    memoDrawStart = dr.start > 0 ? static_cast<uint32_t>(dr.start) : 0u;
+                    memoDrawCount = dr.count > 0 ? static_cast<uint32_t>(dr.count) : 0u;
                 }
             }
             const BlasRecord* rec = memoRec;
@@ -262,7 +274,16 @@ namespace threepp {
                                         ? memoLodSel0
                                         : selectLodGeom(*rec, en.lodLevel);
             const bool indexed = lodSel.indexed;
-            const uint32_t vcount = indexed ? lodSel.indexCount : rec->vertexCount;
+            uint32_t vcount = indexed ? lodSel.indexCount : rec->vertexCount;
+            uint32_t vfirst = 0u;
+            // BufferGeometry::drawRange, base level only — a simplified LOD
+            // level's index set has no correspondence with the range's units.
+            // Same clamp shape as the overlay path and GLRenderer: elements are
+            // indices when indexed, vertices otherwise.
+            if (en.lodLevel == 0 || memoLodStatic) {
+                vfirst = std::min(memoDrawStart, vcount);
+                vcount = std::min(vcount - vfirst, memoDrawCount);
+            }
             if (vcount == 0u) continue;
 
             const VkCullModeFlags wantCull =
@@ -355,7 +376,11 @@ namespace threepp {
             // contract every other record in this array carries.
             cmd.vertexCount   = en.isParticleField ? 0u : vcount;
             cmd.instanceCount = 1u;
-            cmd.firstVertex   = 0u;
+            // drawRange start rides through firstVertex: the pull-fetch VS
+            // consumes gl_VertexIndex, which vkCmdDrawIndirect offsets by this
+            // — indexing further into the index buffer (indexed) or the vertex
+            // buffer (soup), exactly GL's drawRange semantics.
+            cmd.firstVertex   = vfirst;
             cmd.firstInstance = 0u;// patched below to the final-position index
             cmds[b].push_back(cmd);
             if (en.isParticleField) {
