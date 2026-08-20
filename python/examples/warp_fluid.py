@@ -8,9 +8,10 @@ Nothing crosses host memory in the render path, on either backend: the
 marching-cubes triangles and their normals are written straight into the
 renderer's own vertex buffers -- GLRenderer.gl_buffer_id + wp.RegisteredGLBuffer
 on OpenGL, VulkanRenderer.enable_vertex_interop + threepp.cuda_interop (a CUDA
-import of the Vulkan allocation) on Vulkan. GL publishes the live triangle count
-with set_draw_range; the Vulkan mesh path has no drawRange, so its unused tail is
-padded with degenerate triangles instead.
+import of the Vulkan allocation) on Vulkan. Both backends publish the live
+triangle count with set_draw_range: the raster draw, the BLAS build and the
+interop copies all clamp to it, so capacity beyond the live surface costs
+nothing per frame.
 
     pip install warp-lang
     python warp_fluid.py                 # window; drag to orbit, Esc quits
@@ -21,6 +22,7 @@ padded with degenerate triangles instead.
     python warp_fluid.py --vulkan --no-interop   # ... via pinned host memory (A/B)
     python warp_fluid.py --points        # draw particles instead of the surface
     python warp_fluid.py --probe 3       # print an energy audit, no window
+    python warp_fluid.py --iters 4 --rho 0   # the old plain-Jacobi solver
 
 Needs a CUDA device: the zero-copy surface path is CUDA/OpenGL interop.
 """
@@ -58,10 +60,10 @@ PROBE = "--probe" in sys.argv
 # Vulkan gets ray-traced reflections and a dedicated water/glass shader. Its zero
 # copy is not gl_buffer_id but enable_vertex_interop: the renderer exports its
 # own position/normal allocations, CUDA imports them, and the expand kernel
-# writes them in place. Its deferred mesh path still ignores
-# BufferGeometry::drawRange -- VulkanCoreRecord.cpp honours drawRange only in the
-# line/points overlay branch -- so the unused tail is padded with degenerate
-# triangles rather than left out of the draw call.
+# writes them in place. The deferred mesh path honours BufferGeometry::drawRange
+# (raster clamp + live-count BLAS build + trimmed interop copies), so the live
+# triangle count is published with set_draw_range exactly as on GL -- no
+# degenerate-tail padding.
 VULKAN = "--vulkan" in sys.argv
 # Force the pinned-host round trip on Vulkan (the route this demo used before the
 # interop existed). Kept as the A/B baseline, and as the automatic fallback on
@@ -85,7 +87,27 @@ H = 2.0 * D                  # SPH support radius (~38 neighbours)
 MASS = 1.0                   # unit mass; rest density is measured from a lattice
 DT = 1.0 / 60.0
 SUBSTEPS = cli_arg("--substeps", 2, int)
-ITERATIONS = cli_arg("--iters", 4, int)               # density-constraint projections per substep
+ITERATIONS = cli_arg("--iters", 3, int)               # density-constraint projections per substep
+# Chebyshev acceleration of the Jacobi projection (Wang 2015). RHO estimates
+# the spectral radius of the iteration; 0 disables (plain Jacobi, bit-exact
+# old behaviour: --iters 4 --rho 0). Iteration 1 runs plain, then
+# omega_2 = 2/(2-rho^2), omega_k = 4/(4 - rho^2 omega_{k-1}).
+#
+# (3 iters, rho 0.8) measures BETTER than the old (4 iters, plain) -- mean
+# compression 13.1% vs 15.3% over the first 4 s -- at 75% of the solver cost
+# (sim 48.4 -> 41.4 ms at 337k). Naive Chebyshev does not survive contact
+# with PBF, though: raw extrapolation doubled mean speed and tripled spray
+# height against a 12-iteration converged reference that is as calm as the
+# baseline, so the heat was overshoot noise, not recovered physics. Two
+# guards in solve_delta make it behave -- surface particles (lambda == 0)
+# are never extrapolated, and the total accelerated step is re-clamped to
+# MAX_DP. Past rho ~0.85 the fluid warms up again even with the guards.
+RHO_CHEB = cli_arg("--rho", 0.8, float)
+OMEGAS = [1.0]
+for _k in range(1, max(ITERATIONS, 1)):
+    _w = (2.0 / (2.0 - RHO_CHEB ** 2) if _k == 1
+          else 4.0 / (4.0 - RHO_CHEB ** 2 * OMEGAS[-1]))
+    OMEGAS.append(_w)
 S_CORR_N = 4.0               # EPS_CFM / S_CORR_K are derived from the lattice
                              # below: hand-guessed values are off by orders of
                              # magnitude because the SPH kernels carry a 1/h^9
@@ -226,11 +248,13 @@ def solve_lambda(xp: wp.array(dtype=wp.vec3),
 @wp.kernel
 def solve_delta(xp: wp.array(dtype=wp.vec3),
                 lam: wp.array(dtype=float),
-                 grid: wp.uint64,
+                grid: wp.uint64,
                 rho0: float,
                 w_dq: float,
                 k_corr: float,
                 relax: float,
+                omega: float,
+                prev: wp.array(dtype=wp.vec3),
                 bx0: float,
                 bx1: float,
                 out: wp.array(dtype=wp.vec3)):
@@ -243,6 +267,7 @@ def solve_delta(xp: wp.array(dtype=wp.vec3),
         return
     p = xp[i]
     li = lam[i]
+    w_dq_inv = 1.0 / w_dq          # hoisted: one divide per thread, not per neighbor
     dp = wp.vec3(0.0, 0.0, 0.0)
     q = wp.hash_grid_query(grid, p, H)
     for j in q:
@@ -250,14 +275,43 @@ def solve_delta(xp: wp.array(dtype=wp.vec3),
         r2 = wp.dot(rv, rv)
         if r2 < H * H and r2 > 1.0e-12:
             # artificial pressure repels near-coincident particles, which is
-            # what keeps droplets round instead of stringy
-            s_corr = -k_corr * wp.pow(w_poly6(r2) / w_dq, S_CORR_N)
+            # what keeps droplets round instead of stringy. S_CORR_N == 4, so
+            # the power is two multiplies; the per-neighbor wp.pow it replaces
+            # was ~5 ms/frame (~12% of the whole sim) at 337k particles --
+            # this loop runs ~77M times a frame, so every op in it is hot.
+            qq = w_poly6(r2) * w_dq_inv
+            q2 = qq * qq
+            s_corr = -k_corr * (q2 * q2)
             dp += w_spiky_grad(rv, wp.sqrt(r2)) * (li + lam[j] + s_corr)
     d = dp * (MASS / rho0 * relax)
     dl = wp.length(d)
     if dl > MAX_DP:
         d = d * (MAX_DP / dl)
-    out[i] = collide(p + d, bx0, bx1)
+    # Chebyshev semi-iteration (Wang 2015): extrapolate the relaxed Jacobi
+    # result through the PREVIOUS iterate. omega == 1 is plain Jacobi -- kept
+    # as its own branch so --rho 0 is bit-identical to the old solver, not
+    # merely within an ulp. collide() runs after the extrapolation so momentum
+    # never carries a particle through a wall.
+    if omega == 1.0 or li == 0.0:
+        # Plain Jacobi. li == 0 means a free-surface particle: its one-sided
+        # constraint is satisfied, so it has nothing to converge to and the
+        # extrapolation below would be a pure kinetic kick. Unrestricted
+        # Chebyshev doubled mean speed and tripled spray height vs a
+        # 12-iteration converged reference, which is as calm as the baseline
+        # -- the heat was overshoot noise, not recovered physics, and it
+        # entered at the surface.
+        out[i] = collide(p + d, bx0, bx1)
+    else:
+        # Re-clamp the TOTAL move (Jacobi step + extrapolation) to MAX_DP so
+        # an accelerated iterate never travels farther than plain Jacobi
+        # allows; the acceleration survives as a better direction, not a
+        # bigger step. (Unclamped, the extrapolated step can reach ~3x
+        # MAX_DP, and peak compression spiked ~600% vs the baseline's 210%.)
+        e = prev[i] + (p + d - prev[i]) * omega - p
+        el = wp.length(e)
+        if el > MAX_DP:
+            e = e * (MAX_DP / el)
+        out[i] = collide(p + e, bx0, bx1)
 
 
 @wp.kernel
@@ -332,6 +386,28 @@ def vorticity_confine(x: wp.array(dtype=wp.vec3),
     if le > 1.0e-6:
         vi = vi + wp.cross(eta * (1.0 / le), omega[i]) * (VORTICITY * dt)
     v[i] = vi
+
+
+@wp.kernel
+def measure_compression(x: wp.array(dtype=wp.vec3),
+                        grid: wp.uint64,
+                        rho0: float,
+                        err: wp.array(dtype=float)):
+    # Post-solve residual of the density constraint (positive part only, the
+    # same one-sided form the solver projects). This is the convergence metric
+    # --probe reports, and what makes solver changes comparable.
+    i = wp.hash_grid_point_id(grid, wp.tid())
+    if i < 0:
+        return
+    p = x[i]
+    rho = float(0.0)
+    q = wp.hash_grid_query(grid, p, H)
+    for j in q:
+        rv = p - x[j]
+        r2 = wp.dot(rv, rv)
+        if r2 < H * H:
+            rho += MASS * w_poly6(r2)
+    err[i] = wp.max(rho / rho0 - 1.0, 0.0)
 
 
 @wp.kernel
@@ -423,8 +499,9 @@ def expand(verts: wp.array(dtype=wp.vec3),
     t = wp.tid()
     if t >= ntris:
         # Collapse unused triangles to a point (zero area, rasterises nothing).
-        # Vulkan ignores drawRange for meshes, so the tail must be padded rather
-        # than simply left out of the draw call.
+        # Only the one-time arm_vulkan_interop init still reaches this branch:
+        # the per-frame launches cover exactly the live triangles, since both
+        # backends honour drawRange and never consume the tail.
         for c in range(3):
             out_pos[t * 3 + c] = wp.vec3(0.0, -50.0, 0.0)
             out_nrm[t * 3 + c] = wp.vec3(0.0, 1.0, 0.0)
@@ -500,6 +577,7 @@ x = wp.array(p0, dtype=wp.vec3, device=device)
 v = wp.zeros(N, dtype=wp.vec3, device=device)
 xp = wp.zeros(N, dtype=wp.vec3, device=device)
 xtmp = wp.zeros(N, dtype=wp.vec3, device=device)
+xprev = wp.zeros(N, dtype=wp.vec3, device=device)   # Chebyshev's k-1 iterate
 lam = wp.zeros(N, dtype=float, device=device)
 omega = wp.zeros(N, dtype=wp.vec3, device=device)
 vtmp = wp.zeros(N, dtype=wp.vec3, device=device)
@@ -535,15 +613,23 @@ def sim_step():
         bx0, bx1 = paddle_extent(sim_time)
         wp.launch(predict, dim=N, device=device, inputs=[x, v, xp, dt, bx0, bx1])
         grid.build(points=xp, radius=H)
-        a, b = xp, xtmp
-        for _ in range(ITERATIONS):
+        # Three-buffer rotation instead of a ping-pong: solve_delta reads the
+        # current iterate AND the previous one (for the Chebyshev extrapolation)
+        # while writing a third. prev is cur on iteration 1, where omega == 1
+        # makes the extrapolation a no-op and the read harmless.
+        prev = cur = xp
+        spare = [xtmp, xprev]
+        for k in range(ITERATIONS):
+            out = spare.pop(0)
             wp.launch(solve_lambda, dim=N, device=device,
-                      inputs=[a, grid.id, RHO0, EPS_CFM, lam])
+                      inputs=[cur, grid.id, RHO0, EPS_CFM, lam])
             wp.launch(solve_delta, dim=N, device=device,
-                      inputs=[a, lam, grid.id, RHO0, W_DQ, S_CORR_K,
-                              JACOBI_RELAX, bx0, bx1, b])
-            a, b = b, a
-        wp.launch(finalize, dim=N, device=device, inputs=[x, a, v, dt])
+                      inputs=[cur, lam, grid.id, RHO0, W_DQ, S_CORR_K,
+                              JACOBI_RELAX, OMEGAS[k], prev, bx0, bx1, out])
+            if prev is not cur:
+                spare.append(prev)
+            prev, cur = cur, out
+        wp.launch(finalize, dim=N, device=device, inputs=[x, cur, v, dt])
         sim_time += dt
     wp.launch(curl_and_viscosity, dim=N, device=device,
               inputs=[x, v, grid.id, RHO0, omega, vtmp])
@@ -584,14 +670,24 @@ def build_surface():
 
 
 if PROBE:
-    print(f"{'t':>6} {'|v|mean':>8} {'|v|max':>8} {'y_mean':>7} {'y_max':>7} {'tris':>9}")
+    err = wp.zeros(N, dtype=float, device=device)
+    print(f"{'t':>6} {'|v|mean':>8} {'|v|max':>8} {'y_mean':>7} {'y_max':>7} "
+          f"{'comp%':>7} {'cmax%':>7} {'tris':>9}")
+    comp_acc = []
     for f in range(int(60 * cli_arg("--probe", 3.0, float))):
         sim_step()
         if f % 12 == 0:
+            wp.launch(measure_compression, dim=N, device=device,
+                      inputs=[x, grid.id, RHO0, err])
+            e = err.numpy()
+            comp_acc.append(e.mean())
             vv = np.linalg.norm(v.numpy(), axis=1)
             yy = x.numpy()[:, 1]
             print(f"{f/60.0:6.2f} {vv.mean():8.3f} {vv.max():8.3f} {yy.mean():7.3f} "
-                  f"{yy.max():7.3f} {build_surface():9,d}")
+                  f"{yy.max():7.3f} {e.mean()*100:7.3f} {e.max()*100:7.2f} "
+                  f"{build_surface():9,d}")
+    print(f"mean compression over run: {np.mean(comp_acc)*100:.3f}%  "
+          f"(iters={ITERATIONS} rho={RHO_CHEB} relax={JACOBI_RELAX})")
     sys.exit(0)
 
 
@@ -661,10 +757,10 @@ canvas = tp.Canvas("threepp x warp - fluid", width=1280, height=800,
                    antialiasing=4, headless=(SHOT or BENCH) and not FRAMES)
 if VULKAN:
     renderer = tp.VulkanRenderer(canvas)
-    # a smaller ceiling: every frame refreshes the whole padded range (a host
-    # upload on the fallback route, a device-to-device copy + BLAS refit on the
-    # interop one), so capacity costs bandwidth here in a way it does not on GL
-    MAX_TRIS = min(MAX_TRIS, cli_arg("--max-tris", 260_000, int))
+    # Capacity no longer needs a smaller ceiling here: with drawRange honoured
+    # on the mesh path, the per-frame copies and the BLAS build cover only the
+    # live triangles, so unused capacity costs VRAM but no bandwidth -- same
+    # deal as GL. (The host-fallback route still uploads full capacity.)
 else:
     renderer = tp.GLRenderer(canvas)
     renderer.shadow_map_enabled = True
@@ -744,7 +840,6 @@ stage_nrm = None
 host_pos = host_nrm = hview_pos = hview_nrm = None
 vk_slot = 0             # which pinned pair the GPU is filling
 vk_pending = None       # (rows, ntris, slot) copied last frame, not yet uploaded
-tail_hwm = 0            # high-water mark: how far the padded tail must reach
 vk_interop = None       # (positions, normals) VkInteropArray pair, or None
 vk_ntris = 0            # triangle count the in-render callback should expand
 vk_route = "pinned host copy"
@@ -814,12 +909,13 @@ def vk_on_frame():
     CUDA write against the Vulkan frame that reads it (there is no shared
     semaphore). It replaces -- rather than adds to -- the sync the pinned-host
     route already had to pay.
+
+    Only the LIVE triangles are expanded: the renderer's copies, BLAS build and
+    raster draw all clamp to the drawRange write_surface published, so rows past
+    vk_ntris are never consumed and shrinking frames need no re-degenerating.
     """
-    global tail_hwm
-    n = max(vk_ntris, tail_hwm)   # shrinking frames must re-degenerate the tail
-    tail_hwm = vk_ntris           # they left real triangles in
-    if n > 0:
-        wp.launch(expand, dim=n, device=device,
+    if vk_ntris > 0:
+        wp.launch(expand, dim=vk_ntris, device=device,
                   inputs=[mc.verts, mc.indices, field, vk_ntris,
                           vk_interop[0].array, vk_interop[1].array])
     wp.synchronize_device(device)
@@ -854,13 +950,14 @@ def arm_vulkan_interop():
         renderer.disable_vertex_interop(water)
         vk_interop = None
         return False
-    # Degenerate the WHOLE capacity once. The exports are fresh VRAM, so every
-    # triangle the surface never reaches would otherwise be uninitialised garbage
-    # on the first frame -- and garbage that happens to be finite gets past the
-    # renderer's sanitize pass. After this the per-frame launch only has to cover
-    # the high-water mark, exactly as the host route does. (mc.verts/mc.indices
-    # are still None here; expand never touches them on the pad path, and warp
-    # passes a None array as an empty one.)
+    # Degenerate the WHOLE capacity once, as belt and braces. The renderer's
+    # copies, BLAS build and raster draw all clamp to the drawRange, so nothing
+    # SHOULD ever consume rows past the live surface -- but the exports are
+    # fresh VRAM, and one launch here means a future consumer that forgets the
+    # clamp reads a harmless off-screen point instead of uninitialised garbage
+    # that happens to be finite. (mc.verts/mc.indices are still None here;
+    # expand never touches them on the pad path, and warp passes a None array
+    # as an empty one.)
     wp.launch(expand, dim=MAX_TRIS, device=device,
               inputs=[mc.verts, mc.indices, field, 0,
                       vk_interop[0].array, vk_interop[1].array])
@@ -892,16 +989,19 @@ def release_vulkan_interop():
 
 def write_surface(ntris):
     """Push marching-cubes output at the renderer."""
-    global reg_pos, reg_nrm, tail_hwm, vk_slot, vk_pending, vk_ntris
+    global reg_pos, reg_nrm, vk_slot, vk_pending, vk_ntris
     if vk_interop is not None:
         # Zero copy: nothing to push. vk_on_frame() does the expand from inside
-        # the renderer's frame, over exactly the surface built above.
+        # the renderer's frame, over exactly the surface built above; the
+        # drawRange published here is what the renderer clamps its raster draw,
+        # BLAS build and interop copies to.
         vk_ntris = ntris
+        geometry.set_draw_range(0, 3 * ntris)
         return
     if VULKAN:
         # No CUDA/Vulkan interop is bound, so the triangles go out through host
-        # memory. Expand over the high-water mark so shrinking frames overwrite
-        # last frame's leftovers with degenerates.
+        # memory -- live rows only, the drawRange keeps the renderer off the
+        # stale tail.
         # Publish last frame's copy first. The sync is MANDATORY -- a copy into
         # PINNED host memory is asynchronous, unlike a pageable one, and without
         # it the upload reads a half-written buffer and the mesh tears
@@ -914,13 +1014,11 @@ def write_surface(ntris):
             geometry.update_attribute("position", hview_pos[p_slot][:p_rows])
             geometry.update_attribute("normal", hview_nrm[p_slot][:p_rows])
             geometry.set_draw_range(0, 3 * p_tris)
-        n = max(ntris, tail_hwm)
-        tail_hwm = ntris
-        if n > 0:
-            wp.launch(expand, dim=n, device=device,
+        if ntris > 0:
+            wp.launch(expand, dim=ntris, device=device,
                       inputs=[mc.verts, mc.indices, field, ntris,
                               stage_pos, stage_nrm])
-            rows = n * 3
+            rows = ntris * 3
             wp.copy(host_pos[vk_slot], stage_pos, count=rows)
             wp.copy(host_nrm[vk_slot], stage_nrm, count=rows)
             vk_pending = (rows, ntris, vk_slot)
@@ -1004,7 +1102,7 @@ if FRAMES:
     ms = 1000.0 / FRAMES
     tot = (sim + surf + rend) * ms
     print(f"frames {N:,} particles [{'vulkan' if VULKAN else 'opengl'}] "
-          f"substeps={SUBSTEPS} iters={ITERATIONS}: "
+          f"substeps={SUBSTEPS} iters={ITERATIONS} rho={RHO_CHEB}: "
           f"sim {sim * ms:.2f} | surface {surf * ms:.2f} | render {rend * ms:.2f} "
           f"= {tot:.2f} ms ({1000.0 / tot:.0f} fps)  wall {wall * 1000 / (FRAMES + 30):.1f} ms")
 elif BENCH:
