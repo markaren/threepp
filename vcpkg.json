@@ -29,7 +29,20 @@
       "description": "Build with Vulkan backend (headers + loader + VMA + glslang). Validation layers still require a Vulkan SDK install.",
       "dependencies": [
         "vulkan-headers",
-        "vulkan-loader",
+        {
+          "name": "vulkan-loader",
+          "platform": "!linux"
+        },
+        {
+          "$comment": "The loader's window-system support is compile-time, and vcpkg's port defaults every BUILD_WSI_* to OFF — they are opt-in FEATURES. A loader built without them FILTERS VK_KHR_xlib_surface/xcb_surface/wayland_surface out of vkEnumerateInstanceExtensionProperties even when the ICD offers them, so vkCreateInstance answers VK_ERROR_EXTENSION_NOT_PRESENT for whatever GLFW just asked for. That is how threepp 2026.8.9's manylinux wheel shipped a loader that could not create a window surface on any Linux machine. Needs libxcb-devel / libX11-devel / wayland-devel in the build environment (see CIBW_BEFORE_ALL_LINUX in .github/workflows/wheels.yml); python/scripts/patch_linux_wheel_loader.py asserts the entry points are there before a wheel leaves the repair step.",
+          "name": "vulkan-loader",
+          "features": [
+            "xcb",
+            "xlib",
+            "wayland"
+          ],
+          "platform": "linux"
+        },
         "vulkan-memory-allocator",
         {
           "name": "glslang",
