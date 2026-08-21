@@ -666,7 +666,29 @@ void main() {
     // error becomes a large position error), the gatherEnv ray origin lands behind
     // the surface → every ray occluded → the surface renders BLACK. cam.jitter.xy
     // equals the gbuffer's Halton jitter (same haltonFrame_, same frame).
-    const vec2 ndc    = vec2(uv.x * 2.0 - 1.0, -(uv.y * 2.0 - 1.0)) + cam.jitter.xy;
+    vec2 ndc = vec2(uv.x * 2.0 - 1.0, -(uv.y * 2.0 - 1.0)) + cam.jitter.xy;
+    // MSAA: the depth this pixel reconstructs from belongs to ONE raster
+    // sample — the dominant one (dispatch A) or the minority representative
+    // (dispatch B) — which sits at that sample's standard location inside
+    // the pixel, not at the centre. Reconstructing it along the centre ray
+    // lands OFF the surface by depth-slope × sample offset (up to 0.375 px),
+    // which on a curved glass ball away from its centre exceeds the 1 mm
+    // refraction epsilon: the refraction ray started OUTSIDE the glass,
+    // re-hit the front face as its "exit" and escaped to the environment —
+    // a glass sphere under MSAA 2x/4x showed sky/background everywhere but
+    // a jagged central cap, worse the fewer pixels it covered (distance,
+    // small windows). Cast the primary ray through the sample's own location
+    // instead (standard Vulkan 2x/4x sample positions). Opaque surfaces at
+    // grazing angles got the same off-surface origin for their shadow /
+    // reflection rays; they simply tolerated it better.
+    if (K > 1) {
+        const int sIdx = (msSampleIdx >= 0) ? msSampleIdx : int((idsW0 >> 4u) & 0x3u);
+        vec2 off;// pixel units from the pixel centre, y down
+        if (K == 2) off = (sIdx == 0) ? vec2(0.25, 0.25) : vec2(-0.25, -0.25);
+        else        off = (sIdx == 0) ? vec2(-0.125, -0.375) : (sIdx == 1) ? vec2(0.375, -0.125)
+                        : (sIdx == 2) ? vec2(-0.375, 0.125) : vec2(0.125, 0.375);
+        ndc += vec2(off.x * 2.0 / float(pc.width), -off.y * 2.0 / float(pc.height));
+    }
     // Where THIS pixel is looked at from. The eye under a perspective camera —
     // unchanged — and this pixel's own near-plane point under a parallel one,
     // which is what makes every camPos-relative term below (the view vector V,
