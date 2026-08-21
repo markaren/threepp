@@ -8,7 +8,7 @@ import numpy.typing
 import typing
 from . import editor
 from . import imgui
-__all__: list[str] = ['AmbientLight', 'AnimationAction', 'AnimationBlendMode', 'AnimationClip', 'AnimationMixer', 'ArrowHelper', 'Articulation', 'ArticulationLink', 'Audio', 'AudioDistanceModel', 'AudioListener', 'AxesHelper', 'Background', 'BarkStyle', 'Blending', 'Blob', 'Box3', 'Box3Helper', 'BoxGeometry', 'BoxHelper', 'BranchingMode', 'BufferGeometry', 'Camera', 'CameraHelper', 'Canvas', 'CapsuleGeometry', 'CatmullRomCurve3', 'CircleGeometry', 'Clock', 'Cluster', 'Colonise', 'Color', 'ColorKeyframeTrack', 'ColorSpace', 'CombineOperation', 'Cone', 'ConeGeometry', 'ContactPoint', 'ContactSample', 'ContactSensor', 'ConvexGeometry', 'CrossQuad', 'CrownShape', 'Cylinder', 'CylinderGeometry', 'DepthPacking', 'DepthSensor', 'DirectionalLight', 'DirectionalLightHelper', 'DisplacedMesh', 'EXPONENTIAL', 'EXRLoader', 'Ellipsoid', 'ErosionType', 'Euler', 'FBXLoader', 'Filter', 'Fog', 'FogExp2', 'Font', 'FontLoader', 'ForceTorqueSensor', 'Frond', 'Furrowed', 'GLRenderer', 'GLTFLoader', 'GLTFResult', 'GrassMesh', 'GridHelper', 'Group', 'HAS_AUDIO', 'HAS_IMGUI', 'HAS_PHYSX', 'HAS_VULKAN', 'Hemisphere', 'HemisphereLight', 'HemisphereLightHelper', 'HorizontalAlignment', 'INVERSE', 'IcosahedronGeometry', 'IcpOptions', 'IcpResult', 'ImguiContext', 'Imu', 'ImuSample', 'InstancedMesh', 'Interpolation', 'IsoMesh', 'Joint', 'JointEncoder', 'JointInfo', 'JointRange', 'JointSample', 'JointType', 'KeyframeTrack', 'LINEAR', 'Lanceolate', 'LeafShape', 'LeafStyle', 'LidarBeam', 'LidarModel', 'LidarParams', 'LidarReturn', 'Light', 'Line', 'LineBasicMaterial', 'LineSegments', 'Lobed', 'Loop', 'Mapping', 'Material', 'Matrix3', 'Matrix4', 'Mesh', 'MeshBasicMaterial', 'MeshDepthMaterial', 'MeshLambertMaterial', 'MeshNormalMaterial', 'MeshPhongMaterial', 'MeshPhysicalMaterial', 'MeshStandardMaterial', 'ModelLoader', 'NONE', 'NoiseModel', 'NoiseType', 'NumberKeyframeTrack', 'OBJLoader', 'Object3D', 'Ocean', 'OctahedronGeometry', 'OrbitControls', 'OrthographicCamera', 'Ovate', 'Papery', 'PerspectiveCamera', 'PhysxGpuBatch', 'PhysxMaterial', 'PhysxWorld', 'PlaneGeometry', 'Plated', 'PointLight', 'PointLightHelper', 'Points', 'PointsMaterial', 'PolarGridHelper', 'PositionalAudio', 'Quad', 'Quaternion', 'QuaternionKeyframeTrack', 'RGBELoader', 'RangeNoiseModel', 'RectAreaLight', 'RigidBody', 'RingGeometry', 'Robot', 'RotationOrder', 'STLLoader', 'SVGLoader', 'ScalarField', 'Scene', 'Sensor', 'Serrate', 'ShadowMaterial', 'Side', 'SkeletonHelper', 'Sphere', 'SphereGeometry', 'SplatCloud', 'SplatData', 'SplatLoader', 'SpotLight', 'SpotLightHelper', 'Sprite', 'SpriteMaterial', 'TerrainFalloff', 'TerrainGenerator', 'TerrainParams', 'Text2D', 'Text3D', 'TextSprite', 'Texture', 'TextureLoader', 'TextureWrapping', 'ToneMapping', 'TorusGeometry', 'TorusKnotGeometry', 'TransformControls', 'TreeGenerator', 'TreeParams', 'URDFLoader', 'Vector2', 'Vector3', 'Vector4', 'VectorKeyframeTrack', 'VerticalAlignment', 'VoxelGrid', 'VulkanRenderer', 'Whorl', 'WrenchSample', 'apply_terrain_preset', 'apply_tree_preset', 'clamp', 'damp', 'deg_to_rad', 'editor', 'euclidean_modulo', 'generate_uuid', 'icp_point_to_point', 'imgui', 'inverse_lerp', 'is_power_of_two', 'iso_mesh_to_geometry', 'lerp', 'make_bark_textures', 'make_flower_texture', 'make_leaf_texture', 'make_needle_frond_texture', 'map_linear', 'marching_cubes', 'merge_buffer_geometries', 'merge_vertices', 'rad_to_deg', 'rand_float', 'rand_float_range', 'rand_float_spread', 'rand_int', 'rotate_equirect', 'simplify_geometry', 'splat_points_to_field', 'terrain_from_json', 'terrain_load_config', 'terrain_save_config', 'terrain_to_json', 'voxel_downsample', 'vulkan_available', 'write_wav']
+__all__: list[str] = ['AmbientLight', 'AnimationAction', 'AnimationBlendMode', 'AnimationClip', 'AnimationMixer', 'ArrowHelper', 'Articulation', 'ArticulationLink', 'Audio', 'AudioDistanceModel', 'AudioListener', 'AxesHelper', 'Background', 'BarkStyle', 'Blending', 'Blob', 'Box3', 'Box3Helper', 'BoxGeometry', 'BoxHelper', 'BranchingMode', 'BufferGeometry', 'Camera', 'CameraHelper', 'Canvas', 'CapsuleGeometry', 'CatmullRomCurve3', 'CircleGeometry', 'Clock', 'Cluster', 'Colonise', 'Color', 'ColorKeyframeTrack', 'ColorSpace', 'CombineOperation', 'Cone', 'ConeGeometry', 'ContactPoint', 'ContactSample', 'ContactSensor', 'ConvexGeometry', 'CrossQuad', 'CrownShape', 'Cylinder', 'CylinderGeometry', 'DepthPacking', 'DepthSensor', 'DirectionalLight', 'DirectionalLightHelper', 'DisplacedMesh', 'EXPONENTIAL', 'EXRLoader', 'Ellipsoid', 'ErosionType', 'Euler', 'FBXLoader', 'Filter', 'Fog', 'FogExp2', 'Font', 'FontLoader', 'ForceTorqueSensor', 'Frond', 'Furrowed', 'GLRenderer', 'GLTFLoader', 'GLTFResult', 'GrassMesh', 'GridHelper', 'Group', 'HAS_AUDIO', 'HAS_IMGUI', 'HAS_PHYSX', 'HAS_VULKAN', 'Hemisphere', 'HemisphereLight', 'HemisphereLightHelper', 'HorizontalAlignment', 'INVERSE', 'IcosahedronGeometry', 'IcpOptions', 'IcpResult', 'ImguiContext', 'Imu', 'ImuSample', 'InstancedMesh', 'Interpolation', 'IsoMesh', 'Joint', 'JointEncoder', 'JointInfo', 'JointRange', 'JointSample', 'JointType', 'KeyframeTrack', 'LINEAR', 'Lanceolate', 'LeafShape', 'LeafStyle', 'LidarBeam', 'LidarModel', 'LidarParams', 'LidarReturn', 'Light', 'Line', 'LineBasicMaterial', 'LineSegments', 'Lobed', 'Loop', 'Mapping', 'Material', 'Matrix3', 'Matrix4', 'Mesh', 'MeshBasicMaterial', 'MeshDepthMaterial', 'MeshLambertMaterial', 'MeshNormalMaterial', 'MeshPhongMaterial', 'MeshPhysicalMaterial', 'MeshStandardMaterial', 'ModelLoader', 'NONE', 'NoiseModel', 'NoiseType', 'NumberKeyframeTrack', 'OBJLoader', 'Object3D', 'Ocean', 'OctahedronGeometry', 'OrbitControls', 'OrthographicCamera', 'Ovate', 'Papery', 'PerspectiveCamera', 'PhysxGpuBatch', 'PhysxMaterial', 'PhysxSoftBodyMaterial', 'PhysxWorld', 'PlaneGeometry', 'Plated', 'PointLight', 'PointLightHelper', 'Points', 'PointsMaterial', 'PolarGridHelper', 'PositionalAudio', 'Quad', 'Quaternion', 'QuaternionKeyframeTrack', 'RGBELoader', 'RangeNoiseModel', 'RectAreaLight', 'RigidBody', 'RingGeometry', 'Robot', 'RotationOrder', 'STLLoader', 'SVGLoader', 'ScalarField', 'Scene', 'Sensor', 'Serrate', 'ShadowMaterial', 'Side', 'SkeletonHelper', 'SoftBody', 'Sphere', 'SphereGeometry', 'SplatCloud', 'SplatData', 'SplatLoader', 'SpotLight', 'SpotLightHelper', 'Sprite', 'SpriteMaterial', 'TerrainFalloff', 'TerrainGenerator', 'TerrainParams', 'Text2D', 'Text3D', 'TextSprite', 'Texture', 'TextureLoader', 'TextureWrapping', 'ToneMapping', 'TorusGeometry', 'TorusKnotGeometry', 'TransformControls', 'TreeGenerator', 'TreeParams', 'URDFLoader', 'Vector2', 'Vector3', 'Vector4', 'VectorKeyframeTrack', 'VerticalAlignment', 'VoxelGrid', 'VulkanRenderer', 'Whorl', 'WrenchSample', 'apply_terrain_preset', 'apply_tree_preset', 'clamp', 'damp', 'deg_to_rad', 'editor', 'euclidean_modulo', 'generate_uuid', 'icp_point_to_point', 'imgui', 'inverse_lerp', 'is_power_of_two', 'iso_mesh_to_geometry', 'lerp', 'make_bark_textures', 'make_flower_texture', 'make_leaf_texture', 'make_needle_frond_texture', 'map_linear', 'marching_cubes', 'merge_buffer_geometries', 'merge_vertices', 'rad_to_deg', 'rand_float', 'rand_float_range', 'rand_float_spread', 'rand_int', 'rotate_equirect', 'simplify_geometry', 'splat_points_to_field', 'terrain_from_json', 'terrain_load_config', 'terrain_save_config', 'terrain_to_json', 'voxel_downsample', 'vulkan_available', 'write_wav']
 class AmbientLight(Light):
     def __init__(self, color: Color = ..., intensity: typing.SupportsFloat | typing.SupportsIndex = 1.0) -> None:
         ...
@@ -3848,6 +3848,34 @@ class PhysxMaterial:
     @static_friction.setter
     def static_friction(self, arg1: typing.SupportsFloat | typing.SupportsIndex) -> None:
         ...
+class PhysxSoftBodyMaterial:
+    """
+    A deformable-volume material: Young's modulus (Pa), Poisson's ratio and surface friction. Create via world.create_soft_body_material(...) and pass the SAME handle to every add_soft_body that shares it — PhysX keeps one PxMaterial per call otherwise. Not interchangeable with PhysxMaterial (rigid bodies use a different PhysX type).
+    """
+    @property
+    def damping(self) -> float:
+        ...
+    @damping.setter
+    def damping(self, arg1: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def dynamic_friction(self) -> float:
+        ...
+    @dynamic_friction.setter
+    def dynamic_friction(self, arg1: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def poisson(self) -> float:
+        ...
+    @poisson.setter
+    def poisson(self, arg1: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def young(self) -> float:
+        ...
+    @young.setter
+    def young(self, arg1: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
 class PhysxWorld:
     """
     A PhysX rigid-body world wired to the threepp scene graph. Add meshes as bodies, then call step(dt) each frame; every bound mesh's position/quaternion follows the simulation. Pure CPU — no canvas or renderer required.
@@ -3867,6 +3895,10 @@ class PhysxWorld:
     def add_instanced(self, mesh: InstancedMesh, density: typing.SupportsFloat | typing.SupportsIndex = 1000.0) -> list[RigidBody]:
         """
         Add one dynamic body per instance of an InstancedMesh. Returns a list of RigidBody.
+        """
+    def add_soft_body(self, mesh: Mesh, material: typing.Any = None, voxel_resolution: typing.SupportsInt | typing.SupportsIndex = 10, solver_iterations: typing.SupportsInt | typing.SupportsIndex = 20, self_collision: bool = False, cache_key: str = '', mass: typing.SupportsFloat | typing.SupportsIndex = 0.0) -> SoftBody:
+        """
+        Cook `mesh` into a deformable volume and add it. Requires PhysxWorld(gpu_dynamics=True). The mesh's world matrix is baked into the cooked geometry and its local transform reset, so place the mesh first, then add it. voxel_resolution sets the SIMULATION mesh detail (higher = finer and slower); the collision mesh is conforming and follows the surface. cache_key reuses the (expensive) cook and per-vertex binding across every body built from the same source geometry at the same voxel_resolution — pass the model's filename to pay the cook once per species. mass in kg; 0 keeps the unit-density mass from the tet volume. Returns a SoftBody handle; the world owns the body.
         """
     def add_static(self, mesh: Mesh, material: typing.Any = None) -> RigidBody:
         """
@@ -3888,6 +3920,10 @@ class PhysxWorld:
         """
         Create a contact material. Defaults: friction 0.5/0.5, restitution 0 (no bounce — right for feet/locomotion, unlike the world's shared 0.2 default). combine modes ('average'|'min'|'multiply'|'max') control how two contacting materials' coefficients mix — use 'min' so a clean material governs a contact against a different one. The returned PhysxMaterial is mutable (per-env friction randomization). Keeps the world alive.
         """
+    def create_soft_body_material(self, young: typing.SupportsFloat | typing.SupportsIndex = 1000000.0, poisson: typing.SupportsFloat | typing.SupportsIndex = 0.44999998807907104, friction: typing.SupportsFloat | typing.SupportsIndex = 0.5, damping: typing.Any = None) -> PhysxSoftBodyMaterial:
+        """
+        Create a deformable-volume material (Young's modulus Pa, Poisson's ratio, surface friction). Requires gpu_dynamics=True. Create ONE and share it across every add_soft_body that uses the same flesh — each call allocates a PxMaterial that lives until the world dies.
+        """
     def load_articulation(self, path: str, fixed_base: bool = False, base_position: typing.Annotated[collections.abc.Sequence[typing.SupportsFloat | typing.SupportsIndex], "FixedSize(3)"] = [0.0, 0.0, 0.0], default_density: typing.SupportsFloat | typing.SupportsIndex = 1000.0, stiffness: typing.SupportsFloat | typing.SupportsIndex = 0.0, damping: typing.SupportsFloat | typing.SupportsIndex = 0.0, max_force: typing.SupportsFloat | typing.SupportsIndex = 1000000.0, self_collision: bool = False, solver_position_iterations: typing.SupportsInt | typing.SupportsIndex = 12, render_visuals: bool = True, scale: typing.SupportsFloat | typing.SupportsIndex = 1.0, args: collections.abc.Mapping[str, str] = {}) -> tuple[Articulation, list[Mesh], list[str]]:
         """
         Import a URDF/xacro as a finalized Articulation (one shared parser with the C++ URDFLoader — xacro supported). Returns (articulation, meshes, joint_names): the collider meshes are bound to the sim (add them to a scene to render), joint_names lists the actuated joints in drive-target order. Collision is primitive/bbox, mass from <inertial> (else default_density x volume); fixed joints are collapsed. stiffness/damping/max_force set a PD drive on every joint. scale reinterprets the file's length units (a millimetre URDF in a metre world is 0.001) - shapes, joint frames and prismatic limits are built scaled, masses stay as authored, and a prismatic DOF then reads and drives in the SCALED units. `args` are xacro argument overrides, the same name:=value pairs the xacro CLI takes - a parameterised description built without them expands to the FILE's defaults, which for many robots names config paths that do not exist.
@@ -3907,6 +3943,10 @@ class PhysxWorld:
     def remove(self, body: RigidBody) -> None:
         """
         Remove a body (from add / add_static / add_dynamic_convex / add_static_trimesh) from the world and release it — e.g. to rebuild geometry without recreating the world. Any mesh binding is dropped; the RigidBody handle is INVALID afterwards (don't reuse it).
+        """
+    def remove_soft_body(self, body: SoftBody) -> None:
+        """
+        Destroy a soft body: releases the PhysX actor and its GPU/pinned buffers, and (for bodies added from a Mesh) detaches that mesh from its parent. The SoftBody handle is INVALID afterwards.
         """
     def remove_substep_callback(self, handle: typing.SupportsInt | typing.SupportsIndex) -> None:
         """
@@ -4511,6 +4551,36 @@ class Side:
 class SkeletonHelper(LineSegments):
     def __init__(self, skeleton: typing.Any) -> None:
         ...
+class SoftBody:
+    """
+    Handle to a PhysX deformable volume created via world.add_soft_body. Valid only while its world lives (and until remove_soft_body). The simulation runs on two meshes: a CONFORMING collision tet mesh (what tet_mesh/sim_positions report, and what contact is resolved against) and a voxelised simulation mesh the solver integrates; voxel_resolution sizes the latter.
+    """
+    def enable_gpu_skinning(self) -> None:
+        """
+        Blend the visual mesh in the vertex shader from a small per-body tet texture instead of CPU-skinning and re-uploading the full-resolution mesh every step. Call once, right after add_soft_body. Also the cheap option when the visual mesh is NOT drawn at all (an external skinner owns the render surface): it reduces the per-step cost to one few-hundred-texel texture write.
+        """
+    def set_recompute_normals(self, enabled: bool) -> None:
+        """
+        Recompute the visual geometry's vertex normals each step (default on). Turn it off when something else owns the normals — it is a full pass over the visual mesh.
+        """
+    def sim_positions(self) -> numpy.typing.NDArray[numpy.float32]:
+        """
+        Current collision-mesh vertex positions as an (N, 3) float32 array, world space. One device->host copy per call — read it once per frame, not once per fish per query.
+        """
+    def tet_mesh(self) -> tuple:
+        """
+        ((V, 3) float32 rest vertices, (T, 4) int32 tets) of the cooked CONFORMING collision mesh. Rest vertices are in the template mesh's own local space, so they differ from sim_positions() by the spawn transform only — rest-relative metrics (volume ratio, edge stretch) compare directly. Feed the pair to another solver to run PhysX's tetrahedralisation elsewhere.
+        """
+    @property
+    def num_tets(self) -> int:
+        """
+        Collision-mesh tetrahedron count.
+        """
+    @property
+    def num_vertices(self) -> int:
+        """
+        Collision-mesh vertex count (the length of sim_positions()).
+        """
 class SphereGeometry(BufferGeometry):
     def __init__(self, radius: typing.SupportsFloat | typing.SupportsIndex = 1.0, width_segments: typing.SupportsInt | typing.SupportsIndex = 16, height_segments: typing.SupportsInt | typing.SupportsIndex = 12, phi_start: typing.SupportsFloat | typing.SupportsIndex = 0.0, phi_length: typing.SupportsFloat | typing.SupportsIndex = 6.2831854820251465, theta_start: typing.SupportsFloat | typing.SupportsIndex = 0.0, theta_length: typing.SupportsFloat | typing.SupportsIndex = 3.1415927410125732) -> None:
         ...

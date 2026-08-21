@@ -3,8 +3,11 @@
 Physics is pure CPU here — no canvas or renderer needed, so these run headless
 anywhere the module was built with PhysX.
 """
-import threepp as tp
+import gc
+
+import numpy as np
 import pytest
+import threepp as tp
 
 pytestmark = pytest.mark.skipif(not tp.HAS_PHYSX, reason="built without the PhysX backend")
 
@@ -108,3 +111,65 @@ def test_instanced_bodies():
     for _ in range(60):
         world.step(1 / 60)
     assert bodies[0].position.y < y_before, "instances should have fallen"
+
+
+# --- Soft bodies (deformable volumes). GPU-only: PhysX cooks and solves these on
+# CUDA, so the world needs gpu_dynamics and the box gets skipped on a CPU-only
+# machine rather than failing there.
+
+@pytest.fixture
+def gpu_world():
+    """One GPU world, torn down before the next test asks for one.
+
+    PhysX allows exactly one PxFoundation per process, so a world that outlives
+    its test takes the whole rest of the file down with it -- which is what a
+    plain local variable does the moment a test fails and pytest keeps the
+    frame alive for the traceback.
+    """
+    try:
+        world = tp.PhysxWorld(gpu_dynamics=True)
+    except Exception as e:                       # no CUDA device / no GPU PhysX build
+        pytest.skip(f"no GPU PhysX: {e}")
+    yield world
+    del world
+    gc.collect()
+
+
+def test_soft_body_tet_mesh_shapes(gpu_world):
+    world = gpu_world
+    m = box(0.5)
+    m.position.set(0, 2, 0)
+    sb = world.add_soft_body(m, voxel_resolution=6, solver_iterations=15)
+    verts, tets = sb.tet_mesh()
+    assert verts.ndim == 2 and verts.shape[1] == 3
+    assert tets.ndim == 2 and tets.shape[1] == 4
+    assert len(verts) == sb.num_vertices and len(tets) == sb.num_tets
+    assert tets.max() < len(verts) and tets.min() >= 0, "tet indices must address the rest vertices"
+    assert sb.sim_positions().shape == verts.shape
+
+
+def test_soft_body_falls_and_deforms(gpu_world):
+    world = gpu_world
+    floor = tp.Mesh(tp.BoxGeometry(10, 1, 10), tp.MeshStandardMaterial())
+    floor.position.set(0, -0.5, 0)
+    world.add_static(floor)
+    m = box(0.5)
+    m.position.set(0, 2, 0)
+    sb = world.add_soft_body(m, voxel_resolution=6, solver_iterations=15)
+    p0 = sb.sim_positions()
+    for _ in range(60):
+        world.step(1 / 60)
+    p1 = sb.sim_positions()
+    assert p1[:, 1].mean() < p0[:, 1].mean() - 0.5, "soft body did not fall"
+    # A rigid drop would move every vertex by the same amount; a deformable one
+    # does not, which is the only thing that distinguishes it here.
+    assert float(np.ptp((p1 - p0)[:, 1])) > 1e-4, "every vertex moved identically — that is a rigid body"
+
+
+def test_remove_soft_body_invalidates_handle(gpu_world):
+    world = gpu_world
+    m = box(0.5)
+    sb = world.add_soft_body(m, voxel_resolution=6, solver_iterations=10)
+    world.remove_soft_body(sb)
+    with pytest.raises(RuntimeError):
+        sb.sim_positions()

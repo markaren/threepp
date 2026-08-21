@@ -28,6 +28,7 @@
 #include "threepp/extras/physx/Articulation.hpp"
 #include "threepp/extras/physx/Joint.hpp"
 #include "threepp/extras/physx/PhysxGpuBatch.hpp"
+#include "threepp/extras/physx/PhysxSoftBody.hpp"
 #include "threepp/extras/physx/PhysxWorld.hpp"
 #include "threepp/extras/physx/UrdfArticulation.hpp"
 #include "threepp/extras/sensors/Imu.hpp"
@@ -119,6 +120,117 @@ inline ::physx::PxCombineMode::Enum combineModeFromString(const std::string& s) 
         }
         ::physx::PxRigidActor* actor_;
     };
+
+
+// Thin handle over a threepp::SoftBody (a PxDeformableVolume). The body is owned by
+// the PhysxWorld's softBodies_ vector and dies with the world (or with
+// remove_soft_body), so this only holds pointers — keep_alive on the adder ties the
+// handle's lifetime to the world's, exactly as RigidBody does.
+//
+// The two readers below deliberately do NOT go through SoftBody's pinned
+// positionsInvMass_ mirror: that buffer is refreshed inside world.step() and is
+// private. A direct device->host copy off the volume's own position buffer is the
+// same few kilobytes and is valid at any point between steps.
+class PySoftBody {
+public:
+    PySoftBody(threepp::SoftBody* sb, ::physx::PxCudaContextManager* cuda) : sb_(sb), cuda_(cuda) {}
+
+    threepp::SoftBody* raw() const { return sb_; }
+    void invalidate() { sb_ = nullptr; }
+
+    // Current COLLISION-mesh vertex positions, world space, as (N, 3) float32.
+    py::array_t<float> simPositions() const {
+        auto* vol = live()->actor();
+        const auto n = static_cast<::physx::PxU32>(vol->getCollisionMesh()->getNbVertices());
+        std::vector<::physx::PxVec4> host(n);
+        {
+            ::physx::PxScopedCudaLock _lock(*cuda_);
+            cuda_->getCudaContext()->memcpyDtoH(
+                    host.data(),
+                    reinterpret_cast<CUdeviceptr>(vol->getPositionInvMassBufferD()),
+                    static_cast<size_t>(n) * sizeof(::physx::PxVec4));
+        }
+        py::array_t<float> out({static_cast<py::ssize_t>(n), py::ssize_t(3)});
+        float* dst = out.mutable_data();
+        for (::physx::PxU32 i = 0; i < n; ++i) {
+            dst[i * 3 + 0] = host[i].x;
+            dst[i * 3 + 1] = host[i].y;
+            dst[i * 3 + 2] = host[i].z;
+        }
+        return out;
+    }
+
+    // The cooked CONFORMING collision tet mesh: (rest vertices (V,3) float32,
+    // tets (T,4) int32). Rest vertices are the cook's own local space — which is
+    // the template mesh's local space, and differs from sim_positions() by the
+    // spawn's rigid transform only (placeAndUpload applies scale 1). Every
+    // rest-relative quality metric (volume ratio, edge stretch) is therefore valid
+    // against sim_positions() as-is.
+    py::tuple tetMesh() const {
+        using namespace ::physx;
+        auto* tm = live()->actor()->getCollisionMesh();
+        const PxU32 nv = tm->getNbVertices();
+        const PxU32 nt = tm->getNbTetrahedrons();
+        const PxVec3* v = tm->getVertices();
+
+        py::array_t<float> verts({static_cast<py::ssize_t>(nv), py::ssize_t(3)});
+        float* vd = verts.mutable_data();
+        for (PxU32 i = 0; i < nv; ++i) {
+            vd[i * 3 + 0] = v[i].x;
+            vd[i * 3 + 1] = v[i].y;
+            vd[i * 3 + 2] = v[i].z;
+        }
+
+        py::array_t<std::int32_t> tets({static_cast<py::ssize_t>(nt), py::ssize_t(4)});
+        std::int32_t* td = tets.mutable_data();
+        const bool narrow = tm->getTetrahedronMeshFlags().isSet(PxTetrahedronMeshFlag::e16_BIT_INDICES);
+        if (narrow) {
+            const auto* src = static_cast<const PxU16*>(tm->getTetrahedrons());
+            for (PxU32 i = 0; i < nt * 4; ++i) td[i] = static_cast<std::int32_t>(src[i]);
+        } else {
+            const auto* src = static_cast<const PxU32*>(tm->getTetrahedrons());
+            for (PxU32 i = 0; i < nt * 4; ++i) td[i] = static_cast<std::int32_t>(src[i]);
+        }
+        return py::make_tuple(verts, tets);
+    }
+
+    int nbCollisionVertices() const {
+        return static_cast<int>(live()->actor()->getCollisionMesh()->getNbVertices());
+    }
+    int nbTets() const {
+        return static_cast<int>(live()->actor()->getCollisionMesh()->getNbTetrahedrons());
+    }
+    void setRecomputeNormals(bool v) { live()->setRecomputeNormals(v); }
+    void enableGpuSkinning() { live()->enableGpuSkinning(); }
+
+private:
+    threepp::SoftBody* live() const {
+        if (!sb_) throw std::runtime_error("SoftBody: handle was invalidated by remove_soft_body");
+        return sb_;
+    }
+    threepp::SoftBody* sb_;
+    ::physx::PxCudaContextManager* cuda_;
+};
+
+// Handle over a PxDeformableVolumeMaterial (owned by PxPhysics, released with the
+// world). Separate from PhysxMaterial: PhysX keeps rigid and deformable materials
+// in different type hierarchies and they are not interchangeable.
+class PhysxSoftBodyMaterial {
+public:
+    explicit PhysxSoftBodyMaterial(::physx::PxDeformableVolumeMaterial* m) : mat_(m) {}
+    ::physx::PxDeformableVolumeMaterial* raw() const { return mat_; }
+    float youngs() const { return mat_->getYoungsModulus(); }
+    void setYoungs(float v) { mat_->setYoungsModulus(v); }
+    float poissons() const { return mat_->getPoissons(); }
+    void setPoissons(float v) { mat_->setPoissons(v); }
+    float dynamicFriction() const { return mat_->getDynamicFriction(); }
+    void setDynamicFriction(float v) { mat_->setDynamicFriction(v); }
+    float damping() const { return mat_->getDamping(); }
+    void setDamping(float v) { mat_->setDamping(v); }
+
+private:
+    ::physx::PxDeformableVolumeMaterial* mat_;
+};
 
 
 }// namespace
@@ -363,6 +475,46 @@ namespace threepp_py {
                      py::arg("static_friction"), py::arg("dynamic_friction"), py::arg("restitution"),
                      "Set all three coefficients at once (the domain-randomization hot path).");
 
+        py::class_<PhysxSoftBodyMaterial>(m, "PhysxSoftBodyMaterial",
+                                          "A deformable-volume material: Young's modulus (Pa), Poisson's ratio and "
+                                          "surface friction. Create via world.create_soft_body_material(...) and pass "
+                                          "the SAME handle to every add_soft_body that shares it — PhysX keeps one "
+                                          "PxMaterial per call otherwise. Not interchangeable with PhysxMaterial "
+                                          "(rigid bodies use a different PhysX type).")
+                .def_property("young", &PhysxSoftBodyMaterial::youngs, &PhysxSoftBodyMaterial::setYoungs)
+                .def_property("poisson", &PhysxSoftBodyMaterial::poissons, &PhysxSoftBodyMaterial::setPoissons)
+                .def_property("dynamic_friction", &PhysxSoftBodyMaterial::dynamicFriction,
+                              &PhysxSoftBodyMaterial::setDynamicFriction)
+                .def_property("damping", &PhysxSoftBodyMaterial::damping, &PhysxSoftBodyMaterial::setDamping);
+
+        py::class_<PySoftBody>(m, "SoftBody",
+                               "Handle to a PhysX deformable volume created via world.add_soft_body. Valid only "
+                               "while its world lives (and until remove_soft_body). The simulation runs on two "
+                               "meshes: a CONFORMING collision tet mesh (what tet_mesh/sim_positions report, and "
+                               "what contact is resolved against) and a voxelised simulation mesh the solver "
+                               "integrates; voxel_resolution sizes the latter.")
+                .def("sim_positions", &PySoftBody::simPositions,
+                     "Current collision-mesh vertex positions as an (N, 3) float32 array, world space. One "
+                     "device->host copy per call — read it once per frame, not once per fish per query.")
+                .def("tet_mesh", &PySoftBody::tetMesh,
+                     "((V, 3) float32 rest vertices, (T, 4) int32 tets) of the cooked CONFORMING collision "
+                     "mesh. Rest vertices are in the template mesh's own local space, so they differ from "
+                     "sim_positions() by the spawn transform only — rest-relative metrics (volume ratio, "
+                     "edge stretch) compare directly. Feed the pair to another solver to run PhysX's "
+                     "tetrahedralisation elsewhere.")
+                .def_property_readonly("num_vertices", &PySoftBody::nbCollisionVertices,
+                                       "Collision-mesh vertex count (the length of sim_positions()).")
+                .def_property_readonly("num_tets", &PySoftBody::nbTets, "Collision-mesh tetrahedron count.")
+                .def("set_recompute_normals", &PySoftBody::setRecomputeNormals, py::arg("enabled"),
+                     "Recompute the visual geometry's vertex normals each step (default on). Turn it off "
+                     "when something else owns the normals — it is a full pass over the visual mesh.")
+                .def("enable_gpu_skinning", &PySoftBody::enableGpuSkinning,
+                     "Blend the visual mesh in the vertex shader from a small per-body tet texture instead of "
+                     "CPU-skinning and re-uploading the full-resolution mesh every step. Call once, right "
+                     "after add_soft_body. Also the cheap option when the visual mesh is NOT drawn at all "
+                     "(an external skinner owns the render surface): it reduces the per-step cost to one "
+                     "few-hundred-texel texture write.");
+
         py::class_<PhysxWorld>(m, "PhysxWorld",
                                "A PhysX rigid-body world wired to the threepp scene graph. Add meshes as "
                                "bodies, then call step(dt) each frame; every bound mesh's position/quaternion "
@@ -451,6 +603,50 @@ namespace threepp_py {
                      "('average'|'min'|'multiply'|'max') control how two contacting materials' coefficients "
                      "mix — use 'min' so a clean material governs a contact against a different one. The "
                      "returned PhysxMaterial is mutable (per-env friction randomization). Keeps the world alive.")
+                .def("create_soft_body_material",
+                     [](PhysxWorld& w, float young, float poisson, float friction, const py::object& damping) {
+                         auto* m = w.createSoftBodyMaterial(young, poisson, friction);
+                         if (!m) throw std::runtime_error("create_soft_body_material: createDeformableVolumeMaterial failed");
+                         if (!damping.is_none()) m->setDamping(damping.cast<float>());
+                         return std::make_unique<PhysxSoftBodyMaterial>(m);
+                     },
+                     py::arg("young") = 1e6f, py::arg("poisson") = 0.45f,
+                     py::arg("friction") = 0.5f, py::arg("damping") = py::none(),
+                     py::keep_alive<0, 1>(),
+                     "Create a deformable-volume material (Young's modulus Pa, Poisson's ratio, surface "
+                     "friction). Requires gpu_dynamics=True. Create ONE and share it across every "
+                     "add_soft_body that uses the same flesh — each call allocates a PxMaterial that lives "
+                     "until the world dies.")
+                .def("add_soft_body",
+                     [](PhysxWorld& w, Mesh& mesh, const py::object& material, int voxel_resolution,
+                        unsigned solver_iterations, bool self_collision, const std::string& cache_key, float mass) {
+                         ::physx::PxDeformableVolumeMaterial* mat =
+                                 material.is_none() ? nullptr : material.cast<PhysxSoftBodyMaterial*>()->raw();
+                         auto* sb = w.addSoftBody(mesh, mat, voxel_resolution, solver_iterations,
+                                                  self_collision, cache_key, mass);
+                         return PySoftBody(sb, w.cudaContextManager());
+                     },
+                     py::arg("mesh"), py::arg("material") = py::none(), py::arg("voxel_resolution") = 10,
+                     py::arg("solver_iterations") = 20, py::arg("self_collision") = false,
+                     py::arg("cache_key") = std::string(), py::arg("mass") = 0.f,
+                     py::keep_alive<1, 2>(), py::keep_alive<0, 1>(),
+                     "Cook `mesh` into a deformable volume and add it. Requires PhysxWorld(gpu_dynamics=True). "
+                     "The mesh's world matrix is baked into the cooked geometry and its local transform reset, "
+                     "so place the mesh first, then add it. voxel_resolution sets the SIMULATION mesh detail "
+                     "(higher = finer and slower); the collision mesh is conforming and follows the surface. "
+                     "cache_key reuses the (expensive) cook and per-vertex binding across every body built from "
+                     "the same source geometry at the same voxel_resolution — pass the model's filename to pay "
+                     "the cook once per species. mass in kg; 0 keeps the unit-density mass from the tet volume. "
+                     "Returns a SoftBody handle; the world owns the body.")
+                .def("remove_soft_body",
+                     [](PhysxWorld& w, PySoftBody& body) {
+                         w.removeSoftBody(body.raw());
+                         body.invalidate();// the handle is now dead — reusing it raises
+                     },
+                     py::arg("body"),
+                     "Destroy a soft body: releases the PhysX actor and its GPU/pinned buffers, and (for "
+                     "bodies added from a Mesh) detaches that mesh from its parent. The SoftBody handle is "
+                     "INVALID afterwards.")
                 .def("add_dynamic_convex",
                      [](PhysxWorld& w, Mesh& mesh, float density) {
                          auto* a = w.addDynamicConvex(mesh, density);
