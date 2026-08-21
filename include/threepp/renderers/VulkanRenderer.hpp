@@ -926,10 +926,13 @@ namespace threepp {
         // enableSoftBodyInterop; a null handle means "not yet, or not on this
         // device", never an exception.
         //
-        // FIXED-CAPACITY GEOMETRY ONLY. The renderer draws and refits
-        // `position.count` vertices; a producer whose triangle count varies must
-        // allocate for its maximum once and write zero-area degenerates for the
-        // unused tail. Changing the attribute counts after enabling tears the
+        // FIXED-CAPACITY ALLOCATION, VARIABLE DRAW. A producer whose triangle
+        // count varies allocates for its maximum once and publishes the live
+        // count with `BufferGeometry::setDrawRange`: the raster path clamps to
+        // the range, the BLAS is built over [0, start + count), and the interop
+        // copies are trimmed to match. No zero-area degenerate tail is needed —
+        // that was the contract before the mesh path honoured drawRange.
+        // Changing the attribute *counts* after enabling still tears the
         // BLAS record down (and with it the allocation the foreign API imported),
         // so the renderer disables interop for that mesh with a warning instead.
         struct VertexInteropHandle {

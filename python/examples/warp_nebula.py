@@ -1,4 +1,4 @@
-"""A sixteen-million-particle nebula — NVIDIA Warp simulation, threepp rendering.
+"""An eighteen-million-particle nebula — NVIDIA Warp simulation, threepp rendering.
 
 A galaxy disk in a softened central gravity well, stirred by animated 4D curl
 noise, with differential rotation shearing the turbulence into spiral arms.
@@ -22,7 +22,7 @@ smooth by construction, has information for. --exact-noise restores it as the
 A/B baseline.
 
     pip install warp-lang
-    python warp_nebula.py                # window, 16M particles; drag to orbit
+    python warp_nebula.py                # window, 18M particles; drag to orbit
     python warp_nebula.py --n 3000000    # fewer (exposure auto-adjusts)
     python warp_nebula.py --shot 6.6     # headless PNG (nova at t=6.0)
     python warp_nebula.py --bench        # timed phase breakdown

@@ -149,8 +149,9 @@ namespace threepp {
         };
 
         // Representations. Each is opt-in, each is independently costed, and
-        // each exists because a sensor can see it. PHASE 0 STORES THEM AND
-        // CONSUMES NONE — enabling one changes no pixels yet.
+        // each exists because a sensor can see it. MeshRepr, DensityRepr and
+        // BillboardRepr are live; TracedRepr is stored and consumed by nothing
+        // — see the PHASE STATE block at the top of this header.
         struct MeshRepr {// granular
             std::shared_ptr<BufferGeometry> geometry;// the per-particle proxy
             std::shared_ptr<Material>       material;// ONE material for the field

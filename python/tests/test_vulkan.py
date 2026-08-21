@@ -310,8 +310,9 @@ def test_vertex_interop_cuda_write(vk_renderer):
         pytest.skip("no CUDA device")
 
     # Fixed capacity, as the contract requires: one live triangle plus a
-    # degenerate tail. The tail is what hides unused triangles — the Vulkan mesh
-    # path has no drawRange.
+    # degenerate tail. The Vulkan mesh path honours drawRange now, so the tail is
+    # no longer the only way to hide unused triangles — this gate keeps it because
+    # a degenerate tail is still valid and is what it was written against.
     ntri, cap = 8, 8 * 3
     # All vertices coincident, and deliberately PARKED FAR OFF-SCREEN at y=-50.
     # Zero area, so nothing rasterises — and, more to the point, the host array

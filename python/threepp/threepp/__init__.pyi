@@ -5760,7 +5760,7 @@ class VulkanRenderer:
         
         POLL IT: the renderer's record for a mesh is created on the frame the mesh is first drawn, so this returns None until after the first render() — call render() once, then enable.
         
-        FIXED-CAPACITY GEOMETRY ONLY: the renderer draws and refits position.count vertices and ignores set_draw_range for meshes, so a producer whose triangle count varies must allocate its maximum once and write zero-area degenerates over the unused tail. Changing an attribute's count after enabling DISABLES interop for that mesh (with a warning on stderr) rather than tearing down memory CUDA has imported.
+        FIXED-CAPACITY ALLOCATION, VARIABLE DRAW: a producer whose triangle count varies allocates its maximum once and publishes the live count with set_draw_range — the raster path clamps to the range, the BLAS is built over [0, start + count), and the interop copies are trimmed to match, so no degenerate tail is needed. Changing an attribute's count after enabling DISABLES interop for that mesh (with a warning on stderr) rather than tearing down memory CUDA has imported.
         
         on_frame() runs INSIDE render(), once per frame while the mesh is visible, post-fence and pre-record, and MUST BE SYNCHRONOUS: every kernel writing the exported buffers has to have completed when it returns (wp.synchronize_device(device) as the last statement). That host ordering is the only thing sequencing the foreign write against the frame that reads it — there is no shared semaphore.
         
