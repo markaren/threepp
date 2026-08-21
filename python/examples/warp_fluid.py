@@ -23,8 +23,23 @@ nothing per frame.
     python warp_fluid.py --points        # draw particles instead of the surface
     python warp_fluid.py --probe 3       # print an energy audit, no window
     python warp_fluid.py --iters 4 --rho 0   # the old plain-Jacobi solver
+    python warp_fluid.py --obstacle part.stl # collide an arbitrary mesh, not the box
+    python warp_fluid.py --obstacle part.stl --obstacle-height 0.35 --sdf-res 128
 
 Needs a CUDA device: the zero-copy surface path is CUDA/OpenGL interop.
+
+--obstacle takes any model threepp's ModelLoader reads (.stl, .obj, .gltf/.glb,
+.dae) and collides the fluid against a signed distance field baked from it once
+at startup, in place of the analytic paddle box. A STEP/IGES solid has no
+triangles of its own, so tessellate it first -- FreeCAD, OpenCascade, CAD
+Assistant -- and pass the result. The mesh is auto-fitted (uniform scale, centred
+where the box was, resting on the floor), because CAD arrives in millimetres as
+often as metres. It sweeps like the paddle did, so the tank keeps circulating.
+
+The mesh needs to be CLOSED for the sign to mean anything: the bake asks for a
+winding number, and an open shell has none. An unclosed mesh still repels
+particles at its surface, so it looks plausible while being an unsigned field --
+check the "closed" note the bake prints.
 """
 import atexit
 import math
@@ -152,6 +167,28 @@ BX0, BX1 = 0.15, 0.42
 BZ0, BZ1 = -0.30, 0.30
 BY1 = 0.26
 
+# --obstacle PATH swaps that box for an arbitrary triangle mesh, collided
+# through a signed distance field baked once at startup. The tank walls stay
+# analytic in both modes -- they are six planes and a clamp is unbeatable; only
+# the thing in the middle of the tank is worth a field.
+#
+# An SDF rather than a per-particle mesh query, because collide() runs
+# (1 + ITERATIONS) times per substep -- 8 calls per particle per frame at the
+# defaults, ~2.7M queries a frame at 340k. A BVH descent per call is a real
+# cost; a trilinear volume fetch is a texture read. The bake pays the mesh
+# query ONCE per voxel instead, which is why it can afford the expensive-but-
+# robust winding-number sign below.
+#
+# The mesh arrives through threepp's own ModelLoader and is read back out of the
+# BufferGeometry it produced, so .stl/.obj/.gltf/.glb/.dae all work and this file
+# carries no parser. A STEP/IGES solid has no triangles of its own -- it is NURBS
+# and topology -- so tessellate it first (FreeCAD, OpenCascade, CAD Assistant).
+# Millimetres are the CAD norm and metres are the tank's, so the mesh is fitted
+# rather than trusted to arrive in the right units.
+OBSTACLE = cli_arg("--obstacle", "", str)
+OBSTACLE_H = cli_arg("--obstacle-height", 0.0, float)  # 0 = fit the box's envelope
+SDF_RES = cli_arg("--sdf-res", 64, int)                # voxels on the long axis
+
 # The dam-break column occupies [X0, FILL_X1] and collapses in the first second.
 # After that the paddle keeps the water moving forever: a recycling spout was
 # tried first and could not work, because a spout dense enough to surface under
@@ -184,10 +221,50 @@ def w_spiky_grad(rv: wp.vec3, r: float) -> wp.vec3:
 
 
 @wp.func
-def collide(p: wp.vec3, bx0: float, bx1: float) -> wp.vec3:
+def collide(p: wp.vec3, bx0: float, bx1: float, vol: wp.uint64, ox: float,
+            blo: wp.vec3, bhi: wp.vec3) -> wp.vec3:
+    # The tank is six planes, so a clamp is the whole of it in both modes.
     x = wp.min(wp.max(p[0], X0 + WALL_EPS), X1 - WALL_EPS)
     z = wp.min(wp.max(p[2], Z0 + WALL_EPS), Z1 - WALL_EPS)
     y = wp.max(p[1], FLOOR + WALL_EPS)
+    if vol != wp.uint64(0):
+        # --obstacle: one trilinear fetch yields distance AND gradient. The field
+        # is baked in the mesh's REST frame, so the paddle sweep is undone on the
+        # query point rather than re-baked -- a rigid translation is a subtract.
+        # vol == 0 is the box path below; the branch is uniform across the launch,
+        # so it costs no divergence.
+        q = wp.vec3(x - ox, y, z)
+        # Reject against the field's own bounds before sampling it. A NanoVDB
+        # fetch is a sparse-tree descent, not a texture read, and collide() runs
+        # 8 times per particle per frame -- 2.7M fetches at the default count,
+        # the large majority of them metres from the obstacle. Five compares in
+        # front of that is worth it: on the 337k bench (RTX 4060 laptop, a torus
+        # filling most of the tank) sim goes 63.6 -> 29.7 ms, against 30.8 for
+        # the analytic box -- an arbitrary mesh collides for the price of the
+        # block it replaced. Outside the grid the sample returns bg_value
+        # anyway, so the reject changes no result: same triangles, same picture.
+        if (q[0] > blo[0] and q[0] < bhi[0] and q[1] < bhi[1]
+                and q[2] > blo[2] and q[2] < bhi[2]):
+            g = wp.vec3()
+            d = wp.volume_sample_grad_f(vol, wp.volume_world_to_index(vol, q),
+                                        wp.Volume.LINEAR, g)
+            if d < WALL_EPS:
+                gl = wp.length(g)
+                if gl > 1.0e-8:
+                    # Push out along the surface normal to the same standoff the
+                    # box path keeps. The gradient comes back in INDEX space, but
+                    # the voxels are cubic, so normalising recovers the world
+                    # direction.
+                    q = q + g * ((WALL_EPS - d) / gl)
+                    # Re-clamp to the tank. A particle wedged between the mesh and
+                    # a wall would otherwise be pushed straight through the wall,
+                    # and leaked fluid never comes back; ending up slightly inside
+                    # the obstacle is recoverable, because the next iteration
+                    # pushes out again. Deliberately the lesser of two failures.
+                    x = wp.min(wp.max(q[0] + ox, X0 + WALL_EPS), X1 - WALL_EPS)
+                    y = wp.max(q[1], FLOOR + WALL_EPS)
+                    z = wp.min(wp.max(q[2], Z0 + WALL_EPS), Z1 - WALL_EPS)
+        return wp.vec3(x, y, z)
     # obstacle box: if inside, eject through the face of least penetration
     ax0 = bx0 - WALL_EPS
     ax1 = bx1 + WALL_EPS
@@ -218,14 +295,15 @@ def collide(p: wp.vec3, bx0: float, bx1: float) -> wp.vec3:
 def predict(x: wp.array(dtype=wp.vec3),
             v: wp.array(dtype=wp.vec3),
             xp: wp.array(dtype=wp.vec3),
-            dt: float, bx0: float, bx1: float):
+            dt: float, bx0: float, bx1: float, vol: wp.uint64, ox: float,
+            blo: wp.vec3, bhi: wp.vec3):
     i = wp.tid()
     vi = v[i] + wp.vec3(0.0, GRAVITY, 0.0) * dt
     sp = wp.length(vi)
     if sp > V_MAX:
         vi = vi * (V_MAX / sp)
     v[i] = vi
-    xp[i] = collide(x[i] + vi * dt, bx0, bx1)
+    xp[i] = collide(x[i] + vi * dt, bx0, bx1, vol, ox, blo, bhi)
 
 
 @wp.kernel
@@ -275,6 +353,10 @@ def solve_delta(xp: wp.array(dtype=wp.vec3),
                 prev: wp.array(dtype=wp.vec3),
                 bx0: float,
                 bx1: float,
+                vol: wp.uint64,
+                ox: float,
+                blo: wp.vec3,
+                bhi: wp.vec3,
                 out: wp.array(dtype=wp.vec3)):
     # spatially-sorted thread order: neighbour gathers hit cache.
     # This beats caching an explicit neighbour list, which was tried
@@ -318,7 +400,7 @@ def solve_delta(xp: wp.array(dtype=wp.vec3),
         # 12-iteration converged reference, which is as calm as the baseline
         # -- the heat was overshoot noise, not recovered physics, and it
         # entered at the surface.
-        out[i] = collide(p + d, bx0, bx1)
+        out[i] = collide(p + d, bx0, bx1, vol, ox, blo, bhi)
     else:
         # Re-clamp the TOTAL move (Jacobi step + extrapolation) to MAX_DP so
         # an accelerated iterate never travels farther than plain Jacobi
@@ -329,7 +411,7 @@ def solve_delta(xp: wp.array(dtype=wp.vec3),
         el = wp.length(e)
         if el > MAX_DP:
             e = e * (MAX_DP / el)
-        out[i] = collide(p + e, bx0, bx1)
+        out[i] = collide(p + e, bx0, bx1, vol, ox, blo, bhi)
 
 
 @wp.kernel
@@ -552,10 +634,176 @@ def expand(verts: wp.array(dtype=wp.vec3),
         out_nrm[t * 3 + c] = n
 
 
+# --- the --obstacle mesh ------------------------------------------------------
+
+
+def load_obstacle_mesh(path):
+    """Anything ModelLoader handles -> (M, 3, 3) float32 triangles, world space.
+
+    The triangles are read back out of the loaded BufferGeometry rather than
+    re-parsed here, so every format the library already supports arrives the
+    same way -- .stl, .obj, .gltf/.glb, .dae -- instead of this example growing
+    a parser per format. A multi-part assembly comes through as the assembly:
+    each node's world matrix is baked in, so a .glb's nested parts land where
+    they belong instead of collapsing onto the origin.
+
+    A STEP/IGES solid carries no triangles of its own -- it is NURBS and
+    topology -- so tessellate it first (FreeCAD, OpenCascade, CAD Assistant)
+    and pass what that writes out.
+    """
+    root = tp.ModelLoader().load(path)
+    if root is None:
+        raise SystemExit(f"--obstacle: threepp could not load {path}")
+    root.update_matrix_world(True)
+    parts = []
+
+    def visit(node):
+        # Meshes only. Points and Line carry a geometry too, and their
+        # "triangles" would be nonsense read three vertices at a time.
+        if not isinstance(node, tp.Mesh):
+            return
+        pos = node.geometry.get_attribute("position")
+        if pos is None or len(pos) < 3:
+            return
+        idx = node.geometry.get_index()
+        v = pos if idx is None else pos[idx]          # STL is already a soup
+        m = node.matrix_world.to_numpy()
+        parts.append((v @ m[:3, :3].T + m[:3, 3]).reshape(-1, 3, 3))
+
+    root.traverse(visit)
+    if not parts:
+        raise SystemExit(f"--obstacle: {path} loaded but carries no triangles")
+    return np.concatenate(parts).astype(np.float32)
+
+
+def fit_obstacle(tris, target_h):
+    """Scale/place a mesh so it sits on the tank floor where the box was.
+
+    CAD arrives in millimetres about as often as metres, and a STEP export is
+    positioned wherever the assembly origin happened to be -- so fit rather than
+    trust. Uniform scale, always: an SDF is only a distance field under a rigid
+    plus uniform map, so anisotropic scaling would make every baked distance lie.
+
+    The default matches the box's HEIGHT, since "as tall as the block it
+    replaces" is what puts the obstacle in the water rather than under it -- but
+    with the footprint clamped, because height alone is wrong for anything flat:
+    a torus 248 mm across and 68 mm tall scaled to the box's 0.26 m comes out
+    0.95 m across and spans the tank wall to wall. The clamp keeps the sweep
+    inside the tank in x and leaves the water somewhere to go in z. Fitting to
+    the box's envelope instead was tried and is worse the other way -- it makes
+    a flat part 74 mm tall, which simply drowns.
+    """
+    flat = tris.reshape(-1, 3)
+    lo, hi = flat.min(axis=0), flat.max(axis=0)
+    size = np.maximum(hi - lo, 1e-9)
+    if target_h > 0.0:
+        s = float(target_h / size[1])          # explicit: the caller's business
+    else:
+        s = float(min(BY1 / size[1],                                   # as tall as the box
+                      (0.9 * (X1 - X0) - 2.0 * PADDLE_AMP) / size[0],  # sweep stays inside
+                      0.8 * (Z1 - Z0) / size[2]))                      # leave a flow gap
+    out = (flat - lo) * s
+    out[:, 0] += 0.5 * (BX0 + BX1) - 0.5 * size[0] * s   # centred in x on the box
+    out[:, 2] += 0.5 * (BZ0 + BZ1) - 0.5 * size[2] * s   # ... and in z
+    out[:, 1] += FLOOR                                    # resting on the floor
+    return out.reshape(-1, 3, 3).astype(np.float32), s, size
+
+
+@wp.kernel
+def sample_sdf_kernel(vol: wp.uint64, pts: wp.array(dtype=wp.vec3),
+                      out: wp.array(dtype=float)):
+    i = wp.tid()
+    out[i] = wp.volume_sample_f(vol, wp.volume_world_to_index(vol, pts[i]),
+                                wp.Volume.LINEAR)
+
+
+@wp.kernel
+def bake_sdf_kernel(mid: wp.uint64, out: wp.array3d(dtype=float),
+                    lo: wp.vec3, h: float, far: float):
+    i, j, k = wp.tid()
+    p = lo + wp.vec3(float(i) * h, float(j) * h, float(k) * h)
+    # Winding-number sign, not the pseudonormal one: a tessellated CAD solid is
+    # a triangle SOUP with duplicated vertices and no adjacency, and it is
+    # routinely a little bit open at the seams. The winding number needs neither
+    # adjacency nor watertightness to get inside/outside right. It is the
+    # expensive query, which is affordable precisely because this runs once.
+    q = wp.mesh_query_point_sign_winding_number(mid, p, far)
+    if q.result:
+        out[i, j, k] = q.sign * wp.length(p - wp.mesh_eval_position(mid, q.face, q.u, q.v))
+    else:
+        out[i, j, k] = far
+
+
+def bake_sdf(tris, res, dev):
+    """Mesh -> NanoVDB signed distance volume, in the mesh's rest frame."""
+    flat = tris.reshape(-1, 3)
+    lo, hi = flat.min(axis=0), flat.max(axis=0)
+    voxel = float(max(hi - lo) / max(res, 8))
+    # Pad so the field carries a usable band OUTSIDE the surface: collide() only
+    # acts within WALL_EPS of it, but the gradient at that distance must be real
+    # and not clamped against the grid edge.
+    pad = max(4.0 * voxel, 2.0 * WALL_EPS)
+    g_lo = lo - pad
+    dims = np.maximum(np.ceil((hi + pad - g_lo) / voxel).astype(int) + 1, 2)
+    far = float(np.linalg.norm(hi - lo) + pad)
+
+    mesh = wp.Mesh(points=wp.array(flat, dtype=wp.vec3, device=dev),
+                   indices=wp.array(np.arange(len(flat), dtype=np.int32), device=dev),
+                   support_winding_number=True)
+    grid = wp.zeros(tuple(dims), dtype=float, device=dev)
+    wp.launch(bake_sdf_kernel, dim=tuple(dims), device=dev,
+              inputs=[mesh.id, grid, wp.vec3(*g_lo.tolist()), voxel, far])
+    # bg_value keeps a query that falls outside the grid reading as "far
+    # outside", so a particle that leaves the padded band simply never collides
+    # rather than sampling garbage.
+    field = grid.numpy()
+    # A closed mesh has an interior, so the field must go negative somewhere. If
+    # it never does, the winding number found nothing to be inside of -- an open
+    # shell, or a surface with inconsistent facet winding. Worth saying out loud
+    # because the failure is quiet: an UNSIGNED field still repels particles at
+    # the surface, so the fluid looks right while nothing can ever be pushed back
+    # OUT of the obstacle. (Cost me a debugging round on a hand-generated torus
+    # whose quads were wound inconsistently.)
+    closed = bool((field < 0.0).any())
+    vol = wp.Volume.load_from_numpy(field, min_world=tuple(g_lo.tolist()),
+                                    voxel_size=voxel, bg_value=far)
+    g_hi = g_lo + (dims - 1) * voxel
+    return vol, voxel, dims, mesh, g_lo, g_hi, closed
+
+
 # --- particle initialisation --------------------------------------------------
 
 wp.init()
 device = wp.get_preferred_device()
+
+obstacle_tris = None
+obstacle_vol = None
+OBSTACLE_VOL_ID = wp.uint64(0)
+OBSTACLE_LO = wp.vec3(0.0, 0.0, 0.0)   # unused on the box path
+OBSTACLE_HI = wp.vec3(0.0, 0.0, 0.0)
+if OBSTACLE:
+    if not os.path.exists(OBSTACLE):
+        raise SystemExit(f"--obstacle: no such file: {OBSTACLE}")
+    _raw_tris = load_obstacle_mesh(OBSTACLE)
+    obstacle_tris, _fit_s, _raw_size = fit_obstacle(_raw_tris, OBSTACLE_H)
+    _t0 = time.perf_counter()
+    obstacle_vol, _vox, _dims, _obstacle_mesh, _glo, _ghi, _closed = bake_sdf(
+        obstacle_tris, SDF_RES, device)
+    OBSTACLE_VOL_ID = obstacle_vol.id
+    OBSTACLE_LO = wp.vec3(*_glo.tolist())
+    OBSTACLE_HI = wp.vec3(*_ghi.tolist())
+    wp.synchronize_device(device)
+    _fit_size = _raw_size * _fit_s
+    print(f"obstacle: {os.path.basename(OBSTACLE)}  {len(_raw_tris):,} tris  "
+          f"raw {_raw_size[0]:.4g} x {_raw_size[1]:.4g} x {_raw_size[2]:.4g} "
+          f"-> x{_fit_s:.4g} -> {_fit_size[0]:.3f} x {_fit_size[1]:.3f} x "
+          f"{_fit_size[2]:.3f} m")
+    print(f"          sdf {_dims[0]}x{_dims[1]}x{_dims[2]} @ {_vox * 1000:.2f} mm/voxel, "
+          f"baked in {(time.perf_counter() - _t0) * 1000:.0f} ms, "
+          f"{'closed (signed)' if _closed else 'NOT CLOSED -- unsigned'}")
+    if not _closed:
+        print("          warning: no interior found, so the field cannot push a particle")
+        print("                   back OUT of the mesh. Surface repulsion still works.")
 
 nx = int((FILL_X1 - X0 - 2.0 * WALL_EPS) / D)
 nz = int((Z1 - Z0 - 2.0 * WALL_EPS) / D)
@@ -566,10 +814,19 @@ p0 = np.stack([
     FLOOR + WALL_EPS + (iy.ravel() + 0.5) * D,
     Z0 + WALL_EPS + (iz.ravel() + 0.5) * D,
 ], axis=-1).astype(np.float32)
-# drop the particles that would start inside the obstacle
-keep = ~((p0[:, 0] > BX0 - WALL_EPS) & (p0[:, 0] < BX1 + WALL_EPS) &
-         (p0[:, 2] > BZ0 - WALL_EPS) & (p0[:, 2] < BZ1 + WALL_EPS) &
-         (p0[:, 1] < BY1 + WALL_EPS))
+# drop the particles that would start inside the obstacle. Seeding happens at
+# t = 0, where the paddle offset is sin(0) == 0, so the rest frame the field was
+# baked in IS the world frame here -- no offset to undo.
+if obstacle_vol is not None:
+    _q = wp.array(p0, dtype=wp.vec3, device=device)
+    _d = wp.zeros(len(p0), dtype=float, device=device)
+    wp.launch(sample_sdf_kernel, dim=len(p0), device=device,
+              inputs=[OBSTACLE_VOL_ID, _q, _d])
+    keep = _d.numpy() >= WALL_EPS
+else:
+    keep = ~((p0[:, 0] > BX0 - WALL_EPS) & (p0[:, 0] < BX1 + WALL_EPS) &
+             (p0[:, 2] > BZ0 - WALL_EPS) & (p0[:, 2] < BZ1 + WALL_EPS) &
+             (p0[:, 1] < BY1 + WALL_EPS))
 p0 = p0[keep]
 rng = np.random.default_rng(17)
 p0 = (p0 + rng.uniform(-0.06 * D, 0.06 * D, p0.shape)).astype(np.float32)
@@ -630,9 +887,14 @@ sim_time = 0.0
 frame_no = 0
 
 
+def paddle_offset(t):
+    """Sweep displacement of the paddle along x at time t."""
+    return PADDLE_AMP * math.sin(2.0 * math.pi * t / PADDLE_PERIOD)
+
+
 def paddle_extent(t):
-    """World x-extent of the paddle at time t."""
-    c = PADDLE_AMP * math.sin(2.0 * math.pi * t / PADDLE_PERIOD)
+    """World x-extent of the paddle box at time t."""
+    c = paddle_offset(t)
     return BX0 + c, BX1 + c
 
 
@@ -642,7 +904,10 @@ def sim_step():
     dt = DT / SUBSTEPS
     for _ in range(SUBSTEPS):
         bx0, bx1 = paddle_extent(sim_time)
-        wp.launch(predict, dim=N, device=device, inputs=[x, v, xp, dt, bx0, bx1])
+        ox = paddle_offset(sim_time)
+        wp.launch(predict, dim=N, device=device,
+                  inputs=[x, v, xp, dt, bx0, bx1, OBSTACLE_VOL_ID, ox,
+                          OBSTACLE_LO, OBSTACLE_HI])
         grid.build(points=xp, radius=H)
         # Three-buffer rotation instead of a ping-pong: solve_delta reads the
         # current iterate AND the previous one (for the Chebyshev extrapolation)
@@ -668,7 +933,9 @@ def sim_step():
                       inputs=[cur, grid.id, RHO0, EPS_CFM, lam])
             wp.launch(solve_delta, dim=N, device=device,
                       inputs=[cur, lam, grid.id, RHO0, W_DQ, S_CORR_K,
-                              JACOBI_RELAX, OMEGAS[k], prev, bx0, bx1, out])
+                              JACOBI_RELAX, OMEGAS[k], prev, bx0, bx1,
+                              OBSTACLE_VOL_ID, ox, OBSTACLE_LO,
+                              OBSTACLE_HI, out])
             if prev is not cur:
                 spare.append(prev)
             prev, cur = cur, out
@@ -940,8 +1207,20 @@ block_mat = tp.MeshStandardMaterial()
 block_mat.color = 0x6d7480
 block_mat.roughness = 0.35
 block_mat.metalness = 0.45
-block = tp.Mesh(tp.BoxGeometry(BX1 - BX0, BY1, BZ1 - BZ0), block_mat)
-block.position.set(0.5 * (BX0 + BX1), 0.5 * BY1, 0.5 * (BZ0 + BZ1))
+if obstacle_tris is not None:
+    # The SAME triangles the field was baked from, so what you see is what the
+    # fluid hits -- the box path duplicates its geometry in two places (a
+    # BoxGeometry here, six constants in collide) and the two can drift.
+    # Already in world coordinates from fit_obstacle, so the mesh sits at the
+    # origin and only the paddle sweep moves it.
+    _og = tp.BufferGeometry()
+    _og.set_attribute("position", obstacle_tris.reshape(-1, 3))
+    _og.compute_vertex_normals()
+    block = tp.Mesh(_og, block_mat)
+    block.position.set(0.0, 0.0, 0.0)
+else:
+    block = tp.Mesh(tp.BoxGeometry(BX1 - BX0, BY1, BZ1 - BZ0), block_mat)
+    block.position.set(0.5 * (BX0 + BX1), 0.5 * BY1, 0.5 * (BZ0 + BZ1))
 block.cast_shadow = True
 block.receive_shadow = True
 scene.add(block)
@@ -1255,7 +1534,10 @@ def refresh_surface():
         geometry.update_attribute("color", col.numpy())
         return N
     bx0, bx1 = paddle_extent(sim_time)
-    block.position.x = 0.5 * (bx0 + bx1)
+    # The mesh's vertices already carry its rest position, so it tracks the raw
+    # sweep offset; the box's geometry is centred on its own origin, so it
+    # tracks the swept centre.
+    block.position.x = (bx0 - BX0) if obstacle_tris is not None else 0.5 * (bx0 + bx1)
     ntris = build_surface()
     write_surface(ntris)
     return ntris
