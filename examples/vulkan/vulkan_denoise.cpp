@@ -108,6 +108,8 @@ int main(int argc, char** argv) {
     // soft local-shadow triage for the deferred denoised-shadow channel.
     std::string shotPath;
     int   shotFrames = 150, shotFrame = 0;
+    float camX = 0.f, camY = 3.5f, camZ = 8.f;// --cam x y z: capture from elsewhere (distance repros)
+    int   optMsaa = 0;// --msaa N: G-buffer MSAA (2|4) for captures
     float optLightRad = -1.f;
     float fogDensity  = 0.f;// --fog d: FogExp2 medium (froxel-volumetrics triage: beams + point-light glow)
     int   ringLights  = 0;// --lights N: ring of N extra colored point lights (clustered-lighting triage)
@@ -122,6 +124,12 @@ int main(int argc, char** argv) {
         const std::string a = argv[i];
         if (a == "--shot" && i + 1 < argc) shotPath = argv[++i];
         else if (a == "--frames" && i + 1 < argc) shotFrames = std::atoi(argv[++i]);
+        else if (a == "--msaa" && i + 1 < argc) optMsaa = std::atoi(argv[++i]);
+        else if (a == "--cam" && i + 3 < argc) {
+            camX = static_cast<float>(std::atof(argv[++i]));
+            camY = static_cast<float>(std::atof(argv[++i]));
+            camZ = static_cast<float>(std::atof(argv[++i]));
+        }
         else if (a == "--lightrad" && i + 1 < argc) optLightRad = static_cast<float>(std::atof(argv[++i]));
         else if (a == "--lights" && i + 1 < argc) ringLights = std::atoi(argv[++i]);
         else if (a == "--fog" && i + 1 < argc) fogDensity = static_cast<float>(std::atof(argv[++i]));
@@ -137,6 +145,7 @@ int main(int argc, char** argv) {
     Canvas canvas("Vulkan Deferred - Denoiser Showcase", {{"vsync", false}});
 
     VulkanRenderer renderer(canvas);
+    if (optMsaa > 1) renderer.setGbufferMsaa(static_cast<uint32_t>(optMsaa));
     renderer.outputColorSpace    = ColorSpace::sRGB;
 
     // AAA post stack: punchy HDR bloom + post-TAA RCAS sharpen (live-tunable
@@ -215,7 +224,7 @@ int main(int argc, char** argv) {
 
     // ---- Camera ----
     PerspectiveCamera camera(45.f, canvas.aspect(), 0.1f, 100.f);
-    camera.position.set(0.f, 3.5f, 8.f);
+    camera.position.set(camX, camY, camZ);
     OrbitControls controls{camera, canvas};
     controls.target.set(0.f, 2.f, 0.f);
     controls.update();
