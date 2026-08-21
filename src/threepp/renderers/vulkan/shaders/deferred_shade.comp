@@ -1319,21 +1319,23 @@ void main() {
         // threshold aligns with specNEET's upper edge so the handoff is exact).
         const float kReflStochastic = 0.25;
         uint reflSeed = pcgHash(uint(px.x) + pcgHash(uint(px.y) + pcgHash(pc.frame * 2654435761u + 7u)));
-        // MOTION GUARD — a single per-frame GGX-importance sample only resolves once
-        // the temporal accumulation has averaged many frames of it. A glossy panel
-        // that is SCREEN-stationary but WORLD-moving (car paint under a chase / POV
-        // cam: the reflected trees, road and sky sweep past every frame) gets a SHORT
-        // reflection history — reflReproject folds camera world-motion into its cap
-        // and the content-antilag collapses it further — so the 1-spp lobe sample
-        // never converges and boils as F0-tinted speckle (worst on saturated coloured
-        // metals like rally-red paint). There the DETERMINISTIC mirror ray is the
-        // better estimator: identical every frame (zero sample noise), with the
-        // reflection denoise's roughness-scaled blur supplying the gloss and the
-        // content-antilag tracking the moving reflection. The stochastic lobe stays
-        // for SETTLED surfaces, whose long history converges it (parallax-correct
-        // roughening). The motion proxy mirrors reflReproject's mvLen (screen-space
-        // surface motion OR camera world motion) so the estimator choice matches the
-        // history the pixel will actually receive.
+        // MOTION proxy (mirrors reflReproject's mvLen: screen-space surface
+        // motion OR camera world motion) — drives the miss-LOD floor and the
+        // radiance clamp below. It USED to also swap the GGX sample for the
+        // deterministic mirror ray while moving (the boil guard for a SCREEN-
+        // stationary, WORLD-moving glossy panel whose short history never
+        // converged the 1-spp lobe). That made every rough metal a MIRROR
+        // whenever the camera moved: the gloss filter's widening is driven by
+        // history length and residual variance, and a 1-frame deterministic
+        // history has neither, so a roughness-0.4 steel bed showed a crisp
+        // reflection of the object on it during an orbit and relaxed to its
+        // glossy self over the next 16 frames at rest — two different
+        // materials depending on whether you were dragging. The rough band
+        // now keeps the stochastic sample in BOTH states (same estimator, so
+        // stopping is a seamless convergence, not a material change) and the
+        // gloss filter widens to the lobe while history is short
+        // (deferred_refl_filter.comp, stochT); the motion-path clamp below
+        // bounds the bright-source speckle that the guard worried about.
         const vec2  reflMv     = texture(gbufMotionTex, paneToPhys(gbufMotionTex, uv)).rg;
         const float reflCamNdc = pc.camRot * 1.7 + 1.7 * pc.camDelta / max(length(worldPos - camPos), 0.25);
         const bool  reflMoving = max(length(reflMv), reflCamNdc) > 0.004;
@@ -1349,7 +1351,7 @@ void main() {
         const float missLod = max(roughness * maxLod,
                                   reflMoving ? min(2.0, maxLod) * smoothstep(0.02, 0.10, roughness)
                                              : 0.0);
-        vec3 Rd = (roughness < kReflStochastic || reflMoving)
+        vec3 Rd = (roughness < kReflStochastic)
                       ? R : sampleGGXReflection(V, N, roughness, reflSeed);
         // BELOW-HORIZON guard: plain NDF sampling (no VNDF) reflects under the
         // surface for a good fraction of samples at grazing view / high roughness.
@@ -1379,17 +1381,19 @@ void main() {
         // geometry hit → its distance.
         reflHitT = max(gTraceHitT, 0.0);
         gReflEmitterScale = 1.0;
-        // Roughness-aware reflection clamp (moving/deterministic path only). A glossy
-        // surface integrates a bright point source — the sun, a sky-gap between trees —
-        // over its WHOLE BRDF lobe, so the peak is spread thin and dim. The stochastic
-        // lobe (settled surfaces) does that for free, but the DETERMINISTIC mirror ray
-        // used while MOVING reflects the source at FULL radiance and the gloss blur only
-        // smears it into a bright BLOB (the "env-map-probe" speckles on the moving car /
-        // floor). Cap the reflected radiance toward a glossy ceiling as roughness rises:
-        // near-mirror keeps the loose clamp (a sharp bright sun reflection IS correct);
-        // glossy paint dims bright sources to a lobe-appropriate peak. min() never loosens
-        // a tighter user fireflyClamp and stays 1e30-sentinel-safe; applied only on the
-        // deterministic path so the settled stochastic lobe integral stays unbiased.
+        // Roughness-aware reflection clamp (moving path only). A glossy surface
+        // integrates a bright point source — the sun, a sky-gap between trees —
+        // over its WHOLE BRDF lobe, so the peak is spread thin and dim. A SETTLED
+        // surface's temporal lobe does that for free; while MOVING the history is
+        // short and a single sample (mirror ray below 0.25, or a 1-spp GGX sample
+        // that happens to hit the source) carries it at FULL radiance, which the
+        // gloss blur only smears into a bright BLOB / speckle (the "env-map-probe"
+        // speckles on the moving car / floor). Cap toward a glossy ceiling as
+        // roughness rises: near-mirror keeps the loose clamp (a sharp bright sun
+        // reflection IS correct); glossy paint dims bright sources to a
+        // lobe-appropriate peak. min() never loosens a tighter user fireflyClamp
+        // and stays 1e30-sentinel-safe; moving-only so the settled lobe integral
+        // stays unbiased.
         const float reflClamp = reflMoving
                 ? min(pc.fireflyClamp, mix(30.0, 4.0, smoothstep(0.05, 0.30, roughness)))
                 : pc.fireflyClamp;

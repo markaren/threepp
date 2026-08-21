@@ -172,10 +172,20 @@ vec4 reflSVGFTemporal(vec4 cur, ivec2 px, vec2 uv, vec3 N, float viewDist, bool 
     bool valid = reflReproject(uv, N, rough, viewDist, pUv, histCap);
     // MOVING REFLECTED CONTENT — the reflected hit is a moving mesh (its content
     // slides frame-to-frame while the reflecting surface reproject tracks the
-    // surface, not the content). HARD-reset history so the moving reflection is
-    // re-estimated fresh each frame (the roughness-scaled spatial blur is the
-    // gloss); no accumulation = no ghost comb.
-    if (hitMoved) valid = false;
+    // surface, not the content). Near-MIRROR: HARD-reset history so the moving
+    // reflection is re-estimated fresh each frame (the roughness-scaled spatial
+    // blur is the gloss); no accumulation = no ghost comb. ROUGH: the lobe
+    // integrates a wide solid angle, so a frame's worth of content motion barely
+    // changes it — the same argument the camera-motion policy above makes — and
+    // a 1-sample restart every frame of a 1-spp GGX lobe is permanent grain
+    // (a deforming chrome shell on a roughness-0.4 steel bed: speckled bed for
+    // as long as the shell moved). Short cap instead (6, the fast-motion cap)
+    // and let the content-change antilag below catch genuine jumps.
+    if (hitMoved) {
+        const float viewDepT = 1.0 - smoothstep(0.05, 0.30, rough);// 1 = mirror-like
+        histCap = mix(min(histCap, 6.0), 1.0, viewDepT);
+        if (histCap < 1.5) valid = false;
+    }
     const vec4 prevR = valid ? texture(reflectPrevTex, paneToPhys(reflectPrevTex, pUv)) : vec4(0.0);
     if (valid && any(greaterThan(abs(prevR.rgb), vec3(1e6)))) valid = false;// garbage guard
     if (hold && valid) {
