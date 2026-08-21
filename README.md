@@ -8,8 +8,8 @@
 A cross-platform C++20 3D library with the high-level API of [three.js](https://github.com/mrdoob/three.js/) —
 and modern backends: portable OpenGL, and a deferred Vulkan renderer with ray-traced accents.
 
-On top of that: a scene editor, PhysX-backed robot simulation, and ground-truth
-sensor output for synthetic-data generation.
+On top of that: a scene editor, PhysX-backed robot simulation, hardware-in-the-loop
+flight, and ground-truth sensor output for synthetic-data generation.
 
 ![Real-time ray-traced FFT ocean](doc/screenshots/pt_ocean.png)
 *Real-time FFT ocean — Vulkan deferred-hybrid renderer (raster-first, with ray-traced shadows & reflections) ([examples/vulkan/vulkan_ocean.cpp](examples/vulkan/vulkan_ocean.cpp))*
@@ -31,10 +31,15 @@ lights, the frame loop, loaders and the two backends.
 
 * Two backends behind one scene graph: OpenGL 3.3 raster (the portable baseline,
   also the Emscripten/WebGL2 target) and a **deferred Vulkan renderer** (raster
-  G-buffer with ray-traced AO, GI, reflections and shadows; denoised, with TAA).
+  G-buffer with ray-traced AO, GI, reflections and shadows, participating media
+  marched per pixel; denoised, with TAA).
 * **`Ocean`** — three-cascade FFT-displaced water with foam, transmission and live
   wind. Vulkan only; on OpenGL the type
   is an inert flat plane. 
+* **`ParticleField`** — GPU particle fields whose count the CPU never walks: fire,
+  smoke, snow, rain, embers, dust and physics-coupled grains, drawn as instanced
+  meshes or lit billboards, or marched as density that fog, lighting and the
+  ray-traced sensors all see. Vulkan only.
 * PMREM environment maps.
 * **Gaussian splatting** — `SplatCloud` renders scans on both backends, with two
   loaders (INRIA `.ply`, PlayCanvas SOG) and dynamic LOD on Vulkan.
@@ -46,13 +51,25 @@ lights, the frame loop, loaders and the two backends.
   survive add/remove/hide/LOD, semantic classes, world normals and motion. `addView`
   attaches N cameras rendered from one scene build in a single submission, so a whole
   sensor rig sees the same simulated instant.
-* **Simulated sensors** — LIDAR (VLP-16/HDL-32E/OS1-64/OS0-128 patterns), depth and
-  event cameras, plus IMU, joint encoder, contact and 6-axis force/torque. Ray-traced
+* **Simulated sensors** — LIDAR (VLP-16/HDL-32E/OS1-64/OS0-128 patterns), depth, colour
+  and event cameras, plus IMU, joint encoder, contact and 6-axis force/torque. Ray-traced
   on Vulkan, rasterized on OpenGL, with the same range semantics on both. Every
-  measurement is seeded and sim-clock-stamped, so a recorded run replays bit-for-bit.
+  measurement is seeded and sim-clock-stamped; drive `VulkanRenderer::setSimTime()` from
+  the same clock and the whole frame replays bit-for-bit, beauty pass included. The one
+  exception is a `ParticleField` whose positions come from GPU PhysX — those bytes are
+  authored on the other side of a CUDA import, so gate them by tolerance, not by compare.
 * **Robots, not just rigid bodies** — PhysX reduced-coordinate articulations built from
   a URDF or xacro in one call, with joints, limits, PD drives, V-HACD concave colliders,
   and a header-only damped-least-squares IK solver. From C++ and Python.
+* **Hardware-in-the-loop flight** — a real, unmodified ArduPilot flies a threepp PhysX
+  airframe in lock-step over ArduPilot's JSON backend: one servo packet is exactly one
+  substep, and threepp's clock drives SITL's. The drone's rangefinder and proximity ring
+  feed ArduPilot's own obstacle avoidance, so the autopilot dodges simulated geometry.
+  See [doc/ardupilot_sitl.md](doc/ardupilot_sitl.md).
+* **Zero-copy CUDA interop** (Vulkan, NVIDIA) — hand a mesh's position/normal buffers to
+  an external GPU producer and let it write them in place: no host round-trip, and the
+  BLAS refits so the traced legs see the new geometry. Shipped from Python as
+  `threepp.cuda_interop`, with two NVIDIA Warp demos on it.
 * **Physical camera, lens and sensor model** — EV100 exposure from an aperture/shutter/ISO
   triplet, photometric light units, OpenCV-convention intrinsics, Brown-Conrady and fisheye
   distortion applied to both the image and the labels, and electron-domain sensor noise.
@@ -99,13 +116,20 @@ A few limits worth knowing before you start:
   based — shadows, reflections and GI all trace, with no raster fallback — and MoltenVK implements
   none of the KHR ray-tracing extensions. It still compiles there, so it is usable as a compile
   check; at runtime it fails at device selection with an explanation. Use `GLRenderer` on macOS.
-* Gaussian splat clouds are a backdrop, not a simulation asset: they cast no shadows, appear in
-  no reflection, contribute nothing to GI, are invisible to the ray-traced sensors, and are not
-  serialized.
+* Gaussian splat clouds are a backdrop first. Nothing puts a splat into an acceleration
+  structure, so they cast no shadows, contribute nothing to GI and are invisible to the
+  ray-traced sensors — and neither a `SplatCloud` nor a `ParticleField` is serialized into a
+  scene document. There are two narrow doors out of that, both opt-in: each cloud bakes a small
+  density/radiance volume that the water, glass and glossy *reflection* legs march (a stand-in
+  for the cloud, primary view only), and `splats::bakeSurface` fuses the depth AOV into a
+  triangle mesh that PhysX can collide and — behind `setSensorOnlySurfaces`, off by default —
+  the sensors can perceive. See [doc/vulkan_splats.md](doc/vulkan_splats.md).
 * The editor is tested against OpenGL; its Vulkan view pane is best-effort. See the known-limitations
   list in [doc/editor.md](doc/editor.md).
-* GPU code paths are not covered by CI — the runners have no device. Golden-image tests are a local
-  pre-push check.
+* CI runners have no GPU, but the Vulkan backend is at least *executed* there: a lavapipe
+  (Mesa software rasterizer) job runs it under the validation layers and fails the build on any
+  validation error. That gates spec-cleanliness, not pixels — golden images are references
+  captured on one GPU and remain a local pre-push check.
 
 ### What works?
 
@@ -123,30 +147,41 @@ A few limits worth knowing before you start:
   over as-is ([examples/postprocessing](examples/postprocessing))
 * Environment maps, including PMREM
 * Animation, morph targets, Bones
-* Controls [Orbit, Fly, Drag, Transform]
+* Controls [Orbit, Trackball, Fly, Drag, Transform]
 * Water and Sky shaders
 * Built-in text rendering and font loading [typeface.json, TTF]
 * Scene serialization — `ObjectExporter`/`ObjectLoader` read and write three.js
   "Object" JSON (metadata 4.5) deterministically, with the option to *reference*
-  source models and textures instead of inlining them. Documents authored by the
-  three.js editor load as-is.
+  source models and textures instead of inlining them — or of writing the whole
+  project as one `.tpz` archive: an uncompressed zip holding that same `scene.json`
+  beside the images and geometry buffers its urls point at, textures kept as the
+  bytes they arrived as. The loader sniffs archive-vs-directory, so it is packaging
+  rather than a second format. Documents authored by the three.js editor load as-is.
 
 **Beyond three.js** — what this library adds:
 
 * Gaussian splatting — `SplatCloud` with two scan loaders and a Vulkan compute
-  tile rasterizer ([doc/vulkan_splats.md](doc/vulkan_splats.md))
-* Simulated sensors — LIDAR, depth and event cameras, IMU, joint encoder, contact,
-  force/torque
+  tile rasterizer, plus `splats::bakeSurface` to fuse a scan into a triangle
+  surface physics and sensors can use ([doc/vulkan_splats.md](doc/vulkan_splats.md))
+* Simulated sensors — LIDAR, depth, colour and event cameras, IMU, joint encoder,
+  contact, force/torque
 * PhysX physics — rigid bodies, reduced-coordinate articulations, joints, soft
-  bodies, vehicles, and V-HACD convex decomposition
+  bodies, PBD particles (GPU-solved granular piles and fluids), character
+  controllers, vehicles, and V-HACD convex decomposition
 * Automatic mesh LOD (Vulkan, on by default), GPU occlusion culling, and NVIDIA
   DLSS / AMD FSR 3.1 temporal upscaling
 * Procedural content, all asset-free and first-party — quadtree-LOD terrain, trees,
-  grass, conveyor systems, a parametric log cabin
+  grass, road networks, conveyor systems, bird flocks, GPU particle fields (fire,
+  smoke, snow, rain, dust), a parametric log cabin
 * Real-world terrain — a documented "region pack" format plus an included Python tool
   that builds one from Norwegian national open data (Kartverket elevation, NVDB roads,
   OSM footprints with building heights)
-* Basic Audio support using [miniaudio](https://miniaud.io/docs/manual/index.html)
+* Audio via [miniaudio](https://miniaud.io/docs/manual/index.html) — playback,
+  positional sources, a listener
+* Ray-traced acoustics — `AcousticScene` traces occlusion and transmission through
+  scene geometry (its own BVH; no PhysX required) and probes the room for an Eyring
+  RT60 estimate; sources get a low-pass occlusion splice and a shared reverb bus.
+  Authorable per mesh in the editor, and live during Play
 * Generic model loader based on [Assimp](https://github.com/assimp/assimp)
   (requires the assimp package — see [Optional downstream dependencies](#optional-downstream-dependencies))
 * Easy integration with [Dear ImGui](https://github.com/ocornut/imgui)
@@ -157,10 +192,12 @@ Two binaries build alongside the library (`THREEPP_BUILD_EDITOR`, on by default 
 top-level GLFW build):
 
 * **`threepp_editor`** — a scene editor: viewport, hierarchy, inspector, undo/redo, and a
-  Play mode backed by PhysX. Scenes save as ordinary three.js Object JSON with everything
-  editor-specific (physics, sensors, scripts, joints, vehicles, splines, conveyors, sound)
-  in `userData`, so a saved document opens and runs in a plain threepp program with no
-  editor present. Python behaviour scripts attach to objects Unity-style.
+  Play mode backed by PhysX. Scenes save as ordinary three.js Object JSON — or as a single-file
+  `.tpz` archive — with everything editor-specific (physics, sensors, scripts, joints, vehicles,
+  splines, conveyors, terrain, trees, characters, bird flocks, particle fields, granular piles,
+  acoustic surfaces, splat surfaces, sound) in `userData`, so a saved document opens and runs in
+  a plain threepp program with no editor present. Python behaviour scripts attach to objects
+  Unity-style.
   Also shipped prebuilt on PyPI for Windows — `pip install threepp-editor`, then run
   `threepp-editor`. See [doc/editor.md](doc/editor.md).
 * **`threepp_player`** — the same play runtime with no editing machinery: headless,
@@ -185,6 +222,11 @@ Yay!
 `threepp/threepp.hpp` is a convenience umbrella over the three.js-equivalent core. Everything under
 `extras/`, `postprocessing/`, `splats/` and the newer objects and loaders is included explicitly —
 if a feature listed above seems missing, check its own header first.
+
+One subtree is deliberately *not* installed: the editor/player document model and play sessions
+(`threepp/extras/editor/...`) live in `editor-core/` behind the static target `threepp_editor_core`,
+because several of those headers change meaning under macros — PhysX, V-HACD — that the installed
+library cannot own. Link that target if you want to drive play sessions yourself.
 
 
 ### A good fit for AI-assisted development
@@ -307,21 +349,33 @@ renderer.save_frame("out.png")
 ```
 
 Beyond the scene graph, the module exposes the Vulkan AOVs as typed NumPy arrays (metric depth,
-instance and semantic ids, normals, motion), PhysX articulations, and `threepp.rl` — a
-GPU-vectorized RL stack (`GpuSim`, `VecTask`, `PPO`) with no rl_games / rsl_rl / Gym dependency,
-reading and writing PhysX state directly as CUDA tensors. Probe what a given build has with
-`tp.HAS_VULKAN` / `tp.HAS_PHYSX` / `tp.HAS_IMGUI` / `tp.HAS_AUDIO`.
+instance and semantic ids, normals, motion), PhysX articulations, `threepp.cuda_interop` (hand a
+mesh's vertex buffers to a CUDA producer and let it write them in place — NVIDIA only), and
+`threepp.rl` — a GPU-vectorized RL stack (`GpuSim`, `VecTask`, `PPO`) with no rl_games / rsl_rl /
+Gym dependency, reading and writing PhysX state directly as CUDA tensors. Probe what a given build
+has with `tp.HAS_VULKAN` / `tp.HAS_PHYSX` / `tp.HAS_IMGUI` / `tp.HAS_AUDIO`.
 
-Extras: `threepp[rl]` adds torch for the PPO trainer, and `threepp[editor]` pulls the
-editor package (Windows). Building the wheel yourself from a checkout gives the OpenGL
-backend by default — unlike the published wheels, Vulkan and PhysX have to be pointed
+**No display required.** A `headless=True` canvas needs no window system at all: the Vulkan
+renderer creates its surface through `VK_EXT_headless_surface`, and on Linux with no `DISPLAY`
+the canvas skips the window system entirely. That is exactly the compute-only cloud-GPU setup —
+Colab, EC2 — where the synthetic-data path (`render_aov`, `read_depth`, `read_rgb_pixels`) runs
+unmodified. Where the driver lacks the extension (NVIDIA on *Windows*), it falls back to a hidden
+window and says so.
+
+Extras: `threepp[rl]` adds torch for the PPO trainer, `threepp[editor]` pulls the editor package
+(Windows), and `threepp[full]` takes both. Building the wheel yourself from a checkout gives the
+OpenGL backend by default — unlike the published wheels, Vulkan and PhysX have to be pointed
 at their SDKs:
 ```shell
 pip install .
 ```
 
 [python/README.md](python/README.md) is the full Python guide — install matrix, the AOV
-and PhysX walkthroughs, and what the GPU-physics paths need on top.
+and PhysX walkthroughs, and what the GPU-physics paths need on top. Two of the examples
+are worth singling out: [`warp_fluid.py`](python/examples/warp_fluid.py) solves position-based
+fluids in NVIDIA Warp and surfaces them with GPU marching cubes, and
+[`warp_nebula.py`](python/examples/warp_nebula.py) pushes 18M additive points — both
+writing their vertex buffers straight from CUDA, with no host round-trip.
 
 Looking for more? [doc/getting_started.md](doc/getting_started.md) walks through the concepts
 behind the API, and the [examples](examples) folder is the de-facto documentation,
@@ -354,6 +408,11 @@ cmake --preset gl
 cmake --build --preset gl
 ctest --preset gl
 ```
+
+`cmake --list-presets` also shows the `ci-*` presets — the exact configurations the GitHub
+workflow runs. `ci-linux-physx` is the one to copy if you want the PhysX-backed tests built
+(it needs `VCPKG_ROOT`), and `ci-linux-vulkan-lavapipe` runs the Vulkan backend with no GPU
+at all, under the validation layers.
 
 Each preset builds into `build/<preset-name>`, so configurations don't clobber each other.
 The presets above deliberately leave the generator unset, so each platform uses its default.
@@ -421,7 +480,10 @@ some headers will require additional dependencies to compile.
 | ImguiContext            | imgui          | ImGUI utility                                          |
 | Physx\*                 | physx          | Physics simulation                                     |
 | ConvexDecomposition     | v-hacd         | Concave collision shapes (pulled by the vcpkg `physx` feature) |
-| Vulkan\*, Ocean, DisplacedMesh | Vulkan SDK | Vulkan renderer backend; `Ocean` links only under `THREEPP_WITH_VULKAN` |
+| Vulkan\*, Ocean, DisplacedMesh, ParticleField, SplatSurface | Vulkan SDK | Vulkan renderer backend; these link only under `THREEPP_WITH_VULKAN` |
+
+`THREEPP_WITH_VULKAN` arrives **PUBLIC** from the `threepp` target, so consumers do not restate
+it — and cannot end up compiling a different variant of the public headers than the library did.
 
 
 ## Consuming threepp
@@ -483,6 +545,7 @@ that the package does not carry the Vulkan, PhysX, Python or application halves.
 
 |                                                                                                                                                                                                                      |                                                                                                                                                                    |
 |:--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------:|:------------------------------------------------------------------------------------------------------------------------------------------------------------------:|
+| <img src="doc/screenshots/vulkan_fire.png" width="400" alt="GPU particle field"><br>*`ParticleField` — a campfire as GPU-resident particles, marched as participating media ([vulkan_fire](examples/vulkan/vulkan_fire.cpp))* | <img src="doc/screenshots/warp_fluid.png" width="400" alt="NVIDIA Warp fluid"><br>*NVIDIA Warp position-based fluid, written into threepp's vertex buffers from CUDA ([warp_fluid.py](python/examples/warp_fluid.py))* |
 | <img src="doc/screenshots/aalesund.png" width="400" alt="Ålesund terrain"><br>*Ålesund from Kartverket elevation data, NVDB roads and OSM footprints ([norway_terrain](examples/extras/terrain/norway_terrain.cpp))* |                       <img src="doc/screenshots/sponza.png" width="400" alt="Sponza"><br>*Sponza — probe GI, sky light through the openings*                       |
 |                                           <img src="doc/screenshots/spot_slam.png" width="400" alt="Spot RL gait, procedural forest"><br>*Spot RL gait, procedural forest*                                           |           <img src="doc/screenshots/depth_sensor.png" width="400" alt="Depth sensor"><br>*Depth-camera returns, range-coloured, with occlusion shadows*            |
 |                                                                <img src="doc/screenshots/lidar.png" width="400" alt="Lidar + SLAM"><br>*LIDAR + SLAM*                                                                |                                         <img src="doc/screenshots/chess.png" width="400" alt="Chess"><br>*glTF Chessboard*                                         |
