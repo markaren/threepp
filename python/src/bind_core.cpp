@@ -260,6 +260,49 @@ namespace threepp_py {
                     return out;
                 }, "Read the index buffer back as a flat uint32 array, or None if the geometry "
                    "is non-indexed (a triangle soup, which is what an STL always is).")
+                // get_index's counterpart. Without it, geometry authored in Python could only
+                // ever be a triangle soup: every shared vertex duplicated once per face it
+                // touches, which for a closed surface is ~6x the vertices, and no way to give
+                // two faces the same normal sample. That is a real cost for a mesh whose
+                // positions are rewritten every frame — a deforming soft body pays it on every
+                // upload — and it is why a smooth-shaded, UV-mapped mesh could not be driven
+                // from Python at all.
+                //
+                // Takes any integer array (flat, or (M, 3) triangles) and stores it as uint32.
+                .def("set_index", [](BufferGeometry& g,
+                                     py::array_t<std::uint32_t, py::array::c_style | py::array::forcecast> data)
+                             -> BufferGeometry& {
+                    const auto n = static_cast<size_t>(data.size());
+                    if (n % 3 != 0) throw std::runtime_error("set_index: index count must be a multiple of 3");
+                    const auto* p = data.data();
+                    const auto nVerts = [&] {
+                        size_t most = 0;
+                        for (const auto& [_, attr]: g.getAttributes())
+                            most = std::max(most, static_cast<size_t>(attr->count()));
+                        return most;
+                    }();
+                    if (nVerts > 0) {
+                        const auto bad = std::find_if(p, p + n, [&](std::uint32_t i) { return i >= nVerts; });
+                        if (bad != p + n)
+                            throw std::runtime_error("set_index: index " + std::to_string(*bad) +
+                                                     " is out of range for " + std::to_string(nVerts) +
+                                                     " vertices (set the attributes first)");
+                    }
+                    g.setIndex(std::vector<unsigned int>(p, p + n));
+                    // An indexed draw counts INDICES, not vertices (GLRenderer.cpp clamps
+                    // drawRange against index->count()), and set_attribute has just left
+                    // drawRange at the vertex count — which for a closed mesh is roughly a
+                    // sixth of the indices, so the geometry would draw a torn fraction of
+                    // itself. Publishing the whole index buffer here is what makes
+                    // "set the attributes, then set the index" mean what it looks like.
+                    g.setDrawRange(0, static_cast<int>(n));
+                    return g;
+                }, py::arg("data"), py::return_value_policy::reference_internal,
+                   "Give this geometry an index buffer, so its vertices can be shared between "
+                   "faces. Accepts a flat or (M, 3) integer array. Validated against the "
+                   "vertex count of the attributes already set, so set_attribute first — and "
+                   "note that this sets the draw range to the whole index buffer, which a "
+                   "later set_attribute would reset to the vertex count.")
                 .def("attribute_names", [](const BufferGeometry& g) {
                     std::vector<std::string> names;
                     names.reserve(g.getAttributes().size());

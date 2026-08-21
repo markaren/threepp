@@ -1,3 +1,4 @@
+import numpy as np
 import pytest
 
 import threepp as tp
@@ -48,3 +49,24 @@ def test_buffergeometry_from_points():
     # usable as Line geometry
     line = tp.Line(geo, tp.LineBasicMaterial())
     assert line.geometry is not None
+
+
+def test_set_index_round_trips_and_publishes_the_whole_buffer():
+    geo = tp.BufferGeometry()
+    geo.set_attribute("position", np.array([[0, 0, 0], [1, 0, 0], [0, 1, 0], [1, 1, 0]], np.float32))
+    geo.set_index(np.array([[0, 1, 2], [2, 1, 3]], np.uint32))
+    assert list(geo.get_index()) == [0, 1, 2, 2, 1, 3]
+    # set_attribute leaves the draw range at the VERTEX count (4); an indexed
+    # draw counts indices, so set_index has to restate it or the mesh renders
+    # a torn fraction of itself.
+    quad = tp.Mesh(geo, tp.MeshBasicMaterial())
+    assert quad.geometry is not None
+
+
+def test_set_index_rejects_out_of_range_and_ragged_input():
+    geo = tp.BufferGeometry()
+    geo.set_attribute("position", np.zeros((4, 3), np.float32))
+    with pytest.raises(RuntimeError, match="out of range"):
+        geo.set_index(np.array([0, 1, 9], np.uint32))
+    with pytest.raises(RuntimeError, match="multiple of 3"):
+        geo.set_index(np.array([0, 1], np.uint32))
