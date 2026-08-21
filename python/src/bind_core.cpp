@@ -17,6 +17,8 @@
 
 #include <algorithm>
 #include <any>
+#include <cstdint>
+#include <optional>
 
 using namespace threepp;
 
@@ -223,6 +225,48 @@ namespace threepp_py {
                     attr->needsUpdate();
                     return g;
                 }, py::arg("name"), py::arg("data"), py::return_value_policy::reference_internal)
+                // Readback. set_attribute's counterpart, and the only way to reach geometry
+                // Python did not author: a model that arrived through one of the LOADERS
+                // (STL, OBJ, glTF/GLB, COLLADA, Assimp) is a BufferGeometry full of triangles
+                // that Python could previously write to but never read. That gap is why a
+                // consumer wanting a mesh's vertices — an SDF bake, a collider, a point
+                // sampler, an export — had to re-parse the file itself in Python and
+                // hand-support one format at a time.
+                //
+                // Returns a COPY, not a view: the backing std::vector is reallocated by
+                // set_attribute and freed by dispose, so a view would dangle at a distance.
+                // Readback happens once at load, where a copy costs nothing worth saving.
+                .def("get_attribute", [](BufferGeometry& g, const std::string& name)
+                             -> std::optional<py::array_t<float>> {
+                    auto* attr = g.getAttribute<float>(name);
+                    if (!attr) return std::nullopt;
+                    const auto& a = attr->array();
+                    const auto item = static_cast<py::ssize_t>(attr->itemSize());
+                    if (item <= 0) return std::nullopt;
+                    const auto n = static_cast<py::ssize_t>(a.size()) / item;
+                    py::array_t<float> out({n, item});
+                    std::copy_n(a.begin(), static_cast<size_t>(n * item), out.mutable_data());
+                    return out;
+                }, py::arg("name"),
+                   "Read a float attribute back as an (N, item_size) float32 array, or None if "
+                   "the geometry has no attribute of that name. Returns a copy.")
+                .def("get_index", [](BufferGeometry& g)
+                             -> std::optional<py::array_t<std::uint32_t>> {
+                    const auto* idx = g.getIndex();
+                    if (!idx) return std::nullopt;
+                    const auto& a = idx->array();
+                    py::array_t<std::uint32_t> out(static_cast<py::ssize_t>(a.size()));
+                    std::copy(a.begin(), a.end(), out.mutable_data());
+                    return out;
+                }, "Read the index buffer back as a flat uint32 array, or None if the geometry "
+                   "is non-indexed (a triangle soup, which is what an STL always is).")
+                .def("attribute_names", [](const BufferGeometry& g) {
+                    std::vector<std::string> names;
+                    names.reserve(g.getAttributes().size());
+                    for (const auto& [name, _]: g.getAttributes()) names.push_back(name);
+                    std::sort(names.begin(), names.end());
+                    return names;
+                }, "Sorted names of the attributes this geometry carries.")
                 .def("set_draw_range", [](BufferGeometry& g, int start, int count) -> BufferGeometry& {
                     return g.setDrawRange(start, count);
                 }, py::arg("start"), py::arg("count"), py::return_value_policy::reference_internal,

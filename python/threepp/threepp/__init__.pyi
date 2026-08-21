@@ -494,6 +494,10 @@ class BufferGeometry:
     name: str
     def __init__(self) -> None:
         ...
+    def attribute_names(self) -> list[str]:
+        """
+        Sorted names of the attributes this geometry carries.
+        """
     def center(self) -> BufferGeometry:
         ...
     def compute_bounding_box(self) -> None:
@@ -504,6 +508,14 @@ class BufferGeometry:
         ...
     def dispose(self) -> None:
         ...
+    def get_attribute(self, name: str) -> numpy.typing.NDArray[numpy.float32] | None:
+        """
+        Read a float attribute back as an (N, item_size) float32 array, or None if the geometry has no attribute of that name. Returns a copy.
+        """
+    def get_index(self) -> numpy.typing.NDArray[numpy.uint32] | None:
+        """
+        Read the index buffer back as a flat uint32 array, or None if the geometry is non-indexed (a triangle soup, which is what an STL always is).
+        """
     def rotate_x(self, angle: typing.SupportsFloat | typing.SupportsIndex) -> BufferGeometry:
         ...
     def rotate_y(self, angle: typing.SupportsFloat | typing.SupportsIndex) -> BufferGeometry:
