@@ -298,9 +298,8 @@ VulkanRenderer::Impl::~Impl() {
                 if (st->scratchA.image != VK_NULL_HANDLE) vmaDestroyImage(ctx->allocator(), st->scratchA.image, st->scratchA.alloc);
                 if (st->foamImage.view  != VK_NULL_HANDLE) vkDestroyImageView(d, st->foamImage.view, nullptr);
                 if (st->foamImage.image != VK_NULL_HANDLE) vmaDestroyImage(ctx->allocator(), st->foamImage.image, st->foamImage.alloc);
-                destroyBuffer(ctx->allocator(), st->heightReadback);
-                destroyBuffer(ctx->allocator(), st->heightReadback1);
-                destroyBuffer(ctx->allocator(), st->heightReadback2);
+                for (auto& ring : st->heightReadback)
+                    for (auto& b : ring) destroyBuffer(ctx->allocator(), b);
                 destroyBuffer(ctx->allocator(), st->foamDisturbBuffer);
                 destroyBuffer(ctx->allocator(), st->wakeTrailBuffer);
                 // Per-cascade Phillips / DynamicSpectrum / IFFT are RAII; their

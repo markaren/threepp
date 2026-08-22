@@ -1964,17 +1964,46 @@ void VulkanRenderer::Impl::recordDisplacedDeform(VkCommandBuffer cb, DisplacedMe
                 c.ifft->recordApply(cb, ht,  st.scratchA);
                 c.ifft->recordApply(cb, dsp, st.scratchA);
 
-                // Copy the spatial-domain height image into the host-mapped
-                // readback buffer for this cascade. By the time
-                // endAndSubmitOneShot returns, the buffer is filled.
+                // Copy the spatial-domain height image into THIS FRAME's slot
+                // of the host-mapped readback ring for this cascade (slot =
+                // currentFrame; DisplacedMeshState::heightReadback says why it
+                // is a ring and which slot the mirror reads). On the one-shot
+                // first build the buffer is filled by the time
+                // endAndSubmitOneShot returns; on the per-frame path when
+                // inFlight[currentFrame] next signals.
                 // Gated on the sticky sampleHeight() opt-in — scenes that
                 // never query CPU wave height skip the copies (and their
-                // barriers) entirely.
-                Buffer* rb = (i == 0) ? &st.heightReadback
-                           : (i == 1) ? &st.heightReadback1
-                                      : &st.heightReadback2;
-                if (dm.wantsHeightReadback && rb->handle != VK_NULL_HANDLE) {
-                    st.heightCopiesEverRecorded = true;
+                // barriers) entirely and never allocate the ring.
+                Buffer* rb = nullptr;
+                if (dm.wantsHeightReadback) {
+                    if (st.heightReadback[0][0].handle == VK_NULL_HANDLE) {
+                        // First opted-in record: allocate the whole ring —
+                        // every enabled cascade × every slot — so it is
+                        // either complete or absent. Cascade 0 is always
+                        // enabled, so its slot 0 is the "allocated" probe.
+                        for (uint32_t c = 0; c < 3; ++c) {
+                            const uint32_t dim = st.heightReadbackDim[c];
+                            if (dim == 0) continue;
+                            const VkDeviceSize bytes =
+                                    VkDeviceSize(dim) * VkDeviceSize(dim) * 8u;
+                            for (uint32_t s = 0; s < kFramesInFlight; ++s) {
+                                auto& b = st.heightReadback[c][s];
+                                b = createBuffer(
+                                        ctx->allocator(), ctx->device(), bytes,
+                                        VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+                                        VMA_MEMORY_USAGE_AUTO,
+                                        VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT |
+                                                VMA_ALLOCATION_CREATE_MAPPED_BIT);
+                                ctx->setObjectName(b.handle,
+                                        (std::string("ocean.heightReadback") + std::to_string(c) +
+                                         "." + std::to_string(s)).c_str());
+                            }
+                        }
+                    }
+                    rb = &st.heightReadback[i][currentFrame];
+                }
+                if (rb && rb->handle != VK_NULL_HANDLE) {
+                    st.heightReadbackWritten[currentFrame] = true;
                     VkImageMemoryBarrier imb{};
                     imb.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
                     imb.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
@@ -2354,30 +2383,41 @@ void VulkanRenderer::Impl::recordDisplacedDeform(VkCommandBuffer cb, DisplacedMe
 void VulkanRenderer::Impl::mirrorDisplacedHeightfields(DisplacedMesh& dm, DisplacedMeshState& st) {
             // Nothing has ever called sampleHeight() on this mesh → the GPU
             // copies were skipped and there is nothing (correct) to mirror.
-            // heightCopiesEverRecorded additionally guards the first opted-in
-            // frame: the flag flips at sampleHeight() time, but the buffers
-            // only hold real data once a frame has recorded the copies.
-            if (!dm.wantsHeightReadback || !st.heightCopiesEverRecorded) return;
-            struct { Buffer* buf; float tileSize; } cascades[] = {
-                {&st.heightReadback,  dm.params.tileSize0},
-                {&st.heightReadback1, dm.params.tileSize1},
-                {&st.heightReadback2, dm.params.tileSize2},
-            };
+            if (!dm.wantsHeightReadback) return;
+            // Reads slot currentFrame of the readback ring: the copy recorded
+            // by this slot's previous occupant kFramesInFlight frames ago —
+            // or, on the first-build path, by the one-shot that just ran.
+            // The caller guarantees that copy is complete (frame-begin path:
+            // beginDeferredFrame calls this right after
+            // vkWaitForFences(inFlight[currentFrame]); one-shot:
+            // endAndSubmitOneShot waited the queue), and nothing writes this
+            // slot again until this frame records its own copy, after the
+            // mirror. So the field is whole and a FIXED kFramesInFlight
+            // frames old however the host is paced. The unwritten-slot guard
+            // covers the first opted-in frames: the opt-in flips at
+            // sampleHeight() time, but a slot only holds real data once a
+            // command buffer has recorded the copies into it (the ring is
+            // allocated on that first record); until then keep the last
+            // good field rather than hand buoyancy uninitialized memory.
+            const uint32_t slot = currentFrame;
+            if (!st.heightReadbackWritten[slot]) return;
+            const float tileSizes[3] = {dm.params.tileSize0, dm.params.tileSize1, dm.params.tileSize2};
             for (int ci = 0; ci < 3; ++ci) {
                 auto& cf = dm.heightFields[ci];
+                Buffer& buf = st.heightReadback[ci][slot];
                 const uint32_t dim = st.heightReadbackDim[ci];
-                if (cascades[ci].buf->handle != VK_NULL_HANDLE && dim > 0) {
+                if (buf.handle != VK_NULL_HANDLE && dim > 0) {
                     const size_t cells = size_t(dim) * size_t(dim);
                     const size_t bytes = cells * 2 * sizeof(float);
                     if (cf.data.size() != cells * 2)
                         cf.data.assign(cells * 2, 0.f);
                     void* mapped = nullptr;
-                    vmaMapMemory(ctx->allocator(), cascades[ci].buf->alloc, &mapped);
-                    invalidateHostReads(ctx->allocator(), cascades[ci].buf->alloc, 0, bytes);
+                    vmaMapMemory(ctx->allocator(), buf.alloc, &mapped);
+                    invalidateHostReads(ctx->allocator(), buf.alloc, 0, bytes);
                     std::memcpy(cf.data.data(), mapped, bytes);
-                    vmaUnmapMemory(ctx->allocator(), cascades[ci].buf->alloc);
+                    vmaUnmapMemory(ctx->allocator(), buf.alloc);
                     cf.dim      = dim;
-                    cf.tileSize = cascades[ci].tileSize;
+                    cf.tileSize = tileSizes[ci];
                 }
             }
         }
@@ -3253,32 +3293,16 @@ VulkanRenderer::Impl::DisplacedMeshState* VulkanRenderer::Impl::ensureDisplacedS
             state->appliedWindSpeed = dm.params.windSpeed;
             state->appliedWindTheta = dm.params.windTheta;
 
-            // Per-cascade height readback buffers (host-mapped). Each cascade
-            // can run at a different FFT resolution, so each readback is
-            // sized to its own dim²·8 bytes (RG32F). Kept persistent so the
-            // mappings survive between frames.
-            auto makeReadback = [&](uint32_t dim, const char* name) {
-                const VkDeviceSize bytes =
-                        VkDeviceSize(dim) * VkDeviceSize(dim) * 8u;
-                auto b = createBuffer(
-                        ctx->allocator(), ctx->device(), bytes,
-                        VK_BUFFER_USAGE_TRANSFER_DST_BIT,
-                        VMA_MEMORY_USAGE_AUTO,
-                        VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT |
-                                VMA_ALLOCATION_CREATE_MAPPED_BIT);
-                ctx->setObjectName(b.handle, name);
-                return b;
-            };
-            state->heightReadback  = makeReadback(textureSizes[0], "ocean.heightReadback0");
+            // Per-cascade height readback DIMENSIONS. Each cascade can run at
+            // a different FFT resolution, so each readback buffer is sized to
+            // its own dim²·8 bytes (RG32F). The buffers themselves — a ring of
+            // kFramesInFlight per cascade, see DisplacedMeshState — are
+            // allocated by recordDisplacedDeform on the first frame that
+            // records the copies (sampleHeight()'s sticky opt-in); a scene
+            // that never queries CPU wave height never pays for them.
             state->heightReadbackDim[0] = textureSizes[0];
-            if (dm.params.tileSize1 > 0.f) {
-                state->heightReadback1 = makeReadback(textureSizes[1], "ocean.heightReadback1");
-                state->heightReadbackDim[1] = textureSizes[1];
-            }
-            if (dm.params.tileSize2 > 0.f) {
-                state->heightReadback2 = makeReadback(textureSizes[2], "ocean.heightReadback2");
-                state->heightReadbackDim[2] = textureSizes[2];
-            }
+            if (dm.params.tileSize1 > 0.f) state->heightReadbackDim[1] = textureSizes[1];
+            if (dm.params.tileSize2 > 0.f) state->heightReadbackDim[2] = textureSizes[2];
 
             // Scratch image for IFFT ping-pong (RG32F). Cascades dispatch
             // back-to-back on the same queue and share this scratch, so size

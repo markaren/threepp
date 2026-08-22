@@ -248,6 +248,18 @@ namespace threepp {
         // feel). Masking out cascade 2 for the buoyancy sample (visual
         // remains unchanged — GPU still renders all cascades) restores
         // the integrating behaviour of a long hull.
+        //
+        // Latency and determinism (Vulkan): the value comes from a CPU
+        // mirror of the GPU height field, refreshed inside render() right
+        // after the frame's fence wait from a per-frame-in-flight readback
+        // ring — so it is the field as of a FIXED number of renderer frames
+        // ago (kFramesInFlight = 2; the synchronous first build of a new
+        // mesh is current), never "whatever the GPU had finished copying
+        // when the host looked". The same pinned renderer sim-time sequence
+        // therefore gives the same heights flat out and with sleeps between
+        // frames. (Until 2026-08 it was a memcpy out of one buffer the
+        // in-flight frames were still copying into: 1-2 frames old and
+        // torn, depending on GPU pacing.)
         float sampleHeight(float worldX, float worldZ,
                            uint32_t cascadeMask = 0b111u) const;
 

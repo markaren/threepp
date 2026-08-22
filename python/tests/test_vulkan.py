@@ -5,6 +5,7 @@ build these require a Vulkan-capable GPU.
 """
 import importlib.util
 import math
+import os
 import time
 
 import numpy as np
@@ -102,6 +103,62 @@ def test_sim_time_pins_ocean_against_frame_pacing(vk_renderer):
         assert later != pytest.approx(fast, abs=1e-3)
     finally:
         vk_renderer.sim_time = None
+
+
+def _ocean_height_series(renderer, *, t0, frames, dt, pace_s, probe=(12.5, -7.25)):
+    """Render a fresh 1400 m / 640-vertex / FFT-1024 Ocean for `frames` frames with
+    renderer.sim_time stepped from t0 by dt, sleeping pace_s of WALL time after
+    each frame, and return the CPU-mirrored wave height at `probe` after every
+    frame (the order buoyancy code reads it in)."""
+    scene = tp.Scene()
+    scene.background = 0x202830
+    ocean = tp.Ocean(size=1400.0, resolution=640, wind_speed=10.0, fft_size=1024, wave_scale=1.7)
+    scene.add(ocean)
+    cam = tp.PerspectiveCamera(55, W / H, 0.1, 5000)
+    cam.position.set(0, 15, 40)
+    cam.look_at(0, 0, 0)
+    ocean.sample_height(0.0, 0.0)  # arms the GPU->CPU height readback (sticky opt-in)
+    out = []
+    for i in range(frames):
+        renderer.sim_time = t0 + i * dt
+        renderer.render(scene, cam)
+        if pace_s:
+            time.sleep(pace_s)
+        out.append(ocean.sample_height(*probe))
+    return out
+
+
+@pytest.mark.skipif(not hasattr(tp, "Ocean"), reason="Ocean needs the Vulkan build")
+def test_sample_height_mirror_is_pacing_independent():
+    """DisplacedMesh.sample_height reads a CPU mirror of the GPU height field. The
+    mirror must sit a FIXED number of frames behind the render, not "whatever the
+    GPU had finished copying when the host looked": the same pinned sim_time
+    sequence, sampled after every frame, gives the same heights flat out and with
+    wall time between frames. Runs one renderer frame per render() with presents
+    suppressed (the film/bench mode), where the frames in flight really overlap;
+    with the binding's default 3 flush frames per render(), or a presenting hidden
+    window, the pipeline drains every call and the race cannot show. Before the
+    per-frame-in-flight readback ring (2026-08) this differed in ~95% of frames
+    at this sea (max ~3 cm; torn mixes of two frames' fields)."""
+    prev = os.environ.get("THREEPP_VULKAN_SUPPRESS_PRESENT")
+    os.environ["THREEPP_VULKAN_SUPPRESS_PRESENT"] = "1"  # read once, at context creation
+    try:
+        canvas = tp.Canvas("vk-test-height-mirror", width=W, height=H, headless=True, vsync=False)
+        renderer = tp.VulkanRenderer(canvas, flush_frames=1)
+    finally:
+        if prev is None:
+            del os.environ["THREEPP_VULKAN_SUPPRESS_PRESENT"]
+        else:
+            os.environ["THREEPP_VULKAN_SUPPRESS_PRESENT"] = prev
+    try:
+        fast = _ocean_height_series(renderer, t0=3.0, frames=40, dt=1.0 / 60.0, pace_s=0.0)
+        slow = _ocean_height_series(renderer, t0=3.0, frames=40, dt=1.0 / 60.0, pace_s=0.03)
+        assert any(abs(h) > 1e-3 for h in fast), "height mirror never filled"
+        steps = [abs(b - a) for a, b in zip(fast[4:], fast[5:])]
+        assert sum(steps) / len(steps) > 1e-3, "the sea did not advance under the stepped clock"
+        assert slow == pytest.approx(fast, abs=1e-6)
+    finally:
+        renderer.sim_time = None
 
 
 def test_aov_shapes(vk_renderer):

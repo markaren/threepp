@@ -430,21 +430,33 @@ namespace threepp::vulkan::impl {
         float    planeSizeZ = 0.f;
         // Per-cascade height readback for CPU-side wave sampling (boat
         // hydrodynamics, pitch/roll from multi-scale wave slope, etc.).
-        // Host-mapped RG32F buffers of size textureSize²·8 bytes each;
-        // populated after every IFFT pass via vkCmdCopyImageToBuffer.
-        Buffer    heightReadback;
-        Buffer    heightReadback1;
-        Buffer    heightReadback2;
+        // Host-mapped RG32F buffers of textureSize²·8 bytes, populated
+        // after every IFFT pass via vkCmdCopyImageToBuffer — a RING of
+        // kFramesInFlight per cascade, indexed [cascade][currentFrame]:
+        // the frame recorded in slot s copies into slot s, and the mirror
+        // (mirrorDisplacedHeightfields, run right after the frame-begin
+        // vkWaitForFences(inFlight[currentFrame])) reads slot currentFrame
+        // — the copy the slot's previous occupant recorded kFramesInFlight
+        // frames ago, which that fence proves complete. ONE buffer shared
+        // by the frames in flight was memcpy'd while the GPU could still be
+        // copying into it, so sampleHeight() returned a field whose age
+        // (and tearing) depended on how far the GPU had got: one frame old
+        // when the host was slow, two or a torn mix of both flat out.
+        // Allocated lazily on the first frame that records the copies
+        // (sampleHeight()'s sticky opt-in), so scenes that never query
+        // wave height pay no memory for it; null handles until then.
+        Buffer    heightReadback[3][kFramesInFlight] = {};
         // Per-cascade readback texture dimension. Cascades can run at
         // different FFT resolutions — each cascade's readback buffer is
         // sized to its own dim²·8 bytes (RG32F).
         uint32_t  heightReadbackDim[3] = {0, 0, 0};
-        // True once at least one frame has RECORDED the image→buffer
-        // height copies. The copies are gated on the sampleHeight()
-        // opt-in, so before the first opted-in frame the readback
-        // buffers hold uninitialized VMA memory — mirroring them would
-        // hand garbage heights to buoyancy for a frame.
-        bool      heightCopiesEverRecorded = false;
+        // Per-slot: true once a command buffer that copies into slot s has
+        // been recorded (a frame cb, or the synchronous first-build
+        // one-shot). The copies are gated on the sampleHeight() opt-in, so
+        // an unwritten slot holds uninitialized VMA memory — mirroring it
+        // would hand garbage heights to buoyancy for a frame; the mirror
+        // skips it and keeps the last good field instead.
+        bool      heightReadbackWritten[kFramesInFlight] = {};
         std::weak_ptr<BufferGeometry> liveCheck;
         // Per-frame BLAS-refit state. The initial AS is built (buildBlasFor)
         // with ALLOW_UPDATE, so subsequent per-frame refreshes can use

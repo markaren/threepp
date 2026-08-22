@@ -615,6 +615,20 @@ bool VulkanRenderer::Impl::beginDeferredFrame(Object3D& scene, Camera& camera) {
                 THREEPP_CPUPROF("frame.0b_queryReadback");
                 gpuTimings_->readBack(currentFrame, pendingCpuEnsureSceneMs_);
             }
+            // Same fence, same reasoning, for the DisplacedMesh (FFT water)
+            // CPU height mirrors. Each ocean update ensureSceneBuilt queued
+            // this frame copies its height field into readback slot
+            // currentFrame once recorded below; the slot's PREVIOUS occupant
+            // (kFramesInFlight frames ago) is what the fence just retired, so
+            // its copy is whole — mirror it now, before this frame's record
+            // reuses the slot. Taken at stage time (ensureSceneBuilt, before
+            // this wait) the memcpy raced the in-flight frames' copies, and
+            // sampleHeight() returned a field whose age and tearing depended
+            // on host pacing; this is a fixed kFramesInFlight-frame latency.
+            for (auto& [dmPtr, stPtr, tsec] : pendingDisplacedDeforms_) {
+                (void)tsec;
+                mirrorDisplacedHeightfields(*dmPtr, *stPtr);
+            }
 
             // Apply any setter requests deferred from mid-frame. setRenderScale
             // / resetAccumulation issue vkDeviceWaitIdle + reallocate descriptor

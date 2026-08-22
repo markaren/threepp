@@ -1608,15 +1608,17 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                         // recordCommandBuffer — NO blocking one-shot submit
                         // (the old drain stalled the CPU on all in-flight GPU
                         // work, tens of ms on large scenes). The CPU height-
-                        // field mirror reads the last completed frame's
-                        // readback here instead — one frame of latency.
+                        // field mirror is NOT taken here: this runs before the
+                        // frame's fence wait, while the frames in flight may
+                        // still be copying into the readback — beginDeferredFrame
+                        // mirrors the queued meshes right after vkWaitForFences,
+                        // from the readback slot that fence proves complete.
                         const float now = static_cast<float>(frameNowSec());
                         for (size_t i = 0; i < entries.size(); ++i) {
                             if (!entryDisplacedDirty[i]) continue;
                             auto* dm = static_cast<DisplacedMesh*>(entries[i].mesh);
                             auto stIt = displacedStates.find(dm);
                             if (stIt == displacedStates.end()) continue;
-                            mirrorDisplacedHeightfields(*dm, *stIt->second);
                             pendingDisplacedDeforms_.emplace_back(dm, stIt->second.get(), now);
                             ++dm->frameTick;
                         }
@@ -2433,9 +2435,8 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                         // teardown destroys; missing them here leaked the
                         // readback trio + foam/wake SSBOs on every scene
                         // switch that removed an ocean (VUID 05137).
-                        destroyBuffer(ctx->allocator(), st->heightReadback);
-                        destroyBuffer(ctx->allocator(), st->heightReadback1);
-                        destroyBuffer(ctx->allocator(), st->heightReadback2);
+                        for (auto& ring : st->heightReadback)
+                            for (auto& b : ring) destroyBuffer(ctx->allocator(), b);
                         destroyBuffer(ctx->allocator(), st->foamDisturbBuffer);
                         destroyBuffer(ctx->allocator(), st->wakeTrailBuffer);
                         // PhillipsSpectrum / DynamicSpectrum / IFFT destructors
@@ -2614,8 +2615,9 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                         // BLAS refit as a synchronous one-shot stalls the CPU on
                         // every tile swap. The BLAS keeps last frame's displaced
                         // content for this frame's TLAS (imperceptible for water);
-                        // recordCommandBuffer refits it before the shade trace.
-                        mirrorDisplacedHeightfields(*dm, *st);
+                        // recordCommandBuffer refits it before the shade trace,
+                        // and beginDeferredFrame mirrors the height field after
+                        // the fence wait, as on the per-frame path.
                         pendingDisplacedDeforms_.emplace_back(dm, st, static_cast<float>(frameNowSec()));
                         ++dm->frameTick;
                     } else {

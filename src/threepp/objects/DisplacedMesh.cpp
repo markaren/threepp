@@ -73,9 +73,9 @@ namespace threepp {
                                       uint32_t cascadeMask) const {
         // Sticky opt-in: the Vulkan renderer only records the GPU→host height
         // copies (and the per-frame mirror memcpy) once something actually
-        // queries the CPU wave field. First-ever call may return 0 until the
-        // next frame's readback lands — same one-frame latency the mirror
-        // always had.
+        // queries the CPU wave field. First-ever call may return 0 until a
+        // frame has recorded the copies and its fence has retired — the
+        // mirror's fixed kFramesInFlight-frame latency (see the header).
         wantsHeightReadback = true;
 
         float total = 0.f;
