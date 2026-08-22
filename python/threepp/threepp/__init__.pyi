@@ -7482,6 +7482,22 @@ class VulkanRenderer:
         Current sensor-noise settings as a dict.
         """
     @property
+    def sim_time(self) -> float:
+        """
+        Simulation time in seconds that pins EVERY wall-clock read the frame
+        path makes: the TAA blend dt, the shade's animation timeSec, the
+        DLSS/FSR frame deltas, ocean foam decay, deform timestamps and the
+        cloud clock. Set it once per frame BEFORE render(), monotonically
+        non-decreasing; stepping by a fixed dt makes the output replayable
+        bit-for-bit and makes an offline render frame-rate independent (an
+        unpinned renderer runs the ocean/clouds/foam at wall speed while the
+        app steps its own physics at 1/fps). Negative returns to the wall
+        clock, which is the default and what a live window wants.
+        """
+    @sim_time.setter
+    def sim_time(self, arg1: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
     def starfield(self) -> float:
         """
         Procedural star field drawn on sky pixels. 0 disables (default); ~1.0 is a night sky. Ramp it with the daylight rather than snapping it on.

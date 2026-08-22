@@ -667,6 +667,22 @@ namespace threepp_py {
                               [](PyVulkanRenderer& r, float v) { r.native().setDeferredStarfield(v); },
                               "Procedural star field drawn on sky pixels. 0 disables (default); "
                               "~1.0 is a night sky. Ramp it with the daylight rather than snapping it on.")
+                // Deterministic frame clock. Without this every wall-clock read
+                // in the frame path runs on glfwGetTime(), so an offline render
+                // whose frames take 80 ms of wall time animates the engine-side
+                // fields ~5x faster than the dt the app integrates with.
+                .def_property("sim_time",
+                              [](PyVulkanRenderer& r) { return r.native().simTime(); },
+                              [](PyVulkanRenderer& r, double v) { r.native().setSimTime(v); },
+                              "Simulation time in seconds that pins EVERY wall-clock read the frame\n"
+                              "path makes: the TAA blend dt, the shade's animation timeSec, the\n"
+                              "DLSS/FSR frame deltas, ocean foam decay, deform timestamps and the\n"
+                              "cloud clock. Set it once per frame BEFORE render(), monotonically\n"
+                              "non-decreasing; stepping by a fixed dt makes the output replayable\n"
+                              "bit-for-bit and makes an offline render frame-rate independent (an\n"
+                              "unpinned renderer runs the ocean/clouds/foam at wall speed while the\n"
+                              "app steps its own physics at 1/fps). Negative returns to the wall\n"
+                              "clock, which is the default and what a live window wants.")
                 // Per-frame CPU/GPU pass timings (milliseconds) — see
                 // VulkanRenderer::FrameTimings. For perf triage from python.
                 .def_property_readonly("frame_timings",

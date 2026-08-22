@@ -45,6 +45,15 @@ def test_rgb_render(vk_renderer):
     assert int(img.max()) > int(img.min()), "shaded render is flat"
 
 
+def test_sim_time_round_trips(vk_renderer):
+    """The deterministic frame clock: pin it, read it back, then release it."""
+    try:
+        vk_renderer.sim_time = 4.25
+        assert vk_renderer.sim_time == pytest.approx(4.25)
+    finally:
+        vk_renderer.sim_time = -1.0  # back to the wall clock
+
+
 def test_aov_shapes(vk_renderer):
     scene, cam = make_scene()
     out = vk_renderer.render_aovs(scene, cam, ["rgb", "normals", "segmentation", "albedo"])
