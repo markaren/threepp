@@ -73,6 +73,7 @@ PYBIND11_MODULE(threepp, m) {
     tp::init_pointcloud(m); // VoxelGrid, ICP, MarchingCubes
     tp::init_terrain(m);    // TerrainGenerator + TerrainParams
     tp::init_vegetation(m); // TreeGenerator, TreeTextures
+    tp::init_fauna(m);      // Flock (needs Mesh from init_objects, Camera from init_cameras)
     tp::init_splats(m);     // SplatLoader + SplatCloud (needs Mesh from init_objects, Camera from init_cameras)
     tp::init_render(m);
     tp::init_loaders(m);// returns Group/Texture/BufferGeometry + GLTFResult
