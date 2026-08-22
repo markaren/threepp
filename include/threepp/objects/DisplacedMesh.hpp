@@ -79,6 +79,27 @@ namespace threepp {
         // Hull exclusion zone: suppresses wave displacement inside a
         // world-space oriented rectangle so the ocean doesn't clip through
         // a vessel's deck. Set each frame before render().
+        //
+        // Inside the (plan-form tapered) footprint the surface is pulled onto
+        // the VESSEL'S WATERLINE PLANE and fades back into the wave field over
+        // ~2 m outside the hull edge — i.e. the hull really displaces the
+        // water instead of the sea passing through it. The plane is
+        //
+        //     y(localX, localZ) = centerY + tan(pitch)·localZ + tan(roll)·localX
+        //
+        // with localZ the length axis (positive toward the BOW, along
+        // (sinYaw, cosYaw)) and localX the beam axis (positive to STARBOARD,
+        // along (cosYaw, -sinYaw)) — the same vessel-local frame the wake
+        // formulas use. So:
+        //   centerY  world height of the hull's own design-waterline plane at
+        //            (centerX, centerZ); the height the water should meet the
+        //            hull at, NOT the deck.
+        //   pitch    radians, POSITIVE = bow up   (the plane rises toward +localZ)
+        //   roll     radians, POSITIVE = starboard up (rises toward +localX)
+        // Both angles are clamped to ±1 rad in the shader.
+        //
+        // Defaults (centerY = pitch = roll = 0) reproduce the historical
+        // behaviour exactly: the patch flattens onto the ocean rest plane.
         struct HullExclusion {
             float centerX    = 0.f;
             float centerZ    = 0.f;
@@ -86,6 +107,9 @@ namespace threepp {
             float halfBeam   = 0.f;
             float sinYaw     = 0.f;
             float cosYaw     = 1.f;
+            float centerY    = 0.f;   // world y of the hull's waterline plane
+            float pitch      = 0.f;   // rad, +bow up
+            float roll       = 0.f;   // rad, +starboard up
         };
         HullExclusion hullExclusion;
 

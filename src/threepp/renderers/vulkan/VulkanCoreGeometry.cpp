@@ -2080,10 +2080,9 @@ void VulkanRenderer::Impl::recordDisplacedDeform(VkCommandBuffer cb, DisplacedMe
             // supplied on skipped frames are latched in st.foamDisturbCarry
             // and uploaded as a union with the next dispatch's list — the
             // shader combines stamps with max(), so re-stamping a source that
-            // persists across frames is idempotent. water_displace's
-            // disturbAddr is dead plumbing (see water_displace.comp), so the
-            // buffer's only consumer is foam_world and a deferred upload
-            // changes nothing else.
+            // persists across frames is idempotent. The buffer's only consumer
+            // is foam_world (water_displace no longer carries a disturbAddr at
+            // all), so a deferred upload changes nothing else.
             static const uint32_t kFoamInterval = [] {
                 const char* e = std::getenv("THREEPP_OCEAN_FOAM_INTERVAL");
                 const long v = e ? std::atol(e) : 1L;
@@ -2153,7 +2152,6 @@ void VulkanRenderer::Impl::recordDisplacedDeform(VkCommandBuffer cb, DisplacedMe
             vulkan::WaterDisplacePipeline::PushConstants pc{};
             pc.posOut       = st.blas->vertex.address;
             pc.normOut      = st.blas->normal.address;
-            pc.disturbAddr  = st.foamDisturbBuffer.address;
             pc.vertexCount  = st.vertexCount;
             pc.gridDimX     = st.gridDimX;
             pc.gridDimZ     = st.gridDimZ;
@@ -2172,13 +2170,17 @@ void VulkanRenderer::Impl::recordDisplacedDeform(VkCommandBuffer cb, DisplacedMe
             pc.hullSinYaw     = dm.hullExclusion.sinYaw;
             pc.hullCosYaw     = dm.hullExclusion.cosYaw;
             pc.forwardSpeed   = dm.wake.enabled ? dm.wake.forwardSpeed : 0.0f;
-            pc.disturbCount   = disturbCount;
             pc.warpCenterX    = dm.warp.centerX;
             pc.warpCenterZ    = dm.warp.centerZ;
             pc.warpHalfRange  = dm.warp.halfRange;
             pc.warpCoefA      = dm.warp.coefA;
             pc.wakeTrailAddr  = st.wakeTrailBuffer.address;
             pc.wakeTrailCount = wakeSampleCount;
+            // Waterline plane of the excluded patch (0/0/0 = ocean rest plane,
+            // the historical behaviour) — see DisplacedMesh::HullExclusion.
+            pc.hullCenterY    = dm.hullExclusion.centerY;
+            pc.hullPitch      = dm.hullExclusion.pitch;
+            pc.hullRoll       = dm.hullExclusion.roll;
             if (timed) gpuTimings_->begin(cb, vulkan::TP_OceanDisplace, currentFrame);
             waterDisplace_->recordDispatch(cb, st.displaceDS, pc);
             if (timed) gpuTimings_->end(cb, vulkan::TP_OceanDisplace, currentFrame);

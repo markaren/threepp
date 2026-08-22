@@ -41,17 +41,6 @@ layout(set = 0, binding = 5) uniform sampler2D displace2;
 layout(buffer_reference, scalar) buffer PosBuf  { float v[]; };
 layout(buffer_reference, scalar) buffer NormBuf { float v[]; };
 
-// Per-disturbance point source — splatted into the per-vertex foam buffer
-// with a gaussian falloff. Populated by host code each frame from boat
-// hull / propeller / splash sources. Layout matches DisplacedMesh::FoamDisturbance.
-struct DisturbPoint {
-    float worldX;
-    float worldZ;
-    float radius;     // metres
-    float intensity;  // peak foam value at centre, [0..1]
-};
-layout(buffer_reference, scalar) buffer DisturbBuf { DisturbPoint p[]; };
-
 // Historical wake sample — one snapshot of the boat's pose at a past
 // frame, used to trace the Kelvin V-wake along the actual sailed path.
 // Layout matches DisplacedMesh::WakeSample (32 B, 8 floats).
@@ -67,10 +56,11 @@ struct WakeSample {
 };
 layout(buffer_reference, scalar) buffer WakeTrailBuf { WakeSample s[]; };
 
+// EXACTLY 128 bytes — the Vulkan-guaranteed maxPushConstantsSize. It is FULL;
+// mirrored field-for-field by WaterDisplacePipeline::PushConstants.
 layout(push_constant, scalar) uniform Pc {
     PosBuf   posOut;
     NormBuf  normOut;
-    uint64_t disturbAddr;
     uint64_t wakeTrailAddr; // 0 = no historical trail (falls back to current pose)
     uint    vertexCount;
     uint    gridDimX;       // vertices along local X / Z (rectangles supported)
@@ -90,12 +80,14 @@ layout(push_constant, scalar) uniform Pc {
     float   hullSinYaw;
     float   hullCosYaw;
     float   forwardSpeed;   // m/s along +heading; 0 disables wake
-    uint    disturbCount;
     float   warpCenterX;
     float   warpCenterZ;
     float   warpHalfRange;
     float   warpCoefA;
     uint    wakeTrailCount; // # valid samples in wakeTrailAddr
+    float   hullCenterY;    // world y of the vessel's waterline plane at
+    float   hullPitch;      // (hullCenterX, hullCenterZ); +bow up (+localZ),
+    float   hullRoll;       // +starboard up (+localX). All 0 = ocean rest plane.
 } pc;
 
 // Bicubic B-spline single-channel fetch (4 bilinear taps, Sigg & Hadwiger).
@@ -297,8 +289,21 @@ void main() {
     // Hull exclusion: suppress displacement inside a vessel's footprint
     // so the ocean mesh doesn't clip through the deck. Smooth fade over
     // ~2 m outside the hull edge keeps the transition invisible.
+    //
+    // The target inside the footprint is the vessel's OWN WATERLINE PLANE,
+    // not the ocean rest plane: a hull that heaves and pitches with the sea
+    // has to carry its waterline with it, or a boat sitting on a 2 m crest
+    // gets a 2 m hole punched in the water around her. `hullCenterY` is the
+    // world height of the hull's design waterline at the exclusion centre and
+    // pitch/roll tilt it in the vessel-local frame computed above. With all
+    // three at their defaults this is bit-for-bit the old `disp *= hullFade`.
     if (hasVessel) {
-        disp *= hullFade;
+        const float planeY = pc.hullCenterY
+                           + tan(clamp(pc.hullPitch, -1.0, 1.0)) * wakeLocalZ
+                           + tan(clamp(pc.hullRoll,  -1.0, 1.0)) * wakeLocalX;
+        disp.y  = mix(planeY, disp.y, hullFade);
+        disp.x *= hullFade;
+        disp.z *= hullFade;
     }
 
     // === Vessel wake ===
@@ -502,6 +507,8 @@ void main() {
     // space texture built by foam_world.comp, pinned to world XZ regardless
     // of mesh layout, so both the buffer and the foamAddr push-constant are
     // gone. The wakeFoam value computed above is now write-only dead code
-    // (the compiler DCEs it); a later micro-cleanup can drop it along with
-    // the now-unused disturbAddr / DisturbBuf plumbing in this shader.
+    // (the compiler DCEs it). The matching disturbAddr / disturbCount /
+    // DisturbBuf plumbing IS now gone from this shader — its 12 bytes of push
+    // constant pay for the hull waterline plane. foam_world.comp still owns
+    // the disturbance splats.
 }
