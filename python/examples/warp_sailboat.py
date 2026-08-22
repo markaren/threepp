@@ -56,7 +56,8 @@ there is a rainbow opposite the sun because the geometry says there should be.
 Helm:  A / D steer      Q / E ease / trim main     Z / C ease / trim jib
        T auto-trim      P autopilot (hold course)  R reset
 Sky:   1-5 jump to dawn / morning / squall / golden hour / night
-       N toggle rain    K time-lapse the day
+       N toggle rain    K time-lapse the day       L fire a lightning strike
+Drone: G fly the camera drone    V switch to its own view (FPV)
 
 Needs a Vulkan build (-DTHREEPP_WITH_VULKAN=ON). Warp falls back to CPU if no
 CUDA device is present -- slower, same picture.
@@ -1950,6 +1951,514 @@ _dr.enabled = False
 rain.set_live_count(0)
 scene.add(rain)
 
+# --------------------------------------------------------------------------- #
+#  Lightning.
+#
+#  Eight bolts are built ONCE at startup and never touched again. A strike is
+#  three cheap things: two TRANSFORMS (park / un-park the channel), one
+#  emissive number a frame, and two point-light intensities. Building geometry
+#  per strike would rebuild the entry list, idle the device and cold-start the
+#  TAA history -- on the one frame in the film where that is most visible.
+#
+#  The emissive channel is what lights the SURFACES (sails, sea, and the rain's
+#  lit mesh proxies near the camera); emissive triangles are not in the froxel
+#  pass, so the AIR flash -- the rain curtain, the mist, the cloud base -- needs
+#  real clustered point lights. That is why there are both.
+# --------------------------------------------------------------------------- #
+LRNG = np.random.default_rng(cli_arg("--seed", 90210, int))
+CLOUD_BASE = 300.0          # where a channel leaves the deck (storm deck is 240 m)
+BOLT_PARK = -9000.0         # inactive channels live down here; a transform, not a rebuild
+FLASH_RANGE = 8000.0        # point-light cull radius: must clear the strike distance
+STRIKE_SLOTS = 2            # two concurrent strikes, four bolts each
+
+
+def _perp_frame(d):
+    """Unit tangent plus two perpendiculars for each row of `d`."""
+    t = d / np.maximum(np.linalg.norm(d, axis=1, keepdims=True), 1e-9)
+    ref = np.tile(np.array([0.0, 0.0, 1.0]), (len(t), 1))
+    ref[np.abs(t[:, 2]) > 0.9] = np.array([1.0, 0.0, 0.0])
+    u = np.cross(t, ref)
+    u /= np.maximum(np.linalg.norm(u, axis=1, keepdims=True), 1e-9)
+    return t, u, np.cross(t, u)
+
+
+def _displace(rng, a, b, jitter, levels):
+    """Midpoint displacement between two points -- the shape of a leader."""
+    pts = np.stack([np.asarray(a, np.float64), np.asarray(b, np.float64)])
+    for lv in range(levels):
+        seg = pts[1:] - pts[:-1]
+        _, u, v = _perp_frame(seg)
+        amp = jitter * (0.58 ** lv)
+        mid = 0.5 * (pts[:-1] + pts[1:])
+        mid = mid + (rng.normal(size=(len(seg), 1)) * u
+                     + rng.normal(size=(len(seg), 1)) * v) * amp
+        out = np.empty((2 * len(pts) - 1, 3))
+        out[0::2], out[1::2] = pts, mid
+        pts = out
+    return pts
+
+
+def _tube(pts, r0, r1, sides):
+    """A tapering tube round a polyline, as a non-indexed triangle soup."""
+    seg = np.diff(pts, axis=0)
+    tang = np.zeros_like(pts)
+    tang[:-1] += seg
+    tang[1:] += seg
+    _, u, v = _perp_frame(tang)
+    rad = (r0 + (r1 - r0) * np.linspace(0.0, 1.0, len(pts)) ** 0.7)[:, None, None]
+    ang = np.linspace(0.0, 2.0 * math.pi, sides, endpoint=False)
+    ring = pts[:, None, :] + rad * (np.cos(ang)[None, :, None] * u[:, None, :]
+                                    + np.sin(ang)[None, :, None] * v[:, None, :])
+    a, b = ring[:-1], ring[1:]
+    a2, b2 = np.roll(a, -1, axis=1), np.roll(b, -1, axis=1)
+    return np.concatenate([np.stack([a, b, a2], axis=2),
+                           np.stack([a2, b, b2], axis=2)], axis=1).reshape(-1, 3)
+
+
+def _soup_mesh(v, mat):
+    tri = v.reshape(-1, 3, 3)
+    n = np.cross(tri[:, 1] - tri[:, 0], tri[:, 2] - tri[:, 0])
+    n /= np.maximum(np.linalg.norm(n, axis=1, keepdims=True), 1e-9)
+    g = tp.BufferGeometry()
+    g.set_attribute("position", np.ascontiguousarray(v, np.float32))
+    g.set_attribute("normal", np.ascontiguousarray(np.repeat(n, 3, axis=0), np.float32))
+    m = tp.Mesh(g, mat)
+    m.cast_shadow = False              # a light source does not cast a shadow
+    m.receive_shadow = False
+    m.frustum_culled = False
+    return m
+
+
+def build_bolt(rng, ground_y, r_main, branches, spread):
+    """One channel: main stroke plus branches, all tapering toward their tips.
+
+    The main radius is metres, not centimetres, on purpose: at 0.8-2.5 km a
+    1.5 m channel is ~2 px at 1080p, which is the thinnest a bolt may be and
+    still survive TAA and the upscalers.
+    """
+    top = np.array([rng.normal() * 14.0, CLOUD_BASE * rng.uniform(0.90, 1.20),
+                    rng.normal() * 14.0])
+    bot = np.array([rng.normal() * spread, ground_y, rng.normal() * spread])
+    main = _displace(rng, top, bot, spread * 0.42, 6)
+    parts = [_tube(main, r_main, r_main * 0.30, 5)]
+    for _ in range(branches):
+        i = int(rng.integers(len(main) // 4, len(main) - 8))
+        p0 = main[i]
+        d = np.array([rng.normal(), -abs(rng.normal()) - 0.6, rng.normal()])
+        d /= np.linalg.norm(d)
+        ln = max(28.0, (p0[1] - ground_y) * rng.uniform(0.30, 0.65))
+        p1 = p0 + d * ln
+        p1[1] = max(p1[1], ground_y + 8.0)
+        parts.append(_tube(_displace(rng, p0, p1, ln * 0.18, 4),
+                           r_main * 0.42, r_main * 0.10, 4))
+    return np.concatenate(parts, axis=0)
+
+
+BOLT_EMISSIVE = tp.Color(0.78, 0.84, 1.0)
+bolt_mats, bolt_nodes, strike_anchors, flash_lights = [], [], [], []
+_bolt_tris = 0
+for _a in range(STRIKE_SLOTS):
+    _anc = tp.Group()
+    _anc.position.set(0.0, -20000.0, 0.0)
+    scene.add(_anc)
+    strike_anchors.append(_anc)
+    for _k in range(4):
+        _rng = np.random.default_rng(7000 + _a * 10 + _k)
+        # #3 of each four is an INTRA-CLOUD channel: it stops 300 m up, inside
+        # the storm deck, so it reads as a sheet glow rather than a fork.
+        _v = build_bolt(_rng, 300.0 if _k == 3 else 0.0,
+                        (2.0, 1.6, 1.25, 1.8)[_k], 2 + _k % 3, 55.0)
+        _bolt_tris += len(_v) // 3
+        _m = tp.MeshStandardMaterial()
+        _m.color = 0x000000                 # black at rest; only emissive ever shows
+        _m.emissive = BOLT_EMISSIVE
+        _m.emissive_intensity = 0.0
+        _m.roughness = 1.0
+        _m.metalness = 0.0
+        _m.side = tp.Side.Double            # the soup's winding is not worth deriving
+        _node = tp.Group()
+        _node.position.set(0.0, BOLT_PARK, 0.0)
+        _node.add(_soup_mesh(_v, _m))
+        _anc.add(_node)
+        bolt_mats.append(_m)
+        bolt_nodes.append(_node)
+    pair = []
+    for _k in range(2):
+        _pl = tp.PointLight(tp.Color(0.80, 0.86, 1.0), 0.0, FLASH_RANGE, 2.0)
+        _pl.position.set(0.0, -20000.0, 0.0)
+        scene.add(_pl)
+        pair.append(_pl)
+    flash_lights.append(pair)
+
+# What a kind of strike IS. `lux` is the illuminance the two air lights deliver
+# AT THE BOAT at peak, so the point-light intensity is lux * d^2 and a strike
+# looks the same from 600 m or from 2.5 km -- the kind, not the geometry, is
+# what says how big it was. For reference the storm's own sun runs at ~0.55 and
+# a clear noon at ~4.6 in the same units.
+STRIKE_KINDS = {
+    "sheet": dict(bolts=(), emis=0.0, lux=1.8, strokes=(2, 4),
+                  dist=(1500.0, 2500.0), mid=520.0, top=820.0),
+    "intra": dict(bolts=(3,), emis=1800.0, lux=2.4, strokes=(2, 3),
+                  dist=(1300.0, 2200.0), mid=430.0, top=700.0),
+    "mid": dict(bolts=(1, 2), emis=2800.0, lux=3.6, strokes=(2, 3),
+                dist=(1000.0, 1900.0), mid=140.0, top=300.0),
+    "hero": dict(bolts=(0,), emis=4200.0, lux=9.0, strokes=(3, 4),
+                 dist=(600.0, 900.0), mid=130.0, top=300.0),
+}
+strikes = [dict(on=False, t=0.0, dur=0.0, bolt=-1, strokes=(),
+                emis=0.0, lux=0.0, dist=1000.0) for _ in range(STRIKE_SLOTS)]
+_next_strike = 3.0
+flash_level = 0.0            # 0..1, the frame's brightest active stroke
+# Auto exposure is a 10-stop-wide lever in this demo and a bolt is the brightest
+# thing in the film; without a floor the meter constricts on the flash and the
+# two seconds AFTER it come back grey. -1.2 EV is as far down as the eye may go
+# while a channel is lit.
+AE_RANGE = (-2.5, 3.0)
+AE_FLASH_MIN = -1.2
+_ae_flashing = False
+
+
+def lightning_anchor(bearing_deg, distance_m, slot=0):
+    """Put a strike pool at a bearing / distance from the boat (+Z is north).
+
+    The pool is REPOSITIONED, never rebuilt, and given a random yaw so the same
+    eight channels never present the same silhouette twice.
+    """
+    a = math.radians(bearing_deg)
+    g = strike_anchors[slot]
+    g.position.set(boat_state["x"] + distance_m * math.sin(a), 0.0,
+                   boat_state["z"] + distance_m * math.cos(a))
+    g.rotation.y = float(LRNG.uniform(0.0, 2.0 * math.pi))
+    return g
+
+
+def fire_strike(kind="mid", bearing=None, distance=None, slot=None):
+    """Fire one strike NOW. Returns the thunder delay in seconds (no audio yet).
+
+    This is the call a scripted shot makes. `kind` is sheet / intra / mid /
+    hero; bearing is degrees from +Z, distance is metres from the boat.
+    """
+    spec = STRIKE_KINDS.get(kind, STRIKE_KINDS["mid"])
+    if slot is None:
+        slot = next((i for i, s in enumerate(strikes) if not s["on"]), 0)
+    if bearing is None:
+        bearing = float(LRNG.uniform(0.0, 360.0))
+    if distance is None:
+        distance = float(LRNG.uniform(*spec["dist"]))
+    anc = lightning_anchor(bearing, distance, slot)
+
+    if strikes[slot]["on"]:
+        _end_strike(slot)
+    bolt = -1
+    if spec["bolts"]:
+        bolt = slot * 4 + int(LRNG.choice(spec["bolts"]))
+        bolt_nodes[bolt].position.set(0.0, 0.0, 0.0)
+
+    # 2-4 return strokes down the same channel, 55-160 ms apart, each weaker.
+    n = int(LRNG.integers(spec["strokes"][0], spec["strokes"][1] + 1))
+    t, st = 0.0, [(0.0, 1.0)]
+    for _ in range(n - 1):
+        t += float(LRNG.uniform(0.055, 0.130))
+        st.append((t, float(LRNG.uniform(0.60, 0.80))))
+    strikes[slot].update(on=True, t=0.0, dur=t + 0.24, bolt=bolt, strokes=st,
+                         emis=spec["emis"], lux=spec["lux"], dist=distance)
+    for pl, y in zip(flash_lights[slot], (spec["mid"], spec["top"])):
+        pl.position.set(anc.position.x, y, anc.position.z)
+    return distance / 343.0
+
+
+def _end_strike(slot):
+    s = strikes[slot]
+    s["on"] = False
+    if s["bolt"] >= 0:
+        bolt_mats[s["bolt"]].emissive_intensity = 0.0
+        bolt_mats[s["bolt"]].needs_update()
+        bolt_nodes[s["bolt"]].position.set(0.0, BOLT_PARK, 0.0)
+        s["bolt"] = -1
+    for pl in flash_lights[slot]:
+        pl.intensity = 0.0
+        pl.position.set(0.0, -20000.0, 0.0)   # out of every cluster cell
+
+
+def _stroke_shape(u, tau=0.050):
+    """One return stroke: a dim stepped leader, a spike, an exponential tail.
+
+    The leader is 5% of the peak, not 50%: on an ACES curve anything above ~3
+    is white, so a leader that is only one stop down from the stroke is not a
+    leader at all -- it is the same white line arriving early.
+    """
+    if u < 0.0:
+        return 0.0
+    if u < 0.030:
+        return 0.05 * (u / 0.030)
+    if u < 0.046:
+        return 0.05 + 0.95 * (u - 0.030) / 0.016
+    return math.exp(-(u - 0.046) / tau)
+
+
+def update_lightning(dt):
+    """Schedule strikes in a storm, then advance whatever is burning."""
+    global _next_strike, flash_level, _ae_flashing
+    stormy = weather["coverage"] > 0.85 and weather["rain"] > 0.30
+    if stormy:
+        _next_strike -= dt
+        if _next_strike <= 0.0:
+            fire_strike(str(LRNG.choice(("sheet", "sheet", "intra", "mid", "mid", "hero"))))
+            _next_strike = float(LRNG.uniform(5.0, 10.0))
+    else:
+        _next_strike = min(_next_strike, 4.0)
+
+    flash_level = 0.0
+    for i, s in enumerate(strikes):
+        if not s["on"]:
+            continue
+        s["t"] += dt
+        env = 0.0
+        for t0, a in s["strokes"]:
+            env = max(env, a * _stroke_shape(s["t"] - t0))
+        if s["t"] > s["dur"] or env < 6e-3:
+            _end_strike(i)
+            continue
+        env *= 0.72 + 0.28 * float(LRNG.random())     # a channel is never steady
+        flash_level = max(flash_level, env)
+        if s["bolt"] >= 0:
+            # The CHANNEL fades faster than the flash does: the plasma cools in
+            # microseconds while the lit cloud keeps glowing, and squaring is
+            # also the only way to get a channel that visibly dims instead of
+            # sitting at pure white until it snaps off (radiance 40 and
+            # radiance 4000 tone-map to the same pixel).
+            m = bolt_mats[s["bolt"]]
+            m.emissive_intensity = s["emis"] * env * env
+            m.needs_update()
+        # Inverse square, no window (the backend's atten is 1/d^decay), so the
+        # intensity has to carry the distance itself.
+        inten = s["lux"] * env * s["dist"] ** 2
+        for pl in flash_lights[i]:
+            pl.intensity = inten
+
+    hot = flash_level > 0.02
+    if hot != _ae_flashing:
+        _ae_flashing = hot
+        renderer.set_auto_exposure_range(AE_FLASH_MIN if hot else AE_RANGE[0], AE_RANGE[1])
+
+
+# --------------------------------------------------------------------------- #
+#  The filming drone: a camera vehicle, not a quadrotor sim. The attitude is
+#  kinematic -- it leans the way the acceleration says it must be leaning for
+#  the path it is on -- which is all the eye reads at 15 m.
+# --------------------------------------------------------------------------- #
+DRONE_SPAN = 0.45
+DRONE_ARM = DRONE_SPAN * 0.5 * 0.7071
+DRONE_G = 9.81
+# The eye sits on the gimbal, forward of and below the hull, so an FPV shot can
+# never see the machine it is flying on.
+DRONE_EYE = np.array([0.0, -0.090, 0.300])
+
+drone = tp.Group()
+drone.rotation.order = tp.RotationOrder.YXZ
+drone.visible = False
+scene.add(drone)
+
+body_mat = tp.MeshStandardMaterial()
+body_mat.color = 0x1b1f26
+body_mat.roughness = 0.42
+body_mat.metalness = 0.25
+trim_mat = tp.MeshStandardMaterial()
+trim_mat.color = 0x343b45
+trim_mat.roughness = 0.55
+prop_mat = tp.MeshStandardMaterial()
+prop_mat.color = 0x0c0e11
+prop_mat.roughness = 0.60
+prop_mat.side = tp.Side.Double
+# The blur disc is the one translucent thing in the demo. A TRANSPARENT
+# MeshBasicMaterial is routed to the post-TAA UI overlay pass on this backend
+# (VulkanCoreScene.cpp:26, kSnapUiBlend) and would draw straight through the
+# boat; a transparent MeshStandardMaterial stays in the traced scene and gets
+# stochastic alpha (VulkanCoreScene.cpp:3386), which is what a prop disc wants.
+disc_mat = tp.MeshStandardMaterial()
+disc_mat.color = 0xa8b0bb
+disc_mat.roughness = 0.45
+disc_mat.transparent = True
+disc_mat.opacity = 0.0
+disc_mat.side = tp.Side.Double
+lens_mat = tp.MeshStandardMaterial()
+lens_mat.color = 0x07090c
+lens_mat.roughness = 0.05
+lens_mat.metalness = 0.2
+
+_hull = tp.Mesh(tp.BoxGeometry(0.115, 0.052, 0.170), body_mat)
+_hull.cast_shadow = True
+drone.add(_hull)
+_canopy = tp.Mesh(tp.SphereGeometry(0.055, 14, 10), trim_mat)
+_canopy.scale.set(1.0, 0.52, 1.30)
+_canopy.position.set(0.0, 0.026, 0.005)
+drone.add(_canopy)
+for _s in (1.0, -1.0):
+    _bm = tp.Mesh(tp.BoxGeometry(DRONE_SPAN, 0.015, 0.021), trim_mat)
+    _bm.rotation.y = _s * math.radians(45.0)
+    _bm.cast_shadow = True
+    drone.add(_bm)
+
+props = []
+for _sx, _sz in ((1, 1), (-1, 1), (-1, -1), (1, -1)):
+    _px, _pz = _sx * DRONE_ARM, _sz * DRONE_ARM
+    _pod = tp.Mesh(tp.CylinderGeometry(0.017, 0.020, 0.032, 10, 1), body_mat)
+    _pod.position.set(_px, 0.013, _pz)
+    drone.add(_pod)
+    _hub = tp.Group()
+    _hub.position.set(_px, 0.035, _pz)
+    drone.add(_hub)
+    _bl = tp.Mesh(tp.BoxGeometry(0.126, 0.0024, 0.016), prop_mat)
+    _bl.rotation.z = math.radians(9.0)      # a little pitch, so it reads as a blade
+    _hub.add(_bl)
+    _disc = tp.Mesh(tp.CylinderGeometry(0.064, 0.064, 0.0016, 22, 1), disc_mat)
+    _disc.position.set(_px, 0.035, _pz)
+    drone.add(_disc)
+    props.append((_hub, 1.0 if _sx * _sz > 0 else -1.0))
+
+led_mats = []
+for _col, _x, _z in ((0xff1408, -1.02, 1.02), (0x18ff3c, 1.02, 1.02)):
+    _m = tp.MeshStandardMaterial()
+    _m.color = 0x0a0a0a
+    _m.emissive = _col
+    _m.emissive_intensity = 0.0
+    _s = tp.Mesh(tp.SphereGeometry(0.012, 10, 8), _m)
+    _s.position.set(_x * DRONE_ARM, 0.004, _z * DRONE_ARM)
+    drone.add(_s)
+    led_mats.append(_m)
+strobe_mat = tp.MeshStandardMaterial()
+strobe_mat.color = 0x0a0a0a
+strobe_mat.emissive = 0xffffff
+strobe_mat.emissive_intensity = 0.0
+_st = tp.Mesh(tp.SphereGeometry(0.013, 10, 8), strobe_mat)
+_st.position.set(0.0, -0.030, -0.030)
+drone.add(_st)
+
+gimbal = tp.Group()
+gimbal.position.set(0.0, -0.038, 0.082)
+drone.add(gimbal)
+_gb = tp.Mesh(tp.SphereGeometry(0.027, 14, 10), body_mat)
+_gb.scale.set(1.0, 1.0, 0.85)
+gimbal.add(_gb)
+_lens = tp.Mesh(tp.CylinderGeometry(0.014, 0.017, 0.018, 12, 1), lens_mat)
+_lens.rotate_x(math.pi / 2)
+_lens.position.set(0.0, 0.0, 0.022)
+gimbal.add(_lens)
+
+drone_state = {
+    "pos": np.array([0.0, 6.0, 14.0]), "vel": np.zeros(3), "acc": np.zeros(3),
+    "look": np.array([0.0, 3.0, 0.0]),
+    "yaw": 0.0, "pitch": 0.0, "roll": 0.0,
+    "spin": 0.0, "spool": 0.0, "throttle": 0.5, "have": False,
+}
+drone_on = ("--drone" in sys.argv) or ("--fpv" in sys.argv)
+drone_auto = True          # False = a script owns drone_set_pose (Phase 4)
+view_mode = "fpv" if "--fpv" in sys.argv else "orbit"
+drone.visible = drone_on
+_drone_phase = 0.0
+_night_level = 0.0
+
+
+def _wrap_toward(a, b, k):
+    d = (b - a + math.pi) % (2.0 * math.pi) - math.pi
+    return a + d * k
+
+
+def drone_set_pose(pos, look_at, dt=1.0 / 60.0):
+    """Put the drone at `pos` looking at `look_at`. THE call a shot makes.
+
+    Attitude is derived, never authored: the last few poses give a smoothed
+    velocity and acceleration, and a machine that is accelerating forward must
+    be nose-down by atan2(a_fwd, g) to be doing it. Yaw is the velocity heading
+    once it is actually moving and the look-at bearing when it is not, so a
+    hover does not spin on numerical noise.
+    """
+    d = drone_state
+    p = np.asarray(pos, np.float64).copy()
+    tgt = np.asarray(look_at, np.float64).copy()
+    dt = max(float(dt), 1e-4)
+    if not d["have"]:
+        d["have"] = True
+        d["vel"][:] = 0.0
+        d["acc"][:] = 0.0
+        to0 = tgt - p
+        d["yaw"] = math.atan2(to0[0], to0[2])
+    else:
+        v = (p - d["pos"]) / dt
+        vprev = d["vel"].copy()
+        d["vel"] += (v - d["vel"]) * (1.0 - math.exp(-dt / 0.12))
+        a = (d["vel"] - vprev) / dt
+        d["acc"] += (a - d["acc"]) * (1.0 - math.exp(-dt / 0.22))
+    d["pos"] = p
+    d["look"] = tgt
+
+    sp = float(np.linalg.norm(d["vel"][[0, 2]]))
+    to = tgt - p
+    yaw_t = _wrap_toward(math.atan2(to[0], to[2]),
+                         math.atan2(d["vel"][0], d["vel"][2]) if sp > 1e-3 else
+                         math.atan2(to[0], to[2]), smoothstep(0.6, 2.5, sp))
+    d["yaw"] = _wrap_toward(d["yaw"], yaw_t, 1.0 - math.exp(-dt / 0.15))
+    fwd = np.array([math.sin(d["yaw"]), 0.0, math.cos(d["yaw"])])
+    lat = np.array([math.cos(d["yaw"]), 0.0, -math.sin(d["yaw"])])
+    lim = math.radians(25.0)
+    # +x nose-down, -z starboard-down: the signs that make it bank INTO the turn
+    pt = max(-lim, min(lim, math.atan2(float(np.dot(d["acc"], fwd)), DRONE_G)))
+    rl = max(-lim, min(lim, -math.atan2(float(np.dot(d["acc"], lat)), DRONE_G)))
+    k = 1.0 - math.exp(-dt / 0.10)
+    d["pitch"] += (pt - d["pitch"]) * k
+    d["roll"] += (rl - d["roll"]) * k
+    d["throttle"] = float(np.clip(0.5 + d["acc"][1] / 9.0, 0.0, 1.0))
+
+    drone.position.set(float(p[0]), float(p[1]), float(p[2]))
+    drone.rotation.set(d["pitch"], d["yaw"], d["roll"])
+    # The gimbal holds the horizon and points where the shot points.
+    dh = math.hypot(float(to[0]), float(to[2]))
+    gp = math.atan2(-float(to[1]), max(dh, 1e-3))
+    gimbal.rotation.set(gp - d["pitch"], 0.0, -d["roll"])
+
+
+def drone_tick(dt):
+    """Props, LEDs and the strobe. Runs whenever the machine is in the world."""
+    d = drone_state
+    d["spool"] += (1.0 - d["spool"]) * (1.0 - math.exp(-dt / 0.55))
+    rate = (100.0 + 55.0 * d["throttle"]) * d["spool"]
+    d["spin"] += rate * dt
+    for hub, sgn in props:
+        hub.rotation.y = sgn * d["spin"]
+    op = 0.55 * smoothstep(12.0, 70.0, rate)
+    if abs(op - disc_mat.opacity) > 0.02:
+        disc_mat.opacity = op
+        disc_mat.needs_update()
+    lit = 10.0 + 70.0 * _night_level
+    for m in led_mats:
+        if abs(m.emissive_intensity - lit) > 0.5:
+            m.emissive_intensity = lit
+            m.needs_update()
+    blink = 340.0 if (world_time % 1.05) < 0.065 else 0.0
+    if blink != strobe_mat.emissive_intensity:
+        strobe_mat.emissive_intensity = blink
+        strobe_mat.needs_update()
+
+
+def drone_demo_path(dt):
+    """Key G / --drone: a lazy orbit round the boat so the machine can be seen."""
+    global _drone_phase
+    _drone_phase += dt * (2.0 * math.pi / 22.0)
+    bx, bz, by = boat_state["x"], boat_state["z"], boat_state["y"]
+    r = 13.0 + 2.5 * math.sin(_drone_phase * 0.7)
+    h = 6.0 + 1.7 * math.sin(_drone_phase * 1.3 + 0.8)
+    drone_set_pose((bx + r * math.sin(_drone_phase), by + h, bz + r * math.cos(_drone_phase)),
+                   (bx, by + 4.2, bz), dt)
+
+
+def drone_camera_apply():
+    """FPV: the render camera IS the gimbal eye."""
+    d = drone_state
+    eye = d["pos"] + yxz_matrix(d["pitch"], d["yaw"], d["roll"]) @ DRONE_EYE
+    camera.position.set(float(eye[0]), float(eye[1]), float(eye[2]))
+    camera.look_at(float(d["look"][0]), float(d["look"][1]), float(d["look"][2]))
+
+
 camera = tp.PerspectiveCamera(48, canvas.aspect(), 0.1, 4000)
 # Start downsun of the boat, looking back toward the sun: that is the one
 # viewpoint where the sails glow with transmitted light and the rig cuts
@@ -2227,7 +2736,7 @@ def pressed(key):
 
 
 def handle_keys(dt):
-    global day_speed
+    global day_speed, drone_on, view_mode
     bs = boat_state
     if ui is not None and ui.want_capture_keyboard:
         return
@@ -2267,6 +2776,21 @@ def handle_keys(dt):
         wtarget["rain"] = 0.0 if wtarget["rain"] > 0.05 else 1.0
     if pressed("K"):
         day_speed = 0.0 if day_speed != 0.0 else 0.35   # 24 h in ~68 s
+    if pressed("L"):
+        # A hero fork, now, in front of wherever the camera happens to look.
+        cam = camera.position
+        fwd = camera.get_world_direction()
+        fire_strike("hero", bearing=math.degrees(math.atan2(fwd.x, fwd.z))
+                    + float(LRNG.uniform(-14.0, 14.0)), distance=780.0)
+    if pressed("G"):
+        drone_on = not drone_on
+        drone.visible = drone_on            # structural, so only on a keypress
+        if not drone_on:
+            view_mode = "orbit"
+        else:
+            drone_state["have"] = False     # re-seed the kinematics on the way in
+    if pressed("V") and drone_on:
+        view_mode = "orbit" if view_mode == "fpv" else "fpv"
 
 
 def reset_boat():
@@ -2389,7 +2913,8 @@ def update_world(dt):
         ocean.params.choppiness = knob["choppy"]
 
     # ---- the light on the rock ---------------------------------------------
-    night = 1.0 - smoothstep(0.0, 0.30, cs.daylight)
+    global _night_level
+    night = _night_level = 1.0 - smoothstep(0.0, 0.30, cs.daylight)
     ang = 2.0 * math.pi * (world_time / BEAM_PERIOD)
     for k, (b, tg) in enumerate(zip(beams, beam_targets)):
         a = ang + k * math.pi
@@ -2435,6 +2960,7 @@ def update_world(dt):
         rain.density_repr.enabled = False
 
     apply_wetness(weather["wetness"])
+    update_lightning(dt)
     return cs
 
 
@@ -2491,7 +3017,7 @@ def draw_ui():
     _, knob["stiff"] = tp.imgui.slider_float("cloth stiffness", knob["stiff"], 0.15, 1.0)
     _, knob["rig_eff"] = tp.imgui.slider_float("rig efficiency", knob["rig_eff"], 0.5, 3.0)
     tp.imgui.text("A/D steer  Q/E main  Z/C jib  T trim  P pilot  R reset")
-    tp.imgui.text("1-5 acts   N rain   K time-lapse")
+    tp.imgui.text("1-5 acts  N rain  K time-lapse  L strike  G drone  V FPV")
     tp.imgui.end()
 
     tp.imgui.set_next_window_pos(12, 470)
@@ -2541,8 +3067,42 @@ def draw_ui():
                   f"{gulls.perched_count()} on the rock")
     if tp.imgui.button("flush the flock"):
         gulls.startle(tp.Vector3(boat_state["x"], 2.0, boat_state["z"]), 200.0, 1.0)
+    tp.imgui.separator()
+    if tp.imgui.button("strike (L)"):
+        fire_strike("hero", distance=780.0)
+    tp.imgui.same_line()
+    if tp.imgui.button("sheet"):
+        fire_strike("sheet")
+    tp.imgui.same_line()
+    if tp.imgui.button("fork"):
+        fire_strike("mid")
+    live = sum(1 for s in strikes if s["on"])
+    tp.imgui.text(f"lightning: {live} burning   flash {flash_level:.2f}   "
+                  f"next in {max(_next_strike, 0.0):4.1f} s")
+    ch, dr = tp.imgui.checkbox("drone (G)", drone_on)
+    if ch:
+        _set_drone(dr)
+    tp.imgui.same_line()
+    ch, fp = tp.imgui.checkbox("FPV (V)", view_mode == "fpv")
+    if ch and drone_on:
+        _set_view("fpv" if fp else "orbit")
     tp.imgui.text("look toward the sun for shafts through the rig")
     tp.imgui.end()
+
+
+def _set_drone(on):
+    global drone_on, view_mode
+    drone_on = bool(on)
+    drone.visible = drone_on
+    if not drone_on:
+        view_mode = "orbit"
+    else:
+        drone_state["have"] = False
+
+
+def _set_view(mode):
+    global view_mode
+    view_mode = mode
 
 
 # --------------------------------------------------------------------------- #
@@ -2587,7 +3147,25 @@ def frame(dt):
     blow = math.radians(knob["wind_from"]) + math.pi
     gulls.set_wind(math.sin(blow), math.cos(blow))   # perched birds face the wind
     gulls.update(dt)
-    follow_camera()
+    if drone_on:
+        if drone_auto:
+            drone_demo_path(dt)              # Phase 4 drives drone_set_pose itself
+        drone_tick(dt)
+    # FPV means the render camera IS the drone: the orbit rig has to keep its
+    # hands off it, or controls.update() puts the camera back on its sphere.
+    fpv = drone_on and view_mode == "fpv"
+    # Offsetting the eye forward and below the hull is not enough on its own --
+    # the gimbal swings off the airframe's axis and an arm walks back into the
+    # corner of the frame. In FPV the machine is simply not in the world. The
+    # visibility flip is a structural change, but it only ever happens on a
+    # mode switch, which in the film is a CUT.
+    want_vis = drone_on and not fpv
+    if drone.visible != want_vis:
+        drone.visible = want_vis
+    if fpv:
+        drone_camera_apply()
+    else:
+        follow_camera()
 
 
 if SHOT:
@@ -2597,7 +3175,26 @@ if SHOT:
     # light (glitter path, sail translucency) or away from it, which is the
     # only half of the sky a rainbow -- or a moon opposite the sun -- lives in.
     FACE = cli_arg("--face", "islet", str)
+    # A strike, on the clock, for the headless stress test. `--seq PREFIX`
+    # writes the frames either side of it so the envelope can be LOOKED at
+    # rather than asserted: -1 (before), 0 (leader), +2 (peak), +5, +10, +30.
+    STRIKE_AT = cli_arg("--strike", -1.0, float)
+    STRIKE_KIND = cli_arg("--strike-kind", "hero", str)
+    STRIKE_BRG = cli_arg("--strike-bearing", 322.0, float)
+    STRIKE_DIST = cli_arg("--strike-dist", 800.0, float)
+    SEQ = cli_arg("--seq", "", str)
+    strike_frame = int(round(STRIKE_AT * 60.0)) if STRIKE_AT > 0.0 else -1
+    seq = {}
+    if SEQ and strike_frame > 0:
+        for o in (-1, 0, 2, 5, 10, 30, 75):
+            seq[strike_frame + o] = f"{SEQ}_{'m' if o < 0 else 'p'}{abs(o):02d}.png"
+    t_hot, n_hot, t_cold, n_cold = 0.0, 0, 0.0, 0
     for f in range(frames):
+        if f == strike_frame:
+            delay = fire_strike(STRIKE_KIND, bearing=STRIKE_BRG, distance=STRIKE_DIST)
+            print(f"strike at frame {f} ({STRIKE_KIND}, {STRIKE_DIST:.0f} m), "
+                  f"thunder in {delay:.1f} s")
+        _t0 = time.perf_counter()
         frame(1.0 / 60.0)
         # Orbit slowly so the still is not shot from the launch pose.
         # Stand off her starboard quarter so the boat sits against the light.
@@ -2613,25 +3210,63 @@ if SHOT:
             # ANTISOLAR point, so at a low sun it is most of the way to the
             # zenith and a level camera frames only its shoulders.
             camera.look_at(bx + hz[0] * 260.0, 62.0, bz + hz[1] * 260.0)
+        elif FACE == "drone":
+            # Stand outside the drone's orbit and look in, so the boat is the
+            # background and the machine is the subject.
+            dp = drone_state["pos"]
+            to = np.array([dp[0] - bx, 0.0, dp[2] - bz])
+            to = to / max(float(np.linalg.norm(to)), 1e-6)
+            camera.position.set(dp[0] + to[0] * 5.2 + 1.4, dp[1] + 1.15,
+                                dp[2] + to[2] * 5.2 + 1.4)
+            camera.look_at(float(dp[0]), float(dp[1]) - 0.12, float(dp[2]))
+        elif FACE == "bow":
+            # Bow-on from a little to port: the one angle where the jib is not
+            # behind the main.
+            cy, sy = math.cos(boat_state["yaw"]), math.sin(boat_state["yaw"])
+            camera.position.set(bx + sy * 21.0 - cy * 8.0, 5.2, bz + cy * 21.0 + sy * 8.0)
+            camera.look_at(bx, 6.4, bz)
         else:
             camera.position.set(bx + 27.0, 10.5, bz - 20.0)
             camera.look_at(bx * 0.35 + ISLET_X * 0.65, 7.0, bz * 0.35 + ISLET_Z * 0.65)
+        if drone_on and view_mode == "fpv":
+            drone_camera_apply()              # the shot framing does not own FPV
         renderer.render(scene, camera)        # keeps the temporal history honest
         first_render_done = True
+        _dt_ms = (time.perf_counter() - _t0) * 1e3
+        if f > 90:                            # skip the warm-up
+            if flash_level > 0.02:
+                t_hot += _dt_ms
+                n_hot += 1
+            else:
+                t_cold += _dt_ms
+                n_cold += 1
+        if f in seq:
+            try:
+                from PIL import Image
+                Image.fromarray(renderer.read_pixels()).save(seq[f])
+            except Exception as exc:          # noqa: BLE001 - a still is not the demo
+                print(f"  seq write failed: {exc}")
+            print(f"  wrote {seq[f]}  (flash {flash_level:.3f})")
     # Let the accumulation settle on the final pose before the read-back.
-    for _ in range(24):
-        renderer.render(scene, camera)
-    out = cli_arg("--out", "warp_sailboat.png", str)
-    renderer.save_frame(scene, camera, out)
-    print(f"sailed {SHOT_T:.1f} s ({frames} frames), wrote {out}")
+    if not seq:
+        for _ in range(24):
+            renderer.render(scene, camera)
+        out = cli_arg("--out", "warp_sailboat.png", str)
+        renderer.save_frame(scene, camera, out)
+        print(f"sailed {SHOT_T:.1f} s ({frames} frames), wrote {out}")
+    if n_cold:
+        print(f"frame time: {t_cold / n_cold:5.1f} ms over {n_cold} quiet frames"
+              + (f", {t_hot / n_hot:5.1f} ms over {n_hot} lit frames" if n_hot else ""))
 else:
     def animate():
         global first_render_done
         dt = min(clock.get_delta(), 0.1)      # a pause must not teleport the boat
+        fpv = drone_on and view_mode == "fpv"
         if ui is not None:
-            controls.enabled = not ui.want_capture_mouse
+            controls.enabled = (not ui.want_capture_mouse) and not fpv
         frame(dt)
-        controls.update()
+        if not fpv:
+            controls.update()
         renderer.render(scene, camera)
         first_render_done = True
         if ui is not None:
