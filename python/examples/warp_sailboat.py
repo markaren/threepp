@@ -129,6 +129,24 @@ FILM_CUT = cli_arg("--cut", "full", str)          # "short" = the one-minute cut
 WARMUP = int(cli_arg("--warmup", 50, float))      # unrecorded frames after a cut
 PREROLL = int(cli_arg("--preroll", 6.0 * FPS, float))  # unrecorded, before shot 0
 
+# ---- the drone's sensors ------------------------------------------------------
+#  The short cut's FPV leg shows what the drone's camera SEES three ways: the
+#  shaded picture, a metric DEPTH map and an EVENT CAMERA (DVS) view. These are
+#  the renderer's real sensor outputs -- read_aovs_typed's depth AOV in metres
+#  and the GPU log-intensity crossing detector -- not post effects on the RGB.
+DEPTH_NEAR = cli_arg("--depth-near", 2.0, float)   # metres, the LUT's hot end
+DEPTH_FAR = cli_arg("--depth-far", 140.0, float)   # metres; beyond this = black
+EVT_W = int(cli_arg("--evt-width", 640, float))    # DVS native resolution
+EVT_H = int(cli_arg("--evt-height", 360, float))
+EVT_THRESHOLD = cli_arg("--evt-threshold", 0.22, float)   # log-intensity units
+EVT_DECAY = cli_arg("--evt-decay", 0.70, float)
+EVT_MIN_LUMA = cli_arg("--evt-min-luma", 0.004, float)    # soft floor before log()
+EVT_MAX_PP = int(cli_arg("--evt-max-events", 4, float))   # events per pixel per frame
+# The renderer's GPU detector instead of the final-frame model. It is real and
+# it is bound (renderer.event_camera_*), but for THIS scene it is the wrong
+# instrument -- see the note over _dvs_step.
+EVT_GPU = "--evt-gpu" in sys.argv
+
 if not tp.HAS_VULKAN or not tp.vulkan_available():
     print("This example needs the Vulkan backend (configure with "
           "-DTHREEPP_WITH_VULKAN=ON) and a working Vulkan loader.")
@@ -1505,9 +1523,28 @@ stone_mat.roughness = 1.0                    # the map scales this
 stone_mat.metalness = 0.0
 stone_mat.side = tp.Side.Double
 
+# The lantern glazing. It is GLASS, and it took two goes to get there.
+#
+# It was an opaque dark revolution, which is why the user's first note was "in
+# the day/dusk it just looks black": the lamp sits inside it and is occluded
+# from every outside direction, so however hard the lamp is driven the lantern
+# reads as a black box. Making the GLAZING itself emissive fixed the black box
+# and created a worse one -- "the light source is too large, it looks
+# unnatural, no cabinet etc." -- because a 3.2 m tall, 2.1 m radius emitter is
+# a building-sized light, and blown out it erases the panes, the mullions and
+# the dome with it.
+#
+# So the glazing is transparent and the LAMP is the emitter. A transparent
+# MeshStandardMaterial stays in the traced scene and gets stochastic alpha
+# (`d.transmission = 1 - opacity`, VulkanCoreScene.cpp:3386) -- a transparent
+# MeshBasicMaterial would be routed to the post-TAA UI overlay instead
+# (kSnapUiBlend, VulkanCoreScene.cpp:26) and would draw through the tower.
 lamp_glass = tp.MeshStandardMaterial()
-lamp_glass.color = 0x1a1d20
-lamp_glass.roughness = 0.08
+lamp_glass.color = 0x121a1e                  # smoked, cold, dark
+lamp_glass.roughness = 0.04
+lamp_glass.metalness = 0.0
+lamp_glass.transparent = True
+lamp_glass.opacity = 0.17                    # you see the lamp, and the glass
 lamp_glass.side = tp.Side.Double
 
 metal_mat = tp.MeshStandardMaterial()
@@ -1585,12 +1622,39 @@ for h in (14.35, 14.95):
             light_house.add(strut(prev, p, 0.022, metal_mat))
         prev = p
 
+# The lantern's IRONWORK: eight astragals up the glazing and a sill ring at its
+# foot. Without them the glass band is a featureless tube and the lantern has no
+# cabinet -- which is exactly what the user saw. They also give the lamp
+# something to be behind, which is what makes it read as a lamp in a room.
+for k in range(8):
+    a0 = 2.0 * math.pi * k / 8.0
+    _r = 2.14
+    light_house.add(strut((_r * math.cos(a0), 14.10, _r * math.sin(a0)),
+                          (_r * math.cos(a0), 17.00, _r * math.sin(a0)),
+                          0.055, metal_mat))
+_prev = None
+for k in range(25):
+    a0 = 2.0 * math.pi * k / 24.0
+    _p = (2.16 * math.cos(a0), 14.12, 2.16 * math.sin(a0))
+    if _prev is not None:
+        light_house.add(strut(_prev, _p, 0.040, metal_mat))
+    _prev = _p
+
+# The lamp: a small Fresnel drum, not a room. 0.34 m radius inside a 2.1 m
+# lantern, so however hot it is driven it is a bright POINT with a bloom halo
+# and the panes, astragals and dome stay legible around it. On Vulkan an
+# emissive mesh IS a light source, so this one really does throw light into the
+# mist -- but the sweeping beam is the two SpotLights, not this.
 lamp_mat = tp.MeshStandardMaterial()
 lamp_mat.color = 0x120e08
 lamp_mat.emissive = 0xffc978
 lamp_mat.emissive_intensity = 46.0
-lamp = tp.Mesh(tp.SphereGeometry(0.72, 20, 14), lamp_mat)
-lamp.position.set(0.0, 15.5, 0.0)
+# Day value ABOVE the night one, because the meter is doing the opposite:
+# -2.5 EV at noon and +3 EV at midnight. Capped either way -- the point is a
+# lit lamp with a soft halo, not a white slab (bloom_clamp is 12).
+LAMP_DAY, LAMP_NIGHT = 62.0, 26.0
+lamp = tp.Mesh(tp.CylinderGeometry(0.34, 0.34, 0.66, 18, 1), lamp_mat)
+lamp.position.set(0.0, 15.45, 0.0)
 light_house.add(lamp)
 
 # ---- the boat -------------------------------------------------------------- #
@@ -1834,12 +1898,21 @@ LANTERN = (ISLET_X, PAD_Y - 0.6 + 15.5, ISLET_Z)
 # intensity has to be lighthouse-sized (O(10^5) cd) before the far end of the
 # beam lights anything; the cone is narrow enough to read as a shaft in the
 # mist rather than a floodlight.
-BEAM_INTENSITY = 380000.0
+# 380000 through Phase 7. The user, after the one-minute cut: "in the night the
+# beam needs to have more POWER." 3x, plus a degree of cone and a softer
+# penumbra, so it reads as a solid sweeping shaft rather than a thin dotted one.
+BEAM_INTENSITY = 1150000.0
+# The optic never stops turning, so the light never goes out: by day it is a
+# small fraction of the night value, which is the wrong way round physically
+# (a real lamp is the same lamp) but the right way round for a renderer whose
+# meter closes 2.5 EV at noon and opens 3 EV at midnight. Small on purpose --
+# a full-power beam sweeping a sunlit boat reads as a bug, not as a lighthouse.
+BEAM_DAY_FRAC = 0.05
 BEAM_PERIOD = 6.0                          # seconds per revolution
 beams, beam_targets = [], []
 for k in range(2):
     b = tp.SpotLight(tp.Color(1.0, 0.93, 0.74), 0.0, 2500.0,
-                     math.radians(4.0), 0.5, 2.0)
+                     math.radians(5.0), 0.62, 2.0)
     b.position.set(*LANTERN)
     t = tp.Group()
     t.position.set(LANTERN[0] + 900.0, LANTERN[1] - 22.0, LANTERN[2])
@@ -2304,17 +2377,13 @@ prop_mat = tp.MeshStandardMaterial()
 prop_mat.color = 0x0c0e11
 prop_mat.roughness = 0.60
 prop_mat.side = tp.Side.Double
-# The blur disc is the one translucent thing in the demo. A TRANSPARENT
-# MeshBasicMaterial is routed to the post-TAA UI overlay pass on this backend
-# (VulkanCoreScene.cpp:26, kSnapUiBlend) and would draw straight through the
-# boat; a transparent MeshStandardMaterial stays in the traced scene and gets
-# stochastic alpha (VulkanCoreScene.cpp:3386), which is what a prop disc wants.
-disc_mat = tp.MeshStandardMaterial()
-disc_mat.color = 0xa8b0bb
-disc_mat.roughness = 0.45
-disc_mat.transparent = True
-disc_mat.opacity = 0.0
-disc_mat.side = tp.Side.Double
+# There WAS a translucent blur disc over each hub (a transparent
+# MeshStandardMaterial, opacity ramped with the spin rate). CUT on the user's
+# call after watching the film: "the drone has opaque disks + rotors. ONLY
+# rotors is what we want." At 0.45 m span and 12-15 m from the lens the discs
+# never resolved as motion blur -- they read as four grey plates bolted to the
+# arms. The blades alias into an apparent slow counter-rotation at 60 fps,
+# which is what a filmed prop does, and that is the whole effect wanted.
 lens_mat = tp.MeshStandardMaterial()
 lens_mat.color = 0x07090c
 lens_mat.roughness = 0.05
@@ -2345,9 +2414,6 @@ for _sx, _sz in ((1, 1), (-1, 1), (-1, -1), (1, -1)):
     _bl = tp.Mesh(tp.BoxGeometry(0.126, 0.0024, 0.016), prop_mat)
     _bl.rotation.z = math.radians(9.0)      # a little pitch, so it reads as a blade
     _hub.add(_bl)
-    _disc = tp.Mesh(tp.CylinderGeometry(0.064, 0.064, 0.0016, 22, 1), disc_mat)
-    _disc.position.set(_px, 0.035, _pz)
-    drone.add(_disc)
     props.append((_hub, 1.0 if _sx * _sz > 0 else -1.0))
 
 led_mats = []
@@ -2459,10 +2525,6 @@ def drone_tick(dt):
     d["spin"] += rate * dt
     for hub, sgn in props:
         hub.rotation.y = sgn * d["spin"]
-    op = 0.55 * smoothstep(12.0, 70.0, rate)
-    if abs(op - disc_mat.opacity) > 0.02:
-        disc_mat.opacity = op
-        disc_mat.needs_update()
     lit = 10.0 + 70.0 * _night_level
     for m in led_mats:
         if abs(m.emissive_intensity - lit) > 0.5:
@@ -3107,7 +3169,7 @@ def sim_tick(dt):
     renderer.sim_time = sim_clock
 
 
-_applied = {"cloud": None, "fog_h": None, "wind": None,
+_applied = {"cloud": None, "fog_h": None, "fog_n": 0.45, "wind": None,
             "wave": None, "choppy": None, "glow": None, "whitecap": None}
 
 
@@ -3177,10 +3239,19 @@ def update_world(dt):
     # ---- air: the fog is the sky's own horizon -----------------------------
     knob["fog"] = weather["fog"]
     scene.set_fog_exp2(horizon_color(cs, weather), knob["fog"])
-    if _applied["fog_h"] is None or abs(weather["fog_h"] - _applied["fog_h"]) > 1.0:
+    # Froxel noise stops a fog slab reading as a flat wall, and it is ALSO what
+    # makes the lighthouse beam a dotted sparkly streak instead of a solid
+    # shaft -- the cone is a thin high-contrast feature and the noise lands
+    # right across it. The beam only matters after dark, so the noise comes
+    # down as the light comes up.
+    fog_noise = 0.45 - 0.35 * (1.0 - smoothstep(0.0, 0.30, cs.daylight))
+    if (_applied["fog_h"] is None
+            or abs(weather["fog_h"] - _applied["fog_h"]) > 1.0
+            or abs(fog_noise - _applied["fog_n"]) > 0.02):
         _applied["fog_h"] = knob["fog_h"] = weather["fog_h"]
+        _applied["fog_n"] = fog_noise
         renderer.set_height_fog(density=0.0, base_y=0.0,
-                                falloff=knob["fog_h"], noise_amount=0.45)
+                                falloff=knob["fog_h"], noise_amount=fog_noise)
 
     if _applied["cloud"] is None or abs(weather["coverage"] - _applied["cloud"]) > 0.006:
         _applied["cloud"] = knob["cloud"] = weather["coverage"]
@@ -3220,15 +3291,15 @@ def update_world(dt):
         a = ang + k * math.pi
         tg.position.set(LANTERN[0] + 900.0 * math.sin(a), LANTERN[1] - 22.0,
                         LANTERN[2] + 900.0 * math.cos(a))
-        b.intensity = BEAM_INTENSITY * night
+        b.intensity = BEAM_INTENSITY * (BEAM_DAY_FRAC + (1.0 - BEAM_DAY_FRAC) * night)
     glow = night * (1.0 + 0.05 * math.sin(world_time * 9.0) * math.sin(world_time * 3.7))
     if _applied["glow"] is None or abs(glow - _applied["glow"]) > 0.015:
         _applied["glow"] = glow
-        # Both of these are REAL light sources on Vulkan, and auto exposure
-        # lifts the night by up to 3 EV -- the pre-cycle constants (lamp 46,
-        # window 26) came back as a white-hot rock and one yellow smear along
-        # the deck once the eye was allowed to open.
-        lamp_mat.emissive_intensity = 3.0 + 19.0 * glow
+        # The lamp is a real light source on Vulkan and auto exposure lifts the
+        # night by up to 3 EV, so the NIGHT value is the smaller one. It burns
+        # at both ends of the day: a lighthouse whose lamp is off at noon is
+        # the thing the user complained about.
+        lamp_mat.emissive_intensity = LAMP_DAY + (LAMP_NIGHT - LAMP_DAY) * glow
         lamp_mat.needs_update()
         glass_mat.emissive_intensity = 9.0 * glow
         glass_mat.needs_update()
@@ -3460,6 +3531,7 @@ _cur_shot = None
 _cur_u = 0.0
 _cam_fov = None
 _dof_on = False
+_sensor_px = None            # this frame's sensor image, or None for the picture
 
 
 def fov_mm(mm):
@@ -3519,7 +3591,7 @@ class Shot:
                  wx=None, wx_hard=True, wx_over=None, place=None, course=None,
                  tod_rate=0.0, ease="inout", lead=0.0, shake=0.15, ae=None,
                  drone=None, view="cam", du=(0.0, 1.0), fire=(), poster=None,
-                 fade=None, **p):
+                 fade=None, sensor=None, caption=None, **p):
         self.act, self.name, self.tod, self.dur, self.kind = act, name, tod, dur, kind
         self.fov, self.dof, self.wx, self.wx_hard = fov, dof, wx, wx_hard
         self.wx_over, self.place, self.course = wx_over, place, course
@@ -3527,6 +3599,10 @@ class Shot:
         self.ae = ae
         self.drone, self.view, self.du = drone, view, du
         self.fire, self.poster, self.fade = list(fire), poster, fade
+        # `sensor` swaps what the frame IS: None = the shaded picture, "depth" =
+        # the metric depth AOV of that same frame, "events" = the DVS detector's
+        # accumulator. `caption` is the small bottom-left sensor label.
+        self.sensor, self.caption = sensor, caption
         self.p = p
 
 
@@ -3831,7 +3907,8 @@ FILM_SCRIPT = [
 #  whole of it -- "keep it to one minute. make sure the golden, drone and
 #  lightning strike is captured" -- so this is a SELECTION and a RE-TIMING of
 #  shots that already exist, not new mechanics: same kinds, same camera paths,
-#  same drone trajectory, same strike mechanism. Seven shots, 59.0 s.
+#  same drone trajectory, same strike mechanism. Nine shots, 59.0 s -- the FPV
+#  leg is now three of them (rgb / depth / event camera off the same move).
 #
 #  Two things have to be repaired when a shot is dropped:
 #   * an ACT CUT can go with it. `place` (the teleport that says hours have
@@ -3866,7 +3943,33 @@ SHORT_CUT = [
     # (shot name in FILM_SCRIPT, seconds, overrides)
     ("dawn: low wide, boat in silhouette", 6.0, {}),
     ("morning: the drone off the quarter", 5.5, {}),
-    ("morning: FPV, the same move", 6.5, {}),
+    # ---- THE DRONE SENSOR LEG (10 s) -------------------------------------- #
+    #  The user, after watching the one-minute cut: "we have a 'drone' in the
+    #  shot. Can we spend 10 seconds displaying depth and possibly event camera
+    #  render from it?" This is the platform's actual pitch -- synthetic
+    #  perception -- so the leg has to read as SENSOR OUTPUT and not as a
+    #  filter, which means three things:
+    #   * it is ONE continuous drone move, cut three ways. All three shots fly
+    #     the same DRONE_REVEAL arc (the same object, so drone_state's velocity
+    #     / acceleration / attitude filters carry across the cuts) at the same
+    #     tod and weather, split by `du` in proportion to their seconds. The
+    #     picture does not jump; only the way it is SENSED does.
+    #   * the depth is `read_aovs_typed(..., ["depth"])` -- the renderer's
+    #     metric depth buffer of that exact frame, in metres -- and the events
+    #     are the GPU DVS detector at its own 640x360 sensor resolution. No
+    #     post-processing of the RGB is involved in either.
+    #   * each look carries a small bottom-left label, the way a sensor readout
+    #     is captioned in a paper figure.
+    #  The FPV shot was 6.5 s; the leg is 10.0 s, and the 3.5 s came out of the
+    #  night pull-back (13.5 -> 10.0), so the cut is still 59.0 s.
+    ("morning: FPV, the same move", 3.0,
+     dict(name="drone sensors: FPV rgb", du=(0.42, 0.594), caption="drone · rgb")),
+    ("morning: FPV, the same move", 3.5,
+     dict(name="drone sensors: depth", du=(0.594, 0.797), sensor="depth",
+          caption=f"drone · depth · {DEPTH_NEAR:.0f}-{DEPTH_FAR:.0f} m")),
+    ("morning: FPV, the same move", 3.5,
+     dict(name="drone sensors: event camera", du=(0.797, 1.0), sensor="events",
+          caption=f"drone · event camera · {EVT_W}x{EVT_H} DVS")),
     # Reframed, and the reason is the standing rule about drowning her. At the
     # full film's 30 mm from 16 m the lens is pointed at mid-mast, which puts
     # her WATERLINE 3 deg below the bottom edge: the hull is cropped away and a
@@ -3902,7 +4005,9 @@ SHORT_CUT = [
     # crane, and its six seconds went to the money shot (12 -> 14) and to the
     # pull-back (10 -> 13.5). The pull-back therefore inherits act 5's placement
     # and its hard cut to `night`.
-    ("night: pull back and up", 13.5,
+    # 13.5 s in Phase 7; 10.0 here -- the 3.5 s went to the drone sensor leg.
+    # The 1.1 s fade is unchanged, so the ending still lands the same way.
+    ("night: pull back and up", 10.0,
      dict(place=(28.0, -58.0, 330.0), course=330.0)),
 ]
 
@@ -3996,7 +4101,22 @@ def _film_warm(sh, n, dt):
     flash inside it.
     """
     renderer.set_auto_exposure_speed(14.0)
-    for _ in range(n):
+    # The sensor mode is a STRUCTURAL change (device idle + detector resize +
+    # dirty material samplers). Give the cut's own forced env re-bake a few
+    # frames to land before adding a second invalidation -- see _film_sensor_mode.
+    pre = min(8, n)
+    for _ in range(pre):
+        _film_step(sh, 0.0, 0.0, dt)
+    _film_sensor_mode(sh.sensor)
+    mid = max(0, min(24, n - pre))
+    for _ in range(mid):
+        _film_step(sh, 0.0, 0.0, dt)
+    # Latch the DVS reference on an ALREADY-METERED frame. The warm-up runs the
+    # meter at 14 EV/s; a reference taken while it is still snapping makes the
+    # first recorded frames a full-frame flash of the exposure ramp rather than
+    # of the scene. The remaining warm-up frames then build the accumulator.
+    _dvs_reset()
+    for _ in range(n - pre - mid):
         _film_step(sh, 0.0, 0.0, dt)
     renderer.set_auto_exposure_speed(1.2)
     for _ in range(4):                  # 4 frames at the real speed: no snap
@@ -4005,13 +4125,26 @@ def _film_warm(sh, n, dt):
 
 def _film_step(sh, u, t, dt):
     """One frame of the film: place, simulate, place again, render."""
-    global _cur_u, first_render_done
+    global _cur_u, first_render_done, _sensor_px
     _cur_u = u
     apply_cam(sh, u, t)        # before frame(): the rain field follows the lens
     frame(dt)
     apply_cam(sh, u, t)        # after: the boat has moved, so the framing has
     sim_tick(dt)               # the sea advances by dt, not by 80 ms of wall
-    renderer.render(scene, camera)
+    if sh.sensor == "depth":
+        # ONE render, and the depth comes off THAT frame -- read_aovs_typed
+        # drives the frame itself, so the sensor cannot be a frame out of step
+        # with the picture it is the depth of.
+        _sensor_px = _depth_frame(renderer.read_aovs_typed(scene, camera, ["depth"])["depth"])
+    elif sh.sensor == "events":
+        renderer.render(scene, camera)
+        # The DVS runs on the DELIVERED frame -- the same pixels the audience
+        # sees one shot earlier -- so what fires is what is actually in the
+        # picture: wave crests, the glitter, the sail folds, the rig.
+        _sensor_px = _events_frame(renderer.read_pixels())
+    else:
+        renderer.render(scene, camera)
+        _sensor_px = None
     # THE FILM NEVER SET THIS. `first_render_done` gates the whole buoyancy
     # block (the CPU height mirror is empty until a Vulkan frame has run), and
     # only the live window and the `--shot` loop ever raised it -- so every
@@ -4022,20 +4155,248 @@ def _film_step(sh, u, t, dt):
     first_render_done = True
 
 
+# --------------------------------------------------------------------------- #
+#  The drone's sensors: depth and the event camera
+# --------------------------------------------------------------------------- #
+#  The point of this leg is that these are the renderer's OWN sensor outputs.
+#  The depth look is `read_aovs_typed(..., ["depth"])`, i.e. the metric depth
+#  buffer of the very frame that would otherwise have been the picture -- one
+#  render, not a second pass, so the sensor and the shot cannot disagree. The
+#  event look is the GPU DVS detector: a per-pixel log-intensity crossing
+#  comparator (the ESIM model) running at its own coarse sensor resolution,
+#  read back as the accumulator image the detector paints. Neither is a filter
+#  on the RGB, and both are the same calls a synthetic-perception dataset job
+#  would make.
+def _film_font(px):
+    from PIL import ImageFont
+    for name in ("segoeui.ttf", "arial.ttf", "DejaVuSans.ttf"):
+        try:
+            return ImageFont.truetype(name, px)
+        except Exception:                            # noqa: BLE001
+            continue
+    return ImageFont.load_default()
+
+
+def _nn_resize(a, h, w):
+    """Nearest-neighbour to (h, w). Nearest ON PURPOSE for the event view: a
+    resampled DVS frame stops looking like a sensor and starts looking like a
+    filter. It is also what makes the coarse detector's pixels legible."""
+    if a.shape[0] == h and a.shape[1] == w:
+        return a
+    yi = (np.arange(h) * (a.shape[0] / h)).astype(np.int32)
+    xi = (np.arange(w) * (a.shape[1] / w)).astype(np.int32)
+    return a[yi][:, xi]
+
+
+def _depth_lut():
+    """A turbo-like near->far ramp that ends in BLACK.
+
+    A linear grey wash reads as a gradient, not as a depth map: the eye cannot
+    tell 40 m from 60 m in it. A wide-hue ramp gives every decade of range its
+    own colour, and taking the far end to black rather than to dark blue means
+    the sky and everything past the sensor's range fall out of the picture
+    instead of sitting there as a flat plate.
+    """
+    keys = [(0.00, (0, 0, 0)), (0.07, (18, 14, 62)), (0.20, (32, 58, 158)),
+            (0.36, (18, 148, 190)), (0.52, (40, 200, 122)), (0.66, (168, 220, 52)),
+            (0.79, (250, 192, 40)), (0.90, (250, 112, 36)), (1.00, (252, 64, 62))]
+    t = np.linspace(0.0, 1.0, 256)
+    xs = np.array([k[0] for k in keys])
+    lut = np.stack([np.interp(t, xs, [k[1][c] for k in keys]) for c in range(3)], 1)
+    return np.clip(lut, 0, 255).astype(np.uint8)
+
+
+_DEPTH_LUT = None
+_LOG_N, _LOG_SCALE = math.log(max(DEPTH_NEAR, 1e-3)), 0.0
+_EVT_BG = np.float32([6, 8, 11])          # no event: black, not mid-grey
+_EVT_ON = np.float32([120, 236, 255])     # brightening: cyan-white
+_EVT_OFF = np.float32([236, 58, 92])      # darkening: red-magenta
+_CAP_RGB = np.float32([228, 233, 240])
+_CAP_ALPHA = 0.62
+_caps = {}
+_evt_on = False
+_evt_stats = [0, 0.0, 0.0]                # frames, sum fired fraction, sum events
+_dvs_ref = None                           # (h, w) per-pixel log-intensity reference
+_dvs_acc = None                           # (h, w) signed accumulator, decaying
+
+
+def _depth_frame(z):
+    """Metric depth (H, W) float32 -> an (H, W, 3) uint8 depth map.
+
+    LOG depth, not inverse depth. The frame spans two decades -- the rig is at
+    8 m and the horizon is at the far plane -- and inverse depth spends 90% of
+    its range inside the first 10 m, which crushes the whole sea into one
+    value. log(z) gives each decade the same number of LUT entries, so the boat
+    has internal structure AND the sea still recedes visibly to the cut-off.
+    """
+    global _DEPTH_LUT, _LOG_SCALE
+    if _DEPTH_LUT is None:
+        _DEPTH_LUT = _depth_lut()
+        _LOG_SCALE = 255.0 / max(math.log(DEPTH_FAR) - _LOG_N, 1e-6)
+    fw, fh = renderer.size()
+    zc = np.clip(np.asarray(z, np.float32), DEPTH_NEAR, DEPTH_FAR)
+    # 255 at DEPTH_NEAR down to 0 at DEPTH_FAR (and at the far plane, i.e. sky).
+    idx = (255.0 - (np.log(zc) - _LOG_N) * _LOG_SCALE).astype(np.uint8)
+    # Colour-map at the AOV's own resolution (render_scale 0.9, so 24% fewer
+    # pixels than the frame) and upscale the bytes, not the floats.
+    return _nn_resize(_DEPTH_LUT[idx], fh, fw)
+
+
+def _luma_down(px, h, w):
+    """Sensor-resolution luma in [0, 1] from the delivered frame.
+
+    AREA average, not point sampling: a DVS pixel integrates over its own
+    photodiode, and point-sampling a 1080p frame down to 640x360 would alias
+    the rigging into a shimmer that fires events every frame from nothing but
+    the resampler.
+    """
+    fh, fw = px.shape[0], px.shape[1]
+    if fh % h == 0 and fw % w == 0:
+        # Two contiguous reductions, rows then columns. The one-shot
+        # `reshape(h, ky, w, kx, 3).mean((1, 3))` is the obvious spelling and it
+        # is 2.8x slower (50 ms vs 18 ms at 1080p -> 640x360): the strided
+        # 4-D reduction thrashes, two 1-axis ones do not.
+        d = px.reshape(h, fh // h, fw, 3).mean(1, dtype=np.float32)
+        d = d.reshape(h, w, fw // w, 3).mean(2)
+    else:
+        d = _nn_resize(px, h, w).astype(np.float32)
+    return (d[:, :, 0] * 0.2126 + d[:, :, 1] * 0.7152
+            + d[:, :, 2] * 0.0722) * (1.0 / 255.0)
+
+
+def _dvs_reset():
+    global _dvs_ref, _dvs_acc
+    _dvs_ref, _dvs_acc = None, None
+
+
+def _dvs_step(px):
+    """ESIM on the FINAL RENDERED FRAME, in numpy. Returns the accumulator.
+
+    Per pixel: keep the log-intensity at which it last fired; when
+    |d log I| >= C, emit one event per whole multiple of C with
+    polarity = sign(d), advance the reference by polarity * C * N, and paint
+    the accumulator (+1 / -1) which otherwise decays exponentially. That is
+    the model `helpers/EventCameraSensor.hpp` documents, and it is what the
+    academic simulators (ESIM and friends) do.
+
+    Why not the renderer's GPU detector, which is bound and does exactly this
+    on the GPU: it shades a fast DETERMINISTIC PROXY of the raster G-buffer
+    (`event_shade.comp` -- Lambert diffuse from the DIRECTIONAL lights plus
+    ambient and emissive, and nothing else). No specular, no transmission, no
+    point lights, no GI. That is a deliberate sim-to-real choice -- it means
+    the event stream cannot be contaminated by stochastic shading noise -- but
+    in THIS scene it removes precisely the subjects: the ocean is a
+    transmissive water material whose proxy luma barely moves, so the sea
+    fires nothing; the sails are read by TRANSMITTED light, so only their
+    silhouettes fire; and a lightning point light is invisible to it. The
+    user's verdict on the proxy take was exactly that -- "event camera does
+    not seem to see water or sails". Run it with `--evt-gpu` to see it.
+
+    The renderer ask that falls out of this: an `eventCameraSource =
+    Shaded | Final` switch. `event_detect.comp` already has the path that
+    consumes a copy of the presented frame; it is the shade stage in front of
+    it that is the proxy.
+    """
+    global _dvs_ref, _dvs_acc
+    log_i = np.log(np.maximum(_luma_down(px, EVT_H, EVT_W), EVT_MIN_LUMA))
+    if _dvs_ref is None or _dvs_ref.shape != log_i.shape:
+        _dvs_ref = log_i                      # latch, emit nothing
+        _dvs_acc = np.zeros_like(log_i)
+        return _dvs_acc
+    n = np.clip(np.trunc((log_i - _dvs_ref) * (1.0 / EVT_THRESHOLD)),
+                -EVT_MAX_PP, EVT_MAX_PP)
+    _dvs_ref = _dvs_ref + n * EVT_THRESHOLD   # residual survives to next frame
+    fired = n != 0.0
+    _dvs_acc *= EVT_DECAY
+    _dvs_acc[fired] = np.sign(n[fired])
+    _evt_stats[0] += 1
+    _evt_stats[1] += float(np.count_nonzero(fired)) / max(n.size, 1)
+    _evt_stats[2] += float(np.abs(n).sum())
+    return _dvs_acc
+
+
+def _events_frame(px):
+    """A signed event accumulator -> the classic sparse black/+/- DVS picture."""
+    if EVT_GPU:
+        v = renderer.read_event_camera_visualisation()
+        acc = (v.astype(np.float32) - 128.0) * (1.0 / 127.0) if v.size else None
+        if acc is None:
+            fw, fh = renderer.size()
+            return np.zeros((fh, fw, 3), np.uint8)
+    else:
+        acc = _dvs_step(px)
+    pos = np.clip(acc, 0.0, 1.0)[:, :, None]
+    neg = np.clip(-acc, 0.0, 1.0)[:, :, None]
+    small = _EVT_BG + pos * (_EVT_ON - _EVT_BG) + neg * (_EVT_OFF - _EVT_BG)
+    fw, fh = renderer.size()
+    return _nn_resize(np.clip(small, 0, 255).astype(np.uint8), fh, fw)
+
+
+def _caption(text, w, h):
+    """A small low-contrast label, blended over its own bounding box only."""
+    key = (text, w, h)
+    if key not in _caps:
+        from PIL import Image, ImageDraw
+        f = _film_font(max(12, int(round(h * 0.0165))))
+        pad = int(round(h * 0.030))
+        im = Image.new("L", (w, h), 0)
+        d = ImageDraw.Draw(im)
+        d.text((int(round(w * 0.031)), h - pad), text, font=f, fill=255, anchor="ls")
+        a = np.asarray(im, np.float32)
+        ys, xs = np.nonzero(a)
+        if ys.size == 0:
+            _caps[key] = None
+        else:
+            box = (int(ys.min()), int(ys.max()) + 1, int(xs.min()), int(xs.max()) + 1)
+            sub = a[box[0]:box[1], box[2]:box[3], None] * (_CAP_ALPHA / 255.0)
+            _caps[key] = (box, sub, _CAP_RGB * sub)
+    return _caps[key]
+
+
+def _stamp(px, text):
+    cap = _caption(text, px.shape[1], px.shape[0])
+    if cap is None:
+        return px
+    (y0, y1, x0, x1), a, pre = cap
+    out = px.copy()
+    out[y0:y1, x0:x1] = (px[y0:y1, x0:x1] * (1.0 - a) + pre).astype(np.uint8)
+    return out
+
+
+def _film_sensor_mode(mode):
+    """Arm or disarm the renderer's GPU detector (`--evt-gpu` only).
+
+    NEVER call this on a cut frame. Enabling marks material samplers dirty and
+    gates TAA jitter off, and `setEventCameraResolution` idles the device to
+    resize the detector images. Phase 4 lost the device outright
+    (`vkDeviceWaitIdle ... failed: -4`) doing two structural invalidations in
+    the same gap as a forced env re-bake, so this runs from inside the warm-up,
+    several frames after the cut, and the detector then has the rest of the
+    warm-up to latch its per-pixel reference (its first frame emits nothing).
+    """
+    global _evt_on
+    if not EVT_GPU:
+        return
+    want = (mode == "events")
+    if want == _evt_on:
+        return
+    if want:
+        renderer.set_event_camera_params(threshold=EVT_THRESHOLD, decay=EVT_DECAY,
+                                         min_luma=EVT_MIN_LUMA,
+                                         max_events_per_pixel=EVT_MAX_PP)
+        renderer.set_event_camera_resolution(EVT_W, EVT_H)   # stored; no device work yet
+    renderer.event_camera_enabled = want
+    _evt_on = want
+    if want:
+        print(f"  GPU event detector ON {renderer.event_camera_resolution}")
+
+
 def _endcard(w, h, n):
-    from PIL import Image, ImageDraw, ImageFont
+    from PIL import Image, ImageDraw
     img = Image.new("RGB", (w, h), (6, 8, 11))
     d = ImageDraw.Draw(img)
     txt = "threepp  +  warp  +  python"
-    f = None
-    for name in ("segoeui.ttf", "arial.ttf", "DejaVuSans.ttf"):
-        try:
-            f = ImageFont.truetype(name, max(18, int(h * 0.052)))
-            break
-        except Exception:                            # noqa: BLE001
-            continue
-    if f is None:
-        f = ImageFont.load_default()
+    f = _film_font(max(18, int(h * 0.052)))
     bb = d.textbbox((0, 0), txt, font=f)
     d.text(((w - (bb[2] - bb[0])) * 0.5, (h - (bb[3] - bb[1])) * 0.5 - bb[1]),
            txt, font=f, fill=(214, 219, 226))
@@ -4111,7 +4472,7 @@ def run_film():
                     fire_strike(kind, bearing=brg, distance=dist)
             _t0 = time.perf_counter()
             _film_step(sh, u, t, dt)
-            px = renderer.read_pixels()
+            px = _sensor_px if _sensor_px is not None else renderer.read_pixels()
             ms = (time.perf_counter() - _t0) * 1e3
             s_ms += ms
             act_ms[sh.act] = act_ms.get(sh.act, 0.0) + ms
@@ -4119,6 +4480,8 @@ def run_film():
             if shape is None:
                 shape = (px.shape[0] & ~1, px.shape[1] & ~1)
             px = px[:shape[0], :shape[1]]
+            if sh.caption:
+                px = _stamp(px, sh.caption)
             if sh.fade is not None:
                 left = (n - 1 - f) * dt
                 if left < sh.fade:
@@ -4136,6 +4499,7 @@ def run_film():
         print(f"  act {sh.act} [{si:2d}] {sh.name:<38s} {n:4d} f  "
               f"{s_ms / n:6.1f} ms/f  tod {sh.tod:05.2f}")
 
+    _film_sensor_mode(None)             # never leave the detector armed
     for a in _endcard(shape[1], shape[0], card_n):
         writer.append_data(a)
     writer.close()
@@ -4158,6 +4522,13 @@ def run_film():
     for a in sorted(act_ms):
         print(f"  act {a}: {act_ms[a] / act_n[a]:6.1f} ms/frame over {act_n[a]} frames")
     print(f"  sky bakes {_bake_count} ({_bake_ms / max(_bake_count, 1):.0f} ms each)")
+    if _evt_stats[0]:
+        frac = _evt_stats[1] / _evt_stats[0]
+        print(f"  event camera ({'GPU detector' if EVT_GPU else 'final-frame ESIM'}, "
+              f"{EVT_W}x{EVT_H}, C={EVT_THRESHOLD}): {_evt_stats[0]} frames, mean "
+              f"{frac * 100.0:.2f}% of pixels fired, "
+              f"{_evt_stats[2] / _evt_stats[0]:.0f} events/frame "
+              f"({_evt_stats[2] / _evt_stats[0] * FPS / 1e3:.0f}k events/s)")
 
 
 def run_warmup_probe():
