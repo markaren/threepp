@@ -659,6 +659,14 @@ namespace threepp_py {
                               [](PyVulkanRenderer& r) { return r.native().bloomClamp(); },
                               [](PyVulkanRenderer& r, float v) { r.native().setBloomClamp(v); },
                               "Bloom input clamp to stabilise flickery ultra-bright highlights. <=0 disables (default); typical 8-32.")
+                // Procedural stars on SKY pixels — hash-based points in
+                // direction space, so they stay pixel-crisp at any resolution
+                // or FOV instead of smearing the way a baked star map does.
+                .def_property("starfield",
+                              [](PyVulkanRenderer& r) { return r.native().deferredStarfield(); },
+                              [](PyVulkanRenderer& r, float v) { r.native().setDeferredStarfield(v); },
+                              "Procedural star field drawn on sky pixels. 0 disables (default); "
+                              "~1.0 is a night sky. Ramp it with the daylight rather than snapping it on.")
                 // Per-frame CPU/GPU pass timings (milliseconds) — see
                 // VulkanRenderer::FrameTimings. For perf triage from python.
                 .def_property_readonly("frame_timings",

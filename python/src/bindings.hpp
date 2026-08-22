@@ -107,6 +107,10 @@ namespace threepp_py {
     void init_terrain(py::module_& m);   // TerrainGenerator + TerrainParams
     void init_vegetation(py::module_& m); // TreeGenerator, TreeTextures
     void init_fauna(py::module_& m);      // Flock (extras/fauna ambient birds)
+    // ParticleField (weather / granular fields; Vulkan-only at render time).
+    // Needs Mesh from init_objects, Material from init_materials, BufferGeometry
+    // from init_geometries and Texture from init_textures.
+    void init_particles(py::module_& m);
     void init_splats(py::module_& m);    // SplatLoader + SplatCloud (3D Gaussian Splatting; GL + Vulkan)
     void init_render(py::module_& m);
     void init_loaders(py::module_& m);

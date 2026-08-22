@@ -8,7 +8,7 @@ import numpy.typing
 import typing
 from . import editor
 from . import imgui
-__all__: list[str] = ['AmbientLight', 'AnimationAction', 'AnimationBlendMode', 'AnimationClip', 'AnimationMixer', 'ArrowHelper', 'Articulation', 'ArticulationLink', 'Audio', 'AudioDistanceModel', 'AudioListener', 'AxesHelper', 'Background', 'BarkStyle', 'Blending', 'Blob', 'Box3', 'Box3Helper', 'BoxGeometry', 'BoxHelper', 'BranchingMode', 'BufferGeometry', 'Camera', 'CameraHelper', 'Canvas', 'CapsuleGeometry', 'CatmullRomCurve3', 'CircleGeometry', 'Clock', 'Cluster', 'Colonise', 'Color', 'ColorKeyframeTrack', 'ColorSpace', 'CombineOperation', 'Cone', 'ConeGeometry', 'ContactPoint', 'ContactSample', 'ContactSensor', 'ConvexGeometry', 'CrossQuad', 'CrownShape', 'Cylinder', 'CylinderGeometry', 'DepthPacking', 'DepthSensor', 'DirectionalLight', 'DirectionalLightHelper', 'DisplacedMesh', 'EXPONENTIAL', 'EXRLoader', 'Ellipsoid', 'ErosionType', 'Euler', 'FBXLoader', 'Filter', 'Fog', 'FogExp2', 'Font', 'FontLoader', 'ForceTorqueSensor', 'Frond', 'Furrowed', 'GLRenderer', 'GLTFLoader', 'GLTFResult', 'GrassMesh', 'GridHelper', 'Group', 'HAS_AUDIO', 'HAS_IMGUI', 'HAS_PHYSX', 'HAS_VULKAN', 'Hemisphere', 'HemisphereLight', 'HemisphereLightHelper', 'HorizontalAlignment', 'INVERSE', 'IcosahedronGeometry', 'IcpOptions', 'IcpResult', 'ImguiContext', 'Imu', 'ImuSample', 'InstancedMesh', 'Interpolation', 'IsoMesh', 'Joint', 'JointEncoder', 'JointInfo', 'JointRange', 'JointSample', 'JointType', 'KeyframeTrack', 'LINEAR', 'Lanceolate', 'LeafShape', 'LeafStyle', 'LidarBeam', 'LidarModel', 'LidarParams', 'LidarReturn', 'Light', 'Line', 'LineBasicMaterial', 'LineSegments', 'Lobed', 'Loop', 'Mapping', 'Material', 'Matrix3', 'Matrix4', 'Mesh', 'MeshBasicMaterial', 'MeshDepthMaterial', 'MeshLambertMaterial', 'MeshNormalMaterial', 'MeshPhongMaterial', 'MeshPhysicalMaterial', 'MeshStandardMaterial', 'ModelLoader', 'NONE', 'NoiseModel', 'NoiseType', 'NumberKeyframeTrack', 'OBJLoader', 'Object3D', 'Ocean', 'OctahedronGeometry', 'OrbitControls', 'OrthographicCamera', 'Ovate', 'Papery', 'PerspectiveCamera', 'PhysxGpuBatch', 'PhysxMaterial', 'PhysxSoftBodyMaterial', 'PhysxWorld', 'PlaneGeometry', 'Plated', 'PointLight', 'PointLightHelper', 'Points', 'PointsMaterial', 'PolarGridHelper', 'PositionalAudio', 'Quad', 'Quaternion', 'QuaternionKeyframeTrack', 'RGBELoader', 'RangeNoiseModel', 'RectAreaLight', 'RigidBody', 'RingGeometry', 'Robot', 'RotationOrder', 'STLLoader', 'SVGLoader', 'ScalarField', 'Scene', 'Sensor', 'Serrate', 'ShadowMaterial', 'Side', 'SkeletonHelper', 'SoftBody', 'Sphere', 'SphereGeometry', 'SplatCloud', 'SplatData', 'SplatLoader', 'SpotLight', 'SpotLightHelper', 'Sprite', 'SpriteMaterial', 'TerrainFalloff', 'TerrainGenerator', 'TerrainParams', 'Text2D', 'Text3D', 'TextSprite', 'Texture', 'TextureLoader', 'TextureWrapping', 'ToneMapping', 'TorusGeometry', 'TorusKnotGeometry', 'TransformControls', 'TreeGenerator', 'TreeParams', 'URDFLoader', 'Vector2', 'Vector3', 'Vector4', 'VectorKeyframeTrack', 'VerticalAlignment', 'VoxelGrid', 'VulkanRenderer', 'Whorl', 'WrenchSample', 'apply_terrain_preset', 'apply_tree_preset', 'clamp', 'damp', 'deg_to_rad', 'editor', 'euclidean_modulo', 'generate_uuid', 'icp_point_to_point', 'imgui', 'inverse_lerp', 'is_power_of_two', 'iso_mesh_to_geometry', 'lerp', 'make_bark_textures', 'make_flower_texture', 'make_leaf_texture', 'make_needle_frond_texture', 'map_linear', 'marching_cubes', 'merge_buffer_geometries', 'merge_vertices', 'rad_to_deg', 'rand_float', 'rand_float_range', 'rand_float_spread', 'rand_int', 'rotate_equirect', 'simplify_geometry', 'splat_points_to_field', 'terrain_from_json', 'terrain_load_config', 'terrain_save_config', 'terrain_to_json', 'voxel_downsample', 'vulkan_available', 'write_wav']
+__all__: list[str] = ['AmbientLight', 'AnimationAction', 'AnimationBlendMode', 'AnimationClip', 'AnimationMixer', 'Approach', 'ArrowHelper', 'Articulation', 'ArticulationLink', 'Audio', 'AudioDistanceModel', 'AudioListener', 'AxesHelper', 'Background', 'BarkStyle', 'BirdPlumage', 'BirdRole', 'BirdShape', 'BirdState', 'Blending', 'Blob', 'Box3', 'Box3Helper', 'BoxGeometry', 'BoxHelper', 'BranchingMode', 'BufferGeometry', 'Camera', 'CameraHelper', 'Canvas', 'CapsuleGeometry', 'CatmullRomCurve3', 'CircleGeometry', 'Clock', 'Cluster', 'Colonise', 'Color', 'ColorKeyframeTrack', 'ColorSpace', 'CombineOperation', 'Cone', 'ConeGeometry', 'ContactPoint', 'ContactSample', 'ContactSensor', 'ConvexGeometry', 'CrossQuad', 'CrownShape', 'Cruise', 'Cylinder', 'CylinderGeometry', 'DepthPacking', 'DepthSensor', 'DirectionalLight', 'DirectionalLightHelper', 'DisplacedMesh', 'EXPONENTIAL', 'EXRLoader', 'Ellipsoid', 'ErosionType', 'Euler', 'Evade', 'FBXLoader', 'Filter', 'Flare', 'Flock', 'FlockParams', 'Fog', 'FogExp2', 'Follower', 'Font', 'FontLoader', 'ForceTorqueSensor', 'Frond', 'Furrowed', 'GLRenderer', 'GLTFLoader', 'GLTFResult', 'Gait', 'GrassMesh', 'GridHelper', 'Group', 'HAS_AUDIO', 'HAS_IMGUI', 'HAS_PHYSX', 'HAS_VULKAN', 'Hemisphere', 'HemisphereLight', 'HemisphereLightHelper', 'Hop', 'HorizontalAlignment', 'INVERSE', 'IcosahedronGeometry', 'IcpOptions', 'IcpResult', 'ImguiContext', 'Imu', 'ImuSample', 'InstancedMesh', 'Interpolation', 'IsoMesh', 'Joint', 'JointEncoder', 'JointInfo', 'JointRange', 'JointSample', 'JointType', 'KeyframeTrack', 'LINEAR', 'Lanceolate', 'Launch', 'Leader', 'LeafShape', 'LeafStyle', 'LidarBeam', 'LidarModel', 'LidarParams', 'LidarReturn', 'Light', 'Line', 'LineBasicMaterial', 'LineSegments', 'Lobed', 'Loner', 'Loop', 'Mapping', 'Material', 'Matrix3', 'Matrix4', 'Mesh', 'MeshBasicMaterial', 'MeshDepthMaterial', 'MeshLambertMaterial', 'MeshNormalMaterial', 'MeshPhongMaterial', 'MeshPhysicalMaterial', 'MeshStandardMaterial', 'ModelLoader', 'NONE', 'NoiseModel', 'NoiseType', 'NumberKeyframeTrack', 'OBJLoader', 'Object3D', 'Ocean', 'OctahedronGeometry', 'OrbitControls', 'OrthographicCamera', 'Ovate', 'Papery', 'ParticleField', 'Perched', 'PerspectiveCamera', 'PhysxGpuBatch', 'PhysxMaterial', 'PhysxSoftBodyMaterial', 'PhysxWorld', 'PlaneGeometry', 'Plated', 'PointLight', 'PointLightHelper', 'Points', 'PointsMaterial', 'PolarGridHelper', 'PositionalAudio', 'Quad', 'Quaternion', 'QuaternionKeyframeTrack', 'RGBELoader', 'RangeNoiseModel', 'RectAreaLight', 'RigidBody', 'RingGeometry', 'Robot', 'RotationOrder', 'STLLoader', 'SVGLoader', 'ScalarField', 'Scene', 'Sensor', 'Serrate', 'ShadowMaterial', 'Side', 'SkeletonHelper', 'SoftBody', 'Sphere', 'SphereGeometry', 'SplatCloud', 'SplatData', 'SplatLoader', 'SpotLight', 'SpotLightHelper', 'Sprite', 'SpriteMaterial', 'TerrainFalloff', 'TerrainGenerator', 'TerrainParams', 'Text2D', 'Text3D', 'TextSprite', 'Texture', 'TextureLoader', 'TextureWrapping', 'ToneMapping', 'TorusGeometry', 'TorusKnotGeometry', 'TransformControls', 'TreeGenerator', 'TreeParams', 'URDFLoader', 'Vector2', 'Vector3', 'Vector4', 'VectorKeyframeTrack', 'VerticalAlignment', 'VoxelGrid', 'VulkanRenderer', 'Walk', 'Whorl', 'WrenchSample', 'apply_terrain_preset', 'apply_tree_preset', 'clamp', 'damp', 'data_texture', 'deg_to_rad', 'editor', 'euclidean_modulo', 'float_texture', 'generate_uuid', 'icp_point_to_point', 'imgui', 'inverse_lerp', 'is_power_of_two', 'iso_mesh_to_geometry', 'lerp', 'make_bark_textures', 'make_flower_texture', 'make_leaf_texture', 'make_needle_frond_texture', 'map_linear', 'marching_cubes', 'merge_buffer_geometries', 'merge_vertices', 'rad_to_deg', 'rand_float', 'rand_float_range', 'rand_float_spread', 'rand_int', 'rotate_equirect', 'simplify_geometry', 'splat_points_to_field', 'terrain_from_json', 'terrain_load_config', 'terrain_save_config', 'terrain_to_json', 'voxel_downsample', 'vulkan_available', 'write_wav']
 class AmbientLight(Light):
     def __init__(self, color: Color = ..., intensity: typing.SupportsFloat | typing.SupportsIndex = 1.0) -> None:
         ...
@@ -335,6 +335,184 @@ class BarkStyle:
     Papery: typing.ClassVar[BarkStyle]  # value = <BarkStyle.Papery: 2>
     Plated: typing.ClassVar[BarkStyle]  # value = <BarkStyle.Plated: 1>
     __members__: typing.ClassVar[dict[str, BarkStyle]]  # value = {'Furrowed': <BarkStyle.Furrowed: 0>, 'Plated': <BarkStyle.Plated: 1>, 'Papery': <BarkStyle.Papery: 2>}
+    def __eq__(self, other: typing.Any) -> bool:
+        ...
+    def __getstate__(self) -> int:
+        ...
+    def __hash__(self) -> int:
+        ...
+    def __index__(self) -> int:
+        ...
+    def __init__(self, value: typing.SupportsInt | typing.SupportsIndex) -> None:
+        ...
+    def __int__(self) -> int:
+        ...
+    def __ne__(self, other: typing.Any) -> bool:
+        ...
+    def __repr__(self) -> str:
+        ...
+    def __setstate__(self, state: typing.SupportsInt | typing.SupportsIndex) -> None:
+        ...
+    def __str__(self) -> str:
+        ...
+    @property
+    def name(self) -> str:
+        ...
+    @property
+    def value(self) -> int:
+        ...
+class BirdPlumage:
+    leg: Color
+    def __init__(self) -> None:
+        ...
+    @property
+    def back(self) -> Color:
+        """
+        dorsal colour (LINEAR rgb; multiplies albedo)
+        """
+    @back.setter
+    def back(self, arg0: Color) -> None:
+        ...
+    @property
+    def belly(self) -> Color:
+        """
+        ventral colour
+        """
+    @belly.setter
+    def belly(self, arg0: Color) -> None:
+        ...
+    @property
+    def cap(self) -> Color:
+        """
+        crown + bill
+        """
+    @cap.setter
+    def cap(self, arg0: Color) -> None:
+        ...
+    @property
+    def cap_strength(self) -> float:
+        ...
+    @cap_strength.setter
+    def cap_strength(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def lightness_jitter(self) -> float:
+        ...
+    @lightness_jitter.setter
+    def lightness_jitter(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def tail_band_dark(self) -> float:
+        ...
+    @tail_band_dark.setter
+    def tail_band_dark(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def wingtip_dark(self) -> float:
+        """
+        0..1 multiplier at the primaries
+        """
+    @wingtip_dark.setter
+    def wingtip_dark(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+class BirdRole:
+    """
+    Members:
+    
+      Follower
+    
+      Leader
+    
+      Loner
+    """
+    Follower: typing.ClassVar[BirdRole]  # value = <BirdRole.Follower: 0>
+    Leader: typing.ClassVar[BirdRole]  # value = <BirdRole.Leader: 1>
+    Loner: typing.ClassVar[BirdRole]  # value = <BirdRole.Loner: 2>
+    __members__: typing.ClassVar[dict[str, BirdRole]]  # value = {'Follower': <BirdRole.Follower: 0>, 'Leader': <BirdRole.Leader: 1>, 'Loner': <BirdRole.Loner: 2>}
+    def __eq__(self, other: typing.Any) -> bool:
+        ...
+    def __getstate__(self) -> int:
+        ...
+    def __hash__(self) -> int:
+        ...
+    def __index__(self) -> int:
+        ...
+    def __init__(self, value: typing.SupportsInt | typing.SupportsIndex) -> None:
+        ...
+    def __int__(self) -> int:
+        ...
+    def __ne__(self, other: typing.Any) -> bool:
+        ...
+    def __repr__(self) -> str:
+        ...
+    def __setstate__(self, state: typing.SupportsInt | typing.SupportsIndex) -> None:
+        ...
+    def __str__(self) -> str:
+        ...
+    @property
+    def name(self) -> str:
+        ...
+    @property
+    def value(self) -> int:
+        ...
+class BirdShape:
+    def __init__(self) -> None:
+        ...
+    @property
+    def body_length(self) -> float:
+        """
+        m, bill tip to tail tip
+        """
+    @body_length.setter
+    def body_length(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def body_radius(self) -> float:
+        """
+        m, max half-width of the body spindle
+        """
+    @body_radius.setter
+    def body_radius(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def tail_fork(self) -> float:
+        """
+        -1 forked .. +1 wedge; 0 = square
+        """
+    @tail_fork.setter
+    def tail_fork(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def wing_span(self) -> float:
+        """
+        m, tip to tip, fully extended
+        """
+    @wing_span.setter
+    def wing_span(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+class BirdState:
+    """
+    Members:
+    
+      Cruise
+    
+      Approach
+    
+      Flare
+    
+      Perched
+    
+      Launch
+    
+      Evade
+    """
+    Approach: typing.ClassVar[BirdState]  # value = <BirdState.Approach: 1>
+    Cruise: typing.ClassVar[BirdState]  # value = <BirdState.Cruise: 0>
+    Evade: typing.ClassVar[BirdState]  # value = <BirdState.Evade: 5>
+    Flare: typing.ClassVar[BirdState]  # value = <BirdState.Flare: 2>
+    Launch: typing.ClassVar[BirdState]  # value = <BirdState.Launch: 4>
+    Perched: typing.ClassVar[BirdState]  # value = <BirdState.Perched: 3>
+    __members__: typing.ClassVar[dict[str, BirdState]]  # value = {'Cruise': <BirdState.Cruise: 0>, 'Approach': <BirdState.Approach: 1>, 'Flare': <BirdState.Flare: 2>, 'Perched': <BirdState.Perched: 3>, 'Launch': <BirdState.Launch: 4>, 'Evade': <BirdState.Evade: 5>}
     def __eq__(self, other: typing.Any) -> bool:
         ...
     def __getstate__(self) -> int:
@@ -1515,6 +1693,398 @@ class Filter:
     @property
     def value(self) -> int:
         ...
+class Flock(Mesh):
+    @typing.overload
+    def __init__(self, params: FlockParams) -> None:
+        """
+        Build a flock from a FlockParams. Add it to a Scene and call update(dt) once per frame.
+        """
+    @typing.overload
+    def __init__(self, bird_count: typing.SupportsInt | typing.SupportsIndex = 18, home: Vector3 = ..., roam_radius: typing.SupportsFloat | typing.SupportsIndex = 42.0, cruise_altitude: typing.SupportsFloat | typing.SupportsIndex = 14.0, cruise_speed: typing.SupportsFloat | typing.SupportsIndex = 9.0, perching: bool = True, seed: typing.SupportsInt | typing.SupportsIndex = 1337) -> None:
+        """
+        Convenience constructor over the handful of fields most hosts set. For the rest, build a FlockParams and pass that instead.
+        """
+    def add_perch(self, world_pos: Vector3, world_normal: Vector3, walkable: bool) -> None:
+        """
+        Add one perch by hand, instead of (or as well as) baking.
+        """
+    def bake_complete(self) -> bool:
+        ...
+    def bake_perches(self, scene_root: Object3D) -> None:
+        """
+        Scan a scene for landable surfaces (async; poll bake_complete()).
+        """
+    def bake_perches_blocking(self, scene_root: Object3D) -> None:
+        """
+        Same, but finish before returning.
+        """
+    def bake_progress(self) -> float:
+        ...
+    def bird_count(self) -> int:
+        ...
+    def bird_position(self, i: typing.SupportsInt | typing.SupportsIndex) -> Vector3:
+        ...
+    def bird_velocity(self, i: typing.SupportsInt | typing.SupportsIndex) -> Vector3:
+        ...
+    def flying_count(self) -> int:
+        ...
+    def perch_count(self) -> int:
+        ...
+    def perched_count(self) -> int:
+        ...
+    def role_of(self, i: typing.SupportsInt | typing.SupportsIndex) -> BirdRole:
+        ...
+    def set_disturbance_source(self, source: Object3D) -> None:
+        """
+        Birds take flight when this object comes within flight_initiation_distance. Pass None to clear.
+        """
+    def set_observer(self, camera: Camera) -> None:
+        """
+        Soft repulsion from the camera, so birds do not fly through the lens.
+        """
+    def set_perch_filter(self, predicate: collections.abc.Callable[[Mesh], bool]) -> None:
+        """
+        predicate(mesh) -> bool, deciding which meshes may be landed on.
+        """
+    def set_wind(self, x: typing.SupportsFloat | typing.SupportsIndex, z: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        """
+        World XZ wind direction; perched birds turn to face into it.
+        """
+    def stalled_updates(self) -> int:
+        ...
+    def startle(self, epicentre: Vector3, radius: typing.SupportsFloat | typing.SupportsIndex = 1000000000.0, strength: typing.SupportsFloat | typing.SupportsIndex = 1.0) -> None:
+        """
+        Flush the flock away from a world point.
+        """
+    def state_of(self, i: typing.SupportsInt | typing.SupportsIndex) -> BirdState:
+        ...
+    def update(self, dt: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        """
+        Advance the simulation and rebake the geometry. CALL ONCE PER FRAME. dt is clamped internally to [0, 0.05] s; dt <= 0 is a no-op.
+        """
+    def update_count(self) -> int:
+        ...
+    @property
+    def params(self) -> FlockParams:
+        """
+        A COPY of the construction params (read-only).
+        """
+class FlockParams:
+    birds_cast_shadow: bool
+    gait: Gait
+    perching: bool
+    plumage: BirdPlumage
+    shape: BirdShape
+    def __init__(self) -> None:
+        ...
+    @property
+    def abort_chance(self) -> float:
+        ...
+    @abort_chance.setter
+    def abort_chance(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def altitude_spread(self) -> float:
+        ...
+    @altitude_spread.setter
+    def altitude_spread(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def bird_count(self) -> int:
+        """
+        Hard-clamped to [0, 256]: neighbour search is O(N^2).
+        """
+    @bird_count.setter
+    def bird_count(self, arg0: typing.SupportsInt | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def cruise_altitude(self) -> float:
+        """
+        m above the baked ground under home
+        """
+    @cruise_altitude.setter
+    def cruise_altitude(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def cruise_speed(self) -> float:
+        ...
+    @cruise_speed.setter
+    def cruise_speed(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def flight_initiation_distance(self) -> float:
+        ...
+    @flight_initiation_distance.setter
+    def flight_initiation_distance(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def ground_bias(self) -> float:
+        ...
+    @ground_bias.setter
+    def ground_bias(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def home(self) -> Vector3:
+        """
+        Centre of the loiter volume (world m); drifts at runtime.
+        """
+    @home.setter
+    def home(self, arg0: Vector3) -> None:
+        ...
+    @property
+    def home_drift_rate(self) -> float:
+        ...
+    @home_drift_rate.setter
+    def home_drift_rate(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def launch_contagion(self) -> float:
+        ...
+    @launch_contagion.setter
+    def launch_contagion(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def leader_fraction(self) -> float:
+        ...
+    @leader_fraction.setter
+    def leader_fraction(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def lod_far_distance(self) -> float:
+        ...
+    @lod_far_distance.setter
+    def lod_far_distance(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def loner_fraction(self) -> float:
+        ...
+    @loner_fraction.setter
+    def loner_fraction(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def lookahead_time(self) -> float:
+        ...
+    @lookahead_time.setter
+    def lookahead_time(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def mass_kg(self) -> float:
+        """
+        drives wingbeat_hz allometrically
+        """
+    @mass_kg.setter
+    def mass_kg(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def max_accel_along(self) -> float:
+        ...
+    @max_accel_along.setter
+    def max_accel_along(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def max_accel_lateral(self) -> float:
+        ...
+    @max_accel_lateral.setter
+    def max_accel_lateral(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def max_bank(self) -> float:
+        ...
+    @max_bank.setter
+    def max_bank(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def max_perched_fraction(self) -> float:
+        ...
+    @max_perched_fraction.setter
+    def max_perched_fraction(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def max_speed(self) -> float:
+        ...
+    @max_speed.setter
+    def max_speed(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def max_turn_rate(self) -> float:
+        ...
+    @max_turn_rate.setter
+    def max_turn_rate(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def min_ground_clearance(self) -> float:
+        ...
+    @min_ground_clearance.setter
+    def min_ground_clearance(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def min_speed(self) -> float:
+        ...
+    @min_speed.setter
+    def min_speed(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def neighbour_count(self) -> int:
+        """
+        Topological, not metric: a fixed NUMBER of nearest neighbours.
+        """
+    @neighbour_count.setter
+    def neighbour_count(self, arg0: typing.SupportsInt | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def neighbour_radius(self) -> float:
+        ...
+    @neighbour_radius.setter
+    def neighbour_radius(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def obstacle_margin(self) -> float:
+        ...
+    @obstacle_margin.setter
+    def obstacle_margin(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def perch_contagion(self) -> float:
+        ...
+    @perch_contagion.setter
+    def perch_contagion(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def perch_interval_max(self) -> float:
+        ...
+    @perch_interval_max.setter
+    def perch_interval_max(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def perch_interval_min(self) -> float:
+        ...
+    @perch_interval_min.setter
+    def perch_interval_min(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def perch_search_radius(self) -> float:
+        ...
+    @perch_search_radius.setter
+    def perch_search_radius(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def rest_interval_max(self) -> float:
+        ...
+    @rest_interval_max.setter
+    def rest_interval_max(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def rest_interval_min(self) -> float:
+        ...
+    @rest_interval_min.setter
+    def rest_interval_min(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def roam_radius(self) -> float:
+        ...
+    @roam_radius.setter
+    def roam_radius(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def seed(self) -> int:
+        ...
+    @seed.setter
+    def seed(self, arg0: typing.SupportsInt | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def separation_distance(self) -> float:
+        ...
+    @separation_distance.setter
+    def separation_distance(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def size_variation(self) -> float:
+        ...
+    @size_variation.setter
+    def size_variation(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def startle_wave_speed(self) -> float:
+        ...
+    @startle_wave_speed.setter
+    def startle_wave_speed(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def w_alignment(self) -> float:
+        ...
+    @w_alignment.setter
+    def w_alignment(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def w_altitude(self) -> float:
+        ...
+    @w_altitude.setter
+    def w_altitude(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def w_bounds(self) -> float:
+        ...
+    @w_bounds.setter
+    def w_bounds(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def w_cohesion(self) -> float:
+        ...
+    @w_cohesion.setter
+    def w_cohesion(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def w_goal(self) -> float:
+        ...
+    @w_goal.setter
+    def w_goal(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def w_ground(self) -> float:
+        ...
+    @w_ground.setter
+    def w_ground(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def w_observer(self) -> float:
+        ...
+    @w_observer.setter
+    def w_observer(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def w_obstacle(self) -> float:
+        ...
+    @w_obstacle.setter
+    def w_obstacle(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def w_separation(self) -> float:
+        ...
+    @w_separation.setter
+    def w_separation(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def w_wander(self) -> float:
+        ...
+    @w_wander.setter
+    def w_wander(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def wind(self) -> Vector2:
+        """
+        world XZ; perched birds face into it
+        """
+    @wind.setter
+    def wind(self, arg0: Vector2) -> None:
+        ...
+    @property
+    def wingbeat_hz(self) -> float:
+        """
+        0 => derived from mass_kg
+        """
+    @wingbeat_hz.setter
+    def wingbeat_hz(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
 class Fog:
     color: Color
     def __init__(self, color: Color, near: typing.SupportsFloat | typing.SupportsIndex = 1.0, far: typing.SupportsFloat | typing.SupportsIndex = 1000.0) -> None:
@@ -1672,6 +2242,43 @@ class GLTFResult:
         """
         All scenes in the file.
         """
+class Gait:
+    """
+    Members:
+    
+      Hop
+    
+      Walk
+    """
+    Hop: typing.ClassVar[Gait]  # value = <Gait.Hop: 0>
+    Walk: typing.ClassVar[Gait]  # value = <Gait.Walk: 1>
+    __members__: typing.ClassVar[dict[str, Gait]]  # value = {'Hop': <Gait.Hop: 0>, 'Walk': <Gait.Walk: 1>}
+    def __eq__(self, other: typing.Any) -> bool:
+        ...
+    def __getstate__(self) -> int:
+        ...
+    def __hash__(self) -> int:
+        ...
+    def __index__(self) -> int:
+        ...
+    def __init__(self, value: typing.SupportsInt | typing.SupportsIndex) -> None:
+        ...
+    def __int__(self) -> int:
+        ...
+    def __ne__(self, other: typing.Any) -> bool:
+        ...
+    def __repr__(self) -> str:
+        ...
+    def __setstate__(self, state: typing.SupportsInt | typing.SupportsIndex) -> None:
+        ...
+    def __str__(self) -> str:
+        ...
+    @property
+    def name(self) -> str:
+        ...
+    @property
+    def value(self) -> int:
+        ...
 class GrassMesh(Mesh):
     wind_dir: Vector2
     def __init__(self, geometry: BufferGeometry, material: typing.Any) -> None:
@@ -3680,6 +4287,687 @@ class OrthographicCamera(Camera):
     @top.setter
     def top(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
         ...
+class ParticleField(Mesh):
+    class BillboardRepr:
+        enabled: bool
+        @property
+        def bright_jitter(self) -> float:
+            """
+            Per-particle brightness spread, hashed.
+            """
+        @bright_jitter.setter
+        def bright_jitter(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+            ...
+        @property
+        def color_cool(self) -> Color:
+            """
+            Linear HDR radiance at end of life.
+            """
+        @color_cool.setter
+        def color_cool(self, arg0: Color) -> None:
+            ...
+        @property
+        def color_hot(self) -> Color:
+            """
+            Linear HDR radiance at age 0.
+            """
+        @color_hot.setter
+        def color_hot(self, arg0: Color) -> None:
+            ...
+        @property
+        def fade_power(self) -> float:
+            """
+            Brightness over life: (1 - age_frac)^fade_power. 0 = no fade (rain).
+            """
+        @fade_power.setter
+        def fade_power(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+            ...
+        @property
+        def glow(self) -> float:
+            """
+            > 0 gives this field its own bloom pyramid. 0 skips the whole chain (what weather wants — 300k rain streaks have nothing to bloom).
+            """
+        @glow.setter
+        def glow(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+            ...
+        @property
+        def glow_threshold(self) -> float:
+            """
+            Bright-pass knee for this field's own pyramid. 0 = no bright pass.
+            """
+        @glow_threshold.setter
+        def glow_threshold(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+            ...
+        @property
+        def intensity(self) -> float:
+            """
+            HDR scale on both colours. Additive over a field the camera stands INSIDE — rain wants ~0.07, not ~0.5.
+            """
+        @intensity.setter
+        def intensity(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+            ...
+        @property
+        def lod_fade(self) -> float:
+            """
+            Metres of ramp above lod_near over which the quad fades IN.
+            """
+        @lod_fade.setter
+        def lod_fade(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+            ...
+        @property
+        def lod_near(self) -> float:
+            """
+            Quads CLOSER than this collapse — MeshRepr.lod_far is the complementary gate on the same field. 0 = off.
+            """
+        @lod_near.setter
+        def lod_near(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+            ...
+        @property
+        def near_fade(self) -> float:
+            """
+            Fade the sprite out below this camera distance (m). 0 = off.
+            """
+        @near_fade.setter
+        def near_fade(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+            ...
+        @property
+        def size_scale(self) -> float:
+            """
+            Multiplies the particle radius.
+            """
+        @size_scale.setter
+        def size_scale(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+            ...
+        @property
+        def size_taper(self) -> float:
+            """
+            Radius over life: r *= (1 - size_taper * age_frac).
+            """
+        @size_taper.setter
+        def size_taper(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+            ...
+        @property
+        def softness(self) -> float:
+            """
+            0 = a tight spark, 1 = a broad glow.
+            """
+        @softness.setter
+        def softness(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+            ...
+        @property
+        def splash_ring_width(self) -> float:
+            """
+            Annulus width as a fraction of the splash ring's radius (1 = a filled disc). Only means anything with emitter.surface.splash_seconds > 0.
+            """
+        @splash_ring_width.setter
+        def splash_ring_width(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+            ...
+        @property
+        def stretch_max(self) -> float:
+            """
+            Streak cap in multiples of the radius (WORLD units).
+            """
+        @stretch_max.setter
+        def stretch_max(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+            ...
+        @property
+        def stretch_max_screen(self) -> float:
+            """
+            Streak cap as a fraction of the frame HEIGHT (NDC). 0 = off; ~0.045 stops the nearest drop painting a bar across the frame.
+            """
+        @stretch_max_screen.setter
+        def stretch_max_screen(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+            ...
+        @property
+        def stretch_seconds(self) -> float:
+            """
+            Seconds of travel to smear the quad over, along the particle's own analytic velocity. 0 = a round sprite; rain without this reads as HAIL.
+            """
+        @stretch_seconds.setter
+        def stretch_seconds(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+            ...
+        @property
+        def texture(self) -> Texture:
+            """
+            Optional sprite that MODULATES the procedural quad (rgb tint x alpha). None binds a 1x1 white default.
+            """
+        @texture.setter
+        def texture(self, arg0: Texture) -> None:
+            ...
+    class Config:
+        attributes: bool
+        def __init__(self) -> None:
+            ...
+        @property
+        def capacity(self) -> int:
+            """
+            Fixed for life — a field is created ONCE at its final capacity and never resized (creating/destroying one is a structural scene change: entry re-expansion, device idle, TAA history clear). Park a field with set_live_count(0) instead.
+            """
+        @capacity.setter
+        def capacity(self, arg0: typing.SupportsInt | typing.SupportsIndex) -> None:
+            ...
+        @property
+        def orientations(self) -> bool:
+            """
+            Allocate the snorm16x4 per-particle orientation buffer.
+            """
+        @orientations.setter
+        def orientations(self, arg0: bool) -> None:
+            ...
+        @property
+        def ownership(self) -> ParticleField.Ownership:
+            """
+            Who writes the positions.
+            """
+        @ownership.setter
+        def ownership(self, arg0: ParticleField.Ownership) -> None:
+            ...
+        @property
+        def uniform_radius(self) -> float:
+            """
+            World radius the MeshRepr proxy geometry is authored at; also the billboard/density size reference.
+            """
+        @uniform_radius.setter
+        def uniform_radius(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+            ...
+        @property
+        def w_semantic(self) -> ParticleField.WSemantic:
+            """
+            What the w channel means.
+            """
+        @w_semantic.setter
+        def w_semantic(self, arg0: ParticleField.WSemantic) -> None:
+            ...
+    class DensityRepr:
+        enabled: bool
+        @property
+        def albedo(self) -> Color:
+            """
+            Scattering albedo of THIS medium. Snow is bright; a rain curtain is dark.
+            """
+        @albedo.setter
+        def albedo(self, arg0: Color) -> None:
+            ...
+        @property
+        def anisotropy(self) -> float:
+            """
+            HG g for this medium.
+            """
+        @anisotropy.setter
+        def anisotropy(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+            ...
+        @property
+        def center(self) -> Vector3:
+            """
+            World centre of the volume box.
+            """
+        @center.setter
+        def center(self, arg0: Vector3) -> None:
+            ...
+        @property
+        def emissive_intensity(self) -> float:
+            """
+            HDR radiance scale of the analytic blackbody flame ramp. 0 = the exact no-op (pure dust).
+            """
+        @emissive_intensity.setter
+        def emissive_intensity(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+            ...
+        @property
+        def half_extent(self) -> Vector3:
+            """
+            World half-size per axis.
+            """
+        @half_extent.setter
+        def half_extent(self, arg0: Vector3) -> None:
+            ...
+        @property
+        def resolution(self) -> int:
+            """
+            Voxels per axis — LATCHED at the first enable (set it via set_density_repr).
+            """
+        @property
+        def sigma_per_particle(self) -> float:
+            """
+            Extinction (1/m) one particle contributes. Total optical mass is N * sigma — a 300k weather field wants hundredths, not units.
+            """
+        @sigma_per_particle.setter
+        def sigma_per_particle(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+            ...
+        @property
+        def temp_bottom_k(self) -> float:
+            ...
+        @temp_bottom_k.setter
+        def temp_bottom_k(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+            ...
+        @property
+        def temp_falloff(self) -> float:
+            ...
+        @temp_falloff.setter
+        def temp_falloff(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+            ...
+        @property
+        def temp_top_k(self) -> float:
+            ...
+        @temp_top_k.setter
+        def temp_top_k(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+            ...
+    class EmitterParams:
+        class Surface:
+            def __init__(self) -> None:
+                ...
+            @property
+            def bias(self) -> float:
+                """
+                Metres above the baked surface the particle CENTRE rests; ~its own size.
+                """
+            @bias.setter
+            def bias(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+                ...
+            @property
+            def enabled(self) -> bool:
+                """
+                Solve each slot's landing against a top-down height bake of the scene, inside the same closed form. Snow rests; rain splashes.
+                """
+            @enabled.setter
+            def enabled(self, arg0: bool) -> None:
+                ...
+            @property
+            def extent(self) -> float:
+                """
+                Half-size of the square bake footprint (field-local m). 0 = use spawn_half_extent.xz, which is also the toroidal wrap period.
+                """
+            @extent.setter
+            def extent(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+                ...
+            @property
+            def fade_seconds(self) -> float:
+                ...
+            @fade_seconds.setter
+            def fade_seconds(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+                ...
+            @property
+            def resolution(self) -> int:
+                """
+                Texels per axis, clamped to [16, 1024]. Sampled NEAREST by design.
+                """
+            @resolution.setter
+            def resolution(self, arg0: typing.SupportsInt | typing.SupportsIndex) -> None:
+                ...
+            @property
+            def rest_jitter(self) -> float:
+                ...
+            @rest_jitter.setter
+            def rest_jitter(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+                ...
+            @property
+            def rest_seconds(self) -> float:
+                ...
+            @rest_seconds.setter
+            def rest_seconds(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+                ...
+            @property
+            def search_bottom(self) -> float:
+                """
+                Vertical search band, field-local. top == bottom = derive it.
+                """
+            @search_bottom.setter
+            def search_bottom(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+                ...
+            @property
+            def search_top(self) -> float:
+                ...
+            @search_top.setter
+            def search_top(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+                ...
+            @property
+            def splash_grow(self) -> float:
+                """
+                Ring radius at the end of the splash, in multiples of the drop radius.
+                """
+            @splash_grow.setter
+            def splash_grow(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+                ...
+            @property
+            def splash_seconds(self) -> float:
+                """
+                > 0 makes a landed drop an expanding flat RING for this long instead of resting. Drawn by the billboard representation.
+                """
+            @splash_seconds.setter
+            def splash_seconds(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+                ...
+        def __init__(self) -> None:
+            ...
+        @property
+        def accel(self) -> Vector3:
+            """
+            Constant acceleration (m/s^2). Falling snow and rain use ZERO — they are at terminal velocity.
+            """
+        @accel.setter
+        def accel(self, arg0: Vector3) -> None:
+            ...
+        @property
+        def drift_amplitude(self) -> float:
+            """
+            metres
+            """
+        @drift_amplitude.setter
+        def drift_amplitude(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+            ...
+        @property
+        def drift_frequency(self) -> float:
+            """
+            Hz of the slowest term.
+            """
+        @drift_frequency.setter
+        def drift_frequency(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+            ...
+        @property
+        def drift_growth(self) -> float:
+            """
+            0 = constant, 1 = ramps in over the life.
+            """
+        @drift_growth.setter
+        def drift_growth(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+            ...
+        @property
+        def drift_scale(self) -> float:
+            """
+            Metres of spatial wavelength (turns wobble into travelling gusts); 0 = per-slot phase only.
+            """
+        @drift_scale.setter
+        def drift_scale(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+            ...
+        @property
+        def duty_cycle(self) -> float:
+            """
+            Alive fraction of the period, (0,1].
+            """
+        @duty_cycle.setter
+        def duty_cycle(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+            ...
+        @property
+        def follow(self) -> bool:
+            """
+            Wrap the field toroidally into a lateral box centred on set_follow_center() — weather instead of a patch. The wrap PERIOD is 2 * spawn_half_extent.xz, so author the slab accordingly. Y is never wrapped.
+            """
+        @follow.setter
+        def follow(self, arg0: bool) -> None:
+            ...
+        @property
+        def follow_snap(self) -> float:
+            """
+            Lattice (m) the follow centre is snapped to; 0 = no snapping. Choose an integer number of density voxels when the field also carries a DensityRepr, or the haze visibly swims.
+            """
+        @follow_snap.setter
+        def follow_snap(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+            ...
+        @property
+        def lifetime(self) -> float:
+            """
+            Slot repeat period (s). It has to CONTAIN the whole story: fall, land, rest/splash, fade.
+            """
+        @lifetime.setter
+        def lifetime(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+            ...
+        @property
+        def lifetime_jitter(self) -> float:
+            ...
+        @lifetime_jitter.setter
+        def lifetime_jitter(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+            ...
+        @property
+        def seed(self) -> int:
+            ...
+        @seed.setter
+        def seed(self, arg0: typing.SupportsInt | typing.SupportsIndex) -> None:
+            ...
+        @property
+        def size(self) -> float:
+            """
+            Per-particle radius in METRES, written into w. Sizes here are metres, not pixels — a 2.4 cm proxy centimetres from the lens paints 150 px.
+            """
+        @size.setter
+        def size(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+            ...
+        @property
+        def size_jitter(self) -> float:
+            ...
+        @size_jitter.setter
+        def size_jitter(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+            ...
+        @property
+        def spawn_center(self) -> Vector3:
+            """
+            Birth region centre, FIELD-LOCAL.
+            """
+        @spawn_center.setter
+        def spawn_center(self, arg0: Vector3) -> None:
+            ...
+        @property
+        def spawn_half_extent(self) -> Vector3:
+            """
+            Birth region half-size. A thin slab is an emission plane — author snow/rain as a slab at the TOP with lifetime = height / speed, not as a box the size of the volume.
+            """
+        @spawn_half_extent.setter
+        def spawn_half_extent(self, arg0: Vector3) -> None:
+            ...
+        @property
+        def speed_spread(self) -> float:
+            """
+            Isotropic per-particle perturbation of the velocity (m/s).
+            """
+        @speed_spread.setter
+        def speed_spread(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+            ...
+        @property
+        def surface(self) -> ParticleField.EmitterParams.Surface:
+            """
+            Analytic landing (rest / splash) against a baked height map.
+            """
+        @surface.setter
+        def surface(self, arg0: ParticleField.EmitterParams.Surface) -> None:
+            ...
+        @property
+        def velocity(self) -> Vector3:
+            """
+            Initial velocity (m/s).
+            """
+        @velocity.setter
+        def velocity(self, arg0: Vector3) -> None:
+            ...
+        @property
+        def wind(self) -> Vector3:
+            """
+            Uniform horizontal drift (m/s), summed with velocity. Usually animated.
+            """
+        @wind.setter
+        def wind(self, arg0: Vector3) -> None:
+            ...
+    class MeshRepr:
+        enabled: bool
+        @property
+        def lod_fade(self) -> float:
+            """
+            Metres of soft shrink below lod_far, so the swap cross-dissolves.
+            """
+        @lod_fade.setter
+        def lod_fade(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+            ...
+        @property
+        def lod_far(self) -> float:
+            """
+            Metres beyond which the proxy collapses to zero area and the billboard is expected to take over (BillboardRepr.lod_near). 0 = no LOD.
+            """
+        @lod_far.setter
+        def lod_far(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+            ...
+        @property
+        def near_cull(self) -> float:
+            """
+            Shrink particles closer than this to the camera; caps how big the nearest one may get. 0 = off.
+            """
+        @near_cull.setter
+        def near_cull(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+            ...
+    class Ownership:
+        """
+        Members:
+        
+          Interop : A foreign device API (CUDA/PhysX) writes the positions. NOT reproducible.
+        
+          HostRing : The CPU owns the positions; feed them with submit().
+        
+          Renderer : The GPU owns the positions, written from the closed-form EmitterParams. This is what weather uses.
+        """
+        HostRing: typing.ClassVar[ParticleField.Ownership]  # value = <Ownership.HostRing: 1>
+        Interop: typing.ClassVar[ParticleField.Ownership]  # value = <Ownership.Interop: 0>
+        Renderer: typing.ClassVar[ParticleField.Ownership]  # value = <Ownership.Renderer: 2>
+        __members__: typing.ClassVar[dict[str, ParticleField.Ownership]]  # value = {'Interop': <Ownership.Interop: 0>, 'HostRing': <Ownership.HostRing: 1>, 'Renderer': <Ownership.Renderer: 2>}
+        def __eq__(self, other: typing.Any) -> bool:
+            ...
+        def __getstate__(self) -> int:
+            ...
+        def __hash__(self) -> int:
+            ...
+        def __index__(self) -> int:
+            ...
+        def __init__(self, value: typing.SupportsInt | typing.SupportsIndex) -> None:
+            ...
+        def __int__(self) -> int:
+            ...
+        def __ne__(self, other: typing.Any) -> bool:
+            ...
+        def __repr__(self) -> str:
+            ...
+        def __setstate__(self, state: typing.SupportsInt | typing.SupportsIndex) -> None:
+            ...
+        def __str__(self) -> str:
+            ...
+        @property
+        def name(self) -> str:
+            ...
+        @property
+        def value(self) -> int:
+            ...
+    class WSemantic:
+        """
+        Members:
+        
+          InvMass : w is PhysX's inverse mass; the radius comes from Config.uniform_radius.
+        
+          Radius : w IS the world radius (so emitter size_jitter is free per-particle variety).
+        """
+        InvMass: typing.ClassVar[ParticleField.WSemantic]  # value = <WSemantic.InvMass: 0>
+        Radius: typing.ClassVar[ParticleField.WSemantic]  # value = <WSemantic.Radius: 1>
+        __members__: typing.ClassVar[dict[str, ParticleField.WSemantic]]  # value = {'InvMass': <WSemantic.InvMass: 0>, 'Radius': <WSemantic.Radius: 1>}
+        def __eq__(self, other: typing.Any) -> bool:
+            ...
+        def __getstate__(self) -> int:
+            ...
+        def __hash__(self) -> int:
+            ...
+        def __index__(self) -> int:
+            ...
+        def __init__(self, value: typing.SupportsInt | typing.SupportsIndex) -> None:
+            ...
+        def __int__(self) -> int:
+            ...
+        def __ne__(self, other: typing.Any) -> bool:
+            ...
+        def __repr__(self) -> str:
+            ...
+        def __setstate__(self, state: typing.SupportsInt | typing.SupportsIndex) -> None:
+            ...
+        def __str__(self) -> str:
+            ...
+        @property
+        def name(self) -> str:
+            ...
+        @property
+        def value(self) -> int:
+            ...
+    @staticmethod
+    def create(config: ParticleField.Config) -> ParticleField:
+        """
+        Create a field at its FINAL capacity (never resized — see Config.capacity). Raises ValueError on capacity == 0.
+        """
+    def __repr__(self) -> str:
+        ...
+    def set_billboard_repr(self, hot: Color, cool: Color, intensity: typing.SupportsFloat | typing.SupportsIndex = 1.0, size_scale: typing.SupportsFloat | typing.SupportsIndex = 1.0) -> None:
+        """
+        Draw every live particle as one camera-facing ADDITIVE quad, composited after the upscalers (so it is outside TAA and is NOT exposed by auto-exposure — scale intensity with the scene exposure by hand). Vulkan only.
+        """
+    def set_density_repr(self, center: Vector3, half_extent: Vector3, sigma_per_particle: typing.SupportsFloat | typing.SupportsIndex, resolution: typing.SupportsInt | typing.SupportsIndex = 128) -> None:
+        """
+        Scatter the field once per frame into a world-anchored extinction volume every view's froxel pass then samples — the haze a snowfall or a rain curtain adds. `resolution` is LATCHED the frame the volume is allocated. Vulkan only.
+        """
+    def set_emitter(self, params: ParticleField.EmitterParams) -> None:
+        """
+        Install the closed-form trajectory the device emitter evaluates. Free to call every frame (O(1) bytes, published as push constants), so animating the wind costs nothing. Raises on a HostRing / Interop field.
+        """
+    def set_emitter_time(self, time_sec: typing.SupportsFloat | typing.SupportsIndex, dt_sec: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        """
+        Advance the emitter to ABSOLUTE time (not a delta): the trajectory is closed form in t, so any t is valid in any order and a capture may seek with no warm-up. dt_sec is the interval the motion vectors are taken over — pass the frame's own delta, or 0 to freeze the field for a still.
+        """
+    def set_follow_center(self, world_center: Vector3) -> None:
+        """
+        Move the centre of the toroidal follow box — pass the CAMERA's world position (weather that follows anything else is not weather). Snapped to emitter.follow_snap here; read the snapped point back from follow_center.
+        """
+    def set_live_count(self, n: typing.SupportsInt | typing.SupportsIndex) -> None:
+        """
+        Park a field with 0 (it stays in the scene and costs one entry, and the emit dispatch is skipped) or, on a HostRing field, cap the live prefix.
+        """
+    def set_mesh_repr(self, geometry: BufferGeometry, material: typing.Any) -> None:
+        """
+        Draw every live particle as a lit proxy in the G-buffer — ONE indirect draw. `material` also becomes the field's Mesh material, which is what keeps the shading in step. Vulkan only.
+        """
+    def set_orientations(self, quaternions: typing.Annotated[numpy.typing.ArrayLike, numpy.float32]) -> None:
+        """
+        Per-particle orientation as (n, 4) float32 quaternions in (x, y, z, w) order. Requires Config.orientations. WRITE-ONCE by contract: the device buffer is not ringed, so this is authored with the field, not animated.
+        """
+    def submit(self, positions: typing.Annotated[numpy.typing.ArrayLike, numpy.float32]) -> None:
+        """
+        Point a HostRing field at n positions as an (n, 4) float32 array — xyz plus w, which is the radius under WSemantic.Radius and is the DEAD sentinel when negative under either. One memcpy, no per-particle loop. n > capacity is clamped; also sets the live count. Raises on a Renderer / Interop field.
+        """
+    @property
+    def billboard_repr(self) -> ParticleField.BillboardRepr:
+        ...
+    @property
+    def capacity(self) -> int:
+        ...
+    @property
+    def config(self) -> ParticleField.Config:
+        ...
+    @property
+    def density_repr(self) -> ParticleField.DensityRepr:
+        ...
+    @property
+    def emitter(self) -> ParticleField.EmitterParams:
+        """
+        A COPY of the current parameters — mutate it and hand it back to set_emitter().
+        """
+    @property
+    def emitter_dt(self) -> float:
+        ...
+    @property
+    def emitter_time(self) -> float:
+        ...
+    @property
+    def follow_center(self) -> Vector3:
+        """
+        The SNAPPED centre — use this, not the raw camera position, to place anything that must agree with the wrap box (above all density_repr.center).
+        """
+    @property
+    def host_fallback(self) -> bool:
+        """
+        True when an Interop field had to fall back to the host path (this device cannot export memory to a foreign API), which makes submit() legal on it.
+        """
+    @property
+    def live_count(self) -> int:
+        ...
+    @property
+    def mesh_repr(self) -> ParticleField.MeshRepr:
+        ...
 class PerspectiveCamera(Camera):
     def __init__(self, fov: typing.SupportsFloat | typing.SupportsIndex = 60.0, aspect: typing.SupportsFloat | typing.SupportsIndex = 1.0, near: typing.SupportsFloat | typing.SupportsIndex = 0.10000000149011612, far: typing.SupportsFloat | typing.SupportsIndex = 2000.0) -> None:
         ...
@@ -5095,6 +6383,10 @@ class Texture:
         ...
     def needs_update(self) -> None:
         ...
+    def update_float(self, data: typing.Annotated[numpy.typing.ArrayLike, numpy.float32]) -> None:
+        """
+        Rewrite a float texture's pixels in place from a (height, width, 3|4) float32 array of the SAME size, and mark it dirty. For ping-ponging a procedural sky.
+        """
     def update_matrix(self) -> None:
         ...
     @property
@@ -6190,6 +7482,14 @@ class VulkanRenderer:
         Current sensor-noise settings as a dict.
         """
     @property
+    def starfield(self) -> float:
+        """
+        Procedural star field drawn on sky pixels. 0 disables (default); ~1.0 is a night sky. Ramp it with the daylight rather than snapping it on.
+        """
+    @starfield.setter
+    def starfield(self, arg1: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
     def sun_angular_radius(self) -> float:
         """
         Directional-light angular radius in degrees for soft sun shadows (default 0.5; 0 = hard shadow).
@@ -6230,10 +7530,18 @@ def clamp(value: typing.SupportsFloat | typing.SupportsIndex, low: typing.Suppor
     ...
 def damp(x: typing.SupportsFloat | typing.SupportsIndex, y: typing.SupportsFloat | typing.SupportsIndex, lambda_: typing.SupportsFloat | typing.SupportsIndex, dt: typing.SupportsFloat | typing.SupportsIndex) -> float:
     ...
+def data_texture(data: typing.Annotated[numpy.typing.ArrayLike, numpy.uint8], srgb: bool = True) -> Texture:
+    """
+    Build a Texture from a (height, width, 3|4) uint8 numpy array. srgb=True for colour maps (map, emissive_map); srgb=False for data maps (roughness_map, metalness_map, ao_map).
+    """
 def deg_to_rad(degrees: typing.SupportsFloat | typing.SupportsIndex) -> float:
     ...
 def euclidean_modulo(n: typing.SupportsFloat | typing.SupportsIndex, m: typing.SupportsFloat | typing.SupportsIndex) -> float:
     ...
+def float_texture(data: typing.Annotated[numpy.typing.ArrayLike, numpy.float32]) -> Texture:
+    """
+    Build a float (HDR) Texture from a (height, width, 3|4) float32 numpy array: RGBA, linear, equirectangular. This is the sky/IBL texture type — assign it to scene.environment and scene.background. Row 0 is v = 0 (the zenith end of an equirect). Use Texture.update_float to re-bake one in place.
+    """
 def generate_uuid() -> str:
     ...
 def icp_point_to_point(source: typing.Annotated[numpy.typing.ArrayLike, numpy.float32], target: VoxelGrid, pose: Matrix4, opts: IcpOptions = ...) -> IcpResult:
@@ -6320,14 +7628,19 @@ def write_wav(path: str, samples: collections.abc.Sequence[typing.SupportsFloat 
     """
     Write a mono 16-bit PCM WAV file from normalised float samples in [-1, 1].
     """
+Approach: BirdState  # value = <BirdState.Approach: 1>
 Blob: LeafStyle  # value = <LeafStyle.Blob: 3>
 Cluster: LeafStyle  # value = <LeafStyle.Cluster: 1>
 Colonise: BranchingMode  # value = <BranchingMode.Colonise: 0>
 Cone: CrownShape  # value = <CrownShape.Cone: 2>
 CrossQuad: LeafStyle  # value = <LeafStyle.CrossQuad: 2>
+Cruise: BirdState  # value = <BirdState.Cruise: 0>
 Cylinder: CrownShape  # value = <CrownShape.Cylinder: 4>
 EXPONENTIAL: AudioDistanceModel  # value = <AudioDistanceModel.EXPONENTIAL: 3>
 Ellipsoid: CrownShape  # value = <CrownShape.Ellipsoid: 1>
+Evade: BirdState  # value = <BirdState.Evade: 5>
+Flare: BirdState  # value = <BirdState.Flare: 2>
+Follower: BirdRole  # value = <BirdRole.Follower: 0>
 Frond: LeafStyle  # value = <LeafStyle.Frond: 4>
 Furrowed: BarkStyle  # value = <BarkStyle.Furrowed: 0>
 HAS_AUDIO: bool = True
@@ -6335,15 +7648,21 @@ HAS_IMGUI: bool = True
 HAS_PHYSX: bool = True
 HAS_VULKAN: bool = True
 Hemisphere: CrownShape  # value = <CrownShape.Hemisphere: 3>
+Hop: Gait  # value = <Gait.Hop: 0>
 INVERSE: AudioDistanceModel  # value = <AudioDistanceModel.INVERSE: 1>
 LINEAR: AudioDistanceModel  # value = <AudioDistanceModel.LINEAR: 2>
 Lanceolate: LeafShape  # value = <LeafShape.Lanceolate: 3>
+Launch: BirdState  # value = <BirdState.Launch: 4>
+Leader: BirdRole  # value = <BirdRole.Leader: 1>
 Lobed: LeafShape  # value = <LeafShape.Lobed: 1>
+Loner: BirdRole  # value = <BirdRole.Loner: 2>
 NONE: AudioDistanceModel  # value = <AudioDistanceModel.NONE: 0>
 Ovate: LeafShape  # value = <LeafShape.Ovate: 0>
 Papery: BarkStyle  # value = <BarkStyle.Papery: 2>
+Perched: BirdState  # value = <BirdState.Perched: 3>
 Plated: BarkStyle  # value = <BarkStyle.Plated: 1>
 Quad: LeafStyle  # value = <LeafStyle.Quad: 0>
 Serrate: LeafShape  # value = <LeafShape.Serrate: 2>
 Sphere: CrownShape  # value = <CrownShape.Sphere: 0>
+Walk: Gait  # value = <Gait.Walk: 1>
 Whorl: BranchingMode  # value = <BranchingMode.Whorl: 1>
