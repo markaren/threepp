@@ -7482,20 +7482,24 @@ class VulkanRenderer:
         Current sensor-noise settings as a dict.
         """
     @property
-    def sim_time(self) -> float:
+    def sim_time(self) -> float | None:
         """
         Simulation time in seconds that pins EVERY wall-clock read the frame
-        path makes: the TAA blend dt, the shade's animation timeSec, the
-        DLSS/FSR frame deltas, ocean foam decay, deform timestamps and the
-        cloud clock. Set it once per frame BEFORE render(), monotonically
-        non-decreasing; stepping by a fixed dt makes the output replayable
-        bit-for-bit and makes an offline render frame-rate independent (an
-        unpinned renderer runs the ocean/clouds/foam at wall speed while the
-        app steps its own physics at 1/fps). Negative returns to the wall
-        clock, which is the default and what a live window wants.
+        path makes, or None while the renderer runs on the wall clock (the
+        default). Pinned, it drives every renderer-side animated field: the
+        ocean/DisplacedMesh FFT deform and its foam decay, grass wind, the
+        clouds, the shared shader timeSec (water, particle lights, splats),
+        the TAA blend dt and the DLSS/FSR frame deltas. Set it once per frame
+        BEFORE render(), monotonically non-decreasing; stepping it by a fixed
+        dt makes ocean/grass/particle animation deterministic and frame-rate
+        independent, and the output replayable bit-for-bit. Unpinned, an
+        offline render whose frames take 80 ms of wall time animates the sea
+        ~5x faster than the dt the app integrates its own physics with (the
+        hull can no longer follow the waves). None or a negative value
+        returns to the wall clock, which is what a live window wants.
         """
     @sim_time.setter
-    def sim_time(self, arg1: typing.SupportsFloat | typing.SupportsIndex) -> None:
+    def sim_time(self, arg1: typing.SupportsFloat | typing.SupportsIndex | None) -> None:
         ...
     @property
     def starfield(self) -> float:

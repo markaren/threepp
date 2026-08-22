@@ -45,6 +45,7 @@
 #include <array>
 #include <cstdint>
 #include <cstring>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -670,19 +671,33 @@ namespace threepp_py {
                 // Deterministic frame clock. Without this every wall-clock read
                 // in the frame path runs on glfwGetTime(), so an offline render
                 // whose frames take 80 ms of wall time animates the engine-side
-                // fields ~5x faster than the dt the app integrates with.
+                // fields ~5x faster than the dt the app integrates with. None or
+                // any negative value releases the pin (C++ simTime() < 0); the
+                // getter hands the wall-clock state back as None rather than
+                // leaking the -1 sentinel, so `r.sim_time += dt` on an unpinned
+                // renderer raises instead of silently staying on the wall clock.
                 .def_property("sim_time",
-                              [](PyVulkanRenderer& r) { return r.native().simTime(); },
-                              [](PyVulkanRenderer& r, double v) { r.native().setSimTime(v); },
+                              [](PyVulkanRenderer& r) -> std::optional<double> {
+                                  const double t = r.native().simTime();
+                                  if (t < 0.0) return std::nullopt;
+                                  return t;
+                              },
+                              [](PyVulkanRenderer& r, const std::optional<double>& v) {
+                                  r.native().setSimTime(v.has_value() ? *v : -1.0);
+                              },
                               "Simulation time in seconds that pins EVERY wall-clock read the frame\n"
-                              "path makes: the TAA blend dt, the shade's animation timeSec, the\n"
-                              "DLSS/FSR frame deltas, ocean foam decay, deform timestamps and the\n"
-                              "cloud clock. Set it once per frame BEFORE render(), monotonically\n"
-                              "non-decreasing; stepping by a fixed dt makes the output replayable\n"
-                              "bit-for-bit and makes an offline render frame-rate independent (an\n"
-                              "unpinned renderer runs the ocean/clouds/foam at wall speed while the\n"
-                              "app steps its own physics at 1/fps). Negative returns to the wall\n"
-                              "clock, which is the default and what a live window wants.")
+                              "path makes, or None while the renderer runs on the wall clock (the\n"
+                              "default). Pinned, it drives every renderer-side animated field: the\n"
+                              "ocean/DisplacedMesh FFT deform and its foam decay, grass wind, the\n"
+                              "clouds, the shared shader timeSec (water, particle lights, splats),\n"
+                              "the TAA blend dt and the DLSS/FSR frame deltas. Set it once per frame\n"
+                              "BEFORE render(), monotonically non-decreasing; stepping it by a fixed\n"
+                              "dt makes ocean/grass/particle animation deterministic and frame-rate\n"
+                              "independent, and the output replayable bit-for-bit. Unpinned, an\n"
+                              "offline render whose frames take 80 ms of wall time animates the sea\n"
+                              "~5x faster than the dt the app integrates its own physics with (the\n"
+                              "hull can no longer follow the waves). None or a negative value\n"
+                              "returns to the wall clock, which is what a live window wants.")
                 // Per-frame CPU/GPU pass timings (milliseconds) — see
                 // VulkanRenderer::FrameTimings. For perf triage from python.
                 .def_property_readonly("frame_timings",

@@ -5,6 +5,7 @@ build these require a Vulkan-capable GPU.
 """
 import importlib.util
 import math
+import time
 
 import numpy as np
 import pytest
@@ -46,12 +47,61 @@ def test_rgb_render(vk_renderer):
 
 
 def test_sim_time_round_trips(vk_renderer):
-    """The deterministic frame clock: pin it, read it back, then release it."""
+    """The deterministic frame clock: None on the wall clock (the default), a
+    pinned value reads back exactly, and None or a negative value releases it."""
     try:
+        assert vk_renderer.sim_time is None
         vk_renderer.sim_time = 4.25
         assert vk_renderer.sim_time == pytest.approx(4.25)
+        vk_renderer.sim_time = -1.0
+        assert vk_renderer.sim_time is None
+        vk_renderer.sim_time = 4.25
+        vk_renderer.sim_time = None
+        assert vk_renderer.sim_time is None
     finally:
-        vk_renderer.sim_time = -1.0  # back to the wall clock
+        vk_renderer.sim_time = None  # back to the wall clock
+
+
+_OCEAN_PROBES = [(0.0, 0.0), (13.5, -7.25), (-41.0, 30.5)]
+
+
+def _ocean_heights(renderer, *, t0, frames=4, dt=1.0 / 30.0, pace_s=0.0):
+    """Render a fresh Ocean for `frames` frames with renderer.sim_time stepped
+    from t0 by dt, sleeping pace_s of WALL time between frames, and return the
+    CPU-mirrored wave height at a few probes."""
+    scene = tp.Scene()
+    scene.background = 0x202830
+    ocean = tp.Ocean(size=200.0, resolution=64, wind_speed=10.0, fft_size=128)
+    scene.add(ocean)
+    cam = tp.PerspectiveCamera(55, W / H, 0.1, 1000)
+    cam.position.set(0, 15, 40)
+    cam.look_at(0, 0, 0)
+    ocean.sample_height(0.0, 0.0)  # arms the GPU->CPU height readback (sticky opt-in)
+    for i in range(frames):
+        renderer.sim_time = t0 + i * dt
+        renderer.render(scene, cam)
+        if pace_s:
+            time.sleep(pace_s)
+    return [ocean.sample_height(x, z) for x, z in _OCEAN_PROBES]
+
+
+@pytest.mark.skipif(not hasattr(tp, "Ocean"), reason="Ocean needs the Vulkan build")
+def test_sim_time_pins_ocean_against_frame_pacing(vk_renderer):
+    """With sim_time pinned, the same frame sequence rendered back-to-back and
+    rendered with 0.1 s of wall time between frames lands the ocean on the same
+    wave heights. Unpinned, the sea advances at wall speed while the app steps
+    its own physics at 1/fps -- the warp_sailboat film bug, where a 1080p render
+    (~90 ms/frame) got a ~5x faster ocean than the buoyancy follower expected."""
+    try:
+        fast = _ocean_heights(vk_renderer, t0=3.0)
+        slow = _ocean_heights(vk_renderer, t0=3.0, pace_s=0.1)
+        assert any(abs(h) > 1e-3 for h in fast), "height mirror never filled"
+        assert slow == pytest.approx(fast, abs=1e-4)
+        # The pin is what drives the field: a different pinned time is a different sea.
+        later = _ocean_heights(vk_renderer, t0=4.5)
+        assert later != pytest.approx(fast, abs=1e-3)
+    finally:
+        vk_renderer.sim_time = None
 
 
 def test_aov_shapes(vk_renderer):
