@@ -2703,12 +2703,9 @@ _buoy_h = np.empty(len(BUOY_PTS))
 # --------------------------------------------------------------------------- #
 #  One frame of sailing.
 # --------------------------------------------------------------------------- #
-def hull_half_width(t):
-    """Half-beam at fore-aft fraction t (0 = bow, 1 = stern), for foam splats."""
-    u = 2.0 * t - 1.0
-    b = BEAM * 0.5
-    return b * (1.0 - u * u) ** 0.6 if u <= 0.0 else b * (1.0 - 0.25 * u * u)
-
+# (`hull_half_width` used to live here, a CPU mirror of the shader's plan-form
+#  taper for the hand-placed perimeter foam splats. Both are gone: the analytic
+#  wake draws the waterline contact now.)
 
 # Hull exclusion + analytical wake: the hull DISPLACES the water instead of the
 # sea passing through it. `hull_excl_on` is the X-key A/B.
