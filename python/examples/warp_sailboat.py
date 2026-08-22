@@ -67,6 +67,7 @@ simulation never stops.
     python warp_sailboat.py --timelapse             # run the day at 0.35 h/s
     python warp_sailboat.py --shot 25 --tod 23.5 --weather night --out night.png
     python warp_sailboat.py --film film.mp4 --contact        # the whole picture
+    python warp_sailboat.py --film min.mp4 --cut short --contact   # ~60 s of it
     python warp_sailboat.py --film t.mp4 --preview --acts 4  # iterate one act
     python warp_sailboat.py --film t.mp4 --preview --shots 9-12
 
@@ -80,6 +81,7 @@ Hull:  X toggle "the hull displaces water" (footprint + waterline plane + wake)
 Needs a Vulkan build (-DTHREEPP_WITH_VULKAN=ON). Warp falls back to CPU if no
 CUDA device is present -- slower, same picture.
 """
+import copy
 import math
 import os
 import sys
@@ -123,6 +125,7 @@ HEADLESS = SHOT or FILM
 FPS = int(cli_arg("--fps", 30 if PREVIEW else 60, float))
 FILM_ACTS = cli_arg("--acts", "", str)            # "1,3" = only those acts
 FILM_SHOTS = cli_arg("--shots", "", str)          # "4-7" = a flat shot range
+FILM_CUT = cli_arg("--cut", "full", str)          # "short" = the one-minute cut
 WARMUP = int(cli_arg("--warmup", 50, float))      # unrecorded frames after a cut
 PREROLL = int(cli_arg("--preroll", 6.0 * FPS, float))  # unrecorded, before shot 0
 
@@ -2716,6 +2719,31 @@ hull_excl_on = True
 _wake_accum = 0.0
 _wake_last = None
 
+# She is a 9.6 m yacht at 5-7 kn, not a planing launch, and fed her true speed
+# the analytical wake reads as a motor-boat river (the orchestrator's verdict on
+# `v4_wake_clear.png`). There is no per-trail amplitude knob to turn down: every
+# wake effect in `water_displace.comp` / `foam_world.comp` is gated on
+# `smoothstep(0.5, 1.5, |speed|)` and the stern foam trail's amplitude is a FLAT
+# 0.95 above 1.5 m/s. So the one lever from Python is the SPEED the shaders are
+# handed. At 3-6 m/s the gate saturates, the foam accumulator pins at 1.0, and
+# the water shading's sheet term (`smoothstep(0.03, 0.42, coverage - pools*..)`,
+# solid from coverage ~0.55) paints an unbroken slab. Compressing her speed into
+# the gate's own ramp instead lands the trail near coverage 0.5, where the pool
+# and edge noise breaks it into streaks and the V-wedge ridges stay as thin
+# feathered lines. It also takes the ridge HEIGHT (0.016 v^2 + 0.06 v, clamped
+# at 1 m) from half a metre of standing water down to a few centimetres.
+# Nothing here touches the boat: `sampleHeight` ignores the wake, so the
+# hydrostatics read the same sea either way.
+WAKE_SPEED_FLOOR = 0.60      # m/s handed to the wake at bare steerage way
+WAKE_SPEED_GAIN = 0.10       # ... plus this per m/s of her own speed
+WAKE_SPEED_CAP = cli_arg("--wake-cap", 0.98, float)   # gate ~0.44 at the top
+
+
+def wake_speed(u):
+    """Her speed as the wake shaders should see it -- see the note above."""
+    return math.copysign(min(WAKE_SPEED_FLOOR + WAKE_SPEED_GAIN * abs(u),
+                             WAKE_SPEED_CAP), u)
+
 
 def _wake_update(dt, cy, sy, pitch, roll):
     """Hand the ocean the vessel's pose + waterline plane, and keep the Kelvin
@@ -2726,7 +2754,8 @@ def _wake_update(dt, cy, sy, pitch, roll):
     h.set_pose(bs["x"], bs["z"], bs["y"], yaw=bs["yaw"], pitch=pitch, roll=roll,
                half_length=HULL_HALF_L if hull_excl_on else 0.0,
                half_beam=HULL_HALF_B)
-    ocean.wake.forward_speed = bs["u"]
+    ws = wake_speed(bs["u"])                 # NOT bs["u"] -- see WAKE_SPEED_CAP
+    ocean.wake.forward_speed = ws
     if not hull_excl_on:
         return
     ocean.age_wake(dt, WAKE_MAX_AGE, WAKE_MAX_SAMPLES)
@@ -2734,9 +2763,11 @@ def _wake_update(dt, cy, sy, pitch, roll):
     moved = 1e9 if _wake_last is None else math.hypot(bs["x"] - _wake_last[0],
                                                       bs["z"] - _wake_last[1])
     if abs(bs["u"]) > 0.3 and (_wake_accum >= WAKE_INTERVAL or moved >= WAKE_DISTANCE):
+        # Emission still keys off her REAL speed (she is either making way or
+        # she is not); only the amplitude the shaders derive is compressed.
         _wake_accum = 0.0
         _wake_last = (bs["x"], bs["z"])
-        ocean.add_wake_sample(bs["x"], bs["z"], sy, cy, bs["u"], WAKE_MAX_SAMPLES)
+        ocean.add_wake_sample(bs["x"], bs["z"], sy, cy, ws, WAKE_MAX_SAMPLES)
 
 
 def wake_teleport():
@@ -3795,6 +3826,107 @@ FILM_SCRIPT = [
          tgt_mix=(0.30, 6.0), fade=1.1),
 ]
 
+# ---- the one-minute cut ------------------------------------------------------ #
+#  `--cut short`: the same picture at social length. The user's brief was the
+#  whole of it -- "keep it to one minute. make sure the golden, drone and
+#  lightning strike is captured" -- so this is a SELECTION and a RE-TIMING of
+#  shots that already exist, not new mechanics: same kinds, same camera paths,
+#  same drone trajectory, same strike mechanism. Seven shots, 59.0 s.
+#
+#  Two things have to be repaired when a shot is dropped:
+#   * an ACT CUT can go with it. `place` (the teleport that says hours have
+#     passed) lives on the FIRST shot of each act in the full script, and both
+#     the storm chase and the money shot are second or third in theirs. They get
+#     their act's placement here.
+#   * so can the WEATHER. The squall's opener is the shot that ramps clear ->
+#     storm on camera over 8 s; without it the chase has to take the storm as a
+#     hard cut (`wx_hard`), which is what a cut into the middle of a squall is.
+#
+#  The money shot is the one place the LOOK changed, in three steps, and all
+#  three were needed to get the frame the user actually approved (the wide islet
+#  still with the sun disc in it, not the film's closer variant):
+#   * 19.667 -> 20.00. Twenty minutes later the disc has dropped out of
+#     Preetham's near-white low-sun band; the sky goes a saltier pink, the
+#     glitter path runs all the way to the lens, and the islet finally reads as
+#     a dark silhouette instead of the flat pale cut-out it has been since
+#     Phase 2.
+#   * 34 mm -> 48 deg (the demo camera's own lens, which is what the approved
+#     still was shot on) and the -9 deg / -2.5 deg composition trim dropped. At
+#     34 mm the disc sits outside the top-right corner: the film had been
+#     cropping away the very thing the frame is named after.
+#   * `ae=(-3.8, -1.4)`. THIS is what finally made the disc separate. A low sun
+#     over a lit sea is the brightest scene in the film and the default AE floor
+#     of -2.5 EV is not enough constriction, so the meter clamps and the sky
+#     prints a stop hot -- the disc merges into it and the pink goes chalky.
+#     With the floor opened the shot meters where it wants to. It also explains
+#     the "isolated render has the disc, whole film does not" puzzle from
+#     Phase 4: a clamped meter lands at different places depending on what the
+#     rest of the frame is doing.
+SHORT_CUT = [
+    # (shot name in FILM_SCRIPT, seconds, overrides)
+    ("dawn: low wide, boat in silhouette", 6.0, {}),
+    ("morning: the drone off the quarter", 5.5, {}),
+    ("morning: FPV, the same move", 6.5, {}),
+    # Reframed, and the reason is the standing rule about drowning her. At the
+    # full film's 30 mm from 16 m the lens is pointed at mid-mast, which puts
+    # her WATERLINE 3 deg below the bottom edge: the hull is cropped away and a
+    # cropped hull in a 1.7-wave_scale sea reads as swamped even though she is
+    # dry (Phase 4b's exact finding, one shot further on). 26 mm from 19 m with
+    # the look-at down at 5.6 m holds masthead to waterline inside the frame
+    # with ~3-5 deg of margin. The sea is untouched.
+    ("squall: hard over in the rain", 5.5,
+     dict(place=(-44.0, 38.0, 62.0), course=62.0, wx_hard=True, fov=fov_mm(26),
+          fire=((2.0, "sheet", 300.0, 1600.0),),
+          p=dict(off=(-18.0, 7.0, 4.4), tgt=(1.0, 0.0, 5.6), sway=(2.4, 8.0)))),
+    # THE LIGHTNING, and it is aimed rather than scheduled. The user's verdict on
+    # the first one-minute cut was "we have no lightning shots!" -- the full
+    # film's fork does fire here, but at bearing 322 / 720 m it lands off in the
+    # left third, thin, and 0.4 s of it in a 60 s cut goes past unseen. The
+    # camera of this shot sits off her starboard quarter looking up her track at
+    # bearing 310, and screen-right on this backend is (look bearing - 90), so a
+    # bolt at bearing 316 sits ~6 deg LEFT of the frame axis: upper-middle,
+    # clear of the mainsail, with the boat in the lower third. 620 m rather than
+    # 720 makes the channel ~8 px wide at 1080p and still keeps the cloud base
+    # (300 m) at 25.8 deg, inside the 20 mm lens's 28 deg half-height, so the
+    # whole fork is in frame from cloud to sea. It fires at 1.3 s of an 8 s shot
+    # so leader, peak, the return strokes and the full decay are all recorded,
+    # and a second hero follows at 4.6 s from 300 deg / 950 m.
+    ("squall: the hero fork", 8.0,
+     dict(fire=((1.3, "hero", 316.0, 620.0), (4.6, "hero", 300.0, 950.0)))),
+    ("golden: the islet", 14.0,
+     dict(tod=20.00, wx="clearing", place=(-12.0, 33.0, 338.0), course=338.0,
+          fov=48.0, ae=(-3.8, -1.4), p=dict(tgt_yaw=0.0, tgt_pitch=0.0))),
+    # "night: the beam comes round" USED to sit here (6 s, 23:50). The user cut
+    # it after watching the first one-minute take -- "the leg at 0:42-0:49 can be
+    # removed" -- so the film goes straight from the golden hour to the closing
+    # crane, and its six seconds went to the money shot (12 -> 14) and to the
+    # pull-back (10 -> 13.5). The pull-back therefore inherits act 5's placement
+    # and its hard cut to `night`.
+    ("night: pull back and up", 13.5,
+     dict(place=(28.0, -58.0, 330.0), course=330.0)),
+]
+
+
+def film_shots():
+    """The shot list this run is rendering: the full script or the short cut."""
+    if FILM_CUT not in ("full", "short"):
+        raise SystemExit(f"--cut takes 'full' or 'short', not {FILM_CUT!r}")
+    if FILM_CUT == "full":
+        return list(FILM_SCRIPT)
+    by_name = {s.name: s for s in FILM_SCRIPT}
+    out = []
+    for name, dur, over in SHORT_CUT:
+        sh = copy.copy(by_name[name])       # shallow: p/fire are re-owned below
+        sh.p, sh.fire = dict(sh.p), list(sh.fire)
+        sh.dur = dur
+        for k, v in over.items():
+            if k == "p":
+                sh.p.update(v)          # path/target trim, not a replacement
+            else:
+                setattr(sh, k, v)
+        out.append(sh)
+    return out
+
 
 def _film_cut(sh, prev):
     """Everything that must be true before the first recorded frame of a shot."""
@@ -3915,7 +4047,7 @@ def run_film():
     import imageio.v2 as imageio
     from PIL import Image
 
-    shots = list(FILM_SCRIPT)
+    shots = film_shots()
     if FILM_ACTS:
         keep = {int(v) for v in FILM_ACTS.replace(" ", "").split(",") if v != ""}
         shots = [s for s in shots if s.act in keep]
@@ -3935,8 +4067,8 @@ def run_film():
     out = os.path.abspath(FILM_OUT)
     stem = os.path.splitext(out)[0]
 
-    print(f"film: {len(shots)} shots, {total} frames = {total / FPS:.1f} s "
-          f"at {FPS} fps, {W}x{H}, warm-up {WARMUP}/cut")
+    print(f"film[{FILM_CUT}]: {len(shots)} shots, {total} frames = "
+          f"{total / FPS:.1f} s at {FPS} fps, {W}x{H}, warm-up {WARMUP}/cut")
 
     writer = imageio.get_writer(out, fps=FPS, codec="libx264", quality=None,
                                 macro_block_size=None,
