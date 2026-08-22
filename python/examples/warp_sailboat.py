@@ -45,6 +45,14 @@ is a small state machine with ramps in seconds: cloud closes, wind builds, the
 sea gets up, rain starts, the deck goes dark and glossy, and when it clears
 there is a rainbow opposite the sun because the geometry says there should be.
 
+And then there is the FILM. `--film out.mp4` runs a scripted two-minute picture
+headless -- a cold open on a lightning strike, dawn, the drone reveal, a squall,
+the golden hour and a starry night -- as twenty-one cut shots on one continuous
+world, and writes H.264. Each cut sets the hour, re-bakes the sky, sets the
+weather and places the camera (and the drone), then burns unrecorded warm-up
+frames so no exposure ramp or temporal smear is ever recorded. Between cuts the
+simulation never stops.
+
     pip install warp-lang
     python warp_sailboat.py                     # window; drag to orbit, Esc quits
     python warp_sailboat.py --tod 19.7 --weather clearing
@@ -52,6 +60,9 @@ there is a rainbow opposite the sun because the geometry says there should be.
     python warp_sailboat.py --birds 60          # more gulls
     python warp_sailboat.py --timelapse             # run the day at 0.35 h/s
     python warp_sailboat.py --shot 25 --tod 23.5 --weather night --out night.png
+    python warp_sailboat.py --film film.mp4 --contact        # the whole picture
+    python warp_sailboat.py --film t.mp4 --preview --acts 4  # iterate one act
+    python warp_sailboat.py --film t.mp4 --preview --shots 9-12
 
 Helm:  A / D steer      Q / E ease / trim main     Z / C ease / trim jib
        T auto-trim      P autopilot (hold course)  R reset
@@ -89,6 +100,24 @@ SHOT_T = cli_arg("--shot", 25.0, float)
 TOD0 = cli_arg("--tod", 5.2, float) % 24.0        # clock time, hours
 WEATHER0 = cli_arg("--weather", "mist", str)
 WIND0 = cli_arg("--wind", 0.0, float)             # 0 = let the weather decide
+
+# ---- the film ---------------------------------------------------------------
+#  `--film out.mp4` runs the whole scripted picture headless and writes H.264.
+#  `--preview` is the iteration loop: 960x540 at 30 fps, which is a quarter of
+#  the pixels and half the frames, so a shot comes back in seconds instead of
+#  minutes. The sim then runs at dt = 1/30 -- the boat and the weather keep real
+#  time, the cloth solver (a fixed 8 x 1/480 per call) runs at half rate, which
+#  is a composition tool, not a physics result.
+FILM = "--film" in sys.argv
+FILM_OUT = cli_arg("--film", "warp_sailboat_film.mp4", str)
+PREVIEW = "--preview" in sys.argv
+CONTACT = "--contact" in sys.argv
+HEADLESS = SHOT or FILM
+FPS = int(cli_arg("--fps", 30 if PREVIEW else 60, float))
+FILM_ACTS = cli_arg("--acts", "", str)            # "1,3" = only those acts
+FILM_SHOTS = cli_arg("--shots", "", str)          # "4-7" = a flat shot range
+WARMUP = int(cli_arg("--warmup", 50, float))      # unrecorded frames after a cut
+PREROLL = int(cli_arg("--preroll", 6.0 * FPS, float))  # unrecorded, before shot 0
 
 if not tp.HAS_VULKAN or not tp.vulkan_available():
     print("This example needs the Vulkan backend (configure with "
@@ -470,31 +499,32 @@ def horizon_color(cs, wx):
 #  reads as a cut, not as weather.
 # --------------------------------------------------------------------------- #
 WEATHER_KEYS = ("coverage", "cloud_density", "deck_bottom", "deck_top", "wind",
-                "wave_scale", "choppy", "fog", "fog_h", "rain", "rainbow")
+                "wave_scale", "choppy", "fog", "fog_h", "rain", "rainbow",
+                "whitecap")
 
 PRESETS = {
     # dawn: thick mist, a glassy sea, the light only just arriving
     "mist": dict(coverage=0.30, cloud_density=0.8, deck_bottom=620.0, deck_top=1500.0,
                  wind=6.0, wave_scale=0.72, choppy=0.48, fog=0.0062, fog_h=52.0,
-                 rain=0.0, rainbow=0.0),
+                 rain=0.0, rainbow=0.0, whitecap=0.30),
     "clear": dict(coverage=0.22, cloud_density=0.8, deck_bottom=700.0, deck_top=1600.0,
                   wind=9.5, wave_scale=1.00, choppy=0.58, fog=0.0011, fog_h=140.0,
-                  rain=0.0, rainbow=0.0),
+                  rain=0.0, rainbow=0.0, whitecap=0.34),
     "overcast": dict(coverage=0.74, cloud_density=1.15, deck_bottom=420.0, deck_top=1250.0,
                      wind=12.0, wave_scale=1.20, choppy=0.68, fog=0.0040, fog_h=130.0,
-                     rain=0.0, rainbow=0.0),
+                     rain=0.0, rainbow=0.0, whitecap=0.30),
     "storm": dict(coverage=0.97, cloud_density=1.70, deck_bottom=240.0, deck_top=1500.0,
-                  wind=17.0, wave_scale=1.65, choppy=0.86, fog=0.0078, fog_h=150.0,
-                  rain=1.0, rainbow=0.0),
+                  wind=17.0, wave_scale=1.70, choppy=0.78, fog=0.0078, fog_h=150.0,
+                  rain=1.0, rainbow=0.0, whitecap=0.32),
     # the squall walking away: broken cloud, a low sun, and a bow behind you
     "clearing": dict(coverage=0.38, cloud_density=0.95, deck_bottom=520.0, deck_top=1350.0,
                      wind=8.5, wave_scale=1.15, choppy=0.62, fog=0.0032, fog_h=95.0,
-                     rain=0.0, rainbow=1.0),
+                     rain=0.0, rainbow=1.0, whitecap=0.26),
     # thin sea mist, because a lighthouse beam is only visible if there is
     # something in the air for it to be visible IN
     "night": dict(coverage=0.18, cloud_density=0.8, deck_bottom=700.0, deck_top=1600.0,
                   wind=7.0, wave_scale=0.90, choppy=0.55, fog=0.0062, fog_h=60.0,
-                  rain=0.0, rainbow=0.0),
+                  rain=0.0, rainbow=0.0, whitecap=0.26),
 }
 PRESETS["night-clear"] = PRESETS["night"]
 PRESETS["golden"] = PRESETS["clearing"]
@@ -503,7 +533,7 @@ PRESETS["golden"] = PRESETS["clearing"]
 # a wet deck dries far more slowly than it wets.
 RAMP_TAU = dict(coverage=5.0, cloud_density=5.0, deck_bottom=6.0, deck_top=6.0,
                 wind=7.0, wave_scale=9.0, choppy=9.0, fog=5.0, fog_h=6.0,
-                rain=2.2, rainbow=3.5)
+                rain=2.2, rainbow=3.5, whitecap=7.0)
 
 # The five acts: key -> (time of day, weather preset).
 ACTS = ((4.833, "mist"), (8.5, "clear"), (15.0, "storm"),
@@ -1327,9 +1357,10 @@ def yxz_matrix(ex, ey, ez):
 # --------------------------------------------------------------------------- #
 #  Scene
 # --------------------------------------------------------------------------- #
-W, H = (int(v) for v in cli_arg("--size", "1600x900", str).lower().split("x"))
+_DEF_SIZE = "960x540" if PREVIEW else ("1920x1080" if FILM else "1600x900")
+W, H = (int(v) for v in cli_arg("--size", _DEF_SIZE, str).lower().split("x"))
 canvas = tp.Canvas("threepp x warp - sailboat", width=W, height=H,
-                   vsync=False, headless=SHOT)
+                   vsync=False, headless=HEADLESS)
 renderer = tp.VulkanRenderer(canvas)
 renderer.tone_mapping = tp.ToneMapping.ACESFilmic
 renderer.tone_mapping_exposure = 0.72
@@ -1351,7 +1382,7 @@ renderer.set_auto_exposure_range(-2.5, 3.0)
 renderer.set_auto_exposure_speed(1.2)
 renderer.bloom_clamp = 12.0
 
-ui = tp.ImguiContext(canvas, renderer) if (tp.HAS_IMGUI and not SHOT) else None
+ui = tp.ImguiContext(canvas, renderer) if (tp.HAS_IMGUI and not HEADLESS) else None
 
 scene = tp.Scene()
 
@@ -1404,7 +1435,8 @@ def apply_sky(cs, force=False):
     if SKY_LOG:
         print(f"sky bake {_bake_count:3d}  t={_last_tod():05.2f}h  "
               f"elev {cs.sun_elev_deg:+5.1f} deg  az {cs.sun_az_deg % 360:5.1f} deg  "
-              f"cover {weather['coverage']:.2f}  {ms:5.1f} ms")
+              f"cover {weather['coverage']:.2f}  bow {weather['rainbow']:.2f}  "
+              f"{ms:5.1f} ms")
     return True
 
 
@@ -1861,7 +1893,6 @@ def apply_wetness(w):
 #  rain is everywhere the boat sails rather than a patch over the origin.
 RAIN_CAP = 200_000
 RAIN_HALF = 26.0                    # lateral half-extent = the wrap period / 2
-RAIN_LOD_NEAR, RAIN_LOD_FAR = 6.0, 12.0
 
 _rc = tp.ParticleField.Config()
 _rc.capacity = RAIN_CAP
@@ -1871,24 +1902,17 @@ _rc.uniform_radius = 0.013
 rain = tp.ParticleField.create(_rc)
 rain.frustum_culled = False
 
-# Near the camera a drop is a lit SOLID -- which is the whole point of the LOD
-# split here: a lightning flash (Phase 3) reaches a mesh proxy and cannot reach
-# an unlit additive quad. Past 12 m a drop is 2 px and the octahedron buys
-# nothing, so the billboard streak takes over across the same band.
-rain_mat = tp.MeshStandardMaterial()
-rain_mat.color = tp.Color(0.58, 0.64, 0.72)
-rain_mat.roughness = 0.06
-rain_mat.metalness = 0.0
-rain.set_mesh_repr(tp.OctahedronGeometry(0.013, 0), rain_mat)
-_mr = rain.mesh_repr
-_mr.lod_far = RAIN_LOD_FAR
-_mr.lod_fade = RAIN_LOD_FAR - RAIN_LOD_NEAR
-# near_cull is "how big may the NEAREST drop get": inside the band the linear
-# scale ramp and the 1/d projection cancel, so every proxy lands at r/near_cull
-# radians. At 2.2 m that is 0.006 rad -- a 12 px white diamond hanging in front
-# of the lens, which is exactly what the first storm still showed. 9 m puts the
-# nearest drop at 3 px, which is a drop.
-_mr.near_cull = 9.0
+# NO MESH PROXY. Phase 2 gave the near field a lit OctahedronGeometry solid so
+# that a lightning flash would have geometry to reach within 12 m of the lens,
+# and on a 1080p close shot that is exactly what it looks like: a scatter of
+# pale DIAMONDS drifting across the sky, i.e. snow. The lit-near-drops idea is
+# cut outright rather than re-tuned -- a drop at 2 m is not a shape the eye
+# should be able to resolve at all. The billboards now draw at EVERY distance
+# (lod_near = lod_fade = 0) and `near_fade` + `stretch_max_screen` are what keep
+# the closest quads from painting bars across the frame. The cost: the rain
+# curtain near the camera is no longer lit by a strike (billboards are unlit
+# additive); the DensityRepr volume still is, so the flash still blooms in the
+# curtain, just not on individual drops.
 
 # A drop crosses ~20 px a frame; drawn as a solid it reads as hail. The quad is
 # smeared along the emitter's own analytic velocity, and both caps (world and
@@ -1897,8 +1921,8 @@ RAIN_BB_BASE = 0.135
 rain.set_billboard_repr(tp.Color(0.72, 0.79, 0.90), tp.Color(0.60, 0.67, 0.78),
                         RAIN_BB_BASE, 0.30)
 _br = rain.billboard_repr
-_br.lod_near = RAIN_LOD_NEAR
-_br.lod_fade = RAIN_LOD_FAR - RAIN_LOD_NEAR
+_br.lod_near = 0.0
+_br.lod_fade = 0.0
 _br.stretch_seconds = 0.024
 _br.stretch_max = 30.0
 _br.stretch_max_screen = 0.045
@@ -2818,7 +2842,7 @@ def run_autopilot(dt):
 # --------------------------------------------------------------------------- #
 world_time = 0.0
 _applied = {"cloud": None, "fog_h": None, "wind": None,
-            "wave": None, "choppy": None, "glow": None}
+            "wave": None, "choppy": None, "glow": None, "whitecap": None}
 
 
 def _ramp(dt):
@@ -2911,6 +2935,16 @@ def update_world(dt):
     if _applied["choppy"] is None or abs(weather["choppy"] - knob["choppy"]) > 0.01:
         _applied["choppy"] = knob["choppy"] = weather["choppy"]
         ocean.params.choppiness = knob["choppy"]
+    # Natural whitecaps. Ocean::create derives foamAmount from the tile scale
+    # (1400 m / 300 -> clamped to 1.0), which at a storm's wave_scale deposits
+    # foam faster than the shading lifecycle can age it away: the fold field
+    # saturates, the sheet mask goes solid, and the sea renders as slabs of
+    # pack ice. Whitewater is the TAIL of the fold distribution, so the knob
+    # has to come DOWN as the sea gets up, not up -- 0.16 in the storm leaves
+    # only the genuinely breaking crests and the wind streaks over dark slate.
+    if _applied["whitecap"] is None or abs(weather["whitecap"] - _applied["whitecap"]) > 0.005:
+        _applied["whitecap"] = weather["whitecap"]
+        ocean.params.foam_amount = weather["whitecap"]
 
     # ---- the light on the rock ---------------------------------------------
     global _night_level
@@ -3138,8 +3172,624 @@ def on_resize(w, h):
 canvas.on_window_resize(on_resize)
 
 
+# --------------------------------------------------------------------------- #
+#  The film.
+#
+#  A shot is a camera path in the BOAT's frame (or in world axes anchored on
+#  her), because the boat is doing 3-5 m/s: a path authored in absolute world
+#  coordinates is composed for exactly one instant and then drifts off the
+#  subject. Everything else -- the ease, the look-at lead, the handheld noise,
+#  the lens -- is the same machinery every shot uses.
+# --------------------------------------------------------------------------- #
+film_mode = FILM
+film_drone = None            # frame() calls this instead of the demo orbit
+_cur_shot = None
+_cur_u = 0.0
+_cam_fov = None
+_dof_on = False
+
+
+def fov_mm(mm):
+    """Vertical FOV in degrees for a 35 mm-equivalent focal length, 16:9."""
+    return math.degrees(2.0 * math.atan(10.125 / float(mm)))
+
+
+def _lerp(a, b, u):
+    return a + (b - a) * u
+
+
+def _ease(u, mode="inout"):
+    u = min(max(u, 0.0), 1.0)
+    if mode == "linear":
+        return u
+    if mode == "in":
+        return u * u
+    if mode == "out":
+        return 1.0 - (1.0 - u) * (1.0 - u)
+    return u * u * (3.0 - 2.0 * u)
+
+
+def boat_axes():
+    """(origin at the waterline, forward, starboard) -- the shot frame."""
+    bs = boat_state
+    cy, sy = math.cos(bs["yaw"]), math.sin(bs["yaw"])
+    return (np.array([bs["x"], 0.0, bs["z"]]),
+            np.array([sy, 0.0, cy]), np.array([cy, 0.0, -sy]))
+
+
+def boat_vel():
+    bs = boat_state
+    cy, sy = math.cos(bs["yaw"]), math.sin(bs["yaw"])
+    return np.array([sy * bs["u"] + cy * bs["sway"], 0.0,
+                     cy * bs["u"] - sy * bs["sway"]])
+
+
+def _handheld(t, amp_deg):
+    """Sum of incommensurate sines: an operator's hands, not a wobble cycle."""
+    a = math.radians(amp_deg)
+    return (a * (0.60 * math.sin(t * 1.7 + 0.3) + 0.28 * math.sin(t * 3.1 + 1.9)
+                 + 0.12 * math.sin(t * 6.7 + 4.2)),
+            a * (0.55 * math.sin(t * 1.3 + 2.1) + 0.30 * math.sin(t * 2.7 + 0.7)
+                 + 0.15 * math.sin(t * 5.3 + 3.3)))
+
+
+class Shot:
+    """One cut. `kind` picks the path; `p` is that path's parameters.
+
+    Path offsets are (forward, starboard, altitude) in the boat's frame, or
+    (east, north, altitude) relative to the boat when `world=True`. Altitude is
+    always absolute above mean sea level, so a 0.6 m water skim stays 0.6 m up
+    whatever the boat is doing.
+    """
+
+    def __init__(self, act, name, tod, dur, kind, fov=35.0, dof=None,
+                 wx=None, wx_hard=True, wx_over=None, place=None, course=None,
+                 tod_rate=0.0, ease="inout", lead=0.0, shake=0.15, ae=None,
+                 drone=None, view="cam", du=(0.0, 1.0), fire=(), poster=None,
+                 fade=None, **p):
+        self.act, self.name, self.tod, self.dur, self.kind = act, name, tod, dur, kind
+        self.fov, self.dof, self.wx, self.wx_hard = fov, dof, wx, wx_hard
+        self.wx_over, self.place, self.course = wx_over, place, course
+        self.tod_rate, self.ease, self.lead, self.shake = tod_rate, ease, lead, shake
+        self.ae = ae
+        self.drone, self.view, self.du = drone, view, du
+        self.fire, self.poster, self.fade = list(fire), poster, fade
+        self.p = p
+
+
+def _pt(org, fwd, rgt, q, world):
+    """(f, s, y) in the boat frame, or (dx, dz, y) in world axes."""
+    p = org + (np.array([q[0], 0.0, q[1]]) if world else fwd * q[0] + rgt * q[1])
+    p[1] = q[2]
+    return p
+
+
+def shot_target(sh, e, org, fwd, rgt):
+    p = sh.p
+    if "tgt_mix" in p:                       # blend boat -> islet, the act-4 framing
+        k, y = p["tgt_mix"]
+        t = np.array([org[0] * (1.0 - k) + ISLET_X * k, y,
+                      org[2] * (1.0 - k) + ISLET_Z * k])
+    elif p.get("tgt_drone"):
+        t = drone_state["pos"] + np.array(p.get("tgt_drone_off", (0.0, 0.0, 0.0)))
+        k = p.get("tgt_drone_mix", 1.0)
+        if k < 1.0:                          # keep the boat in frame behind it
+            t = t * k + _pt(org, fwd, rgt, np.array(p.get("tgt", (0.0, 0.0, 5.0)),
+                                                    float), False) * (1.0 - k)
+    else:
+        a = np.array(p.get("tgt", (0.0, 0.0, 5.0)), float)
+        b = np.array(p.get("tgt_b", a), float)
+        t = _pt(org, fwd, rgt, a + (b - a) * e, p.get("tgt_world", False))
+    if sh.lead:
+        t = t + boat_vel() * sh.lead
+    return t
+
+
+def shot_camera(sh, u):
+    """Where the lens is and what it is pointed at, this frame."""
+    p, k = sh.p, sh.kind
+    e = _ease(u, sh.ease)
+    org, fwd, rgt = boat_axes()
+    world = p.get("world", False)
+
+    if k == "orbit":
+        r = _lerp(*p.get("r", (26.0, 26.0)), e)
+        h = _lerp(*p.get("h", (10.0, 10.0)), e)
+        az = math.radians(_lerp(*p.get("az", (40.0, 90.0)), e))
+        eye = org + np.array([r * math.sin(az), h, r * math.cos(az)])
+    elif k in ("dolly", "crane", "water_skim"):
+        a = np.array(p.get("a", (-20.0, 8.0, 8.0)), float)
+        b = np.array(p.get("b", a), float)
+        eye = _pt(org, fwd, rgt, a + (b - a) * e, world)
+        if k == "crane":
+            eye[1] += p.get("arc", 0.0) * math.sin(math.pi * e)
+        elif k == "water_skim":
+            # A lens 0.6 m off the water is ON the water: it lifts and drops
+            # with the swell it is skimming, or it reads as a tripod at sea.
+            eye[1] += 0.30 * math.sin(world_time * 1.55) + 0.12 * math.sin(world_time * 2.9)
+    elif k == "chase":
+        off = np.array(p.get("off", (-17.0, 6.0, 5.0)), float)
+        amp, per = p.get("sway", (2.0, 9.0))
+        ph = world_time * 2.0 * math.pi / per
+        eye = _pt(org, fwd, rgt,
+                  (off[0], off[1] + amp * math.sin(ph), off[2]), world)
+        eye[1] += 0.45 * amp * math.sin(ph * 0.63 + 1.1)
+    elif k == "mast_cam":
+        # Slung off the masthead looking down the sail. The heel is the shot:
+        # the horizon swings because the mast the camera is bolted to swings.
+        hgt = p.get("mast_y", MAST_H * 0.82)
+        heel = boat_state["heel"]
+        eye = org + fwd * (MAST_Z + p.get("fore", 0.0)) \
+            + rgt * (p.get("side", 0.9) + hgt * math.sin(heel))
+        eye[1] = boat_state["y"] + hgt * math.cos(heel)
+    elif k == "tripod":
+        # The lighthouse gallery: a locked-off long lens that only pans.
+        eye = np.array(p.get("eye", (ISLET_X + 2.4, LANTERN[1] - 3.2, ISLET_Z + 1.6)), float)
+    elif k == "fpv":
+        return None, None
+    else:
+        raise ValueError(f"unknown shot kind {k!r}")
+    if "tgt_anti" in p:
+        # Point at the ANTISOLAR point at a given elevation: the only way to
+        # frame a rainbow, whose apex sits 42 deg from it and therefore moves
+        # with the sun. A level camera frames the arc's shoulders and nothing
+        # else, which is exactly what Phase 2's `--face anti` did.
+        hz = -celestial(time_of_day).sun_dir[[0, 2]]
+        hz = hz / max(float(np.linalg.norm(hz)), 1e-6)
+        el = math.radians(p["tgt_anti"])
+        ce = math.cos(el)
+        return eye, eye + np.array([hz[0] * ce, math.sin(el), hz[1] * ce]) * 400.0
+    return eye, shot_target(sh, e, org, fwd, rgt)
+
+
+def apply_cam(sh, u, t):
+    """Place the render camera for a shot. FPV shots own the camera elsewhere."""
+    global _cam_fov, _dof_on
+    if sh.fov != _cam_fov:
+        _cam_fov = camera.fov = sh.fov
+        camera.update_projection_matrix()
+    eye, tgt = shot_camera(sh, u)
+    if eye is None:                     # FPV: the drone's gimbal owns the lens
+        if _dof_on:
+            _dof_on = False
+            renderer.depth_of_field = False
+        return
+    d = tgt - eye
+    n = float(np.linalg.norm(d))
+    dy, dp = _handheld(t, sh.shake) if sh.shake > 0.0 else (0.0, 0.0)
+    dy += math.radians(sh.p.get("tgt_yaw", 0.0))     # composition trim, degrees
+    dp += math.radians(sh.p.get("tgt_pitch", 0.0))
+    if n > 1e-5 and (dy or dp):
+        az = math.atan2(d[0], d[2]) + dy
+        el = math.atan2(d[1], math.hypot(d[0], d[2])) + dp
+        ch = math.cos(el)
+        d = np.array([n * ch * math.sin(az), n * math.sin(el), n * ch * math.cos(az)])
+    camera.position.set(float(eye[0]), float(eye[1]), float(eye[2]))
+    camera.look_at(float(eye[0] + d[0]), float(eye[1] + d[1]), float(eye[2] + d[2]))
+    want = sh.dof is not None
+    if want:
+        renderer.focus_distance = float(n if sh.dof is True else sh.dof)
+    if want != _dof_on:
+        _dof_on = want
+        renderer.depth_of_field = want
+
+
+def drone_eval(spec, uu):
+    """The drone's pose at `uu` along ONE continuous scripted trajectory."""
+    e = _ease(uu, spec.get("ease", "inout"))
+    org, fwd, rgt = boat_axes()
+    if spec.get("kind", "arc") == "arc":
+        r = _lerp(*spec.get("r", (14.0, 12.0)), e)
+        az = math.radians(_lerp(*spec.get("az", (150.0, 100.0)), e))
+        h = _lerp(*spec.get("h", (7.0, 6.0)), e)
+        pos = org + np.array([r * math.sin(az), h, r * math.cos(az)])
+    else:
+        a = np.array(spec.get("a", (-14.0, 6.0, 8.0)), float)
+        b = np.array(spec.get("b", a), float)
+        pos = _pt(org, fwd, rgt, a + (b - a) * e, spec.get("world", False))
+    la = np.array(spec.get("look", (0.0, 0.0, 5.0)), float)
+    lb = np.array(spec.get("look_b", la), float)
+    return pos, _pt(org, fwd, rgt, la + (lb - la) * e, spec.get("world", False))
+
+
+# The film NEVER flips `drone.visible`. Phase 3 already found that a visibility
+# change is a snapshot invalidation (entry-list rebuild + waitIdle + TAA clear);
+# doing one in the same gap as a forced env re-bake lost the device outright
+# (`vkDeviceWaitIdle (pre-prevVertex-resync) failed: -4` on the first frame after
+# the external -> FPV cut). So the airframe is parked by TRANSFORM, exactly the
+# way the lightning pool is, and `drone_state` keeps the real pose so the FPV
+# camera still rides the machine that is no longer in the picture.
+DRONE_PARK = -20000.0
+
+
+def _film_drone(dt):
+    sh = _cur_shot
+    if sh is None or sh.drone is None:
+        drone.position.set(0.0, DRONE_PARK, 0.0)
+        return
+    pos, look = drone_eval(sh.drone, _lerp(sh.du[0], sh.du[1], _cur_u))
+    drone_set_pose(pos, look, dt)
+    if sh.view == "fpv":
+        drone.position.y = float(pos[1]) + DRONE_PARK
+
+
+# ---- the script ------------------------------------------------------------ #
+#  Five acts plus a cold open. `place` teleports the boat AT AN ACT CUT only --
+#  hours pass between acts, so she is honestly somewhere else; inside an act she
+#  sails continuously and the sim never stops. Positions are chosen so she is
+#  always 60-260 m off the islet and never sails into it.
+DRONE_REVEAL = dict(kind="arc", r=(15.5, 11.5), az=(196.0, 262.0), h=(8.8, 5.4),
+                    look=(2.0, 0.0, 6.0), look_b=(5.0, 0.0, 3.4), ease="linear")
+DRONE_NIGHT = dict(kind="arc", r=(21.0, 13.0), az=(60.0, 130.0), h=(11.0, 6.5),
+                   look=(0.0, 0.0, 5.0), ease="linear")
+
+FILM_SCRIPT = [
+    # ---- 0. COLD OPEN -- the strongest frame first, then black ------------- #
+    Shot(0, "cold open: hero fork", 15.10, 4.2, "dolly", fov=fov_mm(22),
+         wx="storm", place=(70.0, -150.0, 342.0), course=342.0,
+         ease="linear", shake=0.34, lead=0.5,
+         world=True, a=(14.4, -14.9, 6.2), b=(12.2, -12.6, 5.4),
+         tgt=(0.0, 0.0, 8.0),
+         fire=((1.05, "hero", 318.0, 760.0), (2.85, "mid", 344.0, 1500.0))),
+
+    # ---- 1. DAWN 04:50 ----------------------------------------------------- #
+    Shot(1, "dawn: low wide, boat in silhouette", 4.833, 7.0, "dolly",
+         fov=fov_mm(24), wx="mist", place=(10.0, -30.0, 340.0), course=340.0,
+         ease="inout", shake=0.13, lead=0.8,
+         world=True, a=(-19.0, -14.0, 2.4), b=(-26.0, -5.0, 3.2),
+         tgt=(0.0, 0.0, 6.5)),
+    Shot(1, "dawn: downsun on the sails", 4.90, 6.0, "orbit", fov=fov_mm(42),
+         dof=True, ease="inout", shake=0.16,
+         r=(15.0, 13.0), h=(4.6, 6.2), az=(212.0, 244.0), tgt=(0.5, 0.0, 7.2)),
+    Shot(1, "dawn: crane up to the islet", 5.15, 6.5, "crane", fov=fov_mm(28),
+         ease="inout", shake=0.10, arc=2.0,
+         world=True, a=(30.0, -24.0, 3.0), b=(26.0, -20.0, 21.0),
+         tgt_mix=(0.62, 8.0)),
+
+    # ---- 2. MORNING -> NOON, and the drone -------------------------------- #
+    Shot(2, "morning: the drone off the quarter", 8.50, 5.5, "dolly",
+         fov=fov_mm(32), wx="clear", place=(-46.0, -66.0, 20.0), course=20.0,
+         ease="linear", shake=0.18, drone=DRONE_REVEAL, du=(0.0, 0.42),
+         tgt_drone=True, tgt_drone_off=(0.0, -0.15, 0.0), tgt_drone_mix=0.66,
+         tgt=(0.0, 0.0, 5.0),
+         world=True, a=(-15.5, -19.5, 6.4), b=(-11.5, -15.5, 5.6)),
+    Shot(2, "morning: FPV, the same move", 8.62, 6.5, "fpv", fov=fov_mm(20),
+         drone=DRONE_REVEAL, du=(0.42, 1.0), view="fpv"),
+    Shot(2, "forenoon: water skim down the hull", 10.60, 5.0, "water_skim",
+         fov=fov_mm(24), ease="linear", shake=0.20, lead=0.3,
+         a=(-15.0, -7.5, 0.60), b=(15.0, -6.2, 0.60), tgt=(2.0, 0.0, 4.0)),
+    Shot(2, "noon: mast cam down the main", 12.40, 5.0, "mast_cam",
+         fov=fov_mm(21), ease="linear", shake=0.22,
+         mast_y=MAST_H * 0.80, side=1.1, tgt=(1.6, -0.4, 1.1)),
+    Shot(2, "noon: from the lighthouse gallery", 12.62, 5.5, "tripod",
+         fov=fov_mm(70), ease="linear", shake=0.09, lead=1.2, tgt=(0.0, 0.0, 6.0)),
+
+    # ---- 3. THE SQUALL ----------------------------------------------------- #
+    #  The deck CLOSES on camera: the act opens on `clear` and ramps to `storm`,
+    #  so the coverage / wind / sea / rain ramps in RAMP_TAU do the weather live.
+    Shot(3, "squall: the deck closes", 14.70, 8.0, "orbit", fov=fov_mm(24),
+         wx="clear", place=(-44.0, 38.0, 62.0), course=62.0, tod_rate=0.010,
+         ease="linear", shake=0.16, r=(34.0, 27.0), h=(13.0, 8.0),
+         az=(150.0, 196.0), tgt=(0.0, 0.0, 8.0)),
+    Shot(3, "squall: hard over in the rain", 15.05, 6.0, "chase",
+         fov=fov_mm(30), wx="storm", wx_hard=False, tod_rate=0.006,
+         ease="linear", shake=0.30, lead=0.4,
+         off=(-15.0, 7.0, 4.2), sway=(2.6, 8.0), tgt=(1.0, 0.0, 6.5)),
+    Shot(3, "squall: the hero fork", 15.25, 7.0, "dolly", fov=fov_mm(20),
+         wx="storm", wx_hard=False, ease="linear", shake=0.32, lead=0.5,
+         world=True, a=(15.5, -13.0, 6.4), b=(13.0, -10.8, 5.6),
+         tgt=(0.0, 0.0, 8.5),
+         fire=((2.1, "hero", 322.0, 720.0), (4.9, "mid", 300.0, 1500.0))),
+    Shot(3, "squall: the light in the murk", 15.45, 5.5, "dolly",
+         fov=fov_mm(55), wx="storm", wx_hard=False, ease="linear", shake=0.24,
+         world=True, a=(16.0, -13.0, 9.0), b=(13.0, -11.0, 9.5),
+         tgt_mix=(1.0, 16.0),
+         fire=((1.4, "sheet", 330.0, 1800.0), (3.2, "mid", 326.0, 1200.0))),
+    # CUT: "squall: rain on the wet deck" lived here -- a 38 mm close on the
+    # weather rail from 2.2-2.6 m off the water. In a 1.70-wave_scale sea the
+    # lens goes UNDER: the last second of it was a black hull seen from below
+    # the surface and then a teal underwater wash. The hull is never engulfed in
+    # the surviving act-3 shots (verified frame by frame over the whole act);
+    # this one shot was, so it is gone rather than nursed. The film is 4.5 s
+    # shorter and act 3 keeps its close-quarters feel from the chase instead.
+
+    # ---- 4. CLEARING / GOLDEN HOUR ----------------------------------------- #
+    # The bow. 18 mm and pitched to +16 deg of elevation over the ANTISOLAR
+    # point: the primary arc's apex is 42 deg from that point and its feet are
+    # +/-41 deg of azimuth away, so nothing narrower and nothing level holds the
+    # whole bow inside the frame.
+    Shot(4, "golden: the rainbow astern", 19.55, 6.0, "dolly", fov=fov_mm(18),
+         wx="clearing", place=(4.0, -6.0, 338.0), course=338.0,
+         ease="inout", shake=0.11, ae=(-2.6, -0.9),
+         world=True, a=(-24.6, 8.4, 4.2), b=(-21.5, 7.4, 5.0),
+         tgt_anti=19.0),
+    Shot(4, "golden: the wet deck", 19.62, 4.5, "dolly", fov=fov_mm(40),
+         dof=True, ease="inout", shake=0.14,
+         a=(-5.0, -3.6, 2.3), b=(-1.0, -3.0, 2.0), tgt=(4.0, 0.4, 1.6)),
+    # THE MONEY SHOT. Held unbroken; the poster frame comes out of it. Panned
+    # right off the islet so the sun disc and the glitter path come into the
+    # right third and the rock sits on the left one.
+    Shot(4, "golden: the islet", 19.667, 10.0, "dolly", fov=fov_mm(34),
+         ease="inout", shake=0.075, poster=0.55,
+         world=True, a=(30.0, -22.5, 11.4), b=(24.0, -17.5, 10.0),
+         tgt_mix=(0.65, 7.0), tgt_yaw=-9.0, tgt_pitch=-2.5),
+
+    # ---- 5. NIGHT ---------------------------------------------------------- #
+    Shot(5, "night: the beam comes round", 23.50, 6.5, "dolly", fov=fov_mm(26),
+         wx="night", place=(28.0, -58.0, 330.0), course=330.0, tod_rate=0.012,
+         ease="inout", shake=0.11,
+         world=True, a=(19.3, -23.0, 5.4), b=(16.2, -19.3, 6.6),
+         tgt_mix=(0.35, 8.0)),
+    Shot(5, "night: moon glitter, drone strobe", 23.72, 6.0, "dolly",
+         fov=fov_mm(28), ease="linear", shake=0.13, drone=DRONE_NIGHT,
+         du=(0.0, 1.0), tgt_drone=True, tgt_drone_off=(0.0, -0.6, 0.0),
+         tgt_drone_mix=0.52, tgt=(0.0, 0.0, 6.0),
+         world=True, a=(-20.0, -23.0, 8.4), b=(-16.0, -19.0, 7.4)),
+    # A bolt out of a clear starry sky is a stress test, not a shot -- so a
+    # thin high veil (coverage 0.55) goes over this one and it reads as the
+    # squall clearing away to the north. The stars survive it (starfield is
+    # killed by murk, and murk at 0.55 coverage is only 0.27).
+    Shot(5, "night: the last strike", 23.90, 6.0, "dolly", fov=fov_mm(22),
+         wx="night", wx_over=dict(coverage=0.55, cloud_density=0.95,
+                                  deck_bottom=900.0, deck_top=2000.0, fog=0.0072),
+         ease="linear", shake=0.15,
+         world=True, a=(15.0, -15.5, 6.0), b=(12.6, -13.0, 5.4),
+         tgt=(0.0, 0.0, 9.0),
+         fire=((1.5, "hero", 320.0, 900.0), (4.0, "sheet", 300.0, 2000.0))),
+    Shot(5, "night: pull back and up", 0.20, 9.0, "crane", fov=fov_mm(28),
+         wx="night", tod_rate=0.010, ease="inout", shake=0.08, arc=3.0,
+         world=True, a=(17.0, -13.0, 7.0), b=(52.0, -40.0, 40.0),
+         tgt_mix=(0.30, 6.0), fade=1.1),
+]
+
+
+def _film_cut(sh, prev):
+    """Everything that must be true before the first recorded frame of a shot."""
+    global time_of_day, day_speed, _cur_shot, _cur_u, film_drone, _cam_anchor
+    global view_mode, drone_on, drone_auto, weather_name, _rain_was_on, _bow_timer
+    global AE_RANGE
+    _cur_shot, _cur_u = sh, 0.0
+    time_of_day = sh.tod
+    day_speed = sh.tod_rate
+    if sh.place is not None:
+        # An act cut. Hours have passed; she is somewhere else, on a new course.
+        boat_state["x"], boat_state["z"] = float(sh.place[0]), float(sh.place[1])
+        boat_state["yaw"] = math.radians(sh.place[2])
+        _cam_anchor = np.array([boat_state["x"], 0.0, boat_state["z"]])
+        ocean.warp_toward(boat_state["x"], boat_state["z"], 1.0)
+    if sh.course is not None:
+        knob["course"] = float(sh.course)
+    # Per-shot metering. A rainbow is a 3% contrast feature on a bright sky:
+    # meter it to 18% grey and it is gone. Printing the shot down a stop is what
+    # a photographer does, and it is the only lever -- tone_mapping_exposure is
+    # inert while auto exposure is on.
+    AE_RANGE = tuple(sh.ae) if sh.ae else (-2.5, 3.0)
+    renderer.set_auto_exposure_range(AE_RANGE[0], AE_RANGE[1])
+    if sh.wx is not None:
+        set_weather(sh.wx)
+        if sh.wx_hard:
+            weather.update(PRESETS[sh.wx])          # a cut, not a dissolve
+            weather["wetness"] = 1.0 if weather["rain"] > 0.5 else 0.0
+            # The rainbow is a CONSEQUENCE of rain stopping, and a cut stops the
+            # rain instantly -- which handed the 04:50 dawn a 40 s bow arcing
+            # over the mist because the previous shot had been a thunderstorm.
+            # A cut is not weather: clear the post-rain window with it.
+            _rain_was_on = weather["rain"] > 0.30
+            _bow_timer = 0.0
+    if sh.wx_over:
+        weather.update(sh.wx_over)
+        wtarget.update(sh.wx_over)
+    # The drone: on for any shot that flies it, and `have` is only reset when
+    # the trajectory is NOT continuous with the previous shot -- that is what
+    # makes the external -> FPV reveal one unbroken move.
+    drone_auto = False
+    film_drone = _film_drone
+    want = sh.drone is not None
+    if want and (prev is None or prev.drone is not sh.drone):
+        drone_state["have"] = False
+    drone_on = True                 # always: the machine is parked, not removed
+    view_mode = "fpv" if sh.view == "fpv" else "orbit"
+    _film_drone(1.0 / max(FPS, 1))
+    apply_cam(sh, 0.0, 0.0)
+    for k in _applied:
+        _applied[k] = None                          # re-push clouds/sea/fog now
+    update_world(1e-4)
+    apply_sky(celestial(time_of_day), force=True)
+    apply_cam(sh, 0.0, 0.0)
+
+
+def _film_warm(sh, n, dt):
+    """Unrecorded frames after a cut, with the eye allowed to snap.
+
+    The slow part of a cut is NOT the temporal history -- TAA/FSR is clean in
+    single digits of frames -- it is AUTO EXPOSURE. At the film's 1.2 EV/s a
+    storm-to-dawn cut can be four seconds of visible brightening, which is 240
+    recorded frames of exposure ramp. So the meter runs at 14 EV/s while the
+    warm-up burns and is put back before the first recorded frame; the shot then
+    opens already metered and still reacts at a cinematic rate to a lightning
+    flash inside it.
+    """
+    renderer.set_auto_exposure_speed(14.0)
+    for _ in range(n):
+        _film_step(sh, 0.0, 0.0, dt)
+    renderer.set_auto_exposure_speed(1.2)
+    for _ in range(4):                  # 4 frames at the real speed: no snap
+        _film_step(sh, 0.0, 0.0, dt)
+
+
+def _film_step(sh, u, t, dt):
+    """One frame of the film: place, simulate, place again, render."""
+    global _cur_u
+    _cur_u = u
+    apply_cam(sh, u, t)        # before frame(): the rain field follows the lens
+    frame(dt)
+    apply_cam(sh, u, t)        # after: the boat has moved, so the framing has
+    renderer.render(scene, camera)
+
+
+def _endcard(w, h, n):
+    from PIL import Image, ImageDraw, ImageFont
+    img = Image.new("RGB", (w, h), (6, 8, 11))
+    d = ImageDraw.Draw(img)
+    txt = "threepp  +  warp  +  python"
+    f = None
+    for name in ("segoeui.ttf", "arial.ttf", "DejaVuSans.ttf"):
+        try:
+            f = ImageFont.truetype(name, max(18, int(h * 0.052)))
+            break
+        except Exception:                            # noqa: BLE001
+            continue
+    if f is None:
+        f = ImageFont.load_default()
+    bb = d.textbbox((0, 0), txt, font=f)
+    d.text(((w - (bb[2] - bb[0])) * 0.5, (h - (bb[3] - bb[1])) * 0.5 - bb[1]),
+           txt, font=f, fill=(214, 219, 226))
+    a = np.asarray(img, np.uint8)
+    return [a] * n
+
+
+def run_film():
+    import imageio.v2 as imageio
+    from PIL import Image
+
+    shots = list(FILM_SCRIPT)
+    if FILM_ACTS:
+        keep = {int(v) for v in FILM_ACTS.replace(" ", "").split(",") if v != ""}
+        shots = [s for s in shots if s.act in keep]
+    if FILM_SHOTS:
+        lo, _, hi = FILM_SHOTS.partition("-")
+        lo = int(lo or 0)
+        hi = int(hi) if hi else lo
+        shots = shots[lo:hi + 1]
+    if not shots:
+        print("no shots selected")
+        return
+    dt = 1.0 / FPS
+    counts = [max(1, int(round(s.dur * FPS))) for s in shots]
+    total = sum(counts)
+    black_n = int(round(0.4 * FPS)) if shots[0].act == 0 else 0
+    card_n = int(round(2.0 * FPS))
+    out = os.path.abspath(FILM_OUT)
+    stem = os.path.splitext(out)[0]
+
+    print(f"film: {len(shots)} shots, {total} frames = {total / FPS:.1f} s "
+          f"at {FPS} fps, {W}x{H}, warm-up {WARMUP}/cut")
+
+    writer = imageio.get_writer(out, fps=FPS, codec="libx264", quality=None,
+                                macro_block_size=None,
+                                ffmpeg_params=["-crf", "17", "-pix_fmt", "yuv420p",
+                                               "-preset", "slow"])
+    # 16 evenly spaced RECORDED frames make the contact sheet.
+    picks = set(np.linspace(0, total - 1, 16).round().astype(int).tolist()) if CONTACT else set()
+    sheet, shape = [], None
+
+    # Pre-roll: the boat starts stopped and the ocean height sampler needs a
+    # rendered frame before buoyancy is live. None of this is recorded.
+    drone.visible = True            # set ONCE; parked by transform thereafter
+    _film_cut(shots[0], None)
+    t0 = time.perf_counter()
+    for _ in range(PREROLL):
+        _film_step(shots[0], 0.0, 0.0, dt)
+    renderer.set_auto_exposure_speed(1.2)
+    print(f"pre-roll {PREROLL} frames in {time.perf_counter() - t0:.1f} s; "
+          f"boat {boat_state['u'] / 0.5144:.1f} kn")
+
+    rec = 0
+    warm_total = PREROLL
+    act_ms, act_n = {}, {}
+    wall0 = time.perf_counter()
+    prev = None
+    for si, sh in enumerate(shots):
+        n = counts[si]
+        _film_cut(sh, prev)
+        prev = sh
+        _film_warm(sh, WARMUP, dt)
+        warm_total += WARMUP + 4
+        fired = [False] * len(sh.fire)
+        s_ms = 0.0
+        for f in range(n):
+            u = f / max(n - 1, 1)
+            t = f * dt
+            for k, (ft, kind, brg, dist) in enumerate(sh.fire):
+                if not fired[k] and t >= ft:
+                    fired[k] = True
+                    fire_strike(kind, bearing=brg, distance=dist)
+            _t0 = time.perf_counter()
+            _film_step(sh, u, t, dt)
+            px = renderer.read_pixels()
+            ms = (time.perf_counter() - _t0) * 1e3
+            s_ms += ms
+            act_ms[sh.act] = act_ms.get(sh.act, 0.0) + ms
+            act_n[sh.act] = act_n.get(sh.act, 0) + 1
+            if shape is None:
+                shape = (px.shape[0] & ~1, px.shape[1] & ~1)
+            px = px[:shape[0], :shape[1]]
+            if sh.fade is not None:
+                left = (n - 1 - f) * dt
+                if left < sh.fade:
+                    px = (px.astype(np.float32) * (left / sh.fade)).astype(np.uint8)
+            writer.append_data(px)
+            if sh.poster is not None and f == int(sh.poster * (n - 1)):
+                Image.fromarray(px).save(os.path.join(os.path.dirname(out), "poster.png"))
+                print(f"  poster.png  <- {sh.name} frame {f}")
+            if rec in picks:
+                sheet.append(Image.fromarray(px).resize((480, 270), Image.LANCZOS))
+            rec += 1
+            if black_n and rec == counts[0]:
+                for _ in range(black_n):
+                    writer.append_data(np.zeros((shape[0], shape[1], 3), np.uint8))
+        print(f"  act {sh.act} [{si:2d}] {sh.name:<38s} {n:4d} f  "
+              f"{s_ms / n:6.1f} ms/f  tod {sh.tod:05.2f}")
+
+    for a in _endcard(shape[1], shape[0], card_n):
+        writer.append_data(a)
+    writer.close()
+
+    if sheet:
+        cs_ = Image.new("RGB", (480 * 4, 270 * 4), (0, 0, 0))
+        for i, im in enumerate(sheet[:16]):
+            cs_.paste(im, (480 * (i % 4), 270 * (i // 4)))
+        cs_.save(stem + "_contact.png")
+        print(f"contact sheet -> {stem}_contact.png")
+
+    wall = time.perf_counter() - wall0
+    print(f"\nfilm -> {out}")
+    print(f"  recorded {rec} frames ({rec / FPS:.1f} s) + {black_n} black "
+          f"+ {card_n} end card = {rec + black_n + card_n} written")
+    print(f"  warm-up  {warm_total} frames not recorded "
+          f"({WARMUP}/cut x {len(shots)} cuts + {PREROLL} pre-roll)")
+    print(f"  wall {wall / 60.0:.1f} min, {1e3 * wall / max(rec + warm_total, 1):.1f} "
+          f"ms/frame overall")
+    for a in sorted(act_ms):
+        print(f"  act {a}: {act_ms[a] / act_n[a]:6.1f} ms/frame over {act_n[a]} frames")
+    print(f"  sky bakes {_bake_count} ({_bake_ms / max(_bake_count, 1):.0f} ms each)")
+
+
+def run_warmup_probe():
+    """How many frames does a cut actually need? Measure, do not guess."""
+    from PIL import Image                                   # noqa: F401
+    dt = 1.0 / FPS
+    sh = FILM_SCRIPT[1]                                     # dawn, after a storm
+    _film_cut(FILM_SCRIPT[0], None)
+    for _ in range(120):
+        _film_step(FILM_SCRIPT[0], 0.0, 0.0, dt)
+    _film_warm(sh, 0, dt)
+    _film_cut(sh, FILM_SCRIPT[0])
+    _film_warm(sh, WARMUP, dt)
+    frames = []
+    for i in range(140):
+        _film_step(sh, 0.0, 0.0, dt)                        # a FROZEN camera
+        frames.append(renderer.read_pixels().astype(np.float32))
+    ref = frames[-1]
+    print("frames-after-cut   mean|dI| vs settled   mean|dI| vs previous")
+    for i in (0, 2, 5, 10, 15, 20, 25, 30, 40, 50, 60, 75, 90, 110, 130):
+        d1 = float(np.abs(frames[i] - ref).mean())
+        d2 = float(np.abs(frames[i] - frames[i - 1]).mean()) if i else 0.0
+        print(f"  {i:4d}              {d1:8.3f}                {d2:8.3f}")
+
+
 def frame(dt):
-    if not SHOT:
+    if not HEADLESS:
         handle_keys(dt)
     update_world(dt)
     run_autopilot(dt)
@@ -3149,7 +3799,9 @@ def frame(dt):
     gulls.update(dt)
     if drone_on:
         if drone_auto:
-            drone_demo_path(dt)              # Phase 4 drives drone_set_pose itself
+            drone_demo_path(dt)              # the live G-key orbit
+        elif film_drone is not None:
+            film_drone(dt)                   # the film owns the trajectory
         drone_tick(dt)
     # FPV means the render camera IS the drone: the orbit rig has to keep its
     # hands off it, or controls.update() puts the camera back on its sphere.
@@ -3159,16 +3811,22 @@ def frame(dt):
     # corner of the frame. In FPV the machine is simply not in the world. The
     # visibility flip is a structural change, but it only ever happens on a
     # mode switch, which in the film is a CUT.
-    want_vis = drone_on and not fpv
-    if drone.visible != want_vis:
-        drone.visible = want_vis
+    if not film_mode:
+        want_vis = drone_on and not fpv
+        if drone.visible != want_vis:
+            drone.visible = want_vis
     if fpv:
         drone_camera_apply()
+    elif not film_mode:
+        follow_camera()                      # the film places its own camera
+
+
+if FILM:
+    if "--warmup-probe" in sys.argv:
+        run_warmup_probe()
     else:
-        follow_camera()
-
-
-if SHOT:
+        run_film()
+elif SHOT:
     frames = int(round(SHOT_T * 60.0))
     # Where the still looks. `islet` is the demo's own framing; `sun` and
     # `anti` swing the camera round the boat so the shot is either INTO the
