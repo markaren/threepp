@@ -46,8 +46,8 @@ sea gets up, rain starts, the deck goes dark and glossy, and when it clears
 there is a rainbow opposite the sun because the geometry says there should be.
 
 And then there is the FILM. `--film out.mp4` runs a scripted two-minute picture
-headless -- a cold open on a lightning strike, dawn, the drone reveal, a squall,
-the golden hour and a starry night -- as twenty-one cut shots on one continuous
+headless -- dawn, the drone reveal, a squall, the golden hour and a starry
+night -- as nineteen cut shots on one continuous
 world, and writes H.264. Each cut sets the hour, re-bakes the sky, sets the
 weather and places the camera (and the drone), then burns unrecorded warm-up
 frames so no exposure ramp or temporal smear is ever recorded. Between cuts the
@@ -2841,6 +2841,32 @@ def run_autopilot(dt):
 #  The world clock: sky, weather, lights, rain. Everything that is not the boat.
 # --------------------------------------------------------------------------- #
 world_time = 0.0
+
+# The RENDERER's own clock, which is a separate thing from `world_time`.
+# Vulkan's frame path reads WALL time by default (frameNowSec() falls back to
+# glfwGetTime), and that clock drives the ocean's FFT deform timestamp, the
+# cloud evolution, the foam decay, the shade's animation timeSec and the
+# TAA/FSR frame deltas. Offline one 1/60 s frame costs 60-90 ms of wall time,
+# so the SEA would run ~5x faster than the dt the boat, the sails and the rain
+# are integrated with -- the 0.85 Hz buoyancy follower cannot track a wave
+# field moving five times its own rate and a crest sweeps the deck (that was
+# the Phase 4b drowning, and it is also why `--preview` could not reproduce
+# it: at 35 ms/frame the same shot is dry).
+#
+# So every OFFLINE frame pins `renderer.sim_time` to this clock, stepping it
+# by exactly the frame dt, warm-up and pre-roll frames included -- a frozen
+# clock would freeze the temporal history too. The live window never touches
+# it and keeps the wall clock, which is what an interactive app wants.
+sim_clock = 0.0
+
+
+def sim_tick(dt):
+    """Advance the pinned renderer clock one frame. Call BEFORE render()."""
+    global sim_clock
+    sim_clock += dt
+    renderer.sim_time = sim_clock
+
+
 _applied = {"cloud": None, "fog_h": None, "wind": None,
             "wave": None, "choppy": None, "glow": None, "whitecap": None}
 
@@ -3414,7 +3440,7 @@ def _film_drone(dt):
 
 
 # ---- the script ------------------------------------------------------------ #
-#  Five acts plus a cold open. `place` teleports the boat AT AN ACT CUT only --
+#  Five acts. `place` teleports the boat AT AN ACT CUT only --
 #  hours pass between acts, so she is honestly somewhere else; inside an act she
 #  sails continuously and the sim never stops. Positions are chosen so she is
 #  always 60-260 m off the islet and never sails into it.
@@ -3424,30 +3450,24 @@ DRONE_NIGHT = dict(kind="arc", r=(21.0, 13.0), az=(60.0, 130.0), h=(11.0, 6.5),
                    look=(0.0, 0.0, 5.0), ease="linear")
 
 FILM_SCRIPT = [
-    # ---- 0. COLD OPEN -- the strongest frame first, then black ------------- #
-    #  The sea here is a STORM SEA AT A LOWER SWELL, on purpose. The ocean's
-    #  wave field advances on the renderer's own clock (wall time), while the
-    #  hull's 0.85 Hz buoyancy follower is stepped with the film's dt -- so at a
-    #  1080p storm frame time (~89 ms) the sea runs about five times faster than
-    #  the boat believes it does, the follower cannot track it, and a
-    #  wave_scale-1.70 crest simply sweeps over the deck. On the delivered take
-    #  the first four seconds had her swamped. The rule is REFRAME OR CUT, never
-    #  nurse the buoyancy model, so this shot -- and only this shot -- gets a
-    #  smaller swell: the wind stays at the storm's 17 m/s (so the spectrum, the
-    #  streaks, the spray and the rain are all still a gale), the cloud deck and
-    #  the fog are untouched, and only the height multiplier and the chop come
-    #  down. Whitecap goes UP to compensate: at a lower fold rate the breaking
-    #  crests need help or the sea reads flat.
-    #  1.26 was tried first and is NOT safe: she is under at t=0.0 and t=0.2 and
-    #  the foredeck is awash again at t=2.2. 1.02 holds her dry across all 252
-    #  frames (checked at 1080p/60, which is the only frame time that counts).
-    Shot(0, "cold open: hero fork", 15.10, 4.2, "dolly", fov=fov_mm(22),
-         wx="storm", wx_over=dict(wave_scale=1.02, choppy=0.60, whitecap=0.40),
-         place=(70.0, -150.0, 342.0), course=342.0,
-         ease="linear", shake=0.34, lead=0.5,
-         world=True, a=(14.4, -14.9, 6.8), b=(12.2, -12.6, 6.0),
-         tgt=(0.0, 0.0, 5.6),
-         fire=((1.05, "hero", 318.0, 760.0), (2.85, "mid", 344.0, 1500.0))),
+    # ---- 0. COLD OPEN -- CUT (user's call, 2026-08-22) --------------------- #
+    #  There WAS a 4.2 s storm cold open here: the hero fork first, then a hard
+    #  cut to black, on the "front-load the strongest frame" theory. On the
+    #  delivered take the sea was over her deck for most of it. Phase 4b traced
+    #  that to the renderer's wall-clock frame clock (the sea ran ~5x the film's
+    #  dt, so the buoyancy follower could not track it -- now fixed by pinning
+    #  `renderer.sim_time`, see `sim_tick`) and reframed the shot down to
+    #  wave_scale 1.02. The user watched it anyway and said: cut it. So it is
+    #  gone, not reframed, and the film OPENS ON DAWN. The hero fork still plays
+    #  in act 3 where the storm actually is, and the shot no longer has to earn
+    #  its place by being first. The 0.4 s black gap went with it (the writer
+    #  only inserts it after an act-0 shot).
+    #  If it is ever wanted back: `Shot(0, "cold open: hero fork", 15.10, 4.2,
+    #  "dolly", fov=fov_mm(22), wx="storm", wx_over=dict(wave_scale=1.02,
+    #  choppy=0.60, whitecap=0.40), place=(70,-150,342), course=342,
+    #  ease="linear", shake=0.34, lead=0.5, world=True, a=(14.4,-14.9,6.8),
+    #  b=(12.2,-12.6,6.0), tgt=(0,0,5.6), fire=((1.05,"hero",318,760),
+    #  (2.85,"mid",344,1500)))` -- and re-run the engulf check at 1080p.
 
     # ---- 1. DAWN 04:50 ----------------------------------------------------- #
     Shot(1, "dawn: low wide, boat in silhouette", 4.833, 7.0, "dolly",
@@ -3641,6 +3661,7 @@ def _film_step(sh, u, t, dt):
     apply_cam(sh, u, t)        # before frame(): the rain field follows the lens
     frame(dt)
     apply_cam(sh, u, t)        # after: the boat has moved, so the framing has
+    sim_tick(dt)               # the sea advances by dt, not by 80 ms of wall
     renderer.render(scene, camera)
 
 
@@ -3905,6 +3926,7 @@ elif SHOT:
             camera.look_at(bx * 0.35 + ISLET_X * 0.65, 7.0, bz * 0.35 + ISLET_Z * 0.65)
         if drone_on and view_mode == "fpv":
             drone_camera_apply()              # the shot framing does not own FPV
+        sim_tick(1.0 / 60.0)                  # sea on the shot's clock, not wall
         renderer.render(scene, camera)        # keeps the temporal history honest
         first_render_done = True
         _dt_ms = (time.perf_counter() - _t0) * 1e3
@@ -3925,6 +3947,7 @@ elif SHOT:
     # Let the accumulation settle on the final pose before the read-back.
     if not seq:
         for _ in range(24):
+            sim_tick(1.0 / 60.0)
             renderer.render(scene, camera)
         out = cli_arg("--out", "warp_sailboat.png", str)
         renderer.save_frame(scene, camera, out)
