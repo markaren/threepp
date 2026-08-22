@@ -698,6 +698,139 @@ namespace threepp_py {
                               "~5x faster than the dt the app integrates its own physics with (the\n"
                               "hull can no longer follow the waves). None or a negative value\n"
                               "returns to the wall clock, which is what a live window wants.")
+                // ── GPU event camera (DVS) ───────────────────────────────
+                // A per-pixel log-intensity crossing detector (the ESIM model)
+                // running as a compute pass on the renderer's own deterministic
+                // shade of the raster G-buffer. Enabling it marks material
+                // samplers dirty and gates TAA jitter off (the detector must not
+                // see jitter as scene motion), so flip it at a CUT and give it a
+                // few frames to settle its per-pixel reference — the first frame
+                // after enabling only latches the reference and emits nothing.
+                .def_property("event_camera_enabled",
+                              [](PyVulkanRenderer& r) { return r.native().eventCameraEnabled(); },
+                              [](PyVulkanRenderer& r, bool v) { r.native().setEventCameraEnabled(v); },
+                              "GPU DVS event detector on/off. Costs nothing while off. Toggling\n"
+                              "does a device-idle + image resize, so do it between shots, never\n"
+                              "mid-sequence.")
+                .def("set_event_camera_params",
+                     [](PyVulkanRenderer& r, float threshold, float decay, float min_luma,
+                        uint32_t max_events_per_pixel, uint32_t frame_time_us) {
+                         VulkanRenderer::EventCameraParams p{};
+                         p.threshold         = threshold;
+                         p.decay             = decay;
+                         p.minLuma           = min_luma;
+                         p.maxEventsPerPixel = max_events_per_pixel;
+                         p.frameTimeUs       = frame_time_us;
+                         r.native().setEventCameraParams(p);
+                     },
+                     py::arg("threshold") = 0.15f, py::arg("decay") = 0.85f,
+                     py::arg("min_luma") = 0.005f, py::arg("max_events_per_pixel") = 5u,
+                     py::arg("frame_time_us") = 0u,
+                     "Contrast threshold in log-intensity units (0.15 fires on almost any\n"
+                     "edge, 0.30 only on hard ones), the visualisation's per-frame decay\n"
+                     "toward mid-grey, the luma floor that stops log() exploding in the\n"
+                     "shadows, the per-pixel event cap, and the microsecond clock stamped\n"
+                     "onto every event this frame (drive it from your sim clock — a\n"
+                     "wall-clock stamp is not reproducible).")
+                .def_property_readonly("event_camera_params",
+                                       [](PyVulkanRenderer& r) {
+                                           const auto p = r.native().eventCameraParams();
+                                           py::dict d;
+                                           d["threshold"]            = p.threshold;
+                                           d["decay"]                = p.decay;
+                                           d["min_luma"]             = p.minLuma;
+                                           d["max_events_per_pixel"] = p.maxEventsPerPixel;
+                                           d["frame_time_us"]        = p.frameTimeUs;
+                                           return d;
+                                       },
+                                       "The detector's current parameters as a dict.")
+                .def("set_event_camera_resolution",
+                     [](PyVulkanRenderer& r, uint32_t width, uint32_t height) {
+                         r.native().setEventCameraResolution(width, height);
+                     },
+                     py::arg("width"), py::arg("height"),
+                     "Pin the sensor's native resolution (0, 0 tracks the swapchain).\n"
+                     "Clamped to [16, swapchain]. A real DVS is coarse — 640x480 is\n"
+                     "Prophesee Gen3/4 territory — and a coarser detector is also less\n"
+                     "readback and less compute.")
+                .def_property_readonly("event_camera_resolution",
+                                       [](PyVulkanRenderer& r) { return r.native().eventCameraResolution(); },
+                                       "(width, height) the detector is actually running at.")
+                .def("read_event_camera_visualisation",
+                     [](PyVulkanRenderer& r) {
+                         const auto res = r.native().eventCameraResolution();
+                         const auto w = static_cast<py::ssize_t>(res.first);
+                         const auto h = static_cast<py::ssize_t>(res.second);
+                         std::vector<unsigned char> rgba;
+                         {
+                             py::gil_scoped_release release;
+                             rgba = r.native().readEventCameraVisualisation();
+                         }
+                         const size_t need = static_cast<size_t>(w) * static_cast<size_t>(h) * 4u;
+                         if (w <= 0 || h <= 0 || rgba.size() < need) {
+                             return py::array_t<uint8_t>({py::ssize_t(0), py::ssize_t(0)});
+                         }
+                         py::array_t<uint8_t> arr({h, w});
+                         auto* dst = arr.mutable_data();
+                         // The accumulator is RGBA8 with the mono value replicated
+                         // across RGB, and it is stored BOTTOM-UP (row 0 = bottom;
+                         // the C++ demo feeds it straight to a sprite, whose V=0 is
+                         // the bottom). Flip it so row 0 is the top of the image,
+                         // matching read_pixels() and every AOV.
+                         for (py::ssize_t y = 0; y < h; ++y) {
+                             const unsigned char* src = rgba.data() +
+                                     static_cast<size_t>(h - 1 - y) * static_cast<size_t>(w) * 4u;
+                             for (py::ssize_t x = 0; x < w; ++x)
+                                 dst[y * w + x] = src[x * 4];
+                         }
+                         return arr;
+                     },
+                     "The detector's accumulator image as (H, W) uint8 at the SENSOR\n"
+                     "resolution, row 0 = top: 255 = positive (brightening) event,\n"
+                     "0 = negative, 128 = no event, decaying back toward 128 at the\n"
+                     "`decay` rate. Empty array while the event camera is off. Two\n"
+                     "renderer frames of latency (it reads the oldest ring slot, which\n"
+                     "the in-flight fences guarantee complete — no device wait).")
+                .def("read_event_stream",
+                     [](PyVulkanRenderer& r, size_t max_events) {
+                         const auto res = r.native().eventCameraResolution();
+                         const auto h   = static_cast<int64_t>(res.second);
+                         std::vector<VulkanRenderer::Event> buf(max_events);
+                         bool overflowed = false;
+                         size_t n = 0;
+                         {
+                             py::gil_scoped_release release;
+                             n = r.native().readEventStreamInto(buf.data(), buf.size(), &overflowed);
+                         }
+                         py::array_t<int64_t> arr({static_cast<py::ssize_t>(n), py::ssize_t(4)});
+                         auto* dst = arr.mutable_data();
+                         for (size_t i = 0; i < n; ++i) {
+                             const auto& e = buf[i];
+                             dst[i * 4 + 0] = static_cast<int64_t>(e.x);
+                             // Same bottom-up -> top-down flip as the visualisation,
+                             // so a stream coordinate indexes the image the sensor
+                             // hands back.
+                             dst[i * 4 + 1] = h > 0 ? h - 1 - static_cast<int64_t>(e.y)
+                                                    : static_cast<int64_t>(e.y);
+                             dst[i * 4 + 2] = static_cast<int64_t>(e.polarity);
+                             dst[i * 4 + 3] = static_cast<int64_t>(e.t_us);
+                         }
+                         return py::make_tuple(arr, overflowed);
+                     },
+                     py::arg("max_events") = size_t(1000000),
+                     "The sparse event stream of the last completed detector frame as\n"
+                     "((N, 4) int64, overflowed): columns are x, y (image convention,\n"
+                     "row 0 = top), polarity (+1 brightening / -1 darkening) and t_us\n"
+                     "(the frame_time_us stamped on it). `overflowed` is True when the\n"
+                     "GPU append list saturated and events were dropped — the same\n"
+                     "failure mode a real sensor's readout has. Unsorted: the GPU\n"
+                     "appends with an atomic, so order is dispatch order, not time.")
+                .def_property("events_only_mode",
+                              [](PyVulkanRenderer& r) { return r.native().eventsOnlyMode(); },
+                              [](PyVulkanRenderer& r, bool v) { r.native().setEventsOnlyMode(v); },
+                              "Present the event visualisation INSTEAD of the shaded scene.\n"
+                              "Leave it off if you also want read_pixels()/AOVs from the same\n"
+                              "frames — the detector runs either way.")
                 // Per-frame CPU/GPU pass timings (milliseconds) — see
                 // VulkanRenderer::FrameTimings. For perf triage from python.
                 .def_property_readonly("frame_timings",

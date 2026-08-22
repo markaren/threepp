@@ -7322,6 +7322,25 @@ class VulkanRenderer:
         """
         Metric depth as (H, W) float32 — distance from the camera in scene units. Background reads as the camera far plane. Full 32-bit precision (native D32 read; supersedes the old 24-bit-packed path).
         """
+    def read_event_camera_visualisation(self) -> numpy.typing.NDArray[numpy.uint8]:
+        """
+        The detector's accumulator image as (H, W) uint8 at the SENSOR
+        resolution, row 0 = top: 255 = positive (brightening) event,
+        0 = negative, 128 = no event, decaying back toward 128 at the
+        `decay` rate. Empty array while the event camera is off. Two
+        renderer frames of latency (it reads the oldest ring slot, which
+        the in-flight fences guarantee complete — no device wait).
+        """
+    def read_event_stream(self, max_events: typing.SupportsInt | typing.SupportsIndex = 1000000) -> tuple[numpy.typing.NDArray[numpy.int64], bool]:
+        """
+        The sparse event stream of the last completed detector frame as
+        ((N, 4) int64, overflowed): columns are x, y (image convention,
+        row 0 = top), polarity (+1 brightening / -1 darkening) and t_us
+        (the frame_time_us stamped on it). `overflowed` is True when the
+        GPU append list saturated and events were dropped — the same
+        failure mode a real sensor's readout has. Unsorted: the GPU
+        appends with an atomic, so order is dispatch order, not time.
+        """
     def read_instance_ids(self, scene: Object3D, camera: Camera) -> numpy.typing.NDArray[numpy.uint32]:
         """
         Stable per-pixel instance ids as (H, W) uint32. 0 = sky / no hit; otherwise a per-object id that persists across frames and visible-set changes (no hashing, no collisions). Auto-assigned; override with set_instance_id().
@@ -7387,6 +7406,22 @@ class VulkanRenderer:
     def set_color_grade(self, lift: Vector3 = ..., gamma: Vector3 = ..., gain: Vector3 = ..., saturation: typing.SupportsFloat | typing.SupportsIndex = 1.0, contrast: typing.SupportsFloat | typing.SupportsIndex = 1.0) -> None:
         """
         Lift/gamma/gain wheels + saturation + contrast, baked into a 33^3 LUT applied after the tone map. Defaults = identity = off.
+        """
+    def set_event_camera_params(self, threshold: typing.SupportsFloat | typing.SupportsIndex = 0.15000000596046448, decay: typing.SupportsFloat | typing.SupportsIndex = 0.8500000238418579, min_luma: typing.SupportsFloat | typing.SupportsIndex = 0.004999999888241291, max_events_per_pixel: typing.SupportsInt | typing.SupportsIndex = 5, frame_time_us: typing.SupportsInt | typing.SupportsIndex = 0) -> None:
+        """
+        Contrast threshold in log-intensity units (0.15 fires on almost any
+        edge, 0.30 only on hard ones), the visualisation's per-frame decay
+        toward mid-grey, the luma floor that stops log() exploding in the
+        shadows, the per-pixel event cap, and the microsecond clock stamped
+        onto every event this frame (drive it from your sim clock — a
+        wall-clock stamp is not reproducible).
+        """
+    def set_event_camera_resolution(self, width: typing.SupportsInt | typing.SupportsIndex, height: typing.SupportsInt | typing.SupportsIndex) -> None:
+        """
+        Pin the sensor's native resolution (0, 0 tracks the swapchain).
+        Clamped to [16, swapchain]. A real DVS is coarse — 640x480 is
+        Prophesee Gen3/4 territory — and a coarser detector is also less
+        readback and less compute.
         """
     def set_flush_frames(self, n: typing.SupportsInt | typing.SupportsIndex) -> None:
         """
@@ -7532,6 +7567,36 @@ class VulkanRenderer:
         """
     @env_sun_policy.setter
     def env_sun_policy(self, arg1: str) -> None:
+        ...
+    @property
+    def event_camera_enabled(self) -> bool:
+        """
+        GPU DVS event detector on/off. Costs nothing while off. Toggling
+        does a device-idle + image resize, so do it between shots, never
+        mid-sequence.
+        """
+    @event_camera_enabled.setter
+    def event_camera_enabled(self, arg1: bool) -> None:
+        ...
+    @property
+    def event_camera_params(self) -> dict:
+        """
+        The detector's current parameters as a dict.
+        """
+    @property
+    def event_camera_resolution(self) -> tuple[int, int]:
+        """
+        (width, height) the detector is actually running at.
+        """
+    @property
+    def events_only_mode(self) -> bool:
+        """
+        Present the event visualisation INSTEAD of the shaded scene.
+        Leave it off if you also want read_pixels()/AOVs from the same
+        frames — the detector runs either way.
+        """
+    @events_only_mode.setter
+    def events_only_mode(self, arg1: bool) -> None:
         ...
     @property
     def exposure_compensation(self) -> float:

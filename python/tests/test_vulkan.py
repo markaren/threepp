@@ -512,3 +512,26 @@ def test_vertex_interop_cuda_write(vk_renderer):
         ipos.close()
         inrm.close()
         vk_renderer.disable_vertex_interop(mesh)
+
+
+def test_event_camera_visualisation(vk_renderer):
+    """The GPU DVS detector: pinned sensor resolution, a mono accumulator of
+    that shape, and a moving edge that actually fires events."""
+    scene, cam = make_scene()
+    box = scene.children[0]
+    vk_renderer.set_event_camera_params(threshold=0.15, decay=0.85)
+    vk_renderer.set_event_camera_resolution(64, 48)
+    vk_renderer.event_camera_enabled = True
+    try:
+        sw, sh = vk_renderer.event_camera_resolution
+        assert (sw, sh) == (64, 48)
+        viz = None
+        for i in range(8):                      # ring latency + reference settle
+            box.rotation.y = 0.35 * i
+            vk_renderer.render(scene, cam)
+            viz = vk_renderer.read_event_camera_visualisation()
+        assert viz.shape == (sh, sw) and str(viz.dtype) == "uint8"
+        assert int(viz.max()) > 128 or int(viz.min()) < 128, \
+            "a spinning box fired no events (accumulator is flat mid-grey)"
+    finally:
+        vk_renderer.event_camera_enabled = False
