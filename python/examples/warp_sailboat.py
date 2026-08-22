@@ -37,14 +37,26 @@ non-indexed soup so every triangle keeps its own normal (hard facets; the usual
 revolution for the tower. The lamp is an emissive mesh, which on Vulkan is a
 real light source, so it throws light into the fog.
 
+The day runs. `celestial()` puts the sun and the moon where they belong for
+~59 N in mid-August, and the sky is a Preetham bake in numpy that is BOTH the
+background and the IBL -- so the light on the sails always comes from the sky
+you can see, whether that is a dawn haze, a black squall or a moon. The weather
+is a small state machine with ramps in seconds: cloud closes, wind builds, the
+sea gets up, rain starts, the deck goes dark and glossy, and when it clears
+there is a rainbow opposite the sun because the geometry says there should be.
+
     pip install warp-lang
-    python warp_sailboat.py                 # window; drag to orbit, Esc quits
-    python warp_sailboat.py --wind 14       # start in a fresh breeze
-    python warp_sailboat.py --birds 60      # more gulls
-    python warp_sailboat.py --shot 25       # headless: sail 25 s, write a png
+    python warp_sailboat.py                     # window; drag to orbit, Esc quits
+    python warp_sailboat.py --tod 19.7 --weather clearing
+    python warp_sailboat.py --wind 14           # override the weather's wind
+    python warp_sailboat.py --birds 60          # more gulls
+    python warp_sailboat.py --timelapse             # run the day at 0.35 h/s
+    python warp_sailboat.py --shot 25 --tod 23.5 --weather night --out night.png
 
 Helm:  A / D steer      Q / E ease / trim main     Z / C ease / trim jib
        T auto-trim      P autopilot (hold course)  R reset
+Sky:   1-5 jump to dawn / morning / squall / golden hour / night
+       N toggle rain    K time-lapse the day
 
 Needs a Vulkan build (-DTHREEPP_WITH_VULKAN=ON). Warp falls back to CPU if no
 CUDA device is present -- slower, same picture.
@@ -52,7 +64,7 @@ CUDA device is present -- slower, same picture.
 import math
 import os
 import sys
-import tempfile
+import time
 
 # Make the built `threepp` module (in the parent python/ dir) importable.
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -73,7 +85,9 @@ def cli_arg(flag, default, cast):
 
 SHOT = "--shot" in sys.argv
 SHOT_T = cli_arg("--shot", 25.0, float)
-WIND0 = cli_arg("--wind", 9.0, float)
+TOD0 = cli_arg("--tod", 5.2, float) % 24.0        # clock time, hours
+WEATHER0 = cli_arg("--weather", "mist", str)
+WIND0 = cli_arg("--wind", 0.0, float)             # 0 = let the weather decide
 
 if not tp.HAS_VULKAN or not tp.vulkan_available():
     print("This example needs the Vulkan backend (configure with "
@@ -130,80 +144,398 @@ TURN_GAIN = 0.085            # yaw rate per (m/s * rad of rudder)
 WEATHER_HELM = 0.055         # heel-induced round-up
 RUDDER_MAX = math.radians(35.0)
 BUOY_MASK = 0b011            # swells + mid band; cascade 2 is chop the hull ignores
+SAIL_WIND_MAX = 16.0         # apparent wind the cloth solver is allowed to see
 
 
 # --------------------------------------------------------------------------- #
-#  Procedural HDR sky (numpy -> Radiance .hdr -> RGBELoader), self-contained so
-#  the example needs no downloaded environment map -- same recipe as
-#  vulkan_ocean.py. The sun sits low on purpose: a low sun rakes the mist and
-#  gives the rig something to cast shafts through.
+#  Sky, sun, moon: a day/night cycle for ~59 N in mid-August.
+#
+#  The sky is a Preetham daylight model with a night extension, baked to a
+#  float equirect in numpy and handed to the renderer as scene.environment --
+#  which on Vulkan is BOTH the background and the IBL, so whatever the bake
+#  says is what lights the boat. The atmosphere is therefore the single source
+#  of truth: the sun light's colour is the same Beer-Lambert transmittance the
+#  sky was painted with, and the fog colour is the sky's own horizon.
+#
+#  Frame: +Z is north, +X is east, +Y is up -- the same compass the wind
+#  bearings already use ("wind from 0 deg" blows from +Z).
 # --------------------------------------------------------------------------- #
-SUN_DIR = np.array([0.52, 0.135, 0.83])
-SUN_DIR = SUN_DIR / np.linalg.norm(SUN_DIR)
+LAT = math.radians(59.0)          # a skerry off the Norwegian coast
+DECL = math.radians(17.5)         # solar declination, mid-August
+SOLAR_NOON = 12.85                # clock time of the sun's transit
+MOON_DECL = math.radians(5.0)     # a summer moon rides low and to the south
+_SIN_LAT, _COS_LAT = math.sin(LAT), math.cos(LAT)
 
 
-def _encode_rgbe(rgb):
-    rgb = np.maximum(np.asarray(rgb, np.float64), 0.0)
-    m = rgb.max(axis=2)
-    mask = m >= 1e-32
-    safe = np.where(mask, m, 1.0)
-    mant, exp = np.frexp(safe)
-    scale = np.where(mask, mant * 256.0 / safe, 0.0)
-    out = np.zeros(rgb.shape[:2] + (4,), np.uint8)
-    for c in range(3):
-        out[..., c] = np.clip(rgb[..., c] * scale, 0, 255).astype(np.uint8)
-    out[..., 3] = np.where(mask, np.clip(exp + 128, 0, 255), 0).astype(np.uint8)
+def smoothstep(a, b, x):
+    t = np.clip((x - a) / (b - a), 0.0, 1.0) if isinstance(x, np.ndarray) \
+        else min(max((x - a) / (b - a), 0.0), 1.0)
+    return t * t * (3.0 - 2.0 * t)
+
+
+def _body_dir(decl, hour_angle):
+    """Unit vector toward a body at the given declination and hour angle.
+
+    Straight spherical astronomy, which is what makes the arc read as a real
+    day rather than a sine wave: at 59 N in August the sun rises in the NE,
+    transits 48 deg up in the south, sets in the NW, and then only dips ~12 deg
+    below the horizon -- so the "night" is a long blue twilight, not a void.
+    """
+    sd, cd = math.sin(decl), math.cos(decl)
+    ch = math.cos(hour_angle)
+    up = _SIN_LAT * sd + _COS_LAT * cd * ch
+    north = sd * _COS_LAT - cd * _SIN_LAT * ch
+    east = -cd * math.sin(hour_angle)
+    v = np.array([east, up, north], np.float64)
+    return v / max(float(np.linalg.norm(v)), 1e-9)
+
+
+class Celestial:
+    """Where the sun and the moon are, and how much daylight there is."""
+
+    __slots__ = ("t", "sun_dir", "moon_dir", "sun_y", "daylight", "moon_up",
+                 "sun_elev_deg", "sun_az_deg")
+
+    def __init__(self, t_hours):
+        self.t = t_hours % 24.0
+        ha = math.radians(15.0 * (self.t - SOLAR_NOON))
+        self.sun_dir = _body_dir(DECL, ha)
+        # Roughly opposite the sun, so it is up when the sun is down.
+        self.moon_dir = _body_dir(MOON_DECL, ha + math.pi)
+        self.sun_y = float(self.sun_dir[1])
+        self.daylight = smoothstep(-0.10, 0.05, self.sun_y)
+        self.moon_up = min(max(float(self.moon_dir[1]) / 0.30, 0.0), 1.0)
+        self.sun_elev_deg = math.degrees(math.asin(max(-1.0, min(1.0, self.sun_y))))
+        self.sun_az_deg = math.degrees(math.atan2(self.sun_dir[0], self.sun_dir[2]))
+
+
+def celestial(t_hours):
+    return Celestial(t_hours)
+
+
+# ---- the atmosphere --------------------------------------------------------- #
+SKY_TURBIDITY = 3.6               # nominal; the weather moves it (see turbidity())
+SKY_RAYLEIGH = 3.0
+SKY_MIE_COEFF = 0.006
+SKY_MIE_G = 0.80
+_TOTAL_RAYLEIGH = np.array([5.804542996261093e-6, 1.3562911419845635e-5,
+                            3.0265902468824876e-5], np.float32)
+_MIE_CONST = np.array([1.8399918514433978e14, 2.7798023919660528e14,
+                       4.0790479543861094e14], np.float32)
+_LUMA = np.array([0.2126, 0.7152, 0.0722], np.float32)
+
+
+def turbidity(wx):
+    """How much junk is in the air, from the weather that put it there.
+
+    A fixed turbidity means the clear noon and the dawn haze are the same
+    atmosphere, and one of the two always looks wrong -- a milky blue noon or a
+    thin dawn. Coverage and fog density already say how thick the air is, so
+    they say it here too.
+    """
+    return 2.8 + 3.0 * wx["coverage"] + 300.0 * wx["fog"]
+
+
+def scatter_coeffs(sun_y, turb=SKY_TURBIDITY):
+    """Rayleigh / Mie coefficients for the current sun height.
+
+    ONE source for both the sky radiance and the sun light's transmittance
+    tint -- computing them twice is how a renderer ends up with a sun that is
+    a different colour from the sky it hangs in.
+    """
+    sunfade = 1.0 - min(max(1.0 - math.exp(sun_y), 0.0), 1.0)
+    beta_r = _TOTAL_RAYLEIGH * np.float32(SKY_RAYLEIGH - (1.0 - sunfade))
+    beta_m = _MIE_CONST * np.float32(0.434 * (0.2 * turb) * 1e-17 * SKY_MIE_COEFF)
+    return beta_r, beta_m, sunfade
+
+
+def extinction(beta_r, beta_m, dir_y):
+    """Beer-Lambert transmittance along a slant path toward elevation dir_y."""
+    y = np.asarray(dir_y, np.float32)
+    zen = np.arccos(np.maximum(y, 0.0))
+    inv = 1.0 / (np.cos(zen) + 0.15 * np.power(93.885 - zen * (180.0 / math.pi), -1.253))
+    return np.exp(-(beta_r * (8400.0 * inv)[..., None]
+                    + beta_m * (1250.0 * inv)[..., None])).astype(np.float32)
+
+
+def _sun_intensity(zenith_cos):
+    cutoff = 1.6110731556870734           # pi / 1.95
+    zc = min(max(zenith_cos, -1.0), 1.0)
+    return 1000.0 * max(0.0, 1.0 - math.exp(-((cutoff - math.acos(zc)) / 1.5)))
+
+
+# Rainbow colours from the inner (violet) to the outer (red) edge of the bow.
+_BOW_F = np.array([0.0, 0.25, 0.50, 0.75, 1.0], np.float32)
+_BOW_RGB = np.array([[0.42, 0.10, 0.62], [0.10, 0.35, 0.95], [0.20, 0.85, 0.25],
+                     [1.00, 0.92, 0.15], [1.00, 0.22, 0.08]], np.float32)
+
+
+def _bow_colour(f):
+    return np.stack([np.interp(f, _BOW_F, _BOW_RGB[:, c]) for c in range(3)],
+                    -1).astype(np.float32)
+
+
+def sky_radiance(dirs, cs, wx, y_rows=None):
+    """Linear sky radiance toward `dirs` ((..., 3) unit vectors).
+
+    Preetham daylight + the demo's own directional horizon glow at low sun +
+    a night extension (deep blue gradient, moon disc and halo) + the storm's
+    darkening and greying + the rainbow. The lower hemisphere fades out of the
+    SAME horizon value the upper one ends on, so there is no dark band at the
+    sea line and grazing reflections never go black.
+
+    Written for the bake, which is half a million directions at a time. Three
+    things keep it inside a frame: everything that depends only on ELEVATION is
+    passed in as `y_rows` and stays a COLUMN (extinction, the horizon band, the
+    below-horizon fade); the two features that occupy a handful of texels (the
+    sun disc, the rainbow arc) are found with a threshold on the cosine and
+    evaluated on that MASK rather than over the frame; and `x ** k` is spelled
+    exp(k * log(x)), because np.power costs twice what that does at this size.
+    Written naively the same model took 90-200 ms a bake.
+    """
+    d = np.asarray(dirs, np.float32)
+    y = d[..., 1]
+    yb = y if y_rows is None else y_rows       # elevation-only, still a column
+    sun = cs.sun_dir.astype(np.float32)
+    sun_y = float(sun[1])
+    sun_e = np.float32(_sun_intensity(sun_y))
+    beta_r, beta_m, sunfade = scatter_coeffs(sun_y, turbidity(wx))
+    fex = extinction(beta_r, beta_m, yb)
+
+    cos_t = np.clip(d @ sun, -1.0, 1.0)
+    ct = cos_t * np.float32(0.5) + np.float32(0.5)
+    ct *= ct
+    ct *= np.float32(0.05968310365946075)
+    r_phase = ct + np.float32(0.05968310365946075)
+    g2 = SKY_MIE_G * SKY_MIE_G
+    den = np.float32(1.0 + g2) - np.float32(2.0 * SKY_MIE_G) * cos_t
+    m_phase = np.float32(0.07957747154594767 * (1.0 - g2)) / (den * np.sqrt(den))
+
+    # beta / (betaR + betaM) folded into constants: the per-pixel divide goes.
+    tot = beta_r + beta_m
+    q = (beta_r / tot) * r_phase[..., None] + (beta_m / tot) * m_phase[..., None]
+    q *= sun_e
+    b = q * fex
+    a = q - b
+    np.maximum(a, 0.0, out=a)
+    np.maximum(b, 0.0, out=b)
+    mix_t = np.float32(min(max((1.0 - sun_y) ** 5, 0.0), 1.0))
+    a *= np.sqrt(a)                                     # x ** 1.5
+    np.sqrt(b, out=b)
+    b *= mix_t
+    b += np.float32(1.0) - mix_t
+    a *= b                                              # a is `lin` from here
+
+    # The solar disc lives IN the bake (env-sun policy Auto + an explicit
+    # DirectionalLight = the env supplies sky and ambience, the disc is clamped
+    # out of the glossy mips). Under a storm deck there is no disc to see.
+    murk = smoothstep(0.30, 0.92, wx["coverage"]) * min(wx["cloud_density"], 1.0)
+    disc_cos = 0.9999566769464484
+    a += fex * np.float32(0.1)
+    hit = cos_t > disc_cos
+    if murk < 0.99 and hit.any():
+        w = np.clip((cos_t[hit] - disc_cos) / 2.0e-5, 0.0, 1.0)
+        w = (w * w * (3.0 - 2.0 * w) * (sun_e * 19000.0 * (1.0 - 0.98 * murk)))
+        a[hit] += np.broadcast_to(fex, a.shape)[hit] * w[..., None].astype(np.float32)
+
+    a *= np.float32(0.04)
+    a += np.array([0.0, 0.0003, 0.00075], np.float32)
+    np.maximum(a, 1e-9, out=a)
+    np.log(a, out=a)
+    a *= np.float32(1.0 / (1.2 + 1.2 * sunfade))
+    col = np.exp(a, out=a)
+    # The Preetham pow-curve lifts the deep-night residual to a grey haze; fade
+    # the daylight model out once the sun is well down, so night belongs to the
+    # (dark) night model below.
+    col *= np.float32(0.05 + 0.95 * smoothstep(-0.25, -0.02, sun_y))
+
+    # ---- the demo's dawn haze, kept ----------------------------------------
+    # A horizon glow concentrated around the sun's BEARING rather than smeared
+    # evenly round the compass: an all-round band reads as overcast noon, a
+    # directional one reads as low sun, and that is this demo's hero look.
+    glow_amp = ((1.0 - smoothstep(0.06, 0.34, sun_y)) * cs.daylight
+                * (1.0 - 0.85 * murk))
+    if glow_amp > 1e-3:
+        sun_hz = sun[[0, 2]] / max(float(np.linalg.norm(sun[[0, 2]])), 1e-6)
+        hx, hz = d[..., 0], d[..., 2]
+        toward = ((hx * sun_hz[0] + hz * sun_hz[1])
+                  / np.sqrt(np.maximum(hx * hx + hz * hz, 1e-12)))
+        np.clip(toward, -1.0, 1.0, out=toward)
+        toward *= np.float32(0.5)
+        toward += np.float32(0.5)
+        toward *= toward * toward
+        toward *= np.float32(0.52 * glow_amp)
+        toward += np.float32(0.09 * glow_amp)
+        toward = toward * np.exp((yb * yb) * np.float32(-1.0 / (2.0 * 0.0075)))
+        col += toward[..., None] * np.array([1.0, 0.62, 0.34], np.float32)
+
+    # ---- night --------------------------------------------------------------
+    night = 1.0 - cs.daylight
+    if night > 1e-3:
+        horizon = np.exp(np.maximum(yb, 0.0) * np.float32(-4.5)) * (yb >= 0.0)
+        base = (np.array([0.0035, 0.0050, 0.0100], np.float32)
+                + horizon[..., None] * np.array([0.016, 0.022, 0.042], np.float32))
+        col += base * np.float32(night)
+        # The moon is a 1 deg disc in a 2 pi sky: find it with one comparison
+        # and paint it on the few hundred texels it actually covers.
+        cos_m = d @ cs.moon_dir.astype(np.float32)
+        near = cos_m > 0.92                             # ~23 deg: disc plus halo
+        if cs.moon_up > 0.0 and near.any():
+            ang_m = np.arccos(np.clip(cos_m[near], -1.0, 1.0))
+            disc = (ang_m < 0.018).astype(np.float32) * cs.moon_up
+            halo = 0.28 * np.exp(-ang_m * ang_m * 110.0) * cs.moon_up * (1.0 - disc)
+            col[near] += ((disc[..., None] * np.array([16.0, 18.0, 23.0], np.float32)
+                           + halo[..., None] * np.array([0.65, 0.75, 1.0], np.float32))
+                          * np.float32(night))
+
+    # ---- the storm deck -----------------------------------------------------
+    # The volumetric cloud deck is a RASTER effect; the IBL knows nothing about
+    # it. Without darkening and greying the bake ITSELF, a boat under a black
+    # ceiling is still lit like a sunny day -- so the sky the storm shows and
+    # the sky the storm lights by are made the same thing here.
+    if murk > 1e-3:
+        lum = (col @ _LUMA)[..., None] * np.float32(0.80 * murk)
+        col *= np.float32(1.0 - 0.80 * murk)
+        col += lum * np.array([0.90, 0.94, 1.00], np.float32)
+        col *= np.float32(1.0 - 0.66 * murk)
+
+    # ---- the rainbow --------------------------------------------------------
+    # Geometry, not decoration: the bow is an arc of fixed angular radius about
+    # the ANTISOLAR point, which is why it is only there with the sun behind you
+    # and low, and why it sinks below the sea as the sun climbs. Primary
+    # 40.5-42.5 deg (violet in, red out), secondary 51-53 deg and reversed.
+    bow = wx["rainbow"] * (1.0 - smoothstep(0.26, 0.40, sun_y)) * cs.daylight
+    if bow > 0.01:
+        anti = -cos_t                    # cosine of the angle from the antisolar point
+        yall = np.broadcast_to(y, anti.shape)
+        for lo, hi, amp, flip in ((40.5, 42.5, 0.34 * bow, False),
+                                  (51.0, 53.0, 0.115 * bow, True)):
+            m = ((anti < math.cos(math.radians(lo)))
+                 & (anti > math.cos(math.radians(hi))))
+            if not m.any():
+                continue
+            f = (np.degrees(np.arccos(np.clip(anti[m], -1.0, 1.0))) - lo) / (hi - lo)
+            np.clip(f, 0.0, 1.0, out=f)
+            env = np.maximum(np.sin(np.pi * f), 0.0)
+            env *= np.clip(yall[m] * 9.0, 0.0, 1.0) * amp   # stops at the sea line
+            col[m] += _bow_colour(1.0 - f if flip else f) * env[..., None].astype(np.float32)
+
+    # Below the horizon: fade toward a dark sea tone, out of exactly the horizon
+    # value above it (fade == 1 at y == 0), so the two hemispheres meet.
+    low = yb < 0.0
+    if low.any():
+        col *= np.where(low, np.exp(np.minimum(yb, 0.0) * np.float32(2.6)), 1.0)[..., None]
+        col += low[..., None] * np.array([0.002, 0.0025, 0.003], np.float32)
+
+    col *= np.float32(0.62)      # sun:sky contrast; auto exposure re-normalises
+    return np.minimum(col, 300.0)
+
+
+SKY_W, SKY_H = 1024, 512
+_sv = (np.arange(SKY_H, dtype=np.float32) + 0.5) / SKY_H
+_su = (np.arange(SKY_W, dtype=np.float32) + 0.5) / SKY_W
+_selev = (_sv - 0.5) * math.pi
+_saz = (_su - 0.5) * 2.0 * math.pi
+# v = 0.5 + asin(dir.y)/pi and u = 0.5 + atan2(z, x)/tau is what the shader
+# samples with (deferred_shade_10_lighting_utils.glsl), so row 0 is the nadir.
+_SKY_DIRS = np.empty((SKY_H, SKY_W, 3), np.float32)
+_SKY_DIRS[..., 0] = np.cos(_selev)[:, None] * np.cos(_saz)[None, :]
+_SKY_DIRS[..., 1] = np.sin(_selev)[:, None]
+_SKY_DIRS[..., 2] = np.cos(_selev)[:, None] * np.sin(_saz)[None, :]
+_SKY_YROWS = np.sin(_selev)[:, None]
+_HZ_AZ = (np.arange(16, dtype=np.float32) + 0.5) / 16.0 * 2.0 * math.pi
+_HZ_DIRS = np.stack([np.cos(0.026) * np.cos(_HZ_AZ),
+                     np.full(16, math.sin(0.026), np.float32),
+                     np.cos(0.026) * np.sin(_HZ_AZ)], -1).astype(np.float32)
+
+
+def bake_sky(cs, wx):
+    """The whole sky as a float32 (H, W, 4) equirect, ready for float_texture."""
+    out = np.empty((SKY_H, SKY_W, 4), np.float32)
+    out[..., :3] = sky_radiance(_SKY_DIRS, cs, wx, y_rows=_SKY_YROWS)
+    out[..., 3] = 1.0
     return out
 
 
-def make_sky_hdr(path, W=2048, H=1024):
-    j = np.arange(H).reshape(H, 1)
-    i = np.arange(W).reshape(1, W)
-    theta = (j / H) * math.pi
-    phi = (i / W) * 2 * math.pi - math.pi
-    y = np.broadcast_to(np.cos(theta), (H, W))
-    sin_t = np.sin(theta)
-    x = sin_t * np.cos(phi)
-    z = sin_t * np.sin(phi)
+def horizon_color(cs, wx):
+    """Average radiance round the horizon -- the fog colour that always fits."""
+    c = sky_radiance(_HZ_DIRS, cs, wx).mean(axis=0)
+    return tp.Color(float(c[0]), float(c[1]), float(c[2]))
 
-    # Hazier and warmer than a clear-day sky -- the whole point is thick air.
-    # Both hemispheres meet at the horizon colour, so there is no dark band
-    # where the sea meets the sky and grazing reflections never go black.
-    horizon = np.array([0.68, 0.72, 0.80])
-    zenith = np.array([0.10, 0.22, 0.46])
-    haze = np.array([0.40, 0.44, 0.50])
 
-    up = np.clip(y, 0.0, 1.0)[..., None] ** 0.32
-    down = np.clip(-y, 0.0, 1.0)[..., None] ** 0.6
-    sky = np.where(y[..., None] >= 0.0,
-                   horizon * (1.0 - up) + zenith * up,
-                   horizon * (1.0 - down) + haze * down)
+# --------------------------------------------------------------------------- #
+#  Weather. Presets are TARGETS; the live state chases them with per-field time
+#  constants measured in seconds, because a squall that arrives in one frame
+#  reads as a cut, not as weather.
+# --------------------------------------------------------------------------- #
+WEATHER_KEYS = ("coverage", "cloud_density", "deck_bottom", "deck_top", "wind",
+                "wave_scale", "choppy", "fog", "fog_h", "rain", "rainbow")
 
-    d = np.stack([x, y, z], axis=-1)
-    # Horizon glow, concentrated around the sun's BEARING rather than smeared
-    # evenly round the compass -- an all-round band reads as overcast noon, a
-    # directional one reads as low sun, and that is the whole mood here.
-    hz = np.stack([x, z], -1)
-    hz = hz / np.maximum(np.linalg.norm(hz, axis=-1, keepdims=True), 1e-6)
-    sun_hz = SUN_DIR[[0, 2]] / np.linalg.norm(SUN_DIR[[0, 2]])
-    align = np.clip((hz * sun_hz).sum(-1), -1.0, 1.0)
-    toward = (0.5 + 0.5 * align) ** 3.0
-    glow = np.exp(-(y * y) / (2 * 0.0075))[..., None]
-    sky = sky + glow * (0.28 + 1.35 * toward)[..., None] * np.array([1.0, 0.66, 0.40])
+PRESETS = {
+    # dawn: thick mist, a glassy sea, the light only just arriving
+    "mist": dict(coverage=0.30, cloud_density=0.8, deck_bottom=620.0, deck_top=1500.0,
+                 wind=6.0, wave_scale=0.72, choppy=0.48, fog=0.0062, fog_h=52.0,
+                 rain=0.0, rainbow=0.0),
+    "clear": dict(coverage=0.22, cloud_density=0.8, deck_bottom=700.0, deck_top=1600.0,
+                  wind=9.5, wave_scale=1.00, choppy=0.58, fog=0.0011, fog_h=140.0,
+                  rain=0.0, rainbow=0.0),
+    "overcast": dict(coverage=0.74, cloud_density=1.15, deck_bottom=420.0, deck_top=1250.0,
+                     wind=12.0, wave_scale=1.20, choppy=0.68, fog=0.0040, fog_h=130.0,
+                     rain=0.0, rainbow=0.0),
+    "storm": dict(coverage=0.97, cloud_density=1.70, deck_bottom=240.0, deck_top=1500.0,
+                  wind=17.0, wave_scale=1.65, choppy=0.86, fog=0.0078, fog_h=150.0,
+                  rain=1.0, rainbow=0.0),
+    # the squall walking away: broken cloud, a low sun, and a bow behind you
+    "clearing": dict(coverage=0.38, cloud_density=0.95, deck_bottom=520.0, deck_top=1350.0,
+                     wind=8.5, wave_scale=1.15, choppy=0.62, fog=0.0032, fog_h=95.0,
+                     rain=0.0, rainbow=1.0),
+    # thin sea mist, because a lighthouse beam is only visible if there is
+    # something in the air for it to be visible IN
+    "night": dict(coverage=0.18, cloud_density=0.8, deck_bottom=700.0, deck_top=1600.0,
+                  wind=7.0, wave_scale=0.90, choppy=0.55, fog=0.0062, fog_h=60.0,
+                  rain=0.0, rainbow=0.0),
+}
+PRESETS["night-clear"] = PRESETS["night"]
+PRESETS["golden"] = PRESETS["clearing"]
 
-    ang = np.arccos(np.clip((d * SUN_DIR).sum(-1), -1.0, 1.0))
-    core = np.exp(-(ang / math.radians(1.6)) ** 2)
-    halo = np.exp(-(ang / math.radians(14.0)) ** 2)
-    sky = sky + (core * 55.0 + halo * 6.0)[..., None] * np.array([1.0, 0.90, 0.74])
+# Seconds to close ~63% of the gap. Cloud and sea are slow, rain is quick, and
+# a wet deck dries far more slowly than it wets.
+RAMP_TAU = dict(coverage=5.0, cloud_density=5.0, deck_bottom=6.0, deck_top=6.0,
+                wind=7.0, wave_scale=9.0, choppy=9.0, fog=5.0, fog_h=6.0,
+                rain=2.2, rainbow=3.5)
 
-    rgbe = _encode_rgbe(sky)
-    if rgbe[0, 0, 0] == 2 and rgbe[0, 0, 1] == 2 and rgbe[0, 0, 2] < 128:
-        rgbe[0, 0, 0] = 3
-    with open(path, "wb") as f:
-        f.write(b"#?RADIANCE\nFORMAT=32-bit_rle_rgbe\n\n")
-        f.write(b"-Y %d +X %d\n" % (H, W))
-        f.write(rgbe.tobytes())
-    return path
+# The five acts: key -> (time of day, weather preset).
+ACTS = ((4.833, "mist"), (8.5, "clear"), (15.0, "storm"),
+        (19.667, "clearing"), (23.5, "night"))
+
+if WEATHER0 not in PRESETS:
+    print(f"unknown --weather {WEATHER0!r}; choose from {sorted(PRESETS)}")
+    sys.exit(2)
+
+# `weather` is the live state; `wtarget` is what it is chasing. Everything the
+# sky, the sea, the fog, the clouds and the rain read comes out of `weather`.
+weather = dict(PRESETS[WEATHER0])
+weather["wetness"] = 1.0 if weather["rain"] > 0.5 else 0.0
+wtarget = dict(PRESETS[WEATHER0])
+if WIND0 > 0.0:
+    weather["wind"] = wtarget["wind"] = WIND0
+weather_name = WEATHER0
+time_of_day = TOD0
+# Hours of sky per second of wall clock. K toggles it in the window; 0.35
+# runs the whole day in about 68 s, which is the cadence to watch the bake
+# throttle at.
+day_speed = 0.35 if "--timelapse" in sys.argv else 0.0
+_rain_was_on = weather["rain"] > 0.3
+_bow_timer = 0.0           # seconds left in the post-rain rainbow window
+
+
+def set_weather(name):
+    """Aim the weather at a preset. The ramps do the rest."""
+    global weather_name
+    if name not in PRESETS:
+        return
+    weather_name = name
+    wtarget.update(PRESETS[name])
 
 
 # --------------------------------------------------------------------------- #
@@ -1004,25 +1336,98 @@ renderer.render_scale = 0.9
 renderer.gbuffer_msaa = 2            # steadies the rigging wires against the sky
 renderer.sun_angular_radius = 0.6    # soft ray-traced sun shadows
 renderer.bloom_intensity = 0.11
+# A day that runs from a moonlit sea to a noon glare is ~10 stops wide, and no
+# single tone_mapping_exposure covers it (auto exposure IGNORES that knob while
+# it is on). The clamp is what keeps night reading as night: metering to 18%
+# grey would happily turn midnight into an overcast afternoon, so the eye is
+# only allowed +3 EV of dilation -- enough to find the lighthouse beam and the
+# nav lights, nowhere near enough to fake daylight -- and -2.5 EV of
+# constriction, which is what a sunlit sea needs to keep its highlights.
+# 1.2 EV/s (0.6 dilating) settles a cut in about a second without pumping on a
+# lightning flash; bloom_clamp stops a flash from smearing the whole frame.
+renderer.auto_exposure = True
+renderer.set_auto_exposure_range(-2.5, 3.0)
+renderer.set_auto_exposure_speed(1.2)
+renderer.bloom_clamp = 12.0
 
 ui = tp.ImguiContext(canvas, renderer) if (tp.HAS_IMGUI and not SHOT) else None
 
-hdr_path = os.path.join(tempfile.gettempdir(), "threepp_sailboat_sky.hdr")
-env = tp.RGBELoader().load(make_sky_hdr(hdr_path))
-
 scene = tp.Scene()
-scene.background = env
-scene.environment = env
+
+# ---- the sky, ping-ponged --------------------------------------------------- #
+#  Replacing scene.environment is not a per-frame material patch: it re-uploads
+#  the texture, re-runs PMREM, idles the device and cold-starts the ReSTIR
+#  reservoirs. So there are two float textures, they are allocated ONCE, each
+#  bake writes the back one in place, and a bake only happens when the sun has
+#  actually moved (0.25 deg of elevation / 0.6 deg of azimuth) or the weather
+#  changed -- the same throttle vulkan_fjord uses.
+sky_tex = [tp.float_texture(np.zeros((SKY_H, SKY_W, 4), np.float32)) for _ in range(2)]
+sky_front = 0
+_bake_count = 0
+_bake_ms = 0.0
+_last_bake_elev, _last_bake_az, _since_bake = -99.0, -99.0, 1e9
+_last_bake_sig = None
+SKY_LOG = "--quiet" not in sys.argv
+
+
+def _weather_sig():
+    return (round(weather["coverage"], 2), round(weather["cloud_density"], 2),
+            round(weather["rainbow"], 2))
+
+
+def apply_sky(cs, force=False):
+    """Re-bake the environment if it is worth it, and swap the ping-pong."""
+    global sky_front, _bake_count, _bake_ms
+    global _last_bake_elev, _last_bake_az, _since_bake, _last_bake_sig
+    sig = _weather_sig()
+    if not force:
+        if _since_bake < 0.30:
+            return False
+        if (abs(cs.sun_elev_deg - _last_bake_elev) < 0.25
+                and abs(cs.sun_az_deg - _last_bake_az) < 0.6
+                and sig == _last_bake_sig):
+            return False
+    _last_bake_elev, _last_bake_az, _last_bake_sig = cs.sun_elev_deg, cs.sun_az_deg, sig
+    _since_bake = 0.0
+
+    t0 = time.perf_counter()
+    data = bake_sky(cs, weather)
+    back = 1 - sky_front
+    sky_tex[back].update_float(data)
+    sky_front = back
+    scene.environment = sky_tex[back]
+    scene.background = sky_tex[back]
+    ms = (time.perf_counter() - t0) * 1e3
+    _bake_count += 1
+    _bake_ms += ms
+    if SKY_LOG:
+        print(f"sky bake {_bake_count:3d}  t={_last_tod():05.2f}h  "
+              f"elev {cs.sun_elev_deg:+5.1f} deg  az {cs.sun_az_deg % 360:5.1f} deg  "
+              f"cover {weather['coverage']:.2f}  {ms:5.1f} ms")
+    return True
+
+
+def _last_tod():
+    return time_of_day
+
+
+cs0 = celestial(time_of_day)
+apply_sky(cs0, force=True)
 
 # One sun, aligned with the sun painted into the sky, so the specular highlight
-# on the water and the shafts through the rig agree with the background.
+# on the water and the shafts through the rig agree with the background. And a
+# moon, which is the same light with a different colour temperature and only
+# ever on when the sun is not.
 sun = tp.DirectionalLight(0xffdcaa, 3.2)
-sun.position.set(*(SUN_DIR * 300.0))
+sun.position.set(*(cs0.sun_dir * 1200.0))
 scene.add(sun)
+moon = tp.DirectionalLight(0x9fb4ff, 0.0)
+moon.position.set(*(cs0.moon_dir * 1200.0))
+scene.add(moon)
 
 SEA = 1400.0
-ocean = tp.Ocean(size=SEA, resolution=640, wind_speed=WIND0, wind_theta=0.6,
-                 choppiness=0.58, fft_size=1024)
+ocean = tp.Ocean(size=SEA, resolution=640, wind_speed=weather["wind"], wind_theta=0.6,
+                 choppiness=weather["choppy"], fft_size=1024)
 scene.add(ocean)
 
 # Dark water below the surface so refraction has something to read against.
@@ -1374,19 +1779,191 @@ gull.birds_cast_shadow = False
 gulls = tp.Flock(gull)
 scene.add(gulls)
 
+# ---- the night kit ---------------------------------------------------------- #
+#  Everything here is pre-created and driven by intensity alone. Adding or
+#  removing a scene object is a structural change (entry-list rebuild, device
+#  idle, TAA history clear), so nothing in this demo is ever added after
+#  startup -- the night simply turns the day's zeros into numbers.
+LANTERN = (ISLET_X, PAD_Y - 0.6 + 15.5, ISLET_Z)
+
+# Two beams 180 deg apart out of one lantern, which is what an optic with two
+# lens panels actually throws. decay 2 = physical inverse square, so the
+# intensity has to be lighthouse-sized (O(10^5) cd) before the far end of the
+# beam lights anything; the cone is narrow enough to read as a shaft in the
+# mist rather than a floodlight.
+BEAM_INTENSITY = 380000.0
+BEAM_PERIOD = 6.0                          # seconds per revolution
+beams, beam_targets = [], []
+for k in range(2):
+    b = tp.SpotLight(tp.Color(1.0, 0.93, 0.74), 0.0, 2500.0,
+                     math.radians(4.0), 0.5, 2.0)
+    b.position.set(*LANTERN)
+    t = tp.Group()
+    t.position.set(LANTERN[0] + 900.0, LANTERN[1] - 22.0, LANTERN[2])
+    scene.add(t)
+    b.set_target(t)
+    scene.add(b)
+    beams.append(b)
+    beam_targets.append(t)
+
+# Navigation lights: red to port, green to starboard, white astern. Tiny
+# emissive spheres, which on Vulkan are real light sources -- so they put a
+# coloured wash on the deck beside them, which is exactly what they do at sea.
+NAV_INTENSITY = 55.0
+nav_mats = []
+for colour, side, along, name in ((0xff1408, -1.0, 0.34, "port"),
+                                  (0x18ff3c, 1.0, 0.34, "stbd"),
+                                  (0xfff0d8, 0.0, 0.965, "stern")):
+    m = tp.MeshStandardMaterial()
+    m.color = 0x101010
+    m.emissive = colour
+    m.emissive_intensity = 0.0
+    p = deck_edge(along, side * 0.92) if side != 0.0 else deck_edge(along, 0.0)
+    s = tp.Mesh(tp.SphereGeometry(0.075, 12, 8), m)
+    s.position.set(float(p[0]), float(p[1]) + 0.30, float(p[2]))
+    boat.add(s)
+    nav_mats.append(m)
+
+# Cabin glow: the smoked window strips are already their own material band, so
+# the light below decks is one emissive ramp on a material that exists.
+glass_mat.emissive = 0xffb45a
+glass_mat.emissive_intensity = 0.0
+
+# Wet surfaces. A wet deck is not a darker deck, it is a SMOOTHER one: the
+# water fills the grain, roughness collapses, and the sky arrives as a sheen
+# instead of a diffuse wash. Darkening the albedo on its own reads as dirt.
+WET_MATS = ((deck_mat, (0.725, 0.639, 0.510), 0.80, 0.20),
+            (hull_mat, (0.957, 0.961, 0.953), 0.30, 0.14),
+            (boot_mat, (0.078, 0.125, 0.180), 0.38, 0.16),
+            (spar_mat, (0.788, 0.800, 0.816), 0.34, 0.18))
+_wetness_applied = -1.0
+
+
+def apply_wetness(w):
+    """Tween the deck, hull, boot stripe and spars between dry and streaming."""
+    global _wetness_applied
+    if abs(w - _wetness_applied) < 0.02:
+        return
+    _wetness_applied = w
+    for mat, base, dry, wet in WET_MATS:
+        mat.roughness = dry + (wet - dry) * w
+        k = 1.0 - 0.35 * w                       # wet paint reads ~a third down
+        mat.color = tp.Color(base[0] * k, base[1] * k, base[2] * k)
+        mat.needs_update()
+
+
+# ---- rain ------------------------------------------------------------------- #
+#  ONE field, created at its final capacity and never resized, parked with
+#  set_live_count(0) when it is not raining. The emitter is a closed form on
+#  the GPU -- the CPU writes one 64-byte record a frame and never touches a
+#  drop. `follow` wraps the whole slab toroidally around the camera, so the
+#  rain is everywhere the boat sails rather than a patch over the origin.
+RAIN_CAP = 200_000
+RAIN_HALF = 26.0                    # lateral half-extent = the wrap period / 2
+RAIN_LOD_NEAR, RAIN_LOD_FAR = 6.0, 12.0
+
+_rc = tp.ParticleField.Config()
+_rc.capacity = RAIN_CAP
+_rc.ownership = tp.ParticleField.Ownership.Renderer
+_rc.w_semantic = tp.ParticleField.WSemantic.Radius
+_rc.uniform_radius = 0.013
+rain = tp.ParticleField.create(_rc)
+rain.frustum_culled = False
+
+# Near the camera a drop is a lit SOLID -- which is the whole point of the LOD
+# split here: a lightning flash (Phase 3) reaches a mesh proxy and cannot reach
+# an unlit additive quad. Past 12 m a drop is 2 px and the octahedron buys
+# nothing, so the billboard streak takes over across the same band.
+rain_mat = tp.MeshStandardMaterial()
+rain_mat.color = tp.Color(0.58, 0.64, 0.72)
+rain_mat.roughness = 0.06
+rain_mat.metalness = 0.0
+rain.set_mesh_repr(tp.OctahedronGeometry(0.013, 0), rain_mat)
+_mr = rain.mesh_repr
+_mr.lod_far = RAIN_LOD_FAR
+_mr.lod_fade = RAIN_LOD_FAR - RAIN_LOD_NEAR
+# near_cull is "how big may the NEAREST drop get": inside the band the linear
+# scale ramp and the 1/d projection cancel, so every proxy lands at r/near_cull
+# radians. At 2.2 m that is 0.006 rad -- a 12 px white diamond hanging in front
+# of the lens, which is exactly what the first storm still showed. 9 m puts the
+# nearest drop at 3 px, which is a drop.
+_mr.near_cull = 9.0
+
+# A drop crosses ~20 px a frame; drawn as a solid it reads as hail. The quad is
+# smeared along the emitter's own analytic velocity, and both caps (world and
+# screen) are there to stop the nearest drop painting a bar across the frame.
+RAIN_BB_BASE = 0.135
+rain.set_billboard_repr(tp.Color(0.72, 0.79, 0.90), tp.Color(0.60, 0.67, 0.78),
+                        RAIN_BB_BASE, 0.30)
+_br = rain.billboard_repr
+_br.lod_near = RAIN_LOD_NEAR
+_br.lod_fade = RAIN_LOD_FAR - RAIN_LOD_NEAR
+_br.stretch_seconds = 0.024
+_br.stretch_max = 30.0
+_br.stretch_max_screen = 0.045
+_br.near_fade = 1.20
+_br.softness = 0.95
+_br.fade_power = 0.0
+_br.size_taper = 0.0
+_br.bright_jitter = 0.55
+_br.splash_ring_width = 0.28
+_br.glow = 0.0
+
+_re = rain.emitter                    # NB: a COPY -- mutate and hand it back
+_re.spawn_center = tp.Vector3(0.0, 16.0, 0.0)
+_re.spawn_half_extent = tp.Vector3(RAIN_HALF, 0.35, RAIN_HALF)
+_re.velocity = tp.Vector3(0.0, -9.0, 0.0)
+_re.speed_spread = 0.35
+_re.wind = tp.Vector3(1.30, 0.0, 0.45)
+_re.drift_amplitude = 0.03
+_re.drift_frequency = 0.9
+_re.drift_scale = 6.0
+_re.lifetime = 2.4
+_re.duty_cycle = 0.92
+_re.size = 0.013
+_re.size_jitter = 0.30
+_re.seed = 20260822
+_re.follow = True
+# An integer number of density voxels: the curtain volume below is 52 m across
+# 96 voxels, so half a voxel of snap would re-phase the haze and make it swim.
+_re.follow_snap = 8.0 * (2.0 * RAIN_HALF / 96.0)
+_rs = _re.surface
+_rs.enabled = True                    # drops land on the deck AND on the sea
+_rs.resolution = 512
+_rs.splash_seconds = 0.30
+_rs.splash_grow = 12.0
+_rs.bias = 0.010
+_rs.rest_seconds = 0.0
+_rs.fade_seconds = 0.05
+_re.surface = _rs
+rain.set_emitter(_re)
+rain.set_emitter_time(0.0, 1.0 / 60.0)
+
+# The curtain itself: a rain squall is a DARK medium, and without it heavy rain
+# is a lot of bright streaks in perfectly clear air.
+rain.set_density_repr(tp.Vector3(0.0, 8.0, 0.0), tp.Vector3(RAIN_HALF, 9.0, RAIN_HALF),
+                      0.014, 96)
+_dr = rain.density_repr
+_dr.albedo = tp.Color(0.42, 0.46, 0.52)
+_dr.anisotropy = 0.35
+_dr.enabled = False
+rain.set_live_count(0)
+scene.add(rain)
+
 camera = tp.PerspectiveCamera(48, canvas.aspect(), 0.1, 4000)
 # Start downsun of the boat, looking back toward the sun: that is the one
 # viewpoint where the sails glow with transmitted light and the rig cuts
 # shafts through the mist. Orbit away from it and the scene goes flat.
-SUN_HZ = SUN_DIR[[0, 2]] / np.linalg.norm(SUN_DIR[[0, 2]])
-camera.position.set(-SUN_HZ[0] * 21.0 + 12.0, 8.0, -SUN_HZ[1] * 21.0 - 6.0)
+_sun_hz = cs0.sun_dir[[0, 2]]
+_sun_hz = _sun_hz / max(float(np.linalg.norm(_sun_hz)), 1e-6)
+camera.position.set(-_sun_hz[0] * 21.0 + 12.0, 8.0, -_sun_hz[1] * 21.0 - 6.0)
 
 # --------------------------------------------------------------------------- #
 #  Live state. Everything an imgui slider owns lives in one dict, because the
 #  widgets are pure immediate mode: value in, (changed, value) out.
 # --------------------------------------------------------------------------- #
 knob = {
-    "wind": WIND0,             # true wind speed, m/s
+    "wind": weather["wind"],   # true wind speed, m/s -- driven by the weather
     "wind_from": 215.0,        # bearing the wind blows FROM, deg (0 = from +Z)
     "boom": 42.0,              # mainsheet: boom angle off the centreline, deg
     "jib": 30.0,               # jib sheet angle, deg
@@ -1397,13 +1974,13 @@ knob = {
     "cloth": 420.0,            # sailcloth areal density, g/m2
     "stiff": 1.0,
     "sea_follows": True,
-    "wave_scale": 1.0,
-    "choppy": 0.58,
+    "wave_scale": weather["wave_scale"],
+    "choppy": weather["choppy"],
     "foam": 1.0,
-    "fog": 0.0031,             # sigma_t of the air medium, 1/m
-    "fog_h": 95.0,             # height falloff of the mist, m
+    "fog": weather["fog"],     # sigma_t of the air medium, 1/m
+    "fog_h": weather["fog_h"],  # height falloff of the mist, m
     "fog_g": 0.72,             # Henyey-Greenstein: + = forward god rays
-    "cloud": 0.55,
+    "cloud": weather["coverage"],
 }
 
 START_X, START_Z, START_HDG = 0.0, 0.0, 340.0
@@ -1504,6 +2081,14 @@ def step_boat(dt):
     roll = bs["wave_roll"] + bs["heel"]
     rot = yxz_matrix(-pitch, bs["yaw"], roll)
     wind_local = rot.T @ app_wind
+    # The storm blows 17 m/s and the cloth solver was tuned at 9: past ~16 the
+    # free leech flogs hard enough that neighbouring normals cancel and the rig
+    # loses its drive to numerical noise. Cap what the SAILS see (the ocean and
+    # the gulls still get the real thing) -- a reefed boat is the honest reading
+    # of that anyway.
+    _aw = float(np.linalg.norm(wind_local))
+    if _aw > SAIL_WIND_MAX:
+        wind_local = wind_local * (SAIL_WIND_MAX / _aw)
     grav_local = rot.T @ np.array([0.0, -9.81, 0.0])
 
     # Apparent wind angle off the bow; positive means the wind is on the
@@ -1642,6 +2227,7 @@ def pressed(key):
 
 
 def handle_keys(dt):
+    global day_speed
     bs = boat_state
     if ui is not None and ui.want_capture_keyboard:
         return
@@ -1674,6 +2260,13 @@ def handle_keys(dt):
         knob["course"] = math.degrees(bs["yaw"]) % 360.0
     if pressed("R"):
         reset_boat()
+    for i in range(len(ACTS)):
+        if pressed(str(i + 1)):
+            jump_to_act(i)
+    if pressed("N"):
+        wtarget["rain"] = 0.0 if wtarget["rain"] > 0.05 else 1.0
+    if pressed("K"):
+        day_speed = 0.0 if day_speed != 0.0 else 0.35   # 24 h in ~68 s
 
 
 def reset_boat():
@@ -1696,7 +2289,169 @@ def run_autopilot(dt):
     bs["rudder"] += max(-1.1 * dt, min(1.1 * dt, d))
 
 
+# --------------------------------------------------------------------------- #
+#  The world clock: sky, weather, lights, rain. Everything that is not the boat.
+# --------------------------------------------------------------------------- #
+world_time = 0.0
+_applied = {"cloud": None, "fog_h": None, "wind": None,
+            "wave": None, "choppy": None, "glow": None}
+
+
+def _ramp(dt):
+    """Chase the target weather. Seconds, not frames -- see RAMP_TAU."""
+    global _rain_was_on, _bow_timer
+    for k in WEATHER_KEYS:
+        a = 1.0 - math.exp(-dt / RAMP_TAU[k])
+        weather[k] += (wtarget[k] - weather[k]) * a
+    # Wetness lags the rain badly on the way down: a deck wets in seconds and
+    # dries in minutes, and that asymmetry is most of what sells "it rained".
+    wet_target = min(weather["rain"] * 1.25, 1.0)
+    tau = 6.0 if wet_target > weather["wetness"] else 45.0
+    weather["wetness"] += (wet_target - weather["wetness"]) * (1.0 - math.exp(-dt / tau))
+
+    # The rainbow is not a preset flag, it is a consequence: about 40 s of bow
+    # after the rain stops, and only while the sun is low enough to put the
+    # antisolar point above the sea.
+    raining = weather["rain"] > 0.30
+    if _rain_was_on and not raining:
+        _bow_timer = 40.0
+    _rain_was_on = raining
+    if _bow_timer > 0.0:
+        _bow_timer = max(0.0, _bow_timer - dt)
+        wtarget["rainbow"] = 1.0 if _bow_timer > 0.0 else 0.0
+
+
+def update_world(dt):
+    global world_time, time_of_day, _since_bake
+    world_time += dt
+    _since_bake += dt
+    if day_speed != 0.0:
+        time_of_day = (time_of_day + day_speed * dt) % 24.0
+    _ramp(dt)
+
+    cs = celestial(time_of_day)
+    apply_sky(cs)
+    murk = smoothstep(0.30, 0.92, weather["coverage"]) * min(weather["cloud_density"], 1.0)
+
+    # ---- sun: same atmosphere as the sky it hangs in -----------------------
+    sun.position.set(*(cs.sun_dir * 1200.0))
+    beta_r, beta_m, _ = scatter_coeffs(cs.sun_y, turbidity(weather))
+    fex = extinction(beta_r, beta_m, np.array([max(cs.sun_y, 0.0)], np.float32))[0]
+    max_c = float(fex.max())
+    if max_c > 1e-4:
+        # Normalised, or raw Beer-Lambert kills the low sun's energy along with
+        # its hue; then softened toward warm white, or the whole boat goes pink.
+        t = fex / max_c
+        t = t + (np.array([1.0, 0.80, 0.62], np.float32) - t) * 0.35
+        # ...and then further toward white as the sun climbs. The raw
+        # transmittance ratio at 48 deg is still (1, 0.78, 0.50), which is a
+        # sunset colour: the whole picture goes amber at noon and the eye reads
+        # the mismatch against a blue sky instantly.
+        t = t + (1.0 - t) * (0.55 * smoothstep(0.10, 0.55, cs.sun_y))
+    else:
+        t = np.array([1.0, 0.80, 0.62], np.float32)
+    sun.color = tp.Color(float(t[0]), float(t[1]), float(t[2]))
+    sun.intensity = (4.6 * smoothstep(-0.03, 0.12, cs.sun_y) * (0.35 + 0.65 * max_c)
+                     * (1.0 - 0.88 * murk))
+
+    moon.position.set(*(cs.moon_dir * 1200.0))
+    moon.intensity = 0.42 * cs.moon_up * (1.0 - cs.daylight) * (1.0 - 0.85 * murk)
+
+    # Stars only once the sun is well down, and never through a storm deck.
+    renderer.starfield = 1.15 * (1.0 - smoothstep(-0.18, -0.05, cs.sun_y)) * (1.0 - murk)
+
+    # ---- air: the fog is the sky's own horizon -----------------------------
+    knob["fog"] = weather["fog"]
+    scene.set_fog_exp2(horizon_color(cs, weather), knob["fog"])
+    if _applied["fog_h"] is None or abs(weather["fog_h"] - _applied["fog_h"]) > 1.0:
+        _applied["fog_h"] = knob["fog_h"] = weather["fog_h"]
+        renderer.set_height_fog(density=0.0, base_y=0.0,
+                                falloff=knob["fog_h"], noise_amount=0.45)
+
+    if _applied["cloud"] is None or abs(weather["coverage"] - _applied["cloud"]) > 0.006:
+        _applied["cloud"] = knob["cloud"] = weather["coverage"]
+        renderer.set_clouds(coverage=weather["coverage"], density=weather["cloud_density"],
+                            bottom_y=weather["deck_bottom"], top_y=weather["deck_top"],
+                            wind=tp.Vector3(6.0, 0.0, 3.0),
+                            evolve_speed=1.0 + 1.4 * murk)
+
+    # ---- sea ---------------------------------------------------------------
+    if _applied["wind"] is None or abs(weather["wind"] - knob["wind"]) > 0.05:
+        knob["wind"] = weather["wind"]
+        _applied["wind"] = weather["wind"]
+        if knob["sea_follows"]:
+            apply_ocean_wind()
+    if _applied["wave"] is None or abs(weather["wave_scale"] - knob["wave_scale"]) > 0.01:
+        _applied["wave"] = knob["wave_scale"] = weather["wave_scale"]
+        ocean.params.wave_scale = knob["wave_scale"]
+    if _applied["choppy"] is None or abs(weather["choppy"] - knob["choppy"]) > 0.01:
+        _applied["choppy"] = knob["choppy"] = weather["choppy"]
+        ocean.params.choppiness = knob["choppy"]
+
+    # ---- the light on the rock ---------------------------------------------
+    night = 1.0 - smoothstep(0.0, 0.30, cs.daylight)
+    ang = 2.0 * math.pi * (world_time / BEAM_PERIOD)
+    for k, (b, tg) in enumerate(zip(beams, beam_targets)):
+        a = ang + k * math.pi
+        tg.position.set(LANTERN[0] + 900.0 * math.sin(a), LANTERN[1] - 22.0,
+                        LANTERN[2] + 900.0 * math.cos(a))
+        b.intensity = BEAM_INTENSITY * night
+    glow = night * (1.0 + 0.05 * math.sin(world_time * 9.0) * math.sin(world_time * 3.7))
+    if _applied["glow"] is None or abs(glow - _applied["glow"]) > 0.015:
+        _applied["glow"] = glow
+        # Both of these are REAL light sources on Vulkan, and auto exposure
+        # lifts the night by up to 3 EV -- the pre-cycle constants (lamp 46,
+        # window 26) came back as a white-hot rock and one yellow smear along
+        # the deck once the eye was allowed to open.
+        lamp_mat.emissive_intensity = 3.0 + 19.0 * glow
+        lamp_mat.needs_update()
+        glass_mat.emissive_intensity = 9.0 * glow
+        glass_mat.needs_update()
+        on = 1.0 - smoothstep(0.35, 0.60, cs.daylight)
+        for m in nav_mats:
+            m.emissive_intensity = NAV_INTENSITY * on
+            m.needs_update()
+
+    # ---- rain --------------------------------------------------------------
+    amount = weather["rain"]
+    live = int(RAIN_CAP * min(max(amount, 0.0), 1.0))
+    rain.set_live_count(live)
+    if live > 0:
+        cp = camera.position
+        rain.set_follow_center(tp.Vector3(cp.x, cp.y, cp.z))
+        rain.set_emitter_time(world_time, dt)
+        # The quads are composited AFTER the upscalers and are NOT touched by
+        # auto exposure, so their brightness has to be walked against whatever
+        # exposure the scene is running at -- otherwise the rain that reads
+        # right at noon is invisible at midnight.
+        br = rain.billboard_repr
+        br.intensity = RAIN_BB_BASE * (1.0 + 4.5 * (1.0 - cs.daylight) ** 2)
+        dr = rain.density_repr
+        fc = rain.follow_center
+        dr.center = tp.Vector3(fc.x, 8.0, fc.z)
+        dr.sigma_per_particle = 0.014
+        dr.enabled = True
+    else:
+        rain.density_repr.enabled = False
+
+    apply_wetness(weather["wetness"])
+    return cs
+
+
+def jump_to_act(i):
+    """Keys 1-5: the five acts, each with its own hour and its own weather."""
+    global time_of_day
+    t, name = ACTS[i]
+    time_of_day = t
+    set_weather(name)
+    weather.update(PRESETS[name])          # a cut, not a dissolve
+    weather["wetness"] = 1.0 if weather["rain"] > 0.5 else 0.0
+    update_world(1e-4)
+    apply_sky(celestial(time_of_day), force=True)
+
+
 def draw_ui():
+    global time_of_day, day_speed
     bs = boat_state
     tp.imgui.set_next_window_pos(12, 12)
     tp.imgui.set_next_window_size(322, 0)
@@ -1736,33 +2491,51 @@ def draw_ui():
     _, knob["stiff"] = tp.imgui.slider_float("cloth stiffness", knob["stiff"], 0.15, 1.0)
     _, knob["rig_eff"] = tp.imgui.slider_float("rig efficiency", knob["rig_eff"], 0.5, 3.0)
     tp.imgui.text("A/D steer  Q/E main  Z/C jib  T trim  P pilot  R reset")
+    tp.imgui.text("1-5 acts   N rain   K time-lapse")
     tp.imgui.end()
 
     tp.imgui.set_next_window_pos(12, 470)
     tp.imgui.set_next_window_size(322, 0)
     tp.imgui.begin("Sea & sky")
+    _cs = celestial(time_of_day)
+    tp.imgui.text(f"{int(time_of_day):02d}:{int(time_of_day % 1.0 * 60):02d}   "
+                  f"sun {_cs.sun_elev_deg:+5.1f} deg   {weather_name}")
+    ch, time_of_day = tp.imgui.slider_float("time of day", time_of_day, 0.0, 24.0)
+    if ch:
+        apply_sky(celestial(time_of_day), force=True)
+    _, day_speed_on = tp.imgui.checkbox("time-lapse (K)", day_speed != 0.0)
+    day_speed = 0.35 if day_speed_on else 0.0
+    for i, name in enumerate(("mist", "clear", "overcast", "storm", "clearing", "night")):
+        if i:
+            tp.imgui.same_line()
+        if tp.imgui.button(name):
+            set_weather(name)
+    ch, wtarget["rain"] = tp.imgui.slider_float("rain", wtarget["rain"], 0.0, 1.0)
+    tp.imgui.text(f"rain {int(rain.live_count / 1000)}k live   "
+                  f"wet {weather['wetness']:.2f}   bow {weather['rainbow']:.2f}")
+    tp.imgui.separator()
     ch, knob["wave_scale"] = tp.imgui.slider_float("wave scale", knob["wave_scale"], 0.0, 2.0)
     if ch:
+        weather["wave_scale"] = wtarget["wave_scale"] = knob["wave_scale"]
         ocean.params.wave_scale = knob["wave_scale"]
     ch, knob["choppy"] = tp.imgui.slider_float("choppiness", knob["choppy"], 0.0, 1.0)
     if ch:
+        weather["choppy"] = wtarget["choppy"] = knob["choppy"]
         ocean.params.choppiness = knob["choppy"]
     _, knob["foam"] = tp.imgui.slider_float("wake foam", knob["foam"], 0.0, 2.0)
     tp.imgui.separator()
-    ch, knob["fog"] = tp.imgui.slider_float("fog density", knob["fog"], 0.0, 0.012)
+    ch, knob["fog"] = tp.imgui.slider_float("fog density", knob["fog"], 0.0, 0.016)
     if ch:
-        scene.set_fog_exp2(tp.Color(0.72, 0.74, 0.78), knob["fog"])
+        weather["fog"] = wtarget["fog"] = knob["fog"]
     ch, knob["fog_h"] = tp.imgui.slider_float("mist height (m)", knob["fog_h"], 8.0, 400.0)
     if ch:
-        renderer.set_height_fog(density=0.0, base_y=0.0,
-                                falloff=knob["fog_h"], noise_amount=0.45)
+        weather["fog_h"] = wtarget["fog_h"] = knob["fog_h"]
     ch, knob["fog_g"] = tp.imgui.slider_float("fog forward-scatter", knob["fog_g"], -0.9, 0.9)
     if ch:
         renderer.fog_anisotropy = knob["fog_g"]
     ch, knob["cloud"] = tp.imgui.slider_float("cloud cover", knob["cloud"], 0.0, 1.0)
     if ch:
-        renderer.set_clouds(coverage=knob["cloud"], density=1.0, bottom_y=380.0,
-                            top_y=1050.0, wind=tp.Vector3(6.0, 0.0, 3.0), evolve_speed=1.0)
+        weather["coverage"] = wtarget["coverage"] = knob["cloud"]
     tp.imgui.separator()
     tp.imgui.text(f"gulls: {gulls.flying_count()} flying, "
                   f"{gulls.perched_count()} on the rock")
@@ -1808,6 +2581,7 @@ canvas.on_window_resize(on_resize)
 def frame(dt):
     if not SHOT:
         handle_keys(dt)
+    update_world(dt)
     run_autopilot(dt)
     step_boat(dt)
     blow = math.radians(knob["wind_from"]) + math.pi
@@ -1818,13 +2592,30 @@ def frame(dt):
 
 if SHOT:
     frames = int(round(SHOT_T * 60.0))
+    # Where the still looks. `islet` is the demo's own framing; `sun` and
+    # `anti` swing the camera round the boat so the shot is either INTO the
+    # light (glitter path, sail translucency) or away from it, which is the
+    # only half of the sky a rainbow -- or a moon opposite the sun -- lives in.
+    FACE = cli_arg("--face", "islet", str)
     for f in range(frames):
         frame(1.0 / 60.0)
         # Orbit slowly so the still is not shot from the launch pose.
         # Stand off her starboard quarter so the boat sits against the light.
         bx, bz = boat_state["x"], boat_state["z"]
-        camera.position.set(bx + 27.0, 10.5, bz - 20.0)
-        camera.look_at(bx * 0.35 + ISLET_X * 0.65, 7.0, bz * 0.35 + ISLET_Z * 0.65)
+        if FACE in ("sun", "anti"):
+            cs_ = celestial(time_of_day)
+            hz = cs_.sun_dir[[0, 2]]
+            hz = hz / max(float(np.linalg.norm(hz)), 1e-6)
+            if FACE == "anti":
+                hz = -hz
+            camera.position.set(bx - hz[0] * 30.0, 11.0, bz - hz[1] * 30.0)
+            # Pitched well up: the primary bow's apex sits 42.5 deg above the
+            # ANTISOLAR point, so at a low sun it is most of the way to the
+            # zenith and a level camera frames only its shoulders.
+            camera.look_at(bx + hz[0] * 260.0, 62.0, bz + hz[1] * 260.0)
+        else:
+            camera.position.set(bx + 27.0, 10.5, bz - 20.0)
+            camera.look_at(bx * 0.35 + ISLET_X * 0.65, 7.0, bz * 0.35 + ISLET_Z * 0.65)
         renderer.render(scene, camera)        # keeps the temporal history honest
         first_render_done = True
     # Let the accumulation settle on the final pose before the read-back.
