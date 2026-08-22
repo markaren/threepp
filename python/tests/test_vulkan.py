@@ -253,6 +253,21 @@ def test_ocean_is_displaced_mesh_with_knobs():
     # foam API is callable
     ocean.add_foam_disturbance(0.0, 0.0, 2.0, 1.0)
     ocean.clear_foam_disturbances()
+    # the vessel pair: hull exclusion (incl. the waterline plane) + wake trail
+    ocean.hull_exclusion.set_pose(4.0, -3.0, 0.7, yaw=0.5, pitch=0.04, roll=-0.2,
+                                  half_length=4.8, half_beam=1.5)
+    h = ocean.hull_exclusion
+    assert (h.center_x, h.center_z, h.center_y) == pytest.approx((4.0, -3.0, 0.7))
+    assert (h.pitch, h.roll, h.half_length) == pytest.approx((0.04, -0.2, 4.8))
+    assert h.sin_yaw == pytest.approx(math.sin(0.5))
+    ocean.wake.forward_speed = 3.2
+    ocean.add_wake_sample(4.0, -3.0, h.sin_yaw, h.cos_yaw, 3.2)
+    assert ocean.age_wake(0.5) == 1 and ocean.wake.trail[0].age == pytest.approx(0.5)
+    assert ocean.age_wake(10.0) == 0          # aged past max_age -> dropped
+    # sampleWakeHeight runs off the CURRENT pose even with an empty trail
+    assert ocean.sample_wake_height(6.0, -3.0) > 0.0
+    ocean.wake.forward_speed = 0.0            # below the speed gate -> no wake
+    assert ocean.sample_wake_height(6.0, -3.0) == pytest.approx(0.0)
 
 
 def test_ocean_renders_and_displaces(vk_renderer):

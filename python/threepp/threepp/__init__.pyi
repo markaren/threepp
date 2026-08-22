@@ -1367,6 +1367,79 @@ class DirectionalLightHelper(Object3D):
     def update(self) -> None:
         ...
 class DisplacedMesh(Mesh):
+    class HullExclusion:
+        def set_pose(self, x: typing.SupportsFloat | typing.SupportsIndex, z: typing.SupportsFloat | typing.SupportsIndex, y: typing.SupportsFloat | typing.SupportsIndex = 0.0, yaw: typing.SupportsFloat | typing.SupportsIndex = 0.0, pitch: typing.SupportsFloat | typing.SupportsIndex = 0.0, roll: typing.SupportsFloat | typing.SupportsIndex = 0.0, half_length: typing.SupportsFloat | typing.SupportsIndex = -1.0, half_beam: typing.SupportsFloat | typing.SupportsIndex = -1.0) -> None:
+            """
+            One-call per-frame update: world XZ, waterline height, heading (rad, 0 = +Z) and the two plane angles. half_length/half_beam are left alone when negative, so the usual pattern is to set them once and then call set_pose(x, z, y, yaw, pitch, roll) every frame.
+            """
+        @property
+        def center_x(self) -> float:
+            """
+            World X of the hull's centre (the exclusion origin).
+            """
+        @center_x.setter
+        def center_x(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+            ...
+        @property
+        def center_y(self) -> float:
+            """
+            World Y of the hull's DESIGN WATERLINE at (center_x, center_z) — the height the water should meet the hull at, not the deck. 0 (the default) = the ocean rest plane, i.e. the pre-2026-08 behaviour.
+            """
+        @center_y.setter
+        def center_y(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+            ...
+        @property
+        def center_z(self) -> float:
+            ...
+        @center_z.setter
+        def center_z(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+            ...
+        @property
+        def cos_yaw(self) -> float:
+            ...
+        @cos_yaw.setter
+        def cos_yaw(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+            ...
+        @property
+        def half_beam(self) -> float:
+            """
+            Half the beam (m).
+            """
+        @half_beam.setter
+        def half_beam(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+            ...
+        @property
+        def half_length(self) -> float:
+            """
+            Half the vessel's length (m). 0 DISABLES hull exclusion and the wake.
+            """
+        @half_length.setter
+        def half_length(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+            ...
+        @property
+        def pitch(self) -> float:
+            """
+            Waterline-plane pitch (rad), POSITIVE = bow up. Clamped to +/-1 rad.
+            """
+        @pitch.setter
+        def pitch(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+            ...
+        @property
+        def roll(self) -> float:
+            """
+            Waterline-plane roll (rad), POSITIVE = starboard up. Clamped to +/-1 rad.
+            """
+        @roll.setter
+        def roll(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+            ...
+        @property
+        def sin_yaw(self) -> float:
+            """
+            sin/cos of the heading: forward = (sin_yaw, cos_yaw), starboard = (cos_yaw, -sin_yaw).
+            """
+        @sin_yaw.setter
+        def sin_yaw(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+            ...
     class MeshWarp:
         @property
         def center_x(self) -> float:
@@ -1485,6 +1558,69 @@ class DisplacedMesh(Mesh):
         @wind_theta.setter
         def wind_theta(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
             ...
+    class VesselWake:
+        enabled: bool
+        @property
+        def forward_speed(self) -> float:
+            """
+            m/s along +heading. The whole wake fades out below ~0.5 m/s; 0 disables it.
+            """
+        @forward_speed.setter
+        def forward_speed(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+            ...
+        @property
+        def trail(self) -> list[DisplacedMesh.WakeSample]:
+            """
+            Historical pose snapshots (list of WakeSample). Reading COPIES and writing REPLACES — mutating the returned list does not write through. Use mesh.add_wake_sample()/age_wake() for the per-frame path.
+            """
+        @trail.setter
+        def trail(self, arg0: collections.abc.Sequence[DisplacedMesh.WakeSample]) -> None:
+            ...
+    class WakeSample:
+        def __init__(self) -> None:
+            ...
+        def __repr__(self) -> str:
+            ...
+        @property
+        def age(self) -> float:
+            """
+            Seconds since emission.
+            """
+        @age.setter
+        def age(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+            ...
+        @property
+        def cos_yaw(self) -> float:
+            ...
+        @cos_yaw.setter
+        def cos_yaw(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+            ...
+        @property
+        def sin_yaw(self) -> float:
+            ...
+        @sin_yaw.setter
+        def sin_yaw(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+            ...
+        @property
+        def speed(self) -> float:
+            """
+            m/s along +heading at emission.
+            """
+        @speed.setter
+        def speed(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+            ...
+        @property
+        def world_x(self) -> float:
+            ...
+        @world_x.setter
+        def world_x(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+            ...
+        @property
+        def world_z(self) -> float:
+            ...
+        @world_z.setter
+        def world_z(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+            ...
     def __init__(self, geometry: BufferGeometry, material: typing.Any) -> None:
         """
         Low-level constructor. Most callers want Ocean instead, which builds the plane + water material + cascade defaults for you.
@@ -1493,15 +1629,41 @@ class DisplacedMesh(Mesh):
         """
         Splat a gaussian foam blob at a world XZ (radius m, intensity in [0,1]).
         """
+    def add_wake_sample(self, x: typing.SupportsFloat | typing.SupportsIndex, z: typing.SupportsFloat | typing.SupportsIndex, sin_yaw: typing.SupportsFloat | typing.SupportsIndex, cos_yaw: typing.SupportsFloat | typing.SupportsIndex, speed: typing.SupportsFloat | typing.SupportsIndex, max_samples: typing.SupportsInt | typing.SupportsIndex = 64) -> None:
+        """
+        Emit one wake snapshot at the vessel's current pose (age 0), dropping the oldest once the trail is full. The renderer's hard cap is 64 samples; overflow beyond it is dropped silently on upload. The C++ showcase's cadence is 10 Hz OR every 1 m travelled, whichever fires first.
+        """
+    def age_wake(self, dt: typing.SupportsFloat | typing.SupportsIndex, max_age: typing.SupportsFloat | typing.SupportsIndex = 6.0, max_samples: typing.SupportsInt | typing.SupportsIndex = 64) -> int:
+        """
+        Age every trail sample by dt, drop anything older than max_age, and keep at most max_samples (newest). Returns the surviving count. Call once per frame.
+        """
     def clear_foam_disturbances(self) -> None:
         ...
+    def clear_wake(self) -> None:
+        """
+        Drop the whole trail (e.g. after teleporting the vessel, so the wake does not stretch across the map).
+        """
     def sample_height(self, world_x: typing.SupportsFloat | typing.SupportsIndex, world_z: typing.SupportsFloat | typing.SupportsIndex, cascade_mask: typing.SupportsInt | typing.SupportsIndex = 7) -> float:
         """
         Combined wave height (m) at a world XZ. cascade_mask selects cascades (bit i = cascade i). Returns 0 until a Vulkan render() has run.
         """
+    def sample_wake_height(self, world_x: typing.SupportsFloat | typing.SupportsIndex, world_z: typing.SupportsFloat | typing.SupportsIndex) -> float:
+        """
+        CPU mirror of the shader's wake height (bow bump + bow V-wedge + the trail-summed Kelvin V) at a world XZ. 0 with no active vessel or below the speed gate. Add to sample_height() to make a buoy bob through a passing wake.
+        """
+    @property
+    def hull_exclusion(self) -> DisplacedMesh.HullExclusion:
+        """
+        The vessel's footprint + waterline plane; set each frame before render(). half_length = 0 (the default) disables it AND the wake.
+        """
     @property
     def params(self) -> DisplacedMesh.Params:
         ...
+    @property
+    def wake(self) -> DisplacedMesh.VesselWake:
+        """
+        Kelvin V-wake / bow bump / foam trail. Shares the hull_exclusion pose, so set that first.
+        """
     @property
     def warp(self) -> DisplacedMesh.MeshWarp:
         ...
