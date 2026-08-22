@@ -858,6 +858,19 @@ namespace threepp::vulkan {
         // to BGRA8 swap targets without declaring rgba8 (which would mismatch
         // the underlying VkImageView format and produce a validation warning).
         features2.features.shaderStorageImageWriteWithoutFormat = VK_TRUE;
+        // ...and READS without a format qualifier, for the one pass that loads
+        // the BGRA8 swapchain back in (event_shade.comp's Final source). Not
+        // mandatory like the write side — the renderer runs without it and
+        // the event camera falls back to its G-buffer proxy — so query first
+        // and enable only when the device has it (every desktop GPU and
+        // lavapipe do).
+        {
+            VkPhysicalDeviceFeatures sup{};
+            vkGetPhysicalDeviceFeatures(physicalDevice_, &sup);
+            storageImageReadWithoutFormat_ = sup.shaderStorageImageReadWithoutFormat == VK_TRUE;
+            features2.features.shaderStorageImageReadWithoutFormat =
+                    storageImageReadWithoutFormat_ ? VK_TRUE : VK_FALSE;
+        }
         // Per-attachment color-blend on the gbuffer MRT: the decal pipeline
         // blends only the albedo attachment (SRC_ALPHA) while the other targets
         // stay non-blended. Without independentBlend, all

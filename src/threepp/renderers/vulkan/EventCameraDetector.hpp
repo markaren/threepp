@@ -73,6 +73,13 @@ namespace threepp::vulkan {
         // first frame, no spurious burst of events).
         void resize(uint32_t width, uint32_t height);
 
+        // Re-latch the per-pixel log-intensity reference on the next
+        // record(): that frame stores the reference and emits nothing, like
+        // the first frame after resize(). No GPU work, no reallocation —
+        // for source switches (proxy ↔ final frame) whose luma jump is not
+        // scene motion and must not read as a whole-frame burst.
+        void resetReference() { firstFrame_ = true; }
+
         // Record the compute dispatch (sceneCaptureBuf → logHistory +
         // accumulator) plus the accumulator-to-ring copy. The caller is
         // responsible for ensuring sceneCaptureBuf was populated earlier

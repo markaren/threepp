@@ -3018,9 +3018,11 @@ void VulkanRenderer::Impl::recordSceneCapture(VkCommandBuffer cb, uint32_t image
 void VulkanRenderer::Impl::createEventShadePipeline() {
             if (eventShadePipeline_ != VK_NULL_HANDLE) return;
 
-            // 5 bindings: gbufNormal, gbufIds (combined image samplers),
-            // matDesc (storage buffer), lightsUbo (uniform), lumaBuf (storage).
-            std::array<VkDescriptorSetLayoutBinding, 5> b{};
+            // 6 bindings: gbufNormal, gbufIds (combined image samplers),
+            // matDesc (storage buffer), lightsUbo (uniform), lumaBuf (storage),
+            // finalImg (storage image — the acquired swapchain image, read by
+            // the Final source; bound every frame, unused under Shaded).
+            std::array<VkDescriptorSetLayoutBinding, 6> b{};
             b[0].binding         = 0;
             b[0].descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
             b[0].descriptorCount = 1;
@@ -3041,6 +3043,10 @@ void VulkanRenderer::Impl::createEventShadePipeline() {
             b[4].descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
             b[4].descriptorCount = 1;
             b[4].stageFlags      = VK_SHADER_STAGE_COMPUTE_BIT;
+            b[5].binding         = 5;
+            b[5].descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+            b[5].descriptorCount = 1;
+            b[5].stageFlags      = VK_SHADER_STAGE_COMPUTE_BIT;
 
             VkDescriptorSetLayoutCreateInfo dlci{};
             dlci.sType        = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
@@ -3052,8 +3058,9 @@ void VulkanRenderer::Impl::createEventShadePipeline() {
             struct ShadePC {
                 uint32_t width;
                 uint32_t height;
-                uint32_t gbufWidth;
-                uint32_t gbufHeight;
+                uint32_t srcWidth;
+                uint32_t srcHeight;
+                uint32_t source;
             };
             VkPushConstantRange pcr{};
             pcr.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
@@ -3098,13 +3105,15 @@ void VulkanRenderer::Impl::createEventShadePipeline() {
             // (VUID-vkUpdateDescriptorSets-None-03047) — the GPU then reads the
             // racing update's wrong-frame gbuf, which was the event-camera
             // "binary flicker". Pool sizes scale with the set count.
-            std::array<VkDescriptorPoolSize, 3> ps{};
+            std::array<VkDescriptorPoolSize, 4> ps{};
             ps[0].type            = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
             ps[0].descriptorCount = 2 * kFramesInFlight;
             ps[1].type            = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
             ps[1].descriptorCount = 2 * kFramesInFlight;
             ps[2].type            = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
             ps[2].descriptorCount = 1 * kFramesInFlight;
+            ps[3].type            = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+            ps[3].descriptorCount = 1 * kFramesInFlight;
             VkDescriptorPoolCreateInfo dpci{};
             dpci.sType         = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
             dpci.maxSets       = kFramesInFlight;
@@ -3136,9 +3145,13 @@ void VulkanRenderer::Impl::allocateEventLumaBuffer(uint32_t w, uint32_t h) {
             eventLumaH_ = h;
         }
 
-void VulkanRenderer::Impl::recordEventShade(VkCommandBuffer cb, uint32_t frame) {
+void VulkanRenderer::Impl::recordEventShade(VkCommandBuffer cb, uint32_t frame, uint32_t imageIndex) {
             if (eventShadePipeline_ == VK_NULL_HANDLE ||
                 eventLumaBuf_.handle == VK_NULL_HANDLE) return;
+
+            const EventCameraSource source = effectiveEventCamSource();
+            const VkImage     swapImg  = ctx->swapchainImages()[imageIndex];
+            const VkImageView swapView = ctx->swapchainImageViews()[imageIndex];
 
             // Per-frame descriptor writes. Cheap; no descriptor indexing
             // shenanigans needed.
@@ -3169,12 +3182,21 @@ void VulkanRenderer::Impl::recordEventShade(VkCommandBuffer cb, uint32_t frame) 
             lumaInfo.offset = 0;
             lumaInfo.range  = VK_WHOLE_SIZE;
 
+            // The Final source's input: the acquired swapchain image, which
+            // holds the presented frame by the time the record tail runs
+            // (TAA/upscale/post-composite have written it) and sits in
+            // GENERAL. Bound every frame regardless of source — the shader
+            // statically references it, so the descriptor must be valid.
+            VkDescriptorImageInfo finalInfo{};
+            finalInfo.imageView   = swapView;
+            finalInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+
             // The inFlight[frame] fence was waited on at the top of
             // beginDeferredFrame, so this frame's prior use of its own
             // descriptor set has retired — updating it here can't race the
             // other in-flight frame's set.
             VkDescriptorSet ds = eventShadeDescSets_[frame];
-            std::array<VkWriteDescriptorSet, 5> w{};
+            std::array<VkWriteDescriptorSet, 6> w{};
             for (auto& it : w) it.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
             w[0].dstSet = ds;
             w[0].dstBinding = 0;
@@ -3201,10 +3223,43 @@ void VulkanRenderer::Impl::recordEventShade(VkCommandBuffer cb, uint32_t frame) 
             w[4].descriptorCount = 1;
             w[4].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
             w[4].pBufferInfo = &lumaInfo;
+            w[5].dstSet = ds;
+            w[5].dstBinding = 5;
+            w[5].descriptorCount = 1;
+            w[5].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+            w[5].pImageInfo = &finalInfo;
 
             vkUpdateDescriptorSets(ctx->device(),
                                     static_cast<uint32_t>(w.size()), w.data(),
                                     0, nullptr);
+
+            if (source == EventCameraSource::Final) {
+                // The swapchain was last written by the resolve/post chain
+                // (compute storage writes; transfer covers the upscaler and
+                // eventsOnly's clear defensively). Make those writes visible
+                // to this dispatch's storage-image loads. GENERAL → GENERAL:
+                // the downstream view-composite / overlay / present barriers
+                // all source from COMPUTE, which orders our read before their
+                // writes (WAR needs only the execution dependency).
+                VkImageMemoryBarrier toRead{};
+                toRead.sType               = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+                toRead.oldLayout           = VK_IMAGE_LAYOUT_GENERAL;
+                toRead.newLayout           = VK_IMAGE_LAYOUT_GENERAL;
+                toRead.srcAccessMask       = VK_ACCESS_SHADER_WRITE_BIT |
+                                             VK_ACCESS_TRANSFER_WRITE_BIT;
+                toRead.dstAccessMask       = VK_ACCESS_SHADER_READ_BIT;
+                toRead.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+                toRead.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+                toRead.image               = swapImg;
+                toRead.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+                toRead.subresourceRange.levelCount = 1;
+                toRead.subresourceRange.layerCount = 1;
+                vkCmdPipelineBarrier(cb,
+                                     VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT |
+                                             VK_PIPELINE_STAGE_TRANSFER_BIT,
+                                     VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                                     0, 0, nullptr, 0, nullptr, 1, &toRead);
+            }
 
             vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, eventShadePipeline_);
             vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_COMPUTE,
@@ -3213,14 +3268,24 @@ void VulkanRenderer::Impl::recordEventShade(VkCommandBuffer cb, uint32_t frame) 
             struct ShadePC {
                 uint32_t width;       // sensor (output) dims
                 uint32_t height;
-                uint32_t gbufWidth;   // gbuf (input) dims — gbuf is sized to
-                uint32_t gbufHeight;  // the render extent (≤ swapchain)
+                uint32_t srcWidth;    // source dims: the gbuf (render extent,
+                uint32_t srcHeight;   // ≤ swapchain) for Shaded, the swapchain
+                                      // (display extent) for Final
+                uint32_t source;      // 0 = Shaded proxy, 1 = Final frame
             } pc{};
             pc.width  = eventLumaW_;
             pc.height = eventLumaH_;
-            const VkExtent2D rext = renderExtent();
-            pc.gbufWidth  = rext.width;
-            pc.gbufHeight = rext.height;
+            if (source == EventCameraSource::Final) {
+                const VkExtent2D sext = ctx->swapchainExtent();
+                pc.srcWidth  = sext.width;
+                pc.srcHeight = sext.height;
+                pc.source    = 1u;
+            } else {
+                const VkExtent2D rext = renderExtent();
+                pc.srcWidth  = rext.width;
+                pc.srcHeight = rext.height;
+                pc.source    = 0u;
+            }
             vkCmdPushConstants(cb, eventShadePipelineLayout_, VK_SHADER_STAGE_COMPUTE_BIT,
                                 0, sizeof(pc), &pc);
 

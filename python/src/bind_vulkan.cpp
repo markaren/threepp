@@ -700,12 +700,14 @@ namespace threepp_py {
                               "returns to the wall clock, which is what a live window wants.")
                 // ── GPU event camera (DVS) ───────────────────────────────
                 // A per-pixel log-intensity crossing detector (the ESIM model)
-                // running as a compute pass on the renderer's own deterministic
-                // shade of the raster G-buffer. Enabling it marks material
-                // samplers dirty and gates TAA jitter off (the detector must not
-                // see jitter as scene motion), so flip it at a CUT and give it a
-                // few frames to settle its per-pixel reference — the first frame
-                // after enabling only latches the reference and emits nothing.
+                // running as a compute pass on either the renderer's own
+                // deterministic shade of the raster G-buffer or the final frame
+                // (event_camera_source). Enabling it marks material samplers
+                // dirty and, on the 'shaded' source, gates TAA jitter off (that
+                // detector must not see jitter as scene motion), so flip it at
+                // a CUT and give it a few frames to settle its per-pixel
+                // reference — the first frame after enabling only latches the
+                // reference and emits nothing.
                 .def_property("event_camera_enabled",
                               [](PyVulkanRenderer& r) { return r.native().eventCameraEnabled(); },
                               [](PyVulkanRenderer& r, bool v) { r.native().setEventCameraEnabled(v); },
@@ -830,7 +832,33 @@ namespace threepp_py {
                               [](PyVulkanRenderer& r, bool v) { r.native().setEventsOnlyMode(v); },
                               "Present the event visualisation INSTEAD of the shaded scene.\n"
                               "Leave it off if you also want read_pixels()/AOVs from the same\n"
-                              "frames — the detector runs either way.")
+                              "frames — the detector runs either way. Forces the 'shaded'\n"
+                              "event_camera_source (no final frame exists to read).")
+                .def_property("event_camera_source",
+                              [](PyVulkanRenderer& r) -> std::string {
+                                  switch (r.native().eventCameraSource()) {
+                                      case VulkanRenderer::EventCameraSource::Final: return "final";
+                                      default: return "shaded";
+                                  }
+                              },
+                              [](PyVulkanRenderer& r, const std::string& v) {
+                                  if (v == "shaded") r.native().setEventCameraSource(VulkanRenderer::EventCameraSource::Shaded);
+                                  else if (v == "final") r.native().setEventCameraSource(VulkanRenderer::EventCameraSource::Final);
+                                  else throw std::invalid_argument("event_camera_source: expected 'shaded' or 'final'");
+                              },
+                              "What the detector looks at. 'shaded' (default): a deterministic\n"
+                              "Lambert proxy of the raster G-buffer — directional lights +\n"
+                              "ambient + emissive, no specular / transmission / point lights /\n"
+                              "GI. Noise-free and jitter-free (a static scene emits nothing),\n"
+                              "but only silhouettes and diffuse texture fire: water glitter,\n"
+                              "backlit sails and light flashes are invisible to it. 'final': the\n"
+                              "presented frame — the same pixels read_pixels() returns, post\n"
+                              "TAA / upscale / tonemap — box-averaged to the sensor resolution\n"
+                              "(a DVS pixel integrates its photodiode area). Everything the\n"
+                              "picture shows fires; it inherits the picture's temporal residue\n"
+                              "(denoiser, auto-exposure drift) and TAA jitter stays on. A switch\n"
+                              "while enabled re-latches the per-pixel reference on the next\n"
+                              "frame (no burst). Ignored under events_only_mode.")
                 // Per-frame CPU/GPU pass timings (milliseconds) — see
                 // VulkanRenderer::FrameTimings. For perf triage from python.
                 .def_property_readonly("frame_timings",

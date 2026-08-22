@@ -962,12 +962,14 @@ bool VulkanRenderer::Impl::beginDeferredFrame(Object3D& scene, Camera& camera) {
             }
 
             // GPU event camera detection. Run event_shade first to fill
-            // eventLumaBuf_ with deterministic Lambert lighting from the
-            // gbuf (eliminates stochastic shading noise as a source of false
-            // events), then dispatch the detector against that buffer.
+            // eventLumaBuf_ — with deterministic Lambert lighting from the
+            // gbuf (Shaded source: no stochastic shading noise as a source of
+            // false events) or with a box-average of the final frame now
+            // sitting in the swapchain (Final source: everything the picture
+            // shows fires) — then dispatch the detector against that buffer.
             if (eventCamEnabled_ && eventCam_ &&
                 eventShadePipeline_ != VK_NULL_HANDLE) {
-                recordEventShade(cmdBuffers[currentFrame], currentFrame);
+                recordEventShade(cmdBuffers[currentFrame], currentFrame, imageIndex);
                 eventCam_->record(cmdBuffers[currentFrame],
                                   eventLumaBuf_.handle,
                                   eventCamParams_);

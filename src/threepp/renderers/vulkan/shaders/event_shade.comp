@@ -1,43 +1,53 @@
 #version 460
 #extension GL_EXT_scalar_block_layout : require
 #extension GL_GOOGLE_include_directive : enable
+// Format-less image LOADS (finalImg below) — SPIR-V StorageImageReadWithoutFormat.
+#extension GL_EXT_shader_image_load_formatted : require
 
-// Fast deterministic shader for the event-camera path. Reads the hybrid
-// raster G-buffer (normal + instanceCustomIndex), looks up the hit's
-// MaterialDesc, and shades it with the scene's directional lights only —
-// no shadows, no bounces, no path tracing. Output is packed BGRA8
-// (matching swapchain format) in the same buffer event_detect.comp would
-// otherwise read from the stochastic-noise swapchain copy (deferred_shade.comp's
-// 1-2 spp reflections/GI), so the downstream
-// detector pipeline is unchanged.
+// Source pass for the event-camera path: fills the sensor-resolution
+// packed-BGRA8 buffer that event_detect.comp compares frame-to-frame.
+// Two sources, selected per dispatch by pc.source:
 //
-// What's modelled:
-//   • Lambertian diffuse:  albedo · max(0, N·L) · lightColor, summed over
-//     up to 8 directional lights.
-//   • Ambient: lights.ambient · albedo.
-//   • Emissive: mat.emissive · mat.emissiveIntensity (so glowing surfaces
-//     light up the event accumulator when they appear / move).
-//   • Metalness damping on the diffuse: metals lose most of their light
-//     to the specular lobe we deliberately don't compute here. Better
-//     to under-shade chrome than to fake a noisy specular term.
+//   SOURCE_SHADED (0) — a fast deterministic proxy. Reads the hybrid raster
+//   G-buffer (normal + instanceCustomIndex), looks up the hit's MaterialDesc,
+//   and shades it with the scene's directional lights only — no shadows, no
+//   bounces, no path tracing. Nothing stochastic reaches the detector, so
+//   the 1-2 spp reflections/GI of deferred_shade.comp can never read as
+//   events; the cost is that only silhouettes, diffuse texture and emissive
+//   surfaces fire.
+//     What's modelled:
+//       • Lambertian diffuse:  albedo · max(0, N·L) · lightColor, summed
+//         over up to 8 directional lights.
+//       • Ambient: lights.ambient · albedo.
+//       • Emissive: mat.emissive · mat.emissiveIntensity (so glowing
+//         surfaces light up the event accumulator when they appear / move).
+//       • Metalness damping on the diffuse: metals lose most of their light
+//         to the specular lobe we deliberately don't compute here. Better
+//         to under-shade chrome than to fake a noisy specular term.
+//     What's NOT modelled (intentional, for sim-to-real noise reasons):
+//       • Specular highlights, shadows, indirect/GI, transmission, point and
+//         spot lights — each would need ray traces or screen-space hacks,
+//         i.e. the noisy stochastic branch this source exists to avoid.
 //
-// What's NOT modelled (intentional, for sim-to-real noise reasons):
-//   • Specular highlights — they'd require either ray-traced reflections
-//     (slow) or screen-space hacks (noisy). Real DVS sensors smooth most
-//     specular flicker via their photoreceptor bandwidth, so leaving it
-//     out matches the typical event signature better than approximating.
-//   • Shadows — would need ray traces, defeating the "fast deterministic"
-//     point. Static shadow edges don't fire DVS events anyway; only
-//     moving shadows do, and those are caught downstream by detecting
-//     events on the surfaces the shadow sweeps across.
-//   • Indirect / GI — by definition, the stochastic branch we're avoiding.
+//   SOURCE_FINAL (1) — the presented frame: the post-TAA / upscaled /
+//   tonemapped swapchain image, the same pixels readRGBPixels returns.
+//   Everything the picture shows fires (water glitter, backlit cloth,
+//   light flashes, shadows sweeping). Box-averaged down to the sensor
+//   resolution — a DVS pixel integrates over its photodiode, and
+//   point-sampling a 1080p frame to 640×360 would alias fine detail into a
+//   shimmer that fires from nothing but the resampler. Inherits the
+//   picture's temporal residue (denoiser, auto-exposure drift); TAA has
+//   already resolved the raster jitter, so that gate stays open.
 //
-// The output deliberately matches the swapchain BGRA8 layout so the
-// existing event_detect.comp consumes it without modification.
+// The output deliberately matches the swapchain BGRA8 layout so
+// event_detect.comp consumes either source without modification.
 
 #include "vulkan_shared.h"
 
 layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+
+const uint SOURCE_SHADED = 0u;
+const uint SOURCE_FINAL  = 1u;
 
 layout(set = 0, binding = 0) uniform sampler2D  gbufNormal;
 layout(set = 0, binding = 1) uniform usampler2D gbufIds;
@@ -96,26 +106,42 @@ layout(set = 0, binding = 4, scalar) writeonly buffer LumaBuf {
     uint pixels[];
 };
 
+// The acquired swapchain image (GENERAL layout), read by the Final source.
+// No format qualifier: the swapchain is VK_FORMAT_B8G8R8A8_UNORM and GLSL
+// has no bgra8 qualifier — declaring rgba8 mismatches the bound view
+// (Undefined-Value-StorageImage-FormatMismatch-ImageView). Loading without
+// a format needs shaderStorageImageReadWithoutFormat (enabled at device
+// creation when available; the host falls back to SOURCE_SHADED otherwise,
+// so this image is never loaded on a device that lacks it). Channel names
+// still map by component, so .r is red regardless of the in-memory order.
+// Always bound — harmlessly unused under SOURCE_SHADED.
+layout(set = 0, binding = 5) uniform readonly image2D finalImg;
+
 layout(push_constant) uniform Pc {
     uint width;       // sensor (output) extent — drives the dispatch
     uint height;
-    uint gbufWidth;   // gbuf (input) extent — may exceed sensor when the
-    uint gbufHeight;  // user has set a sub-swapchain sensor resolution
+    uint srcWidth;    // source extent — the gbuf (render extent) for SHADED,
+    uint srcHeight;   // the swapchain for FINAL; may exceed the sensor when
+                      // the user has set a sub-swapchain sensor resolution
+    uint source;      // SOURCE_SHADED / SOURCE_FINAL
 } pc;
 
-void main() {
-    const ivec2 pix = ivec2(gl_GlobalInvocationID.xy);
-    if (pix.x >= int(pc.width) || pix.y >= int(pc.height)) return;
+// Upper bound on the Final source's box-filter taps per axis. 1080p →
+// 640×360 is a 3×3 box; a 16×16 sensor on a 4K frame would be 240×135
+// taps per pixel, so past 8 per axis the footprint is strided instead of
+// walked — still an area sample, just a sparser one.
+const uint kMaxBoxTaps = 8u;
 
+vec3 shadeProxy(ivec2 pix) {
     // Map sensor-space pixel → gbuf-space texel (nearest-centre). When
-    // gbufW/H == sensorW/H this collapses to identity. Nearest sampling
+    // srcW/H == sensorW/H this collapses to identity. Nearest sampling
     // for both attachments: ids MUST be NN (usampler can't do LINEAR);
     // normal at < 2× downsample is visually indistinguishable from a
     // bilinear filter for the events output (the detector cares about
     // silhouette stability, not surface gradient).
     const ivec2 srcPix = ivec2(
-        int((float(pix.x) + 0.5) * float(pc.gbufWidth)  / float(pc.width)),
-        int((float(pix.y) + 0.5) * float(pc.gbufHeight) / float(pc.height))
+        int((float(pix.x) + 0.5) * float(pc.srcWidth)  / float(pc.width)),
+        int((float(pix.y) + 0.5) * float(pc.srcHeight) / float(pc.height))
     );
     const uvec4 ids = texelFetch(gbufIds, srcPix, 0);
     const uint  instCustomIdx = ids.r;
@@ -145,11 +171,46 @@ void main() {
         // emissive features (LEDs, indicator lights, displays).
         color += mat.emissive * max(0.0, mat.emissiveIntensity);
     }
+    return color;
+}
 
-    color = clamp(color, vec3(0.0), vec3(1.0));
-    const uint r = uint(color.r * 255.0);
-    const uint g = uint(color.g * 255.0);
-    const uint b = uint(color.b * 255.0);
+vec3 sampleFinal(ivec2 pix) {
+    // The sensor pixel's footprint on the source image, [x0, x1) × [y0, y1).
+    // Integer bounds from the exact ratio, so the footprints of adjacent
+    // sensor pixels tile the source with no gap and no overlap; at least one
+    // texel each so an upscaled (larger-than-source) sensor still samples.
+    const uint x0 = (uint(pix.x) * pc.srcWidth) / pc.width;
+    const uint y0 = (uint(pix.y) * pc.srcHeight) / pc.height;
+    const uint x1 = max(x0 + 1u, ((uint(pix.x) + 1u) * pc.srcWidth) / pc.width);
+    const uint y1 = max(y0 + 1u, ((uint(pix.y) + 1u) * pc.srcHeight) / pc.height);
+    const uint fw = x1 - x0;
+    const uint fh = y1 - y0;
+    const uint sx = max(1u, (fw + kMaxBoxTaps - 1u) / kMaxBoxTaps);
+    const uint sy = max(1u, (fh + kMaxBoxTaps - 1u) / kMaxBoxTaps);
+
+    vec3  sum = vec3(0.0);
+    float n   = 0.0;
+    for (uint y = y0; y < y1; y += sy) {
+        for (uint x = x0; x < x1; x += sx) {
+            sum += imageLoad(finalImg, ivec2(int(x), int(y))).rgb;
+            n   += 1.0;
+        }
+    }
+    return sum / n;
+}
+
+void main() {
+    const ivec2 pix = ivec2(gl_GlobalInvocationID.xy);
+    if (pix.x >= int(pc.width) || pix.y >= int(pc.height)) return;
+
+    const vec3 color = clamp(
+            (pc.source == SOURCE_FINAL) ? sampleFinal(pix) : shadeProxy(pix),
+            vec3(0.0), vec3(1.0));
+    // Round, don't truncate: a 1:1 Final sample is an exact 8-bit value
+    // coming back as v/255, and v/255*255 can land one ulp under v.
+    const uint r = uint(color.r * 255.0 + 0.5);
+    const uint g = uint(color.g * 255.0 + 0.5);
+    const uint b = uint(color.b * 255.0 + 0.5);
     pixels[uint(pix.y) * pc.width + uint(pix.x)] =
             b | (g << 8u) | (r << 16u) | (0xFFu << 24u);
 }

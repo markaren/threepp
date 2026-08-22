@@ -1408,11 +1408,17 @@ namespace threepp {
             // images before resize() destroys them.
             vkDeviceWaitIdle(impl.ctx->device());
             impl.eventCam_->resize(w, h);
-            // Set up the deterministic shade pipeline — eliminates
-            // stochastic shading noise as a source of false events. The
-            // detector now reads the shade output (eventLumaBuf_) instead of
-            // the scene capture buffer, so we don't need to enable
-            // sceneCapture for the event camera to work.
+            // resize() is a no-op at an unchanged size, which would carry the
+            // reference + accumulator over from the previous enable (stale
+            // reference → a burst on whatever changed while the camera was
+            // off). Re-enabling always latches afresh: the documented "first
+            // frame after enabling emits nothing".
+            impl.eventCam_->resetReference();
+            // Set up the source pipeline (event_shade.comp): the deterministic
+            // G-buffer proxy or a box-average of the final swapchain frame,
+            // per eventCamSource_. Either way the detector reads its output
+            // (eventLumaBuf_), not the scene capture buffer, so sceneCapture
+            // need not be enabled for the event camera to work.
             impl.createEventShadePipeline();
             impl.allocateEventLumaBuffer(w, h);
         }
@@ -1420,6 +1426,24 @@ namespace threepp {
 
     bool VulkanRenderer::eventCameraEnabled() const {
         return core()->eventCamEnabled_;
+    }
+
+    void VulkanRenderer::setEventCameraSource(EventCameraSource source) {
+        auto& impl = *core();
+        if (source == impl.eventCamSource_) return;
+        impl.eventCamSource_ = source;
+        if (!impl.eventCamEnabled_) return;// takes effect when enabled
+        // The jitter gate keys off the EFFECTIVE source (Shaded reads the raw
+        // gbuf, Final does not) → the material sampler policy flips with it.
+        impl.markMaterialSamplerDirty();
+        // The proxy and the final frame have different luma; re-latch the
+        // per-pixel reference on the next frame so the switch itself is not
+        // a whole-frame burst of events.
+        if (impl.eventCam_) impl.eventCam_->resetReference();
+    }
+
+    VulkanRenderer::EventCameraSource VulkanRenderer::eventCameraSource() const {
+        return core()->eventCamSource_;
     }
 
     void VulkanRenderer::setEventCameraParams(const EventCameraParams& p) {
@@ -1472,7 +1496,16 @@ namespace threepp {
     }
 
     void VulkanRenderer::setEventsOnlyMode(bool enabled) {
-        core()->eventsOnlyMode_ = enabled;
+        auto& impl = *core();
+        if (enabled == impl.eventsOnlyMode_) return;
+        impl.eventsOnlyMode_ = enabled;
+        // eventsOnly forces the Shaded source (no final frame exists to read),
+        // which can flip the jitter gate and with it the sampler policy; also
+        // re-latch the reference so the source change is not an event burst.
+        if (impl.eventCamEnabled_ && impl.eventCamSource_ == EventCameraSource::Final) {
+            impl.markMaterialSamplerDirty();
+            if (impl.eventCam_) impl.eventCam_->resetReference();
+        }
     }
 
     bool VulkanRenderer::eventsOnlyMode() const {

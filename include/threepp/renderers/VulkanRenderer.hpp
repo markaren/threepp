@@ -322,8 +322,31 @@ namespace threepp {
             int32_t  polarity;// +1 (bright) / -1 (dark)
             uint32_t t_us;
         };
+        // What the detector looks at.
+        //   Shaded — a deterministic Lambert proxy shaded from the raster
+        //            G-buffer (event_shade.comp): directional lights + ambient
+        //            + emissive, metalness-damped; no specular, shadows, GI,
+        //            transmission or point/spot lights. Cheap and noise-free
+        //            (raster jitter is gated off so a static scene emits
+        //            nothing), but it only sees silhouettes and diffuse
+        //            texture — water glitter, backlit cloth and light flashes
+        //            do not fire. The default, and what eventsOnlyMode uses.
+        //   Final  — the presented frame: post-TAA/upscale/tonemap, the same
+        //            pixels readRGBPixels returns, box-averaged down to the
+        //            sensor resolution (a DVS pixel integrates its photodiode
+        //            area). Everything the picture shows fires, at the cost of
+        //            inheriting the picture's temporal residue (denoiser,
+        //            auto-exposure drift). Raster jitter stays ON (TAA resolves
+        //            it). Ignored — Shaded is used — while eventsOnlyMode is
+        //            on, since no final frame exists then.
+        // Switching while enabled re-latches the per-pixel reference on the
+        // next frame (which then emits nothing) instead of firing a
+        // whole-frame burst on the proxy-vs-final luma jump. Flip it at a cut.
+        enum class EventCameraSource { Shaded, Final };
         void setEventCameraEnabled(bool enabled);
         [[nodiscard]] bool eventCameraEnabled() const;
+        void setEventCameraSource(EventCameraSource source);
+        [[nodiscard]] EventCameraSource eventCameraSource() const;
         void setEventCameraParams(const EventCameraParams& params);
         [[nodiscard]] EventCameraParams eventCameraParams() const;
         [[nodiscard]] std::vector<unsigned char> readEventCameraVisualisation() const;

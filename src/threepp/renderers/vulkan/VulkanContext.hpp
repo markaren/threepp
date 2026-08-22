@@ -68,6 +68,12 @@ namespace threepp::vulkan {
         // precondition for every path that copies the presented image out
         // (readRGBPixels, scene capture). See createSwapchain.
         bool swapchainSupportsTransferSrc() const { return swapchainTransferSrc_; }
+        // True when shaderStorageImageReadWithoutFormat was available and
+        // enabled on the device — the precondition for a compute pass
+        // imageLoad()-ing the BGRA8 swapchain through a format-less storage
+        // image (GLSL has no bgra8 qualifier; rgba8 mismatches the view). The
+        // event camera's Final source needs it; universal on desktop GPUs.
+        bool storageImageReadWithoutFormat() const { return storageImageReadWithoutFormat_; }
 
         bool rayTracingEnabled() const { return rayTracingEnabled_; }
 
@@ -172,6 +178,7 @@ namespace threepp::vulkan {
         std::vector<VkImage>     swapchainImages_;
         std::vector<VkImageView> swapchainImageViews_;
         bool                     swapchainTransferSrc_ = false;
+        bool                     storageImageReadWithoutFormat_ = false;
 
         bool vsync_ = true;// FIFO when true, else MAILBOX/IMMEDIATE (see createSwapchain)
         bool headlessSurface_ = false;// VK_EXT_headless_surface instead of a window surface

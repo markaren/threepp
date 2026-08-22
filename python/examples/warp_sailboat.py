@@ -142,10 +142,13 @@ EVT_THRESHOLD = cli_arg("--evt-threshold", 0.22, float)   # log-intensity units
 EVT_DECAY = cli_arg("--evt-decay", 0.70, float)
 EVT_MIN_LUMA = cli_arg("--evt-min-luma", 0.004, float)    # soft floor before log()
 EVT_MAX_PP = int(cli_arg("--evt-max-events", 4, float))   # events per pixel per frame
-# The renderer's GPU detector instead of the final-frame model. It is real and
-# it is bound (renderer.event_camera_*), but for THIS scene it is the wrong
-# instrument -- see the note over _dvs_step.
-EVT_GPU = "--evt-gpu" in sys.argv
+# The renderer's GPU detector instead of the numpy final-frame model. Same ESIM
+# model, same final pixels (event_camera_source = "final" box-averages the
+# presented frame to the sensor on the GPU), no read_pixels() round trip --
+# see the note over _dvs_step. `--evt-gpu-shaded` runs it on the G-buffer
+# Lambert proxy instead, the take that could not see the water or the sails.
+EVT_GPU = "--evt-gpu" in sys.argv or "--evt-gpu-shaded" in sys.argv
+EVT_GPU_SOURCE = "shaded" if "--evt-gpu-shaded" in sys.argv else "final"
 
 if not tp.HAS_VULKAN or not tp.vulkan_available():
     print("This example needs the Vulkan backend (configure with "
@@ -4279,23 +4282,25 @@ def _dvs_step(px):
     the model `helpers/EventCameraSensor.hpp` documents, and it is what the
     academic simulators (ESIM and friends) do.
 
-    Why not the renderer's GPU detector, which is bound and does exactly this
-    on the GPU: it shades a fast DETERMINISTIC PROXY of the raster G-buffer
-    (`event_shade.comp` -- Lambert diffuse from the DIRECTIONAL lights plus
-    ambient and emissive, and nothing else). No specular, no transmission, no
-    point lights, no GI. That is a deliberate sim-to-real choice -- it means
-    the event stream cannot be contaminated by stochastic shading noise -- but
-    in THIS scene it removes precisely the subjects: the ocean is a
-    transmissive water material whose proxy luma barely moves, so the sea
-    fires nothing; the sails are read by TRANSMITTED light, so only their
-    silhouettes fire; and a lightning point light is invisible to it. The
-    user's verdict on the proxy take was exactly that -- "event camera does
-    not seem to see water or sails". Run it with `--evt-gpu` to see it.
+    The renderer's GPU detector does exactly this on the GPU, and it has two
+    sources. Its DEFAULT ("shaded") shades a fast DETERMINISTIC PROXY of the
+    raster G-buffer (`event_shade.comp` -- Lambert diffuse from the
+    DIRECTIONAL lights plus ambient and emissive, and nothing else). No
+    specular, no transmission, no point lights, no GI. That is a deliberate
+    sim-to-real choice -- the event stream cannot be contaminated by
+    stochastic shading noise -- but in THIS scene it removes precisely the
+    subjects: the ocean is a transmissive water material whose proxy luma
+    barely moves, so the sea fires nothing; the sails are read by TRANSMITTED
+    light, so only their silhouettes fire; and a lightning point light is
+    invisible to it. The user's verdict on that take was exactly "event
+    camera does not seem to see water or sails" (`--evt-gpu-shaded` shows it).
 
-    The renderer ask that falls out of this: an `eventCameraSource =
-    Shaded | Final` switch. `event_detect.comp` already has the path that
-    consumes a copy of the presented frame; it is the shade stage in front of
-    it that is the proxy.
+    The ask that fell out of that, `event_camera_source = "final"`, now
+    exists: the detector box-averages the PRESENTED frame to the sensor on
+    the GPU and runs the same crossing model on it -- this function, without
+    the read_pixels() round trip (`--evt-gpu`). This numpy path stays as the
+    reference the GPU take is checked against, and as the default until the
+    film has been looked at on the GPU source.
     """
     global _dvs_ref, _dvs_acc
     log_i = np.log(np.maximum(_luma_down(px, EVT_H, EVT_W), EVT_MIN_LUMA))
@@ -4385,10 +4390,12 @@ def _film_sensor_mode(mode):
                                          min_luma=EVT_MIN_LUMA,
                                          max_events_per_pixel=EVT_MAX_PP)
         renderer.set_event_camera_resolution(EVT_W, EVT_H)   # stored; no device work yet
+        renderer.event_camera_source = EVT_GPU_SOURCE       # "final" unless --evt-gpu-shaded
     renderer.event_camera_enabled = want
     _evt_on = want
     if want:
-        print(f"  GPU event detector ON {renderer.event_camera_resolution}")
+        print(f"  GPU event detector ON {renderer.event_camera_resolution} "
+              f"source={renderer.event_camera_source}")
 
 
 def _endcard(w, h, n):

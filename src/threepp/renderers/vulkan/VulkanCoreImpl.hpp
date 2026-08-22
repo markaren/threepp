@@ -1103,6 +1103,31 @@ namespace threepp {
         std::unique_ptr<vulkan::EventCameraDetector> eventCam_;
         bool eventCamEnabled_ = false;
         vulkan::EventCameraDetector::Params eventCamParams_{};
+        // What event_shade feeds the detector: the G-buffer Lambert proxy or
+        // the presented frame. See VulkanRenderer::EventCameraSource.
+        EventCameraSource eventCamSource_ = EventCameraSource::Shaded;
+
+        // The source the frame actually runs. Final needs a final frame
+        // (eventsOnlyMode skips producing one) and a device that can imageLoad
+        // the BGRA8 swapchain without a format qualifier; otherwise Shaded.
+        [[nodiscard]] EventCameraSource effectiveEventCamSource() const {
+            if (eventCamSource_ == EventCameraSource::Final && !eventsOnlyMode_ &&
+                ctx && ctx->storageImageReadWithoutFormat()) {
+                return EventCameraSource::Final;
+            }
+            return EventCameraSource::Shaded;
+        }
+        // True when the event camera reads the RAW raster G-buffer — the one
+        // consumer for which per-frame raster jitter is not "resolved later"
+        // but leaks straight into a sensor as false motion (jittered
+        // silhouette coverage flips → a static scene fires ~6.7k events/frame).
+        // The Final source reads the post-TAA frame, where jitter has already
+        // been resolved, so it keeps jitter on. Every raster-jitter gate keys
+        // off THIS, not off eventCamEnabled_.
+        [[nodiscard]] bool eventCamReadsGbuf() const {
+            return eventCamEnabled_ &&
+                   effectiveEventCamSource() == EventCameraSource::Shaded;
+        }
 
         // Events-only render mode. When on, recordCommandBuffer skips
         // every pass downstream of the raster G-buffer prepass: deferred
@@ -4075,7 +4100,7 @@ namespace threepp {
         // rasterJitterOn expression (the sampler policy keys off the same
         // condition the projection jitter does).
         [[nodiscard]] bool rasterJitterActive() const {
-            return !eventCamEnabled_ && (useFsr() || useDlss() || gbufMsaaSamples_ <= 1);
+            return !eventCamReadsGbuf() && (useFsr() || useDlss() || gbufMsaaSamples_ <= 1);
         }
         // The sampler the material-texture bindings use this frame: AUTO
         // (16×, jittered or not) unless
@@ -4331,11 +4356,13 @@ namespace threepp {
         void allocateEventLumaBuffer(uint32_t w, uint32_t h);
 
         // Refresh descriptor set bindings + dispatch the event_shade
-        // compute. Called once per frame after the gbuf prepass, before
-        // the event_detect dispatch. Gbuf images are in
-        // SHADER_READ_ONLY_OPTIMAL at this point (same as for the main
-        // deferred shade's gbuf consumption).
-        void recordEventShade(VkCommandBuffer cb, uint32_t frame);
+        // compute. Called once per frame in the record tail (after the gbuf
+        // prepass AND after the swapchain holds the final frame), before the
+        // event_detect dispatch. Gbuf images are in SHADER_READ_ONLY_OPTIMAL
+        // at this point (same as for the main deferred shade's gbuf
+        // consumption); the acquired swapchain image (imageIndex) is in
+        // GENERAL and is bound as the Final source's storage image.
+        void recordEventShade(VkCommandBuffer cb, uint32_t frame, uint32_t imageIndex);
 
         void recordOverlayAndPresentTransition(VkCommandBuffer cb, uint32_t imageIndex);
 

@@ -7589,11 +7589,32 @@ class VulkanRenderer:
         (width, height) the detector is actually running at.
         """
     @property
+    def event_camera_source(self) -> str:
+        """
+        What the detector looks at. 'shaded' (default): a deterministic
+        Lambert proxy of the raster G-buffer — directional lights +
+        ambient + emissive, no specular / transmission / point lights /
+        GI. Noise-free and jitter-free (a static scene emits nothing),
+        but only silhouettes and diffuse texture fire: water glitter,
+        backlit sails and light flashes are invisible to it. 'final': the
+        presented frame — the same pixels read_pixels() returns, post
+        TAA / upscale / tonemap — box-averaged to the sensor resolution
+        (a DVS pixel integrates its photodiode area). Everything the
+        picture shows fires; it inherits the picture's temporal residue
+        (denoiser, auto-exposure drift) and TAA jitter stays on. A switch
+        while enabled re-latches the per-pixel reference on the next
+        frame (no burst). Ignored under events_only_mode.
+        """
+    @event_camera_source.setter
+    def event_camera_source(self, arg1: str) -> None:
+        ...
+    @property
     def events_only_mode(self) -> bool:
         """
         Present the event visualisation INSTEAD of the shaded scene.
         Leave it off if you also want read_pixels()/AOVs from the same
-        frames — the detector runs either way.
+        frames — the detector runs either way. Forces the 'shaded'
+        event_camera_source (no final frame exists to read).
         """
     @events_only_mode.setter
     def events_only_mode(self, arg1: bool) -> None:

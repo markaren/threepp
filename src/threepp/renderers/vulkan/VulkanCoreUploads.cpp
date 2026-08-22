@@ -624,16 +624,18 @@ namespace threepp {
         // this UBO's jitter must match or every consumer reconstructing
         // with cam.jitter (deferred_shade worldPos, hybrid V) lands
         // off the rasterized surface.
-        // Event camera ON also forces UNJITTERED: event_shade reads the raw
-        // raster gbuf, and per-frame Halton jitter dithers silhouette coverage
-        // so a STATIC scene fires spurious +/- events every frame (the "event
-        // view flickers with no motion" bug). A physical DVS never sees TAA
-        // jitter. Must match uploadRasterCameraUbo's identical gate.
+        // Event camera on its G-buffer (Shaded) source also forces UNJITTERED:
+        // event_shade reads the raw raster gbuf, and per-frame Halton jitter
+        // dithers silhouette coverage so a STATIC scene fires spurious +/-
+        // events every frame (the "event view flickers with no motion" bug). A
+        // physical DVS never sees TAA jitter. The Final source reads the
+        // post-TAA frame, where jitter is already resolved, and keeps it on.
+        // Must match uploadRasterCameraUbo's identical gate (eventCamReadsGbuf).
         // FSR requires jitter to reconstruct — force it on whenever FSR is the
         // active upscaler (even under MSAA, which otherwise rasterizes unjittered),
-        // so the dispatch jitterOffset matches what was rendered. Event camera
-        // still wins (a real DVS never sees jitter). Must match uploadRasterCameraUbo.
-        const bool rasterJitterOn = !eventCamEnabled_ &&
+        // so the dispatch jitterOffset matches what was rendered. The gbuf-reading
+        // event camera still wins. Must match uploadRasterCameraUbo.
+        const bool rasterJitterOn = !eventCamReadsGbuf() &&
                                     (useFsr() || useDlss() || gbufMsaaSamples_ <= 1);
         const float jClipX = rasterJitterOn ? 2.f * jx / float(ext.width)  : 0.f;
         const float jClipY = rasterJitterOn ? 2.f * jy / float(ext.height) : 0.f;
@@ -825,18 +827,20 @@ namespace threepp {
         // jittered coverage flips and edge flicker returns at full
         // strength, 6.7k px/frame vs 5.1k at msaa=1. Unjittered MSAA
         // upsampling is STABLE; its trade is spatial softness, not noise.)
-        // Event camera ON forces UNJITTERED (must match updateCameraUbo's
-        // gate): event_shade reads this raw gbuf, and the per-frame Halton
-        // coverage flip at silhouettes makes a STATIC scene emit spurious
-        // events every frame — the DVS "flickers with no motion". A real
-        // event camera sees no jitter; transform/camera motion still flows
-        // through motionMat, so genuine motion events are unaffected.
+        // Event camera on its G-buffer (Shaded) source forces UNJITTERED (must
+        // match updateCameraUbo's gate, eventCamReadsGbuf): event_shade reads
+        // this raw gbuf, and the per-frame Halton coverage flip at silhouettes
+        // makes a STATIC scene emit spurious events every frame — the DVS
+        // "flickers with no motion". A real event camera sees no jitter;
+        // transform/camera motion still flows through motionMat, so genuine
+        // motion events are unaffected. The Final source reads the post-TAA
+        // frame (jitter resolved) and leaves it on.
         // useFsr()/useDlss() force jitter on: both need it to reconstruct, even
         // under MSAA (which otherwise rasterizes unjittered), so the dispatch
-        // jitterOffset matches the render. Event camera still wins (a real DVS
-        // sees no jitter).
+        // jitterOffset matches the render. The gbuf-reading event camera still
+        // wins (a real DVS sees no jitter).
         const bool rasterJitterOn =
-                kRasterJitterEnabled && !eventCamEnabled_ &&
+                kRasterJitterEnabled && !eventCamReadsGbuf() &&
                 (useFsr() || useDlss() || gbufMsaaSamples_ <= 1);
         const float jClipX = rasterJitterOn ? 2.f * jx / float(ext.width)  : 0.f;
         const float jClipY = rasterJitterOn ? 2.f * jy / float(ext.height) : 0.f;

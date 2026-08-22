@@ -535,3 +535,39 @@ def test_event_camera_visualisation(vk_renderer):
             "a spinning box fired no events (accumulator is flat mid-grey)"
     finally:
         vk_renderer.event_camera_enabled = False
+
+
+def test_event_camera_source_final(vk_renderer):
+    """The 'final' source: the detector reads the presented frame (box-averaged
+    to the sensor), so a STATIC scene settles to ~nothing once TAA converges,
+    a moving edge still fires, and the switch itself is not a burst."""
+    scene, cam = make_scene()
+    box = scene.children[0]
+    assert vk_renderer.event_camera_source == "shaded"
+    vk_renderer.event_camera_source = "final"
+    vk_renderer.set_event_camera_params(threshold=0.15, decay=0.85)
+    vk_renderer.set_event_camera_resolution(64, 48)
+    vk_renderer.event_camera_enabled = True
+    try:
+        assert vk_renderer.event_camera_source == "final"
+        for _ in range(12):                     # reference latch + TAA settle
+            vk_renderer.render(scene, cam)
+        quiet = 0
+        for _ in range(6):                      # static: the picture converged
+            vk_renderer.render(scene, cam)
+            ev, _ = vk_renderer.read_event_stream()
+            quiet += len(ev)
+        assert quiet <= 6 * 64 * 48 * 0.01, \
+            f"static scene fired {quiet} events over 6 frames on the final source"
+        moving = 0
+        for i in range(6):                      # a spinning box: edges fire
+            box.rotation.y = 0.35 * (i + 1)
+            vk_renderer.render(scene, cam)
+            ev, _ = vk_renderer.read_event_stream()
+            moving += len(ev)
+        assert moving > quiet, "a spinning box fired no events on the final source"
+        with pytest.raises(ValueError):
+            vk_renderer.event_camera_source = "beauty"
+    finally:
+        vk_renderer.event_camera_enabled = False
+        vk_renderer.event_camera_source = "shaded"

@@ -208,6 +208,7 @@ int main() {
     float lastCaptureMs     = 0.f;
     bool  animatePendulums  = true;
     bool  eventsOnly        = false;
+    int   evSource          = 0;// 0 = Shaded proxy, 1 = Final frame
     auto  evParams          = renderer.eventCameraParams();
 
     // Sparse event-stream buffer — reused frame-to-frame; the demo
@@ -251,6 +252,18 @@ int main() {
                 "where |Δlog I| exceeds the threshold.");
         ImGui::Separator();
         ImGui::Checkbox("Animate pendulums", &animatePendulums);
+
+        // What the detector looks at: the deterministic G-buffer Lambert
+        // proxy (noise- and jitter-free; silhouettes + diffuse texture
+        // fire) or the presented frame (everything the picture shows fires,
+        // incl. the striped wall's shading and any specular; inherits the
+        // picture's temporal residue). Switching re-latches the reference,
+        // so no burst. Events-only mode forces the proxy.
+        if (ImGui::Combo("Source", &evSource, "Shaded G-buffer proxy\0Final frame\0")) {
+            renderer.setEventCameraSource(evSource == 1
+                                                  ? VulkanRenderer::EventCameraSource::Final
+                                                  : VulkanRenderer::EventCameraSource::Shaded);
+        }
 
         // Events-only mode: when on, the renderer skips shading/denoise/TAA
         // entirely — only the raster gbuf prepass + event_shade +
