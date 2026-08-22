@@ -20,12 +20,18 @@ is a thin foil and makes far more lift close-hauled than a flat plate does, so
 this boat is strong on a reach and comes upwind more grudgingly than the real
 thing. The "rig efficiency" slider is the fudge factor that buys some of it back.
 
-The sea is threepp's 3-cascade FFT ocean. It supplies wave height for buoyancy
-(the hull pitches and rolls on the slope it is actually sitting on), it takes the
-wake foam, and it follows the boat -- the vertex-density warp centre relocates
-the whole grid in world space, so the water never runs out. The fog is the
-unified Vulkan air medium, and the rig cuts shafts through it when you look
-toward the sun.
+The sea is threepp's 3-cascade FFT ocean, and the hull FLOATS on it rather than
+being flown along it. The lofted sections are integrated into an immersed-area
+table at startup, so every frame nine probes fit a local water plane, each of
+the forty stations gets its own draft, and the summed buoyant force and pitching
+moment drive a damped heave/pitch pair. A crest arriving at the bow lifts the
+bow, because the bow's sections are the ones that got deeper. She in turn
+DISPLACES the water: the ocean's hull-exclusion footprint carries her waterline
+plane, so the sea meets the boot stripe on a crest as much as in a trough, and
+the same pose drives an analytical Kelvin V-wake. Press X to A/B it. The ocean
+also follows the boat -- the vertex-density warp centre relocates the whole grid
+in world space, so the water never runs out. The fog is the unified Vulkan air
+medium, and the rig cuts shafts through it when you look toward the sun.
 
 The gulls are threepp's own ambient flock (extras/fauna): boids that fly, bank
 into their turns, and land. The islet is scanned for landable rock at startup,
@@ -69,6 +75,7 @@ Helm:  A / D steer      Q / E ease / trim main     Z / C ease / trim jib
 Sky:   1-5 jump to dawn / morning / squall / golden hour / night
        N toggle rain    K time-lapse the day       L fire a lightning strike
 Drone: G fly the camera drone    V switch to its own view (FPV)
+Hull:  X toggle "the hull displaces water" (footprint + waterline plane + wake)
 
 Needs a Vulkan build (-DTHREEPP_WITH_VULKAN=ON). Warp falls back to CPU if no
 CUDA device is present -- slower, same picture.
@@ -2523,7 +2530,10 @@ boat_state = {
     "yaw": math.radians(START_HDG), "yaw_rate": 0.0,
     "u": 0.0, "sway": 0.0,
     "heel": 0.0, "heel_rate": 0.0,
-    "wave_pitch": 0.0, "wave_roll": 0.0,
+    # pitch is now a hydrostatic DOF (bow up positive); roll off the water
+    # plane still is not -- the GM heel model owns roll.
+    "pitch": 0.0, "pitch_rate": 0.0, "wave_roll": 0.0, "draft": 0.0,
+    "floating": False,   # set on the first frame the CPU height mirror is live
     "rudder": 0.0,
     "boom": math.radians(42.0), "jib": math.radians(30.0),
     "drive": 0.0, "side": 0.0, "awa": 0.0, "aws": 0.0,
@@ -2581,6 +2591,116 @@ def step_sails(wind_local, grav_local):
 
 
 # --------------------------------------------------------------------------- #
+#  Hydrostatics: she floats on her own sections, not on a spring.
+#
+#  The hull is LOFTED here (`_station` / `_half_section`), so the immersed area
+#  of every station at every draft is knowable exactly. Build that table once
+#  and the per-frame buoyancy is a table lookup: 40 stations x an interpolated
+#  area, summed for the vertical force and moment-armed for the pitch moment.
+#  That is what makes her RIDE a swell -- a crest arriving at the bow lifts the
+#  bow first, because the bow's sections are the ones that got deeper.
+#
+#  THE ONE FUDGE, stated plainly. The lofted canoe body displaces 8.63 m3 at
+#  its painted waterline = 8849 kg of seawater, and this boat is modelled at
+#  MASS = 3500 kg everywhere else (drive, drag, heel, righting moment, the
+#  whole film's feel). Left alone she would float 26 cm above her boot stripe
+#  with her antifouling in the air. Raising MASS to 8849 instead would make the
+#  righting moment 2.5x stiffer and she would stop heeling, which is the one
+#  thing act 3 is about. So the AREA TABLE is scaled by a constant
+#  HULL_VOL_SCALE = (MASS / rho) / V(TRIM_DRAFT): the shape of the hydrostatic
+#  curve is kept (stiffness with draft, the distribution along the length) and
+#  only its absolute volume is brought into line with the mass the rest of the
+#  boat believes in. Note that the resulting heave/pitch frequencies are
+#  IDENTICAL to the honest heavy-boat alternative -- equilibrium ties the two
+#  together -- so nothing dynamic is lost by the choice.
+# --------------------------------------------------------------------------- #
+HULL_LOG = "--hull-log" in sys.argv          # one buoyancy line per sim second
+RHO_W = 1025.0               # seawater
+TRIM_DRAFT = 0.02            # flat-water waterline in hull-local y: 2 cm above
+                             # the design line, which is where the boot stripe
+                             # wants it (the stripe spans local y -0.10 .. +0.17)
+HS_NG = 256                  # girth samples per half section for the table
+HS_D0, HS_D1, HS_ND = -0.90, 1.80, 271       # draft grid, 1 cm
+PITCH_MAX = math.radians(20.0)
+BUOY_SUBSTEPS = 4            # hydrostatic integration steps per rendered frame
+HEAVE_ZETA, PITCH_ZETA = 0.55, 0.60
+ADDED_MASS = 0.20            # heave added mass as a fraction of MASS
+PITCH_RG = 0.26 * LOA        # pitch radius of gyration
+
+HS_DGRID = np.linspace(HS_D0, HS_D1, HS_ND)
+HS_INV_DD = (HS_ND - 1) / (HS_D1 - HS_D0)
+HS_T = (np.arange(NS) + 0.5) / NS            # station centres, 0 = bow
+HS_Z = (0.5 - HS_T) * LOA                    # ... in hull-local z (+ = bow)
+HS_DZ = LOA / NS
+HS_ROW = np.arange(NS)
+HS_AREA = np.empty((NS, HS_ND))              # immersed FULL-section area vs draft
+_hs_halfb = np.empty((NS, HS_ND))            # half-beam at the waterline vs draft
+for _i, _t in enumerate(HS_T):
+    _xs, _ys = _half_section(_t, HS_NG)      # keel -> deck edge, y strictly rising
+    _cum = np.concatenate([[0.0],
+                           np.cumsum(0.5 * (_xs[1:] + _xs[:-1]) * np.diff(_ys))])
+    HS_AREA[_i] = 2.0 * np.interp(HS_DGRID, _ys, _cum, left=0.0, right=_cum[-1])
+    _hs_halfb[_i] = np.interp(HS_DGRID, _ys, _xs, left=0.0, right=_xs[-1])
+
+_v_design = float(np.interp(0.0, HS_DGRID, HS_AREA.sum(0)) * HS_DZ)
+_v_trim = float(np.interp(TRIM_DRAFT, HS_DGRID, HS_AREA.sum(0)) * HS_DZ)
+HULL_VOL_SCALE = (MASS / RHO_W) / _v_trim
+HS_AREA *= HULL_VOL_SCALE                    # bake it in: no per-frame multiply
+
+# Stiffnesses at the trim waterline, from the same table.
+_b_trim = np.array([np.interp(TRIM_DRAFT, HS_DGRID, _hs_halfb[i]) for i in range(NS)])
+AW_TRIM = 2.0 * float(_b_trim.sum()) * HS_DZ * HULL_VOL_SCALE          # m2
+IL_TRIM = 2.0 * float(_b_trim @ (HS_Z ** 2)) * HS_DZ * HULL_VOL_SCALE  # m4
+K_HEAVE = RHO_W * 9.81 * AW_TRIM
+K_PITCH = RHO_W * 9.81 * IL_TRIM
+M_HEAVE = MASS * (1.0 + ADDED_MASS)
+I_PITCH = MASS * PITCH_RG ** 2 * (1.0 + ADDED_MASS)
+C_HEAVE = 2.0 * HEAVE_ZETA * math.sqrt(K_HEAVE * M_HEAVE)
+C_PITCH = 2.0 * PITCH_ZETA * math.sqrt(K_PITCH * I_PITCH)
+
+# Where the buoyancy actually acts fore-and-aft at the trim waterline. Her
+# sections are fuller aft, so the centre of buoyancy is abaft amidships and a
+# CG at the hull origin would leave a permanent bow-up moment. Real boats put
+# the CG over the LCB; so does this one, as a constant counter-moment.
+_a_trim = np.array([np.interp(TRIM_DRAFT, HS_DGRID, HS_AREA[i]) for i in range(NS)])
+LCB_Z = float((_a_trim @ HS_Z) / _a_trim.sum())
+TRIM_M0 = RHO_W * 9.81 * float((_a_trim * HS_DZ) @ HS_Z)
+
+HEAVE_HZ = math.sqrt(K_HEAVE / M_HEAVE) / (2.0 * math.pi)
+PITCH_HZ = math.sqrt(K_PITCH / I_PITCH) / (2.0 * math.pi)
+if SKY_LOG:
+    print(f"[hull] design displacement rho*V(0) = {RHO_W * _v_design:7.0f} kg "
+          f"(V = {_v_design:.2f} m3) vs MASS {MASS:.0f} kg -> "
+          f"area table scaled x {HULL_VOL_SCALE:.3f}")
+    print(f"[hull] trim draft {TRIM_DRAFT * 100:.0f} cm  Aw {AW_TRIM:5.2f} m2  "
+          f"IL {IL_TRIM:6.2f} m4  LCB {LCB_Z:+.2f} m  LCG {TRIM_M0 / (MASS * 9.81):+.2f} m")
+    print(f"[hull] heave {HEAVE_HZ:.2f} Hz (T {1 / HEAVE_HZ:.2f} s, c {C_HEAVE:.0f}) "
+          f"pitch {PITCH_HZ:.2f} Hz (T {1 / PITCH_HZ:.2f} s, c {C_PITCH:.0f})")
+
+
+def immersed_area(d):
+    """Immersed area of every station at per-station draft `d` (a length-NS
+    array of the water height in hull-local y). Linear lookup in the 1 cm
+    table -- 40 gathers, no Python loop."""
+    f = np.clip((d - HS_D0) * HS_INV_DD, 0.0, HS_ND - 1.001)
+    i0 = f.astype(np.intp)
+    a0 = HS_AREA[HS_ROW, i0]
+    return a0 + (HS_AREA[HS_ROW, i0 + 1] - a0) * (f - i0)
+
+
+# The nine buoyancy probes, in the boat's own frame: three stations x
+# port/centre/starboard. Nine samples of a noisy CPU mirror least-squares
+# fitted to a PLANE beat five samples differenced pairwise -- the ~1 cm jitter
+# in `ocean.sample_height` (an unfenced GPU readback) averages down instead of
+# going straight into the pitch angle.
+BUOY_PZ = np.array([0.36 * LOA, 0.0, -0.36 * LOA])
+BUOY_PX = np.array([-0.40 * BEAM, 0.0, 0.40 * BEAM])
+BUOY_PTS = [(px, pz) for pz in BUOY_PZ for px in BUOY_PX]
+BUOY_FIT = np.linalg.pinv(np.array([[1.0, pz, px] for px, pz in BUOY_PTS]))
+_buoy_h = np.empty(len(BUOY_PTS))
+
+
+# --------------------------------------------------------------------------- #
 #  One frame of sailing.
 # --------------------------------------------------------------------------- #
 def hull_half_width(t):
@@ -2590,8 +2710,50 @@ def hull_half_width(t):
     return b * (1.0 - u * u) ** 0.6 if u <= 0.0 else b * (1.0 - 0.25 * u * u)
 
 
+# Hull exclusion + analytical wake: the hull DISPLACES the water instead of the
+# sea passing through it. `hull_excl_on` is the X-key A/B.
+HULL_HALF_L, HULL_HALF_B = LOA * 0.5, BEAM * 0.5
+WAKE_MAX_AGE, WAKE_MAX_SAMPLES = 6.0, 64
+WAKE_INTERVAL, WAKE_DISTANCE = 0.10, 1.0     # 10 Hz or 1 m, whichever fires first
+hull_excl_on = True
+_wake_accum = 0.0
+_wake_last = None
+
+
+def _wake_update(dt, cy, sy, pitch, roll):
+    """Hand the ocean the vessel's pose + waterline plane, and keep the Kelvin
+    wake's history trail. `half_length = 0` is the off switch for BOTH."""
+    global _wake_accum, _wake_last
+    bs = boat_state
+    h = ocean.hull_exclusion
+    h.set_pose(bs["x"], bs["z"], bs["y"], yaw=bs["yaw"], pitch=pitch, roll=roll,
+               half_length=HULL_HALF_L if hull_excl_on else 0.0,
+               half_beam=HULL_HALF_B)
+    ocean.wake.forward_speed = bs["u"]
+    if not hull_excl_on:
+        return
+    ocean.age_wake(dt, WAKE_MAX_AGE, WAKE_MAX_SAMPLES)
+    _wake_accum += dt
+    moved = 1e9 if _wake_last is None else math.hypot(bs["x"] - _wake_last[0],
+                                                      bs["z"] - _wake_last[1])
+    if abs(bs["u"]) > 0.3 and (_wake_accum >= WAKE_INTERVAL or moved >= WAKE_DISTANCE):
+        _wake_accum = 0.0
+        _wake_last = (bs["x"], bs["z"])
+        ocean.add_wake_sample(bs["x"], bs["z"], sy, cy, bs["u"], WAKE_MAX_SAMPLES)
+
+
+def wake_teleport():
+    """After an act cut moves her hundreds of metres: drop the trail, or the
+    Kelvin V stretches across the whole sea from where she used to be."""
+    global _wake_last, _wake_accum
+    ocean.clear_wake()
+    _wake_last, _wake_accum = None, 0.0
+    boat_state["floating"] = False   # re-seat her on the new patch of sea
+
+
 sim_time = 0.0
 first_render_done = False
+_hs_ms, _hs_n = 0.0, 0        # --hull-log: cost of the whole buoyancy block
 
 
 def step_boat(dt):
@@ -2610,7 +2772,7 @@ def step_boat(dt):
     boat_vel = fwd * bs["u"] + stb * bs["sway"]
     app_wind = true_wind - boat_vel
 
-    pitch = bs["wave_pitch"] + 0.020 * (bs["u"] / max(HULL_SPEED, 0.1)) ** 2
+    pitch = bs["pitch"] + 0.020 * (bs["u"] / max(HULL_SPEED, 0.1)) ** 2
     roll = bs["wave_roll"] + bs["heel"]
     rot = yxz_matrix(-pitch, bs["yaw"], roll)
     wind_local = rot.T @ app_wind
@@ -2690,49 +2852,90 @@ def step_boat(dt):
     bs["x"] += (sy * bs["u"] + cy * bs["sway"]) * dt
     bs["z"] += (cy * bs["u"] - sy * bs["sway"]) * dt
 
-    # --- the sea under the hull ---------------------------------------------
+    # --- the sea under the hull: hydrostatics --------------------------------
+    # Not a follower. Nine probes -> a least-squares WATER PLANE in her own
+    # frame -> a per-station draft -> the immersed area of each station out of
+    # the table -> the buoyant force and the pitching moment. Integrated with
+    # four substeps because the heave/pitch springs are stiffer than the frame
+    # rate is fine-grained (~0.7 Hz heave, ~0.8 Hz pitch, but the DAMPING is
+    # what a single 60 Hz Euler step trips over in a big sea).
     if first_render_done:
-        def sample(dx, dz):
-            # dx = starboard offset, dz = forward offset.
-            return ocean.sample_height(bs["x"] + sy * dz + cy * dx,
-                                       bs["z"] + cy * dz - sy * dx, BUOY_MASK)
-        h_c = sample(0.0, 0.0)
-        h_bow, h_stern = sample(0.0, LOA * 0.5), sample(0.0, -LOA * 0.5)
-        h_port, h_stbd = sample(-BEAM * 0.5, 0.0), sample(BEAM * 0.5, 0.0)
-        # A spring-damped follower, not the surface height itself: tracking the
-        # water exactly reads as a yo-yo riding the crests.
-        omega = 2.0 * math.pi * 0.85
-        bs["vy"] += ((h_c - bs["y"]) * omega * omega - bs["vy"] * 2.0 * 0.7 * omega) * dt
-        bs["y"] += bs["vy"] * dt
-        # atan2 over the FULL baseline, not the half -- the samples straddle it.
-        wp_ = math.atan2(h_bow - h_stern, LOA)
-        wr_ = math.atan2(h_stbd - h_port, BEAM)
-        a = 1.0 - math.exp(-2.0 * math.pi * dt)
-        bs["wave_pitch"] += (wp_ - bs["wave_pitch"]) * a
-        bs["wave_roll"] += (wr_ - bs["wave_roll"]) * a
+        _t_hs = time.perf_counter() if HULL_LOG else 0.0
+        for k, (px, pz) in enumerate(BUOY_PTS):
+            _buoy_h[k] = ocean.sample_height(bs["x"] + sy * pz + cy * px,
+                                             bs["z"] + cy * pz - sy * px, BUOY_MASK)
+        h0, slope_z, slope_x = BUOY_FIT @ _buoy_h
+        h_stations = h0 + slope_z * HS_Z          # water height at every station
+        if not bs["floating"]:
+            # First live frame (or straight after a teleport): drop her ON her
+            # marks instead of letting a 1 m initial error ring out over two
+            # seconds of a recorded shot.
+            bs["floating"] = True
+            bs["y"], bs["vy"] = h0 - TRIM_DRAFT, 0.0
+            bs["pitch"] = bs["pitch_rate"] = 0.0
+            bs["wave_roll"] = math.atan(slope_x)
 
-    # Sink her to her marks: the design waterline is local y = 0, and the boot
-    # stripe is cut just above it so the stripe stays out of the water.
-    boat.position.set(bs["x"], bs["y"] - 0.02, bs["z"])
+        hh = dt / BUOY_SUBSTEPS
+        for _ in range(BUOY_SUBSTEPS):
+            th = bs["pitch"]
+            st, ct = math.sin(th), max(math.cos(th), 0.5)
+            # Draft at each station, in HULL-LOCAL y: how far the water plane
+            # is above the station's own y = 0 datum once the hull is pitched.
+            d = (h_stations - (bs["y"] + HS_Z * st)) / ct
+            f_seg = (RHO_W * 9.81 * HS_DZ) * immersed_area(d)
+            f_b = float(f_seg.sum())
+            m_p = float(f_seg @ HS_Z) - TRIM_M0   # TRIM_M0 = the LCG counter-moment
+            bs["vy"] += (f_b - MASS * 9.81 - C_HEAVE * bs["vy"]) / M_HEAVE * hh
+            bs["y"] += bs["vy"] * hh
+            bs["pitch_rate"] += (m_p - C_PITCH * bs["pitch_rate"]) / I_PITCH * hh
+            bs["pitch"] += bs["pitch_rate"] * hh
+            if abs(bs["pitch"]) > PITCH_MAX:
+                bs["pitch"] = math.copysign(PITCH_MAX, bs["pitch"])
+                bs["pitch_rate"] = 0.0
+        bs["draft"] = h0 - bs["y"]                # readout: her draft amidships
+        if HULL_LOG:
+            global _hs_ms, _hs_n
+            _hs_ms += (time.perf_counter() - _t_hs) * 1e3
+            _hs_n += 1
+            if int(sim_time) != int(sim_time - dt):
+                print(f"[hull] t{sim_time:6.1f}  y {bs['y']:+6.3f}  water {h0:+6.3f}  "
+                      f"draft {bs['draft'] * 100:+6.1f} cm  trim {math.degrees(bs['pitch']):+5.2f} "
+                      f"heel {math.degrees(bs['heel']):+5.1f}  wroll "
+                      f"{math.degrees(bs['wave_roll']):+5.1f}  u {bs['u']:.2f}  "
+                      f"[{_hs_ms / max(_hs_n, 1):.3f} ms/frame]")
+        # Roll still comes off the water plane's athwartships slope, low-passed,
+        # and adds to the sail-driven heel. The GM heel model is good; leave it.
+        a = 1.0 - math.exp(-2.0 * math.pi * dt)
+        bs["wave_roll"] += (math.atan(slope_x) - bs["wave_roll"]) * a
+
+    # Her hull origin IS her design waterline, so the pose is the state.
+    boat.position.set(bs["x"], bs["y"], bs["z"])
     # Pitch is negated: positive Euler.x tips +Z toward -Y, i.e. bow DOWN, and
-    # a positive wave pitch means the bow is on a crest.
+    # a positive pitch means the bow is up.
     boat.rotation.set(-pitch, bs["yaw"], roll)
 
-    # --- wake ---------------------------------------------------------------
+    # --- she displaces the water, and leaves a wake --------------------------
+    # The exclusion footprint carries her WATERLINE PLANE (centre y + the two
+    # angles), so the sea meets the hull at the boot stripe on a crest as well
+    # as in a trough; and the same pose drives the analytical Kelvin wake in
+    # water_displace.comp / foam_world.comp.
+    # NOTE the roll passed here is `wave_roll`, NOT the total roll. Heel is the
+    # HULL rotating into the water; the water surface stays where it is. Tilting
+    # the excluded patch by the sail heel lifted the sea to the weather deck and
+    # dropped it clear of the leeward bilge -- a 20 deg heel over a 3 m beam is
+    # half a metre of error either side.
+    _wake_update(dt, cy, sy, pitch, bs["wave_roll"])
+
     ocean.clear_foam_disturbances()
     spd = abs(bs["u"])
     norm = min(spd / 3.0, 1.0)
     base = (0.14 + 0.52 * norm) * knob["foam"]
     if base > 0.02:
-        for side in (-1.0, 1.0):
-            for i in range(7):
-                t = i / 6.0
-                lz = LOA * 0.5 - LOA * t
-                lx = side * (hull_half_width(t) + 0.25)
-                ocean.add_foam_disturbance(bs["x"] + cy * lx + sy * lz,
-                                           bs["z"] - sy * lx + cy * lz,
-                                           0.85, base)
-        # Bow wave and the quarter wave off the transom.
+        # The perimeter splats are GONE: the analytical wake's own foam (trail
+        # + bow V-wedge ridges, foam_world.comp) draws the hull's waterline
+        # contact now, and doubling it up read as a bar of white either side.
+        # The bow crest and the transom quarter-wave are still hand-placed --
+        # they land where the analytic wake is weakest.
         ocean.add_foam_disturbance(bs["x"] + sy * (LOA * 0.5 + 0.4),
                                    bs["z"] + cy * (LOA * 0.5 + 0.4),
                                    1.5, min(base * 1.3, 1.0))
@@ -2760,7 +2963,7 @@ def pressed(key):
 
 
 def handle_keys(dt):
-    global day_speed, drone_on, view_mode
+    global day_speed, drone_on, view_mode, hull_excl_on
     bs = boat_state
     if ui is not None and ui.want_capture_keyboard:
         return
@@ -2815,14 +3018,23 @@ def handle_keys(dt):
             drone_state["have"] = False     # re-seed the kinematics on the way in
     if pressed("V") and drone_on:
         view_mode = "orbit" if view_mode == "fpv" else "fpv"
+    if pressed("X"):
+        # A/B the whole watertight story: footprint, waterline plane, Kelvin
+        # wake and analytic wake foam all switch off together.
+        hull_excl_on = not hull_excl_on
+        if not hull_excl_on:
+            wake_teleport()
+        print(f"[hull] displacement {'ON' if hull_excl_on else 'OFF'}")
 
 
 def reset_boat():
     bs = boat_state
     bs.update({"x": START_X, "z": START_Z, "y": 0.0, "vy": 0.0, "u": 0.0,
                "sway": 0.0, "yaw_rate": 0.0, "heel": 0.0, "heel_rate": 0.0,
-               "rudder": 0.0})
+               "pitch": 0.0, "pitch_rate": 0.0, "rudder": 0.0,
+               "floating": False})
     bs["yaw"] = math.radians(knob["course"])
+    wake_teleport()
 
 
 def run_autopilot(dt):
@@ -3051,6 +3263,8 @@ def draw_ui():
     tp.imgui.text(f"drive  {bs['drive']:7.0f} N     side {bs['side']:+7.0f} N")
     tp.imgui.text(f"heading {math.degrees(bs['yaw']) % 360.0:5.1f} deg    "
                   f"{tp.imgui.get_framerate():.0f} fps")
+    tp.imgui.text(f"trim   {math.degrees(bs['pitch']):+5.1f} deg    "
+                  f"draft {bs['draft'] * 100:+5.1f} cm  (marks {TRIM_DRAFT * 100:.0f})")
     tp.imgui.separator()
 
     ch, knob["wind"] = tp.imgui.slider_float("wind (m/s)", knob["wind"], 0.0, 22.0)
@@ -3076,8 +3290,13 @@ def draw_ui():
     _, knob["cloth"] = tp.imgui.slider_float("cloth (g/m2)", knob["cloth"], 60.0, 900.0)
     _, knob["stiff"] = tp.imgui.slider_float("cloth stiffness", knob["stiff"], 0.15, 1.0)
     _, knob["rig_eff"] = tp.imgui.slider_float("rig efficiency", knob["rig_eff"], 0.5, 3.0)
+    ch, hx = tp.imgui.checkbox("hull displaces water (X)", hull_excl_on)
+    if ch:
+        globals()["hull_excl_on"] = hx
+        if not hx:
+            wake_teleport()
     tp.imgui.text("A/D steer  Q/E main  Z/C jib  T trim  P pilot  R reset")
-    tp.imgui.text("1-5 acts  N rain  K time-lapse  L strike  G drone  V FPV")
+    tp.imgui.text("1-5 acts  N rain  K lapse  L strike  G drone  V FPV  X hull")
     tp.imgui.end()
 
     tp.imgui.set_next_window_pos(12, 470)
@@ -3594,6 +3813,7 @@ def _film_cut(sh, prev):
         boat_state["yaw"] = math.radians(sh.place[2])
         _cam_anchor = np.array([boat_state["x"], 0.0, boat_state["z"]])
         ocean.warp_toward(boat_state["x"], boat_state["z"], 1.0)
+        wake_teleport()      # or the Kelvin V runs back to the previous act
     if sh.course is not None:
         knob["course"] = float(sh.course)
     # Per-shot metering. A rainbow is a 3% contrast feature on a bright sky:
@@ -3656,13 +3876,21 @@ def _film_warm(sh, n, dt):
 
 def _film_step(sh, u, t, dt):
     """One frame of the film: place, simulate, place again, render."""
-    global _cur_u
+    global _cur_u, first_render_done
     _cur_u = u
     apply_cam(sh, u, t)        # before frame(): the rain field follows the lens
     frame(dt)
     apply_cam(sh, u, t)        # after: the boat has moved, so the framing has
     sim_tick(dt)               # the sea advances by dt, not by 80 ms of wall
     renderer.render(scene, camera)
+    # THE FILM NEVER SET THIS. `first_render_done` gates the whole buoyancy
+    # block (the CPU height mirror is empty until a Vulkan frame has run), and
+    # only the live window and the `--shot` loop ever raised it -- so every
+    # film rendered up to v3 had a boat pinned at exactly mean water level with
+    # zero heave, pitch or roll while a wave_scale-1.7 sea rolled through her.
+    # That, not only the sim-clock mismatch Phase 4b found, is why the cold open
+    # was underwater.
+    first_render_done = True
 
 
 def _endcard(w, h, n):
@@ -3915,6 +4143,23 @@ elif SHOT:
             camera.position.set(dp[0] + to[0] * 5.2 + 1.4, dp[1] + 1.15,
                                 dp[2] + to[2] * 5.2 + 1.4)
             camera.look_at(float(dp[0]), float(dp[1]) - 0.12, float(dp[2]))
+        elif FACE in ("deck", "wake"):
+            # Two hull-in-water checks. `deck` rides ON her (full pose, so it
+            # rolls and pitches with the boat) at head height in the cockpit
+            # looking aft over the transom: if the sea is inside the hull
+            # outline, this is where you see it. `wake` stands off astern and
+            # above for the Kelvin V and the flattened footprint.
+            bs_ = boat_state
+            rot_ = yxz_matrix(-(bs_["pitch"] + 0.020 * (bs_["u"] / max(HULL_SPEED, 0.1)) ** 2),
+                              bs_["yaw"], bs_["wave_roll"] + bs_["heel"])
+            org = np.array([bs_["x"], bs_["y"], bs_["z"]])
+            if FACE == "deck":
+                camera.position.set(*(org + rot_ @ np.array([0.55, 1.90, -3.30])))
+                camera.look_at(*(org + rot_ @ np.array([0.0, 0.55, 5.60])))
+            else:
+                cy, sy = math.cos(bs_["yaw"]), math.sin(bs_["yaw"])
+                camera.position.set(bx - sy * 30.0 + cy * 6.0, 13.5, bz - cy * 30.0 - sy * 6.0)
+                camera.look_at(bx, 0.4, bz)
         elif FACE == "bow":
             # Bow-on from a little to port: the one angle where the jib is not
             # behind the main.
