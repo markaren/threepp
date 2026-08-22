@@ -3425,11 +3425,28 @@ DRONE_NIGHT = dict(kind="arc", r=(21.0, 13.0), az=(60.0, 130.0), h=(11.0, 6.5),
 
 FILM_SCRIPT = [
     # ---- 0. COLD OPEN -- the strongest frame first, then black ------------- #
+    #  The sea here is a STORM SEA AT A LOWER SWELL, on purpose. The ocean's
+    #  wave field advances on the renderer's own clock (wall time), while the
+    #  hull's 0.85 Hz buoyancy follower is stepped with the film's dt -- so at a
+    #  1080p storm frame time (~89 ms) the sea runs about five times faster than
+    #  the boat believes it does, the follower cannot track it, and a
+    #  wave_scale-1.70 crest simply sweeps over the deck. On the delivered take
+    #  the first four seconds had her swamped. The rule is REFRAME OR CUT, never
+    #  nurse the buoyancy model, so this shot -- and only this shot -- gets a
+    #  smaller swell: the wind stays at the storm's 17 m/s (so the spectrum, the
+    #  streaks, the spray and the rain are all still a gale), the cloud deck and
+    #  the fog are untouched, and only the height multiplier and the chop come
+    #  down. Whitecap goes UP to compensate: at a lower fold rate the breaking
+    #  crests need help or the sea reads flat.
+    #  1.26 was tried first and is NOT safe: she is under at t=0.0 and t=0.2 and
+    #  the foredeck is awash again at t=2.2. 1.02 holds her dry across all 252
+    #  frames (checked at 1080p/60, which is the only frame time that counts).
     Shot(0, "cold open: hero fork", 15.10, 4.2, "dolly", fov=fov_mm(22),
-         wx="storm", place=(70.0, -150.0, 342.0), course=342.0,
+         wx="storm", wx_over=dict(wave_scale=1.02, choppy=0.60, whitecap=0.40),
+         place=(70.0, -150.0, 342.0), course=342.0,
          ease="linear", shake=0.34, lead=0.5,
-         world=True, a=(14.4, -14.9, 6.2), b=(12.2, -12.6, 5.4),
-         tgt=(0.0, 0.0, 8.0),
+         world=True, a=(14.4, -14.9, 6.8), b=(12.2, -12.6, 6.0),
+         tgt=(0.0, 0.0, 5.6),
          fire=((1.05, "hero", 318.0, 760.0), (2.85, "mid", 344.0, 1500.0))),
 
     # ---- 1. DAWN 04:50 ----------------------------------------------------- #
