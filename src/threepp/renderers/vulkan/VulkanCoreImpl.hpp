@@ -3170,6 +3170,9 @@ namespace threepp {
         //   v1.xyz = world pos1,    v1.w = running cumPower (CDF)
         //   v2.xyz = world pos2,    v2.w = per-tri power (lum * area)
         //   emission.xyz = emissive*intensity, emission.w = unused
+        // then a 64-byte header (v0.x = emissive-instance count) and, under
+        // kEmissiveCoverMaxLights, one 64-byte record per emissive instance
+        // for the shader's coverage mode (emissive_lights.glsl).
         //
         // Uniform-by-area within each tri × power-weighted picking across tris
         // gives a constant area-weighted-luminance pdf for closest_hit's NEE.

@@ -7,6 +7,7 @@
 #include <cmath>
 #include <cstdlib>// std::getenv / std::strtof (THREEPP_VK_SPLATVOL_SIGMA)
 #include <cstring>
+#include <limits>
 
 namespace threepp {
 
@@ -304,6 +305,12 @@ namespace threepp {
     //   v1.xyz = world pos1,    v1.w = running cumPower (CDF)
     //   v2.xyz = world pos2,    v2.w = per-tri power (lum * area)
     //   emission.xyz = emissive*intensity, emission.w = unused
+    // followed by a 64-byte HEADER (v0.x = emissive-instance count L) and,
+    // when L <= kEmissiveCoverMaxLights, one 64-byte record per emissive
+    // INSTANCE (centre/radius, area-weighted normal sum, CDF start, tri
+    // range, area, power, Le) — the shader's coverage mode, which samples
+    // every light instead of letting a few strata pick among them
+    // (emissive_lights.glsl). Capacity is sized on the whole record count.
     //
     // Uniform-by-area within each tri × power-weighted picking across tris
     // gives a constant area-weighted-luminance pdf for closest_hit's NEE.
@@ -338,7 +345,8 @@ namespace threepp {
                 // This frame's GPU buffer already holds the cached data.
                 return false;
             }
-            const bool grew = ensureEmissiveTriCapacity(frame, cachedEmissiveTriCount_);
+            const bool grew = ensureEmissiveTriCapacity(
+                    frame, static_cast<uint32_t>(cachedEmissiveData_.size() / 16));
             uploadHostVisible(ctx->allocator(), emissiveTriBuffers[frame],
                               cachedEmissiveData_.data(),
                               cachedEmissiveData_.size() * sizeof(float));
@@ -349,6 +357,11 @@ namespace threepp {
         std::vector<float> data;// 16 floats per tri
         data.reserve(64 * 16);
         float cumPower = 0.0f;
+        // Per-light records for the shader's COVERAGE mode (emissive_lights.glsl):
+        // one per emissive INSTANCE, appended behind a header after the triangles.
+        std::vector<float> lights;// 16 floats per light, kept only while under the cap
+        lights.reserve(kEmissiveCoverMaxLights * 16);
+        uint32_t lightCount = 0;// every emissive instance, capped or not
 
         // Per SPAN: the emissive verdict is a per-MESH fact, read off the
         // expansion-cached MaterialWithEmissive* (material pointer swaps force
@@ -395,6 +408,18 @@ namespace threepp {
                 wy = M[1] * x + M[5] * y + M[9]  * z + M[13];
                 wz = M[2] * x + M[6] * y + M[10] * z + M[14];
             };
+            // This instance's light record: its tri range in the CDF, total area,
+            // area-weighted (outward) normal sum and bounding sphere.
+            const uint32_t triBegin = static_cast<uint32_t>(data.size() / 16);
+            const float    cumStart = cumPower;
+            float areaSum = 0.0f, nsx = 0.0f, nsy = 0.0f, nsz = 0.0f;
+            constexpr float kInf = std::numeric_limits<float>::max();
+            float bbMin[3] = {kInf, kInf, kInf}, bbMax[3] = {-kInf, -kInf, -kInf};
+            auto bbAdd = [&](float x, float y, float z) {
+                bbMin[0] = std::min(bbMin[0], x); bbMax[0] = std::max(bbMax[0], x);
+                bbMin[1] = std::min(bbMin[1], y); bbMax[1] = std::max(bbMax[1], y);
+                bbMin[2] = std::min(bbMin[2], z); bbMax[2] = std::max(bbMax[2], z);
+            };
 
             const auto* indices = indexed ? idxAttr->array().data() : nullptr;
             for (uint32_t t = 0; t < triCount; ++t) {
@@ -425,6 +450,9 @@ namespace threepp {
                 if (!(area > 1e-8f)) continue;
                 const float power = emLum * area;
                 cumPower += power;
+                areaSum += area;
+                nsx += 0.5f * cx; nsy += 0.5f * cy; nsz += 0.5f * cz;// area-weighted face normal
+                bbAdd(w0x, w0y, w0z); bbAdd(w1x, w1y, w1z); bbAdd(w2x, w2y, w2z);
 
                 data.push_back(w0x); data.push_back(w0y); data.push_back(w0z);
                 data.push_back(area);
@@ -435,12 +463,31 @@ namespace threepp {
                 data.push_back(emR); data.push_back(emG); data.push_back(emB);
                 data.push_back(0.0f);
             }
+            const uint32_t triCnt = static_cast<uint32_t>(data.size() / 16) - triBegin;
+            if (triCnt > 0) {
+                const float ex = bbMax[0] - bbMin[0], ey = bbMax[1] - bbMin[1], ez = bbMax[2] - bbMin[2];
+                const float lf[16] = {0.5f * (bbMin[0] + bbMax[0]), 0.5f * (bbMin[1] + bbMax[1]),
+                                      0.5f * (bbMin[2] + bbMax[2]), 0.5f * std::sqrt(ex * ex + ey * ey + ez * ez),
+                                      nsx, nsy, nsz, cumStart,
+                                      static_cast<float>(triBegin), static_cast<float>(triCnt),
+                                      areaSum, cumPower - cumStart,
+                                      emR, emG, emB, 0.0f};
+                if (++lightCount <= kEmissiveCoverMaxLights) lights.insert(lights.end(), lf, lf + 16);
+            }
             }// per-entry (emissive spans only)
         }
 
         const uint32_t triCount = static_cast<uint32_t>(data.size() / 16);
         emissiveTriCountThisFrame_ = triCount;
         emissiveTotalPowerThisFrame_ = cumPower;
+        // Tail: the header (light count), then the per-light table — only under the
+        // cap the shader reads it at; bigger scenes use the global pick and skip the
+        // bytes. pc.emissiveCount stays the TRIANGLE count (the CDF search range).
+        if (triCount > 0) {
+            const float hdr[16] = {static_cast<float>(lightCount)};// rest zero
+            data.insert(data.end(), hdr, hdr + 16);
+            if (lightCount <= kEmissiveCoverMaxLights) data.insert(data.end(), lights.begin(), lights.end());
+        }
 
         // Update cache regardless — non-emissive scenes still want
         // entriesUnchanged + 0-tri to short-circuit out of the walk.
@@ -455,7 +502,8 @@ namespace threepp {
 
         if (triCount == 0) return false;
 
-        const bool grew = ensureEmissiveTriCapacity(frame, triCount);
+        const bool grew = ensureEmissiveTriCapacity(
+                frame, static_cast<uint32_t>(cachedEmissiveData_.size() / 16));
 
         uploadHostVisible(ctx->allocator(), emissiveTriBuffers[frame],
                           cachedEmissiveData_.data(),

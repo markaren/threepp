@@ -553,6 +553,7 @@ vec2 paneToPhys(sampler2D t, vec2 paneUv) {
     return paneUv * vec2(float(pc.width), float(pc.height)) / vec2(textureSize(t, 0));
 }
 
+#include "emissive_lights.glsl"// emitter light table + coverage sample plan (the NEE loops below)
 #include "deferred_shade_10_lighting_utils.glsl"
 #include "deferred_shade_20_restir_di.glsl"
 #include "deferred_shade_30_gi_gather.glsl"

@@ -17,6 +17,13 @@
 // clean rebuild so every translation unit picks up the new size.
 #define kMaxMaterialTextures 2048
 
+// Emitter COVERAGE mode (emissive_lights.glsl): scenes with at most this many
+// emissive INSTANCES get a per-light table at the tail of the EmTri buffer and
+// every light is sampled every time; above it the coherent NEE falls back to
+// the global power-CDF pick. Host (buildAndUploadEmissiveTris) writes the
+// table only under this cap; the shaders read it only under this cap.
+#define kEmissiveCoverMaxLights 8
+
 // TLAS instance visibility groups (VkAccelerationStructureInstanceKHR.mask).
 // Opaque + alpha-CUTOUT instances carry kRayMaskOpaque; alpha-BLEND and
 // transmissive instances (text decals, alpha quads, glass — anything whose

@@ -169,6 +169,8 @@ layout(push_constant) uniform Pc {
     uint  _pad;
 } pc;
 
+#include "emissive_lights.glsl"// emitter light table + coverage sample plan (emissiveIrradiance)
+
 // ── RNG (verbatim from deferred_shade.comp) ─────────────────────────────────
 uint pcgHash(uint v) {
     v = v * 747796405u + 2891336453u;
@@ -292,50 +294,36 @@ uint pickAnalyticLight(vec3 P, inout uint seed, out float wPick) {
 // clamp is the fixed 6.0 the GI channel uses — no pc.fireflyClamp here) ─────
 vec3 emissiveIrradiance(vec3 P, vec3 N, int EM_SAMPLES, bool doShadows) {
     if (pc.emissiveCount == 0u || pc.emissiveTotalPower <= 0.0) return vec3(0.0);
-    const int  emIters    = findMSB(max(pc.emissiveCount - 1u, 1u)) + 1;
-    const vec3 shadowOrig = P + N * SHADOW_EPS;
+    // The pick (global strata, or per-light COVERAGE with point proxies for small
+    // lights) is emissive_lights.glsl's; this loop owns the cosine term and the plain
+    // opaque shadow ray. twoSided: a GI bounce accepts an emitter's back face.
+    const vec3   shadowOrig = P + N * SHADOW_EPS;
+    const EmPlan plan = emPlanBuild(P, EM_SAMPLES);
     vec3 sum = vec3(0.0);
-    for (int s = 0; s < EM_SAMPLES; ++s) {
-        const float xi = (float(s) + 0.5) / float(EM_SAMPLES) * pc.emissiveTotalPower;
-        uint lo = 0u, hi = pc.emissiveCount - 1u;
-        for (int it = 0; it < emIters; ++it) {
-            if (lo >= hi) break;
-            const uint mid = (lo + hi) >> 1u;
-            if (emissiveTris[mid].v1.w < xi) lo = mid + 1u; else hi = mid;
-        }
-        const EmTri t = emissiveTris[lo];
-        const float su1 = sqrt(fract(0.5 + float(s) * 0.7548776662));
-        const float r2  =      fract(0.5 + float(s) * 0.5698402909);
-        const vec3 lp = (1.0 - su1) * t.v0.xyz + (su1 * (1.0 - r2)) * t.v1.xyz + (su1 * r2) * t.v2.xyz;
-        const vec3 toL = lp - P;
-        const float dist2 = dot(toL, toL);
-        const float dist  = sqrt(max(dist2, 1e-20));
-        if (dist <= 1e-4) continue;
-        const vec3 L = toL / dist;
-        const float ndl = dot(N, L);
+    for (int s = 0; s < plan.count; ++s) {
+        EmSample es;
+        if (!emPlanSample(plan, s, P, /*twoSided=*/true, es)) continue;
+        const float ndl = dot(N, es.L);
         if (ndl <= 0.01) continue;
-        const vec3 lnRaw = cross(t.v1.xyz - t.v0.xyz, t.v2.xyz - t.v0.xyz);
-        const float lnLen = length(lnRaw);
-        if (lnLen < 1e-20 || t.v0.w <= 1e-20 || t.v2.w <= 0.0) continue;
-        const float cosLight = abs(dot(-L, lnRaw / lnLen));
-        if (cosLight <= 0.05) continue;
-        const float pickPdf = t.v2.w / pc.emissiveTotalPower;
-        const float p_omega = pickPdf * dist2 / (t.v0.w * cosLight);
-        if (p_omega <= 1e-20) continue;
         if (doShadows) {
-            rayQueryEXT rq;
-            rayQueryInitializeEXT(rq, topAS, gl_RayFlagsTerminateOnFirstHitEXT | gl_RayFlagsOpaqueEXT,
-                                  kRayMaskOpaque, shadowOrig, 1e-3, L, dist - 1e-2);
-            while (rayQueryProceedEXT(rq)) {}
-            if (rayQueryGetIntersectionTypeEXT(rq, true) != gl_RayQueryCommittedIntersectionNoneEXT)
-                continue;
+            const float tMax = es.dist - es.backoff - 1e-2;// a point proxy stops at the light's radius
+            if (tMax > 1e-3) {
+                rayQueryEXT rq;
+                // kRayMaskOpaque: blend/transmissive surfaces don't block (force-
+                // opaque flag would otherwise commit a decal's transparent quad).
+                rayQueryInitializeEXT(rq, topAS, gl_RayFlagsTerminateOnFirstHitEXT | gl_RayFlagsOpaqueEXT,
+                                      kRayMaskOpaque, shadowOrig, 1e-3, es.L, tMax);
+                while (rayQueryProceedEXT(rq)) {}
+                if (rayQueryGetIntersectionTypeEXT(rq, true) != gl_RayQueryCommittedIntersectionNoneEXT)
+                    continue;
+            }
         }
-        vec3 c = ndl * t.emission.rgb / p_omega;
+        vec3 c = ndl * es.Le * es.gw;
         const float lum = max(max(c.r, c.g), c.b);
         if (lum > 6.0) c *= 6.0 / lum;
-        sum += c;
+        sum += c * es.w;
     }
-    return sum / float(EM_SAMPLES);
+    return sum;
 }
 
 // ── One probe ray (giRadiance's shading + the probe feedback tap) ───────────

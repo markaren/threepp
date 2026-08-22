@@ -566,82 +566,48 @@ float sampleFoamBicubic(vec2 uv) {
 // COVERAGE (bias), not noise: stratified power-CDF picks span the emitters ∝
 // power; a low-discrepancy (R2) barycentric covers each picked triangle's area.
 // Settles instantly, no denoiser. (`seed` kept for ABI; unused.)
+// The pick itself — and the per-light COVERAGE mode that resolves several small
+// emitters (the sailboat's nav lights) — now lives in emissive_lights.glsl.
 vec3 emissiveNEE(int EM_SAMPLES, vec3 P, vec3 N, vec3 V, float NdotV, vec3 F0, vec3 albedo,
                  float roughness, float metalness, float k, inout uint seed, bool doShadows) {
     if (pc.emissiveCount == 0u || pc.emissiveTotalPower <= 0.0) return vec3(0.0);
-    const int   emIters    = findMSB(max(pc.emissiveCount - 1u, 1u)) + 1;
-    // EM_SAMPLES: 16 at primaries (per-surface-dithered → soft penumbra),
-    // small at reflection-bounce hits (accumulated + roughness-blurred).
-    const vec3  shadowOrig = P + N * SHADOW_EPS;
-    // COHERENT deterministic sampling — the SAME stratified sample set at every pixel (NO
-    // per-pixel rotation). Coherent area-light sampling is noise-free: the diffuse
-    // contribution is a smooth function of surface position, so identical samples give
-    // smooth lighting, not speckle. This is REQUIRED for many-light scenes (Bistro: 1000s
-    // of emissive triangles) — a per-pixel-ROTATED set samples a DIFFERENT random 16-of-N
-    // lights per pixel → massive variance → un-denoisable noise (the regression that a
-    // per-pixel PCG dither, added to unbias a single cube, caused). The tradeoff is a FIXED
-    // directional bias on a lone small emitter (a cube face with few strata reads dim) —
-    // accepted over the noise. The proper no-bias + no-noise answer is TEMPORAL accumulation
-    // of a per-FRAME-rotated set through the SVGF GI channel (indirectImage reproject); a
-    // 1-spp deferred path with no accumulation cannot have both unbiased AND noise-free.
+    // EM_SAMPLES: 16 at primaries, small at reflection-bounce hits. The PICK (global
+    // strata, or per-light COVERAGE with point proxies for small lights) lives in
+    // emissive_lights.glsl; this loop owns the BRDF and the emitter-skipping shadow ray.
+    const vec3   shadowOrig = P + N * SHADOW_EPS;
+    const EmPlan plan = emPlanBuild(P, EM_SAMPLES);
     vec3 sum = vec3(0.0);
-    for (int s = 0; s < EM_SAMPLES; ++s) {
-        // Coherent stratified power-CDF pick (covers emitters ∝ power; same every pixel).
-        const float xi = (float(s) + 0.5) / float(EM_SAMPLES) * pc.emissiveTotalPower;
-        uint lo = 0u, hi = pc.emissiveCount - 1u;
-        for (int it = 0; it < emIters; ++it) {
-            if (lo >= hi) break;
-            const uint mid = (lo + hi) >> 1u;
-            if (emissiveTris[mid].v1.w < xi) lo = mid + 1u; else hi = mid;
-        }
-        const EmTri t = emissiveTris[lo];
-        // Coherent R2 barycentric → same LIGHTING point every pixel (smooth irradiance).
-        const float su1 = sqrt(fract(0.5 + float(s) * 0.7548776662));
-        const float r2  =      fract(0.5 + float(s) * 0.5698402909);
-        const vec3 lp = (1.0 - su1) * t.v0.xyz + (su1 * (1.0 - r2)) * t.v1.xyz + (su1 * r2) * t.v2.xyz;
-        const vec3 toL = lp - P;
-        const float dist2 = dot(toL, toL);
-        const float dist  = sqrt(max(dist2, 1e-20));
-        if (dist <= 1e-4) continue;
-        const vec3 L = toL / dist;
+    for (int s = 0; s < plan.count; ++s) {
+        EmSample es;
+        if (!emPlanSample(plan, s, P, /*twoSided=*/false, es)) continue;
+        const vec3 L = es.L;
         if (dot(N, L) <= 0.01) continue;
-        const vec3 lnRaw = cross(t.v1.xyz - t.v0.xyz, t.v2.xyz - t.v0.xyz);
-        const float lnLen = length(lnRaw);
-        if (lnLen < 1e-20 || t.v0.w <= 1e-20 || t.v2.w <= 0.0) continue;
-        // FRONT-FACING only (no abs): reject emitter triangles whose face points AWAY
-        // from the shading point — i.e. the emitter's FAR side. The shadow ray to a
-        // far-side point passes through the emitter's near side → self-"occluded";
-        // dithering that made every lit surface a fake penumbra = the "fence" weave.
-        // A convex emitter (sphere) only lights via its visible near side anyway, so
-        // this is also more correct. (Also rejects grazing → firefly source.)
-        const float cosLight = dot(-L, lnRaw / lnLen);
-        if (cosLight <= 0.05) continue;// front-facing only (far side isn't visible to P)
-        const float pickPdf = t.v2.w / pc.emissiveTotalPower;
-        const float p_omega = pickPdf * dist2 / (t.v0.w * cosLight);
-        if (p_omega <= 1e-20) continue;
         if (doShadows) {
-            // Shadow ray to the SAME (rotated) emitter point used for lighting — the
-            // per-pixel rotation already softens the penumbra. Non-opaque + SKIP emitters:
-            // a light never shadows itself, so the emitter's own far side can't paint a
-            // self-occlusion "fence" across lit surfaces; real occluders right up to the
-            // light still cast soft shadows (no tMax margin).
-            const vec3  toLs = lp - shadowOrig;
+            // Shadow ray to the SAME emitter point used for lighting. Non-opaque + SKIP
+            // emitters: a light never shadows itself, so the emitter's own far side can't
+            // paint a self-occlusion "fence" across lit surfaces; real occluders right up
+            // to the light still cast soft shadows (no tMax margin). A point proxy stops
+            // at the light's bounding radius (es.backoff).
+            const vec3  toLs  = es.lp - shadowOrig;
             const float dists = length(toLs);
-            rayQueryEXT rq;
-            // kRayMaskOpaque: blend/transmissive surfaces (decals, glass) must
-            // not block emissive light — this loop only filters emitters.
-            rayQueryInitializeEXT(rq, topAS, gl_RayFlagsTerminateOnFirstHitEXT,
-                                  kRayMaskOpaque, shadowOrig, 1e-3, toLs / max(dists, 1e-6), dists - 1e-2);
-            while (rayQueryProceedEXT(rq)) {
-                if (rayQueryGetIntersectionTypeEXT(rq, false) == gl_RayQueryCandidateIntersectionTriangleEXT) {
-                    const MaterialDesc hm = mats[rayQueryGetIntersectionInstanceCustomIndexEXT(rq, false)];
-                    const vec3 hem = hm.emissive * hm.emissiveIntensity;
-                    if (max(max(hem.r, hem.g), hem.b) < 0.05)// not an emitter → real occluder
-                        rayQueryConfirmIntersectionEXT(rq);
+            const float tMax  = dists - es.backoff - 1e-2;
+            if (tMax > 1e-3) {
+                rayQueryEXT rq;
+                // kRayMaskOpaque: blend/transmissive surfaces (decals, glass) must
+                // not block emissive light — this loop only filters emitters.
+                rayQueryInitializeEXT(rq, topAS, gl_RayFlagsTerminateOnFirstHitEXT,
+                                      kRayMaskOpaque, shadowOrig, 1e-3, toLs / max(dists, 1e-6), tMax);
+                while (rayQueryProceedEXT(rq)) {
+                    if (rayQueryGetIntersectionTypeEXT(rq, false) == gl_RayQueryCandidateIntersectionTriangleEXT) {
+                        const MaterialDesc hm = mats[rayQueryGetIntersectionInstanceCustomIndexEXT(rq, false)];
+                        const vec3 hem = hm.emissive * hm.emissiveIntensity;
+                        if (max(max(hem.r, hem.g), hem.b) < 0.05)// not an emitter → real occluder
+                            rayQueryConfirmIntersectionEXT(rq);
+                    }
                 }
+                if (rayQueryGetIntersectionTypeEXT(rq, true) != gl_RayQueryCommittedIntersectionNoneEXT)
+                    continue;
             }
-            if (rayQueryGetIntersectionTypeEXT(rq, true) != gl_RayQueryCommittedIntersectionNoneEXT)
-                continue;
         }
         // DIFFUSE-ONLY emitter NEE. Light sampling (sampling the emitter) is the
         // correct, low-variance estimator for the broad DIFFUSE term — but the WRONG
@@ -653,15 +619,15 @@ vec3 emissiveNEE(int EM_SAMPLES, vec3 P, vec3 N, vec3 V, float NdotV, vec3 F0, v
         const vec3  H  = normalize(V + L);
         const vec3  Fr = fresnelSchlick(max(dot(V, H), 0.0), F0);
         const vec3  kd = (vec3(1.0) - Fr) * (1.0 - metalness);
-        vec3 c = (kd * albedo * (1.0 / PI)) * max(dot(N, L), 0.0) * t.emission.rgb / p_omega;
+        vec3 c = (kd * albedo * (1.0 / PI)) * max(dot(N, L), 0.0) * es.Le * es.gw;
         // Firefly clamp: cap a single sample's luminance so a stray spike (grazing
         // emitter / near hit) can't dominate — the dominant noise on animated
         // geometry where TAA can't accumulate it away.
         const float lum = max(max(c.r, c.g), c.b);
         if (lum > pc.fireflyClamp) c *= pc.fireflyClamp / lum;
-        sum += c;
+        sum += c * es.w;
     }
-    return sum / float(EM_SAMPLES);
+    return sum;
 }
 
 // Coherent emitter SPECULAR NEE — the GGX-lobe analogue of emissiveNEE (same
@@ -680,39 +646,18 @@ vec3 emissiveNEE(int EM_SAMPLES, vec3 P, vec3 N, vec3 V, float NdotV, vec3 F0, v
 vec3 emissiveSpecNEE(vec3 P, vec3 N, vec3 V, float NdotV, vec3 F0,
                      float roughness, float k, bool doShadows) {
     if (pc.emissiveCount == 0u || pc.emissiveTotalPower <= 0.0) return vec3(0.0);
-    const int   emIters    = findMSB(max(pc.emissiveCount - 1u, 1u)) + 1;
-    const int   EM_SAMPLES = 8;// was 16 — halves the per-glossy-pixel shadow rays;
-                                // still deterministic (zero temporal noise), slightly
-                                // coarser emitter coverage on wide-lobe metals.
-    const vec3  shadowOrig = P + N * SHADOW_EPS;
+    const int    EM_SAMPLES = 8;// was 16 — halves the per-glossy-pixel shadow rays;
+                                 // still deterministic (zero temporal noise), slightly
+                                 // coarser emitter coverage on wide-lobe metals.
+    const vec3   shadowOrig = P + N * SHADOW_EPS;
+    const EmPlan plan = emPlanBuild(P, EM_SAMPLES);// same pick as emissiveNEE (emissive_lights.glsl)
     vec3 sum = vec3(0.0);
-    for (int s = 0; s < EM_SAMPLES; ++s) {
-        const float xi = (float(s) + 0.5) / float(EM_SAMPLES) * pc.emissiveTotalPower;
-        uint lo = 0u, hi = pc.emissiveCount - 1u;
-        for (int it = 0; it < emIters; ++it) {
-            if (lo >= hi) break;
-            const uint mid = (lo + hi) >> 1u;
-            if (emissiveTris[mid].v1.w < xi) lo = mid + 1u; else hi = mid;
-        }
-        const EmTri t = emissiveTris[lo];
-        const float su1 = sqrt(fract(0.5 + float(s) * 0.7548776662));
-        const float r2  =      fract(0.5 + float(s) * 0.5698402909);
-        const vec3 lp = (1.0 - su1) * t.v0.xyz + (su1 * (1.0 - r2)) * t.v1.xyz + (su1 * r2) * t.v2.xyz;
-        const vec3 toL = lp - P;
-        const float dist2 = dot(toL, toL);
-        const float dist  = sqrt(max(dist2, 1e-20));
-        if (dist <= 1e-4) continue;
-        const vec3 L = toL / dist;
+    for (int s = 0; s < plan.count; ++s) {
+        EmSample es;
+        if (!emPlanSample(plan, s, P, /*twoSided=*/false, es)) continue;
+        const vec3  L     = es.L;
         const float NdotL = dot(N, L);
         if (NdotL <= 0.01) continue;
-        const vec3 lnRaw = cross(t.v1.xyz - t.v0.xyz, t.v2.xyz - t.v0.xyz);
-        const float lnLen = length(lnRaw);
-        if (lnLen < 1e-20 || t.v0.w <= 1e-20 || t.v2.w <= 0.0) continue;
-        const float cosLight = dot(-L, lnRaw / lnLen);
-        if (cosLight <= 0.05) continue;// front-facing only (matches emissiveNEE)
-        const float pickPdf = t.v2.w / pc.emissiveTotalPower;
-        const float p_omega = pickPdf * dist2 / (t.v0.w * cosLight);
-        if (p_omega <= 1e-20) continue;
         // GGX spec toward the emitter sample — BRDF eval BEFORE the shadow ray:
         // most samples sit outside the lobe (D≈0), so their ray is skipped and
         // the per-pixel cost concentrates on the few in-lobe samples.
@@ -721,30 +666,33 @@ vec3 emissiveSpecNEE(vec3 P, vec3 N, vec3 V, float NdotV, vec3 F0,
         const vec3  F     = fresnelSchlick(max(dot(V, H), 0.0), F0);
         const float D     = distGGX(NdotH, roughness);
         const float G     = geomSmithG1(NdotV, k) * geomSmithG1(NdotL, k);
-        vec3 c = (D * G * F) / max(4.0 * NdotV * NdotL, 1e-4) * NdotL * t.emission.rgb / p_omega;
+        vec3 c = (D * G * F) / max(4.0 * NdotV * NdotL, 1e-4) * NdotL * es.Le * es.gw;
         const float lum = max(max(c.r, c.g), c.b);
         if (lum <= 1e-4) continue;// outside the lobe → skip the shadow ray
         if (lum > pc.fireflyClamp) c *= pc.fireflyClamp / lum;
         if (doShadows) {
             // Emitter-skipping shadow ray (a light never shadows itself) — same
             // query as emissiveNEE's (kRayMaskOpaque: decals/glass don't block).
-            const vec3  toLs  = lp - shadowOrig;
+            const vec3  toLs  = es.lp - shadowOrig;
             const float dists = length(toLs);
-            rayQueryEXT rq;
-            rayQueryInitializeEXT(rq, topAS, gl_RayFlagsTerminateOnFirstHitEXT,
-                                  kRayMaskOpaque, shadowOrig, 1e-3, toLs / max(dists, 1e-6), dists - 1e-2);
-            while (rayQueryProceedEXT(rq)) {
-                if (rayQueryGetIntersectionTypeEXT(rq, false) == gl_RayQueryCandidateIntersectionTriangleEXT) {
-                    const MaterialDesc hm = mats[rayQueryGetIntersectionInstanceCustomIndexEXT(rq, false)];
-                    const vec3 hem = hm.emissive * hm.emissiveIntensity;
-                    if (max(max(hem.r, hem.g), hem.b) < 0.05)// not an emitter → real occluder
-                        rayQueryConfirmIntersectionEXT(rq);
+            const float tMax  = dists - es.backoff - 1e-2;
+            if (tMax > 1e-3) {
+                rayQueryEXT rq;
+                rayQueryInitializeEXT(rq, topAS, gl_RayFlagsTerminateOnFirstHitEXT,
+                                      kRayMaskOpaque, shadowOrig, 1e-3, toLs / max(dists, 1e-6), tMax);
+                while (rayQueryProceedEXT(rq)) {
+                    if (rayQueryGetIntersectionTypeEXT(rq, false) == gl_RayQueryCandidateIntersectionTriangleEXT) {
+                        const MaterialDesc hm = mats[rayQueryGetIntersectionInstanceCustomIndexEXT(rq, false)];
+                        const vec3 hem = hm.emissive * hm.emissiveIntensity;
+                        if (max(max(hem.r, hem.g), hem.b) < 0.05)// not an emitter → real occluder
+                            rayQueryConfirmIntersectionEXT(rq);
+                    }
                 }
+                if (rayQueryGetIntersectionTypeEXT(rq, true) != gl_RayQueryCommittedIntersectionNoneEXT)
+                    continue;
             }
-            if (rayQueryGetIntersectionTypeEXT(rq, true) != gl_RayQueryCommittedIntersectionNoneEXT)
-                continue;
         }
-        sum += c;
+        sum += c * es.w;
     }
-    return sum / float(EM_SAMPLES);
+    return sum;
 }
