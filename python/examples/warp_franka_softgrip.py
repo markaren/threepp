@@ -216,6 +216,16 @@ CARVE = 0.25          # cells of dilation, so the cage measures the fish
 # than a bag of marbles (and to stop a pad node slipping between four cage
 # nodes). Contact distance is the SUM of the two radii.
 PART_R = 0.005        # pad / finger nodes
+# PHASE 10: the contact radius WAS the visible gap. contact_r = PART_R + CAGE_R
+# stops the pad particle that far short of a cage node, and the pad face is drawn
+# AT the particle, so a fat contact_r left the amber pad ~1 cm proud of the drawn
+# fish even while the physics reported a firm bite. LEVER 2 (shrink contact_r) was
+# tried at 0.10..0.25 cells / TET_RES 22..30 and CONSISTENTLY broke the RELEASE: a
+# wide contact band actively pushes the fish off the pad as the jaws open, while a
+# thin band leaves only tacky friction, which drags the fish back up on RETREAT
+# (touch stayed 66..262 at DONE vs phase-9's clean 0). Clean ejection needs
+# contact_r ~9.9 mm. So the physics is left EXACTLY at phase 9 (grip, release, FEM
+# all unchanged) and the visible gap is closed render-only by RENDER_PAD_INSET.
 CAGE_R_CELLS = 0.45   # fish cage nodes, in cells of the voxel pitch
 CONTACT_CAP = 10
 CONTACT_MARGIN = 1.4
@@ -283,6 +293,18 @@ FIN_SKIN_OUT = 0.010              # back skin, outboard
 # clamping it -- the mass ratio IS the clamping stiffness at a contact.
 FIN_MASS = 0.8
 RIB_EVERY = 2                     # draw a cross rib every Nth row (render only)
+# PHASE 10, and the whole gap fix now lives here. The pad particle stops contact_r
+# (~9.9 mm) short of a cage node and the pad face is drawn AT the particle, so the
+# amber face reads ~contact_r minus the indent (~2 mm) = ~8 mm proud of the drawn
+# fish. Shift ONLY the drawn FRONT-skin vertices inward (toward the other finger)
+# by this much when building the finger render soup each frame -- applied to BOTH
+# the skin soup and the rib soup's front edge so they stay joined. This is a pure
+# render move: the physics particles, the truss and the contact nodes do not move,
+# so the grasp, the release and the FEM are byte-for-byte the phase-9 ones. Front
+# and back skins sit ~14 mm apart, so 8 mm inward leaves a ~6 mm drawn pad -- thin
+# but still a pad, not a collapsed sheet (verified by looking). The back skin and
+# the ribs' back edge are NOT touched.
+RENDER_PAD_INSET = 0.008          # m, drawn front skin only (0 disables)
 
 URDF = "C:/dev/threepp/cmake-build-relwithdebinfo/_deps/threepp_data-src/urdf/franka/fr3.urdf"
 if not os.path.exists(URDF):
@@ -1291,6 +1313,29 @@ N_FISH_FACES = fish_corners // 3
 fin_pos = wp.zeros(fin_corners, dtype=wp.vec3, device=device)
 fin_nrm = wp.zeros(fin_corners, dtype=wp.vec3, device=device)
 
+# PHASE 10 render-only pad inset. Per drawn corner: the finger index (0/1) if the
+# corner belongs to that finger's FRONT skin, else -1. The front skin is the first
+# FIN_ROWS*FIN_COLS particles of each finger's FIN_N block. offset_front_skin then
+# shifts only those corners inward (toward the other finger) after the scatter, so
+# the amber contact face meets the fish without moving any physics particle.
+_fin_corner_pid = fin_tris_np
+_fin_corner_front = np.where(
+    (_fin_corner_pid % FIN_N) < (FIN_ROWS * FIN_COLS),
+    _fin_corner_pid // FIN_N, -1).astype(np.int32)
+fin_front_of_d = wp.array(_fin_corner_front, dtype=int, device=device)
+
+
+@wp.kernel
+def offset_front_skin(finger_of: wp.array(dtype=int),
+                      dir0: wp.vec3, dir1: wp.vec3, amt: float,
+                      out_pos: wp.array(dtype=wp.vec3)):
+    c = wp.tid()
+    f = finger_of[c]
+    if f == 0:
+        out_pos[c] = out_pos[c] + dir0 * amt
+    elif f == 1:
+        out_pos[c] = out_pos[c] + dir1 * amt
+
 # The ribs are their own soup with their own vertex normals: a rib plate stands
 # perpendicular to the skins, so averaging its face normals into the skin nodes
 # would band the skins and averaging the skins' into the ribs would make the
@@ -1302,6 +1347,13 @@ N_RIB_FACES = rib_corners // 3
 rib_vn = wp.zeros(NP, dtype=wp.vec3, device=device)
 rib_pos = wp.zeros(rib_corners, dtype=wp.vec3, device=device)
 rib_nrm = wp.zeros(rib_corners, dtype=wp.vec3, device=device)
+# The rib soup's FRONT edge (the corners on front-skin particles) is inset by the
+# same RENDER_PAD_INSET so the ribs stay welded to the shifted front skin; the
+# rib's back edge (back-skin particles) is left where it is. Same front-index rule.
+_rib_corner_front = np.where(
+    (rib_tris_np % FIN_N) < (FIN_ROWS * FIN_COLS),
+    rib_tris_np // FIN_N, -1).astype(np.int32)
+rib_front_of_d = wp.array(_rib_corner_front, dtype=int, device=device)
 fish_pos = wp.zeros(fish_corners, dtype=wp.vec3, device=device)
 fish_nrm = wp.zeros(fish_corners, dtype=wp.vec3, device=device)
 
@@ -1439,7 +1491,7 @@ Y_CARRIAGE = abs(float(CARRIAGE_TCP[0][1]))
 # held on the backstop at ~0.9 N and lifted at ~1.2 N (below the ~2.5 N target)
 # on the shallow 3 mm bite. Driving the pad face ~6 mm inside the flank firms the
 # clamp without over-stretching the FEM (p99 stays well under 1.4).
-BITE = 0.007             # how far inside the flank the pad face is driven
+BITE = 0.007             # how far inside the flank the pad face is driven (phase 9)
 FINGER_STOP = max(FINGER_MIN, FINGER_OPEN - Y_CARRIAGE + FIN_SKIN_IN + PART_R
                   + FISH_HALF_W - BITE)
 
@@ -1541,6 +1593,20 @@ def fem_diag(cage_pos):
     return float(ratio.max()), float(np.percentile(ratio, 99.0)), float(np.abs(detf - 1.0).max())
 
 
+def _pad_inward_dirs():
+    """Unit vectors, per finger, pointing toward the OTHER finger (the grasp
+    closing axis in world), taken from the two live carriage frames. Finger 0's
+    front skin is inset along dirs[0], finger 1's along dirs[1]."""
+    c0 = _mats_cur[0][:3, 3]
+    c1 = _mats_cur[1][:3, 3]
+    d = c1 - c0
+    n = float(np.linalg.norm(d))
+    if n < 1.0e-6:
+        return [(0.0, 1.0, 0.0), (0.0, -1.0, 0.0)]
+    d = (d / n).astype(np.float64)
+    return [tuple(d), tuple(-d)]
+
+
 def pad_gap_diag(tag):
     """Print, for BOTH fingers, the pad inner-face (front-skin) centroid and the
     minimum surface gap from that pad to the nearest fish tet-cage vertex, plus
@@ -1558,14 +1624,29 @@ def pad_gap_diag(tag):
     print(f"  [gap:{tag:5s}] cage bbox ({cmin[0]:.3f},{cmin[1]:.3f},{cmin[2]:.3f})"
           f"..({cmax[0]:.3f},{cmax[1]:.3f},{cmax[2]:.3f}) c=({cc[0]:.3f},{cc[1]:.3f},{cc[2]:.3f})"
           f" render bbox ({rmin[0]:.3f},{rmin[1]:.3f},{rmin[2]:.3f})..({rmax[0]:.3f},{rmax[1]:.3f},{rmax[2]:.3f})")
+    dirs = _pad_inward_dirs()          # world inward per finger (grasp closing axis)
     for k in (0, 1):
         b = k * FIN_N
         pad = xp[b:b + FIN_ROWS * FIN_COLS]          # front skin = the inner face
         pc = pad.mean(0)
         d = np.sqrt(((pad[:, None, :] - cage[None, :, :]) ** 2).sum(-1))
         gap = float(d.min()) - contact_r
+        # VISUAL gap -- the user's actual complaint. Compare the DRAWN front-skin
+        # face (particle + the render-only inward inset) to the DRAWN fish surface
+        # (fish_v render vertices). For each front-skin particle take the nearest
+        # render vertex; report the closest one, signed along the inward axis so a
+        # negative value means the drawn pad has crossed into the drawn fish.
+        inward = np.array(dirs[k], dtype=np.float32)
+        drawn = pad + inward * RENDER_PAD_INSET
+        dr = np.sqrt(((drawn[:, None, :] - rv[None, :, :]) ** 2).sum(-1))
+        near_j = dr.argmin(1)                         # nearest render vtx per pad pt
+        near_d = dr[np.arange(len(pad)), near_j]
+        p = int(near_d.argmin())                      # closest pad point
+        nn = rv[near_j[p]]
+        vis_signed = float(np.dot(nn - drawn[p], inward))   # + = gap, - = overlap
         print(f"  [gap:{tag:5s}] finger {k} pad-face c=({pc[0]:+.3f},{pc[1]:+.3f},{pc[2]:+.3f})"
-              f" min surface gap {gap * 1000:+5.1f} mm")
+              f" min surface gap {gap * 1000:+5.1f} mm | VISUAL pad->render "
+              f"{vis_signed * 1000:+5.1f} mm (min {float(near_d.min()) * 1000:4.1f} mm)")
 
 
 def step_frame():
@@ -1594,10 +1675,18 @@ def step_frame():
     wp.launch(accum_normals, dim=N_FIN_FACES, device=device, inputs=[x, fin_tris_d, nrm])
     wp.launch(scatter_soup_safe, dim=fin_corners, device=device,
               inputs=[x, nrm, fin_tris_d, fin_pos, fin_nrm])
+    if RENDER_PAD_INSET > 0.0:
+        _din = _pad_inward_dirs()
+        _d0, _d1 = wp.vec3(*_din[0]), wp.vec3(*_din[1])
+        wp.launch(offset_front_skin, dim=fin_corners, device=device,
+                  inputs=[fin_front_of_d, _d0, _d1, RENDER_PAD_INSET, fin_pos])
     rib_vn.zero_()
     wp.launch(accum_normals, dim=N_RIB_FACES, device=device, inputs=[x, rib_tris_d, rib_vn])
     wp.launch(scatter_soup_safe, dim=rib_corners, device=device,
               inputs=[x, rib_vn, rib_tris_d, rib_pos, rib_nrm])
+    if RENDER_PAD_INSET > 0.0:
+        wp.launch(offset_front_skin, dim=rib_corners, device=device,
+                  inputs=[rib_front_of_d, _d0, _d1, RENDER_PAD_INSET, rib_pos])
     wp.launch(skin_lattice, dim=FISH_NV, device=device,
               inputs=[x, FISH_BASE, skin_ids_d, skin_w_d, fish_v])
     fish_vn.zero_()
