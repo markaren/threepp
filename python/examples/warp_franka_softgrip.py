@@ -53,6 +53,7 @@ fingers do not hold the fish it falls.
     python warp_franka_softgrip.py --pov          # render from the wrist camera
     python warp_franka_softgrip.py --dof          # depth of field (see the note below)
     python warp_franka_softgrip.py --no-slowmo    # no 0.15x window around CLOSE -> LIFT
+    (interactive: press R to replay the scenario -- drop or pick -- from t = 0)
     python warp_franka_softgrip.py --no-pip       # no wrist-camera picture-in-picture
 """
 import math
@@ -2632,6 +2633,48 @@ def summary(c):
     return ok
 
 
+def reset_scenario():
+    """R in the viewer: rewind the whole scenario -- particles, multipliers,
+    task plan, grip state -- to t = 0 without reloading (JIT + assets ~10 s).
+    The prev buffer carries the belt speed again, so a --drop replays
+    identically (up to solver non-determinism)."""
+    global sim_t, seg_i, seg_t, q_cur, finger_cmd, grip_force, grip_held, grip_hi_n
+    global tcp_prev, slip_peak, slip_mean, slip_n, _close_diag_pending
+    x.assign(p0)
+    prev.assign(_p0_prev)
+    dpos.zero_()
+    tet_lam_d.zero_()
+    tet_lam_h.zero_()
+    pair_lam.zero_()
+    mc_acc.zero_()
+    mc_face.fill_(-1)
+    pad_force.zero_()
+    pad_hits.zero_()
+    sim_t = 0.0
+    q_cur = list(Q_HOME)
+    q_cur[7] = q_cur[8] = FINGER_OPEN if not DROP else Q_HOME[7]
+    finger_cmd = FINGER_OPEN
+    grip_force = 0.0
+    grip_held = False
+    grip_hi_n = 0
+    tcp_prev = None
+    slip_peak = 0.0
+    slip_mean, slip_n = 0.0, 0
+    _close_diag_pending = False
+    set_q(q_cur)
+    _mats_cur[0] = link_mat(left_link)
+    _mats_cur[1] = link_mat(right_link)
+    _mats_prev[:] = _mats_cur
+    _push_mats(1.0)
+    seg_i, seg_t = 0, 0.0
+    begin_segment(0)
+    step_frame.c_prev = np.array(FISH_P, dtype=np.float32)
+    step_frame.phase_prev = ""
+    step_frame.frame_i = 0
+    _diag_state["prev_local"] = None
+    print("  -- replay --")
+
+
 def set_rig(name):
     """Cut to a camera rig. MACRO rides the TCP (aim_camera), the others are
     fixed, so the rig name has to be the module-level CAM the follower reads."""
@@ -2839,9 +2882,15 @@ else:
         renderer.set_size(w, h)
 
     canvas.on_window_resize(on_resize)
-    state = {"done": False, "phase": ""}
+    state = {"done": False, "phase": "", "r_down": False}
 
     def animate():
+        r = canvas.is_key_down("R")
+        if r and not state["r_down"]:
+            reset_scenario()
+            state["done"] = False
+            slow["acc"] = 0.0
+        state["r_down"] = r
         slow["acc"] += rate()
         while slow["acc"] >= 1.0:
             slow["acc"] -= 1.0
