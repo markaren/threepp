@@ -81,7 +81,7 @@ BENCH = FRAMES > 0
 WIDTH, HEIGHT = parse_size(cli_arg("--size", "1280x720", str))
 # Newtons, but normalised: the proxy below is divided by the iteration count and
 # by the contacting-node count, so it no longer moves when the solver settings do.
-F_GRASP = cli_arg("--grip-force", 8.0, float)     # N, both pads together (a real force now)
+F_GRASP = cli_arg("--grip-force", 30.0, float)   # N, both pads: firm enough to seat around the back/belly ridges (palm stops the ride-up; a 9 N pinch lets the almond section ROLL and wedge diagonally)
 HEADLESS = SHOT or BENCH
 CAM = cli_arg("--cam", "drop" if "--drop" in sys.argv else "wide", str)   # wide | macro | top | drop
 # Render skin: default is the self-contained procedural herring so the committed
@@ -270,7 +270,11 @@ CAGE_R_CELLS = 0.30
 CONTACT_MARGIN = 0.004
 SURF_R = 0.0005         # the skin's own thickness against the tray / crate
 
-MU_PAD = 1.10         # tacky silicone pad on wet fish -- high, but elastomers do this
+# 0.7: wet-slimy fish on silicone. 1.10 was tuned when friction was the only
+# thing holding a half-volume fish; at full contact it made the open hand a
+# trap -- the wedged fish would hang between the OPEN pads by stiction alone
+# and ride the retreat. Carry margin at 0.7 is still ~2*0.7*N / 2.1 N >> 2.
+MU_PAD = cli_arg("--mu-pad", 0.70, float)
 MU_STEEL = cli_arg("--mu-steel", 0.25, float)   # fish on the stainless tray / table / belt
 MU_CRATE = 0.35
 
@@ -339,7 +343,15 @@ FIN_SKIN_IN = 0.004               # front skin, inboard of the carriage origin
 # of flat pads; a stiff corotational fish with Coulomb friction is held by the
 # pads themselves, and real Fin Ray fingers are straight when open -- they curl
 # under load, which the soft diagonals still do. --fin-curl 0.010 brings it back.
-FIN_CURL = cli_arg("--fin-curl", 0.010, float)   # back ON (user: the curved tips grip better)
+# 3 mm for the SIDE-LYING pick: at 10 mm the tip gap was 48.6 mm against a
+# 60 mm fish -- the tips ploughed the flanks on descent (20 N before the close
+# began) and caged the fish on OPEN so it rode the hand up ("stuck in the
+# gripper"). 3 mm keeps a lip against axial squirt-out without closing the exit.
+# 3 mm: enough of a lip that the almond cross-section cannot squirt axially
+# while the close settles (at 0 the fish squirted 46 mm and jack-knifed into
+# the wrist at 75 N), small enough that the tips clear the flanks on descent
+# and the fish can leave the open hand (10 mm caged it).
+FIN_CURL = cli_arg("--fin-curl", 0.003, float)
 FIN_SKIN_OUT = 0.010              # back skin, outboard
 # Heavy relative to the fish ON PURPOSE. The contact correction is split by
 # inverse mass, so a light pad simply gets shoved aside by the fish instead of
@@ -695,6 +707,33 @@ for k in (0, 1):
         invm_of.append(0.0 if root else 1.0 / m)
         pad_of.append(1 if skin == 0 else 0)
         pinned_of.append(1 if root else 0)
+
+# THE PALM. The real FR3 hand has a solid body between the finger roots; the
+# sim had an open funnel there, and the almond cross-section of a side-lying
+# fish gets pumped UP the funnel by every squeeze/acceleration until it wedges
+# in the "wrist" and rides the retreat ("the fish gets stuck inside the
+# gripper"). A pinned plate of contact particles across the root plane gives
+# the squeezed fish a ceiling to seat against -- two pads + palm, like the real
+# grasp. Pinned to the TOOL frame (owner 2), zero inverse mass: the fish side
+# takes the whole contact correction.
+PALM_NX, PALM_NY = 19, 13
+_palm_local = []
+for _pi in range(PALM_NX):
+    for _pj in range(PALM_NY):
+        _palm_local.append((FIN_WIDTH * (_pi / (PALM_NX - 1) - 0.5),
+                            2.0 * abs(CARRIAGE_TCP[0][1]) * (_pj / (PALM_NY - 1) - 0.5),
+                            FIN_Z0 - PART_R))
+_palm_local = np.array(_palm_local, dtype=np.float32)
+PALM_BASE = len(positions)
+_palm_world = (M_TCP_REF[:3, :3] @ _palm_local.T).T + M_TCP_REF[:3, 3]
+for _pw in _palm_world:
+    positions.append(_pw.astype(np.float32))
+    body_of.append(3)
+    mu_of.append(MU_PAD)
+    invm_of.append(0.0)
+    pad_of.append(0)
+    pinned_of.append(1)
+PALM_N = len(_palm_local)
 
 FIN_TOTAL = len(positions)
 
@@ -1304,8 +1343,10 @@ def surface_contacts_build(pos: wp.array(dtype=wp.vec3),
     i = wp.tid()
     mc_face[i] = -1
     mc_acc[i] = 0.0
-    if invm[i] == 0.0 or body[i] == 2:
+    if body[i] == 2:
         return
+    if invm[i] == 0.0 and body[i] != 3:
+        return                     # pinned finger roots do not collide; the palm does
     p = pos[i]
     q = wp.mesh_query_point_sign_normal(mesh, p, PART_R + margin)
     if not q.result:
@@ -1379,7 +1420,7 @@ def surface_contacts_solve(pos: wp.array(dtype=wp.vec3),
     if f < 0:
         return
     p = pos[i]
-    wi = invm[i]
+    wi = invm[i]                   # 0 for the palm: the fish takes it all
     n = mc_n[i]
     uv = mc_uv[i]
     bu = uv[0]
@@ -1406,6 +1447,8 @@ def surface_contacts_solve(pos: wp.array(dtype=wp.vec3),
                 + invm[kc] * wc * wc * float(wp.max(csplit[kc - base], 1)))
     pen = PART_R - wp.dot(p - q, n)
     if pen <= 0.0:
+        return
+    if den <= 0.0:
         return
     dl = pen / den
     mc_acc[i] = mc_acc[i] + pen
@@ -1589,9 +1632,11 @@ for k in (0, 1):
     b = k * FIN_N
     local_np[b:b + FIN_N] = fin_local[k]
     owner_np[b:b + FIN_N] = k
+local_np[PALM_BASE:PALM_BASE + PALM_N] = _palm_local
+owner_np[PALM_BASE:PALM_BASE + PALM_N] = 2          # the tool frame
 local_arr = wp.array(local_np, dtype=wp.vec3, device=device)
 owner_arr = wp.array(owner_np, dtype=int, device=device)
-mats = wp.zeros(2, dtype=wp.mat44, device=device)
+mats = wp.zeros(3, dtype=wp.mat44, device=device)
 
 # The fish's render surface is its own little vertex array now (skinned off the
 # cage), so its normals are accumulated over its own triangles, not over the
@@ -1789,7 +1834,9 @@ WP_GRASP = (GRASP_X, TRAY_Y + CAGE_R + 0.5 * CAGE_H_REST, FISH_P[2])
 WP_LIFT = (GRASP_X, 0.30, FISH_P[2])
 WP_CARRY = (TARGET_C[0], 0.32, TARGET_CZ)
 WP_LOWER = (TARGET_C[0], 0.17, TARGET_CZ)
-WP_OUT = (TARGET_C[0], 0.36, TARGET_CZ)
+# Retreat up AND sideways: a straight-up retreat rose through the still-falling
+# fish and the tips re-snagged it out of the crate.
+WP_OUT = (TARGET_C[0], 0.36, TARGET_CZ + (0.14 if TARGET_CZ < 0 else -0.14))
 
 # (name, waypoint or None to hold, seconds)
 # CARRY and LOWER are 30 % longer than phase 2b. The quintic's peak acceleration
@@ -1803,7 +1850,7 @@ PLAN = [("DROP", None, 600.0)] if DROP else [
         ("LIFT", WP_LIFT, 2.6),
         ("CARRY", WP_CARRY, 2.1),
         ("LOWER", WP_LOWER, 1.5),
-        ("OPEN", None, 0.9),
+        ("OPEN", None, 1.5),
         ("RETREAT", WP_OUT, 1.0),
         ("DONE", None, 1.2)]
 
@@ -1824,13 +1871,15 @@ report = {}
 # Halved from phase 2. The ejection that lost the fish was DYNAMIC -- solver
 # energy injected by the converging paddles, not a slide -- and a slower close
 # gives the volume rows time to answer each bite before the next one arrives.
-CLOSE_V = 0.009          # m/s per carriage
-SQUEEZE = 0.001          # extra bite once the threshold trips
+CLOSE_V = 0.006          # m/s per carriage -- the corotational fish is STIFF: 1 mm = tens of N
+SQUEEZE = 0.0003         # extra bite once the threshold trips
 # The release used CLOSE_V too, which at 9 mm/s needs 1.8 s to give back the
 # 16 mm the close took -- longer than the OPEN phase, so on half the runs the
 # fish was still in the hand at DONE. Letting go is not a delicate operation.
 OPEN_V = 0.060           # m/s per carriage
-GRIP_CONFIRM = 5         # consecutive frames over F_GRASP before the close stops
+GRIP_CONFIRM = 2         # consecutive frames over F_GRASP before the close stops
+                         # (5 frames of debounce = 0.75 mm of extra travel, and a
+                         # full-contact corotational fish answers that with 70 N)
 grip_hi_n = 0
 # Position backstop, and it is the primary control -- the force proxy only
 # short-circuits it. Measured, not assumed: the carriage frame sits Y_CARRIAGE
@@ -1849,7 +1898,9 @@ Y_CARRIAGE = abs(float(CARRIAGE_TCP[0][1]))
 # was a 12 mm commanded squeeze per side, which a fish at its real stiffness
 # answers with >100 N. The force trip is the primary stop now; this backstop is
 # a 3 mm indentation for when the force never reads (e.g. a soft --young).
-BITE = cli_arg("--bite", 0.003, float)
+BITE = cli_arg("--bite", 0.003, float)   # 8 mm was tried: the wrap pressed the
+                                         # fish into the palm pocket and it left
+                                         # the cell stuck in the hand at 134 N
 FINGER_STOP = max(FINGER_MIN, FINGER_OPEN - Y_CARRIAGE + FIN_SKIN_IN + PART_R
                   + FISH_HALF_W + CAGE_R - BITE)
 
@@ -1889,7 +1940,13 @@ def advance_task(dt):
         # fish in phase 2b, at a carriage where the pads still push more than
         # they hold. Only N consecutive frames over the threshold count.
         global grip_hi_n
-        grip_hi_n = grip_hi_n + 1 if grip_force >= F_GRASP else 0
+        # ARMING: during the descent the pads brush the flanks of a fish that
+        # nearly fills the open hand, and that brushing alone read ~20 N -- the
+        # force stop tripped after 1.6 mm of travel and the "grasp" was the
+        # brush. A real controller tares at close start: the force trip only
+        # arms once the carriages have actually closed 3 mm.
+        armed = finger_cmd <= FINGER_OPEN - 0.003
+        grip_hi_n = grip_hi_n + 1 if (armed and grip_force >= F_GRASP) else 0
         if not grip_held and grip_hi_n < GRIP_CONFIRM and finger_cmd > FINGER_STOP:
             finger_cmd = max(FINGER_STOP, finger_cmd - CLOSE_V * dt)
         elif not grip_held:
@@ -1912,7 +1969,11 @@ def advance_task(dt):
     return name
 
 
-_mats_cur = np.stack([link_mat(left_link), link_mat(right_link)]).astype(np.float32)
+def _tool_mat():
+    return np.array(ik.tool_transform(q_cur).to_numpy(), dtype=np.float32).reshape(4, 4)
+
+
+_mats_cur = np.stack([link_mat(left_link), link_mat(right_link), _tool_mat()]).astype(np.float32)
 _mats_prev = _mats_cur.copy()
 _mats_host = _mats_cur.copy()
 
@@ -1926,7 +1987,7 @@ def _push_mats(a):
     so re-uploading between capture_launch calls costs one 128-byte copy."""
     np.multiply(_mats_cur - _mats_prev, a, out=_mats_host)
     np.add(_mats_host, _mats_prev, out=_mats_host)
-    for k in (0, 1):                       # re-orthonormalise the lerped basis
+    for k in (0, 1, 2):                    # re-orthonormalise the lerped basis
         r = _mats_host[k][:3, :3]
         c0 = r[:, 0] / (np.linalg.norm(r[:, 0]) + 1e-12)
         c1 = r[:, 1] - c0 * np.dot(c0, r[:, 1])
@@ -2107,6 +2168,7 @@ def step_frame():
     _mats_prev[:] = _mats_cur
     _mats_cur[0] = link_mat(left_link)
     _mats_cur[1] = link_mat(right_link)
+    _mats_cur[2] = _tool_mat()
     t1 = time.perf_counter()
 
     pad_force.zero_()
@@ -2204,9 +2266,11 @@ def step_frame():
     fins_geo.update_attribute("position", finf_pos.numpy())
     fins_geo.update_attribute("normal", finf_nrm.numpy())
     if _fem_state["mode"] > 0:
-        _cage_now = x.numpy()[FISH_BASE:FISH_BASE + CAGE_N]
+        _x_now = x.numpy()
+        _cage_now = _x_now[FISH_BASE:FISH_BASE + CAGE_N]
         _w, _g, _edges = fem_wires[_fem_state["mode"] - 1]
         _g.update_attribute("position", np.ascontiguousarray(_cage_now[_edges.reshape(-1)]))
+        fin_wire_geo.update_attribute("position", np.ascontiguousarray(_x_now[_fin_pairs.reshape(-1)]))
     for _ey, _ci in zip(eyes, EYE_CORNER):
         _p = fish_np[_ci]
         _ey.position.set(float(_p[0]), float(_p[1]), float(_p[2]))
@@ -2552,6 +2616,20 @@ for _edges in (_e_surf, _e):
     scene.add(w)
     fem_wires.append((w, g, _edges))
 print(f"  fem view: {len(_e_surf)} surface-grid edges / {len(_e)} tet edges")
+# The GRIPPER's truss in the same view, another colour: the structural members
+# only (skins + ribs) -- the fan/bend/diagonal chords are load paths, not shape,
+# and drawing all 7k rows is soup. Positions ride the live finger particles.
+_fin_pairs = _pairs_np[np.isin(_pairs_w, (STIFF_SKIN, STIFF_RIB))]
+fin_wire_mat = tp.LineBasicMaterial()
+fin_wire_mat.color = tp.Color(0xffa63c)
+fin_wire_mat.depth_test = False
+fin_wire_geo = tp.BufferGeometry()
+fin_wire_geo.set_attribute("position", p0[_fin_pairs.reshape(-1)].astype(np.float32))
+fin_wire = tp.LineSegments(fin_wire_geo, fin_wire_mat)
+fin_wire.frustum_culled = False
+fin_wire.visible = False
+scene.add(fin_wire)
+print(f"  fem view: {len(_fin_pairs)} finger truss edges (skins + ribs)")
 _fem_state = {"mode": 0, "opacity": float(getattr(fish_mat, "opacity", 1.0)),
               "transparent": bool(getattr(fish_mat, "transparent", False))}
 
@@ -2562,7 +2640,10 @@ def set_fem_view(mode):
     m = _fem_state["mode"]
     fem_wires[0][0].visible = m == 1
     fem_wires[1][0].visible = m == 2
+    fin_wire.visible = m > 0
     fish_mesh.visible = m < 2
+    fingers_mesh.visible = m < 2
+    ribs_mesh.visible = m < 2
     fish_mat.transparent = _fem_state["transparent"] or m == 1
     fish_mat.opacity = 0.35 if m == 1 else _fem_state["opacity"]
     try:
@@ -2733,6 +2814,7 @@ def reset_scenario():
     set_q(q_cur)
     _mats_cur[0] = link_mat(left_link)
     _mats_cur[1] = link_mat(right_link)
+    _mats_cur[2] = _tool_mat()
     _mats_prev[:] = _mats_cur
     _push_mats(1.0)
     seg_i, seg_t = 0, 0.0
@@ -2860,6 +2942,7 @@ if "--fin-rest" in sys.argv:
     set_q(q_ref)
     _mats_cur[0] = link_mat(left_link)
     _mats_cur[1] = link_mat(right_link)
+    _mats_cur[2] = _tool_mat()
     _mats_prev[:] = _mats_cur
 
     def _tick():
