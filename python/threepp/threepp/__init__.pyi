@@ -7547,6 +7547,20 @@ class VulkanRenderer:
         """
         Release the exports and return the mesh to the CPU attribute path. STOP the foreign writes first — nothing here can wait on a CUDA stream. Close the importing VkInteropArrays before calling this.
         """
+    def enable_particle_field_interop(self, field: ParticleField, device_copy: collections.abc.Callable[[], None]) -> typing.Any:
+        """
+        Export an Ownership.Interop ParticleField's positions allocation and arm the per-frame device-to-device copy that fills it.
+        
+        Returns (os_handle, size_bytes), or None when the device has no external-memory extension — in which case the field is left in host_fallback() and submit() is legal on it, so the caller drops to the HostRing path rather than failing.
+        
+        CALL IT AFTER THE FIRST render(): the field's device state and this renderer's field pass are both created on the frame the field is first seen, so this returns None until then — render once, then enable.
+        
+        device_copy() runs INSIDE render(), once per frame, pre-record, and MUST BE SYNCHRONOUS (wp.copy(...) then wp.synchronize_device(device) as the last statement, or cuMemcpyDtoDAsync + cuStreamSynchronize). That host ordering is the only thing sequencing the foreign write against the frame that reads it — there is no shared semaphore.
+        
+        The handle is an OS handle owned by the RENDERER (a Win32 NT handle on Windows): import it, but never CloseHandle it from Python. The layout is ParticlePos — 16-byte xyzw slots, byte-identical to wp.vec4 and to PxVec4 — and w < 0 is the DEAD sentinel every consumer tests. size_bytes is the ALLOCATION size and may exceed capacity*16.
+        
+        Liveness is the sim's job here: set_live_count(capacity) once and let the kernel write w < 0 for dead slots. An Interop field forfeits reproducibility and every emitter-derived feature (age fade, size taper, colour ramp, surface landing) — it is positions, a radius and an orientation set, and that is the whole model.
+        """
     def enable_vertex_interop(self, mesh: Mesh, on_frame: collections.abc.Callable[[], None], validate: bool = True) -> typing.Any:
         """
         Export mesh.geometry's position + normal buffers for a foreign GPU producer and arm the per-frame device write that fills them.

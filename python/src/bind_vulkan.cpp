@@ -40,6 +40,7 @@
 #include "threepp/core/Object3D.hpp"
 #include "threepp/math/Color.hpp"
 #include "threepp/objects/Mesh.hpp"
+#include "threepp/objects/ParticleField.hpp"
 #include "threepp/renderers/VulkanRenderer.hpp"
 
 #include <array>
@@ -1052,6 +1053,52 @@ namespace threepp_py {
                      "Release the exports and return the mesh to the CPU attribute path. STOP "
                      "the foreign writes first — nothing here can wait on a CUDA stream. Close "
                      "the importing VkInteropArrays before calling this.")
+                // ── Zero-copy GPU-particle interop (CUDA -> Vulkan) ───────────
+                // The ParticleField sibling of enable_vertex_interop: export an
+                // Ownership.Interop field's ONE positions allocation so a Warp /
+                // PhysX / torch kernel writes ParticlePos in place. 16-byte
+                // slots, i.e. wp.vec4 with no repack — simpler than the vertex
+                // path's 12-byte stride. Pair with
+                // threepp.cuda_interop.VkInteropArray.
+                .def("enable_particle_field_interop",
+                     [](PyVulkanRenderer& r, ParticleField& field,
+                        std::function<void()> device_copy) -> py::object {
+                         const auto h = r.native().enableParticleFieldInterop(
+                                 field, std::move(device_copy));
+                         // Empty handle = "not yet, or this device cannot export"
+                         // — never an exception, same None-when-not-ready
+                         // contract as enable_vertex_interop. On the
+                         // cannot-export leg the field is left in
+                         // host_fallback() and submit() becomes legal on it.
+                         if (!h.osHandle) return py::none();
+                         return py::make_tuple(reinterpret_cast<uintptr_t>(h.osHandle),
+                                               h.sizeBytes);
+                     },
+                     py::arg("field"), py::arg("device_copy"),
+                     "Export an Ownership.Interop ParticleField's positions allocation and arm "
+                     "the per-frame device-to-device copy that fills it.\n\n"
+                     "Returns (os_handle, size_bytes), or None when the device has no "
+                     "external-memory extension — in which case the field is left in "
+                     "host_fallback() and submit() is legal on it, so the caller drops to the "
+                     "HostRing path rather than failing.\n\n"
+                     "CALL IT AFTER THE FIRST render(): the field's device state and this "
+                     "renderer's field pass are both created on the frame the field is first "
+                     "seen, so this returns None until then — render once, then enable.\n\n"
+                     "device_copy() runs INSIDE render(), once per frame, pre-record, and MUST "
+                     "BE SYNCHRONOUS (wp.copy(...) then wp.synchronize_device(device) as the "
+                     "last statement, or cuMemcpyDtoDAsync + cuStreamSynchronize). That host "
+                     "ordering is the only thing sequencing the foreign write against the frame "
+                     "that reads it — there is no shared semaphore.\n\n"
+                     "The handle is an OS handle owned by the RENDERER (a Win32 NT handle on "
+                     "Windows): import it, but never CloseHandle it from Python. The layout is "
+                     "ParticlePos — 16-byte xyzw slots, byte-identical to wp.vec4 and to "
+                     "PxVec4 — and w < 0 is the DEAD sentinel every consumer tests. "
+                     "size_bytes is the ALLOCATION size and may exceed capacity*16.\n\n"
+                     "Liveness is the sim's job here: set_live_count(capacity) once and let the "
+                     "kernel write w < 0 for dead slots. An Interop field forfeits "
+                     "reproducibility and every emitter-derived feature (age fade, size taper, "
+                     "colour ramp, surface landing) — it is positions, a radius and an "
+                     "orientation set, and that is the whole model.")
                 // ── Physical camera + photometric light units ─────────────────
                 .def_property("physical_camera",
                               [](PyVulkanRenderer& r) { return r.native().physicalCamera(); },

@@ -20,24 +20,47 @@ what keeps the wall panels moving after the first frame instead of dropping
 straight down, and it is the difference between "a wall fell over" and "a wall
 was blown out". A point light flashes at the charge and the camera shakes.
 
-The gas is four `tp.ParticleField`s, all created before the first frame and
-parked at live count 0 -- creating one mid-run is a device idle and a cleared
-TAA history, on the one frame where that shows.
+The gas is five `tp.ParticleField`s at NEBULA SCALE -- ~15 million particles by
+default -- all created before the first frame and parked at live count 0.
+Creating one mid-run is a device idle and a cleared TAA history, on the one
+frame where that shows.
 
-  fire   HostRing, Warp-advected: a radial burst with heavy drag, curl stir and
-         buoyancy. Rendered as a DensityRepr volume whose blackbody emission
-         ramp (2700 K at the box floor, 1250 K at its top) IS the fireball --
-         emission is sigma * L_e and sigma is already being marched, so the
-         flame's shape comes from the particles and its colour from the ramp.
-         Additive billboards with their own bloom pyramid carry the flash.
-  smoke  HostRing, DensityRepr only. Early smoke is thrown outward and rolls
-         over into a mushroom head; late smoke goes straight up as the stem.
-         Real extinction, so it shadows itself and dims the yard behind it.
-  dust   HostRing. Slots are born on the ground annulus at the shock radius
-         r = c*t, so the ring races outward ahead of the debris for free.
-  spark  HostRing. A TIGHT burst window (0.45 s) then long-lived embers that
-         arc, land and burn out. Not the analytic emitter, which cannot express
-         a one-shot burst at all -- see the note at the field.
+Fifteen million particles do not fit on the bus. They ride
+`renderer.enable_particle_field_interop` instead: the renderer exports each
+field's positions allocation as an OS handle, CUDA imports it once
+(`threepp.cuda_interop.VkInteropArray`), and the Warp sim writes it device to
+device inside render(). Zero host particle traffic, ever. Without the extension
+(or with --no-interop) the demo falls back to HostRing `submit()` at ~4% of the
+counts and still runs.
+
+THE MODEL: an explosion is a fireball that turns warmth into thick smoke
+pushing outward. ALL matter is born inside the burst window; nothing is
+instantiated afterwards. Everything you see later is that same matter evolving.
+
+  fire   Born in a 0.3 s burst out of the charge: a radial blast with heavy
+         drag, curl stir and buoyancy. Each parcel carries a cooling time.
+         Rendered as a DensityRepr volume whose blackbody emission ramp
+         (2700 K at the box floor, 1250 K at its top) IS the fireball.
+  smoke  NEVER EMITTED. A fire parcel that cools past its threshold DIES and
+         CONVERTS into SMOKE_K soot parcels at the same place, inheriting most
+         of its outward momentum -- so the smoke pushes outward from the
+         fireball, thick, and only then does buoyancy roll it up into a head.
+         The column and the stem are the plume's own dynamics; no ground
+         emitter pumps smoke after the blast. DensityRepr only.
+  dust   Born on the ground annulus at the shock radius r = c*t while the front
+         is still crossing the yard (~0.9 s), so the ring races outward ahead
+         of the debris for free. DensityRepr only.
+  ember  A tight 0.4 s spawn, then long-lived embers that arc, land and burn
+         out. Additive billboards. Not the analytic emitter, which cannot
+         express a one-shot burst at all -- see the note at the field.
+  flare  A small hot subset of the burst carrying the additive billboard flash
+         with its own bloom pyramid. 15 M additive quads is not a look, it is
+         a fill-rate accident; a quarter million of them is the sparkle.
+
+Emission, recycling and the fire->smoke conversion are all device kernels
+structured around a fixed-max array of 8 charges. The CPU never walks a
+particle: per frame it computes one integer per cohort per charge and hands the
+ring cursor to a launch.
 
 Everything is driven off one sim clock and one blast timeline, so the later
 phases (drums, slow-motion film) hang off the same t0 without re-deriving it.
@@ -50,8 +73,9 @@ phases (drums, slow-motion film) hang off the same t0 without re-deriving it.
     python warp_explosion.py --charge 0,0.6,-1.2 --t0 1.5
     python warp_explosion.py --courses 20 --shot 4      # taller walls, more bodies
     python warp_explosion.py --shot 4 --spin 0.25       # orbit while simulating
-    python warp_explosion.py --gas 2.0                  # twice the gas particles
+    python warp_explosion.py --gas 0.3                  # 4.4 M particles, not 15 M
     python warp_explosion.py --sigma 1.6                # thicker smoke
+    python warp_explosion.py --no-interop               # HostRing fallback, reduced counts
     python warp_explosion.py --no-gas                   # phase 1 only
     python warp_explosion.py --no-ao                    # RT AO/GI off (~6.5 ms/frame back)
     python warp_explosion.py --msaa 1                   # the other render knob
@@ -117,45 +141,88 @@ FLASH_BB = 7.0            # billboard brightness spike at t0, on top of the base
 
 # --- the gas ----------------------------------------------------------------
 #
-# Counts are the bandwidth: one HostRing field costs 16 B/particle/frame on the
-# readback AND again on the submit memcpy, and that is the only per-frame cost
-# that scales with the particle count anywhere in this demo. --gas scales all
-# three cohorts together; --sigma scales the optical mass the other way, so
-# `--gas 0.5 --sigma 2` is very nearly the same picture for half the bus.
+# Counts are VRAM and kernel bandwidth now, not bus bandwidth: the zero-copy
+# interop path never moves a particle across PCIe. Each cohort costs
+# 16 B (the renderer's exported positions) + 16 B (the sim's own positions, the
+# copy source) + 12 B (velocity) + 8 B (age/life) = 52 B/particle resident.
+# --gas scales every count; --sigma scales the optical mass the other way.
 NO_GAS = "--no-gas" in sys.argv
+NO_INTEROP = "--no-interop" in sys.argv
 GAS = cli_arg("--gas", 1.0, float)
 SIGMA = cli_arg("--sigma", 1.0, float)
-FIRE_N = int(120_000 * GAS)
-SMOKE_N = int(300_000 * GAS)
-DUST_N = int(180_000 * GAS)
-SPARK_N = int(44_000 * GAS)
+SMOKE_K = cli_arg("--smoke-k", 3, int)      # soot parcels one cooled fire parcel becomes
 
-# Emission windows, in seconds since t0 (§2.6 of the plan). A slot's birth time
-# is drawn ONCE at startup and sorted, so the sim is a pure function of tw with
-# no free list, no compaction and no spawn kernel -- and the sorted births mean
-# the submit only has to carry the prefix that has been born yet.
-FIRE_EMIT, FIRE_LIFE = 0.26, (0.24, 0.70)
-SMOKE_EMIT, SMOKE_LIFE = 3.40, (3.2, 7.5)
-DUST_EMIT, DUST_LIFE = 1.10, (0.8, 1.9)
-SMOKE_SKEW = 1.0          # births = EMIT * u**SKEW: front-loaded, so the head leads
-SPARK_EMIT, SPARK_LIFE = 0.40, (0.9, 3.4)   # a TIGHT burst, then long-lived embers
-SPARK_V0, SPARK_DRAG, SPARK_CURL = 18.0, 0.90, 0.9
-SPARK_R = (0.075, 0.0)    # holds its size, then goes out (r_pow below)
+# The capacity decision needs the device, because it is the interop path that
+# makes fifteen million affordable: without it every particle crosses the bus
+# TWICE a frame, so the fallback runs at phase 2's counts, which is what the
+# HostRing path was measured to carry (1.79 ms of submit at 644 k live).
+device = None
+INTEROP = False
+if not NO_GAS:
+    wp.init()
+    device = wp.get_preferred_device()
+    INTEROP = (not NO_INTEROP) and device.is_cuda
+FALLBACK = 0.04
+_SCALE = GAS * (1.0 if INTEROP else FALLBACK)
+FIRE_N = int(3_000_000 * _SCALE)
+DUST_N = int(2_000_000 * _SCALE)
+# Embers do NOT scale with the rest, and that is a finding, not an oversight: an
+# ember is a DISCRETE POINT on screen, so its count is a dot density, not an
+# optical mass. Half a million of them, thrown outward and landing on the yard,
+# read as a carpet of white static thirty metres across -- exactly what phase 2
+# rejected dust billboards for. Three times phase 2's count is the ceiling.
+EMBER_N = int(70_000 * _SCALE)
+FLARE_N = int(250_000 * _SCALE)
+# Smoke is not emitted, it is CONVERTED, and the mapping is static: fire slot i
+# becomes smoke slots [i*K, i*K+K). That is why there is no free list and no
+# atomic anywhere in this sim -- the smoke pool inherits the fire ring's
+# recycling for free.
+SMOKE_N = FIRE_N * SMOKE_K
+
+# Emission windows, in seconds since a charge's t0. NOTHING IS INSTANTIATED
+# OUTSIDE THEM -- that is the model, not an optimisation. The longest window is
+# the dust ring's, and it is the shock front crossing the yard, not a fountain.
+FIRE_EMIT, FIRE_LIFE = 0.30, (0.30, 1.15)   # "life" here IS the cooling time
+DUST_EMIT, DUST_LIFE = 0.90, (0.9, 2.2)
+EMBER_EMIT, EMBER_LIFE = 0.40, (0.9, 3.4)   # a TIGHT burst, then long-lived embers
+FLARE_EMIT, FLARE_LIFE = 0.22, (0.14, 0.46)
+SMOKE_LIFE = (4.5, 9.5)                     # from the moment it was fire
+EMBER_SKEW, FLARE_SKEW = 1.8, 1.4           # emitted = N * (tau/EMIT)**(1/skew)
 
 FIRE_V0, FIRE_DRAG, FIRE_BUOY, FIRE_CURL = 21.0, 7.5, 26.0, 7.0
-SMOKE_V0, SMOKE_DRAG, SMOKE_BUOY, SMOKE_CURL = 6.0, 1.5, 7.5, 3.4
+SMOKE_DRAG, SMOKE_BUOY, SMOKE_CURL = 1.30, 4.5, 3.4
+SMOKE_INHERIT = 0.75      # of the fire parcel's velocity: this is the outward push
+SMOKE_SPREAD = 1.35       # m/s of isotropic scatter added to each soot child
 DUST_V0, DUST_DRAG, DUST_GRAV, DUST_CURL = 7.5, 2.2, 9.81, 0.7
-FIRE_R = (0.10, 0.55)     # world radius over life, m (w under WSemantic.Radius)
-SMOKE_R = (0.30, 1.45)
+EMBER_V0, EMBER_DRAG, EMBER_CURL = 18.0, 0.90, 0.9
+FLARE_V0, FLARE_DRAG, FLARE_BUOY, FLARE_CURL = 19.0, 6.5, 20.0, 6.0
+FIRE_R = (0.15, 0.80)     # world radius over life, m (w under WSemantic.Radius)
+SMOKE_R = (0.30, 1.20)
 DUST_R = (0.14, 0.70)
+EMBER_R = (0.075, 0.0)    # holds its size, then goes out (r_pow below)
+FLARE_R = (0.22, 0.85)
 
-# sigma_t one particle contributes, before --sigma. These are TUNED BY EYE and
-# are an order of magnitude above the pyi's weather guidance for a reason: a
-# rain curtain fills a 50 m box and wants a whisper of extinction each, while a
-# soot column is 300k particles inside a few hundred cubic metres and has to go
-# genuinely opaque. Total optical mass is N * sigma, so halving a count and
-# doubling its sigma here is very nearly the same picture.
-FIRE_SIGMA, SMOKE_SIGMA, DUST_SIGMA = 0.40, 0.55, 0.24
+# Volume resolution, LATCHED at the first frame the field has live particles.
+# RAISING IT DOES NOT BUY DETAIL HERE, and that is worth knowing: the scatter is
+# per-VOXEL OCCUPANCY, so doubling the resolution divides the particles per voxel
+# by eight and the medium goes thin and grainy at the same sigma. 192**3 was
+# tried against 128**3 for the smoke at nine million parcels and read WORSE --
+# more scatter noise, no more structure -- because the plume's detail is set by
+# the particles, not the grid. 128 stays, and the sigma is tuned against it.
+FIRE_RES = cli_arg("--fire-res", 128, int)
+SMOKE_RES = cli_arg("--smoke-res", 128, int)
+DUST_RES = cli_arg("--dust-res", 128, int)
+
+# sigma_t one particle contributes, before --sigma.
+#
+# The scatter is an 8-tap trilinear splat into ONE voxel neighbourhood and the
+# particle radius is never consulted, so what the fog march sees is
+#   density = (particles in the voxel) * sigma = rho * V_voxel * sigma.
+# Both factors move when the counts do, which is why these are NOT simply
+# phase 2's values over N: going from 300 k at res 128 to 9 M at res 192 divides
+# rho*V_voxel by 30 and multiplies it by 2.34, and the sigma that keeps the same
+# picture follows. Then tuned by eye from there.
+FIRE_SIGMA, SMOKE_SIGMA, DUST_SIGMA = 0.22, 0.32, 0.040
 
 # --- the yard ---------------------------------------------------------------
 
@@ -302,8 +369,10 @@ scene.background = VOID
 if not NO_FOG:
     scene.set_fog(VOID, 55.0, 200.0)          # dissolves the slab's far edge into the void
 
-camera = tp.PerspectiveCamera(44, canvas.aspect(), 0.05, 800)
-CAM_R, CAM_Y, CAM_TARGET = 30.0, 11.0, (0.0, 6.0, 0.0)
+camera = tp.PerspectiveCamera(46, canvas.aspect(), 0.05, 800)
+# Framed for the PLUME, not the yard: at nebula counts the column is the
+# subject and it climbs past 25 m, so the yard only occupies the bottom third.
+CAM_R, CAM_Y, CAM_TARGET = 38.0, 13.0, (0.0, 9.0, 0.0)
 SPIN = cli_arg("--spin", 0.0, float)          # shot/video: orbit the camera, deg/frame
 START_ANGLE = cli_arg("--angle", 22.0, float)  # orbit start angle, degrees
 _cam_base = tp.Vector3()
@@ -493,13 +562,21 @@ def blast_wind(accel):
         b.add_force(f)
 
 
-# --- the gas: four ParticleFields, all created here, before the first frame --
+# --- the gas: five ParticleFields, all created here, before the first frame --
 #
 # The churn contract (ParticleField.hpp): a field is created ONCE at its final
 # capacity and never resized, and creating one is a STRUCTURAL scene change --
-# entry re-expansion, a vkDeviceWaitIdle and a cleared TAA history. So all four
+# entry re-expansion, a vkDeviceWaitIdle and a cleared TAA history. So all five
 # exist from startup and sit at live count 0 until the charge goes off. Nothing
 # is added to or removed from the scene after this point.
+
+# The charge array is FIXED at 8 slots and lives on the device (xyz + t0), even
+# though exactly one charge fires here. Every emission kernel indexes it, so
+# phase 2.5's multi-charge work is filling more of the array and looping the
+# host-side emission budget over the active ones -- not a kernel rewrite.
+MAX_CHARGES = 8
+CHARGES = [(CHARGE[0], CHARGE[1], CHARGE[2], T0)]
+N_CHARGES = len(CHARGES)
 
 # The curl field is baked to an NG^3 grid once per frame and fetched
 # trilinearly, exactly as warp_nebula does it: 110k grid threads instead of
@@ -540,71 +617,129 @@ def bake_noise(t: float, f: wp.array3d(dtype=wp.vec3)):
 
 
 @wp.kernel
-def step_gas(pos: wp.array(dtype=wp.vec4),
+def emit_gas(pos: wp.array(dtype=wp.vec4),
              vel: wp.array(dtype=wp.vec3),
-             birth: wp.array(dtype=float),
-             life: wp.array(dtype=float),
-             noise: wp.array3d(dtype=wp.vec3),
-             cx: float, cy: float, cz: float,
-             tw: float, dt: float, kind: int, seed: int,
-             v0: float, drag: float, buoy: float, buoy_tau: float,
-             grav: float, curl: float, r0: float, r1: float, r_pow: float,
-             front_c: float):
-    """One kernel, four cohorts. kind: 0 fire, 1 smoke, 2 dust, 3 sparks.
+             st: wp.array(dtype=wp.vec2),
+             charge: wp.array(dtype=wp.vec4),
+             ci: int, base: int, cap: int, b: float,
+             kind: int, seed: int, v0: float,
+             life0: float, life1: float, r0: float, front_c: float):
+    """Hand out `dim` ring slots starting at `base`, born of charge `ci`.
 
-    A slot is born the first frame tw passes its (fixed, sorted) birth time and
-    is dead for good once it passes birth + life -- so the whole cohort is a
-    pure function of tw with no free list. The dead sentinel is the one rule
-    every consumer of the position buffer tests: w < 0.
+    Device-side, per frame, and the ONLY place a particle comes into existence.
+    The ring cursor is the whole allocator: a slot is reused only after the
+    cohort has emitted `cap` more particles, which for the shipped budgets is
+    longer than any lifetime -- so recycling is free and there is no free list
+    to compact and no atomic to contend on. `charge` is a fixed 8-slot array
+    (xyz + t0) so phase 2.5 only has to fill more of it.
     """
     i = wp.tid()
-    b = birth[i]
-    age = tw - b
-    if age < 0.0 or age >= life[i]:
-        pos[i] = wp.vec4(0.0, -1000.0, 0.0, -1.0)
-        return
-    q = pos[i]
-    p = wp.vec3(q[0], q[1], q[2])
-    v = vel[i]
-    if q[3] < 0.0:
-        # ── birth ───────────────────────────────────────────────────────────
-        s = wp.rand_init(seed, i)
+    slot = (base + i) % cap
+    s = wp.rand_init(seed, base + i)
+    ch = charge[ci]
+    a = wp.randf(s) * 6.2831853
+    q = wp.randf(s)                       # 0 = the core, 1 = the outer shell
+    life = life0 + (life1 - life0) * wp.randf(s)
+    if kind == 2:
+        # Dust rides the shock front: a slot emitted at b seconds after the
+        # charge appears on the ground annulus of radius c*b, which IS the ring
+        # racing outward. Ground-hugging by construction -- the kick is almost
+        # all RADIAL, the vertical part is a tenth of it, gravity is full g.
+        rr = front_c * b * (0.90 + 0.15 * wp.randf(s))
+        p = wp.vec3(ch[0] + rr * wp.cos(a), 0.05 + 0.60 * wp.randf(s),
+                    ch[2] + rr * wp.sin(a))
+        sp = v0 * (0.45 + 0.85 * wp.randf(s))
+        v = wp.vec3(wp.cos(a) * sp, sp * (0.06 + 0.30 * wp.randf(s)),
+                    wp.sin(a) * sp)
+    else:
         z = 2.0 * wp.randf(s) - 1.0
-        a = wp.randf(s) * 6.2831853
         rxy = wp.sqrt(wp.max(1.0 - z * z, 0.0))
         d = wp.vec3(rxy * wp.cos(a), z, rxy * wp.sin(a))
-        if kind == 2:
-            # Dust rides the shock front: a slot born at tw = b appears on the
-            # ground annulus of radius c*b, which IS the ring racing outward.
-            # Ground-hugging by construction: the kick is almost all RADIAL,
-            # the vertical component is a tenth of it, and gravity is full g.
-            # Dust is what the shock front TEARS OFF the ground as it passes --
-            # the smoke column is the only thing in this demo that rises.
-            rr = front_c * b * (0.90 + 0.15 * wp.randf(s))
-            p = wp.vec3(rr * wp.cos(a), 0.05 + 0.60 * wp.randf(s), rr * wp.sin(a))
-            sp = v0 * (0.45 + 0.85 * wp.randf(s))
-            v = wp.vec3(wp.cos(a) * sp, sp * (0.06 + 0.30 * wp.randf(s)),
-                        wp.sin(a) * sp)
-        else:
-            p = wp.vec3(cx, cy, cz) + d * (0.20 + 0.95 * wp.pow(wp.randf(s), 0.3333))
-            sp = v0 * (0.35 + 0.95 * wp.randf(s))
-            if kind == 1:
-                # The mushroom, for free: smoke born in the first fifth of a
-                # second is thrown sideways and rolls over into the head; smoke
-                # born later goes straight up and is the stem underneath it.
-                lat = 0.40 + 0.75 * wp.exp(-b / 0.42)
-                dd = wp.vec3(d[0] * lat, wp.abs(d[1]) * 0.55 + 0.55, d[2] * lat)
-            else:
-                dd = wp.vec3(d[0], d[1] + 0.32, d[2])
-            v = wp.normalize(dd) * sp
+        p = wp.vec3(ch[0], ch[1], ch[2]) + d * (0.20 + 0.95 * wp.pow(q, 0.3333))
+        sp = v0 * (0.35 + 0.95 * wp.randf(s))
+        v = wp.normalize(wp.vec3(d[0], d[1] + 0.32, d[2])) * sp
+        if kind == 0 or kind == 4:
+            # A fire parcel's "life" IS its cooling time, and the core cools
+            # SLOWEST: q ~ 0 is deep inside the ball and holds its warmth,
+            # q ~ 1 is the outer shell and turns to soot almost at once. That
+            # gradient is what makes the conversion below read as a fireball
+            # peeling into smoke from the outside in, rather than a population
+            # that all goes dark together.
+            life = life1 + (life0 - life1) * q
+    pos[slot] = wp.vec4(p[0], p[1], p[2], r0)
+    vel[slot] = v
+    st[slot] = wp.vec2(0.0, life)
+
+
+@wp.kernel
+def step_gas(pos: wp.array(dtype=wp.vec4),
+             vel: wp.array(dtype=wp.vec3),
+             st: wp.array(dtype=wp.vec2),
+             noise: wp.array3d(dtype=wp.vec3),
+             dt: float, kind: int, seed: int,
+             drag: float, buoy: float, buoy_tau: float, grav: float,
+             curl: float, r0: float, r1: float, r_pow: float,
+             s_pos: wp.array(dtype=wp.vec4),
+             s_vel: wp.array(dtype=wp.vec3),
+             s_st: wp.array(dtype=wp.vec2),
+             sk: int, s_cap: int, s_life0: float, s_life1: float,
+             s_r0: float, s_inherit: float, s_spread: float):
+    """Advect one cohort, and turn cooled fire into smoke.
+
+    kind: 0 fire, 1 smoke, 2 dust, 3 ember, 4 flare. The dead sentinel is the
+    one rule every consumer of the position buffer tests -- w < 0 -- so a dead
+    or never-emitted slot costs this kernel a single 16-byte load and an exit.
+
+    THE CONVERSION is the model: nothing emits smoke. A fire parcel that
+    reaches its cooling time dies and writes SMOKE_K soot parcels into the
+    slots statically mapped to it, at its own position, carrying `s_inherit` of
+    its velocity. The outward momentum of the fireball becomes the outward push
+    of the smoke, and only then does buoyancy roll it over. The mapping
+    (fire slot i -> smoke slots [i*K, i*K+K)) is what lets the smoke pool
+    inherit the fire ring's recycling without a free list of its own.
+    """
+    i = wp.tid()
+    q = pos[i]
+    if q[3] < 0.0:
+        return
+    a = st[i]
+    age = a[0] + dt
+    life = a[1]
+    p = wp.vec3(q[0], q[1], q[2])
+    v = vel[i]
+    if age >= life:
+        pos[i] = wp.vec4(0.0, -1000.0, 0.0, -1.0)
+        if kind == 0:
+            s = wp.rand_init(seed + 7717, i)
+            scat = q[3] * 1.4
+            for k in range(sk):
+                j = (i * sk + k) % s_cap
+                o = wp.vec3(wp.randf(s) - 0.5, wp.randf(s) - 0.5, wp.randf(s) - 0.5)
+                jv = wp.vec3(wp.randf(s) - 0.5, wp.randf(s) - 0.5, wp.randf(s) - 0.5)
+                s_pos[j] = wp.vec4(p[0] + o[0] * scat, p[1] + o[1] * scat,
+                                   p[2] + o[2] * scat, s_r0)
+                s_vel[j] = v * s_inherit + jv * s_spread
+                s_st[j] = wp.vec2(0.0, s_life0 + (s_life1 - s_life0) * wp.randf(s))
+        return
     # ── advect ──────────────────────────────────────────────────────────────
     acc = gas_noise(noise, p) * curl
     acc = acc + wp.vec3(0.0, buoy * wp.exp(-age / buoy_tau) - grav, 0.0)
     acc = acc - v * drag
     v = v + acc * dt
     p = p + v * dt
-    if p[1] < 0.10:                       # the yard's floor, cheaply
-        p = wp.vec3(p[0], 0.10, p[2])
+    # The yard's floor, cheaply -- but dust gets a per-particle REST HEIGHT
+    # spread over most of a metre instead of one shared plane. Two million
+    # settled particles pinned to a single 10 cm layer is a sheet three voxels
+    # thick and optically solid, and the froxel march steps ~2 m: the result is
+    # a carpet of dither speckle across the whole yard that no amount of sigma
+    # tuning fixes, because the sheet is opaque at any sigma. Spread over ~20
+    # voxel layers it reads as settling dust and samples cleanly.
+    fl = float(0.10)
+    if kind == 2:
+        sf = wp.rand_init(seed + 31, i)
+        fl = 0.10 + 0.90 * wp.randf(sf)
+    if p[1] < fl:
+        p = wp.vec3(p[0], fl, p[2])
         # Dust that reaches the ground STAYS on it -- no bounce, or a settling
         # ring turns back into a fountain one frame later.
         if kind == 3:
@@ -615,93 +750,194 @@ def step_gas(pos: wp.array(dtype=wp.vec4),
                 vy = wp.abs(v[1]) * 0.20
             v = wp.vec3(v[0] * 0.92, vy, v[2] * 0.92)
     # Radius over life. r_pow shapes it: 1 is the linear growth the gas wants,
-    # and > 1 with r1 < r0 is the ember's hold-then-drop -- the only fade a
-    # HostRing field HAS, because age-based fade is the emitter's and there is
-    # no emitter here.
-    f = wp.pow(age / life[i], r_pow)
+    # and > 1 with r1 < r0 is the ember's hold-then-drop -- the only fade an
+    # Interop or HostRing field HAS, because age fade is the analytic emitter's
+    # and there is no emitter here.
+    f = wp.pow(age / life, r_pow)
     pos[i] = wp.vec4(p[0], p[1], p[2], r0 + (r1 - r0) * f)
     vel[i] = v
+    st[i] = wp.vec2(age, life)
+
+
+@wp.kernel
+def sample_gas(pos: wp.array(dtype=wp.vec4), out: wp.array(dtype=wp.vec4), stride: int):
+    """A strided sample of a cohort, for the tuning report only.
+
+    The whole point of the interop path is that positions never cross the bus,
+    so the diagnostic that used to read the submit buffer has to pull its own
+    few thousand slots. Called from report(), never per frame.
+    """
+    i = wp.tid()
+    out[i] = pos[i * stride]
+
+
+DEAD = wp.vec4(0.0, -1000.0, 0.0, -1.0)
+# Seconds spent inside the renderer's per-frame device-to-device callbacks. It
+# is a list because it is written from inside render(), before `prof` exists.
+GAS_COPY = [0.0, 0.0, 0.0]      # total, issue, synchronize
 
 
 class Cohort:
-    """One HostRing field plus the Warp state that feeds it.
+    """One ParticleField plus the Warp state that feeds it.
 
     The device buffer is `wp.vec4`, which is byte-identical to ParticlePos, so
-    the (n, 4) float32 the readback lands in IS the submit buffer -- one DtoH
-    copy into a pinned host array and one memcpy into the field's ring, with no
-    repack anywhere in between.
+    on the interop path the renderer's exported allocation and this sim's own
+    positions are the same 16-byte layout and the per-frame publish is one
+    cuMemcpyDtoD with no repack and no host round trip. On the fallback path the
+    same buffer is read back and memcpy'd into the field's host ring instead,
+    which is why the counts drop by 25x there.
+
+    `live` is a PREFIX of the ring: the cursor is monotonic, so slots
+    [0, min(cursor, capacity)) is exactly the set that has ever been handed out.
+    Everything -- the advect launch, the device copy, the field's live count --
+    is trimmed to it, so the first frames after t0 cost a fraction of full
+    capacity and the pre-detonation frames cost nothing at all.
     """
 
-    def __init__(self, name, n, kind, emit, life, radius, seed, skew=1.0, r_pow=1.0):
+    def __init__(self, name, n, kind, emit, life, radius, seed,
+                 skew=1.0, r_pow=1.0, per_charge=None):
         self.name, self.n, self.kind, self.r_pow = name, n, kind, r_pow
-        gen = np.random.default_rng(seed)
-        births = np.sort(emit * gen.random(n) ** skew).astype(np.float32)
-        lives = gen.uniform(life[0], life[1], n).astype(np.float32)
-        self.births = births
-        self.t_last = float((births + lives).max())     # when the cohort is gone
-        self.pos = wp.zeros(n, dtype=wp.vec4, device=device)
+        self.emit_win, self.life, self.radius, self.skew = emit, life, radius, skew
+        self.seed = seed
+        self.per_charge = n if per_charge is None else per_charge
+        self.pos = wp.empty(n, dtype=wp.vec4, device=device)
+        self.pos.fill_(DEAD)                 # w < 0: nothing is alive until it is emitted
         self.vel = wp.zeros(n, dtype=wp.vec3, device=device)
-        self.birth = wp.array(births, dtype=float, device=device)
-        self.life = wp.array(lives, dtype=float, device=device)
-        try:
-            self.host = wp.zeros(n, dtype=wp.vec4, device="cpu", pinned=True)
-        except TypeError:                               # older warp: plain host mem
-            self.host = wp.zeros(n, dtype=wp.vec4, device="cpu")
-        self.host_np = self.host.numpy()                # a VIEW of the host array
+        self.st = wp.zeros(n, dtype=wp.vec2, device=device)
+        self.emitted = [0] * MAX_CHARGES     # per charge, so the ring cursor is exact
+        self.cursor = 0
+        self.live = 0
         self.field = None
-        self.radius = radius
+        self.imported = None                 # VkInteropArray on the zero-copy path
+        self.host = self.host_np = None      # the fallback's staging buffer
+        self.params = ()
 
-    def advance(self, tw, dt, params):
-        wp.launch(step_gas, dim=self.n,
-                  inputs=[self.pos, self.vel, self.birth, self.life, noise_grid,
-                          CHARGE[0], CHARGE[1], CHARGE[2], tw, dt, self.kind,
-                          9000 + self.kind, *params,
-                          self.radius[0], self.radius[1], self.r_pow, FRONT_C],
+    # ── emission ─────────────────────────────────────────────────────────────
+    def emit(self, ci, b):
+        """Emit charge `ci`'s share due by `b` seconds after it fired.
+
+        The cumulative form is what makes this exact and stateless per frame:
+        `emitted(tau) = N * (tau/EMIT)**(1/skew)` is the same distribution phase
+        2 drew as sorted birth times, evaluated instead of stored -- and unlike
+        the sorted prefix it survives charges firing out of order.
+        """
+        if b <= 0.0 or self.per_charge == 0:
+            return 0
+        u = min(b / self.emit_win, 1.0)
+        want = int(self.per_charge * u ** (1.0 / self.skew))
+        n = want - self.emitted[ci]
+        if n <= 0:
+            return 0
+        self.emitted[ci] = want
+        wp.launch(emit_gas, dim=n,
+                  inputs=[self.pos, self.vel, self.st, charge_arr, ci,
+                          self.cursor, self.n, b, self.kind,
+                          self.seed, self.params[0], self.life[0], self.life[1],
+                          self.radius[0], FRONT_C],
                   device=device)
-
-    def fetch(self, tw):
-        """Issue the device->host copy. Births are SORTED, so only the prefix
-        that has been born yet has to cross the bus -- which is most of the
-        saving in the first half second, when the picture matters most."""
-        n = int(np.searchsorted(self.births, tw, side="right"))
-        if n:
-            wp.copy(self.host, self.pos, count=n)
+        self.cursor += n
+        self.live = min(self.cursor, self.n)
         return n
 
-    def push(self, n):
-        """One memcpy into the field's ring. submit() also sets the live count."""
-        if n:
-            self.field.submit(self.host_np[:n])
-        else:
-            self.field.set_live_count(0)
+    # ── advection ────────────────────────────────────────────────────────────
+    def advance(self, dt, child=None):
+        if not self.live:
+            return
+        c = child if child is not None else self
+        wp.launch(step_gas, dim=self.live,
+                  inputs=[self.pos, self.vel, self.st, noise_grid, dt, self.kind,
+                          self.seed, *self.params[1:],
+                          self.radius[0], self.radius[1], self.r_pow,
+                          c.pos, c.vel, c.st, SMOKE_K, c.n,
+                          SMOKE_LIFE[0], SMOKE_LIFE[1], SMOKE_R[0],
+                          SMOKE_INHERIT, SMOKE_SPREAD],
+                  device=device)
+
+    # ── publish ──────────────────────────────────────────────────────────────
+    def device_copy(self):
+        """The renderer's per-frame callback: one device-to-device copy of the
+        live prefix, then a synchronize. It runs INSIDE render(), pre-record,
+        and the host ordering it provides is the ONLY thing sequencing this
+        write against the frame that reads it -- there is no shared semaphore.
+        """
+        t = time.perf_counter()
+        if self.live:
+            wp.copy(self.imported.array, self.pos, count=self.live)
+        t1 = time.perf_counter()
+        wp.synchronize_device(device)
+        t2 = time.perf_counter()
+        GAS_COPY[0] += t2 - t
+        GAS_COPY[1] += t1 - t
+        GAS_COPY[2] += t2 - t1
+
+    def publish(self):
+        """One integer on the interop path. A readback plus a memcpy otherwise."""
+        if self.imported is not None or self.host is None or not self.live:
+            self.field.set_live_count(self.live)
+            return
+        wp.copy(self.host, self.pos, count=self.live)
+        wp.synchronize_device(device)
+        self.field.submit(self.host_np[:self.live])
+
+    def reset(self):
+        self.pos.fill_(DEAD)
+        self.emitted = [0] * MAX_CHARGES
+        self.cursor = 0
+        self.live = 0
+
+    def sample(self, k=4096):
+        """A strided read of the live prefix, for report() only."""
+        if self.live < 2:
+            return None
+        stride = max(self.live // k, 1)
+        n = self.live // stride
+        out = wp.empty(n, dtype=wp.vec4, device=device)
+        wp.launch(sample_gas, dim=n, inputs=[self.pos, out, stride], device=device)
+        return out.numpy()
 
 
 cohorts = []
 fields = []
 
 if not NO_GAS:
-    wp.init()
-    device = wp.get_preferred_device()
     noise_grid = wp.zeros((NG, NG, NG), dtype=wp.vec3, device=device)
+    _ch = np.zeros((MAX_CHARGES, 4), np.float32)
+    _ch[:N_CHARGES] = np.array(CHARGES, np.float32)
+    charge_arr = wp.array(_ch, dtype=wp.vec4, device=device)
 
-    cohorts = [
-        Cohort("fire", FIRE_N, 0, FIRE_EMIT, FIRE_LIFE, FIRE_R, SEED + 1),
-        Cohort("smoke", SMOKE_N, 1, SMOKE_EMIT, SMOKE_LIFE, SMOKE_R, SEED + 2,
-               skew=SMOKE_SKEW),
-        Cohort("dust", DUST_N, 2, DUST_EMIT, DUST_LIFE, DUST_R, SEED + 3),
-        Cohort("spark", SPARK_N, 3, SPARK_EMIT, SPARK_LIFE, SPARK_R, SEED + 4,
-               skew=1.8, r_pow=1.5),
-    ]
-    fire, smoke, dust, spark = cohorts
+    # per_charge: how much of a pool ONE detonation is allowed to claim. With a
+    # single charge that is the whole capacity; phase 2.5 divides it, and an
+    # overlapping ninth burst simply overwrites the oldest slots in the ring.
+    _share = max(N_CHARGES, 1)
+    fire = Cohort("fire", FIRE_N, 0, FIRE_EMIT, FIRE_LIFE, FIRE_R, SEED + 1,
+                  per_charge=FIRE_N // _share)
+    smoke = Cohort("smoke", SMOKE_N, 1, 1.0, SMOKE_LIFE, SMOKE_R, SEED + 2,
+                   per_charge=0)        # NEVER emitted: fire converts into it
+    dust = Cohort("dust", DUST_N, 2, DUST_EMIT, DUST_LIFE, DUST_R, SEED + 3,
+                  per_charge=DUST_N // _share)
+    ember = Cohort("ember", EMBER_N, 3, EMBER_EMIT, EMBER_LIFE, EMBER_R, SEED + 4,
+                   skew=EMBER_SKEW, r_pow=1.5, per_charge=EMBER_N // _share)
+    flare = Cohort("flare", FLARE_N, 4, FLARE_EMIT, FLARE_LIFE, FLARE_R, SEED + 5,
+                   skew=FLARE_SKEW, per_charge=FLARE_N // _share)
+    # (v0, drag, buoy, buoy_tau, grav, curl) -- v0 is the emit kernel's, the
+    # rest are the advect kernel's, in its argument order.
     fire.params = (FIRE_V0, FIRE_DRAG, FIRE_BUOY, 0.30, 0.0, FIRE_CURL)
-    smoke.params = (SMOKE_V0, SMOKE_DRAG, SMOKE_BUOY, 1.50, 0.0, SMOKE_CURL)
+    smoke.params = (0.0, SMOKE_DRAG, SMOKE_BUOY, 2.00, 0.0, SMOKE_CURL)
     dust.params = (DUST_V0, DUST_DRAG, 0.0, 1.0, DUST_GRAV, DUST_CURL)
-    spark.params = (SPARK_V0, SPARK_DRAG, 0.0, 1.0, 9.81, SPARK_CURL)
+    ember.params = (EMBER_V0, EMBER_DRAG, 0.0, 1.0, 9.81, EMBER_CURL)
+    flare.params = (FLARE_V0, FLARE_DRAG, FLARE_BUOY, 0.26, 0.0, FLARE_CURL)
+    # fire is advected FIRST and smoke LAST, so a parcel that converts this
+    # frame is advected the same frame instead of hanging for one.
+    cohorts = [fire, flare, dust, ember, smoke]
+    emitters = [fire, flare, dust, ember]
+
+    OWNERSHIP = (tp.ParticleField.Ownership.Interop if INTEROP
+                 else tp.ParticleField.Ownership.HostRing)
 
     def make_field(n, radius):
         c = tp.ParticleField.Config()
         c.capacity = n
-        c.ownership = tp.ParticleField.Ownership.HostRing
+        c.ownership = OWNERSHIP
         c.w_semantic = tp.ParticleField.WSemantic.Radius   # w IS the world radius
         c.uniform_radius = radius
         f = tp.ParticleField.create(c)
@@ -721,7 +957,7 @@ if not NO_GAS:
     fire.field = make_field(FIRE_N, FIRE_R[1])
     if VOLUMES:
         fire.field.set_density_repr(tp.Vector3(cx, 3.6, cz), tp.Vector3(9.0, 4.6, 9.0),
-                                    FIRE_SIGMA * SIGMA, 96)
+                                    FIRE_SIGMA * SIGMA, FIRE_RES)
         _d = fire.field.density_repr
         _d.albedo = tp.Color(0.30, 0.22, 0.17)
         _d.anisotropy = 0.15
@@ -729,24 +965,22 @@ if not NO_GAS:
         _d.temp_top_k = 1250.0
         _d.temp_falloff = 1.5
         _d.emissive_intensity = 0.0     # driven by the timeline
-    fire.field.set_billboard_repr(tp.Color(1.00, 0.63, 0.24), tp.Color(1.00, 0.20, 0.03),
-                                  0.0, 0.40)
-    _b = fire.field.billboard_repr
-    _b.softness = 0.80
-    _b.fade_power = 0.0                 # no age on a HostRing field: w carries the life
-    _b.size_taper = 0.0
-    _b.bright_jitter = 0.70
-    _b.near_fade = 1.5
-    _b.glow = 1.10                      # this field's own bloom pyramid
-    _b.glow_threshold = 0.0
+    # NO billboards on the fire field at this scale. Three million additive
+    # quads inside a four-metre ball is not a look, it is a fill-rate accident:
+    # the overdraw is hundreds deep and the result is a flat white ball. The
+    # `flare` cohort below is the fire SUBSET that carries the additive layer.
 
     # ── smoke ───────────────────────────────────────────────────────────────
-    # DensityRepr only. Soot is a DARK medium -- a bright albedo here and the
-    # column reads as steam.
+    # DensityRepr only -- nine million additive quads would be worse than three.
+    # Soot is a DARK medium; a bright albedo here and the column reads as steam.
     smoke.field = make_field(SMOKE_N, SMOKE_R[1])
     if VOLUMES:
-        smoke.field.set_density_repr(tp.Vector3(0.0, 12.0, 0.0),
-                                     tp.Vector3(16.0, 13.0, 16.0), SMOKE_SIGMA * SIGMA, 128)
+        # The box has to contain the WHOLE plume: soot outside it is not
+        # scattered and simply is not there, which reads as a cloud with its top
+        # sheared off. 48 x 30 x 48 m at 192**3 is a 25 cm voxel.
+        smoke.field.set_density_repr(tp.Vector3(0.0, 13.0, 0.0),
+                                     tp.Vector3(24.0, 15.0, 24.0),
+                                     SMOKE_SIGMA * SIGMA, SMOKE_RES)
         _d = smoke.field.density_repr
         _d.albedo = tp.Color(0.115, 0.108, 0.100)
         _d.anisotropy = 0.28
@@ -755,7 +989,8 @@ if not NO_GAS:
     dust.field = make_field(DUST_N, DUST_R[1])
     if VOLUMES:
         dust.field.set_density_repr(tp.Vector3(0.0, 1.5, 0.0),
-                                    tp.Vector3(36.0, 2.6, 36.0), DUST_SIGMA * SIGMA, 128)
+                                    tp.Vector3(36.0, 2.6, 36.0),
+                                    DUST_SIGMA * SIGMA, DUST_RES)
         _d = dust.field.density_repr
         _d.albedo = tp.Color(0.62, 0.58, 0.52)
         _d.anisotropy = 0.10
@@ -765,10 +1000,28 @@ if not NO_GAS:
     # static across the whole yard, not as glinting grit. The extinction volume
     # is the honest representation for dust and it is the only one here.
 
-    # ── sparks ──────────────────────────────────────────────────────────────
+    # ── flare: the fire subset that carries the additive layer ──────────────
+    # A quarter of a million hot parcels on the same burst trajectory as the
+    # fire, with a much shorter life, drawn as additive billboards with their
+    # own bloom pyramid. This is how the flash survives the jump to nebula
+    # counts: the DENSITY volume gets all three million fire parcels and the
+    # BILLBOARDS get a subset small enough that the overdraw stays sane.
+    flare.field = make_field(FLARE_N, FLARE_R[1])
+    flare.field.set_billboard_repr(tp.Color(1.00, 0.63, 0.24), tp.Color(1.00, 0.20, 0.03),
+                                   0.0, 0.40)
+    _b = flare.field.billboard_repr
+    _b.softness = 0.80
+    _b.fade_power = 0.0                 # no age on an Interop field: w carries the life
+    _b.size_taper = 0.0
+    _b.bright_jitter = 0.70
+    _b.near_fade = 1.5
+    _b.glow = 1.10                      # this field's own bloom pyramid
+    _b.glow_threshold = 0.0
+
+    # ── embers ──────────────────────────────────────────────────────────────
     #
-    # HostRing, not the analytic emitter, and that is a DEVIATION FROM THE PLAN
-    # with a hard reason. Ownership::Renderer's emitter is a STEADY-STATE
+    # A device-fed field, not the analytic emitter, and that is a DEVIATION FROM
+    # THE PLAN with a hard reason. Ownership::Renderer's emitter is a STEADY-STATE
     # generator by construction: particle_emit.comp gives every slot a random
     # phase into its own period (`float birth; // phase offset into the period,
     # [0,1)`), so at any emitter time a `dutyCycle` fraction of slots is alive
@@ -780,18 +1033,18 @@ if not NO_GAS:
     # steady state into a burst.
     #
     # What is lost by moving: age fade, size taper and the hot->cool colour ramp
-    # are all derived from the emitter's closed form, and on a HostRing field
-    # ageFrac is pinned to 0. The radius IS the fade here (an additive quad's
-    # contribution goes as its area, so r -> 0 is a fade), and because this is
-    # ONE burst rather than a steady state, the whole field ages together --
-    # so cooling the field's own colour over tw below is a faithful stand-in
-    # for cooling each ember over its own age.
-    spark.field = make_field(SPARK_N, SPARK_R[0])
-    spark.field.set_billboard_repr(tp.Color(1.00, 0.78, 0.36), tp.Color(1.00, 0.17, 0.02),
+    # are all derived from the emitter's closed form, and on a HostRing or
+    # Interop field ageFrac is pinned to 0. The radius IS the fade here (an
+    # additive quad's contribution goes as its area, so r -> 0 is a fade), and
+    # because this is ONE burst rather than a steady state, the whole field ages
+    # together -- so cooling the field's own colour over tw below is a faithful
+    # stand-in for cooling each ember over its own age.
+    ember.field = make_field(EMBER_N, EMBER_R[0])
+    ember.field.set_billboard_repr(tp.Color(1.00, 0.78, 0.36), tp.Color(1.00, 0.17, 0.02),
                                    0.0, 1.0)
-    _b = spark.field.billboard_repr
+    _b = ember.field.billboard_repr
     _b.softness = 0.32
-    _b.fade_power = 0.0                 # inert on HostRing: the radius is the fade
+    _b.fade_power = 0.0                 # inert off the emitter: the radius is the fade
     _b.size_taper = 0.0
     _b.bright_jitter = 0.65
     _b.stretch_seconds = 0.030          # smeared along (pos - prevPos) of the ring
@@ -799,9 +1052,9 @@ if not NO_GAS:
     _b.stretch_max_screen = 0.055
     _b.near_fade = 1.2
     _b.glow = 0.50
-    SPARK_HOT = ((1.00, 0.80, 0.40), (1.00, 0.30, 0.06))   # new ember -> old ember
+    EMBER_HOT = ((1.00, 0.80, 0.40), (1.00, 0.30, 0.06))   # new ember -> old ember
 
-    # ── streaks: the ONE thing HostRing cannot do ───────────────────────────
+    # ── streaks: the ONE thing a device-fed field cannot do ─────────────────
     # ParticleFieldPass.cpp is explicit: "the stretch is a Renderer-mode
     # feature and is silently zero elsewhere", because a HostRing field's
     # prevPositions are the previous RING SLOT and their age is never
@@ -854,7 +1107,84 @@ if not NO_GAS:
     scene.add(streaks)
 
     fields = [c.field for c in cohorts] + [streaks]
-    GAS_END = max(c.t_last for c in cohorts) + 0.1
+    # The last thing that can still be on screen: a fire parcel emitted at the
+    # end of the burst, cooling for its full life, converting, and its soot
+    # living out the longest smoke life. Nothing is emitted after DUST_EMIT.
+    GAS_END = FIRE_EMIT + FIRE_LIFE[1] + SMOKE_LIFE[1] + 0.1
+    GAS_N = sum(c.n for c in cohorts)
+
+    # ── ARM THE ZERO-COPY PATH ──────────────────────────────────────────────
+    # enable_particle_field_interop returns None until after the FIRST render():
+    # the field's device state and the renderer's field pass are both created on
+    # the frame the field is first seen. So: render once (nothing is live, so
+    # nothing is drawn), then export, then import into CUDA.
+    #
+    # Every leg of the failure path lands on the same fallback. No CUDA device,
+    # --no-interop, an empty handle (the device cannot export memory), or a
+    # CUDA-side import that throws: the fields were created HostRing in the
+    # first two cases and the renderer has set host_fallback() in the third, so
+    # submit() is legal either way and the counts were already scaled down.
+    renderer.render(scene, camera)
+    HOST_RING = not INTEROP             # is submit() a legal path for these fields?
+    if INTEROP:
+        from threepp.cuda_interop import VkInteropArray
+        exported = False
+        try:
+            for c in cohorts:
+                h = renderer.enable_particle_field_interop(c.field, c.device_copy)
+                if h is None:
+                    raise RuntimeError("this device cannot export memory "
+                                       f"(host_fallback={c.field.host_fallback})")
+                exported = True
+                c.imported = VkInteropArray(h[0], h[1], wp.vec4, c.n, device)
+            # Confirm the path is actually device-to-device by TIMING it: eight
+            # full-capacity copies outside any frame. A number in the hundreds
+            # of GB/s is device-local memory; anything near 20 would mean the
+            # export had landed in host memory and the whole exercise was moot.
+            for c in cohorts:
+                wp.copy(c.imported.array, c.pos)
+            wp.synchronize_device(device)
+            _t = time.perf_counter()
+            for _ in range(8):
+                for c in cohorts:
+                    wp.copy(c.imported.array, c.pos)
+            wp.synchronize_device(device)
+            _dt = (time.perf_counter() - _t) / 8.0
+            print(f"gas: DIRECT device-to-device path armed -- {GAS_N:,} particles, "
+                  f"{16 * GAS_N / 1e6:.0f} MB exported, 0 B/frame across the bus\n"
+                  f"     full-capacity device copy: {1e3 * _dt:.2f} ms "
+                  f"({32 * GAS_N / 1e9 / _dt:.0f} GB/s read+write)")
+        except Exception as e:
+            INTEROP = False
+            for c in cohorts:
+                c.imported = None
+            if exported:
+                # The renderer DID export and only the CUDA import failed, so
+                # the fields are Interop and NOT in host_fallback: submit() will
+                # throw on them and there is no second path from here. Park the
+                # gas rather than crash, and name the flag that works.
+                print(f"gas: CUDA could not import the export ({e}).\n"
+                      f"     Re-run with --no-interop for the host-ring path.")
+                for c in cohorts:
+                    c.per_charge = 0
+            else:
+                # No external memory: the renderer has already put the fields in
+                # host_fallback(), which makes submit() legal on them. Keep the
+                # allocations (capacity is latched) but emit only what the bus
+                # can carry -- 16 B/particle out and 16 B/particle back, twice a
+                # frame, is what caps this path at a few hundred thousand.
+                print(f"gas: no zero-copy export ({e}); host ring at {FALLBACK:.0%} "
+                      f"of the counts")
+                HOST_RING = True
+                for c in cohorts:
+                    c.per_charge = int(c.per_charge * FALLBACK)
+    if HOST_RING:
+        for c in cohorts:
+            try:
+                c.host = wp.zeros(c.n, dtype=wp.vec4, device="cpu", pinned=True)
+            except TypeError:                           # older warp: plain host mem
+                c.host = wp.zeros(c.n, dtype=wp.vec4, device="cpu")
+            c.host_np = c.host.numpy()                  # a VIEW of the host array
 
     # ── PREWARM: one throwaway frame with every field LIVE ───────────────────
     # Creating the fields up front is necessary but not sufficient. A density
@@ -862,37 +1192,52 @@ if not NO_GAS:
     # the field actually has live particles, and a billboard field's glow
     # pyramid allocates its offscreen target the first time it draws -- so with
     # nothing but set_live_count(0) at startup, ALL of that lands on the
-    # detonation frame. Measured in the window: a 34.9 ms worst frame at t0,
-    # against 6-9 ms once the gas is running. One particle each, for one frame
-    # nobody sees, moves it to startup where it belongs.
-    _warm = np.array([[0.0, 1.0, 0.0, 0.01]], np.float32)
+    # detonation frame. Measured in the window at phase 2's counts: a 34.9 ms
+    # worst frame at t0 against 6-9 ms once the gas is running, and at fifteen
+    # million a 192**3 volume allocation is not something to do mid-shot. One
+    # particle each, for one frame nobody sees, moves it to startup.
+    _warm = wp.array(np.array([[0.0, 1.0, 0.0, 0.01]], np.float32),
+                     dtype=wp.vec4, device=device)
     for c in cohorts:
-        c.field.submit(_warm)
+        wp.copy(c.pos, _warm, count=1)
+        c.live = 1
+        c.publish()
     streaks.set_live_count(STREAK_N)
     renderer.render(scene, camera)
     for c in cohorts:
+        c.reset()
         c.field.set_live_count(0)
     streaks.set_live_count(0)
-    print(f"gas: fire {FIRE_N:,} + smoke {SMOKE_N:,} + dust {DUST_N:,} HostRing "
-          f"+ sparks {SPARK_N:,} HostRing "
-          f"({16 * (FIRE_N + SMOKE_N + DUST_N + SPARK_N) / 1e6:.1f} MB/frame at full "
-          f"count), on {device}")
+    print(f"gas: fire {FIRE_N:,} -> smoke {SMOKE_N:,} (x{SMOKE_K} on cooling) "
+          f"+ dust {DUST_N:,} + ember {EMBER_N:,} + flare {FLARE_N:,} "
+          f"= {GAS_N:,} particles "
+          f"({52 * GAS_N / 1e6:.0f} MB resident), on {device}")
 else:
     GAS_END = 0.0
+    GAS_N = 0
 
 # Billboards are composited after the upscaler and are outside auto-exposure,
 # so their intensity is tied to the pinned scene exposure BY HAND, once, here.
 # Change tone_mapping_exposure and these follow it instead of blowing out.
 _EXP = 0.55 / max(renderer.tone_mapping_exposure, 1e-3)
-BB_FIRE = 0.055 * _EXP     # low ON PURPOSE: 120k additive quads inside a 4 m ball
-BB_SPARK = 0.85 * _EXP     # emission ramp. The billboards are only its sparkle.
+# Scaled off phase 2's tuned values by the nebula's 1/sqrt(N) law: the flare
+# cohort is 250 k against the old fire field's 120 k, the ember field 500 k
+# against 44 k. Overlapping additive quads saturate long before they sum, which
+# is why the exponent is a half and not one.
+BB_FLARE = 0.038 * _EXP    # low ON PURPOSE: the FLAME is the density ramp.
+BB_EMBER = 0.40 * _EXP     # The billboards are only its sparkle.
 BB_STREAK = 1.6 * _EXP
 FIRE_EMISSIVE = 4.5                     # emission is intensity * THIS field's sigma
 _gas_live = False
 
 
 def step_gas_frame(dt):
-    """Advance the three HostRing cohorts and publish them. Returns (kernel, submit)."""
+    """Advance every cohort and publish it. Returns (kernel, publish) seconds.
+
+    On the interop path `publish` is five integers and the real cost is the
+    device_copy the renderer invokes inside render(); on the fallback it is the
+    readback plus the ring memcpy, which is why it is still its own column.
+    """
     global _gas_live
     if NO_GAS:
         return 0.0, 0.0
@@ -901,6 +1246,7 @@ def step_gas_frame(dt):
     if not state["armed"] or tw > GAS_END:
         if _gas_live:                   # park, do not destroy: one entry, no churn
             for c in cohorts:
+                c.live = 0
                 c.field.set_live_count(0)
             streaks.set_live_count(0)
             _gas_live = False
@@ -908,18 +1254,25 @@ def step_gas_frame(dt):
     _gas_live = True
     t0 = time.perf_counter()
     wp.launch(bake_noise, dim=(NG, NG, NG), inputs=[tw, noise_grid], device=device)
+    # EMISSION. The host loop is over CHARGES, never over particles: per cohort
+    # per charge it computes one integer and hands the ring cursor to a launch.
+    for ci in range(N_CHARGES):
+        b = sim_time - CHARGES[ci][3]
+        for c in emitters:
+            c.emit(ci, b)
+    # Smoke slots are claimed by conversion, and the mapping is static, so the
+    # live prefix of the smoke pool is exactly the fire ring's prefix times K.
+    smoke.live = min(fire.cursor * SMOKE_K, smoke.n)
     for c in cohorts:
-        c.advance(tw, dt, c.params)
+        c.advance(dt, child=smoke)
     wp.synchronize_device(device)
     t1 = time.perf_counter()
-    counts = [c.fetch(tw) for c in cohorts]
-    wp.synchronize_device(device)                       # the DtoH copies
-    for c, n in zip(cohorts, counts):
-        c.push(n)
+    for c in cohorts:
+        c.publish()
     t2 = time.perf_counter()
 
     gain = state["bb_gain"]
-    fire.field.billboard_repr.intensity = BB_FIRE * gain
+    flare.field.billboard_repr.intensity = BB_FLARE * gain
     if not NO_FOG:
         # NEVER exactly zero while the gas is live. Any emissive volume switches
         # the per-pixel dust march from 24 midpoint steps to 32 dithered ones,
@@ -931,12 +1284,12 @@ def step_gas_frame(dt):
         fire.field.density_repr.emissive_intensity = max(FIRE_EMISSIVE * state["fire_e"],
                                                          1.0e-3)
     # One burst ages as one population, so cooling the FIELD is a faithful
-    # stand-in for the per-particle colour ramp a HostRing field cannot have.
+    # stand-in for the per-particle colour ramp a device-fed field cannot have.
     k = min(tw / 2.6, 1.0)
-    hot, cool = SPARK_HOT
-    spark.field.billboard_repr.color_hot = tp.Color(*(a + (b - a) * k
+    hot, cool = EMBER_HOT
+    ember.field.billboard_repr.color_hot = tp.Color(*(a + (b - a) * k
                                                       for a, b in zip(hot, cool)))
-    spark.field.billboard_repr.intensity = (BB_SPARK * (1.0 + 0.6 * (gain - 1.0))
+    ember.field.billboard_repr.intensity = (BB_EMBER * (1.0 + 0.6 * (gain - 1.0))
                                             * (1.0 - 0.55 * k))
     # The streak field ejects only while the charge is still ejecting.
     if tw < STREAK_T:
@@ -1005,19 +1358,22 @@ def yard_stats():
 
 def gas_stats():
     """Where the gas actually IS -- the only honest way to tune sigma, since a
-    column that is twice as wide as you think is four times more transparent."""
+    column that is twice as wide as you think is four times more transparent.
+
+    A STRIDED SAMPLE of the live prefix, scaled back up, because on the interop
+    path the positions never cross the bus and there is no host mirror to read.
+    """
     out = {}
     for c in cohorts:
-        n = int(np.searchsorted(c.births, blast_timeline(sim_time)["tw"], side="right"))
-        if n == 0:
+        p = c.sample()
+        if p is None:
             continue
-        p = c.host_np[:n]
         live = p[:, 3] >= 0.0
         if not live.any():
             continue
         q = p[live]
         r = np.hypot(q[:, 0], q[:, 2])
-        out[c.name] = (int(live.sum()), float(np.median(q[:, 1])),
+        out[c.name] = (int(round(live.mean() * c.live)), float(np.median(q[:, 1])),
                        float(np.percentile(q[:, 1], 95)), float(np.median(r)),
                        float(np.percentile(r, 95)))
     return out
@@ -1033,8 +1389,10 @@ def report():
     for name, (k, ymed, y95, rmed, r95) in gas_stats().items():
         print(f"  {name:>5}: {k:7,} live  y {ymed:5.1f}/{y95:5.1f} m  "
               f"r {rmed:5.1f}/{r95:5.1f} m  (median/p95)")
-    print(f"  per frame: gas {1e3 * prof['gas'] / n:.2f} ms, submit "
-          f"{1e3 * prof['submit'] / n:.2f} ms, blast {1e3 * prof['blast'] / n:.2f} ms, "
+    print(f"  per frame: gas {1e3 * prof['gas'] / n:.2f} ms, publish "
+          f"{1e3 * prof['submit'] / n:.2f} ms, device_copy "
+          f"{1e3 * GAS_COPY[0] / n:.2f} ms ({1e3 * GAS_COPY[1] / n:.2f} issue + "
+          f"{1e3 * GAS_COPY[2] / n:.2f} sync), blast {1e3 * prof['blast'] / n:.2f} ms, "
           f"physx {1e3 * prof['physx'] / n:.2f} ms, render "
           f"{1e3 * prof['render'] / n:.2f} ms")
 
@@ -1102,6 +1460,7 @@ elif BENCH:
         step_frame()
         renderer.render(scene, camera)
     prof.update(gas=0.0, submit=0.0, blast=0.0, physx=0.0, render=0.0, n=0)
+    GAS_COPY[:] = [0.0, 0.0, 0.0]
     live = sum(f.live_count for f in fields)
     bench_loop(step_frame, lambda: renderer.render(scene, camera),
                ("gas", "submit", "blast", "physx"), 20, 200,
