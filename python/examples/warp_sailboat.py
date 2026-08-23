@@ -68,6 +68,7 @@ simulation never stops.
     python warp_sailboat.py --birds 60          # more gulls
     python warp_sailboat.py --timelapse             # run the day in time-lapse
     python warp_sailboat.py --shot 25 --tod 23.5 --weather night --out night.png
+    python warp_sailboat.py --gif readme.gif --face gif --drone --tod 19.7 --weather clearing --start -22,32
     python warp_sailboat.py --film film.mp4 --contact        # the whole picture
     python warp_sailboat.py --film min.mp4 --cut short --contact   # the one-minute cut
     python warp_sailboat.py --film t.mp4 --preview --acts 4  # iterate one act
@@ -98,8 +99,18 @@ import warp as wp
 import threepp as tp
 from warp_common import cli_arg, load_font, parse_size, resize_handler, standard_material
 
-SHOT = "--shot" in sys.argv
-SHOT_T = cli_arg("--shot", 25.0, float)
+# ---- the README gif ----------------------------------------------------------
+#  `--gif out.gif` runs the --shot loop headless and keeps the LAST --gif-seconds
+#  of it as a palette-optimised GIF (ffmpeg palettegen/paletteuse through
+#  imageio-ffmpeg, which the film already needs). Everything else about the
+#  shot -- weather, time of day, --face, --drone -- applies unchanged.
+GIF = "--gif" in sys.argv
+GIF_OUT = cli_arg("--gif", "warp_sailboat.gif", str)
+GIF_SECONDS = cli_arg("--gif-seconds", 5.0, float)
+GIF_FPS = int(cli_arg("--gif-fps", 15, float))
+GIF_WIDTH = int(cli_arg("--gif-width", 640, float))
+SHOT = ("--shot" in sys.argv) or GIF
+SHOT_T = cli_arg("--shot", 16.0 if GIF else 25.0, float)
 TOD0 = cli_arg("--tod", 5.2, float) % 24.0        # clock time, hours
 WEATHER0 = cli_arg("--weather", "mist", str)
 WIND0 = cli_arg("--wind", 0.0, float)             # 0 = let the weather decide
@@ -2495,7 +2506,10 @@ knob = {
     "cloud": weather["coverage"],
 }
 
-START_X, START_Z, START_HDG = 0.0, 0.0, 340.0
+# `--start x,z` moves the launch point (the README gif starts her nearer the
+# rock so the gulls are more than specks).
+_start = cli_arg("--start", "0,0", str).split(",")
+START_X, START_Z, START_HDG = float(_start[0]), float(_start[1]), 340.0
 
 boat_state = {
     "x": START_X, "z": START_Z, "y": 0.0, "vy": 0.0,
@@ -4393,6 +4407,32 @@ def frame(dt):
         follow_camera()                      # the film places its own camera
 
 
+def write_gif(frames_rgb, out, fps, width):
+    """Palette-optimised GIF from a list of (H, W, 3) uint8 frames: PNGs to a
+    temp dir, then ffmpeg's two-pass palettegen / paletteuse (one global
+    palette, bayer dither) -- the difference between a 4 MB README loop and a
+    15 MB one."""
+    import subprocess
+    import tempfile
+    import imageio_ffmpeg
+    from PIL import Image
+    if not frames_rgb:
+        print("gif: no frames captured")
+        return
+    with tempfile.TemporaryDirectory() as td:
+        for i, fr in enumerate(frames_rgb):
+            Image.fromarray(fr).save(os.path.join(td, f"f{i:04d}.png"))
+        vf = (f"fps={fps},scale={width}:-2:flags=lanczos,split[a][b];"
+              f"[a]palettegen=max_colors=256:stats_mode=diff[p];"
+              f"[b][p]paletteuse=dither=bayer:bayer_scale=5:diff_mode=rectangle")
+        cmd = [imageio_ffmpeg.get_ffmpeg_exe(), "-y", "-loglevel", "error",
+               "-framerate", str(fps), "-i", os.path.join(td, "f%04d.png"),
+               "-vf", vf, "-loop", "0", out]
+        subprocess.run(cmd, check=True)
+    print(f"gif: {len(frames_rgb)} frames @ {fps} fps -> {out} "
+          f"({os.path.getsize(out) / 1e6:.1f} MB)")
+
+
 if FILM:
     if "--warmup-probe" in sys.argv:
         run_warmup_probe()
@@ -4419,7 +4459,36 @@ elif SHOT:
         for o in (-1, 0, 2, 5, 10, 30, 75):
             seq[strike_frame + o] = f"{SEQ}_{'m' if o < 0 else 'p'}{abs(o):02d}.png"
     t_hot, n_hot, t_cold, n_cold = 0.0, 0, 0.0, 0
+    # `--face gif`: the README loop. Closer than `islet` so the boat fills the
+    # foreground, and the drone is not off orbiting 13 m out (a 0.45 m machine
+    # is six pixels at gif size there): it hangs a few metres ahead of the
+    # camera, off to one side, FILMING the boat -- so the audience watches the
+    # shot over the drone's shoulder and the rock, the gulls and the sun sit
+    # behind the sail.
+    _gif_ph = [0.0]
+    def _gif_drone(dt):
+        _gif_ph[0] += dt * (2.0 * math.pi / 9.0)
+        ph = _gif_ph[0]
+        cp = np.array([camera.position.x, camera.position.y, camera.position.z])
+        bx_, bz_ = boat_state["x"], boat_state["z"]
+        to = np.array([bx_ - cp[0], 0.0, bz_ - cp[2]])
+        to /= max(float(np.linalg.norm(to)), 1e-6)
+        left = np.array([-to[2], 0.0, to[0]])
+        pos = (cp + to * (6.2 + 0.5 * math.sin(ph * 0.6))
+               + left * (2.3 + 0.7 * math.sin(ph))
+               + np.array([0.0, -0.9 + 0.35 * math.sin(0.7 * ph + 1.0), 0.0]))
+        drone_set_pose(pos, (bx_, boat_state["y"] + 5.0, bz_), dt)
+    if FACE == "gif" and drone_on:
+        drone_auto = False
+        film_drone = _gif_drone
+    # The gif keeps the tail of the shot; flush the gulls a few seconds before
+    # it so the flock is wheeling over the rock rather than sitting on it.
+    gif_frames = []
+    gif_every = max(int(round(60.0 / max(GIF_FPS, 1))), 1)
+    gif_start = max(frames - int(round(GIF_SECONDS * 60.0)), 0)
     for f in range(frames):
+        if GIF and f == max(gif_start - 6 * 60, 0):
+            gulls.startle(tp.Vector3(boat_state["x"], 2.0, boat_state["z"]), 260.0, 1.0)
         if f == strike_frame:
             delay = fire_strike(STRIKE_KIND, bearing=STRIKE_BRG, distance=STRIKE_DIST)
             print(f"strike at frame {f} ({STRIKE_KIND}, {STRIKE_DIST:.0f} m), "
@@ -4466,6 +4535,9 @@ elif SHOT:
                 cy, sy = math.cos(bs_["yaw"]), math.sin(bs_["yaw"])
                 camera.position.set(bx - sy * 30.0 + cy * 6.0, 13.5, bz - cy * 30.0 - sy * 6.0)
                 camera.look_at(bx, 0.4, bz)
+        elif FACE == "gif":
+            camera.position.set(bx + 19.0, 7.8, bz - 14.0)
+            camera.look_at(bx * 0.55 + ISLET_X * 0.45, 7.5, bz * 0.55 + ISLET_Z * 0.45)
         elif FACE == "bow":
             # Bow-on from a little to port: the one angle where the jib is not
             # behind the main.
@@ -4495,8 +4567,12 @@ elif SHOT:
             except Exception as exc:          # noqa: BLE001 - a still is not the demo
                 print(f"  seq write failed: {exc}")
             print(f"  wrote {seq[f]}  (flash {flash_level:.3f})")
+        if GIF and f >= gif_start and (f - gif_start) % gif_every == 0:
+            gif_frames.append(np.ascontiguousarray(renderer.read_pixels()))
+    if GIF:
+        write_gif(gif_frames, GIF_OUT, GIF_FPS, GIF_WIDTH)
     # Let the accumulation settle on the final pose before the read-back.
-    if not seq:
+    elif not seq:
         for _ in range(24):
             sim_tick(1.0 / 60.0)
             renderer.render(scene, camera)

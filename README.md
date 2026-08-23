@@ -11,8 +11,8 @@ and modern backends: portable OpenGL, and a deferred Vulkan renderer with ray-tr
 On top of that: a scene editor, PhysX-backed robot simulation, hardware-in-the-loop
 flight, and ground-truth sensor output for synthetic-data generation.
 
-![Real-time ray-traced FFT ocean](doc/screenshots/sailboat_golden.png)
-*Real-time FFT ocean — Vulkan deferred-hybrid renderer (raster-first, with ray-traced shadows & reflections)*
+![Warp cloth sails on a real-time FFT ocean](doc/screenshots/sailboat_golden.gif)
+*Golden hour, live: NVIDIA Warp cloth sails driving the hull, a JONSWAP FFT sea, a gull flock and a camera drone — Vulkan deferred-hybrid renderer (raster-first, with ray-traced shadows & reflections). [warp_sailboat.py](python/examples/warp_sailboat.py)*
 
 ![The threepp scene editor](doc/screenshots/bistro_editor.png)
 *The scene editor — hierarchy, inspector, Play mode, and a live sensor preview ([apps/editor](apps/editor), [doc/editor.md](doc/editor.md))*
