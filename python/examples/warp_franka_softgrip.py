@@ -42,15 +42,15 @@ SHOT_TIME = cli_arg("--shot", 3.2, float)
 FRAMES = cli_arg("--frames", 0, int)
 BENCH = FRAMES > 0
 WIDTH, HEIGHT = parse_size(cli_arg("--size", "1280x720", str))
-F_GRASP = cli_arg("--grip-force", 9.0, float)
+F_GRASP = cli_arg("--grip-force", 14.0, float)
 HEADLESS = SHOT or BENCH
 
 # --- solver tunables ------------------------------------------------------------
 
 FPS = 60.0
 DT = 1.0 / 240.0
-SUBSTEPS = 4
-ITERATIONS = 12
+SUBSTEPS = 6
+ITERATIONS = 16
 VOLUME_PASSES = 1     # the fish's pressure row; >1 measured WORSE, see the plan
 DAMPING = 0.04
 GRAVITY = wp.vec3(0.0, -9.81, 0.0)
@@ -60,8 +60,25 @@ RELAX = 0.5
 STIFF_SKIN = 1.0
 STIFF_RIB = 0.7
 STIFF_DIAG = 0.35
+# Root fan. Only the two root rows are pinned to the carriage, and a Jacobi
+# solve moves a rigid translation down an 11-row chain appallingly slowly: the
+# pad face lagged the carriage so badly that a hand provably squeezing the fish
+# (178 fish particles in contact, 13 N) still could not lift it -- the load
+# never reached the pinned rows. A chord from the root row straight to every
+# node ties the pad face to the carriage in ONE hop. It costs some of the
+# finger's gross floppiness; the local conformity and the Fin Ray shear (soft
+# diagonals) survive, because those change the chord lengths hardly at all.
+STIFF_FAN = 0.5
 STIFF_EDGE = 1.0      # fish shell stretch
-STIFF_BEND = 0.20     # fish shell bending: low, so it flops
+STIFF_BEND = 0.35     # fish shell bending: low, so it flops
+# The fish's body. A pressurised shell held only by a single global volume row
+# satisfies that row by spreading sideways -- it pancakes on the tray and a
+# 12 mm puddle has nothing for a 75 mm pad to hold. Transverse chords across
+# each body cross-section (top skin to belly, flank to flank) are the ribs: a
+# fish is firm across, floppy along. They resist flattening AND squirting
+# sideways while leaving the length free to bend and droop.
+STIFF_FISH_RIB = 0.75
+RIB_AXIAL = 0.35      # keep only chords with |dx| <= this * |chord|
 
 # Contact radius, and it is a CLEARANCE budget as much as a collision one: the
 # pads' effective surface stands PART_R proud of the particles, so a fat radius
@@ -71,12 +88,12 @@ STIFF_BEND = 0.20     # fish shell bending: low, so it flops
 # inside finds nothing to push on) is bought off by rebuilding the contact list
 # every substep and closing slowly enough that a pad moves << PART_R between
 # rebuilds.
-PART_R = 0.0035
+PART_R = 0.005
 CONTACT_R = 2.0 * PART_R
 CONTACT_CAP = 10
 CONTACT_MARGIN = 1.4
 
-MU_PAD = 0.85         # silicone pad on wet fish
+MU_PAD = 1.10         # tacky silicone pad on wet fish -- high, but elastomers do this
 MU_STEEL = 0.25       # fish on the stainless tray / table
 MU_CRATE = 0.35
 
@@ -107,21 +124,26 @@ FISH_P = (TRAY_C[0], TRAY_Y + FISH_H * 0.5, TRAY_C[1])
 # sieve: the fish bulges through the gaps between pad particles and the grip
 # leaks. 14 x 9 over 50 x 75 mm puts the nodes ~6 mm apart against a 7 mm
 # contact diameter.
-FIN_ROWS, FIN_COLS = 14, 9
-FIN_Z0, FIN_LEN = -0.045, 0.075   # root at the carriage, tip 30 mm past the TCP
-FIN_WIDTH = 0.050                 # across the grasp
+# The paddle is WIDE along the fish and only as tall as the fish is: a narrow
+# tall pad pinches a 50 mm patch of a 220 mm body, the fish pivots about that
+# patch and hangs out of the hand by one end (measured: it did exactly that).
+# 90 mm of flank between the pads is a cradle, and the head and tail still
+# droop off the ends.
+FIN_ROWS, FIN_COLS = 11, 16
+FIN_Z0, FIN_LEN = -0.032, 0.060   # root at the carriage, tip ~28 mm past the TCP
+FIN_WIDTH = 0.090                 # across the grasp, i.e. along the fish
 FIN_SKIN_IN = 0.004               # front skin, inboard of the carriage origin
 # The tip hooks INWARD. Two flat plates pinching a floppy shell is not a grasp:
 # the fish squirts out along its own length and the pads never stop it. Curving
 # the last third of the front skin toward the other finger puts a lip under the
 # fish, which is form closure -- the fish has to deform its way OUT to escape,
 # not merely slide.
-FIN_CURL = 0.013
+FIN_CURL = 0.010
 FIN_SKIN_OUT = 0.010              # back skin, outboard
 # Heavy relative to the fish ON PURPOSE. The contact correction is split by
 # inverse mass, so a light pad simply gets shoved aside by the fish instead of
 # clamping it -- the mass ratio IS the clamping stiffness at a contact.
-FIN_MASS = 0.6
+FIN_MASS = 0.8
 
 URDF = "C:/dev/threepp/cmake-build-relwithdebinfo/_deps/threepp_data-src/urdf/franka/fr3.urdf"
 if not os.path.exists(URDF):
@@ -159,7 +181,7 @@ FINGER_OPEN, FINGER_SHUT = 0.04, 0.0
 # 4.6 cm across, so the whole useful travel is about a centimetre; without a
 # floor under the force control a soft fish just gets squeezed out sideways
 # rather than pushing back, and the carriages run to zero.
-FINGER_MIN = 0.024
+FINGER_MIN = 0.021
 
 ik_opts = tp.IkOptions()
 ik_opts.task = tp.IkTask.Pose
@@ -283,6 +305,12 @@ def finger_pairs(base):
                 if i + 1 < FIN_ROWS and j + 1 < FIN_COLS:
                     p.append((pid(i, j, skin), pid(i + 1, j + 1, skin), STIFF_SKIN))
                     p.append((pid(i, j + 1, skin), pid(i + 1, j, skin), STIFF_SKIN))
+    for skin in (0, 1):
+        for i in range(3, FIN_ROWS):
+            for j in range(FIN_COLS):
+                p.append((pid(1, j, skin), pid(i, j, skin), STIFF_FAN))
+                if skin == 0:
+                    p.append((pid(1, j, 1), pid(i, j, 0), STIFF_FAN))
     for i in range(FIN_ROWS):
         for j in range(FIN_COLS):
             p.append((pid(i, j, 0), pid(i, j, 1), STIFF_RIB))
@@ -319,6 +347,33 @@ for k in (0, 1):
 
 FIN_TOTAL = len(positions)
 
+def rib_pairs(unit_v, tmpl, stiff):
+    """Transverse chords through the body: each shell vertex paired with the
+    vertex opposite it across the cross-section. The icosphere is symmetric
+    under (x, -y, -z), so the mirror of a vertex is (near enough) another
+    vertex; the pair is kept only if the chord is mostly transverse to the
+    body axis x, which leaves the length free to bend."""
+    mirror = unit_v * np.array([1.0, -1.0, -1.0], dtype=np.float32)
+    d = np.linalg.norm(unit_v[None, :, :] - mirror[:, None, :], axis=2)
+    np.fill_diagonal(d, 1.0e9)
+    nearest = np.argmin(d, axis=1)
+    out, seen = [], set()
+    for i in range(len(unit_v)):
+        j = int(nearest[i])
+        if d[i, j] > 0.25:
+            continue
+        a, b = (i, j) if i < j else (j, i)
+        if a == b or (a, b) in seen:
+            continue
+        ch = tmpl[b] - tmpl[a]
+        L = float(np.linalg.norm(ch))
+        if L < 1.0e-5 or abs(float(ch[0])) > RIB_AXIAL * L:
+            continue
+        seen.add((a, b))
+        out.append((a, b, stiff))
+    return out
+
+
 # Fish: tapered-ellipsoid pressurised shell (the warp_fish_conveyor recipe).
 unit, fish_faces_t = icosphere(FISH_SUBDIV)
 taper = (1.0 - 0.45 * (unit[:, 0] * 0.5 + 0.5)).astype(np.float32)
@@ -332,6 +387,9 @@ FISH_BASE = FIN_TOTAL
 fish_p0 = fish_tmpl + np.array(FISH_P, dtype=np.float32)
 for pr in shell_pairs(fish_faces_t, STIFF_EDGE, STIFF_BEND):
     pairs.append((FISH_BASE + pr[0], FISH_BASE + pr[1], pr[2]))
+FISH_RIBS = rib_pairs(unit, fish_tmpl, STIFF_FISH_RIB)
+for a, b, s in FISH_RIBS:
+    pairs.append((FISH_BASE + a, FISH_BASE + b, s))
 mfish = FISH_MASS / FISH_NV
 for n in range(FISH_NV):
     positions.append(fish_p0[n])
@@ -386,6 +444,7 @@ def build_contacts(pos: wp.array(dtype=wp.vec3),
                    grid: wp.uint64,
                    body: wp.array(dtype=int),
                    cont_idx: wp.array(dtype=int),
+                   cont_d: wp.array(dtype=float),
                    cont_n: wp.array(dtype=int)):
     # One hash-grid sweep per substep; the iterations replay the list. Same-body
     # pairs are skipped -- a shell is held apart by its own pressure and a truss
@@ -397,8 +456,16 @@ def build_contacts(pos: wp.array(dtype=wp.vec3),
     q = wp.hash_grid_query(grid, p, CONTACT_R * CONTACT_MARGIN)
     for j in q:
         if body[j] != b and n < CONTACT_CAP:
-            if wp.length(p - pos[j]) < CONTACT_R * CONTACT_MARGIN:
+            dist = wp.length(p - pos[j])
+            if dist < CONTACT_R * CONTACT_MARGIN:
                 cont_idx[i * CONTACT_CAP + n] = j
+                # The penetration LATCHED at collision time is the friction
+                # budget. Sizing friction off the live residual overlap instead
+                # is self-defeating: the normal constraint drives that residual
+                # to zero, so a well-solved contact ends the substep with no
+                # friction left and the fish slides out of a hand that is
+                # provably squeezing it.
+                cont_d[i * CONTACT_CAP + n] = CONTACT_R - dist
                 n += 1
     cont_n[i] = n
 
@@ -412,6 +479,7 @@ def solve(p_in: wp.array(dtype=wp.vec3),
           rests: wp.array(dtype=float),
           stiffs: wp.array(dtype=float),
           cont_idx: wp.array(dtype=int),
+          cont_d: wp.array(dtype=float),
           cont_n: wp.array(dtype=int),
           invm: wp.array(dtype=float),
           mu: wp.array(dtype=float),
@@ -451,7 +519,8 @@ def solve(p_in: wp.array(dtype=wp.vec3),
             t = rel - n * wp.dot(rel, n)
             tl = wp.length(t)
             if tl > 1.0e-9:
-                lim = wp.min(tl, mu[i] * (CONTACT_R - l))
+                budget = wp.max(cont_d[i * CONTACT_CAP + k], CONTACT_R - l)
+                lim = wp.min(tl, mu[i] * wp.max(budget, 0.0))
                 c -= t * (lim / tl * share)
             if record == 1 and pad[i] == 1 and body[j] == 2:
                 wp.atomic_add(pad_force, body[i], wp.length(push) * RELAX * f_scale)
@@ -580,6 +649,7 @@ fish_nrm = wp.zeros(fish_corners, dtype=wp.vec3, device=device)
 
 grid = wp.HashGrid(48, 48, 48, device)
 cont_idx = wp.zeros(NP * CONTACT_CAP, dtype=int, device=device)
+cont_d = wp.zeros(NP * CONTACT_CAP, dtype=float, device=device)
 cont_n = wp.zeros(NP, dtype=int, device=device)
 
 # PBD impulse -> newtons. The contact corrections summed over a substep's
@@ -600,11 +670,11 @@ def substep_body():
               inputs=[local_arr, mats, owner_arr, pinned_arr, pred, prev])
     grid.build(points=pred, radius=CONTACT_R * CONTACT_MARGIN)
     wp.launch(build_contacts, dim=NP, device=device,
-              inputs=[pred, grid.id, body_arr, cont_idx, cont_n])
+              inputs=[pred, grid.id, body_arr, cont_idx, cont_d, cont_n])
     pa, pb = pred, scratch
     for _ in range(ITERATIONS):
         wp.launch(solve, dim=NP, device=device,
-                  inputs=[pa, pb, prev, offsets, indices, rests, stiffs, cont_idx, cont_n,
+                  inputs=[pa, pb, prev, offsets, indices, rests, stiffs, cont_idx, cont_d, cont_n,
                           invm, mu_arr, pad_arr, body_arr, 1, F_SCALE, pad_force])
         pa, pb = pb, pa
     # The volume constraint is ONE global row over 642 vertices, so a single
@@ -657,7 +727,7 @@ PLAN = [("SETTLE", None, 0.4),
         ("PREGRASP", WP_PRE, 1.1),
         ("DESCEND", WP_GRASP, 1.0),
         ("CLOSE", None, 1.8),
-        ("LIFT", WP_LIFT, 1.8),
+        ("LIFT", WP_LIFT, 2.6),
         ("CARRY", WP_CARRY, 1.6),
         ("LOWER", WP_LOWER, 1.1),
         ("OPEN", None, 0.8),
@@ -772,6 +842,15 @@ def step_frame():
         slip_n += 1
     step_frame.c_prev = c
     tcp_prev = tcp
+    if phase != step_frame.phase_prev:
+        step_frame.phase_prev = phase
+        fv = x.numpy()[FISH_BASE:FISH_BASE + FISH_NV]
+        ncon = int((cont_n.numpy()[FISH_BASE:FISH_BASE + FISH_NV] > 0).sum())
+        print(f"  {phase:9s} t={sim_t:5.2f}s grip {grip_force:6.2f} N | fish "
+              f"y {fv[:, 1].min():.3f}..{fv[:, 1].max():.3f} "
+              f"(h {(fv[:, 1].max() - fv[:, 1].min()) * 1000:4.1f} mm, "
+              f"{100.0 * (fv[:, 1].max() - fv[:, 1].min()) / FISH_H:3.0f}% of {FISH_H * 1000:.0f}) "
+              f"c=({c[0]:.3f}, {c[1]:.3f}, {c[2]:.3f}) touch {ncon}")
     sim_t += 1.0 / FPS
     fin_np, fin_nn = fin_pos.numpy(), fin_nrm.numpy()
     fish_np, fish_nn = fish_pos.numpy(), fish_nrm.numpy()
@@ -785,6 +864,7 @@ def step_frame():
 
 
 step_frame.c_prev = np.array(FISH_P, dtype=np.float32)
+step_frame.phase_prev = ""
 
 
 def in_crate(c):
@@ -919,9 +999,7 @@ else:
 
     def animate():
         parts = step_frame()
-        if parts[3] != state["phase"]:
-            state["phase"] = parts[3]
-            print(f"  {parts[3]:9s} t={sim_t:5.2f}s grip {grip_force:6.2f} N")
+        state["phase"] = parts[3]
         if parts[3] == "DONE" and not state["done"]:
             state["done"] = True
             summary(parts[4])
