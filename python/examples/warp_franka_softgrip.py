@@ -111,16 +111,23 @@ if FILM:
 FPS = 60.0
 DT = 1.0 / 240.0
 SUBSTEPS = 6
-ITERATIONS = 26
+ITERATIONS = 32          # PHASE 9: +6 to converge the stiffer truss (skip-two
+                         # bending chords + higher gain cap); shared with the FEM
 DAMPING = 0.04
 DAMPING_FIN = 0.22       # the truss rings otherwise -- see integrate_damped
 GRAVITY = wp.vec3(0.0, -9.81, 0.0)
 RELAX = 0.5
 
 # Fin Ray split: the skins are structural, the diagonals are the compliance.
-STIFF_SKIN = 1.0
-STIFF_RIB = 0.7
-STIFF_DIAG = 0.35
+# PHASE 9: the finger read as floppy foil -- it deflected too much and did not
+# hold a plate shape. The plate is the two skins + the ribs holding them parallel
+# + the bending chords resisting curvature; the COMPLIANCE that makes it a Fin
+# Ray is the cell diagonals. So the plate members are stiffened (skins, ribs,
+# bending) and the gain headroom raised to let them converge, while STIFF_DIAG is
+# left soft so the tip still curls in and wraps the fish.
+STIFF_SKIN = 1.15
+STIFF_RIB = 0.85
+STIFF_DIAG = 0.35        # LEFT SOFT: this is the Fin Ray curl compliance
 # BENDING. A distance-only sheet has no bending stiffness at all: every fold is
 # free, so under the clamp the skins buckled into crumpled amber foil (phase 4's
 # poster shows the lower half of each finger reading as a crushed paper bag) and
@@ -130,10 +137,12 @@ STIFF_DIAG = 0.35
 # CURVATURE without adding any in-plane stretch resistance, so the truss's shear
 # compliance -- the Fin Ray effect itself -- is untouched. Same trick as the
 # fish's spine chords (phase 3), applied in both directions of both skins.
-STIFF_BEND = 0.9
-STIFF_BEND2 = 0.0     # skip-TWO chords along the columns, if skip-one is not
-                      # enough. Off: skip-one plus the gain cap below is enough,
-                      # and every row costs budget.
+STIFF_BEND = 1.0
+STIFF_BEND2 = 0.3    # skip-TWO chords along the columns (PHASE 9, ON now): a
+                      # skip-one chord resists a single-cell kink; the skip-two
+                      # chord resists a longer, gentler bow, and the two together
+                      # make the skin hold a stiff-plate arc instead of a floppy
+                      # foil. The gain cap + extra iterations absorb the new rows.
 # The cell's two diagonals. Softening them to 0.6 to pay for the bending rows'
 # Jacobi budget was TRIED and is wrong: the in-plane shear rows are load path
 # from the pinned root to the pad face, and at 0.6 the hand ploughed the fish
@@ -148,7 +157,13 @@ STIFF_SHEAR = 1.0
 # Jacobi signature. So: cap, do not normalise. Rows below the cap behave exactly
 # as they did before this phase; the surplus the new rows would have added is
 # what gets divided out.
-FIN_GAIN_CAP = 5.5    # in units of 0.5 * sum(stiffness) at the node
+FIN_GAIN_CAP = 5.5    # in units of 0.5 * sum(stiffness) at the node. PHASE 9
+                      # tried 7.0 and it went NaN -- the per-node Jacobi gain
+                      # crossed its stability limit (the phase-5 warning). Kept at
+                      # the proven-stable 5.5: the stiffer plate members still win
+                      # a larger SHARE of the capped correction, so the plate is
+                      # stiffer relative to the soft diagonals without raising the
+                      # absolute gain. Extra ITERATIONS buy the convergence.
 # Root fan. Only the two root rows are pinned to the carriage, and a Jacobi
 # solve moves a rigid translation down an 11-row chain appallingly slowly: the
 # pad face lagged the carriage so badly that a hand provably squeezing the fish
@@ -315,37 +330,76 @@ def load_fish_model(path, length):
     return (Pr * scale).astype(np.float32), faces, uv, mesh.material
 
 
+def body_profile(rv, nb=28, keep=90.0):
+    """Per-slice body half-extents (yhw, zhw) along the fish's long axis (+x),
+    with the thin fins REMOVED so the cage is carved to the FLESH, not the fins.
+
+    Slice x into `nb` bins. The two vertical fins (dorsal, anal) and the caudal
+    fan all lie in the median plane (z ~ 0) and are TALL but paper-THIN in z: if
+    the half-height were taken over all verts they would set a 100 mm cage on a
+    60 mm fish (measured). So the half-height is taken only over FLANK verts --
+    those a few mm off the median plane -- which are the body's own sides and
+    exclude every median-plane fin. The half-width is a high percentile of |z|
+    with the odd pectoral spike trimmed by a median gate. Both profiles are then
+    linearly interpolated across empty slices and lightly smoothed. Returns
+    (xc, yhw, zhw)."""
+    x = rv[:, 0].astype(np.float64)
+    ay = np.abs(rv[:, 1].astype(np.float64))
+    az = np.abs(rv[:, 2].astype(np.float64))
+    edges = np.linspace(x.min(), x.max(), nb + 1)
+    xc = 0.5 * (edges[:-1] + edges[1:])
+    bidx = np.clip(np.searchsorted(edges, x, side="right") - 1, 0, nb - 1)
+
+    def fill_smooth(v):
+        idx = np.arange(nb)
+        good = ~np.isnan(v)
+        if not good.any():
+            return np.zeros(nb)
+        v = np.interp(idx, idx[good], v[good])
+        return np.convolve(np.pad(v, 1, mode="edge"), np.array([0.25, 0.5, 0.25]), mode="valid")
+
+    # Width first: 90th percentile of |z| per slice, trimming pectoral-fin z
+    # spikes with a median gate.
+    zhw = np.full(nb, np.nan)
+    for i in range(nb):
+        m = bidx == i
+        if int(m.sum()) >= 4:
+            med = np.median(az[m])
+            sel = m & (az <= max(4.0 * med, med + 0.006))
+            zhw[i] = np.percentile(az[sel] if int(sel.sum()) >= 3 else az[m], keep)
+    zhw = np.maximum(fill_smooth(zhw), 1.0e-4)
+
+    # Height over FLANK verts only (|z| off the median plane), so the dorsal /
+    # anal / caudal fins -- which live at z ~ 0 -- never set the cage height.
+    yhw = np.full(nb, np.nan)
+    for i in range(nb):
+        zf = max(0.004, 0.30 * zhw[i])
+        m = (bidx == i) & (az >= zf)
+        if int(m.sum()) >= 4:
+            yhw[i] = np.percentile(ay[m], keep)
+    yhw = np.maximum(fill_smooth(yhw), 1.0e-4)
+    return xc, yhw, zhw
+
+
 FISH_MODEL_CACHE = None
+PROF_XC = PROF_YHW = PROF_ZHW = None
 if FISH_MODEL and os.path.exists(FISH_MODEL):
     FISH_MODEL_CACHE = load_fish_model(FISH_MODEL, FISH_LEN)
     _rv = FISH_MODEL_CACHE[0]
-    _body = _rv[np.abs(_rv[:, 0]) < 0.40 * FISH_LEN]     # drop the caudal (tail fin)
-    if len(_body) < 16:
-        _body = _rv
-    # Robust body half-extents: a high percentile of |y| / |z| over the central
-    # body verts, so the thin dorsal/anal/pectoral fins do not inflate the cage.
-    _bh = 2.0 * float(np.percentile(np.abs(_body[:, 1]), 92.0))
-    _bw = 2.0 * float(np.percentile(np.abs(_body[:, 2]), 92.0))
+    # PHASE 9: the cage is carved to the real per-slice body profile, so the
+    # collision surface MATCHES the render surface -- what you see is what you
+    # touch. The old path measured only two numbers (a symmetric ellipsoid) and
+    # capped the height for stability; now both axes follow the flesh.
+    PROF_XC, PROF_YHW, PROF_ZHW = body_profile(_rv, nb=28)
     _old_h, _old_w = FISH_H, FISH_W
-    # WIDTH is the grasp axis and the source of the user's gap: match it to the
-    # real flank so both pads bite the flesh with no side gap.
-    FISH_W = _bw
-    # HEIGHT: the fish is spawned STANDING (flanks facing the pads) so the 48 mm
-    # width fits the 80 mm hand. A tall-narrow ellipsoid standing on its belly is
-    # an egg on its end -- unstable -- and a full-height (91 mm) cage tips onto its
-    # flank during the settle and escapes the jaws (measured). So cap the cage's
-    # cross-section aspect near the procedural fish's (which stayed upright): the
-    # render still shows the full 91 mm body (its top/bottom extrapolate off the
-    # cage and droop upright, exactly as before this fix), while the physics cage
-    # stays stable AND fills the flank the pads actually close on.
-    STAND_ASPECT = 1.15
-    FISH_H = min(_bh, STAND_ASPECT * FISH_W)
+    # Full body height (not capped to a stable aspect any more): the conforming
+    # belly holds the fish upright better than the old ellipsoid egg, and the
+    # user wants the touch cage to match the visible body in Y as well as Z.
+    FISH_W = 2.0 * float(PROF_ZHW.max())
+    FISH_H = 2.0 * float(PROF_YHW.max())
     FISH_P = (TRAY_C[0], TRAY_Y + FISH_H * 0.5, TRAY_C[1])
-    # The pad paddle (FIN_LEN along the tool axis, FIN_WIDTH along the fish) already
-    # spans a 55 mm cage flank comfortably -- 60 mm tall, 110 mm along the body --
-    # so it is left at its tuned size; growing it just buckled the thin skins.
-    print(f"  fish-model body extents: real body {_bh * 1000:.0f} x {_bw * 1000:.0f} mm -> "
-          f"cage {FISH_H * 1000:.0f} x {FISH_W * 1000:.0f} mm "
+    print(f"  fish-model body profile: conforming cage {FISH_H * 1000:.0f} x {FISH_W * 1000:.0f} mm "
+          f"over {len(PROF_XC)} slices "
           f"(procedural was {_old_h * 1000:.0f} x {_old_w * 1000:.0f} mm)")
 
 
@@ -629,6 +683,49 @@ def fish_cage(h):
     return cv, tets.astype(np.int32), lo, dims, solid, cid
 
 
+def fish_cage_profile(xc, yhw, zhw, h):
+    """PHASE 9: voxel-carve a CONFORMING tet cage from the measured body profile.
+
+    Keep a cell when its centre is inside the per-slice half-extents:
+    |y| <= yhw(x) and |z| <= zhw(x), interpolating the profile at the cell's x.
+    This is the same conforming-cube -> 5-tet parity split (neighbouring cells
+    agree on shared-face diagonals) and the same negative-volume flip as
+    fish_cage; only the solid test changes from the symmetric ellipsoid SDF to
+    the real body envelope, so the collision cage now has the fish's deep
+    shoulder and slim tail instead of an ellipsoid."""
+    xlo, xhi = float(xc.min()), float(xc.max())
+    ymax, zmax = float(yhw.max()), float(zhw.max())
+    lo = np.array([xlo - 1.5 * h, -ymax - 1.5 * h, -zmax - 1.5 * h], np.float64)
+    hi = np.array([xhi + 1.5 * h, ymax + 1.5 * h, zmax + 1.5 * h], np.float64)
+    dims = np.maximum(np.ceil((hi - lo) / h).astype(int), 1)
+    gi = np.stack(np.meshgrid(*[np.arange(d) for d in dims], indexing="ij"), -1).reshape(-1, 3)
+    cc = lo + (gi + 0.5) * h
+    yh = np.interp(cc[:, 0], xc, yhw)
+    zh = np.interp(cc[:, 0], xc, zhw)
+    # Dilate by ~0.35 cell so the cage reaches the surface rather than sitting
+    # half a cell short on every face (fish_cage's CARVE lesson).
+    dl = 0.35 * h
+    solid = ((np.abs(cc[:, 1]) <= yh + dl) & (np.abs(cc[:, 2]) <= zh + dl)
+             & (cc[:, 0] >= xlo - h) & (cc[:, 0] <= xhi + h)).reshape(dims)
+    ci, cj, ck = np.nonzero(solid)
+    used = np.zeros(tuple(dims + 1), bool)
+    for c in range(8):
+        used[ci + (c & 1), cj + ((c >> 1) & 1), ck + ((c >> 2) & 1)] = True
+    cid = -np.ones(tuple(dims + 1), np.int64)
+    ui, uj, uk = np.nonzero(used)
+    cid[ui, uj, uk] = np.arange(len(ui))
+    cv = (lo + np.stack([ui, uj, uk], 1) * h).astype(np.float32)
+    corners = np.stack([cid[ci + (c & 1), cj + ((c >> 1) & 1), ck + ((c >> 2) & 1)]
+                        for c in range(8)], 1)
+    par = (ci + cj + ck) % 2
+    tets = np.concatenate([corners[par == 0][:, _EVEN].reshape(-1, 4),
+                           corners[par == 1][:, _ODD].reshape(-1, 4)])
+    a, b, c_, d = (cv[tets[:, i]] for i in range(4))
+    neg = np.einsum("ij,ij->i", np.cross(b - a, c_ - a), d - a) < 0.0
+    tets[neg] = tets[neg][:, [0, 2, 1, 3]]
+    return cv, tets.astype(np.int32), lo, dims, solid, cid
+
+
 def bind_lattice(surf, lo, h, dims, solid, cid):
     """Bind every render vertex to the 8 corners of ITS cell, trilinearly.
 
@@ -658,18 +755,31 @@ def bind_lattice(surf, lo, h, dims, solid, cid):
 FISH_H_REST = float(fish_tmpl[:, 1].max() - fish_tmpl[:, 1].min())
 
 CAGE_H = FISH_LEN / TET_RES
-cage_v, cage_t, CAGE_LO, CAGE_DIMS, CAGE_SOLID, CAGE_ID = fish_cage(CAGE_H)
+if FISH_MODEL_CACHE is not None:
+    cage_v, cage_t, CAGE_LO, CAGE_DIMS, CAGE_SOLID, CAGE_ID = fish_cage_profile(
+        PROF_XC, PROF_YHW, PROF_ZHW, CAGE_H)
+else:
+    cage_v, cage_t, CAGE_LO, CAGE_DIMS, CAGE_SOLID, CAGE_ID = fish_cage(CAGE_H)
 CAGE_N, N_TETS = len(cage_v), len(cage_t)
 CAGE_R = CAGE_R_CELLS * CAGE_H
-# The cage nodes are a uniform lattice through a body of uniform density, so
-# their mean IS the centre of mass. It sits behind the mid-point because the
-# taper puts the meat in the front half.
-FISH_COM_X = float(cage_v[:, 0].mean())
+# PHASE 9 grasp station. For the conforming cage, grip the SHOULDER: the deepest
+# body station (max cross-section yhw*zhw), which for a real fish is forward of
+# centre. With a faithful cage that station has a deep cross-section, so the pads
+# catch many nodes and the clamp is strong -- AND it is roughly the centre of
+# mass of a head-heavy fish, so the body hangs roughly level instead of by the
+# tail. The procedural ellipsoid keeps its cage-centroid station.
+if FISH_MODEL_CACHE is not None:
+    _cross = PROF_YHW * PROF_ZHW
+    FISH_COM_X = float(PROF_XC[int(np.argmax(_cross))])
+    FISH_HALF_W = float(np.interp(FISH_COM_X, PROF_XC, PROF_ZHW))
+else:
+    # The cage nodes are a uniform lattice through a body of uniform density, so
+    # their mean IS the centre of mass. It sits behind the mid-point because the
+    # taper puts the meat in the front half.
+    FISH_COM_X = float(cage_v[:, 0].mean())
+    _near = np.abs(fish_tmpl[:, 0] - FISH_COM_X) < 0.012
+    FISH_HALF_W = float(np.abs(fish_tmpl[_near, 2]).max())
 GRASP_X = FISH_P[0] + FISH_COM_X
-# The widest half-section within a centimetre of the grasp station: the position
-# backstop for the close is quoted off this.
-_near = np.abs(fish_tmpl[:, 0] - FISH_COM_X) < 0.012
-FISH_HALF_W = float(np.abs(fish_tmpl[_near, 2]).max())
 
 # The render surface: procedural ellipsoid, or the glTF fish bound to the same
 # cage. bind_lattice's weights are unclamped, so vertices outside the body cage
@@ -692,15 +802,9 @@ skin_ids, skin_w = bind_lattice(render_v.astype(np.float64), CAGE_LO, CAGE_H,
                                 CAGE_DIMS, CAGE_SOLID, CAGE_ID)
 _bind_err = np.linalg.norm((cage_v[skin_ids] * skin_w[:, :, None]).sum(1) - render_v, axis=1)
 
-# Grasp station. The cage centroid (mid-body) is where the fish is deepest and
-# the pads get the most flank to bite -- it grips reliably (2.5-3.9 N). Gripping
-# the head-heavy fish's TRUE centre of mass would hang it more level, but the COM
-# sits forward where the body is narrowing, so the pads catch far fewer nodes and
-# the clamp collapses to ~0.8 N and the fish is flung. So we grip mid-body and
-# accept that head and tail droop off the ends (which is what a real single
-# gripper does to a whole fish). `--grasp-shift` (metres, +x toward the head)
-# nudges the station for anyone who wants to trade grip margin for a flatter
-# carry; default 0 keeps the strong hold.
+# Grasp station (see the phase-9 block above). For the glTF fish it is the
+# deepest body cross-section (the shoulder); for the procedural fish it is the
+# cage centroid. `--grasp-shift` (metres, +x) nudges it manually.
 GRASP_SHIFT = cli_arg("--grasp-shift", 0.0, float)
 GRASP_X = FISH_P[0] + FISH_COM_X + GRASP_SHIFT
 if GRASP_SHIFT and USE_GLTF:
@@ -1330,7 +1434,12 @@ grip_hi_n = 0
 # the pad face reaches a given half-width is arithmetic, and it has to be,
 # because the dof is NOT the half-gap (the carriage origin is offset).
 Y_CARRIAGE = abs(float(CARRIAGE_TCP[0][1]))
-BITE = 0.003             # how far inside the flank the pad face is driven
+# PHASE 9: a deeper bite. The conforming cage's shoulder is deep, so the pads
+# catch many nodes but the contact force spreads thin across them -- the close
+# held on the backstop at ~0.9 N and lifted at ~1.2 N (below the ~2.5 N target)
+# on the shallow 3 mm bite. Driving the pad face ~6 mm inside the flank firms the
+# clamp without over-stretching the FEM (p99 stays well under 1.4).
+BITE = 0.007             # how far inside the flank the pad face is driven
 FINGER_STOP = max(FINGER_MIN, FINGER_OPEN - Y_CARRIAGE + FIN_SKIN_IN + PART_R
                   + FISH_HALF_W - BITE)
 
@@ -2090,7 +2199,41 @@ def run_film():
         summary(last_c)
 
 
-if FILM:
+if "--fin-rest" in sys.argv:
+    # PHASE 9 acceptance (a): with the hand OPEN and stationary in mid-air, the
+    # fingertip velocity RMS must be ~0 -- the truss must not jitter or ring. Hold
+    # the reference open pose, let the truss settle under gravity, then measure the
+    # RMS speed of the free (non-pinned) finger nodes over N frames.
+    nrest = cli_arg("--fin-rest", 150, int)
+    set_q(q_ref)
+    _mats_cur[0] = link_mat(left_link)
+    _mats_cur[1] = link_mat(right_link)
+    _mats_prev[:] = _mats_cur
+
+    def _tick():
+        for _s in range(SUBSTEPS):
+            _push_mats(1.0)
+            if substep_graph is not None:
+                wp.capture_launch(substep_graph)
+            else:
+                substep_body()
+
+    for _ in range(90):                        # settle the truss, hand held open
+        _tick()
+    free = np.array(pinned_of[:FIN_TOTAL]) == 0
+    prevpos = x.numpy()[:FIN_TOTAL].copy()
+    acc, cnt = 0.0, 0
+    for _ in range(nrest):
+        _tick()
+        cur = x.numpy()[:FIN_TOTAL]
+        sp = np.linalg.norm((cur - prevpos)[free] * FPS, axis=1)
+        acc += float((sp ** 2).mean())
+        cnt += 1
+        prevpos = cur.copy()
+    print(f"fin-rest: fingertip velocity RMS at rest = {(acc / max(cnt, 1)) ** 0.5 * 1000:.3f} "
+          f"mm/s over {nrest} frames (hand open, stationary)")
+    sys.exit(0)
+elif FILM:
     if PREVIEW:
         PIP = False
     run_film()
