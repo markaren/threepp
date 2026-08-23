@@ -3145,7 +3145,11 @@ else:
             if parts[3] == "DONE" and not state["done"]:
                 state["done"] = True
                 summary(parts[4])
-        if CAM != "macro" and not (ui and ui.want_capture_mouse):
+        # OrbitControls reacts to canvas mouse events directly, so gating
+        # update() is not enough: flip its enabled flag while ImGui owns the
+        # pointer, or dragging a slider also spins the camera.
+        controls.enabled = not (ui and ui.want_capture_mouse)
+        if CAM != "macro" and controls.enabled:
             controls.update()
         renderer.render(scene, wrist_cam if POV else camera)
         ensure_pip()
