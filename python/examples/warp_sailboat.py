@@ -1,6 +1,6 @@
 """A sailboat whose sails are Warp cloth, sailing the FFT ocean in the mist.
 
-The two sails are real cloth: a Warp GPU solver holds ~9k particles together
+The two sails are real cloth: a Warp GPU solver holds their particles together
 with structural / shear / bending constraints, and the only thing pushing them
 around is the wind. Every particle feels the flat-plate membrane pressure
 
@@ -22,13 +22,13 @@ thing. The "rig efficiency" slider is the fudge factor that buys some of it back
 
 The sea is threepp's 3-cascade FFT ocean, and the hull FLOATS on it rather than
 being flown along it. The lofted sections are integrated into an immersed-area
-table at startup, so every frame nine probes fit a local water plane, each of
-the forty stations gets its own draft, and the summed buoyant force and pitching
+table at startup, so every frame nine probes fit a local water plane, each hull
+station gets its own draft, and the summed buoyant force and pitching
 moment drive a damped heave/pitch pair. A crest arriving at the bow lifts the
 bow, because the bow's sections are the ones that got deeper. She in turn
 DISPLACES the water: the ocean's hull-exclusion footprint carries her waterline
 plane, so the sea meets the boot stripe on a crest as much as in a trough, and
-the same pose drives an analytical Kelvin V-wake. Press X to A/B it. The ocean
+the same pose drives an analytical Kelvin V-wake. Press X to toggle it. The ocean
 also follows the boat -- the vertex-density warp centre relocates the whole grid
 in world space, so the water never runs out. The fog is the unified Vulkan air
 medium, and the rig cuts shafts through it when you look toward the sun.
@@ -44,17 +44,18 @@ revolution for the tower. The lamp is an emissive mesh, which on Vulkan is a
 real light source, so it throws light into the fog.
 
 The day runs. `celestial()` puts the sun and the moon where they belong for
-~59 N in mid-August, and the sky is a Preetham bake in numpy that is BOTH the
+the latitude and season LAT / DECL describe, and the sky is a Preetham bake in
+numpy that is BOTH the
 background and the IBL -- so the light on the sails always comes from the sky
 you can see, whether that is a dawn haze, a black squall or a moon. The weather
 is a small state machine with ramps in seconds: cloud closes, wind builds, the
 sea gets up, rain starts, the deck goes dark and glossy, and when it clears
 there is a rainbow opposite the sun because the geometry says there should be.
 
-And then there is the FILM. `--film out.mp4` runs a scripted two-minute picture
-headless -- dawn, the drone reveal, a squall, the golden hour and a starry
-night -- as nineteen cut shots on one continuous
-world, and writes H.264. Each cut sets the hour, re-bakes the sky, sets the
+And then there is the FILM. `--film out.mp4` runs a scripted picture headless
+-- dawn, the drone reveal, a squall, the golden hour and a starry night -- as a
+run of cut shots on one continuous world, and writes H.264. Each cut sets the
+hour, re-bakes the sky, sets the
 weather and places the camera (and the drone), then burns unrecorded warm-up
 frames so no exposure ramp or temporal smear is ever recorded. Between cuts the
 simulation never stops.
@@ -64,10 +65,10 @@ simulation never stops.
     python warp_sailboat.py --tod 19.7 --weather clearing
     python warp_sailboat.py --wind 14           # override the weather's wind
     python warp_sailboat.py --birds 60          # more gulls
-    python warp_sailboat.py --timelapse             # run the day at 0.35 h/s
+    python warp_sailboat.py --timelapse             # run the day in time-lapse
     python warp_sailboat.py --shot 25 --tod 23.5 --weather night --out night.png
     python warp_sailboat.py --film film.mp4 --contact        # the whole picture
-    python warp_sailboat.py --film min.mp4 --cut short --contact   # ~60 s of it
+    python warp_sailboat.py --film min.mp4 --cut short --contact   # the one-minute cut
     python warp_sailboat.py --film t.mp4 --preview --acts 4  # iterate one act
     python warp_sailboat.py --film t.mp4 --preview --shots 9-12
 
@@ -94,15 +95,7 @@ import numpy as np
 import warp as wp
 
 import threepp as tp
-
-
-def cli_arg(flag, default, cast):
-    if flag in sys.argv:
-        k = sys.argv.index(flag)
-        if k + 1 < len(sys.argv) and not sys.argv[k + 1].startswith("--"):
-            return cast(sys.argv[k + 1])
-    return default
-
+from warp_common import cli_arg, load_font, parse_size, resize_handler, standard_material
 
 SHOT = "--shot" in sys.argv
 SHOT_T = cli_arg("--shot", 25.0, float)
@@ -112,11 +105,11 @@ WIND0 = cli_arg("--wind", 0.0, float)             # 0 = let the weather decide
 
 # ---- the film ---------------------------------------------------------------
 #  `--film out.mp4` runs the whole scripted picture headless and writes H.264.
-#  `--preview` is the iteration loop: 960x540 at 30 fps, which is a quarter of
-#  the pixels and half the frames, so a shot comes back in seconds instead of
-#  minutes. The sim then runs at dt = 1/30 -- the boat and the weather keep real
-#  time, the cloth solver (a fixed 8 x 1/480 per call) runs at half rate, which
-#  is a composition tool, not a physics result.
+#  `--preview` is the iteration loop: a smaller frame at a lower frame rate, so
+#  a shot comes back in seconds instead of minutes. The sim then runs at the
+#  preview dt -- the boat and the weather keep real time, the cloth solver (a
+#  fixed SUBSTEPS x DT per call) runs at the lower rate, which is a composition
+#  tool, not a physics result.
 FILM = "--film" in sys.argv
 FILM_OUT = cli_arg("--film", "warp_sailboat_film.mp4", str)
 PREVIEW = "--preview" in sys.argv
@@ -145,8 +138,8 @@ EVT_MAX_PP = int(cli_arg("--evt-max-events", 4, float))   # events per pixel per
 # The renderer's GPU detector instead of the numpy final-frame model. Same ESIM
 # model, same final pixels (event_camera_source = "final" box-averages the
 # presented frame to the sensor on the GPU), no read_pixels() round trip --
-# see the note over _dvs_step. `--evt-gpu-shaded` runs it on the G-buffer
-# Lambert proxy instead, the take that could not see the water or the sails.
+# see _dvs_step. `--evt-gpu-shaded` runs it on the G-buffer Lambert proxy
+# instead, which sees neither the transmissive water nor the translucent sails.
 EVT_GPU = "--evt-gpu" in sys.argv or "--evt-gpu-shaded" in sys.argv
 EVT_GPU_SOURCE = "shaded" if "--evt-gpu-shaded" in sys.argv else "final"
 
@@ -175,27 +168,27 @@ JIB_HEAD = 10.9              # forestay hound height
 JIB_FOOT = 3.45              # jib tack to clew
 JIB_CLEW_Y = 0.85            # jib clew height above its tack
 
-# Cloth grids: (chordwise, along the luff). ~9k particles total.
+# Cloth grids: (chordwise, along the luff).
 MAIN_NU, MAIN_NV = 48, 64
 JIB_NU, JIB_NV = 36, 50
 
 DT = 1.0 / 480.0
-# A sail under 9 m/s of wind sees ~200 m/s2 of pressure -- two orders above
+# A sail in a fresh breeze sees pressure accelerations two orders above
 # gravity. Small steps are what let an under-relaxed Jacobi solve keep up with
-# that; at 1/240 the free leech flogged hard enough that neighbouring normals
-# cancelled and the rig lost two thirds of its drive.
-SUBSTEPS = 8                 # 8 x 1/480 = one 60 fps frame of sim time
+# that; coarser and the free leech flogs hard enough that neighbouring normals
+# cancel and the rig loses its drive to noise.
+SUBSTEPS = 8                 # SUBSTEPS * DT = one 60 fps frame of sim time
 ITERATIONS = 10              # constraint projections per substep
 RHO_AIR = 1.225
 
-# Hull: a 9.6 m fin-keel cruiser, ~3.5 t. Hull speed 1.34*sqrt(LWL_ft) knots.
+# Hull: a fin-keel cruiser. Hull speed 1.34*sqrt(LWL_ft) knots.
 MASS = 3500.0
-HULL_SPEED = 1.34 * math.sqrt(LOA * 0.9 / 0.3048) * 0.5144   # ~3.6 m/s, 7 kn
+HULL_SPEED = 1.34 * math.sqrt(LOA * 0.9 / 0.3048) * 0.5144   # m/s
 GM = 1.10                    # metacentric height -- the stiffness of the boat
-I_ROLL = MASS * 1.3 ** 2     # roll inertia; with GM gives a ~2.5 s roll period
+I_ROLL = MASS * 1.3 ** 2     # roll inertia; with GM it sets the roll period
 ROLL_DAMP = 0.35 * 2.0 * math.sqrt(I_ROLL * MASS * 9.81 * GM)
-# Centre of effort sits ~40% up the luff (5.7 m over the water); the centre of
-# lateral resistance is ~1.1 m BELOW it, mid-keel. The heeling lever is the gap.
+# Heeling lever: the centre of effort well up the luff to the centre of lateral
+# resistance mid-keel.
 CE_HEIGHT = 6.8
 DRAG_Q = 64.0                # quadratic hull drag, N/(m/s)^2
 DRAG_WAVE = 1100.0           # wave-making wall past hull speed
@@ -209,7 +202,7 @@ SAIL_WIND_MAX = 16.0         # apparent wind the cloth solver is allowed to see
 
 
 # --------------------------------------------------------------------------- #
-#  Sky, sun, moon: a day/night cycle for ~59 N in mid-August.
+#  Sky, sun, moon: a day/night cycle for LAT in late summer.
 #
 #  The sky is a Preetham daylight model with a night extension, baked to a
 #  float equirect in numpy and handed to the renderer as scene.environment --
@@ -222,7 +215,7 @@ SAIL_WIND_MAX = 16.0         # apparent wind the cloth solver is allowed to see
 #  bearings already use ("wind from 0 deg" blows from +Z).
 # --------------------------------------------------------------------------- #
 LAT = math.radians(59.0)          # a skerry off the Norwegian coast
-DECL = math.radians(17.5)         # solar declination, mid-August
+DECL = math.radians(17.5)         # solar declination for the season
 SOLAR_NOON = 12.85                # clock time of the sun's transit
 MOON_DECL = math.radians(5.0)     # a summer moon rides low and to the south
 _SIN_LAT, _COS_LAT = math.sin(LAT), math.cos(LAT)
@@ -238,9 +231,10 @@ def _body_dir(decl, hour_angle):
     """Unit vector toward a body at the given declination and hour angle.
 
     Straight spherical astronomy, which is what makes the arc read as a real
-    day rather than a sine wave: at 59 N in August the sun rises in the NE,
-    transits 48 deg up in the south, sets in the NW, and then only dips ~12 deg
-    below the horizon -- so the "night" is a long blue twilight, not a void.
+    day rather than a sine wave: at a high northern latitude in summer the sun
+    rises in the NE, transits low-ish in the south, sets in the NW, and only
+    dips a little below the horizon -- so the "night" is a long blue twilight,
+    not a void.
     """
     sd, cd = math.sin(decl), math.cos(decl)
     ch = math.cos(hour_angle)
@@ -351,8 +345,7 @@ def sky_radiance(dirs, cs, wx, y_rows=None):
     below-horizon fade); the two features that occupy a handful of texels (the
     sun disc, the rainbow arc) are found with a threshold on the cosine and
     evaluated on that MASK rather than over the frame; and `x ** k` is spelled
-    exp(k * log(x)), because np.power costs twice what that does at this size.
-    Written naively the same model took 90-200 ms a bake.
+    exp(k * log(x)), which is much cheaper than np.power at this size.
     """
     d = np.asarray(dirs, np.float32)
     y = d[..., 1]
@@ -440,7 +433,7 @@ def sky_radiance(dirs, cs, wx, y_rows=None):
         # The moon is a 1 deg disc in a 2 pi sky: find it with one comparison
         # and paint it on the few hundred texels it actually covers.
         cos_m = d @ cs.moon_dir.astype(np.float32)
-        near = cos_m > 0.92                             # ~23 deg: disc plus halo
+        near = cos_m > 0.92                             # disc plus halo
         if cs.moon_up > 0.0 and near.any():
             ang_m = np.arccos(np.clip(cos_m[near], -1.0, 1.0))
             disc = (ang_m < 0.018).astype(np.float32) * cs.moon_up
@@ -497,8 +490,8 @@ _sv = (np.arange(SKY_H, dtype=np.float32) + 0.5) / SKY_H
 _su = (np.arange(SKY_W, dtype=np.float32) + 0.5) / SKY_W
 _selev = (_sv - 0.5) * math.pi
 _saz = (_su - 0.5) * 2.0 * math.pi
-# v = 0.5 + asin(dir.y)/pi and u = 0.5 + atan2(z, x)/tau is what the shader
-# samples with (deferred_shade_10_lighting_utils.glsl), so row 0 is the nadir.
+# v = 0.5 + asin(dir.y)/pi and u = 0.5 + atan2(z, x)/tau is what the renderer's
+# environment lookup samples with, so row 0 is the nadir.
 _SKY_DIRS = np.empty((SKY_H, SKY_W, 3), np.float32)
 _SKY_DIRS[..., 0] = np.cos(_selev)[:, None] * np.cos(_saz)[None, :]
 _SKY_DIRS[..., 1] = np.sin(_selev)[:, None]
@@ -583,12 +576,12 @@ if WIND0 > 0.0:
     weather["wind"] = wtarget["wind"] = WIND0
 weather_name = WEATHER0
 time_of_day = TOD0
-# Hours of sky per second of wall clock. K toggles it in the window; 0.35
-# runs the whole day in about 68 s, which is the cadence to watch the bake
-# throttle at.
-day_speed = 0.35 if "--timelapse" in sys.argv else 0.0
+# Hours of sky per second of wall clock; K toggles it in the window.
+DAY_SPEED = 0.35
+day_speed = DAY_SPEED if "--timelapse" in sys.argv else 0.0
 _rain_was_on = weather["rain"] > 0.3
-_bow_timer = 0.0           # seconds left in the post-rain rainbow window
+BOW_WINDOW = 40.0          # seconds of rainbow after the rain stops
+_bow_timer = 0.0           # seconds left in that window
 
 
 def set_weather(name):
@@ -817,7 +810,6 @@ def _flat_soup(grid, inside):
     sharing vertices: every triangle carries its own copy, so every triangle
     gets its own normal and the silhouette breaks into planes.
     """
-    ns, nc = grid.shape[0], grid.shape[1]
     a = grid[:-1, :-1]
     b = grid[:-1, 1:]
     c = grid[1:, :-1]
@@ -933,7 +925,6 @@ def lighthouse_maps(seed, W=1024, H=1024):
     """
     rng = np.random.default_rng(seed)
     v = np.linspace(0.0, 1.0, H)[:, None]                 # 0 = base, 1 = lantern
-    u = np.linspace(0.0, 1.0, W)[None, :]
 
     grain = _fbm(rng, H, W, 3, 3, 6)
     # Lime render: warm off-white, sun-bleached toward the top.
@@ -1036,7 +1027,7 @@ DRAFT_FRAC = 0.13            # maximum belly as a fraction of chord
 
 
 def _camber(fu, fv):
-    """Belly profile: draft peaks ~40% aft of the luff, fading out at the head."""
+    """Belly profile: draft peaks forward of mid-chord, fading out at the head."""
     return np.sin(np.pi * np.clip(fu, 0, 1) ** 0.78) * (1.0 - fv) ** 0.55
 
 
@@ -1285,7 +1276,7 @@ class Sail:
         self.pin_pos.assign(self.pin_host)
 
     def upload(self):
-        # Device -> host -> geometry. The tier-1 handoff: one copy per frame.
+        # Device -> host -> geometry: one copy per attribute per frame.
         self.geometry.update_attribute("position", self.pos.numpy())
         self.geometry.update_attribute("normal", self.nrm.numpy())
 
@@ -1389,7 +1380,7 @@ def yxz_matrix(ex, ey, ez):
 #  Scene
 # --------------------------------------------------------------------------- #
 _DEF_SIZE = "960x540" if PREVIEW else ("1920x1080" if FILM else "1600x900")
-W, H = (int(v) for v in cli_arg("--size", _DEF_SIZE, str).lower().split("x"))
+W, H = parse_size(cli_arg("--size", _DEF_SIZE, str))
 canvas = tp.Canvas("threepp x warp - sailboat", width=W, height=H,
                    vsync=False, headless=HEADLESS)
 renderer = tp.VulkanRenderer(canvas)
@@ -1399,18 +1390,20 @@ renderer.render_scale = 0.9
 renderer.gbuffer_msaa = 2            # steadies the rigging wires against the sky
 renderer.sun_angular_radius = 0.6    # soft ray-traced sun shadows
 renderer.bloom_intensity = 0.11
-# A day that runs from a moonlit sea to a noon glare is ~10 stops wide, and no
+# A day that runs from a moonlit sea to a noon glare is many stops wide, and no
 # single tone_mapping_exposure covers it (auto exposure IGNORES that knob while
 # it is on). The clamp is what keeps night reading as night: metering to 18%
 # grey would happily turn midnight into an overcast afternoon, so the eye is
-# only allowed +3 EV of dilation -- enough to find the lighthouse beam and the
-# nav lights, nowhere near enough to fake daylight -- and -2.5 EV of
-# constriction, which is what a sunlit sea needs to keep its highlights.
-# 1.2 EV/s (0.6 dilating) settles a cut in about a second without pumping on a
-# lightning flash; bloom_clamp stops a flash from smearing the whole frame.
+# only allowed a few EV of dilation -- enough to find the lighthouse beam and
+# the nav lights, nowhere near enough to fake daylight -- and a little
+# constriction, which is what a sunlit sea needs to keep its highlights. The
+# speed settles a cut in about a second without pumping on a lightning flash;
+# bloom_clamp stops a flash from smearing the whole frame.
+AE_RANGE_DEFAULT = (-2.5, 3.0)
+AE_SPEED = 1.2
 renderer.auto_exposure = True
-renderer.set_auto_exposure_range(-2.5, 3.0)
-renderer.set_auto_exposure_speed(1.2)
+renderer.set_auto_exposure_range(*AE_RANGE_DEFAULT)
+renderer.set_auto_exposure_speed(AE_SPEED)
 renderer.bloom_clamp = 12.0
 
 ui = tp.ImguiContext(canvas, renderer) if (tp.HAS_IMGUI and not HEADLESS) else None
@@ -1422,8 +1415,8 @@ scene = tp.Scene()
 #  the texture, re-runs PMREM, idles the device and cold-starts the ReSTIR
 #  reservoirs. So there are two float textures, they are allocated ONCE, each
 #  bake writes the back one in place, and a bake only happens when the sun has
-#  actually moved (0.25 deg of elevation / 0.6 deg of azimuth) or the weather
-#  changed -- the same throttle vulkan_fjord uses.
+#  actually moved by more than the thresholds in apply_sky() or the weather
+#  changed.
 sky_tex = [tp.float_texture(np.zeros((SKY_H, SKY_W, 4), np.float32)) for _ in range(2)]
 sky_front = 0
 _bake_count = 0
@@ -1510,51 +1503,26 @@ ISLET_X, ISLET_Z = -95.0, 115.0
 ISLET_R, ISLET_H = 32.0, 15.5
 PAD_FRAC = 0.24
 
-rock_mat = tp.MeshStandardMaterial()
-rock_mat.color = 0xbdb3a0
-rock_mat.roughness = 0.92
-rock_mat.metalness = 0.0
+rock_mat = standard_material(0xbdb3a0, 0.92)
 
 # The tower's weathering is a generated texture, not a flat colour -- see
 # lighthouse_maps(). color stays white so the map is not tinted twice.
 _alb, _rgh = lighthouse_maps(17)
-stone_mat = tp.MeshStandardMaterial()
-stone_mat.color = 0xffffff
+stone_mat = standard_material(0xffffff, 1.0, side=tp.Side.Double)   # the map scales roughness
 stone_mat.map = tp.data_texture(_alb, srgb=True)
 stone_mat.roughness_map = tp.data_texture(_rgh, srgb=False)
-stone_mat.roughness = 1.0                    # the map scales this
-stone_mat.metalness = 0.0
-stone_mat.side = tp.Side.Double
 
-# The lantern glazing. It is GLASS, and it took two goes to get there.
-#
-# It was an opaque dark revolution, which is why the user's first note was "in
-# the day/dusk it just looks black": the lamp sits inside it and is occluded
-# from every outside direction, so however hard the lamp is driven the lantern
-# reads as a black box. Making the GLAZING itself emissive fixed the black box
-# and created a worse one -- "the light source is too large, it looks
-# unnatural, no cabinet etc." -- because a 3.2 m tall, 2.1 m radius emitter is
-# a building-sized light, and blown out it erases the panes, the mullions and
-# the dome with it.
-#
-# So the glazing is transparent and the LAMP is the emitter. A transparent
-# MeshStandardMaterial stays in the traced scene and gets stochastic alpha
-# (`d.transmission = 1 - opacity`, VulkanCoreScene.cpp:3386) -- a transparent
-# MeshBasicMaterial would be routed to the post-TAA UI overlay instead
-# (kSnapUiBlend, VulkanCoreScene.cpp:26) and would draw through the tower.
-lamp_glass = tp.MeshStandardMaterial()
-lamp_glass.color = 0x121a1e                  # smoked, cold, dark
-lamp_glass.roughness = 0.04
-lamp_glass.metalness = 0.0
-lamp_glass.transparent = True
-lamp_glass.opacity = 0.17                    # you see the lamp, and the glass
-lamp_glass.side = tp.Side.Double
+# The lantern glazing is transparent GLASS and the LAMP inside is the emitter:
+# an opaque lantern occludes the lamp from every outside direction and reads as
+# a black box, and an emissive glazing is a building-sized light that blows out
+# the panes, the mullions and the dome. A transparent MeshStandardMaterial
+# stays in the traced scene and gets stochastic alpha; a transparent
+# MeshBasicMaterial would be routed to the post-TAA UI overlay instead and
+# would draw through the tower.
+lamp_glass = standard_material(0x121a1e, 0.04, transparent=True,  # smoked, cold, dark
+                               opacity=0.17, side=tp.Side.Double)  # the lamp, and the glass
 
-metal_mat = tp.MeshStandardMaterial()
-metal_mat.color = 0x4a3a2c                   # iron that gave up on paint
-metal_mat.roughness = 0.72
-metal_mat.metalness = 0.55
-metal_mat.side = tp.Side.Double
+metal_mat = standard_material(0x4a3a2c, 0.72, 0.55, side=tp.Side.Double)  # iron that gave up on paint
 
 islet = tp.Group()
 islet.position.set(ISLET_X, 0.0, ISLET_Z)
@@ -1573,12 +1541,10 @@ islet.add(rock)
 # A pale shelf just under the shallows. The ocean is transmissive, so what the
 # water reads as is mostly whatever is on the bottom -- sand here, deep dark
 # everywhere else, which is the whole turquoise-round-a-rock effect.
-shelf_mat = tp.MeshStandardMaterial()
-shelf_mat.color = 0xb9c7a8
-shelf_mat.roughness = 1.0
 # Kept tight to the rock and set deep: a broad shelf shows its own rim through
 # the water as a hard-edged patch, which reads as a bug rather than as a bank.
-shelf = tp.Mesh(tp.CylinderGeometry(ISLET_R * 1.25, ISLET_R * 1.55, 1.0, 40, 1), shelf_mat)
+shelf = tp.Mesh(tp.CylinderGeometry(ISLET_R * 1.25, ISLET_R * 1.55, 1.0, 40, 1),
+                standard_material(0xb9c7a8, 1.0))
 shelf.position.set(0.0, -4.4, 0.0)
 islet.add(shelf)
 
@@ -1625,10 +1591,10 @@ for h in (14.35, 14.95):
             light_house.add(strut(prev, p, 0.022, metal_mat))
         prev = p
 
-# The lantern's IRONWORK: eight astragals up the glazing and a sill ring at its
-# foot. Without them the glass band is a featureless tube and the lantern has no
-# cabinet -- which is exactly what the user saw. They also give the lamp
-# something to be behind, which is what makes it read as a lamp in a room.
+# The lantern's IRONWORK: astragals up the glazing and a sill ring at its foot.
+# Without them the glass band is a featureless tube and the lantern has no
+# cabinet. They also give the lamp something to be behind, which is what makes
+# it read as a lamp in a room.
 for k in range(8):
     a0 = 2.0 * math.pi * k / 8.0
     _r = 2.14
@@ -1643,18 +1609,15 @@ for k in range(25):
         light_house.add(strut(_prev, _p, 0.040, metal_mat))
     _prev = _p
 
-# The lamp: a small Fresnel drum, not a room. 0.34 m radius inside a 2.1 m
-# lantern, so however hot it is driven it is a bright POINT with a bloom halo
-# and the panes, astragals and dome stay legible around it. On Vulkan an
-# emissive mesh IS a light source, so this one really does throw light into the
-# mist -- but the sweeping beam is the two SpotLights, not this.
-lamp_mat = tp.MeshStandardMaterial()
-lamp_mat.color = 0x120e08
-lamp_mat.emissive = 0xffc978
-lamp_mat.emissive_intensity = 46.0
-# Day value ABOVE the night one, because the meter is doing the opposite:
-# -2.5 EV at noon and +3 EV at midnight. Capped either way -- the point is a
-# lit lamp with a soft halo, not a white slab (bloom_clamp is 12).
+# The lamp: a small Fresnel drum, not a room. Small inside the lantern, so
+# however hot it is driven it is a bright POINT with a bloom halo and the panes,
+# astragals and dome stay legible around it. On Vulkan an emissive mesh IS a
+# light source, so this one really does throw light into the mist -- but the
+# sweeping beam is the two SpotLights, not this.
+lamp_mat = standard_material(0x120e08, 1.0, emissive=0xffc978, emissive_intensity=46.0)
+# Day value ABOVE the night one, because the auto-exposure meter is doing the
+# opposite: constricting at noon and dilating at midnight. Capped either way --
+# the point is a lit lamp with a soft halo, not a white slab (see bloom_clamp).
 LAMP_DAY, LAMP_NIGHT = 62.0, 26.0
 lamp = tp.Mesh(tp.CylinderGeometry(0.34, 0.34, 0.66, 18, 1), lamp_mat)
 lamp.position.set(0.0, 15.45, 0.0)
@@ -1667,49 +1630,16 @@ scene.add(boat)
 
 # The hull bands, the coachroof and the deck are all OPEN lofts -- strips and a
 # trunk with open ends, not solids. Seen from behind, a one-sided face is not
-# drawn at all, so you look straight through the cabin top into the boat.
-hull_mat = tp.MeshStandardMaterial()
-hull_mat.color = 0xf4f5f3
-hull_mat.roughness = 0.30                    # painted topsides: glossy dielectric
-hull_mat.metalness = 0.0
-hull_mat.side = tp.Side.Double
-
-boot_mat = tp.MeshStandardMaterial()
-boot_mat.color = 0x14202e                    # boot stripe / cove line
-boot_mat.roughness = 0.38
-boot_mat.side = tp.Side.Double
-
-anti_mat = tp.MeshStandardMaterial()
-anti_mat.color = 0x1d3550                    # antifouling below the waterline
-anti_mat.roughness = 0.62
-anti_mat.side = tp.Side.Double
-
-deck_mat = tp.MeshStandardMaterial()
-deck_mat.color = 0xb9a382                    # teak
-deck_mat.roughness = 0.80
-# The deck is a single open shell, not a solid: seen from below (or through the
-# cockpit well from a low camera) a one-sided deck simply is not there.
-deck_mat.side = tp.Side.Double
-
-spar_mat = tp.MeshStandardMaterial()
-spar_mat.color = 0xc9ccd0                    # anodised alloy
-spar_mat.roughness = 0.34
-spar_mat.metalness = 0.85
-
-tiller_mat = tp.MeshStandardMaterial()
-tiller_mat.color = 0x8a6033                  # varnished ash
-tiller_mat.roughness = 0.28
-
-glass_mat = tp.MeshStandardMaterial()
-glass_mat.color = 0x0d1418                   # smoked cabin windows
-glass_mat.roughness = 0.08
-glass_mat.metalness = 0.0
-glass_mat.side = tp.Side.Double
-
-wire_mat = tp.MeshStandardMaterial()
-wire_mat.color = 0x9aa0a6
-wire_mat.roughness = 0.30
-wire_mat.metalness = 0.95
+# drawn at all, so you look straight through the cabin top into the boat;
+# hence Side.Double on every one of them.
+hull_mat = standard_material(0xf4f5f3, 0.30, side=tp.Side.Double)   # painted topsides: glossy dielectric
+boot_mat = standard_material(0x14202e, 0.38, side=tp.Side.Double)   # boot stripe / cove line
+anti_mat = standard_material(0x1d3550, 0.62, side=tp.Side.Double)   # antifouling below the waterline
+deck_mat = standard_material(0xb9a382, 0.80, side=tp.Side.Double)   # teak
+spar_mat = standard_material(0xc9ccd0, 0.34, 0.85)                  # anodised alloy
+tiller_mat = standard_material(0x8a6033, 0.28)                      # varnished ash
+glass_mat = standard_material(0x0d1418, 0.08, side=tp.Side.Double)  # smoked cabin windows
+wire_mat = standard_material(0x9aa0a6, 0.30, 0.95)
 
 # Girth index runs 0 (starboard deck edge) .. NP-1 (keel) .. 2*NP-2 (port).
 HG = hull_grid()
@@ -1756,7 +1686,7 @@ kv, ki = build_foil(1.35, 0.85, 1.80, 0.12, 0.28)
 keel = _mesh(kv, ki, anti_mat, inside=(0.0, -0.9, 0.0))
 keel.position.set(0.0, -0.45, 0.15)
 boat.add(keel)
-# Ballast bulb: most of the 3.5 t lives down here, and it is the reason the
+# Ballast bulb: most of MASS lives down here, and it is the reason the
 # righting moment in the heel equation is as strong as it is.
 bulb = tp.Mesh(tp.SphereGeometry(0.30, 20, 12), anti_mat)
 bulb.scale.set(1.0, 0.72, 3.1)
@@ -1775,7 +1705,7 @@ stock.position.set(0.0, 0.60, 0.0)
 stock.cast_shadow = True
 rudder_pivot.add(stock)
 # Tiller: up out of the stock head and forward into the cockpit, where a hand
-# would be. On a 9.6 m boat this is the helm.
+# would be. On a boat this size this is the helm.
 rudder_pivot.add(strut((0.0, 1.24, 0.02), (0.0, 1.46, 1.55), 0.038, tiller_mat))
 grip = tp.Mesh(tp.CylinderGeometry(0.031, 0.031, 0.30, 10, 1), boot_mat)
 grip.position.set(0.0, 1.45, 1.42)
@@ -1898,18 +1828,15 @@ LANTERN = (ISLET_X, PAD_Y - 0.6 + 15.5, ISLET_Z)
 
 # Two beams 180 deg apart out of one lantern, which is what an optic with two
 # lens panels actually throws. decay 2 = physical inverse square, so the
-# intensity has to be lighthouse-sized (O(10^5) cd) before the far end of the
-# beam lights anything; the cone is narrow enough to read as a shaft in the
-# mist rather than a floodlight.
-# 380000 through Phase 7. The user, after the one-minute cut: "in the night the
-# beam needs to have more POWER." 3x, plus a degree of cone and a softer
-# penumbra, so it reads as a solid sweeping shaft rather than a thin dotted one.
+# intensity has to be lighthouse-sized before the far end of the beam lights
+# anything; the cone is narrow enough to read as a shaft in the mist rather
+# than a floodlight, and the penumbra soft enough that the shaft reads solid.
 BEAM_INTENSITY = 1150000.0
 # The optic never stops turning, so the light never goes out: by day it is a
 # small fraction of the night value, which is the wrong way round physically
 # (a real lamp is the same lamp) but the right way round for a renderer whose
-# meter closes 2.5 EV at noon and opens 3 EV at midnight. Small on purpose --
-# a full-power beam sweeping a sunlit boat reads as a bug, not as a lighthouse.
+# meter constricts at noon and dilates at midnight. Small on purpose -- a
+# full-power beam sweeping a sunlit boat reads as a bug, not as a lighthouse.
 BEAM_DAY_FRAC = 0.05
 BEAM_PERIOD = 6.0                          # seconds per revolution
 beams, beam_targets = [], []
@@ -1933,10 +1860,7 @@ nav_mats = []
 for colour, side, along, name in ((0xff1408, -1.0, 0.34, "port"),
                                   (0x18ff3c, 1.0, 0.34, "stbd"),
                                   (0xfff0d8, 0.0, 0.965, "stern")):
-    m = tp.MeshStandardMaterial()
-    m.color = 0x101010
-    m.emissive = colour
-    m.emissive_intensity = 0.0
+    m = standard_material(0x101010, 1.0, emissive=colour, emissive_intensity=0.0)
     p = deck_edge(along, side * 0.92) if side != 0.0 else deck_edge(along, 0.0)
     s = tp.Mesh(tp.SphereGeometry(0.075, 12, 8), m)
     s.position.set(float(p[0]), float(p[1]) + 0.30, float(p[2]))
@@ -1988,21 +1912,17 @@ _rc.uniform_radius = 0.013
 rain = tp.ParticleField.create(_rc)
 rain.frustum_culled = False
 
-# NO MESH PROXY. Phase 2 gave the near field a lit OctahedronGeometry solid so
-# that a lightning flash would have geometry to reach within 12 m of the lens,
-# and on a 1080p close shot that is exactly what it looks like: a scatter of
-# pale DIAMONDS drifting across the sky, i.e. snow. The lit-near-drops idea is
-# cut outright rather than re-tuned -- a drop at 2 m is not a shape the eye
-# should be able to resolve at all. The billboards now draw at EVERY distance
-# (lod_near = lod_fade = 0) and `near_fade` + `stretch_max_screen` are what keep
-# the closest quads from painting bars across the frame. The cost: the rain
-# curtain near the camera is no longer lit by a strike (billboards are unlit
-# additive); the DensityRepr volume still is, so the flash still blooms in the
-# curtain, just not on individual drops.
+# No mesh proxy for the near drops: a lit solid within a few metres of the lens
+# resolves as a scatter of pale diamonds, i.e. snow -- a drop that close is not
+# a shape the eye should resolve at all. The billboards draw at EVERY distance
+# (lod_near = lod_fade = 0) and `near_fade` + `stretch_max_screen` keep the
+# closest quads from painting bars across the frame. Billboards are unlit
+# additive, so a strike does not light individual drops; the DensityRepr
+# volume still is, so the flash still blooms in the curtain.
 
-# A drop crosses ~20 px a frame; drawn as a solid it reads as hail. The quad is
-# smeared along the emitter's own analytic velocity, and both caps (world and
-# screen) are there to stop the nearest drop painting a bar across the frame.
+# A drop crosses many pixels a frame; drawn as a solid it reads as hail. The
+# quad is smeared along the emitter's own analytic velocity, and both caps
+# (world and screen) stop the nearest drop painting a bar across the frame.
 RAIN_BB_BASE = 0.135
 rain.set_billboard_repr(tp.Color(0.72, 0.79, 0.90), tp.Color(0.60, 0.67, 0.78),
                         RAIN_BB_BASE, 0.30)
@@ -2035,9 +1955,10 @@ _re.size = 0.013
 _re.size_jitter = 0.30
 _re.seed = 20260822
 _re.follow = True
-# An integer number of density voxels: the curtain volume below is 52 m across
-# 96 voxels, so half a voxel of snap would re-phase the haze and make it swim.
-_re.follow_snap = 8.0 * (2.0 * RAIN_HALF / 96.0)
+# An integer number of density voxels, so the follow snap never re-phases the
+# haze and makes it swim.
+RAIN_DENSITY_RES = 96
+_re.follow_snap = 8.0 * (2.0 * RAIN_HALF / RAIN_DENSITY_RES)
 _rs = _re.surface
 _rs.enabled = True                    # drops land on the deck AND on the sea
 _rs.resolution = 512
@@ -2053,7 +1974,7 @@ rain.set_emitter_time(0.0, 1.0 / 60.0)
 # The curtain itself: a rain squall is a DARK medium, and without it heavy rain
 # is a lot of bright streaks in perfectly clear air.
 rain.set_density_repr(tp.Vector3(0.0, 8.0, 0.0), tp.Vector3(RAIN_HALF, 9.0, RAIN_HALF),
-                      0.014, 96)
+                      0.014, RAIN_DENSITY_RES)
 _dr = rain.density_repr
 _dr.albedo = tp.Color(0.42, 0.46, 0.52)
 _dr.anisotropy = 0.35
@@ -2070,13 +1991,13 @@ scene.add(rain)
 #  per strike would rebuild the entry list, idle the device and cold-start the
 #  TAA history -- on the one frame in the film where that is most visible.
 #
-#  The emissive channel is what lights the SURFACES (sails, sea, and the rain's
-#  lit mesh proxies near the camera); emissive triangles are not in the froxel
-#  pass, so the AIR flash -- the rain curtain, the mist, the cloud base -- needs
-#  real clustered point lights. That is why there are both.
+#  The emissive channel is what lights the SURFACES (sails, sea); emissive
+#  triangles are not in the froxel pass, so the AIR flash -- the rain curtain,
+#  the mist, the cloud base -- needs real clustered point lights. That is why
+#  there are both.
 # --------------------------------------------------------------------------- #
 LRNG = np.random.default_rng(cli_arg("--seed", 90210, int))
-CLOUD_BASE = 300.0          # where a channel leaves the deck (storm deck is 240 m)
+CLOUD_BASE = 300.0          # where a channel leaves the deck, above the storm's deck_bottom
 BOLT_PARK = -9000.0         # inactive channels live down here; a transform, not a rebuild
 FLASH_RANGE = 8000.0        # point-light cull radius: must clear the strike distance
 STRIKE_SLOTS = 2            # two concurrent strikes, four bolts each
@@ -2142,9 +2063,8 @@ def _soup_mesh(v, mat):
 def build_bolt(rng, ground_y, r_main, branches, spread):
     """One channel: main stroke plus branches, all tapering toward their tips.
 
-    The main radius is metres, not centimetres, on purpose: at 0.8-2.5 km a
-    1.5 m channel is ~2 px at 1080p, which is the thinnest a bolt may be and
-    still survive TAA and the upscalers.
+    The main radius is metres, not centimetres, on purpose: at strike distance a
+    channel has to be a couple of pixels wide to survive TAA and the upscalers.
     """
     top = np.array([rng.normal() * 14.0, CLOUD_BASE * rng.uniform(0.90, 1.20),
                     rng.normal() * 14.0])
@@ -2174,18 +2094,14 @@ for _a in range(STRIKE_SLOTS):
     strike_anchors.append(_anc)
     for _k in range(4):
         _rng = np.random.default_rng(7000 + _a * 10 + _k)
-        # #3 of each four is an INTRA-CLOUD channel: it stops 300 m up, inside
-        # the storm deck, so it reads as a sheet glow rather than a fork.
-        _v = build_bolt(_rng, 300.0 if _k == 3 else 0.0,
+        # The last of each four is an INTRA-CLOUD channel: it stops at the cloud
+        # base, inside the storm deck, so it reads as a sheet glow, not a fork.
+        _v = build_bolt(_rng, CLOUD_BASE if _k == 3 else 0.0,
                         (2.0, 1.6, 1.25, 1.8)[_k], 2 + _k % 3, 55.0)
         _bolt_tris += len(_v) // 3
-        _m = tp.MeshStandardMaterial()
-        _m.color = 0x000000                 # black at rest; only emissive ever shows
-        _m.emissive = BOLT_EMISSIVE
-        _m.emissive_intensity = 0.0
-        _m.roughness = 1.0
-        _m.metalness = 0.0
-        _m.side = tp.Side.Double            # the soup's winding is not worth deriving
+        _m = standard_material(0x000000, 1.0, emissive=BOLT_EMISSIVE,  # black at rest
+                               emissive_intensity=0.0,                  # only emissive ever shows
+                               side=tp.Side.Double)                     # the soup's winding is not worth deriving
         _node = tp.Group()
         _node.position.set(0.0, BOLT_PARK, 0.0)
         _node.add(_soup_mesh(_v, _m))
@@ -2202,9 +2118,8 @@ for _a in range(STRIKE_SLOTS):
 
 # What a kind of strike IS. `lux` is the illuminance the two air lights deliver
 # AT THE BOAT at peak, so the point-light intensity is lux * d^2 and a strike
-# looks the same from 600 m or from 2.5 km -- the kind, not the geometry, is
-# what says how big it was. For reference the storm's own sun runs at ~0.55 and
-# a clear noon at ~4.6 in the same units.
+# looks the same from near or far -- the kind, not the geometry, is what says
+# how big it was. (The sun's intensity in update_world is the reference scale.)
 STRIKE_KINDS = {
     "sheet": dict(bolts=(), emis=0.0, lux=1.8, strokes=(2, 4),
                   dist=(1500.0, 2500.0), mid=520.0, top=820.0),
@@ -2219,11 +2134,11 @@ strikes = [dict(on=False, t=0.0, dur=0.0, bolt=-1, strokes=(),
                 emis=0.0, lux=0.0, dist=1000.0) for _ in range(STRIKE_SLOTS)]
 _next_strike = 3.0
 flash_level = 0.0            # 0..1, the frame's brightest active stroke
-# Auto exposure is a 10-stop-wide lever in this demo and a bolt is the brightest
-# thing in the film; without a floor the meter constricts on the flash and the
-# two seconds AFTER it come back grey. -1.2 EV is as far down as the eye may go
-# while a channel is lit.
-AE_RANGE = (-2.5, 3.0)
+# Auto exposure is a wide lever in this demo and a bolt is the brightest thing
+# in the film; without a floor the meter constricts on the flash and the seconds
+# AFTER it come back grey. AE_FLASH_MIN is as far down as the eye may go while a
+# channel is lit.
+AE_RANGE = AE_RANGE_DEFAULT
 AE_FLASH_MIN = -1.2
 _ae_flashing = False
 
@@ -2264,7 +2179,7 @@ def fire_strike(kind="mid", bearing=None, distance=None, slot=None):
         bolt = slot * 4 + int(LRNG.choice(spec["bolts"]))
         bolt_nodes[bolt].position.set(0.0, 0.0, 0.0)
 
-    # 2-4 return strokes down the same channel, 55-160 ms apart, each weaker.
+    # A few return strokes down the same channel, tens of ms apart, each weaker.
     n = int(LRNG.integers(spec["strokes"][0], spec["strokes"][1] + 1))
     t, st = 0.0, [(0.0, 1.0)]
     for _ in range(n - 1):
@@ -2293,9 +2208,10 @@ def _end_strike(slot):
 def _stroke_shape(u, tau=0.050):
     """One return stroke: a dim stepped leader, a spike, an exponential tail.
 
-    The leader is 5% of the peak, not 50%: on an ACES curve anything above ~3
-    is white, so a leader that is only one stop down from the stroke is not a
-    leader at all -- it is the same white line arriving early.
+    The leader is a few percent of the peak, not half: on an ACES curve
+    anything well above 1 is white, so a leader that is only one stop down
+    from the stroke is not a leader at all -- it is the same white line
+    arriving early.
     """
     if u < 0.0:
         return 0.0
@@ -2355,7 +2271,7 @@ def update_lightning(dt):
 # --------------------------------------------------------------------------- #
 #  The filming drone: a camera vehicle, not a quadrotor sim. The attitude is
 #  kinematic -- it leans the way the acceleration says it must be leaning for
-#  the path it is on -- which is all the eye reads at 15 m.
+#  the path it is on -- which is all the eye reads at filming distance.
 # --------------------------------------------------------------------------- #
 DRONE_SPAN = 0.45
 DRONE_ARM = DRONE_SPAN * 0.5 * 0.7071
@@ -2369,28 +2285,13 @@ drone.rotation.order = tp.RotationOrder.YXZ
 drone.visible = False
 scene.add(drone)
 
-body_mat = tp.MeshStandardMaterial()
-body_mat.color = 0x1b1f26
-body_mat.roughness = 0.42
-body_mat.metalness = 0.25
-trim_mat = tp.MeshStandardMaterial()
-trim_mat.color = 0x343b45
-trim_mat.roughness = 0.55
-prop_mat = tp.MeshStandardMaterial()
-prop_mat.color = 0x0c0e11
-prop_mat.roughness = 0.60
-prop_mat.side = tp.Side.Double
-# There WAS a translucent blur disc over each hub (a transparent
-# MeshStandardMaterial, opacity ramped with the spin rate). CUT on the user's
-# call after watching the film: "the drone has opaque disks + rotors. ONLY
-# rotors is what we want." At 0.45 m span and 12-15 m from the lens the discs
-# never resolved as motion blur -- they read as four grey plates bolted to the
-# arms. The blades alias into an apparent slow counter-rotation at 60 fps,
-# which is what a filmed prop does, and that is the whole effect wanted.
-lens_mat = tp.MeshStandardMaterial()
-lens_mat.color = 0x07090c
-lens_mat.roughness = 0.05
-lens_mat.metalness = 0.2
+body_mat = standard_material(0x1b1f26, 0.42, 0.25)
+trim_mat = standard_material(0x343b45, 0.55)
+# Bare blades, no blur disc: at this span and filming distance a disc reads as a
+# grey plate bolted to the arm, while the spinning blades alias into the slow
+# apparent counter-rotation a filmed prop has.
+prop_mat = standard_material(0x0c0e11, 0.60, side=tp.Side.Double)
+lens_mat = standard_material(0x07090c, 0.05, 0.2)
 
 _hull = tp.Mesh(tp.BoxGeometry(0.115, 0.052, 0.170), body_mat)
 _hull.cast_shadow = True
@@ -2421,18 +2322,12 @@ for _sx, _sz in ((1, 1), (-1, 1), (-1, -1), (1, -1)):
 
 led_mats = []
 for _col, _x, _z in ((0xff1408, -1.02, 1.02), (0x18ff3c, 1.02, 1.02)):
-    _m = tp.MeshStandardMaterial()
-    _m.color = 0x0a0a0a
-    _m.emissive = _col
-    _m.emissive_intensity = 0.0
+    _m = standard_material(0x0a0a0a, 1.0, emissive=_col, emissive_intensity=0.0)
     _s = tp.Mesh(tp.SphereGeometry(0.012, 10, 8), _m)
     _s.position.set(_x * DRONE_ARM, 0.004, _z * DRONE_ARM)
     drone.add(_s)
     led_mats.append(_m)
-strobe_mat = tp.MeshStandardMaterial()
-strobe_mat.color = 0x0a0a0a
-strobe_mat.emissive = 0xffffff
-strobe_mat.emissive_intensity = 0.0
+strobe_mat = standard_material(0x0a0a0a, 1.0, emissive=0xffffff, emissive_intensity=0.0)
 _st = tp.Mesh(tp.SphereGeometry(0.013, 10, 8), strobe_mat)
 _st.position.set(0.0, -0.030, -0.030)
 drone.add(_st)
@@ -2455,7 +2350,7 @@ drone_state = {
     "spin": 0.0, "spool": 0.0, "throttle": 0.5, "have": False,
 }
 drone_on = ("--drone" in sys.argv) or ("--fpv" in sys.argv)
-drone_auto = True          # False = a script owns drone_set_pose (Phase 4)
+drone_auto = True          # False = the film script owns drone_set_pose
 view_mode = "fpv" if "--fpv" in sys.argv else "orbit"
 drone.visible = drone_on
 _drone_phase = 0.0
@@ -2598,8 +2493,8 @@ boat_state = {
     "yaw": math.radians(START_HDG), "yaw_rate": 0.0,
     "u": 0.0, "sway": 0.0,
     "heel": 0.0, "heel_rate": 0.0,
-    # pitch is now a hydrostatic DOF (bow up positive); roll off the water
-    # plane still is not -- the GM heel model owns roll.
+    # pitch is a hydrostatic DOF (bow up positive); roll off the water plane
+    # is not -- the GM heel model owns roll.
     "pitch": 0.0, "pitch_rate": 0.0, "wave_roll": 0.0, "draft": 0.0,
     "floating": False,   # set on the first frame the CPU height mirror is live
     "rudder": 0.0,
@@ -2663,32 +2558,29 @@ def step_sails(wind_local, grav_local):
 #
 #  The hull is LOFTED here (`_station` / `_half_section`), so the immersed area
 #  of every station at every draft is knowable exactly. Build that table once
-#  and the per-frame buoyancy is a table lookup: 40 stations x an interpolated
+#  and the per-frame buoyancy is a table lookup: NS stations x an interpolated
 #  area, summed for the vertical force and moment-armed for the pitch moment.
 #  That is what makes her RIDE a swell -- a crest arriving at the bow lifts the
 #  bow first, because the bow's sections are the ones that got deeper.
 #
-#  THE ONE FUDGE, stated plainly. The lofted canoe body displaces 8.63 m3 at
-#  its painted waterline = 8849 kg of seawater, and this boat is modelled at
-#  MASS = 3500 kg everywhere else (drive, drag, heel, righting moment, the
-#  whole film's feel). Left alone she would float 26 cm above her boot stripe
-#  with her antifouling in the air. Raising MASS to 8849 instead would make the
-#  righting moment 2.5x stiffer and she would stop heeling, which is the one
-#  thing act 3 is about. So the AREA TABLE is scaled by a constant
-#  HULL_VOL_SCALE = (MASS / rho) / V(TRIM_DRAFT): the shape of the hydrostatic
-#  curve is kept (stiffness with draft, the distribution along the length) and
-#  only its absolute volume is brought into line with the mass the rest of the
-#  boat believes in. Note that the resulting heave/pitch frequencies are
-#  IDENTICAL to the honest heavy-boat alternative -- equilibrium ties the two
-#  together -- so nothing dynamic is lost by the choice.
+#  THE ONE FUDGE, stated plainly. The lofted canoe body displaces far more
+#  seawater at its painted waterline than MASS, and MASS is what the rest of
+#  the boat (drive, drag, heel, righting moment) is modelled with. Left alone
+#  she would float well above her boot stripe; raising MASS to match would
+#  stiffen the righting moment until she stopped heeling. So the AREA TABLE is
+#  scaled by a constant HULL_VOL_SCALE = (MASS / rho) / V(TRIM_DRAFT): the
+#  shape of the hydrostatic curve is kept (stiffness with draft, the
+#  distribution along the length) and only its absolute volume is brought into
+#  line with the mass the rest of the boat believes in. The resulting
+#  heave/pitch frequencies are IDENTICAL to the honest heavy-boat alternative
+#  -- equilibrium ties the two together -- so nothing dynamic is lost.
 # --------------------------------------------------------------------------- #
 HULL_LOG = "--hull-log" in sys.argv          # one buoyancy line per sim second
 RHO_W = 1025.0               # seawater
-TRIM_DRAFT = 0.02            # flat-water waterline in hull-local y: 2 cm above
-                             # the design line, which is where the boot stripe
-                             # wants it (the stripe spans local y -0.10 .. +0.17)
+TRIM_DRAFT = 0.02            # flat-water waterline in hull-local y: a little
+                             # above the design line, inside the boot stripe
 HS_NG = 256                  # girth samples per half section for the table
-HS_D0, HS_D1, HS_ND = -0.90, 1.80, 271       # draft grid, 1 cm
+HS_D0, HS_D1, HS_ND = -0.90, 1.80, 271       # draft grid
 PITCH_MAX = math.radians(20.0)
 BUOY_SUBSTEPS = 4            # hydrostatic integration steps per rendered frame
 HEAVE_ZETA, PITCH_ZETA = 0.55, 0.60
@@ -2748,8 +2640,8 @@ if SKY_LOG:
 
 def immersed_area(d):
     """Immersed area of every station at per-station draft `d` (a length-NS
-    array of the water height in hull-local y). Linear lookup in the 1 cm
-    table -- 40 gathers, no Python loop."""
+    array of the water height in hull-local y). Linear lookup in the draft
+    table -- NS gathers, no Python loop."""
     f = np.clip((d - HS_D0) * HS_INV_DD, 0.0, HS_ND - 1.001)
     i0 = f.astype(np.intp)
     a0 = HS_AREA[HS_ROW, i0]
@@ -2757,10 +2649,9 @@ def immersed_area(d):
 
 
 # The nine buoyancy probes, in the boat's own frame: three stations x
-# port/centre/starboard. Nine samples of a noisy CPU mirror least-squares
-# fitted to a PLANE beat five samples differenced pairwise -- the ~1 cm jitter
-# in `ocean.sample_height` (an unfenced GPU readback) averages down instead of
-# going straight into the pitch angle.
+# port/centre/starboard, least-squares fitted to a PLANE. `ocean.sample_height`
+# is an unfenced GPU readback with some jitter, and a plane fit averages that
+# down instead of passing it straight into the pitch angle.
 BUOY_PZ = np.array([0.36 * LOA, 0.0, -0.36 * LOA])
 BUOY_PX = np.array([-0.40 * BEAM, 0.0, 0.40 * BEAM])
 BUOY_PTS = [(px, pz) for pz in BUOY_PZ for px in BUOY_PX]
@@ -2771,12 +2662,8 @@ _buoy_h = np.empty(len(BUOY_PTS))
 # --------------------------------------------------------------------------- #
 #  One frame of sailing.
 # --------------------------------------------------------------------------- #
-# (`hull_half_width` used to live here, a CPU mirror of the shader's plan-form
-#  taper for the hand-placed perimeter foam splats. Both are gone: the analytic
-#  wake draws the waterline contact now.)
-
 # Hull exclusion + analytical wake: the hull DISPLACES the water instead of the
-# sea passing through it. `hull_excl_on` is the X-key A/B.
+# sea passing through it. `hull_excl_on` is the X-key toggle.
 HULL_HALF_L, HULL_HALF_B = LOA * 0.5, BEAM * 0.5
 WAKE_MAX_AGE, WAKE_MAX_SAMPLES = 6.0, 64
 WAKE_INTERVAL, WAKE_DISTANCE = 0.10, 1.0     # 10 Hz or 1 m, whichever fires first
@@ -2784,24 +2671,17 @@ hull_excl_on = True
 _wake_accum = 0.0
 _wake_last = None
 
-# She is a 9.6 m yacht at 5-7 kn, not a planing launch, and fed her true speed
-# the analytical wake reads as a motor-boat river (the orchestrator's verdict on
-# `v4_wake_clear.png`). There is no per-trail amplitude knob to turn down: every
-# wake effect in `water_displace.comp` / `foam_world.comp` is gated on
-# `smoothstep(0.5, 1.5, |speed|)` and the stern foam trail's amplitude is a FLAT
-# 0.95 above 1.5 m/s. So the one lever from Python is the SPEED the shaders are
-# handed. At 3-6 m/s the gate saturates, the foam accumulator pins at 1.0, and
-# the water shading's sheet term (`smoothstep(0.03, 0.42, coverage - pools*..)`,
-# solid from coverage ~0.55) paints an unbroken slab. Compressing her speed into
-# the gate's own ramp instead lands the trail near coverage 0.5, where the pool
-# and edge noise breaks it into streaks and the V-wedge ridges stay as thin
-# feathered lines. It also takes the ridge HEIGHT (0.016 v^2 + 0.06 v, clamped
-# at 1 m) from half a metre of standing water down to a few centimetres.
-# Nothing here touches the boat: `sampleHeight` ignores the wake, so the
-# hydrostatics read the same sea either way.
+# She is a displacement yacht, not a planing launch, and fed her true speed the
+# ocean's analytical wake reads as a motor-boat river: the wake shaders gate
+# every effect on a speed ramp and saturate the foam trail above it, with no
+# per-trail amplitude knob. So the one lever from Python is the SPEED the
+# shaders are handed. Compressing her speed into the low end of that ramp
+# keeps the trail broken into streaks and the V-wedge ridges thin and
+# feathered. Nothing here touches the boat: the height sampler ignores the
+# wake, so the hydrostatics read the same sea either way.
 WAKE_SPEED_FLOOR = 0.60      # m/s handed to the wake at bare steerage way
 WAKE_SPEED_GAIN = 0.10       # ... plus this per m/s of her own speed
-WAKE_SPEED_CAP = cli_arg("--wake-cap", 0.98, float)   # gate ~0.44 at the top
+WAKE_SPEED_CAP = cli_arg("--wake-cap", 0.98, float)
 
 
 def wake_speed(u):
@@ -2812,14 +2692,14 @@ def wake_speed(u):
 
 def _wake_update(dt, cy, sy, pitch, roll):
     """Hand the ocean the vessel's pose + waterline plane, and keep the Kelvin
-    wake's history trail. `half_length = 0` is the off switch for BOTH."""
+    wake's history trail. `half_length = 0` is the off switch for both."""
     global _wake_accum, _wake_last
     bs = boat_state
     h = ocean.hull_exclusion
     h.set_pose(bs["x"], bs["z"], bs["y"], yaw=bs["yaw"], pitch=pitch, roll=roll,
                half_length=HULL_HALF_L if hull_excl_on else 0.0,
                half_beam=HULL_HALF_B)
-    ws = wake_speed(bs["u"])                 # NOT bs["u"] -- see WAKE_SPEED_CAP
+    ws = wake_speed(bs["u"])                 # NOT bs["u"] -- see wake_speed()
     ocean.wake.forward_speed = ws
     if not hull_excl_on:
         return
@@ -2869,11 +2749,10 @@ def step_boat(dt):
     roll = bs["wave_roll"] + bs["heel"]
     rot = yxz_matrix(-pitch, bs["yaw"], roll)
     wind_local = rot.T @ app_wind
-    # The storm blows 17 m/s and the cloth solver was tuned at 9: past ~16 the
-    # free leech flogs hard enough that neighbouring normals cancel and the rig
-    # loses its drive to numerical noise. Cap what the SAILS see (the ocean and
-    # the gulls still get the real thing) -- a reefed boat is the honest reading
-    # of that anyway.
+    # Past SAIL_WIND_MAX the free leech flogs hard enough that neighbouring
+    # normals cancel and the rig loses its drive to numerical noise. Cap what
+    # the SAILS see (the ocean and the gulls still get the real thing) -- a
+    # reefed boat is the honest reading of a storm anyway.
     _aw = float(np.linalg.norm(wind_local))
     if _aw > SAIL_WIND_MAX:
         wind_local = wind_local * (SAIL_WIND_MAX / _aw)
@@ -2949,9 +2828,8 @@ def step_boat(dt):
     # Not a follower. Nine probes -> a least-squares WATER PLANE in her own
     # frame -> a per-station draft -> the immersed area of each station out of
     # the table -> the buoyant force and the pitching moment. Integrated with
-    # four substeps because the heave/pitch springs are stiffer than the frame
-    # rate is fine-grained (~0.7 Hz heave, ~0.8 Hz pitch, but the DAMPING is
-    # what a single 60 Hz Euler step trips over in a big sea).
+    # BUOY_SUBSTEPS substeps because the heave/pitch DAMPING is what a single
+    # 60 Hz Euler step trips over in a big sea.
     if first_render_done:
         _t_hs = time.perf_counter() if HULL_LOG else 0.0
         for k, (px, pz) in enumerate(BUOY_PTS):
@@ -2961,8 +2839,8 @@ def step_boat(dt):
         h_stations = h0 + slope_z * HS_Z          # water height at every station
         if not bs["floating"]:
             # First live frame (or straight after a teleport): drop her ON her
-            # marks instead of letting a 1 m initial error ring out over two
-            # seconds of a recorded shot.
+            # marks instead of letting the initial error ring out over the
+            # first seconds of a recorded shot.
             bs["floating"] = True
             bs["y"], bs["vy"] = h0 - TRIM_DRAFT, 0.0
             bs["pitch"] = bs["pitch_rate"] = 0.0
@@ -2996,8 +2874,8 @@ def step_boat(dt):
                       f"heel {math.degrees(bs['heel']):+5.1f}  wroll "
                       f"{math.degrees(bs['wave_roll']):+5.1f}  u {bs['u']:.2f}  "
                       f"[{_hs_ms / max(_hs_n, 1):.3f} ms/frame]")
-        # Roll still comes off the water plane's athwartships slope, low-passed,
-        # and adds to the sail-driven heel. The GM heel model is good; leave it.
+        # Roll comes off the water plane's athwartships slope, low-passed, and
+        # adds to the sail-driven heel from the GM model.
         a = 1.0 - math.exp(-2.0 * math.pi * dt)
         bs["wave_roll"] += (math.atan(slope_x) - bs["wave_roll"]) * a
 
@@ -3010,13 +2888,12 @@ def step_boat(dt):
     # --- she displaces the water, and leaves a wake --------------------------
     # The exclusion footprint carries her WATERLINE PLANE (centre y + the two
     # angles), so the sea meets the hull at the boot stripe on a crest as well
-    # as in a trough; and the same pose drives the analytical Kelvin wake in
-    # water_displace.comp / foam_world.comp.
+    # as in a trough; and the same pose drives the ocean's analytical Kelvin
+    # wake.
     # NOTE the roll passed here is `wave_roll`, NOT the total roll. Heel is the
     # HULL rotating into the water; the water surface stays where it is. Tilting
-    # the excluded patch by the sail heel lifted the sea to the weather deck and
-    # dropped it clear of the leeward bilge -- a 20 deg heel over a 3 m beam is
-    # half a metre of error either side.
+    # the excluded patch by the sail heel would lift the sea to the weather deck
+    # and drop it clear of the leeward bilge.
     _wake_update(dt, cy, sy, pitch, bs["wave_roll"])
 
     ocean.clear_foam_disturbances()
@@ -3024,11 +2901,9 @@ def step_boat(dt):
     norm = min(spd / 3.0, 1.0)
     base = (0.14 + 0.52 * norm) * knob["foam"]
     if base > 0.02:
-        # The perimeter splats are GONE: the analytical wake's own foam (trail
-        # + bow V-wedge ridges, foam_world.comp) draws the hull's waterline
-        # contact now, and doubling it up read as a bar of white either side.
-        # The bow crest and the transom quarter-wave are still hand-placed --
-        # they land where the analytic wake is weakest.
+        # The analytical wake's own foam (trail + bow V-wedge ridges) draws the
+        # hull's waterline contact; only the bow crest and the transom
+        # quarter-wave are hand-placed, where the analytic wake is weakest.
         ocean.add_foam_disturbance(bs["x"] + sy * (LOA * 0.5 + 0.4),
                                    bs["z"] + cy * (LOA * 0.5 + 0.4),
                                    1.5, min(base * 1.3, 1.0))
@@ -3095,10 +2970,9 @@ def handle_keys(dt):
     if pressed("N"):
         wtarget["rain"] = 0.0 if wtarget["rain"] > 0.05 else 1.0
     if pressed("K"):
-        day_speed = 0.0 if day_speed != 0.0 else 0.35   # 24 h in ~68 s
+        day_speed = 0.0 if day_speed != 0.0 else DAY_SPEED
     if pressed("L"):
         # A hero fork, now, in front of wherever the camera happens to look.
-        cam = camera.position
         fwd = camera.get_world_direction()
         fire_strike("hero", bearing=math.degrees(math.atan2(fwd.x, fwd.z))
                     + float(LRNG.uniform(-14.0, 14.0)), distance=780.0)
@@ -3112,7 +2986,7 @@ def handle_keys(dt):
     if pressed("V") and drone_on:
         view_mode = "orbit" if view_mode == "fpv" else "fpv"
     if pressed("X"):
-        # A/B the whole watertight story: footprint, waterline plane, Kelvin
+        # Toggle the whole watertight story: footprint, waterline plane, Kelvin
         # wake and analytic wake foam all switch off together.
         hull_excl_on = not hull_excl_on
         if not hull_excl_on:
@@ -3148,15 +3022,13 @@ def run_autopilot(dt):
 world_time = 0.0
 
 # The RENDERER's own clock, which is a separate thing from `world_time`.
-# Vulkan's frame path reads WALL time by default (frameNowSec() falls back to
-# glfwGetTime), and that clock drives the ocean's FFT deform timestamp, the
-# cloud evolution, the foam decay, the shade's animation timeSec and the
-# TAA/FSR frame deltas. Offline one 1/60 s frame costs 60-90 ms of wall time,
-# so the SEA would run ~5x faster than the dt the boat, the sails and the rain
-# are integrated with -- the 0.85 Hz buoyancy follower cannot track a wave
-# field moving five times its own rate and a crest sweeps the deck (that was
-# the Phase 4b drowning, and it is also why `--preview` could not reproduce
-# it: at 35 ms/frame the same shot is dry).
+# Vulkan's frame path reads WALL time by default, and that clock drives the
+# ocean's FFT deform timestamp, the cloud evolution, the foam decay, the
+# shade's animation time and the TAA/FSR frame deltas. Offline a frame costs
+# far more wall time than the dt it represents, so the SEA would run several
+# times faster than the dt the boat, the sails and the rain are integrated
+# with -- the buoyancy cannot track a wave field moving that much faster than
+# its own rate and a crest sweeps the deck.
 #
 # So every OFFLINE frame pins `renderer.sim_time` to this clock, stepping it
 # by exactly the frame dt, warm-up and pre-roll frames included -- a frozen
@@ -3188,12 +3060,12 @@ def _ramp(dt):
     tau = 6.0 if wet_target > weather["wetness"] else 45.0
     weather["wetness"] += (wet_target - weather["wetness"]) * (1.0 - math.exp(-dt / tau))
 
-    # The rainbow is not a preset flag, it is a consequence: about 40 s of bow
+    # The rainbow is not a preset flag, it is a consequence: a window of bow
     # after the rain stops, and only while the sun is low enough to put the
     # antisolar point above the sea.
     raining = weather["rain"] > 0.30
     if _rain_was_on and not raining:
-        _bow_timer = 40.0
+        _bow_timer = BOW_WINDOW
     _rain_was_on = raining
     if _bow_timer > 0.0:
         _bow_timer = max(0.0, _bow_timer - dt)
@@ -3222,10 +3094,9 @@ def update_world(dt):
         # its hue; then softened toward warm white, or the whole boat goes pink.
         t = fex / max_c
         t = t + (np.array([1.0, 0.80, 0.62], np.float32) - t) * 0.35
-        # ...and then further toward white as the sun climbs. The raw
-        # transmittance ratio at 48 deg is still (1, 0.78, 0.50), which is a
-        # sunset colour: the whole picture goes amber at noon and the eye reads
-        # the mismatch against a blue sky instantly.
+        # ...and then further toward white as the sun climbs: the raw
+        # transmittance ratio is still a sunset colour at noon, and the eye
+        # reads amber light against a blue sky as a mismatch instantly.
         t = t + (1.0 - t) * (0.55 * smoothstep(0.10, 0.55, cs.sun_y))
     else:
         t = np.array([1.0, 0.80, 0.62], np.float32)
@@ -3275,13 +3146,13 @@ def update_world(dt):
     if _applied["choppy"] is None or abs(weather["choppy"] - knob["choppy"]) > 0.01:
         _applied["choppy"] = knob["choppy"] = weather["choppy"]
         ocean.params.choppiness = knob["choppy"]
-    # Natural whitecaps. Ocean::create derives foamAmount from the tile scale
-    # (1400 m / 300 -> clamped to 1.0), which at a storm's wave_scale deposits
-    # foam faster than the shading lifecycle can age it away: the fold field
-    # saturates, the sheet mask goes solid, and the sea renders as slabs of
-    # pack ice. Whitewater is the TAIL of the fold distribution, so the knob
-    # has to come DOWN as the sea gets up, not up -- 0.16 in the storm leaves
-    # only the genuinely breaking crests and the wind streaks over dark slate.
+    # Natural whitecaps. The ocean's default foam amount is derived from the
+    # tile scale, and at a storm's wave_scale that deposits foam faster than the
+    # shading lifecycle can age it away: the fold field saturates, the sheet
+    # mask goes solid, and the sea renders as slabs of pack ice. Whitewater is
+    # the TAIL of the fold distribution, so the knob has to come DOWN as the sea
+    # gets up, not up -- the storm preset leaves only the genuinely breaking
+    # crests and the wind streaks over dark slate.
     if _applied["whitecap"] is None or abs(weather["whitecap"] - _applied["whitecap"]) > 0.005:
         _applied["whitecap"] = weather["whitecap"]
         ocean.params.foam_amount = weather["whitecap"]
@@ -3299,9 +3170,8 @@ def update_world(dt):
     if _applied["glow"] is None or abs(glow - _applied["glow"]) > 0.015:
         _applied["glow"] = glow
         # The lamp is a real light source on Vulkan and auto exposure lifts the
-        # night by up to 3 EV, so the NIGHT value is the smaller one. It burns
-        # at both ends of the day: a lighthouse whose lamp is off at noon is
-        # the thing the user complained about.
+        # night by several EV, so the NIGHT value is the smaller one. It burns
+        # at both ends of the day: a lighthouse's lamp is not off at noon.
         lamp_mat.emissive_intensity = LAMP_DAY + (LAMP_NIGHT - LAMP_DAY) * glow
         lamp_mat.needs_update()
         glass_mat.emissive_intensity = 9.0 * glow
@@ -3411,7 +3281,7 @@ def draw_ui():
     if ch:
         apply_sky(celestial(time_of_day), force=True)
     _, day_speed_on = tp.imgui.checkbox("time-lapse (K)", day_speed != 0.0)
-    day_speed = 0.35 if day_speed_on else 0.0
+    day_speed = DAY_SPEED if day_speed_on else 0.0
     for i, name in enumerate(("mist", "clear", "overcast", "storm", "clearing", "night")):
         if i:
             tp.imgui.same_line()
@@ -3510,13 +3380,7 @@ def follow_camera():
     controls.target = tp.Vector3(float(p[0]), 3.0, float(p[2]))
 
 
-def on_resize(w, h):
-    camera.aspect = w / max(h, 1)
-    camera.update_projection_matrix()
-    renderer.set_size(w, h)
-
-
-canvas.on_window_resize(on_resize)
+canvas.on_window_resize(resize_handler(camera, renderer))
 
 
 # --------------------------------------------------------------------------- #
@@ -3529,6 +3393,7 @@ canvas.on_window_resize(on_resize)
 #  the lens -- is the same machinery every shot uses.
 # --------------------------------------------------------------------------- #
 film_mode = FILM
+AE_WARMUP_SPEED = 14.0       # EV/s while a cut's unrecorded warm-up burns
 film_drone = None            # frame() calls this instead of the demo orbit
 _cur_shot = None
 _cur_u = 0.0
@@ -3685,7 +3550,7 @@ def shot_camera(sh, u):
         # Point at the ANTISOLAR point at a given elevation: the only way to
         # frame a rainbow, whose apex sits 42 deg from it and therefore moves
         # with the sun. A level camera frames the arc's shoulders and nothing
-        # else, which is exactly what Phase 2's `--face anti` did.
+        # else.
         hz = -celestial(time_of_day).sun_dir[[0, 2]]
         hz = hz / max(float(np.linalg.norm(hz)), 1e-6)
         el = math.radians(p["tgt_anti"])
@@ -3744,13 +3609,12 @@ def drone_eval(spec, uu):
     return pos, _pt(org, fwd, rgt, la + (lb - la) * e, spec.get("world", False))
 
 
-# The film NEVER flips `drone.visible`. Phase 3 already found that a visibility
-# change is a snapshot invalidation (entry-list rebuild + waitIdle + TAA clear);
-# doing one in the same gap as a forced env re-bake lost the device outright
-# (`vkDeviceWaitIdle (pre-prevVertex-resync) failed: -4` on the first frame after
-# the external -> FPV cut). So the airframe is parked by TRANSFORM, exactly the
-# way the lightning pool is, and `drone_state` keeps the real pose so the FPV
-# camera still rides the machine that is no longer in the picture.
+# The film NEVER flips `drone.visible`: a visibility change is a snapshot
+# invalidation (entry-list rebuild + device idle + TAA clear), and one in the
+# same gap as a forced env re-bake can lose the device. So the airframe is
+# parked by TRANSFORM, exactly the way the lightning pool is, and `drone_state`
+# keeps the real pose so the FPV camera still rides the machine that is no
+# longer in the picture.
 DRONE_PARK = -20000.0
 
 
@@ -3769,31 +3633,15 @@ def _film_drone(dt):
 #  Five acts. `place` teleports the boat AT AN ACT CUT only --
 #  hours pass between acts, so she is honestly somewhere else; inside an act she
 #  sails continuously and the sim never stops. Positions are chosen so she is
-#  always 60-260 m off the islet and never sails into it.
+#  always well off the islet and never sails into it.
 DRONE_REVEAL = dict(kind="arc", r=(15.5, 11.5), az=(196.0, 262.0), h=(8.8, 5.4),
                     look=(2.0, 0.0, 6.0), look_b=(5.0, 0.0, 3.4), ease="linear")
 DRONE_NIGHT = dict(kind="arc", r=(21.0, 13.0), az=(60.0, 130.0), h=(11.0, 6.5),
                    look=(0.0, 0.0, 5.0), ease="linear")
 
 FILM_SCRIPT = [
-    # ---- 0. COLD OPEN -- CUT (user's call, 2026-08-22) --------------------- #
-    #  There WAS a 4.2 s storm cold open here: the hero fork first, then a hard
-    #  cut to black, on the "front-load the strongest frame" theory. On the
-    #  delivered take the sea was over her deck for most of it. Phase 4b traced
-    #  that to the renderer's wall-clock frame clock (the sea ran ~5x the film's
-    #  dt, so the buoyancy follower could not track it -- now fixed by pinning
-    #  `renderer.sim_time`, see `sim_tick`) and reframed the shot down to
-    #  wave_scale 1.02. The user watched it anyway and said: cut it. So it is
-    #  gone, not reframed, and the film OPENS ON DAWN. The hero fork still plays
-    #  in act 3 where the storm actually is, and the shot no longer has to earn
-    #  its place by being first. The 0.4 s black gap went with it (the writer
-    #  only inserts it after an act-0 shot).
-    #  If it is ever wanted back: `Shot(0, "cold open: hero fork", 15.10, 4.2,
-    #  "dolly", fov=fov_mm(22), wx="storm", wx_over=dict(wave_scale=1.02,
-    #  choppy=0.60, whitecap=0.40), place=(70,-150,342), course=342,
-    #  ease="linear", shake=0.34, lead=0.5, world=True, a=(14.4,-14.9,6.8),
-    #  b=(12.2,-12.6,6.0), tgt=(0,0,5.6), fire=((1.05,"hero",318,760),
-    #  (2.85,"mid",344,1500)))` -- and re-run the engulf check at 1080p.
+    # An act-0 shot (a cold open before the dawn) gets a short black gap after
+    # it; the script as written opens on dawn.
 
     # ---- 1. DAWN 04:50 ----------------------------------------------------- #
     Shot(1, "dawn: low wide, boat in silhouette", 4.833, 7.0, "dolly",
@@ -3848,19 +3696,14 @@ FILM_SCRIPT = [
          world=True, a=(16.0, -13.0, 9.0), b=(13.0, -11.0, 9.5),
          tgt_mix=(1.0, 16.0),
          fire=((1.4, "sheet", 330.0, 1800.0), (3.2, "mid", 326.0, 1200.0))),
-    # CUT: "squall: rain on the wet deck" lived here -- a 38 mm close on the
-    # weather rail from 2.2-2.6 m off the water. In a 1.70-wave_scale sea the
-    # lens goes UNDER: the last second of it was a black hull seen from below
-    # the surface and then a teal underwater wash. The hull is never engulfed in
-    # the surviving act-3 shots (verified frame by frame over the whole act);
-    # this one shot was, so it is gone rather than nursed. The film is 4.5 s
-    # shorter and act 3 keeps its close-quarters feel from the chase instead.
+    # No low close-ups in the storm: a lens a couple of metres off the water
+    # goes UNDER in a storm-scale sea.
 
     # ---- 4. CLEARING / GOLDEN HOUR ----------------------------------------- #
-    # The bow. 18 mm and pitched to +16 deg of elevation over the ANTISOLAR
-    # point: the primary arc's apex is 42 deg from that point and its feet are
-    # +/-41 deg of azimuth away, so nothing narrower and nothing level holds the
-    # whole bow inside the frame.
+    # The bow: a wide lens pitched up over the ANTISOLAR point. The primary
+    # arc's apex is 42 deg from that point and its feet are +/-41 deg of
+    # azimuth away, so nothing narrower and nothing level holds the whole bow
+    # inside the frame.
     Shot(4, "golden: the rainbow astern", 19.55, 6.0, "dolly", fov=fov_mm(18),
          wx="clearing", place=(4.0, -6.0, 338.0), course=338.0,
          ease="inout", shake=0.11, ae=(-2.6, -0.9),
@@ -3906,52 +3749,31 @@ FILM_SCRIPT = [
 ]
 
 # ---- the one-minute cut ------------------------------------------------------ #
-#  `--cut short`: the same picture at social length. The user's brief was the
-#  whole of it -- "keep it to one minute. make sure the golden, drone and
-#  lightning strike is captured" -- so this is a SELECTION and a RE-TIMING of
-#  shots that already exist, not new mechanics: same kinds, same camera paths,
-#  same drone trajectory, same strike mechanism. Nine shots, 59.0 s -- the FPV
-#  leg is now three of them (rgb / depth / event camera off the same move).
+#  `--cut short`: the same picture at social length -- a SELECTION and a
+#  RE-TIMING of shots that already exist, not new mechanics: same kinds, same
+#  camera paths, same drone trajectory, same strike mechanism.
 #
 #  Two things have to be repaired when a shot is dropped:
 #   * an ACT CUT can go with it. `place` (the teleport that says hours have
-#     passed) lives on the FIRST shot of each act in the full script, and both
-#     the storm chase and the money shot are second or third in theirs. They get
-#     their act's placement here.
+#     passed) lives on the FIRST shot of each act in the full script, and a
+#     shot that was second or third in its act gets its act's placement here.
 #   * so can the WEATHER. The squall's opener is the shot that ramps clear ->
-#     storm on camera over 8 s; without it the chase has to take the storm as a
-#     hard cut (`wx_hard`), which is what a cut into the middle of a squall is.
+#     storm on camera; without it the chase has to take the storm as a hard cut
+#     (`wx_hard`), which is what a cut into the middle of a squall is.
 #
-#  The money shot is the one place the LOOK changed, in three steps, and all
-#  three were needed to get the frame the user actually approved (the wide islet
-#  still with the sun disc in it, not the film's closer variant):
-#   * 19.667 -> 20.00. Twenty minutes later the disc has dropped out of
-#     Preetham's near-white low-sun band; the sky goes a saltier pink, the
-#     glitter path runs all the way to the lens, and the islet finally reads as
-#     a dark silhouette instead of the flat pale cut-out it has been since
-#     Phase 2.
-#   * 34 mm -> 48 deg (the demo camera's own lens, which is what the approved
-#     still was shot on) and the -9 deg / -2.5 deg composition trim dropped. At
-#     34 mm the disc sits outside the top-right corner: the film had been
-#     cropping away the very thing the frame is named after.
-#   * `ae=(-3.8, -1.4)`. THIS is what finally made the disc separate. A low sun
-#     over a lit sea is the brightest scene in the film and the default AE floor
-#     of -2.5 EV is not enough constriction, so the meter clamps and the sky
-#     prints a stop hot -- the disc merges into it and the pink goes chalky.
-#     With the floor opened the shot meters where it wants to. It also explains
-#     the "isolated render has the disc, whole film does not" puzzle from
-#     Phase 4: a clamped meter lands at different places depending on what the
-#     rest of the frame is doing.
+#  The money shot is re-timed a little later into the golden hour (the sun disc
+#  drops out of Preetham's near-white low-sun band, the glitter path runs to
+#  the lens, the islet reads as a silhouette), takes the demo camera's own lens
+#  so the disc is inside the frame, and opens the auto-exposure floor: a low sun
+#  over a lit sea is the brightest scene in the film, and with the default floor
+#  the meter clamps and the sky prints a stop hot, merging the disc into it.
 SHORT_CUT = [
     # (shot name in FILM_SCRIPT, seconds, overrides)
     ("dawn: low wide, boat in silhouette", 6.0, {}),
     ("morning: the drone off the quarter", 5.5, {}),
-    # ---- THE DRONE SENSOR LEG (10 s) -------------------------------------- #
-    #  The user, after watching the one-minute cut: "we have a 'drone' in the
-    #  shot. Can we spend 10 seconds displaying depth and possibly event camera
-    #  render from it?" This is the platform's actual pitch -- synthetic
-    #  perception -- so the leg has to read as SENSOR OUTPUT and not as a
-    #  filter, which means three things:
+    # ---- THE DRONE SENSOR LEG --------------------------------------------- #
+    #  What the drone's camera sees, three ways. The leg has to read as SENSOR
+    #  OUTPUT and not as a filter, which means three things:
     #   * it is ONE continuous drone move, cut three ways. All three shots fly
     #     the same DRONE_REVEAL arc (the same object, so drone_state's velocity
     #     / acceleration / attitude filters carry across the cuts) at the same
@@ -3959,12 +3781,10 @@ SHORT_CUT = [
     #     picture does not jump; only the way it is SENSED does.
     #   * the depth is `read_aovs_typed(..., ["depth"])` -- the renderer's
     #     metric depth buffer of that exact frame, in metres -- and the events
-    #     are the GPU DVS detector at its own 640x360 sensor resolution. No
-    #     post-processing of the RGB is involved in either.
+    #     are the DVS detector at its own sensor resolution. No post-processing
+    #     of the RGB is involved in either.
     #   * each look carries a small bottom-left label, the way a sensor readout
     #     is captioned in a paper figure.
-    #  The FPV shot was 6.5 s; the leg is 10.0 s, and the 3.5 s came out of the
-    #  night pull-back (13.5 -> 10.0), so the cut is still 59.0 s.
     ("morning: FPV, the same move", 3.0,
      dict(name="drone sensors: FPV rgb", du=(0.42, 0.594), caption="drone · rgb")),
     ("morning: FPV, the same move", 3.5,
@@ -3973,43 +3793,29 @@ SHORT_CUT = [
     ("morning: FPV, the same move", 3.5,
      dict(name="drone sensors: event camera", du=(0.797, 1.0), sensor="events",
           caption=f"drone · event camera · {EVT_W}x{EVT_H} DVS")),
-    # Reframed, and the reason is the standing rule about drowning her. At the
-    # full film's 30 mm from 16 m the lens is pointed at mid-mast, which puts
-    # her WATERLINE 3 deg below the bottom edge: the hull is cropped away and a
-    # cropped hull in a 1.7-wave_scale sea reads as swamped even though she is
-    # dry (Phase 4b's exact finding, one shot further on). 26 mm from 19 m with
-    # the look-at down at 5.6 m holds masthead to waterline inside the frame
-    # with ~3-5 deg of margin. The sea is untouched.
+    # Reframed wider and further back than the full film's chase, with the
+    # look-at lower: a hull cropped at the bottom edge reads as swamped in a
+    # storm sea even when she is dry, so masthead to waterline stay inside the
+    # frame. The sea is untouched.
     ("squall: hard over in the rain", 5.5,
      dict(place=(-44.0, 38.0, 62.0), course=62.0, wx_hard=True, fov=fov_mm(26),
           fire=((2.0, "sheet", 300.0, 1600.0),),
           p=dict(off=(-18.0, 7.0, 4.4), tgt=(1.0, 0.0, 5.6), sway=(2.4, 8.0)))),
-    # THE LIGHTNING, and it is aimed rather than scheduled. The user's verdict on
-    # the first one-minute cut was "we have no lightning shots!" -- the full
-    # film's fork does fire here, but at bearing 322 / 720 m it lands off in the
-    # left third, thin, and 0.4 s of it in a 60 s cut goes past unseen. The
-    # camera of this shot sits off her starboard quarter looking up her track at
-    # bearing 310, and screen-right on this backend is (look bearing - 90), so a
-    # bolt at bearing 316 sits ~6 deg LEFT of the frame axis: upper-middle,
-    # clear of the mainsail, with the boat in the lower third. 620 m rather than
-    # 720 makes the channel ~8 px wide at 1080p and still keeps the cloud base
-    # (300 m) at 25.8 deg, inside the 20 mm lens's 28 deg half-height, so the
-    # whole fork is in frame from cloud to sea. It fires at 1.3 s of an 8 s shot
-    # so leader, peak, the return strokes and the full decay are all recorded,
-    # and a second hero follows at 4.6 s from 300 deg / 950 m.
+    # THE LIGHTNING, aimed rather than scheduled: the bolt's bearing is a few
+    # degrees off the camera's look bearing (screen-right on this backend is
+    # look bearing - 90), so it sits upper-middle, clear of the mainsail, with
+    # the boat in the lower third; the distance keeps the channel a few pixels
+    # wide and the cloud base inside the lens's half-height, so the whole fork
+    # is in frame from cloud to sea. It fires early in the shot so leader,
+    # peak, the return strokes and the full decay are all recorded, and a
+    # second hero follows.
     ("squall: the hero fork", 8.0,
      dict(fire=((1.3, "hero", 316.0, 620.0), (4.6, "hero", 300.0, 950.0)))),
     ("golden: the islet", 14.0,
      dict(tod=20.00, wx="clearing", place=(-12.0, 33.0, 338.0), course=338.0,
           fov=48.0, ae=(-3.8, -1.4), p=dict(tgt_yaw=0.0, tgt_pitch=0.0))),
-    # "night: the beam comes round" USED to sit here (6 s, 23:50). The user cut
-    # it after watching the first one-minute take -- "the leg at 0:42-0:49 can be
-    # removed" -- so the film goes straight from the golden hour to the closing
-    # crane, and its six seconds went to the money shot (12 -> 14) and to the
-    # pull-back (10 -> 13.5). The pull-back therefore inherits act 5's placement
-    # and its hard cut to `night`.
-    # 13.5 s in Phase 7; 10.0 here -- the 3.5 s went to the drone sensor leg.
-    # The 1.1 s fade is unchanged, so the ending still lands the same way.
+    # Straight from the golden hour to the closing crane, which therefore
+    # inherits act 5's placement and its hard cut to `night`.
     ("night: pull back and up", 10.0,
      dict(place=(28.0, -58.0, 330.0), course=330.0)),
 ]
@@ -4039,7 +3845,7 @@ def film_shots():
 def _film_cut(sh, prev):
     """Everything that must be true before the first recorded frame of a shot."""
     global time_of_day, day_speed, _cur_shot, _cur_u, film_drone, _cam_anchor
-    global view_mode, drone_on, drone_auto, weather_name, _rain_was_on, _bow_timer
+    global view_mode, drone_on, drone_auto, _rain_was_on, _bow_timer
     global AE_RANGE
     _cur_shot, _cur_u = sh, 0.0
     time_of_day = sh.tod
@@ -4053,11 +3859,11 @@ def _film_cut(sh, prev):
         wake_teleport()      # or the Kelvin V runs back to the previous act
     if sh.course is not None:
         knob["course"] = float(sh.course)
-    # Per-shot metering. A rainbow is a 3% contrast feature on a bright sky:
+    # Per-shot metering. A rainbow is a low-contrast feature on a bright sky:
     # meter it to 18% grey and it is gone. Printing the shot down a stop is what
     # a photographer does, and it is the only lever -- tone_mapping_exposure is
     # inert while auto exposure is on.
-    AE_RANGE = tuple(sh.ae) if sh.ae else (-2.5, 3.0)
+    AE_RANGE = tuple(sh.ae) if sh.ae else AE_RANGE_DEFAULT
     renderer.set_auto_exposure_range(AE_RANGE[0], AE_RANGE[1])
     if sh.wx is not None:
         set_weather(sh.wx)
@@ -4065,9 +3871,9 @@ def _film_cut(sh, prev):
             weather.update(PRESETS[sh.wx])          # a cut, not a dissolve
             weather["wetness"] = 1.0 if weather["rain"] > 0.5 else 0.0
             # The rainbow is a CONSEQUENCE of rain stopping, and a cut stops the
-            # rain instantly -- which handed the 04:50 dawn a 40 s bow arcing
-            # over the mist because the previous shot had been a thunderstorm.
-            # A cut is not weather: clear the post-rain window with it.
+            # rain instantly -- which would hand a dawn shot a bow arcing over
+            # the mist because the previous shot had been a thunderstorm. A cut
+            # is not weather: clear the post-rain window with it.
             _rain_was_on = weather["rain"] > 0.30
             _bow_timer = 0.0
     if sh.wx_over:
@@ -4096,14 +3902,13 @@ def _film_warm(sh, n, dt):
     """Unrecorded frames after a cut, with the eye allowed to snap.
 
     The slow part of a cut is NOT the temporal history -- TAA/FSR is clean in
-    single digits of frames -- it is AUTO EXPOSURE. At the film's 1.2 EV/s a
-    storm-to-dawn cut can be four seconds of visible brightening, which is 240
-    recorded frames of exposure ramp. So the meter runs at 14 EV/s while the
-    warm-up burns and is put back before the first recorded frame; the shot then
-    opens already metered and still reacts at a cinematic rate to a lightning
-    flash inside it.
+    single digits of frames -- it is AUTO EXPOSURE. At the film's metering
+    speed a storm-to-dawn cut is seconds of visible brightening. So the meter
+    runs fast while the warm-up burns and is put back before the first recorded
+    frame; the shot then opens already metered and still reacts at a cinematic
+    rate to a lightning flash inside it.
     """
-    renderer.set_auto_exposure_speed(14.0)
+    renderer.set_auto_exposure_speed(AE_WARMUP_SPEED)
     # The sensor mode is a STRUCTURAL change (device idle + detector resize +
     # dirty material samplers). Give the cut's own forced env re-bake a few
     # frames to land before adding a second invalidation -- see _film_sensor_mode.
@@ -4115,13 +3920,13 @@ def _film_warm(sh, n, dt):
     for _ in range(mid):
         _film_step(sh, 0.0, 0.0, dt)
     # Latch the DVS reference on an ALREADY-METERED frame. The warm-up runs the
-    # meter at 14 EV/s; a reference taken while it is still snapping makes the
-    # first recorded frames a full-frame flash of the exposure ramp rather than
-    # of the scene. The remaining warm-up frames then build the accumulator.
+    # meter fast; a reference taken while it is still snapping makes the first
+    # recorded frames a full-frame flash of the exposure ramp rather than of
+    # the scene. The remaining warm-up frames then build the accumulator.
     _dvs_reset()
     for _ in range(n - pre - mid):
         _film_step(sh, 0.0, 0.0, dt)
-    renderer.set_auto_exposure_speed(1.2)
+    renderer.set_auto_exposure_speed(AE_SPEED)
     for _ in range(4):                  # 4 frames at the real speed: no snap
         _film_step(sh, 0.0, 0.0, dt)
 
@@ -4133,7 +3938,7 @@ def _film_step(sh, u, t, dt):
     apply_cam(sh, u, t)        # before frame(): the rain field follows the lens
     frame(dt)
     apply_cam(sh, u, t)        # after: the boat has moved, so the framing has
-    sim_tick(dt)               # the sea advances by dt, not by 80 ms of wall
+    sim_tick(dt)               # the sea advances by dt, not by wall time
     if sh.sensor == "depth":
         # ONE render, and the depth comes off THAT frame -- read_aovs_typed
         # drives the frame itself, so the sensor cannot be a frame out of step
@@ -4148,13 +3953,10 @@ def _film_step(sh, u, t, dt):
     else:
         renderer.render(scene, camera)
         _sensor_px = None
-    # THE FILM NEVER SET THIS. `first_render_done` gates the whole buoyancy
-    # block (the CPU height mirror is empty until a Vulkan frame has run), and
-    # only the live window and the `--shot` loop ever raised it -- so every
-    # film rendered up to v3 had a boat pinned at exactly mean water level with
-    # zero heave, pitch or roll while a wave_scale-1.7 sea rolled through her.
-    # That, not only the sim-clock mismatch Phase 4b found, is why the cold open
-    # was underwater.
+    # `first_render_done` gates the whole buoyancy block (the CPU height mirror
+    # is empty until a Vulkan frame has run); without it the boat sits pinned
+    # at mean water level with zero heave, pitch or roll while the sea rolls
+    # through her.
     first_render_done = True
 
 
@@ -4170,16 +3972,6 @@ def _film_step(sh, u, t, dt):
 #  read back as the accumulator image the detector paints. Neither is a filter
 #  on the RGB, and both are the same calls a synthetic-perception dataset job
 #  would make.
-def _film_font(px):
-    from PIL import ImageFont
-    for name in ("segoeui.ttf", "arial.ttf", "DejaVuSans.ttf"):
-        try:
-            return ImageFont.truetype(name, px)
-        except Exception:                            # noqa: BLE001
-            continue
-    return ImageFont.load_default()
-
-
 def _nn_resize(a, h, w):
     """Nearest-neighbour to (h, w). Nearest ON PURPOSE for the event view: a
     resampled DVS frame stops looking like a sensor and starts looking like a
@@ -4226,11 +4018,11 @@ _dvs_acc = None                           # (h, w) signed accumulator, decaying
 def _depth_frame(z):
     """Metric depth (H, W) float32 -> an (H, W, 3) uint8 depth map.
 
-    LOG depth, not inverse depth. The frame spans two decades -- the rig is at
-    8 m and the horizon is at the far plane -- and inverse depth spends 90% of
-    its range inside the first 10 m, which crushes the whole sea into one
-    value. log(z) gives each decade the same number of LUT entries, so the boat
-    has internal structure AND the sea still recedes visibly to the cut-off.
+    LOG depth, not inverse depth. The frame spans two decades -- the rig a few
+    metres away, the horizon at the far plane -- and inverse depth spends most
+    of its range inside the first few metres, which crushes the whole sea into
+    one value. log(z) gives each decade the same number of LUT entries, so the
+    boat has internal structure AND the sea still recedes visibly to the cut-off.
     """
     global _DEPTH_LUT, _LOG_SCALE
     if _DEPTH_LUT is None:
@@ -4240,7 +4032,7 @@ def _depth_frame(z):
     zc = np.clip(np.asarray(z, np.float32), DEPTH_NEAR, DEPTH_FAR)
     # 255 at DEPTH_NEAR down to 0 at DEPTH_FAR (and at the far plane, i.e. sky).
     idx = (255.0 - (np.log(zc) - _LOG_N) * _LOG_SCALE).astype(np.uint8)
-    # Colour-map at the AOV's own resolution (render_scale 0.9, so 24% fewer
+    # Colour-map at the AOV's own resolution (render_scale < 1, so fewer
     # pixels than the frame) and upscale the bytes, not the floats.
     return _nn_resize(_DEPTH_LUT[idx], fh, fw)
 
@@ -4249,16 +4041,15 @@ def _luma_down(px, h, w):
     """Sensor-resolution luma in [0, 1] from the delivered frame.
 
     AREA average, not point sampling: a DVS pixel integrates over its own
-    photodiode, and point-sampling a 1080p frame down to 640x360 would alias
+    photodiode, and point-sampling the frame down to the sensor would alias
     the rigging into a shimmer that fires events every frame from nothing but
     the resampler.
     """
     fh, fw = px.shape[0], px.shape[1]
     if fh % h == 0 and fw % w == 0:
-        # Two contiguous reductions, rows then columns. The one-shot
-        # `reshape(h, ky, w, kx, 3).mean((1, 3))` is the obvious spelling and it
-        # is 2.8x slower (50 ms vs 18 ms at 1080p -> 640x360): the strided
-        # 4-D reduction thrashes, two 1-axis ones do not.
+        # Two contiguous reductions, rows then columns: the one-shot strided
+        # 4-D `reshape(h, ky, w, kx, 3).mean((1, 3))` thrashes, two 1-axis
+        # reductions do not.
         d = px.reshape(h, fh // h, fw, 3).mean(1, dtype=np.float32)
         d = d.reshape(h, w, fw // w, 3).mean(2)
     else:
@@ -4279,28 +4070,24 @@ def _dvs_step(px):
     |d log I| >= C, emit one event per whole multiple of C with
     polarity = sign(d), advance the reference by polarity * C * N, and paint
     the accumulator (+1 / -1) which otherwise decays exponentially. That is
-    the model `helpers/EventCameraSensor.hpp` documents, and it is what the
+    the model the renderer's EventCameraSensor documents, and it is what the
     academic simulators (ESIM and friends) do.
 
     The renderer's GPU detector does exactly this on the GPU, and it has two
-    sources. Its DEFAULT ("shaded") shades a fast DETERMINISTIC PROXY of the
-    raster G-buffer (`event_shade.comp` -- Lambert diffuse from the
-    DIRECTIONAL lights plus ambient and emissive, and nothing else). No
-    specular, no transmission, no point lights, no GI. That is a deliberate
-    sim-to-real choice -- the event stream cannot be contaminated by
-    stochastic shading noise -- but in THIS scene it removes precisely the
-    subjects: the ocean is a transmissive water material whose proxy luma
-    barely moves, so the sea fires nothing; the sails are read by TRANSMITTED
-    light, so only their silhouettes fire; and a lightning point light is
-    invisible to it. The user's verdict on that take was exactly "event
-    camera does not seem to see water or sails" (`--evt-gpu-shaded` shows it).
+    sources. Its "shaded" source shades a fast DETERMINISTIC PROXY of the
+    raster G-buffer (Lambert diffuse from the DIRECTIONAL lights plus ambient
+    and emissive, and nothing else). No specular, no transmission, no point
+    lights, no GI. That is a deliberate sim-to-real choice -- the event stream
+    cannot be contaminated by stochastic shading noise -- but in THIS scene it
+    removes precisely the subjects: the ocean is a transmissive water material
+    whose proxy luma barely moves, so the sea fires nothing; the sails are
+    read by TRANSMITTED light, so only their silhouettes fire; and a lightning
+    point light is invisible to it (`--evt-gpu-shaded` shows it).
 
-    The ask that fell out of that, `event_camera_source = "final"`, now
-    exists: the detector box-averages the PRESENTED frame to the sensor on
-    the GPU and runs the same crossing model on it -- this function, without
-    the read_pixels() round trip (`--evt-gpu`). This numpy path stays as the
-    reference the GPU take is checked against, and as the default until the
-    film has been looked at on the GPU source.
+    Its "final" source box-averages the PRESENTED frame to the sensor on the
+    GPU and runs the same crossing model on it -- this function, without the
+    read_pixels() round trip (`--evt-gpu`). This numpy path is the reference
+    the GPU take is checked against.
     """
     global _dvs_ref, _dvs_acc
     log_i = np.log(np.maximum(_luma_down(px, EVT_H, EVT_W), EVT_MIN_LUMA))
@@ -4342,7 +4129,7 @@ def _caption(text, w, h):
     key = (text, w, h)
     if key not in _caps:
         from PIL import Image, ImageDraw
-        f = _film_font(max(12, int(round(h * 0.0165))))
+        f = load_font(max(12, int(round(h * 0.0165))))
         pad = int(round(h * 0.030))
         im = Image.new("L", (w, h), 0)
         d = ImageDraw.Draw(im)
@@ -4372,12 +4159,12 @@ def _film_sensor_mode(mode):
     """Arm or disarm the renderer's GPU detector (`--evt-gpu` only).
 
     NEVER call this on a cut frame. Enabling marks material samplers dirty and
-    gates TAA jitter off, and `setEventCameraResolution` idles the device to
-    resize the detector images. Phase 4 lost the device outright
-    (`vkDeviceWaitIdle ... failed: -4`) doing two structural invalidations in
-    the same gap as a forced env re-bake, so this runs from inside the warm-up,
-    several frames after the cut, and the detector then has the rest of the
-    warm-up to latch its per-pixel reference (its first frame emits nothing).
+    gates TAA jitter off, and the resolution change idles the device to resize
+    the detector images; two structural invalidations in the same gap as a
+    forced env re-bake can lose the device. So this runs from inside the
+    warm-up, several frames after the cut, and the detector then has the rest
+    of the warm-up to latch its per-pixel reference (its first frame emits
+    nothing).
     """
     global _evt_on
     if not EVT_GPU:
@@ -4403,7 +4190,7 @@ def _endcard(w, h, n):
     img = Image.new("RGB", (w, h), (6, 8, 11))
     d = ImageDraw.Draw(img)
     txt = "threepp  +  warp  +  python"
-    f = _film_font(max(18, int(h * 0.052)))
+    f = load_font(max(18, int(h * 0.052)))
     bb = d.textbbox((0, 0), txt, font=f)
     d.text(((w - (bb[2] - bb[0])) * 0.5, (h - (bb[3] - bb[1])) * 0.5 - bb[1]),
            txt, font=f, fill=(214, 219, 226))
@@ -4442,7 +4229,7 @@ def run_film():
                                 macro_block_size=None,
                                 ffmpeg_params=["-crf", "17", "-pix_fmt", "yuv420p",
                                                "-preset", "slow"])
-    # 16 evenly spaced RECORDED frames make the contact sheet.
+    # Evenly spaced RECORDED frames make the 4x4 contact sheet.
     picks = set(np.linspace(0, total - 1, 16).round().astype(int).tolist()) if CONTACT else set()
     sheet, shape = [], None
 
@@ -4453,7 +4240,7 @@ def run_film():
     t0 = time.perf_counter()
     for _ in range(PREROLL):
         _film_step(shots[0], 0.0, 0.0, dt)
-    renderer.set_auto_exposure_speed(1.2)
+    renderer.set_auto_exposure_speed(AE_SPEED)
     print(f"pre-roll {PREROLL} frames in {time.perf_counter() - t0:.1f} s; "
           f"boat {boat_state['u'] / 0.5144:.1f} kn")
 
@@ -4540,7 +4327,6 @@ def run_film():
 
 def run_warmup_probe():
     """How many frames does a cut actually need? Measure, do not guess."""
-    from PIL import Image                                   # noqa: F401
     dt = 1.0 / FPS
     sh = FILM_SCRIPT[1]                                     # dawn, after a storm
     _film_cut(FILM_SCRIPT[0], None)
@@ -4608,7 +4394,7 @@ elif SHOT:
     FACE = cli_arg("--face", "islet", str)
     # A strike, on the clock, for the headless stress test. `--seq PREFIX`
     # writes the frames either side of it so the envelope can be LOOKED at
-    # rather than asserted: -1 (before), 0 (leader), +2 (peak), +5, +10, +30.
+    # rather than asserted.
     STRIKE_AT = cli_arg("--strike", -1.0, float)
     STRIKE_KIND = cli_arg("--strike-kind", "hero", str)
     STRIKE_BRG = cli_arg("--strike-bearing", 322.0, float)

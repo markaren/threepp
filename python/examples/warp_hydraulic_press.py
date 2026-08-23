@@ -14,9 +14,8 @@ positions and smooth normals once per frame.
 
 The solve is Gauss-Seidel over a greedy graph colouring of the constraints (no
 two constraints in a colour share a vertex, so each colour is one race-free
-launch), with many small substeps -- Jacobi with half-corrections was too soft
-to hold a shell's shape against its own weight. The whole frame
-is captured once into a CUDA graph (~2k launches/frame) and replayed.
+launch), with many small substeps. The whole frame is captured once into a
+CUDA graph and replayed.
 
 Rendered with the Vulkan path so the chrome mirrors the red and green walls and
 the reflections warp across the buckling surface as it goes.
@@ -26,17 +25,16 @@ the reflections warp across the buckling surface as it goes.
     python warp_hydraulic_press.py --shot 7      # headless: sim 7 s, write png
     python warp_hydraulic_press.py --video 9     # headless: 9 s of frames (+mp4 if ffmpeg)
     python warp_hydraulic_press.py --gl          # OpenGL renderer (no mirror reflections)
-    python warp_hydraulic_press.py --size 960x768               # smaller window: the
-                                                 # Vulkan render, not the sim, bounds fps
-    python warp_hydraulic_press.py --subdiv 6 --substeps 160   # finer shell for the video
+    python warp_hydraulic_press.py --size 960x768               # smaller window
+    python warp_hydraulic_press.py --subdiv 6 --substeps 160   # finer shell, more substeps
     python warp_hydraulic_press.py --video 9 --spin 0.1        # turntable: orbit 0.1 deg/frame
-    python warp_hydraulic_press.py --shot 1 --freeze --spin 1.5 --angle -45   # renderer A/B: no sim,
-                                                 # fast orbit INTO the saved frame (vs --angle 45 static)
+    python warp_hydraulic_press.py --shot 1 --freeze --spin 1.5 --angle -45   # no sim: camera only
 
 Warp falls back to CPU if no CUDA device is present -- slower, same picture.
 """
 import math
 import os
+import subprocess
 import sys
 import tempfile
 import time
@@ -48,27 +46,21 @@ import numpy as np
 import warp as wp
 
 import threepp as tp
-
-
-def cli_arg(flag, default, cast):
-    if flag in sys.argv:
-        k = sys.argv.index(flag)
-        if k + 1 < len(sys.argv) and not sys.argv[k + 1].startswith("--"):
-            return cast(sys.argv[k + 1])
-    return default
-
+from warp_common import (accum_normals, cli_arg, find_ffmpeg, icosphere, integrate,
+                         orbit_loop, parse_size, scatter_soup, standard_material)
 
 SHOT = "--shot" in sys.argv
 SHOT_T = cli_arg("--shot", 7.0, float)
-VIDEO = cli_arg("--video", 0.0, float)      # seconds; 9 covers the whole stroke
+VIDEO = cli_arg("--video", 0.0, float)      # seconds of frames to render
 GL = "--gl" in sys.argv
-SUBDIV = cli_arg("--subdiv", 5, int)       # 5: 10242 verts/skin; 6 for the video
+SUBDIV = cli_arg("--subdiv", 5, int)       # icosphere subdivisions per skin
 
 # --- tunables ---------------------------------------------------------------
 
 RADIUS = 0.6
-SUBSTEPS = cli_arg("--substeps", 96, int)  # small steps beat sweeps: 96x1 converges
-                                           # better than 48x8 at a third of the launches
+SUBSTEPS = cli_arg("--substeps", 96, int)  # many small steps with one sweep each
+                                           # converge better than fewer steps
+                                           # with more sweeps
 DT = 1.0 / (60.0 * SUBSTEPS)
 ITERATIONS = cli_arg("--iters", 1, int)    # Gauss-Seidel sweeps per substep
 DAMPING = 0.002              # per substep
@@ -85,7 +77,7 @@ YIELD_DIAG = cli_arg("--ydiag", 0.01, float)
 YIELD_RAD = 0.06
 PLASTIC_RATE = cli_arg("--plastic", 0.04, float)   # excess adopted per substep
 MU = 0.4                     # friction against floor and plate
-GRAVITY = cli_arg("--gravity", 9.81, float)
+GRAVITY = wp.vec3(0.0, -cli_arg("--gravity", 9.81, float), 0.0)
 
 ROOM = 3.2                   # Cornell box side
 BED_T = 0.12                 # press bed (anvil) thickness; the sphere sits on it
@@ -121,17 +113,6 @@ def collide(p: wp.vec3, plate_y: float) -> wp.vec3:
     if p[1] > plate_y and p[0] * p[0] + p[2] * p[2] < PLATE_R * PLATE_R:
         p = wp.vec3(p[0], plate_y, p[2])
     return p
-
-
-@wp.kernel
-def integrate(x: wp.array(dtype=wp.vec3),
-              prev: wp.array(dtype=wp.vec3),
-              dt: float):
-    i = wp.tid()
-    p = x[i]
-    v = (p - prev[i]) * (1.0 - DAMPING)
-    prev[i] = p
-    x[i] = p + v + wp.vec3(0.0, -GRAVITY, 0.0) * dt * dt
 
 
 @wp.kernel
@@ -196,73 +177,10 @@ def contacts(pos: wp.array(dtype=wp.vec3),
     pos[i] = p
 
 
-@wp.kernel
-def clear_vec3(a: wp.array(dtype=wp.vec3)):
-    a[wp.tid()] = wp.vec3(0.0, 0.0, 0.0)
-
-
-@wp.kernel
-def accum_normals(pos: wp.array(dtype=wp.vec3),
-                  tris: wp.array(dtype=int),
-                  nrm: wp.array(dtype=wp.vec3)):
-    f = wp.tid()
-    ia, ib, ic = tris[f * 3], tris[f * 3 + 1], tris[f * 3 + 2]
-    n = wp.cross(pos[ib] - pos[ia], pos[ic] - pos[ia])  # area-weighted
-    wp.atomic_add(nrm, ia, n)
-    wp.atomic_add(nrm, ib, n)
-    wp.atomic_add(nrm, ic, n)
-
-
-@wp.kernel
-def scatter(pos: wp.array(dtype=wp.vec3),
-            nrm: wp.array(dtype=wp.vec3),
-            tris: wp.array(dtype=int),
-            out_pos: wp.array(dtype=wp.vec3),
-            out_nrm: wp.array(dtype=wp.vec3)):
-    k = wp.tid()
-    i = tris[k]
-    out_pos[k] = pos[i]
-    n = nrm[i]
-    out_nrm[k] = n / wp.max(wp.length(n), 1.0e-9)
-
-
 # --- mesh construction (numpy, once) ----------------------------------------
-
-def icosphere(subdiv):
-    t = (1.0 + 5.0 ** 0.5) / 2.0
-    verts = [(-1, t, 0), (1, t, 0), (-1, -t, 0), (1, -t, 0),
-             (0, -1, t), (0, 1, t), (0, -1, -t), (0, 1, -t),
-             (t, 0, -1), (t, 0, 1), (-t, 0, -1), (-t, 0, 1)]
-    faces = [(0, 11, 5), (0, 5, 1), (0, 1, 7), (0, 7, 10), (0, 10, 11),
-             (1, 5, 9), (5, 11, 4), (11, 10, 2), (10, 7, 6), (7, 1, 8),
-             (3, 9, 4), (3, 4, 2), (3, 2, 6), (3, 6, 8), (3, 8, 9),
-             (4, 9, 5), (2, 4, 11), (6, 2, 10), (8, 6, 7), (9, 8, 1)]
-    verts = [np.array(v, dtype=np.float64) / np.linalg.norm(v) for v in verts]
-    for _ in range(subdiv):
-        cache, new_faces = {}, []
-
-        def midpoint(i, j):
-            key = (min(i, j), max(i, j))
-            if key not in cache:
-                m = verts[i] + verts[j]
-                verts.append(m / np.linalg.norm(m))
-                cache[key] = len(verts) - 1
-            return cache[key]
-
-        for a, b, c in faces:
-            ab, bc, ca = midpoint(a, b), midpoint(b, c), midpoint(c, a)
-            new_faces += [(a, ab, ca), (b, bc, ab), (c, ca, bc), (ab, bc, ca)]
-        faces = new_faces
-    return np.array(verts, dtype=np.float32), np.array(faces, dtype=np.int32)
-
 
 verts0, faces = icosphere(SUBDIV)
 p0 = verts0 * RADIUS
-
-# Outward winding so the accumulated normals point out.
-a, b, c = p0[faces[:, 0]], p0[faces[:, 1]], p0[faces[:, 2]]
-if float(np.einsum("ij,ij->i", a, np.cross(b, c)).sum()) < 0.0:
-    faces = faces[:, ::-1].copy()
 
 # Two skins: outer at RADIUS, inner at RADIUS - THICK, same connectivity.
 # Vertices 0..N-1 are the outer skin (the rendered one), N..2N-1 the inner.
@@ -291,8 +209,8 @@ n_cons = len(cons)
 
 # Greedy graph colouring: a constraint takes the lowest colour not yet used
 # by any constraint at either of its vertices. Per-vertex bitmask of colours.
-# Colouring class by class (skins, then diagonals, then radials) lands on 16
-# colours where the interleaved order needs 18; fewer colours = fewer launches.
+# Colouring class by class (skins, then diagonals, then radials) needs fewer
+# colours than the interleaved order, and fewer colours is fewer launches.
 cons.sort(key=lambda c: (0 if (c[0] < N) == (c[1] < N) else
                          (2 if abs(c[0] - c[1]) == N else 1)))
 used = [0] * n_verts
@@ -348,7 +266,9 @@ prof = {"sim": 0.0, "copy": 0.0, "render": 0.0, "n": 0}
 def frame_launches():
     """Every launch of one 60 fps frame; captured into a CUDA graph below."""
     for s in range(SUBSTEPS):
-        wp.launch(integrate, dim=n_verts, device=device, inputs=[x, prev, DT])
+        # Integrate in place: the Gauss-Seidel sweeps write pos directly.
+        wp.launch(integrate, dim=n_verts, device=device,
+                  inputs=[x, prev, x, DT, DAMPING, GRAVITY])
         for _ in range(ITERATIONS):
             for c in range(n_colors):
                 wp.launch(solve_color, dim=int(color_count[c]), device=device,
@@ -357,9 +277,9 @@ def frame_launches():
         wp.launch(contacts, dim=n_verts, device=device, inputs=[x, prev, plate_ys, s])
         wp.launch(plastic, dim=n_cons, device=device,
                   inputs=[x, ci, cj, rests, yields, PLASTIC_RATE])
-    wp.launch(clear_vec3, dim=n_verts, device=device, inputs=[nrm])
+    nrm.zero_()
     wp.launch(accum_normals, dim=len(faces), device=device, inputs=[x, tris, nrm])
-    wp.launch(scatter, dim=n_corners, device=device,
+    wp.launch(scatter_soup, dim=n_corners, device=device,
               inputs=[x, nrm, tris, soup_pos, soup_nrm])
 
 
@@ -403,7 +323,7 @@ if not GL and not VULKAN:
     print("vulkan not available on this machine; falling back to OpenGL")
 
 headless = SHOT or VIDEO > 0
-W, H = (int(v) for v in cli_arg("--size", "1280x1024", str).lower().split("x"))
+W, H = parse_size(cli_arg("--size", "1280x1024", str))
 canvas = tp.Canvas("threepp x warp - hydraulic press", width=W, height=H,
                    antialiasing=4, vsync=False, headless=headless)
 if VULKAN:
@@ -434,11 +354,7 @@ orbit(0)
 
 
 def wall(color, roughness=0.95):
-    m = tp.MeshStandardMaterial()
-    m.color = color
-    m.roughness = roughness
-    m.metalness = 0.0
-    return m
+    return standard_material(color, roughness)
 
 
 S = ROOM
@@ -469,12 +385,9 @@ scene.add(right)
 
 # Emissive ceiling panel: the area light. On Vulkan it is the light source
 # (NEE samples it); GL gets a point light in the same place as a stand-in.
-panel_mat = tp.MeshStandardMaterial()
-panel_mat.color = 0xffffff
-panel_mat.emissive = tp.Color(1.0, 1.0, 1.0)
-panel_mat.emissive_intensity = 18.0
-panel_mat.roughness = 1.0
-panel = tp.Mesh(tp.PlaneGeometry(0.5 * S, 0.5 * S), panel_mat)
+panel = tp.Mesh(tp.PlaneGeometry(0.5 * S, 0.5 * S),
+                standard_material(0xffffff, 1.0, emissive=tp.Color(1.0, 1.0, 1.0),
+                                  emissive_intensity=18.0))
 panel.rotation.x = math.pi / 2
 panel.position.set(0.0, S - 0.01, 0.0)
 scene.add(panel)
@@ -490,11 +403,7 @@ if not VULKAN:
 geometry = tp.BufferGeometry()
 geometry.set_attribute("position", p0[faces.reshape(-1)])
 geometry.set_attribute("normal", verts0[faces.reshape(-1)])
-chrome = tp.MeshStandardMaterial()
-chrome.color = tp.Color(0.97, 0.97, 0.97)
-chrome.roughness = 0.03
-chrome.metalness = 1.0
-ball = tp.Mesh(geometry, chrome)
+ball = tp.Mesh(geometry, standard_material(tp.Color(0.97, 0.97, 0.97), 0.03, 1.0))
 ball.cast_shadow = True
 ball.frustum_culled = False     # positions change under the renderer's feet
 scene.add(ball)
@@ -502,14 +411,8 @@ scene.add(ball)
 # The press. An H-frame shop press: bed plate the sphere sits on, two
 # uprights, a crossbeam carrying the hydraulic cylinder, and the ram
 # telescoping out of a sleeve under it. Painted frame, bare-steel tooling.
-paint = tp.MeshStandardMaterial()
-paint.color = tp.Color(0.30, 0.32, 0.36)
-paint.roughness = 0.45
-paint.metalness = 0.5
-steel = tp.MeshStandardMaterial()
-steel.color = tp.Color(0.22, 0.23, 0.25)
-steel.roughness = 0.38
-steel.metalness = 1.0
+paint = standard_material(tp.Color(0.30, 0.32, 0.36), 0.45, 0.5)
+steel = standard_material(tp.Color(0.22, 0.23, 0.25), 0.38, 1.0)
 
 
 def part(geom, mat, y, x=0.0, z=0.0):
@@ -547,7 +450,7 @@ def save(path):
 if SHOT:
     frames = int(round(SHOT_T * 60))
     t0 = time.perf_counter()
-    FREEZE = "--freeze" in sys.argv   # no sim: isolate renderer behaviour
+    FREEZE = "--freeze" in sys.argv   # no sim; camera only
     for f in range(frames):
         orbit(f)
         if not FREEZE:
@@ -565,7 +468,7 @@ if SHOT:
         for _ in range(24):
             renderer.render(scene, camera)
     else:
-        orbit(frames)                    # keep moving INTO the saved frame
+        orbit(frames)                    # keep moving into the saved frame
     out = cli_arg("--out", "warp_hydraulic_press.png", str)
     save(out)
     print(f"simulated {SHOT_T:.1f} s ({frames} frames) in "
@@ -574,8 +477,6 @@ if SHOT:
     print(f"  per frame: sim {1e3 * prof['sim'] / n:.1f} ms, copy "
           f"{1e3 * prof['copy'] / n:.1f} ms, render {1e3 * prof['render'] / n:.1f} ms")
 elif VIDEO > 0:
-    import shutil
-    import subprocess as _sp
     outdir = tempfile.mkdtemp(prefix="warp_press_frames_")
     total = int(round(VIDEO * 60))
     t0 = time.perf_counter()
@@ -589,34 +490,12 @@ elif VIDEO > 0:
             print(f"  frame {k}/{total}  ({time.perf_counter() - t0:.0f}s elapsed)",
                   flush=True)
     print(f"rendered {total} frames in {time.perf_counter() - t0:.0f}s -> {outdir}")
-    ff = shutil.which("ffmpeg")
-    if not ff:
-        try:                             # pip install imageio-ffmpeg: bundled binary
-            import imageio_ffmpeg
-            ff = imageio_ffmpeg.get_ffmpeg_exe()
-        except ImportError:
-            pass
+    ff = find_ffmpeg()
     if ff:
-        _sp.run([ff, "-y", "-loglevel", "error", "-framerate", "60",
-                 "-i", os.path.join(outdir, "f%05d.png"),
-                 "-c:v", "libx264", "-pix_fmt", "yuv420p", "-crf", "17",
-                 "warp_hydraulic_press.mp4"], check=False)
+        subprocess.run([ff, "-y", "-loglevel", "error", "-framerate", "60",
+                        "-i", os.path.join(outdir, "f%05d.png"),
+                        "-c:v", "libx264", "-pix_fmt", "yuv420p", "-crf", "17",
+                        "warp_hydraulic_press.mp4"], check=False)
         print("wrote warp_hydraulic_press.mp4")
 else:
-    controls = tp.OrbitControls(camera, canvas)
-    controls.target.set(0.0, 1.0, 0.0)
-    controls.enable_damping = True
-
-    def on_resize(w, h):
-        camera.aspect = w / max(h, 1)
-        camera.update_projection_matrix()
-        renderer.set_size(w, h)
-
-    canvas.on_window_resize(on_resize)
-
-    def animate():
-        step_frame()
-        controls.update()
-        renderer.render(scene, camera)
-
-    canvas.animate(animate)
+    orbit_loop(canvas, renderer, scene, camera, step_frame, target=(0.0, 1.0, 0.0))

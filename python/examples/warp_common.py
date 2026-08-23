@@ -1,0 +1,536 @@
+"""What the warp_*.py examples share.
+
+Each example is a self-contained demo of one thing: a cloth, a pressurised
+shell, a fluid, a sail. The pieces that are the same in every one of them --
+command-line parsing, the icosphere and its constraint tables, the Verlet
+predict / volume / normal kernels, the particles-to-marching-cubes surfacing,
+the standard studio lighting, and the window / headless-shot / benchmark run
+loops -- live here so the examples can be read for the physics alone.
+
+Nothing here reads the command line on its own; the examples decide their
+flags and pass values in.
+"""
+import math
+import os
+import shutil
+import sys
+import time
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+import numpy as np
+import warp as wp
+
+import threepp as tp
+
+# --- command line --------------------------------------------------------------
+
+
+def cli_arg(flag, default, cast):
+    """`--flag value` from sys.argv, or `default`. A bare flag also yields default."""
+    if flag in sys.argv:
+        k = sys.argv.index(flag)
+        if k + 1 < len(sys.argv) and not sys.argv[k + 1].startswith("--"):
+            return cast(sys.argv[k + 1])
+    return default
+
+
+def parse_size(text):
+    """'1280x720' -> (1280, 720)."""
+    w, h = text.lower().split("x")
+    return int(w), int(h)
+
+
+def find_ffmpeg():
+    """The ffmpeg binary on PATH, or imageio-ffmpeg's bundled one, or None."""
+    ff = shutil.which("ffmpeg")
+    if ff:
+        return ff
+    try:
+        import imageio_ffmpeg
+        return imageio_ffmpeg.get_ffmpeg_exe()
+    except Exception:                      # noqa: BLE001 - optional dependency
+        return None
+
+
+def load_font(px):
+    """A PIL truetype font at `px` pixels, falling back to PIL's default."""
+    from PIL import ImageFont
+    for name in ("segoeui.ttf", "arial.ttf", "DejaVuSans.ttf"):
+        try:
+            return ImageFont.truetype(name, px)
+        except Exception:                  # noqa: BLE001 - try the next face
+            continue
+    return ImageFont.load_default()
+
+
+# --- meshes (numpy, once) ------------------------------------------------------
+
+
+def icosphere(subdiv):
+    """Unit icosphere: (verts (N, 3) float32, faces (F, 3) int32), wound outward."""
+    t = (1.0 + 5.0 ** 0.5) / 2.0
+    verts = [(-1, t, 0), (1, t, 0), (-1, -t, 0), (1, -t, 0),
+             (0, -1, t), (0, 1, t), (0, -1, -t), (0, 1, -t),
+             (t, 0, -1), (t, 0, 1), (-t, 0, -1), (-t, 0, 1)]
+    faces = [(0, 11, 5), (0, 5, 1), (0, 1, 7), (0, 7, 10), (0, 10, 11),
+             (1, 5, 9), (5, 11, 4), (11, 10, 2), (10, 7, 6), (7, 1, 8),
+             (3, 9, 4), (3, 4, 2), (3, 2, 6), (3, 6, 8), (3, 8, 9),
+             (4, 9, 5), (2, 4, 11), (6, 2, 10), (8, 6, 7), (9, 8, 1)]
+    verts = [np.array(v, dtype=np.float64) / np.linalg.norm(v) for v in verts]
+    for _ in range(subdiv):
+        cache, new_faces = {}, []
+
+        def midpoint(i, j):
+            key = (min(i, j), max(i, j))
+            if key not in cache:
+                m = verts[i] + verts[j]
+                verts.append(m / np.linalg.norm(m))
+                cache[key] = len(verts) - 1
+            return cache[key]
+
+        for a, b, c in faces:
+            ab, bc, ca = midpoint(a, b), midpoint(b, c), midpoint(c, a)
+            new_faces += [(a, ab, ca), (b, bc, ab), (c, ca, bc), (ab, bc, ca)]
+        faces = new_faces
+    verts = np.array(verts, dtype=np.float32)
+    faces = np.array(faces, dtype=np.int32)
+    # Outward winding, so accumulated normals and the pressure gradient point out.
+    if signed_volume(verts, faces) < 0.0:
+        faces = faces[:, ::-1].copy()
+    return verts, faces
+
+
+def signed_volume(pos, faces):
+    """Signed volume enclosed by a closed triangle mesh (positive = outward winding)."""
+    a, b, c = pos[faces[:, 0]], pos[faces[:, 1]], pos[faces[:, 2]]
+    return float(np.einsum("ij,ij->i", a, np.cross(b, c)).sum() / 6.0)
+
+
+def edge_adjacency(faces):
+    """Per undirected edge (i, j) with i < j: the faces that own it and the
+    opposite vertex in each. Returns (edge_faces, edge_opp), both dicts of lists
+    in the same order."""
+    edge_faces, edge_opp = {}, {}
+    for fi, (fa, fb, fc) in enumerate(faces):
+        for i, j, k in ((fa, fb, fc), (fb, fc, fa), (fc, fa, fb)):
+            key = (min(i, j), max(i, j))
+            edge_faces.setdefault(key, []).append(fi)
+            edge_opp.setdefault(key, []).append(k)
+    return edge_faces, edge_opp
+
+
+def shell_pairs(faces, stiff_edge, stiff_bend):
+    """Distance constraints for a closed triangle shell.
+
+    Every mesh edge is a stretch constraint; for every interior edge, the two
+    opposite vertices of its triangles form a (weaker) bending constraint.
+    Returns a list of (i, j, stiffness, kind, face_a, face_b) with kind 0 for
+    an edge and 1 for a bend pair, and face_a/face_b the two owning faces.
+    """
+    edge_faces, edge_opp = edge_adjacency(faces)
+    pairs = []
+    for key, owners in edge_faces.items():
+        i, j = key
+        fa, fb = owners[0], owners[-1]
+        pairs.append((i, j, stiff_edge, 0, fa, fb))
+        opp = edge_opp[key]
+        if len(opp) == 2:
+            pairs.append((min(opp), max(opp), stiff_bend, 1, fa, fb))
+    return pairs
+
+
+def csr_from_pairs(n_verts, pairs, rest_pos, extra_rows=0):
+    """Symmetric CSR adjacency from (i, j, stiffness, ...) pairs.
+
+    Returns (offsets, indices, rests, stiffs, pair_ids) as numpy arrays; row i
+    lists every partner of vertex i with the rest length measured on rest_pos,
+    the pair's stiffness and its index into `pairs`. `extra_rows` appends that
+    many empty rows (for sentinel vertices).
+    """
+    neighbors = [[] for _ in range(n_verts)]
+    for pid, p in enumerate(pairs):
+        i, j, s = p[0], p[1], p[2]
+        rest = float(np.linalg.norm(rest_pos[i] - rest_pos[j]))
+        neighbors[i].append((j, rest, s, pid))
+        neighbors[j].append((i, rest, s, pid))
+    offsets = np.zeros(n_verts + 1 + extra_rows, dtype=np.int32)
+    idx, rest, stiff, pid = [], [], [], []
+    for i, ns in enumerate(neighbors):
+        offsets[i + 1] = offsets[i] + len(ns)
+        for j, r, s, p in ns:
+            idx.append(j)
+            rest.append(r)
+            stiff.append(s)
+            pid.append(p)
+    offsets[n_verts + 1:] = offsets[n_verts]
+    return (offsets, np.array(idx, dtype=np.int32), np.array(rest, dtype=np.float32),
+            np.array(stiff, dtype=np.float32), np.array(pid, dtype=np.int32))
+
+
+# --- warp kernels: particles, shells ------------------------------------------
+
+
+@wp.kernel
+def integrate(x: wp.array(dtype=wp.vec3),
+              prev: wp.array(dtype=wp.vec3),
+              pred: wp.array(dtype=wp.vec3),
+              dt: float, damping: float, gravity: wp.vec3):
+    """Verlet predict: pred = x + damped velocity + gravity. pred may alias x."""
+    i = wp.tid()
+    p = x[i]
+    v = (p - prev[i]) * (1.0 - damping)
+    prev[i] = p
+    pred[i] = p + v + gravity * dt * dt
+
+
+@wp.kernel
+def volume_grad(pos: wp.array(dtype=wp.vec3),
+                tris: wp.array(dtype=int),
+                faces_per_body: int,
+                vol: wp.array(dtype=float),
+                grad: wp.array(dtype=wp.vec3)):
+    """Signed volume of each closed body and its gradient at every vertex."""
+    f = wp.tid()
+    ia, ib, ic = tris[f * 3], tris[f * 3 + 1], tris[f * 3 + 2]
+    a, b, c = pos[ia], pos[ib], pos[ic]
+    wp.atomic_add(vol, f // faces_per_body, wp.dot(a, wp.cross(b, c)) / 6.0)
+    wp.atomic_add(grad, ia, wp.cross(b, c) / 6.0)
+    wp.atomic_add(grad, ib, wp.cross(c, a) / 6.0)
+    wp.atomic_add(grad, ic, wp.cross(a, b) / 6.0)
+
+
+@wp.kernel
+def grad_sumsq(grad: wp.array(dtype=wp.vec3),
+               verts_per_body: int,
+               out: wp.array(dtype=float)):
+    i = wp.tid()
+    wp.atomic_add(out, i // verts_per_body, wp.dot(grad[i], grad[i]))
+
+
+@wp.kernel
+def volume_apply(pos: wp.array(dtype=wp.vec3),
+                 grad: wp.array(dtype=wp.vec3),
+                 vol: wp.array(dtype=float),
+                 sumsq: wp.array(dtype=float),
+                 v_target: wp.array(dtype=float),
+                 verts_per_body: int):
+    """One global volume constraint per body, acting as internal pressure."""
+    i = wp.tid()
+    body = i // verts_per_body
+    lam = (v_target[body] - vol[body]) / (sumsq[body] + 1.0e-9)
+    pos[i] = pos[i] + grad[i] * lam
+
+
+@wp.kernel
+def accum_normals(pos: wp.array(dtype=wp.vec3),
+                  tris: wp.array(dtype=int),
+                  nrm: wp.array(dtype=wp.vec3)):
+    """Area-weighted face normals summed onto the vertices (zero nrm first)."""
+    f = wp.tid()
+    ia, ib, ic = tris[f * 3], tris[f * 3 + 1], tris[f * 3 + 2]
+    n = wp.cross(pos[ib] - pos[ia], pos[ic] - pos[ia])
+    wp.atomic_add(nrm, ia, n)
+    wp.atomic_add(nrm, ib, n)
+    wp.atomic_add(nrm, ic, n)
+
+
+@wp.kernel
+def scatter_soup(pos: wp.array(dtype=wp.vec3),
+                 nrm: wp.array(dtype=wp.vec3),
+                 tris: wp.array(dtype=int),
+                 out_pos: wp.array(dtype=wp.vec3),
+                 out_nrm: wp.array(dtype=wp.vec3)):
+    """De-index into a triangle soup: per-corner positions and smooth normals."""
+    k = wp.tid()
+    i = tris[k]
+    out_pos[k] = pos[i]
+    n = nrm[i]
+    out_nrm[k] = n / wp.max(wp.length(n), 1.0e-9)
+
+
+# --- warp: particles -> density grid -> marching cubes ------------------------
+
+
+@wp.func
+def _sample(field: wp.array3d(dtype=float), gx: float, gy: float, gz: float,
+            nx: int, ny: int, nz: int) -> float:
+    i = int(wp.floor(gx))
+    j = int(wp.floor(gy))
+    k = int(wp.floor(gz))
+    if i < 0 or j < 0 or k < 0 or i > nx - 2 or j > ny - 2 or k > nz - 2:
+        return 0.0
+    fx = gx - float(i)
+    fy = gy - float(j)
+    fz = gz - float(k)
+    c00 = field[i, j, k] * (1.0 - fx) + field[i + 1, j, k] * fx
+    c10 = field[i, j + 1, k] * (1.0 - fx) + field[i + 1, j + 1, k] * fx
+    c01 = field[i, j, k + 1] * (1.0 - fx) + field[i + 1, j, k + 1] * fx
+    c11 = field[i, j + 1, k + 1] * (1.0 - fx) + field[i + 1, j + 1, k + 1] * fx
+    a = c00 * (1.0 - fy) + c10 * fy
+    b = c01 * (1.0 - fy) + c11 * fy
+    return a * (1.0 - fz) + b * fz
+
+
+@wp.kernel
+def _splat(x: wp.array(dtype=wp.vec3), field: wp.array3d(dtype=float),
+           origin: wp.vec3, inv_cell: float, nx: int, ny: int, nz: int):
+    # Trilinear deposit: one unit of density spread over the 8 cell corners.
+    t = wp.tid()
+    p = x[t]
+    gx = (p[0] - origin[0]) * inv_cell
+    gy = (p[1] - origin[1]) * inv_cell
+    gz = (p[2] - origin[2]) * inv_cell
+    i = int(wp.floor(gx))
+    j = int(wp.floor(gy))
+    k = int(wp.floor(gz))
+    if i < 0 or j < 0 or k < 0 or i > nx - 2 or j > ny - 2 or k > nz - 2:
+        return
+    fx = gx - float(i)
+    fy = gy - float(j)
+    fz = gz - float(k)
+    for a in range(2):
+        wa = wp.where(a == 0, 1.0 - fx, fx)
+        for b in range(2):
+            wb = wp.where(b == 0, 1.0 - fy, fy)
+            for c in range(2):
+                wc = wp.where(c == 0, 1.0 - fz, fz)
+                wp.atomic_add(field, i + a, j + b, k + c, wa * wb * wc)
+
+
+@wp.kernel
+def _blur_axis(src: wp.array3d(dtype=float), dst: wp.array3d(dtype=float),
+               axis: int, w: float, nx: int, ny: int, nz: int):
+    # 3-tap [w, 1-2w, w] along one axis, edge-clamped. w = 0.25 is the binomial
+    # kernel and removes grid-aligned noise exactly; smaller w keeps thin
+    # sheets alive.
+    i, j, k = wp.tid()
+    di = wp.where(axis == 0, 1, 0)
+    dj = wp.where(axis == 1, 1, 0)
+    dk = wp.where(axis == 2, 1, 0)
+    im = wp.max(i - di, 0)
+    jm = wp.max(j - dj, 0)
+    km = wp.max(k - dk, 0)
+    ip = wp.min(i + di, nx - 1)
+    jp = wp.min(j + dj, ny - 1)
+    kp = wp.min(k + dk, nz - 1)
+    dst[i, j, k] = w * src[im, jm, km] + (1.0 - 2.0 * w) * src[i, j, k] + w * src[ip, jp, kp]
+
+
+@wp.kernel
+def _expand(verts: wp.array(dtype=wp.vec3),
+            indices: wp.array(dtype=wp.int32),
+            field: wp.array3d(dtype=float),
+            ntris: int,
+            origin: wp.vec3, inv_cell: float, nx: int, ny: int, nz: int,
+            out_pos: wp.array(dtype=wp.vec3),
+            out_nrm: wp.array(dtype=wp.vec3)):
+    # De-index into a triangle soup with a smooth normal per corner from the
+    # density gradient (a lit mesh with no normals renders black). Triangles
+    # past ntris collapse to an off-screen point.
+    t = wp.tid()
+    if t >= ntris:
+        for c in range(3):
+            out_pos[t * 3 + c] = wp.vec3(0.0, -50.0, 0.0)
+            out_nrm[t * 3 + c] = wp.vec3(0.0, 1.0, 0.0)
+        return
+    for c in range(3):
+        p = verts[indices[t * 3 + c]]
+        gx = (p[0] - origin[0]) * inv_cell
+        gy = (p[1] - origin[1]) * inv_cell
+        gz = (p[2] - origin[2]) * inv_cell
+        g = wp.vec3(_sample(field, gx + 1.0, gy, gz, nx, ny, nz)
+                    - _sample(field, gx - 1.0, gy, gz, nx, ny, nz),
+                    _sample(field, gx, gy + 1.0, gz, nx, ny, nz)
+                    - _sample(field, gx, gy - 1.0, gz, nx, ny, nz),
+                    _sample(field, gx, gy, gz + 1.0, nx, ny, nz)
+                    - _sample(field, gx, gy, gz - 1.0, nx, ny, nz))
+        l = wp.length(g)
+        # Density rises inward, so the outward surface normal is -grad.
+        n = wp.where(l > 1.0e-9, g * (-1.0 / l), wp.vec3(0.0, 1.0, 0.0))
+        out_pos[t * 3 + c] = p
+        out_nrm[t * 3 + c] = n
+
+
+class DensitySurface:
+    """Particles -> blurred density grid -> marching cubes -> triangle soup.
+
+    `origin` is the grid's lower corner, `cell` its spacing, `dims` its node
+    counts. build() returns the unclamped triangle count; expand() writes
+    `ntris` de-indexed triangles with gradient normals into two (3*ntris,)
+    vec3 arrays -- host staging buffers or the renderer's own mapped ones.
+    """
+
+    def __init__(self, origin, cell, dims, device, blur=(0.25, 0.125)):
+        self.origin = wp.vec3(*origin)
+        self.inv_cell = 1.0 / cell
+        self.dims = tuple(int(d) for d in dims)
+        self.blur = tuple(blur)
+        self.device = device
+        self.field = wp.zeros(self.dims, dtype=float, device=device)
+        self._scratch = wp.zeros(self.dims, dtype=float, device=device)
+        nx, ny, nz = self.dims
+        self.mc = wp.MarchingCubes(
+            nx, ny, nz,
+            domain_bounds_lower_corner=self.origin,
+            domain_bounds_upper_corner=wp.vec3(origin[0] + (nx - 1) * cell,
+                                               origin[1] + (ny - 1) * cell,
+                                               origin[2] + (nz - 1) * cell))
+
+    @property
+    def verts(self):
+        return self.mc.verts
+
+    @property
+    def indices(self):
+        return self.mc.indices
+
+    def build(self, x, n, iso):
+        """Splat `n` particles, blur, surface at `iso`; returns the triangle count."""
+        nx, ny, nz = self.dims
+        self.field.zero_()
+        wp.launch(_splat, dim=n, device=self.device,
+                  inputs=[x, self.field, self.origin, self.inv_cell, nx, ny, nz])
+        # Ping-pong between the two grids; one pass per axis per blur weight.
+        # An even number of passes lands the result back in self.field.
+        a, b = self.field, self._scratch
+        for w in self.blur:
+            for axis in range(3):
+                wp.launch(_blur_axis, dim=self.dims, device=self.device,
+                          inputs=[a, b, axis, w, nx, ny, nz])
+                a, b = b, a
+        if a is not self.field:
+            wp.copy(self.field, a)
+        self.mc.surface(self.field, iso)
+        return self.mc.indices.shape[0] // 3
+
+    def expand(self, ntris, out_pos, out_nrm, dim=None):
+        """De-index `ntris` triangles into out_pos/out_nrm. `dim` overrides the
+        launch size to also collapse the rows past ntris."""
+        nx, ny, nz = self.dims
+        wp.launch(_expand, dim=ntris if dim is None else dim, device=self.device,
+                  inputs=[self.mc.verts, self.mc.indices, self.field, ntris,
+                          self.origin, self.inv_cell, nx, ny, nz, out_pos, out_nrm])
+
+
+def pbf_constants(d, h, mass, s_corr_dq, s_corr_n):
+    """Position Based Fluids constants measured from the rest lattice.
+
+    The SPH kernels carry a 1/h^9 scale, so published constants do not
+    transfer between resolutions; everything is derived from a cubic lattice
+    at spacing `d` instead. Returns a dict with poly6, spiky, rho0, w_dq,
+    sum_grad2 (the rest gradient energy), eps_cfm and s_corr_k.
+    """
+    poly6 = 315.0 / (64.0 * math.pi * h ** 9)
+    spiky = -45.0 / (math.pi * h ** 6)
+    reach = int(math.ceil(h / d)) + 1
+    off = np.arange(-reach, reach + 1) * d
+    gx, gy, gz = np.meshgrid(off, off, off, indexing="ij")
+    r2 = (gx ** 2 + gy ** 2 + gz ** 2).ravel()
+    r2 = r2[r2 < h * h]
+    rho0 = float(mass * (poly6 * np.maximum(h * h - r2, 0.0) ** 3).sum())
+    w_dq = float(poly6 * (h * h - s_corr_dq ** 2) ** 3)
+    r = np.sqrt(r2[r2 > 1e-12])
+    g = (mass / rho0) * abs(spiky) * (h - r) ** 2
+    sum_grad2 = float((g ** 2).sum())
+    # Soften lambda by a fraction of the rest gradient energy, and size the
+    # artificial pressure against lambda at a typical compression.
+    eps_cfm = 0.05 * sum_grad2
+    ratio_typ = (poly6 * (h * h - d * d) ** 3) / w_dq
+    s_corr_k = 0.30 * (0.10 / sum_grad2) / ratio_typ ** s_corr_n
+    return dict(poly6=poly6, spiky=spiky, rho0=rho0, w_dq=w_dq, sum_grad2=sum_grad2,
+                eps_cfm=eps_cfm, s_corr_k=s_corr_k)
+
+
+# --- threepp scene -------------------------------------------------------------
+
+
+def standard_material(color, roughness=1.0, metalness=0.0, **props):
+    """MeshStandardMaterial with the common knobs set (the defaults are the
+    material's own); extra keywords are assigned as attributes (side=,
+    emissive=, ...)."""
+    m = tp.MeshStandardMaterial()
+    m.color = color
+    m.roughness = roughness
+    m.metalness = metalness
+    for k, v in props.items():
+        setattr(m, k, v)
+    return m
+
+
+def studio_lights(scene, sun_pos=(4.0, 8.0, 3.0)):
+    """A hemisphere fill plus one shadow-casting sun; returns the sun."""
+    scene.add(tp.HemisphereLight(0xffffff, 0x33383f, 0.9))
+    sun = tp.DirectionalLight(0xffffff, 2.5)
+    sun.position.set(*sun_pos)
+    sun.cast_shadow = True
+    scene.add(sun)
+    return sun
+
+
+def ground_plane(scene, size=30.0, y=0.0, color=0x4a4f55):
+    """A shadow-receiving floor at height y."""
+    ground = tp.Mesh(tp.PlaneGeometry(size, size), standard_material(color))
+    ground.rotate_x(-math.pi / 2)
+    ground.position.y = y
+    ground.receive_shadow = True
+    scene.add(ground)
+    return ground
+
+
+def resize_handler(camera, renderer):
+    """The window-resize callback every example installs."""
+    def on_resize(w, h):
+        camera.aspect = w / max(h, 1)
+        camera.update_projection_matrix()
+        renderer.set_size(w, h)
+    return on_resize
+
+
+# --- run loops -----------------------------------------------------------------
+
+
+def orbit_loop(canvas, renderer, scene, camera, step, target=None):
+    """Interactive window: step(), orbit controls, render, forever."""
+    controls = tp.OrbitControls(camera, canvas)
+    controls.enable_damping = True
+    if target is not None:
+        controls.target.set(*target)
+    canvas.on_window_resize(resize_handler(camera, renderer))
+
+    def animate():
+        step()
+        controls.update()
+        renderer.render(scene, camera)
+
+    canvas.animate(animate)
+
+
+def shot_loop(renderer, scene, camera, step, seconds, out, fps=60):
+    """Headless: simulate `seconds` of frames, render once, write `out`."""
+    frames = int(round(seconds * fps))
+    for _ in range(frames):
+        step()
+    renderer.render(scene, camera)
+    renderer.save_frame(out)
+    print(f"simulated {seconds:.1f} s ({frames} frames), wrote {out}")
+
+
+def bench_loop(step, render, phases, warmup, timed, label):
+    """Timed phase breakdown. step() returns one duration in seconds per entry
+    of `phases`; render() is timed here as the final phase."""
+    for _ in range(warmup):
+        step()
+        render()
+    acc = [0.0] * (len(phases) + 1)
+    for _ in range(timed):
+        parts = list(step())
+        t0 = time.perf_counter()
+        render()
+        parts.append(time.perf_counter() - t0)
+        for i, p in enumerate(parts):
+            acc[i] += p
+    ms = 1000.0 / timed
+    total = sum(acc) * ms
+    cols = " | ".join(f"{name} {a * ms:.2f}" for name, a in zip(tuple(phases) + ("render",), acc))
+    print(f"bench {label}: {cols} = {total:.2f} ms/frame ({1000.0 / total:.0f} fps)")

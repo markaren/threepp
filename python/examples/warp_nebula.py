@@ -1,4 +1,4 @@
-"""An eighteen-million-particle nebula — NVIDIA Warp simulation, threepp rendering.
+"""A particle nebula -- NVIDIA Warp simulation, threepp rendering.
 
 A galaxy disk in a softened central gravity well, stirred by animated 4D curl
 noise, with differential rotation shearing the turbulence into spiral arms.
@@ -10,29 +10,29 @@ explosion ignites the palette by itself. Rendered as additive points.
 The entire simulation is ONE Warp kernel with no neighbor queries. On a CUDA
 device the renderer's vertex buffers are registered with CUDA (GLRenderer.
 gl_buffer_id + wp.RegisteredGLBuffer) and the sim kernel writes positions and
-colors STRAIGHT INTO the mapped buffers — nothing crosses host memory, Python
+colors STRAIGHT INTO the mapped buffers -- nothing crosses host memory, Python
 never touches the bytes, and there is no separate copy pass. --no-direct (or a
-CPU device) falls back to the tier-1 path: pinned host mirrors, GPU/CPU
-pipelining, colors every 3rd frame.
+CPU device) falls back to the host path: pinned host mirrors, GPU/CPU
+pipelining, colours shipped less often than positions.
 
 The 4D curl noise is sampled on a coarse grid rebuilt each frame and fetched
-trilinearly per particle: measured, the direct per-particle wp.curlnoise call
-was 22 of the frame's 52 ms — ~70x more evaluations than the field, which is
-smooth by construction, has information for. --exact-noise restores it as the
-A/B baseline.
+trilinearly per particle: the field is smooth by construction, so a few grid
+samples per noise feature carry all the information a per-particle evaluation
+would, at a small fraction of the cost. --exact-noise evaluates it per particle
+instead.
 
     pip install warp-lang
-    python warp_nebula.py                # window, 18M particles; drag to orbit
-    python warp_nebula.py --n 3000000    # fewer (exposure auto-adjusts)
-    python warp_nebula.py --shot 6.6     # headless PNG (nova at t=6.0)
+    python warp_nebula.py                # window; drag to orbit
+    python warp_nebula.py --n 3000000    # fewer particles (exposure auto-adjusts)
+    python warp_nebula.py --shot 6.6     # headless PNG
     python warp_nebula.py --bench        # timed phase breakdown
     python warp_nebula.py --no-direct    # force the host-copy path
     python warp_nebula.py --dither       # draw a random half per frame at 2x
                                          # brightness: statistically the same
                                          # additive image, half the raster cost
-    python warp_nebula.py --exact-noise  # per-particle curlnoise (A/B)
+    python warp_nebula.py --exact-noise  # per-particle curl noise
 
-Warp falls back to CPU if no CUDA device is present — slower, same picture.
+Warp falls back to CPU if no CUDA device is present -- slower, same picture.
 """
 import math
 import os
@@ -46,15 +46,7 @@ import numpy as np
 import warp as wp
 
 import threepp as tp
-
-
-def cli_arg(flag, default, cast):
-    if flag in sys.argv:
-        k = sys.argv.index(flag)
-        if k + 1 < len(sys.argv) and not sys.argv[k + 1].startswith("--"):
-            return cast(sys.argv[k + 1])
-    return default
-
+from warp_common import bench_loop, cli_arg, orbit_loop, shot_loop
 
 N = cli_arg("--n", 18_000_000, int)
 BENCH = "--bench" in sys.argv
@@ -62,31 +54,27 @@ SHOT = "--shot" in sys.argv
 SHOT_TIME = cli_arg("--shot", 6.6, float)
 
 DT = 1.0 / 60.0
-G = 0.18                 # central gravity; orbital period ~15 s at r=1
+G = 0.18                 # central gravity
 V_CAP = 1.4              # tames extreme nova ejecta; orbits stay far below this
-COOL = 0.4               # 1/s damping of RADIAL + VERTICAL velocity only. The
-                         # thermostat that keeps the disk alive forever: blanket
-                         # drag cold-collapses it into a white ball, zero
-                         # dissipation heat-deaths it into fog, and relaxing
-                         # toward the local circular speed ratchets everything
-                         # outward into a rim ring. Damping the non-tangential
-                         # components conserves angular momentum, so each orbit
-                         # re-circularizes at its own radius.
+COOL = 0.4               # 1/s damping of the RADIAL + VERTICAL velocity only.
+                         # Blanket drag cold-collapses the disk into a ball and
+                         # zero dissipation heat-deaths it into fog; damping only
+                         # the non-tangential components conserves angular
+                         # momentum, so each orbit re-circularises at its own
+                         # radius and the disk lives forever.
 TURB = 0.025             # curl-noise stir strength; must stay well below
                          # orbital acceleration or it bulk-advects the disk
 FREQ = 5.0               # curl wavelength well under the disk radius
 FLAT = 0.4               # disk-flattening pull toward the galactic plane
 R_MAX = 2.4              # soft containment radius
-V_HOT = 1.6              # speed for full white heat — nova ejecta only
+V_HOT = 1.6              # speed for full white heat -- nova ejecta only
 # Per-particle intensity. Additive sums clip at 1.0 and overlap grows with
-# the particle count, so exposure follows an empirical 1/sqrt(N) law —
-# anchored at the hand-tuned look for 16M (0.0018; 3M was 0.0048).
+# the particle count, so exposure follows a 1/sqrt(N) law.
 BRIGHT = 0.0018 * math.sqrt(16_000_000 / N)
 RECYCLE_R = 0.30         # particles below this radius may be reborn on the rim...
-RECYCLE_P = 0.0015       # ...at this per-frame rate. An aesthetic knob now that
-                         # the thermostat holds orbits: ~0.004 evacuates the core
-                         # into a dark accretion-disk eye, ~0.001 keeps it a
-                         # filled golden glow, 0 lets it slowly brighten.
+RECYCLE_P = 0.0015       # ...at this per-frame rate. Higher evacuates the core
+                         # into a dark accretion-disk eye, lower keeps it a
+                         # filled golden glow.
 NOVA_T0 = 6.0            # first detonation
 NOVA_PERIOD = 9.0
 NOVA_AMP = 1.6           # impulse ~ escape speed at the core, a shudder outside
@@ -94,11 +82,8 @@ NOVA_TAU = 0.25
 
 # --- curl-noise field ----------------------------------------------------------
 # The turbulence is baked to an NG^3 grid once per frame and sampled trilinearly
-# in the step kernel. At FREQ=5 a noise feature spans ~0.2 world units; 96 cells
-# over [-R_NOISE, R_NOISE] give ~3.7 samples per feature — enough for a stir
-# whose job is aesthetic. 885k curlnoise evals instead of 18M (~1 ms vs 22).
-# Ejecta beyond the grid clamp to the edge sample; the soft containment is
-# already pulling them back by then.
+# in the step kernel. Ejecta beyond the grid clamp to the edge sample; the soft
+# containment is already pulling them back by then.
 EXACT_NOISE = "--exact-noise" in sys.argv
 NG = cli_arg("--noise-grid", 96, int)
 R_NOISE = 2.6            # covers R_MAX plus nova overshoot
@@ -106,9 +91,8 @@ NG_SCALE = (NG - 1) / (2.0 * R_NOISE)
 
 # Temporal dither: draw a random half of the particles each frame at double
 # brightness. The additive accumulation of millions of subpixel points is
-# statistical anyway (BRIGHT already follows a 1/sqrt(N) law), and the particle
-# order is random by construction, so alternating halves is the same image in
-# motion for half the vertex/fill cost.
+# statistical anyway, and the particle order is random by construction, so
+# alternating halves is the same image in motion for half the vertex/fill cost.
 DITHER = "--dither" in sys.argv
 if DITHER:
     BRIGHT *= 2.0
@@ -186,7 +170,7 @@ def integrate(p: wp.vec3, v: wp.vec3, i: int, turb: wp.vec3,
             v = wp.vec3(-wp.sin(ang), 0.0, wp.cos(ang)) * vc
             r = rr
     # palette: radius sets the base hue (golden core -> blue rim), speed
-    # pushes toward white heat — so the nova ignites everything on its own
+    # pushes toward white heat -- so the nova ignites everything on its own
     w = 1.0 - wp.min(r, 1.0)
     warmth = w * w
     base = wp.vec3(0.12, 0.20, 0.60) * (1.0 - warmth) + wp.vec3(1.0, 0.70, 0.30) * warmth
@@ -196,9 +180,8 @@ def integrate(p: wp.vec3, v: wp.vec3, i: int, turb: wp.vec3,
 
 
 # out_pos/out_col are the DISPLAY destinations: in direct mode the renderer's
-# own mapped VBOs (the kernel writes them in place — the copy pass this
-# replaces was a measured 5.6 ms of pure device bandwidth), in host mode the
-# state array itself plus the staging color buffer.
+# own mapped VBOs (the kernel writes them in place), in host mode the state
+# array itself plus the staging color buffer.
 @wp.kernel
 def step(pos: wp.array(dtype=wp.vec3),
          vel: wp.array(dtype=wp.vec3),
@@ -222,7 +205,7 @@ def step_exact(pos: wp.array(dtype=wp.vec3),
                out_pos: wp.array(dtype=wp.vec3),
                out_col: wp.array(dtype=wp.vec3),
                dt: float, t: float, blast: float, frame: int):
-    # the A/B baseline: per-particle 4D curlnoise, ~70x the noise evals
+    # per-particle 4D curl noise instead of the baked grid
     i = wp.tid()
     p = pos[i]
     s = wp.rand_init(7)
@@ -254,7 +237,7 @@ height = rng.normal(0, 1, N).astype(np.float32) * 0.09 * (0.25 + radius)
 
 p0 = np.stack([radius * np.cos(theta), height, radius * np.sin(theta)], axis=-1)
 # Circular-orbit speed for the *softened* force law used in the kernel
-# (a = G r / (r^2+eps)^1.5) — mismatching these evacuates the core.
+# (a = G r / (r^2+eps)^1.5) -- mismatching these evacuates the core.
 v_circ = (np.sqrt(G * radius ** 2 / (radius ** 2 + 0.04) ** 1.5)
           * rng.uniform(0.95, 1.05, N).astype(np.float32))
 v0 = np.stack([-np.sin(theta) * v_circ, np.zeros(N, np.float32),
@@ -268,9 +251,8 @@ print(f"nebula: {N:,} particles on {device}")
 pos = wp.array(p0.astype(np.float32), dtype=wp.vec3, device=device)
 vel = wp.array(v0.astype(np.float32), dtype=wp.vec3, device=device)
 noise = wp.zeros((NG, NG, NG), dtype=wp.vec3, device=device)
-col = None               # host path only — direct mode writes colors straight
-                         # into the mapped VBO, so the 216 MB state array (at
-                         # 18M) is never allocated there
+col = None               # host path only -- direct mode writes colors straight
+                         # into the mapped VBO, so no colour state is allocated
 
 DIRECT = ("--no-direct" not in sys.argv) and device.is_cuda
 
@@ -300,12 +282,14 @@ def apply_dither():
     else:
         geometry.set_draw_range(0, h)
 
-# Host-path fallback (tier 1): persistent pinned mirrors — allocating fresh
-# 24 MB numpy arrays every frame makes the OS hitch — double-buffered so the
+
+# Host-path fallback: persistent pinned mirrors -- allocating fresh
+# multi-megabyte numpy arrays every frame hitches -- double-buffered so the
 # GPU simulates frame N+1 while the CPU uploads and renders frame N.
 pos_host = col_host = pos_view = col_view = None
 col_fresh = [True, True]
-COLOR_EVERY = 3          # colors drift slowly outside a nova; ship every 3rd frame
+COLOR_EVERY = 3          # colours drift slowly outside a nova, so they ship
+                         # less often than positions
 
 
 def enable_host_path():
@@ -317,16 +301,21 @@ def enable_host_path():
     pos_view = [a.numpy() for a in pos_host]
     col_view = [a.numpy() for a in col_host]
 
+
 sim_time = 0.0
 frame_no = 0
 cur = 0                  # host-buffer pair the CPU consumes this frame
 
 
-def gpu_advance(buf):
-    """Queue one sim step + DMA into host pair `buf` — all async."""
-    global sim_time, frame_no
+def blast_now():
     ph = sim_time - NOVA_T0
-    blast = NOVA_AMP * math.exp(-(ph % NOVA_PERIOD) / NOVA_TAU) if ph >= 0.0 else 0.0
+    return NOVA_AMP * math.exp(-(ph % NOVA_PERIOD) / NOVA_TAU) if ph >= 0.0 else 0.0
+
+
+def gpu_advance(buf):
+    """Queue one sim step + DMA into host pair `buf` -- all async."""
+    global sim_time, frame_no
+    blast = blast_now()
     # out_pos aliases the state array (writing p twice is harmless); colors
     # land in the staging buffer the DMA below ships.
     launch_step(pos, col, blast)
@@ -360,8 +349,7 @@ reg_pos = reg_col = None
 def step_frame_direct():
     """Sim straight into the renderer's own mapped VBOs. Zero copies anywhere."""
     global sim_time, frame_no
-    ph = sim_time - NOVA_T0
-    blast = NOVA_AMP * math.exp(-(ph % NOVA_PERIOD) / NOVA_TAU) if ph >= 0.0 else 0.0
+    blast = blast_now()
     t0 = time.perf_counter()
     dst_pos = reg_pos.map(dtype=wp.vec3, shape=(N,))
     dst_col = reg_col.map(dtype=wp.vec3, shape=(N,))
@@ -378,7 +366,7 @@ def step_frame_direct():
 
 # --- threepp scene ----------------------------------------------------------------
 
-canvas = tp.Canvas("threepp x warp — nebula", width=1280, height=800,
+canvas = tp.Canvas("threepp x warp - nebula", width=1280, height=800,
                    headless=SHOT or BENCH)
 renderer = tp.GLRenderer(canvas)
 
@@ -429,47 +417,17 @@ else:
     step_frame = step_frame_host
 
 if BENCH:
-    WARMUP, TIMED = 60, 240
-    for _ in range(WARMUP):
-        step_frame()
-        renderer.render(scene, camera)
-    wait = upd = rend = 0.0
-    for _ in range(TIMED):
-        w, u_ = step_frame()
-        t0 = time.perf_counter()
-        renderer.render(scene, camera)
-        wait += w
-        upd += u_
-        rend += time.perf_counter() - t0
-    ms = 1000.0 / TIMED
-    total = (wait + upd + rend) * ms
-    print(f"bench {N:,} particles [{'direct' if DIRECT else 'host'}]: "
-          f"gpu {wait * ms:.2f} | update {upd * ms:.2f} | render {rend * ms:.2f} "
-          f"= {total:.2f} ms/frame ({1000.0 / total:.0f} fps)")
+    bench_loop(step_frame, lambda: renderer.render(scene, camera),
+               ("gpu", "update"), warmup=60, timed=240,
+               label=f"{N:,} particles [{'direct' if DIRECT else 'host'}]")
     renderer.save_frame("warp_nebula.png")
 elif SHOT:
-    for _ in range(int(round(SHOT_TIME * 60))):
-        step_frame()
-    renderer.render(scene, camera)
-    renderer.save_frame("warp_nebula.png")
-    print(f"simulated {SHOT_TIME:.1f} s, wrote warp_nebula.png")
+    shot_loop(renderer, scene, camera, step_frame, SHOT_TIME, "warp_nebula.png")
 else:
-    controls = tp.OrbitControls(camera, canvas)
-    controls.enable_damping = True
-
-    def on_resize(w, h):
-        camera.aspect = w / max(h, 1)
-        camera.update_projection_matrix()
-        renderer.set_size(w, h)
-
-    canvas.on_window_resize(on_resize)
-
-    def animate():
+    def step_and_drift():
         step_frame()
         # slow parallax drift so a recording always has camera motion;
         # dragging to orbit composes on top of it
         nebula.rotation.y = 0.04 * sim_time
-        controls.update()
-        renderer.render(scene, camera)
 
-    canvas.animate(animate)
+    orbit_loop(canvas, renderer, scene, camera, step_and_drift)
