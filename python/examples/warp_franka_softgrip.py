@@ -23,6 +23,9 @@ pad contact force crosses a threshold, then hold.
     python warp_franka_softgrip.py --frames 600   # timed phase breakdown
     python warp_franka_softgrip.py --grip-force 8 # close threshold, newtons
     python warp_franka_softgrip.py --fish-len 0.3 # graded sizes: 0.24 / 0.27 / 0.30
+    python warp_franka_softgrip.py --cam macro    # wide | macro (DoF, follows the TCP) | top
+    python warp_franka_softgrip.py --no-slowmo    # no 0.15x window around CLOSE -> LIFT
+    python warp_franka_softgrip.py --no-pip       # no wrist-camera picture-in-picture
 """
 import math
 import os
@@ -35,7 +38,7 @@ import numpy as np
 import warp as wp
 
 import threepp as tp
-from warp_common import (accum_normals, cli_arg, csr_from_pairs, icosphere, integrate,
+from warp_common import (accum_normals, cli_arg, csr_from_pairs, icosphere,
                          parse_size, scatter_soup, signed_volume,
                          standard_material)
 
@@ -50,6 +53,9 @@ WIDTH, HEIGHT = parse_size(cli_arg("--size", "1280x720", str))
 # by the contacting-node count, so it no longer moves when the solver settings do.
 F_GRASP = cli_arg("--grip-force", 6.0, float)
 HEADLESS = SHOT or BENCH
+CAM = cli_arg("--cam", "wide", str)          # wide | macro | top
+SLOWMO = "--no-slowmo" not in sys.argv
+PIP = "--no-pip" not in sys.argv
 
 # --- solver tunables ------------------------------------------------------------
 
@@ -58,6 +64,7 @@ DT = 1.0 / 240.0
 SUBSTEPS = 6
 ITERATIONS = 16
 DAMPING = 0.04
+DAMPING_FIN = 0.22       # the truss rings otherwise -- see integrate_damped
 GRAVITY = wp.vec3(0.0, -9.81, 0.0)
 RELAX = 0.5
 
@@ -82,8 +89,9 @@ STIFF_FAN = 0.5
 # some chords, and the cheapest way for those to be satisfied is to send the
 # material out of the hand. A filled body cannot be extruded that way: every
 # tet in the pinched section carries its own incompressibility row.
-STIFF_TET_EDGE = 0.6  # squishy flesh, in tension and compression
+STIFF_TET_EDGE = 0.85  # 0.6 let the hanging body drape in half over the pads; 1.0 goes unstable
 STIFF_TET_VOL = 1.0   # a fish is water: volume is the constraint that matters
+STIFF_SPINE = 0.9     # skip-a-cell chords along the body axis -- see BACKBONE below
 TET_RES = 22          # voxel cells along the fish's length
 CARVE = 0.25          # cells of dilation, so the cage measures the fish
 
@@ -112,12 +120,14 @@ TABLE_Y = 0.0
 TRAY_C = (0.46, 0.10)         # tray centre (x, z)
 TRAY_HX, TRAY_HZ = 0.22, 0.16
 TRAY_Y = 0.018                # tray floor height
-CRATE_C = (0.36, -0.42)
-CRATE_HX, CRATE_HZ = 0.16, 0.13
+CRATE_C = (0.36, -0.45)
+CRATE2_C = (0.36, 0.45)
+CRATE_HX, CRATE_HZ = 0.19, 0.13
 CRATE_FLOOR = 0.03
 CRATE_RIM = 0.20
 TRAY_CX, TRAY_CZ = float(TRAY_C[0]), float(TRAY_C[1])
 CRATE_CX, CRATE_CZ = float(CRATE_C[0]), float(CRATE_C[1])
+CRATE2_CZ = float(CRATE2_C[1])
 
 # A herring, not a salmon. The stock FR3 hand opens to 8 cm, so what limits the
 # size is the WIDTH, never the length: 45 mm is about all the carriages can bite
@@ -128,9 +138,13 @@ FISH_H = 0.22 * FISH_LEN
 FISH_W = min(0.045, 0.17 * FISH_LEN)
 FISH_SUBDIV = 3
 FISH_P = (TRAY_C[0], TRAY_Y + FISH_H * 0.5, TRAY_C[1])
-# Grasp station: 40 % of the length back from the nose, i.e. the thick shoulder
-# just behind the head, not the mid-body waist.
-GRASP_X = FISH_P[0] + (0.4 - 0.5) * FISH_LEN
+# Grasp station: the body's CENTRE OF MASS (computed off the tet cage further
+# down, since the cage is the mass). Phase 2b gripped 40 % back from the nose --
+# the thick shoulder -- and the fish promptly pivoted to hang vertically by that
+# shoulder with only a third of its length between the pads, then walked out of
+# the hand between CARRY and LOWER. Held at the COM it hangs balanced and the
+# head and tail merely droop.
+GRADE_MM = cli_arg("--grade-mm", 265.0, float)   # >= this goes in the LARGE crate
 
 # Fin Ray finger, in the TCP frame: length along the tool axis (+z), width
 # across the grasp (x), the two skins separated in y.
@@ -143,9 +157,9 @@ GRASP_X = FISH_P[0] + (0.4 - 0.5) * FISH_LEN
 # patch and hangs out of the hand by one end (measured: it did exactly that).
 # 90 mm of flank between the pads is a cradle, and the head and tail still
 # droop off the ends.
-FIN_ROWS, FIN_COLS = 11, 16
+FIN_ROWS, FIN_COLS = 11, 19
 FIN_Z0, FIN_LEN = -0.032, 0.060   # root at the carriage, tip ~28 mm past the TCP
-FIN_WIDTH = 0.090                 # across the grasp, i.e. along the fish
+FIN_WIDTH = 0.110                 # across the grasp, i.e. along the fish
 FIN_SKIN_IN = 0.004               # front skin, inboard of the carriage origin
 # The tip hooks INWARD. Two flat plates pinching a floppy shell is not a grasp:
 # the fish squirts out along its own length and the pads never stop it. Curving
@@ -171,23 +185,12 @@ robot.rotation.x = -math.pi / 2          # URDF is Z-up, the world is Y-up
 robot.position.set(0.0, 0.0, 0.0)
 robot.update_matrix_world(True)
 
-# The URDF ships MeshPhongMaterial, which the Vulkan deferred path draws as
-# white wireframe junk. Swap every Phong/Basic for a Standard of the same
-# colour (material is read-only; set_material is the door).
-_swapped = 0
-
-
-def _restandardise(o):
-    global _swapped
-    if isinstance(o, tp.Mesh):
-        m = getattr(o, "material", None)
-        if m is not None and not isinstance(m, tp.MeshStandardMaterial):
-            col = getattr(m, "color", None)
-            o.set_material(standard_material(col if col is not None else 0xd8d8d8, 0.45, 0.0))
-            _swapped += 1
-
-
-robot.traverse(_restandardise)
+# The white wireframe junk in the raw render is the URDF's COLLISION meshes, not
+# a material problem: Vulkan draws the DAE's own MeshPhongMaterial perfectly
+# well, and RobotCell (the C++ demo that looks right) never touches materials --
+# it just hides the colliders. Phase 1 and 2 swapped all 54 materials for flat
+# grey Standards on that misdiagnosis, which is why the arm read grey and dead.
+robot.show_colliders(False)
 
 Q_HOME = [0.0, -0.6, 0.0, -2.2, 0.0, 1.6, 0.785, 0.04, 0.04]
 FINGER_OPEN, FINGER_SHUT = 0.04, 0.0
@@ -454,15 +457,20 @@ def bind_lattice(surf, lo, h, dims, solid, cid):
 # height at taper 1, and the taper is 1 only at the nose where the ellipsoid has
 # no height at all, so measuring droop against FISH_H reads a healthy fish as 80 %.
 FISH_H_REST = float(fish_tmpl[:, 1].max() - fish_tmpl[:, 1].min())
-# The widest half-section within a centimetre of the grasp station: the position
-# backstop for the close is quoted off this.
-_near = np.abs(fish_tmpl[:, 0] - (GRASP_X - FISH_P[0])) < 0.010
-FISH_HALF_W = float(np.abs(fish_tmpl[_near, 2]).max())
 
 CAGE_H = FISH_LEN / TET_RES
 cage_v, cage_t, CAGE_LO, CAGE_DIMS, CAGE_SOLID, CAGE_ID = fish_cage(CAGE_H)
 CAGE_N, N_TETS = len(cage_v), len(cage_t)
 CAGE_R = CAGE_R_CELLS * CAGE_H
+# The cage nodes are a uniform lattice through a body of uniform density, so
+# their mean IS the centre of mass. It sits behind the mid-point because the
+# taper puts the meat in the front half.
+FISH_COM_X = float(cage_v[:, 0].mean())
+GRASP_X = FISH_P[0] + FISH_COM_X
+# The widest half-section within a centimetre of the grasp station: the position
+# backstop for the close is quoted off this.
+_near = np.abs(fish_tmpl[:, 0] - FISH_COM_X) < 0.012
+FISH_HALF_W = float(np.abs(fish_tmpl[_near, 2]).max())
 skin_ids, skin_w = bind_lattice(fish_tmpl.astype(np.float64), CAGE_LO, CAGE_H,
                                 CAGE_DIMS, CAGE_SOLID, CAGE_ID)
 _bind_err = np.linalg.norm((cage_v[skin_ids] * skin_w[:, :, None]).sum(1) - fish_tmpl, axis=1)
@@ -472,6 +480,18 @@ _e = np.unique(np.sort(np.concatenate([cage_t[:, [a, b]] for a, b in _TET_E]), 1
 FISH_BASE = FIN_TOTAL
 for a, b in _e:
     pairs.append((FISH_BASE + int(a), FISH_BASE + int(b), STIFF_TET_EDGE))
+# BACKBONE. A lattice of tets held only by its own edges has, in a Jacobi solve
+# of a fixed iteration count, almost no long-range bending stiffness: 22 cells
+# of fish is more chain than the sweep can stiffen, and the measured result was
+# a 240 mm fish folding to 220 mm TALL over the pads and sliding out. A herring
+# has a spine. Skip-a-cell chords along the body axis are that spine: one extra
+# distance row per cage node, and they resist exactly the fold.
+_cid = CAGE_ID
+_a, _b = _cid[:-2, :, :], _cid[2:, :, :]
+_m = (_a >= 0) & (_b >= 0)
+spine_pairs = np.stack([_a[_m], _b[_m]], 1)
+for a, b in spine_pairs:
+    pairs.append((FISH_BASE + int(a), FISH_BASE + int(b), STIFF_SPINE))
 _t = cage_v[cage_t]
 tet_v0 = (np.einsum("ni,ni->n", _t[:, 1] - _t[:, 0],
                     np.cross(_t[:, 2] - _t[:, 0], _t[:, 3] - _t[:, 0])) / 6.0).astype(np.float32)
@@ -500,8 +520,7 @@ print(f"franka softgrip: {NP} particles ({FIN_TOTAL} finger + {CAGE_N} fish cage
 print(f"  fish {FISH_LEN * 1000:.0f} x {FISH_H * 1000:.0f} x {FISH_W * 1000:.0f} mm, "
       f"{FISH_MASS * 1000:.0f} g: cage {CAGE_N} verts / {N_TETS} tets / {len(_e)} edges at "
       f"{CAGE_H * 1000:.1f} mm pitch, contact r {CAGE_R * 1000:.1f} mm, "
-      f"{FISH_NV} skinned render verts (bind err {_bind_err.mean() * 1e6:.1f} um), "
-      f"{_swapped} robot materials restandardised")
+      f"{FISH_NV} skinned render verts (bind err {_bind_err.mean() * 1e6:.1f} um)")
 
 MASS_PAD = FIN_MASS / FIN_N
 MASS_FISH = mfish
@@ -531,6 +550,25 @@ def pin_follow(local: wp.array(dtype=wp.vec3),
     d = w - pos[i]
     pos[i] = w
     prev[i] = prev[i] + d
+
+
+@wp.kernel
+def integrate_damped(x: wp.array(dtype=wp.vec3),
+                     prev: wp.array(dtype=wp.vec3),
+                     pred: wp.array(dtype=wp.vec3),
+                     dt: float,
+                     damp: wp.array(dtype=float),
+                     gravity: wp.vec3):
+    # Verlet predict with PER-PARTICLE damping. The truss nodes get several
+    # times the fish's damping: a node in the finger sits on ~30 constraint rows
+    # (skin, rib, two diagonals, root fan) and a Jacobi sweep over that many rows
+    # overshoots, so the pads ring visibly at the truss's own frequency. Damping
+    # the finger alone kills the ring without making the fish look like putty.
+    i = wp.tid()
+    p = x[i]
+    v = (p - prev[i]) * (1.0 - damp[i])
+    prev[i] = p
+    pred[i] = p + v + gravity * dt * dt
 
 
 @wp.kernel
@@ -593,12 +631,31 @@ def solve(p_in: wp.array(dtype=wp.vec3),
         p_out[i] = p
         return
     c = wp.vec3(0.0, 0.0, 0.0)
-    # truss / shell distance constraints (Jacobi half-corrections)
+    # Truss / tet distance constraints, Jacobi half-corrections, NORMALISED by
+    # the node's own summed stiffness once that sum exceeds 1. A Jacobi sweep is
+    # only stable while the total gain at a node is below unity, and a truss node
+    # here sits on ~30 rows (skin, rib, two diagonals, root fan) while a cage
+    # node sits on 14 tet edges plus its spine chords -- so the raw sum was 2-9x
+    # over. That surplus is what rang the pads at the truss frequency and what
+    # blew the fish to NaN the moment the edges were stiffened. Normalising
+    # keeps the RELATIVE weighting (stiff skins, soft diagonals) exactly and
+    # caps the per-iteration move at RELAX; 16 iterations do the converging.
+    # Contacts are deliberately left OUT of the normalisation: a clamp has to be
+    # able to move a node the whole penetration in one go.
+    wsum = float(0.0)
     for k in range(offsets[i], offsets[i + 1]):
         d = p_in[indices[k]] - p
         l = wp.length(d)
         if l > 1.0e-9:
             c += d * (0.5 * stiffs[k] * (l - rests[k]) / l)
+        wsum += stiffs[k]
+    # ...and only on the FISH. The truss was never the thing that diverged, and
+    # normalising it as well costs the clamp: measured, the same close went from
+    # 3.1 N to 0.9 N and pushed the fish across the tray instead of lifting it.
+    # The pads' ringing is handled where it actually comes from -- the once-per-
+    # frame pin update (now interpolated) and DAMPING_FIN.
+    if body[i] == 2:
+        c = c * (1.0 / wp.max(1.0, 0.5 * wsum))
     # particle-particle contact, normal split by inverse mass + Coulomb friction
     for k in range(cont_n[i]):
         j = cont_idx[i * CONTACT_CAP + k]
@@ -711,13 +768,17 @@ def statics(pos: wp.array(dtype=wp.vec3),
     on_tray = wp.abs(p[0] - TRAY_CX) < TRAY_HX and wp.abs(p[2] - TRAY_CZ) < TRAY_HZ
     if on_tray:
         floor = TRAY_Y
-    in_crate = wp.abs(p[0] - CRATE_CX) < CRATE_HX and wp.abs(p[2] - CRATE_CZ) < CRATE_HZ
+    # Two crates, mirrored in z; pick the near one by sign and test that.
+    cz = CRATE_CZ
+    if p[2] > 0.0:
+        cz = CRATE2_CZ
+    in_crate = wp.abs(p[0] - CRATE_CX) < CRATE_HX and wp.abs(p[2] - cz) < CRATE_HZ
     if in_crate and p[1] < CRATE_RIM:
         floor = CRATE_FLOOR
         m = MU_CRATE
         # keep inside the walls
         x = wp.clamp(p[0], CRATE_CX - CRATE_HX + PART_R, CRATE_CX + CRATE_HX - PART_R)
-        z = wp.clamp(p[2], CRATE_CZ - CRATE_HZ + PART_R, CRATE_CZ + CRATE_HZ - PART_R)
+        z = wp.clamp(p[2], cz - CRATE_HZ + PART_R, cz + CRATE_HZ - PART_R)
         p = wp.vec3(x, p[1], z)
     if p[1] < floor + rad[i]:
         p = wp.vec3(p[0], floor + rad[i], p[2])
@@ -754,6 +815,9 @@ offsets = wp.array(offsets_np, dtype=int, device=device)
 indices = wp.array(idx_np, dtype=int, device=device)
 rests = wp.array(rest_np, dtype=float, device=device)
 stiffs = wp.array(stiff_np, dtype=float, device=device)
+_damp_np = np.full(NP, DAMPING, dtype=np.float32)
+_damp_np[:FIN_TOTAL] = DAMPING_FIN
+damp_arr = wp.array(_damp_np, dtype=float, device=device)
 invm = wp.array(np.array(invm_of, dtype=np.float32), dtype=float, device=device)
 mu_arr = wp.array(np.array(mu_of, dtype=np.float32), dtype=float, device=device)
 rad_arr = wp.array(rad_np, dtype=float, device=device)
@@ -809,7 +873,8 @@ def substep_body():
     state -- so the whole thing captures into a CUDA graph."""
     wp.launch(pin_follow, dim=NP, device=device,
               inputs=[local_arr, mats, owner_arr, pinned_arr, x, prev])
-    wp.launch(integrate, dim=NP, device=device, inputs=[x, prev, pred, DT, DAMPING, GRAVITY])
+    wp.launch(integrate_damped, dim=NP, device=device,
+              inputs=[x, prev, pred, DT, damp_arr, GRAVITY])
     wp.launch(pin_follow, dim=NP, device=device,
               inputs=[local_arr, mats, owner_arr, pinned_arr, pred, prev])
     grid.build(points=pred, radius=GRID_R)
@@ -852,6 +917,10 @@ def capture_substep():
 # --- [D] task: waypoints, trajectories, force-controlled close ------------------
 
 YAW = 0.0
+# Graded by length: the small crate sits at -z, the large one at +z.
+CRATE_NAME = "LARGE" if FISH_LEN * 1000.0 >= GRADE_MM else "SMALL"
+TARGET_C = CRATE2_C if CRATE_NAME == "LARGE" else CRATE_C
+TARGET_CZ = float(TARGET_C[1])
 WP_HOME = (0.40, 0.42, 0.05)
 WP_PRE = (GRASP_X, 0.26, FISH_P[2])
 # TCP at the fish's mid-height, so the 90 x 60 mm paddles cover the flank instead
@@ -859,19 +928,22 @@ WP_PRE = (GRASP_X, 0.26, FISH_P[2])
 # under the belly, which is where the inward hook does its work.
 WP_GRASP = (GRASP_X, TRAY_Y + 0.5 * FISH_H_REST, FISH_P[2])
 WP_LIFT = (GRASP_X, 0.30, FISH_P[2])
-WP_CARRY = (CRATE_C[0], 0.32, CRATE_C[1])
-WP_LOWER = (CRATE_C[0], 0.17, CRATE_C[1])
-WP_OUT = (CRATE_C[0], 0.36, CRATE_C[1])
+WP_CARRY = (TARGET_C[0], 0.32, TARGET_CZ)
+WP_LOWER = (TARGET_C[0], 0.17, TARGET_CZ)
+WP_OUT = (TARGET_C[0], 0.36, TARGET_CZ)
 
 # (name, waypoint or None to hold, seconds)
+# CARRY and LOWER are 30 % longer than phase 2b. The quintic's peak acceleration
+# scales as 1/T^2, and the swing across to the crate was throwing the hanging
+# fish out of the pads on the way in and out of the blend.
 PLAN = [("SETTLE", None, 0.4),
         ("PREGRASP", WP_PRE, 1.1),
         ("DESCEND", WP_GRASP, 1.0),
-        ("CLOSE", None, 1.8),
+        ("CLOSE", None, 2.3),
         ("LIFT", WP_LIFT, 2.6),
-        ("CARRY", WP_CARRY, 1.6),
-        ("LOWER", WP_LOWER, 1.1),
-        ("OPEN", None, 0.8),
+        ("CARRY", WP_CARRY, 2.1),
+        ("LOWER", WP_LOWER, 1.5),
+        ("OPEN", None, 0.9),
         ("RETREAT", WP_OUT, 1.0),
         ("DONE", None, 1.2)]
 
@@ -893,6 +965,12 @@ report = {}
 # gives the volume rows time to answer each bite before the next one arrives.
 CLOSE_V = 0.009          # m/s per carriage
 SQUEEZE = 0.002          # extra bite once the threshold trips
+# The release used CLOSE_V too, which at 9 mm/s needs 1.8 s to give back the
+# 16 mm the close took -- longer than the OPEN phase, so on half the runs the
+# fish was still in the hand at DONE. Letting go is not a delicate operation.
+OPEN_V = 0.060           # m/s per carriage
+GRIP_CONFIRM = 5         # consecutive frames over F_GRASP before the close stops
+grip_hi_n = 0
 # Position backstop, and it is the primary control -- the force proxy only
 # short-circuits it. Measured, not assumed: the carriage frame sits Y_CARRIAGE
 # off the tool axis at FINGER_OPEN and tracks the dof one-for-one, and the pad's
@@ -934,11 +1012,18 @@ def advance_task(dt):
     q = [a + (b - a) * s for a, b in zip(q_seg_start, q_seg_end)]
 
     if name == "CLOSE":
-        if not grip_held and grip_force < F_GRASP and finger_cmd > FINGER_STOP:
+        # DEBOUNCE the force short-circuit. The hooked tips clip the fish for a
+        # frame or two long before the flanks are loaded, and a single-frame trip
+        # stopped the close 1-2 mm early -- which is exactly what lost the heavy
+        # fish in phase 2b, at a carriage where the pads still push more than
+        # they hold. Only N consecutive frames over the threshold count.
+        global grip_hi_n
+        grip_hi_n = grip_hi_n + 1 if grip_force >= F_GRASP else 0
+        if not grip_held and grip_hi_n < GRIP_CONFIRM and finger_cmd > FINGER_STOP:
             finger_cmd = max(FINGER_STOP, finger_cmd - CLOSE_V * dt)
         elif not grip_held:
             grip_held = True
-            why = "force" if grip_force >= F_GRASP else "backstop"
+            why = "force" if grip_hi_n >= GRIP_CONFIRM else "backstop"
             finger_cmd = max(FINGER_MIN, finger_cmd - SQUEEZE)
             report["grip_N"] = grip_force
             report["grip_open_mm"] = finger_cmd * 1000.0
@@ -946,7 +1031,7 @@ def advance_task(dt):
                   f"carriage {finger_cmd * 1000:.1f} mm "
                   f"(backstop {FINGER_STOP * 1000:.1f})")
     elif name == "OPEN":
-        finger_cmd = min(FINGER_OPEN, finger_cmd + CLOSE_V * dt)
+        finger_cmd = min(FINGER_OPEN, finger_cmd + OPEN_V * dt)
     q[7] = q[8] = finger_cmd
     q_cur = q
     if seg_t >= dur and seg_i + 1 < len(PLAN):
@@ -955,7 +1040,27 @@ def advance_task(dt):
     return name
 
 
-_mats_host = np.zeros((2, 4, 4), dtype=np.float32)
+_mats_cur = np.stack([link_mat(left_link), link_mat(right_link)]).astype(np.float32)
+_mats_prev = _mats_cur.copy()
+_mats_host = _mats_cur.copy()
+
+
+def _push_mats(a):
+    """Upload the carriage frames a fraction `a` of the way from last frame's to
+    this frame's. The pins were being handed the new carriage matrix ONCE PER
+    FRAME while six substeps ran on it, so the root rows teleported on substep 0
+    and the truss rang for the other five -- that is the oscillation, and it is
+    kinematic, not a solver instability. The graph replays whatever is in `mats`,
+    so re-uploading between capture_launch calls costs one 128-byte copy."""
+    np.multiply(_mats_cur - _mats_prev, a, out=_mats_host)
+    np.add(_mats_host, _mats_prev, out=_mats_host)
+    for k in (0, 1):                       # re-orthonormalise the lerped basis
+        r = _mats_host[k][:3, :3]
+        c0 = r[:, 0] / (np.linalg.norm(r[:, 0]) + 1e-12)
+        c1 = r[:, 1] - c0 * np.dot(c0, r[:, 1])
+        c1 /= np.linalg.norm(c1) + 1e-12
+        r[:, 0], r[:, 1], r[:, 2] = c0, c1, np.cross(c0, c1)
+    mats.assign(_mats_host)
 
 
 def step_frame():
@@ -964,14 +1069,15 @@ def step_frame():
     t0 = time.perf_counter()
     phase = advance_task(1.0 / FPS)
     set_q(q_cur)
-    _mats_host[0] = link_mat(left_link)
-    _mats_host[1] = link_mat(right_link)
-    mats.assign(_mats_host)
+    _mats_prev[:] = _mats_cur
+    _mats_cur[0] = link_mat(left_link)
+    _mats_cur[1] = link_mat(right_link)
     t1 = time.perf_counter()
 
     pad_force.zero_()
     pad_hits.zero_()
-    for _ in range(SUBSTEPS):
+    for _s in range(SUBSTEPS):
+        _push_mats((_s + 1.0) / SUBSTEPS)
         if substep_graph is not None:
             wp.capture_launch(substep_graph)
         else:
@@ -990,6 +1096,12 @@ def step_frame():
               inputs=[fish_v, fish_tris_d, fish_vn])
     wp.launch(scatter_soup, dim=fish_corners, device=device,
               inputs=[fish_v, fish_vn, fish_tris_d, fish_pos, fish_nrm])
+    wp.launch(skin_lattice, dim=FIN_NV, device=device,
+              inputs=[x, FISH_BASE, fin_ids_d, fin_w_d, finv])
+    finvn.zero_()
+    wp.launch(accum_normals, dim=FIN_NF, device=device, inputs=[finv, fin_ftris_d, finvn])
+    wp.launch(scatter_soup, dim=len(fin_ftris_np), device=device,
+              inputs=[finv, finvn, fin_ftris_d, finf_pos, finf_nrm])
     wp.synchronize_device(device)
     t2 = time.perf_counter()
 
@@ -1028,6 +1140,12 @@ def step_frame():
     fin_geo.update_attribute("normal", fin_nn)
     fish_geo.update_attribute("position", fish_np)
     fish_geo.update_attribute("normal", fish_nn)
+    fins_geo.update_attribute("position", finf_pos.numpy())
+    fins_geo.update_attribute("normal", finf_nrm.numpy())
+    for _e, _ci in zip(eyes, EYE_CORNER):
+        _p = fish_np[_ci]
+        _e.position.set(float(_p[0]), float(_p[1]), float(_p[2]))
+    aim_camera(tcp)
     return t1 - t0, t2 - t1, t3 - t2, phase, c
 
 
@@ -1036,7 +1154,7 @@ step_frame.phase_prev = ""
 
 
 def in_crate(c):
-    return (abs(c[0] - CRATE_C[0]) < CRATE_HX and abs(c[2] - CRATE_C[1]) < CRATE_HZ
+    return (abs(c[0] - TARGET_C[0]) < CRATE_HX and abs(c[2] - TARGET_CZ) < CRATE_HZ
             and c[1] < CRATE_RIM)
 
 
@@ -1046,65 +1164,279 @@ canvas = tp.Canvas("threepp x warp - Franka FR3 soft gripper", width=WIDTH, heig
                    antialiasing=4, headless=HEADLESS, vsync=False)
 renderer = tp.VulkanRenderer(canvas)
 
+
+def _try(fn, *a):
+    try:
+        fn(*a)
+        return True
+    except Exception:                                # noqa: BLE001
+        return False
+
+
+def _set(name, value):
+    try:
+        setattr(renderer, name, value)
+        return True
+    except Exception:                                # noqa: BLE001
+        return False
+
+
+# Clean, bright, slightly cool. Phase 1/2 rendered a dark back half; this is the
+# "bright cell" half of the brief.
+# NOTE: the scene lights are not in physical units, so a physical camera at
+# f/2.8 1/60 ISO 200 renders it essentially black (measured). Auto exposure for
+# every rig; MACRO keeps only the depth of field, driven by focus_distance.
+_set("auto_exposure", True)
+_try(renderer.set_auto_exposure_range, 0.15, 3.0)
+if CAM == "macro":
+    _set("depth_of_field", True)
+_try(renderer.set_white_balance, 6900.0, 0.0)
+_set("bloom_strength", 0.12)
+_set("bloom_threshold", 1.6)
+
 scene = tp.Scene()
-scene.background = 0x2b3138
+scene.background = 0x39434f
 
-camera = tp.PerspectiveCamera(42, canvas.aspect(), 0.05, 40)
-camera.position.set(0.92, 0.44, 0.62)
-camera.look_at(0.44, 0.10, 0.02)
+camera = tp.PerspectiveCamera(42 if CAM != "macro" else 34, canvas.aspect(), 0.03, 40)
+CAM_HOME = {"wide": ((1.30, 0.72, 0.92), (0.30, 0.20, 0.0)),
+            "top": ((0.46, 1.02, 0.30), (0.40, 0.05, 0.0)),
+            "macro": ((0.80, 0.40, 0.34), (0.45, 0.10, 0.10))}
+_cp, _ct = CAM_HOME.get(CAM, CAM_HOME["wide"])
+camera.position.set(*_cp)
+camera.look_at(*_ct)
+_cam_target = np.array(_ct, np.float32)
+# MACRO rides the tool: 45 cm off the TCP on a fixed bearing, aimed at a
+# smoothed TCP so the frame does not snap when the arm changes direction, with
+# the focus distance driven from the same number.
+MACRO_OFF = np.array([0.34, 0.17, 0.20], np.float32)
+MACRO_OFF = MACRO_OFF / np.linalg.norm(MACRO_OFF) * 0.45
 
-scene.add(tp.HemisphereLight(0xdfeaff, 0x2a2f36, 0.55))
-key = tp.DirectionalLight(0xfff2e0, 3.0)
-key.position.set(1.6, 2.4, 1.2)
-key.cast_shadow = True
+
+def aim_camera(tcp):
+    global _cam_target
+    if CAM != "macro":
+        return
+    _cam_target += (tcp - _cam_target) * 0.06        # smoothed follow
+    eye = _cam_target + MACRO_OFF
+    camera.position.set(float(eye[0]), float(eye[1]), float(eye[2]))
+    camera.look_at(float(_cam_target[0]), float(_cam_target[1]), float(_cam_target[2]))
+    try:
+        renderer.focus_distance = float(np.linalg.norm(eye - _cam_target))
+    except Exception:                                # noqa: BLE001
+        pass
+
+# RobotCell's base (cool skylight + one clean white sun) plus a warm key from
+# front-left. The phase-1/2 frames were dark in the back half; this is the
+# "clean bright cell" the brief asks for.
+scene.add(tp.HemisphereLight(0xcfe0ff, 0x2a2e33, 0.9))
+sun = tp.DirectionalLight(0xeaf2ff, 2.0)
+sun.position.set(-0.8, 3.0, 1.0)
+sun.cast_shadow = True
+scene.add(sun)
+key = tp.DirectionalLight(0xffe0c0, 1.5)
+key.position.set(1.8, 1.4, 1.6)
 scene.add(key)
-fill = tp.DirectionalLight(0xbcd4ff, 1.1)
-fill.position.set(-1.4, 1.6, -1.6)
-scene.add(fill)
 
-table = tp.Mesh(tp.BoxGeometry(2.2, 0.06, 1.6), standard_material(0x9aa3ac, 0.28, 0.9))
+table = tp.Mesh(tp.BoxGeometry(2.2, 0.06, 1.6), standard_material(0xb8bcc0, 0.30, 0.55))
 table.position.set(0.35, -0.03, 0.0)
 table.receive_shadow = True
 scene.add(table)
 
 tray = tp.Mesh(tp.BoxGeometry(2 * TRAY_HX, TRAY_Y, 2 * TRAY_HZ),
-               standard_material(0xb8c0c8, 0.22, 0.95))
+               standard_material(0xc2c7cb, 0.26, 0.7))
 tray.position.set(TRAY_C[0], TRAY_Y * 0.5, TRAY_C[1])
 tray.receive_shadow = True
 scene.add(tray)
 
 crate_mat = standard_material(0x2f6fae, 0.55, 0.0)
-crate_floor = tp.Mesh(tp.BoxGeometry(2 * CRATE_HX, CRATE_FLOOR, 2 * CRATE_HZ), crate_mat)
-crate_floor.position.set(CRATE_C[0], CRATE_FLOOR * 0.5, CRATE_C[1])
-scene.add(crate_floor)
-for dx, dz, w, d in ((CRATE_HX, 0.0, 0.012, 2 * CRATE_HZ), (-CRATE_HX, 0.0, 0.012, 2 * CRATE_HZ),
-                     (0.0, CRATE_HZ, 2 * CRATE_HX, 0.012), (0.0, -CRATE_HZ, 2 * CRATE_HX, 0.012)):
-    wall = tp.Mesh(tp.BoxGeometry(w, CRATE_RIM, d), crate_mat)
-    wall.position.set(CRATE_C[0] + dx, CRATE_RIM * 0.5, CRATE_C[1] + dz)
-    wall.cast_shadow = True
-    scene.add(wall)
+for cc in (CRATE_C, CRATE2_C):
+    crate_floor = tp.Mesh(tp.BoxGeometry(2 * CRATE_HX, CRATE_FLOOR, 2 * CRATE_HZ), crate_mat)
+    crate_floor.position.set(cc[0], CRATE_FLOOR * 0.5, cc[1])
+    scene.add(crate_floor)
+    for dx, dz, w, d in ((CRATE_HX, 0.0, 0.012, 2 * CRATE_HZ),
+                         (-CRATE_HX, 0.0, 0.012, 2 * CRATE_HZ),
+                         (0.0, CRATE_HZ, 2 * CRATE_HX, 0.012),
+                         (0.0, -CRATE_HZ, 2 * CRATE_HX, 0.012)):
+        wall = tp.Mesh(tp.BoxGeometry(w, CRATE_RIM, d), crate_mat)
+        wall.position.set(cc[0] + dx, CRATE_RIM * 0.5, cc[1] + dz)
+        wall.cast_shadow = True
+        scene.add(wall)
 
-backdrop = tp.Mesh(tp.PlaneGeometry(6, 3), standard_material(0x323a44, 0.95))
-backdrop.position.set(-0.6, 1.0, -1.4)
+backdrop = tp.Mesh(tp.PlaneGeometry(8, 4), standard_material(0x39434f, 0.95))
+backdrop.position.set(-0.6, 1.2, -1.6)
 scene.add(backdrop)
+side_wall = tp.Mesh(tp.PlaneGeometry(6, 4), standard_material(0x39434f, 0.95))
+side_wall.position.set(-1.6, 1.2, 0.0)
+side_wall.rotation.y = math.pi / 2
+scene.add(side_wall)
 
 scene.add(robot)
 
 fin_geo = tp.BufferGeometry()
 fin_geo.set_attribute("position", p0[fin_tris_np])
 fin_geo.set_attribute("normal", np.tile(np.array([0, 1, 0], np.float32), (fin_corners, 1)))
-fingers_mesh = tp.Mesh(fin_geo, standard_material(0x2c3038, 0.55, 0.0))
+# The soup is a closed box wound outward, but the two skins cross each other
+# wherever the truss shears, so single-sided culling flickers holes through the
+# pads. Double-sided costs nothing here and the pad is never seen from inside.
+_fin_mat = standard_material(0x2c3038, 0.55, 0.0)
+_fin_mat.side = tp.Side.Double
+fingers_mesh = tp.Mesh(fin_geo, _fin_mat)
 fingers_mesh.cast_shadow = True
 fingers_mesh.frustum_culled = False
 scene.add(fingers_mesh)
 
+def skin_texture(w=384, h=192):
+    """Procedural herring: silver-white belly -> blue-green-grey back, a darker
+    lateral line, fine scale noise, and a wash of pink at the gills. Rows are v
+    (0 = belly), columns are u along the body with u = 0 at the head."""
+    stops = np.array([0.00, 0.30, 0.46, 0.56, 0.60, 0.78, 1.00])
+    cols = np.array([[248, 250, 252], [236, 241, 246], [186, 200, 208],
+                     [120, 146, 152], [84, 108, 112], [66, 104, 100], [40, 66, 70]],
+                    dtype=np.float64)
+    v = np.linspace(0.0, 1.0, h)
+    img = np.stack([np.interp(v, stops, cols[:, c]) for c in range(3)], -1)
+    img = np.repeat(img[:, None, :], w, axis=1)
+    uu = np.linspace(0.0, 1.0, w)[None, :, None]
+    vv = v[:, None, None]
+    # scales: a fine diamond lattice, brighter on the flank than on the back
+    sc = (np.cos(uu * 210.0) * np.cos(vv * 96.0)) * 14.0 * (1.0 - np.abs(vv - 0.42) * 1.3)
+    rng = np.random.default_rng(11)
+    img = img + sc + rng.normal(0.0, 3.0, (h, w, 1))
+    # lateral line, and the gill blush just behind the head
+    img *= (1.0 - 0.16 * np.exp(-((vv - 0.545) / 0.018) ** 2))
+    gill = np.exp(-((uu - 0.155) / 0.055) ** 2) * np.clip(1.0 - vv * 1.5, 0.0, 1.0)
+    img = img + gill * np.array([70.0, -14.0, 4.0])
+    return tp.data_texture(np.clip(img, 0, 255).astype(np.uint8), srgb=True)
+
+
+# u along the body (0 at the head, which is -x because the taper puts the meat
+# in the front half), v around it from belly to back. Linear in the unit
+# icosphere's own y, so there is no atan2 seam to hide.
+fish_uv = np.stack([unit[:, 0] * 0.5 + 0.5, unit[:, 1] * 0.5 + 0.5], -1).astype(np.float32)
+
 fish_geo = tp.BufferGeometry()
 fish_geo.set_attribute("position", (fish_tmpl + np.array(FISH_P, np.float32))[fish_tris_np])
 fish_geo.set_attribute("normal", unit[fish_tris_np].astype(np.float32))
-fish_mesh = tp.Mesh(fish_geo, standard_material(0xa9bcce, 0.38, 0.25))
+fish_geo.set_attribute("uv", fish_uv[fish_tris_np])
+fish_mat = tp.MeshPhysicalMaterial()
+fish_mat.color = 0xffffff
+fish_mat.map = skin_texture()
+fish_mat.roughness = 0.5
+fish_mat.metalness = 0.0
+fish_mat.clearcoat = 0.85          # the wet coat is what sells a fresh fish
+fish_mat.clearcoat_roughness = 0.1
+fish_mesh = tp.Mesh(fish_geo, fish_mat)
 fish_mesh.cast_shadow = True
 fish_mesh.frustum_culled = False
 scene.add(fish_mesh)
+
+
+def build_fins():
+    """Tail, dorsal and two pectorals as thin triangle fans, in the fish's own
+    template frame. They ride the SAME tet cage as the body: bind_lattice's
+    weights are unclamped, so a vertex outside the cage extrapolates from its
+    nearest cell, and the fins flutter with the flesh they are attached to."""
+    L, H, W = FISH_LEN, FISH_H_REST, FISH_W
+    verts, faces = [], []
+
+    def strip(root, tip):
+        b = len(verts)
+        verts.extend(root)
+        verts.extend(tip)
+        n = len(root)
+        for i in range(n - 1):
+            faces.append((b + i, b + i + 1, b + n + i + 1))
+            faces.append((b + i, b + n + i + 1, b + n + i))
+
+    # caudal fan: root across the tail stalk, tip swept back into a fork
+    ts = np.linspace(-1.0, 1.0, 7)
+    strip([(0.44 * L, t * 0.055 * H, 0.0) for t in ts],
+          [(0.50 * L + abs(t) * 0.085 * L, t * 0.36 * H, 0.0) for t in ts])
+    # dorsal
+    xs = np.linspace(-0.06 * L, 0.14 * L, 6)
+    strip([(x, 0.47 * H, 0.0) for x in xs],
+          [(x + 0.02 * L, 0.47 * H + 0.20 * H * math.sin(math.pi * i / 5.0), 0.0)
+           for i, x in enumerate(xs)])
+    # pectorals, one per side, swept back and down
+    for sgn in (-1.0, 1.0):
+        ys = np.linspace(-0.02 * H, 0.16 * H, 4)
+        strip([(-0.20 * L, y, sgn * 0.42 * W) for y in ys],
+              [(-0.10 * L, y - 0.16 * H, sgn * 0.95 * W) for y in ys])
+    return np.array(verts, np.float32), np.array(faces, np.int32)
+
+
+fin_v_tmpl, fin_f_tmpl = build_fins()
+FIN_NV, FIN_NF = len(fin_v_tmpl), len(fin_f_tmpl)
+fin_ids, fin_w = bind_lattice(fin_v_tmpl.astype(np.float64), CAGE_LO, CAGE_H,
+                              CAGE_DIMS, CAGE_SOLID, CAGE_ID)
+fin_ids_d = wp.array(fin_ids, dtype=int, device=device)
+fin_w_d = wp.array(fin_w, dtype=float, device=device)
+finv = wp.zeros(FIN_NV, dtype=wp.vec3, device=device)
+finvn = wp.zeros(FIN_NV, dtype=wp.vec3, device=device)
+fin_ftris_np = fin_f_tmpl.reshape(-1)
+fin_ftris_d = wp.array(fin_ftris_np, dtype=int, device=device)
+finf_pos = wp.zeros(len(fin_ftris_np), dtype=wp.vec3, device=device)
+finf_nrm = wp.zeros(len(fin_ftris_np), dtype=wp.vec3, device=device)
+
+fins_geo = tp.BufferGeometry()
+fins_geo.set_attribute("position", (fin_v_tmpl + np.array(FISH_P, np.float32))[fin_ftris_np])
+fins_geo.set_attribute("normal", np.tile(np.array([0, 0, 1], np.float32),
+                                         (len(fin_ftris_np), 1)))
+fins_mat = tp.MeshPhysicalMaterial()
+fins_mat.color = 0xc8d6dc
+fins_mat.roughness = 0.35
+fins_mat.metalness = 0.0
+fins_mat.clearcoat = 0.6
+fins_mat.side = tp.Side.Double
+for _k, _v in (("translucency", 0.6), ("translucency_color", 0xdfe8ee)):
+    try:
+        setattr(fins_mat, _k, _v)
+    except Exception:                      # noqa: BLE001
+        pass
+fins_mesh = tp.Mesh(fins_geo, fins_mat)
+fins_mesh.frustum_culled = False
+scene.add(fins_mesh)
+
+# The eye is a plain little sphere parked on the head each frame. Its anchor is
+# a render vertex, so it deforms with the head instead of floating.
+_eye_tmpl = np.array([(-0.34 * FISH_LEN, 0.16 * FISH_H_REST, sg * FISH_W * 0.30)
+                      for sg in (-1.0, 1.0)], np.float32)
+_corner_of = np.zeros(FISH_NV, np.int64)
+_corner_of[fish_tris_np] = np.arange(len(fish_tris_np))
+EYE_CORNER = [int(_corner_of[int(np.argmin(((fish_tmpl - e) ** 2).sum(1)))]) for e in _eye_tmpl]
+eyes = []
+for _ in range(2):
+    e = tp.Mesh(tp.SphereGeometry(0.0075, 12, 10), standard_material(0x14181c, 0.15, 0.0))
+    e.frustum_culled = False
+    scene.add(e)
+    eyes.append(e)
+
+# --- [E] wrist camera picture-in-picture ---------------------------------------
+
+# A secondary view is a real render of the scene from the hand, blitted into the
+# primary frame by setViewDisplayRect at 1:1 -- no extra pass over the main
+# image. The handle is only valid after the first render, so it is created lazily.
+wrist_cam = tp.PerspectiveCamera(54, 320.0 / 180.0, 0.02, 4.0)
+wrist_cam.position.set(0.0, 0.0, 0.035)      # just ahead of the hand flange
+wrist_cam.rotation.y = math.pi               # a camera looks down -z; the tool is +z
+_hand = robot.get_object_by_name("fr3_hand")
+if _hand is not None:
+    _hand.add(wrist_cam)
+_pip = {"h": 0}
+
+
+def ensure_pip():
+    if not PIP or _pip["h"]:
+        return
+    try:
+        h = renderer.add_view(wrist_cam, 320, 180)
+        if h:
+            renderer.set_view_display_rect(h, WIDTH - 330, 10, 320, 180)
+            _pip["h"] = h
+    except Exception as e:                   # noqa: BLE001
+        print(f"  note: wrist PIP unavailable ({e})")
+        _pip["h"] = -1
+
 
 capture_substep()
 
@@ -1112,11 +1444,12 @@ capture_substep()
 def summary(c):
     ok = in_crate(c)
     mean = slip_mean / max(slip_n, 1)
-    print(f"pick: grip {report.get('grip_N', grip_force):.2f} N at "
+    print(f"pick: fish {FISH_LEN * 1000:.0f} mm -> {CRATE_NAME} crate | "
+          f"grip {report.get('grip_N', grip_force):.2f} N at "
           f"{report.get('grip_open_mm', finger_cmd * 1000):.1f} mm carriage | "
           f"slip mean {mean * 1000:.1f} mm/s, peak {slip_peak * 1000:.1f} mm/s | "
           f"fish at ({c[0]:.3f}, {c[1]:.3f}, {c[2]:.3f}) -> "
-          f"{'IN THE CRATE' if ok else 'NOT in the crate'}")
+          f"{'SUCCESS: IN THE CRATE' if ok else 'FAILED: not in the crate'}")
     return ok
 
 
@@ -1127,6 +1460,7 @@ if SHOT:
         last = step_frame()[4]
     for _ in range(40):                    # let AE / TAA settle
         renderer.render(scene, camera)
+        ensure_pip()
     from PIL import Image
     out = cli_arg("--out", "warp_franka_softgrip.png", str)
     Image.fromarray(renderer.read_pixels()).save(out)
@@ -1140,6 +1474,7 @@ elif BENCH:
         last = parts[4]
         t = time.perf_counter()
         renderer.render(scene, camera)
+        ensure_pip()
         r = time.perf_counter() - t
         if n >= 30:
             for i in range(3):
@@ -1153,6 +1488,21 @@ elif BENCH:
           f"{total:.2f} ms/frame ({1000.0 / total:.0f} fps)")
     summary(last)
 else:
+    # Slow motion around the wrap: 1x -> 0.15x -> 1x. The sim advances on an
+    # accumulator rather than by shrinking dt, because dt is baked into the
+    # captured CUDA graph.
+    slow = {"acc": 0.0}
+
+    def rate():
+        if not SLOWMO:
+            return 1.0
+        nm = PLAN[seg_i][0]
+        if nm == "CLOSE":
+            return 0.15
+        if nm == "LIFT":
+            return min(1.0, 0.15 + seg_t / 1.2 * 0.85)
+        return 1.0
+
     controls = tp.OrbitControls(camera, canvas)
     controls.enable_damping = True
     controls.target.set(0.44, 0.10, 0.02)
@@ -1166,12 +1516,17 @@ else:
     state = {"done": False, "phase": ""}
 
     def animate():
-        parts = step_frame()
-        state["phase"] = parts[3]
-        if parts[3] == "DONE" and not state["done"]:
-            state["done"] = True
-            summary(parts[4])
-        controls.update()
+        slow["acc"] += rate()
+        while slow["acc"] >= 1.0:
+            slow["acc"] -= 1.0
+            parts = step_frame()
+            state["phase"] = parts[3]
+            if parts[3] == "DONE" and not state["done"]:
+                state["done"] = True
+                summary(parts[4])
+        if CAM != "macro":
+            controls.update()
         renderer.render(scene, camera)
+        ensure_pip()
 
     canvas.animate(animate)
