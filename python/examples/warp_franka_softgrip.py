@@ -435,16 +435,24 @@ def body_profile(rv, nb=28, keep=90.0):
         v = np.interp(idx, idx[good], v[good])
         return np.convolve(np.pad(v, 1, mode="edge"), np.array([0.25, 0.5, 0.25]), mode="valid")
 
-    # Width first: 90th percentile of |z| per slice, trimming pectoral-fin z
-    # spikes with a median gate.
+    # Width: 90th percentile of |z| per slice. NO median gate: on slices where
+    # median-plane fin verts outnumber the (sparsely tessellated) mid-body flank
+    # the gate threw away the BODY and kept the fins -- measured, zhw collapsed
+    # to 0.9-3.4 mm at x = +4..+21 mm and the cage necked to a one-cell sliver
+    # (the hinge the fish folded over in the drop). p90 is already robust to a
+    # few pectoral outliers; single-slice spikes die in a cross-slice median-of-3.
     zhw = np.full(nb, np.nan)
     for i in range(nb):
         m = bidx == i
         if int(m.sum()) >= 4:
-            med = np.median(az[m])
-            sel = m & (az <= max(4.0 * med, med + 0.006))
-            zhw[i] = np.percentile(az[sel] if int(sel.sum()) >= 3 else az[m], keep)
-    zhw = np.maximum(fill_smooth(zhw), 1.0e-4)
+            zhw[i] = np.percentile(az[m], keep)
+    good = ~np.isnan(zhw)
+    med3 = zhw.copy()
+    gi = np.nonzero(good)[0]
+    for j, i in enumerate(gi):
+        nbrs = zhw[gi[max(j - 1, 0):j + 2]]
+        med3[i] = np.median(nbrs)
+    zhw = np.maximum(fill_smooth(med3), 1.0e-4)
 
     # Height over FLANK verts only (|z| off the median plane), so the dorsal /
     # anal / caudal fins -- which live at z ~ 0 -- never set the cage height.
