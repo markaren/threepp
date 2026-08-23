@@ -228,7 +228,9 @@ YOUNG = cli_arg("--young", 2.5e5, float)      # Pa
 POISSON = cli_arg("--poisson", 0.45, float)   # near-incompressible
 MU_LAME = YOUNG / (2.0 * (1.0 + POISSON))
 LAM_LAME = YOUNG * POISSON / ((1.0 + POISSON) * (1.0 - 2.0 * POISSON))
-TET_RES = 22          # voxel cells along the fish's length
+TET_RES = cli_arg("--tet-res", 40, int)   # voxel cells along the fish's length
+                      # (22 was visibly blocky; finer also hugs the skin tighter
+                      # since the carve dilation is measured in cells)
 CARVE = 0.25          # cells of dilation, so the cage measures the fish
 
 # Contact radius, and it is a CLEARANCE budget as much as a collision one: the
