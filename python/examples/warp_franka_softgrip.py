@@ -92,7 +92,7 @@ if FILM:
 FPS = 60.0
 DT = 1.0 / 240.0
 SUBSTEPS = 6
-ITERATIONS = 16
+ITERATIONS = 26
 DAMPING = 0.04
 DAMPING_FIN = 0.22       # the truss rings otherwise -- see integrate_damped
 GRAVITY = wp.vec3(0.0, -9.81, 0.0)
@@ -102,6 +102,34 @@ RELAX = 0.5
 STIFF_SKIN = 1.0
 STIFF_RIB = 0.7
 STIFF_DIAG = 0.35
+# BENDING. A distance-only sheet has no bending stiffness at all: every fold is
+# free, so under the clamp the skins buckled into crumpled amber foil (phase 4's
+# poster shows the lower half of each finger reading as a crushed paper bag) and
+# the buckles folded triangles back on themselves, which is where the wrist-POV
+# "holes" came from. A real Fin Ray skin is a stiff plastic strip -- it bends in
+# a smooth arc. Skip-a-node chords give the sheet exactly that: they resist
+# CURVATURE without adding any in-plane stretch resistance, so the truss's shear
+# compliance -- the Fin Ray effect itself -- is untouched. Same trick as the
+# fish's spine chords (phase 3), applied in both directions of both skins.
+STIFF_BEND = 0.9
+STIFF_BEND2 = 0.0     # skip-TWO chords along the columns, if skip-one is not
+                      # enough. Off: skip-one plus the gain cap below is enough,
+                      # and every row costs budget.
+# The cell's two diagonals. Softening them to 0.6 to pay for the bending rows'
+# Jacobi budget was TRIED and is wrong: the in-plane shear rows are load path
+# from the pinned root to the pad face, and at 0.6 the hand ploughed the fish
+# across the tray instead of lifting it (grip 1.65 N, slip 188 mm/s). The budget
+# is bought with FIN_GAIN_CAP below instead. Left as a named knob, not a magic 1.0.
+STIFF_SHEAR = 1.0
+# Jacobi gain cap for the TRUSS nodes. The fish is normalised to 1 (see the
+# solver); the truss deliberately is not, because normalising it to 1 costs the
+# clamp (3.1 N -> 0.9 N, measured in phase 3). But a truss node already ran a
+# gain of ~2.8, and simply adding the bending rows on top took it to ~3.7 and
+# the skins came back SPIKY -- a per-row checkerboard, the classic over-relaxed
+# Jacobi signature. So: cap, do not normalise. Rows below the cap behave exactly
+# as they did before this phase; the surplus the new rows would have added is
+# what gets divided out.
+FIN_GAIN_CAP = 5.5    # in units of 0.5 * sum(stiffness) at the node
 # Root fan. Only the two root rows are pinned to the carriage, and a Jacobi
 # solve moves a rigid translation down an 11-row chain appallingly slowly: the
 # pad face lagged the carriage so badly that a hand provably squeezing the fish
@@ -359,8 +387,22 @@ def finger_pairs(base):
                 if j + 1 < FIN_COLS:
                     p.append((pid(i, j, skin), pid(i, j + 1, skin), STIFF_SKIN))
                 if i + 1 < FIN_ROWS and j + 1 < FIN_COLS:
-                    p.append((pid(i, j, skin), pid(i + 1, j + 1, skin), STIFF_SKIN))
-                    p.append((pid(i, j + 1, skin), pid(i + 1, j, skin), STIFF_SKIN))
+                    # The shear pair across every cell. Already at full skin
+                    # stiffness, so the sheet cannot shear IN PLANE -- what it
+                    # was missing is the out-of-plane term below.
+                    p.append((pid(i, j, skin), pid(i + 1, j + 1, skin), STIFF_SHEAR))
+                    p.append((pid(i, j + 1, skin), pid(i + 1, j, skin), STIFF_SHEAR))
+                # Bending: skip-a-node chords, root->tip (the bending direction)
+                # and across the finger. A chord over two cells is only violated
+                # by CURVATURE -- slide the middle node sideways along the sheet
+                # and the chord does not change length -- so this buys smooth
+                # arcs instead of buckles and costs the truss no shear freedom.
+                if i + 2 < FIN_ROWS:
+                    p.append((pid(i, j, skin), pid(i + 2, j, skin), STIFF_BEND))
+                if j + 2 < FIN_COLS:
+                    p.append((pid(i, j, skin), pid(i, j + 2, skin), STIFF_BEND))
+                if STIFF_BEND2 > 0.0 and i + 3 < FIN_ROWS:
+                    p.append((pid(i, j, skin), pid(i + 3, j, skin), STIFF_BEND2))
     for skin in (0, 1):
         for i in range(3, FIN_ROWS):
             for j in range(FIN_COLS):
@@ -697,6 +739,13 @@ def solve(p_in: wp.array(dtype=wp.vec3),
     # frame pin update (now interpolated) and DAMPING_FIN.
     if body[i] == 2:
         c = c * (1.0 / wp.max(1.0, 0.5 * wsum))
+    else:
+        # ...and on the TRUSS, a CAP rather than a normalisation: phase 5 added
+        # the skins' bending chords, which took the node's gain past what
+        # DAMPING_FIN could absorb and made the skins ring in a per-row spike
+        # pattern. Dividing only the surplus keeps every pre-phase-5 row at full
+        # strength, so the clamp survives (measured below 3 N either way).
+        c = c * (FIN_GAIN_CAP / wp.max(FIN_GAIN_CAP, 0.5 * wsum))
     # particle-particle contact, normal split by inverse mass + Coulomb friction
     for k in range(cont_n[i]):
         j = cont_idx[i * CONTACT_CAP + k]
@@ -885,6 +934,36 @@ fish_tris_np = fish_faces_t.reshape(-1).astype(np.int32)
 fish_tris_d = wp.array(fish_tris_np, dtype=int, device=device)
 fish_v = wp.zeros(FISH_NV, dtype=wp.vec3, device=device)
 fish_vn = wp.zeros(FISH_NV, dtype=wp.vec3, device=device)
+
+@wp.kernel
+def scatter_soup_safe(pos: wp.array(dtype=wp.vec3),
+                      nrm: wp.array(dtype=wp.vec3),
+                      tris: wp.array(dtype=int),
+                      out_pos: wp.array(dtype=wp.vec3),
+                      out_nrm: wp.array(dtype=wp.vec3)):
+    """`scatter_soup`, but a vertex whose smooth normal has CANCELLED falls back
+    to its own face's normal instead of normalising numerical noise.
+
+    A sheet with no bending stiffness folds, and where it folds the area-weighted
+    face normals meeting at a node point in opposite directions and sum to ~0.
+    The shared kernel then normalises that near-zero vector, i.e. amplifies float
+    noise into a random normal -- which is what the wrist POV showed as dark torn
+    patches across the skins. The bending chords above stop most of the folding;
+    this stops the shading from exploding on whatever fold is left.
+    """
+    k = wp.tid()
+    i = tris[k]
+    out_pos[k] = pos[i]
+    b0 = k - (k % 3)
+    a = pos[tris[b0]]
+    b = pos[tris[b0 + 1]]
+    c = pos[tris[b0 + 2]]
+    fn = wp.cross(b - a, c - a)
+    n = nrm[i]
+    if wp.length(n) < 0.3 * wp.length(fn):
+        n = fn
+    out_nrm[k] = n / wp.max(wp.length(n), 1.0e-9)
+
 
 fin_tris_np = np.concatenate([fin_faces[0].reshape(-1), fin_faces[1].reshape(-1)]).astype(np.int32)
 fin_tris_d = wp.array(fin_tris_np, dtype=int, device=device)
@@ -1140,11 +1219,11 @@ def step_frame():
               inputs=[x, FISH_BASE, CAGE_N, centroid])
     nrm.zero_()
     wp.launch(accum_normals, dim=N_FIN_FACES, device=device, inputs=[x, fin_tris_d, nrm])
-    wp.launch(scatter_soup, dim=fin_corners, device=device,
+    wp.launch(scatter_soup_safe, dim=fin_corners, device=device,
               inputs=[x, nrm, fin_tris_d, fin_pos, fin_nrm])
     rib_vn.zero_()
     wp.launch(accum_normals, dim=N_RIB_FACES, device=device, inputs=[x, rib_tris_d, rib_vn])
-    wp.launch(scatter_soup, dim=rib_corners, device=device,
+    wp.launch(scatter_soup_safe, dim=rib_corners, device=device,
               inputs=[x, rib_vn, rib_tris_d, rib_pos, rib_nrm])
     wp.launch(skin_lattice, dim=FISH_NV, device=device,
               inputs=[x, FISH_BASE, skin_ids_d, skin_w_d, fish_v])
@@ -1405,7 +1484,11 @@ def silicone(color, rough, clearcoat, translucency):
 fin_geo = tp.BufferGeometry()
 fin_geo.set_attribute("position", p0[fin_tris_np])
 fin_geo.set_attribute("normal", np.tile(np.array([0, 1, 0], np.float32), (fin_corners, 1)))
-fingers_mesh = tp.Mesh(fin_geo, silicone(0xe8c890, 0.38, 0.35, 0.55))
+# Translucency 0.55 -> 0.35: at 0.55 a double-sided sheet lit from behind bleeds
+# the far side's shading through, and from the wrist camera -- which looks along
+# the finger, straight into the open side of the truss -- that read as dark
+# patches on the near skin.
+fingers_mesh = tp.Mesh(fin_geo, silicone(0xe8c890, 0.38, 0.35, 0.35))
 fingers_mesh.cast_shadow = True
 fingers_mesh.frustum_culled = False
 scene.add(fingers_mesh)
