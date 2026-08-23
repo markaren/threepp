@@ -53,7 +53,8 @@ fingers do not hold the fish it falls.
     python warp_franka_softgrip.py --pov          # render from the wrist camera
     python warp_franka_softgrip.py --dof          # depth of field (see the note below)
     python warp_franka_softgrip.py --no-slowmo    # no 0.15x window around CLOSE -> LIFT
-    (interactive: press R to replay the scenario -- drop or pick -- from t = 0)
+    (interactive: R replays the scenario from t = 0; F cycles the FEM debug view
+     -- translucent skin + tet-cage wireframe -> wireframe only -> normal)
     python warp_franka_softgrip.py --no-pip       # no wrist-camera picture-in-picture
 """
 import math
@@ -107,6 +108,7 @@ PREVIEW = "--preview" in sys.argv
 # settles -- the material test bench for the soft fish (is it soft? does it sag,
 # tumble, land and lie like a fish?) with nothing else in the loop.
 DROP = "--drop" in sys.argv
+FEM_VIEW = "--fem-view" in sys.argv     # start with the tet cage visible
 BELT_V = cli_arg("--belt-v", 0.15, float)          # the ledge top is a belt: m/s along +x
 DROP_OVERHANG = cli_arg("--drop-overhang", 0.04, float)   # m of fish past the edge at t=0
 if FILM:
@@ -2191,9 +2193,12 @@ def step_frame():
     fish_geo.update_attribute("normal", fish_nn)
     fins_geo.update_attribute("position", finf_pos.numpy())
     fins_geo.update_attribute("normal", finf_nrm.numpy())
-    for _e, _ci in zip(eyes, EYE_CORNER):
+    if fem_wire.visible:
+        _cage_now = x.numpy()[FISH_BASE:FISH_BASE + CAGE_N]
+        fem_geo.update_attribute("position", np.ascontiguousarray(_cage_now[_e.reshape(-1)]))
+    for _ey, _ci in zip(eyes, EYE_CORNER):
         _p = fish_np[_ci]
-        _e.position.set(float(_p[0]), float(_p[1]), float(_p[2]))
+        _ey.position.set(float(_p[0]), float(_p[1]), float(_p[2]))
     aim_camera(tcp)
     return t1 - t0, t2 - t1, t3 - t2, phase, c
 
@@ -2505,6 +2510,39 @@ fish_mesh = tp.Mesh(fish_geo, fish_mat)
 fish_mesh.cast_shadow = True
 fish_mesh.frustum_culled = False
 scene.add(fish_mesh)
+
+# FEM debug view: the tet cage's 2430 unique edges as line segments riding the
+# live cage nodes, plus a translucent skin so you can see the flesh through it.
+# --fem-view starts with it on; F cycles skin+wire -> wire only -> normal.
+fem_geo = tp.BufferGeometry()
+fem_geo.set_attribute("position", cage_p0[_e.reshape(-1)].astype(np.float32))
+fem_mat = tp.LineBasicMaterial()
+fem_mat.color = tp.Color(0x27e58a)
+fem_wire = tp.LineSegments(fem_geo, fem_mat)
+fem_wire.frustum_culled = False
+fem_wire.visible = False
+scene.add(fem_wire)
+_fem_state = {"mode": 0, "opacity": float(getattr(fish_mat, "opacity", 1.0)),
+              "transparent": bool(getattr(fish_mat, "transparent", False))}
+
+
+def set_fem_view(mode):
+    """0 = normal render, 1 = translucent skin + tet wireframe, 2 = wireframe only."""
+    _fem_state["mode"] = mode % 3
+    m = _fem_state["mode"]
+    fem_wire.visible = m > 0
+    fish_mesh.visible = m < 2
+    fish_mat.transparent = _fem_state["transparent"] or m == 1
+    fish_mat.opacity = 0.35 if m == 1 else _fem_state["opacity"]
+    try:
+        fish_mat.needs_update = True
+    except AttributeError:
+        pass                     # pybind exposes it read-only on some materials
+    print(f"  fem view: {('off', 'skin + cage', 'cage only')[m]}")
+
+
+if FEM_VIEW:
+    set_fem_view(1)
 
 
 def build_fins():
@@ -2891,6 +2929,10 @@ else:
             state["done"] = False
             slow["acc"] = 0.0
         state["r_down"] = r
+        f = canvas.is_key_down("F")
+        if f and not state.get("f_down"):
+            set_fem_view(_fem_state["mode"] + 1)
+        state["f_down"] = f
         slow["acc"] += rate()
         while slow["acc"] >= 1.0:
             slow["acc"] -= 1.0
