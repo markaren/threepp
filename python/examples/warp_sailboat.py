@@ -64,6 +64,7 @@ simulation never stops.
     python warp_sailboat.py                     # window; drag to orbit, Esc quits
     python warp_sailboat.py --tod 19.7 --weather clearing
     python warp_sailboat.py --wind 14           # override the weather's wind
+    python warp_sailboat.py --fetch 0           # fully developed (open-ocean) swell
     python warp_sailboat.py --birds 60          # more gulls
     python warp_sailboat.py --timelapse             # run the day in time-lapse
     python warp_sailboat.py --shot 25 --tod 23.5 --weather night --out night.png
@@ -102,6 +103,13 @@ SHOT_T = cli_arg("--shot", 25.0, float)
 TOD0 = cli_arg("--tod", 5.2, float) % 24.0        # clock time, hours
 WEATHER0 = cli_arg("--weather", "mist", str)
 WIND0 = cli_arg("--wind", 0.0, float)             # 0 = let the weather decide
+# Metres of open water upwind of her. 0 is the fully developed Phillips sea,
+# whose peak at 9.5 m/s sits at ~80 m (260 m in the storm) and carries nearly
+# all the height -- a long low swell that makes a 9.6 m hull read as a bath
+# toy. 30 km is a coastal sea: the JONSWAP peak lands at 20-35 m, the
+# short-wave tail gains energy, and the surface between crests is steep chop at
+# the scale of her own wake, which is the size reference the eye actually uses.
+FETCH = cli_arg("--fetch", 30e3, float)
 
 # ---- the film ---------------------------------------------------------------
 #  `--film out.mp4` runs the whole scripted picture headless and writes H.264.
@@ -1484,7 +1492,7 @@ scene.add(moon)
 
 SEA = 1400.0
 ocean = tp.Ocean(size=SEA, resolution=640, wind_speed=weather["wind"], wind_theta=0.6,
-                 choppiness=weather["choppy"], fft_size=1024)
+                 choppiness=weather["choppy"], fft_size=1024, fetch=FETCH)
 scene.add(ocean)
 
 # Dark water below the surface so refraction has something to read against.
@@ -2477,6 +2485,7 @@ knob = {
     "cloth": 420.0,            # sailcloth areal density, g/m2
     "stiff": 1.0,
     "sea_follows": True,
+    "fetch": FETCH,            # m of open water upwind; 0 = fully developed sea
     "wave_scale": weather["wave_scale"],
     "choppy": weather["choppy"],
     "foam": 1.0,
@@ -3246,6 +3255,10 @@ def draw_ui():
     if ch:
         apply_ocean_wind()
     _, knob["sea_follows"] = tp.imgui.checkbox("sea state follows wind", knob["sea_follows"])
+    ch, _fk = tp.imgui.slider_float("fetch (km, 0 = open ocean)", knob["fetch"] * 1e-3, 0.0, 150.0)
+    if ch:
+        knob["fetch"] = _fk * 1e3
+        ocean.params.fetch = knob["fetch"]
     tp.imgui.separator()
 
     _, knob["auto_trim"] = tp.imgui.checkbox("auto-trim sheets", knob["auto_trim"])
