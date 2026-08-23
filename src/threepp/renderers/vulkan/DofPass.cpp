@@ -335,7 +335,9 @@ namespace threepp::vulkan {
         wImg(tileSet1_, 0, S, sampled(tileA_.view, nearestSampler_));
         wImg(tileSet1_, 1, I, storage(tileB_.view));
         wImg(gatherSet_, 0, S, sampled(half_.view, nearestSampler_));
-        wImg(gatherSet_, 1, S, sampled(tileB_.view, nearestSampler_));
+        // Linear: the gather bilinearly interpolates the dilated tile max so
+        // the gather radius varies smoothly per pixel (no per-tile staircase).
+        wImg(gatherSet_, 1, S, sampled(tileB_.view, linearSampler_));
         wImg(gatherSet_, 2, I, storage(far_.view));
         wImg(gatherSet_, 3, I, storage(near_.view));
 

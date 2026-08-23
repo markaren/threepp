@@ -41,9 +41,19 @@ void main() {
     const ivec2 mx     = ivec2(int(pc.halfW) - 1, int(pc.halfH) - 1);
     const vec4  center = texelFetch(halfTex, hp, 0);
 
-    const ivec2 tile = min(hp / 8, ivec2(int(pc.tilesW) - 1, int(pc.tilesH) - 1));
-    const vec2  tm   = texelFetch(tileTex, tile, 0).rg;// (maxNear, maxFar)
-    const float R    = max(tm.r, tm.g);
+    // Bilinearly sample the DILATED tile max so the gather radius varies
+    // smoothly per pixel instead of stepping at each 8×8-tile (16 full-res
+    // px) boundary. The per-tile-constant radius was the staircase of halo
+    // blocks along every depth discontinuity: R jumped a whole tile at a
+    // time, so the blur size and the passthrough onset both quantized to the
+    // tile grid. The dilate already made neighbouring tiles' maxima agree to
+    // within one tile, so interpolating between them can only smooth the
+    // radius, never under-search a bokeh a tile away. Tile texels are 8
+    // half-res px wide, centred at 8·t+3.5, so a half-res pixel hp samples at
+    // texel coordinate (hp−3.5)/8 → uv = (hp+0.5)/(8·tiles).
+    const vec2  tileUV = (vec2(hp) + 0.5) / (8.0 * vec2(float(pc.tilesW), float(pc.tilesH)));
+    const vec2  tm     = texture(tileTex, tileUV).rg;// bilinear (maxNear, maxFar)
+    const float R      = max(tm.r, tm.g);
 
     if (R < 0.4) {// whole neighbourhood sharp — passthrough (0.8 full-res px:
         // low enough that the blur ONSET ramps in smoothly instead of whole
