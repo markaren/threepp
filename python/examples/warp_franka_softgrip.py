@@ -5,7 +5,10 @@ The arm is the real FR3 URDF driven by threepp's own damped-least-squares IK
 the rigid stock ones: each stock finger carries a GPU soft body -- an XPBD
 two-skin truss, front skin and back skin joined by stiff ribs and SOFT
 diagonals, which is what makes it a Fin Ray: press the front skin and the tip
-curls toward the object. The fish is an XPBD pressurised shell.
+curls toward the object. The fish is a FILLED XPBD tet body: a voxel-carved
+conforming cage with a volume row per tet, with the drawn surface skinned off
+it. A hollow shell was the thing that lost the grasp -- pinching one between
+two converging paddles extrudes it out of the hand.
 
 Fingers and fish live in ONE solver over ONE hash grid with Coulomb friction,
 so the grasp is friction plus form closure. There is no kinematic attach and no
@@ -19,6 +22,7 @@ pad contact force crosses a threshold, then hold.
     python warp_franka_softgrip.py --shot 3.2     # headless PNG at sim time 3.2 s
     python warp_franka_softgrip.py --frames 600   # timed phase breakdown
     python warp_franka_softgrip.py --grip-force 8 # close threshold, newtons
+    python warp_franka_softgrip.py --fish-len 0.3 # graded sizes: 0.24 / 0.27 / 0.30
 """
 import math
 import os
