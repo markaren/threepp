@@ -268,6 +268,13 @@ CAGE_R_CELLS = 0.30
 # Surface contact query margin: a pad node looks for the fish skin this far
 # beyond its own radius when the substep's contacts are latched.
 CONTACT_MARGIN = 0.004
+# How deep inside the fish a finger/palm node can still FIND the skin. With the
+# old 7 mm search radius, a node squeezed deeper than that lost its contact
+# silently and was then free INSIDE the fish -- the "fish fuses with the bent
+# finger" the user caught in the FEM view. Recovery pushes are capped per sweep
+# so a deeply embedded node heals over a few substeps instead of detonating.
+CONTACT_DEEP = 0.030
+CONTACT_HEAL = 0.008
 SURF_R = 0.0005         # the skin's own thickness against the tray / crate
 
 # 0.7: wet-slimy fish on silicone. 1.10 was tuned when friction was the only
@@ -991,6 +998,7 @@ tet_Dm_inv = np.linalg.inv(_Dm).astype(np.float32)            # (N_TETS, 3, 3)
 _dt2 = DT * DT
 tet_alpha_d = (1.0 / (MU_LAME * tet_rest_vol.astype(np.float64) * _dt2)).astype(np.float32)
 tet_alpha_h = (1.0 / (LAM_LAME * tet_rest_vol.astype(np.float64) * _dt2)).astype(np.float32)
+_YOUNG0, _KFIN0 = YOUNG, K_FIN          # bases for the live imgui rescale
 # Rest edge lengths, for the max-stretch diagnostic only (not a constraint).
 _rest_edge_len = np.linalg.norm(cage_v[_e[:, 0]] - cage_v[_e[:, 1]], axis=1).astype(np.float32)
 
@@ -1341,6 +1349,7 @@ def surface_contacts_build(pos: wp.array(dtype=wp.vec3),
     # and the penetration at prediction time (the friction budget's floor). The
     # cage nodes under the contact are counted for mass splitting.
     i = wp.tid()
+    had = mc_face[i] >= 0          # was in contact last substep
     mc_face[i] = -1
     mc_acc[i] = 0.0
     if body[i] == 2:
@@ -1348,12 +1357,20 @@ def surface_contacts_build(pos: wp.array(dtype=wp.vec3),
     if invm[i] == 0.0 and body[i] != 3:
         return                     # pinned finger roots do not collide; the palm does
     p = pos[i]
-    q = wp.mesh_query_point_sign_normal(mesh, p, PART_R + margin)
+    q = wp.mesh_query_point_sign_normal(mesh, p, PART_R + CONTACT_DEEP)
     if not q.result:
         return
     cp = wp.mesh_eval_position(mesh, q.face, q.u, q.v)
     d = p - cp
     dist = wp.length(d)
+    if dist > PART_R + margin:
+        # Beyond the shallow band, trust the "inside" verdict only for a node
+        # that was ALREADY in contact last substep: real embedding is always
+        # entered through the shallow band, while the body mesh's open fin
+        # boundaries make the sign unreliable at range (phantom "embedded"
+        # palm nodes hovering over the dorsal cut inflated the fish to 164 %).
+        if q.sign > 0.0 or not had:
+            return
     n = wp.mesh_eval_face_normal(mesh, q.face)
     if dist > 1.0e-6:
         n = d * (q.sign / dist)
@@ -1445,7 +1462,7 @@ def surface_contacts_solve(pos: wp.array(dtype=wp.vec3),
         den += (invm[ka] * wa * wa * float(wp.max(csplit[ka - base], 1))
                 + invm[kb] * wb * wb * float(wp.max(csplit[kb - base], 1))
                 + invm[kc] * wc * wc * float(wp.max(csplit[kc - base], 1)))
-    pen = PART_R - wp.dot(p - q, n)
+    pen = wp.min(PART_R - wp.dot(p - q, n), CONTACT_HEAL)
     if pen <= 0.0:
         return
     if den <= 0.0:
@@ -2109,6 +2126,9 @@ def stab_diag(phase, frame_i):
         if phase in ("LIFT", "CARRY", "LOWER"):
             st["hold_jit_acc"] += jit; st["hold_jit_n"] += 1
     st["prev_local"] = loc
+    _d0 = mc_d0.numpy()
+    _emb = int((_d0[mc_face.numpy() >= 0] > PART_R + 0.004).sum())
+    st["emb_max"] = max(st.get("emb_max", 0), _emb)
     cage = xp[FISH_BASE:FISH_BASE + CAGE_N].astype(np.float64)
     ax = np.array(_pad_inward_dirs()[0], np.float64)           # live closing axis
     pr = cage[_diag_sec] @ ax
@@ -2142,7 +2162,7 @@ def stab_diag(phase, frame_i):
         cm = cage.mean(0)
         print(f"  [diag] f{frame_i:4d} {phase:8s} fish c=({cm[0]:.3f},{cm[1]:.3f},{cm[2]:.3f}) | finger jitter {jit:7.2f} mm/s | grasp "
               f"section {thick * 100:5.1f} % of rest | cage vol {vol * 100:5.1f} % | "
-              f"detF {detf.min():5.2f}..{detf.max():5.2f} | grip {grip_force:5.2f} N "
+              f"detF {detf.min():5.2f}..{detf.max():5.2f} | embedded {_emb:3d} | grip {grip_force:5.2f} N "
               f"/ {grip_nodes_last[0]:5.1f} nodes | carriage {finger_cmd * 1000:4.1f} mm")
 
 
@@ -2153,7 +2173,8 @@ def stab_summary():
     print(f"stability: finger jitter RMS {st['jit_acc'] / st['jit_n']:.2f} mm/s "
           f"(hold phases {st['hold_jit_acc'] / max(st['hold_jit_n'], 1):.2f}, peak {st['jit_peak']:.2f}) | "
           f"grasp section min {st['thick_min'] * 100:.1f} % of rest | cage volume min "
-          f"{st['vol_min'] * 100:.1f} % | detF {st['det_min']:.2f}..{st['det_max']:.2f}")
+          f"{st['vol_min'] * 100:.1f} % | detF {st['det_min']:.2f}..{st['det_max']:.2f} | "
+          f"embedded peak {st.get('emb_max', 0)}")
 
 
 grip_nodes_last = [0.0]
@@ -3017,7 +3038,7 @@ else:
             return 1.0
         nm = PLAN[seg_i][0]
         if nm == "DROP":
-            return 0.4 if sim_t < 4.0 else 1.0
+            return 1.0        # the imgui speed slider owns the pace in --drop
         if nm == "CLOSE":
             return 0.15
         if nm == "LIFT":
@@ -3036,18 +3057,87 @@ else:
     canvas.on_window_resize(on_resize)
     state = {"done": False, "phase": "", "r_down": False}
 
+    # --- imgui control panel: eyeball speed, debug views, live physics ---------
+    ui = tp.ImguiContext(canvas, renderer) if tp.HAS_IMGUI else None
+    UIS = {"speed": 0.35 if DROP else 1.0, "young": YOUNG, "fin_k": K_FIN,
+           "mu": MU_PAD, "damp": DAMP_RATE, "damp_fin": DAMP_RATE_FIN,
+           "grip": F_GRASP, "close_v": CLOSE_V * 1000.0, "bite": BITE * 1000.0}
+
+    def _apply_young(e):
+        # alpha ~ 1/stiffness: rescale the precomputed compliance arrays on the
+        # device -- the captured graph reads the arrays, so this is live.
+        mu_s = _YOUNG0 / max(e, 1.0)
+        tet_alpha_d_d.assign((tet_alpha_d * mu_s).astype(np.float32))
+        tet_alpha_h_d.assign((tet_alpha_h * mu_s).astype(np.float32))
+
+    def _apply_fin_k(k):
+        pair_alpha_d.assign((pair_alpha_np * (_KFIN0 / max(k, 1.0))).astype(np.float32))
+
+    def _apply_mu(m):
+        mu_arr.assign(np.full(NP, m, dtype=np.float32))
+
+    def _apply_damp(fish_rate, fin_rate):
+        d = np.full(NP, 1.0 - math.exp(-fish_rate * DT), dtype=np.float32)
+        d[:FIN_TOTAL] = 1.0 - math.exp(-fin_rate * DT)
+        damp_arr.assign(d)
+
+    def draw_ui():
+        global F_GRASP, CLOSE_V, BITE, FINGER_STOP
+        tp.imgui.set_next_window_pos(12, 12)
+        tp.imgui.set_next_window_size(330, 0)
+        tp.imgui.begin("softgrip")
+        tp.imgui.text(f"{state['phase'] or PLAN[seg_i][0]}  t={sim_t:5.2f}s  "
+                      f"grip {grip_force:5.1f} N  {tp.imgui.get_framerate():.0f} fps")
+        ch, UIS["speed"] = tp.imgui.slider_float("speed", UIS["speed"], 0.02, 1.0)
+        if tp.imgui.button("replay (R)"):
+            reset_scenario()
+            state["done"] = False
+            slow["acc"] = 0.0
+        tp.imgui.same_line()
+        ch, m = tp.imgui.combo("FEM view", _fem_state["mode"], ["off", "skin+cage", "cage only"])
+        if ch:
+            set_fem_view(m)
+        if tp.imgui.collapsing_header("physics (live)"):
+            ch, UIS["young"] = tp.imgui.slider_float("young E (Pa)", UIS["young"], 2.0e4, 6.0e5)
+            if ch:
+                _apply_young(UIS["young"])
+            ch, UIS["fin_k"] = tp.imgui.slider_float("finger k (N/m)", UIS["fin_k"], 200.0, 6000.0)
+            if ch:
+                _apply_fin_k(UIS["fin_k"])
+            ch, UIS["mu"] = tp.imgui.slider_float("pad friction", UIS["mu"], 0.1, 1.5)
+            if ch:
+                _apply_mu(UIS["mu"])
+            ch1, UIS["damp"] = tp.imgui.slider_float("fish damping 1/s", UIS["damp"], 0.0, 40.0)
+            ch2, UIS["damp_fin"] = tp.imgui.slider_float("finger damping 1/s", UIS["damp_fin"], 0.0, 80.0)
+            if ch1 or ch2:
+                _apply_damp(UIS["damp"], UIS["damp_fin"])
+        if tp.imgui.collapsing_header("grasp"):
+            ch, UIS["grip"] = tp.imgui.slider_float("grip force N", UIS["grip"], 2.0, 80.0)
+            if ch:
+                F_GRASP = UIS["grip"]
+            ch, UIS["close_v"] = tp.imgui.slider_float("close mm/s", UIS["close_v"], 2.0, 15.0)
+            if ch:
+                CLOSE_V = UIS["close_v"] / 1000.0
+            ch, UIS["bite"] = tp.imgui.slider_float("bite mm", UIS["bite"], 0.0, 10.0)
+            if ch:
+                BITE = UIS["bite"] / 1000.0
+                FINGER_STOP = max(FINGER_MIN, FINGER_OPEN - Y_CARRIAGE + FIN_SKIN_IN + PART_R
+                                  + FISH_HALF_W + CAGE_R - BITE)
+        tp.imgui.end()
+
     def animate():
-        r = canvas.is_key_down("R")
+        typing_ui = bool(ui and ui.want_capture_keyboard)
+        r = (not typing_ui) and canvas.is_key_down("R")
         if r and not state["r_down"]:
             reset_scenario()
             state["done"] = False
             slow["acc"] = 0.0
         state["r_down"] = r
-        f = canvas.is_key_down("F")
+        f = (not typing_ui) and canvas.is_key_down("F")
         if f and not state.get("f_down"):
             set_fem_view(_fem_state["mode"] + 1)
         state["f_down"] = f
-        slow["acc"] += rate()
+        slow["acc"] += rate() * UIS["speed"]
         while slow["acc"] >= 1.0:
             slow["acc"] -= 1.0
             parts = step_frame()
@@ -3055,9 +3145,11 @@ else:
             if parts[3] == "DONE" and not state["done"]:
                 state["done"] = True
                 summary(parts[4])
-        if CAM != "macro":
+        if CAM != "macro" and not (ui and ui.want_capture_mouse):
             controls.update()
         renderer.render(scene, wrist_cam if POV else camera)
         ensure_pip()
+        if ui:
+            ui.render(draw_ui)
 
     canvas.animate(animate)
