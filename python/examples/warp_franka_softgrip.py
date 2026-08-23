@@ -290,7 +290,7 @@ def load_fish_model(path, length):
     origin, scaled so the long axis is `length` metres. The model's length runs
     along +Z, so a +90 deg rotation about Y (proper, winding preserved) maps it
     to +X. The mesh is NOT vendored -- this only runs when --fish-model is given."""
-    root = tp.GLTFLoader().load(path).scene
+    root = tp.ModelLoader().load(path)
     found = []
 
     def rec(o):
@@ -692,38 +692,21 @@ skin_ids, skin_w = bind_lattice(render_v.astype(np.float64), CAGE_LO, CAGE_H,
                                 CAGE_DIMS, CAGE_SOLID, CAGE_ID)
 _bind_err = np.linalg.norm((cage_v[skin_ids] * skin_w[:, :, None]).sum(1) - render_v, axis=1)
 
-# Grasp station = the fish's REAL centre of mass along its length. The cage is a
-# symmetric taper, so its centroid sits mid-body; a real fish (the Barramundi) is
-# head-heavy, so gripping the cage centroid grips BEHIND the mass and the head
-# hangs forward out of the jaws. Estimate the body COM as the area-weighted
-# centroid of the render mesh: slice along x, weight each slice by its y*z extent
-# (proportional to cross-section), which for uniform density is the COM. Then a
-# manual --grasp-shift (+x toward the head) is available for the last nudge.
+# Grasp station. The cage centroid (mid-body) is where the fish is deepest and
+# the pads get the most flank to bite -- it grips reliably (2.5-3.9 N). Gripping
+# the head-heavy fish's TRUE centre of mass would hang it more level, but the COM
+# sits forward where the body is narrowing, so the pads catch far fewer nodes and
+# the clamp collapses to ~0.8 N and the fish is flung. So we grip mid-body and
+# accept that head and tail droop off the ends (which is what a real single
+# gripper does to a whole fish). `--grasp-shift` (metres, +x toward the head)
+# nudges the station for anyone who wants to trade grip margin for a flatter
+# carry; default 0 keeps the strong hold.
 GRASP_SHIFT = cli_arg("--grasp-shift", 0.0, float)
-if USE_GLTF:
-    _xs = render_v[:, 0]
-    _nb = 24
-    _edges = np.linspace(_xs.min(), _xs.max(), _nb + 1)
-    _bi = np.clip(np.digitize(_xs, _edges) - 1, 0, _nb - 1)
-    _wsum = _xc = 0.0
-    for _b in range(_nb):
-        _m = _bi == _b
-        if _m.sum() < 3:
-            continue
-        _v = render_v[_m]
-        _area = (_v[:, 1].max() - _v[:, 1].min()) * (_v[:, 2].max() - _v[:, 2].min())
-        _cx = 0.5 * (_edges[_b] + _edges[_b + 1])
-        _xc += _area * _cx
-        _wsum += _area
-    FISH_COM_X = float(_xc / _wsum) if _wsum > 0 else float(cage_v[:, 0].mean())
 GRASP_X = FISH_P[0] + FISH_COM_X + GRASP_SHIFT
-# Re-measure the backstop half-width at the (possibly moved) grasp station.
-_near = np.abs(render_v[:, 0] - (FISH_COM_X + GRASP_SHIFT)) < 0.014
-if _near.sum() >= 3:
-    FISH_HALF_W = float(np.abs(render_v[_near, 2]).max())
-print(f"  grasp station: COM_x {FISH_COM_X * 1000:+.0f} mm from body centre, "
-      f"half-width {FISH_HALF_W * 1000:.0f} mm"
-      + (f" (+{GRASP_SHIFT * 1000:.0f} mm shift)" if GRASP_SHIFT else ""))
+if GRASP_SHIFT and USE_GLTF:
+    _near = np.abs(render_v[:, 0] - (FISH_COM_X + GRASP_SHIFT)) < 0.014
+    if _near.sum() >= 3:
+        FISH_HALF_W = float(np.abs(render_v[_near, 2]).max())
 
 # NEO-HOOKEAN FEM. No distance edges, no volume row, no spine chords -- the tet
 # cage is a real elastic solid. Per tet we precompute the rest inverse shape
