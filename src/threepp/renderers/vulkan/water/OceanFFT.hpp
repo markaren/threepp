@@ -69,6 +69,18 @@ namespace threepp::water {
             float    fetch = 0.0f;    // m of upwind open water; 0 = fully developed (plain Phillips)
         };
 
+        // Push-constant block of phillips_spectrum.comp (std430, 32 bytes).
+        struct PushParams {
+            uint32_t textureSize;
+            float    tileSize;
+            float    windTheta;
+            float    windSpeed;
+            float    smallWaveCutoff;
+            float    kMin;
+            float    kMax;
+            float    fetch;
+        };
+
         PhillipsSpectrum(vulkan::VulkanContext& ctx, const Settings& s);
         ~PhillipsSpectrum();
 
@@ -80,11 +92,12 @@ namespace threepp::water {
         // DynamicSpectrum.
         void recordCompute(VkCommandBuffer cb);
 
-        // Live sea-state change (wind and/or fetch): rewrites the params UBO
-        // so the next recordCompute regenerates h0 (caller re-dispatches). The
-        // noise image persists, so successive regenerations are phase-
-        // correlated and the sea state morphs smoothly. Same mapped-UBO-
-        // rewrite convention as DynamicSpectrum's per-frame time update.
+        // Live sea-state change (wind and/or fetch): the next recordCompute
+        // regenerates h0 with it (caller re-dispatches). The noise image
+        // persists, so successive regenerations are phase-correlated and the
+        // sea state morphs smoothly. The params are push constants recorded
+        // into the command buffer, so a frame in flight never sees the
+        // change meant for the next one.
         void updateSeaState(float windTheta, float windSpeed, float fetch);
 
         VkImage     h0Image() const { return h0_.image; }
@@ -99,7 +112,6 @@ namespace threepp::water {
         Settings  settings_;
         OceanImage h0_;
         OceanImage noise_;
-        OceanBuffer paramsUbo_;
         VkSampler   sampler_      = VK_NULL_HANDLE;
         VkDescriptorPool      pool_   = VK_NULL_HANDLE;
         VkDescriptorSetLayout dsl_    = VK_NULL_HANDLE;
@@ -110,7 +122,6 @@ namespace threepp::water {
         void createImages();
         void uploadNoise();
         void createPipeline();
-        void writeParams();
     };
 
     // ─── DynamicSpectrum ───────────────────────────────────────────────
@@ -132,6 +143,13 @@ namespace threepp::water {
         DynamicSpectrum(const DynamicSpectrum&) = delete;
         DynamicSpectrum& operator=(const DynamicSpectrum&) = delete;
 
+        // Push-constant block of dynamic_spectrum.comp (std430, 12 bytes).
+        struct PushParams {
+            uint32_t textureSize;
+            float    tileSize;
+            float    elapsedSeconds;
+        };
+
         void recordCompute(VkCommandBuffer cb, float elapsedSeconds);
 
         const OceanImage& ht()           const { return ht_; }
@@ -144,7 +162,6 @@ namespace threepp::water {
         float    tileSize_;
 
         OceanImage  ht_, displacement_;
-        OceanBuffer paramsUbo_;
         VkSampler   sampler_ = VK_NULL_HANDLE;
 
         VkDescriptorPool      pool_   = VK_NULL_HANDLE;

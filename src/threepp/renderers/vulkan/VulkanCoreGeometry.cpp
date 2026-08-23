@@ -1946,6 +1946,28 @@ void VulkanRenderer::Impl::recordDisplacedDeform(VkCommandBuffer cb, DisplacedMe
             // Vulkan command buffer recording order plus the IFFT's internal
             // image-layout barriers serialize the work correctly.
             if (timed) gpuTimings_->begin(cb, vulkan::TP_OceanFFT, currentFrame);
+            // WAR hazard across frames: the PREVIOUS frame's height-field
+            // readback copy reads each cascade's `ht` image at the TRANSFER
+            // stage, and the only barriers in the chain below are
+            // COMPUTE→COMPUTE, so this frame's dynamic-spectrum dispatch was
+            // free to overwrite `ht` while that copy was still in flight — the
+            // copy then landed a mix of two frames' fields in its readback
+            // slot. Invisible at real frame sizes (the copy is long done before
+            // the next frame's compute starts); at the 128×96 frames the
+            // regression tests render, adjacent frames overlap and
+            // sample_height() returned the NEXT frame's (or a torn) height for
+            // 1-2 frames in 40, run to run. One execution dependency closes it;
+            // only recorded when a copy can exist (the sticky readback opt-in).
+            if (dm.wantsHeightReadback) {
+                VkMemoryBarrier mb{};
+                mb.sType         = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
+                mb.srcAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+                mb.dstAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+                vkCmdPipelineBarrier(cb,
+                        VK_PIPELINE_STAGE_TRANSFER_BIT,
+                        VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                        0, 1, &mb, 0, nullptr, 0, nullptr);
+            }
             for (uint32_t i = 0; i < 3; ++i) {
                 if (!(st.cascadeMask & (1u << i))) continue;
                 auto& c = st.cascades[i];

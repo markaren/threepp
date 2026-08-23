@@ -225,11 +225,6 @@ namespace threepp::water {
         sampler_ = makeNearestSampler(ctx_);
         createImages();
         uploadNoise();
-
-        // Params UBO (64 bytes — 7 payload fields + 1 pad, doubled for alignment)
-        paramsUbo_ = makeUbo(ctx_, 64);
-        writeParams();
-
         createPipeline();
     }
 
@@ -340,35 +335,12 @@ namespace threepp::water {
         vmaDestroyBuffer(ctx_.allocator(), sb, sa);
     }
 
-    void PhillipsSpectrum::writeParams() {
-        struct {
-            uint32_t textureSize;
-            float    tileSize;
-            float    windTheta;
-            float    windSpeed;
-            float    smallWaveCutoff;
-            float    kMin;
-            float    kMax;
-            float    fetch;
-        } p{};
-        p.textureSize     = settings_.textureSize;
-        p.tileSize        = settings_.tileSize;
-        p.windTheta       = settings_.windTheta;
-        p.windSpeed       = settings_.windSpeed;
-        p.smallWaveCutoff = settings_.smallWaveCutoff;
-        p.kMin            = settings_.kMin;
-        p.kMax            = settings_.kMax;
-        p.fetch           = settings_.fetch;
-        std::memcpy(paramsUbo_.mapped, &p, sizeof(p));
-        vulkan::flushHostWrites(ctx_.allocator(), paramsUbo_.alloc, 0, sizeof(p));
-    }
-
     void PhillipsSpectrum::createPipeline() {
-        // Bindings: 0 = h0 (storage image, write), 1 = noise (sampled), 2 = params UBO
-        const std::array<VkDescriptorSetLayoutBinding, 3> bindings{
+        // Bindings: 0 = h0 (storage image, write), 1 = noise (sampled).
+        // The spectrum params are push constants (see recordCompute).
+        const std::array<VkDescriptorSetLayoutBinding, 2> bindings{
             VkDescriptorSetLayoutBinding{0, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,         1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
             VkDescriptorSetLayoutBinding{1, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
-            VkDescriptorSetLayoutBinding{2, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,         1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
         };
         VkDescriptorSetLayoutCreateInfo dlci{};
         dlci.sType        = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
@@ -377,10 +349,16 @@ namespace threepp::water {
         check(vkCreateDescriptorSetLayout(ctx_.device(), &dlci, nullptr, &dsl_),
               "vkCreateDescriptorSetLayout(phillips)");
 
+        VkPushConstantRange pcr{};
+        pcr.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+        pcr.offset     = 0;
+        pcr.size       = sizeof(PushParams);
         VkPipelineLayoutCreateInfo plci{};
-        plci.sType          = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
-        plci.setLayoutCount = 1;
-        plci.pSetLayouts    = &dsl_;
+        plci.sType                  = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+        plci.setLayoutCount         = 1;
+        plci.pSetLayouts            = &dsl_;
+        plci.pushConstantRangeCount = 1;
+        plci.pPushConstantRanges    = &pcr;
         check(vkCreatePipelineLayout(ctx_.device(), &plci, nullptr, &layout_),
               "vkCreatePipelineLayout(phillips)");
 
@@ -397,15 +375,6 @@ namespace threepp::water {
         dpci.maxSets       = 1;
         dpci.poolSizeCount = static_cast<uint32_t>(poolSizes.size());
         dpci.pPoolSizes    = poolSizes.data();
-        // We also need a UBO entry — extend the pool sizes with one. Combined here
-        // for one-shot allocation.
-        std::array<VkDescriptorPoolSize, 3> poolSizesAll{
-            VkDescriptorPoolSize{VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,          1},
-            VkDescriptorPoolSize{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1},
-            VkDescriptorPoolSize{VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,         1},
-        };
-        dpci.poolSizeCount = static_cast<uint32_t>(poolSizesAll.size());
-        dpci.pPoolSizes    = poolSizesAll.data();
         check(vkCreateDescriptorPool(ctx_.device(), &dpci, nullptr, &pool_),
               "vkCreateDescriptorPool(phillips)");
 
@@ -426,11 +395,7 @@ namespace threepp::water {
         noiseInfo.imageView   = noise_.view;
         noiseInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
 
-        VkDescriptorBufferInfo paramInfo{};
-        paramInfo.buffer = paramsUbo_.handle;
-        paramInfo.range  = paramsUbo_.size;
-
-        std::array<VkWriteDescriptorSet, 3> writes{};
+        std::array<VkWriteDescriptorSet, 2> writes{};
         writes[0].sType      = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
         writes[0].dstSet     = ds_;
         writes[0].dstBinding = 0;
@@ -445,13 +410,6 @@ namespace threepp::water {
         writes[1].descriptorCount = 1;
         writes[1].pImageInfo = &noiseInfo;
 
-        writes[2].sType      = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-        writes[2].dstSet     = ds_;
-        writes[2].dstBinding = 2;
-        writes[2].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-        writes[2].descriptorCount = 1;
-        writes[2].pBufferInfo = &paramInfo;
-
         vkUpdateDescriptorSets(ctx_.device(), static_cast<uint32_t>(writes.size()), writes.data(), 0, nullptr);
     }
 
@@ -460,6 +418,18 @@ namespace threepp::water {
         vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, pipe_);
         vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_COMPUTE, layout_,
                                 0, 1, &ds_, 0, nullptr);
+        // Push constants: baked into THIS command buffer, so a sea-state change
+        // recorded for the next frame cannot reach a dispatch still in flight.
+        PushParams p{};
+        p.textureSize     = settings_.textureSize;
+        p.tileSize        = settings_.tileSize;
+        p.windTheta       = settings_.windTheta;
+        p.windSpeed       = settings_.windSpeed;
+        p.smallWaveCutoff = settings_.smallWaveCutoff;
+        p.kMin            = settings_.kMin;
+        p.kMax            = settings_.kMax;
+        p.fetch           = settings_.fetch;
+        vkCmdPushConstants(cb, layout_, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(p), &p);
         const uint32_t g = groupCountFor(settings_.textureSize);
         vkCmdDispatch(cb, g, g, 1);
         // Emit a write→read barrier so subsequent samples see the data.
@@ -470,7 +440,6 @@ namespace threepp::water {
         settings_.windTheta = windTheta;
         settings_.windSpeed = windSpeed;
         settings_.fetch     = fetch;
-        writeParams();
     }
 
     PhillipsSpectrum::~PhillipsSpectrum() {
@@ -479,7 +448,6 @@ namespace threepp::water {
         if (dsl_    != VK_NULL_HANDLE) vkDestroyDescriptorSetLayout(ctx_.device(), dsl_, nullptr);
         if (pool_   != VK_NULL_HANDLE) vkDestroyDescriptorPool(ctx_.device(), pool_, nullptr);
         if (sampler_!= VK_NULL_HANDLE) vkDestroySampler(ctx_.device(), sampler_, nullptr);
-        destroyBuffer(ctx_, paramsUbo_);
         destroyImage(ctx_, h0_);
         destroyImage(ctx_, noise_);
     }
@@ -494,7 +462,6 @@ namespace threepp::water {
         : ctx_(ctx), src_(src), textureSize_(textureSize), tileSize_(tileSize) {
         sampler_ = makeNearestSampler(ctx_);
         createImages();
-        paramsUbo_ = makeUbo(ctx_, 16);
         createPipeline();
     }
 
@@ -508,11 +475,12 @@ namespace threepp::water {
         // spectra) were retired; gaps in a set layout are legal, so the
         // remaining bindings keep their historical numbers and the shader's
         // layout qualifiers stay put.
-        const std::array<VkDescriptorSetLayoutBinding, 4> bindings{
+        // (Binding 4, the params UBO, is gone too: the per-frame time rides in
+        // push constants — see recordCompute.)
+        const std::array<VkDescriptorSetLayoutBinding, 3> bindings{
             VkDescriptorSetLayoutBinding{0, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr}, // H0
             VkDescriptorSetLayoutBinding{1, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,          1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr}, // HT
             VkDescriptorSetLayoutBinding{3, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,          1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr}, // Displacement
-            VkDescriptorSetLayoutBinding{4, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,         1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr}, // Params
         };
         VkDescriptorSetLayoutCreateInfo dlci{};
         dlci.sType        = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
@@ -521,10 +489,16 @@ namespace threepp::water {
         check(vkCreateDescriptorSetLayout(ctx_.device(), &dlci, nullptr, &dsl_),
               "vkCreateDescriptorSetLayout(dyn)");
 
+        VkPushConstantRange pcr{};
+        pcr.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+        pcr.offset     = 0;
+        pcr.size       = sizeof(PushParams);
         VkPipelineLayoutCreateInfo plci{};
-        plci.sType          = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
-        plci.setLayoutCount = 1;
-        plci.pSetLayouts    = &dsl_;
+        plci.sType                  = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+        plci.setLayoutCount         = 1;
+        plci.pSetLayouts            = &dsl_;
+        plci.pushConstantRangeCount = 1;
+        plci.pPushConstantRanges    = &pcr;
         check(vkCreatePipelineLayout(ctx_.device(), &plci, nullptr, &layout_),
               "vkCreatePipelineLayout(dyn)");
 
@@ -532,10 +506,9 @@ namespace threepp::water {
         pipe_ = makeComputePipeline(ctx_, mod, layout_);
         vkDestroyShaderModule(ctx_.device(), mod, nullptr);
 
-        const std::array<VkDescriptorPoolSize, 3> poolSizes{
+        const std::array<VkDescriptorPoolSize, 2> poolSizes{
             VkDescriptorPoolSize{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1},
             VkDescriptorPoolSize{VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,          2},
-            VkDescriptorPoolSize{VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,         1},
         };
         VkDescriptorPoolCreateInfo dpci{};
         dpci.sType         = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
@@ -569,11 +542,7 @@ namespace threepp::water {
         dispInfo.imageView   = displacement_.view;
         dispInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
 
-        VkDescriptorBufferInfo pInfo{};
-        pInfo.buffer = paramsUbo_.handle;
-        pInfo.range  = paramsUbo_.size;
-
-        std::array<VkWriteDescriptorSet, 4> writes{};
+        std::array<VkWriteDescriptorSet, 3> writes{};
         for (auto& w : writes) {
             w.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
             w.dstSet = ds_;
@@ -582,29 +551,27 @@ namespace threepp::water {
         writes[0].dstBinding = 0; writes[0].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER; writes[0].pImageInfo = &h0Info;
         writes[1].dstBinding = 1; writes[1].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;          writes[1].pImageInfo = &htInfo;
         writes[2].dstBinding = 3; writes[2].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;          writes[2].pImageInfo = &dispInfo;
-        writes[3].dstBinding = 4; writes[3].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;         writes[3].pBufferInfo = &pInfo;
         vkUpdateDescriptorSets(ctx_.device(), static_cast<uint32_t>(writes.size()), writes.data(), 0, nullptr);
     }
 
     void DynamicSpectrum::recordCompute(VkCommandBuffer cb, float elapsedSeconds) {
-        struct {
-            uint32_t textureSize;
-            float    tileSize;
-            float    elapsedSeconds;
-            float    _pad;
-        } p{};
-        p.textureSize    = textureSize_;
-        p.tileSize       = tileSize_;
-        p.elapsedSeconds = elapsedSeconds;
-        std::memcpy(paramsUbo_.mapped, &p, sizeof(p));
-        vulkan::flushHostWrites(ctx_.allocator(), paramsUbo_.alloc, 0, sizeof(p));
-
         cmdTransitionToGeneral(cb, ht_);
         cmdTransitionToGeneral(cb, displacement_);
 
         vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, pipe_);
         vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_COMPUTE, layout_,
                                 0, 1, &ds_, 0, nullptr);
+        // The frame time is a PUSH CONSTANT, recorded into this command buffer.
+        // It used to be a single host-mapped UBO rewritten here every frame —
+        // with two frames in flight, recording frame N+1 overwrote it before
+        // frame N's dispatch had necessarily read it, so frame N's cascades
+        // could evolve to frame N+1's time (a pacing-dependent skew that
+        // showed up as sample_height() mismatches run to run).
+        PushParams p{};
+        p.textureSize    = textureSize_;
+        p.tileSize       = tileSize_;
+        p.elapsedSeconds = elapsedSeconds;
+        vkCmdPushConstants(cb, layout_, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(p), &p);
         const uint32_t g = groupCountFor(textureSize_);
         vkCmdDispatch(cb, g, g, 1);
 
@@ -618,7 +585,6 @@ namespace threepp::water {
         if (dsl_    != VK_NULL_HANDLE) vkDestroyDescriptorSetLayout(ctx_.device(), dsl_, nullptr);
         if (pool_   != VK_NULL_HANDLE) vkDestroyDescriptorPool(ctx_.device(), pool_, nullptr);
         if (sampler_!= VK_NULL_HANDLE) vkDestroySampler(ctx_.device(), sampler_, nullptr);
-        destroyBuffer(ctx_, paramsUbo_);
         destroyImage(ctx_, ht_);
         destroyImage(ctx_, displacement_);
     }

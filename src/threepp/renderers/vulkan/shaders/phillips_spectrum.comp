@@ -28,7 +28,10 @@ layout(local_size_x = 8, local_size_y = 8) in;
 layout(set = 0, binding = 0, rgba32f) uniform writeonly image2D H0;
 layout(set = 0, binding = 1)          uniform sampler2D Noise;
 
-layout(set = 0, binding = 2, scalar) uniform Params {
+// Push constants (not a host-mapped UBO): a live wind/fetch change re-
+// dispatches this pass, and with two frames in flight a UBO rewritten at
+// record time could hand the PREVIOUS frame's dispatch the new sea state.
+layout(push_constant) uniform Params {
     uint  textureSize;
     float tileSize;
     float windTheta;

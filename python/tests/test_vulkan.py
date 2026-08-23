@@ -139,7 +139,13 @@ def test_sample_height_mirror_is_pacing_independent():
     with the binding's default 3 flush frames per render(), or a presenting hidden
     window, the pipeline drains every call and the race cannot show. Before the
     per-frame-in-flight readback ring (2026-08) this differed in ~95% of frames
-    at this sea (max ~3 cm; torn mixes of two frames' fields)."""
+    at this sea (max ~3 cm; torn mixes of two frames' fields). It then still
+    differed in 1-2 frames of 40 (a few mm, run to run, fast-vs-fast too) from
+    two GPU-side hazards the ring could not see: the readback copy (TRANSFER)
+    racing the NEXT frame's spectrum dispatch rewriting the same image, and the
+    dynamic-spectrum time living in one host-mapped UBO rewritten at record
+    time (frame N's cascades evolving to frame N+1's time). Both fixed 2026-08-23
+    (TRANSFER->COMPUTE barrier; push-constant params)."""
     prev = os.environ.get("THREEPP_VULKAN_SUPPRESS_PRESENT")
     os.environ["THREEPP_VULKAN_SUPPRESS_PRESENT"] = "1"  # read once, at context creation
     try:
