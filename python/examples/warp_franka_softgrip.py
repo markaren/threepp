@@ -66,7 +66,7 @@ import numpy as np
 import warp as wp
 
 import threepp as tp
-from warp_common import (accum_normals, cli_arg, csr_from_pairs, icosphere,
+from warp_common import (accum_normals, cli_arg, icosphere,
                          parse_size, scatter_soup, signed_volume,
                          standard_material)
 
@@ -79,9 +79,9 @@ BENCH = FRAMES > 0
 WIDTH, HEIGHT = parse_size(cli_arg("--size", "1280x720", str))
 # Newtons, but normalised: the proxy below is divided by the iteration count and
 # by the contacting-node count, so it no longer moves when the solver settings do.
-F_GRASP = cli_arg("--grip-force", 6.0, float)
+F_GRASP = cli_arg("--grip-force", 8.0, float)     # N, both pads together (a real force now)
 HEADLESS = SHOT or BENCH
-CAM = cli_arg("--cam", "wide", str)          # wide | macro | top
+CAM = cli_arg("--cam", "drop" if "--drop" in sys.argv else "wide", str)   # wide | macro | top | drop
 # Render skin: default is the self-contained procedural herring so the committed
 # example runs on any machine; pass --fish-model to skin a glTF fish (the
 # Khronos Barramundi) off the same tet cage. The mesh is NOT vendored.
@@ -101,6 +101,13 @@ FILM = "--film" in sys.argv
 FILM_OUT = cli_arg("--film", os.path.join(os.path.dirname(os.path.abspath(__file__)),
                                           "warp_franka_softgrip.mp4"), str)
 PREVIEW = "--preview" in sys.argv
+# FISH DROP scenario: no grasp. The fish comes off a raised ledge head-first at
+# belt speed, bends over the edge under its own weight, falls to the table and
+# settles -- the material test bench for the soft fish (is it soft? does it sag,
+# tumble, land and lie like a fish?) with nothing else in the loop.
+DROP = "--drop" in sys.argv
+BELT_V = cli_arg("--belt-v", 0.15, float)          # the ledge top is a belt: m/s along +x
+DROP_OVERHANG = cli_arg("--drop-overhang", 0.04, float)   # m of fish past the edge at t=0
 if FILM:
     HEADLESS = True
     if PREVIEW:
@@ -109,14 +116,31 @@ if FILM:
 # --- solver tunables ------------------------------------------------------------
 
 FPS = 60.0
-DT = 1.0 / 240.0
-SUBSTEPS = 6
-ITERATIONS = 32          # PHASE 9: +6 to converge the stiffer truss (skip-two
-                         # bending chords + higher gain cap); shared with the FEM
-DAMPING = 0.04
-DAMPING_FIN = 0.22       # the truss rings otherwise -- see integrate_damped
+# SMALL STEPS (Macklin et al. 2019): many substeps, few iterations. A substep's
+# constraint error shrinks with dt^2 while iterations only converge linearly, so
+# at a fixed launch budget 24 x 4 beats the old 6 x 32 by a wide margin -- and it
+# is what lets a plain Jacobi solve (below) reach the stiffness the truss needs
+# without any gain cap. DT is derived from the substep count so ONE frame of
+# physics IS one frame of task time (the old 6 x 1/240 s ran the physics 1.5x
+# faster than the robot).
+SUBSTEPS = cli_arg("--substeps", 24, int)
+ITERATIONS = cli_arg("--iters", 4, int)
+DT = 1.0 / (FPS * SUBSTEPS)
+# Velocity damping as RATES (1/s), converted to per-substep factors below so the
+# substep count can change without retuning. The truss no longer needs the old
+# 0.22-per-substep sledgehammer: that was absorbing the over-relaxed Jacobi ring,
+# which the mass-split solve does not have. What is left is material damping.
+DAMP_RATE = cli_arg("--damp", 10.0, float)          # fish flesh
+DAMP_RATE_FIN = cli_arg("--damp-fin", 20.0, float)  # silicone finger
 GRAVITY = wp.vec3(0.0, -9.81, 0.0)
-RELAX = 0.5
+# Jacobi over-relaxation for the structural pass (1 = the plain mass-split step,
+# which is unconditionally stable; >1 trades margin for convergence).
+OMEGA = cli_arg("--omega", 1.0, float)
+# The contact pass (pads vs skin, skin vs floor, both mass-split over the cage
+# nodes they share) is light and under-converges in one sweep: friction can only
+# cancel the relative slide it gets to see, so sweep it a few times per
+# structural iteration.
+CONTACT_SWEEPS = cli_arg("--contact-sweeps", 3, int)
 
 # Fin Ray split: the skins are structural, the diagonals are the compliance.
 # PHASE 9: the finger read as floppy foil -- it deflected too much and did not
@@ -125,6 +149,12 @@ RELAX = 0.5
 # Ray is the cell diagonals. So the plate members are stiffened (skins, ribs,
 # bending) and the gain headroom raised to let them converge, while STIFF_DIAG is
 # left soft so the tip still curls in and wraps the fish.
+# The truss is XPBD now: every row has a REAL spring constant k = weight * K_FIN
+# (N/m) and its own Lagrange multiplier, so the weights below are relative
+# stiffnesses of an elastic truss that converges to a physical equilibrium --
+# not Jacobi gains that only meant something at one iteration count. The Fin
+# Ray curl is the soft diagonals' compliance, and it survives convergence.
+K_FIN = cli_arg("--fin-k", 1500.0, float)       # N/m for a weight-1.0 member
 STIFF_SKIN = 1.15
 STIFF_RIB = 0.85
 STIFF_DIAG = 0.35        # LEFT SOFT: this is the Fin Ray curl compliance
@@ -157,13 +187,7 @@ STIFF_SHEAR = 1.0
 # Jacobi signature. So: cap, do not normalise. Rows below the cap behave exactly
 # as they did before this phase; the surplus the new rows would have added is
 # what gets divided out.
-FIN_GAIN_CAP = 5.5    # in units of 0.5 * sum(stiffness) at the node. PHASE 9
-                      # tried 7.0 and it went NaN -- the per-node Jacobi gain
-                      # crossed its stability limit (the phase-5 warning). Kept at
-                      # the proven-stable 5.5: the stiffer plate members still win
-                      # a larger SHARE of the capped correction, so the plate is
-                      # stiffer relative to the soft diagonals without raising the
-                      # absolute gain. Extra ITERATIONS buy the convergence.
+# (FIN_GAIN_CAP is gone: the mass-split XPBD solve has no per-node gain to cap.)
 # Root fan. Only the two root rows are pinned to the carriage, and a Jacobi
 # solve moves a rigid translation down an 11-row chain appallingly slowly: the
 # pad face lagged the carriage so badly that a hand provably squeezing the fish
@@ -201,7 +225,6 @@ YOUNG = cli_arg("--young", 2.5e5, float)      # Pa
 POISSON = cli_arg("--poisson", 0.45, float)   # near-incompressible
 MU_LAME = YOUNG / (2.0 * (1.0 + POISSON))
 LAM_LAME = YOUNG * POISSON / ((1.0 + POISSON) * (1.0 - 2.0 * POISSON))
-NH_GAMMA = 1.0 + MU_LAME / LAM_LAME            # rest det(F) the hydro row targets
 TET_RES = 22          # voxel cells along the fish's length
 CARVE = 0.25          # cells of dilation, so the cage measures the fish
 
@@ -215,7 +238,14 @@ CARVE = 0.25          # cells of dilation, so the cage measures the fish
 # nodes sit a cell apart and needs ~0.45 cells to read as a smooth flank rather
 # than a bag of marbles (and to stop a pad node slipping between four cage
 # nodes). Contact distance is the SUM of the two radii.
-PART_R = 0.005        # pad / finger nodes
+# PHASE 11 (corotational fish): the contact radii are CLEARANCE now, and they
+# have to be honest about an 80 mm hand. A full-size 240 mm Barramundi body is
+# ~60 mm wide; at FINGER_OPEN the pad faces stand 2*(40+6-4-PART_R) mm apart,
+# so with PART_R 5 + CAGE_R 4.9 the OPEN hand already overlapped the fish by
+# ~3 mm a side on the way down (119 N of 'grip' during DESCEND, fish ploughed
+# 7 cm along the tray). The half-volume fish of phases 6-10 hid that. 3 + 3.3
+# leaves ~2.7 mm of clearance per side at full open.
+PART_R = cli_arg("--pad-r", 0.003, float)     # pad / finger nodes
 # PHASE 10: the contact radius WAS the visible gap. contact_r = PART_R + CAGE_R
 # stops the pad particle that far short of a cage node, and the pad face is drawn
 # AT the particle, so a fat contact_r left the amber pad ~1 cm proud of the drawn
@@ -226,12 +256,17 @@ PART_R = 0.005        # pad / finger nodes
 # (touch stayed 66..262 at DONE vs phase-9's clean 0). Clean ejection needs
 # contact_r ~9.9 mm. So the physics is left EXACTLY at phase 9 (grip, release, FEM
 # all unchanged) and the visible gap is closed render-only by RENDER_PAD_INSET.
-CAGE_R_CELLS = 0.45   # fish cage nodes, in cells of the voxel pitch
-CONTACT_CAP = 10
-CONTACT_MARGIN = 1.4
+# PHASE 11: the cage nodes no longer collide with anything (see the surface
+# contact below); CAGE_R only sizes the cage's own safety floor and a couple of
+# diagnostics.
+CAGE_R_CELLS = 0.30
+# Surface contact query margin: a pad node looks for the fish skin this far
+# beyond its own radius when the substep's contacts are latched.
+CONTACT_MARGIN = 0.004
+SURF_R = 0.0005         # the skin's own thickness against the tray / crate
 
 MU_PAD = 1.10         # tacky silicone pad on wet fish -- high, but elastomers do this
-MU_STEEL = 0.25       # fish on the stainless tray / table
+MU_STEEL = cli_arg("--mu-steel", 0.25, float)   # fish on the stainless tray / table / belt
 MU_CRATE = 0.35
 
 # --- cell geometry --------------------------------------------------------------
@@ -246,6 +281,12 @@ CRATE_HX, CRATE_HZ = 0.19, 0.13
 CRATE_FLOOR = 0.03
 CRATE_RIM = 0.20
 TRAY_CX, TRAY_CZ = float(TRAY_C[0]), float(TRAY_C[1])
+# The drop ledge: a raised slab in the tray's footprint whose +x edge the fish
+# comes off. Only solid when --drop (kernel constant).
+LEDGE_ON = 1 if DROP else 0
+LEDGE_Y = 0.22
+LEDGE_X0, LEDGE_X1 = 0.10, 0.46
+LEDGE_CZ, LEDGE_HZ = 0.10, 0.16
 CRATE_CX, CRATE_CZ = float(CRATE_C[0]), float(CRATE_C[1])
 CRATE2_CZ = float(CRATE2_C[1])
 
@@ -286,7 +327,14 @@ FIN_SKIN_IN = 0.004               # front skin, inboard of the carriage origin
 # the last third of the front skin toward the other finger puts a lip under the
 # fish, which is form closure -- the fish has to deform its way OUT to escape,
 # not merely slide.
-FIN_CURL = 0.010
+# PHASE 11: OFF by default. A 10 mm hook put the tip's contact surface 24 mm
+# from the tool axis, so on a 55 mm wide (real-size) fish the OPEN hand's tips
+# landed on the back and raked down the flanks, shoving the fish sideways before
+# the close. The hook was a crutch for the phase-2 shell fish that squirted out
+# of flat pads; a stiff corotational fish with Coulomb friction is held by the
+# pads themselves, and real Fin Ray fingers are straight when open -- they curl
+# under load, which the soft diagonals still do. --fin-curl 0.010 brings it back.
+FIN_CURL = cli_arg("--fin-curl", 0.010, float)   # back ON (user: the curved tips grip better)
 FIN_SKIN_OUT = 0.010              # back skin, outboard
 # Heavy relative to the fish ON PURPOSE. The contact correction is split by
 # inverse mass, so a light pad simply gets shoved aside by the fish instead of
@@ -304,7 +352,9 @@ RIB_EVERY = 2                     # draw a cross rib every Nth row (render only)
 # and back skins sit ~14 mm apart, so 8 mm inward leaves a ~6 mm drawn pad -- thin
 # but still a pad, not a collapsed sheet (verified by looking). The back skin and
 # the ribs' back edge are NOT touched.
-RENDER_PAD_INSET = 0.008          # m, drawn front skin only (0 disables)
+# PHASE 11: the pad touches the DRAWN fish skin at PART_R from the particle, so
+# the drawn front skin is inset by exactly that -- what you see is what touches.
+RENDER_PAD_INSET = PART_R         # m, drawn front skin only (0 disables)
 
 URDF = "C:/dev/threepp/cmake-build-relwithdebinfo/_deps/threepp_data-src/urdf/franka/fr3.urdf"
 if not os.path.exists(URDF):
@@ -824,15 +874,52 @@ skin_ids, skin_w = bind_lattice(render_v.astype(np.float64), CAGE_LO, CAGE_H,
                                 CAGE_DIMS, CAGE_SOLID, CAGE_ID)
 _bind_err = np.linalg.norm((cage_v[skin_ids] * skin_w[:, :, None]).sum(1) - render_v, axis=1)
 
+# PHASE 11: the fish LIES ON ITS SIDE. A soft dead fish on a tray does not stand
+# on its belly; it lies on a flank, so the hand closes across its back and
+# belly. The cage is built and bound in the fish's own frame (dorsal +y), then
+# rolled 90 deg about its length axis here -- the skin follows through the
+# weights, nothing downstream cares which way is up.
+FISH_ROLL = "--upright" not in sys.argv
+if FISH_ROLL:
+    cage_v = np.stack([cage_v[:, 0], -cage_v[:, 2], cage_v[:, 1]], 1).astype(np.float32)
+    _rv_rolled = np.stack([render_v[:, 0], -render_v[:, 2], render_v[:, 1]], 1)
+else:
+    _rv_rolled = render_v.astype(np.float64)
+# Rest the cage's lowest node 2 mm over the tray; the skin settles onto it.
+FISH_P = (TRAY_C[0], TRAY_Y - float(cage_v[:, 1].min()) + 0.002, TRAY_C[1])
+if DROP:
+    # nose DROP_OVERHANG past the ledge edge, lying on its side on the ledge
+    FISH_P = (LEDGE_X1 + DROP_OVERHANG - float(cage_v[:, 0].max()),
+              LEDGE_Y - float(cage_v[:, 1].min()) + 0.002, LEDGE_CZ)
+# Which render triangles are BODY (for contact): all three vertices inside, or
+# within a third of a cell of, the cage. The fins extrapolate far outside it
+# and stay render-only.
+body_vert = np.ones(len(render_v), dtype=bool)
+if FISH_MODEL_CACHE is not None:
+    # BODY = inside the measured per-slice body profile (+3 mm): that is the
+    # fin-free flank/back/belly envelope the pads are meant to meet. A weights-
+    # based test let the dorsal and anal fin sheets through, and a pad node next
+    # to a thin sheet reads as 9 mm "inside" it.
+    _yh = np.interp(render_v[:, 0], PROF_XC, PROF_YHW) + 0.003
+    _zh = np.interp(render_v[:, 0], PROF_XC, PROF_ZHW) + 0.003
+    body_vert[:] = (np.abs(render_v[:, 1]) <= _yh) & (np.abs(render_v[:, 2]) <= _zh)
+body_tri_mask = body_vert[render_faces].all(1)
+body_tris = render_faces[body_tri_mask].astype(np.int32)
+body_vids = np.nonzero(body_vert)[0].astype(np.int32)
+print(f"  surface contact: {len(body_tris)} body triangles / {len(render_faces)} "
+      f"({len(body_vids)} body vertices of {len(render_v)}); fish {'on its side' if FISH_ROLL else 'upright'}")
+
 # Grasp station (see the phase-9 block above). For the glTF fish it is the
 # deepest body cross-section (the shoulder); for the procedural fish it is the
 # cage centroid. `--grasp-shift` (metres, +x) nudges it manually.
 GRASP_SHIFT = cli_arg("--grasp-shift", 0.0, float)
 GRASP_X = FISH_P[0] + FISH_COM_X + GRASP_SHIFT
-if GRASP_SHIFT and USE_GLTF:
-    _near = np.abs(render_v[:, 0] - (FISH_COM_X + GRASP_SHIFT)) < 0.014
-    if _near.sum() >= 3:
-        FISH_HALF_W = float(np.abs(render_v[_near, 2]).max())
+# Half-extent of the BODY skin along the closing axis (world z) at the grasp
+# station -- measured on the body vertices of the (rolled) render mesh, so the
+# backstop is about the surface the pads actually meet, fins excluded.
+_near = body_vert & (np.abs(_rv_rolled[:, 0] - (FISH_COM_X + GRASP_SHIFT)) < 0.014)
+if _near.sum() >= 3:
+    FISH_HALF_W = float(np.abs(_rv_rolled[_near, 2]).max())
 
 # NEO-HOOKEAN FEM. No distance edges, no volume row, no spine chords -- the tet
 # cage is a real elastic solid. Per tet we precompute the rest inverse shape
@@ -867,15 +954,33 @@ for n in range(CAGE_N):
 
 NP = len(positions)
 rad_np = np.full(NP, PART_R, dtype=np.float32)
-rad_np[FISH_BASE:] = CAGE_R
-GRID_R = 2.0 * float(rad_np.max()) * CONTACT_MARGIN
+rad_np[FISH_BASE:] = -2.0 * CAGE_H      # cage nodes: a safety floor two cells DOWN (the
+                                        # dilated cage sits up to a cell outside the skin);
+                                        # the skin carries the real floor contact + friction
 p0 = np.array(positions, dtype=np.float32)
-offsets_np, idx_np, rest_np, stiff_np, _ = csr_from_pairs(NP, pairs, p0)
+# Truss rows as a flat pair list (one XPBD constraint each, solved per ROW and
+# scattered -- the per-particle CSR gather is gone with the Jacobi gains), plus
+# the mass-splitting count: how many structural rows (truss pairs or tets) touch
+# each particle. Tonge et al. 2012: give every constraint a copy of the particle
+# carrying 1/n of its mass (inverse mass n*w in the denominator), move the real
+# particle by the plain w-weighted correction and SUM over its rows. The sum is
+# then an average of per-row corrections -- unconditionally stable, no gain cap,
+# and the XPBD multiplier stays consistent with what the particle actually moved.
+_pairs_np = np.array([(a, b) for a, b, _ in pairs], dtype=np.int32)
+_pairs_w = np.array([wgt for _, _, wgt in pairs], dtype=np.float64)
+pair_rest_np = np.linalg.norm(p0[_pairs_np[:, 0]] - p0[_pairs_np[:, 1]], axis=1).astype(np.float32)
+pair_alpha_np = (1.0 / (_pairs_w * K_FIN * DT * DT)).astype(np.float32)   # alpha~ = 1/(k dt^2)
+nsplit_np = np.zeros(NP, dtype=np.float32)
+np.add.at(nsplit_np, _pairs_np[:, 0], 1.0)
+np.add.at(nsplit_np, _pairs_np[:, 1], 1.0)
+np.add.at(nsplit_np, FISH_BASE + cage_t.reshape(-1), 1.0)
+nsplit_np = np.maximum(nsplit_np, 1.0)
+N_PAIRS = len(_pairs_np)
 
 wp.init()
 device = wp.get_preferred_device()
 print(f"franka softgrip: {NP} particles ({FIN_TOTAL} finger + {CAGE_N} fish cage), "
-      f"{len(idx_np)} constraint rows, on {device}")
+      f"{N_PAIRS} truss rows + {N_TETS} tets, {SUBSTEPS} x {ITERATIONS} mass-split XPBD, on {device}")
 print(f"  fish {FISH_LEN * 1000:.0f} x {FISH_H * 1000:.0f} x {FISH_W * 1000:.0f} mm, "
       f"{FISH_MASS * 1000:.0f} g: cage {CAGE_N} verts / {N_TETS} tets / {len(_e)} edges at "
       f"{CAGE_H * 1000:.1f} mm pitch, contact r {CAGE_R * 1000:.1f} mm, "
@@ -931,160 +1036,107 @@ def integrate_damped(x: wp.array(dtype=wp.vec3),
 
 
 @wp.kernel
-def build_contacts(pos: wp.array(dtype=wp.vec3),
-                   grid: wp.uint64,
-                   body: wp.array(dtype=int),
-                   rad: wp.array(dtype=float),
-                   cont_idx: wp.array(dtype=int),
-                   cont_d: wp.array(dtype=float),
-                   cont_n: wp.array(dtype=int)):
-    # One hash-grid sweep per substep; the iterations replay the list. Same-body
-    # pairs are skipped -- a tet body is held open by its own volume rows and a
-    # truss by its own struts, and self-contact there is only noise.
-    i = wp.tid()
-    p = pos[i]
-    b = body[i]
-    n = int(0)
-    q = wp.hash_grid_query(grid, p, GRID_R)
-    for j in q:
-        if body[j] != b and n < CONTACT_CAP:
-            dist = wp.length(p - pos[j])
-            cr = rad[i] + rad[j]
-            if dist < cr * CONTACT_MARGIN:
-                cont_idx[i * CONTACT_CAP + n] = j
-                # The penetration LATCHED at collision time is the friction
-                # budget. Sizing friction off the live residual overlap instead
-                # is self-defeating: the normal constraint drives that residual
-                # to zero, so a well-solved contact ends the substep with no
-                # friction left and the fish slides out of a hand that is
-                # provably squeezing it.
-                cont_d[i * CONTACT_CAP + n] = cr - dist
-                n += 1
-    cont_n[i] = n
-
-
-@wp.kernel
-def solve(p_in: wp.array(dtype=wp.vec3),
-          p_out: wp.array(dtype=wp.vec3),
-          prev: wp.array(dtype=wp.vec3),
-          offsets: wp.array(dtype=int),
-          indices: wp.array(dtype=int),
-          rests: wp.array(dtype=float),
-          stiffs: wp.array(dtype=float),
-          cont_idx: wp.array(dtype=int),
-          cont_d: wp.array(dtype=float),
-          cont_n: wp.array(dtype=int),
-          invm: wp.array(dtype=float),
-          mu: wp.array(dtype=float),
-          rad: wp.array(dtype=float),
-          pad: wp.array(dtype=int),
-          body: wp.array(dtype=int),
-          record: int,
-          f_scale: float,
-          pad_force: wp.array(dtype=float),
-          pad_hits: wp.array(dtype=int)):
-    i = wp.tid()
-    p = p_in[i]
-    wi = invm[i]
-    if wi == 0.0:
-        p_out[i] = p
-        return
-    c = wp.vec3(0.0, 0.0, 0.0)
-    # Truss / tet distance constraints, Jacobi half-corrections, NORMALISED by
-    # the node's own summed stiffness once that sum exceeds 1. A Jacobi sweep is
-    # only stable while the total gain at a node is below unity, and a truss node
-    # here sits on ~30 rows (skin, rib, two diagonals, root fan) while a cage
-    # node sits on 14 tet edges plus its spine chords -- so the raw sum was 2-9x
-    # over. That surplus is what rang the pads at the truss frequency and what
-    # blew the fish to NaN the moment the edges were stiffened. Normalising
-    # keeps the RELATIVE weighting (stiff skins, soft diagonals) exactly and
-    # caps the per-iteration move at RELAX; 16 iterations do the converging.
-    # Contacts are deliberately left OUT of the normalisation: a clamp has to be
-    # able to move a node the whole penetration in one go.
-    wsum = float(0.0)
-    for k in range(offsets[i], offsets[i + 1]):
-        d = p_in[indices[k]] - p
-        l = wp.length(d)
-        if l > 1.0e-9:
-            c += d * (0.5 * stiffs[k] * (l - rests[k]) / l)
-        wsum += stiffs[k]
-    # ...and only on the FISH. The truss was never the thing that diverged, and
-    # normalising it as well costs the clamp: measured, the same close went from
-    # 3.1 N to 0.9 N and pushed the fish across the tray instead of lifting it.
-    # The pads' ringing is handled where it actually comes from -- the once-per-
-    # frame pin update (now interpolated) and DAMPING_FIN.
-    if body[i] == 2:
-        c = c * (1.0 / wp.max(1.0, 0.5 * wsum))
-    else:
-        # ...and on the TRUSS, a CAP rather than a normalisation: phase 5 added
-        # the skins' bending chords, which took the node's gain past what
-        # DAMPING_FIN could absorb and made the skins ring in a per-row spike
-        # pattern. Dividing only the surplus keeps every pre-phase-5 row at full
-        # strength, so the clamp survives (measured below 3 N either way).
-        c = c * (FIN_GAIN_CAP / wp.max(FIN_GAIN_CAP, 0.5 * wsum))
-    # particle-particle contact, normal split by inverse mass + Coulomb friction
-    for k in range(cont_n[i]):
-        j = cont_idx[i * CONTACT_CAP + k]
-        pj = p_in[j]
-        d = p - pj
-        l = wp.length(d)
-        cr = rad[i] + rad[j]
-        if l < cr and l > 1.0e-9:
-            wj = invm[j]
-            share = wi / (wi + wj + 1.0e-12)
-            n = d / l
-            push = n * ((cr - l) * share)
-            c += push
-            # Static friction, positionally: cancel the tangential relative
-            # motion of this substep, up to mu times the normal correction.
-            rel = (p - prev[i]) - (pj - prev[j])
-            t = rel - n * wp.dot(rel, n)
-            tl = wp.length(t)
-            if tl > 1.0e-9:
-                budget = wp.max(cont_d[i * CONTACT_CAP + k], cr - l)
-                lim = wp.min(tl, mu[i] * wp.max(budget, 0.0))
-                c -= t * (lim / tl * share)
-            if record == 1 and pad[i] == 1 and body[j] == 2:
-                wp.atomic_add(pad_force, body[i], wp.length(push) * RELAX * f_scale)
-                wp.atomic_add(pad_hits, 0, 1)
-    p_out[i] = p + c * RELAX
-
-
-@wp.kernel
-def tet_lambda_reset(lam_d: wp.array(dtype=float), lam_h: wp.array(dtype=float)):
+def lambda_reset(lam: wp.array(dtype=float)):
     # XPBD multipliers are accumulated across one substep and reset before the
     # next -- this is what makes the compliance dt-independent (a real elastic
     # modulus) rather than an iteration-count-dependent PBD stiffness.
     t = wp.tid()
-    lam_d[t] = 0.0
-    lam_h[t] = 0.0
+    lam[t] = 0.0
 
 
 @wp.kernel
-def tet_neohookean(pos: wp.array(dtype=wp.vec3),
-                   tets: wp.array2d(dtype=int),
-                   dm_inv: wp.array(dtype=wp.mat33),
-                   alpha_d: wp.array(dtype=float),
-                   alpha_h: wp.array(dtype=float),
-                   gamma: float,
-                   invm: wp.array(dtype=float),
-                   base: int,
-                   lam_d: wp.array(dtype=float),
-                   lam_h: wp.array(dtype=float),
-                   dpos: wp.array(dtype=wp.vec3),
-                   cnt: wp.array(dtype=int)):
-    # Stable Neo-Hookean (Macklin/Muller/Chentanez 2021), two XPBD constraints
-    # per tet. F = Ds @ Dm_inv, Ds columns = [x1-x0, x2-x0, x3-x0]. The gradient
-    # of any scalar phi(F) wrt the inner verts is the columns of (dphi/dF)@Dm_inv^T
-    # and wrt x0 is minus their sum. This is inversion-safe: the hydrostatic row
-    # C = det(F) - gamma restores volume even from det(F) < 0, and the deviatoric
-    # row C = sqrt(tr(F^T F)) is always well defined. gamma = 1 + mu/lambda is
-    # chosen so the energy minimum is exactly F = I (undeformed rest).
+def pairs_xpbd(pos: wp.array(dtype=wp.vec3),
+               pi: wp.array(dtype=int),
+               pj: wp.array(dtype=int),
+               rest: wp.array(dtype=float),
+               alpha: wp.array(dtype=float),
+               lam: wp.array(dtype=float),
+               invm: wp.array(dtype=float),
+               nsplit: wp.array(dtype=float),
+               dpos: wp.array(dtype=wp.vec3)):
+    # One XPBD distance row, mass-split Jacobi: the denominator sees each end as
+    # n times lighter (its mass is shared by n rows), the move is the plain
+    # w-weighted one and is SUMMED into dpos with every other row on that node.
+    # C = |xj - xi| - rest, grad_i = -n, grad_j = +n.
+    c = wp.tid()
+    i = pi[c]
+    j = pj[c]
+    d = pos[j] - pos[i]
+    l = wp.length(d)
+    if l < 1.0e-9:
+        return
+    n = d / l
+    wi = invm[i]
+    wj = invm[j]
+    a = alpha[c]
+    den = wi * nsplit[i] + wj * nsplit[j] + a
+    dl = (-(l - rest[c]) - a * lam[c]) / den
+    lam[c] = lam[c] + dl
+    if wi > 0.0:
+        wp.atomic_add(dpos, i, n * (-wi * dl))
+    if wj > 0.0:
+        wp.atomic_add(dpos, j, n * (wj * dl))
+
+
+@wp.kernel
+def apply_delta(pos: wp.array(dtype=wp.vec3),
+                dpos: wp.array(dtype=wp.vec3),
+                omega: float):
+    # The structural pass lands here: truss rows + FEM tets have scattered their
+    # mass-split corrections, the node takes the sum (no division -- the split
+    # already made it an average) and the buffer self-clears for the next sweep.
+    i = wp.tid()
+    pos[i] = pos[i] + dpos[i] * omega
+    dpos[i] = wp.vec3(0.0, 0.0, 0.0)
+
+
+@wp.kernel
+def tet_corot(pos: wp.array(dtype=wp.vec3),
+              tets: wp.array2d(dtype=int),
+              dm_inv: wp.array(dtype=wp.mat33),
+              alpha_d: wp.array(dtype=float),
+              alpha_h: wp.array(dtype=float),
+              invm: wp.array(dtype=float),
+              nsplit: wp.array(dtype=float),
+              base: int,
+              lam_d: wp.array(dtype=float),
+              lam_h: wp.array(dtype=float),
+              dpos: wp.array(dtype=wp.vec3)):
+    # COROTATIONAL FEM as two XPBD rows per tet, both ZERO AT REST:
+    #   deviatoric  C_D = |F - R|_F   (R = closest rotation to F), stiffness mu
+    #   volumetric  C_H = det(F) - 1,                              stiffness lambda
+    # i.e. the energy mu/2 |F - R|^2 + lambda/2 (J - 1)^2 -- linear corotational
+    # elasticity with the right shear and bulk moduli, and the volume row kept
+    # separate so the flesh stays near-incompressible.
+    #
+    # WHY NOT the stable Neo-Hookean constraint pair (phase 6)? Its two rows are
+    # NONZERO at rest (C_D = sqrt 3, C_H = -mu/lambda) and only balance once each
+    # multiplier has climbed to lambda* = -C/alpha~ -- from zero, ~den/alpha~
+    # iterations, about 10 for the deviatoric row and ~250 for the hydrostatic
+    # one at this mesh. Reset every substep and truncated at a few iterations,
+    # that climb is permanently biased toward the deviatoric row's HARD target,
+    # which is F = 0: measured, the fish sat at 34-58 % of its rest volume with
+    # nothing touching it, and carrying the multipliers across substeps instead
+    # re-applies the (huge, mutually cancelling) pre-stress as an explicit step
+    # and blows up. Rows that are zero at rest carry only the actual load in
+    # their multipliers, so a truncated solve is merely a little soft, never
+    # biased, and the fixed point is F = I.
+    #
+    # F = Ds @ Dm_inv, Ds columns = [x1-x0, x2-x0, x3-x0]; for any scalar phi(F)
+    # the gradient wrt x_k (k=1..3) is column k of (dphi/dF) @ Dm_inv^T and wrt
+    # x0 minus their sum. dC_D/dF = (F - R)/C_D (the dR term vanishes), and
+    # dC_H/dF = cof(F). R comes from the SVD with the sign of the smallest
+    # singular direction flipped when det < 0, so an inverted tet is pulled back
+    # through its flat state toward a proper rotation (inversion-safe).
     t = wp.tid()
     la, lb, lc, ld = tets[t, 0], tets[t, 1], tets[t, 2], tets[t, 3]
     ia, ib, ic, id_ = base + la, base + lb, base + lc, base + ld
     x0, x1, x2, x3 = pos[ia], pos[ib], pos[ic], pos[id_]
     w0, w1, w2, w3 = invm[ia], invm[ib], invm[ic], invm[id_]
+    s0 = w0 * nsplit[ia]
+    s1 = w1 * nsplit[ib]
+    s2 = w2 * nsplit[ic]
+    s3 = w3 * nsplit[id_]
     e1 = x1 - x0
     e2 = x2 - x0
     e3 = x3 - x0
@@ -1093,27 +1145,60 @@ def tet_neohookean(pos: wp.array(dtype=wp.vec3),
     f0 = e1 * di[0, 0] + e2 * di[1, 0] + e3 * di[2, 0]
     f1 = e1 * di[0, 1] + e2 * di[1, 1] + e3 * di[2, 1]
     f2 = e1 * di[0, 2] + e2 * di[1, 2] + e3 * di[2, 2]
+    F = wp.mat33(f0[0], f1[0], f2[0],
+                 f0[1], f1[1], f2[1],
+                 f0[2], f1[2], f2[2])
 
-    # deviatoric constraint: C = sqrt(tr(F^T F)), stiffness mu (alpha_d)
-    s = wp.dot(f0, f0) + wp.dot(f1, f1) + wp.dot(f2, f2)
-    cd = wp.sqrt(wp.max(s, 1.0e-12))
-    inv_cd = 1.0 / cd
-    # (F @ Dm_inv^T) columns give grads wrt x1,x2,x3
-    g1 = (f0 * di[0, 0] + f1 * di[0, 1] + f2 * di[0, 2]) * inv_cd
-    g2 = (f0 * di[1, 0] + f1 * di[1, 1] + f2 * di[1, 2]) * inv_cd
-    g3 = (f0 * di[2, 0] + f1 * di[2, 1] + f2 * di[2, 2]) * inv_cd
-    g0 = -(g1 + g2 + g3)
+    # closest rotation R = U V^T (det +1)
+    U = wp.mat33()
+    sig = wp.vec3()
+    V = wp.mat33()
+    wp.svd3(F, U, sig, V)
+    R = U * wp.transpose(V)
+    if wp.determinant(R) < 0.0:
+        # flip the singular direction with the smallest sigma
+        m = int(0)
+        if wp.abs(sig[1]) < wp.abs(sig[m]):
+            m = 1
+        if wp.abs(sig[2]) < wp.abs(sig[m]):
+            m = 2
+        um = wp.vec3(U[0, m], U[1, m], U[2, m])
+        vm = wp.vec3(V[0, m], V[1, m], V[2, m])
+        R = R - wp.outer(um, vm) * 2.0
+
+    da0 = wp.vec3(0.0, 0.0, 0.0)
+    da1 = wp.vec3(0.0, 0.0, 0.0)
+    da2 = wp.vec3(0.0, 0.0, 0.0)
+    da3 = wp.vec3(0.0, 0.0, 0.0)
+
+    # deviatoric row: C = |F - R|, stiffness mu (alpha_d)
+    D = F - R
+    cd = wp.sqrt(D[0, 0] * D[0, 0] + D[0, 1] * D[0, 1] + D[0, 2] * D[0, 2]
+                 + D[1, 0] * D[1, 0] + D[1, 1] * D[1, 1] + D[1, 2] * D[1, 2]
+                 + D[2, 0] * D[2, 0] + D[2, 1] * D[2, 1] + D[2, 2] * D[2, 2])
     ad = alpha_d[t]
-    den = (w0 * wp.dot(g0, g0) + w1 * wp.dot(g1, g1)
-           + w2 * wp.dot(g2, g2) + w3 * wp.dot(g3, g3) + ad)
-    dl = (-cd - ad * lam_d[t]) / den
-    lam_d[t] = lam_d[t] + dl
-    da0 = g0 * (w0 * dl)
-    da1 = g1 * (w1 * dl)
-    da2 = g2 * (w2 * dl)
-    da3 = g3 * (w3 * dl)
+    if cd > 1.0e-9:
+        inv_cd = 1.0 / cd
+        d0 = wp.vec3(D[0, 0], D[1, 0], D[2, 0])     # columns of D
+        d1 = wp.vec3(D[0, 1], D[1, 1], D[2, 1])
+        d2 = wp.vec3(D[0, 2], D[1, 2], D[2, 2])
+        g1 = (d0 * di[0, 0] + d1 * di[0, 1] + d2 * di[0, 2]) * inv_cd
+        g2 = (d0 * di[1, 0] + d1 * di[1, 1] + d2 * di[1, 2]) * inv_cd
+        g3 = (d0 * di[2, 0] + d1 * di[2, 1] + d2 * di[2, 2]) * inv_cd
+        g0 = -(g1 + g2 + g3)
+        den = (s0 * wp.dot(g0, g0) + s1 * wp.dot(g1, g1)
+               + s2 * wp.dot(g2, g2) + s3 * wp.dot(g3, g3) + ad)
+        dl = (-cd - ad * lam_d[t]) / den
+        lam_d[t] = lam_d[t] + dl
+        da0 = g0 * (w0 * dl)
+        da1 = g1 * (w1 * dl)
+        da2 = g2 * (w2 * dl)
+        da3 = g3 * (w3 * dl)
+    else:
+        # at rest the row carries no load; the multiplier relaxes with it
+        lam_d[t] = 0.0
 
-    # hydrostatic constraint: C = det(F) - gamma, stiffness lambda (alpha_h)
+    # volume row: C = det(F) - 1, stiffness lambda (alpha_h)
     c0 = wp.cross(f1, f2)
     c1 = wp.cross(f2, f0)
     c2 = wp.cross(f0, f1)
@@ -1122,10 +1207,10 @@ def tet_neohookean(pos: wp.array(dtype=wp.vec3),
     h2 = c0 * di[1, 0] + c1 * di[1, 1] + c2 * di[1, 2]
     h3 = c0 * di[2, 0] + c1 * di[2, 1] + c2 * di[2, 2]
     h0 = -(h1 + h2 + h3)
-    ch = detf - gamma
+    ch = detf - 1.0
     ah = alpha_h[t]
-    denh = (w0 * wp.dot(h0, h0) + w1 * wp.dot(h1, h1)
-            + w2 * wp.dot(h2, h2) + w3 * wp.dot(h3, h3) + ah)
+    denh = (s0 * wp.dot(h0, h0) + s1 * wp.dot(h1, h1)
+            + s2 * wp.dot(h2, h2) + s3 * wp.dot(h3, h3) + ah)
     dlh = (-ch - ah * lam_h[t]) / denh
     lam_h[t] = lam_h[t] + dlh
     da0 = da0 + h0 * (w0 * dlh)
@@ -1133,33 +1218,10 @@ def tet_neohookean(pos: wp.array(dtype=wp.vec3),
     da2 = da2 + h2 * (w2 * dlh)
     da3 = da3 + h3 * (w3 * dlh)
 
-    wp.atomic_add(dpos, la, da0)
-    wp.atomic_add(dpos, lb, da1)
-    wp.atomic_add(dpos, lc, da2)
-    wp.atomic_add(dpos, ld, da3)
-    wp.atomic_add(cnt, la, 1)
-    wp.atomic_add(cnt, lb, 1)
-    wp.atomic_add(cnt, lc, 1)
-    wp.atomic_add(cnt, ld, 1)
-
-
-@wp.kernel
-def tet_apply(pos: wp.array(dtype=wp.vec3),
-              base: int,
-              dpos: wp.array(dtype=wp.vec3),
-              cnt: wp.array(dtype=int)):
-    # Jacobi mass-split: average the XPBD corrections over the tets incident to
-    # this node, then self-clear. The division by the incident-tet count IS the
-    # under-relaxation that keeps the parallel-over-tets solve stable; adding the
-    # distance rows' extra RELAX 0.5 on top double-damped it and the body could
-    # not even resist gravity (rest det(F) deviation 0.22), so there is no RELAX
-    # here.
-    i = wp.tid()
-    n = cnt[i]
-    if n > 0:
-        pos[base + i] = pos[base + i] + dpos[i] * (1.0 / float(n))
-        dpos[i] = wp.vec3(0.0, 0.0, 0.0)
-        cnt[i] = 0
+    wp.atomic_add(dpos, ia, da0)
+    wp.atomic_add(dpos, ib, da1)
+    wp.atomic_add(dpos, ic, da2)
+    wp.atomic_add(dpos, id_, da3)
 
 
 @wp.kernel
@@ -1176,11 +1238,252 @@ def skin_lattice(pos: wp.array(dtype=wp.vec3),
     out[i] = p
 
 
+@wp.func
+def cell_floor(p: wp.vec3):
+    """(floor height, friction) of the analytic cell under point p: table, the
+    raised tray, or a crate's inner floor."""
+    floor = TABLE_Y
+    m = MU_STEEL
+    if wp.abs(p[0] - TRAY_CX) < TRAY_HX and wp.abs(p[2] - TRAY_CZ) < TRAY_HZ:
+        floor = TRAY_Y
+    if (LEDGE_ON == 1 and p[0] > LEDGE_X0 and p[0] < LEDGE_X1 and wp.abs(p[2] - LEDGE_CZ) < LEDGE_HZ
+            and (LEDGE_Y - p[1]) <= (LEDGE_X1 - p[0])):
+        floor = LEDGE_Y          # on top; the +x end face is handled by the caller
+    cz = CRATE_CZ
+    if p[2] > 0.0:
+        cz = CRATE2_CZ
+    if wp.abs(p[0] - CRATE_CX) < CRATE_HX and wp.abs(p[2] - cz) < CRATE_HZ and p[1] < CRATE_RIM:
+        floor = CRATE_FLOOR
+        m = MU_CRATE
+    return floor, m
+
+
+@wp.func
+def skin_point(pos: wp.array(dtype=wp.vec3), base: int,
+               ids: wp.array2d(dtype=int), w: wp.array2d(dtype=float), v: int):
+    q = wp.vec3(0.0, 0.0, 0.0)
+    for k in range(8):
+        q += pos[base + ids[v, k]] * w[v, k]
+    return q
+
+
+@wp.kernel
+def surface_contacts_build(pos: wp.array(dtype=wp.vec3),
+                           mesh: wp.uint64,
+                           invm: wp.array(dtype=float),
+                           body: wp.array(dtype=int),
+                           tris: wp.array(dtype=int),
+                           ids: wp.array2d(dtype=int),
+                           margin: float,
+                           mc_face: wp.array(dtype=int),
+                           mc_uv: wp.array(dtype=wp.vec2),
+                           mc_n: wp.array(dtype=wp.vec3),
+                           mc_d0: wp.array(dtype=float),
+                           mc_acc: wp.array(dtype=float),
+                           csplit: wp.array(dtype=int)):
+    # PHASE 11: the pads meet the fish's DRAWN SKIN -- a wp.Mesh of the skinned
+    # body triangles, refit every substep -- not the tet-cage nodes as spheres.
+    # One closest-point query per finger node latches the contact for the
+    # substep: face + barycentrics (so the iterations can re-evaluate the skin
+    # point from the live cage through the binding weights), the outward normal
+    # and the penetration at prediction time (the friction budget's floor). The
+    # cage nodes under the contact are counted for mass splitting.
+    i = wp.tid()
+    mc_face[i] = -1
+    mc_acc[i] = 0.0
+    if invm[i] == 0.0 or body[i] == 2:
+        return
+    p = pos[i]
+    q = wp.mesh_query_point_sign_normal(mesh, p, PART_R + margin)
+    if not q.result:
+        return
+    cp = wp.mesh_eval_position(mesh, q.face, q.u, q.v)
+    d = p - cp
+    dist = wp.length(d)
+    n = wp.mesh_eval_face_normal(mesh, q.face)
+    if dist > 1.0e-6:
+        n = d * (q.sign / dist)
+    mc_face[i] = q.face
+    mc_uv[i] = wp.vec2(q.u, q.v)
+    mc_n[i] = n
+    mc_d0[i] = PART_R - q.sign * dist
+    va = tris[q.face * 3 + 0]
+    vb = tris[q.face * 3 + 1]
+    vc = tris[q.face * 3 + 2]
+    for k in range(8):
+        wp.atomic_add(csplit, ids[va, k], 1)
+        wp.atomic_add(csplit, ids[vb, k], 1)
+        wp.atomic_add(csplit, ids[vc, k], 1)
+
+
+@wp.kernel
+def surface_floor_count(pos: wp.array(dtype=wp.vec3),
+                        base: int,
+                        vids: wp.array(dtype=int),
+                        ids: wp.array2d(dtype=int),
+                        w: wp.array2d(dtype=float),
+                        csplit: wp.array(dtype=int)):
+    # body skin vertices near the cell floor count toward their cage nodes' split
+    t = wp.tid()
+    v = vids[t]
+    q = skin_point(pos, base, ids, w, v)
+    floor, m = cell_floor(q)
+    if q[1] < floor + SURF_R + 0.003:
+        for k in range(8):
+            wp.atomic_add(csplit, ids[v, k], 1)
+
+
+@wp.kernel
+def surface_contacts_solve(pos: wp.array(dtype=wp.vec3),
+                           prev: wp.array(dtype=wp.vec3),
+                           base: int,
+                           tris: wp.array(dtype=int),
+                           ids: wp.array2d(dtype=int),
+                           w: wp.array2d(dtype=float),
+                           invm: wp.array(dtype=float),
+                           mu: wp.array(dtype=float),
+                           pad: wp.array(dtype=int),
+                           body: wp.array(dtype=int),
+                           csplit: wp.array(dtype=int),
+                           mc_face: wp.array(dtype=int),
+                           mc_uv: wp.array(dtype=wp.vec2),
+                           mc_n: wp.array(dtype=wp.vec3),
+                           mc_d0: wp.array(dtype=float),
+                           mc_acc: wp.array(dtype=float),
+                           dpos: wp.array(dtype=wp.vec3),
+                           pad_force: wp.array(dtype=float),
+                           pad_hits: wp.array(dtype=int)):
+    # Pad sphere vs the live skin point of its latched contact. The skin point
+    # is a weighted sum of up to 24 cage nodes (3 vertices x 8 corners), so the
+    # XPBD row is C = dot(p - q, n) - PART_R >= 0 with gradient +n on the pad and
+    # -W_k n on cage node k; the correction is mass-split over the pad's one
+    # contact and each cage node's csplit. Coulomb friction on the same row:
+    # cancel the tangential relative motion of pad vs skin point this substep,
+    # up to mu times the normal correction the contact has carried (latched
+    # penetration + what the iterations applied).
+    i = wp.tid()
+    f = mc_face[i]
+    if f < 0:
+        return
+    p = pos[i]
+    wi = invm[i]
+    n = mc_n[i]
+    uv = mc_uv[i]
+    bu = uv[0]
+    bv = uv[1]
+    bw = 1.0 - bu - bv
+    va = tris[f * 3 + 0]
+    vb = tris[f * 3 + 1]
+    vc = tris[f * 3 + 2]
+    # live skin point, its start-of-substep position, and the split denominator
+    q = wp.vec3(0.0, 0.0, 0.0)
+    q0 = wp.vec3(0.0, 0.0, 0.0)
+    den = wi
+    for k in range(8):
+        ka = base + ids[va, k]
+        kb = base + ids[vb, k]
+        kc = base + ids[vc, k]
+        wa = bu * w[va, k]
+        wb = bv * w[vb, k]
+        wc = bw * w[vc, k]
+        q += pos[ka] * wa + pos[kb] * wb + pos[kc] * wc
+        q0 += prev[ka] * wa + prev[kb] * wb + prev[kc] * wc
+        den += (invm[ka] * wa * wa * float(wp.max(csplit[ka - base], 1))
+                + invm[kb] * wb * wb * float(wp.max(csplit[kb - base], 1))
+                + invm[kc] * wc * wc * float(wp.max(csplit[kc - base], 1)))
+    pen = PART_R - wp.dot(p - q, n)
+    if pen <= 0.0:
+        return
+    dl = pen / den
+    mc_acc[i] = mc_acc[i] + pen
+    corr = n * dl
+    # friction
+    rel = (p - prev[i]) - (q - q0)
+    t = rel - n * wp.dot(rel, n)
+    tl = wp.length(t)
+    if tl > 1.0e-9:
+        budget = mu[i] * (wp.max(mc_d0[i], 0.0) + mc_acc[i])
+        lim = wp.min(tl, budget)
+        corr -= t * (lim / tl / den)
+    wp.atomic_add(dpos, i, corr * wi)
+    for k in range(8):
+        ka = base + ids[va, k]
+        kb = base + ids[vb, k]
+        kc = base + ids[vc, k]
+        wp.atomic_add(dpos, ka, corr * (-invm[ka] * bu * w[va, k]))
+        wp.atomic_add(dpos, kb, corr * (-invm[kb] * bv * w[vb, k]))
+        wp.atomic_add(dpos, kc, corr * (-invm[kc] * bw * w[vc, k]))
+    if pad[i] == 1:
+        wp.atomic_add(pad_force, body[i], dl)      # normal impulse, kg*m
+        wp.atomic_add(pad_hits, 0, 1)
+
+
+@wp.kernel
+def surface_floor_solve(pos: wp.array(dtype=wp.vec3),
+                        prev: wp.array(dtype=wp.vec3),
+                        base: int,
+                        vids: wp.array(dtype=int),
+                        ids: wp.array2d(dtype=int),
+                        w: wp.array2d(dtype=float),
+                        invm: wp.array(dtype=float),
+                        csplit: wp.array(dtype=int),
+                        dpos: wp.array(dtype=wp.vec3)):
+    # The body SKIN rests on the tray / table / crate floor (and stays inside
+    # the crate walls) -- not the cage nodes, which sit a few mm outside the skin
+    # and used to leave the drawn fish floating. Same skinned-point XPBD row as
+    # the pad contact, gradient w_k on the 8 corners, Coulomb friction against
+    # the surface with the per-substep normal correction as the budget.
+    t = wp.tid()
+    v = vids[t]
+    q = skin_point(pos, base, ids, w, v)
+    q0 = skin_point(prev, base, ids, w, v)
+    floor, m = cell_floor(q)
+    cz = CRATE_CZ
+    if q[2] > 0.0:
+        cz = CRATE2_CZ
+    in_crate = (wp.abs(q[0] - CRATE_CX) < CRATE_HX and wp.abs(q[2] - cz) < CRATE_HZ
+                and q[1] < CRATE_RIM)
+    corr = wp.vec3(0.0, 0.0, 0.0)
+    den = float(0.0)
+    for k in range(8):
+        kk = base + ids[v, k]
+        den += invm[kk] * w[v, k] * w[v, k] * float(wp.max(csplit[ids[v, k]], 1))
+    if den <= 0.0:
+        return
+    pen = floor + SURF_R - q[1]
+    on_belt = LEDGE_ON == 1 and floor == LEDGE_Y
+    if pen > 0.0:
+        corr += wp.vec3(0.0, pen, 0.0)
+        rel = q - q0
+        if on_belt:
+            rel = rel - wp.vec3(BELT_V * DT, 0.0, 0.0)   # the ledge top is a belt moving at BELT_V
+        tt = wp.vec3(rel[0], 0.0, rel[2])
+        tl = wp.length(tt)
+        if tl > 1.0e-9:
+            lim = wp.min(tl, m * pen * 2.0)
+            corr -= tt * (lim / tl)
+    if (LEDGE_ON == 1 and q[0] > LEDGE_X0 and q[0] < LEDGE_X1 and wp.abs(q[2] - LEDGE_CZ) < LEDGE_HZ
+            and q[1] < LEDGE_Y and (LEDGE_X1 - q[0]) < (LEDGE_Y - q[1])):
+        corr += wp.vec3(LEDGE_X1 + SURF_R - q[0], 0.0, 0.0)        # the ledge's end face
+    if in_crate:
+        # keep inside the walls
+        x = wp.clamp(q[0], CRATE_CX - CRATE_HX + SURF_R, CRATE_CX + CRATE_HX - SURF_R)
+        z = wp.clamp(q[2], cz - CRATE_HZ + SURF_R, cz + CRATE_HZ - SURF_R)
+        corr += wp.vec3(x - q[0], 0.0, z - q[2])
+    if wp.length(corr) <= 0.0:
+        return
+    dl = corr / den
+    for k in range(8):
+        kk = base + ids[v, k]
+        wp.atomic_add(dpos, kk, dl * (invm[kk] * w[v, k]))
+
+
 @wp.kernel
 def statics(pos: wp.array(dtype=wp.vec3),
             prev: wp.array(dtype=wp.vec3),
             invm: wp.array(dtype=float),
-            rad: wp.array(dtype=float)):
+            rad: wp.array(dtype=float),
+            body: wp.array(dtype=int)):
     # Analytic cell: table plane, the raised tray floor, and the crate as an
     # open box (inner floor plus four walls). Tangential motion at a contact is
     # damped by the surface's friction, which is what stops a fish sliding off
@@ -1194,6 +1497,11 @@ def statics(pos: wp.array(dtype=wp.vec3),
     on_tray = wp.abs(p[0] - TRAY_CX) < TRAY_HX and wp.abs(p[2] - TRAY_CZ) < TRAY_HZ
     if on_tray:
         floor = TRAY_Y
+    if LEDGE_ON == 1 and p[0] > LEDGE_X0 and p[0] < LEDGE_X1 and wp.abs(p[2] - LEDGE_CZ) < LEDGE_HZ:
+        if (LEDGE_Y - p[1]) <= (LEDGE_X1 - p[0]):
+            floor = LEDGE_Y
+        elif p[1] < LEDGE_Y:
+            p = wp.vec3(LEDGE_X1, p[1], p[2])              # safety: out through the end face
     # Two crates, mirrored in z; pick the near one by sign and test that.
     cz = CRATE_CZ
     if p[2] > 0.0:
@@ -1208,8 +1516,9 @@ def statics(pos: wp.array(dtype=wp.vec3),
         p = wp.vec3(x, p[1], z)
     if p[1] < floor + rad[i]:
         p = wp.vec3(p[0], floor + rad[i], p[2])
-        t = p - prev[i]
-        p = p - wp.vec3(t[0], 0.0, t[2]) * m
+        if body[i] != 2:                      # the fish's friction lives on its skin
+            t = p - prev[i]
+            p = p - wp.vec3(t[0], 0.0, t[2]) * wp.min(m, 1.0)
     pos[i] = p
 
 
@@ -1223,15 +1532,23 @@ def fish_centroid(pos: wp.array(dtype=wp.vec3), base: int, n: int,
 # --- device state ---------------------------------------------------------------
 
 x = wp.array(p0, dtype=wp.vec3, device=device)
-prev = wp.array(p0, dtype=wp.vec3, device=device)
+_p0_prev = p0.copy()
+if DROP:
+    _p0_prev[FISH_BASE:, 0] -= BELT_V * DT          # already riding the belt
+prev = wp.array(_p0_prev, dtype=wp.vec3, device=device)
 pred = wp.zeros(NP, dtype=wp.vec3, device=device)
 scratch = wp.zeros(NP, dtype=wp.vec3, device=device)
+dpos = wp.zeros(NP, dtype=wp.vec3, device=device)      # structural-pass scatter buffer
+nsplit_d = wp.array(nsplit_np, dtype=float, device=device)
+pair_i_d = wp.array(np.ascontiguousarray(_pairs_np[:, 0]), dtype=int, device=device)
+pair_j_d = wp.array(np.ascontiguousarray(_pairs_np[:, 1]), dtype=int, device=device)
+pair_rest_d = wp.array(pair_rest_np, dtype=float, device=device)
+pair_alpha_d = wp.array(pair_alpha_np, dtype=float, device=device)
+pair_lam = wp.zeros(N_PAIRS, dtype=float, device=device)
 nrm = wp.zeros(NP, dtype=wp.vec3, device=device)
 centroid = wp.zeros(1, dtype=wp.vec3, device=device)
 pad_force = wp.zeros(2, dtype=float, device=device)
 pad_hits = wp.zeros(1, dtype=int, device=device)
-tet_dpos = wp.zeros(CAGE_N, dtype=wp.vec3, device=device)
-tet_cnt = wp.zeros(CAGE_N, dtype=int, device=device)
 tets_d = wp.array(cage_t, dtype=int, device=device)
 tet_dm_inv_d = wp.array(tet_Dm_inv, dtype=wp.mat33, device=device)
 tet_alpha_d_d = wp.array(tet_alpha_d, dtype=float, device=device)
@@ -1241,12 +1558,8 @@ tet_lam_h = wp.zeros(N_TETS, dtype=float, device=device)   # hydrostatic multipl
 skin_ids_d = wp.array(skin_ids, dtype=int, device=device)
 skin_w_d = wp.array(skin_w, dtype=float, device=device)
 
-offsets = wp.array(offsets_np, dtype=int, device=device)
-indices = wp.array(idx_np, dtype=int, device=device)
-rests = wp.array(rest_np, dtype=float, device=device)
-stiffs = wp.array(stiff_np, dtype=float, device=device)
-_damp_np = np.full(NP, DAMPING, dtype=np.float32)
-_damp_np[:FIN_TOTAL] = DAMPING_FIN
+_damp_np = np.full(NP, 1.0 - math.exp(-DAMP_RATE * DT), dtype=np.float32)
+_damp_np[:FIN_TOTAL] = 1.0 - math.exp(-DAMP_RATE_FIN * DT)
 damp_arr = wp.array(_damp_np, dtype=float, device=device)
 invm = wp.array(np.array(invm_of, dtype=np.float32), dtype=float, device=device)
 mu_arr = wp.array(np.array(mu_of, dtype=np.float32), dtype=float, device=device)
@@ -1357,18 +1670,24 @@ rib_front_of_d = wp.array(_rib_corner_front, dtype=int, device=device)
 fish_pos = wp.zeros(fish_corners, dtype=wp.vec3, device=device)
 fish_nrm = wp.zeros(fish_corners, dtype=wp.vec3, device=device)
 
-grid = wp.HashGrid(48, 48, 48, device)
-cont_idx = wp.zeros(NP * CONTACT_CAP, dtype=int, device=device)
-cont_d = wp.zeros(NP * CONTACT_CAP, dtype=float, device=device)
-cont_n = wp.zeros(NP, dtype=int, device=device)
-
-# PBD impulse -> newtons. The contact corrections summed over a substep's
-# iterations ARE the total correction the contact had to make, and a correction
-# dx applied to a particle of mass m over a substep is the force m dx / dt^2.
-# Measured on the PAD particles, so the mass is the pad's; measuring the fish
-# side instead gives the same number, because the split is mass-weighted.
-F_SCALE = MASS_PAD / (DT * DT) / float(ITERATIONS)
-
+# Surface contact state: the body triangles as a wp.Mesh over the skinned
+# vertex buffer (refit each substep), one latched contact slot per finger node,
+# and the per-cage-node split counter.
+body_tris_d = wp.array(body_tris.reshape(-1), dtype=int, device=device)
+body_vids_d = wp.array(body_vids, dtype=int, device=device)
+N_BODY_V = len(body_vids)
+# Skin the rest shape into fish_v BEFORE building the BVH: a tree built on an
+# all-zero buffer is degenerate (every box at the origin) and refit never fixes
+# the topology, so every query walked every triangle (2 ms a substep).
+wp.launch(skin_lattice, dim=FISH_NV, device=device,
+          inputs=[x, FISH_BASE, skin_ids_d, skin_w_d, fish_v])
+fish_cmesh = wp.Mesh(points=fish_v, indices=body_tris_d)
+mc_face = wp.full(FIN_TOTAL, -1, dtype=int, device=device)
+mc_uv = wp.zeros(FIN_TOTAL, dtype=wp.vec2, device=device)
+mc_n = wp.zeros(FIN_TOTAL, dtype=wp.vec3, device=device)
+mc_d0 = wp.zeros(FIN_TOTAL, dtype=float, device=device)
+mc_acc = wp.zeros(FIN_TOTAL, dtype=float, device=device)
+csplit = wp.zeros(CAGE_N, dtype=int, device=device)
 
 def substep_body():
     """One substep. Device work ONLY -- no host reads, no branching on sim
@@ -1379,27 +1698,43 @@ def substep_body():
               inputs=[x, prev, pred, DT, damp_arr, GRAVITY])
     wp.launch(pin_follow, dim=NP, device=device,
               inputs=[local_arr, mats, owner_arr, pinned_arr, pred, prev])
-    grid.build(points=pred, radius=GRID_R)
-    wp.launch(build_contacts, dim=NP, device=device,
-              inputs=[pred, grid.id, body_arr, rad_arr, cont_idx, cont_d, cont_n])
-    wp.launch(tet_lambda_reset, dim=N_TETS, device=device, inputs=[tet_lam_d, tet_lam_h])
-    pa, pb = pred, scratch
+    # Latch this substep's surface contacts: skin the body off the predicted
+    # cage, refit the mesh, one closest-point query per finger node.
+    wp.launch(skin_lattice, dim=FISH_NV, device=device,
+              inputs=[pred, FISH_BASE, skin_ids_d, skin_w_d, fish_v])
+    fish_cmesh.refit()
+    csplit.zero_()
+    wp.launch(surface_contacts_build, dim=FIN_TOTAL, device=device,
+              inputs=[pred, fish_cmesh.id, invm, body_arr, body_tris_d, skin_ids_d, CONTACT_MARGIN,
+                      mc_face, mc_uv, mc_n, mc_d0, mc_acc, csplit])
+    wp.launch(surface_floor_count, dim=N_BODY_V, device=device,
+              inputs=[pred, FISH_BASE, body_vids_d, skin_ids_d, skin_w_d, csplit])
+    wp.launch(lambda_reset, dim=N_TETS, device=device, inputs=[tet_lam_d])
+    wp.launch(lambda_reset, dim=N_TETS, device=device, inputs=[tet_lam_h])
+    wp.launch(lambda_reset, dim=N_PAIRS, device=device, inputs=[pair_lam])
+    pa = pred
     for _ in range(ITERATIONS):
-        wp.launch(solve, dim=NP, device=device,
-                  inputs=[pa, pb, prev, offsets, indices, rests, stiffs, cont_idx, cont_d, cont_n,
-                          invm, mu_arr, rad_arr, pad_arr, body_arr, 1, F_SCALE,
-                          pad_force, pad_hits])
-        pa, pb = pb, pa
-        # The Neo-Hookean FEM rows for the fish, in the same Jacobi sweep as the
-        # finger truss's distance rows. Two constraints per tet, XPBD multipliers
-        # carried across the substep, accumulated per cage node then averaged.
-        wp.launch(tet_neohookean, dim=N_TETS, device=device,
+        # Structural pass: every truss row and every tet scatters its mass-split
+        # XPBD correction, the nodes take the sum.
+        wp.launch(pairs_xpbd, dim=N_PAIRS, device=device,
+                  inputs=[pa, pair_i_d, pair_j_d, pair_rest_d, pair_alpha_d, pair_lam,
+                          invm, nsplit_d, dpos])
+        wp.launch(tet_corot, dim=N_TETS, device=device,
                   inputs=[pa, tets_d, tet_dm_inv_d, tet_alpha_d_d, tet_alpha_h_d,
-                          NH_GAMMA, invm, FISH_BASE, tet_lam_d, tet_lam_h,
-                          tet_dpos, tet_cnt])
-        wp.launch(tet_apply, dim=CAGE_N, device=device,
-                  inputs=[pa, FISH_BASE, tet_dpos, tet_cnt])
-    wp.launch(statics, dim=NP, device=device, inputs=[pa, prev, invm, rad_arr])
+                          invm, nsplit_d, FISH_BASE, tet_lam_d, tet_lam_h, dpos])
+        wp.launch(apply_delta, dim=NP, device=device, inputs=[pa, dpos, OMEGA])
+        # Contact pass: pads vs the skin, the skin vs the cell floor -- both
+        # scatter through the binding weights -- so the substep ends with the
+        # bodies separated and the friction budget reflecting the real squeeze.
+        for _c in range(CONTACT_SWEEPS):
+            wp.launch(surface_contacts_solve, dim=FIN_TOTAL, device=device,
+                      inputs=[pa, prev, FISH_BASE, body_tris_d, skin_ids_d, skin_w_d, invm, mu_arr,
+                              pad_arr, body_arr, csplit, mc_face, mc_uv, mc_n, mc_d0, mc_acc,
+                              dpos, pad_force, pad_hits])
+            wp.launch(surface_floor_solve, dim=N_BODY_V, device=device,
+                      inputs=[pa, prev, FISH_BASE, body_vids_d, skin_ids_d, skin_w_d, invm, csplit, dpos])
+            wp.launch(apply_delta, dim=NP, device=device, inputs=[pa, dpos, 1.0])
+    wp.launch(statics, dim=NP, device=device, inputs=[pa, prev, invm, rad_arr, body_arr])
     wp.copy(x, pa)
 
 
@@ -1433,7 +1768,11 @@ WP_PRE = (GRASP_X, 0.26, FISH_P[2])
 # TCP at the fish's mid-height, so the 90 x 60 mm paddles cover the flank instead
 # of scraping the top of it. The pad tip reaches ~28 mm below the TCP, i.e. just
 # under the belly, which is where the inward hook does its work.
-WP_GRASP = (GRASP_X, TRAY_Y + 0.5 * FISH_H_REST, FISH_P[2])
+# PHASE 11: the TCP goes to the CAGE's mid-height (the body the pads actually
+# meet), not the procedural template's. The Barramundi cage is ~65 mm tall, the
+# template 48: aiming at 24 mm drove the hand 11 mm into the fish's back.
+CAGE_H_REST = float(cage_v[:, 1].max() - cage_v[:, 1].min())
+WP_GRASP = (GRASP_X, TRAY_Y + CAGE_R + 0.5 * CAGE_H_REST, FISH_P[2])
 WP_LIFT = (GRASP_X, 0.30, FISH_P[2])
 WP_CARRY = (TARGET_C[0], 0.32, TARGET_CZ)
 WP_LOWER = (TARGET_C[0], 0.17, TARGET_CZ)
@@ -1443,7 +1782,8 @@ WP_OUT = (TARGET_C[0], 0.36, TARGET_CZ)
 # CARRY and LOWER are 30 % longer than phase 2b. The quintic's peak acceleration
 # scales as 1/T^2, and the swing across to the crate was throwing the hanging
 # fish out of the pads on the way in and out of the blend.
-PLAN = [("SETTLE", None, 0.4),
+PLAN = [("DROP", None, 600.0)] if DROP else [
+        ("SETTLE", None, 0.4),
         ("PREGRASP", WP_PRE, 1.1),
         ("DESCEND", WP_GRASP, 1.0),
         ("CLOSE", None, 2.3),
@@ -1472,7 +1812,7 @@ report = {}
 # energy injected by the converging paddles, not a slide -- and a slower close
 # gives the volume rows time to answer each bite before the next one arrives.
 CLOSE_V = 0.009          # m/s per carriage
-SQUEEZE = 0.002          # extra bite once the threshold trips
+SQUEEZE = 0.001          # extra bite once the threshold trips
 # The release used CLOSE_V too, which at 9 mm/s needs 1.8 s to give back the
 # 16 mm the close took -- longer than the OPEN phase, so on half the runs the
 # fish was still in the hand at DONE. Letting go is not a delicate operation.
@@ -1491,9 +1831,14 @@ Y_CARRIAGE = abs(float(CARRIAGE_TCP[0][1]))
 # held on the backstop at ~0.9 N and lifted at ~1.2 N (below the ~2.5 N target)
 # on the shallow 3 mm bite. Driving the pad face ~6 mm inside the flank firms the
 # clamp without over-stretching the FEM (p99 stays well under 1.4).
-BITE = 0.007             # how far inside the flank the pad face is driven (phase 9)
+# PHASE 11: BITE is measured from the fish's CONTACT surface (cage node + CAGE_R),
+# not from the cage node line -- the old 7 mm "bite" plus the 4.9 mm cage radius
+# was a 12 mm commanded squeeze per side, which a fish at its real stiffness
+# answers with >100 N. The force trip is the primary stop now; this backstop is
+# a 3 mm indentation for when the force never reads (e.g. a soft --young).
+BITE = cli_arg("--bite", 0.003, float)
 FINGER_STOP = max(FINGER_MIN, FINGER_OPEN - Y_CARRIAGE + FIN_SKIN_IN + PART_R
-                  + FISH_HALF_W - BITE)
+                  + FISH_HALF_W + CAGE_R - BITE)
 
 
 def begin_segment(i):
@@ -1620,7 +1965,7 @@ def pad_gap_diag(tag):
     cmin, cmax, cc = cage.min(0), cage.max(0), cage.mean(0)
     rv = fish_v.numpy()
     rmin, rmax = rv.min(0), rv.max(0)
-    contact_r = PART_R + CAGE_R
+    contact_r = PART_R
     print(f"  [gap:{tag:5s}] cage bbox ({cmin[0]:.3f},{cmin[1]:.3f},{cmin[2]:.3f})"
           f"..({cmax[0]:.3f},{cmax[1]:.3f},{cmax[2]:.3f}) c=({cc[0]:.3f},{cc[1]:.3f},{cc[2]:.3f})"
           f" render bbox ({rmin[0]:.3f},{rmin[1]:.3f},{rmin[2]:.3f})..({rmax[0]:.3f},{rmax[1]:.3f},{rmax[2]:.3f})")
@@ -1629,7 +1974,7 @@ def pad_gap_diag(tag):
         b = k * FIN_N
         pad = xp[b:b + FIN_ROWS * FIN_COLS]          # front skin = the inner face
         pc = pad.mean(0)
-        d = np.sqrt(((pad[:, None, :] - cage[None, :, :]) ** 2).sum(-1))
+        d = np.sqrt(((pad[:, None, :] - rv[None, :, :]) ** 2).sum(-1))
         gap = float(d.min()) - contact_r
         # VISUAL gap -- the user's actual complaint. Compare the DRAWN front-skin
         # face (particle + the render-only inward inset) to the DRAWN fish surface
@@ -1647,6 +1992,97 @@ def pad_gap_diag(tag):
         print(f"  [gap:{tag:5s}] finger {k} pad-face c=({pc[0]:+.3f},{pc[1]:+.3f},{pc[2]:+.3f})"
               f" min surface gap {gap * 1000:+5.1f} mm | VISUAL pad->render "
               f"{vis_signed * 1000:+5.1f} mm (min {float(near_d.min()) * 1000:4.1f} mm)")
+
+
+# --- stability probe (--diag) ---------------------------------------------------
+# The two complaints this probe measures: (1) a SHAKY gripper = the free finger
+# nodes moving relative to their own carriage while the hand holds still or
+# carries; (2) a CRUSHED fish = the cross-section between the pads collapsing
+# beyond the commanded bite, and the cage losing volume. Both are printed every
+# DIAG_EVERY frames and summarised at the end of the run.
+DIAG = "--diag" in sys.argv
+DIAG_EVERY = cli_arg("--diag", 15, int)
+_diag_state = {"prev_local": None, "jit_acc": 0.0, "jit_n": 0, "jit_peak": 0.0,
+               "thick_min": 9.9, "vol_min": 9.9, "det_min": 9.9, "det_max": -9.9,
+               "hold_jit_acc": 0.0, "hold_jit_n": 0}
+_diag_free = np.array(pinned_of[:FIN_TOTAL]) == 0
+_diag_sec = np.abs(cage_v[:, 0] - (GRASP_X - FISH_P[0])) < 0.015      # cage nodes at the grasp
+_diag_rest_thick = float(cage_v[_diag_sec, 2].max() - cage_v[_diag_sec, 2].min())
+_diag_rest_vol = float(tet_rest_vol.sum())
+
+
+def _finger_local(xp):
+    """Free finger nodes in their own carriage frame (arm motion removed)."""
+    out = np.zeros((FIN_TOTAL, 3), np.float64)
+    for k in (0, 1):
+        b = k * FIN_N
+        Minv = np.linalg.inv(_mats_cur[k].astype(np.float64))
+        w = xp[b:b + FIN_N].astype(np.float64)
+        out[b:b + FIN_N] = w @ Minv[:3, :3].T + Minv[:3, 3]
+    return out
+
+
+def stab_diag(phase, frame_i):
+    st = _diag_state
+    xp = x.numpy()
+    loc = _finger_local(xp)
+    jit = 0.0
+    if st["prev_local"] is not None:
+        sp = np.linalg.norm((loc - st["prev_local"])[_diag_free] * FPS, axis=1)
+        jit = float(np.sqrt((sp ** 2).mean()))
+        st["jit_acc"] += jit; st["jit_n"] += 1
+        st["jit_peak"] = max(st["jit_peak"], jit)
+        if phase in ("LIFT", "CARRY", "LOWER"):
+            st["hold_jit_acc"] += jit; st["hold_jit_n"] += 1
+    st["prev_local"] = loc
+    cage = xp[FISH_BASE:FISH_BASE + CAGE_N].astype(np.float64)
+    ax = np.array(_pad_inward_dirs()[0], np.float64)           # live closing axis
+    pr = cage[_diag_sec] @ ax
+    thick = float(pr.max() - pr.min()) / max(_diag_rest_thick, 1e-9)
+    tv = cage[_diag_tet]
+    ds = np.stack([tv[:, 1] - tv[:, 0], tv[:, 2] - tv[:, 0], tv[:, 3] - tv[:, 0]], axis=2)
+    detf = np.linalg.det(ds @ _diag_dm_inv)
+    vol = float(np.abs(detf * tet_rest_vol).sum()) / _diag_rest_vol
+    if phase in ("CLOSE", "LIFT", "CARRY", "LOWER"):
+        st["thick_min"] = min(st["thick_min"], thick)
+        st["vol_min"] = min(st["vol_min"], vol)
+    st["det_min"] = min(st["det_min"], float(detf.min()))
+    st["det_max"] = max(st["det_max"], float(detf.max()))
+    if "--lift-diag" in sys.argv and phase in ("DESCEND", "CLOSE", "LIFT") and frame_i % 5 == 0:
+        tcp = np.array(ik.tool_transform(q_cur).to_numpy(), dtype=np.float32).reshape(4, 4)
+        tinv = np.linalg.inv(tcp.astype(np.float64))
+        cc = cage.mean(0) @ tinv[:3, :3].T + tinv[:3, 3]
+        d0 = mc_d0.numpy()
+        fc = mc_face.numpy()
+        act = d0[fc >= 0]
+        pen_i = np.nonzero((fc >= 0) & (d0 > 0))[0]
+        rows = ((pen_i % FIN_N) % (FIN_ROWS * FIN_COLS)) // FIN_COLS
+        fing = pen_i // FIN_N
+        pts = xp[pen_i].astype(np.float64) @ tinv[:3, :3].T + tinv[:3, 3] if len(pen_i) else np.zeros((0, 3))
+        ext = (f" | pen nodes rows {np.bincount(rows, minlength=FIN_ROWS).tolist()} fingers {np.bincount(fing, minlength=2).tolist()}"
+               f" TCP z {pts[:, 2].min() * 1000:.0f}..{pts[:, 2].max() * 1000:.0f}" if len(pen_i) else "")
+        print(f"  [lift] f{frame_i} {phase} tcp y {tcp[1, 3] * 1000:6.1f} | fish c in TCP frame "
+              f"({cc[0] * 1000:+6.1f},{cc[1] * 1000:+6.1f},{cc[2] * 1000:+6.1f}) mm | pad contacts {len(act):3d} "
+              f"penetrating {int((act > 0).sum()):3d} max {act.max() * 1000 if len(act) else 0:.2f} mm | grip {grip_force:5.2f} N" + ext)
+    if frame_i % DIAG_EVERY == 0:
+        cm = cage.mean(0)
+        print(f"  [diag] f{frame_i:4d} {phase:8s} fish c=({cm[0]:.3f},{cm[1]:.3f},{cm[2]:.3f}) | finger jitter {jit:7.2f} mm/s | grasp "
+              f"section {thick * 100:5.1f} % of rest | cage vol {vol * 100:5.1f} % | "
+              f"detF {detf.min():5.2f}..{detf.max():5.2f} | grip {grip_force:5.2f} N "
+              f"/ {grip_nodes_last[0]:5.1f} nodes | carriage {finger_cmd * 1000:4.1f} mm")
+
+
+def stab_summary():
+    st = _diag_state
+    if not DIAG or st["jit_n"] == 0:
+        return
+    print(f"stability: finger jitter RMS {st['jit_acc'] / st['jit_n']:.2f} mm/s "
+          f"(hold phases {st['hold_jit_acc'] / max(st['hold_jit_n'], 1):.2f}, peak {st['jit_peak']:.2f}) | "
+          f"grasp section min {st['thick_min'] * 100:.1f} % of rest | cage volume min "
+          f"{st['vol_min'] * 100:.1f} % | detF {st['det_min']:.2f}..{st['det_max']:.2f}")
+
+
+grip_nodes_last = [0.0]
 
 
 def step_frame():
@@ -1703,11 +2139,12 @@ def step_frame():
     wp.synchronize_device(device)
     t2 = time.perf_counter()
 
-    # Normalised: the raw sum scales with ITERATIONS (folded into F_SCALE) and
-    # with how many pad nodes happen to be touching, which made the phase-2
-    # number unusable as a threshold. Per contacting node, it is comparable.
+    # pad_force holds the contact impulse on the pads (kg*m, summed over the
+    # frame's substeps and iterations); divided by dt^2 it is the normal force
+    # in newtons over one substep, averaged over the frame's substeps. This is
+    # a real force now, both pads together.
     hits = max(int(pad_hits.numpy()[0]), 1)
-    grip_force = float(pad_force.numpy().sum()) / SUBSTEPS
+    grip_force = float(pad_force.numpy().sum()) / (DT * DT) / SUBSTEPS
     grip_nodes = hits / float(SUBSTEPS * ITERATIONS)
     c = centroid.numpy()[0]
     tcp = np.array(ik.tool_transform(q_cur).to_numpy(), dtype=np.float32).reshape(4, 4)[:3, 3]
@@ -1723,7 +2160,7 @@ def step_frame():
     if phase != step_frame.phase_prev:
         step_frame.phase_prev = phase
         fv = fish_v.numpy()
-        ncon = int((cont_n.numpy()[FISH_BASE:] > 0).sum())
+        ncon = int((mc_face.numpy() >= 0).sum())
         stretch, p99, detdev = fem_diag(x.numpy()[FISH_BASE:])
         print(f"  {phase:9s} t={sim_t:5.2f}s grip {grip_force:6.2f} N over "
               f"{grip_nodes:5.1f} nodes | fish y {fv[:, 1].min():.3f}..{fv[:, 1].max():.3f} "
@@ -1736,6 +2173,10 @@ def step_frame():
     if _close_diag_pending:
         pad_gap_diag("CLOSE")
         _close_diag_pending = False
+    grip_nodes_last[0] = grip_nodes
+    if DIAG:
+        stab_diag(phase, step_frame.frame_i)
+    step_frame.frame_i += 1
     sim_t += 1.0 / FPS
     fin_np, fin_nn = fin_pos.numpy(), fin_nrm.numpy()
     fish_np, fish_nn = fish_pos.numpy(), fish_nrm.numpy()
@@ -1758,6 +2199,7 @@ def step_frame():
 
 step_frame.c_prev = np.array(FISH_P, dtype=np.float32)
 step_frame.phase_prev = ""
+step_frame.frame_i = 0
 
 
 def in_crate(c):
@@ -1869,6 +2311,7 @@ except Exception as _e:                              # noqa: BLE001
 
 camera = tp.PerspectiveCamera(42 if CAM != "macro" else 34, canvas.aspect(), 0.03, 40)
 CAM_HOME = {"wide": ((1.30, 0.72, 0.92), (0.30, 0.20, 0.0)),
+            "drop": ((0.72, 0.24, 0.52), (0.52, 0.11, 0.10)),   # side view of the ledge end + floor
             "top": ((0.46, 1.02, 0.30), (0.40, 0.05, 0.0)),
             "macro": ((0.80, 0.40, 0.34), (0.45, 0.10, 0.10))}
 _cp, _ct = CAM_HOME.get(CAM, CAM_HOME["wide"])
@@ -1919,6 +2362,13 @@ table.position.set(0.35, -0.03, 0.0)
 table.receive_shadow = True
 scene.add(table)
 
+if DROP:
+    ledge = tp.Mesh(tp.BoxGeometry(LEDGE_X1 - LEDGE_X0, LEDGE_Y, 2 * LEDGE_HZ),
+                    standard_material(0xc4c9ce, 0.22, 0.92))
+    ledge.position.set(0.5 * (LEDGE_X0 + LEDGE_X1), LEDGE_Y * 0.5, LEDGE_CZ)
+    ledge.receive_shadow = True
+    ledge.cast_shadow = True
+    scene.add(ledge)
 tray = tp.Mesh(tp.BoxGeometry(2 * TRAY_HX, TRAY_Y, 2 * TRAY_HZ),
                standard_material(0xc4c9ce, 0.22, 0.92))
 tray.position.set(TRAY_C[0], TRAY_Y * 0.5, TRAY_C[1])
@@ -1926,7 +2376,7 @@ tray.receive_shadow = True
 scene.add(tray)
 
 crate_mat = standard_material(0x2f6fae, 0.55, 0.0)
-for cc in (CRATE_C, CRATE2_C):
+for cc in () if DROP else (CRATE_C, CRATE2_C):     # no crates in the drop bench (they block the view)
     crate_floor = tp.Mesh(tp.BoxGeometry(2 * CRATE_HX, CRATE_FLOOR, 2 * CRATE_HZ), crate_mat)
     crate_floor.position.set(cc[0], CRATE_FLOOR * 0.5, cc[1])
     scene.add(crate_floor)
@@ -2178,6 +2628,7 @@ def summary(c):
           f"slip mean {mean * 1000:.1f} mm/s, peak {slip_peak * 1000:.1f} mm/s | "
           f"fish at ({c[0]:.3f}, {c[1]:.3f}, {c[2]:.3f}) -> "
           f"{'SUCCESS: IN THE CRATE' if ok else 'FAILED: not in the crate'}")
+    stab_summary()
     return ok
 
 
@@ -2370,6 +2821,8 @@ else:
         if not SLOWMO:
             return 1.0
         nm = PLAN[seg_i][0]
+        if nm == "DROP":
+            return 0.4 if sim_t < 4.0 else 1.0
         if nm == "CLOSE":
             return 0.15
         if nm == "LIFT":
@@ -2378,7 +2831,7 @@ else:
 
     controls = tp.OrbitControls(camera, canvas)
     controls.enable_damping = True
-    controls.target.set(0.44, 0.10, 0.02)
+    controls.target.set(*(CAM_HOME["drop"][1] if DROP else (0.44, 0.10, 0.02)))
 
     def on_resize(w, h):
         camera.aspect = w / max(h, 1)
