@@ -14,16 +14,36 @@ Fingers and fish live in ONE solver over ONE hash grid with Coulomb friction,
 so the grasp is friction plus form closure. There is no kinematic attach and no
 glue anywhere: if the fingers do not hold it, it falls.
 
-The close is force-controlled -- the carriages drive inward until the summed
-pad contact force crosses a threshold, then hold.
+The close drives against a MEASURED backstop with a force proxy over the top of
+it: the carriages come inward until the summed pad contact force crosses a
+threshold or the pad face reaches the flank, then hold.
+
+Each finger is drawn the way it is built -- two thin silicone skins with the
+cross ribs between them, sides open -- so you can watch the ribs shear as the
+front skin is pushed back. That shear IS the Fin Ray effect.
+
+The fish is graded by length into one of two crates, and the wrist camera is a
+live secondary view (picture-in-picture, and the POV camera in the film).
+
+HONEST SCOPE: the arm's poses are SCRIPTED in this version -- a fixed waypoint
+list solved by IK. The wrist camera is a real render, not a decoration, but
+nothing in the loop is driven by it yet: there is no segmentation, no grasp
+synthesis, no closed-loop servoing. What is not scripted is the physics -- the
+grasp is friction and form closure between two GPU soft bodies, and if the
+fingers do not hold the fish it falls.
 
     pip install warp-lang
     python warp_franka_softgrip.py                # window
     python warp_franka_softgrip.py --shot 3.2     # headless PNG at sim time 3.2 s
     python warp_franka_softgrip.py --frames 600   # timed phase breakdown
+    python warp_franka_softgrip.py --film out.mp4 # the cut: 6 shots + end card
+    python warp_franka_softgrip.py --film --preview   # 640x360 at 30 fps, no PIP
     python warp_franka_softgrip.py --grip-force 8 # close threshold, newtons
     python warp_franka_softgrip.py --fish-len 0.3 # graded sizes: 0.24 / 0.27 / 0.30
-    python warp_franka_softgrip.py --cam macro    # wide | macro (DoF, follows the TCP) | top
+    python warp_franka_softgrip.py --grade-mm 265 # length that picks the far crate
+    python warp_franka_softgrip.py --cam macro    # wide | macro (follows the TCP) | top
+    python warp_franka_softgrip.py --pov          # render from the wrist camera
+    python warp_franka_softgrip.py --dof          # depth of field (see the note below)
     python warp_franka_softgrip.py --no-slowmo    # no 0.15x window around CLOSE -> LIFT
     python warp_franka_softgrip.py --no-pip       # no wrist-camera picture-in-picture
 """
@@ -56,6 +76,16 @@ HEADLESS = SHOT or BENCH
 CAM = cli_arg("--cam", "wide", str)          # wide | macro | top
 SLOWMO = "--no-slowmo" not in sys.argv
 PIP = "--no-pip" not in sys.argv
+DOF = "--dof" in sys.argv                    # see the note at the renderer setup
+POV = "--pov" in sys.argv                    # render from the wrist camera
+FILM = "--film" in sys.argv
+FILM_OUT = cli_arg("--film", os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                          "warp_franka_softgrip.mp4"), str)
+PREVIEW = "--preview" in sys.argv
+if FILM:
+    HEADLESS = True
+    if PREVIEW:
+        WIDTH, HEIGHT = 640, 360
 
 # --- solver tunables ------------------------------------------------------------
 
@@ -172,6 +202,7 @@ FIN_SKIN_OUT = 0.010              # back skin, outboard
 # inverse mass, so a light pad simply gets shoved aside by the fish instead of
 # clamping it -- the mass ratio IS the clamping stiffness at a contact.
 FIN_MASS = 0.8
+RIB_EVERY = 2                     # draw a cross rib every Nth row (render only)
 
 URDF = "C:/dev/threepp/cmake-build-relwithdebinfo/_deps/threepp_data-src/urdf/franka/fr3.urdf"
 if not os.path.exists(URDF):
@@ -279,29 +310,37 @@ def fin_ray_particles(k):
 
 
 def finger_faces(base):
-    """Closed-box triangles over one finger's particle block, wound outward."""
+    """Render triangles for one finger, as TWO soups: (skins, ribs).
+
+    Phase 3 drew the truss as a closed box, and a closed box in a dark material
+    is exactly what it looked like -- a black block with nothing to say it was
+    soft. A Fin Ray finger is two thin skins joined by cross ribs, and the
+    ribs SHEARING as the front skin is pushed back is the whole visual idea, so
+    the sides stay open and the ribs are drawn: a strut plate from the front
+    skin to the back skin, spanning the finger's width, every RIB_EVERY rows.
+    They are separate soups because they need separate smooth normals (a rib's
+    normal is perpendicular to the skin it lands on) and separate materials.
+    """
     def pid(i, j, skin):
         return base + skin * FIN_ROWS * FIN_COLS + i * FIN_COLS + j
 
-    f = []
+    skins, ribs = [], []
 
-    def quad(a, b, c, d):
+    def quad(f, a, b, c, d):
         f.append((a, b, c))
         f.append((a, c, d))
 
     for i in range(FIN_ROWS - 1):
         for j in range(FIN_COLS - 1):
-            quad(pid(i, j, 0), pid(i, j + 1, 0), pid(i + 1, j + 1, 0), pid(i + 1, j, 0))
-            quad(pid(i, j, 1), pid(i + 1, j, 1), pid(i + 1, j + 1, 1), pid(i, j + 1, 1))
-    for i in range(FIN_ROWS - 1):
-        quad(pid(i, 0, 0), pid(i, 0, 1), pid(i + 1, 0, 1), pid(i + 1, 0, 0))
-        quad(pid(i, FIN_COLS - 1, 0), pid(i + 1, FIN_COLS - 1, 0),
-             pid(i + 1, FIN_COLS - 1, 1), pid(i, FIN_COLS - 1, 1))
-    for j in range(FIN_COLS - 1):
-        quad(pid(0, j, 0), pid(0, j + 1, 0), pid(0, j + 1, 1), pid(0, j, 1))
-        quad(pid(FIN_ROWS - 1, j, 0), pid(FIN_ROWS - 1, j, 1),
-             pid(FIN_ROWS - 1, j + 1, 1), pid(FIN_ROWS - 1, j + 1, 0))
-    return np.array(f, dtype=np.int32)
+            quad(skins, pid(i, j, 0), pid(i, j + 1, 0), pid(i + 1, j + 1, 0), pid(i + 1, j, 0))
+            quad(skins, pid(i, j, 1), pid(i + 1, j, 1), pid(i + 1, j + 1, 1), pid(i, j + 1, 1))
+    rows = list(range(0, FIN_ROWS, RIB_EVERY))
+    if rows[-1] != FIN_ROWS - 1:
+        rows.append(FIN_ROWS - 1)          # the tip rib closes the two skins
+    for i in rows:
+        for j in range(FIN_COLS - 1):
+            quad(ribs, pid(i, j, 0), pid(i, j, 1), pid(i, j + 1, 1), pid(i, j + 1, 0))
+    return np.array(skins, dtype=np.int32), np.array(ribs, dtype=np.int32)
 
 
 def finger_pairs(base):
@@ -340,7 +379,7 @@ def finger_pairs(base):
 FIN_N = FIN_ROWS * FIN_COLS * 2
 positions, pairs, body_of, mu_of, invm_of, pad_of, pinned_of = [], [], [], [], [], [], []
 fin_local = []      # per finger: (N, 3) in the carriage frame
-fin_faces = []
+fin_faces, rib_faces = [], []
 
 for k in (0, 1):
     base = len(positions)
@@ -349,7 +388,9 @@ for k in (0, 1):
     Cm = CARRIAGE_REF[k]
     local = (np.linalg.inv(Cm)[:3, :3] @ world.T).T + np.linalg.inv(Cm)[:3, 3]
     fin_local.append(local.astype(np.float32))
-    fin_faces.append(finger_faces(base))
+    _sk, _rb = finger_faces(base)
+    fin_faces.append(_sk)
+    rib_faces.append(_rb)
     pairs += finger_pairs(base)
     m = FIN_MASS / FIN_N
     for n in range(FIN_N):
@@ -852,6 +893,18 @@ N_FIN_FACES = fin_corners // 3
 N_FISH_FACES = fish_corners // 3
 fin_pos = wp.zeros(fin_corners, dtype=wp.vec3, device=device)
 fin_nrm = wp.zeros(fin_corners, dtype=wp.vec3, device=device)
+
+# The ribs are their own soup with their own vertex normals: a rib plate stands
+# perpendicular to the skins, so averaging its face normals into the skin nodes
+# would band the skins and averaging the skins' into the ribs would make the
+# ribs shade like the skin and vanish.
+rib_tris_np = np.concatenate([rib_faces[0].reshape(-1), rib_faces[1].reshape(-1)]).astype(np.int32)
+rib_tris_d = wp.array(rib_tris_np, dtype=int, device=device)
+rib_corners = len(rib_tris_np)
+N_RIB_FACES = rib_corners // 3
+rib_vn = wp.zeros(NP, dtype=wp.vec3, device=device)
+rib_pos = wp.zeros(rib_corners, dtype=wp.vec3, device=device)
+rib_nrm = wp.zeros(rib_corners, dtype=wp.vec3, device=device)
 fish_pos = wp.zeros(fish_corners, dtype=wp.vec3, device=device)
 fish_nrm = wp.zeros(fish_corners, dtype=wp.vec3, device=device)
 
@@ -1089,6 +1142,10 @@ def step_frame():
     wp.launch(accum_normals, dim=N_FIN_FACES, device=device, inputs=[x, fin_tris_d, nrm])
     wp.launch(scatter_soup, dim=fin_corners, device=device,
               inputs=[x, nrm, fin_tris_d, fin_pos, fin_nrm])
+    rib_vn.zero_()
+    wp.launch(accum_normals, dim=N_RIB_FACES, device=device, inputs=[x, rib_tris_d, rib_vn])
+    wp.launch(scatter_soup, dim=rib_corners, device=device,
+              inputs=[x, rib_vn, rib_tris_d, rib_pos, rib_nrm])
     wp.launch(skin_lattice, dim=FISH_NV, device=device,
               inputs=[x, FISH_BASE, skin_ids_d, skin_w_d, fish_v])
     fish_vn.zero_()
@@ -1138,6 +1195,8 @@ def step_frame():
 
     fin_geo.update_attribute("position", fin_np)
     fin_geo.update_attribute("normal", fin_nn)
+    rib_geo.update_attribute("position", rib_pos.numpy())
+    rib_geo.update_attribute("normal", rib_nrm.numpy())
     fish_geo.update_attribute("position", fish_np)
     fish_geo.update_attribute("normal", fish_nn)
     fins_geo.update_attribute("position", finf_pos.numpy())
@@ -1188,7 +1247,13 @@ def _set(name, value):
 # every rig; MACRO keeps only the depth of field, driven by focus_distance.
 _set("auto_exposure", True)
 _try(renderer.set_auto_exposure_range, 0.15, 3.0)
-if CAM == "macro":
+# Depth of field is OFF by default even on MACRO (`--dof` forces it on). The
+# renderer's circle of confusion is resolved at a lower rate than the frame, so
+# every depth discontinuity -- the hand against the table, the crate rims --
+# comes back as a hard STAIRCASE of halo blocks. Looked at it: a clean frame
+# beats buggy bokeh, and the macro rig is close enough that perspective does
+# most of the separating anyway.
+if CAM == "macro" and DOF:
     _set("depth_of_field", True)
 _try(renderer.set_white_balance, 6900.0, 0.0)
 _set("bloom_strength", 0.12)
@@ -1196,6 +1261,46 @@ _set("bloom_threshold", 1.6)
 
 scene = tp.Scene()
 scene.background = 0x39434f
+
+
+def studio_env(h=128, w=256):
+    """A tiny HDR equirect: a soft overhead skylight box, a neutral horizon and
+    a darker floor. Without one, `metalness 0.9` has nothing to reflect and
+    stainless renders as flat grey paint -- which is exactly how phase 3's
+    table read, and why its metalness had to be dialled back to 0.55.
+
+    Row 0 is the NADIR as the renderer maps it (same convention as the water
+    balloon's sky), so elevation runs -pi/2 .. +pi/2 up the rows.
+    """
+    v = (np.arange(h, dtype=np.float32) + 0.5) / h
+    el = (v - 0.5) * math.pi
+    up = np.clip(np.sin(el), 0.0, 1.0)
+    down = np.clip(-np.sin(el), 0.0, 1.0)
+    sky = np.float32([2.5, 2.7, 3.0])          # cool skylight overhead
+    hor = np.float32([0.85, 0.88, 0.92])       # neutral walls
+    flr = np.float32([0.15, 0.15, 0.16])       # dark floor
+    col = (hor[None, :] * (1.0 - up[:, None] - down[:, None] * 0.9)
+           + sky[None, :] * (up[:, None] ** 1.4)
+           + flr[None, :] * down[:, None] * 0.9)
+    img = np.repeat(col[:, None, :], w, axis=1)
+    # One warm practical off to the +x side, so the steel has a highlight to
+    # travel across as the arm moves rather than a uniform grey wash.
+    u = (np.arange(w, dtype=np.float32) + 0.5) / w
+    az = u * 2.0 * math.pi
+    cosang = (np.sin(el)[:, None] * math.sin(math.radians(28.0))
+              + np.cos(el)[:, None] * math.cos(math.radians(28.0))
+              * np.cos(az[None, :] - math.radians(20.0)))
+    img += (np.exp(-np.maximum(1.0 - cosang, 0.0) * 26.0).astype(np.float32)[:, :, None]
+            * np.float32([1.6, 1.35, 1.0]))
+    return np.ascontiguousarray(np.dstack([img, np.ones((h, w, 1), np.float32)]), np.float32)
+
+
+env_tex = None
+try:
+    env_tex = tp.float_texture(studio_env())
+    scene.environment = env_tex
+except Exception as _e:                              # noqa: BLE001
+    print(f"  note: environment unavailable ({_e})")
 
 camera = tp.PerspectiveCamera(42 if CAM != "macro" else 34, canvas.aspect(), 0.03, 40)
 CAM_HOME = {"wide": ((1.30, 0.72, 0.92), (0.30, 0.20, 0.0)),
@@ -1237,13 +1342,15 @@ key = tp.DirectionalLight(0xffe0c0, 1.5)
 key.position.set(1.8, 1.4, 1.6)
 scene.add(key)
 
-table = tp.Mesh(tp.BoxGeometry(2.2, 0.06, 1.6), standard_material(0xb8bcc0, 0.30, 0.55))
+# Brushed stainless, now that there IS an environment for it to reflect: the
+# arm and the crates show up in the table as soft vertical smears.
+table = tp.Mesh(tp.BoxGeometry(2.2, 0.06, 1.6), standard_material(0xb9bdc2, 0.28, 0.90))
 table.position.set(0.35, -0.03, 0.0)
 table.receive_shadow = True
 scene.add(table)
 
 tray = tp.Mesh(tp.BoxGeometry(2 * TRAY_HX, TRAY_Y, 2 * TRAY_HZ),
-               standard_material(0xc2c7cb, 0.26, 0.7))
+               standard_material(0xc4c9ce, 0.22, 0.92))
 tray.position.set(TRAY_C[0], TRAY_Y * 0.5, TRAY_C[1])
 tray.receive_shadow = True
 scene.add(tray)
@@ -1262,28 +1369,55 @@ for cc in (CRATE_C, CRATE2_C):
         wall.cast_shadow = True
         scene.add(wall)
 
-backdrop = tp.Mesh(tp.PlaneGeometry(8, 4), standard_material(0x39434f, 0.95))
+backdrop = tp.Mesh(tp.PlaneGeometry(8, 4), standard_material(0x50606e, 0.95))
 backdrop.position.set(-0.6, 1.2, -1.6)
 scene.add(backdrop)
-side_wall = tp.Mesh(tp.PlaneGeometry(6, 4), standard_material(0x39434f, 0.95))
+side_wall = tp.Mesh(tp.PlaneGeometry(6, 4), standard_material(0x50606e, 0.95))
 side_wall.position.set(-1.6, 1.2, 0.0)
 side_wall.rotation.y = math.pi / 2
 scene.add(side_wall)
 
 scene.add(robot)
 
+def silicone(color, rough, clearcoat, translucency):
+    """Cast urethane / TPU: a light dielectric with a wet clearcoat and some
+    light coming through the thin sections. Double-sided, because these are
+    single-thickness sheets and the two skins cross wherever the truss shears
+    (single-sided culling flickered holes through the pads in phase 3)."""
+    m = tp.MeshPhysicalMaterial()
+    m.color = color
+    m.roughness = rough
+    m.metalness = 0.0
+    m.clearcoat = clearcoat
+    m.clearcoat_roughness = 0.15
+    m.side = tp.Side.Double
+    for _k, _v in (("translucency", translucency), ("translucency_color", 0xffe8c8)):
+        try:
+            setattr(m, _k, _v)
+        except Exception:                            # noqa: BLE001
+            pass
+    return m
+
+
+# The skins: amber silicone, thin sheets, open at the sides. Amber rather than
+# the pale grey-blue because the hand behind them is cream-white and the fish
+# in front of them is silver -- a pale finger disappeared into both.
 fin_geo = tp.BufferGeometry()
 fin_geo.set_attribute("position", p0[fin_tris_np])
 fin_geo.set_attribute("normal", np.tile(np.array([0, 1, 0], np.float32), (fin_corners, 1)))
-# The soup is a closed box wound outward, but the two skins cross each other
-# wherever the truss shears, so single-sided culling flickers holes through the
-# pads. Double-sided costs nothing here and the pad is never seen from inside.
-_fin_mat = standard_material(0x2c3038, 0.55, 0.0)
-_fin_mat.side = tp.Side.Double
-fingers_mesh = tp.Mesh(fin_geo, _fin_mat)
+fingers_mesh = tp.Mesh(fin_geo, silicone(0xe8c890, 0.38, 0.35, 0.55))
 fingers_mesh.cast_shadow = True
 fingers_mesh.frustum_culled = False
 scene.add(fingers_mesh)
+
+# The ribs: the same material a shade darker and less glossy, so the struts
+# read against the skin they join instead of merging into it.
+rib_geo = tp.BufferGeometry()
+rib_geo.set_attribute("position", p0[rib_tris_np])
+rib_geo.set_attribute("normal", np.tile(np.array([0, 0, 1], np.float32), (rib_corners, 1)))
+ribs_mesh = tp.Mesh(rib_geo, silicone(0xc79a5c, 0.5, 0.15, 0.35))
+ribs_mesh.frustum_culled = False
+scene.add(ribs_mesh)
 
 def skin_texture(w=384, h=192):
     """Procedural herring: silver-white belly -> blue-green-grey back, a darker
@@ -1453,13 +1587,124 @@ def summary(c):
     return ok
 
 
-if SHOT:
+def set_rig(name):
+    """Cut to a camera rig. MACRO rides the TCP (aim_camera), the others are
+    fixed, so the rig name has to be the module-level CAM the follower reads."""
+    global CAM, _cam_target
+    CAM = name if name in CAM_HOME else "wide"
+    p, t = CAM_HOME[CAM]
+    camera.position.set(*p)
+    camera.look_at(*t)
+    camera.fov = 34 if CAM == "macro" else 42
+    camera.update_projection_matrix()
+    _cam_target = np.array(t, np.float32)
+    _set("depth_of_field", CAM == "macro" and DOF)
+
+
+def run_film():
+    """The cut. Shots are keyed to the TASK's own phases rather than to
+    absolute times, so retuning a phase duration re-times the film instead of
+    breaking it; `rate` is sim seconds per film second, which is where the
+    slow motion lives (the sim's dt is baked into the CUDA graph and cannot be
+    shrunk, so slowing down means repeating film frames on one sim step)."""
+    import imageio.v2 as imageio
+    from PIL import Image, ImageDraw
+    from warp_common import load_font
+
+    fps = 30 if PREVIEW else 60
+    steps_per_frame = FPS / fps
+    warm = 20                                  # AE/TAA settle at every cut
+    names = [p[0] for p in PLAN]
+    ends = np.cumsum([p[2] for p in PLAN])
+
+    def t_end(nm):
+        return float(ends[names.index(nm)])
+
+    # (rig, last phase of the shot, sim seconds per film second)
+    shots = [("wide", "DESCEND", 0.50),        # the arm wakes and comes to look
+             ("macro", "CLOSE", 0.25),         # THE SHOT: the wrap, in slow motion
+             ("macro", "LIFT", 0.60),          # off the tray, and the droop
+             ("pov", "CARRY", 0.45),           # what the wrist sees on the way over
+             ("wide", "RETREAT", 0.55),        # place, let go, come away
+             ("macro", "DONE", 0.40)]
+    out = os.path.abspath(FILM_OUT)
+    hero = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                        "warp_franka_softgrip.png")
+    writer = imageio.get_writer(out, fps=fps, codec="libx264", quality=None,
+                                macro_block_size=None,
+                                ffmpeg_params=["-crf", "17", "-pix_fmt", "yuv420p",
+                                               "-preset", "medium"])
+    print(f"film: {len(shots)} shots at {WIDTH}x{HEIGHT} {fps} fps -> {out}")
+    t_wall = time.perf_counter()
+    acc, nf, last_c = 0.0, 0, None
+    px = None
+    for rig, upto, rate in shots:
+        pov = rig == "pov"
+        set_rig("macro" if pov else rig)
+        cam = wrist_cam if pov else camera
+        if pov and _pip["h"] > 0:
+            _try(renderer.hide_view, _pip["h"])
+        elif _pip["h"] > 0:
+            _try(renderer.set_view_display_rect, _pip["h"], WIDTH - 330, 10, 320, 180)
+        stop = t_end(upto)
+        for _ in range(warm):
+            renderer.render(scene, cam)
+            ensure_pip()
+        guard = int(60.0 / max(rate, 0.05) * 40)
+        while sim_t < stop and guard > 0:
+            guard -= 1
+            acc += rate * steps_per_frame
+            while acc >= 1.0:
+                acc -= 1.0
+                parts = step_frame()
+                last_c = parts[4]
+            _set("sim_time", nf / float(fps))
+            renderer.render(scene, cam)
+            ensure_pip()
+            px = renderer.read_pixels()
+            writer.append_data(px)
+            nf += 1
+        if upto == "CLOSE" and px is not None:
+            Image.fromarray(px).save(hero)     # the poster: the wrap, fully closed
+            print(f"  hero -> {hero}")
+    # End card over the last frame, dimmed.
+    if px is not None:
+        card = (px.astype(np.float32) * 0.30).astype(np.uint8)
+        im = Image.fromarray(card)
+        d = ImageDraw.Draw(im)
+        big, small = load_font(int(HEIGHT * 0.052)), load_font(int(HEIGHT * 0.032))
+        lines = [("Franka FR3 + Warp soft Fin Ray gripper", big),
+                 ("every finger a GPU soft body", small),
+                 ("friction grasp, no glue", small),
+                 ("threepp", small)]
+        y = HEIGHT * 0.32
+        for txt, fnt in lines:
+            w = d.textlength(txt, font=fnt)
+            d.text((WIDTH * 0.5 - w * 0.5, y), txt, font=fnt, fill=(238, 242, 247))
+            y += fnt.size * 1.6
+        a = np.asarray(im)
+        for _ in range(int(2.0 * fps)):
+            writer.append_data(a)
+            nf += 1
+    writer.close()
+    wall = time.perf_counter() - t_wall
+    print(f"film: {nf} frames = {nf / fps:.1f} s at {fps} fps, "
+          f"{wall:.1f} s wall ({wall / max(nf, 1) * 1000:.1f} ms/frame) -> {out}")
+    if last_c is not None:
+        summary(last_c)
+
+
+if FILM:
+    if PREVIEW:
+        PIP = False
+    run_film()
+elif SHOT:
     frames = int(round(SHOT_TIME * FPS))
     last = None
     for _ in range(frames):
         last = step_frame()[4]
     for _ in range(40):                    # let AE / TAA settle
-        renderer.render(scene, camera)
+        renderer.render(scene, wrist_cam if POV else camera)
         ensure_pip()
     from PIL import Image
     out = cli_arg("--out", "warp_franka_softgrip.png", str)
@@ -1473,7 +1718,7 @@ elif BENCH:
         parts = step_frame()
         last = parts[4]
         t = time.perf_counter()
-        renderer.render(scene, camera)
+        renderer.render(scene, wrist_cam if POV else camera)
         ensure_pip()
         r = time.perf_counter() - t
         if n >= 30:
@@ -1526,7 +1771,7 @@ else:
                 summary(parts[4])
         if CAM != "macro":
             controls.update()
-        renderer.render(scene, camera)
+        renderer.render(scene, wrist_cam if POV else camera)
         ensure_pip()
 
     canvas.animate(animate)
