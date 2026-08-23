@@ -50,6 +50,11 @@ namespace threepp_py {
                 .def_readwrite("wind_theta", &DisplacedMesh::Params::windTheta, "Wind direction (radians, 0 = +X).")
                 .def_readwrite("wind_speed", &DisplacedMesh::Params::windSpeed,
                                "Wind speed (m/s); the dominant wave-height lever (Phillips amplitude ~ V^4).")
+                .def_readwrite("fetch", &DisplacedMesh::Params::fetch,
+                               "Fetch (m of open water upwind). 0 = fully developed Phillips/PM sea (long swell, "
+                               "peak ~8 V^2/g). Finite = JONSWAP young sea: shorter, steeper waves with more "
+                               "energy at the 10-40 m scale and less swell; 20e3-40e3 reads as a coastal sea. "
+                               "Live-tunable; saturates at ~1600 V^2.")
                 .def_readwrite("wave_scale", &DisplacedMesh::Params::waveScale, "Global wave-height multiplier; 1.0 = physical.")
                 .def_readwrite("choppiness", &DisplacedMesh::Params::choppiness,
                                "Horizontal pull / crest sharpness; ~0.45 realistic, >=0.8 folds crests.")
@@ -222,7 +227,7 @@ namespace threepp_py {
                 .def(py::init([](float size, unsigned int resolution, float wind_speed, float wind_theta,
                                  float choppiness, float wave_scale, float tile_size_1, float tile_size_2,
                                  unsigned int fft_size, float size_z, unsigned int resolution_z,
-                                 const std::string& look) {
+                                 const std::string& look, float fetch) {
                          Ocean::Options o;
                          o.size = size;
                          o.sizeZ = size_z;
@@ -230,6 +235,7 @@ namespace threepp_py {
                          o.resolutionZ = resolution_z;
                          o.windSpeed = wind_speed;
                          o.windTheta = wind_theta;
+                         o.fetch = fetch;
                          o.choppiness = choppiness;
                          o.waveScale = wave_scale;
                          o.tileSize1 = tile_size_1;
@@ -247,7 +253,7 @@ namespace threepp_py {
                      py::arg("tile_size_1") = -1.0f, py::arg("tile_size_2") = -1.0f,
                      py::arg("fft_size") = 1024u,
                      py::arg("size_z") = 0.0f, py::arg("resolution_z") = 0u,
-                     py::arg("look") = "auto",
+                     py::arg("look") = "auto", py::arg("fetch") = 0.0f,
                      "A ready-to-use FFT ocean. Add it to a Scene and render with the Vulkan "
                      "renderer. size is the local-X extent (m); size_z=0 makes a square, >0 a "
                      "rectangle (vertices only where the water is — the wave field is unaffected). "
@@ -257,7 +263,9 @@ namespace threepp_py {
                      "(a 1000 m ocean gets the classic 127/9.3 bands, a 16 m pond gets dm-scale "
                      "ripples); 0 disables a cascade, >0 pins it. Ponds also want wind_speed 2-5. "
                      "look picks the water material: 'auto' = pond recipe under 100 m, ocean above; "
-                     "'ocean'/'pond' pin it regardless of scale.")
+                     "'ocean'/'pond' pin it regardless of scale. fetch (m) = 0 is a fully developed sea "
+                     "(long swell); 20e3-40e3 gives the shorter, steeper JONSWAP chop of a coastal sea "
+                     "(see Params.fetch).")
                 .def("warp_toward", &Ocean::warpToward,
                      py::arg("world_x"), py::arg("world_z"), py::arg("coef_a") = 0.1f,
                      "Pack vertex density toward a world-space focus point (e.g. the camera). "

@@ -43,6 +43,21 @@ namespace threepp {
             float windTheta = 0.0f;
             float windSpeed = 12.0f;
 
+            // Fetch: metres of open water the wind has blown across. 0 (the
+            // default) = a FULLY DEVELOPED sea — the plain Phillips /
+            // Pierson-Moskowitz spectrum, whose peak sits at ~8 V²/g (80 m
+            // at 9.5 m/s, 260 m at 17) with most of the height in that
+            // swell. A finite fetch gives the JONSWAP young sea a coastal
+            // vessel actually sails in: the peak moves to shorter waves
+            // (∝ fetch^(2/3)), the short-wave tail gains energy
+            // (∝ fetch^-0.22) and the peak sharpens (γ → 3.3). 20–40 km
+            // puts a 9.5 m/s sea's peak at 20–35 m with ~1 m significant
+            // height instead of 80 m / 2 m — the same wind, a far busier
+            // surface at the scale of a 10 m hull. Saturates at the fully
+            // developed fetch (~1600 V² m, i.e. 145 km at 9.5 m/s). Live-
+            // tunable like windSpeed: the renderer regenerates the spectra.
+            float fetch = 0.0f;
+
             // Global Y-displacement multiplier. 1.0 is physical; higher values
             // exaggerate wave height.
             float waveScale = 1.0f;

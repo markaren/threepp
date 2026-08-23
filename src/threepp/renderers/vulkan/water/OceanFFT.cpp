@@ -349,7 +349,7 @@ namespace threepp::water {
             float    smallWaveCutoff;
             float    kMin;
             float    kMax;
-            float    _pad;
+            float    fetch;
         } p{};
         p.textureSize     = settings_.textureSize;
         p.tileSize        = settings_.tileSize;
@@ -358,6 +358,7 @@ namespace threepp::water {
         p.smallWaveCutoff = settings_.smallWaveCutoff;
         p.kMin            = settings_.kMin;
         p.kMax            = settings_.kMax;
+        p.fetch           = settings_.fetch;
         std::memcpy(paramsUbo_.mapped, &p, sizeof(p));
         vulkan::flushHostWrites(ctx_.allocator(), paramsUbo_.alloc, 0, sizeof(p));
     }
@@ -465,9 +466,10 @@ namespace threepp::water {
         cmdShaderRWBarrier(cb, h0_.image);
     }
 
-    void PhillipsSpectrum::updateWind(float windTheta, float windSpeed) {
+    void PhillipsSpectrum::updateSeaState(float windTheta, float windSpeed, float fetch) {
         settings_.windTheta = windTheta;
         settings_.windSpeed = windSpeed;
+        settings_.fetch     = fetch;
         writeParams();
     }
 

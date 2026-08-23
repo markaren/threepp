@@ -121,6 +121,7 @@ namespace threepp {
         p.tileSize2 = tile2;
         p.windTheta = options.windTheta;
         p.windSpeed = options.windSpeed;
+        p.fetch = options.fetch;
         p.waveScale = options.waveScale;
         p.choppiness = options.choppiness;
         // Natural whitecaps fade out with the water body's scale — see

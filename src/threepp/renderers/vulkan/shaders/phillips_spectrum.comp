@@ -13,6 +13,15 @@
 // Band-pass filter (kMin/kMax) lets one cascade cover only a wavenumber
 // range so multi-cascade ocean (ripples / chop / swell) stays free of
 // double-counted frequencies. kMax == 0 disables the upper bound.
+//
+// `fetch` (metres of open water upwind; 0 = fully developed) reshapes the
+// spectrum into a JONSWAP young sea: Phillips is Pierson-Moskowitz in k
+// (its exp(-1/(kL)^2) IS the PM exp(-1.25 (kp/k)^2) with kp = 0.894/L), so
+// a limited fetch moves the peak to shorter waves (kp ~ F^-2/3), lifts the
+// short-wave tail (alpha ~ F^-0.22) and adds the gamma = 3.3 peak
+// enhancement. Net: less swell, more steep chop at the 10-40 m scale --
+// the sea a coastal boat actually sails in. fetch = 0 is bit-identical to
+// the plain Phillips spectrum.
 
 layout(local_size_x = 8, local_size_y = 8) in;
 
@@ -27,6 +36,7 @@ layout(set = 0, binding = 2, scalar) uniform Params {
     float smallWaveLengthCutoff;
     float kMin;
     float kMax;
+    float fetch;
 } P;
 
 const float PI = 3.14159265358979;
@@ -43,14 +53,43 @@ float phillips2D(vec2 k) {
     const float A = 0.01;
     const vec2  windDir = vec2(cos(P.windTheta), sin(P.windTheta));
     const float g = 9.81;
-    const float L = P.windSpeed * P.windSpeed / g;
+    float L     = P.windSpeed * P.windSpeed / g;
+    float Aeff  = A;
+    float gamma = 1.0;
+    if (P.fetch > 0.0) {
+        // JONSWAP fetch scaling (Hasselmann et al. 1973), normalised so the
+        // fully developed fetch Ffd -- where the JONSWAP peak lands on the
+        // PM peak 0.877 g/U -- reproduces the plain Phillips numbers:
+        //   omega_p = 22 (g^2 / (U F))^(1/3)   =>  kp ~ F^(-2/3), Ffd = 22^3 U^2 / (0.877^3 g)
+        //   alpha   = 0.076 (U^2 / (g F))^0.22  =>  tail energy ~ F^(-0.22)
+        // Clamped at gF/U^2 ~ 80 (the formulas' short-fetch limit); below
+        // that only the clamp moves.
+        const float Ffd = 1609.0 * P.windSpeed * P.windSpeed;
+        const float r   = clamp(P.fetch / Ffd, 0.005, 1.0);
+        L    *= pow(r, 2.0 / 3.0);
+        Aeff *= pow(r, -0.22);
+        // Peak enhancement: 3.3 is the JONSWAP mean for every fetch-limited
+        // sea; fade it out toward full development so sliding fetch up to
+        // Ffd lands on PM without a step.
+        gamma = 1.0 + 2.3 * sqrt(1.0 - r);
+    }
     const float k2 = dot(k, k);
     const float kL2 = k2 * L * L;
     const float k4 = k2 * k2;
     float kw = dot(normalize(k), windDir);
     kw *= kw;
     const float l = P.smallWaveLengthCutoff;
-    return A * exp(-1.0 / kL2) * kw * exp(-k2 * l * l) / k4;
+    float p = Aeff * exp(-1.0 / kL2) * kw * exp(-k2 * l * l) / k4;
+    if (gamma > 1.0) {
+        // gamma^exp(-(w - wp)^2 / (2 sigma^2 wp^2)) in deep-water frequency
+        // w = sqrt(g k); sigma = 0.07 below the peak, 0.09 above.
+        const float w  = sqrt(g * sqrt(k2));
+        const float wp = sqrt(g * 0.894 / L);
+        const float sg = (w <= wp) ? 0.07 : 0.09;
+        const float d  = (w - wp) / (sg * wp);
+        p *= pow(gamma, exp(-0.5 * d * d));
+    }
+    return p;
 }
 
 void main() {

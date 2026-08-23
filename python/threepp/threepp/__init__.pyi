@@ -1479,6 +1479,14 @@ class DisplacedMesh(Mesh):
         def choppiness(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
             ...
         @property
+        def fetch(self) -> float:
+            """
+            Fetch (m of open water upwind). 0 = fully developed Phillips/PM sea (long swell, peak ~8 V^2/g). Finite = JONSWAP young sea: shorter, steeper waves with more energy at the 10-40 m scale and less swell; 20e3-40e3 reads as a coastal sea. Live-tunable; saturates at ~1600 V^2.
+            """
+        @fetch.setter
+        def fetch(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+            ...
+        @property
         def foam_amount(self) -> float:
             """
             Natural whitecap foam scale, live-tunable (1 = ocean whitewater, 0 = none; wake/disturbance foam unaffected). Ocean auto-derives ~size/300.
@@ -4357,9 +4365,9 @@ class Object3D:
     def uuid(self) -> str:
         ...
 class Ocean(DisplacedMesh):
-    def __init__(self, size: typing.SupportsFloat | typing.SupportsIndex = 1000.0, resolution: typing.SupportsInt | typing.SupportsIndex = 512, wind_speed: typing.SupportsFloat | typing.SupportsIndex = 10.0, wind_theta: typing.SupportsFloat | typing.SupportsIndex = 0.6000000238418579, choppiness: typing.SupportsFloat | typing.SupportsIndex = 0.550000011920929, wave_scale: typing.SupportsFloat | typing.SupportsIndex = 1.0, tile_size_1: typing.SupportsFloat | typing.SupportsIndex = -1.0, tile_size_2: typing.SupportsFloat | typing.SupportsIndex = -1.0, fft_size: typing.SupportsInt | typing.SupportsIndex = 1024, size_z: typing.SupportsFloat | typing.SupportsIndex = 0.0, resolution_z: typing.SupportsInt | typing.SupportsIndex = 0, look: str = 'auto') -> None:
+    def __init__(self, size: typing.SupportsFloat | typing.SupportsIndex = 1000.0, resolution: typing.SupportsInt | typing.SupportsIndex = 512, wind_speed: typing.SupportsFloat | typing.SupportsIndex = 10.0, wind_theta: typing.SupportsFloat | typing.SupportsIndex = 0.6000000238418579, choppiness: typing.SupportsFloat | typing.SupportsIndex = 0.550000011920929, wave_scale: typing.SupportsFloat | typing.SupportsIndex = 1.0, tile_size_1: typing.SupportsFloat | typing.SupportsIndex = -1.0, tile_size_2: typing.SupportsFloat | typing.SupportsIndex = -1.0, fft_size: typing.SupportsInt | typing.SupportsIndex = 1024, size_z: typing.SupportsFloat | typing.SupportsIndex = 0.0, resolution_z: typing.SupportsInt | typing.SupportsIndex = 0, look: str = 'auto', fetch: typing.SupportsFloat | typing.SupportsIndex = 0.0) -> None:
         """
-        A ready-to-use FFT ocean. Add it to a Scene and render with the Vulkan renderer. size is the local-X extent (m); size_z=0 makes a square, >0 a rectangle (vertices only where the water is — the wave field is unaffected). resolution is the vertex grid along X; resolution_z=0 keeps cells square-ish. fft_size caps the per-cascade FFT resolutions (band-passed cascades auto-size below it). tile_size_1/2 default to -1 = auto: scaled from the larger extent (a 1000 m ocean gets the classic 127/9.3 bands, a 16 m pond gets dm-scale ripples); 0 disables a cascade, >0 pins it. Ponds also want wind_speed 2-5. look picks the water material: 'auto' = pond recipe under 100 m, ocean above; 'ocean'/'pond' pin it regardless of scale.
+        A ready-to-use FFT ocean. Add it to a Scene and render with the Vulkan renderer. size is the local-X extent (m); size_z=0 makes a square, >0 a rectangle (vertices only where the water is — the wave field is unaffected). resolution is the vertex grid along X; resolution_z=0 keeps cells square-ish. fft_size caps the per-cascade FFT resolutions (band-passed cascades auto-size below it). tile_size_1/2 default to -1 = auto: scaled from the larger extent (a 1000 m ocean gets the classic 127/9.3 bands, a 16 m pond gets dm-scale ripples); 0 disables a cascade, >0 pins it. Ponds also want wind_speed 2-5. look picks the water material: 'auto' = pond recipe under 100 m, ocean above; 'ocean'/'pond' pin it regardless of scale. fetch (m) = 0 is a fully developed sea (long swell); 20e3-40e3 gives the shorter, steeper JONSWAP chop of a coastal sea (see Params.fetch).
         """
     def set_wind(self, speed: typing.SupportsFloat | typing.SupportsIndex, theta: typing.SupportsFloat | typing.SupportsIndex) -> None:
         """

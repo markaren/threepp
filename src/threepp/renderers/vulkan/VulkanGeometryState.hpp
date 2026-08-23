@@ -410,13 +410,14 @@ namespace threepp::vulkan::impl {
         };
         std::array<Cascade, 3> cascades;
         uint32_t cascadeMask = 0;            // bit i set = cascade i enabled
-        // Wind actually baked into the cascades' h0 spectra. When
+        // Wind + fetch actually baked into the cascades' h0 spectra. When
         // dm.params drifts from these, recordDisplacedDeform rewrites the
         // Phillips params and re-dispatches the (normally one-shot) h0
         // pass — the per-cascade noise images persist, so the wave field
         // MORPHS smoothly into the new sea state instead of jumping.
         float appliedWindSpeed = 0.f;
         float appliedWindTheta = 0.f;
+        float appliedFetch     = 0.f;
         water::OceanImage scratchA;          // RG32F IFFT scratch — shared across cascades (sequential dispatch)
         VkDescriptorSet displaceDS = VK_NULL_HANDLE;
         uint32_t vertexCount = 0;

@@ -902,7 +902,13 @@ void main() {
         // chop stayed in N, razor-glinted, = the reported per-pixel noise. Complete
         // the hand-off by ~5·eps so mid-distance water converts to sheen.
         const float subPix   = smoothstep(0.5 * eps, 1.5 * eps, pixWorld);// 0 near → 1 sub-pixel
-        const vec3  tilt     = 0.5 * vec3(-grad.x, 0.0, -grad.y);
+        // Full physical slope: N ∝ up − ∇h. Until 2026-08 this carried a 0.5
+        // (undocumented, from the first deferred commit) that rendered the
+        // sub-mesh chop at HALF its steepness — the 1–9 m wind waves read as
+        // a glassy sheen and a 10 m hull looked like a bath toy on the swell.
+        // The speckle that factor presumably guarded against is handled by
+        // the footprint fade + roughness banking below.
+        const vec3  tilt     = vec3(-grad.x, 0.0, -grad.y);
         N = normalize(N + (1.0 - subPix) * tilt);
         // σ_slope² ≈ 2·roughness²; move the faded-out tilt's variance into roughness
         // so shadeWater's glint + reflection lobe broaden as the chop leaves N.

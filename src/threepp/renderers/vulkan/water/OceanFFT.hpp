@@ -66,6 +66,7 @@ namespace threepp::water {
             float    smallWaveCutoff = 0.01f;
             float    kMin = 0.0f;
             float    kMax = 0.0f;     // 0 = no upper bound
+            float    fetch = 0.0f;    // m of upwind open water; 0 = fully developed (plain Phillips)
         };
 
         PhillipsSpectrum(vulkan::VulkanContext& ctx, const Settings& s);
@@ -79,12 +80,12 @@ namespace threepp::water {
         // DynamicSpectrum.
         void recordCompute(VkCommandBuffer cb);
 
-        // Live wind change: rewrites the params UBO so the next recordCompute
-        // regenerates h0 with the new wind (caller re-dispatches). The noise
-        // image persists, so successive regenerations are phase-correlated and
-        // the sea state morphs smoothly. Same mapped-UBO-rewrite convention as
-        // DynamicSpectrum's per-frame time update.
-        void updateWind(float windTheta, float windSpeed);
+        // Live sea-state change (wind and/or fetch): rewrites the params UBO
+        // so the next recordCompute regenerates h0 (caller re-dispatches). The
+        // noise image persists, so successive regenerations are phase-
+        // correlated and the sea state morphs smoothly. Same mapped-UBO-
+        // rewrite convention as DynamicSpectrum's per-frame time update.
+        void updateSeaState(float windTheta, float windSpeed, float fetch);
 
         VkImage     h0Image() const { return h0_.image; }
         VkImageView h0View()  const { return h0_.view;  }

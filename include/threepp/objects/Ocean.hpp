@@ -80,6 +80,11 @@ namespace threepp {
             float windTheta = 0.6f;
             float windSpeed = 10.0f;
 
+            // Fetch (m of open water upwind); 0 = fully developed sea. See
+            // DisplacedMesh::Params::fetch — 20–40 km trades the long PM
+            // swell for the steeper 10–40 m chop of a coastal sea.
+            float fetch = 0.0f;
+
             // Horizontal "choppiness" (sharper crests). ~0.45 is realistic;
             // ≥ 0.8 starts to fold wave crests into white spikes.
             float choppiness = 0.55f;
