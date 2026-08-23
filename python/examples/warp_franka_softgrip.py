@@ -5,10 +5,15 @@ The arm is the real FR3 URDF driven by threepp's own damped-least-squares IK
 the rigid stock ones: each stock finger carries a GPU soft body -- an XPBD
 two-skin truss, front skin and back skin joined by stiff ribs and SOFT
 diagonals, which is what makes it a Fin Ray: press the front skin and the tip
-curls toward the object. The fish is a FILLED XPBD tet body: a voxel-carved
-conforming cage with a volume row per tet, with the drawn surface skinned off
-it. A hollow shell was the thing that lost the grasp -- pinching one between
-two converging paddles extrudes it out of the hand.
+curls toward the object. The fish is a real FEM solid: a voxel-carved
+conforming tet cage running STABLE NEO-HOOKEAN XPBD (Macklin/Muller/Chentanez
+2021) -- two constraints per tet, a deviatoric (shape) and a hydrostatic
+(volume) one, with per-constraint Lagrange multipliers. That formulation is
+inversion-safe, which is exactly why the fish stops "dissolving": the old
+hand-rolled distance + single-volume-row PBD had no real elastic energy and
+resisted inversion weakly, so under a tail hang it stretched to 4x and the head
+tore off the flank. The drawn surface is skinned off the cage -- either the
+procedural herring or, with --fish-model, the Khronos Barramundi glTF.
 
 Fingers and fish live in ONE solver over ONE hash grid with Coulomb friction,
 so the grasp is friction plus form closure. There is no kinematic attach and no
@@ -40,6 +45,9 @@ fingers do not hold the fish it falls.
     python warp_franka_softgrip.py --film --preview   # 640x360 at 30 fps, no PIP
     python warp_franka_softgrip.py --grip-force 8 # close threshold, newtons
     python warp_franka_softgrip.py --fish-len 0.3 # graded sizes: 0.24 / 0.27 / 0.30
+    python warp_franka_softgrip.py --fish-model fish.glb  # skin a glTF fish (Barramundi)
+    python warp_franka_softgrip.py --young 2.5e5  # fish flesh Young's modulus, Pa
+    python warp_franka_softgrip.py --poisson 0.45 # near-incompressible tet FEM
     python warp_franka_softgrip.py --grade-mm 265 # length that picks the far crate
     python warp_franka_softgrip.py --cam macro    # wide | macro (follows the TCP) | top
     python warp_franka_softgrip.py --pov          # render from the wrist camera
@@ -74,6 +82,10 @@ WIDTH, HEIGHT = parse_size(cli_arg("--size", "1280x720", str))
 F_GRASP = cli_arg("--grip-force", 6.0, float)
 HEADLESS = SHOT or BENCH
 CAM = cli_arg("--cam", "wide", str)          # wide | macro | top
+# Render skin: default is the self-contained procedural herring so the committed
+# example runs on any machine; pass --fish-model to skin a glTF fish (the
+# Khronos Barramundi) off the same tet cage. The mesh is NOT vendored.
+FISH_MODEL = cli_arg("--fish-model", "", str)
 SLOWMO = "--no-slowmo" not in sys.argv
 PIP = "--no-pip" not in sys.argv
 DOF = "--dof" in sys.argv                    # see the note at the renderer setup
@@ -147,9 +159,27 @@ STIFF_FAN = 0.5
 # some chords, and the cheapest way for those to be satisfied is to send the
 # material out of the hand. A filled body cannot be extruded that way: every
 # tet in the pinched section carries its own incompressibility row.
-STIFF_TET_EDGE = 0.85  # 0.6 let the hanging body drape in half over the pads; 1.0 goes unstable
-STIFF_TET_VOL = 1.0   # a fish is water: volume is the constraint that matters
-STIFF_SPINE = 0.9     # skip-a-cell chords along the body axis -- see BACKBONE below
+# The fish flesh is a REAL FEM material now, not a bag of distance + volume rows.
+# Stable Neo-Hookean (Macklin, Muller, Chentanez 2021), solved as two XPBD
+# constraints per tet -- a deviatoric one (shape, stiffness mu) and a hydrostatic
+# one (volume, stiffness lambda) -- with per-constraint Lagrange multipliers
+# accumulated across each substep. This is the honest upgrade AND the dissolve
+# fix: the hydrostatic constraint is C = det(F) - gamma, so it pushes an
+# INVERTED tet (det(F) < 0) back toward a positive volume instead of letting it
+# collapse, and the deviatoric constraint is sqrt(tr(F^T F)), which is always
+# well defined. The hand-rolled distance edges + single volume row + spine
+# chords had no elastic energy and resisted inversion weakly, so under a tail
+# hang the body stretched unboundedly and self-intersected. They are ALL gone.
+# Fish flesh is soft, but a WHOLE fish (skin + bone) held by two pads under its
+# own weight and swung across the cell needs enough modulus to keep its shape
+# instead of drawing out like taffy. At 2e4 Pa the body stretched to 4x and the
+# head tore off the flank (max edge stretch 3.8); 2.5e5 Pa keeps the p99 edge
+# stretch near ~1.3 and still droops like a fresh fish.
+YOUNG = cli_arg("--young", 2.5e5, float)      # Pa
+POISSON = cli_arg("--poisson", 0.45, float)   # near-incompressible
+MU_LAME = YOUNG / (2.0 * (1.0 + POISSON))
+LAM_LAME = YOUNG * POISSON / ((1.0 + POISSON) * (1.0 - 2.0 * POISSON))
+NH_GAMMA = 1.0 + MU_LAME / LAM_LAME            # rest det(F) the hydro row targets
 TET_RES = 22          # voxel cells along the fish's length
 CARVE = 0.25          # cells of dilation, so the cage measures the fish
 
@@ -449,8 +479,41 @@ FIN_TOTAL = len(positions)
 
 # --- the fish: render surface + filled tet cage ---------------------------------
 
-# The drawn surface is still the tapered ellipsoid; only what simulates it has
-# changed. It is no longer a particle set at all -- it is SKINNED off the cage.
+# The drawn surface is skinned off the cage. By default it is the tapered
+# ellipsoid (self-contained, runs anywhere); with --fish-model it is a glTF fish
+# (the Khronos Barramundi) bound to the SAME body-sized tet cage, so the FEM and
+# the grasp are identical -- only the skin changes.
+def load_fish_model(path, length):
+    """Load a glTF fish mesh; return (verts, faces, uv, material) with the verts
+    in the procedural template frame: length along +X, up +Y, centred at the
+    origin, scaled so the long axis is `length` metres. The model's length runs
+    along +Z, so a +90 deg rotation about Y (proper, winding preserved) maps it
+    to +X. The mesh is NOT vendored -- this only runs when --fish-model is given."""
+    root = tp.GLTFLoader().load(path).scene
+    found = []
+
+    def rec(o):
+        if isinstance(o, tp.Mesh):
+            found.append(o)
+        for ch in o.children:
+            rec(ch)
+
+    rec(root)
+    mesh = found[0]
+    mesh.update_matrix_world(True)
+    g = mesh.geometry
+    P = np.asarray(g.get_attribute("position"), np.float64).reshape(-1, 3)
+    uv = np.asarray(g.get_attribute("uv"), np.float32).reshape(-1, 2)
+    faces = np.asarray(g.get_index(), np.int64).reshape(-1, 3).astype(np.int32)
+    M = np.asarray(mesh.matrix_world.to_numpy(), np.float64).reshape(4, 4)
+    Pw = (M[:3, :3] @ P.T).T + M[:3, 3]                  # bake the node transform
+    Ry90 = np.array([[0, 0, 1], [0, 1, 0], [-1, 0, 0]], np.float64)   # +Z -> +X
+    Pr = (Ry90 @ Pw.T).T
+    Pr -= 0.5 * (Pr.max(0) + Pr.min(0))                  # centre at origin
+    scale = length / (Pr[:, 0].max() - Pr[:, 0].min())
+    return (Pr * scale).astype(np.float32), faces, uv, mesh.material
+
+
 unit, fish_faces_t = icosphere(FISH_SUBDIV)
 
 
@@ -554,30 +617,48 @@ GRASP_X = FISH_P[0] + FISH_COM_X
 # backstop for the close is quoted off this.
 _near = np.abs(fish_tmpl[:, 0] - FISH_COM_X) < 0.012
 FISH_HALF_W = float(np.abs(fish_tmpl[_near, 2]).max())
-skin_ids, skin_w = bind_lattice(fish_tmpl.astype(np.float64), CAGE_LO, CAGE_H,
-                                CAGE_DIMS, CAGE_SOLID, CAGE_ID)
-_bind_err = np.linalg.norm((cage_v[skin_ids] * skin_w[:, :, None]).sum(1) - fish_tmpl, axis=1)
 
-# Every unique tet edge is a distance constraint; every tet is a volume row.
-_e = np.unique(np.sort(np.concatenate([cage_t[:, [a, b]] for a, b in _TET_E]), 1), axis=0)
+# The render surface: procedural ellipsoid, or the glTF fish bound to the same
+# cage. bind_lattice's weights are unclamped, so vertices outside the body cage
+# (the barramundi's fins) extrapolate from their nearest cell and deform with
+# the flesh -- no separate fin rig needed for the glTF skin.
+gltf_mat = None
+if FISH_MODEL and os.path.exists(FISH_MODEL):
+    render_v, render_faces, render_uv, gltf_mat = load_fish_model(FISH_MODEL, FISH_LEN)
+    render_normals0 = None
+else:
+    if FISH_MODEL:
+        print(f"  note: --fish-model {FISH_MODEL} not found; using the procedural fish")
+    render_v = fish_tmpl
+    render_faces = fish_faces_t
+    render_uv = np.stack([unit[:, 0] * 0.5 + 0.5, unit[:, 1] * 0.5 + 0.5], -1).astype(np.float32)
+    render_normals0 = unit
+USE_GLTF = gltf_mat is not None    # the glTF fish brings its own fins + eye
+FISH_NV, FISH_NF = len(render_v), len(render_faces)
+skin_ids, skin_w = bind_lattice(render_v.astype(np.float64), CAGE_LO, CAGE_H,
+                                CAGE_DIMS, CAGE_SOLID, CAGE_ID)
+_bind_err = np.linalg.norm((cage_v[skin_ids] * skin_w[:, :, None]).sum(1) - render_v, axis=1)
+
+# NEO-HOOKEAN FEM. No distance edges, no volume row, no spine chords -- the tet
+# cage is a real elastic solid. Per tet we precompute the rest inverse shape
+# matrix Dm_inv (Dm columns = [x1-x0, x2-x0, x3-x0]) and the rest volume V; the
+# deformation gradient F = Ds @ Dm_inv is recomputed each iteration on the
+# device. The XPBD compliance of each constraint is alpha = 1/(k*V), and the
+# per-substep alpha~ = alpha/dt^2 is precomputed here. There are no CSR rows for
+# the fish now -- it goes through `solve` only for contacts.
 FISH_BASE = FIN_TOTAL
-for a, b in _e:
-    pairs.append((FISH_BASE + int(a), FISH_BASE + int(b), STIFF_TET_EDGE))
-# BACKBONE. A lattice of tets held only by its own edges has, in a Jacobi solve
-# of a fixed iteration count, almost no long-range bending stiffness: 22 cells
-# of fish is more chain than the sweep can stiffen, and the measured result was
-# a 240 mm fish folding to 220 mm TALL over the pads and sliding out. A herring
-# has a spine. Skip-a-cell chords along the body axis are that spine: one extra
-# distance row per cage node, and they resist exactly the fold.
-_cid = CAGE_ID
-_a, _b = _cid[:-2, :, :], _cid[2:, :, :]
-_m = (_a >= 0) & (_b >= 0)
-spine_pairs = np.stack([_a[_m], _b[_m]], 1)
-for a, b in spine_pairs:
-    pairs.append((FISH_BASE + int(a), FISH_BASE + int(b), STIFF_SPINE))
-_t = cage_v[cage_t]
-tet_v0 = (np.einsum("ni,ni->n", _t[:, 1] - _t[:, 0],
-                    np.cross(_t[:, 2] - _t[:, 0], _t[:, 3] - _t[:, 0])) / 6.0).astype(np.float32)
+_e = np.unique(np.sort(np.concatenate([cage_t[:, [a, b]] for a, b in _TET_E]), 1), axis=0)
+_tv = cage_v[cage_t].astype(np.float64)                       # (N_TETS, 4, 3)
+_Dm = np.stack([_tv[:, 1] - _tv[:, 0], _tv[:, 2] - _tv[:, 0],
+                _tv[:, 3] - _tv[:, 0]], axis=2)                # columns
+_detDm = np.linalg.det(_Dm)
+tet_rest_vol = np.maximum(np.abs(_detDm) / 6.0, 1.0e-12).astype(np.float32)
+tet_Dm_inv = np.linalg.inv(_Dm).astype(np.float32)            # (N_TETS, 3, 3)
+_dt2 = DT * DT
+tet_alpha_d = (1.0 / (MU_LAME * tet_rest_vol.astype(np.float64) * _dt2)).astype(np.float32)
+tet_alpha_h = (1.0 / (LAM_LAME * tet_rest_vol.astype(np.float64) * _dt2)).astype(np.float32)
+# Rest edge lengths, for the max-stretch diagnostic only (not a constraint).
+_rest_edge_len = np.linalg.norm(cage_v[_e[:, 0]] - cage_v[_e[:, 1]], axis=1).astype(np.float32)
 
 cage_p0 = cage_v + np.array(FISH_P, dtype=np.float32)
 mfish = FISH_MASS / CAGE_N
@@ -775,36 +856,92 @@ def solve(p_in: wp.array(dtype=wp.vec3),
 
 
 @wp.kernel
-def tet_volume(pos: wp.array(dtype=wp.vec3),
-               tets: wp.array2d(dtype=int),
-               v0: wp.array(dtype=float),
-               invm: wp.array(dtype=float),
-               base: int,
-               dpos: wp.array(dtype=wp.vec3),
-               cnt: wp.array(dtype=int)):
-    # One incompressibility row PER TET, not one global row over the whole
-    # surface. This is the whole point of the filled body: a squeeze in the
-    # middle has to be answered locally, so the material cannot satisfy the
-    # constraint by leaving the hand.
+def tet_lambda_reset(lam_d: wp.array(dtype=float), lam_h: wp.array(dtype=float)):
+    # XPBD multipliers are accumulated across one substep and reset before the
+    # next -- this is what makes the compliance dt-independent (a real elastic
+    # modulus) rather than an iteration-count-dependent PBD stiffness.
+    t = wp.tid()
+    lam_d[t] = 0.0
+    lam_h[t] = 0.0
+
+
+@wp.kernel
+def tet_neohookean(pos: wp.array(dtype=wp.vec3),
+                   tets: wp.array2d(dtype=int),
+                   dm_inv: wp.array(dtype=wp.mat33),
+                   alpha_d: wp.array(dtype=float),
+                   alpha_h: wp.array(dtype=float),
+                   gamma: float,
+                   invm: wp.array(dtype=float),
+                   base: int,
+                   lam_d: wp.array(dtype=float),
+                   lam_h: wp.array(dtype=float),
+                   dpos: wp.array(dtype=wp.vec3),
+                   cnt: wp.array(dtype=int)):
+    # Stable Neo-Hookean (Macklin/Muller/Chentanez 2021), two XPBD constraints
+    # per tet. F = Ds @ Dm_inv, Ds columns = [x1-x0, x2-x0, x3-x0]. The gradient
+    # of any scalar phi(F) wrt the inner verts is the columns of (dphi/dF)@Dm_inv^T
+    # and wrt x0 is minus their sum. This is inversion-safe: the hydrostatic row
+    # C = det(F) - gamma restores volume even from det(F) < 0, and the deviatoric
+    # row C = sqrt(tr(F^T F)) is always well defined. gamma = 1 + mu/lambda is
+    # chosen so the energy minimum is exactly F = I (undeformed rest).
     t = wp.tid()
     la, lb, lc, ld = tets[t, 0], tets[t, 1], tets[t, 2], tets[t, 3]
     ia, ib, ic, id_ = base + la, base + lb, base + lc, base + ld
-    a, b, c, d = pos[ia], pos[ib], pos[ic], pos[id_]
-    ga = wp.cross(d - b, c - b) / 6.0
-    gb = wp.cross(c - a, d - a) / 6.0
-    gc = wp.cross(d - a, b - a) / 6.0
-    gd = wp.cross(b - a, c - a) / 6.0
-    wa, wb, wc, wd = invm[ia], invm[ib], invm[ic], invm[id_]
-    den = (wa * wp.dot(ga, ga) + wb * wp.dot(gb, gb)
-           + wc * wp.dot(gc, gc) + wd * wp.dot(gd, gd))
-    if den < 1.0e-16:
-        return
-    v = wp.dot(b - a, wp.cross(c - a, d - a)) / 6.0
-    lam = -(v - v0[t]) / den * STIFF_TET_VOL
-    wp.atomic_add(dpos, la, ga * (lam * wa))
-    wp.atomic_add(dpos, lb, gb * (lam * wb))
-    wp.atomic_add(dpos, lc, gc * (lam * wc))
-    wp.atomic_add(dpos, ld, gd * (lam * wd))
+    x0, x1, x2, x3 = pos[ia], pos[ib], pos[ic], pos[id_]
+    w0, w1, w2, w3 = invm[ia], invm[ib], invm[ic], invm[id_]
+    e1 = x1 - x0
+    e2 = x2 - x0
+    e3 = x3 - x0
+    di = dm_inv[t]
+    # deformation gradient columns
+    f0 = e1 * di[0, 0] + e2 * di[1, 0] + e3 * di[2, 0]
+    f1 = e1 * di[0, 1] + e2 * di[1, 1] + e3 * di[2, 1]
+    f2 = e1 * di[0, 2] + e2 * di[1, 2] + e3 * di[2, 2]
+
+    # deviatoric constraint: C = sqrt(tr(F^T F)), stiffness mu (alpha_d)
+    s = wp.dot(f0, f0) + wp.dot(f1, f1) + wp.dot(f2, f2)
+    cd = wp.sqrt(wp.max(s, 1.0e-12))
+    inv_cd = 1.0 / cd
+    # (F @ Dm_inv^T) columns give grads wrt x1,x2,x3
+    g1 = (f0 * di[0, 0] + f1 * di[0, 1] + f2 * di[0, 2]) * inv_cd
+    g2 = (f0 * di[1, 0] + f1 * di[1, 1] + f2 * di[1, 2]) * inv_cd
+    g3 = (f0 * di[2, 0] + f1 * di[2, 1] + f2 * di[2, 2]) * inv_cd
+    g0 = -(g1 + g2 + g3)
+    ad = alpha_d[t]
+    den = (w0 * wp.dot(g0, g0) + w1 * wp.dot(g1, g1)
+           + w2 * wp.dot(g2, g2) + w3 * wp.dot(g3, g3) + ad)
+    dl = (-cd - ad * lam_d[t]) / den
+    lam_d[t] = lam_d[t] + dl
+    da0 = g0 * (w0 * dl)
+    da1 = g1 * (w1 * dl)
+    da2 = g2 * (w2 * dl)
+    da3 = g3 * (w3 * dl)
+
+    # hydrostatic constraint: C = det(F) - gamma, stiffness lambda (alpha_h)
+    c0 = wp.cross(f1, f2)
+    c1 = wp.cross(f2, f0)
+    c2 = wp.cross(f0, f1)
+    detf = wp.dot(f0, c0)
+    h1 = c0 * di[0, 0] + c1 * di[0, 1] + c2 * di[0, 2]
+    h2 = c0 * di[1, 0] + c1 * di[1, 1] + c2 * di[1, 2]
+    h3 = c0 * di[2, 0] + c1 * di[2, 1] + c2 * di[2, 2]
+    h0 = -(h1 + h2 + h3)
+    ch = detf - gamma
+    ah = alpha_h[t]
+    denh = (w0 * wp.dot(h0, h0) + w1 * wp.dot(h1, h1)
+            + w2 * wp.dot(h2, h2) + w3 * wp.dot(h3, h3) + ah)
+    dlh = (-ch - ah * lam_h[t]) / denh
+    lam_h[t] = lam_h[t] + dlh
+    da0 = da0 + h0 * (w0 * dlh)
+    da1 = da1 + h1 * (w1 * dlh)
+    da2 = da2 + h2 * (w2 * dlh)
+    da3 = da3 + h3 * (w3 * dlh)
+
+    wp.atomic_add(dpos, la, da0)
+    wp.atomic_add(dpos, lb, da1)
+    wp.atomic_add(dpos, lc, da2)
+    wp.atomic_add(dpos, ld, da3)
     wp.atomic_add(cnt, la, 1)
     wp.atomic_add(cnt, lb, 1)
     wp.atomic_add(cnt, lc, 1)
@@ -816,12 +953,16 @@ def tet_apply(pos: wp.array(dtype=wp.vec3),
               base: int,
               dpos: wp.array(dtype=wp.vec3),
               cnt: wp.array(dtype=int)):
-    # Jacobi average, same RELAX as the distance rows, then self-clear so the
-    # pass costs two launches per iteration and no memsets.
+    # Jacobi mass-split: average the XPBD corrections over the tets incident to
+    # this node, then self-clear. The division by the incident-tet count IS the
+    # under-relaxation that keeps the parallel-over-tets solve stable; adding the
+    # distance rows' extra RELAX 0.5 on top double-damped it and the body could
+    # not even resist gravity (rest det(F) deviation 0.22), so there is no RELAX
+    # here.
     i = wp.tid()
     n = cnt[i]
     if n > 0:
-        pos[base + i] = pos[base + i] + dpos[i] * (RELAX / float(n))
+        pos[base + i] = pos[base + i] + dpos[i] * (1.0 / float(n))
         dpos[i] = wp.vec3(0.0, 0.0, 0.0)
         cnt[i] = 0
 
@@ -897,7 +1038,11 @@ pad_hits = wp.zeros(1, dtype=int, device=device)
 tet_dpos = wp.zeros(CAGE_N, dtype=wp.vec3, device=device)
 tet_cnt = wp.zeros(CAGE_N, dtype=int, device=device)
 tets_d = wp.array(cage_t, dtype=int, device=device)
-tet_v0 = wp.array(tet_v0, dtype=float, device=device)
+tet_dm_inv_d = wp.array(tet_Dm_inv, dtype=wp.mat33, device=device)
+tet_alpha_d_d = wp.array(tet_alpha_d, dtype=float, device=device)
+tet_alpha_h_d = wp.array(tet_alpha_h, dtype=float, device=device)
+tet_lam_d = wp.zeros(N_TETS, dtype=float, device=device)   # deviatoric multiplier
+tet_lam_h = wp.zeros(N_TETS, dtype=float, device=device)   # hydrostatic multiplier
 skin_ids_d = wp.array(skin_ids, dtype=int, device=device)
 skin_w_d = wp.array(skin_w, dtype=float, device=device)
 
@@ -930,7 +1075,7 @@ mats = wp.zeros(2, dtype=wp.mat44, device=device)
 # The fish's render surface is its own little vertex array now (skinned off the
 # cage), so its normals are accumulated over its own triangles, not over the
 # particle set.
-fish_tris_np = fish_faces_t.reshape(-1).astype(np.int32)
+fish_tris_np = render_faces.reshape(-1).astype(np.int32)
 fish_tris_d = wp.array(fish_tris_np, dtype=int, device=device)
 fish_v = wp.zeros(FISH_NV, dtype=wp.vec3, device=device)
 fish_vn = wp.zeros(FISH_NV, dtype=wp.vec3, device=device)
@@ -1012,6 +1157,7 @@ def substep_body():
     grid.build(points=pred, radius=GRID_R)
     wp.launch(build_contacts, dim=NP, device=device,
               inputs=[pred, grid.id, body_arr, rad_arr, cont_idx, cont_d, cont_n])
+    wp.launch(tet_lambda_reset, dim=N_TETS, device=device, inputs=[tet_lam_d, tet_lam_h])
     pa, pb = pred, scratch
     for _ in range(ITERATIONS):
         wp.launch(solve, dim=NP, device=device,
@@ -1019,9 +1165,13 @@ def substep_body():
                           invm, mu_arr, rad_arr, pad_arr, body_arr, 1, F_SCALE,
                           pad_force, pad_hits])
         pa, pb = pb, pa
-        # The tet volume rows, in the same Jacobi sweep as the distance rows.
-        wp.launch(tet_volume, dim=N_TETS, device=device,
-                  inputs=[pa, tets_d, tet_v0, invm, FISH_BASE, tet_dpos, tet_cnt])
+        # The Neo-Hookean FEM rows for the fish, in the same Jacobi sweep as the
+        # finger truss's distance rows. Two constraints per tet, XPBD multipliers
+        # carried across the substep, accumulated per cage node then averaged.
+        wp.launch(tet_neohookean, dim=N_TETS, device=device,
+                  inputs=[pa, tets_d, tet_dm_inv_d, tet_alpha_d_d, tet_alpha_h_d,
+                          NH_GAMMA, invm, FISH_BASE, tet_lam_d, tet_lam_h,
+                          tet_dpos, tet_cnt])
         wp.launch(tet_apply, dim=CAGE_N, device=device,
                   inputs=[pa, FISH_BASE, tet_dpos, tet_cnt])
     wp.launch(statics, dim=NP, device=device, inputs=[pa, prev, invm, rad_arr])
@@ -1195,6 +1345,22 @@ def _push_mats(a):
     mats.assign(_mats_host)
 
 
+_diag_tet = cage_t.astype(np.int64)
+_diag_dm_inv = tet_Dm_inv.astype(np.float64)
+
+
+def fem_diag(cage_pos):
+    """(max, p99 tet edge stretch, max |det(F) - 1|) over the fish cage -- the
+    numbers that say whether the material is behaving. p99 << 1.4 with the max a
+    little higher (a few boundary edges) means it droops without dissolving; the
+    det deviation says it is not inverting."""
+    ratio = np.linalg.norm(cage_pos[_e[:, 0]] - cage_pos[_e[:, 1]], axis=1) / np.maximum(_rest_edge_len, 1e-9)
+    tv = cage_pos[_diag_tet].astype(np.float64)
+    ds = np.stack([tv[:, 1] - tv[:, 0], tv[:, 2] - tv[:, 0], tv[:, 3] - tv[:, 0]], axis=2)
+    detf = np.linalg.det(ds @ _diag_dm_inv)
+    return float(ratio.max()), float(np.percentile(ratio, 99.0)), float(np.abs(detf - 1.0).max())
+
+
 def step_frame():
     """One 60 fps frame: task -> robot -> pins -> substeps -> surfaces."""
     global grip_force, sim_t, tcp_prev, slip_peak, slip_mean, slip_n
@@ -1262,11 +1428,13 @@ def step_frame():
         step_frame.phase_prev = phase
         fv = fish_v.numpy()
         ncon = int((cont_n.numpy()[FISH_BASE:] > 0).sum())
+        stretch, p99, detdev = fem_diag(x.numpy()[FISH_BASE:])
         print(f"  {phase:9s} t={sim_t:5.2f}s grip {grip_force:6.2f} N over "
               f"{grip_nodes:5.1f} nodes | fish y {fv[:, 1].min():.3f}..{fv[:, 1].max():.3f} "
               f"(h {(fv[:, 1].max() - fv[:, 1].min()) * 1000:4.1f} of {FISH_H_REST * 1000:.0f} mm) "
               f"c=({c[0]:.3f}, {c[1]:.3f}, {c[2]:.3f}) touch {ncon} "
-              f"| carriage {finger_cmd * 1000:.1f} mm")
+              f"| carriage {finger_cmd * 1000:.1f} mm "
+              f"| FEM stretch p99 {p99:.2f} max {stretch:.2f} max|detF-1| {detdev:.2f}")
     sim_t += 1.0 / FPS
     fin_np, fin_nn = fin_pos.numpy(), fin_nrm.numpy()
     fish_np, fish_nn = fish_pos.numpy(), fish_nrm.numpy()
@@ -1526,22 +1694,34 @@ def skin_texture(w=384, h=192):
     return tp.data_texture(np.clip(img, 0, 255).astype(np.uint8), srgb=True)
 
 
-# u along the body (0 at the head, which is -x because the taper puts the meat
-# in the front half), v around it from belly to back. Linear in the unit
-# icosphere's own y, so there is no atan2 seam to hide.
-fish_uv = np.stack([unit[:, 0] * 0.5 + 0.5, unit[:, 1] * 0.5 + 0.5], -1).astype(np.float32)
-
+# Corner-soup geometry, updated every frame from the cage skinning. For the
+# procedural fish the UVs are linear in the unit icosphere (u along the body, v
+# belly->back, no atan2 seam); for the glTF skin they come straight off the
+# model. Normals are recomputed each frame, so the initial ones are placeholders.
+fish_uv = render_uv
 fish_geo = tp.BufferGeometry()
-fish_geo.set_attribute("position", (fish_tmpl + np.array(FISH_P, np.float32))[fish_tris_np])
-fish_geo.set_attribute("normal", unit[fish_tris_np].astype(np.float32))
+fish_geo.set_attribute("position", (render_v + np.array(FISH_P, np.float32))[fish_tris_np])
+_n0 = (render_normals0[fish_tris_np] if render_normals0 is not None
+       else np.tile(np.array([0, 1, 0], np.float32), (len(fish_tris_np), 1)))
+fish_geo.set_attribute("normal", _n0.astype(np.float32))
 fish_geo.set_attribute("uv", fish_uv[fish_tris_np])
-fish_mat = tp.MeshPhysicalMaterial()
-fish_mat.color = 0xffffff
-fish_mat.map = skin_texture()
-fish_mat.roughness = 0.5
-fish_mat.metalness = 0.0
-fish_mat.clearcoat = 0.85          # the wet coat is what sells a fresh fish
-fish_mat.clearcoat_roughness = 0.1
+if gltf_mat is not None:
+    # The Barramundi's own PBR material and maps (base color, normal, AO,
+    # roughness, metalness), with a wet clearcoat added for the fresh-fish sheen.
+    fish_mat = gltf_mat
+    for _k, _v in (("clearcoat", 0.6), ("clearcoat_roughness", 0.12)):
+        try:
+            setattr(fish_mat, _k, _v)
+        except Exception:                            # noqa: BLE001
+            pass
+else:
+    fish_mat = tp.MeshPhysicalMaterial()
+    fish_mat.color = 0xffffff
+    fish_mat.map = skin_texture()
+    fish_mat.roughness = 0.5
+    fish_mat.metalness = 0.0
+    fish_mat.clearcoat = 0.85          # the wet coat is what sells a fresh fish
+    fish_mat.clearcoat_roughness = 0.1
 fish_mesh = tp.Mesh(fish_geo, fish_mat)
 fish_mesh.cast_shadow = True
 fish_mesh.frustum_culled = False
@@ -1612,21 +1792,24 @@ for _k, _v in (("translucency", 0.6), ("translucency_color", 0xdfe8ee)):
         pass
 fins_mesh = tp.Mesh(fins_geo, fins_mat)
 fins_mesh.frustum_culled = False
-scene.add(fins_mesh)
+if not USE_GLTF:
+    scene.add(fins_mesh)
 
 # The eye is a plain little sphere parked on the head each frame. Its anchor is
-# a render vertex, so it deforms with the head instead of floating.
+# a render vertex, so it deforms with the head instead of floating. (The glTF
+# fish has its own eye baked into the mesh + textures, so it gets neither.)
 _eye_tmpl = np.array([(-0.34 * FISH_LEN, 0.16 * FISH_H_REST, sg * FISH_W * 0.30)
                       for sg in (-1.0, 1.0)], np.float32)
 _corner_of = np.zeros(FISH_NV, np.int64)
 _corner_of[fish_tris_np] = np.arange(len(fish_tris_np))
-EYE_CORNER = [int(_corner_of[int(np.argmin(((fish_tmpl - e) ** 2).sum(1)))]) for e in _eye_tmpl]
+EYE_CORNER = [int(_corner_of[int(np.argmin(((render_v - e) ** 2).sum(1)))]) for e in _eye_tmpl]
 eyes = []
-for _ in range(2):
-    e = tp.Mesh(tp.SphereGeometry(0.0075, 12, 10), standard_material(0x14181c, 0.15, 0.0))
-    e.frustum_culled = False
-    scene.add(e)
-    eyes.append(e)
+if not USE_GLTF:
+    for _ in range(2):
+        e = tp.Mesh(tp.SphereGeometry(0.0075, 12, 10), standard_material(0x14181c, 0.15, 0.0))
+        e.frustum_culled = False
+        scene.add(e)
+        eyes.append(e)
 
 # --- [E] wrist camera picture-in-picture ---------------------------------------
 
