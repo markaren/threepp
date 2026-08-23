@@ -162,6 +162,57 @@ namespace {
         bool scene_capture() const { return renderer_.sceneCaptureEnabled(); }
         py::array_t<uint8_t> read_scene_pixels() { return to_numpy(read_scene_rgb_released()); }
 
+        // ── Multi-view: N cameras per frame ─────────────────────────────
+        // Every render() produces the primary AND every added view from ONE
+        // scene build, in a single submission — N viewpoints of the SAME
+        // simulated instant, which N render() calls can never give. Views are
+        // PERSISTENT: addView drains the device and allocates a full deferred
+        // chain, so add once and render every frame, never add/remove per frame.
+        uint32_t add_view(Camera& camera, int width, int height) {
+            py::gil_scoped_release release;// device-idle + allocation
+            return renderer_.addView(camera, width, height);
+        }
+        bool remove_view(uint32_t handle) {
+            py::gil_scoped_release release;
+            return renderer_.removeView(handle);
+        }
+        bool set_view_camera(uint32_t handle, Camera& camera) {
+            return renderer_.setViewCamera(handle, camera);
+        }
+        bool set_view_display_rect(uint32_t handle, int x, int y, int w, int h) {
+            return renderer_.setViewDisplayRect(handle, x, y, w, h);
+        }
+        bool hide_view(uint32_t handle) { return renderer_.hideView(handle); }
+
+        // (w, h) as passed to add_view, or None for an unknown handle.
+        py::object view_size(uint32_t handle) const {
+            int w = 0, h = 0;
+            if (!renderer_.viewSize(handle, w, h)) return py::none();
+            return py::make_tuple(w, h);
+        }
+
+        py::array_t<uint8_t> read_view_rgb_pixels(uint32_t handle) {
+            int w = 0, h = 0;
+            if (!renderer_.viewSize(handle, w, h) || w <= 0 || h <= 0) {
+                return py::array_t<uint8_t>({py::ssize_t(0), py::ssize_t(0), py::ssize_t(3)});
+            }
+            std::vector<unsigned char> px;
+            {
+                py::gil_scoped_release release;// vkDeviceWaitIdle + staging copy
+                px = renderer_.readViewRGBPixels(handle);
+            }
+            py::array_t<uint8_t> arr({static_cast<py::ssize_t>(h),
+                                      static_cast<py::ssize_t>(w),
+                                      static_cast<py::ssize_t>(3)});
+            const size_t want = static_cast<size_t>(w) * h * 3;
+            if (px.size() >= want) {
+                std::memcpy(arr.mutable_data(), px.data(), want);
+            } else {
+                std::memset(arr.mutable_data(), 0, want);
+            }
+            return arr;
+        }
+
         // Viewport / scissor (forwarded to the native renderer; (x,y,w,h) overload).
         void set_viewport(int x, int y, int w, int h) { renderer_.setViewport(x, y, w, h); }
         void set_scissor(int x, int y, int w, int h) { renderer_.setScissor(x, y, w, h); }
@@ -554,6 +605,53 @@ namespace threepp_py {
                               [](PyVulkanRenderer& r, bool v) { r.set_scene_capture(v); },
                               "Toggle scene-only swapchain capture (post-TAA, pre-overlay). When on, "
                               "read it via read_scene_pixels(); off = no cost.")
+                // ── Multi-view: N cameras per frame ──────────────────────
+                .def("add_view", &PyVulkanRenderer::add_view,
+                     py::arg("camera"), py::arg("width"), py::arg("height"), py::keep_alive<1, 2>(),
+                     "Attach a persistent extra view. Every render() then produces the primary "
+                     "AND every added view from one scene build, in a single queue submission — "
+                     "N viewpoints of the SAME simulated instant, which N render() calls cannot "
+                     "give. Each view has its own G-buffer, temporal history and camera state; "
+                     "acceleration structures, lights, materials and probe GI are shared.\n\n"
+                     "Views are PERSISTENT: this call drains the device and allocates a full "
+                     "deferred chain, while rendering an existing view every frame is cheap. Do "
+                     "NOT add and remove per frame.\n\n"
+                     "Secondary views are deliberately plainer than the primary — native "
+                     "resolution with the built-in temporal resolve, no DLSS/FSR, no occlusion "
+                     "culling, no UI overlay, no depth of field, no lens or sensor model. They "
+                     "are measurement cameras, not the display.\n\n"
+                     "Returns a handle (> 0), or 0 if the view could not be created — notably "
+                     "when render() has not run yet, since a view shares the primary's render "
+                     "pass and pipelines.")
+                .def("remove_view", &PyVulkanRenderer::remove_view, py::arg("handle"),
+                     "Destroy the view and free everything it owns. False for an unknown handle. "
+                     "Handles are never reused, so a stale one is inert rather than dangerous.")
+                .def("set_view_camera", &PyVulkanRenderer::set_view_camera,
+                     py::arg("handle"), py::arg("camera"), py::keep_alive<1, 3>(),
+                     "Repoint a view at a different camera. Treated as a CUT: the view's temporal "
+                     "history is dropped rather than reprojected across a discontinuity that "
+                     "never happened in world space.")
+                .def("read_view_rgb_pixels", &PyVulkanRenderer::read_view_rgb_pixels, py::arg("handle"),
+                     "This view's most recent frame as (H, W, 3) uint8, TOP-LEFT origin — the "
+                     "same convention as read_pixels. Reads the view's own colour image, never "
+                     "the swapchain. An unknown handle gives an empty (0, 0, 3) array.")
+                .def("set_view_display_rect", &PyVulkanRenderer::set_view_display_rect,
+                     py::arg("handle"), py::arg("x"), py::arg("y"), py::arg("width"), py::arg("height"),
+                     "Picture-in-picture: show this view inside the primary's frame with its "
+                     "top-left corner at (x, y) in window pixels. The image is already resolved, "
+                     "on the device and in the swapchain's format, so this is a single image copy "
+                     "in the frame's own command buffer — no readback, no upload, no texture, no "
+                     "second submission.\n\n"
+                     "1:1 ONLY: width/height must equal the size the view was added at, and a "
+                     "mismatch draws NOTHING rather than a filtered rescale. A rect running off "
+                     "the window edge is clipped. Composited after the scene capture and before "
+                     "the UI overlay, so ImGui and screen-space sprites still draw on top.")
+                .def("hide_view", &PyVulkanRenderer::hide_view, py::arg("handle"),
+                     "Back to a measurement camera: still rendered, still readable, no longer "
+                     "drawn into the frame.")
+                .def("view_size", &PyVulkanRenderer::view_size, py::arg("handle"),
+                     "Pixel size of a view's output as (width, height), or None if the handle is "
+                     "unknown.")
                 .def("read_scene_pixels", &PyVulkanRenderer::read_scene_pixels,
                      "Last captured scene-only RGB (post-TAA, pre-overlay; no sprite/ImGui) as "
                      "(H, W, 3) uint8. Requires scene_capture=True.")

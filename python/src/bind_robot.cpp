@@ -6,6 +6,7 @@
 
 #include <pybind11/stl.h>
 
+#include "threepp/extras/kinematics/InverseKinematics.hpp"
 #include "threepp/loaders/URDFLoader.hpp"
 #include "threepp/objects/Robot.hpp"
 
@@ -102,7 +103,139 @@ namespace threepp_py {
                          return r.computeEndEffectorTransform(values, deg, enforce_limits);
                      },
                      py::arg("values"), py::arg("deg") = false, py::arg("enforce_limits") = true)
-                .def("show_colliders", &Robot::showColliders, py::arg("flag"));
+                .def("show_colliders", &Robot::showColliders, py::arg("flag"))
+                // ---- Tool frame -------------------------------------------
+                // Which link the FK and the IK solver drive. Defaults to the
+                // deepest leaf of the articulated tree (fr3_hand_tcp on a
+                // Franka); name a different link to solve for a flange, an
+                // elbow, or a tool the URDF happens to carry.
+                .def("set_end_effector", &Robot::setEndEffector, py::arg("link_name"),
+                     "Retarget FK/IK at the named link. Recomputes the root-to-tool "
+                     "path and therefore `chain_dofs`. Raises if the link is unknown.")
+                .def_property_readonly("end_effector_link", &Robot::endEffectorLink,
+                     "Name of the link FK and IK currently drive.")
+                .def_property_readonly("chain_dofs", &Robot::chainDofs,
+                     "DOF indices on the root-to-end-effector path, ascending — the "
+                     "only ones an IkSolver is allowed to move. A gripper's finger "
+                     "joints keep their slots in the joint vector but are not here, "
+                     "so closing the hand can never be mistaken for extra reach.");
+
+        // ---- Inverse kinematics (damped least squares) ----------------------
+        // Header-only C++ solver, see extras/kinematics/InverseKinematics.hpp.
+        // The solve is INCREMENTAL: it steps q toward the target, bounded by
+        // maxIterations * maxPositionStep, so a real-time caller runs it once
+        // per frame and an offline one loops until `converged`.
+        py::enum_<IkTask>(m, "IkTask", "How much of the tool pose the solve must reproduce.")
+                .value("Position", IkTask::Position, "3-DOF: reach the point, any orientation.")
+                .value("AxisAlign", IkTask::AxisAlign,
+                       "5-DOF: reach the point AND aim the tool axis; spin about that axis "
+                       "is left free — what a drill, a suction cup or a symmetric two-finger "
+                       "grasp wants.")
+                .value("Pose", IkTask::Pose, "6-DOF: reproduce the full target transform.");
+
+        py::class_<IkOptions>(m, "IkOptions")
+                .def(py::init<>())
+                .def_readwrite("task", &IkOptions::task)
+                .def_readwrite("tool_offset", &IkOptions::toolOffset,
+                               "Flange -> tool centre point (Matrix4). The solve drives the TCP, "
+                               "so a tool of any length or mounting is described here rather "
+                               "than in the URDF.")
+                .def_readwrite("tool_axis", &IkOptions::toolAxis,
+                               "AxisAlign only, in the TOOL frame (+Z is the URDF convention "
+                               "for an approach direction).")
+                .def_readwrite("target_axis", &IkOptions::targetAxis,
+                               "AxisAlign only, in WORLD space.")
+                .def_readwrite("max_iterations", &IkOptions::maxIterations)
+                .def_readwrite("position_tolerance", &IkOptions::positionTolerance, "metres")
+                .def_readwrite("orientation_tolerance", &IkOptions::orientationTolerance, "radians")
+                .def_readwrite("max_position_step", &IkOptions::maxPositionStep,
+                               "Largest correction one iteration will attempt, in metres. A "
+                               "Gauss-Newton step is a LOCAL statement; clamping keeps it inside "
+                               "the trust region. Travel per solve is bounded by "
+                               "max_iterations * step. Zero disables the clamp.")
+                .def_readwrite("max_orientation_step", &IkOptions::maxOrientationStep, "radians")
+                .def_readwrite("damping", &IkOptions::damping,
+                               "DLS damping; must be > 0 — it is what lets the solve succeed at a "
+                               "singularity instead of flinging the arm.")
+                .def_readwrite("orientation_weight", &IkOptions::orientationWeight,
+                               "Weight on the orientation rows relative to position. Below 1 the "
+                               "solver reaches the point first and straightens up after, which "
+                               "reads as natural motion.")
+                .def_readwrite("revolute_step", &IkOptions::revoluteStep,
+                               "Finite-difference probe for revolute joints (radians).")
+                .def_readwrite("prismatic_step", &IkOptions::prismaticStep,
+                               "Finite-difference probe for prismatic joints (metres).")
+                .def_readwrite("rest_pose_gain", &IkOptions::restPoseGain,
+                               "Null-space rest-posture pull per iteration; zero disables it. "
+                               "Only does anything on a redundant arm.")
+                .def_readwrite("rest_pose", &IkOptions::restPose,
+                               "Rest posture, indexed by GLOBAL dof like every other joint vector.")
+                .def_readwrite("null_space_damping", &IkOptions::nullSpaceDamping,
+                               "Damping for the null-space PROJECTION — much smaller than `damping`, "
+                               "or the posture bias leaks into the tool pose and the arm never "
+                               "reports convergence.")
+                .def_readwrite("max_joint_speed", &IkOptions::maxJointSpeed,
+                               "Per-call joint speed cap in rad/s or m/s, applied against the joint "
+                               "values as they arrived. Zero disables it; needs a non-zero dt.")
+                .def("__repr__", [](const IkOptions& o) {
+                    std::ostringstream s;
+                    s << "IkOptions(task=" << static_cast<int>(o.task)
+                      << ", max_iterations=" << o.maxIterations
+                      << ", damping=" << o.damping << ")";
+                    return s.str();
+                });
+
+        py::class_<IkResult>(m, "IkResult")
+                .def_readonly("iterations", &IkResult::iterations)
+                .def_readonly("position_error", &IkResult::positionError, "metres")
+                .def_readonly("orientation_error", &IkResult::orientationError, "radians")
+                .def_readonly("converged", &IkResult::converged,
+                              "Both errors are inside tolerance — judged on the TRUE error, so "
+                              "the step clamp never fakes it.")
+                .def("__repr__", [](const IkResult& r) {
+                    std::ostringstream s;
+                    s << "IkResult(iterations=" << r.iterations
+                      << ", position_error=" << r.positionError
+                      << ", orientation_error=" << r.orientationError
+                      << ", converged=" << (r.converged ? "True" : "False") << ")";
+                    return s.str();
+                });
+
+        py::class_<IkSolver>(m, "IkSolver")
+                .def(py::init([](const Robot& robot, IkOptions options) {
+                         return std::make_unique<IkSolver>(robot, std::move(options));
+                     }),
+                     py::arg("robot"), py::arg("options") = IkOptions(), py::keep_alive<1, 2>(),
+                     "Damped-least-squares IK over the robot's root-to-end-effector chain.\n\n"
+                     "Joint ranges and the solvable DOF set are cached at construction, so a "
+                     "Robot that is re-parsed or given a new end effector needs a fresh solver.")
+                .def("solve", [](const IkSolver& s, std::vector<float> q, const py::object& target, float dt) {
+                    // q is copied in and handed back: the C++ solve mutates in
+                    // place, which a Python caller passing a list would never
+                    // expect, and the copy is 9 floats.
+                    IkResult r;
+                    if (py::isinstance<Matrix4>(target)) {
+                        r = s.solve(q, target.cast<const Matrix4&>(), dt);
+                    } else {
+                        r = s.solve(q, target.cast<const Vector3&>(), dt);
+                    }
+                    return py::make_tuple(std::move(q), r);
+                },
+                     py::arg("q"), py::arg("target"), py::arg("dt") = 0.f,
+                     "Step q toward placing the tool at `target` (Vector3 = point, Matrix4 = "
+                     "full pose). q is a FULL joint vector indexed by global dof; only "
+                     "`solved_dofs` are modified. Returns (new_q, IkResult) — the input list is "
+                     "left alone. `dt` is used solely by the max_joint_speed cap.")
+                .def("tool_transform", &IkSolver::toolTransform, py::arg("q"),
+                     "The tool centre point for a joint vector, in the robot's PARENT frame "
+                     "(FK composed with tool_offset). Call robot.update_matrix() first if the "
+                     "robot itself has moved.")
+                .def_property("options",
+                              [](const IkSolver& s) { return s.options(); },
+                              [](IkSolver& s, const IkOptions& o) { s.options() = o; },
+                              "Solver options. Reading gives a COPY — assign back to change them.")
+                .def_property_readonly("solved_dofs", [](const IkSolver& s) { return s.solvedDofs(); },
+                                       "The DOF indices this solver is allowed to move (robot.chain_dofs).");
 
         // ---- URDFLoader -----------------------------------------------------
         py::class_<URDFLoader>(m, "URDFLoader")

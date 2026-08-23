@@ -8,7 +8,7 @@ import numpy.typing
 import typing
 from . import editor
 from . import imgui
-__all__: list[str] = ['AmbientLight', 'AnimationAction', 'AnimationBlendMode', 'AnimationClip', 'AnimationMixer', 'Approach', 'ArrowHelper', 'Articulation', 'ArticulationLink', 'Audio', 'AudioDistanceModel', 'AudioListener', 'AxesHelper', 'Background', 'BarkStyle', 'BirdPlumage', 'BirdRole', 'BirdShape', 'BirdState', 'Blending', 'Blob', 'Box3', 'Box3Helper', 'BoxGeometry', 'BoxHelper', 'BranchingMode', 'BufferGeometry', 'Camera', 'CameraHelper', 'Canvas', 'CapsuleGeometry', 'CatmullRomCurve3', 'CircleGeometry', 'Clock', 'Cluster', 'Colonise', 'Color', 'ColorKeyframeTrack', 'ColorSpace', 'CombineOperation', 'Cone', 'ConeGeometry', 'ContactPoint', 'ContactSample', 'ContactSensor', 'ConvexGeometry', 'CrossQuad', 'CrownShape', 'Cruise', 'Cylinder', 'CylinderGeometry', 'DepthPacking', 'DepthSensor', 'DirectionalLight', 'DirectionalLightHelper', 'DisplacedMesh', 'EXPONENTIAL', 'EXRLoader', 'Ellipsoid', 'ErosionType', 'Euler', 'Evade', 'FBXLoader', 'Filter', 'Flare', 'Flock', 'FlockParams', 'Fog', 'FogExp2', 'Follower', 'Font', 'FontLoader', 'ForceTorqueSensor', 'Frond', 'Furrowed', 'GLRenderer', 'GLTFLoader', 'GLTFResult', 'Gait', 'GrassMesh', 'GridHelper', 'Group', 'HAS_AUDIO', 'HAS_IMGUI', 'HAS_PHYSX', 'HAS_VULKAN', 'Hemisphere', 'HemisphereLight', 'HemisphereLightHelper', 'Hop', 'HorizontalAlignment', 'INVERSE', 'IcosahedronGeometry', 'IcpOptions', 'IcpResult', 'ImguiContext', 'Imu', 'ImuSample', 'InstancedMesh', 'Interpolation', 'IsoMesh', 'Joint', 'JointEncoder', 'JointInfo', 'JointRange', 'JointSample', 'JointType', 'KeyframeTrack', 'LINEAR', 'Lanceolate', 'Launch', 'Leader', 'LeafShape', 'LeafStyle', 'LidarBeam', 'LidarModel', 'LidarParams', 'LidarReturn', 'Light', 'Line', 'LineBasicMaterial', 'LineSegments', 'Lobed', 'Loner', 'Loop', 'Mapping', 'Material', 'Matrix3', 'Matrix4', 'Mesh', 'MeshBasicMaterial', 'MeshDepthMaterial', 'MeshLambertMaterial', 'MeshNormalMaterial', 'MeshPhongMaterial', 'MeshPhysicalMaterial', 'MeshStandardMaterial', 'ModelLoader', 'NONE', 'NoiseModel', 'NoiseType', 'NumberKeyframeTrack', 'OBJLoader', 'Object3D', 'Ocean', 'OctahedronGeometry', 'OrbitControls', 'OrthographicCamera', 'Ovate', 'Papery', 'ParticleField', 'Perched', 'PerspectiveCamera', 'PhysxGpuBatch', 'PhysxMaterial', 'PhysxSoftBodyMaterial', 'PhysxWorld', 'PlaneGeometry', 'Plated', 'PointLight', 'PointLightHelper', 'Points', 'PointsMaterial', 'PolarGridHelper', 'PositionalAudio', 'Quad', 'Quaternion', 'QuaternionKeyframeTrack', 'RGBELoader', 'RangeNoiseModel', 'RectAreaLight', 'RigidBody', 'RingGeometry', 'Robot', 'RotationOrder', 'STLLoader', 'SVGLoader', 'ScalarField', 'Scene', 'Sensor', 'Serrate', 'ShadowMaterial', 'Side', 'SkeletonHelper', 'SoftBody', 'Sphere', 'SphereGeometry', 'SplatCloud', 'SplatData', 'SplatLoader', 'SpotLight', 'SpotLightHelper', 'Sprite', 'SpriteMaterial', 'TerrainFalloff', 'TerrainGenerator', 'TerrainParams', 'Text2D', 'Text3D', 'TextSprite', 'Texture', 'TextureLoader', 'TextureWrapping', 'ToneMapping', 'TorusGeometry', 'TorusKnotGeometry', 'TransformControls', 'TreeGenerator', 'TreeParams', 'URDFLoader', 'Vector2', 'Vector3', 'Vector4', 'VectorKeyframeTrack', 'VerticalAlignment', 'VoxelGrid', 'VulkanRenderer', 'Walk', 'Whorl', 'WrenchSample', 'apply_terrain_preset', 'apply_tree_preset', 'clamp', 'damp', 'data_texture', 'deg_to_rad', 'editor', 'euclidean_modulo', 'float_texture', 'generate_uuid', 'icp_point_to_point', 'imgui', 'inverse_lerp', 'is_power_of_two', 'iso_mesh_to_geometry', 'lerp', 'make_bark_textures', 'make_flower_texture', 'make_leaf_texture', 'make_needle_frond_texture', 'map_linear', 'marching_cubes', 'merge_buffer_geometries', 'merge_vertices', 'rad_to_deg', 'rand_float', 'rand_float_range', 'rand_float_spread', 'rand_int', 'rotate_equirect', 'simplify_geometry', 'splat_points_to_field', 'terrain_from_json', 'terrain_load_config', 'terrain_save_config', 'terrain_to_json', 'voxel_downsample', 'vulkan_available', 'write_wav']
+__all__: list[str] = ['AmbientLight', 'AnimationAction', 'AnimationBlendMode', 'AnimationClip', 'AnimationMixer', 'Approach', 'ArrowHelper', 'Articulation', 'ArticulationLink', 'Audio', 'AudioDistanceModel', 'AudioListener', 'AxesHelper', 'Background', 'BarkStyle', 'BirdPlumage', 'BirdRole', 'BirdShape', 'BirdState', 'Blending', 'Blob', 'Box3', 'Box3Helper', 'BoxGeometry', 'BoxHelper', 'BranchingMode', 'BufferGeometry', 'Camera', 'CameraHelper', 'Canvas', 'CapsuleGeometry', 'CatmullRomCurve3', 'CircleGeometry', 'Clock', 'Cluster', 'Colonise', 'Color', 'ColorKeyframeTrack', 'ColorSpace', 'CombineOperation', 'Cone', 'ConeGeometry', 'ContactPoint', 'ContactSample', 'ContactSensor', 'ConvexGeometry', 'CrossQuad', 'CrownShape', 'Cruise', 'Cylinder', 'CylinderGeometry', 'DepthPacking', 'DepthSensor', 'DirectionalLight', 'DirectionalLightHelper', 'DisplacedMesh', 'EXPONENTIAL', 'EXRLoader', 'Ellipsoid', 'ErosionType', 'Euler', 'Evade', 'FBXLoader', 'Filter', 'Flare', 'Flock', 'FlockParams', 'Fog', 'FogExp2', 'Follower', 'Font', 'FontLoader', 'ForceTorqueSensor', 'Frond', 'Furrowed', 'GLRenderer', 'GLTFLoader', 'GLTFResult', 'Gait', 'GrassMesh', 'GridHelper', 'Group', 'HAS_AUDIO', 'HAS_IMGUI', 'HAS_PHYSX', 'HAS_VULKAN', 'Hemisphere', 'HemisphereLight', 'HemisphereLightHelper', 'Hop', 'HorizontalAlignment', 'INVERSE', 'IcosahedronGeometry', 'IcpOptions', 'IcpResult', 'IkOptions', 'IkResult', 'IkSolver', 'IkTask', 'ImguiContext', 'Imu', 'ImuSample', 'InstancedMesh', 'Interpolation', 'IsoMesh', 'Joint', 'JointEncoder', 'JointInfo', 'JointRange', 'JointSample', 'JointType', 'KeyframeTrack', 'LINEAR', 'Lanceolate', 'Launch', 'Leader', 'LeafShape', 'LeafStyle', 'LidarBeam', 'LidarModel', 'LidarParams', 'LidarReturn', 'Light', 'Line', 'LineBasicMaterial', 'LineSegments', 'Lobed', 'Loner', 'Loop', 'Mapping', 'Material', 'Matrix3', 'Matrix4', 'Mesh', 'MeshBasicMaterial', 'MeshDepthMaterial', 'MeshLambertMaterial', 'MeshNormalMaterial', 'MeshPhongMaterial', 'MeshPhysicalMaterial', 'MeshStandardMaterial', 'ModelLoader', 'NONE', 'NoiseModel', 'NoiseType', 'NumberKeyframeTrack', 'OBJLoader', 'Object3D', 'Ocean', 'OctahedronGeometry', 'OrbitControls', 'OrthographicCamera', 'Ovate', 'Papery', 'ParticleField', 'Perched', 'PerspectiveCamera', 'PhysxGpuBatch', 'PhysxMaterial', 'PhysxSoftBodyMaterial', 'PhysxWorld', 'PlaneGeometry', 'Plated', 'PointLight', 'PointLightHelper', 'Points', 'PointsMaterial', 'PolarGridHelper', 'PositionalAudio', 'Quad', 'Quaternion', 'QuaternionKeyframeTrack', 'RGBELoader', 'RangeNoiseModel', 'RectAreaLight', 'RigidBody', 'RingGeometry', 'Robot', 'RotationOrder', 'STLLoader', 'SVGLoader', 'ScalarField', 'Scene', 'Sensor', 'Serrate', 'ShadowMaterial', 'Side', 'SkeletonHelper', 'SoftBody', 'Sphere', 'SphereGeometry', 'SplatCloud', 'SplatData', 'SplatLoader', 'SpotLight', 'SpotLightHelper', 'Sprite', 'SpriteMaterial', 'TerrainFalloff', 'TerrainGenerator', 'TerrainParams', 'Text2D', 'Text3D', 'TextSprite', 'Texture', 'TextureLoader', 'TextureWrapping', 'ToneMapping', 'TorusGeometry', 'TorusKnotGeometry', 'TransformControls', 'TreeGenerator', 'TreeParams', 'URDFLoader', 'Vector2', 'Vector3', 'Vector4', 'VectorKeyframeTrack', 'VerticalAlignment', 'VoxelGrid', 'VulkanRenderer', 'Walk', 'Whorl', 'WrenchSample', 'apply_terrain_preset', 'apply_tree_preset', 'clamp', 'damp', 'data_texture', 'deg_to_rad', 'editor', 'euclidean_modulo', 'float_texture', 'generate_uuid', 'icp_point_to_point', 'imgui', 'inverse_lerp', 'is_power_of_two', 'iso_mesh_to_geometry', 'lerp', 'make_bark_textures', 'make_flower_texture', 'make_leaf_texture', 'make_needle_frond_texture', 'map_linear', 'marching_cubes', 'merge_buffer_geometries', 'merge_vertices', 'rad_to_deg', 'rand_float', 'rand_float_range', 'rand_float_spread', 'rand_int', 'rotate_equirect', 'simplify_geometry', 'splat_points_to_field', 'terrain_from_json', 'terrain_load_config', 'terrain_save_config', 'terrain_to_json', 'voxel_downsample', 'vulkan_available', 'write_wav']
 class AmbientLight(Light):
     def __init__(self, color: Color = ..., intensity: typing.SupportsFloat | typing.SupportsIndex = 1.0) -> None:
         ...
@@ -2576,6 +2576,229 @@ class IcpResult:
         ...
     @property
     def iterations(self) -> int:
+        ...
+class IkOptions:
+    task: IkTask
+    def __init__(self) -> None:
+        ...
+    def __repr__(self) -> str:
+        ...
+    @property
+    def damping(self) -> float:
+        """
+        DLS damping; must be > 0 — it is what lets the solve succeed at a singularity instead of flinging the arm.
+        """
+    @damping.setter
+    def damping(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def max_iterations(self) -> int:
+        ...
+    @max_iterations.setter
+    def max_iterations(self, arg0: typing.SupportsInt | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def max_joint_speed(self) -> float:
+        """
+        Per-call joint speed cap in rad/s or m/s, applied against the joint values as they arrived. Zero disables it; needs a non-zero dt.
+        """
+    @max_joint_speed.setter
+    def max_joint_speed(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def max_orientation_step(self) -> float:
+        """
+        radians
+        """
+    @max_orientation_step.setter
+    def max_orientation_step(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def max_position_step(self) -> float:
+        """
+        Largest correction one iteration will attempt, in metres. A Gauss-Newton step is a LOCAL statement; clamping keeps it inside the trust region. Travel per solve is bounded by max_iterations * step. Zero disables the clamp.
+        """
+    @max_position_step.setter
+    def max_position_step(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def null_space_damping(self) -> float:
+        """
+        Damping for the null-space PROJECTION — much smaller than `damping`, or the posture bias leaks into the tool pose and the arm never reports convergence.
+        """
+    @null_space_damping.setter
+    def null_space_damping(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def orientation_tolerance(self) -> float:
+        """
+        radians
+        """
+    @orientation_tolerance.setter
+    def orientation_tolerance(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def orientation_weight(self) -> float:
+        """
+        Weight on the orientation rows relative to position. Below 1 the solver reaches the point first and straightens up after, which reads as natural motion.
+        """
+    @orientation_weight.setter
+    def orientation_weight(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def position_tolerance(self) -> float:
+        """
+        metres
+        """
+    @position_tolerance.setter
+    def position_tolerance(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def prismatic_step(self) -> float:
+        """
+        Finite-difference probe for prismatic joints (metres).
+        """
+    @prismatic_step.setter
+    def prismatic_step(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def rest_pose(self) -> list[float]:
+        """
+        Rest posture, indexed by GLOBAL dof like every other joint vector.
+        """
+    @rest_pose.setter
+    def rest_pose(self, arg0: collections.abc.Sequence[typing.SupportsFloat | typing.SupportsIndex]) -> None:
+        ...
+    @property
+    def rest_pose_gain(self) -> float:
+        """
+        Null-space rest-posture pull per iteration; zero disables it. Only does anything on a redundant arm.
+        """
+    @rest_pose_gain.setter
+    def rest_pose_gain(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def revolute_step(self) -> float:
+        """
+        Finite-difference probe for revolute joints (radians).
+        """
+    @revolute_step.setter
+    def revolute_step(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def target_axis(self) -> Vector3:
+        """
+        AxisAlign only, in WORLD space.
+        """
+    @target_axis.setter
+    def target_axis(self, arg0: Vector3) -> None:
+        ...
+    @property
+    def tool_axis(self) -> Vector3:
+        """
+        AxisAlign only, in the TOOL frame (+Z is the URDF convention for an approach direction).
+        """
+    @tool_axis.setter
+    def tool_axis(self, arg0: Vector3) -> None:
+        ...
+    @property
+    def tool_offset(self) -> Matrix4:
+        """
+        Flange -> tool centre point (Matrix4). The solve drives the TCP, so a tool of any length or mounting is described here rather than in the URDF.
+        """
+    @tool_offset.setter
+    def tool_offset(self, arg0: Matrix4) -> None:
+        ...
+class IkResult:
+    def __repr__(self) -> str:
+        ...
+    @property
+    def converged(self) -> bool:
+        """
+        Both errors are inside tolerance — judged on the TRUE error, so the step clamp never fakes it.
+        """
+    @property
+    def iterations(self) -> int:
+        ...
+    @property
+    def orientation_error(self) -> float:
+        """
+        radians
+        """
+    @property
+    def position_error(self) -> float:
+        """
+        metres
+        """
+class IkSolver:
+    def __init__(self, robot: Robot, options: IkOptions = ...) -> None:
+        """
+        Damped-least-squares IK over the robot's root-to-end-effector chain.
+        
+        Joint ranges and the solvable DOF set are cached at construction, so a Robot that is re-parsed or given a new end effector needs a fresh solver.
+        """
+    def solve(self, q: collections.abc.Sequence[typing.SupportsFloat | typing.SupportsIndex], target: typing.Any, dt: typing.SupportsFloat | typing.SupportsIndex = 0.0) -> tuple[list[float], IkResult]:
+        """
+        Step q toward placing the tool at `target` (Vector3 = point, Matrix4 = full pose). q is a FULL joint vector indexed by global dof; only `solved_dofs` are modified. Returns (new_q, IkResult) — the input list is left alone. `dt` is used solely by the max_joint_speed cap.
+        """
+    def tool_transform(self, q: collections.abc.Sequence[typing.SupportsFloat | typing.SupportsIndex]) -> Matrix4:
+        """
+        The tool centre point for a joint vector, in the robot's PARENT frame (FK composed with tool_offset). Call robot.update_matrix() first if the robot itself has moved.
+        """
+    @property
+    def options(self) -> IkOptions:
+        """
+        Solver options. Reading gives a COPY — assign back to change them.
+        """
+    @options.setter
+    def options(self, arg1: IkOptions) -> None:
+        ...
+    @property
+    def solved_dofs(self) -> list[int]:
+        """
+        The DOF indices this solver is allowed to move (robot.chain_dofs).
+        """
+class IkTask:
+    """
+    How much of the tool pose the solve must reproduce.
+    
+    Members:
+    
+      Position : 3-DOF: reach the point, any orientation.
+    
+      AxisAlign : 5-DOF: reach the point AND aim the tool axis; spin about that axis is left free — what a drill, a suction cup or a symmetric two-finger grasp wants.
+    
+      Pose : 6-DOF: reproduce the full target transform.
+    """
+    AxisAlign: typing.ClassVar[IkTask]  # value = <IkTask.AxisAlign: 1>
+    Pose: typing.ClassVar[IkTask]  # value = <IkTask.Pose: 2>
+    Position: typing.ClassVar[IkTask]  # value = <IkTask.Position: 0>
+    __members__: typing.ClassVar[dict[str, IkTask]]  # value = {'Position': <IkTask.Position: 0>, 'AxisAlign': <IkTask.AxisAlign: 1>, 'Pose': <IkTask.Pose: 2>}
+    def __eq__(self, other: typing.Any) -> bool:
+        ...
+    def __getstate__(self) -> int:
+        ...
+    def __hash__(self) -> int:
+        ...
+    def __index__(self) -> int:
+        ...
+    def __init__(self, value: typing.SupportsInt | typing.SupportsIndex) -> None:
+        ...
+    def __int__(self) -> int:
+        ...
+    def __ne__(self, other: typing.Any) -> bool:
+        ...
+    def __repr__(self) -> str:
+        ...
+    def __setstate__(self, state: typing.SupportsInt | typing.SupportsIndex) -> None:
+        ...
+    def __str__(self) -> str:
+        ...
+    @property
+    def name(self) -> str:
+        ...
+    @property
+    def value(self) -> int:
         ...
 class ImguiContext:
     def __init__(self, canvas: Canvas, renderer: typing.Any) -> None:
@@ -5788,12 +6011,26 @@ class Robot(Object3D):
         ...
     def joint_values(self, deg: bool = False) -> list[float]:
         ...
+    def set_end_effector(self, link_name: str) -> None:
+        """
+        Retarget FK/IK at the named link. Recomputes the root-to-tool path and therefore `chain_dofs`. Raises if the link is unknown.
+        """
     def set_joint_value(self, index: typing.SupportsInt | typing.SupportsIndex, value: typing.SupportsFloat | typing.SupportsIndex, deg: bool = False) -> None:
         ...
     def set_joint_values(self, values: collections.abc.Sequence[typing.SupportsFloat | typing.SupportsIndex], deg: bool = False) -> None:
         ...
     def show_colliders(self, flag: bool) -> None:
         ...
+    @property
+    def chain_dofs(self) -> list[int]:
+        """
+        DOF indices on the root-to-end-effector path, ascending — the only ones an IkSolver is allowed to move. A gripper's finger joints keep their slots in the joint vector but are not here, so closing the hand can never be mistaken for extra reach.
+        """
+    @property
+    def end_effector_link(self) -> str:
+        """
+        Name of the link FK and IK currently drive.
+        """
     @property
     def num_dof(self) -> int:
         ...
@@ -7288,6 +7525,16 @@ class VulkanRenderer:
         """
         Deferred (RasterFirst) Vulkan renderer. Pass a headless Canvas created with vsync=False.
         """
+    def add_view(self, camera: Camera, width: typing.SupportsInt | typing.SupportsIndex, height: typing.SupportsInt | typing.SupportsIndex) -> int:
+        """
+        Attach a persistent extra view. Every render() then produces the primary AND every added view from one scene build, in a single queue submission — N viewpoints of the SAME simulated instant, which N render() calls cannot give. Each view has its own G-buffer, temporal history and camera state; acceleration structures, lights, materials and probe GI are shared.
+        
+        Views are PERSISTENT: this call drains the device and allocates a full deferred chain, while rendering an existing view every frame is cheap. Do NOT add and remove per frame.
+        
+        Secondary views are deliberately plainer than the primary — native resolution with the built-in temporal resolve, no DLSS/FSR, no occlusion culling, no UI overlay, no depth of field, no lens or sensor model. They are measurement cameras, not the display.
+        
+        Returns a handle (> 0), or 0 if the view could not be created — notably when render() has not run yet, since a view shares the primary's render pass and pipelines.
+        """
     def disable_clouds(self) -> None:
         """
         Turn the volumetric cloud layer off (default).
@@ -7315,6 +7562,10 @@ class VulkanRenderer:
         The handles are OS handles owned by the RENDERER (Win32 NT handles on Windows): import them, but never CloseHandle them from Python — disable_vertex_interop / renderer teardown releases them. The layout is tightly-packed float xyz (12-byte stride, wp.vec3), and *_bytes is the ALLOCATION size, which may exceed count*12 — write only the real range.
         
         validate=True (default) runs a GPU finiteness pass over the exported positions each frame, rewriting non-finite vertices as degenerates. Leave it on unless the producer is trusted: a NaN reaching the BLAS build is a device-lost (GPU reset) on NVIDIA, not an error return.
+        """
+    def hide_view(self, handle: typing.SupportsInt | typing.SupportsIndex) -> bool:
+        """
+        Back to a measurement camera: still rendered, still readable, no longer drawn into the frame.
         """
     def read_albedo(self, scene: Object3D, camera: Camera) -> numpy.typing.NDArray[numpy.uint8]:
         ...
@@ -7373,6 +7624,14 @@ class VulkanRenderer:
         """
     def read_segmentation(self, scene: Object3D, camera: Camera) -> numpy.typing.NDArray[numpy.uint8]:
         ...
+    def read_view_rgb_pixels(self, handle: typing.SupportsInt | typing.SupportsIndex) -> numpy.typing.NDArray[numpy.uint8]:
+        """
+        This view's most recent frame as (H, W, 3) uint8, TOP-LEFT origin — the same convention as read_pixels. Reads the view's own colour image, never the swapchain. An unknown handle gives an empty (0, 0, 3) array.
+        """
+    def remove_view(self, handle: typing.SupportsInt | typing.SupportsIndex) -> bool:
+        """
+        Destroy the view and free everything it owns. False for an unknown handle. Handles are never reused, so a stale one is inert rather than dangerous.
+        """
     def render(self, scene: Object3D, camera: Camera) -> None:
         ...
     def render_aov(self, scene: Object3D, camera: Camera, aov: str) -> numpy.typing.NDArray[numpy.uint8]:
@@ -7463,6 +7722,16 @@ class VulkanRenderer:
         """
         Enable underwater murk (below fog_water_surface_y). density = sigma_t (1/m; 0 disables); color = inscatter tint.
         """
+    def set_view_camera(self, handle: typing.SupportsInt | typing.SupportsIndex, camera: Camera) -> bool:
+        """
+        Repoint a view at a different camera. Treated as a CUT: the view's temporal history is dropped rather than reprojected across a discontinuity that never happened in world space.
+        """
+    def set_view_display_rect(self, handle: typing.SupportsInt | typing.SupportsIndex, x: typing.SupportsInt | typing.SupportsIndex, y: typing.SupportsInt | typing.SupportsIndex, width: typing.SupportsInt | typing.SupportsIndex, height: typing.SupportsInt | typing.SupportsIndex) -> bool:
+        """
+        Picture-in-picture: show this view inside the primary's frame with its top-left corner at (x, y) in window pixels. The image is already resolved, on the device and in the swapchain's format, so this is a single image copy in the frame's own command buffer — no readback, no upload, no texture, no second submission.
+        
+        1:1 ONLY: width/height must equal the size the view was added at, and a mismatch draws NOTHING rather than a filtered rescale. A rect running off the window edge is clipped. Composited after the scene capture and before the UI overlay, so ImGui and screen-space sprites still draw on top.
+        """
     def set_viewport(self, x: typing.SupportsInt | typing.SupportsIndex, y: typing.SupportsInt | typing.SupportsIndex, width: typing.SupportsInt | typing.SupportsIndex, height: typing.SupportsInt | typing.SupportsIndex) -> None:
         ...
     def set_white_balance(self, temperature: typing.SupportsFloat | typing.SupportsIndex = 6500.0, tint: typing.SupportsFloat | typing.SupportsIndex = 0.0) -> None:
@@ -7471,6 +7740,10 @@ class VulkanRenderer:
         """
     def size(self) -> tuple[int, int]:
         ...
+    def view_size(self, handle: typing.SupportsInt | typing.SupportsIndex) -> typing.Any:
+        """
+        Pixel size of a view's output as (width, height), or None if the handle is unknown.
+        """
     @property
     def auto_exposure(self) -> bool:
         """
