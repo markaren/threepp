@@ -267,6 +267,81 @@ if not os.path.exists(URDF):
     URDF = "C:/dev/threepp-data/urdf/franka/fr3.urdf"
 
 
+# --- fit the cage + pads to the REAL fish body (phase 7 defect fix) --------------
+# The procedural FISH_H/FISH_W above are ~half a real fish: the Khronos Barramundi
+# at FISH_LEN=0.24 m is ~92 mm tall and ~60 mm wide once scaled, but the cage was
+# built to the procedural 53 x 41 mm. So the pads closed on a small invisible core
+# while the visible fish ballooned around it and dangled off one corner -- the
+# "empty space between the fish and the gripper" the user saw. Fix: load the model
+# UP FRONT, measure its BODY extents (thin fins excluded via a robust percentile
+# over the central-length vertices), and resize the cage, the spawn height and the
+# pad paddle to the real flesh before anything downstream is built. The procedural
+# path is untouched.
+def load_fish_model(path, length):
+    """Load a glTF fish mesh; return (verts, faces, uv, material) with the verts
+    in the procedural template frame: length along +X, up +Y, centred at the
+    origin, scaled so the long axis is `length` metres. The model's length runs
+    along +Z, so a +90 deg rotation about Y (proper, winding preserved) maps it
+    to +X. The mesh is NOT vendored -- this only runs when --fish-model is given."""
+    root = tp.GLTFLoader().load(path).scene
+    found = []
+
+    def rec(o):
+        if isinstance(o, tp.Mesh):
+            found.append(o)
+        for ch in o.children:
+            rec(ch)
+
+    rec(root)
+    mesh = found[0]
+    mesh.update_matrix_world(True)
+    g = mesh.geometry
+    P = np.asarray(g.get_attribute("position"), np.float64).reshape(-1, 3)
+    uv = np.asarray(g.get_attribute("uv"), np.float32).reshape(-1, 2)
+    faces = np.asarray(g.get_index(), np.int64).reshape(-1, 3).astype(np.int32)
+    M = np.asarray(mesh.matrix_world.to_numpy(), np.float64).reshape(4, 4)
+    Pw = (M[:3, :3] @ P.T).T + M[:3, 3]                  # bake the node transform
+    Ry90 = np.array([[0, 0, 1], [0, 1, 0], [-1, 0, 0]], np.float64)   # +Z -> +X
+    Pr = (Ry90 @ Pw.T).T
+    Pr -= 0.5 * (Pr.max(0) + Pr.min(0))                  # centre at origin
+    scale = length / (Pr[:, 0].max() - Pr[:, 0].min())
+    return (Pr * scale).astype(np.float32), faces, uv, mesh.material
+
+
+FISH_MODEL_CACHE = None
+if FISH_MODEL and os.path.exists(FISH_MODEL):
+    FISH_MODEL_CACHE = load_fish_model(FISH_MODEL, FISH_LEN)
+    _rv = FISH_MODEL_CACHE[0]
+    _body = _rv[np.abs(_rv[:, 0]) < 0.40 * FISH_LEN]     # drop the caudal (tail fin)
+    if len(_body) < 16:
+        _body = _rv
+    # Robust body half-extents: a high percentile of |y| / |z| over the central
+    # body verts, so the thin dorsal/anal/pectoral fins do not inflate the cage.
+    _bh = 2.0 * float(np.percentile(np.abs(_body[:, 1]), 92.0))
+    _bw = 2.0 * float(np.percentile(np.abs(_body[:, 2]), 92.0))
+    _old_h, _old_w = FISH_H, FISH_W
+    # WIDTH is the grasp axis and the source of the user's gap: match it to the
+    # real flank so both pads bite the flesh with no side gap.
+    FISH_W = _bw
+    # HEIGHT: the fish is spawned STANDING (flanks facing the pads) so the 48 mm
+    # width fits the 80 mm hand. A tall-narrow ellipsoid standing on its belly is
+    # an egg on its end -- unstable -- and a full-height (91 mm) cage tips onto its
+    # flank during the settle and escapes the jaws (measured). So cap the cage's
+    # cross-section aspect near the procedural fish's (which stayed upright): the
+    # render still shows the full 91 mm body (its top/bottom extrapolate off the
+    # cage and droop upright, exactly as before this fix), while the physics cage
+    # stays stable AND fills the flank the pads actually close on.
+    STAND_ASPECT = 1.15
+    FISH_H = min(_bh, STAND_ASPECT * FISH_W)
+    FISH_P = (TRAY_C[0], TRAY_Y + FISH_H * 0.5, TRAY_C[1])
+    # The pad paddle (FIN_LEN along the tool axis, FIN_WIDTH along the fish) already
+    # spans a 55 mm cage flank comfortably -- 60 mm tall, 110 mm along the body --
+    # so it is left at its tuned size; growing it just buckled the thin skins.
+    print(f"  fish-model body extents: real body {_bh * 1000:.0f} x {_bw * 1000:.0f} mm -> "
+          f"cage {FISH_H * 1000:.0f} x {FISH_W * 1000:.0f} mm "
+          f"(procedural was {_old_h * 1000:.0f} x {_old_w * 1000:.0f} mm)")
+
+
 # --- [B] robot ------------------------------------------------------------------
 
 robot = tp.URDFLoader().load(URDF)
@@ -482,38 +557,9 @@ FIN_TOTAL = len(positions)
 # The drawn surface is skinned off the cage. By default it is the tapered
 # ellipsoid (self-contained, runs anywhere); with --fish-model it is a glTF fish
 # (the Khronos Barramundi) bound to the SAME body-sized tet cage, so the FEM and
-# the grasp are identical -- only the skin changes.
-def load_fish_model(path, length):
-    """Load a glTF fish mesh; return (verts, faces, uv, material) with the verts
-    in the procedural template frame: length along +X, up +Y, centred at the
-    origin, scaled so the long axis is `length` metres. The model's length runs
-    along +Z, so a +90 deg rotation about Y (proper, winding preserved) maps it
-    to +X. The mesh is NOT vendored -- this only runs when --fish-model is given."""
-    root = tp.GLTFLoader().load(path).scene
-    found = []
-
-    def rec(o):
-        if isinstance(o, tp.Mesh):
-            found.append(o)
-        for ch in o.children:
-            rec(ch)
-
-    rec(root)
-    mesh = found[0]
-    mesh.update_matrix_world(True)
-    g = mesh.geometry
-    P = np.asarray(g.get_attribute("position"), np.float64).reshape(-1, 3)
-    uv = np.asarray(g.get_attribute("uv"), np.float32).reshape(-1, 2)
-    faces = np.asarray(g.get_index(), np.int64).reshape(-1, 3).astype(np.int32)
-    M = np.asarray(mesh.matrix_world.to_numpy(), np.float64).reshape(4, 4)
-    Pw = (M[:3, :3] @ P.T).T + M[:3, 3]                  # bake the node transform
-    Ry90 = np.array([[0, 0, 1], [0, 1, 0], [-1, 0, 0]], np.float64)   # +Z -> +X
-    Pr = (Ry90 @ Pw.T).T
-    Pr -= 0.5 * (Pr.max(0) + Pr.min(0))                  # centre at origin
-    scale = length / (Pr[:, 0].max() - Pr[:, 0].min())
-    return (Pr * scale).astype(np.float32), faces, uv, mesh.material
-
-
+# the grasp are identical -- only the skin changes. load_fish_model() is defined
+# up top, since --fish-model resizes the cage + pads to the real body before the
+# fingers and cage are built.
 unit, fish_faces_t = icosphere(FISH_SUBDIV)
 
 
@@ -623,8 +669,8 @@ FISH_HALF_W = float(np.abs(fish_tmpl[_near, 2]).max())
 # (the barramundi's fins) extrapolate from their nearest cell and deform with
 # the flesh -- no separate fin rig needed for the glTF skin.
 gltf_mat = None
-if FISH_MODEL and os.path.exists(FISH_MODEL):
-    render_v, render_faces, render_uv, gltf_mat = load_fish_model(FISH_MODEL, FISH_LEN)
+if FISH_MODEL_CACHE is not None:
+    render_v, render_faces, render_uv, gltf_mat = FISH_MODEL_CACHE   # loaded up top
     render_normals0 = None
 else:
     if FISH_MODEL:
@@ -1237,6 +1283,7 @@ seg_i, seg_t = 0, 0.0
 finger_cmd = FINGER_OPEN
 grip_force = 0.0
 grip_held = False
+_close_diag_pending = False    # print the pad/fish gap the frame the close completes
 sim_t = 0.0
 tcp_prev = None
 slip_peak = 0.0
@@ -1285,7 +1332,7 @@ begin_segment(0)
 def advance_task(dt):
     """Joint-space quintic between IK-solved waypoints; the fingers are a
     separate, force-controlled drive."""
-    global seg_i, seg_t, q_cur, finger_cmd, grip_held
+    global seg_i, seg_t, q_cur, finger_cmd, grip_held, _close_diag_pending
     name = PLAN[seg_i][0]
     dur = PLAN[seg_i][2]
     seg_t += dt
@@ -1305,6 +1352,7 @@ def advance_task(dt):
             finger_cmd = max(FINGER_STOP, finger_cmd - CLOSE_V * dt)
         elif not grip_held:
             grip_held = True
+            _close_diag_pending = True
             why = "force" if grip_hi_n >= GRIP_CONFIRM else "backstop"
             finger_cmd = max(FINGER_MIN, finger_cmd - SQUEEZE)
             report["grip_N"] = grip_force
@@ -1361,9 +1409,36 @@ def fem_diag(cage_pos):
     return float(ratio.max()), float(np.percentile(ratio, 99.0)), float(np.abs(detf - 1.0).max())
 
 
+def pad_gap_diag(tag):
+    """Print, for BOTH fingers, the pad inner-face (front-skin) centroid and the
+    minimum surface gap from that pad to the nearest fish tet-cage vertex, plus
+    the fish cage bbox+centroid and the render-mesh bbox. The surface gap is the
+    centre-to-centre distance less the two contact radii, so <~3 mm means the pad
+    is genuinely biting the flank rather than closing on a small hidden core with
+    the visible fish ballooning around it. This is the acceptance measurement for
+    the gripper-fish gap defect."""
+    xp = x.numpy()
+    cage = xp[FISH_BASE:FISH_BASE + CAGE_N]
+    cmin, cmax, cc = cage.min(0), cage.max(0), cage.mean(0)
+    rv = fish_v.numpy()
+    rmin, rmax = rv.min(0), rv.max(0)
+    contact_r = PART_R + CAGE_R
+    print(f"  [gap:{tag:5s}] cage bbox ({cmin[0]:.3f},{cmin[1]:.3f},{cmin[2]:.3f})"
+          f"..({cmax[0]:.3f},{cmax[1]:.3f},{cmax[2]:.3f}) c=({cc[0]:.3f},{cc[1]:.3f},{cc[2]:.3f})"
+          f" render bbox ({rmin[0]:.3f},{rmin[1]:.3f},{rmin[2]:.3f})..({rmax[0]:.3f},{rmax[1]:.3f},{rmax[2]:.3f})")
+    for k in (0, 1):
+        b = k * FIN_N
+        pad = xp[b:b + FIN_ROWS * FIN_COLS]          # front skin = the inner face
+        pc = pad.mean(0)
+        d = np.sqrt(((pad[:, None, :] - cage[None, :, :]) ** 2).sum(-1))
+        gap = float(d.min()) - contact_r
+        print(f"  [gap:{tag:5s}] finger {k} pad-face c=({pc[0]:+.3f},{pc[1]:+.3f},{pc[2]:+.3f})"
+              f" min surface gap {gap * 1000:+5.1f} mm")
+
+
 def step_frame():
     """One 60 fps frame: task -> robot -> pins -> substeps -> surfaces."""
-    global grip_force, sim_t, tcp_prev, slip_peak, slip_mean, slip_n
+    global grip_force, sim_t, tcp_prev, slip_peak, slip_mean, slip_n, _close_diag_pending
     t0 = time.perf_counter()
     phase = advance_task(1.0 / FPS)
     set_q(q_cur)
@@ -1435,6 +1510,11 @@ def step_frame():
               f"c=({c[0]:.3f}, {c[1]:.3f}, {c[2]:.3f}) touch {ncon} "
               f"| carriage {finger_cmd * 1000:.1f} mm "
               f"| FEM stretch p99 {p99:.2f} max {stretch:.2f} max|detF-1| {detdev:.2f}")
+        if phase in ("LIFT", "CARRY"):
+            pad_gap_diag(phase)
+    if _close_diag_pending:
+        pad_gap_diag("CLOSE")
+        _close_diag_pending = False
     sim_t += 1.0 / FPS
     fin_np, fin_nn = fin_pos.numpy(), fin_nrm.numpy()
     fish_np, fish_nn = fish_pos.numpy(), fish_nrm.numpy()
