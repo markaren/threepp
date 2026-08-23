@@ -2195,9 +2195,10 @@ def step_frame():
     fish_geo.update_attribute("normal", fish_nn)
     fins_geo.update_attribute("position", finf_pos.numpy())
     fins_geo.update_attribute("normal", finf_nrm.numpy())
-    if fem_wire.visible:
+    if _fem_state["mode"] > 0:
         _cage_now = x.numpy()[FISH_BASE:FISH_BASE + CAGE_N]
-        fem_geo.update_attribute("position", np.ascontiguousarray(_cage_now[_e.reshape(-1)]))
+        _w, _g, _edges = fem_wires[_fem_state["mode"] - 1]
+        _g.update_attribute("position", np.ascontiguousarray(_cage_now[_edges.reshape(-1)]))
     for _ey, _ci in zip(eyes, EYE_CORNER):
         _p = fish_np[_ci]
         _ey.position.set(float(_p[0]), float(_p[1]), float(_p[2]))
@@ -2516,14 +2517,33 @@ scene.add(fish_mesh)
 # FEM debug view: the tet cage's 2430 unique edges as line segments riding the
 # live cage nodes, plus a translucent skin so you can see the flesh through it.
 # --fem-view starts with it on; F cycles skin+wire -> wire only -> normal.
-fem_geo = tp.BufferGeometry()
-fem_geo.set_attribute("position", cage_p0[_e.reshape(-1)].astype(np.float32))
+# Two edge sets. Mode 1 draws the cage's BOUNDARY QUAD GRID -- the axis-aligned
+# edges whose endpoints touch a non-solid cell -- which reads as the voxel
+# surface ("squares") without the interior/diagonal clutter; mode 2 draws every
+# tet edge with the skin hidden. Both are x-ray (no depth test): a depth-tested
+# wire is clipped by the opaque skin wherever the skin stands proud of the cage
+# and the lattice reads as "missing squares" (runtime opacity cannot re-sort a
+# material into Vulkan's transparent pass, so the skin never turns translucent).
+_nid = np.stack(np.nonzero(CAGE_ID >= 0), 1)                     # node -> (i,j,k)
+_solidp = np.zeros(tuple(np.array(CAGE_SOLID.shape) + 2), bool)
+_solidp[1:-1, 1:-1, 1:-1] = CAGE_SOLID
+_bnode = ~np.stack([_solidp[_nid[:, 0] + di, _nid[:, 1] + dj, _nid[:, 2] + dk]
+                    for di in (0, 1) for dj in (0, 1) for dk in (0, 1)]).all(0)
+_rest_e = np.linalg.norm(cage_v[_e[:, 0]] - cage_v[_e[:, 1]], axis=1)
+_e_surf = _e[(_rest_e < 1.05 * CAGE_H) & _bnode[_e[:, 0]] & _bnode[_e[:, 1]]]
 fem_mat = tp.LineBasicMaterial()
 fem_mat.color = tp.Color(0x27e58a)
-fem_wire = tp.LineSegments(fem_geo, fem_mat)
-fem_wire.frustum_culled = False
-fem_wire.visible = False
-scene.add(fem_wire)
+fem_mat.depth_test = False
+fem_wires = []
+for _edges in (_e_surf, _e):
+    g = tp.BufferGeometry()
+    g.set_attribute("position", cage_p0[_edges.reshape(-1)].astype(np.float32))
+    w = tp.LineSegments(g, fem_mat)
+    w.frustum_culled = False
+    w.visible = False
+    scene.add(w)
+    fem_wires.append((w, g, _edges))
+print(f"  fem view: {len(_e_surf)} surface-grid edges / {len(_e)} tet edges")
 _fem_state = {"mode": 0, "opacity": float(getattr(fish_mat, "opacity", 1.0)),
               "transparent": bool(getattr(fish_mat, "transparent", False))}
 
@@ -2532,7 +2552,8 @@ def set_fem_view(mode):
     """0 = normal render, 1 = translucent skin + tet wireframe, 2 = wireframe only."""
     _fem_state["mode"] = mode % 3
     m = _fem_state["mode"]
-    fem_wire.visible = m > 0
+    fem_wires[0][0].visible = m == 1
+    fem_wires[1][0].visible = m == 2
     fish_mesh.visible = m < 2
     fish_mat.transparent = _fem_state["transparent"] or m == 1
     fish_mat.opacity = 0.35 if m == 1 else _fem_state["opacity"]
