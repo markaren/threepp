@@ -86,6 +86,13 @@ CAM = cli_arg("--cam", "wide", str)          # wide | macro | top
 # example runs on any machine; pass --fish-model to skin a glTF fish (the
 # Khronos Barramundi) off the same tet cage. The mesh is NOT vendored.
 FISH_MODEL = cli_arg("--fish-model", "", str)
+# Environment: a real HDRI (Poly Haven empty_warehouse_01) turns the stainless
+# from flat paint into a mirror of an actual room and lights the whole cell by
+# IBL. The committed example falls back to the tiny procedural studio env when
+# the .hdr is absent, so it still runs anywhere; the .hdr is NOT vendored.
+_ENV_DEFAULT = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                            "assets", "empty_warehouse_01_2k.hdr")
+ENV_HDRI = cli_arg("--env-hdri", _ENV_DEFAULT if os.path.exists(_ENV_DEFAULT) else "", str)
 SLOWMO = "--no-slowmo" not in sys.argv
 PIP = "--no-pip" not in sys.argv
 DOF = "--dof" in sys.argv                    # see the note at the renderer setup
@@ -684,6 +691,39 @@ FISH_NV, FISH_NF = len(render_v), len(render_faces)
 skin_ids, skin_w = bind_lattice(render_v.astype(np.float64), CAGE_LO, CAGE_H,
                                 CAGE_DIMS, CAGE_SOLID, CAGE_ID)
 _bind_err = np.linalg.norm((cage_v[skin_ids] * skin_w[:, :, None]).sum(1) - render_v, axis=1)
+
+# Grasp station = the fish's REAL centre of mass along its length. The cage is a
+# symmetric taper, so its centroid sits mid-body; a real fish (the Barramundi) is
+# head-heavy, so gripping the cage centroid grips BEHIND the mass and the head
+# hangs forward out of the jaws. Estimate the body COM as the area-weighted
+# centroid of the render mesh: slice along x, weight each slice by its y*z extent
+# (proportional to cross-section), which for uniform density is the COM. Then a
+# manual --grasp-shift (+x toward the head) is available for the last nudge.
+GRASP_SHIFT = cli_arg("--grasp-shift", 0.0, float)
+if USE_GLTF:
+    _xs = render_v[:, 0]
+    _nb = 24
+    _edges = np.linspace(_xs.min(), _xs.max(), _nb + 1)
+    _bi = np.clip(np.digitize(_xs, _edges) - 1, 0, _nb - 1)
+    _wsum = _xc = 0.0
+    for _b in range(_nb):
+        _m = _bi == _b
+        if _m.sum() < 3:
+            continue
+        _v = render_v[_m]
+        _area = (_v[:, 1].max() - _v[:, 1].min()) * (_v[:, 2].max() - _v[:, 2].min())
+        _cx = 0.5 * (_edges[_b] + _edges[_b + 1])
+        _xc += _area * _cx
+        _wsum += _area
+    FISH_COM_X = float(_xc / _wsum) if _wsum > 0 else float(cage_v[:, 0].mean())
+GRASP_X = FISH_P[0] + FISH_COM_X + GRASP_SHIFT
+# Re-measure the backstop half-width at the (possibly moved) grasp station.
+_near = np.abs(render_v[:, 0] - (FISH_COM_X + GRASP_SHIFT)) < 0.014
+if _near.sum() >= 3:
+    FISH_HALF_W = float(np.abs(render_v[_near, 2]).max())
+print(f"  grasp station: COM_x {FISH_COM_X * 1000:+.0f} mm from body centre, "
+      f"half-width {FISH_HALF_W * 1000:.0f} mm"
+      + (f" (+{GRASP_SHIFT * 1000:.0f} mm shift)" if GRASP_SHIFT else ""))
 
 # NEO-HOOKEAN FEM. No distance edges, no volume row, no spine chords -- the tet
 # cage is a real elastic solid. Per tet we precompute the rest inverse shape
@@ -1573,7 +1613,10 @@ def _set(name, value):
 # f/2.8 1/60 ISO 200 renders it essentially black (measured). Auto exposure for
 # every rig; MACRO keeps only the depth of field, driven by focus_distance.
 _set("auto_exposure", True)
-_try(renderer.set_auto_exposure_range, 0.15, 3.0)
+# A real HDRI is far brighter than the procedural env (its windows are ~physical
+# daylight), so the auto-exposure needs room to stop down or the frame blooms.
+_ae_lo = 0.03 if (ENV_HDRI and os.path.exists(ENV_HDRI)) else 0.15
+_try(renderer.set_auto_exposure_range, _ae_lo, 3.0)
 # Depth of field is OFF by default even on MACRO (`--dof` forces it on). The
 # renderer's circle of confusion is resolved at a lower rate than the frame, so
 # every depth discontinuity -- the hand against the table, the crate rims --
@@ -1623,11 +1666,25 @@ def studio_env(h=128, w=256):
 
 
 env_tex = None
+env_is_hdri = False
 try:
-    env_tex = tp.float_texture(studio_env())
-    scene.environment = env_tex
+    if ENV_HDRI and os.path.exists(ENV_HDRI):
+        env_tex = tp.RGBELoader().load(ENV_HDRI)
+        env_is_hdri = True
+        scene.environment = env_tex
+        scene.background = env_tex               # show the real room behind the cell
+        print(f"  environment: {os.path.basename(ENV_HDRI)} (HDRI, IBL + backdrop)")
+    else:
+        env_tex = tp.float_texture(studio_env())
+        scene.environment = env_tex
 except Exception as _e:                              # noqa: BLE001
     print(f"  note: environment unavailable ({_e})")
+    try:
+        env_tex = tp.float_texture(studio_env())
+        scene.environment = env_tex
+        env_is_hdri = False
+    except Exception:                               # noqa: BLE001
+        pass
 
 camera = tp.PerspectiveCamera(42 if CAM != "macro" else 34, canvas.aspect(), 0.03, 40)
 CAM_HOME = {"wide": ((1.30, 0.72, 0.92), (0.30, 0.20, 0.0)),
@@ -1659,13 +1716,18 @@ def aim_camera(tcp):
 
 # RobotCell's base (cool skylight + one clean white sun) plus a warm key from
 # front-left. The phase-1/2 frames were dark in the back half; this is the
-# "clean bright cell" the brief asks for.
-scene.add(tp.HemisphereLight(0xcfe0ff, 0x2a2e33, 0.9))
+# "clean bright cell" the brief asks for. When a real HDRI is lighting the scene
+# it already supplies the fill and the reflections, so the hemisphere/key are
+# pulled right down and only the sun stays for a crisp contact shadow -- feeding
+# them at full strength on top of the HDRI just washes the frame out.
+_hemi_i = 0.20 if env_is_hdri else 0.9
+_key_i = 0.35 if env_is_hdri else 1.5
+scene.add(tp.HemisphereLight(0xcfe0ff, 0x2a2e33, _hemi_i))
 sun = tp.DirectionalLight(0xeaf2ff, 2.0)
 sun.position.set(-0.8, 3.0, 1.0)
 sun.cast_shadow = True
 scene.add(sun)
-key = tp.DirectionalLight(0xffe0c0, 1.5)
+key = tp.DirectionalLight(0xffe0c0, _key_i)
 key.position.set(1.8, 1.4, 1.6)
 scene.add(key)
 
@@ -1696,13 +1758,18 @@ for cc in (CRATE_C, CRATE2_C):
         wall.cast_shadow = True
         scene.add(wall)
 
-backdrop = tp.Mesh(tp.PlaneGeometry(8, 4), standard_material(0x50606e, 0.95))
-backdrop.position.set(-0.6, 1.2, -1.6)
-scene.add(backdrop)
-side_wall = tp.Mesh(tp.PlaneGeometry(6, 4), standard_material(0x50606e, 0.95))
-side_wall.position.set(-1.6, 1.2, 0.0)
-side_wall.rotation.y = math.pi / 2
-scene.add(side_wall)
+# The painted backdrop/side wall exist only to give the PROCEDURAL env something
+# to stand in front of. With a real HDRI they do the opposite -- they box the
+# scene in and hide the warehouse the environment is showing -- so skip them and
+# let the HDRI be the backdrop.
+if not env_is_hdri:
+    backdrop = tp.Mesh(tp.PlaneGeometry(8, 4), standard_material(0x50606e, 0.95))
+    backdrop.position.set(-0.6, 1.2, -1.6)
+    scene.add(backdrop)
+    side_wall = tp.Mesh(tp.PlaneGeometry(6, 4), standard_material(0x50606e, 0.95))
+    side_wall.position.set(-1.6, 1.2, 0.0)
+    side_wall.rotation.y = math.pi / 2
+    scene.add(side_wall)
 
 scene.add(robot)
 
