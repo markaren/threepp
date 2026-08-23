@@ -42,7 +42,7 @@ SHOT_TIME = cli_arg("--shot", 3.2, float)
 FRAMES = cli_arg("--frames", 0, int)
 BENCH = FRAMES > 0
 WIDTH, HEIGHT = parse_size(cli_arg("--size", "1280x720", str))
-F_GRASP = cli_arg("--grip-force", 4.0, float)
+F_GRASP = cli_arg("--grip-force", 9.0, float)
 HEADLESS = SHOT or BENCH
 
 # --- solver tunables ------------------------------------------------------------
@@ -51,6 +51,7 @@ FPS = 60.0
 DT = 1.0 / 240.0
 SUBSTEPS = 4
 ITERATIONS = 12
+VOLUME_PASSES = 1     # the fish's pressure row; >1 measured WORSE, see the plan
 DAMPING = 0.04
 GRAVITY = wp.vec3(0.0, -9.81, 0.0)
 RELAX = 0.5
@@ -58,21 +59,24 @@ RELAX = 0.5
 # Fin Ray split: the skins are structural, the diagonals are the compliance.
 STIFF_SKIN = 1.0
 STIFF_RIB = 0.7
-STIFF_DIAG = 0.20
+STIFF_DIAG = 0.35
 STIFF_EDGE = 1.0      # fish shell stretch
 STIFF_BEND = 0.20     # fish shell bending: low, so it flops
 
-# Contact radius. It has to be a good fraction of the closing travel, not a
-# fraction of the particle spacing: the fish is a hollow SHELL, so a pad that
-# gets past the surface vertices finds nothing inside to push on and sails
-# straight through. A radius the pads cannot out-run in one close is what
-# stops the tunnel.
-PART_R = 0.006
+# Contact radius, and it is a CLEARANCE budget as much as a collision one: the
+# pads' effective surface stands PART_R proud of the particles, so a fat radius
+# means the open hand is already pressing the fish as it descends and ploughs
+# it out of the way before the close begins. Small enough to descend around the
+# fish; the tunnelling it invites (the fish is a hollow SHELL -- a pad that gets
+# inside finds nothing to push on) is bought off by rebuilding the contact list
+# every substep and closing slowly enough that a pad moves << PART_R between
+# rebuilds.
+PART_R = 0.0035
 CONTACT_R = 2.0 * PART_R
 CONTACT_CAP = 10
 CONTACT_MARGIN = 1.4
 
-MU_PAD = 0.6          # silicone pad on wet fish
+MU_PAD = 0.85         # silicone pad on wet fish
 MU_STEEL = 0.25       # fish on the stainless tray / table
 MU_CRATE = 0.35
 
@@ -89,17 +93,30 @@ CRATE_RIM = 0.20
 TRAY_CX, TRAY_CZ = float(TRAY_C[0]), float(TRAY_C[1])
 CRATE_CX, CRATE_CZ = float(CRATE_C[0]), float(CRATE_C[1])
 
-FISH_LEN, FISH_H, FISH_W = 0.30, 0.062, 0.046
-FISH_MASS = 0.35
+# A herring, not a salmon. The stock FR3 hand opens to 8 cm, so a 30 cm fish
+# is wider than the pads can wrap and pinching it at mid-body just squirts the
+# body out to the ends. Sized to what this hand can actually close around.
+FISH_LEN, FISH_H, FISH_W = 0.22, 0.055, 0.040
+FISH_MASS = 0.16
 FISH_SUBDIV = 3
 FISH_P = (TRAY_C[0], TRAY_Y + FISH_H * 0.5, TRAY_C[1])
 
 # Fin Ray finger, in the TCP frame: length along the tool axis (+z), width
 # across the grasp (x), the two skins separated in y.
-FIN_ROWS, FIN_COLS = 12, 5
+# Particle spacing has to be FINER than the contact diameter or the pad is a
+# sieve: the fish bulges through the gaps between pad particles and the grip
+# leaks. 14 x 9 over 50 x 75 mm puts the nodes ~6 mm apart against a 7 mm
+# contact diameter.
+FIN_ROWS, FIN_COLS = 14, 9
 FIN_Z0, FIN_LEN = -0.045, 0.075   # root at the carriage, tip 30 mm past the TCP
-FIN_WIDTH = 0.020                 # across the grasp
+FIN_WIDTH = 0.050                 # across the grasp
 FIN_SKIN_IN = 0.004               # front skin, inboard of the carriage origin
+# The tip hooks INWARD. Two flat plates pinching a floppy shell is not a grasp:
+# the fish squirts out along its own length and the pads never stop it. Curving
+# the last third of the front skin toward the other finger puts a lip under the
+# fish, which is form closure -- the fish has to deform its way OUT to escape,
+# not merely slide.
+FIN_CURL = 0.013
 FIN_SKIN_OUT = 0.010              # back skin, outboard
 # Heavy relative to the fish ON PURPOSE. The contact correction is split by
 # inverse mass, so a light pad simply gets shoved aside by the fish instead of
@@ -142,7 +159,7 @@ FINGER_OPEN, FINGER_SHUT = 0.04, 0.0
 # 4.6 cm across, so the whole useful travel is about a centimetre; without a
 # floor under the force control a soft fish just gets squeezed out sideways
 # rather than pushing back, and the carriages run to zero.
-FINGER_MIN = 0.030
+FINGER_MIN = 0.024
 
 ik_opts = tp.IkOptions()
 ik_opts.task = tp.IkTask.Pose
@@ -216,7 +233,8 @@ def fin_ray_particles(k):
         z = FIN_Z0 + FIN_LEN * i / (FIN_ROWS - 1)
         for j in range(FIN_COLS):
             x = CARRIAGE_TCP[k][0] + FIN_WIDTH * (j / (FIN_COLS - 1) - 0.5)
-            pts[i, j, 0] = (x, y_c - s * FIN_SKIN_IN, z)   # front (inboard)
+            hook = FIN_CURL * max(0.0, z / 0.030) ** 2 if z > 0.0 else 0.0
+            pts[i, j, 0] = (x, y_c - s * (FIN_SKIN_IN + hook), z)   # front (inboard)
             pts[i, j, 1] = (x, y_c + s * FIN_SKIN_OUT, z)  # back (outboard)
     return pts
 
@@ -589,13 +607,18 @@ def substep_body():
                   inputs=[pa, pb, prev, offsets, indices, rests, stiffs, cont_idx, cont_n,
                           invm, mu_arr, pad_arr, body_arr, 1, F_SCALE, pad_force])
         pa, pb = pb, pa
-    vol.zero_()
-    sumsq.zero_()
-    grad.zero_()
-    wp.launch(fish_volume_grad, dim=FISH_NF, device=device, inputs=[pa, fish_tris_d, vol, grad])
-    wp.launch(fish_grad_sumsq, dim=FISH_NV, device=device, inputs=[grad, FISH_BASE, sumsq])
-    wp.launch(fish_volume_apply, dim=FISH_NV, device=device,
-              inputs=[pa, grad, vol, sumsq, FISH_V0, FISH_BASE])
+    # The volume constraint is ONE global row over 642 vertices, so a single
+    # application barely dents a squeeze; a fish that deflates to a puddle
+    # presents only its bottom centimetre to a pad whose useful length is
+    # seven, which is most of why an early grasp came away empty.
+    for _ in range(VOLUME_PASSES):
+        vol.zero_()
+        sumsq.zero_()
+        grad.zero_()
+        wp.launch(fish_volume_grad, dim=FISH_NF, device=device, inputs=[pa, fish_tris_d, vol, grad])
+        wp.launch(fish_grad_sumsq, dim=FISH_NV, device=device, inputs=[grad, FISH_BASE, sumsq])
+        wp.launch(fish_volume_apply, dim=FISH_NV, device=device,
+                  inputs=[pa, grad, vol, sumsq, FISH_V0, FISH_BASE])
     wp.launch(statics, dim=NP, device=device, inputs=[pa, prev, invm])
     wp.copy(x, pa)
 
@@ -633,8 +656,8 @@ WP_OUT = (CRATE_C[0], 0.36, CRATE_C[1])
 PLAN = [("SETTLE", None, 0.4),
         ("PREGRASP", WP_PRE, 1.1),
         ("DESCEND", WP_GRASP, 1.0),
-        ("CLOSE", None, 1.6),
-        ("LIFT", WP_LIFT, 1.2),
+        ("CLOSE", None, 1.8),
+        ("LIFT", WP_LIFT, 1.8),
         ("CARRY", WP_CARRY, 1.6),
         ("LOWER", WP_LOWER, 1.1),
         ("OPEN", None, 0.8),
@@ -654,7 +677,7 @@ tcp_prev = None
 slip_peak = 0.0
 slip_mean, slip_n = 0.0, 0
 report = {}
-CLOSE_V = 0.030          # m/s per carriage
+CLOSE_V = 0.018          # m/s per carriage
 SQUEEZE = 0.002          # extra bite once the threshold trips
 
 
