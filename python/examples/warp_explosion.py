@@ -71,17 +71,61 @@ instantiated afterwards. Everything you see later is that same matter evolving.
   dust   Born on the ground annulus at the shock radius r = c*t while the front
          is still crossing the yard (~0.9 s), so the ring races outward ahead
          of the debris for free. DensityRepr only.
-  ring   The Wilson cloud: a thin condensation shell ON the front, emitted at
-         r = C_FRONT*t AND thrown outward at C_FRONT so each parcel rides the
-         wave for the quarter second it lives instead of being left behind as a
-         widening band. Bright, translucent, above the dust skirt -- the only
-         part of a shockwave you can actually photograph. DensityRepr only.
-  ember  A tight 0.4 s spawn, then long-lived embers that arc, land and burn
-         out. Additive billboards. Not the analytic emitter, which cannot
-         express a one-shot burst at all -- see the note at the field.
+  ring   The Wilson cloud: a thin condensation shell ON the front, and a DOME
+         rather than a curtain -- it stands taller as it grows and is packed
+         toward its own foot. The front DECAYS (speed = C_FRONT * e^(-t/1.2),
+         so radius asymptotes instead of scaling at a constant rate like a
+         script), and each parcel is launched at the local front speed with a
+         drag equal to that decay, so it rides the wave for the quarter second
+         it lives instead of being left behind as a widening band. Bright,
+         translucent, above the dust skirt -- the only part of a shockwave you
+         can actually photograph. DensityRepr only.
+  ember  A 0.12 s throw of ballistic sparks that arc, land and burn out.
+         Additive billboards, one FIELD per burst so each population dims on
+         its own clock. Not the analytic emitter, which cannot express a
+         one-shot burst at all -- see the note at the field.
   flare  A small hot subset of the burst carrying the additive billboard flash
          with its own bloom pyramid. 15 M additive quads is not a look, it is
          a fill-rate accident; a quarter million of them is the sparkle.
+
+THE VOLUMES FOLLOW THE MATTER. A DensityRepr contributes nothing outside its
+box -- the scatter SKIPS a particle out there, it does not clamp it -- and all
+four boxes used to be nailed down (three at the world origin, the fireball's at
+whatever --charge said, which --charges never wrote back). An expanding ring
+poking through the four flat walls of a 66 m square around the origin is
+amputated there, and what is left is four arcs in the corners of an axis-aligned
+square over a floor whose grid rules run the same way: "the shockwave is locked
+to a grid around world center". `center` and `half_extent` are per-frame writes
+by design, so all four now track their own matter -- the fireball the newest
+live charge, the ring and the dust skirt the union of the live fronts, the
+plume its own measured centroid. Moving a box changes the voxel SIZE, and the
+splat is per-voxel OCCUPANCY, so sigma is scaled as 1/h^2 to hold the optical
+depth the march integrates invariant while the box breathes. Get that law
+wrong and the ring flashes opaque the moment the box is small.
+
+And the plume's box GROWS, which is the counter-intuitive half: parcels per
+voxel is the only thing the density splat measures, and it collapsed 117 -> 3
+between t=5 and t=11 because the plume inflated elevenfold inside a box whose
+voxels never changed. Three parcels a voxel is not a medium, it is visible
+discrete scatter -- which is why the old column dissolved into a sparse point
+cloud and then blinked out. It now grows with the plume, fades out on a
+field-wide sigma ramp instead of being deleted, and shreds as it ages (the curl
+stir grows with a parcel's own age and gains a finer octave). There is ambient
+wind, too, so the head leans downwind and shears against the still stem instead
+of standing as a perfectly axisymmetric fountain over its own crater.
+
+THE YARD IS SOLID. A gas parcel used to collide with exactly one thing, a flat
+plane at y = 0.10 m: smoke went through the house, the bunker, the chimney and
+the pipe rack as if they were not there. A coarse signed-distance field is
+baked ONCE from the settled yard (one 3D launch, ~750 M box tests, tens of ms)
+and sampled per parcel as a single vec4 fetch -- unit outward gradient plus
+signed distance -- exactly the way the curl grid already is. Smoke is pushed out
+of anything it is inside, loses the INTO-surface part of its velocity but keeps
+the tangent (so it climbs a wall and rolls over the top rather than stopping
+dead), clings a little and curls in the shear layer. Gaps are free: at 0.35 m
+the doorway, the gateway's span and the pipe rack are simply open. It is
+re-baked once per charge, 1.6 s after it fires, so the smoke stops breaking
+around a house that has already been thrown across the yard.
 
 Three steel drums stand in the yard, and they are the one thing here that does
 NOT come apart by construction. Each is a two-skin truss shell in raw Warp --
@@ -137,6 +181,10 @@ first cut of this had three pristine drums).
     python warp_explosion.py --shot 4 --spin 0.25       # orbit while simulating
     python warp_explosion.py --gas 0.3                  # 4.4 M particles, not 15 M
     python warp_explosion.py --sigma 1.6                # thicker smoke
+    python warp_explosion.py --wind 0,0,0               # still air (default 1.9 m/s)
+    python warp_explosion.py --smoke-aniso 0.3          # forward-scatter the plume
+    python warp_explosion.py --no-sdf                   # gas ignores the structures
+    python warp_explosion.py --sdf-cell 0.25            # finer obstacle field (more VRAM)
     python warp_explosion.py --no-interop               # HostRing fallback, reduced counts
     python warp_explosion.py --tear 1.18 --drum-gain 1400   # shred the drums
     python warp_explosion.py --no-puff                  # no impact dust
@@ -255,7 +303,17 @@ NO_GAS = "--no-gas" in sys.argv
 NO_INTEROP = "--no-interop" in sys.argv
 GAS = cli_arg("--gas", 1.0, float)
 SIGMA = cli_arg("--sigma", 1.0, float)
-SMOKE_K = cli_arg("--smoke-k", 3, int)      # soot parcels one cooled fire parcel becomes
+# ── THE RISING SMOKE IS OFF ─────────────────────────────────────────────────
+# A blast this size makes its picture in the first second: fireball, shock
+# dome, debris, embers, the dust the front tears off the ground. The rising
+# soot column that followed never earned its place -- every version of it read
+# as a grey mass hanging over the yard rather than as smoke, and the aftermath
+# is stronger without it: the dome expands, the dust ring runs out, the debris
+# lands, and the yard is left standing in settling dust. `--smoke` puts the
+# column back for anyone who wants to keep working on it.
+SMOKE_ON = "--smoke" in sys.argv
+SMOKE_K = cli_arg("--smoke-k", 3, int) if SMOKE_ON else 0
+                                            # soot parcels one cooled fire parcel becomes
 
 # The capacity decision needs the device, because it is the interop path that
 # makes fifteen million affordable: without it every particle crosses the bus
@@ -277,7 +335,21 @@ DUST_N = int(2_000_000 * _SCALE)
 # optical mass. Half a million of them, thrown outward and landing on the yard,
 # read as a carpet of white static thirty metres across -- exactly what phase 2
 # rejected dust billboards for. Three times phase 2's count is the ceiling.
-EMBER_N = int(70_000 * _SCALE)
+# ... and a burst gets a WHOLE ember field of its own (EMBER_RING_N of them,
+# round-robin, exactly as the streak fields work). One field is one intensity and
+# one colour, and the only fade an Interop billboard field HAS is that field-wide
+# scalar -- so two bursts sharing one pool means the newer one's flash re-lights
+# the older one's dead ground sparks. Three small fields cost less than one large
+# one did and make "one burst ages as one population" literally true.
+#
+# PHASE 5: 20 k per burst still read as a HALO OF ROUND DOTS, not as sparks --
+# measured 13-20 k live simultaneously around the crater, and once the streak
+# fields park (0.22 s) nothing left in the shot has stretch, because stretch is
+# a Renderer-emitter property and these are Interop billboards. "Sparse" is the
+# word in the complaint and count is the only lever that reaches it: 6 k spread
+# over a 25 m throw is discrete embers, 20 k is dandruff.
+EMBER_N = int(6_000 * _SCALE)
+EMBER_RING_N = cli_arg("--ember-ring", 3, int)
 FLARE_N = int(250_000 * _SCALE)
 # The Wilson cloud: a thin condensation ring ON the front. It is emitted at the
 # front radius AND thrown outward at the front speed, so each parcel rides the
@@ -287,20 +359,107 @@ WILSON_N = int(600_000 * _SCALE)
 # becomes smoke slots [i*K, i*K+K). That is why there is no free list and no
 # atomic anywhere in this sim -- the smoke pool inherits the fire ring's
 # recycling for free.
-SMOKE_N = FIRE_N * SMOKE_K
+SMOKE_N = FIRE_N * SMOKE_K if SMOKE_ON else 1024
+                                            # stub when off: ParticleField.create
+                                            # rejects capacity 0, and a parked
+                                            # field costs one entry and no march
 
 # Emission windows, in seconds since a charge's t0. NOTHING IS INSTANTIATED
 # OUTSIDE THEM -- that is the model, not an optimisation. The longest window is
 # the dust ring's, and it is the shock front crossing the yard, not a fountain.
 FIRE_EMIT, FIRE_LIFE = 0.30, (0.30, 1.15)   # "life" here IS the cooling time
 DUST_EMIT, DUST_LIFE = 0.90, (0.9, 2.2)
-EMBER_EMIT, EMBER_LIFE = 0.40, (0.9, 3.4)   # a TIGHT burst, then long-lived embers
+# EMBERS: THROWN, NOT POURED. Every window here is quoted in SIM seconds and the
+# film plays the detonation at --slowmo (0.16x), so 0.40 s of emission is two and
+# a half SCREEN seconds of new sparks leaving the charge and a 3.4 s life is six
+# screen seconds of them hanging about. That -- not late instantiation -- is what
+# "it keeps spewing embers" was: the windows were tuned in yard time and watched
+# in film time. Divide the numbers by the ramp instead of arguing with it.
+#
+# PHASE 5: the LOW end of the life range is what sets when the population starts
+# to fall, and 0.55 s meant the count sat pinned at capacity for a full screen
+# second after emission stopped -- nothing could die before then. Widening it
+# downward starts the decay on the frame the last spark is thrown.
+EMBER_EMIT, EMBER_LIFE = 0.12, (0.16, 0.85)  # ejecta: one throw, then they land
+# The whole cohort is gone by EMBER_EMIT + EMBER_LIFE[1], and that is also the
+# time the field's own brightness takes to reach ZERO (it used to floor at 45%).
+EMBER_FADE_T = EMBER_EMIT + EMBER_LIFE[1]
+EMBER_LAND_T = 0.30       # s a spark keeps burning after it hits the ground
 FLARE_EMIT, FLARE_LIFE = 0.22, (0.14, 0.46)
-SMOKE_LIFE = (4.5, 9.5)                     # from the moment it was fire
+# From the moment it was fire. A parcel's death is INSTANT (the kernel writes
+# the dead sentinel and returns) and the density splat ignores its radius, so a
+# long tail does not fade -- it deletes the plume parcel by parcel while it is
+# still holding its shape, and the last third of it blinks out covering a
+# third of the sky. Shorter tail + a field-wide sigma ramp (SMOKE_FADE below)
+# is the honest exit: the plume thins to nothing instead of vanishing.
+SMOKE_LIFE = (3.0, 13.0)  # phase 5: WIDE, so parcels expire staggered over the
+                          # whole aftermath. A narrow window kills one burst's
+                          # soot as one population and the cloud pops out.
+SMOKE_BPOW = 2.2          # skew of the per-parcel buoyancy draw: >1 puts most
+                          # soot near zero lift (the base) and a few near BGAIN
+                          # (the head). This is the shape of the column.
+SMOKE_BGAIN = 2.6
 # The ring is emitted for as long as the front is worth watching -- at 60 m/s
 # that is 27 m, past the far props -- and each parcel lives a quarter second.
 WILSON_EMIT, WILSON_LIFE = 0.45, (0.20, 0.42)
-EMBER_SKEW, FLARE_SKEW = 1.8, 1.4           # emitted = N * (tau/EMIT)**(1/skew)
+# THE FRONT DECELERATES, and that is what stops it reading as a circle being
+# scaled by a script. A blast wave decays toward the sound speed; r = c*t is a
+# machine. One time constant is the whole model: speed = C_FRONT * e^(-b/TD),
+# so radius = C_FRONT * TD * (1 - e^(-b/TD)) and it asymptotes at 51 m instead
+# of running off across the yard for ever. Each ring parcel is LAUNCHED at the
+# local front speed and given drag exactly 1/TD -- the same deceleration the
+# front itself has -- so it rides the front for its whole life with no
+# per-parcel bookkeeping at all. Reach drops 52 m -> 37 m, which is also what
+# makes the follow box below affordable.
+#
+# TD is deliberately gentle rather than Sedov-steep, because the RIGID arrival
+# schedule (t_hit = t0 + r/C_FRONT, built once per charge in Charge.arm) is
+# still linear: the visible ring must not lag the wall it is supposed to be
+# knocking over. At 1.2 s the ring reaches 20 m 0.06 s behind the impulse and
+# has halved its speed by the time it dies, which reads as a decaying wave
+# without desynchronising the demolition.
+WILSON_TD = 1.2
+# ... and it is a DOME, not a two-metre curtain. The shell stands taller as it
+# grows and is densest at its foot, which is where a real Mach stem is.
+# ... except that it was not one yet: measured median height 2.3 m at r = 18 m
+# and 3.1 m at r = 34 m, which is 1:9 and FLATTER as it expands, because the
+# band saturated at 6.2 m while the radius ran on to 37. A hemisphere wants its
+# height to grow WITH its radius, so the band is now a fraction of the front
+# radius with a floor, not an asymptote -- 0.30 r is a squat dome, which is what
+# a surface burst actually throws, and the p1.7 packing keeps it brightest at
+# the foot where the Mach stem is.
+WILSON_H0, WILSON_HG = 2.2, 0.30     # spawn band: floor in m, then x front radius
+WILSON_HP = 1.7                      # >1 packs the parcels toward the ground
+EMBER_SKEW, FLARE_SKEW = 2.6, 1.4           # emitted = N * (tau/EMIT)**(1/skew)
+
+# THE BLAST REACHES THE GAS THAT IS ALREADY IN THE AIR. Until now a charge only
+# touched a gas parcel at BIRTH (emit_gas placed it); every parcel already alive
+# was deaf to it, so a second charge beside a standing plume did nothing to that
+# plume. step_gas now walks the same 8-slot device charge array the drums do and
+# gives every live parcel the same two-part push the rigids get: one IMPULSE as
+# the front sweeps past it (the half-open shell [C*b0, C*b1) tiles the radius
+# axis as the frames tile time, so it lands exactly once at ANY dt), then a
+# decaying WIND behind the front, keyed on that parcel's own arrival time --
+# which is read off the geometry, r/C_FRONT, rather than stored per particle.
+GAS_BLAST = cli_arg("--gas-blast", 1.0, float)   # scale on the whole coupling
+# NOT the rigids' exp(-r/L)/r^1.5: on a massless parcel that is 0.004 at 10 m and
+# invisible. A pressure wave wants a long reach -- L^2/(L^2+r^2) is 0.80 at 3 m,
+# 0.27 at 10 m, 0.08 at 20 m.
+GAS_L = 11.0              # m, the falloff length
+# The two halves do NOT touch the same matter, which is what makes them
+# separately tunable. A charge's OWN cohorts are never in its own shell -- the
+# fireball is inside GAS_RMIN, the dust skirt rides at DUST_C (28 m/s) and the
+# ring at C_FRONT with the velocity gate on it, so all of them are behind R0 and
+# only ever feel the TAIL. The IMPULSE is therefore a cross-charge term, and it
+# is the one that has to be big enough to shove a standing plume: at 18 m it is
+# ~5.4 m/s, which against SMOKE_DRAG relaxes into about four metres of travel.
+GAS_KICK = 20.0           # m/s of delta-v at r << L, x the charge's own scale
+GAS_VMAX = 18.0           # m/s cap on one arrival -- the anti-NaN valve
+GAS_RMIN = 4.0            # m: inside the fireball there is no thin shell
+GAS_LIFT = 0.55           # the ground reflection lifts what is low, as it does bricks
+GAS_WIND_A0 = 20.0        # m/s^2 of tail at r << L (this one DOES hit its own smoke)
+GAS_STIR = 5.0            # m/s^2 of EXTRA curl behind the front: pushed smoke TUMBLES
+GAS_BLAST_T = 1.6         # s a charge's front is worth testing against (45 m + tail)
 
 # IMPACT DUST. Debris that lands hard kicks up the floor, and it is the cheapest
 # "alive" trick in the demo: without it the yard goes quiet the moment the ring
@@ -326,19 +485,36 @@ PUFF_LIFE = (0.55, 1.60)
 PUFF_P = max(int(1400 * _SCALE), 2)   # dust parcels one strike raises
 
 FIRE_V0, FIRE_DRAG, FIRE_BUOY, FIRE_CURL = 21.0, 7.5, 26.0, 7.0
-SMOKE_DRAG, SMOKE_BUOY, SMOKE_CURL = 1.30, 4.5, 3.4
+# The plume: tighter than it was, and it BREAKS UP as it ages instead of
+# ballooning uniformly. Terminal stir is CURL/DRAG -- 2.6 m/s before, 1.4 now --
+# because a divergence-free field stretches a blob into filaments without
+# entraining anything, so all the extra stir bought was a wider, thinner,
+# grainier column. What replaces it is SMOKE_CURL_AGE: the stir GROWS with a
+# parcel's own age and gains a finer second octave, so young soot stays a
+# coherent thick mass and old soot shreds. Occupancy (parcels per voxel) is the
+# only thing the density splat measures, and it is what "thick" means here.
+SMOKE_DRAG, SMOKE_BUOY, SMOKE_CURL = 1.45, 5.2, 3.0
+SMOKE_CURL_AGE = 1.3      # extra stir at end of life, x SMOKE_CURL
+SMOKE_ENT = 2.6           # m/s^2 of entrainment: the column WIDENS as it climbs
+SMOKE_ENT_K = 0.34        # ... to a radius this multiple of its height above the crater
 SMOKE_INHERIT = 0.75      # of the fire parcel's velocity: this is the outward push
-SMOKE_SPREAD = 1.35       # m/s of isotropic scatter added to each soot child
+SMOKE_SPREAD = 2.10       # m/s of isotropic scatter added to each soot child
 DUST_V0, DUST_DRAG, DUST_GRAV, DUST_CURL = 7.5, 2.2, 9.81, 0.7
 EMBER_V0, EMBER_DRAG, EMBER_CURL = 18.0, 0.90, 0.9
 FLARE_V0, FLARE_DRAG, FLARE_BUOY, FLARE_CURL = 19.0, 6.5, 20.0, 6.0
-# Low drag on purpose: the ring has to hold the front's speed for its whole
-# life or it falls behind and the ring stops being a ring.
-WILSON_DRAG, WILSON_BUOY, WILSON_CURL = 0.55, 1.2, 0.9
+# The drag IS the front's deceleration (1/WILSON_TD): a parcel launched at the
+# local front speed and relaxed at exactly that rate stays on the front for its
+# whole life, which is what keeps the ring a ring instead of a widening band.
+WILSON_DRAG, WILSON_BUOY, WILSON_CURL = 1.0 / WILSON_TD, 1.2, 0.9
 FIRE_R = (0.15, 0.80)     # world radius over life, m (w under WSemantic.Radius)
 SMOKE_R = (0.30, 1.20)
 DUST_R = (0.14, 0.70)
-EMBER_R = (0.075, 0.0)    # holds its size, then goes out (r_pow below)
+# An ember quad NEVER goes sub-pixel: the fragment falloff peaks at 1.0 at the
+# sprite centre whatever the world radius, so shrinking one does not dim it, it
+# only makes a same-brightness dot smaller until it aliases into twinkle outside
+# TAA. It shrinks to a floor (50 mm = ~2 px at the shipped 40 m framing) and the
+# DIMMING is done by the field scalar and by the population dying.
+EMBER_R = (0.115, 0.050)
 FLARE_R = (0.22, 0.85)
 WILSON_R = (0.55, 1.70)   # grows as it dies: the ring thins out as it expands
 
@@ -350,7 +526,20 @@ WILSON_R = (0.55, 1.70)   # grows as it dies: the ring thins out as it expands
 # more scatter noise, no more structure -- because the plume's detail is set by
 # the particles, not the grid. 128 stays, and the sigma is tuned against it.
 FIRE_RES = cli_arg("--fire-res", 128, int)
-SMOKE_RES = cli_arg("--smoke-res", 128, int)
+# 72, not 128, AND THAT IS THE ANTI-SPECKLE KNOB. Once the medium is thick
+# enough to shadow itself, voxel-to-voxel OCCUPANCY noise stops being a rounding
+# error and becomes shadow noise -- one extra parcel in a voxel now casts a
+# visibly darker hole -- which is why the shipped build read as salt and pepper
+# no matter what sigma did. Bigger voxels hold more parcels, and the relative
+# noise falls as 1/sqrt of that. Measured at t=7.5 s, same shot, sigma held
+# invariant: res 128 -> 96 -> 72 -> 56 moved the plume's high-frequency energy
+# 15.8 -> 13.0 -> 9.4 -> 5.6 levels and its blown-out fraction 4.2% -> 0.01%.
+# (The same bracket on the OLD thin build moved grain by 7% in total, which is
+# why phase 4 concluded occupancy was not the lever. It is -- but only once the
+# volume is thick.) 72 keeps a 0.67 m voxel over a 48 m box, which the linear
+# filter at both ends of the splat carries without a visible lattice.
+SMOKE_RES = cli_arg("--smoke-res", 96, int)
+SMOKE_RES_REF = 72        # what SMOKE_SIGMA below is normalised at
 DUST_RES = cli_arg("--dust-res", 128, int)
 WILSON_RES = cli_arg("--wilson-res", 128, int)
 
@@ -363,8 +552,8 @@ WILSON_RES = cli_arg("--wilson-res", 128, int)
 # phase 2's values over N: going from 300 k at res 128 to 9 M at res 192 divides
 # rho*V_voxel by 30 and multiplies it by 2.34, and the sigma that keeps the same
 # picture follows. Then tuned by eye from there.
-FIRE_SIGMA, SMOKE_SIGMA, DUST_SIGMA = 0.22, 0.32, 0.040
-WILSON_SIGMA = 0.055
+FIRE_SIGMA, SMOKE_SIGMA, DUST_SIGMA = 0.22, 1.07, 0.040
+WILSON_SIGMA = 0.048      # phase 5: the dome spreads 600 k over 2x the height
 # Single-scatter albedo per medium (kMaxDensityFields slots: fire, smoke, dust,
 # condensation ring). SOOT IS DARK -- and it has to be dark in the RIGHT way:
 # the in-scatter is albedo x (ambient + sun x phase), so a neutral grey column
@@ -380,8 +569,146 @@ WILSON_SIGMA = 0.055
 # that, it does not shade it. Below about 0.05 the column reads as cold ash
 # rather than soot and the brown goes with it; 0.10/0.086/0.066 is the darkest
 # value that still reads dirty rather than dead.
+#
+# ... and that last paragraph is now HISTORY. Renderer commit 02229a23 put the
+# density volumes' own extinction into the sun leg of the march, so a soot
+# column self-shadows: its far side is genuinely dark (measured p05 105 against
+# a 167 sky). What did NOT change is the AMBIENT leg, which carries no
+# transmittance at all -- so a saturated medium converges to
+# albedo * (ambient + sun * T_medium), which is BRIGHTER than a thin one.
+# Measured on this build at t=8: sigma x3 moved the plume mean 141 -> 157 and
+# p95 199 -> 253. Optical depth buys brightness here, not thickness. Thickness
+# is bought with OCCUPANCY (parcels per voxel, the only thing the splat sees)
+# and spent through the shadowed side, which is why the follow box below
+# matters more than either of these two numbers.
+#
+# PHASE 5 CORRECTS THAT PARAGRAPH. It was measured on a build whose smoke was
+# optically thin everywhere -- transmittance through the plume head was 1.00 and
+# 0.36 at its very base -- and a thin medium IS just albedo * ambient, which is
+# why raising albedo there only brightened it. What was missing is the other
+# half of "thick": at sigma 0.24 the volume never shadowed ITSELF, so with
+# 02229a23 landed the sun reached every parcel and the column rendered as a
+# uniformly lit white spray, brighter than the sky it sat on (measured p50 140
+# against a sky of 166 -- smoke that is only 15% darker than the sky is a veil).
+#
+# The fix is BOTH knobs, in opposite directions: eight times the optical depth
+# so the head actually blocks the sky and the underside falls into its own
+# shadow, and a THIRD of the albedo so the lit rim does not blow out. That is
+# also what kills the speckle -- the per-pixel march dither is a fraction of the
+# in-scatter, so once the medium saturates the noise saturates with it (measured
+# lag-1 autocorrelation 0.59 -> 0.90) -- and it is why the resolution bracket
+# never worked: 2.5x the occupancy moved the grain by 7%, this moves it by 50%.
+SMOKE_SIGMA_K = cli_arg("--smoke-sigma", 0.8, float)   # bracketing knob, x SMOKE_SIGMA
 SMOKE_ALBEDO = tuple(float(v) for v in
-                     cli_arg("--smoke-albedo", "0.10,0.086,0.066", str).split(","))
+                     cli_arg("--smoke-albedo", "0.34,0.31,0.28", str).split(","))
+SMOKE_ANISO = cli_arg("--smoke-aniso", 0.20, float)
+
+# --- ambient wind -----------------------------------------------------------
+#
+# There was no wind anywhere in the gas, and it shows: once buoyancy is spent
+# the only motion left is a divergence-free curl field, so the column inflates
+# in place, stays axisymmetric about its own crater and never shears. Three
+# metres a second is enough to lean the head downwind, shear it against the
+# still stem and walk the mass off the crater -- and the height ramp keeps it
+# out of the ground dust, which must stay where it settled.
+AMB_WIND = tuple(float(v) for v in cli_arg("--wind", "1.9,0,0.6", str).split(","))
+AMB_Y0, AMB_Y1 = 2.0, 8.0     # m: no wind below Y0, full above Y1
+
+# --- the density boxes FOLLOW ----------------------------------------------
+#
+# Every one of the four volumes used to be nailed to the world origin (or, for
+# the fireball, to whatever `--charge` said, which `--charges` never writes
+# back). A DensityRepr contributes NOTHING outside its box -- the scatter skips
+# the particle, it does not clamp it -- so an expanding ring poking through the
+# four flat walls of a 66 m square around the origin is amputated there, and
+# what is left is four arcs sitting in the corners of an axis-aligned square
+# over a floor whose grid rules run the same way. That is the whole of "the
+# shockwave is locked to a grid around world center".
+#
+# `center` and `half_extent` are read/write per frame by design ("the volume is
+# re-scattered from scratch every frame, so moving the box is free" --
+# ParticleField.hpp); only `resolution` is latched. So the fix costs no slot,
+# no field, no allocation: move the boxes.
+#
+# THE SIGMA LAW IS THE PRICE. The splat is per-voxel OCCUPANCY, so
+# particles-per-voxel scales with the voxel VOLUME and the extinction the march
+# integrates over a metre goes as occupancy * sigma / voxel_size, i.e. as
+# sigma * h^2 at fixed resolution. Holding the look invariant while the box
+# breathes therefore needs sigma proportional to 1/h^2, normalised at the
+# half-extent each of these was tuned at. Get that wrong and the ring flashes
+# opaque the moment the box is small.
+WILSON_H_REF, WILSON_H_MIN = 33.0, 15.0
+WILSON_HY, WILSON_CY = 9.0, 6.0       # the dome is taller than the old curtain
+# DUST_H_MAX was 40 m, and two charges 12 m apart in x already want 43 -- the
+# union box would have been clamped and the skirt amputated by a flat wall, i.e.
+# exactly the artefact the whole box-follow pass exists to remove. The clamp
+# only ever existed to bound the march's step budget, and this slab is 5.2 m
+# thick, so it can afford to be generous.
+DUST_H_REF, DUST_H_MIN, DUST_H_MAX = 36.0, 26.0, 60.0
+DUST_REACH = DUST_C * DUST_EMIT + 9.0
+# The smoke box TRACKS THE PLUME and GROWS WITH IT, which is the opposite of
+# the intuition and the only thing that fixes the sparse-dots ending. Occupancy
+# fell 117 -> 3 parcels per voxel between t=5 and t=11 because the plume
+# inflated 11x inside a box whose voxels never changed; a box that grows with
+# it holds the voxel count over the plume roughly constant, and the sigma law
+# above keeps the optical depth honest while it does.
+# The floor is TODAY'S half-extent, not something smaller: a box that shrinks to
+# fit the plume divides the parcels per voxel by the cube of the shrink, and
+# occupancy is the entire signal. The box may only ever GROW from here.
+SMOKE_H_REF, SMOKE_H_MIN, SMOKE_H_MAX = 24.0, 26.0, 36.0
+SMOKE_BOX_K = 2.35        # half-extent as a multiple of the plume's p90 spread
+SMOKE_BOX_LAG = 0.30      # how fast the box chases the plume (per sample)
+SMOKE_BOX_EVERY = 8       # frames between plume samples (a 64 kB strided read)
+# ... and it FADES rather than being deleted. The ramp finishes before GAS_END
+# so the plume thins to nothing instead of the park predicate popping it out.
+# PHASE 5: it starts when the population starts DYING (SMOKE_LIFE[0] plus the
+# fastest fire parcel's cooling time, i.e. 4.3 s) rather than a second later,
+# and it ends exactly at GAS_END so the ramp finishes on the frame the park
+# predicate fires instead of leaving 0.45 s of invisible-but-still-advected gas.
+SMOKE_FADE = (2.6, 8.0)   # phase 5: the aftermath dissolves instead of hanging as a slab
+
+# --- the gas meets the yard -------------------------------------------------
+#
+# Until now a gas parcel collided with exactly one thing: a flat plane at
+# y = 0.10 m. It went through the house, the bunker, the chimney, the arch and
+# the pipe rack as if they were not there -- a fireball lit inside the sealed
+# bunker poured its smoke straight up through the roof slabs.
+#
+# The fix is a coarse signed-distance grid baked ONCE from the settled yard and
+# sampled per parcel exactly the way the curl grid already is: one vec4 fetch
+# (unit outward gradient + signed distance), no host loop, no per-parcel state,
+# no broad phase. 0.35 m resolves the house doorway, the gateway's span and the
+# pipe rack's gaps, so smoke pours through them with no authoring at all.
+#
+# STATIC, from the pre-blast layout, with ONE lazy re-bake per charge once its
+# front has finished rearranging the yard. Tracking 1720 live poses every frame
+# would mean the O(bodies) host readback in the sim path that every phase of
+# this demo has kept out of it; and the static field is right exactly where it
+# matters, because the front crosses the yard in a third of a second and the
+# plume is down among the structures for the first second or two, while the
+# walls are still standing or only just leaving.
+NO_SDF = "--no-sdf" in sys.argv
+SDF_CELL = cli_arg("--sdf-cell", 0.35, float)
+SDF_YTOP = 12.0           # m: the grid's ceiling. Above it there is nothing to hit
+#
+# PHASE 5 MADE IT VISIBLE. The first cut of this was measurably real and
+# optically invisible: the whole collision system displaced the average smoke
+# parcel by 2.5 cm, against a parcel RADIUS of 0.30-1.20 m and a 0.35 m voxel,
+# so --no-sdf and the SDF rendered the same picture in every scene that could be
+# built, including a charge lit inside a standing three-walled house. Three
+# things were wrong. The skin was 0.45 m -- a THIRD of one parcel -- so a plume
+# only felt a wall it was already touching; there was no repulsion at all, only
+# a push-out of the penetration that had already happened; and fire was exempt,
+# while every soot parcel in the demo is born at a dying fire parcel's position,
+# so smoke was INSTANTIATED inside the roof it should have been stopped by.
+SDF_SKIN = 1.8            # m: the band a parcel feels the surface through
+SDF_REST = 0.0            # pure slide. Anything above zero reads as rubber
+SDF_REPEL = 26.0          # m/s^2 of standoff INSIDE the band: a real deflection
+SDF_TANG = 2.6            # 1/s of tangential drag at the surface: smoke CLINGS
+SDF_STIR = 6.0            # m/s^2 of shear turbulence at the surface
+SDF_PUSH = 0.45           # m/frame ceiling on the push-out, so nothing teleports
+SDF_FIRE_W = 0.55         # the fireball feels it too, at a little over half
+SDF_REBAKE = (0.35, 2.4)  # s after a charge that the yard is re-measured
 
 # --- the drums --------------------------------------------------------------
 #
@@ -948,6 +1275,24 @@ for kind, items in batches.items():
     bodies += world.add_instanced(im, density)
 
 MASS = np.array([b.mass for b in bodies], dtype=np.float64)
+# Every body's AABB half-extent, in the SAME global order as `bodies`, which is
+# what lets the SDF be re-baked later from body_positions() alone. A yawed box
+# is inflated to its axis-aligned hull (two lines, exact) and a pipe is the
+# capsule's own hull, tipped onto Z the way the instance transform tips it.
+_hs = []
+for kind, items in batches.items():
+    if not items:
+        continue
+    for _p, _s, _yaw in items:
+        if kind == "pipe":
+            _hs.append((PIPE_R, PIPE_R, 0.5 * PIPE_L + PIPE_R))
+        elif _yaw:
+            _c, _sn = abs(math.cos(_yaw)), abs(math.sin(_yaw))
+            _hs.append((0.5 * (_s[0] * _c + _s[2] * _sn), 0.5 * _s[1],
+                        0.5 * (_s[0] * _sn + _s[2] * _c)))
+        else:
+            _hs.append((0.5 * _s[0], 0.5 * _s[1], 0.5 * _s[2]))
+HALF = np.array(_hs, np.float32)
 # Each structure's global body indices and where it started, so a charge can be
 # aimed at something that is still standing (the B key).
 TARGETS = {}
@@ -961,6 +1306,22 @@ for _idx, _p, _ in TARGETS.values():
 
 print(f"blast yard: {N_BODIES} bodies in {len(meshes)} instanced batches "
       f"({MASS.sum():.0f} kg), {len(TARGETS)} structures")
+
+# The SDF grid's geometry, sized to the yard it has to describe. These are
+# module-level Python numbers ON PURPOSE: Warp folds them into the kernels
+# below as compile-time constants, which is how the sampler stays a single vec4
+# fetch instead of eight more kernel arguments threaded through step_gas.
+_lo = (HOME - HALF).min(0) - 1.2
+_hi = (HOME + HALF).max(0) + 1.2
+SDF_OX, SDF_OZ = float(_lo[0]), float(_lo[2])
+SDF_OY = -0.6
+SDF_INV = 1.0 / SDF_CELL
+SDF_NX = int(math.ceil((float(_hi[0]) - SDF_OX) / SDF_CELL)) + 1
+SDF_NY = int(math.ceil((min(float(_hi[1]), SDF_YTOP) - SDF_OY) / SDF_CELL)) + 1
+SDF_NZ = int(math.ceil((float(_hi[2]) - SDF_OZ) / SDF_CELL)) + 1
+SDF_TOP = SDF_OY + (SDF_NY - 1) * SDF_CELL
+SDF_BAND = 3.0            # m: only the band near a surface is ever read
+SDF_ON = not (NO_SDF or NO_GAS)
 
 # --- the drums: mesh, truss, kernels ----------------------------------------
 
@@ -1713,6 +2074,7 @@ class Charge:
         self.shake_t = self.t0        # when the front reaches the CAMERA
         self.light = None
         self.streaks = None
+        self.embers = None            # its own ember field, from the ring
         self.order = self.t_sorted = self.kick = self.spin = self.wind_u = None
 
     def arm(self):
@@ -1845,10 +2207,13 @@ def blast_timeline(t):
     front    the newest front's radius, m
     shake    (x, y, z) camera offset, m: SUMMED, each starting when that
              charge's front reaches the camera
-    bb_gain  additive-billboard brightness multiplier -- the flash spike,
-             summed over charges, decaying over ~0.3 s each. Billboards
-             composite after the upscaler and are NOT seen by auto-exposure, so
-             this is the whole exposure story for them
+    bb_gain  additive-billboard brightness multiplier -- the flash spike, the
+             MAX over live charges (never the sum: a camera does not respond
+             twice to two flashes, and summing let a new charge re-light an old
+             charge's matter). Billboards composite after the upscaler and are
+             NOT seen by auto-exposure, so this is the whole exposure story for
+             them. Anything with its OWN clock (the ember ring) must use that
+             clock instead -- see step_gas_frame.
     fire_e   fireball blackbody emission scale, the max over live charges
 
     Per-charge quantities that used to live here -- the flash intensity and the
@@ -1863,8 +2228,8 @@ def blast_timeline(t):
         if b < 0.0:
             continue
         tw = b if tw < -1.0e8 else min(tw, b)     # the newest charge's clock
-        gain += FLASH_BB * math.exp(-b / 0.13)
-        fire_e = max(fire_e, math.exp(-max(b - 0.16, 0.0) / 0.30))
+        gain = max(gain, FLASH_BB * math.exp(-b / 0.13))   # the NEWEST flash, not the sum
+        fire_e = max(fire_e, math.exp(-max(b - 0.22, 0.0) / 0.55))
         s = ch.shake(t)
         shake = [a + c for a, c in zip(shake, s)]
     if tw < -1.0e8:
@@ -1957,7 +2322,7 @@ NG = 48
 NR = 30.0                              # half-size of the cubic noise box, m
 NCX, NCY, NCZ = 0.0, 14.0, 0.0         # its world centre: over the yard, up the plume
 NG_SCALE = (NG - 1) / (2.0 * NR)
-NOISE_FREQ = 0.11                      # ~9 m eddies
+NOISE_FREQ = 0.085                     # ~12 m eddies: puffs, not grain
 NOISE_RATE = 0.35                      # how fast the field itself evolves, Hz-ish
 
 
@@ -2019,11 +2384,33 @@ def emit_gas(pos: wp.array(dtype=wp.vec4),
         # wave instead, each parcel stays on the front for the quarter second it
         # lives, so what expands is a ring and not a disc. It sits a metre or so
         # up, above the dust skirt the same front is tearing off the ground.
-        rr = front_c * b * (0.985 + 0.030 * wp.randf(s))
-        p = wp.vec3(ch[0] + rr * wp.cos(a), 0.85 + 2.10 * wp.randf(s),
-                    ch[2] + rr * wp.sin(a))
-        sp = v0 * (0.92 + 0.16 * wp.randf(s))
-        v = wp.vec3(wp.cos(a) * sp, sp * 0.04 * wp.randf(s), wp.sin(a) * sp)
+        #
+        # THE FRONT DECAYS, and the parcel is launched at the front's CURRENT
+        # speed with a drag equal to that decay -- so it stays on the front for
+        # its whole life without a shred of per-parcel bookkeeping, and the
+        # ring visibly slows instead of scaling at a constant rate like a
+        # script. It is a DOME too: the shell stands taller as it grows and is
+        # packed toward its own foot, where a real Mach stem is brightest.
+        dec = wp.exp(-b / WILSON_TD)
+        rr = front_c * WILSON_TD * (1.0 - dec) * (0.985 + 0.030 * wp.randf(s))
+        # A HEMISPHERE, not a ring on stilts. Sampling a horizontal radius and
+        # an independent height builds a CYLINDER however the velocities are
+        # dressed up -- the silhouette is a wall with a flat top, which is what
+        # it looked like. A blast front is a spherical shell: pick a DIRECTION
+        # on the hemisphere and put the parcel at exactly rr along it, so the
+        # shape is a sphere by construction and stays one as it grows.
+        # sin(elevation) = u with u packed toward 0 keeps the parcels dense at
+        # the foot -- where a real Mach stem is brightest -- without bending
+        # the geometry: it is a density gradient over a true sphere, not a
+        # squashed one.
+        u = wp.pow(wp.randf(s), WILSON_HP)          # 0 = horizon, 1 = crown
+        hz = wp.sqrt(wp.max(1.0 - u * u, 0.0))      # horizontal component
+        d = wp.vec3(wp.cos(a) * hz, u, wp.sin(a) * hz)
+        p = wp.vec3(ch[0] + d[0] * rr, 0.45 + d[1] * rr, ch[2] + d[2] * rr)
+        sp = v0 * dec * (0.92 + 0.16 * wp.randf(s))
+        # Purely RADIAL along the same direction: every parcel rides its own
+        # normal, so the sphere expands as a sphere instead of shearing.
+        v = wp.vec3(d[0] * sp, d[1] * sp, d[2] * sp)
     elif kind == 2:
         # Dust rides the shock front: a slot emitted at b seconds after the
         # charge appears on the ground annulus of radius c*b, which IS the ring
@@ -2095,6 +2482,71 @@ def emit_puff(pos: wp.array(dtype=wp.vec4),
 
 
 @wp.kernel
+def bake_sdf(bc: wp.array(dtype=wp.vec3), bh: wp.array(dtype=wp.vec3), nb: int,
+             g: wp.array3d(dtype=float)):
+    """Exact AABB signed distance to the nearest of `nb` boxes, per voxel.
+
+    One 3D launch over the grid, one linear scan over the yard inside it. It is
+    ~750 M box tests, which is tens of milliseconds ONCE -- and it is the whole
+    reason smoke can be told about twelve structures without a broad phase, an
+    obstacle list or a single host loop in the frame.
+    """
+    i, j, k = wp.tid()
+    p = wp.vec3(SDF_OX + float(i) * SDF_CELL,
+                SDF_OY + float(j) * SDF_CELL,
+                SDF_OZ + float(k) * SDF_CELL)
+    d = float(1.0e9)
+    for b in range(nb):
+        c = bc[b]
+        h = bh[b]
+        q = wp.vec3(wp.abs(p[0] - c[0]) - h[0],
+                    wp.abs(p[1] - c[1]) - h[1],
+                    wp.abs(p[2] - c[2]) - h[2])
+        o = wp.vec3(wp.max(q[0], 0.0), wp.max(q[1], 0.0), wp.max(q[2], 0.0))
+        d = wp.min(d, wp.length(o) + wp.min(wp.max(q[0], wp.max(q[1], q[2])), 0.0))
+    g[i, j, k] = wp.clamp(d, -2.0, SDF_BAND)
+
+
+@wp.kernel
+def bake_sdf_grad(g: wp.array3d(dtype=float), out: wp.array3d(dtype=wp.vec4)):
+    """Central differences into the xyz of a vec4 whose w is the distance."""
+    i, j, k = wp.tid()
+    i0, i1 = wp.max(i - 1, 0), wp.min(i + 1, SDF_NX - 1)
+    j0, j1 = wp.max(j - 1, 0), wp.min(j + 1, SDF_NY - 1)
+    k0, k1 = wp.max(k - 1, 0), wp.min(k + 1, SDF_NZ - 1)
+    n = wp.vec3(g[i1, j, k] - g[i0, j, k],
+                g[i, j1, k] - g[i, j0, k],
+                g[i, j, k1] - g[i, j, k0])
+    l = wp.length(n)
+    if l > 1.0e-6:
+        n = n / l
+    else:
+        n = wp.vec3(0.0, 1.0, 0.0)
+    out[i, j, k] = wp.vec4(n[0], n[1], n[2], g[i, j, k])
+
+
+@wp.func
+def sdf_sample(g: wp.array3d(dtype=wp.vec4), p: wp.vec3) -> wp.vec4:
+    """Trilinear fetch. Outside the grid this returns "far", NOT the edge value:
+    a clamp would smear the yard's outermost wall across the rest of the world.
+    """
+    gx = (p[0] - SDF_OX) * SDF_INV
+    gy = (p[1] - SDF_OY) * SDF_INV
+    gz = (p[2] - SDF_OZ) * SDF_INV
+    if (gx < 0.0 or gy < 0.0 or gz < 0.0 or gx > float(SDF_NX - 1) - 1.0e-3
+            or gy > float(SDF_NY - 1) - 1.0e-3 or gz > float(SDF_NZ - 1) - 1.0e-3):
+        return wp.vec4(0.0, 1.0, 0.0, 1.0e9)
+    i, j, k = int(wp.floor(gx)), int(wp.floor(gy)), int(wp.floor(gz))
+    fx, fy, fz = gx - float(i), gy - float(j), gz - float(k)
+    c00 = g[i, j, k] * (1.0 - fx) + g[i + 1, j, k] * fx
+    c10 = g[i, j + 1, k] * (1.0 - fx) + g[i + 1, j + 1, k] * fx
+    c01 = g[i, j, k + 1] * (1.0 - fx) + g[i + 1, j, k + 1] * fx
+    c11 = g[i, j + 1, k + 1] * (1.0 - fx) + g[i + 1, j + 1, k + 1] * fx
+    return ((c00 * (1.0 - fy) + c10 * fy) * (1.0 - fz)
+            + (c01 * (1.0 - fy) + c11 * fy) * fz)
+
+
+@wp.kernel
 def step_gas(pos: wp.array(dtype=wp.vec4),
              vel: wp.array(dtype=wp.vec3),
              st: wp.array(dtype=wp.vec2),
@@ -2106,7 +2558,13 @@ def step_gas(pos: wp.array(dtype=wp.vec4),
              s_vel: wp.array(dtype=wp.vec3),
              s_st: wp.array(dtype=wp.vec2),
              sk: int, s_cap: int, s_life0: float, s_life1: float,
-             s_r0: float, s_inherit: float, s_spread: float):
+             s_r0: float, s_inherit: float, s_spread: float,
+             gch: wp.array(dtype=wp.vec4), gcs: wp.array(dtype=float),
+             t: float, bw: float,
+             wind: wp.vec3, curl_gain: float,
+             hub: wp.vec3, ent: float, ent_k: float,
+             sdf: wp.array3d(dtype=wp.vec4), sdfw: float,
+             bpow: float, bgain: float):
     """Advect one cohort, and turn cooled fire into smoke.
 
     kind: 0 fire, 1 smoke, 2 dust, 3 ember, 4 flare. The dead sentinel is the
@@ -2120,6 +2578,12 @@ def step_gas(pos: wp.array(dtype=wp.vec4),
     of the smoke, and only then does buoyancy roll it over. The mapping
     (fire slot i -> smoke slots [i*K, i*K+K)) is what lets the smoke pool
     inherit the fire ring's recycling without a free list of its own.
+
+    AND EVERY LIVE PARCEL FEELS EVERY BLAST. `gch` is the same fixed 8-slot
+    charge array the emission kernel indexes (xyz + t0, w <= -1e8 = empty) and
+    `t` is the ABSOLUTE sim time at the END of this frame; `bw` is this cohort's
+    weight, and zero on the frames when no front is open, which is what keeps
+    the loop off fourteen million parcels for the rest of the shot.
     """
     i = wp.tid()
     q = pos[i]
@@ -2141,15 +2605,128 @@ def step_gas(pos: wp.array(dtype=wp.vec4),
                 jv = wp.vec3(wp.randf(s) - 0.5, wp.randf(s) - 0.5, wp.randf(s) - 0.5)
                 s_pos[j] = wp.vec4(p[0] + o[0] * scat, p[1] + o[1] * scat,
                                    p[2] + o[2] * scat, s_r0)
-                s_vel[j] = v * s_inherit + jv * s_spread
+                # RETAINED MOMENTUM VARIES TOO. Handing every soot parcel the
+                # same fraction of the fireball's climb launches the whole
+                # population at one speed, and no spread of buoyancy afterwards
+                # can pull it back apart -- they coast up together and the
+                # cloud leaves the crater behind. Soot that was entrained and
+                # cooled kept very little of the fireball's motion; soot from
+                # the core kept nearly all of it. Drawing that fraction is what
+                # puts mass at the base, mass in the head, and a stem between.
+                s_vel[j] = v * (s_inherit * (0.18 + 0.82 * wp.pow(wp.randf(s), 1.8)))                            + jv * s_spread
                 s_st[j] = wp.vec2(0.0, s_life0 + (s_life1 - s_life0) * wp.randf(s))
         return
     # ── advect ──────────────────────────────────────────────────────────────
+    # The stir GROWS with a parcel's own age, and the growth arrives as a finer
+    # octave. Young soot keeps the coherent, thick mass that the density splat
+    # rewards; old soot shreds into wisps and breaks up, which is what a plume
+    # actually does when its buoyancy is spent. `curl_gain` is a per-cohort
+    # scalar, so this branch is uniform across a launch, not divergent.
     acc = gas_noise(noise, p) * curl
-    acc = acc + wp.vec3(0.0, buoy * wp.exp(-age / buoy_tau) - grav, 0.0)
-    acc = acc - v * drag
+    if curl_gain > 0.0:
+        ag = curl * curl_gain * wp.min(age / life, 1.0)
+        acc = acc + gas_noise(noise, p * 2.4) * ag
+    # ── the front sweeps past, and the wind follows it ──────────────────────
+    # The impulse is NOT multiplied by dt: it is applied once because the shell
+    # test fires once, not because a frame is 1/60 s. The tail IS an
+    # acceleration and is added to `acc`, which the integration below already
+    # multiplies by dt. (Do not copy the rigid side's dt/DT scale -- that exists
+    # only because PhysX's addForce accumulates between simulate() calls.)
+    if bw > 0.0:
+        for c in range(MAX_CHARGES):
+            cp = gch[c]
+            if cp[3] > -1.0e8:
+                b1 = t - cp[3]
+                if b1 >= 0.0 and b1 < GAS_BLAST_T:
+                    b0 = b1 - dt
+                    dq = p - wp.vec3(cp[0], cp[1], cp[2])
+                    rr = wp.max(wp.length(dq), 1.0e-4)
+                    u = dq / rr
+                    fall = GAS_L * GAS_L / (GAS_L * GAS_L + rr * rr)
+                    R0 = C_FRONT * b0
+                    R1 = C_FRONT * b1
+                    if rr >= R0 and rr < R1 and rr > GAS_RMIN:
+                        # The velocity gate is load-bearing, not decoration: the
+                        # condensation ring is LAUNCHED at ~C_FRONT and rides the
+                        # shell, so without it the ring is kicked every frame and
+                        # accelerates off its own front.
+                        if wp.dot(v, u) < 0.75 * C_FRONT:
+                            dv = wp.min(GAS_KICK * gcs[c] * fall, GAS_VMAX) * bw
+                            lift = GAS_LIFT * wp.exp(-wp.max(p[1], 0.0) / 2.0)
+                            v = v + u * dv + wp.vec3(0.0, dv * lift, 0.0)
+                    elif rr < R0:
+                        tb = b1 - rr / C_FRONT      # since THIS parcel's arrival
+                        if tb < WIND_T:
+                            e = wp.exp(-tb / WIND_TAU)
+                            acc = acc + u * (GAS_WIND_A0 * gcs[c] * fall * e * bw)
+                            acc = acc + gas_noise(noise, p * 2.0) * (GAS_STIR * e * bw)
+    # ── ENTRAINMENT: the column widens as it climbs ─────────────────────────
+    # Measured on the shipped build, the plume grew 2.3 m wider while it climbed
+    # 9.3 m -- a narrow finger, not a cloud, because the only lateral motion in
+    # the model was a divergence-free curl field, and a curl field MIXES without
+    # spreading. A real plume entrains still air and its radius grows roughly
+    # linearly with height above the source. That is one number: push outward
+    # from the column's own axis while the parcel is inside the radius its
+    # height entitles it to, and stop. `hub` is the box-follow's own centroid,
+    # already measured every eighth frame for free, so this costs no readback.
+    if ent > 0.0:
+        dxz = wp.vec3(p[0] - hub[0], 0.0, p[2] - hub[2])
+        rl = wp.length(dxz)
+        want = 2.5 + ent_k * wp.max(p[1] - hub[1], 0.0)
+        if rl > 0.25 and rl < want:
+            acc = acc + dxz * (ent * (1.0 - rl / want) / rl)
+    # BUOYANCY IS PER-PARCEL, and that is what keeps the column joined to its
+    # own crater. Every parcel is born inside the same half-second burst, so a
+    # SINGLE buoyancy curve keyed on age lifts the whole population in lockstep:
+    # it leaves the ground as one bubble and drifts off as a blob with clear air
+    # underneath -- which is exactly what "decoupled from the explosion" looks
+    # like. A real plume is a DISTRIBUTION. The hot core climbs, entrained
+    # cooler soot hangs around the crater, and everything in between is the
+    # stem that joins them. Skewed so the strong risers are the minority they
+    # are in a real column. Hashed on the parcel index, so it is fixed for that
+    # parcel's whole life and costs no state to carry.
+    bs = 1.0
+    if bpow > 0.0:
+        sb = wp.rand_init(seed + 4242, i)
+        bs = wp.pow(wp.randf(sb), bpow) * bgain
+    acc = acc + wp.vec3(0.0, buoy * bs * wp.exp(-age / buoy_tau) - grav, 0.0)
+    # AMBIENT WIND, on a height ramp. The drag term is what carries it -- a
+    # parcel relaxes toward the local air, not toward zero -- so at SMOKE_DRAG
+    # the head reaches wind speed in two thirds of a second and shears against
+    # the still stem below it. The ramp keeps the ground dust where it settled.
+    wr = wp.clamp((p[1] - AMB_Y0) / (AMB_Y1 - AMB_Y0), 0.0, 1.0)
+    acc = acc - (v - wind * wr) * drag
     v = v + acc * dt
     p = p + v * dt
+    # ── the yard is solid ───────────────────────────────────────────────────
+    # One vec4 fetch from the baked SDF: unit outward gradient and signed
+    # distance. Push out of anything it is inside, kill the INTO-surface part of
+    # its velocity but keep the tangent (which is what makes smoke climb a wall
+    # and roll over the top instead of stopping dead against it), drag the
+    # tangent a little so it clings, and stir the shear layer so the slide reads
+    # as a curl rather than a decal. Gaps -- the doorway, the gateway's span,
+    # the pipe rack -- are free: at 0.35 m they are simply open.
+    if sdfw > 0.0 and p[1] < SDF_TOP:
+        sd = sdf_sample(sdf, p)
+        d = sd[3]
+        if d < SDF_SKIN:
+            n = wp.vec3(sd[0], sd[1], sd[2])
+            if d < 0.0:
+                p = p + n * wp.min(-d, SDF_PUSH)
+            w = (SDF_SKIN - wp.max(d, 0.0)) / SDF_SKIN
+            # STANDOFF, applied over the whole band and quadratic in it, is what
+            # a viewer actually sees: the plume is turned BEFORE it reaches the
+            # wall, over the metre and a half a parcel's own radius spans, so a
+            # 3 m wall parts a column instead of nudging it 2 cm. Killing the
+            # into-surface velocity alone can only ever act on the frame of
+            # contact, which is why it never reached the density splat.
+            v = v + n * (SDF_REPEL * w * w * sdfw * dt)
+            vn = wp.dot(v, n)
+            if vn < 0.0:
+                v = v - n * (vn * (1.0 + SDF_REST))
+            vt = v - n * wp.dot(v, n)
+            v = v - vt * wp.min(SDF_TANG * w * dt, 1.0)
+            v = v + gas_noise(noise, p * 2.0) * (SDF_STIR * w * dt * sdfw)
     # The yard's floor, cheaply -- but dust gets a per-particle REST HEIGHT
     # spread over most of a metre instead of one shared plane. Two million
     # settled particles pinned to a single 10 cm layer is a sheet three voxels
@@ -2166,7 +2743,12 @@ def step_gas(pos: wp.array(dtype=wp.vec4),
         # Dust that reaches the ground STAYS on it -- no bounce, or a settling
         # ring turns back into a fountain one frame later.
         if kind == 3:
-            v = wp.vec3(0.0, 0.0, 0.0)        # a landed ember stays put and burns out
+            # A landed ember stays put and BURNS OUT -- fast. Parking it without
+            # touching its life is what built the static carpet of glowing dots
+            # across the yard: 88% of the live population was lying on the floor
+            # at full radiance waiting out a three-second lifetime.
+            v = wp.vec3(0.0, 0.0, 0.0)
+            life = wp.min(life, age + EMBER_LAND_T)
         else:
             vy = float(0.0)
             if kind != 2:
@@ -2234,6 +2816,16 @@ class Cohort:
         self.imported = None                 # VkInteropArray on the zero-copy path
         self.host = self.host_np = None      # the fallback's staging buffer
         self.params = ()
+        self.blast_w = 0.0                   # how hard a passing front pushes this
+        self.b0 = -1.0e9                     # t0 of the burst that owns it (ember ring)
+        self.wind = (0.0, 0.0, 0.0)          # ambient wind this cohort feels
+        self.curl_gain = 0.0                 # extra stir as a parcel ages
+        self.hub = (0.0, 0.0, 0.0)           # the column's axis, for entrainment
+        self.entrain = 0.0                   # m/s^2 of outward spread
+        self.ent_k = 0.0                     # ... up to radius = ent_k * height
+        self.sdf_w = 0.0                     # does the yard's geometry stop it
+        self.bpow = 0.0                      # 0 = one buoyancy for the cohort;
+        self.bgain = 1.0                     # >0 = per-parcel skewed draw
 
     # ── emission ─────────────────────────────────────────────────────────────
     def emit(self, ci, b):
@@ -2263,17 +2855,22 @@ class Cohort:
         return n
 
     # ── advection ────────────────────────────────────────────────────────────
-    def advance(self, dt, child=None):
+    def advance(self, dt, t, blasting, child=None):
         if not self.live:
             return
         c = child if child is not None else self
+        bw = self.blast_w * GAS_BLAST if blasting else 0.0
         wp.launch(step_gas, dim=self.live,
                   inputs=[self.pos, self.vel, self.st, noise_grid, dt, self.kind,
                           self.seed, *self.params[1:],
                           self.radius[0], self.radius[1], self.r_pow,
                           c.pos, c.vel, c.st, SMOKE_K, c.n,
                           SMOKE_LIFE[0], SMOKE_LIFE[1], SMOKE_R[0],
-                          SMOKE_INHERIT, SMOKE_SPREAD],
+                          SMOKE_INHERIT, SMOKE_SPREAD,
+                          charge_arr, charge_scale, t, bw,
+                          wp.vec3(*self.wind), self.curl_gain,
+                          wp.vec3(*self.hub), self.entrain, self.ent_k,
+                          sdf_grid, self.sdf_w, self.bpow, self.bgain],
                   device=device)
 
     # ── publish ──────────────────────────────────────────────────────────────
@@ -2324,11 +2921,60 @@ fields = []
 
 if not NO_GAS:
     noise_grid = wp.zeros((NG, NG, NG), dtype=wp.vec3, device=device)
-    _ch = np.zeros((MAX_CHARGES, 4), np.float32)
+    # SENTINELLED, like the drums' array at the top of the file: now that a
+    # device-side loop walks all eight slots every frame, an unfired slot of
+    # zeros would read as a phantom charge at the world origin that fired at
+    # t = 0, and every parcel in the yard would be kicked by it during the
+    # settle. w <= -1e8 is "empty".
+    _ch = np.tile(np.float32([0.0, 0.0, 0.0, -1.0e9]), (MAX_CHARGES, 1))
     charge_arr = wp.array(_ch, dtype=wp.vec4, device=device)
+    # ... and each slot's yield scale, sqrt(J/1400), so a big charge pushes the
+    # air harder. (The drums keep their own copy; this one is the gas's.)
+    _chs = np.ones(MAX_CHARGES, np.float32)
+    charge_scale = wp.array(_chs, dtype=float, device=device)
     # This frame's impact points, (x, _, z, strength). Fixed capacity, uploaded
     # only on frames that actually found a strike.
     puff_pts = wp.zeros(PUFF_MAX, dtype=wp.vec4, device=device)
+
+    # ── the yard, as a signed-distance field ────────────────────────────────
+    # Baked once from the settled layout and re-baked once per charge after its
+    # front has finished rearranging things (SDF_REBAKE). A 1x1x1 dummy stands
+    # in when --no-sdf is passed, because the kernel argument still has to be a
+    # real array -- the branch is `sdf_w > 0`, which is a host-side scalar.
+    if SDF_ON:
+        sdf_d = wp.zeros((SDF_NX, SDF_NY, SDF_NZ), dtype=float, device=device)
+        sdf_grid = wp.zeros((SDF_NX, SDF_NY, SDF_NZ), dtype=wp.vec4, device=device)
+        sdf_bc = wp.array(HOME.astype(np.float32), dtype=wp.vec3, device=device)
+        sdf_bh = wp.array(HALF, dtype=wp.vec3, device=device)
+    else:
+        sdf_grid = wp.zeros((1, 1, 1), dtype=wp.vec4, device=device)
+
+    def bake_yard_sdf(centres=None):
+        """(Re)build the distance field. Two launches and no host particle work.
+
+        The re-bake is the answer to "smoke keeps breaking around a house that
+        has already been blown across the yard": one body_positions() -- the arm
+        path's own O(bodies) loop, on ONE frame, not in the sim path -- and the
+        field is the yard as it now stands, rubble piles included.
+        """
+        if not SDF_ON:
+            return 0.0
+        t = time.perf_counter()
+        if centres is not None:
+            sdf_bc.assign(np.ascontiguousarray(centres, np.float32))
+        wp.launch(bake_sdf, dim=(SDF_NX, SDF_NY, SDF_NZ),
+                  inputs=[sdf_bc, sdf_bh, len(bodies), sdf_d], device=device)
+        wp.launch(bake_sdf_grad, dim=(SDF_NX, SDF_NY, SDF_NZ),
+                  inputs=[sdf_d, sdf_grid], device=device)
+        wp.synchronize_device(device)
+        return time.perf_counter() - t
+
+    if SDF_ON:
+        _ms = bake_yard_sdf()
+        print(f"yard SDF: {SDF_NX}x{SDF_NY}x{SDF_NZ} at {SDF_CELL:.2f} m "
+              f"({SDF_NX * SDF_NY * SDF_NZ / 1e3:.0f} k voxels, "
+              f"{16 * SDF_NX * SDF_NY * SDF_NZ / 1e6:.1f} MB) "
+              f"over {len(bodies)} bodies in {1e3 * _ms:.0f} ms")
 
     # per_charge: how much of a pool ONE detonation may claim. An overlapping
     # ninth burst simply overwrites the oldest slots in the ring.
@@ -2338,8 +2984,12 @@ if not NO_GAS:
                    per_charge=0)        # NEVER emitted: fire converts into it
     dust = Cohort("dust", DUST_N, 2, DUST_EMIT, DUST_LIFE, DUST_R, SEED + 3,
                   per_charge=DUST_N // N_SHARES, front_c=DUST_C)
-    ember = Cohort("ember", EMBER_N, 3, EMBER_EMIT, EMBER_LIFE, EMBER_R, SEED + 4,
-                   skew=EMBER_SKEW, r_pow=1.5, per_charge=EMBER_N // N_SHARES)
+    # THE EMBER RING. One burst, one field, its own clock -- see EMBER_N above.
+    # per_charge is the WHOLE field because a field is never shared.
+    EMBER_RING = [Cohort(f"ember{k}", EMBER_N, 3, EMBER_EMIT, EMBER_LIFE, EMBER_R,
+                         SEED + 4 + 131 * k, skew=EMBER_SKEW, r_pow=1.5,
+                         per_charge=EMBER_N)
+                  for k in range(EMBER_RING_N)]
     flare = Cohort("flare", FLARE_N, 4, FLARE_EMIT, FLARE_LIFE, FLARE_R, SEED + 5,
                    skew=FLARE_SKEW, per_charge=FLARE_N // N_SHARES)
     wilson = Cohort("wilson", WILSON_N, 5, WILSON_EMIT, WILSON_LIFE, WILSON_R,
@@ -2347,15 +2997,52 @@ if not NO_GAS:
     # (v0, drag, buoy, buoy_tau, grav, curl) -- v0 is the emit kernel's, the
     # rest are the advect kernel's, in its argument order.
     fire.params = (FIRE_V0, FIRE_DRAG, FIRE_BUOY, 0.30, 0.0, FIRE_CURL)
-    smoke.params = (0.0, SMOKE_DRAG, SMOKE_BUOY, 2.00, 0.0, SMOKE_CURL)
+    smoke.params = (0.0, SMOKE_DRAG, SMOKE_BUOY, 1.70, 0.45, SMOKE_CURL)
+    smoke.bpow, smoke.bgain = SMOKE_BPOW, SMOKE_BGAIN
     dust.params = (DUST_V0, DUST_DRAG, 0.0, 1.0, DUST_GRAV, DUST_CURL)
-    ember.params = (EMBER_V0, EMBER_DRAG, 0.0, 1.0, 9.81, EMBER_CURL)
+    for _e in EMBER_RING:
+        _e.params = (EMBER_V0, EMBER_DRAG, 0.0, 1.0, 9.81, EMBER_CURL)
     flare.params = (FLARE_V0, FLARE_DRAG, FLARE_BUOY, 0.26, 0.0, FLARE_CURL)
     wilson.params = (C_FRONT, WILSON_DRAG, WILSON_BUOY, 0.5, 0.0, WILSON_CURL)
+    # How hard a PASSING front pushes each cohort. Fire and flare are zero: they
+    # are born WITH the burst velocity and kicking them again just doubles the
+    # fireball's expansion. Smoke takes it in full -- that is the whole point,
+    # "another explosion should push any old smoke in the scene". Dust and the
+    # ring take a fraction because both are already emitted ON a front and their
+    # radius law is tuned; the ember is ejecta and rides the wind.
+    smoke.blast_w = 1.00
+    for _e in EMBER_RING:
+        _e.blast_w = 0.80
+    dust.blast_w = 0.45
+    wilson.blast_w = 0.35
+    # Ambient wind reaches the SMOKE and nothing else: it is the only cohort
+    # that lives long enough to care, and blowing the ground dust or the ring
+    # would only smear two things that are already tuned.
+    smoke.wind = AMB_WIND
+    smoke.curl_gain = SMOKE_CURL_AGE
+    smoke.entrain, smoke.ent_k = SMOKE_ENT, SMOKE_ENT_K
+    # What the yard's geometry stops. Fire and flare are excluded on purpose --
+    # they live inside the fireball for a second, they are the densest cohorts,
+    # and colliding a fireball with the house it is destroying reads wrong.
+    if SDF_ON:
+        smoke.sdf_w = 1.0
+        dust.sdf_w = 1.0
+        wilson.sdf_w = 1.0
+        for _e in EMBER_RING:
+            _e.sdf_w = 1.0
+        # ... and fire and flare at SDF_FIRE_W. Excluding them was the single
+        # biggest hole in "smoke interacts with the world", because NOTHING
+        # emits smoke in this demo: a soot parcel is written at the position of
+        # the fire parcel that just cooled, so a fireball that walked through a
+        # roof handed the plume a birth site on the far side of it. Partial
+        # rather than full because a fireball genuinely does not bounce off the
+        # house it is taking apart -- it pours around it.
+        fire.sdf_w = SDF_FIRE_W
+        flare.sdf_w = SDF_FIRE_W
     # fire is advected FIRST and smoke LAST, so a parcel that converts this
     # frame is advected the same frame instead of hanging for one.
-    cohorts = [fire, flare, dust, ember, wilson, smoke]
-    emitters = [fire, flare, dust, ember, wilson]
+    cohorts = [fire, flare, dust] + EMBER_RING + [wilson, smoke]
+    emitters = [fire, flare, dust, wilson]      # the ember ring emits per CHARGE
 
     OWNERSHIP = (tp.ParticleField.Ownership.Interop if INTEROP
                  else tp.ParticleField.Ownership.HostRing)
@@ -2400,16 +3087,17 @@ if not NO_GAS:
     # DensityRepr only -- nine million additive quads would be worse than three.
     # Soot is a DARK medium; a bright albedo here and the column reads as steam.
     smoke.field = make_field(SMOKE_N, SMOKE_R[1])
-    if VOLUMES:
+    if VOLUMES and SMOKE_ON:
         # The box has to contain the WHOLE plume: soot outside it is not
         # scattered and simply is not there, which reads as a cloud with its top
         # sheared off. 48 x 30 x 48 m at 192**3 is a 25 cm voxel.
-        smoke.field.set_density_repr(tp.Vector3(0.0, 13.0, 0.0),
+        smoke.field.set_density_repr(tp.Vector3(cx, 13.0, cz),
                                      tp.Vector3(24.0, 15.0, 24.0),
-                                     SMOKE_SIGMA * SIGMA, SMOKE_RES)
+                                     SMOKE_SIGMA * SMOKE_SIGMA_K * SIGMA,
+                                     SMOKE_RES)
         _d = smoke.field.density_repr
         _d.albedo = tp.Color(*SMOKE_ALBEDO)
-        _d.anisotropy = 0.28
+        _d.anisotropy = SMOKE_ANISO
 
     # ── dust ────────────────────────────────────────────────────────────────
     dust.field = make_field(DUST_N, DUST_R[1])
@@ -2440,9 +3128,12 @@ if not NO_GAS:
     # making matter. It stops at WILSON_EMIT and nothing is emitted after it.
     wilson.field = make_field(WILSON_N, WILSON_R[1])
     if VOLUMES:
-        _reach = C_FRONT * WILSON_EMIT + 6.0
-        wilson.field.set_density_repr(tp.Vector3(0.0, 2.0, 0.0),
-                                      tp.Vector3(_reach, 4.0, _reach),
+        # The box is written EVERY FRAME (see density_boxes()) -- these are only
+        # what it is created with. It has to follow the front, because the ring
+        # travels three times the distance the old static box covered.
+        wilson.field.set_density_repr(tp.Vector3(0.0, WILSON_CY, 0.0),
+                                      tp.Vector3(WILSON_H_MIN, WILSON_HY,
+                                                 WILSON_H_MIN),
                                       WILSON_SIGMA * SIGMA, WILSON_RES)
         _d = wilson.field.density_repr
         _d.albedo = tp.Color(0.90, 0.92, 0.96)   # condensed water, not soot
@@ -2480,27 +3171,32 @@ if not NO_GAS:
     # phase spread is scale-invariant, so no remapping of the clock turns a
     # steady state into a burst.
     #
-    # What is lost by moving: age fade, size taper and the hot->cool colour ramp
-    # are all derived from the emitter's closed form, and on a HostRing or
-    # Interop field ageFrac is pinned to 0. The radius IS the fade here (an
-    # additive quad's contribution goes as its area, so r -> 0 is a fade), and
-    # because this is ONE burst rather than a steady state, the whole field ages
-    # together -- so cooling the field's own colour over tw below is a faithful
-    # stand-in for cooling each ember over its own age.
-    ember.field = make_field(EMBER_N, EMBER_R[0])
-    ember.field.set_billboard_repr(tp.Color(1.00, 0.78, 0.36), tp.Color(1.00, 0.17, 0.02),
-                                   0.0, 1.0)
-    _b = ember.field.billboard_repr
-    _b.softness = 0.32
-    _b.fade_power = 0.0                 # inert off the emitter: the radius is the fade
-    _b.size_taper = 0.0
-    _b.bright_jitter = 0.65
-    _b.stretch_seconds = 0.030          # smeared along (pos - prevPos) of the ring
-    _b.stretch_max = 34.0
-    _b.stretch_max_screen = 0.055
-    _b.near_fade = 1.2
-    _b.glow = 0.50
+    # What is lost by moving: age fade, size taper, velocity stretch and the
+    # hot->cool colour ramp are ALL derived from the emitter's closed form.
+    # ParticleFieldPass only writes bp.lifetime and bp.stretchOverDt for a
+    # rendererOwned field, so on this one lifetime == 0, the vertex stage pins
+    # ageFrac = 0, and fade_power / size_taper / stretch_seconds are silently
+    # zero -- authoring them here is a no-op that invites the next reader to tune
+    # nothing. THE ONLY BRIGHTNESS CHANNEL AN INTEROP BILLBOARD FIELD HAS IS THE
+    # FIELD-WIDE `intensity`, and the radius is a SIZE, not a radiance (the
+    # fragment falloff peaks at 1.0 at the sprite centre whatever the quad's
+    # world size, so shrinking one only makes a same-brightness dot smaller).
+    #
+    # Which is why there are THREE of these fields, one per concurrent burst,
+    # claimed round-robin exactly as the streak fields are. Then "one burst ages
+    # as one population" is literally true per field and the field scalar IS the
+    # per-particle dimmer -- instead of a second charge's flash re-lighting the
+    # first charge's dead sparks lying on the floor thirty metres away.
     EMBER_HOT = ((1.00, 0.80, 0.40), (1.00, 0.30, 0.06))   # new ember -> old ember
+    for _e in EMBER_RING:
+        _e.field = make_field(EMBER_N, EMBER_R[0])
+        _e.field.set_billboard_repr(tp.Color(*EMBER_HOT[0]),
+                                    tp.Color(1.00, 0.17, 0.02), 0.0, 1.0)
+        _b = _e.field.billboard_repr
+        _b.softness = 0.32
+        _b.bright_jitter = 0.65
+        _b.near_fade = 1.2
+        _b.glow = 0.62
 
     # ── streaks: the ONE thing a device-fed field cannot do ─────────────────
     # ParticleFieldPass.cpp is explicit: "the stretch is a Renderer-mode
@@ -2523,8 +3219,23 @@ if not NO_GAS:
     # design exists to avoid. Three fields, assigned round-robin as charges fire,
     # a fourth burst stealing the oldest -- which by then has been parked for
     # its whole life anyway.
+    # STREAK_T IS QUOTED IN SIM SECONDS AND WATCHED IN FILM SECONDS. Every slot
+    # of this field is alive at all times (duty 1.0) and each is reborn once per
+    # `lifetime` AT THE CHARGE, so the window is not "how long a streak lives",
+    # it is HOW LONG SPARKS KEEP ERUPTING FROM THE ORIGIN. At 0.85 s the film's
+    # 0.16x ramp played that as four screen seconds of garden sprinkler -- which
+    # is what the user saw three times. 0.22 s is 1.4 screen seconds, and because
+    # the emitter's period shortens with the lifetime each slot still cycles
+    # about once through the window: the DENSITY of sparks is unchanged, only the
+    # duration collapses.
+    # Two numbers, and conflating them is what made the old fountain: the
+    # emitter's LIFETIME is how far a ray reaches (its slots' ages are spread
+    # over [0, lifetime) from the very first frame, so the spray is full-depth
+    # instantly -- a steady state has no build-up), and the WINDOW is how long
+    # sparks keep leaving the charge. The shipped build had both at 0.85 s.
     STREAK_N = int(20_000 * GAS)
-    STREAK_T = 0.85
+    STREAK_T = 0.22           # the window: how long the charge keeps ejecting
+    STREAK_LIFE = 0.70        # the reach: how far one ray gets before it fades
     STREAK_RING = []
     for _k in range(3):
         _kc = tp.ParticleField.Config()
@@ -2552,8 +3263,8 @@ if not NO_GAS:
         _e.velocity = tp.Vector3(0.0, 8.0, 0.0)   # the ground reflection's upward bias
         _e.speed_spread = 22.0                    # isotropic: this IS the radial burst
         _e.accel = tp.Vector3(0.0, -9.81, 0.0)
-        _e.lifetime = STREAK_T
-        _e.lifetime_jitter = 0.25
+        _e.lifetime = STREAK_LIFE
+        _e.lifetime_jitter = 0.35
         _e.duty_cycle = 1.0
         _e.size = 0.05
         _e.size_jitter = 0.65
@@ -2564,12 +3275,13 @@ if not NO_GAS:
         scene.add(_s)
         STREAK_RING.append(_s)
 
+    STREAK_B0 = [-1.0e9] * len(STREAK_RING)   # t0 of the burst that owns each
     fields = [c.field for c in cohorts] + STREAK_RING
     # The last thing that can still be on screen: a fire parcel emitted at the
     # end of the burst, cooling for its full life, converting, and its soot
     # living out the longest smoke life. Nothing is emitted after DUST_EMIT.
     GAS_END = FIRE_EMIT + FIRE_LIFE[1] + SMOKE_LIFE[1] + 0.1
-    EMIT_END = max(c.emit_win for c in emitters)     # nothing is born after this
+    EMIT_END = max(c.emit_win for c in emitters + EMBER_RING)   # nothing is born after
     GAS_N = sum(c.n for c in cohorts)
 
     def claim_charge_slot(ch):
@@ -2583,12 +3295,28 @@ if not NO_GAS:
         ch.slot = _fired[0] % MAX_CHARGES
         _ch[ch.slot] = (ch.pos[0], ch.pos[1], ch.pos[2], ch.t0)
         charge_arr.assign(_ch)
+        _chs[ch.slot] = ch.scale          # the advect kernel's front reads this too
+        charge_scale.assign(_chs)
         for c in cohorts:
             c.emitted[ch.slot] = 0        # the slot is re-used: start its budget over
-        ch.streaks = STREAK_RING[_fired[0] % len(STREAK_RING)]
+        # ... and the ring is claimed OLDEST-FIRST, never round-robin. Round
+        # robin picks by fire order, so four detonations inside EMBER_FADE_T --
+        # trivial with --auto-charge 0.4 or a held B key -- delete a cohort that
+        # is still glowing, in one frame, while an already-dark field sits idle
+        # beside it. Least-recently-claimed is always the dimmest one there is.
+        k = min(range(len(STREAK_RING)), key=lambda i: STREAK_B0[i])
+        STREAK_B0[k] = ch.t0
+        ch.streaks = STREAK_RING[k]
         e = ch.streaks.emitter
         e.spawn_center = tp.Vector3(ch.pos[0], ch.pos[1] + 0.2, ch.pos[2])
         ch.streaks.set_emitter(e)
+        # ... and its own ember field, wiped so it carries ONE burst only. The
+        # fourth overlapping charge steals the oldest, which by then has been
+        # dark for over a second (EMBER_FADE_T).
+        ch.embers = min(EMBER_RING, key=lambda c: c.b0)
+        ch.embers.reset()
+        ch.embers.field.set_live_count(0)
+        ch.embers.b0 = ch.t0
 
     # ── ARM THE ZERO-COPY PATH ──────────────────────────────────────────────
     # enable_particle_field_interop returns None until after the FIRST render():
@@ -2688,7 +3416,7 @@ if not NO_GAS:
     for _s in STREAK_RING:
         _s.set_live_count(0)
     print(f"gas: fire {FIRE_N:,} -> smoke {SMOKE_N:,} (x{SMOKE_K} on cooling) "
-          f"+ dust {DUST_N:,} + ember {EMBER_N:,} + flare {FLARE_N:,} "
+          f"+ dust {DUST_N:,} + ember {EMBER_RING_N}x{EMBER_N:,} + flare {FLARE_N:,} "
           f"+ ring {WILSON_N:,} = {GAS_N:,} particles "
           f"({52 * GAS_N / 1e6:.0f} MB resident), on {device}")
     print(f"charges: {len(CHARGES)} at startup, {N_SHARES} shares of every pool, "
@@ -2725,7 +3453,7 @@ _EXP = 0.55 / max(renderer.tone_mapping_exposure, 1e-3)
 # against 44 k. Overlapping additive quads saturate long before they sum, which
 # is why the exponent is a half and not one.
 BB_FLARE = 0.038 * _EXP    # low ON PURPOSE: the FLAME is the density ramp.
-BB_EMBER = 0.40 * _EXP     # The billboards are only its sparkle.
+BB_EMBER = 0.95 * _EXP     # The billboards are only its sparkle. (x1.7: N/3.3)
 BB_STREAK = 1.6 * _EXP
 FIRE_EMISSIVE = 4.5                     # emission is intensity * THIS field's sigma
 _gas_live = False
@@ -2789,6 +3517,160 @@ def impact_dust():
     return m
 
 
+def front_radius(b):
+    """The decelerating front's radius, m -- ONE law, used by the ring's
+    emission and by the box that has to contain it."""
+    return C_FRONT * WILSON_TD * (1.0 - math.exp(-max(b, 0.0) / WILSON_TD))
+
+
+def smoke_fade(tw):
+    """The field-wide sigma ramp that lets the plume THIN OUT instead of being
+    deleted. A parcel's death is instantaneous and the splat ignores its
+    radius, so without this the last third of the column blinks out while it
+    still covers a third of the sky. One burst ages as one population, which is
+    what makes a field-wide scalar a faithful stand-in for a per-parcel fade
+    (the same argument the ember field's dimmer rests on).
+
+    AND IT RATCHETS. `tw` is time since the NEWEST charge, so firing a second
+    charge beside a seven-second-old plume used to step that plume's field-wide
+    sigma from 0.32 straight back to 1.00 in a single frame -- measured, with the
+    old smoke's own velocity flat across the step, i.e. nothing physical happened
+    and the smoke simply got three times thicker because a bang went off 14 m
+    away. There is exactly one scalar for a pool that holds several bursts, so
+    the only honest invariant available is that it never RISES; the fresh burst's
+    soot is then a little thinner than it would be alone, which is a fraction of
+    a stop and reads as haze, not as a pop. Reset on park, with the box.
+    """
+    a, b = SMOKE_FADE
+    x = min(max((tw - a) / (b - a), 0.0), 1.0)
+    f = 1.0 - x * x * (3.0 - 2.0 * x)
+    if f < _sbox["fade"]:
+        _sbox["fade"] = f
+    return _sbox["fade"]
+
+
+_sbox = {"c": None, "h": float(SMOKE_H_REF), "n": -1, "fade": 1.0}
+_sdf_baked = [-1.0e9, 0]      # (t0 of the burst being tracked, re-bakes done)
+
+
+def _quant(v, step):
+    """Quantise a box edge. A box that moves a hair every frame re-scatters
+    every parcel into a different voxel and hands TAA new noise to chase."""
+    return round(float(v) / step) * step
+
+
+def density_boxes(tw):
+    """Put the four density volumes ON the matter they are supposed to hold.
+
+    All four used to be nailed down: three at the world origin and the fireball
+    at whatever `--charge` said, which `--charges` never writes back. A volume
+    contributes nothing outside its box -- the scatter SKIPS the particle, it
+    does not clamp it -- so the condensation ring, which travels to 33 m, was
+    amputated by the four flat walls of a 66 m square around the origin and
+    what survived was four arcs in the corners of that square, over a floor
+    whose grid rules run the same way. Hence "locked to a grid around world
+    center". Nothing here allocates: center and half_extent are per-frame
+    writes by design, and sigma is scaled as 1/h^2 to hold the optical depth
+    the march integrates invariant while the box breathes.
+    """
+    live = [ch for ch in charges if sim_time >= ch.t0]
+    if not live:
+        return
+    # ── the fireball: the NEWEST charge that still has flame ────────────────
+    # Its blackbody ramp is a function of height INSIDE this box, so the box
+    # floor has to be that charge's own ground or the flame colour is wrong.
+    hot = [ch for ch in live if sim_time - ch.t0 <= FIRE_EMIT + FIRE_LIFE[1]]
+    if hot:
+        ch = max(hot, key=lambda c: c.t0)
+        fire.field.density_repr.center = tp.Vector3(ch.pos[0], ch.pos[1] + 3.0,
+                                                   ch.pos[2])
+    # ── the condensation ring: the union of the live fronts ─────────────────
+    ring = [ch for ch in live
+            if sim_time - ch.t0 <= WILSON_EMIT + WILSON_LIFE[1] + 0.05]
+    if ring:
+        rs = [front_radius(sim_time - ch.t0) + 3.0 for ch in ring]
+        x0 = min(c.pos[0] - r for c, r in zip(ring, rs))
+        x1 = max(c.pos[0] + r for c, r in zip(ring, rs))
+        z0 = min(c.pos[2] - r for c, r in zip(ring, rs))
+        z1 = max(c.pos[2] + r for c, r in zip(ring, rs))
+        h = _quant(max(0.5 * (x1 - x0), 0.5 * (z1 - z0), WILSON_H_MIN), 0.5)
+        d = wilson.field.density_repr
+        d.center = tp.Vector3(_quant(0.5 * (x0 + x1), 0.25), WILSON_CY,
+                              _quant(0.5 * (z0 + z1), 0.25))
+        # The dome's crown rides at ~h now that it is a real hemisphere, so a
+        # fixed 9 m ceiling would slice its top off flat.
+        vy = max(WILSON_HY, 0.66 * h)
+        d.center = tp.Vector3(d.center.x, vy * 0.92, d.center.z)
+        d.half_extent = tp.Vector3(h, vy, h)
+        d.sigma_per_particle = WILSON_SIGMA * SIGMA * (WILSON_H_REF / h) ** 2
+    else:
+        # The ring is over, but its live PREFIX never shrinks, so the box stays
+        # bound and its span keeps feeding the fog march's step budget for the
+        # rest of the shot. Collapse it.
+        wilson.field.density_repr.half_extent = tp.Vector3(WILSON_H_MIN,
+                                                           WILSON_HY,
+                                                           WILSON_H_MIN)
+    # ── the dust: settled skirt + impact puffs, so it never shrinks ─────────
+    x0 = min(c.pos[0] for c in live) - DUST_REACH
+    x1 = max(c.pos[0] for c in live) + DUST_REACH
+    z0 = min(c.pos[2] for c in live) - DUST_REACH
+    z1 = max(c.pos[2] for c in live) + DUST_REACH
+    h = _quant(min(max(0.5 * (x1 - x0), 0.5 * (z1 - z0), DUST_H_MIN),
+                   DUST_H_MAX), 0.5)
+    d = dust.field.density_repr
+    d.center = tp.Vector3(_quant(0.5 * (x0 + x1), 0.25), 1.5,
+                          _quant(0.5 * (z0 + z1), 0.25))
+    d.half_extent = tp.Vector3(h, 2.6, h)
+    d.sigma_per_particle = DUST_SIGMA * SIGMA * (DUST_H_REF / h) ** 2
+    # ── the plume: follow it, and GROW WITH IT ──────────────────────────────
+    # The counter-intuitive half. Occupancy -- parcels per voxel, the only
+    # thing the splat measures -- fell 117 -> 3 between t=5 and t=11 because
+    # the plume inflated eleven-fold inside a box whose voxels never changed,
+    # and three parcels a voxel is not a medium, it is visible discrete
+    # scatter. Shrinking the box to "concentrate" it makes that WORSE (finer
+    # voxels hold fewer parcels); growing it with the plume is what holds
+    # occupancy roughly constant, and the 1/h^2 sigma keeps the optical depth
+    # the same while it does. The sample is 4096 strided vec4 read AFTER the
+    # frame's own synchronize, so it costs a launch and a 64 kB copy, and only
+    # every SMOKE_BOX_EVERY frames.
+    # SEEDED FROM THE CHARGE, not from the world origin. The box below is only
+    # re-measured every SMOKE_BOX_EVERY frames and only once there is smoke to
+    # measure, so a charge fired 30 m out used to pour its first eight frames of
+    # soot outside a box still sitting at (0, 13, 0) -- invisible, and then a
+    # SNAP onto the plume. Under the 0.16x ramp those eight frames are most of a
+    # screen second, and it repeats on every fresh burst because park clears it.
+    if _sbox["c"] is None:
+        ch = max(live, key=lambda c: c.t0)
+        _sbox["c"] = np.array([ch.pos[0], ch.pos[1] + 6.0, ch.pos[2]], np.float64)
+        _sbox["h"] = float(SMOKE_H_MIN)
+    _sbox["n"] += 1
+    if smoke.live > 8192 and _sbox["n"] % SMOKE_BOX_EVERY == 0:
+        a = smoke.sample(2048)
+        if a is not None:
+            a = a[a[:, 3] >= 0.0]
+            if len(a) > 64:
+                med = np.median(a[:, :3], axis=0)
+                dev = np.percentile(np.abs(a[:, :3] - med), 96.0, axis=0)
+                want = min(max(SMOKE_BOX_K * float(dev.max()), SMOKE_H_MIN),
+                           SMOKE_H_MAX)
+                _sbox["c"] = _sbox["c"] + (med - _sbox["c"]) * SMOKE_BOX_LAG
+                _sbox["h"] += (want - _sbox["h"]) * SMOKE_BOX_LAG
+    if _sbox["c"] is not None:
+        h = _quant(_sbox["h"], 0.5)
+        c = _sbox["c"]
+        d = smoke.field.density_repr
+        d.center = tp.Vector3(_quant(c[0], 0.25), _quant(c[1], 0.25),
+                              _quant(c[2], 0.25))
+        d.half_extent = tp.Vector3(h, 0.80 * h, h)
+        # sigma ~ R^2 / h^2: what the march integrates over a metre is
+        # n_density * voxel_side^2 * sigma, so both the box and the resolution
+        # have to appear here or --smoke-res silently changes the exposure.
+        d.sigma_per_particle = (SMOKE_SIGMA * SMOKE_SIGMA_K * SIGMA
+                                * (SMOKE_H_REF / h) ** 2
+                                * (SMOKE_RES / SMOKE_RES_REF) ** 2
+                                * smoke_fade(tw))
+
+
 def step_gas_frame(dt):
     """Advance every cohort and publish it. Returns (kernel, publish) seconds.
 
@@ -2808,6 +3690,8 @@ def step_gas_frame(dt):
                 c.field.set_live_count(0)
             for s in STREAK_RING:
                 s.set_live_count(0)
+            _sbox["c"] = None           # the next burst re-acquires its own box
+            _sbox["fade"] = 1.0
             _gas_live = False
         return 0.0, 0.0
     _gas_live = True
@@ -2818,14 +3702,19 @@ def step_gas_frame(dt):
     # A charge past its longest emission window is skipped entirely -- emit()
     # would return 0 anyway, but a burst that finished five seconds ago should
     # not cost five cohort calls a frame for the rest of the shot.
+    blasting = False
     for ch in charges:
         if not ch.armed:
             continue
         b = sim_time - ch.t0
+        if 0.0 <= b < GAS_BLAST_T:
+            blasting = True             # a front is open: the advect loop earns its cost
         if b > EMIT_END:
             continue
         for c in emitters:
             c.emit(ch.slot, b)
+        if ch.embers is not None:       # the ember ring is per CHARGE, not shared
+            ch.embers.emit(ch.slot, b)
     # IMPACT DUST rides the dust cohort's ring, so it has to go in before the
     # advect launch trims itself to the live prefix -- a puff emitted after it
     # would sit still for a frame.
@@ -2834,14 +3723,31 @@ def step_gas_frame(dt):
     # Smoke slots are claimed by conversion, and the mapping is static, so the
     # live prefix of the smoke pool is exactly the fire ring's prefix times K.
     smoke.live = min(fire.cursor * SMOKE_K, smoke.n)
+    # The entrainment axis: the box-follow's own centroid in xz (already
+    # measured, every eighth frame, for free) and the newest charge's ground as
+    # the height the widening is counted from. Until there is a plume to
+    # measure it is simply the charge.
+    _hot = max((c for c in charges if sim_time >= c.t0), key=lambda c: c.t0,
+               default=None)
+    if _hot is not None:
+        cxz = _sbox["c"]
+        smoke.hub = ((float(cxz[0]), _hot.pos[1], float(cxz[2]))
+                     if cxz is not None else tuple(_hot.pos))
     for c in cohorts:
-        c.advance(dt, child=smoke)
+        c.advance(dt, sim_time, blasting, child=smoke)
     wp.synchronize_device(device)
     t1 = time.perf_counter()
     for c in cohorts:
         c.publish()
     t2 = time.perf_counter()
 
+    # THE FLASH GAIN IS THE NEWEST CHARGE'S, NOT THE SUM. bb_gain used to be
+    # summed over every live charge, which is wrong twice over: two charges
+    # firing together doubled a spike that is a single camera response, and an
+    # OLD charge's still-live additive matter was re-lit by a NEW charge's
+    # flash. The flare pool is shared, so the honest key is the newest flash --
+    # a flare parcel outlives its own charge by 0.68 s at most, and within that
+    # window "the newest flash" and "its own flash" are the same number.
     gain = state["bb_gain"]
     flare.field.billboard_repr.intensity = BB_FLARE * gain
     if not NO_FOG:
@@ -2854,14 +3760,48 @@ def step_gas_frame(dt):
         # emission is intensity * THAT volume's sigma.
         fire.field.density_repr.emissive_intensity = max(FIRE_EMISSIVE * state["fire_e"],
                                                          1.0e-3)
-    # One burst ages as one population, so cooling the FIELD is a faithful
-    # stand-in for the per-particle colour ramp a device-fed field cannot have.
-    k = min(tw / 2.6, 1.0)
+        density_boxes(tw)
+    # THE YARD CHANGED SHAPE. One re-bake per charge, once its front has
+    # finished throwing the walls across the yard -- otherwise smoke keeps
+    # breaking around a house that is no longer there. It is one
+    # body_positions() (the arm path's own O(bodies) host loop) plus two
+    # launches, on ONE frame, and never in the steady state.
+    if SDF_ON:
+        newest = max((ch.t0 for ch in charges if sim_time >= ch.t0),
+                     default=-1.0e9)
+        if newest > _sdf_baked[0]:
+            _sdf_baked[0], _sdf_baked[1] = newest, 0
+        # TWO re-bakes per charge, not one. One at 1.6 s meant the whole
+        # slow-motion section of the film -- the money shot -- ran against a
+        # yard that had already been thrown across itself, and after that single
+        # bake nothing was ever measured again, so settling rubble never
+        # appeared. 0.35 s is right after the front has passed the near
+        # structures, 2.4 s is once the yard has come to rest.
+        k = _sdf_baked[1]
+        if k < len(SDF_REBAKE) and sim_time >= newest + SDF_REBAKE[k]:
+            bake_yard_sdf(body_positions())
+            _sdf_baked[1] = k + 1
+    # EACH ember field ages on ITS OWN burst's clock, which is the whole reason
+    # there is a ring of them: the field scalar is the only brightness channel an
+    # Interop billboard field has, so one shared field means one shared clock and
+    # a new charge re-lighting an old charge's dead ground sparks (measured: an
+    # 8x step, on 18,000 embers already lying still, in one frame). (1 - k)^2
+    # reaches ZERO at EMBER_FADE_T instead of flooring at 45% for ever.
+    #
+    # PHASE 5: and its flash gain is ITS OWN burst's too. The ring gave every
+    # field its own (1-k)^2 clock and then multiplied it by the GLOBAL flash
+    # gain, so the bug simply moved: measured, a charge fired 99 m away and
+    # entirely off camera stepped a 0.65 s old, mostly-grounded cohort's
+    # intensity 0.099 -> 0.364 in one frame. A spark on the ground does not care
+    # what happened on the far side of the yard.
     hot, cool = EMBER_HOT
-    ember.field.billboard_repr.color_hot = tp.Color(*(a + (b - a) * k
-                                                      for a, b in zip(hot, cool)))
-    ember.field.billboard_repr.intensity = (BB_EMBER * (1.0 + 0.6 * (gain - 1.0))
-                                            * (1.0 - 0.55 * k))
+    for c in EMBER_RING:
+        bo = max(sim_time - c.b0, 0.0)
+        k = min(bo / EMBER_FADE_T, 1.0)
+        bb = c.field.billboard_repr
+        bb.color_hot = tp.Color(*(a + (b - a) * k for a, b in zip(hot, cool)))
+        bb.intensity = (BB_EMBER * (1.0 + 0.6 * FLASH_BB * math.exp(-bo / 0.13))
+                        * (1.0 - k) ** 2)
     # The streak fields eject only while their own charge is still ejecting.
     # Park them all first and let the live charges claim theirs back: with the
     # ring shared, a charge whose field has been stolen by a newer one must not
@@ -2876,9 +3816,13 @@ def step_gas_frame(dt):
         if 0.0 <= b < STREAK_T:
             ch.streaks.set_emitter_time(b, dt)
             ch.streaks.set_live_count(STREAK_N)
+            # The ramp reaches zero exactly at STREAK_T, so the field is never
+            # live-but-black (it used to bottom out 0.02 s before the window
+            # closed). `b` is its OWN charge's clock, so this is already
+            # per-burst and no other charge's flash reaches it.
             ch.streaks.billboard_repr.intensity = (
                 BB_STREAK * (1.0 + FLASH_BB * math.exp(-b / 0.13))
-                * min(max((0.80 - b) / 0.35, 0.0), 1.0))
+                * min(max((STREAK_T - b) / (0.42 * STREAK_T), 0.0), 1.0))
     return t1 - t0, t2 - t1
 
 
