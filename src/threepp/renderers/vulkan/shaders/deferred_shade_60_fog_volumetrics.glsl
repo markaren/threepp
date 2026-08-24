@@ -256,9 +256,29 @@ vec3 applyParticleFog(vec3 col, vec3 ro, vec3 rd, float tMax) {
     const bool emissive = pd.counts.y != 0u;
     const bool multi    = n > 1u;
 
-    // Rule 2: base count, raised toward a 1 m world step on long traversals.
+    // Rule 2: the step is sized by the FINEST VOLUME in the interval, not by a
+    // fixed world scale. A station every dt metres through a field whose voxel
+    // is SMALLER than dt point-samples a signal it cannot represent: the plume
+    // breaks into salt-and-pepper static, with single-voxel hotspots where a
+    // station happens to land on a dense cell. Sizing dt in metres made that
+    // unavoidable -- a 0.56 m voxel under a 1.13 m step aliases however the
+    // field is authored, so the only escape was to coarsen the volume until
+    // its voxels were bigger than the step, which trades the static for
+    // visible voxel slabs. Deriving the count from the voxel grid removes the
+    // trade: fine volumes get the stations they need, coarse ones cost what
+    // they always did.
     const float span  = t1 - t0;
-    const int   STEPS = clamp(int(ceil(span)), emissive ? 32 : 24, 64);
+    float vmin = 1e30;
+    for (uint i = 0u; i < n; ++i) {
+        const vec3 bsz = 1.0 / pd.boxInvSize[i].xyz;
+        const vec3 res = vec3(textureSize(particleDensityLinTex[i], 0));
+        vmin = min(vmin, min(min(bsz.x / res.x, bsz.y / res.y), bsz.z / res.z));
+    }
+    // Below Nyquist on the voxel grid, with the old 1 m rule as a FLOOR so a
+    // coarse volume never gets cheaper than it was before.
+    const float want  = min(0.75 * vmin, 1.0);
+    const int   STEPS = clamp(int(ceil(span / max(want, 0.05))),
+                              emissive ? 32 : 24, 192);
     const float dt    = span / float(STEPS);
     // Step phase: the per-pixel hash dither of rule 3, for every march.
     // pcgHash of the pixel coordinate only — NO pc.frame term, deliberately.
@@ -288,7 +308,15 @@ vec3 applyParticleFog(vec3 col, vec3 ro, vec3 rd, float tMax) {
             // Skip, don't clamp: CLAMP_TO_EDGE would smear each face's voxels
             // over everything outside the box.
             if (any(lessThan(tt, vec3(0.0))) || any(greaterThan(tt, vec3(1.0)))) continue;
-            const float si = texture(particleDensityLinTex[i], tt).r;
+            // Feather the outermost voxels of every face to zero. A medium
+            // that is still dense where its box stops DRAWS THE BOX -- a
+            // hard-edged slab with straight sides and a flat top, which is
+            // what a plume that drifted against its own volume looked like.
+            // Real media fall off at their boundary; this is that falloff.
+            const vec3  fw = smoothstep(vec3(0.0), vec3(0.045), tt)
+                           * smoothstep(vec3(0.0), vec3(0.045), 1.0 - tt);
+            const float si = texture(particleDensityLinTex[i], tt).r
+                           * (fw.x * fw.y * fw.z);
             sig += si;
             if (multi) {
                 albStep += pd.albedoAniso[i].rgb * si;

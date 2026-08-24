@@ -40,7 +40,24 @@ layout(push_constant) uniform Pc {
     uint volIndex;
 } pc;
 
+// ── A 3^3 BINOMIAL PREFILTER, AND WHY THE MARCH NEEDS ONE ────────────────────
+// The scatter deposits a finite number of parcels into a finite grid, so every
+// voxel carries Poisson noise of order 1/sqrt(parcels per voxel) -- and the
+// grid is exactly where a plume's detail lives, so raising the resolution to
+// buy detail LOWERS the occupancy that keeps it smooth. Sampled raw, a plume
+// reads as grain through its thin regions and as voxel stair-steps along its
+// boundary however finely the march is stepped: the two artefacts trade
+// against each other with resolution and neither resolution removes both.
+// One binomial tap per axis kills the noise that lives AT the grid scale and
+// leaves everything coarser than a voxel untouched -- the same argument, and
+// the same kernel, as the marching-cubes surfacing in the python examples.
+//
+// The MAJORANT below stays a valid bound: a binomial tap is a convex
+// combination of the texels it reads, so the filtered field can never exceed
+// their maximum, and the raw integer max still bounds it.
+
 const float kInvScale = 1.0 / 4096.0;
+const float kW[3] = float[3](0.25, 0.5, 0.25);
 
 shared uint sMax;
 
@@ -55,7 +72,19 @@ void main() {
     uint v = 0u;
     if (all(lessThan(c, sz))) {
         v = imageLoad(srcFixed, c).x;
-        imageStore(dstLin, c, vec4(float(v) * kInvScale));
+        float acc = 0.0;
+        for (int dz = -1; dz <= 1; ++dz)
+        for (int dy = -1; dy <= 1; ++dy)
+        for (int dx = -1; dx <= 1; ++dx) {
+            const ivec3 q = c + ivec3(dx, dy, dz);
+            // Outside the volume is VACUUM, not the edge voxel repeated:
+            // clamping would smear the boundary outward and redraw the box.
+            // Letting the weights fall short at the faces IS the falloff.
+            if (any(lessThan(q, ivec3(0))) || any(greaterThanEqual(q, sz))) continue;
+            acc += kW[dx + 1] * kW[dy + 1] * kW[dz + 1]
+                 * float(imageLoad(srcFixed, q).x);
+        }
+        imageStore(dstLin, c, vec4(acc * kInvScale));
     }
     atomicMax(sMax, v);
 
