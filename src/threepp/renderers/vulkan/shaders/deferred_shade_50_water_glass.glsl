@@ -13,6 +13,7 @@
 // needs first, not by call graph). shadeWater's from-below branch needs both:
 // the gate, and applyMurk to composite the murk onto its traced reflection leg.
 bool camUnderwater();
+bool camPortWetDryEye();
 vec3 applyMurk(vec3 col, vec3 ro, vec3 hit);
 
 // Thin-shell water (RenderMode::RasterFirst). Replicates closest_hit's
@@ -104,9 +105,20 @@ vec3 shadeWater(vec3 P, vec3 N, vec3 V, MaterialDesc pm, int instIdx,
     // points down for a submerged view and `dot(R, Nmacro) >= 0.02` reads as
     // "keep R just below the plane" there and "just above" from the air — one
     // expression, both half-spaces, exactly as the world-up-free framing intends.
+    //
+    // ONE exception, and it is the whole waterline shot: when the split runs
+    // through the PORT, a pixel in the wet half is looking into the water while
+    // the eye is still in the air, so the ray reaches this surface from ABOVE
+    // and "the camera's side" is the wrong side to keep the reflection on.
+    // Clamping to the camera there mirrors the sky into the underwater half of
+    // the frame — a bright grazing sheet exactly where the murk should start.
+    // Flip the clamp to the WATER side and the same expression puts the traced
+    // leg down the column, where applyMurk below turns it into the murk the
+    // open-water pixels beside it already show.
+    const vec3 Nsurf = camPortWetDryEye() ? -Nmacro : Nmacro;
     vec3 R = reflect(-V, N);
-    const float rDotUp = dot(R, Nmacro);
-    if (rDotUp < 0.02) R = normalize(R + Nmacro * (0.02 - rDotUp));
+    const float rDotUp = dot(R, Nsurf);
+    if (rDotUp < 0.02) R = normalize(R + Nsurf * (0.02 - rDotUp));
     // Env-miss reflection blur widens with the banked chop variance: distant
     // sub-pixel wave facets reflect a point-feature sky (sun disc / bright cloud
     // edge) as per-pixel speckle unless the reflection is filtered by the same

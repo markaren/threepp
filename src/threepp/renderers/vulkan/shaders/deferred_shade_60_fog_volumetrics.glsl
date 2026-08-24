@@ -563,13 +563,36 @@ vec3 applyMurk(vec3 col, vec3 ro, vec3 hit) {
 }
 // ── Submerged camera: the two gates every underwater path is behind ──────────
 // murkLive() = the water body exists as a medium at all (a density AND a clip
-// plane). camUnderwater() = this PIXEL's ray starts inside it — gPrimaryOrigin,
-// not the shared eye, so a parallel projection follows the same per-pixel
-// convention as camOriginAt and every other camPos-relative term in the shade.
+// plane). camUnderwater() = the medium this PIXEL looks out through.
+//
+// The test point is the near-plane point (gNearPointY), NOT the eye, because the
+// thing that decides which medium a pixel sees is where its ray crosses the
+// camera's front element — a dome port. Those points span only ±(near-plane
+// radius) ≈ 5 cm around the eye, so a camera further than that from the surface
+// has every one of them on the same side and this reads exactly as the shared-eye
+// test did: the half-and-half frame is confined to the waterline zone BY
+// CONSTRUCTION, and no other shot can shift by a pixel. Inside the zone the frame
+// splits along the line — sky and topsides above it, murk and keel below — which
+// is the whole of the waterline shot.
+//
+// The gate feeds ONLY medium selection: the sky/env-miss swap, shadeWater's
+// from-below branch, and the meniscus. Ray origins, fog legs and view vectors
+// stay on gPrimaryOrigin (the eye under a perspective camera) — bending those
+// per pixel would fan the primary rays out of a disc instead of a point.
+//
 // Both are false for every scene that never calls setUnderwaterMurk /
 // setFogWaterSurfaceY, which is what keeps the above-water render byte-identical.
 bool murkLive()      { return fog.murkDensity > 0.0 && fog.waterSurfaceY < 1e29; }
-bool camUnderwater() { return murkLive() && gPrimaryOrigin.y < fog.waterSurfaceY; }
+bool camUnderwater() { return murkLive() && gNearPointY < fog.waterSurfaceY; }
+
+// The split running THROUGH the port: this pixel looks out of the wet half of
+// the glass while the eye itself is still in the air. Only reachable inside the
+// waterline zone, and the one place the near-point model and the ray the engine
+// actually traces disagree — the ray comes down onto the surface from ABOVE and
+// hits it from the dry side, while the pixel must show what is under it. Where
+// that matters (which side of the surface the reflection belongs on) the medium
+// wins, not the eye. Always false for a camera clear of the waterline.
+bool camPortWetDryEye() { return camUnderwater() && gPrimaryOrigin.y >= fog.waterSurfaceY; }
 
 // Snell's ratio for a flat air/water interface, as GLSL refract() wants it
 // (eta = n_incident / n_transmitted). Used to bend the SUN into the water; the
@@ -629,6 +652,50 @@ vec3 applyMurkSky(vec3 dir) {
         col += fog.murkColor * lights.dirLights[i].color * (0.18 * pow(mu, 6.0));
     }
     return col;
+}
+
+// ── The meniscus — where the waterline crosses the port ──────────────────────
+// A real half-and-half shot never has a razor edge: water climbs the glass in a
+// wetting band a centimetre or so wide, and that band bends, brightens and
+// tints whatever is behind it. Here it is a screen-space overlay keyed on the
+// SAME signed distance the medium test uses (near-plane point vs the surface),
+// which is what keeps the band welded to the split however the swell moves it.
+//
+// Not a blur: no neighbour taps, so it cannot smear or pull the two halves into
+// each other. A lift, a mild desaturation, and a pull toward the murk's own
+// in-scatter colour — the water rolling over the glass carries the colour of the
+// water, and that colour is already in the frame right below the line.
+//
+// Half-width in METRES ON THE PORT. A ~50° lens with a 0.1 m near plane spans
+// ~9 cm of port top to bottom, so 12 mm reads as a soft band around a fifth of
+// the frame high — wide on paper, subtle on screen because the profile peaks
+// only at the line itself.
+const float kMeniscusWidth = 0.012;
+const float kMeniscusLift  = 1.60;// brightness at the line
+const float kMeniscusPull  = 0.35;// max blend toward the murk in-scatter colour
+const float kMeniscusDesat = 0.25;// max pull toward luminance
+
+// `tintScale` carries the ADDITIVE half of the band (the murk-colour pull) into
+// whatever value domain the caller stores in: pre-exposure at the dispatch-A
+// stores, and 0.0 at the dispatch-B accumulate, where the pull has already been
+// added once for that pixel and only the multiplicative half may apply again.
+vec3 applyMeniscus(vec3 col, float tintScale) {
+    if (!murkLive()) return col;
+    const float s = abs(gNearPointY - fog.waterSurfaceY);
+    // EXACT no-op outside the band, which for a camera further than
+    // kMeniscusWidth + the near-plane radius from the surface is every pixel of
+    // the frame — the same construction that keeps camUnderwater() inert there.
+    if (s >= kMeniscusWidth) return col;
+    // SQUARED, so the band hugs the line instead of grading a fifth of the frame:
+    // 12 mm is a quarter of a 50 mm half-height port, and a linear falloff over
+    // that reads as a haze over the whole lower frame rather than a wet seam.
+    const float w0 = 1.0 - smoothstep(0.0, kMeniscusWidth, s);
+    const float w  = w0 * w0;
+    const vec3  fogLight = lights.ambient
+                         + sampleEnvLod(vec3(0.0, 1.0, 0.0), float(max(pc.envMipCount, 1u) - 1u));
+    const float lum  = dot(col, vec3(0.2126, 0.7152, 0.0722));
+    const vec3  band = mix(col, vec3(lum), kMeniscusDesat * w) * mix(1.0, kMeniscusLift, w);
+    return mix(band, fog.murkColor * fogLight * tintScale, kMeniscusPull * w);
 }
 
 // ── Murk sun in-scatter — the shafts ─────────────────────────────────────────

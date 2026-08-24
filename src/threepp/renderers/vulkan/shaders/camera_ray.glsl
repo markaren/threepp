@@ -17,14 +17,26 @@
 #ifndef CAMERA_RAY_GLSL
 #define CAMERA_RAY_GLSL
 
+// This pixel's own point on the camera's NEAR PLANE, in world space. Reverse-Z,
+// so NDC z = 1 IS the near plane, and unprojecting there is the near-plane point
+// under BOTH projections — for a parallel camera it is the whole ray origin, for
+// a perspective one it is where that pixel's ray pierces the glass: a patch
+// spanning ±sqrt(halfW² + halfH² + near²) ≈ a few centimetres around the eye.
+//
+// That patch is the camera's physical PORT, which is why this exists separately
+// from camRayOrigin: a lens straddling a water surface is half in each medium,
+// and only a per-pixel point can say which side a given pixel looks out of.
+// Use it for MEDIUM decisions only — ray origins, fog legs and view vectors all
+// stay on camRayOrigin, or a perspective frame would fan out from a disc.
+vec3 camNearPoint(vec2 ndc) {
+    const vec4 nh = cam.projInverse * vec4(ndc, 1.0, 1.0);
+    return (cam.viewInverse * vec4(nh.xyz / nh.w, 1.0)).xyz;
+}
+
 // World-space origin of the primary ray through `ndc`.
-// Perspective: the eye. Ortho: this pixel's own point on the near plane —
-// reverse-Z, so NDC z = 1 IS the near plane.
+// Perspective: the eye. Ortho: this pixel's own point on the near plane.
 vec3 camRayOrigin(vec2 ndc) {
-    if (cam.camAux.x > 0.5) {
-        const vec4 nh = cam.projInverse * vec4(ndc, 1.0, 1.0);
-        return (cam.viewInverse * vec4(nh.xyz / nh.w, 1.0)).xyz;
-    }
+    if (cam.camAux.x > 0.5) return camNearPoint(ndc);
     return cam.viewInverse[3].xyz;
 }
 
