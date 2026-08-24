@@ -15,20 +15,28 @@ tets), which is the solver a from-scratch effort would converge on anyway.
 --fish IS REQUIRED and has no default. It takes any model threepp's ModelLoader
 reads -- .usdz, .usd/.usda/.usdc, .obj, .stl, .gltf/.glb, .dae -- and nothing
 about this benchmark is fish-specific beyond the auto-orientation, so any
-closed solid works. The scans this was developed against are not
-redistributable, which is why there is no bundled asset to fall back on.
+closed solid works. Point it at a DIRECTORY (or a comma-separated list) and it
+loads several scans and deals them out round-robin, which is what a real catch
+looks like; --variants caps how many distinct scans it will build cages for.
+The scans this was developed against are not redistributable, which is why
+there is no bundled asset to fall back on.
 
     pip install newton
-    python newton_fish_conveyor.py --fish cod.usdz --graph           # sanity check
-    python newton_fish_conveyor.py --fish cod.usdz --graph --count 64
-    python newton_fish_conveyor.py --fish cod.usdz --graph --sweep   # 1,4,16,64 table
-    python newton_fish_conveyor.py --fish cod.usdz --graph --sweep --sweep-to 256 \
+    python newton_fish_conveyor.py --fish scans/ --count 60 --view    # the demo
+    python newton_fish_conveyor.py --fish cod.usdz                    # sanity check
+    python newton_fish_conveyor.py --fish cod.usdz --sweep            # 1,4,16,64 table
+    python newton_fish_conveyor.py --fish cod.usdz --sweep --sweep-to 256 \
         --max-particles 800000
-    python newton_fish_conveyor.py --fish cod.usdz --graph --count 32 --self-contact
-    python newton_fish_conveyor.py --fish cod.usdz --count 16 --view # NOT the perf path
-    python newton_fish_conveyor.py --fish cod.usdz --tet-res 24      # finer cage
+    python newton_fish_conveyor.py --fish scans/ --count 60 --shot catch.png
+    python newton_fish_conveyor.py --fish scans/ --count 60 --shot catch.png --shot-time 12
+    python newton_fish_conveyor.py --fish scans/ --count 100 --layers 1  # spread, not piled
+    python newton_fish_conveyor.py --fish cod.usdz --count 8 --view --cage # what the solver sees
+    python newton_fish_conveyor.py --fish cod.usdz --count 32 --tet-res 20 # finer cage
     python newton_fish_conveyor.py --fish cod.usdz --young 3e4 --poisson 0.45
     python newton_fish_conveyor.py --fish cod.usdz --fish-length 0.6 # rescale to 60 cm
+
+Every flag that mattered is now a DEFAULT and has a --no- form: CUDA graph
+capture, fish-on-fish contact, and zero-copy skinning are all on.
 
 Reported per count: solve milliseconds per frame, the realtime factor at 60 Hz,
 tet/particle counts, VRAM, whether the fish actually conveyed (mean speed along
@@ -40,26 +48,114 @@ TETRAHEDRALISATION is a voxel lattice carved by the mesh's own signed distance
 field, split 5-tets-per-cell with alternating parity so the result is
 conforming. No external mesher, no dependency, and the resolution is a single
 knob -- which is what you want when the point is to sweep cost against fidelity.
-It also happens to be the right shape for production: a coarse simulation cage
-with the high-resolution scan skinned onto it, rather than simulating 15k
-vertices of scan directly.
+It is carved at --carve cells OUTSIDE the surface, not at the zero level set: a
+cell only survives if its CENTRE is inside, so carving at zero leaves the cage
+up to half a cell short on every face. At 14 cells that measured a 1.110 m cage
+around a 1.412 m cod -- the snout and the whole tail outside the collider, and
+outside every tet the skin binds to. 0.25 cells costs 1.7x the tets and gets the
+cage's bounding box to match the fish's exactly.
+
+WHAT YOU SEE is not what is simulated. The solver moves a few hundred cage
+vertices; the scan's full-resolution surface -- 15k vertices, its own UVs, its
+own baked albedo/normal/AO -- rides along, each vertex bound to the tet that
+holds it by barycentric weights and skinned on the GPU. That split is the whole
+point: a coarse cage is what makes 64 fish affordable, and the scan is what
+makes them look like fish. --cage renders the cage itself instead, so you can
+see exactly how coarse the thing you are timing really is. The drawn scan is
+decimated to --render-ratio of its triangles first (meshoptimizer, through
+threepp's simplify_geometry): 25k triangles to 10k moves the bounding box by
+less than a micron, because at this distance the detail lives in the baked
+normal map rather than in the tessellation.
+
+Binding is by UNCLAMPED barycentric weights, so a vertex reproduces its rest
+position exactly even where it sits outside the cage. Extrapolation multiplies,
+though -- crush a tet in the middle of a heap and a fin bound at |w| = 3.9
+leaves the fish as a metre-long needle -- so anything past |w| = 2.2 is slid
+toward the clamped weights, and only as far as that bound requires.
+
+--view and --shot are for looking, not for timing. Fish that reach the end of
+the bed ride off it, drop to the floor a metre below, and lie there -- the same
+end a real infeed has, and the same behaviour as the PhysX example. --recycle
+loops them back to the start instead, for watching a steady stream longer than
+one belt-length; run() never recycles either way, since it measures conveying
+as displacement over a window and a teleport inside that window reads as the
+belt running backwards. And the skinning writes straight into the renderer's own
+vertex buffers (GLRenderer.gl_buffer_id + wp.RegisteredGLBuffer), so nothing
+crosses host memory: 48 fish measured 30.2 ms/frame that way against 40.5 ms
+through geometry.update_attribute. --no-interop takes the host route.
 
 The fish is auto-oriented: longest extent along the belt, thinnest extent
-vertical, i.e. lying on its side the way a fish lies on a real conveyor.
+vertical, i.e. lying on its side the way a fish lies on a real conveyor. Yaw,
+size and position are jittered per fish (seeded, so runs repeat) -- a rigid
+grid of identical clones is neither realistic nor a fair contact load.
 
-ALWAYS PASS --graph. Without CUDA graph capture this is launch-overhead bound,
-not solve bound: one 290-tet fish measured 54 ms/frame ungraphed and 6.2 ms
-graphed. Ungraphed numbers say nothing about how many fish fit.
+CUDA GRAPH CAPTURE IS ON. --no-graph exists to show you why it is: without it
+this is launch-overhead bound rather than solve bound, and ONE fish measured
+62.3 ms/frame against 4.6 ms captured -- 16 fps for a single cod, and a belt so
+slow it looks like the fish is not being conveyed at all. Never turn it off
+except to reproduce that. (Graph capture needs an EVEN --substeps; the state
+ping-pong would otherwise leave every frame reading a stale buffer.)
+
+WHERE THE TIME GOES, measured at 100 fish on an RTX 4070, end to end -- solve,
+skinning and render -- with the defaults above:
+
+    40 fish  15.5 ms   65 fps        100 fish  35.0 ms   29 fps
+    60 fish  19.6 ms   51 fps        150 fish  45.7 ms   22 fps
+
+60 Hz lands at roughly FIFTY fish, not a hundred. Everything that buys more than
+that buys it by breaking the fish, which is worth knowing precisely:
+
+  --substeps 2   twice the speed, and the single worst thing you can do. Worst
+                 tet edge stretch over 8 s with 60 fish piled: 1.55x at 4
+                 substeps, 16.0x at 2. Iterations barely matter next to this --
+                 8 iterations at 2 substeps still measured 4.85x. Fish stop
+                 being fish: they flatten into sheets, fuse into their
+                 neighbours, and occasionally come apart altogether.
+  --no-self-contact   four times the speed, and a pile stops piling: it
+                 interpenetrates into a single flat layer.
+  --tet-res 12   another 25%, and a LONE fish stops being conveyed -- 117
+                 particles over a 102 mm roller pitch sit in the valleys and
+                 stall for two seconds before friction finds them. 14 is the
+                 coarsest cage that starts moving immediately at every count.
+  --layers 1     spreads the catch instead of piling it, which is cheaper AND
+                 gentler, but wants a 27 m belt for 100 fish.
+
+What DID come free, from VBD's stock contact settings being sized for cloth
+rather than for a hundred blunt tet cages: detect once per substep instead of
+twice; stop preallocating 32 vertex and 64 edge contacts per particle when a
+fish in a heap sees a handful; and give fish-on-fish its own contact radius,
+smaller than the one that makes a fish sit correctly on a 50 mm roller, since
+the detection margin follows the radius and candidate pairs follow the margin
+cubed. Those three took 100 fish from 55.5 ms to 17.7 ms with no change in
+behaviour. A LARGER self-contact radius is much worse, not better: 0.50 cells
+put 179 tets through inversion where 0.25 put none.
+
+STIFFNESS IS NOT THE NUMBER YOU EXPECT. --young defaults to 2e5 Pa, not the 5e4
+usually quoted for fish flesh, because a homogeneous Neo-Hookean tet cage has
+neither skin nor backbone and the bulk modulus has to stand in for both. At 5e4
+the cod at the bottom of a five-deep pile render as empty bags.
 
 Needs a CUDA device. --device cpu runs but is not a meaningful measurement.
 The sweep stops at --max-particles rather than running until it OOMs, and the
 SDF bake is launched in slabs so no single dispatch is long enough to trip a
 display-driver timeout. Sustained GPU load on a thin laptop is its own risk --
 keep an eye on the machine rather than walking away from a long sweep.
+
+This file is the Newton half of a two-engine comparison. Everything that is not
+the solver -- the scans, the cage, the bind, the belt, the lighting, the skinning
+and the quality metrics -- lives in fish_conveyor_common.py, and
+physx_fish_conveyor.py runs the same benchmark on PhysX 5 deformable volumes.
+fish_conveyor_ab.py drives both and reports the table.
+
+--tets physx swaps the voxel carve for PhysX's own conforming tetrahedralisation
+(cooked in a subprocess), so the two solvers can be run on a mesh that is
+identical rather than merely equivalent.
 """
 import math
 import os
+import subprocess
 import sys
+import tempfile
 import time
 
 import numpy as np
@@ -70,22 +166,16 @@ try:
 except ImportError:
     sys.exit("newton is not installed -- pip install newton (needs a CUDA GPU, driver 545+)")
 
-sys.path.insert(0, __file__.rsplit("examples", 1)[0])
-try:
-    import threepp as tp
-except ImportError:
-    sys.exit("threepp is not importable -- the .usdz is read through threepp's ModelLoader")
-
-
-def cli_arg(flag, default, cast):
-    if flag in sys.argv:
-        k = sys.argv.index(flag)
-        if k + 1 < len(sys.argv) and not sys.argv[k + 1].startswith("--"):
-            return cast(sys.argv[k + 1])
-    return default
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import fish_conveyor_common as fc
+from fish_conveyor_common import (Fish, ab_run, cli_arg, deal_variants, fish_paths,
+                                  plan_layout, stage)
+# After fish_conveyor_common, which is what puts python/ on sys.path.
+import threepp as tp  # noqa: E402
 
 
 FISH = cli_arg("--fish", "", str)            # required -- see the module docstring
+VARIANTS = cli_arg("--variants", 4, int)     # distinct scans to build cages for
 COUNT = cli_arg("--count", 1, int)
 SWEEP = "--sweep" in sys.argv
 SWEEP_TO = cli_arg("--sweep-to", 64, int)    # raise deliberately; see MAX_PARTICLES
@@ -94,186 +184,115 @@ SWEEP_TO = cli_arg("--sweep-to", 64, int)    # raise deliberately; see MAX_PARTI
 # OOMs is not a measurement, it is a stress test. Raise it on purpose or not at all.
 MAX_PARTICLES = cli_arg("--max-particles", 400_000, int)
 SDF_SLAB = cli_arg("--sdf-slab", 8, int)     # grid rows per SDF dispatch
-TET_RES = cli_arg("--tet-res", 32, int)      # cells along the fish's longest axis
-ITERATIONS = cli_arg("--iterations", 10, int)# VBD iterations per substep
-SUBSTEPS = cli_arg("--substeps", 4, int)
+TET_RES = cli_arg("--tet-res", 14, int)      # cells along the fish's longest axis
+TETS = cli_arg("--tets", "voxel", str)       # voxel | physx -- whose tetrahedralisation
+PHYSX_VOXEL_RES = cli_arg("--physx-voxel-res", 10, int)   # only with --tets physx
+SOLVER = cli_arg("--solver", "vbd", str)     # vbd | xpbd
+ITERATIONS = cli_arg("--iterations", 4, int) # VBD iterations per substep
+# The rematch knobs. --detect-interval 0 is Newton's own default (detect twice
+# per substep); the shipped default detects once. --contact-buf V,E of 32,64 is
+# Newton's own preallocation; the shipped 8,8 was a speed cut whose quality cost
+# was never isolated. Both exist so the A/B can run Newton at NEWTON's contact
+# settings rather than at this file's.
+DETECT_INTERVAL = cli_arg("--detect-interval", -1, int)  # -1 = once per substep (shipped)
+RELAXATION = cli_arg("--relaxation", 0.9, float)  # xpbd only: soft-body Jacobi relaxation
+EDGE_KE = cli_arg("--edge-ke", 0.0, float)   # xpbd only: surface bending-edge stiffness
+SPINE_KE = cli_arg("--spine-ke", 0.0, float) # xpbd only: long-range body springs, N/m
+CONTACT_BUF = cli_arg("--contact-buf", "8,8", str)
+SUBSTEPS = cli_arg("--substeps", 4, int)    # the quality knob; see the docstring
 FRAMES = cli_arg("--frames", 120, int)       # timed frames
-WARMUP = cli_arg("--warmup", 30, int)        # settle + kernel compile, untimed
-GRAPH = "--graph" in sys.argv
+WARMUP = cli_arg("--warmup", 90, int)        # settle + kernel compile, untimed
+GRAPH = "--no-graph" not in sys.argv   # see the module docstring: never turn this off
 VIEW = "--view" in sys.argv
-SELF_CONTACT = "--self-contact" in sys.argv
+SHOT = cli_arg("--shot", "", str)            # headless: write this PNG and exit
+SHOT_TIME = cli_arg("--shot-time", 2.5, float)  # seconds of sim before the shot
+CAGE = "--cage" in sys.argv                  # draw the tet cage, not the scan
+RENDER_RATIO = cli_arg("--render-ratio", 0.4, float)  # decimate the drawn scan
+CARVE = cli_arg("--carve", 0.25, float)      # cells of dilation on the tet cage
+PARTICLE_R = cli_arg("--particle-radius", 0.40, float)  # cage cells, vs the machine
+CONTACT_MARGIN = cli_arg("--contact-margin", 0.50, float)  # cage cells, vs the machine
+# Fish-on-fish is a separate, SMALLER pair. The radius that makes a fish rest
+# correctly on a 50 mm roller is not the radius you want between two fish: the
+# detection margin scales with it, the candidate pairs scale with the margin
+# cubed, and fish-on-fish is where every millisecond over 100 fish goes.
+# 0.25/0.40 against 0.40/0.55 measured 17.2 ms against 22.8 at 100 fish, with
+# the same pile and one more fish still aboard. Newton wants margin >= 1.5x
+# radius and says so at construction time; 1.6x here.
+SELF_R = cli_arg("--self-radius", 0.25, float)
+SELF_MARGIN = cli_arg("--self-margin", 0.40, float)
+INTEROP = "--no-interop" not in sys.argv     # zero-copy skinning into the GL buffers
+RECYCLE = "--recycle" in sys.argv            # loop fish back to the start (off: they
+                                             # ride off the end, drop, and lie there)
+LANES = cli_arg("--lanes", 5, int)           # fish abreast; sets the belt width
+BED = cli_arg("--bed", 30.0, float)          # m; hard cap on the belt length
+LAYERS = cli_arg("--layers", 2, int)         # how deep the catch may be piled
+SELF_CONTACT = "--no-self-contact" not in sys.argv   # fish-on-fish; see the docstring
 BELT_SPEED = cli_arg("--speed", 0.5, float)  # m/s along +X
 ROLLER_R = cli_arg("--roller-radius", 0.05, float)
 MU = cli_arg("--mu", 0.45, float)            # plastic module belt, not steel
-YOUNG = cli_arg("--young", 5.0e4, float)     # Pa -- fish flesh is soft
+YOUNG = cli_arg("--young", 3.0e6, float)     # Pa. Two orders above the 5e4 quoted for fish
+                                             # flesh, and it has to be: a homogeneous
+                                             # Neo-Hookean cage has neither skin nor
+                                             # backbone, so its bulk modulus stands in for
+                                             # both, and a real cod is far stiffer in
+                                             # bending than its muscle is in compression.
+                                             # Measured over 8 s with 60 fish piled, worst
+                                             # tet edge stretch: 3.17x at 2e5, 1.53x at
+                                             # 3e6, and it costs nothing -- 3e6 measured
+                                             # marginally FASTER, because fish that hold
+                                             # their shape generate fewer contacts.
 POISSON = cli_arg("--poisson", 0.45, float)  # nearly incompressible
 DENSITY = cli_arg("--density", 1050.0, float)
 FISH_LENGTH = cli_arg("--fish-length", 0.0, float)  # 0 = keep the scan's own size
+SCALE_JITTER = cli_arg("--scale-jitter", 0.07, float)  # per-fish size jitter; 0 for the A/B
+SEED = cli_arg("--seed", 7, int)             # layout rng seed
+AB = "--ab" in sys.argv                      # one measured config, one JSON line
+AB_SECONDS = cli_arg("--ab-seconds", 8.0, float)
 DEVICE = cli_arg("--device", "cuda:0", str)
+
+# --solver xpbd selects a REGIME, not just a solver, so it brings its own
+# defaults for every knob the caller did not set. The VBD defaults are lethal
+# to it, not merely suboptimal: E=3e6 diverges XPBD at any substep count tried,
+# and a 0.40-cell particle radius explodes a fish from the inside (its
+# sphere-sphere contact has no topological filter, so intra-fish neighbours
+# start in violation). 16 substeps x 1 iteration is XPBD canon -- small steps
+# are its convergence mechanism, iterations are not.
+if SOLVER == "xpbd":
+    if "--substeps" not in sys.argv:
+        SUBSTEPS = 16
+    if "--iterations" not in sys.argv:
+        ITERATIONS = 2
+    if "--particle-radius" not in sys.argv:
+        PARTICLE_R = 0.25
+    if "--young" not in sys.argv:
+        YOUNG = 1.0e6
+    if "--relaxation" not in sys.argv:
+        RELAXATION = 0.5
+    # The COARSE cage is XPBD's stiffness mechanism, not a compromise: its
+    # corrections travel one tet-ring per iteration, so body stiffness is set
+    # by how many rings a fish is long, not by Young's modulus (res 14 at
+    # E=3e6 droops MORE than res 8 at 1e6). The fat contact spheres that come
+    # with the coarse cage are also what finally grips the rollers: conveying
+    # 0.87x belt at res 8 against 0.71x at res 14.
+    if "--tet-res" not in sys.argv:
+        TET_RES = 8
 FPS = 60.0
 
-
-# ── The fish: load, orient, tetrahedralise ───────────────────────────────────
-
-def load_triangles(path):
-    """Every triangle of the model, welded into one (verts, faces) pair."""
-    root = tp.ModelLoader().load(path)
-    meshes = []
-
-    def walk(n):
-        if getattr(n, "geometry", None) is not None:
-            meshes.append(n)
-        for c in n.children:
-            walk(c)
-
-    walk(root)
-    if not meshes:
-        sys.exit(f"no meshes in {path}")
-
-    verts, faces = [], []
-    for m in meshes:
-        g = m.geometry
-        p = np.asarray(g.get_attribute("position"), dtype=np.float32)
-        idx = g.get_index()
-        idx = np.arange(len(p), dtype=np.int64) if idx is None else np.asarray(idx, dtype=np.int64)
-        faces.append(idx.reshape(-1, 3) + len(verts))
-        verts.append(p)
-    return np.concatenate(verts), np.concatenate(faces)
+fc.configure(FPS=FPS, TET_RES=TET_RES, CARVE=CARVE, SDF_SLAB=SDF_SLAB,
+             RENDER_RATIO=RENDER_RATIO, CAGE=CAGE, FISH_LENGTH=FISH_LENGTH,
+             LANES=LANES, BED=BED, LAYERS=LAYERS, BELT_SPEED=BELT_SPEED,
+             ROLLER_R=ROLLER_R, MU=MU, WARMUP=WARMUP, FRAMES=FRAMES,
+             SCALE_JITTER=SCALE_JITTER, SEED=SEED, INTEROP=INTEROP,
+             # The belt gets a runway long enough for the window it is measured
+             # over, and --ab measures a different window than the sweep does.
+             # At 0.5 m/s an 8 s window plus warmup is 4.75 m of travel, and a
+             # bed built for 1.75 m conveys a third of the catch off the end
+             # mid-measurement -- which reads as "10 of 16 on belt" and a
+             # conveying speed averaged over fish that are on the floor.
+             MEASURED_FRAMES=int(round(AB_SECONDS * FPS)) if AB else FRAMES)
 
 
-def orient_fish(v):
-    """Longest extent -> +X (along the belt), thinnest -> +Z (up).
-
-    A fish on a conveyor lies on its side: its lateral (thinnest) axis vertical,
-    its length along travel. Sorting the bbox extents gets that without knowing
-    anything about how the scan was authored.
-    """
-    ext = v.max(0) - v.min(0)
-    order = np.argsort(ext)              # [thinnest, middle, longest]
-    perm = [order[2], order[1], order[0]]  # -> [X=longest, Y=middle, Z=thinnest]
-    v = v[:, perm]
-    # A permutation can be a reflection; keep it a rotation so the scan is not
-    # mirrored (a fish is not symmetric, and neither is a fillet).
-    if np.linalg.det(np.eye(3)[perm]) < 0:
-        v = v * np.float32([1, 1, -1])
-    return v
-
-
-def is_closed(faces):
-    e = np.concatenate([faces[:, [0, 1]], faces[:, [1, 2]], faces[:, [2, 0]]])
-    _, cnt = np.unique(np.sort(e, 1), axis=0, return_counts=True)
-    return bool((cnt == 2).all())
-
-
-@wp.kernel
-def _sdf_kernel(mesh: wp.uint64, origin: wp.vec3, h: float, max_dist: float, i0: int,
-                out: wp.array3d(dtype=wp.float32)):
-    di, j, k = wp.tid()
-    i = i0 + di
-    p = origin + wp.vec3((float(i) + 0.5) * h, (float(j) + 0.5) * h, (float(k) + 0.5) * h)
-    q = wp.mesh_query_point_sign_winding_number(mesh, p, max_dist)
-    d = max_dist
-    if q.result:
-        cp = wp.mesh_eval_position(mesh, q.face, q.u, q.v)
-        d = wp.length(p - cp) * q.sign
-    out[i, j, k] = d
-
-
-# The two 5-tet splits of a cube. Corner c has bits (dx, dy, dz) = (c&1, c>>1&1,
-# c>>2&1). Alternating them by cell parity is what makes the lattice conforming:
-# neighbouring cells then agree on the diagonal of every shared face.
-_EVEN = np.array([[0, 1, 2, 4], [1, 2, 3, 7], [1, 4, 5, 7], [2, 4, 6, 7], [1, 2, 4, 7]])
-_ODD = np.array([[0, 1, 3, 5], [0, 2, 3, 6], [0, 4, 5, 6], [3, 5, 6, 7], [0, 3, 5, 6]])
-
-
-def tetrahedralise(verts, faces, res, device):
-    """A conforming tet cage carved out of the mesh by its own SDF."""
-    lo, hi = verts.min(0), verts.max(0)
-    h = float((hi - lo).max()) / res
-    lo = lo - 2.0 * h
-    hi = hi + 2.0 * h
-    dims = np.maximum(np.ceil((hi - lo) / h).astype(int), 1)
-
-    mesh = wp.Mesh(points=wp.array(verts, dtype=wp.vec3, device=device),
-                   indices=wp.array(faces.astype(np.int32).flatten(), dtype=wp.int32, device=device),
-                   support_winding_number=True)
-    sdf = wp.zeros(tuple(dims), dtype=wp.float32, device=device)
-    # Launched in slabs, not one dispatch. A winding-number query walks the mesh
-    # BVH, and on an open mesh it walks a lot of it; a single grid-wide launch is
-    # exactly the multi-second dispatch this laptop answers with a device loss.
-    # Slabs keep every dispatch short and cost nothing measurable.
-    slab = max(1, SDF_SLAB)
-    for i0 in range(0, int(dims[0]), slab):
-        n = min(slab, int(dims[0]) - i0)
-        wp.launch(_sdf_kernel, dim=(n, int(dims[1]), int(dims[2])), device=device,
-                  inputs=[mesh.id, wp.vec3(*lo), h, float((hi - lo).max()), i0], outputs=[sdf])
-        wp.synchronize_device(device)
-    solid = sdf.numpy() < 0.0
-    if not solid.any():
-        sys.exit("tetrahedralise: nothing inside -- is the mesh closed? try a higher --tet-res")
-
-    ci, cj, ck = np.nonzero(solid)
-    nx, ny, nz = dims
-
-    # Corner grid: number only the corners a solid cell actually touches.
-    used = np.zeros((nx + 1, ny + 1, nz + 1), dtype=bool)
-    for c in range(8):
-        used[ci + (c & 1), cj + ((c >> 1) & 1), ck + ((c >> 2) & 1)] = True
-    cid = -np.ones_like(used, dtype=np.int64)
-    ui, uj, uk = np.nonzero(used)
-    cid[ui, uj, uk] = np.arange(len(ui))
-    tverts = (lo + np.stack([ui, uj, uk], 1) * h).astype(np.float32)
-
-    corners = np.stack([cid[ci + (c & 1), cj + ((c >> 1) & 1), ck + ((c >> 2) & 1)]
-                        for c in range(8)], 1)
-    parity = (ci + cj + ck) % 2
-    tets = np.concatenate([corners[parity == 0][:, _EVEN].reshape(-1, 4),
-                           corners[parity == 1][:, _ODD].reshape(-1, 4)])
-
-    # Positive orientation, whatever the split tables did.
-    a, b, c_, d = (tverts[tets[:, i]] for i in range(4))
-    neg = np.einsum("ij,ij->i", np.cross(b - a, c_ - a), d - a) < 0.0
-    tets[neg] = tets[neg][:, [0, 2, 1, 3]]
-
-    tverts, tets = _largest_component(tverts, tets)
-    return tverts, tets.astype(np.int32), h
-
-
-def _largest_component(verts, tets):
-    """Voxel carving can shed islands (fin tips, scan noise). Keep the body."""
-    parent = np.arange(len(verts))
-
-    def find(x):
-        while parent[x] != x:
-            parent[x] = parent[parent[x]]
-            x = parent[x]
-        return x
-
-    for t in tets:
-        r = find(t[0])
-        for v in t[1:]:
-            s = find(v)
-            if s != r:
-                parent[s] = r
-    roots = np.array([find(i) for i in range(len(verts))])
-    labels, counts = np.unique(roots[tets[:, 0]], return_counts=True)
-    keep = labels[counts.argmax()]
-    tets = tets[roots[tets[:, 0]] == keep]
-
-    remap = -np.ones(len(verts), dtype=np.int64)
-    live = np.unique(tets)
-    remap[live] = np.arange(len(live))
-    return verts[live], remap[tets]
-
-
-def surface_of(tets):
-    """Faces belonging to exactly one tet, wound outward."""
-    f = tets[:, [[0, 2, 1], [0, 1, 3], [0, 3, 2], [1, 2, 3]]].reshape(-1, 3)
-    _, idx, cnt = np.unique(np.sort(f, 1), axis=0, return_index=True, return_counts=True)
-    return f[idx[cnt == 1]]
-
-
-# ── The conveyor + the sim ───────────────────────────────────────────────────
+# -- The conveyor + the sim --------------------------------------------------
 
 @wp.kernel
 def drive_rollers(t: wp.array(dtype=wp.float32), omega: float,
@@ -288,24 +307,74 @@ def advance_time(dt: float, t: wp.array(dtype=wp.float32)):
     t[0] = t[0] + dt
 
 
+@wp.kernel
+def fish_centroid_x(q: wp.array(dtype=wp.vec3), owner: wp.array(dtype=int),
+                    inv_count: wp.array(dtype=float), out: wp.array(dtype=float)):
+    i = wp.tid()
+    f = owner[i]
+    wp.atomic_add(out, f, q[i][0] * inv_count[f])
+
+
+@wp.kernel
+def shift_fish(q: wp.array(dtype=wp.vec3), owner: wp.array(dtype=int),
+               off: wp.array(dtype=wp.vec3)):
+    i = wp.tid()
+    q[i] = q[i] + off[owner[i]]
+
+
+
+_SPINE = {}
+
+
+def spine_pairs(fish):
+    """Skewers for one fish: vertex pairs far apart along the body.
+
+    The spine of each x-slab (the vertex nearest the slab's centroid) chained to
+    its neighbours 3 slabs on, plus nose-to-mid and mid-to-tail ties. A few
+    dozen springs; O(1) propagation across the whole body.
+    """
+    key = id(fish)
+    if key not in _SPINE:
+        v = fish.cverts
+        n_slab = 8
+        xs = np.linspace(v[:, 0].min(), v[:, 0].max(), n_slab + 1)
+        spine = []
+        for i in range(n_slab):
+            in_slab = np.flatnonzero((v[:, 0] >= xs[i]) & (v[:, 0] <= xs[i + 1]))
+            if not len(in_slab):
+                continue
+            c = v[in_slab].mean(0)
+            spine.append(int(in_slab[np.argmin(((v[in_slab] - c) ** 2).sum(1))]))
+        pairs = []
+        for i in range(len(spine)):
+            for j in (i + 2, i + 3):
+                if j < len(spine):
+                    pairs.append((spine[i], spine[j]))
+        if len(spine) >= 5:
+            pairs.append((spine[0], spine[len(spine) // 2]))
+            pairs.append((spine[len(spine) // 2], spine[-1]))
+            pairs.append((spine[0], spine[-1]))
+        _SPINE[key] = pairs
+    return _SPINE[key]
+
+
 class Sim:
-    def __init__(self, cage, n_fish, device):
-        cverts, ctets, cell = cage
+    def __init__(self, fishes, n_fish, device):
         self.device = device
         self.n_fish = n_fish
-        self.n_cage_verts = len(cverts)
         self.frame_dt = 1.0 / FPS
         self.sim_dt = self.frame_dt / SUBSTEPS
+        # Deal the scans out round-robin: fish k is fishes[k % len(fishes)].
+        self.variant = deal_variants(n_fish, len(fishes))
+        self.fishes = fishes
 
-        ext = cverts.max(0) - cverts.min(0)
-        fish_len, fish_wide = float(ext[0]), float(ext[1])
-
-        # Lay the fish out in lanes across a belt sized to the fish.
-        lanes = max(1, int(math.ceil(math.sqrt(n_fish * fish_len / (3.0 * fish_wide)))))
-        lanes = min(lanes, 6)
-        rows = int(math.ceil(n_fish / lanes))
-        half_w = max(0.35, lanes * fish_wide * 0.75)
-        bed_len = max(2.0, rows * fish_len * 1.35 + 1.0)
+        # The belt, and every fish's spawn pose. Seeded and shared with the PhysX
+        # run, so the contact load -- and therefore the numbers that come out of
+        # it -- is the same machine loaded the same way on both sides.
+        L = plan_layout(fishes, n_fish, self.variant)
+        self.layout = L
+        self.part_base = L.part_base
+        self.part_count = L.part_count
 
         builder = newton.ModelBuilder(up_axis=newton.Axis.Z, gravity=(0.0, 0.0, -9.81))
 
@@ -315,21 +384,15 @@ class Sim:
         roller_cfg.mu = MU
         roller_cfg.ke, roller_cfg.kd = 1.0e5, 1.0e2
         roller_cfg.has_particle_collision = True
-        roller_cfg.margin = 0.5 * cell
+        roller_cfg.margin = CONTACT_MARGIN * min(f.cell for f in fishes)
 
-        spacing = 2.05 * ROLLER_R          # cylinders nearly touching: a tight bed
-        n_rollers = max(2, int(bed_len / spacing))
         z_to_y = wp.quat_from_axis_angle(wp.vec3(1.0, 0.0, 0.0), -0.5 * math.pi)
-        self.half_w = half_w
-        self.roller_x = []
         self.roller_joints = []
-        for i in range(n_rollers):
-            x = -0.5 + (i + 0.5) * spacing
-            self.roller_x.append(x)
+        for i, x in enumerate(L.roller_x):
             body = builder.add_link(mass=1.0, inertia=wp.mat33(np.eye(3) * 0.01),
                                     is_kinematic=True, label=f"roller_{i}")
             builder.add_shape_cylinder(body, xform=wp.transform(wp.vec3(), z_to_y),
-                                       radius=ROLLER_R, half_height=half_w, cfg=roller_cfg)
+                                       radius=ROLLER_R, half_height=L.half_w, cfg=roller_cfg)
             j = builder.add_joint_revolute(
                 parent=-1, child=body, axis=newton.Axis.Y,
                 parent_xform=wp.transform(p=wp.vec3(x, 0.0, -ROLLER_R), q=wp.quat_identity()))
@@ -340,11 +403,11 @@ class Sim:
         rail_cfg = newton.ModelBuilder.ShapeConfig()
         rail_cfg.mu = 0.2
         rail_cfg.has_particle_collision = True
-        rail_cfg.margin = 0.5 * cell
+        rail_cfg.margin = roller_cfg.margin
         for s in (-1.0, 1.0):
-            builder.add_shape_box(body=-1, hx=0.5 * bed_len, hy=0.02, hz=0.12,
-                                  xform=wp.transform(p=wp.vec3(0.5 * bed_len - 0.5,
-                                                               s * (half_w + 0.02), 0.10),
+            builder.add_shape_box(body=-1, hx=0.5 * L.bed_len, hy=0.02, hz=L.rail_h,
+                                  xform=wp.transform(p=wp.vec3(0.5 * L.bed_len - 0.5,
+                                                               s * L.rail_y, 0.10),
                                                      q=wp.quat_identity()),
                                   cfg=rail_cfg)
         builder.add_ground_plane(height=-1.0)
@@ -352,22 +415,35 @@ class Sim:
         # --- the fish ---
         lam = YOUNG * POISSON / ((1.0 + POISSON) * (1.0 - 2.0 * POISSON))
         mu_lame = YOUNG / (2.0 * (1.0 + POISSON))
-        flat_tets = ctets.flatten().tolist()
-        vert_list = cverts.tolist()
-        drop = 0.02 + 0.5 * float(ext[2])
-        self.spawn_x = []
+        cache = {}
         for k in range(n_fish):
-            lane, row = k % lanes, k // lanes
-            x = 0.2 + row * fish_len * 1.35
-            y = (lane - 0.5 * (lanes - 1)) * (2.0 * half_w / max(lanes, 1)) * 0.85
-            self.spawn_x.append(x)
+            v = int(self.variant[k])
+            fish = fishes[v]
+            if v not in cache:
+                cache[v] = (fish.cverts.tolist(), fish.ctets.flatten().tolist())
+            vert_list, flat_tets = cache[v]
+            x, y, z = (float(c) for c in L.spawn[k])
+            first_particle = builder.particle_count
             builder.add_soft_mesh(
-                pos=wp.vec3(x, y, drop), rot=wp.quat_identity(), scale=1.0,
-                vel=wp.vec3(0.0, 0.0, 0.0),
+                pos=wp.vec3(x, y, z),
+                rot=wp.quat_from_axis_angle(wp.vec3(0.0, 0.0, 1.0), float(L.yaw[k])),
+                scale=float(L.scale[k]), vel=wp.vec3(0.0, 0.0, 0.0),
                 vertices=vert_list, indices=flat_tets,
                 density=DENSITY, k_mu=mu_lame, k_lambda=lam, k_damp=1.0,
-                add_surface_mesh_edges=SELF_CONTACT,
-                particle_radius=0.4 * cell)
+                add_surface_mesh_edges=SELF_CONTACT or EDGE_KE > 0.0,
+                edge_ke=EDGE_KE,
+                particle_radius=PARTICLE_R * fish.cell)
+            if SPINE_KE > 0.0:
+                # Long-range springs, because tets cannot make the BODY stiff:
+                # XPBD moves a correction one tet-ring per iteration, a fish is
+                # ~14 rings long, and gravity re-bends it faster than one or two
+                # iterations carry stiffness down the chain. A spring that SPANS
+                # the body puts nose and tail in the same constraint, making the
+                # propagation distance one. Rest lengths come from the spawned
+                # positions, so scale and yaw are already in them.
+                for a, b_ in spine_pairs(fish):
+                    builder.add_spring(first_particle + int(a), first_particle + int(b_),
+                                       ke=SPINE_KE, kd=SPINE_KE * 1e-3, control=0.0)
 
         builder.color()
         self.model = builder.finalize(device=device)
@@ -375,14 +451,35 @@ class Sim:
         self.model.soft_contact_kd = 1.0e2
         self.model.soft_contact_mu = MU
 
-        self.solver = newton.solvers.SolverVBD(
-            self.model, iterations=ITERATIONS,
-            particle_enable_self_contact=SELF_CONTACT,
-            particle_self_contact_radius=0.4 * cell,
-            particle_self_contact_margin=0.8 * cell,
-            rigid_body_particle_contact_buffer_size=256)
+        cell = float(np.mean([f.cell for f in fishes]))
+        # Fish-on-fish is where the time goes, and the stock settings are sized for
+        # cloth, not for a few hundred blunt tet cages. Three changes, measured at
+        # 100 fish: detect once per substep rather than twice (54.2 -> 56.3 ms on
+        # its own, but it is what lets the rest be cut), pull the detection margin
+        # in from 0.8 to 0.55 cells since a cage particle cannot move half a cell
+        # in one substep (-10 ms), and stop preallocating 32 vertex / 64 edge
+        # contacts per particle when a fish in a heap sees a handful (-8 ms).
+        # Together: 54.2 -> 27.5 ms with the pile behaving the same.
+        vbuf, ebuf = (int(x) for x in CONTACT_BUF.split(","))
+        interval = ITERATIONS if DETECT_INTERVAL < 0 else DETECT_INTERVAL
+        if SOLVER == "xpbd":
+            # XPBD's regime is the opposite corner from VBD's: many small steps,
+            # one or two iterations. Fish-fish contact is particle-sphere via the
+            # model's own radii -- none of the VBD self-contact machinery applies.
+            self.solver = newton.solvers.SolverXPBD(
+                self.model, iterations=ITERATIONS, soft_body_relaxation=RELAXATION)
+        else:
+            self.solver = newton.solvers.SolverVBD(
+                self.model, iterations=ITERATIONS,
+                particle_enable_self_contact=SELF_CONTACT,
+                particle_self_contact_radius=SELF_R * cell,
+                particle_self_contact_margin=SELF_MARGIN * cell,
+                particle_collision_detection_interval=interval,
+                particle_vertex_contact_buffer_size=vbuf,
+                particle_edge_contact_buffer_size=ebuf,
+                rigid_body_particle_contact_buffer_size=256)
         self.pipeline = newton.CollisionPipeline(
-            self.model, broad_phase="sap", soft_contact_margin=0.5 * cell)
+            self.model, broad_phase="sap", soft_contact_margin=CONTACT_MARGIN * cell)
 
         self.state_0 = self.model.state()
         self.state_1 = self.model.state()
@@ -391,12 +488,33 @@ class Sim:
         newton.eval_fk(self.model, self.model.joint_q, self.model.joint_qd, self.state_0)
 
         self.omega = BELT_SPEED / ROLLER_R
-        self.n_rollers = n_rollers
+        self.n_rollers = L.n_rollers
+        self.bed_len = L.bed_len
         self.t = wp.zeros(1, dtype=wp.float32, device=device)
+        self.frames = 0
         self.graph = None
 
+        # Per-particle owner, for the two whole-fish operations that are not the
+        # solver's business: where is it, and put it back.
+        self.n_particles = L.n_particles
+        self.owner = wp.array(np.repeat(np.arange(n_fish, dtype=np.int32), self.part_count),
+                              dtype=int, device=device)
+        self.inv_count = wp.array((1.0 / self.part_count).astype(np.float32),
+                                  dtype=float, device=device)
+        self.cx = wp.zeros(n_fish, dtype=float, device=device)
+        self.shift = wp.zeros(n_fish, dtype=wp.vec3, device=device)
+        self.recycle_rng = np.random.default_rng(11)
+
         # One dof per roller joint and no other joints: joint index == dof index.
-        assert self.model.joint_dof_count == n_rollers, "roller joint layout changed"
+        assert self.model.joint_dof_count == L.n_rollers, "roller joint layout changed"
+
+    def positions(self):
+        """Cage vertices, all fish concatenated -- on the device, no readback."""
+        return self.state_0.particle_q
+
+    def positions_host(self):
+        """The same array on the host. Only the metrics ask for this."""
+        return self.state_0.particle_q.numpy()[:self.n_particles]
 
     def simulate(self):
         for _ in range(SUBSTEPS):
@@ -425,17 +543,47 @@ class Sim:
         self.graph = cap.graph
 
     def step(self):
+        self.frames += 1
         if self.graph is not None:
             wp.capture_launch(self.graph)
         else:
             self.simulate()
 
+    def recycle(self):
+        """Put fish that ran off the end back on the start of the bed.
+
+        View path only. The benchmark measures conveying as mean displacement
+        over a fixed window, and a fish teleported back inside that window reads
+        as the belt running hard backwards -- so run() never calls this, and the
+        window is short enough that nothing reaches the end during it.
+        """
+        self.cx.zero_()
+        wp.launch(fish_centroid_x, dim=self.n_particles, device=self.device,
+                  inputs=[self.state_0.particle_q, self.owner, self.inv_count],
+                  outputs=[self.cx])
+        done = self.cx.numpy() > self.layout.bed_len - 0.9
+        if not done.any():
+            return
+        off = np.zeros((self.n_fish, 3), np.float32)
+        off[done, 0] = -(self.layout.bed_len - 1.4)
+        off[done, 1] = self.recycle_rng.uniform(-0.12, 0.12, int(done.sum()))
+        wp.copy(self.shift, wp.array(off, dtype=wp.vec3, device=self.device))
+        wp.launch(shift_fish, dim=self.n_particles, device=self.device,
+                  inputs=[self.state_0.particle_q, self.owner], outputs=[self.shift])
+
+    def sim_time(self):
+        # Counted host-side on purpose: the device clock is the same number, and
+        # reading it back would sync the whole graph replay once per frame.
+        return self.frames * self.frame_dt
+
     def centroids(self):
-        q = self.state_0.particle_q.numpy()[: self.n_fish * self.n_cage_verts]
-        return q.reshape(self.n_fish, self.n_cage_verts, 3).mean(1)
+        n = int(self.part_base[-1] + self.part_count[-1])
+        q = self.state_0.particle_q.numpy()[:n]
+        return (np.add.reduceat(q, self.part_base, axis=0)
+                / self.part_count[:, None].astype(np.float64))
 
 
-# ── Measurement ──────────────────────────────────────────────────────────────
+# -- Measurement -------------------------------------------------------------
 
 def vram_mb(device):
     try:
@@ -445,9 +593,9 @@ def vram_mb(device):
         return float("nan")
 
 
-def run(cage, n_fish, device, verbose=True):
+def run(fishes, n_fish, device, verbose=True):
     t_build = time.perf_counter()
-    sim = Sim(cage, n_fish, device)
+    sim = Sim(fishes, n_fish, device)
     build_s = time.perf_counter() - t_build
 
     for _ in range(WARMUP):          # kernel compile + settle onto the rollers
@@ -497,64 +645,13 @@ def run(cage, n_fish, device, verbose=True):
               f"{r['onbelt']}/{n_fish} on belt | {r['vram']:.0f} MB", flush=True)
     return sim, r
 
-
-def flat_normals(p):
-    """Per-face normals for a non-indexed triangle soup, one copy per vertex."""
-    t = p.reshape(-1, 3, 3)
-    n = np.cross(t[:, 1] - t[:, 0], t[:, 2] - t[:, 0])
-    n /= np.maximum(np.linalg.norm(n, axis=1, keepdims=True), 1e-12)
-    return np.ascontiguousarray(np.repeat(n, 3, axis=0), dtype=np.float32)
-
-
-def view(sim, cage_surf, cage_verts):
-    """Eyeball it. Host readback per frame -- deliberately not the perf path.
-
-    Newton is Z-up and so is this scene, which is why the camera sits at -Y
-    looking along +Y rather than the usual three.js Y-up placement.
-    """
-    canvas = tp.Canvas("newton fish conveyor", width=1280, height=720, antialiasing=4)
-    renderer = tp.GLRenderer(canvas)
-
-    scene = tp.Scene()
-    scene.background = 0x171A1F
-    scene.add(tp.AmbientLight(0xFFFFFF, 0.45))
-    key = tp.DirectionalLight(0xFFFFFF, 2.5)
-    key.position.set(2, -4, 6)
-    scene.add(key)
-
-    tri = cage_surf.flatten()
-    rest = np.ascontiguousarray(cage_verts[tri], dtype=np.float32)
-    # ALLOCATE with set_attribute, UPDATE with update_attribute. The renderer
-    # caches its GPU buffers per geometry and invalidates that cache on the
-    # geometry's version, which update_attribute bumps and set_attribute does
-    # not -- a per-frame set_attribute leaves the old buffer live, so a fish
-    # keeps being drawn at a position it has already left.
-    geoms = []
-    for _ in range(sim.n_fish):
-        g = tp.BufferGeometry()
-        g.set_attribute("position", rest.copy())
-        g.set_attribute("normal", flat_normals(rest))
-        mat = tp.MeshPhongMaterial()
-        mat.color = 0xC08878
-        mat.shininess = 60.0
-        scene.add(tp.Mesh(g, mat))
-        geoms.append(g)
-
-    roller_geo = tp.CylinderGeometry(ROLLER_R, ROLLER_R, 2.0 * sim.half_w, 20)
-    roller_mat = tp.MeshPhongMaterial()
-    roller_mat.color = 0x707880
-    for x in sim.roller_x:
-        m = tp.Mesh(roller_geo, roller_mat)
-        m.position.set(x, 0.0, -ROLLER_R)
-        # CylinderGeometry's axis is +Y; the rollers lie along world +Y already,
-        # so no rotation -- unlike a Y-up scene, where this would need one.
-        scene.add(m)
-
-    camera = tp.PerspectiveCamera(50, canvas.aspect(), 0.05, 100)
-    camera.position.set(1.0, -2.0, 1.1)
-    camera.up.set(0, 0, 1)
+def view(sim, fishes):
+    """Eyeball it. Not the measured path, but not a slideshow either: the only
+    thing that crosses host memory per frame is one float per fish, for the
+    recycle check."""
+    canvas, renderer, scene, camera, draw = stage(sim, fishes, False, wp.get_device(DEVICE), "newton fish conveyor")
     controls = tp.OrbitControls(camera, canvas)
-    controls.target.set(1.0, 0.0, 0.0)
+    controls.target.set(0.5 * sim.bed_len - 0.5 - 0.02 * sim.bed_len, 0.6 * sim.layout.rail_h, 0.0)
     controls.enable_damping = True
 
     def on_resize(w, h):
@@ -564,83 +661,144 @@ def view(sim, cage_surf, cage_verts):
 
     canvas.on_window_resize(on_resize)
 
-    n_cage = sim.n_cage_verts
-
     def animate():
         sim.step()
-        q = sim.state_0.particle_q.numpy()[: sim.n_fish * n_cage].reshape(sim.n_fish, n_cage, 3)
-        for i, g in enumerate(geoms):
-            p = np.ascontiguousarray(q[i][tri], dtype=np.float32)
-            g.update_attribute("position", p)
-            g.update_attribute("normal", flat_normals(p))
+        if RECYCLE and sim.frames % 12 == 0:
+            sim.recycle()
+        draw()
         controls.update()
         renderer.render(scene, camera)
 
     canvas.animate(animate)
 
 
+def shot(sim, fishes, path):
+    """Headless PNG, after enough sim that the catch has settled and moved."""
+    canvas, renderer, scene, camera, draw = stage(sim, fishes, True, wp.get_device(DEVICE), "newton fish conveyor")
+    for _ in range(int(round(SHOT_TIME * FPS))):
+        sim.step()
+        if RECYCLE and sim.frames % 12 == 0:
+            sim.recycle()
+        draw()
+        renderer.render(scene, camera)      # arms the GL interop on frame one
+    renderer.save_frame(path)
+    print(f"      simulated {SHOT_TIME:.1f} s, wrote {path}", flush=True)
+
+# -- PhysX's tetrahedralisation, for the like-for-like run --------------------
+
+def physx_tets(paths, voxel_res):
+    """Cook each scan into PhysX's conforming tet mesh and hand back the cages.
+
+    Run in a SUBPROCESS: PhysX allows one PxFoundation per process and creates
+    its own CUDA context, and the point of this call is to leave neither behind
+    in the process that is about to run Warp. What comes back is exactly what
+    the PhysX benchmark simulates -- same cook, same voxel resolution -- so
+    --tets physx is the "same mesh, different solver" arm of the comparison.
+    """
+    script = os.path.join(os.path.dirname(os.path.abspath(__file__)), "physx_fish_conveyor.py")
+    out = os.path.join(tempfile.gettempdir(), f"physx_tets_{os.getpid()}.npz")
+    cmd = [sys.executable, script, "--fish", ",".join(paths), "--dump-tets", out,
+           "--voxel-res", str(voxel_res), "--render-ratio", str(RENDER_RATIO),
+           "--variants", str(len(paths))]
+    if FISH_LENGTH > 0:
+        cmd += ["--fish-length", str(FISH_LENGTH)]
+    r = subprocess.run(cmd, capture_output=True, text=True)
+    if r.returncode != 0 or not os.path.isfile(out):
+        sys.exit("--tets physx: the cook subprocess failed\n" + (r.stderr or r.stdout)[-3000:])
+    with np.load(out) as z:
+        cages = [(z[f"v{i}"], z[f"t{i}"]) for i in range(len(paths))]
+    os.remove(out)
+    return cages
+
+
+# -- main --------------------------------------------------------------------
+
 def main():
     if not FISH:
         sys.exit("--fish PATH is required: there is no bundled model.\n"
                  "  Any closed solid threepp's ModelLoader reads will do -- .usdz, .usd,\n"
-                 "  .obj, .stl, .gltf/.glb, .dae. Nothing here is fish-specific beyond the\n"
-                 "  auto-orientation (longest extent along the belt, thinnest one up).\n"
+                 "  .obj, .stl, .gltf/.glb, .dae. A directory or a comma-separated list\n"
+                 "  loads several and deals them out round-robin. Nothing here is\n"
+                 "  fish-specific beyond the auto-orientation (longest extent along the\n"
+                 "  belt, thinnest one up).\n"
                  "  e.g. python newton_fish_conveyor.py --fish cod.usdz --graph")
-    if not os.path.isfile(FISH):
-        sys.exit(f"--fish: no such file: {FISH}")
+    paths = fish_paths(FISH)
+    if not paths:
+        sys.exit(f"--fish: nothing to load from {FISH}")
+    for p in paths:
+        if not os.path.isfile(p):
+            sys.exit(f"--fish: no such file: {p}")
+    paths = paths[:max(1, VARIANTS)]
 
     device = wp.get_device(DEVICE)
     if device.is_cpu:
         print("warning: --device cpu is not a meaningful measurement of GPU headroom")
 
-    verts, faces = load_triangles(FISH)
-    verts = orient_fish(verts)
-    if FISH_LENGTH > 0:
-        verts *= FISH_LENGTH / float((verts.max(0) - verts.min(0))[0])
-    verts = verts - 0.5 * (verts.max(0) + verts.min(0))
-    verts[:, 2] -= verts[:, 2].min()
-    ext = verts.max(0) - verts.min(0)
-
-    print(f"fish  {os.path.basename(FISH)}")
-    print(f"      {len(verts)} verts, {len(faces)} tris, "
-          f"{ext[0]:.3f} x {ext[1]:.3f} x {ext[2]:.3f} m (L x W x H), "
-          f"{'closed' if is_closed(faces) else 'NOT CLOSED -- signs are unreliable'}")
-
-    t0 = time.perf_counter()
-    cverts, ctets, cell = tetrahedralise(verts, faces, TET_RES, device)
-    print(f"cage  {len(cverts)} verts, {len(ctets)} tets @ {cell * 1000:.1f} mm cells "
-          f"({time.perf_counter() - t0:.2f} s)")
+    if TETS == "physx":
+        cages = physx_tets(paths, PHYSX_VOXEL_RES)
+        fishes = [Fish(p, device, tets=c) for p, c in zip(paths, cages)]
+    elif TETS == "voxel":
+        fishes = [Fish(p, device) for p in paths]
+    else:
+        sys.exit(f"--tets: expected 'voxel' or 'physx', got {TETS!r}")
+    for f in fishes:
+        f.report()
+    if len(fishes) > 1:
+        print(f"      {len(fishes)} scans, dealt round-robin over the fish")
     print(f"mat   E={YOUNG:.3g} Pa, nu={POISSON}, rho={DENSITY} kg/m3 | "
           f"belt {BELT_SPEED} m/s, mu={MU}, rollers r={ROLLER_R} m")
-    print(f"solve VBD {ITERATIONS} iters x {SUBSTEPS} substeps @ {FPS:.0f} Hz"
-          f"{', CUDA graph' if GRAPH else ''}{', self-contact' if SELF_CONTACT else ''}")
+    print(f"solve {SOLVER.upper()} {ITERATIONS} iters x {SUBSTEPS} substeps @ {FPS:.0f} Hz"
+          f"{', CUDA graph' if GRAPH else ''}{', self-contact' if SELF_CONTACT else ''}"
+          f" | cage {fishes[0].cage_kind}")
     print()
 
-    if VIEW:
-        # Warm up (compile + settle onto the rollers) but skip the timed loop --
-        # the window is for looking at, and the host readback in view() would
-        # make any number it produced meaningless anyway.
-        sim = Sim((cverts, ctets, cell), COUNT, device)
+    if AB:
+        # The A/B path: settle, then run a fixed window with skinning and a
+        # headless render inside the clock, and report quality alongside speed.
+        sim = Sim(fishes, COUNT, device)
         for _ in range(WARMUP):
             sim.simulate()
         wp.synchronize_device(device)
         if GRAPH:
             sim.capture()
-        print(f"      {COUNT} fish, {sim.model.tet_count} tets -- drag to orbit, Esc quits",
-              flush=True)
-        view(sim, surface_of(ctets), cverts)
+            sim.step()
+            wp.synchronize_device(device)
+        engine = "newton-physx-tets" if TETS == "physx" else "newton-voxel"
+        r = ab_run(sim, fishes, device, AB_SECONDS, engine, SEED,
+                   "newton fish conveyor", shot=SHOT or None, shot_at=SHOT_TIME, warmup=0)
+        fc.ab_report(r)
+        return
+
+    if VIEW or SHOT:
+        # Warm up (compile + settle onto the rollers) but skip the timed loop --
+        # this path is for looking at.
+        sim = Sim(fishes, COUNT, device)
+        for _ in range(WARMUP):
+            sim.simulate()
+        wp.synchronize_device(device)
+        if GRAPH:
+            sim.capture()
+        drawn = sum(len(f.render_surface()[1]) for f in fishes) * COUNT // len(fishes)
+        print(f"      {COUNT} fish, {sim.model.tet_count} tets simulated, "
+              f"{drawn} triangles drawn ({'cage' if CAGE else 'scan'})", flush=True)
+        if SHOT:
+            shot(sim, fishes, SHOT)
+        else:
+            print("      drag to orbit, Esc quits", flush=True)
+            view(sim, fishes)
         return
 
     counts = [n for n in (1, 4, 16, 64, 128, 256, 512) if n <= SWEEP_TO] if SWEEP else [COUNT]
+    per_fish = float(np.mean([len(f.cverts) for f in fishes]))
     rows = []
     for n in counts:
-        if n * len(cverts) > MAX_PARTICLES:
-            print(f"  {n:>4} fish | SKIPPED: {n * len(cverts)} particles exceeds "
+        if n * per_fish > MAX_PARTICLES:
+            print(f"  {n:>4} fish | SKIPPED: {int(n * per_fish)} particles exceeds "
                   f"--max-particles {MAX_PARTICLES}", flush=True)
             break
         print(f"  {n:>4} fish | building...", end="\r", flush=True)
         try:
-            _, r = run((cverts, ctets, cell), n, device)
+            _, r = run(fishes, n, device)
             rows.append(r)
         except Exception as e:                       # OOM or buffer overflow at high n
             print(f"  {n:>4} fish | FAILED: {type(e).__name__}: {e}", flush=True)
