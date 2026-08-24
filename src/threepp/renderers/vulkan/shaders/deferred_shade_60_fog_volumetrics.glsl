@@ -42,9 +42,30 @@ float fogPathLength(vec3 a, vec3 b) {
 // noise modulation — a smooth mean is exactly what the FAR remainder wants).
 float heightFogOpticalDepth(vec3 a, vec3 b) {
     if (clouds.hfDensity <= 0.0) return 0.0;
+    // ── THE AIR MEDIUM STOPS AT THE WATERLINE ────────────────────────────────
+    // The profile below clamps to a CONSTANT σ0 under baseY (the max()es on
+    // ya/yb), so with a water surface present the whole submerged column would
+    // carry the air medium at full base density: a squall's mist hazing the
+    // underwater view, layered on top of the murk that already owns that leg.
+    // Clip the segment to its ABOVE-water portion instead — air above, murk
+    // below, one medium per leg portion and no double count. waterSurfaceY
+    // unset (1e30) leaves both endpoints alone, so a scene that never calls
+    // setFogWaterSurfaceY runs the pre-clip arithmetic textually.
+    // KEEP IN SYNC with deferred_filter_common.glsl's twin: the GI/reflection
+    // recombine multiplies by the extinction computed THERE, and an unclipped
+    // recombine glows its added radiance straight through the murk.
+    vec3 pa = a, pb = b;
+    if (fog.waterSurfaceY < 1e29) {
+        const float wa = a.y - fog.waterSurfaceY;
+        const float wb = b.y - fog.waterSurfaceY;
+        if (wa < 0.0 && wb < 0.0) return 0.0;                  // wholly submerged
+        const float tc = wa / (wa - wb);                       // surface crossing
+        if (wa < 0.0)      pa = mix(a, b, tc);
+        else if (wb < 0.0) pb = mix(a, b, tc);
+    }
     const float H   = max(clouds.hfFalloff, 1e-3);
-    const float ya  = max(a.y - clouds.hfBaseY, 0.0);
-    const float yb  = max(b.y - clouds.hfBaseY, 0.0);
+    const float ya  = max(pa.y - clouds.hfBaseY, 0.0);
+    const float yb  = max(pb.y - clouds.hfBaseY, 0.0);
     // Clamp the leg so a sentinel / near-infinite end point can NEVER overflow.
     // compositeClouds fogs the cloud in-scatter over camP→(camP+dir·meanDist); on
     // a clear-SKY pixel meanDist falls back to sceneDist = 1e30, and distance()
@@ -53,7 +74,7 @@ float heightFogOpticalDepth(vec3 a, vec3 b) {
     // for a grazing/long leg (camera high above a shallow layer, ya/H ≳ 87 ⇒ ea→0)
     // — and exp(-NaN) = NaN blacks out the whole sky. 1e7 m dwarfs any real scene
     // leg; beyond it e^{-od} is already 0, so the clamp is invisible when legit.
-    const float len = min(distance(a, b), 1.0e7);
+    const float len = min(distance(pa, pb), 1.0e7);
     // ∫ σ0 e^{-max(y,base)/H} ds along the segment (y linear in s):
     //   σ0·len·(e^{-ya/H} − e^{-yb/H})/((yb−ya)/H).
     // ea, eb both ≤ 1 (arguments ≤ 0) so they NEVER overflow. The DIFFERENCE form
@@ -540,6 +561,161 @@ vec3 applyMurk(vec3 col, vec3 ro, vec3 hit) {
                          + sampleEnvLod(vec3(0.0, 1.0, 0.0), float(max(pc.envMipCount, 1u) - 1u));
     return col * tr + fog.murkColor * fogLight * (vec3(1.0) - tr);
 }
+// ── Submerged camera: the two gates every underwater path is behind ──────────
+// murkLive() = the water body exists as a medium at all (a density AND a clip
+// plane). camUnderwater() = this PIXEL's ray starts inside it — gPrimaryOrigin,
+// not the shared eye, so a parallel projection follows the same per-pixel
+// convention as camOriginAt and every other camPos-relative term in the shade.
+// Both are false for every scene that never calls setUnderwaterMurk /
+// setFogWaterSurfaceY, which is what keeps the above-water render byte-identical.
+bool murkLive()      { return fog.murkDensity > 0.0 && fog.waterSurfaceY < 1e29; }
+bool camUnderwater() { return murkLive() && gPrimaryOrigin.y < fog.waterSurfaceY; }
+
+// Snell's ratio for a flat air/water interface, as GLSL refract() wants it
+// (eta = n_incident / n_transmitted). Used to bend the SUN into the water; the
+// water→air direction (shadeWater's Snell window) is its reciprocal, which is
+// pm.ior, so that path reads the material instead of this constant.
+const float kMurkEtaAirWater = 1.0 / 1.333;
+// Shaft phase when no air fog is bound to inherit an anisotropy from. Water is
+// strongly forward-scattering; this is the low end of measured ocean g.
+const float kMurkShaftG = 0.65;
+// Caustic proxy: how hard the surface pattern bites the shafts (0 = flat shafts,
+// 1 = full contrast), the height→contrast scale that turns the fine cascade's
+// centimetric relief into filaments, and the peak of a focus. Look knobs, not
+// physics — a real caustic is a focusing determinant, this is a crest proxy.
+const float kMurkCausticBite  = 0.9;
+const float kMurkCausticScale = 9.0;
+const float kMurkCausticPeak  = 2.6;
+// Shaft gain. NOT a fudge for the single-scatter integral, which is complete:
+// applyMurk's ambient in-scatter is keyed on the env MEAN, and that mean already
+// contains the sun disc, so the flat murk arrives carrying a share of the very
+// light this march resolves into structure. Until the two are split (a murk that
+// takes a sunless ambient) the shafts need the head-room to read against it.
+// 1.5 is where the two checkpoint views agree: below it the horizontal view has
+// no shafts to speak of, above it the near-surface band floods and Snell's
+// window loses its edge against the murk.
+const float kMurkShaftGain = 1.5;
+
+// ── Underwater env-miss background — the endless blue ────────────────────────
+// A submerged camera that misses every surface is NOT looking at the sky: its
+// ray runs out through an unbounded water column, and that column's radiance is
+// the t→∞ limit of applyMurk — murkColor · fogLight with the transmittance term
+// gone. Direction only GRADES that limit, because the geometry above and below
+// the camera differ: the column overhead is short and fed by the whole sky
+// through the surface, the column underneath is fed by nothing. So a shallow
+// up/down ramp plus one broad forward lobe around the REFRACTED sun (which
+// sits far higher than the geometric sun — refraction compresses the entire sky
+// into Snell's 97° window) is the whole model. The structure comes from
+// murkSunScatter, added on top by the caller; this is only what it hangs on.
+vec3 applyMurkSky(vec3 dir) {
+    const vec3  up = (dot(fog.worldUp, fog.worldUp) > 1e-6) ? normalize(fog.worldUp) : vec3(0.0, 1.0, 0.0);
+    const vec3  fogLight = lights.ambient
+                         + sampleEnvLod(up, float(max(pc.envMipCount, 1u) - 1u));
+    const float elev = clamp(dot(dir, up), -1.0, 1.0);
+    // ANCHORED AT THE HORIZON, exactly 1.0 there — the same convergence rule
+    // applySkyFog follows for air. A murk-saturated distant SURFACE fades to
+    // murkColor·fogLight with no grade at all, so a ramp that read 0.87 at the
+    // horizon drew a visible step along the far edge of every seabed against the
+    // open water behind it. Only the two half-spaces are graded, away from that
+    // shared value.
+    const float grade = (elev >= 0.0) ? mix(1.0, 1.55, elev) : mix(1.0, 0.30, -elev);
+    vec3 col = fog.murkColor * fogLight * grade;
+    for (uint i = 0u; i < lights.dirCount; ++i) {
+        const vec3 L = normalize(lights.dirLights[i].direction);
+        if (dot(L, up) <= 0.02) continue;// sun at/below the horizon: no column to light
+        const vec3 sd = refract(-L, up, kMurkEtaAirWater);
+        if (dot(sd, sd) < 1e-6) continue;
+        const float mu = max(dot(dir, -normalize(sd)), 0.0);
+        col += fog.murkColor * lights.dirLights[i].color * (0.18 * pow(mu, 6.0));
+    }
+    return col;
+}
+
+// ── Murk sun in-scatter — the shafts ─────────────────────────────────────────
+// Single-scattering march of the sun through the water body, over the
+// BELOW-waterSurfaceY portion of [0, tMax] only. Same skeleton as
+// volumetricDirScatter (per-pixel jittered start, one RT shadow ray per step,
+// HG phase, TAA converges the stratification), deliberately NOT a call into it:
+// three things differ, and each of them is the reason the shafts read as water.
+//
+//  • THE SUN'S LEG IS THE WATER COLUMN, not the view ray. Its transmittance is
+//    exp(-σ·depth/|sunDir·up|) with depth measured from the SURFACE, so shafts
+//    fade with how deep they are, not with how far they are from the camera —
+//    which is what puts the bright band just under the surface.
+//  • THE SHADOW RAY FOLLOWS THE REFRACTED DIRECTION. A 48° sun enters the water
+//    at 33°; casting the occlusion ray along the air direction puts a hull's
+//    shadow the better part of a metre off at 3 m depth, and the shaft edges are
+//    exactly where the eye reads that error.
+//  • A CAUSTIC PROXY from the FFT fine cascade, sampled at the surface point the
+//    step's light actually passed through (walk back up the sun's leg), is what
+//    makes the shafts flicker and braid instead of being smooth cones. The
+//    cascade evolves every frame, so the animation costs nothing extra. One tap
+//    per step: a focusing measure (second differences of the surface) is the
+//    physical quantity and five taps too many — crest height correlates well
+//    enough with convergence for a proxy that a smoothstep sharpens anyway.
+//
+// Exact no-op with no murk, no clip plane, or no sun, so this costs a submerged
+// scene only and nothing else.
+vec3 murkSunScatter(vec3 ro, vec3 rd, float tMax, ivec2 px) {
+    if (!murkLive() || lights.dirCount == 0u) return vec3(0.0);
+    // Below-water portion of the leg. rd.y ≈ 0 is the degenerate horizontal ray:
+    // it is wholly in or wholly out, decided by the origin.
+    const float y0 = ro.y - fog.waterSurfaceY;
+    float t0 = 0.0, t1 = min(tMax, 1.0e4);
+    if (abs(rd.y) > 1e-6) {
+        const float tc = -y0 / rd.y;                 // surface crossing
+        if (y0 < 0.0) { if (rd.y > 0.0) t1 = min(t1, tc); }
+        else if (rd.y < 0.0) t0 = max(t0, tc);
+        else return vec3(0.0);                       // above, heading up
+    } else if (y0 >= 0.0) return vec3(0.0);
+    // Optical-depth horizon: past ~6/σ the rest of the column contributes < 0.3%.
+    t1 = min(t1, t0 + 6.0 / fog.murkDensity);
+    if (t1 <= t0) return vec3(0.0);
+
+    const vec3  up  = (dot(fog.worldUp, fog.worldUp) > 1e-6) ? normalize(fog.worldUp) : vec3(0.0, 1.0, 0.0);
+    const float hgG = (fog.enabled > 0.5) ? fog.anisotropy : kMurkShaftG;
+    const int   STEPS  = 20;
+    uint        seed   = pcgHash(uint(px.x) * 7919u + pcgHash(uint(px.y) * 104729u + pc.frame * 6271u));
+    const float jitter = rnd(seed);
+    const float dt     = (t1 - t0) / float(STEPS);
+    const bool  caustic = pc.oceanFineTileSize > 0.0;
+    const float invTile = caustic ? 1.0 / pc.oceanFineTileSize : 0.0;
+
+    vec3 sum = vec3(0.0);
+    for (uint li = 0u; li < lights.dirCount; ++li) {
+        const vec3 L = normalize(lights.dirLights[li].direction);
+        if (dot(L, up) <= 0.02) continue;// grazing/below the horizon: no column
+        vec3 sd = refract(-L, up, kMurkEtaAirWater);// the sun's direction INSIDE the water
+        if (dot(sd, sd) < 1e-6) continue;
+        sd = normalize(sd);
+        const float sy    = max(-dot(sd, up), 0.08);// metres of leg per metre of depth
+        const float phase = hgPhase(dot(-sd, rd), hgG);
+        vec3 acc = vec3(0.0);
+        for (int s = 0; s < STEPS; ++s) {
+            const float t     = t0 + (float(s) + jitter) * dt;
+            const vec3  x     = ro + rd * t;
+            const float trCam = exp(-fog.murkDensity * (t - t0));
+            if (trCam < 0.003) break;              // nothing behind this survives
+            const float depth = max(fog.waterSurfaceY - x.y, 0.0);
+            const float trSun = exp(-fog.murkDensity * depth / sy);
+            if (trSun < 0.002) continue;           // too deep for this sun to reach
+            const float vis = shadowVis(x, -sd, 1e30);// hull/keel carve the real shafts
+            if (vis <= 0.0) continue;
+            float caus = 1.0;
+            if (caustic) {
+                const vec2  sp = (x.xz - sd.xz * (depth / sy)) * invTile;
+                const float h  = textureLod(oceanFineHeight, sp, 0.0).r * kMurkCausticScale;
+                caus = mix(1.0, smoothstep(-0.10, 0.55, h) * kMurkCausticPeak, kMurkCausticBite);
+            }
+            acc += vec3(trCam * trSun * vis * caus);
+        }
+        sum += lights.dirLights[li].color * (phase * fog.murkDensity * dt) * acc;
+    }
+    // σ_s = σ_t · albedo, with murkColor the single-scattering albedo — the same
+    // convention applyMurk's in-scatter term uses, so the shafts and the ambient
+    // murk are tinted by one value and cannot drift apart.
+    return sum * (fog.murkColor * kMurkShaftGain);
+}
 // ── Sky aerial perspective (deferred) ────────────────────────────────────────
 // The HDR background is infinitely far, so applySceneFog never touches it — a
 // foggy scene then shows distant geometry fading to fog colour against a crisp,
@@ -759,6 +935,12 @@ vec3 volumetricDirScatter(vec3 ro, vec3 rd, float tMax, ivec2 px) {
         // heightFogOpticalDepth / mediumExtinction.
         const float sigmaX = clouds.hfDensity * exp(-max(x.y - clouds.hfBaseY, 0.0) / H);
         if (sigmaX <= 1e-7) continue;
+        // The air medium stops at the waterline (heightFogOpticalDepth is clipped
+        // the same way, so trCam below already agrees): a submerged step scatters
+        // no air, and murkSunScatter owns that part of the leg. Without the pair
+        // the underwater view got the sun's aerial glow through the water column
+        // at the air medium's full base density.
+        if (fog.waterSurfaceY < 1e29 && x.y < fog.waterSurfaceY) continue;
         const float trCam = exp(-heightFogOpticalDepth(ro, x));// closed-form camera → x over the WHOLE leg
         if (trCam < 0.003) break;                              // remaining contribution negligible
         vec3 stepSum = vec3(0.0);
@@ -782,10 +964,14 @@ vec3 volumetricDirScatter(vec3 ro, vec3 rd, float tMax, ivec2 px) {
 // a per-pixel view-ray integral added once, at full weight, by the caller.
 vec3 skyBackground(vec2 ndc, vec3 ro) {
     const vec3 dirWS = camRayDir(ndc);
+    // Underwater the env miss is the water column, not the sky — the same swap
+    // the full sky path makes. A minority that kept the sky here would put a
+    // bright sky-coloured rim along every submerged silhouette.
+    const vec3 bg = camUnderwater()
+                  ? applyMurkSky(dirWS)
+                  : applySkyFog(sampleEnvLod(dirWS, 0.0) + proceduralStars(dirWS), dirWS);
     // Same dust term the full sky path applies (deferred_shade.comp's skyRad):
     // this is the MSAA sky-minority blend, and a minority that skipped the dust
     // would put an undusted rim along every silhouette inside the cloud.
-    return applyParticleFog(
-            applySkyFog(sampleEnvLod(dirWS, 0.0) + proceduralStars(dirWS), dirWS),
-            ro, dirWS, 1e30);
+    return applyParticleFog(bg, ro, dirWS, 1e30);
 }

@@ -7708,6 +7708,10 @@ class VulkanRenderer:
         """
         Frames driven per render() to flush the MAILBOX swapchain (default 3; raise to 4+ for fast-moving dynamic scenes).
         """
+    def set_fog_water_surface_y(self, y: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        """
+        World-Y of the water surface: murk applies below it, the air medium above it. 1e30 (default) = no waterline.
+        """
     def set_height_fog(self, density: typing.SupportsFloat | typing.SupportsIndex = 0.019999999552965164, base_y: typing.SupportsFloat | typing.SupportsIndex = 0.0, falloff: typing.SupportsFloat | typing.SupportsIndex = 80.0, noise_amount: typing.SupportsFloat | typing.SupportsIndex = 0.6000000238418579) -> None:
         """
         Enable near-field heterogeneous height fog. density = sigma_t at base_y; base_y world-Y; falloff exponential height scale (m); noise_amount 0=smooth..1=fully noise-modulated.

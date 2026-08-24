@@ -1424,6 +1424,16 @@ namespace threepp_py {
                 .def_property("volumetric_fog",
                               [](PyVulkanRenderer& r) { return r.native().volumetricFog(); },
                               [](PyVulkanRenderer& r, bool v) { r.native().setVolumetricFog(v); })
+                // World-Y of the water surface — the clip plane the underwater
+                // murk lives below, and (since the underwater shading pass) the
+                // plane the AIR medium is clipped ABOVE. Also the gate every
+                // submerged path is behind: unset (1e30, the default) means the
+                // renderer has no waterline and nothing underwater-specific runs.
+                .def("set_fog_water_surface_y",
+                     [](PyVulkanRenderer& r, float y) { r.native().setFogWaterSurfaceY(y); },
+                     py::arg("y"),
+                     "World-Y of the water surface: murk applies below it, the air "
+                     "medium above it. 1e30 (default) = no waterline.")
                 // Underwater murk — a homogeneous absorption/tint medium clipped to
                 // BELOW the water surface (fog_water_surface_y). Phase 2 decouples
                 // this from scene.fog: scene.fog is the AIR medium (haze / god rays,

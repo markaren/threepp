@@ -8,6 +8,13 @@
 #define SCOUT_WATER 0
 #endif
 
+// Forward declarations — the underwater medium lives in deferred_shade_60, which
+// is included AFTER this file (the split is ordered by what the shade's main()
+// needs first, not by call graph). shadeWater's from-below branch needs both:
+// the gate, and applyMurk to composite the murk onto its traced reflection leg.
+bool camUnderwater();
+vec3 applyMurk(vec3 col, vec3 ro, vec3 hit);
+
 // Thin-shell water (RenderMode::RasterFirst). Replicates closest_hit's
 // DETERMINISTIC thin-shell BSDF — noise-free because it's an analytic Fresnel
 // split, not a stochastic reflect/refract pick:
@@ -32,12 +39,36 @@ vec3 shadeWater(vec3 P, vec3 N, vec3 V, MaterialDesc pm, int instIdx,
                 float slopeVarSq, vec3 Nmacro) {
     const float NdotV = max(dot(N, V), 1e-4);
     const float ior   = max(pm.ior, 1.0);
+    // ── FROM BELOW ───────────────────────────────────────────────────────────
+    // The surface rasterizes into the G-buffer from underneath already (the
+    // ocean material is Side::Double thin-shell), and main() flips N toward the
+    // camera before calling in, so N/Nmacro point DOWN here and every N-relative
+    // term below is already in the right frame. What is NOT is the optics: the
+    // ray leaves the DENSE medium, which the above-water Fresnel and the
+    // sand-floor transmit have no expression for. Gated on the murk medium being
+    // live, so a scene without one can never enter these branches.
+    const bool below = camUnderwater();
     // Explicit square: the max() above makes (1-ior)/(1+ior) ≤ 0, and GLSL's
     // pow() is spec-undefined for a negative base (works only where the driver
     // folds pow(x,2) → x·x).
     const float f0n   = (1.0 - ior) / (1.0 + ior);
     const float r0    = f0n * f0n;
-    const float F     = r0 + (1.0 - r0) * pow(1.0 - NdotV, 5.0);
+    // r0 is symmetric in the two indices, so only the ANGLE term changes going
+    // the other way: Schlick's cosine is the one on the LESS dense side, and
+    // past the critical angle (sin²θ_air ≥ 1) no transmitted ray exists at all —
+    // F is exactly 1 and the surface is a perfect mirror. That discontinuity IS
+    // Snell's window: a ~97° cone of sky overhead, a mirrored water column
+    // everywhere outside it. eta here is n_water/n_air = ior, refract()'s
+    // convention for a ray crossing water → air.
+    float cosAir = 1.0;// air-side cosine; 0 = total internal reflection
+    float F;
+    if (below) {
+        const float sinAir2 = ior * ior * (1.0 - NdotV * NdotV);
+        cosAir = (sinAir2 < 1.0) ? sqrt(1.0 - sinAir2) : 0.0;
+        F = (sinAir2 >= 1.0) ? 1.0 : r0 + (1.0 - r0) * pow(1.0 - cosAir, 5.0);
+    } else {
+        F = r0 + (1.0 - r0) * pow(1.0 - NdotV, 5.0);
+    }
 
     // Effective specular roughness = base water roughness ⊕ the sub-pixel chop
     // variance banked out of N (LEAN spec-AA). Distant water fattens its lobe →
@@ -66,6 +97,13 @@ vec3 shadeWater(vec3 P, vec3 N, vec3 V, MaterialDesc pm, int instIdx,
     // have skimmed a crest reflects near-horizon light anyway. Clamped against
     // the MACRO normal (pre-tilt, pre-jitter), so a rotated ocean (Z-up pond)
     // needs no world-up assumption.
+    //
+    // The clamp needs NO from-below branch, and that is worth stating because
+    // the physical rule inverts: a submerged surface cannot reflect ABOVE
+    // itself. Nmacro is the CAMERA-FACING macro normal (main() flips it), so it
+    // points down for a submerged view and `dot(R, Nmacro) >= 0.02` reads as
+    // "keep R just below the plane" there and "just above" from the air — one
+    // expression, both half-spaces, exactly as the world-up-free framing intends.
     vec3 R = reflect(-V, N);
     const float rDotUp = dot(R, Nmacro);
     if (rDotUp < 0.02) R = normalize(R + Nmacro * (0.02 - rDotUp));
@@ -125,7 +163,44 @@ vec3 shadeWater(vec3 P, vec3 N, vec3 V, MaterialDesc pm, int instIdx,
         reflectColor = reflectColor * svT + svEmis;
     }
 
-    // Transmission, two terms:
+    // ── THE MIRROR IS UNDER WATER ────────────────────────────────────────────
+    // Third medium on the same leg, and the one that decides whether the from-
+    // below surface reads at all: R points DOWN into the water column, so the
+    // traced leg runs through the very murk the caller composites onto the
+    // primary. Skip it and total internal reflection becomes an impossibly clean
+    // mirror — a crisp hull at 40 m inside water whose direct view fades out by
+    // 15. applyMurk is the same expression and the same medium the primary leg
+    // gets, so the two cannot disagree. A ray that escaped (gTraceHitT < 0) is
+    // heading down and never leaves the water, so it takes the saturating 10 km
+    // leg, i.e. the infinite-murk limit applyMurkSky returns.
+    if (below) {
+        const float legT = (gTraceHitT > 0.0) ? min(gTraceHitT, 1.0e4) : 1.0e4;
+        reflectColor = applyMurk(reflectColor, reflOrig, reflOrig + R * legT);
+    }
+
+    // Transmission. From BELOW it is Snell's window; from above, the analytic
+    // deep-water body (+ an optional shallow bottom).
+    vec3 transmitColor;
+    if (below) {
+        // ── SNELL'S WINDOW ───────────────────────────────────────────────────
+        // Inside the critical cone the refracted ray exits upward into air, so
+        // the transmitted radiance is simply the sky along it — the WHOLE upper
+        // hemisphere squeezed into ~97°, which is what makes the window both
+        // bright and compressed. Sampled at the reflection's own LOD so the sun
+        // disc survives (it is the brightest thing an underwater shot has) while
+        // a point-feature sky still does not speckle across the chop.
+        //
+        // NO SCENE TRACE, deliberately: rigging, topsides and gulls ABOVE the
+        // surface are absent from the window. The sky outweighs them by orders
+        // of magnitude and a trace here would add a second full radiance ray to
+        // every water pixel. Accepted for v1 — named so a mast that fails to
+        // appear overhead reads as a known approximation, not a bug.
+        const vec3 wDir = refract(-V, N, ior);
+        transmitColor = (dot(wDir, wDir) > 1e-6)
+                      ? sampleEnvLod(normalize(wDir), reflLod)
+                      : reflectColor;// outside the window there is no transmitted ray (F == 1)
+    } else {
+    // Two terms:
     //
     // 1) ANALYTIC deep-water body — deliberately NOT a refraction ray for the
     // body itself. A stochastic downward continuation self-intersects this same
@@ -156,7 +231,7 @@ vec3 shadeWater(vec3 P, vec3 N, vec3 V, MaterialDesc pm, int instIdx,
     const float skyLum    = dot(sampleEnvLod(vec3(0.0, 1.0, 0.0), maxLod), vec3(0.2126, 0.7152, 0.0722));
     const float depthFade = mix(1.0, 0.4, clamp(V.y, 0.0, 1.0));// darker looking down into the column
     const vec3  deepBody  = tint * (skyLum * 0.35 + lights.ambient) * depthFade;
-    vec3 transmitColor = deepBody;
+    transmitColor = deepBody;
 
     // 2) SHALLOW BOTTOM — the pond/shore path. Refract the view ray for real
     // and probe for geometry within the Beer-Lambert visibility range; a hit
@@ -215,6 +290,7 @@ vec3 shadeWater(vec3 P, vec3 N, vec3 V, MaterialDesc pm, int instIdx,
                 }
             }
         }
+    }
     }
 
 #if SCOUT_WATER == 6
@@ -368,7 +444,12 @@ vec3 shadeWater(vec3 P, vec3 N, vec3 V, MaterialDesc pm, int instIdx,
             const float lace = textureLod(foamDetailTex, P.xz * (1.0 / 12.0) + drift * 0.12, lodLace).g;
             const float web  = smoothstep(0.55, 0.80, lace * (0.55 + 0.45 * foamCoverage)) *
                                smoothstep(0.03, 0.22, foamCoverage);
-            const float foamMask = max(sheet, web * 0.8);
+            // From BELOW, foam is not paint on the surface — it is a raft of
+            // bubbles seen from underneath, which reads as a dull patch in the
+            // window rather than white. The lifecycle above still runs (the mask
+            // is where the sheet IS), only its opacity collapses; killing it
+            // outright would leave a breaking crest looking like clear water.
+            const float foamMask = max(sheet, web * 0.8) * (below ? 0.12 : 1.0);
             if (foamMask > 0.0) {
                 const float micro = textureLod(foamDetailTex, P.xz * 0.25 - drift * 0.1, lodMicro).r;
                 vec3 foamCol = mix(vec3(0.62, 0.68, 0.72), vec3(0.97, 0.99, 1.00), micro);
