@@ -1320,6 +1320,34 @@ namespace threepp {
             g.color[2] = envSun_.colorE[2];
         }
 
+        // ── 4c: the billboard slice's copy of the sun ───────────────────────
+        // ParticleFieldPass has no descriptor set by design, so a `lit`
+        // BillboardRepr cannot read the UBO above — it gets three floats in its
+        // per-view record instead. Taken from the FINISHED ubo, after the
+        // one-sun policy has decided between the scene's own DirectionalLight
+        // and the extracted HDRI sun, so the sprites are lit by exactly the sun
+        // the deferred path shades with. Brightest by luminance-ish max, which
+        // for the single-sun scenes this serves is simply "the sun".
+        {
+            bbAmbient_[0] = ubo.ambient[0];
+            bbAmbient_[1] = ubo.ambient[1];
+            bbAmbient_[2] = ubo.ambient[2];
+            float best = -1.f;
+            bbSunRadiance_[0] = bbSunRadiance_[1] = bbSunRadiance_[2] = 0.f;
+            for (std::uint32_t i = 0; i < ubo.dirCount; ++i) {
+                const auto& g = ubo.dirLights[i];
+                const float p = std::max({g.color[0], g.color[1], g.color[2]});
+                if (p <= best) continue;
+                best = p;
+                bbSunDirWorld_[0] = g.direction[0];
+                bbSunDirWorld_[1] = g.direction[1];
+                bbSunDirWorld_[2] = g.direction[2];
+                bbSunRadiance_[0] = g.color[0];
+                bbSunRadiance_[1] = g.color[1];
+                bbSunRadiance_[2] = g.color[2];
+            }
+        }
+
         uploadHostVisible(ctx->allocator(), lightsUbos[frame], &ubo, sizeof(ubo));
     }
 

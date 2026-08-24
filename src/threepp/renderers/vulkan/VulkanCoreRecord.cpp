@@ -1663,7 +1663,7 @@ bool VulkanRenderer::Impl::sceneHasFieldBillboards() const {
 // buffer holds the same sum whatever order the fields and their particles
 // arrive in, and this phase draws additive only.
 void VulkanRenderer::Impl::recordFieldBillboards(VkCommandBuffer cb, VkPipeline pipe,
-                                                 bool glowPass) {
+                                                 bool glowPass, VkPipeline pipeAlpha) {
             if (!particleFieldPass_) return;
             if (pipe == VK_NULL_HANDLE) return;
             const auto& states = particleFieldPass_->drawStates();
@@ -1683,7 +1683,7 @@ void VulkanRenderer::Impl::recordFieldBillboards(VkCommandBuffer cb, VkPipeline 
             const VkDeviceAddress viewAddr = pushBillboardViewRecord(viewM, glowPass);
             if (viewAddr == 0) return;
 
-            bool bound = false;
+            VkPipeline boundPipe = VK_NULL_HANDLE;
             const Texture* curTex = nullptr;
             bool curTexBound = false;
             std::unordered_map<const Texture*, VkDescriptorSet> setCache;
@@ -1696,9 +1696,17 @@ void VulkanRenderer::Impl::recordFieldBillboards(VkCommandBuffer cb, VkPipeline 
                 // it does not use.
                 if (glowPass && !st.glow) continue;
 
-                if (!bound) {
-                    vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, pipe);
-                    bound = true;
+                // 4c: blending is PIPELINE state, so a field that composites
+                // alpha-over needs its own object. The glow leg passes no alpha
+                // pipeline — that target accumulates linear HDR for a bright
+                // pass and is additive by definition — so a sprite field's halo
+                // is additive there, which is what a halo is.
+                VkPipeline want = (st.bbAlphaOver && pipeAlpha != VK_NULL_HANDLE)
+                                          ? pipeAlpha
+                                          : pipe;
+                if (boundPipe != want) {
+                    vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, want);
+                    boundPipe = want;
                 }
 
                 // The sprite texture, through the LEGACY path's cache, layout,
@@ -1815,6 +1823,31 @@ VkDeviceAddress VulkanRenderer::Impl::pushBillboardViewRecord(const Matrix4& vie
                 rec.viewToWorldY[0] = static_cast<float>(iv[1]);
                 rec.viewToWorldY[1] = static_cast<float>(iv[5]);
                 rec.viewToWorldY[2] = static_cast<float>(iv[9]);
+            }
+
+            // ── 4c: the sun, rotated into VIEW space ────────────────────────
+            // BillboardRepr::lit evaluates one HG lobe against it, and the
+            // vertex stage has the view-space particle position and no way back
+            // to world — so the basis change happens here, once per view per
+            // frame, out of the snapshot updateLightsUbo already took of the
+            // scene's brightest DirectionalLight.
+            //
+            // Rotation only: a direction has no translation, so this is the
+            // upper-left 3x3 of the view matrix applied to the world vector,
+            // which for the column-major Matrix4 is three dot products against
+            // its columns... expressed as the rows of the 3x3, i.e. elements
+            // 0/4/8 for x. Unconditional: three multiplies for a field that is
+            // not lit, against a branch that would have to be taken anyway.
+            {
+                const auto& ve = viewM.elements;
+                const float* s = bbSunDirWorld_;
+                rec.sunDir[0] = static_cast<float>(ve[0] * s[0] + ve[4] * s[1] + ve[8] * s[2]);
+                rec.sunDir[1] = static_cast<float>(ve[1] * s[0] + ve[5] * s[1] + ve[9] * s[2]);
+                rec.sunDir[2] = static_cast<float>(ve[2] * s[0] + ve[6] * s[1] + ve[10] * s[2]);
+                for (int i = 0; i < 3; ++i) {
+                    rec.sunRadiance[i] = bbSunRadiance_[i];
+                    rec.ambient[i]     = bbAmbient_[i];
+                }
             }
             return particleFieldPass_->pushViewRecord(currentFrame, rec);
         }
@@ -2732,7 +2765,9 @@ void VulkanRenderer::Impl::recordHybridOverlay(VkCommandBuffer cb, uint32_t imag
                     recordFieldBillboards(cb,
                                           overlayMsaa ? fieldBillboardPipeline_
                                                       : fieldBillboardPipeline1x_,
-                                          /*glowPass=*/false);
+                                          /*glowPass=*/false,
+                                          overlayMsaa ? fieldBillboardAlphaPipeline_
+                                                      : fieldBillboardAlphaPipeline1x_);
 
                     // ── F4: the billboard glow ─────────────────────────────
                     // The sparks' own bloom pyramid, computed just before this

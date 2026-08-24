@@ -1455,6 +1455,16 @@ void ParticleFieldPass::prepareFrame(std::uint64_t serial, std::uint32_t frame,
             bp.brightJitter  = std::max(0.f, std::min(1.f, bb.brightJitter));
             bp.sizeTaper     = std::max(0.f, std::min(1.f, bb.sizeTaper));
             bp.flags = (cfg.wSemantic == ParticleField::WSemantic::Radius) ? 1u : 0u;
+            // ── 4c: the sprite slice ────────────────────────────────────────
+            // Two bits and three floats. Both default off and everything below
+            // is exactly zero then, which is what keeps the additive path
+            // byte-identical rather than merely close.
+            if (bb.alphaOver) bp.flags |= 2u;
+            if (bb.lit) bp.flags |= 4u;
+            bp.opacity    = std::max(0.f, std::min(1.f, bb.opacity));
+            bp.litPhaseG  = std::max(-0.95f, std::min(0.95f, bb.litPhaseG));
+            bp.litAmbient = std::max(bb.litAmbient, 0.f);
+            ds.bbAlphaOver = bb.alphaOver;
 
             // ── F4 ──────────────────────────────────────────────────────────
             bp.glow             = std::max(bb.glow, 0.f);

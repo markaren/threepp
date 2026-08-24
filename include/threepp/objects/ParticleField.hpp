@@ -340,6 +340,53 @@ namespace threepp {
             // the emitter wrote into w.
             float splashRingWidth = 0.30f;
 
+            // ── 4c: the SPRITE slice — alpha-over, and lit ──────────────────
+            // Two opt-in flags that together turn this representation from
+            // "emissive dot" into "a parcel of water/dust the sun shines on".
+            // Both default OFF and the additive path is byte-identical when
+            // they are: the pipeline, the vertex maths and the fragment output
+            // all branch on them and nothing else changes.
+            //
+            // alphaOver: composite premultiplied SRC_ALPHA-over instead of
+            // ONE/ONE. An additive sprite can only ever ADD light, so a white
+            // puff over a bright sky is invisible and the same puff over a dark
+            // hull is a lamp — the two failures that make additive dots read as
+            // a snow flurry rather than as water. Alpha-over OCCLUDES, which is
+            // what a chunk of aerated water does.
+            //
+            // ORDER. This pass sorts nothing (that is still true): draws are
+            // issued in field order and, within a field, instances in SLOT
+            // order, which Vulkan's primitive-order guarantee makes the blend
+            // order too. So a host that wants correct alpha-over submits its
+            // particles back-to-front — which for a few hundred sprites is one
+            // argsort. Documented rather than solved, deliberately: a device
+            // radix sort (SplatPass's) is the answer at 10^5 sprites, and this
+            // slice is for 10^2.
+            bool alphaOver = false;
+            // lit: per-vertex radiance = colour x (ambient + sun x phase(V.L))
+            // from the SCENE's sun and ambient, filled engine-side (the same
+            // one-sun policy the deferred path follows). Still not a lighting
+            // path — no shadow ray, no cluster walk, no per-fragment work: one
+            // Henyey-Greenstein lobe per particle, which is what makes a sheet
+            // of spray FLARE when the lens looks through it into the sun and go
+            // grey when the sun is behind the camera.
+            bool lit = false;
+            // HG asymmetry for that lobe. ~0.3-0.4 is the forward-ish, still
+            // half-isotropic scattering of a water parcel; 0 is isotropic.
+            float litPhaseG = 0.35f;
+            // An ambient radiance FLOOR, added to the scene's own summed
+            // AmbientLights in the same linear units. Not a scale on them: an
+            // IBL-lit scene usually carries no AmbientLight at all (the env map
+            // is the ambience, and this pass cannot sample it), so scaling zero
+            // would leave the shaded side of every sprite black. This is the
+            // one number that says how dark that side is allowed to get.
+            float litAmbient = 0.2f;
+            // Master coverage scale in alphaOver mode: the sprite's own alpha,
+            // before the procedural/texture falloff. Ignored when additive
+            // (there `intensity` is the only knob and coverage is folded into
+            // the radiance).
+            float opacity = 1.0f;
+
             bool enabled = false;
         };
         // Dense dust / smoke. The field is scattered ONCE per frame into a

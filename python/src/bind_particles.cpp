@@ -148,6 +148,27 @@ namespace threepp_py {
                 .def_readwrite("splash_ring_width", &ParticleField::BillboardRepr::splashRingWidth,
                                "Annulus width as a fraction of the splash ring's radius (1 = a filled "
                                "disc). Only means anything with emitter.surface.splash_seconds > 0.")
+                // ── 4c: the sprite slice ────────────────────────────────────
+                .def_readwrite("alpha_over", &ParticleField::BillboardRepr::alphaOver,
+                               "Composite premultiplied SRC_ALPHA-over instead of additive, so a "
+                               "sprite OCCLUDES what is behind it. Nothing is sorted: draws go in "
+                               "field order and, within a field, in SLOT order, so submit "
+                               "back-to-front for correct blending.")
+                .def_readwrite("lit", &ParticleField::BillboardRepr::lit,
+                               "Per-particle radiance = colour x (ambient + sun x HG phase), from "
+                               "the scene's own sun. One lobe per particle — no shadow ray, no "
+                               "cluster walk.")
+                .def_readwrite("lit_phase_g", &ParticleField::BillboardRepr::litPhaseG,
+                               "Henyey-Greenstein asymmetry for that lobe. ~0.35 = the forward-ish "
+                               "scattering of a water parcel; 0 = isotropic.")
+                .def_readwrite("lit_ambient", &ParticleField::BillboardRepr::litAmbient,
+                               "Ambient radiance FLOOR added to the scene's summed AmbientLights, "
+                               "in the same linear units — how dark the shaded side of a sprite is "
+                               "allowed to get. An IBL-lit scene carries no AmbientLight, so a "
+                               "scale on it would be a scale on zero.")
+                .def_readwrite("opacity", &ParticleField::BillboardRepr::opacity,
+                               "Coverage scale in alpha_over mode, before the texture/procedural "
+                               "falloff. Ignored when additive.")
                 .def_readwrite("enabled", &ParticleField::BillboardRepr::enabled);
 
         // ── DensityRepr (world-anchored sigma_t volume the froxel pass reads) ─

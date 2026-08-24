@@ -440,6 +440,11 @@ VulkanRenderer::Impl::~Impl() {
             if (fieldBillboardPipeline1xOwned_ && fieldBillboardPipeline1x_)
                 vkDestroyPipeline(d, fieldBillboardPipeline1x_, nullptr);
             if (fieldBillboardPipeline_)    vkDestroyPipeline(d, fieldBillboardPipeline_, nullptr);
+            // 4c: the alpha-over pair, same aliasing rule.
+            if (fieldBillboardAlphaPipeline1xOwned_ && fieldBillboardAlphaPipeline1x_)
+                vkDestroyPipeline(d, fieldBillboardAlphaPipeline1x_, nullptr);
+            if (fieldBillboardAlphaPipeline_)
+                vkDestroyPipeline(d, fieldBillboardAlphaPipeline_, nullptr);
             if (fieldBillboardGlowPipeline_) vkDestroyPipeline(d, fieldBillboardGlowPipeline_, nullptr);
             if (fieldBillboardPipelineLayout_)
                 vkDestroyPipelineLayout(d, fieldBillboardPipelineLayout_, nullptr);

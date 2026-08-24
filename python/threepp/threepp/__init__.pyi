@@ -4684,6 +4684,14 @@ class ParticleField(Mesh):
     class BillboardRepr:
         enabled: bool
         @property
+        def alpha_over(self) -> bool:
+            """
+            Composite premultiplied SRC_ALPHA-over instead of additive, so a sprite OCCLUDES what is behind it. Nothing is sorted: draws go in field order and, within a field, in SLOT order, so submit back-to-front for correct blending.
+            """
+        @alpha_over.setter
+        def alpha_over(self, arg0: bool) -> None:
+            ...
+        @property
         def bright_jitter(self) -> float:
             """
             Per-particle brightness spread, hashed.
@@ -4740,6 +4748,30 @@ class ParticleField(Mesh):
         def intensity(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
             ...
         @property
+        def lit(self) -> bool:
+            """
+            Per-particle radiance = colour x (ambient + sun x HG phase), from the scene's own sun. One lobe per particle — no shadow ray, no cluster walk.
+            """
+        @lit.setter
+        def lit(self, arg0: bool) -> None:
+            ...
+        @property
+        def lit_ambient(self) -> float:
+            """
+            Scale on the ambient floor of the lit term — what the shaded side of a sprite sits at.
+            """
+        @lit_ambient.setter
+        def lit_ambient(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+            ...
+        @property
+        def lit_phase_g(self) -> float:
+            """
+            Henyey-Greenstein asymmetry for that lobe. ~0.35 = the forward-ish scattering of a water parcel; 0 = isotropic.
+            """
+        @lit_phase_g.setter
+        def lit_phase_g(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+            ...
+        @property
         def lod_fade(self) -> float:
             """
             Metres of ramp above lod_near over which the quad fades IN.
@@ -4762,6 +4794,14 @@ class ParticleField(Mesh):
             """
         @near_fade.setter
         def near_fade(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+            ...
+        @property
+        def opacity(self) -> float:
+            """
+            Coverage scale in alpha_over mode, before the texture/procedural falloff. Ignored when additive.
+            """
+        @opacity.setter
+        def opacity(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
             ...
         @property
         def size_scale(self) -> float:

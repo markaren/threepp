@@ -2627,6 +2627,52 @@ void VulkanRenderer::Impl::createFieldBillboardPipeline() {
                 fieldBillboardPipeline1xOwned_ = true;
             }
 
+            // ── 4c: the ALPHA-OVER variant ──────────────────────────────────
+            // One state differs: premultiplied SRC_ALPHA-over (ONE,
+            // ONE_MINUS_SRC_ALPHA) instead of ONE/ONE, so a sprite OCCLUDES
+            // what is behind it. Everything else — depth test, write mask,
+            // samples, layout, both stages — is the same object's, because
+            // everything else about the two modes is the same.
+            //
+            // The colour write mask still excludes alpha, and that is not in
+            // tension with reading SRC_ALPHA: the write mask governs what
+            // reaches the attachment, never what the blend equation may use as
+            // a factor. So the swapchain's alpha stays exactly as untouched as
+            // it is on the additive path.
+            //
+            // NOTHING IS SORTED here either. Draws are issued in field order
+            // and, within a field, instances in slot order, which Vulkan's
+            // primitive-order guarantee makes the BLEND order as well — so a
+            // host with a few hundred sprites gets correct back-to-front by
+            // submitting them that way, and a device radix sort stays deferred
+            // to the count that needs one.
+            {
+                VkPipelineColorBlendAttachmentState cbasA[1] = {cbas[0]};
+                cbasA[0].srcColorBlendFactor = VK_BLEND_FACTOR_ONE;
+                cbasA[0].dstColorBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
+                VkPipelineColorBlendStateCreateInfo cbA = cb;
+                cbA.pAttachments = cbasA;
+
+                VkGraphicsPipelineCreateInfo gpciA = gpci;
+                gpciA.pColorBlendState = &cbA;
+                check(vkCreateGraphicsPipelines(ctx->device(), ctx->pipelineCache(), 1, &gpciA,
+                                                nullptr, &fieldBillboardAlphaPipeline_),
+                      "vkCreateGraphicsPipelines(fieldBillboard alpha)");
+                if (ms.rasterizationSamples == VK_SAMPLE_COUNT_1_BIT) {
+                    fieldBillboardAlphaPipeline1x_      = fieldBillboardAlphaPipeline_;
+                    fieldBillboardAlphaPipeline1xOwned_ = false;
+                } else {
+                    VkPipelineMultisampleStateCreateInfo ms1 = ms;
+                    ms1.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+                    VkGraphicsPipelineCreateInfo gpciA1 = gpciA;
+                    gpciA1.pMultisampleState = &ms1;
+                    check(vkCreateGraphicsPipelines(ctx->device(), ctx->pipelineCache(), 1, &gpciA1,
+                                                    nullptr, &fieldBillboardAlphaPipeline1x_),
+                          "vkCreateGraphicsPipelines(fieldBillboard alpha 1x)");
+                    fieldBillboardAlphaPipeline1xOwned_ = true;
+                }
+            }
+
             // ── F4: the GLOW variant ────────────────────────────────────────
             // Same two stages, same layout, same additive blend — three
             // differences and each is forced by where it draws:

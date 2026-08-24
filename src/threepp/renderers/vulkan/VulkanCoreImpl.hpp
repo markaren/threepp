@@ -1537,6 +1537,24 @@ namespace threepp {
         // and is only a second object when it has to be.
         VkPipeline       fieldBillboardPipeline1x_     = VK_NULL_HANDLE;
         bool             fieldBillboardPipeline1xOwned_ = false;
+        // 4c: the ALPHA-OVER siblings. Identical in every respect but the blend
+        // state — premultiplied SRC_ALPHA-over instead of ONE/ONE — because
+        // blending is pipeline state and a field that occludes cannot share an
+        // object with one that only adds. Created alongside the additive pair,
+        // bound per field by BillboardRepr::alphaOver.
+        // 4c: the scene's ONE sun, snapshotted by updateLightsUbo for the
+        // billboard slice — the brightest DirectionalLight in the lights UBO
+        // (which is already the env-sun/scene-sun decision EnvSunPolicy made),
+        // plus the summed ambient. Three vectors on the host beats binding the
+        // lights descriptor set into a pass whose whole design is not to have
+        // one. Defaults: no sun, no ambient, so a `lit` field in a scene with
+        // neither draws black rather than undefined.
+        float            bbSunDirWorld_[3]  = {0.f, 1.f, 0.f};
+        float            bbSunRadiance_[3]  = {0.f, 0.f, 0.f};
+        float            bbAmbient_[3]      = {0.f, 0.f, 0.f};
+        VkPipeline       fieldBillboardAlphaPipeline_   = VK_NULL_HANDLE;
+        VkPipeline       fieldBillboardAlphaPipeline1x_ = VK_NULL_HANDLE;
+        bool             fieldBillboardAlphaPipeline1xOwned_ = false;
         // F4: the billboard-only bloom chain. Created LAZILY, on the first
         // frame a field asks for a glow — a scene with no sparks in it
         // allocates no target, compiles no pipeline and records no pass.
@@ -3800,7 +3818,10 @@ namespace threepp {
         // 1-sample sibling a secondary view needs, or F4's linear-HDR glow
         // variant), and `glowPass` selects which fields are drawn and which
         // value domain they are written in.
-        void recordFieldBillboards(VkCommandBuffer cb, VkPipeline pipe, bool glowPass);
+        // `pipeAlpha` is the alpha-over sibling, bound for fields that ask for
+        // it; VK_NULL_HANDLE (the glow leg) draws every field additively.
+        void recordFieldBillboards(VkCommandBuffer cb, VkPipeline pipe, bool glowPass,
+                                   VkPipeline pipeAlpha = VK_NULL_HANDLE);
 
         // F4: build this view's BillboardViewGpu record — the display transform
         // and the fog medium the quads are attenuated by — and publish it into
