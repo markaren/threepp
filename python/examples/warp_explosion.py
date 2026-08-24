@@ -75,6 +75,18 @@ instantiated afterwards. Everything you see later is that same matter evolving.
          with its own bloom pyramid. 15 M additive quads is not a look, it is
          a fill-rate accident; a quarter million of them is the sparkle.
 
+Three steel drums stand in the yard, and they are the one thing here that does
+NOT come apart by construction. Each is a two-skin truss shell in raw Warp --
+the hydraulic press's cylinder, plus the water balloon's tearing -- so the wave
+dents it, the dents STAY (plasticity: a strut past yield creeps its rest length
+toward the length it has), struts stretched past TEAR die, faces left without
+three live edges leave the mesh, and the flap that is still hanging peels back
+on the wind. The vertex kicks are staggered by the same front the bricks feel.
+Both skins are published as fixed-capacity triangle soups straight into the
+renderer's own vertex buffers (`enable_vertex_interop`), the outer one in bare
+steel that takes the ray-traced reflection of the flash, the inner one dark, so
+a tear shows the drum's inside.
+
 Emission, recycling and the fire->smoke conversion are all device kernels
 structured around a fixed-max array of 8 charges. The CPU never walks a
 particle: per frame it computes one integer per cohort per charge and hands the
@@ -98,6 +110,9 @@ phases (drums, slow-motion film) hang off the same t0 without re-deriving it.
     python warp_explosion.py --gas 0.3                  # 4.4 M particles, not 15 M
     python warp_explosion.py --sigma 1.6                # thicker smoke
     python warp_explosion.py --no-interop               # HostRing fallback, reduced counts
+    python warp_explosion.py --drum-cam --shot 2.6      # macro on the near drum
+    python warp_explosion.py --tear 1.18 --drum-gain 1400   # shred the drums
+    python warp_explosion.py --no-drums                 # no shells at all
     python warp_explosion.py --no-gas                   # phase 1 only
     python warp_explosion.py --no-ao                    # RT AO/GI off (~6.5 ms/frame back)
     python warp_explosion.py --msaa 1                   # the other render knob
@@ -106,6 +121,7 @@ Vulkan only: the fireball renders with tp.ParticleField, which draws nothing on
 the GL path by design. The smoke rides the froxel FOG pass, so --no-fog is a
 phase-1 debug flag -- it turns the gas volumes off with it.
 """
+import atexit
 import math
 import os
 import subprocess
@@ -198,12 +214,13 @@ SMOKE_K = cli_arg("--smoke-k", 3, int)      # soot parcels one cooled fire parce
 # makes fifteen million affordable: without it every particle crosses the bus
 # TWICE a frame, so the fallback runs at phase 2's counts, which is what the
 # HostRing path was measured to carry (1.79 ms of submit at 644 k live).
+NO_DRUMS = "--no-drums" in sys.argv
 device = None
 INTEROP = False
-if not NO_GAS:
+if not (NO_GAS and NO_DRUMS):
     wp.init()
     device = wp.get_preferred_device()
-    INTEROP = (not NO_INTEROP) and device.is_cuda
+    INTEROP = (not NO_GAS) and (not NO_INTEROP) and device.is_cuda
 FALLBACK = 0.04
 _SCALE = GAS * (1.0 if INTEROP else FALLBACK)
 FIRE_N = int(3_000_000 * _SCALE)
@@ -295,6 +312,81 @@ WILSON_SIGMA = 0.055
 # value that still reads dirty rather than dead.
 SMOKE_ALBEDO = tuple(float(v) for v in
                      cli_arg("--smoke-albedo", "0.10,0.086,0.066", str).split(","))
+
+# --- the drums --------------------------------------------------------------
+#
+# Three vertical steel drums, each a TWO-SKIN TRUSS SHELL: an outer skin, an
+# inner skin 13 mm behind it, and a truss between them -- edges in each skin, a
+# radial strut per vertex pair, two shear diagonals across every edge's prism.
+# That is the hydraulic press's shell wrapped onto a cylinder, and it is the
+# whole reason a drum dents instead of deflating: bending costs stretch in the
+# skins, so an inverted dent is a real crease and not a free sign flip.
+#
+# What makes it STEEL rather than rubber is plasticity (the press again): a
+# strut strained past its yield creeps its rest length toward the length it
+# actually has, so the crease the wave puts in is still there a second later.
+# What makes it TEAR is the water balloon: a skin strut stretched past TEAR
+# times its ORIGINAL rest length dies, and a face whose edges are not all alive
+# leaves the mesh -- so a run of broken struts opens a slit, the slit runs, and
+# the flap left hanging peels back on the wind behind the front.
+#
+# The blast coupling is per VERTEX and staggered by the front exactly like the
+# rigid side (t_hit = t0 + r / C_FRONT), with a facing weight: a blast is a
+# pressure on a surface, so the skin whose normal looks INTO the wave takes the
+# push and the far skin is shadowed. That difference IS the cave-in. The whole
+# thing lives on the device -- the host never touches a drum vertex.
+DRUM_R, DRUM_H = 0.295, 0.88        # a 200 litre drum, near enough
+DRUM_G = cli_arg("--drum-grid", 9, int)     # cap grid side; the body has 4*(g-1) segments
+DRUM_NV = cli_arg("--drum-rings", 14, int)  # rings up the side
+DRUM_THICK = cli_arg("--drum-thick", 0.013, float)   # spacing of the two skins, m
+DRUM_SUBSTEPS = cli_arg("--drum-substeps", 48, int)
+DRUM_DAMP = 0.002                   # per substep
+DRUM_MU = 0.55                      # friction against the ground: this is what topples it
+DRUM_GRAV = wp.vec3(0.0, -9.81, 0.0) if device is not None else None
+# Strut classes, per the press: the skins are nearly inextensible and rarely
+# yield, the shear diagonals are soft and yield early -- so a wrinkle is cheap
+# to form and, once formed, the diagonals remember it.
+#
+# THE YIELDS ARE TINY AND THAT IS THE POINT. The press's 6% skin yield is a
+# number a distance projection can never reach: at full stiffness every strut
+# is pulled back inside a percent of its rest length on every sweep, so a 6%
+# gate is never opened, nothing creeps, and the drum DENTS ELASTICALLY AND
+# SPRINGS BACK -- which is exactly what the first version did, at every blast
+# gain I tried. Thin steel yields at a couple of tenths of a percent anyway;
+# what the press's number really encodes is a shell squeezed slowly by a plate,
+# not one hit by a wave. These are the real thing.
+STIFF_SKIN, STIFF_DIAG, STIFF_RAD = 1.0, 0.28, 1.0
+YIELD_SKIN = cli_arg("--yskin", 0.0020, float)
+YIELD_DIAG = cli_arg("--ydiag", 0.0008, float)
+YIELD_RAD = 0.010
+PLASTIC_RATE = cli_arg("--plastic", 0.05, float)     # excess adopted per substep
+# THE TEAR IS DUCTILE, NOT ELASTIC. The first spelling of this measured the
+# instantaneous stretch of a skin strut against its original rest length, and
+# NOTHING EVER TORE, at any gain: a full-stiffness distance projection holds
+# every strut within a percent or two of its rest length, and a crushed
+# cylinder buckles rather than stretches. What actually breaks a drum is the
+# plastic strain it has ACCUMULATED -- so every metre of rest-length creep, in
+# either direction, is damage, and a skin strut dies when it has taken TEAR of
+# its own original length in creep. That is a real ductile-failure model and it
+# puts the tears where the creases are, which is where a drum actually splits.
+TEAR = cli_arg("--tear", 0.090, float)
+TEAR_SNAP = 1.45          # ... and a strut yanked this far past rest0 in one go
+# The shell's own blast gain. It is NOT the rigid J0: an impulse per unit MASS
+# is what a rigid body takes, while a pressure wave on a thin skin delivers
+# P*A/(rho*A*t) -- a velocity that does not depend on how finely the shell is
+# tessellated. So the drums get their own number, in m/s at 1 m, tuned by eye.
+DRUM_GAIN = cli_arg("--drum-gain", 1500.0, float)
+DRUM_VMAX = 26.0                    # speed cap on the kick, m/s: the anti-NaN valve
+DRUM_FACE_MIN = 0.22                # what the SHADOWED side still feels, 0..1
+DRUM_WIND = cli_arg("--drum-wind", 2.2, float)   # wind-tail gain over the rigid side
+DRUM_SETTLE = 0.35                  # seconds of solve before the shells are frozen
+DRUM_RUN_T = 8.0                    # seconds a charge keeps them running afterwards
+# (x, z, yaw degrees). Two in the open ground outside the house doorway, where
+# the camera sees them against the fireball, and one out by the chimney so a
+# second charge has a drum of its own -- which is also the stagger test: the
+# near pair caves at t0 + 0.11 s and this one does not move until 0.21 s.
+DRUM_SITES = [(2.6, 5.4, 0.0), (4.3, 6.6, 40.0), (-12.2, -4.6, 15.0)]
+DRUM_CAM = "--drum-cam" in sys.argv  # frame the near drum instead of the yard
 
 # --- the yard ---------------------------------------------------------------
 
@@ -584,17 +676,36 @@ camera = tp.PerspectiveCamera(46, canvas.aspect(), 0.05, 800)
 # Framed for the PLUME, not the yard: at nebula counts the column is the
 # subject and it climbs past 25 m, so the yard only occupies the bottom third.
 CAM_R, CAM_Y, CAM_TARGET = 38.0, 13.0, (0.0, 9.0, 0.0)
+CAM_O = (0.0, 0.0)                            # what the orbit is centred on, (x, z)
+_ANGLE0 = 22.0
+if DRUM_CAM:
+    # The macro shot: a close orbit on the near drum, from the CHARGE's side of
+    # it, because the face that caves in is the face that saw the wave.
+    _dx, _dz = DRUM_SITES[0][0], DRUM_SITES[0][1]
+    CAM_O = (_dx, _dz)
+    CAM_R, CAM_Y, CAM_TARGET = 2.7, 1.05, (_dx, 0.46, _dz)
+    _ANGLE0 = math.degrees(math.atan2(-_dx, -_dz)) + 34.0
 SPIN = cli_arg("--spin", 0.0, float)          # shot/video: orbit the camera, deg/frame
-START_ANGLE = cli_arg("--angle", 22.0, float)  # orbit start angle, degrees
+START_ANGLE = cli_arg("--angle", _ANGLE0, float)  # orbit start angle, degrees
 _cam_base = tp.Vector3()
 
 
+_focus = [CAM_O[0], CAM_TARGET[1], CAM_O[1]]     # what --drum-cam tracks
+
+
 def orbit(frame):
-    """Place the camera on its orbit for `frame` (static at SPIN == 0)."""
+    """Place the camera on its orbit for `frame` (static at SPIN == 0).
+
+    In --drum-cam the orbit CENTRE follows the near drum, because a drum next
+    to a charge that size does not stay where it was put -- it is thrown, and a
+    macro shot that does not follow it is a shot of an empty patch of grid."""
     a = math.radians(START_ANGLE + SPIN * frame)
-    _cam_base.set(CAM_R * math.sin(a), CAM_Y, CAM_R * math.cos(a))
+    ox, oz = (_focus[0], _focus[2]) if DRUM_CAM else CAM_O
+    _cam_base.set(ox + CAM_R * math.sin(a), CAM_Y + (_focus[1] - CAM_TARGET[1]),
+                  oz + CAM_R * math.cos(a))
     camera.position.set(_cam_base.x, _cam_base.y, _cam_base.z)
-    camera.look_at(*CAM_TARGET)
+    camera.look_at(_focus[0], _focus[1], _focus[2]) if DRUM_CAM \
+        else camera.look_at(*CAM_TARGET)
 
 
 # A test range is an overcast-bright void with one hard sun in it. The fill is
@@ -720,6 +831,664 @@ for _idx, _p, _ in TARGETS.values():
 print(f"blast yard: {N_BODIES} bodies in {len(meshes)} instanced batches "
       f"({MASS.sum():.0f} kg), {len(TARGETS)} structures")
 
+# --- the drums: mesh, truss, kernels ----------------------------------------
+
+
+def drum_mesh(g, nv, R, H):
+    """A closed cylinder whose CAPS ARE QUAD GRIDS, not triangle fans.
+
+    The obvious cap -- a fan of nu triangles around one centre vertex -- gives
+    that vertex nu incident struts, and the Gauss-Seidel colouring needs at
+    least that many colours because no two constraints in a colour may share a
+    vertex. One colour is one launch and there are DRUM_SUBSTEPS of them per
+    frame, so a 24-fan cap costs about fifty launches a substep where the rest
+    of the shell costs sixteen. A cap built as a g x g quad grid keeps every
+    degree at six.
+
+    The grid is mapped to the disc with the elliptical square-to-circle map,
+    which sends the square's BOUNDARY exactly onto the unit circle -- so with
+    nu = 4*(g-1) the cap's rim vertices ARE the body's top ring, shared, no
+    stitching. The ring is then spaced by the map rather than uniformly in
+    angle; the error is under three degrees and invisible.
+    """
+    nu = 4 * (g - 1)
+
+    def disc(s, t):
+        return (s * math.sqrt(max(1.0 - 0.5 * t * t, 0.0)),
+                t * math.sqrt(max(1.0 - 0.5 * s * s, 0.0)))
+
+    # the square's perimeter, counter-clockwise, starting at the (-1, -1) corner
+    perim = ([(i, 0) for i in range(g - 1)] + [(g - 1, j) for j in range(g - 1)]
+             + [(i, g - 1) for i in range(g - 1, 0, -1)]
+             + [(0, j) for j in range(g - 1, 0, -1)])
+    ax = [-1.0 + 2.0 * i / (g - 1) for i in range(g)]
+    ring = [disc(ax[i], ax[j]) for i, j in perim]          # unit vectors, in order
+    verts = []
+    for k in range(nv + 1):                                # the body: nv+1 rings
+        y = H * k / nv
+        for dx, dz in ring:
+            verts.append((R * dx, y, R * dz))
+    cap_in = {}
+    for cap, y in ((0, 0.0), (1, H)):                      # cap interiors only
+        for j in range(1, g - 1):
+            for i in range(1, g - 1):
+                x, z = disc(ax[i], ax[j])
+                cap_in[(cap, i, j)] = len(verts)
+                verts.append((R * x, y, R * z))
+    base = {0: 0, 1: nv * nu}
+    pat = {p: u for u, p in enumerate(perim)}
+
+    def cid(cap, i, j):
+        return base[cap] + pat[(i, j)] if (i, j) in pat else cap_in[(cap, i, j)]
+
+    faces = []
+    for k in range(nv):                                    # the body
+        for u in range(nu):
+            a, b = k * nu + u, k * nu + (u + 1) % nu
+            c, d = (k + 1) * nu + (u + 1) % nu, (k + 1) * nu + u
+            faces += [(a, b, c), (a, c, d)]
+    for cap in (0, 1):                                     # the caps
+        for j in range(g - 1):
+            for i in range(g - 1):
+                a, b = cid(cap, i, j), cid(cap, i + 1, j)
+                c, d = cid(cap, i + 1, j + 1), cid(cap, i, j + 1)
+                faces += [(a, b, c), (a, c, d)]
+    v = np.array(verts, np.float32)
+    f = np.array(faces, np.int32)
+    # Outward winding, per face and exactly: a drum is CONVEX, so a face points
+    # outward iff its normal agrees with (face centroid - body centre). Cheaper
+    # to get right than three regions of hand-checked index order.
+    c0 = v.mean(0)
+    n = np.cross(v[f[:, 1]] - v[f[:, 0]], v[f[:, 2]] - v[f[:, 0]])
+    out = ((v[f].mean(1) - c0) * n).sum(1) < 0.0
+    f[out] = f[out][:, ::-1]
+    return v, f
+
+
+DRUMS = (not NO_DRUMS) and device is not None
+if DRUMS:
+    _v1, _f1 = drum_mesh(DRUM_G, DRUM_NV, DRUM_R, DRUM_H)
+    NV1, NF1 = len(_v1), len(_f1)
+    # The inner skin: every vertex pushed DRUM_THICK along its own area-weighted
+    # normal. At the rim that normal is a 45 degree mix of body and cap, which
+    # mitres the corner instead of leaving a gap there.
+    _n1 = np.zeros((NV1, 3), np.float64)
+    _fn = np.cross(_v1[_f1[:, 1]] - _v1[_f1[:, 0]], _v1[_f1[:, 2]] - _v1[_f1[:, 0]])
+    for _c in range(3):
+        np.add.at(_n1, _f1[:, _c], _fn)
+    _n1 /= np.linalg.norm(_n1, axis=1)[:, None]
+    _skin1 = np.concatenate([_v1, _v1 - DRUM_THICK * _n1]).astype(np.float32)
+
+    _edges = sorted({(min(int(t[a]), int(t[b])), max(int(t[a]), int(t[b])))
+                     for t in _f1 for a, b in ((0, 1), (1, 2), (2, 0))})
+    _eid = {e: k for k, e in enumerate(_edges)}
+    NE1 = len(_edges)
+    _fe1 = np.array([[_eid[(min(int(t[a]), int(t[b])), max(int(t[a]), int(t[b])))]
+                      for a, b in ((0, 1), (1, 2), (2, 0))] for t in _f1], np.int32)
+
+    # The truss. Every constraint remembers WHICH MESH EDGE it belongs to, so a
+    # tear retires all four of an edge's struts (both skins and both diagonals)
+    # in one write and the faces can be tested against the edges alone.
+    # (i, j, stiffness, yield, edge, kind) with kind 0 skin / 1 diagonal / 2 radial.
+    _cons1 = []
+    for _i, _j in _edges:
+        _e = _eid[(_i, _j)]
+        _cons1.append((_i, _j, STIFF_SKIN, YIELD_SKIN, _e, 0))
+        _cons1.append((NV1 + _i, NV1 + _j, STIFF_SKIN, YIELD_SKIN, _e, 0))
+        _cons1.append((_i, NV1 + _j, STIFF_DIAG, YIELD_DIAG, _e, 1))
+        _cons1.append((_j, NV1 + _i, STIFF_DIAG, YIELD_DIAG, _e, 1))
+    for _i in range(NV1):
+        _cons1.append((_i, NV1 + _i, STIFF_RAD, YIELD_RAD, -1, 2))
+
+    # Three copies, placed. One set of arrays holds all of them: the solve does
+    # not care that the constraint graph has three components, and one launch
+    # over three drums beats three launches over one.
+    N_DRUM = len(DRUM_SITES)
+    VPD = 2 * NV1                                  # vertices per drum, both skins
+    _pos, _cons, _tri_o, _tri_i, _fe = [], [], [], [], []
+    for _d, (_x, _z, _yaw) in enumerate(DRUM_SITES):
+        _a = math.radians(_yaw)
+        _rot = np.array([[math.cos(_a), 0.0, math.sin(_a)], [0.0, 1.0, 0.0],
+                         [-math.sin(_a), 0.0, math.cos(_a)]], np.float32)
+        _pos.append(_skin1 @ _rot.T + np.float32([_x, 0.0012, _z]))
+        _vb, _eb = _d * VPD, _d * NE1
+        for _i, _j, _s, _y, _e, _k in _cons1:
+            _cons.append((_vb + _i, _vb + _j, _s, _y, -1 if _e < 0 else _eb + _e, _k))
+        _tri_o.append(_f1 + _vb)
+        _tri_i.append(_f1[:, ::-1] + _vb + NV1)    # inner skin: wound to face inward
+        _fe.append(_fe1 + _eb)
+    _p0 = np.concatenate(_pos).astype(np.float32)
+    _tri_o = np.concatenate(_tri_o).reshape(-1).astype(np.int32)
+    _tri_i = np.concatenate(_tri_i).reshape(-1).astype(np.int32)
+    _fe = np.concatenate(_fe).reshape(-1).astype(np.int32)
+    N_DV, N_DF, N_DE = len(_p0), NF1 * N_DRUM, NE1 * N_DRUM
+    N_DC = len(_cons)
+    N_CORNERS = N_DF * 3
+    # Which outer vertex a vertex belongs to: the blast's facing weight uses the
+    # OUTER skin's normal for both skins (they are 13 mm apart and share a face).
+    _outer = np.concatenate([np.concatenate([np.arange(NV1), np.arange(NV1)])
+                             + _d * VPD for _d in range(N_DRUM)]).astype(np.int32)
+
+    # Greedy colouring, class by class, exactly as the press does it: a
+    # constraint takes the lowest colour unused at either of its vertices, and
+    # colouring skins first, then diagonals, then radials needs fewer colours
+    # than the interleaved order.
+    _cons.sort(key=lambda c: c[5])
+    _used = [0] * N_DV
+    _col = np.empty(N_DC, np.int32)
+    for _k, _c in enumerate(_cons):
+        _m = _used[_c[0]] | _used[_c[1]]
+        _q = 0
+        while (_m >> _q) & 1:
+            _q += 1
+        _col[_k] = _q
+        _used[_c[0]] |= 1 << _q
+        _used[_c[1]] |= 1 << _q
+    _ord = np.argsort(_col, kind="stable")
+    N_COL = int(_col.max()) + 1
+    COL_N = np.bincount(_col, minlength=N_COL)
+    COL_0 = np.concatenate(([0], np.cumsum(COL_N)[:-1]))
+
+    _ci = np.array([_cons[k][0] for k in _ord], np.int32)
+    _cj = np.array([_cons[k][1] for k in _ord], np.int32)
+    _cs = np.array([_cons[k][2] for k in _ord], np.float32)
+    _cy = np.array([_cons[k][3] for k in _ord], np.float32)
+    _ce = np.array([_cons[k][4] for k in _ord], np.int32)
+    _ck = np.array([_cons[k][5] for k in _ord], np.int32)
+    _cr = np.linalg.norm(_p0[_ci] - _p0[_cj], axis=1).astype(np.float32)
+
+    dx_ = wp.array(_p0, dtype=wp.vec3, device=device)
+    dprev = wp.array(_p0, dtype=wp.vec3, device=device)
+    dnrm = wp.zeros(N_DV, dtype=wp.vec3, device=device)
+    dci = wp.array(_ci, dtype=int, device=device)
+    dcj = wp.array(_cj, dtype=int, device=device)
+    drest = wp.array(_cr, dtype=float, device=device)      # creeps: plasticity
+    drest0 = wp.array(_cr, dtype=float, device=device)     # never moves: the tear datum
+    dstiff = wp.array(_cs, dtype=float, device=device)
+    ddmg = wp.zeros(N_DC, dtype=float, device=device)      # accumulated plastic strain
+    dyield = wp.array(_cy, dtype=float, device=device)
+    dcedge = wp.array(_ce, dtype=int, device=device)
+    dckind = wp.array(_ck, dtype=int, device=device)
+    dtri_o = wp.array(_tri_o, dtype=int, device=device)
+    dtri_i = wp.array(_tri_i, dtype=int, device=device)
+    dfe = wp.array(_fe, dtype=int, device=device)
+    douter = wp.array(_outer, dtype=int, device=device)
+    dealive = wp.array(np.ones(N_DE, np.int32), dtype=int, device=device)
+    dfalive = wp.array(np.ones(N_DF, np.int32), dtype=int, device=device)
+    dsoup_op = wp.zeros(N_CORNERS, dtype=wp.vec3, device=device)
+    dsoup_on = wp.zeros(N_CORNERS, dtype=wp.vec3, device=device)
+    dsoup_ip = wp.zeros(N_CORNERS, dtype=wp.vec3, device=device)
+    dsoup_in = wp.zeros(N_CORNERS, dtype=wp.vec3, device=device)
+    dtsub = wp.array(np.full(DRUM_SUBSTEPS, -1.0e9, np.float32), dtype=float,
+                     device=device)
+    ddt = wp.array(np.float32([DT / DRUM_SUBSTEPS]), dtype=float, device=device)
+    # The device charge array the SHELLS read: (x, y, z, t0) and (j0, scale).
+    # Separate from the gas's, because the drums must work with --no-gas and
+    # because they need the yield, which the gas array has no room for.
+    _dch = np.tile(np.float32([0.0, 0.0, 0.0, -1.0e9]), (MAX_CHARGES, 1))
+    dchp = wp.array(_dch, dtype=wp.vec4, device=device)
+    dchj = wp.zeros(MAX_CHARGES, dtype=wp.vec2, device=device)
+    # When each vertex was hit by each charge slot, or BIG for "not yet". This is
+    # what makes the arrival EXACT rather than a window test: a drum already in
+    # flight changes its own r between substeps, so a "did t cross t_hit this
+    # substep" test can miss the crossing entirely. Recording the hit instead
+    # fires once, on the first substep at or after arrival, and then doubles as
+    # the clock for that vertex's own wind tail.
+    dhit = wp.array(np.full(N_DV * MAX_CHARGES, 1.0e9, np.float32), dtype=float,
+                    device=device)
+
+
+@wp.kernel
+def drum_predict(x: wp.array(dtype=wp.vec3), prev: wp.array(dtype=wp.vec3),
+                 dt_a: wp.array(dtype=float), damping: float, gravity: wp.vec3):
+    """Verlet predict, with dt read from the DEVICE so the substep loop can be
+    captured once and replayed at any frame length (phase 4's slow-motion ramp
+    changes dt every frame; the graph must not care)."""
+    i = wp.tid()
+    dt = dt_a[0]
+    p = x[i]
+    v = (p - prev[i]) * (1.0 - damping)
+    prev[i] = p
+    x[i] = p + v + gravity * dt * dt
+
+
+@wp.kernel
+def drum_blast(x: wp.array(dtype=wp.vec3), prev: wp.array(dtype=wp.vec3),
+               nrm: wp.array(dtype=wp.vec3), outer: wp.array(dtype=int),
+               chp: wp.array(dtype=wp.vec4), chj: wp.array(dtype=wp.vec2),
+               hit: wp.array(dtype=float), tsub: wp.array(dtype=float),
+               dt_a: wp.array(dtype=float), s: int):
+    """The front arrives at this VERTEX, and then the wind follows it.
+
+    Same schedule as the rigid side -- t_hit = t0 + r/C_FRONT -- so a drum next
+    to a wall caves when that wall goes, not when the charge does. The facing
+    weight is what turns a uniform push into a CRUSH: the skin whose normal
+    looks into the wave takes it all, the far skin is shadowed and only feels
+    DRUM_FACE_MIN of it, and the difference closes the drum.
+
+    A kick is applied by moving PREV, not x: in Verlet the velocity is
+    (x - prev)/dt, so prev -= u*dv*dt adds dv with no teleport.
+    """
+    i = wp.tid()
+    t = tsub[s]
+    dt = dt_a[0]
+    p = x[i]
+    n = nrm[outer[i]]
+    ln = wp.length(n)
+    if ln > 1.0e-12:
+        n = n / ln
+    else:
+        n = wp.vec3(0.0, 1.0, 0.0)
+    d = wp.vec3(0.0, 0.0, 0.0)
+    for c in range(MAX_CHARGES):
+        cp = chp[c]
+        if cp[3] > -1.0e8:
+            q = p - wp.vec3(cp[0], cp[1], cp[2])
+            r = wp.max(wp.length(q), 1.0e-4)
+            u = q / r
+            # the pressure only reaches the skin that can see the charge
+            w = DRUM_FACE_MIN + (1.0 - DRUM_FACE_MIN) * wp.max(-wp.dot(u, n), 0.0)
+            fall = wp.exp(-r / BLAST_L) / wp.pow(wp.max(r, BLAST_R0), BLAST_P)
+            h = hit[i * MAX_CHARGES + c]
+            if h > 1.0e8:
+                if t >= cp[3] + r / C_FRONT:
+                    dv = wp.min(DRUM_GAIN * chj[c][1] * fall, DRUM_VMAX) * w
+                    d = d + u * (dv * dt)
+                    hit[i * MAX_CHARGES + c] = t
+            else:
+                b = t - h
+                if b < WIND_T:
+                    a = (WIND_A0 * DRUM_WIND * chj[c][1] * w * fall
+                         * wp.exp(-b / WIND_TAU))
+                    d = d + u * (a * dt * dt)
+    if wp.length(d) > 0.0:
+        prev[i] = prev[i] - d
+
+
+@wp.kernel
+def drum_solve(x: wp.array(dtype=wp.vec3), ci: wp.array(dtype=int),
+               cj: wp.array(dtype=int), rests: wp.array(dtype=float),
+               stiffs: wp.array(dtype=float), start: int):
+    """One colour: no two constraints here share a vertex, so the in-place
+    Gauss-Seidel writes are race-free. A torn strut has stiffness zero."""
+    k = start + wp.tid()
+    s = stiffs[k]
+    if s > 0.0:
+        i, j = ci[k], cj[k]
+        pi, pj = x[i], x[j]
+        dv = pj - pi
+        l = wp.length(dv)
+        if l > 1.0e-9:
+            corr = dv * (0.5 * s * (l - rests[k]) / l)
+            x[i] = pi + corr
+            x[j] = pj - corr
+
+
+@wp.kernel
+def drum_contacts(x: wp.array(dtype=wp.vec3), prev: wp.array(dtype=wp.vec3)):
+    """Ground plane at y = 0 with Coulomb-ish friction. This is the whole
+    toppling model: the shell's own vertices are what stands on the floor, so a
+    drum knocked off balance goes over because its footprint left."""
+    i = wp.tid()
+    p = x[i]
+    if p[1] < 0.0:
+        p = wp.vec3(p[0], 0.0, p[2])
+        t = p - prev[i]
+        p = p - wp.vec3(t[0], 0.0, t[2]) * DRUM_MU
+    x[i] = p
+
+
+@wp.kernel
+def drum_plastic(x: wp.array(dtype=wp.vec3), ci: wp.array(dtype=int),
+                 cj: wp.array(dtype=int), rests: wp.array(dtype=float),
+                 rest0: wp.array(dtype=float), stiffs: wp.array(dtype=float),
+                 yields: wp.array(dtype=float), dmg: wp.array(dtype=float),
+                 rate: float):
+    """Past yield, the rest length creeps toward the length it actually has.
+    That is what makes a crease PERSIST after the wave has gone by -- and every
+    metre of that creep, stretch or squash alike, is logged as damage, which is
+    what eventually tears the shell open."""
+    k = wp.tid()
+    if stiffs[k] > 0.0:
+        l = wp.length(x[cj[k]] - x[ci[k]])
+        r = rests[k]
+        y = yields[k]
+        d = float(0.0)
+        if l > r * (1.0 + y):
+            d = (l - r * (1.0 + y)) * rate
+        elif l < r * (1.0 - y):
+            d = (l - r * (1.0 - y)) * rate
+        if d != 0.0:
+            rests[k] = r + d
+            dmg[k] = dmg[k] + wp.abs(d) / rest0[k]
+
+
+@wp.kernel
+def drum_break(x: wp.array(dtype=wp.vec3), ci: wp.array(dtype=int),
+               cj: wp.array(dtype=int), rest0: wp.array(dtype=float),
+               stiffs: wp.array(dtype=float), dmg: wp.array(dtype=float),
+               cedge: wp.array(dtype=int), ckind: wp.array(dtype=int),
+               ealive: wp.array(dtype=int)):
+    """A SKIN strut that has worked itself to death, or been yanked apart.
+
+    Several struts on one mesh edge can fire at once; they all write the same
+    zero, so the race is benign and no atomic is needed."""
+    k = wp.tid()
+    if ckind[k] == 0 and stiffs[k] > 0.0:
+        if (dmg[k] > TEAR
+                or wp.length(x[cj[k]] - x[ci[k]]) > rest0[k] * TEAR_SNAP):
+            ealive[cedge[k]] = 0
+
+
+@wp.kernel
+def drum_clear_slot(hit: wp.array(dtype=float), slot: int):
+    """Every vertex's arrival state against one charge slot, reset. The slot is
+    a ring: a ninth detonation re-uses the oldest and starts it over."""
+    hit[wp.tid() * MAX_CHARGES + slot] = 1.0e9
+
+
+@wp.kernel
+def drum_cut(cedge: wp.array(dtype=int), ealive: wp.array(dtype=int),
+             stiffs: wp.array(dtype=float)):
+    """Retire every strut of a dead edge -- both skins and both diagonals."""
+    k = wp.tid()
+    e = cedge[k]
+    if e >= 0:
+        if ealive[e] == 0:
+            stiffs[k] = 0.0
+
+
+@wp.kernel
+def drum_faces(fe: wp.array(dtype=int), ealive: wp.array(dtype=int),
+               falive: wp.array(dtype=int)):
+    """A face lives while ALL THREE of its edges do. One broken edge therefore
+    opens a two-triangle slit, and a run of them is a tear."""
+    f = wp.tid()
+    n = ealive[fe[f * 3 + 0]] + ealive[fe[f * 3 + 1]] + ealive[fe[f * 3 + 2]]
+    falive[f] = wp.where(n == 3, 1, 0)
+
+
+@wp.kernel
+def drum_normals(x: wp.array(dtype=wp.vec3), tris: wp.array(dtype=int),
+                 falive: wp.array(dtype=int), nrm: wp.array(dtype=wp.vec3)):
+    """Area-weighted face normals onto the vertices -- LIVE faces only, so the
+    lip of a tear is shaded by the metal that is still there."""
+    f = wp.tid()
+    if falive[f] != 0:
+        ia, ib, ic = tris[f * 3 + 0], tris[f * 3 + 1], tris[f * 3 + 2]
+        n = wp.cross(x[ib] - x[ia], x[ic] - x[ia])
+        wp.atomic_add(nrm, ia, n)
+        wp.atomic_add(nrm, ib, n)
+        wp.atomic_add(nrm, ic, n)
+
+
+@wp.kernel
+def drum_soup(x: wp.array(dtype=wp.vec3), nrm: wp.array(dtype=wp.vec3),
+              tri_o: wp.array(dtype=int), tri_i: wp.array(dtype=int),
+              falive: wp.array(dtype=int),
+              op: wp.array(dtype=wp.vec3), on: wp.array(dtype=wp.vec3),
+              ip: wp.array(dtype=wp.vec3), inn: wp.array(dtype=wp.vec3)):
+    """De-index BOTH skins into their triangle soups in ONE pass.
+
+    A dead face collapses to a point far below the floor -- zero area, nothing
+    rasterised, nothing in the BLAS. It is NOT compacted out of the soup and
+    that is deliberate: the renderer keeps a previous-frame vertex buffer to
+    build motion vectors from, so a soup whose triangles change slot between
+    frames hands TAA garbage exactly where the hero shot is. A stable soup with
+    holes in it costs a few thousand degenerate triangles and keeps the
+    reprojection honest.
+    """
+    k = wp.tid()
+    f = k / 3
+    if falive[f] == 0:
+        dead = wp.vec3(0.0, -60.0, 0.0)
+        op[k] = dead
+        ip[k] = dead
+        on[k] = wp.vec3(0.0, 1.0, 0.0)
+        inn[k] = wp.vec3(0.0, 1.0, 0.0)
+    else:
+        a = tri_o[k]
+        op[k] = x[a]
+        na = nrm[a]
+        on[k] = na / wp.max(wp.length(na), 1.0e-9)
+        b = tri_i[k]
+        ip[k] = x[b]
+        nb = nrm[b]
+        inn[k] = nb / wp.max(wp.length(nb), 1.0e-9)
+
+
+if DRUMS:
+    def drum_launches():
+        """Every launch of one frame of shell simulation; captured into a graph."""
+        for s in range(DRUM_SUBSTEPS):
+            wp.launch(drum_predict, dim=N_DV, device=device,
+                      inputs=[dx_, dprev, ddt, DRUM_DAMP, DRUM_GRAV])
+            wp.launch(drum_blast, dim=N_DV, device=device,
+                      inputs=[dx_, dprev, dnrm, douter, dchp, dchj, dhit,
+                              dtsub, ddt, s])
+            for c in range(N_COL):
+                wp.launch(drum_solve, dim=int(COL_N[c]), device=device,
+                          inputs=[dx_, dci, dcj, drest, dstiff, int(COL_0[c])])
+            wp.launch(drum_contacts, dim=N_DV, device=device, inputs=[dx_, dprev])
+            wp.launch(drum_plastic, dim=N_DC, device=device,
+                      inputs=[dx_, dci, dcj, drest, drest0, dstiff, dyield, ddmg,
+                              PLASTIC_RATE])
+            if s % 8 == 7:      # tearing does not need 48 Hz x 60; six a frame is plenty
+                wp.launch(drum_break, dim=N_DC, device=device,
+                          inputs=[dx_, dci, dcj, drest0, dstiff, ddmg, dcedge,
+                                  dckind, dealive])
+                wp.launch(drum_cut, dim=N_DC, device=device,
+                          inputs=[dcedge, dealive, dstiff])
+        wp.launch(drum_faces, dim=N_DF, device=device, inputs=[dfe, dealive, dfalive])
+        dnrm.zero_()
+        wp.launch(drum_normals, dim=N_DF, device=device,
+                  inputs=[dx_, dtri_o, dfalive, dnrm])
+        wp.launch(drum_normals, dim=N_DF, device=device,
+                  inputs=[dx_, dtri_i, dfalive, dnrm])
+        wp.launch(drum_soup, dim=N_CORNERS, device=device,
+                  inputs=[dx_, dnrm, dtri_o, dtri_i, dfalive,
+                          dsoup_op, dsoup_on, dsoup_ip, dsoup_in])
+
+    def drum_boot():
+        """Warm the Warp module, then capture the substep loop into a graph.
+
+        Deliberately NOT run here. Warp builds the whole module the first time
+        anything in it launches, and every kernel defined afterwards changes the
+        module's hash -- so warming the shells before the gas kernels below even
+        exist would compile the module twice and, worse, leave the captured
+        graph pointing into the copy that got unloaded. This runs once from the
+        boot block after the last kernel in the file.
+
+        The warm pass runs at dt = 0: every kernel compiles, every buffer ends
+        up holding the rest pose, and nothing moves.
+        """
+        global d_graph
+        ddt.assign(np.float32([0.0]))
+        drum_launches()
+        wp.launch(drum_clear_slot, dim=N_DV, device=device, inputs=[dhit, 0])
+        wp.synchronize_device(device)
+        ddt.assign(np.float32([DT / DRUM_SUBSTEPS]))
+        if device.is_cuda:
+            with wp.ScopedCapture(device) as cap:
+                drum_launches()
+            d_graph = cap.graph
+        lpf = DRUM_SUBSTEPS * (N_COL + 4) + 4
+        print(f"drums: {N_DRUM} shells, {N_DV:,} vertices (2 skins), {N_DF:,} faces, "
+              f"{N_DC:,} struts in {N_COL} colours, {DRUM_SUBSTEPS} substeps "
+              f"({lpf:,} launches/frame{', CUDA graph' if d_graph else ''})")
+
+    # ── the meshes: two fixed-capacity triangle soups ───────────────────────
+    # OUTER is bare steel and the reason this scene is on Vulkan -- it takes the
+    # ray-traced reflection of the yard and the flash. INNER is the same faces
+    # wound the other way in a dark, nearly matte paint, so the moment the shell
+    # tears open the lip shows the drum's unlit inside. It is the cheapest thing
+    # that reads as "torn METAL" rather than "a hole in a balloon".
+    drum_geo_o = tp.BufferGeometry()
+    drum_geo_o.set_attribute("position", _p0[_tri_o])
+    drum_geo_o.set_attribute("normal", np.tile(np.float32([0, 1, 0]), (N_CORNERS, 1)))
+    drum_geo_o.set_draw_range(0, N_CORNERS)
+    drum_out = tp.Mesh(drum_geo_o, standard_material(tp.Color(0.63, 0.65, 0.68),
+                                                     0.17, 1.0))
+    drum_geo_i = tp.BufferGeometry()
+    drum_geo_i.set_attribute("position", _p0[_tri_i])
+    drum_geo_i.set_attribute("normal", np.tile(np.float32([0, -1, 0]), (N_CORNERS, 1)))
+    drum_geo_i.set_draw_range(0, N_CORNERS)
+    drum_in = tp.Mesh(drum_geo_i, standard_material(tp.Color(0.055, 0.048, 0.042),
+                                                    0.72, 0.30))
+    for _m in (drum_out, drum_in):
+        _m.cast_shadow = True
+        _m.receive_shadow = True
+        _m.frustum_culled = False       # the bounds go stale the moment it detonates
+        scene.add(_m)
+
+    def claim_drum_slot(ch):
+        """A new charge's row in the shells' charge array, and the arrival state
+        of every vertex against it cleared. Two host writes and one launch --
+        nothing here walks a vertex."""
+        _dch[ch.slot] = (ch.pos[0], ch.pos[1], ch.pos[2], ch.t0)
+        dchp.assign(_dch)
+        _j = dchj.numpy()
+        _j[ch.slot] = (ch.j0, ch.scale)
+        dchj.assign(_j)
+        wp.launch(drum_clear_slot, dim=N_DV, device=device, inputs=[dhit, ch.slot])
+else:
+    N_DV = N_DF = N_DC = N_DE = N_COL = 0
+
+    def claim_drum_slot(ch):
+        pass
+
+    def drum_boot():
+        pass
+
+
+DRUM_ROUTE = "off"
+d_vk = None
+d_graph = None
+
+
+def arm_drum_interop():
+    """Point the soup kernels straight at the renderer's own vertex buffers.
+
+    Must run AFTER the first render(): a mesh's record -- and so the allocation
+    there is anything to export -- is created on the frame it is first drawn.
+    Any failure falls back to the press's host route, which needs neither the
+    external-memory export nor the CUDA import.
+    """
+    global d_vk, DRUM_ROUTE
+    if not DRUMS:
+        return
+    DRUM_ROUTE = "host copy"
+    if not device.is_cuda or not hasattr(renderer, "enable_vertex_interop"):
+        return
+    try:
+        from threepp.cuda_interop import VkInteropArray
+    except ImportError:
+        return
+    handles = []
+    try:
+        for m in (drum_out, drum_in):
+            h = renderer.enable_vertex_interop(m, drum_on_frame if m is drum_out
+                                               else drum_on_frame_in)
+            if h is None:
+                raise RuntimeError("no external-memory export for this mesh")
+            handles.append(h)
+        d_vk = [VkInteropArray(hh[0], hh[1], wp.vec3, N_CORNERS, device)
+                for h in handles for hh in h]
+    except Exception as e:
+        print(f"  note: drum vertex interop did not arm ({e}) -- host copy route")
+        for m in (drum_out, drum_in):
+            try:
+                renderer.disable_vertex_interop(m)
+            except Exception:
+                pass
+        d_vk = None
+        return
+    DRUM_ROUTE = "zero-copy CUDA -> Vulkan"
+    atexit.register(release_drum_interop)
+
+
+def release_drum_interop():
+    """Drop the CUDA mappings BEFORE the renderer frees the memory they map."""
+    global d_vk
+    if d_vk is None:
+        return
+    arrays, d_vk = d_vk, None
+    for a in arrays:
+        a.close()
+    for m in (drum_out, drum_in):
+        renderer.disable_vertex_interop(m)
+
+
+def drum_on_frame():
+    """Inside render(), post-fence and pre-record: fill the outer skin's buffers.
+
+    The synchronize is the whole contract -- wp.launch is asynchronous on Warp's
+    stream and host ordering here is the only thing sequencing this write
+    against the Vulkan frame that reads it."""
+    if d_vk is not None:
+        wp.copy(d_vk[0].array, dsoup_op)
+        wp.copy(d_vk[1].array, dsoup_on)
+        wp.synchronize_device(device)
+
+
+def drum_on_frame_in():
+    if d_vk is not None:
+        wp.copy(d_vk[2].array, dsoup_ip)
+        wp.copy(d_vk[3].array, dsoup_in)
+        wp.synchronize_device(device)
+
+
+def drums_active():
+    """The shells run while they are settling and for DRUM_RUN_T after the
+    newest charge; between those they are FROZEN, because a thousand launches a
+    frame to hold three drums still is a thousand launches wasted."""
+    if sim_time < DRUM_SETTLE:
+        return True
+    st = blast_timeline(sim_time)
+    return st["armed"] and st["tw"] < DRUM_RUN_T
+
+
+def step_drums(dt):
+    """One frame of shell simulation. Returns its wall-clock seconds."""
+    if not DRUMS or not drums_active():
+        return 0.0
+    t0 = time.perf_counter()
+    sub = dt / DRUM_SUBSTEPS
+    dtsub.assign((sim_time - dt + (np.arange(DRUM_SUBSTEPS) + 1) * sub).astype(np.float32))
+    ddt.assign(np.float32([sub]))
+    if d_graph is not None:
+        wp.capture_launch(d_graph)
+    else:
+        drum_launches()
+    wp.synchronize_device(device)
+    if d_vk is None:            # the fallback: four attribute uploads a frame
+        drum_geo_o.update_attribute("position", dsoup_op.numpy())
+        drum_geo_o.update_attribute("normal", dsoup_on.numpy())
+        drum_geo_i.update_attribute("position", dsoup_ip.numpy())
+        drum_geo_i.update_attribute("normal", dsoup_in.numpy())
+    if DRUM_CAM:                # 26 kB of readback, in the macro mode only
+        c = dx_.numpy()[:VPD].mean(0)
+        for k in range(3):
+            _focus[k] += (float(c[k]) - _focus[k]) * 0.25    # a lagging dolly
+    return time.perf_counter() - t0
+
+
+def drum_stats():
+    """Torn edges, dead faces and each shell's remaining height and footprint."""
+    if not DRUMS:
+        return None
+    alive = int(dealive.numpy().sum())
+    faces = int(dfalive.numpy().sum())
+    p = dx_.numpy().reshape(N_DRUM, -1, 3)
+    hw = [(float(d[:, 1].max()), float(np.hypot(d[:, 0] - d[:, 0].mean(),
+                                                d[:, 2] - d[:, 2].mean()).max() * 2.0))
+          for d in p]
+    g = ddmg.numpy()[_ck == 0]           # the skin struts: what the tear tests
+    return dict(edges=alive, torn=N_DE - alive, faces=faces, gone=N_DF - faces,
+                shells=hw, nan=int((~np.isfinite(p)).sum()),
+                dmg=(float(np.percentile(g, 99)), float(g.max())))
+
+
 # --- the blast timeline -----------------------------------------------------
 #
 # One clock, one timeline. Phases 2-4 (gas emission windows, shell coupling,
@@ -798,6 +1567,7 @@ class Charge:
         self.light = FLASHES[_fired[0] % len(FLASHES)]
         self.light.position.set(self.pos[0], self.pos[1] + 0.3, self.pos[2])
         claim_charge_slot(self)                    # device charge array + streak field
+        claim_drum_slot(self)                      # the shells' own charge array
         _fired[0] += 1
         self.armed = True
 
@@ -1701,6 +2471,21 @@ else:
     def claim_charge_slot(ch):
         ch.slot = _fired[0] % MAX_CHARGES
 
+# --- boot the drums ---------------------------------------------------------
+#
+# LAST, and in this order for two reasons. The Warp module is built the first
+# time anything in it launches and re-hashed whenever a kernel is added, so the
+# shells' warm pass and graph capture have to come after the last @wp.kernel in
+# the file. And the vertex export does not exist until the mesh has been drawn
+# once, so the interop needs a render behind it -- the gas block above already
+# did two, and with --no-gas there is one here.
+if DRUMS:
+    if NO_GAS:
+        renderer.render(scene, camera)
+    drum_boot()
+    arm_drum_interop()
+    print(f"drums: publishing {2 * N_CORNERS:,} soup vertices via {DRUM_ROUTE}")
+
 # Billboards are composited after the upscaler and are outside auto-exposure,
 # so their intensity is tied to the pinned scene exposure BY HAND, once, here.
 # Change tone_mapping_exposure and these follow it instead of blowing out.
@@ -1807,7 +2592,8 @@ def step_gas_frame(dt):
 # --- frame ------------------------------------------------------------------
 
 sim_time = 0.0
-prof = {"gas": 0.0, "submit": 0.0, "blast": 0.0, "physx": 0.0, "render": 0.0, "n": 0}
+prof = {"gas": 0.0, "submit": 0.0, "blast": 0.0, "physx": 0.0, "drums": 0.0,
+        "render": 0.0, "n": 0}
 
 
 def step_frame(dt=DT):
@@ -1828,13 +2614,15 @@ def step_frame(dt=DT):
     t1 = time.perf_counter()
     world.step(dt)
     t2 = time.perf_counter()
+    drums = step_drums(dt)     # the shells: their own clock, their own arrivals
     gas, submit = step_gas_frame(dt)
     prof["blast"] += t1 - t0
     prof["physx"] += t2 - t1
+    prof["drums"] += drums
     prof["gas"] += gas
     prof["submit"] += submit
     prof["n"] += 1
-    return gas, submit, t1 - t0, t2 - t1
+    return gas, submit, t1 - t0, t2 - t1, drums
 
 
 def apply_shake():
@@ -1890,11 +2678,19 @@ def report():
     for name, (k, ymed, y95, rmed, r95) in gas_stats().items():
         print(f"  {name:>5}: {k:7,} live  y {ymed:5.1f}/{y95:5.1f} m  "
               f"r {rmed:5.1f}/{r95:5.1f} m  (median/p95)")
+    d = drum_stats()
+    if d is not None:
+        print(f"  drums: {d['torn']:,}/{N_DE:,} edges torn, {d['gone']:,}/{N_DF:,} "
+              f"faces gone, damage p99/max {d['dmg'][0]:.3f}/{d['dmg'][1]:.3f}, "
+              f"nan={d['nan']}, "
+              + "  ".join(f"#{i} h {h:4.2f} w {w:4.2f} m"
+                          for i, (h, w) in enumerate(d["shells"])))
     print(f"  per frame: gas {1e3 * prof['gas'] / n:.2f} ms, publish "
           f"{1e3 * prof['submit'] / n:.2f} ms, device_copy "
           f"{1e3 * GAS_COPY[0] / n:.2f} ms ({1e3 * GAS_COPY[1] / n:.2f} issue + "
           f"{1e3 * GAS_COPY[2] / n:.2f} sync), blast {1e3 * prof['blast'] / n:.2f} ms, "
-          f"physx {1e3 * prof['physx'] / n:.2f} ms, render "
+          f"physx {1e3 * prof['physx'] / n:.2f} ms, drums "
+          f"{1e3 * prof['drums'] / n:.2f} ms, render "
           f"{1e3 * prof['render'] / n:.2f} ms")
 
 
@@ -1960,12 +2756,13 @@ elif BENCH:
     while sim_time < T0 + 0.6:
         step_frame()
         renderer.render(scene, camera)
-    prof.update(gas=0.0, submit=0.0, blast=0.0, physx=0.0, render=0.0, n=0)
+    prof.update(gas=0.0, submit=0.0, blast=0.0, physx=0.0, drums=0.0, render=0.0, n=0)
     GAS_COPY[:] = [0.0, 0.0, 0.0]
     live = sum(f.live_count for f in fields)
     bench_loop(step_frame, lambda: renderer.render(scene, camera),
-               ("gas", "submit", "blast", "physx"), 20, 200,
-               f"{len(bodies)} bodies + {live:,} live particles (headless, serialized)")
+               ("gas", "submit", "blast", "physx", "drums"), 20, 200,
+               f"{len(bodies)} bodies + {live:,} live particles + {N_DF:,} shell "
+               f"faces (headless, serialized)")
     report()
 else:
     controls = tp.OrbitControls(camera, canvas)
