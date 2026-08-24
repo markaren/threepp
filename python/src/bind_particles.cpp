@@ -78,7 +78,16 @@ namespace threepp_py {
                                "billboard/density size reference.")
                 .def_readwrite("orientations", &ParticleField::Config::orientations,
                                "Allocate the snorm16x4 per-particle orientation buffer.")
-                .def_readwrite("attributes", &ParticleField::Config::attributes);
+                .def_readwrite("attributes", &ParticleField::Config::attributes)
+                .def_readwrite("host_stable_slots", &ParticleField::Config::hostStableSlots,
+                               "HostRing only: the host promises index i is the SAME particle in "
+                               "every submit (fixed pool, dead slots left at w < 0, no compaction). "
+                               "That makes the previous ring slot a real prevPositions buffer, which "
+                               "is what BillboardRepr.stretch_seconds — the velocity streak — needs; "
+                               "without the promise the stretch stays off on a host field. A frame "
+                               "the host skips falls back to round sprites rather than smearing over "
+                               "two steps, and a freshly spawned slot streaks from its predecessor "
+                               "for one frame (bounded by stretch_max; spend it under a fade-in).");
 
         // ── MeshRepr (lit proxy per particle) ───────────────────────────────
         // geometry/material are set through set_mesh_repr, which also keeps the
@@ -308,18 +317,21 @@ namespace threepp_py {
 
                 // ── Ownership.HostRing half ─────────────────────────────────
                 .def("submit",
-                     [](ParticleField& f, py::array_t<float, py::array::c_style | py::array::forcecast> data) {
+                     [](ParticleField& f, py::array_t<float, py::array::c_style | py::array::forcecast> data,
+                        float dt) {
                          if (data.ndim() != 2 || data.shape(1) != 4)
                              throw std::runtime_error("submit: expected an (n, 4) float32 array of "
                                                       "(x, y, z, w) positions");
                          const auto n = static_cast<std::uint32_t>(data.shape(0));
-                         f.submit(data.data(), n);
+                         f.submit(data.data(), n, dt);
                      },
-                     py::arg("positions"),
+                     py::arg("positions"), py::arg("dt") = 0.f,
                      "Point a HostRing field at n positions as an (n, 4) float32 array — xyz plus w, "
                      "which is the radius under WSemantic.Radius and is the DEAD sentinel when "
                      "negative under either. One memcpy, no per-particle loop. n > capacity is "
-                     "clamped; also sets the live count. Raises on a Renderer / Interop field.")
+                     "clamped; also sets the live count. Raises on a Renderer / Interop field. "
+                     "`dt` is the step this submit advanced the pool over, read only by the "
+                     "velocity stretch under Config.host_stable_slots (0 = assume 1/60 s).")
                 .def("set_orientations",
                      [](ParticleField& f, py::array_t<float, py::array::c_style | py::array::forcecast> quats) {
                          if (quats.ndim() != 2 || quats.shape(1) != 4)

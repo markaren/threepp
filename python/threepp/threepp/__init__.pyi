@@ -4840,6 +4840,14 @@ class ParticleField(Mesh):
         def capacity(self, arg0: typing.SupportsInt | typing.SupportsIndex) -> None:
             ...
         @property
+        def host_stable_slots(self) -> bool:
+            """
+            HostRing only: the host promises index i is the SAME particle in every submit (fixed pool, dead slots left at w < 0, no compaction). That makes the previous ring slot a real prevPositions buffer, which is what BillboardRepr.stretch_seconds — the velocity streak — needs; without the promise the stretch stays off on a host field. A frame the host skips falls back to round sprites rather than smearing over two steps, and a freshly spawned slot streaks from its predecessor for one frame (bounded by stretch_max; spend it under a fade-in).
+            """
+        @host_stable_slots.setter
+        def host_stable_slots(self, arg0: bool) -> None:
+            ...
+        @property
         def orientations(self) -> bool:
             """
             Allocate the snorm16x4 per-particle orientation buffer.
@@ -5318,9 +5326,9 @@ class ParticleField(Mesh):
         """
         Per-particle orientation as (n, 4) float32 quaternions in (x, y, z, w) order. Requires Config.orientations. WRITE-ONCE by contract: the device buffer is not ringed, so this is authored with the field, not animated.
         """
-    def submit(self, positions: typing.Annotated[numpy.typing.ArrayLike, numpy.float32]) -> None:
+    def submit(self, positions: typing.Annotated[numpy.typing.ArrayLike, numpy.float32], dt: typing.SupportsFloat | typing.SupportsIndex = 0.0) -> None:
         """
-        Point a HostRing field at n positions as an (n, 4) float32 array — xyz plus w, which is the radius under WSemantic.Radius and is the DEAD sentinel when negative under either. One memcpy, no per-particle loop. n > capacity is clamped; also sets the live count. Raises on a Renderer / Interop field.
+        Point a HostRing field at n positions as an (n, 4) float32 array — xyz plus w, which is the radius under WSemantic.Radius and is the DEAD sentinel when negative under either. One memcpy, no per-particle loop. n > capacity is clamped; also sets the live count. Raises on a Renderer / Interop field. `dt` is the step this submit advanced the pool over, read only by the velocity stretch under Config.host_stable_slots (0 = assume 1/60 s).
         """
     @property
     def billboard_repr(self) -> ParticleField.BillboardRepr:

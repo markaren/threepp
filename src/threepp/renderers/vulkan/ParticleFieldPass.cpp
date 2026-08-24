@@ -606,6 +606,7 @@ ParticleFieldPass::State& ParticleFieldPass::ensureState(const ParticleField& fi
                                        sizeof(VkDrawIndirectCommand), kIndirectUsage,
                                        VMA_MEMORY_USAGE_AUTO, kHostWrite);
         st->slotSerial[s] = 0;// fresh allocation holds garbage
+        st->slotFill[s]   = 0;// ...so no slot is anybody's previous step yet
     }
     if (st->rendererOwned) ensureEmitPipeline();
     if (field.config().orientations) {
@@ -1021,6 +1022,10 @@ void ParticleFieldPass::prepareFrame(std::uint64_t serial, std::uint32_t frame,
                 uploadHostVisible(ctx_.allocator(), st.positions[slot],
                                   r.field->hostPositions().data(),
                                   VkDeviceSize(live) * sizeof(ParticlePos));
+                // Stamped HERE and nowhere else: what makes a slot somebody's
+                // "previous step" is that host bytes landed in it, not that a
+                // frame went by.
+                st.slotFill[slot] = ++st.fillSeq;
             }
             FieldCountsGpu c{};
             c.liveCount = live;
@@ -1055,6 +1060,17 @@ void ParticleFieldPass::prepareFrame(std::uint64_t serial, std::uint32_t frame,
         // comes from the snapshot bookkeeping rather than from the host serial.
         const bool prevValid = st.interopOwned ? st.snapped[prevSlot]
                                                : st.slotSerial[prevSlot] != 0;
+        // ── Config::hostStableSlots: the previous slot IS prevPositions ─────
+        // Only when this frame's slot and the previous one hold CONSECUTIVE
+        // uploads. A frame the host skipped leaves a three-frame-old submit in
+        // its slot, and the ring would then hand the shader a displacement over
+        // three steps — or, once the wrap puts the newer submit in the older
+        // slot, a backwards one. The stretch simply switches off for that frame
+        // and the sprite is round, which is the honest answer and is invisible
+        // next to the alternative.
+        const bool hostPrevIsPrevStep =
+                r.field->config().hostStableSlots && !st.rendererOwned && !st.interopOwned &&
+                st.slotFill[slot] != 0 && st.slotFill[slot] == st.slotFill[prevSlot] + 1u;
 
         FieldDescGpu d{};
         const auto& world = r.field->matrixWorld->elements;
@@ -1465,13 +1481,18 @@ void ParticleFieldPass::prepareFrame(std::uint64_t serial, std::uint32_t frame,
             // out of the shader entirely and keeps the stretch stable when the
             // frame rate is not.
             //
-            // A HostRing field has no dt to divide by (its prevPositions are
-            // the previous ring slot, whose age is the frame interval and is
-            // not published), so the stretch is a Renderer-mode feature and is
-            // silently zero elsewhere rather than silently wrong.
+            // A HostRing field used to have neither half of that: its previous
+            // ring slot could hold ANY particle at index i (the host was free
+            // to compact), and no dt was published for it. Both are now things
+            // the host can PROMISE — Config::hostStableSlots for the identity,
+            // submit()'s dtSec for the interval — and with the promise made the
+            // previous slot is a real prevPositions buffer and the streak is
+            // the same expression it is for a Renderer field. Without it the
+            // stretch stays silently zero rather than silently wrong.
             const bool rendererOwned = st.rendererOwned;
-            const float edt = r.field->emitterDt();
-            bp.stretchOverDt = (rendererOwned && bb.stretchSeconds > 0.f && edt > 1e-6f)
+            const float edt = rendererOwned ? r.field->emitterDt() : r.field->hostDt();
+            bp.stretchOverDt = ((rendererOwned || hostPrevIsPrevStep) &&
+                                bb.stretchSeconds > 0.f && edt > 1e-6f)
                                        ? (bb.stretchSeconds / edt)
                                        : 0.f;
 

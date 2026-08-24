@@ -146,6 +146,31 @@ namespace threepp {
             float         uniformRadius = 0.01f;
             bool          orientations  = false;// allocate the snorm16x4 buffer
             bool          attributes    = false;
+            // ── Ownership::HostRing: the STABLE SLOT promise ────────────────
+            // The host declares that index i names the SAME particle in every
+            // submit — a fixed pool written in place, dead slots left in the
+            // buffer with w < 0, no compaction between frames. It costs the
+            // host nothing to say so when it is already true, and it buys the
+            // one thing a host-driven field otherwise cannot have: the previous
+            // ring slot becomes a genuine prevPositions buffer, so
+            // BillboardRepr::stretchSeconds (the velocity streak) works here
+            // exactly as it does for a Renderer field. Without it (pos -
+            // prevPos) would be the difference between two UNRELATED particles
+            // and the field would streak in every direction at once.
+            //
+            // A newly spawned slot has one frame of stale prevPos, because the
+            // slot's previous occupant is what the previous submit left there;
+            // the streak is bounded by BillboardRepr::stretchMax and is meant
+            // to be spent under a spawn fade-in. The renderer also drops the
+            // stretch for any frame whose two ring slots are not CONSECUTIVE
+            // submits (a frame the host skipped, a field just created) rather
+            // than smearing over a two-frame or backwards displacement — the
+            // sprite is simply round that frame.
+            //
+            // Ignored under Ownership::Renderer (which has real prevPositions)
+            // and under Ownership::Interop (whose slots are snapshots of a
+            // foreign buffer this class cannot make promises about).
+            bool          hostStableSlots = false;
         };
 
         // Representations. Each is opt-in, each is independently costed, and
@@ -687,7 +712,15 @@ namespace threepp {
         // positions are written by the foreign device API, and host data
         // submitted here would go nowhere — with ONE exception:
         // hostFallback() below.
-        void submit(const void* pxVec4Array, std::uint32_t n);
+        //
+        // `dtSec` is the interval this submit ADVANCED the pool over — the same
+        // role setEmitterTime's dt plays for a Renderer field, and used for the
+        // same one thing: turning BillboardRepr::stretchSeconds into a streak
+        // length under Config::hostStableSlots. Leave it 0 (the default) and
+        // the field assumes 1/60 s; it is only read when the stretch is on.
+        void submit(const void* pxVec4Array, std::uint32_t n, float dtSec = 0.f);
+        // Seconds the last submit advanced the pool over. See submit().
+        [[nodiscard]] float hostDt() const { return hostDt_; }
 
         // ── Ownership::Interop: the fallback leg ────────────────────────────
         // Set by the RENDERER, once, when it discovers that this device cannot
@@ -812,6 +845,8 @@ namespace threepp {
         bool          hostFallback_ = false;// Interop on a device that cannot export
 
         std::vector<ParticlePos> host_;
+        // Ownership::HostRing: what the last submit says its own step was.
+        float                     hostDt_ = 1.f / 60.f;
         std::vector<std::int16_t> ori_;// snorm16x4, 4 per particle
         std::uint64_t             oriSerial_ = 0;
 

@@ -668,6 +668,15 @@ namespace threepp::vulkan {
             // freshly allocated, i.e. holds garbage and must be re-sent.
             std::uint64_t slotSerial[kSlots]{};
             std::uint64_t lastSeenSerial = 0;
+            // Which host UPLOAD filled each slot, counted in uploads and not in
+            // frames. Config::hostStableSlots turns the previous ring slot into
+            // a prevPositions buffer, and that is only true when the two slots
+            // hold CONSECUTIVE submits: a frame the host skipped leaves its slot
+            // holding a submit three frames old, and reading it as "one step
+            // ago" would streak every particle over three steps and, once the
+            // ring wraps past it, backwards. fillSeq == 0 means never filled.
+            std::uint64_t slotFill[kSlots]{};
+            std::uint64_t fillSeq = 0;
             // ── Density volume (phase 2) ────────────────────────────────────
             // Allocated at the FIRST frame DensityRepr::enabled is seen and
             // never resized — the same fixed-size contract as the position

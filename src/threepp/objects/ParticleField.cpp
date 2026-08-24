@@ -85,7 +85,7 @@ std::shared_ptr<ParticleField> ParticleField::create(const Config& config) {
     return std::make_shared<ParticleField>(config);
 }
 
-void ParticleField::submit(const void* pxVec4Array, std::uint32_t n) {
+void ParticleField::submit(const void* pxVec4Array, std::uint32_t n, float dtSec) {
 
     // The mode split, enforced rather than documented. A Renderer field's
     // positions are device-local — there is no host buffer to memcpy into and
@@ -119,6 +119,10 @@ void ParticleField::submit(const void* pxVec4Array, std::uint32_t n) {
         std::memcpy(host_.data(), pxVec4Array, std::size_t(n) * sizeof(ParticlePos));
     }
     liveCount_ = n;
+    // Only a POSITIVE step is a step. 0 keeps the previous answer rather than
+    // dividing the stretch by zero, and a caller that never passes one keeps
+    // the 1/60 default it has always had.
+    if (dtSec > 0.f) hostDt_ = dtSec;
     ++dataSerial_;
 }
 
