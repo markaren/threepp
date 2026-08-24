@@ -9,6 +9,14 @@ PhysX bodies, laid in staggered courses with millimetre gaps so nothing starts
 interpenetrating, settled for two seconds, spread out so every charge has its
 own victim -- and then hit.
 
+The void is a GRADE, not a colour: `--grade` moves the sky, the floor tone, the
+exposure, the fill and the sun together, because they set where black and white
+are and the sun is also what lights the smoke. The default puts the sky a stop
+under the floor and the floor a stop under the plume, so the fireball, the column
+and the embers are the only things at the top of the range. `--grade flat` is the
+near-white sky this had before, kept for comparison; it is what "washed out"
+looks like.
+
 The blast is not a fracture solve; it is an impulse field with a SHOCK FRONT.
 Nothing happens at t0 except the flash: the front leaves the charge at
 --front-speed and each body is hit when the front ARRIVES,
@@ -87,19 +95,39 @@ renderer's own vertex buffers (`enable_vertex_interop`), the outer one in bare
 steel that takes the ray-traced reflection of the flash, the inner one dark, so
 a tear shows the drum's inside.
 
+Debris that lands hard kicks up the floor: once a frame the host reads a THIRD
+of the bodies (round-robin, so every one is sampled at 20 Hz for a third of the
+cost), calls a body that was falling fast and has just stopped a STRIKE, and
+hands the hardest two dozen of them to a kernel that raises a small collar of
+dust parcels there -- in the dust cohort's own ring, with the dust cohort's own
+gravity and settling. It is the one thing here that is not born in the burst
+window, and it earns that the same way the shock ring does: it is not new matter
+appearing, it is the yard being kicked.
+
 Emission, recycling and the fire->smoke conversion are all device kernels
 structured around a fixed-max array of 8 charges. The CPU never walks a
 particle: per frame it computes one integer per cohort per charge and hands the
 ring cursor to a launch. The pools are SHARED between charges -- a ninth
 overlapping burst overwrites the oldest slots, which is the recycling policy.
 
-Everything is driven off one sim clock and one blast timeline, so the later
-phases (drums, slow-motion film) hang off the same t0 without re-deriving it.
+`--video S` is S seconds of FILM, not of yard. The playback RAMPS: the settle
+runs at 1.9x because nothing is happening in it, the ramp drops to a sixth speed
+as the fuse burns down, holds through the flash, the fireball opening, the
+condensation ring leaving and the first wall going, then comes back out over
+three quarters of a second of yard. The physics timestep never changes -- PhysX
+keeps its fixed 1/60 against an accumulator and the shells keep a fixed substep
+size, which is what makes the slow motion honest rather than a different
+simulation (get that wrong and the shells come out six times as damped: the
+first cut of this had three pristine drums).
 
     python warp_explosion.py                 # window; drag to orbit, Esc quits
-    python warp_explosion.py --shot 4        # headless: sim 4 s, write png
-    python warp_explosion.py --video 6       # headless: 6 s of frames (+mp4 if ffmpeg)
+    python warp_explosion.py --video 9       # the film -> warp_explosion.mp4
+    python warp_explosion.py --shot 2.1      # headless: sim 2.1 s, write png
     python warp_explosion.py --bench         # timed phase breakdown, post-detonation
+    python warp_explosion.py --slowmo 0.08   # slower slow motion
+    python warp_explosion.py --no-ramp --video 8    # real time, as phases 1-3 shot it
+    python warp_explosion.py --grade dusk    # flat | yard | range (default) | dusk
+    python warp_explosion.py --drum-cam --dof --shot 2.24   # macro on the near drum
     python warp_explosion.py --yield 2400    # bigger charge (J0, kg m/s at 1 m)
     python warp_explosion.py --charge 0,0.6,-1.2 --t0 1.5
     python warp_explosion.py --charges "0,-0.6,1400@2.0; -14.5,-6,1700@2.6"
@@ -110,8 +138,8 @@ phases (drums, slow-motion film) hang off the same t0 without re-deriving it.
     python warp_explosion.py --gas 0.3                  # 4.4 M particles, not 15 M
     python warp_explosion.py --sigma 1.6                # thicker smoke
     python warp_explosion.py --no-interop               # HostRing fallback, reduced counts
-    python warp_explosion.py --drum-cam --shot 2.6      # macro on the near drum
     python warp_explosion.py --tear 1.18 --drum-gain 1400   # shred the drums
+    python warp_explosion.py --no-puff                  # no impact dust
     python warp_explosion.py --no-drums                 # no shells at all
     python warp_explosion.py --no-gas                   # phase 1 only
     python warp_explosion.py --no-ao                    # RT AO/GI off (~6.5 ms/frame back)
@@ -154,6 +182,25 @@ if HEADLESS:
 
 FPS = 60.0
 DT = 1.0 / FPS
+
+# THE SLOW-MOTION RAMP (--video only; the window is always real time).
+#
+# The water balloon's trick: the physics timestep never changes, only how much
+# SIM time one rendered frame covers. So `--video S` is S seconds of FILM, and
+# the sim time it covers is whatever the ramp integrates to -- the settle runs
+# fast because nothing is happening in it, the frame the front leaves the charge
+# runs at a sixth speed because everything is, and the drifting column runs a
+# little fast again on the way out. Everything downstream follows for free:
+# PhysX accumulates and interpolates against its own fixed 1/60 step, the gas and
+# the shells take dt as an argument, the streak emitter is seeded with absolute
+# time, and the shake and the timeline are functions of sim time.
+SLOWMO = cli_arg("--slowmo", 0.16, float)   # sim seconds per film second at the floor
+NO_RAMP = "--no-ramp" in sys.argv           # --video in real time, as phases 1-3 shot it
+SLOW_LEAD = 0.30          # sim s before t0 that the ramp starts (the fuse)
+SLOW_HOLD = 0.45          # sim s held at the floor: the bloom and the first wall
+SLOW_OUT = 0.75           # sim s the ramp back out takes
+PLAY_PRE = 1.9            # before the ramp: the settle is not the film
+PLAY_TAIL = 1.35          # after it: the column drifts, so let it drift faster
 
 # --- the charges ------------------------------------------------------------
 #
@@ -255,6 +302,29 @@ SMOKE_LIFE = (4.5, 9.5)                     # from the moment it was fire
 WILSON_EMIT, WILSON_LIFE = 0.45, (0.20, 0.42)
 EMBER_SKEW, FLARE_SKEW = 1.8, 1.4           # emitted = N * (tau/EMIT)**(1/skew)
 
+# IMPACT DUST. Debris that lands hard kicks up the floor, and it is the cheapest
+# "alive" trick in the demo: without it the yard goes quiet the moment the ring
+# has passed, and a brick arcing forty metres lands in silence. The host reads
+# the bodies ONCE a frame -- a third of them per frame, round-robin, which is
+# what keeps a 1700-body Python loop off the frame time -- and a strike is a body
+# that was falling fast and has just stopped. See impact_dust().
+NO_PUFF = "--no-puff" in sys.argv
+IMPACT_V = 5.5            # m/s of fall that counts as a strike
+IMPACT_STOP = 0.45        # ... and has to have lost this much of it in one scan
+IMPACT_Y = 1.8            # ... near enough the ground to raise anything, m
+IMPACT_STRIDE = 3         # bodies scanned per frame: len(bodies) // this
+IMPACT_T = 4.5            # s after a charge that debris is still coming down
+PUFF_MAX = 24             # strikes taken per frame, the hardest first
+PUFF_V0 = 3.2             # m/s at a reference strike
+PUFF_LIFE = (0.55, 1.60)
+# A puff has to be a LOCAL concentration to read, and the density splat is
+# per-voxel occupancy with the particle radius ignored (phase 2's finding), so
+# the only two knobs are how many parcels and how tightly they are packed. The
+# dust volume's voxel is 0.56 x 0.04 x 0.56 m: 220 parcels in a metre-wide collar
+# came out at under one parcel a voxel and was invisible in an A/B. 1400 in a
+# half-metre collar is about six, and reads.
+PUFF_P = max(int(1400 * _SCALE), 2)   # dust parcels one strike raises
+
 FIRE_V0, FIRE_DRAG, FIRE_BUOY, FIRE_CURL = 21.0, 7.5, 26.0, 7.0
 SMOKE_DRAG, SMOKE_BUOY, SMOKE_CURL = 1.30, 4.5, 3.4
 SMOKE_INHERIT = 0.75      # of the fire parcel's velocity: this is the outward push
@@ -340,6 +410,7 @@ DRUM_G = cli_arg("--drum-grid", 9, int)     # cap grid side; the body has 4*(g-1
 DRUM_NV = cli_arg("--drum-rings", 14, int)  # rings up the side
 DRUM_THICK = cli_arg("--drum-thick", 0.013, float)   # spacing of the two skins, m
 DRUM_SUBSTEPS = cli_arg("--drum-substeps", 48, int)
+DRUM_SUB = DT / DRUM_SUBSTEPS       # the substep SIZE, fixed forever (see step_drums)
 DRUM_DAMP = 0.002                   # per substep
 DRUM_MU = 0.55                      # friction against the ground: this is what topples it
 DRUM_GRAV = wp.vec3(0.0, -9.81, 0.0) if device is not None else None
@@ -652,12 +723,62 @@ if not tp.vulkan_available():
 
 W, H = parse_size(cli_arg("--size", "1280x720", str))
 MSAA = cli_arg("--msaa", 4, int)              # G-buffer MSAA (measured free here at 720p)
+
+# THE GRADE. Phases 1-3 shot a light-grey yard under a near-white sky at
+# exposure 0.55 and the frames came out light-grey-on-white: a soot column whose
+# darkest value was barely under the void behind it, and a floor that was the
+# brightest thing in frame. The fix is not one knob, it is the five that set
+# where black and white ARE -- and they have to move together, because the sun
+# is what lights the smoke (the density march reads the scene's sun and ambient)
+# and the floor tone is what the plume is read AGAINST.
+#
+#   void   background AND fog colour: the sky the column is silhouetted on
+#   floor  the grid texture's base tone, 0-255 sRGB
+#   exp    tone_mapping_exposure, pinned (auto-exposure is off: the billboards
+#          bypass it, so BB_* below is tied to this number by hand)
+#   hemi   the fill. Weak on purpose -- fill is what flattens a blast
+#   sun    the one hard light. Contrast is (sun - hemi), not exposure
+#   fog    linear near/far, m. Far too near and the yard dissolves with the void
+# Bracketed by eye on one frame (t = 4.4, the column up and the yard scattered),
+# measured as mean sky / floor / plume tone in the same three windows:
+#   flat  251 / 175 / 226   phases 1-3: everything in the top third, plume
+#                           DARKER than the sky it is drawn on. The complaint.
+#   yard  187 / 139 / 208
+#   range 160 / 126 / 198   SHIPPED
+#   dusk  150 /  97 / 184   the floor stops being a light-grey test range
+# `range` is the one that keeps the Omniverse floor and still puts the plume at
+# the top of the range: sky a real grey, floor a stop under it, and the column,
+# the fireball and the embers the only things above both.
+GRADE = cli_arg("--grade", "range", str)
+GRADES = {
+    # phase 3's look, kept so its acceptance frames reproduce exactly
+    "flat": dict(void=(0.800, 0.810, 0.830), floor=163, exp=0.55, hemi=0.45,
+                 sun=3.0, fog=(55.0, 200.0)),
+    "yard": dict(void=(0.400, 0.428, 0.482), floor=150, exp=0.50, hemi=0.26,
+                 sun=3.9, fog=(80.0, 320.0)),
+    "range": dict(void=(0.300, 0.325, 0.385), floor=152, exp=0.52, hemi=0.24,
+                  sun=3.2, fog=(85.0, 340.0)),
+    # the far end of the bracket -- overcast dusk, almost a lightbox
+    "dusk": dict(void=(0.245, 0.268, 0.320), floor=118, exp=0.46, hemi=0.20,
+                 sun=4.4, fog=(60.0, 260.0)),
+}
+if GRADE not in GRADES:
+    sys.exit(f"--grade: want one of {', '.join(GRADES)}")
+G = GRADES[GRADE]
+
 canvas = tp.Canvas("threepp x physx - blast yard", width=W, height=H,
                    antialiasing=MSAA, vsync=False, headless=HEADLESS)
 renderer = tp.VulkanRenderer(canvas)
 renderer.tone_mapping = tp.ToneMapping.ACESFilmic
-renderer.tone_mapping_exposure = 0.55    # pinned: phase 2's billboards bypass auto-exposure
+renderer.tone_mapping_exposure = G["exp"]  # pinned: the billboards bypass auto-exposure
 renderer.shadow_map_enabled = True
+# Thin-lens bokeh, off by default (it is not free and a yard-wide establishing
+# shot does not want it). The macro drum shot does: --dof --drum-cam.
+DOF = "--dof" in sys.argv
+FSTOP = cli_arg("--fstop", 2.4, float)
+if DOF:
+    renderer.set_camera_exposure(FSTOP, 1.0 / 125.0, 100.0)   # f-number: the CoC
+    renderer.depth_of_field = True
 # The two knobs that actually move the frame time here (measured, --bench):
 # ray-traced AO/GI ~6.5 ms and the fog march ~2.5 ms at 1280x720. The body
 # count is not the lever -- PhysX is under 2 ms of a 22 ms frame.
@@ -666,11 +787,11 @@ NO_FOG = "--no-fog" in sys.argv
 if NO_AO:
     renderer.deferred_ao = False
 
-VOID = tp.Color(0.80, 0.81, 0.83)
+VOID = tp.Color(*G["void"])
 scene = tp.Scene()
 scene.background = VOID
 if not NO_FOG:
-    scene.set_fog(VOID, 55.0, 200.0)          # dissolves the slab's far edge into the void
+    scene.set_fog(VOID, *G["fog"])            # dissolves the slab's far edge into the void
 
 camera = tp.PerspectiveCamera(46, canvas.aspect(), 0.05, 800)
 # Framed for the PLUME, not the yard: at nebula counts the column is the
@@ -704,15 +825,21 @@ def orbit(frame):
     _cam_base.set(ox + CAM_R * math.sin(a), CAM_Y + (_focus[1] - CAM_TARGET[1]),
                   oz + CAM_R * math.cos(a))
     camera.position.set(_cam_base.x, _cam_base.y, _cam_base.z)
-    camera.look_at(_focus[0], _focus[1], _focus[2]) if DRUM_CAM \
-        else camera.look_at(*CAM_TARGET)
+    tgt = _focus if DRUM_CAM else CAM_TARGET
+    camera.look_at(tgt[0], tgt[1], tgt[2])
+    if DOF:
+        # The lens focuses on what the camera is pointed at. On the macro shot
+        # that is the drum, which is MOVING, so the focus has to be recomputed
+        # rather than dialled in once -- it rides the same lagging dolly.
+        renderer.focus_distance = max(math.dist((_cam_base.x, _cam_base.y, _cam_base.z),
+                                                tuple(tgt)), 0.2)
 
 
 # A test range is an overcast-bright void with one hard sun in it. The fill is
 # deliberately weak: everything here is grey or clay, and a strong hemisphere
 # fill flattens both into the same pale pink.
-scene.add(tp.HemisphereLight(0xd7e3f4, 0x8d8a84, 0.45))
-sun = tp.DirectionalLight(0xfff2df, 3.0)
+scene.add(tp.HemisphereLight(0xd7e3f4, 0x8d8a84, G["hemi"]))
+sun = tp.DirectionalLight(0xfff2df, G["sun"])
 sun.position.set(9.0, 15.0, 6.0)
 sun.cast_shadow = True
 scene.add(sun)
@@ -728,11 +855,14 @@ for _f in FLASHES:
     scene.add(_f)
 
 
-def grid_texture(px=1024, tile=10.0, minor=1.0):
+def grid_texture(px=1024, tile=10.0, minor=1.0, base=163):
     """The test-range floor: a light grey with 1 m minor and 10 m major rules.
 
     Written to a temp PNG because TextureLoader takes a path; `tile` is the
-    metres the image covers, which is what sets the repeat below.
+    metres the image covers, which is what sets the repeat below. `base` is the
+    grade's floor tone and the RULES FOLLOW IT -- the grid has to stay a fixed
+    fraction under the floor or a darker grade turns it into a black lattice.
+    The cache path carries the tone, or the first grade rendered wins forever.
     """
     from PIL import Image
 
@@ -740,18 +870,19 @@ def grid_texture(px=1024, tile=10.0, minor=1.0):
         i = np.arange(px)
         return ((i + width // 2) % period) < width
 
-    img = np.full((px, px, 3), 163, np.uint8)
+    img = np.full((px, px, 3), base, np.uint8)
     fine = rules(max(int(round(px * minor / tile)), 2), 2)
     coarse = rules(px, 6)
-    for mask, tone in ((fine, 138), (coarse, 100)):
+    for mask, tone in ((fine, int(base * 0.85)), (coarse, int(base * 0.61))):
         img[mask, :, :] = tone
         img[:, mask, :] = tone
-    path = os.path.join(tempfile.gettempdir(), f"threepp_blast_grid_{px}_{int(tile)}.png")
+    path = os.path.join(tempfile.gettempdir(),
+                        f"threepp_blast_grid_{px}_{int(tile)}_{base}.png")
     Image.fromarray(img).save(path)
     return path, tile
 
 
-grid_path, grid_tile = grid_texture()
+grid_path, grid_tile = grid_texture(base=G["floor"])
 grid = tp.TextureLoader().load(grid_path, tp.ColorSpace.SRGB)
 grid.wrap_s = tp.TextureWrapping.Repeat
 grid.wrap_t = tp.TextureWrapping.Repeat
@@ -1258,9 +1389,14 @@ def drum_soup(x: wp.array(dtype=wp.vec3), nrm: wp.array(dtype=wp.vec3),
 
 
 if DRUMS:
-    def drum_launches():
-        """Every launch of one frame of shell simulation; captured into a graph."""
-        for s in range(DRUM_SUBSTEPS):
+    def drum_launches(n=DRUM_SUBSTEPS):
+        """Every launch of one frame of shell simulation; captured into a graph.
+
+        `n` is the substep count and it is ONLY ever less than DRUM_SUBSTEPS off
+        the captured path, for the slow-motion ramp -- see step_drums. The
+        substep SIZE never changes, which is the whole point.
+        """
+        for s in range(n):
             wp.launch(drum_predict, dim=N_DV, device=device,
                       inputs=[dx_, dprev, ddt, DRUM_DAMP, DRUM_GRAV])
             wp.launch(drum_blast, dim=N_DV, device=device,
@@ -1419,20 +1555,34 @@ def release_drum_interop():
         renderer.disable_vertex_interop(m)
 
 
+# Frames of publishing still owed after the last solve. A FROZEN shell's soup is
+# byte-identical to the one already in the renderer's buffers, and copying it
+# again costs two device-to-device copies AND two wp.synchronize_device calls
+# inside render() -- which is a WAIT on the whole Vulkan frame, not a copy. That
+# is the entire pre-detonation cost of the drums (measured: 211 fps against 307
+# with them frozen), so the callbacks are gated on this. It counts DOWN rather
+# than being a bool because the renderer keeps a previous-frame vertex buffer to
+# build motion vectors from: the first frames after the shells stop still have to
+# publish, or the last motion the drum made never leaves the history.
+_dpub = [3]
+_dacc = [0.0]        # sim seconds owed to the shells, not yet stepped
+_dclk = [0.0]        # the shells' own clock: sim time at the last substep taken
+
+
 def drum_on_frame():
     """Inside render(), post-fence and pre-record: fill the outer skin's buffers.
 
     The synchronize is the whole contract -- wp.launch is asynchronous on Warp's
     stream and host ordering here is the only thing sequencing this write
     against the Vulkan frame that reads it."""
-    if d_vk is not None:
+    if d_vk is not None and _dpub[0] > 0:
         wp.copy(d_vk[0].array, dsoup_op)
         wp.copy(d_vk[1].array, dsoup_on)
         wp.synchronize_device(device)
 
 
 def drum_on_frame_in():
-    if d_vk is not None:
+    if d_vk is not None and _dpub[0] > 0:
         wp.copy(d_vk[2].array, dsoup_ip)
         wp.copy(d_vk[3].array, dsoup_in)
         wp.synchronize_device(device)
@@ -1449,17 +1599,46 @@ def drums_active():
 
 
 def step_drums(dt):
-    """One frame of shell simulation. Returns its wall-clock seconds."""
+    """One frame of shell simulation, at a FIXED substep size. Wall-clock secs.
+
+    THE SUBSTEP SIZE IS A MATERIAL PROPERTY HERE, not a discretisation choice,
+    and the slow-motion ramp is what proves it: the Verlet damping (1 - 0.002 per
+    substep) and the plastic creep (5% of the excess per substep) are both
+    per-SUBSTEP rates, so running the same 48 substeps over a sixth of the sim
+    time makes the shells six times as damped and six times as ductile per second
+    of yard. The first slow-motion cut came out with three pristine drums.
+    So the shells keep a fixed DRUM_SUB and an accumulator, exactly as PhysX
+    does: at full speed that is one captured-graph replay a frame, and at a sixth
+    speed it is seven or eight uncaptured substeps a frame -- fine granularity
+    where the film needs it, and the identical material either way. The graph is
+    still the fast path and its shape never changes.
+    """
     if not DRUMS or not drums_active():
+        if _dpub[0] > 0:            # let the last motion out of the history, then stop
+            _dpub[0] -= 1
+        _dacc[0] = 0.0
+        _dclk[0] = sim_time
         return 0.0
     t0 = time.perf_counter()
-    sub = dt / DRUM_SUBSTEPS
-    dtsub.assign((sim_time - dt + (np.arange(DRUM_SUBSTEPS) + 1) * sub).astype(np.float32))
-    ddt.assign(np.float32([sub]))
-    if d_graph is not None:
-        wp.capture_launch(d_graph)
-    else:
-        drum_launches()
+    _dacc[0] += dt
+    n = int(_dacc[0] / DRUM_SUB + 1.0e-9)
+    if n <= 0:                      # slow motion: not a whole substep's worth yet
+        return time.perf_counter() - t0
+    n = min(n, 4 * DRUM_SUBSTEPS)   # no spiral of death on a compile hitch
+    _dacc[0] -= n * DRUM_SUB
+    _dpub[0] = 3
+    while n > 0:
+        k = min(n, DRUM_SUBSTEPS)
+        dtsub.assign((_dclk[0] + (np.arange(DRUM_SUBSTEPS) + 1)
+                      * DRUM_SUB).astype(np.float32))
+        _dclk[0] += k * DRUM_SUB
+        if k == DRUM_SUBSTEPS and d_graph is not None:
+            wp.capture_launch(d_graph)
+        else:
+            drum_launches(k)
+        n -= k
+        if n > 0:                   # the next batch rewrites dtsub from the host
+            wp.synchronize_device(device)
     wp.synchronize_device(device)
     if d_vk is None:            # the fallback: four attribute uploads a frame
         drum_geo_o.update_attribute("position", dsoup_op.numpy())
@@ -1695,13 +1874,22 @@ def blast_timeline(t):
                 bb_gain=1.0 + gain, fire_e=fire_e)
 
 
-def blast_frame(t):
+def blast_frame(t, dt=DT):
     """Arm what is due, deliver the front's impulses, blow the wind behind it.
 
     This is the one place the rigid side hears about the blast, and it is
     O(bodies the front crossed this frame) plus O(bodies inside the wind
     window) -- not O(bodies) every frame.
+
+    `dt` is here for ONE reason and it is the slow-motion ramp. PhysX runs a
+    FIXED 1/60 step against an accumulator, so at a sixth speed six rendered
+    frames go by per physics step -- and PxRigidBody::addForce ACCUMULATES until
+    simulate() consumes it. Six frames of the same wind force therefore deliver
+    six times the impulse over that one step. Scaling by dt/DT hands each frame
+    its own share, which comes out identical at any playback speed (verified the
+    hard way: the first slow-motion cut threw a brick 287 m).
     """
+    fscale = dt / DT
     kick, spin, force = tp.Vector3(), tp.Vector3(), tp.Vector3()
     done = []
     for ch in charges:
@@ -1731,7 +1919,7 @@ def blast_frame(t):
         lo = int(np.searchsorted(ch.t_sorted, t - WIND_T))
         if hi > lo:
             idx = ch.order[lo:hi]
-            amp = (WIND_A0 * ch.scale
+            amp = (WIND_A0 * ch.scale * fscale
                    * np.exp(-(t - ch.t_sorted[lo:hi]) / WIND_TAU) * MASS[idx])
             fv = ch.wind_u[idx] * amp[:, None]
             for k, i in enumerate(idx):
@@ -1865,6 +2053,45 @@ def emit_gas(pos: wp.array(dtype=wp.vec4),
     pos[slot] = wp.vec4(p[0], p[1], p[2], r0)
     vel[slot] = v
     st[slot] = wp.vec2(0.0, life)
+
+
+@wp.kernel
+def emit_puff(pos: wp.array(dtype=wp.vec4),
+              vel: wp.array(dtype=wp.vec3),
+              st: wp.array(dtype=wp.vec2),
+              pts: wp.array(dtype=wp.vec4),
+              base: int, cap: int, per: int, seed: int,
+              v0: float, life0: float, life1: float, r0: float):
+    """IMPACT DUST: a small ground puff where a piece of debris just landed.
+
+    The second exception to "nothing is instantiated after the burst", and it
+    earns it the same way the dust ring does -- this is not new matter appearing
+    out of nowhere, it is the floor of the yard being kicked up by something that
+    hit it. `pts` is (x, _, z, strength) for the strikes the host found this
+    frame, at most PUFF_MAX of them, and the launch is 2D so each strike gets
+    `per` parcels without an integer division in the kernel.
+
+    The parcels go into the DUST cohort's ring at its cursor: same pool, same
+    allocator, same advection (kind 2 -- gravity, low drag, a per-particle rest
+    height), so a puff settles exactly like the shock skirt does. It just starts
+    where a brick landed instead of on the front.
+    """
+    k, j = wp.tid()
+    idx = k * per + j
+    slot = (base + idx) % cap
+    s = wp.rand_init(seed, base + idx)
+    hit = pts[k]
+    a = wp.randf(s) * 6.2831853
+    rr = 0.07 + 0.40 * wp.sqrt(wp.randf(s))
+    p = wp.vec3(hit[0] + rr * wp.cos(a), 0.04 + 0.20 * wp.randf(s),
+                hit[2] + rr * wp.sin(a))
+    # Mostly UP and a little out: a strike throws a collar, not a fountain.
+    sp = v0 * hit[3] * (0.30 + 0.95 * wp.randf(s))
+    v = wp.vec3(wp.cos(a) * sp * 0.85, sp * (0.55 + 0.85 * wp.randf(s)),
+                wp.sin(a) * sp * 0.85)
+    pos[slot] = wp.vec4(p[0], p[1], p[2], r0)
+    vel[slot] = v
+    st[slot] = wp.vec2(0.0, life0 + (life1 - life0) * wp.randf(s))
 
 
 @wp.kernel
@@ -2099,6 +2326,9 @@ if not NO_GAS:
     noise_grid = wp.zeros((NG, NG, NG), dtype=wp.vec3, device=device)
     _ch = np.zeros((MAX_CHARGES, 4), np.float32)
     charge_arr = wp.array(_ch, dtype=wp.vec4, device=device)
+    # This frame's impact points, (x, _, z, strength). Fixed capacity, uploaded
+    # only on frames that actually found a strike.
+    puff_pts = wp.zeros(PUFF_MAX, dtype=wp.vec4, device=device)
 
     # per_charge: how much of a pool ONE detonation may claim. An overlapping
     # ninth burst simply overwrites the oldest slots in the ring.
@@ -2500,6 +2730,64 @@ BB_STREAK = 1.6 * _EXP
 FIRE_EMISSIVE = 4.5                     # emission is intensity * THIS field's sigma
 _gas_live = False
 
+# --- impact dust ------------------------------------------------------------
+#
+# The only host loop over bodies left in the frame, and it is a THIRD of them:
+# subset k = frame % 3 is scanned, so every body is sampled at 20 Hz and the
+# Python attribute walk costs a third of what it would. Velocity comes from the
+# position difference over that subset's own span (`_imp_t`), which is why the
+# slow-motion ramp does not confuse it -- the span shrinks with dt and the
+# quotient does not. A strike is: it WAS falling faster than IMPACT_V, it has
+# just lost most of that, and it is near the ground.
+_imp_p = HOME.copy()                       # last sampled position per body
+_imp_vy = np.zeros(len(bodies))            # ... and the fall speed it had there
+_imp_t = [0.0] * IMPACT_STRIDE
+_imp_k = [0]
+_imp_pts = np.zeros((PUFF_MAX, 4), np.float32)
+PUFFS = [0]                                # strikes raised, for report()
+
+
+def impact_dust():
+    """Find this frame's strikes and kick up a puff at each. Returns the count.
+
+    Called from step_gas_frame, i.e. AFTER world.step, so the positions read here
+    are the ones the renderer is about to draw.
+    """
+    if NO_PUFF or NO_GAS or dust.per_charge == 0:
+        return 0
+    k = _imp_k[0] % IMPACT_STRIDE
+    _imp_k[0] += 1
+    sub = bodies[k::IMPACT_STRIDE]
+    p = np.array([(b.position.x, b.position.y, b.position.z) for b in sub])
+    span = max(sim_time - _imp_t[k], 1.0e-4)
+    _imp_t[k] = sim_time
+    vy = (p[:, 1] - _imp_p[k::IMPACT_STRIDE][:, 1]) / span
+    pvy = _imp_vy[k::IMPACT_STRIDE]
+    hit = ((pvy < -IMPACT_V) & (vy > IMPACT_STOP * pvy) & (p[:, 1] < IMPACT_Y)
+           & np.isfinite(p).all(1))
+    _imp_p[k::IMPACT_STRIDE] = p
+    _imp_vy[k::IMPACT_STRIDE] = vy
+    n = int(hit.sum())
+    if n == 0:
+        return 0
+    speed = -pvy[hit]
+    take = np.argsort(-speed)[:PUFF_MAX]           # the hardest strikes, not the first
+    q = p[hit][take]
+    m = len(take)
+    _imp_pts[:m, 0] = q[:, 0]
+    _imp_pts[:m, 2] = q[:, 2]
+    _imp_pts[:m, 3] = np.clip(speed[take] / 13.0, 0.25, 1.7)
+    puff_pts.assign(_imp_pts)
+    wp.launch(emit_puff, dim=(m, PUFF_P),
+              inputs=[dust.pos, dust.vel, dust.st, puff_pts, dust.cursor, dust.n,
+                      PUFF_P, SEED + 91, PUFF_V0, PUFF_LIFE[0], PUFF_LIFE[1],
+                      DUST_R[0]],
+              device=device)
+    dust.cursor += m * PUFF_P                      # the same ring, the same cursor
+    dust.live = min(dust.cursor, dust.n)
+    PUFFS[0] += m
+    return m
+
 
 def step_gas_frame(dt):
     """Advance every cohort and publish it. Returns (kernel, publish) seconds.
@@ -2538,6 +2826,11 @@ def step_gas_frame(dt):
             continue
         for c in emitters:
             c.emit(ch.slot, b)
+    # IMPACT DUST rides the dust cohort's ring, so it has to go in before the
+    # advect launch trims itself to the live prefix -- a puff emitted after it
+    # would sit still for a frame.
+    if tw < IMPACT_T:
+        impact_dust()
     # Smoke slots are claimed by conversion, and the mapping is static, so the
     # live prefix of the smoke pool is exactly the fire ring's prefix times K.
     smoke.live = min(fire.cursor * SMOKE_K, smoke.n)
@@ -2596,6 +2889,37 @@ prof = {"gas": 0.0, "submit": 0.0, "blast": 0.0, "physx": 0.0, "drums": 0.0,
         "render": 0.0, "n": 0}
 
 
+FILM_T0 = min((ch.t0 for ch in CHARGES), default=T0)   # the ramp is keyed on the FIRST charge
+
+
+def playback_speed(t):
+    """Sim seconds per film second at sim time `t` -- the slow-motion ramp.
+
+    Keyed on SIM time, not on film time, so where the ramp sits relative to the
+    detonation is exact and the same in every run: the floor starts LEAD seconds
+    of sim before the first charge and holds HOLD seconds after it, which at the
+    shipped numbers is the flash, the fireball opening, the condensation ring
+    leaving and the near wall going -- about three and a half seconds of film out
+    of three quarters of a second of yard.
+    """
+    if NO_RAMP:
+        return 1.0
+
+    def ease(a, b, u):
+        u = min(max(u, 0.0), 1.0)
+        return a + (b - a) * u * u * (3.0 - 2.0 * u)
+
+    lead = FILM_T0 - SLOW_LEAD
+    if t <= lead:
+        return PLAY_PRE
+    if t < FILM_T0:
+        return ease(PLAY_PRE, SLOWMO, (t - lead) / SLOW_LEAD)
+    hold = FILM_T0 + SLOW_HOLD
+    if t < hold:
+        return SLOWMO
+    return ease(SLOWMO, PLAY_TAIL, (t - hold) / SLOW_OUT)
+
+
 def step_frame(dt=DT):
     """Advance one frame of sim time. Returns the bench's phase durations.
 
@@ -2610,7 +2934,7 @@ def step_frame(dt=DT):
         if pos is not None:
             fire_charge(pos, why=f"{name} [auto]")
     t0 = time.perf_counter()
-    blast_frame(sim_time)      # arm what is due, deliver the front, blow the wind
+    blast_frame(sim_time, dt)  # arm what is due, deliver the front, blow the wind
     t1 = time.perf_counter()
     world.step(dt)
     t2 = time.perf_counter()
@@ -2674,7 +2998,7 @@ def report():
     live = sum(f.live_count for f in fields)
     print(f"  t={sim_time:5.2f}  nan={s['nan']}  r_max={s['r_max']:6.1f} m  "
           f"y_max={s['y_max']:5.2f} m  moving={s['moving']}/{len(bodies)}  "
-          f"gas live={live:,}")
+          f"gas live={live:,}  impacts={PUFFS[0]:,}")
     for name, (k, ymed, y95, rmed, r95) in gas_stats().items():
         print(f"  {name:>5}: {k:7,} live  y {ymed:5.1f}/{y95:5.1f} m  "
               f"r {rmed:5.1f}/{r95:5.1f} m  (median/p95)")
@@ -2732,21 +3056,27 @@ elif VIDEO > 0:
         renderer.render(scene, camera)
     for k in range(total):
         orbit(k)
-        step_frame()
+        # THE RAMP. One line: the film's frame length in SIM seconds. Everything
+        # else -- PhysX's accumulator, the gas advection, the shells' substep
+        # size, the streak emitter's clock, the shake -- takes it from here.
+        step_frame(DT * playback_speed(sim_time))
         apply_shake()
         save(os.path.join(outdir, f"f{k:05d}.png"))
         if k % 60 == 0:
-            print(f"  frame {k}/{total}  ({time.perf_counter() - t_start:.0f}s elapsed)",
-                  flush=True)
-    print(f"rendered {total} frames in {time.perf_counter() - t_start:.0f}s -> {outdir}")
+            print(f"  frame {k}/{total}  t={sim_time:5.2f} "
+                  f"x{playback_speed(sim_time):4.2f}  "
+                  f"({time.perf_counter() - t_start:.0f}s elapsed)", flush=True)
+    print(f"rendered {total} frames of film ({sim_time:.2f} s of yard) in "
+          f"{time.perf_counter() - t_start:.0f}s -> {outdir}")
     report()
     ff = find_ffmpeg()
+    mp4 = cli_arg("--out", "warp_explosion.mp4", str)
     if ff:
         subprocess.run([ff, "-y", "-loglevel", "error", "-framerate", "60",
                         "-i", os.path.join(outdir, "f%05d.png"),
                         "-c:v", "libx264", "-pix_fmt", "yuv420p", "-crf", "17",
-                        "warp_explosion.mp4"], check=False)
-        print("wrote warp_explosion.mp4")
+                        mp4], check=False)
+        print(f"wrote {mp4}")
 elif BENCH:
     # Bench the interesting state: bricks in flight, not a sleeping stack.
     # Headless on purpose (vsync off, no present), which also means each
