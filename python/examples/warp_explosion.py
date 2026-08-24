@@ -2,25 +2,38 @@
 
 A light-grey void with a grid floor, the way a test range looks in Unreal or
 Omniverse, and a yard full of things that are *pre-broken by construction* --
-a three-walled brick house, a shed, pillars of stacked segments, pallets of
-crates, loose rubble. Roughly twelve hundred individual PhysX boxes, laid in
-staggered courses with millimetre gaps so nothing starts interpenetrating,
-settled for two seconds, and then hit.
+a three-walled brick house, a shed, a ten-metre chimney, a stone gateway, a
+concrete bunker, a rack of steel pipe (capsule bodies), pillars, pallets of
+crates, boundary walls, loose rubble. Roughly seventeen hundred individual
+PhysX bodies, laid in staggered courses with millimetre gaps so nothing starts
+interpenetrating, settled for two seconds, spread out so every charge has its
+own victim -- and then hit.
 
-The blast is not a fracture solve; it is an impulse field. At t0 every body
-gets
+The blast is not a fracture solve; it is an impulse field with a SHOCK FRONT.
+Nothing happens at t0 except the flash: the front leaves the charge at
+--front-speed and each body is hit when the front ARRIVES,
 
-    J(r) = J0 * exp(-r / L) / max(r, r0) ** 1.5
+    t_hit = t0 + r / C_FRONT,      J(r) = J0 * exp(-r / L) / max(r, r0) ** 1.5
 
 along (body - charge), with an upward bias near the floor (a real blast
 reflects off the ground and lifts what is standing on it), a speed cap so the
 bodies nearest the charge do not leave at kilometres per second, and a random
-tumble. A decaying radial "wind" force follows for the next 0.45 s -- that is
-what keeps the wall panels moving after the first frame instead of dropping
-straight down, and it is the difference between "a wall fell over" and "a wall
-was blown out". A point light flashes at the charge and the camera shakes.
+tumble. The near wall therefore leaves before the far one and the yard comes
+apart as a travelling ripple, which is the whole read. A decaying radial "wind"
+force follows each body's OWN arrival for 0.45 s -- that is what keeps the wall
+panels moving after the first frame instead of dropping straight down, and it
+is the difference between "a wall fell over" and "a wall was blown out". A
+point light flashes at the charge, and the camera shakes when the front reaches
+the LENS, not when the charge goes off.
 
-The gas is five `tp.ParticleField`s at NEBULA SCALE -- ~15 million particles by
+There can be up to eight charges. `--charges "x,z,J@t; ..."` places them; in the
+window B detonates at a structure that is still standing and D at the orbit
+target, as often as you like. A new charge creates nothing -- no field, no
+buffer, no scene entry -- it takes a slot of a fixed device-side charge array
+and a share of the shared particle pools, so it costs no more than the frame it
+lands on.
+
+The gas is nine `tp.ParticleField`s at NEBULA SCALE -- ~15 million particles by
 default -- all created before the first frame and parked at live count 0.
 Creating one mid-run is a device idle and a cleared TAA history, on the one
 frame where that shows.
@@ -50,6 +63,11 @@ instantiated afterwards. Everything you see later is that same matter evolving.
   dust   Born on the ground annulus at the shock radius r = c*t while the front
          is still crossing the yard (~0.9 s), so the ring races outward ahead
          of the debris for free. DensityRepr only.
+  ring   The Wilson cloud: a thin condensation shell ON the front, emitted at
+         r = C_FRONT*t AND thrown outward at C_FRONT so each parcel rides the
+         wave for the quarter second it lives instead of being left behind as a
+         widening band. Bright, translucent, above the dust skirt -- the only
+         part of a shockwave you can actually photograph. DensityRepr only.
   ember  A tight 0.4 s spawn, then long-lived embers that arc, land and burn
          out. Additive billboards. Not the analytic emitter, which cannot
          express a one-shot burst at all -- see the note at the field.
@@ -60,7 +78,8 @@ instantiated afterwards. Everything you see later is that same matter evolving.
 Emission, recycling and the fire->smoke conversion are all device kernels
 structured around a fixed-max array of 8 charges. The CPU never walks a
 particle: per frame it computes one integer per cohort per charge and hands the
-ring cursor to a launch.
+ring cursor to a launch. The pools are SHARED between charges -- a ninth
+overlapping burst overwrites the oldest slots, which is the recycling policy.
 
 Everything is driven off one sim clock and one blast timeline, so the later
 phases (drums, slow-motion film) hang off the same t0 without re-deriving it.
@@ -71,6 +90,9 @@ phases (drums, slow-motion film) hang off the same t0 without re-deriving it.
     python warp_explosion.py --bench         # timed phase breakdown, post-detonation
     python warp_explosion.py --yield 2400    # bigger charge (J0, kg m/s at 1 m)
     python warp_explosion.py --charge 0,0.6,-1.2 --t0 1.5
+    python warp_explosion.py --charges "0,-0.6,1400@2.0; -14.5,-6,1700@2.6"
+    python warp_explosion.py --auto-charge 2.5     # keep blowing things up
+    python warp_explosion.py --front-speed 35      # a slower, more readable ripple
     python warp_explosion.py --courses 20 --shot 4      # taller walls, more bodies
     python warp_explosion.py --shot 4 --spin 0.25       # orbit while simulating
     python warp_explosion.py --gas 0.3                  # 4.4 M particles, not 15 M
@@ -117,11 +139,28 @@ if HEADLESS:
 FPS = 60.0
 DT = 1.0 / FPS
 
-# --- the charge -------------------------------------------------------------
+# --- the charges ------------------------------------------------------------
+#
+# A charge is (position, yield, t0). Up to MAX_CHARGES of them are live at once
+# -- the device-side gas emission has been indexing a fixed 8-slot charge array
+# since phase 2.6, and this is what fills it. The ninth overlapping burst takes
+# the oldest slot; that is the recycling policy, not an error.
 
 T0 = cli_arg("--t0", 2.0, float)           # detonation time; before it, the stack settles
 YIELD = cli_arg("--yield", 1400.0, float)   # J0: impulse (kg m/s) at 1 m on a 1 kg body
 CHARGE = tuple(float(v) for v in cli_arg("--charge", "0,0.6,-0.6", str).split(","))
+CHARGE_SPEC = cli_arg("--charges", "", str)  # "x,z,J@t; x,y,z,J@t; ..." -- overrides --charge
+# Fire a charge at something still standing every N seconds. It is what the B
+# key does, on a timer -- a demo mode, and the honest way to measure that a
+# mid-run detonation costs nothing structural (watch the worst-frame print).
+AUTO_CHARGE = cli_arg("--auto-charge", 0.0, float)
+_auto = [T0 + 1.0]
+MAX_CHARGES = 8           # slots in the device charge array; a ring
+# THE SHOCK FRONT. Nothing happens at t0 except the flash: every body takes its
+# impulse when the front ARRIVES, t_hit = t0 + r / C_FRONT, and the wind tail
+# follows ITS arrival rather than t0. That stagger IS the shockwave -- the near
+# wall leaves, then the far one, and the yard comes apart as a ripple.
+C_FRONT = cli_arg("--front-speed", 60.0, float)
 BLAST_L = 5.0             # exponential range of the impulse field, m
 BLAST_R0 = 0.8            # near-field softening radius, m
 BLAST_P = 1.5             # geometric falloff exponent
@@ -136,7 +175,10 @@ FLASH_TAU = 0.075         # flash decay, s
 SHAKE_A = 0.11            # camera shake amplitude at the default yield, m
 SHAKE_TAU = 0.30
 SHAKE_T = 1.4
-FRONT_C = 28.0            # visual shock-front speed, m/s: the dust ring rides it
+# The DUST skirt is slower than the front by design: the front is the pressure
+# wave, the dust is what it tears off the ground behind itself. The condensation
+# ring below rides C_FRONT and is the front you can see.
+DUST_C = 28.0             # visual dust-ring speed, m/s
 FLASH_BB = 7.0            # billboard brightness spike at t0, on top of the base gain
 
 # --- the gas ----------------------------------------------------------------
@@ -173,6 +215,10 @@ DUST_N = int(2_000_000 * _SCALE)
 # rejected dust billboards for. Three times phase 2's count is the ceiling.
 EMBER_N = int(70_000 * _SCALE)
 FLARE_N = int(250_000 * _SCALE)
+# The Wilson cloud: a thin condensation ring ON the front. It is emitted at the
+# front radius AND thrown outward at the front speed, so each parcel rides the
+# wave for its own short life instead of being left behind as a widening band.
+WILSON_N = int(600_000 * _SCALE)
 # Smoke is not emitted, it is CONVERTED, and the mapping is static: fire slot i
 # becomes smoke slots [i*K, i*K+K). That is why there is no free list and no
 # atomic anywhere in this sim -- the smoke pool inherits the fire ring's
@@ -187,6 +233,9 @@ DUST_EMIT, DUST_LIFE = 0.90, (0.9, 2.2)
 EMBER_EMIT, EMBER_LIFE = 0.40, (0.9, 3.4)   # a TIGHT burst, then long-lived embers
 FLARE_EMIT, FLARE_LIFE = 0.22, (0.14, 0.46)
 SMOKE_LIFE = (4.5, 9.5)                     # from the moment it was fire
+# The ring is emitted for as long as the front is worth watching -- at 60 m/s
+# that is 27 m, past the far props -- and each parcel lives a quarter second.
+WILSON_EMIT, WILSON_LIFE = 0.45, (0.20, 0.42)
 EMBER_SKEW, FLARE_SKEW = 1.8, 1.4           # emitted = N * (tau/EMIT)**(1/skew)
 
 FIRE_V0, FIRE_DRAG, FIRE_BUOY, FIRE_CURL = 21.0, 7.5, 26.0, 7.0
@@ -196,11 +245,15 @@ SMOKE_SPREAD = 1.35       # m/s of isotropic scatter added to each soot child
 DUST_V0, DUST_DRAG, DUST_GRAV, DUST_CURL = 7.5, 2.2, 9.81, 0.7
 EMBER_V0, EMBER_DRAG, EMBER_CURL = 18.0, 0.90, 0.9
 FLARE_V0, FLARE_DRAG, FLARE_BUOY, FLARE_CURL = 19.0, 6.5, 20.0, 6.0
+# Low drag on purpose: the ring has to hold the front's speed for its whole
+# life or it falls behind and the ring stops being a ring.
+WILSON_DRAG, WILSON_BUOY, WILSON_CURL = 0.55, 1.2, 0.9
 FIRE_R = (0.15, 0.80)     # world radius over life, m (w under WSemantic.Radius)
 SMOKE_R = (0.30, 1.20)
 DUST_R = (0.14, 0.70)
 EMBER_R = (0.075, 0.0)    # holds its size, then goes out (r_pow below)
 FLARE_R = (0.22, 0.85)
+WILSON_R = (0.55, 1.70)   # grows as it dies: the ring thins out as it expands
 
 # Volume resolution, LATCHED at the first frame the field has live particles.
 # RAISING IT DOES NOT BUY DETAIL HERE, and that is worth knowing: the scatter is
@@ -212,6 +265,7 @@ FLARE_R = (0.22, 0.85)
 FIRE_RES = cli_arg("--fire-res", 128, int)
 SMOKE_RES = cli_arg("--smoke-res", 128, int)
 DUST_RES = cli_arg("--dust-res", 128, int)
+WILSON_RES = cli_arg("--wilson-res", 128, int)
 
 # sigma_t one particle contributes, before --sigma.
 #
@@ -223,6 +277,24 @@ DUST_RES = cli_arg("--dust-res", 128, int)
 # rho*V_voxel by 30 and multiplies it by 2.34, and the sigma that keeps the same
 # picture follows. Then tuned by eye from there.
 FIRE_SIGMA, SMOKE_SIGMA, DUST_SIGMA = 0.22, 0.32, 0.040
+WILSON_SIGMA = 0.055
+# Single-scatter albedo per medium (kMaxDensityFields slots: fire, smoke, dust,
+# condensation ring). SOOT IS DARK -- and it has to be dark in the RIGHT way:
+# the in-scatter is albedo x (ambient + sun x phase), so a neutral grey column
+# under a white sky is a WHITE column no matter how low you take it. What reads
+# as soot is a dirty warm grey with the BLUE end pulled down hardest, which is
+# what tints the lit side toward brown instead of toward the sky.
+#
+# What the knob CANNOT fix, and it is worth knowing before spending an hour on
+# it: the plume's sunlit side is bright because the density march lights it with
+# shadowVis() sampled from the SCENE's shadow map, and particle volumes are not
+# in the shadow map -- so a nine-million-parcel column is fully sunlit all the
+# way through, with no self-shadowing to darken its own far side. Albedo scales
+# that, it does not shade it. Below about 0.05 the column reads as cold ash
+# rather than soot and the brown goes with it; 0.10/0.086/0.066 is the darkest
+# value that still reads dirty rather than dead.
+SMOKE_ALBEDO = tuple(float(v) for v in
+                     cli_arg("--smoke-albedo", "0.10,0.086,0.066", str).split(","))
 
 # --- the yard ---------------------------------------------------------------
 
@@ -234,17 +306,33 @@ GROUND = 400.0                 # floor slab side, m: the edge sits out in the fo
 JITTER = 0.0015                # per-brick placement noise, m
 
 RHO_BRICK, RHO_CRATE, RHO_BLOCK = 900.0, 160.0, 1500.0
+RHO_STONE, RHO_CONC, RHO_PIPE = 1900.0, 2100.0, 420.0
 
 rng = np.random.default_rng(SEED)
 
 # Each item is (position, size, yaw). One list per material batch: instance
-# colours are a GL-only feature, so brick tone variation is three batches of
-# bricks rather than three colours in one.
-batches = {"brick0": [], "brick1": [], "brick2": [], "crate": [], "block": []}
+# colours are a GL-only feature (no `instanceColor` anywhere on the Vulkan
+# path), so the yard's colour variety is SEVEN batches rather than seven
+# colours in one, and each batch is still one draw and one add_instanced.
+batches = {"brick0": [], "brick1": [], "brick2": [], "crate": [], "block": [],
+           "stone": [], "conc": [], "pipe": []}
 _brick_tone = 0
+
+# Which structure each item belongs to, so the B key can pick a target that is
+# still standing. `group` is the name currently being built; GROUPS maps it to
+# (batch, index-within-batch) pairs, resolved to global body indices once the
+# bodies exist.
+GROUPS = {}
+_group = "yard"
+
+
+def group(name):
+    global _group
+    _group = name
 
 
 def add_item(kind, pos, size, yaw=0.0):
+    GROUPS.setdefault(_group, []).append((kind, len(batches[kind])))
     batches[kind].append((pos, size, yaw))
 
 
@@ -329,16 +417,139 @@ def rubble(n, r_min, r_max):
                   float(rng.uniform(0.0, 2.0 * math.pi)))
 
 
+def tower(x, z, courses, seg=(1.05, 0.55, 1.05)):
+    """A chimney: a tall stack of heavy stone blocks.
+
+    The tallest thing in the yard and the one that TOPPLES rather than
+    scattering -- a stack this slender goes over as a whole before it comes
+    apart, which is the silhouette the yard was missing.
+    """
+    for k in range(courses):
+        y = (k + 0.5) * (seg[1] + GAP) + 0.001
+        taper = 1.0 - 0.012 * k                   # a hair narrower every course
+        jx, jz = rng.normal(0.0, JITTER, 2)
+        add_item("stone", (x + jx, y, z + jz),
+                 (seg[0] * taper, seg[1], seg[2] * taper),
+                 float(rng.normal(0.0, 0.01)))
+
+
+def archway(x, z, span=3.2, courses=8, seg=(0.75, 0.60, 0.75)):
+    """A gateway: two block pillars carrying a lintel.
+
+    The span runs along X, across the camera's line of sight -- an arch seen
+    end-on is one column, and this one is out at the edge of the yard where
+    that is exactly how it would be seen.
+    """
+    for sx in (-0.5, 0.5):
+        for k in range(courses):
+            y = (k + 0.5) * (seg[1] + GAP) + 0.001
+            jx, jz = rng.normal(0.0, JITTER, 2)
+            add_item("stone", (x + sx * span + jx, y, z + jz), seg,
+                     float(rng.normal(0.0, 0.01)))
+    # THE LINTEL SPANS THE GAP -- three beams laid side by side ACROSS both
+    # pillars, not four blocks laid along it. The obvious spelling (a row of
+    # blocks between the pillars) leaves every one of them cantilevered off one
+    # pillar, and the gateway falls down before the charge is even armed.
+    top = courses * (seg[1] + GAP) + 0.001
+    beam = span + seg[0] - 0.10
+    for i in range(3):
+        add_item("stone", (x, top + 0.21, z + (i - 1.0) * 0.24), (beam, 0.42, 0.23), 0.0)
+    for sx in (-1.0, 1.0):                        # a cap, for something to shed
+        add_item("stone", (x + sx * 0.27 * beam, top + 0.42 + 0.18, z),
+                 (0.44 * beam, 0.36, 0.80), 0.0)
+
+
+def pipe_rack(x, z, length=6.4, radius=0.24):
+    """Capsule bodies stacked in a cradle on two block trestles.
+
+    PhysX infers a capsule collider straight off CapsuleGeometry (the threepp
+    capsule is Y-aligned, PhysX's is X-aligned, and PhysxWorld's shape
+    inference already carries the -PI/2 local pose that reconciles them), so a
+    pipe is one instance of one InstancedMesh like everything else here. The
+    only thing it needs that a brick does not is a real ROTATION: the instance
+    is tipped a quarter turn onto the Z axis, which is why the pipe batch
+    composes its own quaternion in the build loop below.
+
+    A PIPE ROLLS, which is the whole difficulty. Laid straight on a flat
+    trestle the rack shakes itself empty during the two-second settle -- the
+    first thing this demo taught me about capsules. So: side rails on the
+    trestles, a bottom row of three touching pipes between them, and two more
+    nested in the valleys, which is how pipe actually sits in a yard.
+    """
+    top = 3.0 * (0.62 + GAP)
+    for sz in (-1.0, 1.0):
+        for k in range(3):
+            add_item("conc", (x, (k + 0.5) * (0.62 + GAP) + 0.001,
+                              z + sz * 0.40 * length), (2.4, 0.62, 0.55), 0.0)
+        for sx in (-1.0, 1.0):          # the rails that stop the row rolling off
+            add_item("conc", (x + sx * 1.05, top + 0.16, z + sz * 0.40 * length),
+                     (0.26, 0.32, 0.55), 0.0)
+    pitch = 2.0 * radius + 0.02
+    for col in range(3):
+        add_item("pipe", (x + (col - 1.0) * pitch, top + radius + 0.004, z),
+                 (1.0, 1.0, 1.0), 0.0)
+    for col in range(2):                # nested in the valleys of the row below
+        add_item("pipe", (x + (col - 0.5) * pitch,
+                          top + radius + 0.004 + 0.866 * pitch, z),
+                 (1.0, 1.0, 1.0), 0.0)
+
+
+def bunker(x, z, courses=3, block=(1.20, 0.55, 0.60)):
+    """A low concrete bunker: three walls under a roof of slabs.
+
+    The heaviest thing in the yard by far, and deliberately so -- it is what
+    stands when the front has flattened everything around it, and the roof
+    slabs are the pieces a near miss actually moves.
+    """
+    for c in range(courses):
+        y = (c + 0.5) * (block[1] + GAP) + 0.001
+        for i in range(4):                        # back wall, along x
+            add_item("conc", (x + (i - 1.5) * (block[0] + GAP), y, z - 2.1), block, 0.0)
+        for sx in (-1.0, 1.0):                    # returns, along z
+            for j in range(3):
+                add_item("conc", (x + sx * 2.1, y, z + (j - 1.0) * (block[0] + GAP)),
+                         (block[2], block[1], block[0]), 0.0)
+    # The slabs have to land INSIDE the returns' span at both ends: a roof
+    # overhanging its own wall tips off during the settle, which is how the
+    # first version of this bunker came apart before anything hit it.
+    roof = courses * (block[1] + GAP) + 0.001
+    for i in range(3):
+        add_item("conc", (x, roof + 0.16, z + (i - 1.0) * (block[0] + GAP)),
+                 (5.4, 0.32, 1.15), 0.0)
+
+
+group("house")
 brick_house((0.0, 0.0), 8.0, 5.5, COURSES)            # the main structure
+group("shed")
 brick_house((-7.6, 1.0), 3.6, 3.0, SHED_COURSES)      # a shed off to one side
+group("wall")
 brick_wall((6.6, 0.0, -3.0), (0.0, 1.0), 0.0, 6.0, COURSES - 4)   # free-standing wall
+group("pillars")
 for px, pz in ((9.6, -2.2), (9.6, 1.8)):
     pillar(px, pz, 10)
+group("pallets")
 pallet(-3.4, 4.6, 3, 3, 3)
 pallet(4.2, 5.2, 3, 2, 4)
 pallet(8.2, 4.4, 3, 3, 3)
 pallet(-6.8, -2.6, 3, 2, 3)     # keep pallets wider than they are tall, or they settle over
-rubble(80, 3.5, 11.0)
+# ── the dressing: one silhouette per charge, spread across the yard ──────────
+group("tower")
+tower(-14.5, -6.0, 19)
+group("arch")
+archway(13.5, -6.5)
+group("pipes")
+pipe_rack(-6.5, 10.5)
+group("bunker")
+bunker(8.5, 11.0)
+group("far_pallets")
+pallet(-12.5, 4.6, 3, 2, 3)
+pallet(13.0, 3.4, 2, 3, 3)
+pallet(1.0, 13.5, 4, 2, 2)
+group("perimeter")
+brick_wall((-17.5, 0.0, -11.0), (0.0, 1.0), 0.0, 9.6, 6)          # boundary walls: the
+brick_wall((4.0, 0.0, -13.5), (1.0, 0.0), 0.0, 10.0, 6)           # front's far victims
+group("yard")
+rubble(90, 3.5, 15.0)
 
 N_BODIES = sum(len(v) for v in batches.values())
 
@@ -395,9 +606,15 @@ sun.position.set(9.0, 15.0, 6.0)
 sun.cast_shadow = True
 scene.add(sun)
 
-flash = tp.PointLight(0xffd6a0, 0.0, 45.0, 2.0)
-flash.position.set(*CHARGE)
-scene.add(flash)
+# One point light per concurrent charge, created here and parked at zero. THREE,
+# not MAX_CHARGES: every point light in the scene costs the particle-density
+# march a per-step in-scatter evaluation whether it is lit or not, and three
+# flashes overlapping inside one 0.3 s decay is already more than the demo asks
+# for. A fourth charge re-uses the oldest light, which by then is dark.
+FLASHES = [tp.PointLight(0xffd6a0, 0.0, 45.0, 2.0) for _ in range(3)]
+for _f in FLASHES:
+    _f.position.set(*CHARGE)
+    scene.add(_f)
 
 
 def grid_texture(px=1024, tile=10.0, minor=1.0):
@@ -446,24 +663,37 @@ world = tp.PhysxWorld(tp.Vector3(0.0, -9.81, 0.0), fixed_timestep=DT, max_subste
 ground_mat = world.create_material(0.62, 0.58, 0.06)
 world.add_static(floor, ground_mat)
 
+PIPE_R, PIPE_L = 0.24, 6.4
 MATERIALS = {
     "brick0": (standard_material(tp.Color(0.42, 0.17, 0.12), 0.92), RHO_BRICK),
     "brick1": (standard_material(tp.Color(0.52, 0.24, 0.16), 0.92), RHO_BRICK),
     "brick2": (standard_material(tp.Color(0.35, 0.15, 0.12), 0.94), RHO_BRICK),
     "crate": (standard_material(tp.Color(0.46, 0.32, 0.17), 0.88), RHO_CRATE),
     "block": (standard_material(tp.Color(0.52, 0.52, 0.50), 0.95), RHO_BLOCK),
+    "stone": (standard_material(tp.Color(0.56, 0.52, 0.44), 0.93), RHO_STONE),
+    "conc": (standard_material(tp.Color(0.68, 0.68, 0.66), 0.90), RHO_CONC),
+    "pipe": (standard_material(tp.Color(0.20, 0.34, 0.40), 0.42), RHO_PIPE),
 }
+GEOMETRY = {"pipe": lambda: tp.CapsuleGeometry(PIPE_R, PIPE_L, 6, 14)}
 
 UP = tp.Vector3(0.0, 1.0, 0.0)
+XAXIS = tp.Vector3(1.0, 0.0, 0.0)
 meshes, bodies = [], []
+_offsets = {}                       # batch -> first global body index
 for kind, items in batches.items():
     if not items:
         continue
     material, density = MATERIALS[kind]
-    im = tp.InstancedMesh(tp.BoxGeometry(1.0, 1.0, 1.0), material, len(items))
+    geometry = GEOMETRY.get(kind, lambda: tp.BoxGeometry(1.0, 1.0, 1.0))()
+    im = tp.InstancedMesh(geometry, material, len(items))
     m, q = tp.Matrix4(), tp.Quaternion()
     for i, (p, s, yaw) in enumerate(items):
-        q.set_from_axis_angle(UP, yaw)
+        if kind == "pipe":
+            # A threepp capsule stands on Y; a pipe lies along Z. The collider
+            # follows the instance transform, so tipping it here tips both.
+            q.set_from_axis_angle(XAXIS, -0.5 * math.pi)
+        else:
+            q.set_from_axis_angle(UP, yaw)
         m.compose(tp.Vector3(*p), q, tp.Vector3(*s))
         im.set_matrix_at(i, m)
     im.instance_matrix_needs_update()
@@ -472,11 +702,23 @@ for kind, items in batches.items():
     im.frustum_culled = False        # the bounds go stale the moment it detonates
     scene.add(im)
     meshes.append(im)
+    _offsets[kind] = len(bodies)
     bodies += world.add_instanced(im, density)
 
 MASS = np.array([b.mass for b in bodies], dtype=np.float64)
+# Each structure's global body indices and where it started, so a charge can be
+# aimed at something that is still standing (the B key).
+TARGETS = {}
+for _name, _items in GROUPS.items():
+    _idx = np.array([_offsets[k] + i for k, i in _items], np.int64)
+    _p = np.array([batches[k][i][0] for k, i in _items], np.float64)
+    TARGETS[_name] = (_idx, _p, _p.mean(0))
+HOME = np.zeros((len(bodies), 3))
+for _idx, _p, _ in TARGETS.values():
+    HOME[_idx] = _p
+
 print(f"blast yard: {N_BODIES} bodies in {len(meshes)} instanced batches "
-      f"({MASS.sum():.0f} kg), charge at {CHARGE}, t0 = {T0:.2f} s")
+      f"({MASS.sum():.0f} kg), {len(TARGETS)} structures")
 
 # --- the blast timeline -----------------------------------------------------
 #
@@ -489,77 +731,247 @@ _shake_bank = [[(float(f), float(p)) for f, p in
                for _ in range(3)]
 
 
-def blast_timeline(t):
-    """The state of the detonation at sim time `t`, as a dict.
+def body_positions():
+    return np.array([[b.position.x, b.position.y, b.position.z] for b in bodies])
 
-    tw       seconds since t0 (negative before it)
-    armed    True once the charge has gone off
-    flash    point-light intensity, 0 outside the pulse
-    wind     radial acceleration scale (m/s^2 at 1 m), 0 outside the tail
-    front    shock-front radius, m -- the dust ring is spawned on it
-    shake    (x, y, z) camera offset, m
-    bb_gain  additive-billboard brightness multiplier: the t0 spike, decaying
-             over ~0.3 s. Billboards composite after the upscaler and are NOT
-             seen by auto-exposure, so this is the whole exposure story for them
-    fire_e   fireball blackbody emission scale, 0 once the flame is out
+
+class Charge:
+    """One detonation: where, how big, when -- and when its front gets where.
+
+    NOTHING IS APPLIED AT t0 except the flash. The front leaves the charge at
+    C_FRONT and each body takes its impulse when the front ARRIVES:
+
+        t_hit = t0 + r / C_FRONT
+
+    which is the whole shockwave read. The near wall leaves, then the far one;
+    at 60 m/s a body 25 m out waits four tenths of a second for its turn, and
+    the yard comes apart as a travelling ripple rather than all at once. The
+    wind tail follows each body's OWN arrival, not t0, so the push behind the
+    front travels with it.
+
+    The cost is one argsort at arm time. Per frame it is a searchsorted plus a
+    walk over the bodies that arrived since the last one -- the schedule is
+    sorted by r, so both the arrivals and the wind window are contiguous slices.
     """
-    tw = t - T0
-    if tw < 0.0:
-        return dict(tw=tw, armed=False, flash=0.0, wind=0.0, front=0.0,
-                    shake=(0.0, 0.0, 0.0), bb_gain=0.0, fire_e=0.0)
-    scale = math.sqrt(YIELD / 1400.0)
-    flash_i = FLASH_I * scale * math.exp(-tw / FLASH_TAU) if tw < 0.5 else 0.0
-    wind = WIND_A0 * math.exp(-tw / WIND_TAU) if tw < WIND_T else 0.0
-    shake = (0.0, 0.0, 0.0)
-    if tw < SHAKE_T:
-        a = SHAKE_A * scale * math.exp(-tw / SHAKE_TAU)
-        shake = tuple(a * sum(math.sin(2.0 * math.pi * f * tw + p) for f, p in bank) / 3.0
-                      for bank in _shake_bank)
-    return dict(tw=tw, armed=True, flash=flash_i, wind=wind,
-                front=FRONT_C * tw, shake=shake,
-                bb_gain=1.0 + FLASH_BB * math.exp(-tw / 0.13),
-                fire_e=math.exp(-max(tw - 0.16, 0.0) / 0.30))
 
+    def __init__(self, pos, j0=None, t0=None):
+        self.pos = tuple(float(v) for v in pos)
+        self.j0 = YIELD if j0 is None else float(j0)
+        self.t0 = T0 if t0 is None else float(t0)
+        self.scale = math.sqrt(self.j0 / 1400.0)
+        self.armed = False
+        self.slot = 0                 # its slot in the 8-wide device charge array
+        self.cursor = 0               # how far down the arrival schedule we are
+        self.shake_t = self.t0        # when the front reaches the CAMERA
+        self.light = None
+        self.streaks = None
+        self.order = self.t_sorted = self.kick = self.spin = self.wind_u = None
 
-def detonate():
-    """The impulse field, applied once, to every body."""
-    cx, cy, cz = CHARGE
-    kick = tp.Vector3()
-    spin = tp.Vector3()
-    for b, m in zip(bodies, MASS):
-        p = b.position
-        dx, dy, dz = p.x - cx, p.y - cy, p.z - cz
-        r = math.sqrt(dx * dx + dy * dy + dz * dz) + 1e-6
-        dx, dy, dz = dx / r, dy / r, dz / r
+    def arm(self):
+        """Freeze the yard's geometry into this charge's arrival schedule.
+
+        Everything per-body is computed ONCE, vectorised, here: the kick, the
+        tumble, the wind direction and the arrival time. What runs per frame is
+        only the handing of those numbers to PhysX.
+        """
+        p = body_positions()
+        d = p - np.array(self.pos)
+        r = np.sqrt((d * d).sum(1)) + 1e-6
+        rad = d / r[:, None]                       # pure radial: the wind's direction
+        u = rad.copy()
         # A blast reflects off the ground, so what is standing on it gets lifted.
-        dy += BLAST_LIFT * math.exp(-p.y / 1.5)
-        n = math.sqrt(dx * dx + dy * dy + dz * dz)
-        dx, dy, dz = dx / n, dy / n, dz / n
-        j = YIELD * math.exp(-r / BLAST_L) / max(r, BLAST_R0) ** BLAST_P
-        dv = min(j / m, BLAST_VMAX)     # the cap is what keeps the near field finite
-        b.wake_up()
-        kick.set(dx * dv * m, dy * dv * m, dz * dv * m)
-        b.add_impulse(kick)
-        w = BLAST_SPIN * dv
-        spin.set(*(w * v for v in rng.uniform(-1.0, 1.0, 3)))
-        b.set_angular_velocity(spin)
+        u[:, 1] += BLAST_LIFT * np.exp(-np.maximum(p[:, 1], 0.0) / 1.5)
+        u /= np.linalg.norm(u, axis=1)[:, None]
+        j = self.j0 * np.exp(-r / BLAST_L) / np.maximum(r, BLAST_R0) ** BLAST_P
+        dv = np.minimum(j / MASS, BLAST_VMAX)      # the cap keeps the near field finite
+        self.kick = u * (dv * MASS)[:, None]
+        self.spin = (BLAST_SPIN * dv)[:, None] * rng.uniform(-1.0, 1.0, (len(MASS), 3))
+        self.wind_u = rad / (np.maximum(r, BLAST_R0) ** BLAST_P)[:, None]
+        t_hit = self.t0 + r / C_FRONT
+        self.order = np.argsort(t_hit)
+        self.t_sorted = t_hit[self.order]
+        self.cursor = 0
+        # The shake re-triggers when the front reaches the CAMERA -- a blast
+        # 30 m away does not shake the lens until the wave gets there.
+        c = camera.position
+        self.shake_t = self.t0 + math.dist((c.x, c.y, c.z), self.pos) / C_FRONT
+        self.light = FLASHES[_fired[0] % len(FLASHES)]
+        self.light.position.set(self.pos[0], self.pos[1] + 0.3, self.pos[2])
+        claim_charge_slot(self)                    # device charge array + streak field
+        _fired[0] += 1
+        self.armed = True
+
+    def retire(self):
+        """Drop the per-body schedule; the charge is inert from here on."""
+        self.order = self.t_sorted = self.kick = self.spin = self.wind_u = None
+
+    def flash_i(self, t):
+        tw = t - self.t0
+        if tw < 0.0 or tw >= 0.5:
+            return 0.0
+        return FLASH_I * self.scale * math.exp(-tw / FLASH_TAU)
+
+    def shake(self, t):
+        tw = t - self.shake_t
+        if tw < 0.0 or tw >= SHAKE_T:
+            return (0.0, 0.0, 0.0)
+        a = SHAKE_A * self.scale * math.exp(-tw / SHAKE_TAU)
+        return tuple(a * sum(math.sin(2.0 * math.pi * f * tw + p) for f, p in bank) / 3.0
+                     for bank in _shake_bank)
 
 
-def blast_wind(accel):
-    """The drag tail: a decaying radial acceleration field for WIND_T seconds.
+_fired = [0]              # how many charges have gone off: the slot/light ring cursor
+charges = []              # every charge that has not yet been retired
 
-    Applied as force = a * m so it is a genuine acceleration -- light crates and
-    heavy pillar segments are carried by the same wind at the same rate.
+
+def parse_charges(spec):
+    """--charges "x,z,J@t; x,y,z,J@t; x,z; ..." -> a list of Charges.
+
+    y is optional (ground level, where a charge sits), J and @t both fall back
+    to --yield and --t0. Two numbers is the shortest useful form: a place.
     """
-    cx, cy, cz = CHARGE
-    f = tp.Vector3()
-    for b, m in zip(bodies, MASS):
-        p = b.position
-        dx, dy, dz = p.x - cx, p.y - cy, p.z - cz
-        r = math.sqrt(dx * dx + dy * dy + dz * dz) + 1e-6
-        k = accel * m / max(r, BLAST_R0) ** BLAST_P / r
-        f.set(dx * k, dy * k, dz * k)
-        b.add_force(f)
+    out = []
+    for item in spec.split(";"):
+        item = item.strip()
+        if not item:
+            continue
+        body, _, when = item.partition("@")
+        v = [float(x) for x in body.split(",")]
+        t0 = float(when) if when.strip() else None
+        if len(v) == 2:
+            out.append(Charge((v[0], 0.6, v[1]), None, t0))
+        elif len(v) == 3:
+            out.append(Charge((v[0], 0.6, v[1]), v[2], t0))
+        elif len(v) == 4:
+            out.append(Charge((v[0], v[1], v[2]), v[3], t0))
+        else:
+            sys.exit(f"--charges: cannot read '{item}' (want x,z[,J] or x,y,z,J, "
+                     f"optionally @t)")
+    return out
+
+
+def fire_charge(pos, j0=None, at=None, why=""):
+    """Arm a new charge -- from the CLI at startup, or from a key mid-run.
+
+    Mid-run this is the whole story: no field is created, no buffer is
+    allocated, nothing is added to the scene. The gas pools are shared and the
+    new charge simply takes the next slot of the device charge array (the ring
+    cursor overwrites the oldest emission if it has to), and the rigid side
+    builds one schedule. That is why it does not hitch.
+    """
+    ch = Charge(pos, j0, sim_time + 0.5 * DT if at is None else at)
+    charges.append(ch)
+    if why:
+        print(f"  [{sim_time:5.2f}] charge at ({pos[0]:5.1f},{pos[2]:5.1f}) -- {why}",
+              flush=True)
+    return ch
+
+
+def intact_target():
+    """A structure that is still standing, for the B key.
+
+    "Still standing" is measured, not remembered: the median displacement of a
+    structure's bodies from where they were built. A wall that has already been
+    blown across the yard is not a target worth re-detonating.
+    """
+    ok = []
+    p = body_positions()
+    for name, (idx, home, centre) in TARGETS.items():
+        if len(idx) < 8:
+            continue
+        d = np.linalg.norm(p[idx] - home, axis=1)
+        if float(np.median(d)) < 0.35:
+            ok.append((name, centre))
+    if not ok:
+        return None, None
+    name, centre = ok[int(rng.integers(len(ok)))]
+    return name, (float(centre[0]), 0.6, float(centre[2]))
+
+
+def blast_timeline(t):
+    """The state of the whole yard at sim time `t`, aggregated over the charges.
+
+    tw       seconds since the MOST RECENT charge (negative before the first)
+    armed    True once anything has gone off
+    front    the newest front's radius, m
+    shake    (x, y, z) camera offset, m: SUMMED, each starting when that
+             charge's front reaches the camera
+    bb_gain  additive-billboard brightness multiplier -- the flash spike,
+             summed over charges, decaying over ~0.3 s each. Billboards
+             composite after the upscaler and are NOT seen by auto-exposure, so
+             this is the whole exposure story for them
+    fire_e   fireball blackbody emission scale, the max over live charges
+
+    Per-charge quantities that used to live here -- the flash intensity and the
+    wind -- moved onto the Charge itself, because there is no longer one of
+    them: each charge drives its own point light, and the wind is applied per
+    BODY from the arrival schedule.
+    """
+    tw, gain, fire_e = -1.0e9, 0.0, 0.0
+    shake = [0.0, 0.0, 0.0]
+    for ch in charges:
+        b = t - ch.t0
+        if b < 0.0:
+            continue
+        tw = b if tw < -1.0e8 else min(tw, b)     # the newest charge's clock
+        gain += FLASH_BB * math.exp(-b / 0.13)
+        fire_e = max(fire_e, math.exp(-max(b - 0.16, 0.0) / 0.30))
+        s = ch.shake(t)
+        shake = [a + c for a, c in zip(shake, s)]
+    if tw < -1.0e8:
+        return dict(tw=-1.0, armed=False, front=0.0, shake=(0.0, 0.0, 0.0),
+                    bb_gain=0.0, fire_e=0.0)
+    return dict(tw=tw, armed=True, front=C_FRONT * tw, shake=tuple(shake),
+                bb_gain=1.0 + gain, fire_e=fire_e)
+
+
+def blast_frame(t):
+    """Arm what is due, deliver the front's impulses, blow the wind behind it.
+
+    This is the one place the rigid side hears about the blast, and it is
+    O(bodies the front crossed this frame) plus O(bodies inside the wind
+    window) -- not O(bodies) every frame.
+    """
+    kick, spin, force = tp.Vector3(), tp.Vector3(), tp.Vector3()
+    done = []
+    for ch in charges:
+        if not ch.armed:
+            if t < ch.t0:
+                continue
+            ch.arm()
+        ch.light.intensity = ch.flash_i(t)
+        if ch.order is None:
+            continue
+        # ── the front arrives ────────────────────────────────────────────────
+        hi = int(np.searchsorted(ch.t_sorted, t, "right"))
+        if hi > ch.cursor:
+            idx = ch.order[ch.cursor:hi]
+            for i in idx:
+                i = int(i)
+                b = bodies[i]
+                b.wake_up()
+                kick.set(*ch.kick[i])
+                b.add_impulse(kick)
+                spin.set(*ch.spin[i])
+                b.set_angular_velocity(spin)
+            ch.cursor = hi
+        # ── and the wind follows it ──────────────────────────────────────────
+        # force = a * m, so it is a genuine acceleration: light crates and heavy
+        # pillar segments are carried by the same wind at the same rate.
+        lo = int(np.searchsorted(ch.t_sorted, t - WIND_T))
+        if hi > lo:
+            idx = ch.order[lo:hi]
+            amp = (WIND_A0 * ch.scale
+                   * np.exp(-(t - ch.t_sorted[lo:hi]) / WIND_TAU) * MASS[idx])
+            fv = ch.wind_u[idx] * amp[:, None]
+            for k, i in enumerate(idx):
+                force.set(*fv[k])
+                bodies[int(i)].add_force(force)
+        elif t - ch.t0 > GAS_END + SHAKE_T:
+            done.append(ch)
+    for ch in done:                    # inert: drop the schedule, stop iterating it
+        ch.retire()
+        charges.remove(ch)
 
 
 # --- the gas: five ParticleFields, all created here, before the first frame --
@@ -570,13 +982,14 @@ def blast_wind(accel):
 # exist from startup and sit at live count 0 until the charge goes off. Nothing
 # is added to or removed from the scene after this point.
 
-# The charge array is FIXED at 8 slots and lives on the device (xyz + t0), even
-# though exactly one charge fires here. Every emission kernel indexes it, so
-# phase 2.5's multi-charge work is filling more of the array and looping the
-# host-side emission budget over the active ones -- not a kernel rewrite.
-MAX_CHARGES = 8
-CHARGES = [(CHARGE[0], CHARGE[1], CHARGE[2], T0)]
-N_CHARGES = len(CHARGES)
+# The charge array is FIXED at MAX_CHARGES slots and lives on the device
+# (xyz + t0). Every emission kernel indexes it, so a new detonation is a 128-byte
+# upload and nothing else: no field, no buffer, no scene entry, no device idle.
+CHARGES = parse_charges(CHARGE_SPEC) if CHARGE_SPEC else [Charge(CHARGE)]
+charges.extend(CHARGES)
+# How much of a pool ONE detonation may claim. Never fewer than two shares, so
+# a charge fired from the keyboard in a single-charge run still has budget.
+N_SHARES = max(len(CHARGES), 2)
 
 # The curl field is baked to an NG^3 grid once per frame and fetched
 # trilinearly, exactly as warp_nebula does it: 110k grid threads instead of
@@ -640,7 +1053,20 @@ def emit_gas(pos: wp.array(dtype=wp.vec4),
     a = wp.randf(s) * 6.2831853
     q = wp.randf(s)                       # 0 = the core, 1 = the outer shell
     life = life0 + (life1 - life0) * wp.randf(s)
-    if kind == 2:
+    if kind == 5:
+        # THE CONDENSATION RING (Wilson cloud). Emitted ON the front -- a thin
+        # annulus at exactly c*b -- and thrown outward AT the front speed, which
+        # is the part that matters: a ring whose parcels stand still spreads into
+        # a band as wide as (speed x lifetime), 25 m at these numbers. Riding the
+        # wave instead, each parcel stays on the front for the quarter second it
+        # lives, so what expands is a ring and not a disc. It sits a metre or so
+        # up, above the dust skirt the same front is tearing off the ground.
+        rr = front_c * b * (0.985 + 0.030 * wp.randf(s))
+        p = wp.vec3(ch[0] + rr * wp.cos(a), 0.85 + 2.10 * wp.randf(s),
+                    ch[2] + rr * wp.sin(a))
+        sp = v0 * (0.92 + 0.16 * wp.randf(s))
+        v = wp.vec3(wp.cos(a) * sp, sp * 0.04 * wp.randf(s), wp.sin(a) * sp)
+    elif kind == 2:
         # Dust rides the shock front: a slot emitted at b seconds after the
         # charge appears on the ground annulus of radius c*b, which IS the ring
         # racing outward. Ground-hugging by construction -- the kick is almost
@@ -795,10 +1221,10 @@ class Cohort:
     """
 
     def __init__(self, name, n, kind, emit, life, radius, seed,
-                 skew=1.0, r_pow=1.0, per_charge=None):
+                 skew=1.0, r_pow=1.0, per_charge=None, front_c=0.0):
         self.name, self.n, self.kind, self.r_pow = name, n, kind, r_pow
         self.emit_win, self.life, self.radius, self.skew = emit, life, radius, skew
-        self.seed = seed
+        self.seed, self.front_c = seed, front_c
         self.per_charge = n if per_charge is None else per_charge
         self.pos = wp.empty(n, dtype=wp.vec4, device=device)
         self.pos.fill_(DEAD)                 # w < 0: nothing is alive until it is emitted
@@ -833,7 +1259,7 @@ class Cohort:
                   inputs=[self.pos, self.vel, self.st, charge_arr, ci,
                           self.cursor, self.n, b, self.kind,
                           self.seed, self.params[0], self.life[0], self.life[1],
-                          self.radius[0], FRONT_C],
+                          self.radius[0], self.front_c],
                   device=device)
         self.cursor += n
         self.live = min(self.cursor, self.n)
@@ -902,23 +1328,22 @@ fields = []
 if not NO_GAS:
     noise_grid = wp.zeros((NG, NG, NG), dtype=wp.vec3, device=device)
     _ch = np.zeros((MAX_CHARGES, 4), np.float32)
-    _ch[:N_CHARGES] = np.array(CHARGES, np.float32)
     charge_arr = wp.array(_ch, dtype=wp.vec4, device=device)
 
-    # per_charge: how much of a pool ONE detonation is allowed to claim. With a
-    # single charge that is the whole capacity; phase 2.5 divides it, and an
-    # overlapping ninth burst simply overwrites the oldest slots in the ring.
-    _share = max(N_CHARGES, 1)
+    # per_charge: how much of a pool ONE detonation may claim. An overlapping
+    # ninth burst simply overwrites the oldest slots in the ring.
     fire = Cohort("fire", FIRE_N, 0, FIRE_EMIT, FIRE_LIFE, FIRE_R, SEED + 1,
-                  per_charge=FIRE_N // _share)
+                  per_charge=FIRE_N // N_SHARES)
     smoke = Cohort("smoke", SMOKE_N, 1, 1.0, SMOKE_LIFE, SMOKE_R, SEED + 2,
                    per_charge=0)        # NEVER emitted: fire converts into it
     dust = Cohort("dust", DUST_N, 2, DUST_EMIT, DUST_LIFE, DUST_R, SEED + 3,
-                  per_charge=DUST_N // _share)
+                  per_charge=DUST_N // N_SHARES, front_c=DUST_C)
     ember = Cohort("ember", EMBER_N, 3, EMBER_EMIT, EMBER_LIFE, EMBER_R, SEED + 4,
-                   skew=EMBER_SKEW, r_pow=1.5, per_charge=EMBER_N // _share)
+                   skew=EMBER_SKEW, r_pow=1.5, per_charge=EMBER_N // N_SHARES)
     flare = Cohort("flare", FLARE_N, 4, FLARE_EMIT, FLARE_LIFE, FLARE_R, SEED + 5,
-                   skew=FLARE_SKEW, per_charge=FLARE_N // _share)
+                   skew=FLARE_SKEW, per_charge=FLARE_N // N_SHARES)
+    wilson = Cohort("wilson", WILSON_N, 5, WILSON_EMIT, WILSON_LIFE, WILSON_R,
+                    SEED + 6, per_charge=WILSON_N // N_SHARES, front_c=C_FRONT)
     # (v0, drag, buoy, buoy_tau, grav, curl) -- v0 is the emit kernel's, the
     # rest are the advect kernel's, in its argument order.
     fire.params = (FIRE_V0, FIRE_DRAG, FIRE_BUOY, 0.30, 0.0, FIRE_CURL)
@@ -926,10 +1351,11 @@ if not NO_GAS:
     dust.params = (DUST_V0, DUST_DRAG, 0.0, 1.0, DUST_GRAV, DUST_CURL)
     ember.params = (EMBER_V0, EMBER_DRAG, 0.0, 1.0, 9.81, EMBER_CURL)
     flare.params = (FLARE_V0, FLARE_DRAG, FLARE_BUOY, 0.26, 0.0, FLARE_CURL)
+    wilson.params = (C_FRONT, WILSON_DRAG, WILSON_BUOY, 0.5, 0.0, WILSON_CURL)
     # fire is advected FIRST and smoke LAST, so a parcel that converts this
     # frame is advected the same frame instead of hanging for one.
-    cohorts = [fire, flare, dust, ember, smoke]
-    emitters = [fire, flare, dust, ember]
+    cohorts = [fire, flare, dust, ember, wilson, smoke]
+    emitters = [fire, flare, dust, ember, wilson]
 
     OWNERSHIP = (tp.ParticleField.Ownership.Interop if INTEROP
                  else tp.ParticleField.Ownership.HostRing)
@@ -982,7 +1408,7 @@ if not NO_GAS:
                                      tp.Vector3(24.0, 15.0, 24.0),
                                      SMOKE_SIGMA * SIGMA, SMOKE_RES)
         _d = smoke.field.density_repr
-        _d.albedo = tp.Color(0.115, 0.108, 0.100)
+        _d.albedo = tp.Color(*SMOKE_ALBEDO)
         _d.anisotropy = 0.28
 
     # ── dust ────────────────────────────────────────────────────────────────
@@ -992,13 +1418,35 @@ if not NO_GAS:
                                     tp.Vector3(36.0, 2.6, 36.0),
                                     DUST_SIGMA * SIGMA, DUST_RES)
         _d = dust.field.density_repr
-        _d.albedo = tp.Color(0.62, 0.58, 0.52)
+        _d.albedo = tp.Color(0.50, 0.43, 0.33)   # the granular demo's "dirty", verbatim
         _d.anisotropy = 0.10
     # NO billboards. The plan asked for "very dim billboards for sunlit
     # glints", and they were tried: once the ring is genuinely ground-hugging,
     # 170k additive quads packed into a half-metre layer read as a carpet of
     # static across the whole yard, not as glinting grit. The extinction volume
     # is the honest representation for dust and it is the only one here.
+
+    # ── the condensation ring ───────────────────────────────────────────────
+    # The FOURTH and last density slot (kMaxDensityFields is 4). A real blast
+    # front briefly drops the pressure behind it enough to condense the air's
+    # water into a visible shell -- the Wilson cloud -- and that shell is the
+    # only part of a shockwave you can actually photograph. Here it is a thin
+    # bright annulus riding r = C_FRONT * t, translucent and short-lived, ABOVE
+    # the dust skirt the same front is tearing off the ground.
+    #
+    # This is front-tracking emission, the one exception to "nothing spawns
+    # after the burst" -- the same exception the dust ring already holds, and
+    # for the same reason: the wave is still travelling, so its edge is still
+    # making matter. It stops at WILSON_EMIT and nothing is emitted after it.
+    wilson.field = make_field(WILSON_N, WILSON_R[1])
+    if VOLUMES:
+        _reach = C_FRONT * WILSON_EMIT + 6.0
+        wilson.field.set_density_repr(tp.Vector3(0.0, 2.0, 0.0),
+                                      tp.Vector3(_reach, 4.0, _reach),
+                                      WILSON_SIGMA * SIGMA, WILSON_RES)
+        _d = wilson.field.density_repr
+        _d.albedo = tp.Color(0.90, 0.92, 0.96)   # condensed water, not soot
+        _d.anisotropy = 0.35
 
     # ── flare: the fire subset that carries the additive layer ──────────────
     # A quarter of a million hot parcels on the same burst trajectory as the
@@ -1068,50 +1516,79 @@ if not NO_GAS:
     # intensity is ramped out over 0.45-0.80 s and it is PARKED at 0.85 s.
     # Nothing is instantiated after the burst; the HostRing embers carry the
     # rest of the story.
+    # A RING OF THEM, one per concurrent charge and all created here. A Renderer
+    # field is a closed form in ONE spawn_center and ONE clock, so two charges
+    # cannot share one; and creating one per detonation is exactly the scene
+    # churn (entry re-expansion, device idle, cleared TAA history) this whole
+    # design exists to avoid. Three fields, assigned round-robin as charges fire,
+    # a fourth burst stealing the oldest -- which by then has been parked for
+    # its whole life anyway.
     STREAK_N = int(20_000 * GAS)
     STREAK_T = 0.85
-    _kc = tp.ParticleField.Config()
-    _kc.capacity = STREAK_N
-    _kc.ownership = tp.ParticleField.Ownership.Renderer
-    _kc.w_semantic = tp.ParticleField.WSemantic.Radius
-    _kc.uniform_radius = 0.05
-    streaks = tp.ParticleField.create(_kc)
-    streaks.frustum_culled = False
-    streaks.set_billboard_repr(tp.Color(1.00, 0.84, 0.46), tp.Color(1.00, 0.24, 0.03),
-                               0.0, 1.0)
-    _b = streaks.billboard_repr
-    _b.softness = 0.20
-    _b.fade_power = 2.0                 # a Renderer field HAS an age: hold, then drop
-    _b.size_taper = 0.60
-    _b.bright_jitter = 0.60
-    _b.stretch_seconds = 0.032          # the exact analytic velocity, smeared
-    _b.stretch_max = 34.0
-    _b.stretch_max_screen = 0.055
-    _b.near_fade = 1.2
-    _b.glow = 0.70
-    _e = streaks.emitter                # NB: a COPY -- mutate and hand it back
-    _e.spawn_center = tp.Vector3(cx, cy + 0.2, cz)
-    _e.spawn_half_extent = tp.Vector3(0.45, 0.45, 0.45)
-    _e.velocity = tp.Vector3(0.0, 8.0, 0.0)   # the ground reflection's upward bias
-    _e.speed_spread = 22.0                    # isotropic: this IS the radial burst
-    _e.accel = tp.Vector3(0.0, -9.81, 0.0)
-    _e.lifetime = STREAK_T
-    _e.lifetime_jitter = 0.25
-    _e.duty_cycle = 1.0
-    _e.size = 0.05
-    _e.size_jitter = 0.65
-    _e.seed = SEED * 1013 + 5
-    streaks.set_emitter(_e)
-    streaks.set_emitter_time(0.0, DT)
-    streaks.set_live_count(0)
-    scene.add(streaks)
+    STREAK_RING = []
+    for _k in range(3):
+        _kc = tp.ParticleField.Config()
+        _kc.capacity = STREAK_N
+        _kc.ownership = tp.ParticleField.Ownership.Renderer
+        _kc.w_semantic = tp.ParticleField.WSemantic.Radius
+        _kc.uniform_radius = 0.05
+        _s = tp.ParticleField.create(_kc)
+        _s.frustum_culled = False
+        _s.set_billboard_repr(tp.Color(1.00, 0.84, 0.46), tp.Color(1.00, 0.24, 0.03),
+                              0.0, 1.0)
+        _b = _s.billboard_repr
+        _b.softness = 0.20
+        _b.fade_power = 2.0             # a Renderer field HAS an age: hold, then drop
+        _b.size_taper = 0.60
+        _b.bright_jitter = 0.60
+        _b.stretch_seconds = 0.032      # the exact analytic velocity, smeared
+        _b.stretch_max = 34.0
+        _b.stretch_max_screen = 0.055
+        _b.near_fade = 1.2
+        _b.glow = 0.70
+        _e = _s.emitter                 # NB: a COPY -- mutate and hand it back
+        _e.spawn_center = tp.Vector3(cx, cy + 0.2, cz)
+        _e.spawn_half_extent = tp.Vector3(0.45, 0.45, 0.45)
+        _e.velocity = tp.Vector3(0.0, 8.0, 0.0)   # the ground reflection's upward bias
+        _e.speed_spread = 22.0                    # isotropic: this IS the radial burst
+        _e.accel = tp.Vector3(0.0, -9.81, 0.0)
+        _e.lifetime = STREAK_T
+        _e.lifetime_jitter = 0.25
+        _e.duty_cycle = 1.0
+        _e.size = 0.05
+        _e.size_jitter = 0.65
+        _e.seed = SEED * 1013 + 5 + 97 * _k
+        _s.set_emitter(_e)
+        _s.set_emitter_time(0.0, DT)
+        _s.set_live_count(0)
+        scene.add(_s)
+        STREAK_RING.append(_s)
 
-    fields = [c.field for c in cohorts] + [streaks]
+    fields = [c.field for c in cohorts] + STREAK_RING
     # The last thing that can still be on screen: a fire parcel emitted at the
     # end of the burst, cooling for its full life, converting, and its soot
     # living out the longest smoke life. Nothing is emitted after DUST_EMIT.
     GAS_END = FIRE_EMIT + FIRE_LIFE[1] + SMOKE_LIFE[1] + 0.1
+    EMIT_END = max(c.emit_win for c in emitters)     # nothing is born after this
     GAS_N = sum(c.n for c in cohorts)
+
+    def claim_charge_slot(ch):
+        """Give a charge its slot in the device charge array and its streak field.
+
+        This is EVERYTHING a new detonation costs the gas: one 128-byte upload
+        of the 8-slot array, five emission counters zeroed, one emitter's spawn
+        centre moved (O(1) push constants). No allocation, no field creation, no
+        device idle -- which is why the B key does not hitch.
+        """
+        ch.slot = _fired[0] % MAX_CHARGES
+        _ch[ch.slot] = (ch.pos[0], ch.pos[1], ch.pos[2], ch.t0)
+        charge_arr.assign(_ch)
+        for c in cohorts:
+            c.emitted[ch.slot] = 0        # the slot is re-used: start its budget over
+        ch.streaks = STREAK_RING[_fired[0] % len(STREAK_RING)]
+        e = ch.streaks.emitter
+        e.spawn_center = tp.Vector3(ch.pos[0], ch.pos[1] + 0.2, ch.pos[2])
+        ch.streaks.set_emitter(e)
 
     # ── ARM THE ZERO-COPY PATH ──────────────────────────────────────────────
     # enable_particle_field_interop returns None until after the FIRST render():
@@ -1202,19 +1679,27 @@ if not NO_GAS:
         wp.copy(c.pos, _warm, count=1)
         c.live = 1
         c.publish()
-    streaks.set_live_count(STREAK_N)
+    for _s in STREAK_RING:
+        _s.set_live_count(STREAK_N)
     renderer.render(scene, camera)
     for c in cohorts:
         c.reset()
         c.field.set_live_count(0)
-    streaks.set_live_count(0)
+    for _s in STREAK_RING:
+        _s.set_live_count(0)
     print(f"gas: fire {FIRE_N:,} -> smoke {SMOKE_N:,} (x{SMOKE_K} on cooling) "
           f"+ dust {DUST_N:,} + ember {EMBER_N:,} + flare {FLARE_N:,} "
-          f"= {GAS_N:,} particles "
+          f"+ ring {WILSON_N:,} = {GAS_N:,} particles "
           f"({52 * GAS_N / 1e6:.0f} MB resident), on {device}")
+    print(f"charges: {len(CHARGES)} at startup, {N_SHARES} shares of every pool, "
+          f"{MAX_CHARGES} device slots, front {C_FRONT:.0f} m/s")
 else:
     GAS_END = 0.0
     GAS_N = 0
+    STREAK_RING = []
+
+    def claim_charge_slot(ch):
+        ch.slot = _fired[0] % MAX_CHARGES
 
 # Billboards are composited after the upscaler and are outside auto-exposure,
 # so their intensity is tied to the pinned scene exposure BY HAND, once, here.
@@ -1248,7 +1733,8 @@ def step_gas_frame(dt):
             for c in cohorts:
                 c.live = 0
                 c.field.set_live_count(0)
-            streaks.set_live_count(0)
+            for s in STREAK_RING:
+                s.set_live_count(0)
             _gas_live = False
         return 0.0, 0.0
     _gas_live = True
@@ -1256,10 +1742,17 @@ def step_gas_frame(dt):
     wp.launch(bake_noise, dim=(NG, NG, NG), inputs=[tw, noise_grid], device=device)
     # EMISSION. The host loop is over CHARGES, never over particles: per cohort
     # per charge it computes one integer and hands the ring cursor to a launch.
-    for ci in range(N_CHARGES):
-        b = sim_time - CHARGES[ci][3]
+    # A charge past its longest emission window is skipped entirely -- emit()
+    # would return 0 anyway, but a burst that finished five seconds ago should
+    # not cost five cohort calls a frame for the rest of the shot.
+    for ch in charges:
+        if not ch.armed:
+            continue
+        b = sim_time - ch.t0
+        if b > EMIT_END:
+            continue
         for c in emitters:
-            c.emit(ci, b)
+            c.emit(ch.slot, b)
     # Smoke slots are claimed by conversion, and the mapping is static, so the
     # live prefix of the smoke pool is exactly the fire ring's prefix times K.
     smoke.live = min(fire.cursor * SMOKE_K, smoke.n)
@@ -1291,14 +1784,23 @@ def step_gas_frame(dt):
                                                       for a, b in zip(hot, cool)))
     ember.field.billboard_repr.intensity = (BB_EMBER * (1.0 + 0.6 * (gain - 1.0))
                                             * (1.0 - 0.55 * k))
-    # The streak field ejects only while the charge is still ejecting.
-    if tw < STREAK_T:
-        streaks.set_emitter_time(tw, dt)
-        streaks.set_live_count(STREAK_N)
-        streaks.billboard_repr.intensity = (BB_STREAK * gain
-                                            * min(max((0.80 - tw) / 0.35, 0.0), 1.0))
-    else:
-        streaks.set_live_count(0)
+    # The streak fields eject only while their own charge is still ejecting.
+    # Park them all first and let the live charges claim theirs back: with the
+    # ring shared, a charge whose field has been stolen by a newer one must not
+    # be the one that parks it, and iterating oldest-to-newest means the newest
+    # claim is the one that stands.
+    for s in STREAK_RING:
+        s.set_live_count(0)
+    for ch in charges:
+        if ch.streaks is None:
+            continue
+        b = sim_time - ch.t0
+        if 0.0 <= b < STREAK_T:
+            ch.streaks.set_emitter_time(b, dt)
+            ch.streaks.set_live_count(STREAK_N)
+            ch.streaks.billboard_repr.intensity = (
+                BB_STREAK * (1.0 + FLASH_BB * math.exp(-b / 0.13))
+                * min(max((0.80 - b) / 0.35, 0.0), 1.0))
     return t1 - t0, t2 - t1
 
 
@@ -1315,15 +1817,14 @@ def step_frame(dt=DT):
     the detonation for the slow-motion cut.
     """
     global sim_time
-    t_prev = sim_time
     sim_time += dt
+    if AUTO_CHARGE > 0.0 and sim_time > _auto[0]:
+        _auto[0] = sim_time + AUTO_CHARGE
+        name, pos = intact_target()
+        if pos is not None:
+            fire_charge(pos, why=f"{name} [auto]")
     t0 = time.perf_counter()
-    if t_prev < T0 <= sim_time:
-        detonate()
-    state = blast_timeline(sim_time)
-    if state["wind"] > 0.0:
-        blast_wind(state["wind"])
-    flash.intensity = state["flash"]
+    blast_frame(sim_time)      # arm what is due, deliver the front, blow the wind
     t1 = time.perf_counter()
     world.step(dt)
     t2 = time.perf_counter()
@@ -1346,7 +1847,7 @@ def apply_shake():
 
 def yard_stats():
     """Sanity: nothing at NaN, nothing a kilometre away, how much is still moving."""
-    p = np.array([[b.position.x, b.position.y, b.position.z] for b in bodies])
+    p = body_positions()
     v = np.array([[b.linear_velocity.x, b.linear_velocity.y, b.linear_velocity.z]
                   for b in bodies])
     finite = np.isfinite(p).all(axis=1)
@@ -1473,11 +1974,31 @@ else:
     canvas.on_window_resize(resize_handler(camera, renderer))
     fps = {"t": time.perf_counter(), "n": 0, "shake": (0.0, 0.0, 0.0),
            "last": time.perf_counter(), "worst": 0.0}
+    held = {"B": False, "D": False}
+    print("keys: B = detonate at a structure that is still standing, "
+          "D = detonate at the orbit target")
+
+    def poll_keys():
+        """B and D, on the edge -- is_key_down is a poll, not an event."""
+        for k in ("B", "D"):
+            down = canvas.is_key_down(k)
+            if down and not held[k]:
+                if k == "D":
+                    t = controls.target
+                    fire_charge((t.x, 0.6, t.z), why="orbit target [D]")
+                else:
+                    name, pos = intact_target()
+                    if pos is None:
+                        print("  nothing left standing to blow up", flush=True)
+                    else:
+                        fire_charge(pos, why=f"{name} [B]")
+            held[k] = down
 
     def animate():
         now0 = time.perf_counter()
         fps["worst"] = max(fps["worst"], now0 - fps["last"])
         fps["last"] = now0
+        poll_keys()
         step_frame()
         # Undo last frame's shake before the controls read the camera back.
         sx, sy, sz = fps["shake"]
