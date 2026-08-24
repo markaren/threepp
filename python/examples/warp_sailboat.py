@@ -2886,6 +2886,7 @@ motes.set_live_count(0)
 scene.add(motes)
 
 _uw_on = False
+_uw_water_y = WATER_Y
 
 
 def underwater_wanted():
@@ -2903,9 +2904,25 @@ def underwater_wanted():
     return camera.position.y < 1.2
 
 
+def waterline_shot():
+    return film_mode and _cur_shot is not None and _cur_shot.kind == "waterline"
+
+
 def update_underwater(dt):
-    global _uw_on
+    global _uw_on, _uw_water_y
     want = underwater_wanted()
+    # WHERE the waterline is, this frame. Mean sea level is right for a shot
+    # that never goes near it, but a lens AT the surface is split by the wave
+    # actually under it: half a metre of swell against a 5 cm port means the
+    # local height is the only one that can put the line in the frame at all.
+    # Same mirror the buoys read, so the split and the boat ride one sea.
+    wy = WATER_Y
+    if want and first_render_done:
+        cp = camera.position
+        wy = float(ocean.sample_height(cp.x, cp.z))
+    if UNDERWATER and wy != _uw_water_y:
+        _uw_water_y = wy
+        renderer.set_fog_water_surface_y(wy)
     if want != _uw_on:
         _uw_on = want
         # Transforms and a live count. No visibility flip, no field resize:
@@ -3562,7 +3579,10 @@ def update_world(dt):
     # the TAIL of the fold distribution, so the knob has to come DOWN as the sea
     # gets up, not up -- the storm preset leaves only the genuinely breaking
     # crests and the wind streaks over dark slate.
-    wcap = weather["whitecap"] * (UW_FOAM if _uw_on else 1.0)
+    # ... except at the WATERLINE, where the foam is on the line and in front of
+    # the lens rather than twenty metres off and seen through the murk: there it
+    # is the surface reading as a surface, which is the shot.
+    wcap = weather["whitecap"] * (UW_FOAM if (_uw_on and not waterline_shot()) else 1.0)
     if _applied["whitecap"] is None or abs(wcap - _applied["whitecap"]) > 0.005:
         _applied["whitecap"] = wcap
         ocean.params.foam_amount = wcap
@@ -3861,6 +3881,35 @@ def _handheld(t, amp_deg):
                  + 0.15 * math.sin(t * 5.3 + 3.3)))
 
 
+# ---- the waterline: a housing floating on the surface ----------------------- #
+#  Half-in / half-out is a LENS effect, and the renderer models it as one: the
+#  medium is decided per pixel at the NEAR PLANE, which for this camera spans
+#  about +-5 cm around the eye. So the whole shot lives inside five centimetres.
+#  Park the lens at mean sea level in a half-metre swell and the port is metres
+#  under or metres clear for seconds at a time -- the split would flash on and
+#  off, not ride.
+#
+#  What actually rides is a floating housing: it follows the SWELL (the long
+#  cascades, the same BUOY_MASK the hull's hydrostatics ride) and lets the CHOP
+#  run up and down the glass. That residual is centimetres by construction --
+#  the scale the near plane can resolve -- and it is wave-driven, so the line
+#  sweeps with the sea instead of on a scripted sine. Clamped to the port so a
+#  steep little crest cannot flood the frame or drop it wholly dry.
+WL_PORT = 0.035        # metres of residual the port can show, either way
+WL_CHOP = 1.6          # gain on it: the fine cascade alone is a quiet line
+
+
+def waterline_eye_y(x, z, trim=0.0):
+    """Lens height for a housing floating at (x, z). `trim` raises the housing,
+    which drops the split DOWN the frame (more sky, less water)."""
+    if not first_render_done:                    # the height mirror is empty yet
+        return trim
+    h_all = float(ocean.sample_height(x, z))              # the surface as it is
+    h_swell = float(ocean.sample_height(x, z, BUOY_MASK))  # what a float follows
+    r = max(-WL_PORT, min(WL_PORT, (h_all - h_swell) * WL_CHOP))
+    return h_all - r + trim
+
+
 class Shot:
     """One cut. `kind` picks the path; `p` is that path's parameters.
 
@@ -3939,6 +3988,23 @@ def shot_camera(sh, u):
             # A lens 0.6 m off the water is ON the water: it lifts and drops
             # with the swell it is skimming, or it reads as a tripod at sea.
             eye[1] += 0.30 * math.sin(world_time * 1.55) + 0.12 * math.sin(world_time * 2.9)
+    elif k == "waterline":
+        # THE SPLIT SHOT. The lens is a housing floating on the surface, and
+        # the frame is half in the water because the PORT is: the renderer
+        # decides the medium per pixel at the near plane, which spans about
+        # +-5 cm around the eye, so where the line sits in the frame is a
+        # centimetre problem, not a metre one.
+        a = np.array(p.get("a", (-4.0, 3.0, 0.0)), float)
+        b = np.array(p.get("b", a), float)
+        eye = _pt(org, fwd, rgt, a + (b - a) * e, world)
+        eye[1] = waterline_eye_y(eye[0], eye[2], p.get("trim", 0.0))
+        # The lens stays LEVEL with its own port. A fixed target height would
+        # tilt it by the swell it is floating on -- and a tilt of a few degrees
+        # is centimetres on the near plane, i.e. the split sliding off the
+        # frame. `tilt` is the deliberate part, in metres at the target.
+        t = shot_target(sh, e, org, fwd, rgt)
+        t[1] = eye[1] + p.get("tilt", 0.0)
+        return eye, t
     elif k == "chase":
         off = np.array(p.get("off", (-17.0, 6.0, 5.0)), float)
         amp, per = p.get("sway", (2.0, 9.0))
@@ -4120,6 +4186,21 @@ FILM_SCRIPT = [
          ease="inout", shake=0.11, ae=(-2.5, 0.2),
          world=True, a=(0.00, 3.90, -5.40), b=(0.05, 2.00, -4.60),
          tgt_world=True, tgt=(0.20, -5.00, 4.60), tgt_b=(0.15, -3.70, 3.80),
+         uw=True),
+    #  ON the line. A housing floating three metres off her starboard bow,
+    #  drifting aft as she goes by: topsides, rig and sky above the split,
+    #  forefoot, keel and the school below it, and the line itself sweeping the
+    #  frame as the chop runs over the glass (see waterline_eye_y). Framed in
+    #  HER frame and not the sun's -- what has to stay in the picture is the
+    #  hull cutting the water, and the below-line half is only three metres of
+    #  column, too short for the shafts to be the subject.
+    #  AE is pinned tighter than the submerged shots: half sky and half murk is
+    #  the worst case there is for a meter left to roam, and it pumps a stop
+    #  every time the swell trades one for the other.
+    Shot(2, "noon: on the waterline", 12.78, 6.0, "waterline", fov=fov_mm(20),
+         ease="linear", shake=0.09, ae=(-1.4, 0.0),
+         a=(6.6, 3.1, 0.0), b=(2.2, 2.7, 0.0), trim=0.008, tilt=-0.15,
+         tgt=(4.2, 0.0, 0.0), tgt_b=(0.6, 0.0, 0.0),
          uw=True),
 
     # ---- 3. THE SQUALL ----------------------------------------------------- #
