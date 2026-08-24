@@ -1,12 +1,10 @@
 // ParticleFieldPass — the device-side half of threepp::ParticleField.
 //
-// Phase 0 of plans/particle-field.md, and deliberately only phase 0: this owns
-// the per-field POSITION buffer (the one required buffer, §1.1), the per-field
-// live-count block (§1.3) and the per-frame FieldDesc SSBO (§1.5). No shader
-// reads any of it yet. Its reason to exist now is that everything phases 1-5
-// add — mesh expansion, billboards, the density scatter, the AABB BLAS — reads
-// exactly these three things, so getting their lifetime and their write window
-// right once is what makes the later phases small.
+// Phase 0 of plans/particle-field.md: this owns the per-field position buffer,
+// the per-field live-count block and the per-frame FieldDesc SSBO. Everything
+// later phases add — mesh expansion, billboards, the density scatter, the
+// AABB BLAS — reads exactly these three things, so their lifetime and write
+// window are established here once.
 //
 // Frame flow (Impl::prepareParticleFields, called from renderFrame at the same
 // site as prepareInstanceExpansion):
@@ -40,12 +38,12 @@
 // device-local there, never host-mapped, and it buys two things a direct read
 // of the exported buffer cannot:
 //
-//   • prevPositions. Motion vectors need the PREVIOUS state, and the foreign
-//     copy lands on the HOST timeline (it is synchronous, in prepareFrame),
+//   • prevPositions. Motion vectors need the previous state, and the foreign
+//     copy lands on the host timeline (it is synchronous, in prepareFrame),
 //     so anything the renderer copies afterwards inside the same frame's
 //     command buffer would capture the state that just arrived — every motion
 //     vector exactly zero. Two consecutive snapshots taken by the renderer's
-//     OWN queue are a genuinely consecutive pair, which is the whole point.
+//     own queue are a genuinely consecutive pair.
 //   • A stable frame. Consumers (G-buffer draw, density scatter, and whatever
 //     a later BLAS phase adds) then read a buffer no foreign API is writing,
 //     so the field cannot change under them mid-frame. The unsynchronised
@@ -211,18 +209,18 @@ namespace threepp::vulkan {
     // One record per visible billboard field, rewritten whole every frame into
     // a per-frame-in-flight host-visible block and reached by DEVICE ADDRESS.
     //
-    // A buffer reference rather than a descriptor, and that is the point: this
-    // pass allocates no descriptor set, writes no descriptor set, and therefore
-    // cannot update one a frame in flight still names (VUID-03047) — the same
-    // argument particle_emit.comp's zero-set push block makes, applied to data
-    // that is too big for the 128 B push range once the camera matrices are in
-    // it. O(fields) bytes per frame, never O(particles).
+    // A buffer reference rather than a descriptor: this pass allocates no
+    // descriptor set, writes no descriptor set, and therefore cannot update
+    // one a frame in flight still names (VUID-03047) — the same argument as
+    // particle_emit.comp's zero-set push block, applied to data that is too
+    // big for the 128 B push range once the camera matrices are in it.
+    // O(fields) bytes per frame, never O(particles).
     //
     // MUST mirror the BbParams buffer_reference block in
     // shaders/particlefield_billboard.vert member for member. The 64-bit
     // addresses sit first so the block's 8-byte alignment is satisfied at
-    // offset 0 and every float after is naturally 4-aligned, making MSVC's
-    // layout and GLSL's scalar layout the same bytes by construction.
+    // offset 0 and every float after is naturally 4-aligned, keeping MSVC's
+    // layout and GLSL's scalar layout byte-identical.
     struct BillboardParamsGpu {
         VkDeviceAddress posAddr;      //   0
         VkDeviceAddress prevPosAddr;  //   8
@@ -255,11 +253,11 @@ namespace threepp::vulkan {
         // so these two numbers are the decode. w > splashR0 means "this is a
         // ring", and (w - R0) / (R1 - R0) is how far through the splash it is.
         //
-        // Absolute metres rather than a multiple of the particle's own radius,
-        // deliberately: the alternative is for the vertex stage to re-derive
-        // the per-slot size hash, which would make stream 12 a THIRD shared
-        // contract to keep in sync for no gain. R0 is computed host-side as
-        // just above the largest radius the emitter's size jitter can produce.
+        // Absolute metres rather than a multiple of the particle's own radius:
+        // the alternative is for the vertex stage to re-derive the per-slot
+        // size hash, which would add a third shared contract to keep in sync
+        // for no gain. R0 is computed host-side as just above the largest
+        // radius the emitter's size jitter can produce.
         float splashR0;               // 120  0 = this field has no splash
         float splashR1;               // 124
         float splashRingWidth;        // 128  annulus width, fraction of radius
@@ -304,9 +302,9 @@ namespace threepp::vulkan {
         float         waterSurfaceY; // 28
         float         camWorldY;     // 32
         float         viewToWorldY[3];// 36
-        // ── 4c: the SUN, for BillboardRepr::lit ─────────────────────────────
-        // The lights UBO is a descriptor set this pass deliberately does not
-        // have (F3 note 2: no set means no VUID-03047 exposure), and the sun is
+        // ── 4c: the sun, for BillboardRepr::lit ─────────────────────────────
+        // The lights UBO is a descriptor set this pass does not have (no set
+        // means no VUID-03047 exposure), and the sun is
         // three floats. So the renderer snapshots the scene's brightest
         // DirectionalLight — the same one-sun the deferred path shades with —
         // into this record, per view per frame, and the vertex stage evaluates
@@ -410,7 +408,7 @@ namespace threepp::vulkan {
 
         // What enableInterop hands back: the exported OS handle (a Win32 NT
         // handle owned by us, a POSIX fd owned by the importer) and the size to
-        // import. Deliberately this pass's own type rather than
+        // import. This pass's own type rather than
         // VulkanRenderer::ParticleFieldInteropHandle — the pass does not
         // include the renderer's public header, and the Impl converts.
         struct InteropExport {
@@ -503,8 +501,8 @@ namespace threepp::vulkan {
         void invalidateSurfaceBakes() { ++bakeStructGen_; }
 
         // Any Renderer-owned field will dispatch this frame. Lets the renderer
-        // skip the timestamp bracket (and therefore keep the timing honest) on
-        // the overwhelmingly common frame that has no emitter.
+        // skip the timestamp bracket (so the timing measures only real work)
+        // on the common frame that has no emitter.
         [[nodiscard]] bool emitActive() const { return !emitDispatch_.empty(); }
 
         // ── PHASE 2 ─────────────────────────────────────────────────────────
@@ -604,7 +602,7 @@ namespace threepp::vulkan {
             float         topY = 0.f, depth = 0.f;
             float         worldX = 0.f, worldY = 0.f, worldZ = 0.f;
             std::uint64_t structGen = 0;
-            // Deliberately exact float comparison: every one of these is copied
+            // Exact float comparison on purpose: every one of these is copied
             // from the same source each frame, so "unchanged" means bit-equal
             // and a tolerance would only let a real change through.
             bool operator==(const BakeKey& o) const {

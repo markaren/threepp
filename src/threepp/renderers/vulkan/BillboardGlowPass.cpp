@@ -2,10 +2,10 @@
 
 #include "threepp/renderers/vulkan/VulkanContext.hpp"
 
-// The SHARED bloom shaders. Reusing the SPIR-V rather than writing a second
-// pyramid is the whole point of F4 item 1's "run the EXISTING bloom_down/up on
-// that target alone": the push block, the descriptor shape and the Karis /
-// soft-knee / 13-tap behaviour are all identical, only the images differ.
+// The shared bloom shaders. This pass reuses the existing bloom_down/up
+// SPIR-V rather than carrying a second pyramid: the push block, the
+// descriptor shape and the Karis / soft-knee / 13-tap behaviour are all
+// identical, only the images differ.
 #include "threepp/renderers/vulkan/shaders/bloom_down.comp.spv.h"
 #include "threepp/renderers/vulkan/shaders/bloom_up.comp.spv.h"
 

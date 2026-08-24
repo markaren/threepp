@@ -2524,7 +2524,7 @@ void VulkanRenderer::Impl::createFieldBillboardPipeline() {
             stages[1].module = frag;
             stages[1].pName  = "main";
 
-            // No bindings, no attributes — the whole point.
+            // No bindings, no attributes — the pipeline is vertex-less.
             VkPipelineVertexInputStateCreateInfo vi{};
             vi.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
 

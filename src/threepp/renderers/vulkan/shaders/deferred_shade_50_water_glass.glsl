@@ -264,8 +264,8 @@ vec3 shadeWater(vec3 P, vec3 N, vec3 V, MaterialDesc pm, int instIdx,
     //    occlusion queries (see vulkan_shared.h — the PT's caustic energy
     //    balance relies on it), so a shadow ray from the bottom would report
     //    the surface above as a full occluder and render the floor sun-black.
-    //    Unshadowed direct + the vertical-depth absorption term is the honest
-    //    raster approximation of sunlight penetrating water.
+    //    Unshadowed direct + the vertical-depth absorption term is the
+    //    workable raster approximation of sunlight penetrating water.
     if (pm.attenuationDistance > 0.0) {
         // Beyond ~6 attenuation lengths the bottom term is < ~2% — invisible.
         const float maxVis = 6.0 * pm.attenuationDistance;

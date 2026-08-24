@@ -11,7 +11,7 @@
 //   * TAA and the DLSS/FSR upscalers average successive frames, so noise added
 //     before the resolve gets filtered back out.
 //
-// It also keeps the overlay's depth test honest: that test runs against the
+// It also keeps the overlay's depth test valid: that test runs against the
 // raster G-buffer's depth in UNDISTORTED screen space, which is where the
 // overlay geometry still is when the warp happens afterwards.
 //

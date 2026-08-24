@@ -582,8 +582,8 @@ namespace threepp {
         // below, never to camera.projectionMatrix, so this is the lens the
         // dataset should be labelled with, not this frame's dithered one).
         // elements[8]/[9] are the frustum skew, non-zero under filmOffset /
-        // setViewOffset — carrying them is what keeps the principal point
-        // honest for an off-centre sensor.
+        // setViewOffset — carrying them keeps the principal point correct
+        // for an off-centre sensor.
         // Multiplying the overscan factor back out recovers the OUTPUT camera:
         // render() widened proj[0]/proj[5] by 1/overscan for this frame, and
         // the intrinsics must describe the lens the user configured, not the
@@ -642,7 +642,7 @@ namespace threepp {
                 // A parallel projection has no field of view. FSR only feeds
                 // fovY into its disocclusion/reactivity heuristics, so hand it
                 // the angle a perspective camera would need to cover the same
-                // frustum height at the far plane — the closest honest answer,
+                // frustum height at the far plane — the closest equivalent,
                 // and one that at least scales with the zoom instead of holding
                 // whatever the last perspective frame left behind.
                 fsrCamNear_ = ocam->nearPlane;
@@ -816,10 +816,10 @@ namespace threepp {
                 fsrCamFar_  = pcam->farPlane;
                 fsrCamFovY_ = pcam->fov * 3.14159265f / 180.f;// vertical FOV, radians
             } else if (auto* ocam = dynamic_cast<OrthographicCamera*>(&camera)) {
-                // A parallel projection has no field of viewMat. FSR only feeds
+                // A parallel projection has no field of view. FSR only feeds
                 // fovY into its disocclusion/reactivity heuristics, so hand it
                 // the angle a perspective camera would need to cover the same
-                // frustum height at the far plane — the closest honest answer,
+                // frustum height at the far plane — the closest equivalent,
                 // and one that at least scales with the zoom instead of holding
                 // whatever the last perspective frame left behind.
                 fsrCamNear_ = ocam->nearPlane;
@@ -1870,9 +1870,9 @@ void VulkanRenderer::Impl::prepareInstanceExpansion(uint32_t frame) {
 // grows the entry list, the draw list or the TLAS.
 void VulkanRenderer::Impl::prepareParticleFields(uint32_t frame) {
             if (!particleFieldPass_) return;
-            // Nothing to do AND nothing to sweep: the overwhelmingly common
-            // scene. Skip before the profiler scope so it stays honest about
-            // which frames actually paid.
+            // Nothing to do and nothing to sweep: the common scene. Skip
+            // before the profiler scope so it only counts frames that
+            // actually paid.
             if (particleFields_.empty() &&
                 particleFieldPass_->liveFieldCount() == 0) return;
             THREEPP_CPUPROF("frame.P_particleFields");
@@ -2237,11 +2237,11 @@ void VulkanRenderer::Impl::updateSplatVolumeUbo(uint32_t frame) {
 
             // The bound volume LIST changed (a bake completed, a cloud stopped
             // being visible, a cloud was freed): every view's set names the
-            // wrong views. Refresh THIS slot now — its fence has signaled,
+            // wrong views. Refresh this slot now — its fence has signaled,
             // which is what makes the write legal — and mark the others so they
-            // refresh at the top of their own frames. Churn under promotion is
-            // the whole point: a cloud that appears and disappears rewrites two
-            // sets rather than stalling the device.
+            // refresh at the top of their own frames. The churn is the design:
+            // a cloud that appears and disappears rewrites two sets rather
+            // than stalling the device.
             //
             // Keyed on the HANDLES, not on volumeGeneration() alone — see
             // splatVolumeBindKey. Dropping a hidden cloud's view here is what

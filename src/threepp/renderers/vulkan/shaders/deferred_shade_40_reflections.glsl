@@ -332,9 +332,9 @@ vec3 traceRadiance(vec3 origin, vec3 dir, bool doShadows, float maxLod, float mi
     // one of them ever stopping it. d and curMissLod still describe the live
     // ray, so terminate on the environment exactly as the miss branch would
     // (returning black here is what put dark dots in grazing ocean
-    // reflections). At 12 steps this is rare enough not to be a visible answer
-    // in its own right, which is the whole point: at 3 it fired constantly, and
-    // a frequent wrong answer is a visible artifact whichever colour it is.
+    // reflections). At 12 steps this fires rarely enough not to be a visible
+    // answer in its own right; at 3 it fired constantly, and a frequent wrong
+    // answer is a visible artifact whichever colour it is.
     // Every shading exit break's first, so this can never double-count.
     if (step >= REFL_MAX_STEPS) radiance += tput * sampleEnvLod(d, curMissLod);
     // A moving-caster SHADOW inside the reflected content is moving content just

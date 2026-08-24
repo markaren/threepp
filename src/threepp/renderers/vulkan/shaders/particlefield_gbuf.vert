@@ -201,7 +201,7 @@ void main() {
     // outlier" of the F3 snow capture. It is NOT an emitter size-hash overshoot
     // (`size * (1 + sizeJitter * rndS)` is bounded by construction and cannot
     // exceed 2x the authored size); it is a proximity artefact, and shrinking
-    // out what a real lens could not resolve anyway is the honest fix.
+    // out what a real lens could not resolve anyway is the right fix.
     if (pf.lodFar > 0.0 || pf.nearCull > 0.0) {
         const float camDist = distance((d.model * vec4(P.xyz, 1.0)).xyz, pf.camPos);
         if (pf.lodFar > 0.0) {

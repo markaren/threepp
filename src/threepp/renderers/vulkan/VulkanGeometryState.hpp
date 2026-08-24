@@ -90,7 +90,7 @@ namespace threepp::vulkan::impl {
         // BufferGeometry::drawRange snapshot, compared every frame by the
         // enqueue loop in ensureSceneBuilt. drawRange is not covered by any
         // BufferAttribute version, so without this the DrawInfo skip
-        // signature would happily reuse commands built for a stale range.
+        // signature would reuse commands built for a stale range.
         // Initialised to BufferGeometry's own default so an ordinary mesh
         // never takes the bump. (int, not uint: DrawRange members are int.)
         int lastDrawStart = 0;
@@ -175,7 +175,7 @@ namespace threepp::vulkan::impl {
         // EXPORTED allocations, and recordDynamicGeomRefits copies them into
         // rec.vertex / rec.normal at head of frame.
         //
-        // The copy is the whole point, and it is ParticleField F6's shape
+        // The copy is the design — ParticleField F6's shape
         // rather than the soft-body swap's. `vertex` has seven consumers,
         // five of them by DEVICE ADDRESS (the bindless raster pull's
         // DrawInfo::posAddr, the BLAS build/refit input, GeometryDesc::
@@ -584,10 +584,10 @@ namespace threepp::vulkan::impl {
                                    // metric (all paths) + soup weld equality
         std::vector<float> uvs;    // soup only; tightly packed xy
         // Normal-attribute weight for the simplifier, scaled by the
-        // enqueueing entry's material GLOSSINESS: matte foliage barely
-        // charges normal deviation (retiring far detail is the point),
-        // glossy paint charges it fully (shading IS the mm-scale normal
-        // field). See lodNormalWeightFor.
+        // enqueueing entry's material glossiness: matte foliage barely
+        // charges normal deviation (retiring far detail is what the LOD
+        // is for), glossy paint charges it fully (shading is the mm-scale
+        // normal field). See lodNormalWeightFor.
         float normalWeight = 0.5f;
     };
 

@@ -110,7 +110,7 @@ void main() {
     // fuzzy slab about a voxel thick, which at the blur level of a wave-
     // perturbed, Fresnel-weighted reflection is invisible, and it is the trade
     // that keeps the deposit one expression instead of an ellipsoid rasterizer.
-    // The honest cost is here rather than hidden: mass follows the TRUE
+    // The cost of the trade: mass follows the true
     // Gaussian's sqrt(det Sigma) while the amplitude was calibrated on sigbar,
     // so a very flat splat carries less optical mass than its own alpha
     // suggests, and an exactly degenerate one (a zero scale) carries none.

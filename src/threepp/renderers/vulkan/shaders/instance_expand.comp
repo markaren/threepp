@@ -12,7 +12,7 @@
 // later stages, one at a time, against a producer that is already known to
 // agree with the CPU bit for bit.
 //
-// BIT-EXACTNESS is the whole point of this shader, so the multiply is spelled
+// This shader exists to be bit-exact with the CPU, so the multiply is spelled
 // out instead of written as `A * B`:
 //
 //   * The CPU sums (((a0*b0 + a1*b1) + a2*b2) + a3*b3) per element — both CPU

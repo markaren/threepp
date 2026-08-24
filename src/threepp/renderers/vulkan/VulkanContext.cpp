@@ -182,7 +182,7 @@ namespace threepp::vulkan {
         // into VkInstanceCreateInfo::pNext (covering vkCreateInstance /
         // vkDestroyInstance, which run before/after the persistent messenger
         // exists) and passed to vkCreateDebugUtilsMessengerEXT for everything in
-        // between. Keeping them the same struct is the point — a severity added
+        // between. Keeping them the same struct matters — a severity added
         // in one place but not the other would make instance-time coverage
         // silently diverge from runtime coverage.
         VkDebugUtilsMessengerCreateInfoEXT debugMessengerCreateInfo() {
@@ -459,7 +459,7 @@ namespace threepp::vulkan {
         //
         // This is spec compliance, not macOS support: the renderer still needs
         // KHR ray tracing, which MoltenVK does not provide (see
-        // pickPhysicalDevice). It only buys an honest failure further in.
+        // pickPhysicalDevice). It only buys a clearer failure further in.
 #ifdef VK_KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME
         const bool portability =
                 hasInstanceExtension(VK_KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME);
@@ -845,7 +845,7 @@ namespace threepp::vulkan {
         // Hybrid gbuf indirect-drawing path encodes the per-draw DrawInfo
         // index into VkDrawIndirectCommand::firstInstance; the VS reads
         // it back as gl_InstanceIndex. Without this feature, firstInstance
-        // must be 0 and the trick collapses.
+        // must be 0 and that encoding breaks.
         features2.features.drawIndirectFirstInstance = VK_TRUE;
         // gl_DrawIDARB / gl_BaseInstanceARB / gl_BaseVertexARB — not strictly
         // required by the current gbuf shader (it uses gl_InstanceIndex), but

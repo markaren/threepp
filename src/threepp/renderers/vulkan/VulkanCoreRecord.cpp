@@ -411,8 +411,8 @@ bool VulkanRenderer::Impl::recordGbufferStage(VkCommandBuffer cb, uint32_t image
                     // HiZ from its depth (the raw MS attachment under MSAA —
                     // its samples reduce at mip 0) → AABB test → pass B draws
                     // only the newly visible. rasterGbufMs (this timing
-                    // scope) covers the WHOLE sequence, so the on/off
-                    // comparison is honest.
+                    // scope) covers the whole sequence, so the on/off
+                    // comparison measures like for like.
                     occl_->recordFilter(cb, currentFrame, indirectTotalDraws_);
                     recordRasterGbufPassInternal(cb, currentFrame, occlA, occlFb,
                                                  occlMsaa,
@@ -1031,7 +1031,7 @@ void VulkanRenderer::Impl::recordSplats(VkCommandBuffer cb) {
             // frame, so composing it with this frame's projection is the only
             // way to get the real previous VP here — and it guarantees the
             // splat motion vectors and the raster's come from the same
-            // matrices, which is the whole point of writing them at all.
+            // matrices.
             {
                 Matrix4 sky, projRev, prev;
                 std::memcpy(sky.elements.data(), view().taaSkyReproj_.data(), 64);

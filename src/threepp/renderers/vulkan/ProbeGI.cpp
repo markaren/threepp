@@ -291,7 +291,7 @@ namespace threepp::vulkan {
         // half a cell and spacing within −20 %/+25 % per axis. Out-of-grid
         // points clamp in probeIrradiance, so a slightly-outgrown AABB
         // degrades gracefully; a real scene swap trips the thresholds and
-        // takes the honest wipe.
+        // takes the full wipe.
         if (gridFitted_) {
             bool keep = true;
             for (int a = 0; a < 3; ++a) {

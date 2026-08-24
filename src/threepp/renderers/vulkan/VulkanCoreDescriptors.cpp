@@ -360,8 +360,8 @@ void VulkanRenderer::Impl::rewriteDeferredDescriptors(int onlyFrame) {
             in.gbufAlbedoMS     = albedoMSViews.data();
             in.gbufUvMS         = uvMSViews.data();
             // ParticleField density volumes (bindings 67/68). World-anchored
-            // and therefore SHARED by every view: the same handles go into the
-            // primary's set and each secondary's, which is R9's whole point.
+            // and therefore shared by every view: the same handles go into the
+            // primary's set and each secondary's (plan R9).
             // Every slot is filled — live volumes first, the 1×1×1 dummy for
             // the rest — so the set is complete on a scene that has no dust and
             // on one that just lost its last field.

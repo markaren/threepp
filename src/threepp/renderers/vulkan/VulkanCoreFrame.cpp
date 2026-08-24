@@ -244,7 +244,7 @@ int VulkanRenderer::Impl::scanLidarBegin(const std::vector<LidarBeam>& beams,
             // a perpendicular 1.0-albedo *Lambertian* surface at `referenceRange`
             // reads as 1.0. The reference is purely geometric (π · refRange²)
             // — it does NOT include laserPower, so raising the power slider
-            // scales every return linearly (the whole point of the knob).
+            // scales every return linearly.
             // The π factor absorbs the 1/π in the Lambert BRDF — without it
             // a "100% reflective" Lambertian at the reference range would
             // read as 1/π ≈ 0.318 instead of 1.0.
@@ -1360,9 +1360,8 @@ void VulkanRenderer::Impl::renderFrame(Object3D& scene, Camera& camera) {
 // A view is a persistent object. Everything it needs is allocated once, here,
 // behind a device drain; from then on rendering it is just a second pass over
 // the frame's already-built scene. Nothing in the per-frame path adds, removes
-// or resizes a view — this codebase has been bitten before by per-frame churn
-// of GPU-visible lists (a rebuild + vkDeviceWaitIdle every frame), and the
-// whole point of persistent views is to never go near that.
+// or resizes a view — per-frame churn of GPU-visible lists means a rebuild +
+// vkDeviceWaitIdle every frame, which persistent views exist to avoid.
 
 VulkanRenderer::Impl::ViewContext* VulkanRenderer::Impl::findView(uint32_t handle) {
             for (auto& v : views_) {

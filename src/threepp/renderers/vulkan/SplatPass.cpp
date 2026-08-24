@@ -1577,10 +1577,10 @@ namespace threepp::vulkan {
             // expansion used to run over entryBudget_ instead, which measured
             // 7.9 ms of sorting on a frame with nothing on screen.
             // THREEPP_VK_SPLAT_NOINDIRECT restores the worst-case dispatches.
-            // Same escape-hatch shape as NOMOTION/NOFOG, and it earns its keep
-            // twice: it is how the indirect path was A/B'd for byte-identical
-            // output on a real scan, and it is the first thing to try if some
-            // other driver disagrees about vkCmdDispatchIndirect.
+            // Same escape-hatch shape as NOMOTION/NOFOG: it is how the
+            // indirect path was A/B'd for byte-identical output on a real
+            // scan, and it is the first thing to try if some other driver
+            // disagrees about vkCmdDispatchIndirect.
             const char* nie = std::getenv("THREEPP_VK_SPLAT_NOINDIRECT");
             const bool indirectDispatch = !(nie && *nie && *nie != '0');
 

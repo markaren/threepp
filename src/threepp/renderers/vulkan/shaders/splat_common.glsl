@@ -48,8 +48,8 @@ const uint kRadixBits     = 4u;
 const uint kRadixBins     = 1u << kRadixBits;// 16
 
 // The blend is a no-op below this alpha, and transmittance below it can no
-// longer change a stored 8-bit-ish result. Same constant as the GL fragment
-// shader, which is the point.
+// longer change a stored 8-bit-ish result. Kept identical to the GL fragment
+// shader's constant.
 const float kMinAlpha = 0.00392156862;// 1/255
 const float kMaxAlpha = 0.99;
 
@@ -401,7 +401,7 @@ vec3 splatShColor(uint splat, vec3 dir) {
 // splats without any of it being re-derived here, which is why this pass
 // composites pre-post at all.
 //
-// The honest cost: partial-coverage compositing is not linear-light. It is the
+// The trade-off: partial-coverage compositing is not linear-light. It is the
 // operator the asset was fitted with, which for a scan — where the ground
 // truth is "what the capture looks like" — is the one that matters.
 vec3 splatSrgbToLinear(vec3 c) {

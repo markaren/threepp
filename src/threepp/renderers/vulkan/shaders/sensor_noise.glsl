@@ -42,7 +42,7 @@
 // Shot noise uses a Gaussian approximation to the Poisson distribution. That
 // is excellent above ~10 electrons and progressively coarser below, where it
 // also has to be clamped against going negative — deep-shadow statistics are
-// approximate here, and honestly so.
+// approximate here.
 
 #ifndef SENSOR_NOISE_GLSL
 #define SENSOR_NOISE_GLSL

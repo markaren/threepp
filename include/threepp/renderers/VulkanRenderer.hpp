@@ -1043,7 +1043,7 @@ namespace threepp {
         // surfaces at all.
         //
         // A view that serves BOTH RGB and depth for one sensor cannot have it
-        // both ways; leave it off (the picture stays honest) and read depth
+        // both ways; leave it off (the picture stays correct) and read depth
         // from a lidar scan or a second view.
         bool setViewSensorSurfaces(uint32_t handle, bool enabled);
         [[nodiscard]] bool viewSensorSurfaces(uint32_t handle) const;
@@ -1222,7 +1222,7 @@ namespace threepp {
         // the rough split-sum env specular gets probe-derived specular
         // occlusion, and reflected hits take probe irradiance instead of the
         // env+ambient fill. Enclosed interiors therefore stop being "lit with
-        // no light" — they go honestly dark and receive only what bounces in
+        // no light" — they go properly dark and receive only what bounces in
         // through actual openings (e.g. the Sponza ground-floor corridors);
         // pair with setAutoExposure for interior scenes.
         // ON by default (≈ neutral outdoors; ~0.3 ms probe update). Requires

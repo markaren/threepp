@@ -698,8 +698,8 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                 const bool isSkinned   = (dynamic_cast<SkinnedMesh*>(m)   != nullptr);
                 const bool isDisplaced = (dynamic_cast<DisplacedMesh*>(m) != nullptr);
                 const bool isGrass     = (dynamic_cast<GrassMesh*>(m)     != nullptr);
-                // A ParticleField expands to EXACTLY ONE entry whatever its
-                // capacity — that is the whole reason the type exists. It is
+                // A ParticleField expands to exactly one entry whatever its
+                // capacity — the property the type exists to provide. It is
                 // classified here rather than dropped like SplatCloud because it
                 // must reach the entry list: it is the field's one entry that
                 // carries the world matrix, the entry index the FieldDesc
@@ -1692,9 +1692,9 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                                 entries[i].isGrass || entries[i].isTet) continue;
                             const BufferGeometry* geomKey = entries[i].mesh->geometry().get();
                             auto cIt = blasCache.find(geomKey);
-                            // Refresh MeshEntry::isVertexInterop IN PLACE, every
-                            // frame, for every plain entry — set AND clear. This
-                            // is the whole reason the flag can be trusted without
+                            // Refresh MeshEntry::isVertexInterop in place, every
+                            // frame, for every plain entry — set and clear. This
+                            // is what lets the flag be trusted without
                             // a structural rebuild behind it: arming interop
                             // changes no pointer, matrix, material or attribute
                             // version, so no fingerprint diff can see it, and the
@@ -1708,8 +1708,8 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                             // frame would sail through the DrawInfo skip
                             // signature with commands built for the OLD range.
                             // Compare against the record's snapshot here — the
-                            // same always-runs loop that keeps isVertexInterop
-                            // honest — and bump drawInputsVersion_ on change:
+                            // same always-runs loop that refreshes
+                            // isVertexInterop — and bump drawInputsVersion_ on change:
                             // new DrawInfo inputs must (EntrySpan contract).
                             // A non-interop record ALSO gets the geom-dirty
                             // flags: its BLAS holds the old span, and the

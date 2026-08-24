@@ -595,10 +595,10 @@ namespace threepp::vulkan {
                                 (density.viewCount >= kDensityVolumes);
         if (!sceneReady) return handle;
 
-        // Sized by the RESULT count, which is what the leg factor multiplies.
+        // Sized by the result count, which is what the leg factor multiplies.
         // The beam buffer comes out one leg too large and is uploaded with
-        // numBeams rows regardless — the clean leg reads the SAME beams, which
-        // is the whole point of pairing, so there is nothing extra to send.
+        // numBeams rows regardless — the clean leg reads the same beams (that
+        // is what pairing means), so there is nothing extra to send.
         ensureCapacity(s, numBeams * legs, slotsPerBeam);
 
         // Upload beams (mapped, sequential write + flush).

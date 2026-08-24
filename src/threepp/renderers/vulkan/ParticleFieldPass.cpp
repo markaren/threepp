@@ -33,18 +33,18 @@ namespace {
     constexpr VkBufferUsageFlags kPositionUsageInterop =
             kPositionUsage | VK_BUFFER_USAGE_TRANSFER_DST_BIT;
 
-    // F6: the EXPORTED allocation. TRANSFER_SRC is the only usage the renderer
+    // F6: the exported allocation. TRANSFER_SRC is the only usage the renderer
     // itself needs — it is copied, never bound — and STORAGE is there so a
-    // future phase can point a shader at it without re-exporting. Deliberately
-    // NO SHADER_DEVICE_ADDRESS: createExternalBuffer allocates its dedicated
+    // future phase can point a shader at it without re-exporting. No
+    // SHADER_DEVICE_ADDRESS: createExternalBuffer allocates its dedicated
     // memory without VK_MEMORY_ALLOCATE_DEVICE_ADDRESS_BIT, and a buffer that
     // asks for an address on memory that was not allocated for one is invalid.
     constexpr VkBufferUsageFlags kExternalPositionUsage =
             VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
             VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
 
-    // Counts: TRANSFER_SRC because §1.3's cleanest liveCount → instanceCount
-    // route is a 4-byte device copy into a VkDrawIndirectCommand; INDIRECT so a
+    // Counts: TRANSFER_SRC because the liveCount → instanceCount route is a
+    // 4-byte device copy into a VkDrawIndirectCommand; INDIRECT so a
     // future consumer can dispatch off it directly; STORAGE + device address so
     // a shader (or, under Interop, a CUDA kernel) can write it.
     constexpr VkBufferUsageFlags kCountsUsage =
@@ -98,9 +98,9 @@ namespace {
 
     // MUST mirror the push block in particle_density_scatter.comp under scalar
     // layout. 120 B — inside the 128 B every Vulkan implementation guarantees.
-    // The explicit tail pad is what makes "scalar layout" and "what MSVC lays
-    // out for a struct containing a uint64" the same number rather than two
-    // numbers that happen to agree today.
+    // The explicit tail pad keeps the scalar-layout size and MSVC's struct
+    // size (8-byte-aligned, uint64 member) equal by definition rather than by
+    // accident.
     struct DensityScatterPc {
         float           world[16];
         VkDeviceAddress posAddr;
@@ -118,15 +118,14 @@ namespace {
     constexpr std::uint32_t kEmitLocalSize = 64;// == particle_emit.comp
 
     // MUST mirror the push block in particle_emit.comp under scalar layout,
-    // member for member and offset for offset. 128 B EXACTLY — the ceiling every
-    // Vulkan implementation guarantees — which is why the trailing reserve is
-    // spelled out rather than left to grow by accident: the next member added
-    // here without removing one is a device that cannot create the pipeline.
+    // member for member and offset for offset. Exactly 128 B — the ceiling
+    // every Vulkan implementation guarantees — so the trailing reserve is
+    // spelled out: adding a member here without removing one makes a device
+    // that cannot create the pipeline.
     //
     // The two uint64s sit first so the block's 8-byte alignment is satisfied at
-    // offset 0 and every float after them is naturally 4-aligned, making MSVC's
-    // layout and GLSL's scalar layout the same bytes by construction rather than
-    // by coincidence (the std140 tail-pack trap, feedback_vulkan_material_gpu_update).
+    // offset 0 and every float after them is naturally 4-aligned, keeping
+    // MSVC's layout and GLSL's scalar layout byte-identical.
     struct EmitPc {
         VkDeviceAddress posAddr;      //   0
         VkDeviceAddress prevPosAddr;  //   8
@@ -150,11 +149,9 @@ namespace {
         std::uint32_t seed;           // 112
         float driftScale;             // 116
         // ── F4/F5 ───────────────────────────────────────────────────────────
-        // The follow centre used to be two floats HERE and there was nothing
-        // left. F5 needs a height map plus a lifecycle block, so those two
-        // floats became this address and the follow centre moved behind it into
-        // EmitAuxGpu. A field that neither follows nor rests pushes 0, which is
-        // the same eight zero bytes it pushed before F5 existed.
+        // The follow centre, height map and lifecycle block live behind this
+        // address (EmitAuxGpu) — the push block itself has no room left.
+        // A field that neither follows nor rests pushes 0.
         VkDeviceAddress auxAddr;      // 120  -> EmitAuxGpu, or 0
     };
     static_assert(sizeof(EmitPc) == 128, "particle_emit push-constant drift");
@@ -164,8 +161,8 @@ namespace {
     constexpr std::uint32_t kBakeLocalSize = 8;// == particle_height_bake.comp (8x8)
 
     // MUST mirror the push block in particle_height_bake.comp under scalar
-    // layout. Well inside the guaranteed 128 B; the explicit tail pad is what
-    // makes the MSVC layout and the GLSL one the same bytes by construction.
+    // layout. Well inside the guaranteed 128 B; the explicit tail pad keeps
+    // the MSVC layout and the GLSL one byte-identical.
     struct BakePc {
         VkDeviceAddress dstAddr;//  0
         float           originX;//  8  WORLD min corner of the footprint
@@ -181,8 +178,7 @@ namespace {
 
     // Clamp bounds for EmitterParams::Surface::resolution. The floor keeps a
     // degenerate map from making surfaceAt's texel arithmetic meaningless; the
-    // ceiling is 4 MB per ring slot, which is where a height field stops being
-    // the cheap half of this feature.
+    // ceiling caps the cost at 4 MB per ring slot.
     constexpr std::uint32_t kBakeResMin = 16;
     constexpr std::uint32_t kBakeResMax = 1024;
 
@@ -263,10 +259,10 @@ void ParticleFieldPass::destroyState(State& st) {
     destroyImage2D(ctx_.allocator(), ctx_.device(), st.densityLin);
 }
 
-// The emitter pipeline: ONE compute stage, ZERO descriptor sets, one 128 B push
-// range. The absence of a descriptor set is the point — there is no set to
-// allocate, no pool to size, no handle to go stale and nothing that could ever
-// be written while a frame that names it is in flight (R6 / VUID-03047).
+// The emitter pipeline: one compute stage, zero descriptor sets, one 128 B
+// push range. With no descriptor set there is no set to allocate, no pool to
+// size, no handle to go stale and nothing that could ever be written while a
+// frame that names it is in flight (VUID-03047).
 void ParticleFieldPass::ensureEmitPipeline() {
 
     if (emitPipe_ != VK_NULL_HANDLE) return;
@@ -547,14 +543,13 @@ ParticleFieldPass::State& ParticleFieldPass::ensureState(const ParticleField& fi
     st->rendererOwned =
             field.config().ownership == ParticleField::Ownership::Renderer;
     if (st->rendererOwned) {
-        // ── NO RING (plan F-C) ──────────────────────────────────────────────
-        // Two DEVICE-LOCAL buffers, single-instance, never host-mapped. The ring
-        // below exists solely because a HOST memcpy for frame N would otherwise
-        // land in a buffer frames N-1 / N-2 are still reading; here the writer
-        // is particle_emit.comp, recorded into the same command buffer as every
-        // consumer and separated from them by a barrier in recordEmit, so the
-        // GPU's own dependency graph does the job three frames of latency were
-        // doing. Same argument, verbatim, as 5584d2ab's single interop buffer.
+        // ── No ring (plan F-C) ──────────────────────────────────────────────
+        // Two device-local buffers, single-instance, never host-mapped. The
+        // ring below exists solely because a host memcpy for frame N would
+        // otherwise land in a buffer frames N-1 / N-2 are still reading; here
+        // the writer is particle_emit.comp, recorded into the same command
+        // buffer as every consumer and separated from them by a barrier in
+        // recordEmit, so no ring is needed.
         //
         // No kHostWrite: this memory is never touched by the CPU, so it goes in
         // device-local heap and a 1M-particle field costs 16 MB rather than the
@@ -566,11 +561,11 @@ ParticleFieldPass::State& ParticleFieldPass::ensureState(const ParticleField& fi
     }
     // ── F6: Ownership::Interop ──────────────────────────────────────────────
     // The exported allocation, and the gate. A device with no external-memory
-    // extension cannot export, cannot be imported by CUDA, and has no honest
-    // interop path at all — so the field becomes a HostRing field in every
-    // respect but its declared mode, is TOLD so (a field that renders nothing
-    // and says nothing is the outcome this exists to prevent), and its own
-    // submit() stops throwing so the caller's pull leg can feed it.
+    // extension cannot export or be imported by CUDA, so the field falls back
+    // to a HostRing field in every respect but its declared mode, a warning is
+    // printed (a field that renders nothing and says nothing would be worse),
+    // and its own submit() stops throwing so the caller's pull leg can feed
+    // it.
     if (field.config().ownership == ParticleField::Ownership::Interop) {
         if (ctx_.externalMemorySupported()) {
             st->interopOwned = true;
@@ -621,13 +616,13 @@ ParticleFieldPass::State& ParticleFieldPass::ensureState(const ParticleField& fi
 }
 
 // ── F6: export one field's positions and arm its per-frame copy ─────────────
-// Unlike enableSoftBodyInterop this does NOT drain the device, and the
-// difference is structural rather than an oversight: that call SWAPS a buffer
-// that in-flight frames' dispatches are already reading and rewrites the
-// descriptor sets naming it. Here the exported allocation is created with the
-// field's state, before anything can name it, and is never swapped — the
-// shaders read the snapshot ring, whose addresses are republished every frame
-// anyway. Nothing in flight is invalidated, so there is nothing to wait for.
+// Unlike enableSoftBodyInterop this does not drain the device, and safely so:
+// that call swaps a buffer that in-flight frames' dispatches are already
+// reading and rewrites the descriptor sets naming it. Here the exported
+// allocation is created with the field's state, before anything can name it,
+// and is never swapped — the shaders read the snapshot ring, whose addresses
+// are republished every frame anyway. Nothing in flight is invalidated, so
+// there is nothing to wait for.
 ParticleFieldPass::InteropExport
 ParticleFieldPass::enableInterop(ParticleField& field, std::function<void()> deviceCopy) {
 
@@ -844,12 +839,12 @@ void ParticleFieldPass::recordSurfaceBake(VkCommandBuffer cb) {
     vkCmdPipelineBarrier2(cb, &di);
 }
 
-// ── F4: publish one per-VIEW billboard record ───────────────────────────────
-// Called DURING recording, which is why this block is fixed-size and never
-// grows here: an address handed to a vkCmdPushConstants earlier in the same
-// command buffer would be dangling the moment the buffer is reallocated. A
-// request past the end therefore returns 0, and the caller must skip the draw —
-// a null buffer_reference dereference is undefined behaviour, not a no-op.
+// ── F4: publish one per-view billboard record ───────────────────────────────
+// Called during recording, so this block is fixed-size and never grows here:
+// an address handed to a vkCmdPushConstants earlier in the same command buffer
+// would be dangling the moment the buffer is reallocated. A request past the
+// end therefore returns 0, and the caller must skip the draw — a null
+// buffer_reference dereference is undefined behaviour, not a no-op.
 //
 // Writing host-visible memory at record time is safe here for exactly the
 // reason prepareFrame's writes are: this frame-in-flight's fence was waited on
@@ -877,20 +872,17 @@ void ParticleFieldPass::prepareFrame(std::uint64_t serial, std::uint32_t frame,
                                      const std::vector<Rec>& fields) {
 
     const std::uint32_t slot = static_cast<std::uint32_t>(serial % kSlots);
-    // The slot the PREVIOUS frame filled, which by construction holds the
-    // previous frame's positions — so it IS the prevPositions buffer plan
-    // §1.2 asks for, at zero cost and with no ordering hazard.
+    // The slot the previous frame filled holds the previous frame's positions,
+    // so it serves directly as the prevPositions buffer — no copy needed.
     //
-    // The plan writes that buffer as a per-frame vkCmdCopyBuffer of positions
-    // "at the head of the frame's particle block, BEFORE any writer". That is
-    // the right shape for Ownership::Interop, where ONE device buffer is
-    // rewritten by the sim's CUDA copy inside the frame. It is the WRONG shape
-    // here: under HostRing the writer is the host, in prepareFrame, which has
-    // already run by the time any command is recorded — a copy at the head of
-    // the command buffer would capture this frame's positions and every motion
-    // vector would be exactly zero. The ring's own depth is what makes the
-    // previous state still readable, and a slot is only reused three frames
-    // later, i.e. one full frame after the fence that retired it.
+    // A head-of-frame vkCmdCopyBuffer snapshot (as Ownership::Interop uses,
+    // where one device buffer is rewritten by the sim's CUDA copy inside the
+    // frame) would be wrong here: under HostRing the writer is the host, in
+    // prepareFrame, which has already run by the time any command is recorded
+    // — such a copy would capture this frame's positions and every motion
+    // vector would be exactly zero. The ring's own depth is what keeps the
+    // previous state readable, and a slot is only reused three frames later,
+    // i.e. one full frame after the fence that retired it.
     const std::uint32_t prevSlot = (slot + kSlots - 1u) % kSlots;
 
     descScratch_.clear();
@@ -955,9 +947,9 @@ void ParticleFieldPass::prepareFrame(std::uint64_t serial, std::uint32_t frame,
 
         std::uint32_t live = std::min(r.field->liveCount(), st.capacity);
 
-        // Positions + count into THIS frame's slot, version-gated. A static or
+        // Positions + count into this frame's slot, version-gated. A static or
         // parked field re-sends nothing; a field the sim advanced re-sends the
-        // live prefix only. This is the design's ONLY per-particle CPU cost —
+        // live prefix only. This is the design's only per-particle CPU cost —
         // and under Ownership::Renderer even that is gone: there are no host
         // positions to send, and the count is capacity, written once per slot
         // and never again (dataSerial only moves on submit/setLiveCount).
@@ -968,15 +960,15 @@ void ParticleFieldPass::prepareFrame(std::uint64_t serial, std::uint32_t frame,
         bool parkedUnarmed = false;
 
         // ── F6: the foreign device copy, and this frame's snapshot ──────────
-        // The callback is invoked HERE — post-fence, pre-record — and is
+        // The callback is invoked here — post-fence, pre-record — and is
         // required to be synchronous, so by the time it returns the exported
         // allocation holds this step's positions and the command buffer that
         // will snapshot them has not been submitted yet. That host ordering is
-        // the whole synchronisation story: there is no external semaphore, and
-        // the only overlap left is the foreign API writing while an EARLIER
-        // frame's snapshot copy reads — GPU to GPU, and benign in exactly the
-        // sense 5584d2ab records (worst case one copy blends two sim steps of
-        // grain positions, which no eye and no motion vector can resolve).
+        // the entire synchronisation story: there is no external semaphore,
+        // and the only overlap left is the foreign API writing while an
+        // earlier frame's snapshot copy reads — GPU to GPU, and benign (worst
+        // case one copy blends two sim steps of grain positions, which no eye
+        // and no motion vector can resolve).
         if (st.interopOwned) {
             if (st.deviceCopy) {
                 st.deviceCopy();
@@ -1001,7 +993,7 @@ void ParticleFieldPass::prepareFrame(std::uint64_t serial, std::uint32_t frame,
                 }
             }
             if (live > 0) {
-                // The live PREFIX only, so a 300k-capacity field pouring its
+                // The live prefix only, so a 300k-capacity field pouring its
                 // first 5k grains copies 80 KB and not 4.8 MB. The tail holds
                 // whatever the previous snapshot left; nothing reads past
                 // instanceCount, which is this same number.
@@ -1060,14 +1052,13 @@ void ParticleFieldPass::prepareFrame(std::uint64_t serial, std::uint32_t frame,
         // comes from the snapshot bookkeeping rather than from the host serial.
         const bool prevValid = st.interopOwned ? st.snapped[prevSlot]
                                                : st.slotSerial[prevSlot] != 0;
-        // ── Config::hostStableSlots: the previous slot IS prevPositions ─────
-        // Only when this frame's slot and the previous one hold CONSECUTIVE
+        // ── Config::hostStableSlots: the previous slot is prevPositions ─────
+        // Only when this frame's slot and the previous one hold consecutive
         // uploads. A frame the host skipped leaves a three-frame-old submit in
         // its slot, and the ring would then hand the shader a displacement over
         // three steps — or, once the wrap puts the newer submit in the older
         // slot, a backwards one. The stretch simply switches off for that frame
-        // and the sprite is round, which is the honest answer and is invisible
-        // next to the alternative.
+        // and the sprite is round.
         const bool hostPrevIsPrevStep =
                 r.field->config().hostStableSlots && !st.rendererOwned && !st.interopOwned &&
                 st.slotFill[slot] != 0 && st.slotFill[slot] == st.slotFill[prevSlot] + 1u;
@@ -1076,7 +1067,7 @@ void ParticleFieldPass::prepareFrame(std::uint64_t serial, std::uint32_t frame,
         const auto& world = r.field->matrixWorld->elements;
         std::memcpy(d.world, world.data(), sizeof(d.world));
         if (st.rendererOwned) {
-            // Single instance, both of them, and prevPositions is a REAL
+            // Single instance, both of them, and prevPositions is a real
             // previous state rather than an aliased ring slot: the emit
             // dispatch writes f(t) and f(t - dt) into the two buffers from the
             // same thread, earlier in this same command buffer.
@@ -1108,8 +1099,8 @@ void ParticleFieldPass::prepareFrame(std::uint64_t serial, std::uint32_t frame,
         // O(1) host work per field: pack a 128 B push block. Nothing is
         // version-gated because there is nothing to skip — the block is built
         // fresh every frame and costs less than the branch that would decide
-        // not to. A PARKED Renderer field (setLiveCount(0)) records no dispatch
-        // at all, which is the one legitimate way to stop an emitter.
+        // not to. A parked Renderer field (setLiveCount(0)) records no dispatch
+        // at all, which is the one supported way to stop an emitter.
         if (st.rendererOwned && live > 0 && emitPipe_ != VK_NULL_HANDLE) {
             const auto& ep = r.field->emitter();
             EmitPc pc{};
@@ -1152,14 +1143,12 @@ void ParticleFieldPass::prepareFrame(std::uint64_t serial, std::uint32_t frame,
             // that does not follow pushes the identical bytes it pushed before
             // this existed — capacity is a slot count and cannot reach 2^31.
             //
-            // WORLD → FIELD-LOCAL here, not on the API, because this is the
+            // World → field-local here, not on the API, because this is the
             // only place the field's world matrix is guaranteed current, and
             // the shader's positions are field-local by the mode's contract.
-            // Translation only: a weather field with a ROTATED world matrix
-            // would need the inverse basis applied to the wrap box as well,
-            // and an axis-aligned torus around a tilted field is not a thing
-            // this asks for — the rotation is ignored, which is the honest
-            // degradation (the box stays world-axis-aligned).
+            // Translation only: a rotated world matrix would need the inverse
+            // basis applied to the wrap box as well; the rotation is ignored
+            // and the box stays world-axis-aligned.
             EmitAuxGpu aux{};
             bool       needAux = false;
             if (ep.follow) {
@@ -1191,7 +1180,7 @@ void ParticleFieldPass::prepareFrame(std::uint64_t serial, std::uint32_t frame,
             if (sp.enabled && bakePipe_ != VK_NULL_HANDLE &&
                 wantTlas_ != VK_NULL_HANDLE) {
 
-                // The set holds a stale acceleration structure. Written HERE,
+                // The set holds a stale acceleration structure. Written here,
                 // in prepareFrame's post-fence window, and only on the frame
                 // the handle actually changed — which is a structural rebuild,
                 // which is itself vkDeviceWaitIdle-guarded (see setTlas).
@@ -1214,7 +1203,7 @@ void ParticleFieldPass::prepareFrame(std::uint64_t serial, std::uint32_t frame,
 
                 const std::uint32_t res =
                         std::max(kBakeResMin, std::min(kBakeResMax, sp.resolution));
-                // The FOOTPRINT. Square, and by default the spawn slab's larger
+                // The footprint. Square, and by default the spawn slab's larger
                 // lateral half-extent — which under EmitterParams::follow is
                 // also exactly half the toroidal wrap period, so the map covers
                 // precisely the box the flakes are folded into and no more.
@@ -1223,12 +1212,11 @@ void ParticleFieldPass::prepareFrame(std::uint64_t serial, std::uint32_t frame,
                                 ? sp.extent
                                 : std::max(std::max(ep.spawnHalfExtent.x,
                                                     ep.spawnHalfExtent.z), 0.5f);
-                // THE CENTRE, and this is the whole of what the F4 defect
-                // amendment's closing note asks for: when the field follows,
-                // the map re-anchors on the SAME SNAPPED centre the wrap uses,
-                // and therefore only on snaps. Anything else — the raw camera
-                // position, a second snap expression — and the flakes would
-                // rest at heights sampled from where the field used to be.
+                // The centre: when the field follows, the map re-anchors on the
+                // same snapped centre the wrap uses, and therefore only on
+                // snaps. Anything else — the raw camera position, a second snap
+                // expression — and the flakes would rest at heights sampled
+                // from where the field used to be.
                 float cx = ep.spawnCenter.x, cz = ep.spawnCenter.z;
                 if (ep.follow) { cx = aux.followX; cz = aux.followZ; }
 
@@ -1366,10 +1354,8 @@ void ParticleFieldPass::prepareFrame(std::uint64_t serial, std::uint32_t frame,
                 v.boxInvSize[1] = 1.f / (2.f * hy);
                 v.boxInvSize[2] = 1.f / (2.f * hz);
                 v.linView       = st.densityLin.view;
-                // Per-field medium + emission. Every one of these travels with
-                // the volume now (plans/particle-atmosphere.md F-A); the
-                // first-field-wins fill that used to sit here, and the wart
-                // comment in the header that apologised for it, are both gone.
+                // Per-field medium + emission, carried with the volume
+                // (plans/particle-atmosphere.md F-A).
                 v.albedo[0]  = dr.albedo.r;
                 v.albedo[1]  = dr.albedo.g;
                 v.albedo[2]  = dr.albedo.b;
@@ -1378,7 +1364,7 @@ void ParticleFieldPass::prepareFrame(std::uint64_t serial, std::uint32_t frame,
                 v.emission[1] = dr.tempBottomK;
                 v.emission[2] = dr.tempTopK;
                 // The shader raises the in-box height fraction to this power.
-                // Clamped HERE rather than in the march: pow(0, 0) is undefined
+                // Clamped here rather than in the march: pow(0, 0) is undefined
                 // in GLSL, and a floor costs nothing on the host but two
                 // instructions per step per volume in the shader.
                 v.emission[3] = std::max(dr.tempFalloff, 1e-3f);
@@ -1425,8 +1411,8 @@ void ParticleFieldPass::prepareFrame(std::uint64_t serial, std::uint32_t frame,
         const auto& bb = r.field->billboardRepr();
         if (bb.enabled && live > 0) {
             // The draw record, allocated the first frame this field asks for
-            // one. Four vertices, forever — a quad is a quad; only
-            // instanceCount ever changes, and it changes on the DEVICE.
+            // one. Always four vertices; only instanceCount ever changes, and
+            // it changes on the device.
             if (st.bbIndirect[slot].handle == VK_NULL_HANDLE) {
                 st.bbIndirect[slot] = createBuffer(ctx_.allocator(), ctx_.device(),
                                                    sizeof(VkDrawIndirectCommand), kIndirectUsage,
@@ -1457,8 +1443,7 @@ void ParticleFieldPass::prepareFrame(std::uint64_t serial, std::uint32_t frame,
             bp.flags = (cfg.wSemantic == ParticleField::WSemantic::Radius) ? 1u : 0u;
             // ── 4c: the sprite slice ────────────────────────────────────────
             // Two bits and three floats. Both default off and everything below
-            // is exactly zero then, which is what keeps the additive path
-            // byte-identical rather than merely close.
+            // is exactly zero then, keeping the additive path byte-identical.
             if (bb.alphaOver) bp.flags |= 2u;
             if (bb.lit) bp.flags |= 4u;
             bp.opacity    = std::max(0.f, std::min(1.f, bb.opacity));
@@ -1473,7 +1458,7 @@ void ParticleFieldPass::prepareFrame(std::uint64_t serial, std::uint32_t frame,
             bp.lodNear          = std::max(bb.lodNear, 0.f);
             bp.lodFade          = std::max(bb.lodFade, 0.f);
 
-            // The glow chain is a SCENE-level decision made out of per-field
+            // The glow chain is a scene-level decision made out of per-field
             // requests: every glow field composites additively into the one
             // offscreen target, so N fields still cost one pyramid. With no
             // glow field the renderer allocates no target and records nothing.
@@ -1491,14 +1476,12 @@ void ParticleFieldPass::prepareFrame(std::uint64_t serial, std::uint32_t frame,
             // out of the shader entirely and keeps the stretch stable when the
             // frame rate is not.
             //
-            // A HostRing field used to have neither half of that: its previous
-            // ring slot could hold ANY particle at index i (the host was free
-            // to compact), and no dt was published for it. Both are now things
-            // the host can PROMISE — Config::hostStableSlots for the identity,
-            // submit()'s dtSec for the interval — and with the promise made the
-            // previous slot is a real prevPositions buffer and the streak is
-            // the same expression it is for a Renderer field. Without it the
-            // stretch stays silently zero rather than silently wrong.
+            // A HostRing field needs two host guarantees for this:
+            // Config::hostStableSlots (index i in the previous slot names the
+            // same particle) and submit()'s dtSec (the interval). With both,
+            // the previous slot is a real prevPositions buffer and the streak
+            // is the same expression it is for a Renderer field. Without them
+            // the stretch stays zero rather than silently wrong.
             const bool rendererOwned = st.rendererOwned;
             const float edt = rendererOwned ? r.field->emitterDt() : r.field->hostDt();
             bp.stretchOverDt = ((rendererOwned || hostPrevIsPrevStep) &&
@@ -1506,16 +1489,14 @@ void ParticleFieldPass::prepareFrame(std::uint64_t serial, std::uint32_t frame,
                                        ? (bb.stretchSeconds / edt)
                                        : 0.f;
 
-            // ── The lifecycle, handed over so the shader can re-derive AGE ───
-            // There is no age channel in the position buffer — w is the radius,
-            // and a second buffer carrying one float per particle would undo
-            // the point of the entity — so the billboard vertex stage
-            // recomputes a slot's age from the SAME closed form and the SAME
-            // hash particle_emit.comp used. That is four lines of arithmetic
-            // against a whole buffer, and it is what makes fade-over-life,
-            // shrink-over-life and the hot-to-cool colour ramp possible at all.
-            // lifetime == 0 tells the shader "no age is knowable here", which is
-            // the honest answer for a HostRing field driven by a sim.
+            // ── The lifecycle, handed over so the shader can re-derive age ───
+            // There is no age channel in the position buffer (w is the radius),
+            // so the billboard vertex stage recomputes a slot's age from the
+            // same closed form and the same hash particle_emit.comp used —
+            // this is what makes fade-over-life, shrink-over-life and the
+            // hot-to-cool colour ramp possible without a second buffer.
+            // lifetime == 0 tells the shader no age is knowable, which is the
+            // case for a HostRing field driven by a sim.
             if (rendererOwned) {
                 const auto& ep = r.field->emitter();
                 bp.lifetime       = std::max(ep.lifetime, 1e-3f);
@@ -1525,9 +1506,8 @@ void ParticleFieldPass::prepareFrame(std::uint64_t serial, std::uint32_t frame,
                 bp.seed           = ep.seed;
                 // ── F5: the splash decode ───────────────────────────────────
                 // The same two numbers the emitter encodes with, computed by
-                // the same expression a few dozen lines below — they are a
-                // MATCHED PAIR and the pass owns both ends of it, which is why
-                // neither is authored directly.
+                // the same expression a few dozen lines below — a matched pair
+                // the pass owns both ends of, so neither is authored directly.
                 if (ep.surface.enabled && ep.surface.splashSeconds > 0.f) {
                     const float rMax =
                             std::max(ep.size, 1e-5f) *
@@ -1791,8 +1771,8 @@ void ParticleFieldPass::recordDensityScatter(VkCommandBuffer cb) {
     mb.dstAccessMask = VK_ACCESS_2_SHADER_STORAGE_READ_BIT;
     vkCmdPipelineBarrier2(cb, &dep);
 
-    // 5. r32ui → r16f, one dispatch per field — hardware trilinear for the
-    //    deferred shade's per-pixel dust march is the whole point of the copy.
+    // 5. r32ui → r16f, one dispatch per field — the copy exists to give the
+    //    deferred shade's per-pixel dust march hardware trilinear filtering.
     //    The same dispatch reduces the volume's maximum into the majorant
     //    buffer — it is already reading every voxel, so the bound the sensor
     //    needs costs one shared-memory reduction and one atomic per workgroup.
@@ -1819,9 +1799,9 @@ void ParticleFieldPass::recordDensityScatter(VkCommandBuffer cb) {
 }
 
 // ── F6: exported allocation → this frame's ring slot ────────────────────────
-// One copy per interop field, then ONE barrier for all of them — the copies are
-// independent and the copy engine is happy to overlap them, exactly as
-// recordCounts argues for its own batch.
+// One copy per interop field, then one barrier for all of them — the copies
+// are independent and the copy engine can overlap them, same batching as
+// recordCounts.
 //
 // The destination stages are everything that can read a position this frame:
 // the vertex stage (the mesh proxy and the billboard quad both pull positions

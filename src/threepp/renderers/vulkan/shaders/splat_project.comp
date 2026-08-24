@@ -5,7 +5,7 @@
 // Splat stage 1/6 — project, cull, and count tiles. One thread per splat.
 //
 // This is the GL vertex shader (SplatCloud.cpp) doing the same EWA algebra for
-// the same reason, with two differences that are the whole point of a tile
+// the same reason, with the two differences that define a tile
 // rasterizer: the result is written to a buffer instead of a varying, and the
 // splat's screen footprint is turned into a TILE RECT plus a count rather than
 // a quad. The count is what the prefix sum consumes, and the prefix sum is what
