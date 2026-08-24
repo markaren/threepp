@@ -1997,9 +1997,10 @@ void VulkanRenderer::Impl::updateParticleDensityUbo(uint32_t frame) {
             }
             ubo.counts[0] = n;
             // ONE uniform branch for the whole march: the emissive path (the
-            // blackbody term, the 32-step bump and the hash dither) is skipped
-            // wholesale when this is 0, which is what makes a dust-only scene
-            // execute the identical arithmetic it did before fire existed.
+            // blackbody term and the 32-step base count) is skipped wholesale
+            // when this is 0, so a dust-only scene never pays for fire. (The
+            // hash dither and the world-step raise apply to every march now —
+            // see the march-grid rules in deferred_shade_60_fog_volumetrics.)
             ubo.counts[1] = emissive;
             uploadHostVisible(ctx->allocator(), particleDensityUbos_[frame], &ubo, sizeof(ubo));
 

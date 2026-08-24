@@ -421,7 +421,7 @@ void main() {
         // The dust's own ambient in-scatter, in the same shape the air and murk
         // terms above take: albedo x ambient x (1 - T). The SUN's contribution
         // through the dust is deliberately NOT here — that is applyParticleFog's
-        // 24-step march with its shadow ray and phase function, and a second,
+        // full march with its shadow ray and phase function, and a second,
         // cheaper, differently-wrong copy of it is exactly the duplicate BSDF
         // the house rule forbids. A billboard behind a sunlit plume therefore
         // loses the right amount of light and gains a slightly cool fill; the

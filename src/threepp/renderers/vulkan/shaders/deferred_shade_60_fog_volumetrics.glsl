@@ -124,8 +124,12 @@ vec3 applyHeteroSurfaceFog(vec3 col, vec2 fuv, float viewDist, vec3 ro, vec3 hit
 // volumetricDirScatter cannot supply, because its march is the height-fog
 // σ profile and it early-outs entirely when scene fog is off. The sun is
 // shadowed ONCE, at the σ-weighted centroid of the traversed dust (a full
-// per-step shadow ray is shaft-resolution the plume scale does not need), and
-// dimmed by the cloud-shadow map at the same point.
+// per-step shadow ray is shaft-resolution the plume scale does not need),
+// dimmed by the cloud-shadow map at the same point — and SELF-shadowed by the
+// medium itself (pdLightTransmittance at the same centroid): the scene shadow
+// map holds geometry only, density volumes never render into it, so without
+// the medium's own light-leg transmittance a deep soot column was fully
+// sunlit through its entire depth and read as white ash at any albedo.
 //
 // ── POINT LIGHTS ARE MARCHED HERE, NOT READ OUT OF THE FROXEL LUT ────────────
 // They used to arrive through froxelInscatter: the injector multiplied its
@@ -167,9 +171,7 @@ vec3 applyHeteroSurfaceFog(vec3 col, vec2 fuv, float viewDist, vec3 ro, vec3 hit
 //
 // ∫σ·e^(-τ) dt over the dust segment is accumulated as `wsum`; with dust the
 // only extinction on that segment it equals 1 - T exactly, so the in-scatter
-// needs no separate normalisation. No jitter on the step offset: the phase-2
-// determinism contract (a static scene renders the same bytes every frame)
-// outranks the mild banding 24 steps of a trilinear-smooth volume could show.
+// needs no separate normalisation.
 //
 // Applied to EVERY leg the shade terminates: surfaces, water, and the sky
 // background. Gated on flags bit 11 = "a ParticleField density volume is live
@@ -195,22 +197,36 @@ vec3 applyHeteroSurfaceFog(vec3 col, vec2 fuv, float viewDist, vec3 ro, vec3 hit
 // arithmetic it did before this term existed. That is the F0 checkpoint, not a
 // nicety.
 //
-// ── BANDING: SPATIAL DITHER, NEVER TEMPORAL JITTER ──────────────────────────
-// A high-contrast emissive core bands where a trilinear dust cloud did not: 24
-// uniform steps quantise a steep radiance ramp into visible shells. The two
-// mitigations here are chosen to KEEP the determinism contract:
+// ── THE MARCH GRID: DEPTH-INDEPENDENT, ~1 m STEPS, SPATIALLY DITHERED ────────
+// Three rules, each answering a defect a capture showed:
 //
-//   1. 24 -> 32 steps whenever any volume is emissive. One uniform branch, and
-//      cheap against the march's fixed cost — R-2's stated first answer.
-//   2. A per-PIXEL hash offset on the step phase, replacing the fixed +0.5.
-//      This is spatial dithering: the offset is a function of the pixel
+//   1. The step grid is a function of the DENSITY-BOX UNION alone — tMax does
+//      not shape it. The first ship clipped the marched interval to scene
+//      depth, which handed rays on either side of a depth edge DIFFERENT step
+//      grids over the SAME plume: a sky ray (tMax 1e30) marched the full box
+//      span while the ground ray beside it marched a truncated one, and the
+//      two quantisations of one σ field disagree by a visible constant — a
+//      hard seam tracing the horizon through every plume that straddled it.
+//      The surface clip is per STEP instead (the slab straddling tMax
+//      contributes its front fraction, later slabs nothing): that is the
+//      physical clip, and it is continuous in tMax where reparameterising the
+//      whole march was not.
+//   2. The step count is the fixed 24 (32 emissive) of the first ship, RAISED
+//      — never lowered — toward a ~1 m world-space step for long traversals,
+//      capped at 64. A fixed count over a box-sized interval is a step length
+//      that scales with the box: a yard-scale plume marched in ~4 m slabs and
+//      showed them as shells, while a campfire keeps its sub-metre steps
+//      through the base count, unchanged.
+//   3. A per-PIXEL hash offset on the step phase — for EVERY march now, not
+//      only emissive ones, since rule 2's cap still leaves metre-scale slabs
+//      on a big plume. This is spatial dithering: a function of the pixel
 //      coordinate ALONE, with no frame term anywhere, so a static scene still
 //      renders the same bytes every frame and every run — unlike the pcg
 //      jitter volumetricSpotScatter/volumetricDirScatter use, which are keyed
-//      on pc.frame and are therefore off limits here. TAA converges the
-//      resulting dither exactly as it converges those marches' jitter; without
-//      TAA it reads as fine stationary noise instead of hard shells, which is
-//      the better failure.
+//      on pc.frame and are therefore off limits here (the phase-2 determinism
+//      contract). TAA converges the dither exactly as it converges those
+//      marches' jitter; without TAA it reads as fine stationary noise instead
+//      of hard shells, which is the better failure.
 vec3 applyParticleFog(vec3 col, vec3 ro, vec3 rd, float tMax) {
     if ((pc.flags & 2048u) == 0u) return col;
 #ifdef PD_LINEAR
@@ -219,7 +235,9 @@ vec3 applyParticleFog(vec3 col, vec3 ro, vec3 rd, float tMax) {
 
     // Union of the ray's box overlaps — one interval, so disjoint plumes cost
     // steps in the gap, but K is fixed and two plumes usually share a yard.
-    float t0 = tMax, t1 = 0.0;
+    // The BOXES alone bound it — not tMax — so the step grid below is the same
+    // for every ray of a pixel-neighbourhood whatever each one hit (rule 1).
+    float t0 = 1e30, t1 = 0.0;
     const vec3 inv = 1.0 / rd;// ±inf on axis-parallel components is fine below
     for (uint i = 0u; i < n; ++i) {
         const vec3  bmin  = pd.boxMin[i].xyz;
@@ -228,26 +246,24 @@ vec3 applyParticleFog(vec3 col, vec3 ro, vec3 rd, float tMax) {
         const vec3  tb = (bmin + bsize - ro) * inv;
         const vec3  lo = min(ta, tb), hi = max(ta, tb);
         const float e = max(max(lo.x, lo.y), max(lo.z, 0.0));
-        const float x = min(min(hi.x, hi.y), min(hi.z, tMax));
+        const float x = min(min(hi.x, hi.y), hi.z);
         if (x > e) { t0 = min(t0, e); t1 = max(t1, x); }
     }
-    if (t1 <= t0) return col;
+    if (t1 <= t0 || tMax <= t0) return col;// no overlap / all of it behind the hit
 
     // Uniform branches, both of them: every pixel in the dispatch takes the
     // same side, so neither costs divergence.
     const bool emissive = pd.counts.y != 0u;
     const bool multi    = n > 1u;
 
-    const int   STEPS = emissive ? 32 : 24;
-    const float dt    = (t1 - t0) / float(STEPS);
-    // Step phase. Exactly 0.5 (midpoint, the pre-emission form, bit for bit)
-    // unless something is emissive; then the per-pixel hash dither above.
+    // Rule 2: base count, raised toward a 1 m world step on long traversals.
+    const float span  = t1 - t0;
+    const int   STEPS = clamp(int(ceil(span)), emissive ? 32 : 24, 64);
+    const float dt    = span / float(STEPS);
+    // Step phase: the per-pixel hash dither of rule 3, for every march.
     // pcgHash of the pixel coordinate only — NO pc.frame term, deliberately.
-    float phase = 0.5;
-    if (emissive) {
-        uint seed = pcgHash(uint(gPixelCoord.x) * 7919u + pcgHash(uint(gPixelCoord.y) * 104729u));
-        phase = rnd(seed);
-    }
+    uint seed = pcgHash(uint(gPixelCoord.x) * 7919u + pcgHash(uint(gPixelCoord.y) * 104729u));
+    const float phase = rnd(seed);
     float tau = 0.0, wsum = 0.0;
     vec3  cen = vec3(0.0);
     vec3  emis = vec3(0.0);// sum of intensity * blackbody * sigma_i * e^-tau * dt
@@ -255,7 +271,13 @@ vec3 applyParticleFog(vec3 col, vec3 ro, vec3 rd, float tMax) {
     float gW   = 0.0;      // sigma-weighted HG g, same weighting
     vec3  pnt  = vec3(0.0);// point-light in-scatter, ALREADY albedo-multiplied
     for (int s = 0; s < STEPS; ++s) {
-        const float t = t0 + (float(s) + phase) * dt;
+        const float slab0 = t0 + float(s) * dt;
+        // Rule 1's surface clip: the slab straddling tMax contributes its
+        // front fraction, everything behind the hit contributes nothing. The
+        // grid stations themselves never move with tMax.
+        const float ds = min(dt, tMax - slab0);
+        if (ds <= 0.0) break;
+        const float t = slab0 + phase * ds;
         const vec3  x = ro + rd * t;
         float sig = 0.0;
         vec3  albStep = vec3(0.0);
@@ -280,15 +302,15 @@ vec3 applyParticleFog(vec3 col, vec3 ro, vec3 rd, float tMax) {
         }
         if (sig <= 0.0) continue;
         const float tr = exp(-tau);
-        const float w  = sig * tr * dt;// KEEP the grouping: this is the pre-emission expression
-        tau  += sig * dt;
+        const float w  = sig * tr * ds;// KEEP the grouping: this is the pre-emission expression
+        tau  += sig * ds;
         wsum += w;
         cen  += w * x;
         if (multi) {
-            albW += albStep * (tr * dt);
-            gW   += gStep * (tr * dt);
+            albW += albStep * (tr * ds);
+            gW   += gStep * (tr * ds);
         }
-        if (emissive) emis += emStep * (tr * dt);
+        if (emissive) emis += emStep * (tr * ds);
         // ── Point-light glow, per step ──────────────────────────────────────
         // Unlike the sun, a point light's geometry changes ALONG the ray
         // (direction turns, inverse square falls off), so it cannot be factored
@@ -352,9 +374,16 @@ vec3 applyParticleFog(vec3 col, vec3 ro, vec3 rd, float tMax) {
     vec3 sun = vec3(0.0);
     for (uint i = 0u; i < lights.dirCount; ++i) {
         const vec3 L = normalize(lights.dirLights[i].direction);
+        // Three occluders on the sun's leg, disjoint by construction:
+        // shadowVis is GEOMETRY (the RT scene — the medium is not in it),
+        // cloudShadowSample is the cloud layer overhead, and
+        // pdLightTransmittance is the medium ITSELF — Beer-Lambert through
+        // the density mirrors from the centroid toward the sun, the term
+        // that makes a soot column's shaded side actually dark.
         sun += lights.dirLights[i].color
              * (hgPhase(dot(L, rd), medG)
-                * shadowVis(cen, L, 1e30) * cloudShadowSample(cen));
+                * shadowVis(cen, L, 1e30) * cloudShadowSample(cen)
+                * pdLightTransmittance(cen, L));
     }
     const vec3 amb = lights.ambient
                    + sampleEnvLod(vec3(0.0, 1.0, 0.0), float(max(pc.envMipCount, 1u) - 1u));
@@ -384,7 +413,7 @@ vec3 applyParticleFog(vec3 col, vec3 ro, vec3 rd, float tMax) {
     // cloud-shadow sample, so this reuses that approximation rather than
     // inventing a second one: the air's optical depth varies by well under a
     // percent across a ten-metre plume seventy metres out, while a per-step
-    // form would put two exps and a distance() inside the 32-step loop.
+    // form would put two exps and a distance() inside the march loop.
     //
     // AND THE OTHER HALF, which a capture caught and arithmetic would not have:
     // attenuating only the added term turns a plume in THICK fog into a DARK
