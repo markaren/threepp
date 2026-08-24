@@ -42,6 +42,17 @@ layout(location = 4) flat in uint  vToneMap;
 // F5: > 0 draws an ANNULUS of this fractional width instead of the disc — the
 // splash ring. Flat, so the branch is uniform over every fragment of the quad.
 layout(location = 5) flat in float vRing;
+// 4c: bit0 = composite premultiplied alpha-OVER instead of additive. Uniform
+// over the draw (the pipeline's blend state is chosen to match), so the branch
+// costs one compare.
+layout(location = 6) flat in uint  vMode;
+// 4c: the sprite's coverage scale — field opacity times fog transmittance and
+// every other dimming factor, which in this mode make the sprite TRANSPARENT
+// rather than dark. 1.0 in additive mode.
+layout(location = 7) flat in float vCover;
+// 4c: per-particle rotation of the texture lookup, as (cos, sin).
+layout(location = 8) flat in vec2  vRot;
+const uint kModeAlphaOver = 1u;
 
 layout(push_constant, scalar) uniform Pc {
     mat4     proj;
@@ -53,11 +64,16 @@ layout(push_constant, scalar) uniform Pc {
 layout(location = 0) out vec4 outColor;
 
 void main() {
+    const bool alphaOver = (vMode & kModeAlphaOver) != 0u;
     const float r = length(vLocal);
     // Outside the inscribed disc there is nothing to add. Discarding rather
     // than adding zero matters at 300k: this content is fill-bound, and the
     // corners of a quad are 21% of its area.
-    if (r >= 1.0 || vColor.a <= 0.0) discard;
+    //
+    // 4c: a TEXTURED sprite is the exception — its alpha lives in the whole
+    // square and a spray puff is not a disc, so the alpha-over path keeps the
+    // corners and lets the texture decide what is covered.
+    if ((r >= 1.0 && !alphaOver) || vColor.a <= 0.0) discard;
 
     const float t = 1.0 - r;
     // Skirt vs core. The exponent runs 4 (hard, a spark) to 1.2 (soft, a glow)
@@ -80,7 +96,37 @@ void main() {
         a = k * k;
     }
 
-    const vec4 tx = texture(tex, vLocal * 0.5 + 0.5);
+    // 4c: the lookup is ROTATED about the sprite centre by the per-particle
+    // angle the vertex stage hashed. Four atlas variants drawn at one
+    // orientation tile visibly across a few hundred sprites; the same four at a
+    // hashed angle do not. (cos, sin) = (1, 0) in additive mode, which is the
+    // identity rotation and leaves that path's lookup untouched.
+    const vec2 luv = vec2(vRot.x * vLocal.x - vRot.y * vLocal.y,
+                          vRot.y * vLocal.x + vRot.x * vLocal.y);
+    const vec4 tx = texture(tex, luv * 0.5 + 0.5);
+
+    if (alphaOver) {
+        // ── The sprite slice ────────────────────────────────────────────────
+        // The TEXTURE is the shape here, not the procedural falloff: a spray
+        // puff is a torn sheet with a ragged edge and the radial skirt above
+        // would just darken its rim. A soft box feather keeps an UNTEXTURED
+        // alpha field (the 1x1 white default) from drawing hard squares, and
+        // costs a textured one nothing it does not already have.
+        const float e  = max(abs(luv.x), abs(luv.y));
+        const float cv = tx.a * vCover * (1.0 - smoothstep(0.82, 1.0, e));
+        if (cv <= 0.0) discard;
+        // PREMULTIPLIED. The pass composites onto a swapchain the post stack
+        // already tone-mapped and sRGB-encoded, so the alpha-over has to happen
+        // in THAT domain: tone-map the sprite's own linear radiance first, then
+        // premultiply by coverage. Doing it the other way (tone-map the blended
+        // result) is not available to a blend unit, and tone-mapping colour x
+        // coverage would darken a thin sprite's HUE as well as its opacity.
+        const vec3 disp = vColor.rgb * tx.rgb;
+        outColor = vec4((vExposure < 0.0 ? disp : odDisplay(disp, vToneMap, vExposure)) * cv,
+                        cv);
+        return;
+    }
+
     a *= tx.a;
     if (a <= 0.0) discard;
 

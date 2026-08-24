@@ -1745,7 +1745,8 @@ void VulkanRenderer::Impl::recordSecondaryViews(VkCommandBuffer cb) {
                     // If sensor/display parity on the halo ever matters, the
                     // fix is a per-view BillboardGlowPass instance, not a
                     // change here.
-                    recordFieldBillboards(cb, fieldBillboardPipeline1x_, /*glowPass=*/false);
+                    recordFieldBillboards(cb, fieldBillboardPipeline1x_, /*glowPass=*/false,
+                                          fieldBillboardAlphaPipeline1x_);
                     vkCmdEndRendering(cb);
 
                     // Back out to everything downstream: recordViewComposite's

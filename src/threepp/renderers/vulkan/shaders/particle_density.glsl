@@ -283,6 +283,57 @@ float pdMediumLinear(vec3 p, out vec3 albedo) {
     return s;
 }
 
+// ── SELF-SHADOW: transmittance through the medium toward a light ─────────────
+// Beer-Lambert through the r16f mirrors from p along L (unit, TOWARD the
+// light) to the exit of the volume-box union. This is the term the scene
+// shadow map cannot supply: density volumes are a participating medium, not
+// geometry, so they are never rasterised into that map and shadowVis() reports
+// "fully sunlit" through any thickness of soot — which lit a deep smoke column
+// uniformly through its whole depth and read as white ash whatever the albedo.
+//
+// Evaluated ONCE per (pixel, light) at the march's σ-weighted centroid — the
+// same point and the same reasoning as the centroid shadow ray (a full
+// per-step light march is shaft-resolution the plume scale does not need; the
+// centroid moves per pixel, so the lit side of a column stays bright while
+// pixels whose dust sits deep behind it darken, which is the shading a plume
+// needs). 8 midpoint taps, fixed and unjittered: the integrand is a trilinear
+// volume evaluated at one smoothly-varying point, so there is no shell to
+// dither away, and the determinism contract wants no new noise sources.
+float pdLightTransmittance(vec3 p, vec3 L) {
+    const uint n = min(pd.counts.x, uint(kMaxDensityFields));
+    if (n == 0u) return 1.0;
+    // Exit of the box union along L. Entry is ~0 (p sits inside the traversed
+    // dust); disjoint boxes waste taps in the gap, matching the primary
+    // march's one-interval trade.
+    float tExit = 0.0;
+    const vec3 inv = 1.0 / L;// ±inf on axis-parallel components is fine below
+    for (uint i = 0u; i < n; ++i) {
+        const vec3  bmin  = pd.boxMin[i].xyz;
+        const vec3  bsize = 1.0 / pd.boxInvSize[i].xyz;
+        const vec3  ta = (bmin - p) * inv;
+        const vec3  tb = (bmin + bsize - p) * inv;
+        const vec3  lo = min(ta, tb), hi = max(ta, tb);
+        const float e = max(max(lo.x, lo.y), max(lo.z, 0.0));
+        const float x = min(min(hi.x, hi.y), hi.z);
+        if (x > e) tExit = max(tExit, x);
+    }
+    if (tExit <= 0.0) return 1.0;
+    const int   kTaps = 8;
+    const float dl    = tExit / float(kTaps);
+    float tau = 0.0;
+    for (int s = 0; s < kTaps; ++s) {
+        const vec3 x = p + L * ((float(s) + 0.5) * dl);
+        for (uint i = 0u; i < n; ++i) {
+            const vec3 tt = (x - pd.boxMin[i].xyz) * pd.boxInvSize[i].xyz;
+            // Skip, don't clamp — the boundary-smear rule above.
+            if (any(lessThan(tt, vec3(0.0))) || any(greaterThan(tt, vec3(1.0)))) continue;
+            tau += texture(particleDensityLinTex[i], tt).r * dl;
+        }
+        if (tau > 8.0) break;// e^-8: fully occluded, the rest cannot matter
+    }
+    return exp(-tau);
+}
+
 // ── THE CHEAP LEG: emission + extinction only, for SECONDARY rays ────────────
 // plans/particle-atmosphere.md, "water-fire reflection march".
 //
@@ -296,9 +347,9 @@ float pdMediumLinear(vec3 p, out vec3 albedo) {
 // Beer-Lambert compositing order — and NOTHING ELSE.
 //
 // WHAT IS DELIBERATELY OMITTED, and why it is an omission and not a bug:
-// the sun's in-scatter (one centroid shadow ray + HG phase + cloud shadow),
-// the ambient/env in-scatter, and the per-step point-light glow. Those are
-// applyParticleFog's 32-step march, and the house rule this tree runs on is
+// the sun's in-scatter (one centroid shadow ray + HG phase + cloud shadow +
+// medium self-shadow), the ambient/env in-scatter, and the per-step
+// point-light glow. Those are applyParticleFog's full march, and the house rule is
 // ONE medium model — a second, differently-wrong copy of the full march is the
 // duplicate BSDF that rule exists to forbid. So a smoke plume reflected in
 // water DIMS what is behind it (transmittance) but is not itself lit by the
@@ -308,7 +359,7 @@ float pdMediumLinear(vec3 p, out vec3 albedo) {
 // emission IS the term this returns.
 //
 // Fixed step count, midpoint phase, no temporal jitter — the phase-2
-// determinism contract. 16 rather than the primary march's 32: a reflected
+// determinism contract. 16 rather than the primary march's 24+: a reflected
 // image is Fresnel-weighted (F ≈ 0.02 face-on), perturbed by the wave normals
 // that already dither the sampling across neighbouring pixels, and never the
 // subject of the frame. If a banding shell ever shows, F0's sanctioned answer

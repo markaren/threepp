@@ -4684,6 +4684,14 @@ class ParticleField(Mesh):
     class BillboardRepr:
         enabled: bool
         @property
+        def alpha_over(self) -> bool:
+            """
+            Composite premultiplied SRC_ALPHA-over instead of additive, so a sprite OCCLUDES what is behind it. Nothing is sorted: draws go in field order and, within a field, in SLOT order, so submit back-to-front for correct blending.
+            """
+        @alpha_over.setter
+        def alpha_over(self, arg0: bool) -> None:
+            ...
+        @property
         def bright_jitter(self) -> float:
             """
             Per-particle brightness spread, hashed.
@@ -4740,6 +4748,30 @@ class ParticleField(Mesh):
         def intensity(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
             ...
         @property
+        def lit(self) -> bool:
+            """
+            Per-particle radiance = colour x (ambient + sun x HG phase), from the scene's own sun. One lobe per particle — no shadow ray, no cluster walk.
+            """
+        @lit.setter
+        def lit(self, arg0: bool) -> None:
+            ...
+        @property
+        def lit_ambient(self) -> float:
+            """
+            Scale on the ambient floor of the lit term — what the shaded side of a sprite sits at.
+            """
+        @lit_ambient.setter
+        def lit_ambient(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+            ...
+        @property
+        def lit_phase_g(self) -> float:
+            """
+            Henyey-Greenstein asymmetry for that lobe. ~0.35 = the forward-ish scattering of a water parcel; 0 = isotropic.
+            """
+        @lit_phase_g.setter
+        def lit_phase_g(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+            ...
+        @property
         def lod_fade(self) -> float:
             """
             Metres of ramp above lod_near over which the quad fades IN.
@@ -4762,6 +4794,14 @@ class ParticleField(Mesh):
             """
         @near_fade.setter
         def near_fade(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+            ...
+        @property
+        def opacity(self) -> float:
+            """
+            Coverage scale in alpha_over mode, before the texture/procedural falloff. Ignored when additive.
+            """
+        @opacity.setter
+        def opacity(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
             ...
         @property
         def size_scale(self) -> float:
@@ -4838,6 +4878,14 @@ class ParticleField(Mesh):
             """
         @capacity.setter
         def capacity(self, arg0: typing.SupportsInt | typing.SupportsIndex) -> None:
+            ...
+        @property
+        def host_stable_slots(self) -> bool:
+            """
+            HostRing only: the host promises index i is the SAME particle in every submit (fixed pool, dead slots left at w < 0, no compaction). That makes the previous ring slot a real prevPositions buffer, which is what BillboardRepr.stretch_seconds — the velocity streak — needs; without the promise the stretch stays off on a host field. A frame the host skips falls back to round sprites rather than smearing over two steps, and a freshly spawned slot streaks from its predecessor for one frame (bounded by stretch_max; spend it under a fade-in).
+            """
+        @host_stable_slots.setter
+        def host_stable_slots(self, arg0: bool) -> None:
             ...
         @property
         def orientations(self) -> bool:
@@ -5318,9 +5366,9 @@ class ParticleField(Mesh):
         """
         Per-particle orientation as (n, 4) float32 quaternions in (x, y, z, w) order. Requires Config.orientations. WRITE-ONCE by contract: the device buffer is not ringed, so this is authored with the field, not animated.
         """
-    def submit(self, positions: typing.Annotated[numpy.typing.ArrayLike, numpy.float32]) -> None:
+    def submit(self, positions: typing.Annotated[numpy.typing.ArrayLike, numpy.float32], dt: typing.SupportsFloat | typing.SupportsIndex = 0.0) -> None:
         """
-        Point a HostRing field at n positions as an (n, 4) float32 array — xyz plus w, which is the radius under WSemantic.Radius and is the DEAD sentinel when negative under either. One memcpy, no per-particle loop. n > capacity is clamped; also sets the live count. Raises on a Renderer / Interop field.
+        Point a HostRing field at n positions as an (n, 4) float32 array — xyz plus w, which is the radius under WSemantic.Radius and is the DEAD sentinel when negative under either. One memcpy, no per-particle loop. n > capacity is clamped; also sets the live count. Raises on a Renderer / Interop field. `dt` is the step this submit advanced the pool over, read only by the velocity stretch under Config.host_stable_slots (0 = assume 1/60 s).
         """
     @property
     def billboard_repr(self) -> ParticleField.BillboardRepr:
@@ -7547,6 +7595,20 @@ class VulkanRenderer:
         """
         Release the exports and return the mesh to the CPU attribute path. STOP the foreign writes first — nothing here can wait on a CUDA stream. Close the importing VkInteropArrays before calling this.
         """
+    def enable_particle_field_interop(self, field: ParticleField, device_copy: collections.abc.Callable[[], None]) -> typing.Any:
+        """
+        Export an Ownership.Interop ParticleField's positions allocation and arm the per-frame device-to-device copy that fills it.
+        
+        Returns (os_handle, size_bytes), or None when the device has no external-memory extension — in which case the field is left in host_fallback() and submit() is legal on it, so the caller drops to the HostRing path rather than failing.
+        
+        CALL IT AFTER THE FIRST render(): the field's device state and this renderer's field pass are both created on the frame the field is first seen, so this returns None until then — render once, then enable.
+        
+        device_copy() runs INSIDE render(), once per frame, pre-record, and MUST BE SYNCHRONOUS (wp.copy(...) then wp.synchronize_device(device) as the last statement, or cuMemcpyDtoDAsync + cuStreamSynchronize). That host ordering is the only thing sequencing the foreign write against the frame that reads it — there is no shared semaphore.
+        
+        The handle is an OS handle owned by the RENDERER (a Win32 NT handle on Windows): import it, but never CloseHandle it from Python. The layout is ParticlePos — 16-byte xyzw slots, byte-identical to wp.vec4 and to PxVec4 — and w < 0 is the DEAD sentinel every consumer tests. size_bytes is the ALLOCATION size and may exceed capacity*16.
+        
+        Liveness is the sim's job here: set_live_count(capacity) once and let the kernel write w < 0 for dead slots. An Interop field forfeits reproducibility and every emitter-derived feature (age fade, size taper, colour ramp, surface landing) — it is positions, a radius and an orientation set, and that is the whole model.
+        """
     def enable_vertex_interop(self, mesh: Mesh, on_frame: collections.abc.Callable[[], None], validate: bool = True) -> typing.Any:
         """
         Export mesh.geometry's position + normal buffers for a foreign GPU producer and arm the per-frame device write that fills them.
@@ -7693,6 +7755,10 @@ class VulkanRenderer:
     def set_flush_frames(self, n: typing.SupportsInt | typing.SupportsIndex) -> None:
         """
         Frames driven per render() to flush the MAILBOX swapchain (default 3; raise to 4+ for fast-moving dynamic scenes).
+        """
+    def set_fog_water_surface_y(self, y: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        """
+        World-Y of the water surface: murk applies below it, the air medium above it. 1e30 (default) = no waterline.
         """
     def set_height_fog(self, density: typing.SupportsFloat | typing.SupportsIndex = 0.019999999552965164, base_y: typing.SupportsFloat | typing.SupportsIndex = 0.0, falloff: typing.SupportsFloat | typing.SupportsIndex = 80.0, noise_amount: typing.SupportsFloat | typing.SupportsIndex = 0.6000000238418579) -> None:
         """

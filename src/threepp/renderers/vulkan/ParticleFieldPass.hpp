@@ -263,7 +263,12 @@ namespace threepp::vulkan {
         float splashR0;               // 120  0 = this field has no splash
         float splashR1;               // 124
         float splashRingWidth;        // 128  annulus width, fraction of radius
-        std::uint32_t _pad[3];        // 132
+        // ── 4c: the sprite slice ────────────────────────────────────────────
+        // Rides the last 12 bytes the record already reserved, so the sprite
+        // mode costs the parameter block nothing.
+        float opacity;                // 132  alphaOver coverage scale
+        float litPhaseG;              // 136  HG asymmetry for the lit lobe
+        float litAmbient;             // 140  ambient share of the lit radiance
     };
     static_assert(sizeof(BillboardParamsGpu) == 144,
                   "BillboardParamsGpu drifted from particlefield_billboard.vert");
@@ -299,8 +304,23 @@ namespace threepp::vulkan {
         float         waterSurfaceY; // 28
         float         camWorldY;     // 32
         float         viewToWorldY[3];// 36
-    };                               // 48
-    static_assert(sizeof(BillboardViewGpu) == 48,
+        // ── 4c: the SUN, for BillboardRepr::lit ─────────────────────────────
+        // The lights UBO is a descriptor set this pass deliberately does not
+        // have (F3 note 2: no set means no VUID-03047 exposure), and the sun is
+        // three floats. So the renderer snapshots the scene's brightest
+        // DirectionalLight — the same one-sun the deferred path shades with —
+        // into this record, per view per frame, and the vertex stage evaluates
+        // one HG lobe against it. Zero radiance when the scene has no sun,
+        // which makes a `lit` field fall back to pure ambient rather than go
+        // black.
+        float         sunDir[3];     // 48  world space, TOWARD the sun
+        float         _pad0;         // 60
+        float         sunRadiance[3];// 64  linear, colour x intensity
+        float         _pad1;         // 76
+        float         ambient[3];    // 80  the scene's summed AmbientLights
+        float         _pad2;         // 92
+    };                               // 96
+    static_assert(sizeof(BillboardViewGpu) == 96,
                   "BillboardViewGpu drifted from particlefield_billboard.vert");
     // Flag bits, mirrored in the shader.
     inline constexpr std::uint32_t kBbViewFogActive = 1u;
@@ -351,6 +371,11 @@ namespace threepp::vulkan {
             // sprite texture.
             VkDeviceAddress bbParamsAddr  = 0;
             bool            billboard     = false;// draw the quad this frame
+            // 4c: BillboardRepr::alphaOver — this field's quads composite
+            // premultiplied SRC_ALPHA-over instead of ONE/ONE, which is a
+            // PIPELINE property and therefore has to be visible to the
+            // recorder, not just to the shader.
+            bool            bbAlphaOver   = false;
             // F4: BillboardRepr::glow > 0 — this field is also drawn into the
             // offscreen glow target and feeds the billboard bloom pyramid. The
             // gate is per FIELD so weather (rain, snow) pays literally nothing:
@@ -668,6 +693,15 @@ namespace threepp::vulkan {
             // freshly allocated, i.e. holds garbage and must be re-sent.
             std::uint64_t slotSerial[kSlots]{};
             std::uint64_t lastSeenSerial = 0;
+            // Which host UPLOAD filled each slot, counted in uploads and not in
+            // frames. Config::hostStableSlots turns the previous ring slot into
+            // a prevPositions buffer, and that is only true when the two slots
+            // hold CONSECUTIVE submits: a frame the host skipped leaves its slot
+            // holding a submit three frames old, and reading it as "one step
+            // ago" would streak every particle over three steps and, once the
+            // ring wraps past it, backwards. fillSeq == 0 means never filled.
+            std::uint64_t slotFill[kSlots]{};
+            std::uint64_t fillSeq = 0;
             // ── Density volume (phase 2) ────────────────────────────────────
             // Allocated at the FIRST frame DensityRepr::enabled is seen and
             // never resized — the same fixed-size contract as the position

@@ -81,6 +81,13 @@ layout(set = 0, binding = 0) uniform CameraUbo {
 // before parallel projections existed.
 vec3 gPrimaryOrigin = vec3(0.0);
 vec3 gPrimaryDir    = vec3(0.0, 0.0, -1.0);
+// Height of this pixel's NEAR-PLANE point (camNearPoint) — the camera's port,
+// not its eye. Only the underwater MEDIUM test reads it: a lens parked at the
+// sea surface is submerged for the pixels whose port point is under it and dry
+// for the rest, which is what splits the frame along the waterline instead of
+// flipping the whole thing at once. Every other camera-relative term keeps
+// using gPrimaryOrigin. Set beside it, so the same is true per pixel.
+float gNearPointY = 0.0;
 // This pixel's integer coordinate, in the same global-invocation space every
 // other per-pixel term uses. A GLOBAL rather than a parameter because
 // applyParticleFog needs it for its spatial dither and is reached through
@@ -700,6 +707,7 @@ void main() {
     gPrimaryOrigin    = camPos;
     gPrimaryDir       = camRayDir(ndc);
     gPixelCoord       = px;
+    gNearPointY       = camNearPoint(ndc).y;// this pixel's port point — MEDIUM tests only
     const float maxLod = float(max(pc.envMipCount, 1u) - 1u);
 
     const uint id = (msSampleIdx >= 0) ? texelFetch(gbufIdsMS, px, msSampleIdx).x
@@ -722,7 +730,14 @@ void main() {
         // (clouds sit in front of the infinite sky background). Physical
         // radiance shares the sky's value domain, so the skyPe scale below
         // carries the clouds too — consistent under the solid-bg bypass.
-        vec3 skyRad = applySkyFog(sampleEnvLod(dirWS, 0.0) + proceduralStars(dirWS), dirWS);
+        // SUBMERGED: an env miss is not the sky, it is the unbounded water
+        // column — applyMurkSky's infinite-murk limit replaces the whole sky
+        // dispatch (aerial perspective and stars included; both belong to an
+        // atmosphere this ray never reaches). Exact no-op above water or with
+        // no murk medium bound.
+        vec3 skyRad = camUnderwater()
+                    ? applyMurkSky(dirWS)
+                    : applySkyFog(sampleEnvLod(dirWS, 0.0) + proceduralStars(dirWS), dirWS);
         skyRad = compositeClouds(skyRad, px, 1e30);// upsampled half-res cloud layer over the sky
         // Dust in front of the sky. Without this the cloud is invisible against
         // the background and only reads where it covers geometry — the whole
@@ -745,8 +760,15 @@ void main() {
         // the night sky). Physical radiance → always pre-exposed.
         sky += (froxelInscatter(uv, kFroxelZMax)
               + volumetricSpotScatter(camPos, dirWS, 2000.0, px)
-              + volumetricDirScatter(camPos, dirWS, 2000.0, px)) * uintBitsToFloat(pc.preExpBits);
-        imageStore(outImage, px, vec4(sky, 1.0));
+              + volumetricDirScatter(camPos, dirWS, 2000.0, px)
+              // Shafts against open water: on a background pixel the murk march
+              // is the ONLY structure in the frame, so it is what stops the
+              // endless blue from being a flat gradient.
+              + murkSunScatter(camPos, dirWS, 2000.0, px)) * uintBitsToFloat(pc.preExpBits);
+        // Waterline band, if this pixel's port point sits within a centimetre of
+        // the surface (no-op otherwise — see applyMeniscus). Last, so it grades
+        // the finished pixel: it is water on the GLASS, in front of everything.
+        imageStore(outImage, px, vec4(applyMeniscus(sky, uintBitsToFloat(pc.preExpBits)), 1.0));
         imageStore(indirectImage, px, vec4(0.0));
         imageStore(shadowVisImage, px, vec4(0.0));// cold-start marker for the ping-pong
         imageStore(directUImage, px, vec4(0.0));
@@ -777,7 +799,14 @@ void main() {
                                       : applySceneFog(albedo, camPos, wpU), camPos, wpU),
                             camPos, (wpU - camPos) / max(distU, 1e-6), distU) * domWeight;
         if (skyEdgeW > 0.0) outU += skyEdgeW * skyBackground(ndc, camPos);
-        imageStore(outImage, px, vec4(outU * uintBitsToFloat(pc.preExpBits), 1.0));
+        // Murk sun shafts over the submerged part of this leg — a per-pixel
+        // view-ray integral, so full weight, after the coverage scale. (This
+        // path carries no other volumetric term; the murk march is added
+        // wherever applyMurk is, or an unlit surface would sit in front of
+        // shafts that stop at its silhouette.)
+        outU += murkSunScatter(camPos, (wpU - camPos) / max(distU, 1e-6), distU, px);
+        imageStore(outImage, px, vec4(applyMeniscus(outU * uintBitsToFloat(pc.preExpBits),
+                                                    uintBitsToFloat(pc.preExpBits)), 1.0));
         imageStore(indirectImage, px, vec4(0.0));
         imageStore(shadowVisImage, px, vec4(0.0));
         imageStore(directUImage, px, vec4(0.0));
@@ -969,8 +998,10 @@ void main() {
         wcol = compositeClouds(wcol, px, length(worldPos - camPos));// depth-aware cloud layer in front of the water
         wcol += froxelInscatter(uv, max(-(viewH.z / viewH.w), 0.0))
               + volumetricSpotScatter(camPos, -V, length(worldPos - camPos), px)
-              + volumetricDirScatter(camPos, -V, length(worldPos - camPos), px);
-        imageStore(outImage, px, vec4(wcol * uintBitsToFloat(pc.preExpBits), 1.0));
+              + volumetricDirScatter(camPos, -V, length(worldPos - camPos), px)
+              + murkSunScatter(camPos, -V, length(worldPos - camPos), px);// shafts under the surface
+        imageStore(outImage, px, vec4(applyMeniscus(wcol * uintBitsToFloat(pc.preExpBits),
+                                                    uintBitsToFloat(pc.preExpBits)), 1.0));
         imageStore(indirectImage, px, vec4(0.0));
         imageStore(reflectImage, px, vec4(0.0));// water shades its own reflection inline
         imageStore(shadowVisImage, px, vec4(0.0));// water shadows its own lighting inline
@@ -1558,7 +1589,10 @@ void main() {
         float cloudMeanDistUnused;
         const float cloudT = (clouds.enabled > 0.5)
                 ? cloudGather(px, length(worldPos - camPos), cloudMeanDistUnused).a : 1.0;
-        imageStore(outImage, px, vec4(base + lit * (msWeight * cloudT * uintBitsToFloat(pc.preExpBits)), 1.0));
+        // The waterline band applies to this minority sample too — but only its
+        // MULTIPLICATIVE half (tintScale 0): dispatch A already added the murk-
+        // colour pull once for this pixel, and the two adds would double it.
+        imageStore(outImage, px, vec4(base + applyMeniscus(lit * (msWeight * cloudT * uintBitsToFloat(pc.preExpBits)), 0.0), 1.0));
     } else {
         // Dispatch A: at a complex pixel, scale down by the dominant
         // cluster's population fraction and blend the SKY minority's
@@ -1580,8 +1614,10 @@ void main() {
         // minority coverage at every edge pixel — a dark fringe in fog.)
         outC += froxelInscatter(uv, max(-(viewH.z / viewH.w), 0.0))// clustered point-light glow
               + volumetricSpotScatter(camPos, -V, length(worldPos - camPos), px)// crisp spot beams
-              + volumetricDirScatter(camPos, -V, length(worldPos - camPos), px);// sun shafts / aerial glow
-        imageStore(outImage, px, vec4(outC * uintBitsToFloat(pc.preExpBits), 1.0));
+              + volumetricDirScatter(camPos, -V, length(worldPos - camPos), px)// sun shafts / aerial glow
+              + murkSunScatter(camPos, -V, length(worldPos - camPos), px);// the same, through water
+        imageStore(outImage, px, vec4(applyMeniscus(outC * uintBitsToFloat(pc.preExpBits),
+                                                    uintBitsToFloat(pc.preExpBits)), 1.0));
     }
     // Dispatch B never touches the GI/SVGF accumulator channels (indirect/
     // momentsImage) — those are dispatch-A-exclusive temporal state keyed to

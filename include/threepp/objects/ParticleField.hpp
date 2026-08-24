@@ -146,6 +146,31 @@ namespace threepp {
             float         uniformRadius = 0.01f;
             bool          orientations  = false;// allocate the snorm16x4 buffer
             bool          attributes    = false;
+            // ── Ownership::HostRing: the STABLE SLOT promise ────────────────
+            // The host declares that index i names the SAME particle in every
+            // submit — a fixed pool written in place, dead slots left in the
+            // buffer with w < 0, no compaction between frames. It costs the
+            // host nothing to say so when it is already true, and it buys the
+            // one thing a host-driven field otherwise cannot have: the previous
+            // ring slot becomes a genuine prevPositions buffer, so
+            // BillboardRepr::stretchSeconds (the velocity streak) works here
+            // exactly as it does for a Renderer field. Without it (pos -
+            // prevPos) would be the difference between two UNRELATED particles
+            // and the field would streak in every direction at once.
+            //
+            // A newly spawned slot has one frame of stale prevPos, because the
+            // slot's previous occupant is what the previous submit left there;
+            // the streak is bounded by BillboardRepr::stretchMax and is meant
+            // to be spent under a spawn fade-in. The renderer also drops the
+            // stretch for any frame whose two ring slots are not CONSECUTIVE
+            // submits (a frame the host skipped, a field just created) rather
+            // than smearing over a two-frame or backwards displacement — the
+            // sprite is simply round that frame.
+            //
+            // Ignored under Ownership::Renderer (which has real prevPositions)
+            // and under Ownership::Interop (whose slots are snapshots of a
+            // foreign buffer this class cannot make promises about).
+            bool          hostStableSlots = false;
         };
 
         // Representations. Each is opt-in, each is independently costed, and
@@ -314,6 +339,53 @@ namespace threepp {
             // that is the emitter's business, and this shader only draws what
             // the emitter wrote into w.
             float splashRingWidth = 0.30f;
+
+            // ── 4c: the SPRITE slice — alpha-over, and lit ──────────────────
+            // Two opt-in flags that together turn this representation from
+            // "emissive dot" into "a parcel of water/dust the sun shines on".
+            // Both default OFF and the additive path is byte-identical when
+            // they are: the pipeline, the vertex maths and the fragment output
+            // all branch on them and nothing else changes.
+            //
+            // alphaOver: composite premultiplied SRC_ALPHA-over instead of
+            // ONE/ONE. An additive sprite can only ever ADD light, so a white
+            // puff over a bright sky is invisible and the same puff over a dark
+            // hull is a lamp — the two failures that make additive dots read as
+            // a snow flurry rather than as water. Alpha-over OCCLUDES, which is
+            // what a chunk of aerated water does.
+            //
+            // ORDER. This pass sorts nothing (that is still true): draws are
+            // issued in field order and, within a field, instances in SLOT
+            // order, which Vulkan's primitive-order guarantee makes the blend
+            // order too. So a host that wants correct alpha-over submits its
+            // particles back-to-front — which for a few hundred sprites is one
+            // argsort. Documented rather than solved, deliberately: a device
+            // radix sort (SplatPass's) is the answer at 10^5 sprites, and this
+            // slice is for 10^2.
+            bool alphaOver = false;
+            // lit: per-vertex radiance = colour x (ambient + sun x phase(V.L))
+            // from the SCENE's sun and ambient, filled engine-side (the same
+            // one-sun policy the deferred path follows). Still not a lighting
+            // path — no shadow ray, no cluster walk, no per-fragment work: one
+            // Henyey-Greenstein lobe per particle, which is what makes a sheet
+            // of spray FLARE when the lens looks through it into the sun and go
+            // grey when the sun is behind the camera.
+            bool lit = false;
+            // HG asymmetry for that lobe. ~0.3-0.4 is the forward-ish, still
+            // half-isotropic scattering of a water parcel; 0 is isotropic.
+            float litPhaseG = 0.35f;
+            // An ambient radiance FLOOR, added to the scene's own summed
+            // AmbientLights in the same linear units. Not a scale on them: an
+            // IBL-lit scene usually carries no AmbientLight at all (the env map
+            // is the ambience, and this pass cannot sample it), so scaling zero
+            // would leave the shaded side of every sprite black. This is the
+            // one number that says how dark that side is allowed to get.
+            float litAmbient = 0.2f;
+            // Master coverage scale in alphaOver mode: the sprite's own alpha,
+            // before the procedural/texture falloff. Ignored when additive
+            // (there `intensity` is the only knob and coverage is folded into
+            // the radiance).
+            float opacity = 1.0f;
 
             bool enabled = false;
         };
@@ -687,7 +759,15 @@ namespace threepp {
         // positions are written by the foreign device API, and host data
         // submitted here would go nowhere — with ONE exception:
         // hostFallback() below.
-        void submit(const void* pxVec4Array, std::uint32_t n);
+        //
+        // `dtSec` is the interval this submit ADVANCED the pool over — the same
+        // role setEmitterTime's dt plays for a Renderer field, and used for the
+        // same one thing: turning BillboardRepr::stretchSeconds into a streak
+        // length under Config::hostStableSlots. Leave it 0 (the default) and
+        // the field assumes 1/60 s; it is only read when the stretch is on.
+        void submit(const void* pxVec4Array, std::uint32_t n, float dtSec = 0.f);
+        // Seconds the last submit advanced the pool over. See submit().
+        [[nodiscard]] float hostDt() const { return hostDt_; }
 
         // ── Ownership::Interop: the fallback leg ────────────────────────────
         // Set by the RENDERER, once, when it discovers that this device cannot
@@ -812,6 +892,8 @@ namespace threepp {
         bool          hostFallback_ = false;// Interop on a device that cannot export
 
         std::vector<ParticlePos> host_;
+        // Ownership::HostRing: what the last submit says its own step was.
+        float                     hostDt_ = 1.f / 60.f;
         std::vector<std::int16_t> ori_;// snorm16x4, 4 per particle
         std::uint64_t             oriSerial_ = 0;
 

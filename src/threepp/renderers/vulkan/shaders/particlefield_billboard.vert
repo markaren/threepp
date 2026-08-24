@@ -98,10 +98,15 @@ layout(buffer_reference, scalar, buffer_reference_align = 16) readonly buffer Bb
     float    splashR0;
     float    splashR1;
     float    splashRingWidth;// annulus width as a fraction of the ring radius
-    uint     _pad0;
-    uint     _pad1;
-    uint     _pad2;
+    // ── 4c: the sprite slice ────────────────────────────────────────────────
+    float    opacity;       // alphaOver coverage scale
+    float    litPhaseG;     // HG asymmetry for the lit lobe
+    float    litAmbient;    // ambient share of the lit radiance
 };
+// BbParams::flags bits.
+const uint kBbRadiusInW = 1u;
+const uint kBbAlphaOver = 2u;
+const uint kBbLit       = 4u;
 
 // ── F4: the per-VIEW record ─────────────────────────────────────────────────
 // Everything here is a property of the CAMERA and the FRAME, not of the field,
@@ -128,6 +133,21 @@ layout(buffer_reference, scalar, buffer_reference_align = 16) readonly buffer Bb
     float camWorldY;
     vec3  viewToWorldY; // world-Y row of the inverse view; reconstructs a
                         // particle's world Y from its VIEW-space position
+    // ── 4c: the scene's sun, for BillboardRepr::lit ─────────────────────────
+    // The lights UBO is a descriptor set this pass deliberately does not own,
+    // and the sun is three floats — so the renderer snapshots the brightest
+    // scene DirectionalLight (the same one-sun the deferred path shades with)
+    // here, per view per frame. Already rotated into VIEW space by the host:
+    // this stage has the view-space particle position and no way back to world
+    // (only the world-Y ROW of the inverse view is carried), so the one vector
+    // that has to change basis is transformed once on the CPU rather than
+    // reconstructed per vertex.
+    vec3  sunDir;       // VIEW space, TOWARD the sun
+    float _pad0;
+    vec3  sunRadiance;  // linear, colour x intensity; 0 = the scene has no sun
+    float _pad1;
+    vec3  ambient;      // the scene's summed AmbientLights
+    float _pad2;
 };
 const uint kViewFogActive = 1u;
 const uint kViewLinearOut = 2u;
@@ -155,6 +175,19 @@ layout(location = 4) flat out uint  vToneMap;
 // F5: > 0 turns the sprite into an ANNULUS of this fractional width — a splash
 // ring. 0 is the ordinary soft disc and costs the fragment stage one compare.
 layout(location = 5) flat out float vRing;
+// 4c: bit0 = composite alpha-over (premultiplied) rather than additive. Flat,
+// so the fragment stage's branch is uniform over the whole draw.
+layout(location = 6) flat out uint  vMode;
+// 4c: the sprite's own coverage scale in alpha-over mode — the field opacity
+// times everything that used to dim the RADIANCE (fog transmittance, near fade,
+// LOD, life fade). An occluding sprite fades by becoming TRANSPARENT, not by
+// becoming dark: a dimmed opaque puff is a grey puff, which is the single most
+// obvious tell of fake spray.
+layout(location = 7) flat out float vCover;
+// 4c: rotation of the sprite's texture lookup, hashed per slot. Two floats
+// rather than an angle so the fragment stage does no trig.
+layout(location = 8) flat out vec2  vRot;
+const uint kModeAlphaOver = 1u;
 
 // ── The hash ────────────────────────────────────────────────────────────────
 // Bit-for-bit particle_emit.comp's hashU/rnd01, which is itself bit-for-bit
@@ -254,7 +287,7 @@ void main() {
     // Radius. Under WSemantic::Radius the emitter wrote each particle's own
     // radius into w, which is where SIZE VARIETY comes from at zero cost; under
     // InvMass w says nothing about size and the field's uniformRadius stands in.
-    float radius = (((P.flags & 1u) != 0u) ? pw.w : P.uniformRadius) * P.sizeScale;
+    float radius = (((P.flags & kBbRadiusInW) != 0u) ? pw.w : P.uniformRadius) * P.sizeScale;
     radius *= max(1.0 - P.sizeTaper * ageFrac, 0.0);
 
     const vec3 vp = viewOf(vec4(pw.xyz, 1.0));
@@ -440,9 +473,65 @@ void main() {
     // host skips it, so this multiply is never reached with a zero).
     const float outScale = ((V.flags & kViewLinearOut) != 0u) ? P.glow : 1.0;
 
-    vColor = vec4(mix(P.colorHot, P.colorCool, cf) *
-                          (P.intensity * fade * bj * distFade * outScale),
-                  cull ? 0.0 : 1.0);
+    // ── 4c: the LIT term ────────────────────────────────────────────────────
+    // ONE Henyey-Greenstein lobe about the scene's sun, evaluated per particle.
+    // Not a lighting path and not pretending to be one: no shadow ray, no
+    // cluster walk, no per-fragment work. What it buys is the one thing an
+    // emissive sprite categorically cannot do — a sheet of spray FLARES when
+    // the lens looks through it into the sun and goes flat grey when the sun is
+    // behind the camera, and that swing is most of what says "water in air"
+    // rather than "white dot". The ambient floor is what the shaded side sits
+    // at, so the sprite never goes black.
+    //
+    // The particle is treated as an isotropic scattering parcel with no
+    // self-shadowing and no transmittance from the sun to it: a spray puff is
+    // optically thin and metres across at most. Written down as an
+    // approximation rather than hidden.
+    vec3 lit = vec3(1.0);
+    if ((P.flags & kBbLit) != 0u) {
+        const vec3  rd = (camDist > 1e-6) ? (vp / camDist) : vec3(0.0, 0.0, -1.0);
+        const float ct = clamp(dot(rd, V.sunDir), -1.0, 1.0);
+        const float g  = P.litPhaseG;
+        const float dn = 1.0 + g * g - 2.0 * g * ct;
+        // The 1/4pi of the true phase function is folded away: this multiplies
+        // an authored radiance, so an absolute normalisation would only mean
+        // authoring 12.57x bigger numbers.
+        const float hg = (1.0 - g * g) / max(pow(max(dn, 1e-4), 1.5), 1e-4);
+        lit = V.ambient + vec3(P.litAmbient) + V.sunRadiance * hg;
+    }
+
+    // ── 4c: alpha-over vs additive ──────────────────────────────────────────
+    // The SAME radiance, split between the two channels differently. Additive
+    // folds every dimming factor into the colour, because the only thing it can
+    // do to the frame buffer is add less. Alpha-over folds them into COVERAGE
+    // instead: a distant, fogged or dying sprite is more transparent, not
+    // darker, which is the whole reason this mode exists.
+    //
+    // The additive branch is written as the ORIGINAL expression with one `*
+    // lit` inserted, and `lit` is exactly vec3(1.0) when the flag is off — a
+    // multiply by exactly 1.0 is exact in IEEE, so an unlit additive field
+    // still produces bit-identical radiance. That is the regression contract
+    // for this whole change, and it is why the two branches are not factored.
+    const bool alphaOver = (P.flags & kBbAlphaOver) != 0u;
+    if (alphaOver) {
+        vColor = vec4(mix(P.colorHot, P.colorCool, cf) * lit *
+                              (P.intensity * bj * outScale),
+                      cull ? 0.0 : 1.0);
+        vCover = cull ? 0.0 : (P.opacity * fade * distFade);
+        vMode  = kModeAlphaOver;
+    } else {
+        vColor = vec4(mix(P.colorHot, P.colorCool, cf) * lit *
+                              (P.intensity * fade * bj * distFade * outScale),
+                      cull ? 0.0 : 1.0);
+        vCover = 1.0;
+        vMode  = 0u;
+    }
+    // Rotation of the TEXTURE lookup, hashed per slot. Four puff variants drawn
+    // at one orientation tile visibly; the same four at a hashed angle do not,
+    // and a rotation is two hashed floats against a per-particle atlas index
+    // this pass does not carry.
+    const float ra = rnd01(pi, 31u, P.seed) * 6.2831853;
+    vRot = alphaOver ? vec2(cos(ra), sin(ra)) : vec2(1.0, 0.0);
     vLocal = c;
     vSoft  = clamp(P.softness, 0.0, 1.0);
     // The display transform. In the glow pass the fragment stage must NOT apply

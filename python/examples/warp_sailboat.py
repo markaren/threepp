@@ -37,6 +37,18 @@ The gulls are threepp's own ambient flock (extras/fauna): boids that fly, bank
 into their turns, and land. The islet is scanned for landable rock at startup,
 so they sit on it between flights and scatter when the boat runs them down.
 
+The water is a MEDIUM, not a surface. Below mean sea level the renderer swaps
+air for a Beer-Lambert murk with its own in-scatter, and a submerged lens gets
+the whole picture: Snell's window overhead (the entire sky refracted into a 97
+deg cone, everything outside it a total-internal mirror), the endless blue below,
+and the sun marched through the column with a real shadow ray per step, so the
+hull and the keel carve the shafts. Two shots at noon go under -- the lens drops
+through the surface, then pushes in beneath her. A school of 150 low-poly fish
+swims there as one merged buffer geometry that is rewritten every frame (boids,
+plus a travelling lateral wave whose local slope turns each cross-section, which
+is what makes a fish read as a fish and not a sliver), and the shafts pick out
+twenty thousand motes of marine snow.
+
 The islet and its lighthouse are procedural -- a ridged-noise crag emitted as a
 non-indexed soup so every triangle keeps its own normal (hard facets; the usual
 `flatShading` lever is a no-op on the Vulkan backend), and a lofted surface of
@@ -68,6 +80,7 @@ simulation never stops.
     python warp_sailboat.py --birds 60          # more gulls
     python warp_sailboat.py --timelapse             # run the day in time-lapse
     python warp_sailboat.py --shot 25 --tod 23.5 --weather night --out night.png
+    python warp_sailboat.py --shot 6 --face under --tod 12.74 --weather clear
     python warp_sailboat.py --gif readme.gif --face gif --drone --tod 19.7 --weather clearing --start -22,32
     python warp_sailboat.py --film film.mp4 --contact        # the whole picture
     python warp_sailboat.py --film min.mp4 --cut short --contact   # the one-minute cut
@@ -140,6 +153,11 @@ FILM_SHOTS = cli_arg("--shots", "", str)          # "4-7" = a flat shot range
 FILM_CUT = cli_arg("--cut", "full", str)          # "short" = the one-minute cut
 WARMUP = int(cli_arg("--warmup", 50, float))      # unrecorded frames after a cut
 PREROLL = int(cli_arg("--preroll", 6.0 * FPS, float))  # unrecorded, before shot 0
+# `--stills PREFIX` also writes every --stills-every-th RECORDED frame of each
+# shot as a lossless PNG: a shot is judged at native scale on a still, and an
+# h.264 frame out of the mp4 is not that.
+STILLS = cli_arg("--stills", "", str)
+STILLS_EVERY = int(cli_arg("--stills-every", 30, float))
 
 # ---- the drone's sensors ------------------------------------------------------
 #  The short cut's FPV leg shows what the drone's camera SEES three ways: the
@@ -1507,13 +1525,43 @@ ocean = tp.Ocean(size=SEA, resolution=640, wind_speed=weather["wind"], wind_thet
 scene.add(ocean)
 
 # Dark water below the surface so refraction has something to read against.
+# Six metres down is a lagoon, not the North Sea, but it is the depth that makes
+# the sea read as water rather than as a mirror from ABOVE. A submerged lens
+# would see it as a seabed two metres under its own keel, so the underwater
+# shots sink it out of the murk's reach -- a transform, not a rebuild.
+FLOOR_Y_SHALLOW, FLOOR_Y_DEEP = -6.0, -55.0
 floor_mat = tp.MeshStandardMaterial()
 floor_mat.color = 0x04070a
 floor_mat.roughness = 1.0
 floor = tp.Mesh(tp.PlaneGeometry(SEA, SEA), floor_mat)
 floor.rotate_x(-math.pi / 2)
-floor.position.y = -6.0
+floor.position.y = FLOOR_Y_SHALLOW
 scene.add(floor)
+
+# ---- the water as a MEDIUM ---------------------------------------------------
+#  Below the waterline the renderer stops being in air. `set_fog_water_surface_y`
+#  says where the waterline is and `set_underwater_murk` gives the column its
+#  Beer-Lambert extinction and the colour of its ambient in-scatter. Both are on
+#  for the WHOLE film: the engine clips the murk to the below-surface leg of a
+#  ray and the air medium to the above-surface leg, so an above-water shot only
+#  gains a more honest through-surface look (the sea has a colour of its own
+#  instead of being a dark mirror), while a submerged lens gets the endless
+#  blue, Snell's window overhead and the sun shafts for nothing.
+#
+#  Tuning note: for DEEPER, darker water bring the murk COLOUR's luminance down
+#  before raising the density -- the ambient in-scatter is keyed on the env mean,
+#  so a denser column of a bright colour just gets foggier, not deeper.
+#  `--no-underwater` takes the whole thing back out -- media, school and motes --
+#  which is how an above-water shot is A/B'd against the film as it was before
+#  the water became a medium.
+UNDERWATER = "--no-underwater" not in sys.argv
+WATER_Y = 0.0
+MURK_SIGMA = 0.17
+MURK_COLOR = tp.Color(0.022, 0.115, 0.155)
+UW_FOAM = 0.18               # what is left of the whitecaps while the lens is under
+if UNDERWATER:
+    renderer.set_fog_water_surface_y(WATER_Y)
+    renderer.set_underwater_murk(MURK_SIGMA, MURK_COLOR)
 
 # ---- the islet and its light ----------------------------------------------- #
 #  A crag with a lighthouse on it -- the one thing on this horizon that is not
@@ -2550,6 +2598,361 @@ gulls.bake_perches_blocking(islet)      # the rock and the gallery are landable
 gulls.set_disturbance_source(boat)      # they scatter when she runs them down
 print(f"islet: {gulls.perch_count()} perches on the rock")
 
+# --------------------------------------------------------------------------- #
+#  Underwater life: a school of fish, and the particulate the shafts light up.
+#
+#  The gulls are threepp's own Flock, which is a BIRD (it perches, it beats its
+#  wings, it lands) -- a fish is none of those things, so the school is its own
+#  thing: boids in numpy over ONE merged BufferGeometry whose positions and
+#  normals are rewritten every frame, exactly the way the Warp sails are pushed
+#  (`update_attribute` + `frustum_culled = False`).
+#
+#  What makes it read as a fish rather than as a drifting sliver is that the
+#  body BENDS. A travelling lateral wave runs from about a fifth of the way back
+#  to the tail tip, amplitude growing as the square of the distance aft, and the
+#  cross-sections are rotated by the LOCAL SLOPE of that wave -- so the flanks
+#  turn with the body and catch the shafts one after another down its length,
+#  which is the whole silver-flash cue. Beat frequency scales with speed.
+# --------------------------------------------------------------------------- #
+FISH_N = 150
+FISH_LEN = 0.27              # mean fork length, m
+FISH_RINGS, FISH_SIDES = 6, 6
+FISH_PARK = -9000.0          # parked by TRANSFORM, never by `visible` -- see the drone
+FISH_WAVE_K = 5.2            # radians of wave per body length
+FISH_BEAT = 1.35             # tail beats per second per (m/s) of speed
+FISH_AMP = 0.052             # tail-tip sweep, in body lengths, at cruise
+
+
+def _fish_body():
+    """One fish: a fusiform tube, a peduncle cap, a caudal fin and a dorsal.
+
+    Local frame is the boat's: +Z is forward (the nose), +Y up. Returns
+    (positions, normals, indices) for a single animal at unit body length.
+    """
+    u = np.linspace(0.0, 1.0, FISH_RINGS)            # 0 nose, 1 tail root
+    prof = np.sin(np.pi * np.clip(u, 0.0, 1.0) ** 0.62) ** 0.72
+    girth = prof * (1.0 - 0.55 * u) + 0.055 * u ** 2  # thick shoulders, thin peduncle
+    girth = girth / max(float(girth.max()), 1e-6)
+    hw, hh = girth * 0.058, girth * 0.100            # taller than wide, and slim
+    z = 0.5 - u                                      # nose +0.5, tail root -0.5
+    ang = np.linspace(0.0, 2.0 * np.pi, FISH_SIDES, endpoint=False)
+    v = np.stack([(hw[:, None] * np.cos(ang)[None, :]).ravel(),
+                  (hh[:, None] * np.sin(ang)[None, :]).ravel()
+                  - np.repeat(girth * 0.012, FISH_SIDES),      # a little belly
+                  np.repeat(z, FISH_SIDES)], 1)
+    tri = []
+    for i in range(FISH_RINGS - 1):
+        for j in range(FISH_SIDES):
+            k = (j + 1) % FISH_SIDES
+            a, b = i * FISH_SIDES + j, i * FISH_SIDES + k
+            c, d = a + FISH_SIDES, b + FISH_SIDES
+            tri += [[a, c, b], [b, c, d]]
+    base = (FISH_RINGS - 1) * FISH_SIDES
+    cap = len(v)                                      # close the peduncle
+    v = np.concatenate([v, [[0.0, -girth[-1] * 0.012, z[-1]]]])
+    for j in range(FISH_SIDES):
+        tri.append([base + j, cap, base + (j + 1) % FISH_SIDES])
+    f0 = len(v)                                       # caudal fin, in the x = 0 plane
+    v = np.concatenate([v, [[0.0, 0.030, -0.50], [0.0, -0.030, -0.50],
+                            [0.0, 0.170, -0.66], [0.0, -0.170, -0.62]]])
+    tri += [[f0, f0 + 2, f0 + 1], [f0 + 1, f0 + 2, f0 + 3]]
+    d0 = len(v)                                       # dorsal
+    v = np.concatenate([v, [[0.0, hh[2] * 0.9, z[2]], [0.0, hh[4] * 0.9, z[4]],
+                            [0.0, hh[3] + 0.075, z[3]]]])
+    tri.append([d0, d0 + 1, d0 + 2])
+    idx = np.asarray(tri, np.uint32).reshape(-1)
+    # Area-weighted vertex normals of the canonical pose; the per-frame bend
+    # rotates them with the section, so this is computed exactly once.
+    t = v[idx.reshape(-1, 3)]
+    fn = np.cross(t[:, 1] - t[:, 0], t[:, 2] - t[:, 0])
+    n = np.zeros_like(v)
+    for c in range(3):
+        np.add.at(n, idx.reshape(-1, 3)[:, c], fn)
+    n /= np.maximum(np.linalg.norm(n, axis=1, keepdims=True), 1e-9)
+    return v.astype(np.float64), n, idx
+
+
+_FV, _FN, _FI = _fish_body()
+FISH_V = len(_FV)
+_frng = np.random.default_rng(20260824)
+# Per-fish size jitter, tail phase and a beat-rate spread, so the school does
+# not pulse as one animal.
+_f_len = FISH_LEN * _frng.uniform(0.72, 1.34, FISH_N)
+_f_phase = _frng.uniform(0.0, 2.0 * np.pi, FISH_N)
+_f_rate = _frng.uniform(0.85, 1.20, FISH_N)
+_f_pos = np.zeros((FISH_N, 3))
+_f_vel = np.zeros((FISH_N, 3))
+_f_yaw = np.zeros(FISH_N)
+_f_roll = np.zeros(FISH_N)
+_f_beat = np.zeros(FISH_N)          # integrated tail phase, so a speed change does not jump it
+_f_bait = np.array([0.0, -4.5, 0.0])
+
+# The wave along the body, and its slope. `_fu` is 0 at the nose and 1 at the
+# tail root (and a little over 1 out on the fin), which is the coordinate the
+# amplitude envelope and the phase both run in.
+_fu = 0.5 - _FV[:, 2]
+_fa = np.clip(_fu - 0.18, 0.0, None) ** 2 / (1.0 - 0.18) ** 2
+_fda = 2.0 * np.clip(_fu - 0.18, 0.0, None) / (1.0 - 0.18) ** 2
+
+def fish_scatter(centre):
+    """Put the whole school around `centre` -- a cut, not a swim."""
+    global _f_bait
+    _f_bait = np.asarray(centre, float).copy()
+    _f_pos[:] = centre + _frng.normal(0.0, 1.0, (FISH_N, 3)) * np.array([1.9, 0.8, 1.9])
+    _f_pos[:, 1] = np.clip(_f_pos[:, 1], -9.0, -1.4)
+    hd = _frng.uniform(0.0, 2.0 * np.pi, FISH_N)
+    _f_vel[:] = np.stack([np.sin(hd), np.zeros(FISH_N), np.cos(hd)], 1) * 1.1
+
+
+FISH_NEI, FISH_SEP = 2.6, 0.62       # m: schooling radius, personal space
+FISH_SPEED = (0.55, 2.9)
+
+
+def fish_step(dt, boat_pos, boat_fwd, cam_pos):
+    """Boids, then the bend. Everything here is (FISH_N, ...) numpy."""
+    global _f_bait
+    dt = min(dt, 1.0 / 20.0)
+    # The bait ball drifts along under her quarter and swings across her track,
+    # so the school CROSSES the frame instead of sitting in a corner of it.
+    side = np.array([boat_fwd[2], 0.0, -boat_fwd[0]])
+    want = boat_pos + boat_fwd * -0.8 + side * (1.8 * math.sin(world_time * 0.16))
+    want[1] = -2.7 + 0.8 * math.sin(world_time * 0.13)
+    # A quarter of a second of smoothing, no more: she does two metres a second,
+    # so a two-second lag here leaves the school five metres astern of the shot.
+    _f_bait += (want - _f_bait) * (1.0 - math.exp(-dt / 0.25))
+
+    d = _f_pos[None, :, :] - _f_pos[:, None, :]
+    r2 = np.einsum("ijk,ijk->ij", d, d)
+    np.fill_diagonal(r2, 1e9)
+    near = (r2 < FISH_NEI ** 2).astype(np.float64)
+    cnt = np.maximum(near.sum(1), 1.0)[:, None]
+    coh = np.einsum("ij,ijk->ik", near, d) / cnt                     # toward neighbours
+    ali = (near @ _f_vel) / cnt - _f_vel
+    tight = (r2 < FISH_SEP ** 2).astype(np.float64)
+    sep = -np.einsum("ij,ijk->ik", tight / np.maximum(r2, 1e-3), d)
+
+    acc = coh * 1.30 + ali * 2.10 + sep * 0.85
+    acc += (_f_bait - _f_pos) * 0.55
+    # The lid and the floor. A fish that hits the surface from underneath is a
+    # fish that has jumped, so the ceiling is firm and the floor is soft.
+    acc[:, 1] += 5.0 * np.clip(-0.9 - _f_pos[:, 1], -1.0, 0.0)
+    acc[:, 1] += 0.9 * np.clip(-12.0 - _f_pos[:, 1], 0.0, 3.0)
+    # Startle: off the keel, and off the lens when it comes at them. Gently --
+    # the bait ball rides WITH the boat, so a hard keel repulsion just blows the
+    # school out into a shell four metres off her and empties the frame.
+    for src, rad, gain in ((boat_pos, 2.6, 4.5), (cam_pos, 1.8, 7.0)):
+        dv = _f_pos - src
+        dist = np.linalg.norm(dv, axis=1, keepdims=True)
+        acc += dv / np.maximum(dist, 1e-3) * np.clip(1.0 - dist / rad, 0.0, 1.0) * gain
+
+    _f_vel[:] += acc * dt
+    sp = np.linalg.norm(_f_vel, axis=1, keepdims=True)
+    _f_vel[:] *= np.clip(sp, *FISH_SPEED) / np.maximum(sp, 1e-6)
+    _f_pos[:] += _f_vel * dt
+    _f_pos[:, 1] = np.clip(_f_pos[:, 1], -14.0, -0.55)
+
+    p, n = fish_pose(dt)
+    fish_geom.update_attribute("position", p)
+    fish_geom.update_attribute("normal", n)
+
+
+def fish_pose(dt):
+    """The school's current state as (FISH_N * FISH_V, 3) position / normal."""
+    # ---- pose: heading from the velocity, bank from the turn rate ----------
+    sp = np.maximum(np.linalg.norm(_f_vel, axis=1), 1e-6)
+    v = _f_vel / sp[:, None]
+    yaw = np.arctan2(v[:, 0], v[:, 2])
+    pit = -np.arcsin(np.clip(v[:, 1], -1.0, 1.0))
+    dyaw = (yaw - _f_yaw + np.pi) % (2.0 * np.pi) - np.pi
+    _f_yaw[:] = yaw
+    _f_roll[:] += (np.clip(-1.6 * dyaw / max(dt, 1e-4), -0.7, 0.7) - _f_roll) \
+        * (1.0 - math.exp(-dt / 0.18))
+
+    # ---- the bend ----------------------------------------------------------
+    _f_beat[:] += dt * (2.0 * np.pi * FISH_BEAT * _f_rate * (0.45 + sp))
+    ph = FISH_WAVE_K * _fu[None, :] - _f_beat[:, None] + _f_phase[:, None]
+    sn, cn = np.sin(ph), np.cos(ph)
+    amp = (FISH_AMP * (0.55 + 0.45 * sp / FISH_SPEED[1]))[:, None]
+    s = amp * _fa[None, :] * sn
+    # d(lateral)/dz. `_fu` runs the other way from z, hence the leading sign.
+    th = np.arctan(-amp * (_fda[None, :] * sn + _fa[None, :] * FISH_WAVE_K * cn))
+    ct, st = np.cos(th), np.sin(th)
+
+    px = s + _FV[None, :, 0] * ct
+    py = np.broadcast_to(_FV[None, :, 1], px.shape)
+    pz = _FV[None, :, 2] - _FV[None, :, 0] * st
+    nx = _FN[None, :, 0] * ct + _FN[None, :, 2] * st
+    ny = np.broadcast_to(_FN[None, :, 1], px.shape)
+    nz = -_FN[None, :, 0] * st + _FN[None, :, 2] * ct
+    p = np.stack([px, py, pz], 2) * _f_len[:, None, None]
+    n = np.stack([nx, ny, nz], 2)
+
+    cy, sy = np.cos(_f_yaw), np.sin(_f_yaw)
+    cp_, sp_ = np.cos(pit), np.sin(pit)
+    cr, sr = np.cos(_f_roll), np.sin(_f_roll)
+    # R = Ry(yaw) Rx(pitch) Rz(roll), the same order as yxz_matrix().
+    r = np.empty((FISH_N, 3, 3))
+    r[:, 0, 0] = cy * cr + sy * sp_ * sr
+    r[:, 0, 1] = -cy * sr + sy * sp_ * cr
+    r[:, 0, 2] = sy * cp_
+    r[:, 1, 0] = cp_ * sr
+    r[:, 1, 1] = cp_ * cr
+    r[:, 1, 2] = -sp_
+    r[:, 2, 0] = -sy * cr + cy * sp_ * sr
+    r[:, 2, 1] = sy * sr + cy * sp_ * cr
+    r[:, 2, 2] = cy * cp_
+    out = np.einsum("fij,fvj->fvi", r, p) + _f_pos[:, None, :]
+    return (np.ascontiguousarray(out.reshape(-1, 3), np.float32),
+            np.ascontiguousarray(np.einsum("fij,fvj->fvi", r, n).reshape(-1, 3),
+                                 np.float32))
+
+
+# Silver. metalness buys the flank flash off the shafts; a fully dielectric fish
+# is a grey sliver. Double-sided because the fins are single-triangle plates.
+#
+# The geometry is created with a REAL first pose, not with zeros: a dynamic mesh
+# whose first upload is 6600 coincident vertices builds a degenerate BLAS, and
+# what a per-frame `update_attribute` does to it afterwards is a refit, not a
+# rebuild.
+fish_scatter(np.array([START_X, -3.2, START_Z]))
+_fp0, _fn0 = fish_pose(1.0 / 60.0)
+fish_mat = standard_material(0xa8b7bd, 0.34, 0.32, side=tp.Side.Double)
+fish_geom = tp.BufferGeometry()
+fish_geom.set_attribute("position", _fp0)
+fish_geom.set_attribute("normal", _fn0)
+fish_geom.set_index(np.ascontiguousarray(
+    (_FI[None, :] + (np.arange(FISH_N, dtype=np.uint32) * FISH_V)[:, None]).reshape(-1)))
+fish = tp.Mesh(fish_geom, fish_mat)
+fish.frustum_culled = False          # the positions change under the renderer's feet
+fish.cast_shadow = False             # 150 x 69 tris of RT shadow caster for 27 cm of fish
+fish.receive_shadow = True
+fish.position.y = FISH_PARK
+scene.add(fish)
+
+
+# ---- motes -------------------------------------------------------------------
+#  Marine snow. The same recipe as the rain -- one field at its final capacity,
+#  Renderer ownership, an analytic emitter, parked with set_live_count(0) -- but
+#  the slab is a COLUMN of water around the lens instead of a plane above it,
+#  and it is authored entirely below y = 0 so nothing ever floats in the air.
+#  `follow` only wraps laterally (Y is never wrapped), which is exactly right
+#  here: the depth of a mote is a physical fact, its position around the camera
+#  is not. particle.frag already applies the murk to them, so they fade into the
+#  blue with distance for free.
+MOTE_CAP = 20_000
+MOTE_HALF = 9.0                      # lateral wrap period / 2
+MOTE_TOP, MOTE_BOTTOM = 0.0, -13.0
+
+_uc = tp.ParticleField.Config()
+_uc.capacity = MOTE_CAP
+_uc.ownership = tp.ParticleField.Ownership.Renderer
+_uc.w_semantic = tp.ParticleField.WSemantic.Radius
+_uc.uniform_radius = 0.007
+motes = tp.ParticleField.create(_uc)
+motes.frustum_culled = False
+MOTE_BASE = 0.055
+motes.set_billboard_repr(tp.Color(0.80, 0.90, 0.86), tp.Color(0.52, 0.72, 0.74),
+                         MOTE_BASE, 1.0)
+_mb = motes.billboard_repr
+_mb.lod_near = 0.0
+_mb.lod_fade = 0.0
+_mb.stretch_seconds = 0.0            # suspended, not falling: a round sprite
+_mb.softness = 0.85
+_mb.fade_power = 0.0
+_mb.size_taper = 0.0
+_mb.near_fade = 0.35
+_mb.bright_jitter = 0.75             # a few bright flecks carry the shafts
+_mb.glow = 0.0
+
+_me = motes.emitter
+_me.spawn_center = tp.Vector3(0.0, 0.5 * (MOTE_TOP + MOTE_BOTTOM), 0.0)
+_me.spawn_half_extent = tp.Vector3(MOTE_HALF, 0.5 * (MOTE_TOP - MOTE_BOTTOM), MOTE_HALF)
+_me.velocity = tp.Vector3(0.0, 0.022, 0.0)     # the faintest upwelling
+_me.speed_spread = 0.012
+_me.wind = tp.Vector3(0.045, 0.0, 0.020)
+_me.drift_amplitude = 0.10                     # the curl that says "water", not "dust"
+_me.drift_frequency = 0.13
+_me.drift_scale = 3.5
+_me.lifetime = 40.0
+_me.duty_cycle = 1.0
+_me.size = 0.007
+_me.size_jitter = 0.70
+_me.seed = 20260824
+_me.follow = True
+_me.follow_snap = 0.0
+motes.set_emitter(_me)
+motes.set_emitter_time(0.0, 1.0 / 60.0)
+motes.set_live_count(0)
+scene.add(motes)
+
+_uw_on = False
+_uw_water_y = WATER_Y
+
+
+def underwater_wanted():
+    """Is the lens in the water this frame?
+
+    In the film this is a SHOT PROPERTY, not a measurement: the school and the
+    motes must already be swimming when the first recorded frame of an
+    underwater shot lands, and an above-water shot must never pay for them
+    because the swell happened to lift the water over a skimming lens.
+    """
+    if not UNDERWATER:
+        return False
+    if film_mode:
+        return _cur_shot is not None and bool(_cur_shot.p.get("uw", False))
+    return camera.position.y < 1.2
+
+
+def waterline_shot():
+    return film_mode and _cur_shot is not None and _cur_shot.kind == "waterline"
+
+
+def update_underwater(dt):
+    global _uw_on, _uw_water_y
+    want = underwater_wanted()
+    # WHERE the waterline is, this frame. Mean sea level is right for a shot
+    # that never goes near it, but a lens AT the surface is split by the wave
+    # actually under it: half a metre of swell against a 5 cm port means the
+    # local height is the only one that can put the line in the frame at all.
+    # Same mirror the buoys read, so the split and the boat ride one sea.
+    wy = WATER_Y
+    if want and first_render_done:
+        cp = camera.position
+        wy = float(ocean.sample_height(cp.x, cp.z))
+    if UNDERWATER and wy != _uw_water_y:
+        _uw_water_y = wy
+        renderer.set_fog_water_surface_y(wy)
+    if want != _uw_on:
+        _uw_on = want
+        # Transforms and a live count. No visibility flip, no field resize:
+        # both are structural changes and both would clear the TAA history on
+        # the cut frame.
+        floor.position.y = FLOOR_Y_DEEP if want else FLOOR_Y_SHALLOW
+        fish.position.y = 0.0 if want else FISH_PARK
+        motes.set_live_count(MOTE_CAP if want else 0)
+        # Foam is a bubble layer, not a film: it scatters from UNDERNEATH too,
+        # and the engine composites it outside the murk, so from below a
+        # whitecap twenty metres off prints as a white streak that no amount of
+        # water in front of it dims. Take the sea's foam down while the lens is
+        # under and the surface goes back to being water.
+        _applied["whitecap"] = None
+        if want:
+            fish_scatter(np.array([boat_state["x"], -4.6, boat_state["z"]]))
+    if not want:
+        return
+    cy, sy = math.cos(boat_state["yaw"]), math.sin(boat_state["yaw"])
+    cp = camera.position
+    fish_step(dt, np.array([boat_state["x"], -1.1, boat_state["z"]]),
+              np.array([sy, 0.0, cy]), np.array([cp.x, cp.y, cp.z]))
+    motes.set_follow_center(tp.Vector3(cp.x, cp.y, cp.z))
+    motes.set_emitter_time(world_time, dt)
+    # Additive quads are composited after the upscalers and are NOT exposed by
+    # auto exposure, so their brightness walks with the depth the lens is at:
+    # a mote 10 m down has to survive the same lift the meter gives the murk.
+    motes.billboard_repr.intensity = MOTE_BASE * (1.0 + 0.9 * min(max(-cp.y, 0.0), 8.0) / 8.0)
+
+
 set_pin_targets(boat_state["boom"], boat_state["jib"])
 for s in SAILS:
     s.push_pins()
@@ -3176,9 +3579,13 @@ def update_world(dt):
     # the TAIL of the fold distribution, so the knob has to come DOWN as the sea
     # gets up, not up -- the storm preset leaves only the genuinely breaking
     # crests and the wind streaks over dark slate.
-    if _applied["whitecap"] is None or abs(weather["whitecap"] - _applied["whitecap"]) > 0.005:
-        _applied["whitecap"] = weather["whitecap"]
-        ocean.params.foam_amount = weather["whitecap"]
+    # ... except at the WATERLINE, where the foam is on the line and in front of
+    # the lens rather than twenty metres off and seen through the murk: there it
+    # is the surface reading as a surface, which is the shot.
+    wcap = weather["whitecap"] * (UW_FOAM if (_uw_on and not waterline_shot()) else 1.0)
+    if _applied["whitecap"] is None or abs(wcap - _applied["whitecap"]) > 0.005:
+        _applied["whitecap"] = wcap
+        ocean.params.foam_amount = wcap
 
     # ---- the light on the rock ---------------------------------------------
     global _night_level
@@ -3228,6 +3635,7 @@ def update_world(dt):
 
     apply_wetness(weather["wetness"])
     update_lightning(dt)
+    update_underwater(dt)
     return cs
 
 
@@ -3473,6 +3881,35 @@ def _handheld(t, amp_deg):
                  + 0.15 * math.sin(t * 5.3 + 3.3)))
 
 
+# ---- the waterline: a housing floating on the surface ----------------------- #
+#  Half-in / half-out is a LENS effect, and the renderer models it as one: the
+#  medium is decided per pixel at the NEAR PLANE, which for this camera spans
+#  about +-5 cm around the eye. So the whole shot lives inside five centimetres.
+#  Park the lens at mean sea level in a half-metre swell and the port is metres
+#  under or metres clear for seconds at a time -- the split would flash on and
+#  off, not ride.
+#
+#  What actually rides is a floating housing: it follows the SWELL (the long
+#  cascades, the same BUOY_MASK the hull's hydrostatics ride) and lets the CHOP
+#  run up and down the glass. That residual is centimetres by construction --
+#  the scale the near plane can resolve -- and it is wave-driven, so the line
+#  sweeps with the sea instead of on a scripted sine. Clamped to the port so a
+#  steep little crest cannot flood the frame or drop it wholly dry.
+WL_PORT = 0.035        # metres of residual the port can show, either way
+WL_CHOP = 1.6          # gain on it: the fine cascade alone is a quiet line
+
+
+def waterline_eye_y(x, z, trim=0.0):
+    """Lens height for a housing floating at (x, z). `trim` raises the housing,
+    which drops the split DOWN the frame (more sky, less water)."""
+    if not first_render_done:                    # the height mirror is empty yet
+        return trim
+    h_all = float(ocean.sample_height(x, z))              # the surface as it is
+    h_swell = float(ocean.sample_height(x, z, BUOY_MASK))  # what a float follows
+    r = max(-WL_PORT, min(WL_PORT, (h_all - h_swell) * WL_CHOP))
+    return h_all - r + trim
+
+
 class Shot:
     """One cut. `kind` picks the path; `p` is that path's parameters.
 
@@ -3551,6 +3988,23 @@ def shot_camera(sh, u):
             # A lens 0.6 m off the water is ON the water: it lifts and drops
             # with the swell it is skimming, or it reads as a tripod at sea.
             eye[1] += 0.30 * math.sin(world_time * 1.55) + 0.12 * math.sin(world_time * 2.9)
+    elif k == "waterline":
+        # THE SPLIT SHOT. The lens is a housing floating on the surface, and
+        # the frame is half in the water because the PORT is: the renderer
+        # decides the medium per pixel at the near plane, which spans about
+        # +-5 cm around the eye, so where the line sits in the frame is a
+        # centimetre problem, not a metre one.
+        a = np.array(p.get("a", (-4.0, 3.0, 0.0)), float)
+        b = np.array(p.get("b", a), float)
+        eye = _pt(org, fwd, rgt, a + (b - a) * e, world)
+        eye[1] = waterline_eye_y(eye[0], eye[2], p.get("trim", 0.0))
+        # The lens stays LEVEL with its own port. A fixed target height would
+        # tilt it by the swell it is floating on -- and a tilt of a few degrees
+        # is centimetres on the near plane, i.e. the split sliding off the
+        # frame. `tilt` is the deliberate part, in metres at the target.
+        t = shot_target(sh, e, org, fwd, rgt)
+        t[1] = eye[1] + p.get("tilt", 0.0)
+        return eye, t
     elif k == "chase":
         off = np.array(p.get("off", (-17.0, 6.0, 5.0)), float)
         amp, per = p.get("sway", (2.0, 9.0))
@@ -3701,6 +4155,53 @@ FILM_SCRIPT = [
          mast_y=MAST_H * 0.80, side=1.1, tgt=(1.6, -0.4, 1.1)),
     Shot(2, "noon: from the lighthouse gallery", 12.62, 5.5, "tripod",
          fov=fov_mm(70), ease="linear", shake=0.09, lead=1.2, tgt=(0.0, 0.0, 6.0)),
+
+    # ---- UNDER. Noon, because the shafts are the sun ----------------------- #
+    #  `uw=True` is what arms the school, the motes and the deep floor -- a shot
+    #  property and not a measurement of the lens height, so the water is
+    #  already alive on the first recorded frame and no above-water shot ever
+    #  pays for it. The waterline crossing is a HARD cut in the picture: there
+    #  is no half-and-half composite, which is honest for a lens with no dome
+    #  port and is what the frame of a GoPro going over the side looks like.
+    Shot(2, "noon: the lens goes under", 12.70, 4.5, "dolly", fov=fov_mm(21),
+         ease="inout", shake=0.26, ae=(-2.5, 0.2),
+         world=True, a=(0.10, 3.20, 1.30), b=(0.10, 3.00, -3.60),
+         tgt_world=True, tgt=(0.05, 0.60, -0.60), tgt_b=(0.10, -2.60, 2.60),
+         uw=True),
+    #  Under her, on the far side from the sun, pushing in until the keel is
+    #  overhead. Two angles decide this shot and neither is free:
+    #   * Snell's window is a 48.6 deg half-angle cone about straight up, so the
+    #     lens has to end up nearly UNDER her for the hull to be a silhouette
+    #     inside the bright disc rather than out in the mirrored part.
+    #   * the shafts are a strongly forward HG lobe about the REFRACTED sun --
+    #     a 48 deg sun enters the water 30 deg off the vertical -- and 25 deg
+    #     off that axis the in-scatter is already a third of the flat murk. So
+    #     the camera stands downsun of her and looks back UP the shafts, and the
+    #     hull and the keel are what carve them.
+    #  Both are placed in WORLD axes (east, north) and not in her frame: what
+    #  the shot is composed against is the SUN, which is due south at this hour,
+    #  and her heading is a sailing result that must not be allowed to swing the
+    #  lens off the shaft axis.
+    Shot(2, "noon: beneath the hull", 12.74, 7.0, "dolly", fov=fov_mm(18),
+         ease="inout", shake=0.11, ae=(-2.5, 0.2),
+         world=True, a=(0.00, 3.90, -5.40), b=(0.05, 2.00, -4.60),
+         tgt_world=True, tgt=(0.20, -5.00, 4.60), tgt_b=(0.15, -3.70, 3.80),
+         uw=True),
+    #  ON the line. A housing floating three metres off her starboard bow,
+    #  drifting aft as she goes by: topsides, rig and sky above the split,
+    #  forefoot, keel and the school below it, and the line itself sweeping the
+    #  frame as the chop runs over the glass (see waterline_eye_y). Framed in
+    #  HER frame and not the sun's -- what has to stay in the picture is the
+    #  hull cutting the water, and the below-line half is only three metres of
+    #  column, too short for the shafts to be the subject.
+    #  AE is pinned tighter than the submerged shots: half sky and half murk is
+    #  the worst case there is for a meter left to roam, and it pumps a stop
+    #  every time the swell trades one for the other.
+    Shot(2, "noon: on the waterline", 12.78, 6.0, "waterline", fov=fov_mm(20),
+         ease="linear", shake=0.09, ae=(-1.4, 0.0),
+         a=(6.6, 3.1, 0.0), b=(2.2, 2.7, 0.0), trim=0.008, tilt=-0.15,
+         tgt=(4.2, 0.0, 0.0), tgt_b=(0.6, 0.0, 0.0),
+         uw=True),
 
     # ---- 3. THE SQUALL ----------------------------------------------------- #
     #  The deck CLOSES on camera: the act opens on `clear` and ramps to `storm`,
@@ -4308,6 +4809,8 @@ def run_film():
                 if left < sh.fade:
                     px = (px.astype(np.float32) * (left / sh.fade)).astype(np.uint8)
             writer.append_data(px)
+            if STILLS and f % STILLS_EVERY == 0:
+                Image.fromarray(px).save(f"{STILLS}_{si:02d}_{f:04d}.png")
             if sh.poster is not None and f == int(sh.poster * (n - 1)):
                 Image.fromarray(px).save(os.path.join(os.path.dirname(out), "poster.png"))
                 print(f"  poster.png  <- {sh.name} frame {f}")
@@ -4445,6 +4948,10 @@ elif SHOT:
     # light (glitter path, sail translucency) or away from it, which is the
     # only half of the sky a rainbow -- or a moon opposite the sun -- lives in.
     FACE = cli_arg("--face", "islet", str)
+    if FACE == "under":
+        # Same metering clamp the film's underwater shots run, or the meter
+        # dilates three stops and prints the murk as a grey day.
+        renderer.set_auto_exposure_range(-2.5, 0.2)
     # A strike, on the clock, for the headless stress test. `--seq PREFIX`
     # writes the frames either side of it so the envelope can be LOOKED at
     # rather than asserted.
@@ -4535,6 +5042,22 @@ elif SHOT:
                 cy, sy = math.cos(bs_["yaw"]), math.sin(bs_["yaw"])
                 camera.position.set(bx - sy * 30.0 + cy * 6.0, 13.5, bz - cy * 30.0 - sy * 6.0)
                 camera.look_at(bx, 0.4, bz)
+        elif FACE == "under":
+            # The submerged check, and the iteration loop for it: under her
+            # port quarter looking up and forward at the keel in the Snell
+            # window. `underwater_wanted()` is geometric outside the film, so
+            # the school, the motes and the deep floor come with the pose.
+            # Sunward and steep, because the shafts are a strongly forward
+            # Henyey-Greenstein lobe about the REFRACTED sun (a 48 deg sun
+            # enters the water at 30 deg off the vertical): 20 deg off that
+            # axis the in-scatter is a third of the flat murk and the shafts
+            # are a haze, and on it they are twice it. So the lens stands on
+            # the far side of her from the sun, deep, and looks back up.
+            cs_ = celestial(time_of_day)
+            hz = cs_.sun_dir[[0, 2]]
+            hz = hz / max(float(np.linalg.norm(hz)), 1e-6)
+            camera.position.set(bx - hz[0] * 2.6, -5.0, bz - hz[1] * 2.6)
+            camera.look_at(bx + hz[0] * 5.0, 4.6, bz + hz[1] * 5.0)
         elif FACE == "gif":
             camera.position.set(bx + 19.0, 7.8, bz - 14.0)
             camera.look_at(bx * 0.55 + ISLET_X * 0.45, 7.5, bz * 0.55 + ISLET_Z * 0.45)
@@ -4569,6 +5092,11 @@ elif SHOT:
             print(f"  wrote {seq[f]}  (flash {flash_level:.3f})")
         if GIF and f >= gif_start and (f - gif_start) % gif_every == 0:
             gif_frames.append(np.ascontiguousarray(renderer.read_pixels()))
+    if FACE == "under":
+        _c = _f_pos.mean(0)
+        print(f"school: centroid {np.round(_c, 2)}, mean radius "
+              f"{np.linalg.norm(_f_pos - _c, axis=1).mean():.2f} m, lens "
+              f"{np.round([camera.position.x, camera.position.y, camera.position.z], 2)}")
     if GIF:
         write_gif(gif_frames, GIF_OUT, GIF_FPS, GIF_WIDTH)
     # Let the accumulation settle on the final pose before the read-back.
