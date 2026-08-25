@@ -1508,6 +1508,7 @@ void main() {
             // straight (-V) ray to recover it. Host encodes strength = transmission-1
             // (transmission>1 is the additive marker).
             const float strength = clamp(pm.transmission - 1.0, 0.0, 1.0);
+            gEnvFillVis = probeEnvFillVis(worldPos, N, maxLod);// surface sky visibility for the env hit fill
             const vec3  behind   = traceRadiance(worldPos - V * SHADOW_EPS, -V, shadowsOn, maxLod, 0.0, seed,
                                                  /*cheapHits=*/false,// straight into lit, unblurred
                                                  /*probeHitFill=*/false);// content behind a blend surface
@@ -1520,6 +1521,7 @@ void main() {
                 // darkening. (One transparent layer over opaque: the behind ray sees
                 // opaque geometry shaded as PBR; overlapping transparent isn't sorted.)
                 const float opacity = 1.0 - clamp(pm.transmission, 0.0, 1.0);
+                gEnvFillVis = probeEnvFillVis(worldPos, N, maxLod);// surface sky visibility for the env hit fill
                 const vec3  behind  = traceRadiance(worldPos - V * SHADOW_EPS, -V, shadowsOn, maxLod, 0.0, seed,
                                                     /*cheapHits=*/false,// straight into lit, unblurred
                                                     /*probeHitFill=*/false);// content behind a blend surface

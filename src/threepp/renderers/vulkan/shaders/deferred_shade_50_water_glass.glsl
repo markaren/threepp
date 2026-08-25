@@ -615,6 +615,13 @@ vec3 shadeGlass(vec3 P, vec3 N, vec3 V, MaterialDesc pm, vec3 albedo,
     // sky crisp and the sun reads as a real glint. Scene hits stay sharp.
     const float missLod = max(gr, 0.10) * maxLod;
 
+    // Sky visibility at the glass surface, consumed by the transmit legs'
+    // probeHitFill=false env hit fill (see gEnvFillVis). Without it the
+    // enclosed-interior scene showed a sky-lit world through the glass while
+    // probe GI darkened everything around it. The reflect leg passes
+    // probeHitFill=true and is unaffected.
+    gEnvFillVis = probeEnvFillVis(P, N, maxLod);
+
     vec3 sum = vec3(0.0);
     for (int s = 0; s < kGlassSamples; ++s) {
         vec3 Ns = ggxHalfVectorFib(N, gr, s, kGlassSamples);// distinct per-iteration Fibonacci sample
