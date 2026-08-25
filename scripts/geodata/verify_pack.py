@@ -124,7 +124,22 @@ def main(pack_dir):
         print(f"buildings: {len(buildings)}")
         verify_buildings(region, h, buildings)
 
-    for name in ("region.json", "heights.f32", "roads.json", "buildings.json"):
+    if "texture" in region:
+        tpath = os.path.join(pack_dir, region["texture"])
+        try:
+            from PIL import Image
+            with Image.open(tpath) as im:
+                w, hh = im.size
+            mpp = region["worldSize"] / w
+            square = "square" if w == hh else f"NOT SQUARE ({w}x{hh})"
+            print(f"texture: {region['texture']} {w}x{hh} px, {square}, "
+                  f"{mpp:.2f} m/px, layer={region.get('textureLayer', '?')}")
+        except ImportError:
+            print(f"texture: {region['texture']} (pillow not installed; "
+                  f"dimensions not checked)")
+
+    for name in ("region.json", "heights.f32", "roads.json", "buildings.json",
+                 "texture.png"):
         p = os.path.join(pack_dir, name)
         if os.path.exists(p):
             print(f"  {name}: {os.path.getsize(p)} bytes")

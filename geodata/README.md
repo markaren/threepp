@@ -14,7 +14,7 @@ Kartverket DOM surface model). See
 [`scripts/geodata/README.md`](../scripts/geodata/README.md) for full options.
 
 ```
-pip install requests numpy tifffile pyproj      # matplotlib optional (PNG preview)
+pip install requests numpy tifffile pyproj      # matplotlib optional (PNG preview), pillow optional (--texture)
 
 cd scripts/geodata
 python fetch_norway_terrain.py --preset trollstigen --buildings   # the Fv63 hairpins (driving showcase)
@@ -29,6 +29,7 @@ Each run writes `geodata/<name>/` containing:
 | `heights.f32`  | raw little-endian float32 DEM, `dim×dim`, row-major (`iz*dim+ix`) |
 | `roads.json`   | road polylines in local world coords, with category + width |
 | `buildings.json` | extruded-footprint buildings (only with `--buildings`) |
+| `texture.png`  | square RGB basemap drape, row 0 = north (only with `--texture topo` / `topograatone`) |
 | `preview.png`  | hillshade + roads + building outlines (only with `--preview`) |
 
 Coordinates are threepp-native: Y-up metres, terrain centred on the origin,
@@ -53,5 +54,7 @@ Generated packs embed an attribution string. The source data is:
 - **Roads** — © Statens vegvesen, [NVDB](https://nvdb.no), NLOD.
 - **Buildings** — © [OpenStreetMap](https://www.openstreetmap.org/copyright)
   contributors, ODbL (only in packs fetched with `--buildings`).
+- **Basemap texture** — © Kartverket, topo raster WMS, CC BY 4.0 (only in
+  packs fetched with `--texture`).
 
 Respect those licences when redistributing anything derived from a pack.

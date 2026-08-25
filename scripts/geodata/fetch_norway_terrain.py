@@ -8,6 +8,7 @@ Output (frozen C++ contract) written to <out>/<name>/:
     heights.f32     dim*dim little-endian float32, row-major (iz*dim + ix)
     roads.json      polylines in local world coords
     buildings.json  extruded-footprint buildings (--buildings)
+    texture.png     square RGB basemap drape, row 0 = north (--texture)
     preview.(png|tif)   optional hillshade + roads/buildings overlay (--preview)
 
 Data sources (verified live 2026-07-15, buildings 2026-07-17):
@@ -18,11 +19,14 @@ Data sources (verified live 2026-07-15, buildings 2026-07-17):
   Buildings: OSM footprints via Overpass (ODbL, (c) OpenStreetMap
              contributors); heights measured from the Kartverket national
              DOM (surface model) minus the DTM (nDSM) where OSM lacks tags.
+  Texture:   Kartverket topo raster via WMS GetMap (topo / topograatone).
+             License CC BY 4.0, (c) Kartverket. Verified live 2026-08-25.
 
 Usage:
     python fetch_norway_terrain.py --preset trollstigen
     python fetch_norway_terrain.py --center 62.4482,7.6714 --size 8000 --res 2 --name myregion
     python fetch_norway_terrain.py --preset alesund --preview --include-paths --buildings
+    python fetch_norway_terrain.py --preset trollstigen --texture topo
 """
 import argparse
 import io
@@ -63,6 +67,18 @@ WCS_COVERAGE = "nhm_dtm_topo_25833"
 # (nDSM = DOM - DTM) where OSM has no height tag. Verified live 2026-07-17.
 WCS_DOM_URL = "https://wms.geonorge.no/skwms1/wcs.hoyde-dom-nhm-25833"
 WCS_DOM_COVERAGE = "nhm_dom_topo_25833"
+
+# Open Kartverket topo raster WMS (basemap texture, --texture). Same geonorge
+# server family as the WCS. WMS GetMap with bbox in EASTING,NORTHING order
+# (verified live 2026-08-25: the E,N form returns map content on both 1.3.0
+# and 1.1.1; a swapped N,E bbox returns a blank tile). Tiles up to 4096 px
+# per dimension verified. License CC BY 4.0, (c) Kartverket.
+WMS_TEXTURE = {
+    "topo": ("https://wms.geonorge.no/skwms1/wms.topo", "topo"),
+    "topograatone": ("https://wms.geonorge.no/skwms1/wms.topograatone",
+                     "topograatone"),
+}
+TEX_CHUNK = 4096  # max px per WMS GetMap dimension (verified)
 
 # NVDB road network endpoint.
 NVDB_URL = "https://nvdbapiles.atlas.vegvesen.no/vegnett/api/v4/veglenkesekvenser/segmentert"
@@ -201,6 +217,86 @@ def _fetch_grid_window(originE, originN, size, res, row0, row1, col0, col1,
 def fetch_heights(originE, originN, size, res, dim):
     """Fetch the full dim x dim node-aligned DTM height grid."""
     return _fetch_grid_window(originE, originN, size, res, 0, dim, 0, dim)
+
+
+# ==========================================================================
+# Texture (Kartverket topo raster WMS)
+# ==========================================================================
+def _require_pil():
+    try:
+        from PIL import Image
+        return Image
+    except ImportError:
+        raise SystemExit("--texture requires pillow: pip install pillow")
+
+
+def _wms_tile(url, layer, minE, minN, maxE, maxN, w, h, session, Image,
+              retries=4):
+    """Fetch one WMS GetMap tile as a uint8 (h, w, 3) RGB array."""
+    params = {
+        "service": "WMS", "version": "1.3.0", "request": "GetMap",
+        "layers": layer, "styles": "", "crs": "EPSG:25833",
+        "bbox": f"{minE},{minN},{maxE},{maxN}",
+        "width": int(w), "height": int(h), "format": "image/png",
+    }
+    last = None
+    for attempt in range(retries):
+        try:
+            r = session.get(url, params=params, timeout=180)
+            if r.status_code == 200 and r.content[:8] == b"\x89PNG\r\n\x1a\n":
+                arr = np.asarray(Image.open(io.BytesIO(r.content)).convert("RGB"))
+                if arr.shape == (h, w, 3):
+                    return arr
+                raise ValueError(f"tile shape {arr.shape} != {(h, w, 3)}")
+            last = f"HTTP {r.status_code} {r.content[:80]!r}"
+        except Exception as e:  # noqa: BLE001
+            last = str(e)
+        time.sleep(1.5 * (attempt + 1))
+    raise RuntimeError(f"WMS tile failed after {retries} tries: {last}")
+
+
+def fetch_texture(originE, originN, size, layer, tex_res):
+    """
+    Fetch the region's basemap texture as a uint8 (px, px, 3) RGB array,
+    px = round(size / tex_res).
+
+    Unlike the node-aligned elevation grid, the texture uses plain image
+    coverage: pixel (row, col) covers the tex_res x tex_res square starting
+    at (west + col*tex_res, north - (row+1)*tex_res). Row 0 is the NORTH
+    edge (WMS images are north-up, top-down), matching the heights
+    convention, so u = (x + size/2)/size, v = (z + size/2)/size maps local
+    world coords straight onto the image. Tiles are cut on pixel boundaries
+    with edge-aligned bboxes, so they stitch with no overlap.
+    """
+    url, wms_layer = WMS_TEXTURE[layer]
+    Image = _require_pil()
+    px = int(round(size / tex_res))
+    west = originE - size / 2.0
+    north = originN + size / 2.0
+
+    session = requests.Session()
+    session.headers.update({"User-Agent": "threepp-geodata/1.0"})
+    rgb = np.zeros((px, px, 3), dtype=np.uint8)
+
+    bounds = list(range(0, px, TEX_CHUNK)) + [px]
+    ntiles = (len(bounds) - 1) ** 2
+    t = 0
+    for ri in range(len(bounds) - 1):
+        r0, r1 = bounds[ri], bounds[ri + 1]
+        maxN = north - r0 * tex_res
+        minN = north - r1 * tex_res
+        for ci in range(len(bounds) - 1):
+            c0, c1 = bounds[ci], bounds[ci + 1]
+            minE = west + c0 * tex_res
+            maxE = west + c1 * tex_res
+            t += 1
+            print(f"  {layer} tile {t}/{ntiles}  rows[{r0}:{r1}] "
+                  f"cols[{c0}:{c1}] ({c1 - c0}x{r1 - r0})", flush=True)
+            rgb[r0:r1, c0:c1] = _wms_tile(url, wms_layer, minE, minN, maxE,
+                                          maxN, c1 - c0, r1 - r0, session,
+                                          Image)
+            time.sleep(0.15)  # be polite
+    return rgb
 
 
 # ==========================================================================
@@ -862,7 +958,8 @@ def write_preview(pack_dir, heights, roads, size, res, dim, buildings=None):
 # Driver
 # ==========================================================================
 def build_region(name, lat, lon, size, res, out_dir, include_paths,
-                 do_roads=True, do_buildings=False, do_preview=False):
+                 do_roads=True, do_buildings=False, do_preview=False,
+                 texture=None, texture_res=2.0):
     dim = int(round(size / res)) + 1
     transformer = Transformer.from_crs("EPSG:4326", "EPSG:25833", always_xy=True)
     originE, originN = transformer.transform(lon, lat)
@@ -895,6 +992,15 @@ def build_region(name, lat, lon, size, res, out_dir, include_paths,
             print("Measuring building heights (Kartverket DOM nDSM)...", flush=True)
             resolve_building_heights(buildings_local, heights,
                                      originE, originN, size, res, dim)
+
+    if texture:
+        print(f"Fetching texture (Kartverket {texture} WMS)...", flush=True)
+        tex = fetch_texture(originE, originN, size, texture, texture_res)
+        Image = _require_pil()
+        tex_path = os.path.join(pack_dir, "texture.png")
+        Image.fromarray(tex).save(tex_path)
+        print(f"  texture: {tex.shape[1]}x{tex.shape[0]} px "
+              f"({texture_res} m/px) -> {tex_path}", flush=True)
 
     # --- write heights.f32 (row-major, iz*dim+ix; row 0 = north, no flip) ---
     heights.astype("<f4").tofile(os.path.join(pack_dir, "heights.f32"))
@@ -930,6 +1036,9 @@ def build_region(name, lat, lon, size, res, out_dir, include_paths,
                    "Roads: © Statens vegvesen, NVDB (NLOD).")
     if do_buildings:
         attribution += " Buildings: © OpenStreetMap contributors (ODbL)."
+    if texture:
+        attribution += (f" Basemap texture: © Kartverket, {texture} WMS "
+                        f"(CC BY 4.0).")
     region = {
         "version": 1,
         "name": name,
@@ -947,6 +1056,9 @@ def build_region(name, lat, lon, size, res, out_dir, include_paths,
     }
     if do_buildings:
         region["buildings"] = "buildings.json"
+    if texture:
+        region["texture"] = "texture.png"
+        region["textureLayer"] = texture
     with open(os.path.join(pack_dir, "region.json"), "w", encoding="utf-8") as f:
         json.dump(region, f, ensure_ascii=False, indent=2)
 
@@ -972,6 +1084,11 @@ def parse_args(argv):
     ap.add_argument("--no-roads", action="store_true", help="skip road fetch")
     ap.add_argument("--buildings", action="store_true",
                     help="fetch OSM building footprints + DOM nDSM heights")
+    ap.add_argument("--texture", choices=sorted(WMS_TEXTURE.keys()),
+                    help="fetch a basemap texture from the open Kartverket "
+                         "raster WMS (writes texture.png)")
+    ap.add_argument("--texture-res", type=float, default=2.0,
+                    help="texture resolution m/px (default 2)")
     ap.add_argument("--preview", action="store_true", help="render hillshade+roads preview")
     return ap.parse_args(argv)
 
@@ -993,7 +1110,9 @@ def main(argv=None):
                  include_paths=args.include_paths,
                  do_roads=not args.no_roads,
                  do_buildings=args.buildings,
-                 do_preview=args.preview)
+                 do_preview=args.preview,
+                 texture=args.texture,
+                 texture_res=args.texture_res)
     print("Done.", flush=True)
     return 0
 
