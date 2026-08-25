@@ -9,6 +9,12 @@
 #include "threepp/renderers/vulkan/shaders/bloom_down.comp.spv.h"
 #include "threepp/renderers/vulkan/shaders/bloom_up.comp.spv.h"
 
+// The depth reduction that gives the source pass something to test against:
+// the shared fullscreen triangle, plus the two variants of the reduce itself.
+#include "threepp/renderers/vulkan/shaders/billboard_glow_depth.frag.ms.spv.h"
+#include "threepp/renderers/vulkan/shaders/billboard_glow_depth.frag.spv.h"
+#include "threepp/renderers/vulkan/shaders/overlay_fullscreen.vert.spv.h"
+
 #include <algorithm>
 
 namespace threepp::vulkan {
@@ -18,6 +24,7 @@ namespace threepp::vulkan {
         : ctx_(ctx), cmdPool_(cmdPool), framesInFlight_(framesInFlight) {
         src_.resize(framesInFlight_);
         pyr_.resize(framesInFlight_ * kMaxLevels);
+        depth_.resize(framesInFlight_);
         createPipelines();
         createDescriptors();
     }
@@ -26,11 +33,16 @@ namespace threepp::vulkan {
         const VkDevice d = ctx_.device();
         if (downPipe_)          vkDestroyPipeline(d, downPipe_, nullptr);
         if (upPipe_)            vkDestroyPipeline(d, upPipe_, nullptr);
+        if (reducePipe_)        vkDestroyPipeline(d, reducePipe_, nullptr);
+        if (reducePipeMs_)      vkDestroyPipeline(d, reducePipeMs_, nullptr);
         if (bloomPipeLayout_)   vkDestroyPipelineLayout(d, bloomPipeLayout_, nullptr);
+        if (reducePipeLayout_)  vkDestroyPipelineLayout(d, reducePipeLayout_, nullptr);
         if (bloomDsLayout_)     vkDestroyDescriptorSetLayout(d, bloomDsLayout_, nullptr);
         if (compositeDsLayout_) vkDestroyDescriptorSetLayout(d, compositeDsLayout_, nullptr);
+        if (reduceDsLayout_)    vkDestroyDescriptorSetLayout(d, reduceDsLayout_, nullptr);
         if (descPool_)          vkDestroyDescriptorPool(d, descPool_, nullptr);
         if (sampler_)           vkDestroySampler(d, sampler_, nullptr);
+        if (depthSampler_)      vkDestroySampler(d, depthSampler_, nullptr);
         destroyImages();
     }
 
@@ -38,6 +50,11 @@ namespace threepp::vulkan {
         const VkDevice d = ctx_.device();
         for (auto& img : src_) destroyImage2D(ctx_.allocator(), d, img);
         for (auto& img : pyr_) destroyImage2D(ctx_.allocator(), d, img);
+        for (auto& img : depth_) destroyImage2D(ctx_.allocator(), d, img);
+        // The reduce sets name an image this pass does not own, and the caller
+        // reallocates that image on the same events that bring us here. Forget
+        // what they hold; recordDepthReduce rewrites on the next mismatch.
+        std::fill(reduceSetViews_.begin(), reduceSetViews_.end(), VkImageView{VK_NULL_HANDLE});
         levels_ = 0;
         srcW_ = srcH_ = dispW_ = dispH_ = 0;
     }
@@ -66,7 +83,7 @@ namespace threepp::vulkan {
         aci.usage = VMA_MEMORY_USAGE_AUTO;
         check(vmaCreateImage(ctx_.allocator(), &ici, &aci, &out.image, &out.alloc, nullptr), label);
 
-        transitionFreshImage(out.image);
+        transitionFreshImage(out.image, VK_IMAGE_ASPECT_COLOR_BIT);
 
         VkImageViewCreateInfo vci{};
         vci.sType    = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
@@ -83,6 +100,50 @@ namespace threepp::vulkan {
         return out;
     }
 
+    // The depth companion of createImage. Same "GENERAL forever" contract — a
+    // depth/stencil attachment is legal in GENERAL, and this one is written by
+    // the reduce and read by the source pass in the same submit, so it never
+    // needs a second layout.
+    Image2D BillboardGlowPass::createDepthImage(uint32_t w, uint32_t h, const char* label) {
+        Image2D out{};
+        out.width  = w;
+        out.height = h;
+        out.format = kDepthFormat;
+
+        VkImageCreateInfo ici{};
+        ici.sType         = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+        ici.imageType     = VK_IMAGE_TYPE_2D;
+        ici.format        = out.format;
+        ici.extent        = {w, h, 1};
+        ici.mipLevels     = 1;
+        ici.arrayLayers   = 1;
+        ici.samples       = VK_SAMPLE_COUNT_1_BIT;
+        ici.tiling        = VK_IMAGE_TILING_OPTIMAL;
+        ici.usage         = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT;
+        ici.sharingMode   = VK_SHARING_MODE_EXCLUSIVE;
+        ici.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+
+        VmaAllocationCreateInfo aci{};
+        aci.usage = VMA_MEMORY_USAGE_AUTO;
+        check(vmaCreateImage(ctx_.allocator(), &ici, &aci, &out.image, &out.alloc, nullptr), label);
+
+        transitionFreshImage(out.image, VK_IMAGE_ASPECT_DEPTH_BIT);
+
+        VkImageViewCreateInfo vci{};
+        vci.sType    = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+        vci.image    = out.image;
+        vci.viewType = VK_IMAGE_VIEW_TYPE_2D;
+        vci.format   = out.format;
+        vci.subresourceRange.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT;
+        vci.subresourceRange.levelCount = 1;
+        vci.subresourceRange.layerCount = 1;
+        check(vkCreateImageView(ctx_.device(), &vci, nullptr, &out.view),
+              "vkCreateImageView(bbglow.depth)");
+        ctx_.setObjectName(out.image, label);
+        ctx_.setObjectName(out.view, label);
+        return out;
+    }
+
     // Every image in this pass lives in GENERAL for its whole life and never
     // transitions again. GENERAL is a legal layout for a colour attachment, for
     // a storage image and for a sampled read, so one layout serves the render
@@ -90,7 +151,7 @@ namespace threepp::vulkan {
     // property ViewContext::colorTarget keeps, and for the same reason: a
     // per-frame layout dance across three consumers is a barrier bug waiting to
     // happen, and the pass is bandwidth-trivial either way.
-    void BillboardGlowPass::transitionFreshImage(VkImage img) {
+    void BillboardGlowPass::transitionFreshImage(VkImage img, VkImageAspectFlags aspect) {
         VkCommandBufferAllocateInfo ai{};
         ai.sType              = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
         ai.commandPool        = cmdPool_;
@@ -111,15 +172,17 @@ namespace threepp::vulkan {
         b.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
         b.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
         b.image               = img;
-        b.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        b.subresourceRange.aspectMask = aspect;
         b.subresourceRange.levelCount = 1;
         b.subresourceRange.layerCount = 1;
         b.srcAccessMask = 0;
         b.dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT |
-                          VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+                          VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT |
+                          VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
         vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
                              VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT |
-                                     VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+                                     VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT |
+                                     VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT,
                              0, 0, nullptr, 0, nullptr, 1, &b);
 
         check(vkEndCommandBuffer(cb), "end one-shot cb(bbglow)");
@@ -160,6 +223,8 @@ namespace threepp::vulkan {
                         createImage(std::max(srcW_ >> (l + 1u), 1u), std::max(srcH_ >> (l + 1u), 1u),
                                     VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
                                     "vmaCreateImage(bbglow.pyr)");
+        for (auto& img : depth_)
+            img = createDepthImage(srcW_, srcH_, "vmaCreateImage(bbglow.depth)");
         rewriteDescriptors();
         return true;
     }
@@ -255,6 +320,153 @@ namespace threepp::vulkan {
                                     sizeof(kBloomDownCompSpv), "vkCreateComputePipelines(bbglow_down)");
         upPipe_   = makeComputePipe(d, ctx_.pipelineCache(), bloomPipeLayout_, kBloomUpCompSpv,
                                     sizeof(kBloomUpCompSpv), "vkCreateComputePipelines(bbglow_up)");
+
+        createReducePipelines();
+    }
+
+    // ── The depth reduction ─────────────────────────────────────────────────
+    // A fullscreen triangle that texelFetches the overlay pass's full-extent
+    // depth and writes the min of the four texels each half-extent pixel covers
+    // (see billboard_glow_depth.frag for why min). Both variants are built up
+    // front: which one runs depends on the Canvas antialiasing setting, which
+    // is fixed for the run but not known to this class, and the second pipeline
+    // is a few hundred bytes.
+    void BillboardGlowPass::createReducePipelines() {
+        const VkDevice d = ctx_.device();
+
+        // texelFetch ignores filtering, but a combined image sampler still
+        // needs a sampler object; NEAREST states the intent.
+        VkSamplerCreateInfo sci{};
+        sci.sType        = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
+        sci.magFilter    = VK_FILTER_NEAREST;
+        sci.minFilter    = VK_FILTER_NEAREST;
+        sci.mipmapMode   = VK_SAMPLER_MIPMAP_MODE_NEAREST;
+        sci.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+        sci.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+        sci.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+        sci.maxLod       = 0.f;
+        check(vkCreateSampler(d, &sci, nullptr, &depthSampler_), "vkCreateSampler(bbglow.depth)");
+
+        VkDescriptorSetLayoutBinding bnd{};
+        bnd.binding         = 0;
+        bnd.descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        bnd.descriptorCount = 1;
+        bnd.stageFlags      = VK_SHADER_STAGE_FRAGMENT_BIT;
+        VkDescriptorSetLayoutCreateInfo dlci{};
+        dlci.sType        = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+        dlci.bindingCount = 1;
+        dlci.pBindings    = &bnd;
+        check(vkCreateDescriptorSetLayout(d, &dlci, nullptr, &reduceDsLayout_),
+              "vkCreateDescriptorSetLayout(bbglow.reduce)");
+
+        VkPushConstantRange pcr{};
+        pcr.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+        pcr.size       = sizeof(uint32_t) * 2;// uvec2 srcExtent
+        VkPipelineLayoutCreateInfo plci{};
+        plci.sType                  = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+        plci.setLayoutCount         = 1;
+        plci.pSetLayouts            = &reduceDsLayout_;
+        plci.pushConstantRangeCount = 1;
+        plci.pPushConstantRanges    = &pcr;
+        check(vkCreatePipelineLayout(d, &plci, nullptr, &reducePipeLayout_),
+              "vkCreatePipelineLayout(bbglow.reduce)");
+
+        auto module = [&](const uint32_t* spv, size_t bytes, const char* label) {
+            VkShaderModuleCreateInfo smci{};
+            smci.sType    = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
+            smci.codeSize = bytes;
+            smci.pCode    = spv;
+            VkShaderModule m = VK_NULL_HANDLE;
+            check(vkCreateShaderModule(d, &smci, nullptr, &m), label);
+            return m;
+        };
+        VkShaderModule vert = module(kOverlayFullscreenVertSpv, sizeof(kOverlayFullscreenVertSpv),
+                                     "vkCreateShaderModule(bbglow.reduce.vert)");
+        VkShaderModule frag = module(kBillboardGlowDepthFragSpv, sizeof(kBillboardGlowDepthFragSpv),
+                                     "vkCreateShaderModule(bbglow.reduce.frag)");
+        VkShaderModule fragMs = module(kBillboardGlowDepthMsFragSpv,
+                                       sizeof(kBillboardGlowDepthMsFragSpv),
+                                       "vkCreateShaderModule(bbglow.reduce.frag.ms)");
+
+        VkPipelineShaderStageCreateInfo stages[2]{};
+        stages[0].sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+        stages[0].stage  = VK_SHADER_STAGE_VERTEX_BIT;
+        stages[0].module = vert;
+        stages[0].pName  = "main";
+        stages[1].sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+        stages[1].stage  = VK_SHADER_STAGE_FRAGMENT_BIT;
+        stages[1].pName  = "main";
+
+        VkPipelineVertexInputStateCreateInfo vi{};
+        vi.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
+
+        VkPipelineInputAssemblyStateCreateInfo ia{};
+        ia.sType    = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
+        ia.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+
+        VkPipelineViewportStateCreateInfo vp{};
+        vp.sType         = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO;
+        vp.viewportCount = 1;
+        vp.scissorCount  = 1;
+
+        VkPipelineRasterizationStateCreateInfo rs{};
+        rs.sType       = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
+        rs.polygonMode = VK_POLYGON_MODE_FILL;
+        rs.cullMode    = VK_CULL_MODE_NONE;
+        rs.frontFace   = VK_FRONT_FACE_COUNTER_CLOCKWISE;
+        rs.lineWidth   = 1.0f;
+
+        VkDynamicState dynStates[2] = {VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR};
+        VkPipelineDynamicStateCreateInfo dyn{};
+        dyn.sType             = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO;
+        dyn.dynamicStateCount = 2;
+        dyn.pDynamicStates    = dynStates;
+
+        // Depth-only: no colour attachment at all. The test must be ENABLED for
+        // the write to happen (Vulkan gates depthWriteEnable on it), so it is
+        // ALWAYS — every pixel of the target is overwritten by construction.
+        VkPipelineDepthStencilStateCreateInfo ds{};
+        ds.sType            = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
+        ds.depthTestEnable  = VK_TRUE;
+        ds.depthWriteEnable = VK_TRUE;
+        ds.depthCompareOp   = VK_COMPARE_OP_ALWAYS;
+
+        VkPipelineColorBlendStateCreateInfo cb{};
+        cb.sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
+
+        VkPipelineMultisampleStateCreateInfo ms{};
+        ms.sType                = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
+        ms.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+
+        VkPipelineRenderingCreateInfo prci{};
+        prci.sType                 = VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO;
+        prci.depthAttachmentFormat = kDepthFormat;
+
+        VkGraphicsPipelineCreateInfo gpci{};
+        gpci.sType               = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
+        gpci.pNext               = &prci;
+        gpci.stageCount          = 2;
+        gpci.pStages             = stages;
+        gpci.pVertexInputState   = &vi;
+        gpci.pInputAssemblyState = &ia;
+        gpci.pViewportState      = &vp;
+        gpci.pRasterizationState = &rs;
+        gpci.pMultisampleState   = &ms;
+        gpci.pDepthStencilState  = &ds;
+        gpci.pColorBlendState    = &cb;
+        gpci.pDynamicState       = &dyn;
+        gpci.layout              = reducePipeLayout_;
+
+        stages[1].module = frag;
+        check(vkCreateGraphicsPipelines(d, ctx_.pipelineCache(), 1, &gpci, nullptr, &reducePipe_),
+              "vkCreateGraphicsPipelines(bbglow.reduce)");
+        stages[1].module = fragMs;
+        check(vkCreateGraphicsPipelines(d, ctx_.pipelineCache(), 1, &gpci, nullptr, &reducePipeMs_),
+              "vkCreateGraphicsPipelines(bbglow.reduce.ms)");
+
+        vkDestroyShaderModule(d, vert, nullptr);
+        vkDestroyShaderModule(d, frag, nullptr);
+        vkDestroyShaderModule(d, fragMs, nullptr);
     }
 
     // One allocation of every set, at construction, sized for kMaxLevels
@@ -267,15 +479,17 @@ namespace threepp::vulkan {
         const uint32_t up   = framesInFlight_ * kMaxLevels;
         const uint32_t comp = framesInFlight_;
 
+        const uint32_t red  = framesInFlight_;
+
         VkDescriptorPoolSize sizes[2]{};
         sizes[0].type            = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-        sizes[0].descriptorCount = down + up + comp;
+        sizes[0].descriptorCount = down + up + comp + red;
         sizes[1].type            = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
         sizes[1].descriptorCount = down + up;
 
         VkDescriptorPoolCreateInfo dpci{};
         dpci.sType         = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
-        dpci.maxSets       = down + up + comp;
+        dpci.maxSets       = down + up + comp + red;
         dpci.poolSizeCount = 2;
         dpci.pPoolSizes    = sizes;
         check(vkCreateDescriptorPool(ctx_.device(), &dpci, nullptr, &descPool_),
@@ -296,6 +510,8 @@ namespace threepp::vulkan {
         alloc(downSets_, bloomDsLayout_, down);
         alloc(upSets_, bloomDsLayout_, up);
         alloc(compositeSets_, compositeDsLayout_, comp);
+        alloc(reduceSets_, reduceDsLayout_, red);
+        reduceSetViews_.assign(red, VkImageView{VK_NULL_HANDLE});
     }
 
     void BillboardGlowPass::rewriteDescriptors() {
@@ -351,6 +567,86 @@ namespace threepp::vulkan {
             w.pImageInfo      = &cIn;
             vkUpdateDescriptorSets(ctx_.device(), 1, &w, 0, nullptr);
         }
+    }
+
+    void BillboardGlowPass::recordDepthReduce(VkCommandBuffer cb, uint32_t frame,
+                                              VkImageView srcView, bool srcMultisampled,
+                                              VkExtent2D srcExtent) {
+        if (levels_ == 0) return;
+
+        const bool haveSrc = srcView != VK_NULL_HANDLE && srcExtent.width > 0 &&
+                             srcExtent.height > 0 && reducePipe_ != VK_NULL_HANDLE;
+
+        // The set names an attachment this pass does not own, so it is rewritten
+        // whenever the caller hands over a different view — which only happens
+        // when that attachment is reallocated, with the device idled.
+        if (haveSrc && reduceSetViews_[frame] != srcView) {
+            VkDescriptorImageInfo ii{};
+            ii.sampler   = depthSampler_;
+            ii.imageView = srcView;
+            // The layout the overlay depth prepass leaves its target in; it
+            // serves both the overlay pass's read-only attachment and this
+            // sampled read.
+            ii.imageLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
+            VkWriteDescriptorSet w{};
+            w.sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            w.dstSet          = reduceSets_[frame];
+            w.dstBinding      = 0;
+            w.descriptorCount = 1;
+            w.descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+            w.pImageInfo      = &ii;
+            vkUpdateDescriptorSets(ctx_.device(), 1, &w, 0, nullptr);
+            reduceSetViews_[frame] = srcView;
+        }
+
+        VkRenderingAttachmentInfo depthAtt{};
+        depthAtt.sType       = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+        depthAtt.imageView   = depth_[frame].view;
+        depthAtt.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+        // With a source, every pixel is written, so the prior contents are
+        // irrelevant. Without one, the CLEAR is the whole pass: reverse-Z far is
+        // 0, and GREATER_OR_EQUAL against 0 passes for everything.
+        depthAtt.loadOp  = haveSrc ? VK_ATTACHMENT_LOAD_OP_DONT_CARE : VK_ATTACHMENT_LOAD_OP_CLEAR;
+        depthAtt.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+        depthAtt.clearValue.depthStencil = {0.0f, 0u};
+
+        VkRenderingInfo ri{};
+        ri.sType                = VK_STRUCTURE_TYPE_RENDERING_INFO;
+        ri.renderArea.offset    = {0, 0};
+        ri.renderArea.extent    = {srcW_, srcH_};
+        ri.layerCount           = 1;
+        ri.colorAttachmentCount = 0;
+        ri.pDepthAttachment     = &depthAtt;
+        vkCmdBeginRendering(cb, &ri);
+        if (haveSrc) {
+            VkViewport vp{0.f, 0.f, float(srcW_), float(srcH_), 0.f, 1.f};
+            vkCmdSetViewport(cb, 0, 1, &vp);
+            VkRect2D sc{{0, 0}, {srcW_, srcH_}};
+            vkCmdSetScissor(cb, 0, 1, &sc);
+            vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                              srcMultisampled ? reducePipeMs_ : reducePipe_);
+            vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, reducePipeLayout_, 0, 1,
+                                    &reduceSets_[frame], 0, nullptr);
+            const uint32_t pc[2] = {srcExtent.width, srcExtent.height};
+            vkCmdPushConstants(cb, reducePipeLayout_, VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(pc), pc);
+            vkCmdDraw(cb, 3, 1, 0, 0);
+        }
+        vkCmdEndRendering(cb);
+
+        // Written as an attachment here, read as one by the source pass's depth
+        // test; same image, same layout, different access.
+        VkMemoryBarrier2 mb{};
+        mb.sType         = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2;
+        mb.srcStageMask  = VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT;
+        mb.srcAccessMask = VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+        mb.dstStageMask  = VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT |
+                           VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT;
+        mb.dstAccessMask = VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_READ_BIT;
+        VkDependencyInfo di{};
+        di.sType              = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
+        di.memoryBarrierCount = 1;
+        di.pMemoryBarriers    = &mb;
+        vkCmdPipelineBarrier2(cb, &di);
     }
 
     void BillboardGlowPass::recordPyramid(VkCommandBuffer cb, uint32_t frame, float threshold) {

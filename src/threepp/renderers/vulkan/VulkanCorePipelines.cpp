@@ -2681,21 +2681,22 @@ void VulkanRenderer::Impl::createFieldBillboardPipeline() {
             //     the bright pass downstream is defined on linear radiance;
             //   • ONE sample, because that target never participates in the
             //     overlay's MSAA machinery;
-            //   • NO depth attachment and no depth test — the target is half
-            //     extent and the overlay's depth is full extent, so there is
-            //     nothing to test against without a second reduction pass. The
-            //     trade (an occluded spark still contributes a halo) is argued
-            //     in BillboardGlowPass.hpp.
+            //   • its own HALF-EXTENT depth attachment, reduced from the
+            //     overlay's full-extent one by BillboardGlowPass (a render area
+            //     must fit its attachments, so the full-extent buffer cannot be
+            //     attached here directly). Same reverse-Z test as the sharp
+            //     quads, so a spark behind a wall contributes no halo.
             {
                 const VkFormat glowFmt[1] = {VK_FORMAT_R16G16B16A16_SFLOAT};
                 VkPipelineRenderingCreateInfo prciGlow = prci;
                 prciGlow.pColorAttachmentFormats = glowFmt;
-                prciGlow.depthAttachmentFormat   = VK_FORMAT_UNDEFINED;
+                prciGlow.depthAttachmentFormat   = vulkan::BillboardGlowPass::kDepthFormat;
 
                 VkPipelineDepthStencilStateCreateInfo dsGlow{};
-                dsGlow.sType           = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
-                dsGlow.depthTestEnable = VK_FALSE;
+                dsGlow.sType            = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
+                dsGlow.depthTestEnable  = VK_TRUE;
                 dsGlow.depthWriteEnable = VK_FALSE;
+                dsGlow.depthCompareOp   = VK_COMPARE_OP_GREATER_OR_EQUAL;
 
                 VkPipelineMultisampleStateCreateInfo msGlow = ms;
                 msGlow.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
