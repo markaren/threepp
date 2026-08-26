@@ -551,8 +551,11 @@ def machine_friction(pos: wp.array(dtype=wp.vec3),
                 p = p - nrm * (en * 0.5)
     # sleep floor: sub-centimetre-per-second residual shimmer is solver noise,
     # not physics -- freeze it, exactly like the big engines' sleep thresholds.
-    # A riding fish moves 40x this per substep and never feels it.
-    if wp.length(p - prev[i]) < SLEEP_V * dt:
+    # A riding fish moves 40x this per substep and never feels it. ONLY where
+    # something is holding the particle up, though: gravity's own per-substep
+    # step is g*dt^2 = 1.1e-5 m, which is BELOW this floor, so an unsupported
+    # particle that starts at rest could never begin to fall.
+    if total > 0.0 and wp.length(p - prev[i]) < SLEEP_V * dt:
         prev[i] = p
     pos[i] = p
 
