@@ -577,3 +577,42 @@ def test_event_camera_source_final(vk_renderer):
     finally:
         vk_renderer.event_camera_enabled = False
         vk_renderer.event_camera_source = "shaded"
+
+
+def test_event_camera_subframe_timestamps(vk_renderer):
+    """ESIM sub-frame stamps. With the microsecond clock driven every frame the
+    detector places each threshold crossing where the log-intensity ramp between
+    the previous sample and this one crosses its level, so a frame's events
+    spread across the interval instead of piling onto one value -- and the
+    packet comes back in time order."""
+    scene, cam = make_scene()
+    box = scene.children[0]
+    vk_renderer.set_event_camera_resolution(64, 48)
+    vk_renderer.event_camera_enabled = True
+    dt_us = 16667                               # a 60 fps sim clock
+    latest = 0
+    try:
+        stamps = []
+        for i in range(16):
+            latest = i * dt_us
+            vk_renderer.set_event_camera_params(threshold=0.15, decay=0.85,
+                                                frame_time_us=latest)
+            box.rotation.y = 0.35 * i
+            vk_renderer.render(scene, cam)
+            if i < 8:                           # ring latency + reference settle
+                continue
+            ev, _ = vk_renderer.read_event_stream(max_events=200000)
+            t = ev[:, 3]
+            assert np.all(np.diff(t) >= 0), \
+                "a read came back out of time order (the packet must be sorted)"
+            stamps.append(t)
+        t_all = np.concatenate(stamps)
+        assert t_all.size and np.any(t_all % dt_us != 0), (
+            f"{t_all.size} events, none of them stamped between two frame "
+            "boundaries -- the sub-frame interpolation is not running")
+        # Two frames of ring latency mean a read belongs to an EARLIER frame, so
+        # the only bound worth asserting is that nothing ran ahead of the clock.
+        assert int(t_all.max()) <= latest, \
+            f"a stamp ({int(t_all.max())}) is ahead of the newest clock ({latest})"
+    finally:
+        vk_renderer.event_camera_enabled = False

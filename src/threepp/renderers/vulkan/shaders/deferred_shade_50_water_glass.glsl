@@ -264,8 +264,8 @@ vec3 shadeWater(vec3 P, vec3 N, vec3 V, MaterialDesc pm, int instIdx,
     //    occlusion queries (see vulkan_shared.h — the PT's caustic energy
     //    balance relies on it), so a shadow ray from the bottom would report
     //    the surface above as a full occluder and render the floor sun-black.
-    //    Unshadowed direct + the vertical-depth absorption term is the honest
-    //    raster approximation of sunlight penetrating water.
+    //    Unshadowed direct + the vertical-depth absorption term is the
+    //    workable raster approximation of sunlight penetrating water.
     if (pm.attenuationDistance > 0.0) {
         // Beyond ~6 attenuation lengths the bottom term is < ~2% — invisible.
         const float maxVis = 6.0 * pm.attenuationDistance;
@@ -614,6 +614,13 @@ vec3 shadeGlass(vec3 P, vec3 N, vec3 V, MaterialDesc pm, vec3 albedo,
     // glass — with the lobe now capped near-mirror, a gentle floor keeps the
     // sky crisp and the sun reads as a real glint. Scene hits stay sharp.
     const float missLod = max(gr, 0.10) * maxLod;
+
+    // Sky visibility at the glass surface, consumed by the transmit legs'
+    // probeHitFill=false env hit fill (see gEnvFillVis). Without it the
+    // enclosed-interior scene showed a sky-lit world through the glass while
+    // probe GI darkened everything around it. The reflect leg passes
+    // probeHitFill=true and is unaffected.
+    gEnvFillVis = probeEnvFillVis(P, N, maxLod);
 
     vec3 sum = vec3(0.0);
     for (int s = 0; s < kGlassSamples; ++s) {

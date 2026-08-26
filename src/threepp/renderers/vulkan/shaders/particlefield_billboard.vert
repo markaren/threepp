@@ -134,7 +134,7 @@ layout(buffer_reference, scalar, buffer_reference_align = 16) readonly buffer Bb
     vec3  viewToWorldY; // world-Y row of the inverse view; reconstructs a
                         // particle's world Y from its VIEW-space position
     // ── 4c: the scene's sun, for BillboardRepr::lit ─────────────────────────
-    // The lights UBO is a descriptor set this pass deliberately does not own,
+    // The lights UBO is a descriptor set this pass does not own,
     // and the sun is three floats — so the renderer snapshots the brightest
     // scene DirectionalLight (the same one-sun the deferred path shades with)
     // here, per view per frame. Already rotated into VIEW space by the host:
@@ -158,9 +158,9 @@ layout(push_constant, scalar) uniform Pc {
                          //     view-space position is three dot products and no
                          //     matrix-layout convention has to be agreed on
     uint64_t paramsAddr; //  8  -> this field's BbParams record
-    uint64_t viewAddr;   //  8  -> this view's BbView record (F4; used to be the
-                         //     exposure/toneMapMode pair, which moved INTO that
-                         //     record to make room for the fog terms)
+    uint64_t viewAddr;   //  8  -> this view's BbView record (exposure,
+                         //     toneMapMode and the fog terms ride there —
+                         //     the push block itself is full)
 } pc;                    // 128 B exactly — the guaranteed minimum push range
 
 layout(location = 0) out vec2  vLocal;// [-1,1]^2 parametric square
@@ -179,10 +179,9 @@ layout(location = 5) flat out float vRing;
 // so the fragment stage's branch is uniform over the whole draw.
 layout(location = 6) flat out uint  vMode;
 // 4c: the sprite's own coverage scale in alpha-over mode — the field opacity
-// times everything that used to dim the RADIANCE (fog transmittance, near fade,
-// LOD, life fade). An occluding sprite fades by becoming TRANSPARENT, not by
-// becoming dark: a dimmed opaque puff is a grey puff, which is the single most
-// obvious tell of fake spray.
+// times every dimming factor (fog transmittance, near fade, LOD, life fade).
+// An occluding sprite fades by becoming transparent, not by becoming dark: a
+// dimmed opaque puff reads as a grey puff.
 layout(location = 7) flat out float vCover;
 // 4c: rotation of the sprite's texture lookup, hashed per slot. Two floats
 // rather than an angle so the fragment stage does no trig.
@@ -191,13 +190,11 @@ const uint kModeAlphaOver = 1u;
 
 // ── The hash ────────────────────────────────────────────────────────────────
 // Bit-for-bit particle_emit.comp's hashU/rnd01, which is itself bit-for-bit
-// FireEffect.cpp's. It is shared here for a specific reason: this shader
-// RE-DERIVES a particle's age from the same closed form the emitter evaluated,
-// rather than reading an age nobody wrote. There is no age channel in the
-// position buffer (w is the radius, and a second buffer for one float per
-// particle would undo the point of the entity), and the lifecycle is four lines
-// of arithmetic over the same hash — so the cheapest correct answer is to
-// compute it. KEEP IN SYNC with particle_emit.comp: streams 0 (birth phase) and
+// FireEffect.cpp's. Shared because this shader re-derives a particle's age
+// from the same closed form the emitter evaluated: there is no age channel in
+// the position buffer (w is the radius), and the lifecycle is four lines of
+// arithmetic over the same hash.
+// KEEP IN SYNC with particle_emit.comp: streams 0 (birth phase) and
 // 4 (period jitter) must mean there exactly what they mean here.
 uint hashU(uint x) {
     x ^= x >> 16;
@@ -436,29 +433,29 @@ void main() {
     gl_Position = clip;
 
     // ── Colour ──────────────────────────────────────────────────────────────
-    // Hot to cool over the life, with a per-particle offset on WHERE in that
+    // Hot to cool over the life, with a per-particle offset on where in that
     // ramp the particle sits, so a field of embers is not one colour animating
-    // in lockstep. This is the blackbody story the flame's emission ramp tells,
-    // told per particle instead of per height.
+    // in lockstep — the same blackbody ramp the flame's emission uses, applied
+    // per particle instead of per height.
     const float cf = clamp(ageFrac + 0.40 * (rnd01(pi, 24u, P.seed) - 0.5), 0.0, 1.0);
     const float fade = pow(max(1.0 - ageFrac, 0.0), max(P.fadePower, 0.0));
-    // Brightness varies per particle as well as over time: real embers are not
-    // 6000 identical lamps, and a hash is the whole cost of saying so.
+    // Brightness varies per particle as well as over time, so embers are not
+    // identical lamps; a hash is the whole cost.
     const float bj = max(1.0 + P.brightJitter * rndS(pi, 23u, P.seed), 0.0);
 
     // ── F4: fog on the camera leg ───────────────────────────────────────────
-    // TRANSMITTANCE ONLY, and the omission of the in-scatter term is the point
-    // rather than a shortcut. These quads blend ADDITIVELY over a background the
-    // deferred pass has ALREADY fogged, so the fog's own radiance along this leg
-    // is in the frame buffer before the sprite arrives; adding it a second time
-    // would double-count it and make distant embers BRIGHTER in murk, which is
-    // the opposite of the effect. What an emitter loses to a medium is its own
-    // light being extinguished, and that is exactly e^(-tau). (The legacy
-    // alpha-blended path composites both terms because it REPLACES the
-    // background rather than adding to it — same model, different compositing.)
+    // Transmittance only — the in-scatter term is intentionally omitted. These
+    // quads blend additively over a background the deferred pass has already
+    // fogged, so the fog's own radiance along this leg is in the frame buffer
+    // before the sprite arrives; adding it a second time would double-count it
+    // and make distant embers brighter in murk. What an emitter loses to a
+    // medium is its own light being extinguished, which is exactly e^(-tau).
+    // (The legacy alpha-blended path composites both terms because it replaces
+    // the background rather than adding to it — same model, different
+    // compositing.)
     //
-    // Per PARTICLE, not per fragment: a sprite is a handful of pixels wide and
-    // the optical depth across it is constant to many decimal places.
+    // Per particle, not per fragment: a sprite is a handful of pixels wide and
+    // the optical depth across it is effectively constant.
     if ((V.flags & kViewFogActive) != 0u) {
         const float partY = dot(V.viewToWorldY, vp) + V.camWorldY;
         const float od    = bbAirOpticalDepth(V, partY, camDist) +
@@ -473,20 +470,18 @@ void main() {
     // host skips it, so this multiply is never reached with a zero).
     const float outScale = ((V.flags & kViewLinearOut) != 0u) ? P.glow : 1.0;
 
-    // ── 4c: the LIT term ────────────────────────────────────────────────────
-    // ONE Henyey-Greenstein lobe about the scene's sun, evaluated per particle.
-    // Not a lighting path and not pretending to be one: no shadow ray, no
-    // cluster walk, no per-fragment work. What it buys is the one thing an
-    // emissive sprite categorically cannot do — a sheet of spray FLARES when
-    // the lens looks through it into the sun and goes flat grey when the sun is
-    // behind the camera, and that swing is most of what says "water in air"
-    // rather than "white dot". The ambient floor is what the shaded side sits
-    // at, so the sprite never goes black.
+    // ── 4c: the lit term ────────────────────────────────────────────────────
+    // One Henyey-Greenstein lobe about the scene's sun, evaluated per
+    // particle. Not a full lighting path: no shadow ray, no cluster walk, no
+    // per-fragment work. What it buys is forward-scatter behaviour an emissive
+    // sprite cannot have — spray flares when the lens looks through it into
+    // the sun and goes flat grey when the sun is behind the camera. The
+    // ambient floor is what the shaded side sits at, so the sprite never goes
+    // black.
     //
-    // The particle is treated as an isotropic scattering parcel with no
-    // self-shadowing and no transmittance from the sun to it: a spray puff is
-    // optically thin and metres across at most. Written down as an
-    // approximation rather than hidden.
+    // Approximation: the particle is an isotropic scattering parcel with no
+    // self-shadowing and no sun-to-particle transmittance (a spray puff is
+    // optically thin and metres across at most).
     vec3 lit = vec3(1.0);
     if ((P.flags & kBbLit) != 0u) {
         const vec3  rd = (camDist > 1e-6) ? (vp / camDist) : vec3(0.0, 0.0, -1.0);
@@ -501,17 +496,17 @@ void main() {
     }
 
     // ── 4c: alpha-over vs additive ──────────────────────────────────────────
-    // The SAME radiance, split between the two channels differently. Additive
-    // folds every dimming factor into the colour, because the only thing it can
-    // do to the frame buffer is add less. Alpha-over folds them into COVERAGE
-    // instead: a distant, fogged or dying sprite is more transparent, not
-    // darker, which is the whole reason this mode exists.
+    // The same radiance, split between the two channels differently. Additive
+    // folds every dimming factor into the colour, because the only thing it
+    // can do to the frame buffer is add less. Alpha-over folds them into
+    // coverage instead: a distant, fogged or dying sprite is more transparent,
+    // not darker — the reason this mode exists.
     //
-    // The additive branch is written as the ORIGINAL expression with one `*
-    // lit` inserted, and `lit` is exactly vec3(1.0) when the flag is off — a
-    // multiply by exactly 1.0 is exact in IEEE, so an unlit additive field
-    // still produces bit-identical radiance. That is the regression contract
-    // for this whole change, and it is why the two branches are not factored.
+    // The additive branch is the original expression with one `* lit`
+    // inserted, and `lit` is exactly vec3(1.0) when the flag is off — a
+    // multiply by 1.0 is exact in IEEE, so an unlit additive field still
+    // produces bit-identical radiance. That regression contract is why the two
+    // branches are not factored.
     const bool alphaOver = (P.flags & kBbAlphaOver) != 0u;
     if (alphaOver) {
         vColor = vec4(mix(P.colorHot, P.colorCool, cf) * lit *
@@ -526,10 +521,10 @@ void main() {
         vCover = 1.0;
         vMode  = 0u;
     }
-    // Rotation of the TEXTURE lookup, hashed per slot. Four puff variants drawn
-    // at one orientation tile visibly; the same four at a hashed angle do not,
-    // and a rotation is two hashed floats against a per-particle atlas index
-    // this pass does not carry.
+    // Rotation of the texture lookup, hashed per slot. Four puff variants
+    // drawn at one orientation tile visibly; the same four at a hashed angle
+    // do not, and a rotation is two hashed floats against a per-particle atlas
+    // index this pass does not carry.
     const float ra = rnd01(pi, 31u, P.seed) * 6.2831853;
     vRot = alphaOver ? vec2(cos(ra), sin(ra)) : vec2(1.0, 0.0);
     vLocal = c;

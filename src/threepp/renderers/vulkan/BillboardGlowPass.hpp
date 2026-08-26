@@ -33,14 +33,15 @@
 // full-extent target would, and it is allocated LAZILY — a scene with no glow
 // field never creates it.
 //
-// The source pass carries NO depth attachment, so a spark behind a wall still
-// contributes its halo. That is a deliberate trade rather than an oversight: a
-// depth test at half extent needs a half-extent depth buffer (the overlay's
-// unjittered depth is full extent, and a render area must fit its attachments),
-// which is a second image and a reduction pass to fill it, for an artefact that
-// bloom's own defining behaviour — bleeding over silhouettes — half-hides
-// anyway. If an occluded emitter ever reads wrong, the fix is that reduction,
-// not a full-extent target.
+// The source pass DOES carry a depth attachment, and it is half extent like the
+// target: the overlay's depth is full extent and a render area must fit its
+// attachments, so `depth` here is filled by a reduction of it
+// (billboard_glow_depth.frag, min over the covered texels = the farthest under
+// reverse-Z). Without it an occluded spark still contributed its halo, and at
+// the campfire's default emberGlow of 8 that halo carries a bright core: sparks
+// behind a wall read as sparks, not as bleed. The reduction is one fullscreen
+// draw over a quarter of the pixels; the alternative — a full-extent source —
+// costs four times the memory and the bandwidth of the pyramid's first tap.
 //
 // ── DESCRIPTOR DISCIPLINE ───────────────────────────────────────────────────
 // Every set here is allocated once and written once per resize, never per
@@ -86,6 +87,24 @@ namespace threepp::vulkan {
         [[nodiscard]] VkImageView srcView(uint32_t frame) const { return src_[frame].view; }
         [[nodiscard]] VkExtent2D  srcExtent() const { return {srcW_, srcH_}; }
 
+        // The depth attachment that source pass tests against, at the same half
+        // extent, and the format the glow pipeline must declare.
+        static constexpr VkFormat kDepthFormat = VK_FORMAT_D32_SFLOAT;
+        [[nodiscard]] VkImageView depthView(uint32_t frame) const { return depth_[frame].view; }
+
+        // Fill this frame's half-extent depth from the overlay pass's
+        // full-extent buffer, in the layout the overlay depth prepass leaves it
+        // (DEPTH_STENCIL_READ_ONLY_OPTIMAL). `srcMultisampled` picks the
+        // sampler2DMS variant, which reduces over the samples as well.
+        //
+        // A null `srcView` means no prepass ran this frame and there is no
+        // occluder buffer to read: the target is then CLEARED to the far plane,
+        // so every spark passes and the pass behaves as it did before it had a
+        // depth attachment at all. Leaves the image barriered for the source
+        // pass's depth-test read.
+        void recordDepthReduce(VkCommandBuffer cb, uint32_t frame, VkImageView srcView,
+                               bool srcMultisampled, VkExtent2D srcExtent);
+
         // Level 0 of the pyramid — what the composite draw samples. The set is
         // pre-written per frame-in-flight; the renderer binds it and adds.
         [[nodiscard]] VkDescriptorSet compositeSet(uint32_t frame) const {
@@ -120,6 +139,7 @@ namespace threepp::vulkan {
         uint32_t levels_ = 0;
         std::vector<Image2D> src_;// [framesInFlight]
         std::vector<Image2D> pyr_;// [framesInFlight × kMaxLevels]
+        std::vector<Image2D> depth_;// [framesInFlight], half extent, kDepthFormat
         VkSampler sampler_ = VK_NULL_HANDLE;
 
         // The pyramid pipelines. Same SPIR-V, same 28 B push block and same
@@ -134,14 +154,33 @@ namespace threepp::vulkan {
         // Composite: one combined image sampler on pyramid level 0.
         VkDescriptorSetLayout compositeDsLayout_ = VK_NULL_HANDLE;
 
+        // The depth reduction: one fullscreen draw, one combined image sampler
+        // on the overlay's depth. Two pipelines because that source is
+        // multisampled exactly when the Canvas asked for antialiasing.
+        VkDescriptorSetLayout reduceDsLayout_   = VK_NULL_HANDLE;
+        VkPipelineLayout      reducePipeLayout_ = VK_NULL_HANDLE;
+        VkPipeline            reducePipe_       = VK_NULL_HANDLE;// sampler2D
+        VkPipeline            reducePipeMs_     = VK_NULL_HANDLE;// sampler2DMS
+        VkSampler             depthSampler_     = VK_NULL_HANDLE;
+
         VkDescriptorPool descPool_ = VK_NULL_HANDLE;
         std::vector<VkDescriptorSet> downSets_;
         std::vector<VkDescriptorSet> upSets_;
         std::vector<VkDescriptorSet> compositeSets_;
+        std::vector<VkDescriptorSet> reduceSets_;
+        // The source view each reduceSets_ entry currently names. The overlay's
+        // depth is not this pass's image, so unlike every other set here it
+        // cannot be written once per resize and forgotten — but it only ever
+        // changes when the renderer reallocates that attachment, which it does
+        // with the device idled. Rewriting only on a change keeps this out of
+        // the VUID-03047 zone the class comment describes.
+        std::vector<VkImageView> reduceSetViews_;
 
         Image2D createImage(uint32_t w, uint32_t h, VkImageUsageFlags usage, const char* label);
-        void    transitionFreshImage(VkImage img);
+        Image2D createDepthImage(uint32_t w, uint32_t h, const char* label);
+        void    transitionFreshImage(VkImage img, VkImageAspectFlags aspect);
         void    createPipelines();
+        void    createReducePipelines();
         void    createDescriptors();
         void    rewriteDescriptors();
     };

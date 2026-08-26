@@ -37,8 +37,8 @@
 //     touched, so a wireframe behind a cloud drew over it. The depth AOV is
 //     stamped into that buffer by VulkanCoreRecord::recordSplatOverlayDepthStamp
 //     (shaders/splat_overlay_depth.frag) to close it.
-//  5. DETERMINISM. Sensor goldens depend on it and "RT is never bit-exact" is
-//     already a scar in this tree. The danger is the tile EXPANSION: an
+//  5. DETERMINISM. Sensor goldens depend on it. The danger is the tile
+//     expansion: an
 //     atomic-append expansion produces a different order every run. This one
 //     computes a prefix sum over the per-splat tile counts first, so every
 //     (splat, tile) pair lands at an index that is a pure function of the
@@ -647,8 +647,8 @@ namespace threepp::vulkan {
         void createDescriptorPool();
         void allocateScratch(uint32_t maxSplats, uint32_t entryBudget);
         // Every claimed target's sets, or one target's. The one-target flavour
-        // exists so a slot claimed while other targets' sets are IN FLIGHT can
-        // be written without touching them (VUID-…-03047 is a scar here).
+        // exists so a slot claimed while other targets' sets are in flight can
+        // be written without touching them (VUID-…-03047).
         void writeSets(Cloud& c);
         void writeSets(Cloud& c, uint32_t target);
         // rangeBuf_ is sized from the tile grid, and the targets do not share

@@ -6838,6 +6838,10 @@ class Texture:
         ...
     def needs_update(self) -> None:
         ...
+    def update_data(self, data: typing.Annotated[numpy.typing.ArrayLike, numpy.uint8]) -> None:
+        """
+        Rewrite a uint8 texture's pixels in place from a (height, width, 3|4) uint8 array of the SAME size, and mark it dirty. For per-frame panels (sensor readouts) without churning texture allocations.
+        """
     def update_float(self, data: typing.Annotated[numpy.typing.ArrayLike, numpy.float32]) -> None:
         """
         Rewrite a float texture's pixels in place from a (height, width, 3|4) float32 array of the SAME size, and mark it dirty. For ping-ponging a procedural sky.

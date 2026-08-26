@@ -17,6 +17,7 @@ EventCameraSensor::EventCameraSensor(unsigned int width, unsigned int height)
 void EventCameraSensor::allocateImages() {
     const size_t pixels = static_cast<size_t>(width_) * height_;
     logRef_.assign(pixels, 0.f);
+    logLast_.assign(pixels, 0.f);
     vizAccum_.assign(pixels, 0.f);
     readbackBuf_.clear();
 
@@ -60,7 +61,13 @@ void EventCameraSensor::ingestPixels(const unsigned char* rgb,
         return;
     }
 
-    const auto  t       = static_cast<float>(simTime_);
+    // The interval this frame's events interpolate into. On the first
+    // frame (nothing to ramp from, nothing emitted) it collapses to a
+    // point; so it does whenever the owner never drives the clock, in
+    // which case every stamp is simTime_ exactly as before.
+    const double tPrev  = firstFrame_ ? simTime_ : prevSimTime_;
+    const double tNow   = simTime_;
+    const double dt     = tNow - tPrev;
     const float thresh  = std::max(1e-4f, params.contrastThreshold);
     const float minLuma = std::max(1e-6f, params.minLuma);
     const float decay   = std::clamp(params.vizDecay, 0.f, 1.f);
@@ -88,12 +95,16 @@ void EventCameraSensor::ingestPixels(const unsigned char* rgb,
             const float logLum = std::log(luma);
 
             if (firstFrame_) {
-                logRef_[idx] = logLum;
+                logRef_[idx]  = logLum;
+                logLast_[idx] = logLum;
                 continue;
             }
 
-            const float delta = logLum - logRef_[idx];
+            const float ref   = logRef_[idx];
+            const float last  = logLast_[idx];
+            const float delta = logLum - ref;
             const float absD  = std::abs(delta);
+            logLast_[idx] = logLum;// the ramp's start next frame, fired or not
 
             if (absD >= thresh) {
                 // Emit one event per integer multiple of threshold,
@@ -102,11 +113,26 @@ void EventCameraSensor::ingestPixels(const unsigned char* rgb,
                 // amount, leaving the residual for next frame.
                 const int n = std::min(maxEv, static_cast<int>(absD / thresh));
                 const int polarity = (delta > 0.f) ? 1 : -1;
+
+                // Sub-frame timestamps, the ESIM model: log intensity is
+                // assumed to ramp linearly from last (at tPrev) to logLum
+                // (at tNow), so crossing k of level ref + pol·(k+1)·thresh
+                // happens at the fraction of the ramp where that level
+                // sits. The denominator is the span of the RAW samples,
+                // not of the reference — they differ by the sub-threshold
+                // residual carried in from earlier frames.
+                const float span     = logLum - last;
+                const bool  flatRamp = std::abs(span) < 1e-6f;
+
                 for (int k = 0; k < n; ++k) {
+                    const float level = ref + static_cast<float>(polarity * (k + 1)) * thresh;
+                    const float frac  = flatRamp
+                            ? 1.f
+                            : std::clamp((level - last) / span, 0.f, 1.f);
                     EventCameraEvent ev{};
                     ev.x         = static_cast<uint16_t>(x);
                     ev.y         = static_cast<uint16_t>(y);
-                    ev.timestamp = t;
+                    ev.timestamp = static_cast<float>(tPrev + static_cast<double>(frac) * dt);
                     ev.polarity  = static_cast<int8_t>(polarity);
                     events.push_back(ev);
                 }
@@ -118,7 +144,19 @@ void EventCameraSensor::ingestPixels(const unsigned char* rgb,
         }
     }
 
-    firstFrame_ = false;
+    firstFrame_  = false;
+    prevSimTime_ = tNow;
+
+    // Time-order the packet. Generation is raster order, but the stamps
+    // are now spread across the frame's interval, so a downstream
+    // consumer that assumes non-decreasing t (the .aedat convention,
+    // time surfaces, voxel-grid encoders) would see it violated. Stable
+    // sort so pixels that share a stamp keep raster order, which keeps
+    // the output reproducible.
+    std::stable_sort(events.begin(), events.end(),
+                     [](const EventCameraEvent& a, const EventCameraEvent& b) {
+                         return a.timestamp < b.timestamp;
+                     });
 
     // Project accumulator into the visualisation texture. Map [-1, +1]
     // into [0, 1] with 0.5 = "no recent event". sRGB byte encoding.

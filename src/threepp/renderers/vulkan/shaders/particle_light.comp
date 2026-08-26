@@ -264,7 +264,7 @@ void main() {
     // ray shares the camera's forward and the origin is the particle's own
     // footprint on the near plane, so the direction is known outright and the
     // "camera" this particle sees is the point directly up-ray from it — which
-    // keeps the HG phase (backlit silver lining) and the march below honest
+    // keeps the HG phase (backlit silver lining) and the march below correct
     // instead of fanning them out from an eye that has no meaning here.
     const bool  parallelCam = cam.camAux.x > 0.5;
     const vec3  eye   = cam.viewInverse[3].xyz;
@@ -381,7 +381,7 @@ void main() {
     // ParticleSystem path untouched. The model here was INCOMPLETE, not
     // different: it already composes extinction and in-scatter for every other
     // medium in the scene, sequentially, and this is the third medium composed
-    // the same way. The assertion that keeps it honest is byte identity when no
+    // the same way. The guard is byte identity when no
     // volume is bound, which the uniform branch below gives textually: a scene
     // with no ParticleField density executes exactly the pre-fix arithmetic.
     //

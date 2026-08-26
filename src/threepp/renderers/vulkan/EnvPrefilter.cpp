@@ -237,8 +237,8 @@ namespace threepp::vulkan {
                     // luminance — bright clouds/sky bands sit at 10–50× (see the
                     // detection comment above) and survive untouched — and fold the
                     // removed energy into the analytic sun (it is circumsolar
-                    // radiance; direction-weighting keeps the aggregate direction
-                    // honest), so total illumination is conserved. Mip 0 keeps the
+                    // radiance; direction-weighting preserves the aggregate
+                    // direction), so total illumination is conserved. Mip 0 keeps the
                     // original pixels either way: backgrounds and true mirrors still
                     // see the real sun and halo.
                     const float capL = 64.f * meanL;

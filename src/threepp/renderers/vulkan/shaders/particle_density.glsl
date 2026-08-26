@@ -80,15 +80,11 @@ layout(set = 0, binding = 69) uniform sampler3D particleDensityLinTex[kMaxDensit
 // enable GL_EXT_scalar_block_layout, and the layout below is std140-clean by
 // construction — everything is a vec4/uvec4.
 //
-// ── WHY albedoAniso IS PER FIELD (F-A of plans/particle-atmosphere.md) ───────
-// It used to be ONE vec4 shared by every bound volume, filled from whichever
-// field happened to be enumerated first. That was a documented wart with no
-// cost while the only client was dust — two dust clouds rarely differ — but it
-// makes the DEFINING fire scene impossible: a fire field and a smoke field in
-// one scene are a bright warm medium and a dark grey one, and one shared albedo
-// cannot be both. Per-field costs 48 B of UBO and one indexed load at a site
-// that already loops per volume, so there is no argument for the shared form
-// once anything needs two media. `emission` is new for the same loop.
+// ── Why albedoAniso is per field (F-A of plans/particle-atmosphere.md) ───────
+// A single shared vec4 cannot serve a fire field and a smoke field in one
+// scene — a bright warm medium and a dark grey one need different albedos.
+// Per-field costs 48 B of UBO and one indexed load at a site that already
+// loops per volume. `emission` is per-field for the same reason.
 layout(set = 0, binding = 68) uniform ParticleDensityUbo {
     vec4  boxMin[kMaxDensityFields];     // xyz = world min corner, w = resolution
     vec4  boxInvSize[kMaxDensityFields]; // xyz = 1 / (2 * halfExtent), w unused
@@ -137,13 +133,13 @@ vec3 blackbodyRGB(float T) {
     return vec3(1.0, g, b) * (h2 * h2);
 }
 
-// The emitted radiance ONE volume contributes at a sample point — the SINGLE
-// expression the fire model has, factored out so that every consumer of it is
-// the same model by construction rather than by review. `ty` is the sample's
+// The emitted radiance one volume contributes at a sample point — the single
+// expression the fire model has, factored out so every consumer shares the
+// same model. `ty` is the sample's
 // normalised height inside that volume's box (already in [0,1] — every caller
 // reaches this only after the in-box test, which is what keeps the pow's base
 // non-negative; a negative base is undefined in GLSL and has produced NaN in
-// this tree before, feedback_float_pi_sin_pow_nan). `sigma` is THAT volume's
+// this tree before). `sigma` is that volume's
 // own extinction there, because emission ∝ σ is the physics (soot radiates in
 // proportion to how much soot there is) and is what makes a flame's silhouette
 // be the particle distribution instead of a billboard card.
@@ -342,21 +338,20 @@ float pdLightTransmittance(vec3 p, vec3 L) {
 // emission ramp — so a campfire beside a pond reflected in that pond showed
 // only the flicker PointLight's glint on the wave facets and none of the flame
 // itself. The primary leg gets the full treatment from applyParticleFog; a
-// reflected leg gets THIS: the same medium, the same emission expression
+// reflected leg gets this: the same medium, the same emission expression
 // (pdEmissionAt, shared), the same skip-don't-clamp box test, the same
-// Beer-Lambert compositing order — and NOTHING ELSE.
+// Beer-Lambert compositing order — and nothing else.
 //
-// WHAT IS DELIBERATELY OMITTED, and why it is an omission and not a bug:
-// the sun's in-scatter (one centroid shadow ray + HG phase + cloud shadow +
-// medium self-shadow), the ambient/env in-scatter, and the per-step
-// point-light glow. Those are applyParticleFog's full march, and the house rule is
-// ONE medium model — a second, differently-wrong copy of the full march is the
-// duplicate BSDF that rule exists to forbid. So a smoke plume reflected in
-// water DIMS what is behind it (transmittance) but is not itself lit by the
-// sun in the mirror: it reads as a dark column rather than a bright one. That
-// is the same trade particle_light.comp's overlay fog makes, recorded there
-// for the same reason. The flame, being emission-dominated, loses nothing:
-// emission IS the term this returns.
+// Intentionally omitted: the sun's in-scatter (one centroid shadow ray + HG
+// phase + cloud shadow + medium self-shadow), the ambient/env in-scatter, and
+// the per-step point-light glow. Those are applyParticleFog's full march, and
+// the house rule is one medium model — a second, differently-wrong copy of
+// the full march is the duplicate-BSDF pattern that rule forbids. So a smoke
+// plume reflected in water dims what is behind it (transmittance) but is not
+// itself lit by the sun in the mirror: it reads as a dark column rather than
+// a bright one — the same trade particle_light.comp's overlay fog makes. The
+// flame, being emission-dominated, loses nothing: emission is the term this
+// returns.
 //
 // Fixed step count, midpoint phase, no temporal jitter — the phase-2
 // determinism contract. 16 rather than the primary march's 24+: a reflected

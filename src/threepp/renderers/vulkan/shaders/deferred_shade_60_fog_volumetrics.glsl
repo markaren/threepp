@@ -152,11 +152,10 @@ vec3 applyHeteroSurfaceFog(vec3 col, vec2 fuv, float viewDist, vec3 ro, vec3 hit
 // the medium's own light-leg transmittance a deep soot column was fully
 // sunlit through its entire depth and read as white ash at any albedo.
 //
-// ── POINT LIGHTS ARE MARCHED HERE, NOT READ OUT OF THE FROXEL LUT ────────────
-// They used to arrive through froxelInscatter: the injector multiplied its
-// clustered point-light in-scatter by the dust's own σ, on the argument that
-// "a glow is low-frequency in exactly the way a silhouette is not". That
-// argument fails when the light sits INSIDE a thin plume, which is the entire
+// ── Point lights are marched here, not read out of the froxel LUT ────────────
+// Routing them through froxelInscatter (clustered point-light in-scatter
+// multiplied by the dust's own σ) breaks when the light sits inside a thin
+// plume — which is the entire
 // campfire geometry. The froxel grid is 128×72×64 and VIEW-anchored (10 px per
 // cell laterally at 720p, depth slices ~12.6% of distance); its σ is sampled at
 // ONE per-frame-jittered point per cell and converged by a temporal EMA whose
@@ -213,10 +212,9 @@ vec3 applyHeteroSurfaceFog(vec3 col, vec2 fuv, float viewDist, vec3 ro, vec3 hit
 // its own near side exactly as the in-scatter is. `heightFraction` is tt.y, the
 // in-box normalised coordinate the loop already computes for the fetch.
 //
-// The whole emissive path sits behind `pd.counts.y != 0` — a UNIFORM branch on
+// The whole emissive path sits behind `pd.counts.y != 0` — a uniform branch on
 // "any bound volume is emissive" — so a dust-only scene executes the identical
-// arithmetic it did before this term existed. That is the F0 checkpoint, not a
-// nicety.
+// arithmetic it did before this term existed (the F0 checkpoint).
 //
 // ── THE MARCH GRID: DEPTH-INDEPENDENT, ~1 m STEPS, SPATIALLY DITHERED ────────
 // Three rules, each answering a defect a capture showed:
@@ -457,22 +455,20 @@ vec3 applyParticleFog(vec3 col, vec3 ro, vec3 rd, float tMax) {
     // behind it fade through the same profile, and with no air medium bound
     // every factor is exactly 1 and the return is textually the pre-fix one.
     //
-    // AT THE CENTROID, not per step. `cen` is the sigma-weighted centroid the
+    // At the centroid, not per step. `cen` is the sigma-weighted centroid the
     // march already computed and already uses for the sun's shadow ray and the
     // cloud-shadow sample, so this reuses that approximation rather than
     // inventing a second one: the air's optical depth varies by well under a
     // percent across a ten-metre plume seventy metres out, while a per-step
     // form would put two exps and a distance() inside the march loop.
     //
-    // AND THE OTHER HALF, which a capture caught and arithmetic would not have:
-    // attenuating only the added term turns a plume in THICK fog into a DARK
-    // HOLE. `col` arrives carrying the air's in-scatter over the WHOLE leg, and
-    // `col · e^-tau` extinguishes all of it — including the share scattered
-    // BETWEEN the camera and the plume, which is in FRONT of the plume and which
-    // the plume therefore cannot occlude. In thin fog that share is nothing; at
-    // --mist 0.010 it is most of the pixel, and the previously-unattenuated
-    // added term had been quietly cancelling the error. Fixing one without the
-    // other swapped a plume that would not fade for a black smudge.
+    // The other half: attenuating only the added term turns a plume in thick
+    // fog into a dark hole. `col` arrives carrying the air's in-scatter over
+    // the whole leg, and `col · e^-tau` extinguishes all of it — including the
+    // share scattered between the camera and the plume, which is in front of
+    // the plume and which the plume therefore cannot occlude. In thin fog that
+    // share is nothing; at --mist 0.010 it is most of the pixel. Fixing one
+    // without the other swaps a plume that would not fade for a black smudge.
     //
     // The split is exact and costs one lerp. With I the air's in-scatter
     // radiance and T its transmittance to the plume, the caller handed us

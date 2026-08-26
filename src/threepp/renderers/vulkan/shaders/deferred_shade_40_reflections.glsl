@@ -132,9 +132,13 @@ vec3 sampleGGXReflectionFib(vec3 V, vec3 N, float roughness, int s, int count) {
 // pass true — the probe field is the occlusion-correct interior irradiance
 // (the mirror-in-a-corridor fix). TRANSMISSION continuations (thin-shell /
 // refraction / behind-view — content directly under glass) pass false and
-// keep the env fill: a world-scale probe grid cannot resolve a glass-covered
-// cavity (watch dial, goggles, vitrines — probes there sit inside the case)
-// and "seen through clear glass" sees the same sky the glass surface sees.
+// keep the env fill's SHAPE: a world-scale probe grid cannot resolve a
+// glass-covered cavity (watch dial, goggles, vitrines — probes there sit
+// inside the case). The fill's MAGNITUDE is scaled by gEnvFillVis, the sky
+// visibility measured at the transmitting surface — "seen through clear
+// glass" sees the sky the glass surface sees, which in an enclosed interior
+// is none of it (the raw fill lit everything behind glass sky-bright while
+// probe GI darkened the opaque surround).
 // First-bounce hit distance of the last traceRadiance call, for the reflection
 // denoiser's gloss-blur footprint (carried in reflAux .w): -1 = no committed
 // hit (pure env miss — the radiance is ALREADY lobe-filtered via missLod, so
@@ -160,6 +164,27 @@ bool gTraceHitMoved = false;
 // Water reflected in OTHER surfaces is unaffected — only water's own
 // reflection sets this.
 bool gTraceSkipWater = false;
+
+// Sky-visibility scale for the env hit fill on probeHitFill=false traces.
+// Stamped by the transmission callers (shadeGlass, the additive/alpha-blend
+// behind-views) with probeEnvFillVis at the transmitting surface; 1.0 for
+// every other caller (reflection traces read the probe fill and ignore this).
+float gEnvFillVis = 1.0;
+
+// Measured probe/env irradiance ratio at P — the envSpecVis construction from
+// the opaque primary shade: 1 under open sky, → 0 deep inside an enclosure.
+// Conf-gated the same way: a starved probe neighbourhood (all 8 probes inside
+// geometry) means "unmeasured", not "dark" — return 1.0 so the env fill
+// survives untouched (the watch-dial/goggles cavity case).
+float probeEnvFillVis(vec3 P, vec3 N, float maxLod) {
+    if (probeGrid.enabled <= 0.5) return 1.0;
+    const vec3  LUMW   = vec3(0.2126, 0.7152, 0.0722);
+    float conf;
+    const float actE   = dot(probeIrradianceConf(P, N, conf), LUMW) * (1.0 / PI);
+    const float unoccE = dot(sampleEnvLod(N, maxLod), LUMW);
+    const float vis    = clamp(actE / max(unoccE, 1e-5), 0.0, 1.0);
+    return mix(1.0, vis, smoothstep(0.0, 0.1, conf));
+}
 
 vec3 traceRadiance(vec3 origin, vec3 dir, bool doShadows, float maxLod, float missLod, inout uint seed, bool cheapHits, bool probeHitFill) {
     const int REFL_MAX_BOUNCES = 3;
@@ -277,17 +302,24 @@ vec3 traceRadiance(vec3 origin, vec3 dir, bool doShadows, float maxLod, float mi
         // near-black. Low confidence falls back to the legacy env fill.
         // Probes off keeps the original approximation.
         vec3 hitDiffInd = sampleEnvLod(hitN, maxLod) + lights.ambient;
-        if (probeGrid.enabled > 0.5 && probeHitFill) {
-            float probeConf;
-            const vec3 probeFill = probeIrradianceConf(hitP, hitN, probeConf) * (1.0 / PI);
-            // SATURATED confidence: interior walls have partially-valid probe
-            // neighbourhoods (some of the 8 sit inside the wall), and a linear
-            // blend re-admitted (1−conf) of the full-sky fill — re-brightening
-            // the enclosed corridors the probe fill exists to fix. Any
-            // reasonably-measured neighbourhood (conf ≥ 0.25) is trusted
-            // outright; only a truly starved one (all 8 probes inside
-            // geometry) falls back to the env fill instead of black.
-            hitDiffInd = mix(hitDiffInd, probeFill, smoothstep(0.0, 0.25, probeConf));
+        if (probeGrid.enabled > 0.5) {
+            if (probeHitFill) {
+                float probeConf;
+                const vec3 probeFill = probeIrradianceConf(hitP, hitN, probeConf) * (1.0 / PI);
+                // SATURATED confidence: interior walls have partially-valid probe
+                // neighbourhoods (some of the 8 sit inside the wall), and a linear
+                // blend re-admitted (1−conf) of the full-sky fill — re-brightening
+                // the enclosed corridors the probe fill exists to fix. Any
+                // reasonably-measured neighbourhood (conf ≥ 0.25) is trusted
+                // outright; only a truly starved one (all 8 probes inside
+                // geometry) falls back to the env fill instead of black.
+                hitDiffInd = mix(hitDiffInd, probeFill, smoothstep(0.0, 0.25, probeConf));
+            } else {
+                // Transmission retrace: env-fill shape (probes cannot resolve
+                // the cavity) at the sky level that actually reaches the
+                // transmitting surface. See gEnvFillVis.
+                hitDiffInd *= gEnvFillVis;
+            }
         }
         radiance += tput * hitAlpha * shadeDiffuseDirect(hitP, hitN, hitV, hAlbedo, hRough, hMetal,
                                               hEmissive * gReflEmitterScale,
@@ -317,7 +349,11 @@ vec3 traceRadiance(vec3 origin, vec3 dir, bool doShadows, float maxLod, float mi
         // throughput is negligible — cap off with prefiltered-env specular.
         if (b >= REFL_MAX_BOUNCES - 1 || hRough > 0.35 ||
             max(max(specW.r, specW.g), specW.b) < 0.02) {
-            radiance += tput * specW * sampleEnvLod(hitR, hRough * maxLod);
+            // Transmission retrace: the split-sum env cap-off takes the same
+            // surface sky-visibility scale as the diffuse fill (a rough metal
+            // behind glass has no diffuse — this term is its whole shade).
+            radiance += tput * specW * sampleEnvLod(hitR, hRough * maxLod)
+                      * (probeHitFill ? 1.0 : gEnvFillVis);
             break;
         }
         // Continue the reflection one bounce deeper (GGX-jittered when glossy).
@@ -332,9 +368,9 @@ vec3 traceRadiance(vec3 origin, vec3 dir, bool doShadows, float maxLod, float mi
     // one of them ever stopping it. d and curMissLod still describe the live
     // ray, so terminate on the environment exactly as the miss branch would
     // (returning black here is what put dark dots in grazing ocean
-    // reflections). At 12 steps this is rare enough not to be a visible answer
-    // in its own right, which is the whole point: at 3 it fired constantly, and
-    // a frequent wrong answer is a visible artifact whichever colour it is.
+    // reflections). At 12 steps this fires rarely enough not to be a visible
+    // answer in its own right; at 3 it fired constantly, and a frequent wrong
+    // answer is a visible artifact whichever colour it is.
     // Every shading exit break's first, so this can never double-count.
     if (step >= REFL_MAX_STEPS) radiance += tput * sampleEnvLod(d, curMissLod);
     // A moving-caster SHADOW inside the reflected content is moving content just

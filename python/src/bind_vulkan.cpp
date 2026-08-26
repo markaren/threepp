@@ -830,9 +830,17 @@ namespace threepp_py {
                      "Contrast threshold in log-intensity units (0.15 fires on almost any\n"
                      "edge, 0.30 only on hard ones), the visualisation's per-frame decay\n"
                      "toward mid-grey, the luma floor that stops log() exploding in the\n"
-                     "shadows, the per-pixel event cap, and the microsecond clock stamped\n"
-                     "onto every event this frame (drive it from your sim clock — a\n"
-                     "wall-clock stamp is not reproducible).")
+                     "shadows, the per-pixel event cap, and the microsecond clock for THIS\n"
+                     "frame's sample.\n"
+                     "\n"
+                     "Drive `frame_time_us` EVERY frame from a monotone sim clock (a\n"
+                     "wall-clock stamp is not reproducible). The detector remembers the\n"
+                     "previous value and interpolates each event's timestamp linearly\n"
+                     "between the two — the ESIM model — so a frame's events spread across\n"
+                     "(previous, this] instead of sharing one stamp. Left at its default the\n"
+                     "interval is empty and every event carries 0, an obviously-unstamped\n"
+                     "stream rather than a plausible wrong one. The call only stores a\n"
+                     "struct, so per-frame is cheap.")
                 .def_property_readonly("event_camera_params",
                                        [](PyVulkanRenderer& r) {
                                            const auto p = r.native().eventCameraParams();
@@ -921,11 +929,17 @@ namespace threepp_py {
                      py::arg("max_events") = size_t(1000000),
                      "The sparse event stream of the last completed detector frame as\n"
                      "((N, 4) int64, overflowed): columns are x, y (image convention,\n"
-                     "row 0 = top), polarity (+1 brightening / -1 darkening) and t_us\n"
-                     "(the frame_time_us stamped on it). `overflowed` is True when the\n"
-                     "GPU append list saturated and events were dropped — the same\n"
-                     "failure mode a real sensor's readout has. Unsorted: the GPU\n"
-                     "appends with an atomic, so order is dispatch order, not time.")
+                     "row 0 = top), polarity (+1 brightening / -1 darkening) and t_us.\n"
+                     "`overflowed` is True when the GPU append list saturated and events\n"
+                     "were dropped — the same failure mode a real sensor's readout has.\n"
+                     "\n"
+                     "t_us is sub-frame interpolated: log intensity is taken to ramp\n"
+                     "linearly between two consecutive detector frames and each threshold\n"
+                     "crossing is stamped where it crosses, so one frame's events span\n"
+                     "(previous frame_time_us, this one] rather than sharing a value.\n"
+                     "Rows come back sorted ascending by (t_us, y, x, polarity) — time\n"
+                     "order like a real readout, and deterministic despite the GPU's\n"
+                     "atomic append order being scheduler-dependent.")
                 .def_property("events_only_mode",
                               [](PyVulkanRenderer& r) { return r.native().eventsOnlyMode(); },
                               [](PyVulkanRenderer& r, bool v) { r.native().setEventsOnlyMode(v); },

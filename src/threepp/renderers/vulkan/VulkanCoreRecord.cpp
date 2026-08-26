@@ -411,8 +411,8 @@ bool VulkanRenderer::Impl::recordGbufferStage(VkCommandBuffer cb, uint32_t image
                     // HiZ from its depth (the raw MS attachment under MSAA —
                     // its samples reduce at mip 0) → AABB test → pass B draws
                     // only the newly visible. rasterGbufMs (this timing
-                    // scope) covers the WHOLE sequence, so the on/off
-                    // comparison is honest.
+                    // scope) covers the whole sequence, so the on/off
+                    // comparison measures like for like.
                     occl_->recordFilter(cb, currentFrame, indirectTotalDraws_);
                     recordRasterGbufPassInternal(cb, currentFrame, occlA, occlFb,
                                                  occlMsaa,
@@ -1031,7 +1031,7 @@ void VulkanRenderer::Impl::recordSplats(VkCommandBuffer cb) {
             // frame, so composing it with this frame's projection is the only
             // way to get the real previous VP here — and it guarantees the
             // splat motion vectors and the raster's come from the same
-            // matrices, which is the whole point of writing them at all.
+            // matrices.
             {
                 Matrix4 sky, projRev, prev;
                 std::memcpy(sky.elements.data(), view().taaSkyReproj_.data(), 64);
@@ -1866,6 +1866,55 @@ void VulkanRenderer::Impl::recordFieldBillboardGlow(VkCommandBuffer cb) {
             const VkExtent2D gext = billboardGlow_->srcExtent();
             if (gext.width == 0 || gext.height == 0) return;
 
+            // ── Occlusion ───────────────────────────────────────────────────
+            // The overlay depth prepass has already laid this frame's occluders
+            // into the overlay pass's depth attachment; reduce that buffer to
+            // the glow target's half extent so the second draw of the sparks is
+            // depth-tested exactly like the sharp one. The predicate below is
+            // the prepass's own, verbatim: when it did not run there is no
+            // occluder buffer, and recordDepthReduce clears to the far plane
+            // instead — the un-occluded behaviour this pass shipped with.
+            const bool overlayMsaa = overlaySamples() > 1;
+            const bool depthValid  = !view().secondary &&
+                                    overlayDepthPrepassPipeline != VK_NULL_HANDLE &&
+                                    sceneHasOverlayContent();
+            VkImageView srcDepthView = VK_NULL_HANDLE;
+            VkImage     srcDepthImg  = VK_NULL_HANDLE;
+            VkExtent2D  srcDepthExt{};
+            if (depthValid) {
+                srcDepthView = overlayMsaa ? overlayMsDepth_.view
+                                           : view().rasterGbufs[currentFrame].unjitDepth.view;
+                srcDepthImg  = overlayMsaa ? overlayMsDepth_.image
+                                           : view().rasterGbufs[currentFrame].unjitDepth.image;
+                srcDepthExt  = viewOutExtent();
+            }
+            if (srcDepthView != VK_NULL_HANDLE) {
+                // The prepass left the image in DEPTH_STENCIL_READ_ONLY_OPTIMAL
+                // and made its writes visible to the depth TEST only. This is
+                // the same layout with a different access: a sampled read.
+                VkImageMemoryBarrier2 toSample{};
+                toSample.sType         = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
+                toSample.srcStageMask  = VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT;
+                toSample.srcAccessMask = VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+                toSample.dstStageMask  = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT;
+                toSample.dstAccessMask = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT;
+                toSample.oldLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
+                toSample.newLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
+                toSample.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+                toSample.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+                toSample.image = srcDepthImg;
+                toSample.subresourceRange.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT;
+                toSample.subresourceRange.levelCount = 1;
+                toSample.subresourceRange.layerCount = 1;
+                VkDependencyInfo dep{};
+                dep.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
+                dep.imageMemoryBarrierCount = 1;
+                dep.pImageMemoryBarriers = &toSample;
+                vkCmdPipelineBarrier2(cb, &dep);
+            }
+            billboardGlow_->recordDepthReduce(cb, currentFrame, srcDepthView, overlayMsaa,
+                                              srcDepthExt);
+
             VkRenderingAttachmentInfo colorAtt{};
             colorAtt.sType       = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
             colorAtt.imageView   = billboardGlow_->srcView(currentFrame);
@@ -1884,6 +1933,15 @@ void VulkanRenderer::Impl::recordFieldBillboardGlow(VkCommandBuffer cb) {
             ri.layerCount           = 1;
             ri.colorAttachmentCount = 1;
             ri.pColorAttachments    = &colorAtt;
+            // Read-only: the sparks are additive and must not occlude each
+            // other, exactly as in the sharp overlay pass.
+            VkRenderingAttachmentInfo glowDepthAtt{};
+            glowDepthAtt.sType       = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+            glowDepthAtt.imageView   = billboardGlow_->depthView(currentFrame);
+            glowDepthAtt.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+            glowDepthAtt.loadOp      = VK_ATTACHMENT_LOAD_OP_LOAD;
+            glowDepthAtt.storeOp     = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+            ri.pDepthAttachment      = &glowDepthAtt;
             vkCmdBeginRendering(cb, &ri);
             VkViewport vp{0.f, 0.f, float(gext.width), float(gext.height), 0.f, 1.f};
             vkCmdSetViewport(cb, 0, 1, &vp);
@@ -3449,9 +3507,13 @@ void VulkanRenderer::Impl::ensureOverlayMsaaImages(VkExtent2D ext) {
                     ext.width, ext.height, ctx->swapchainFormat(),
                     VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT, VK_IMAGE_ASPECT_COLOR_BIT,
                     "overlayMsColor", overlaySampleBits_);
+            // SAMPLED as well as attached: BillboardGlowPass reduces this
+            // buffer to its own half extent so the billboard glow source can
+            // depth-test (billboard_glow_depth.frag, sampler2DMS variant).
             overlayMsDepth_ = createAttachmentImage2D(
                     ext.width, ext.height, VK_FORMAT_D32_SFLOAT,
-                    VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT, VK_IMAGE_ASPECT_DEPTH_BIT,
+                    VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
+                    VK_IMAGE_ASPECT_DEPTH_BIT,
                     "overlayMsDepth", overlaySampleBits_);
 
             // Scratch needs a sampler (the inject shader reads it), which

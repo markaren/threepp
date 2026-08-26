@@ -1469,6 +1469,23 @@ if (THREEPP_WITH_VULKAN)
         "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/particlefield_glow.frag"
         kParticleFieldGlowFragSpv
         _particlefield_glow_frag_spv_h)
+    # F4 (1), depth: the glow SOURCE target is half extent and the overlay's
+    # depth is full extent, so the second draw of the glow-enabled fields has
+    # nothing to depth-test against without a reduction. This fullscreen pass
+    # writes that reduced buffer (compute cannot target a depth-aspect image).
+    # Two variants because the overlay's depth is multisampled exactly when the
+    # Canvas asked for antialiasing, and a sampler2D and a sampler2DMS are
+    # different types in GLSL.
+    compile_vulkan_shader(threepp
+        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/billboard_glow_depth.frag"
+        kBillboardGlowDepthFragSpv
+        _billboard_glow_depth_frag_spv_h)
+    compile_vulkan_shader(threepp
+        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/billboard_glow_depth.frag"
+        kBillboardGlowDepthMsFragSpv
+        _billboard_glow_depth_ms_frag_spv_h
+        VARIANT_SUFFIX ms
+        DEFINES DEPTH_MS)
     # MSAA G-buffer dominant-sample resolve (VulkanRenderer::setGbufferMsaa,
     # opt-in, default off). gbuf_resolve.comp picks the majority-covering
     # instance per pixel from the K raster samples and writes it into the

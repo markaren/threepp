@@ -325,22 +325,19 @@ namespace threepp {
         // prevVertexResyncPending pass).
         std::vector<vulkan::impl::BlasRecord*> pendingDynamicPrevResyncs_;
         // Geometries whose BLAS record must be built with allowPacked=false.
-        // Populated by enableVertexInterop when it finds an already-built PACKED
+        // Populated by enableVertexInterop when it finds an already-built packed
         // record: a zero-copy producer writes tightly-packed float xyz normals,
-        // and a record built with allowPacked=true carries snorm16x4 ones
-        // (packedMask bit 0), an encoding no foreign producer knows. Rather than
-        // rejecting (the old behaviour, which made interop unusable on every
-        // ordinary mesh in a default build) or rebuilding inline inside enable
-        // (teardown of buffers in-flight frames still read), enable MARKS the
-        // geometry here, asks for a structural rebuild, and returns a null
-        // handle. buildBlasFor consults this set, so the rebuild produces an
-        // unpacked record through the ordinary machinery — descs, TLAS and every
-        // device address republished exactly as any other rebuild does — and the
-        // caller's next poll arms for real. Documented on enableVertexInterop as
-        // "call it after the first render()", which is the same contract.
+        // but a record built with allowPacked=true carries snorm16x4 ones
+        // (packedMask bit 0). Rebuilding inline inside enable would tear down
+        // buffers in-flight frames still read, so enable marks the geometry
+        // here, requests a structural rebuild, and returns a null handle; the
+        // rebuild (buildBlasFor consults this set) then produces an unpacked
+        // record through the ordinary machinery and the caller's next poll
+        // succeeds. Matches the documented enableVertexInterop contract of
+        // "call it after the first render()".
         //
         // Entries live as long as the geometry does (pruned with the blasCache
-        // record whose liveCheck expired). NOT cleared once consumed: a later
+        // record whose liveCheck expired). Not cleared once consumed: a later
         // geomVersion-mismatch rebuild of the same geometry must stay unpacked,
         // or interop would silently break under the producer.
         std::unordered_set<const BufferGeometry*> forceUnpackedGeoms_;
@@ -396,17 +393,15 @@ namespace threepp {
 
         // ── Per-slot dirty state for the entries-indexed desc rings ──────────
         // What one frame-in-flight slot still owes the GPU: either the whole
-        // array, or a set of half-open ENTRY ranges. Ranges exist because the
-        // arrays are entries-indexed and enormous — MaterialDesc is 608 B, so a
-        // 78.4k-grain scene is 47.7 MB, and a whole-array flush for the two belt
-        // meshes whose scrolling texture bumps their material version every
-        // frame was the single largest CPU item in the frame (2.8 ms).
+        // array, or a set of half-open entry ranges. Ranges matter because the
+        // arrays are entries-indexed and large (MaterialDesc is 608 B; a
+        // 78.4k-entry scene is 47.7 MB), so a whole-array flush for a small
+        // per-frame change costs milliseconds of CPU.
         //
-        // PER SLOT, not global: a change dirtied on frame N must reach every
-        // slot's buffer, but each slot may only be written after ITS fence has
-        // signalled. So each slot accumulates independently and is cleared alone
-        // when its turn comes — the classic pending-set, now carrying ranges
-        // instead of one bool.
+        // Per slot, not global: a change dirtied on frame N must reach every
+        // slot's buffer, but each slot may only be written after its own fence
+        // has signalled, so each slot accumulates independently and is cleared
+        // alone when its turn comes.
         struct DescDirtyRanges {
             // Half-open [first, last) entry ranges, kept sorted and coalesced.
             std::vector<std::pair<uint32_t, uint32_t>> ranges;
@@ -422,9 +417,9 @@ namespace threepp {
                 ranges.clear();// subsumed
             }
             // Callers mark in increasing entry order (every producer walks
-            // entries forward), so coalescing against the LAST range is enough
-            // to make an instanced span — contiguous by construction — exactly
-            // one range. Out-of-order marks stay correct, just less coalesced.
+            // entries forward), so coalescing against the last range collapses
+            // a contiguous instanced span into one range. Out-of-order marks
+            // stay correct, just less coalesced.
             void mark(uint32_t first, uint32_t count = 1) {
                 if (whole || count == 0) return;
                 const uint32_t last = first + count;
@@ -432,9 +427,8 @@ namespace threepp {
                     ranges.back().second = std::max(ranges.back().second, last);
                     return;
                 }
-                // A range list long enough to be its own cost is a sign the
-                // change is scene-wide; one memcpy beats a hundred, and it is
-                // never wrong — only broader than necessary.
+                // Many ranges suggest a scene-wide change; fall back to one
+                // whole-array flush (broader than necessary, never wrong).
                 if (ranges.size() >= 64) {
                     markWhole();
                     return;
@@ -445,19 +439,17 @@ namespace threepp {
 
         // Per-frame-in-flight GeometryDesc storage — same fence-gated ring as
         // materialDescsBuffers below. Ringed for auto-LOD: a level switch
-        // repoints GeometryDesc::indexAddress/indexed, and the single-buffer
-        // version needed a vkDeviceWaitIdle on every switch frame to patch it
-        // in place — a stall exactly when the camera moves (the frames where
-        // responsiveness matters most). Hot path stages in geomDescsCached_ +
+        // repoints GeometryDesc::indexAddress/indexed, and a single shared
+        // buffer would need a vkDeviceWaitIdle on every switch frame to patch
+        // it in place. Hot path stages in geomDescsCached_ +
         // marks geomDescsDirty_ (markGeomDescsDirty / ...Whole); renderFrame's
         // flushGeometryDescsIfDirty memcpys the marked ranges into this frame's
         // slot once its fence has signaled.
         std::array<Buffer, kFramesInFlight> geometryDescsBuffers{};
         std::array<DescDirtyRanges, kFramesInFlight> geomDescsDirty_{};
-        // Per-frame-in-flight MaterialDesc storage. Was a single shared buffer
-        // gated by vkDeviceWaitIdle on every animated-pbr update; now one buffer
-        // per kFramesInFlight slot so the upload after a fence wait races
-        // nothing. The hot path stages new descs in `matDescsCached_` and marks
+        // Per-frame-in-flight MaterialDesc storage; one buffer per slot so the
+        // upload after a fence wait races nothing. The hot path stages new
+        // descs in `matDescsCached_` and marks
         // the entry ranges it touched (markMatDescsDirty); renderFrame's
         // flushMaterialDescsIfDirty memcpys those ranges into
         // `materialDescsBuffers[currentFrame]` once the fence has
@@ -468,9 +460,9 @@ namespace threepp {
         std::vector<MaterialDesc> matDescsCached_;
         std::array<DescDirtyRanges, kFramesInFlight> matDescsDirty_{};
 
-        // Stage a desc change for EVERY slot at once — the shape every producer
-        // wants, since a host-side patch is a fact about the scene and not about
-        // one frame. Named per array so the call sites read as what they patched.
+        // Stage a desc change for every slot at once (a host-side patch applies
+        // to the scene, not to one frame). Named per array so the call sites
+        // read as what they patched.
         void markMatDescsDirty(uint32_t first, uint32_t count = 1) {
             for (auto& d : matDescsDirty_) d.mark(first, count);
         }
@@ -514,13 +506,13 @@ namespace threepp {
         std::array<Buffer, kFramesInFlight> lightsUbos{};
 
         // ── Clustered lights (deferred) ─────────────────────────────────────
-        // ALL scene point/spot lights, power-sorted, in one unified record —
-        // the UBO's 8-per-type arrays above keep the STRONGEST 8 (same sort)
+        // All scene point/spot lights, power-sorted, in one unified record;
+        // the UBO's 8-per-type arrays above keep the strongest 8 (same sort)
         // for the paths screen-space clusters can't serve (secondary ray
         // hits — reflection/GI, volumetric beams, probes). cluster_build.comp
-        // culls the list
-        // into per-cell index rows of a 16×8×24 screen-tile × exponential-Z
-        // grid; deferred_shade's analytic split loops only its own cell.
+        // culls the list into per-cell index rows of a 16×8×24 screen-tile ×
+        // exponential-Z grid; deferred_shade's analytic split loops only its
+        // own cell.
         // KEEP IN SYNC with the ClusterLight structs in cluster_build.comp +
         // deferred_shade.comp (scalar layout, 64 bytes).
         static constexpr uint32_t kMaxClusterLights   = 256;
@@ -543,12 +535,12 @@ namespace threepp {
         // ── Resolved unified fog medium for THIS frame (computed by updateFogUbo,
         // consumed by updateCloudUbo + the froxel gate) ──────────────────────────
         // Phase 2 "one knob": scene.fog is the primary control — when present it
-        // supplies the medium DENSITY (FogExp2.density / linear-Fog span) + COLOUR
-        // and the froxel volumetrics run in HETEROGENEOUS mode with a near-uniform
-        // default profile (baseY 0, huge falloff). setHeightFog is the ADVANCED
-        // profile control: it sets baseY/falloff/noise; its density is used ONLY
+        // supplies the medium density (FogExp2.density / linear-Fog span) + colour
+        // and the froxel volumetrics run in heterogeneous mode with a near-uniform
+        // default profile (baseY 0, huge falloff). setHeightFog is the advanced
+        // profile control: it sets baseY/falloff/noise; its density is used only
         // when scene.fog is absent (back-compat for existing mist users). When
-        // BOTH are set scene.fog's density WINS (heightFog.density ignored).
+        // both are set, scene.fog's density wins (heightFog.density ignored).
         bool  mediumActiveThisFrame_ = false;// air medium present → run froxels hetero
         float mediumDensityThisFrame_ = 0.0f;
         float mediumBaseYThisFrame_   = 0.0f;
@@ -687,10 +679,9 @@ namespace threepp {
         std::vector<uint32_t> retiredTextureSlots_;
         // The policy samplers every material-texture binding chooses between
         // (fillMaterialTextureInfos → materialSampler()): 16× aniso is the
-        // DEFAULT regardless of raster jitter. (A retired policy dropped to
-        // isotropic under TAA/DLSS/FSR, blaming aniso for distance shimmer;
-        // triage later pinned that on other mechanisms, and the fallback only
-        // bought mip-blurred grazing angles.) The isotropic twins survive for
+        // default regardless of raster jitter (dropping to isotropic under
+        // TAA/DLSS/FSR does not fix distance shimmer, it only mip-blurs
+        // grazing angles). The isotropic twins exist for
         // the explicit setTextureAnisotropy(1) / THREEPP_VK_ANISO=1 override.
         // Each policy exists in a REPEAT and a CLAMP_TO_EDGE flavour —
         // clamp-tagged textures (materialTexClampUV_) get the clamp twin.
@@ -836,14 +827,14 @@ namespace threepp {
         // uploadRasterCameraUbo) so no descriptor/PC layout change is needed.
         // ON by default: it is a no-op on materials without a normal map and at
         // mip 0 (nLen ~= 1), and strictly reduces normal-map minification
-        // shimmer otherwise — a "just right" default, not an opt-in.
+        // shimmer otherwise.
         bool     normalMapToksvig_ = true;
 
         // ── Automatic mesh LOD (setAutoLod; ON by default) ──────────────────
-        // Default-on since the full measurement pass: Bistro (per-pixel-bound
-        // worst case) neutral, fjord flight +32% FPS, quality below animation
-        // noise, switch frames stall-free (geomDescs ring). setAutoLod(false)
-        // remains as the manual override / debug escape (Toksvig pattern).
+        // Measured: Bistro (per-pixel-bound worst case) neutral, fjord flight
+        // +32% FPS, quality below animation noise, switch frames stall-free
+        // (geomDescs ring). setAutoLod(false) remains as the manual override /
+        // debug escape.
         bool autoLod_ = true;
         // Screen-space error budget τ for the selection pass, in RENDER-scale
         // pixels (setAutoLodError). The pass picks the coarsest level whose
@@ -936,8 +927,8 @@ namespace threepp {
         // w = 0.5·glossiness² (glossiness = 1−roughness). Matte foliage
         // (r≈0.85 → w≈0.01) simplifies essentially position-only — the far-
         // vegetation LOD win depends on it; glossy paint (r≈0.25 → w≈0.28)
-        // keeps the normal field charged so panels never flatten visibly
-        // (the CarConcept lesson). Unlit renders no shading at all → 0.
+        // weights normals enough that panels never flatten visibly.
+        // Unlit renders no shading at all → 0.
         // Unknown/absent material stays conservative at 0.5. dynamic_cast is
         // fine here: once per geometry lifetime, not per frame.
         static float lodNormalWeightFor(const Mesh& mesh) {
@@ -986,12 +977,10 @@ namespace threepp {
         // resources never outlive the record itself.
         void destroyBlasLodLevels(BlasRecord& rec);
 
-        // Free every GPU resource a BlasRecord owns. Teardown used to inline
-        // this list at each of the six places that hold a BlasRecord (blasCache,
-        // skinned / tet / displaced / grass / morphed states), and five of the
-        // six had drifted: they omitted `color`, so the per-vertex color buffer
-        // leaked for every mesh that wasn't a plain cached BLAS. One helper, so
-        // adding a Buffer to BlasRecord can only ever be missed in one place.
+        // Free every GPU resource a BlasRecord owns. One shared helper for all
+        // six BlasRecord holders (blasCache, skinned / tet / displaced / grass
+        // / morphed states), so adding a Buffer to BlasRecord can only ever be
+        // missed in one place.
         // NB: LOD levels are NOT freed here — blasCache is the only owner of a
         // LOD chain and calls destroyBlasLodLevels() itself, which also keeps
         // the lodBlasBytes_ accounting straight.
@@ -1006,14 +995,12 @@ namespace threepp {
             destroyBuffer(ctx->allocator(), rec.prevVertex);
             destroyBuffer(ctx->allocator(), rec.blasScratch);
             destroyBuffer(ctx->allocator(), rec.dynStaging);
-            // Zero-copy vertex interop exports. Freed HERE and only here for the
-            // same reason the list above exists: five of the six BlasRecord
-            // owners used to hand-roll their teardown and four of them drifted.
+            // Zero-copy vertex interop exports, freed here and only here.
             // Note the asymmetry with the buffers above — a foreign API may
-            // still hold an IMPORT of this memory. Nothing in Vulkan can wait
+            // still hold an import of this memory. Nothing in Vulkan can wait
             // for that; the contract (documented on enableVertexInterop) is that
             // the application stops its producer before dropping the geometry,
-            // exactly as it must for the soft-body and ParticleField exports.
+            // as it must for the soft-body and ParticleField exports too.
             if (rec.sanitizeDS != VK_NULL_HANDLE && vertexSanitize_) {
                 vertexSanitize_->freeRecordDescriptorSet(rec.sanitizeDS);
                 rec.sanitizeDS = VK_NULL_HANDLE;
@@ -1117,13 +1104,13 @@ namespace threepp {
             }
             return EventCameraSource::Shaded;
         }
-        // True when the event camera reads the RAW raster G-buffer — the one
-        // consumer for which per-frame raster jitter is not "resolved later"
-        // but leaks straight into a sensor as false motion (jittered
-        // silhouette coverage flips → a static scene fires ~6.7k events/frame).
+        // True when the event camera reads the raw raster G-buffer — the one
+        // consumer for which per-frame raster jitter is not resolved later but
+        // leaks straight into a sensor as false motion (jittered silhouette
+        // coverage flips → a static scene fires ~6.7k events/frame).
         // The Final source reads the post-TAA frame, where jitter has already
         // been resolved, so it keeps jitter on. Every raster-jitter gate keys
-        // off THIS, not off eventCamEnabled_.
+        // off this, not off eventCamEnabled_.
         [[nodiscard]] bool eventCamReadsGbuf() const {
             return eventCamEnabled_ &&
                    effectiveEventCamSource() == EventCameraSource::Shaded;
@@ -1509,26 +1496,25 @@ namespace threepp {
         VkPipeline particlePipelineAdditive_ = VK_NULL_HANDLE;// additive blend, depth-test off
 
         // ── ParticleField billboards (plans/particle-atmosphere.md F-D) ─────
-        // A SIBLING of the two above rather than a variant of them, and it
-        // rides the SAME SLOT in the frame: the post-upscaler overlay render
-        // pass, right after the legacy billboard loop. That position is a
-        // design decision, not an accident of where it was easy to put:
+        // A sibling of the two above rather than a variant of them, drawn in
+        // the same slot: the post-upscaler overlay render pass, right after
+        // the legacy billboard loop. That position is deliberate:
         //
-        //   • AFTER the upscalers means the quads are never fed to TAA / DLSS /
-        //     FSR. A 3-px spark crossing 20 px in a frame is the exact content
-        //     those filters mis-handle (F2's amendment 4 is the scar), and an
-        //     additive glow has no depth or motion vector to give them anyway.
-        //   • It is where TRANSPARENTS already composite, so field billboards
+        //   • After the upscalers, the quads are never fed to TAA / DLSS /
+        //     FSR — a 3-px spark crossing 20 px in a frame is exactly the
+        //     content those filters mis-handle, and an additive glow has no
+        //     depth or motion vector to give them anyway.
+        //   • It is where transparents already composite, so field billboards
         //     land in the same order relative to lines, wireframe and legacy
-        //     particles that a user already reasons about.
+        //     particles.
         //   • The pass already binds the unjittered depth read-only, so the
         //     quads get correct occlusion against scene geometry for free.
         //
         // Zero vertex bindings and zero uniform buffers: the quad is
         // vertex-less, the positions come by buffer_reference and the per-field
         // appearance record comes by device address. The one descriptor is the
-        // OPTIONAL sprite texture, which reuses the legacy path's set layout,
-        // its per-frame pool and its 1x1 white default verbatim.
+        // optional sprite texture, which reuses the legacy path's set layout,
+        // its per-frame pool and its 1x1 white default.
         VkPipelineLayout fieldBillboardPipelineLayout_ = VK_NULL_HANDLE;
         // At overlaySampleBits() — the primary's overlay pass.
         VkPipeline       fieldBillboardPipeline_       = VK_NULL_HANDLE;
@@ -1537,56 +1523,51 @@ namespace threepp {
         // and is only a second object when it has to be.
         VkPipeline       fieldBillboardPipeline1x_     = VK_NULL_HANDLE;
         bool             fieldBillboardPipeline1xOwned_ = false;
-        // 4c: the ALPHA-OVER siblings. Identical in every respect but the blend
-        // state — premultiplied SRC_ALPHA-over instead of ONE/ONE — because
-        // blending is pipeline state and a field that occludes cannot share an
-        // object with one that only adds. Created alongside the additive pair,
-        // bound per field by BillboardRepr::alphaOver.
-        // 4c: the scene's ONE sun, snapshotted by updateLightsUbo for the
+        // Alpha-over siblings: identical but for the blend state
+        // (premultiplied SRC_ALPHA-over instead of ONE/ONE) — blending is
+        // pipeline state, so they need their own objects. Created alongside
+        // the additive pair, bound per field by BillboardRepr::alphaOver.
+        // The scene's one sun, snapshotted by updateLightsUbo for the
         // billboard slice — the brightest DirectionalLight in the lights UBO
-        // (which is already the env-sun/scene-sun decision EnvSunPolicy made),
-        // plus the summed ambient. Three vectors on the host beats binding the
-        // lights descriptor set into a pass whose whole design is not to have
-        // one. Defaults: no sun, no ambient, so a `lit` field in a scene with
-        // neither draws black rather than undefined.
+        // (already the env-sun/scene-sun decision EnvSunPolicy made), plus the
+        // summed ambient. Kept as three host vectors so the pass needs no
+        // lights descriptor set. Defaults: no sun, no ambient, so a `lit`
+        // field in a scene with neither draws black rather than undefined.
         float            bbSunDirWorld_[3]  = {0.f, 1.f, 0.f};
         float            bbSunRadiance_[3]  = {0.f, 0.f, 0.f};
         float            bbAmbient_[3]      = {0.f, 0.f, 0.f};
         VkPipeline       fieldBillboardAlphaPipeline_   = VK_NULL_HANDLE;
         VkPipeline       fieldBillboardAlphaPipeline1x_ = VK_NULL_HANDLE;
         bool             fieldBillboardAlphaPipeline1xOwned_ = false;
-        // F4: the billboard-only bloom chain. Created LAZILY, on the first
-        // frame a field asks for a glow — a scene with no sparks in it
-        // allocates no target, compiles no pipeline and records no pass.
+        // Billboard-only bloom chain. Created lazily on the first frame a
+        // field asks for a glow — a scene with no sparks allocates no target,
+        // compiles no pipeline and records no pass.
         std::unique_ptr<vulkan::BillboardGlowPass> billboardGlow_;
         bool billboardGlowReadyThisFrame_ = false;
         // Host mirror of particlefield_billboard.{vert,frag}'s push block
-        // (scalar layout). 128 B EXACTLY — the range every Vulkan
-        // implementation guarantees — which is why anything per-FIELD lives in
-        // the device-address record instead and only the per-VIEW camera is
-        // here. proj is UNJITTERED: this pass runs after the temporal resolve.
+        // (scalar layout). Exactly 128 B — the range every Vulkan
+        // implementation guarantees — so anything per-field lives in the
+        // device-address record instead and only the per-view camera is
+        // here. proj is unjittered: this pass runs after the temporal resolve.
         struct FieldBillboardPC {
             float    proj[16];  //   0
-            float    mv[3][4];  //  64  ROWS of the affine view * model
+            float    mv[3][4];  //  64  rows of the affine view * model
             uint64_t paramsAddr;// 112
-            // F4: exposure + toneMapMode used to sit in these 8 bytes. They
-            // moved into the per-VIEW record (BillboardViewGpu) to make room
-            // for its address, which is what the fog terms ride in — the push
-            // block was already at 128 B, the guaranteed minimum range, and
-            // growing it past that is not portable.
+            // Per-view record (exposure, toneMapMode, fog terms) rides behind
+            // this address — the push block has no room past 128 B.
             uint64_t viewAddr;  // 120
         };
         static_assert(sizeof(FieldBillboardPC) == 128,
                       "FieldBillboardPC drifted from particlefield_billboard.vert");
-        // F4: the billboard glow pipelines.
-        //   • ...GlowPipeline_ draws the SAME quads into BillboardGlowPass's
-        //     half-extent linear-HDR target: rgba16f, one sample, NO depth
-        //     attachment (see that class's header for why the occlusion test is
-        //     deliberately given up at this resolution).
+        // Billboard glow pipelines.
+        //   • ...GlowPipeline_ draws the same quads into BillboardGlowPass's
+        //     half-extent linear-HDR target: rgba16f, one sample, no depth
+        //     attachment (see that class's header for why occlusion is given
+        //     up at this resolution).
         //   • ...CompositePipeline_ is the fullscreen additive draw that folds
-        //     the finished pyramid into the swapchain, INSIDE the overlay
-        //     render-pass instance — so the composite point does not move and
-        //     F3 note 1's outside-TAA property survives untouched.
+        //     the finished pyramid into the swapchain, inside the overlay
+        //     render-pass instance — the composite point does not move, so the
+        //     glow stays outside TAA/upscaling like the billboards themselves.
         VkPipeline       fieldBillboardGlowPipeline_ = VK_NULL_HANDLE;
         VkPipelineLayout fieldGlowCompositeLayout_   = VK_NULL_HANDLE;
         VkPipeline       fieldGlowCompositePipeline_ = VK_NULL_HANDLE;
@@ -1867,10 +1848,9 @@ namespace threepp {
         // Gaussian splats (SplatCloud), composited into sceneHdr between the
         // deferred shade and the DoF — linear HDR, pre-post, so splats get
         // DoF/bloom/tonemap/TAA through the same path as everything else. See
-        // vulkan/SplatPass.hpp. PRIMARY VIEW ONLY (the pass owns one set of
-        // scratch buffers sized to the extent it was last resized to; a
-        // secondary view would fight it for them, and painting splats into a
-        // sensor AOV without being asked is worse than not drawing them).
+        // vulkan/SplatPass.hpp. Primary view only: the pass owns one set of
+        // scratch buffers sized to the extent it was last resized to, and a
+        // secondary view would fight it for them.
         // Allocates nothing until a scene actually contains a SplatCloud.
         std::unique_ptr<vulkan::SplatPass> splat_;
         // This frame's SplatClouds, gathered by the sidecar collector in
@@ -1968,10 +1948,10 @@ namespace threepp {
 
         // (deferredShade_ moved to ViewContext — its per-frame-in-flight
         //  descriptor sets bind this view's G-buffer, reservoirs and sceneHdr,
-        //  so the sets themselves are per-view. The PIPELINE could be shared;
+        //  so the sets themselves are per-view. The pipeline could be shared;
         //  it is not, because a set can never be rewritten while it may be in
-        //  flight (VUID-03047), and a per-view pass object makes that
-        //  impossible by construction rather than by discipline.)
+        //  flight (VUID-03047), and a per-view pass object rules that out
+        //  structurally.)
         // World-space irradiance probe grid (multi-bounce GI for the deferred
         // gather — see vulkan/ProbeGI.hpp). Created alongside deferredShade_;
         // its SH buffer + grid UBO back the deferred set's bindings 36/37, so
@@ -2085,16 +2065,13 @@ namespace threepp {
         // ensureSceneBuilt's lean refresh bakes into MeshEntry::worldMatrix. No
         // consumer reads it — DrawInfo, motion, cull and the TLAS instance fill
         // all still take the CPU values — so this is pure added cost until
-        // stages 2-5 move them over. It buys the one thing those stages cannot
-        // buy themselves: proof that the GPU producer agrees with the CPU
+        // stages 2-5 move them over. What it provides now is verification that
+        // the GPU producer agrees with the CPU
         // (VulkanRenderer::instanceExpandCheck).
         std::unique_ptr<vulkan::InstanceExpand> instExpand_;
-        // OFF by default, and it stays off until a consumer reads the buffer.
-        // The comment above is the whole argument: the pass is measured slower
-        // (~+1.0 ms wall at 85k grains, 8 of 8 interleaved A/B pairs) and its
-        // output is read by nobody, so defaulting it on made every application
-        // and every test in the tree pay for a value none of them use — and
-        // quietly moved the baseline that stages 2-5 must be measured against.
+        // OFF by default until a consumer reads the buffer: the pass is
+        // measured slower (~+1.0 ms wall at 85k grains, 8 of 8 interleaved A/B
+        // pairs) and its output is read by nobody yet.
         // setGpuInstanceExpansion(true) opts in, which is all the A/B lever and
         // VulkanInstanceExpand_test need.
         bool gpuInstanceExpand_ = false;// setGpuInstanceExpansion; the A/B lever
@@ -2140,10 +2117,9 @@ namespace threepp {
         float taaBlendAlpha_ = 0.16f;// 10% current, 90% history at the reference rate;
                                     // frame-rate-corrected per frame (see taaPrevTimeSec_)
         // Wall-clock anchor for the frame-rate-aware TAA blend. taaBlendAlpha_ is a
-        // per-FRAME new-sample weight, so holding it fixed ties the history half-life
-        // to frame COUNT: the same 90 %/frame retention is an invisible ~10 ms ghost
-        // at 200 fps but a long visible smear on a 30 fps (or vsync-capped + heavy)
-        // frame — the "moving object leaves edge trails" report. Each frame the
+        // per-frame new-sample weight, so holding it fixed ties the history half-life
+        // to frame count: the same 90 %/frame retention is an invisible ~10 ms ghost
+        // at 200 fps but a long visible smear at 30 fps. Each frame the
         // weight is re-solved (in recordCommandBuffer, against kTaaRefFps) so
         // (1-alpha) is held constant in wall-clock time instead of per frame; the
         // shader's velocity/deviation gates are already per-frame-displacement based,
@@ -2155,12 +2131,10 @@ namespace threepp {
         // Negative (the default) = wall clock, behaviour unchanged. When the
         // app drives it (VulkanRenderer::setSimTime, once per frame before
         // render()), TAA/DLSS/FSR frame-dt, the shade's timeSec, foam decay,
-        // deform timestamps and the cloud clock all advance on SIMULATION
-        // time — which is what makes two same-seed runs produce the same
-        // pixels. Wall time in shading math was found as the source of
-        // fresh-process rgb divergence (replay-audit branch): the TAA blend
-        // alpha was a function of real frame time, so every run blended
-        // differently from the first history frame onward.
+        // deform timestamps and the cloud clock all advance on simulation
+        // time, which is what makes two same-seed runs produce the same
+        // pixels (wall time in the TAA blend alpha alone is enough to make
+        // every run diverge from the first history frame onward).
         double simTimeSec_ = -1.0;
         [[nodiscard]] double frameNowSec() const {
             return simTimeSec_ >= 0.0 ? simTimeSec_ : glfwGetTime();
@@ -2300,25 +2274,22 @@ namespace threepp {
 
         // (cameraUbos moved to ViewContext.)
 
-        // Swapchain image count, sampled ONCE in createSwapchainDependents and
-        // deliberately never refreshed: it is pinned for the renderer's lifetime,
-        // not merely for the current swapchain's. Its one consumer is the primary
-        // view's TaaResolve, constructed with this value — and TaaResolve sizes its
-        // descriptor pool and all six set vectors from it at construction, then
-        // indexes them `frame * imageCount + imageIndex` forever after. Refreshing
-        // this scalar on a swapchain recreate would therefore make things WORSE,
-        // not better: the index would move while the arrays it addresses stayed the
-        // size they were allocated at.
+        // Swapchain image count, sampled once in createSwapchainDependents and
+        // never refreshed: pinned for the renderer's lifetime, not merely the
+        // current swapchain's. Its one consumer is the primary view's
+        // TaaResolve, which sizes its descriptor pool and set vectors from it
+        // at construction and indexes them `frame * imageCount + imageIndex`
+        // forever after — refreshing this scalar on a swapchain recreate would
+        // move the index while the arrays stayed their allocated size.
         //
-        // A recreate producing a different count is legal in principle (the count
-        // is negotiated with the surface, and presentSuppressed_ asks for a deeper
-        // swapchain) but cannot happen here: every input to the negotiation —
-        // vsync_, presentSuppressed_, and the surface itself — is fixed at context
-        // construction, leaving only caps.min/maxImageCount, which no driver we run
-        // varies across the life of one surface. recreateSwapchainAndDescriptors
-        // verifies that rather than trusting it. If it ever fires, the fix is to
-        // rebuild the primary view's TaaResolve there (pool and set vectors and
-        // all), not to assign a new value here.
+        // A recreate producing a different count is legal in principle but
+        // cannot happen here: every input to the negotiation (vsync_,
+        // presentSuppressed_, the surface itself) is fixed at context
+        // construction, leaving only caps.min/maxImageCount.
+        // recreateSwapchainAndDescriptors verifies that rather than trusting
+        // it. If it ever fires, the fix is to rebuild the primary view's
+        // TaaResolve there (pool, set vectors and all), not to assign a new
+        // value here.
         uint32_t imageCount_ = 0;
 
         // Per-frame command resources.
@@ -3098,18 +3069,16 @@ namespace threepp {
 
         // ── ParticleField device emitter (F2) ───────────────────────────────
         // One dispatch per Ownership::Renderer field, at the head of the frame
-        // command buffer and BEFORE the density scatter, the counts copy and
+        // command buffer and before the density scatter, the counts copy and
         // every view's raster pass — all of which read the positions it writes.
-        // Bracketed by TP_ParticleEmit so the F2 checkpoint ("emit + scatter
-        // under 1 ms at 300k") is two numbers rather than one. No-op without a
+        // Bracketed by TP_ParticleEmit for timing. No-op without a
         // Renderer-owned field.
         void recordParticleFieldEmit(VkCommandBuffer cb, uint32_t frame);
 
         // ── ParticleField density (phase 2) ─────────────────────────────────
         // Clear + splat every density field into its world-anchored volume,
-        // ONCE for all views. Bracketed by TP_ParticleDensity so the claim
-        // "the cheapest per-particle representation by an order of magnitude"
-        // is a number. No-op without a density field.
+        // once for all views. Bracketed by TP_ParticleDensity for timing.
+        // No-op without a density field.
         void recordParticleDensityScatter(VkCommandBuffer cb, uint32_t frame);
         // Per-FIF ParticleDensityUbo (bindings 68) + the 1x1x1 dummy volume.
         // Both created once and never resized.
@@ -3129,20 +3098,18 @@ namespace threepp {
         // write and the staleness key below, so the two cannot disagree about
         // what "the current list" is.
         void splatVolumeBindViews(std::array<VkImageView, vulkan::kMaxSplatVolumes>& out);
-        // Identifies that exact list. Keyed on the VIEW HANDLES and not on
-        // SplatPass::volumeGeneration() alone, and the difference is the whole
-        // reason this exists: the generation bumps when a volume is BAKED or
-        // FREED, and the free happens inside syncClouds — by which time a
-        // descriptor set that still named the view has already been recorded
-        // into a command buffer that may still be executing
-        // (VUID-vkDestroyImageView-imageView-01026, caught by the validation
-        // gate). The handle list changes the moment a cloud stops being
-        // VISIBLE, which is framesInFlight+1 syncs before retireStale destroys
-        // anything — exactly the margin retireStale's own timing argument
+        // Identifies that exact list. Keyed on the view handles, not on
+        // SplatPass::volumeGeneration() alone: the generation bumps when a
+        // volume is baked or freed, and the free happens inside syncClouds —
+        // by which time a descriptor set that still named the view has already
+        // been recorded into a command buffer that may still be executing
+        // (VUID-vkDestroyImageView-imageView-01026). The handle list changes
+        // the moment a cloud stops being visible, which is framesInFlight+1
+        // syncs before retireStale destroys anything — the margin retireStale
         // assumes every consumer has. The generation is mixed in anyway, so a
-        // rebake that happens to be handed the same handle back still counts as
-        // a change. The cost is a rewrite whenever a cloud is shown or hidden;
-        // the density table accepts the same churn for the same reason.
+        // rebake that happens to be handed the same handle back still counts
+        // as a change. The cost is a rewrite whenever a cloud is shown or
+        // hidden; the density table accepts the same churn.
         [[nodiscard]] uint64_t splatVolumeBindKey();
         // Rewrite the frame's SplatVolumeUbo from SplatPass::volumeEntries():
         // world→UVW and the conservative world AABB composed on the HOST from
@@ -3742,11 +3709,8 @@ namespace threepp {
         void createOcclRenderPasses(VkSampleCountFlagBits samples,
                                     VkRenderPass& outA, VkRenderPass& outB);
 
-        // MSAA sibling of createRasterGbufRenderPass — same 6 attachments/
-        // formats/subpass/dependency shape, only `samples` and the depth
-        // finalLayout differ. The depth attachment's finalLayout stays
-        // SHADER_READ_ONLY... no: depth needs its own aspect, so mirror the
-        // 1× pass exactly except attachments[*].samples. Consumed only by
+        // MSAA sibling of createRasterGbufRenderPass — mirrors the 1× pass
+        // exactly except attachments[*].samples. Consumed only by
         // gbuf_resolve.comp (COMPUTE reads all live samples via texelFetch);
         // nothing else ever touches the MS attachments, so dstStageMask only
         // needs COMPUTE_SHADER (no ray-query stage reads the MS attachments
@@ -3889,11 +3853,11 @@ namespace threepp {
         // guards against recycled-pointer aliasing. (OverlayPass owns a separate
         // cache of the same shape for the ortho path — these are NOT shared.)
         //
-        // The counter is advanced once per SUBMITTED frame in endFrame, which
-        // also runs sweepLineGeomCache. It used to be read but never written, so
-        // every entry's lastTouch stayed 0 and nothing was ever evicted: an app
-        // that rebuilds Line/Points geometry each frame (trajectory, scan and
-        // detection-box overlays) leaked a buffer set per geometry, forever.
+        // The counter is advanced once per submitted frame in endFrame, which
+        // also runs sweepLineGeomCache — eviction matters for apps that
+        // rebuild Line/Points geometry each frame (trajectory, scan and
+        // detection-box overlays), which would otherwise leak a buffer set
+        // per geometry.
         std::unordered_map<const BufferGeometry*, vulkan::LineRec> lineGeomCache_;
         uint64_t overlayFrameCounter_ = 0;// lastTouch reference for lineGeomCache_ entries
 
@@ -4179,14 +4143,13 @@ namespace threepp {
         // count. The MS G-buffer spans color, depth AND integer (ids) formats,
         // each used as both attachment and sampled image, so the usable counts
         // are the intersection of all five limit masks. The spec only
-        // guarantees 1x and 4x in each of them — 2x is optional, and lavapipe
-        // advertises exactly 1|4, which the validation CI gate caught after
-        // every NVIDIA-tested build had passed: vkCreateImage with an
-        // unsupported sample count is a spec violation
+        // guarantees 1x and 4x in each of them — 2x is optional (lavapipe
+        // advertises exactly 1|4), and vkCreateImage with an unsupported
+        // sample count is a spec violation
         // (VUID-VkImageCreateInfo-samples-02258 family) and a crash risk, not
         // a graceful fallback. Callers that want N>1 fall back to 4, the
-        // mandatory multisample count. Same idea as overlaySamples() above,
-        // which has always clamped the canvas request this way.
+        // mandatory multisample count. Same clamping idea as overlaySamples()
+        // above.
         [[nodiscard]] bool gbufMsaaCountSupported(uint32_t samples) const {
             VkPhysicalDeviceProperties props{};
             vkGetPhysicalDeviceProperties(ctx->physicalDevice(), &props);
@@ -4202,8 +4165,7 @@ namespace threepp {
 
         // Gaussian-splat depth AOV. OFF by default, and off means the backing
         // image is one texel: a full-res r32f per frame in flight is ~25 MB at
-        // 1080p that a scene with no splats in it would never read, and this
-        // renderer's fixed footprint is already the thing being watched.
+        // 1080p that a scene with no splats would never read.
         // Crossing Off reallocates the render-extent resources, exactly like
         // setGbufferMsaa — a setup knob, not a per-frame one. Expected <->
         // Median is a UBO flag and reallocates nothing.

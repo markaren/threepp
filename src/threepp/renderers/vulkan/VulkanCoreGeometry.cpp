@@ -1041,8 +1041,8 @@ VulkanRenderer::Impl::enableVertexInterop(const Mesh& mesh, std::function<void()
             rec.interop = true;
 
             // Force the graduated per-frame residency rather than waiting for
-            // kDynamicGraduationStreak dirty frames that will never arrive: the
-            // whole point of interop is that the CPU never touches the attributes
+            // kDynamicGraduationStreak dirty frames that will never arrive:
+            // under interop the CPU never touches the attributes
             // again, so the streak counter can't graduate this record. The
             // staging ring the normal graduation allocates is NOT allocated here
             // — under interop the copy source is posExt/nrmExt and the host pack
@@ -1086,8 +1086,8 @@ VulkanRenderer::Impl::enableVertexInterop(const Mesh& mesh, std::function<void()
 // disableSoftBodyInterop: the caller is responsible for having stopped the
 // foreign writes first — nothing here can wait for a CUDA stream.
 //
-// perFrameDynamic is deliberately LEFT SET. It is one-way for a record's
-// lifetime by design (the comment on BlasRecord says so), and the graduated
+// perFrameDynamic is intentionally left set. It is one-way for a record's
+// lifetime (see the comment on BlasRecord), and the graduated
 // path is strictly better than the drained one for a record whose attributes
 // were being rewritten every frame a moment ago. The record simply resumes
 // taking its data from the host arrays, gated on BufferAttribute::version like

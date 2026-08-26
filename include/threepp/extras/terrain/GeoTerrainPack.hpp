@@ -24,9 +24,17 @@
 //                        area in (x,z), holes negative. Roof top sits at
 //                        groundMin + height (slope relief already folded in).
 //
+//   <pack>/texture.png   (optional) square RGB basemap drape (Kartverket topo
+//                        raster WMS). Row 0 = north edge, so
+//                        u=(x+worldSize/2)/worldSize, v=(z+worldSize/2)/worldSize
+//                        maps local world coords onto the image. Not consumed
+//                        by load() — the terrain albedo is the procedural
+//                        splat (GeoTerrain.hpp); the file is for external
+//                        consumers.
+//
 // region.json fields: version, name, crs, originEasting, originNorthing,
 // worldSize, dim, heightMin, heightMax, seaLevel, heights, roads, attribution,
-// buildings (optional).
+// buildings (optional), texture + textureLayer (optional).
 //
 // load() reads all three files, validates that heights.f32 is exactly
 // dim*dim*4 bytes, and returns a fully-populated GeoTerrainPack (a HeightGrid

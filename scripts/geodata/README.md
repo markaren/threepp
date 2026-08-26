@@ -7,12 +7,14 @@ engine consumes the pack; this tool is the preprocessor.
 
 ## Install
 
-Active interpreter: Python 3.14. Dependencies:
+Active interpreter: Python 3.12 (`py -3.12`). Dependencies:
 
 ```
 pip install requests numpy tifffile pyproj
 # optional, only for a PNG (not TIF) preview:
 pip install matplotlib
+# optional, only for --texture:
+pip install pillow
 ```
 
 ## Usage
@@ -34,10 +36,13 @@ python fetch_norway_terrain.py --center 62.4482,7.6714 --size 8000 --res 2 --nam
 | `--include-paths` | off | also emit foot/bike paths (Gangveg, Gang- og sykkelveg, Gågate) |
 | `--no-roads` | off | skip the NVDB fetch |
 | `--buildings` | off | fetch OSM building footprints + DOM nDSM heights |
+| `--texture` | off | fetch a basemap texture from the open Kartverket raster WMS: `topo` (colour) or `topograatone` (greyscale) |
+| `--texture-res` | 2 | texture resolution, m/px |
 | `--preview` | off | render `preview.png` (hillshade + roads + building outlines) |
 
 Output lands in `<out>/<name>/` as `region.json`, `heights.f32`, `roads.json`
-(+ `buildings.json` with `--buildings`, `preview.png` with `--preview`). The
+(+ `buildings.json` with `--buildings`, `texture.png` with `--texture`,
+`preview.png` with `--preview`). The
 output format is the **frozen C++ contract** — see the tool docstring / the
 spec; do not change it here.
 
@@ -75,6 +80,34 @@ Quirks / decisions:
 - **Nodata:** the DTM already encodes sea as `0.0` (verified — no negative
   sentinel; sea samples are `0.0 ± 0.003` float noise). We still guard against
   NaN / large-negative sentinels, then clamp the floor to `0.0` (sea level).
+
+### Basemap texture — Kartverket topo raster (WMS, `--texture`)
+
+`https://wms.geonorge.no/skwms1/wms.topo` (layer `topo`, colour) /
+`.../wms.topograatone` (layer `topograatone`, greyscale), **WMS 1.3.0
+GetMap** in EPSG:25833, PNG. License CC BY 4.0, © Kartverket. Verified live
+2026-08-25.
+
+Quirks / decisions:
+- **bbox axis order is EASTING,NORTHING** even in WMS 1.3.0 (verified: the
+  E,N form returns map content on both 1.3.0 and 1.1.1; a swapped N,E bbox
+  returns a blank tile).
+- Written as `texture.png`, square, `round(size / texture-res)` px per side.
+  **Row 0 = north edge** (WMS images are north-up, top-down), matching the
+  heights convention — `u = (x + size/2)/size`, `v = (z + size/2)/size`
+  drapes the image straight onto the terrain. Pixel-is-area over the exact
+  region AABB (no node alignment: textures are sampled, not gridded).
+- Tiled at ≤4096 px per dimension (4096 verified against the server), cut on
+  pixel boundaries so tiles stitch exactly. Measured (Ålesund 2 km, 2×2
+  forced tiling vs one request): base cartography is **pixel-identical**;
+  only text labels (place names, depth soundings, contour labels) move —
+  the WMS places labels per viewport. At the default 8000 m / 2 m/px the
+  texture is 4000 px = a single request, so no seams at all; above 4096 px
+  expect label clipping at internal tile boundaries.
+- The C++ loader does not consume `texture.png` yet — the terrain albedo is
+  the procedural Norwegian splat (GeoTerrain.hpp). The file is for external
+  consumers and future drape support; `region.json` gains optional
+  `texture` / `textureLayer` keys when present.
 
 ### Roads — NVDB API Les v4 (vegnett)
 

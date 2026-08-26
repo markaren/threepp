@@ -269,7 +269,7 @@ TEST_CASE("the rate gate drives scanDue", "[sensors]") {
 // Event camera: same clock rule, no attachment node
 // ---------------------------------------------------------------------------
 
-TEST_CASE("event timestamps come from the sim clock", "[sensors]") {
+TEST_CASE("event timestamps interpolate within the sim-clock interval", "[sensors]") {
 
     constexpr unsigned w = 8, h = 4;
     EventCameraSensor sensor(w, h);
@@ -282,20 +282,38 @@ TEST_CASE("event timestamps come from the sim clock", "[sensors]") {
     sensor.ingestPixels(dark.data(), dark.size(), events);
     REQUIRE(events.empty());
 
+    // A flat dark→bright step is ~1.61 log units, i.e. 10 thresholds' worth,
+    // capped to maxEventsPerPixel = 5. Those 5 crossings happened at five
+    // DIFFERENT points of the ramp, so they get five different stamps inside
+    // (0, 0.5] — not one stamp at the frame boundary.
     sensor.advanceClock(0.5);
     sensor.ingestPixels(bright.data(), bright.size(), events);
     REQUIRE_FALSE(events.empty());
     for (const auto& e: events) {
         REQUIRE(e.polarity == 1);
-        REQUIRE_THAT(e.timestamp, WithinAbs(0.5f, 1e-6f));
+        REQUIRE(e.timestamp > 0.f);
+        REQUIRE(e.timestamp <= 0.5f);
     }
+    // Sorted ascending, and genuinely spread rather than collapsed.
+    for (std::size_t i = 1; i < events.size(); ++i) {
+        REQUIRE(events[i].timestamp >= events[i - 1].timestamp);
+    }
+    REQUIRE(events.back().timestamp > events.front().timestamp);
+    // Every pixel sees the identical step, so the distinct stamps are exactly
+    // the per-pixel crossing count — the interpolation, not pixel-to-pixel
+    // variation, is what spreads them.
+    REQUIRE_THAT(events.front().timestamp,
+                 WithinAbs(0.5f * 0.15f / std::log(200.f / 40.f), 1e-4f));
 
+    // Jumping the clock forward stretches the ramp: the same five crossings
+    // now land across (0.5, 9.0], still inside the interval they belong to.
     sensor.setSimTime(9.0);
     sensor.ingestPixels(dark.data(), dark.size(), events);
     REQUIRE_FALSE(events.empty());
     for (const auto& e: events) {
         REQUIRE(e.polarity == -1);
-        REQUIRE_THAT(e.timestamp, WithinAbs(9.0f, 1e-6f));
+        REQUIRE(e.timestamp > 0.5f);
+        REQUIRE(e.timestamp <= 9.0f);
     }
 
     // Replaying the same frames on the same clock reproduces the same stream —

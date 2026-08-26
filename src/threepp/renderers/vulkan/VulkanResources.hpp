@@ -105,7 +105,7 @@ namespace threepp::vulkan {
     // VkDeviceMemory, not of the buffer bound to it. Importing with the smaller
     // number succeeds and maps a SHORT range — writes past it are out of bounds
     // with no error anywhere in the chain, which is why this field carries the
-    // number that keeps the import honest. Mapping the whole allocation from
+    // full allocation size. Mapping the whole allocation from
     // CUDA is legal; the extra tail is simply unused by Vulkan.
     struct ExternalBuffer {
         VkBuffer       handle   = VK_NULL_HANDLE;
