@@ -8,11 +8,24 @@
 //   1. Renderer's existing recordSceneCapture() copies the post-TAA
 //      swapchain into sceneCaptureBuf_ (host-visible storage buffer).
 //   2. EventCameraDetector::record() dispatches event_detect.comp,
-//      which reads sceneCaptureBuf_, updates a persistent r32f
-//      log-history image, and paints an RGBA8 accumulator image.
+//      which reads sceneCaptureBuf_, updates a persistent rg32f
+//      log-history image (.x = emit reference, .y = last raw sample),
+//      and paints an RGBA8 accumulator image.
 //   3. The accumulator is copied to a 3-slot host-visible ring; the
 //      host reads from the OLDEST slot (guaranteed complete) without
 //      any vkDeviceWaitIdle. ~2 frames of display latency, no stall.
+//
+// Timestamps follow ESIM: log intensity is taken to ramp linearly
+// between two consecutive samples, and each threshold crossing is
+// stamped at its interpolated crossing time. A frame's events therefore
+// land spread across (prevFrameTimeUs, frameTimeUs] rather than all on
+// one stamp, and readEventStreamInto hands them back time-sorted. The
+// detector tracks the previous stamp itself — the caller only ever
+// supplies "now" via Params::frameTimeUs, but it must supply it EVERY
+// frame from a monotone sim clock for the interpolation to mean
+// anything. Note this raises timestamp RESOLUTION, not temporal
+// bandwidth: the underlying sampling rate is still the frame rate, so
+// motion faster than a frame is still missed.
 
 #ifndef THREEPP_VULKAN_EVENT_CAMERA_DETECTOR_HPP
 #define THREEPP_VULKAN_EVENT_CAMERA_DETECTOR_HPP
@@ -37,11 +50,14 @@ namespace threepp::vulkan {
             float    decay            = 0.85f;
             float    minLuma          = 0.005f;
             uint32_t maxEventsPerPixel = 5;
-            // Microsecond timestamp tagged onto every event emitted this
-            // frame. Caller-supplied so it can carry a sim or wall clock.
-            // All events from one record() call share this value (sub-
-            // frame timing isn't available — match real DVS semantics:
-            // a "packet" of events at frame time).
+            // Microsecond timestamp of THIS frame's sample. Caller-supplied
+            // so it can carry a sim or wall clock; drive it every frame,
+            // monotonically. The detector remembers the previous value and
+            // interpolates each event's stamp along the log-intensity ramp
+            // between the two, so a frame's events land spread across
+            // (previous, this]. Left undriven (always 0) the interval is
+            // empty and every event carries the same stamp, exactly as
+            // before interpolation existed.
             uint32_t frameTimeUs       = 0u;
         };
 
@@ -108,9 +124,15 @@ namespace threepp::vulkan {
         // so no GPU wait. Returns the event count actually written to
         // `dst` (clamped to `cap`); `overflowed` (if non-null) is set to
         // true when the shader dropped events because the GPU stream
-        // buffer hit its capacity. The frame timestamp tagged onto the
-        // events is the value the caller passed via Params.frameTimeUs
-        // when that frame was recorded.
+        // buffer hit its capacity.
+        //
+        // Events come back SORTED ascending by (t_us, y, x, polarity).
+        // Their stamps are the sub-frame interpolated crossing times
+        // within (prevFrameTimeUs, frameTimeUs] of the frame that
+        // produced them, so the packet is monotone in time the way a
+        // real sensor's readout is; the tie-break on the remaining
+        // fields makes it deterministic despite the GPU's atomicAdd
+        // append order being scheduler-dependent.
         size_t readEventStreamInto(Event* dst, size_t cap, bool* overflowed) const;
 
         [[nodiscard]] uint32_t width() const { return width_; }
@@ -122,6 +144,9 @@ namespace threepp::vulkan {
         uint32_t width_  = 0;
         uint32_t height_ = 0;
         bool     firstFrame_ = true;
+        // Stamp handed to the previous record(); the low end of the
+        // interval this frame's events interpolate into.
+        uint32_t lastFrameTimeUs_ = 0;
 
         Image2D  logHistoryImg_{};
         Image2D  accumulatorImg_{};

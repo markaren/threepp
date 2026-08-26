@@ -22,6 +22,7 @@ namespace threepp::vulkan {
             uint32_t maxEventsPerPixel;
             uint32_t firstFrame;
             uint32_t frameTimeUs;
+            uint32_t prevFrameTimeUs;
         };
 
         // 16-byte header at the front of every event-stream buffer.
@@ -91,7 +92,7 @@ namespace threepp::vulkan {
 
         // Four bindings:
         //   0 = scene buffer (storage, read)
-        //   1 = log-history image (r32f storage, read/write)
+        //   1 = log-history image (rg32f storage, read/write)
         //   2 = accumulator image (rgba8 storage, read/write)
         //   3 = event stream buffer (storage, atomic append)
         std::array<VkDescriptorSetLayoutBinding, 4> b{};
@@ -190,9 +191,11 @@ namespace threepp::vulkan {
         // path issues vkDeviceWaitIdle before calling resize so we're safe.
         destroyImages();
 
-        // Allocate persistent storage images. r32f for the log-luminance
-        // history (signed log value per pixel, plenty of dynamic range);
-        // rgba8 for the visualisation accumulator (sRGB-domain output).
+        // Allocate persistent storage images. rg32f for the log-luminance
+        // history — .x is the emit reference, .y the previous frame's raw
+        // sample that the sub-frame timestamp interpolation ramps from
+        // (signed log values, plenty of dynamic range); rgba8 for the
+        // visualisation accumulator (sRGB-domain output).
         auto allocImage = [this](uint32_t w, uint32_t h, VkFormat fmt,
                                   VkImageUsageFlags usage, const char* name) {
             Image2D out{};
@@ -236,7 +239,7 @@ namespace threepp::vulkan {
                 VK_IMAGE_USAGE_STORAGE_BIT |
                 VK_IMAGE_USAGE_TRANSFER_SRC_BIT |
                 VK_IMAGE_USAGE_TRANSFER_DST_BIT;
-        logHistoryImg_  = allocImage(width, height, VK_FORMAT_R32_SFLOAT,
+        logHistoryImg_  = allocImage(width, height, VK_FORMAT_R32G32_SFLOAT,
                                        storageUsage, "evtLogHistory");
         accumulatorImg_ = allocImage(width, height, VK_FORMAT_R8G8B8A8_UNORM,
                                        storageUsage, "evtAccumulator");
@@ -463,6 +466,10 @@ namespace threepp::vulkan {
         pc.maxEventsPerPixel = params.maxEventsPerPixel;
         pc.firstFrame       = firstFrame_ ? 1u : 0u;
         pc.frameTimeUs      = params.frameTimeUs;
+        // The detector owns the previous stamp — Params only ever carries
+        // "now". On the first frame there is no previous sample to ramp
+        // from, so collapse the interval (that frame emits nothing anyway).
+        pc.prevFrameTimeUs  = firstFrame_ ? params.frameTimeUs : lastFrameTimeUs_;
         vkCmdPushConstants(cb, pipelineLayout_, VK_SHADER_STAGE_COMPUTE_BIT,
                             0, sizeof(pc), &pc);
 
@@ -518,8 +525,9 @@ namespace threepp::vulkan {
                               VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
                               0, 0, nullptr, 0, nullptr, 1, &toGen);
 
-        writeSlot_  = (writeSlot_ + 1) % kRingSize;
-        firstFrame_ = false;
+        writeSlot_       = (writeSlot_ + 1) % kRingSize;
+        firstFrame_      = false;
+        lastFrameTimeUs_ = params.frameTimeUs;
     }
 
     std::vector<unsigned char> EventCameraDetector::readVisualisation() const {
@@ -587,6 +595,27 @@ namespace threepp::vulkan {
             std::memcpy(dst, events, toCopy * sizeof(Event));
         }
         vmaUnmapMemory(ctx_.allocator(), src.alloc);
+
+        // Time-order the packet. Two reasons, both about the stream being
+        // usable rather than merely correct:
+        //   • A real DVS reads out in time order, and every downstream
+        //     consumer (.aedat writers, ROS bridges, time-surface / voxel-grid
+        //     encoders) assumes non-decreasing t. With sub-frame interpolated
+        //     stamps the events of one frame genuinely span an interval, so
+        //     "unordered" would now be visible rather than academic.
+        //   • The GPU appends with an atomicAdd, so the raw order is whatever
+        //     the scheduler happened to do — it varies run to run on identical
+        //     input. Sorting on the full key (t, y, x, polarity) makes the
+        //     packet deterministic, which is what replayable datasets need.
+        // The cost is an O(n log n) pass over one frame's events on the host;
+        // at the ~10-50k events a busy frame produces that is well under the
+        // readback it follows.
+        std::sort(dst, dst + toCopy, [](const Event& a, const Event& b) {
+            if (a.t_us != b.t_us) return a.t_us < b.t_us;
+            if (a.y != b.y) return a.y < b.y;
+            if (a.x != b.x) return a.x < b.x;
+            return a.polarity < b.polarity;
+        });
         return toCopy;
     }
 

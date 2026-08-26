@@ -3,14 +3,15 @@
 
 // GPU-side event camera (DVS) detector.
 //
-// Per-pixel: read the renderer's post-TAA scene image from a packed
-// BGRA8 storage buffer (one uint per pixel, packed B/G/R/A in low→high
-// bits), compute log-luminance, compare against a persistent
-// per-pixel reference stored in `logHistory`, and emit events when
-// |Δlog I| crosses `threshold`. Events drive the accumulator image —
-// bright pixel on positive event, dark pixel on negative, decaying
-// toward grey otherwise. The accumulator gets copied to a host-visible
-// readback ring by the host immediately after this dispatch.
+// Per-pixel: read the sensor-resolution scene image event_shade.comp
+// wrote into a packed BGRA8 storage buffer (one uint per pixel, packed
+// B/G/R/A in low→high bits), compute log-luminance, compare against a
+// persistent per-pixel reference stored in `logHistory`, and emit
+// events when |Δlog I| crosses `threshold`. Events drive the
+// accumulator image — bright pixel on positive event, dark pixel on
+// negative, decaying toward grey otherwise. The accumulator gets copied
+// to a host-visible readback ring by the host immediately after this
+// dispatch.
 //
 // In parallel with the accumulator paint, every threshold crossing
 // atomically appends an Event {x, y, polarity, t_us} record into the
@@ -22,17 +23,34 @@
 // `maxEventsPerPixel` events when |Δ| > N · threshold, advance the
 // reference by polarity · N · threshold so the residual carries to
 // the next frame.
+//
+// Timestamps are sub-frame interpolated, the way ESIM does it: log
+// intensity is assumed to ramp LINEARLY from the previous frame's
+// sample (at prevFrameTimeUs) to this frame's (at frameTimeUs), and
+// each threshold crossing is stamped with the time at which that ramp
+// crosses its level. So the N events a pixel emits in one frame are
+// spread across (prevFrameTimeUs, frameTimeUs] instead of piling up on
+// a single stamp. That needs the RAW previous sample, not the emit
+// reference (they differ by the sub-threshold residual), which is why
+// logHistory is rg32f: .x = reference, .y = last raw sample.
 
 layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
 
-// Packed BGRA8 pixels of the post-TAA scene, one uint per pixel.
-// Vulkan swapchain is VK_FORMAT_B8G8R8A8_UNORM, so byte 0 = B, byte 1 = G,
-// byte 2 = R, byte 3 = A. We swizzle back to RGB for the luminance.
+// Packed BGRA8 pixels of the scene at SENSOR resolution, one uint per
+// pixel, written by event_shade.comp (which mirrors the swapchain's
+// VK_FORMAT_B8G8R8A8_UNORM byte order for either of its sources): byte
+// 0 = B, byte 1 = G, byte 2 = R, byte 3 = A. We swizzle back to RGB for
+// the luminance.
 layout(set = 0, binding = 0, scalar) readonly buffer SceneBuf {
     uint pixels[];
 } sceneBuf;
 
-layout(set = 0, binding = 1, r32f) uniform image2D logHistory;
+// .x = the emit reference (advanced by polarity · N · threshold on every
+//      fire, so the sub-threshold residual carries forward).
+// .y = the raw sampled logLum of the PREVIOUS frame, stored every frame
+//      whether or not events fired. The linear-ramp interpolation needs
+//      the actual previous sample, which the reference is not.
+layout(set = 0, binding = 1, rg32f) uniform image2D logHistory;
 layout(set = 0, binding = 2, rgba8) uniform image2D accumulator;
 
 // Sparse event stream. Header (count/capacity/overflow/frameTimeUs) at
@@ -61,9 +79,12 @@ layout(push_constant) uniform Pc {
     float minLuma;
     uint  maxEventsPerPixel;
     uint  firstFrame;
-    uint  frameTimeUs;  // host-supplied microsecond clock — every event
-                        // emitted this frame is tagged with this value
-                        // (sub-frame timing isn't available)
+    uint  frameTimeUs;      // host-supplied microsecond clock: the time of
+                            // THIS frame's sample.
+    uint  prevFrameTimeUs;  // the stamp of the previous record(). Events
+                            // land in (prevFrameTimeUs, frameTimeUs]. When
+                            // the caller never drives the clock the two are
+                            // equal and every stamp collapses onto it again.
 } pc;
 
 void main() {
@@ -92,12 +113,14 @@ void main() {
     const float logLum = log(luma);
 
     if (pc.firstFrame != 0u) {
-        imageStore(logHistory, pix, vec4(logLum, 0.0, 0.0, 0.0));
+        imageStore(logHistory, pix, vec4(logLum, logLum, 0.0, 0.0));
         imageStore(accumulator, pix, vec4(0.5, 0.5, 0.5, 1.0));
         return;
     }
 
-    const float prev  = imageLoad(logHistory, pix).x;
+    const vec2  hist = imageLoad(logHistory, pix).xy;
+    const float prev       = hist.x;// emit reference
+    const float lastSample = hist.y;// raw previous-frame logLum
     const float delta = logLum - prev;
     const float absD  = abs(delta);
 
@@ -105,9 +128,20 @@ void main() {
         const float pol = (delta > 0.0) ? 1.0 : -1.0;
         const uint  n   = min(pc.maxEventsPerPixel, uint(absD / pc.threshold));
         const float newRef = prev + pol * float(n) * pc.threshold;
-        imageStore(logHistory, pix, vec4(newRef, 0.0, 0.0, 0.0));
+        imageStore(logHistory, pix, vec4(newRef, logLum, 0.0, 0.0));
         const float v = (pol > 0.0) ? 1.0 : 0.0;
         imageStore(accumulator, pix, vec4(v, v, v, 1.0));
+
+        // Sub-frame timestamps. The ramp runs lastSample → logLum over
+        // (prevFrameTimeUs, frameTimeUs]; crossing i sits at level
+        // L_i = prev + pol · (i+1) · threshold, so its fraction along the
+        // ramp is (L_i - lastSample) / (logLum - lastSample). Note the
+        // DENOMINATOR uses lastSample, not the reference — the two differ
+        // by the residual carried in from earlier frames, and using the
+        // reference there would stretch the ramp by that residual.
+        const float span    = logLum - lastSample;
+        const bool  flatRamp = abs(span) < 1e-6;
+        const float dtUs    = float(pc.frameTimeUs - pc.prevFrameTimeUs);
 
         // Sparse event stream emit. atomicAdd is the standard append-list
         // primitive; the returned index is per-thread-unique. Past the
@@ -116,18 +150,28 @@ void main() {
         // so this is a faithful failure mode rather than a bug.
         const int  polInt = (pol > 0.0) ? 1 : -1;
         for (uint i = 0u; i < n; ++i) {
+            const float level = prev + pol * float(i + 1u) * pc.threshold;
+            const float frac  = flatRamp
+                    ? 1.0
+                    : clamp((level - lastSample) / span, 0.0, 1.0);
+            const uint  tUs   = pc.prevFrameTimeUs + uint(frac * dtUs);
+
             const uint idx = atomicAdd(stream.count, 1u);
             if (idx < stream.capacity) {
                 stream.events[idx].x        = uint(pix.x);
                 stream.events[idx].y        = uint(pix.y);
                 stream.events[idx].polarity = polInt;
-                stream.events[idx].t_us     = pc.frameTimeUs;
+                stream.events[idx].t_us     = tUs;
             } else {
                 atomicMax(stream.overflow, 1u);
                 break;
             }
         }
     } else {
+        // No fire: the reference stands, but the raw sample still has to
+        // advance — next frame's ramp starts where THIS frame sampled.
+        imageStore(logHistory, pix, vec4(prev, logLum, 0.0, 0.0));
+
         // Decay toward mid-grey (no recent event). cur.rgb is already
         // in [0, 1] from a prior emit or decay step.
         const vec4 cur    = imageLoad(accumulator, pix);

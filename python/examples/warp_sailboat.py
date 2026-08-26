@@ -4461,12 +4461,24 @@ def _film_warm(sh, n, dt):
 
 def _film_step(sh, u, t, dt):
     """One frame of the film: place, simulate, place again, render."""
-    global _cur_u, first_render_done, _sensor_px
+    global _cur_u, first_render_done, _sensor_px, _evt_clock
     _cur_u = u
     apply_cam(sh, u, t)        # before frame(): the rain field follows the lens
     frame(dt)
     apply_cam(sh, u, t)        # after: the boat has moved, so the framing has
     sim_tick(dt)               # the sea advances by dt, not by wall time
+    _evt_clock += dt           # film sim-time, monotone across cuts
+    if _evt_on:
+        # The detector stamps each event at the point where the log-intensity
+        # ramp between the PREVIOUS frame_time_us and this one crosses its
+        # threshold, so the clock has to be pushed EVERY frame -- left undriven
+        # the interval is empty and the whole packet collapses onto one stamp.
+        # Sim time, not wall time: a stream stamped with the machine's speed is
+        # not replayable. The call only stores a struct.
+        renderer.set_event_camera_params(threshold=EVT_THRESHOLD, decay=EVT_DECAY,
+                                         min_luma=EVT_MIN_LUMA,
+                                         max_events_per_pixel=EVT_MAX_PP,
+                                         frame_time_us=int(_evt_clock * 1e6))
     if sh.sensor == "depth":
         # ONE render, and the depth comes off THAT frame -- read_aovs_typed
         # drives the frame itself, so the sensor cannot be a frame out of step
@@ -4477,6 +4489,8 @@ def _film_step(sh, u, t, dt):
         # The DVS runs on the DELIVERED frame -- the same pixels the audience
         # sees one shot earlier -- so what fires is what is actually in the
         # picture: wave crests, the glitter, the sail folds, the rig.
+        if EVT_GPU:
+            _evt_gpu_probe()
         _sensor_px = _events_frame(renderer.read_pixels())
     else:
         renderer.render(scene, camera)
@@ -4538,7 +4552,12 @@ _CAP_RGB = np.float32([228, 233, 240])
 _CAP_ALPHA = 0.62
 _caps = {}
 _evt_on = False
+_evt_clock = 0.0                          # film sim-time (s) driving the DVS stamps
 _evt_stats = [0, 0.0, 0.0]                # frames, sum fired fraction, sum events
+# GPU-detector STREAM stats (--evt-gpu only), which the accumulator picture
+# cannot show: [frames, events, overflow frames, sum unique stamps/frame,
+# sum interval coverage, frames with >= 2 events].
+_evt_gpu_stats = [0, 0, 0, 0.0, 0.0, 0]
 _dvs_ref = None                           # (h, w) per-pixel log-intensity reference
 _dvs_acc = None                           # (h, w) signed accumulator, decaying
 
@@ -4635,6 +4654,30 @@ def _dvs_step(px):
     return _dvs_acc
 
 
+def _evt_gpu_probe():
+    """Read the GPU detector's SPARSE STREAM and measure its timestamps.
+
+    The accumulator is the picture; the stream is what a synthetic-perception
+    dataset job would actually store, and the one thing the picture cannot show
+    is whether the stamps carry sub-frame structure. With ESIM's linear-ramp
+    interpolation a pixel that crosses the threshold three times in a frame
+    gets three DIFFERENT times, so `unique stamps/frame` climbs off 1 and
+    `coverage` -- the span the frame's events occupy as a fraction of the frame
+    interval -- climbs off 0. Both are degenerate the moment the clock stops
+    being driven, which is exactly the regression worth watching for.
+    """
+    ev, ov = renderer.read_event_stream(max_events=300000)
+    _evt_gpu_stats[0] += 1
+    _evt_gpu_stats[1] += int(ev.shape[0])
+    _evt_gpu_stats[2] += 1 if ov else 0
+    if ev.shape[0]:
+        ts = ev[:, 3]
+        _evt_gpu_stats[3] += float(np.unique(ts).size)
+        if ev.shape[0] >= 2:
+            _evt_gpu_stats[4] += float(int(ts.max()) - int(ts.min())) * FPS / 1e6
+            _evt_gpu_stats[5] += 1
+
+
 def _events_frame(px):
     """A signed event accumulator -> the classic sparse black/+/- DVS picture."""
     if EVT_GPU:
@@ -4703,7 +4746,8 @@ def _film_sensor_mode(mode):
     if want:
         renderer.set_event_camera_params(threshold=EVT_THRESHOLD, decay=EVT_DECAY,
                                          min_luma=EVT_MIN_LUMA,
-                                         max_events_per_pixel=EVT_MAX_PP)
+                                         max_events_per_pixel=EVT_MAX_PP,
+                                         frame_time_us=int(_evt_clock * 1e6))
         renderer.set_event_camera_resolution(EVT_W, EVT_H)   # stored; no device work yet
         renderer.event_camera_source = EVT_GPU_SOURCE       # "final" unless --evt-gpu-shaded
     renderer.event_camera_enabled = want
@@ -4853,6 +4897,13 @@ def run_film():
               f"{frac * 100.0:.2f}% of pixels fired, "
               f"{_evt_stats[2] / _evt_stats[0]:.0f} events/frame "
               f"({_evt_stats[2] / _evt_stats[0] * FPS / 1e3:.0f}k events/s)")
+    if _evt_gpu_stats[0]:
+        g = _evt_gpu_stats
+        print(f"  event stream: {g[1] / g[0]:.0f} events/frame "
+              f"({g[1] / g[0] * FPS / 1e6:.2f} Mevent/s), "
+              f"{g[3] / g[0]:.1f} unique timestamps/frame, "
+              f"{g[4] / max(g[5], 1) * 100.0:.0f}% of the frame interval covered, "
+              f"{g[2]} overflow frames")
 
 
 def run_warmup_probe():

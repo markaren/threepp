@@ -32,10 +32,21 @@
 // range to perturb, so the only piece of the sensor contract that applies is
 // the clock.
 //
-// Limitations of this first version:
-//   - Per-frame discretisation (timestamps = frame time), not sub-frame.
-//     Real DVS sensors operate at μs-level temporal resolution; this is
-//     at the renderer's frame rate.
+// Timestamps are sub-frame interpolated the way ESIM does it: log intensity
+// is assumed to ramp LINEARLY between two consecutive samples, so a crossing
+// of level `ref + polarity · k · threshold` is stamped at the point along
+// that ramp where the level sits, not at the frame boundary. The N events one
+// pixel emits in a frame therefore spread across (previous capture, this
+// capture] instead of piling up on one value, and the per-frame vector comes
+// back sorted ascending by timestamp.
+//
+// Limitations:
+//   - Interpolation raises timestamp RESOLUTION, not temporal bandwidth.
+//     The scene is still only sampled once per rendered frame, so anything
+//     that happens and reverses between two frames is invisible however
+//     finely the crossings in between are stamped; and the linear-ramp
+//     assumption is only as good as the frame rate makes it. Real DVS
+//     front-ends respond continuously at μs scale.
 //   - Operates on display-encoded sRGB pixels rather than scene-referred
 //     linear radiance. The log-difference threshold still works correctly
 //     because sRGB encoding is monotonic and the photoreceptor model is
@@ -163,11 +174,17 @@ namespace threepp {
         unsigned int height_ = 0;
 
         std::vector<float>         logRef_;       // per-pixel reference log-luminance
+        // Per-pixel RAW log-luminance of the previous capture, stored every
+        // frame whether or not it fired. The sub-frame timestamp ramps from
+        // this, not from logRef_ — the two differ by the sub-threshold
+        // residual the reference carries forward.
+        std::vector<float>         logLast_;
         std::vector<float>         vizAccum_;     // per-pixel viz value in [-1, +1]
         std::vector<unsigned char> readbackBuf_;  // RGB readback scratch
         std::shared_ptr<DataTexture> vizTex_;
 
-        double simTime_   = 0.0;
+        double simTime_     = 0.0;
+        double prevSimTime_ = 0.0;// clock at the previous capture
         bool  firstFrame_ = true;
 
         void allocateImages();
