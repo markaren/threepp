@@ -93,6 +93,7 @@ Sky:   1-5 jump to dawn / morning / squall / golden hour / night
        N toggle rain    K time-lapse the day       L fire a lightning strike
 Drone: G fly the camera drone    V switch to its own view (FPV)
 Hull:  X toggle "the hull displaces water" (footprint + waterline plane + wake)
+View:  B cycle the sensor view (rgb -> depth -> event camera), the film's looks
 
 Needs a Vulkan build (-DTHREEPP_WITH_VULKAN=ON). Warp falls back to CPU if no
 CUDA device is present -- slower, same picture.
@@ -179,6 +180,12 @@ EVT_MAX_PP = int(cli_arg("--evt-max-events", 4, float))   # events per pixel per
 # instead, which sees neither the transmissive water nor the translucent sails.
 EVT_GPU = "--evt-gpu" in sys.argv or "--evt-gpu-shaded" in sys.argv
 EVT_GPU_SOURCE = "shaded" if "--evt-gpu-shaded" in sys.argv else "final"
+# The film's sensor looks, live: B cycles rgb -> depth -> events in the window,
+# `--view depth|events` starts (or, with --shot, saves the still) in that look.
+VIEW0 = cli_arg("--view", "rgb", str)
+if VIEW0 not in ("rgb", "depth", "events"):
+    print(f"--view {VIEW0}: expected rgb, depth or events")
+    sys.exit(2)
 
 if not tp.HAS_VULKAN or not tp.vulkan_available():
     print("This example needs the Vulkan backend (configure with "
@@ -3411,6 +3418,10 @@ def handle_keys(dt):
             drone_state["have"] = False     # re-seed the kinematics on the way in
     if pressed("V") and drone_on:
         view_mode = "orbit" if view_mode == "fpv" else "fpv"
+    if pressed("B"):
+        # The film's sensor looks, live: rgb -> depth -> event camera.
+        order = ("rgb", "depth", "events")
+        set_sensor_view(order[(order.index(sensor_view) + 1) % len(order)])
     if pressed("X"):
         # Toggle the whole watertight story: footprint, waterline plane, Kelvin
         # wake and analytic wake foam all switch off together.
@@ -4571,17 +4582,22 @@ def _depth_frame(z):
     one value. log(z) gives each decade the same number of LUT entries, so the
     boat has internal structure AND the sea still recedes visibly to the cut-off.
     """
+    fw, fh = renderer.size()
+    # Colour-map at the AOV's own resolution (render_scale < 1, so fewer
+    # pixels than the frame) and upscale the bytes, not the floats.
+    return _nn_resize(_depth_rgb(z), fh, fw)
+
+
+def _depth_rgb(z):
+    """The colour-mapped bytes at the AOV's own resolution (no upscale)."""
     global _DEPTH_LUT, _LOG_SCALE
     if _DEPTH_LUT is None:
         _DEPTH_LUT = _depth_lut()
         _LOG_SCALE = 255.0 / max(math.log(DEPTH_FAR) - _LOG_N, 1e-6)
-    fw, fh = renderer.size()
     zc = np.clip(np.asarray(z, np.float32), DEPTH_NEAR, DEPTH_FAR)
     # 255 at DEPTH_NEAR down to 0 at DEPTH_FAR (and at the far plane, i.e. sky).
     idx = (255.0 - (np.log(zc) - _LOG_N) * _LOG_SCALE).astype(np.uint8)
-    # Colour-map at the AOV's own resolution (render_scale < 1, so fewer
-    # pixels than the frame) and upscale the bytes, not the floats.
-    return _nn_resize(_DEPTH_LUT[idx], fh, fw)
+    return _DEPTH_LUT[idx]
 
 
 def _luma_down(px, h, w):
@@ -4688,11 +4704,115 @@ def _events_frame(px):
             return np.zeros((fh, fw, 3), np.uint8)
     else:
         acc = _dvs_step(px)
+    fw, fh = renderer.size()
+    return _nn_resize(_evt_colormap(acc), fh, fw)
+
+
+def _evt_colormap(acc):
+    """Signed accumulator in [-1, 1] -> the black/+/- palette, sensor-size."""
     pos = np.clip(acc, 0.0, 1.0)[:, :, None]
     neg = np.clip(-acc, 0.0, 1.0)[:, :, None]
     small = _EVT_BG + pos * (_EVT_ON - _EVT_BG) + neg * (_EVT_OFF - _EVT_BG)
+    return np.clip(small, 0, 255).astype(np.uint8)
+
+
+# --------------------------------------------------------------------------- #
+#  The live sensor view (B key / --view): the film's depth and DVS looks, in
+#  the window. One full-window screen-space sprite rides over the frame; its
+#  texture is rewritten IN PLACE each frame (Texture.update_data -- same
+#  allocation, no material churn). The DVS look is the GPU detector on the
+#  Final source, exactly the film's `--evt-gpu` take; the depth look is
+#  read_aovs_typed off the very frame that would otherwise have been the
+#  picture, exactly the film's. The detector reads the swapchain BEFORE the
+#  sprite overlay composites, so the readout never sees itself as motion.
+sensor_view = "rgb"
+_view_tex = None
+_view_tex_hw = None
+_view_mat = tp.SpriteMaterial()
+_view_sprite = tp.Sprite(_view_mat)
+_view_sprite.screen_space = True
+_view_sprite.screen_anchor.set(0.0, 0.0)
+_view_sprite.center.set(0.0, 0.0)
+_view_sprite.position.set(0.0, 0.0, 0.0)
+_view_sprite.visible = False
+scene.add(_view_sprite)
+
+
+def set_sensor_view(mode):
+    """Arm or disarm a sensor look. B cycles here; --view starts here."""
+    global sensor_view
+    if mode == sensor_view:
+        return
+    if mode == "events":
+        # The film's arming order (_film_sensor_mode): params and resolution
+        # first, then the source, then enable -- enabling is the structural
+        # step (detector images + dirty samplers).
+        renderer.set_event_camera_params(threshold=EVT_THRESHOLD, decay=EVT_DECAY,
+                                         min_luma=EVT_MIN_LUMA,
+                                         max_events_per_pixel=EVT_MAX_PP)
+        renderer.set_event_camera_resolution(EVT_W, EVT_H)
+        renderer.event_camera_source = "final"   # the picture is what should fire
+        renderer.event_camera_enabled = True
+    elif sensor_view == "events":
+        renderer.event_camera_enabled = False
+    sensor_view = mode
+    if mode == "rgb":
+        _view_sprite.visible = False
+    print(f"[view] {mode}" + ("" if mode == "rgb" else "  (B cycles back; UI hidden)"))
+
+
+def _view_show(rgb):
+    """Put an (H, W, 3) uint8 look on the full-window sprite. Row 0 of the
+    array is the TOP of the picture; the sprite samples v=0 at the bottom,
+    so the rows flip on the way in."""
+    global _view_tex, _view_tex_hw
+    rgb = np.ascontiguousarray(rgb[::-1])
+    if _view_tex is None or _view_tex_hw != rgb.shape[:2]:
+        _view_tex = tp.data_texture(rgb, srgb=True)
+        # Nearest ON PURPOSE, like the film's _nn_resize: sensor pixels stay
+        # legible instead of smearing into a filter.
+        _view_tex.mag_filter = tp.Filter.Nearest
+        _view_tex.min_filter = tp.Filter.Linear
+        _view_tex.generate_mipmaps = False
+        _view_tex.wrap_s = tp.TextureWrapping.ClampToEdge
+        _view_tex.wrap_t = tp.TextureWrapping.ClampToEdge
+        _view_tex_hw = rgb.shape[:2]
+        _view_mat.map = _view_tex
+        _view_mat.needs_update()
+    else:
+        _view_tex.update_data(rgb)
     fw, fh = renderer.size()
-    return _nn_resize(np.clip(small, 0, 255).astype(np.uint8), fh, fw)
+    _view_sprite.scale.set(float(fw), float(fh), 1.0)
+    _view_sprite.visible = True
+
+
+def _view_render(dt):
+    """One presented frame through the active sensor view -- the drop-in for a
+    plain renderer.render() wherever the window (or the still) is watching."""
+    global _evt_clock, first_render_done
+    if sensor_view == "depth":
+        z = renderer.read_aovs_typed(scene, camera, ["depth"])["depth"]
+        if z.size:
+            _view_show(_depth_rgb(z))
+    else:
+        if sensor_view == "events":
+            _evt_clock += dt                 # sim time; see _film_step's note
+            renderer.set_event_camera_params(threshold=EVT_THRESHOLD, decay=EVT_DECAY,
+                                             min_luma=EVT_MIN_LUMA,
+                                             max_events_per_pixel=EVT_MAX_PP,
+                                             frame_time_us=int(_evt_clock * 1e6))
+        renderer.render(scene, camera)
+        if sensor_view == "events":
+            v = renderer.read_event_camera_visualisation()
+            if v.size:
+                _view_show(_evt_colormap((v.astype(np.float32) - 128.0) * (1.0 / 127.0)))
+    first_render_done = True
+
+
+if VIEW0 != "rgb" and not FILM:
+    # The film cuts its own sensor shots (--shots); a live view sprite over a
+    # recorded frame would be read back INTO the film. Window and --shot only.
+    set_sensor_view(VIEW0)
 
 
 def _caption(text, w, h):
@@ -5124,7 +5244,7 @@ elif SHOT:
         if drone_on and view_mode == "fpv":
             drone_camera_apply()              # the shot framing does not own FPV
         sim_tick(1.0 / 60.0)                  # sea on the shot's clock, not wall
-        renderer.render(scene, camera)        # keeps the temporal history honest
+        _view_render(1.0 / 60.0)              # keeps the temporal history honest
         first_render_done = True
         _dt_ms = (time.perf_counter() - _t0) * 1e3
         if f > 90:                            # skip the warm-up
@@ -5154,9 +5274,15 @@ elif SHOT:
     elif not seq:
         for _ in range(24):
             sim_tick(1.0 / 60.0)
-            renderer.render(scene, camera)
+            _view_render(1.0 / 60.0)
         out = cli_arg("--out", "warp_sailboat.png", str)
-        renderer.save_frame(scene, camera, out)
+        if sensor_view != "rgb":
+            # The look lives on the composited sprite: read the presented
+            # frame (overlays included) rather than re-rendering for the save.
+            from PIL import Image
+            Image.fromarray(renderer.read_pixels()).save(out)
+        else:
+            renderer.save_frame(scene, camera, out)
         print(f"sailed {SHOT_T:.1f} s ({frames} frames), wrote {out}")
     if n_cold:
         print(f"frame time: {t_cold / n_cold:5.1f} ms over {n_cold} quiet frames"
@@ -5171,9 +5297,12 @@ else:
         frame(dt)
         if not fpv:
             controls.update()
-        renderer.render(scene, camera)
+        _view_render(dt)                      # rgb = plain render; B changes it
         first_render_done = True
-        if ui is not None:
+        # The sensor views are a readout, not the app: the HUD stays off them
+        # (and the depth view's AOV readback drives its own frame, which the
+        # ImGui overlay pass is not written against).
+        if ui is not None and sensor_view == "rgb":
             ui.render(draw_ui)                # overlay: after render(), same frame
 
     canvas.animate(animate)

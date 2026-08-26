@@ -92,6 +92,39 @@ namespace threepp_py {
                      py::arg("data"),
                      "Rewrite a float texture's pixels in place from a (height, width, 3|4) float32 "
                      "array of the SAME size, and mark it dirty. For ping-ponging a procedural sky.")
+                // The uint8 sibling of update_float, for textures that change
+                // every frame (a sensor readout panel, a live minimap). Same
+                // contract: same allocation, same Texture object, new pixels.
+                .def("update_data",
+                     [](Texture& t, py::array_t<std::uint8_t, py::array::c_style | py::array::forcecast> data) {
+                         if (t.images().empty() || t.image().isFloat() || t.image().isHalfFloat())
+                             throw std::runtime_error("update_data: not a uint8 texture (see tp.data_texture)");
+                         if (data.ndim() != 3)
+                             throw std::runtime_error("update_data: expected a 3-D (height, width, channels) array");
+                         auto& img = t.image();
+                         const auto h = static_cast<unsigned int>(data.shape(0));
+                         const auto w = static_cast<unsigned int>(data.shape(1));
+                         const auto c = static_cast<unsigned int>(data.shape(2));
+                         if (w != img.width() || h != img.height())
+                             throw std::runtime_error("update_data: shape does not match the texture "
+                                                      "(it is never resized — make a new one instead)");
+                         if (c != 3 && c != 4)
+                             throw std::runtime_error("update_data: channels must be 3 (RGB) or 4 (RGBA)");
+                         auto& dst = img.data<unsigned char>();
+                         dst.assign(static_cast<size_t>(w) * h * 4, 255);
+                         const std::uint8_t* src = data.data();
+                         for (size_t i = 0; i < static_cast<size_t>(w) * h; ++i) {
+                             dst[i * 4 + 0] = src[i * c + 0];
+                             dst[i * 4 + 1] = src[i * c + 1];
+                             dst[i * 4 + 2] = src[i * c + 2];
+                             if (c == 4) dst[i * 4 + 3] = src[i * c + 3];
+                         }
+                         t.needsUpdate();
+                     },
+                     py::arg("data"),
+                     "Rewrite a uint8 texture's pixels in place from a (height, width, 3|4) uint8 "
+                     "array of the SAME size, and mark it dirty. For per-frame panels "
+                     "(sensor readouts) without churning texture allocations.")
                 .def("needs_update", &Texture::needsUpdate)
                 .def("update_matrix", &Texture::updateMatrix)
                 .def("dispose", &Texture::dispose)
