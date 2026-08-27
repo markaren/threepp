@@ -648,6 +648,19 @@ def test_pathtraced_lidar_sensor(vk_renderer):
     assert np.array_equal(r2["position"], r3["position"])
     assert np.array_equal(r2["intensity"], r3["intensity"])
 
+    # The raw beam-table entry point: one dispatch, arbitrary beams. This is
+    # the multi-pose scoring path (12 poses as one table instead of 12
+    # scans); here 64 parallel beams straight at the box.
+    org = np.zeros((64, 3), np.float32)
+    org[:, 2] = 3.0
+    org[:, 0] = np.linspace(-0.3, 0.3, 64)
+    dirs = np.tile(np.float32([0, 0, -1]), (64, 1))
+    raw = vk_renderer.scan_lidar(org, dirs, tp.LidarParams())
+    raw_hits = raw["return_no"] > 0
+    assert raw_hits.sum() > 32 and (raw["intensity"][raw_hits] > 0).all()
+    raw2 = vk_renderer.scan_lidar(org, dirs, tp.LidarParams())
+    assert np.array_equal(raw["position"], raw2["position"])
+
 
 def test_lidar_intensity_monotone_at_grazing(vk_renderer):
     """The Smith G regression gate. Without shadowing-masking the back-scatter

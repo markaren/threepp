@@ -7724,6 +7724,10 @@ class VulkanRenderer:
         """
     def render(self, scene: Object3D, camera: Camera) -> None:
         ...
+    def scan_lidar(self, origins: typing.Annotated[numpy.typing.ArrayLike, numpy.float32], directions: typing.Annotated[numpy.typing.ArrayLike, numpy.float32], params: LidarParams = ...) -> dict:
+        """
+        Trace an arbitrary (N,3)+(N,3) beam table in ONE dispatch -> the same dict of numpy arrays as PathTracedLidarSensor.scan(). Use when the beams do not follow a single pose, e.g. scoring an object from a ring of viewpoints in one round trip.
+        """
     def render_aov(self, scene: Object3D, camera: Camera, aov: str) -> numpy.typing.NDArray[numpy.uint8]:
         """
         Render and return a G-buffer AOV as (H, W, 3) uint8: 'rgb' | 'normals' | 'segmentation' | 'albedo' | 'motion'.

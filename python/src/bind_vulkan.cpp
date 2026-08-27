@@ -1705,7 +1705,70 @@ namespace threepp_py {
                 .def("set_auto_exposure_range",
                      [](PyVulkanRenderer& r, float lo, float hi) { r.native().setAutoExposureRange(lo, hi); },
                      py::arg("min_ev"), py::arg("max_ev"),
-                     "EV clamp for auto-exposure relative to linear 1.0 (default -3 to +3).");
+                     "EV clamp for auto-exposure relative to linear 1.0 (default -3 to +3).")
+                // Raw beam-table lidar: ONE dispatch, ONE readback, any beam
+                // set. This is what makes multi-pose scoring GPU-bound instead
+                // of round-trip-bound: 12 poses as 12 PathTracedLidarSensor
+                // scans is 12 tiny dispatches each followed by a synchronous
+                // readback (~30% GPU); the same 48k beams as one table is one
+                // trace. The sensor class remains the ergonomic path when the
+                // beams follow a pose.
+                .def("scan_lidar", [](PyVulkanRenderer& r,
+                                      py::array_t<float, py::array::c_style | py::array::forcecast> origins,
+                                      py::array_t<float, py::array::c_style | py::array::forcecast> directions,
+                                      const LidarParams& params) {
+                    if (origins.ndim() != 2 || origins.shape(1) != 3 ||
+                        directions.ndim() != 2 || directions.shape(1) != 3 ||
+                        origins.shape(0) != directions.shape(0)) {
+                        throw std::invalid_argument("origins and directions must both be (N, 3)");
+                    }
+                    const auto n = static_cast<size_t>(origins.shape(0));
+                    std::vector<LidarBeam> beams(n);
+                    const float* po = origins.data();
+                    const float* pd = directions.data();
+                    for (size_t i = 0; i < n; ++i) {
+                        beams[i].origin.set(po[i * 3 + 0], po[i * 3 + 1], po[i * 3 + 2]);
+                        beams[i].direction.set(pd[i * 3 + 0], pd[i * 3 + 1], pd[i * 3 + 2]);
+                    }
+                    std::vector<LidarReturn> out;
+                    std::vector<LidarReturn> clean;
+                    {
+                        py::gil_scoped_release release;
+                        r.native().scanLidar(beams, out, params,
+                                             params.pairedCleanTrace ? &clean : nullptr);
+                    }
+                    const auto n_ = static_cast<py::ssize_t>(out.size());
+                    py::array_t<float>   pos({n_, static_cast<py::ssize_t>(3)});
+                    py::array_t<float>   nrm({n_, static_cast<py::ssize_t>(3)});
+                    py::array_t<float>   dist(n_);
+                    py::array_t<float>   inten(n_);
+                    py::array_t<int32_t> inst(n_);
+                    py::array_t<int32_t> rno(n_);
+                    py::array_t<int32_t> rkind(n_);
+                    auto *pp = pos.mutable_data(), *pn = nrm.mutable_data();
+                    auto *pdi = dist.mutable_data(), *pi = inten.mutable_data();
+                    auto *pinst = inst.mutable_data(), *prno = rno.mutable_data(),
+                         *pkind = rkind.mutable_data();
+                    for (py::ssize_t i = 0; i < n_; ++i) {
+                        const auto& q = out[static_cast<size_t>(i)];
+                        pp[i * 3 + 0] = q.position.x; pp[i * 3 + 1] = q.position.y; pp[i * 3 + 2] = q.position.z;
+                        pn[i * 3 + 0] = q.normal.x;   pn[i * 3 + 1] = q.normal.y;   pn[i * 3 + 2] = q.normal.z;
+                        pdi[i] = q.distance; pi[i] = q.intensity;
+                        pinst[i] = q.hitInstanceId; prno[i] = q.returnNo; pkind[i] = q.returnKind;
+                    }
+                    py::dict d;
+                    d["position"] = pos; d["normal"] = nrm; d["distance"] = dist;
+                    d["intensity"] = inten; d["instance_id"] = inst;
+                    d["return_no"] = rno; d["return_kind"] = rkind;
+                    return d;
+                }, py::arg("origins"), py::arg("directions"), py::arg("params") = LidarParams{},
+                   "Trace an arbitrary beam table in ONE dispatch: origins (N,3) + unit "
+                   "directions (N,3) -> the same dict of numpy arrays as "
+                   "PathTracedLidarSensor.scan(), row i belonging to beam i (x "
+                   "samples_per_beam x max_returns when those are raised; return_no > 0 is "
+                   "the real-return predicate). render() the scene once first. Use this "
+                   "when the beams do not follow a single pose - e.g. scoring an object "
+                   "from a ring of viewpoints in one round trip.");
 
         // ---- PathTracedLidarSensor (helpers/PathTracedLidarSensor.hpp) -------
         // The renderer's own lidar tracer (VulkanRenderer::scanLidar), surfaced
