@@ -46,6 +46,11 @@ fingers do not hold the fish it falls.
     python warp_franka_softgrip.py --grip-force 8 # close threshold, newtons
     python warp_franka_softgrip.py --fish-len 0.3 # graded sizes: 0.24 / 0.27 / 0.30
     python warp_franka_softgrip.py --fish-model fish.glb  # skin a glTF fish (Barramundi)
+    python warp_franka_softgrip.py --fish-model scan.usdz --fish-len 0.63 --fish-mass 3.74
+                                                  # an FHF photogrammetry cod scan at its
+                                                  # MEASURED length and weight (the FR3 hand
+                                                  # cannot span it -- see --fish-mass below)
+    python warp_franka_softgrip.py --flesh-visc 0.01  # strain-rate damping, s (UNSTABLE here)
     python warp_franka_softgrip.py --young 2.5e5  # fish flesh Young's modulus, Pa
     python warp_franka_softgrip.py --poisson 0.45 # near-incompressible tet FEM
     python warp_franka_softgrip.py --grade-mm 265 # length that picks the far crate
@@ -228,6 +233,36 @@ YOUNG = cli_arg("--young", 2.5e5, float)      # Pa
 POISSON = cli_arg("--poisson", 0.45, float)   # near-incompressible
 MU_LAME = YOUNG / (2.0 * (1.0 + POISSON))
 LAM_LAME = YOUNG * POISSON / ((1.0 + POISSON) * (1.0 - 2.0 * POISSON))
+# Strain-rate (Kelvin-Voigt) damping on the DEVIATORIC corotational row, in
+# SECONDS -- ported verbatim from warp_fish_collide.py's tet_corot, where it was
+# measured against a slow soft-vs-soft collision. gamma = tau / DT and the solved
+# row becomes C + tau*Cdot = 0, so the flesh resists the RATE of shape change,
+# not just the shape: a fast squeeze is met with a viscous back-pressure instead
+# of an elastic spike. Rigid motion is untouched by construction (g0 = -(g1+g2+g3)),
+# so free fall, the carry swing and the drop glide never see this term.
+# 0 = EXACTLY the old purely-elastic solver, byte for byte.
+# The volumetric row gets NONE by default: the collide rig measured it worse at
+# high Poisson, where it is already the stiff row and rate-freezing it makes the
+# body rigid. Left as a knob, not a hidden zero.
+#
+# MEASURED HERE, 2026-08-27, AND IT DOES NOT WORK IN THIS RIG -- default 0 is
+# not a placeholder, it is the verdict. In the collide rig (free bodies meeting
+# each other and a floor) tau = 10..40 ms is safe and 40 ms is best. Under the
+# PADS it detonates: the frame the pad face meets the flank, cage volume goes
+# 99 % -> 400-800 %, detF -> -1e3, and the force proxy trips at 150-370 N after
+# 3.4 mm of close travel. That is true at tau = 1 ms as well as 40 (so it is not
+# a gamma-magnitude tuning problem), and at ITERATIONS = 1, 2 and 4 (so it is
+# not the multiplier being re-projected against a stale prev either -- fewer
+# iterations is WORSE: 1798 % cage volume at ITERATIONS = 1). The SAME tau = 40
+# is stable in this file's own --drop bench, which has gravity, the floor and
+# the ledge but no pad: cage volume 97.5 %, detF 0.37..1.20. So the instability
+# is specific to the pad contact, whose corrections are mass-split back onto the
+# cage nodes THROUGH the skinning weights -- the rate term then reads the
+# contact solve's own within-substep corrections as strain rate and pumps them.
+# Fixing that means damping a rate measured before the contact sweeps, not
+# after; it is not a knob change. Until then: leave this at 0.
+FLESH_VISC = cli_arg("--flesh-visc", 0.0, float)          # s, deviatoric row
+FLESH_VISC_VOL = cli_arg("--flesh-visc-vol", 0.0, float)  # s, volumetric row
 TET_RES = cli_arg("--tet-res", 40, int)   # voxel cells along the fish's length
                       # (22 was visibly blocky; finer also hugs the skin tighter
                       # since the carve dilation is measured in cells)
@@ -396,34 +431,72 @@ if not os.path.exists(URDF):
 # pad paddle to the real flesh before anything downstream is built. The procedural
 # path is untouched.
 def load_fish_model(path, length):
-    """Load a glTF fish mesh; return (verts, faces, uv, material) with the verts
-    in the procedural template frame: length along +X, up +Y, centred at the
-    origin, scaled so the long axis is `length` metres. The model's length runs
-    along +Z, so a +90 deg rotation about Y (proper, winding preserved) maps it
-    to +X. The mesh is NOT vendored -- this only runs when --fish-model is given."""
+    """Load a fish mesh; return (verts, faces, uv, material) with the verts in
+    the procedural template frame: length along +X, dorsal +Y, lateral +Z,
+    centred at the origin, scaled so the long axis is `length` metres.
+
+    EVERY mesh in the file is welded, not just the first: the Khronos Barramundi
+    is one mesh, but an FHF photogrammetry .usdz scan is a scene graph and taking
+    found[0] silently loaded a fragment (or a stray helper) instead of the fish.
+    Missing indices / UVs are synthesised rather than crashing, since a scanned
+    surface is often non-indexed and need not carry a UV set.
+
+    ORIENTATION is measured, not assumed. The old path hard-coded a +90 deg Y
+    rotation because the Barramundi's length runs along +Z; a scan's axes are
+    whatever the photogrammetry rig happened to use. Sorting the bbox extents
+    puts the longest axis on +X, the middle (dorsal-ventral) on +Y and the
+    thinnest (lateral) on +Z -- exactly the template frame -- and the permutation
+    is corrected to a proper rotation so the fish is never mirrored and the
+    surface winding, which the contact normals ride on, survives. On the
+    Barramundi this reproduces the old Ry90 up to a lateral sign.
+
+    The scan need not be CLOSED: nothing here needs an inside test. The cage is
+    carved from the per-slice body profile (body_profile) and the contact surface
+    is a wp.Mesh of the body triangles, both of which are winding-agnostic."""
     root = tp.ModelLoader().load(path)
+    if root is None:
+        sys.exit(f"could not load {path}")
+    root.update_matrix_world(True)
     found = []
-
-    def rec(o):
-        if isinstance(o, tp.Mesh):
-            found.append(o)
-        for ch in o.children:
-            rec(ch)
-
-    rec(root)
-    mesh = found[0]
-    mesh.update_matrix_world(True)
-    g = mesh.geometry
-    P = np.asarray(g.get_attribute("position"), np.float64).reshape(-1, 3)
-    uv = np.asarray(g.get_attribute("uv"), np.float32).reshape(-1, 2)
-    faces = np.asarray(g.get_index(), np.int64).reshape(-1, 3).astype(np.int32)
-    M = np.asarray(mesh.matrix_world.to_numpy(), np.float64).reshape(4, 4)
-    Pw = (M[:3, :3] @ P.T).T + M[:3, 3]                  # bake the node transform
-    Ry90 = np.array([[0, 0, 1], [0, 1, 0], [-1, 0, 0]], np.float64)   # +Z -> +X
-    Pr = (Ry90 @ Pw.T).T
+    root.traverse(lambda o: found.append(o) if isinstance(o, tp.Mesh) else None)
+    verts, faces, uvs, material, base = [], [], [], None, 0
+    for mesh in found:
+        g = mesh.geometry
+        if g is None:
+            continue
+        p = g.get_attribute("position")
+        if p is None or not len(p):
+            continue
+        P = np.asarray(p, np.float64).reshape(-1, 3)
+        M = np.asarray(mesh.matrix_world.to_numpy(), np.float64).reshape(4, 4)
+        verts.append((M[:3, :3] @ P.T).T + M[:3, 3])     # bake the node transform
+        idx = g.get_index()
+        idx = (np.arange(len(P), dtype=np.int64) if idx is None
+               else np.asarray(idx, np.int64).reshape(-1))
+        faces.append(idx.reshape(-1, 3) + base)
+        uv = g.get_attribute("uv")
+        uvs.append(np.zeros((len(P), 2), np.float32) if uv is None
+                   else np.asarray(uv, np.float32).reshape(-1, 2))
+        base += len(P)
+        if material is None:
+            material = mesh.material
+    if not verts:
+        sys.exit(f"no geometry in {path}")
+    Pw = np.concatenate(verts)
+    faces = np.concatenate(faces).astype(np.int32)
+    uv = np.concatenate(uvs)
+    ext = Pw.max(0) - Pw.min(0)
+    order = np.argsort(ext)                              # [thinnest, middle, longest]
+    perm = [order[2], order[1], order[0]]                # -> [X long, Y dorsal, Z lateral]
+    Pr = Pw[:, perm]
+    if np.linalg.det(np.eye(3)[perm]) < 0:               # keep it a ROTATION
+        Pr = Pr * np.array([1.0, 1.0, -1.0])
     Pr -= 0.5 * (Pr.max(0) + Pr.min(0))                  # centre at origin
     scale = length / (Pr[:, 0].max() - Pr[:, 0].min())
-    return (Pr * scale).astype(np.float32), faces, uv, mesh.material
+    print(f"  fish-model: {len(found)} mesh node(s) welded to {len(Pw)} verts / "
+          f"{len(faces)} tris, raw bbox {ext[perm][0]:.3f} x {ext[perm][1]:.3f} x "
+          f"{ext[perm][2]:.3f} -> scaled x{scale:.4f} to {length * 1000:.0f} mm")
+    return (Pr * scale).astype(np.float32), faces, uv, material
 
 
 def body_profile(rv, nb=28, keep=90.0):
@@ -767,6 +840,13 @@ FISH_NV, FISH_NF = len(fish_tmpl), len(fish_faces_t)
 # Water, near enough: 1000 kg/m^3 on the template's own volume. 0.24 m of herring
 # comes out at ~0.21 kg, which is what a 0.24 m herring weighs.
 FISH_MASS = 1000.0 * abs(signed_volume(fish_tmpl, fish_faces_t))
+# ...unless the fish was WEIGHED. The FHF scan database ships a measured
+# weight_kg beside every scan (CF2504MR0096: 0.63 m cod, 3.74 kg), and a
+# density-times-a-fitted-ellipsoid estimate is not that number. --fish-mass sets
+# the cage's total mass directly, so the grasp is tested against the real load.
+_FISH_MASS_CLI = cli_arg("--fish-mass", 0.0, float)      # kg, 0 = density estimate
+if _FISH_MASS_CLI > 0.0:
+    FISH_MASS = _FISH_MASS_CLI
 
 # The two 5-tet splits of a cube, alternated by cell parity so neighbouring
 # cells agree on the diagonal of every shared face (a conforming lattice).
@@ -999,6 +1079,11 @@ _dt2 = DT * DT
 tet_alpha_d = (1.0 / (MU_LAME * tet_rest_vol.astype(np.float64) * _dt2)).astype(np.float32)
 tet_alpha_h = (1.0 / (LAM_LAME * tet_rest_vol.astype(np.float64) * _dt2)).astype(np.float32)
 _YOUNG0, _KFIN0 = YOUNG, K_FIN          # bases for the live imgui rescale
+# Relaxation time -> XPBD damping coefficient. gamma is the SAME number for every
+# tet regardless of volume (the damping is stiffness-proportional, Rayleigh), so
+# these are plain scalars baked into the CUDA graph at capture.
+GAMMA_D = float(FLESH_VISC / DT)
+GAMMA_H = float(FLESH_VISC_VOL / DT)
 # Rest edge lengths, for the max-stretch diagnostic only (not a constraint).
 _rest_edge_len = np.linalg.norm(cage_v[_e[:, 0]] - cage_v[_e[:, 1]], axis=1).astype(np.float32)
 
@@ -1045,6 +1130,10 @@ print(f"  fish {FISH_LEN * 1000:.0f} x {FISH_H * 1000:.0f} x {FISH_W * 1000:.0f}
       f"{FISH_MASS * 1000:.0f} g: cage {CAGE_N} verts / {N_TETS} tets / {len(_e)} edges at "
       f"{CAGE_H * 1000:.1f} mm pitch, contact r {CAGE_R * 1000:.1f} mm, "
       f"{FISH_NV} skinned render verts (bind err {_bind_err.mean() * 1e6:.1f} um)")
+print(f"  flesh E {YOUNG:.3g} Pa nu {POISSON:.2f}, strain-rate damping "
+      f"{FLESH_VISC * 1000:.1f} ms dev"
+      f"{f' / {FLESH_VISC_VOL * 1000:.1f} ms vol' if FLESH_VISC_VOL > 0.0 else ''}"
+      f"{'  (elastic, = the old solver)' if FLESH_VISC <= 0.0 and FLESH_VISC_VOL <= 0.0 else ''}")
 
 MASS_PAD = FIN_MASS / FIN_N
 MASS_FISH = mfish
@@ -1152,6 +1241,7 @@ def apply_delta(pos: wp.array(dtype=wp.vec3),
 
 @wp.kernel
 def tet_corot(pos: wp.array(dtype=wp.vec3),
+              prev: wp.array(dtype=wp.vec3),
               tets: wp.array2d(dtype=int),
               dm_inv: wp.array(dtype=wp.mat33),
               alpha_d: wp.array(dtype=float),
@@ -1159,6 +1249,8 @@ def tet_corot(pos: wp.array(dtype=wp.vec3),
               invm: wp.array(dtype=float),
               nsplit: wp.array(dtype=float),
               base: int,
+              gamma_d: float,
+              gamma_h: float,
               lam_d: wp.array(dtype=float),
               lam_h: wp.array(dtype=float),
               dpos: wp.array(dtype=wp.vec3)):
@@ -1188,10 +1280,22 @@ def tet_corot(pos: wp.array(dtype=wp.vec3),
     # dC_H/dF = cof(F). R comes from the SVD with the sign of the smallest
     # singular direction flipped when det < 0, so an inverted tet is pulled back
     # through its flat state toward a proper rotation (inversion-safe).
+    #
+    # STRAIN-RATE DAMPING (--flesh-visc), Macklin et al.'s damped XPBD update:
+    #   dlam = (-C - alpha~*lam - gamma*dot(gradC, x - x_prev))
+    #          / ((1 + gamma) * sum_k s_k |gradC_k|^2 + alpha~)
+    # `prev` is the position at the START of this substep (integrate_damped
+    # writes it), so dot(gradC, x - prev) is C's change over the substep. With
+    # gamma = tau/DT the row solves C + tau*Cdot = 0: Kelvin-Voigt flesh with
+    # relaxation time tau. gamma_d = gamma_h = 0 is the old elastic solver.
     t = wp.tid()
     la, lb, lc, ld = tets[t, 0], tets[t, 1], tets[t, 2], tets[t, 3]
     ia, ib, ic, id_ = base + la, base + lb, base + lc, base + ld
     x0, x1, x2, x3 = pos[ia], pos[ib], pos[ic], pos[id_]
+    u0 = x0 - prev[ia]        # this substep's displacement, per node: the
+    u1 = x1 - prev[ib]        # strain RATE reference for the damping term
+    u2 = x2 - prev[ic]
+    u3 = x3 - prev[id_]
     w0, w1, w2, w3 = invm[ia], invm[ib], invm[ic], invm[id_]
     s0 = w0 * nsplit[ia]
     s1 = w1 * nsplit[ib]
@@ -1246,9 +1350,12 @@ def tet_corot(pos: wp.array(dtype=wp.vec3),
         g2 = (d0 * di[1, 0] + d1 * di[1, 1] + d2 * di[1, 2]) * inv_cd
         g3 = (d0 * di[2, 0] + d1 * di[2, 1] + d2 * di[2, 2]) * inv_cd
         g0 = -(g1 + g2 + g3)
-        den = (s0 * wp.dot(g0, g0) + s1 * wp.dot(g1, g1)
-               + s2 * wp.dot(g2, g2) + s3 * wp.dot(g3, g3) + ad)
-        dl = (-cd - ad * lam_d[t]) / den
+        gd = (s0 * wp.dot(g0, g0) + s1 * wp.dot(g1, g1)
+              + s2 * wp.dot(g2, g2) + s3 * wp.dot(g3, g3))
+        rate = (wp.dot(g0, u0) + wp.dot(g1, u1)
+                + wp.dot(g2, u2) + wp.dot(g3, u3))
+        den = (1.0 + gamma_d) * gd + ad
+        dl = (-cd - ad * lam_d[t] - gamma_d * rate) / den
         lam_d[t] = lam_d[t] + dl
         da0 = g0 * (w0 * dl)
         da1 = g1 * (w1 * dl)
@@ -1269,9 +1376,12 @@ def tet_corot(pos: wp.array(dtype=wp.vec3),
     h0 = -(h1 + h2 + h3)
     ch = detf - 1.0
     ah = alpha_h[t]
-    denh = (s0 * wp.dot(h0, h0) + s1 * wp.dot(h1, h1)
-            + s2 * wp.dot(h2, h2) + s3 * wp.dot(h3, h3) + ah)
-    dlh = (-ch - ah * lam_h[t]) / denh
+    gh = (s0 * wp.dot(h0, h0) + s1 * wp.dot(h1, h1)
+          + s2 * wp.dot(h2, h2) + s3 * wp.dot(h3, h3))
+    rateh = (wp.dot(h0, u0) + wp.dot(h1, u1)
+             + wp.dot(h2, u2) + wp.dot(h3, u3))
+    denh = (1.0 + gamma_h) * gh + ah
+    dlh = (-ch - ah * lam_h[t] - gamma_h * rateh) / denh
     lam_h[t] = lam_h[t] + dlh
     da0 = da0 + h0 * (w0 * dlh)
     da1 = da1 + h1 * (w1 * dlh)
@@ -1795,8 +1905,9 @@ def substep_body():
                   inputs=[pa, pair_i_d, pair_j_d, pair_rest_d, pair_alpha_d, pair_lam,
                           invm, nsplit_d, dpos])
         wp.launch(tet_corot, dim=N_TETS, device=device,
-                  inputs=[pa, tets_d, tet_dm_inv_d, tet_alpha_d_d, tet_alpha_h_d,
-                          invm, nsplit_d, FISH_BASE, tet_lam_d, tet_lam_h, dpos])
+                  inputs=[pa, prev, tets_d, tet_dm_inv_d, tet_alpha_d_d, tet_alpha_h_d,
+                          invm, nsplit_d, FISH_BASE, GAMMA_D, GAMMA_H,
+                          tet_lam_d, tet_lam_h, dpos])
         wp.launch(apply_delta, dim=NP, device=device, inputs=[pa, dpos, OMEGA])
         # Contact pass: pads vs the skin, the skin vs the cell floor -- both
         # scatter through the binding weights -- so the substep ends with the
