@@ -13,7 +13,8 @@
 //
 //     I = P_tx · f_back · cos θ · η(r) / r²
 //
-//     f_back = albedo·(1-metal)/π  +  F·D(N·N) / (4·cos θ)
+//     f_back = albedo·(1-metal)/π  +  F·D·V_smith   (V = height-correlated
+//              Smith GGX visibility at NoV = NoL = cos θ; see below)
 //
 // where
 //   P_tx     = `laserPower` push constant (transmitter power, arbitrary unit)
@@ -209,10 +210,20 @@ void main() {
     const float fOneM   = pow(1.0 - cosTheta, 5.0);
     const vec3  F        = F0 + (vec3(1.0) - F0) * fOneM;
 
-    // Microfacet specular at back-scatter: D · F / (4 · NoV · NoL) collapses
-    // to D · F / (4 · cos² θ) because NoV = NoL = cos θ in this geometry.
-    // We omit Smith G for simplicity — it's near 1 across the dominant
-    // perpendicular hits and the visualisation tolerates the small bias.
+    // Microfacet specular at back-scatter: D · F · V with V the
+    // height-correlated Smith GGX visibility (G2 folded together with the
+    // 1/(4·NoV·NoL) denominator). At back-scatter NoV = NoL = cos θ, so
+    //
+    //     V = 0.25 / (cos θ · sqrt(cos²θ·(1-α²) + α²))
+    //
+    // For α → 0 this is exactly the old un-shadowed 1/(4cos²θ), so smooth
+    // chrome behaves as before. The term earns its keep at grazing: without
+    // shadowing-masking the returned intensity CLIMBS back up past ~80°
+    // incidence (measured 0.017 at 55° but > 0.16 at 85° on a flat panel),
+    // handing every closed body a bright silhouette rim no shaping can
+    // remove — an artifact, not physics. With V the full lidar equation
+    // I ∝ D·F·V·cosθ decays monotonically to zero at grazing, as a real
+    // detector sees.
     //
     // IMPORTANT: the specular term is NOT damped by (1 - transmission).
     // Fresnel reflection IS the fraction that doesn't transmit, by
@@ -221,7 +232,9 @@ void main() {
     // at grazing incidence (Schlick's pow(1-cosθ, 5) term). Damping
     // specular by (1 - T) on top of Fresnel would double-discount and
     // make every water surface invisible to the LIDAR.
-    const vec3  specular = (D * F) / max(4.0 * cosTheta * cosTheta, 1e-6);
+    const float vDen     = cosTheta * sqrt(cosTheta * cosTheta * (1.0 - a2) + a2);
+    const float Vis      = 0.25 / max(vDen, 1e-6);
+    const vec3  specular = D * F * Vis;
 
     const vec3  fBack    = diffuse + specular;
 
