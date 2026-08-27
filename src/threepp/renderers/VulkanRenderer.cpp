@@ -491,8 +491,17 @@ namespace threepp {
             }
         } overscanRestore{&camera, applyOverscan, savedP0, savedP5};
 
+        // Resize predicate: has the CANVAS changed since we last looked, not
+        // does the canvas disagree with the swapchain. The two can disagree
+        // permanently — the platform grants the extent, and e.g. Windows
+        // enforces a minimum window width on the hidden-window headless
+        // fallback, so a 128-wide canvas gets a 232-wide swapchain no matter
+        // how often it is recreated. Comparing against core()->size (pinned to
+        // the swapchain extent) re-triggered a full swapchain + render-extent
+        // recreate every frame in that state.
         const auto cur = core()->canvas.size();
-        if (cur.width() != core()->size.width() || cur.height() != core()->size.height()) {
+        if (cur != core()->lastCanvasSize) {
+            core()->lastCanvasSize = cur;
             core()->needsResize = true;
         }
         // Mirror Renderer-base tone-mapping state into the Impl so renderFrame

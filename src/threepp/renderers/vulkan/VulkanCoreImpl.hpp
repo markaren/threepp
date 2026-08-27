@@ -173,6 +173,12 @@ namespace threepp {
     struct VulkanRenderer::Impl {
         Canvas& canvas;
         WindowSize size;
+        // Canvas size render() last responded to. The resize predicate compares
+        // against THIS, not `size`: `size` is pinned to the swapchain extent,
+        // and the platform can grant a different extent than the canvas asked
+        // for (Windows enforces a minimum window width on the hidden-window
+        // headless fallback), so asked-for vs granted can disagree permanently.
+        WindowSize lastCanvasSize;
         Color clearColor{0.f, 0.f, 0.f};
         float clearAlpha = 1.f;
         Vector4 viewport;

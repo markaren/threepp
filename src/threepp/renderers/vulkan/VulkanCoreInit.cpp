@@ -13,7 +13,7 @@
 namespace threepp {
 
 
-VulkanRenderer::Impl::Impl(Canvas& c) : canvas(c), size(c.size()) {
+VulkanRenderer::Impl::Impl(Canvas& c) : canvas(c), size(c.size()), lastCanvasSize(c.size()) {
             // The PRIMARY view. Created before anything else touches a
             // per-view resource, because view() dereferences curView_
             // unconditionally — every createXxx below allocates into it.

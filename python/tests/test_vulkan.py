@@ -15,7 +15,11 @@ import threepp as tp
 
 pytestmark = pytest.mark.skipif(not tp.HAS_VULKAN, reason="built without the Vulkan backend")
 
-W, H = 128, 96
+# Same 4:3 aspect as the old 128x96, but wide enough that no window manager
+# clamps it: a headless canvas on Windows falls back to a hidden window, and
+# the WM enforces a minimum window width (~232 px), so a 128-wide canvas gets
+# a 232-wide swapchain and every (H, W) shape assertion fails.
+W, H = 320, 240
 
 
 @pytest.fixture(scope="module")
@@ -634,12 +638,10 @@ def _cuda_torch():
 needs_cuda_torch = pytest.mark.skipif(_cuda_torch() is None,
                                       reason="needs torch with a CUDA device")
 
-# A canvas of its own, deliberately WIDER than the 128x96 module fixture. A
-# headless canvas on Windows falls back to a hidden window, whose minimum width
-# the window manager enforces (~232 px): asking for 128 leaves canvas.size() and
-# the swapchain extent permanently disagreeing, so the renderer recreates the
-# swapchain every frame -- and a swapchain recreate is exactly the reallocation
-# that (correctly) disables frame interop. 320 px settles on the first frame.
+# A module-scoped canvas of its own so the interop fixture's exported frames
+# are independent of the AOV tests' render cadence. Width must clear the
+# Windows hidden-window minimum (~232 px, see W/H above) so the swapchain
+# extent matches what was asked for and the exports are FW x FH exactly.
 FW, FH = 320, 240
 
 
