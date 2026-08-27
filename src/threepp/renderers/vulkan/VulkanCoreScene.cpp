@@ -2,6 +2,7 @@
 
 #include "VulkanCpuPhaseProf.hpp"
 
+#include <algorithm>
 #include <cfloat>
 
 namespace threepp {
@@ -1185,6 +1186,7 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                         auto* normAttr = g->getAttribute("normal");
                         auto* uvAttr   = g->getAttribute("uv");
                         auto* idxAttr  = g->getIndex();
+                        auto* colAttr  = g->getAttribute("color");
                         for (uint32_t j = 0; j < sp.count; ++j) {
                             auto& fp = prevSceneFingerprint[sp.first + j];
                             fp.attrVersion = av;
@@ -1192,6 +1194,7 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                             fp.normAttr = normAttr;
                             fp.uvAttr   = uvAttr;
                             fp.idxAttr  = idxAttr;
+                            fp.colAttr  = colAttr;
                         }
                     }
                     unsigned int gv = 0;// must mirror geomVersionOf()
@@ -1199,6 +1202,7 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                     if (fp0.normAttr) gv += fp0.normAttr->version;
                     if (fp0.idxAttr)  gv += fp0.idxAttr->version;
                     if (fp0.uvAttr)   gv += fp0.uvAttr->version;
+                    if (fp0.colAttr)  gv += fp0.colAttr->version;
                     const bool geomChanged = (gv != fp0.geomVersion);
                     if (geomChanged) {
                         for (uint32_t j = 0; j < sp.count; ++j)
@@ -2676,6 +2680,88 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                                 forceUnpackedGeoms_.count(geomKey) != 0;
                         if (it->second->geomVersion != curVer || packedMismatch) {
                             auto& old = it->second;
+                            if (old->interop) {
+                                // A CPU edit to a SIDE attribute (color / uv /
+                                // index contents — counts are fixed: the interop
+                                // enqueue loop above tears interop down on any
+                                // count change before this runs) bumped the
+                                // composite version under an armed interop
+                                // registration. Legitimate: the producer owns
+                                // position/normal, the CPU still owns the rest.
+                                // Evicting here would be three bugs at once —
+                                // free exports a foreign API holds imports of,
+                                // leave pendingDynamicGeomRefits_ (filled
+                                // earlier this pass) dangling at the freed
+                                // record, and rebuild from host position arrays
+                                // that are stale by contract, freezing the mesh
+                                // at whatever the CPU last saw. Transplant
+                                // instead: build the replacement from host data
+                                // (which is exactly how the fresh color/uv/index
+                                // contents get uploaded), move the interop
+                                // machinery across, and re-point the pending
+                                // refit — this same frame's recorded refit then
+                                // overwrites vertex/normal from the exports, so
+                                // the stale host positions are never presented.
+                                auto fresh = buildBlasFor(*m->geometry(), /*allowPacked=*/true);
+                                // >=, not ==: createExternalBuffer reports the
+                                // ALLOCATION size, which the allocator pads up
+                                // (30752 for a 30744-byte request), so equality
+                                // spuriously fails for any vertex count whose
+                                // byte size is not 16-aligned. The requirement
+                                // is only that the export can source the full
+                                // head-of-frame copy into the new buffers.
+                                const bool fits = fresh &&
+                                        fresh->vertexCount == old->vertexCount &&
+                                        fresh->indexCount == old->indexCount &&
+                                        fresh->vertex.size <= old->posExt.size &&
+                                        fresh->normal.size <= old->nrmExt.size;
+                                if (fits) {
+                                    fresh->liveCheck = m->geometry();
+                                    fresh->posExt = old->posExt;
+                                    old->posExt = {};
+                                    fresh->nrmExt = old->nrmExt;
+                                    old->nrmExt = {};
+                                    fresh->externalCopy = std::move(old->externalCopy);
+                                    old->externalCopy = nullptr;
+                                    fresh->sanitizeDS = old->sanitizeDS;
+                                    old->sanitizeDS = VK_NULL_HANDLE;
+                                    fresh->interopValidate = old->interopValidate;
+                                    fresh->interop = true;
+                                    old->interop = false;
+                                    fresh->perFrameDynamic = true;
+                                    destroyBlasLodLevels(*old);
+                                    destroyBlasRecord(*old);// interop fields cleared above
+                                    BlasRecord* freshPtr = fresh.get();
+                                    it->second = std::move(fresh);
+                                    for (auto& op : pendingDynamicGeomRefits_) {
+                                        if (op.geom == geomKey) op.rec = freshPtr;
+                                    }
+                                    recPtr = freshPtr;
+                                } else {
+                                    // Cannot transplant (an attribute appeared or
+                                    // vanished, changing the buffer set). Tear the
+                                    // interop down DELIBERATELY — the exports are
+                                    // released behind disableVertexInterop's drain
+                                    // and the application is told — then evict as
+                                    // for any other geometry change.
+                                    std::cerr << "[VulkanRenderer] vertex interop: geometry "
+                                                 "attributes changed shape under an armed interop "
+                                                 "registration - interop is being DISABLED for "
+                                                 "this mesh. Edit only the CONTENTS of side "
+                                                 "attributes (color/uv/index) while interop is "
+                                                 "armed.\n";
+                                    disableVertexInterop(*m);
+                                    pendingDynamicGeomRefits_.erase(
+                                            std::remove_if(pendingDynamicGeomRefits_.begin(),
+                                                           pendingDynamicGeomRefits_.end(),
+                                                           [&](const auto& op) { return op.geom == geomKey; }),
+                                            pendingDynamicGeomRefits_.end());
+                                    destroyBlasLodLevels(*old);
+                                    destroyBlasRecord(*old);
+                                    blasCache.erase(it);
+                                    it = blasCache.end();
+                                }
+                            } else {
                             // Topology/positions changed under this geometry
                             // pointer — any existing LOD chain simplified the
                             // OLD data and no longer matches. Destroy it; the
@@ -2683,11 +2769,6 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                             // LodState::None and the selection pass re-
                             // enqueues a new chain next time it's eligible.
                             destroyBlasLodLevels(*old);
-                            // Same chokepoint as the prune above — and the reason
-                            // recordDynamicGeomRefits keeps an interop record's
-                            // geomVersion stamped: reaching this branch with one
-                            // would destroy an allocation a foreign API holds an
-                            // import of.
                             destroyBlasRecord(*old);
                             blasCache.erase(it);
                             // erase() returns the next bucket entry, not end().
@@ -2696,6 +2777,7 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                             // cache entry (different mesh's BLAS) and the TLAS
                             // instance ends up referencing the wrong AS.
                             it = blasCache.end();
+                            }
                         }
                     }
                     if (it == blasCache.end()) {

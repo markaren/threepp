@@ -105,7 +105,10 @@ std::unique_ptr<VulkanRenderer::Impl::BlasRecord> VulkanRenderer::Impl::buildBla
             // this closes. Scoped to that one geometry: the rest of the scene
             // keeps its packed normals/uv/color, so this is NOT THREEPP_NO_PACK
             // by another name.
-            if (allowPacked && forceUnpackedGeoms_.count(&geom)) allowPacked = false;
+            // (Also read below: an interop-marked geometry's BLAS storage is
+            // sized for both build-flag lineages, not just FAST_TRACE.)
+            const bool interopTarget = forceUnpackedGeoms_.count(&geom) != 0;
+            if (allowPacked && interopTarget) allowPacked = false;
 
             auto* posAttr = geom.getAttribute<float>("position");
             if (!posAttr) return nullptr;
@@ -382,8 +385,35 @@ std::unique_ptr<VulkanRenderer::Impl::BlasRecord> VulkanRenderer::Impl::buildBla
                     VK_ACCELERATION_STRUCTURE_BUILD_TYPE_DEVICE_KHR,
                     &blasBuild, &primitiveCount, &blasSizes);
 
+            // An interop record's per-frame rebuilds take PREFER_FAST_BUILD
+            // (recordDynamicGeomRefits), and the two flag lineages are
+            // different BVH formats with different footprints: on NVIDIA a
+            // FAST_BUILD structure over the same geometry is ~5% LARGER
+            // (measured 345856 vs 329600 B for a 5120-triangle indexed
+            // mesh). Building the larger lineage into storage sized for the
+            // smaller overruns the structure — VUID-vkCmdBuildAcceleration-
+            // StructuresKHR-pInfos-10126 with the layers on, heap corruption
+            // surfacing as VK_ERROR_DEVICE_LOST without — so size the
+            // storage for the max of both lineages up front. Scoped to
+            // interop-marked geometries: everything else builds FAST_TRACE
+            // for life and should not pay the padding.
+            VkDeviceSize asBytes = blasSizes.accelerationStructureSize;
+            if (interopTarget) {
+                VkAccelerationStructureBuildGeometryInfoKHR fbBuild = blasBuild;
+                fbBuild.flags = VK_BUILD_ACCELERATION_STRUCTURE_PREFER_FAST_BUILD_BIT_KHR |
+                                VK_BUILD_ACCELERATION_STRUCTURE_ALLOW_UPDATE_BIT_KHR;
+                VkAccelerationStructureBuildSizesInfoKHR fbSizes{};
+                fbSizes.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_SIZES_INFO_KHR;
+                ctx->rt().getAccelerationStructureBuildSizes(
+                        ctx->device(),
+                        VK_ACCELERATION_STRUCTURE_BUILD_TYPE_DEVICE_KHR,
+                        &fbBuild, &primitiveCount, &fbSizes);
+                asBytes = std::max(asBytes, fbSizes.accelerationStructureSize);
+                rec->storageFitsFastBuild = true;
+            }
+
             rec->storage = createBuffer(
-                    ctx->allocator(), ctx->device(), blasSizes.accelerationStructureSize,
+                    ctx->allocator(), ctx->device(), asBytes,
                     VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_STORAGE_BIT_KHR |
                             VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
                     VMA_MEMORY_USAGE_AUTO);
@@ -391,7 +421,7 @@ std::unique_ptr<VulkanRenderer::Impl::BlasRecord> VulkanRenderer::Impl::buildBla
             VkAccelerationStructureCreateInfoKHR blasCreate{};
             blasCreate.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_CREATE_INFO_KHR;
             blasCreate.buffer = rec->storage.handle;
-            blasCreate.size = blasSizes.accelerationStructureSize;
+            blasCreate.size = asBytes;
             blasCreate.type = VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR;
             check(ctx->rt().createAccelerationStructure(ctx->device(), &blasCreate, nullptr, &rec->as),
                   "vkCreateAccelerationStructureKHR(BLAS)");
@@ -951,7 +981,19 @@ VulkanRenderer::Impl::enableVertexInterop(const Mesh& mesh, std::function<void()
             // machinery before the next submit, so nothing here hand-rolls a
             // descriptor update — and, unlike a forced structural rebuild, the
             // interop enqueue still runs on that frame.
-            if (recPtr->packedMask != 0u) {
+            //
+            // The same rebuild also runs for a record that is ALREADY unpacked
+            // (THREEPP_NO_PACK=1, or geometry whose attributes never packed)
+            // but whose BLAS storage predates the interop mark: interop refits
+            // build with PREFER_FAST_BUILD, and buildBlasFor only sizes the
+            // storage for that lineage once the geometry is in
+            // forceUnpackedGeoms_ (storageFitsFastBuild). Undersized storage
+            // is not cosmetic — a FAST_BUILD build into it overruns the
+            // structure (VUID 10126 / device-lost) — and replacing the whole
+            // record through this branch reuses the drain + republish
+            // machinery instead of hand-rolling an AS-only swap whose new
+            // device address the TLAS instances would have to chase.
+            if (recPtr->packedMask != 0u || !recPtr->storageFitsFastBuild) {
                 const auto geomSp = mesh.geometry();
                 forceUnpackedGeoms_.insert(geomSp.get());
                 check(vkDeviceWaitIdle(ctx->device()),
@@ -1746,21 +1788,31 @@ void VulkanRenderer::Impl::recordDynamicGeomRefits(VkCommandBuffer cb) {
                     // CPU-graduated records keep FAST_TRACE: their fixed
                     // topology refits via MODE_UPDATE 63 frames of 64.
                     //
-                    // ... BUT ONLY IF IT FITS. rec.as was created by
-                    // buildBlasFor, whose storage was sized from a FAST_TRACE
-                    // size query, and the two lineages are different BVH
-                    // formats with different footprints: on NVIDIA a
-                    // FAST_BUILD structure over the same geometry is ~5%
-                    // LARGER (measured 345856 vs 329600 B for a 5120-triangle
-                    // indexed mesh). Building it into that AS overruns the
-                    // structure — VUID-vkCmdBuildAccelerationStructuresKHR-
-                    // pInfos-10126 with the layers on, and heap corruption
-                    // that surfaces as VK_ERROR_DEVICE_LOST a few frames later
-                    // without them. So: ask for the flags we want, and fall
-                    // back to the lineage the allocation was actually sized
-                    // for when the answer does not fit. The size query is
-                    // cheap (a driver-side estimate, no allocation) and only
-                    // the flags and the geometry affect the answer.
+                    // FAST_BUILD is only legal because the storage was sized
+                    // for it: the two lineages are different BVH formats with
+                    // different footprints, and building the one the storage
+                    // was not sized for overruns the structure — VUID-
+                    // vkCmdBuildAccelerationStructuresKHR-pInfos-10126 with
+                    // the layers on, heap corruption surfacing as
+                    // VK_ERROR_DEVICE_LOST without. buildBlasFor sizes an
+                    // interop-marked record's storage for the max of BOTH
+                    // lineages' size queries (storageFitsFastBuild), and
+                    // enableVertexInterop rebuilds any record armed before
+                    // that sizing existed, so the fits-check below passes for
+                    // every armed record.
+                    //
+                    // It is still made against a LIVE query rather than
+                    // trusted from the flag. The sizing guarantee rests on
+                    // the driver answering the same size query with the same
+                    // number at creation and at refit — which the spec
+                    // implies but which the one observed overrun (345856
+                    // required vs a 329600 FAST_TRACE allocation for the same
+                    // 5120-triangle mesh, 2026-08-27) could never be
+                    // reproduced against with byte-identical queries. So the
+                    // denial path stays: it turns the unexplained case into a
+                    // benign FAST_TRACE frame, and reports itself once per
+                    // record instead of corrupting the heap silently. The
+                    // query is cheap — a driver-side estimate, no allocation.
                     bool fastBuildFits = false;
                     if (rec.interop) {
                         VkAccelerationStructureBuildGeometryInfoKHR q{};
@@ -1777,6 +1829,17 @@ void VulkanRenderer::Impl::recordDynamicGeomRefits(VkCommandBuffer cb) {
                                 ctx->device(), VK_ACCELERATION_STRUCTURE_BUILD_TYPE_DEVICE_KHR,
                                 &q, &primitiveCount, &s);
                         fastBuildFits = s.accelerationStructureSize <= rec.storage.size;
+                        if (!fastBuildFits && !rec.fastBuildDeniedWarned) {
+                            rec.fastBuildDeniedWarned = true;
+                            std::cerr << "[VulkanRenderer] interop BLAS refit: FAST_BUILD needs "
+                                      << s.accelerationStructureSize << " B but storage is "
+                                      << rec.storage.size << " B ("
+                                      << (rec.storageFitsFastBuild
+                                          ? "max-of-lineages sized at creation - the driver's "
+                                            "answer moved between creation and refit"
+                                          : "storage predates the max-of-lineages sizing")
+                                      << ") - this record keeps the FAST_TRACE lineage.\n";
+                        }
                     }
                     const VkBuildAccelerationStructureFlagsKHR wantFlags =
                             ((rec.interop && fastBuildFits)

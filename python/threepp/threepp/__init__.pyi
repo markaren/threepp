@@ -8243,6 +8243,14 @@ def vulkan_available() -> bool:
     """
     True when the Vulkan loader is present at runtime. HAS_VULKAN=True + vulkan_available()=False means the wheel carries the backend but this machine has no Vulkan runtime — use GLRenderer.
     """
+def vulkan_validation_active() -> bool:
+    """
+    True once a renderer has actually installed the validation-layer messenger (layer requested via THREEPP_VULKAN_VALIDATION=1 or a debug build, AND found on the machine).
+    """
+def vulkan_validation_error_count() -> int:
+    """
+    Validation-layer ERROR messages counted since process start. Always 0 unless the layer is active — check vulkan_validation_active() first, or a 'no errors' assertion passes vacuously.
+    """
 def write_wav(path: str, samples: collections.abc.Sequence[typing.SupportsFloat | typing.SupportsIndex], sample_rate: typing.SupportsInt | typing.SupportsIndex = 44100) -> None:
     """
     Write a mono 16-bit PCM WAV file from normalised float samples in [-1, 1].

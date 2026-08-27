@@ -105,6 +105,19 @@ namespace threepp::vulkan::impl {
         // (interop wants PREFER_FAST_BUILD, the CPU routes FAST_TRACE) — a
         // mismatch forces MODE_BUILD to re-establish the lineage.
         VkBuildAccelerationStructureFlagsKHR blasBuiltFlags = 0;
+        // `storage` was sized for the max of BOTH flag lineages
+        // (PREFER_FAST_TRACE and PREFER_FAST_BUILD size queries), so a
+        // per-frame interop rebuild may legally take FAST_BUILD. Set by
+        // buildBlasFor for interop-marked geometries only — the lineages
+        // are different BVH formats with different footprints, and
+        // building the one the storage was not sized for overruns the
+        // structure (see recordDynamicGeomRefits). enableVertexInterop
+        // consults it to decide whether an already-unpacked record still
+        // needs the drain + rebuild that re-sizes the storage.
+        bool storageFitsFastBuild = false;
+        // The refit's live FAST_BUILD fits-check failed once and said so on
+        // stderr; don't repeat it every frame (recordDynamicGeomRefits).
+        bool fastBuildDeniedWarned = false;
         // Persistent scratch buffer for per-frame refit. Sized to
         // buildScratchSize on first use (which is always >= updateScratchSize),
         // reused every frame to avoid the create+destroy pair that
@@ -656,7 +669,7 @@ namespace threepp::vulkan::impl {
                                     // 8 texture-of dynamic_casts + materialFromMesh
                                     // (~21 dynamic_casts/mesh) when nothing on the
                                     // material has changed since last frame.
-        unsigned int geomVersion = 0;// composite BufferAttribute version (pos+norm+idx+uv)
+        unsigned int geomVersion = 0;// composite BufferAttribute version (pos+norm+idx+uv+color)
         std::array<float, 16> matrix{};
         std::array<float, 15> pbr{};// + normalScale.xy + transmission/ior + clearcoat/roughness
         // TYPED views + attribute-pointer cache for the snapshot lean diff
@@ -673,6 +686,10 @@ namespace threepp::vulkan::impl {
         const BufferAttribute* normAttr = nullptr;
         const BufferAttribute* uvAttr   = nullptr;
         const BufferAttribute* idxAttr  = nullptr;
+        const BufferAttribute* colAttr  = nullptr;// was MISSING: a color-only
+                                                  // edit sailed through the lean
+                                                  // fast path unseen even though
+                                                  // geomVersionOf() counts it
     };
 
     // Per-frame refresh op for a plain (non-skinned/non-displaced/non-morphed)

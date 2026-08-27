@@ -42,6 +42,7 @@
 #include "threepp/objects/Mesh.hpp"
 #include "threepp/objects/ParticleField.hpp"
 #include "threepp/renderers/VulkanRenderer.hpp"
+#include "threepp/renderers/vulkan/ValidationReport.hpp"
 
 #include <array>
 #include <cstdint>
@@ -1716,6 +1717,21 @@ namespace threepp_py {
               "True when the Vulkan loader is present at runtime. HAS_VULKAN=True + "
               "vulkan_available()=False means the wheel carries the backend but this "
               "machine has no Vulkan runtime — use GLRenderer.");
+        // The validation-layer tally behind the C++ CI gate
+        // (threepp/renderers/vulkan/ValidationReport.hpp), so a pytest run
+        // under THREEPP_VULKAN_VALIDATION=1 can assert a frame sequence
+        // produced no spec violations. Counts are process-wide and never
+        // reset; a per-phase delta is two readings subtracted.
+        m.def("vulkan_validation_error_count",
+              [] { return threepp::vulkan::validationErrorCount(); },
+              "Validation-layer ERROR messages counted since process start. Always 0 "
+              "unless the layer is active — check vulkan_validation_active() first, or "
+              "a 'no errors' assertion passes vacuously.");
+        m.def("vulkan_validation_active",
+              [] { return threepp::vulkan::validationActive(); },
+              "True once a renderer has actually installed the validation-layer "
+              "messenger (layer requested via THREEPP_VULKAN_VALIDATION=1 or a debug "
+              "build, AND found on the machine).");
     }
 
     threepp::Renderer* py_vulkan_native_renderer(const py::handle& h) {
@@ -1736,6 +1752,10 @@ namespace threepp_py {
         m.attr("HAS_VULKAN") = false;
         m.def("vulkan_available", [] { return false; },
               "Always False in a GL-only build (HAS_VULKAN is False too).");
+        m.def("vulkan_validation_error_count", [] { return 0u; },
+              "Always 0 in a GL-only build.");
+        m.def("vulkan_validation_active", [] { return false; },
+              "Always False in a GL-only build.");
     }
 
     threepp::Renderer* py_vulkan_native_renderer(const py::handle&) { return nullptr; }

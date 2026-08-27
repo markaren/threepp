@@ -454,7 +454,11 @@ def test_vertex_interop_cuda_write(vk_renderer):
     # degenerate tail. The Vulkan mesh path honours drawRange now, so the tail is
     # no longer the only way to hide unused triangles — this gate keeps it because
     # a degenerate tail is still valid and is what it was written against.
-    ntri, cap = 8, 8 * 3
+    # 9 tris = 27 verts = 324 position bytes — deliberately NOT 16-aligned:
+    # createExternalBuffer pads the export allocation up and reports the
+    # PADDED size, and the repaint-transplant below must accept export >=
+    # buffer (an 8-tri / 288-byte capacity is aligned and hid exactly that).
+    ntri, cap = 9, 9 * 3
     # All vertices coincident, and deliberately PARKED FAR OFF-SCREEN at y=-50.
     # Zero area, so nothing rasterises — and, more to the point, the host array
     # describes a shape 50 m below the camera while the producer draws one at the
@@ -468,6 +472,10 @@ def test_vertex_interop_cuda_write(vk_renderer):
     geom = tp.BufferGeometry()
     geom.set_attribute("position", pos)
     geom.set_attribute("normal", np.tile(np.float32([0, 0, 1]), (cap, 1)))
+    # Present BEFORE arming, so the repaint phase below is a same-shape content
+    # update — the case the record transplant must survive. Adding the
+    # attribute after arming is the OTHER case (deliberate loud disable).
+    geom.set_attribute("color", np.tile(np.float32([0.2, 0.8, 0.2]), (cap, 1)))
     mat = tp.MeshStandardMaterial()
     mat.color = 0xffffff
     mat.side = tp.Side.Double
@@ -518,10 +526,95 @@ def test_vertex_interop_cuda_write(vk_renderer):
         drawn = vk_renderer.read_depth(scene, cam)
         assert drawn[H // 2, W // 2] == pytest.approx(3.0, abs=0.05), \
             "the CUDA-written triangle never reached the renderer's vertex buffer"
+
+        # Repaint under interop. A same-count edit to a CPU-owned side
+        # attribute (vertex color here) bumps the composite geomVersion, and
+        # the eviction path used to rebuild the record from the STALE host
+        # arrays — freeing exports CUDA still held imports of, dangling the
+        # already-enqueued refit, and freezing the mesh at the parked
+        # positions (warp_hull_sculpt's "nothing moves after the color
+        # change"). The record is transplanted now: the new colors land and
+        # the producer's writes keep landing. Prove the latter by moving the
+        # triangle AFTER the repaint and reading its new depth.
+        # The eviction only ever ran on a frame that was structural for some
+        # OTHER reason (the interop refit re-stamps geomVersion every frame,
+        # so a lone side-edit is deferred until one) — in warp_hull_sculpt it
+        # was a material+visibility flip in the same call as the repaint.
+        # Recreate that: entry churn forces the full structural pass through
+        # the eviction branch on the very frame the color version moved.
+        churn = tp.Mesh(tp.BoxGeometry(0.1, 0.1, 0.1), tp.MeshStandardMaterial())
+        churn.position.set(6.0, 0.0, 0.0)               # out of the camera's way
+        scene.add(churn)
+        geom.update_attribute("color", np.tile(np.float32([0.9, 0.1, 0.1]), (cap, 1)))
+        vk_renderer.read_depth(scene, cam)              # the structural frame
+        tri[0], tri[1], tri[2] = (-1, -1, 1), (1, -1, 1), (0, 1, 1)
+        moved = vk_renderer.read_depth(scene, cam)
+        assert moved[H // 2, W // 2] == pytest.approx(2.0, abs=0.05), \
+            "producer writes stopped landing after a color repaint - the " \
+            "interop registration did not survive the record transplant"
     finally:
         ipos.close()
         inrm.close()
         vk_renderer.disable_vertex_interop(mesh)
+
+
+def test_vertex_interop_blas_sizing_validates_clean(vk_renderer):
+    """Arming vertex interop on a real-sized mesh must not overrun its BLAS.
+
+    Interop refits build with PREFER_FAST_BUILD, and that lineage is a
+    different BVH format from the PREFER_FAST_TRACE one the initial build
+    uses — on NVIDIA ~5% LARGER over the same geometry (345856 vs 329600 B
+    measured at 5120 triangles). Before buildBlasFor sized interop records'
+    storage for the max of both lineages, every armed frame built past the
+    end of the structure: VUID-vkCmdBuildAccelerationStructuresKHR-pInfos-
+    10126 with the layers on, silent heap corruption surfacing as
+    VK_ERROR_DEVICE_LOST without them. test_vertex_interop_cuda_write never
+    sees this because its 8-triangle capacity is too small for the two
+    lineages' sizes to diverge; an icosphere at subdivision 4 is comfortably
+    past the crossover.
+
+    No CUDA needed — the overrun is in the renderer's own refit, not the
+    producer's write, so a no-op on_frame reproduces it. Meaningful ONLY
+    under THREEPP_VULKAN_VALIDATION=1: the assertion is "zero validation
+    errors", so the test skips (rather than passing vacuously) when the
+    layer is not active.
+    """
+    if not tp.vulkan_validation_active():
+        pytest.skip("validation layer not active - run with THREEPP_VULKAN_VALIDATION=1")
+
+    geom = tp.IcosahedronGeometry(1.0, 4)               # 5120 triangles
+    mesh = tp.Mesh(geom, tp.MeshStandardMaterial())
+    scene = tp.Scene()
+    scene.background = 0x000000
+    scene.add(mesh)
+    scene.add(tp.AmbientLight(0xffffff, 3.0))
+    cam = tp.PerspectiveCamera(55, W / H, 0.1, 100)
+    cam.position.set(0, 0, 4)
+    cam.look_at(0, 0, 0)
+
+    vk_renderer.render(scene, cam)                      # builds the record
+    handles = None
+    for _ in range(4):                                  # poll, as the API documents
+        handles = vk_renderer.enable_vertex_interop(mesh, lambda: None)
+        if handles is not None:
+            break
+        vk_renderer.render(scene, cam)                  # let the unpacked rebuild land
+    if handles is None:
+        pytest.skip("vertex interop unavailable (no external-memory support)")
+
+    err0 = tp.vulkan_validation_error_count()
+    try:
+        # Every armed frame records a PREFER_FAST_BUILD build into the
+        # record's storage (the flags flip away from the initial FAST_TRACE
+        # build forces MODE_BUILD on the first one), so a handful of frames
+        # is plenty to trip an undersized allocation.
+        for _ in range(6):
+            vk_renderer.render(scene, cam)
+    finally:
+        vk_renderer.disable_vertex_interop(mesh)        # drains the device
+    assert tp.vulkan_validation_error_count() == err0, \
+        "BLAS refit under vertex interop raised validation errors " \
+        "(storage too small for the FAST_BUILD lineage?)"
 
 
 def test_event_camera_visualisation(vk_renderer):
