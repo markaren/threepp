@@ -222,6 +222,20 @@ VulkanRenderer::Impl::~Impl() {
             // 05137 — the class of bug that bit lineGeomCache_ below).
             flushRetireQueue();
 
+            // Secondary views that were never removeView()'d. Their resources
+            // (rasterGbuf images, colorTarget, readbackBuf, post chain) are
+            // otherwise only freed by applyPendingViewChanges after a
+            // removeView, so they leak at device destroy (VUID-vkDestroyDevice-
+            // device-05137). destroyBuffer/destroyImage2D null their handles,
+            // so the per-view loops further down become no-ops for these.
+            // Same guard as applyPendingViewChanges: a view still marked
+            // pendingCreate never got resources.
+            curView_ = views_[0].get();
+            for (size_t i = 1; i < views_.size(); ++i) {
+                if (!views_[i]->pendingCreate)
+                    destroySecondaryViewResources(*views_[i]);
+            }
+
             for (auto s : imageAvailable) if (s) vkDestroySemaphore(d, s, nullptr);
             for (auto s : renderFinished) if (s) vkDestroySemaphore(d, s, nullptr);
             for (auto f : inFlight) if (f) vkDestroyFence(d, f, nullptr);
