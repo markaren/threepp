@@ -617,6 +617,74 @@ def test_vertex_interop_blas_sizing_validates_clean(vk_renderer):
         "(storage too small for the FAST_BUILD lineage?)"
 
 
+def test_pathtraced_lidar_sensor(vk_renderer):
+    """The renderer's own lidar tracer, finally reachable from Python: full
+    radiometric returns, live LidarParams, and deterministic replay."""
+    scene, cam = make_scene()                             # unit box at origin
+    vk_renderer.render(scene, cam)                        # build the TLAS
+
+    lid = tp.PathTracedLidarSensor(60.0, 64, 48, 50.0)    # depth-camera mode
+    lid.position.set(0, 0, 3)                             # default pose faces -Z; the
+    #                                                       unit box must subtend >100 beams
+    r = lid.scan(vk_renderer)
+    hits = r["return_no"] > 0
+    assert r["position"].shape == (lid.beam_count, 3) and hits.sum() > 100
+    assert (r["intensity"][hits] > 0.0).all() and (r["intensity"][hits] <= 1.0).all()
+    assert (r["instance_id"][hits] >= 0).all()            # stable ids on surface hits
+
+    # params are live state, not a copy: raising the detector threshold must
+    # drop the grazing-attenuated returns (this knob was UNREACHABLE from
+    # Python before). Tilt the box first -- head-on inside the reference
+    # range every face pixel clamps to 1.0 and no threshold can bite.
+    scene.children[0].rotation.y = 0.7
+    vk_renderer.render(scene, cam)
+    r_low = lid.scan(vk_renderer)
+    lid.params.detector_threshold = 0.9
+    r2 = lid.scan(vk_renderer)
+    assert 0 < (r2["return_no"] > 0).sum() < (r_low["return_no"] > 0).sum()
+
+    # Zero-noise scans of a static scene replay exactly.
+    r3 = lid.scan(vk_renderer)
+    assert np.array_equal(r2["position"], r3["position"])
+    assert np.array_equal(r2["intensity"], r3["intensity"])
+
+
+def test_lidar_intensity_monotone_at_grazing(vk_renderer):
+    """The Smith G regression gate. Without shadowing-masking the back-scatter
+    specular is D*F/(4cos^2) and intensity CLIMBS back up past ~80 deg
+    incidence (measured 0.017 at 55 deg but >0.16 at 85 on the old shader),
+    handing every closed body a bright silhouette rim no shaping can remove.
+    Post-fix the curve decays monotonically; the residual grazing intensity is
+    the physical Fresnel sheen, so the gate is strictly-below, not zero."""
+    scene = tp.Scene()
+    scene.background = 0x000000
+    mat = tp.MeshStandardMaterial()
+    mat.color = 0xffffff
+    mat.roughness = 0.5
+    panel = tp.Mesh(tp.PlaneGeometry(4.0, 4.0), mat)
+    scene.add(panel)
+    scene.add(tp.AmbientLight(0xffffff, 1.0))
+    cam = tp.PerspectiveCamera(55, W / H, 0.1, 100)
+    cam.position.set(0, 0, 8)
+    cam.look_at(0, 0, 0)
+
+    lid = tp.PathTracedLidarSensor(10.0, 9, 9, 50.0)   # narrow pinhole grid
+    lid.position.set(0, 0, 5.0)
+    lid.params.detector_threshold = 0.0                # raw curve, no gating
+    curve = []
+    for deg in range(0, 90, 5):
+        panel.rotation.y = math.radians(deg)
+        vk_renderer.render(scene, cam)
+        d = lid.scan(vk_renderer)
+        hit = d["return_no"] > 0
+        curve.append(float(d["intensity"][hit].mean()) if hit.any() else 0.0)
+    tail = curve[11:]                                  # 55..85 deg
+    assert all(tail[i + 1] <= tail[i] * 1.05 for i in range(len(tail) - 1)), \
+        f"intensity not monotone past 55 deg: {tail}"
+    assert curve[-1] < 0.5 * curve[11], \
+        f"grazing not subdued vs 55 deg: {curve[-1]} vs {curve[11]}"
+
+
 def test_event_camera_visualisation(vk_renderer):
     """The GPU DVS detector: pinned sensor resolution, a mono accumulator of
     that shape, and a moving edge that actually fires events."""

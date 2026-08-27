@@ -93,6 +93,7 @@ namespace threepp_py {
         py::class_<LidarParams>(m, "LidarParams")
                 .def(py::init<>())
                 .def_readwrite("max_range", &LidarParams::maxRange)
+                .def_readwrite("min_range", &LidarParams::minRange)
                 .def_readwrite("laser_power", &LidarParams::laserPower)
                 .def_readwrite("reference_range", &LidarParams::referenceRange)
                 .def_readwrite("atmospheric_extinction", &LidarParams::atmosphericExtinction)
@@ -103,7 +104,12 @@ namespace threepp_py {
                 .def_readwrite("medium_surface_y", &LidarParams::mediumSurfaceY)
                 .def_readwrite("medium_extinction", &LidarParams::mediumExtinction)
                 .def_readwrite("medium_albedo", &LidarParams::mediumAlbedo)
-                .def_readwrite("medium_anisotropy", &LidarParams::mediumAnisotropy);
+                .def_readwrite("medium_anisotropy", &LidarParams::mediumAnisotropy)
+                .def_readwrite("paired_clean_trace", &LidarParams::pairedCleanTrace,
+                               "Trace every beam twice in one dispatch -- as-is, and with the "
+                               "ParticleField density medium off, same beams and RNG keys. The "
+                               "difference IS the degradation. PathTracedLidarSensor.scan() "
+                               "returns the clean leg under the 'clean' key.");
 
         py::class_<LidarModel>(m, "LidarModel")
                 .def(py::init<>())

@@ -3459,6 +3459,8 @@ class LidarModel:
     def elevation_angles(self, arg0: collections.abc.Sequence[typing.SupportsFloat | typing.SupportsIndex]) -> None:
         ...
 class LidarParams:
+    min_range: float
+    paired_clean_trace: bool
     def __init__(self) -> None:
         ...
     @property
@@ -5408,6 +5410,28 @@ class ParticleField(Mesh):
         ...
     @property
     def mesh_repr(self) -> ParticleField.MeshRepr:
+        ...
+class PathTracedLidarSensor(Object3D, Sensor):
+    """
+    Path-traced LIDAR: fires beams through the renderer's own acceleration structure and returns full radiometric hits. Vulkan only; render() the scene once first. Beams leave along local -Z; look_at() aims a non-camera Object3D exactly backwards -- set rotation directly or reflect the target through the sensor position.
+    """
+    params: LidarParams
+    noise: RangeNoiseModel
+    @typing.overload
+    def __init__(self, h_res: typing.SupportsInt | typing.SupportsIndex, v_res: typing.SupportsInt | typing.SupportsIndex, max_range: typing.SupportsFloat | typing.SupportsIndex = 100.0) -> None:
+        ...
+    @typing.overload
+    def __init__(self, model: LidarModel, max_range: typing.SupportsFloat | typing.SupportsIndex = 100.0) -> None:
+        ...
+    @typing.overload
+    def __init__(self, fov_y: typing.SupportsFloat | typing.SupportsIndex, width: typing.SupportsInt | typing.SupportsIndex, height: typing.SupportsInt | typing.SupportsIndex, max_range: typing.SupportsFloat | typing.SupportsIndex = 100.0) -> None:
+        ...
+    def scan(self, renderer: VulkanRenderer) -> dict:
+        """
+        One scan -> dict of numpy arrays: position (N,3), normal (N,3), distance, intensity, instance_id, return_no, return_kind; plus 'clean' when params.paired_clean_trace is set. return_no > 0 is the real-return predicate.
+        """
+    @property
+    def beam_count(self) -> int:
         ...
 class PerspectiveCamera(Camera):
     def __init__(self, fov: typing.SupportsFloat | typing.SupportsIndex = 60.0, aspect: typing.SupportsFloat | typing.SupportsIndex = 1.0, near: typing.SupportsFloat | typing.SupportsIndex = 0.10000000149011612, far: typing.SupportsFloat | typing.SupportsIndex = 2000.0) -> None:

@@ -41,6 +41,7 @@
 #include "threepp/math/Color.hpp"
 #include "threepp/objects/Mesh.hpp"
 #include "threepp/objects/ParticleField.hpp"
+#include "threepp/helpers/PathTracedLidarSensor.hpp"
 #include "threepp/renderers/VulkanRenderer.hpp"
 #include "threepp/renderers/vulkan/ValidationReport.hpp"
 
@@ -1705,6 +1706,96 @@ namespace threepp_py {
                      [](PyVulkanRenderer& r, float lo, float hi) { r.native().setAutoExposureRange(lo, hi); },
                      py::arg("min_ev"), py::arg("max_ev"),
                      "EV clamp for auto-exposure relative to linear 1.0 (default -3 to +3).");
+
+        // ---- PathTracedLidarSensor (helpers/PathTracedLidarSensor.hpp) -------
+        // The renderer's own lidar tracer (VulkanRenderer::scanLidar), surfaced
+        // at last: LidarReturn/LidarParams/LidarModel have been bound as value
+        // types since the start, but nothing on the Python side could fire
+        // them — DepthSensor was the only scanner, and it cannot set fog,
+        // detector threshold, laser power or reference range. Returns come
+        // back as a dict of numpy arrays rather than a list of LidarReturn
+        // objects: a 100k-beam scan as 100k Python objects is unusable.
+        auto returns_to_dict = [](const std::vector<LidarReturn>& rs) {
+            const auto n = static_cast<py::ssize_t>(rs.size());
+            py::array_t<float>   pos({n, static_cast<py::ssize_t>(3)});
+            py::array_t<float>   nrm({n, static_cast<py::ssize_t>(3)});
+            py::array_t<float>   dist(n);
+            py::array_t<float>   inten(n);
+            py::array_t<int32_t> inst(n);
+            py::array_t<int32_t> rno(n);
+            py::array_t<int32_t> rkind(n);
+            auto *pp = pos.mutable_data(), *pn = nrm.mutable_data();
+            auto *pd = dist.mutable_data(), *pi = inten.mutable_data();
+            auto *pinst = inst.mutable_data(), *prno = rno.mutable_data(),
+                 *pkind = rkind.mutable_data();
+            for (py::ssize_t i = 0; i < n; ++i) {
+                const auto& r = rs[static_cast<size_t>(i)];
+                pp[i * 3 + 0] = r.position.x; pp[i * 3 + 1] = r.position.y; pp[i * 3 + 2] = r.position.z;
+                pn[i * 3 + 0] = r.normal.x;   pn[i * 3 + 1] = r.normal.y;   pn[i * 3 + 2] = r.normal.z;
+                pd[i] = r.distance; pi[i] = r.intensity;
+                pinst[i] = r.hitInstanceId; prno[i] = r.returnNo; pkind[i] = r.returnKind;
+            }
+            py::dict d;
+            d["position"] = pos; d["normal"] = nrm; d["distance"] = dist;
+            d["intensity"] = inten; d["instance_id"] = inst;
+            d["return_no"] = rno; d["return_kind"] = rkind;
+            return d;
+        };
+        py::class_<PathTracedLidarSensor, Object3D, Sensor,
+                   std::shared_ptr<PathTracedLidarSensor>>(
+                m, "PathTracedLidarSensor",
+                "Path-traced LIDAR: fires beams through the renderer's own acceleration "
+                "structure and returns full radiometric hits (position, normal, distance, "
+                "intensity from the GPU back-scatter BRDF, stable instance id, return "
+                "number/kind). Vulkan only; render() the scene at least once first so the "
+                "TLAS exists.\n\n"
+                "`params` (a threepp.LidarParams, mutated in place) exposes the whole LIDAR "
+                "equation: max/min range, laser power, reference range, detector threshold, "
+                "atmospheric extinction, multi-return through transmissive surfaces, beam "
+                "divergence sampling, a dedicated water-column/dust medium, and the paired "
+                "clean/degraded trace (see LidarParams).\n\n"
+                "Beam convention matches DepthSensor: beams leave along the sensor's LOCAL "
+                "-Z. The sensor is an Object3D, not a Camera, so look_at() aims it exactly "
+                "backwards -- set rotation/quaternion directly, or reflect the target "
+                "through the sensor position.")
+                .def(py::init([](unsigned int h_res, unsigned int v_res, float max_range) {
+                    return std::make_shared<PathTracedLidarSensor>(h_res, v_res, max_range);
+                }), py::arg("h_res"), py::arg("v_res"), py::arg("max_range") = 100.f,
+                    "Dense grid: h_res x v_res beams over the full sphere (debug / ground truth).")
+                .def(py::init([](const LidarModel& model, float max_range) {
+                    return std::make_shared<PathTracedLidarSensor>(model, max_range);
+                }), py::arg("model"), py::arg("max_range") = 100.f,
+                    "Real-sensor beam pattern, e.g. LidarModel.vlp16() / os1_64().")
+                .def(py::init([](float fov_y, unsigned int width, unsigned int height, float max_range) {
+                    return std::make_shared<PathTracedLidarSensor>(fov_y, width, height, max_range);
+                }), py::arg("fov_y"), py::arg("width"), py::arg("height"), py::arg("max_range") = 100.f,
+                    "Depth-camera mode: a pinhole grid down local -Z, same mounting as DepthSensor.")
+                .def_readwrite("params", &PathTracedLidarSensor::params,
+                               "LidarParams, live-tweakable between scans; mutate in place.")
+                .def_readwrite("noise", &PathTracedLidarSensor::rangeNoise,
+                               "Seeded RangeNoiseModel applied along each beam (default zero model: "
+                               "the tracer's own range is already physical). Same replay contract as "
+                               "DepthSensor.noise.")
+                .def_property_readonly("beam_count", &PathTracedLidarSensor::beamCount)
+                .def("scan", [returns_to_dict](PathTracedLidarSensor& self, PyVulkanRenderer& r) {
+                    self.updateWorldMatrix(true, true);
+                    std::vector<LidarReturn> out;
+                    {
+                        py::gil_scoped_release release;// blocks on the GPU trace + readback
+                        self.scan(r.native(), out);
+                    }
+                    py::dict d = returns_to_dict(out);
+                    // The clean leg of a paired trace rides along when requested —
+                    // same beams, same RNG keys, particle medium off (see
+                    // LidarParams.pairedCleanTrace).
+                    if (!self.cleanReturns().empty()) d["clean"] = returns_to_dict(self.cleanReturns());
+                    return d;
+                }, py::arg("renderer"),
+                   "One scan from the current pose -> dict of numpy arrays keyed position "
+                   "(N,3), normal (N,3), distance, intensity, instance_id, return_no, "
+                   "return_kind (all length N = beams x samples_per_beam x max_returns; "
+                   "return_no > 0 is the 'real return' predicate). Adds key 'clean' when "
+                   "params.paired_clean_trace is set. Call after render(); never during it.");
 
         m.attr("HAS_VULKAN") = true;
         // HAS_VULKAN says the backend was COMPILED IN; this says the machine can
