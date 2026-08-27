@@ -120,6 +120,38 @@ def edge_adjacency(faces):
     return edge_faces, edge_opp
 
 
+def unique_edges(faces):
+    """Every undirected mesh edge once, as an (E, 2) int32 array with i < j."""
+    edges = set()
+    for fa, fb, fc in faces:
+        for i, j in ((fa, fb), (fb, fc), (fc, fa)):
+            edges.add((min(int(i), int(j)), max(int(i), int(j))))
+    return np.array(sorted(edges), dtype=np.int32)
+
+
+def vertex_adjacency(faces, n_verts=None):
+    """1-ring neighbours of every vertex as CSR (offsets (N+1,), indices (2E,)).
+
+    What a uniform-Laplacian term -- smoothing a surface, or preconditioning a
+    per-vertex gradient -- needs, and the one table that is the same for every
+    fixed-topology mesh demo. Built off `unique_edges`, so each neighbour
+    appears exactly once per row.
+    """
+    edges = unique_edges(faces)
+    n = int(faces.max()) + 1 if n_verts is None else int(n_verts)
+    counts = np.bincount(edges.ravel(), minlength=n)
+    offsets = np.zeros(n + 1, dtype=np.int32)
+    np.cumsum(counts, out=offsets[1:])
+    cursor = offsets[:-1].copy()
+    indices = np.zeros(int(offsets[-1]), dtype=np.int32)
+    for i, j in edges:
+        indices[cursor[i]] = j
+        cursor[i] += 1
+        indices[cursor[j]] = i
+        cursor[j] += 1
+    return offsets, indices
+
+
 def shell_pairs(faces, stiff_edge, stiff_bend):
     """Distance constraints for a closed triangle shell.
 
@@ -233,6 +265,43 @@ def accum_normals(pos: wp.array(dtype=wp.vec3),
     wp.atomic_add(nrm, ia, n)
     wp.atomic_add(nrm, ib, n)
     wp.atomic_add(nrm, ic, n)
+
+
+@wp.kernel
+def normalize_vec3(v: wp.array(dtype=wp.vec3)):
+    """Unit-length in place; the second half of the accum_normals pattern.
+
+    `accum_normals` leaves AREA-WEIGHTED sums on the vertices, which is what a
+    triangle-soup expander normalises on the fly. An INDEXED mesh published
+    straight into a vertex buffer has no such pass, and a lit surface with
+    unnormalised normals reads as a blown-out or black shell depending on the
+    triangle sizes -- so it gets one launch of this instead.
+    """
+    i = wp.tid()
+    n = v[i]
+    v[i] = n / wp.max(wp.length(n), 1.0e-9)
+
+
+@wp.kernel
+def smooth_vec3_csr(src: wp.array(dtype=wp.vec3),
+                    offsets: wp.array(dtype=wp.int32),
+                    indices: wp.array(dtype=wp.int32),
+                    alpha: float,
+                    dst: wp.array(dtype=wp.vec3)):
+    """One Jacobi smoothing sweep over a CSR 1-ring: dst = (1-a) src + a mean(nbrs).
+
+    Used as a GRADIENT preconditioner in the hull optimiser (a cheap stand-in
+    for solving (I + lambda L) g' = g), and as a plain surface smoother
+    anywhere else. `vertex_adjacency` builds the two index arrays.
+    """
+    i = wp.tid()
+    s = offsets[i]
+    e = offsets[i + 1]
+    acc = wp.vec3(0.0, 0.0, 0.0)
+    for k in range(s, e):
+        acc += src[indices[k]]
+    n = float(wp.max(e - s, 1))
+    dst[i] = src[i] * (1.0 - alpha) + (acc / n) * alpha
 
 
 @wp.kernel
