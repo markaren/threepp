@@ -2423,6 +2423,60 @@ namespace threepp {
         uint32_t         sceneCaptureBufW_ = 0;
         uint32_t         sceneCaptureBufH_ = 0;
 
+        // ── Frame zero-copy interop (VulkanRenderer::enableFrameInterop) ──
+        // One exported TRANSFER_DST buffer per armed (view, channel), filled by
+        // a vkCmdCopyImageToBuffer recorded at the frame's record tail. Kept
+        // here rather than on ViewContext because the invalidation rule is
+        // "kill the whole view's set at once" and the record walk wants the
+        // armed views, not all of them — a scene with no interop iterates an
+        // empty vector.
+        struct FrameInteropChannel {
+            VulkanRenderer::FrameChannel channel{};
+            vulkan::ExternalBuffer       buf{};
+            uint32_t width = 0, height = 0, bpp = 0;
+            bool     bgra = false;
+        };
+        struct FrameInteropView {
+            uint32_t viewHandle = 0;// 0 = primary, else a secondary's handle
+            std::vector<FrameInteropChannel> channels;
+        };
+        std::vector<FrameInteropView> frameInterops_;
+
+        // Where one channel's pixels come from THIS frame: the image, the
+        // aspect and the layout it rests in at the record tail. The table is
+        // readViewGBufferAOVs' verbatim, plus the Color row (the swapchain for
+        // the primary, the view's colorTarget for a secondary), and it is
+        // resolved twice — once at enable to size the export, once per frame to
+        // record the copy — so the two can never disagree about a format.
+        struct FrameInteropSource {
+            VkImage            image      = VK_NULL_HANDLE;
+            VkImageAspectFlags aspect     = VK_IMAGE_ASPECT_COLOR_BIT;
+            VkImageLayout      restLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+            uint32_t width = 0, height = 0, bpp = 0;
+            bool    bgra = false;
+        };
+        bool frameInteropSource(uint32_t viewHandle, VulkanRenderer::FrameChannel channel,
+                                uint32_t gbufSlot, uint32_t imageIndex,
+                                FrameInteropSource& out);
+        std::vector<VulkanRenderer::FrameInteropExport>
+        enableFrameInterop(uint32_t viewHandle,
+                           const std::vector<VulkanRenderer::FrameChannel>& channels);
+        void disableFrameInterop(uint32_t viewHandle);
+        [[nodiscard]] bool frameInteropActive(uint32_t viewHandle) const {
+            for (const auto& s : frameInterops_)
+                if (s.viewHandle == viewHandle) return true;
+            return false;
+        }
+        // Invalidation (see the header): the source images are about to be
+        // reallocated or destroyed, so the exports the foreign API imported are
+        // torn down with a warning rather than left pointing at freed images.
+        void invalidateFrameInterop(uint32_t viewHandle, const char* why);
+        bool syncFrameInterop();
+        // Recorded at the frame's record tail, after the scene capture. Returns
+        // immediately when no view is armed.
+        void recordFrameInterop(VkCommandBuffer cb, uint32_t imageIndex);
+        void destroyFrameInterops();
+
         // Deferred-apply queue for setters that issue vkDeviceWaitIdle +
         // realloc descriptor/image resources. These collide with an open
         // cmd buffer (frameState_ != Idle), so when called mid-frame we

@@ -979,6 +979,125 @@ namespace threepp {
         // foreign writes into the exported memory first.
         void disableVertexInterop(const Mesh& mesh);
 
+        // ── Frame zero-copy interop (Vulkan → CUDA), "frames out" ────────────
+        // The reverse direction of enableVertexInterop: instead of a foreign
+        // producer writing geometry the renderer reads, the renderer publishes
+        // what it just DREW into external-memory buffers a foreign consumer
+        // reads. A vision-observation RL policy, an on-GPU dataset writer or a
+        // learned post-process gets the frame as a device pointer, with no
+        // staging buffer, no host memcpy and no vkDeviceWaitIdle — the three
+        // costs readGBufferAOVs pays per call.
+        //
+        // What it is, mechanically: one exported TRANSFER_DST buffer per
+        // requested channel, and one vkCmdCopyImageToBuffer per channel
+        // recorded into the frame's OWN command buffer, at the point in the
+        // frame where the source image is final (the scene-capture point for
+        // Color, after every G-buffer consumer for the AOVs). No shader binds
+        // the exports; they are copy destinations and nothing else. A frame
+        // with no armed view records nothing extra at all.
+        //
+        // Channels. Color is the scene image — post-TAA, pre-overlay, the same
+        // picture readSceneRGBPixels captures — in the SWAPCHAIN's format for
+        // the primary and in the view's own colorTarget (same format) for a
+        // secondary. `bgra` says which byte order that format is, since the
+        // surface may not offer B8G8R8A8_UNORM and the context falls back. The
+        // rest are the raster G-buffer attachments, byte-for-byte the images
+        // readGBufferAOV copies, with the element layouts documented there:
+        //   Color      (4)  4x unorm8  : bgra when `bgra`, else rgba
+        //   Depth      (4)  1x float32 : reversed-Z NDC depth (1=near, 0=far)
+        //   Normal     (8)  4x float16 : n*0.5+0.5 in xyz, roughness in w
+        //   Motion     (8)  4x float16 : NDC motion in xy, prevDepth in z
+        //   Ids        (8)  4x uint16  : visible index+1, meshId, flags|class
+        //   Albedo     (4)  4x unorm8  : linear base colour in rgb, metal in a
+        //   SplatDepth (4)  1x float32 : splat view distance; needs setSplatDepthAov
+        // Rows are TIGHTLY PACKED (bufferRowLength 0), row-major, top-left
+        // origin — an export is exactly width*height*bytesPerPixel of image,
+        // and `sizeBytes` is the ALLOCATION size, which the driver may round up
+        // past that. No conversion, no tonemapping, no lens warp: the AOV
+        // HOST readback warps its output when a lens is set (readViewGBufferAOVs)
+        // and this path deliberately does not, because the warp is a CPU
+        // resample. Exports carry the pinhole G-buffer; a lensed pipeline that
+        // needs matched labels stays on the host path.
+        enum class FrameChannel { Color, Depth, Normal, Motion, Ids, Albedo, SplatDepth };
+
+        struct FrameInteropExport {
+            FrameChannel channel{};
+            void*    osHandle = nullptr;// renderer-owned NT handle / fresh fd,
+            size_t   sizeBytes = 0;     // same rules as VertexInteropHandle
+            uint32_t width = 0, height = 0, bytesPerPixel = 0;
+            bool     bgra = false;// Color only: the swapchain is B8G8R8A8
+        };
+
+        // REGISTRATION-TIME call, after the first render(): the G-buffer and
+        // the swapchain images are allocated by then and their extents are what
+        // the exports are sized from. Returns one entry per exportable
+        // requested channel — duplicates collapse, unreadable channels are
+        // SKIPPED rather than failing the batch (SplatDepth without
+        // setSplatDepthAov; Color on a surface without TRANSFER_SRC swapchain
+        // usage), so match entries by their `channel` field. An EMPTY vector
+        // means nothing could be exported at all: before the first render, on a
+        // stale view handle, or on a device without the external-memory
+        // extension — in which case one line says so on stderr and the fallback
+        // is the readGBufferAOVs host path everyone already has.
+        //
+        // Re-enabling a view that is already armed replaces its channel set and
+        // returns fresh handles for the SAME allocations (Windows) or freshly
+        // minted fds (POSIX), so a consumer may re-import without a disable.
+        //
+        // Import the handles once with CU_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_WIN32 /
+        // _OPAQUE_FD and CUDA_EXTERNAL_MEMORY_DEDICATED (the exports are
+        // dedicated allocations) — python/threepp/cuda_interop.py does exactly
+        // that, and threepp.torch_frames wraps it as torch tensors.
+        std::vector<FrameInteropExport> enableFrameInterop(uint32_t viewHandle,
+                                                           const std::vector<FrameChannel>& channels);
+        // Release this view's exports. Windows NT handles are closed here, so
+        // the consumer must have released its imports FIRST — freeing the
+        // Vulkan allocation under a live CUDA mapping reports as nothing at all.
+        // Unknown or unarmed handles are a no-op.
+        void disableFrameInterop(uint32_t viewHandle);
+
+        // Is this view's frame interop still armed? The one way a consumer
+        // learns about an invalidation (below) without reading stderr: a false
+        // here means the exports it imported are dead and the tensors built on
+        // them describe memory the renderer no longer writes.
+        [[nodiscard]] bool frameInteropActive(uint32_t viewHandle) const;
+
+        // Block until the most recently submitted frame — and therefore the
+        // copies recorded at its tail — has completed on the GPU. This waits
+        // ONE frame fence, not vkDeviceWaitIdle: submissions on a single
+        // VkQueue signal fences in submission order, so retiring the last frame
+        // retires every earlier one too. The frame loop waits the same fence
+        // again later, and a fence wait is idempotent, so this costs nothing
+        // beyond the wait itself. Returns false before the first frame.
+        bool syncFrameInterop();
+
+        // ── Sync contract (the mirror of enableVertexInterop's) ──────────────
+        // Host ordering is the ONLY cross-API synchronization here, direction
+        // reversed: render() → syncFrameInterop() → read the tensors → next
+        // render(). There is no shared timeline semaphore (deliberately out of
+        // scope; see plans/frame-interop-torch.md).
+        //
+        // SINGLE-BUFFERED. The exports are one allocation per channel, not a
+        // ring: the tensors are live views of the renderer's own memory and the
+        // next render() overwrites them in place. A consumer that needs to keep
+        // a frame — a replay buffer, an async training batch — clones it
+        // (tensor.clone()) while the fence is still held. Reading during a
+        // render() that is in flight is torn data, intermittently, by
+        // construction, exactly as skipping wp.synchronize_device() is on the
+        // inbound path.
+        //
+        // ── Invalidation ─────────────────────────────────────────────────────
+        // Anything that REALLOCATES the source images — a window resize,
+        // setRenderScale, setGbufferMsaa, toggling setSplatDepthAov, removing
+        // the view — destroys the images the exports copy from. The rule is the
+        // one vertex interop uses for an attribute-count change: the renderer
+        // DISABLES frame interop for that view, with one line on stderr, rather
+        // than reallocating under a live foreign import. The consumer notices
+        // (its next enableFrameInterop returns fresh handles) and re-imports.
+        // No silent reallocation under an import, ever. Fixed-size secondary
+        // views and fixed-size headless windows are the supported steady state,
+        // and are what the ML use cases actually run.
+
         // Hybrid-mode raster overlay: post-TAA wireframe / Line / layer-tagged
         // meshes drawn over the shaded image, depth-tested against the raster
         // G-buffer. -1 (default) disables layer selection.

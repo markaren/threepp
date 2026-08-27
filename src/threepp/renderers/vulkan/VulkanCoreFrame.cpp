@@ -409,6 +409,12 @@ void VulkanRenderer::Impl::reallocateRenderExtentResources() {
             // known-idle point is the natural place, and it keeps the queue from
             // growing unbounded if the app spams resizes). Safe: device idle.
             flushRetireQueue();
+            // Every image a frame-interop export copies from at this view is
+            // about to be freed and rebuilt — a resize, setRenderScale,
+            // setGbufferMsaa, a setSplatDepthAov toggle all funnel here. The
+            // contract is to disable rather than silently reallocate under a
+            // live foreign import.
+            invalidateFrameInterop(view().id, "a render-target reallocation");
             for (auto& img : view().reservoirPosImagesPP) destroyImage2D(ctx->allocator(), ctx->device(), img);
             for (auto& img : view().reservoirWImagesPP) destroyImage2D(ctx->allocator(), ctx->device(), img);
             createReservoirImages();// reallocates the reservoir images + clears them
@@ -961,6 +967,15 @@ bool VulkanRenderer::Impl::beginDeferredFrame(Object3D& scene, Camera& camera) {
                 recordSceneCapture(cmdBuffers[currentFrame], imageIndex);
             }
 
+            // Zero-copy frames out (enableFrameInterop). The SAME point in the
+            // frame as the scene capture, and for the same reason: the Color
+            // channel must be the clean post-TAA picture, without the sprite /
+            // ImGui overlays or a picture-in-picture view composite drawn into
+            // it. The G-buffer AOVs are equally final by here — every consumer
+            // of them (deferred shade, TAA, the secondary views) has already
+            // been recorded. Records nothing when no view is armed.
+            recordFrameInterop(cmdBuffers[currentFrame], imageIndex);
+
             // GPU event camera detection. Run event_shade first to fill
             // eventLumaBuf_ — with deterministic Lambert lighting from the
             // gbuf (Shaded source: no stochastic shading noise as a source of
@@ -1453,6 +1468,9 @@ void VulkanRenderer::Impl::createSecondaryViewResources(ViewContext& v) {
 
 void VulkanRenderer::Impl::destroySecondaryViewResources(ViewContext& v) {
             VkDevice d = ctx->device();
+            // Same rule as a reallocation, one step harder: the images go away
+            // entirely, so an armed export has to be released first.
+            invalidateFrameInterop(v.id, "removing the view");
             // Passes first, while the device is alive — they own pipelines,
             // pools, samplers and images of their own.
             v.taa_.reset();
@@ -2014,6 +2032,338 @@ std::vector<unsigned char> VulkanRenderer::Impl::readViewPixelsImpl(uint32_t han
             }
             vmaUnmapMemory(ctx->allocator(), v->readbackBuf.alloc);
             return rgb;
+        }
+
+// ── Frame zero-copy interop (Vulkan → CUDA) ─────────────────────────────────
+// The "frames out" direction: exported buffers, filled by copies recorded in
+// the frame's own command buffer. The caller-facing contract — sync, single
+// buffering, invalidation — is documented on VulkanRenderer::enableFrameInterop.
+
+bool VulkanRenderer::Impl::frameInteropSource(uint32_t viewHandle,
+                                              VulkanRenderer::FrameChannel channel,
+                                              uint32_t gbufSlot, uint32_t imageIndex,
+                                              FrameInteropSource& out) {
+            out = FrameInteropSource{};
+            ViewContext* v = viewHandle == 0u ? &primaryView() : findView(viewHandle);
+            if (!v) return false;
+
+            using FC = VulkanRenderer::FrameChannel;
+            if (channel == FC::Color) {
+                if (v->secondary) {
+                    // A secondary's finished frame lands in its own colour
+                    // target, which lives in GENERAL from creation and forever
+                    // (see createSecondaryViewResources) — no transition to get
+                    // wrong, only a visibility barrier, exactly like
+                    // readViewPixelsImpl.
+                    if (v->colorTarget.image == VK_NULL_HANDLE) return false;
+                    out.image      = v->colorTarget.image;
+                    out.restLayout = VK_IMAGE_LAYOUT_GENERAL;
+                    out.width      = v->outExt.width;
+                    out.height     = v->outExt.height;
+                    out.bpp        = 4;
+                    out.bgra       = v->colorTarget.format == VK_FORMAT_B8G8R8A8_UNORM;
+                    return out.width != 0 && out.height != 0;
+                }
+                // The primary reads the swapchain image the frame is drawing
+                // into, at the scene-capture point: post-TAA, pre-overlay.
+                // Copying out of the swapchain needs TRANSFER_SRC usage, which
+                // the surface may not offer (the same gate recordSceneCapture
+                // checks) — an unexportable channel is skipped, not fatal.
+                if (!ctx->swapchainSupportsTransferSrc()) return false;
+                if (imageIndex >= ctx->swapchainImages().size()) return false;
+                const VkExtent2D ext = ctx->swapchainExtent();
+                if (ext.width == 0 || ext.height == 0) return false;
+                out.image      = ctx->swapchainImages()[imageIndex];
+                out.restLayout = VK_IMAGE_LAYOUT_GENERAL;
+                out.width      = ext.width;
+                out.height     = ext.height;
+                out.bpp        = 4;
+                out.bgra       = ctx->swapchainFormat() == VK_FORMAT_B8G8R8A8_UNORM;
+                return true;
+            }
+
+            // The G-buffer AOVs. Attachment, aspect and resting layout are
+            // readViewGBufferAOVs' table VERBATIM — depth carries the depth
+            // aspect and DEPTH_STENCIL_READ_ONLY, the splat-depth AOV lives in
+            // GENERAL for its whole life, every other colour AOV rests in
+            // SHADER_READ_ONLY (the raster render pass' finalLayout, which the
+            // MSAA resolve also leaves the resolved images in).
+            if (v->rasterGbufs.empty()) return false;
+            const auto& g = v->rasterGbufs[gbufSlot % v->rasterGbufs.size()];
+            const vulkan::Image2D* img = nullptr;
+            out.aspect     = VK_IMAGE_ASPECT_COLOR_BIT;
+            out.restLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+            switch (channel) {
+                case FC::Depth:
+                    img        = &g.depth;
+                    out.aspect = VK_IMAGE_ASPECT_DEPTH_BIT;
+                    out.restLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
+                    break;
+                case FC::Normal: img = &g.normal; break;
+                case FC::Motion: img = &g.motion; break;
+                case FC::Ids:    img = &g.ids;    break;
+                case FC::Albedo: img = &g.albedo; break;
+                case FC::SplatDepth:
+                    // Skipped rather than exported as the 1x1 placeholder, for
+                    // the reason readViewGBufferAOVs gives: a caller who forgot
+                    // setSplatDepthAov would otherwise get a successful
+                    // one-pixel read that looks like "no splats in the frame".
+                    if (!splatDepthAov()) return false;
+                    img = &g.splatDepth;
+                    out.restLayout = VK_IMAGE_LAYOUT_GENERAL;
+                    break;
+                default: return false;
+            }
+            if (!img || img->image == VK_NULL_HANDLE || img->width == 0 || img->height == 0) {
+                return false;
+            }
+            out.image  = img->image;
+            out.width  = img->width;
+            out.height = img->height;
+            // RGBA16 (normal / motion / ids) is 8 bytes; D32_SFLOAT (depth,
+            // splat depth) and RGBA8_UNORM (albedo) are 4.
+            out.bpp = (img->format == VK_FORMAT_R16G16B16A16_SFLOAT ||
+                       img->format == VK_FORMAT_R16G16B16A16_UINT)
+                              ? 8u
+                              : 4u;
+            return true;
+        }
+
+std::vector<VulkanRenderer::FrameInteropExport>
+VulkanRenderer::Impl::enableFrameInterop(uint32_t viewHandle,
+                                         const std::vector<VulkanRenderer::FrameChannel>& channels) {
+            std::vector<VulkanRenderer::FrameInteropExport> out;
+            if (!ctx || channels.empty()) return out;
+            if (!ctx->externalMemorySupported()) {
+                std::cerr << "[VulkanRenderer] enableFrameInterop: this device has no "
+                             "external-memory extension - use readGBufferAOVs (host readback) "
+                             "instead.\n";
+                return out;
+            }
+            // The same "a real frame's contents are in there" predicate the AOV
+            // readback uses: the attachments are allocated with the swapchain,
+            // so their handles and extents look valid long before anything has
+            // been rendered into them.
+            if (frameSerial_ == 0 || !sceneBuilt_) return out;
+            ViewContext* v = viewHandle == 0u ? &primaryView() : findView(viewHandle);
+            if (!v || v->rasterGbufs.empty() || v->rasterGbufs[0].width == 0) return out;
+
+            // Re-enabling replaces the channel set. Tear the old exports down
+            // first (device-idle, because an in-flight frame may still be
+            // copying into them) so a re-arm never leaks an allocation.
+            disableFrameInterop(viewHandle);
+
+            // Size from the FRESHEST G-buffer slot, the same arithmetic
+            // readViewGBufferAOVs uses. Every slot is allocated at one extent,
+            // so this only matters for the format lookup, but taking the same
+            // slot keeps the two paths reading the same table.
+            const uint32_t n    = static_cast<uint32_t>(v->rasterGbufs.size());
+            const uint32_t slot = (currentFrame + n - 1u) % n;
+
+            FrameInteropView state;
+            state.viewHandle = viewHandle;
+            for (const auto ch : channels) {
+                bool dup = false;
+                for (const auto& c : state.channels) dup = dup || c.channel == ch;
+                if (dup) continue;// duplicates collapse to one export
+
+                FrameInteropSource src{};
+                if (!frameInteropSource(viewHandle, ch, slot, frameImageIndex_, src)) continue;
+
+                FrameInteropChannel c{};
+                c.channel = ch;
+                c.width   = src.width;
+                c.height  = src.height;
+                c.bpp     = src.bpp;
+                c.bgra    = src.bgra;
+                const VkDeviceSize bytes =
+                        static_cast<VkDeviceSize>(src.width) * src.height * src.bpp;
+                try {
+                    // TRANSFER_DST and nothing else: these are copy
+                    // destinations no shader ever binds, and
+                    // createExternalBuffer's dedicated allocation carries no
+                    // VK_MEMORY_ALLOCATE_DEVICE_ADDRESS_BIT to ask for anyway.
+                    c.buf = vulkan::createExternalBuffer(ctx->physicalDevice(), ctx->device(),
+                                                         bytes, VK_BUFFER_USAGE_TRANSFER_DST_BIT);
+                } catch (const std::exception& e) {
+                    std::cerr << "[VulkanRenderer] enableFrameInterop: export failed (" << e.what()
+                              << ") - this channel stays on the host readback path.\n";
+                    continue;
+                }
+                state.channels.push_back(std::move(c));
+            }
+            if (state.channels.empty()) return out;
+
+            out.reserve(state.channels.size());
+            VkDeviceSize totalBytes = 0;
+            for (auto& c : state.channels) {
+                VulkanRenderer::FrameInteropExport e{};
+                e.channel       = c.channel;
+                e.osHandle      = vulkan::takeOsHandle(ctx->device(), c.buf);
+                e.sizeBytes     = static_cast<size_t>(c.buf.size);
+                e.width         = c.width;
+                e.height        = c.height;
+                e.bytesPerPixel = c.bpp;
+                e.bgra          = c.bgra;
+                out.push_back(e);
+                totalBytes += c.buf.size;
+            }
+            std::fprintf(stderr,
+                         "[VulkanRenderer] frame interop armed on view %u: %zu channel(s), "
+                         "%.1f MB exported\n",
+                         viewHandle, state.channels.size(),
+                         static_cast<double>(totalBytes) / (1024.0 * 1024.0));
+            frameInterops_.push_back(std::move(state));
+            return out;
+        }
+
+void VulkanRenderer::Impl::disableFrameInterop(uint32_t viewHandle) {
+            if (!ctx) return;
+            for (size_t i = 0; i < frameInterops_.size(); ++i) {
+                if (frameInterops_[i].viewHandle != viewHandle) continue;
+                // The exports are a transfer DESTINATION for whatever frames
+                // are still in flight, and destroying them is a free, not a
+                // retire — so drain, exactly as disableVertexInterop does for
+                // the same reason. A teardown call, never a per-frame one.
+                check(vkDeviceWaitIdle(ctx->device()), "vkDeviceWaitIdle (disableFrameInterop)");
+                for (auto& c : frameInterops_[i].channels)
+                    vulkan::destroyExternalBuffer(ctx->device(), c.buf);
+                frameInterops_.erase(frameInterops_.begin() + static_cast<long>(i));
+                return;
+            }
+        }
+
+void VulkanRenderer::Impl::invalidateFrameInterop(uint32_t viewHandle, const char* why) {
+            bool armed = false;
+            for (const auto& s : frameInterops_) armed = armed || s.viewHandle == viewHandle;
+            if (!armed) return;
+            std::cerr << "[VulkanRenderer] frame interop disabled on view " << viewHandle << ": "
+                      << why << " reallocates the source images, and they must not be freed "
+                                "under a live foreign import. Re-enable and re-import.\n";
+            disableFrameInterop(viewHandle);
+        }
+
+void VulkanRenderer::Impl::destroyFrameInterops() {
+            if (frameInterops_.empty() || !ctx) return;
+            for (auto& s : frameInterops_)
+                for (auto& c : s.channels)
+                    vulkan::destroyExternalBuffer(ctx->device(), c.buf);
+            frameInterops_.clear();
+        }
+
+bool VulkanRenderer::Impl::syncFrameInterop() {
+            if (!ctx || frameSerial_ == 0) return false;
+            // The fence of the LAST SUBMITTED frame — endFrame advances
+            // currentFrame after submitting, so that is the slot before this
+            // one, the same arithmetic readViewGBufferAOVs uses to find the
+            // freshest G-buffer. One fence, not vkDeviceWaitIdle: a single
+            // queue signals fences in submission order, so this retires every
+            // earlier frame with it. The frame loop waits this same fence again
+            // at its next begin, which is harmless.
+            const uint32_t n    = kFramesInFlight;
+            const uint32_t slot = (currentFrame + n - 1u) % n;
+            check(vkWaitForFences(ctx->device(), 1, &inFlight[slot], VK_TRUE, UINT64_MAX),
+                  "vkWaitForFences(syncFrameInterop)");
+            return true;
+        }
+
+void VulkanRenderer::Impl::recordFrameInterop(VkCommandBuffer cb, uint32_t imageIndex) {
+            // The cost gate: a frame with nothing armed records not one extra
+            // command, not even a barrier.
+            if (frameInterops_.empty()) return;
+
+            struct Copy {
+                VkImage image;
+                VkImageAspectFlags aspect;
+                VkImageLayout restLayout;
+                VkBuffer dst;
+                uint32_t width, height;
+            };
+            std::vector<Copy> copies;
+            for (const auto& s : frameInterops_) {
+                for (const auto& c : s.channels) {
+                    FrameInteropSource src{};
+                    // Slot `currentFrame`: this copy is recorded into the frame
+                    // that is WRITING that slot, after its passes, so it is the
+                    // just-written G-buffer rather than the previous one. (The
+                    // one-shot readback runs after endFrame advanced the
+                    // counter, which is why its arithmetic differs.)
+                    if (!frameInteropSource(s.viewHandle, c.channel, currentFrame, imageIndex, src))
+                        continue;
+                    // Extent/format drift would write the wrong number of bytes
+                    // into a foreign mapping. The invalidation rule means this
+                    // cannot happen; skipping rather than trusting it is one
+                    // comparison per channel per frame.
+                    if (src.width != c.width || src.height != c.height || src.bpp != c.bpp) continue;
+                    copies.push_back({src.image, src.aspect, src.restLayout, c.buf.handle,
+                                      src.width, src.height});
+                }
+            }
+            if (copies.empty()) return;
+
+            // restLayout → TRANSFER_SRC for every source in ONE barrier batch,
+            // the copies, then one batch back — the recorded-per-frame form of
+            // readViewGBufferAOVs' pattern. ALL_COMMANDS on the source side
+            // because the batch mixes attachment writes (the G-buffer),
+            // compute stores (the swapchain after TAA/post) and transfer writes
+            // (a resolved image), and one conservative barrier at the frame's
+            // tail is cheaper to get right than four narrow ones.
+            std::vector<VkImageMemoryBarrier> toSrc(copies.size());
+            for (size_t i = 0; i < copies.size(); ++i) {
+                auto& b               = toSrc[i];
+                b                     = VkImageMemoryBarrier{};
+                b.sType               = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+                b.oldLayout           = copies[i].restLayout;
+                b.newLayout           = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+                b.srcAccessMask       = VK_ACCESS_SHADER_WRITE_BIT |
+                                        VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT |
+                                        VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT |
+                                        VK_ACCESS_TRANSFER_WRITE_BIT;
+                b.dstAccessMask       = VK_ACCESS_TRANSFER_READ_BIT;
+                b.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+                b.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+                b.image               = copies[i].image;
+                b.subresourceRange.aspectMask = copies[i].aspect;
+                b.subresourceRange.levelCount = 1;
+                b.subresourceRange.layerCount = 1;
+            }
+            vkCmdPipelineBarrier(cb,
+                                 VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
+                                 VK_PIPELINE_STAGE_TRANSFER_BIT,
+                                 0, 0, nullptr, 0, nullptr,
+                                 static_cast<uint32_t>(toSrc.size()), toSrc.data());
+
+            for (const auto& c : copies) {
+                VkBufferImageCopy region{};
+                region.bufferOffset                = 0;
+                region.bufferRowLength             = 0;// tightly packed, like the readback
+                region.bufferImageHeight           = 0;
+                region.imageSubresource.aspectMask = c.aspect;
+                region.imageSubresource.layerCount = 1;
+                region.imageExtent                 = {c.width, c.height, 1};
+                vkCmdCopyImageToBuffer(cb, c.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                                       c.dst, 1, &region);
+            }
+
+            // Back to the resting layouts, so the overlay tail and the next
+            // frame's consumers find every image where they expect it.
+            std::vector<VkImageMemoryBarrier> toRest = toSrc;
+            for (size_t i = 0; i < toRest.size(); ++i) {
+                toRest[i].oldLayout     = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+                toRest[i].newLayout     = copies[i].restLayout;
+                toRest[i].srcAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+                toRest[i].dstAccessMask = VK_ACCESS_SHADER_READ_BIT |
+                                          VK_ACCESS_SHADER_WRITE_BIT |
+                                          VK_ACCESS_COLOR_ATTACHMENT_READ_BIT |
+                                          VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT |
+                                          VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT |
+                                          VK_ACCESS_TRANSFER_READ_BIT;
+            }
+            vkCmdPipelineBarrier(cb,
+                                 VK_PIPELINE_STAGE_TRANSFER_BIT,
+                                 VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
+                                 0, 0, nullptr, 0, nullptr,
+                                 static_cast<uint32_t>(toRest.size()), toRest.data());
         }
 
 

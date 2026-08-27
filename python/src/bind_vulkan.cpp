@@ -392,6 +392,109 @@ namespace {
             return motion_last();
         }
 
+        // ── Frame zero-copy interop (Vulkan -> CUDA), "frames out" ───────
+        // Names, not the enum, at the boundary: every other AOV entry point
+        // here takes a string ("depth", "albedo", ...) and the enum is bound
+        // beside them for callers who prefer it. Both are accepted.
+        static bool parse_frame_channel(const py::handle& h,
+                                        VulkanRenderer::FrameChannel& out) {
+            using FC = VulkanRenderer::FrameChannel;
+            if (py::isinstance<FC>(h)) {
+                out = h.cast<FC>();
+                return true;
+            }
+            const auto n = h.cast<std::string>();
+            if (n == "color") { out = FC::Color; return true; }
+            if (n == "depth") { out = FC::Depth; return true; }
+            if (n == "normal" || n == "normals") { out = FC::Normal; return true; }
+            if (n == "motion" || n == "flow") { out = FC::Motion; return true; }
+            if (n == "ids" || n == "instance_ids" || n == "segmentation") { out = FC::Ids; return true; }
+            if (n == "albedo") { out = FC::Albedo; return true; }
+            if (n == "splat_depth" || n == "splatdepth") { out = FC::SplatDepth; return true; }
+            throw std::invalid_argument("unknown frame interop channel '" + n +
+                                        "' (color/depth/normal/motion/ids/albedo/splat_depth)");
+        }
+        static const char* frame_channel_name(VulkanRenderer::FrameChannel c) {
+            using FC = VulkanRenderer::FrameChannel;
+            switch (c) {
+                case FC::Color: return "color";
+                case FC::Depth: return "depth";
+                case FC::Normal: return "normal";
+                case FC::Motion: return "motion";
+                case FC::Ids: return "ids";
+                case FC::Albedo: return "albedo";
+                case FC::SplatDepth: return "splat_depth";
+            }
+            return "?";
+        }
+
+        py::list enable_frame_interop(uint32_t view, const py::iterable& channels) {
+            std::vector<VulkanRenderer::FrameChannel> wanted;
+            for (const auto& item : channels) {
+                VulkanRenderer::FrameChannel c{};
+                if (parse_frame_channel(item, c)) wanted.push_back(c);
+            }
+            std::vector<VulkanRenderer::FrameInteropExport> got;
+            if (!wanted.empty()) {
+                py::gil_scoped_release release;// allocation + a possible drain
+                got = renderer_.enableFrameInterop(view, wanted);
+            }
+            py::list out;
+            for (const auto& e : got) {
+                py::dict d;
+                d["channel"]         = frame_channel_name(e.channel);
+                d["handle"]          = reinterpret_cast<uintptr_t>(e.osHandle);
+                d["size_bytes"]      = e.sizeBytes;
+                d["width"]           = e.width;
+                d["height"]          = e.height;
+                d["bytes_per_pixel"] = e.bytesPerPixel;
+                d["bgra"]            = e.bgra;
+                out.append(std::move(d));
+            }
+            return out;
+        }
+        void disable_frame_interop(uint32_t view) {
+            py::gil_scoped_release release;// device drain
+            renderer_.disableFrameInterop(view);
+        }
+        bool sync_frame_interop() {
+            py::gil_scoped_release release;// one fence wait
+            return renderer_.syncFrameInterop();
+        }
+        bool frame_interop_active(uint32_t view) const {
+            return renderer_.frameInteropActive(view);
+        }
+
+        // The raw bytes of one G-buffer attachment of the last rendered frame,
+        // as (H, W, bytes_per_pixel) uint8 — no decode, no lens warp applied by
+        // the caller's side. This is the host readback the frame-interop path
+        // is checked byte-for-byte against; the decoded read_depth /
+        // read_instance_ids helpers above are what applications use.
+        py::object read_gbuffer_aov_raw(const std::string& name, uint32_t view) {
+            using AOV = VulkanRenderer::GBufferAOV;
+            AOV aov{};
+            if (name == "depth") aov = AOV::Depth;
+            else if (name == "normal" || name == "normals") aov = AOV::Normal;
+            else if (name == "motion" || name == "flow") aov = AOV::Motion;
+            else if (name == "ids" || name == "instance_ids" || name == "segmentation") aov = AOV::Ids;
+            else if (name == "albedo") aov = AOV::Albedo;
+            else if (name == "splat_depth" || name == "splatdepth") aov = AOV::SplatDepth;
+            else throw std::invalid_argument("unknown AOV '" + name + "'");
+
+            std::vector<VulkanRenderer::AOVReadback> got;
+            {
+                py::gil_scoped_release release;// device wait + staging copy
+                (void) renderer_.readViewGBufferAOVs(view, {aov}, got);
+            }
+            if (got.empty()) return py::none();
+            const auto& r = got.front();
+            py::array_t<uint8_t> arr({static_cast<py::ssize_t>(r.height),
+                                      static_cast<py::ssize_t>(r.width),
+                                      static_cast<py::ssize_t>(r.bytesPerPixel)});
+            std::memcpy(arr.mutable_data(), r.data.data(), r.data.size());
+            return std::move(arr);
+        }
+
         // Label assignment for the segmentation AOVs. instance id overrides the
         // auto-assigned stable id (outIds.y); class id (0..255) tags the object
         // for semantic segmentation (outIds.z). Take effect on the next render.
@@ -584,6 +687,20 @@ namespace {
 namespace threepp_py {
 
     void init_vulkan(py::module_& m) {
+        // Channels of the zero-copy frames-out path. enable_frame_interop also
+        // accepts the equivalent lowercase strings, which is what the helpers
+        // in threepp.torch_frames pass.
+        py::enum_<VulkanRenderer::FrameChannel>(m, "FrameChannel",
+                                                "A per-frame image the Vulkan renderer can export "
+                                                "for zero-copy CUDA/torch consumption.")
+                .value("Color", VulkanRenderer::FrameChannel::Color)
+                .value("Depth", VulkanRenderer::FrameChannel::Depth)
+                .value("Normal", VulkanRenderer::FrameChannel::Normal)
+                .value("Motion", VulkanRenderer::FrameChannel::Motion)
+                .value("Ids", VulkanRenderer::FrameChannel::Ids)
+                .value("Albedo", VulkanRenderer::FrameChannel::Albedo)
+                .value("SplatDepth", VulkanRenderer::FrameChannel::SplatDepth);
+
         py::class_<PyVulkanRenderer>(m, "VulkanRenderer")
                 .def(py::init([](Canvas& c, int flush) {
                          if (!vulkan_loader_present()) {
@@ -1067,6 +1184,61 @@ namespace threepp_py {
                      "Release the exports and return the mesh to the CPU attribute path. STOP "
                      "the foreign writes first — nothing here can wait on a CUDA stream. Close "
                      "the importing VkInteropArrays before calling this.")
+                // ── Zero-copy FRAMES OUT (Vulkan -> CUDA) ─────────────────────
+                // The reverse direction: the renderer publishes what it drew
+                // into external-memory buffers a torch policy reads as tensors.
+                // Pair with threepp.torch_frames.FrameTensors, which does the
+                // CUDA import and the tensor wrapping.
+                .def("enable_frame_interop", &PyVulkanRenderer::enable_frame_interop,
+                     py::arg("view") = 0u,
+                     py::arg("channels") = py::make_tuple("color", "depth"),
+                     "Export this view's per-frame images as CUDA-importable buffers and arm "
+                     "the device-to-device copies that fill them.\n\n"
+                     "channels: any of 'color', 'depth', 'normal', 'motion', 'ids', 'albedo', "
+                     "'splat_depth' (or FrameChannel values). view=0 is the primary; anything "
+                     "else must be a live add_view handle.\n\n"
+                     "Returns a list of dicts, one per EXPORTABLE channel — duplicates collapse "
+                     "and unexportable ones are skipped ('splat_depth' without splat_depth_aov), "
+                     "so match on the 'channel' key. Each dict carries handle, size_bytes, "
+                     "width, height, bytes_per_pixel and (for 'color') bgra. An EMPTY list means "
+                     "nothing could be exported: before the first render(), on a stale view "
+                     "handle, or on a device with no external-memory extension (one line on "
+                     "stderr) — the fallback is the read_* host readback path.\n\n"
+                     "CALL IT AFTER THE FIRST render(): the exports are sized from the "
+                     "G-buffer / swapchain extents, which exist only once a frame has run.\n\n"
+                     "SYNC: render() -> sync_frame_interop() -> read the tensors -> next "
+                     "render(). Host ordering is the only cross-API synchronization; there is "
+                     "no shared semaphore.\n\n"
+                     "SINGLE-BUFFERED: the tensors are live views of renderer memory that the "
+                     "next render() overwrites. Clone what you need to keep.\n\n"
+                     "INVALIDATION: a resize, render_scale, gbuffer MSAA or splat_depth_aov "
+                     "toggle, or removing the view DISABLES interop for that view (one warning "
+                     "on stderr) rather than reallocating under a live import — re-enable and "
+                     "re-import. The handles are OS handles owned by the RENDERER: import them, "
+                     "never CloseHandle them from Python.")
+                .def("disable_frame_interop", &PyVulkanRenderer::disable_frame_interop,
+                     py::arg("view") = 0u,
+                     "Release this view's frame-interop exports. Close the importing tensors "
+                     "FIRST (FrameTensors.close() does both in the right order) — freeing the "
+                     "Vulkan allocation under a live CUDA mapping reports as nothing at all.")
+                .def("sync_frame_interop", &PyVulkanRenderer::sync_frame_interop,
+                     "Block until the last submitted frame's interop copies have completed. "
+                     "Waits ONE frame fence, not the whole device: a single queue signals "
+                     "fences in submission order, so this retires every earlier frame too. "
+                     "False before the first frame.")
+                .def("frame_interop_active", &PyVulkanRenderer::frame_interop_active,
+                     py::arg("view") = 0u,
+                     "Is this view's frame interop still armed? False after an "
+                     "invalidation (a resize, render_scale, ...) tore the exports down — "
+                     "the one way to notice without reading stderr. FrameTensors.stale "
+                     "is this, negated.")
+                .def("read_gbuffer_aov_raw", &PyVulkanRenderer::read_gbuffer_aov_raw,
+                     py::arg("aov"), py::arg("view") = 0u,
+                     "The raw bytes of one G-buffer attachment of the last rendered frame as "
+                     "(H, W, bytes_per_pixel) uint8, or None. No decode: this is the host "
+                     "readback the zero-copy frame-interop path is checked byte-for-byte "
+                     "against. Applications want read_depth / read_instance_ids / "
+                     "read_aovs_typed instead.")
                 // ── Zero-copy GPU-particle interop (CUDA -> Vulkan) ───────────
                 // The ParticleField sibling of enable_vertex_interop: export an
                 // Ownership.Interop field's ONE positions allocation so a Warp /

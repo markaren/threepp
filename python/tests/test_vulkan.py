@@ -616,3 +616,241 @@ def test_event_camera_subframe_timestamps(vk_renderer):
             f"a stamp ({int(t_all.max())}) is ahead of the newest clock ({latest})"
     finally:
         vk_renderer.event_camera_enabled = False
+
+
+# ── Zero-copy frames out (VulkanRenderer.enable_frame_interop) ───────────────
+# Local-verification only, like the vertex-interop test above: no CI job has
+# both Vulkan and CUDA, so these skip everywhere but a machine with an NVIDIA
+# GPU and a CUDA torch.
+
+def _cuda_torch():
+    """torch, if it is installed AND has a CUDA device; else None."""
+    if importlib.util.find_spec("torch") is None:
+        return None
+    import torch
+    return torch if torch.cuda.is_available() else None
+
+
+needs_cuda_torch = pytest.mark.skipif(_cuda_torch() is None,
+                                      reason="needs torch with a CUDA device")
+
+# A canvas of its own, deliberately WIDER than the 128x96 module fixture. A
+# headless canvas on Windows falls back to a hidden window, whose minimum width
+# the window manager enforces (~232 px): asking for 128 leaves canvas.size() and
+# the swapchain extent permanently disagreeing, so the renderer recreates the
+# swapchain every frame -- and a swapchain recreate is exactly the reallocation
+# that (correctly) disables frame interop. 320 px settles on the first frame.
+FW, FH = 320, 240
+
+
+@pytest.fixture(scope="module")
+def vk_frames():
+    canvas = tp.Canvas("vk-frames", width=FW, height=FH, headless=True, vsync=False)
+    renderer = tp.VulkanRenderer(canvas)
+    scene = tp.Scene()
+    scene.background = 0x202830
+    mat = tp.MeshStandardMaterial()
+    mat.color = 0xff5533
+    box = tp.Mesh(tp.BoxGeometry(), mat)
+    scene.add(box)
+    scene.add(tp.HemisphereLight(0xffffff, 0x404040, 1.0))
+    sun = tp.DirectionalLight(0xffffff, 3.0)
+    sun.position.set(3, 5, 2)
+    scene.add(sun)
+    cam = tp.PerspectiveCamera(55, FW / FH, 0.1, 100)
+    cam.position.set(1.5, 1.5, 3.0)
+    cam.look_at(0, 0, 0)
+    renderer.render(scene, cam)          # the exports are sized from a real frame
+    return renderer, scene, cam, box
+
+
+def _host_aov(renderer, name, view):
+    """One AOV of the last rendered frame, reinterpreted from its raw bytes."""
+    raw = renderer.read_gbuffer_aov_raw(name, view)
+    assert raw is not None, f"host readback of {name!r} failed"
+    h, w = raw.shape[0], raw.shape[1]
+    if name == "depth":
+        return raw.view(np.float32).reshape(h, w)
+    if name == "ids":
+        return raw.view(np.uint16).reshape(h, w, 4)
+    return raw.reshape(h, w, 4)          # albedo: RGBA8, already bytes
+
+
+@needs_cuda_torch
+@pytest.mark.parametrize("secondary", [False, True])
+def test_frame_interop_is_bit_exact_with_the_host_readback(vk_frames, secondary):
+    """The acceptance test: the same frame, read two ways, byte for byte.
+
+    The zero-copy path copies the same images read_gbuffer_aov copies, so this
+    is exact equality and not allclose -- any difference at all would mean the
+    copy took the wrong slot, the wrong layout or the wrong stride.
+    """
+    from threepp.torch_frames import FrameTensors
+
+    renderer, scene, cam, _ = vk_frames
+    view = 0
+    if secondary:
+        cam2 = tp.PerspectiveCamera(60, 1.0, 0.1, 100)
+        cam2.position.set(-2, 1, 2)
+        cam2.look_at(0, 0, 0)
+        view = renderer.add_view(cam2, 160, 160)
+        assert view > 0
+        renderer.render(scene, cam)      # the view's own G-buffer exists now
+
+    channels = ("depth", "ids", "albedo")
+    frames = FrameTensors(renderer, view, channels)
+    try:
+        assert set(frames.channels) == set(channels)
+        renderer.render(scene, cam)
+        assert frames.sync()
+        # Cloned before the host readback, which is what a real consumer does
+        # with a single-buffered export.
+        got = {c: frames[c].clone().cpu().numpy() for c in channels}
+        for c in channels:
+            host = _host_aov(renderer, c, view)
+            mine = got[c].astype(np.uint16) if c == "ids" else got[c]
+            assert mine.shape == host.shape, c
+            assert np.array_equal(mine, host), f"{c} differs from the host readback"
+        # The frame really had content in it -- an all-zero comparison would
+        # pass the equality above and prove nothing.
+        assert int(got["ids"].astype(np.uint32).max()) > 0, "no geometry in the frame"
+    finally:
+        frames.close()
+        if secondary:
+            renderer.remove_view(view)
+
+
+@needs_cuda_torch
+def test_frame_interop_color_is_the_scene_capture(vk_frames):
+    """The Color channel is the post-TAA, pre-overlay picture -- exactly the one
+    read_scene_pixels() returns, in the swapchain's own byte order. Recorded at
+    the same point in the frame, so this is byte equality, and it is what pins
+    the recording site: composited overlays or a picture-in-picture view would
+    show up here and nowhere else."""
+    from threepp.torch_frames import FrameTensors
+
+    renderer, scene, cam, _ = vk_frames
+    renderer.scene_capture = True
+    frames = FrameTensors(renderer, 0, ("color",))
+    try:
+        renderer.render(scene, cam)
+        frames.sync()
+        got = frames.color.clone().cpu().numpy()
+        host = renderer.read_scene_pixels()          # (H, W, 3), RGB
+        assert got.shape[:2] == host.shape[:2]
+        rgb = got[..., [2, 1, 0]] if frames.bgra else got[..., :3]
+        assert np.array_equal(rgb, host)
+    finally:
+        frames.close()
+        renderer.scene_capture = False
+
+
+@needs_cuda_torch
+def test_frame_interop_tensors_are_live_and_untorn(vk_frames):
+    """The tensors track the renderer, frame after frame, with no tearing.
+
+    UNTORN is the sharp half: every frame, the tensor equals that frame's host
+    readback exactly. A copy that raced the frame it was recorded in would show
+    up here as a partial image, intermittently, over several frames.
+
+    LIVE is the other half: the ids change when the box turns. The stability
+    check is a THRESHOLD, not equality -- the raster is TAA-jittered, so a
+    static scene still flips the silhouette pixels between frames, and the ids
+    attachment inherits that. What separates "static" from "moved" is how MANY
+    pixels move: a jitter fringe is a percent or two, a rotating box is tens.
+    """
+    from threepp.torch_frames import FrameTensors
+
+    torch = _cuda_torch()
+    renderer, scene, cam, box = vk_frames
+    frames = FrameTensors(renderer, 0, ("depth", "ids"))
+    try:
+        renderer.render(scene, cam)
+        frames.sync()
+        assert frames.depth.device.type == "cuda"
+
+        def changed_fraction(a, b):
+            return float((a != b).any(dim=-1).float().mean())
+
+        prev = frames.ids.clone()
+        static_max = 0.0
+        for _ in range(3):               # static scene, static camera
+            renderer.render(scene, cam)
+            frames.sync()
+            # Untorn: this frame's tensor IS this frame's host readback.
+            host = _host_aov(renderer, "ids", 0)
+            assert np.array_equal(frames.ids.clone().cpu().numpy().astype(np.uint16), host)
+            static_max = max(static_max, changed_fraction(frames.ids, prev))
+            prev = frames.ids.clone()
+        assert static_max < 0.05, \
+            f"{static_max:.1%} of ids pixels moved with nothing moving -- that is " \
+            "more than the sub-pixel jitter fringe"
+
+        before_depth = frames.depth.clone()
+        box.rotation.y = 0.9             # now move something
+        for _ in range(2):
+            renderer.render(scene, cam)
+            frames.sync()
+        moved = changed_fraction(frames.ids, prev)
+        assert moved > 4 * max(static_max, 1e-3), \
+            f"the box turned and only {moved:.1%} of ids pixels changed -- the " \
+            "tensor is not live"
+        assert not torch.equal(frames.depth, before_depth)
+    finally:
+        box.rotation.y = 0.0
+        frames.close()
+
+
+@needs_cuda_torch
+def test_frame_interop_is_disabled_by_a_reallocation(vk_frames, capfd):
+    """render_scale reallocates the G-buffer, and the renderer disables
+    interop rather than freeing images CUDA has imported. The consumer sees a
+    warning, nothing crashes, and re-arming gives fresh (smaller) exports."""
+    from threepp.torch_frames import FrameTensors
+
+    renderer, scene, cam, _ = vk_frames
+    frames = FrameTensors(renderer, 0, ("depth",))
+    full_h, full_w = tuple(frames.depth.shape)
+    try:
+        renderer.render(scene, cam)
+        frames.sync()
+        assert not frames.stale
+        capfd.readouterr()               # drop everything up to here
+        renderer.render_scale = 0.5
+        renderer.render(scene, cam)      # the deferred realloc lands here
+        err = capfd.readouterr().err
+        assert "frame interop disabled" in err, \
+            "no invalidation warning was printed; stderr was:\n" + err
+        # And the consumer sees it without having to read stderr.
+        assert frames.stale and not renderer.frame_interop_active(0)
+        # Still no crash: the fence wait and the teardown both behave.
+        assert renderer.sync_frame_interop()
+    finally:
+        frames.close()
+
+    # Re-arming after the reallocation works, and reports the NEW extent.
+    again = FrameTensors(renderer, 0, ("depth",))
+    try:
+        h, w = tuple(again.depth.shape)
+        assert h < full_h and w < full_w, (h, w, full_h, full_w)
+        renderer.render(scene, cam)
+        assert again.sync()
+    finally:
+        again.close()
+        renderer.render_scale = 1.0
+        renderer.render(scene, cam)
+
+
+@needs_cuda_torch
+def test_frame_interop_rejects_a_stale_view(vk_frames):
+    """A handle that never existed exports nothing -- the same rule
+    read_view_gbuffer_aov follows, for the same reason: a frame attributed to
+    the wrong camera is worse than no frame."""
+    from threepp.torch_frames import FrameInteropUnavailable, FrameTensors
+
+    renderer, _, _, _ = vk_frames
+    assert renderer.enable_frame_interop(9999, ["depth"]) == []
+    with pytest.raises(FrameInteropUnavailable):
+        FrameTensors(renderer, 9999, ("depth",))
+    with pytest.raises(ValueError):
+        FrameTensors(renderer, 0, ("not_a_channel",))

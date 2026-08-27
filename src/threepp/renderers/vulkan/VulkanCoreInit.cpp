@@ -249,6 +249,10 @@ VulkanRenderer::Impl::~Impl() {
             for (auto& b : geometryDescsBuffers) destroyBuffer(ctx->allocator(), b);
             for (auto& b : materialDescsBuffers) destroyBuffer(ctx->allocator(), b);
             destroyBuffer(ctx->allocator(), sceneCaptureBuf_);
+            // Frame-interop exports (enableFrameInterop). Closing the Win32 NT
+            // handles here is why teardown must come after the consumer has
+            // released its CUDA imports — the documented order.
+            destroyFrameInterops();
             destroyBuffer(ctx->allocator(), eventLumaBuf_);
             if (eventShadePipeline_)       vkDestroyPipeline(d, eventShadePipeline_, nullptr);
             if (eventShadePipelineLayout_) vkDestroyPipelineLayout(d, eventShadePipelineLayout_, nullptr);

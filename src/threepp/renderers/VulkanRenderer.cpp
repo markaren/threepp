@@ -2397,6 +2397,24 @@ namespace threepp {
         core()->disableVertexInterop(mesh);
     }
 
+    std::vector<VulkanRenderer::FrameInteropExport>
+    VulkanRenderer::enableFrameInterop(uint32_t viewHandle,
+                                       const std::vector<FrameChannel>& channels) {
+        return core()->enableFrameInterop(viewHandle, channels);
+    }
+
+    void VulkanRenderer::disableFrameInterop(uint32_t viewHandle) {
+        core()->disableFrameInterop(viewHandle);
+    }
+
+    bool VulkanRenderer::frameInteropActive(uint32_t viewHandle) const {
+        return core()->frameInteropActive(viewHandle);
+    }
+
+    bool VulkanRenderer::syncFrameInterop() {
+        return core()->syncFrameInterop();
+    }
+
     void VulkanRenderer::setDeferredVolumetrics(float density, float anisotropy) {
         pimpl_->deferredVolDensity_ = std::max(density, 0.f);
         pimpl_->deferredVolAniso_   = std::clamp(anisotropy, -0.95f, 0.95f);
