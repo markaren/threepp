@@ -107,7 +107,9 @@ from warp_common import cli_arg, icosphere, parse_size, resize_handler, signed_v
 SELFTEST = "--selftest" in sys.argv
 TUNE = "--tune" in sys.argv            # optimise only, no window, print numbers
 SWEEP = "--sweep" in sys.argv          # detection-range table and stop
-MODE = "both" if SELFTEST else cli_arg("--mode", "both", str)  # stealth|conspicuous|both
+CLIP = "--clip" in sys.argv            # 12 s share clip: 3 s per body + all three
+MODE = ("both" if (SELFTEST or CLIP)
+        else cli_arg("--mode", "both", str))  # stealth|conspicuous|both
 SEED = int(cli_arg("--seed", 7, float))
 # The selftest runs the SAME population as the demo and only shortens the search.
 # Dropping the population to 16 to save time was a false economy: it slows the
@@ -123,8 +125,13 @@ SHOT_DIR = cli_arg("--shots", os.path.join(
     "doc", "screenshots"), str)
 FRAME_BUDGET = int(cli_arg("--frames", 0, float))
 WIN_W, WIN_H = parse_size(cli_arg("--size", "640x360" if (SELFTEST or SWEEP)
-                                 else "1440x810", str))
-HEADLESS = SELFTEST or SWEEP or TUNE or bool(SHOT)
+                                 else ("1920x1080" if CLIP else "1440x810"), str))
+HEADLESS = SELFTEST or SWEEP or TUNE or CLIP or bool(SHOT)
+# The optimised parameter vectors, cached so a clip re-render does not pay the
+# ~2 min of optimisation again. Keyed on n_param/seed/gens; a mismatch simply
+# re-optimises.
+SHAPES_CACHE = cli_arg("--shapes-cache", os.path.join(
+    os.environ.get("TEMP", "."), "lidar_sculpt_shapes.npz"), str)
 
 # ---- the body ----------------------------------------------------------------
 SUBDIV = int(cli_arg("--subdiv", 4, float))       # render mesh: 4 = 2562 v / 5120 f
@@ -836,7 +843,18 @@ def main():
         alive[0] = canvas.animate_once(draw)
         return alive[0]
 
-    for mode in modes:
+    clip_loaded = False
+    if CLIP and os.path.exists(SHAPES_CACHE):
+        z = np.load(SHAPES_CACHE)
+        if (int(z["n_param"]) == shape.n_param and int(z["seed"]) == SEED
+                and int(z["gens"]) == GENS):
+            for nm in ("stealth", "conspicuous"):
+                results[nm] = (float(z[nm + "_soft"]), int(z[nm + "_hard"]),
+                               z[nm + "_x"], float(z[nm + "_err"]))
+            clip_loaded = True
+            print(f"  clip: optimised shapes loaded from {SHAPES_CACHE}")
+
+    for mode in (() if clip_loaded else modes):
         mesh.material.color = STEALTH_COLOR if mode == "stealth" else CONSP_COLOR
         run = Run(shape, geom, det, mode, base_soft, SEED)
         state["run"] = run
@@ -881,6 +899,15 @@ def main():
           f"at {det.eval_ms:.1f} ms")
     summary(results, base_soft, base_hard)
 
+    if CLIP:
+        if not clip_loaded and "stealth" in results and "conspicuous" in results:
+            np.savez(SHAPES_CACHE, n_param=shape.n_param, seed=SEED, gens=GENS,
+                     **{f"{nm}_{k}": v for nm in ("stealth", "conspicuous")
+                        for k, v in zip(("soft", "hard", "x", "err"), results[nm])})
+            print(f"  clip: shapes cached to {SHAPES_CACHE}")
+        render_clip(shape, renderer, scene, camera, results, mesh, cloud_obj)
+        return
+
     # The selftest runs BEFORE the finale: the finale retires the optimisation
     # mesh, and the determinism check needs it still in the scene.
     if SELFTEST:
@@ -910,6 +937,121 @@ def summary(results, base_soft, base_hard):
         print(f"  {name:<14}{soft:10.1f}{soft / base_soft:11.3f}{hard:11d}"
               f"{100.0 * err:9.3f}%")
     print("  " + "-" * 66)
+
+
+# --------------------------------------------------------------------------- #
+#  The share clip (--clip): 12 seconds, four beats -- 3 s per body under a
+#  sweeping scanner, then all three under the same pose. Headless and
+#  deterministic (the azimuth is a function of the frame index, never the wall
+#  clock), raw RGB streamed straight into x264 -- the pipeline the hull film
+#  settled on after paying 5.4 GB of PNG intermediates to learn it.
+# --------------------------------------------------------------------------- #
+def _ffmpeg_exe():
+    import shutil
+    exe = shutil.which("ffmpeg")
+    if exe is None:
+        try:
+            import imageio_ffmpeg
+            exe = imageio_ffmpeg.get_ffmpeg_exe()
+        except Exception:
+            exe = None
+    return exe
+
+
+def render_clip(shape, renderer, scene, camera, results, old_mesh, old_cloud):
+    import subprocess
+    print("\n  --- CLIP " + "-" * 54)
+    fps, secs = 30, 3.0
+    names = ("sphere", "stealth", "conspicuous")
+    colors = (SPHERE_COLOR, STEALTH_COLOR, CONSP_COLOR)
+    centres = [np.array([(i - 1) * SPACING, 0.0, 0.0]) for i in range(3)]
+
+    scene.remove(old_mesh)
+    scene.remove(old_cloud)
+    bodies = []
+    for i, name in enumerate(names):
+        pos, _ = shape.build(results[name][2])
+        g = make_geom(shape, pos)
+        m = tp.Mesh(g, make_material(colors[i]))
+        m.position.set(*centres[i])
+        scene.add(m)
+        bodies.append((name, centres[i]))
+
+    orbit = tp.DepthSensor(fov_y=SFOV, width=SW, height=SH, near=0.2, far=400.0)
+    orbit.noise = tp.RangeNoiseModel()
+    cap = 3 * SW * SH
+    cloud_obj, cloud_geom = make_cloud(cap)
+    cloud_obj.material.size = 0.11
+    scene.add(cloud_obj)
+    for _ in range(3):
+        renderer.render(scene, camera)      # material warm-up, as everywhere
+
+    exe = _ffmpeg_exe()
+    if exe is None:
+        print("  no ffmpeg on PATH and no imageio-ffmpeg; cannot encode the clip")
+        return
+    out = os.path.join(SHOT_DIR, "lidar_sculpt.mp4")
+    os.makedirs(SHOT_DIR, exist_ok=True)
+    log = os.path.join(os.environ.get("TEMP", "."), "lidar_sculpt_ffmpeg.log")
+    cmd = [exe, "-y", "-hide_banner", "-loglevel", "warning",
+           "-f", "rawvideo", "-pix_fmt", "rgb24",
+           "-s", f"{WIN_W}x{WIN_H}", "-r", str(fps), "-i", "-",
+           "-an", "-c:v", "libx264", "-pix_fmt", "yuv420p",
+           "-crf", "18", "-preset", "medium", "-movflags", "+faststart", out]
+    logf = open(log, "w")
+    enc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=logf, stderr=logf)
+
+    fpseg = int(fps * secs)
+    t0 = time.perf_counter()
+    for f in range(4 * fpseg):
+        seg, fu = divmod(f, fpseg)
+        u = (fu + 0.5) / fpseg                  # (0, 1) inside the beat
+        # A 240-degree sweep centred on the camera's side of each body. A full
+        # 360 spends half the beat with the returns on the far side, hidden
+        # behind the very body they landed on -- the same lesson the finale's
+        # AZ0 comment records.
+        az = AZ0 - 120.0 + 240.0 * u
+        off = _sph(az, ORBIT_EL, ORBIT_R)
+        featured = bodies if seg == 3 else [bodies[seg]]
+        allp, alld = [], []
+        for name, c in featured:
+            aim(orbit, c + off, c)
+            pts, cols = orbit.scan_rgbd(renderer, scene)
+            if not len(pts):
+                continue
+            d = pts - c.astype(np.float32)
+            msk = (d * d).sum(1) <= MASK_R * MASK_R
+            if msk.any():
+                allp.append(pts[msk])
+                alld.append(cols[msk, 0] >= THRESH)
+        paint_cloud(cloud_geom, cap,
+                    np.concatenate(allp) if allp else np.zeros((0, 3), np.float32),
+                    np.concatenate(alld) if alld else np.zeros(0, bool))
+
+        if seg < 3:
+            c = bodies[seg][1]
+            th = -0.30 + 0.60 * u               # one slow arc per beat, no cuts
+            eye = c + np.array([5.0 * math.sin(th), 2.1, 5.0 * math.cos(th)])
+            look = c + np.array([0.0, 0.15, 0.0])
+        else:
+            eye = np.array([0.0, 5.0 + 1.2 * u, 19.5 + 2.5 * u])
+            look = np.zeros(3)
+        camera.position.set(float(eye[0]), float(eye[1]), float(eye[2]))
+        camera.look_at(float(look[0]), float(look[1]), float(look[2]))
+
+        renderer.render(scene, camera)
+        rgb = renderer.read_pixels()
+        if f == 0:
+            assert rgb.shape[:2] == (WIN_H, WIN_W), f"readback {rgb.shape}"
+        enc.stdin.write(np.ascontiguousarray(rgb, np.uint8).tobytes())
+
+    enc.stdin.close()
+    rc = enc.wait()
+    logf.close()
+    dt = time.perf_counter() - t0
+    sz = os.path.getsize(out) / 1e6 if os.path.exists(out) else 0.0
+    print(f"  wrote {out}  ({4 * fpseg} frames in {dt:.1f} s = "
+          f"{4 * fpseg / dt:.1f} fps, {sz:.1f} MB, x264 rc={rc})")
 
 
 # --------------------------------------------------------------------------- #
