@@ -257,9 +257,11 @@ namespace threepp_py {
         // ---- DepthSensor (helpers/DepthSensor.hpp) ---------------------------
         // A GPU depth-render sensor: renders the scene from its own viewpoint, linearizes
         // depth, reads it back, and reprojects to a world-space point cloud (optionally with
-        // per-point sRGB color). It is an Object3D — aim it with position/rotation/quaternion/
-        // look_at, then scan() with a GLRenderer. scan() refreshes the sensor's world matrix
-        // first, so it works whether or not the sensor was added to the scene.
+        // per-point sRGB color). It is an Object3D — aim it with position/rotation/quaternion
+        // (NOT look_at: beams go down local -Z but the non-camera look_at convention points
+        // +Z at the target, so look_at aims it exactly backwards — see the class docstring),
+        // then scan() with a GLRenderer. scan() refreshes the sensor's world matrix first,
+        // so it works whether or not the sensor was added to the scene.
         auto pts_to_numpy = [](const std::vector<Vector3>& cloud) {
             py::array_t<float> pts({static_cast<py::ssize_t>(cloud.size()), static_cast<py::ssize_t>(3)});
             auto* d = pts.mutable_data();
@@ -286,7 +288,18 @@ namespace threepp_py {
             std::unordered_map<const DepthSensor*, std::vector<Vector3>> clouds;
         };
         static PendingClouds pending;
-        py::class_<DepthSensor, Object3D, Sensor, std::shared_ptr<DepthSensor>>(m, "DepthSensor")
+        py::class_<DepthSensor, Object3D, Sensor, std::shared_ptr<DepthSensor>>(
+                m, "DepthSensor",
+                "GPU depth sensor: scans the scene from its own pose and returns a world-space "
+                "point cloud.\n\n"
+                "Beam convention: beams are cast down the sensor's LOCAL -Z axis (camera "
+                "convention). The sensor is an Object3D, not a Camera, so look_at() applies "
+                "the non-camera convention and turns local +Z toward the target -- aiming the "
+                "sensor exactly backwards, and every scan returns an empty (0, 3) cloud with "
+                "no other symptom. Aim it by setting rotation/quaternion directly, or reflect "
+                "the target through the sensor position:\n\n"
+                "    p = sensor.position\n"
+                "    sensor.look_at(2 * p.x - t.x, 2 * p.y - t.y, 2 * p.z - t.z)\n")
                 .def(py::init([](float fov_y, unsigned int width, unsigned int height, float near, float far) {
                     return std::make_shared<DepthSensor>(fov_y, width, height, near, far);
                 }), py::arg("fov_y"), py::arg("width"), py::arg("height"),
@@ -336,7 +349,9 @@ namespace threepp_py {
                 }, py::arg("renderer"), py::arg("scene"),
                    "Depth scan -> (N,3) float32 world-space hit points (N = points that hit within far). "
                    "Works with a GLRenderer (raster depth) or a VulkanRenderer (path-traced through the "
-                   "renderer's acceleration structure -- render() the scene at least once first).")
+                   "renderer's acceleration structure -- render() the scene at least once first). "
+                   "Beams go down the sensor's local -Z; an all-empty cloud from a sensor aimed with "
+                   "look_at() usually means it is pointing exactly backwards (see the class docstring).")
                 // ---- pipelined scan: fire on one frame, collect on a later one ----
                 .def("scan_begin", [](DepthSensor& self, const py::object& renderer, Scene& scene) {
                     self.updateWorldMatrix(true, true);            // sync sensor + child camera pose

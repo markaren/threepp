@@ -33,6 +33,14 @@ namespace threepp {
      *     the same world-space point cloud, so perception/deploy code is
      *     identical on either backend.
      *
+     * Aiming: beams go down the sensor's LOCAL -Z (camera convention), but the
+     * sensor is an Object3D, not a Camera, so Object3D::lookAt applies the
+     * non-camera convention and turns local +Z toward the target — aiming the
+     * sensor exactly backwards, with an empty cloud as the only symptom. Aim
+     * via rotation/quaternion, or reflect the target through the sensor
+     * position: lookAt(2*position - target). (Deliberately not "fixed" in
+     * lookAt itself: existing callers already compensate.)
+     *
      * Can scan with or without color: the former is slightly more expensive but
      * gives per-point color information, while the latter is faster and uses
      * less GPU memory. (On Vulkan the "color" is the LIDAR intensity as
