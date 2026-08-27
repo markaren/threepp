@@ -1745,7 +1745,41 @@ void VulkanRenderer::Impl::recordDynamicGeomRefits(VkCommandBuffer cb) {
                     // standard choice for per-frame rebuilt geometry.
                     // CPU-graduated records keep FAST_TRACE: their fixed
                     // topology refits via MODE_UPDATE 63 frames of 64.
-                    const VkBuildAccelerationStructureFlagsKHR wantFlags = (rec.interop
+                    //
+                    // ... BUT ONLY IF IT FITS. rec.as was created by
+                    // buildBlasFor, whose storage was sized from a FAST_TRACE
+                    // size query, and the two lineages are different BVH
+                    // formats with different footprints: on NVIDIA a
+                    // FAST_BUILD structure over the same geometry is ~5%
+                    // LARGER (measured 345856 vs 329600 B for a 5120-triangle
+                    // indexed mesh). Building it into that AS overruns the
+                    // structure — VUID-vkCmdBuildAccelerationStructuresKHR-
+                    // pInfos-10126 with the layers on, and heap corruption
+                    // that surfaces as VK_ERROR_DEVICE_LOST a few frames later
+                    // without them. So: ask for the flags we want, and fall
+                    // back to the lineage the allocation was actually sized
+                    // for when the answer does not fit. The size query is
+                    // cheap (a driver-side estimate, no allocation) and only
+                    // the flags and the geometry affect the answer.
+                    bool fastBuildFits = false;
+                    if (rec.interop) {
+                        VkAccelerationStructureBuildGeometryInfoKHR q{};
+                        q.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_GEOMETRY_INFO_KHR;
+                        q.type = VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR;
+                        q.flags = VK_BUILD_ACCELERATION_STRUCTURE_PREFER_FAST_BUILD_BIT_KHR |
+                                  VK_BUILD_ACCELERATION_STRUCTURE_ALLOW_UPDATE_BIT_KHR;
+                        q.mode = VK_BUILD_ACCELERATION_STRUCTURE_MODE_BUILD_KHR;
+                        q.geometryCount = 1;
+                        q.pGeometries = &blasGeoms[kk];
+                        VkAccelerationStructureBuildSizesInfoKHR s{};
+                        s.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_SIZES_INFO_KHR;
+                        ctx->rt().getAccelerationStructureBuildSizes(
+                                ctx->device(), VK_ACCELERATION_STRUCTURE_BUILD_TYPE_DEVICE_KHR,
+                                &q, &primitiveCount, &s);
+                        fastBuildFits = s.accelerationStructureSize <= rec.storage.size;
+                    }
+                    const VkBuildAccelerationStructureFlagsKHR wantFlags =
+                            ((rec.interop && fastBuildFits)
                             ? VK_BUILD_ACCELERATION_STRUCTURE_PREFER_FAST_BUILD_BIT_KHR
                             : VK_BUILD_ACCELERATION_STRUCTURE_PREFER_FAST_TRACE_BIT_KHR) |
                             VK_BUILD_ACCELERATION_STRUCTURE_ALLOW_UPDATE_BIT_KHR;
