@@ -1,4 +1,4 @@
-"""Four arms catch a cannonball in a cloth, tracking it with two cameras on tripods.
+"""Four arms catch a cannonball in a cloth, throw it up, and four drones net it.
 
 Aim the cannon, fire, and a rig of four anchors holding a sheet works out where
 the ball will be and gets there in time. The rig is never told the ball's true
@@ -83,6 +83,47 @@ Three things make this work, and each of them is a measurement, not a guess:
     verdict: DELIVERED if the ball comes to rest in the bin, and the miss
     distance either way.
 
+  * AND THEN FOUR DRONES CATCH IT AGAIN, in a net, in the air. The net is the
+    SAME CLOTH a second time -- the same kernels over a second set of arrays,
+    625 particles instead of 2401, with its four anchors on four quadrotors
+    instead of four arms. The ball can only be inside one of the two cloths at
+    once, so both of them accumulate into one impulse buffer and whichever is
+    far away contributes exactly zero; no test decides which is which.
+    The drones fly the rig's own Hermite in 3-D, and their limits are a thrust
+    vector and a lean: the commanded acceleration becomes a thrust direction,
+    the thrust is capped at 22 m/s^2 and the lean at 40 degrees, and the body is
+    then DRAWN along the vector that survived both. The two caps are not
+    independent, which is the whole point -- holding altitude at 40 degrees buys
+    g tan 40 = 8.2 m/s^2 sideways and no more. Clamping the lean at constant
+    thrust magnitude instead, which is what a rotation does, quietly hands back
+    an extra 7 m/s^2 of climb with every hard turn: the formation flew 33 m
+    straight up chasing an intercept, and the picture said 90 degrees of lean.
+
+    The ball is found again by the SAME two cameras and a tracker that knows
+    nothing: a fresh instance, armed by the rig's own launch clock and given one
+    prior, the throw the rig itself just commanded. The lob is planned like the
+    basket throw and calibrated the same way -- open loop, at separation -- but
+    NOT with the same numbers, because a near-vertical stroke slings far harder
+    than a flat one: 1.39 x the anchors' own speed against 1.02, and the ball is
+    gone 45 ms into a 170 ms stroke. Planning the lob on the flat throw's
+    calibration put the seed window 0.7 m ahead of the ball and cost half a
+    second of looking in the wrong place; with the vertical numbers measured the
+    first crossing call lands 267 ms after the stroke, 0.7 s before the catch.
+    Measured on the default shot: 48 observations at 0.032 m of 3-D error, and
+    the ball settles 0.05-0.20 m from the middle of a net 0.90 m across.
+
+    The drones are also the biggest movers in both frames while all this is
+    happening, and they are in the detector's own search window on about 100 of
+    150 ticks. Two things keep them out of the track. They sit ON THE PAD until
+    the rig is holding the ball -- there is nowhere to hover that the cannon's
+    arc does not sweep, and check_drones() rejected the first station at 0.10 m
+    of overlap -- so during the first catch they are four parked objects putting
+    nothing into a difference detector. And once flying, each hull is excluded
+    by its own small disc, the same prior as the cannon's: the drones are this
+    robot's own hardware and it knows where it commanded them. Masking them took
+    the toss leg from 0.116 m of observation error to 0.032 and the catch from
+    0.335 m off the middle to 0.05.
+
   * THE ARMS ARE THE ENVELOPE, and they are now allowed to say so. --arm-reach
     was a flag with 2.0 m typed into it while four Franka arms on 0.5 m
     pedestals ran out at about 1.1 m downrange and 0.16 m sideways, so every
@@ -151,13 +192,20 @@ the whole perception story in one picture.
     python warp_cloth_catch.py --oracle             # ground truth instead of the sensors,
                                                     # to separate tracking error from control
     python warp_cloth_catch.py --tilt 0             # flat sheet, to A/B the scoop
+    python warp_cloth_catch.py --no-drones          # throw at the basket instead,
+                                                    # no second catch
     python warp_cloth_catch.py --no-toss            # catch only, no throw
     python warp_cloth_catch.py --no-effects         # no flash, smoke or recoil, so the
                                                     # sensor pollution can be A/B'd
 
-Prints the predicted intercept against where the ball actually crossed, and the
-throw's commanded speed against what the ball actually left with, so perception,
-catch and throw can each be judged separately.
+In the window the amber crossing ring turns RED when the shot is outside the
+arms' measured envelope, so an impossible shot is visible before it is fired
+rather than explained on the last line of the run.
+
+Prints the predicted intercept against where the ball actually crossed, the
+throw's commanded speed against what the ball actually left with, and how far
+the ball settled from the middle of the net, so perception, catch, throw and the
+second catch can each be judged separately.
 """
 import math
 import os
@@ -300,6 +348,88 @@ BALL_R = cli_arg("--ball-r", 0.10, float)
 BALL_KG = cli_arg("--ball-kg", 0.40, float)
 MU = cli_arg("--mu", 0.55, float)            # cloth-on-ball Coulomb friction
 
+# ---- the net and the drones ---------------------------------------------------
+# The second catch. With drones the rig throws the ball UP instead of at the bin,
+# and four quadrotors carrying a net between them take it out of the air on the
+# way down. Almost nothing here is new machinery:
+#
+#   * the NET is a second INSTANCE of the sheet. Every cloth kernel above already
+#     takes its positions, its inverse masses, its anchors and its long-range
+#     table as arguments, so a second set of launches over a second set of arrays
+#     is a second cloth. Its four anchors are the four drones.
+#   * the DRONES fly the same arrive-velocity-matched Hermite the rig flies, in
+#     full 3-D, with a thrust cap in place of a joint cap.
+#   * the ball is found by the SAME two cameras, by a fresh tracker that has to
+#     re-acquire it from nothing.
+DRONES = "--no-drones" not in sys.argv and "--no-toss" not in sys.argv
+NET_RES = int(cli_arg("--net-res", 24, float))
+NET_CLOTH = cli_arg("--net", 1.02, float)        # m of material in the net
+NET_SPAN = cli_arg("--net-span", 0.90, float)    # m between the drones
+NET_ITERS = int(cli_arg("--net-iters", 24, float))
+NET_KG = cli_arg("--net-kg", 0.18, float)
+NET_HOOK = cli_arg("--net-hook", 0.10, float)    # m the net hangs under the hulls
+NET_Y = cli_arg("--net-y", 1.90, float)          # altitude of the mid-air catch
+NET_NEAR = cli_arg("--net-near", 0.90, float)    # m of ball-to-net that counts as
+net_near = [False]                               # close enough to interleave
+# A quadrotor is a thrust vector and a lean, so that is the whole flight model.
+# The commanded acceleration is turned into a thrust direction, the thrust is
+# capped and its lean is capped, and what comes back out is the acceleration
+# those two limits allow -- then the body is DRAWN along that same vector, so the
+# tilt in the picture is not decoration, it is the constraint. The two caps are
+# not independent: holding altitude at lean t costs g / cos t of thrust and buys
+# g tan t of horizontal acceleration, which at 40 degrees is 8.2 m/s^2. Leaning
+# harder while climbing buys more (up to THRUST sin t = 14.1), which is exactly
+# what the drop onto the ball uses.
+DRONE_THRUST = cli_arg("--drone-thrust", 22.0, float)  # m/s^2 of thrust/mass
+DRONE_TILT = cli_arg("--drone-tilt", 40.0, float)      # degrees of lean allowed
+DRONE_SPEED = cli_arg("--drone-speed", 5.0, float)     # m/s cap on the formation
+DRONE_TAU = cli_arg("--drone-tau", 0.09, float)        # s, the velocity loop
+DRONE_ATT_TAU = cli_arg("--drone-att-tau", 0.05, float)  # s, the airframe's lag
+# Where the drones wait, and when they stop waiting there.
+#
+# There is nowhere in the air to hover. The cannonball's arc sweeps the whole
+# x-y plane the net would have to stand in -- at az 0, el 66, 7 m/s it is still
+# at x +1.10 when it passes y 2.10 -- so any station close enough to reach the
+# lob's intercept in time is also a station the first shot flies through. The
+# first attempt at this was rejected by check_drones() at 0.10 m of overlap.
+#
+# So the drones sit ON THE PAD until the rig has the ball, and take station while
+# it carries it home. That is the rig's own catch, not the ball's position: the
+# state machine knows it is in `recover`, and it knows the lob it is going to
+# throw because the lob is planned from its own centre at a fixed elevation. The
+# staging pose comes out of that plan; where the ball actually goes still comes
+# only from the fresh fit, 1.5 s later.
+DRONE_GROUND = np.array([float(x) for x in
+                         cli_arg("--drone-ground", "3.10,0.19,1.85", str).split(",")])
+DRONE_PARK_OUT = cli_arg("--park-out", 0.45, float)
+DRONE_PARK_UP = cli_arg("--park-up", 0.35, float)
+DRONE_ABSORB = cli_arg("--drone-absorb", 0.35, float)  # s of give after arrival
+DRONE_HOLD = cli_arg("--drone-hold", 0.55, float)      # s of stillness, then the exit
+DRONE_EXIT = cli_arg("--drone-exit", 2.40, float)      # s of the carry off frame
+DRONE_EXIT_TO = np.array([float(x) for x in
+                          cli_arg("--drone-exit-to", "1.9,1.4,0.8", str).split(",")])
+# How much of the ball's own descent the net matches on arrival. All of it and
+# the net never closes on the ball; none of it and the ball hits a net that is
+# standing still, which is the same 4.5 J/kg problem the sheet has.
+DRONE_MATCH = cli_arg("--drone-match", 0.70, float)
+# The fresh tracker is armed by the rig's own launch clock: the stroke takes
+# TOSS_STROKE, the brake takes TOSS_BRAKE, and after that the sheet is out from
+# under the ball. NET_SEED_R is how wide a window the throw PLAN opens before the
+# tracker has a fit of its own, in units of the detector's own search radius.
+# How long after the ball is gone the fresh tracker starts. Not zero: at 0.10 s
+# the tracker has the ball but only 0.12 s of baseline when it first publishes,
+# and a ballistic fit over 0.12 s is confident and wrong -- it called the
+# crossing at x +3.19 against a truth near +1.6, the formation committed to it,
+# and the catch got worse rather than better (0.33 m off the middle against
+# 0.09). At 0.245 s the sheet is also well clear of the ball in both frames.
+NET_OBS_LAG = cli_arg("--net-obs-lag", 0.245, float)  # s after the ball is gone
+NET_SEED_R = cli_arg("--net-seed-r", 1.6, float)
+# One exclusion disc per DRONE, in metres of world radius around each hull. A
+# drone is 0.42 m across its booms; this covers it and a little of its downwash
+# without reaching the ball, which is the whole point of masking them one at a
+# time instead of masking the formation as a box.
+DRONE_MASK_R = cli_arg("--drone-mask-r", 0.30, float)
+
 # ---- rates -------------------------------------------------------------------
 # The sensor rate IS the loop rate: the detector samples once per render, so a
 # fast tracker means a fast loop. The substep rate is held constant across it,
@@ -317,7 +447,10 @@ CLIP_FPS = 60.0
 # the extra seconds cost 0.06 ms/tick of the average, measured.
 # The carry home added roughly a second: an off-axis catch ends up to a metre
 # out and walks back at a cradling speed.
-SECONDS = cli_arg("--seconds", 4.2 if "--no-toss" in sys.argv else 8.0, float)
+# With the drones there is a second flight, a second catch, and the carry off
+# frame after it, all of which happen after the point the basket run stops.
+SECONDS = cli_arg("--seconds", 4.2 if "--no-toss" in sys.argv
+                  else (9.6 if DRONES else 8.0), float)
 DAMPING = cli_arg("--damping", 0.010, float)
 
 # Each sensor is a secondary view rendered at exactly this size, so unlike the
@@ -368,6 +501,51 @@ REST = CLOTH / N
 M_PARTICLE = CLOTH_KG / V
 GRAVITY = wp.vec3(0.0, -9.81, 0.0)
 G_NP = np.array([0.0, -9.81, 0.0])
+
+# The lob. It is planned exactly like the basket throw -- from the rig's own
+# centre, at the fastest ball the stroke has been calibrated to deliver -- but
+# aimed at an ANGLE instead of at a point, because there is no point to aim at:
+# the drones go where the ball is, not the other way round. Near vertical, with
+# just enough downrange lean to take the ball out of the rig's own airspace.
+LOB_EL = cli_arg("--lob-el", 78.0, float)          # degrees above horizontal
+# The stroke is commanded at ARM_SPEED and this is what comes off it, measured at
+# separation like everything else about this throw -- and it is NOT the number
+# the basket throw uses. A near-vertical stroke slings far harder than a flat
+# one: 1.41 x the anchors' own speed against 1.02, because the long-range
+# attachment snaps taut at the top of the stroke and by then the ball is sitting
+# straight up the line of it. Planning the lob at the flat throw's calibration
+# put the plan 1.9 m/s slow, which is 1.2 m of apex, and the fresh tracker spent
+# 0.7 s looking for a ball that had already gone past its search window.
+LOB_SPEED = cli_arg("--lob-speed", 5.70, float)    # m/s off the sheet, measured
+LOB_RISE = cli_arg("--lob-rise", 0.15, float)      # m above the rig centre and
+LOB_LEAD = cli_arg("--lob-lead", 0.16, float)      # m downrange of it at release
+# WHEN it leaves, as seconds into the stroke, and it is not the end of it: the
+# ball is gone 45 ms into a 170 ms vertical stroke, because the sheet reaches the
+# speed that slings it long before the anchors stop. Assuming the end of the
+# stroke put the seed window 0.7 m ahead of the ball and cost the fresh tracker
+# half a second of looking in the wrong place.
+LOB_T_REL = cli_arg("--lob-t-rel", 0.045, float)
+LOB_DIR = np.array([math.cos(math.radians(LOB_EL)), math.sin(math.radians(LOB_EL)),
+                    0.0])
+
+
+def lob_landmarks(p_rest=None):
+    """Launch point, apex and the descending crossing of NET_Y for the planned
+    lob. Everything the drones' park pose and the coverage check are placed
+    against, and all of it arithmetic on the rig's own numbers."""
+    if p_rest is None:
+        p_rest = np.array([HOME[0], CATCH_Y, HOME[1]])
+    p = (np.asarray(p_rest, float) + np.array([0.0, LOB_RISE, 0.0])
+         + LOB_LEAD * np.array([LOB_DIR[0], 0.0, LOB_DIR[2]])
+         / max(math.hypot(LOB_DIR[0], LOB_DIR[2]), 1e-9))
+    v = LOB_DIR * LOB_SPEED
+    t_apex = v[1] / 9.81
+    apex = p + v * t_apex + 0.5 * G_NP * t_apex ** 2
+    a, b, c = 0.5 * G_NP[1], v[1], p[1] - NET_Y
+    disc = b * b - 4 * a * c
+    t_net = (-b + math.sqrt(disc)) / (2 * a) if disc > 0 else t_apex
+    t_net = max(t_net, (-b - math.sqrt(disc)) / (2 * a) if disc > 0 else t_apex)
+    return p, v, apex, p + v * t_net + 0.5 * G_NP * t_net ** 2, t_net
 
 # ---- warp: the sheet ----------------------------------------------------------
 
@@ -629,6 +807,153 @@ if device.is_cuda and ITERS % 2 == 0:
         print(f"  (no graph capture: {exc})")
 
 
+# ---- the net ------------------------------------------------------------------
+# The same cloth a second time: its own arrays, the same kernels, its own graph.
+# Both cloths accumulate into the SAME impulse buffer, which is what the ball
+# reads -- the ball can only be inside one of them at a time, so whichever is far
+# away contributes exactly zero and nothing has to decide which is which. That is
+# also what lets the sheet keep running after the throw, so it hangs and swings
+# under the arms while the drones work, instead of freezing.
+netp = None
+net_graph = None
+if DRONES:
+    NR = NET_RES
+    NVV = (NR + 1) * (NR + 1)
+    NET_REST = NET_CLOTH / NR
+    NET_M = NET_KG / NVV
+    _nxs = np.linspace(-NET_SPAN / 2, NET_SPAN / 2, NR + 1, dtype=np.float32)
+    _ngx, _ngz = np.meshgrid(_nxs, _nxs)
+    _nr2 = (_ngx / (NET_SPAN / 2)) ** 2 + (_ngz / (NET_SPAN / 2)) ** 2
+    _ngy = -0.5 * (NET_CLOTH - NET_SPAN) * np.clip(1.0 - _nr2, 0.0, 1.0)
+    net_p0 = np.stack([_ngx, _ngy, _ngz], axis=-1).reshape(-1, 3).astype(np.float32)
+    NET_CORNERS = [(0, 0), (NR, 0), (0, NR), (NR, NR)]
+    net_anchor_idx_np = np.array([iy * (NR + 1) + ix for ix, iy in NET_CORNERS],
+                                 dtype=np.int32)
+    # The drones sit at the corners of this square; the net's own anchors hang
+    # NET_HOOK below them, so the cloth is slung under four hulls rather than
+    # growing out of their centres.
+    drone_local = np.array([[float(_nxs[ix]), 0.0, float(_nxs[iy])]
+                            for ix, iy in NET_CORNERS], dtype=np.float32)
+    net_p0[net_anchor_idx_np] = drone_local
+    # A provisional station: the settle below measures how far the net actually
+    # hangs and the whole thing is then moved to where that measurement says the
+    # drones have to take station.
+    _, _, _, _lob_net_p, _ = lob_landmarks()
+    STAGE = np.array([_lob_net_p[0] + DRONE_PARK_OUT,
+                      NET_Y + 0.5 * (NET_CLOTH - NET_SPAN) + NET_HOOK + DRONE_PARK_UP,
+                      _lob_net_p[2]])
+    net_p0 += (STAGE + np.array([0.0, -NET_HOOK, 0.0])).astype(np.float32)
+
+    _nfx = np.linspace(-NET_CLOTH / 2, NET_CLOTH / 2, NR + 1, dtype=np.float32)
+    _nmx, _nmz = np.meshgrid(_nfx, _nfx)
+    _nflat = np.stack([_nmx, np.zeros_like(_nmx), _nmz], axis=-1).reshape(-1, 3)
+    net_lra_np = np.linalg.norm(_nflat[:, None, :] - _nflat[net_anchor_idx_np][None, :, :],
+                                axis=2).astype(np.float32).reshape(-1)
+    net_im_np = np.full(NVV, 1.0, dtype=np.float32)
+    net_im_np[net_anchor_idx_np] = 0.0
+
+    netp = wp.array(net_p0, dtype=wp.vec3, device=device)
+    netprev = wp.array(net_p0, dtype=wp.vec3, device=device)
+    netpred = wp.zeros(NVV, dtype=wp.vec3, device=device)
+    netscratch = wp.zeros(NVV, dtype=wp.vec3, device=device)
+    netnrm = wp.zeros(NVV, dtype=wp.vec3, device=device)
+    net_im = wp.array(net_im_np, dtype=float, device=device)
+    net_lra = wp.array(net_lra_np, dtype=float, device=device)
+    net_anchor_idx = wp.array(net_anchor_idx_np, dtype=int, device=device)
+    net_anchor_tgt = wp.array(net_p0[net_anchor_idx_np].copy(), dtype=wp.vec3,
+                              device=device)
+
+    net_from = net_p0[net_anchor_idx_np].astype(np.float64)
+    net_to = net_from.copy()
+    NET_CENTRE_I = (NR // 2) * (NR + 1) + NR // 2
+
+    def _net_kernels():
+        wp.launch(integrate, dim=NVV, device=device,
+                  inputs=[netp, netprev, netpred, net_im, DT, DAMPING])
+        wp.launch(set_anchors, dim=4, device=device,
+                  inputs=[netpred, net_anchor_idx, net_anchor_tgt])
+        a, b = netpred, netscratch
+        for _ in range(NET_ITERS):
+            wp.launch(solve, dim=NVV, device=device,
+                      inputs=[a, b, net_im, NR, NR, NET_REST, bpred, bp,
+                              BALL_R + 0.012, MU, netprev, net_anchor_tgt,
+                              net_lra, impulse, NET_M, 0.35])
+            a, b = b, a
+        wp.copy(netp, a)
+
+    # The WHOLE substep is captured, not just the solve loop -- integrate, set
+    # the anchors, iterate, copy back. That matters more than anything about the
+    # solver here: measured, the second cloth cost +3.0 ms/tick and NONE of it
+    # was arithmetic (dropping the iterations from 24 to 8 changed the loop by
+    # 0.05 ms, and halving the resolution made it slower). It was 12 substeps of
+    # Python launch overhead, and a graph is the way to stop paying it. The
+    # anchors are the one host input, and they are uploaded once per tick rather
+    # than once per substep: the formation moves 2 cm in a tick, which the cloth
+    # does not need walked in for it the way a 4.5 m/s arm does.
+    #
+    # And there is a second graph holding the WHOLE TICK of them. The net's
+    # substeps only have to be interleaved with the sheet's while the ball can
+    # touch the net, because that is the only thing the two cloths share: one
+    # impulse accumulator, which the far cloth writes nothing to. So while the
+    # ball is more than NET_NEAR from the net the twelve substeps go in one
+    # launch instead of twelve, and the interleaved path is paid for only over
+    # the tenth of a second the catch actually takes.
+    net_bulk_graph = None
+    if device.is_cuda and NET_ITERS % 2 == 0:
+        try:
+            with wp.ScopedCapture(device) as _cap:
+                _net_kernels()
+            net_graph = _cap.graph
+            with wp.ScopedCapture(device) as _cap:
+                for _ in range(SUBSTEPS):
+                    _net_kernels()
+            net_bulk_graph = _cap.graph
+        except Exception as exc:                   # noqa: BLE001 - capture is optional
+            print(f"  (no net graph capture: {exc})")
+
+    def net_sim():
+        """One substep of the net. The same cloth step as the sheet's, on the
+        other arrays, in one launch."""
+        if net_graph is not None:
+            wp.capture_launch(net_graph)
+        else:
+            _net_kernels()
+
+    def net_bulk():
+        """A whole tick of the net at once, for when the ball is nowhere near."""
+        if net_bulk_graph is not None:
+            wp.capture_launch(net_bulk_graph)
+        else:
+            for _ in range(SUBSTEPS):
+                _net_kernels()
+
+    def net_anchors_to(target):
+        net_anchor_tgt.assign(np.asarray(target, np.float32))
+
+    # Let it hang before anything else happens, and MEASURE the hang. Everything
+    # downstream needs that number -- where the drones have to wait so the bowl
+    # is at the catch altitude, and where the bowl is when the ball arrives --
+    # and it is a property of the cloth, not something to assert about it.
+    net_anchors_to(net_to)
+    for _ in range(int(0.60 / DT)):
+        net_sim()
+    NET_HANG = float(STAGE[1] - netp.numpy()[NET_CENTRE_I][1])
+    # And now the station that measurement implies: the bowl DRONE_PARK_UP above
+    # the catch altitude and DRONE_PARK_OUT downrange of where the lob will cross
+    # it. Then put the whole thing back down on the pad, where it starts.
+    STAGE = STAGE + np.array([0.0, (NET_Y + NET_HANG + DRONE_PARK_UP) - STAGE[1], 0.0])
+    NET_HALF = 0.5 * NET_SPAN
+    _shift = (DRONE_GROUND - STAGE).astype(np.float32)
+    netp.assign(netp.numpy() + _shift)
+    netprev.assign(netprev.numpy() + _shift)
+    net_from = net_from + _shift
+    net_to = net_from.copy()
+    net_anchors_to(net_to)
+    for _ in range(int(0.50 / DT)):        # and let it pool on the concrete
+        net_sim()
+    NET_SETTLED = netp.numpy().copy()      # the resting pose, for R in the window
+
+
 # ---- the rig ------------------------------------------------------------------
 
 class Rig:
@@ -717,6 +1042,202 @@ class Rig:
 
 
 rig = Rig()
+
+
+class Quad:
+    """Four drones on a square, flown as ONE formation, with the net slung under
+    them. Position and velocity of the formation centre are the state; the four
+    hulls ride along rigidly, exactly as the sheet's corners ride the rig.
+
+    The flight model is a thrust vector and a lean, and both of them are capped.
+    That is deliberately the same bargain the arms make: an intercept the caps
+    cannot deliver is not smoothed over, the formation simply arrives late and
+    short and the ball goes past it.
+    """
+
+    def __init__(self, ground):
+        self.p = np.asarray(ground, float).copy()
+        self.v = np.zeros(3)
+        self.a = np.zeros(3)
+        self.lean = np.array([0.0, 1.0, 0.0])     # thrust direction; the body tilt
+        self.spin = 0.0
+        self.mode = "ground"
+        self.climbed = False
+        self.plan = None                # (t_hit, p_hit, v_hit) from the toss fit
+        self.approach = None            # (t0, p0, v0) the intercept cubic leaves
+        self.hold_p = self.p.copy()
+        self.t_mode = 0.0
+        self.arrive_v = np.zeros(3)
+        self.shortfall = None           # m the caps left it from the commanded pose
+        self.t_commit = None
+        self.deadline = 1e9
+        self.thrust_capped = 0
+        self.tilt_capped = 0
+        self.speed_capped = 0
+        self.peak_speed = 0.0
+        self.peak_tilt = 0.0
+        self.travel = 0.0
+
+    def corners(self):
+        return (drone_local + self.p).astype(np.float64)
+
+    def anchors(self):
+        """Where the net hangs from: a hook under each hull."""
+        return self.corners() + np.array([0.0, -NET_HOOK, 0.0])
+
+    def _drive(self, dt, v_cmd):
+        """Commanded velocity in, achievable acceleration out.
+
+        The thrust vector is a + g. It may not be longer than DRONE_THRUST and it
+        may not lean further than DRONE_TILT off vertical; whatever survives both
+        clamps is what this machine has. Holding altitude at the lean limit is
+        worth g tan(DRONE_TILT) horizontally and no more, which is the number
+        that decides whether the ball is caught.
+        """
+        # Through an attitude loop with a time constant, NOT "reach v_cmd this
+        # tick". Dividing the velocity error by dt asks for 240 times more
+        # acceleration than the machine has on every tick, so the thrust sits on
+        # its limit permanently and its DIRECTION flips sign whenever the error
+        # does -- the position stays smooth, but the body chatters between +40
+        # and -40 degrees of lean at the tick rate and the drones read as
+        # stop-motion. DRONE_TAU is how fast a rotorcraft can actually change
+        # what it is pulling on, and the caps below still bite whenever the ask
+        # is genuinely beyond them.
+        f = (v_cmd - self.v) / DRONE_TAU + np.array([0.0, 9.81, 0.0])
+        # LEAN FIRST, and against the vertical thrust rather than against the
+        # magnitude. Clamping the angle at constant |f| is what a rotation looks
+        # like, and it is wrong: it hands back the horizontal limit AND an extra
+        # 7 m/s^2 of climb, so every hard turn was also a hard climb and the
+        # formation flew 33 m straight up chasing an intercept it could not make.
+        # A rotor can only pull along its own axis, so the horizontal it can
+        # deliver is whatever it is lifting with, times the tangent of the lean.
+        f[1] = max(f[1], 0.0)                      # it cannot thrust downward
+        h = np.array([f[0], 0.0, f[2]])
+        hn = float(np.linalg.norm(h))
+        h_max = f[1] * math.tan(math.radians(DRONE_TILT))
+        if hn > h_max:
+            f = h * (h_max / max(hn, 1e-9)) + np.array([0.0, f[1], 0.0])
+            self.tilt_capped += 1
+        n = float(np.linalg.norm(f))
+        if n > DRONE_THRUST:                       # and only so much of it
+            f *= DRONE_THRUST / n
+            self.thrust_capped += 1
+        self.a = f - np.array([0.0, 9.81, 0.0])
+        n = float(np.linalg.norm(f))
+        if n > 1e-3:            # a rotor at idle has no direction to lean in
+            # The airframe follows the thrust it is being given, with the lag a
+            # real one has -- a quad cannot snap its attitude, and the smoothing
+            # here is the only thing in the drone that is cosmetic.
+            k = 1.0 - math.exp(-dt / max(DRONE_ATT_TAU, 1e-6))
+            self.lean = self.lean + (f / n - self.lean) * k
+            self.lean /= max(float(np.linalg.norm(self.lean)), 1e-9)
+            self.peak_tilt = max(self.peak_tilt,
+                                 math.acos(max(min(self.lean[1], 1.0), -1.0)))
+        self.v = self.v + self.a * dt
+        sp = float(np.linalg.norm(self.v))
+        if sp > DRONE_SPEED:
+            self.v *= DRONE_SPEED / sp
+            self.speed_capped += 1
+            sp = DRONE_SPEED
+        self.p = self.p + self.v * dt
+        self.travel += sp * dt
+        self.peak_speed = max(self.peak_speed, sp)
+
+    def _station(self, dt, target, vmax):
+        d = np.asarray(target, float) - self.p
+        v_cmd = d * 3.0
+        s = float(np.linalg.norm(v_cmd))
+        if s > vmax:
+            v_cmd *= vmax / s
+        self._drive(dt, v_cmd)
+
+    def launch(self, t):
+        """Off the pad, on the rig's own catch. Nothing about the ball is read:
+        the rig is in `recover`, which means it is holding something and is about
+        to throw it, and the lob it will throw is planned from its own centre."""
+        if self.mode == "ground":
+            self.mode, self.t_mode = "stage", t
+
+    def commit(self, t, plan):
+        """Take the fitted crossing. The cubic is anchored at the state the
+        formation was in when the fit FIRST published, and re-solved to the
+        latest crossing every tick after that -- the same thing the rig does."""
+        if self.mode == "stage":
+            self.approach = (t, self.p.copy(), self.v.copy())
+            self.mode, self.t_commit = "intercept", t
+            # A DEADLINE, fixed at the first commit. Without one the formation
+            # chases a crossing that keeps being re-solved: once the ball is out
+            # of the frames the fit is being made from whatever is left moving,
+            # the predicted crossing walks away, and the drones walk away after
+            # it -- measured, 10.6 m and still climbing.
+            self.deadline = plan[0] + 0.15
+        if self.mode == "intercept" and plan[0] < self.deadline:
+            self.plan = plan
+
+    def update(self, dt, t, hang):
+        if self.mode == "stage":
+            # Climb first, cross second. A straight line from the pad to the
+            # station passes through the height the sheet is working at while the
+            # rig is still carrying the ball home, and a net dragged through the
+            # sheet is not a thing to find out about in an mp4.
+            if not self.climbed:
+                self._station(dt, np.array([self.p[0], STAGE[1] + 0.15, self.p[2]]),
+                              DRONE_SPEED)
+                self.climbed = self.p[1] > STAGE[1] - 0.05
+            else:
+                self._station(dt, STAGE, DRONE_SPEED)
+        elif self.mode == "intercept" and self.plan is not None:
+            t_hit, p_hit, v_hit = self.plan
+            t0, p_start, v_start = self.approach
+            # The BOWL has to be at the crossing, and the bowl hangs `hang` below
+            # the hulls -- measured off the net itself, not assumed from its
+            # dimensions. Arriving already descending with the ball is the same
+            # trick the sheet plays horizontally: the ball meets a net that is
+            # moving its way, so the energy it has to lose is the difference.
+            tgt_p = np.array([p_hit[0], p_hit[1] + hang, p_hit[2]])
+            tgt_v = np.array([v_hit[0], DRONE_MATCH * v_hit[1], v_hit[2]])
+            ph, vh = hermite(p_start, v_start, tgt_p, tgt_v,
+                             max(t_hit - t0, 1e-3), t - t0)
+            self._drive(dt, vh + (ph - self.p) * 6.0)
+            if t >= min(t_hit, self.deadline):
+                self.shortfall = float(np.linalg.norm(self.p - tgt_p))
+                self.arrive_v = self.v.copy()
+                self.mode, self.t_mode = "absorb", t
+        elif self.mode == "absorb":
+            # Bleed the descent off over DRONE_ABSORB, which is what turns a net
+            # that is falling with the ball into a net that is holding it.
+            u = min((t - self.t_mode) / DRONE_ABSORB, 1.0)
+            self._drive(dt, self.arrive_v * (1.0 - u))
+            if u >= 1.0:
+                self.hold_p = self.p.copy()
+                self.mode, self.t_mode = "hold", t
+        elif self.mode == "hold":
+            self._station(dt, self.hold_p, 1.0)
+            if t - self.t_mode > DRONE_HOLD:
+                self.mode, self.t_mode = "exit", t
+        elif self.mode == "exit":
+            # Out of frame, gently. A sine profile over DRONE_EXIT integrates to
+            # exactly DRONE_EXIT_TO and peaks at pi^2 |d| / 2T^2 of acceleration,
+            # which at these numbers leans the formation ~12 degrees -- shallower
+            # than the bowl the ball is sitting in, so it stays there because of
+            # the cloth rather than because anything is holding it.
+            u = min((t - self.t_mode) / DRONE_EXIT, 1.0)
+            self._drive(dt, DRONE_EXIT_TO
+                        * ((math.pi / (2.0 * DRONE_EXIT)) * math.sin(math.pi * u)))
+            if u >= 1.0:
+                self.mode, self.hold_p = "done", self.p.copy()
+        elif self.mode == "ground":
+            self.p = DRONE_GROUND.copy()          # sitting on its legs
+            self.v[:] = 0.0
+            self.lean = np.array([0.0, 1.0, 0.0])
+        else:
+            self._station(dt, self.hold_p, 1.2)
+        if self.mode != "ground":
+            self.spin += 2.0 * math.pi * DRONE_RPS * dt
+
+
+DRONE_RPS = 18.0                 # rotor revolutions per second, for the picture
+quad = Quad(DRONE_GROUND) if DRONES else None
 
 
 # ---- the sensors --------------------------------------------------------------
@@ -853,16 +1374,18 @@ class Sensor:
         """
         if xy is None or xy.shape[0] < MIN_PIXELS:
             return None
-        if self.mask is not None:
-            # The rig knows where its own cannon is. Flash, smoke and a recoiling
-            # carriage are all change, and for the first fraction of a second
-            # they are far more change than the ball -- so a disc around the
-            # gun's own projected position is excluded. This is a prior about the
-            # ROBOT, not about the ball: it is the same disc whether a shot has
-            # been fired or not, it never moves with the target, and the ball is
-            # outside it within ~60 ms of leaving the barrel.
-            mu, mv, mr = self.mask
-            xy = xy[(xy[:, 0] - mu) ** 2 + (xy[:, 1] - mv) ** 2 > mr * mr]
+        if self.mask:
+            # The rig knows where its own hardware is. Flash, smoke and a
+            # recoiling carriage are all change, and for the first fraction of a
+            # second they are far more change than the ball -- so a disc around
+            # the gun's own projected position is excluded. Later, the four
+            # drones are the same argument: they are commanded by this system,
+            # their poses are proprioception, and four hulls closing on the ball
+            # are the biggest movers in both frames. These are priors about the
+            # ROBOT, not about the ball: nothing here follows the target, and the
+            # discs are where they are whether a shot has been fired or not.
+            for mu, mv, mr in self.mask:
+                xy = xy[(xy[:, 0] - mu) ** 2 + (xy[:, 1] - mv) ** 2 > mr * mr]
             if xy.shape[0] < MIN_PIXELS:
                 return None
         if self.gate is not None:
@@ -1444,6 +1967,99 @@ def build_sensor_rig(sensor):
 for _s in sensors:
     build_sensor_rig(_s)
 
+# ---- the drones and their net -------------------------------------------------
+# Four quadrotors and one net, all procedural. Two details are perception
+# decisions rather than modelling ones, and both cost nothing:
+#
+#   * the rotors are ROTATIONALLY SYMMETRIC discs. That is what a spinning rotor
+#     looks like at any shutter speed worth having, and it is also why four
+#     drones can hover inside both sensor frames for the whole cannon shot
+#     without putting a single changed pixel into the difference. A blade bar
+#     would have been four spinning movers in frame while the tracker was trying
+#     to find the ball.
+#   * the nav light is STEADY. A blinking light is a mover too, and there is no
+#     version of this demo where a blink is worth an observation.
+
+net_mesh = None
+drone_groups = []
+drone_hubs = []
+if DRONES:
+    def _net_texture(s=512, cells=22):
+        """Bright cord over dark openings. The net is seen against a dusk sky
+        from below for most of the shot, so the cord carries it: a plain matte
+        square reads as a board, and a transparent one would land in the overlay
+        pass, which the sensor views do not run at all."""
+        img = np.full((s, s, 3), (24, 28, 34), np.uint8)
+        g = (np.arange(s) % (s / cells)) < (s / cells) * 0.34
+        img[g, :] = (232, 238, 244)
+        img[:, g] = (232, 238, 244)
+        return img
+
+    _net_mat = standard_material(0xffffff, 0.80, 0.0, side=tp.Side.Double)
+    _net_mat.map = tp.data_texture(_net_texture(), True)
+    net_geometry = tp.PlaneGeometry(NET_CLOTH, NET_CLOTH, NR, NR)
+    net_mesh = tp.Mesh(net_geometry, _net_mat)
+    net_mesh.cast_shadow = True
+    scene.add(net_mesh)
+
+    _hull = standard_material(0x262b33, 0.55, 0.35)
+    _boom = standard_material(0x99a3ad, 0.45, 0.60)
+    _rotor = standard_material(0x0d1015, 0.65, 0.15, side=tp.Side.Double)
+    _nav = standard_material(0x1e0806, 0.5, 0.0,
+                            emissive=0xff3f2a, emissive_intensity=2.6)
+    for _k in range(4):
+        _g = tp.Group()
+        scene.add(_g)
+        _hulls = tp.Mesh(tp.BoxGeometry(0.17, 0.055, 0.13), _hull)
+        _hulls.cast_shadow = True
+        _g.add(_hulls)
+        for _ry in (math.pi / 4, -math.pi / 4):     # the X frame
+            _bm = tp.Mesh(tp.BoxGeometry(0.42, 0.014, 0.022), _boom)
+            _bm.rotate_y(_ry)
+            _bm.cast_shadow = True
+            _g.add(_bm)
+        _hubs = []
+        for _sx, _sz in ((1, 1), (1, -1), (-1, 1), (-1, -1)):
+            _cx, _cz = _sx * 0.148, _sz * 0.148
+            _mot = tp.Mesh(tp.CylinderGeometry(0.021, 0.024, 0.046, 10), _hull)
+            _mot.position.set(_cx, 0.021, _cz)
+            _g.add(_mot)
+            _hub = tp.Group()
+            _hub.position.set(_cx, 0.049, _cz)
+            _g.add(_hub)
+            _disc = tp.Mesh(tp.CircleGeometry(0.085, 20), _rotor)
+            _disc.rotate_x(-math.pi / 2)
+            _hub.add(_disc)
+            _hubs.append(_hub)
+        _lt = tp.Mesh(tp.SphereGeometry(0.017, 10, 8), _nav)
+        _lt.position.set(0.088, 0.004, 0.0)
+        _g.add(_lt)
+        _tether = tp.Mesh(tp.CylinderGeometry(0.006, 0.006, NET_HOOK, 6), _boom)
+        _tether.position.set(0.0, -0.5 * NET_HOOK, 0.0)
+        _g.add(_tether)
+        drone_groups.append(_g)
+        drone_hubs.append(_hubs)
+
+
+def place_drones():
+    """Hulls at the formation corners, bodies along the thrust vector.
+
+    The tilt is not an animation curve: it is the direction of `quad.lean`, which
+    is the thrust the caps allowed. Euler XYZ with no y term gives roll and pitch
+    alone, so the airframe leans without the heading swinging round with it."""
+    if not DRONES:
+        return
+    c = quad.corners()
+    n = quad.lean
+    rz = math.asin(max(-1.0, min(1.0, -n[0])))
+    rx = math.atan2(n[2], max(n[1], 1e-6))
+    for k, g in enumerate(drone_groups):
+        g.position.set(float(c[k][0]), float(c[k][1]), float(c[k][2]))
+        g.rotation.set(rx, 0.0, rz)
+        for j, hub in enumerate(drone_hubs[k]):
+            hub.rotation.set(0.0, quad.spin * (1.0 if (j % 2) else -1.0), 0.0)
+
+
 # ---- the cannon ---------------------------------------------------------------
 # A barrel that visibly carries the aim, so a shot can be lined up before it is
 # taken rather than discovered afterwards. CANNON is the trunnion; the ball
@@ -1692,6 +2308,15 @@ def update_aim_preview(visible):
     _arc_geo.update_attribute("position", pts.astype(np.float32))
     if p_hit is not None:
         aim_hit.visible = True
+        # RED when the shot is outside the arms' measured envelope. The player is
+        # allowed ground truth -- this whole preview is ground truth -- and
+        # reach_limit() is the same boundary the rig is clamped to at run time,
+        # so an impossible shot is visible before it is fired instead of being
+        # explained on the last line of the run.
+        off = np.array([p_hit[0] - HOME[0], p_hit[2] - HOME[1]])
+        d = float(np.linalg.norm(off))
+        lim = reach_limit(off[0] / d, off[1] / d) if d > 1e-6 else ARM_REACH
+        _hit_mat.color = 0xff3b30 if d > lim else 0xffae3a
         aim_hit.position.set(float(p_hit[0]), CATCH_Y + 0.004, float(p_hit[2]))
     else:
         aim_hit.visible = False
@@ -2022,6 +2647,15 @@ def check_coverage():
                     pts[f"{k} az{az:+.0f} el{el:.0f} v{speed:.1f}"] = p
     for k, p in shot_landmarks(aim["az"], aim["el"], aim["speed"]).items():
         pts[f"{k} (this shot)"] = p
+    if DRONES:
+        # The SECOND shot has to be inside both frames too, and it is a different
+        # shot: it leaves from the middle of the arena, goes almost straight up
+        # and is caught in the air. A pair framed on the cannon's arc can miss it
+        # entirely at the top, which is a thing to fail on rather than discover.
+        _lp, _lv, _apex, _pnet, _ = lob_landmarks()
+        pts["lob launch"] = _lp
+        pts["lob apex"] = _apex
+        pts["lob net catch"] = _pnet
     worst = 1e9
     for s in sensors:
         for name, p in pts.items():
@@ -2152,8 +2786,88 @@ def check_reach():
         print(f"         ... and {len(rows) - 4} more")
 
 
+def check_drones():
+    """Where the drones wait, and whether they can get off it in time.
+
+    Same idea as check_props and check_reach: three clearances and one budget,
+    printed as numbers instead of noticed in an mp4.
+
+      * the parked net must be clear of the CANNONBALL's arc, over the whole aim
+        envelope, or the first catch ends against four drones.
+      * clear of everywhere the SHEET goes, for the same reason.
+      * clear of the LOB's own rising arc, or the ball is caught going up.
+      * and the caps have to cover the gap from the park to the intercept in the
+        time the lob leaves after the fresh fit can publish.
+    """
+    def gap(p, c, pad=0.0):
+        """Distance from a world point to the net when the formation centre is at
+        `c`: a box, half-width NET_HALF horizontally, from the bowl's low point
+        up to the hulls."""
+        dx = max(abs(p[0] - c[0]) - NET_HALF - pad, 0.0)
+        dz = max(abs(p[2] - c[2]) - NET_HALF - pad, 0.0)
+        dy = max(max((c[1] - NET_HANG) - p[1], p[1] - c[1]), 0.0)
+        return math.sqrt(dx * dx + dz * dz + dy * dy) - BALL_R
+
+    # The cannonball is not in this at all: while it is in the air the drones are
+    # sitting on the pad, and they only leave it once the rig is already holding
+    # the ball. What the STATION has to be clear of is the lob's own climb and
+    # the sheet at its highest; what the PAD has to be clear of is everywhere the
+    # sheet sweeps, which is a 3-D question because the sheet flies over it.
+    lp, lv, apex, p_net, t_net = lob_landmarks()
+    # Only the CLIMB, and a little past the top of it. After that the formation
+    # is committed and closing on the ball on purpose, so measuring how near the
+    # net gets to it is measuring the catch.
+    t_apex = lv[1] / 9.81
+    worst_lob = min(gap(lp + lv * t + 0.5 * G_NP * t * t, STAGE)
+                    for t in np.arange(0.0, t_apex + 0.05, 0.005))
+    worst_sheet = 1e9
+    for az in (-12.0, 0.0, 12.0):
+        for el in (58.0, 66.0):
+            for speed in (6.0, 7.0):
+                c = shot_landmarks(az, el, speed)["crossing"]
+                for x in (HOME[0], c[0]):
+                    for y in (CATCH_Y - GIVE, CATCH_Y + 0.45):
+                        sheet = np.array([x, y, c[2]])
+                        for st in (STAGE, DRONE_GROUND):
+                            worst_sheet = min(worst_sheet,
+                                              gap(sheet, st, 0.5 * CLOTH) + BALL_R)
+    if min(worst_sheet, worst_lob) < 0.10:
+        raise SystemExit(f"the net is in the way: {worst_sheet:.2f} m from the "
+                         f"sheet, {worst_lob:.2f} m from the lob (station "
+                         f"x{STAGE[0]:+.2f} y{STAGE[1]:.2f} z{STAGE[2]:+.2f}, "
+                         f"hang {NET_HANG:.2f} m)")
+    # The budget. Observations of the lob cannot start until the stroke is over
+    # and the brake with it, the fit needs 24 of them plus the 5-frame agreement
+    # gate, and what is left over is all the drones get. Against it: what the
+    # caps need to close the gap, horizontally at the acceleration a lean of
+    # DRONE_TILT buys in level flight (and only for the part of the gap the net's
+    # own width does not cover), vertically at gravity down and thrust to arrest.
+    centre = np.array([p_net[0], p_net[1] + NET_HANG, p_net[2]])
+    dh = math.hypot(STAGE[0] - centre[0], STAGE[2] - centre[2])
+    dv = abs(STAGE[1] - centre[1])
+    a_h = 9.81 * math.tan(math.radians(DRONE_TILT))
+    a_up = DRONE_THRUST - 9.81
+    t_h = 2.0 * math.sqrt(max(dh - 0.7 * NET_HALF, 0.0) / a_h)
+    t_v = math.sqrt(2.0 * dv * (1.0 / 9.81 + 1.0 / a_up))
+    t_need = max(t_h, t_v)
+    t_avail = t_net - (NET_OBS_LAG + 29.0 / SENSOR_HZ)
+    print(f"drones:  4 quads, net {NET_SPAN:.2f} m across {NVV} particles, hanging "
+          f"{NET_HANG:.2f} m (measured); on the pad at x{DRONE_GROUND[0]:+.2f} "
+          f"z{DRONE_GROUND[2]:+.2f}, taking station at x{STAGE[0]:+.2f} "
+          f"y{STAGE[1]:.2f} on the rig's own catch")
+    print(f"         station {worst_sheet:.2f} m clear of the sheet, "
+          f"{worst_lob:.2f} m of the lob's climb; lob apex y{apex[1]:.2f} planned, "
+          f"caught at x{p_net[0]:+.2f} y{NET_Y:.2f} {t_net:.2f} s after it leaves")
+    print(f"         {dh:.2f} m across and {dv:.2f} m down to the intercept: "
+          f"{t_need:.2f} s of thrust ({a_h:.1f} m/s^2 level at {DRONE_TILT:.0f} deg "
+          f"of lean) against the {t_avail:.2f} s the fit leaves"
+          + ("" if t_need < t_avail else "   [THE CAPS ARE SHORT - expect a miss]"))
+
+
 check_props()
 check_reach()
+if DRONES:
+    check_drones()
 
 
 # ---- state --------------------------------------------------------------------
@@ -2162,7 +2876,11 @@ anchor_from = np.array(p0[anchor_idx_np], np.float64)
 anchor_to = anchor_from.copy()
 
 sim_time = 0.0
-state = "idle"                # idle -> flight -> catch -> settled / missed
+# idle -> flight -> catch -> recover -> settled / missed, and with a throw
+# -> windup -> launch -> toss -> delivered / adrift, or with drones
+# -> handoff -> netted / net_missed.
+state = "idle"
+DONE_STATES = ("settled", "missed", "delivered", "adrift", "netted", "net_missed")
 t_fire = None
 t_contact = None
 v_contact = np.zeros(3)
@@ -2182,6 +2900,23 @@ toss_rig_v = np.zeros(3)      # the rig's own peak velocity during the stroke
 toss_free = None              # first tick with no contact, pending confirmation
 toss_launch_p = None          # where the plan expected the ball to leave from
 toss_miss = None
+
+# ---- the second catch ---------------------------------------------------------
+# A fresh tracker, because the ball has to be found again from nothing. It is
+# armed by the rig's OWN launch clock (the robot knows when it threw and how long
+# its stroke is), never by anything about the ball.
+net_tracker = None
+t_net_obs = None
+net_plan = None               # (t, p, v): the fitted crossing of NET_Y
+net_first_plan = None
+net_obs_err = []
+net_bearing_err = [[], []]
+net_verdict = None
+net_miss = None               # m from the net's middle when the verdict was taken
+net_rel = None                # m/s relative to the formation at the same instant
+net_centre = np.zeros(3)
+net_low = 0.0
+drone_seen = [0, 0]           # ticks a drone projected inside a sensor's own gate
 
 
 def held(p, v):
@@ -2272,6 +3007,41 @@ def plan_toss(p_rest):
     return T, v0, sp, sp / max(TOSS_GAIN, 1e-3) <= ARM_SPEED + 1e-6
 
 
+def plan_lob(p_rest):
+    """The throw with drones: same stroke, no target point.
+
+    The basket throw solves for a v0 that lands on a bin. There is no bin here --
+    the drones go to the ball -- so the lob is planned the other way round: take
+    the fastest ball the stroke has been calibrated to deliver, point it at
+    LOB_EL, and let the arc be what it is. The rig still knows nothing about the
+    ball; the launch point is its own centre plus the rise measured at separation.
+    """
+    launch_p, v0 = lob_landmarks(p_rest)[:2]
+    a, b, c = 0.5 * G_NP[1], v0[1], launch_p[1] - NET_Y
+    disc = b * b - 4 * a * c
+    T = max((-b + math.sqrt(disc)) / (2 * a),
+            (-b - math.sqrt(disc)) / (2 * a)) if disc > 0 else v0[1] / 9.81
+    globals()['toss_launch_p'] = launch_p
+    return T, v0, LOB_SPEED, True
+
+
+def lob_pred(t):
+    """Where the rig's OWN throw plan says the ball is, for seeding the fresh
+    tracker's search window before it has a fit of its own.
+
+    This is the same class of prior as the cannon's exclusion disc: it is the
+    robot's own commanded stroke, known before the ball moves, and it is wrong by
+    however much the stroke is wrong -- which is why the window it opens is six
+    ball radii wide and why it is dropped the instant the tracker can predict for
+    itself. Without it the first lock lands on the sheet, which at that moment is
+    braking out from under the ball and is the biggest mover in both frames.
+    """
+    if toss_plan is None or t_launch is None:
+        return None
+    tau = t - (t_launch + LOB_T_REL)
+    return toss_launch_p + toss_plan[1] * tau + 0.5 * G_NP * tau * tau
+
+
 def hermite(p0, v0, p1, v1, T, t):
     """Position and velocity at time t along the cubic that leaves (p0,v0) and
     arrives at (p1,v1) after T.
@@ -2316,6 +3086,10 @@ def substep(alpha=1.0):
                               prev, anchor_tgt, lra, impulse, M_PARTICLE, 0.35])
             a, b = b, a
         wp.copy(pos, a)
+    # The net, in step with the sheet, but only while the ball could be in it.
+    # Both cloths add into `impulse`, and the one the ball is not in adds zero.
+    if DRONES and net_near[0]:
+        net_sim()
     if state != "idle":
         wp.launch(ball_finish, dim=1, device=device,
                   inputs=[bp, bv, impulse, DT, 1.0 / BALL_KG, BALL_R,
@@ -2330,6 +3104,8 @@ def step_frame():
     global t_windup, t_launch, t_toss, toss_dir, toss_cmd, toss_plan
     global toss_release, toss_miss, toss_offset, toss_rig_v, toss_free
     global plan, first_plan, frames_tracked, truth_cross, _prev_ball_y
+    global net_tracker, t_net_obs, net_plan, net_first_plan, net_verdict
+    global net_miss, net_rel, net_centre, net_low
 
     import time as _t
     _mark = _t.perf_counter()
@@ -2342,18 +3118,31 @@ def step_frame():
             _mark = now
 
     muzzle_effects(None if t_fire is None or state == "idle" else sim_time - t_fire)
-    update_aim_preview(state in ("idle", "settled", "missed", "delivered", "adrift"))
+    update_aim_preview(state in DONE_STATES or state == "idle")
 
     dt = 1.0 / SENSOR_HZ
     if EFFECTS:
         step_smoke(dt)
-    global anchor_from, anchor_to
+    global anchor_from, anchor_to, net_from, net_to
     anchor_from = anchor_to.copy()
     cmd = rig.targets()
     if arms:
         anchor_to = np.array([a.track(cmd[k], dt) for k, a in enumerate(arms)])
     else:
         anchor_to = cmd.astype(np.float64)
+    net_still = False
+    if DRONES:
+        # The drones ARE the net's four anchors, exactly as the arms are the
+        # sheet's. Same one-tick pipeline: what the formation reached last tick
+        # is where the cloth is pulled to over this one's substeps.
+        net_from = net_to.copy()
+        net_to = quad.anchors()
+        net_anchors_to(net_to)
+        # On the pad with the ball elsewhere, nothing can move the net, so
+        # nothing steps it and nothing uploads it. It is scenery until it is not.
+        net_still = quad.mode == "ground" and not net_near[0] and sim_time > 0.0
+        if not net_still and not net_near[0]:
+            net_bulk()
     for _i in range(SUBSTEPS):
         substep((_i + 1) / SUBSTEPS)
         sim_time += DT
@@ -2361,6 +3150,13 @@ def step_frame():
 
     p_true = bp.numpy()[0].astype(np.float64)
     v_true = bv.numpy()[0].astype(np.float64)
+    if DRONES:
+        # Close enough that the ball could be in the net next tick. NET_NEAR is
+        # 0.9 m against 2 cm of ball travel per tick, so the test cannot be late.
+        c = quad.p
+        net_near[0] = (abs(p_true[0] - c[0]) < NET_HALF + NET_NEAR
+                       and abs(p_true[2] - c[2]) < NET_HALF + NET_NEAR
+                       and c[1] - NET_HANG - NET_NEAR < p_true[1] < c[1] + NET_NEAR)
     contact = float(np.linalg.norm(impulse.numpy()[0])) > 0.0
     if arms:
         e = max(a.err for a in arms)
@@ -2385,6 +3181,15 @@ def step_frame():
     for k, m in enumerate(anchor_meshes):
         m.position.set(float(anchor_to[k][0]), float(anchor_to[k][1]), float(anchor_to[k][2]))
         m.visible = not arms          # the tool link IS the gripper once arms exist
+    if DRONES and not net_still:
+        wp.launch(compute_normals, dim=NVV, device=device,
+                  inputs=[netp, netnrm, NR, NR])
+        _np = netp.numpy()
+        net_geometry.update_attribute("position", _np)
+        net_geometry.update_attribute("normal", netnrm.numpy())
+        net_centre = _np[NET_CENTRE_I].astype(np.float64)
+        net_low = float(_np[:, 1].min())
+        place_drones()
     _lap("mesh upload")
 
     # --- render, then read both sensors --------------------------------------
@@ -2416,7 +3221,14 @@ def step_frame():
                 # for the recoil and the birth of the smoke.
                 r = (FLASH_MASK_R if sim_time - t_fire < FLASH_S + 2.0 / SENSOR_HZ
                      else MUZZLE_MASK_R)
-                s.mask = (uv[0], uv[1], s.f * r / depth)
+                s.mask = [(uv[0], uv[1], s.f * r / depth)]
+        if DRONES and quad.mode != "ground" and state in ("launch", "toss", "handoff"):
+            s.mask = []
+            for c in quad.corners():
+                uv = s.project(c)
+                if uv is not None:
+                    depth = max(float(np.dot(c - s.eye, s.fwd)), 0.05)
+                    s.mask.append((uv[0], uv[1], s.f * DRONE_MASK_R / depth))
 
     blind = plan is not None and plan[0] - sim_time < 0.08
     if state == "flight" and not blind:
@@ -2443,6 +3255,60 @@ def step_frame():
                 plan = hit
                 if first_plan is None:
                     first_plan = (sim_time, hit)
+
+    # --- the second catch: the same two cameras, a tracker that knows nothing --
+    # The trigger is the rig's own launch clock, not the ball: the stroke takes
+    # TOSS_STROKE and the brake takes TOSS_BRAKE, so the robot knows when it has
+    # let go without being told where the ball went. Everything after that is the
+    # phase-1 pipeline again -- difference, densest cell, two bearings, midpoint,
+    # ballistic fit -- on an object it has never seen.
+    if DRONES and t_net_obs is not None and sim_time >= t_net_obs:
+        if net_tracker is None:
+            for s in sensors:
+                s.gate, s.last_px, s.prev = None, None, None
+            net_tracker = StereoTracker(sensors)
+        # Stop just before the net arrives, for the reason the first catch stops
+        # just before the sheet does: two overlapping movers, one blob.
+        near = net_plan is not None and net_plan[0] - sim_time < 0.06
+        if quad.mode in ("stage", "intercept") and not near \
+                and sim_time < quad.deadline:
+            if ORACLE:
+                net_tracker.obs.append((sim_time, p_true[0], p_true[1], p_true[2]))
+            else:
+                if net_tracker.fit is None:
+                    seed = lob_pred(sim_time - 0.5 / SENSOR_HZ)
+                    for s in sensors:
+                        puv = s.project(seed) if seed is not None else None
+                        if puv is not None:
+                            s.gate = (puv[0], puv[1], NET_SEED_R * s.r0)
+                est = net_tracker.observe(frames, sim_time)
+                if est is not None:
+                    net_obs_err.append(est - p_true)
+                    for k, s in enumerate(sensors):
+                        lp, tuv = s.last_px, s.project(p_true)
+                        if lp is not None and tuv is not None:
+                            net_bearing_err[k].append(math.hypot(lp[0] - tuv[0],
+                                                                 lp[1] - tuv[1]))
+                # Are the drones inside the window the detector is searching? If
+                # they are and the track survives it, the prediction gate is
+                # doing what it claims; if they are never in it, the claim is
+                # untested rather than proven.
+                for k, s in enumerate(sensors):
+                    if s.gate is None:
+                        continue
+                    gu, gv, gr = s.gate
+                    for c in quad.corners():
+                        puv = s.project(c)
+                        if puv and abs(puv[0] - gu) < gr and abs(puv[1] - gv) < gr:
+                            drone_seen[k] += 1
+                            break
+            if net_tracker.solve_fit() is not None:
+                hit = net_tracker.predict_crossing(NET_Y)
+                if hit is not None:
+                    net_plan = hit
+                    if net_first_plan is None:
+                        net_first_plan = (sim_time, hit)
+                    quad.commit(sim_time, hit)
 
     _lap("track + fit")
 
@@ -2536,6 +3402,22 @@ def step_frame():
         rig.set_tilt(0.0)
         rig.step(dt, -rig.v / dt)
 
+    if DRONES:
+        was_mode = quad.mode
+        quad.update(dt, sim_time, NET_HANG)
+        if was_mode == "intercept" and quad.mode == "absorb":
+            state = "handoff"
+        if was_mode == "hold" and quad.mode == "exit":
+            # The verdict, and it is truth: is the ball in the net, and is it
+            # travelling with the net rather than through it? Both are measured
+            # against the net's own middle -- the cloth's centre particle, where
+            # the bowl is -- not against the formation's nominal centre.
+            net_miss = math.hypot(p_true[0] - net_centre[0], p_true[2] - net_centre[2])
+            net_rel = float(np.linalg.norm(v_true - quad.v))
+            net_verdict = ("netted" if (net_miss < NET_HALF and net_rel < 0.6
+                                        and p_true[1] > 2.5 * BALL_R) else "missed")
+            state = "netted" if net_verdict == "netted" else "net_missed"
+
     if state == "flight" and contact:
         state = "catch"
         t_contact = sim_time
@@ -2547,6 +3429,11 @@ def step_frame():
         dip_depth = min(abs(ball_vy_at_contact) * ABSORB / math.pi, GIVE)
     elif state == "catch" and sim_time - t_contact > ABSORB:
         state, t_recover = "recover", sim_time
+        if DRONES:
+            # The rig has the ball and is about to carry it home and throw it.
+            # That is the drones' cue, and it is the rig's own state machine --
+            # no camera, no ball.
+            quad.launch(sim_time)
         # Everything the carry needs, fixed once at the moment it starts. The
         # rig's own pose is proprioception; the ball is not consulted.
         carry_vec = np.array([HOME[0] - rig.p[0], 0.0, HOME[1] - rig.p[2]])
@@ -2566,7 +3453,7 @@ def step_frame():
                 # Plan from the rig's own centre and commit. Everything after
                 # this is open loop against a plan made from proprioception --
                 # the tracker is not consulted, and neither is the ball.
-                T, v0, sp, ok = plan_toss(rig.p)
+                T, v0, sp, ok = (plan_lob(rig.p) if DRONES else plan_toss(rig.p))
                 toss_plan = (T, v0, sp, ok)
                 toss_dir = v0 / max(sp, 1e-9)
                 toss_cmd = min(sp / max(TOSS_GAIN, 1e-3), ARM_SPEED)
@@ -2583,9 +3470,17 @@ def step_frame():
             state = "missed"
     elif state == "windup" and sim_time - t_windup > TOSS_WINDUP:
         state, t_launch = "launch", sim_time
+        if DRONES:
+            # Arm the fresh tracker off the rig's own clock: the stroke starts
+            # now and the ball is gone LOB_T_REL into it. Nothing about the ball
+            # is consulted, and nothing about it is known yet.
+            t_net_obs = sim_time + LOB_T_REL + NET_OBS_LAG
     elif state == "launch" and sim_time - t_launch > TOSS_STROKE:
         state, t_toss = "toss", sim_time
-    elif state == "toss" and sim_time - t_toss > 0.45:
+    elif DRONES and state == "toss" and sim_time - t_toss > 2.2 \
+            and quad.mode in ("ground", "stage"):
+        state, net_verdict = "net_missed", "missed"      # never acquired
+    elif not DRONES and state == "toss" and sim_time - t_toss > 0.45:
         settled_ = float(np.linalg.norm(v_true)) < 0.35
         if settled_ or sim_time - t_toss > 2.4:
             toss_miss = math.hypot(p_true[0] - BASKET[0], p_true[2] - BASKET[1])
@@ -2692,7 +3587,13 @@ def report(p_true, v_true):
         print(f"  carry home  catch ended {toss_offset[0]:.3f} m from home, carried "
               f"back in {carry_T:.2f} s at <= {CARRY_SPEED:.2f} m/s; ball then "
               f"{toss_offset[1]:.3f} m off the point the throw was planned from")
-    if toss_plan is not None:
+    if toss_plan is not None and DRONES:
+        T, v0, sp, ok = toss_plan
+        print(f"  throw plan  lob at {LOB_EL:.0f} deg, {sp:.2f} m/s (the fastest ball "
+              f"the stroke is calibrated for), commanded {toss_cmd:.2f} (cap "
+              f"{ARM_SPEED:.1f}); planned to fall through y={NET_Y:.2f} after "
+              f"{T:.2f} s")
+    elif toss_plan is not None:
         T, v0, sp, ok = toss_plan
         print(f"  throw plan  basket at x{BASKET[0]:+.2f} z{BASKET[1]:+.2f}, "
               f"{np.linalg.norm(np.array([BASKET[0] - HOME[0], BASKET[1] - HOME[1]])):.2f} m "
@@ -2713,15 +3614,76 @@ def report(p_true, v_true):
         print(f"  release     t={tr:.3f} s (separation), rig {vg:.2f} m/s, ball {vb:.2f} m/s "
               f"({vb / max(vg, 1e-6):.2f} x the rig, gain assumed {TOSS_GAIN:.2f}), "
               f"wanted {sp:.2f} m/s at {off:.0f} deg off the planned direction")
+    if DRONES:
+        print(f"  net         {NVV} particles, {NET_SPAN:.2f} m square hanging "
+              f"{NET_HANG:.2f} m under four quads; formation flew {quad.travel:.2f} m, "
+              f"peak {quad.peak_speed:.2f} m/s (cap {DRONE_SPEED:.1f}), leaned to "
+              f"{math.degrees(quad.peak_tilt):.0f} deg (cap {DRONE_TILT:.0f})"
+              + (f", THRUST-CAPPED on {quad.thrust_capped} frames"
+                 if quad.thrust_capped else "")
+              + (f", LEAN-CAPPED on {quad.tilt_capped} frames"
+                 if quad.tilt_capped else ""))
+        for k, s in enumerate(sensors):
+            be = np.array(net_bearing_err[k])
+            if be.size:
+                print(f"  toss bear {s.name:<4s} median {np.median(be):.2f} px, "
+                      f"90th {np.percentile(be, 90):.2f} px")
+        if net_obs_err:
+            e = np.array(net_obs_err)
+            print(f"  toss obs    {len(net_tracker.obs)} observations, |err| median "
+                  f"{np.median(np.linalg.norm(e, axis=1)):.3f} m, mean "
+                  f"({e[:,0].mean():+.3f},{e[:,1].mean():+.3f},{e[:,2].mean():+.3f}) m; "
+                  f"{net_tracker.rejected} pairs rejected, drones inside the search "
+                  f"window on {drone_seen[0]}/{drone_seen[1]} ticks")
+        if net_first_plan is not None:
+            t_at, (th, ph, vh) = net_first_plan
+            print(f"  toss call   first at t={t_at:.3f} s "
+                  f"({1000 * (t_at - t_toss):.0f} ms after the stroke ended): "
+                  f"x{ph[0]:+.3f} z{ph[2]:+.3f}")
+        if net_plan is not None:
+            th, ph, vh = net_plan
+            print(f"              final x{ph[0]:+.3f} y{NET_Y:.2f} z{ph[2]:+.3f}, "
+                  f"ball there at {math.hypot(vh[0], vh[2]):.2f} m/s across, "
+                  f"{vh[1]:.2f} m/s down")
+        if quad.shortfall is not None:
+            print(f"  intercept   formation {quad.shortfall:.3f} m from the pose the "
+                  f"plan commanded when the ball arrived"
+                  + ("" if quad.shortfall < 0.25 else
+                     "  (the caps could not cover the gap)"))
+        elif DRONES and quad.mode in ("ground", "stage"):
+            print("  intercept   the drones never left the station: no fit published")
+        if net_miss is not None:
+            print(f"  net catch   ball {net_miss:.3f} m from the net's middle "
+                  f"(half-width {NET_HALF:.2f}), {net_rel:.2f} m/s relative to the "
+                  f"formation (needs < 0.60), y={net_low:.2f} at the net's low point")
+        if state == "netted":
+            d_end = math.hypot(p_true[0] - net_centre[0], p_true[2] - net_centre[2])
+            print(f"  carry off   formation ended at x{quad.p[0]:+.2f} y{quad.p[1]:.2f} "
+                  f"z{quad.p[2]:+.2f} ({quad.mode}); ball {d_end:.3f} m from the "
+                  f"net's middle at the end of the carry"
+                  + ("" if d_end < NET_HALF and p_true[1] > 2.5 * BALL_R
+                     else "   [it came out during the exit]"))
     resting = float(np.linalg.norm(v_true))
     verdict = {"settled": "CAUGHT", "missed": "MISSED", "catch": "still absorbing",
                "recover": "caught, still lifting", "windup": "caught, winding up",
                "launch": "caught, mid-throw", "toss": "thrown, still in the air",
                "delivered": "CAUGHT and DELIVERED",
                "adrift": "CAUGHT, throw missed the basket",
+               "handoff": "thrown, the drones are on it",
+               "netted": "CAUGHT and NET-CAUGHT",
+               "net_missed": "CAUGHT, MISSED-NET",
                "flight": "NEVER CONTACTED", "idle": "never fired"}.get(state, state)
     dx = math.hypot(p_true[0] - rig.p[0], p_true[2] - rig.p[2])
-    if state in ("delivered", "adrift", "toss") or toss_miss is not None:
+    if state in ("netted", "net_missed", "handoff"):
+        d = net_miss if net_miss is not None else math.hypot(
+            p_true[0] - net_centre[0], p_true[2] - net_centre[2])
+        extra = ""
+        if state == "net_missed" and in_basket(p_true):
+            extra = "   (the bin caught it instead)"
+        print(f"  RESULT      {verdict} -- ball {d:.3f} m from the net's middle "
+              f"(half-width {NET_HALF:.2f}), y={p_true[1]:.2f}, {resting:.2f} m/s"
+              + extra)
+    elif state in ("delivered", "adrift", "toss") or toss_miss is not None:
         d = (toss_miss if toss_miss is not None
              else math.hypot(p_true[0] - BASKET[0], p_true[2] - BASKET[1]))
         print(f"  RESULT      {verdict} -- ball {d:.3f} m from the basket axis "
@@ -2817,7 +3779,13 @@ if (CLIP or SEQ) and not FRAMES:
         # lift, the windup) plays at speed, so the clip does not sag.
         slowmo = FILM and (state in ("catch", "recover", "launch")
                            or (plan is not None and 0 < plan[0] - sim_time < 0.22)
-                           or (state == "toss" and sim_time - t_toss < 0.30))
+                           or (state == "toss" and sim_time - t_toss < 0.30)
+                           # and the net catch, which is the other beat the whole
+                           # thing is about: the last of the drones' approach and
+                           # the give that follows it.
+                           or (DRONES and (quad.mode == "absorb"
+                                           or (net_plan is not None
+                                               and 0 < net_plan[0] - sim_time < 0.28))))
         if FILM and sim_time < FIRE_AT - 0.35:
             keep = False
         else:
@@ -2901,7 +3869,7 @@ def pressed(k):
 def ready():
     # A quiet SHEET, and nothing about the camera: the sensors do not move, so
     # where the view camera happens to be is no longer a precondition for a shot.
-    return (state in ("idle", "settled", "missed", "delivered", "adrift")
+    return ((state in DONE_STATES or state == "idle")
             and sheet_speed < QUIET_SHEET)
 
 
@@ -2910,6 +3878,8 @@ def arm():
     resetting it is what broke this path."""
     global last_result, toss_plan, toss_release, toss_free, toss_miss
     global toss_offset, toss_launch_p, toss_rig_v, truth_cross, t_contact
+    global net_tracker, t_net_obs, net_plan, net_first_plan, net_verdict
+    global net_miss, net_rel, net_from, net_to
     bp.assign(np.array([muzzle()], np.float32))
     bv.zero_()
     rig.__init__()
@@ -2917,6 +3887,17 @@ def arm():
     toss_plan = toss_release = toss_free = toss_miss = None
     toss_offset = toss_launch_p = truth_cross = t_contact = None
     toss_rig_v = np.zeros(3)
+    net_tracker = t_net_obs = net_plan = net_first_plan = None
+    net_verdict = net_miss = net_rel = None
+    if DRONES:
+        # Back to the park, and the net back to the pose it was measured hanging
+        # in -- putting the anchors back without the cloth would snap it taut.
+        quad.__init__(DRONE_GROUND)
+        netp.assign(NET_SETTLED)
+        netprev.assign(NET_SETTLED)
+        net_from = NET_SETTLED[net_anchor_idx_np].astype(np.float64)
+        net_to = net_from.copy()
+        net_anchors_to(net_to)
     fire()
 
 
@@ -3001,11 +3982,14 @@ def animate():
     if aim_mark.visible:
         aim_mark.position.set(float(plan[1][0]), CATCH_Y, float(plan[1][2]))
 
-    _DONE = ("settled", "missed", "delivered", "adrift")
     was = state
     p_true, v_true = step_frame()      # the render both sensors are sampled from
-    if state in _DONE and was not in _DONE:
-        if state in ("delivered", "adrift"):
+    if state in DONE_STATES and was not in DONE_STATES:
+        if state in ("netted", "net_missed"):
+            last_result = ("CAUGHT + NET-CAUGHT" if state == "netted"
+                           else "CAUGHT, the net missed") + \
+                          f" - ball {net_miss or 0.0:.2f} m from the net's middle"
+        elif state in ("delivered", "adrift"):
             d = math.hypot(p_true[0] - BASKET[0], p_true[2] - BASKET[1])
             last_result = ("CAUGHT + DELIVERED" if state == "delivered"
                            else "CAUGHT, throw missed") + f" - {d:.2f} m from the basket"
