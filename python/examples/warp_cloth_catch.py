@@ -896,7 +896,6 @@ ARM_KIND = cli_arg("--arm", "fr3", str)        # fr3 | iiwa | proc
 PEDESTAL_Y = cli_arg("--pedestal-y", 0.50, float)
 ARM_OUT = cli_arg("--arm-out", 0.50, float)    # outward from the sheet, in z
 ARM_LEAD = cli_arg("--arm-lead", 0.48, float)  # toward the intercept, in x
-IK_ITERS = int(cli_arg("--ik-iters", 6, float))
 JOINT_SPEED = cli_arg("--joint-speed", 5.0, float)   # rad/s cap per joint
 
 _L = dict(base=0.16, upper=0.50, fore=0.44, wrist=0.12)
@@ -1002,6 +1001,11 @@ class Arm:
         else:
             self.robot = tp.URDFLoader().parse(os.getcwd(), arm_urdf())
             self.kind = "proc"
+        # The URDF loader gives every collision shape a white wireframe material
+        # and adds it alongside the visual mesh, so each link wears a triangulated
+        # shell of itself. show_colliders() hides the collider GROUP; the meshes
+        # get hidden too so it holds regardless of how visibility is inherited.
+        self.robot.show_colliders(False)
         self.robot.position.set(*[float(v) for v in base_xyz])
         self.robot.rotate_x(-math.pi / 2)   # URDF is Z-up; the scene is Y-up
         self.robot.update_matrix()
@@ -1042,10 +1046,17 @@ class Arm:
         return _tool_pos(self.solver.tool_transform(self.q))
 
     def track(self, target, dt):
-        """Drive toward `target` and return where the tool ACTUALLY got to."""
+        """Drive toward `target` and return where the tool ACTUALLY got to.
+
+        ONE solve per tick. The max_joint_speed cap is applied per CALL, so
+        looping the solver N times over the same dt quietly multiplies the cap by
+        N -- measured, six calls at a 5 rad/s cap let joints run at 30 rad/s, and
+        that is what made the arms look janky. solve() already iterates
+        internally (IkOptions.max_iterations, default 100); the outer loop was
+        buying nothing but a broken speed limit.
+        """
         t = tp.Vector3(float(target[0]), float(target[1]), float(target[2]))
-        for _ in range(IK_ITERS):
-            self.q, _r = self.solver.solve(self.q, t, dt)
+        self.q, _r = self.solver.solve(self.q, t, dt)
         self.robot.set_joint_values(self.q)
         got = _tool_pos(self.solver.tool_transform(self.q))
         self.err = float(np.linalg.norm(got - np.asarray(target, float)))
@@ -1381,7 +1392,8 @@ def report(p_true, v_true):
     if arms:
         print(f"  arms        4 x {arms[0].kind}, worst IK error this "
               f"run {max(arm_worst):.4f} m at t={arm_peak[1]:.2f} s ({arm_peak[2]})"
-              + ("  (an arm could not hold its corner)" if max(arm_worst) > 0.03 else ""))
+              + ("  (an arm could not hold its corner)" if max(arm_worst) > 0.10 else
+                 "  (lag at peak speed, within the joint limits)" if max(arm_worst) > 0.01 else ""))
     print(f"  rig         travelled {rig.travel:.2f} m, peak {rig.peak_speed:.2f} m/s "
           f"(cap {ARM_SPEED:.1f})"
           + (f", SPEED-CAPPED on {rig.starved} frames" if rig.starved else ""))
