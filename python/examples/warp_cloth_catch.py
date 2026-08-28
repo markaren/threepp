@@ -142,6 +142,27 @@ Three things make this work, and each of them is a measurement, not a guess:
     arm error, so it has never been caught, and it now says so on the first line
     of the run instead of on the last.
 
+  * THE ARMS CAN BE EXECUTED BY DYNAMICS, not posed. --physics-arms loads the
+    same FR3 file a second time as a PhysX reduced-coordinate articulation, one
+    per arm, all four in one world with self-collision on and colliders for the
+    floor and the pedestals. IK still plans the corner; the plan becomes the
+    joints' PD drive targets, PhysX steps twice per sensor tick, and the
+    ACHIEVED joint vector is what the visual robot and the cloth anchor get. A
+    position-only PD in force mode carries a velocity lag of D*qd/K, which at
+    3 rad/s was 0.3 rad and 0.14 m of tool error, so the plan's own joint
+    velocity is fed forward through the position target (target + (D/K)*qd).
+    That cancels the lag term and leaves the inertial residual: the drives hold
+    the IK plan to 1.3 mm mean and 12 mm peak through the whole run, and every
+    catch verdict is unchanged. Commanded to do something impossible -- two arms
+    sent to the same point in the air -- the kinematic pair close to 1 mm and
+    occupy the same metre, while the simulated pair stop 29 mm apart and hold
+    there with 13 and 16 mm of standing drive error. It is opt-in because the
+    BASKET throw is not a tracking task but a whip: TOSS_GAIN was calibrated
+    against a stroke with no execution error in it, and the same command
+    executed by drives releases at 0.97x the rig instead of 1.06x, which turns
+    --no-drones from DELIVERED into a throw that sails past the bin. The drone
+    path, which is the default, is unaffected.
+
 The range around all this is procedural and static: a painted concrete pad with
 a hazard ring on the catch zone and a lane out of the cannon, a backstop, crates
 and drums, four lamp poles and a pennant line. The markings live on their OWN
@@ -179,7 +200,9 @@ In the window the cannon carries its aim visibly and draws the arc the shot will
 actually take, with a ring where it crosses the catch plane. That preview is
 ground truth and is the PLAYER's aid -- it is hidden the instant the shot leaves,
 so it can never be confused with, or leak into, what the tracker has to work out
-for itself. Watching the tracker's cyan reticle converge onto that amber ring is
+for itself. In a headless run it does not come back at all once the shot is
+away: it exists to aim the NEXT one, and a clip has no next one, so all it did
+there was paint an amber arc over the closing seconds of the film. Watching the tracker's cyan reticle converge onto that amber ring is
 the whole perception story in one picture.
 
     python warp_cloth_catch.py                      # window; A/D aim, W/S elevate,
@@ -197,6 +220,8 @@ the whole perception story in one picture.
     python warp_cloth_catch.py --no-toss            # catch only, no throw
     python warp_cloth_catch.py --no-effects         # no flash, smoke or recoil, so the
                                                     # sensor pollution can be A/B'd
+    python warp_cloth_catch.py --physics-arms       # arms executed by PhysX drives
+                                                    # instead of posed by IK
 
 In the window the amber crossing ring turns RED when the shot is outside the
 arms' measured envelope, so an impossible shot is visible before it is fired
@@ -2370,6 +2395,44 @@ JOINT_SPEED = cli_arg("--joint-speed", 5.0, float)   # rad/s cap per joint
 # converges there to 0.0000 m.
 ARM_TOOL_REACH = cli_arg("--arm-tool-reach", 1.00, float)
 
+# --physics-arms SIMULATES the arms instead of posing them. IK still plans the
+# corner; the plan becomes per-joint PD drive targets on a PhysX
+# reduced-coordinate articulation, PhysX steps, and the achieved joint state is
+# what the visual robot and the cloth anchor get. That buys the thing
+# set_joint_values could never say no to: an arm cannot pass through its own
+# pedestal, through the floor, or through the arm opposite it.
+#
+# It is OPT-IN, and the reason is measured, not cautious. The drives track the IK
+# plan to 1.3-1.8 mm mean and 12-24 mm peak through the 4.5 m/s corner sweep, and
+# every catch verdict is unchanged. But the BASKET THROW is not a tracking task,
+# it is a whip: the ball separates on the brake, and TOSS_GAIN (0.85, the ball
+# speed the stroke yields per m/s of rig) was calibrated against a stroke with no
+# execution error in it at all. Executed by drives the same command releases at
+# 0.97x instead of 1.06x and 5 deg off plan instead of 8, and --no-drones turns
+# from DELIVERED into a throw that sails 1.35 m past the bin. The drone path
+# (the default) is unaffected and still catches. Re-calibrating the throw against
+# the simulated stroke is the work that would make this the default.
+PHYS_ARMS = ARMS and "--physics-arms" in sys.argv and getattr(tp, "HAS_PHYSX", False)
+# Drive gains, measured on one arm against a 4.6 m/s tool sweep (probe: 0.25 m
+# amplitude at 2.9 Hz, the fastest thing the corner ever does). A pure position
+# PD in FORCE mode carries a velocity lag of D*qd/K -- at K=3000, D=300 and
+# 3 rad/s that is 0.3 rad, and it showed up as 0.14 m of tool error. Two fixes
+# were available and only one is honest: raise K until the lag is small (rings,
+# and needs gains no arm has), or tell the drive the velocity it is supposed to
+# be at. ARM_FF = D/K folds exactly that feed-forward into the position target,
+# which cancels the lag term analytically and leaves only the inertial residual:
+# 3.7 mm mean / 5.8 mm peak at 4.6 m/s, settling in 0.09 s.
+ARM_STIFF = cli_arg("--arm-stiff", 12000.0, float)   # N*m/rad
+ARM_DAMP = cli_arg("--arm-damp", 300.0, float)       # N*m*s/rad
+ARM_TORQUE = cli_arg("--arm-torque", 87.0, float)    # N*m ceiling, the FR3's own
+ARM_SUBSTEPS = max(1, int(cli_arg("--arm-substeps", 2, float)))
+ARM_FF = ARM_DAMP / max(ARM_STIFF, 1e-6)
+# The coupling is ONE-WAY: the anchors follow the simulated tool, the cloth's
+# contact impulse is not fed back onto the arms. Two-way needs an external force
+# on the tool LINK, and load_articulation returns (articulation, meshes, joint
+# names) -- no ArticulationLink handles -- so from Python there is nothing to
+# apply the force to. It is a binding gap, not a tuning one.
+
 
 def reach_limit(ux, uz):
     """How far the rig centre may travel along a horizontal unit direction
@@ -2487,6 +2550,33 @@ def _tool_pos(m):
     return a[:3, 3] if abs(a[3, 3] - 1.0) < 1e-6 else a[3, :3]
 
 
+def _arm_frame(p):
+    """Scene (Y-up) -> the articulation world (the URDF's own Z-up frame).
+
+    load_articulation takes a base POSITION but no base rotation, so the arms are
+    simulated in the frame their URDF is written in and the whole physics world
+    is tilted to match: gravity, the pedestals and the floor all go through this
+    map. Rotating the world instead of the robots keeps every relative distance
+    exactly what the scene shows, which is the only thing arm-vs-arm collision
+    cares about."""
+    return (float(p[0]), float(-p[2]), float(p[1]))
+
+
+# One world for all four arms: they have to be able to hit each other, and two
+# arms in two worlds cannot. Fixed timestep is the tick divided by ARM_SUBSTEPS
+# and max_substeps is the same number, so the accumulator is drained exactly and
+# a tick is always the same number of substeps.
+arm_world = None
+arm_static = []      # collider meshes for the floor and the pedestals (held: the
+                     # world does not keep them alive, and PhysX cooked from them)
+if PHYS_ARMS:
+    # num_threads=0 runs the solver on the calling thread: four seven-DOF arms
+    # are not enough work to pay for a task dispatcher.
+    arm_world = tp.PhysxWorld(gravity=tp.Vector3(0.0, 0.0, -9.81),
+                              fixed_timestep=1.0 / (SENSOR_HZ * ARM_SUBSTEPS),
+                              max_substeps=ARM_SUBSTEPS, num_threads=0)
+
+
 class Arm:
     def __init__(self, base_xyz, kind):
         rel = _ARM_URDFS.get(kind)
@@ -2523,12 +2613,48 @@ class Arm:
         self.solver = tp.IkSolver(self.robot, opts)
         self.q = list(opts.rest_pose) if opts.rest_pose else [0.0] * self.robot.num_dof
         self.err = 0.0
+        self.lag = 0.0
         scene.add(self.robot)
         ped = tp.Mesh(tp.CylinderGeometry(0.11, 0.13, base_xyz[1], 20),
                       standard_material(0x1b1f25, 0.7, 0.35))
         ped.position.set(float(base_xyz[0]), float(base_xyz[1]) / 2, float(base_xyz[2]))
         ped.cast_shadow = True
         scene.add(ped)
+
+        # ---- the simulated twin -------------------------------------------
+        # The SAME file, loaded a second time as a PhysX articulation. Its own
+        # collider meshes are never rendered (render_visuals=False, and they are
+        # not added to the scene): the visual robot above is still what you see,
+        # driven by the achieved joint vector. self_collision puts the link hulls
+        # against each other; the pedestal and floor colliders below put them
+        # against the world.
+        # The collider meshes must be HELD even though nothing draws them: each
+        # one is bound to its link, and letting the list fall out of scope leaves
+        # the world syncing a binding whose target is gone -- which surfaces as
+        # "bad function call" out of the first step(), not as anything about
+        # meshes.
+        self.art = None
+        self.ndof = 0
+        self.colliders = []
+        if arm_world is not None and path and os.path.isfile(path):
+            try:
+                self.art, self.colliders, self.joint_names = arm_world.load_articulation(
+                    path, fixed_base=True, base_position=list(_arm_frame(base_xyz)),
+                    stiffness=ARM_STIFF, damping=ARM_DAMP, max_force=ARM_TORQUE,
+                    self_collision=True, solver_position_iterations=16,
+                    render_visuals=False)
+                self.ndof = int(self.art.joint_positions().size)
+            except Exception as exc:                       # noqa: BLE001
+                print(f"arms: could not build the articulation ({exc}); "
+                      "falling back to kinematic")
+                self.art = None
+        if self.art is not None and self.ndof != self.robot.num_dof:
+            # The drive vector and the IK vector have to be the same joints in
+            # the same order. They come from one parser, so this should not
+            # happen -- but a silent mismatch would drive joint k from joint j.
+            print(f"arms: articulation has {self.ndof} dof against the kinematic "
+                  f"model's {self.robot.num_dof}; falling back to kinematic")
+            self.art = None
 
     def settle(self, target):
         """Converge onto a corner with the speed cap OFF, once, before the run.
@@ -2541,10 +2667,20 @@ class Arm:
         for _ in range(300):
             self.q, _r = self.solver.solve(self.q, t, 0.0)
         self.robot.set_joint_values(self.q)
+        self.err = float(np.linalg.norm(_tool_pos(self.solver.tool_transform(self.q))
+                                        - np.asarray(target, float)))
+        if self.art is not None:
+            # Teleport the simulated twin onto the same pose (which also zeroes
+            # its velocities) and point the drives at it. Without this the
+            # articulation starts folded at q=0 while the visual arm is already
+            # holding a corner, and the first tick is a 2 rad lunge.
+            q = np.asarray(self.q, np.float32)
+            self.art.set_joint_positions(q)
+            self.art.set_drive_targets(q)
         return _tool_pos(self.solver.tool_transform(self.q))
 
-    def track(self, target, dt):
-        """Drive toward `target` and return where the tool ACTUALLY got to.
+    def plan(self, target, dt):
+        """Solve the corner and hand the joint vector to the drives.
 
         ONE solve per tick. The max_joint_speed cap is applied per CALL, so
         looping the solver N times over the same dt quietly multiplies the cap by
@@ -2552,13 +2688,49 @@ class Arm:
         that is what made the arms look janky. solve() already iterates
         internally (IkOptions.max_iterations, default 100); the outer loop was
         buying nothing but a broken speed limit.
+
+        The IK state stays the PLAN, never the achieved pose: re-seeding the
+        solver from where the drives got to would fold the execution error back
+        into the command, and then there is no plan left to measure against.
         """
         t = tp.Vector3(float(target[0]), float(target[1]), float(target[2]))
+        prev = np.asarray(self.q, np.float64)
         self.q, _r = self.solver.solve(self.q, t, dt)
-        self.robot.set_joint_values(self.q)
-        got = _tool_pos(self.solver.tool_transform(self.q))
+        if self.art is None:
+            self.robot.set_joint_values(self.q)
+            return
+        q = np.asarray(self.q, np.float64)
+        self.art.set_drive_targets((q + ARM_FF * (q - prev) / max(dt, 1e-9)).astype(np.float32))
+
+    def achieved(self, target):
+        """Where the tool ACTUALLY got to, and the two errors that describes.
+
+        `err` is against the commanded corner (IK reach plus execution, which is
+        what the sheet feels); `lag` is against the IK plan alone, which is the
+        drives' own tracking error and the number the gains were tuned on."""
+        if self.art is not None:
+            self.q_ach = [float(v) for v in self.art.joint_positions()]
+        else:
+            self.q_ach = list(self.q)
+        self.robot.set_joint_values(self.q_ach)
+        got = _tool_pos(self.solver.tool_transform(self.q_ach))
         self.err = float(np.linalg.norm(got - np.asarray(target, float)))
+        self.lag = (0.0 if self.art is None else
+                    float(np.linalg.norm(got - _tool_pos(self.solver.tool_transform(self.q)))))
         return got
+
+
+def arms_track(cmd, dt):
+    """One tick of the whole rig: IK plans, PhysX executes, the arms report.
+
+    The four articulations share one world and are stepped together, so an arm
+    swinging into its neighbour is resolved as a contact between them rather than
+    two robots quietly occupying the same metre of air."""
+    for k, a in enumerate(arms):
+        a.plan(cmd[k], dt)
+    if arm_world is not None:
+        arm_world.step(dt)
+    return np.array([a.achieved(cmd[k]) for k, a in enumerate(arms)])
 
 
 arms = []
@@ -2591,13 +2763,52 @@ if ARMS:
         _a0.q = _q
         _a0.settle(_home[0])
         ARM_TOOL_REACH = _best
+    if arm_world is not None and any(a.art is not None for a in arms):
+        # The world the arms cannot pass through. The floor is where the scene's
+        # floor is and each pedestal is a box the size of its cylinder, stopped
+        # 4 cm short of the base flange so a fixed root link is not born in
+        # contact with it. Everything goes through _arm_frame, so "0.70 m up" is
+        # 0.70 m along the articulation world's z.
+        _fl = tp.Mesh(tp.BoxGeometry(40.0, 40.0, 1.0), standard_material(0x202020, 0.9, 0.0))
+        _fl.position.set(0.0, 0.0, -0.5)
+        _fl.update_matrix_world()
+        arm_static.append(_fl)
+        arm_world.add_static(_fl)
+        for _a in arms:
+            _b = _a.robot.position
+            _h = max(PEDESTAL_Y - 0.04, 0.05)
+            _pm = tp.Mesh(tp.BoxGeometry(0.24, 0.24, _h),
+                          standard_material(0x202020, 0.9, 0.0))
+            _pm.position.set(*_arm_frame((_b.x, _h / 2, _b.z)))
+            _pm.update_matrix_world()
+            arm_static.append(_pm)
+            arm_world.add_static(_pm)
+
+        # The articulations hold a reference to the world but nothing keeps the
+        # world alive for them, and at interpreter shutdown the order is not
+        # ours to pick -- a world released first takes its articulations' actors
+        # with it and the process dies on the way out (measured: exit code 5).
+        # Release them here, while both still exist.
+        import atexit
+
+        @atexit.register
+        def _release_arms():
+            for _a in arms:
+                _a.art = None
+
     _kind = arms[0].kind
+    _phys = sum(1 for a in arms if a.art is not None)
     print(f"arms: 4 x {_kind} ({arms[0].robot.num_dof} dof, tool "
           f"{arms[0].robot.end_effector_link}), pedestals at {PEDESTAL_Y:.2f} m, "
           f"settled onto the corners to {max(a.err for a in arms):.4f} m, tool "
           f"reach measured at {ARM_TOOL_REACH:.2f} m"
           + ("   [threepp_data not found - procedural fallback]"
              if _kind == "proc" and ARM_KIND != "proc" else ""))
+    print(f"      {'simulated' if _phys == 4 else 'kinematic'}: "
+          + (f"{_phys} PhysX articulations, drives K={ARM_STIFF:.0f} D={ARM_DAMP:.0f} "
+             f"(feed-forward {ARM_FF:.4f} s), {ARM_TORQUE:.0f} N*m ceiling, "
+             f"{ARM_SUBSTEPS} substeps/tick, self-collision on"
+             if _phys else "IK poses the joints directly (--physics-arms simulates them)"))
 
 
 # ---- attaching the sensors ----------------------------------------------------
@@ -2935,6 +3146,7 @@ frames_tracked = 0
 _prev_ball_y = None
 obs_err = []
 arm_worst = [0.0]
+arm_lag = [0.0]
 arm_peak = [0.0, 0.0, 'idle']
 bearing_err = [[], []]      # per sensor, in pixels
 contact_miss = [0.0]        # how far off centre the ball first touched the sheet
@@ -3118,7 +3330,12 @@ def step_frame():
             _mark = now
 
     muzzle_effects(None if t_fire is None or state == "idle" else sim_time - t_fire)
-    update_aim_preview(state in DONE_STATES or state == "idle")
+    # The amber arc and hit ring are the INTERACTIVE re-aim aid: they come back
+    # when a run reaches a terminal state so the next shot can be aimed. A
+    # headless clip has no next shot, so all they did was paint the last seconds
+    # of the film with a preview of a shot nobody was going to take.
+    update_aim_preview((state in DONE_STATES or state == "idle")
+                       and not (HEADLESS and t_fire is not None))
 
     dt = 1.0 / SENSOR_HZ
     if EFFECTS:
@@ -3127,7 +3344,7 @@ def step_frame():
     anchor_from = anchor_to.copy()
     cmd = rig.targets()
     if arms:
-        anchor_to = np.array([a.track(cmd[k], dt) for k, a in enumerate(arms)])
+        anchor_to = arms_track(cmd, dt)
     else:
         anchor_to = cmd.astype(np.float64)
     net_still = False
@@ -3161,6 +3378,7 @@ def step_frame():
     if arms:
         e = max(a.err for a in arms)
         arm_worst.append(e)
+        arm_lag.append(max(a.lag for a in arms))
         if e > arm_peak[0]:
             arm_peak[:] = [e, sim_time, state]
     _lap("readback")
@@ -3568,10 +3786,18 @@ def report(p_true, v_true):
                   f"err {np.linalg.norm(ph - tp_):.3f} m, timing err "
                   f"{1000 * (th - tt):+.0f} ms")
     if arms:
-        print(f"  arms        4 x {arms[0].kind}, worst IK error this "
+        _sim = arms[0].art is not None
+        print(f"  arms        4 x {arms[0].kind}"
+              + (" (PhysX drives)" if _sim else " (kinematic)")
+              + f", worst corner error this "
               f"run {max(arm_worst):.4f} m at t={arm_peak[1]:.2f} s ({arm_peak[2]})"
               + ("  (an arm could not hold its corner)" if max(arm_worst) > 0.10 else
                  "  (lag at peak speed, within the joint limits)" if max(arm_worst) > 0.01 else ""))
+        if _sim:
+            _l = np.array(arm_lag)
+            print(f"              achieved vs planned tool pose: mean {_l.mean():.4f} m, "
+                  f"peak {_l.max():.4f} m over {len(_l)} ticks "
+                  f"(K={ARM_STIFF:.0f} D={ARM_DAMP:.0f}, {ARM_TORQUE:.0f} N*m)")
     print(f"  rig         travelled {rig.travel:.2f} m, peak {rig.peak_speed:.2f} m/s "
           f"(cap {ARM_SPEED:.1f})"
           + (f", SPEED-CAPPED on {rig.starved} frames" if rig.starved else "")
