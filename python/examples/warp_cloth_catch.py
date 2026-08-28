@@ -47,6 +47,40 @@ Three things make this work, and each of them is a measurement, not a guess:
     the track sharpens. That constraint is also what makes it look like four
     things cooperating rather than four things moving.
 
+  * AND THEN IT THROWS THE BALL BACK, into a basket 1.35 m away. The stroke is
+    planned without looking at the ball at all: the launch point is the rig's
+    OWN centre, which it knows from its four tool frames, and v0 comes out of
+    (B - p - g T^2 / 2) / T solved for the cheapest T the arms can deliver.
+    Then the sheet is pulled taut, dipped 15 cm along -v0, driven along +v0 to
+    the commanded speed and braked. Nothing touches the ball: it rides the same
+    contact and friction that caught it, and leaves when the impulse stops.
+
+    A trampoline is not a hand, and the measured transfer says so. At a 3.7 m/s
+    stroke the ball leaves at 1.14 times the anchors' own speed, because the
+    long-range attachment snaps taut at the top and slings it; at 2.9 m/s it
+    leaves at 1.05; the first throw ever attempted was commanded at 4.15 m/s,
+    gave the ball 6.40 m/s and put it 6.6 m past the basket. So the one number
+    the throw is calibrated on is that ratio, and it is a measurement of the
+    rig's own actuator rather than anything read off the ball. The verdict is
+    truth, and only the verdict: DELIVERED if the ball comes to rest in the bin,
+    and the miss distance either way.
+
+The range around all this is procedural and static: a painted concrete pad with
+a hazard ring on the catch zone and a lane out of the cannon, a backstop, crates
+and drums, four lamp poles and a pennant line. Firing is a flash, a puff of 60
+smoke particles and 6 cm of recoil, and all three are things the SENSORS SEE.
+The flash was the expensive one: a point light throws a pool of changing
+brightness metres wide across the floor, the detector locked onto it, and the
+first crossing call came out 0.99 m wrong. Two things fix that, and neither is
+a special case for the ball. The flash is over in five sensor ticks, before the
+tracker's first accepted observation. And a disc around the cannon's own
+projected position is excluded from the difference for the first 0.35 s: the rig
+knows where its own gun is, the disc never moves and never follows the target,
+and at 0.75 m the ball is out of it 15 ms after leaving the barrel. Lighting the
+range for dusk also cost the detector two thirds of its observations at the old
+threshold of 16 luma, so the threshold is 9 now: same bearing medians, 248
+observations instead of 59.
+
 The sensors are bolted to tripods you can see, and the view camera is now free:
 orbit it during flight, fire from anywhere, it changes nothing the tracker sees.
 Secondary views also run no overlay pass, so the aim arc, the reticles and ImGui
@@ -68,9 +102,13 @@ the whole perception story in one picture.
     python warp_cloth_catch.py --az -12 --el 58 --speed 7.0
     python warp_cloth_catch.py --oracle             # ground truth instead of the sensors,
                                                     # to separate tracking error from control
+    python warp_cloth_catch.py --no-toss            # catch only, no throw
+    python warp_cloth_catch.py --no-effects         # no flash, smoke or recoil, so the
+                                                    # sensor pollution can be A/B'd
 
-Prints the predicted intercept against where the ball actually crossed, so the
-perception can be judged separately from the catch.
+Prints the predicted intercept against where the ball actually crossed, and the
+throw's commanded speed against what the ball actually left with, so perception,
+catch and throw can each be judged separately.
 """
 import math
 import os
@@ -126,6 +164,49 @@ RECOVER = cli_arg("--recover", 0.55, float)      # s to lift back to the ready h
 PRESENT = cli_arg("--present", 0.75, float)      # how taut to pull on recovery, in
                                                  # units of the slack (1 = dead flat)
 
+# ---- the throw ----------------------------------------------------------------
+# The basket sits 1.39 m from rig home, off the far shoulder. Both offsets are
+# measured rather than chosen: at x +1.35 it stood 0.95 m from where the az -12
+# el 58 7.0 m/s shot crosses, and that shot then bounced off its rim and was
+# reported MISSED, so it moved back and left until the nearest crossing of the
+# whole aim envelope is 1.4 m away. It is also not straight behind the rig,
+# where it started: a bin directly behind the cloth read, in the shot camera,
+# as something the arms were holding. Rim at 0.95 m against a rig home of 1.10,
+# so the throw is a short lob rather than a punt.
+BASKET = np.array([float(x) for x in cli_arg("--basket", "0.85,-1.35", str).split(",")])
+BASKET_R = cli_arg("--basket-r", 0.40, float)     # inner radius of the bin
+BASKET_RIM = cli_arg("--basket-rim", 0.95, float)
+BASKET_FLOOR = BASKET_RIM - 0.42
+TOSS = "--no-toss" not in sys.argv
+# The stroke is bounded by the same arm that does the catching: ARM_SPEED is a
+# hard cap on the rig centre, so anything the solve asks for above this is a
+# throw the rig cannot make and is reported as such rather than faked.
+TOSS_VMAX = cli_arg("--toss-vmax", 0.93 * ARM_SPEED, float)
+TOSS_DIP = cli_arg("--toss-dip", 0.15, float)     # m of windup along -v0
+TOSS_WINDUP = cli_arg("--toss-windup", 0.26, float)
+TOSS_STROKE = cli_arg("--toss-stroke", 0.17, float)   # s of acceleration
+TOSS_BRAKE = cli_arg("--toss-brake", 0.10, float)     # s to stop after release
+TOSS_SPREAD = cli_arg("--toss-spread", 0.92, float)   # taut, but not dead flat:
+                                                      # a flat sheet has no bowl
+                                                      # to hold the ball during
+                                                      # the windup
+# What the ball leaves with, as a multiple of the rig's own commanded speed --
+# a calibration of the rig's actuator, measured open loop over the stroke rather
+# than read off the ball in flight. It is not a constant, because a trampoline
+# is not a hand: measured 1.05x at a 2.9 m/s stroke, 1.14x at 3.7 m/s and 1.54x
+# at 4.15 m/s, since the long-range attachment snaps taut at the top of a hard
+# stroke and slings the ball out faster than the anchors ever move. 0.95 is the
+# working point that puts the default shot in the bin; the first throw the rig
+# ever made assumed 0.80, was commanded at 4.15 and went 6.6 m past the basket.
+TOSS_GAIN = cli_arg("--toss-gain", 0.95, float)
+# The flattest throw the planner may choose. Left free, the solve takes the
+# cheapest T it can find and asks for 2.70 m/s, which is below the speed at
+# which the sheet slings at all: measured, the ball then left with 0.80 of the
+# rig's own speed and fell 0.72 m short. Above 0.60 s the plan lands in the
+# range the gain above was calibrated over, and it also looks like a throw
+# rather than a shove.
+TOSS_T_MIN = cli_arg("--toss-t-min", 0.60, float)
+
 # ---- the sheet ---------------------------------------------------------------
 N = int(cli_arg("--res", 48, float))
 CLOTH = cli_arg("--cloth", 1.50, float)
@@ -147,11 +228,12 @@ ITERS = int(cli_arg("--iters", 32, float))
 SUBSTEPS = max(1, int(round(SUBSTEP_HZ / SENSOR_HZ)))
 DT = 1.0 / (SENSOR_HZ * SUBSTEPS)
 CLIP_FPS = 60.0
-# Long enough for the whole beat: settle, flight, absorb, recover, and the
-# window after it that decides CAUGHT against MISSED. At 3.0 s the run stopped
-# mid-lift and reported "still lifting", which is not a verdict; the extra
-# 1.2 s costs 0.06 ms/tick of the average, measured.
-SECONDS = cli_arg("--seconds", 4.2, float)
+# Long enough for the whole beat: settle, flight, absorb, recover, the window
+# that decides CAUGHT against MISSED, and then the throw -- windup, stroke,
+# ~0.6 s of second flight and the ball coming to rest in the basket. At 3.0 s
+# the run stopped mid-lift and reported "still lifting", which is not a verdict;
+# the extra seconds cost 0.06 ms/tick of the average, measured.
+SECONDS = cli_arg("--seconds", 4.2 if "--no-toss" in sys.argv else 6.4, float)
 DAMPING = cli_arg("--damping", 0.010, float)
 
 # Each sensor is a secondary view rendered at exactly this size, so unlike the
@@ -164,10 +246,18 @@ SENSOR_W, SENSOR_H = parse_size(cli_arg("--sensor", "320x240", str))
 SENSOR_FOV = cli_arg("--sensor-fov", 45.0, float)
 # 4:3, to match the sensors. It is also the better aspect for a social clip.
 VIEW_W, VIEW_H = parse_size(cli_arg("--size", "1280x960" if FILM else "960x720", str))
-# Frame differencing threshold, in 0-255 luma. The ball is a bright textured
-# sphere on a dark floor, so its disc clears this by a wide margin while TAA
-# shimmer and the shadow edges do not.
-DIFF_THRESHOLD = cli_arg("--diff-threshold", 16.0, float)
+# Frame differencing threshold, in 0-255 luma. The ball moves ~0.5 px per tick
+# at 240 Hz, so what clears this is not the disc but the disc's TEXTURE sliding
+# across the pixels under it -- which means the threshold is really a statement
+# about local contrast, and local contrast is set by the lighting.
+#
+# It used to be 16, against a near-black floor and a single hard sun. Lighting
+# the range for dusk (a warm sun, a cool fill, four lamp poles) lifted the mid
+# tones and cost the detector two thirds of its observations at 16: 59 tracked
+# frames against 146. At 9 the same scene gives 248, with the bearing medians
+# and the stereo gap unchanged or better, so this is a threshold that was tuned
+# for a different scene rather than a floor imposed by noise.
+DIFF_THRESHOLD = cli_arg("--diff-threshold", 9.0, float)
 # Render is ~65% of the loop, so this is the lever that matters. The worry was
 # that it would cost accuracy -- the detector samples the post-TAA frame, so a
 # lower scale softens the edges it fires on -- but measured across 0.5..1.0 the
@@ -326,12 +416,59 @@ def ball_predict(bp: wp.array(dtype=wp.vec3), bv: wp.array(dtype=wp.vec3),
 @wp.kernel
 def ball_finish(bp: wp.array(dtype=wp.vec3), bv: wp.array(dtype=wp.vec3),
                 impulse: wp.array(dtype=wp.vec3), h: float, inv_bm: float,
-                radius: float):
+                radius: float,
+                bk_x: float, bk_z: float, bk_floor: float, bk_rim: float,
+                bk_r: float):
     v = bv[0] + GRAVITY * h - impulse[0] * (inv_bm / h)
     p = bp[0] + v * h
     if p[1] < radius:
         p = wp.vec3(p[0], radius, p[2])
         v = wp.vec3(v[0] * 0.6, wp.abs(v[1]) * 0.3, v[2] * 0.6)
+
+    # The basket is a real collider, not a scoring region: an open cylinder
+    # (wall, floor, rim ring) the ball can enter, rattle in, or bounce off the
+    # lip of. A throw that clips the rim has to be allowed to fail visibly,
+    # which a "was it inside the radius" test would quietly hide.
+    dx = p[0] - bk_x
+    dz = p[2] - bk_z
+    d = wp.sqrt(dx * dx + dz * dz)
+    ux = float(1.0)
+    uz = float(0.0)
+    if d > 1.0e-6:
+        ux = dx / d
+        uz = dz / d
+    if p[1] < bk_rim:
+        if d < bk_r:                              # inside: wall and floor
+            if d > bk_r - radius:
+                p = wp.vec3(bk_x + ux * (bk_r - radius), p[1], bk_z + uz * (bk_r - radius))
+                vr = v[0] * ux + v[2] * uz
+                if vr > 0.0:
+                    v = wp.vec3(v[0] - 1.4 * vr * ux, v[1], v[2] - 1.4 * vr * uz)
+            if p[1] < bk_floor + radius:
+                p = wp.vec3(p[0], bk_floor + radius, p[2])
+                v = wp.vec3(v[0] * 0.55, wp.abs(v[1]) * 0.22, v[2] * 0.55)
+        elif d < bk_r + radius:                   # outside the wall
+            p = wp.vec3(bk_x + ux * (bk_r + radius), p[1], bk_z + uz * (bk_r + radius))
+            vr = v[0] * ux + v[2] * uz
+            if vr < 0.0:
+                v = wp.vec3(v[0] - 1.4 * vr * ux, v[1], v[2] - 1.4 * vr * uz)
+    else:
+        # The lip itself, as a circle: this is what makes a rim-out look like
+        # a rim-out instead of a ball passing through a hole.
+        cx = bk_x + ux * bk_r
+        cz = bk_z + uz * bk_r
+        ex = p[0] - cx
+        ey = p[1] - bk_rim
+        ez = p[2] - cz
+        el = wp.sqrt(ex * ex + ey * ey + ez * ez)
+        if el < radius and el > 1.0e-6:
+            nx = ex / el
+            ny = ey / el
+            nz = ez / el
+            p = wp.vec3(cx + nx * radius, bk_rim + ny * radius, cz + nz * radius)
+            vn = v[0] * nx + v[1] * ny + v[2] * nz
+            if vn < 0.0:
+                v = wp.vec3(v[0] - 1.5 * vn * nx, v[1] - 1.5 * vn * ny, v[2] - 1.5 * vn * nz)
     bv[0] = v
     bp[0] = p
 
@@ -497,6 +634,25 @@ STEREO_GAP = cli_arg("--stereo-gap", 0.12, float)
 # a real manoeuvre would survive it, tight enough that a lock on the cloth
 # cannot.
 OBS_GATE = cli_arg("--obs-gate", 0.35, float)
+# The cannon's own exclusion disc, in metres of world radius around the TRUNNION
+# (not the muzzle): centred there it covers the carriage, the wheels and the
+# flash, and because the ball starts 0.62 m out along the barrel it leaves the
+# disc 58 ms after firing at 6.5 m/s -- so masking the gun costs almost nothing
+# of the early track. Held for 0.30 s, which is past the recoil and past the
+# point where the smoke is still bright enough to out-vote a ball.
+MUZZLE_MASK_R = cli_arg("--mask-r", 0.75, float)
+MUZZLE_MASK_S = cli_arg("--mask-s", 0.35, float)
+# The flash is a different problem from the gun. A PointLight puts a pool of
+# changing brightness on the ground several metres wide, and no disc that covers
+# it can avoid also covering the ball -- the ball flies out THROUGH the pool.
+# Measured: with an 80 ms flash the detector spent its first 20 frames locked on
+# the lit floor 1.2 m below the shot and the first crossing call came out 0.99 m
+# wrong. So the flash is short instead: it is over in five sensor ticks, which
+# is before the ball has cleared the barrel and before the tracker's first
+# accepted observation (21 ms, measured), and for exactly those ticks the mask
+# widens to cover the whole lit pool. Nothing is lost, because there was nothing
+# to see yet.
+FLASH_MASK_R = cli_arg("--flash-mask-r", 3.0, float)
 
 
 def basis_of(eye, target):
@@ -531,6 +687,7 @@ class Sensor:
         self.handle = 0
         self.prev = None          # last frame's luma, for the difference
         self.gate = None          # (u, v, half-width) to search inside
+        self.mask = None          # (u, v, r) to ignore entirely: the cannon
         self.last_px = None       # (u, v, r_rms, n) of the last accepted blob
         self.rejected = 0
         # The cell size and the starting search radius are in PIXELS, so they
@@ -579,6 +736,18 @@ class Sensor:
         """
         if xy is None or xy.shape[0] < MIN_PIXELS:
             return None
+        if self.mask is not None:
+            # The rig knows where its own cannon is. Flash, smoke and a recoiling
+            # carriage are all change, and for the first fraction of a second
+            # they are far more change than the ball -- so a disc around the
+            # gun's own projected position is excluded. This is a prior about the
+            # ROBOT, not about the ball: it is the same disc whether a shot has
+            # been fired or not, it never moves with the target, and the ball is
+            # outside it within ~60 ms of leaving the barrel.
+            mu, mv, mr = self.mask
+            xy = xy[(xy[:, 0] - mu) ** 2 + (xy[:, 1] - mv) ** 2 > mr * mr]
+            if xy.shape[0] < MIN_PIXELS:
+                return None
         if self.gate is not None:
             gu, gv, gr = self.gate
             keep = (np.abs(xy[:, 0] - gu) < gr) & (np.abs(xy[:, 1] - gv) < gr)
@@ -774,7 +943,10 @@ canvas = tp.Canvas("threepp - cloth catch", width=VIEW_W, height=VIEW_H,
 renderer = tp.VulkanRenderer(canvas, 1 if TUNE else 3)
 
 scene = tp.Scene()
-scene.background = 0x0a0d11
+# Dusk, not void. The range is lit by a low warm sun and four lamp poles, and a
+# near-black sky made every silhouette read as a cut-out; this is the tone the
+# analytic lights sit against.
+scene.background = 0x1b2634
 
 # The SHOT camera, and nothing else. It no longer feeds any sensor, so it may
 # be orbited freely, mid-flight and all -- which is the point of moving the
@@ -795,24 +967,233 @@ camera.look_at(*TGT)
 
 sensors = [Sensor(name, eye, SENSOR_TARGET) for name, eye in SENSOR_POSES]
 
-scene.add(tp.HemisphereLight(0xffffff, 0x1a1e24, 0.55))
-sun = tp.DirectionalLight(0xffffff, 3.2)
-sun.position.set(3.5, 7.0, 4.0)
+scene.add(tp.HemisphereLight(0xbfd2ea, 0x1a1e24, 0.50))
+sun = tp.DirectionalLight(0xffd9b0, 3.0)            # low and warm: late afternoon
+sun.position.set(3.5, 5.2, 4.0)
 sun.cast_shadow = True
+# The default ortho frustum is a metre wide, so the backstop was half in shadow
+# and half in full sun with a hard vertical seam across it. 11 m covers the pad,
+# the wall and the props.
+sun.set_shadow_frustum(-8.0, 8.0, 8.0, -8.0)
 scene.add(sun)
+# White arms on a dark floor lose their silhouette under a single lamp, and with
+# GI off there is nothing to fill the shadow side back in. This one costs
+# 0.05 ms/tick, measured, so it is no longer a film-only luxury.
+_fill = tp.DirectionalLight(0x9fb6d8, 0.9)          # cool fill from the shadow side
+_fill.position.set(-5.0, 2.5, 2.0)
+scene.add(_fill)
 if FILM:
-    # White arms on a dark floor lose their silhouette under a single lamp.
-    _fill = tp.DirectionalLight(0x9fb6d8, 0.9)      # cool fill from the shadow side
-    _fill.position.set(-5.0, 2.5, 2.0)
-    scene.add(_fill)
     _rim = tp.DirectionalLight(0xffd7a8, 1.7)       # warm rim, from behind
     _rim.position.set(-1.5, 3.0, -6.0)
     scene.add(_rim)
 
-ground = tp.Mesh(tp.PlaneGeometry(40, 40), standard_material(0x24282e, 0.95))
+# ---- the range ----------------------------------------------------------------
+# A place rather than a void, and procedural rather than downloaded: one baked
+# ground texture, a backstop, some crates, four lamp poles and the basket. All of
+# it is STATIC, which is the only reason it is affordable -- nothing here moves,
+# so nothing here costs a per-frame update, and (measured) it also puts nothing
+# into the frame difference the detector reads.
+
+GROUND_M = 40.0                       # metres the ground plane spans
+GROUND_PX = 1536                      # 26 mm per texel, enough for painted lines
+
+
+def _cyl_between(a, b, radius, mat):
+    """A cylinder spanning a -> b. The geometry's axis is +y, and a look_at is
+    degenerate for a near-vertical leg, so the orientation goes in as Euler
+    angles: XYZ order applies Ry*Rz to (0,1,0), giving
+    (-sin t cos p, cos t, sin t sin p) for tilt t from vertical, azimuth p."""
+    d = np.asarray(b, float) - np.asarray(a, float)
+    length = float(np.linalg.norm(d))
+    if length < 1e-6:
+        return None
+    d /= length
+    tilt = math.acos(max(-1.0, min(1.0, d[1])))
+    sin_t = math.sqrt(max(1.0 - d[1] * d[1], 1e-12))
+    mesh = tp.Mesh(tp.CylinderGeometry(radius, radius, length, 10), mat)
+    mesh.rotation.set(0.0, math.atan2(d[2] / sin_t, -d[0] / sin_t), tilt)
+    mid = 0.5 * (np.asarray(a, float) + np.asarray(b, float))
+    mesh.position.set(*[float(v) for v in mid])
+    mesh.cast_shadow = True
+    return mesh
+
+
+def _bilinear_up(a, s):
+    """Bilinear upsample of a square array to s x s, in numpy alone."""
+    c = a.shape[0]
+    idx = (np.arange(s) + 0.5) * c / s - 0.5
+    i0 = np.floor(idx).astype(np.int64)
+    f = (idx - i0).astype(np.float32)
+    lo, hi = np.clip(i0, 0, c - 1), np.clip(i0 + 1, 0, c - 1)
+    b = a[lo, :] * (1.0 - f)[:, None] + a[hi, :] * f[:, None]
+    return b[:, lo] * (1.0 - f)[None, :] + b[:, hi] * f[None, :]
+
+
+def _range_texture(s=GROUND_PX, w=GROUND_M):
+    """Asphalt, a lighter concrete pad, a hazard ring around the catch zone and
+    a firing lane out from the cannon -- painted in WORLD coordinates, so the
+    ring really is centred on the rig and the lane really does point down the
+    barrel. The plane's uv runs +u along +x and +v along -z once it is laid
+    flat, which is what these two axes encode."""
+    rng = np.random.default_rng(7)
+    xs = ((np.arange(s) + 0.5) / s - 0.5) * w
+    X, Z = np.meshgrid(xs, -xs)
+    n = (0.55 * _bilinear_up(rng.random((24, 24)).astype(np.float32), s)
+         + 0.30 * _bilinear_up(rng.random((96, 96)).astype(np.float32), s)
+         + 0.15 * rng.random((s, s)).astype(np.float32))
+    img = np.empty((s, s, 3), np.float32)
+    img[:] = np.array([0.128, 0.140, 0.156]) * (0.72 + 0.56 * n)[:, :, None]
+    pad = (np.abs(X - 0.2) < 5.4) & (Z > -3.05) & (Z < 5.0)
+    img[pad] = (np.array([0.208, 0.212, 0.213])
+                * (0.80 + 0.40 * n[pad])[:, None])
+    # Expansion joints, so the pad reads as poured slabs and not as a decal.
+    joint = pad & ((np.abs(((X - 0.2 + 1.35) % 2.7) - 1.35) < 0.016)
+                   | (np.abs(((Z + 1.35) % 2.7) - 1.35) < 0.016))
+    img[joint] *= 0.62
+
+    def paint(mask, rgb, strength=1.0):
+        wear = strength * (0.55 + 0.45 * n[mask])
+        img[mask] = img[mask] * (1.0 - wear)[:, None] + np.array(rgb) * wear[:, None]
+
+    # Firing lane: two solid edges and a dashed centre, from behind the cannon
+    # to the near edge of the hazard ring.
+    lane = (X > CANNON[0] - 1.1) & (X < HOME[0] - 1.9) & (np.abs(Z) < 0.62)
+    paint(lane & (np.abs(np.abs(Z) - 0.60) < 0.045), (0.80, 0.80, 0.78), 0.85)
+    paint(lane & (np.abs(Z) < 0.045) & (((X + 40.0) % 0.72) < 0.42),
+          (0.80, 0.80, 0.78), 0.85)
+    # Hazard ring: a yellow annulus around the catch zone, chevroned in black.
+    rr = np.hypot(X - HOME[0], Z - HOME[1])
+    ring = (rr > 1.52) & (rr < 1.78)
+    paint(ring, (0.86, 0.66, 0.10), 0.9)
+    theta = np.arctan2(Z - HOME[1], X - HOME[0])
+    paint(ring & (((theta + math.pi) % 0.32) < 0.16), (0.06, 0.06, 0.07), 0.9)
+    # And a plain circle under the basket, so the target is marked on the floor
+    # as well as standing on a post.
+    br = np.hypot(X - BASKET[0], Z - BASKET[1])
+    paint((br > 0.52) & (br < 0.60), (0.75, 0.76, 0.78), 0.8)
+    return (np.clip(img, 0.0, 1.0) * 255.0).astype(np.uint8)
+
+
+_ground_mat = standard_material(0xffffff, 0.95)
+_ground_mat.map = tp.data_texture(_range_texture(), True)
+ground = tp.Mesh(tp.PlaneGeometry(GROUND_M, GROUND_M), _ground_mat)
 ground.rotate_x(-math.pi / 2)
 ground.receive_shadow = True
 scene.add(ground)
+
+
+def _box(size, pos, mat, ry=0.0):
+    m = tp.Mesh(tp.BoxGeometry(*size), mat)
+    m.position.set(*[float(v) for v in pos])
+    if ry:
+        m.rotate_y(ry)
+    m.cast_shadow = True
+    m.receive_shadow = True
+    scene.add(m)
+    return m
+
+
+# Backstop: what a range puts behind the thing it is throwing at. It also gives
+# the sensors a flat, still background behind the catch zone instead of 40 m of
+# empty floor, which the frame difference is measurably happier with.
+_panel = standard_material(0x353b44, 0.85, 0.05)
+_frame_mat = standard_material(0x1a1d22, 0.7, 0.35)
+for _i in range(7):
+    _cx = -6.3 + _i * 2.1
+    # The panels do not RECEIVE shadow: the sun's ortho shadow camera has to
+    # cover the whole pad, and at that texel density the wall self-shadowed in
+    # one hard-edged patch that read as a white sheet hung on it. Nothing casts
+    # onto the wall from the front anyway, so this costs nothing real.
+    _box((2.0, 2.45, 0.09), (_cx, 1.225, -3.20), _panel).receive_shadow = False
+    _box((0.14, 2.75, 0.16), (_cx - 1.05, 1.375, -3.24), _frame_mat).cast_shadow = False
+_box((14.9, 0.16, 0.26), (0.0, 2.52, -3.22), _frame_mat).cast_shadow = False
+_box((14.9, 0.22, 0.34), (0.0, 0.11, -3.22), _frame_mat).cast_shadow = False
+
+# Crates and drums, kept off to the sides and behind: nothing may stand between
+# a sensor and the arc, and the coverage check does not test occlusion.
+_crate = standard_material(0x6a5433, 0.9)
+_crate2 = standard_material(0x4e5a48, 0.9)
+_drum = standard_material(0x9c3d2a, 0.6, 0.25)
+for _p, _s, _m, _r in (((-4.55, 0.35, -2.35), (0.70, 0.70, 0.70), _crate, 0.22),
+                       ((-4.30, 0.95, -2.30), (0.52, 0.52, 0.52), _crate2, -0.35),
+                       ((-5.20, 0.28, -1.55), (0.56, 0.56, 0.56), _crate2, 0.51),
+                       ((4.70, 0.35, -2.20), (0.70, 0.70, 0.70), _crate, -0.18),
+                       ((4.95, 0.95, -2.24), (0.50, 0.50, 0.50), _crate, 0.40),
+                       ((5.55, 0.30, 1.10), (0.60, 0.60, 0.60), _crate2, 0.12)):
+    _box(_s, _p, _m, _r)
+for _x, _z in ((-5.75, -2.55), (-5.75, -1.90), (5.90, -2.50)):
+    _d = tp.Mesh(tp.CylinderGeometry(0.29, 0.29, 0.88, 16), _drum)
+    _d.position.set(_x, 0.44, _z)
+    _d.cast_shadow = True
+    scene.add(_d)
+
+# Lamp poles. With GI off an emissive surface lights nothing, so each pole
+# carries its own small PointLight -- four cheap analytic lights that put a warm
+# pool on the pad and give the dusk sky something to be dusk against.
+_pole_mat = standard_material(0x2a2f36, 0.6, 0.5)
+_lamp_mat = standard_material(0x201d18, 0.5, 0.2,
+                             emissive=0xffc98a, emissive_intensity=1.2)
+for _x, _z in ((-5.0, 3.6), (5.2, 3.6), (-5.0, -2.9), (5.2, -2.9)):
+    _p = tp.Mesh(tp.CylinderGeometry(0.055, 0.075, 3.30, 12), _pole_mat)
+    _p.position.set(_x, 1.65, _z)
+    _p.cast_shadow = True
+    scene.add(_p)
+    _head = tp.Mesh(tp.CylinderGeometry(0.20, 0.12, 0.16, 14), _lamp_mat)
+    _head.position.set(_x, 3.32, _z)
+    scene.add(_head)
+    _lp = tp.PointLight(0xffc98a, 4.0, 12.0, 2.0)
+    _lp.position.set(_x, 3.24, _z)
+    scene.add(_lp)
+
+# A pennant line between the two poles at the BACK, sagging as a cable does.
+# Not the camera-side pair, which is where it started: those poles stand 0.6 m
+# in front of the shot camera and both sensors, so a 20 cm flag covered a third
+# of every frame and read as a sheet hung on the backstop.
+_cable_mat = standard_material(0x14171b, 0.8, 0.2)
+_FLAGS = (0xd8532c, 0xe6b13a, 0xdfe3e8)
+_a, _b = np.array([-5.0, 3.24, -2.9]), np.array([5.2, 3.24, -2.9])
+_prev_pt = None
+for _k in range(13):
+    _u = _k / 12.0
+    _pt = _a + (_b - _a) * _u + np.array([0.0, -0.85 * 4.0 * _u * (1.0 - _u), 0.0])
+    if _prev_pt is not None:
+        _seg = _cyl_between(_prev_pt, _pt, 0.010, _cable_mat)
+        if _seg is not None:
+            _seg.cast_shadow = False
+            scene.add(_seg)
+        _f = tp.Mesh(tp.PlaneGeometry(0.20, 0.26),
+                     standard_material(_FLAGS[_k % 3], 0.9, 0.0, side=tp.Side.Double))
+        _f.position.set(*[float(v) for v in 0.5 * (_prev_pt + _pt) - np.array([0, 0.15, 0])])
+        _f.rotate_y(0.30 * math.sin(_k * 2.1))
+        scene.add(_f)
+    _prev_pt = _pt
+
+# The basket: a bin on a post, and the target of the throw. Its collider is in
+# ball_finish -- an open cylinder with a rim ring -- so a throw that catches the
+# lip rattles out instead of scoring.
+_bin_mat = standard_material(0x8d9299, 0.55, 0.55, side=tp.Side.Double)
+_bin = tp.Mesh(tp.CylinderGeometry(BASKET_R, BASKET_R * 0.82,
+                                   BASKET_RIM - BASKET_FLOOR, 28, 1, True), _bin_mat)
+_bin.position.set(float(BASKET[0]), 0.5 * (BASKET_RIM + BASKET_FLOOR), float(BASKET[1]))
+_bin.cast_shadow = True
+scene.add(_bin)
+_bin_floor = tp.Mesh(tp.CylinderGeometry(BASKET_R * 0.82, BASKET_R * 0.82, 0.03, 28),
+                     standard_material(0x2c3138, 0.8))
+_bin_floor.position.set(float(BASKET[0]), BASKET_FLOOR, float(BASKET[1]))
+scene.add(_bin_floor)
+_rim_ring = tp.Mesh(tp.TorusGeometry(BASKET_R, 0.028, 8, 30),
+                    standard_material(0xe4b23a, 0.4, 0.7))
+_rim_ring.rotate_x(math.pi / 2)
+_rim_ring.position.set(float(BASKET[0]), BASKET_RIM, float(BASKET[1]))
+_rim_ring.cast_shadow = True
+scene.add(_rim_ring)
+_post = tp.Mesh(tp.CylinderGeometry(0.055, 0.07, BASKET_FLOOR, 14), _pole_mat)
+_post.position.set(float(BASKET[0]), 0.5 * BASKET_FLOOR, float(BASKET[1]))
+_post.cast_shadow = True
+scene.add(_post)
+_foot = tp.Mesh(tp.CylinderGeometry(0.30, 0.34, 0.05, 18), _frame_mat)
+_foot.position.set(float(BASKET[0]), 0.025, float(BASKET[1]))
+scene.add(_foot)
 
 geometry = tp.PlaneGeometry(CLOTH, CLOTH, N, N)
 cloth_mesh = tp.Mesh(geometry, standard_material(0xd4542e, 0.88, side=tp.Side.Double))
@@ -849,26 +1230,6 @@ for _ in range(4):
 # its actual look direction. They are in shot and they can see each other, which
 # is what a two-camera capture rig looks like; more usefully, the measurement
 # geometry is now something you can point at instead of a constant in a comment.
-
-def _cyl_between(a, b, radius, mat):
-    """A cylinder spanning a -> b. The geometry's axis is +y, and a look_at is
-    degenerate for a near-vertical leg, so the orientation goes in as Euler
-    angles: XYZ order applies Ry*Rz to (0,1,0), giving
-    (-sin t cos p, cos t, sin t sin p) for tilt t from vertical, azimuth p."""
-    d = np.asarray(b, float) - np.asarray(a, float)
-    length = float(np.linalg.norm(d))
-    if length < 1e-6:
-        return None
-    d /= length
-    tilt = math.acos(max(-1.0, min(1.0, d[1])))
-    sin_t = math.sqrt(max(1.0 - d[1] * d[1], 1e-12))
-    mesh = tp.Mesh(tp.CylinderGeometry(radius, radius, length, 10), mat)
-    mesh.rotation.set(0.0, math.atan2(d[2] / sin_t, -d[0] / sin_t), tilt)
-    mid = 0.5 * (np.asarray(a, float) + np.asarray(b, float))
-    mesh.position.set(*[float(v) for v in mid])
-    mesh.cast_shadow = True
-    return mesh
-
 
 def build_sensor_rig(sensor):
     metal = standard_material(0x2b3038, 0.55, 0.45)
@@ -983,9 +1344,128 @@ def muzzle():
     return CANNON + aim_dir() * BARREL_L
 
 
-def point_barrel():
+def point_barrel(recoil=0.0):
     barrel_pivot.rotation.set(0.0, -math.radians(aim["az"]),
-                              math.radians(aim["el"]) - math.pi / 2)
+                              math.radians(aim["el"] + RECOIL_DEG * recoil) - math.pi / 2)
+
+
+# ---- what firing looks like ---------------------------------------------------
+# A flash, a puff and a recoil, and all three of them are things the sensors can
+# see. That is the point: the detector is frame differencing, so the cannon
+# announcing itself is a real pollution source and has to be handled rather than
+# rendered somewhere the sensors are not looking.
+RECOIL_M = cli_arg("--recoil", 0.06, float)       # m the carriage rides back
+RECOIL_DEG = cli_arg("--recoil-deg", 4.0, float)  # degrees the barrel rocks up
+RECOIL_TAU = 0.048                                # s to the peak; back down by ~0.20
+FLASH_S = cli_arg("--flash", 0.030, float)        # s the point light lasts: five
+                                                  # sensor ticks, one clip frame
+EFFECTS = "--no-effects" not in sys.argv
+
+# The flash is a child of the barrel pivot, so it rides the aim and the recoil
+# without any of its own maths. Emissive rather than a light source, because
+# with GI and ReSTIR off (the default path) emissive geometry lights nothing --
+# the PointLight below is what actually reaches the carriage and the smoke.
+flash_mat = standard_material(0x100a04, 0.4, 0.0,
+                              emissive=0xffcf8c, emissive_intensity=0.0)
+flash = tp.Mesh(tp.CylinderGeometry(0.235, 0.030, 0.34, 18), flash_mat)
+flash.position.set(0.0, BARREL_L + 0.14, 0.0)
+flash.visible = False
+barrel_pivot.add(flash)
+flash_light = tp.PointLight(0xffb066, 0.0, 4.0, 2.0)
+scene.add(flash_light)
+
+# ONE ParticleField, capacity 256, host-owned: the puff is 60 particles whose
+# whole life is 12 lines of numpy, so the GPU never has to know it is a
+# simulation. HostRing with stable slots means slot i is the same particle every
+# frame, which is what lets the radius grow with age.
+SMOKE_N = 60
+SMOKE_CAP = 256
+_smoke_cfg = tp.ParticleField.Config()
+_smoke_cfg.capacity = SMOKE_CAP
+_smoke_cfg.ownership = tp.ParticleField.Ownership.HostRing
+_smoke_cfg.w_semantic = tp.ParticleField.WSemantic.Radius
+_smoke_cfg.uniform_radius = 0.08
+_smoke_cfg.host_stable_slots = True
+smoke = tp.ParticleField.create(_smoke_cfg)
+smoke.set_billboard_repr(tp.Color(0x8e959e), tp.Color(0x30353c), 1.0, 1.0)
+_sb = smoke.billboard_repr
+_sb.alpha_over = True            # smoke OCCLUDES; additive smoke is a firework
+_sb.opacity = 0.22
+_sb.lit = True                   # lit by the scene's own sun, so the puff sits
+_sb.lit_phase_g = 0.30           # in the same light as the gun that made it
+_sb.lit_ambient = 0.16
+_sb.softness = 1.0
+_sb.fade_power = 1.7
+_sb.bright_jitter = 0.30
+_sb.glow = 0.0
+smoke.set_live_count(0)
+scene.add(smoke)
+
+_smoke_p = np.zeros((SMOKE_CAP, 3))
+_smoke_v = np.zeros((SMOKE_CAP, 3))
+_smoke_age = np.full(SMOKE_CAP, 1e9)
+_smoke_life = np.ones(SMOKE_CAP)
+_smoke_r0 = np.full(SMOKE_CAP, 0.05)
+_smoke_buf = np.zeros((SMOKE_CAP, 4), np.float32)
+_smoke_rng = np.random.default_rng(11)
+_smoke_live = [False]
+_SMOKE_BUOY = np.array([0.0, 0.62, 0.0])
+
+
+def puff(at, direction):
+    """Sixty particles out of the bore, slow and spreading."""
+    n = SMOKE_N
+    _smoke_p[:n] = at + 0.05 * _smoke_rng.normal(0.0, 1.0, (n, 3))
+    _smoke_v[:n] = (direction * _smoke_rng.uniform(0.35, 1.30, n)[:, None]
+                    + 0.30 * _smoke_rng.normal(0.0, 1.0, (n, 3)))
+    _smoke_age[:n] = 0.0
+    _smoke_life[:n] = _smoke_rng.uniform(0.9, 1.8, n)
+    _smoke_r0[:n] = _smoke_rng.uniform(0.045, 0.085, n)
+    _smoke_live[0] = True
+
+
+def step_smoke(dt):
+    """Buoyant, heavily damped, growing with age. Deliberately slow and soft:
+    a fast bright puff is a second mover in both sensor frames and the densest
+    -cell seed would happily lock onto it."""
+    if not _smoke_live[0]:
+        return
+    _smoke_age[:] += dt
+    alive = _smoke_age < _smoke_life
+    if not alive.any():
+        _smoke_live[0] = False
+        smoke.set_live_count(0)
+        return
+    _smoke_v[:] += (_SMOKE_BUOY - 2.3 * _smoke_v) * dt
+    _smoke_p[:] += _smoke_v * dt
+    f = np.clip(_smoke_age / np.maximum(_smoke_life, 1e-3), 0.0, 1.0)
+    _smoke_buf[:, :3] = _smoke_p
+    _smoke_buf[:, 3] = np.where(alive, _smoke_r0 * (1.0 + 2.4 * f), -1.0)
+    smoke.submit(_smoke_buf, dt)
+
+
+def muzzle_effects(t):
+    """Flash, light and recoil as functions of seconds since the shot. `t` is
+    None outside a shot, which parks everything."""
+    if t is None or not EFFECTS:
+        flash.visible = False
+        flash_light.intensity = 0.0
+        point_barrel()
+        cannon.position.set(*[float(x) for x in CANNON])
+        return
+    # Impulse response of a recoil spring: out fast, back with no overshoot.
+    s = (t / RECOIL_TAU) * math.exp(1.0 - t / RECOIL_TAU) if t >= 0.0 else 0.0
+    point_barrel(s)
+    back = aim_dir()
+    back = np.array([back[0], 0.0, back[2]])
+    back /= max(float(np.linalg.norm(back)), 1e-9)
+    cannon.position.set(*[float(x) for x in CANNON - back * (RECOIL_M * s)])
+    flash.visible = 0.0 <= t < FLASH_S
+    if flash.visible:
+        flash_mat.emissive_intensity = 38.0 * (1.0 - t / FLASH_S)
+    flash_light.intensity = 70.0 * math.exp(-t / (FLASH_S / 2.2)) if flash.visible else 0.0
+    if flash_light.intensity > 0.0:
+        flash_light.position.set(*[float(x) for x in muzzle() + aim_dir() * 0.12])
 
 
 point_barrel()
@@ -1351,6 +1831,12 @@ v_contact = np.zeros(3)
 ball_vy_at_contact = 0.0
 t_recover = None
 dip_depth = 0.0
+t_windup = t_launch = t_toss = None
+toss_dir = np.array([0.0, 1.0, 0.0])
+toss_cmd = 0.0                # m/s the rig is commanded to reach
+toss_plan = None              # (T, v0, |v0|, reachable) of the solved throw
+toss_release = None           # truth at release, for the report only
+toss_miss = None
 
 
 def held(p, v):
@@ -1371,6 +1857,7 @@ obs_err = []
 arm_worst = [0.0]
 arm_peak = [0.0, 0.0, 'idle']
 bearing_err = [[], []]      # per sensor, in pixels
+contact_miss = [0.0]        # how far off centre the ball first touched the sheet
 
 
 def fire():
@@ -1389,6 +1876,51 @@ def fire():
     frames_tracked, plan, first_plan = 0, None, None
     globals()['approach'] = None
     t_fire, state = sim_time, "flight"
+    if EFFECTS:
+        puff(muzzle() + aim_dir() * 0.06, aim_dir())
+
+
+def in_basket(p):
+    """Is the ball in the bin? Inside the inner radius and between the bin floor
+    and a little above the rim -- the same cylinder the collider uses."""
+    return (math.hypot(p[0] - BASKET[0], p[2] - BASKET[1]) < BASKET_R
+            and BASKET_FLOOR - 0.02 < p[1] < BASKET_RIM + 0.12)
+
+
+def plan_toss(p_rest):
+    """Solve the throw WITHOUT looking at the ball.
+
+    The launch point is the rig's own centre, which is proprioception rather
+    than vision: the rig knows where its four tool frames are, the sheet's
+    middle is the average of them, and the ball demonstrably settles there
+    (measured 0.19 m off centre on the default shot, and that residual offset is
+    an honest error source in the throw, not something to be looked up).
+
+    v0 = (B - p - g T^2 / 2) / T is solved for every T at or above TOSS_T_MIN
+    and the CHEAPEST one is taken, because the rig's speed cap is the binding
+    constraint at one end -- and the sheet is the binding constraint at the
+    other, which is why the search does not simply start at zero. The release
+    point moves with the stroke, so this runs three times, feeding its own
+    answer back in.
+    """
+    target = np.array([BASKET[0], BASKET_RIM + 0.05, BASKET[1]])
+    launch_p = np.asarray(p_rest, float).copy()
+    T, v0, sp = 0.7, np.zeros(3), 0.0
+    for _ in range(3):
+        best = None
+        for T_ in np.arange(TOSS_T_MIN, 1.20, 0.01):
+            vv = (target - launch_p - 0.5 * G_NP * T_ * T_) / T_
+            s_ = float(np.linalg.norm(vv))
+            if best is None or s_ < best[1]:
+                best = (T_, s_, vv)
+        T, sp, v0 = best
+        cmd = min(sp / max(TOSS_GAIN, 1e-3), ARM_SPEED)
+        # Where the ball is when it leaves: the windup carries the rig back
+        # along -v0, the stroke carries it forward again, and the sheet lets go
+        # at the top of the stroke.
+        reach = cmd * TOSS_STROKE * (2.0 / math.pi) - TOSS_DIP
+        launch_p = np.asarray(p_rest, float) + (v0 / max(sp, 1e-9)) * reach
+    return T, v0, sp, sp / max(TOSS_GAIN, 1e-3) <= ARM_SPEED + 1e-6
 
 
 def hermite(p0, v0, p1, v1, T, t):
@@ -1437,13 +1969,17 @@ def substep(alpha=1.0):
         wp.copy(pos, a)
     if state != "idle":
         wp.launch(ball_finish, dim=1, device=device,
-                  inputs=[bp, bv, impulse, DT, 1.0 / BALL_KG, BALL_R])
+                  inputs=[bp, bv, impulse, DT, 1.0 / BALL_KG, BALL_R,
+                          float(BASKET[0]), float(BASKET[1]), BASKET_FLOOR,
+                          BASKET_RIM, BASKET_R])
 
 
 def step_frame():
     """Sim, render, read the sensor, re-plan, move the rig. One sensor tick."""
     global sim_time, state, t_contact, v_contact, ball_vy_at_contact
     global t_recover, dip_depth
+    global t_windup, t_launch, t_toss, toss_dir, toss_cmd, toss_plan
+    global toss_release, toss_miss
     global plan, first_plan, frames_tracked, truth_cross, _prev_ball_y
 
     import time as _t
@@ -1456,10 +1992,12 @@ def step_frame():
             prof[name] = prof.get(name, 0.0) + (now - _mark) * 1000.0
             _mark = now
 
-    point_barrel()
-    update_aim_preview(state in ("idle", "settled", "missed"))
+    muzzle_effects(None if t_fire is None or state == "idle" else sim_time - t_fire)
+    update_aim_preview(state in ("idle", "settled", "missed", "delivered", "adrift"))
 
     dt = 1.0 / SENSOR_HZ
+    if EFFECTS:
+        step_smoke(dt)
     global anchor_from, anchor_to
     anchor_from = anchor_to.copy()
     cmd = rig.targets()
@@ -1516,6 +2054,21 @@ def step_frame():
     # the tail frames put the bearing 80-95 px out at the 90th percentile and
     # dragged the fitted arc 0.36 m low. Nothing is lost by dropping them: by
     # then the plan is 200 observations old and the rig is already committed.
+    # The cannon's exclusion disc, projected per sensor. Its world radius is
+    # fixed, so the pixel radius is just f * R / depth -- and both are constants
+    # of the rig, not of the shot.
+    for s in sensors:
+        s.mask = None
+        if EFFECTS and state == "flight" and sim_time - t_fire < MUZZLE_MASK_S:
+            uv = s.project(CANNON)
+            if uv is not None:
+                depth = max(float(np.dot(CANNON - s.eye, s.fwd)), 0.05)
+                # Wide while the flash is lighting the floor, tight afterwards
+                # for the recoil and the birth of the smoke.
+                r = (FLASH_MASK_R if sim_time - t_fire < FLASH_S + 2.0 / SENSOR_HZ
+                     else MUZZLE_MASK_R)
+                s.mask = (uv[0], uv[1], s.f * r / depth)
+
     blind = plan is not None and plan[0] - sim_time < 0.08
     if state == "flight" and not blind:
         if ORACLE:
@@ -1572,6 +2125,39 @@ def step_frame():
         v_des[1] = dip_depth * (math.pi / RECOVER) * 0.5 * math.sin(math.pi * u)
         rig.spread = PRESENT * 0.5 * (1.0 - math.cos(math.pi * u))
         rig.step(dt, (v_des - rig.v) / dt)
+    elif state == "windup":
+        # Pull the sheet taut and drop the rig back along -v0. The sine profile
+        # integrates to exactly TOSS_DIP and ends at zero velocity, so the
+        # stroke starts from rest rather than from whatever the dip left behind.
+        u = min((sim_time - t_windup) / TOSS_WINDUP, 1.0)
+        rig.spread = PRESENT + (TOSS_SPREAD - PRESENT) * 0.5 * (1.0 - math.cos(math.pi * u))
+        v_des = -toss_dir * TOSS_DIP * (math.pi / TOSS_WINDUP) * 0.5 * math.sin(math.pi * u)
+        rig.step(dt, (v_des - rig.v) / dt)
+    elif state == "launch":
+        # Accelerate along v0 and arrive at the commanded speed exactly at the
+        # end of the stroke. Nothing is done to the ball: it is carried by the
+        # sheet and leaves when the contact impulse stops, which is the same
+        # contact model that caught it.
+        u = min((sim_time - t_launch) / TOSS_STROKE, 1.0)
+        rig.step(dt, (toss_dir * toss_cmd * math.sin(0.5 * math.pi * u) - rig.v) / dt)
+    elif state == "toss":
+        u = min((sim_time - t_toss) / TOSS_BRAKE, 1.0)
+        if u < 1.0:
+            rig.step(dt, (toss_dir * toss_cmd * (1.0 - u) - rig.v) / dt)
+        else:
+            # Get the sheet out from under the ball. The rig ends the stroke
+            # high, moving at nearly the ball's own speed, and if it just stops
+            # there the ball falls straight back into it -- measured, the first
+            # throws that reached the right speed still ended with the ball at
+            # rest in the sheet at y=1.31. Withdrawing to the ready pose is the
+            # follow-through, and it is what makes the throw a throw.
+            home3 = np.array([HOME[0], CATCH_Y, HOME[1]])
+            v_des = (home3 - rig.p) * 3.0
+            sp_ = float(np.linalg.norm(v_des))
+            if sp_ > 2.2:
+                v_des *= 2.2 / sp_
+            rig.spread = max(rig.spread - 2.0 * dt, 0.0)
+            rig.step(dt, (v_des - rig.v) / dt)
     else:
         rig.step(dt, -rig.v / dt)
 
@@ -1579,6 +2165,7 @@ def step_frame():
         state = "catch"
         t_contact = sim_time
         v_contact = np.array([rig.v[0], 0.0, rig.v[2]])
+        contact_miss[0] = math.hypot(p_true[0] - rig.p[0], p_true[2] - rig.p[2])
         ball_vy_at_contact = float(v_true[1])
         # Give the ball room proportional to how hard it arrived, up to the
         # stroke the arms actually have.
@@ -1595,9 +2182,32 @@ def step_frame():
         # the floor or out the side fails the height and distance tests
         # permanently, so waiting cannot rescue one.
         if held(p_true, v_true):
-            state = "settled"
+            if TOSS:
+                # Plan from the rig's own centre and commit. Everything after
+                # this is open loop against a plan made from proprioception --
+                # the tracker is not consulted, and neither is the ball.
+                T, v0, sp, ok = plan_toss(rig.p)
+                toss_plan = (T, v0, sp, ok)
+                toss_dir = v0 / max(sp, 1e-9)
+                toss_cmd = min(sp / max(TOSS_GAIN, 1e-3), ARM_SPEED)
+                state, t_windup = "windup", sim_time
+            else:
+                state = "settled"
         elif sim_time - t_recover > RECOVER + 0.85:
             state = "missed"
+    elif state == "windup" and sim_time - t_windup > TOSS_WINDUP:
+        state, t_launch = "launch", sim_time
+    elif state == "launch" and sim_time - t_launch > TOSS_STROKE:
+        state, t_toss = "toss", sim_time
+        # Truth at the top of the stroke, recorded for the report alone: what
+        # the ball actually left with against what the rig was commanded to
+        # give it is the only way to see what the stroke is worth.
+        toss_release = (sim_time, p_true.copy(), v_true.copy(), rig.v.copy())
+    elif state == "toss" and sim_time - t_toss > 0.45:
+        settled_ = float(np.linalg.norm(v_true)) < 0.35
+        if settled_ or sim_time - t_toss > 2.4:
+            toss_miss = math.hypot(p_true[0] - BASKET[0], p_true[2] - BASKET[1])
+            state = "delivered" if in_basket(p_true) else "adrift"
 
     _lap("control")
     if TRACE and state != "idle":
@@ -1669,15 +2279,40 @@ def report(p_true, v_true):
           f"(cap {ARM_SPEED:.1f})"
           + (f", SPEED-CAPPED on {rig.starved} frames" if rig.starved else ""))
     if t_contact is not None:
-        miss = math.hypot(p_true[0] - rig.p[0], p_true[2] - rig.p[2])
-        print(f"  contact     t={t_contact:.3f} s, ball {miss:.3f} m from the sheet centre")
+        print(f"  contact     t={t_contact:.3f} s, ball {contact_miss[0]:.3f} m from the "
+              f"sheet centre when it first touched")
+    if toss_plan is not None:
+        T, v0, sp, ok = toss_plan
+        print(f"  throw plan  basket at x{BASKET[0]:+.2f} z{BASKET[1]:+.2f}, "
+              f"{np.linalg.norm(np.array([BASKET[0] - HOME[0], BASKET[1] - HOME[1]])):.2f} m "
+              f"from rig home; T={T:.2f} s needs {sp:.2f} m/s, "
+              f"commanded {toss_cmd:.2f} (cap {ARM_SPEED:.1f})"
+              + ("" if ok else "   [BEYOND THE STROKE - clamped]"))
+    if toss_release is not None and toss_plan is not None:
+        tr, _pr, vr, rv = toss_release
+        _, v0, sp, _ = toss_plan
+        vb, vg = float(np.linalg.norm(vr)), float(np.linalg.norm(rv))
+        cosang = float(np.dot(vr, v0)) / max(vb * sp, 1e-9)
+        off = math.degrees(math.acos(max(-1.0, min(1.0, cosang))))
+        print(f"  release     t={tr:.3f} s, rig {vg:.2f} m/s, ball {vb:.2f} m/s "
+              f"({vb / max(vg, 1e-6):.2f} x the rig, gain assumed {TOSS_GAIN:.2f}), "
+              f"wanted {sp:.2f} m/s at {off:.0f} deg off the planned direction")
     resting = float(np.linalg.norm(v_true))
     verdict = {"settled": "CAUGHT", "missed": "MISSED", "catch": "still absorbing",
-               "recover": "caught, still lifting",
+               "recover": "caught, still lifting", "windup": "caught, winding up",
+               "launch": "caught, mid-throw", "toss": "thrown, still in the air",
+               "delivered": "CAUGHT and DELIVERED",
+               "adrift": "CAUGHT, throw missed the basket",
                "flight": "NEVER CONTACTED", "idle": "never fired"}.get(state, state)
     dx = math.hypot(p_true[0] - rig.p[0], p_true[2] - rig.p[2])
-    print(f"  RESULT      {verdict} -- ball {dx:.3f} m off the sheet centre "
-          f"(half-width {0.5 * CLOTH:.2f}), y={p_true[1]:.2f}, {resting:.2f} m/s")
+    if state in ("delivered", "adrift", "toss") or toss_miss is not None:
+        d = (toss_miss if toss_miss is not None
+             else math.hypot(p_true[0] - BASKET[0], p_true[2] - BASKET[1]))
+        print(f"  RESULT      {verdict} -- ball {d:.3f} m from the basket axis "
+              f"(rim radius {BASKET_R:.2f}), y={p_true[1]:.2f}, {resting:.2f} m/s")
+    else:
+        print(f"  RESULT      {verdict} -- ball {dx:.3f} m off the sheet centre "
+              f"(half-width {0.5 * CLOTH:.2f}), y={p_true[1]:.2f}, {resting:.2f} m/s")
 
 
 # ---- run ----------------------------------------------------------------------
@@ -1686,23 +2321,40 @@ TOTAL = int(SECONDS * SENSOR_HZ)
 
 
 def show_sensor_pip(on):
-    """Picture-in-picture of both sensor feeds, bottom corners.
+    """Picture-in-picture of both sensor feeds, bottom corners. Returns the
+    framebuffer size the rects were laid out for, so the caller can notice when
+    it changes.
 
     set_view_display_rect is a single image copy inside the frame's own command
     buffer -- already resolved, already on the device, already in the
     swapchain's format -- so this costs no readback, no upload and no second
     submission. It is 1:1 ONLY: the rect must be exactly the size the view was
     added at, which is why the sensor resolution and the inset size are the same
-    number. A mismatch draws nothing rather than a filtered rescale.
+    number. A mismatch draws nothing rather than a filtered rescale, so on a
+    resize only x and y may move.
+
+    The size comes from renderer.size(), which reports the FRAMEBUFFER, not the
+    size the canvas was asked for: Canvas.size() is a request, and a window
+    manager or a display scale is free to hand back something else. Laying the
+    insets out against the requested size put them in the wrong corner on the
+    first frame, before anyone had resized anything.
     """
-    m = 18
-    for k, s in enumerate(sensors):
-        if not on:
+    if not on:
+        for s in sensors:
             renderer.hide_view(s.handle)
-            continue
-        x = m if k == 0 else VIEW_W - SENSOR_W - m
-        renderer.set_view_display_rect(s.handle, x, VIEW_H - SENSOR_H - m,
+        return None
+    w, h = renderer.size()
+    m = 18
+    if w >= 2 * SENSOR_W + 3 * m:
+        rects = [(m, h - SENSOR_H - m), (w - SENSOR_W - m, h - SENSOR_H - m)]
+    else:
+        # Too narrow for both along the bottom, so stack them up the left edge
+        # rather than let the second one slide off the right.
+        rects = [(m, h - 2 * SENSOR_H - 2 * m), (m, h - SENSOR_H - m)]
+    for s, (x, y) in zip(sensors, rects):
+        renderer.set_view_display_rect(s.handle, max(0, x), max(0, y),
                                        SENSOR_W, SENSOR_H)
+    return w, h
 
 
 if TUNE:
@@ -1744,8 +2396,12 @@ if (CLIP or SEQ) and not FRAMES:
         # runs at SENSOR_HZ and the clip plays at CLIP_FPS, so keeping every tick
         # is free slow motion at exactly that ratio. And nothing before the shot
         # is worth watching: the settle is a requirement, not a beat.
-        slowmo = FILM and (state in ("catch", "recover")
-                           or (plan is not None and 0 < plan[0] - sim_time < 0.22))
+        # Slow motion for the two beats that are actually about the rig: the
+        # catch, and the throw that follows it. Everything between them (the
+        # lift, the windup) plays at speed, so the clip does not sag.
+        slowmo = FILM and (state in ("catch", "recover", "launch")
+                           or (plan is not None and 0 < plan[0] - sim_time < 0.22)
+                           or (state == "toss" and sim_time - t_toss < 0.30))
         if FILM and sim_time < FIRE_AT - 0.35:
             keep = False
         else:
@@ -1798,7 +2454,7 @@ QUIET_SHEET = cli_arg("--quiet-sheet", 0.08, float)   # m/s, max particle speed
 _prev_pos = None
 sheet_speed = 1e9
 last_result = ""
-show_sensor_pip(True)
+pip_size = show_sensor_pip(True)
 
 
 # Where the tracker currently thinks the ball will cross the catch plane. A flat
@@ -1829,7 +2485,8 @@ def pressed(k):
 def ready():
     # A quiet SHEET, and nothing about the camera: the sensors do not move, so
     # where the view camera happens to be is no longer a precondition for a shot.
-    return state in ("idle", "settled", "missed") and sheet_speed < QUIET_SHEET
+    return (state in ("idle", "settled", "missed", "delivered", "adrift")
+            and sheet_speed < QUIET_SHEET)
 
 
 def arm():
@@ -1883,7 +2540,19 @@ def draw_ui():
 
 
 def animate():
-    global _prev_pos, sheet_speed, last_result, state
+    global _prev_pos, sheet_speed, last_result, state, pip_size
+
+    # The insets are placed in WINDOW PIXELS, so a resize leaves them at the old
+    # coordinates: wrong corner, and off the edge (where they are clipped) if the
+    # window shrank. The rect cannot be rescaled -- it is 1:1 or it draws nothing
+    # -- so the answer is to re-issue it with new x and y, and only when the
+    # framebuffer actually changed size. The camera has to be told as well, or
+    # the frame stretches.
+    now_size = renderer.size()
+    if now_size != pip_size:
+        pip_size = show_sensor_pip(True)
+        camera.aspect = now_size[0] / max(now_size[1], 1)
+        camera.update_projection_matrix()
 
     if canvas.is_key_down("A"):
         aim["az"] -= 0.6
@@ -1912,12 +2581,18 @@ def animate():
     if aim_mark.visible:
         aim_mark.position.set(float(plan[1][0]), CATCH_Y, float(plan[1][2]))
 
+    _DONE = ("settled", "missed", "delivered", "adrift")
     was = state
     p_true, v_true = step_frame()      # the render both sensors are sampled from
-    if state in ("settled", "missed") and was not in ("settled", "missed"):
-        dx = math.hypot(p_true[0] - rig.p[0], p_true[2] - rig.p[2])
-        last_result = ("CAUGHT" if state == "settled" else "MISSED") + \
-                      f" - ball {dx:.2f} m off the sheet centre"
+    if state in _DONE and was not in _DONE:
+        if state in ("delivered", "adrift"):
+            d = math.hypot(p_true[0] - BASKET[0], p_true[2] - BASKET[1])
+            last_result = ("CAUGHT + DELIVERED" if state == "delivered"
+                           else "CAUGHT, throw missed") + f" - {d:.2f} m from the basket"
+        else:
+            dx = math.hypot(p_true[0] - rig.p[0], p_true[2] - rig.p[2])
+            last_result = ("CAUGHT" if state == "settled" else "MISSED") + \
+                          f" - ball {dx:.2f} m off the sheet centre"
 
     now = pos.numpy()
     if _prev_pos is not None and _prev_pos.shape == now.shape:
