@@ -39,13 +39,16 @@ Three things make this work, and each of them is a measurement, not a guess:
     two overlapping movers it is centred on; by then the plan is 150 frames old
     and the rig is committed, so nothing is lost.
 
-  * The rig arrives MATCHING THE BALL'S HORIZONTAL VELOCITY. The bowl in a slack
-    sheet is only ~0.3 m deep, worth about 3 J/kg, while a ball crossing it at
-    3 m/s carries 4.5 J/kg -- park the rig at the landing spot and the ball skips
-    straight out the far side. So the approach is a cubic Hermite (position AND
-    velocity at arrival), re-solved every frame from the rig's current state as
-    the track sharpens. That constraint is also what makes it look like four
-    things cooperating rather than four things moving.
+  * The rig arrives MATCHING THE BALL'S HORIZONTAL VELOCITY, and TILTED. The
+    bowl in a slack sheet is only ~0.3 m deep, worth about 3 J/kg, while a ball
+    crossing it at 3 m/s carries 4.5 J/kg -- park the rig at the landing spot
+    and the ball skips straight out the far side. So the approach is a cubic
+    Hermite (position AND velocity at arrival), re-solved every frame from the
+    rig's current state as the track sharpens, and over the last 0.45 s of it
+    the square pitches 8 degrees with its DOWNRANGE corners high, about an axis
+    perpendicular to the fitted horizontal velocity. The scoop is a small
+    effect and it is reported as one: on the default shot it takes the ball's
+    first contact from 0.063 m off the sheet centre to 0.052.
 
   * AND THEN IT THROWS THE BALL BACK, into a basket 1.35 m away. The stroke is
     planned without looking at the ball at all: the launch point is the rig's
@@ -55,20 +58,65 @@ Three things make this work, and each of them is a measurement, not a guess:
     the commanded speed and braked. Nothing touches the ball: it rides the same
     contact and friction that caught it, and leaves when the impulse stops.
 
-    A trampoline is not a hand, and the measured transfer says so. At a 3.7 m/s
-    stroke the ball leaves at 1.14 times the anchors' own speed, because the
-    long-range attachment snaps taut at the top and slings it; at 2.9 m/s it
-    leaves at 1.05; the first throw ever attempted was commanded at 4.15 m/s,
-    gave the ball 6.40 m/s and put it 6.6 m past the basket. So the one number
-    the throw is calibrated on is that ratio, and it is a measurement of the
-    rig's own actuator rather than anything read off the ball. The verdict is
-    truth, and only the verdict: DELIVERED if the ball comes to rest in the bin,
-    and the miss distance either way.
+    That plan is only true if the ball is AT the rig's centre, so the rig puts
+    it there first. The catch ends wherever the ball was -- 0.98 m from home on
+    the default shot, 0.68 m at az +8 -- and a stroke launched from there threw
+    something that was not on it: the az +8 ball left at 0.17 of the commanded
+    speed, 145 degrees off plan, and landed 1.93 m from the bin. So after the
+    absorb the rig CARRIES THE BALL HOME, walking back at 1.6 m/s while the
+    sheet re-tensions under it. The bowl's low point is the rig centre, so the
+    ball rolls to the middle by construction rather than by being looked at:
+    0.98 m of catch offset becomes 0.12 m of residual, and the throw leaves
+    within 8 degrees of plan on every shot the arms can reach.
+
+    A trampoline is not a hand, and the measured transfer says so. The ball is
+    NOT free at the top of the stroke -- scoring it there read 2.60 m/s while
+    the ball was actually still in the cloth and left at 8.7 m/s once the
+    long-range attachment snapped taut -- so the release is measured at
+    separation, after 80 ms of daylight. Two numbers are calibrated on that
+    measurement and nothing else: the transfer ratio (1.02-1.11 x the anchors'
+    own speed, so the stroke is commanded at speed/0.85) and the launch POINT,
+    which is where the ball sat and not where the stroke ends, because the sheet
+    slides under the ball for most of the stroke. Assuming the ball rides
+    forward with the rig put the planned launch point 0.285 m from the truth and
+    that is most of a basket at 1.35 m. The verdict is truth, and only the
+    verdict: DELIVERED if the ball comes to rest in the bin, and the miss
+    distance either way.
+
+  * THE ARMS ARE THE ENVELOPE, and they are now allowed to say so. --arm-reach
+    was a flag with 2.0 m typed into it while four Franka arms on 0.5 m
+    pedestals ran out at about 1.1 m downrange and 0.16 m sideways, so every
+    off-axis catch was executed with one corner up to a metre behind where it
+    was commanded -- the sheet stopped being a sheet, and the ball left at
+    whatever the wreckage gave it. The tool reach is now MEASURED at startup by
+    walking a target away from one arm's base until it stops converging (1.08 m
+    for an FR3 to fr3_hand_tcp), the travel envelope is solved from it per
+    direction, and the rig is clamped to that envelope instead of to a flag.
+    Standing the pedestals at 0.70 m and tucking them 0.34 m out took the
+    default shot's worst tracking error from 0.186 m to 0.019 m. Shots outside
+    the envelope are named at startup and reported as reach-capped rather than
+    attempted: az -12 el 58 at 7.0 m/s crosses 2.06 m from home against a 1.11 m
+    boundary. That shot was thought to be a regression; it is not. Re-running
+    the pre-sensor build on it misses by the same margin with the same 1.01 m of
+    arm error, so it has never been caught, and it now says so on the first line
+    of the run instead of on the last.
 
 The range around all this is procedural and static: a painted concrete pad with
 a hazard ring on the catch zone and a lane out of the cannon, a backstop, crates
-and drums, four lamp poles and a pennant line. Firing is a flash, a puff of 60
-smoke particles and 6 cm of recoil, and all three are things the SENSORS SEE.
+and drums, four lamp poles and a pennant line. The markings live on their OWN
+mesh and their own texture -- 10.8 x 8.05 m at 5.3 mm per texel against the
+ground's 26 mm -- because a 26 mm step is invisible in gravel noise and a
+staircase in the edge of a painted line, and because every edge on the pad is a
+smoothstep over a signed distance rather than a boolean mask. Resolution alone
+just makes smaller stairs. The bin's placement is arithmetic too: it stands
+uprange, which is the only corridor that is 1.2-1.5 m from home, 0.35 m clear of
+every pedestal and outside every arm's swept envelope, and clear of everywhere
+the sheet goes -- which is all of +x. check_props() prints those four clearances
+and the angle the film camera looks into the bin at, because the first bin was
+standing inside an arm and rendered perfectly well doing it.
+
+Firing is a flash, a puff of 60 smoke particles and 6 cm of recoil, and all
+three are things the SENSORS SEE.
 The flash was the expensive one: a point light throws a pool of changing
 brightness metres wide across the floor, the detector locked onto it, and the
 first crossing call came out 0.99 m wrong. Two things fix that, and neither is
@@ -102,6 +150,7 @@ the whole perception story in one picture.
     python warp_cloth_catch.py --az -12 --el 58 --speed 7.0
     python warp_cloth_catch.py --oracle             # ground truth instead of the sensors,
                                                     # to separate tracking error from control
+    python warp_cloth_catch.py --tilt 0             # flat sheet, to A/B the scoop
     python warp_cloth_catch.py --no-toss            # catch only, no throw
     python warp_cloth_catch.py --no-effects         # no flash, smoke or recoil, so the
                                                     # sensor pollution can be A/B'd
@@ -163,20 +212,50 @@ GIVE = cli_arg("--give", 0.30, float)            # m the sheet may drop while ab
 RECOVER = cli_arg("--recover", 0.55, float)      # s to lift back to the ready height
 PRESENT = cli_arg("--present", 0.75, float)      # how taut to pull on recovery, in
                                                  # units of the slack (1 = dead flat)
+# The catch ends wherever the ball was, which on an off-axis shot is up to a
+# metre from home -- and a throw planned from the rig's own centre is then
+# throwing something that is NOT at that centre. So the rig walks the ball home
+# while it re-tensions, slowly enough to keep it in the bowl, and only plans the
+# stroke once it is back at the pose it knows. Peak carry speed, not duration:
+# the carry stretches to whatever the distance needs at this speed.
+CARRY_SPEED = cli_arg("--carry-speed", 1.60, float)   # m/s while cradling
+SETTLE_DWELL = cli_arg("--settle-dwell", 0.35, float) # s of stillness before the throw
+# The sheet does not have to stay flat. Tilting the square so the DOWNRANGE side
+# rides high turns it into a scoop: the ball's horizontal energy runs uphill into
+# the pocket instead of skating out over the far edge, which is the exact way the
+# marginal catches were being lost (ball at rest 0.766 m out against a 0.75 m
+# half-width). The axis is horizontal and perpendicular to the incoming
+# horizontal velocity AS THE TRACKER FITTED IT -- no truth is read.
+TILT_DEG = cli_arg("--tilt", 8.0, float)        # degrees of scoop at arrival
+TILT_LEAD = cli_arg("--tilt-lead", 0.45, float)  # s before arrival the tilt ramps in
+TILT_EASE = cli_arg("--tilt-ease", 0.30, float)  # s to flatten again during recovery
 
 # ---- the throw ----------------------------------------------------------------
-# The basket sits 1.39 m from rig home, off the far shoulder. Both offsets are
-# measured rather than chosen: at x +1.35 it stood 0.95 m from where the az -12
-# el 58 7.0 m/s shot crosses, and that shot then bounced off its rim and was
-# reported MISSED, so it moved back and left until the nearest crossing of the
-# whole aim envelope is 1.4 m away. It is also not straight behind the rig,
-# where it started: a bin directly behind the cloth read, in the shot camera,
-# as something the arms were holding. Rim at 0.95 m against a rig home of 1.10,
-# so the throw is a short lob rather than a punt.
-BASKET = np.array([float(x) for x in cli_arg("--basket", "0.85,-1.35", str).split(",")])
-BASKET_R = cli_arg("--basket-r", 0.40, float)     # inner radius of the bin
-BASKET_RIM = cli_arg("--basket-rim", 0.95, float)
-BASKET_FLOOR = BASKET_RIM - 0.42
+# The basket stands UPRANGE of the rig, back toward the cannon, and every part
+# of that is forced rather than chosen. Three things want the same floor:
+#
+#   * the catch. Every shot in the aim envelope crosses DOWNRANGE of home, from
+#     x +0.56 out to x +2.30, and the sheet sweeps 0.75 m further still -- so a
+#     bin anywhere on the +x side is something the cloth flies through. The
+#     first placement, x +0.85 z -1.35, was inside the swept envelope of the
+#     rear-left arm as well (0.56 m from its pedestal axis against a 0.42 m
+#     bin), which is what check_props() below now refuses.
+#   * the four pedestals, which occupy a 1.30 x 2.30 m rectangle around home.
+#     Only two corridors leave 1.2-1.5 m of throw AND 0.35 m of clearance: past
+#     +x, which the catch owns, and back past -x, which is empty because the
+#     ball is 2.5 m up when it passes over.
+#   * the film camera, which stands off the +x +z shoulder. Upranging the bin
+#     puts the throw broadside to it and out from behind the sheet.
+#
+# The bin is also WIDER AND SHALLOWER than it was (0.42 x 0.28 against 0.40 x
+# 0.42): a camera 4.6 m away and 3.3 m up looks into it at 29 degrees, and a bin
+# needs the sight line to clear its own near rim -- 23 degrees at this aspect,
+# 39 at the old one, which is why the ball in the bin used to be a rumour.
+BASKET = np.array([float(x) for x in cli_arg("--basket", "-0.85,0.0", str).split(",")])
+BASKET_R = cli_arg("--basket-r", 0.42, float)     # inner radius of the bin
+BASKET_RIM = cli_arg("--basket-rim", 0.90, float)
+BASKET_DEPTH = cli_arg("--basket-depth", 0.28, float)
+BASKET_FLOOR = BASKET_RIM - BASKET_DEPTH
 TOSS = "--no-toss" not in sys.argv
 # The stroke is bounded by the same arm that does the catching: ARM_SPEED is a
 # hard cap on the rig centre, so anything the solve asks for above this is a
@@ -198,7 +277,7 @@ TOSS_SPREAD = cli_arg("--toss-spread", 0.92, float)   # taut, but not dead flat:
 # stroke and slings the ball out faster than the anchors ever move. 0.95 is the
 # working point that puts the default shot in the bin; the first throw the rig
 # ever made assumed 0.80, was commanded at 4.15 and went 6.6 m past the basket.
-TOSS_GAIN = cli_arg("--toss-gain", 0.95, float)
+TOSS_GAIN = cli_arg("--toss-gain", 0.85, float)
 # The flattest throw the planner may choose. Left free, the solve takes the
 # cheapest T it can find and asks for 2.70 m/s, which is below the speed at
 # which the sheet slings at all: measured, the ball then left with 0.80 of the
@@ -206,6 +285,9 @@ TOSS_GAIN = cli_arg("--toss-gain", 0.95, float)
 # range the gain above was calibrated over, and it also looks like a throw
 # rather than a shove.
 TOSS_T_MIN = cli_arg("--toss-t-min", 0.60, float)
+# How far the ball rises off its rest point before it is free of the sheet,
+# measured at separation rather than assumed from the stroke.
+TOSS_RISE = cli_arg("--toss-rise", 0.03, float)
 
 # ---- the sheet ---------------------------------------------------------------
 N = int(cli_arg("--res", 48, float))
@@ -233,7 +315,9 @@ CLIP_FPS = 60.0
 # ~0.6 s of second flight and the ball coming to rest in the basket. At 3.0 s
 # the run stopped mid-lift and reported "still lifting", which is not a verdict;
 # the extra seconds cost 0.06 ms/tick of the average, measured.
-SECONDS = cli_arg("--seconds", 4.2 if "--no-toss" in sys.argv else 6.4, float)
+# The carry home added roughly a second: an off-axis catch ends up to a metre
+# out and walks back at a cradling speed.
+SECONDS = cli_arg("--seconds", 4.2 if "--no-toss" in sys.argv else 8.0, float)
 DAMPING = cli_arg("--damping", 0.010, float)
 
 # Each sensor is a secondary view rendered at exactly this size, so unlike the
@@ -557,15 +641,38 @@ class Rig:
         self.travel = 0.0
         self.peak_speed = 0.0
         self.starved = 0          # frames the speed cap bit
+        self.reach_capped = 0     # frames the arms' own envelope bit
         self.p_pending = self.p.copy()
         self.spread = 0.0
+        self.tilt = 0.0                       # rad; + raises the downrange side
+        self.tilt_dir = np.array([1.0, 0.0, 0.0])   # horizontal, unit, downrange
+        self.peak_tilt = 0.0
 
     def targets(self):
         # Spreading the anchors re-tensions the sheet. Left slack it simply
         # crumples over the ball and hides it, which is the same lesson the
         # throw taught in reverse: a slack sheet has no shape to speak of.
         scale = 1.0 + self.spread * (CLOTH - SPAN) / SPAN
-        return (anchor_local * scale + self.p).astype(np.float32)
+        c = anchor_local * scale
+        if self.tilt != 0.0:
+            # Per-corner height offsets on the UNSCALED square, so re-tensioning
+            # for the throw cannot also deepen the scoop. Corners downrange of
+            # the centre go up, corners uprange go down, and the centre -- which
+            # is what the whole approach was planned to -- stays on CATCH_Y.
+            s = (anchor_local[:, 0] * self.tilt_dir[0]
+                 + anchor_local[:, 2] * self.tilt_dir[2])
+            c = c.copy()
+            c[:, 1] += math.tan(self.tilt) * s
+        return (c + self.p).astype(np.float32)
+
+    def set_tilt(self, angle, direction=None):
+        if direction is not None:
+            d = np.array([direction[0], 0.0, direction[2]], float)
+            n = float(np.linalg.norm(d))
+            if n > 1e-6:
+                self.tilt_dir = d / n
+        self.tilt = float(angle)
+        self.peak_tilt = max(self.peak_tilt, abs(self.tilt))
 
     def goto(self, dt, p_cmd, v_cmd):
         """Move toward the commanded pose, capped at ARM_SPEED."""
@@ -582,10 +689,20 @@ class Rig:
         home3 = np.array([HOME[0], CATCH_Y, HOME[1]])
         nxt = self.p_pending
         off = nxt - home3
-        d = float(np.linalg.norm(off))
-        if d > ARM_REACH:                       # the arms simply run out of arm
-            nxt = home3 + off * (ARM_REACH / d)
-            self.v[:] = 0.0
+        d = math.hypot(off[0], off[2])
+        # The arms simply run out of arm, and they do it much sooner sideways
+        # than downrange -- reach_limit() below is that envelope, and it is a
+        # tenth of what --arm-reach used to allow across the z axis. Letting the
+        # plan drag the rig past it does not fail gracefully: one corner ends up
+        # a metre behind the other three, the sheet stops being a sheet, and the
+        # ball leaves at whatever speed the wreckage gives it. Stopping at the
+        # boundary loses the same catches and keeps the sheet.
+        lim = ARM_REACH if d < 1e-6 else min(ARM_REACH, reach_limit(off[0] / d,
+                                                                   off[2] / d))
+        if d > lim:
+            nxt = home3 + np.array([off[0] * lim / d, off[1], off[2] * lim / d])
+            self.v[0] = self.v[2] = 0.0
+            self.reach_capped += 1
         self.travel += float(np.linalg.norm(nxt - self.p))
         self.peak_speed = max(self.peak_speed, float(np.linalg.norm(self.v)))
         self.p = nxt
@@ -959,8 +1076,12 @@ scene.background = 0x1b2634
 # Framed on the RIG, not on the whole arena. The cannon sits at the edge and the
 # ball flies in from off-frame, which reads better than watching it be launched --
 # and it stops most of the frame being empty floor between the two.
-EYE = np.array([1.75, 2.35, 4.25]) if FILM else np.array([0.60, 3.15, 5.60])
-TGT = np.array([0.55, 1.05, 0.0]) if FILM else np.array([-0.30, 1.05, 0.0])
+# The film pose also has to LOOK INTO THE BIN, which is a stronger constraint
+# than framing anything: a bin occludes its own floor with its own near rim
+# unless the sight line drops faster than depth/radius, and check_props() below
+# turns that into a printed margin instead of a thing noticed in an mp4.
+EYE = np.array([2.00, 3.70, 4.55]) if FILM else np.array([0.60, 3.15, 5.60])
+TGT = np.array([0.35, 1.30, 0.10]) if FILM else np.array([-0.30, 1.05, 0.0])
 camera = tp.PerspectiveCamera(45, VIEW_W / VIEW_H, 0.1, 100)
 camera.position.set(*EYE)
 camera.look_at(*TGT)
@@ -1030,11 +1151,13 @@ def _bilinear_up(a, s):
 
 
 def _range_texture(s=GROUND_PX, w=GROUND_M):
-    """Asphalt, a lighter concrete pad, a hazard ring around the catch zone and
-    a firing lane out from the cannon -- painted in WORLD coordinates, so the
-    ring really is centred on the rig and the lane really does point down the
-    barrel. The plane's uv runs +u along +x and +v along -z once it is laid
-    flat, which is what these two axes encode."""
+    """The asphalt the whole range stands on: 40 m of noise and nothing else.
+
+    Nothing PAINTED lives here any more. 1536 texels over 40 m is 26 mm each,
+    and a 26 mm step is perfectly invisible in gravel noise and perfectly
+    visible in the edge of a painted line -- the hazard ring came out of this
+    texture as a staircase you could count. The markings moved to the pad below,
+    which covers a twentieth of the area at more than the same resolution."""
     rng = np.random.default_rng(7)
     xs = ((np.arange(s) + 0.5) / s - 0.5) * w
     X, Z = np.meshgrid(xs, -xs)
@@ -1043,34 +1166,76 @@ def _range_texture(s=GROUND_PX, w=GROUND_M):
          + 0.15 * rng.random((s, s)).astype(np.float32))
     img = np.empty((s, s, 3), np.float32)
     img[:] = np.array([0.128, 0.140, 0.156]) * (0.72 + 0.56 * n)[:, :, None]
-    pad = (np.abs(X - 0.2) < 5.4) & (Z > -3.05) & (Z < 5.0)
-    img[pad] = (np.array([0.208, 0.212, 0.213])
-                * (0.80 + 0.40 * n[pad])[:, None])
-    # Expansion joints, so the pad reads as poured slabs and not as a decal.
-    joint = pad & ((np.abs(((X - 0.2 + 1.35) % 2.7) - 1.35) < 0.016)
-                   | (np.abs(((Z + 1.35) % 2.7) - 1.35) < 0.016))
-    img[joint] *= 0.62
+    return (np.clip(img, 0.0, 1.0) * 255.0).astype(np.uint8)
 
-    def paint(mask, rgb, strength=1.0):
-        wear = strength * (0.55 + 0.45 * n[mask])
-        img[mask] = img[mask] * (1.0 - wear)[:, None] + np.array(rgb) * wear[:, None]
+
+# The poured pad, and everything painted on it: its own mesh, its own texture,
+# sized to the marked area instead of to the arena. 10.8 x 8.05 m at 5.3 mm per
+# texel -- five times the density of the ground, on a twentieth of the area, for
+# a fifth of the memory. It is opaque and it replaces the ground underneath
+# rather than being an alpha decal over it, which means no transparency, no
+# overlay pass, no sort order, and no risk of the markings vanishing from the
+# sensor views (secondary views run no overlay pass at all).
+PAD_X0, PAD_X1 = -5.20, 5.60
+PAD_Z0, PAD_Z1 = -3.05, 5.00
+PAD_PX = int(cli_arg("--pad-px", 2048, float))
+
+
+def _pad_texture(w=PAD_PX):
+    """Concrete, expansion joints, a hazard ring around the catch zone, a firing
+    lane out of the cannon and a circle under the basket -- painted in WORLD
+    coordinates, so the ring really is centred on the rig and the lane really
+    does point down the barrel.
+
+    Every edge is a SMOOTHSTEP over a signed distance in metres rather than a
+    boolean mask, so a line half a texel wide still reads as a line and the
+    chevrons stop being a staircase. That is what actually fixed the blocky
+    ring: resolution alone just makes smaller stairs."""
+    h = max(2, int(round(w * (PAD_Z1 - PAD_Z0) / (PAD_X1 - PAD_X0))))
+    rng = np.random.default_rng(11)
+    X, Z = np.meshgrid(PAD_X0 + (np.arange(w) + 0.5) * (PAD_X1 - PAD_X0) / w,
+                       PAD_Z1 - (np.arange(h) + 0.5) * (PAD_Z1 - PAD_Z0) / h)
+    px = (PAD_X1 - PAD_X0) / w                    # metres per texel
+    n = (0.55 * _bilinear_up(rng.random((24, 24)).astype(np.float32), max(w, h))[:h, :w]
+         + 0.30 * _bilinear_up(rng.random((96, 96)).astype(np.float32), max(w, h))[:h, :w]
+         + 0.15 * rng.random((h, w)).astype(np.float32))
+    img = np.array([0.208, 0.212, 0.213]) * (0.80 + 0.40 * n)[:, :, None]
+
+    def edge(sdf):
+        """1 inside, 0 outside, one texel of ramp across the boundary."""
+        return np.clip(0.5 - sdf / (1.4 * px), 0.0, 1.0)
+
+    def paint(alpha, rgb, strength=1.0):
+        a = (strength * (0.55 + 0.45 * n) * alpha)[:, :, None]
+        img[:] = img * (1.0 - a) + np.array(rgb) * a
+
+    # Expansion joints, so the pad reads as poured slabs and not as a decal.
+    joint = np.minimum(np.abs(((X - 0.2 + 1.35) % 2.7) - 1.35),
+                       np.abs(((Z + 1.35) % 2.7) - 1.35))
+    img *= (1.0 - 0.38 * edge(joint - 0.016))[:, :, None]
 
     # Firing lane: two solid edges and a dashed centre, from behind the cannon
     # to the near edge of the hazard ring.
-    lane = (X > CANNON[0] - 1.1) & (X < HOME[0] - 1.9) & (np.abs(Z) < 0.62)
-    paint(lane & (np.abs(np.abs(Z) - 0.60) < 0.045), (0.80, 0.80, 0.78), 0.85)
-    paint(lane & (np.abs(Z) < 0.045) & (((X + 40.0) % 0.72) < 0.42),
+    lane = np.maximum(np.maximum(CANNON[0] - 1.1 - X, X - (HOME[0] - 1.9)),
+                      np.abs(Z) - 0.62)
+    paint(edge(np.maximum(lane, np.abs(np.abs(Z) - 0.60) - 0.045)),
+          (0.80, 0.80, 0.78), 0.85)
+    dash = np.abs(((X + 40.0) % 0.72) - 0.21) - 0.21
+    paint(edge(np.maximum(np.maximum(lane, np.abs(Z) - 0.045), dash)),
           (0.80, 0.80, 0.78), 0.85)
     # Hazard ring: a yellow annulus around the catch zone, chevroned in black.
     rr = np.hypot(X - HOME[0], Z - HOME[1])
-    ring = (rr > 1.52) & (rr < 1.78)
-    paint(ring, (0.86, 0.66, 0.10), 0.9)
+    ring = np.abs(rr - 1.65) - 0.13
+    paint(edge(ring), (0.86, 0.66, 0.10), 0.9)
+    # The chevron edge is measured along the ring, not in radians, or the stripes
+    # would blur at the inner radius and stay hard at the outer one.
     theta = np.arctan2(Z - HOME[1], X - HOME[0])
-    paint(ring & (((theta + math.pi) % 0.32) < 0.16), (0.06, 0.06, 0.07), 0.9)
+    chev = (np.abs(((theta + math.pi) % 0.32) - 0.08) - 0.08) * np.maximum(rr, 1e-3)
+    paint(edge(np.maximum(ring, chev)), (0.06, 0.06, 0.07), 0.9)
     # And a plain circle under the basket, so the target is marked on the floor
     # as well as standing on a post.
     br = np.hypot(X - BASKET[0], Z - BASKET[1])
-    paint((br > 0.52) & (br < 0.60), (0.75, 0.76, 0.78), 0.8)
+    paint(edge(np.abs(br - 0.56) - 0.04), (0.75, 0.76, 0.78), 0.8)
     return (np.clip(img, 0.0, 1.0) * 255.0).astype(np.uint8)
 
 
@@ -1080,6 +1245,14 @@ ground = tp.Mesh(tp.PlaneGeometry(GROUND_M, GROUND_M), _ground_mat)
 ground.rotate_x(-math.pi / 2)
 ground.receive_shadow = True
 scene.add(ground)
+
+_pad_mat = standard_material(0xffffff, 0.95)
+_pad_mat.map = tp.data_texture(_pad_texture(), True)
+pad = tp.Mesh(tp.PlaneGeometry(PAD_X1 - PAD_X0, PAD_Z1 - PAD_Z0), _pad_mat)
+pad.rotate_x(-math.pi / 2)
+pad.position.set(0.5 * (PAD_X0 + PAD_X1), 0.004, 0.5 * (PAD_Z0 + PAD_Z1))
+pad.receive_shadow = True
+scene.add(pad)
 
 
 def _box(size, pos, mat, ry=0.0):
@@ -1554,10 +1727,49 @@ if hasattr(renderer, "restir_di"):
 # and base-to-corner distance stays between 0.5 and 0.95 m throughout.
 ARMS = "--no-arms" not in sys.argv
 ARM_KIND = cli_arg("--arm", "fr3", str)        # fr3 | iiwa | proc
-PEDESTAL_Y = cli_arg("--pedestal-y", 0.50, float)
-ARM_OUT = cli_arg("--arm-out", 0.50, float)    # outward from the sheet, in z
+# Pedestal height and stand-off are the rig's REACH ENVELOPE, not decoration.
+# At 0.50 m and 0.50 m out the arms spent 0.60 m of their metre going straight
+# up and another 0.50 m going sideways, which left 0.16 m of travel across the z
+# axis -- so the az +8 shot, whose crossing is only 0.42 m off the axis, already
+# had an arm 0.19 m behind its corner. Standing them taller and tucking them in
+# costs nothing and triples the sideways envelope (0.16 -> 0.44 m).
+PEDESTAL_Y = cli_arg("--pedestal-y", 0.70, float)
+ARM_OUT = cli_arg("--arm-out", 0.34, float)    # outward from the sheet, in z
 ARM_LEAD = cli_arg("--arm-lead", 0.48, float)  # toward the intercept, in x
 JOINT_SPEED = cli_arg("--joint-speed", 5.0, float)   # rad/s cap per joint
+# How far an arm can put its TOOL frame from its own base. Nothing at run time
+# is bounded by this -- the arms are bounded by their own IK, and the report
+# prints what they actually achieved -- but check_props() needs a number to keep
+# scenery out of the arms, and 0.917 m is already known to be reachable because
+# that is the distance from a pedestal to its corner at home and the settle
+# converges there to 0.0000 m.
+ARM_TOOL_REACH = cli_arg("--arm-tool-reach", 1.00, float)
+
+
+def reach_limit(ux, uz):
+    """How far the rig centre may travel along a horizontal unit direction
+    before an arm runs out of arm.
+
+    --arm-reach was a flag with 2.0 typed into it and it was fiction. A pedestal
+    sits at its corner plus (ARM_LEAD, -(CATCH_Y - PEDESTAL_Y), +/-ARM_OUT), so
+    the corner OFFSETS cancel and the envelope depends only on the direction
+    travelled and the z sign of the pedestal. Solving |(r*u - offset)| =
+    ARM_TOOL_REACH for r and taking the worse of the two z signs gives the real
+    boundary: 1.33 m straight downrange, 0.44 m straight across. That asymmetry
+    is why every off-axis shot in this demo had an arm a fifth of a metre behind
+    its corner and nobody could see why.
+    """
+    h = CATCH_Y - PEDESTAL_Y
+    best = ARM_REACH
+    for sz in (1.0, -1.0):
+        bx, bz = -ARM_LEAD, -sz * ARM_OUT
+        b = 2.0 * (ux * bx + uz * bz)
+        c = bx * bx + bz * bz + h * h - ARM_TOOL_REACH ** 2
+        disc = b * b - 4.0 * c
+        if disc <= 0.0:
+            return 0.0
+        best = min(best, max(0.5 * (-b + math.sqrt(disc)), 0.0))
+    return best
 
 _L = dict(base=0.16, upper=0.50, fore=0.44, wrist=0.12)
 
@@ -1732,10 +1944,33 @@ if ARMS:
                          HOME[1] + _c[2] + math.copysign(ARM_OUT, _c[2])), ARM_KIND))
     _home = np.array(p0[anchor_idx_np], np.float64)
     _res = np.array([a.settle(_home[k]) for k, a in enumerate(arms)])
+    if "--arm-tool-reach" not in " ".join(sys.argv):
+        # MEASURE the reach instead of asserting it. A datasheet number would be
+        # the wrong number anyway (the tool frame is past the flange, and the
+        # null-space bias costs a little of it), and everything downstream --
+        # the travel envelope the rig is clamped to, and whether the basket is
+        # standing inside an arm -- is only as honest as this.
+        _a0 = arms[0]
+        _base = np.array([HOME[0] + anchor_local[0][0] + ARM_LEAD, PEDESTAL_Y,
+                          HOME[1] + anchor_local[0][2] - ARM_OUT])
+        _u = (_home[0] - _base) / np.linalg.norm(_home[0] - _base)
+        _q, _best = list(_a0.q), 0.0
+        for _r in np.arange(0.70, 1.45, 0.02):
+            _t = _base + _u * _r
+            _tv = tp.Vector3(*[float(v) for v in _t])
+            for _ in range(90):
+                _a0.q, _ = _a0.solver.solve(_a0.q, _tv, 0.0)
+            if np.linalg.norm(_tool_pos(_a0.solver.tool_transform(_a0.q)) - _t) > 0.005:
+                break
+            _best = float(_r)
+        _a0.q = _q
+        _a0.settle(_home[0])
+        ARM_TOOL_REACH = _best
     _kind = arms[0].kind
     print(f"arms: 4 x {_kind} ({arms[0].robot.num_dof} dof, tool "
           f"{arms[0].robot.end_effector_link}), pedestals at {PEDESTAL_Y:.2f} m, "
-          f"settled onto the corners to {max(a.err for a in arms):.4f} m"
+          f"settled onto the corners to {max(a.err for a in arms):.4f} m, tool "
+          f"reach measured at {ARM_TOOL_REACH:.2f} m"
           + ("   [threepp_data not found - procedural fallback]"
              if _kind == "proc" and ARM_KIND != "proc" else ""))
 
@@ -1818,6 +2053,109 @@ print(f"sensors: 2 x {SENSOR_W}x{SENSOR_H} at {SENSOR_FOV:.0f} deg, "
       f"both frames with {COVER_MARGIN:.0f} px to spare")
 
 
+def check_props():
+    """The basket has to stand somewhere no arm, no sheet and no camera wants.
+
+    This is the same idea as check_coverage: a placement that used to be checked
+    by looking at a frame is checked by arithmetic instead, and it fails loudly.
+    The first basket really was inside an arm -- 0.56 m from the rear-left
+    pedestal axis with a 0.42 m bin on a 0.34 m foot -- and nothing in the demo
+    said so, because a bin and an arm interpenetrating renders perfectly well.
+
+    Four tests:
+      * throwing reach: 1.2-1.5 m from rig home.
+      * pedestals: the bin's foot clear of every pedestal axis by CLEARANCE, and
+        the bin outside every arm's swept envelope (the horizontal circle an
+        arm can put its tool on at CATCH_Y, which is what the sqrt below is).
+      * the catch: the bin clear of everywhere the SHEET goes, which is every
+        crossing in the aim envelope plus the cloth's own half-diagonal.
+      * the film camera: the bin inside the frame, and the sight line into it
+        steeper than the bin's own near rim.
+    """
+    CLEARANCE = 0.35
+    b = np.array([BASKET[0], BASKET[1]])
+    d_home = float(np.linalg.norm(b - HOME))
+    if not 1.15 < d_home < 1.55:
+        raise SystemExit(f"basket is {d_home:.2f} m from rig home, outside the "
+                         f"1.2-1.5 m the stroke can throw")
+    # An arm mounted at PEDESTAL_Y can put its tool anywhere within this radius
+    # of its own axis at the catch height; beyond it the arm simply is not.
+    sweep = math.sqrt(max(ARM_TOOL_REACH ** 2 - (CATCH_Y - PEDESTAL_Y) ** 2, 0.0))
+    worst_ped, worst_sweep = 1e9, 1e9
+    for c in anchor_local:
+        p = np.array([HOME[0] + c[0] + ARM_LEAD,
+                      HOME[1] + c[2] + math.copysign(ARM_OUT, c[2])])
+        dd = float(np.linalg.norm(b - p))
+        worst_ped = min(worst_ped, dd - 0.34 - 0.13)     # bin foot vs pedestal
+        worst_sweep = min(worst_sweep, dd - BASKET_R - sweep)
+    if worst_ped < CLEARANCE or worst_sweep < 0.0:
+        raise SystemExit(f"basket is inside an arm: {worst_ped:.2f} m of foot "
+                         f"clearance to the nearest pedestal (want {CLEARANCE:.2f}), "
+                         f"{worst_sweep:.2f} m outside its swept envelope")
+    # Everywhere the sheet gets to: home, and every crossing in the aim
+    # envelope. The sheet is an axis-aligned square of half-width CLOTH/2 when
+    # fully spread, so this is a box distance, not a radius -- a radius would
+    # have condemned this placement over a corner that points the other way.
+    centres = [np.array([HOME[0], HOME[1]])]
+    for az in (-12.0, 0.0, 12.0):
+        for el in (58.0, 66.0):
+            for speed in (6.0, 7.0):
+                c = shot_landmarks(az, el, speed)["crossing"]
+                centres.append(np.array([c[0], c[2]]))
+    worst_sheet = min(math.hypot(max(abs(b[0] - c[0]) - 0.5 * CLOTH, 0.0),
+                                 max(abs(b[1] - c[1]) - 0.5 * CLOTH, 0.0))
+                      - BASKET_R for c in centres)
+    if worst_sheet < 0.10:
+        raise SystemExit(f"the sheet sweeps through the basket "
+                         f"({-worst_sheet:.2f} m of overlap)")
+    # Looking into the bin: the sight line must drop faster across the bin's
+    # radius than the rim stands above the resting ball.
+    ball_y = BASKET_FLOOR + BALL_R
+    need = math.degrees(math.atan2(BASKET_RIM - ball_y, BASKET_R))
+    got = math.degrees(math.atan2(EYE[1] - ball_y,
+                                  math.hypot(EYE[0] - BASKET[0], EYE[2] - BASKET[1])))
+    print(f"props:   basket {d_home:.2f} m from home, {worst_ped:.2f} m of foot "
+          f"clearance to the nearest pedestal ({worst_sweep:.2f} m outside its "
+          f"reach), {worst_sheet:.2f} m clear of the swept sheet; camera looks "
+          f"into the bin at {got:.0f} deg against the {need:.0f} deg its own rim "
+          f"needs")
+    if FILM and got < need + 3.0:
+        print(f"         (the ball in the bin will be hidden by the near rim: "
+              f"{got:.0f} deg of sight line against {need:.0f} needed)")
+
+
+def check_reach():
+    """Print which shots in the aim envelope the ARMS can actually be taken to.
+
+    The catch was being planned against --arm-reach and executed against four
+    Franka arms, and those are not the same number. Saying so at startup is the
+    difference between "the wide shot is flaky" and "the wide shot crosses
+    2.06 m from home and the arms stop at 1.10"."""
+    rows, out = [], 0
+    for az in (-12.0, 0.0, 12.0):
+        for el in (58.0, 66.0):
+            for speed in (6.0, 7.0):
+                c = shot_landmarks(az, el, speed)["crossing"]
+                off = np.array([c[0] - HOME[0], c[2] - HOME[1]])
+                d = float(np.linalg.norm(off))
+                lim = reach_limit(*(off / max(d, 1e-9)))
+                if d > lim:
+                    out += 1
+                    rows.append(f"az{az:+.0f} el{el:.0f} v{speed:.1f} crosses "
+                                f"{d:.2f} m out, arms stop at {lim:.2f}")
+    print(f"reach:   arms take the rig {reach_limit(1.0, 0.0):.2f} m downrange, "
+          f"{reach_limit(0.0, 1.0):.2f} m across; {12 - out} of 12 envelope shots "
+          f"land inside it")
+    for r in rows[:4]:
+        print(f"         OUT OF REACH: {r}")
+    if rows[4:]:
+        print(f"         ... and {len(rows) - 4} more")
+
+
+check_props()
+check_reach()
+
+
 # ---- state --------------------------------------------------------------------
 
 anchor_from = np.array(p0[anchor_idx_np], np.float64)
@@ -1831,11 +2169,18 @@ v_contact = np.zeros(3)
 ball_vy_at_contact = 0.0
 t_recover = None
 dip_depth = 0.0
+carry_vec = np.zeros(3)       # xz walk back to home during recovery
+carry_d = 0.0                 # how far the catch ended from home
+carry_T = RECOVER             # s the carry takes at CARRY_SPEED
+toss_offset = None            # (carry distance, ball-off-centre at the plan)
 t_windup = t_launch = t_toss = None
 toss_dir = np.array([0.0, 1.0, 0.0])
 toss_cmd = 0.0                # m/s the rig is commanded to reach
 toss_plan = None              # (T, v0, |v0|, reachable) of the solved throw
-toss_release = None           # truth at release, for the report only
+toss_release = None           # truth at separation, for the report only
+toss_rig_v = np.zeros(3)      # the rig's own peak velocity during the stroke
+toss_free = None              # first tick with no contact, pending confirmation
+toss_launch_p = None          # where the plan expected the ball to leave from
 toss_miss = None
 
 
@@ -1875,6 +2220,7 @@ def fire():
     tracker = StereoTracker(sensors)
     frames_tracked, plan, first_plan = 0, None, None
     globals()['approach'] = None
+    rig.set_tilt(0.0)
     t_fire, state = sim_time, "flight"
     if EFFECTS:
         puff(muzzle() + aim_dir() * 0.06, aim_dir())
@@ -1914,12 +2260,15 @@ def plan_toss(p_rest):
             if best is None or s_ < best[1]:
                 best = (T_, s_, vv)
         T, sp, v0 = best
-        cmd = min(sp / max(TOSS_GAIN, 1e-3), ARM_SPEED)
-        # Where the ball is when it leaves: the windup carries the rig back
-        # along -v0, the stroke carries it forward again, and the sheet lets go
-        # at the top of the stroke.
-        reach = cmd * TOSS_STROKE * (2.0 / math.pi) - TOSS_DIP
-        launch_p = np.asarray(p_rest, float) + (v0 / max(sp, 1e-9)) * reach
+        # Where the ball is when it leaves. The first model said it rides
+        # forward with the rig -- cmd * stroke * 2/pi, less the windup dip --
+        # and the measurement says it does not: the sheet slides UNDER the ball
+        # for most of the stroke and the ball only takes off at the end, so it
+        # leaves within 0.09 m of where it sat and 0.03 m above it. That model
+        # put the planned launch point 0.285 m from where the ball actually
+        # left, and 0.285 m of a 1.35 m throw is most of a basket.
+        launch_p = np.asarray(p_rest, float) + np.array([0.0, TOSS_RISE, 0.0])
+    globals()['toss_launch_p'] = launch_p
     return T, v0, sp, sp / max(TOSS_GAIN, 1e-3) <= ARM_SPEED + 1e-6
 
 
@@ -1977,9 +2326,9 @@ def substep(alpha=1.0):
 def step_frame():
     """Sim, render, read the sensor, re-plan, move the rig. One sensor tick."""
     global sim_time, state, t_contact, v_contact, ball_vy_at_contact
-    global t_recover, dip_depth
+    global t_recover, dip_depth, carry_vec, carry_d, carry_T
     global t_windup, t_launch, t_toss, toss_dir, toss_cmd, toss_plan
-    global toss_release, toss_miss
+    global toss_release, toss_miss, toss_offset, toss_rig_v, toss_free
     global plan, first_plan, frames_tracked, truth_cross, _prev_ball_y
 
     import time as _t
@@ -2109,6 +2458,15 @@ def step_frame():
         p_cmd, v_cmd = hermite(p_start, v_start, target_p, target_v,
                                t_hit - t0, sim_time - t0)
         rig.goto(dt, p_cmd, v_cmd)
+        # Ramp the scoop in over the last TILT_LEAD seconds of the approach,
+        # along the FITTED horizontal velocity -- the same arc the rig is
+        # chasing, not the ball's true motion. Early in the track the fit is
+        # still moving, and a sheet that pitches about while the arms are also
+        # sprinting is the worst of both; by the time the tilt matters the
+        # direction has been stable for a hundred observations.
+        u_t = (t_hit - sim_time) / max(TILT_LEAD, 1e-3)
+        rig.set_tilt(math.radians(TILT_DEG) * min(max(1.0 - u_t, 0.0), 1.0),
+                     np.array([v_hit[0], 0.0, v_hit[2]]))
     elif state == "catch":
         u = min((sim_time - t_contact) / ABSORB, 1.0)
         # Ride with the ball, then bleed off. Zero relative velocity at first
@@ -2117,13 +2475,29 @@ def step_frame():
         v_des[1] = -dip_depth * (math.pi / ABSORB) * 0.5 * math.sin(math.pi * u)
         rig.step(dt, (v_des - rig.v) / dt)
     elif state == "recover":
-        # Cradle, then lift back to the ready height -- which is what a person
-        # does, and without it the sheet just stays parked at the bottom of its
-        # give with the ball sitting in a pit.
+        # Cradle, lift back to the ready height, AND CARRY THE BALL HOME.
+        #
+        # The lift is what a person does, and without it the sheet stays parked
+        # at the bottom of its give with the ball sitting in a pit. The carry is
+        # what makes the throw possible at all: the catch ends wherever the ball
+        # was, and on the az +8 shot that was 0.83 m from home with the ball
+        # near the edge of the sheet, so a stroke planned from the rig's own
+        # centre was accelerating something that was not on it -- the ball left
+        # at 0.17 of the commanded speed, 145 degrees off plan. Walking back to
+        # home at a cradling speed re-centres the ball BY CONSTRUCTION rather
+        # than by looking at it: the bowl's low point is the rig centre, so the
+        # ball rolls to the middle while the sheet re-tensions under it. The
+        # carry lasts as long as the distance needs at CARRY_SPEED; the lift and
+        # the re-tension still take RECOVER.
         u = min((sim_time - t_recover) / RECOVER, 1.0)
-        v_des = np.zeros(3)
+        uc = min((sim_time - t_recover) / carry_T, 1.0)
+        v_des = carry_vec * ((math.pi / (2.0 * carry_T)) * math.sin(math.pi * uc))
         v_des[1] = dip_depth * (math.pi / RECOVER) * 0.5 * math.sin(math.pi * u)
         rig.spread = PRESENT * 0.5 * (1.0 - math.cos(math.pi * u))
+        # Flat again before the carry gets going: a tilted sheet being walked
+        # sideways tips the ball out of the low corner.
+        rig.set_tilt(math.radians(TILT_DEG)
+                     * max(0.0, 1.0 - (sim_time - t_recover) / max(TILT_EASE, 1e-3)))
         rig.step(dt, (v_des - rig.v) / dt)
     elif state == "windup":
         # Pull the sheet taut and drop the rig back along -v0. The sine profile
@@ -2159,6 +2533,7 @@ def step_frame():
             rig.spread = max(rig.spread - 2.0 * dt, 0.0)
             rig.step(dt, (v_des - rig.v) / dt)
     else:
+        rig.set_tilt(0.0)
         rig.step(dt, -rig.v / dt)
 
     if state == "flight" and contact:
@@ -2172,7 +2547,12 @@ def step_frame():
         dip_depth = min(abs(ball_vy_at_contact) * ABSORB / math.pi, GIVE)
     elif state == "catch" and sim_time - t_contact > ABSORB:
         state, t_recover = "recover", sim_time
-    elif state == "recover" and sim_time - t_recover > RECOVER + 0.25:
+        # Everything the carry needs, fixed once at the moment it starts. The
+        # rig's own pose is proprioception; the ball is not consulted.
+        carry_vec = np.array([HOME[0] - rig.p[0], 0.0, HOME[1] - rig.p[2]])
+        carry_d = float(np.linalg.norm(carry_vec))
+        carry_T = max(RECOVER, carry_d * math.pi / (2.0 * max(CARRY_SPEED, 1e-3)))
+    elif state == "recover" and sim_time - t_recover > carry_T + SETTLE_DWELL:
         # One instant is a coin flip on a damped oscillation. Measured on the
         # az +8 shot: the ball was 0.11 m off the sheet centre and never left
         # it, but happened to be swinging at 0.19 m/s when the clock said now,
@@ -2190,24 +2570,46 @@ def step_frame():
                 toss_plan = (T, v0, sp, ok)
                 toss_dir = v0 / max(sp, 1e-9)
                 toss_cmd = min(sp / max(TOSS_GAIN, 1e-3), ARM_SPEED)
+                # Truth, for the report alone: how far the ball actually is from
+                # the point the throw was just planned from. That residual is
+                # the throw's own error source, and the carry exists to shrink
+                # it -- so it has to be printed, not assumed.
+                toss_offset = (carry_d,
+                               math.hypot(p_true[0] - rig.p[0], p_true[2] - rig.p[2]))
                 state, t_windup = "windup", sim_time
             else:
                 state = "settled"
-        elif sim_time - t_recover > RECOVER + 0.85:
+        elif sim_time - t_recover > carry_T + SETTLE_DWELL + 0.60:
             state = "missed"
     elif state == "windup" and sim_time - t_windup > TOSS_WINDUP:
         state, t_launch = "launch", sim_time
     elif state == "launch" and sim_time - t_launch > TOSS_STROKE:
         state, t_toss = "toss", sim_time
-        # Truth at the top of the stroke, recorded for the report alone: what
-        # the ball actually left with against what the rig was commanded to
-        # give it is the only way to see what the stroke is worth.
-        toss_release = (sim_time, p_true.copy(), v_true.copy(), rig.v.copy())
     elif state == "toss" and sim_time - t_toss > 0.45:
         settled_ = float(np.linalg.norm(v_true)) < 0.35
         if settled_ or sim_time - t_toss > 2.4:
             toss_miss = math.hypot(p_true[0] - BASKET[0], p_true[2] - BASKET[1])
             state = "delivered" if in_basket(p_true) else "adrift"
+
+    # The ball LEAVES when the contact impulse stops, and that is not the top of
+    # the stroke -- which is what the throw was being scored against, and it was
+    # scoring the wrong instant. Once the ball rides in the middle of the bowl
+    # (which is what the carry home is for) the sheet keeps hold of it through
+    # the brake, the long-range attachment snaps taut on the way past, and the
+    # ball leaves LATER and much faster: measured 2.60 m/s at the top of a 3.34
+    # m/s stroke, and 8.7 m/s vertical by the time it was actually free. So the
+    # release is recorded at separation. Truth, and for the report only.
+    if state in ("launch", "toss") and toss_release is None and t_launch is not None:
+        if contact:
+            # Contact flickers on and off through a stroke, so a single free
+            # tick is not a release; only 80 ms of daylight is.
+            toss_free = None
+            if float(np.linalg.norm(rig.v)) > float(np.linalg.norm(toss_rig_v)):
+                toss_rig_v = rig.v.copy()
+        elif toss_free is None:
+            toss_free = (sim_time, p_true.copy(), v_true.copy())
+        elif sim_time - toss_free[0] > 0.08:
+            toss_release = toss_free + (toss_rig_v.copy(),)
 
     _lap("control")
     if TRACE and state != "idle":
@@ -2277,10 +2679,19 @@ def report(p_true, v_true):
                  "  (lag at peak speed, within the joint limits)" if max(arm_worst) > 0.01 else ""))
     print(f"  rig         travelled {rig.travel:.2f} m, peak {rig.peak_speed:.2f} m/s "
           f"(cap {ARM_SPEED:.1f})"
-          + (f", SPEED-CAPPED on {rig.starved} frames" if rig.starved else ""))
+          + (f", SPEED-CAPPED on {rig.starved} frames" if rig.starved else "")
+          + (f", HELD AT THE ARMS' REACH BOUNDARY on {rig.reach_capped} frames"
+             if rig.reach_capped else ""))
     if t_contact is not None:
         print(f"  contact     t={t_contact:.3f} s, ball {contact_miss[0]:.3f} m from the "
               f"sheet centre when it first touched")
+    if rig.peak_tilt > 0.0:
+        print(f"  scoop       sheet tilted to {math.degrees(rig.peak_tilt):.0f} deg "
+              f"on arrival (corners +/- {0.5 * SPAN * math.tan(rig.peak_tilt):.3f} m)")
+    if toss_offset is not None:
+        print(f"  carry home  catch ended {toss_offset[0]:.3f} m from home, carried "
+              f"back in {carry_T:.2f} s at <= {CARRY_SPEED:.2f} m/s; ball then "
+              f"{toss_offset[1]:.3f} m off the point the throw was planned from")
     if toss_plan is not None:
         T, v0, sp, ok = toss_plan
         print(f"  throw plan  basket at x{BASKET[0]:+.2f} z{BASKET[1]:+.2f}, "
@@ -2290,11 +2701,16 @@ def report(p_true, v_true):
               + ("" if ok else "   [BEYOND THE STROKE - clamped]"))
     if toss_release is not None and toss_plan is not None:
         tr, _pr, vr, rv = toss_release
+        if toss_launch_p is not None:
+            print(f"  launch pt   planned x{toss_launch_p[0]:+.2f} y{toss_launch_p[1]:.2f} "
+                  f"z{toss_launch_p[2]:+.2f}, ball actually left from "
+                  f"x{_pr[0]:+.2f} y{_pr[1]:.2f} z{_pr[2]:+.2f} "
+                  f"({np.linalg.norm(_pr - toss_launch_p):.3f} m away)")
         _, v0, sp, _ = toss_plan
         vb, vg = float(np.linalg.norm(vr)), float(np.linalg.norm(rv))
         cosang = float(np.dot(vr, v0)) / max(vb * sp, 1e-9)
         off = math.degrees(math.acos(max(-1.0, min(1.0, cosang))))
-        print(f"  release     t={tr:.3f} s, rig {vg:.2f} m/s, ball {vb:.2f} m/s "
+        print(f"  release     t={tr:.3f} s (separation), rig {vg:.2f} m/s, ball {vb:.2f} m/s "
               f"({vb / max(vg, 1e-6):.2f} x the rig, gain assumed {TOSS_GAIN:.2f}), "
               f"wanted {sp:.2f} m/s at {off:.0f} deg off the planned direction")
     resting = float(np.linalg.norm(v_true))
@@ -2492,11 +2908,15 @@ def ready():
 def arm():
     """The cloth is deliberately NOT reset -- it is already hanging quiet, and
     resetting it is what broke this path."""
-    global last_result
+    global last_result, toss_plan, toss_release, toss_free, toss_miss
+    global toss_offset, toss_launch_p, toss_rig_v, truth_cross, t_contact
     bp.assign(np.array([muzzle()], np.float32))
     bv.zero_()
     rig.__init__()
     last_result = ""
+    toss_plan = toss_release = toss_free = toss_miss = None
+    toss_offset = toss_launch_p = truth_cross = t_contact = None
+    toss_rig_v = np.zeros(3)
     fire()
 
 
