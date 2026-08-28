@@ -73,6 +73,33 @@ def test_drive_holds_against_gravity():
     assert abs(arm.joint_position) < 0.1, "drive should hold the arm near horizontal"
 
 
+def test_link_impulse_is_timestep_invariant():
+    # PhysX takes no impulse on an articulation link ("The force modes eIMPULSE and
+    # eVELOCITY_CHANGE can not be applied to articulation links"), so add_impulse goes
+    # in as force = impulse / fixed_timestep for the single substep that consumes it.
+    # What makes that an impulse rather than a force is that the velocity it imparts is
+    # INDEPENDENT of the timestep, where the same call as a force halves when dt does.
+    def kick(dt, how, mag):
+        world = tp.PhysxWorld(gravity=tp.Vector3(0, 0, 0), fixed_timestep=dt)
+        art = world.create_articulation(fixed_base=True)
+        base = art.add_link(box(0.2, 0.2, 0.2, (0, 2, 0)))
+        arm = art.add_link(box(1.0, 0.2, 0.2, (0.5, 2, 0)), parent=base,
+                           axis=(0, 0, 1), anchor=(0.0, 2, 0))  # free hinge, no drive
+        art.finalize()
+        getattr(arm, how)(tp.Vector3(0, mag, 0))  # straight up, at the far end
+        world.step(dt)                            # exactly one substep
+        return arm.joint_velocity
+
+    j = kick(1 / 60, "add_impulse", 20.0)
+    assert abs(j) > 0.1, "an impulse on the link must spin the joint"
+    # The same impulse over half the step must impart the same velocity.
+    assert kick(1 / 120, "add_impulse", 20.0) == pytest.approx(j, rel=0.02)
+    # And it must equal the force carrying that momentum through one step, J/dt.
+    assert kick(1 / 60, "add_force", 20.0 * 60.0) == pytest.approx(j, rel=0.02)
+    # A force, unlike an impulse, delivers only half of it in half the step.
+    assert kick(1 / 120, "add_force", 20.0 * 60.0) == pytest.approx(j / 2, rel=0.02)
+
+
 def test_root_link_has_no_joint():
     world = tp.PhysxWorld()
     art = world.create_articulation(fixed_base=True)

@@ -52,8 +52,8 @@ namespace {
     struct Cantilever {
         std::unique_ptr<Articulation> art;
         std::shared_ptr<Mesh> rootMesh, armMesh;
-        ArticulationLink root{nullptr, nullptr, ::physx::PxTransform(::physx::PxIdentity)};
-        ArticulationLink link{nullptr, nullptr, ::physx::PxTransform(::physx::PxIdentity)};
+        ArticulationLink root{nullptr, nullptr, nullptr, ::physx::PxTransform(::physx::PxIdentity)};
+        ArticulationLink link{nullptr, nullptr, nullptr, ::physx::PxTransform(::physx::PxIdentity)};
         float mass = 0.f;
         float arm = 0.f;
     };

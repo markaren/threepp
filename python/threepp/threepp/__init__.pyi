@@ -219,7 +219,7 @@ class ArticulationLink:
         """
     def add_impulse(self, impulse: Vector3) -> None:
         """
-        Apply an external impulse (kg·m/s) — e.g. a random shove.
+        Apply an external impulse (kg·m/s) — e.g. a random shove. PhysX takes no impulse on an articulation link, so this goes in as the force that carries the same momentum through one substep (force = impulse / fixed_timestep), consumed by the next step().
         """
     def set_drive_target(self, target: typing.SupportsFloat | typing.SupportsIndex) -> None:
         """

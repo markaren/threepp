@@ -61,11 +61,14 @@ namespace threepp {
     // Valid only while its Articulation (and world) live.
     class ArticulationLink {
     public:
-        ArticulationLink(::physx::PxArticulationLink* link,
+        // `world` is the world the link is simulated by; addImpulse needs its
+        // substep length to size the equivalent force (see below).
+        ArticulationLink(const PhysxWorld* world,
+                         ::physx::PxArticulationLink* link,
                          ::physx::PxArticulationJointReducedCoordinate* joint,
                          ::physx::PxTransform creationPose,
                          ::physx::PxArticulationAxis::Enum axis = ::physx::PxArticulationAxis::eTWIST)
-            : link_(link), joint_(joint), creationPose_(creationPose), axis_(axis) {}
+            : world_(world), link_(link), joint_(joint), creationPose_(creationPose), axis_(axis) {}
 
         [[nodiscard]] bool isRoot() const { return joint_ == nullptr; }
         [[nodiscard]] Vector3 position() const { return fromPxVec3(link_->getGlobalPose().p); }
@@ -74,8 +77,29 @@ namespace threepp {
         // External force/impulse on this link (a PxArticulationLink is a PxRigidBody).
         // Use for perturbations — e.g. random shoves to train push recovery, or to
         // force-drive a cart link in a cart-pole on the CPU deployment path.
+        //
+        // Neither is valid once the world runs direct-GPU: PhysX rejects
+        // PxArticulationLink::addForce outright under PxSceneFlag::eENABLE_DIRECT_GPU_API.
         void addForce(const Vector3& v) { link_->addForce(toPxVec3(v), ::physx::PxForceMode::eFORCE); }
-        void addImpulse(const Vector3& v) { link_->addForce(toPxVec3(v), ::physx::PxForceMode::eIMPULSE); }
+
+        // eFORCE is the only mode PhysX documents for an articulation link: "The force
+        // modes PxForceMode::eIMPULSE and PxForceMode::eVELOCITY_CHANGE can not be
+        // applied to articulation links" (PxRigidBody::addForce). So the impulse goes in
+        // as the force that carries the same momentum through the substep that consumes
+        // it, F = J / dt — the conversion PhysX's own note points at ("an impulsive force
+        // is applied force multiplied by a timestep"). It lands exactly once: link forces
+        // are cleared after every simulate(), and PhysxWorld::step always simulates
+        // settings().fixedTimestep, whatever dt the caller hands it.
+        //
+        // Measured on fr3.urdf (gravity off, drives off, one step): J = 2.5 kg·m/s through
+        // fr3_hand_tcp moves its nine joints by 63.004 rad/s of summed |Δq̇| at BOTH
+        // dt = 1/60 and dt = 1/120, matching F = J/dt to six decimals — impulsive, i.e.
+        // timestep-invariant, where a plain eFORCE halves when the timestep does.
+        void addImpulse(const Vector3& v) {
+            const float dt = world_->settings().fixedTimestep;
+            if (!(dt > 0.f)) throw std::runtime_error("ArticulationLink.addImpulse: the world's fixedTimestep must be > 0");
+            link_->addForce(toPxVec3(v) / dt, ::physx::PxForceMode::eFORCE);
+        }
 
         // Operate on this joint's actual motion axis (eTWIST for revolute, eX for
         // prismatic) so the accessors are correct for both joint types.
@@ -92,6 +116,7 @@ namespace threepp {
             if (!joint_) throw std::runtime_error("ArticulationLink: the root link has no joint");
             return joint_;
         }
+        const PhysxWorld* world_;
         ::physx::PxArticulationLink* link_;
         ::physx::PxArticulationJointReducedCoordinate* joint_;
         ::physx::PxTransform creationPose_;
@@ -238,7 +263,7 @@ namespace threepp {
             // A PxArticulationLink is a PxRigidActor, so the rigid-body bind path
             // syncs the visual mesh to the simulated link pose.
             world_.bind(mesh, *link);
-            ArticulationLink handle(link, joint, linkPose, ax);
+            ArticulationLink handle(&world_, link, joint, linkPose, ax);
             links_.push_back(handle);
             return handle;
         }

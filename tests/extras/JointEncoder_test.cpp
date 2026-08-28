@@ -51,8 +51,8 @@ namespace {
         std::unique_ptr<Articulation> art;
         std::shared_ptr<Mesh> rootMesh;
         std::shared_ptr<Mesh> armMesh;
-        ArticulationLink root{nullptr, nullptr, ::physx::PxTransform(::physx::PxIdentity)};
-        ArticulationLink arm{nullptr, nullptr, ::physx::PxTransform(::physx::PxIdentity)};
+        ArticulationLink root{nullptr, nullptr, nullptr, ::physx::PxTransform(::physx::PxIdentity)};
+        ArticulationLink arm{nullptr, nullptr, nullptr, ::physx::PxTransform(::physx::PxIdentity)};
     };
 
     // `horizontal` starts the arm along +X (maximum gravity torque, so it swings);

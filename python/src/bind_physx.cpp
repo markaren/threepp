@@ -272,7 +272,10 @@ namespace threepp_py {
                 .def_property_readonly("joint_position", &ArticulationLink::jointPosition, "Joint angle (radians).")
                 .def_property_readonly("joint_velocity", &ArticulationLink::jointVelocity, "Joint angular velocity (rad/s).")
                 .def("add_force", &ArticulationLink::addForce, py::arg("force"), "Apply an external force (N) to this link.")
-                .def("add_impulse", &ArticulationLink::addImpulse, py::arg("impulse"), "Apply an external impulse (kg·m/s) — e.g. a random shove.")
+                .def("add_impulse", &ArticulationLink::addImpulse, py::arg("impulse"),
+                     "Apply an external impulse (kg·m/s) — e.g. a random shove. PhysX takes no impulse on an "
+                     "articulation link, so this goes in as the force that carries the same momentum through one "
+                     "substep (force = impulse / fixed_timestep), consumed by the next step().")
                 .def("set_drive_target", &ArticulationLink::setDriveTarget, py::arg("target"),
                      "Set the PD drive's target angle (radians).")
                 .def("set_drive_velocity", &ArticulationLink::setDriveVelocity, py::arg("velocity"));
