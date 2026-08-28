@@ -145,6 +145,15 @@ SENSOR_W, SENSOR_H = parse_size(cli_arg("--sensor", "640x480", str))
 # better aspect for a social clip.
 VIEW_W, VIEW_H = parse_size(cli_arg("--size", "960x720", str))
 EV_THRESHOLD = cli_arg("--ev-threshold", 0.15, float)
+# Render is ~65% of the loop, so this is the lever that matters. The worry was
+# that it would cost accuracy -- the detector samples the post-TAA frame, so a
+# lower scale softens the edges it fires on -- but measured across 0.5..1.0 the
+# bearing stays at 2.4-2.6 px and every scale still catches. Interleaved A/B
+# (the run-to-run spread is ~15%, so singles are not worth quoting): 25.8 ms at
+# 1.0 against 18.7 ms at 0.6.
+RENDER_SCALE = cli_arg("--render-scale", 0.6, float)
+PROFILE = "--profile" in sys.argv
+prof = {}
 MIN_EVENTS = int(cli_arg("--min-events", 40, float))
 
 V = (N + 1) * (N + 1)
@@ -722,28 +731,42 @@ cannon = tp.Group()
 cannon.position.set(*[float(x) for x in CANNON])
 scene.add(cannon)
 
-for _z in (-0.135, 0.135):
-    _cheek = tp.Mesh(tp.BoxGeometry(0.34, 0.20, 0.035),
+# The trunnion sits at CANNON (0.55 m up, which is where the shot leaves from),
+# so the carriage has to reach the floor FROM there: wheel bottom at local
+# -0.55 puts it exactly on y = 0 rather than hovering a quarter of a metre up.
+_AXLE_Y, _WHEEL_R = -0.27, 0.28
+for _z in (-0.145, 0.145):
+    _cheek = tp.Mesh(tp.BoxGeometry(0.34, 0.34, 0.035),
                      standard_material(0x343b45, 0.6, 0.45))
-    _cheek.position.set(-0.02, -0.12, _z)
+    _cheek.position.set(-0.02, -0.15, _z)
     _cheek.cast_shadow = True
     cannon.add(_cheek)
+for _z in (-0.19, 0.19):
+    _w = tp.Mesh(tp.CylinderGeometry(_WHEEL_R, _WHEEL_R, 0.05, 24),
+                 standard_material(0x15181d, 0.55, 0.3))
+    _w.rotate_x(math.pi / 2)
+    _w.position.set(0.0, _AXLE_Y, _z)
+    _w.cast_shadow = True
+    cannon.add(_w)
+    _hub = tp.Mesh(tp.CylinderGeometry(0.055, 0.055, 0.075, 14),
+                   standard_material(0x6b7480, 0.4, 0.8))
+    _hub.rotate_x(math.pi / 2)
+    _hub.position.set(0.0, _AXLE_Y, _z)
+    cannon.add(_hub)
 _axle = tp.Mesh(tp.CylinderGeometry(0.022, 0.022, 0.40, 12),
                 standard_material(0x22262d, 0.6, 0.5))
 _axle.rotate_x(math.pi / 2)
-_axle.position.set(0.0, -0.18, 0.0)
+_axle.position.set(0.0, _AXLE_Y, 0.0)
 cannon.add(_axle)
-for _z in (-0.19, 0.19):
-    _w = tp.Mesh(tp.CylinderGeometry(0.15, 0.15, 0.045, 20),
-                 standard_material(0x15181d, 0.55, 0.3))
-    _w.rotate_x(math.pi / 2)
-    _w.position.set(0.0, -0.18, _z)
-    _w.cast_shadow = True
-    cannon.add(_w)
+# Trail spar down to the ground behind, so it stands on three points like a gun
+# rather than on an invisible plinth.
+_trail = tp.Mesh(tp.BoxGeometry(0.82, 0.065, 0.11),
+                 standard_material(0x343b45, 0.65, 0.4))
+_trail.position.set(-0.42, -0.40, 0.0)
+_trail.rotate_z(math.radians(-24.0))
+_trail.cast_shadow = True
+cannon.add(_trail)
 
-# Cylinders run along +Y, so the pivot's job is to map +Y onto the aim vector.
-# Rotating about Z by (el - 90 deg) swings +Y down onto +X at the right pitch,
-# then about Y by -az swings it round; XYZ Euler order applies them in that order.
 barrel_pivot = tp.Group()
 cannon.add(barrel_pivot)
 _barrel = tp.Mesh(tp.CylinderGeometry(BARREL_R * 0.80, BARREL_R, BARREL_L, 24),
@@ -831,6 +854,8 @@ def update_aim_preview(visible):
         aim_hit.visible = False
 
 
+if RENDER_SCALE < 0.999:
+    renderer.render_scale = RENDER_SCALE
 renderer.event_camera_source = "shaded"
 renderer.set_event_camera_resolution(SENSOR_W, SENSOR_H)
 renderer.event_camera_enabled = True
@@ -935,6 +960,16 @@ def step_frame():
     global t_recover, dip_depth
     global plan, first_plan, frames_tracked, ev_overflows, truth_cross, _prev_ball_y
 
+    import time as _t
+    _mark = _t.perf_counter()
+
+    def _lap(name):
+        nonlocal _mark
+        if PROFILE:
+            now = _t.perf_counter()
+            prof[name] = prof.get(name, 0.0) + (now - _mark) * 1000.0
+            _mark = now
+
     point_barrel()
     update_aim_preview(state in ("idle", "settled", "missed"))
 
@@ -942,10 +977,12 @@ def step_frame():
     for _ in range(SUBSTEPS):
         substep()
         sim_time += DT
+    _lap("sim")
 
     p_true = bp.numpy()[0].astype(np.float64)
     v_true = bv.numpy()[0].astype(np.float64)
     contact = float(np.linalg.norm(impulse.numpy()[0])) > 0.0
+    _lap("readback")
 
     # Ground truth of the crossing, recorded once, purely so the prediction can
     # be scored afterwards. Nothing in the control path reads it.
@@ -963,15 +1000,18 @@ def step_frame():
     tg = rig.targets()
     for k, m in enumerate(anchor_meshes):
         m.position.set(float(tg[k][0]), float(tg[k][1]), float(tg[k][2]))
+    _lap("mesh upload")
 
     # --- render, then read the sensor ----------------------------------------
     renderer.set_event_camera_params(threshold=EV_THRESHOLD, decay=0.80,
                                      min_luma=0.005, max_events_per_pixel=5,
                                      frame_time_us=int(round(sim_time * 1e6)))
     renderer.render(scene, camera)
+    _lap("render")
     ev, overflowed = renderer.read_event_stream(200000)
     if overflowed:
         ev_overflows += 1
+    _lap("event read")
 
     # --- perceive and plan ----------------------------------------------------
     if state == "flight":
@@ -1004,6 +1044,8 @@ def step_frame():
                 plan = hit
                 if first_plan is None:
                     first_plan = (sim_time, hit)
+
+    _lap("track + fit")
 
     # --- control --------------------------------------------------------------
     if state == "flight" and plan is not None:
@@ -1049,6 +1091,7 @@ def step_frame():
     elif state == "recover" and sim_time - t_recover > RECOVER + 0.25:
         state = "settled" if held(p_true, v_true) else "missed"
 
+    _lap("control")
     if TRACE and state != "idle":
         pe = "  -" if plan is None else f"{plan[1][0]:+.2f}"
         oe = obs_err[-1] if obs_err else np.zeros(3)
@@ -1138,13 +1181,24 @@ def compose(ev_img):
 
 
 if TUNE:
-    print(f"cloth catch: {V} particles on {device}, {SENSOR_HZ:.0f} Hz sensor tick")
+    import time
+    print(f"cloth catch: {V} particles on {device}, {SENSOR_HZ:.0f} Hz sensor tick, "
+          f"render scale {RENDER_SCALE:.2f}")
     pt = vt = None
     for i in range(TOTAL):
         if state == "idle" and sim_time >= FIRE_AT:
             fire()
+        if i == 60:                        # warm up before timing
+            t0 = time.perf_counter()
         pt, vt = step_frame()
+    loop_ms = 1000.0 * (time.perf_counter() - t0) / (TOTAL - 60)
     report(pt, vt)
+    print(f"  loop        {loop_ms:.2f} ms/tick ({1000.0 / loop_ms:.0f} Hz achievable, "
+          f"{SENSOR_HZ:.0f} Hz asked)")
+    if PROFILE:
+        n = TOTAL
+        for k, v in sorted(prof.items(), key=lambda kv: -kv[1]):
+            print(f"    {k:<12} {v / n:6.2f} ms/tick  ({100 * v / (loop_ms * n):4.1f}%)")
     sys.exit(0)
 
 if (CLIP or SEQ) and not FRAMES:
