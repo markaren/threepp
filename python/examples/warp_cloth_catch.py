@@ -1681,9 +1681,9 @@ def animate():
     global cam_moved_in_flight, last_result, state
 
     if canvas.is_key_down("A"):
-        aim["az"] += 0.6
-    if canvas.is_key_down("D"):
         aim["az"] -= 0.6
+    if canvas.is_key_down("D"):
+        aim["az"] += 0.6
     if canvas.is_key_down("W"):
         aim["el"] = min(aim["el"] + 0.4, 85.0)
     if canvas.is_key_down("S"):
