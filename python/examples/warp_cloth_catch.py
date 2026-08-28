@@ -7,12 +7,25 @@ changes -- and everything else is inferred from that.
 
 Three things make this work, and each of them is a measurement, not a guess:
 
-  * Range from apparent size. Only the PRIMARY Vulkan view runs the event
-    detector (secondary views are "measurement cameras... no lens or sensor
-    model"), so stereo is off the table. A DVS fires on a moving ball's
-    silhouette, so the RMS radius of the event cloud is its apparent radius --
-    measured at 0.989 of ground truth, i.e. essentially uncalibrated -- and a
-    known ball radius turns that into depth.
+  * BEARINGS ONLY, with gravity supplying the scale. Splitting the estimator's
+    error in two showed the bearing was unbiased at 4.3 mrad while the range --
+    from the event cloud's apparent radius -- carried a systematic -0.19 m bias,
+    3.4% of the distance and more than twice its own noise. The RMS radius of an
+    event cloud is only PROPORTIONAL to the ball's apparent radius, and the
+    constant depends on how the ball happens to look; a centroid has no such
+    constant. So the arc is fitted to the bearings and the range is thrown away.
+
+    Bearings alone would leave the scale free -- every scaled trajectory
+    projects identically -- except that gravity is not free. Fixing |g| at 9.81
+    pins it, and six unknowns (p0, v0) come out of bearings alone. Against
+    fitting reconstructed 3-D points (--size-range) this is 4x better on the
+    final call (0.06 m vs 0.26 m) and 11x on the first (0.08 m vs 0.93 m), which
+    matters more: it means the rig can commit early instead of chasing.
+
+    No depth sensor is needed for this, and one would not be free -- read_depth
+    re-renders, which would feed the detector phantom frames. Where depth WOULD
+    earn its place is a target whose size is unknown, or one that does not fly a
+    ballistic arc; neither is true here.
 
   * Timestamps, not frame indices. The detector interpolates each event's stamp
     along the log-intensity ramp between two frames, so the stream carries real
@@ -31,8 +44,16 @@ Three things make this work, and each of them is a measurement, not a guess:
 The sensor camera is static, because a moving event camera fires events over the
 whole frame. That is both realistic and a better shot.
 
+In the window the cannon carries its aim visibly and draws the arc the shot will
+actually take, with a ring where it crosses the catch plane. That preview is
+ground truth and is the PLAYER's aid -- it is hidden the instant the shot leaves,
+so it can never be confused with, or leak into, what the tracker has to work out
+for itself. Watching the tracker's cyan reticle converge onto that amber ring is
+the whole perception story in one picture.
+
     python warp_cloth_catch.py                      # window; A/D aim, W/S elevate,
                                                     # Q/E power, SPACE fire, R reset
+    python warp_cloth_catch.py --frames 900 --autofire   # bounded window run, for testing
     python warp_cloth_catch.py --tune               # headless, numbers only
     python warp_cloth_catch.py --clip catch.mp4     # headless mp4
     python warp_cloth_catch.py --clip c.mp4 --split # beauty | event stream, side by side
@@ -62,14 +83,21 @@ CLIP = cli_arg("--clip", "", str)
 SEQ = cli_arg("--seq", "", str)
 SPLIT = "--split" in sys.argv          # beauty | event visualisation, side by side
 ORACLE = "--oracle" in sys.argv        # bypass the sensor; use true ball state
+SIZE_RANGE = "--size-range" in sys.argv  # the old apparent-size fit, for the A/B
 TRACE = "--trace" in sys.argv
-HEADLESS = bool(TUNE or CLIP or SEQ)
+# Bounded interactive run: drives the real window loop -- ImGui, HUD, orbit
+# controls and all -- for N frames and exits, so the interactive path can be
+# exercised rather than assumed. --autofire shoots as soon as it reads READY.
+FRAMES = int(cli_arg("--frames", 0, float))
+AUTOFIRE = "--autofire" in sys.argv
+HEADLESS = bool(TUNE or CLIP or SEQ) and not FRAMES
 
 # ---- the cannon --------------------------------------------------------------
 CANNON = np.array([float(x) for x in cli_arg("--cannon", "-2.40,0.55,0", str).split(",")])
 AZ = cli_arg("--az", 0.0, float)             # degrees; 0 fires along +x
 EL = cli_arg("--el", 62.0, float)            # degrees above horizontal
 MUZZLE = cli_arg("--speed", 6.5, float)      # m/s
+aim = {"az": AZ, "el": EL, "speed": MUZZLE}
 # The sheet must be STILL before the ball flies. A DVS reports change, so a
 # ringing sheet floods the frame and the tracker locks onto cloth instead of
 # ball -- measured centre 300 px from the true one. Once it has settled the
@@ -418,8 +446,10 @@ class EventTracker:
         self.fit = None              # (p0, v0) of the ballistic fit
         self.gate = None             # (u, v, radius_px) to search inside
         self.rejected = 0
+        self.bearing_rms = float('nan')
         self.last_px = None
         self.recent = []
+        self.bear = []      # (t, u, v): the measurement that is not biased
 
     def _angular(self, xy):
         """Pixels -> tangent-plane angles, which are isotropic even when the
@@ -484,6 +514,7 @@ class EventTracker:
         p = (self.eye + self.fwd * z
              + self.right * (c_ang[0] * z) - self.up * (c_ang[1] * z))
         self.obs.append((t_ev, p[0], p[1], p[2]))
+        self.bear.append((t_ev, c[0], c[1]))
         # Tight gate: the sheet is a large, bright, fast mover and once the ball
         # nears it a loose window swallows cloth events and the range collapses.
         self.gate = (c[0], c[1], max(4.0 * r_rms, 30.0))
@@ -509,6 +540,69 @@ class EventTracker:
             s = max(float(np.median(res)), 1e-3)
             w = 1.0 / (1.0 + (res / (3.0 * s)) ** 2)
         self.fit = (sol[0], sol[1], a[0, 0])
+        return self.fit
+
+    def _project(self, p):
+        d = p - self.eye
+        z = np.dot(d, self.fwd)
+        z = np.where(np.abs(z) < 1e-3, 1e-3, z)
+        return np.stack([self.w / 2.0 + self.fx * np.dot(d, self.right) / z,
+                         self.h / 2.0 - self.fy * np.dot(d, self.up) / z], axis=-1)
+
+    def solve_fit_bearings(self):
+        """Fit the arc to the BEARINGS, with gravity fixed.
+
+        Range from apparent size carries a systematic bias -- measured at
+        -0.19 m, which is 3.4% of the distance and dwarfs its 0.08 m noise --
+        because the RMS radius of an event cloud is only proportional to the
+        ball's apparent radius, and the constant depends on how the ball happens
+        to look. The bearing has no such constant: it is a centroid, and it came
+        out unbiased at 4.3 mrad.
+
+        Bearings alone would leave the scale free -- every scaled trajectory
+        projects identically -- except that gravity is NOT free. Fixing |g| at
+        9.81 pins the scale, so six unknowns (p0, v0) are recoverable from
+        bearings alone. This is Gauss-Newton on those six, started from the
+        size-based fit, which is close enough to converge from.
+        """
+        if len(self.bear) < 24:
+            return None
+        a = np.array(self.bear)
+        t = a[:, 0] - a[0, 0]
+        if t[-1] < 0.12:
+            return None
+        seed = self.solve_fit()
+        if seed is None:
+            return None
+        x = np.concatenate([seed[0], seed[1]])
+        half_g = 0.5 * G_NP[None, :] * (t ** 2)[:, None]
+
+        def resid(x):
+            p = x[None, :3] + x[None, 3:] * t[:, None] + half_g
+            return (self._project(p) - a[:, 1:]).reshape(-1)
+
+        r = resid(x)
+        for _ in range(6):
+            J = np.empty((r.size, 6))
+            for k in range(6):
+                dx = np.zeros(6)
+                dx[k] = 1e-4 if k < 3 else 1e-3
+                J[:, k] = (resid(x + dx) - r) / dx[k]
+            # Huber-ish reweighting: one collapsed cluster should not steer six
+            # parameters that a few hundred good bearings agree on.
+            e = np.linalg.norm(r.reshape(-1, 2), axis=1)
+            wgt = np.repeat(1.0 / (1.0 + (e / max(3.0 * np.median(e), 1e-6)) ** 2), 2)
+            Jw, rw = J * wgt[:, None], r * wgt
+            try:
+                step = np.linalg.lstsq(Jw, -rw, rcond=None)[0]
+            except np.linalg.LinAlgError:
+                return None
+            x = x + step
+            r = resid(x)
+            if np.linalg.norm(step[:3]) < 1e-4:
+                break
+        self.fit = (x[:3], x[3:], a[0, 0])
+        self.bearing_rms = float(np.sqrt((r ** 2).reshape(-1, 2).sum(axis=1).mean()))
         return self.fit
 
     def predict_crossing(self, y_plane):
@@ -562,8 +656,8 @@ scene.background = 0x0a0d11
 # events across the whole frame, so there is nothing to be gained by flying it.
 # High enough to see INTO the bowl -- from a low angle the sheet's near lip
 # hides the very thing the shot is about -- while still framing the whole arc.
-EYE = np.array([0.40, 3.05, 4.90])
-TGT = np.array([-0.50, 1.05, 0.0])
+EYE = np.array([0.60, 3.15, 5.60])
+TGT = np.array([-0.30, 1.05, 0.0])
 camera = tp.PerspectiveCamera(45, VIEW_W / VIEW_H, 0.1, 100)
 camera.position.set(*EYE)
 camera.look_at(*TGT)
@@ -593,8 +687,21 @@ cloth_mesh = tp.Mesh(geometry, standard_material(0xd4542e, 0.88, side=tp.Side.Do
 cloth_mesh.cast_shadow = True
 scene.add(cloth_mesh)
 
-# Bright ball on a dark set: that contrast is what the detector actually runs on.
-ball_mesh = tp.Mesh(tp.SphereGeometry(BALL_R, 40, 28), standard_material(0xf2f5ff, 0.35))
+def _ball_texture(w=768, h=384):
+    u = (np.arange(w) + 0.5) / w
+    v = (np.arange(h) + 0.5) / h
+    U, V = np.meshgrid(u, v)
+    img = np.empty((h, w, 3), np.uint8)
+    img[:] = (243, 246, 252)
+    img[((np.floor(U * 12) + np.floor(V * 6)) % 2).astype(bool)] = (22, 26, 34)
+    img[np.abs(V - 0.5) < 0.030] = (0, 208, 255)      # equator
+    img[np.abs(U - 0.5) < 0.010] = (255, 96, 30)      # meridian
+    return img
+
+
+ball_mat = standard_material(0xffffff, 0.34)
+ball_mat.map = tp.data_texture(_ball_texture(), True)
+ball_mesh = tp.Mesh(tp.SphereGeometry(BALL_R, 48, 32), ball_mat)
 ball_mesh.cast_shadow = True
 scene.add(ball_mesh)
 
@@ -604,10 +711,125 @@ for _ in range(4):
     scene.add(m)
     anchor_meshes.append(m)
 
-cannon_mesh = tp.Mesh(tp.BoxGeometry(0.42, 0.30, 0.30), standard_material(0x3a4048, 0.7, 0.3))
-cannon_mesh.position.set(*[float(x) for x in CANNON])
-cannon_mesh.cast_shadow = True
-scene.add(cannon_mesh)
+# ---- the cannon ---------------------------------------------------------------
+# A barrel that visibly carries the aim, so a shot can be lined up before it is
+# taken rather than discovered afterwards. CANNON is the trunnion; the ball
+# leaves the MUZZLE, so the visual and the ballistics agree.
+BARREL_L = 0.62
+BARREL_R = 0.075
+
+cannon = tp.Group()
+cannon.position.set(*[float(x) for x in CANNON])
+scene.add(cannon)
+
+for _z in (-0.135, 0.135):
+    _cheek = tp.Mesh(tp.BoxGeometry(0.34, 0.20, 0.035),
+                     standard_material(0x343b45, 0.6, 0.45))
+    _cheek.position.set(-0.02, -0.12, _z)
+    _cheek.cast_shadow = True
+    cannon.add(_cheek)
+_axle = tp.Mesh(tp.CylinderGeometry(0.022, 0.022, 0.40, 12),
+                standard_material(0x22262d, 0.6, 0.5))
+_axle.rotate_x(math.pi / 2)
+_axle.position.set(0.0, -0.18, 0.0)
+cannon.add(_axle)
+for _z in (-0.19, 0.19):
+    _w = tp.Mesh(tp.CylinderGeometry(0.15, 0.15, 0.045, 20),
+                 standard_material(0x15181d, 0.55, 0.3))
+    _w.rotate_x(math.pi / 2)
+    _w.position.set(0.0, -0.18, _z)
+    _w.cast_shadow = True
+    cannon.add(_w)
+
+# Cylinders run along +Y, so the pivot's job is to map +Y onto the aim vector.
+# Rotating about Z by (el - 90 deg) swings +Y down onto +X at the right pitch,
+# then about Y by -az swings it round; XYZ Euler order applies them in that order.
+barrel_pivot = tp.Group()
+cannon.add(barrel_pivot)
+_barrel = tp.Mesh(tp.CylinderGeometry(BARREL_R * 0.80, BARREL_R, BARREL_L, 24),
+                  standard_material(0x4a515b, 0.30, 0.85))
+_barrel.position.set(0.0, BARREL_L / 2, 0.0)
+_barrel.cast_shadow = True
+barrel_pivot.add(_barrel)
+_band = tp.Mesh(tp.CylinderGeometry(BARREL_R * 1.02, BARREL_R * 1.02, 0.05, 24),
+                standard_material(0x6b7480, 0.35, 0.9))
+_band.position.set(0.0, BARREL_L - 0.035, 0.0)
+barrel_pivot.add(_band)
+_breech = tp.Mesh(tp.SphereGeometry(BARREL_R * 1.15, 20, 14),
+                  standard_material(0x4a515b, 0.30, 0.85))
+barrel_pivot.add(_breech)
+
+
+def aim_dir():
+    el, az = math.radians(aim["el"]), math.radians(aim["az"])
+    return np.array([math.cos(el) * math.cos(az), math.sin(el),
+                     math.cos(el) * math.sin(az)])
+
+
+def muzzle():
+    return CANNON + aim_dir() * BARREL_L
+
+
+def point_barrel():
+    barrel_pivot.rotation.set(0.0, -math.radians(aim["az"]),
+                              math.radians(aim["el"]) - math.pi / 2)
+
+
+point_barrel()
+
+# ---- the aim preview ----------------------------------------------------------
+# Ground truth, and deliberately so: this is the PLAYER's aid, not the robot's.
+# It is hidden the moment the shot is fired, so nothing it draws can be confused
+# with -- or leak into -- what the tracker has to work out for itself. Watching
+# the cyan reticle converge onto this amber one IS the perception story.
+ARC_N = 72
+_arc_geo = tp.BufferGeometry()
+_arc_geo.set_attribute("position", np.zeros((ARC_N, 3), np.float32))
+_arc_mat = tp.LineBasicMaterial()
+_arc_mat.color = 0xffae3a
+_arc_mat.transparent = True
+_arc_mat.opacity = 0.55
+aim_arc = tp.Line(_arc_geo, _arc_mat)
+scene.add(aim_arc)
+
+_hit_mat = tp.MeshBasicMaterial()
+_hit_mat.color = 0xffae3a
+_hit_mat.transparent = True
+_hit_mat.opacity = 0.6
+_hit_mat.side = tp.Side.Double
+aim_hit = tp.Mesh(tp.RingGeometry(0.13, 0.17, 40), _hit_mat)
+aim_hit.rotate_x(-math.pi / 2)
+scene.add(aim_hit)
+
+
+def true_crossing(p0, v0, y_plane):
+    """Where an unobstructed shot would cross y_plane on the way down."""
+    a, b, c = 0.5 * G_NP[1], v0[1], p0[1] - y_plane
+    disc = b * b - 4 * a * c
+    if disc < 0:
+        return None, None
+    r = math.sqrt(disc)
+    t = max((-b + r) / (2 * a), (-b - r) / (2 * a))
+    return (t, p0 + v0 * t + 0.5 * G_NP * t * t) if t > 0 else (None, None)
+
+
+def update_aim_preview(visible):
+    aim_arc.visible = visible
+    aim_hit.visible = visible
+    if not visible:
+        return
+    p0, v0 = muzzle(), aim["speed"] * aim_dir()
+    t_hit, p_hit = true_crossing(p0, v0, CATCH_Y)
+    span = t_hit if t_hit else 1.4
+    ts = np.linspace(0.0, span, ARC_N)[:, None]
+    pts = p0[None, :] + v0[None, :] * ts + 0.5 * G_NP[None, :] * ts * ts
+    _arc_geo.update_attribute("position", pts.astype(np.float32))
+    if p_hit is not None:
+        aim_hit.visible = True
+        aim_hit.position.set(float(p_hit[0]), CATCH_Y + 0.004, float(p_hit[2]))
+    else:
+        aim_hit.visible = False
+
 
 renderer.event_camera_source = "shaded"
 renderer.set_event_camera_resolution(SENSOR_W, SENSOR_H)
@@ -637,22 +859,24 @@ truth_cross = None            # where the ball really crossed the catch plane
 plan = None                   # (t_hit, p_hit, v_hit) from the tracker
 first_plan = None             # the earliest usable prediction, for the report
 approach = None               # (t0, p0, v0) the approach cubic departs from
-aim = {"az": AZ, "el": EL, "speed": MUZZLE}
 tracker = EventTracker(FX_PX, FY_PX, EYE, _fwd, _right, _up, SENSOR_W, SENSOR_H)
 frames_tracked = 0
 ev_overflows = 0
 _prev_ball_y = None
 obs_err = []
+bearing_err = []
+range_err = []
 
 
-def fire():
+def fire(basis=None):
     global state, t_fire, tracker, frames_tracked, plan, first_plan
     el, az = math.radians(aim["el"]), math.radians(aim["az"])
     v0 = aim["speed"] * np.array([math.cos(el) * math.cos(az), math.sin(el),
                                   math.cos(el) * math.sin(az)])
-    bp.assign(np.array([CANNON], np.float32))
+    bp.assign(np.array([muzzle()], np.float32))
     bv.assign(np.array([v0], np.float32))
-    tracker = EventTracker(FX_PX, FY_PX, EYE, _fwd, _right, _up, SENSOR_W, SENSOR_H)
+    eye, fwd, right, up = basis if basis is not None else (EYE, _fwd, _right, _up)
+    tracker = EventTracker(FX_PX, FY_PX, eye, fwd, right, up, SENSOR_W, SENSOR_H)
     frames_tracked, plan, first_plan = 0, None, None
     globals()['approach'] = None
     t_fire, state = sim_time, "flight"
@@ -711,6 +935,9 @@ def step_frame():
     global t_recover, dip_depth
     global plan, first_plan, frames_tracked, ev_overflows, truth_cross, _prev_ball_y
 
+    point_barrel()
+    update_aim_preview(state in ("idle", "settled", "missed"))
+
     dt = 1.0 / SENSOR_HZ
     for _ in range(SUBSTEPS):
         substep()
@@ -731,6 +958,7 @@ def step_frame():
     wp.launch(compute_normals, dim=V, device=device, inputs=[pos, nrm, N, N])
     geometry.update_attribute("position", pos.numpy())
     geometry.update_attribute("normal", nrm.numpy())
+    ball_mesh.visible = state != "idle"      # loaded in the barrel until fired
     ball_mesh.position.set(*[float(x) for x in p_true])
     tg = rig.targets()
     for k, m in enumerate(anchor_meshes):
@@ -755,7 +983,22 @@ def step_frame():
             if est is not None:
                 frames_tracked += 1
                 obs_err.append(est - p_true)
-        if tracker.solve_fit() is not None:
+                # Split the error into the two things the estimator actually
+                # produces: a BEARING (where in the image) and a RANGE (how far).
+                # They come from completely different measurements -- the cluster
+                # centre and the cluster size -- and fixing the wrong one is easy.
+                b = tracker
+                d_ = p_true - b.eye
+                zt = float(np.dot(d_, b.fwd))
+                tu = SENSOR_W / 2.0 + b.fx * float(np.dot(d_, b.right)) / zt
+                tv = SENSOR_H / 2.0 - b.fy * float(np.dot(d_, b.up)) / zt
+                lp = b.last_px
+                if lp is not None:
+                    bearing_err.append(math.hypot(lp[0] - tu, lp[1] - tv))
+                    range_err.append(float(np.dot(est - b.eye, b.fwd)) - zt)
+        fitted = (tracker.solve_fit() if (ORACLE or SIZE_RANGE)
+                  else tracker.solve_fit_bearings())
+        if fitted is not None:
             hit = tracker.predict_crossing(CATCH_Y)
             if hit is not None:
                 plan = hit
@@ -830,6 +1073,17 @@ def report(p_true, v_true):
     print(f"  sheet       {V} particles, {SUBSTEPS} substeps x {ITERS} iters per tick")
     print(f"  shot        az {aim['az']:+.1f} deg, el {aim['el']:.1f} deg, "
           f"{aim['speed']:.2f} m/s")
+    if bearing_err:
+        be, re = np.array(bearing_err), np.array(range_err)
+        halfway = len(be) // 2
+        print(f"  bearing     median {np.median(be):.2f} px, 90th {np.percentile(be, 90):.2f} px"
+              f"   (= {np.median(be) / FY_PX * 1000:.2f} mrad)")
+        tag = "USED for the fit" if SIZE_RANGE else "SEED ONLY - the fit uses bearings"
+        print(f"  size-range  median {np.median(np.abs(re)):.3f} m, bias {re.mean():+.3f} m "
+              f"({tag})")
+        if not SIZE_RANGE and np.isfinite(tracker.bearing_rms):
+            print(f"  fit residual {tracker.bearing_rms:.2f} px rms over "
+                  f"{len(tracker.bear)} bearings")
     if obs_err:
         e = np.array(obs_err)
         print(f"  obs error   mean ({e[:,0].mean():+.3f},{e[:,1].mean():+.3f},"
@@ -893,7 +1147,7 @@ if TUNE:
     report(pt, vt)
     sys.exit(0)
 
-if CLIP or SEQ:
+if (CLIP or SEQ) and not FRAMES:
     import shutil
     import tempfile
     from PIL import Image
@@ -926,8 +1180,146 @@ if CLIP or SEQ:
                 shutil.rmtree(os.path.dirname(outdir), ignore_errors=True)
     sys.exit(0)
 
-# --- interactive ---------------------------------------------------------------
-print("cloth catch:  A/D aim   W/S elevation   Q/E power   SPACE fire   R reset")
+# --- interactive -----------------------------------------------------------------
+# Two things a headless run never exercises, and both bite the same way.
+#
+# The sheet must be QUIET before a shot. A DVS reports change, so a sheet still
+# ringing floods the frame and the tracker locks onto cloth rather than ball.
+# The old reset() slammed the cloth back to its domed initial state and fired on
+# the same frame, which is why interactive shots tracked to the wrong place while
+# headless ones (which settle for FIRE_AT seconds first) were fine. Nothing here
+# resets the cloth any more: it is left hanging where it is, and firing is gated
+# on measured quiescence instead of on a hopeful delay.
+#
+# The camera may be moved freely, but the same rule applies to it: while it is
+# moving every pixel changes and the detector reports the whole scene. So the
+# ready gate wants a still camera too, and the shot is armed from the camera
+# pose at the instant it fires.
+
+# Worth knowing before adding any of this: the detector's source is "shaded",
+# the raster G-buffer's own shade, which is resolved BEFORE the overlay pass.
+# Unlit transparent things -- the sprite panel, the reticle -- and ImGui all land
+# in that later pass, so none of them appear in the event stream. The debug view
+# does not perturb the measurement it is showing. Verified by eye: the panel does
+# not contain a picture of itself.
+controls = tp.OrbitControls(camera, canvas)
+controls.enable_damping = True
+controls.target.set(*[float(x) for x in TGT])
+ui = tp.ImguiContext(canvas, renderer)
+
+QUIET_SHEET = cli_arg("--quiet-sheet", 0.08, float)   # m/s, max particle speed
+QUIET_FRAMES = int(cli_arg("--quiet-frames", 10, float))
+
+_prev_pos = None
+_prev_cam = None
+_still_for = 0
+sheet_speed = 1e9
+_dbg_tick = 0
+cam_moved_in_flight = False
+last_result = ""
+
+
+def camera_basis():
+    """Eye and orthonormal frame of the LIVE camera, so a shot is aimed from
+    wherever the user has actually put it."""
+    eye = np.array([camera.position.x, camera.position.y, camera.position.z])
+    tgt = np.array([controls.target.x, controls.target.y, controls.target.z])
+    fwd = tgt - eye
+    n = float(np.linalg.norm(fwd))
+    fwd = fwd / n if n > 1e-6 else np.array([0.0, 0.0, -1.0])
+    right = np.cross(fwd, np.array([0.0, 1.0, 0.0]))
+    rn = float(np.linalg.norm(right))
+    right = right / rn if rn > 1e-6 else np.array([1.0, 0.0, 0.0])
+    return eye, fwd, right, np.cross(right, fwd)
+
+
+def project_sensor(p, basis):
+    eye, fwd, right, up = basis
+    d = np.asarray(p, float) - eye
+    z = float(np.dot(d, fwd))
+    if z < 0.05:
+        return None
+    return (SENSOR_W / 2.0 + FX_PX * float(np.dot(d, right)) / z,
+            SENSOR_H / 2.0 - FY_PX * float(np.dot(d, up)) / z)
+
+
+# --- the debug panel ------------------------------------------------------------
+# Parented to the CAMERA, not drawn in a second ortho pass: VulkanRenderer has
+# no auto_clear, and its screen-space layer is the overlay pass, which unlit
+# transparent materials (a SpriteMaterial) land in on their own. One unit in
+# front of the camera the frustum is 2*tan(fov/2) high, so the panel is sized
+# and cornered in those units.
+_h1 = 2.0 * math.tan(math.radians(45) / 2.0)      # frustum height at z = -1
+_w1 = _h1 * VIEW_W / VIEW_H
+DBG_H3 = 0.30 * _h1
+DBG_W3 = DBG_H3 * SENSOR_W / SENSOR_H
+dbg_tex = tp.data_texture(np.zeros((SENSOR_H, SENSOR_W, 3), np.uint8), False)
+_spr_mat = tp.SpriteMaterial()
+_spr_mat.map = dbg_tex
+panel = tp.Sprite(_spr_mat)
+panel.scale.set(DBG_W3, DBG_H3, 1)
+panel.position.set(_w1 / 2 - DBG_W3 / 2 - 0.02, _h1 / 2 - DBG_H3 / 2 - 0.02, -1.0)
+camera.add(panel)
+scene.add(camera)          # so the camera's children get their transforms updated
+
+# Where the tracker currently thinks the ball will cross the catch plane. A flat
+# reticle lying IN that plane, not a sphere -- a sphere out in the scene just
+# reads as a second ball to catch.
+_ring_mat = tp.MeshBasicMaterial()
+_ring_mat.color = 0x2ad4ff
+_ring_mat.transparent = True
+_ring_mat.opacity = 0.75
+_ring_mat.side = tp.Side.Double
+aim_mark = tp.Mesh(tp.RingGeometry(0.17, 0.21, 40), _ring_mat)
+aim_mark.rotate_x(-math.pi / 2)
+aim_mark.visible = False
+scene.add(aim_mark)
+
+
+def _box(img, cx, cy, r, col):
+    h, w = img.shape[:2]
+    x0, x1 = int(max(0, cx - r)), int(min(w - 1, cx + r))
+    y0, y1 = int(max(0, cy - r)), int(min(h - 1, cy + r))
+    if x1 <= x0 or y1 <= y0:
+        return
+    img[y0, x0:x1] = col
+    img[y1, x0:x1] = col
+    img[y0:y1, x0] = col
+    img[y0:y1, x1] = col
+
+
+def _cross(img, cx, cy, r, col):
+    h, w = img.shape[:2]
+    x, y = int(cx), int(cy)
+    if 0 <= y < h:
+        img[y, int(max(0, x - r)):int(min(w, x + r))] = col
+    if 0 <= x < w:
+        img[int(max(0, y - r)):int(min(h, y + r)), x] = col
+
+
+def build_debug(ev_img, basis):
+    """The raw event frame with what the tracker made of it drawn on top:
+    green = the cluster it locked onto and its search gate, blue = the predicted
+    crossing. When those disagree with the ball, this is where you see it."""
+    if ev_img is None or ev_img.size == 0:
+        return
+    rgb = np.repeat(ev_img[:, :, None], 3, axis=2).astype(np.float32)
+    rgb *= 0.7                                   # dim, so the overlays read
+    rgb = rgb.astype(np.uint8)
+    lp = tracker.last_px
+    if lp is not None:
+        _box(rgb, lp[0], lp[1], max(2.5 * lp[2], 10), (40, 230, 120))
+        _cross(rgb, lp[0], lp[1], 7, (40, 230, 120))
+    if plan is not None:
+        uv = project_sensor(np.array([plan[1][0], CATCH_Y, plan[1][2]]), basis)
+        if uv is not None:
+            _cross(rgb, uv[0], uv[1], 11, (60, 200, 255))
+    # data_texture takes row 0 as v = 0 (bottom) while the sensor hands back row
+    # 0 = top, so it goes up the other way without this flip.
+    dbg_tex.update_data(np.ascontiguousarray(rgb[::-1]))
+
+
+# --- input ----------------------------------------------------------------------
 _held = {}
 
 
@@ -938,17 +1330,67 @@ def pressed(k):
     return fired
 
 
-def reset():
-    global state, sim_time, t_contact, truth_cross, _prev_ball_y
-    pos.assign(p0)
-    prev.assign(p0)
-    bp.assign(np.array([CANNON], np.float32))
+def ready():
+    return (state in ("idle", "settled", "missed")
+            and sheet_speed < QUIET_SHEET and _still_for >= QUIET_FRAMES)
+
+
+def arm():
+    """Fire from the live camera pose. The cloth is deliberately NOT reset --
+    it is already hanging quiet, and resetting it is what broke this path."""
+    global cam_moved_in_flight, last_result
+    bp.assign(np.array([muzzle()], np.float32))
     bv.zero_()
     rig.__init__()
-    state, t_contact, truth_cross, _prev_ball_y = "idle", None, None, None
+    cam_moved_in_flight = False
+    last_result = ""
+    fire(camera_basis())
+
+
+def draw_ui():
+    tp.imgui.set_next_window_pos(14, 14)
+    tp.imgui.set_next_window_size(420, 0)
+    tp.imgui.begin("cloth catch")
+    tp.imgui.text(f"{tp.imgui.get_framerate():.0f} fps   sensor {SENSOR_HZ:.0f} Hz")
+    tp.imgui.separator()
+    tp.imgui.text(f"azimuth    {aim['az']:+6.1f} deg      A / D")
+    tp.imgui.text(f"elevation  {aim['el']:6.1f} deg      W / S")
+    tp.imgui.text(f"muzzle     {aim['speed']:6.2f} m/s      Q / E")
+    tp.imgui.separator()
+    if state == "flight":
+        n = len(tracker.obs)
+        if plan is None:
+            tp.imgui.text(f"TRACKING   {n} obs, no confident fit yet")
+        else:
+            tp.imgui.text(f"TRACKING   {n} obs")
+            tp.imgui.text(f"intercept  x {plan[1][0]:+.2f}  z {plan[1][2]:+.2f}"
+                          f"   in {max(plan[0] - sim_time, 0.0) * 1000:.0f} ms")
+        if cam_moved_in_flight:
+            tp.imgui.text("camera moved mid-flight - tracking degraded")
+    elif ready():
+        tp.imgui.text("READY - SPACE to fire")
+    else:
+        why = []
+        if sheet_speed >= QUIET_SHEET:
+            why.append(f"sheet settling ({sheet_speed:.2f} m/s)")
+        if _still_for < QUIET_FRAMES:
+            why.append("camera moving")
+        if state in ("catch", "recover"):
+            why.append("catching")
+        tp.imgui.text("WAIT - " + ", ".join(why or ["..."]))
+        tp.imgui.text("a DVS needs a still scene to see one moving thing")
+    if last_result:
+        tp.imgui.separator()
+        tp.imgui.text(last_result)
+    tp.imgui.separator()
+    tp.imgui.text("mouse orbits - R resets")
+    tp.imgui.end()
 
 
 def animate():
+    global _prev_pos, _prev_cam, _still_for, sheet_speed, _dbg_tick
+    global cam_moved_in_flight, last_result, state
+
     if canvas.is_key_down("A"):
         aim["az"] += 0.6
     if canvas.is_key_down("D"):
@@ -958,15 +1400,65 @@ def animate():
     if canvas.is_key_down("S"):
         aim["el"] = max(aim["el"] - 0.4, 10.0)
     if canvas.is_key_down("Q"):
-        aim["speed"] = max(aim["speed"] - 0.02, 2.0)
+        aim["speed"] = max(aim["speed"] - 0.03, 2.0)
     if canvas.is_key_down("E"):
-        aim["speed"] = min(aim["speed"] + 0.02, 12.0)
-    if pressed("SPACE") and state in ("idle", "settled", "missed"):
-        reset()
-        fire()
+        aim["speed"] = min(aim["speed"] + 0.03, 12.0)
+
+    cam = np.array([camera.position.x, camera.position.y, camera.position.z,
+                    controls.target.x, controls.target.y, controls.target.z])
+    if _prev_cam is not None and np.abs(cam - _prev_cam).max() < 1e-4:
+        _still_for += 1
+    else:
+        _still_for = 0
+        if state == "flight":
+            cam_moved_in_flight = True
+    _prev_cam = cam
+
+    if (pressed("SPACE") or (AUTOFIRE and state in ("idle",))) and ready():
+        arm()
     if pressed("R"):
-        reset()
-    step_frame()
+        bp.assign(np.array([muzzle()], np.float32))
+        bv.zero_()
+        rig.__init__()
+        state, last_result = "idle", ""
+
+    controls.update()
+    basis = camera_basis()
+    aim_mark.visible = plan is not None and state == "flight"
+    if aim_mark.visible:
+        aim_mark.position.set(float(plan[1][0]), CATCH_Y, float(plan[1][2]))
+
+    was = state
+    p_true, v_true = step_frame()      # this is the render the detector samples
+    if state in ("settled", "missed") and was not in ("settled", "missed"):
+        dx = math.hypot(p_true[0] - rig.p[0], p_true[2] - rig.p[2])
+        last_result = ("CAUGHT" if state == "settled" else "MISSED") + \
+                      f" - ball {dx:.2f} m off the sheet centre"
+
+    now = pos.numpy()
+    if _prev_pos is not None and _prev_pos.shape == now.shape:
+        sheet_speed = float(np.abs(now - _prev_pos).max()) * SENSOR_HZ
+    _prev_pos = now.copy()
+
+    global _dbg_tick
+    _dbg_tick += 1
+    if _dbg_tick % max(1, int(round(SENSOR_HZ / 60.0))) == 0:
+        build_debug(renderer.read_event_camera_visualisation(), basis)
+    ui.render(draw_ui)
 
 
-canvas.animate(animate)
+print("cloth catch:  A/D aim   W/S elevation   Q/E power   SPACE fire   R reset"
+      "   mouse orbits")
+
+if FRAMES:
+    from PIL import Image
+    n = 0
+    while n < FRAMES and canvas.animate_once(animate):
+        n += 1
+        if SEQ and n % 20 == 0:
+            Image.fromarray(renderer.read_pixels()).save(f"{SEQ}_{n:05d}.png")
+    print(f"  ran {n} interactive frames, state={state}, "
+          f"sheet {sheet_speed:.3f} m/s, still {_still_for} frames")
+    print(f"  {last_result or 'no shot completed'}")
+else:
+    canvas.animate(animate)
