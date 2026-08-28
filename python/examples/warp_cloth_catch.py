@@ -151,7 +151,7 @@ EV_THRESHOLD = cli_arg("--ev-threshold", 0.15, float)
 # bearing stays at 2.4-2.6 px and every scale still catches. Interleaved A/B
 # (the run-to-run spread is ~15%, so singles are not worth quoting): 25.8 ms at
 # 1.0 against 18.7 ms at 0.6.
-RENDER_SCALE = cli_arg("--render-scale", 0.6, float)
+RENDER_SCALE = cli_arg("--render-scale", 0.8, float)
 PROFILE = "--profile" in sys.argv
 # The GI machinery is built for many-light and emissive-geometry scenes. This
 # one has two lights and no emitters, so it is paying for convergence it does
@@ -876,12 +876,207 @@ if NO_DENOISE:
 # trade. (Needs a threepp built after the restir_di binding was added.)
 if NO_RESTIR and hasattr(renderer, "restir_di"):
     renderer.restir_di = False
+
+
+# ---- the arms -----------------------------------------------------------------
+# Four 5-DOF arms, defined as a URDF STRING and parsed by the engine's own loader
+# rather than fetched: no external asset, but real joints with real limits and
+# real speed caps. They are not set dressing -- the cloth corner follows each
+# arm's ACHIEVED tool pose, so if an arm cannot get there, the sheet does not go
+# there either, and the catch fails for a reason you can point at.
+#
+# Mounted on pedestals at plate height, which is the whole trick. Floor-mounted
+# they would need ~1.25 m of reach just to climb to the catch plane before
+# covering any of the corner's ~1.25 m sweep; measured, this arm's practical
+# envelope is ~0.85 m horizontal (well under its 1.14 m nominal -- joint limits
+# and the base link eat the rest). On a pedestal it only has to cover the sweep,
+# and base-to-corner distance stays between 0.5 and 0.95 m throughout.
+ARMS = "--no-arms" not in sys.argv
+ARM_KIND = cli_arg("--arm", "fr3", str)        # fr3 | iiwa | proc
+PEDESTAL_Y = cli_arg("--pedestal-y", 0.50, float)
+ARM_OUT = cli_arg("--arm-out", 0.50, float)    # outward from the sheet, in z
+ARM_LEAD = cli_arg("--arm-lead", 0.48, float)  # toward the intercept, in x
+IK_ITERS = int(cli_arg("--ik-iters", 6, float))
+JOINT_SPEED = cli_arg("--joint-speed", 5.0, float)   # rad/s cap per joint
+
+_L = dict(base=0.16, upper=0.50, fore=0.44, wrist=0.12)
+
+
+def _link(name, radius, length, rgba, origin_z):
+    return f"""
+  <link name="{name}">
+    <visual>
+      <origin xyz="0 0 {origin_z}" rpy="0 0 0"/>
+      <geometry><cylinder radius="{radius}" length="{length}"/></geometry>
+      <material name="{name}_m"><color rgba="{rgba}"/></material>
+    </visual>
+    <inertial><mass value="2.0"/>
+      <inertia ixx="0.01" ixy="0" ixz="0" iyy="0.01" iyz="0" izz="0.01"/>
+    </inertial>
+  </link>"""
+
+
+def arm_urdf():
+    L = _L
+    return f"""<?xml version="1.0"?>
+<robot name="catcher">
+  {_link("base", 0.085, L['base'], "0.13 0.15 0.18 1", L['base'] / 2)}
+  {_link("shoulder", 0.070, 0.14, "0.78 0.80 0.85 1", 0.0)}
+  {_link("upper", 0.055, L['upper'], "0.78 0.80 0.85 1", L['upper'] / 2)}
+  {_link("fore", 0.045, L['fore'], "0.26 0.30 0.36 1", L['fore'] / 2)}
+  {_link("wrist", 0.034, L['wrist'], "0.78 0.80 0.85 1", L['wrist'] / 2)}
+  {_link("tool", 0.026, 0.06, "0.95 0.42 0.14 1", 0.03)}
+  <joint name="pan" type="revolute">
+    <parent link="base"/><child link="shoulder"/>
+    <origin xyz="0 0 {L['base']}" rpy="0 0 0"/><axis xyz="0 0 1"/>
+    <limit lower="-3.14" upper="3.14" effort="200" velocity="4.0"/>
+  </joint>
+  <joint name="lift" type="revolute">
+    <parent link="shoulder"/><child link="upper"/>
+    <origin xyz="0 0 0" rpy="0 0 0"/><axis xyz="0 1 0"/>
+    <limit lower="-2.0" upper="2.0" effort="200" velocity="4.0"/>
+  </joint>
+  <joint name="elbow" type="revolute">
+    <parent link="upper"/><child link="fore"/>
+    <origin xyz="0 0 {L['upper']}" rpy="0 0 0"/><axis xyz="0 1 0"/>
+    <limit lower="-2.6" upper="2.6" effort="200" velocity="5.0"/>
+  </joint>
+  <joint name="wrist1" type="revolute">
+    <parent link="fore"/><child link="wrist"/>
+    <origin xyz="0 0 {L['fore']}" rpy="0 0 0"/><axis xyz="0 1 0"/>
+    <limit lower="-2.6" upper="2.6" effort="120" velocity="6.0"/>
+  </joint>
+  <joint name="wrist2" type="revolute">
+    <parent link="wrist"/><child link="tool"/>
+    <origin xyz="0 0 {L['wrist']}" rpy="0 0 0"/><axis xyz="0 0 1"/>
+    <limit lower="-3.14" upper="3.14" effort="120" velocity="6.0"/>
+  </joint>
+</robot>"""
+
+
+# threepp_data ships a Franka FR3 and a KUKA iiwa. Both measure ~0.90 m of
+# practical reach against a corner sweep of ~1.25 m, so the pedestal is doing the
+# work: at 0.50 m high and 0.35-0.50 m outboard, both track the corner through
+# the whole sweep to under a millimetre. Falls back to the procedural arm when
+# the data checkout is not present, so the demo still runs from a bare clone.
+_ARM_URDFS = {"fr3": (os.path.join("urdf", "franka", "fr3.urdf"), "fr3_hand_tcp"),
+              "iiwa": (os.path.join("urdf", "lbr_iiwa_14_r820.urdf"), None)}
+# Franka's ready pose, so the redundant joints settle somewhere an arm would
+# actually sit rather than wherever the solver happens to leave them.
+_REST = {"fr3": [0.0, -0.785, 0.0, -2.356, 0.0, 1.571, 0.785],
+         "iiwa": [0.0, 0.6, 0.0, -1.5, 0.0, 1.0, 0.0],
+         "proc": [0.0, -0.95, 1.75, -0.80, 0.0]}
+
+
+def data_dir():
+    """threepp_data's checkout. THREEPP_DATA_DIR wins; otherwise the usual
+    places -- note the checkout is commonly named with a hyphen."""
+    env = os.environ.get("THREEPP_DATA_DIR")
+    if env and os.path.isdir(env):
+        return env
+    repo = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    for name in ("threepp-data", "threepp_data"):
+        cand = os.path.join(os.path.dirname(repo), name)
+        if os.path.isdir(cand):
+            return cand
+    return ""
+
+
+def _tool_pos(m):
+    """Translation of a Matrix4. tool_transform reports in the robot's parent
+    frame, which -- measured -- INCLUDES the Robot object's own placement, so
+    these come out directly in world coordinates."""
+    a = m.to_numpy().reshape(4, 4)
+    return a[:3, 3] if abs(a[3, 3] - 1.0) < 1e-6 else a[3, :3]
+
+
+class Arm:
+    def __init__(self, base_xyz, kind):
+        rel = _ARM_URDFS.get(kind)
+        path = os.path.join(data_dir(), rel[0]) if (rel and data_dir()) else ""
+        if path and os.path.isfile(path):
+            self.robot = tp.URDFLoader().load(path)
+            if rel[1]:
+                self.robot.set_end_effector(rel[1])
+            self.kind = kind
+        else:
+            self.robot = tp.URDFLoader().parse(os.getcwd(), arm_urdf())
+            self.kind = "proc"
+        self.robot.position.set(*[float(v) for v in base_xyz])
+        self.robot.rotate_x(-math.pi / 2)   # URDF is Z-up; the scene is Y-up
+        self.robot.update_matrix()
+        opts = tp.IkOptions()
+        opts.max_joint_speed = JOINT_SPEED
+        opts.position_tolerance = 0.002
+        # A 3-DOF position task on a 5-DOF arm leaves two joints free, and left
+        # to itself the solver folds them into the shortest pose -- which sits
+        # bolt upright against the pedestal and reads as a post, not an arm.
+        # Biasing the null space toward shoulder-out / elbow-bent costs nothing
+        # in reach and is the difference between four posts and four arms.
+        rest = list(_REST.get(self.kind, []))
+        if rest:
+            rest = (rest + [0.0] * self.robot.num_dof)[:self.robot.num_dof]
+            opts.rest_pose = rest
+            opts.rest_pose_gain = 0.06
+        self.solver = tp.IkSolver(self.robot, opts)
+        self.q = list(opts.rest_pose) if opts.rest_pose else [0.0] * self.robot.num_dof
+        self.err = 0.0
+        scene.add(self.robot)
+        ped = tp.Mesh(tp.CylinderGeometry(0.11, 0.13, base_xyz[1], 20),
+                      standard_material(0x1b1f25, 0.7, 0.35))
+        ped.position.set(float(base_xyz[0]), float(base_xyz[1]) / 2, float(base_xyz[2]))
+        ped.cast_shadow = True
+        scene.add(ped)
+
+    def settle(self, target):
+        """Converge onto a corner with the speed cap OFF, once, before the run.
+
+        The arms are born at q = 0 (straight up) while the sheet corners are
+        elsewhere; with a 5 rad/s cap they spend the first second of every run
+        catching up, and that transient IS the worst tracking error. A real rig
+        starts already holding the cloth."""
+        t = tp.Vector3(float(target[0]), float(target[1]), float(target[2]))
+        for _ in range(300):
+            self.q, _r = self.solver.solve(self.q, t, 0.0)
+        self.robot.set_joint_values(self.q)
+        return _tool_pos(self.solver.tool_transform(self.q))
+
+    def track(self, target, dt):
+        """Drive toward `target` and return where the tool ACTUALLY got to."""
+        t = tp.Vector3(float(target[0]), float(target[1]), float(target[2]))
+        for _ in range(IK_ITERS):
+            self.q, _r = self.solver.solve(self.q, t, dt)
+        self.robot.set_joint_values(self.q)
+        got = _tool_pos(self.solver.tool_transform(self.q))
+        self.err = float(np.linalg.norm(got - np.asarray(target, float)))
+        return got
+
+
+arms = []
+if ARMS:
+    for _k, _c in enumerate(anchor_local):
+        arms.append(Arm((HOME[0] + _c[0] + ARM_LEAD,
+                         PEDESTAL_Y,
+                         HOME[1] + _c[2] + math.copysign(ARM_OUT, _c[2])), ARM_KIND))
+    _home = np.array(p0[anchor_idx_np], np.float64)
+    _res = np.array([a.settle(_home[k]) for k, a in enumerate(arms)])
+    _kind = arms[0].kind
+    print(f"arms: 4 x {_kind} ({arms[0].robot.num_dof} dof, tool "
+          f"{arms[0].robot.end_effector_link}), pedestals at {PEDESTAL_Y:.2f} m, "
+          f"settled onto the corners to {max(a.err for a in arms):.4f} m"
+          + ("   [threepp_data not found - procedural fallback]"
+             if _kind == "proc" and ARM_KIND != "proc" else ""))
+
+
 renderer.event_camera_source = "shaded"
 renderer.set_event_camera_resolution(SENSOR_W, SENSOR_H)
 renderer.event_camera_enabled = True
 
 
 # ---- state --------------------------------------------------------------------
+
+anchor_from = np.array(p0[anchor_idx_np], np.float64)
+anchor_to = anchor_from.copy()
 
 sim_time = 0.0
 state = "idle"                # idle -> flight -> catch -> settled / missed
@@ -909,6 +1104,8 @@ frames_tracked = 0
 ev_overflows = 0
 _prev_ball_y = None
 obs_err = []
+arm_worst = [0.0]
+arm_peak = [0.0, 0.0, 'idle']
 bearing_err = []
 range_err = []
 
@@ -951,9 +1148,11 @@ def hermite(p0, v0, p1, v1, T, t):
     return pos_, vel_
 
 
-def substep():
-    """One physics substep. The rig is kinematic, so it is simply written in."""
-    anchor_tgt.assign(rig.targets())
+def substep(alpha=1.0):
+    """One physics substep. `alpha` walks the anchors from where they were at the
+    start of this tick to where the arms got them, so a 240 Hz IK update does not
+    arrive as a step change the cloth has to absorb."""
+    anchor_tgt.assign((anchor_from + (anchor_to - anchor_from) * alpha).astype(np.float32))
     impulse.zero_()
     wp.launch(ball_predict, dim=1, device=device, inputs=[bp, bv, bpred, DT])
     wp.launch(integrate, dim=V, device=device, inputs=[pos, prev, pred, im, DT, DAMPING])
@@ -994,14 +1193,26 @@ def step_frame():
     update_aim_preview(state in ("idle", "settled", "missed"))
 
     dt = 1.0 / SENSOR_HZ
-    for _ in range(SUBSTEPS):
-        substep()
+    global anchor_from, anchor_to
+    anchor_from = anchor_to.copy()
+    cmd = rig.targets()
+    if arms:
+        anchor_to = np.array([a.track(cmd[k], dt) for k, a in enumerate(arms)])
+    else:
+        anchor_to = cmd.astype(np.float64)
+    for _i in range(SUBSTEPS):
+        substep((_i + 1) / SUBSTEPS)
         sim_time += DT
     _lap("sim")
 
     p_true = bp.numpy()[0].astype(np.float64)
     v_true = bv.numpy()[0].astype(np.float64)
     contact = float(np.linalg.norm(impulse.numpy()[0])) > 0.0
+    if arms:
+        e = max(a.err for a in arms)
+        arm_worst.append(e)
+        if e > arm_peak[0]:
+            arm_peak[:] = [e, sim_time, state]
     _lap("readback")
 
     # Ground truth of the crossing, recorded once, purely so the prediction can
@@ -1017,9 +1228,9 @@ def step_frame():
     geometry.update_attribute("normal", nrm.numpy())
     ball_mesh.visible = state != "idle"      # loaded in the barrel until fired
     ball_mesh.position.set(*[float(x) for x in p_true])
-    tg = rig.targets()
     for k, m in enumerate(anchor_meshes):
-        m.position.set(float(tg[k][0]), float(tg[k][1]), float(tg[k][2]))
+        m.position.set(float(anchor_to[k][0]), float(anchor_to[k][1]), float(anchor_to[k][2]))
+        m.visible = not arms          # the tool link IS the gripper once arms exist
     _lap("mesh upload")
 
     # --- render, then read the sensor ----------------------------------------
@@ -1167,6 +1378,10 @@ def report(p_true, v_true):
         th, ph, vh = plan
         print(f"  final call  x{ph[0]:+.3f} z{ph[2]:+.3f}, "
               f"err {np.linalg.norm(ph - tp_):.3f} m, timing err {1000 * (th - tt):+.0f} ms")
+    if arms:
+        print(f"  arms        4 x {arms[0].kind}, worst IK error this "
+              f"run {max(arm_worst):.4f} m at t={arm_peak[1]:.2f} s ({arm_peak[2]})"
+              + ("  (an arm could not hold its corner)" if max(arm_worst) > 0.03 else ""))
     print(f"  rig         travelled {rig.travel:.2f} m, peak {rig.peak_speed:.2f} m/s "
           f"(cap {ARM_SPEED:.1f})"
           + (f", SPEED-CAPPED on {rig.starved} frames" if rig.starved else ""))
