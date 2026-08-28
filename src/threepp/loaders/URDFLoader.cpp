@@ -22,6 +22,7 @@
 #include <array>
 #include <cmath>
 #include <iostream>
+#include <iterator>
 #include <list>
 #include <map>
 #include <set>
@@ -377,10 +378,32 @@ namespace {
         return group;
     }
 
+    // A link's <visual> and <collision> both collapse to one in the articulation description
+    // (Link holds a single Collision and a single visual subtree, and Articulation::addLink
+    // attaches one shape). Keeping the first in document order is the model, not a failure —
+    // but silently is expensive: the FR3's fingers are four collision boxes each and the first
+    // is the proximal mount block, not the pad at the grasp plane, so a grasp built on it fails
+    // with nothing to explain why. The renderer's Robot path (loadFromXml) draws every one of
+    // them, so the collider wireframe and the physics genuinely disagree. Say what was ignored.
+    void warnExtraElements(std::vector<std::string>& diagnostics, const pugi::xml_node& linkNode,
+                           const std::string& name, const char* tag, const char* model) {
+
+        const auto nodes = linkNode.children(tag);
+        const auto count = std::distance(nodes.begin(), nodes.end());
+        if (count < 2) return;
+
+        const std::string message =
+                "[URDFLoader] warning: link '" + name + "' has " + std::to_string(count) + " <" + tag +
+                "> elements; the articulation uses the first and ignores " + std::to_string(count - 1) +
+                " (" + model + ")";
+        std::cerr << message << std::endl;
+        diagnostics.push_back(message);
+    }
+
     // Walk the URDF link/joint tree (root first) into a flat articulation description.
     URDFArticulationDesc buildArticulationDesc(xacro::PackageResolver* packages, const pugi::xml_node& robotNode,
                                                const std::filesystem::path& path, Loader<Group>* loader,
-                                               bool loadVisuals) {
+                                               bool loadVisuals, std::vector<std::string>& diagnostics) {
         URDFArticulationDesc desc;
         std::map<std::string, pugi::xml_node> linkNodes;
         for (const auto link : robotNode.children("link"))
@@ -421,12 +444,18 @@ namespace {
                 L.range = getRange(joint);
                 L.jointOrigin = originMatrix(joint);
             }
+            warnExtraElements(diagnostics, linkNode, name, "collision", "one collider per link");
             L.collision = parseCollisionShape(packages, linkNode.child("collision"), path, loader);
             if (const auto m = parseInertialMass(linkNode)) {
                 L.hasMass = true;
                 L.mass = *m;
             }
-            if (loadVisuals) L.visual = parseFirstVisual(packages, linkNode, path, loader);
+            // Only when visuals are actually being built: with loadVisuals=false the caller
+            // asked for no visual subtree at all, so reporting the ones it "ignored" is noise.
+            if (loadVisuals) {
+                warnExtraElements(diagnostics, linkNode, name, "visual", "one visual subtree per link");
+                L.visual = parseFirstVisual(packages, linkNode, path, loader);
+            }
             const int myIdx = static_cast<int>(desc.links.size());
             desc.links.push_back(std::move(L));
             for (const auto& child : childLinks[name])
@@ -559,14 +588,14 @@ struct URDFLoader::Impl {
                 fail("'" + path.string() + "' has no <robot> element");
                 return {};
             }
-            return buildArticulationDesc(&packages, robotNode, path, &cachingLoader, loadVisuals);
+            return buildArticulationDesc(&packages, robotNode, path, &cachingLoader, loadVisuals, diagnostics);
         }
         const auto robotNode = doc.child("robot");
         if (!robotNode) {
             fail("'" + path.string() + "' has no <robot> element");
             return {};
         }
-        return buildArticulationDesc(&packages, robotNode, path, &cachingLoader, loadVisuals);
+        return buildArticulationDesc(&packages, robotNode, path, &cachingLoader, loadVisuals, diagnostics);
     }
 
     std::shared_ptr<Robot> loadFromXml(const pugi::xml_document& doc, const std::filesystem::path& path) {

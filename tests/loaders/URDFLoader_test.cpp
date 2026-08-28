@@ -137,6 +137,177 @@ TEST_CASE("parseArticulation turns a mesh collision into a convex hull") {
     std::filesystem::remove_all(dir);
 }
 
+TEST_CASE("parseArticulation warns when a link drops extra <collision> elements") {
+
+    // One collider per link is the model (Link holds a single Collision), so a link
+    // describing several <collision> volumes keeps only the first. The FR3's fingers are
+    // four boxes each and the first is the mount block, not the pad, so the drop has to be
+    // reported: the renderer's Robot path draws all four and the physics has one.
+    const auto dir = std::filesystem::temp_directory_path() / "threepp_urdf_multicollision";
+    std::filesystem::create_directories(dir);
+
+    {
+        std::ofstream urdf(dir / "robot.urdf", std::ios::trunc);
+        urdf << R"(
+        <robot name="test">
+          <link name="finger">
+            <collision><origin xyz="0 0.0185 0.011"/><geometry><box size="0.022 0.015 0.02"/></geometry></collision>
+            <collision><origin xyz="0 0.0068 0.0022"/><geometry><box size="0.022 0.0088 0.0038"/></geometry></collision>
+            <collision><origin xyz="0 0.00758 0.04525"/><geometry><box size="0.0175 0.0152 0.0185"/></geometry></collision>
+          </link>
+          <link name="quiet">
+            <collision><geometry><sphere radius="0.05"/></geometry></collision>
+          </link>
+          <joint name="j" type="fixed">
+            <parent link="finger"/><child link="quiet"/>
+          </joint>
+        </robot>)";
+    }
+
+    URDFLoader loader;
+    const auto desc = loader.parseArticulation(dir / "robot.urdf", false);
+    REQUIRE(desc.links.size() == 2);
+
+    // The kept collider is the FIRST in document order, not a merge and not the last.
+    using Shape = URDFArticulationDesc::Collision::Shape;
+    const auto& finger = desc.links[0].collision;
+    REQUIRE(finger.shape == Shape::Box);
+    CHECK(std::abs(finger.halfExtents.x - 0.011f) < 1e-6f);
+    CHECK(std::abs(finger.halfExtents.y - 0.0075f) < 1e-6f);
+    CHECK(std::abs(finger.halfExtents.z - 0.010f) < 1e-6f);
+
+    // Exactly one warning, naming the link and both counts, and it is not an error:
+    // dropping the extras is a documented simplification, not a failed load.
+    const auto& diagnostics = loader.diagnostics();
+    const auto warnings = std::count_if(diagnostics.begin(), diagnostics.end(), [](const std::string& d) {
+        return d.find("<collision>") != std::string::npos;
+    });
+    CHECK(warnings == 1);
+
+    const auto it = std::find_if(diagnostics.begin(), diagnostics.end(), [](const std::string& d) {
+        return d.find("<collision>") != std::string::npos;
+    });
+    REQUIRE(it != diagnostics.end());
+    CHECK(it->find("'finger'") != std::string::npos);
+    CHECK(it->find("3 <collision>") != std::string::npos);
+    CHECK(it->find("ignores 2") != std::string::npos);
+
+    // The single-collision link must stay silent, and the load must still succeed.
+    CHECK(it->find("quiet") == std::string::npos);
+    CHECK(loader.lastError().empty());
+
+    std::filesystem::remove_all(dir);
+}
+
+TEST_CASE("parseArticulation warns about extra <visual> elements only when building visuals") {
+
+    // <visual> collapses to one per link the same way <collision> does, so it gets the same
+    // report — but only when the caller actually asked for visuals. parseArticulation(path,
+    // false) builds no visual subtree at all, so naming the ones it "ignored" would be noise.
+    const auto dir = std::filesystem::temp_directory_path() / "threepp_urdf_multivisual";
+    std::filesystem::create_directories(dir);
+
+    {
+        std::ofstream urdf(dir / "robot.urdf", std::ios::trunc);
+        urdf << R"(
+        <robot name="test">
+          <link name="body">
+            <visual><geometry><box size="0.1 0.1 0.1"/></geometry></visual>
+            <visual><origin xyz="0 0 0.2"/><geometry><sphere radius="0.05"/></geometry></visual>
+            <collision><geometry><box size="0.1 0.1 0.1"/></geometry></collision>
+          </link>
+        </robot>)";
+    }
+
+    const auto visualWarnings = [](const URDFLoader& loader) {
+        const auto& diagnostics = loader.diagnostics();
+        return std::count_if(diagnostics.begin(), diagnostics.end(), [](const std::string& d) {
+            return d.find("<visual>") != std::string::npos;
+        });
+    };
+
+    {
+        URDFLoader loader;
+        const auto desc = loader.parseArticulation(dir / "robot.urdf", true);
+        REQUIRE(desc.links.size() == 1);
+        CHECK(visualWarnings(loader) == 1);
+
+        const auto& diagnostics = loader.diagnostics();
+        const auto it = std::find_if(diagnostics.begin(), diagnostics.end(), [](const std::string& d) {
+            return d.find("<visual>") != std::string::npos;
+        });
+        REQUIRE(it != diagnostics.end());
+        CHECK(it->find("'body'") != std::string::npos);
+        CHECK(it->find("2 <visual>") != std::string::npos);
+        CHECK(it->find("ignores 1") != std::string::npos);
+
+        // The single <collision> on the same link stays quiet, and this is a warning, not an error.
+        CHECK(std::none_of(diagnostics.begin(), diagnostics.end(), [](const std::string& d) {
+            return d.find("<collision>") != std::string::npos;
+        }));
+        CHECK(loader.lastError().empty());
+    }
+    {
+        URDFLoader loader;
+        const auto desc = loader.parseArticulation(dir / "robot.urdf", false);
+        REQUIRE(desc.links.size() == 1);
+        CHECK(desc.links[0].visual == nullptr);
+        CHECK(visualWarnings(loader) == 0);
+        CHECK(loader.lastError().empty());
+    }
+
+    std::filesystem::remove_all(dir);
+}
+
+TEST_CASE("parseArticulation reports the FR3's dropped finger colliders") {
+
+    // The case the warning exists for. Upstream franka_description gives each finger four
+    // <collision> boxes; the first in document order is the proximal mount block (spanning
+    // y 11..26 mm), while the box that reaches the grasp plane is a later one. Keeping only
+    // the first is the documented one-collider-per-link model, but a grasp built on it fails
+    // silently, so the drop must be reported for both fingers.
+    const auto path = std::filesystem::path(DATA_FOLDER) / "urdf" / "franka" / "fr3.urdf";
+    if (!std::filesystem::exists(path)) {
+        SKIP("fr3.urdf not available");
+    }
+
+    URDFLoader loader;
+    const auto desc = loader.parseArticulation(path, false);
+    REQUIRE(!desc.links.empty());
+    CHECK(loader.lastError().empty());
+
+    const auto& diagnostics = loader.diagnostics();
+    const auto mentions = [&diagnostics](const std::string& link) {
+        return std::any_of(diagnostics.begin(), diagnostics.end(), [&link](const std::string& d) {
+            return d.find("<collision>") != std::string::npos && d.find("'" + link + "'") != std::string::npos;
+        });
+    };
+    CHECK(mentions("fr3_leftfinger"));
+    CHECK(mentions("fr3_rightfinger"));
+
+    // Those two links are the only ones upstream gives multiple <collision> boxes, and no FR3
+    // link has more than one <visual> — so the whole 26-link robot must produce exactly two
+    // lines. A warning that fires on ordinary links is one nobody reads.
+    CHECK(diagnostics.size() == 2);
+
+    // Four boxes each, so three are ignored.
+    const auto it = std::find_if(diagnostics.begin(), diagnostics.end(), [](const std::string& d) {
+        return d.find("'fr3_leftfinger'") != std::string::npos;
+    });
+    REQUIRE(it != diagnostics.end());
+    CHECK(it->find("4 <collision>") != std::string::npos);
+    CHECK(it->find("ignores 3") != std::string::npos);
+
+    // And the collider actually kept is the first box: half-extents 11 x 7.5 x 10 mm.
+    using Shape = URDFArticulationDesc::Collision::Shape;
+    const auto finger = std::find_if(desc.links.begin(), desc.links.end(), [](const URDFArticulationDesc::Link& l) {
+        return l.name == "fr3_leftfinger";
+    });
+    REQUIRE(finger != desc.links.end());
+    REQUIRE(finger->collision.shape == Shape::Box);
+    CHECK(std::abs(finger->collision.halfExtents.y - 0.0075f) < 1e-6f);
+}
+
 TEST_CASE("URDFLoader shares mesh resources between visual and collision") {
 
     // The same mesh referenced from <visual> and <collision> should be loaded
