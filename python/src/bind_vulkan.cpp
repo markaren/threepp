@@ -1509,6 +1509,20 @@ namespace threepp_py {
                                        },
                                        "Auto-LOD counters: resident index/BLAS bytes, chains "
                                        "ready/queued, and the per-level entry histogram.")
+                // ReSTIR DI master toggle. ON by default because it is what makes
+                // many-light and emissive-geometry scenes converge at 1 spp, and it
+                // is the path the renderer is tuned and golden-tested against. A
+                // scene with a handful of analytic lights and no emitters is paying
+                // for convergence it does not need, and the legacy per-light NEE
+                // loops are cheaper there — so this is a perf lever for simple
+                // scenes as much as it is an A/B for triaging reservoir artifacts.
+                .def_property("restir_di",
+                              [](PyVulkanRenderer& r) { return r.native().restirDIEnabled(); },
+                              [](PyVulkanRenderer& r, bool v) { r.native().setRestirDIEnabled(v); },
+                              "ReSTIR DI (streaming RIS + temporal/spatial reuse at primary\n"
+                              "surfaces) for the deferred shade's next-event estimation.\n"
+                              "Default on. Off falls back to the legacy per-light NEE loops:\n"
+                              "cheaper with a handful of lights, markedly noisier with many.")
                 .def_property("probe_gi",
                               [](PyVulkanRenderer& r) { return r.native().probeGI(); },
                               [](PyVulkanRenderer& r, bool v) { r.native().setProbeGI(v); },

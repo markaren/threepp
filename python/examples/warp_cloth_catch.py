@@ -153,6 +153,13 @@ EV_THRESHOLD = cli_arg("--ev-threshold", 0.15, float)
 # 1.0 against 18.7 ms at 0.6.
 RENDER_SCALE = cli_arg("--render-scale", 0.6, float)
 PROFILE = "--profile" in sys.argv
+# The GI machinery is built for many-light and emissive-geometry scenes. This
+# one has two lights and no emitters, so it is paying for convergence it does
+# not need. Individually flagged so the cost of each can be measured.
+NO_GI = "--no-gi" in sys.argv
+NO_AO = "--no-ao" in sys.argv
+NO_DENOISE = "--no-denoise" in sys.argv
+NO_RESTIR = "--no-restir" in sys.argv
 prof = {}
 MIN_EVENTS = int(cli_arg("--min-events", 40, float))
 
@@ -856,6 +863,19 @@ def update_aim_preview(visible):
 
 if RENDER_SCALE < 0.999:
     renderer.render_scale = RENDER_SCALE
+if NO_GI:
+    renderer.probe_gi = False
+if NO_AO:
+    renderer.deferred_ao = False
+if NO_DENOISE:
+    renderer.denoise = False
+# ReSTIR earns its keep with many lights and emissive geometry. This scene has
+# two analytic lights and no emitters, which is exactly the case the legacy
+# per-light NEE loops handle more cheaply -- and at 1 spp with two lights the
+# two paths should agree, so unlike the GI toggles this one is not a look/perf
+# trade. (Needs a threepp built after the restir_di binding was added.)
+if NO_RESTIR and hasattr(renderer, "restir_di"):
+    renderer.restir_di = False
 renderer.event_camera_source = "shaded"
 renderer.set_event_camera_resolution(SENSOR_W, SENSOR_H)
 renderer.event_camera_enabled = True
