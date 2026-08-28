@@ -627,7 +627,8 @@ def solve(p_in: wp.array(dtype=wp.vec3), p_out: wp.array(dtype=wp.vec3),
           ball_r: float, mu: float,
           prev_pos: wp.array(dtype=wp.vec3),
           anchors: wp.array(dtype=wp.vec3), lra: wp.array(dtype=float),
-          impulse: wp.array(dtype=wp.vec3), m_particle: float, relax: float):
+          impulse: wp.array(dtype=wp.vec3), anchor_f: wp.array(dtype=wp.vec3),
+          m_particle: float, relax: float):
     i = wp.tid()
     p = p_in[i]
     w = im[i]
@@ -662,7 +663,22 @@ def solve(p_in: wp.array(dtype=wp.vec3), p_out: wp.array(dtype=wp.vec3),
         lk = wp.length(dk)
         lmax = lra[i * 4 + k]
         if lk > lmax:
-            p = ak + dk * (lmax / lk)
+            # The projection pulls the particle toward the anchor, so by
+            # Newton's third law the ANCHOR is dragged toward the particle by
+            # m * (p - q). Accumulated per corner this says WHICH corner is
+            # carrying the sheet, and it is used for nothing else -- see
+            # ARM_LOAD. It is a share and not a force: at the fixed point of a
+            # Jacobi solve the attachment and the springs it fights both keep
+            # correcting, by equal and opposite amounts, so the sum over
+            # iterations grows with ITERS instead of converging. Measured, the
+            # first attempt at reading it as a force hit a 200 N-a-corner guard
+            # 43 times through the throw, on a 0.45 kg sheet.
+            # The projected position is written exactly the way it always was,
+            # arithmetic and all, so a run with the feedback off is bit-for-bit
+            # the run before any of this existed.
+            q = ak + dk * (lmax / lk)
+            wp.atomic_add(anchor_f, k, (p - q) * m_particle)
+            p = q
 
     # Ball contact. The pushout delta is the only thing the ball did to this
     # particle, so m * delta summed over the sheet IS the momentum transfer --
@@ -816,6 +832,11 @@ bp = wp.array(np.array([CANNON], np.float32), dtype=wp.vec3, device=device)
 bv = wp.zeros(1, dtype=wp.vec3, device=device)
 bpred = wp.zeros(1, dtype=wp.vec3, device=device)
 impulse = wp.zeros(1, dtype=wp.vec3, device=device)
+# What each CORNER is carrying, accumulated over a whole tick (see the long-range
+# attachment block in solve()). The two cloths get their own: the sheet's corners
+# are the arms and the net's are the drones, and feeding one rig the other's load
+# is exactly the bug a shared accumulator would invite.
+anchor_f = wp.zeros(4, dtype=wp.vec3, device=device)
 
 solve_graph = None
 if device.is_cuda and ITERS % 2 == 0:
@@ -825,7 +846,8 @@ if device.is_cuda and ITERS % 2 == 0:
             for _ in range(ITERS):
                 wp.launch(solve, dim=V, device=device,
                           inputs=[_a, _b, im, N, N, REST, bpred, bp, BALL_R + 0.012, MU,
-                                  prev, anchor_tgt, lra, impulse, M_PARTICLE, 0.35])
+                                  prev, anchor_tgt, lra, impulse, anchor_f,
+                                  M_PARTICLE, 0.35])
                 _a, _b = _b, _a
         solve_graph = _cap.graph
     except Exception as exc:                       # noqa: BLE001 - capture is optional
@@ -887,6 +909,7 @@ if DRONES:
     net_anchor_idx = wp.array(net_anchor_idx_np, dtype=int, device=device)
     net_anchor_tgt = wp.array(net_p0[net_anchor_idx_np].copy(), dtype=wp.vec3,
                               device=device)
+    net_anchor_f = wp.zeros(4, dtype=wp.vec3, device=device)
 
     net_from = net_p0[net_anchor_idx_np].astype(np.float64)
     net_to = net_from.copy()
@@ -902,7 +925,7 @@ if DRONES:
             wp.launch(solve, dim=NVV, device=device,
                       inputs=[a, b, net_im, NR, NR, NET_REST, bpred, bp,
                               BALL_R + 0.012, MU, netprev, net_anchor_tgt,
-                              net_lra, impulse, NET_M, 0.35])
+                              net_lra, impulse, net_anchor_f, NET_M, 0.35])
             a, b = b, a
         wp.copy(netp, a)
 
@@ -2442,11 +2465,50 @@ ARM_DAMP = cli_arg("--arm-damp", 300.0, float)       # N*m*s/rad
 ARM_TORQUE = cli_arg("--arm-torque", 87.0, float)    # N*m ceiling, the FR3's own
 ARM_SUBSTEPS = max(1, int(cli_arg("--arm-substeps", 2, float)))
 ARM_FF = ARM_DAMP / max(ARM_STIFF, 1e-6)
-# The coupling is ONE-WAY: the anchors follow the simulated tool, the cloth's
-# contact impulse is not fed back onto the arms. Two-way needs an external force
-# on the tool LINK, and load_articulation returns (articulation, meshes, joint
-# names) -- no ArticulationLink handles -- so from Python there is nothing to
-# apply the force to. It is a binding gap, not a tuning one.
+# The coupling is TWO-WAY under --physics-arms: the anchors follow the simulated
+# tool, and the load the sheet hangs on them goes back onto each arm's tool LINK
+# as an external force. articulation.link(name) is what makes it reachable at all
+# -- the handle resolves fr3_hand_tcp, four fixed joints past the last actuated
+# one, to the body it was welded into -- and --no-arm-load turns it off for an
+# A/B against the one-way rig.
+#
+# HOW MUCH is Newton, not the solver. Take the sheet (and the ball, while they
+# are touching) as one system: whatever the corners are holding is
+#     F = M_cloth * (g - a_com) + M_ball * (g - a_ball)
+# with both accelerations differenced from the tick's own state. At rest that is
+# the sheet's 4.4 N of weight, in free flight the ball term is identically zero,
+# through the catch it is the ball's deceleration minus what the cloth's own
+# inertia swallows, and through the throw it is the reaction to slinging 0.45 kg
+# around. Nothing in it depends on ITERS, SUBSTEPS or the relaxation.
+#
+# The first version of this DID read the constraint corrections as forces, which
+# is what a PBD solver appears to offer, and it is a trap: the corrections at a
+# Jacobi fixed point balance rather than vanish, so the "force" scales with the
+# iteration count. It saturated a 200 N-a-corner guard through the stroke and
+# put the ball off the rig at 1.57x its speed against the 1.21x it leaves at.
+#
+# WHICH CORNER is the one thing the solver is asked for: the long-range
+# attachment reaction (solve()) is the tension path from a load to a corner, and
+# its per-corner ratios are used to split F. Direction comes from F, so the four
+# forces sum to exactly the system reaction; the split is a share, and a sheet
+# nobody is loading unevenly splits four ways.
+#
+# What it costs, measured against --no-arm-load on the standard shot: the catch
+# does not move (contact 0.053 m from the sheet centre, CAUGHT, both ways) and
+# the drives go from 1.3 mm mean / 12.0 mm peak of tracking error to 1.4 / 12.0.
+# The number that DOES move is the throw: the ball leaves at 1.25-1.27x the rig
+# instead of 1.21x, because the sheet now pulls back on the arms while the stroke
+# whips it, and that is 0.2 m/s of ball speed the TOSS_GAIN calibration above
+# does not know about. It still lands in the drones' net, further off its middle
+# (0.18-0.26 m against 0.09) but well inside the 0.45 m half-width, and that
+# number is noisy anyway -- the kinematic arms put it 0.21 m off on the same
+# shot. Re-calibrating the throw is the same open work --physics-arms already
+# has, one notch bigger.
+ARM_LOAD = PHYS_ARMS and "--no-arm-load" not in sys.argv
+# A guard, not a model: an articulation handed a kilonewton is not a robot any
+# more. Every clamped corner-tick is counted and printed, so if this ever bites
+# it says so instead of quietly becoming the model.
+ARM_LOAD_CAP = cli_arg("--arm-load-cap", 200.0, float)
 
 
 def reach_limit(ux, uz):
@@ -2584,6 +2646,19 @@ def _arm_frame(p):
 arm_world = None
 arm_static = []      # collider meshes for the floor and the pedestals (held: the
                      # world does not keep them alive, and PhysX cooked from them)
+# Last tick's corner load, in the SCENE frame, one row per arm. The cloth is
+# measured over a tick and pushed onto the arms over the next one, which is the
+# same one-tick pipeline the anchors already ride: the arms move first, then the
+# cloth answers, and the answer arrives on the following tick.
+arm_load = np.zeros((4, 3))
+arm_load_n = np.zeros(4)
+arm_load_peak = [0.0, 0.0, "idle"]   # worst single corner, N, when, in what state
+arm_load_hold = [0.0, 0.0]           # worst single corner while the ball is IN the sheet
+arm_load_clamped = [0]
+arm_load_log = []                    # per-tick mean corner load, N -- the noise floor
+cloth_com = None                     # last tick's centre of mass, and its velocity
+cloth_com_v = None
+ball_v_prev = None
 if PHYS_ARMS:
     # num_threads=0 runs the solver on the calling thread: four seven-DOF arms
     # are not enough work to pay for a task dispatcher.
@@ -2670,6 +2745,18 @@ class Arm:
             print(f"arms: articulation has {self.ndof} dof against the kinematic "
                   f"model's {self.robot.num_dof}; falling back to kinematic")
             self.art = None
+        # The link the sheet hangs off, and the only thing an external force can
+        # be applied to. The tool frame is not a link the solver knows about --
+        # fr3_hand_tcp sits four FIXED joints past the last actuated one -- but
+        # link() resolves a collapsed name to the body it was welded into, which
+        # is the body whose motion the tool frame rigidly follows. Index -1 (the
+        # last link added) is the fallback for a URDF with no named tool.
+        self.tool = None
+        if self.art is not None and ARM_LOAD:
+            try:
+                self.tool = self.art.link(rel[1] if (rel and rel[1]) else -1)
+            except Exception as exc:                   # noqa: BLE001
+                print(f"arms: no tool link to load ({exc}); coupling stays one-way")
 
     def settle(self, target):
         """Converge onto a corner with the speed cap OFF, once, before the run.
@@ -2811,6 +2898,22 @@ if ARMS:
             for _a in arms:
                 _a.art = None
 
+        if ARM_LOAD and any(a.tool is not None for a in arms):
+            def _push_cloth_load(_dt):
+                """Put last tick's corner load on the tool links, once per substep.
+
+                PhysX clears an external force after every simulate(), so a force
+                applied before step() lives for ONE of the ARM_SUBSTEPS substeps
+                and delivers that fraction of the momentum. Applying it from a
+                pre-substep hook is one steady force across the whole tick, and it
+                does not have to know or care how many substeps the accumulator
+                decides to run."""
+                for _k, _a in enumerate(arms):
+                    if _a.tool is not None and arm_load_n[_k] > 0.0:
+                        _a.tool.add_force(tp.Vector3(*_arm_frame(arm_load[_k])))
+
+            arm_world.on_pre_substep(_push_cloth_load)
+
     _kind = arms[0].kind
     _phys = sum(1 for a in arms if a.art is not None)
     print(f"arms: 4 x {_kind} ({arms[0].robot.num_dof} dof, tool "
@@ -2823,6 +2926,9 @@ if ARMS:
           + (f"{_phys} PhysX articulations, drives K={ARM_STIFF:.0f} D={ARM_DAMP:.0f} "
              f"(feed-forward {ARM_FF:.4f} s), {ARM_TORQUE:.0f} N*m ceiling, "
              f"{ARM_SUBSTEPS} substeps/tick, self-collision on"
+             + (", cloth load fed back onto the tool links"
+                if ARM_LOAD and any(a.tool is not None for a in arms)
+                else ", coupling one-way (--no-arm-load)" if PHYS_ARMS else "")
              if _phys else "IK poses the joints directly (--physics-arms simulates them)"))
 
 
@@ -3310,7 +3416,8 @@ def substep(alpha=1.0):
         for _ in range(ITERS):
             wp.launch(solve, dim=V, device=device,
                       inputs=[a, b, im, N, N, REST, bpred, bp, BALL_R + 0.012, MU,
-                              prev, anchor_tgt, lra, impulse, M_PARTICLE, 0.35])
+                              prev, anchor_tgt, lra, impulse, anchor_f,
+                              M_PARTICLE, 0.35])
             a, b = b, a
         wp.copy(pos, a)
     # The net, in step with the sheet, but only while the ball could be in it.
@@ -3333,6 +3440,7 @@ def step_frame():
     global plan, first_plan, frames_tracked, truth_cross, _prev_ball_y
     global net_tracker, t_net_obs, net_plan, net_first_plan, net_verdict
     global net_miss, net_rel, net_centre, net_low
+    global cloth_com, cloth_com_v, ball_v_prev
 
     import time as _t
     _mark = _t.perf_counter()
@@ -3375,6 +3483,9 @@ def step_frame():
         net_still = quad.mode == "ground" and not net_near[0] and sim_time > 0.0
         if not net_still and not net_near[0]:
             net_bulk()
+    anchor_f.zero_()
+    if DRONES:
+        net_anchor_f.zero_()
     for _i in range(SUBSTEPS):
         substep((_i + 1) / SUBSTEPS)
         sim_time += DT
@@ -3390,6 +3501,41 @@ def step_frame():
                        and abs(p_true[2] - c[2]) < NET_HALF + NET_NEAR
                        and c[1] - NET_HANG - NET_NEAR < p_true[1] < c[1] + NET_NEAR)
     contact = float(np.linalg.norm(impulse.numpy()[0])) > 0.0
+    sheet_np = pos.numpy()
+    if ARM_LOAD:
+        # What the four corners are holding, by Newton on {sheet + ball}. Both
+        # accelerations are second differences of the tick's own state, so the
+        # number is a tick MEAN -- which is all the drives could act on at 240 Hz
+        # anyway -- and the ball term is identically zero unless the two are
+        # touching (out of contact the ball's own acceleration IS g). The sheet's
+        # particles all carry the same mass, so the mean position is the centre
+        # of mass, anchors included: they are part of what is being accelerated.
+        _c = sheet_np.mean(axis=0).astype(np.float64)
+        _vc = np.zeros(3) if cloth_com is None else (_c - cloth_com) / dt
+        _ac = np.zeros(3) if cloth_com_v is None else (_vc - cloth_com_v) / dt
+        _ab = ((v_true - ball_v_prev) / dt
+               if (contact and ball_v_prev is not None) else G_NP)
+        _tot = CLOTH_KG * (G_NP - _ac) + BALL_KG * (G_NP - _ab)
+        cloth_com, cloth_com_v, ball_v_prev = _c, _vc, v_true.copy()
+        # Split it by the attachment reaction. Only the RATIOS are read (see the
+        # long-range attachment block in solve()); an unloaded sheet has none and
+        # splits four ways.
+        _s = np.linalg.norm(anchor_f.numpy().astype(np.float64), axis=1)
+        _w = _s / _s.sum() if _s.sum() > 1e-12 else np.full(4, 0.25)
+        _f = _w[:, None] * _tot
+        _n = np.linalg.norm(_f, axis=1)
+        _hot = _n > ARM_LOAD_CAP
+        if _hot.any():
+            _f[_hot] *= (ARM_LOAD_CAP / _n[_hot])[:, None]
+            _n[_hot] = ARM_LOAD_CAP
+            arm_load_clamped[0] += int(_hot.sum())
+        arm_load[:] = _f
+        arm_load_n[:] = _n
+        if _n.max() > arm_load_peak[0]:
+            arm_load_peak[:] = [float(_n.max()), sim_time, state]
+        if contact and _n.max() > arm_load_hold[0]:
+            arm_load_hold[:] = [float(_n.max()), sim_time]
+        arm_load_log.append(float(_n.mean()))
     if arms:
         e = max(a.err for a in arms)
         arm_worst.append(e)
@@ -3407,7 +3553,7 @@ def step_frame():
 
     # --- meshes ---------------------------------------------------------------
     wp.launch(compute_normals, dim=V, device=device, inputs=[pos, nrm, N, N])
-    geometry.update_attribute("position", pos.numpy())
+    geometry.update_attribute("position", sheet_np)
     geometry.update_attribute("normal", nrm.numpy())
     ball_mesh.visible = state != "idle"      # loaded in the barrel until fired
     ball_mesh.position.set(*[float(x) for x in p_true])
@@ -3813,6 +3959,17 @@ def report(p_true, v_true):
             print(f"              achieved vs planned tool pose: mean {_l.mean():.4f} m, "
                   f"peak {_l.max():.4f} m over {len(_l)} ticks "
                   f"(K={ARM_STIFF:.0f} D={ARM_DAMP:.0f}, {ARM_TORQUE:.0f} N*m)")
+        if ARM_LOAD:
+            print(f"              cloth load fed back: peak {arm_load_hold[0]:.1f} N on a "
+                  f"corner with the ball aboard (t={arm_load_hold[1]:.2f} s), "
+                  f"{arm_load_peak[0]:.1f} N over the whole run "
+                  f"(t={arm_load_peak[1]:.2f} s, {arm_load_peak[2]}); "
+                  f"{CLOTH_KG * 9.81 / 4:.1f} N a corner is the sheet just hanging"
+                  + (f"; CLAMPED at {ARM_LOAD_CAP:.0f} N on {arm_load_clamped[0]} "
+                     f"corner-ticks" if arm_load_clamped[0] else ""))
+            _q = np.percentile(np.array(arm_load_log), [50, 95, 99])
+            print(f"              per-corner load over the run: median {_q[0]:.2f} N, "
+                  f"95th {_q[1]:.2f} N, 99th {_q[2]:.2f} N")
     print(f"  rig         travelled {rig.travel:.2f} m, peak {rig.peak_speed:.2f} m/s "
           f"(cap {ARM_SPEED:.1f})"
           + (f", SPEED-CAPPED on {rig.starved} frames" if rig.starved else "")
@@ -4201,9 +4358,9 @@ def animate():
     if canvas.is_key_down("D"):
         aim["az"] += 0.6
     if canvas.is_key_down("W"):
-        aim["el"] = min(aim["el"] + 0.4, 85.0)
+        aim["el"] = min(aim["el"] - 0.4, 85.0)
     if canvas.is_key_down("S"):
-        aim["el"] = max(aim["el"] - 0.4, 10.0)
+        aim["el"] = max(aim["el"] + 0.4, 10.0)
     if canvas.is_key_down("Q"):
         aim["speed"] = max(aim["speed"] - 0.03, 2.0)
     if canvas.is_key_down("E"):
