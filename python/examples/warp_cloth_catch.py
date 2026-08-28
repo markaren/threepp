@@ -82,6 +82,11 @@ TUNE = "--tune" in sys.argv
 CLIP = cli_arg("--clip", "", str)
 SEQ = cli_arg("--seq", "", str)
 SPLIT = "--split" in sys.argv          # beauty | event visualisation, side by side
+# Film pass: full render scale, a bigger frame, a proper key/fill/rim set, the
+# dead air before the shot trimmed, and the catch itself in slow motion. The
+# sheet still has to settle for the tracker to bootstrap -- it just does not
+# have to be watched doing it.
+FILM = "--film" in sys.argv
 ORACLE = "--oracle" in sys.argv        # bypass the sensor; use true ball state
 SIZE_RANGE = "--size-range" in sys.argv  # the old apparent-size fit, for the A/B
 TRACE = "--trace" in sys.argv
@@ -143,7 +148,7 @@ SENSOR_W, SENSOR_H = parse_size(cli_arg("--sensor", "640x480", str))
 # downsample is anisotropic and one focal length no longer describes both axes;
 # rather than model the resampling, keep them the same shape. It is also the
 # better aspect for a social clip.
-VIEW_W, VIEW_H = parse_size(cli_arg("--size", "960x720", str))
+VIEW_W, VIEW_H = parse_size(cli_arg("--size", "1280x960" if FILM else "960x720", str))
 EV_THRESHOLD = cli_arg("--ev-threshold", 0.15, float)
 # Render is ~65% of the loop, so this is the lever that matters. The worry was
 # that it would cost accuracy -- the detector samples the post-TAA frame, so a
@@ -151,7 +156,7 @@ EV_THRESHOLD = cli_arg("--ev-threshold", 0.15, float)
 # bearing stays at 2.4-2.6 px and every scale still catches. Interleaved A/B
 # (the run-to-run spread is ~15%, so singles are not worth quoting): 25.8 ms at
 # 1.0 against 18.7 ms at 0.6.
-RENDER_SCALE = cli_arg("--render-scale", 0.8, float)
+RENDER_SCALE = cli_arg("--render-scale", 1.0 if FILM else 0.8, float)
 PROFILE = "--profile" in sys.argv
 # The GI machinery is built for many-light and emissive-geometry scenes. This
 # one has two lights and no emitters, so it is paying for convergence it does
@@ -672,8 +677,14 @@ scene.background = 0x0a0d11
 # events across the whole frame, so there is nothing to be gained by flying it.
 # High enough to see INTO the bowl -- from a low angle the sheet's near lip
 # hides the very thing the shot is about -- while still framing the whole arc.
-EYE = np.array([0.60, 3.15, 5.60])
-TGT = np.array([-0.30, 1.05, 0.0])
+# The film pass sits closer: the arms are the subject and the wide framing left
+# most of the frame as empty floor. Still wide enough that the cannon and the
+# whole arc stay in shot.
+# Framed on the RIG, not on the whole arena. The cannon sits at the edge and the
+# ball flies in from off-frame, which reads better than watching it be launched --
+# and it stops most of the frame being empty floor between the two.
+EYE = np.array([1.75, 2.35, 4.25]) if FILM else np.array([0.60, 3.15, 5.60])
+TGT = np.array([0.55, 1.05, 0.0]) if FILM else np.array([-0.30, 1.05, 0.0])
 camera = tp.PerspectiveCamera(45, VIEW_W / VIEW_H, 0.1, 100)
 camera.position.set(*EYE)
 camera.look_at(*TGT)
@@ -692,6 +703,14 @@ sun = tp.DirectionalLight(0xffffff, 3.2)
 sun.position.set(3.5, 7.0, 4.0)
 sun.cast_shadow = True
 scene.add(sun)
+if FILM:
+    # White arms on a dark floor lose their silhouette under a single lamp.
+    _fill = tp.DirectionalLight(0x9fb6d8, 0.9)      # cool fill from the shadow side
+    _fill.position.set(-5.0, 2.5, 2.0)
+    scene.add(_fill)
+    _rim = tp.DirectionalLight(0xffd7a8, 1.7)       # warm rim, from behind
+    _rim.position.set(-1.5, 3.0, -6.0)
+    scene.add(_rim)
 
 ground = tp.Mesh(tp.PlaneGeometry(40, 40), standard_material(0x24282e, 0.95))
 ground.rotate_x(-math.pi / 2)
@@ -1415,16 +1434,32 @@ TOTAL = int(SECONDS * SENSOR_HZ)
 
 
 def compose(ev_img):
-    """Beauty frame, optionally with the event stream beside it."""
+    """Beauty frame, optionally with the event stream shown alongside it.
+
+    Side by side halves the width the actual subject gets, which on a 4:3 frame
+    leaves the rig small. In the film pass the sensor goes in as a corner inset
+    instead: same story, and the arms keep the frame.
+    """
     rgb = renderer.read_pixels()
     if not SPLIT:
         return rgb
     from PIL import Image
-    h = rgb.shape[0]
     e = np.stack([ev_img] * 3, axis=-1) if ev_img.ndim == 2 else ev_img
-    e = np.asarray(Image.fromarray(e).resize((int(h * e.shape[1] / e.shape[0]), h),
-                                             Image.NEAREST))
-    return np.concatenate([rgb, e], axis=1)
+    if not FILM:
+        h = rgb.shape[0]
+        e = np.asarray(Image.fromarray(e).resize(
+            (int(h * e.shape[1] / e.shape[0]), h), Image.NEAREST))
+        return np.concatenate([rgb, e], axis=1)
+    H, W = rgb.shape[:2]
+    iw = int(W * 0.30)
+    ih = int(iw * e.shape[0] / e.shape[1])
+    e = np.asarray(Image.fromarray(e).resize((iw, ih), Image.BILINEAR))
+    m, b = int(W * 0.022), 2                      # margin, border
+    out = rgb.copy()
+    y0, x0 = H - ih - m, m
+    out[y0 - b:y0 + ih + b, x0 - b:x0 + iw + b] = 235
+    out[y0:y0 + ih, x0:x0 + iw] = e
+    return out
 
 
 if TUNE:
@@ -1461,7 +1496,17 @@ if (CLIP or SEQ) and not FRAMES:
         if state == "idle" and sim_time >= FIRE_AT:
             fire()
         pt, vt = step_frame()
-        if i % every == 0:
+        # Real time on the approach, then every tick through the catch -- the sim
+        # runs at SENSOR_HZ and the clip plays at CLIP_FPS, so keeping every tick
+        # is free slow motion at exactly that ratio. And nothing before the shot
+        # is worth watching: the settle is a requirement, not a beat.
+        slowmo = FILM and (state in ("catch", "recover")
+                           or (plan is not None and 0 < plan[0] - sim_time < 0.22))
+        if FILM and sim_time < FIRE_AT - 0.35:
+            keep = False
+        else:
+            keep = slowmo or (i % every == 0)
+        if keep:
             Image.fromarray(compose(renderer.read_event_camera_visualisation())).save(
                 f"{outdir}_{written:04d}.png")
             written += 1
