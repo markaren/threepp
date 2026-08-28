@@ -1955,7 +1955,16 @@ for _ in range(4):
 def build_sensor_rig(sensor):
     metal = standard_material(0x2b3038, 0.55, 0.45)
     body_mat = standard_material(0x14171c, 0.5, 0.35)
-    apex = sensor.eye + np.array([0.0, -0.12, 0.0])
+    # The sensor's eye is the PINHOLE, so the entire housing has to sit BEHIND it:
+    # the front glass lands SET_BACK behind the eye and everything stacks back from
+    # there. Built forward of the eye, as it was, the lens sat 0.17 m out against a
+    # 0.1 m near plane and put a black disc over the middle of both sensor frames,
+    # which is a prop blinding the instrument it is decorating. The tripod follows
+    # the body so the column still comes up under its middle rather than under the
+    # lens; MID is the body's centre, half a housing behind the glass.
+    SET_BACK = 0.18
+    MID = sensor.eye - 0.17 * sensor.fwd
+    apex = MID + np.array([0.0, -0.12, 0.0])
     for k in range(3):                       # three legs, splayed 120 degrees
         psi = math.radians(90.0 + 120.0 * k + 25.0)
         foot = np.array([apex[0] + 0.40 * math.cos(psi), 0.0,
@@ -1963,29 +1972,35 @@ def build_sensor_rig(sensor):
         leg = _cyl_between(apex, foot, 0.018, metal)
         if leg is not None:
             scene.add(leg)
-    column = _cyl_between(apex, sensor.eye + np.array([0.0, -0.02, 0.0]), 0.028, metal)
+    column = _cyl_between(apex, MID + np.array([0.0, -0.02, 0.0]), 0.028, metal)
     if column is not None:
         scene.add(column)
-    # The body is a Group at the eye pointed with look_at, which is safe here
-    # (the look direction is nowhere near vertical) and puts -z along fwd, the
-    # same convention the camera itself uses.
+    # The body is a Group at the eye, turned so its -z runs along fwd -- the same
+    # convention the camera itself uses, which is what lets the lens sit at -z.
+    # A Group is NOT a Camera, so Object3D::lookAt gives it the non-camera
+    # convention and turns +z toward the argument: aiming it straight at
+    # SENSOR_TARGET pointed every lens 180 degrees out, at the sky behind the
+    # rig. Reflecting the target through the eye is the one-line fix, the same
+    # one lidar_sculpt's aim() writes down. Safe here either way: the look
+    # direction is nowhere near vertical.
     head = tp.Group()
     head.position.set(*[float(v) for v in sensor.eye])
-    head.look_at(*[float(v) for v in SENSOR_TARGET])
+    _behind = 2.0 * sensor.eye - SENSOR_TARGET
+    head.look_at(*[float(v) for v in _behind])
     scene.add(head)
     shell = tp.Mesh(tp.BoxGeometry(0.17, 0.13, 0.22), body_mat)
-    shell.position.set(0.0, 0.0, 0.05)
+    shell.position.set(0.0, 0.0, 0.05 + SET_BACK)
     shell.cast_shadow = True
     head.add(shell)
     lens = tp.Mesh(tp.CylinderGeometry(0.048, 0.055, 0.11, 18), metal)
     lens.rotate_x(-math.pi / 2)              # +y -> -z, which is forward
-    lens.position.set(0.0, 0.0, -0.11)
+    lens.position.set(0.0, 0.0, -0.11 + SET_BACK)
     lens.cast_shadow = True
     head.add(lens)
     glass = tp.Mesh(tp.CylinderGeometry(0.040, 0.040, 0.012, 18),
                     standard_material(0x0a2b3a, 0.15, 0.95))
     glass.rotate_x(-math.pi / 2)
-    glass.position.set(0.0, 0.0, -0.168)
+    glass.position.set(0.0, 0.0, -0.168 + SET_BACK)
     head.add(glass)
 
 
