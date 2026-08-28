@@ -8,7 +8,7 @@ import numpy.typing
 import typing
 from . import editor
 from . import imgui
-__all__: list[str] = ['AmbientLight', 'AnimationAction', 'AnimationBlendMode', 'AnimationClip', 'AnimationMixer', 'Approach', 'ArrowHelper', 'Articulation', 'ArticulationLink', 'Audio', 'AudioDistanceModel', 'AudioListener', 'AxesHelper', 'Background', 'BarkStyle', 'BirdPlumage', 'BirdRole', 'BirdShape', 'BirdState', 'Blending', 'Blob', 'Box3', 'Box3Helper', 'BoxGeometry', 'BoxHelper', 'BranchingMode', 'BufferGeometry', 'Camera', 'CameraHelper', 'Canvas', 'CapsuleGeometry', 'CatmullRomCurve3', 'CircleGeometry', 'Clock', 'Cluster', 'Colonise', 'Color', 'ColorKeyframeTrack', 'ColorSpace', 'CombineOperation', 'Cone', 'ConeGeometry', 'ContactPoint', 'ContactSample', 'ContactSensor', 'ConvexGeometry', 'CrossQuad', 'CrownShape', 'Cruise', 'Cylinder', 'CylinderGeometry', 'DepthPacking', 'DepthSensor', 'DirectionalLight', 'DirectionalLightHelper', 'DisplacedMesh', 'EXPONENTIAL', 'EXRLoader', 'Ellipsoid', 'ErosionType', 'Euler', 'Evade', 'FBXLoader', 'Filter', 'Flare', 'Flock', 'FlockParams', 'Fog', 'FogExp2', 'Follower', 'Font', 'FontLoader', 'ForceTorqueSensor', 'Frond', 'Furrowed', 'GLRenderer', 'GLTFLoader', 'GLTFResult', 'Gait', 'GrassMesh', 'GridHelper', 'Group', 'HAS_AUDIO', 'HAS_IMGUI', 'HAS_PHYSX', 'HAS_VULKAN', 'Hemisphere', 'HemisphereLight', 'HemisphereLightHelper', 'Hop', 'HorizontalAlignment', 'INVERSE', 'IcosahedronGeometry', 'IcpOptions', 'IcpResult', 'IkOptions', 'IkResult', 'IkSolver', 'IkTask', 'ImguiContext', 'Imu', 'ImuSample', 'InstancedMesh', 'Interpolation', 'IsoMesh', 'Joint', 'JointEncoder', 'JointInfo', 'JointRange', 'JointSample', 'JointType', 'KeyframeTrack', 'LINEAR', 'Lanceolate', 'Launch', 'Leader', 'LeafShape', 'LeafStyle', 'LidarBeam', 'LidarModel', 'LidarParams', 'LidarReturn', 'Light', 'Line', 'LineBasicMaterial', 'LineSegments', 'Lobed', 'Loner', 'Loop', 'Mapping', 'Material', 'Matrix3', 'Matrix4', 'Mesh', 'MeshBasicMaterial', 'MeshDepthMaterial', 'MeshLambertMaterial', 'MeshNormalMaterial', 'MeshPhongMaterial', 'MeshPhysicalMaterial', 'MeshStandardMaterial', 'ModelLoader', 'NONE', 'NoiseModel', 'NoiseType', 'NumberKeyframeTrack', 'OBJLoader', 'Object3D', 'Ocean', 'OctahedronGeometry', 'OrbitControls', 'OrthographicCamera', 'Ovate', 'Papery', 'ParticleField', 'Perched', 'PerspectiveCamera', 'PhysxGpuBatch', 'PhysxMaterial', 'PhysxSoftBodyMaterial', 'PhysxWorld', 'PlaneGeometry', 'Plated', 'PointLight', 'PointLightHelper', 'Points', 'PointsMaterial', 'PolarGridHelper', 'PositionalAudio', 'Quad', 'Quaternion', 'QuaternionKeyframeTrack', 'RGBELoader', 'RangeNoiseModel', 'RectAreaLight', 'RigidBody', 'RingGeometry', 'Robot', 'RotationOrder', 'STLLoader', 'SVGLoader', 'ScalarField', 'Scene', 'Sensor', 'Serrate', 'ShadowMaterial', 'Side', 'SkeletonHelper', 'SoftBody', 'Sphere', 'SphereGeometry', 'SplatCloud', 'SplatData', 'SplatLoader', 'SpotLight', 'SpotLightHelper', 'Sprite', 'SpriteMaterial', 'TerrainFalloff', 'TerrainGenerator', 'TerrainParams', 'Text2D', 'Text3D', 'TextSprite', 'Texture', 'TextureLoader', 'TextureWrapping', 'ToneMapping', 'TorusGeometry', 'TorusKnotGeometry', 'TransformControls', 'TreeGenerator', 'TreeParams', 'URDFLoader', 'Vector2', 'Vector3', 'Vector4', 'VectorKeyframeTrack', 'VerticalAlignment', 'VoxelGrid', 'VulkanRenderer', 'Walk', 'Whorl', 'WrenchSample', 'apply_terrain_preset', 'apply_tree_preset', 'clamp', 'damp', 'data_texture', 'deg_to_rad', 'editor', 'euclidean_modulo', 'float_texture', 'generate_uuid', 'icp_point_to_point', 'imgui', 'inverse_lerp', 'is_power_of_two', 'iso_mesh_to_geometry', 'lerp', 'make_bark_textures', 'make_flower_texture', 'make_leaf_texture', 'make_needle_frond_texture', 'map_linear', 'marching_cubes', 'merge_buffer_geometries', 'merge_vertices', 'rad_to_deg', 'rand_float', 'rand_float_range', 'rand_float_spread', 'rand_int', 'rotate_equirect', 'simplify_geometry', 'splat_points_to_field', 'terrain_from_json', 'terrain_load_config', 'terrain_save_config', 'terrain_to_json', 'voxel_downsample', 'vulkan_available', 'write_wav']
+__all__: list[str] = ['AmbientLight', 'AnimationAction', 'AnimationBlendMode', 'AnimationClip', 'AnimationMixer', 'Approach', 'ArrowHelper', 'Articulation', 'ArticulationLink', 'Audio', 'AudioDistanceModel', 'AudioListener', 'AxesHelper', 'Background', 'BarkStyle', 'BirdPlumage', 'BirdRole', 'BirdShape', 'BirdState', 'Blending', 'Blob', 'Box3', 'Box3Helper', 'BoxGeometry', 'BoxHelper', 'BranchingMode', 'BufferGeometry', 'Camera', 'CameraHelper', 'Canvas', 'CapsuleGeometry', 'CatmullRomCurve3', 'CircleGeometry', 'Clock', 'Cluster', 'Colonise', 'Color', 'ColorKeyframeTrack', 'ColorSpace', 'CombineOperation', 'Cone', 'ConeGeometry', 'ContactPoint', 'ContactSample', 'ContactSensor', 'ConvexGeometry', 'CrossQuad', 'CrownShape', 'Cruise', 'Cylinder', 'CylinderGeometry', 'DepthPacking', 'DepthSensor', 'DirectionalLight', 'DirectionalLightHelper', 'DisplacedMesh', 'EXPONENTIAL', 'EXRLoader', 'Ellipsoid', 'ErosionType', 'Euler', 'Evade', 'FBXLoader', 'Filter', 'Flare', 'Flock', 'FlockParams', 'Fog', 'FogExp2', 'Follower', 'Font', 'FontLoader', 'ForceTorqueSensor', 'FrameChannel', 'Frond', 'Furrowed', 'GLRenderer', 'GLTFLoader', 'GLTFResult', 'Gait', 'GrassMesh', 'GridHelper', 'Group', 'HAS_AUDIO', 'HAS_IMGUI', 'HAS_PHYSX', 'HAS_VULKAN', 'Hemisphere', 'HemisphereLight', 'HemisphereLightHelper', 'Hop', 'HorizontalAlignment', 'INVERSE', 'IcosahedronGeometry', 'IcpOptions', 'IcpResult', 'IkOptions', 'IkResult', 'IkSolver', 'IkTask', 'ImguiContext', 'Imu', 'ImuSample', 'InstancedMesh', 'Interpolation', 'IsoMesh', 'Joint', 'JointEncoder', 'JointInfo', 'JointRange', 'JointSample', 'JointType', 'KeyframeTrack', 'LINEAR', 'Lanceolate', 'Launch', 'Leader', 'LeafShape', 'LeafStyle', 'LidarBeam', 'LidarModel', 'LidarParams', 'LidarReturn', 'Light', 'Line', 'LineBasicMaterial', 'LineSegments', 'Lobed', 'Loner', 'Loop', 'Mapping', 'Material', 'Matrix3', 'Matrix4', 'Mesh', 'MeshBasicMaterial', 'MeshDepthMaterial', 'MeshLambertMaterial', 'MeshNormalMaterial', 'MeshPhongMaterial', 'MeshPhysicalMaterial', 'MeshStandardMaterial', 'ModelLoader', 'NONE', 'NoiseModel', 'NoiseType', 'NumberKeyframeTrack', 'OBJLoader', 'Object3D', 'Ocean', 'OctahedronGeometry', 'OrbitControls', 'OrthographicCamera', 'Ovate', 'Papery', 'ParticleField', 'PathTracedLidarSensor', 'Perched', 'PerspectiveCamera', 'PhysxGpuBatch', 'PhysxMaterial', 'PhysxSoftBodyMaterial', 'PhysxWorld', 'PlaneGeometry', 'Plated', 'PointLight', 'PointLightHelper', 'Points', 'PointsMaterial', 'PolarGridHelper', 'PositionalAudio', 'Quad', 'Quaternion', 'QuaternionKeyframeTrack', 'RGBELoader', 'RangeNoiseModel', 'RectAreaLight', 'RigidBody', 'RingGeometry', 'Robot', 'RotationOrder', 'STLLoader', 'SVGLoader', 'ScalarField', 'Scene', 'Sensor', 'Serrate', 'ShadowMaterial', 'Side', 'SkeletonHelper', 'SoftBody', 'Sphere', 'SphereGeometry', 'SplatCloud', 'SplatData', 'SplatLoader', 'SpotLight', 'SpotLightHelper', 'Sprite', 'SpriteMaterial', 'TerrainFalloff', 'TerrainGenerator', 'TerrainParams', 'Text2D', 'Text3D', 'TextSprite', 'Texture', 'TextureLoader', 'TextureWrapping', 'ToneMapping', 'TorusGeometry', 'TorusKnotGeometry', 'TransformControls', 'TreeGenerator', 'TreeParams', 'URDFLoader', 'Vector2', 'Vector3', 'Vector4', 'VectorKeyframeTrack', 'VerticalAlignment', 'VoxelGrid', 'VulkanRenderer', 'Walk', 'Whorl', 'WrenchSample', 'apply_terrain_preset', 'apply_tree_preset', 'clamp', 'damp', 'data_texture', 'deg_to_rad', 'editor', 'euclidean_modulo', 'float_texture', 'generate_uuid', 'icp_point_to_point', 'imgui', 'inverse_lerp', 'is_power_of_two', 'iso_mesh_to_geometry', 'lerp', 'make_bark_textures', 'make_flower_texture', 'make_leaf_texture', 'make_needle_frond_texture', 'map_linear', 'marching_cubes', 'merge_buffer_geometries', 'merge_vertices', 'rad_to_deg', 'rand_float', 'rand_float_range', 'rand_float_spread', 'rand_int', 'rotate_equirect', 'simplify_geometry', 'splat_points_to_field', 'terrain_from_json', 'terrain_load_config', 'terrain_save_config', 'terrain_to_json', 'voxel_downsample', 'vulkan_available', 'vulkan_validation_active', 'vulkan_validation_error_count', 'write_wav']
 class AmbientLight(Light):
     def __init__(self, color: Color = ..., intensity: typing.SupportsFloat | typing.SupportsIndex = 1.0) -> None:
         ...
@@ -175,6 +175,10 @@ class Articulation:
         """
         All revolute joint angular velocities (rad/s) as one numpy array.
         """
+    def link(self, key: typing.Any) -> ArticulationLink:
+        """
+        The ArticulationLink at add-order index `key` (int, 0 = root, negatives count from the end) or registered under name `key` (str). For a URDF-loaded articulation every URDF link name resolves — a link attached by a FIXED joint maps to the link it was welded into, so a tool frame like a hand TCP still finds its body. Use it to add_force/add_impulse on one specific link (e.g. load the tool link with a catch impulse for two-way coupling) or to read its pose. The handle keeps the articulation alive; the world must outlive both.
+        """
     def reset(self, position: Vector3, quaternion: Quaternion = ...) -> None:
         """
         Episode reset: teleport the root to `position` with optional `quaternion` orientation (default upright/identity), zero velocity, and zero all joint positions/velocities.
@@ -194,6 +198,16 @@ class Articulation:
     def set_joint_positions(self, positions: typing.Annotated[numpy.typing.ArrayLike, numpy.float32]) -> None:
         """
         Set all joint positions (DOF order) and zero velocities — e.g. place a cart-pole hanging straight down for a swing-up demo.
+        """
+    @property
+    def link_names(self) -> list[str]:
+        """
+        All names link(name) resolves, in registration order. Populated by load_articulation with every URDF link name (root and fixed-collapsed children included); empty for a hand-built articulation.
+        """
+    @property
+    def links(self) -> list[ArticulationLink]:
+        """
+        Every link as a list of ArticulationLink, in add_link order (root first). Handles are valid only while the articulation and its world live — hold both; prefer link(key) for a single handle, which keeps the articulation alive itself.
         """
 class ArticulationLink:
     """
@@ -1267,6 +1281,14 @@ class DepthPacking:
     def value(self) -> int:
         ...
 class DepthSensor(Object3D, Sensor):
+    """
+    GPU depth sensor: scans the scene from its own pose and returns a world-space point cloud.
+    
+    Beam convention: beams are cast down the sensor's LOCAL -Z axis (camera convention). The sensor is an Object3D, not a Camera, so look_at() applies the non-camera convention and turns local +Z toward the target -- aiming the sensor exactly backwards, and every scan returns an empty (0, 3) cloud with no other symptom. Aim it by setting rotation/quaternion directly, or reflect the target through the sensor position:
+    
+        p = sensor.position
+        sensor.look_at(2 * p.x - t.x, 2 * p.y - t.y, 2 * p.z - t.z)
+    """
     def __init__(self, fov_y: typing.SupportsFloat | typing.SupportsIndex, width: typing.SupportsInt | typing.SupportsIndex, height: typing.SupportsInt | typing.SupportsIndex, near: typing.SupportsFloat | typing.SupportsIndex = 0.10000000149011612, far: typing.SupportsFloat | typing.SupportsIndex = 100.0) -> None:
         """
         Depth sensor with a vertical FOV (deg), output resolution, and the near/far RANGE bounds (m) it reports in -- a blind sphere of radius near out to a max range of far, inclusive at both ends and identical on GL and Vulkan. These are ranges, not view-space clip planes: an off-axis surface is judged by its distance, not by its depth along the view axis.
@@ -1277,7 +1299,7 @@ class DepthSensor(Object3D, Sensor):
         """
     def scan(self, renderer: typing.Any, scene: Scene) -> numpy.typing.NDArray[numpy.float32]:
         """
-        Depth scan -> (N,3) float32 world-space hit points (N = points that hit within far). Works with a GLRenderer (raster depth) or a VulkanRenderer (path-traced through the renderer's acceleration structure -- render() the scene at least once first).
+        Depth scan -> (N,3) float32 world-space hit points (N = points that hit within far). Works with a GLRenderer (raster depth) or a VulkanRenderer (path-traced through the renderer's acceleration structure -- render() the scene at least once first). Beams go down the sensor's local -Z; an all-empty cloud from a sensor aimed with look_at() usually means it is pointing exactly backwards (see the class docstring).
         """
     def scan_begin(self, renderer: typing.Any, scene: Scene) -> bool:
         """
@@ -2350,6 +2372,60 @@ class ForceTorqueSensor(Sensor):
         """
     @torque_noise.setter
     def torque_noise(self, arg0: NoiseModel) -> None:
+        ...
+class FrameChannel:
+    """
+    A per-frame image the Vulkan renderer can export for zero-copy CUDA/torch consumption.
+    
+    Members:
+    
+      Color
+    
+      Depth
+    
+      Normal
+    
+      Motion
+    
+      Ids
+    
+      Albedo
+    
+      SplatDepth
+    """
+    Albedo: typing.ClassVar[FrameChannel]  # value = <FrameChannel.Albedo: 5>
+    Color: typing.ClassVar[FrameChannel]  # value = <FrameChannel.Color: 0>
+    Depth: typing.ClassVar[FrameChannel]  # value = <FrameChannel.Depth: 1>
+    Ids: typing.ClassVar[FrameChannel]  # value = <FrameChannel.Ids: 4>
+    Motion: typing.ClassVar[FrameChannel]  # value = <FrameChannel.Motion: 3>
+    Normal: typing.ClassVar[FrameChannel]  # value = <FrameChannel.Normal: 2>
+    SplatDepth: typing.ClassVar[FrameChannel]  # value = <FrameChannel.SplatDepth: 6>
+    __members__: typing.ClassVar[dict[str, FrameChannel]]  # value = {'Color': <FrameChannel.Color: 0>, 'Depth': <FrameChannel.Depth: 1>, 'Normal': <FrameChannel.Normal: 2>, 'Motion': <FrameChannel.Motion: 3>, 'Ids': <FrameChannel.Ids: 4>, 'Albedo': <FrameChannel.Albedo: 5>, 'SplatDepth': <FrameChannel.SplatDepth: 6>}
+    def __eq__(self, other: typing.Any) -> bool:
+        ...
+    def __getstate__(self) -> int:
+        ...
+    def __hash__(self) -> int:
+        ...
+    def __index__(self) -> int:
+        ...
+    def __init__(self, value: typing.SupportsInt | typing.SupportsIndex) -> None:
+        ...
+    def __int__(self) -> int:
+        ...
+    def __ne__(self, other: typing.Any) -> bool:
+        ...
+    def __repr__(self) -> str:
+        ...
+    def __setstate__(self, state: typing.SupportsInt | typing.SupportsIndex) -> None:
+        ...
+    def __str__(self) -> str:
+        ...
+    @property
+    def name(self) -> str:
+        ...
+    @property
+    def value(self) -> int:
         ...
 class GLRenderer:
     auto_clear: bool
@@ -3459,8 +3535,6 @@ class LidarModel:
     def elevation_angles(self, arg0: collections.abc.Sequence[typing.SupportsFloat | typing.SupportsIndex]) -> None:
         ...
 class LidarParams:
-    min_range: float
-    paired_clean_trace: bool
     def __init__(self) -> None:
         ...
     @property
@@ -3522,6 +3596,20 @@ class LidarParams:
         ...
     @medium_surface_y.setter
     def medium_surface_y(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def min_range(self) -> float:
+        ...
+    @min_range.setter
+    def min_range(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def paired_clean_trace(self) -> bool:
+        """
+        Trace every beam twice in one dispatch -- as-is, and with the ParticleField density medium off, same beams and RNG keys. The difference IS the degradation. PathTracedLidarSensor.scan() returns the clean leg under the 'clean' key.
+        """
+    @paired_clean_trace.setter
+    def paired_clean_trace(self, arg0: bool) -> None:
         ...
     @property
     def reference_range(self) -> float:
@@ -4760,7 +4848,7 @@ class ParticleField(Mesh):
         @property
         def lit_ambient(self) -> float:
             """
-            Scale on the ambient floor of the lit term — what the shaded side of a sprite sits at.
+            Ambient radiance FLOOR added to the scene's summed AmbientLights, in the same linear units — how dark the shaded side of a sprite is allowed to get. An IBL-lit scene carries no AmbientLight, so a scale on it would be a scale on zero.
             """
         @lit_ambient.setter
         def lit_ambient(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
@@ -5413,25 +5501,49 @@ class ParticleField(Mesh):
         ...
 class PathTracedLidarSensor(Object3D, Sensor):
     """
-    Path-traced LIDAR: fires beams through the renderer's own acceleration structure and returns full radiometric hits. Vulkan only; render() the scene once first. Beams leave along local -Z; look_at() aims a non-camera Object3D exactly backwards -- set rotation directly or reflect the target through the sensor position.
+    Path-traced LIDAR: fires beams through the renderer's own acceleration structure and returns full radiometric hits (position, normal, distance, intensity from the GPU back-scatter BRDF, stable instance id, return number/kind). Vulkan only; render() the scene at least once first so the TLAS exists.
+    
+    `params` (a threepp.LidarParams, mutated in place) exposes the whole LIDAR equation: max/min range, laser power, reference range, detector threshold, atmospheric extinction, multi-return through transmissive surfaces, beam divergence sampling, a dedicated water-column/dust medium, and the paired clean/degraded trace (see LidarParams).
+    
+    Beam convention matches DepthSensor: beams leave along the sensor's LOCAL -Z. The sensor is an Object3D, not a Camera, so look_at() aims it exactly backwards -- set rotation/quaternion directly, or reflect the target through the sensor position.
     """
-    params: LidarParams
-    noise: RangeNoiseModel
     @typing.overload
     def __init__(self, h_res: typing.SupportsInt | typing.SupportsIndex, v_res: typing.SupportsInt | typing.SupportsIndex, max_range: typing.SupportsFloat | typing.SupportsIndex = 100.0) -> None:
-        ...
+        """
+        Dense grid: h_res x v_res beams over the full sphere (debug / ground truth).
+        """
     @typing.overload
     def __init__(self, model: LidarModel, max_range: typing.SupportsFloat | typing.SupportsIndex = 100.0) -> None:
-        ...
+        """
+        Real-sensor beam pattern, e.g. LidarModel.vlp16() / os1_64().
+        """
     @typing.overload
     def __init__(self, fov_y: typing.SupportsFloat | typing.SupportsIndex, width: typing.SupportsInt | typing.SupportsIndex, height: typing.SupportsInt | typing.SupportsIndex, max_range: typing.SupportsFloat | typing.SupportsIndex = 100.0) -> None:
-        ...
+        """
+        Depth-camera mode: a pinhole grid down local -Z, same mounting as DepthSensor.
+        """
     def scan(self, renderer: VulkanRenderer) -> dict:
         """
-        One scan -> dict of numpy arrays: position (N,3), normal (N,3), distance, intensity, instance_id, return_no, return_kind; plus 'clean' when params.paired_clean_trace is set. return_no > 0 is the real-return predicate.
+        One scan from the current pose -> dict of numpy arrays keyed position (N,3), normal (N,3), distance, intensity, instance_id, return_no, return_kind (all length N = beams x samples_per_beam x max_returns; return_no > 0 is the 'real return' predicate). Adds key 'clean' when params.paired_clean_trace is set. Call after render(); never during it.
         """
     @property
     def beam_count(self) -> int:
+        ...
+    @property
+    def noise(self) -> RangeNoiseModel:
+        """
+        Seeded RangeNoiseModel applied along each beam (default zero model: the tracer's own range is already physical). Same replay contract as DepthSensor.noise.
+        """
+    @noise.setter
+    def noise(self, arg0: RangeNoiseModel) -> None:
+        ...
+    @property
+    def params(self) -> LidarParams:
+        """
+        LidarParams, live-tweakable between scans; mutate in place.
+        """
+    @params.setter
+    def params(self, arg0: LidarParams) -> None:
         ...
 class PerspectiveCamera(Camera):
     def __init__(self, fov: typing.SupportsFloat | typing.SupportsIndex = 60.0, aspect: typing.SupportsFloat | typing.SupportsIndex = 1.0, near: typing.SupportsFloat | typing.SupportsIndex = 0.10000000149011612, far: typing.SupportsFloat | typing.SupportsIndex = 2000.0) -> None:
@@ -5679,7 +5791,7 @@ class PhysxWorld:
         """
     def load_articulation(self, path: str, fixed_base: bool = False, base_position: typing.Annotated[collections.abc.Sequence[typing.SupportsFloat | typing.SupportsIndex], "FixedSize(3)"] = [0.0, 0.0, 0.0], default_density: typing.SupportsFloat | typing.SupportsIndex = 1000.0, stiffness: typing.SupportsFloat | typing.SupportsIndex = 0.0, damping: typing.SupportsFloat | typing.SupportsIndex = 0.0, max_force: typing.SupportsFloat | typing.SupportsIndex = 1000000.0, self_collision: bool = False, solver_position_iterations: typing.SupportsInt | typing.SupportsIndex = 12, render_visuals: bool = True, scale: typing.SupportsFloat | typing.SupportsIndex = 1.0, args: collections.abc.Mapping[str, str] = {}) -> tuple[Articulation, list[Mesh], list[str]]:
         """
-        Import a URDF/xacro as a finalized Articulation (one shared parser with the C++ URDFLoader — xacro supported). Returns (articulation, meshes, joint_names): the collider meshes are bound to the sim (add them to a scene to render), joint_names lists the actuated joints in drive-target order. Collision is primitive/bbox, mass from <inertial> (else default_density x volume); fixed joints are collapsed. stiffness/damping/max_force set a PD drive on every joint. scale reinterprets the file's length units (a millimetre URDF in a metre world is 0.001) - shapes, joint frames and prismatic limits are built scaled, masses stay as authored, and a prismatic DOF then reads and drives in the SCALED units. `args` are xacro argument overrides, the same name:=value pairs the xacro CLI takes - a parameterised description built without them expands to the FILE's defaults, which for many robots names config paths that do not exist.
+        Import a URDF/xacro as a finalized Articulation (one shared parser with the C++ URDFLoader — xacro supported). Returns (articulation, meshes, joint_names): the collider meshes are bound to the sim (add them to a scene to render), joint_names lists the actuated joints in drive-target order. Per-link handles are on the articulation itself: articulation.link('tool_link_name') resolves every URDF link name to its ArticulationLink (for add_force on a tool link, per-link poses...). Collision is primitive/bbox, mass from <inertial> (else default_density x volume); fixed joints are collapsed. stiffness/damping/max_force set a PD drive on every joint. scale reinterprets the file's length units (a millimetre URDF in a metre world is 0.001) - shapes, joint frames and prismatic limits are built scaled, masses stay as authored, and a prismatic DOF then reads and drives in the SCALED units. `args` are xacro argument overrides, the same name:=value pairs the xacro CLI takes - a parameterised description built without them expands to the FILE's defaults, which for many robots names config paths that do not exist.
         """
     def on_post_substep(self, callback: collections.abc.Callable) -> int:
         """
@@ -7615,6 +7727,10 @@ class VulkanRenderer:
         """
         Turn the volumetric cloud layer off (default).
         """
+    def disable_frame_interop(self, view: typing.SupportsInt | typing.SupportsIndex = 0) -> None:
+        """
+        Release this view's frame-interop exports. Close the importing tensors FIRST (FrameTensors.close() does both in the right order) — freeing the Vulkan allocation under a live CUDA mapping reports as nothing at all.
+        """
     def disable_height_fog(self) -> None:
         """
         Turn near-field height fog off (default).
@@ -7622,6 +7738,22 @@ class VulkanRenderer:
     def disable_vertex_interop(self, mesh: Mesh) -> None:
         """
         Release the exports and return the mesh to the CPU attribute path. STOP the foreign writes first — nothing here can wait on a CUDA stream. Close the importing VkInteropArrays before calling this.
+        """
+    def enable_frame_interop(self, view: typing.SupportsInt | typing.SupportsIndex = 0, channels: collections.abc.Iterable = ('color', 'depth')) -> list:
+        """
+        Export this view's per-frame images as CUDA-importable buffers and arm the device-to-device copies that fill them.
+        
+        channels: any of 'color', 'depth', 'normal', 'motion', 'ids', 'albedo', 'splat_depth' (or FrameChannel values). view=0 is the primary; anything else must be a live add_view handle.
+        
+        Returns a list of dicts, one per EXPORTABLE channel — duplicates collapse and unexportable ones are skipped ('splat_depth' without splat_depth_aov), so match on the 'channel' key. Each dict carries handle, size_bytes, width, height, bytes_per_pixel and (for 'color') bgra. An EMPTY list means nothing could be exported: before the first render(), on a stale view handle, or on a device with no external-memory extension (one line on stderr) — the fallback is the read_* host readback path.
+        
+        CALL IT AFTER THE FIRST render(): the exports are sized from the G-buffer / swapchain extents, which exist only once a frame has run.
+        
+        SYNC: render() -> sync_frame_interop() -> read the tensors -> next render(). Host ordering is the only cross-API synchronization; there is no shared semaphore.
+        
+        SINGLE-BUFFERED: the tensors are live views of renderer memory that the next render() overwrites. Clone what you need to keep.
+        
+        INVALIDATION: a resize, render_scale, gbuffer MSAA or splat_depth_aov toggle, or removing the view DISABLES interop for that view (one warning on stderr) rather than reallocating under a live import — re-enable and re-import. The handles are OS handles owned by the RENDERER: import them, never CloseHandle them from Python.
         """
     def enable_particle_field_interop(self, field: ParticleField, device_copy: collections.abc.Callable[[], None]) -> typing.Any:
         """
@@ -7652,6 +7784,10 @@ class VulkanRenderer:
         The handles are OS handles owned by the RENDERER (Win32 NT handles on Windows): import them, but never CloseHandle them from Python — disable_vertex_interop / renderer teardown releases them. The layout is tightly-packed float xyz (12-byte stride, wp.vec3), and *_bytes is the ALLOCATION size, which may exceed count*12 — write only the real range.
         
         validate=True (default) runs a GPU finiteness pass over the exported positions each frame, rewriting non-finite vertices as degenerates. Leave it on unless the producer is trusted: a NaN reaching the BLAS build is a device-lost (GPU reset) on NVIDIA, not an error return.
+        """
+    def frame_interop_active(self, view: typing.SupportsInt | typing.SupportsIndex = 0) -> bool:
+        """
+        Is this view's frame interop still armed? False after an invalidation (a resize, render_scale, ...) tore the exports down — the one way to notice without reading stderr. FrameTensors.stale is this, negated.
         """
     def hide_view(self, handle: typing.SupportsInt | typing.SupportsIndex) -> bool:
         """
@@ -7684,11 +7820,21 @@ class VulkanRenderer:
         """
         The sparse event stream of the last completed detector frame as
         ((N, 4) int64, overflowed): columns are x, y (image convention,
-        row 0 = top), polarity (+1 brightening / -1 darkening) and t_us
-        (the frame_time_us stamped on it). `overflowed` is True when the
-        GPU append list saturated and events were dropped — the same
-        failure mode a real sensor's readout has. Unsorted: the GPU
-        appends with an atomic, so order is dispatch order, not time.
+        row 0 = top), polarity (+1 brightening / -1 darkening) and t_us.
+        `overflowed` is True when the GPU append list saturated and events
+        were dropped — the same failure mode a real sensor's readout has.
+        
+        t_us is sub-frame interpolated: log intensity is taken to ramp
+        linearly between two consecutive detector frames and each threshold
+        crossing is stamped where it crosses, so one frame's events span
+        (previous frame_time_us, this one] rather than sharing a value.
+        Rows come back sorted ascending by (t_us, y, x, polarity) — time
+        order like a real readout, and deterministic despite the GPU's
+        atomic append order being scheduler-dependent.
+        """
+    def read_gbuffer_aov_raw(self, aov: str, view: typing.SupportsInt | typing.SupportsIndex = 0) -> typing.Any:
+        """
+        The raw bytes of one G-buffer attachment of the last rendered frame as (H, W, bytes_per_pixel) uint8, or None. No decode: this is the host readback the zero-copy frame-interop path is checked byte-for-byte against. Applications want read_depth / read_instance_ids / read_aovs_typed instead.
         """
     def read_instance_ids(self, scene: Object3D, camera: Camera) -> numpy.typing.NDArray[numpy.uint32]:
         """
@@ -7724,10 +7870,6 @@ class VulkanRenderer:
         """
     def render(self, scene: Object3D, camera: Camera) -> None:
         ...
-    def scan_lidar(self, origins: typing.Annotated[numpy.typing.ArrayLike, numpy.float32], directions: typing.Annotated[numpy.typing.ArrayLike, numpy.float32], params: LidarParams = ...) -> dict:
-        """
-        Trace an arbitrary (N,3)+(N,3) beam table in ONE dispatch -> the same dict of numpy arrays as PathTracedLidarSensor.scan(). Use when the beams do not follow a single pose, e.g. scoring an object from a ring of viewpoints in one round trip.
-        """
     def render_aov(self, scene: Object3D, camera: Camera, aov: str) -> numpy.typing.NDArray[numpy.uint8]:
         """
         Render and return a G-buffer AOV as (H, W, 3) uint8: 'rgb' | 'normals' | 'segmentation' | 'albedo' | 'motion'.
@@ -7742,6 +7884,10 @@ class VulkanRenderer:
         """
     def save_frame(self, scene: Object3D, camera: Camera, path: str) -> None:
         ...
+    def scan_lidar(self, origins: typing.Annotated[numpy.typing.ArrayLike, numpy.float32], directions: typing.Annotated[numpy.typing.ArrayLike, numpy.float32], params: LidarParams = ...) -> dict:
+        """
+        Trace an arbitrary beam table in ONE dispatch: origins (N,3) + unit directions (N,3) -> the same dict of numpy arrays as PathTracedLidarSensor.scan(), row i belonging to beam i (x samples_per_beam x max_returns when those are raised; return_no > 0 is the real-return predicate). render() the scene once first. Use this when the beams do not follow a single pose - e.g. scoring an object from a ring of viewpoints in one round trip.
+        """
     def set_auto_exposure_range(self, min_ev: typing.SupportsFloat | typing.SupportsIndex, max_ev: typing.SupportsFloat | typing.SupportsIndex) -> None:
         """
         EV clamp for auto-exposure relative to linear 1.0 (default -3 to +3).
@@ -7773,9 +7919,17 @@ class VulkanRenderer:
         Contrast threshold in log-intensity units (0.15 fires on almost any
         edge, 0.30 only on hard ones), the visualisation's per-frame decay
         toward mid-grey, the luma floor that stops log() exploding in the
-        shadows, the per-pixel event cap, and the microsecond clock stamped
-        onto every event this frame (drive it from your sim clock — a
-        wall-clock stamp is not reproducible).
+        shadows, the per-pixel event cap, and the microsecond clock for THIS
+        frame's sample.
+        
+        Drive `frame_time_us` EVERY frame from a monotone sim clock (a
+        wall-clock stamp is not reproducible). The detector remembers the
+        previous value and interpolates each event's timestamp linearly
+        between the two — the ESIM model — so a frame's events spread across
+        (previous, this] instead of sharing one stamp. Left at its default the
+        interval is empty and every event carries 0, an obviously-unstamped
+        stream rather than a plausible wrong one. The call only stores a
+        struct, so per-frame is cheap.
         """
     def set_event_camera_resolution(self, width: typing.SupportsInt | typing.SupportsIndex, height: typing.SupportsInt | typing.SupportsIndex) -> None:
         """
@@ -7838,6 +7992,10 @@ class VulkanRenderer:
         """
     def size(self) -> tuple[int, int]:
         ...
+    def sync_frame_interop(self) -> bool:
+        """
+        Block until the last submitted frame's interop copies have completed. Waits ONE frame fence, not the whole device: a single queue signals fences in submission order, so this retires every earlier frame too. False before the first frame.
+        """
     def view_size(self, handle: typing.SupportsInt | typing.SupportsIndex) -> typing.Any:
         """
         Pixel size of a view's output as (width, height), or None if the handle is unknown.
@@ -8094,6 +8252,17 @@ class VulkanRenderer:
         ...
     @render_scale.setter
     def render_scale(self, arg1: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def restir_di(self) -> bool:
+        """
+        ReSTIR DI (streaming RIS + temporal/spatial reuse at primary
+        surfaces) for the deferred shade's next-event estimation.
+        Default on. Off falls back to the legacy per-light NEE loops:
+        cheaper with a handful of lights, markedly noisier with many.
+        """
+    @restir_di.setter
+    def restir_di(self, arg1: bool) -> None:
         ...
     @property
     def scene_capture(self) -> bool:

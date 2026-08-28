@@ -27,6 +27,7 @@
 #include <cstddef>
 #include <stdexcept>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace threepp {
@@ -237,7 +238,44 @@ namespace threepp {
             // A PxArticulationLink is a PxRigidActor, so the rigid-body bind path
             // syncs the visual mesh to the simulated link pose.
             world_.bind(mesh, *link);
-            return ArticulationLink(link, joint, linkPose, ax);
+            ArticulationLink handle(link, joint, linkPose, ax);
+            links_.push_back(handle);
+            return handle;
+        }
+
+        // Every link in add order (root first) — small copyable handles, valid while
+        // this articulation and its world live. This is how a caller reaches one
+        // specific link (to add_force a tool link, attach a sensor) without having
+        // kept every addLink return value itself.
+        [[nodiscard]] const std::vector<ArticulationLink>& links() const { return links_; }
+
+        // Register `name` for the link at add-order `index`. The URDF loader registers
+        // every URDF link name — a fixed-collapsed child maps to the link it was
+        // welded into, so a tool frame attached by a fixed joint still resolves.
+        // Several names may map to one link; one name registered twice keeps the
+        // first entry (findLink scans in registration order).
+        void nameLink(const std::string& name, std::size_t index) {
+            if (index >= links_.size())
+                throw std::runtime_error("Articulation.nameLink: link index out of range");
+            linkNames_.emplace_back(name, index);
+        }
+
+        // The link registered under `name`, or nullptr. The pointer is into links_
+        // and stays valid until the next addLink (callers that keep it long-term
+        // should copy the handle — it is small and copyable by design).
+        [[nodiscard]] const ArticulationLink* findLink(const std::string& name) const {
+            for (const auto& [n, i] : linkNames_)
+                if (n == name) return &links_[i];
+            return nullptr;
+        }
+
+        // All registered names, in registration order (for URDF loads: the file's
+        // link order, root and fixed-collapsed children included).
+        [[nodiscard]] std::vector<std::string> linkNames() const {
+            std::vector<std::string> out;
+            out.reserve(linkNames_.size());
+            for (const auto& [n, i] : linkNames_) out.push_back(n);
+            return out;
         }
 
         void finalize() {
@@ -346,6 +384,8 @@ namespace threepp {
         ::physx::PxArticulationLink* rootLink_ = nullptr;
         std::vector<::physx::PxArticulationJointReducedCoordinate*> joints_;// non-root joints, add order
         std::vector<::physx::PxArticulationAxis::Enum> jointAxes_;// each joint's motion axis (eTWIST rev / eX prism)
+        std::vector<ArticulationLink> links_;                     // every link, add order (root first)
+        std::vector<std::pair<std::string, std::size_t>> linkNames_;// registered name -> add-order index
         bool finalized_ = false;
     };
 

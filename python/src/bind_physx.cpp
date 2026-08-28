@@ -357,6 +357,42 @@ namespace threepp_py {
                      },
                      "Root link world-frame velocity as numpy [vx,vy,vz, wx,wy,wz] — the base "
                      "linear + angular velocity a locomotion observation needs.")
+                .def("link",
+                     [](Articulation& a, const py::object& key) -> ArticulationLink {
+                         if (py::isinstance<py::str>(key)) {
+                             const auto name = key.cast<std::string>();
+                             const auto* l = a.findLink(name);
+                             if (!l) throw py::key_error("Articulation.link: no link named '" + name +
+                                                         "' (see link_names)");
+                             return *l;// a copy: the C++ pointer is only stable until the next add_link
+                         }
+                         const auto& ls = a.links();
+                         const auto n = static_cast<std::ptrdiff_t>(ls.size());
+                         auto i = key.cast<std::ptrdiff_t>();
+                         if (i < 0) i += n;// Python-style negative indexing
+                         if (i < 0 || i >= n) throw py::index_error("Articulation.link: index out of range");
+                         return ls[static_cast<std::size_t>(i)];
+                     },
+                     py::arg("key"), py::keep_alive<0, 1>(),
+                     "The ArticulationLink at add-order index `key` (int, 0 = root, negatives count "
+                     "from the end) or registered under name `key` (str). For a URDF-loaded "
+                     "articulation every URDF link name resolves — a link attached by a FIXED joint "
+                     "maps to the link it was welded into, so a tool frame like a hand TCP still "
+                     "finds its body. Use it to add_force/add_impulse on one specific link (e.g. "
+                     "load the tool link with a catch impulse for two-way coupling) or to read its "
+                     "pose. The handle keeps the articulation alive; the world must outlive both.")
+                .def_property_readonly("links",
+                     [](const Articulation& a) { return a.links(); },
+                     // No keep_alive: a Python list can't be a weakref nurse (same rule as
+                     // add_static_trimesh_tree) — hold the articulation/world yourself.
+                     "Every link as a list of ArticulationLink, in add_link order (root first). "
+                     "Handles are valid only while the articulation and its world live — hold "
+                     "both; prefer link(key) for a single handle, which keeps the articulation "
+                     "alive itself.")
+                .def_property_readonly("link_names", &Articulation::linkNames,
+                     "All names link(name) resolves, in registration order. Populated by "
+                     "load_articulation with every URDF link name (root and fixed-collapsed "
+                     "children included); empty for a hand-built articulation.")
                 .def("dof_order",
                      [](const Articulation& a) {
                          const auto v = a.dofOrder();
@@ -767,7 +803,10 @@ namespace threepp_py {
                      "Import a URDF/xacro as a finalized Articulation (one shared parser with the C++ "
                      "URDFLoader — xacro supported). Returns (articulation, meshes, joint_names): the "
                      "collider meshes are bound to the sim (add them to a scene to render), joint_names "
-                     "lists the actuated joints in drive-target order. Collision is primitive/bbox, mass "
+                     "lists the actuated joints in drive-target order. Per-link handles are on the "
+                     "articulation itself: articulation.link('tool_link_name') resolves every URDF link "
+                     "name to its ArticulationLink (for add_force on a tool link, per-link poses...). "
+                     "Collision is primitive/bbox, mass "
                      "from <inertial> (else default_density x volume); fixed joints are collapsed. "
                      "stiffness/damping/max_force set a PD drive on every joint. scale reinterprets the "
                      "file's length units (a millimetre URDF in a metre world is 0.001) - shapes, joint "

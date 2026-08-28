@@ -306,7 +306,15 @@ namespace threepp {
         // children into their parents, so this is a read-out, not new
         // bookkeeping.
         for (std::size_t i = 0; i < n; ++i) {
-            if (artLinkOf[i]) result.linkForName.emplace_back(desc.links[i].name, *artLinkOf[i]);
+            if (!artLinkOf[i]) continue;
+            result.linkForName.emplace_back(desc.links[i].name, *artLinkOf[i]);
+            // Register the same mapping ON the articulation, so a caller holding
+            // only the Articulation (the Python binding returns nothing else
+            // per-link) can resolve a URDF link name to its ArticulationLink.
+            // linkStore is pushed once per addLink in call order, so an index
+            // into it IS the articulation's add-order link index.
+            art->nameLink(desc.links[i].name,
+                          static_cast<std::size_t>(artLinkOf[i] - linkStore.data()));
         }
 
         art->finalize();
