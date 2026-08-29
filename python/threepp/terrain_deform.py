@@ -24,10 +24,29 @@ kernels. The surface is a height grid; a step is three passes over it:
               height at `flow_rate` per iteration. Sand slumps back to nearly flat, mud
               holds a near-vertical trench wall.
 
-The same pass that pushes the cell down also returns the reaction on the collider: a
-bearing force `k_sink * penetration * cellArea` up the height axis, and a viscous shear
-`-c_shear * cellArea * v_tangential`. So the grid is both the thing you draw and the
+The same pass that pushes the cell down also returns the reaction on the collider, and
+that reaction is a soil model rather than a spring. Bekker-Wong bearing pressure
+
+    p = (k_c / b + k_phi) * z^n         [Pa]
+
+where `z` is the depth of the collider's lower surface below a slowly relaxing reference
+grade -- not the height the cell yielded this step -- and `b` is the chord width of the
+contact at that cell. Because `z` is a total depth, a foot standing still in its own
+print keeps its support: it sinks until `p * A` balances the load and then holds, at a
+material-dependent equilibrium depth. Traction is Janosi-Hanamoto,
+
+    tau = (c + p * tan_phi) * (1 - exp(-j / janosi_K))    [Pa]
+
+built out of the slip `j` the collider has accumulated since it touched down, so it ramps
+in over a centimetre or so of sliding and saturates at the Mohr-Coulomb limit -- a policy
+can lean on it, and shear out of it. Mud additionally sucks back on a foot that lifts
+while its patch is still below grade. So the grid is both the thing you draw and the
 thing that pushes back on the feet.
+
+The reference grade is its own [K, nx, ny] grid. Cells under a collider are frozen (that
+is what holds `z` still under a stance); everywhere else it relaxes toward the surface
+over seconds, so a berm slowly becomes ground and a fresh print still measures its depth
+from where the ground used to be -- which is why the second pass over a rut is firmer.
 
 Everything is batched over K and allocation-free after construction: no host readback, no
 data-dependent launch size, no Python branching on device values. The whole `deform` +
@@ -78,27 +97,74 @@ class Material:
     flow_rate    how much of an over-steep slope is relaxed per `relax` iteration (0..0.25;
                  above 0.25 the explicit Jacobi sweep rings).
     tan_repose   the steepest slope that stands. tan(angle of repose).
-    k_sink       bearing stiffness, N/m^3: contact pressure = k_sink * penetration.
-    c_shear      tangential viscous drag, N*s/m per m^2 of contact.
+    n            Bekker sinkage exponent, dimensionless. Below 1 the ground firms up with
+                 depth and the print bottoms out; above 1 it softens, which is why a snow
+                 print runs away and a sand print does not.
+    k_c          Bekker cohesive modulus, N/m^(n+1). Divided by the contact width, so it
+                 is the term that makes a narrow foot sink deeper than a wide one.
+    k_phi        Bekker frictional modulus, N/m^(n+2). Carries most of the load.
+    cohesion     Mohr-Coulomb cohesion c, Pa -- traction available at zero normal load.
+    tan_phi      tan of the internal friction angle -- traction bought with normal load.
+    janosi_K     Janosi-Hanamoto shear modulus, m: the slip distance over which traction
+                 builds. Centimetre-scale.
+    suction      adhesion on withdrawal, Pa*s/m. While the patch is still below grade and
+                 the collider is rising, it is pulled back down at `suction * v_up` Pa.
+    suction_cap  ceiling on that suction pressure, Pa. Sand ~0, mud large.
+    grade_rate   1/s at which the reference grade relaxes toward the surface, away from
+                 whatever is standing on it. Seconds, not frames.
+
+    `n` is not a free knob: the units of k_c and k_phi are powers of n, so a preset's
+    three bearing numbers only mean anything together.
     """
     compression: float
     flow_rate: float
     tan_repose: float
-    k_sink: float
-    c_shear: float
+    n: float
+    k_c: float
+    k_phi: float
+    cohesion: float
+    tan_phi: float
+    janosi_K: float
+    suction: float
+    suction_cap: float
+    grade_rate: float
 
 
+# The bearing exponents and the shear pair are Wong, "Theory of Ground Vehicles",
+# Table 2.3 (converted from kN); the moduli are scaled to that table's *shape* rather
+# than copied, because Wong measures plates and tracks 0.2-0.5 m wide, where k_c/b is a
+# rounding error next to k_phi. A 5 cm Spot foot sinks to b ~ 3 cm, where the raw k_c
+# would swamp everything and a 160 N foot load would sit at a fraction of a millimetre.
+# These are calibrated to that foot: ~2 cm in sand, ~3.5 cm in mud, ~6 cm in snow.
 MATERIALS = {
     # Wet clay: nothing compacts, so every gram the boot displaces ends up in the berm,
     # and a 55-degree trench wall stands there until something else knocks it down.
-    "mud": Material(compression=0.15, flow_rate=0.02, tan_repose=1.4, k_sink=4.0e5, c_shear=4.0e3),
+    # Cohesion-dominated (c ~ 4 kPa, phi 13 deg): grip at zero load, and a low ceiling to
+    # shear out of. n < 1, so it firms up as the foot goes down. Sucks on the way out.
+    "mud": Material(compression=0.15, flow_rate=0.02, tan_repose=1.4,
+                    n=0.5, k_c=1.3e3, k_phi=1.75e5,
+                    cohesion=4.1e3, tan_phi=0.23, janosi_K=0.020,
+                    suction=2.0e4, suction_cap=1.5e4, grade_rate=0.15),
     # Packed snow: most of the displaced volume is air being squeezed out, so the print is
-    # deep, the rim is low, and what rim there is slumps a little.
-    "snow": Material(compression=0.70, flow_rate=0.06, tan_repose=0.9, k_sink=1.0e5, c_shear=1.5e3),
+    # deep, the rim is low, and what rim there is slumps a little. n = 1.6 is the whole
+    # character -- pressure grows slower than depth, so the foot keeps going.
+    "snow": Material(compression=0.70, flow_rate=0.06, tan_repose=0.9,
+                     n=1.6, k_c=4.4e3, k_phi=5.0e6,
+                     cohesion=1.0e3, tan_phi=0.36, janosi_K=0.040,
+                     suction=2.0e3, suction_cap=2.0e3, grade_rate=0.10),
     # Dry sand: incompressible grains at a shallow repose angle -- a print fills itself in.
-    "sand": Material(compression=0.0, flow_rate=0.15, tan_repose=0.65, k_sink=2.0e5, c_shear=1.0e3),
-    # A control: displaces, never flows, never compacts. Volume is conserved exactly.
-    "clay": Material(compression=0.0, flow_rate=0.0, tan_repose=10.0, k_sink=6.0e5, c_shear=6.0e3),
+    # Friction-dominated (phi 28 deg, almost no cohesion): traction has to be bought with
+    # load, which is the thing a light-footed gait cannot do.
+    "sand": Material(compression=0.0, flow_rate=0.15, tan_repose=0.65,
+                     n=1.1, k_c=9.9e2, k_phi=4.6e6,
+                     cohesion=1.0e3, tan_phi=0.53, janosi_K=0.025,
+                     suction=0.0, suction_cap=0.0, grade_rate=0.50),
+    # A control: displaces, never flows, never compacts. Volume is conserved exactly, and
+    # the grade never moves, so its bearing depth is measured from the original ground.
+    "clay": Material(compression=0.0, flow_rate=0.0, tan_repose=10.0,
+                     n=1.0, k_c=1.0e3, k_phi=6.0e6,
+                     cohesion=1.0e4, tan_phi=0.60, janosi_K=0.010,
+                     suction=0.0, suction_cap=0.0, grade_rate=0.0),
 }
 
 _KERNELS = None      # (warp module, kernels...) -- built once per process
@@ -125,37 +191,94 @@ def _compile():
     @wp.kernel
     def imprint(h: wp.array3d(dtype=float),
                 eject: wp.array3d(dtype=float),
+                grade: wp.array3d(dtype=float),
                 org: wp.array(dtype=wp.vec2),
                 centers: wp.array3d(dtype=float),      # [K, C, 3]
                 radii: wp.array2d(dtype=float),        # [K, C]
                 vel: wp.array3d(dtype=float),          # [K, C, 3]
+                slip_j: wp.array2d(dtype=float),       # [K, c_max] stance slip, read here
                 forces: wp.array3d(dtype=float),       # [K, C, 3] (accumulated)
-                n_c: int, cell: float, z0: float,
-                compression: float, k_sink: float, c_shear: float):
-        """Push every covered cell down to the sphere bottom; bank the displaced volume."""
+                carea: wp.array2d(dtype=float),        # [K, c_max] contact area (accum.)
+                n_c: int, cell: float, z0: float, dt: float,
+                compression: float, bek_n: float, k_c: float, k_phi: float,
+                cohesion: float, tan_phi: float, janosi_K: float,
+                suction: float, suction_cap: float, grade_rate: float):
+        """Push every covered cell down to the sphere bottom; bank the displaced volume;
+        return the Bekker/Janosi reaction; age the reference grade where nothing stands."""
         k, i, j = wp.tid()
         o = org[k]
         x = o[0] + float(i) * cell
         y = o[1] + float(j) * cell
         area = cell * cell
         hh = h[k, i, j]
+        g = grade[k, i, j]
         moved = float(0.0)
+        covered = int(0)
         # Sequential over the colliders: each one sees the surface the previous one left,
         # so two overlapping feet displace the cell once between them, not twice.
         for c in range(n_c):
-            bz = _bottom(centers[k, c, 0], centers[k, c, 1], centers[k, c, 2],
-                         radii[k, c], x, y)
+            r = radii[k, c]
+            bz = _bottom(centers[k, c, 0], centers[k, c, 1], centers[k, c, 2], r, x, y)
             pen = (z0 + hh) - bz
             if pen > 0.0:
                 hh = bz - z0
                 moved += pen
-                # Reaction on the collider: bearing pressure up, viscous drag against the
-                # collider's own tangential motion.
-                wp.atomic_add(forces, k, c, 2, k_sink * pen * area)
-                wp.atomic_add(forces, k, c, 0, -c_shear * area * vel[k, c, 0])
-                wp.atomic_add(forces, k, c, 1, -c_shear * area * vel[k, c, 1])
+                covered = 1
+            # The reaction is NOT in the carve branch: it is driven by the total depth
+            # below the reference grade, so it survives a foot that has stopped digging.
+            z = (z0 + g) - bz
+            if z > 0.0:
+                covered = 1
+                # Chord half-width of the sphere's contact at this depth, floored at one
+                # cell so the k_c / b term cannot run away as the patch edge thins out.
+                b = wp.sqrt(wp.max(z * (2.0 * r - z), cell * cell))
+                p = (k_c / b + k_phi) * wp.pow(z, bek_n)
+                fz = p * area
+                vz = vel[k, c, 2]
+                if vz > 0.0:
+                    # Still below grade and pulling away: mud holds on.
+                    fz -= wp.min(suction * vz, suction_cap) * area
+                wp.atomic_add(forces, k, c, 2, fz)
+                wp.atomic_add(carea, k, c, area)
+                sj = slip_j[k, c]
+                if sj > 0.0:
+                    vx = vel[k, c, 0]
+                    vy = vel[k, c, 1]
+                    vm = wp.sqrt(vx * vx + vy * vy)
+                    if vm > 1.0e-6:
+                        tau = (cohesion + p * tan_phi) * (1.0 - wp.exp(-sj / janosi_K))
+                        f = tau * area / vm
+                        wp.atomic_add(forces, k, c, 0, -f * vx)
+                        wp.atomic_add(forces, k, c, 1, -f * vy)
         h[k, i, j] = hh
         eject[k, i, j] = moved * (1.0 - compression)
+        # Frozen under a stance, relaxing everywhere else. Folded in here rather than run
+        # as its own [K, nx, ny] pass: the collider loop above already knows who is
+        # covered, and the grade moves by rate*dt per step, so reading `h` before the
+        # ejecta lands is a step of lag on a timescale of seconds.
+        if covered == 0:
+            d = hh - g
+            # Guard the store, not the arithmetic: most of a grid is ground nobody has
+            # touched, where the grade already equals the surface and the write is a
+            # no-op. Worth a few percent; the extra read above is the part that is not
+            # optional.
+            if d > 1.0e-7 or d < -1.0e-7:
+                grade[k, i, j] = g + grade_rate * dt * d
+
+    @wp.kernel
+    def slip(carea: wp.array2d(dtype=float),                # [K, c_max]
+             vel: wp.array3d(dtype=float),                  # [K, c_max, 3]
+             slip_j: wp.array2d(dtype=float),               # [K, c_max]
+             dt: float):
+        """Age each collider's stance slip: integrate tangential speed while it is in
+        contact, and forget the whole stance the moment it lifts."""
+        k, c = wp.tid()
+        if carea[k, c] > 0.0:
+            vx = vel[k, c, 0]
+            vy = vel[k, c, 1]
+            slip_j[k, c] = slip_j[k, c] + wp.sqrt(vx * vx + vy * vy) * dt
+        else:
+            slip_j[k, c] = 0.0
 
     @wp.kernel
     def distribute(h: wp.array3d(dtype=float),
@@ -276,7 +399,7 @@ def _compile():
             pos[t] = wp.vec3(x, y, z)
             nrm[t] = n
 
-    _KERNELS = (wp, imprint, distribute, relax, surface)
+    _KERNELS = (wp, imprint, distribute, relax, surface, slip)
     return _KERNELS
 
 
@@ -291,7 +414,8 @@ class DeformableTerrain:
 
     def __init__(self, origin, cell, dims, *, K=1, material="mud", device="cuda",
                  z0=0.0, init_height=None, c_max=8):
-        wp, self._imprint, self._distribute, self._relax, self._surface = _compile()
+        (wp, self._imprint, self._distribute, self._relax, self._surface,
+         self._slip) = _compile()
         self._wp = wp
         wp.init()
         self.device = torch.device(device)
@@ -321,19 +445,27 @@ class DeformableTerrain:
             h0 = np.broadcast_to(np.asarray(init_height, dtype=np.float32),
                                  shape).astype(np.float32)
         self.h = wp.array(np.ascontiguousarray(h0), dtype=float, device=self._wp_device)
+        # The bearing datum: where the ground was before anything stood on it.
+        self.grade = wp.array(np.ascontiguousarray(h0.copy()), dtype=float,
+                              device=self._wp_device)
         self.eject = wp.zeros(shape, dtype=float, device=self._wp_device)
         self._pong = wp.zeros(shape, dtype=float, device=self._wp_device)
         self._h_torch = wp.to_torch(self.h)
+        self._grade_torch = wp.to_torch(self.grade)
         self._pong_torch = wp.to_torch(self._pong)
 
         # Persistent staging so the kernels always see contiguous float32 at a fixed
         # address -- which is also what makes a CUDA-graph replay legal.
         z = lambda *s: torch.zeros(s, device=self.device, dtype=torch.float32)  # noqa: E731
         self.forces = z(self.K, self.c_max, 3)
+        self.contact_area = z(self.K, self.c_max)     # m^2 under each collider this step
+        self.slip_j = z(self.K, self.c_max)           # m of slip since this stance began
         self._centers = z(self.K, self.c_max, 3)
         self._vel = z(self.K, self.c_max, 3)
         self._radii = z(self.K, self.c_max)
         self._wf = wp.from_torch(self.forces)
+        self._wa = wp.from_torch(self.contact_area)
+        self._wj = wp.from_torch(self.slip_j)
         self._wc = wp.from_torch(self._centers)
         self._wv = wp.from_torch(self._vel)
         self._wr = wp.from_torch(self._radii)
@@ -345,20 +477,36 @@ class DeformableTerrain:
         return self._h_torch
 
     @property
+    def grade_torch(self):
+        """The reference grade [K, nx, ny] the bearing depth is measured from, zero-copy."""
+        return self._grade_torch
+
+    @property
     def dims(self):
         return (self.nx, self.ny)
 
     def reset(self, init_height=None):
         """Flatten the ground back to `init_height` (default: the z0 datum)."""
-        self._h_torch.fill_(0.0 if init_height is None else float(init_height))
+        v = 0.0 if init_height is None else float(init_height)
+        self._h_torch.fill_(v)
+        self._grade_torch.fill_(v)
+        self.slip_j.zero_()
+        self.contact_area.zero_()
 
     # ---- the step ------------------------------------------------------------
-    def deform(self, centers, radii, vel=None):
+    def deform(self, centers, radii, vel=None, dt=1.0 / 60.0):
         """One displacement step. Returns the reaction on each collider, [K, C, 3].
 
         `centers` [K, C, 3] sphere centres in world coordinates (x, y, height), `radii`
-        [C] or [K, C], `vel` [K, C, 3] the colliders' own velocities (only the two
-        horizontal components matter, they drive the shear term).
+        [C] or [K, C], `vel` [K, C, 3] the colliders' own velocities: the horizontal pair
+        drives the Janosi shear and the vertical one the suction on withdrawal. `dt` is
+        the caller's step, and it is what the slip integral and the grade relaxation are
+        measured in -- a Python float baked into the launch, so it is fixed across a
+        CUDA-graph replay, which is what a fixed-rate sim wants anyway.
+
+        The shear reported this step is built from the slip accumulated up to the previous
+        one, so the first frame of a stance has bearing but no traction. That is the
+        physics: traction is bought with sliding.
 
         The returned tensor is a view of a buffer this call overwrites: clone it if it has
         to outlive the next `deform`.
@@ -375,17 +523,26 @@ class DeformableTerrain:
         else:
             self._vel[:, :C].copy_(vel)
         self.forces.zero_()
+        self.contact_area.zero_()
         self.eject.zero_()
         m = self.material
         wp = self._wp
+        dt = float(dt)
         dim = (self.K, self.nx, self.ny)
         wp.launch(self._imprint, dim=dim, device=self._wp_device,
-                  inputs=[self.h, self.eject, self._org, self._wc, self._wr, self._wv,
-                          self._wf, C, self.cell, self.z0,
-                          m.compression, m.k_sink, m.c_shear])
+                  inputs=[self.h, self.eject, self.grade, self._org, self._wc, self._wr,
+                          self._wv, self._wj, self._wf, self._wa,
+                          C, self.cell, self.z0, dt,
+                          m.compression, m.n, m.k_c, m.k_phi,
+                          m.cohesion, m.tan_phi, m.janosi_K,
+                          m.suction, m.suction_cap, m.grade_rate])
         wp.launch(self._distribute, dim=dim, device=self._wp_device,
                   inputs=[self.h, self.eject, self._org, self._wc, self._wr,
                           C, self.cell, self.z0])
+        # [K, c_max] and not [K, C]: a fixed launch dim, and the colliders the caller did
+        # not pass have zero contact area, so their stance is correctly forgotten.
+        wp.launch(self._slip, dim=(self.K, self.c_max), device=self._wp_device,
+                  inputs=[self._wa, self._wv, self._wj, dt])
         return self.forces[:, :C]
 
     def relax(self, iterations=2):
@@ -532,7 +689,7 @@ def _trot(t, K, device, sink=0.035, r=0.06, span=1.2):
 def _run(terrain, radii, steps=240, dt=1.0 / 60.0):
     for s in range(steps):
         c, v = _trot(s * dt, terrain.K, terrain.device)
-        terrain.deform(c, radii, v)
+        terrain.deform(c, radii, v, dt)
         terrain.relax(2)
 
 
@@ -606,6 +763,63 @@ if __name__ == "__main__":
         except Exception as exc:                       # noqa: BLE001 - report, do not fail
             graph_note = f"SKIPPED ({type(exc).__name__}: {exc})"
     print(f"  3. cuda graph: {graph_note}")
+
+    # 4. plate sinkage: the bearing force is the Bekker integral over the covered cells,
+    #    and nothing else -- computed here in numpy from the same closed form
+    SINK, RF = 0.030, 0.05
+    org1 = np.array([[-NX * CELL * 0.5, -NY * CELL * 0.5]], dtype=np.float32)
+    plate = DeformableTerrain(org1, CELL, (NX, NY), K=1, material="mud", device=dev)
+    pc = torch.zeros(1, 1, 3, device=dev)
+    pc[0, 0, 2] = RF - SINK                      # sphere bottom SINK below the datum
+    pr = torch.full((1,), RF, device=dev)
+    f1 = float(plate.deform(pc, pr)[0, 0, 2])
+    mm = MATERIALS["mud"]
+    gi, gj = np.meshgrid(np.arange(NX), np.arange(NY), indexing="ij")
+    d2 = (org1[0, 0] + gi * CELL) ** 2 + (org1[0, 1] + gj * CELL) ** 2
+    bz = np.where(d2 < RF * RF,
+                  (RF - SINK) - np.sqrt(np.maximum(RF * RF - d2, 0.0)), 1.0e9)
+    zc = np.maximum(-bz, 0.0)                    # grade is still the flat datum
+    bw = np.sqrt(np.maximum(zc * (2.0 * RF - zc), CELL * CELL))
+    f_ref = float(((mm.k_c / bw + mm.k_phi) * np.power(zc, mm.n) * CELL * CELL).sum())
+    print(f"  4. plate sinkage {SINK * 1000:.0f} mm on r={RF * 100:.0f} cm: "
+          f"F_z {f1:.1f} N vs Bekker {f_ref:.1f} N ({100.0 * (f1 / f_ref - 1.0):+.2f} %)")
+    assert abs(f1 / f_ref - 1.0) < 0.10, f"bearing off the closed form: {f1} vs {f_ref}"
+
+    # 5. standing support: the same pose again. v1 returned ~0 here, because its force
+    #    lived in the carve branch and the second call has nothing left to carve.
+    f2 = float(plate.deform(pc, pr)[0, 0, 2])
+    print(f"  5. standing: F_z {f1:.1f} N carving -> {f2:.1f} N at rest in its own print "
+          f"({100.0 * (f2 / f1 - 1.0):+.2f} %)")
+    assert f2 > 0.0, "no support standing still -- the v1 bug is back"
+    assert abs(f2 / f1 - 1.0) < 0.05, f"support is not held: {f2} vs {f1}"
+
+    # 6. slip sweep: hold the same plate down and slide it. Traction has to ramp in over
+    #    janosi_K and stop at the Mohr-Coulomb limit c*A + tan_phi*F_z.
+    DT = 1.0 / 60.0
+    slide = DeformableTerrain(org1, CELL, (NX, NY), K=1, material="mud", device=dev)
+    sv = torch.zeros(1, 1, 3, device=dev)
+    sv[0, 0, 0] = 0.4
+    slide.deform(pc, pr, sv, DT)                  # touchdown: j == 0, no traction yet
+    fx_early = abs(float(slide.deform(pc, pr, sv, DT)[0, 0, 0]))
+    for _ in range(120):
+        out = slide.deform(pc, pr, sv, DT)
+    fx_late, fz_late = abs(float(out[0, 0, 0])), float(out[0, 0, 2])
+    area = float(slide.contact_area[0, 0])
+    limit = mm.cohesion * area + mm.tan_phi * fz_late
+    print(f"  6. slip at 0.4 m/s: |F_t| {fx_early:.1f} N at j={0.4 * DT * 1000:.1f} mm -> "
+          f"{fx_late:.1f} N at j={0.4 * DT * 121 * 1000:.0f} mm, Mohr-Coulomb "
+          f"{limit:.1f} N over {area * 1.0e4:.1f} cm2")
+    assert abs(fx_late / limit - 1.0) < 0.10, f"traction did not saturate: {fx_late} vs {limit}"
+    assert fx_early < 0.5 * fx_late, f"traction stepped instead of building: {fx_early}"
+
+    # Diagnostics, not gates: suction on withdrawal, and the frozen/relaxing grade.
+    lv = torch.zeros(1, 1, 3, device=dev)
+    lv[0, 0, 2] = 0.6
+    f_lift = float(plate.deform(pc, pr, lv)[0, 0, 2])
+    g, hh = plate.grade_torch, plate.h_torch
+    print(f"     suction: F_z {f2:.1f} N at rest -> {f_lift:.1f} N lifting at 0.6 m/s; "
+          f"grade under the print {float(g.min()) * 1000:+.2f} mm while the surface is at "
+          f"{float(hh.min()) * 1000:+.2f} mm, berm grade {float(g.max()) * 1000:+.3f} mm")
 
     def bench(terrain, n=100):
         c, v = _trot(0.0, terrain.K, terrain.device)
