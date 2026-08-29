@@ -916,6 +916,20 @@ namespace threepp_py {
                      py::arg("tensor"),
                      "Apply per-DOF joint forces/torques (effort control) from the [n, max_dofs] float32 cuda "
                      "tensor. Re-apply each step (forces don't persist). Use for force-controlled joints.")
+                .def("write_link_force", [cudaPtr](threepp::PhysxGpuBatch& b, const py::object& t) {
+                         b.write(cudaPtr(t, std::int64_t(b.count()) * b.maxLinks() * 3, "write_link_force"), Write::eLINK_FORCE); },
+                     py::arg("tensor"),
+                     "Apply an external force (N) to every link, from the [n, max_links, 3] float32 cuda "
+                     "tensor, in WORLD coordinates at each link's centre of mass. This is the only way to "
+                     "push a batched robot: ArticulationLink.add_force is a CPU-path call and PhysX rejects "
+                     "it outright under direct-GPU. Forces are consumed by the next step and cleared, so "
+                     "re-apply every substep you want them to act on — a random shove is one substep of "
+                     "impulse/dt on the base link.")
+                .def("write_link_torque", [cudaPtr](threepp::PhysxGpuBatch& b, const py::object& t) {
+                         b.write(cudaPtr(t, std::int64_t(b.count()) * b.maxLinks() * 3, "write_link_torque"), Write::eLINK_TORQUE); },
+                     py::arg("tensor"),
+                     "Apply an external torque (N*m) to every link, from the [n, max_links, 3] float32 cuda "
+                     "tensor, in WORLD coordinates. Cleared after each step, like write_link_force.")
                 .def("write_joint_target_vel", [cudaPtr](threepp::PhysxGpuBatch& b, const py::object& t) {
                          b.write(cudaPtr(t, std::int64_t(b.count()) * b.maxDofs(), "write_joint_target_vel"), Write::eJOINT_TARGET_VELOCITY); },
                      py::arg("tensor"), "Set all joints' PD velocity targets from the [n, max_dofs] float32 cuda tensor.")

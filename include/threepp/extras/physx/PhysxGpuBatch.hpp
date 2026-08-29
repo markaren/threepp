@@ -111,6 +111,15 @@ namespace threepp {
                 default: return maxDofs;
             }
         }
+        // Write counterpart of blockFloats(Read), for the link-centric write types.
+        ::physx::PxU32 blockFloats(Write::Enum t) const {
+            switch (t) {
+                case Write::eLINK_FORCE:
+                case Write::eLINK_TORQUE: return maxLinks_ * 3;
+                default: return blockFloatsWrite(t, maxDofs_);
+            }
+        }
+
         static ::physx::PxU32 blockFloatsWrite(Write::Enum t, ::physx::PxU32 maxDofs) {
             switch (t) {
                 case Write::eJOINT_POSITION:
@@ -193,7 +202,7 @@ namespace threepp {
         }
         void writeHost(const std::vector<float>& host, Write::Enum type) {
             using namespace ::physx;
-            const PxU32 block = blockFloatsWrite(type, maxDofs_);
+            const PxU32 block = blockFloats(type);
             const size_t bytes = static_cast<size_t>(n_) * block * sizeof(float);
             if (host.size() != static_cast<size_t>(n_) * block)
                 throw std::runtime_error("PhysxGpuBatch::writeHost: wrong buffer size");

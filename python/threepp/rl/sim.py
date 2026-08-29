@@ -169,6 +169,21 @@ class GpuSim:
             self.batch.step(dt)
         self.read()
 
+    def apply_link_force(self, force):
+        """Apply external world-frame forces to every link, [K, max_links, 3] N.
+
+        The only way to shove a batched robot: ArticulationLink.add_force is a CPU-path call that
+        PhysX rejects outright under direct-GPU. Forces are consumed by the next batch.step() and
+        cleared, so a shove is one substep of impulse/dt — re-apply for anything longer.
+
+        Verified against a settled robot with gravity off: the response is diagonal and positive,
+        linear in the magnitude, and WORLD-frame (yaw the base 90 degrees and a +x force still
+        pushes +x). Link 0 is the root. Measure with a no-force control step, or the drive
+        transient swamps the answer.
+        """
+        torch.cuda.synchronize()      # PhysX reads the pointer on its own stream, no start event
+        self.batch.write_link_force(force.contiguous())
+
     def apply_force(self, force):
         """Apply per-DOF generalized forces/torques, [K, dof] add-order (re-apply each step)."""
         self._force[:, self._perm] = force

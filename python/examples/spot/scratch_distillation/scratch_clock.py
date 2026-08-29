@@ -58,13 +58,17 @@ from spot_terrain_env import DT as DT  # noqa: E402  (import after sys.path setu
 #  Clock functions
 # --------------------------------------------------------------------------- #
 
-def advance(phi: torch.Tensor, dt: float = DT) -> torch.Tensor:
+def advance(phi: torch.Tensor, dt: float = DT, period=GAIT_PERIOD) -> torch.Tensor:
     """Advance the phase by one control tick.
 
     phi: [K] in [0, 1). Returns the new phi [K] in [0, 1).
     Call AFTER the physics substep so the returned phi aligns with the next obs.
+
+    `period` may be a scalar (the calibrated default) or a [K] tensor, which is how a task gives
+    each env its own cadence: with a fixed period the policy can only ever change stride LENGTH, so
+    one gait is the most it can express no matter what the terrain looks like.
     """
-    return (phi + dt / GAIT_PERIOD) % 1.0
+    return (phi + dt / period) % 1.0
 
 
 def clock_obs(phi: torch.Tensor) -> torch.Tensor:

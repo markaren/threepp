@@ -195,6 +195,7 @@ class VecTask:
         self._cg_hot = self._cg_obs = None
         self._cg_act = None
         self._cg_out = self._cg_obs_out = None
+        self.settling = False
 
     # ---- hooks a task implements --------------------------------------------------
     def on_reset(self, idx):
@@ -233,10 +234,16 @@ class VecTask:
         one state read at the end). Sim-less tasks (build_robot=None) override this with their
         own dynamics instead of act()."""
         self._apply(self.act(a))
+        self.on_pre_substep()
         if self.substeps > 1:
             self.sim.substep(self.dt / self.substeps, self.substeps)
         else:
             self.sim.step(self.dt)
+
+    def on_pre_substep(self):
+        """Runs after the action is written and before the physics advances — the one place an
+        external force belongs, since PhysX clears link forces on every step."""
+        pass
 
     def on_step(self, s):
         """Optional per-step task logic (e.g. periodic command resampling). Runs after the
@@ -308,8 +315,10 @@ class VecTask:
         self._reset_envs(torch.arange(self.K, device=self.device))
         if self.settle_steps:
             zero = torch.zeros(self.K, self.act_dim, device=self.device)
+            self.settling = True          # tasks skip perturbations while the spawn settles
             for _ in range(self.settle_steps):
                 self.simulate(zero)
+            self.settling = False
             self.on_settled()
         elif self.sim is not None:
             self.sim.read()   # refresh joint_pos/joint_vel with the freshly written state

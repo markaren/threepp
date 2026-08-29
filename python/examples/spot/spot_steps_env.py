@@ -16,6 +16,7 @@ New obs layout: [0:48] proprio | [48:50] clock | [50:51] base_above | [51:96] sc
 First 50 dims byte-identical to scratch_flat → warm-start copies cols [0:50], terrain cols zero-init.
 Anchor = scratch_flat_best.pt (50-d, norm-aware); stiff gains (90) on both training and deploy robots.
 """
+import math
 import os
 import sys
 
@@ -65,6 +66,11 @@ W_IMIT = 0.25                  # scan-gated imitation anchor (hold the teacher's
 STEPS_EPISODE_S = 16.0         # time to approach + climb a tent at the commanded speed
 HALF_W_STEPS = SPACING * 0.5   # on-lane gate = FULL lane half-width (no flat strip to walk around)
 HALF_W_BOX = SPACING           # tent box width = full lane -> tents tile with no gap between lanes
+# Effective mass the base presents to an external force, MEASURED: settle the robot with gravity
+# off, difference a force step against a no-force control, F*dt/dv came out 23.7-25.2 kg on all
+# three axes. Spot's total is ~32 kg; the legs lag, so the base sees less. Used to turn a shove
+# expressed as a velocity change into the force that delivers it.
+PUSH_MASS = 24.0
 FOOT_DX = (0.30, 0.30, -0.30, -0.30)   # stance foot offsets for spawn clearance
 FOOT_DY = (0.17, -0.17, 0.17, -0.17)
 
@@ -131,7 +137,8 @@ class SpotStepsEnv(VecTask):
     clip_actions = None              # the policy emits ~[-8,8]; do NOT clamp
 
     def __init__(self, num_envs=1024, device="cuda", seed=0, flat_only=False,
-                 height_source=None, perceive=False, perceive_noise=0.0, graph=False):
+                 height_source=None, perceive=False, perceive_noise=0.0, graph=False,
+                 cadence_jitter=0.0, push_vel=0.0, push_prob=0.02):
         if height_source is None:              # perception needs the BVH, so it implies the raycast
             height_source = "raycast" if perceive else "analytic"
         if height_source not in ("analytic", "raycast"):
@@ -201,6 +208,21 @@ class SpotStepsEnv(VecTask):
         self._last_obs = torch.zeros(num_envs, OBS_DIM, device=dev)
         self.up = torch.zeros(num_envs, device=dev)
         self._resample_cmd(torch.arange(num_envs, device=dev))             # valid cmd before the first reset()
+        # Per-env gait period. With one shared constant the policy can only vary stride LENGTH,
+        # so it has no way to express a second gait however the terrain changes; jitter > 0 gives
+        # each episode its own cadence and makes the clock something to read rather than assume.
+        self.cadence_jitter = float(cadence_jitter)
+        self.period = self.env_state((), init=GAIT_PERIOD)
+        # The imitation weight lives on the device because the trainer anneals it: as a Python
+        # float it would be baked into the step graph at capture and silently never change.
+        self._imit_w = torch.full((), W_IMIT, device=dev)
+        # Random shoves. Nothing ever perturbed this robot in training, so recovery was never a
+        # behaviour that got selected for; `push_vel` is the velocity change a shove delivers, which
+        # is the interpretable end of it (the force follows from PUSH_MASS and the substep).
+        self.push_vel = float(push_vel)
+        self.push_prob = float(push_prob)
+        self._push_buf = torch.zeros(num_envs, self.sim.batch.max_links, 3, device=dev)
+        self._st_push = torch.zeros((), device=dev)
         self._st_track = torch.zeros((), device=dev)
         self._st_flat = torch.zeros((), device=dev)
         self._st_level = torch.zeros((), device=dev)
@@ -220,6 +242,37 @@ class SpotStepsEnv(VecTask):
     last_flat_track = property(lambda self: self._st_flat.item())
     last_level = property(lambda self: self._st_level.item())
     last_fell = property(lambda self: self._st_fell.item())
+    last_push = property(lambda self: self._st_push.item())
+
+    def on_pre_substep(self):
+        """Shove a random subset, world-frame and horizontal, for one substep.
+
+        PhysX clears link forces after every step, so this lands as an impulse of
+        push_vel * PUSH_MASS N*s and nothing persists. Skipped while the spawn is settling —
+        knocking the robot over before the episode starts measures nothing."""
+        if self.push_vel <= 0.0 or self.settling:
+            return
+        dev = self.device
+        # Shove the STAIR lanes only. The flat lanes exist as the steering-replay set, and
+        # last_flat_track is what the anchor anneal gates on — shove them and that number stops
+        # measuring steering and starts measuring shove recovery, so the anchor lets go on a
+        # gate it only cleared because the baseline was shoved too. Measured: steering regressed
+        # from a worst ratio of 1.19 to 1.65 exactly that way.
+        hit = ((torch.rand(self.K, device=dev) < self.push_prob) & self.is_stairs).float()
+        mag = torch.rand(self.K, device=dev) * self.push_vel * hit
+        ang = torch.rand(self.K, device=dev) * (2.0 * math.pi)
+        scale = PUSH_MASS / (DT / SUBSTEPS)          # dv -> the force that delivers it in one substep
+        self._push_buf.zero_()
+        self._push_buf[:, 0, 0] = torch.cos(ang) * mag * scale     # link 0 is the root (measured)
+        self._push_buf[:, 0, 1] = torch.sin(ang) * mag * scale
+        self.sim.apply_link_force(self._push_buf)
+        self._st_push.copy_(hit.mean())
+
+    def set_imit_weight(self, w):
+        """Anneal the imitation anchor. Written through a device scalar rather than rebound as a
+        Python float, so a captured step graph sees the change instead of the value it was born
+        with — the one failure mode verify_graph cannot see."""
+        self._imit_w.fill_(float(w))
 
     def _terrain_h(self, x, y):
         """Ground height at (x,y). x,y [K] or [K,P].
@@ -313,6 +366,9 @@ class SpotStepsEnv(VecTask):
         if self.percept is not None:
             self.percept.forget(idx)         # a teleport invalidates every remembered cell
         self.phi[idx] = reset_phi(n, dev)    # randomise phase (decorrelate batch; don't advance during settle)
+        if self.cadence_jitter > 0.0:
+            lo, hi = 1.0 - self.cadence_jitter, 1.0 + self.cadence_jitter
+            self.period[idx] = GAIT_PERIOD * (torch.rand(n, device=dev) * (hi - lo) + lo)
         self.ep_start_x[idx] = sx
         self._resample_cmd(idx)
         # stair lanes: force a forward command at spawn so the robot ATTEMPTS the tent (level evaluation)
@@ -332,7 +388,7 @@ class SpotStepsEnv(VecTask):
         self.up = up_z(self.sim.root_quat)
 
     def on_step(self, s):
-        self.phi.copy_(advance(self.phi))                                    # clock after physics, before next obs
+        self.phi.copy_(advance(self.phi, period=self.period))                # clock after physics, before next obs
         self.cmd_timer -= 1
         self._resample_due()
 
@@ -349,6 +405,13 @@ class SpotStepsEnv(VecTask):
         ahead = self._terrain_h(px, py) - h_here[:, None]
         change = ahead.abs().max(dim=1).values
         self._w_imit = (1.0 - change / 0.10).clamp(0.0, 1.0)
+        if self.cadence_jitter > 0.0:
+            # The anchor's teacher is a FIXED-cadence walker, so it only has an opinion worth
+            # copying about envs running near that cadence. Anchoring a jittered env pulls it
+            # toward a gait that does not fit its own clock — an incoherent target, and exactly
+            # the pull that would keep the cadence pinned however wide the jitter.
+            off = (self.period - GAIT_PERIOD).abs() / (GAIT_PERIOD * self.cadence_jitter)
+            self._w_imit = self._w_imit * (1.0 - off.clamp(0.0, 1.0))
         self.ep_max_climb.copy_(torch.maximum(self.ep_max_climb, (x - self.ep_start_x).clamp_min(0.0)))
 
     def terminated(self, s):
@@ -373,7 +436,7 @@ class SpotStepsEnv(VecTask):
             "angrate": -0.05 * (self._ang_b[:, 0].pow(2) + self._ang_b[:, 2].pow(2)),
             "scrape": -3.0 * torch.relu(0.30 - self._base_above),   # anti-scrape over the steps
             "arate": -0.001 * arate.pow(2).mean(dim=1),
-            "imit": -W_IMIT * imit,
+            "imit": -self._imit_w * imit,
             "fell": -5.0 * s.terminated.float(),
         }
         # Device-side, and read back only when a trainer asks (see the last_* properties). Masked

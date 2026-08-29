@@ -23,7 +23,8 @@ sys.path.insert(0, os.path.join(_HERE, "scratch_distillation"))
 
 import threepp as tp
 from spot_terrain_env import quat_rotate_inverse
-from spot_steps_env import ACT_DIM, CONFIG, HIDDEN, N_LEVELS, RISERS, SpotStepsEnv
+from spot_steps_env import (ACT_DIM, CONFIG, HIDDEN, N_LEVELS, OBS_DIM, RISERS, W_IMIT,
+                            SpotStepsEnv)
 from spot_steps_symmetry import make_aux_loss
 from threepp.rl import PPO, load_policy
 
@@ -85,7 +86,7 @@ def stochastic_flat_baseline(env, ac, norm, steps=240, warm=80):
 
 @torch.no_grad()
 def score_checkpoint(policy_path, k=512, device="cuda", steps=900, warm=200, height_source=None,
-                     perceive=None):
+                     perceive=None, seed=0):
     """Deterministic track/flat/fell + the curriculum LEVEL it climbs to (how tall a riser it handles).
     The env starts every stair env at level 0 and promotes as the policy clears tents.
 
@@ -93,6 +94,10 @@ def score_checkpoint(policy_path, k=512, device="cuda", steps=900, warm=200, hei
     is scored against the raycast scan — scoring it against the other one measures the mismatch."""
     if not tp.HAS_PHYSX or not torch.cuda.is_available():
         print("need PhysX + CUDA"); return None
+    # The command sampler draws from torch's DEFAULT generator, which nothing here was seeding —
+    # so two scoring runs of one checkpoint saw different velocity commands and landed up to 0.012
+    # apart, which is wider than any difference this script is usually asked to resolve.
+    torch.manual_seed(seed)
     ac, norm, meta = load_policy(policy_path, device=device)
     trained_on = meta.get("height_source", "analytic")
     src = height_source or trained_on
@@ -128,6 +133,7 @@ def eval_flat_steering(policy_path, k=512, device="cuda"):
     if not tp.HAS_PHYSX or not torch.cuda.is_available():
         print("need PhysX + CUDA"); return
     ac, norm, meta = load_policy(policy_path, device=device)
+    torch.manual_seed(0)
     env = SpotStepsEnv(num_envs=k, device=device, flat_only=True,
                        height_source=meta.get("height_source", "analytic"))
     pol = (lambda o: ac.act_mean(norm.norm(o))) if norm is not None else ac.act_mean
@@ -158,9 +164,29 @@ def main():
     ap.add_argument("--gate", type=float, default=0.90)
     ap.add_argument("--out", default=os.path.join(_HERE, "spot_steps.pt"))
     ap.add_argument("--warmstart", default=os.path.join(_HERE, "scratch_distillation", "scratch_flat_best.pt"),
-                    help="50-d clock base gait (.pt) to expand into 96-d; default = scratch_flat_best.pt")
+                    help="what to start the fine-tune from. A 50-d clock base gait is expanded into "
+                         "96-d (default = scratch_flat_best.pt); a checkpoint that is ALREADY 96-d — "
+                         "spot_hf.pt, say — is continued whole, which is how you chain "
+                         "heightfield -> stairs.")
     ap.add_argument("--fell_max", type=float, default=0.006)
     ap.add_argument("--sym_coef", type=float, default=1.0)   # left-right symmetry augmentation (kills the veer)
+    ap.add_argument("--push-vel", dest="push_vel", type=float, default=0.0,
+                    help="random shoves, as the velocity change (m/s) each delivers to the base. "
+                         "Nothing has ever perturbed this robot in training, so recovery was never "
+                         "selected for. Measured on spot_steps.pt: falls per 1000 pushes go 0.5 at "
+                         "1.2 m/s, 3 at 2.0, 29 at 3.0, 92 at 4.0 — so ~3.0 is where it starts to "
+                         "matter and is the sensible thing to train against.")
+    ap.add_argument("--push-prob", dest="push_prob", type=float, default=0.02,
+                    help="per-env per-step probability of a shove")
+    ap.add_argument("--cadence-jitter", dest="cadence_jitter", type=float, default=0.0,
+                    help="sample each episode's gait period from GAIT_PERIOD * (1 +- this). 0 = the "
+                         "single fixed cadence, under which the policy can vary stride length and "
+                         "nothing else — one gait, whatever the terrain does.")
+    ap.add_argument("--imit-anneal", dest="imit_anneal", type=int, default=-1,
+                    help="iteration at which the imitation anchor starts decaying to 0 by the end "
+                         "of training. The anchor protects steering, so the decay HOLDS on any log "
+                         "where flat tracking is under the gate. -1 = never decay (the default, and "
+                         "what pins the gait to the teacher for all 1500 iterations).")
     ap.add_argument("--graph", action="store_true",
                     help="replay the step's torch region from a CUDA graph (VecTask graph=True). "
                          "The region is launch-bound — a few hundred small kernels whose dispatch "
@@ -181,6 +207,10 @@ def main():
                          "agree exactly inside a lane; the raycast also sees the neighbour's tent. "
                          "It is recorded in the checkpoint meta, so --score/--eval follow it.")
     ap.add_argument("--eval", default="")
+    ap.add_argument("--score-envs", dest="score_envs", type=int, default=512,
+                    help="envs for --score/--eval. 512 is the historical default; the run-to-run "
+                         "spread at that size is about 0.012 of tracking, so raise it before "
+                         "trusting a small difference between two checkpoints.")
     ap.add_argument("--score", default="")
     ap.add_argument("--score-perceive", dest="score_perceive", choices=("on", "off"), default="",
                     help="score with the camera-limited scan on or off, whatever the checkpoint was "
@@ -194,30 +224,56 @@ def main():
     if not tp.HAS_PHYSX or not torch.cuda.is_available():
         print("need PhysX + CUDA"); sys.exit(0)
     if args.score:
-        score_checkpoint(args.score, height_source=args.score_source or None,
+        score_checkpoint(args.score, k=args.score_envs,
+                         height_source=args.score_source or None,
                          perceive=None if not args.score_perceive else args.score_perceive == "on")
         return
     if args.eval:
-        eval_flat_steering(args.eval); return
+        eval_flat_steering(args.eval, k=args.score_envs); return
 
     env = SpotStepsEnv(num_envs=args.envs, device="cuda", perceive=args.perceive,
                        perceive_noise=args.perceive_noise, graph=args.graph,
+                       cadence_jitter=args.cadence_jitter,
+                       push_vel=args.push_vel, push_prob=args.push_prob,
                        height_source=None if args.perceive else args.height_source)
     if env.rays is not None:
         print(f"terrain height by raycast: {env.rays}")
     if env.percept is not None:
         print(f"camera-limited scan: {env.percept}")
+    if args.push_vel > 0:
+        print(f"random shoves: up to {args.push_vel} m/s "
+              f"({args.push_vel * 24.0:.0f} N*s) at p={args.push_prob} per env per step")
     aux = make_aux_loss(args.sym_coef) if args.sym_coef > 0 else None
     # height_source rides in the meta so --score and --eval rebuild the env the way it was trained.
     ppo = PPO(env, ACT_DIM, hidden=HIDDEN, lr=args.lr, horizon=args.horizon, log_std_init=-1.5,
               entropy=0.0, normalize_obs=True,
               meta={**CONFIG, "height_source": env.height_source, "perceive": args.perceive,
-                    "perceive_noise": args.perceive_noise}, aux_loss=aux)
+                    "perceive_noise": args.perceive_noise,
+                    # Lineage: which gait this fine-tune started from. spot_steps.pt records none,
+                    # so whether it came off the old heightfield -> stairs chain or straight off the
+                    # scratch gait is not recoverable from the file — only guessable from its date.
+                    "warmstart": os.path.basename(args.warmstart) if args.warmstart else "",
+                    "iters": args.iters, "envs": args.envs,
+                    "cadence_jitter": args.cadence_jitter,
+                    "imit_anneal": args.imit_anneal,
+                    "push_vel": args.push_vel, "push_prob": args.push_prob}, aux_loss=aux)
     if aux is not None:
         print(f"symmetry augmentation ON (coef {args.sym_coef})")
     if args.warmstart and os.path.exists(args.warmstart):
-        warmstart_scratch_to_terrain(ppo.ac, ppo.norm,
-                                     args.warmstart, n_keep=50, device="cuda")
+        src, src_norm, src_meta = load_policy(args.warmstart, device="cuda")
+        if src_meta.get("obs_dim") == OBS_DIM:
+            # Already a terrain policy, not the 50-d base gait: continue it whole. This is what a
+            # heightfield -> stairs chain needs, and until now it could not be run at all — the
+            # expander below asserts on anything that is not 50-d, so handing it spot_hf.pt
+            # stopped the trainer dead.
+            ppo.ac.load_state_dict(src.state_dict())
+            if ppo.norm is not None and src_norm is not None:
+                ppo.norm.load(src_norm.state())
+            print(f"continued from {os.path.basename(args.warmstart)} "
+                  f"({OBS_DIM}-d terrain policy: full actor+critic+log_std+norm)")
+        else:
+            warmstart_scratch_to_terrain(ppo.ac, ppo.norm,
+                                         args.warmstart, n_keep=50, device="cuda")
     else:
         print(f"(warmstart path not found: {args.warmstart} — starting from scratch)")
     if args.graph:
@@ -231,6 +287,8 @@ def main():
 
     latest = os.path.splitext(args.out)[0] + "_latest.pt"
     best = [-1e9]
+    seen = [0]
+    LOG_EVERY = 20
 
     def log(msg):
         trk, ftrk, lvl = env.last_track, env.last_flat_track, env.last_level
@@ -239,6 +297,19 @@ def main():
         # STAIRS: the objective is climb HEIGHT (curriculum level), not track — track DROPS with
         # difficulty, so best-by-track would pick the easy early checkpoint. Select by level (track ties).
         score = lvl + 0.01 * trk
+        seen[0] += LOG_EVERY
+        anneal = ""
+        if args.imit_anneal >= 0 and seen[0] >= args.imit_anneal:
+            # Let go of the teacher, but only while steering is still healthy: the anchor exists
+            # because steering regressed without it, so a decay that ignores that just reintroduces
+            # the bug it was added to fix.
+            if ok:
+                frac = (seen[0] - args.imit_anneal) / max(args.iters - args.imit_anneal, 1)
+                w = W_IMIT * max(0.0, 1.0 - frac)
+                env.set_imit_weight(w)
+                anneal = f" | imit {w:.3f}"
+            else:
+                anneal = " | imit HELD"
         mark = ""
         if score > best[0] and ok:
             best[0] = score
@@ -246,9 +317,9 @@ def main():
             mark = "  <- saved best"
         print(f"{msg} | track {trk:.3f} | flat {ftrk:.3f}{'' if ok else ' LOW!'} | "
               f"level {lvl:.2f}/{N_LEVELS - 1} | clear {env.last_clear:.2f} | "
-              f"fell {env.last_fell:.3f}{mark}")
+              f"fell {env.last_fell:.3f}{anneal}{mark}")
 
-    ppo.learn(args.iters, log_every=20, on_log=log)
+    ppo.learn(args.iters, log_every=LOG_EVERY, on_log=log)
     ppo.save(latest)
     print(f"saved -> {args.out} (best level-score {best[0]:.3f}, steering gate {gate:.3f}) + {latest} (final)")
     print(f"next: python {os.path.basename(__file__)} --score {args.out}")
