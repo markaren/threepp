@@ -163,6 +163,11 @@ SPAWN_ROT = tp.Quaternion().set_from_axis_angle(tp.Vector3(0, 1, 0), math.pi / 2
 # ~0.18 g of traction margin to actually drive with (the mud ceiling is 0.37 g).
 C_BULLDOZE = 0.5
 C_COMPACT = 0.35
+# The wedge cannot push harder than the material can bear before it FAILS --
+# snow crushes at a few tens of kPa. Without this cap snow's n=1.6 makes the
+# wedge pressure explode with depth (~120 kPa dug-in) and the lane is
+# undrivable at its own static sinkage. Mud's cap is above anything reachable.
+P_BULLDOZE_CAP = {"mud": 8.0e4, "snow": 3.5e4, "clay": 1.0e9}
 
 # Slip sinkage: a spinning wheel excavates. The effective sinkage is
 # z_eq * dig, where dig follows 1 + K_DIG * min(scrub / SCRUB_REF, 1) with a
@@ -248,7 +253,7 @@ def motion_resistance(lane, z):
         return 0.0
     m = MATS[lane]
     b = math.sqrt(max(z * (2.0 * R_WHEEL - z), CELL * CELL))
-    p = (m.k_c / b + m.k_phi) * z ** m.n
+    p = min((m.k_c / b + m.k_phi) * z ** m.n, P_BULLDOZE_CAP[lane])
     compact = C_COMPACT * (m.k_c + 2.0 * b * m.k_phi) * z ** (m.n + 1.0) / (m.n + 1.0)
     return compact + C_BULLDOZE * z * 2.0 * b * p
 
@@ -286,7 +291,12 @@ def bilinear(t, flat, x, y):
             + (1 - tx) * ty * gat(ix, iy + 1) + tx * ty * gat(ix + 1, iy + 1))
 
 
-def lane_at(z):
+def lane_at(x, z):
+    """The lane under world (x, z), or None -- and None PAST THE LANE ENDS in x
+    too, or a car that leaves the far end of the strip would carry soft-ground
+    handling (and its drag) onto the rigid ground forever."""
+    if not (X0 <= x <= X0 + (NX - 1) * CELL):
+        return None
     for name in LANES:
         lo, hi = LANE_Z[name]
         if lo <= z <= hi:
@@ -786,7 +796,7 @@ def coupled_step(throttle, steer, brake, relax_iters=2):
 
     # 2. the GRADE under each wheel -- the bearing datum, not the surface. One
     #    gather per lane and one transfer for all of them.
-    lane_of = [lane_at(hub[i, 2]) for i in range(4)]
+    lane_of = [lane_at(hub[i, 0], hub[i, 2]) for i in range(4)]
     grade = np.zeros(4)
     gathered = []
     for name in LANES:
@@ -1022,8 +1032,16 @@ def drive_inputs(dt):
         steer_cmd = 0.0
         w_ema[:] = REST_LOAD
     if pressed("T"):
+        # Reset the DEMO's soft-ground state along with the grids: a reset that
+        # leaves the dig factor, the TC cut and the load EMA where they were is
+        # not a reset a stuck car can feel.
+        global prev_hub, tc_cut
         for t in terrain.values():
             t.reset()
+        dig[:] = 1.0
+        tc_cut = 1.0
+        w_ema[:] = REST_LOAD
+        prev_hub = None
     if pressed("F"):
         shot_no += 1
         save_shot(os.path.join(OUT_DIR, f"warp_mudsnow_drive_{shot_no:03d}.png"))
@@ -1197,21 +1215,26 @@ elif SHOT:
                  (-17.0, 1.5, z + (5.0 if z <= 0 else -5.0)), (-18.5, 0.2, z),
                  out(f"2_{which}"))
     if which == "diag":
-        # Tuning telemetry: a 0.45-throttle launch in mud, per-wheel state
-        # every half second. No frame saved.
-        vehicle.respawn(tp.Vector3(-20.0, 1.05, z_mud), SPAWN_ROT)
-        w_ema[:] = REST_LOAD
-        for _ in range(60):
-            coupled_step(0.0, 0.0, 0.0)
-        print("  t     v_kmh | per wheel FR FL RR RL: W_kN | omega*r m/s | dig | sink_mm")
-        for k in range(int(4.0 * 60)):
-            coupled_step(0.45, 0.0, 0.0)
-            if k % 30 == 0:
-                w = [vehicle.suspension_force(i) / 1000 for i in range(4)]
-                wr = [vehicle.wheel_angular_speed(i) * R_WHEEL for i in range(4)]
-                print(f"  {k / 60.0:4.1f} {vehicle.forward_speed * 3.6:6.1f} | "
-                      f"W {np.round(w, 2)} | wr {np.round(wr, 1)} | "
-                      f"dig {np.round(dig, 2)} | z {np.round(hud['z'] * 1000, 0)}")
+        # Tuning telemetry: a 0.45-throttle launch on each soft lane, per-wheel
+        # state every half second. No frame saved.
+        for lane_name in ("mud", "snow"):
+            z_lane = 0.5 * (LANE_Z[lane_name][0] + LANE_Z[lane_name][1])
+            vehicle.respawn(tp.Vector3(-20.0, 1.05, z_lane), SPAWN_ROT)
+            dig[:] = 1.0
+            tc_cut = 1.0
+            w_ema[:] = REST_LOAD
+            for _ in range(60):
+                coupled_step(0.0, 0.0, 0.0)
+            print(f"  {lane_name}: t  v_kmh | W_kN | omega*r m/s | dig | sink_mm | tc")
+            for k in range(int(4.0 * 60)):
+                coupled_step(0.45, 0.0, 0.0)
+                if k % 30 == 0:
+                    w = [vehicle.suspension_force(i) / 1000 for i in range(4)]
+                    wr = [vehicle.wheel_angular_speed(i) * R_WHEEL for i in range(4)]
+                    print(f"  {k / 60.0:4.1f} {vehicle.forward_speed * 3.6:6.1f} | "
+                          f"W {np.round(w, 2)} | wr {np.round(wr, 1)} | "
+                          f"dig {np.round(dig, 2)} | z {np.round(hud['z'] * 1000, 0)} | "
+                          f"{tc_cut:4.2f}")
     if which == "stuck":
         # The mud skill loop, measured, with TC off (TC exists to prevent
         # exactly this): floor it from rest (the wheels dig and the car goes
