@@ -161,6 +161,11 @@ def main():
                     help="50-d clock base gait (.pt) to expand into 96-d; default = scratch_flat_best.pt")
     ap.add_argument("--fell_max", type=float, default=0.006)
     ap.add_argument("--sym_coef", type=float, default=1.0)   # left-right symmetry augmentation (kills the veer)
+    ap.add_argument("--graph", action="store_true",
+                    help="replay the step's torch region from a CUDA graph (VecTask graph=True). "
+                         "The region is launch-bound — a few hundred small kernels whose dispatch "
+                         "costs far more than their execution — so this is ~1.7x on the step. "
+                         "Verified against a fresh eager observation before training starts.")
     ap.add_argument("--perceive", action="store_true",
                     help="train on the scan a body-mounted depth camera could actually have seen "
                          "(threepp.rl.perception): occluded and never-observed cells read flat, and "
@@ -196,7 +201,7 @@ def main():
         eval_flat_steering(args.eval); return
 
     env = SpotStepsEnv(num_envs=args.envs, device="cuda", perceive=args.perceive,
-                       perceive_noise=args.perceive_noise,
+                       perceive_noise=args.perceive_noise, graph=args.graph,
                        height_source=None if args.perceive else args.height_source)
     if env.rays is not None:
         print(f"terrain height by raycast: {env.rays}")
@@ -215,6 +220,10 @@ def main():
                                      args.warmstart, n_keep=50, device="cuda")
     else:
         print(f"(warmstart path not found: {args.warmstart} — starting from scratch)")
+    if args.graph:
+        env.reset()
+        print(f"CUDA-graph step ON — replay verified to "
+              f"{env.verify_graph(steps=32):.1e} against a recomputed observation")
     sanity_walk(env, ppo.ac, ppo.norm)
     flat0 = stochastic_flat_baseline(env, ppo.ac, ppo.norm)
     gate = args.gate * flat0

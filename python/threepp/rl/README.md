@@ -283,6 +283,43 @@ termination and spawn placement should keep reading ground truth, or you are han
 training signal rather than the policy. `examples/spot/spot_occlusion.py` measures what the camera
 can and cannot see, and whether it changes what the policy does.
 
+### Replaying the step from a CUDA graph (`graph=True`)
+
+A GpuSim step is not compute-bound, it is **launch**-bound. `SpotStepsEnv` at K=2048 dispatches
+**584 torch ops per control step** — each a few microseconds of GPU work behind ~20 µs of CPU
+dispatch — and the cost of that is *flat in K*: 12 ms at K=1024 and the same 12 ms at K=2048,
+against 13.6 ms of actual physics. It is not host syncs either; there are only five in a step, and
+removing four of them is worth 1.6%.
+
+So `VecTask(..., graph=True)` records the whole torch region between the physics and the auto-reset
+as a CUDA graph and replays it with one launch:
+
+| K=2048, RTX 4070 | eager | graph |
+|---|---|---|
+| the torch region alone | 9.40 ms | **0.87 ms** |
+| `env.step` | 22.54 ms | **13.20 ms** (1.71×) |
+| training incl. PPO | 41.8k steps/s | **52.6k steps/s** (1.26×) |
+
+Capture happens inside `reset()`, and the reset is then redone, because the warm-up genuinely runs
+the region — so a graphed run and an eager one start from the same state. **That only cleans up
+buffers registered with `env_state()`**; state a task keeps outside it will carry the warm-up's
+marks.
+
+Writing a task that can be captured is one rule: **the hot region is tensor ops on buffers that are
+written through, never rebound, and never shaped by data**. In practice:
+
+- `self.buf.copy_(x)` / `buf.add_()`, not `self.buf = x` — the graph recorded an address.
+- masks and `torch.where`, not `torch.nonzero` — a data-dependent shape is baked at capture.
+- no `.item()` in the step path; keep per-step stats on device and read them when a trainer logs.
+- RNG from the default generator is fine and advances properly across replays; a seeded
+  `torch.Generator` needs registering, which the capture does for `self.g`.
+
+`env.verify_graph()` is the guard: it steps, then recomputes `observe` from the state the step left
+behind and requires them to match. That catches a stale address or a frozen shape. It **cannot**
+catch Python-side state that simply stops updating (`self.k += 0.1` in `on_step`), because replay
+never runs the Python and the eager recomputation then reads the same frozen value — which is why
+the rule above, not the check, is what keeps a task correct.
+
 ---
 
 ## Training

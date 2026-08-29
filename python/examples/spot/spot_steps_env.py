@@ -131,7 +131,7 @@ class SpotStepsEnv(VecTask):
     clip_actions = None              # the policy emits ~[-8,8]; do NOT clamp
 
     def __init__(self, num_envs=1024, device="cuda", seed=0, flat_only=False,
-                 height_source=None, perceive=False, perceive_noise=0.0):
+                 height_source=None, perceive=False, perceive_noise=0.0, graph=False):
         if height_source is None:              # perception needs the BVH, so it implies the raycast
             height_source = "raycast" if perceive else "analytic"
         if height_source not in ("analytic", "raycast"):
@@ -167,7 +167,7 @@ class SpotStepsEnv(VecTask):
 
         super().__init__(num_envs, lambda world, i: _SpotStepsRobot(world, i),
                          gravity=(0.0, 0.0, -9.81), spacing=SPACING, device=device, seed=seed,
-                         read_root=True, build_world=_build)
+                         read_root=True, build_world=_build, graph=graph)
         if height_source == "raycast":
             from threepp.rl.raycast import TerrainRays
             self.rays = TerrainRays.from_objects(collector[0].meshes, device=self.device, up="z")
@@ -201,7 +201,10 @@ class SpotStepsEnv(VecTask):
         self._last_obs = torch.zeros(num_envs, OBS_DIM, device=dev)
         self.up = torch.zeros(num_envs, device=dev)
         self._resample_cmd(torch.arange(num_envs, device=dev))             # valid cmd before the first reset()
-        self.last_track = 0.0; self.last_flat_track = 0.0; self.last_level = 0.0; self.last_fell = 0.0
+        self._st_track = torch.zeros((), device=dev)
+        self._st_flat = torch.zeros((), device=dev)
+        self._st_level = torch.zeros((), device=dev)
+        self._st_fell = torch.zeros((), device=dev)
         self.last_clear = 0.0
         if perceive:
             from threepp.rl.perception import PerceivedScan
@@ -210,6 +213,13 @@ class SpotStepsEnv(VecTask):
             self.percept = PerceivedScan(self.rays, num_envs, origin_b=self.lane_y,
                                          bounds=(-1.0, STRIP_LEN + 1.0, HALF_W_STEPS),
                                          noise=perceive_noise, seed=seed)
+
+    # The per-step stats live on the device so the reward can be replayed from a graph; these read
+    # them back, which the trainers do once per iteration rather than once per step.
+    last_track = property(lambda self: self._st_track.item())
+    last_flat_track = property(lambda self: self._st_flat.item())
+    last_level = property(lambda self: self._st_level.item())
+    last_fell = property(lambda self: self._st_fell.item())
 
     def _terrain_h(self, x, y):
         """Ground height at (x,y). x,y [K] or [K,P].
@@ -229,22 +239,40 @@ class SpotStepsEnv(VecTask):
         on = ((torch.abs(y - lane) < HALF_W_STEPS) & (x >= 0.0) & (x < STRIP_LEN)).float()
         return h * on * stairs
 
-    def _resample_cmd(self, idx):
-        n = idx.numel()
-        if n == 0:
-            return
+    def _sample_cmd(self, stairs):
+        """Fresh commands for the n envs whose stair flags are `stairs` [n] -> (cmd [n,3], timer [n]).
+
+        Nothing here selects with a boolean mask, so the shapes are fixed by n alone — which is what
+        lets the step-path caller sample for every env and pick with `where` instead of `nonzero`."""
+        n = stairs.numel()
         dev = self.sim.device
         vx = torch.empty(n, device=dev).uniform_(VX_LO, VX_HI)
         vy = torch.empty(n, device=dev).uniform_(-VY_HI, VY_HI)
         wz = torch.empty(n, device=dev).uniform_(-WZ_HI, WZ_HI)
-        drive = (torch.rand(n, device=dev) < FWD_DRIVE_FRAC) & self.is_stairs[idx]   # stair lanes drive at the tent
+        drive = (torch.rand(n, device=dev) < FWD_DRIVE_FRAC) & stairs   # stair lanes drive at the tent
         vx = torch.where(drive, torch.empty(n, device=dev).uniform_(0.4, VX_HI), vx)
         vy = torch.where(drive, vy * 0.2, vy)
         wz = torch.where(drive, wz * 0.2, wz)
         cmd = torch.stack([vx, vy, wz], dim=1)
-        cmd[torch.rand(n, device=dev) < STAND_PROB] = 0.0
+        stand = (torch.rand(n, 1, device=dev) < STAND_PROB)
+        cmd = torch.where(stand, torch.zeros_like(cmd), cmd)
+        return cmd, torch.randint(CMD_MIN, CMD_MAX + 1, (n,), device=dev)
+
+    def _resample_cmd(self, idx):
+        """Subset form, for the reset path. Runs eagerly — idx already cost a host sync."""
+        if idx.numel() == 0:
+            return
+        cmd, timer = self._sample_cmd(self.is_stairs[idx])
         self.cmd[idx] = cmd
-        self.cmd_timer[idx] = torch.randint(CMD_MIN, CMD_MAX + 1, (n,), device=dev)
+        self.cmd_timer[idx] = timer
+
+    def _resample_due(self):
+        """Step form: sample for every env, keep it only where the timer ran out. K*3 extra randoms
+        instead of a nonzero, which is the trade that keeps the step graph-capturable."""
+        due = self.cmd_timer <= 0
+        cmd, timer = self._sample_cmd(self.is_stairs)
+        self.cmd.copy_(torch.where(due.unsqueeze(1), cmd, self.cmd))
+        self.cmd_timer.copy_(torch.where(due, timer, self.cmd_timer))
 
     def _spawn_x(self, idx):
         """Spawn x for the subset: stair lanes at their level's band approach; flat lanes anywhere flat."""
@@ -306,7 +334,7 @@ class SpotStepsEnv(VecTask):
     def on_step(self, s):
         self.phi.copy_(advance(self.phi))                                    # clock after physics, before next obs
         self.cmd_timer -= 1
-        self._resample_cmd(torch.nonzero(self.cmd_timer <= 0, as_tuple=False).squeeze(-1))
+        self._resample_due()
 
         q = self.sim.root_quat
         self.up = up_z(q)
@@ -348,11 +376,16 @@ class SpotStepsEnv(VecTask):
             "imit": -W_IMIT * imit,
             "fell": -5.0 * s.terminated.float(),
         }
-        self.last_fell = s.terminated.float().mean().item()
-        self.last_track = (track_lin + track_ang).mean().item()
-        flat = ~self.is_stairs
-        self.last_flat_track = ((track_lin + track_ang)[flat]).mean().item() if bool(flat.any()) else float("nan")
-        self.last_level = self.level[self.is_stairs].float().mean().item() if bool(self.is_stairs.any()) else 0.0
+        # Device-side, and read back only when a trainer asks (see the last_* properties). Masked
+        # means rather than boolean indexing: a mask keeps the shapes static, which is what lets the
+        # whole reward be replayed from a CUDA graph.
+        trk = track_lin + track_ang
+        self._st_fell.copy_(s.terminated.float().mean())
+        self._st_track.copy_(trk.mean())
+        flat = (~self.is_stairs).float()
+        self._st_flat.copy_((trk * flat).sum() / flat.sum().clamp_min(1.0))
+        st = self.is_stairs.float()
+        self._st_level.copy_((self.level.float() * st).sum() / st.sum().clamp_min(1.0))
         return terms
 
     def on_done(self, idx):
@@ -366,7 +399,10 @@ class SpotStepsEnv(VecTask):
                                          + (prog > CLEAR_DIST).long()
                                          - (prog < REACH_DIST).long(), 0, N_LEVELS - 1)
             self.last_clear = (prog > CLEAR_DIST).float().mean().item()
-            self.last_level = self.level[self.is_stairs].float().mean().item()
+            # on_done runs outside the step graph, but keep the same device-side accumulator the
+            # reward writes so the two never disagree about what "level" means.
+            stf = self.is_stairs.float()
+            self._st_level.copy_((self.level.float() * stf).sum() / stf.sum().clamp_min(1.0))
 
     def observe(self, s):
         q = s.root_quat
@@ -392,8 +428,8 @@ class SpotStepsEnv(VecTask):
         # First 50 (proprio+clock) byte-identical to scratch_flat -> anchor reads obs[:,:50]
         obs = torch.cat([lin_b, ang_b, proj_g, self.cmd, qpos, jv_isaac, self.last_act,
                          clk, base_above, ahead], dim=1)
-        self._last_obs = obs
-        return obs
+        self._last_obs.copy_(obs)     # in place: reward_terms reads this, and a graph captures the
+        return obs                    # address, so rebinding would strand it on a stale tensor
 
     def config(self):
         return {**super().config(), **CONFIG}
@@ -423,7 +459,8 @@ if __name__ == "__main__":
     K = int(os.environ.get("K", "64"))
     src = os.environ.get("HEIGHT_SOURCE", "analytic")     # HEIGHT_SOURCE=raycast -> Warp BVH scan
     see = os.environ.get("PERCEIVE", "") == "1"           # PERCEIVE=1 -> the camera-limited scan
-    env = SpotStepsEnv(num_envs=K, height_source=None if see else src, perceive=see)
+    gph = os.environ.get("GRAPH", "") == "1"              # GRAPH=1 -> CUDA-graph the step's torch region
+    env = SpotStepsEnv(num_envs=K, height_source=None if see else src, perceive=see, graph=gph)
     obs = env.reset()
     assert obs.shape == (K, 96), f"expected obs (K,96), got {tuple(obs.shape)}"
     print(f"obs {tuple(obs.shape)} (OBS_DIM={OBS_DIM}=96) finite={bool(torch.isfinite(obs).all())}  "
@@ -436,4 +473,6 @@ if __name__ == "__main__":
     print(f"zero-action (stand): track={env.last_track:.3f}  flat_track={env.last_flat_track:.3f}  "
           f"level={env.last_level:.2f}  fell/step={env.last_fell:.3f}  rew={rew.mean().item():+.3f}")
     print("per-term:", env.stats_line() or "(no episode finished yet)")
+    if gph:
+        print(f"graph replay verified: worst |obs - recomputed| = {env.verify_graph(steps=32):.3e}")
     print("SPOTV2-STEPS ENV SELFTEST: PASS")

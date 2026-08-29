@@ -179,7 +179,7 @@ class PerceivedScan:
         # h_here survives an unobserved tick the way the deploy scanner's does: the last height the
         # map could actually answer with. Zero at the start, which is the ground it spawns on.
         self.h_here_last = torch.zeros(self.K, device=self.device)
-        self._buf = None                                             # allocated on the first read
+        self._buf = self._known = self._out = None                   # allocated on the first read
         self.last_visible = None      # [K,N] uint8 — seen by the camera THIS tick
         self.last_known = None        # [K,N] uint8 — answerable from the map (this tick or memory)
 
@@ -255,8 +255,10 @@ class PerceivedScan:
                           self.nx, self.ny, self.mark_radius],
                   outputs=[wp.from_torch(self.seen)], device=self._wp_device)
 
-        known = torch.empty((K, total), dtype=torch.uint8, device=self.device)
-        out = torch.empty((K, total), device=self.device)
+        if self._known is None or self._known.shape != (K, total):
+            self._known = torch.empty((K, total), dtype=torch.uint8, device=self.device)
+            self._out = torch.empty((K, total), device=self.device)
+        known, out = self._known, self._out
         wp.launch(self._read, dim=(K, total),
                   inputs=[wp.from_torch(qa), wp.from_torch(qb), wp.from_torch(h),
                           wp.from_torch(self.origin_b), self.a0, self.b_half, self.cell,
@@ -264,8 +266,10 @@ class PerceivedScan:
                   outputs=[wp.from_torch(known), wp.from_torch(out)], device=self._wp_device)
 
         here_known = known[:, -1].bool()
+        # written THROUGH, not rebound: under a CUDA graph a rebind would leave every replay
+        # reading the tensor that existed at capture time, so the fallback would stop chaining
         h_here = torch.where(here_known, out[:, -1], self.h_here_last)
-        self.h_here_last = h_here
+        self.h_here_last.copy_(h_here)
         ahead = torch.where(known[:, M:M + N].bool(), out[:, M:M + N] - h_here[:, None],
                             torch.zeros((), device=self.device)).clamp(-1.0, 1.0)
         self.last_visible = vis[:, M:M + N]

@@ -166,7 +166,8 @@ class VecTask:
     vel_ema = 0.2            # EMA blend for the finite-difference body velocity (read_root)
 
     def __init__(self, num_envs, build_robot, *, gravity=(0, -9.81, 0), spacing=3.0,
-                 device="cuda", seed=0, read_root=False, read_links=False, build_world=None):
+                 device="cuda", seed=0, read_root=False, read_links=False, build_world=None,
+                 graph=False):
         if self.act_dim is None:
             raise TypeError(f"{type(self).__name__} must define act_dim")
         self.K = num_envs
@@ -189,6 +190,11 @@ class VecTask:
         self._ep_term = None
         self._done_sum = None
         self._done_steps = torch.zeros((), dtype=torch.long, device=self.device)
+        # CUDA-graph replay of the per-step torch region — see _capture()
+        self.graph = bool(graph)
+        self._cg_hot = self._cg_obs = None
+        self._cg_act = None
+        self._cg_out = self._cg_obs_out = None
 
     # ---- hooks a task implements --------------------------------------------------
     def on_reset(self, idx):
@@ -298,7 +304,7 @@ class VecTask:
         return "  ".join(parts)
 
     # ---- the PPO env protocol --------------------------------------------------------
-    def reset(self):
+    def _reset_all(self):
         self._reset_envs(torch.arange(self.K, device=self.device))
         if self.settle_steps:
             zero = torch.zeros(self.K, self.act_dim, device=self.device)
@@ -310,32 +316,126 @@ class VecTask:
         self.state.rebaseline()
         return self.observe(self.state)
 
+    def reset(self):
+        obs = self._reset_all()
+        if self.graph and self._cg_hot is None:
+            self._capture()
+            obs = self._reset_all()      # wipe what the capture warm-up did to the env state
+        return obs
+
     @torch.no_grad()
-    def step(self, actions):
-        a = actions.clamp(-self.clip_actions, self.clip_actions) if self.clip_actions else actions
-        self.simulate(a)
-        self.steps += 1
+    def _hot(self, a):
+        """The step's pure-torch region: everything between the physics and the auto-reset.
+
+        Kept as one function because it is also the CUDA-graph capture unit. Nothing in here may
+        read a device value back to the host or produce a data-dependent shape, or the graph will
+        freeze whatever the capture happened to see — see `graph` on the constructor.
+        """
         self.state.update()
         self.on_step(self.state)
-
         term = self.terminated(self.state)
         self.state.terminated.copy_(term)
         timeout = (self.steps >= self.max_steps) & ~term
         done = term | timeout
         terms = self.reward_terms(self.state, a)
         rew = torch.stack(list(terms.values())).sum(0)
+        # terminal_obs, read BEFORE any reset overwrites the sim state
+        return rew, done, timeout, self.observe(self.state), terms
 
-        # capture terminal_obs BEFORE the reset overwrites the sim state, then partial-reset
+    def _capture(self):
+        """Record `_hot` and the post-reset `observe` as two CUDA graphs.
+
+        Worth doing because the region is launch-bound, not compute-bound: a few hundred small
+        torch kernels whose dispatch costs an order of magnitude more than their execution, and a
+        graph replays the whole sequence with one launch. Measured on SpotStepsEnv at K=2048, the
+        region goes 9.4 ms -> 0.9 ms and the whole step drops about a third.
+
+        The seeded generator has to be registered or capture refuses the first RNG op in it, and
+        the warm-up on a side stream is PyTorch's requirement, not ours.
+
+        The warm-up genuinely RUNS `_hot`, side effects and all, so this is called from reset() and
+        the reset is then redone — otherwise a graphed run starts a few phase-clock ticks ahead of
+        an eager one and the two trajectories are not comparable. That only cleans up state the task
+        registered with env_state(); anything a task keeps outside it will carry the warm-up's marks.
+        """
+        self._cg_act = torch.zeros(self.K, self.act_dim, device=self.device)
+        side = torch.cuda.Stream()
+        side.wait_stream(torch.cuda.current_stream())
+        with torch.cuda.stream(side):
+            for _ in range(3):
+                self._hot(self._cg_act)
+                self.observe(self.state)
+        torch.cuda.current_stream().wait_stream(side)
+
+        self._cg_hot = torch.cuda.CUDAGraph()
+        self._cg_hot.register_generator_state(self.g)
+        with torch.cuda.graph(self._cg_hot):
+            self._cg_out = self._hot(self._cg_act)
+        self._cg_obs = torch.cuda.CUDAGraph()
+        self._cg_obs.register_generator_state(self.g)
+        with torch.cuda.graph(self._cg_obs):
+            self._cg_obs_out = self.observe(self.state)
+
+    def verify_graph(self, steps=32, tol=1e-5, actions=None):
+        """Guard on the capture: after each replayed step, recompute the observation eagerly from
+        the state the step left behind, and require the two to agree.
+
+        A graph bakes in the control flow it saw. If an env resamples with a data-dependent shape,
+        or rebinds a tensor in Python where the graph captured an address, replay keeps reading the
+        tensor that existed at capture time — and the observations go stale in a way no shape or
+        finiteness check will catch. `observe` is deterministic given the state, so recomputing it
+        is a real check and not a tautology. Comparing whole trajectories would not be: both arms
+        draw from the same RNG stream and would diverge for honest reasons.
+
+        What it CANNOT catch: Python-side state inside `_hot` that simply stops updating, because
+        replay never runs the Python and the eager recomputation then reads the same frozen value.
+        `self.k += 0.1` in on_step is invisible to this check and to every other one. The rule that
+        actually keeps a task safe is that everything in the hot region is tensor ops on buffers
+        that are written through, never rebound.
+
+        Raises on the first divergence; returns the worst difference seen.
+        """
+        if not self.graph:
+            raise RuntimeError("verify_graph: this env was not built with graph=True")
+        a = actions if actions is not None else torch.zeros(self.K, self.act_dim, device=self.device)
+        worst = 0.0
+        for i in range(steps):
+            obs = self.step(a)[0].clone()
+            d = (obs - self.observe(self.state)).abs().max().item()
+            worst = max(worst, d)
+            if d > tol:
+                raise AssertionError(
+                    f"verify_graph: the replayed observation is {d:.3e} away from recomputing it at "
+                    f"step {i} — the capture froze something this env varies per step")
+        return worst
+
+    def step(self, actions):
+        a = actions.clamp(-self.clip_actions, self.clip_actions) if self.clip_actions else actions
+        self.simulate(a)
+        self.steps += 1
+        if self.graph:
+            if self._cg_hot is None:
+                raise RuntimeError("graph=True: call reset() before step(), the capture happens there")
+            self._cg_act.copy_(a)
+            self._cg_hot.replay()
+            rew, done, timeout, term_obs, terms = self._cg_out
+        else:
+            rew, done, timeout, term_obs, terms = self._hot(a)
+
         d = torch.nonzero(done, as_tuple=False).squeeze(-1)
         self._accumulate(terms, d)   # needs steps[d] pre-zero for the episode lengths
-        term_obs = self.observe(self.state)
         if d.numel() > 0:
             self.on_done(d)
             self._reset_envs(d)
             if self.sim is not None:
                 self.sim.read()
             self.state.rebaseline(d)
-            obs = self.observe(self.state)
+            # the reset wrote through the same state buffers the graph reads, so a replay sees it
+            if self.graph:
+                self._cg_obs.replay()
+                obs = self._cg_obs_out
+            else:
+                obs = self.observe(self.state)
         else:
             obs = term_obs
         return obs, rew, done, term_obs, timeout

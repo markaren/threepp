@@ -111,6 +111,11 @@ Checkpoints (`*.pt`) are git-ignored — regenerate by training, or keep your ow
   imitation reward oracle, so no Isaac-licensed weights enter the shipped policy.
 - **GpuSim is the enabler** — K Spots in one direct-GPU PhysX scene; the 48-d Isaac obs is assembled as
   torch ops on the GPU state. ~35–40k env-steps/s at K=2048 on an RTX 4070.
+- **`--graph` makes it ~1.26× faster** — the step is launch-bound, not compute-bound: 584 torch ops
+  whose dispatch costs more than their execution, and that cost is flat in K (12 ms at K=1024 and at
+  K=2048, against 13.6 ms of physics). `VecTask(graph=True)` replays the whole torch region from a
+  CUDA graph: `env.step` 22.54 → 13.20 ms, training 41.8k → 52.6k steps/s. Verified against a
+  recomputed observation before training starts (0.0 exactly on the privileged scan). Off by default.
 - **Privileged terrain scan in training, perception at deploy** — training uses the exact analytic
   45-cell height grid (privileged, like IsaacLab's height scanner); the viewers estimate that same grid
   from an onboard depth camera + elevation map (see "Seeing the terrain"). One obs contract, two sources.
