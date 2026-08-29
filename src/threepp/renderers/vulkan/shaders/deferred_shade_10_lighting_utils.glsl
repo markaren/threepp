@@ -285,6 +285,20 @@ vec3 sampleEnvLod(vec3 dir, float lod) {
     return textureLod(envTex, vec2(u, v), lod).rgb;
 }
 
+// HemisphereLight surface term — the zero-mean directional remainder of
+// mix(ground, sky, 0.5*dot(N,up)+0.5). The CPU traversal (updateLightsUbo)
+// folds each hemi's angular mean into lights.ambient, so every isotropic
+// ambient consumer already carries the hemi's energy; add THIS wherever
+// lights.ambient feeds a surface diffuse term with a known normal, gated
+// exactly like the ambient it rides with. ambient + hemiAmbient(N) ≥ 0
+// per hemi (it reconstructs the mix), and all-zero rows (no hemi in the
+// scene) make it an exact no-op.
+vec3 hemiAmbient(vec3 N) {
+    return vec3(dot(lights.hemiDeltaR, N),
+                dot(lights.hemiDeltaG, N),
+                dot(lights.hemiDeltaB, N));
+}
+
 // ── Sheen (KHR_materials_sheen). The deferred base BRDF omitted
 // this, so satin/velvet/fabric read flat.
 float D_Charlie(float NdotH, float roughness) {

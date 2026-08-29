@@ -111,6 +111,14 @@ layout(set = 0, binding = 1, scalar) uniform LightsUbo {
     PointLight pointLights[8];
     SpotLight  spotLights[8];
     RectLight  rectLights[4];
+    // HemisphereLight zero-mean rows (GpuLightsUbo, VulkanGpuLayouts.hpp):
+    // the hemi's angular mean is folded into `ambient` above; the surface
+    // term is ambient + rows·N with rows = 0.5*(sky-ground)⊗up — see
+    // hemiAmbient() in deferred_shade_10_lighting_utils.glsl. All-zero
+    // (no HemisphereLight in the scene) makes it inert.
+    vec3       hemiDeltaR;
+    vec3       hemiDeltaG;
+    vec3       hemiDeltaB;
 } lights;
 
 layout(set = 0, binding = 2) uniform sampler2D  envTex;        // prefiltered PMREM mip chain
@@ -1128,7 +1136,7 @@ void main() {
         // rationale as the retrace fill: a partially-valid interior
         // neighbourhood is trusted outright; a starved one (conf → 0) means
         // "unmeasured", not "dark" — fall back to the env fill, never black.
-        diffInd = sampleEnvLod(N, maxLod) + lights.ambient;
+        diffInd = sampleEnvLod(N, maxLod) + lights.ambient + hemiAmbient(N);
         if (probeGrid.enabled > 0.5) {
             float bConf;
             const vec3 bFill = probeIrradianceConf(worldPos, N, bConf) * (1.0 / PI);
@@ -1146,9 +1154,9 @@ void main() {
     } else if (aoOn) {
         float openness;
         gGiMovFrac = 0.0;// set by gatherEnv: fraction of GI rays hitting moving geometry
-        diffInd = gatherEnv(worldPos, N, px, pc.frame, shadowsOn, demodIndirect, giSpp, openness) + lights.ambient * openness;
+        diffInd = gatherEnv(worldPos, N, px, pc.frame, shadowsOn, demodIndirect, giSpp, openness) + (lights.ambient + hemiAmbient(N)) * openness;
     } else {
-        diffInd = sampleEnvLod(N, maxLod) + lights.ambient;
+        diffInd = sampleEnvLod(N, maxLod) + lights.ambient + hemiAmbient(N);
     }
     // ReSTIR DI emissive area lighting → DEMOD irradiance folded into the diffuse-
     // indirect channel so it rides the SVGF temporal + à-trous denoise (the reservoir

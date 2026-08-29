@@ -51,11 +51,24 @@ namespace threepp::vulkan::impl {
         GpuPointLight pointLights[kMaxPointLights];
         GpuSpotLight  spotLights[kMaxSpotLights];
         GpuRectLight  rectLights[kMaxRectLights];
+        // HemisphereLight, split in two so most shaders need no layout change:
+        // each hemi's angular MEAN 0.5*(sky+ground) is folded into ambient
+        // above (fog/cloud/water/particle/probe shaders declare only a PREFIX
+        // of this block and keep seeing the energy), while these rows carry
+        // the zero-mean remainder 0.5*(sky-ground)⊗up. The deferred surface
+        // shade reconstructs the exact GL term mix(ground, sky,
+        // 0.5*dot(N,up)+0.5) as ambient + rows·N; per-channel rows let
+        // several hemis with different up axes sum exactly. Appended LAST so
+        // every earlier offset is unchanged.
+        float hemiDeltaR[3];
+        float hemiDeltaG[3];
+        float hemiDeltaB[3];
     };
     static_assert(sizeof(GpuDirLight)   == 24);
     static_assert(sizeof(GpuPointLight) == 36);
     static_assert(sizeof(GpuSpotLight)  == 56);
     static_assert(sizeof(GpuRectLight)  == 60);
+    static_assert(sizeof(GpuLightsUbo)  == 1232);
 
     struct GpuClusterLight {
         float position[3];   float range;         // range 0 = infinite (three.js)

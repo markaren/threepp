@@ -301,7 +301,7 @@ vec3 traceRadiance(vec3 origin, vec3 dir, bool doShadows, float maxLod, float mi
         // the point is dark — a hard switch rendered every glass-covered dial
         // near-black. Low confidence falls back to the legacy env fill.
         // Probes off keeps the original approximation.
-        vec3 hitDiffInd = sampleEnvLod(hitN, maxLod) + lights.ambient;
+        vec3 hitDiffInd = sampleEnvLod(hitN, maxLod) + lights.ambient + hemiAmbient(hitN);
         if (probeGrid.enabled > 0.5) {
             if (probeHitFill) {
                 float probeConf;

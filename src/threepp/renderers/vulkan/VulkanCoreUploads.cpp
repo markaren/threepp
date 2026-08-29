@@ -2,6 +2,8 @@
 
 #include "VulkanCpuPhaseProf.hpp"
 
+#include "threepp/lights/HemisphereLight.hpp"
+
 #include <algorithm>
 #include <chrono>
 #include <cmath>
@@ -1167,13 +1169,41 @@ namespace threepp {
             // One RTTI probe instead of five for the ~99% of nodes that are not
             // lights: every type the chain below handles derives from Light, so
             // a failed cast here cannot skip a branch that would have matched.
-            // (HemisphereLight/LightProbe pass this gate and fall through the
-            // chain unhandled, exactly as before.)
+            // (LightProbe passes this gate and falls through the chain
+            // unhandled, exactly as before.)
             if (!dynamic_cast<Light*>(&o)) return;
             if (auto* a = dynamic_cast<AmbientLight*>(&o)) {
                 ubo.ambient[0] += a->color.r * a->intensity;
                 ubo.ambient[1] += a->color.g * a->intensity;
                 ubo.ambient[2] += a->color.b * a->intensity;
+            } else if (auto* hl = dynamic_cast<HemisphereLight*>(&o)) {
+                // GL parity (Lights.cpp / lights_pars_begin.glsl): irradiance
+                // = mix(ground, sky, 0.5*dot(N,up)+0.5), up = the light's
+                // world position direction (three.js puts a hemi at (0,1,0)
+                // by default). Split as mean + zero-mean remainder: the MEAN
+                // rides ubo.ambient so every isotropic ambient consumer
+                // (fog, clouds, water, particles, probes) sees the energy
+                // through its existing prefix-declared block; the remainder
+                // 0.5*(sky-ground)*dot(N,up) goes into the hemiDelta rows
+                // (per channel, so several hemis fold exactly) and only the
+                // deferred surface shade evaluates it.
+                Vector3 up;
+                hl->getWorldPosition(up);
+                if (up.lengthSq() < 1e-12f) up.set(0.f, 1.f, 0.f);
+                up.normalize();
+                const float upv[3] = {up.x, up.y, up.z};
+                const float sky[3] = {hl->color.r * hl->intensity,
+                                      hl->color.g * hl->intensity,
+                                      hl->color.b * hl->intensity};
+                const float gnd[3] = {hl->groundColor.r * hl->intensity,
+                                      hl->groundColor.g * hl->intensity,
+                                      hl->groundColor.b * hl->intensity};
+                for (int c = 0; c < 3; ++c) {
+                    ubo.ambient[c] += 0.5f * (sky[c] + gnd[c]);
+                    ubo.hemiDeltaR[c] += 0.5f * (sky[0] - gnd[0]) * upv[c];
+                    ubo.hemiDeltaG[c] += 0.5f * (sky[1] - gnd[1]) * upv[c];
+                    ubo.hemiDeltaB[c] += 0.5f * (sky[2] - gnd[2]) * upv[c];
+                }
             } else if (auto* dl = dynamic_cast<DirectionalLight*>(&o)) {
                 if (ubo.dirCount >= kMaxDirLights) return;
                 Vector3 lp, tp;

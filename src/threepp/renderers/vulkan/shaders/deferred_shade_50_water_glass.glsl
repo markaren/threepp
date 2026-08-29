@@ -467,7 +467,7 @@ vec3 shadeWater(vec3 P, vec3 N, vec3 V, MaterialDesc pm, int instIdx,
                 vec3 foamCol = mix(vec3(0.62, 0.68, 0.72), vec3(0.97, 0.99, 1.00), micro);
                 foamCol = mix(foamCol, vec3(0.97, 0.99, 1.00), 0.35 * foamCoverage);// fresh caps brighter
                 const float foamRough= mix(1.0, 0.45, micro);
-                const vec3  foamDiff = sampleEnvLod(N, maxLod) + lights.ambient;
+                const vec3  foamDiff = sampleEnvLod(N, maxLod) + lights.ambient + hemiAmbient(N);
                 const vec3  foamLit  = shadeDiffuseDirect(P, N, V, foamCol, foamRough, 0.0,
                                                           vec3(0.0), doShadows, foamDiff,
                                                           vec3(0.0), 0.0,
@@ -535,7 +535,7 @@ void traceGlassInterior(vec3 origin, vec3 dir, float maxLod, bool doShadows, ino
                 vec3 n = hitN;
                 if (dot(n, -dir) < 0.0) n = -n;
                 const vec3 alb     = hitTex(hm.albedoTexIndex, hm.uvTransform, uv, hm.albedo);
-                const vec3 diffInd = sampleEnvLod(n, maxLod) + lights.ambient;
+                const vec3 diffInd = sampleEnvLod(n, maxLod) + lights.ambient + hemiAmbient(n);
                 over  += overT * a * shadeDiffuseDirect(hitP, n, -dir, alb,
                                                         clamp(hm.roughness, 0.04, 1.0), clamp(hm.metalness, 0.0, 1.0),
                                                         hm.emissive * hm.emissiveIntensity,
