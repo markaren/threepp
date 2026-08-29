@@ -392,6 +392,7 @@ def _expand(verts: wp.array(dtype=wp.vec3),
             field: wp.array3d(dtype=float),
             ntris: int,
             origin: wp.vec3, inv_cell: float, nx: int, ny: int, nz: int,
+            sign: float, grain: float, grain_freq: float,
             out_pos: wp.array(dtype=wp.vec3),
             out_nrm: wp.array(dtype=wp.vec3)):
     # De-index into a triangle soup with a smooth normal per corner from the
@@ -403,6 +404,7 @@ def _expand(verts: wp.array(dtype=wp.vec3),
             out_pos[t * 3 + c] = wp.vec3(0.0, -50.0, 0.0)
             out_nrm[t * 3 + c] = wp.vec3(0.0, 1.0, 0.0)
         return
+    state = wp.uint32(1337)
     for c in range(3):
         p = verts[indices[t * 3 + c]]
         gx = (p[0] - origin[0]) * inv_cell
@@ -417,8 +419,21 @@ def _expand(verts: wp.array(dtype=wp.vec3),
         l = wp.length(g)
         # Density rises inward, so the outward surface normal is -grad.
         n = wp.where(l > 1.0e-9, g * (-1.0 / l), wp.vec3(0.0, 1.0, 0.0))
+        if grain > 0.0:
+            # Micro-relief the blurred density field cannot carry: two octaves
+            # of world-space Perlin bent into the normal. Position-keyed, so it
+            # is stable frame to frame and rides the surface as it flows.
+            q = p * grain_freq
+            q2 = p * (grain_freq * 2.6)
+            nse = wp.vec3(wp.noise(state, q)
+                          + 0.5 * wp.noise(state, q2),
+                          wp.noise(state, q + wp.vec3(19.1, 47.7, 11.3))
+                          + 0.5 * wp.noise(state, q2 + wp.vec3(19.1, 47.7, 11.3)),
+                          wp.noise(state, q + wp.vec3(-7.3, 3.9, 29.2))
+                          + 0.5 * wp.noise(state, q2 + wp.vec3(-7.3, 3.9, 29.2)))
+            n = wp.normalize(n + grain * nse)
         out_pos[t * 3 + c] = p
-        out_nrm[t * 3 + c] = n
+        out_nrm[t * 3 + c] = n * sign
 
 
 class DensitySurface:
@@ -473,13 +488,32 @@ class DensitySurface:
         self.mc.surface(self.field, iso)
         return self.mc.indices.shape[0] // 3
 
-    def expand(self, ntris, out_pos, out_nrm, dim=None):
+    def expand(self, ntris, out_pos, out_nrm, dim=None, sign=1.0,
+               grain=0.0, grain_freq=30.0):
         """De-index `ntris` triangles into out_pos/out_nrm. `dim` overrides the
-        launch size to also collapse the rows past ntris."""
+        launch size to also collapse the rows past ntris.
+
+        `sign` multiplies the gradient normal. The default ships outward
+        (-grad) normals -- but wp.MarchingCubes winds its triangles the OTHER
+        way, so a Side.Double material's back-face flip (normal *= faceDirection,
+        both GL and Vulkan) turns them inward on every fragment seen from
+        outside, which lights the surface as pure black. A double-sided lit
+        consumer wants sign=-1.0: winding-aligned normals that the rasterizer's
+        flip lands outward.
+
+        `grain` > 0 bends two octaves of world-space Perlin noise into the
+        normal (amplitude `grain`, base feature size ~1/`grain_freq` metres).
+        The blurred density field yields a surface smoother than any granular
+        material really is -- a uniform specular over it reads as moulded
+        plastic; position-keyed micro-relief breaks the highlight up without
+        touching the geometry.
+        """
         nx, ny, nz = self.dims
         wp.launch(_expand, dim=ntris if dim is None else dim, device=self.device,
                   inputs=[self.mc.verts, self.mc.indices, self.field, ntris,
-                          self.origin, self.inv_cell, nx, ny, nz, out_pos, out_nrm])
+                          self.origin, self.inv_cell, nx, ny, nz, float(sign),
+                          float(grain), float(grain_freq),
+                          out_pos, out_nrm])
 
 
 def pbf_constants(d, h, mass, s_corr_dq, s_corr_n):
