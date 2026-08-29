@@ -19,7 +19,9 @@ kernels. The surface is a height grid; a step is three passes over it:
   distribute  each cell's ejecta is pushed onto its 8 neighbours, skipping any neighbour
               that is itself under a collider. Material cannot be shoved back under the
               boot, so it migrates outward a cell per step and the berm builds where the
-              boot is not.
+              boot is not. A cell ringed in on all 8 sides parks its ejecta in a carry
+              grid until the collider moves and a neighbour opens, so the print floor
+              stays where the sphere cut it instead of being re-buried and re-carved.
   relax       an angle-of-repose relaxation: neighbours steeper than `tan_repose` trade
               height at `flow_rate` per iteration. Sand slumps back to nearly flat, mud
               holds a near-vertical trench wall.
@@ -283,13 +285,17 @@ def _compile():
     @wp.kernel
     def distribute(h: wp.array3d(dtype=float),
                    eject: wp.array3d(dtype=float),
+                   carry: wp.array3d(dtype=float),
                    org: wp.array(dtype=wp.vec2),
                    centers: wp.array3d(dtype=float),
                    radii: wp.array2d(dtype=float),
                    n_c: int, cell: float, z0: float):
-        """Spread each cell's ejecta over the 8-neighbours that are not under a collider."""
+        """Spread each cell's ejecta over the 8-neighbours that are not under a collider.
+
+        `carry` is this step's ejecta plus whatever earlier steps could not place: only
+        this cell's thread touches carry[k, i, j], so it needs no atomics."""
         k, i, j = wp.tid()
-        e = eject[k, i, j]
+        e = eject[k, i, j] + carry[k, i, j]
         if e <= 0.0:
             return
         nx = h.shape[1]
@@ -317,10 +323,15 @@ def _compile():
                 if blocked == 0:
                     n_open += 1
         if n_open == 0:
-            # Ringed in by the collider. Keep it here; the collider moves on next step and
-            # re-ejects it, which is how material migrates out from under a rolling wheel.
-            wp.atomic_add(h, k, i, j, e)
+            # Ringed in by the collider. Park it: stacking it back onto h (v1) meant the
+            # next imprint carved it off again, and at compression=0 that cycle never
+            # decays -- the print floor would churn forever a constant height above the
+            # sphere. Parked material spreads like any other ejecta the moment the
+            # collider moves on and a neighbour opens, which is still how material
+            # migrates out from under a rolling wheel.
+            carry[k, i, j] = e
             return
+        carry[k, i, j] = 0.0
         share = e / float(n_open)
         # Pass 2: deposit. Same test, so the two passes agree on who is open.
         for a in range(-1, 2):
@@ -449,6 +460,9 @@ class DeformableTerrain:
         self.grade = wp.array(np.ascontiguousarray(h0.copy()), dtype=float,
                               device=self._wp_device)
         self.eject = wp.zeros(shape, dtype=float, device=self._wp_device)
+        # Ejecta that had nowhere to go (ringed in by a collider), waiting for a
+        # neighbour to open. Volume in flight: h + carry is what is conserved.
+        self.carry = wp.zeros(shape, dtype=float, device=self._wp_device)
         self._pong = wp.zeros(shape, dtype=float, device=self._wp_device)
         self._h_torch = wp.to_torch(self.h)
         self._grade_torch = wp.to_torch(self.grade)
@@ -490,6 +504,7 @@ class DeformableTerrain:
         v = 0.0 if init_height is None else float(init_height)
         self._h_torch.fill_(v)
         self._grade_torch.fill_(v)
+        self.carry.zero_()
         self.slip_j.zero_()
         self.contact_area.zero_()
 
@@ -537,7 +552,7 @@ class DeformableTerrain:
                           m.cohesion, m.tan_phi, m.janosi_K,
                           m.suction, m.suction_cap, m.grade_rate])
         wp.launch(self._distribute, dim=dim, device=self._wp_device,
-                  inputs=[self.h, self.eject, self._org, self._wc, self._wr,
+                  inputs=[self.h, self.eject, self.carry, self._org, self._wc, self._wr,
                           C, self.cell, self.z0])
         # [K, c_max] and not [K, C]: a fixed launch dim, and the colliders the caller did
         # not pass have zero contact area, so their stance is correctly forgotten.
@@ -811,6 +826,22 @@ if __name__ == "__main__":
           f"{limit:.1f} N over {area * 1.0e4:.1f} cm2")
     assert abs(fx_late / limit - 1.0) < 0.10, f"traction did not saturate: {fx_late} vs {limit}"
     assert fx_early < 0.5 * fx_late, f"traction stepped instead of building: {fx_early}"
+
+    # 7. the print floor is where the sphere cut it: ringed-in ejecta is parked in the
+    #    carry grid, not stacked back under the collider for the next imprint to carve
+    #    off again. Clay is the worst case -- at compression=0 the old cycle never
+    #    decayed and the floor churned forever a constant height above the sphere.
+    still = DeformableTerrain(org1, CELL, (NX, NY), K=1, material="clay", device=dev)
+    for _ in range(10):
+        still.deform(pc, pr)
+    floor = float(still.h_torch.min())
+    parked = float(still.carry.numpy().sum())
+    vol = float(still.h_torch.sum()) + parked
+    print(f"  7. parked ejecta: floor {floor * 1000:+.2f} mm vs sphere bottom "
+          f"{-SINK * 1000:.0f} mm after 10 holds, {parked * 1000:.1f} mm of column parked, "
+          f"h+carry off by {vol * 1000:+.3f} mm")
+    assert abs(floor + SINK) < 5.0e-4, f"floor {floor} did not settle on the sphere at {-SINK}"
+    assert abs(vol) < 1.0e-3, f"parking leaked volume: {vol}"
 
     # Diagnostics, not gates: suction on withdrawal, and the frozen/relaxing grade.
     lv = torch.zeros(1, 1, 3, device=dev)
