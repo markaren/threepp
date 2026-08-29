@@ -130,7 +130,12 @@ class SpotStepsEnv(VecTask):
     settle_steps = 20                # settle to a clean stand (default targets) after a full reset
     clip_actions = None              # the policy emits ~[-8,8]; do NOT clamp
 
-    def __init__(self, num_envs=1024, device="cuda", seed=0, flat_only=False):
+    def __init__(self, num_envs=1024, device="cuda", seed=0, flat_only=False,
+                 height_source="analytic"):
+        if height_source not in ("analytic", "raycast"):
+            raise ValueError(f"height_source must be 'analytic' or 'raycast', got {height_source!r}")
+        self.height_source = height_source
+        self.rays = None                       # set below when height_source == "raycast"
         rng = np.random.default_rng(seed)
         is_stairs_np = np.ones(num_envs, bool) if not flat_only else np.zeros(num_envs, bool)
         if not flat_only:
@@ -141,11 +146,26 @@ class SpotStepsEnv(VecTask):
             def __init__(self_, world, i):
                 self_.art, _ = build_spot(world, assets=None, base_xy=(0.0, i * SPACING),
                                           gains=STIFF_GAINS)
+        # Under "raycast" the builders write into a CollectedWorld, which forwards every call
+        # to the real world and keeps the Mesh it was handed — so the BVH is built from the
+        # boxes PhysX actually got, not from a second description of them.
+        collector = []
+
+        def _build(world):
+            if height_source == "raycast":
+                from threepp.rl.raycast import CollectedWorld
+                world = CollectedWorld(world)
+                collector.append(world)
+            _flat_ground(world, num_envs, SPACING)
+            _add_steps(world, num_envs, SPACING, is_stairs_np, risers_np)
+
         super().__init__(num_envs, lambda world, i: _SpotStepsRobot(world, i),
                          gravity=(0.0, 0.0, -9.81), spacing=SPACING, device=device, seed=seed,
-                         read_root=True,
-                         build_world=lambda world: (_flat_ground(world, num_envs, SPACING),
-                                                    _add_steps(world, num_envs, SPACING, is_stairs_np, risers_np)))
+                         read_root=True, build_world=_build)
+        if height_source == "raycast":
+            from threepp.rl.raycast import TerrainRays
+            self.rays = TerrainRays.from_objects(collector[0].meshes, device=self.device, up="z")
+            collector[0].meshes.clear()      # the BVH owns the triangles now; drop the threepp objects
         dev = self.device
         self.default_q = torch.from_numpy(default_q).to(dev)
         self.i2a = torch.from_numpy(isaac_to_add.astype(np.int64)).to(dev)
@@ -179,8 +199,14 @@ class SpotStepsEnv(VecTask):
         self.last_clear = 0.0
 
     def _terrain_h(self, x, y):
-        """Tent height at (x,y): pick the band from x, evaluate that band's tent, gate to stair lanes
-        + lane width. x,y [K] or [K,P]."""
+        """Ground height at (x,y). x,y [K] or [K,P].
+
+        Under height_source="raycast" this is a ray straight down into the BVH over the boxes the
+        world was actually built from, and none of the formula below runs. The analytic branch picks
+        the band from x, evaluates that band's tent, and gates to stair lanes + lane width — it only
+        answers correctly for terrain this env authored, which is the constraint the raycast lifts."""
+        if self.rays is not None:
+            return self.rays.heights(x, y)
         lane = self.lane_y if x.dim() == 1 else self.lane_y[:, None]
         stairs = self.is_stairs.float() if x.dim() == 1 else self.is_stairs.float()[:, None]
         band = torch.clamp(torch.floor(x / BAND_LEN).long(), 0, N_LEVELS - 1)
@@ -221,6 +247,8 @@ class SpotStepsEnv(VecTask):
         fdx = torch.tensor(FOOT_DX, device=dev); fdy = torch.tensor(FOOT_DY, device=dev)
         fx = sx[:, None] + fdx[None, :]                                   # [n,4]
         fy = self.lane_y[idx][:, None] + fdy[None, :]                     # [n,4] world-y
+        if self.rays is not None:
+            return self.rays.heights(fx, fy).max(dim=1).values
         # evaluate terrain at the foot points for these specific lanes (per-row band + riser + gate)
         lane = self.lane_y[idx][:, None]
         stairs = self.is_stairs[idx].float()[:, None]
@@ -372,11 +400,13 @@ if __name__ == "__main__":
     if not tp.HAS_PHYSX or not torch.cuda.is_available():
         print("need PhysX + CUDA"); sys.exit(0)
     K = int(os.environ.get("K", "64"))
-    env = SpotStepsEnv(num_envs=K)
+    src = os.environ.get("HEIGHT_SOURCE", "analytic")     # HEIGHT_SOURCE=raycast -> Warp BVH scan
+    env = SpotStepsEnv(num_envs=K, height_source=src)
     obs = env.reset()
     assert obs.shape == (K, 96), f"expected obs (K,96), got {tuple(obs.shape)}"
     print(f"obs {tuple(obs.shape)} (OBS_DIM={OBS_DIM}=96) finite={bool(torch.isfinite(obs).all())}  "
-          f"levels={N_LEVELS} risers={RISERS}")
+          f"levels={N_LEVELS} risers={RISERS}  height_source={src}"
+          + (f" {env.rays}" if env.rays is not None else ""))
     for _ in range(200):
         obs, rew, done, term, to = env.step(torch.zeros(K, ACT_DIM, device=env.device))
         assert torch.isfinite(obs).all() and torch.isfinite(rew).all()

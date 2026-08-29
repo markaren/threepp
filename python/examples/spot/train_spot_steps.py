@@ -84,13 +84,20 @@ def stochastic_flat_baseline(env, ac, norm, steps=240, warm=80):
 
 
 @torch.no_grad()
-def score_checkpoint(policy_path, k=512, device="cuda", steps=900, warm=200):
+def score_checkpoint(policy_path, k=512, device="cuda", steps=900, warm=200, height_source=None):
     """Deterministic track/flat/fell + the curriculum LEVEL it climbs to (how tall a riser it handles).
-    The env starts every stair env at level 0 and promotes as the policy clears tents."""
+    The env starts every stair env at level 0 and promotes as the policy clears tents.
+
+    The height source comes from the checkpoint's own meta, so a policy trained on the raycast scan
+    is scored against the raycast scan — scoring it against the other one measures the mismatch."""
     if not tp.HAS_PHYSX or not torch.cuda.is_available():
         print("need PhysX + CUDA"); return None
-    env = SpotStepsEnv(num_envs=k, device=device)
-    ac, norm, _ = load_policy(policy_path, device=device)
+    ac, norm, meta = load_policy(policy_path, device=device)
+    trained_on = meta.get("height_source", "analytic")
+    src = height_source or trained_on
+    print(f"scoring against the {src} height source"
+          + ("" if src == trained_on else f"  (MISMATCH: trained on {trained_on})"))
+    env = SpotStepsEnv(num_envs=k, device=device, height_source=src)
     pol = (lambda o: ac.act_mean(norm.norm(o))) if norm is not None else ac.act_mean
     obs = env.reset()
     trk, flt, fl = [], [], []
@@ -112,8 +119,9 @@ def eval_flat_steering(policy_path, k=512, device="cuda"):
     """Held-out steering regression on FLAT ground vs the scratch base gait (the real steering test)."""
     if not tp.HAS_PHYSX or not torch.cuda.is_available():
         print("need PhysX + CUDA"); return
-    env = SpotStepsEnv(num_envs=k, device=device, flat_only=True)
-    ac, norm, _ = load_policy(policy_path, device=device)
+    ac, norm, meta = load_policy(policy_path, device=device)
+    env = SpotStepsEnv(num_envs=k, device=device, flat_only=True,
+                       height_source=meta.get("height_source", "analytic"))
     pol = (lambda o: ac.act_mean(norm.norm(o))) if norm is not None else ac.act_mean
     # Base gait teacher (50-d, norm-aware): compare against it so steering regression is defined
     # relative to the actual STARTING point of this fine-tune (not the old Isaac TorchScript).
@@ -145,20 +153,35 @@ def main():
                     help="50-d clock base gait (.pt) to expand into 96-d; default = scratch_flat_best.pt")
     ap.add_argument("--fell_max", type=float, default=0.006)
     ap.add_argument("--sym_coef", type=float, default=1.0)   # left-right symmetry augmentation (kills the veer)
+    ap.add_argument("--height-source", dest="height_source", choices=("analytic", "raycast"),
+                    default="analytic",
+                    help="where the terrain height (h_here + the 45-cell scan) comes from. "
+                         "analytic = the closed-form tent formula; raycast = a ray into a Warp BVH "
+                         "over the boxes actually added to the world (threepp.rl.raycast). The two "
+                         "agree exactly inside a lane; the raycast also sees the neighbour's tent. "
+                         "It is recorded in the checkpoint meta, so --score/--eval follow it.")
     ap.add_argument("--eval", default="")
     ap.add_argument("--score", default="")
+    ap.add_argument("--score-source", dest="score_source", choices=("analytic", "raycast"), default="",
+                    help="score against this height source instead of the one the checkpoint was "
+                         "trained on — the deliberate mismatch experiment (how much does the "
+                         "difference between the two oracles cost a trained policy?)")
     args = ap.parse_args()
     if not tp.HAS_PHYSX or not torch.cuda.is_available():
         print("need PhysX + CUDA"); sys.exit(0)
     if args.score:
-        score_checkpoint(args.score); return
+        score_checkpoint(args.score, height_source=args.score_source or None); return
     if args.eval:
         eval_flat_steering(args.eval); return
 
-    env = SpotStepsEnv(num_envs=args.envs, device="cuda")
+    env = SpotStepsEnv(num_envs=args.envs, device="cuda", height_source=args.height_source)
+    if args.height_source == "raycast":
+        print(f"terrain height by raycast: {env.rays}")
     aux = make_aux_loss(args.sym_coef) if args.sym_coef > 0 else None
-    ppo = PPO(env, ACT_DIM, hidden=HIDDEN, lr=args.lr, horizon=args.horizon,
-              log_std_init=-1.5, entropy=0.0, normalize_obs=True, meta=CONFIG, aux_loss=aux)
+    # height_source rides in the meta so --score and --eval rebuild the env the way it was trained.
+    ppo = PPO(env, ACT_DIM, hidden=HIDDEN, lr=args.lr, horizon=args.horizon, log_std_init=-1.5,
+              entropy=0.0, normalize_obs=True,
+              meta={**CONFIG, "height_source": args.height_source}, aux_loss=aux)
     if aux is not None:
         print(f"symmetry augmentation ON (coef {args.sym_coef})")
     if args.warmstart and os.path.exists(args.warmstart):

@@ -32,8 +32,10 @@ def score_checkpoint(policy_path, k=512, amp_max=HF_AMP_MAX, device="cuda", step
     """Deterministic track / flat / fell of a checkpoint on the heightfield (pick a deploy/ramp source)."""
     if not tp.HAS_PHYSX or not torch.cuda.is_available():
         print("need PhysX + CUDA"); return None
-    env = SpotHeightfieldEnv(num_envs=k, device=device, amp_max=amp_max)
-    ac, norm, _ = load_policy(policy_path, device=device)
+    ac, norm, meta = load_policy(policy_path, device=device)
+    src = meta.get("height_source", "analytic")
+    print(f"scoring against the {src} height source")
+    env = SpotHeightfieldEnv(num_envs=k, device=device, amp_max=amp_max, height_source=src)
     pol = (lambda o: ac.act_mean(norm.norm(o))) if norm is not None else ac.act_mean
     obs = env.reset()
     trk, flt, fl = [], [], []
@@ -52,8 +54,9 @@ def eval_flat_steering(policy_path, k=512, device="cuda"):
     """Held-out steering regression on FLAT ground vs the scratch base gait (PASS = within ~1.10x)."""
     if not tp.HAS_PHYSX or not torch.cuda.is_available():
         print("need PhysX + CUDA"); return
-    env = SpotHeightfieldEnv(num_envs=k, device=device, flat_only=True)
-    ac, norm, _ = load_policy(policy_path, device=device)
+    ac, norm, meta = load_policy(policy_path, device=device)
+    env = SpotHeightfieldEnv(num_envs=k, device=device, flat_only=True,
+                             height_source=meta.get("height_source", "analytic"))
     pol = (lambda o: ac.act_mean(norm.norm(o))) if norm is not None else ac.act_mean
     # Compare vs the base gait (50-d, norm-aware) — same starting point as the fine-tune.
     base_path = os.path.join(_HERE, "scratch_distillation", "scratch_flat_best.pt")
@@ -85,6 +88,13 @@ def main():
                     help="continue from a previous .pt (e.g. spot_terrain.pt or a prior spot_hf.pt) instead of scratch_flat")
     ap.add_argument("--fell_max", type=float, default=0.005)
     ap.add_argument("--sym_coef", type=float, default=1.0)   # left-right symmetry augmentation weight (0 = off)
+    ap.add_argument("--height-source", dest="height_source", choices=("analytic", "raycast"),
+                    default="analytic",
+                    help="where the terrain height (h_here + the 45-cell scan) comes from. analytic = "
+                         "amp * bilinear(grid); raycast = a ray into a Warp BVH over the triangle soup "
+                         "PhysX actually cooked (threepp.rl.raycast) — the surface the feet stand on, "
+                         "which the bilinear field approximates to about a centimetre. Recorded in the "
+                         "checkpoint meta, so --score/--eval follow it.")
     ap.add_argument("--eval", default="")
     ap.add_argument("--score", default="")
     args = ap.parse_args()
@@ -95,10 +105,15 @@ def main():
     if args.eval:
         eval_flat_steering(args.eval); return
 
-    env = SpotHeightfieldEnv(num_envs=args.envs, device="cuda", amp_max=args.amp_max)
+    env = SpotHeightfieldEnv(num_envs=args.envs, device="cuda", amp_max=args.amp_max,
+                             height_source=args.height_source)
+    if args.height_source == "raycast":
+        print(f"terrain height by raycast: {env.rays}")
     aux = make_aux_loss(args.sym_coef) if args.sym_coef > 0 else None
-    ppo = PPO(env, ACT_DIM, hidden=HIDDEN, lr=args.lr, horizon=args.horizon,
-              log_std_init=-1.5, entropy=0.0, normalize_obs=True, meta=CONFIG, aux_loss=aux)
+    # height_source rides in the meta so --score and --eval rebuild the env the way it was trained.
+    ppo = PPO(env, ACT_DIM, hidden=HIDDEN, lr=args.lr, horizon=args.horizon, log_std_init=-1.5,
+              entropy=0.0, normalize_obs=True,
+              meta={**CONFIG, "height_source": args.height_source}, aux_loss=aux)
     if aux is not None:
         print(f"symmetry augmentation ON (coef {args.sym_coef})")
     if args.warmstart:                                        # continue from a prior 96-d normalized .pt

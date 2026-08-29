@@ -212,6 +212,47 @@ It exposes the batched state as tensors (`root_position`, `root_quat`, `root_lin
 `set_joint_state`, `make_root_pose`). Your `_obs()` is then just torch ops over those tensors. See
 `sim.py` and `examples/spot/spot_terrain_env.py` for a full worked example.
 
+### Terrain height without a formula (`raycast.py`)
+
+A legged env asks "how high is the ground here?" every control step — for the height scan in the
+observation, for the drop-settle spawn, for the fell-over test. Answering that in torch means the
+terrain has to be something you can write in closed form: a tent, a bilinear grid, a plane.
+`threepp.rl.raycast` answers it instead by casting a ray down into a Warp BVH built over the
+world's static triangles, so authored geometry, an imported mesh, or a scene loaded out of the
+editor all work — and the answer comes from the surface the feet actually collide with.
+
+```python
+from threepp.rl.raycast import CollectedWorld, TerrainRays
+
+collector = []
+def build(world):
+    world = CollectedWorld(world)        # forwards every call, keeps each Mesh it is handed
+    collector.append(world)
+    add_my_terrain(world)                # unchanged builder code
+
+super().__init__(K, build_robot, build_world=build, ...)
+self.rays = TerrainRays.from_objects(collector[0].meshes, device=self.device, up="z")
+
+h = self.rays.heights(px, py)            # [K, N] ground height, same shape as its inputs
+```
+
+It is not a cost you absorb — it is *one* kernel where the formula was thirty small torch ops, so
+it comes out ahead. Measured on the stairs env at K=2048 (RTX 4070, 616 044 triangles, the 45-cell
+scan, interleaved A/B):
+
+| | raycast | analytic formula |
+|---|---|---|
+| the scan | **0.102 ms** (906 M rays/s) | 0.841 ms |
+| the whole `env.step` | **38.3 ms** | 42.0 ms |
+
+Warp shares torch's CUDA primary context — the same one `GpuSim` hands PhysX — so the query reads
+the sim's state tensors and writes its answer with no copy and no context switch. Warp is imported
+lazily on the first `TerrainRays`, so `import threepp.rl` still works without it.
+
+`examples/spot/spot_scan_ab.py` is the acceptance test: it runs both arms through the env's own
+`_terrain_h` and reports agreement and cost. Where a formula is exact — the stairs env inside a
+lane — the two match to 0.000000 m over 436 730 probes.
+
 ---
 
 ## Training

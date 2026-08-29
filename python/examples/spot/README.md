@@ -85,8 +85,10 @@ The deployed gait is essentially unchanged from the oracle, and survives several
 python scratch_distillation/train_scratch.py --envs 4096 --iters 4000   # -> scratch_flat_best.pt (50-d, stiff gains 90)
 python spot_deploy.py                                                    # drive that base gait on flat ground
 
-# selftest any terrain env (finiteness + a stable stand)
+# selftest any terrain env (finiteness + a stable stand); HEIGHT_SOURCE=raycast for the BVH scan
 K=64 python spot_steps_env.py
+K=64 HEIGHT_SOURCE=raycast python spot_steps_env.py
+python spot_scan_ab.py --env steps --envs 2048       # A/B the two height sources (see below)
 
 # watch the generalist drive (hot-reloads spot_steps.pt; arrows/numpad steer, R resets)
 python play_spot_steps.py --level 3     # spawn at the 0.13 m riser band
@@ -112,6 +114,12 @@ Checkpoints (`*.pt`) are git-ignored — regenerate by training, or keep your ow
 - **Privileged terrain scan in training, perception at deploy** — training uses the exact analytic
   45-cell height grid (privileged, like IsaacLab's height scanner); the viewers estimate that same grid
   from an onboard depth camera + elevation map (see "Seeing the terrain"). One obs contract, two sources.
+- **Or read the terrain by raycast** — `SpotStepsEnv(..., height_source="raycast")` and the same on
+  `SpotHeightfieldEnv` answer the height query with a ray into a Warp BVH over the geometry the world
+  was actually built from (`threepp.rl.raycast`), instead of the closed-form formula. It is one kernel
+  where the formula is thirty torch ops, so it is **8x faster** and takes the whole `env.step` from
+  42.0 to 38.3 ms at K=2048. Off by default: it changes the observation slightly (see below), and no
+  shipped checkpoint was trained on it.
 - **Drop-settle spawns** — the robot is placed referenced to the highest terrain under its footprint so a
   foot never spawns inside the terrain (no depenetration jolt).
 - **CPU deploy / sim-to-sim** — viewers default to `tgs_pcm`/0.005 to match the GpuSim training contact
@@ -121,3 +129,48 @@ Checkpoints (`*.pt`) are git-ignored — regenerate by training, or keep your ow
 
 The PPO has a general `aux_loss` hook (used here for symmetry augmentation; also reusable for a
 behavioral-cloning / KL anchor to the teacher).
+
+## What the raycast scan says about the analytic one
+
+`spot_scan_ab.py` runs both height sources through the env's own `_terrain_h` and compares them.
+Where the formula is exact the raycast reproduces it exactly; where they part, the formula is the
+one that is wrong, because the raycast reads the collider.
+
+```bash
+python spot_scan_ab.py --env steps --envs 2048        # agreement + interleaved cost
+python spot_scan_ab.py --env heightfield --envs 1024
+```
+
+**Stairs, K=2048** — 436 730 probes inside a lane: **max 0.000000 m, mean 4.3e-8, zero over 1 mm.**
+The tent formula and the boxes are the same surface. Two places they differ:
+
+- *Past the lane edge.* The tent boxes are a **full lane wide and tile with no gap**, so at
+  `|dy| > HALF_W_STEPS` the neighbour's tread is really there — up to 0.60 m of it. The formula
+  gates every query to the robot's own lane and reports flat ground. Over 150 steps of driving
+  `spot_steps.pt`, 1.3% of the 13.8 M observed scan cells reach out there, and the policy is told
+  the ground is level exactly when it is drifting toward a staircase it could trip on.
+- *Tread seams.* Adjacent tread boxes share a face; a ray at the seam takes the upper box and the
+  formula's `floor()` takes the lower. The window is **under a micrometre wide** — 4 cells in 13.8 M
+  — and the disagreement is exactly one riser.
+
+**Heightfield, K=1024** — the formula is `amp * bilinear(grid)` but the collider is the
+*triangulation* of that same grid. Two different surfaces: inside the lane they differ by up to
+**9.8 mm** (mean 0.25 mm), on 7% of probes, against a terrain amplitude of 0.18 m. The feet stand on
+the triangles.
+
+Neither of these makes the shipped policy wrong — it was trained against the analytic obs and is
+consistent with it. They are the reason the raycast is the better source to train the *next* one on,
+and the reason the scan no longer has to be a formula at all.
+
+**Does the difference cost anything?** `--score-source` scores a checkpoint against the *other*
+oracle, which is the mismatch experiment. `spot_steps.pt`, trained entirely on the analytic scan:
+
+```bash
+python train_spot_steps.py --score spot_steps.pt --score-source analytic   # track 1.884  fell 0.0000  level 0.96
+python train_spot_steps.py --score spot_steps.pt --score-source raycast    # track 1.865  fell 0.0000  level 0.96
+```
+
+−1.0% tracking, no extra falls, the same curriculum level. So the swap is safe on an existing
+policy — you get the faster scan and the formula-free terrain without invalidating the checkpoint.
+Both trainers take `--height-source raycast`, and the choice is written into the checkpoint meta so
+`--score` / `--eval` rebuild the env the way it was trained.

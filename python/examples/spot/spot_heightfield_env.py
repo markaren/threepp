@@ -129,7 +129,12 @@ class SpotHeightfieldEnv(VecTask):
     settle_steps = 20                # settle to a clean stand (default targets) after a full reset
     clip_actions = None              # the policy emits ~[-8,8]; do NOT clamp
 
-    def __init__(self, num_envs=1024, device="cuda", seed=0, amp_max=HF_AMP_MAX, flat_only=False):
+    def __init__(self, num_envs=1024, device="cuda", seed=0, amp_max=HF_AMP_MAX, flat_only=False,
+                 height_source="analytic"):
+        if height_source not in ("analytic", "raycast"):
+            raise ValueError(f"height_source must be 'analytic' or 'raycast', got {height_source!r}")
+        self.height_source = height_source
+        self.rays = None                       # set below when height_source == "raycast"
         rng = np.random.default_rng(seed)
         H_np, xs_np, ys_np = make_hf_grids(seed=seed)
         amps = np.linspace(HF_AMP_MIN, (0.0 if flat_only else amp_max), num_envs).astype(np.float32)
@@ -141,12 +146,27 @@ class SpotHeightfieldEnv(VecTask):
         class _StiffSpot:
             def __init__(self_, world, i):
                 self_.art, _ = build_spot(world, assets=None, base_xy=(0.0, i * SPACING), gains=STIFF_GAINS)
+        # Under "raycast" the builders write into a CollectedWorld, which forwards every call to
+        # the real world and keeps the Mesh it was handed — so the BVH is built from the very
+        # triangle soup PhysX cooked, and the scan reads the surface the feet collide with rather
+        # than the bilinear field the grid only approximates.
+        collector = []
+
+        def _build(world):
+            if height_source == "raycast":
+                from threepp.rl.raycast import CollectedWorld
+                world = CollectedWorld(world)
+                collector.append(world)
+            _flat_ground(world, num_envs, SPACING)
+            _add_heightfield(world, num_envs, SPACING, shape_idx, amps, geoms)
+
         super().__init__(num_envs, lambda world, i: _StiffSpot(world, i),
                          gravity=(0.0, 0.0, -9.81), spacing=SPACING, device=device, seed=seed,
-                         read_root=True,
-                         build_world=lambda world: (_flat_ground(world, num_envs, SPACING),
-                                                    _add_heightfield(world, num_envs, SPACING,
-                                                                     shape_idx, amps, geoms)))
+                         read_root=True, build_world=_build)
+        if height_source == "raycast":
+            from threepp.rl.raycast import TerrainRays
+            self.rays = TerrainRays.from_objects(collector[0].meshes, device=self.device, up="z")
+            collector[0].meshes.clear()      # the BVH owns the triangles now; drop the threepp objects
         dev = self.device
         self.default_q = torch.from_numpy(default_q).to(dev)
         self.i2a = torch.from_numpy(isaac_to_add.astype(np.int64)).to(dev)
@@ -193,7 +213,14 @@ class SpotHeightfieldEnv(VecTask):
         return (1 - tx) * (1 - ty) * h00 + tx * (1 - ty) * h10 + (1 - tx) * ty * h01 + tx * ty * h11
 
     def _terrain_h(self, x, y):
-        """Exact heightfield height at (x,y): amp * bilinear(grid), gated to the tile footprint."""
+        """Heightfield height at (x,y), gated to the tile footprint.
+
+        Under height_source="raycast" this is a ray into the BVH over the cooked triangle soup.
+        The analytic branch is amp * bilinear(grid) — a different surface from the triangulation
+        the physics actually uses, so the two agree only up to the bilinear-vs-triangle gap
+        (about a centimetre at full amplitude), and it is the raycast that matches the feet."""
+        if self.rays is not None:
+            return self.rays.heights(x, y)
         lane = self.lane_y if x.dim() == 1 else self.lane_y[:, None]
         amp = self.amp if x.dim() == 1 else self.amp[:, None]
         y_local = y - lane
@@ -240,7 +267,9 @@ class SpotHeightfieldEnv(VecTask):
         self._resample_cmd(idx)
 
     def _sample(self, idx, x, y_local):
-        """Bilinear terrain height at (x, y_local) for the subset `idx`. x, y_local are [n,P]."""
+        """Terrain height at (x, y_local) for the subset `idx`. x, y_local are [n,P]."""
+        if self.rays is not None:
+            return self.rays.heights(x, y_local + self.lane_y[idx][:, None])
         fx = ((x - HF_X0) / (HF_X1 - HF_X0) * (HF_NX - 1)).clamp(0.0, HF_NX - 1.0001)
         fy = ((y_local + HALF_W) / (2.0 * HALF_W) * (HF_NY - 1)).clamp(0.0, HF_NY - 1.0001)
         ix = fx.long(); iy = fy.long(); tx = fx - ix; ty = fy - iy
@@ -361,11 +390,13 @@ if __name__ == "__main__":
     if not tp.HAS_PHYSX or not torch.cuda.is_available():
         print("need PhysX + CUDA"); sys.exit(0)
     K = int(os.environ.get("K", "64"))
-    env = SpotHeightfieldEnv(num_envs=K)
+    src = os.environ.get("HEIGHT_SOURCE", "analytic")     # HEIGHT_SOURCE=raycast -> Warp BVH scan
+    env = SpotHeightfieldEnv(num_envs=K, height_source=src)
     obs = env.reset()
     assert obs.shape == (K, 96), f"expected obs (K,96), got {tuple(obs.shape)}"
     print(f"obs {tuple(obs.shape)} (OBS_DIM={OBS_DIM}=96) finite={bool(torch.isfinite(obs).all())}  "
-          f"shapes={NUM_SHAPES} amp_max={HF_AMP_MAX}")
+          f"shapes={NUM_SHAPES} amp_max={HF_AMP_MAX}  height_source={src}"
+          + (f" {env.rays}" if env.rays is not None else ""))
     for _ in range(200):
         obs, rew, done, term, to = env.step(torch.zeros(K, ACT_DIM, device=env.device))
         assert torch.isfinite(obs).all() and torch.isfinite(rew).all()
