@@ -8,8 +8,8 @@
 // Scope: rigid bodies — dynamic / static colliders from Box/Sphere/Capsule
 // meshes, convex hulls, static triangle meshes (and whole subtrees), instanced
 // bodies — plus a fixed-timestep step() that drives the bound visuals. Soft
-// bodies and PxVehicle2 (which need the CUDA/GPU path) are intentionally left
-// out of this first cut.
+// bodies (CUDA path) came later; so did the PxVehicle2 direct-drive vehicle at
+// the bottom of the file.
 //
 // Pointer-safety note: PhysxWorld::add(Mesh&) is given the *concrete* Mesh& by
 // pybind (safe — the virtual Object3D base is never crossed here). The up-cast
@@ -29,6 +29,7 @@
 #include "threepp/extras/physx/Joint.hpp"
 #include "threepp/extras/physx/PhysxGpuBatch.hpp"
 #include "threepp/extras/physx/PhysxSoftBody.hpp"
+#include "threepp/extras/physx/PhysxVehicle.hpp"
 #include "threepp/extras/physx/PhysxWorld.hpp"
 #include "threepp/extras/physx/UrdfArticulation.hpp"
 #include "threepp/extras/sensors/Imu.hpp"
@@ -74,6 +75,17 @@ public:
 private:
     ::physx::PxMaterial* mat_;
 };
+
+// Wheel index guard for the PhysxVehicle readouts. The C++ getters index a
+// std::array<..., 4> with no bounds check, so an out-of-range index from Python
+// would read past it instead of raising — check here, at the boundary.
+inline int wheelIndex(int i) {
+    if (i < 0 || i > 3) {
+        throw std::out_of_range(
+                "wheel index must be 0..3 (0=front-right, 1=front-left, 2=rear-right, 3=rear-left)");
+    }
+    return i;
+}
 
 // "average"|"min"|"multiply"|"max" -> PxCombineMode (how two contacting materials' coefficients mix).
 inline ::physx::PxCombineMode::Enum combineModeFromString(const std::string& s) {
@@ -984,6 +996,186 @@ namespace threepp_py {
                          return reshape(b.readHost(Read::eLINK_LINEAR_VELOCITY), b.count(), b.maxLinks() * 3); })
                 .def("read_link_angvel_host", [reshape](threepp::PhysxGpuBatch& b) {
                          return reshape(b.readHost(Read::eLINK_ANGULAR_VELOCITY), b.count(), b.maxLinks() * 3); });
+
+        // ---- PxVehicle2 direct-drive vehicle ----
+        //
+        // The C++ PhysxVehicle, unchanged: PhysX owns the suspension, the tire
+        // model, the sticky tires, the substepping and the load transfer. The
+        // vehicle steps itself from a PhysxWorld substep callback, so the only
+        // thing Python drives is commands in / telemetry out — plus the road
+        // override, which lets a ground model Python owns (deformable terrain,
+        // a terramechanics soil model) stand in for the scene query under a wheel.
+        //
+        // Constructor defaults are the Range Rover Evoque tuning from the C++
+        // demo (examples/projects/Vehicle/main.cpp): 4WD, sticky tires, direct
+        // drive. They are known-fun; change the dimensions to suit another body
+        // and leave the dynamics alone unless you are ready to re-tune.
+        //
+        // Wheel indices everywhere: 0 = front-right, 1 = front-left,
+        // 2 = rear-right, 3 = rear-left. Frame: +Z forward, +X right, +Y up.
+        py::class_<PhysxVehicle> vehicle(
+                m, "PhysxVehicle",
+                "A drivable 4-wheel vehicle (PxVehicle2 direct drive) in a PhysxWorld. Feed it "
+                "throttle/brake/steer each frame and copy its chassis + wheel poses onto your "
+                "visuals; it advances itself inside world.step(dt). Valid only while its world "
+                "lives. Wheel indices: 0=front-right, 1=front-left, 2=rear-right, 3=rear-left.");
+
+        py::enum_<PhysxVehicle::Gear>(vehicle, "Gear")
+                .value("REVERSE", PhysxVehicle::Gear::Reverse)
+                .value("NEUTRAL", PhysxVehicle::Gear::Neutral)
+                .value("FORWARD", PhysxVehicle::Gear::Forward);
+
+        vehicle.def(py::init([](PhysxWorld& world,
+                                float chassis_width, float chassis_height, float chassis_length,
+                                float chassis_mass, float wheelbase, float track_width,
+                                float wheel_radius, float wheel_half_width, float wheel_mass,
+                                const std::array<bool, 4>& driven_wheels,
+                                float max_throttle_torque, float max_brake_torque, float max_steer_angle,
+                                float tire_friction, float longitudinal_stiffness, float lateral_stiffness,
+                                float suspension_travel, float suspension_stiffness, float suspension_damping,
+                                float suspension_attachment_y, float wheel_damping_rate,
+                                const Vector3& position, const Quaternion& rotation) {
+                        PhysxVehicle::Settings s;
+                        s.chassisWidth = chassis_width;
+                        s.chassisHeight = chassis_height;
+                        s.chassisLength = chassis_length;
+                        s.chassisMass = chassis_mass;
+                        s.wheelbase = wheelbase;
+                        s.trackWidth = track_width;
+                        s.wheelRadius = wheel_radius;
+                        s.wheelHalfWidth = wheel_half_width;
+                        s.wheelMass = wheel_mass;
+                        s.drivenWheels = driven_wheels;
+                        s.maxThrottleTorque = max_throttle_torque;
+                        s.maxBrakeTorque = max_brake_torque;
+                        s.maxSteerAngleRad = max_steer_angle;
+                        s.tireFriction = tire_friction;
+                        s.longitudinalStiffness = longitudinal_stiffness;
+                        s.lateralStiffness = lateral_stiffness;
+                        s.suspensionTravelDist = suspension_travel;
+                        s.suspensionStiffness = suspension_stiffness;
+                        s.suspensionDamping = suspension_damping;
+                        s.suspensionAttachmentY = suspension_attachment_y;
+                        s.wheelDampingRate = wheel_damping_rate;
+                        s.spawnPosition = position;
+                        s.spawnRotation = rotation;
+                        return std::make_unique<PhysxVehicle>(world, s);
+                    }),
+                    py::arg("world"),
+                    py::arg("chassis_width") = 1.95f, py::arg("chassis_height") = 1.4f,
+                    py::arg("chassis_length") = 4.4f, py::arg("chassis_mass") = 1500.f,
+                    py::arg("wheelbase") = 2.66f, py::arg("track_width") = 1.65f,
+                    py::arg("wheel_radius") = 0.4f, py::arg("wheel_half_width") = 0.15f,
+                    py::arg("wheel_mass") = 25.f,
+                    py::arg("driven_wheels") = std::array<bool, 4>{true, true, true, true},
+                    py::arg("max_throttle_torque") = 1500.f, py::arg("max_brake_torque") = 5000.f,
+                    py::arg("max_steer_angle") = 0.6f,
+                    py::arg("tire_friction") = 2.f,
+                    py::arg("longitudinal_stiffness") = 100'000.f, py::arg("lateral_stiffness") = 80'000.f,
+                    py::arg("suspension_travel") = 0.3f, py::arg("suspension_stiffness") = 35'000.f,
+                    py::arg("suspension_damping") = 4500.f, py::arg("suspension_attachment_y") = -0.4f,
+                    py::arg("wheel_damping_rate") = 1.5f,
+                    py::arg("position") = Vector3(0, 1.2f, 0), py::arg("rotation") = Quaternion(),
+                    py::keep_alive<1, 2>(),// the world outlives the vehicle (it steps it)
+                    "Spawn a vehicle in `world`. Defaults are the Range Rover Evoque tuning of the "
+                    "C++ demo: 4WD direct drive, tire_friction 2.0 (dry asphalt). Dimensions are the "
+                    "chassis box PhysX simulates — match them to whatever body you draw on top. "
+                    "driven_wheels selects which wheels take throttle torque, in wheel-index order.")
+                // -- Inputs --
+                .def("set_throttle", &PhysxVehicle::setThrottle, py::arg("value"),
+                     "Throttle, 0..1. Direct drive: torque straight to the driven wheels.")
+                .def("set_brake", &PhysxVehicle::setBrake, py::arg("value"), "Brake, 0..1 (all four wheels).")
+                .def("set_steer", &PhysxVehicle::setSteer, py::arg("value"),
+                     "Steer, -1..1 (front wheels; 1 = max_steer_angle to the right).")
+                .def_property("gear", &PhysxVehicle::gear, &PhysxVehicle::setGear,
+                              "Gear.FORWARD / Gear.NEUTRAL / Gear.REVERSE. Direct drive has no gearbox — "
+                              "this only picks the sign of the drive torque.")
+                .def("respawn",
+                     [](PhysxVehicle& v, const Vector3& position, const Quaternion& rotation) {
+                         auto* actor = v.chassisActor();
+                         actor->setGlobalPose(toPxTransform(position, rotation));
+                         actor->setLinearVelocity(::physx::PxVec3(0.f));
+                         actor->setAngularVelocity(::physx::PxVec3(0.f));
+                         actor->wakeUp();
+                     },
+                     py::arg("position"), py::arg("rotation") = Quaternion(),
+                     "Teleport the chassis and kill its velocities (the wheels keep spinning down "
+                     "on their own). The suspension re-settles over the next few steps.")
+                .def("add_force_at_pos",
+                     [](PhysxVehicle& v, const Vector3& force, const Vector3& world_pos) {
+                         ::physx::PxRigidBodyExt::addForceAtPos(
+                                 *v.chassisActor(), toPxVec3(force), toPxVec3(world_pos),
+                                 ::physx::PxForceMode::eFORCE);
+                     },
+                     py::arg("force"), py::arg("world_pos"),
+                     "Apply a continuous force (N) to the chassis at a world-space point — the way to "
+                     "add something PhysX's vehicle knows nothing about, e.g. the bulldozing drag of a "
+                     "wheel ploughing through soil. Consumed by the next step().")
+                // -- Chassis readouts --
+                .def_property_readonly("position",
+                                       [](const PhysxVehicle& v) { return fromPxVec3(v.chassisPose().p); },
+                                       "Chassis center, world space. Copy onto your visual each frame.")
+                .def_property_readonly("quaternion",
+                                       [](const PhysxVehicle& v) { return fromPxQuat(v.chassisPose().q); })
+                .def_property_readonly("forward_speed", &PhysxVehicle::forwardSpeed,
+                                       "Speed along the chassis forward axis (m/s); negative in reverse.")
+                // -- Per-wheel readouts --
+                .def("wheel_local_pose",
+                     [](const PhysxVehicle& v, int i) {
+                         const auto p = v.wheelLocalPose(wheelIndex(i));
+                         return py::make_tuple(fromPxVec3(p.p), fromPxQuat(p.q));
+                     },
+                     py::arg("wheel"),
+                     "(position, quaternion) of the wheel in CHASSIS space — steer, suspension travel "
+                     "and spin included. Put your wheel visual under the chassis group and assign both.")
+                .def("wheel_angular_speed",
+                     [](const PhysxVehicle& v, int i) { return v.wheelAngularSpeed(wheelIndex(i)); },
+                     py::arg("wheel"), "Wheel spin rate (rad/s).")
+                .def("wheel_rotation_angle",
+                     [](const PhysxVehicle& v, int i) { return v.wheelRotationAngle(wheelIndex(i)); },
+                     py::arg("wheel"), "Wheel spin angle (radians, wrapped to ±2π).")
+                .def("tire_longitudinal_slip",
+                     [](const PhysxVehicle& v, int i) { return v.tireLongitudinalSlip(wheelIndex(i)); },
+                     py::arg("wheel"),
+                     "Longitudinal slip ratio: 0 = pure rolling, +1 = the wheel spinning up under a "
+                     "stationary car, -1 = locked. The wheelspin readout.")
+                .def("tire_lateral_slip",
+                     [](const PhysxVehicle& v, int i) { return v.tireLateralSlip(wheelIndex(i)); },
+                     py::arg("wheel"), "Lateral slip (≈ tan of the slip angle; 0.1 ≈ 6° of drift).")
+                .def("suspension_jounce",
+                     [](const PhysxVehicle& v, int i) { return v.suspensionJounce(wheelIndex(i)); },
+                     py::arg("wheel"),
+                     "Suspension compression (m): 0 = full droop, suspension_travel = bottomed out.")
+                .def("suspension_jounce_speed",
+                     [](const PhysxVehicle& v, int i) { return v.suspensionJounceSpeed(wheelIndex(i)); },
+                     py::arg("wheel"), "Compression rate (m/s) — spikes on landings and curb strikes.")
+                .def("suspension_force",
+                     [](const PhysxVehicle& v, int i) { return v.suspensionForce(wheelIndex(i)); },
+                     py::arg("wheel"),
+                     "Wheel load (N): the magnitude of the suspension force this wheel puts into the "
+                     "chassis. On level ground the four sum to the chassis weight and redistribute "
+                     "under braking/cornering — this is the W a soil model wants for sinkage and grip.")
+                .def("wheel_grounded",
+                     [](const PhysxVehicle& v, int i) { return v.wheelGrounded(wheelIndex(i)); },
+                     py::arg("wheel"), "True while this wheel has ground within suspension reach.")
+                // -- Road override --
+                .def("set_road_override",
+                     [](PhysxVehicle& v, int i, float height, float mu) {
+                         v.setRoadOverride(wheelIndex(i), height, mu);
+                     },
+                     py::arg("wheel"), py::arg("height"), py::arg("mu"),
+                     "Hand this wheel's suspension a road of your own instead of what the PhysX scene "
+                     "query found: a horizontal plane at world y=`height` with friction `mu`. Set it "
+                     "per wheel, per frame, from whatever ground model you own — e.g. terrain grade "
+                     "minus the soil's equilibrium sinkage, so the wheel rides IN the ground by "
+                     "exactly the sinkage the load dictates, with mu from Mohr-Coulomb rather than "
+                     "the tire_friction ceiling. Everything else about the vehicle is untouched.")
+                .def("clear_road_override",
+                     [](PhysxVehicle& v, int i) { v.clearRoadOverride(wheelIndex(i)); },
+                     py::arg("wheel"), "Give this wheel back to the scene query (the rigid fallback).")
+                .def("road_override_active",
+                     [](const PhysxVehicle& v, int i) { return v.roadOverrideActive(wheelIndex(i)); },
+                     py::arg("wheel"));
 
         m.attr("HAS_PHYSX") = true;
     }

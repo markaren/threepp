@@ -197,6 +197,43 @@ namespace threepp {
         void setBrake(float v) { commands_.brakes[0] = std::clamp(v, 0.f, 1.f); }
         void setSteer(float v) { commands_.steer = std::clamp(v, -1.f, 1.f); }
 
+        // -- Road override (an external ground model under one wheel) --
+        //
+        // The wheels normally find ground by raycasting the PhysX scene. A caller
+        // that owns a ground model PhysX knows nothing about — a deformable
+        // terrain, a terramechanics soil model, a heightfield living on the GPU —
+        // can hand the suspension its own road instead: a horizontal plane at
+        // world height `height` carrying friction `mu`. The scene query still
+        // runs every frame (it is the fallback under every wheel that has no
+        // override), and the override is stamped over its result immediately
+        // afterwards, before the suspension or the tire model read it.
+        //
+        // `height` is where the wheel's contact patch should sit — e.g. a soil
+        // model's terrain grade minus its equilibrium sinkage, so the wheel rides
+        // *in* the ground by exactly the sinkage the soil dictates. `mu` is the
+        // friction the tire model gets there (2.0 is dry asphalt; wet clay ~0.25),
+        // replacing the material-based friction lookup for that wheel.
+        //
+        // Set it per wheel, per frame; clearRoadOverride() gives the wheel back to
+        // the scene query. Zero heap, no effect at all while no override is set.
+        void setRoadOverride(int wheel, float height, float mu) {
+            checkWheelIndex(wheel);
+            auto& o = roadOverrides_[static_cast<std::size_t>(wheel)];
+            o.active = true;
+            o.height = height;
+            o.friction = mu;
+        }
+
+        void clearRoadOverride(int wheel) {
+            checkWheelIndex(wheel);
+            roadOverrides_[static_cast<std::size_t>(wheel)].active = false;
+        }
+
+        bool roadOverrideActive(int wheel) const {
+            checkWheelIndex(wheel);
+            return roadOverrides_[static_cast<std::size_t>(wheel)].active;
+        }
+
         // -- Readouts --
 
         ::physx::PxRigidDynamic* chassisActor() const { return chassisActor_; }
@@ -240,6 +277,15 @@ namespace threepp {
         // useful for impact effects (audio thuds, camera shake).
         float suspensionJounceSpeed(int i) const {
             return suspensionStates_[i].jounceSpeed;
+        }
+
+        // Magnitude of the suspension force this wheel puts into the chassis (N) —
+        // the wheel load. On level ground the four sum to the chassis weight, and
+        // they redistribute under braking/cornering exactly as load transfer says.
+        // This is the W an external ground model wants: sinkage, bearing capacity
+        // and Mohr-Coulomb friction are all functions of the load the wheel carries.
+        float suspensionForce(int i) const {
+            return suspensionForces_[i].force.magnitude();
         }
 
         // True when the wheel's road query found ground within suspension reach.
@@ -573,6 +619,18 @@ namespace threepp {
             componentSequence_.add(static_cast<PxVehiclePhysXActorBeginComponent*>(this));
             componentSequence_.add(static_cast<PxVehiclePhysXRoadGeometrySceneQueryComponent*>(this));
 
+            // Stamp any active road overrides over what the scene query just wrote,
+            // before suspension/tire/constraints read roadGeometryStates_. It is a
+            // separate one-line component rather than an override of the query
+            // component's update(): this class inherits eight PxVehicleComponents,
+            // every one of which declares the same `update(dt, context)` virtual, so
+            // a single override here would hijack ALL of them — suspension, tire,
+            // wheel, rigid body — not just the road query. Inert (a loop over four
+            // flags, all false) until a caller sets an override. Outside the substep
+            // group with the query it replaces: the plane holds for the whole frame.
+            roadOverrideComponent_.owner = this;
+            componentSequence_.add(&roadOverrideComponent_);
+
             // Sub-step the integration-heavy components (suspension through rigid
             // body). They form the stiff wheel-spin ODE that is unstable at the
             // full timestep — see Settings::subStepCount* docs. The per-step count
@@ -776,7 +834,50 @@ namespace threepp {
             constraints = &physxConstraints_;
         }
 
+        // ---- Road override ----
+
+        void checkWheelIndex(int i) const {
+            if (i < 0 || i > 3) {
+                throw std::out_of_range("wheel index must be 0..3 (0=front-right, 1=front-left, 2=rear-right, 3=rear-left)");
+            }
+        }
+
+        // Overwrite the road under every overridden wheel. Runs once per frame,
+        // right after the scene query — see buildComponentSequence().
+        void applyRoadOverrides() {
+            using namespace ::physx;
+            for (std::size_t i = 0; i < 4; ++i) {
+                const auto& o = roadOverrides_[i];
+                if (!o.active) continue;
+                auto& s = roadGeometryStates_[i];
+                // Horizontal plane through (0, height, 0). Ground models that need
+                // a tilted road can be added here later; terrain slopes under a car
+                // are gentle enough that up is a good normal.
+                s.plane = PxPlane(PxVec3(0.f, o.height, 0.f), PxVec3(0.f, 1.f, 0.f));
+                s.friction = o.friction;
+                s.velocity = PxVec3(0.f);// the ground itself is not moving
+                s.hitState = true;
+            }
+        }
+
         // ---- Internal types ----
+
+        struct RoadOverride {
+            bool active = false;
+            float height = 0.f;
+            float friction = 1.f;
+        };
+
+        // Sequence element that does nothing but call applyRoadOverrides().
+        struct RoadOverrideComponent : public ::physx::vehicle2::PxVehicleComponent {
+            PhysxVehicleBase* owner = nullptr;
+
+            bool update(const ::physx::PxReal,
+                        const ::physx::vehicle2::PxVehicleSimulationContext&) override {
+                owner->applyRoadOverrides();
+                return true;
+            }
+        };
 
         struct ChassisQueryFilter : public ::physx::PxQueryFilterCallback {
             ::physx::PxRigidActor const* ignored = nullptr;
@@ -857,6 +958,8 @@ namespace threepp {
         ::physx::vehicle2::PxVehiclePhysXMaterialFriction materialFriction_{};
         std::array<::physx::vehicle2::PxVehiclePhysXMaterialFrictionParams, 4> perWheelMaterialFriction_{};
         std::array<::physx::vehicle2::PxVehicleRoadGeometryState, 4> roadGeometryStates_{};
+        std::array<RoadOverride, 4> roadOverrides_{};
+        RoadOverrideComponent roadOverrideComponent_{};
 
         ChassisQueryFilter queryFilter_{};
 
