@@ -468,27 +468,22 @@ LANE_GRAIN = {"mud": (1.4, 0.22), "snow": (5.5, 0.13), "clay": (2.4, 0.19)}
 
 
 # A lane is drawn as a row of STRIPS, not one mesh, and the ground is published
-# through the plain attribute path by default. Both are worked around a
-# VulkanRenderer defect rather than chosen:
+# through the plain attribute path by default. The strips are a real choice:
+# the host route republishes only the strips a wheel touched (Strip.publish),
+# and 16 m of lane is the granularity that makes that cheap. `--interop` stays
+# opt-in only because the host route runs everywhere -- the zero-copy path
+# needs an NVIDIA driver on the other end of the export.
 #
-#   * enable_vertex_interop loses the device (vkQueueSubmit2 ->
-#     VK_ERROR_DEVICE_LOST, on the first frame after arming) on any geometry
-#     with more than 65536 vertices. Bisected on this scene: 58,201 vertices
-#     arms and renders, 67,821 arms and kills the device, and the same
-#     96,681-vertex geometry renders fine on the host attribute route. 65536 is
-#     exactly where VulkanCoreGeometry stops packing indices to uint16.
-#   * Even under that ceiling the interop route dies once the SNOW lane has been
-#     driven on -- mud and clay are stable indefinitely at the same 51,681
-#     vertices a strip, and the identical snow drive is fine on the host route.
-#     Not with validate=False, not at antialiasing=1, not with fewer frames.
-#     Root cause not found inside this phase's budget.
+# (Historical note: both routes used to be capped by a VulkanRenderer defect --
+# enable_vertex_interop left the RT-side GeometryDescs pointing at the freed
+# buffers of the record it swaps out at arm time, which read as a >65k-vertex
+# "ceiling" and a device loss once a lane had been driven on. Fixed in
+# VulkanCoreGeometry.cpp (the desc republish in enableVertexInterop); merged
+# 154k-vertex lanes now arm and drive fine, so MAX_INTEROP_VERTS is a strip
+# granularity knob, not a correctness limit.)
 #
-# So `--interop` is opt-in and the default is a host copy of only the strips a
-# wheel touched (Strip.publish). Reported as renderer work, not worked around in
-# C++ -- no renderer changes in this phase. Strips also keep every mesh under
-# the 65536 ceiling for whoever fixes the first bug, share their boundary column
-# so there is no seam, and take their normals from the FULL grid so the shading
-# crosses the joins too.
+# Strips share their boundary column so there is no seam, and take their
+# normals from the FULL grid so the shading crosses the joins too.
 MAX_INTEROP_VERTS = 60_000
 
 
