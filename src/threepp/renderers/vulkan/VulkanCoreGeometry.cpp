@@ -1016,6 +1016,57 @@ VulkanRenderer::Impl::enableVertexInterop(const Mesh& mesh, std::function<void()
                 cIt->second = std::move(fresh);
                 lodChangedThisFrame_ = true;// the effective LOD level just became 0
                 recPtr = cIt->second.get();
+
+                // The swap just freed every buffer the entries-indexed
+                // GeometryDesc mirror names for this geometry, and the ordinary
+                // machinery does NOT republish those slots: the TLAS instance
+                // fill and the indirect DrawInfo build re-read the record, but
+                // geomDescsCached_ is only ever patched per-entry on a LOD
+                // switch — indexAddress alone, and only for a record that HAS
+                // a chain, which this one no longer does. Left stale, every RT
+                // hit on this mesh (shadow/GI/reflection/probe/lidar) fetches
+                // indices and vertices through the freed device addresses.
+                // That reads as last frame's data for as long as the allocator
+                // keeps the old block bytes — and turns into wild indices, a
+                // fetch gigabytes off the heap and VK_ERROR_DEVICE_LOST the
+                // moment the region is recycled (first observed via the per-
+                // frame refit's scratch regrowth under a deforming producer).
+                // Rewrite the slots in place, exactly as the full rebuild
+                // fills them, and stage the change for every frame in flight.
+                const auto lodSel0 = selectLodGeom(*recPtr, 0);
+                for (size_t i = 0; i < lastVisibleEntries_.size(); ++i) {
+                    const MeshEntry& en = lastVisibleEntries_[i];
+                    if (en.isOverlay || !en.mesh) continue;
+                    if (en.mesh->geometry().get() != geomSp.get()) continue;
+                    if (i >= geomDescsCached_.size()) continue;
+                    auto& gd = geomDescsCached_[i];
+                    gd.vertexAddress = recPtr->vertex.address;
+                    gd.normalAddress = recPtr->normal.address;
+                    gd.indexAddress  = lodSel0.indexAddress;
+                    gd.uvAddress     = recPtr->uv.address;
+                    gd.foamAddress   = recPtr->isOceanSurface ? 1ull : 0ull;
+                    // interopWorldStatic is not set on the fresh record yet;
+                    // the caller's flag is what it is about to become.
+                    gd.prevVertexAddress =
+                            (recPtr->prevVertex.handle != VK_NULL_HANDLE &&
+                             stableCorrespondence)
+                                    ? recPtr->prevVertex.address
+                                    : recPtr->vertex.address;
+                    const auto mat = en.mesh->material();
+                    gd.colorAddress = (recPtr->color.handle != VK_NULL_HANDLE &&
+                                       mat && mat->vertexColors)
+                                              ? recPtr->color.address
+                                              : 0ull;
+                    gd.indexed = lodSel0.indexed ? 1u : 0u;
+                    // Preserve bit 0 (moved-sticky); the fresh record is
+                    // unpacked, so the packed bits above it all clear.
+                    gd.flags = (gd.flags & 1u) | (recPtr->packedMask << 1);
+                    markGeomDescsDirty(static_cast<uint32_t>(i));
+                }
+                // The DrawInfo skip signature cannot see this swap either — on
+                // an otherwise-static scene it would keep serving the raster
+                // vertex-pull the freed addresses verbatim.
+                ++drawInputsVersion_;
             }
             // Bound only now: the packed branch above may have replaced the record.
             auto& rec = *recPtr;
