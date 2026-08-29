@@ -15,6 +15,7 @@ ground.
     python warp_mudsnow_drive.py --interop        # zero-copy lane meshes (see Strip)
     python warp_mudsnow_drive.py --bench          # ms/frame, vsync off, headless
     python warp_mudsnow_drive.py --shot --script mud     # one acceptance frame
+    python warp_mudsnow_drive.py --shot --script cine    # the cinematic frame
     python warp_mudsnow_drive.py --cell 0.08 --width 6   # cheaper ground
 
     W / S     throttle / brake        R    gear (forward <-> reverse)
@@ -26,8 +27,10 @@ ground.
 `--script` drives a fixed input sequence headless and saves the frame the
 comparison needs: `mud` and `snow` are the same line at the same throttle down
 either soft lane, `spin_mud` / `spin_clay` the same full-throttle launch, `lap`
-a circle in mud twice. Repeatable is the point -- a hand-driven pass is not the
-same line twice, and the whole claim is that only the SOIL differs.
+a circle in mud twice, `cine` the look pass's own frame off the C camera, and
+`pan --yaw D` one heading of a 360 from the driver's seat. Repeatable is the
+point -- a hand-driven pass is not the same line twice, and the whole claim is
+that only the SOIL differs.
 
 How the ground and the vehicle are coupled
 ------------------------------------------
@@ -358,37 +361,110 @@ renderer = tp.GLRenderer(canvas) if GL else tp.VulkanRenderer(canvas)
 if GL:
     renderer.shadow_map_enabled = True
 renderer.tone_mapping = tp.ToneMapping.ACESFilmic
-renderer.tone_mapping_exposure = 1.1
+renderer.tone_mapping_exposure = 0.95
 
 scene = tp.Scene()
-scene.background = 0x9fb0c4
-# A graded backdrop rather than a horizon line: the lanes run 48 m and the far
-# end has to fall away into the sky, or the yard reads as a table top. Global
-# fog, not a per-material one -- some Vulkan paths ignore those.
-scene.set_fog(0x9fb0c4, 45.0, 190.0)
+# The backdrop IS the haze: background and fog the same warm grey-brown, so the
+# far hills dissolve into it and there is no horizon LINE anywhere to fight the
+# yard for attention (warp_mudsnow_mpm.py does the same at 1/100 the scale).
+# Global fog, not a per-material one -- some Vulkan paths ignore those.
+HAZE = 0x3a3329
+scene.background = HAZE
+scene.set_fog(HAZE, 55.0, 300.0)
 
-# Low raking key across the lanes. Berms are centimetres tall; under a high sun
-# they vanish, and under a low one every rut wall throws a shadow as long as it
-# is deep. The hemisphere is the cold sky fill that keeps the snow from going
-# grey in its own shadows.
-scene.add(tp.HemisphereLight(0xb9cfe8, 0x4a4438, 0.75))
-sun = tp.DirectionalLight(0xffd9a8, 4.0)
-sun.position.set(-26.0, 7.0, -34.0)
+# Low warm key raking ACROSS the lanes -- along z, while the lanes run along x.
+# Berms are centimetres tall; under a high sun they vanish, and under a low one
+# every rut wall throws a shadow as long as it is deep. 13 degrees of elevation
+# is the compromise: shallow enough that a 3 cm berm draws a 12 cm shadow, steep
+# enough that the car's own shadow does not lie down the lane and cover them.
+# +z, not -z, and that sign is the whole shot: the acceptance cameras look
+# ACROSS the lanes from the clay strip, so a key from behind them lights the
+# face of every rut wall and hides its shadow, while a key from beyond throws
+# each shadow toward the lens. Same relief, twice the contrast.
+SUN_DIR = (-9.0, 8.5, 34.0)
+scene.add(tp.HemisphereLight(0xc4cfdc, 0x39352e, 0.80))
+sun = tp.DirectionalLight(0xffdca8, 4.0)
+sun.position.set(*SUN_DIR)
 sun.cast_shadow = True
 sun.set_shadow_frustum(-40.0, 40.0, 40.0, -40.0)
 sun.set_shadow_bias(-0.0008)
 scene.add(sun)
 
+
+def make_dusk_hdr(path, key_dir, W=512, HH=256):
+    """A low-sun haze dome, written as a Radiance .hdr: what the paint reflects.
+
+    The Evoque is the only glossy thing in the yard, and with no environment it
+    reads as white plastic -- the body reflects nothing, so its panels have no
+    edges. This is the rest of a low sun sky: a warm band low at the key's
+    azimuth, cool dim blue overhead, and a dark warm ground half so horizontal
+    panels do not mirror a sky that is underneath them.
+
+    Deliberately carries NO sun DISC. The renderer extracts a disc out of an
+    HDRI into an analytic light by default, and the scene's DirectionalLight is
+    already the one sun -- a disc here would be a second one.
+    """
+    j = np.arange(HH).reshape(HH, 1)
+    i = np.arange(W).reshape(1, W)
+    theta = (j / HH) * math.pi
+    phi = (i / W) * 2 * math.pi - math.pi
+    y = np.broadcast_to(np.cos(theta), (HH, W))
+    sin_t = np.sin(theta)
+    d = np.stack([sin_t * np.cos(phi), y, sin_t * np.sin(phi)], axis=-1)
+    up = np.clip(y, 0.0, 1.0)[..., None] ** 0.75
+    sky = np.array([0.30, 0.26, 0.21]) * (1.0 - up) + np.array([0.07, 0.10, 0.17]) * up
+    k = np.float32(key_dir)
+    k = k / np.linalg.norm(k)
+    ang = np.arccos(np.clip((d * k).sum(-1), -1.0, 1.0))
+    sky = sky + np.exp(-(ang / math.radians(42.0)) ** 2)[..., None] \
+        * np.array([1.05, 0.66, 0.33])
+    sky = np.where((y < 0)[..., None], np.array([0.045, 0.040, 0.034]), sky)
+    rgb = np.maximum(sky, 0.0)
+    m = rgb.max(axis=2)
+    mask = m >= 1e-32
+    mant, exp = np.frexp(np.where(mask, m, 1.0))
+    scale = np.where(mask, mant * 256.0 / np.where(mask, m, 1.0), 0.0)
+    rgbe = np.zeros(rgb.shape[:2] + (4,), np.uint8)
+    for c in range(3):
+        rgbe[..., c] = np.clip(rgb[..., c] * scale, 0, 255).astype(np.uint8)
+    rgbe[..., 3] = np.where(mask, np.clip(exp + 128, 0, 255), 0).astype(np.uint8)
+    # An RGBE row starting (2, 2, <128) reads as "adaptive RLE" to a .hdr
+    # reader; nudge the one pixel that could fake that signature.
+    if rgbe[0, 0, 0] == 2 and rgbe[0, 0, 1] == 2 and rgbe[0, 0, 2] < 128:
+        rgbe[0, 0, 0] = 3
+    with open(path, "wb") as f:
+        f.write(b"#?RADIANCE\nFORMAT=32-bit_rle_rgbe\n\n")
+        f.write(b"-Y %d +X %d\n" % (HH, W))
+        f.write(rgbe.tobytes())
+    return path
+
+
+try:
+    import tempfile
+    scene.environment = tp.RGBELoader().load(make_dusk_hdr(
+        os.path.join(tempfile.gettempdir(), "threepp_mudsnow_drive_sky.hdr"), SUN_DIR))
+except Exception as e:                              # noqa: BLE001 - garnish only
+    print(f"  note: no environment ({e})")
+
 # Mud eats the sunlight: rough AND weak-specular, so the raking key gives it a
-# wet sheen in patches instead of a plastic gloss. Snow is the opposite -- bright
-# and near-lambertian, so what you read on it is pure shape.
+# wet sheen in patches instead of a plastic gloss. Snow is the opposite --
+# bright and near-lambertian, so what you read on it is pure shape. Clay is
+# packed dry earth: lighter than mud and flatter than either.
 mud_mat = tp.MeshPhysicalMaterial()
-mud_mat.color = 0x4a3320
-mud_mat.roughness = 0.5
-mud_mat.specular_intensity = 0.3
-snow_mat = standard_material(0xeef4fb, 0.95)
-clay_mat = standard_material(0x6d6152, 0.92)
+mud_mat.color = 0x40291a
+mud_mat.roughness = 0.86
+mud_mat.specular_intensity = 0.14
+snow_mat = standard_material(0xdde5f0, 0.97)
+clay_mat = standard_material(0x5a5142, 0.96)
 LANE_MAT = {"mud": mud_mat, "snow": snow_mat, "clay": clay_mat}
+
+# Micro-relief, as a slope bent into the published normal rather than geometry.
+# A 5 cm grid over 48 m of lane is dead flat between the ruts, and dead flat is
+# what makes the mud read as brown gloss paint under a raking key. This is the
+# same trick warp_mudsnow_mpm.py's `grain` plays, and it costs four noise
+# lookups a vertex on the strips a wheel actually touched. (freq 1/m, slope) --
+# mud is gloopy, so large soft lumps; snow is crystalline, so fine and strong.
+LANE_GRAIN = {"mud": (1.4, 0.22), "snow": (5.5, 0.13), "clay": (2.4, 0.19)}
 
 
 # A lane is drawn as a row of STRIPS, not one mesh, and the ground is published
@@ -419,6 +495,7 @@ MAX_INTEROP_VERTS = 60_000
 @wp.kernel
 def strip_surface(h: wp.array3d(dtype=float),
                   i0: int, ox: float, oy: float, cell: float, z0: float,
+                  gfreq: float, gamp: float, gseed: int,
                   pos: wp.array(dtype=wp.vec3),
                   nrm: wp.array(dtype=wp.vec3)):
     """terrain_deform's `surface` kernel over one column range of the grid.
@@ -427,6 +504,11 @@ def strip_surface(h: wp.array3d(dtype=float),
     index buffer's winding still faces out) and the same central-difference
     normal -- but the difference reads the whole grid while the write is
     strip-local, which is what makes the seam between two strips invisible.
+
+    Plus the grain (see LANE_GRAIN): the material's micro-slope, added to the
+    grid's own slope before the normal is built, because grain IS extra slope.
+    Shading only -- the position written is exactly the grid's, so the ground
+    the camera sees is still the ground the wheels read.
     """
     s, j = wp.tid()
     i = i0 + s
@@ -438,6 +520,18 @@ def strip_surface(h: wp.array3d(dtype=float),
     jb = wp.max(j - 1, 0)
     dhx = (h[0, ia, j] - h[0, ib, j]) / (float(ia - ib) * cell)
     dhy = (h[0, i, ja] - h[0, i, jb]) / (float(ja - jb) * cell)
+    gx = (ox + float(i) * cell) * gfreq
+    gy = (oy + float(j) * cell) * gfreq
+    d = float(0.5)
+    st = wp.uint32(gseed)
+    dhx += gamp * (wp.noise(st, wp.vec2(gx + d, gy)) - wp.noise(st, wp.vec2(gx - d, gy)))
+    dhy += gamp * (wp.noise(st, wp.vec2(gx, gy + d)) - wp.noise(st, wp.vec2(gx, gy - d)))
+    # A second octave at 3.7x: one scale of lump is a pattern, two is a surface.
+    bx = gx * 3.7
+    by = gy * 3.7
+    ga = gamp * 0.55
+    dhx += ga * (wp.noise(st, wp.vec2(bx + d, by)) - wp.noise(st, wp.vec2(bx - d, by)))
+    dhy += ga * (wp.noise(st, wp.vec2(bx, by + d)) - wp.noise(st, wp.vec2(bx, by - d)))
     n = wp.normalize(wp.vec3(-dhx, -dhy, 1.0))
     t = s * ny + j
     pos[t] = wp.vec3(ox + float(i) * cell, z0 + h[0, i, j], -(oy + float(j) * cell))
@@ -447,10 +541,11 @@ def strip_surface(h: wp.array3d(dtype=float),
 class Strip:
     """One column range of a lane as a threepp mesh, published device-side."""
 
-    def __init__(self, terrain, material, i0, ncol):
+    def __init__(self, terrain, material, i0, ncol, grain=(1.0, 0.0)):
         self.t = terrain
         self.i0 = i0
         self.ncol = ncol
+        self.gfreq, self.gamp = grain
         ny = terrain.ny
         self.n = ncol * ny
         self.ox, self.oy = (float(v) for v in terrain.origin_np[0])
@@ -478,7 +573,8 @@ class Strip:
 
     def launch(self, pos, nrm):
         wp.launch(strip_surface, dim=(self.ncol, self.t.ny), device=self.t._wp_device,
-                  inputs=[self.t.h, self.i0, self.ox, self.oy, self.t.cell, self.t.z0],
+                  inputs=[self.t.h, self.i0, self.ox, self.oy, self.t.cell, self.t.z0,
+                          self.gfreq, self.gamp, 0x5eed],
                   outputs=[pos, nrm])
 
     def arm(self, renderer):
@@ -548,7 +644,7 @@ def make_strips(name):
     out = []
     for k in range(n_strip):
         i0 = k * (per - 1)
-        out.append(Strip(t, LANE_MAT[name], i0, min(per, t.nx - i0)))
+        out.append(Strip(t, LANE_MAT[name], i0, min(per, t.nx - i0), LANE_GRAIN[name]))
     return out
 
 
@@ -570,34 +666,344 @@ def mark_dirty(hub):
     strips[_rr % len(strips)].dirty = True
     _rr += 1
 
-# Speed perception: without something standing still beside the lane, 70 km/h
-# over a flat grid reads as 20. Posts along both shoulders and a scatter of
-# boulders on the verges, placed off the driving line but close enough to flick
-# past. Built once -- adding or removing scene entries mid-drive rebuilds the
-# Vulkan descriptor set and drops the TAA history.
+# --- the proving ground --------------------------------------------------------
+# The lanes used to sit on a 400 m grey slab under a white sky, which is the one
+# thing about this demo that was wrong on sight: no scale, no horizon, no world.
+# What replaces it is ONE heightfield -- dead flat and EXACTLY at the collider
+# height out to the perimeter, because the visual ground and the ground the car
+# drives on have to be the same ground, and beyond that rising into hills the
+# fog takes away. One mesh, so there is no apron/surround seam to hide, and the
+# lattice is stretched cubically so the metres beside the yard are fine and the
+# quarter-kilometre out at the rim is cheap: 0.7 m spacing at the lanes, 7 m at
+# the edge, 33k vertices for a 640 m yard.
+
+SURROUND_R = 320.0                # to the rim
+APRON_R = 62.0                    # flat, drivable, matches the rigid collider
 rng = np.random.default_rng(7)
-post_mat = standard_material(0x2e2b28, 0.85)
-rock_mat = standard_material(0x53514c, 0.9)
-props = tp.Group()
+
+
+def vnoise(x, y, freq, seed, n=64):
+    """Value noise on a wrapping n x n lattice: bilinear, smoothstep-faded."""
+    g = np.random.default_rng(seed).random((n, n))
+    fx, fy = np.asarray(x) * freq, np.asarray(y) * freq
+    i0, j0 = np.floor(fx).astype(np.int64), np.floor(fy).astype(np.int64)
+    tx, ty = fx - i0, fy - j0
+    tx = tx * tx * (3.0 - 2.0 * tx)
+    ty = ty * ty * (3.0 - 2.0 * ty)
+    a = lambda di, dj: g[(i0 + di) % n, (j0 + dj) % n]                   # noqa: E731
+    return ((1 - tx) * (1 - ty) * a(0, 0) + tx * (1 - ty) * a(1, 0)
+            + (1 - tx) * ty * a(0, 1) + tx * ty * a(1, 1))
+
+
+def fbm(x, y, freq, seed, octaves=4):
+    v, amp, tot = 0.0, 1.0, 0.0
+    for k in range(octaves):
+        v = v + amp * vnoise(x, y, freq * 2.0 ** k, seed + 977 * k)
+        tot += amp
+        amp *= 0.5
+    return v / tot
+
+
+def build_surround():
+    """The lattice, and the three meshes cut out of it.
+
+    ONE material per mesh, because per-vertex colour would be the natural way
+    to grade dirt into snow into haze and this renderer's deferred path does
+    not have it: gbuffer.vert has no colour binding and writes vec3(1) (only
+    the GPU-driven indirect path reads a "color" attribute). So the yard is
+    split into regions instead, and the cuts are put where a material change is
+    something rather than nothing -- the snow line, and the perimeter the hills
+    start from.
+    """
+    n = 181
+    u = np.linspace(-1.0, 1.0, n)
+    ax = (0.20 * u + 0.80 * u ** 3) * SURROUND_R
+    X, Z = np.meshgrid(ax, ax, indexing="ij")
+    r = np.hypot(X, Z)
+
+    # Nothing at all inside the perimeter: the apron is the collider's plane,
+    # to the millimetre. Past it the hills ramp in over 50 m (a cliff at the
+    # perimeter would read as a wall) and the rim lifts above the eyeline so
+    # there is a silhouette in the haze instead of an edge of the world.
+    t = np.clip((r - APRON_R) / 50.0, 0.0, 1.0) ** 2
+    hills = 26.0 * fbm(X, Z, 1.0 / 190.0, 11) - 9.5
+    hills += 7.0 * fbm(X, Z, 1.0 / 52.0, 31) - 3.0
+    h = RIGID_Y + t * np.maximum(hills, 0.0)
+    h += t * 14.0 * np.clip((r - 130.0) / 180.0, 0.0, 1.0) ** 1.4
+
+    dhx = np.gradient(h, ax, axis=0)
+    dhz = np.gradient(h, ax, axis=1)
+    # The apron is geometrically flat and would mirror the sky as one sheet, so
+    # its RELIEF is a slope bent into the normal -- 20 m lumps, the biggest
+    # thing this lattice can carry without aliasing. Same trick as the lanes'
+    # grain, one scale up.
+    dhx = dhx + 0.13 * (fbm(X + 91.0, Z, 0.05, 53, 3) - 0.5) * 2.0
+    dhz = dhz + 0.13 * (fbm(X, Z + 47.0, 0.05, 59, 3) - 0.5) * 2.0
+    nrm = np.stack([-dhx, np.ones_like(h), -dhz], axis=-1)
+    nrm /= np.linalg.norm(nrm, axis=-1, keepdims=True)
+
+    pos = np.ascontiguousarray(np.stack([X, h, Z], axis=-1).reshape(-1, 3), np.float32)
+    nrm = np.ascontiguousarray(nrm.reshape(-1, 3), np.float32)
+    a = (np.arange(n - 1)[:, None] * n + np.arange(n - 1)[None, :]).ravel()
+    quads = np.stack([a, a + 1, a + n + 1, a, a + n + 1, a + n], axis=1)
+    # Region tests on the quad's own centre, so a quad belongs to exactly one
+    # mesh and the three meshes tile the lattice with no gap and no overlap.
+    cx = 0.25 * (X[:-1, :-1] + X[1:, :-1] + X[:-1, 1:] + X[1:, 1:]).ravel()
+    cz = 0.25 * (Z[:-1, :-1] + Z[1:, :-1] + Z[:-1, 1:] + Z[1:, 1:]).ravel()
+    cr = np.hypot(cx, cz)
+    yard = cr <= APRON_R + 7.0
+    # A snow LINE, not a rectangle: the threshold wanders a few metres with the
+    # ground so the field's edge reads as lying snow rather than a rug.
+    snowline = LANE_Z["snow"][0] - 1.6 - 7.0 * fbm(cx, cz, 0.035, 89, 3)
+    snow_ground = yard & (cz < snowline)
+
+    def mesh_of(mask, material):
+        idx = quads[mask]
+        g = tp.BufferGeometry()
+        g.set_attribute("position", pos)
+        g.set_attribute("normal", nrm)
+        g.set_index(np.ascontiguousarray(idx.ravel(), np.uint32))
+        m = tp.Mesh(g, material)
+        m.receive_shadow = True
+        return m
+
+    # None of the three casts: the sun's shadow frustum is +-40 m (tight, so
+    # that a 3 cm berm gets a shadow map texel), the apron is flat, and the
+    # hills start at 62 m. Everything they could cast falls outside the map, so
+    # cast_shadow on them buys a 33k-vertex depth pass and nothing else.
+    return (mesh_of(yard & ~snow_ground, apron_mat),
+            mesh_of(snow_ground, field_snow_mat),
+            mesh_of(~yard, hill_mat))
+
+
+# The yard floor is churned wet dirt: darker than the clay strip so the lanes
+# read as lighter cuts into it rather than carpets laid on it, and dull enough
+# that the raking key does not turn 12,000 m2 of it into a mirror.
+apron_mat = standard_material(0x2b241c, 0.96)
+field_snow_mat = standard_material(0xc9d2de, 0.97)
+# The hills carry the haze's own hue: half the job of a backdrop is being the
+# thing the fog dissolves, and a backdrop in a different colour never does.
+hill_mat = standard_material(0x554b3e, 0.98)
+for part in build_surround():
+    scene.add(part)
+
+
+def boulder(radius, seed, squash=0.72):
+    """A rock: an icosphere pushed around by three beat frequencies.
+
+    IcosahedronGeometry is unindexed, so the displacement -- a pure function of
+    the vertex position -- lands identically on every copy of a shared corner
+    and the shell stays closed, while compute_vertex_normals then gives it the
+    faceted read a broken rock has and a UV sphere never does.
+    """
+    g = tp.IcosahedronGeometry(1.0, 2)
+    p = g.get_attribute("position")
+    r = np.random.default_rng(seed)
+    d = np.ones(len(p))
+    for freq, amp in ((1.15, 0.30), (2.45, 0.15), (5.10, 0.065)):
+        ph = r.uniform(0.0, 6.283, 3)
+        d += amp * (np.sin(freq * p[:, 0] + ph[0]) * np.sin(freq * p[:, 1] + ph[1])
+                    * np.sin(freq * p[:, 2] + ph[2]))
+    q = p * d[:, None] * radius
+    q[:, 1] *= squash
+    g.set_attribute("position", np.ascontiguousarray(q, np.float32))
+    g.compute_vertex_normals()
+    return g
+
+
+# Speed perception: without something standing still beside the lane, 70 km/h
+# over a flat grid reads as 20. A weathered post line marks the perimeter and
+# the lane shoulders; boulders scatter over the verges, dark and wet where they
+# sit by the mud and snow-capped on the snow side. Built once -- adding or
+# removing scene entries mid-drive rebuilds the Vulkan descriptor set and drops
+# the TAA history.
+#
+# And built MERGED: ~170 pebbles and posts as 170 scene entries is 170 draws
+# and 170 shadow-map draws for scenery that never moves relative to anything,
+# and it measured as most of this pass's frame cost. Baked into one geometry a
+# material, it is five draws.
+post_mat = standard_material(0x2a2521, 0.92)
+cap_mat = standard_material(0x9aa2ac, 0.9)
+wet_rock = standard_material(0x312b25, 0.72)
+dry_rock = standard_material(0x4b463d, 0.95)
+snow_rock = standard_material(0x9fa8b2, 0.93)
+
+
+class Batch:
+    """Accumulates transformed copies of small geometries into one mesh."""
+
+    def __init__(self, material, cast=False):
+        self.material = material
+        self.cast = cast
+        self.pos, self.nrm, self.idx, self.n = [], [], [], 0
+
+    def add(self, geometry, offset, rot_y=0.0, tilt=(0.0, 0.0)):
+        p = geometry.get_attribute("position")
+        nm = geometry.get_attribute("normal")
+        i = geometry.get_index()
+        ca, sa = math.cos(rot_y), math.sin(rot_y)
+        cx, sx = math.cos(tilt[0]), math.sin(tilt[0])
+        cz, sz = math.cos(tilt[1]), math.sin(tilt[1])
+        # Rz . Rx . Ry -- the same order three.js applies an object's XYZ Euler
+        # plus the yaw, so a batched copy sits exactly where the loose Mesh did.
+        m = (np.array([[cz, -sz, 0.0], [sz, cz, 0.0], [0.0, 0.0, 1.0]])
+             @ np.array([[1.0, 0.0, 0.0], [0.0, cx, -sx], [0.0, sx, cx]])
+             @ np.array([[ca, 0.0, sa], [0.0, 1.0, 0.0], [-sa, 0.0, ca]]))
+        self.pos.append(p @ m.T + np.asarray(offset))
+        self.nrm.append(nm @ m.T)
+        self.idx.append((np.arange(len(p)) if i is None else i) + self.n)
+        self.n += len(p)
+
+    def mesh(self):
+        g = tp.BufferGeometry()
+        g.set_attribute("position",
+                        np.ascontiguousarray(np.concatenate(self.pos), np.float32))
+        g.set_attribute("normal",
+                        np.ascontiguousarray(np.concatenate(self.nrm), np.float32))
+        g.set_index(np.ascontiguousarray(np.concatenate(self.idx).ravel(), np.uint32))
+        m = tp.Mesh(g, self.material)
+        m.cast_shadow = self.cast
+        m.receive_shadow = True
+        return m
+
+
+# The shoulder posts are inside the +-40 m shadow frustum and cast; the 62 m
+# perimeter ring is outside it and cannot, so it is a separate batch that skips
+# the depth pass entirely.
+near_posts = Batch(post_mat, cast=True)
+far_posts = Batch(post_mat)
+caps = Batch(cap_mat, cast=True)
+rocks = {id(m): Batch(m, cast=True) for m in (wet_rock, dry_rock, snow_rock)}
+rock_mats = {id(m): m for m in (wet_rock, dry_rock, snow_rock)}
+
 for x in np.arange(X0 + 2.0, X1, 6.0):
     for z in (LANE_Z["mud"][1] + 0.9, LANE_Z["snow"][0] - 0.9):
-        post = tp.Mesh(tp.CylinderGeometry(0.07, 0.09, 1.5, 8), post_mat)
-        post.position.set(float(x), 0.7, float(z))
-        post.cast_shadow = True
-        props.add(post)
-for _ in range(46):
-    r = float(rng.uniform(0.22, 0.7))
-    rock = tp.Mesh(tp.SphereGeometry(r, 7, 5), rock_mat)
-    side = rng.integers(0, 2)
-    z = float(rng.uniform(13.0, 20.0)) * (1.0 if side else -1.0)
-    rock.position.set(float(rng.uniform(X0 - 8.0, X1 + 8.0)), r * 0.35 + RIGID_Y, z)
-    rock.rotation.x = float(rng.uniform(0.0, 3.0))
-    rock.rotation.y = float(rng.uniform(0.0, 3.0))
-    rock.cast_shadow = True
-    rock.receive_shadow = True
-    props.add(rock)
+        hgt = float(rng.uniform(1.25, 1.65))
+        near_posts.add(tp.CylinderGeometry(0.06, 0.10, hgt, 8),
+                       (float(x), 0.5 * hgt + RIGID_Y, float(z)),
+                       tilt=(float(rng.normal(0.0, 0.05)),      # nothing stands
+                             float(rng.normal(0.0, 0.05))))     # straight
+        if z < 0.0:                                             # snow on the tops
+            cap = tp.SphereGeometry(0.10, 8, 6)
+            cap.scale(1.0, 0.45, 1.0)
+            caps.add(cap, (float(x), hgt + RIGID_Y - 0.02, float(z)))
+# The perimeter itself, so the flat apron ends at something rather than at the
+# fog: a ring of posts on the boundary the hills start from.
+for a in np.arange(0.0, 2.0 * math.pi, 2.0 * math.pi / 96.0):
+    hgt = float(rng.uniform(1.0, 1.4))
+    far_posts.add(tp.CylinderGeometry(0.06, 0.09, hgt, 6),
+                  (float(APRON_R * math.cos(a)), 0.5 * hgt + RIGID_Y,
+                   float(APRON_R * math.sin(a))),
+                  tilt=(0.0, float(rng.normal(0.0, 0.07))))
+
+for k in range(72):
+    r = float(rng.uniform(0.30, 1.15))
+    side = 1.0 if rng.integers(0, 2) else -1.0
+    z = float(rng.uniform(12.0, 46.0)) * side
+    x = float(rng.uniform(X0 - 26.0, X1 + 26.0))
+    mat = snow_rock if (z < 0.0 and rng.random() < 0.7) else         (wet_rock if abs(z) < 22.0 and side > 0 else dry_rock)
+    rocks[id(mat)].add(boulder(r, 400 + k), (x, r * 0.34 + RIGID_Y, z),
+                       rot_y=float(rng.uniform(0.0, 6.28)))
+# NOTE: these boulders are scenery only. Making the big ones solid is one line
+# (a hidden sphere proxy through world.add_static -- add_static reads
+# Box/Sphere/Capsule geometry, not a displaced icosahedron), and it was tried
+# and taken back out: four more static actors change the order PhysX
+# accumulates its scene in, and the acceptance scripts' numbers moved in the
+# third digit. This phase is the LOOK pass, and the sim has to print what it
+# printed before it.
+props = tp.Group()
+for b in (near_posts, far_posts, caps, *rocks.values()):
+    props.add(b.mesh())
 scene.add(props)
-scene.add(rigid)
+print(f"  surround: {APRON_R:.0f} m apron, hills to {SURROUND_R:.0f} m")
+
+# --- weather --------------------------------------------------------------------
+# One ParticleField in Renderer ownership: the CPU writes a 64-byte emitter
+# record a frame and never touches a flake, so the whole snowfall costs one
+# scene entry and one indirect draw. Built ONCE and left in the scene (adding
+# or removing entries mid-drive rebuilds the Vulkan descriptor set and throws
+# away the TAA history), so there is no toggle -- parking it is
+# set_live_count(0).
+#
+# The brief asked for snowfall over the SNOW LANE. That was tried first and it
+# is worse: an 8 m wide emitter slab is a rectangular column of white specks
+# with two visible vertical edges, and the drive camera sits on the clay strip
+# looking straight through one of them. Snow falls out of a sky, not out of a
+# box over one strip, so this follows the camera toroidally instead -- no edge
+# anywhere, and which lane is the snow one is said by the GROUND, which is
+# where this demo says everything else too.
+# 9k flakes in a 28 m box, not 30k in a 56 m one: a flake has to subtend a
+# pixel or two to read as a flake, and a wide box spends its whole budget on
+# 40 m specks that composite into a star field. Close and sparse beats far and
+# dense every time.
+SNOW_CAP = 9_000
+SNOW_HALF = 14.0
+snowfall = None
+if not GL:
+    _sc = tp.ParticleField.Config()
+    _sc.capacity = SNOW_CAP
+    _sc.ownership = tp.ParticleField.Ownership.Renderer
+    _sc.w_semantic = tp.ParticleField.WSemantic.Radius
+    _sc.uniform_radius = 0.050
+    snowfall = tp.ParticleField.create(_sc)
+    snowfall.frustum_culled = False
+    # Billboards only, unlit and additive. A lit mesh proxy would be the right
+    # answer for flakes a metre from the lens and this camera is never there;
+    # what it would cost is a G-buffer draw for every flake so that the two in
+    # focus read as crystals.
+    snowfall.set_billboard_repr(tp.Color(0.86, 0.89, 0.95), tp.Color(0.74, 0.79, 0.88),
+                                0.35, 0.90)
+    _sb = snowfall.billboard_repr
+    _sb.lod_near = 0.0
+    _sb.lod_fade = 0.0
+    _sb.softness = 0.9
+    _sb.fade_power = 0.0
+    _sb.size_taper = 0.0
+    _sb.bright_jitter = 0.35
+    _sb.near_fade = 6.0                           # a flake at arm's length is a
+                                                  # white plate across the frame
+    _sb.stretch_seconds = 0.05
+    _sb.stretch_max = 3.0
+    _sb.stretch_max_screen = 0.02
+    _sb.glow = 0.0
+    _se = snowfall.emitter
+    z_snowc = 0.5 * (LANE_Z["snow"][0] + LANE_Z["snow"][1])
+    _se.spawn_center = tp.Vector3(0.0, 15.0, 0.0)
+    _se.spawn_half_extent = tp.Vector3(SNOW_HALF, 0.5, SNOW_HALF)
+    _se.velocity = tp.Vector3(0.0, -1.5, 0.0)     # a flake terminal-velocities slowly
+    _se.speed_spread = 0.4
+    _se.wind = tp.Vector3(0.55, 0.0, -0.2)
+    _se.drift_amplitude = 0.28                    # the tumble, which is what says snow
+    _se.drift_frequency = 0.5
+    _se.drift_scale = 3.0
+    _se.lifetime = 9.0
+    _se.duty_cycle = 1.0
+    _se.size = 0.050
+    _se.size_jitter = 0.45
+    _se.seed = 20260830
+    _se.follow = True
+    _se.follow_snap = 2.0
+    snowfall.set_emitter(_se)
+    snowfall.set_emitter_time(0.0, DT)
+    scene.add(snowfall)
+
+_weather_t = 0.0
+
+
+def weather(dt, eye=None):
+    """Advance the snowfall. Absolute time, so a still can seek to any t.
+
+    The follow box is centred on the CAMERA -- weather that follows anything
+    else is not weather -- and set_follow_center snaps, so the curtain does not
+    swim under a moving chase cam.
+    """
+    global _weather_t
+    if snowfall is None:
+        return
+    _weather_t += dt
+    if eye is not None:
+        snowfall.set_follow_center(tp.Vector3(*(float(v) for v in eye)))
+    snowfall.set_emitter_time(_weather_t, dt)
 
 # --- the rover -----------------------------------------------------------------
 
@@ -1047,6 +1453,25 @@ def drive_inputs(dt):
         save_shot(os.path.join(OUT_DIR, f"warp_mudsnow_drive_{shot_no:03d}.png"))
 
 
+def cine_pose(c, a):
+    """The cinematic orbit at phase `a`: eye and target.
+
+    Low -- 1.2 to 2.2 m, i.e. inside a wheel's world rather than above the car
+    -- and a full circle, so the orbit CROSSES the key's azimuth twice a lap.
+    That is the whole point of it: at the two crossings the ruts are backlit and
+    every berm on the lane draws its own shadow toward the lens, which is the
+    frame this demo exists to produce. Anywhere else on the circle it is a car.
+    """
+    return (c + np.array([math.cos(a) * 9.5, 0.30 + 0.85 * (0.5 - 0.5 * math.cos(2.0 * a)),
+                          math.sin(a) * 9.5]),
+            c + np.array([0.0, -0.22, 0.0]))
+
+
+# The phase of that orbit where the camera is behind the car and BEYOND it is
+# the key: the hero framing, and the one --script cine parks on.
+CINE_HERO = 3.55
+
+
 def update_camera(dt):
     """main.cpp's chase: exponential lerp toward a chassis-relative offset, read
     off the interpolated visual rather than the raw actor pose."""
@@ -1055,10 +1480,7 @@ def update_camera(dt):
     c = np.array([p.x, p.y, p.z])
     if view_mode == 2:
         cine_t += dt
-        a = cine_t * 0.16
-        want = c + np.array([math.cos(a) * 13.0, 3.6 + 1.2 * math.sin(a * 0.7),
-                             math.sin(a) * 13.0])
-        want_t = c + np.array([0.0, 0.4, 0.0])
+        want, want_t = cine_pose(c, cine_t * 0.16)
     else:
         off = qrot(q, np.array([0.0, CHASE_DIST * math.sin(CHASE_PITCH),
                                 -CHASE_DIST * math.cos(CHASE_PITCH)]))
@@ -1102,6 +1524,8 @@ def frame():
         reverse_mat.needs_update()
 
     update_camera(DT)
+    c = active_camera()
+    weather(DT, (c.position.x, c.position.y, c.position.z))
     for s in strips:
         s.publish()
     renderer.render(scene, active_camera())
@@ -1136,6 +1560,7 @@ def scripted(spawn_z, beats, eye, look, path, note=""):
     The shots the acceptance asks for have to be repeatable and identical
     between lanes -- the same line at the same speed is the whole comparison --
     which a hand-driven pass is not. Each beat is (seconds, throttle, steer).
+    `eye` None means the cinematic orbit at CINE_HERO, wherever the car ended.
     """
     vehicle.respawn(tp.Vector3(-20.0, 1.05, spawn_z), SPAWN_ROT)
     vehicle.gear = tp.PhysxVehicle.Gear.FORWARD
@@ -1145,10 +1570,19 @@ def scripted(spawn_z, beats, eye, look, path, note=""):
     for secs, thr, st in beats:
         for _ in range(int(round(secs * 60.0))):
             mark_dirty(coupled_step(thr, st, 0.0))
+            weather(DT, eye if eye is not None else (0.0, 2.0, 0.0))
     pose_visuals()
     for s in strips:
         s.dirty = True
         s.publish()
+    if eye is None:
+        p = vehicle.position
+        eye, look = cine_pose(np.array([p.x, p.y, p.z]), CINE_HERO)
+    # dt = 0 freezes the snowfall for the still, and this is also where the
+    # follow box finally lands on the shot's own camera: the WARM loop below
+    # renders the same instant sixty times to settle the temporal passes, and a
+    # field reporting motion through frames that do not move is one TAA smears.
+    weather(0.0, eye)
     camera.position.set(*eye)
     camera.look_at(tp.Vector3(*look))
     # The Vulkan pipeline is temporal (probe GI, denoisers, the upscaler): one
@@ -1169,6 +1603,7 @@ if BENCH:
     for _ in range(60):
         mark_dirty(coupled_step(0.5, 0.15, 0.0))
         pose_visuals()
+        weather(DT)
         for s in strips:
             s.publish()
         renderer.render(scene, camera)
@@ -1177,6 +1612,7 @@ if BENCH:
     for _ in range(240):
         mark_dirty(coupled_step(0.5, 0.15, 0.0))
         pose_visuals()
+        weather(DT)
         for s in strips:
             s.publish()
         renderer.render(scene, camera)
@@ -1214,6 +1650,21 @@ elif SHOT:
         scripted(z, [(2.0, 1.0, 0.0)],
                  (-17.0, 1.5, z + (5.0 if z <= 0 else -5.0)), (-18.5, 0.2, z),
                  out(f"2_{which}"))
+    if which == "cine":
+        # The look pass's own acceptance frame: the cinematic camera, parked at
+        # the phase of its orbit that crosses the key, on a mud lane with a
+        # trail of its own ruts leading back out of frame. Nothing here is a
+        # special camera -- cine_pose is the same function C flies.
+        scripted(z_mud, [(5.5, 0.45, 0.0)], None, None, out("4_cine"))
+    if which == "pan":
+        # Acceptance 3: no flat grey anywhere in a 360 pan from the driver's
+        # seat. One heading per process (a second save_frame in one run loses
+        # the device), so this is run four times with --yaw.
+        yaw = math.radians(cli_arg("--yaw", 0.0, float))
+        eye = np.array([-6.0, 1.35, 0.0])
+        scripted(0.0, [(0.2, 0.0, 0.0)], eye,
+                 eye + np.array([math.sin(yaw) * 20.0, -1.2, math.cos(yaw) * 20.0]),
+                 out(f"5_pan_{int(round(math.degrees(yaw))):03d}"))
     if which == "diag":
         # Tuning telemetry: a 0.45-throttle launch on each soft lane, per-wheel
         # state every half second. No frame saved.
