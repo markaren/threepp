@@ -253,6 +253,36 @@ lazily on the first `TerrainRays`, so `import threepp.rl` still works without it
 `_terrain_h` and reports agreement and cost. Where a formula is exact — the stairs env inside a
 lane — the two match to 0.000000 m over 436 730 probes.
 
+`heights()` returns a **fresh** tensor. It used to hand back a view of one reused buffer, which
+aliased the moment a caller held two results at once — `h_here = heights(x, y)` followed by
+`heights(px, py)` left `h_here` pointing at the second call's numbers, and every env doing exactly
+that read garbage from its second control step onward. Pass `out=` to reuse a buffer only where
+that cannot happen.
+
+### The scan a robot could actually have seen (`perception.py`)
+
+A height scan read straight off the terrain is privileged information. `PerceivedScan` limits it to
+what a body-mounted depth camera could have observed: each control step it casts one ray from the
+camera to every query point (`TerrainRays.visible` — frustum, range, and a real occlusion test
+against the same BVH), marks what it saw into a per-env world-anchored map, and answers from that
+map. Occluded and never-observed cells read as flat ground; cells the camera swept earlier are
+remembered.
+
+```python
+from threepp.rl.perception import PerceivedScan
+
+scan = PerceivedScan(rays, K, origin_b=env.lane_y, bounds=(-1.0, 31.6, 1.5))
+ahead, h_here = scan.read(sim.root_position, sim.root_quat, px, py)   # the deploy-side pair
+scan.forget(reset_idx)                                               # a teleport drops the map
+```
+
+The map stores a *seen* bit rather than a fused height — equivalent for static terrain, and cheap
+enough to hold at K=2048 — and `noise` re-adds the sensor error as a fixed per-cell bias, which is
+what a converged elevation map's error looks like. Use it for the **observation only**: reward,
+termination and spawn placement should keep reading ground truth, or you are handicapping the
+training signal rather than the policy. `examples/spot/spot_occlusion.py` measures what the camera
+can and cannot see, and whether it changes what the policy does.
+
 ---
 
 ## Training

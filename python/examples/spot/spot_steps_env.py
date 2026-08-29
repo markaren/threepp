@@ -131,11 +131,17 @@ class SpotStepsEnv(VecTask):
     clip_actions = None              # the policy emits ~[-8,8]; do NOT clamp
 
     def __init__(self, num_envs=1024, device="cuda", seed=0, flat_only=False,
-                 height_source="analytic"):
+                 height_source=None, perceive=False, perceive_noise=0.0):
+        if height_source is None:              # perception needs the BVH, so it implies the raycast
+            height_source = "raycast" if perceive else "analytic"
         if height_source not in ("analytic", "raycast"):
             raise ValueError(f"height_source must be 'analytic' or 'raycast', got {height_source!r}")
+        if perceive and height_source != "raycast":
+            raise ValueError("perceive=True needs height_source='raycast': the camera rays and the "
+                             "elevation map both come off the same BVH")
         self.height_source = height_source
         self.rays = None                       # set below when height_source == "raycast"
+        self.percept = None                    # set below when perceive
         rng = np.random.default_rng(seed)
         is_stairs_np = np.ones(num_envs, bool) if not flat_only else np.zeros(num_envs, bool)
         if not flat_only:
@@ -197,6 +203,13 @@ class SpotStepsEnv(VecTask):
         self._resample_cmd(torch.arange(num_envs, device=dev))             # valid cmd before the first reset()
         self.last_track = 0.0; self.last_flat_track = 0.0; self.last_level = 0.0; self.last_fell = 0.0
         self.last_clear = 0.0
+        if perceive:
+            from threepp.rl.perception import PerceivedScan
+            # Same mount, FOV and range as spot_depth_scan.ForwardDepthScanner, so the training
+            # camera and the deploy camera are one camera. The map spans the strip and the lane.
+            self.percept = PerceivedScan(self.rays, num_envs, origin_b=self.lane_y,
+                                         bounds=(-1.0, STRIP_LEN + 1.0, HALF_W_STEPS),
+                                         noise=perceive_noise, seed=seed)
 
     def _terrain_h(self, x, y):
         """Ground height at (x,y). x,y [K] or [K,P].
@@ -269,6 +282,8 @@ class SpotStepsEnv(VecTask):
         pose[:, 4] = sx; pose[:, 6] = sz
         self.sim.set_root_state(idx, pose)
         self.sim.set_joint_state(idx, self.stand_q_add[idx], torch.zeros(n, self.sim.dof, device=dev))
+        if self.percept is not None:
+            self.percept.forget(idx)         # a teleport invalidates every remembered cell
         self.phi[idx] = reset_phi(n, dev)    # randomise phase (decorrelate batch; don't advance during settle)
         self.ep_start_x[idx] = sx
         self._resample_cmd(idx)
@@ -362,9 +377,15 @@ class SpotStepsEnv(VecTask):
         jv_isaac = s.joint_vel[:, self.i2a]
         x, y, zz = s.root_pos[:, 0], s.root_pos[:, 1], s.root_pos[:, 2]
         cyaw, syaw = heading_cossin(q)
-        h_here = self._terrain_h(x, y)
         px, py = scan_xy(x, y, cyaw, syaw, self.gx, self.gy)
-        ahead = (self._terrain_h(px, py) - h_here[:, None]).clamp(-1.0, 1.0)
+        if self.percept is not None:
+            # What the robot could have SEEN: occluded and never-observed cells read flat, exactly
+            # as they do at deploy. Reward, termination and the spawn keep reading ground truth —
+            # the policy is handicapped, the training signal is not.
+            ahead, h_here = self.percept.read(self.sim.root_position, q, px, py)
+        else:
+            h_here = self._terrain_h(x, y)
+            ahead = (self._terrain_h(px, py) - h_here[:, None]).clamp(-1.0, 1.0)
         base_above = (zz - h_here).unsqueeze(-1)
         clk = clock_obs(self.phi)                                          # [K,2] clock after last substep
         # Layout: [proprio(48)|clock(2)|base_above(1)|scan(45)] = 96-d
@@ -401,12 +422,14 @@ if __name__ == "__main__":
         print("need PhysX + CUDA"); sys.exit(0)
     K = int(os.environ.get("K", "64"))
     src = os.environ.get("HEIGHT_SOURCE", "analytic")     # HEIGHT_SOURCE=raycast -> Warp BVH scan
-    env = SpotStepsEnv(num_envs=K, height_source=src)
+    see = os.environ.get("PERCEIVE", "") == "1"           # PERCEIVE=1 -> the camera-limited scan
+    env = SpotStepsEnv(num_envs=K, height_source=None if see else src, perceive=see)
     obs = env.reset()
     assert obs.shape == (K, 96), f"expected obs (K,96), got {tuple(obs.shape)}"
     print(f"obs {tuple(obs.shape)} (OBS_DIM={OBS_DIM}=96) finite={bool(torch.isfinite(obs).all())}  "
-          f"levels={N_LEVELS} risers={RISERS}  height_source={src}"
-          + (f" {env.rays}" if env.rays is not None else ""))
+          f"levels={N_LEVELS} risers={RISERS}  height_source={env.height_source}"
+          + (f" {env.rays}" if env.rays is not None else "")
+          + (f"  {env.percept}" if env.percept is not None else ""))
     for _ in range(200):
         obs, rew, done, term, to = env.step(torch.zeros(K, ACT_DIM, device=env.device))
         assert torch.isfinite(obs).all() and torch.isfinite(rew).all()

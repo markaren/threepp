@@ -84,7 +84,8 @@ def stochastic_flat_baseline(env, ac, norm, steps=240, warm=80):
 
 
 @torch.no_grad()
-def score_checkpoint(policy_path, k=512, device="cuda", steps=900, warm=200, height_source=None):
+def score_checkpoint(policy_path, k=512, device="cuda", steps=900, warm=200, height_source=None,
+                     perceive=None):
     """Deterministic track/flat/fell + the curriculum LEVEL it climbs to (how tall a riser it handles).
     The env starts every stair env at level 0 and promotes as the policy clears tents.
 
@@ -95,9 +96,16 @@ def score_checkpoint(policy_path, k=512, device="cuda", steps=900, warm=200, hei
     ac, norm, meta = load_policy(policy_path, device=device)
     trained_on = meta.get("height_source", "analytic")
     src = height_source or trained_on
-    print(f"scoring against the {src} height source"
-          + ("" if src == trained_on else f"  (MISMATCH: trained on {trained_on})"))
-    env = SpotStepsEnv(num_envs=k, device=device, height_source=src)
+    saw = bool(meta.get("perceive", False))
+    see = saw if perceive is None else bool(perceive)
+    if see:
+        src = "raycast"
+    print(f"scoring against the {src} height source, scan {'PERCEIVED' if see else 'privileged'}"
+          + ("" if (src == trained_on and see == saw) else
+             f"  (MISMATCH: trained on {trained_on}, "
+             f"{'perceived' if saw else 'privileged'} scan)"))
+    env = SpotStepsEnv(num_envs=k, device=device, height_source=None if see else src,
+                       perceive=see, perceive_noise=float(meta.get("perceive_noise", 0.0)))
     pol = (lambda o: ac.act_mean(norm.norm(o))) if norm is not None else ac.act_mean
     obs = env.reset()
     trk, flt, fl = [], [], []
@@ -153,6 +161,13 @@ def main():
                     help="50-d clock base gait (.pt) to expand into 96-d; default = scratch_flat_best.pt")
     ap.add_argument("--fell_max", type=float, default=0.006)
     ap.add_argument("--sym_coef", type=float, default=1.0)   # left-right symmetry augmentation (kills the veer)
+    ap.add_argument("--perceive", action="store_true",
+                    help="train on the scan a body-mounted depth camera could actually have seen "
+                         "(threepp.rl.perception): occluded and never-observed cells read flat, and "
+                         "the map remembers what the camera swept. Implies --height-source raycast. "
+                         "Reward, termination and the spawn keep reading ground truth.")
+    ap.add_argument("--perceive-noise", dest="perceive_noise", type=float, default=0.0,
+                    help="elevation-map error (m) as a fixed per-cell bias, with --perceive")
     ap.add_argument("--height-source", dest="height_source", choices=("analytic", "raycast"),
                     default="analytic",
                     help="where the terrain height (h_here + the 45-cell scan) comes from. "
@@ -162,6 +177,10 @@ def main():
                          "It is recorded in the checkpoint meta, so --score/--eval follow it.")
     ap.add_argument("--eval", default="")
     ap.add_argument("--score", default="")
+    ap.add_argument("--score-perceive", dest="score_perceive", choices=("on", "off"), default="",
+                    help="score with the camera-limited scan on or off, whatever the checkpoint was "
+                         "trained with — how much does the policy lose when it only sees what a "
+                         "forward depth camera could have seen?")
     ap.add_argument("--score-source", dest="score_source", choices=("analytic", "raycast"), default="",
                     help="score against this height source instead of the one the checkpoint was "
                          "trained on — the deliberate mismatch experiment (how much does the "
@@ -170,18 +189,25 @@ def main():
     if not tp.HAS_PHYSX or not torch.cuda.is_available():
         print("need PhysX + CUDA"); sys.exit(0)
     if args.score:
-        score_checkpoint(args.score, height_source=args.score_source or None); return
+        score_checkpoint(args.score, height_source=args.score_source or None,
+                         perceive=None if not args.score_perceive else args.score_perceive == "on")
+        return
     if args.eval:
         eval_flat_steering(args.eval); return
 
-    env = SpotStepsEnv(num_envs=args.envs, device="cuda", height_source=args.height_source)
-    if args.height_source == "raycast":
+    env = SpotStepsEnv(num_envs=args.envs, device="cuda", perceive=args.perceive,
+                       perceive_noise=args.perceive_noise,
+                       height_source=None if args.perceive else args.height_source)
+    if env.rays is not None:
         print(f"terrain height by raycast: {env.rays}")
+    if env.percept is not None:
+        print(f"camera-limited scan: {env.percept}")
     aux = make_aux_loss(args.sym_coef) if args.sym_coef > 0 else None
     # height_source rides in the meta so --score and --eval rebuild the env the way it was trained.
     ppo = PPO(env, ACT_DIM, hidden=HIDDEN, lr=args.lr, horizon=args.horizon, log_std_init=-1.5,
               entropy=0.0, normalize_obs=True,
-              meta={**CONFIG, "height_source": args.height_source}, aux_loss=aux)
+              meta={**CONFIG, "height_source": env.height_source, "perceive": args.perceive,
+                    "perceive_noise": args.perceive_noise}, aux_loss=aux)
     if aux is not None:
         print(f"symmetry augmentation ON (coef {args.sym_coef})")
     if args.warmstart and os.path.exists(args.warmstart):

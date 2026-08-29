@@ -166,11 +166,60 @@ and the reason the scan no longer has to be a formula at all.
 oracle, which is the mismatch experiment. `spot_steps.pt`, trained entirely on the analytic scan:
 
 ```bash
-python train_spot_steps.py --score spot_steps.pt --score-source analytic   # track 1.884  fell 0.0000  level 0.96
-python train_spot_steps.py --score spot_steps.pt --score-source raycast    # track 1.865  fell 0.0000  level 0.96
+python train_spot_steps.py --score spot_steps.pt --score-source analytic   # track 1.892  fell 0.0000  level 0.93
+python train_spot_steps.py --score spot_steps.pt --score-source raycast    # track 1.886  fell 0.0000  level 0.95
 ```
 
-−1.0% tracking, no extra falls, the same curriculum level. So the swap is safe on an existing
+−0.3% tracking, no extra falls, the same curriculum level. So the swap is safe on an existing
 policy — you get the faster scan and the formula-free terrain without invalidating the checkpoint.
 Both trainers take `--height-source raycast`, and the choice is written into the checkpoint meta so
 `--score` / `--eval` rebuild the env the way it was trained.
+
+## Training on the scan the camera could actually have seen
+
+The scan above is still **privileged**: the exact height at all 45 cells, which no robot has. The
+`play_*` viewers already replace it with an onboard depth camera and an elevation map
+("Seeing the terrain"), but training never saw that. `--perceive` puts the same camera inside the
+training loop (`threepp.rl.perception`): each control step it casts one ray from the body-mounted
+camera to every query point, marks what was actually visible into a per-env world-anchored map, and
+answers the scan from the map — so a cell reads as terrain once it has been observed and as flat
+ground until then. Same mount, FOV, range and fallback as `spot_depth_scan.ForwardDepthScanner`, so
+the training camera and the deploy camera are one camera. **Reward, termination and the drop-settle
+spawn keep reading ground truth** — the policy is handicapped, the training signal is not.
+
+```bash
+python spot_occlusion.py --envs 512               # what the camera can and cannot see
+python spot_occlusion.py --noise 0.05             # + 5 cm of elevation-map error
+python train_spot_steps.py --perceive --iters 1500
+python train_spot_steps.py --score spot_steps.pt --score-perceive on    # the mismatch experiment
+```
+
+**What the camera sees** (512 envs x 250 steps driving `spot_steps.pt`, levels spread over all six
+riser bands): **49.8% of scan cells directly visible, 41.9% answered from memory, 11.9% blind.**
+That average hides the structure, which is the interesting part — by forward offset:
+
+| cell | −0.35 | −0.15 | +0.05 | +0.20 | +0.35 | +0.50 | +0.70 | +0.90 | +1.10 |
+|---|---|---|---|---|---|---|---|---|---|
+| visible now | 0% | 0% | 0% | 1% | 63% | 98% | 97% | 96% | 94% |
+| from memory | 74% | 77% | 85% | 91% | 35% | 2% | 3% | 4% | 6% |
+| blind | 26% | 23% | 15% | 8% | 6% | 6% | 7% | 8% | 8% |
+
+A forward camera pitched 40° down cannot see the ground under its own body at all — everything
+behind +0.35 m comes out of memory or nowhere. Ahead of it, where the next footfall goes, it sees
+almost everything. `h_here` is answerable on 82% of ticks; the rest reuse the last height the map
+could give, exactly as the deploy scanner does.
+
+**And it makes no measurable difference to the policy.** Same env, same spawns, the observation
+switched between the two, three interleaved rounds of 400 steps:
+
+| | tracking | fell/step |
+|---|---|---|
+| privileged scan | 1.8995 | 0.00001 |
+| camera-limited scan | 1.8991 | 0.00000 |
+
+100.0%, and 99.8% with 5 cm of map error added. I expected this to be the biggest fidelity gap in
+the stack and it measures as none at all — because the cells that go blind are the ones behind and
+under the robot, which it has already walked over, while the forward cells it actually steps on are
+94–98% directly visible. That is a quantitative version of what the viewers report qualitatively,
+and it is specific to this camera and this terrain: a lower mount, a narrower FOV, taller obstacles
+or real overhangs would all move it, and `spot_occlusion.py` is how you would find out.
