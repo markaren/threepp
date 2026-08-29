@@ -61,10 +61,24 @@ Double-count audit -- what the soil model applies and what it only reports:
                        Mohr-Coulomb mu ceiling we hand it -- which saturates at
                        the same c*A + tan_phi*W the module's Janosi law does.
                        Displayed as traction utilisation.
-    bulldozing         APPLIED, via add_force_at_pos. The first-order soil wedge
-                       a wheel pushes ahead of itself. PhysX has no notion of
-                       it, so there is nothing to double-count: it is the whole
-                       reason deep snow slows you down.
+    motion resistance  APPLIED, via add_force_at_pos: Bekker's compaction
+                       resistance (the work of making the rut) plus the
+                       first-order bulldozing wedge, opposing the wheel's FULL
+                       horizontal travel -- a sideways slide ploughs soil too.
+                       PhysX has no notion of either, so there is nothing to
+                       double-count: this is why soft ground bleeds speed and a
+                       slide dies instead of sailing.
+    slip sinkage       APPLIED, through the road override: a spinning wheel
+                       excavates, so the effective sinkage is z_eq scaled by a
+                       dig factor that follows slip with a ~0.6 s time constant.
+                       Floor it in mud and the wheel digs to where the motion
+                       resistance exceeds the traction ceiling -- stuck -- and
+                       easing off lets the dig relax and the car creep out.
+                       Standard terramechanics (slip sinkage), and the whole
+                       mud-driving skill loop. NOTE: the Bekker-vs-PhysX panel
+                       is an identity only while dig ~ 1 -- a dug-in wheel sits
+                       deliberately below static equilibrium, and the panel
+                       then shows the module's excess bearing at that depth.
     suction, grade     module-internal; they shape the grid the wheels then read.
 
 Keep that split. Applying the module's bearing or shear on top of PhysX's would
@@ -141,11 +155,33 @@ MATS = {"mud": replace(MATERIALS["mud"], grade_rate=0.02),
 SPAWN_POS = tp.Vector3(-20.0, 1.05, 0.0)
 SPAWN_ROT = tp.Quaternion().set_from_axis_angle(tp.Vector3(0, 1, 0), math.pi / 2)
 
-# Bulldozing coefficient: the fraction of (frontal patch area x bearing
-# pressure) that ends up as drag. 0.5 is the by-feel value -- around 460 N per
-# wheel in mud and 830 N in snow at cruise, so the snow lane costs you about
-# 2 m/s^2 and you feel the lane change without the car stopping dead.
+# Motion-resistance coefficients. Bulldozing: the fraction of (frontal patch
+# area x bearing pressure) pushed as the soil wedge -- around 460 N per wheel in
+# mud and 830 N in snow at static sinkage. Compaction: Bekker's rut-making work
+# (k_c + 2b*k_phi) * z^(n+1) / (n+1), scaled so that mud cruise costs ~0.18 g
+# total -- enough that a slide dies and a coast bleeds off, while leaving
+# ~0.18 g of traction margin to actually drive with (the mud ceiling is 0.37 g).
 C_BULLDOZE = 0.5
+C_COMPACT = 0.35
+
+# Slip sinkage: a spinning wheel excavates. The effective sinkage is
+# z_eq * dig, where dig follows 1 + K_DIG * min(scrub / SCRUB_REF, 1) with a
+# DIG_TAU time constant -- digging in is excavation, not instant, and so is
+# climbing back out when you ease off. The driver is the contact patch's scrub
+# SPEED, not the slip ratio: any launch from rest has ratio ~1, but a gentle
+# launch scrubs ~1 m/s and barely digs, while wheelspin scrubs 10-25 m/s and
+# buries the wheel. DIG_MAX caps the hole at a physical fraction of the wheel.
+# At full spin in mud the resistance at DIG_MAX exceeds the mu*W traction
+# ceiling: genuinely stuck until the dig relaxes. Clay barely digs.
+SCRUB_DEAD = 1.5                  # m/s below which a wheel compacts, not digs --
+                                  # without this dead zone the car can chicken-and-
+                                  # egg itself stuck: drag keeps it slow, slow keeps
+                                  # scrub up, scrub keeps the dig (and drag) up.
+SCRUB_REF = 5.0                   # m/s of scrub PAST the dead zone for full rate
+K_DIG = {"mud": 1.6, "snow": 1.3, "clay": 0.2}
+DIG_MAX = {"mud": 2.5, "snow": 2.2, "clay": 1.3}
+DIG_TAU = 0.6                     # seconds
+DRAG_CAP_FRAC = 1.5               # per-wheel drag cap, x wheel load (stability)
 
 RIGID_Y = -0.03                   # the packed ground the lanes sit on
 FALLBACK_MU = 1.1                 # see "handling" below
@@ -198,18 +234,23 @@ def sinkage(lane, w):
     return z, (m.cohesion * a + m.tan_phi * w) / max(w, 1.0)
 
 
-def bulldoze(lane, z):
-    """First-order bulldozing drag (N) for a wheel ploughing at sinkage z.
+def motion_resistance(lane, z):
+    """Soil drag (N) for a wheel travelling at sinkage z: compaction + bulldozing.
 
-    The wedge of soil ahead of the wheel is 2b wide and z deep, and it is being
-    pushed at the bearing pressure the wheel is already generating.
+    Compaction is Bekker's rut-making work per unit distance,
+    (k_c + w_eff*k_phi) * z^(n+1) / (n+1) -- the energy that went into the print
+    you can see behind the car. Bulldozing is the wedge ahead of the wheel, 2b
+    wide and z deep, pushed at the bearing pressure the wheel is generating.
+    Both grow superlinearly in z, which is what makes slip sinkage a trap: dig
+    twice as deep and the drag roughly triples.
     """
     if z <= 1.0e-4:
         return 0.0
     m = MATS[lane]
     b = math.sqrt(max(z * (2.0 * R_WHEEL - z), CELL * CELL))
     p = (m.k_c / b + m.k_phi) * z ** m.n
-    return C_BULLDOZE * z * 2.0 * b * p
+    compact = C_COMPACT * (m.k_c + 2.0 * b * m.k_phi) * z ** (m.n + 1.0) / (m.n + 1.0)
+    return compact + C_BULLDOZE * z * 2.0 * b * p
 
 
 # --- the ground ----------------------------------------------------------------
@@ -705,7 +746,18 @@ def pressed(key):
 # --- coupling state ------------------------------------------------------------
 
 w_ema = np.full(4, REST_LOAD)
-prev_hub_y = np.zeros(4)
+prev_hub = None                   # full hub positions last frame, for drag direction
+dig = np.ones(4)                  # slip-sinkage factor, EMA toward 1 + K_DIG*slip
+
+# Traction control, on by default (the real Evoque has it -- "Terrain Response"
+# is exactly this). The direct drive can put 1500 N*m on a wheel whose mud
+# ceiling is ~530 N*m, so anything past ~35 % throttle just spins without it.
+# Cuts throttle while any contact patch scrubs past TC_SCRUB, recovers when it
+# grips. X toggles it off -- at which point flooring it in mud digs the car in,
+# which is the other half of the demo.
+TC_SCRUB = 2.5                    # m/s of scrub where the cut starts
+tc_on = True
+tc_cut = 1.0
 radii = torch.full((4,), R_WHEEL, device=device)
 centers = {n: torch.zeros(1, 4, 3, device=device) for n in LANES}
 vels = {n: torch.zeros(1, 4, 3, device=device) for n in LANES}
@@ -713,13 +765,13 @@ c_host = {n: np.zeros((1, 4, 3), np.float32) for n in LANES}
 v_host = {n: np.zeros((1, 4, 3), np.float32) for n in LANES}
 hud = dict(lane=[None] * 4, z=np.zeros(4), mu=np.zeros(4), w=np.zeros(4),
            bek=np.zeros(4), slip=np.zeros(4), util=np.zeros(4), j=np.zeros(4),
-           over=[False] * 4)
+           dig=np.ones(4), drag=np.zeros(4), over=[False] * 4)
 _readback = 0
 
 
 def coupled_step(throttle, steer, brake, relax_iters=2):
     """One 1/60 step: ground under the wheels, then PhysX over the top."""
-    global w_ema, prev_hub_y, _readback
+    global w_ema, prev_hub, tc_cut, _readback
 
     # 1. chassis pose + wheel world centres
     p, q = vehicle.position, vehicle.quaternion
@@ -759,14 +811,18 @@ def coupled_step(throttle, steer, brake, relax_iters=2):
     w_ema += (load - w_ema) * (DT / (0.15 + DT))
 
     # 4/5. invert Bekker for the sinkage, Mohr-Coulomb for the friction, and
-    #      hand the suspension a road at grade - z_eq.
+    #      hand the suspension a road at grade - z_eq. The dig factor (updated
+    #      in step 6 from last frame's slip) deepens the road under a spinning
+    #      wheel: slip sinkage, one frame of lag like the load loop.
     z_eq = np.zeros(4)
     mu = np.zeros(4)
     for i in range(4):
         if lane_of[i] is None:
             vehicle.clear_road_override(i)
+            dig[i] += (1.0 - dig[i]) * (DT / (DIG_TAU + DT))
             continue
-        z_eq[i], mu[i] = sinkage(lane_of[i], w_ema[i])
+        z_st, mu[i] = sinkage(lane_of[i], w_ema[i])
+        z_eq[i] = min(z_st * dig[i], 0.45 * (2.0 * R_WHEEL))
         vehicle.set_road_override(i, float(grade[i] - z_eq[i]), float(mu[i]))
 
     # 6. carve. The wheels are the module's collider spheres; their bottoms are
@@ -774,6 +830,7 @@ def coupled_step(throttle, steer, brake, relax_iters=2):
     #    Bekker sinkage and the berm is whatever the material would not compact.
     #    Velocity is the CONTACT PATCH slip, not the hub velocity: that is what
     #    the Janosi integral is measured along.
+    max_scrub = 0.0
     for name in LANES:
         c, v = c_host[name], v_host[name]
         for i in range(4):
@@ -785,28 +842,58 @@ def coupled_step(throttle, steer, brake, relax_iters=2):
             slip_long = vehicle.wheel_angular_speed(i) * R_WHEEL - v_fwd
             slip_lat = vehicle.tire_lateral_slip(i) * abs(v_fwd)
             s = slip_long * fwd + slip_lat * right
-            v[0, i] = (s[0], -s[2], (hub[i, 1] - prev_hub_y[i]) / DT)
+            vy = 0.0 if prev_hub is None else (hub[i, 1] - prev_hub[i, 1]) / DT
+            v[0, i] = (s[0], -s[2], vy)
+            # Slip sinkage follows the patch's scrub SPEED past a dead zone
+            # (see SCRUB_DEAD / SCRUB_REF). Digging DEEPER also requires the
+            # wheel to be carrying load: excavation is pressure ejecting
+            # material, and an unloaded wheel just flings mud. Without that
+            # gate there is a runaway -- the road drops faster than the body
+            # can follow, the wheel unloads, spins up, and pins the dig.
+            max_scrub = max(max_scrub, math.hypot(s[0], s[2]))
+            scrub = max(math.hypot(s[0], s[2]) - SCRUB_DEAD, 0.0)
+            target = 1.0 + K_DIG[name] * min(scrub / SCRUB_REF, 1.0)
+            target = min(target, DIG_MAX[name])
+            if target < dig[i] or w_ema[i] > 0.35 * REST_LOAD:
+                dig[i] += (target - dig[i]) * (DT / (DIG_TAU + DT))
         centers[name].copy_(torch.from_numpy(c))
         vels[name].copy_(torch.from_numpy(v))
         terrain[name].deform(centers[name], radii, vels[name], DT)
         terrain[name].relax(relax_iters)
-    prev_hub_y = hub[:, 1].copy()
 
-    # 7. bulldozing drag -- the one soil force actually applied (see the audit
-    #    at the top of the file). Opposes the wheel's horizontal travel.
-    speed_h = math.hypot(fwd[0], fwd[2]) * abs(v_fwd)
+    # 7. motion resistance -- the one soil force actually applied (see the audit
+    #    at the top of the file). Opposes each wheel's FULL horizontal travel:
+    #    a sideways slide ploughs soil just like forward travel does, which is
+    #    why a slide in mud dies instead of sailing. Tapered below 0.5 m/s so it
+    #    never pushes a resting car backwards, capped per wheel for stability.
+    hud["drag"][:] = 0.0
     for i in range(4):
         if lane_of[i] is None:
             continue
-        f = bulldoze(lane_of[i], z_eq[i])
-        if f <= 0.0 or speed_h < 0.15:
+        vh = (np.zeros(3) if prev_hub is None else (hub[i] - prev_hub[i]) / DT)
+        vh[1] = 0.0
+        speed_h = float(np.linalg.norm(vh))
+        f = motion_resistance(lane_of[i], z_eq[i])
+        f = min(f, DRAG_CAP_FRAC * max(w_ema[i], 1.0)) * min(speed_h / 0.5, 1.0)
+        hud["drag"][i] = f
+        if f <= 0.0 or speed_h < 0.05:
             continue
-        d = np.array([fwd[0], 0.0, fwd[2]]) * (1.0 if v_fwd >= 0 else -1.0)
-        d /= max(np.linalg.norm(d), 1e-6)
+        d = vh / speed_h
         vehicle.add_force_at_pos(tp.Vector3(float(-d[0] * f), 0.0, float(-d[2] * f)),
                                  tp.Vector3(*hub[i]))
+    prev_hub = hub.copy()
 
-    # 8. and PhysX runs the car.
+    # 8. and PhysX runs the car -- through the traction control, which is the
+    #    difference between "drivable at any throttle" and "any throttle spins".
+    if tc_on:
+        err = max_scrub - TC_SCRUB
+        if err > 0.0:
+            tc_cut = max(0.15, tc_cut - 4.0 * DT * min(err / 4.0, 1.0))
+        else:
+            tc_cut = min(1.0, tc_cut + 1.5 * DT)
+        throttle = throttle * tc_cut
+    else:
+        tc_cut = 1.0
     vehicle.set_throttle(throttle)
     vehicle.set_steer(steer)
     vehicle.set_brake(brake)
@@ -828,6 +915,7 @@ def coupled_step(throttle, steer, brake, relax_iters=2):
                 hud["util"][i] = ft / max(mu[i] * w_ema[i], 1.0)
     hud["lane"] = lane_of
     hud["z"] = z_eq
+    hud["dig"] = dig.copy()
     hud["mu"] = mu
     hud["w"] = load
     hud["slip"] = np.array([vehicle.tire_longitudinal_slip(i) for i in range(4)])
@@ -857,17 +945,22 @@ def draw_ui():
                   f"{'REVERSE' if vehicle.gear == tp.PhysxVehicle.Gear.REVERSE else 'FORWARD'}"
                   f"   {fps_ema:5.1f} fps")
     tp.imgui.text(f"throttle {bar(throttle_cmd)}  brake {bar(brake_cmd)}")
+    tp.imgui.text(f"traction control {'ON ' if tc_on else 'OFF'} "
+                  f"{bar(tc_cut) if tc_on else '[ floor it and dig ]'}")
     tp.imgui.text(f"steer    {bar(0.5 + 0.5 * steer_cmd)}")
     tp.imgui.separator()
-    tp.imgui.text("wh lane  sink   load   mu   slip  util   j")
+    tp.imgui.text("wh lane  sink   load   mu   slip  util  dig  drag")
     for i in range(4):
         n = hud["lane"][i]
         tp.imgui.text(f"{WHEEL_NAME[i]} {(n or 'rigid'):5s} "
                       f"{hud['z'][i] * 1000:5.1f} {hud['w'][i] / 1000:6.2f} "
                       f"{(hud['mu'][i] if n else FALLBACK_MU):5.2f} "
                       f"{hud['slip'][i]:6.2f} {hud['util'][i]:5.2f} "
-                      f"{hud['j'][i] * 1000:5.1f}")
-    tp.imgui.text("           mm     kN               -    mm")
+                      f"{hud['dig'][i]:4.2f} {hud['drag'][i] / 1000:5.2f}")
+    tp.imgui.text("           mm     kN               -         kN")
+    if (np.mean(hud["dig"]) > 1.6 and abs(vehicle.forward_speed) < 0.5
+            and np.mean(hud["util"]) > 0.9):
+        tp.imgui.text("DUG IN -- ease off the throttle and creep out")
     tp.imgui.separator()
     tp.imgui.text("soil bearing vs PhysX suspension load")
     for i in range(4):
@@ -878,7 +971,7 @@ def draw_ui():
         tp.imgui.text(f"{WHEEL_NAME[i]} Bekker {hud['bek'][i]:7.0f} N   "
                       f"PhysX {hud['w'][i]:7.0f} N   {err:+5.1f} %")
     tp.imgui.separator()
-    tp.imgui.text("W/S drive  A/D steer  R gear  SPACE handbrake")
+    tp.imgui.text("W/S drive  A/D steer  R gear  SPACE handbrake  X tc")
     tp.imgui.text("V pov  C cinematic  BACKSPACE respawn  T reset  F frame")
     tp.imgui.end()
 
@@ -915,6 +1008,9 @@ def drive_inputs(dt):
         vehicle.gear = (tp.PhysxVehicle.Gear.REVERSE
                         if vehicle.gear == tp.PhysxVehicle.Gear.FORWARD
                         else tp.PhysxVehicle.Gear.FORWARD)
+    if pressed("X"):
+        global tc_on
+        tc_on = not tc_on
     if pressed("V"):
         view_mode = 0 if view_mode == 1 else 1
     if pressed("C"):
@@ -1094,10 +1190,53 @@ elif SHOT:
                  out(f"1_{which}_rut"))
     if which in ("spin_mud", "spin_clay"):
         # Acceptance 2: the same full-throttle launch, mud vs the clay strip.
+        # TC off -- unassisted wheelspin is what this shot is about.
+        tc_on = False
         z = z_mud if which == "spin_mud" else 0.0
         scripted(z, [(2.0, 1.0, 0.0)],
                  (-17.0, 1.5, z + (5.0 if z <= 0 else -5.0)), (-18.5, 0.2, z),
                  out(f"2_{which}"))
+    if which == "diag":
+        # Tuning telemetry: a 0.45-throttle launch in mud, per-wheel state
+        # every half second. No frame saved.
+        vehicle.respawn(tp.Vector3(-20.0, 1.05, z_mud), SPAWN_ROT)
+        w_ema[:] = REST_LOAD
+        for _ in range(60):
+            coupled_step(0.0, 0.0, 0.0)
+        print("  t     v_kmh | per wheel FR FL RR RL: W_kN | omega*r m/s | dig | sink_mm")
+        for k in range(int(4.0 * 60)):
+            coupled_step(0.45, 0.0, 0.0)
+            if k % 30 == 0:
+                w = [vehicle.suspension_force(i) / 1000 for i in range(4)]
+                wr = [vehicle.wheel_angular_speed(i) * R_WHEEL for i in range(4)]
+                print(f"  {k / 60.0:4.1f} {vehicle.forward_speed * 3.6:6.1f} | "
+                      f"W {np.round(w, 2)} | wr {np.round(wr, 1)} | "
+                      f"dig {np.round(dig, 2)} | z {np.round(hud['z'] * 1000, 0)}")
+    if which == "stuck":
+        # The mud skill loop, measured, with TC off (TC exists to prevent
+        # exactly this): floor it from rest (the wheels dig and the car goes
+        # nowhere), then ease off to a crawl throttle (the dig relaxes and it
+        # creeps out). No frame is saved -- this one is numbers.
+        tc_on = False
+        vehicle.respawn(tp.Vector3(-20.0, 1.05, z_mud), SPAWN_ROT)
+        w_ema[:] = REST_LOAD
+        for _ in range(60):
+            coupled_step(0.0, 0.0, 0.0)
+        x0 = vehicle.position.x
+        for _ in range(int(4.0 * 60)):
+            coupled_step(1.0, 0.0, 0.0)
+        x1 = vehicle.position.x
+        d1, dig1, z1 = x1 - x0, float(np.mean(hud["dig"])), float(np.mean(hud["z"]) * 1000)
+        for _ in range(int(6.0 * 60)):
+            coupled_step(0.35, 0.0, 0.0)
+        x2 = vehicle.position.x
+        d2, dig2 = x2 - x1, float(np.mean(hud["dig"]))
+        print(f"  stuck test (mud): 4 s full throttle -> {d1:5.2f} m travelled, "
+              f"dig {dig1:.2f}, sink {z1:.0f} mm")
+        print(f"                    6 s at 0.35       -> {d2:5.2f} m travelled, "
+              f"dig {dig2:.2f}, v {vehicle.forward_speed * 3.6:4.1f} km/h")
+        print(f"  drag/wheel now {np.round(hud['drag'], 0)} N, "
+              f"traction ceiling {np.round(hud['mu'] * hud['w'], 0)} N")
     if which == "lap":
         # Acceptance 3: a circle in mud, twice. Full lock at a walking pace
         # turns inside the lane; the readout is the depth of the wheel below
