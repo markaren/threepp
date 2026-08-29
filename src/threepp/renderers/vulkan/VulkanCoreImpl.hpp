@@ -2676,7 +2676,8 @@ namespace threepp {
         // live on BlasRecord::posExt (why a copy and not a buffer swap) and on
         // VulkanRenderer::enableVertexInterop (the caller-facing contract).
         VulkanRenderer::VertexInteropHandle
-        enableVertexInterop(const Mesh& mesh, std::function<void()> deviceCopy, bool validate);
+        enableVertexInterop(const Mesh& mesh, std::function<void()> deviceCopy, bool validate,
+                            bool stableCorrespondence);
         void disableVertexInterop(const Mesh& mesh);
         // The record backing `mesh` for interop purposes, or null. Interop is a
         // plain-mesh feature: skinned / tet / displaced / grass / morphed meshes

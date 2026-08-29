@@ -214,6 +214,18 @@ namespace threepp::vulkan::impl {
         // deviceCopy: it MUST have completed when it returns).
         std::function<void()> externalCopy;
         bool interop = false;
+        // The producer declared (enableVertexInterop stableCorrespondence =
+        // false) that vertex id i is NOT the same surface point from frame to
+        // frame — a re-triangulated soup (marching cubes: one changed cell
+        // shifts every later slot), not a deforming fixed-topology mesh. Then
+        // prevVertex (indexed by vertex id) can't track a stable world point
+        // and per-vertex motion is noise, so the motion-vector consumers are
+        // pointed at the current buffer instead and the geometry reprojects
+        // as world-static — the same treatment (and rationale) as the ocean's
+        // adaptive warp; see the prevVertexAddress / prevPosAddr selection
+        // sites. The per-frame vertex→prevVertex snapshot is skipped as dead
+        // work.
+        bool interopWorldStatic = false;
         // W4: run the GPU sanitize dispatch over posExt before the copy into
         // rec.vertex. The CPU finiteness scan that guards every other BLAS
         // build path reads the host attribute array, which under interop is

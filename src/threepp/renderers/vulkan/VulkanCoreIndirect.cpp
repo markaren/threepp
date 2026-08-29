@@ -306,8 +306,10 @@ namespace threepp {
             // prevVertex can't track a stable world point — point the
             // motion-vector source at the current buffer so the ocean
             // reprojects as world-static (see prevVertexAddress in the
-            // GeometryDesc build for the full rationale).
-            bool warpReproject = false;
+            // GeometryDesc build for the full rationale). An interop record
+            // whose producer declared unstable vertex correspondence
+            // (interopWorldStatic — marching-cubes soups) is the same case.
+            bool warpReproject = rec->interopWorldStatic;
             if (en.isDisplaced) {
                 warpReproject = static_cast<DisplacedMesh*>(en.mesh)->warp.halfRange > 0.0f;
             }

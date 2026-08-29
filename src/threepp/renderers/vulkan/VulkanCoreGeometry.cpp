@@ -934,7 +934,7 @@ vulkan::impl::BlasRecord* VulkanRenderer::Impl::interopRecordFor(const Mesh& mes
 
 VulkanRenderer::VertexInteropHandle
 VulkanRenderer::Impl::enableVertexInterop(const Mesh& mesh, std::function<void()> deviceCopy,
-                                          bool validate) {
+                                          bool validate, bool stableCorrespondence) {
             // Every failure is a NULL HANDLE, never a throw. The record only
             // exists after the mesh's first render (buildBlasFor runs in
             // ensureSceneBuilt), so "not yet" is the expected answer to a call
@@ -1032,6 +1032,7 @@ VulkanRenderer::Impl::enableVertexInterop(const Mesh& mesh, std::function<void()
                     rec.sanitizeDS = vertexSanitize_->allocateRecordDescriptorSet(rec.posExt.handle);
                 }
                 rec.interopValidate = validate && rec.sanitizeDS != VK_NULL_HANDLE;
+                rec.interopWorldStatic = !stableCorrespondence;
                 return {vulkan::takeOsHandle(ctx->device(), rec.posExt),
                         static_cast<size_t>(rec.posExt.size),
                         vulkan::takeOsHandle(ctx->device(), rec.nrmExt),
@@ -1081,6 +1082,7 @@ VulkanRenderer::Impl::enableVertexInterop(const Mesh& mesh, std::function<void()
             rec.interopValidate = validate && rec.sanitizeDS != VK_NULL_HANDLE;
             rec.externalCopy = std::move(deviceCopy);
             rec.interop = true;
+            rec.interopWorldStatic = !stableCorrespondence;
 
             // Force the graduated per-frame residency rather than waiting for
             // kDynamicGraduationStreak dirty frames that will never arrive:
@@ -1636,6 +1638,10 @@ void VulkanRenderer::Impl::recordDynamicGeomRefits(VkCommandBuffer cb) {
             for (size_t k : liveOps) {
                 auto& rec = *pendingDynamicGeomRefits_[k].rec;
                 if (rec.prevVertex.handle == VK_NULL_HANDLE) continue;
+                // World-static interop (re-triangulated soups): the selection
+                // sites never read prevVertex for this record, so the snapshot
+                // is dead work — same skip as the ocean's adaptive warp.
+                if (rec.interopWorldStatic) continue;
                 VkBufferCopy region{};
                 region.size = rec.vbBytes;
                 if (rec.interop) {

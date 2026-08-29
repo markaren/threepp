@@ -2398,8 +2398,9 @@ namespace threepp {
 
     VulkanRenderer::VertexInteropHandle
     VulkanRenderer::enableVertexInterop(const Mesh& mesh, std::function<void()> deviceCopy,
-                                        bool validate) {
-        return core()->enableVertexInterop(mesh, std::move(deviceCopy), validate);
+                                        bool validate, bool stableCorrespondence) {
+        return core()->enableVertexInterop(mesh, std::move(deviceCopy), validate,
+                                           stableCorrespondence);
     }
 
     void VulkanRenderer::disableVertexInterop(const Mesh& mesh) {

@@ -971,9 +971,18 @@ namespace threepp {
         // may replace a blasCache record while the frame that invoked the
         // callback is iterating records, which is a use-after-free, not a
         // wrong picture.
+        // stableCorrespondence: leave true when vertex i is the same surface
+        // point every frame (a deforming fixed-topology mesh) — per-vertex
+        // motion vectors then come from the previous frame's positions. Pass
+        // FALSE for a producer that re-triangulates each frame (a marching-
+        // cubes soup: one changed cell shifts every later vertex slot), where
+        // that history is noise: the mesh then reprojects as world-static and
+        // the temporal passes (TAA/upscaler, reflection denoiser) stop
+        // flickering on the regions that changed.
         VertexInteropHandle enableVertexInterop(const Mesh& mesh,
                                                 std::function<void()> deviceCopy,
-                                                bool validate = true);
+                                                bool validate = true,
+                                                bool stableCorrespondence = true);
         // Release the exports and return the mesh to the normal CPU-driven
         // attribute path. The caller must have stopped (or never started) the
         // foreign writes into the exported memory first.

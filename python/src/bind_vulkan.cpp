@@ -1126,9 +1126,10 @@ namespace threepp_py {
                 // which does the CUDA-side import and hands back wp.arrays.
                 .def("enable_vertex_interop",
                      [](PyVulkanRenderer& r, const Mesh& mesh, std::function<void()> on_frame,
-                        bool validate) -> py::object {
+                        bool validate, bool stable_correspondence) -> py::object {
                          const auto h = r.native().enableVertexInterop(mesh, std::move(on_frame),
-                                                                       validate);
+                                                                       validate,
+                                                                       stable_correspondence);
                          // Null handle = "not ready, or not on this device" —
                          // never an exception. Same None-when-not-ready contract
                          // as GLRenderer.gl_buffer_id, and the caller polls the
@@ -1141,6 +1142,7 @@ namespace threepp_py {
                                                 h.nrmBytes));
                      },
                      py::arg("mesh"), py::arg("on_frame"), py::arg("validate") = true,
+                     py::arg("stable_correspondence") = true,
                      "Export mesh.geometry's position + normal buffers for a foreign GPU "
                      "producer and arm the per-frame device write that fills them.\n\n"
                      "Returns ((pos_handle, pos_bytes), (nrm_handle, nrm_bytes)) or None.\n\n"
@@ -1168,7 +1170,15 @@ namespace threepp_py {
                      "validate=True (default) runs a GPU finiteness pass over the exported "
                      "positions each frame, rewriting non-finite vertices as degenerates. Leave "
                      "it on unless the producer is trusted: a NaN reaching the BLAS build is a "
-                     "device-lost (GPU reset) on NVIDIA, not an error return.")
+                     "device-lost (GPU reset) on NVIDIA, not an error return.\n\n"
+                     "stable_correspondence=True (default) means vertex i is the SAME surface "
+                     "point every frame (a deforming fixed-topology mesh — cloth, a soft body); "
+                     "per-vertex motion vectors then come from the previous frame's positions. "
+                     "Pass False for a producer that RE-TRIANGULATES each frame (a marching-"
+                     "cubes soup: one changed cell shifts every later vertex slot) — that "
+                     "history is noise there, so the mesh reprojects as world-static and the "
+                     "temporal passes (TAA/upscaler, reflection denoiser) stop flickering on "
+                     "the regions that changed.")
                 .def("disable_vertex_interop",
                      [](PyVulkanRenderer& r, const Mesh& mesh) {
                          // Drains the device — the exports may still be a

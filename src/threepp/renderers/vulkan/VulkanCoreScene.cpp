@@ -2841,7 +2841,10 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                 // back to the current buffer so the chit's prevWorldPos
                 // resolves to hitWorldPos: the ocean reprojects as world-
                 // static (camera-parallax only), matching the foam texture.
-                bool warpReproject = false;
+                // An interop record whose producer declared unstable vertex
+                // correspondence (interopWorldStatic — marching-cubes soups)
+                // gets the same world-static fallback.
+                bool warpReproject = recPtr->interopWorldStatic;
                 if (en.isDisplaced) {
                     warpReproject = static_cast<DisplacedMesh*>(m)->warp.halfRange > 0.0f;
                 }
