@@ -4375,6 +4375,22 @@ class MeshPhysicalMaterial(MeshStandardMaterial):
     def dispersion(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
         ...
     @property
+    def specular_intensity(self) -> float:
+        """
+        Scales dielectric F0 linearly; 0 kills the specular lobe (direct and environment) entirely. Default 1.
+        """
+    @specular_intensity.setter
+    def specular_intensity(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def specular_color(self) -> Color:
+        """
+        Tints dielectric F0; applied together with specular_intensity.
+        """
+    @specular_color.setter
+    def specular_color(self, arg0: Color) -> None:
+        ...
+    @property
     def ior(self) -> float:
         ...
     @ior.setter
@@ -7769,7 +7785,7 @@ class VulkanRenderer:
         
         Liveness is the sim's job here: set_live_count(capacity) once and let the kernel write w < 0 for dead slots. An Interop field forfeits reproducibility and every emitter-derived feature (age fade, size taper, colour ramp, surface landing) — it is positions, a radius and an orientation set, and that is the whole model.
         """
-    def enable_vertex_interop(self, mesh: Mesh, on_frame: collections.abc.Callable[[], None], validate: bool = True) -> typing.Any:
+    def enable_vertex_interop(self, mesh: Mesh, on_frame: collections.abc.Callable[[], None], validate: bool = True, stable_correspondence: bool = True) -> typing.Any:
         """
         Export mesh.geometry's position + normal buffers for a foreign GPU producer and arm the per-frame device write that fills them.
         
@@ -7784,6 +7800,8 @@ class VulkanRenderer:
         The handles are OS handles owned by the RENDERER (Win32 NT handles on Windows): import them, but never CloseHandle them from Python — disable_vertex_interop / renderer teardown releases them. The layout is tightly-packed float xyz (12-byte stride, wp.vec3), and *_bytes is the ALLOCATION size, which may exceed count*12 — write only the real range.
         
         validate=True (default) runs a GPU finiteness pass over the exported positions each frame, rewriting non-finite vertices as degenerates. Leave it on unless the producer is trusted: a NaN reaching the BLAS build is a device-lost (GPU reset) on NVIDIA, not an error return.
+
+        stable_correspondence=True (default) means vertex i is the SAME surface point every frame (a deforming fixed-topology mesh — cloth, a soft body); per-vertex motion vectors then come from the previous frame's positions. Pass False for a producer that RE-TRIANGULATES each frame (a marching-cubes soup: one changed cell shifts every later vertex slot) — that history is noise there, so the mesh reprojects as world-static and the temporal passes (TAA/upscaler, reflection denoiser) stop flickering on the regions that changed.
         """
     def frame_interop_active(self, view: typing.SupportsInt | typing.SupportsIndex = 0) -> bool:
         """

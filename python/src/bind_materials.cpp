@@ -217,6 +217,16 @@ namespace threepp_py {
                                "Distance (m) over which attenuation_color is applied once; smaller = murkier.")
                 .def_readwrite("clearcoat", &MeshPhysicalMaterial::clearcoat)
                 .def_readwrite("clearcoat_roughness", &MeshPhysicalMaterial::clearcoatRoughness)
+                // KHR_materials_specular. Unlike clearcoat (which the Vulkan
+                // deferred evaluates only for transmission materials), these
+                // scale/tint dielectric F0 in the OPAQUE shading path on BOTH
+                // backends — the knob for "less specular without more
+                // roughness" (porous surfaces: soil, plaster, unfinished wood).
+                .def_readwrite("specular_intensity", &MeshPhysicalMaterial::specularIntensity,
+                               "Scales dielectric F0 linearly; 0 kills the specular lobe "
+                               "(direct and environment) entirely. Default 1.")
+                .def_readwrite("specular_color", &MeshPhysicalMaterial::specularColor,
+                               "Tints dielectric F0; applied together with specular_intensity.")
                 .def_readwrite("dispersion", &MeshPhysicalMaterial::dispersion)
                 .def_readwrite("iridescence", &MeshPhysicalMaterial::iridescence)
                 .def_readwrite("iridescence_ior", &MeshPhysicalMaterial::iridescenceIOR)
