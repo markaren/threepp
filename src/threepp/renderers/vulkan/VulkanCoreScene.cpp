@@ -955,6 +955,24 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                         }
                         BlasRecord& rec = *blasIt->second;
 
+                        // BufferGeometry::drawRange is honoured at the BASE level
+                        // only (buildIndirectDrawData): a simplified level's index
+                        // set has no correspondence with the range's units. A mesh
+                        // drawing a partial range must therefore stay at LOD0 —
+                        // selecting a coarser level would silently draw the WHOLE
+                        // simplified mesh, the range ignored with no warning.
+                        // lastDraw* is the always-runs enqueue loop's snapshot of
+                        // drawRange, so this hot loop stays shared_ptr-deref-free.
+                        {
+                            const auto fullElems = static_cast<int64_t>(
+                                    rec.indexCount != 0u ? rec.indexCount : rec.vertexCount);
+                            if (rec.lastDrawStart != 0 ||
+                                static_cast<int64_t>(rec.lastDrawCount) < fullElems) {
+                                resetSpan();
+                                continue;
+                            }
+                        }
+
                         // NON-indexed soup (FBX-style loaders never call
                         // setIndex) is eligible too: the chain generator welds
                         // it into canonical indices, and the levels drive
