@@ -429,6 +429,13 @@ VulkanRenderer::Impl::~Impl() {
             if (overlayLineStripPipeline)         vkDestroyPipeline(d, overlayLineStripPipeline, nullptr);
             if (overlayLineListColoredPipeline)   vkDestroyPipeline(d, overlayLineListColoredPipeline, nullptr);
             if (overlayLineStripColoredPipeline)  vkDestroyPipeline(d, overlayLineStripColoredPipeline, nullptr);
+            for (auto& byStrip : overlayLineBlendPipelines)
+                for (auto& byMode : byStrip)
+                    for (VkPipeline p : byMode)
+                        if (p) vkDestroyPipeline(d, p, nullptr);
+            for (VkPipeline p : overlayMeshColoredPipelines)
+                if (p) vkDestroyPipeline(d, p, nullptr);
+            if (overlayBasicAdditivePipeline)     vkDestroyPipeline(d, overlayBasicAdditivePipeline, nullptr);
             if (overlayPointListPipeline)         vkDestroyPipeline(d, overlayPointListPipeline, nullptr);
             if (overlayDepthPrepassPipeline)      vkDestroyPipeline(d, overlayDepthPrepassPipeline, nullptr);
             if (overlayPipelineLayout)      vkDestroyPipelineLayout(d, overlayPipelineLayout, nullptr);

@@ -1365,6 +1365,24 @@ namespace threepp {
         // material has vertexColors == true (matches three.js semantics).
         VkPipeline       overlayLineListColoredPipeline  = VK_NULL_HANDLE;
         VkPipeline       overlayLineStripColoredPipeline = VK_NULL_HANDLE;
+        // Blended counterparts to the four line pipelines above, which all
+        // share the wireframe pipeline's blend-OFF state — that silently
+        // dropped Material::transparent/opacity/blending for Line overlays
+        // (an additive streamline drew as an opaque near-black stroke).
+        // Selection mirrors GLState::setBlending's gate: blend only when
+        // NOT (Normal && !transparent). Indexed [colored][strip][mode] with
+        // mode 0 = alpha (SRC_ALPHA, 1-SRC_ALPHA), 1 = additive
+        // (SRC_ALPHA, ONE) — the same factors the GL backend programs.
+        VkPipeline       overlayLineBlendPipelines[2][2][2] = {};
+        // Vertex-coloured mesh fill (overlay_color shaders, TRIANGLE_LIST,
+        // dynamic cull like overlayBasicPipeline). Lets unlit transparent
+        // vertex-coloured basics take the kSnapUiBlend overlay route instead
+        // of landing opaque in the G-buffer (see snapMeshFlags). Indexed
+        // [0] opaque, [1] alpha-blended, [2] additive.
+        VkPipeline       overlayMeshColoredPipelines[3] = {};
+        // Additive counterpart to overlayBasicTransparentPipeline, so a flat
+        // Blending::Additive basic mesh matches the GL backend too.
+        VkPipeline       overlayBasicAdditivePipeline = VK_NULL_HANDLE;
         // Points pipeline — POINT_LIST topology. Always vertex-coloured;
         // a Points object without a "color" attribute renders as plain
         // material colour (vertex colour defaults to white in that case

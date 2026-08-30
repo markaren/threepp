@@ -2235,12 +2235,25 @@ void VulkanRenderer::Impl::recordHybridOverlay(VkCommandBuffer cb, uint32_t imag
                     // share a mode (most do).
                     VkPipeline curPipeline = VK_NULL_HANDLE;
 
+                    // Blend-pipeline slot from the material, mirroring
+                    // GLState::setBlending's gate: no blending only for
+                    // (Normal && !transparent) or Blending::None. Additive
+                    // gets its own factors; the remaining enums (Subtractive
+                    // / Multiply / Custom) have no overlay variant and fall
+                    // back to plain alpha when transparent, opaque otherwise.
+                    // Returns 0 = opaque, 1 = alpha, 2 = additive.
+                    auto overlayBlendMode = [](const Material& m) {
+                        if (m.blending == Blending::Additive) return 2;
+                        return (m.transparent && m.blending != Blending::None) ? 1 : 0;
+                    };
+
                     auto drawOverlayMesh = [&](const MeshEntry& en) {
                         Color color(1.f, 1.f, 1.f);
                         float opacity = 1.0f;
                         bool wireframe = false;
-                        bool transparent = false;
                         bool depthTest = true;
+                        bool vertexColors = false;
+                        int blendMode = 0;
                         Side side = Side::Front;
                         if (auto* m = en.mesh->material().get()) {
                             if (auto* mc = dynamic_cast<MaterialWithColor*>(m)) {
@@ -2249,18 +2262,40 @@ void VulkanRenderer::Impl::recordHybridOverlay(VkCommandBuffer cb, uint32_t imag
                             if (auto* mw = dynamic_cast<MaterialWithWireframe*>(m)) {
                                 wireframe = mw->wireframe;
                             }
-                            opacity     = m->opacity;
-                            transparent = m->transparent;
-                            depthTest   = m->depthTest;
-                            side        = m->side;
+                            opacity      = m->opacity;
+                            blendMode    = overlayBlendMode(*m);
+                            depthTest    = m->depthTest;
+                            side         = m->side;
+                            vertexColors = m->vertexColors;
+                        }
+                        // Per-vertex colours: fetch pos+color via the line-
+                        // geometry cache — the BLAS vertex buffer bound below
+                        // is position-only. Skinned/displaced/morphed meshes
+                        // keep the flat path (the cache holds undeformed
+                        // attribute-array positions), as does any geometry
+                        // without a vec3 "color" attribute.
+                        const vulkan::LineRec* crec = nullptr;
+                        if (!wireframe && vertexColors &&
+                            !en.isSkinned && !en.isDisplaced && !en.isMorphed) {
+                            if (auto geom = en.mesh->geometry()) {
+                                if (const auto* colAttr = geom->getAttribute("color");
+                                    colAttr && colAttr->itemSize() == 3) {
+                                    crec = ensureLineGeometryUploaded(geom.get());
+                                    if (crec && (crec->vertex.handle == VK_NULL_HANDLE ||
+                                                 crec->color.handle == VK_NULL_HANDLE))
+                                        crec = nullptr;
+                                }
+                            }
                         }
                         // Wireframe takes precedence — wireframe lines are
                         // typically opaque even when material.transparent
                         // is incidentally true.
                         VkPipeline want;
-                        if (wireframe)        want = overlayWireframePipeline;
-                        else if (transparent) want = overlayBasicTransparentPipeline;
-                        else                  want = overlayBasicPipeline;
+                        if (wireframe)           want = overlayWireframePipeline;
+                        else if (crec)           want = overlayMeshColoredPipelines[blendMode];
+                        else if (blendMode == 2) want = overlayBasicAdditivePipeline;
+                        else if (blendMode == 1) want = overlayBasicTransparentPipeline;
+                        else                     want = overlayBasicPipeline;
                         if (want != curPipeline) {
                             vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, want);
                             curPipeline = want;
@@ -2282,8 +2317,11 @@ void VulkanRenderer::Impl::recordHybridOverlay(VkCommandBuffer cb, uint32_t imag
                             vkCmdSetCullMode(cb, cull);
                         }
 
-                        const BlasRecord* rec = resolveBlasForEntry(en);
-                        if (!rec || rec->vertex.handle == VK_NULL_HANDLE) return;
+                        const BlasRecord* rec = nullptr;
+                        if (!crec) {
+                            rec = resolveBlasForEntry(en);
+                            if (!rec || rec->vertex.handle == VK_NULL_HANDLE) return;
+                        }
 
                         Matrix4 model;
                         std::memcpy(model.elements.data(), en.worldMatrix.data(), 64);
@@ -2303,6 +2341,23 @@ void VulkanRenderer::Impl::recordHybridOverlay(VkCommandBuffer cb, uint32_t imag
                                            VK_SHADER_STAGE_VERTEX_BIT |
                                                    VK_SHADER_STAGE_FRAGMENT_BIT,
                                            0, sizeof(pc), &pc);
+
+                        if (crec) {
+                            // overlay_color pipeline: pos at binding 0, vec3
+                            // colour at binding 1, always-uint32 index. The
+                            // fragment result is pc.color × vertex colour with
+                            // pc.color.w opacity — three.js modulation.
+                            VkBuffer     cvbufs[2] = {crec->vertex.handle, crec->color.handle};
+                            VkDeviceSize cvoffs[2] = {0, 0};
+                            vkCmdBindVertexBuffers(cb, 0, 2, cvbufs, cvoffs);
+                            if (crec->index.handle != VK_NULL_HANDLE) {
+                                vkCmdBindIndexBuffer(cb, crec->index.handle, 0, VK_INDEX_TYPE_UINT32);
+                                vkCmdDrawIndexed(cb, crec->indexCount, 1, 0, 0, 0);
+                            } else {
+                                vkCmdDraw(cb, crec->vertexCount, 1, 0, 0);
+                            }
+                            return;
+                        }
 
                         VkBuffer     vbufs[1] = {rec->vertex.handle};
                         VkDeviceSize voffs[1] = {0};
@@ -2397,6 +2452,15 @@ void VulkanRenderer::Impl::recordHybridOverlay(VkCommandBuffer cb, uint32_t imag
                             // skip the draw if the geometry has none.
                             if (lrec->color.handle == VK_NULL_HANDLE) return;
                             want = overlayPointListPipeline;
+                        } else if (const int blendMode = matPtr ? overlayBlendMode(*matPtr) : 0;
+                                   blendMode > 0) {
+                            // transparent / Blending::Additive lines take the
+                            // blend-enabled variants — the plain pipelines
+                            // are blend-off, which rendered a dark additive
+                            // streamline as an opaque near-black stroke.
+                            want = overlayLineBlendPipelines[useVertexColors ? 1 : 0]
+                                                            [le.isSegments ? 0 : 1]
+                                                            [blendMode - 1];
                         } else if (useVertexColors) {
                             want = le.isSegments ? overlayLineListColoredPipeline
                                                  : overlayLineStripColoredPipeline;

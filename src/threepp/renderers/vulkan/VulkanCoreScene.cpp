@@ -18,13 +18,16 @@ uint32_t VulkanRenderer::Impl::snapMeshFlags(Mesh& m, const MaterialWithWirefram
                 m.layers.isEnabled(static_cast<unsigned>(overlayLayer_))) fl |= kSnapOverlay;
             if (m.layers.isEnabled(VulkanRenderer::kSensorOnlyLayer)) fl |= kSnapSensorOnly;
             if (auto mat = m.material(); mat && mat->tetSkinning && mat->tetTexture) fl |= kSnapTet;
-            // Unlit transparent flat-color mesh → raster overlay routing (see
-            // kSnapUiBlend). Textured / vertex-colored basics stay traced —
-            // the overlay fill pipeline is flat-color push-constant only.
+            // Unlit transparent untextured mesh → raster overlay routing (see
+            // kSnapUiBlend). Textured basics stay traced — the overlay fill
+            // pipelines have no sampler. Vertex-colored ones route too, via
+            // the overlayMeshColoredPipelines / line-geometry-cache path
+            // (drawOverlayMesh); before that path existed they stayed in the
+            // G-buffer and rendered opaque, ignoring transparent/opacity.
             if (!(fl & kSnapWire)) {
                 if (auto mat = m.material()) {
                     if (auto* mb = dynamic_cast<MeshBasicMaterial*>(mat.get());
-                        mb && mb->transparent && !mb->map && !mb->vertexColors) fl |= kSnapUiBlend;
+                        mb && mb->transparent && !mb->map) fl |= kSnapUiBlend;
                 }
             }
             // ParticleSystem billboard mesh — detected by the unique material-name
@@ -91,7 +94,7 @@ bool VulkanRenderer::Impl::sceneSnapshotMatches(Object3D& scene, Camera& camera)
                 const bool tet = sn.mat && sn.mat->tetSkinning && sn.mat->tetTexture != nullptr;
                 const bool particle = sn.mat && sn.mat->name == kParticleMaterialName;
                 const bool uiBlend = !wire && sn.basic && sn.basic->transparent &&
-                                     !sn.basic->map && !sn.basic->vertexColors;
+                                     !sn.basic->map;
                 // sn.mat compared equal above, so it's alive and dereferenceable
                 // (nullptr ⇒ no material ⇒ treated as visible). [[#mat-visible]]
                 const bool matHidden = sn.mat && !sn.mat->visible;

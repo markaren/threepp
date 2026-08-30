@@ -1684,6 +1684,62 @@ void VulkanRenderer::Impl::createOverlayPipeline() {
                                             &overlayLineStripColoredPipeline),
                   "vkCreateGraphicsPipelines(overlayLineStripColored)");
 
+            // ── Blended line variants ───────────────────────────────────────
+            // The four line pipelines above inherit the wireframe pipeline's
+            // blend-OFF attachment state, so Material::transparent / opacity /
+            // blending never reached the hardware for Line / LineSegments.
+            // Additive matches GLState: (SRC_ALPHA, ONE) on color and alpha.
+            VkPipelineColorBlendAttachmentState cbasAdd[1] = {cbasBlend[0]};
+            cbasAdd[0].dstColorBlendFactor = VK_BLEND_FACTOR_ONE;
+            cbasAdd[0].srcAlphaBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA;
+            cbasAdd[0].dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
+            VkPipelineColorBlendStateCreateInfo cbAdd = cbBlend;
+            cbAdd.pAttachments = cbasAdd;
+
+            const VkGraphicsPipelineCreateInfo* lineBases[2][2] = {
+                    {&gpciLineList, &gpciLineStrip},
+                    {&gpciLineListColored, &gpciLineStripColored}};
+            const VkPipelineColorBlendStateCreateInfo* lineBlends[2] = {&cbBlend, &cbAdd};
+            for (int colored = 0; colored < 2; ++colored)
+                for (int strip = 0; strip < 2; ++strip)
+                    for (int mode = 0; mode < 2; ++mode) {
+                        VkGraphicsPipelineCreateInfo g = *lineBases[colored][strip];
+                        g.pColorBlendState            = lineBlends[mode];
+                        check(vkCreateGraphicsPipelines(
+                                      ctx->device(), ctx->pipelineCache(), 1, &g, nullptr,
+                                      &overlayLineBlendPipelines[colored][strip][mode]),
+                              "vkCreateGraphicsPipelines(overlayLineBlend)");
+                    }
+
+            // ── Vertex-coloured mesh fill ───────────────────────────────────
+            // Same overlay_color shader pair and 2-binding input as the
+            // colored lines, but triangle-list fill with the basic pipeline's
+            // dynamic cull/depth state. Gives the kSnapUiBlend route a path
+            // for vertexColors materials (snapMeshFlags used to keep them in
+            // the G-buffer, where they rendered opaque). [0]=opaque,
+            // [1]=alpha, [2]=additive.
+            const VkPipelineColorBlendStateCreateInfo* meshBlends[3] = {&cb, &cbBlend, &cbAdd};
+            for (int mode = 0; mode < 3; ++mode) {
+                VkGraphicsPipelineCreateInfo g = gpciBasic;
+                g.stageCount        = 2;
+                g.pStages           = cStages;
+                g.pVertexInputState = &cvi;
+                g.pColorBlendState  = meshBlends[mode];
+                check(vkCreateGraphicsPipelines(ctx->device(), ctx->pipelineCache(), 1, &g, nullptr,
+                                                &overlayMeshColoredPipelines[mode]),
+                      "vkCreateGraphicsPipelines(overlayMeshColored)");
+            }
+
+            // Flat additive fill — Blending::Additive on an untextured basic
+            // previously fell back to plain alpha blending.
+            {
+                VkGraphicsPipelineCreateInfo g = gpciBasic;
+                g.pColorBlendState = &cbAdd;
+                check(vkCreateGraphicsPipelines(ctx->device(), ctx->pipelineCache(), 1, &g, nullptr,
+                                                &overlayBasicAdditivePipeline),
+                      "vkCreateGraphicsPipelines(overlayBasicAdditive)");
+            }
+
             // ── Point list pipeline ─────────────────────────────────────────
             // POINT_LIST topology. Uses overlay_point.vert/.frag which write
             // gl_PointSize from the push constant's color.w slot and discard
