@@ -525,17 +525,26 @@ struct GLMaterials::Impl {
 
     void refreshFogUniforms(UniformMap& uniforms, FogVariant& fog) {
 
+        // The fog mix runs LAST in the fragment shader, after tonemapping and
+        // encodings (the r129 chunk order) -- i.e. in OUTPUT space -- while
+        // Color has authored hex/CSS values as LINEAR since the colour
+        // management change. Encoding the uniform here is what makes a fully
+        // fogged surface land exactly on the authored value, which is also
+        // what a Color background clears to: fog meets background with no
+        // horizon line, the property scenes are designed around. Without it,
+        // full fog converged to EOTF(authored) -- near-black for any dusk
+        // haze -- while the background stayed at the authored value.
         if (fog.index() == 0) {
 
             auto& f = std::get<Fog>(fog);
-            uniforms.at("fogColor").value<Color>().copy(f.color);
+            uniforms.at("fogColor").value<Color>().copyLinearToSRGB(f.color);
 
             uniforms.at("fogNear").value<float>() = f.nearPlane;
             uniforms.at("fogFar").value<float>() = f.farPlane;
         } else {
 
             auto& f = std::get<FogExp2>(fog);
-            uniforms.at("fogColor").value<Color>().copy(f.color);
+            uniforms.at("fogColor").value<Color>().copyLinearToSRGB(f.color);
 
             uniforms.at("fogDensity").value<float>() = f.density;
         }
