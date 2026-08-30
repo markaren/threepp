@@ -16,10 +16,19 @@ blend stays additive and therefore ORDERLESS: still no sort.
 
     pip install warp-lang
     python warp_nebula_vk.py                  # window; drag to orbit
-    python warp_nebula_vk.py --shot 6.6       # headless PNG at the nova
-    python warp_nebula_vk.py --shot 6.6 --flat   # the SAME frame, knobs at 0
-    python warp_nebula_vk.py --n 8000000      # more particles
-    python warp_nebula_vk.py --bench          # frame time, knobs on vs --flat
+    python warp_nebula_vk.py --shot 4.0        # headless PNG, the quiet disk
+    python warp_nebula_vk.py --shot 4.0 --flat # the SAME frame, knobs at 0
+    python warp_nebula_vk.py --shot 6.05       # the nova instant
+    python warp_nebula_vk.py --shot 6.6        # the shell, half a second later
+    python warp_nebula_vk.py --n 8000000       # more particles
+    python warp_nebula_vk.py --bench           # frame time, knobs on vs --flat
+
+WHERE TO LOOK. t=4.0 is the clearest: a dark dust lane cuts across the bulge
+where the near arm crosses it, the near half of the disk sits in its own
+shadow, and the far edge carries a lit rim -- against a --flat frame that is
+one evenly bright lens with no front and no back. t=6.05 is the nova instant,
+where the shock front's near arc reads as a hard rim over a core the front's
+own dust is dimming.
 
 --flat zeroes volume_extinction and volume_shadow and changes nothing else, so
 the pair at one timestamp is the whole acceptance test: dust lanes across the
