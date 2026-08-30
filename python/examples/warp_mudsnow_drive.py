@@ -21,6 +21,7 @@ ground.
     python warp_mudsnow_drive.py --gravel                # the fourth lane, granular
     python warp_mudsnow_drive.py --gravel --gravel-particles 70000   # cheaper grains
     python warp_mudsnow_drive.py --film --interop        # the film (see below)
+    python warp_mudsnow_drive.py --film --gravel --interop   # + the spread's take
     python warp_mudsnow_drive.py --film --dry            # its route, no renderer
     python warp_mudsnow_drive.py --film --takes mud,dig  # re-render two takes
 
@@ -49,7 +50,9 @@ scripts are `spin_gravel`, `gravel` and `gravel_rest`. See "the gravel lane".
 over ONE continuously advancing sim (the ruts accumulate across the whole film;
 nothing is ever reset), hard cuts between them, thirty frames discarded after
 every cut for the temporal passes, and off-screen transits to move the car
-between shots. See "the film" at the bottom of this file.
+between shots. With `--gravel` it is eight takes and ~59 s: the spread gets its
+own launch, and the route detours to keep it virgin until the camera is there.
+See "the film" at the bottom of this file.
 
 The ground has a colour, and the wheels throw it
 ------------------------------------------------
@@ -3166,6 +3169,7 @@ elif FILM:
 
     Z_MUD = 0.5 * (LANE_Z["mud"][0] + LANE_Z["mud"][1])
     Z_SNOW = 0.5 * (LANE_Z["snow"][0] + LANE_Z["snow"][1])
+    Z_GRV = 0.5 * (GRAVEL_Z[0] + GRAVEL_Z[1])
 
     def road(x, z, dy=0.0):
         """Camera height quoted against the ROAD under it, never a datum."""
@@ -3327,6 +3331,10 @@ elif FILM:
     MUD_LINE = 6.0                    # the mud lane's centreline, both passes
     retrace_pass = pilot_fn([(-30.0, MUD_LINE)], 17.0)
     retrace_out = pilot_fn([(-26.0, 10.6)], 17.0)     # out over its own berm
+    # The gravel take's line: a waypoint the take never reaches, so the pilot
+    # holds the lane dead straight for the whole shot instead of arriving and
+    # hunting the point it just passed on camera.
+    gravel_pass = pilot_fn([(-44.0, Z_GRV)], 34.0)
 
     def enter_orbit(c, f, s):
         """Start the orbit behind the car, wherever the car ended up."""
@@ -3360,10 +3368,40 @@ elif FILM:
                                      c + UP * 0.10), lag=6.0),
 
         # Off screen: out onto the apron, back down the yard beyond the mud lane
-        # (z = 14 is apron, so the loop cuts no rut it would then drive on) and
-        # around onto the mud lane's centreline, stopped, pointing up it.
-        transit("to_mud", [(34.0, 8.0), (36.0, 16.0), (-26.0, 14.0), (-27.0, 6.0),
-                           (-14.0, MUD_LINE)], v=26.0),
+        # (z = 14 is apron then, so the loop cuts no rut it would then drive on)
+        # and around onto the mud lane's centreline, stopped, pointing up it.
+        # With --gravel, z = 14 is the SPREAD, and that loop would plough the
+        # take's subject off screen -- so the road goes through the take
+        # instead: the same east-end loop onto the gravel lane's graded base
+        # (its Bekker carve is off, the particles are the surface, and east of
+        # the spread there are no particles to disturb), stopped short of the
+        # virgin stone. The take launches over it, and a hook around the west
+        # end lands the car on the mud line the next take needs either way.
+        *([transit("to_mud", [(34.0, 8.0), (36.0, 16.0), (-26.0, 14.0),
+                              (-27.0, 6.0), (-14.0, MUD_LINE)], v=26.0)]
+          if not GRAVEL else
+          [transit("to_gravel", [(34.0, 8.0), (36.0, 16.0), (24.0, Z_GRV),
+                                 (4.0, Z_GRV), (-4.0, Z_GRV)], v=24.0),
+
+           # 2g. The grains. TC off, floored west over the spread: the bed is
+           #     MLS-MPM stone over the same Bekker road as every other lane,
+           #     the wheels enter the solver as kinematic spheres, and the
+           #     subject is what aggregate does that soil does not -- the
+           #     trough opening under a spinning wheel, the fan of thrown
+           #     stone, the pile that will not hold a wall. The mud take's
+           #     trailing rig, lower and tighter, offset to the LANE side:
+           #     the only near post line on this half of the yard is the mud
+           #     shoulder's at z = 10.9, and any camera south of it shoots the
+           #     whole take through the posts (tried; it does). From inside
+           #     the corridor nothing stands between the lens and the stone.
+           dict(name="gravel", secs=7.0, fov=42.0, tc=False,
+                drive=lambda t: (gravel_pass(t) if t < 5.2 else
+                                 (0.0, gravel_pass(t)[1], 0.5)),
+                rig=lambda t, c, f, s: (c - f * 6.0 - s * 2.4 + UP * 0.75,
+                                        c + f * 1.0 + UP * 0.25), lag=3.5),
+
+           transit("to_mud", [(-33.0, 10.0), (-29.0, 5.5), (-14.0, MUD_LINE)],
+                   v=20.0)]),
 
         # 3. The mud run, up the centreline. From rest: the pilot floors it, the
         #    mud will not take it, TC catches the scrub and feeds it back in --
@@ -3401,8 +3439,8 @@ elif FILM:
                                (34.0, -8.0), (36.0, 4.0), (28.0, MUD_LINE),
                                (17.0, MUD_LINE)], v=24.0, halt=False),
 
-        # 5. The physics money shot: back down the lane in the two ruts it cut
-        #    six shots ago, then out ACROSS them -- up over its own berm and
+        # 5. The physics money shot: back down the lane in the two ruts the
+        #    mud take cut, then out ACROSS them -- up over its own berm and
         #    away. The camera orbits the car so the trench reads as a trench.
         #    The rut number in the log is the whole claim, and it is the same
         #    number the mud take printed on fresh ground.
