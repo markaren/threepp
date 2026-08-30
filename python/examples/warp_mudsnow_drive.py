@@ -18,6 +18,8 @@ ground.
     python warp_mudsnow_drive.py --shot --script cine    # the cinematic frame
     python warp_mudsnow_drive.py --cell 0.08 --width 6   # cheaper ground
     python warp_mudsnow_drive.py --no-lane-color         # flat lane materials
+    python warp_mudsnow_drive.py --gravel                # the fourth lane, granular
+    python warp_mudsnow_drive.py --gravel --gravel-particles 70000   # cheaper grains
     python warp_mudsnow_drive.py --film --interop        # the film (see below)
     python warp_mudsnow_drive.py --film --dry            # its route, no renderer
     python warp_mudsnow_drive.py --film --takes mud,dig  # re-render two takes
@@ -36,6 +38,12 @@ a circle in mud twice, `crest` the car on the rise out of the spawn dip, `cine`
 the look pass's own frame off the C camera, and `pan --yaw D` one heading of a
 360 from the driver's seat. Repeatable is the point -- a hand-driven pass is not
 the same line twice, and the whole claim is that only the SOIL differs.
+
+`--gravel` adds a FOURTH lane whose ground is grains rather than a heightfield:
+the Bekker road override carries the car exactly as on the other three, and an
+MLS-MPM bed of ~100k particles lying on the road carries the look. Opt-in, and
+the reason is measured: 26 fps against 33 with everything else on. Its own
+scripts are `spin_gravel`, `gravel` and `gravel_rest`. See "the gravel lane".
 
 `--film` renders the demo's story as one ~52 s 60 fps mp4: seven scripted TAKES
 over ONE continuously advancing sim (the ruts accumulate across the whole film;
@@ -166,7 +174,8 @@ import warp as wp
 
 import threepp as tp
 from threepp.terrain_deform import MATERIALS, DeformableTerrain
-from warp_common import cli_arg, find_ffmpeg, parse_size, standard_material
+from warp_common import (DensitySurface, cli_arg, find_ffmpeg, parse_size,
+                         standard_material)
 
 try:
     from threepp.cuda_interop import VkInteropArray
@@ -189,6 +198,11 @@ AA = cli_arg("--aa", 4, int)
 WARM = cli_arg("--warm", 60, int)
 NOSAN = "--no-sanitize" in sys.argv
 LANE_COLOR = "--no-lane-color" not in sys.argv   # static colour under interop
+# The fourth lane. Opt-in: the MPM bed is a whole second solver in a frame that
+# already spends ~25 ms elsewhere. See "the gravel lane" below for the numbers.
+GRAVEL = "--gravel" in sys.argv
+GRAVEL_N = cli_arg("--gravel-particles", 110_000, int)
+GRAVEL_SURF_EVERY = cli_arg("--surface-every", 1, int)
 
 DT = 1.0 / 60.0
 R_WHEEL = 0.40                    # PhysX wheel radius, and the collider sphere
@@ -204,10 +218,16 @@ X0, X1 = -0.5 * LANE_LEN, 0.5 * LANE_LEN
 NX = int(round((X1 - X0) / CELL)) + 1
 
 CLAY_W = 4.0
-LANES = ("mud", "clay", "snow")
+# The gravel lane sits beyond the mud lane's post line, 5 m wide: past the posts
+# so the yard still reads as three lanes and a spread, narrow because the MPM
+# domain that covers it is priced by the square metre.
+GRAVEL_W = 5.0
+GRAVEL_Z = (0.5 * CLAY_W + LANE_W + 1.6, 0.5 * CLAY_W + LANE_W + 1.6 + GRAVEL_W)
+LANES = ("mud", "clay", "snow") + (("gravel",) if GRAVEL else ())
 LANE_Z = {"mud": (0.5 * CLAY_W, 0.5 * CLAY_W + LANE_W),
           "clay": (-0.5 * CLAY_W, 0.5 * CLAY_W),
-          "snow": (-0.5 * CLAY_W - LANE_W, -0.5 * CLAY_W)}
+          "snow": (-0.5 * CLAY_W - LANE_W, -0.5 * CLAY_W),
+          "gravel": GRAVEL_Z}
 
 # The presets are calibrated to a 5 cm Spot foot; the bearing numbers carry
 # straight over to a 40 cm wheel (a 3.7 kN corner sits 22 mm into clay, 55 mm
@@ -219,7 +239,17 @@ LANE_Z = {"mud": (0.5 * CLAY_W, 0.5 * CLAY_W + LANE_W),
 # its own tracks instead of digging a fresh sinkage below them.
 MATS = {"mud": replace(MATERIALS["mud"], grade_rate=0.02),
         "snow": replace(MATERIALS["snow"], grade_rate=0.02),
-        "clay": MATERIALS["clay"]}
+        "clay": MATERIALS["clay"],
+        # Crushed aggregate: the sand preset's family (n = 1.1, friction-bought
+        # traction, no suction) with the numbers a graded gravel actually has --
+        # firmer under load than sand (k_phi up 40 %), a steeper repose angle
+        # because the grains interlock, and almost no cohesion. What the CAR
+        # feels from this preset is a road override 25 mm down at mu ~ 0.73:
+        # nearly clay's grip, with sand's motion resistance underneath it.
+        "gravel": replace(MATERIALS["sand"], n=1.1, k_c=1.2e3, k_phi=6.5e6,
+                          cohesion=0.7e3, tan_phi=0.70, janosi_K=0.025,
+                          tan_repose=0.78, compression=0.08, flow_rate=0.14,
+                          grade_rate=0.40)}
 
 SURROUND_R = 320.0                # to the rim of the world
 APRON_R = 62.0                    # the drivable yard: flat-ISH, and it is a road
@@ -349,7 +379,7 @@ C_COMPACT = 0.35
 # snow crushes at a few tens of kPa. Without this cap snow's n=1.6 makes the
 # wedge pressure explode with depth (~120 kPa dug-in) and the lane is
 # undrivable at its own static sinkage. Mud's cap is above anything reachable.
-P_BULLDOZE_CAP = {"mud": 8.0e4, "snow": 3.5e4, "clay": 1.0e9}
+P_BULLDOZE_CAP = {"mud": 8.0e4, "snow": 3.5e4, "clay": 1.0e9, "gravel": 2.5e5}
 
 # Slip sinkage: a spinning wheel excavates. The effective sinkage is
 # z_eq * dig, where dig follows 1 + K_DIG * min(scrub / SCRUB_REF, 1) with a
@@ -365,8 +395,11 @@ SCRUB_DEAD = 1.5                  # m/s below which a wheel compacts, not digs -
                                   # egg itself stuck: drag keeps it slow, slow keeps
                                   # scrub up, scrub keeps the dig (and drag) up.
 SCRUB_REF = 5.0                   # m/s of scrub PAST the dead zone for full rate
-K_DIG = {"mud": 1.6, "snow": 1.3, "clay": 0.2}
-DIG_MAX = {"mud": 2.5, "snow": 2.2, "clay": 1.3}
+# Gravel digs: a spinning wheel throws the loose aggregate out and settles onto
+# the graded base under it, which is a shallow hole that stops -- so K_DIG is
+# mud's but DIG_MAX is low. You cannot bury a car in 15 cm of gravel.
+K_DIG = {"mud": 1.6, "snow": 1.3, "clay": 0.2, "gravel": 1.5}
+DIG_MAX = {"mud": 2.5, "snow": 2.2, "clay": 1.3, "gravel": 1.6}
 DIG_TAU = 0.6                     # seconds
 DRAG_CAP_FRAC = 1.5               # per-wheel drag cap, x wheel load (stability)
 
@@ -650,11 +683,16 @@ mud_mat.roughness = 0.86
 mud_mat.specular_intensity = 0.14
 snow_mat = standard_material(0xdde5f0, 0.97)
 clay_mat = standard_material(0x5a5142, 0.96)
-LANE_MAT = {"mud": mud_mat, "snow": snow_mat, "clay": clay_mat}
+# The gravel LANE (what the Bekker override drives on) is the graded base under
+# the loose stuff: darker and flatter than clay. The loose stuff itself is the
+# MPM bed's own material, further down.
+gravel_mat = standard_material(0x4c4740, 0.95)
+LANE_MAT = {"mud": mud_mat, "snow": snow_mat, "clay": clay_mat,
+            "gravel": gravel_mat}
 # --lane-color: the same trick as the yard, on the LANES -- white materials and
 # a static per-vertex albedo. Off by default; see the note in Strip.__init__.
 LANE_ALBEDO = {"mud": (0.251, 0.161, 0.102), "snow": (0.867, 0.898, 0.941),
-               "clay": (0.353, 0.318, 0.259)}
+               "clay": (0.353, 0.318, 0.259), "gravel": (0.286, 0.267, 0.235)}
 if LANE_COLOR:
     for _m in LANE_MAT.values():
         _m.color = 0xffffff
@@ -666,7 +704,8 @@ if LANE_COLOR:
 # same trick warp_mudsnow_mpm.py's `grain` plays, and it costs four noise
 # lookups a vertex on the strips a wheel actually touched. (freq 1/m, slope) --
 # mud is gloopy, so large soft lumps; snow is crystalline, so fine and strong.
-LANE_GRAIN = {"mud": (1.4, 0.22), "snow": (5.5, 0.13), "clay": (2.4, 0.19)}
+LANE_GRAIN = {"mud": (1.4, 0.22), "snow": (5.5, 0.13), "clay": (2.4, 0.19),
+              "gravel": (3.6, 0.26)}
 
 
 # A lane is drawn as a row of STRIPS, not one mesh, and the ground is published
@@ -1277,11 +1316,17 @@ for k in range(72):
     key = "snow" if mat is snow_rock else ("wet" if mat is wet_rock else "dry")
     # Snow-capped rocks keep their tint tight (snow is snow); the dirt ones get
     # a wide value spread, and every one of them stands in the mud it sits in.
+    _rot = float(rng.uniform(0.0, 6.28))
+    _col = tint(ROCK_ALBEDO[key], 0.09 if key == "snow" else 0.26,
+                0.02 if key == "snow" else 0.07)
+    # The gravel lane's band starts inside the boulder field: drop the two or
+    # three that would stand in it. Every draw above has already been taken, so
+    # both rng streams stay bit-identical and no other rock in the yard moves
+    # or changes colour because the fourth lane is on.
+    if GRAVEL and GRAVEL_Z[0] - 1.0 < z < GRAVEL_Z[1] + 1.0:
+        continue
     rocks[id(mat)].add(boulder(r, 400 + k), (x, r * 0.34 + ground_y(x, z), z),
-                       rot_y=float(rng.uniform(0.0, 6.28)),
-                       color=tint(ROCK_ALBEDO[key],
-                                  0.09 if key == "snow" else 0.26,
-                                  0.02 if key == "snow" else 0.07),
+                       rot_y=_rot, color=_col,
                        dirt=MUD_LINE if key != "snow" else (0.30, 0.31, 0.33),
                        dirt_frac=0.38, mottle=0.09 if key != "snow" else 0.04)
 # NOTE: these boulders are scenery only. Making the big ones solid is one line
@@ -1495,13 +1540,23 @@ def _spray_field(mesh_material=None, hot=(0.20, 0.14, 0.10), cool=(0.09, 0.07, 0
     if mesh_material is not None:
         f.set_mesh_repr(tp.IcosahedronGeometry(radius, 0), mesh_material)
         mr = f.mesh_repr
-        mr.lod_far = 11.0
-        mr.lod_fade = 4.0
+        # The crossover has to sit BEYOND every camera the demo actually flies.
+        # It used to be 11 m, and the chase camera sits at CHASE_DIST = 9.5 --
+        # dead centre of the fade -- so interactive driving watched the clods
+        # exactly where lit geometry dissolves into billboards, and they read
+        # BRIGHT while the parked 2-5 m acceptance rigs (pure mesh) read dark.
+        # The billboard is the reason: BillboardRepr composites AFTER the
+        # upscalers and OUTSIDE auto-exposure, so its painted value is absolute
+        # and does not come down with the AE-adapted dusk ground. Pushed out to
+        # 28 m, every camera in this demo sees real lit geometry; 1.5k
+        # subdiv-0 icosahedra is ~30k triangles worst case, which is nothing.
+        mr.lod_far = 28.0
+        mr.lod_fade = 6.0
         mr.near_cull = 0.9
     f.set_billboard_repr(tp.Color(*hot), tp.Color(*cool), intensity, 1.0)
     b = f.billboard_repr
-    b.lod_near = 7.0 if mesh_material is not None else 0.0
-    b.lod_fade = 4.0 if mesh_material is not None else 0.0
+    b.lod_near = 22.0 if mesh_material is not None else 0.0
+    b.lod_fade = 6.0 if mesh_material is not None else 0.0
     b.alpha_over = True               # thrown soil OCCLUDES; additive mud glows
     b.opacity = opacity
     b.lit = True                      # in the same key the car is in
@@ -1524,8 +1579,13 @@ def _spray_field(mesh_material=None, hot=(0.20, 0.14, 0.10), cool=(0.09, 0.07, 0
 # Wet clods are nearly black and take a specular from the key; powder is the
 # snowfall's own sky-grey, because it IS the snowfall, briefly airborne.
 clod_mat = standard_material(0x2a1e14, 0.62)
+# Gravel throws STONES: drier, lighter, less drag than a wet clod and a shorter
+# life, because a 2 cm chip leaves the tread and is down again in half a second.
+grit_mat = standard_material(0x585044, 0.78)
 sprays = {"mud": Spray("mud", 0.30, (0.70, 1.20), 0.030, 5150),
           "snow": Spray("snow", 1.60, (0.55, 1.00), 0.036, 5151)}
+if GRAVEL:
+    sprays["gravel"] = Spray("gravel", 0.16, (0.45, 0.85), 0.022, 5152)
 if not GL:
     sprays["mud"].field = _spray_field(clod_mat, (0.115, 0.082, 0.058),
                                        (0.052, 0.038, 0.028), 1.0, 0.030,
@@ -1533,6 +1593,10 @@ if not GL:
     sprays["snow"].field = _spray_field(None, (0.66, 0.69, 0.75),
                                         (0.44, 0.47, 0.54), 1.0, 0.036,
                                         stretch=0.05, opacity=0.55)
+    if GRAVEL:
+        sprays["gravel"].field = _spray_field(grit_mat, (0.178, 0.161, 0.132),
+                                              (0.088, 0.080, 0.068), 1.0, 0.022,
+                                              stretch=0.015, opacity=0.90)
 
 
 def spray_step(dt, hub):
@@ -1568,17 +1632,573 @@ def spray_step(dt, hub):
         # leaves where the tread lifts out of the ground, which is what makes a
         # rooster tail a tail and not a halo.
         rim = float(vehicle.wheel_angular_speed(i)) * R_WHEEL
-        gy = hub[i, 1] - R_WHEEL + hud["z"][i]
+        # The ground a clod lands back on. In gravel that is the TOP of the
+        # loose bed, not the graded base the suspension is riding on.
+        gy = hub[i, 1] - R_WHEEL + hud["z"][i] + (GB_D if lane == "gravel" else 0.0)
         pos = hub[i] - fwd * 0.34 + np.array([0.0, -0.30, 0.0])
         # Thrown against the direction of travel at a fraction of rim speed --
         # a clod leaves the tread, it is not launched from it -- with the
         # lateral component of the scrub carried across.
         vel = (-fwd * np.clip(rim, -14.0, 14.0) * 0.34
                + right * float(np.clip(hud["slip_lat"][i], -6.0, 6.0)) * 0.30)
-        s.spawn(n, pos, vel, 0.9 if lane == "mud" else 1.25,
-                2.4 if lane == "mud" else 1.9, gy)
+        # Spread and lift by material: mud leaves in a fat wet arc, powder in a
+        # wide soft cloud, gravel in a tight fast fan (stones do not billow).
+        spread, up = {"mud": (0.9, 2.4), "snow": (1.25, 1.9),
+                      "gravel": (0.70, 2.1)}[lane]
+        s.spawn(n, pos, vel, spread, up, gy)
     for s in sprays.values():
         s.step(dt)
+
+# --- the gravel lane: grains, not a heightfield ---------------------------------
+# The fourth lane is the only one whose ground is not a displacement grid. It is
+# a bed of loose aggregate solved as MLS-MPM -- the three kernels, the Hencky
+# stress and the Drucker-Prager return map on the log singular values that
+# warp_mudsnow_mpm.py runs its mud pit with, at near-zero cohesion, which is
+# what turns a trench that holds its walls into a pile that will not.
+#
+# DIVISION OF HONESTY -- read this before believing anything on screen:
+#
+#   the CAR is carried by BEKKER, exactly like the other three lanes. The
+#   gravel preset above goes through the same road override, the same
+#   Mohr-Coulomb mu and the same motion resistance. Nothing about how this lane
+#   drives comes from the particles.
+#
+#   the LOOK is carried by MPM, one way. The wheels enter the solver as
+#   kinematic sphere colliders with velocity boundary conditions; the grains
+#   part, pile, spill and settle around them. The grains push back on NOTHING:
+#   no grid impulse is ever read out and applied to the vehicle. A two-way
+#   coupling would be a second bearing force on top of the suspension's, which
+#   is the double-count the whole demo is built to avoid.
+#
+# So the bed is a display of what the aggregate does while the soil model drives
+# the car, and the panel says so. The Bekker override is skipped for the CARVE
+# on this lane only (the particles are the surface), not for the support.
+#
+# The bed is a STRETCH of the lane, not all of it: 11 m by 3.4 m by 16 cm, over
+# the spawn, because 110k particles is what fits in the frame budget and 48 m of
+# lane at this resolution is 2 million. Outside it the lane is its own graded
+# base and nothing else, which is exactly what a gravel road is either side of
+# a fresh spread.
+
+GB_D = 0.16                          # bed depth, m: a spread, not a pit
+GB_X0, GB_X1 = -21.5, -10.5          # 11 m, centred on the spawn
+_gb_zc = 0.5 * (GRAVEL_Z[0] + GRAVEL_Z[1])
+GB_Z0, GB_Z1 = _gb_zc - 1.7, _gb_zc + 1.7
+GB_SUB = 10                          # substeps per 1/60 frame
+GB_DT = DT / GB_SUB
+
+# Spacing follows the requested count and the grid follows the spacing, the same
+# one-knob sizing warp_mudsnow_mpm.py uses. At the 110k default that is a 3.8 cm
+# particle and a 7.6 cm cell -- coarse next to that demo's 1.4 cm, and correctly
+# so: these are 40 mm stones, and the marching-cubes blobs ARE the aggregate.
+_gb_vol = (GB_X1 - GB_X0) * (GB_Z1 - GB_Z0) * GB_D
+GB_PD = float((_gb_vol / max(GRAVEL_N, 1000)) ** (1.0 / 3.0))
+GB_H = 2.0 * GB_PD
+GB_INV_H = 1.0 / GB_H
+GB_V0 = GB_PD ** 3
+
+# The bed's floor is the ROAD -- base(x, z) -- so the grains lie on the same
+# profile the lanes and the apron do. It arrives in the kernels as a per-column
+# height array rather than as an analytic expression, because base() is numpy.
+GB_GX0 = GB_X0 - 3.0 * GB_H
+GB_GZ0 = GB_Z0 - 3.0 * GB_H
+GB_FLOOR0 = float(base(0.5 * (GB_X0 + GB_X1), _gb_zc))     # datum for the y grid
+GB_GY0 = GB_FLOOR0 - 0.55                # room under the deepest dip in the bed
+GB_NX = int((GB_X1 + 3.0 * GB_H - GB_GX0) / GB_H) + 1
+GB_NY = int((GB_FLOOR0 + 0.62 - GB_GY0) / GB_H) + 1
+GB_NZ = int((GB_Z1 + 3.0 * GB_H - GB_GZ0) / GB_H) + 1
+GB_DIMS = (GB_NX, GB_NY, GB_NZ)
+
+# Loose crushed aggregate. Stiffness is turned DOWN rather than substeps up
+# (sqrt(E/rho) = 3.6 m/s against h/dt = 46 m/s, comfortably inside it), the
+# friction angle is 38 degrees -- interlocking angular stone -- and the cohesion
+# is a thousandth of the mud pit's: gravel has none, and what little is left
+# only keeps a face from exploding into dust on the first contact.
+GB_E, GB_NU, GB_RHO = 2.5e4, 0.28, 1800.0
+GB_MU = GB_E / (2.0 * (1.0 + GB_NU))
+GB_LA = GB_E * GB_NU / ((1.0 + GB_NU) * (1.0 - 2.0 * GB_NU))
+GB_PHI = math.radians(38.0)
+GB_ALPHA = math.sqrt(2.0 / 3.0) * 2.0 * math.sin(GB_PHI) / (3.0 - math.sin(GB_PHI))
+GB_COH = 0.0006                      # near-zero: a pile, not a trench
+GB_TEN = 0.0015                      # and it parts almost as soon as it is pulled
+GB_C = 0.94                          # APIC -> PIC blend; dry, so barely any
+GB_MASS = GB_RHO * GB_V0
+GB_VMAX = 12.0
+GB_GRAV = -9.81
+GB_MU_WHEEL = 0.62                   # Coulomb friction, tread against stone
+GB_EPS = 0.55 * GB_H
+GB_WEPS = 0.5 * GB_H
+
+
+@wp.func
+def gb_collide(v: wp.vec3, n: wp.vec3, vc: wp.vec3, mu: float) -> wp.vec3:
+    """Project a grid velocity out of a moving collider, with Coulomb friction."""
+    rel = v - vc
+    vn = wp.dot(rel, n)
+    if vn >= 0.0:
+        return v                       # already separating
+    vt = rel - n * vn
+    vtl = wp.length(vt)
+    if vtl > 1.0e-6:
+        vt = vt * wp.max(0.0, 1.0 + mu * vn / vtl)
+    else:
+        vt = wp.vec3(0.0, 0.0, 0.0)
+    return vc + vt
+
+
+@wp.kernel
+def gb_p2g(x: wp.array(dtype=wp.vec3), v: wp.array(dtype=wp.vec3),
+           C: wp.array(dtype=wp.mat33), F: wp.array(dtype=wp.mat33),
+           gm: wp.array3d(dtype=float), gv: wp.array3d(dtype=wp.vec3), dt: float):
+    """Scatter mass and APIC momentum with the MLS-MPM force folded in."""
+    p = wp.tid()
+    xp = x[p]
+    gx = (xp[0] - GB_GX0) * GB_INV_H
+    gy = (xp[1] - GB_GY0) * GB_INV_H
+    gz = (xp[2] - GB_GZ0) * GB_INV_H
+    bi = int(wp.floor(gx - 0.5))
+    bj = int(wp.floor(gy - 0.5))
+    bk = int(wp.floor(gz - 0.5))
+    if bi < 0 or bj < 0 or bk < 0 or bi > GB_NX - 3 or bj > GB_NY - 3 or bk > GB_NZ - 3:
+        return
+    fx = wp.vec3(gx - float(bi), gy - float(bj), gz - float(bk))
+    wx = wp.vec3(0.5 * (1.5 - fx[0]) * (1.5 - fx[0]),
+                 0.75 - (fx[0] - 1.0) * (fx[0] - 1.0),
+                 0.5 * (fx[0] - 0.5) * (fx[0] - 0.5))
+    wy = wp.vec3(0.5 * (1.5 - fx[1]) * (1.5 - fx[1]),
+                 0.75 - (fx[1] - 1.0) * (fx[1] - 1.0),
+                 0.5 * (fx[1] - 0.5) * (fx[1] - 0.5))
+    wz = wp.vec3(0.5 * (1.5 - fx[2]) * (1.5 - fx[2]),
+                 0.75 - (fx[2] - 1.0) * (fx[2] - 1.0),
+                 0.5 * (fx[2] - 0.5) * (fx[2] - 0.5))
+    # Hencky (log) strain, so the return map in gb_g2p acts on the same singular
+    # values the stress is built from.
+    U = wp.mat33()
+    V = wp.mat33()
+    sig = wp.vec3()
+    wp.svd3(F[p], U, sig, V)
+    e0 = wp.log(wp.max(sig[0], 1.0e-4))
+    e1 = wp.log(wp.max(sig[1], 1.0e-4))
+    e2 = wp.log(wp.max(sig[2], 1.0e-4))
+    tr = e0 + e1 + e2
+    t = wp.vec3(2.0 * GB_MU * e0 + GB_LA * tr,
+                2.0 * GB_MU * e1 + GB_LA * tr,
+                2.0 * GB_MU * e2 + GB_LA * tr)
+    tau = U * wp.diag(t) * wp.transpose(U)
+    affine = tau * (-dt * GB_V0 * 4.0 * GB_INV_H * GB_INV_H) + C[p] * GB_MASS
+    mv = v[p] * GB_MASS
+    for a in range(3):
+        for b in range(3):
+            for c in range(3):
+                w = wx[a] * wy[b] * wz[c]
+                dpos = wp.vec3((float(a) - fx[0]) * GB_H,
+                               (float(b) - fx[1]) * GB_H,
+                               (float(c) - fx[2]) * GB_H)
+                wp.atomic_add(gm, bi + a, bj + b, bk + c, w * GB_MASS)
+                wp.atomic_add(gv, bi + a, bj + b, bk + c, (mv + affine * dpos) * w)
+
+
+@wp.kernel
+def gb_grid(gm: wp.array3d(dtype=float), gv: wp.array3d(dtype=wp.vec3),
+            floor: wp.array2d(dtype=float),
+            wc: wp.array(dtype=wp.vec3), wv: wp.array(dtype=wp.vec3),
+            ww: wp.array(dtype=wp.vec3), dt: float,
+            react: wp.array(dtype=wp.vec3)):
+    """Momentum -> velocity, gravity, the four wheels, the road under it all.
+
+    `react` accumulates the momentum the wheel boundary condition TOOK OUT of
+    the grid this substep. Divided by dt that is a force -- an MPM grid impulse
+    is momentum, which is exactly what a PBD position correction is not -- and
+    it is the number the panel shows against Bekker's. It is read, never
+    applied: see the division of honesty above.
+    """
+    i, j, k = wp.tid()
+    m = gm[i, j, k]
+    if m <= 1.0e-11:
+        gv[i, j, k] = wp.vec3(0.0, 0.0, 0.0)
+        return
+    v = gv[i, j, k] * (1.0 / m) + wp.vec3(0.0, GB_GRAV * dt, 0.0)
+    p = wp.vec3(GB_GX0 + float(i) * GB_H, GB_GY0 + float(j) * GB_H,
+                GB_GZ0 + float(k) * GB_H)
+
+    for q in range(4):
+        c = wc[q]
+        d = p - c
+        dl = wp.length(d)
+        if dl < R_WHEEL + GB_EPS:
+            n = d * (1.0 / wp.max(dl, 1.0e-9))
+            before = v
+            v = gb_collide(v, n, wv[q] + wp.cross(ww[q], n * R_WHEEL), GB_MU_WHEEL)
+            wp.atomic_add(react, q, (before - v) * m)
+
+    # The road: a per-column floor height, so the bed lies on base(x, z) and not
+    # on a plane the rest of the yard abandoned.
+    fy = floor[i, k]
+    if p[1] < fy + GB_WEPS:
+        v = wp.vec3(v[0] * 0.42, wp.max(v[1], 0.0), v[2] * 0.42)
+
+    # The bed's own edges. Nothing is walled: the fill is inset from the domain
+    # and gravel at a 38-degree repose angle stops itself long before the clamp,
+    # so the spread tapers at its edges the way a tipped load does.
+    if p[0] < GB_GX0 + GB_H:
+        v = wp.vec3(wp.max(v[0], 0.0), v[1], v[2])
+    if p[0] > GB_GX0 + float(GB_NX - 2) * GB_H:
+        v = wp.vec3(wp.min(v[0], 0.0), v[1], v[2])
+    if p[2] < GB_GZ0 + GB_H:
+        v = wp.vec3(v[0], v[1], wp.max(v[2], 0.0))
+    if p[2] > GB_GZ0 + float(GB_NZ - 2) * GB_H:
+        v = wp.vec3(v[0], v[1], wp.min(v[2], 0.0))
+
+    sp = wp.length(v)
+    if sp > GB_VMAX:
+        v = v * (GB_VMAX / sp)
+    gv[i, j, k] = v
+
+
+@wp.kernel
+def gb_g2p(x: wp.array(dtype=wp.vec3), v: wp.array(dtype=wp.vec3),
+           C: wp.array(dtype=wp.mat33), F: wp.array(dtype=wp.mat33),
+           floor: wp.array2d(dtype=float),
+           gv: wp.array3d(dtype=wp.vec3), dt: float):
+    """Gather velocity and the affine field, advect, then return-map F."""
+    p = wp.tid()
+    xp = x[p]
+    gx = (xp[0] - GB_GX0) * GB_INV_H
+    gy = (xp[1] - GB_GY0) * GB_INV_H
+    gz = (xp[2] - GB_GZ0) * GB_INV_H
+    bi = int(wp.floor(gx - 0.5))
+    bj = int(wp.floor(gy - 0.5))
+    bk = int(wp.floor(gz - 0.5))
+    if bi < 0 or bj < 0 or bk < 0 or bi > GB_NX - 3 or bj > GB_NY - 3 or bk > GB_NZ - 3:
+        v[p] = wp.vec3(0.0, 0.0, 0.0)
+        return
+    fx = wp.vec3(gx - float(bi), gy - float(bj), gz - float(bk))
+    wx = wp.vec3(0.5 * (1.5 - fx[0]) * (1.5 - fx[0]),
+                 0.75 - (fx[0] - 1.0) * (fx[0] - 1.0),
+                 0.5 * (fx[0] - 0.5) * (fx[0] - 0.5))
+    wy = wp.vec3(0.5 * (1.5 - fx[1]) * (1.5 - fx[1]),
+                 0.75 - (fx[1] - 1.0) * (fx[1] - 1.0),
+                 0.5 * (fx[1] - 0.5) * (fx[1] - 0.5))
+    wz = wp.vec3(0.5 * (1.5 - fx[2]) * (1.5 - fx[2]),
+                 0.75 - (fx[2] - 1.0) * (fx[2] - 1.0),
+                 0.5 * (fx[2] - 0.5) * (fx[2] - 0.5))
+    nv = wp.vec3(0.0, 0.0, 0.0)
+    nc = wp.mat33(0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
+    for a in range(3):
+        for b in range(3):
+            for c in range(3):
+                w = wx[a] * wy[b] * wz[c]
+                g = gv[bi + a, bj + b, bk + c]
+                nv += g * w
+                nc += wp.outer(g, wp.vec3(float(a) - fx[0], float(b) - fx[1],
+                                          float(c) - fx[2])) * (4.0 * GB_INV_H * w)
+    nc = nc * GB_C
+    Fn = (wp.identity(n=3, dtype=float) + nc * dt) * F[p]
+    U = wp.mat33()
+    V = wp.mat33()
+    sig = wp.vec3()
+    wp.svd3(Fn, U, sig, V)
+    s0 = wp.min(wp.max(sig[0], 0.05), 4.0)
+    s1 = wp.min(wp.max(sig[1], 0.05), 4.0)
+    s2 = wp.min(wp.max(sig[2], 0.05), 4.0)
+    # Drucker-Prager, cohesion ~ 0. Pulled apart at all and the stone lets go
+    # (the tip of the yield cone, stress-free); sheared past the cone and it
+    # slides along it, which is the angle of repose showing up as a pile.
+    e0 = wp.log(s0)
+    e1 = wp.log(s1)
+    e2 = wp.log(s2)
+    tr = e0 + e1 + e2
+    if tr > GB_TEN:
+        kk = wp.exp(GB_TEN / 3.0)
+        s0, s1, s2 = kk, kk, kk
+    else:
+        h0 = e0 - tr / 3.0
+        h1 = e1 - tr / 3.0
+        h2 = e2 - tr / 3.0
+        fn = wp.sqrt(h0 * h0 + h1 * h1 + h2 * h2)
+        dg = fn - GB_COH + GB_ALPHA * (3.0 * GB_LA + 2.0 * GB_MU) / (2.0 * GB_MU) * tr
+        if dg > 0.0 and fn > 1.0e-8:
+            sc = dg / fn
+            s0 = wp.exp(e0 - h0 * sc)
+            s1 = wp.exp(e1 - h1 * sc)
+            s2 = wp.exp(e2 - h2 * sc)
+    F[p] = U * wp.diag(wp.vec3(s0, s1, s2)) * wp.transpose(V)
+    C[p] = nc
+    v[p] = nv
+    # Belt and braces: nothing leaves the bed, whatever the grid did, and
+    # nothing sinks through the road under it.
+    q = xp + nv * dt
+    ci = wp.min(wp.max(int((q[0] - GB_GX0) * GB_INV_H), 0), GB_NX - 1)
+    ck = wp.min(wp.max(int((q[2] - GB_GZ0) * GB_INV_H), 0), GB_NZ - 1)
+    x[p] = wp.vec3(
+        wp.min(wp.max(q[0], GB_GX0 + GB_H), GB_GX0 + float(GB_NX - 2) * GB_H),
+        wp.min(wp.max(q[1], floor[ci, ck] + 0.25 * GB_H), GB_GY0 + float(GB_NY - 2) * GB_H),
+        wp.min(wp.max(q[2], GB_GZ0 + GB_H), GB_GZ0 + float(GB_NZ - 2) * GB_H))
+
+
+class GravelBed:
+    """The particles, their surface, and the mesh the surface is published into.
+
+    Surfacing is warp_mudsnow_mpm.py's route verbatim: density grid, marching
+    cubes, then one expand that de-indexes the soup straight into the vertex
+    buffers -- the renderer's own under --interop, a host staging pair
+    otherwise. `sign=-1.0` is not optional: wp.MarchingCubes winds the other
+    way round, and a Side.Double material's back-face flip would light outward
+    normals as pure black.
+    """
+
+    MAX_TRIS = cli_arg("--gravel-max-tris", 220_000, int)
+
+    def __init__(self, wp_device):
+        self.dev = wp_device
+        # A jittered lattice, inset half a cell from the bed so the first frame
+        # is a level spread rather than a wall against the clamp.
+        pad = 0.6 * GB_PD
+        nx = max(1, int((GB_X1 - GB_X0 - 2 * pad) / GB_PD))
+        nz = max(1, int((GB_Z1 - GB_Z0 - 2 * pad) / GB_PD))
+        ny = max(1, int(GB_D / GB_PD))
+        ix, iy, iz = np.meshgrid(np.arange(nx), np.arange(ny), np.arange(nz),
+                                 indexing="ij")
+        px = GB_X0 + pad + (ix.ravel() + 0.5) * GB_PD
+        pz = GB_Z0 + pad + (iz.ravel() + 0.5) * GB_PD
+        # Seeded ON the road: the bed's underside is base(x, z), so a spread
+        # over a crest is thinner at the top than a slab would be.
+        py = base(px, pz) + 0.5 * GB_PD + (iy.ravel() + 0.5) * GB_PD
+        # And it TAPERS at its edges over 0.7 m. A tipped-and-graded spread ends
+        # in a feather, not in the 16 cm wall a full rectangle would put there --
+        # which is the difference between gravel laid on a road and a doormat.
+        edge = np.minimum(np.minimum(px - GB_X0, GB_X1 - px),
+                          np.minimum(pz - GB_Z0, GB_Z1 - pz))
+        keep = ((iy.ravel() + 0.5) * GB_PD
+                <= GB_D * np.clip(edge / 0.70, 0.12, 1.0) ** 0.65)
+        p0 = np.stack([px, py, pz], axis=-1)[keep].astype(np.float32)
+        jit = np.random.default_rng(9).uniform(-0.22 * GB_PD, 0.22 * GB_PD, p0.shape)
+        self.p0 = np.ascontiguousarray(p0 + jit, np.float32)
+        self.n = len(self.p0)
+        self.x = wp.array(self.p0, dtype=wp.vec3, device=wp_device)
+        self.v = wp.zeros(self.n, dtype=wp.vec3, device=wp_device)
+        self.C = wp.zeros(self.n, dtype=wp.mat33, device=wp_device)
+        self.F = wp.array(np.tile(np.eye(3, dtype=np.float32), (self.n, 1, 1)),
+                          dtype=wp.mat33, device=wp_device)
+        self.gm = wp.zeros(GB_DIMS, dtype=float, device=wp_device)
+        self.gv = wp.zeros(GB_DIMS, dtype=wp.vec3, device=wp_device)
+
+        # The road, sampled once per grid column.
+        fi = (GB_GX0 + np.arange(GB_NX) * GB_H)[:, None]
+        fk = (GB_GZ0 + np.arange(GB_NZ) * GB_H)[None, :]
+        self.floor = wp.array(np.ascontiguousarray(base(fi, fk), np.float32),
+                              dtype=float, device=wp_device)
+
+        self.wc = wp.zeros(4, dtype=wp.vec3, device=wp_device)
+        self.wv = wp.zeros(4, dtype=wp.vec3, device=wp_device)
+        self.ww = wp.zeros(4, dtype=wp.vec3, device=wp_device)
+        self.react = wp.zeros(4, dtype=wp.vec3, device=wp_device)
+        self.react_n = np.zeros(4)          # |grid dp/dt| per wheel, N, display
+        self._react_ready = 0
+
+        cell = 1.15 * GB_PD
+        origin = (GB_X0 - 4 * cell, GB_GY0, GB_Z0 - 4 * cell)
+        dims = (int((GB_X1 + 4 * cell - origin[0]) / cell) + 1,
+                int((GB_FLOOR0 + 0.50 - origin[1]) / cell) + 1,
+                int((GB_Z1 + 4 * cell - origin[2]) / cell) + 1)
+        self.surface = DensitySurface(origin, cell, dims, wp_device)
+        # A cell fully inside the material collects (cell/PD)^3 particles, so the
+        # iso level tracks the resolution instead of being a magic number.
+        self.iso = 0.46 * (cell / GB_PD) ** 3
+        self.ntris = 0
+        self.vk = None
+        self.vk_ntris = 0
+        self._stage = None
+        cap = self.MAX_TRIS * 3
+        self.geometry = tp.BufferGeometry()
+        self.geometry.set_attribute("position", np.zeros((cap, 3), np.float32))
+        self.geometry.set_attribute("normal", np.tile(np.float32([0, 1, 0]), (cap, 1)))
+        self.geometry.set_draw_range(0, 3)
+        # Grey-brown crushed stone, a shade warmer and lighter than the graded
+        # base it lies on so the spread reads as a separate LAYER rather than a
+        # bulge in the lane. Not vertex-coloured: a marching-cubes soup
+        # re-triangulates every frame, so a static per-vertex attribute on it
+        # would be noise. The grain in expand() does that job instead.
+        # sRGB, decoded by the material -- the same numbers LANE_ALBEDO is
+        # written in. A shade LIGHTER than the graded base under it (0.286) and
+        # no more: this yard is dusk under fog and its whole palette lives
+        # between 0.10 and 0.35, so a "stone grey" picked by eye off a monitor
+        # lands three times too bright and reads as spilled plaster.
+        m = tp.MeshPhysicalMaterial()
+        m.color = 0x554e44
+        m.roughness = 0.94
+        m.specular_intensity = 0.18
+        m.side = tp.Side.Double
+        m.flat_shading = False
+        self.material = m
+        self.mesh = tp.Mesh(self.geometry, m)
+        self.mesh.cast_shadow = True
+        self.mesh.receive_shadow = True
+        self.mesh.frustum_culled = False     # the CPU-side bounds never see GPU writes
+        self.frame_no = 0
+        print(f"  gravel bed: {self.n:,} MLS-MPM particles, grid "
+              f"{GB_NX}x{GB_NY}x{GB_NZ} @ h={GB_H * 1000:.0f} mm, "
+              f"spacing {GB_PD * 1000:.0f} mm, {GB_SUB} substeps/frame, "
+              f"{GB_X1 - GB_X0:.0f} x {GB_Z1 - GB_Z0:.1f} m bed")
+
+    # -- simulation ------------------------------------------------------------
+
+    def set_wheels(self, hub, vel, omega, active):
+        """This frame's kinematic colliders. Inactive wheels park under the map."""
+        c = np.zeros((4, 3), np.float32)
+        v = np.zeros((4, 3), np.float32)
+        w = np.zeros((4, 3), np.float32)
+        for i in range(4):
+            if not active[i]:
+                c[i] = (0.0, GB_GY0 - 50.0, 0.0)
+                continue
+            c[i] = hub[i]
+            v[i] = vel[i]
+            w[i] = omega[i]
+        self.wc.assign(c)
+        self.wv.assign(v)
+        self.ww.assign(w)
+
+    def step(self):
+        self.react.zero_()
+        for _ in range(GB_SUB):
+            self.gm.zero_()
+            self.gv.zero_()
+            wp.launch(gb_p2g, dim=self.n, device=self.dev,
+                      inputs=[self.x, self.v, self.C, self.F, self.gm, self.gv, GB_DT])
+            wp.launch(gb_grid, dim=GB_DIMS, device=self.dev,
+                      inputs=[self.gm, self.gv, self.floor, self.wc, self.wv,
+                              self.ww, GB_DT, self.react])
+            wp.launch(gb_g2p, dim=self.n, device=self.dev,
+                      inputs=[self.x, self.v, self.C, self.F, self.floor,
+                              self.gv, GB_DT])
+        # Momentum balance, read every third frame like the Bekker panel: the
+        # impulse the wheel BCs removed from the grid over the frame, divided by
+        # the frame. Display only.
+        self._react_ready += 1
+        if self._react_ready % 3 == 0:
+            self.react_n = np.linalg.norm(self.react.numpy(), axis=1) / DT
+
+    def reset(self):
+        self.x.assign(self.p0)
+        self.v.zero_()
+        self.C.zero_()
+        self.F.assign(np.tile(np.eye(3, dtype=np.float32), (self.n, 1, 1)))
+        self.react.zero_()
+        self.react_n[:] = 0.0
+
+    # -- surfacing -------------------------------------------------------------
+
+    def surface_frame(self):
+        """Density grid -> marching cubes -> the mesh, throttled by --surface-every."""
+        self.frame_no += 1
+        if (self.frame_no - 1) % GRAVEL_SURF_EVERY:
+            return
+        self.ntris = min(self.surface.build(self.x, self.n, self.iso), self.MAX_TRIS)
+        if self.vk is not None:
+            # Zero copy: _on_frame expands from inside the renderer's frame, and
+            # the drawRange published here is what its raster draw, BLAS build
+            # and interop copies all clamp to.
+            self.vk_ntris = self.ntris
+            self.geometry.set_draw_range(0, 3 * self.ntris)
+            return
+        if self.ntris > 0:
+            if self._stage is None:
+                self._stage = (wp.zeros(self.MAX_TRIS * 3, dtype=wp.vec3, device=self.dev),
+                               wp.zeros(self.MAX_TRIS * 3, dtype=wp.vec3, device=self.dev))
+            self._expand(self.ntris, self._stage[0], self._stage[1])
+            rows = 3 * self.ntris
+            self.geometry.update_attribute("position", self._stage[0][:rows].numpy())
+            self.geometry.update_attribute("normal", self._stage[1][:rows].numpy())
+        self.geometry.set_draw_range(0, 3 * self.ntris)
+
+    def _expand(self, ntris, pos, nrm, dim=None):
+        # Grain, hard. The density blur that makes a marching-cubes surface
+        # watertight also makes it putty, and putty is the one thing crushed
+        # stone must never look like: 0.8 of slope at 34/m is a 3 cm chip
+        # breaking the specular up over every square metre of the spread.
+        self.surface.expand(ntris, pos, nrm, dim=dim, sign=-1.0,
+                            grain=0.80, grain_freq=34.0)
+
+    def _on_frame(self):
+        if self.vk_ntris > 0:
+            self._expand(self.vk_ntris, self.vk[0].array, self.vk[1].array)
+        wp.synchronize_device(self.dev)
+
+    def arm(self, renderer):
+        if not INTEROP or VkInteropArray is None \
+                or not hasattr(renderer, "enable_vertex_interop"):
+            return False
+        try:
+            # The soup re-triangulates every frame -- one changed cell shifts
+            # every later vertex slot -- so per-vertex motion history is noise.
+            h = renderer.enable_vertex_interop(self.mesh, self._on_frame,
+                                               stable_correspondence=False,
+                                               validate=not NOSAN)
+        except TypeError:                       # build predating the keywords
+            h = renderer.enable_vertex_interop(self.mesh, self._on_frame)
+        if h is None:
+            return False
+        (ph, pb), (nh, nb) = h
+        cap = self.MAX_TRIS * 3
+        try:
+            self.vk = (VkInteropArray(ph, pb, wp.vec3, cap, device),
+                       VkInteropArray(nh, nb, wp.vec3, cap, device))
+        except Exception as e:                  # noqa: BLE001 - fall back
+            print(f"  note: gravel CUDA import failed ({e}) -- host route")
+            renderer.disable_vertex_interop(self.mesh)
+            self.vk = None
+            return False
+        # Degenerate the whole capacity once: the exports are fresh VRAM and a
+        # consumer that ever forgot the drawRange clamp should read a harmless
+        # off-screen point rather than whatever was in that memory.
+        self._expand(0, self.vk[0].array, self.vk[1].array, dim=self.MAX_TRIS)
+        wp.synchronize_device(self.dev)
+        atexit.register(self._release, renderer)
+        return True
+
+    def _release(self, renderer):
+        if self.vk is None:
+            return
+        pair, self.vk = self.vk, None
+        for a in pair:
+            a.close()
+        renderer.disable_vertex_interop(self.mesh)
+
+
+gravel = GravelBed(terrain["gravel"]._wp_device) if GRAVEL else None
+if gravel is not None:
+    scene.add(gravel.mesh)
+
+
+def gravel_step(hub, prev, lane_of, right):
+    """Drive the bed's four kinematic colliders and advance it one frame.
+
+    Called from the END of coupled_step, so it sees the wheel poses the vehicle
+    just settled on. Nothing it computes goes back into the vehicle.
+    """
+    if gravel is None:
+        return
+    vel = np.zeros((4, 3))
+    om = np.zeros((4, 3))
+    active = [False] * 4
+    for i in range(4):
+        if lane_of[i] != "gravel":
+            continue
+        if not (GB_X0 - 1.2 <= hub[i, 0] <= GB_X1 + 1.2
+                and GB_Z0 - 1.2 <= hub[i, 2] <= GB_Z1 + 1.2):
+            continue                    # on the lane, but off the spread
+        active[i] = True
+        if prev is not None:
+            vel[i] = (hub[i] - prev[i]) / DT
+        # omega = right * wheel_angular_speed puts the contact point's surface
+        # velocity at -forward * omega * R, so a wheel rolling true stands still
+        # against the stone and a spinning one throws it backwards.
+        om[i] = right * float(vehicle.wheel_angular_speed(i))
+    gravel.set_wheels(hub, vel, om, active)
+    gravel.step()
+    gravel.surface_frame()
+
 
 # --- the rover -----------------------------------------------------------------
 
@@ -1855,6 +2475,13 @@ def coupled_step(throttle, steer, brake, relax_iters=2):
             target = min(target, DIG_MAX[name])
             if target < dig[i] or w_ema[i] > 0.35 * REST_LOAD:
                 dig[i] += (target - dig[i]) * (DT / (DIG_TAU + DT))
+        if name == "gravel":
+            # The one lane whose surface is NOT this module's. Everything above
+            # still runs -- the scrub the spray reads, the dig the road override
+            # deepens with -- but the carve is skipped, because the MPM bed is
+            # the gravel's display and a heightfield rut under it would be a
+            # second, contradictory opinion about where the stone went.
+            continue
         centers[name].copy_(torch.from_numpy(c))
         vels[name].copy_(torch.from_numpy(v))
         terrain[name].deform(centers[name], radii, vels[name], DT)
@@ -1880,6 +2507,7 @@ def coupled_step(throttle, steer, brake, relax_iters=2):
         d = vh / speed_h
         vehicle.add_force_at_pos(tp.Vector3(float(-d[0] * f), 0.0, float(-d[2] * f)),
                                  tp.Vector3(*hub[i]))
+    hub_prev = prev_hub
     prev_hub = hub.copy()
 
     # 8. and PhysX runs the car -- through the traction control, which is the
@@ -1919,6 +2547,11 @@ def coupled_step(throttle, steer, brake, relax_iters=2):
     hud["w"] = load
     hud["slip"] = np.array([vehicle.tire_longitudinal_slip(i) for i in range(4)])
     hud["over"] = [vehicle.road_override_active(i) for i in range(4)]
+    # And the gravel bed, LAST and one-way: it reads the wheel poses PhysX just
+    # produced and hands nothing back. `prev_hub` was overwritten in step 7, so
+    # the velocity it wants is (hub - the copy it made) -- which is why the
+    # previous frame's hub is passed explicitly rather than read from a global.
+    gravel_step(hub, hub_prev, lane_of, right)
     return hub
 
 
@@ -1966,9 +2599,30 @@ def draw_ui():
         if hud["lane"][i] is None:
             tp.imgui.text(f"{WHEEL_NAME[i]}  -- off the lanes (rigid ground) --")
             continue
+        if hud["lane"][i] == "gravel":
+            tp.imgui.text(f"{WHEEL_NAME[i]}  -- gravel: no carve, see the bed below --")
+            continue
         err = 100.0 * (hud["bek"][i] / max(hud["w"][i], 1.0) - 1.0)
         tp.imgui.text(f"{WHEEL_NAME[i]} Bekker {hud['bek'][i]:7.0f} N   "
                       f"PhysX {hud['w'][i]:7.0f} N   {err:+5.1f} %")
+    if gravel is not None:
+        tp.imgui.separator()
+        # The honest label. Bekker drives the car on this lane exactly as on the
+        # other three; the particles are a one-way display of what the loose
+        # aggregate does around the wheels, and the grid reaction is printed
+        # next to the drag so the two can be compared -- not so one can replace
+        # the other.
+        tp.imgui.text("gravel bed  MLS-MPM, DISPLAY ONLY -- Bekker carries the car")
+        tp.imgui.text(f"  {gravel.n:,} grains  {gravel.ntris:,} tris   "
+                      f"bed {GB_X0:.0f}..{GB_X1:.0f} m")
+        on = [i for i in range(4) if hud["lane"][i] == "gravel"]
+        if on:
+            tp.imgui.text("   wh  grid dp/dt (N)   Bekker drag (N)")
+            for i in on:
+                tp.imgui.text(f"   {WHEEL_NAME[i]}  {gravel.react_n[i]:10.0f}   "
+                              f"{hud['drag'][i]:12.0f}")
+        else:
+            tp.imgui.text("   no wheel on the spread")
     tp.imgui.separator()
     tp.imgui.text("W/S drive  A/D steer  R gear  SPACE handbrake  X tc")
     tp.imgui.text("V pov  C cinematic  BACKSPACE respawn  T reset  F frame")
@@ -2043,6 +2697,11 @@ def drive_inputs(dt):
         prev_hub = None
         for _s in sprays.values():          # airborne soil off a ground that
             _s.clear()                      # no longer has a rut in it
+        if gravel is not None:
+            # The bed is state too, and none of it lives in a grid reset() can
+            # scalar-fill: the stored seed positions go back, the deformation
+            # gradients go back to identity, and the trough is gone.
+            gravel.reset()
     if pressed("F"):
         shot_no += 1
         save_shot(os.path.join(OUT_DIR, f"warp_mudsnow_drive_{shot_no:03d}.png"))
@@ -2138,8 +2797,13 @@ if not GL:
     print(f"lane mesh route: "
           f"{'zero-copy CUDA -> Vulkan' if armed == len(strips) else 'mixed / host copy'}"
           f" ({armed}/{len(strips)} armed)")
+    if gravel is not None:
+        print(f"  gravel bed surface: "
+              f"{'zero-copy CUDA -> Vulkan' if gravel.arm(renderer) else 'host copy'}")
 for s in strips:
     s.publish()
+if gravel is not None:
+    gravel.surface_frame()      # a bed on screen before the first sim frame
 
 def pose_visuals():
     p, q = vehicle.position, vehicle.quaternion
@@ -2269,6 +2933,57 @@ elif SHOT:
         eye, look = rig(-18.5, z, (-17.0, 1.5, z + (5.0 if z <= 0 else -5.0)),
                         (-18.5, 0.2, z))
         scripted(z, [(2.0, 1.0, 0.0)], eye, look, out(f"2_{which}"))
+    if which == "burnout":
+        # The clod fix's own acceptance (the mesh->billboard crossover used to
+        # sit at 11 m, right on top of CHASE_DIST). Same mud launch as
+        # spin_mud, shot from where the CHASE CAMERA stands -- 9.5 m back and a
+        # little up -- because 2-5 m proves nothing about a fade at 9.5.
+        tc_on = False
+        eye, look = rig(-18.5, z_mud, (-18.5 - 9.5 * math.cos(0.30), 1.05 + 9.5 * math.sin(0.30),
+                                       z_mud - 2.2), (-17.4, 0.55, z_mud))
+        scripted(z_mud, [(2.0, 1.0, 0.0)], eye, look, out("8_burnout_chase"),
+                 note="clods at chase distance")
+    if which in ("spin_gravel", "gravel", "gravel_rest"):
+        if gravel is None:
+            print("  --script gravel* needs --gravel")
+            raise SystemExit(0)
+        z_g = 0.5 * (GRAVEL_Z[0] + GRAVEL_Z[1])
+        if which == "spin_gravel":
+            # The launch: TC off, floored, on the spread. What this shot is for
+            # is the ROOSTER TAIL of stone and the trough opening under the rear
+            # wheels -- the grains are the whole subject, so the camera is low
+            # and close to the side the spray leaves on.
+            tc_on = False
+            eye, look = rig(-15.5, z_g, (-11.6, 1.10, z_g - 5.0), (-15.6, 0.30, z_g))
+            scripted(z_g, [(1.5, 1.0, 0.0)], eye, look, out("7_spin_gravel"),
+                     note="MPM bed, display only")
+        elif which == "gravel":
+            # The roll-through: TC on, a gentle 3.5 s crawl the length of the
+            # spread. Grains PART at the wheel and pool behind it instead of
+            # being thrown, which is the half of granular behaviour a launch
+            # hides.
+            eye, look = rig(-15.0, z_g, (-12.4, 1.35, z_g - 5.0), (-16.0, 0.05, z_g))
+            scripted(z_g, [(3.5, 0.28, 0.0)], eye, look, out("7_gravel_roll"),
+                     note="slow roll-through")
+        else:
+            # Before and after, one camera, one process: the undisturbed spread,
+            # then the same frame once a pass has been driven through it and the
+            # stone has had two seconds to stop moving.
+            eye = (-13.2, float(base(-13.2, z_g)) + 2.30, z_g - 6.6)
+            look = (-17.5, float(base(-17.5, z_g)) + 0.02, z_g)
+            gravel.reset()
+            vehicle.respawn(tp.Vector3(SPAWN_X, ride_y(SPAWN_X, -20.0), -20.0),
+                            SPAWN_ROT)               # the car parked off frame
+            for _ in range(90):
+                coupled_step(0.0, 0.0, 0.0)
+            camera.position.set(*eye)
+            camera.look_at(tp.Vector3(*look))
+            weather(0.0, eye)
+            for _ in range(0 if GL else WARM):
+                renderer.render(scene, camera)
+            save_shot(out("7_gravel_before"))
+            scripted(z_g, [(3.0, 0.55, 0.0), (2.0, 0.0, 1.0)], eye, look,
+                     out("7_gravel_after"), note="the same frame, driven")
     if which == "crest":
         # The road's own frame: the car ON the rise out of the spawn dip, shot
         # from the clay strip across the lanes so the chassis PITCH is a
