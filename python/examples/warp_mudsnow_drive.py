@@ -30,7 +30,8 @@ ground.
 
 `--script` drives a fixed input sequence headless and saves the frame the
 comparison needs: `mud` and `snow` are the same line at the same throttle down
-either soft lane, `spin_mud` / `spin_clay` the same full-throttle launch, `lap`
+either soft lane, `spin_mud` / `spin_snow` / `spin_clay` the same full-throttle
+launch, `lap`
 a circle in mud twice, `crest` the car on the rise out of the spawn dip, `cine`
 the look pass's own frame off the C camera, and `pan --yaw D` one heading of a
 360 from the driver's seat. Repeatable is the point -- a hand-driven pass is not
@@ -2257,11 +2258,14 @@ elif SHOT:
         eye, look = rig(-15.5, z, (-13.5, 1.15, z + (5.2 if z < 0 else -5.2)),
                         (-15.5, -0.1, z))
         scripted(z, [(3.2, 0.45, 0.0)], eye, look, out(f"1_{which}_rut"))
-    if which in ("spin_mud", "spin_clay"):
+    if which in ("spin_mud", "spin_clay", "spin_snow"):
         # Acceptance 2: the same full-throttle launch, mud vs the clay strip.
         # TC off -- unassisted wheelspin is what this shot is about.
+        # spin_snow is the spray's snow-side acceptance: the gentle `snow`
+        # cruise correctly throws nothing, so the white spray needs this shot.
         tc_on = False
-        z = z_mud if which == "spin_mud" else 0.0
+        z = (z_mud if which == "spin_mud" else
+             z_snow if which == "spin_snow" else 0.0)
         eye, look = rig(-18.5, z, (-17.0, 1.5, z + (5.0 if z <= 0 else -5.0)),
                         (-18.5, 0.2, z))
         scripted(z, [(2.0, 1.0, 0.0)], eye, look, out(f"2_{which}"))
