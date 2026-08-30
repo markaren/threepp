@@ -2270,12 +2270,15 @@ void VulkanRenderer::Impl::recordHybridOverlay(VkCommandBuffer cb, uint32_t imag
                         }
                         // Per-vertex colours: fetch pos+color via the line-
                         // geometry cache — the BLAS vertex buffer bound below
-                        // is position-only. Skinned/displaced/morphed meshes
-                        // keep the flat path (the cache holds undeformed
-                        // attribute-array positions), as does any geometry
-                        // without a vec3 "color" attribute.
+                        // is position-only. Applies to wireframe too
+                        // (HemisphereLightHelper paints its octahedron's
+                        // "color" attribute and drew white without this).
+                        // Skinned/displaced/morphed meshes keep the flat path
+                        // (the cache holds undeformed attribute-array
+                        // positions), as does any geometry without a vec3
+                        // "color" attribute.
                         const vulkan::LineRec* crec = nullptr;
-                        if (!wireframe && vertexColors &&
+                        if (vertexColors &&
                             !en.isSkinned && !en.isDisplaced && !en.isMorphed) {
                             if (auto geom = en.mesh->geometry()) {
                                 if (const auto* colAttr = geom->getAttribute("color");
@@ -2291,7 +2294,8 @@ void VulkanRenderer::Impl::recordHybridOverlay(VkCommandBuffer cb, uint32_t imag
                         // typically opaque even when material.transparent
                         // is incidentally true.
                         VkPipeline want;
-                        if (wireframe)           want = overlayWireframePipeline;
+                        if (wireframe)           want = crec ? overlayWireframeColoredPipeline
+                                                            : overlayWireframePipeline;
                         else if (crec)           want = overlayMeshColoredPipelines[blendMode];
                         else if (blendMode == 2) want = overlayBasicAdditivePipeline;
                         else if (blendMode == 1) want = overlayBasicTransparentPipeline;

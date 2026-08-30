@@ -1740,6 +1740,18 @@ void VulkanRenderer::Impl::createOverlayPipeline() {
                       "vkCreateGraphicsPipelines(overlayBasicAdditive)");
             }
 
+            // Vertex-coloured wireframe — the flat wireframe create-info
+            // (POLYGON_MODE_LINE, static cull NONE, blend off, no dynamic
+            // cull) with the overlay_color shader pair and 2-binding input.
+            {
+                VkGraphicsPipelineCreateInfo g = gpci;
+                g.pStages           = cStages;
+                g.pVertexInputState = &cvi;
+                check(vkCreateGraphicsPipelines(ctx->device(), ctx->pipelineCache(), 1, &g, nullptr,
+                                                &overlayWireframeColoredPipeline),
+                      "vkCreateGraphicsPipelines(overlayWireframeColored)");
+            }
+
             // ── Point list pipeline ─────────────────────────────────────────
             // POINT_LIST topology. Uses overlay_point.vert/.frag which write
             // gl_PointSize from the push constant's color.w slot and discard

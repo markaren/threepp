@@ -1383,6 +1383,12 @@ namespace threepp {
         // Additive counterpart to overlayBasicTransparentPipeline, so a flat
         // Blending::Additive basic mesh matches the GL backend too.
         VkPipeline       overlayBasicAdditivePipeline = VK_NULL_HANDLE;
+        // Vertex-coloured wireframe (overlay_color shaders, POLYGON_MODE_LINE,
+        // blend-off like the flat wireframe). HemisphereLightHelper-style
+        // helpers paint a "color" attribute on a wireframe basic material;
+        // the flat wireframe pipeline drew them in the material colour
+        // (default white) instead.
+        VkPipeline       overlayWireframeColoredPipeline = VK_NULL_HANDLE;
         // Points pipeline — POINT_LIST topology. Always vertex-coloured;
         // a Points object without a "color" attribute renders as plain
         // material colour (vertex colour defaults to white in that case
