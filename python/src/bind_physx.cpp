@@ -1160,16 +1160,22 @@ namespace threepp_py {
                      py::arg("wheel"), "True while this wheel has ground within suspension reach.")
                 // -- Road override --
                 .def("set_road_override",
-                     [](PhysxVehicle& v, int i, float height, float mu) {
-                         v.setRoadOverride(wheelIndex(i), height, mu);
+                     [](PhysxVehicle& v, int i, float height, float mu, float vRoad) {
+                         v.setRoadOverride(wheelIndex(i), height, mu, vRoad);
                      },
-                     py::arg("wheel"), py::arg("height"), py::arg("mu"),
+                     py::arg("wheel"), py::arg("height"), py::arg("mu"), py::arg("v_road") = 0.f,
                      "Hand this wheel's suspension a road of your own instead of what the PhysX scene "
                      "query found: a horizontal plane at world y=`height` with friction `mu`. Set it "
                      "per wheel, per frame, from whatever ground model you own — e.g. terrain grade "
                      "minus the soil's equilibrium sinkage, so the wheel rides IN the ground by "
                      "exactly the sinkage the load dictates, with mu from Mohr-Coulomb rather than "
-                     "the tire_friction ceiling. Everything else about the vehicle is untouched.")
+                     "the tire_friction ceiling. On a road PROFILE also pass `v_road`, the surface's "
+                     "vertical velocity under the wheel (v * slope, m/s, +up) — it reaches the tire "
+                     "slip terms. NOTE (probe-verified, PhysX 5.x): the suspension damper IGNORES it "
+                     "and still measures against a static plane, so suspension_force() reads biased "
+                     "low by damping*v_road on grades while the limit constraint quietly carries the "
+                     "difference; see the header for why compensating externally makes it worse. "
+                     "Everything else about the vehicle is untouched.")
                 .def("clear_road_override",
                      [](PhysxVehicle& v, int i) { v.clearRoadOverride(wheelIndex(i)); },
                      py::arg("wheel"), "Give this wheel back to the scene query (the rigid fallback).")

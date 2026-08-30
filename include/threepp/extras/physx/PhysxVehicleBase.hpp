@@ -216,12 +216,27 @@ namespace threepp {
         //
         // Set it per wheel, per frame; clearRoadOverride() gives the wheel back to
         // the scene query. Zero heap, no effect at all while no override is set.
-        void setRoadOverride(int wheel, float height, float mu) {
+        //
+        // vRoad is the road surface's own vertical velocity under the wheel (m/s,
+        // +up). A road profile rising under a wheel travelling at v on slope s
+        // moves at v*s. CAVEAT, probe-verified on PhysX 5.x: the suspension state
+        // update IGNORES the road velocity -- it reaches the tire slip terms only.
+        // The damper measures against a motionless plane, bleeding
+        // damping * v * slope from the REPORTED suspension force on every grade
+        // (~1.6 kN/wheel at 25 km/h on 5 %); the suspension-limit constraint
+        // quietly carries the difference, so the ride itself stays correct.
+        // Do NOT compensate by pushing the chassis up externally: that unloads
+        // the spring and corrupts suspensionForce() further (tried, measured).
+        // A truthful per-wheel load on a moving road needs the constraint
+        // impulses exposed as a readout -- future work. Until then, treat
+        // suspensionForce() on grades as biased low by damping * vRoad.
+        void setRoadOverride(int wheel, float height, float mu, float vRoad = 0.f) {
             checkWheelIndex(wheel);
             auto& o = roadOverrides_[static_cast<std::size_t>(wheel)];
             o.active = true;
             o.height = height;
             o.friction = mu;
+            o.vRoad = vRoad;
         }
 
         void clearRoadOverride(int wheel) {
@@ -855,7 +870,10 @@ namespace threepp {
                 // are gentle enough that up is a good normal.
                 s.plane = PxPlane(PxVec3(0.f, o.height, 0.f), PxVec3(0.f, 1.f, 0.f));
                 s.friction = o.friction;
-                s.velocity = PxVec3(0.f);// the ground itself is not moving
+                // The plane is horizontal but the ROAD under a moving wheel is not
+                // motionless: on a profile it rises/falls at v * slope. See
+                // setRoadOverride's vRoad doc for what omitting this costs.
+                s.velocity = PxVec3(0.f, o.vRoad, 0.f);
                 s.hitState = true;
             }
         }
@@ -866,6 +884,7 @@ namespace threepp {
             bool active = false;
             float height = 0.f;
             float friction = 1.f;
+            float vRoad = 0.f;// road surface vertical velocity under the wheel, +up
         };
 
         // Sequence element that does nothing but call applyRoadOverrides().
