@@ -927,11 +927,14 @@ print(f"  surround: {APRON_R:.0f} m apron, hills to {SURROUND_R:.0f} m")
 # box over one strip, so this follows the camera toroidally instead -- no edge
 # anywhere, and which lane is the snow one is said by the GROUND, which is
 # where this demo says everything else too.
-# 9k flakes in a 28 m box, not 30k in a 56 m one: a flake has to subtend a
+# 3.6k flakes in a 28 m box, not 30k in a 56 m one: a flake has to subtend a
 # pixel or two to read as a flake, and a wide box spends its whole budget on
 # 40 m specks that composite into a star field. Close and sparse beats far and
-# dense every time.
-SNOW_CAP = 9_000
+# dense every time -- and dim beats bright: the quads are ADDITIVE against a
+# dark dusk sky and outside auto-exposure, so white at 0.35 intensity reads as
+# a bokeh star field that upstages the car (field report). Snow at dusk is
+# sky-coloured, not white; it should be felt, not counted.
+SNOW_CAP = 3_600
 SNOW_HALF = 14.0
 snowfall = None
 if not GL:
@@ -939,15 +942,15 @@ if not GL:
     _sc.capacity = SNOW_CAP
     _sc.ownership = tp.ParticleField.Ownership.Renderer
     _sc.w_semantic = tp.ParticleField.WSemantic.Radius
-    _sc.uniform_radius = 0.050
+    _sc.uniform_radius = 0.024
     snowfall = tp.ParticleField.create(_sc)
     snowfall.frustum_culled = False
     # Billboards only, unlit and additive. A lit mesh proxy would be the right
     # answer for flakes a metre from the lens and this camera is never there;
     # what it would cost is a G-buffer draw for every flake so that the two in
     # focus read as crystals.
-    snowfall.set_billboard_repr(tp.Color(0.86, 0.89, 0.95), tp.Color(0.74, 0.79, 0.88),
-                                0.35, 0.90)
+    snowfall.set_billboard_repr(tp.Color(0.62, 0.64, 0.70), tp.Color(0.48, 0.51, 0.58),
+                                0.22, 0.90)
     _sb = snowfall.billboard_repr
     _sb.lod_near = 0.0
     _sb.lod_fade = 0.0
@@ -965,7 +968,7 @@ if not GL:
     z_snowc = 0.5 * (LANE_Z["snow"][0] + LANE_Z["snow"][1])
     _se.spawn_center = tp.Vector3(0.0, 15.0, 0.0)
     _se.spawn_half_extent = tp.Vector3(SNOW_HALF, 0.5, SNOW_HALF)
-    _se.velocity = tp.Vector3(0.0, -1.5, 0.0)     # a flake terminal-velocities slowly
+    _se.velocity = tp.Vector3(0.0, -1.9, 0.0)     # a flake terminal-velocities slowly
     _se.speed_spread = 0.4
     _se.wind = tp.Vector3(0.55, 0.0, -0.2)
     _se.drift_amplitude = 0.28                    # the tumble, which is what says snow
@@ -973,7 +976,7 @@ if not GL:
     _se.drift_scale = 3.0
     _se.lifetime = 9.0
     _se.duty_cycle = 1.0
-    _se.size = 0.050
+    _se.size = 0.024
     _se.size_jitter = 0.45
     _se.seed = 20260830
     _se.follow = True
