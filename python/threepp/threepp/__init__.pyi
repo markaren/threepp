@@ -726,7 +726,7 @@ class BufferGeometry:
         ...
     def set_index(self, data: typing.Annotated[numpy.typing.ArrayLike, numpy.uint32]) -> BufferGeometry:
         """
-        Give this geometry an index buffer, so its vertices can be shared between faces. Accepts a flat or (M, 3) integer array. Validated against the vertex count of the attributes already set, so set_attribute first — and note that this sets the draw range to the whole index buffer, which a later set_attribute would reset to the vertex count.
+        Give this geometry an index buffer, so its vertices can be shared between faces. Accepts a flat or (M, 3) integer array. Validated against the vertex count of the attributes already set, so set_attribute first. Sets the draw range to the whole index buffer; once indexed, a later set_attribute leaves the draw range alone.
         """
     def translate(self, x: typing.SupportsFloat | typing.SupportsIndex, y: typing.SupportsFloat | typing.SupportsIndex, z: typing.SupportsFloat | typing.SupportsIndex) -> BufferGeometry:
         ...
