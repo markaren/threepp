@@ -27,10 +27,45 @@ ground.
 `--script` drives a fixed input sequence headless and saves the frame the
 comparison needs: `mud` and `snow` are the same line at the same throttle down
 either soft lane, `spin_mud` / `spin_clay` the same full-throttle launch, `lap`
-a circle in mud twice, `cine` the look pass's own frame off the C camera, and
-`pan --yaw D` one heading of a 360 from the driver's seat. Repeatable is the
-point -- a hand-driven pass is not the same line twice, and the whole claim is
-that only the SOIL differs.
+a circle in mud twice, `crest` the car on the rise out of the spawn dip, `cine`
+the look pass's own frame off the C camera, and `pan --yaw D` one heading of a
+360 from the driver's seat. Repeatable is the point -- a hand-driven pass is not
+the same line twice, and the whole claim is that only the SOIL differs.
+
+The ground is a road, not a plane
+---------------------------------
+One analytic profile, `base(x, z)`, is the height of every drivable surface in
+the yard: the three lanes get it as their DeformableTerrain `init_height` (which
+the constructor copies into `grade`, the datum the road override already reads),
+the apron mesh is drawn from it, and the apron's static PhysX trimesh collider
+is cooked from the same vertices. Nothing samples a second opinion, so there is
+no surface in the yard that disagrees with another about where the ground is.
+Long swells along the lanes (27-61 m, +-0.4 m, grades to 5.7 %) are the crests
+and dips; a crown falls a few cm from the clay strip to the shoulders; 3 cm of
+8 m chatter is what the suspension hears. Nothing shorter than 4 m: the lanes
+are a 5 cm grid read through a 40 cm wheel, and finer washboard aliases.
+
+What a grade does to the suspension damper -- READ THIS BEFORE TUNING
+--------------------------------------------------------------------
+`PhysxVehicleBase::applyRoadOverrides` declares the overridden road plane
+STATIONARY (`s.velocity = PxVec3(0)`), which was exactly true while the ground
+was flat. On a grade it is not: the road under a wheel travelling at v rises at
+v*slope, and PhysX's suspension damper reads the chassis climbing away from a
+motionless plane as the suspension EXTENDING. The damper then subtracts
+`damping * v * slope` -- 4500 * 7 m/s * 0.05 = ~1.6 kN per wheel -- from the
+suspension force. Measured: cruising up the 5 % climb out of the spawn dip at
+25 km/h the total normal load reads ~9.3 kN against a static 14.7 kN, and the
+same amount MORE on the way down.
+
+It is smooth, not a ringing loop (per-frame jounce is monotone, sd is a tenth of
+the mean), and it is self-consistent -- z_eq is inverted from the load PhysX
+reports, so the module's bearing at that depth still matches it and the panel's
+Bekker-vs-PhysX column is unaffected. What it costs is absolute sinkage: the
+car rides ~15 mm shallower uphill and deeper downhill than the soil says. The
+fix is one line of C++ and a wider override API (pass the road's own vertical
+velocity into `s.velocity` instead of zero); it is deliberately NOT worked
+around here, because every Python-side workaround is a lie about where the
+wheel is that the rut-carving imprint would then have to be told about too.
 
 How the ground and the vehicle are coupled
 ------------------------------------------
@@ -155,7 +190,104 @@ MATS = {"mud": replace(MATERIALS["mud"], grade_rate=0.02),
         "snow": replace(MATERIALS["snow"], grade_rate=0.02),
         "clay": MATERIALS["clay"]}
 
-SPAWN_POS = tp.Vector3(-20.0, 1.05, 0.0)
+SURROUND_R = 320.0                # to the rim of the world
+APRON_R = 62.0                    # the drivable yard: flat-ISH, and it is a road
+
+
+# --- the road ------------------------------------------------------------------
+# ONE analytic profile, `base(x, z)` metres above the yard datum, and EVERY
+# drivable surface samples it: the two soft lanes (as their DeformableTerrain
+# init_height, which the constructor also copies into `grade`, so the road
+# override already reads it), the clay strip, the apron mesh, and the apron's
+# static trimesh collider. Two surfaces are never allowed to disagree about
+# where the ground is -- that is the whole architecture of this section, and it
+# is why the coupling loop needed no change at all: the suspension reads
+# `grade - z_eq` exactly as before, and grade now has a road in it.
+#
+# Longitudinal swells run ALONG the lanes (x), because that is the axis you
+# drive: three cosines anchored so x = SPAWN_X sits in the bottom of a dip
+# (a car spawned on a grade rolls away before the script's first beat), the
+# combined +-0.40 m reaching about 5.5 % where the crest comes out of the dip.
+# Wavelengths 27-61 m: long enough to be a road and not a ramp, short enough
+# that 48 m of lane carries a whole dip and a whole crest.
+
+
+def vnoise(x, y, freq, seed, n=64):
+    """Value noise on a wrapping n x n lattice: bilinear, smoothstep-faded."""
+    g = np.random.default_rng(seed).random((n, n))
+    fx, fy = np.asarray(x) * freq, np.asarray(y) * freq
+    i0, j0 = np.floor(fx).astype(np.int64), np.floor(fy).astype(np.int64)
+    tx, ty = fx - i0, fy - j0
+    tx = tx * tx * (3.0 - 2.0 * tx)
+    ty = ty * ty * (3.0 - 2.0 * ty)
+    a = lambda di, dj: g[(i0 + di) % n, (j0 + dj) % n]                   # noqa: E731
+    return ((1 - tx) * (1 - ty) * a(0, 0) + tx * (1 - ty) * a(1, 0)
+            + (1 - tx) * ty * a(0, 1) + tx * ty * a(1, 1))
+
+
+def fbm(x, y, freq, seed, octaves=4):
+    v, amp, tot = 0.0, 1.0, 0.0
+    for k in range(octaves):
+        v = v + amp * vnoise(x, y, freq * 2.0 ** k, seed + 977 * k)
+        tot += amp
+        amp *= 0.5
+    return v / tot
+
+
+def smoothstep(a, b, v):
+    t = np.clip((np.asarray(v, dtype=np.float64) - a) / (b - a), 0.0, 1.0)
+    return t * t * (3.0 - 2.0 * t)
+
+
+SPAWN_X = -20.0
+# (amplitude m, wavelength m). Written as -A*cos((x - SPAWN_X)*2pi/lam) so every
+# term is at its MINIMUM and its derivative is zero at the spawn: the car starts
+# in a dip, level, and has to climb out of it.
+SWELL = ((0.20, 47.0), (0.12, 27.0), (0.08, 61.0))
+CROWN = 0.08                      # crown fall, clay strip out to the shoulders
+CROWN_HALF = 12.0
+BUMP_AMP = 0.030                  # +-3 cm of road chatter...
+BUMP_LAM = 8.0                    # ...at 8 m and 4 m. NOT shorter: the lanes are
+                                  # a 5 cm grid read through a 40 cm wheel, and
+                                  # anything under ~4 m aliases into noise the
+                                  # suspension cannot tell from a step.
+FADE_R = (APRON_R - 12.0, APRON_R)  # profile -> 0 before the hills take over
+
+
+def base(x, z):
+    """The road surface, metres above the yard datum, at world (x, z).
+
+    Vectorised (numpy broadcasting) so the lane grids, the apron lattice and a
+    single spawn point all go through the same function -- a second
+    implementation is a second opinion about where the ground is, and one of
+    them would be wrong.
+    """
+    x = np.asarray(x, dtype=np.float64)
+    z = np.asarray(z, dtype=np.float64)
+    h = np.zeros(np.broadcast(x, z).shape)
+    for amp, lam in SWELL:
+        h = h - amp * np.cos(2.0 * math.pi * (x - SPAWN_X) / lam)
+    # Cross-fall: a crown on the clay strip falling a few cm to the shoulders,
+    # so the lanes have camber and a stopped car leans off the centreline.
+    h = h - CROWN * np.minimum(np.abs(z) / CROWN_HALF, 1.0) ** 2
+    # Chatter, weighted by where you are: the clay strip is the graded track and
+    # is nearly smooth, the soft lanes a little rougher, the apron beside them
+    # roughest. Faded out past 26-46 m because the apron LATTICE coarsens with
+    # radius and 8 m bumps on 2 m quads is aliasing, not texture.
+    rough = ((0.30 + 0.70 * smoothstep(2.5, 13.0, np.abs(z)))
+             * (1.0 - smoothstep(26.0, 46.0, np.hypot(x, z))))
+    h = h + BUMP_AMP * rough * (2.0 * fbm(x, z, 1.0 / BUMP_LAM, 4441, 2) - 1.0)
+    # And flat again before the perimeter, so the surround hills join the yard
+    # at exactly the datum they joined it at when the yard was a plane.
+    return h * (1.0 - smoothstep(FADE_R[0], FADE_R[1], np.hypot(x, z)))
+
+
+def ride_y(x, z, over=1.05):
+    """Spawn height at (x, z): the road plus the chassis' resting ride height."""
+    return float(base(x, z)) + over
+
+
+SPAWN_POS = tp.Vector3(SPAWN_X, ride_y(SPAWN_X, 0.0), 0.0)
 SPAWN_ROT = tp.Quaternion().set_from_axis_angle(tp.Vector3(0, 1, 0), math.pi / 2)
 
 # Motion-resistance coefficients. Bulldozing: the fraction of (frontal patch
@@ -268,11 +400,22 @@ if device == "cpu":
     print("no CUDA device -- the terrain will run on the CPU and this will crawl")
 
 terrain = {}
+BASE_GRID = {}                    # the road, on each lane's own grid
+BASE_T = {}                       # ...and on the device, for T
 for name in LANES:
     z0, z1 = LANE_Z[name]
     ny = int(round((z1 - z0) / CELL)) + 1
+    # The module works in (x, y, height) with y = -world z, so grid point (i, j)
+    # is world (X0 + i*cell, z1 - j*cell). init_height goes into BOTH h and the
+    # bearing datum `grade`, which is what the road override reads -- so this one
+    # array is the whole of "the suspension drives on the profile".
+    gx = (X0 + np.arange(NX) * CELL)[:, None]
+    gz = (z1 - np.arange(ny) * CELL)[None, :]
+    BASE_GRID[name] = np.ascontiguousarray(base(gx, gz)[None], np.float32)
     terrain[name] = DeformableTerrain((X0, -z1), CELL, (NX, ny), K=1,
-                                      material=MATS[name], device=device, c_max=4)
+                                      material=MATS[name], device=device, c_max=4,
+                                      init_height=BASE_GRID[name])
+    BASE_T[name] = torch.from_numpy(BASE_GRID[name]).to(device)
     print(f"  {name:5s} {terrain[name]}")
 cells = sum(t.nx * t.ny for t in terrain.values())
 print(f"  {cells:,} cells total")
@@ -311,13 +454,17 @@ def lane_at(x, z):
 
 world = tp.PhysxWorld()
 
-# The rigid ground the lanes are bedded into: what a wheel that leaves the
-# terrain falls back onto (the scene query still runs under every wheel, and is
-# what the road override stands in for). 3 cm below the lane datum, so driving
-# off the end of a lane is a kerb rather than a cliff.
+# The deep catch plane: the floor of last resort, past the edge of the surround
+# lattice or under anything the trimesh apron somehow misses. It used to sit at
+# RIGID_Y, level with a dead-flat apron -- with a road in the apron it has to go
+# BELOW the deepest dip (-0.48 m) or it would poke up through the crown of every
+# hollow. What a wheel that leaves a lane actually lands on now is the apron
+# trimesh (built with the surround, below), 3 cm under the lane datum: still a
+# kerb rather than a cliff, and now a kerb that follows the road.
+CATCH_DROP = 1.0
 rigid = tp.Mesh(tp.BoxGeometry(400.0, 0.4, 400.0),
                 standard_material(0x2a2a26, 0.95))
-rigid.position.y = RIGID_Y - 0.2
+rigid.position.y = RIGID_Y - CATCH_DROP - 0.2
 rigid.receive_shadow = True
 world.add_static(rigid)
 
@@ -536,7 +683,7 @@ def strip_surface(h: wp.array3d(dtype=float),
 class Strip:
     """One column range of a lane as a threepp mesh, published device-side."""
 
-    def __init__(self, terrain, material, i0, ncol, grain=(1.0, 0.0)):
+    def __init__(self, terrain, material, i0, ncol, base0, grain=(1.0, 0.0)):
         self.t = terrain
         self.i0 = i0
         self.ncol = ncol
@@ -545,8 +692,11 @@ class Strip:
         self.n = ncol * ny
         self.ox, self.oy = (float(v) for v in terrain.origin_np[0])
         gi, gj = np.meshgrid(np.arange(i0, i0 + ncol), np.arange(ny), indexing="ij")
+        # Seeded with the ROAD, not with the datum: the first render happens
+        # before any strip is armed or published, and a flat lane for one frame
+        # is a flat lane in a saved still.
         p0 = np.stack([self.ox + gi * terrain.cell,
-                       np.full_like(gi, terrain.z0, dtype=np.float32),
+                       terrain.z0 + base0[i0:i0 + ncol, :],
                        -(self.oy + gj * terrain.cell)], axis=-1)
         a = ((gi[:-1, :-1] - i0) * ny + gj[:-1, :-1]).ravel()
         faces = np.stack([a, a + ny, a + ny + 1, a, a + ny + 1, a + 1],
@@ -637,9 +787,11 @@ def make_strips(name):
     n_strip = int(math.ceil((t.nx - 1) / (per - 1)))
     per = int(math.ceil((t.nx - 1) / n_strip)) + 1
     out = []
+    b0 = BASE_GRID[name][0]
     for k in range(n_strip):
         i0 = k * (per - 1)
-        out.append(Strip(t, LANE_MAT[name], i0, min(per, t.nx - i0), LANE_GRAIN[name]))
+        out.append(Strip(t, LANE_MAT[name], i0, min(per, t.nx - i0), b0,
+                         LANE_GRAIN[name]))
     return out
 
 
@@ -664,43 +816,24 @@ def mark_dirty(hub):
 # --- the proving ground --------------------------------------------------------
 # The lanes used to sit on a 400 m grey slab under a white sky, which is the one
 # thing about this demo that was wrong on sight: no scale, no horizon, no world.
-# What replaces it is ONE heightfield -- dead flat and EXACTLY at the collider
-# height out to the perimeter, because the visual ground and the ground the car
-# drives on have to be the same ground, and beyond that rising into hills the
-# fog takes away. One mesh, so there is no apron/surround seam to hide, and the
-# lattice is stretched cubically so the metres beside the yard are fine and the
-# quarter-kilometre out at the rim is cheap: 0.7 m spacing at the lanes, 7 m at
-# the edge, 33k vertices for a 640 m yard.
+# What replaces it is ONE heightfield -- the ROAD (base(x, z)) out to the
+# perimeter, because the visual ground and the ground the car drives on have to
+# be the same ground, and beyond that rising into hills the fog takes away. One
+# mesh, so there is no apron/surround seam to hide, and the lattice is stretched
+# cubically so the metres beside the yard are fine and the quarter-kilometre out
+# at the rim is cheap: 0.7 m spacing at the lanes, 7 m at the edge, 33k vertices
+# for a 640 m yard.
+#
+# And the whole lattice is cooked as ONE static trimesh collider, so the apron
+# the car drives on off the lanes is exactly the apron it is looking at -- the
+# 0.7 m quads beside the lanes carry an 8 m bump to well under a millimetre, so
+# the lane edge has no step in it that the profile put there.
 
-SURROUND_R = 320.0                # to the rim
-APRON_R = 62.0                    # flat, drivable, matches the rigid collider
 rng = np.random.default_rng(7)
 
 
-def vnoise(x, y, freq, seed, n=64):
-    """Value noise on a wrapping n x n lattice: bilinear, smoothstep-faded."""
-    g = np.random.default_rng(seed).random((n, n))
-    fx, fy = np.asarray(x) * freq, np.asarray(y) * freq
-    i0, j0 = np.floor(fx).astype(np.int64), np.floor(fy).astype(np.int64)
-    tx, ty = fx - i0, fy - j0
-    tx = tx * tx * (3.0 - 2.0 * tx)
-    ty = ty * ty * (3.0 - 2.0 * ty)
-    a = lambda di, dj: g[(i0 + di) % n, (j0 + dj) % n]                   # noqa: E731
-    return ((1 - tx) * (1 - ty) * a(0, 0) + tx * (1 - ty) * a(1, 0)
-            + (1 - tx) * ty * a(0, 1) + tx * ty * a(1, 1))
-
-
-def fbm(x, y, freq, seed, octaves=4):
-    v, amp, tot = 0.0, 1.0, 0.0
-    for k in range(octaves):
-        v = v + amp * vnoise(x, y, freq * 2.0 ** k, seed + 977 * k)
-        tot += amp
-        amp *= 0.5
-    return v / tot
-
-
 def build_surround():
-    """The lattice, and the three meshes cut out of it.
+    """The lattice, the three meshes cut out of it, and its collider.
 
     ONE material per mesh, because per-vertex colour would be the natural way
     to grade dirt into snow into haze and this renderer's deferred path does
@@ -709,6 +842,10 @@ def build_surround():
     split into regions instead, and the cuts are put where a material change is
     something rather than nothing -- the snow line, and the perimeter the hills
     start from.
+
+    The collider is the WHOLE lattice, hills included, not just the yard: the
+    alternative is a trimesh that stops at the perimeter and a metre of air
+    beyond it, which is the invisible cliff this phase exists to remove.
     """
     n = 181
     u = np.linspace(-1.0, 1.0, n)
@@ -716,14 +853,17 @@ def build_surround():
     X, Z = np.meshgrid(ax, ax, indexing="ij")
     r = np.hypot(X, Z)
 
-    # Nothing at all inside the perimeter: the apron is the collider's plane,
-    # to the millimetre. Past it the hills ramp in over 50 m (a cliff at the
-    # perimeter would read as a wall) and the rim lifts above the eyeline so
-    # there is a silhouette in the haze instead of an edge of the world.
+    # Inside the perimeter it is the road and nothing else, 3 cm under the lane
+    # datum (the kerb the lanes are bedded into). base() has already faded
+    # itself to zero by APRON_R and the hill ramp `t` is still zero there, so
+    # the two never overlap and the join is exact rather than blended. Past it
+    # the hills ramp in over 50 m (a cliff at the perimeter would read as a
+    # wall) and the rim lifts above the eyeline so there is a silhouette in the
+    # haze instead of an edge of the world.
     t = np.clip((r - APRON_R) / 50.0, 0.0, 1.0) ** 2
     hills = 26.0 * fbm(X, Z, 1.0 / 190.0, 11) - 9.5
     hills += 7.0 * fbm(X, Z, 1.0 / 52.0, 31) - 3.0
-    h = RIGID_Y + t * np.maximum(hills, 0.0)
+    h = RIGID_Y + base(X, Z) + t * np.maximum(hills, 0.0)
     h += t * 14.0 * np.clip((r - 130.0) / 180.0, 0.0, 1.0) ** 1.4
 
     dhx = np.gradient(h, ax, axis=0)
@@ -762,13 +902,20 @@ def build_surround():
         m.receive_shadow = True
         return m
 
-    # None of the three casts: the sun's shadow frustum is +-40 m (tight, so
-    # that a 3 cm berm gets a shadow map texel), the apron is flat, and the
-    # hills start at 62 m. Everything they could cast falls outside the map, so
-    # cast_shadow on them buys a 33k-vertex depth pass and nothing else.
+    # None of the three casts: the sun's frustum is +-40 m (tight, so that a
+    # 3 cm berm gets a shadow map texel), the hills start at 62 m, and the road
+    # never self-shadows -- its steepest grade is 3.1 degrees against a key at
+    # 13.6 degrees of elevation, so no crest can throw a shadow into its own
+    # dip. cast_shadow here would buy a 33k-vertex depth pass and nothing else.
+    #
+    # The fourth mesh is never added to the scene: it is every quad of the
+    # lattice, handed to PhysX as one cooked trimesh and then dropped. Same
+    # vertices as the three visible ones, so the ground the wheels raycast into
+    # is the ground to the last float.
     return (mesh_of(yard & ~snow_ground, apron_mat),
             mesh_of(snow_ground, field_snow_mat),
-            mesh_of(~yard, hill_mat))
+            mesh_of(~yard, hill_mat),
+            mesh_of(np.ones(len(quads), bool), apron_mat))
 
 
 # The yard floor is churned wet dirt: darker than the clay strip so the lanes
@@ -779,8 +926,14 @@ field_snow_mat = standard_material(0xc9d2de, 0.97)
 # The hills carry the haze's own hue: half the job of a backdrop is being the
 # thing the fog dissolves, and a backdrop in a different colour never does.
 hill_mat = standard_material(0x554b3e, 0.98)
-for part in build_surround():
+*_surround, _ground_collider = build_surround()
+for part in _surround:
     scene.add(part)
+_t_cook = time.perf_counter()
+world.add_static_trimesh(_ground_collider)
+print(f"  apron collider: {len(_ground_collider.geometry.get_index()) // 3:,} triangles "
+      f"cooked in {(time.perf_counter() - _t_cook) * 1000:.0f} ms")
+del _ground_collider                    # cooked into PhysX; the mesh is dead weight
 
 
 def boulder(radius, seed, squash=0.72):
@@ -871,24 +1024,34 @@ caps = Batch(cap_mat, cast=True)
 rocks = {id(m): Batch(m, cast=True) for m in (wet_rock, dry_rock, snow_rock)}
 rock_mats = {id(m): m for m in (wet_rock, dry_rock, snow_rock)}
 
+
+def ground_y(x, z):
+    """Where the apron surface is at (x, z) -- what a prop stands on."""
+    return RIGID_Y + float(base(x, z))
+
+
 for x in np.arange(X0 + 2.0, X1, 6.0):
     for z in (LANE_Z["mud"][1] + 0.9, LANE_Z["snow"][0] - 0.9):
         hgt = float(rng.uniform(1.25, 1.65))
+        # Planted in the road, not at a datum the road left behind: a post line
+        # that ignores the profile floats over the dips and buries itself in the
+        # crests, and it is the one thing in frame that says where the ground is.
+        y0 = ground_y(x, z)
         near_posts.add(tp.CylinderGeometry(0.06, 0.10, hgt, 8),
-                       (float(x), 0.5 * hgt + RIGID_Y, float(z)),
+                       (float(x), 0.5 * hgt + y0, float(z)),
                        tilt=(float(rng.normal(0.0, 0.05)),      # nothing stands
                              float(rng.normal(0.0, 0.05))))     # straight
         if z < 0.0:                                             # snow on the tops
             cap = tp.SphereGeometry(0.10, 8, 6)
             cap.scale(1.0, 0.45, 1.0)
-            caps.add(cap, (float(x), hgt + RIGID_Y - 0.02, float(z)))
-# The perimeter itself, so the flat apron ends at something rather than at the
-# fog: a ring of posts on the boundary the hills start from.
+            caps.add(cap, (float(x), hgt + y0 - 0.02, float(z)))
+# The perimeter itself, so the apron ends at something rather than at the fog:
+# a ring of posts on the boundary the hills start from.
 for a in np.arange(0.0, 2.0 * math.pi, 2.0 * math.pi / 96.0):
     hgt = float(rng.uniform(1.0, 1.4))
+    px, pz = APRON_R * math.cos(a), APRON_R * math.sin(a)
     far_posts.add(tp.CylinderGeometry(0.06, 0.09, hgt, 6),
-                  (float(APRON_R * math.cos(a)), 0.5 * hgt + RIGID_Y,
-                   float(APRON_R * math.sin(a))),
+                  (float(px), 0.5 * hgt + ground_y(px, pz), float(pz)),
                   tilt=(0.0, float(rng.normal(0.0, 0.07))))
 
 for k in range(72):
@@ -897,7 +1060,7 @@ for k in range(72):
     z = float(rng.uniform(12.0, 46.0)) * side
     x = float(rng.uniform(X0 - 26.0, X1 + 26.0))
     mat = snow_rock if (z < 0.0 and rng.random() < 0.7) else         (wet_rock if abs(z) < 22.0 and side > 0 else dry_rock)
-    rocks[id(mat)].add(boulder(r, 400 + k), (x, r * 0.34 + RIGID_Y, z),
+    rocks[id(mat)].add(boulder(r, 400 + k), (x, r * 0.34 + ground_y(x, z), z),
                        rot_y=float(rng.uniform(0.0, 6.28)))
 # NOTE: these boulders are scenery only. Making the big ones solid is one line
 # (a hidden sphere proxy through world.add_static -- add_static reads
@@ -1439,9 +1602,19 @@ def drive_inputs(dt):
         # Reset the DEMO's soft-ground state along with the grids: a reset that
         # leaves the dig factor, the TC cut and the load EMA where they were is
         # not a reset a stuck car can feel.
+        #
+        # reset() only fills a SCALAR, and the ground is a road now -- calling
+        # it alone would iron the lane flat and leave a 40 cm ledge where it
+        # meets the apron. So: reset() for the state it clears (carry, slip,
+        # contact area), then the stored profile straight back into h AND grade,
+        # which are zero-copy views of the warp arrays the kernels read.
         global prev_hub, tc_cut
-        for t in terrain.values():
+        for name, t in terrain.items():
             t.reset()
+            t.h_torch.copy_(BASE_T[name])
+            t.grade_torch.copy_(BASE_T[name])
+        for s in strips:
+            s.dirty = True
         dig[:] = 1.0
         tc_cut = 1.0
         w_ema[:] = REST_LOAD
@@ -1559,8 +1732,10 @@ def scripted(spawn_z, beats, eye, look, path, note=""):
     between lanes -- the same line at the same speed is the whole comparison --
     which a hand-driven pass is not. Each beat is (seconds, throttle, steer).
     `eye` None means the cinematic orbit at CINE_HERO, wherever the car ended.
+    Spawn height comes off the road, not off a datum -- SPAWN_X is the bottom of
+    a dip and dropping the car from a flat 1.05 m would be a 40 cm fall.
     """
-    vehicle.respawn(tp.Vector3(-20.0, 1.05, spawn_z), SPAWN_ROT)
+    vehicle.respawn(tp.Vector3(SPAWN_X, ride_y(SPAWN_X, spawn_z), spawn_z), SPAWN_ROT)
     vehicle.gear = tp.PhysxVehicle.Gear.FORWARD
     w_ema[:] = REST_LOAD
     for _ in range(60):
@@ -1631,23 +1806,45 @@ elif SHOT:
     z_snow = 0.5 * (LANE_Z["snow"][0] + LANE_Z["snow"][1])
     out = lambda n: os.path.join(OUT_DIR, f"warp_mudsnow_drive_{n}.png")   # noqa: E731
 
+    # Every parked camera is quoted RELATIVE to the road under its subject, so
+    # the framings survived the profile unchanged: the shots were composed on a
+    # plane, and a plane is what base() is measured from.
+    def rig(sx, sz, eye_xyz, look_xyz):
+        y0 = float(base(sx, sz))
+        return ((eye_xyz[0], y0 + eye_xyz[1], eye_xyz[2]),
+                (look_xyz[0], y0 + look_xyz[1], look_xyz[2]))
+
     # One script per process: VulkanRenderer.save_frame is a render + readback
     # and taking two of them in one run loses the device on the second.
     if which in ("mud", "snow"):
         # Same line, same throttle, both soft lanes: mud walls its trench,
         # snow swallows the wheel and barely rims.
         z = z_mud if which == "mud" else z_snow
-        scripted(z, [(3.2, 0.45, 0.0)],
-                 (-13.5, 1.15, z + (5.2 if z < 0 else -5.2)), (-15.5, -0.1, z),
-                 out(f"1_{which}_rut"))
+        eye, look = rig(-15.5, z, (-13.5, 1.15, z + (5.2 if z < 0 else -5.2)),
+                        (-15.5, -0.1, z))
+        scripted(z, [(3.2, 0.45, 0.0)], eye, look, out(f"1_{which}_rut"))
     if which in ("spin_mud", "spin_clay"):
         # Acceptance 2: the same full-throttle launch, mud vs the clay strip.
         # TC off -- unassisted wheelspin is what this shot is about.
         tc_on = False
         z = z_mud if which == "spin_mud" else 0.0
-        scripted(z, [(2.0, 1.0, 0.0)],
-                 (-17.0, 1.5, z + (5.0 if z <= 0 else -5.0)), (-18.5, 0.2, z),
-                 out(f"2_{which}"))
+        eye, look = rig(-18.5, z, (-17.0, 1.5, z + (5.0 if z <= 0 else -5.0)),
+                        (-18.5, 0.2, z))
+        scripted(z, [(2.0, 1.0, 0.0)], eye, look, out(f"2_{which}"))
+    if which == "crest":
+        # The road's own frame: the car ON the rise out of the spawn dip, shot
+        # from the clay strip across the lanes so the chassis PITCH is a
+        # silhouette against the grade behind it rather than something you take
+        # on trust. 2.6 s at 0.45 in mud lands it at x ~ -13, which is the
+        # steepest part of the climb (5.7 %), and the key is beyond the lanes
+        # so the ruts it just cut throw their shadows at the lens.
+        # Both ends of the shot are quoted against THEIR OWN ground, which is
+        # the point of it: the camera stands 0.9 m over the crest at x = -3.5
+        # and the car is 10 m back and 0.45 m lower, so the road between them
+        # is a skyline and the pitch is read against it.
+        eye = (-3.5, float(base(-3.5, z_mud - 4.5)) + 0.90, z_mud - 4.5)
+        look = (-13.0, float(base(-13.0, z_mud)) + 0.55, z_mud)
+        scripted(z_mud, [(2.6, 0.45, 0.0)], eye, look, out("6_crest"))
     if which == "cine":
         # The look pass's own acceptance frame: the cinematic camera, parked at
         # the phase of its orbit that crosses the key, on a mud lane with a
@@ -1659,7 +1856,7 @@ elif SHOT:
         # seat. One heading per process (a second save_frame in one run loses
         # the device), so this is run four times with --yaw.
         yaw = math.radians(cli_arg("--yaw", 0.0, float))
-        eye = np.array([-6.0, 1.35, 0.0])
+        eye = np.array([-6.0, float(base(-6.0, 0.0)) + 1.35, 0.0])
         scripted(0.0, [(0.2, 0.0, 0.0)], eye,
                  eye + np.array([math.sin(yaw) * 20.0, -1.2, math.cos(yaw) * 20.0]),
                  out(f"5_pan_{int(round(math.degrees(yaw))):03d}"))
@@ -1668,15 +1865,18 @@ elif SHOT:
         # state every half second. No frame saved.
         for lane_name in ("mud", "snow"):
             z_lane = 0.5 * (LANE_Z[lane_name][0] + LANE_Z[lane_name][1])
-            vehicle.respawn(tp.Vector3(-20.0, 1.05, z_lane), SPAWN_ROT)
+            vehicle.respawn(tp.Vector3(SPAWN_X, ride_y(SPAWN_X, z_lane), z_lane),
+                            SPAWN_ROT)
             dig[:] = 1.0
             tc_cut = 1.0
             w_ema[:] = REST_LOAD
             for _ in range(60):
                 coupled_step(0.0, 0.0, 0.0)
             print(f"  {lane_name}: t  v_kmh | W_kN | omega*r m/s | dig | sink_mm | tc")
+            _tot = []
             for k in range(int(4.0 * 60)):
                 coupled_step(0.45, 0.0, 0.0)
+                _tot.append(sum(vehicle.suspension_force(i) for i in range(4)))
                 if k % 30 == 0:
                     w = [vehicle.suspension_force(i) / 1000 for i in range(4)]
                     wr = [vehicle.wheel_angular_speed(i) * R_WHEEL for i in range(4)]
@@ -1684,13 +1884,43 @@ elif SHOT:
                           f"W {np.round(w, 2)} | wr {np.round(wr, 1)} | "
                           f"dig {np.round(dig, 2)} | z {np.round(hud['z'] * 1000, 0)} | "
                           f"{tc_cut:4.2f}")
+            # Total normal load, which on a road is no longer the static 14.7 kN
+            # (see "What a grade does to the suspension damper" at the top of
+            # this file). Printed as mean/extremes/sd so the difference between
+            # a car breathing with the road and a coupling loop RINGING is a
+            # number: sd is a tenth of the mean here, and the per-frame trace is
+            # monotone, not oscillatory.
+            _w = np.array(_tot[-120:]) / 1000.0
+            print(f"    total load over the last 2 s: mean {_w.mean():5.2f} kN  "
+                  f"[{_w.min():5.2f}, {_w.max():5.2f}]  sd {_w.std():4.2f} "
+                  f"(static 14.72)")
+    if which == "apron":
+        # The road profile's own acceptance, in numbers: drive the length of the
+        # yard 20 m OFF both lanes, where every wheel is on the rigid fallback,
+        # and print the ride height above RIGID_Y + base(x, z). If the trimesh
+        # collider were missing (or cooked from different vertices) the car
+        # would be a metre down on the catch plane and this column would read
+        # zero; if the apron ignored the profile it would drift by 0.5 m. It
+        # holds to a centimetre, and the centimetre IS the chatter -- the bumps
+        # are felt off-lane because the collider has them.
+        vehicle.respawn(tp.Vector3(SPAWN_X, ride_y(SPAWN_X, 20.0), 20.0), SPAWN_ROT)
+        for _ in range(90):
+            coupled_step(0.0, 0.0, 0.0)
+        print("   t     x      y   y-apron  lane   (apron = RIGID_Y + base)")
+        for k in range(int(9.0 * 60)):
+            coupled_step(0.35, 0.0, 0.0)
+            if k % 45 == 0:
+                p = vehicle.position
+                print(f"  {k/60.0:4.1f} {p.x:7.2f} {p.y:6.3f} "
+                      f"{p.y - (RIGID_Y + float(base(p.x, p.z))):7.3f}  "
+                      f"{hud['lane']}  v={vehicle.forward_speed*3.6:5.1f}")
     if which == "stuck":
         # The mud skill loop, measured, with TC off (TC exists to prevent
         # exactly this): floor it from rest (the wheels dig and the car goes
         # nowhere), then ease off to a crawl throttle (the dig relaxes and it
         # creeps out). No frame is saved -- this one is numbers.
         tc_on = False
-        vehicle.respawn(tp.Vector3(-20.0, 1.05, z_mud), SPAWN_ROT)
+        vehicle.respawn(tp.Vector3(SPAWN_X, ride_y(SPAWN_X, z_mud), z_mud), SPAWN_ROT)
         w_ema[:] = REST_LOAD
         for _ in range(60):
             coupled_step(0.0, 0.0, 0.0)
@@ -1725,7 +1955,7 @@ elif SHOT:
             surf = float(t.heights(x, y)[0, 0])
             return (surf - (hubw[1] - R_WHEEL)) * 1000.0
 
-        vehicle.respawn(tp.Vector3(-14.0, 1.05, z_mud), SPAWN_ROT)
+        vehicle.respawn(tp.Vector3(-14.0, ride_y(-14.0, z_mud), z_mud), SPAWN_ROT)
         w_ema[:] = REST_LOAD
         for _ in range(60):
             coupled_step(0.0, 0.0, 0.0)
@@ -1738,8 +1968,9 @@ elif SHOT:
         for s in strips:
             s.dirty = True
             s.publish()
-        camera.position.set(-14.0, 6.0, z_mud - 6.5)
-        camera.look_at(tp.Vector3(-15.5, -0.1, z_mud))
+        y0 = float(base(-15.5, z_mud))
+        camera.position.set(-14.0, y0 + 6.0, z_mud - 6.5)
+        camera.look_at(tp.Vector3(-15.5, y0 - 0.1, z_mud))
         for _ in range(0 if GL else WARM):
             renderer.render(scene, camera)
         save_shot(out("3_second_lap"))
