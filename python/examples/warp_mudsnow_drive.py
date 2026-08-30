@@ -599,8 +599,14 @@ scene = tp.Scene()
 # yard for attention (warp_mudsnow_mpm.py does the same at 1/100 the scale).
 # Global fog, not a per-material one -- some Vulkan paths ignore those.
 HAZE = 0x3a3329
-scene.background = HAZE
-scene.set_fog(HAZE, 55.0, 300.0)
+# The Vulkan pipeline auto-exposes this dusk up ~4x, so the authored haze
+# reads as a pale warm sky on screen; GL has no auto-exposure and clears the
+# background raw. Author the GL sky at the value the filmic frame actually
+# shows (sampled off the Vulkan acceptance still), so the design -- ground
+# dissolving into the haze, no horizon line anywhere -- survives the backend.
+SKY = 0xe6d8c4 if GL else HAZE
+scene.background = SKY
+scene.set_fog(SKY, 55.0, 300.0)
 
 # Low warm key raking ACROSS the lanes -- along z, while the lanes run along x.
 # Berms are centimetres tall; under a high sun they vanish, and under a low one
@@ -2731,9 +2737,12 @@ CINE_HERO = 3.55
 
 def update_camera(dt):
     """main.cpp's chase: exponential lerp toward a chassis-relative offset, read
-    off the interpolated visual rather than the raw actor pose."""
+    off the interpolated visual rather than the raw actor pose -- `chassis` IS
+    that interpolated visual (posed by frame() from the blended sim states);
+    reading the actor here would re-introduce the 60 Hz stepping the blend
+    exists to hide."""
     global cam_pos, cam_tgt, cine_t
-    p, q = vehicle.position, vehicle.quaternion
+    p, q = chassis.position, chassis.quaternion
     c = np.array([p.x, p.y, p.z])
     if view_mode == 2:
         cine_t += dt
@@ -2751,23 +2760,75 @@ def update_camera(dt):
 
 
 brake_was = reverse_was = False
+wall_prev = None                  # last frame's wall clock, for the accumulator
+sim_debt = 0.0                    # wall time owed to the sim, in seconds
+pose_prev = pose_cur = None       # car pose at sim steps N-1 and N, for drawing
+
+
+def nlerp(q0, q1, a):
+    """Normalised quaternion lerp, sign-fixed so it never takes the long way.
+    The rotations this blends are one sim step apart -- a few degrees at the
+    worst wheelspin -- where nlerp and slerp are the same curve."""
+    if float(np.dot(q0, q1)) < 0.0:
+        q1 = -q1
+    q = q0 + (q1 - q0) * a
+    return q / max(float(np.linalg.norm(q)), 1e-12)
+
+
+def capture_pose():
+    """Chassis pose + the four wheel local poses, as plain arrays."""
+    p, q = vehicle.position, vehicle.quaternion
+    wheels = []
+    for i in range(4):
+        lp, lq = vehicle.wheel_local_pose(i)
+        wheels.append((np.array([lp.x, lp.y, lp.z]),
+                       np.array([lq.x, lq.y, lq.z, lq.w])))
+    return (np.array([p.x, p.y, p.z]), np.array([q.x, q.y, q.z, q.w]), wheels)
 
 
 def frame():
-    global fps_ema, brake_was, reverse_was
+    global fps_ema, brake_was, reverse_was, wall_prev, sim_debt, pose_prev, pose_cur
     t0 = time.perf_counter()
-    drive_inputs(DT)
-    hub = coupled_step(throttle_cmd, steer_cmd, brake_cmd)
-    mark_dirty(hub)
-    spray_step(DT, hub)
+    # The sim runs at 60 Hz on the WALL clock, not one step per rendered frame:
+    # welded to the render loop, the car lived at (fps/60)x real time -- slow
+    # motion at 33 fps under the filmic look, fast-forward on an uncapped GL
+    # frame. An accumulator pays sim steps out of wall time instead, capped at
+    # 4 a frame so a hitch buys slow motion rather than a spiral of catch-up
+    # steps that make the next frame later still. Interactive only -- the
+    # script, film and bench loops are 60 Hz by construction, one step per
+    # emitted frame, and stay on fixed DT.
+    wall = 0.0 if wall_prev is None else t0 - wall_prev
+    wall_prev = t0
+    drive_inputs(min(wall, 0.1))      # once per RENDERED frame: R/T/F edge-trigger
+    sim_debt = min(sim_debt + wall, 4.0 * DT)
+    hub = None
+    while sim_debt >= DT:
+        sim_debt -= DT
+        hub = coupled_step(throttle_cmd, steer_cmd, brake_cmd)
+        mark_dirty(hub)
+        spray_step(DT, hub)
+        pose_prev, pose_cur = pose_cur, capture_pose()
 
-    p, q = vehicle.position, vehicle.quaternion
-    chassis.position.set(p.x, p.y, p.z)
-    chassis.quaternion.set(q.x, q.y, q.z, q.w)
+    # The DRAWN pose is the two newest sim states blended by the leftover
+    # debt, so the car advances a little every RENDERED frame instead of by
+    # whole 1/60 steps -- one or two per frame at 33 fps, zero or one above
+    # 60. Raw stepping plus a wall-time chase camera read as the car shaking
+    # against its own camera (field report); the cost of the blend is up to
+    # one sim step of visual latency, which nothing here can feel.
+    if pose_cur is None:
+        pose_cur = capture_pose()
+    if pose_prev is None or np.linalg.norm(pose_cur[0] - pose_prev[0]) > 5.0:
+        pose_prev = pose_cur          # first frame or a respawn teleport: snap
+    a = sim_debt / DT
+    p = pose_prev[0] + (pose_cur[0] - pose_prev[0]) * a
+    q = nlerp(pose_prev[1], pose_cur[1], a)
+    chassis.position.set(*p)
+    chassis.quaternion.set(*q)
     for i in range(4):
-        lp, lq = vehicle.wheel_local_pose(i)
-        wheel_rigs[i].position.set(lp.x, lp.y, lp.z)
-        wheel_rigs[i].quaternion.set(lq.x, lq.y, lq.z, lq.w)
+        lp = pose_prev[2][i][0] + (pose_cur[2][i][0] - pose_prev[2][i][0]) * a
+        lq = nlerp(pose_prev[2][i][1], pose_cur[2][i][1], a)
+        wheel_rigs[i].position.set(*lp)
+        wheel_rigs[i].quaternion.set(*lq)
 
     # Lamps: only touch the material when the state flips -- needs_update()
     # re-uploads it.
@@ -2782,9 +2843,12 @@ def frame():
         reverse_mat.emissive_intensity = 6.0 if rev else 1.0
         reverse_mat.needs_update()
 
-    update_camera(DT)
+    # Presentation runs on wall time: the chase lerp's 1-exp(-k*dt) is frame
+    # rate independent given the real dt, and snowfall advancing by wall time
+    # is what stops the curtain stuttering on frames the sim did not step.
+    update_camera(min(wall, 0.1))
     c = active_camera()
-    weather(DT, (c.position.x, c.position.y, c.position.z))
+    weather(min(wall, 0.1), (c.position.x, c.position.y, c.position.z))
     for s in strips:
         s.publish()
     renderer.render(scene, active_camera())
