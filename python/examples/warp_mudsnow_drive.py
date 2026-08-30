@@ -17,6 +17,7 @@ ground.
     python warp_mudsnow_drive.py --shot --script mud     # one acceptance frame
     python warp_mudsnow_drive.py --shot --script cine    # the cinematic frame
     python warp_mudsnow_drive.py --cell 0.08 --width 6   # cheaper ground
+    python warp_mudsnow_drive.py --no-lane-color         # flat lane materials
     python warp_mudsnow_drive.py --film --interop        # the film (see below)
     python warp_mudsnow_drive.py --film --dry            # its route, no renderer
     python warp_mudsnow_drive.py --film --takes mud,dig  # re-render two takes
@@ -40,6 +41,24 @@ over ONE continuously advancing sim (the ruts accumulate across the whole film;
 nothing is ever reset), hard cuts between them, thirty frames discarded after
 every cut for the temporal passes, and off-screen transits to move the car
 between shots. See "the film" at the bottom of this file.
+
+The ground has a colour, and the wheels throw it
+------------------------------------------------
+Every surface in the yard is a WHITE material with a per-vertex `color`
+attribute doing the work: the apron mixes dry dirt, wet earth and faded grass
+over two scales of noise, darkens into a moisture halo along the soft lanes,
+carries one worn wheel pair down its natural driving line, and drifts into the
+snow field across a threshold that wanders instead of a mesh edge that does not.
+Boulders and posts get a tint each, a value mottle across their facets and a
+dirt line at the foot. The lanes carry it too -- a static attribute survives the
+vertex-interop arm, which was the open question. Colours are written in sRGB and
+decoded to linear by hand; see `to_linear`, and read it before adding a palette.
+
+And when a contact patch scrubs past 2 m/s in a soft lane the wheel throws what
+it is scrubbing loose: lit 3 cm clods in mud, powder in snow, host-owned
+ballistics in numpy over two 1.5k ParticleFields. It is gated on the soil
+model's own scrub, so it fires on a launch and on a slip-out and stays quiet on
+a cruise.
 
 The ground is a road, not a plane
 ---------------------------------
@@ -168,6 +187,7 @@ OUT_DIR = cli_arg("--out-dir", ".", str)
 AA = cli_arg("--aa", 4, int)
 WARM = cli_arg("--warm", 60, int)
 NOSAN = "--no-sanitize" in sys.argv
+LANE_COLOR = "--no-lane-color" not in sys.argv   # static colour under interop
 
 DT = 1.0 / 60.0
 R_WHEEL = 0.40                    # PhysX wheel radius, and the collider sphere
@@ -247,6 +267,22 @@ def fbm(x, y, freq, seed, octaves=4):
 def smoothstep(a, b, v):
     t = np.clip((np.asarray(v, dtype=np.float64) - a) / (b - a), 0.0, 1.0)
     return t * t * (3.0 - 2.0 * t)
+
+
+def to_linear(c):
+    """sRGB -> linear, and the one thing about vertex colour that will cost you
+    an hour if nobody says it.
+
+    A material's `color` is DECODED by the renderer: 0x2b241c is the sRGB
+    number off a paint chip and reaches the shader as 0.023 linear. A `color`
+    ATTRIBUTE is not -- it is taken as linear and used as it stands. Hand the
+    attribute the same 0.169 the hex quoted and the ground comes back seven
+    times too bright: the first pass of this phase turned a dusk yard into pale
+    desert and the fog into haze over sand. Every palette in this file is
+    written in sRGB, the numbers a human can picture, and decoded here.
+    """
+    c = np.clip(np.asarray(c, dtype=np.float64), 0.0, 1.0)
+    return np.where(c <= 0.04045, c / 12.92, ((c + 0.055) / 1.055) ** 2.4)
 
 
 SPAWN_X = -20.0
@@ -614,6 +650,14 @@ mud_mat.specular_intensity = 0.14
 snow_mat = standard_material(0xdde5f0, 0.97)
 clay_mat = standard_material(0x5a5142, 0.96)
 LANE_MAT = {"mud": mud_mat, "snow": snow_mat, "clay": clay_mat}
+# --lane-color: the same trick as the yard, on the LANES -- white materials and
+# a static per-vertex albedo. Off by default; see the note in Strip.__init__.
+LANE_ALBEDO = {"mud": (0.251, 0.161, 0.102), "snow": (0.867, 0.898, 0.941),
+               "clay": (0.353, 0.318, 0.259)}
+if LANE_COLOR:
+    for _m in LANE_MAT.values():
+        _m.color = 0xffffff
+        _m.vertex_colors = True
 
 # Micro-relief, as a slope bent into the published normal rather than geometry.
 # A 5 cm grid over 48 m of lane is dead flat between the ruts, and dead flat is
@@ -693,7 +737,7 @@ def strip_surface(h: wp.array3d(dtype=float),
 class Strip:
     """One column range of a lane as a threepp mesh, published device-side."""
 
-    def __init__(self, terrain, material, i0, ncol, base0, grain=(1.0, 0.0)):
+    def __init__(self, terrain, material, i0, ncol, base0, grain=(1.0, 0.0), name=""):
         self.t = terrain
         self.i0 = i0
         self.ncol = ncol
@@ -716,6 +760,22 @@ class Strip:
                                     np.ascontiguousarray(p0.reshape(-1, 3), np.float32))
         self.geometry.set_attribute("normal",
                                     np.tile(np.float32([0, 1, 0]), (self.n, 1)))
+        if LANE_COLOR:
+            # A lane is a Warp-owned position and normal buffer that the
+            # renderer exports and CUDA writes, and whether a THIRD, static
+            # attribute survives the arm -- which swaps the GeometryDesc out
+            # from under the entry -- was an open question. It does: 8/8 strips
+            # arm, the ruts still carve, and the tint is there. The colour is
+            # the lane's own albedo with 20 % of value mottle at 3.5 m, which
+            # is what stops eight metres of mud between two ruts being one
+            # brown rectangle. `--no-lane-color` puts the flat materials back.
+            gx, gz = p0[..., 0], p0[..., 2]
+            c = np.asarray(LANE_ALBEDO[name], np.float64)
+            v = (0.80 + 0.40 * fbm(gx, gz, 1.0 / 3.5, 131, 2))
+            self.geometry.set_attribute(
+                "color", np.ascontiguousarray(
+                    to_linear(c[None, None, :] * v[..., None]).reshape(-1, 3),
+                    np.float32))
         self.geometry.set_index(np.ascontiguousarray(faces.reshape(-1), np.uint32))
         self.mesh = tp.Mesh(self.geometry, material)
         self.mesh.frustum_culled = False      # the vertices move under the renderer
@@ -801,7 +861,7 @@ def make_strips(name):
     for k in range(n_strip):
         i0 = k * (per - 1)
         out.append(Strip(t, LANE_MAT[name], i0, min(per, t.nx - i0), b0,
-                         LANE_GRAIN[name]))
+                         LANE_GRAIN[name], name))
     return out
 
 
@@ -842,16 +902,98 @@ def mark_dirty(hub):
 rng = np.random.default_rng(7)
 
 
+def yard_color(X, Z, ny, t):
+    """Per-vertex colour of the lattice: what stops the yard being one brown.
+
+    Absolute colours, not a modulation: the three materials are white and this
+    function IS the ground's albedo. That is the only way the snow line can be
+    a soft edge -- a multiplier on 0x2b241c cannot reach grey-white without
+    going over 1 -- and it puts dirt, wet, grass, snow and rock in one palette
+    that is mixed per vertex instead of cut per quad.
+
+    Value first, hue second: this is dusk under fog, and a saturated ground at
+    3 lux reads as a cartoon. The spread between the dry and the wet dirt is
+    2.1x in VALUE and a few percent in hue.
+
+      * two scales of patchiness -- 22 m fields of dry / wet / faded grass, 7 m
+        of mottle inside them, the same value-noise family the road is made of;
+      * a moisture halo a few metres out from the soft lanes' long edges, so
+        the lanes belong to the ground instead of being decals on it;
+      * a worn wheel pair down the apron's natural driving line (something has
+        been here before, which is also the only cue that says this is a yard
+        and not a field);
+      * snow dusting carried by the same wandering snowline the mesh cut uses,
+        broken up by noise and by how far up a face points, so the field's edge
+        is drifted rather than sawn;
+      * the hills going rockier and greyer with altitude before the fog takes
+        them.
+    """
+    dry = np.array([0.238, 0.198, 0.146])       # sun-dried dirt, warm
+    wet = np.array([0.105, 0.088, 0.072])       # churned wet earth, near-black
+    grass = np.array([0.196, 0.190, 0.122])     # faded winter grass, olive
+    snow = np.array([0.780, 0.816, 0.868])      # the lying-snow albedo
+    rock = np.array([0.318, 0.282, 0.234])      # the hills' own brown
+    scree = np.array([0.395, 0.396, 0.383])     # and their grey tops
+
+    # 22 m fields, 7 m mottle. Two independent noises, so dry/wet and
+    # dirt/grass are not the same map read twice.
+    a = fbm(X + 13.0, Z - 5.0, 1.0 / 22.0, 71, 3)
+    b = fbm(X - 61.0, Z + 29.0, 1.0 / 7.0, 83, 2)
+    wetness = np.clip(1.35 * (a - 0.42) + 0.35 * (b - 0.5), 0.0, 1.0)
+    grassy = smoothstep(0.52, 0.78, fbm(X + 200.0, Z + 90.0, 1.0 / 26.0, 97, 3))
+
+    c = dry + (wet - dry) * wetness[..., None]
+    c = c + (grass - c) * (0.75 * grassy)[..., None]
+    c = c * (0.80 + 0.40 * b)[..., None]        # the 7 m mottle, as value
+
+    # Moisture halo. The soft lanes wick outward: within ~4.5 m of a lane's
+    # long edge the ground darkens and cools toward the wet end of the palette.
+    halo = np.zeros_like(X)
+    for z0, z1 in (LANE_Z["mud"], LANE_Z["snow"]):
+        d = np.maximum(np.maximum(z0 - Z, Z - z1), 0.0)          # distance in z
+        dx = np.maximum(np.maximum(X0 - X, X - X1), 0.0)
+        halo = np.maximum(halo, (1.0 - smoothstep(0.0, 4.5, d))
+                          * (1.0 - smoothstep(0.0, 7.0, dx)))
+    halo *= 0.55 + 0.45 * b
+    c = c + (wet * np.array([0.95, 1.0, 1.12]) - c) * (0.62 * halo)[..., None]
+
+    # The worn track: one wheel pair down the apron beside the mud lane, on a
+    # line that wanders the way a driven line does. Faint -- 0.78 of value --
+    # because a hard black pair reads as paint.
+    zc = LANE_Z["mud"][1] + 3.4 + 1.6 * np.sin(X / 17.0) + 0.7 * np.sin(X / 5.3)
+    worn = np.zeros_like(X)
+    for side in (-1.0, 1.0):
+        worn = np.maximum(worn, 1.0 - smoothstep(0.10, 0.42, np.abs(Z - zc - side * 0.86)))
+    worn *= (1.0 - smoothstep(30.0, 46.0, np.abs(X))) * (0.6 + 0.4 * b)
+    c = c * (1.0 - 0.30 * worn)[..., None]
+
+    # Snow. The SAME wandering threshold the mesh cut uses, so the two agree,
+    # but read per vertex and softened over 3.5 m with the mottle eating into
+    # it -- a snow field ends in drifts and bare patches, not on a line.
+    snowline = LANE_Z["snow"][0] - 1.6 - 7.0 * fbm(X, Z, 0.035, 89, 3)
+    cover = smoothstep(-0.8, 3.2, snowline - Z)
+    cover = np.clip(cover * (0.55 + 0.75 * fbm(X + 7.0, Z - 3.0, 1.0 / 9.0, 101, 2))
+                    * (1.0 - 0.35 * ny), 0.0, 1.0)               # ny: 0 flat, big = steep
+    lit_snow = snow * (0.86 + 0.28 * b)[..., None]
+    c = c + (lit_snow - c) * cover[..., None]
+
+    # The hills: out of the yard the palette goes rock, and up the rock goes
+    # scree-grey. The fog eats the far half of this; what it buys is the near
+    # half not being the yard's own brown at 200 m.
+    return c, rock, scree, snowline
+
+
 def build_surround():
     """The lattice, the three meshes cut out of it, and its collider.
 
-    ONE material per mesh, because per-vertex colour would be the natural way
-    to grade dirt into snow into haze and this renderer's deferred path does
-    not have it: gbuffer.vert has no colour binding and writes vec3(1) (only
-    the GPU-driven indirect path reads a "color" attribute). So the yard is
-    split into regions instead, and the cuts are put where a material change is
-    something rather than nothing -- the snow line, and the perimeter the hills
-    start from.
+    The three materials are WHITE and a per-vertex `color` attribute carries
+    the whole ground (see yard_color). This used to be impossible -- the note
+    that stood here said the deferred path had no colour binding -- and it was
+    half true: `set_attribute` was truncating indexed draw ranges and auto-LOD
+    was pinning a partial one, so a colour attribute took the geometry off the
+    path that draws it. Both are fixed (dev 5825467c, dfa43b60); the region
+    cuts stay because they still carry the roughness split, but the snow line
+    is now a blend across them rather than a seam between them.
 
     The collider is the WHOLE lattice, hills included, not just the yard: the
     alternative is a trimesh that stops at the perimeter and a metre of air
@@ -887,8 +1029,19 @@ def build_surround():
     nrm = np.stack([-dhx, np.ones_like(h), -dhz], axis=-1)
     nrm /= np.linalg.norm(nrm, axis=-1, keepdims=True)
 
+    # Colour, per vertex, over the SAME lattice: the yard's palette inside the
+    # perimeter, ramped into rock and then scree over the hills by the same `t`
+    # that lifts them, so there is one join and it is not visible.
+    col, rock, scree, _ = yard_color(X, Z, 1.0 - nrm[..., 1], t)
+    alt = smoothstep(2.0, 34.0, h - RIGID_Y)
+    hue = fbm(X * 1.3 + 400.0, Z * 1.3, 1.0 / 60.0, 113, 3)
+    hill_c = rock + (scree - rock) * alt[..., None]
+    hill_c = hill_c * (0.72 + 0.56 * hue)[..., None]
+    col = col + (hill_c - col) * (t ** 0.6)[..., None]
+
     pos = np.ascontiguousarray(np.stack([X, h, Z], axis=-1).reshape(-1, 3), np.float32)
     nrm = np.ascontiguousarray(nrm.reshape(-1, 3), np.float32)
+    col = np.ascontiguousarray(to_linear(col).reshape(-1, 3), np.float32)
     a = (np.arange(n - 1)[:, None] * n + np.arange(n - 1)[None, :]).ravel()
     quads = np.stack([a, a + 1, a + n + 1, a, a + n + 1, a + n], axis=1)
     # Region tests on the quad's own centre, so a quad belongs to exactly one
@@ -907,6 +1060,7 @@ def build_surround():
         g = tp.BufferGeometry()
         g.set_attribute("position", pos)
         g.set_attribute("normal", nrm)
+        g.set_attribute("color", col)
         g.set_index(np.ascontiguousarray(idx.ravel(), np.uint32))
         m = tp.Mesh(g, material)
         m.receive_shadow = True
@@ -930,12 +1084,13 @@ def build_surround():
 
 # The yard floor is churned wet dirt: darker than the clay strip so the lanes
 # read as lighter cuts into it rather than carpets laid on it, and dull enough
-# that the raking key does not turn 12,000 m2 of it into a mirror.
-apron_mat = standard_material(0x2b241c, 0.96)
-field_snow_mat = standard_material(0xc9d2de, 0.97)
-# The hills carry the haze's own hue: half the job of a backdrop is being the
-# thing the fog dissolves, and a backdrop in a different colour never does.
-hill_mat = standard_material(0x554b3e, 0.98)
+# that the raking key does not turn 12,000 m2 of it into a mirror. All three
+# are WHITE now and carry only their roughness -- dirt, snow and rock all come
+# out of the one `color` attribute (see yard_color), which is what lets the
+# snow line drift across a mesh boundary instead of stopping at it.
+apron_mat = standard_material(0xffffff, 0.96, vertex_colors=True)
+field_snow_mat = standard_material(0xffffff, 0.97, vertex_colors=True)
+hill_mat = standard_material(0xffffff, 0.98, vertex_colors=True)
 *_surround, _ground_collider = build_surround()
 for part in _surround:
     scene.add(part)
@@ -980,11 +1135,20 @@ def boulder(radius, seed, squash=0.72):
 # and 170 shadow-map draws for scenery that never moves relative to anything,
 # and it measured as most of this pass's frame cost. Baked into one geometry a
 # material, it is five draws.
-post_mat = standard_material(0x2a2521, 0.92)
-cap_mat = standard_material(0x9aa2ac, 0.9)
-wet_rock = standard_material(0x312b25, 0.72)
-dry_rock = standard_material(0x4b463d, 0.95)
-snow_rock = standard_material(0x9fa8b2, 0.93)
+#
+# And coloured per vertex for the same reason the ground is: forty copies of
+# one boulder under one material IS forty copies, and the eye finds that faster
+# than it finds anything else in the frame. Each copy gets its own tint out of
+# a spread, a value mottle across its facets, and a dirt line where it meets
+# the ground -- the three cues that make a batch read as a scatter.
+ROCK_ALBEDO = {"wet": (0.148, 0.126, 0.106), "dry": (0.300, 0.281, 0.244),
+               "snow": (0.628, 0.663, 0.702)}
+MUD_LINE = (0.088, 0.073, 0.058)          # what a foot in the wet yard looks like
+post_mat = standard_material(0xffffff, 0.92, vertex_colors=True)
+cap_mat = standard_material(0xffffff, 0.9, vertex_colors=True)
+wet_rock = standard_material(0xffffff, 0.72, vertex_colors=True)
+dry_rock = standard_material(0xffffff, 0.95, vertex_colors=True)
+snow_rock = standard_material(0xffffff, 0.93, vertex_colors=True)
 
 
 class Batch:
@@ -993,9 +1157,15 @@ class Batch:
     def __init__(self, material, cast=False):
         self.material = material
         self.cast = cast
-        self.pos, self.nrm, self.idx, self.n = [], [], [], 0
+        self.pos, self.nrm, self.idx, self.col, self.n = [], [], [], [], 0
 
-    def add(self, geometry, offset, rot_y=0.0, tilt=(0.0, 0.0)):
+    def add(self, geometry, offset, rot_y=0.0, tilt=(0.0, 0.0),
+            color=(1.0, 1.0, 1.0), dirt=None, dirt_frac=0.45, mottle=0.0):
+        """`color` is this copy's albedo, `dirt` the colour its foot is buried
+        in -- blended over the lowest `dirt_frac` of the copy, which is the
+        cheapest possible fix for props that look posted onto the ground rather
+        than standing in it. `mottle` adds a per-vertex value jitter, which is
+        what stops forty copies of one boulder reading as forty copies."""
         p = geometry.get_attribute("position")
         nm = geometry.get_attribute("normal")
         i = geometry.get_index()
@@ -1007,9 +1177,21 @@ class Batch:
         m = (np.array([[cz, -sz, 0.0], [sz, cz, 0.0], [0.0, 0.0, 1.0]])
              @ np.array([[1.0, 0.0, 0.0], [0.0, cx, -sx], [0.0, sx, cx]])
              @ np.array([[ca, 0.0, sa], [0.0, 1.0, 0.0], [-sa, 0.0, ca]]))
-        self.pos.append(p @ m.T + np.asarray(offset))
+        q = p @ m.T + np.asarray(offset)
+        self.pos.append(q)
         self.nrm.append(nm @ m.T)
         self.idx.append((np.arange(len(p)) if i is None else i) + self.n)
+        c = np.tile(np.asarray(color, np.float64), (len(p), 1))
+        if mottle > 0.0:
+            # A hash of the LOCAL vertex, so a shared icosphere corner gets one
+            # value and the shell does not crack along its seams.
+            s = np.sin(p @ np.array([12.99, 78.23, 37.72])) * 43758.5453
+            c = c * (1.0 + mottle * (2.0 * (s - np.floor(s)) - 1.0))[:, None]
+        if dirt is not None:
+            y0, y1 = q[:, 1].min(), q[:, 1].max()
+            w = 1.0 - smoothstep(y0, y0 + max(dirt_frac * (y1 - y0), 1e-6), q[:, 1])
+            c = c + (np.asarray(dirt, np.float64) - c) * (0.68 * w)[:, None]
+        self.col.append(np.clip(c, 0.0, 1.0))
         self.n += len(p)
 
     def mesh(self):
@@ -1018,6 +1200,9 @@ class Batch:
                         np.ascontiguousarray(np.concatenate(self.pos), np.float32))
         g.set_attribute("normal",
                         np.ascontiguousarray(np.concatenate(self.nrm), np.float32))
+        g.set_attribute("color",
+                        np.ascontiguousarray(to_linear(np.concatenate(self.col)),
+                                             np.float32))
         g.set_index(np.ascontiguousarray(np.concatenate(self.idx).ravel(), np.uint32))
         m = tp.Mesh(g, self.material)
         m.cast_shadow = self.cast
@@ -1040,6 +1225,20 @@ def ground_y(x, z):
     return RIGID_Y + float(base(x, z))
 
 
+# A SEPARATE stream for the tints. `rng` draws the placements, and a colour
+# pass that borrows it would move every post and boulder in the yard -- which
+# is a scene change wearing a colour change's clothes, and the acceptance
+# stills would be comparing two different yards.
+crng = np.random.default_rng(1907)
+
+
+def tint(base_rgb, spread=0.22, hue=0.05):
+    """One copy's albedo: a value draw plus a small independent hue wobble."""
+    v = float(crng.normal(1.0, spread))
+    return tuple(max(0.01, c * v * (1.0 + hue * float(crng.normal())))
+                 for c in base_rgb)
+
+
 for x in np.arange(X0 + 2.0, X1, 6.0):
     for z in (LANE_Z["mud"][1] + 0.9, LANE_Z["snow"][0] - 0.9):
         hgt = float(rng.uniform(1.25, 1.65))
@@ -1050,11 +1249,14 @@ for x in np.arange(X0 + 2.0, X1, 6.0):
         near_posts.add(tp.CylinderGeometry(0.06, 0.10, hgt, 8),
                        (float(x), 0.5 * hgt + y0, float(z)),
                        tilt=(float(rng.normal(0.0, 0.05)),      # nothing stands
-                             float(rng.normal(0.0, 0.05))))     # straight
+                             float(rng.normal(0.0, 0.05))),     # straight
+                       color=tint((0.152, 0.132, 0.115), 0.26, 0.07),
+                       dirt=MUD_LINE, dirt_frac=0.30, mottle=0.06)
         if z < 0.0:                                             # snow on the tops
             cap = tp.SphereGeometry(0.10, 8, 6)
             cap.scale(1.0, 0.45, 1.0)
-            caps.add(cap, (float(x), hgt + y0 - 0.02, float(z)))
+            caps.add(cap, (float(x), hgt + y0 - 0.02, float(z)),
+                     color=tint((0.604, 0.635, 0.675), 0.10, 0.02))
 # The perimeter itself, so the apron ends at something rather than at the fog:
 # a ring of posts on the boundary the hills start from.
 for a in np.arange(0.0, 2.0 * math.pi, 2.0 * math.pi / 96.0):
@@ -1062,7 +1264,8 @@ for a in np.arange(0.0, 2.0 * math.pi, 2.0 * math.pi / 96.0):
     px, pz = APRON_R * math.cos(a), APRON_R * math.sin(a)
     far_posts.add(tp.CylinderGeometry(0.06, 0.09, hgt, 6),
                   (float(px), 0.5 * hgt + ground_y(px, pz), float(pz)),
-                  tilt=(0.0, float(rng.normal(0.0, 0.07))))
+                  tilt=(0.0, float(rng.normal(0.0, 0.07))),
+                  color=tint((0.150, 0.132, 0.118), 0.24, 0.06), mottle=0.05)
 
 for k in range(72):
     r = float(rng.uniform(0.30, 1.15))
@@ -1070,8 +1273,16 @@ for k in range(72):
     z = float(rng.uniform(12.0, 46.0)) * side
     x = float(rng.uniform(X0 - 26.0, X1 + 26.0))
     mat = snow_rock if (z < 0.0 and rng.random() < 0.7) else         (wet_rock if abs(z) < 22.0 and side > 0 else dry_rock)
+    key = "snow" if mat is snow_rock else ("wet" if mat is wet_rock else "dry")
+    # Snow-capped rocks keep their tint tight (snow is snow); the dirt ones get
+    # a wide value spread, and every one of them stands in the mud it sits in.
     rocks[id(mat)].add(boulder(r, 400 + k), (x, r * 0.34 + ground_y(x, z), z),
-                       rot_y=float(rng.uniform(0.0, 6.28)))
+                       rot_y=float(rng.uniform(0.0, 6.28)),
+                       color=tint(ROCK_ALBEDO[key],
+                                  0.09 if key == "snow" else 0.26,
+                                  0.02 if key == "snow" else 0.07),
+                       dirt=MUD_LINE if key != "snow" else (0.30, 0.31, 0.33),
+                       dirt_frac=0.38, mottle=0.09 if key != "snow" else 0.04)
 # NOTE: these boulders are scenery only. Making the big ones solid is one line
 # (a hidden sphere proxy through world.add_static -- add_static reads
 # Box/Sphere/Capsule geometry, not a displaced icosahedron), and it was tried
@@ -1175,6 +1386,198 @@ def weather(dt, eye=None):
     if eye is not None:
         snowfall.set_follow_center(tp.Vector3(*(float(v) for v in eye)))
     snowfall.set_emitter_time(_weather_t, dt)
+
+# --- wheel spray ----------------------------------------------------------------
+# What a wheel throws, and the reason it is an EVENT and not a fountain.
+#
+# The soil model already knows when a wheel is throwing soil: it is the same
+# contact-patch SCRUB the Janosi integral is measured along and the slip
+# sinkage follows. So the spray is gated on scrub past 2 m/s and on the wheel
+# standing in a soft lane, which with traction control on means it fires when
+# the car is launched, when it is provoked, and when the driver turns TC off --
+# the three moments the demo is about. Cruising down the mud lane at 25 km/h
+# throws almost nothing, which is correct and is the "modest" in the brief.
+#
+# Ownership.HostRing: 1.5k particles whose whole life is a dozen lines of numpy
+# is not a thing the GPU should be told about. One (cap, 4) memcpy a frame,
+# host_stable_slots so slot i is the same clod every frame -- which is what
+# lets the radius taper with age (a HostRing field gets no emitter age fade)
+# and what makes the billboard's velocity streak legal.
+#
+# The clods are the high-fidelity half: a lit icosahedron in the G-buffer near
+# the camera, crossing over to an additive sprite at 7-11 m where a 3 cm clod
+# is four pixels and the mesh is buying nothing. Snow spray is billboard only,
+# stretched a little, in the snowfall's own sky-grey -- powder has no facets.
+SPRAY_CAP = 1_500
+SPRAY_SCRUB = 2.0                 # m/s of patch scrub below which nothing flies
+SPRAY_G = np.array([0.0, -9.81, 0.0])
+
+
+class Spray:
+    """One host-owned pool of thrown soil. Ballistics in numpy, no GPU sim."""
+
+    def __init__(self, name, drag, life, radius, seed):
+        self.name = name
+        self.drag = drag
+        self.life_range = life
+        self.radius = radius
+        self.rng = np.random.default_rng(seed)
+        self.field = None
+        self.p = np.zeros((SPRAY_CAP, 3))
+        self.v = np.zeros((SPRAY_CAP, 3))
+        self.y0 = np.zeros(SPRAY_CAP)          # the ground it was thrown off
+        self.age = np.full(SPRAY_CAP, 1e9)
+        self.life = np.ones(SPRAY_CAP)
+        self.r = np.zeros(SPRAY_CAP)
+        self.buf = np.zeros((SPRAY_CAP, 4), np.float32)
+        self.cursor = 0
+
+    def spawn(self, n, pos, vel, spread, up, y0):
+        """n particles at `pos` with `vel` plus an upward cone of half-angle
+        `spread`. Round-robin over the pool: a cursor, not a free list, because
+        stable slots mean the oldest particle is the one worth overwriting."""
+        n = int(n)
+        if n <= 0 or self.field is None:
+            return
+        i = (self.cursor + np.arange(n)) % SPRAY_CAP
+        self.cursor = int((self.cursor + n) % SPRAY_CAP)
+        j = self.rng.normal(0.0, spread, (n, 3))
+        j[:, 1] = np.abs(j[:, 1]) + up
+        self.p[i] = pos + self.rng.normal(0.0, 0.055, (n, 3))
+        self.v[i] = vel + j
+        self.y0[i] = y0
+        self.age[i] = 0.0
+        self.life[i] = self.rng.uniform(*self.life_range, n)
+        self.r[i] = self.radius * self.rng.uniform(0.55, 1.45, n)
+
+    def step(self, dt):
+        if self.field is None:
+            return
+        live = self.age < self.life
+        if not live.any():
+            self.field.set_live_count(0)
+            return
+        self.age[live] += dt
+        self.v[live] += SPRAY_G * dt
+        self.v[live] *= math.exp(-self.drag * dt)
+        self.p[live] += self.v[live] * dt
+        # Two ways to die: it lands, or it runs out of life. Landing is tested
+        # against the ground it was thrown off, not against base() -- 1.5k
+        # analytic profile samples a frame to place a clod that is about to
+        # vanish anyway is a lot of arithmetic for a centimetre.
+        self.age[live & (self.p[:, 1] < self.y0 + 0.015)] = 1e9
+        t = np.clip(self.age / np.maximum(self.life, 1e-6), 0.0, 1.0)
+        # The taper IS the fade: no emitter, so age has to reach the picture
+        # through the only per-particle channel a host field has, the radius.
+        w = self.r * (1.0 - t) ** 0.45
+        self.buf[:, :3] = self.p
+        self.buf[:, 3] = np.where(self.age < self.life, w, -1.0)
+        self.field.submit(self.buf, dt)
+
+    def clear(self):
+        self.age[:] = 1e9
+        self.cursor = 0
+        if self.field is not None:
+            self.field.set_live_count(0)
+
+
+def _spray_field(mesh_material=None, hot=(0.20, 0.14, 0.10), cool=(0.09, 0.07, 0.05),
+                 intensity=1.0, radius=0.03, stretch=0.0, opacity=0.5):
+    cfg = tp.ParticleField.Config()
+    cfg.capacity = SPRAY_CAP
+    cfg.ownership = tp.ParticleField.Ownership.HostRing
+    cfg.w_semantic = tp.ParticleField.WSemantic.Radius
+    cfg.uniform_radius = radius
+    cfg.host_stable_slots = True
+    f = tp.ParticleField.create(cfg)
+    f.frustum_culled = False
+    if mesh_material is not None:
+        f.set_mesh_repr(tp.IcosahedronGeometry(radius, 0), mesh_material)
+        mr = f.mesh_repr
+        mr.lod_far = 11.0
+        mr.lod_fade = 4.0
+        mr.near_cull = 0.9
+    f.set_billboard_repr(tp.Color(*hot), tp.Color(*cool), intensity, 1.0)
+    b = f.billboard_repr
+    b.lod_near = 7.0 if mesh_material is not None else 0.0
+    b.lod_fade = 4.0 if mesh_material is not None else 0.0
+    b.alpha_over = True               # thrown soil OCCLUDES; additive mud glows
+    b.opacity = opacity
+    b.lit = True                      # in the same key the car is in
+    b.lit_phase_g = 0.25
+    b.lit_ambient = 0.14
+    b.softness = 0.85
+    b.fade_power = 1.4
+    b.bright_jitter = 0.30
+    b.glow = 0.0
+    b.near_fade = 1.2                 # nothing ever splats on the lens
+    if stretch > 0.0:
+        b.stretch_seconds = stretch
+        b.stretch_max = 2.5
+        b.stretch_max_screen = 0.05
+    f.set_live_count(0)
+    scene.add(f)
+    return f
+
+
+# Wet clods are nearly black and take a specular from the key; powder is the
+# snowfall's own sky-grey, because it IS the snowfall, briefly airborne.
+clod_mat = standard_material(0x2a1e14, 0.62)
+sprays = {"mud": Spray("mud", 0.30, (0.70, 1.20), 0.030, 5150),
+          "snow": Spray("snow", 1.60, (0.55, 1.00), 0.036, 5151)}
+if not GL:
+    sprays["mud"].field = _spray_field(clod_mat, (0.115, 0.082, 0.058),
+                                       (0.052, 0.038, 0.028), 1.0, 0.030,
+                                       stretch=0.02, opacity=0.85)
+    sprays["snow"].field = _spray_field(None, (0.66, 0.69, 0.75),
+                                        (0.44, 0.47, 0.54), 1.0, 0.036,
+                                        stretch=0.05, opacity=0.55)
+
+
+def spray_step(dt, hub):
+    """Throw what the wheels are scrubbing loose, then fly what is airborne.
+
+    Reads the coupling loop's own record of which lane each wheel is in and how
+    fast its patch is scrubbing (hud, display state) plus the wheel's angular
+    speed. Writes nothing the sim reads -- the whole of this function is
+    downstream of the step that already happened.
+    """
+    if GL or hub is None:
+        return
+    q = vehicle.quaternion
+    fwd = qrot(q, np.array([0.0, 0.0, 1.0]))
+    right = qrot(q, np.array([1.0, 0.0, 0.0]))
+    for i in range(4):
+        lane = hud["lane"][i]
+        if lane not in sprays:
+            continue
+        scrub = float(hud["scrub"][i])
+        if scrub < SPRAY_SCRUB:
+            continue
+        s = sprays[lane]
+        # Rate rises with scrub AND with load: an unloaded spinning wheel is
+        # not excavating, it is waving at the sky (same gate the dig factor
+        # uses). ~14 clods a frame per wheel flat out, which at 60 Hz and a
+        # second of life is a pool of ~800 -- half the cap, four wheels in.
+        rate = min((scrub - SPRAY_SCRUB) / 6.0, 1.0) * min(hud["w"][i] / REST_LOAD, 1.3)
+        n = s.rng.poisson(14.0 * rate)
+        if n <= 0:
+            continue
+        # The BACK of the contact patch, a wheel radius under the hub: soil
+        # leaves where the tread lifts out of the ground, which is what makes a
+        # rooster tail a tail and not a halo.
+        rim = float(vehicle.wheel_angular_speed(i)) * R_WHEEL
+        gy = hub[i, 1] - R_WHEEL + hud["z"][i]
+        pos = hub[i] - fwd * 0.34 + np.array([0.0, -0.30, 0.0])
+        # Thrown against the direction of travel at a fraction of rim speed --
+        # a clod leaves the tread, it is not launched from it -- with the
+        # lateral component of the scrub carried across.
+        vel = (-fwd * np.clip(rim, -14.0, 14.0) * 0.34
+               + right * float(np.clip(hud["slip_lat"][i], -6.0, 6.0)) * 0.30)
+        s.spawn(n, pos, vel, 0.9 if lane == "mud" else 1.25,
+                2.4 if lane == "mud" else 1.9, gy)
+    for s in sprays.values():
+        s.step(dt)
 
 # --- the rover -----------------------------------------------------------------
 
@@ -1352,7 +1755,11 @@ c_host = {n: np.zeros((1, 4, 3), np.float32) for n in LANES}
 v_host = {n: np.zeros((1, 4, 3), np.float32) for n in LANES}
 hud = dict(lane=[None] * 4, z=np.zeros(4), mu=np.zeros(4), w=np.zeros(4),
            bek=np.zeros(4), slip=np.zeros(4), util=np.zeros(4), j=np.zeros(4),
-           dig=np.ones(4), drag=np.zeros(4), over=[False] * 4)
+           dig=np.ones(4), drag=np.zeros(4), over=[False] * 4,
+           # display-only, and the wheel spray's whole trigger: the contact
+           # patch's scrub speed and its lateral component, recorded where the
+           # coupling loop already computes them for the Janosi integral.
+           scrub=np.zeros(4), slip_lat=np.zeros(4))
 _readback = 0
 
 
@@ -1418,6 +1825,8 @@ def coupled_step(throttle, steer, brake, relax_iters=2):
     #    Velocity is the CONTACT PATCH slip, not the hub velocity: that is what
     #    the Janosi integral is measured along.
     max_scrub = 0.0
+    hud["scrub"][:] = 0.0
+    hud["slip_lat"][:] = 0.0
     for name in LANES:
         c, v = c_host[name], v_host[name]
         for i in range(4):
@@ -1438,6 +1847,8 @@ def coupled_step(throttle, steer, brake, relax_iters=2):
             # gate there is a runaway -- the road drops faster than the body
             # can follow, the wheel unloads, spins up, and pins the dig.
             max_scrub = max(max_scrub, math.hypot(s[0], s[2]))
+            hud["scrub"][i] = math.hypot(s[0], s[2])
+            hud["slip_lat"][i] = slip_lat
             scrub = max(math.hypot(s[0], s[2]) - SCRUB_DEAD, 0.0)
             target = 1.0 + K_DIG[name] * min(scrub / SCRUB_REF, 1.0)
             target = min(target, DIG_MAX[name])
@@ -1629,6 +2040,8 @@ def drive_inputs(dt):
         tc_cut = 1.0
         w_ema[:] = REST_LOAD
         prev_hub = None
+        for _s in sprays.values():          # airborne soil off a ground that
+            _s.clear()                      # no longer has a rut in it
     if pressed("F"):
         shot_no += 1
         save_shot(os.path.join(OUT_DIR, f"warp_mudsnow_drive_{shot_no:03d}.png"))
@@ -1681,7 +2094,9 @@ def frame():
     global fps_ema, brake_was, reverse_was
     t0 = time.perf_counter()
     drive_inputs(DT)
-    mark_dirty(coupled_step(throttle_cmd, steer_cmd, brake_cmd))
+    hub = coupled_step(throttle_cmd, steer_cmd, brake_cmd)
+    mark_dirty(hub)
+    spray_step(DT, hub)
 
     p, q = vehicle.position, vehicle.quaternion
     chassis.position.set(p.x, p.y, p.z)
@@ -1752,7 +2167,9 @@ def scripted(spawn_z, beats, eye, look, path, note=""):
         coupled_step(0.0, 0.0, 0.0)
     for secs, thr, st in beats:
         for _ in range(int(round(secs * 60.0))):
-            mark_dirty(coupled_step(thr, st, 0.0))
+            hub = coupled_step(thr, st, 0.0)
+            mark_dirty(hub)
+            spray_step(DT, hub)
             weather(DT, eye if eye is not None else (0.0, 2.0, 0.0))
     pose_visuals()
     for s in strips:
@@ -1784,7 +2201,9 @@ def scripted(spawn_z, beats, eye, look, path, note=""):
 if BENCH:
     # Honest wall clock: the whole frame the interactive loop runs, vsync off.
     for _ in range(60):
-        mark_dirty(coupled_step(0.5, 0.15, 0.0))
+        hub = coupled_step(0.5, 0.15, 0.0)
+        mark_dirty(hub)
+        spray_step(DT, hub)
         pose_visuals()
         weather(DT)
         for s in strips:
@@ -1793,7 +2212,9 @@ if BENCH:
     wp.synchronize_device(device)
     t0 = time.perf_counter()
     for _ in range(240):
-        mark_dirty(coupled_step(0.5, 0.15, 0.0))
+        hub = coupled_step(0.5, 0.15, 0.0)
+        mark_dirty(hub)
+        spray_step(DT, hub)
         pose_visuals()
         weather(DT)
         for s in strips:
@@ -2078,7 +2499,9 @@ elif FILM:
         """One sim frame with the visuals posed -- everything frame() does except
         the camera, the UI and the render."""
         global brake_was
-        mark_dirty(coupled_step(thr, st, br))
+        hub = coupled_step(thr, st, br)
+        mark_dirty(hub)
+        spray_step(DT, hub)
         pose_visuals()
         on = br > 0.05
         if brake_mat is not None and on != brake_was:
