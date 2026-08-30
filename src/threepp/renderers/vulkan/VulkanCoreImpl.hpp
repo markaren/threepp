@@ -1546,6 +1546,16 @@ namespace threepp {
         // optional sprite texture, which reuses the legacy path's set layout,
         // its per-frame pool and its 1x1 white default.
         VkPipelineLayout fieldBillboardPipelineLayout_ = VK_NULL_HANDLE;
+        // ...with ONE exception, added by plans/particle-volumetric-sprites:
+        // SET 1 is the field's own r16f density mirror, which the vertex stage
+        // marches for its transmittance terms. An image is the one thing that
+        // cannot ride a buffer_reference, so the choice was a set or no light
+        // transport. Its own layout rather than a binding grown into
+        // particleDescSetLayout_ — that layout is shared with the legacy
+        // particle and world-Sprite pipelines, and neither has any business
+        // carrying a 3D sampler. Sets come from particleDescPools_, allocated
+        // and written per frame like the texture sets beside them.
+        VkDescriptorSetLayout fieldVolumeDescSetLayout_ = VK_NULL_HANDLE;
         // At overlaySampleBits() — the primary's overlay pass.
         VkPipeline       fieldBillboardPipeline_       = VK_NULL_HANDLE;
         // At 1 sample — a secondary view composites into its own colour target
@@ -1615,7 +1625,10 @@ namespace threepp {
         std::array<VkDescriptorPool, kFramesInFlight> particleDescPools_{};
         // 1×1 white default bound when a particle system has no texture.
         Image2D particleWhiteTex_{};
-        static constexpr uint32_t kMaxParticleTexPerFrame = 64;
+        // 64 sprite-texture sets plus the field billboards' per-field density
+        // volume sets, which come out of the same pool (one per field per view
+        // per output mode).
+        static constexpr uint32_t kMaxParticleTexPerFrame = 96;
 
         // ── Overlay-pass fog (Phase 2b) ─────────────────────────────────────
         // The post-TAA overlay draws world-space ParticleSystem billboards
@@ -2691,7 +2704,7 @@ namespace threepp {
         enableParticleFieldInterop(ParticleField& field, std::function<void()> deviceCopy) {
             ensureParticleFieldPass();
             const auto e = particleFieldPass_->enableInterop(field, std::move(deviceCopy));
-            return {e.osHandle, e.sizeBytes};
+            return {e.osHandle, e.sizeBytes, e.attrHandle, e.attrSizeBytes};
         }
 
         // Zero-copy MESH VERTEX interop — the same idea again, now on a plain

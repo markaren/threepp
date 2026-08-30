@@ -474,6 +474,8 @@ VulkanRenderer::Impl::~Impl() {
             if (fieldBillboardGlowPipeline_) vkDestroyPipeline(d, fieldBillboardGlowPipeline_, nullptr);
             if (fieldBillboardPipelineLayout_)
                 vkDestroyPipelineLayout(d, fieldBillboardPipelineLayout_, nullptr);
+            if (fieldVolumeDescSetLayout_)
+                vkDestroyDescriptorSetLayout(d, fieldVolumeDescSetLayout_, nullptr);
             // F4 billboard glow. The pass object owns its own images, pools and
             // compute pipelines; only the composite graphics pipeline lives out
             // here, because it needs the swapchain format the pass knows nothing

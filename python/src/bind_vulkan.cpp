@@ -1269,13 +1269,27 @@ namespace threepp_py {
                          // cannot-export leg the field is left in
                          // host_fallback() and submit() becomes legal on it.
                          if (!h.osHandle) return py::none();
+                         // Config.attributes appends TWO more entries rather
+                         // than changing the shape of the first two: existing
+                         // callers unpack h[0], h[1] and keep working, and a
+                         // field with attributes can never import its positions
+                         // without its colours because both come from one call.
+                         if (!h.attrHandle)
+                             return py::make_tuple(reinterpret_cast<uintptr_t>(h.osHandle),
+                                                   h.sizeBytes);
                          return py::make_tuple(reinterpret_cast<uintptr_t>(h.osHandle),
-                                               h.sizeBytes);
+                                               h.sizeBytes,
+                                               reinterpret_cast<uintptr_t>(h.attrHandle),
+                                               h.attrSizeBytes);
                      },
                      py::arg("field"), py::arg("device_copy"),
                      "Export an Ownership.Interop ParticleField's positions allocation and arm "
                      "the per-frame device-to-device copy that fills it.\n\n"
-                     "Returns (os_handle, size_bytes), or None when the device has no "
+                     "Returns (os_handle, size_bytes) — or, when the field was created with "
+                     "Config.attributes, (os_handle, size_bytes, attr_handle, attr_size_bytes): "
+                     "the second allocation is the per-particle vec4 appearance buffer (rgb = "
+                     "linear HDR radiance), imported and written exactly like the positions and "
+                     "snapshotted by the same per-frame copy. Or None when the device has no "
                      "external-memory extension — in which case the field is left in "
                      "host_fallback() and submit() is legal on it, so the caller drops to the "
                      "HostRing path rather than failing.\n\n"

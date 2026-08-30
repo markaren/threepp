@@ -908,6 +908,15 @@ namespace threepp {
         struct ParticleFieldInteropHandle {
             void*  osHandle  = nullptr;
             size_t sizeBytes = 0;
+            // Config::attributes: the field's per-particle vec4 appearance
+            // buffer, exported by the SAME call and with the same layout (rgb =
+            // linear HDR radiance, a reserved). Null when the field was created
+            // without attributes. It is handed out here rather than through a
+            // second entry point so that a field can never end up in a state
+            // where the positions imported and the colours did not — the two
+            // allocations are created together and exported together.
+            void*  attrHandle    = nullptr;
+            size_t attrSizeBytes = 0;
         };
         ParticleFieldInteropHandle enableParticleFieldInterop(ParticleField& field,
                                                               std::function<void()> deviceCopy);

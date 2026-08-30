@@ -267,8 +267,24 @@ namespace threepp::vulkan {
         float opacity;                // 132  alphaOver coverage scale
         float litPhaseG;              // 136  HG asymmetry for the lit lobe
         float litAmbient;             // 140  ambient share of the lit radiance
-    };
-    static_assert(sizeof(BillboardParamsGpu) == 144,
+        // ── VOLUMETRIC SPRITES (plans/particle-volumetric-sprites) ──────────
+        // The address lands at 144, which is 8-aligned, so the block's scalar
+        // layout and MSVC's stay byte-identical without a pad.
+        VkDeviceAddress attrAddr;     // 144  Config::attributes; 0 = use the ramp
+        // ROWS of the affine field->world matrix. The marches happen in WORLD
+        // space (the density volume is world-anchored) while the position
+        // buffer is field-local, and the vertex stage's only other basis is
+        // view — so the one matrix it cannot reconstruct travels with the field
+        // rather than being rebuilt per vertex.
+        float model[12];              // 152
+        float boxMin[3];              // 200  the density volume's world min
+        float boxInvSize[3];          // 212  1 / (2 * halfExtent)
+        float volumeExtinction;       // 224  exponent on T_cam; 0 = no march
+        float volumeShadow;           // 228  mix toward the sun term; 0 = no march
+        float volumeAmbient;          // 232
+        float volumeSunGain;          // 236
+    };                                // 240
+    static_assert(sizeof(BillboardParamsGpu) == 240,
                   "BillboardParamsGpu drifted from particlefield_billboard.vert");
 
     // ── F4: the per-VIEW billboard record ───────────────────────────────────
@@ -317,8 +333,18 @@ namespace threepp::vulkan {
         float         _pad1;         // 76
         float         ambient[3];    // 80  the scene's summed AmbientLights
         float         _pad2;         // 92
-    };                               // 96
-    static_assert(sizeof(BillboardViewGpu) == 96,
+        // ── The volumetric marches' two WORLD-space inputs ──────────────────
+        // sunDir above is already in VIEW space (the lit lobe needs it there),
+        // but the density volume is world-anchored, so the marches need the
+        // world vector and the world eye point as well. Two vec3s rather than a
+        // full inverse view: those are the only two quantities the marches ask
+        // for, and the block stays a flat scalar struct.
+        float         camWorld[3];   // 96  the eye, world space
+        float         _pad3;         // 108
+        float         sunDirWorld[3];// 112 unit, TOWARD the sun
+        float         _pad4;         // 124
+    };                               // 128
+    static_assert(sizeof(BillboardViewGpu) == 128,
                   "BillboardViewGpu drifted from particlefield_billboard.vert");
     // Flag bits, mirrored in the shader.
     inline constexpr std::uint32_t kBbViewFogActive = 1u;
@@ -381,6 +407,14 @@ namespace threepp::vulkan {
             // the whole chain is never recorded.
             bool            glow          = false;
             float           glowThreshold = 0.f;// bright-pass knee, linear HDR
+            // The r16f density volume the vertex stage marches for this field's
+            // transmittance terms, or VK_NULL_HANDLE when it has none / the
+            // knobs are off — the recorder then binds the renderer's 1x1x1 zero
+            // dummy, so the descriptor is always valid and the factor is exactly
+            // 1. A VIEW rather than an address: an image cannot be reached by
+            // buffer_reference, which is the whole reason this one term costs
+            // the pass a descriptor set (set 1) it otherwise has none of.
+            VkImageView     volumeView    = VK_NULL_HANDLE;
         };
 
         // Same contract and same reason as InstanceExpand::RetireBufferFn: a
@@ -414,6 +448,13 @@ namespace threepp::vulkan {
         struct InteropExport {
             void*       osHandle  = nullptr;
             std::size_t sizeBytes = 0;
+            // Config::attributes: the SECOND exported allocation, same size and
+            // same layout (one vec4 per slot), handed out by the same call. A
+            // field without attributes reports a null handle here and nothing
+            // else changes — but a field WITH them can never end up in a state
+            // where the positions imported and the colours did not.
+            void*       attrHandle  = nullptr;
+            std::size_t attrSizeBytes = 0;
         };
 
         // ── F6: Ownership::Interop ──────────────────────────────────────────
@@ -687,6 +728,17 @@ namespace threepp::vulkan {
             // by contract (ParticleField::setOrientations documents why).
             Buffer        orientations{};
             std::uint64_t oriSerial = 0;// ParticleField::orientationSerial() uploaded
+            // ── Config::attributes: the positions' path, verbatim ────────────
+            // Under HostRing / Renderer this is ONE host-visible buffer written
+            // write-once (setAttributes' contract, the orientations' rule).
+            // Under Ownership::Interop it is the same kSlots RING the positions
+            // use, device-local, filled by the head-of-frame snapshot from
+            // attrExt — because attributes that arrive per frame have exactly
+            // the write-during-read hazard positions do, and solving it twice
+            // in two different ways is how the two get out of step.
+            Buffer        attributes[kSlots]{};
+            vulkan::ExternalBuffer attrExt{};
+            std::uint64_t attrSerial = 0;// ParticleField::attributeSerial() uploaded
             // ParticleField::dataSerial() this slot was last filled from. 0 =
             // freshly allocated, i.e. holds garbage and must be re-sent.
             std::uint64_t slotSerial[kSlots]{};

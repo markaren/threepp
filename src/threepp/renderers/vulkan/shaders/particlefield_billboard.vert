@@ -102,11 +102,29 @@ layout(buffer_reference, scalar, buffer_reference_align = 16) readonly buffer Bb
     float    opacity;       // alphaOver coverage scale
     float    litPhaseG;     // HG asymmetry for the lit lobe
     float    litAmbient;    // ambient share of the lit radiance
+    // ── VOLUMETRIC SPRITES (plans/particle-volumetric-sprites) ──────────────
+    uint64_t attrAddr;      // Config::attributes; 0 = fall back to the ramp
+    vec4     model[3];      // ROWS of the affine field->world matrix
+    vec3     boxMin;        // the density volume's world min corner
+    vec3     boxInvSize;    // 1 / (2 * halfExtent)
+    float    volumeExtinction;// exponent on T_cam; 0 = no camera march
+    float    volumeShadow;  // mix toward the sun term; 0 = no sun march
+    float    volumeAmbient;
+    float    volumeSunGain;
 };
 // BbParams::flags bits.
 const uint kBbRadiusInW = 1u;
 const uint kBbAlphaOver = 2u;
 const uint kBbLit       = 4u;
+const uint kBbAttrs     = 8u; // rgb comes from the attribute buffer, not the ramp
+const uint kBbVolume    = 16u;// at least one of the two marches is live
+
+// Per-particle appearance, Config::attributes. rgb = linear HDR radiance in the
+// same domain colorHot is authored in; a is reserved for the phase-2 alpha-over
+// opacity and is not read here. Same 16 B stride and same buffer_reference
+// route as the positions, deliberately: on the interop leg the two are one
+// export apiece, snapshotted by the same copy list under the same barrier.
+layout(buffer_reference, scalar, buffer_reference_align = 16) readonly buffer AttrBuf { vec4 v[]; };
 
 // ── F4: the per-VIEW record ─────────────────────────────────────────────────
 // Everything here is a property of the CAMERA and the FRAME, not of the field,
@@ -148,9 +166,29 @@ layout(buffer_reference, scalar, buffer_reference_align = 16) readonly buffer Bb
     float _pad1;
     vec3  ambient;      // the scene's summed AmbientLights
     float _pad2;
+    // The volumetric marches' two WORLD-space inputs. sunDir above is already
+    // in view space (the lit lobe wants it there), but the density volume is
+    // world-anchored, so the marches need the world vector and the world eye.
+    vec3  camWorld;     // the eye, world space
+    float _pad3;
+    vec3  sunDirWorld;  // unit, TOWARD the sun
+    float _pad4;
 };
 const uint kViewFogActive = 1u;
 const uint kViewLinearOut = 2u;
+
+// The field's own r16f density mirror — set 1 because set 0 is the LEGACY
+// particle path's texture layout, reused verbatim, and this pass will not grow
+// a binding into a layout two other pipelines share. An image is the ONE thing
+// that cannot ride a buffer_reference, which is why the whole descriptor-free
+// property of this pass costs exactly one set and no more: the box, the knobs
+// and every other per-field number still arrive by address.
+//
+// Always bound and always valid: a field with no volume (or with both knobs at
+// 0) gets the renderer's 1x1x1 zero dummy, which makes every march below read
+// sigma = 0 and return T = 1 — but the uniform branch on kBbVolume means it is
+// never sampled at all in that case.
+layout(set = 1, binding = 0) uniform sampler3D fieldDensity;
 
 layout(push_constant, scalar) uniform Pc {
     mat4     proj;       // 64  view -> clip, UNJITTERED (this is a post-TAA pass)
@@ -254,6 +292,63 @@ float bbMurkOpticalDepth(BbView V, float partY, float len) {
         }
     }
     return V.murkDensity * d;
+}
+
+// ── Beer-Lambert through the field's OWN density volume ─────────────────────
+// plans/particle-volumetric-sprites R4. The sprite carries the IMAGE; this
+// carries the LIGHT TRANSPORT, and the split is the whole design: a soft shadow
+// survives a 160^3 lattice, a filament does not, so the filaments stay in the
+// millions of sprites and only the low-frequency half is sampled from a grid.
+//
+// The march is in the box's own NORMALISED space, which makes the slab
+// intersection two multiplies and makes `t` come out in WORLD METRES for free:
+// with d = dir * boxInvSize and dir a unit world vector, o + t*d is exactly
+// (p + t*dir - boxMin) * boxInvSize. So the same parameter indexes the texture
+// and integrates the optical depth, and no world<->texture conversion exists to
+// get wrong.
+//
+// EIGHT STEPS, fixed. This is a transmittance, not an image: it is smooth by
+// construction (an exponential of an integral of a trilinearly filtered field),
+// and at 4M sprites 8 taps each is ~64M taps, which is well under a millisecond
+// of texture bandwidth. Sixteen would buy nothing an eye can see.
+//
+// A deliberate second copy of pdTransmittance in particle_density.glsl, for the
+// reason the fog closed forms above are: that header declares set 0 bindings
+// 67/68/69, and this pipeline has neither those bindings nor any prospect of
+// them. If a third copy ever appears, that is the moment to merge all three.
+float bbTransmittance(BbParams P, vec3 p, vec3 dir) {
+    const vec3 o = (p - P.boxMin) * P.boxInvSize;
+    const vec3 d = dir * P.boxInvSize;
+    // Never a zero divisor and never a 0*inf NaN: a ray parallel to a pair of
+    // faces gets a huge finite crossing parameter, which min() then ignores,
+    // which is the right answer.
+    const vec3 sgn = mix(vec3(-1.0), vec3(1.0), greaterThanEqual(d, vec3(0.0)));
+    const vec3 inv = sgn / max(abs(d), vec3(1e-8));
+    const vec3 tf  = max((vec3(0.0) - o) * inv, (vec3(1.0) - o) * inv);
+    // Bounded above by the box's own L1 span, so a particle that has drifted
+    // outside the box cannot ask for a kilometre-long march.
+    const float span = 1.0 / P.boxInvSize.x + 1.0 / P.boxInvSize.y + 1.0 / P.boxInvSize.z;
+    const float tExit = clamp(min(min(tf.x, tf.y), tf.z), 0.0, span);
+    if (tExit <= 0.0) return 1.0;
+
+    const float ds = tExit * (1.0 / 8.0);
+    float tau = 0.0;
+    for (int i = 0; i < 8; ++i) {
+        const vec3 uvw = o + d * (ds * (float(i) + 0.5));
+        // Skip, don't clamp: CLAMP_TO_EDGE would smear the boundary voxels over
+        // the whole world, which reads as infinite dust — the same rule the
+        // deferred march states.
+        if (any(lessThan(uvw, vec3(0.0))) || any(greaterThan(uvw, vec3(1.0)))) continue;
+        // textureLod, NOT texture: an implicit-LOD sample is only defined in a
+        // FRAGMENT stage (there are no derivatives here), and glslang will
+        // happily emit OpImageSampleImplicitLod from a vertex shader — which is
+        // invalid SPIR-V that a permissive driver answers with zero rather than
+        // with an error. The volume then reads as vacuum, every transmittance
+        // comes back as exactly 1, and the feature looks like a tuning problem
+        // instead of a bug. The image has one mip; 0 is the only level there is.
+        tau += textureLod(fieldDensity, uvw, 0.0).r * ds;
+    }
+    return exp(-min(tau, 40.0));
 }
 
 void main() {
@@ -495,6 +590,61 @@ void main() {
         lit = V.ambient + vec3(P.litAmbient) + V.sunRadiance * hg;
     }
 
+    // ── The volumetric terms (R4/R5) ────────────────────────────────────────
+    // Two marches of the field's own density volume, both from THIS sprite's
+    // position: one toward the eye (what the dust in front of it takes away)
+    // and one toward the sun (what the dust between it and the key takes away).
+    //
+    // Both depend only on the sprite's OWN position, which is the property that
+    // keeps this out of the sorting problem entirely: the frame buffer still
+    // holds a commutative sum, so nothing has to be ordered and the additive
+    // blend is untouched. Occlusion BETWEEN sprites is the phase-2 alpha-over
+    // slice; occlusion by the MEDIUM the sprites collectively are is this.
+    //
+    // The whole block is a uniform branch on the flag, so a field that leaves
+    // both knobs at 0 executes not one texture tap and produces bit-identical
+    // radiance: `volume` is exactly vec3(1.0) and a multiply by 1.0 is exact in
+    // IEEE. That is the same no-op contract DensityRepr::emissiveIntensity has.
+    vec3 volume = vec3(1.0);
+    if ((P.flags & kBbVolume) != 0u) {
+        const vec3 pw4 = vec3(dot(P.model[0], vec4(pw.xyz, 1.0)),
+                              dot(P.model[1], vec4(pw.xyz, 1.0)),
+                              dot(P.model[2], vec4(pw.xyz, 1.0)));
+        if (P.volumeExtinction > 0.0) {
+            const vec3  toEye = V.camWorld - pw4;
+            const float dEye  = length(toEye);
+            const vec3  dir   = (dEye > 1e-6) ? (toEye / dEye) : vec3(0.0, 0.0, 1.0);
+            // An EXPONENT rather than a mix: 1 is the physically honest answer
+            // and >1 is the "more dust" grade, without touching
+            // DensityRepr::sigmaPerParticle, which the deferred fog march also
+            // reads and which therefore cannot be pushed for the sprites alone.
+            volume *= pow(max(bbTransmittance(P, pw4, dir), 1e-6), P.volumeExtinction);
+        }
+        if (P.volumeShadow > 0.0) {
+            const float tSun = bbTransmittance(P, pw4, V.sunDirWorld);
+            // The phase angle is a dot product of two directions and is
+            // therefore basis-free; the VIEW-space pair is already to hand.
+            const vec3  rdv = (camDist > 1e-6) ? (vp / camDist) : vec3(0.0, 0.0, -1.0);
+            const float ct  = clamp(dot(rdv, V.sunDir), -1.0, 1.0);
+            const float g   = P.litPhaseG;
+            const float dn  = 1.0 + g * g - 2.0 * g * ct;
+            const float hg  = (1.0 - g * g) / max(pow(max(dn, 1e-4), 1.5), 1e-4);
+            volume *= mix(1.0, tSun * (P.volumeAmbient + P.volumeSunGain * hg),
+                          P.volumeShadow);
+        }
+    }
+
+    // ── Per-particle colour (R3) ────────────────────────────────────────────
+    // With attributes present the sprite's rgb IS the simulation's answer and
+    // the hot/cool ramp is not read at all — no blend of the two schemes
+    // exists. An interop field has no closed form and therefore no age, so
+    // without this its billboards can only ever be colorHot at age 0, which is
+    // one flat colour for the whole field.
+    const vec3 ramp = mix(P.colorHot, P.colorCool, cf);
+    const vec3 tint = ((P.flags & kBbAttrs) != 0u)
+                              ? AttrBuf(P.attrAddr).v[pi].rgb
+                              : ramp;
+
     // ── 4c: alpha-over vs additive ──────────────────────────────────────────
     // The same radiance, split between the two channels differently. Additive
     // folds every dimming factor into the colour, because the only thing it
@@ -509,13 +659,13 @@ void main() {
     // branches are not factored.
     const bool alphaOver = (P.flags & kBbAlphaOver) != 0u;
     if (alphaOver) {
-        vColor = vec4(mix(P.colorHot, P.colorCool, cf) * lit *
+        vColor = vec4(tint * lit * volume *
                               (P.intensity * bj * outScale),
                       cull ? 0.0 : 1.0);
         vCover = cull ? 0.0 : (P.opacity * fade * distFade);
         vMode  = kModeAlphaOver;
     } else {
-        vColor = vec4(mix(P.colorHot, P.colorCool, cf) * lit *
+        vColor = vec4(tint * lit * volume *
                               (P.intensity * fade * bj * distFade * outScale),
                       cull ? 0.0 : 1.0);
         vCover = 1.0;

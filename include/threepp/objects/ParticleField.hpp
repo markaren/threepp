@@ -145,6 +145,21 @@ namespace threepp {
             // radius and the proxy scales by w / uniformRadius.
             float         uniformRadius = 0.01f;
             bool          orientations  = false;// allocate the snorm16x4 buffer
+            // ── PER-PARTICLE APPEARANCE (plans/particle-volumetric-sprites R2) ─
+            // Allocate ONE device buffer of capacity * 16 B holding a vec4 per
+            // particle: rgb = linear HDR radiance, a = reserved (phase-2
+            // opacity). It rides the POSITIONS' path exactly — same exportable
+            // flags under Ownership::Interop, same export call, same per-frame
+            // snapshot — so a mode where positions are safe and attributes are
+            // not cannot exist by construction.
+            //
+            // Under HostRing / Renderer the v1 contract is WRITE-ONCE
+            // (setAttributes, mirroring setOrientations): a per-frame host ring
+            // for colours is scope this slice does not carry, and the demo that
+            // needs colours every frame is on the interop leg.
+            //
+            // BillboardRepr reads it INSTEAD of the colorHot/colorCool ramp
+            // when it is present (R3) — one scheme or the other, never a blend.
             bool          attributes    = false;
             // ── Ownership::HostRing: the STABLE SLOT promise ────────────────
             // The host declares that index i names the SAME particle in every
@@ -386,6 +401,44 @@ namespace threepp {
             // (there `intensity` is the only knob and coverage is folded into
             // the radiance).
             float opacity = 1.0f;
+
+            // ── VOLUMETRIC TRANSPORT (plans/particle-volumetric-sprites R4/R5) ─
+            // The sprite carries the IMAGE; the field's own DensityRepr volume
+            // carries the LIGHT TRANSPORT. Two short fixed-step marches of that
+            // volume per sprite — one toward the camera, one toward the sun —
+            // turn a flat additive projection into something with dust lanes and
+            // a lit rim, and cost no sort, because both factors depend only on
+            // the sprite's OWN position and so leave the blend commutative.
+            //
+            //   rgb = attr.rgb * intensity
+            //       * pow(T_cam, volumeExtinction)
+            //       * mix(1, T_sun * (volumeAmbient + volumeSunGain * HG(V.L)),
+            //             volumeShadow)
+            //
+            // BOTH DEFAULT TO 0 AND 0 IS AN EXACT NO-OP: the shader takes a
+            // uniform branch around both marches, and a field that leaves them
+            // alone renders the bits it did before this existed — the same
+            // discipline as DensityRepr::emissiveIntensity. When either is on
+            // and the field has no DensityRepr, a 1x1x1 dummy volume binds and
+            // the factor is exactly 1; nothing crashes and nothing asks.
+            //
+            // volumeExtinction is an EXPONENT on the transmittance rather than a
+            // linear mix, so 1 is the physically honest answer and >1 is the
+            // "more dust" grade a shot usually wants without re-authoring
+            // DensityRepr::sigmaPerParticle (which the deferred fog march also
+            // reads, and which therefore cannot be pushed for the sprites alone).
+            float volumeExtinction = 0.f;
+            // 0 = unshadowed (the pre-change look), 1 = fully replace the
+            // sprite's own radiance with the sun term. A mix rather than a
+            // multiply because an emissive nebula is not only reflecting the key.
+            float volumeShadow = 0.f;
+            // What the shadowed side sits at, so nothing in the volume goes
+            // black — the litAmbient argument applied to the 3D transport.
+            float volumeAmbient = 0.25f;
+            // Scale on the sun's own contribution through T_sun. Unitless: it
+            // multiplies the HG lobe, not a radiance, because the sprite's
+            // colour IS its radiance here.
+            float volumeSunGain = 1.0f;
 
             bool enabled = false;
         };
@@ -850,6 +903,25 @@ namespace threepp {
         // host floats per instance the InstancedMesh path carried).
         void setOrientations(const float* quatXyzw, std::uint32_t n);
 
+        // Per-particle appearance, as n vec4s in (r, g, b, a) order: rgb is
+        // LINEAR HDR radiance (the same domain BillboardRepr::colorHot is in)
+        // and a is reserved for the phase-2 alpha-over opacity. Requires
+        // Config::attributes.
+        //
+        // WRITE-ONCE by contract, for exactly the reason setOrientations is:
+        // the device buffer is a single instance, not a ring, so rewriting it
+        // while frames are in flight is a host write to memory the GPU may be
+        // reading. A sim that needs per-frame colours wants the INTEROP leg,
+        // where the attribute buffer is exported alongside the positions and
+        // the foreign API writes it device-to-device — which is the mode this
+        // feature exists for.
+        //
+        // THROWS on an Ownership::Interop field that is not in hostFallback():
+        // its attributes are written by the foreign API, and host bytes here
+        // would go nowhere — the same rule, and the same one exception, as
+        // submit().
+        void setAttributes(const float* rgba, std::uint32_t n);
+
         // For HostRing, submit() sets it; this setter exists to park a field
         // (setLiveCount(0)) without re-submitting positions.
         //
@@ -882,6 +954,13 @@ namespace threepp {
         [[nodiscard]] const std::vector<std::int16_t>& hostOrientations() const { return ori_; }
         [[nodiscard]] std::uint64_t orientationSerial() const { return oriSerial_; }
 
+        // rgba floats, 4 per particle, sized to capacity once setAttributes has
+        // been called and empty otherwise. The serial is 0 until then, which is
+        // what lets the backend skip the upload for an interop field whose
+        // attributes only ever arrive on the device.
+        [[nodiscard]] const std::vector<float>& hostAttributes() const { return attr_; }
+        [[nodiscard]] std::uint64_t attributeSerial() const { return attrSerial_; }
+
         explicit ParticleField(const Config& config);
         ~ParticleField() override = default;
 
@@ -896,6 +975,8 @@ namespace threepp {
         float                     hostDt_ = 1.f / 60.f;
         std::vector<std::int16_t> ori_;// snorm16x4, 4 per particle
         std::uint64_t             oriSerial_ = 0;
+        std::vector<float>        attr_;// rgba, 4 per particle
+        std::uint64_t             attrSerial_ = 0;
 
         MeshRepr      meshRepr_;
         BillboardRepr billboardRepr_;

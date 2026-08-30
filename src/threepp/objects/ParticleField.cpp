@@ -216,6 +216,38 @@ void ParticleField::setOrientations(const float* quatXyzw, std::uint32_t n) {
     ++oriSerial_;
 }
 
+void ParticleField::setAttributes(const float* rgba, std::uint32_t n) {
+
+    if (!config_.attributes) {
+        throw std::invalid_argument(
+                "ParticleField::setAttributes: Config::attributes was not set, so no "
+                "attribute buffer exists (it is fixed at create, like capacity)");
+    }
+    // The mode split, exactly as submit() enforces it for positions: an interop
+    // field's attributes are written device-to-device by the foreign API that
+    // imported the renderer's exported buffer, so host bytes here would land in
+    // a block nothing reads.
+    if (config_.ownership == Ownership::Interop && !hostFallback_) {
+        throw std::invalid_argument(
+                "ParticleField::setAttributes: this field is Ownership::Interop — its "
+                "attributes are written device-to-device through the second handle "
+                "VulkanRenderer::enableParticleFieldInterop returns. setAttributes() is "
+                "legal here only after the renderer reports hostFallback()");
+    }
+    if (n > config_.capacity) n = config_.capacity;
+    if (n > 0 && !rgba) {
+        throw std::invalid_argument("ParticleField::setAttributes: null source with n > 0");
+    }
+    // Sized to CAPACITY and zero-filled past n: the backend uploads the whole
+    // buffer once, and a slot the host never wrote must read as black rather
+    // than as whatever the allocator handed us.
+    attr_.assign(std::size_t(config_.capacity) * 4u, 0.f);
+    if (n > 0) {
+        std::memcpy(attr_.data(), rgba, std::size_t(n) * 4u * sizeof(float));
+    }
+    ++attrSerial_;
+}
+
 void ParticleField::setEmitter(const EmitterParams& params) {
 
     if (config_.ownership != Ownership::Renderer) {

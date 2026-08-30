@@ -78,7 +78,14 @@ namespace threepp_py {
                                "billboard/density size reference.")
                 .def_readwrite("orientations", &ParticleField::Config::orientations,
                                "Allocate the snorm16x4 per-particle orientation buffer.")
-                .def_readwrite("attributes", &ParticleField::Config::attributes)
+                .def_readwrite("attributes", &ParticleField::Config::attributes,
+                               "Allocate the per-particle vec4 appearance buffer (rgb = linear HDR "
+                               "radiance, a reserved). It rides the POSITIONS' path exactly: under "
+                               "Ownership.Interop it is a second exported allocation handed back by "
+                               "the same enable_particle_field_interop call and snapshotted by the "
+                               "same per-frame copy, so positions and colours can never diverge. "
+                               "With it on, BillboardRepr uses attribute.rgb INSTEAD of the "
+                               "color_hot/color_cool ramp — one scheme or the other, never a blend.")
                 .def_readwrite("host_stable_slots", &ParticleField::Config::hostStableSlots,
                                "HostRing only: the host promises index i is the SAME particle in "
                                "every submit (fixed pool, dead slots left at w < 0, no compaction). "
@@ -169,6 +176,31 @@ namespace threepp_py {
                 .def_readwrite("opacity", &ParticleField::BillboardRepr::opacity,
                                "Coverage scale in alpha_over mode, before the texture/procedural "
                                "falloff. Ignored when additive.")
+                // ── Volumetric transport (plans/particle-volumetric-sprites) ─
+                .def_readwrite("volume_extinction",
+                               &ParticleField::BillboardRepr::volumeExtinction,
+                               "Dim each sprite by the transmittance of the field's OWN DensityRepr "
+                               "volume between it and the camera, as pow(T_cam, this). 1 is the "
+                               "physically honest answer; >1 is a 'more dust' grade that does not "
+                               "disturb sigma_per_particle (which the deferred fog march also "
+                               "reads). 0 is an EXACT no-op — the shader takes a uniform branch "
+                               "around the march. This is what puts DUST LANES across a nebula: "
+                               "additive blending is orderless and therefore carries zero occlusion "
+                               "information, and this is the occlusion, from the medium the same "
+                               "particles collectively are. Needs DensityRepr on.")
+                .def_readwrite("volume_shadow", &ParticleField::BillboardRepr::volumeShadow,
+                               "Mix each sprite toward T_sun * (volume_ambient + volume_sun_gain * "
+                               "HG(V.L)) — the transmittance from the sprite to the sun through the "
+                               "same volume, times one phase lobe. 0 = unshadowed (the pre-change "
+                               "look and an exact no-op), 1 = fully replace. This is the LIT RIM "
+                               "and the self-shadowed interior. Needs DensityRepr on.")
+                .def_readwrite("volume_ambient", &ParticleField::BillboardRepr::volumeAmbient,
+                               "Floor under the sun term, so the shadowed side of the volume does "
+                               "not go black. Only read when volume_shadow > 0.")
+                .def_readwrite("volume_sun_gain", &ParticleField::BillboardRepr::volumeSunGain,
+                               "Scale on the sun's own contribution through T_sun. Unitless — it "
+                               "multiplies the HG lobe (whose asymmetry is lit_phase_g), not a "
+                               "radiance, because the sprite's colour already IS its radiance.")
                 .def_readwrite("enabled", &ParticleField::BillboardRepr::enabled);
 
         // ── DensityRepr (world-anchored sigma_t volume the froxel pass reads) ─
@@ -364,6 +396,23 @@ namespace threepp_py {
                      "Per-particle orientation as (n, 4) float32 quaternions in (x, y, z, w) order. "
                      "Requires Config.orientations. WRITE-ONCE by contract: the device buffer is not "
                      "ringed, so this is authored with the field, not animated.")
+                .def("set_attributes",
+                     [](ParticleField& f, py::array_t<float, py::array::c_style | py::array::forcecast> rgba) {
+                         if (rgba.ndim() != 2 || rgba.shape(1) != 4)
+                             throw std::runtime_error("set_attributes: expected an (n, 4) float32 "
+                                                      "array of (r, g, b, a)");
+                         f.setAttributes(rgba.data(), static_cast<std::uint32_t>(rgba.shape(0)));
+                     },
+                     py::arg("rgba"),
+                     "Per-particle appearance as (n, 4) float32 (r, g, b, a): rgb is LINEAR HDR "
+                     "radiance in the same domain BillboardRepr.color_hot is authored in, a is "
+                     "reserved for the phase-2 alpha-over opacity. Requires Config.attributes.\n\n"
+                     "WRITE-ONCE by contract, exactly like set_orientations: the device buffer is "
+                     "not ringed, so rewriting it while frames are in flight is a host write to "
+                     "memory the GPU may be reading. A sim that needs colours EVERY frame wants the "
+                     "interop leg — enable_particle_field_interop hands back a second handle for "
+                     "this buffer and the foreign kernel writes it device-to-device.\n\n"
+                     "THROWS on an Ownership.Interop field that is not in host_fallback().")
                 .def_property_readonly("host_fallback", &ParticleField::hostFallback,
                                        "True when an Interop field had to fall back to the host path "
                                        "(this device cannot export memory to a foreign API), which "

@@ -2321,6 +2321,127 @@ int main(int argc, char** argv) {
         for (int i = 0; i < 4; ++i) frame();
     }
 
+    // ── VOLUMETRIC SPRITES (plans/particle-volumetric-sprites) ──────────────
+    //
+    // Two claims, both of which would rot invisibly:
+    //
+    //   (R3) Config::attributes REPLACES the colorHot/colorCool ramp. Asserted
+    //        by authoring the two in OPPOSING channels — a red ramp and blue
+    //        attributes — so "the tint landed" and "the ramp was ignored" are
+    //        the same measurement and neither can pass by accident.
+    //   (R5) volumeExtinction / volumeShadow at 0 are an EXACT no-op. Asserted
+    //        by moving the knobs that ride UNDER them (volumeAmbient,
+    //        volumeSunGain) to absurd values and requiring the frame to come
+    //        back byte-identical — then turning volumeExtinction on and
+    //        requiring it to change, so the no-op is not vacuous.
+    {
+        const auto bytesDiffV = [](const std::vector<unsigned char>& a,
+                                   const std::vector<unsigned char>& b) -> long long {
+            if (a.empty() || a.size() != b.size()) return -1;
+            long long d = 0;
+            for (std::size_t i = 0; i < a.size(); ++i)
+                if (a[i] != b[i]) ++d;
+            return d;
+        };
+
+        Color clearWas3;
+        renderer.getClearColor(clearWas3);
+        renderer.setClearColor(Color(0.f, 0.f, 0.f));
+        const float sunWas3 = light->intensity;
+        light->intensity = 0.05f;
+        box->visible     = false;
+        ground->visible  = false;
+        const Vector3 camWas3 = camera->position;
+        camera->position.set(0.f, 1.4f, 4.6f);
+        camera->lookAt(Vector3(0.f, 1.4f, 0.f));
+
+        constexpr std::uint32_t kMotes = 40'000;
+        ParticleField::Config acfg;
+        acfg.capacity      = kMotes;
+        acfg.wSemantic     = ParticleField::WSemantic::Radius;
+        acfg.uniformRadius = 0.02f;
+        acfg.attributes    = true;
+        auto motes = ParticleField::create(acfg);
+        {
+            std::mt19937 rng(20260831u);
+            std::uniform_real_distribution<float> u(-1.f, 1.f);
+            std::vector<ParticlePos> pos(kMotes);
+            std::vector<float>       rgba(std::size_t(kMotes) * 4u);
+            for (std::uint32_t i = 0; i < kMotes; ++i) {
+                pos[i] = {1.2f * u(rng), 1.4f + 0.9f * u(rng), 1.2f * u(rng), 0.02f};
+                // PURE BLUE, and nothing else. The ramp below is pure RED.
+                rgba[i * 4 + 0] = 0.f;
+                rgba[i * 4 + 1] = 0.f;
+                rgba[i * 4 + 2] = 1.f;
+                rgba[i * 4 + 3] = 1.f;
+            }
+            motes->submit(pos.data(), kMotes);
+            motes->setAttributes(rgba.data(), kMotes);
+        }
+        // A DELIBERATELY DIM field. An additive sprite at any authored radiance
+        // near 1 already tone-maps to ~235/255 on its own, so a few thousand
+        // overlapping quads clip the channel solid — and on a clipped pixel a
+        // transmittance of 0.2 and one of 1.0 are the same byte. The extinction
+        // assertion below is only a measurement at all while the sum has
+        // headroom.
+        motes->setBillboardRepr(Color(1.f, 0.f, 0.f), Color(1.f, 0.f, 0.f), 0.06f);
+        motes->billboardRepr().brightJitter = 0.f;
+        motes->setDensityRepr(Vector3(0.f, 1.4f, 0.f), Vector3(1.4f, 1.1f, 1.4f),
+                              /*sigmaPerParticle*/ 0.3f, /*resolution*/ 32u);
+        scene.add(motes);
+        for (int i = 0; i < 20; ++i) frame();
+
+        const auto tinted = renderer.readRGBPixels();
+        // The scene's OWN run-to-run change, with nothing touched. The no-op
+        // claim below is measured against this and not against absolute
+        // identity, for the reason the F3 block records: the backend's GI and
+        // temporal stages are stochastic per frame index.
+        for (int i = 0; i < 20; ++i) frame();
+        const long long ctlDiff3 = bytesDiffV(tinted, renderer.readRGBPixels());
+        double sumR = 0.0, sumB = 0.0;
+        for (std::size_t i = 0; i + 2 < tinted.size(); i += 3) {
+            sumR += tinted[i];
+            sumB += tinted[i + 2];
+        }
+        std::printf("[info] attributes: summed R %.0f, summed B %.0f "
+                    "(ramp is pure RED, attributes are pure BLUE)\n", sumR, sumB);
+        check(sumB > 1000.0 && sumB > 20.0 * sumR,
+              "Config::attributes REPLACES the colorHot/colorCool ramp — the "
+              "sprites are the simulation's blue, not the field's red");
+
+        // (R5) The under-knobs move; the knobs themselves stay at 0.
+        motes->billboardRepr().volumeAmbient = 7.5f;
+        motes->billboardRepr().volumeSunGain = 9.0f;
+        for (int i = 0; i < 20; ++i) frame();
+        const auto stillOff = renderer.readRGBPixels();
+        const long long offDiff = bytesDiffV(tinted, stillOff);
+
+        motes->billboardRepr().volumeAmbient   = 0.25f;
+        motes->billboardRepr().volumeSunGain   = 1.0f;
+        motes->billboardRepr().volumeExtinction = 2.0f;
+        for (int i = 0; i < 20; ++i) frame();
+        const auto extinct = renderer.readRGBPixels();
+        double dimB = 0.0;
+        for (std::size_t i = 0; i + 2 < extinct.size(); i += 3) dimB += extinct[i + 2];
+        std::printf("[info] volumetrics: knobs-at-0 byte diff %lld (control %lld); "
+                    "summed B %.0f -> %.0f with volumeExtinction 2.0\n",
+                    offDiff, ctlDiff3, sumB, dimB);
+        check(offDiff >= 0 && ctlDiff3 >= 0 && offDiff <= std::max(ctlDiff3, 1LL) &&
+                      dimB < sumB * 0.9,
+              "volumeExtinction / volumeShadow at 0 are an EXACT no-op (the "
+              "knobs riding under them change nothing), and turning extinction "
+              "on measurably dims the field through its own density volume");
+
+        scene.remove(*motes);
+        renderer.setClearColor(clearWas3);
+        light->intensity = sunWas3;
+        box->visible     = true;
+        ground->visible  = true;
+        camera->position.copy(camWas3);
+        camera->lookAt(Vector3(0.f, 0.8f, 0.f));
+        for (int i = 0; i < 4; ++i) frame();
+    }
+
     // ── DEFECT FIXES, 2026-08-11 (the "all fake" round) ─────────────────────
     //
     // Three user-reported defects in the F4 fjord scene, all sharing one root:

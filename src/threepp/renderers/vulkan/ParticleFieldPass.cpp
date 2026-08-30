@@ -58,6 +58,16 @@ namespace {
             VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
             VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT;
 
+    // Attributes (Config::attributes): one vec4 per particle, read as a
+    // buffer_reference by the billboard vertex stage. The interop ring adds
+    // TRANSFER_DST because the head-of-frame snapshot writes it, exactly as the
+    // position ring does — the two are deliberately the same shape.
+    constexpr VkBufferUsageFlags kAttributeUsage =
+            VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
+            VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT;
+    constexpr VkBufferUsageFlags kAttributeUsageInterop =
+            kAttributeUsage | VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+
     // The field's one draw command. TRANSFER_DST because its instanceCount word
     // is filled by a device copy from the counts block, never by the host.
     constexpr VkBufferUsageFlags kIndirectUsage =
@@ -250,10 +260,12 @@ void ParticleFieldPass::destroyState(State& st) {
     for (auto& b : st.indirect) destroyBuffer(ctx_.allocator(), b);
     for (auto& b : st.bbIndirect) destroyBuffer(ctx_.allocator(), b);
     destroyBuffer(ctx_.allocator(), st.orientations);
+    for (auto& b : st.attributes) destroyBuffer(ctx_.allocator(), b);
     // The exported allocation is outside VMA (dedicated + export info), so it
     // has its own destroy — and on Windows that call is also what closes the NT
     // handle we handed the importer, which CUDA duplicated on import.
     destroyExternalBuffer(ctx_.device(), st.posExt);
+    destroyExternalBuffer(ctx_.device(), st.attrExt);
     for (auto& b : st.heights) destroyBuffer(ctx_.allocator(), b);
     destroyImage2D(ctx_.allocator(), ctx_.device(), st.density);
     destroyImage2D(ctx_.allocator(), ctx_.device(), st.densityLin);
@@ -571,6 +583,13 @@ ParticleFieldPass::State& ParticleFieldPass::ensureState(const ParticleField& fi
             st->interopOwned = true;
             st->posExt = vulkan::createExternalBuffer(ctx_.physicalDevice(), ctx_.device(),
                                                       bytes, kExternalPositionUsage);
+            // The attribute allocation is exported HERE, beside the positions,
+            // rather than at enableInterop — so the two are created together,
+            // succeed together, and cannot diverge (plan R2).
+            if (field.config().attributes) {
+                st->attrExt = vulkan::createExternalBuffer(ctx_.physicalDevice(), ctx_.device(),
+                                                           bytes, kExternalPositionUsage);
+            }
         } else {
             std::fprintf(stderr,
                          "[ParticleField] Ownership::Interop asked for on a device with no "
@@ -609,6 +628,19 @@ ParticleFieldPass::State& ParticleFieldPass::ensureState(const ParticleField& fi
                                         VkDeviceSize(st->capacity) * 8u, kOrientationUsage,
                                         VMA_MEMORY_USAGE_AUTO, kHostWrite);
     }
+    // Attributes. A RING only where one is needed: the interop leg receives a
+    // fresh set of colours every frame, so slot N must not be the buffer frames
+    // N-1/N-2 are reading. Everywhere else the contract is write-once, and
+    // slot 0 is the whole buffer.
+    if (field.config().attributes) {
+        const std::uint32_t slots = st->interopOwned ? kSlots : 1u;
+        for (std::uint32_t s = 0; s < slots; ++s) {
+            st->attributes[s] = createBuffer(
+                    ctx_.allocator(), ctx_.device(), bytes,
+                    st->interopOwned ? kAttributeUsageInterop : kAttributeUsage,
+                    VMA_MEMORY_USAGE_AUTO, st->interopOwned ? 0 : kHostWrite);
+        }
+    }
 
     auto* raw = st.get();
     states_.emplace(&field, std::move(st));
@@ -644,8 +676,14 @@ ParticleFieldPass::enableInterop(ParticleField& field, std::function<void()> dev
     // stored value out a second time would give the second importer an fd the
     // first one already closed. Windows is unchanged (CUDA duplicates the NT
     // handle; we keep and close ours).
-    return {vulkan::takeOsHandle(ctx_.device(), st.posExt),
-            static_cast<std::size_t>(st.posExt.size)};
+    InteropExport out{};
+    out.osHandle  = vulkan::takeOsHandle(ctx_.device(), st.posExt);
+    out.sizeBytes = static_cast<std::size_t>(st.posExt.size);
+    if (st.attrExt.handle != VK_NULL_HANDLE) {
+        out.attrHandle    = vulkan::takeOsHandle(ctx_.device(), st.attrExt);
+        out.attrSizeBytes = static_cast<std::size_t>(st.attrExt.size);
+    }
+    return out;
 }
 
 void ParticleFieldPass::ensureDescCapacity(std::uint32_t frame, std::uint32_t count) {
@@ -999,6 +1037,15 @@ void ParticleFieldPass::prepareFrame(std::uint64_t serial, std::uint32_t frame,
                 // instanceCount, which is this same number.
                 interopCopies_.push_back({st.posExt.handle, st.positions[slot].handle,
                                           VkDeviceSize(live) * sizeof(ParticlePos)});
+                // The attributes ride the same snapshot, in the same list, in
+                // the same window, closed by the same barrier — which is the
+                // whole of R2's "a mode where positions are safe and attributes
+                // are not cannot exist by construction".
+                if (st.attrExt.handle != VK_NULL_HANDLE &&
+                    st.attributes[slot].handle != VK_NULL_HANDLE) {
+                    interopCopies_.push_back({st.attrExt.handle, st.attributes[slot].handle,
+                                              VkDeviceSize(live) * sizeof(ParticlePos)});
+                }
                 st.snapped[slot] = true;
             }
         }
@@ -1033,6 +1080,19 @@ void ParticleFieldPass::prepareFrame(std::uint64_t serial, std::uint32_t frame,
             uploadHostVisible(ctx_.allocator(), st.orientations,
                               r.field->hostOrientations().data(),
                               VkDeviceSize(st.capacity) * 8u);
+        }
+
+        // Attributes, once, on the HOST leg. Same serial guard and same
+        // write-once contract as the orientations above; on the interop leg
+        // hostAttributes() is empty and this never fires, because the colours
+        // arrive through the snapshot instead.
+        if (!st.interopOwned && st.attributes[0].handle != VK_NULL_HANDLE &&
+            st.attrSerial != r.field->attributeSerial() &&
+            !r.field->hostAttributes().empty()) {
+            st.attrSerial = r.field->attributeSerial();
+            uploadHostVisible(ctx_.allocator(), st.attributes[0],
+                              r.field->hostAttributes().data(),
+                              VkDeviceSize(st.capacity) * 16u);
         }
 
         // The draw command. Three of its four words are CPU-known constants;
@@ -1081,7 +1141,12 @@ void ParticleFieldPass::prepareFrame(std::uint64_t serial, std::uint32_t frame,
             d.prevPosAddr = prevValid ? st.positions[prevSlot].address : d.posAddr;
         }
         d.oriAddr     = st.orientations.address;// 0 when no orientation buffer
-        d.attrAddr    = 0;                      // Config::attributes, phase 4
+        // Config::attributes. The interop leg reads THIS frame's ring slot for
+        // exactly the reason the positions do; every other mode has one buffer
+        // written once, and slot 0 is it. 0 when the field has none.
+        const VkDeviceAddress attrAddr =
+                st.interopOwned ? st.attributes[slot].address : st.attributes[0].address;
+        d.attrAddr    = attrAddr;
         d.countAddr   = st.counts[slot].address;
         d.capacity    = st.capacity;
         d.entryIndex  = r.entryIndex;
@@ -1451,6 +1516,51 @@ void ParticleFieldPass::prepareFrame(std::uint64_t serial, std::uint32_t frame,
             bp.litAmbient = std::max(bb.litAmbient, 0.f);
             ds.bbAlphaOver = bb.alphaOver;
 
+            // ── Per-particle colour (R2/R3) ─────────────────────────────────
+            // Present ⇒ the sprite's rgb IS attribute.rgb and colorHot /
+            // colorCool are not read at all. One scheme or the other, decided
+            // by this bit; no blend of the two exists to get wrong.
+            bp.attrAddr = attrAddr;
+            if (attrAddr != 0) bp.flags |= 8u;
+
+            // ── The volumetric marches (R4/R5) ──────────────────────────────
+            // Both knobs at 0 is the EXACT no-op: nothing below is published,
+            // the shader's uniform branch skips both marches, and the field
+            // renders the bits it did before this feature existed.
+            const float volExt = std::max(bb.volumeExtinction, 0.f);
+            const float volShd = std::max(0.f, std::min(1.f, bb.volumeShadow));
+            if ((volExt > 0.f || volShd > 0.f) &&
+                st.densityLin.view != VK_NULL_HANDLE && dr.enabled) {
+                bp.volumeExtinction = volExt;
+                bp.volumeShadow     = volShd;
+                bp.volumeAmbient    = std::max(bb.volumeAmbient, 0.f);
+                bp.volumeSunGain    = std::max(bb.volumeSunGain, 0.f);
+                // The field's world matrix as ROWS of its affine part: the
+                // marches happen in world space and the positions are
+                // field-local, and this is the one basis the vertex stage
+                // cannot otherwise reach (it holds view*model, not model).
+                for (int rw = 0; rw < 3; ++rw) {
+                    bp.model[rw * 4 + 0] = static_cast<float>(world[rw]);
+                    bp.model[rw * 4 + 1] = static_cast<float>(world[rw + 4]);
+                    bp.model[rw * 4 + 2] = static_cast<float>(world[rw + 8]);
+                    bp.model[rw * 4 + 3] = static_cast<float>(world[rw + 12]);
+                }
+                // The SAME box expression the density scatter and every
+                // sampler of this volume use, so the march cannot disagree
+                // with the volume about where the dust is.
+                const float hx = std::max(dr.halfExtent.x, 1e-4f);
+                const float hy = std::max(dr.halfExtent.y, 1e-4f);
+                const float hz = std::max(dr.halfExtent.z, 1e-4f);
+                bp.boxMin[0] = dr.center.x - hx;
+                bp.boxMin[1] = dr.center.y - hy;
+                bp.boxMin[2] = dr.center.z - hz;
+                bp.boxInvSize[0] = 1.f / (2.f * hx);
+                bp.boxInvSize[1] = 1.f / (2.f * hy);
+                bp.boxInvSize[2] = 1.f / (2.f * hz);
+                bp.flags |= 16u;
+                ds.volumeView = st.densityLin.view;
+            }
+
             // ── F4 ──────────────────────────────────────────────────────────
             bp.glow             = std::max(bb.glow, 0.f);
             bp.stretchMaxScreen = std::max(bb.stretchMaxScreen, 0.f);
@@ -1584,6 +1694,7 @@ void ParticleFieldPass::prepareFrame(std::uint64_t serial, std::uint32_t frame,
             for (auto& b : st.bbIndirect) retireOrDestroy(b);
             for (auto& b : st.heights) retireOrDestroy(b);
             retireOrDestroy(st.orientations);
+            for (auto& b : st.attributes) retireOrDestroy(b);
             // The exported allocation cannot go through the renderer's retire
             // queue (that takes Buffers; this one is outside VMA), so it takes
             // the same rule by hand. The application's CUDA import of it is the
@@ -1592,6 +1703,10 @@ void ParticleFieldPass::prepareFrame(std::uint64_t serial, std::uint32_t frame,
             if (st.posExt.handle != VK_NULL_HANDLE) {
                 extRetire_.push_back({st.posExt, serial});
                 st.posExt = vulkan::ExternalBuffer{};
+            }
+            if (st.attrExt.handle != VK_NULL_HANDLE) {
+                extRetire_.push_back({st.attrExt, serial});
+                st.attrExt = vulkan::ExternalBuffer{};
             }
             // The set goes back to the pool by hand — the pool is exactly
             // kMaxDensityFields deep, so leaking a set would cap the scene at
@@ -1791,9 +1906,15 @@ void ParticleFieldPass::recordDensityScatter(VkCommandBuffer cb) {
     //    and the shade's hardware trilinear on the r16f mirror. The majorants
     //    are read by the LIDAR pass, which is a SEPARATE submission and is
     //    ordered by submission order, not by this barrier.
+    //
+    //    VERTEX is on the list because the billboard stage now marches the
+    //    r16f mirror for its transmittance terms (plans/particle-volumetric-
+    //    sprites R4), later in this same command buffer and in a graphics pass.
+    //    Without it that read is unsynchronised against the convert's writes.
     mb.srcStageMask  = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
     mb.srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
-    mb.dstStageMask  = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+    mb.dstStageMask  = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT |
+                       VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT;
     mb.dstAccessMask = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT | VK_ACCESS_2_SHADER_STORAGE_READ_BIT;
     vkCmdPipelineBarrier2(cb, &dep);
 }

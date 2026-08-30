@@ -1687,6 +1687,14 @@ void VulkanRenderer::Impl::recordFieldBillboards(VkCommandBuffer cb, VkPipeline 
             const Texture* curTex = nullptr;
             bool curTexBound = false;
             std::unordered_map<const Texture*, VkDescriptorSet> setCache;
+            // Set 1: the field's own density volume, for the vertex stage's
+            // transmittance marches. Keyed by the VIEW handle so the common
+            // scene — every field on the dummy, or one field with a volume —
+            // allocates exactly one set for the whole pass.
+            ensureParticleDensityResources();
+            VkImageView curVol = VK_NULL_HANDLE;
+            bool curVolBound = false;
+            std::unordered_map<VkImageView, VkDescriptorSet> volCache;
 
             for (const auto& st : states) {
                 if (!st.billboard || st.bbIndirect == VK_NULL_HANDLE || !st.field) continue;
@@ -1745,6 +1753,55 @@ void VulkanRenderer::Impl::recordFieldBillboards(VkCommandBuffer cb, VkPipeline 
                                             fieldBillboardPipelineLayout_, 0, 1, &set, 0, nullptr);
                     curTex      = tex;
                     curTexBound = true;
+                }
+
+                // ── Set 1: the density volume the vertex stage marches ──────
+                // Always bound, even when the field asks for no transport: the
+                // vertex shader references the sampler statically, so leaving
+                // set 1 unbound is undefined behaviour rather than a saving.
+                // The 1x1x1 zero dummy makes the unused case read sigma = 0 and
+                // therefore T = 1 — though the uniform kBbVolume branch means
+                // it is never actually sampled there.
+                {
+                    const VkImageView vol = (st.volumeView != VK_NULL_HANDLE)
+                                                    ? st.volumeView
+                                                    : particleDensityLinDummy_.view;
+                    if (!curVolBound || vol != curVol) {
+                        VkDescriptorSet vset = VK_NULL_HANDLE;
+                        if (auto it = volCache.find(vol); it != volCache.end()) {
+                            vset = it->second;
+                        } else {
+                            VkDescriptorSetAllocateInfo vsi{};
+                            vsi.sType              = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+                            vsi.descriptorPool     = particleDescPools_[currentFrame];
+                            vsi.descriptorSetCount = 1;
+                            vsi.pSetLayouts        = &fieldVolumeDescSetLayout_;
+                            if (vkAllocateDescriptorSets(ctx->device(), &vsi, &vset) != VK_SUCCESS)
+                                continue;
+                            VkDescriptorImageInfo vii{};
+                            vii.imageView = vol;
+                            // GENERAL for its whole life — the convert dispatch
+                            // writes it as a storage image and nothing ever
+                            // transitions it, which is the same contract the
+                            // deferred set's binding 69 is written under.
+                            vii.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+                            vii.sampler     = textureSamplerIsoClamp_;
+                            VkWriteDescriptorSet vw{};
+                            vw.sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+                            vw.dstSet          = vset;
+                            vw.dstBinding      = 0;
+                            vw.descriptorCount = 1;
+                            vw.descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+                            vw.pImageInfo      = &vii;
+                            vkUpdateDescriptorSets(ctx->device(), 1, &vw, 0, nullptr);
+                            volCache.emplace(vol, vset);
+                        }
+                        vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                                                fieldBillboardPipelineLayout_, 1, 1, &vset,
+                                                0, nullptr);
+                        curVol      = vol;
+                        curVolBound = true;
+                    }
                 }
 
                 Matrix4 modelM, mvM;
@@ -1847,7 +1904,21 @@ VkDeviceAddress VulkanRenderer::Impl::pushBillboardViewRecord(const Matrix4& vie
                 for (int i = 0; i < 3; ++i) {
                     rec.sunRadiance[i] = bbSunRadiance_[i];
                     rec.ambient[i]     = bbAmbient_[i];
+                    // ...and the WORLD vector as well, unrotated. The density
+                    // volume the sprite marches is world-anchored, so the
+                    // transmittance legs live in world space while the phase
+                    // lobe above lives in view space; both are cheaper to carry
+                    // than to reconstruct.
+                    rec.sunDirWorld[i] = bbSunDirWorld_[i];
                 }
+                // The eye, world space: the fourth column of the inverse view.
+                // Recomputed rather than taken from the fog block above, which
+                // only runs when a medium is active and only keeps its Y.
+                Matrix4 vinv = viewM;
+                vinv.invert();
+                rec.camWorld[0] = static_cast<float>(vinv.elements[12]);
+                rec.camWorld[1] = static_cast<float>(vinv.elements[13]);
+                rec.camWorld[2] = static_cast<float>(vinv.elements[14]);
             }
             return particleFieldPass_->pushViewRecord(currentFrame, rec);
         }
