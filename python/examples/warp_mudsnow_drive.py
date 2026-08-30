@@ -17,6 +17,9 @@ ground.
     python warp_mudsnow_drive.py --shot --script mud     # one acceptance frame
     python warp_mudsnow_drive.py --shot --script cine    # the cinematic frame
     python warp_mudsnow_drive.py --cell 0.08 --width 6   # cheaper ground
+    python warp_mudsnow_drive.py --film --interop        # the film (see below)
+    python warp_mudsnow_drive.py --film --dry            # its route, no renderer
+    python warp_mudsnow_drive.py --film --takes mud,dig  # re-render two takes
 
     W / S     throttle / brake        R    gear (forward <-> reverse)
     A / D     steer                   SPACE handbrake
@@ -31,6 +34,12 @@ a circle in mud twice, `crest` the car on the rise out of the spawn dip, `cine`
 the look pass's own frame off the C camera, and `pan --yaw D` one heading of a
 360 from the driver's seat. Repeatable is the point -- a hand-driven pass is not
 the same line twice, and the whole claim is that only the SOIL differs.
+
+`--film` renders the demo's story as one ~52 s 60 fps mp4: seven scripted TAKES
+over ONE continuously advancing sim (the ruts accumulate across the whole film;
+nothing is ever reset), hard cuts between them, thirty frames discarded after
+every cut for the temporal passes, and off-screen transits to move the car
+between shots. See "the film" at the bottom of this file.
 
 The ground is a road, not a plane
 ---------------------------------
@@ -137,7 +146,7 @@ import warp as wp
 
 import threepp as tp
 from threepp.terrain_deform import MATERIALS, DeformableTerrain
-from warp_common import cli_arg, parse_size, standard_material
+from warp_common import cli_arg, find_ffmpeg, parse_size, standard_material
 
 try:
     from threepp.cuda_interop import VkInteropArray
@@ -149,6 +158,7 @@ INTEROP = "--interop" in sys.argv    # zero-copy publish; see the note on Strip
 VSYNC = "--vsync" in sys.argv
 SHOT = "--shot" in sys.argv
 BENCH = "--bench" in sys.argv
+FILM = "--film" in sys.argv          # the scripted film; see "the film" at the bottom
 SHOT_TIME = cli_arg("--shot", 8.0, float)
 WIDTH, HEIGHT = parse_size(cli_arg("--size", "1600x900", str))
 CELL = cli_arg("--cell", 0.05, float)
@@ -503,7 +513,7 @@ if not GL and not tp.vulkan_available():
     GL = True
 
 canvas = tp.Canvas("threepp x warp - mud & snow drive", width=WIDTH, height=HEIGHT,
-                   antialiasing=AA, vsync=VSYNC, headless=SHOT or BENCH)
+                   antialiasing=AA, vsync=VSYNC, headless=SHOT or BENCH or FILM)
 renderer = tp.GLRenderer(canvas) if GL else tp.VulkanRenderer(canvas)
 if GL:
     renderer.shadow_map_enabled = True
@@ -1502,7 +1512,7 @@ def coupled_step(throttle, steer, brake, relax_iters=2):
 
 # --- UI ------------------------------------------------------------------------
 
-ui = tp.ImguiContext(canvas, renderer) if not (SHOT or BENCH) else None
+ui = tp.ImguiContext(canvas, renderer) if not (SHOT or BENCH or FILM) else None
 fps_ema = 60.0
 shot_no = 0
 WHEEL_NAME = ("FR", "FL", "RR", "RL")
@@ -1814,8 +1824,11 @@ elif SHOT:
         return ((eye_xyz[0], y0 + eye_xyz[1], eye_xyz[2]),
                 (look_xyz[0], y0 + look_xyz[1], look_xyz[2]))
 
-    # One script per process: VulkanRenderer.save_frame is a render + readback
-    # and taking two of them in one run loses the device on the second.
+    # One script per process, one frame each. This used to be forced -- a
+    # second save_frame in one run lost the device -- and is not any more (the
+    # vertex-interop UAF fix; --film takes thousands of them in one run). It
+    # stays one script per process because each of these shots wants the ground
+    # UNDRIVEN, and the shots share a yard.
     if which in ("mud", "snow"):
         # Same line, same throttle, both soft lanes: mud walls its trench,
         # snow swallows the wheel and barely rims.
@@ -1853,8 +1866,7 @@ elif SHOT:
         scripted(z_mud, [(5.5, 0.45, 0.0)], None, None, out("4_cine"))
     if which == "pan":
         # Acceptance 3: no flat grey anywhere in a 360 pan from the driver's
-        # seat. One heading per process (a second save_frame in one run loses
-        # the device), so this is run four times with --yaw.
+        # seat. One heading per process, so this is run four times with --yaw.
         yaw = math.radians(cli_arg("--yaw", 0.0, float))
         eye = np.array([-6.0, float(base(-6.0, 0.0)) + 1.35, 0.0])
         scripted(0.0, [(0.2, 0.0, 0.0)], eye,
@@ -1977,5 +1989,462 @@ elif SHOT:
         print("  circle in mud: t, wheel below LOCAL surface (mm), Bekker z_eq (mm)")
         for t_s, d, z in lap[::4]:
             print(f"    {t_s:5.1f}s  {d:6.1f}  {z:6.1f}")
+elif FILM:
+    # --- the film -------------------------------------------------------------
+    # ONE process, ONE continuously advancing sim, a list of TAKES. The ruts
+    # accumulating across the whole film ARE the story, so nothing is ever reset:
+    # what the second-lap take rides in is what the takes before it cut, and the
+    # dig-in take digs into ground the drive already softened. A take is (camera
+    # rig, duration, scripted inputs); between takes the camera hard-cuts.
+    #
+    # Two things a cut costs, and both are paid here:
+    #   * the temporal stack. Probe GI, the reflection/AO denoisers and TAA/FSR
+    #     all carry history; frame one after a cut is frame one of all of them.
+    #     LEAD frames are rendered and thrown away after every cut.
+    #   * continuity. The sim does not stop for the cut -- the lead frames step
+    #     the car too -- and TRANSIT segments (capture=False) are the film's
+    #     off-screen time: the sim runs, nothing is saved, and the car gets from
+    #     where the last take left it to where the next one starts. No
+    #     teleporting, ever, and no slowmo: every take is DT=1/60 real sim time.
+    #
+    # Frames land in --film-dir as PNGs, one take at a time, each take encoded to
+    # its own segment and its PNGs deleted before the next take starts (a 48 s
+    # film at 1600x900 is ~7 GB of PNG otherwise), then the segments are
+    # concatenated. --takes renders only the named takes (the others still RUN,
+    # as transits, so the route and the ruts are identical) -- that is the
+    # dailies loop. --dry runs the whole route with no renderer at all, which is
+    # how the choreography below was written.
+    import subprocess
+
+    FFMPEG = find_ffmpeg()
+    FILM_DIR = cli_arg("--film-dir", os.path.join(OUT_DIR, "film"), str)
+    LEAD = cli_arg("--lead", 30, int)          # frames discarded after every cut
+    ONLY = [s.strip() for s in cli_arg("--takes", "", str).split(",") if s.strip()]
+    DRY = "--dry" in sys.argv                  # route only: sim, no render
+    PROBE = "--probe" in sys.argv
+    SHEET_EVERY = 120                          # a contact-sheet thumb every 2 s
+
+    Z_MUD = 0.5 * (LANE_Z["mud"][0] + LANE_Z["mud"][1])
+    Z_SNOW = 0.5 * (LANE_Z["snow"][0] + LANE_Z["snow"][1])
+
+    def road(x, z, dy=0.0):
+        """Camera height quoted against the ROAD under it, never a datum."""
+        return float(base(x, z)) + dy
+
+    def car_frame():
+        """Car position and its flattened forward / side axes.
+
+        `side` is the car's +z when it is heading +x -- the mud lane is at +z, so
+        `side` is which way to look for it.
+        """
+        p, q = vehicle.position, vehicle.quaternion
+        c = np.array([p.x, p.y, p.z])
+        f = qrot(q, np.array([0.0, 0.0, 1.0]))
+        f[1] = 0.0
+        f = f / max(float(np.linalg.norm(f)), 1e-6)
+        return c, f, np.array([-f[2], 0.0, f[0]])
+
+    def rut_state(wheel=3):
+        """(rut floor below the VIRGIN road, wheel below the local surface), mm.
+
+        The second-lap claim measured. The floor is the surface the grid holds
+        now against `base()`, the road as it was cut -- so a first pass drives it
+        from 0 down to the Bekker sinkage, and a second pass over the same ground
+        is riding on a floor that is already there. If soft ground simply
+        remembered nothing, the floor would double on the second pass; it does
+        not, and the difference between the two numbers is why the car rides
+        higher in its own tracks than it does in fresh mud.
+        """
+        p = vehicle.position
+        lp, _ = vehicle.wheel_local_pose(wheel)
+        hubw = np.array([p.x, p.y, p.z]) + qrot(vehicle.quaternion,
+                                                np.array([lp.x, lp.y, lp.z]))
+        n = lane_at(hubw[0], hubw[2])
+        if n is None:
+            return float("nan"), float("nan")
+        t = terrain[n]
+        x = torch.tensor([[hubw[0]]], device=device, dtype=torch.float32)
+        y = torch.tensor([[-hubw[2]]], device=device, dtype=torch.float32)
+        surf = float(t.heights(x, y)[0, 0])
+        return ((surf - float(base(hubw[0], hubw[2]))) * 1000.0,
+                (surf - (hubw[1] - R_WHEEL)) * 1000.0)
+
+    def rut_log(tag):
+        floor, into = rut_state()
+        return (f"rut floor {floor:6.1f} mm below the virgin road, wheel "
+                f"{into:5.1f} mm into it ({tag})")
+
+    def film_step(thr, st, br):
+        """One sim frame with the visuals posed -- everything frame() does except
+        the camera, the UI and the render."""
+        global brake_was
+        mark_dirty(coupled_step(thr, st, br))
+        pose_visuals()
+        on = br > 0.05
+        if brake_mat is not None and on != brake_was:
+            brake_was = on
+            brake_mat.emissive_intensity = 6.0 if on else 1.0
+            brake_mat.needs_update()
+
+    if PROBE:
+        # DE-RISK, before a single frame of choreography. The header of this file
+        # used to say that two save_frame calls in one Vulkan run lose the
+        # device; that note predates the vertex-interop UAF fix, and a film is
+        # thousands of them. Prove it in THIS scene, with the interop armed --
+        # a probe in an empty scene would prove nothing about the lane strips.
+        os.makedirs(FILM_DIR, exist_ok=True)
+        t0 = time.perf_counter()
+        for k in range(10):
+            film_step(0.6, 0.0, 0.0)
+            c, f, s = car_frame()
+            eye = c - f * 8.0 + np.array([0.0, 2.0, 0.0]) + s * 2.0
+            camera.position.set(*eye)
+            camera.look_at(tp.Vector3(*(c + np.array([0.0, 0.4, 0.0]))))
+            weather(DT, eye)
+            for st in strips:
+                st.publish()
+            path = os.path.join(FILM_DIR, f"probe_{k:02d}.png")
+            renderer.save_frame(scene, camera, path)
+            print(f"  probe {k:2d}: {os.path.getsize(path) / 1e6:5.2f} MB  "
+                  f"x={c[0]:6.2f}  v={vehicle.forward_speed * 3.6:5.1f} km/h  "
+                  f"{(time.perf_counter() - t0) * 1000.0 / (k + 1):6.1f} ms/frame",
+                  flush=True)
+        print("probe: 10 repeated save_frame calls in one Vulkan run -- survived")
+        sys.exit(0)
+
+    # --- the route ------------------------------------------------------------
+    # Steering sign: +1 is a left turn, and the car spawns heading +x, so +1
+    # swings it toward -z (the snow lane) and -1 toward +z (the mud lane).
+    UP = np.array([0.0, 1.0, 0.0])
+    M = {}                    # what an `enter` hook leaves for its take's rig
+
+    # Nothing in this film is a hand-written throttle number held for N seconds.
+    # The first cut of it was, and it drove into the next county: the clay strip
+    # has grip, and full throttle puts the car at 63 km/h in three seconds --
+    # the whole 48 m yard is gone before a beat lands. Worse, the SAME number is
+    # a different journey on every lane, which is the demo's entire point. So
+    # every take that has to BE somewhere drives to WAYPOINTS at a target speed
+    # instead, and the soil decides what that costs. Still one fixed script per
+    # run: no input, no randomness, the same run twice is the same film twice.
+    def pilot_fn(wps, v_kmh, loop=False, arrive=5.0, halt=False, gain=1.7):
+        """A waypoint follower: steer at the next point, hold a speed."""
+        st = {"i": 0, "dist": 1e9, "arrived": False}
+
+        def go(t):
+            c, f, s = car_frame()
+            last = st["i"] >= len(wps) - 1
+            d = np.array([wps[st["i"]][0], 0.0, wps[st["i"]][1]]) - c
+            d[1] = 0.0
+            st["dist"] = float(np.linalg.norm(d))
+            if st["dist"] < arrive:
+                if loop:
+                    st["i"] = (st["i"] + 1) % len(wps)
+                elif not last:
+                    st["i"] += 1
+                else:
+                    st["arrived"] = True
+            d = d / max(st["dist"], 1e-6)
+            # Signed angle from the car's nose to the waypoint. `side` is the
+            # car's right, and positive steer is a LEFT turn, hence the minus.
+            err = math.atan2(float(np.dot(d, s)), float(np.dot(d, f)))
+            want = 0.0 if (halt and st["arrived"]) else v_kmh
+            v = vehicle.forward_speed * 3.6
+            return (max(0.0, min(1.0, 0.12 * (want - v))),
+                    max(-1.0, min(1.0, -gain * err)),
+                    max(0.0, min(1.0, 0.10 * (v - want - 3.0))))
+
+        go.state = st
+        return go
+
+    def transit(name, wps, v=24.0, secs=40.0, arrive=5.0, halt=True):
+        """Off-screen time: the sim runs, the camera is not there. This is how
+        the car gets from the end of one take to the start of the next without a
+        teleport -- and the ruts it cuts on the way are as real as any other.
+
+        It ends on ARRIVAL, not on a clock: `arrive` metres short of the last
+        waypoint, which is why the last two waypoints of every transit are a
+        LINE -- the stop lands on that line, pointing along it, and the take
+        that follows knows where its subject is without being told.
+        """
+        go = pilot_fn(wps, v, arrive=arrive, halt=halt)
+        return dict(name=name, capture=False, secs=secs, drive=go,
+                    done=lambda: go.state["arrived"] and (not halt or
+                                                          abs(vehicle.forward_speed) < 0.4))
+
+    # The money shot is a RETRACE, not a circle. The brief asked for a circle in
+    # the mud and the car riding higher on lap two; the car cannot do it. Minimum
+    # turn radius is about 4.5 m (2.7 m wheelbase, ~33 degrees of lock) and the
+    # mud lane is 8 m wide, so any circle the car can actually drive puts half of
+    # its ring on the clay strip and the apron -- and a second lap that is half
+    # on rigid ground is not the claim. Driven the other way, the SAME claim is
+    # exact: the wheels come back down the lane in the two ruts they cut on the
+    # way up (a car retracing its own centreline puts each wheel in the other
+    # side's track), and rut_state() reads the rut floor under the wheel on both
+    # passes. Fresh mud gives the full Bekker sinkage; the second pass is riding
+    # on ground the first pass already pushed down.
+    MUD_LINE = 6.0                    # the mud lane's centreline, both passes
+    retrace_pass = pilot_fn([(-30.0, MUD_LINE)], 17.0)
+    retrace_out = pilot_fn([(-26.0, 10.6)], 17.0)     # out over its own berm
+
+    def enter_orbit(c, f, s):
+        """Start the orbit behind the car, wherever the car ended up."""
+        M["a"] = math.atan2(f[2], f[0]) + math.pi + 0.45
+
+    TAKES = [
+        # 1. Cold open. No car anywhere in frame: 5 s of virgin mud, the key
+        #    raking across it from beyond the lane and the snow drifting through.
+        #    The push-in is a dolly along the lane, not a zoom.
+        #    Aimed DOWN about 15 degrees: at eye height on a road this flat the
+        #    horizon eats the frame and the lane becomes a strip, and the subject
+        #    of this shot is the ground.
+        dict(name="open", secs=5.0, fov=36.0, drive=lambda t: (0.0, 0.0, 1.0),
+             rig=lambda t, c, f, s: ((-8.0 + 0.9 * t, road(-8.0 + 0.9 * t, 3.4, 1.55), 3.4),
+                                     (-2.0 + 0.9 * t, road(-2.0 + 0.9 * t, 7.2, -0.35), 7.2)),
+             vf="fade=t=in:st=0:d=1.2"),
+
+        # 2. The launch, on the clay strip: the one lane with grip. Full throttle
+        #    out of the spawn dip, a lift and a dab of brake (the lamps flare),
+        #    then back on it over the crest. The camera is low on the snow side
+        #    looking ACROSS the lanes into the key, dollying gently the way the
+        #    car goes so the pass has some length to it. Six seconds, not eight:
+        #    at 60 km/h the clay strip is 48 m of yard and then it is gone.
+        dict(name="launch", secs=6.0, fov=42.0,
+             drive=lambda t: ((1.0, 0.0, 0.0) if t < 2.4 else
+                              (0.0, 0.0, 0.75) if t < 3.3 else (0.32, 0.0, 0.0)),
+             #  Aimed at the wheels, not the roof: this road is flat enough that
+             #  a lens level with the car puts the horizon through the middle of
+             #  the frame and gives half of it to an empty sky.
+             rig=lambda t, c, f, s: ((-1.5 + 0.5 * t, road(-1.5, -6.2, 1.50), -6.2),
+                                     c + UP * 0.10), lag=6.0),
+
+        # Off screen: out onto the apron, back down the yard beyond the mud lane
+        # (z = 14 is apron, so the loop cuts no rut it would then drive on) and
+        # around onto the mud lane's centreline, stopped, pointing up it.
+        transit("to_mud", [(34.0, 8.0), (36.0, 16.0), (-26.0, 14.0), (-27.0, 6.0),
+                           (-14.0, MUD_LINE)], v=26.0),
+
+        # 3. The mud run, up the centreline. From rest: the pilot floors it, the
+        #    mud will not take it, TC catches the scrub and feeds it back in --
+        #    the tc column below is that argument in one number. Low trailing
+        #    camera, offset a wheel-track to the side the key is NOT on, so the
+        #    two ruts it just cut run from the lens back to the car with their
+        #    own shadow in them. This is the pass the money shot rides back down.
+        dict(name="mud", secs=9.0, fov=44.0,
+             drive=pilot_fn([(30.0, MUD_LINE)], 22.0),
+             rig=lambda t, c, f, s: (c - f * 7.0 - s * 2.4 + UP * 1.05,
+                                     c + f * 1.0 + UP * 0.35), lag=3.5,
+             log=lambda: rut_log("pass 1, fresh mud")),
+
+        # Off screen: across to the top of the snow lane, pointing back down it.
+        transit("to_snow", [(28.0, 2.0), (30.0, -8.0), (22.0, -6.0), (10.0, -6.0)],
+                v=24.0),
+
+        # 4. The snow lane: the same car, the same pilot, a lane that swallows
+        #    the wheel instead of walling a trench (sink reads ~80 mm here
+        #    against mud's ~55). Static low camera BEYOND the lane so the key is
+        #    behind the car; it drives past and away, and the shot ends on the
+        #    prints rather than on the car.
+        dict(name="snow", secs=7.0, fov=42.0,
+             drive=pilot_fn([(-26.0, -6.0)], 20.0),
+             #  Eight metres off the lane, not four: at four the car crosses the
+             #  lens as a white wall and the prints -- the subject -- are behind
+             #  it. The pass wants to fit in the frame.
+             rig=lambda t, c, f, s: ((3.0, road(3.0, -14.5, 1.05), -14.5),
+                                     c + UP * 0.4), lag=5.0),
+
+        # Off screen: the long way round the far end and back onto the mud lane's
+        # centreline -- pointing DOWN it this time, and still rolling (halt=False)
+        # so the money shot opens on a car already in its tracks.
+        transit("to_retrace", [(-16.0, -11.0), (-18.0, -16.0), (26.0, -16.0),
+                               (34.0, -8.0), (36.0, 4.0), (28.0, MUD_LINE),
+                               (17.0, MUD_LINE)], v=24.0, halt=False),
+
+        # 5. The physics money shot: back down the lane in the two ruts it cut
+        #    six shots ago, then out ACROSS them -- up over its own berm and
+        #    away. The camera orbits the car so the trench reads as a trench.
+        #    The rut number in the log is the whole claim, and it is the same
+        #    number the mud take printed on fresh ground.
+        dict(name="retrace", secs=10.0, fov=40.0,
+             drive=lambda t: (retrace_pass if t < 7.0 else retrace_out)(t),
+             enter=enter_orbit,
+             rig=lambda t, c, f, s: (c + np.array([math.cos(M["a"] + 0.14 * t) * 11.0,
+                                                   3.4,
+                                                   math.sin(M["a"] + 0.14 * t) * 11.0]),
+                                     c + UP * 0.45), lag=3.0,
+             log=lambda: rut_log("pass 2, its own ruts")),
+
+        # Off screen: the long way round the apron again, back to the BOTTOM of
+        # the mud lane on a line nothing has driven, stopped and pointing up it.
+        # The dig-in take needs fresh ground under the wheels and the whole lane
+        # in front of it: it buries the car, and then it has to crawl out.
+        transit("to_dig", [(-27.0, 11.0), (-32.0, 5.0), (-28.0, 0.5), (-20.0, 2.0),
+                           (-16.0, 9.2), (-2.0, 9.2)], v=20.0),
+
+        # 6. TC OFF -- the X moment. Four seconds of full throttle with nothing
+        #    between the engine and the mud: the wheels dig to where the motion
+        #    resistance passes the traction ceiling and the car stops going
+        #    anywhere. Hold the beat with the throttle shut (no slowmo, the CAMERA
+        #    holds), then 0.35 and it creeps out of its own hole. Close, side-on,
+        #    on the side the key is BEYOND, so the thrown soil is backlit.
+        dict(name="dig", secs=10.0, fov=40.0, tc=False,
+             drive=lambda t: ((1.0, 0.0, 0.0) if t < 4.0 else
+                              (0.0, 0.0, 0.0) if t < 5.5 else (0.35, 0.0, 0.0)),
+             enter=lambda c, f, s: M.update(
+                 d=(s if (c + s * 5.5)[2] < c[2] else -s), p=c),
+             rig=lambda t, c, f, s: (M["p"] + M["d"] * (5.6 - 0.12 * t) + UP * 0.62,
+                                     c + UP * 0.45), lag=5.0,
+             log=lambda: f"dig {np.mean(hud['dig']):4.2f}  sink {np.mean(hud['z']) * 1000:5.1f} mm  "
+                         f"util {np.mean(hud['util']):4.2f}"),
+
+        # 7. Outro: away up the rise into the haze, camera down IN the ruts. The
+        #    fade is on this segment so the concat stays a stream copy.
+        dict(name="outro", secs=5.0, fov=44.0,
+             drive=pilot_fn([(24.0, 7.4)], 26.0),
+             enter=lambda c, f, s: M.update(o=c, of=f),
+             rig=lambda t, c, f, s: (M["o"] - M["of"] * 7.0 + UP * 0.38,
+                                     M["o"] + M["of"] * 12.0 + UP * 0.7),
+             vf="fade=t=out:st=3.4:d=1.6"),
+    ]
+
+    # --- run it ---------------------------------------------------------------
+    frames_dir = os.path.join(FILM_DIR, "frames")
+    sheet_dir = os.path.join(FILM_DIR, "sheet")
+    if not DRY:
+        for d in (FILM_DIR, frames_dir, sheet_dir):
+            os.makedirs(d, exist_ok=True)
+    segments = []
+    saved = 0
+    for _ in range(60):        # the car settles onto its springs before frame one
+        coupled_step(0.0, 0.0, 0.0)
+    t_start = time.perf_counter()
+    print(f"film: {sum(t['secs'] for t in TAKES if t.get('capture', True)):.0f} s in "
+          f"{sum(1 for t in TAKES if t.get('capture', True))} takes, "
+          f"{sum(t['secs'] for t in TAKES if not t.get('capture', True)):.0f} s of transit, "
+          f"lead {LEAD} frames/cut -> {FILM_DIR}")
+
+    for take_no, take in enumerate(TAKES):
+        name, secs = take["name"], take["secs"]
+        capture = take.get("capture", True) and not DRY and (not ONLY or name in ONLY)
+        tc_on = take.get("tc", True)
+        n = int(round(secs * 60.0))
+        lead = LEAD if capture else 0
+        out_dir = os.path.join(frames_dir, name)
+        if capture:
+            if os.path.isdir(out_dir):
+                for f_old in os.listdir(out_dir):
+                    os.remove(os.path.join(out_dir, f_old))
+            else:
+                os.makedirs(out_dir)
+            camera.fov = take.get("fov", 45.0)
+            camera.update_projection_matrix()
+        c0, f0, s0 = car_frame()
+        if take.get("enter"):
+            take["enter"](c0, f0, s0)
+        first = True
+        t_take = time.perf_counter()
+        for k in range(-lead, n):
+            t = max(k, 0) / 60.0
+            thr, st, br = take["drive"](t)
+            film_step(thr, st, br)
+            c, f, s = car_frame()
+            if take.get("tick"):
+                take["tick"](t, c)
+            if take.get("rig") is not None:
+                # Rigs that follow the car are LAGGED, not glued to it: the
+                # chassis is a suspension away from smooth. `first` snaps -- it
+                # is the cut, and the lead frames absorb it.
+                eye, tgt = take["rig"](t, c, f, s)
+                eye, tgt = np.asarray(eye, float), np.asarray(tgt, float)
+                if first or take.get("lag") is None:
+                    cam_pos[:], cam_tgt[:] = eye, tgt
+                else:
+                    kk = 1.0 - math.exp(-take["lag"] * DT)
+                    cam_pos += (eye - cam_pos) * kk
+                    cam_tgt += (tgt - cam_tgt) * kk
+                camera.position.set(*cam_pos)
+                camera.look_at(tp.Vector3(*cam_tgt))
+            first = False
+            weather(DT, cam_pos)
+            if capture:
+                for strip in strips:
+                    strip.publish()
+                if k >= 0:
+                    path = os.path.join(out_dir, f"f{k:05d}.png")
+                    renderer.save_frame(scene, camera, path)
+                    saved += 1
+            if k >= 0 and k % 60 == 0:
+                extra = take["log"]() if take.get("log") else ""
+                print(f"  [{name:6s} {t:4.1f}s] x{c[0]:7.2f} z{c[2]:6.2f} "
+                      f"hdg{math.degrees(math.atan2(f[2], f[0])):7.1f}  "
+                      f"v{vehicle.forward_speed * 3.6:6.1f} km/h  "
+                      f"lane {str(hud['lane'][0] or 'rigid'):5s} "
+                      f"sink{np.mean(hud['z']) * 1000:5.1f}mm dig{np.mean(hud['dig']):4.2f} "
+                      f"slip{np.mean(np.abs(hud['slip'])):5.2f} tc{tc_cut:4.2f} {extra}",
+                      flush=True)
+            if k >= 0 and take.get("done") and take["done"]():
+                print(f"  [{name:6s} {t:4.1f}s] arrived  x{c[0]:7.2f} z{c[2]:6.2f} "
+                      f"hdg{math.degrees(math.atan2(f[2], f[0])):7.1f}", flush=True)
+                break
+        if capture:
+            # Named by the take's place in the ROUTE, not by this run's order,
+            # so re-rendering one take (--takes) overwrites its own segment and
+            # the concat below reassembles the whole film around it.
+            seg = os.path.join(FILM_DIR, f"seg_{take_no:02d}_{name}.mp4")
+            cmd = [FFMPEG, "-y", "-loglevel", "error", "-framerate", "60",
+                   "-i", os.path.join(out_dir, "f%05d.png")]
+            if take.get("vf"):
+                cmd += ["-vf", take["vf"]]
+            cmd += ["-c:v", "libx264", "-crf", "18", "-preset", "slow",
+                    "-pix_fmt", "yuv420p", seg]
+            subprocess.run(cmd, check=True)
+            segments.append(seg)
+            for f_old in os.listdir(out_dir):
+                os.remove(os.path.join(out_dir, f_old))
+            os.rmdir(out_dir)
+            print(f"  -> {os.path.basename(seg)} ({n} frames, "
+                  f"{(time.perf_counter() - t_take) / max(n + lead, 1) * 1000:.0f} ms/frame)",
+                  flush=True)
+
+    if segments:
+        # Every segment in the working dir, in route order -- not just the ones
+        # this run produced. Re-render one take with --takes and the film is
+        # reassembled around it.
+        import glob
+        segments = sorted(glob.glob(os.path.join(FILM_DIR, "seg_*.mp4")))
+        lst = os.path.join(FILM_DIR, "segments.txt")
+        with open(lst, "w") as fh:
+            for seg in segments:
+                fh.write("file '%s'\n" % seg.replace("\\", "/"))
+        mp4 = os.path.join(FILM_DIR, cli_arg("--out", "warp_mudsnow_drive.mp4", str))
+        subprocess.run([FFMPEG, "-y", "-loglevel", "error", "-f", "concat",
+                        "-safe", "0", "-i", lst, "-c", "copy", mp4], check=True)
+        print(f"wrote {mp4}  ({saved} frames, {saved / 60.0:.1f} s, "
+              f"{os.path.getsize(mp4) / 1e6:.1f} MB) in "
+              f"{(time.perf_counter() - t_start) / 60.0:.1f} min")
+        try:
+            # Contact sheet off the FINISHED mp4, one frame every 2 s: read back
+            # from the deliverable itself, so the sheet is what is in the film
+            # even when only some takes were re-rendered into it.
+            from PIL import Image
+            for old in os.listdir(sheet_dir):
+                os.remove(os.path.join(sheet_dir, old))
+            subprocess.run([FFMPEG, "-y", "-loglevel", "error", "-i", mp4,
+                            "-vf", f"fps=1/{SHEET_EVERY // 60}", "-fps_mode", "passthrough",
+                            os.path.join(sheet_dir, "t%03d.png")], check=True)
+            thumbs = sorted(os.listdir(sheet_dir))
+            cols = 6
+            tw, th = 400, int(round(400 * HEIGHT / WIDTH))
+            rows = int(math.ceil(len(thumbs) / cols))
+            sheet = Image.new("RGB", (cols * tw, rows * th), (16, 15, 13))
+            for i, thumb in enumerate(thumbs):
+                im = Image.open(os.path.join(sheet_dir, thumb))
+                sheet.paste(im.resize((tw, th), Image.LANCZOS),
+                            ((i % cols) * tw, (i // cols) * th))
+            sp = os.path.join(FILM_DIR, "contact_sheet.png")
+            sheet.save(sp)
+            print(f"contact sheet: {sp} ({len(thumbs)} frames, one per "
+                  f"{SHEET_EVERY // 60} s)")
+        except Exception as exc:              # noqa: BLE001 - the film is the deliverable
+            print(f"contact sheet skipped: {exc}")
 else:
     canvas.animate(frame)
