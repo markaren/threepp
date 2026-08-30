@@ -57,9 +57,13 @@ layout(location = 3) flat out uint vInstanceIdx;
 layout(location = 4) flat out uint vFlags;
 layout(location = 5) out vec2 vUv;
 layout(location = 6) out vec3 vWorldPos;// for fragment-shader TBN via dFdx/dFdy
-layout(location = 7) out vec3 vColor;// per-vertex color; this fixed-input path has no
-                                     // color binding, so always white (the indirect
-                                     // path — gbuffer_indirect.vert — does real vertex colors)
+layout(location = 7) out vec3 vColor;// per-vertex color, white here. NOT a parity hole:
+                                     // this fixed-input pipeline is created but never
+                                     // bound for draws — every mesh rasterizes through
+                                     // gbuffer_indirect.vert, which fetches the real
+                                     // "color" attribute (DrawInfo.colorAddr). This
+                                     // shader only keeps the shared gbuffer.frag
+                                     // interface satisfied.
 layout(location = 8) flat out uint vStableId;// stable per-object id — matches the shared
                                              // gbuffer.frag interface. This fixed path is not
                                              // used for the ids pass (indirect draws are), so
@@ -94,7 +98,7 @@ void main() {
     vFlags         = pc.flags;
     vUv            = inUv;
     vWorldPos      = worldPos.xyz;
-    vColor         = vec3(1.0);// no color binding on this path
+    vColor         = vec3(1.0);// interface filler — this pipeline never draws (see decl)
     vStableId      = pc.instanceCustomIndex + 1u;// fixed path: mirror .x (unused for ids)
     vParticleId    = 0u;
 

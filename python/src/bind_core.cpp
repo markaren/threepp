@@ -187,9 +187,10 @@ namespace threepp_py {
                 .def("center", &BufferGeometry::center, py::return_value_policy::reference_internal)
                 .def("set_from_points", [](BufferGeometry& g, const std::vector<Vector3>& pts) -> BufferGeometry& { return g.setFromPoints(pts); }, py::arg("points"), py::return_value_policy::reference_internal)
                 // Set/replace a float vertex attribute (e.g. "position", "color", "normal") from an
-                // (N, item_size) numpy array. The attribute is marked Dynamic and the draw range reset
-                // to all N rows. Allocates a new GPU buffer — for per-frame updates of a fixed-capacity
-                // cloud prefer update_attribute (in place, no buffer churn).
+                // (N, item_size) numpy array. The attribute is marked Dynamic. Setting "position" on a
+                // non-indexed geometry also resets the draw range to all N rows. Allocates a new GPU
+                // buffer — for per-frame updates of a fixed-capacity cloud prefer update_attribute
+                // (in place, no buffer churn).
                 .def("set_attribute", [](BufferGeometry& g, const std::string& name,
                                          py::array_t<float, py::array::c_style | py::array::forcecast> data) -> BufferGeometry& {
                     if (data.ndim() != 2) throw std::runtime_error("set_attribute: expected a 2-D (N, item_size) array");
@@ -198,7 +199,13 @@ namespace threepp_py {
                     auto attr = FloatBufferAttribute::create(std::vector<float>(s, s + static_cast<size_t>(n) * item), item);
                     attr->setUsage(DrawUsage::Dynamic);
                     g.setAttribute(name, std::move(attr));
-                    g.setDrawRange(0, n);
+                    // Reset the draw range only where the rows ARE the drawn elements: a
+                    // non-indexed geometry's "position". An indexed draw counts INDICES and
+                    // set_index owns that range; a secondary attribute (color, normal, uv)
+                    // never defines how much geometry there is. The unconditional reset here
+                    // used to truncate any indexed mesh that set a per-vertex colour after
+                    // its index to a vertex-count's worth of indices — a torn fraction.
+                    if (name == "position" && !g.getIndex()) g.setDrawRange(0, n);
                     return g;
                 }, py::arg("name"), py::arg("data"), py::return_value_policy::reference_internal)
                 // Overwrite the first N rows of an existing float attribute in place (no realloc, no GPU
@@ -290,19 +297,20 @@ namespace threepp_py {
                     }
                     g.setIndex(std::vector<unsigned int>(p, p + n));
                     // An indexed draw counts INDICES, not vertices (GLRenderer.cpp clamps
-                    // drawRange against index->count()), and set_attribute has just left
-                    // drawRange at the vertex count — which for a closed mesh is roughly a
-                    // sixth of the indices, so the geometry would draw a torn fraction of
-                    // itself. Publishing the whole index buffer here is what makes
-                    // "set the attributes, then set the index" mean what it looks like.
+                    // drawRange against index->count()), and set_attribute("position") on the
+                    // not-yet-indexed geometry left drawRange at the vertex count — which for
+                    // a closed mesh is roughly a sixth of the indices, so the geometry would
+                    // draw a torn fraction of itself. Publishing the whole index buffer here
+                    // is what makes "set the attributes, then set the index" mean what it
+                    // looks like; set_attribute afterwards leaves an indexed range alone.
                     g.setDrawRange(0, static_cast<int>(n));
                     return g;
                 }, py::arg("data"), py::return_value_policy::reference_internal,
                    "Give this geometry an index buffer, so its vertices can be shared between "
                    "faces. Accepts a flat or (M, 3) integer array. Validated against the "
-                   "vertex count of the attributes already set, so set_attribute first — and "
-                   "note that this sets the draw range to the whole index buffer, which a "
-                   "later set_attribute would reset to the vertex count.")
+                   "vertex count of the attributes already set, so set_attribute first. "
+                   "Sets the draw range to the whole index buffer; once indexed, a later "
+                   "set_attribute leaves the draw range alone.")
                 .def("attribute_names", [](const BufferGeometry& g) {
                     std::vector<std::string> names;
                     names.reserve(g.getAttributes().size());
