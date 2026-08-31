@@ -3,7 +3,7 @@
 warp_nebula_vk.py proved the thesis on a cloud: particles carry the IMAGE, the
 field's own density volume carries the LIGHT TRANSPORT. A nebula is the easy
 case for it, because a cloud has no shape you can be wrong about. This is the
-hard case, and the one the feature was built for: a three-bladed propeller
+hard case, and the one the feature was built for: a five-bladed propeller
 shedding tip vortices into the classic interleaved helices, which braid,
 destabilise and diffuse into a self-shadowed slipstream.
 
@@ -16,13 +16,61 @@ into ropes wound around a lit cylinder of smoke. --flat at the same timestamp
 is the whole acceptance test.
 
     pip install warp-lang
-    python warp_prop_vortex.py                   # window; drag to orbit
+    python warp_prop_vortex.py                   # window; DRAG THE PITCH SLIDER
     python warp_prop_vortex.py --shot 0.9        # headless PNG, the spin-up
     python warp_prop_vortex.py --shot 4.0        # the developed wake
     python warp_prop_vortex.py --shot 4.0 --flat # the SAME frame, knobs at 0
     python warp_prop_vortex.py --view mouth      # across the disc: air IN, ropes OUT
+    python warp_prop_vortex.py --view prop       # the bronze, close
+    python warp_prop_vortex.py --pitch 8         # feathered: a nearly dead wake
+    python warp_prop_vortex.py --shot 3.4 --pitch 22 --pitch-to 6 --pitch-at 3.0
+                                                 # the step, 0.4 s after the lever
     python warp_prop_vortex.py --n 5000000       # more particles: a grainless far wake
     python warp_prop_vortex.py --bench           # frame time, knobs on vs --flat
+
+IT IS A CONTROLLABLE-PITCH PROPELLER, and that is the demo's second thesis.
+The first (below) is that particles carry the image and a volume carries the
+light. The second is that a CLOSED-FORM wake can still be INTERACTIVE and still
+be honest about causality. Drag the slider: five bronze blades turn in their
+flanges at once, and the wake does NOT change at once, because the wake is made
+of parcels that were shed under whatever pitch was set when each of them
+crossed the disc. The boundary between the old slipstream and the new one
+convects away downstream at the slipstream's own speed and the old wake
+persists until it ages out, half a second later. That lag is the whole point.
+
+    beta   the blade angle at 0.7 R, 0..35 deg, BETA_DESIGN = 22 the neutral
+    L      the loading it makes: smoothstep(sin(beta - 2 deg)), 0 at feather
+           and 1 at 32 deg, and the ONLY channel from the lever to the flow
+    hist   HIST_N floats, one per frame, one full slot period deep. Written on
+           the host at frame_no % HIST_N, read in the kernel at the parcel's
+           OWN crossing frame. That is the whole of the added state.
+
+    u ~ sqrt(L)   induced velocity, momentum theory. Wake speed, funnel length
+                  and (through the distance-keyed flare) funnel WIDTH all
+                  follow, so a feathered prop's funnel collapses onto the disc.
+    swirl ~ L     circulation is linear in loading, so the helix stops winding
+    gain ~ L      a weak vortex is a FAINT vortex and not a fat one: the core
+                  radius does not move with pitch at all
+
+THE ONE ASYMMETRY IS DELIBERATE: the wake reads history and the funnel does
+not. A wake parcel's crossing time is in the past, so the ring has it. An
+inflow parcel's is in the FUTURE, and rather than invent one the kernel clamps
+to now -- which is the physics, not a fudge, because the flow ahead of a disc
+is a pressure field and a pressure field is not convected. Pull the lever and
+the funnel collapses in one frame while a metre of old slipstream is still
+spiralling away under the pitch that made it. Those two rates differing on
+screen is what a CPP looks like.
+
+A HARD STEP TEARS THE SLIPSTREAM, and the black gap that opens in the
+--pitch-at shots is the model being right rather than the model breaking. Past
+the disc there is no force on a parcel, so it keeps the speed it was shed with
+for the rest of its life: drop the pitch and the fast slug already downstream
+keeps going at 5.6 m/s while the flow behind it leaves at 1.8, and the two
+separate. What fills the tear is ambient air that never went through the disc,
+which carries no seeding and is therefore black. A real servo takes seconds to
+swing and a slider drag takes a human moment, so both stretch that tear into a
+visible rarefaction instead of a void; only the scripted instantaneous step
+opens it fully, and it is the clearest single frame of the causal claim.
 
 A PROPELLER PULLS, and for a long time this one did not look like it: every
 parcel was born ON the disc, so the air in front of the propeller was inert and
@@ -119,12 +167,72 @@ DT = 1.0 / FPS
 # point at (0, r, 0) rotated about X by theta lands at (0, r cos, r sin), which
 # is exactly the kernel's (y, z) -- so the mesh's rotation.x and the kernel's
 # azimuth are the same number with no sign to get wrong.
-BLADES = cli_arg("--blades", 3, int)
+BLADES = cli_arg("--blades", 5, int)
 R_TIP = 0.90                        # m
-R_HUB = 0.14
+R_HUB = 0.27       # the bulbous hub: a 5-blade CPP carries the whole pitch
+                   # mechanism inside it, so hub/diameter is ~0.30, not 0.15
+R_PALM = 0.245     # radius at which a blade root meets its own flange
 RPS = cli_arg("--rps", 6.0, float)  # revolutions per second at full speed
 OMEGA = 2.0 * math.pi * RPS
 T_RAMP = cli_arg("--ramp", 2.0, float)   # spin-up, seconds
+
+# ── CONTROLLABLE PITCH ──────────────────────────────────────────────────────
+# The blades turn in their flanges and the wake has to answer -- see the
+# docstring. BETA_DESIGN is the angle the loft is AUTHORED at, so the pivot
+# groups sit at zero rotation there and the designed twist is what you see.
+BETA_DESIGN = 22.0                  # deg, at 0.7 R
+BETA_MIN, BETA_MAX = 0.0, 35.0      # the slider's range
+# The loading curve. L is the fraction of design thrust the blade is making,
+# and it is the ONLY thing the flow reads: a smoothstep of sin(beta - beta0),
+# zero at the feathered angle and saturating at the design-plus angle.
+BETA_0 = 2.0                        # deg: feathered, no lift, no wake
+BETA_1 = 32.0                       # deg: full loading
+# Floors, and they earn their keep. U_FLOOR keeps a feathered prop's wake
+# CREEPING rather than stacking every parcel of every slot on the disc plane
+# in one bright annulus, which is what a hard zero does. G_FLOOR is the
+# matching brightness floor -- and it has to be well BELOW the speed floor,
+# because parcels per unit length goes as 1/u: at L = 0 the line density is
+# 5.8x and the per-parcel radiance 0.05x, so the wake's flux per metre lands
+# at a quarter of design. That is the number that reads as "near-dead".
+U_FLOOR = 0.03
+G_FLOOR = 0.05
+IN_G_FLOOR = 0.06
+PITCH = cli_arg("--pitch", BETA_DESIGN, float)      # headless: the pitch held
+PITCH_TO = cli_arg("--pitch-to", PITCH, float)      # ... and the step it takes
+PITCH_AT = cli_arg("--pitch-at", 1.0e9, float)      # ... at this sim time
+
+
+def loading(beta_deg):
+    """L(beta): 0 at the feathered angle, 1 at design-plus. Momentum theory
+    only needs a monotone, smooth, saturating shape; sin(alpha) is the lift
+    slope's own argument and the smoothstep takes the corners off both ends."""
+    x = math.sin(math.radians(max(beta_deg - BETA_0, 0.0))) \
+        / math.sin(math.radians(BETA_1 - BETA_0))
+    x = min(max(x, 0.0), 1.0)
+    return x * x * (3.0 - 2.0 * x)
+
+
+# THE FLOW IS SCALED RELATIVE TO DESIGN, NOT TO L. L(BETA_DESIGN) is 0.76, not
+# 1 -- 22 deg is the designed cruise setting and there is deliberately more
+# pitch available above it. If the kernel used L raw, the DEFAULT wake would
+# come out 12% slower and 23% dimmer than the wake this demo spent four
+# revisions tuning, and every crop against the pre-pitch baseline would be
+# comparing two different pictures. So every flow term is divided by its own
+# value at the design point: at beta = BETA_DESIGN the kernel evaluates to
+# exactly the numbers it evaluated to before pitch existed, and the slider
+# reads as a departure from design in both directions.
+USC_DESIGN = math.sqrt(U_FLOOR + (1.0 - U_FLOOR) * loading(BETA_DESIGN))
+GAIN_DESIGN = G_FLOOR + (1.0 - G_FLOOR) * loading(BETA_DESIGN)
+IN_GAIN_DESIGN = IN_G_FLOOR + (1.0 - IN_G_FLOOR) * loading(BETA_DESIGN)
+SWIRL_DESIGN = loading(BETA_DESIGN)
+
+
+def scheduled_beta(t):
+    """Headless pitch: hold PITCH, step to PITCH_TO at PITCH_AT. A hard step
+    and not a servo ramp, deliberately -- the acceptance evidence is the
+    BOUNDARY between old and new wake convecting downstream, and a ramp smears
+    the one edge the shots exist to show."""
+    return PITCH_TO if t >= PITCH_AT else PITCH
 
 # ── The wake ────────────────────────────────────────────────────────────────
 LIFETIME = 0.85          # s of wake held on screen; also the slot recycle period
@@ -248,6 +356,14 @@ IN_CORE = 0.030          # m, the loose blob a parcel of undisturbed air is
 IN_TURB = 0.05           # m of curl wander at the mouth -- room air is not a lathe
 IN_TURB_P = 1.5
 PERIOD = T_IN + LIFETIME
+# ── THE PITCH-HISTORY RING ──────────────────────────────────────────────────
+# The closed form survives an interactive pitch on one condition: a parcel shed
+# at tb was shed under the pitch that was set AT tb, not the one set now. So the
+# state f(seed, slot, t) gains one more argument -- a host-side ring of the past
+# PERIOD's worth of loadings, indexed by FRAME (floor(tb / DT)) and never by a
+# wall clock, so a seek and a walk still land on the same wake. One period is
+# all a slot can remember; the margin is for the epsilon in the floor.
+HIST_N = int(math.ceil(PERIOD / DT)) + 8
 # Fraction of slots in the WAKE at any instant, which is what BRIGHT and SIGMA
 # below have to pay back.
 WAKE_SHARE = (1.0 - IN_SHARE) + IN_SHARE * LIFETIME / PERIOD
@@ -383,10 +499,11 @@ def omega_frac(t: float, ramp: float) -> float:
 @wp.kernel
 def shed(out_pos: wp.array(dtype=wp.vec4),
          out_col: wp.array(dtype=wp.vec4),
+         hist: wp.array(dtype=float),
          t: float, n: int, blades: int,
          omega: float, ramp: float, turb: float, sheet: float,
          burst: float, sprite_r0: float, flux_p: float, bright: float,
-         t_in: float, in_share: float):
+         t_in: float, in_share: float, hist_n: int):
     i = wp.tid()
     s = wp.rand_init(90210, i)
     # The inflow leg's own stream, drawn from a SEPARATE seed so that adding
@@ -430,6 +547,29 @@ def shed(out_pos: wp.array(dtype=wp.vec4),
         out_col[i] = wp.vec4(0.0, 0.0, 0.0, 0.0)
         return
 
+    # ── THE PITCH AT THIS PARCEL'S OWN CROSSING ─────────────────────────────
+    # The ring is read at floor(tb / DT), which for the WAKE leg is a frame in
+    # the past -- that is the whole causal beat: pull the lever and the near
+    # wake changes at once while a metre of old wake is still spiralling away
+    # under the pitch that made it, the boundary between them convecting
+    # downstream at the slipstream speed until it ages out.
+    #
+    # The INFLOW leg has tb in the FUTURE and there is no future to read, so
+    # the clamp to t is not a fudge but the physics: the flow AHEAD of a disc
+    # is set by the disc's pressure field, which is established at the speed of
+    # sound and not convected. Move the lever and the funnel collapses NOW
+    # while the wake still remembers. Those two rates differing on screen is
+    # exactly what a controllable-pitch propeller does.
+    tbh = wp.min(tb, t)
+    kh = int(wp.floor(tbh / DT + 1.0e-3))
+    if kh < 0:
+        kh = 0
+    load = hist[kh % hist_n]
+    # Momentum theory: thrust goes as the loading, induced velocity as its
+    # square root. Both legs' speeds carry this, so the helix's axial advance
+    # per revolution follows from U_WAKE / omega without being told.
+    usc = wp.sqrt(U_FLOOR + (1.0 - U_FLOOR) * load) / USC_DESIGN
+
     blade = i % blades
     is_sheet = wp.randf(s) < sheet
 
@@ -451,8 +591,8 @@ def shed(out_pos: wp.array(dtype=wp.vec4),
     # inner span pushes less air, so it lags -- which is what shears the sheet
     # against the tip helix and starts the braiding.
     ax = 0.55 + 0.45 * span
-    u_w = U_WAKE * ofr * ax
-    u_d = U_DISC * ofr * ax
+    u_w = U_WAKE * ofr * ax * usc
+    u_d = U_DISC * ofr * ax * usc
     phi_c = theta_of(tb, omega, ramp) + float(blade) * TWO_PI / float(blades)
 
     x = float(0.0)
@@ -498,7 +638,11 @@ def shed(out_pos: wp.array(dtype=wp.vec4),
         # vortex does not exist yet.
         wc = IN_CORE * (0.42 + 0.58 * uu)
         grow = IN_GROW
-        gain = IN_GAIN * (1.0 - (1.0 - IN_GAIN_FAR) * uu)
+        # A feathered prop draws almost nothing, so the funnel does not merely
+        # get short and narrow (which d_max and the distance-keyed flare give
+        # for free above) -- it goes faint too.
+        gain = IN_GAIN * (1.0 - (1.0 - IN_GAIN_FAR) * uu) \
+            * (IN_G_FLOOR + (1.0 - IN_G_FLOOR) * load) / IN_GAIN_DESIGN
         col = wp.vec3(0.52, 0.54, 0.58)
     else:
         # ── Downstream: the wake, exactly as it was ─────────────────────────
@@ -509,14 +653,22 @@ def shed(out_pos: wp.array(dtype=wp.vec4),
         # rotation of the helical system that DECAYS with age (integral of a
         # decaying rate). The inner sheet sits deeper in the swirl and turns
         # faster, which is the roll-up.
-        sw = SWIRL_F * omega * ofr * (1.6 - 0.6 * span)
+        # The swirl is the filament's own circulation acting on the helical
+        # system, so it scales with the loading LINEARLY (not as its root):
+        # feather the blade and the helix stops winding, which is the single
+        # most legible thing the slider does to the near wake.
+        sw = SWIRL_F * omega * ofr * (1.6 - 0.6 * span) * load / SWIRL_DESIGN
         phi = phi_c + sw * TAU_S * (1.0 - wp.exp(-tau / TAU_S))
         # ── The core is a TUBE, not a curve ─────────────────────────────────
         # Lamb-Oseen diffusion: the core fattens as sqrt(t), which is the whole
         # reason the far wake is smoke and the near wake is a rope.
+        # The CORE STAYS TIGHT whatever the pitch: a weak vortex is a faint
+        # vortex, not a fat one. Only its strength -- and so the sprite's
+        # radiance -- carries the loading.
         wc = W_CORE0 + burst * wp.pow(af, W_BURST_P)
         grow = 1.0 + SPRITE_GROW * wp.pow(af, SPRITE_GROW_P)
-        gain = 1.0 - 0.20 * af
+        gain = (1.0 - 0.20 * af) \
+            * (G_FLOOR + (1.0 - G_FLOOR) * load) / GAIN_DESIGN
         mix = wp.pow(af, 0.55)
         col = wp.vec3(0.58, 0.80, 1.00) * (1.0 - mix) \
             + wp.vec3(0.46, 0.47, 0.50) * mix
@@ -534,7 +686,7 @@ def shed(out_pos: wp.array(dtype=wp.vec4),
     # standing disturbance in the world that the wake slides through, and the
     # wake would shimmer instead of braid. Neighbouring shed times get
     # neighbouring labels, so the meander is smooth ALONG a filament while the
-    # three blades wander independently -- which is what makes them collide.
+    # blades wander independently -- which is what makes them collide.
     # UPSTREAM the same label drives a much smaller wander that grows with
     # distance from the disc: real room air arriving at a propeller is not
     # laminar, and a few centimetres of coherent drift keeps the column from
@@ -585,6 +737,11 @@ renderer.tone_mapping = tp.ToneMapping.ACESFilmic
 # background against each other and make the --flat A/B meaningless.
 renderer.tone_mapping_exposure = EXPOSURE
 
+# The helm. HEADLESS never builds one, which is what keeps --shot and --bench
+# free of UI pixels and reproducible: with no ui, advance() takes its pitch
+# from the scripted schedule instead of from a slider nobody is dragging.
+ui = tp.ImguiContext(canvas, renderer) if (tp.HAS_IMGUI and not HEADLESS) else None
+
 scene = tp.Scene()
 scene.background = tp.Color(0.004, 0.005, 0.008)
 
@@ -604,7 +761,13 @@ scene.background = tp.Color(0.004, 0.005, 0.008)
 # lose both. A crop centred on the blade is the acceptance test.
 VIEW = cli_arg("--view", "side", str)
 CAMS = {"side":  ((1.10, 0.56, 3.00), (1.42, -0.02, 0.0)),
-        "mouth": ((0.45, 0.60, 5.60), (0.95, -0.05, 0.0))}
+        "mouth": ((0.45, 0.60, 5.60), (0.95, -0.05, 0.0)),
+        # "prop" is the geometry's own shot and nothing else's: close enough
+        # that a 2 cm bolt head is several pixels, three-quarters on so the
+        # flange discs are ellipses rather than edge-on lines, and aimed at the
+        # hub so the blade roots and their bolt circles fill the frame. It is
+        # deliberately NOT a framing the wake reads well at.
+        "prop":  ((1.25, 0.62, 2.15), (0.06, 0.0, 0.0))}
 CAM_P, CAM_T = CAMS[VIEW if VIEW in CAMS else "side"]
 camera = tp.PerspectiveCamera(46, canvas.aspect(), 0.02, 200)
 camera.position.set(cli_arg("--cam-x", CAM_P[0], float),
@@ -637,36 +800,89 @@ scene.add(rake)
 scene.add(tp.AmbientLight(0x8C9BC0, 1.0))
 
 
-# ── The propeller, from primitives and one lofted blade ─────────────────────
-def blade_geometry(stations=14, around=10):
-    """One twisted, tapered blade, lofted from elliptical sections.
+# ── The propeller: a MARINE CONTROLLABLE-PITCH prop, from primitives ────────
+# The reference is a five-blade bronze CPP off a ship's shaft, and three things
+# in that photograph are what make it read as one rather than as "a fan":
+#
+#   the PLANFORM -- wide rounded trapezoids, chord ~0.5 m on a 0.9 m radius, so
+#       the blades nearly touch each other and visually swallow the hub. An
+#       aircraft prop's narrow paddle is the wrong silhouette entirely.
+#   the FLANGE -- every blade sits on a circular palm with a bolt circle. That
+#       is the pitch bearing, and it is the single feature that says the blade
+#       CAN turn. Without it a pitch slider is just a mesh spinning for no
+#       visible reason; with it, the bolts turn with the blade against a fixed
+#       seat and the articulation is legible in one frame.
+#   the HUB -- bulbous, because the crank ring and the servo live inside it,
+#       capped by a bolted ring flange and a dome. R_HUB went 0.14 -> 0.27.
+#
+# All of it is first-party geometry: stock primitives plus the same loft.
+C_MAX = 0.50            # m, the widest chord -- ~0.75 expanded area ratio at B=5
+SKEW_DEG = 20.0         # tip skew; moderate, as on the reference
+RAKE_M = 0.085          # m of aft rake at the tip
+# The rounded-trapezoid outline, as control points in (span fraction, chord /
+# C_MAX). Interpolated rather than fitted to a polynomial because the SHAPE is
+# the deliverable here and a cubic cannot hold a broad tip and a narrow root at
+# once. The last point is what rounds the tip off; the first is the root boss.
+PF_F = (0.00, 0.06, 0.15, 0.30, 0.48, 0.65, 0.80, 0.90, 0.96, 1.00)
+PF_C = (0.34, 0.52, 0.72, 0.89, 0.98, 1.00, 0.95, 0.86, 0.74, 0.36)
+# Thickness / chord down the span: a fat structural root fairing into a thin
+# outer blade. At the root this is near 0.6, which is what turns the section
+# from an aerofoil into the circular boss that enters the palm.
+PF_T = (0.62, 0.44, 0.30, 0.21, 0.16, 0.13, 0.105, 0.088, 0.075, 0.070)
+BOLTS = 10              # per blade flange
+BOLT_CIRCLE = 0.128     # m
+FLANGE_R = 0.165        # m, the palm disc
 
-    Span runs along +Y from the hub to R_TIP, chord along Z, and each section
-    is rotated about the span axis by its own pitch angle -- high at the root,
-    low at the tip, which is what a real propeller does so that every station
-    meets the air at a similar angle of attack.
+
+def blade_geometry(stations=18, around=14):
+    """One wide, skewed, twisted marine blade, lofted from cambered sections.
+
+    Span runs along +Y from the palm to R_TIP, chord along Z, and each section
+    is rotated about the span axis by its own pitch angle.
+
+    THE TWIST IS A CONSTANT-PITCH HELIX, not a hand-tuned ramp: beta(r) =
+    atan(P / 2 pi r) with the pitch P chosen so beta(0.7 R) == BETA_DESIGN.
+    That is what a propeller blade is -- a slice of a screw thread -- and it
+    matters here beyond looks, because BETA_DESIGN is now a live variable. The
+    loft is authored AT the design angle, so the pivot group below is at zero
+    rotation there and the slider adds (beta - BETA_DESIGN) about the same
+    spanwise axis the sections were already rotated about. Neutral is neutral
+    by construction rather than by a magic offset.
     """
     import numpy as np
-    sp = np.linspace(R_HUB, R_TIP, stations)
-    f = (sp - R_HUB) / (R_TIP - R_HUB)                  # 0 at root, 1 at tip
-    chord = 0.30 * (0.55 + 0.85 * f - 0.95 * f ** 3)    # broad mid-span, fine tip
-    thick = chord * 0.14
-    pitch = np.radians(46.0 - 34.0 * f ** 0.75)         # geometric twist
-    sweep = 0.06 * f ** 2.2                             # a little tip rake
+    sp = np.linspace(R_PALM, R_TIP, stations)
+    f = (sp - R_PALM) / (R_TIP - R_PALM)                # 0 at root, 1 at tip
+    chord = C_MAX * np.interp(f, PF_F, PF_C)
+    thick = chord * np.interp(f, PF_F, PF_T)
+    p_screw = TWO_PI * 0.7 * R_TIP * math.tan(math.radians(BETA_DESIGN))
+    pitch = np.arctan(p_screw / (TWO_PI * sp))          # 46 deg root, 16 deg tip
+    # Skew is NEGATIVE in azimuth: the tip TRAILS the root, which is the whole
+    # point of skew (each station enters the wake field a moment after the one
+    # inboard of it, so the blade never takes a load impulse across its span).
+    # theta increases with time here, so trailing is -phi.
+    skew = -np.radians(SKEW_DEG * f ** 1.9)
+    rake = RAKE_M * f ** 2.0                            # aft, into the wake
 
     a = np.linspace(0.0, 2.0 * np.pi, around, endpoint=False)
     # Section in (chordwise, thickness), cambered a touch so the two faces are
     # not mirror images and the light breaks across the blade.
     cw = 0.5 * np.cos(a)
-    th = 0.5 * np.sin(a) + 0.10 * (1.0 - np.cos(a) ** 2)
+    th = 0.5 * np.sin(a) + 0.13 * (1.0 - np.cos(a) ** 2)
     v = np.empty((stations, around, 3), np.float32)
     for k in range(stations):
         z = cw * chord[k]
         y = th * thick[k]
         c, s = math.cos(pitch[k]), math.sin(pitch[k])
-        v[k, :, 0] = y * c - z * s + sweep[k]           # axial (out of the disc)
-        v[k, :, 1] = sp[k]                              # span
-        v[k, :, 2] = y * s + z * c                      # in-plane chord
+        axl = y * c - z * s + rake[k]                   # axial (out of the disc)
+        chd = y * s + z * c                             # in-plane chord
+        # Skew is applied as a ROTATION of the whole station about the prop
+        # axis, not as a Z translation: a 20 deg lean at 0.9 m is 0.3 m of arc
+        # and the difference between an arc and a chord is visible at that
+        # size. The spindle axis stays local +Y, which is what the pivot needs.
+        ck, sk = math.cos(skew[k]), math.sin(skew[k])
+        v[k, :, 0] = axl
+        v[k, :, 1] = sp[k] * ck - chd * sk              # span
+        v[k, :, 2] = sp[k] * sk + chd * ck
 
     # ── UVs, because a loft has none ────────────────────────────────────────
     # compute_vertex_normals() fills in normals; nothing fills in uv, and a
@@ -717,16 +933,23 @@ def blade_geometry(stations=14, around=10):
 # ── The prop has to be an OBJECT, not a hole ────────────────────────────────
 # A bare grey MeshStandardMaterial gave this demo a black silhouette, and for a
 # reason that is the wake's own doing: the key is deliberately BEHIND the
-# slipstream (see the light below), there is no environment map, and so the
-# blade faces the camera sees have nothing at all to return. Two fixes, and it
-# needs both. This one is the surface -- Poly Haven's "rust_coarse_01" (CC0,
-# 1k JPGs under assets/), albedo + normal + roughness. The normal map is doing
-# most of the work: it breaks the raking fill into hundreds of little
-# highlights, which is what says "pitted machined artifact" in the first second
-# of looking, where a flat grey lambert says "placeholder".
+# slipstream (see the light below) and there is no environment map, so the blade
+# faces the camera sees have nothing at all to return.
+#
+# BRONZE IS THE HARD CASE OF THAT, and the metalness knob is where it bites. A
+# metal has no diffuse term, so on a full metalness=1 surface the AmbientLight
+# is refused outright and the only light left is two directional speculars over
+# a black background -- a mirror in an empty room, which is black. metalness is
+# a knob here for exactly that reason; MET_DEFAULT is the highest value at
+# which the prop still reads as an object at the demo's own framing rather than
+# as a rim-lit outline. The albedo carries the warm gun-metal bronze, and the
+# rust maps stay on as WEAR ONLY -- roughness + normal, no albedo map, because a
+# rust albedo over a bronze base is just rust.
 RUST_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                         "assets", "rust_coarse_01")
 RUST_REPEAT = 2.0     # tiles per uv unit; ~0.35 m of blade per tile
+MET = cli_arg("--metalness", 0.62, float)
+BRONZE = tp.Color(0.66, 0.42, 0.17)     # linear, warm gold
 
 
 def rust_map(suffix, srgb):
@@ -742,38 +965,115 @@ def rust_map(suffix, srgb):
 
 
 metal = tp.MeshStandardMaterial()
-albedo = rust_map("diff", True)
-if albedo is not None:
-    metal.map = albedo
-    metal.normal_map = rust_map("nor_gl", False)
+metal.color = BRONZE
+metal.metalness = MET
+nrm = rust_map("nor_gl", False)
+if nrm is not None:
+    metal.normal_map = nrm
     metal.roughness_map = rust_map("rough", False)
-    metal.color = tp.Color(0xC9C2BA)   # multiplies the map; a touch under white
-    metal.normal_scale = tp.Vector2(1.5, 1.5)
-    # roughness/metalness MULTIPLY their maps in the deferred path, so these are
-    # ceilings and not values. 0.62 leaves the map's smoother pits around 0.3,
-    # which is the range that still returns a specular edge to a grazing light.
-    metal.roughness = 0.62
+    # normal_scale well under the old 1.5: the reference is a POLISHED casting
+    # with a used surface, not a corroded one, and the map's job is to break the
+    # rake into a hundred small highlights down a 0.5 m chord rather than to
+    # pit it. roughness MULTIPLIES its map, so 0.75 lands the smoother patches
+    # near 0.3 -- a bronze that still returns a broad specular to a grazing key.
+    metal.normal_scale = tp.Vector2(0.55, 0.55)
+    metal.roughness = 0.75
 else:
-    print(f"  (no rust maps in {RUST_DIR}; the prop stays plain metal)")
-    metal.color = tp.Color(0x6B6259)
-    metal.roughness = 0.45
-metal.metalness = 0.22       # low: with no env map, ambient is the only fill a
-                             # metal would refuse, and the prop must not be a hole
+    print(f"  (no wear maps in {RUST_DIR}; the bronze stays clean)")
+    metal.roughness = 0.34
+# The machined parts -- flanges, bolt heads, the hub cap -- get their own
+# material with no wear map at all. They are the surfaces a yard actually
+# machines and re-faces, so they are cleaner and shinier than the cast blade,
+# and the roughness step between the two is most of what separates the bolt
+# circle from the flange it sits on at the demo's framing distance.
+polish = tp.MeshStandardMaterial()
+polish.color = tp.Color(0.72, 0.48, 0.21)
+polish.metalness = min(MET + 0.12, 1.0)
+polish.roughness = 0.24
 # aoMap is deliberately NOT set and its 1k JPG deliberately not shipped: the
 # Vulkan deferred G-buffer carries albedo / rough-metal / normal texture slots
 # and no occlusion term (gbuffer.frag), so it would be 640 kB in the repo for
 # a guaranteed no-op.
 
+# ── Assembly ────────────────────────────────────────────────────────────────
+# prop
+#  |- hub sphere, shaft stub, cap flange + bolts, dome
+#  `- arm[b]                 rotate_x(b * 2pi / B) -- the kernel's own offset
+#      |- seat ring          FIXED: the hub-side collar the palm turns inside
+#      `- pivot[b]           rotation.y = -(beta - BETA_DESIGN)  <-- THE PITCH
+#          |- palm disc      and its bolt circle, which turn WITH the blade
+#          `- blade
+#
+# The pivot's axis is local +Y, which after the arm's rotate_x is that blade's
+# own spanwise (radial) direction -- the spindle. Putting the bolt circle
+# INSIDE the pivot and the seat ring outside it is the whole legibility trick:
+# there is then a stationary ring and a rotating one in contact, so a pitch
+# change is visible as ten bolts walking round a collar and not merely as a
+# blade that happens to look different.
 prop = tp.Group()
-hub = tp.Mesh(tp.CylinderGeometry(0.135, 0.155, 0.30, 28), metal)
-hub.rotate_z(math.pi / 2)                    # the cylinder's own axis is Y
+hub = tp.Mesh(tp.SphereGeometry(R_HUB, 40, 26), metal)
 prop.add(hub)
+# The shaft, coming forward out of the picture: without it the hub floats.
+shaft = tp.Mesh(tp.CylinderGeometry(0.115, 0.115, 0.34, 24), polish)
+shaft.rotate_z(math.pi / 2)                  # the cylinder's own axis is Y
+shaft.position.x = -0.28
+prop.add(shaft)
+# The cap: a bolted ring flange, then the dome. Aft (+X), downstream, which on
+# this axis convention is the side the wake leaves from.
+cap_ring = tp.Mesh(tp.CylinderGeometry(0.198, 0.208, 0.048, 40), polish)
+cap_ring.rotate_z(math.pi / 2)
+cap_ring.position.x = 0.222
+prop.add(cap_ring)
+dome = tp.Mesh(tp.SphereGeometry(0.192, 32, 18, 0.0, TWO_PI, 0.0, math.pi / 2),
+               polish)
+dome.rotate_z(-math.pi / 2)                  # the +Y pole becomes +X
+dome.position.x = 0.243
+prop.add(dome)
+
+BOLT_G = tp.CylinderGeometry(0.0195, 0.0215, 0.028, 8)   # a hex-ish head
+for k in range(12):                          # the cap's own bolt circle
+    ang = (k + 0.5) * TWO_PI / 12
+    bolt = tp.Mesh(BOLT_G, polish)
+    bolt.rotate_z(math.pi / 2)
+    bolt.position.set(0.240, 0.163 * math.cos(ang), 0.163 * math.sin(ang))
+    prop.add(bolt)
+
 bg = blade_geometry()
+SEAT_G = tp.CylinderGeometry(0.186, 0.192, 0.030, 40)
+PALM_G = tp.CylinderGeometry(FLANGE_R, FLANGE_R + 0.018, 0.052, 40)
+pivots = []
 for b in range(BLADES):
-    blade = tp.Mesh(bg, metal)
-    blade.rotate_x(b * TWO_PI / BLADES)      # same offset the kernel uses
-    prop.add(blade)
+    arm = tp.Group()
+    arm.rotate_x(b * TWO_PI / BLADES)        # same offset the kernel uses
+    seat = tp.Mesh(SEAT_G, polish)           # fixed to the hub
+    seat.position.y = R_PALM - 0.036
+    arm.add(seat)
+    pivot = tp.Group()
+    palm = tp.Mesh(PALM_G, polish)
+    palm.position.y = R_PALM - 0.004
+    pivot.add(palm)
+    for k in range(BOLTS):
+        ang = (k + 0.5) * TWO_PI / BOLTS
+        bolt = tp.Mesh(BOLT_G, polish)
+        bolt.position.set(BOLT_CIRCLE * math.sin(ang), R_PALM + 0.030,
+                          BOLT_CIRCLE * math.cos(ang))
+        pivot.add(bolt)
+    pivot.add(tp.Mesh(bg, metal))
+    arm.add(pivot)
+    prop.add(arm)
+    pivots.append(pivot)
 scene.add(prop)
+
+
+def set_pitch(beta_deg):
+    """Turn every blade in its flange. The loft is authored at BETA_DESIGN, so
+    this is a DELTA about the spindle -- zero rotation is the designed blade.
+    The sign is the loft's: a section's chord goes to -X as its pitch angle
+    grows, and a +Y rotation takes it to +X, so more pitch is a NEGATIVE
+    rotation about the spindle."""
+    d = -math.radians(beta_deg - BETA_DESIGN)
+    for pv in pivots:
+        pv.rotation.y = d
 
 # ── The field ───────────────────────────────────────────────────────────────
 cfg = tp.ParticleField.Config()
@@ -828,23 +1128,46 @@ frame_no = 0
 imported_pos = imported_col = None
 host_pos = host_col = None
 
+# ── The pitch, and its history ──────────────────────────────────────────────
+# beta_now is what the blades ARE this frame -- the slider's value, or the
+# scripted schedule when there is no UI. hist_np[k] is the loading the disc was
+# working at on frame k, and it is the only channel through which the past
+# reaches the kernel. Pre-filled with the starting loading so that every index
+# a slot can reach is defined before frame 1, including the t < 0 stretch the
+# spin-up ramp walks through.
+import numpy as _np
+beta_now = PITCH
+hist_np = _np.full(HIST_N, loading(PITCH), _np.float32)
+hist_wp = wp.array(hist_np, dtype=float, device=device)
+
 
 def launch(out_pos, out_col):
     wp.launch(shed, dim=N, device=device,
-              inputs=[out_pos, out_col, sim_time, N, BLADES, OMEGA, T_RAMP,
-                      TURB, SHEET, W_BURST, SPRITE_R0, FLUX_P, BRIGHT,
-                      T_IN, IN_SHARE])
+              inputs=[out_pos, out_col, hist_wp, sim_time, N, BLADES, OMEGA,
+                      T_RAMP, TURB, SHEET, W_BURST, SPRITE_R0, FLUX_P, BRIGHT,
+                      T_IN, IN_SHARE, HIST_N])
 
 
 def advance():
-    """The clock, and the phase lock. The sim time is the FRAME INDEX times DT
-    and never a wall clock, and the propeller's azimuth is the same theta(t) the
-    kernel evaluates for a filament's birth -- which is what welds every
-    filament to the tip it was shed from."""
-    global sim_time, frame_no
+    """The clock, the phase lock and the pitch. The sim time is the FRAME INDEX
+    times DT and never a wall clock, the propeller's azimuth is the same
+    theta(t) the kernel evaluates for a filament's birth -- which is what welds
+    every filament to the tip it was shed from -- and the pitch history is
+    stamped at the SAME frame index, so a seek and a walk see the same lever
+    positions in the same order.
+
+    The blades are set to beta_now here and the ring entry is written here, in
+    one place, on purpose: what the reader sees the blade doing this frame and
+    what the wake will remember about this frame are the same number."""
+    global sim_time, frame_no, beta_now
     frame_no += 1
     sim_time = frame_no * DT
+    if ui is None:
+        beta_now = scheduled_beta(sim_time)
     prop.rotation.x = prop_theta(sim_time)
+    set_pitch(beta_now)
+    hist_np[frame_no % HIST_N] = loading(beta_now)
+    hist_wp.assign(hist_np)          # 76 floats: ~300 B/frame, below measurable
 
 
 def device_copy():
@@ -909,6 +1232,11 @@ IN_R_MOUTH = R_TIP * (1.0 + IN_FLARE_HI * (IN_LINES_R - 0.5) / IN_LINES_R * (
     1.0 / math.sqrt(1.0 - IN_D_MAX / math.hypot(IN_D_MAX, IN_RV)) - 1.0))
 print(f"       prop:   {BLADES} blades, R {R_TIP:g} m, {RPS:g} rev/s "
       f"(ramp {T_RAMP:g} s), wake {LIFETIME:g} s\n"
+      f"       pitch:  beta {PITCH:g} deg (design {BETA_DESIGN:g}), "
+      f"L {loading(PITCH):.2f}"
+      + (f" -> {PITCH_TO:g} deg (L {loading(PITCH_TO):.2f}) at t={PITCH_AT:g} s"
+         if PITCH_AT < 1e8 else "")
+      + f", history {HIST_N} frames = {HIST_N * DT:.2f} s\n"
       f"       inflow: {IN_SHARE:.0%} of slots, {T_IN:g} s upstream "
       f"({T_IN / PERIOD:.0%} of the period), reaching {IN_D_MAX:.2f} m ahead of "
       f"the disc at {IN_R_MOUTH:.2f} m = {IN_R_MOUTH / R_TIP:.1f} x the tip radius\n"
@@ -950,9 +1278,44 @@ else:
     controls.enable_damping = True
     controls.target.set(*CAM_T)
 
+    def draw_ui():
+        """The helm. One slider, and everything else is a readout of what that
+        slider has already done -- there is nothing here to configure, only a
+        lever to pull and the consequences to watch."""
+        global beta_now
+        tp.imgui.set_next_window_pos(12, 12)
+        tp.imgui.set_next_window_size(434, 0)
+        tp.imgui.begin("Controllable pitch")
+        _, beta_now = tp.imgui.slider_float("blade pitch (deg)", beta_now,
+                                            BETA_MIN, BETA_MAX)
+        ld = loading(beta_now)
+        ofr = min(sim_time / T_RAMP, 1.0)
+        usc = math.sqrt(U_FLOOR + (1.0 - U_FLOOR) * ld) / USC_DESIGN
+        tp.imgui.text(f"beta   {beta_now:5.1f} deg at 0.7R   "
+                      f"(design {BETA_DESIGN:.0f})")
+        tp.imgui.text(f"thrust {ld:5.2f} of design   "
+                      f"slipstream {U_WAKE * ofr * usc:5.2f} m/s")
+        tp.imgui.text(f"shaft  {RPS * 60.0 * ofr:5.0f} rpm   "
+                      f"advance {(U_WAKE * usc / RPS if RPS > 0 else 0.0):5.2f} m/rev")
+        tp.imgui.text(f"{tp.imgui.get_framerate():5.0f} fps   "
+                      f"{N / 1e6:.1f} M parcels   t={sim_time:5.2f} s")
+        tp.imgui.separator()
+        # The one thing to say about the lag, because it is the feature and it
+        # looks like a bug for the half-second it takes to convect away.
+        tp.imgui.text("the blades twist NOW; the wake answers with history.")
+        tp.imgui.text(f"{LIFETIME:.2f} s of old slipstream keeps the pitch it")
+        tp.imgui.text(f"was shed under ({HIST_N}-frame ring), and the boundary")
+        tp.imgui.text("convects away. the funnel ahead of the disc does")
+        tp.imgui.text("not lag: a pressure field is not convected.")
+        tp.imgui.end()
+
     def animate():
         step_frame()
+        if ui is not None:
+            controls.enabled = not ui.want_capture_mouse
         controls.update()
         renderer.render(scene, camera)
+        if ui is not None:
+            ui.render(draw_ui)               # overlay: after render(), same frame
 
     canvas.animate(animate)
