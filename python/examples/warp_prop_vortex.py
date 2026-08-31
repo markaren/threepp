@@ -20,7 +20,7 @@ is the whole acceptance test.
     python warp_prop_vortex.py --shot 0.9        # headless PNG, the spin-up
     python warp_prop_vortex.py --shot 4.0        # the developed wake
     python warp_prop_vortex.py --shot 4.0 --flat # the SAME frame, knobs at 0
-    python warp_prop_vortex.py --n 4000000       # more particles
+    python warp_prop_vortex.py --n 5000000       # more particles: a grainless far wake
     python warp_prop_vortex.py --bench           # frame time, knobs on vs --flat
 
 THE SIM IS A CLOSED FORM, like the renderer's own emitter and unlike the
@@ -122,12 +122,41 @@ SHEET = cli_arg("--sheet", 0.30, float)  # fraction of slots born across the SPA
 # obvious first move) grows its area ~400x over the life, and since a sprite
 # contributes radiance x area, the far wake then out-blazes the very filaments
 # it diffused from -- the picture inverts, which is what the first pass did.
-# The grain grows modestly instead, and its radiance is divided by the area it
-# gained, so a parcel's total flux is roughly conserved and the far wake dims
-# because it is SPREAD rather than because it was told to.
+# The grain grows instead, and its radiance is divided by the area it gained,
+# so a parcel's total flux is roughly conserved and the far wake dims because
+# it is SPREAD rather than because it was told to.
+#
+# GROWTH IS A KNEE, NOT A RAMP -- the second thing this had to learn. The first
+# pass grew the grain LINEARLY in age (1 + 3.2 af), which is the one law that
+# cannot serve both halves of this picture: small enough to keep the near ropes
+# tight left the aged grains at ~1.5 px, far too small to touch their
+# neighbours, and the far wake came out as SAND -- discrete specks reading as
+# static rather than smoke. Growing them enough to fuse then fattened the young
+# ones and dissolved the ropes. Putting the grain on the same af^p knee the
+# burst core already uses (W_BURST_P) separates the two populations: below
+# af~0.4 the grain is still essentially SPRITE_R0 and the rope is a rope, above
+# it the grain balloons ~13x and neighbouring sprites OVERLAP into a continuum.
+# Overlap is the whole point -- a smooth far wake is not a smoother sprite, it
+# is enough sprites per pixel that no individual one is visible.
 SPRITE_R0 = cli_arg("--grain", 0.0026, float)   # grain radius at shedding (m)
-SPRITE_GROW = 3.2                               # x radius by end of life
-FLUX_P = cli_arg("--flux", 0.12, float)         # 1 = flux-conserving, >1 = dims faster
+SPRITE_GROW = cli_arg("--grow", 13.0, float)    # x radius by end of life
+SPRITE_GROW_P = 2.2                             # its delay -- the same knee as the burst
+# The flux split pays for that area. Radius x13 is area x170, so a grain that
+# kept its radiance would bloom the far wake to white; FLUX_P near 1 divides the
+# radiance by very nearly the area gained, which holds the far wake at the
+# per-pixel brightness it had while spreading its energy over 170x the film.
+# 0.80 is a deliberate half-step back from conserving: it trades a little
+# smoothness for a far wake that is still THERE.
+FLUX_P = cli_arg("--flux", 0.80, float)         # 1 = flux-conserving, >1 = dims faster
+# WHAT IS ACTUALLY LEFT, measured and not guessed. Bigger grains alone do not
+# finish the job: the residual mottle in a 2x crop of the far wake is ~1-2 px,
+# which is the size of the sprite's t^9 CORE spike (particlefield_billboard.frag
+# adds it under the skirt at a fixed 0.85 and `softness` does not reach it), so
+# every sprite plants a hard dot at its centre no matter how wide it is drawn.
+# The only thing that erases those dots is enough of them per pixel to average,
+# i.e. N -- and --n 5000000 is visibly, completely smooth. 2M is where the
+# 25 fps floor put the default on a 4070 at 1280x800; the demo ships at 2M and
+# a machine with fill to spare should run --n 5000000 for the still.
 
 # ── The look ────────────────────────────────────────────────────────────────
 # The density volume is LATCHED at these bounds and never refitted: a box that
@@ -267,7 +296,7 @@ def shed(out_pos: wp.array(dtype=wp.vec4),
     # (volume_shadow) and not by its own emission.
     mix = wp.pow(af, 0.55)
     c = wp.vec3(0.58, 0.80, 1.00) * (1.0 - mix) + wp.vec3(0.46, 0.47, 0.50) * mix
-    grow = 1.0 + SPRITE_GROW * af
+    grow = 1.0 + SPRITE_GROW * wp.pow(af, SPRITE_GROW_P)
     gain = (1.0 - 0.20 * af) / wp.pow(grow, flux_p)
     if is_sheet:
         gain = gain * 0.42
@@ -297,10 +326,10 @@ scene = tp.Scene()
 scene.background = tp.Color(0.004, 0.005, 0.008)
 
 camera = tp.PerspectiveCamera(46, canvas.aspect(), 0.02, 200)
-camera.position.set(cli_arg("--cam-x", 1.35, float),
-                    cli_arg("--cam-y", 0.62, float),
-                    cli_arg("--cam-z", 3.35, float))
-camera.look_at(1.55, -0.02, 0.0)
+camera.position.set(cli_arg("--cam-x", 1.10, float),
+                    cli_arg("--cam-y", 0.56, float),
+                    cli_arg("--cam-z", 3.00, float))
+camera.look_at(1.42, -0.02, 0.0)
 
 # The KEY, and the thing volume_shadow marches toward. Placed across the wake
 # and slightly BEHIND it: a backlit slipstream is the arrangement that makes
@@ -309,6 +338,21 @@ camera.look_at(1.55, -0.02, 0.0)
 sun = tp.DirectionalLight(0xFFEFD8, 3.2)
 sun.position.set(-0.9, 1.5, -2.4)
 scene.add(sun)
+
+# The RAKE -- the second half of "the prop is not a hole". It exists for the
+# propeller alone and is aimed to graze the blade faces from the camera's own
+# side, low and off to the right, so the twist catches it as a moving edge down
+# the span rather than as flat frontal fill.
+#
+# IT MUST STAY DIMMER THAN THE SUN. The billboards do not sum the light rig:
+# they take the single BRIGHTEST DirectionalLight in the scene as their sun and
+# march T_sun toward it (VulkanCoreUploads.cpp). Let this one win on max
+# channel and the whole wake's self-shadowing silently flips to a front-lit
+# read, which is the one arrangement that makes a helix illegible. 1.5 vs 3.2
+# is the margin; anything that raises it has to check the far crop.
+rake = tp.DirectionalLight(0xD8E4FF, 1.5)
+rake.position.set(2.4, 0.95, 3.1)
+scene.add(rake)
 scene.add(tp.AmbientLight(0x8C9BC0, 1.0))
 
 
@@ -342,6 +386,21 @@ def blade_geometry(stations=14, around=10):
         v[k, :, 0] = y * c - z * s + sweep[k]           # axial (out of the disc)
         v[k, :, 1] = sp[k]                              # span
         v[k, :, 2] = y * s + z * c                      # in-plane chord
+
+    # ── UVs, because a loft has none ────────────────────────────────────────
+    # compute_vertex_normals() fills in normals; nothing fills in uv, and a
+    # rust map on a missing attribute is a solid smear of whatever texel 0 is.
+    # v runs root -> tip. u runs CHORDWISE as a triangle wave over the section
+    # index rather than a sawtooth: the ring closes with j2 = (j+1) % around,
+    # so a 0..1 sawtooth would put one quad per section carrying the entire
+    # texture backwards across the seam -- a visible stripe down the blade. The
+    # triangle wave is 0 at the seam and 1 at the far side, continuous at both,
+    # and mirrors the two faces, which for a rust map with no direction in it
+    # costs exactly nothing.
+    uv = np.empty((stations, around, 2), np.float32)
+    tri = 1.0 - np.abs(2.0 * a / (2.0 * np.pi) - 1.0)
+    uv[:, :, 0] = tri[None, :]
+    uv[:, :, 1] = f[:, None]
     idx = []
     for k in range(stations - 1):
         for j in range(around):
@@ -350,25 +409,79 @@ def blade_geometry(stations=14, around=10):
             b0 = k * around + j2
             a1 = (k + 1) * around + j
             b1 = (k + 1) * around + j2
-            idx += [a0, a1, b1, a0, b1, b0]
+            # WINDING. The first pass wound these the other way round and the
+            # blades were INSIDE-OUT: compute_vertex_normals() then hands every
+            # blade vertex a normal pointing into the solid, N.L is negative on
+            # the face the camera can see, and the blade shades black no matter
+            # what light you put on it. That, not the material, is why this
+            # demo's prop was a silhouette -- the hub and spinner are stock
+            # primitives with correct windings and they were always lit. Along
+            # the ring, increasing j sweeps from the chord's +Z edge toward +X,
+            # so (a0, b1, a1) is the order whose cross product points OUT.
+            idx += [a0, b1, a1, a0, b0, b1]
     # Fan-cap both ends so the blade is a closed solid.
-    for k, flip in ((0, True), (stations - 1, False)):
+    for k, flip in ((0, False), (stations - 1, True)):
         base = k * around
         for j in range(1, around - 1):
             tri = [base, base + j, base + j + 1]
             idx += tri[::-1] if flip else tri
     g = tp.BufferGeometry()
     g.set_attribute("position", v.reshape(-1, 3))
+    g.set_attribute("uv", uv.reshape(-1, 2))
     g.set_index(np.asarray(idx, np.uint32))
     g.compute_vertex_normals()
     return g
 
 
+# ── The prop has to be an OBJECT, not a hole ────────────────────────────────
+# A bare grey MeshStandardMaterial gave this demo a black silhouette, and for a
+# reason that is the wake's own doing: the key is deliberately BEHIND the
+# slipstream (see the light below), there is no environment map, and so the
+# blade faces the camera sees have nothing at all to return. Two fixes, and it
+# needs both. This one is the surface -- Poly Haven's "rust_coarse_01" (CC0,
+# 1k JPGs under assets/), albedo + normal + roughness. The normal map is doing
+# most of the work: it breaks the raking fill into hundreds of little
+# highlights, which is what says "pitted machined artifact" in the first second
+# of looking, where a flat grey lambert says "placeholder".
+RUST_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                        "assets", "rust_coarse_01")
+RUST_REPEAT = 2.0     # tiles per uv unit; ~0.35 m of blade per tile
+
+
+def rust_map(suffix, srgb):
+    path = os.path.join(RUST_DIR, f"rust_coarse_01_{suffix}_1k.jpg")
+    if not os.path.exists(path):
+        return None
+    t = tp.TextureLoader().load(
+        path, tp.ColorSpace.SRGB if srgb else tp.ColorSpace.NoColorSpace)
+    t.wrap_s = tp.TextureWrapping.Repeat
+    t.wrap_t = tp.TextureWrapping.Repeat
+    t.repeat = tp.Vector2(RUST_REPEAT, RUST_REPEAT)
+    return t
+
+
 metal = tp.MeshStandardMaterial()
-metal.color = tp.Color(0x3C424C)
-metal.roughness = 0.42
-metal.metalness = 0.30       # low: with no env map, ambient is the only fill a
+albedo = rust_map("diff", True)
+if albedo is not None:
+    metal.map = albedo
+    metal.normal_map = rust_map("nor_gl", False)
+    metal.roughness_map = rust_map("rough", False)
+    metal.color = tp.Color(0xC9C2BA)   # multiplies the map; a touch under white
+    metal.normal_scale = tp.Vector2(1.5, 1.5)
+    # roughness/metalness MULTIPLY their maps in the deferred path, so these are
+    # ceilings and not values. 0.62 leaves the map's smoother pits around 0.3,
+    # which is the range that still returns a specular edge to a grazing light.
+    metal.roughness = 0.62
+else:
+    print(f"  (no rust maps in {RUST_DIR}; the prop stays plain metal)")
+    metal.color = tp.Color(0x6B6259)
+    metal.roughness = 0.45
+metal.metalness = 0.22       # low: with no env map, ambient is the only fill a
                              # metal would refuse, and the prop must not be a hole
+# aoMap is deliberately NOT set and its 1k JPG deliberately not shipped: the
+# Vulkan deferred G-buffer carries albedo / rough-metal / normal texture slots
+# and no occlusion term (gbuffer.frag), so it would be 640 kB in the repo for
+# a guaranteed no-op.
 
 prop = tp.Group()
 hub = tp.Mesh(tp.CylinderGeometry(0.135, 0.155, 0.30, 28), metal)
@@ -410,7 +523,15 @@ field.density_repr.anisotropy = 0.0
 # The IMAGE half.
 field.set_billboard_repr(tp.Color(1, 1, 1), tp.Color(1, 1, 1), 1.0, 1.0)
 bb = field.billboard_repr
-bb.softness = 0.55
+# The falloff is skirt + a t^9 core; softness slides the skirt exponent 4 -> 1.2
+# (particlefield_billboard.frag). High is what a SMOKE grain wants: the tight
+# core is a spark's shape and, drawn at the aged grain's 10-odd pixels, it is
+# exactly the hard speck the far wake must stop reading as. This is a per-FIELD
+# knob and not per-particle, which sounds like it should soften the near ropes
+# too -- it does not, because a young grain is ~1.5 px across and a radial
+# profile has nowhere to act inside a pixel and a half. The knee gives softness
+# its age selectivity for free.
+bb.softness = 0.92
 bb.bright_jitter = 0.0        # the sim authors the colour; do not hash over it
 bb.fade_power = 0.0           # no age exists on an interop field
 bb.size_taper = 0.0
@@ -535,7 +656,7 @@ elif SHOT:
 else:
     controls = tp.OrbitControls(camera, canvas)
     controls.enable_damping = True
-    controls.target.set(1.55, -0.02, 0.0)
+    controls.target.set(1.42, -0.02, 0.0)
 
     def animate():
         step_frame()
