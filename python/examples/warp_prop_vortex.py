@@ -23,8 +23,11 @@ is the whole acceptance test.
     python warp_prop_vortex.py --view mouth      # across the disc: air IN, ropes OUT
     python warp_prop_vortex.py --view prop       # the bronze, close
     python warp_prop_vortex.py --pitch 8         # feathered: a nearly dead wake
+    python warp_prop_vortex.py --rps 2.5         # a slow shaft: a SHORT wake
     python warp_prop_vortex.py --shot 3.4 --pitch 22 --pitch-to 6 --pitch-at 3.0
                                                  # the step, 0.4 s after the lever
+    python warp_prop_vortex.py --shot 3.4 --rps 6 --rps-to 2.5 --rps-at 3.0
+                                                 # the throttle's own step
     python warp_prop_vortex.py --n 5000000       # more particles: a grainless far wake
     python warp_prop_vortex.py --bench           # frame time, knobs on vs --flat
 
@@ -40,17 +43,40 @@ persists until it ages out, half a second later. That lag is the whole point.
 
     beta   the blade angle at 0.7 R, 0..35 deg, BETA_DESIGN = 22 the neutral
     L      the loading it makes: smoothstep(sin(beta - 2 deg)), 0 at feather
-           and 1 at 32 deg, and the ONLY channel from the lever to the flow
-    hist   HIST_N floats, one per frame, one full slot period deep. Written on
-           the host at frame_no % HIST_N, read in the kernel at the parcel's
-           OWN crossing frame. That is the whole of the added state.
+           and 1 at 32 deg, and the ONLY channel from the pitch to the flow
+    omega  the shaft rate, 60..600 rpm, RPS_REF = 6 rev/s the reference
+    hist   HIST_N vec3 (L, omega, theta), one per frame, one full slot period
+           deep. Written on the host at frame_no % HIST_N, read in the kernel
+           at the parcel's OWN crossing frame. That is the whole added state.
 
-    u ~ sqrt(L)   induced velocity, momentum theory. Wake speed, funnel length
-                  and (through the distance-keyed flare) funnel WIDTH all
-                  follow, so a feathered prop's funnel collapses onto the disc.
-    swirl ~ L     circulation is linear in loading, so the helix stops winding
-    gain ~ L      a weak vortex is a FAINT vortex and not a fat one: the core
-                  radius does not move with pitch at all
+    u ~ omega sqrt(L)  induced velocity. Static-thrust momentum theory: at a
+                  fixed pitch T ~ omega^2 so v_i ~ omega, and the sqrt is spent
+                  on the loading. Wake speed, funnel length and (through the
+                  distance-keyed flare) funnel WIDTH all follow, so a feathered
+                  OR idling prop's funnel collapses onto the disc.
+    swirl ~ omega L    circulation is linear in both
+    gain ~ omega L     a weak vortex is a FAINT vortex and not a fat one: the
+                  core radius does not move with either lever
+
+WHAT THE THROTTLE DOES NOT DO IS THE INTERESTING PART. Advance per revolution
+is u / n, and with u ~ omega that is INDEPENDENT OF RPM: change the shaft speed
+and the helix's loop spacing in metres does not move at all. What moves is how
+far 0.85 s of wake reaches (halve the rpm and the slipstream is half as long)
+and how fast the loops are laid down. Loop SPACING is a property of the PITCH
+alone. That is what a screw is: it advances its geometric pitch per turn
+whatever speed you turn it at, and the rpm-step crops show exactly that -- a
+short stub of new wake whose loops line up with the old wake's, a rarefaction
+between them, and the old wake convecting off to age out.
+
+THETA CANNOT BE A CLOSED FORM ONCE OMEGA IS A LEVER. theta_of(t) = OMEGA t^2 /
+2 T_RAMP was exact while omega was a constant; the moment it is a slider, any
+azimuth derived from the CURRENT omega is retroactive, and dragging the
+throttle re-places every filament in four metres of existing wake at the
+azimuth it would have had if the shaft had always been at the new speed. The
+helix twists bodily off its blade tips and the credibility detail dies. So
+theta is integrated on the host once per frame (trapezoid, which is exact for
+the linear spin-up ramp and so reproduces the old closed form bit for bit) and
+carried in the ring; the mesh and the kernel read the same number.
 
 THE ONE ASYMMETRY IS DELIBERATE: the wake reads history and the funnel does
 not. A wake parcel's crossing time is in the past, so the ring has it. An
@@ -172,9 +198,35 @@ R_TIP = 0.90                        # m
 R_HUB = 0.27       # the bulbous hub: a 5-blade CPP carries the whole pitch
                    # mechanism inside it, so hub/diameter is ~0.30, not 0.15
 R_PALM = 0.245     # radius at which a blade root meets its own flange
-RPS = cli_arg("--rps", 6.0, float)  # revolutions per second at full speed
+# ── CONTROLLABLE SHAFT SPEED ────────────────────────────────────────────────
+# RPS_REF is the ANCHOR and not the default: every flow coupling below is
+# normalised by it, so a prop turning at RPS_REF with beta at BETA_DESIGN
+# evaluates to exactly the numbers this demo had before either lever existed.
+# RPS is merely where the throttle starts.
+RPS_REF = 6.0                       # rev/s, the tuning reference
+RPS = cli_arg("--rps", 6.0, float)  # revolutions per second commanded
 OMEGA = 2.0 * math.pi * RPS
+OMEGA_REF = 2.0 * math.pi * RPS_REF
+RPM_MIN, RPM_MAX = 60.0, 600.0      # the slider's range
+RPS_TO = cli_arg("--rps-to", RPS, float)      # headless: the step it takes
+RPS_AT = cli_arg("--rps-at", 1.0e9, float)    # ... at this sim time
 T_RAMP = cli_arg("--ramp", 2.0, float)   # spin-up, seconds
+# The spin-up is no longer a special case in the kernel: it is simply the first
+# two seconds of the SCHEDULE, multiplying whatever speed is commanded. That is
+# what keeps the ring defined at t = 0 with no separate "before the prop
+# started" branch, and it is why the slider is also ramped for its first two
+# seconds rather than snapping the wake into existence on frame one.
+OM_G_FLOOR = 0.04    # radiance left at a barely-turning shaft
+
+
+def ramp_frac(t):
+    return min(max(t / T_RAMP, 0.0), 1.0) if T_RAMP > 0.0 else 1.0
+
+
+def scheduled_rps(t):
+    """Headless shaft speed: hold RPS, step to RPS_TO at RPS_AT, both under the
+    spin-up ramp. A hard step for the same reason the pitch one is hard."""
+    return (RPS_TO if t >= RPS_AT else RPS) * ramp_frac(t)
 
 # ── CONTROLLABLE PITCH ──────────────────────────────────────────────────────
 # The blades turn in their flanges and the wake has to answer -- see the
@@ -467,41 +519,32 @@ BRIGHT = cli_arg("--bright", 0.038, float) * math.sqrt(2_000_000 / N) \
 TWO_PI = 2.0 * math.pi
 
 
-def prop_theta(t):
-    """Blade azimuth at time t, in radians. Omega ramps linearly over T_RAMP, so
-    this is the exact integral of that ramp -- the mesh and the kernel must not
-    merely agree at steady state, they must agree DURING the spin-up too."""
-    if t < T_RAMP:
-        return OMEGA * t * t / (2.0 * T_RAMP)
-    return OMEGA * (t - 0.5 * T_RAMP)
-
-
 # ── The kernel ──────────────────────────────────────────────────────────────
 # One launch, no state: out_pos is the exported POSITION allocation (xyz + w =
 # the per-particle world radius, WSemantic.Radius) and out_col the exported
 # ATTRIBUTE allocation (rgb = linear HDR radiance). Both written in place,
 # device to device.
-@wp.func
-def theta_of(t: float, omega: float, ramp: float) -> float:
-    if t < ramp:
-        return omega * t * t / (2.0 * ramp)
-    return omega * (t - 0.5 * ramp)
-
-
-@wp.func
-def omega_frac(t: float, ramp: float) -> float:
-    # How far up the spin-up ramp the flow was when this parcel was shed. The
-    # wake it convects into is the wake that existed AT SHEDDING, so a parcel
-    # born during the ramp stays slow for the rest of its life.
-    return wp.clamp(t / ramp, 0.0, 1.0)
-
-
+#
+# THETA IS NO LONGER A CLOSED FORM, and that is the one thing the throttle
+# could not have without breaking. theta_of(t) = OMEGA t^2 / 2 T_RAMP was
+# exact while omega was a compile-time constant; the moment omega is a lever,
+# any azimuth DERIVED from the current omega is retroactive -- drag the speed
+# slider and every filament in the four metres of existing wake is re-placed at
+# the azimuth it would have had if the shaft had ALWAYS been at the new speed,
+# so the whole helix twists bodily and detaches from the blade tips it was
+# welded to. The credibility detail dies in one frame and never comes back.
+#
+# So theta is INTEGRATED ON THE HOST, once per frame, and stored in the ring
+# beside the loading and the rate. The kernel never integrates anything and the
+# visible prop mesh reads the same theta_now the ring was stamped with, so
+# blades and wake stay welded by construction rather than by agreement between
+# two formulae.
 @wp.kernel
 def shed(out_pos: wp.array(dtype=wp.vec4),
          out_col: wp.array(dtype=wp.vec4),
-         hist: wp.array(dtype=float),
+         hist: wp.array(dtype=wp.vec3),
          t: float, n: int, blades: int,
-         omega: float, ramp: float, turb: float, sheet: float,
+         turb: float, sheet: float,
          burst: float, sprite_r0: float, flux_p: float, bright: float,
          t_in: float, in_share: float, hist_n: int):
     i = wp.tid()
@@ -547,28 +590,73 @@ def shed(out_pos: wp.array(dtype=wp.vec4),
         out_col[i] = wp.vec4(0.0, 0.0, 0.0, 0.0)
         return
 
-    # ── THE PITCH AT THIS PARCEL'S OWN CROSSING ─────────────────────────────
-    # The ring is read at floor(tb / DT), which for the WAKE leg is a frame in
-    # the past -- that is the whole causal beat: pull the lever and the near
-    # wake changes at once while a metre of old wake is still spiralling away
-    # under the pitch that made it, the boundary between them convecting
-    # downstream at the slipstream speed until it ages out.
+    # ── THE HELM AT THIS PARCEL'S OWN CROSSING ──────────────────────────────
+    # hist[k] = (loading, omega, theta) as they stood on frame k. The ring is
+    # read at floor(tb / DT), which for the WAKE leg is a frame in the past --
+    # that is the whole causal beat: move a lever and the near wake changes at
+    # once while a metre of old wake is still spiralling away under the pitch
+    # and the speed that made it, the boundary between them convecting
+    # downstream until it ages out.
     #
     # The INFLOW leg has tb in the FUTURE and there is no future to read, so
     # the clamp to t is not a fudge but the physics: the flow AHEAD of a disc
     # is set by the disc's pressure field, which is established at the speed of
-    # sound and not convected. Move the lever and the funnel collapses NOW
-    # while the wake still remembers. Those two rates differing on screen is
-    # exactly what a controllable-pitch propeller does.
+    # sound and not convected. Move a lever and the funnel collapses NOW while
+    # the wake still remembers. Those two rates differing on screen is exactly
+    # what a controllable-pitch propeller does.
     tbh = wp.min(tb, t)
     kh = int(wp.floor(tbh / DT + 1.0e-3))
     if kh < 0:
         kh = 0
-    load = hist[kh % hist_n]
-    # Momentum theory: thrust goes as the loading, induced velocity as its
-    # square root. Both legs' speeds carry this, so the helix's axial advance
-    # per revolution follows from U_WAKE / omega without being told.
+    h = hist[kh % hist_n]
+    load = h[0]
+    om = h[1]
+    # ── AZIMUTH: INTERPOLATE INSIDE THE FRAME, EXTRAPOLATE PAST IT ──────────
+    # The ring is stamped once per frame and tb is continuous, so reading
+    # h[2] raw would quantise every filament's birth azimuth to 16.7 ms of
+    # shaft rotation -- 36 degrees at 360 rpm. The helix would be drawn as a
+    # staircase of 36-degree steps instead of a curve. Walking the residual out
+    # at that frame's own rate is exact for constant omega and smooth for any
+    # omega, and it costs one multiply.
+    #
+    #   WAKE leg:   tb <= t, kh is the frame at or before it, the residual is
+    #               under one frame. This is INTERPOLATION.
+    #   INFLOW leg: tb is in the future, kh is clamped to now, and the same
+    #               expression becomes theta_now + omega_now * (tb - t).
+    #
+    # THE EXTRAPOLATION IS SAFE HERE AND NOWHERE ELSE, for a reason that is a
+    # decision made three revisions ago rather than a happy accident: the
+    # upstream rake carries NO BLADE PHASE. Its azimuths are a fixed set of
+    # world-static streamlines and only the last (1 - uu)^IN_LOCK_P of the leg
+    # -- a few centimetres -- blends toward the crossing azimuth at all. So the
+    # extrapolated theta is invisible over 97% of the funnel and, where it does
+    # show, the error is bounded by omega drift over at most T_IN = 0.28 s and
+    # is hidden inside a blend that is itself going to zero. Extrapolate the
+    # WAKE's azimuth by the same amount and it would be a lie about a filament
+    # welded to a blade tip, which is the one thing this demo cannot get wrong.
+    th_b = h[2] + om * (tb - float(kh) * DT)
+    # ── THE TWO COUPLINGS ───────────────────────────────────────────────────
+    # omf is the speed factor and it replaces, exactly, the spin-up ramp
+    # fraction the kernel used to compute for itself: at RPS_REF it is 1 and
+    # every formula below is the one that was tuned.
+    #
+    # Static-thrust momentum theory is the anchor. At a fixed pitch a screw has
+    # a fixed thrust coefficient, so T ~ omega^2 and the induced velocity
+    # v_i ~ sqrt(T) ~ omega -- LINEAR in shaft speed, and the sqrt is spent on
+    # the loading instead. The consequence is worth stating because it is not
+    # what one expects: the helix's advance PER REVOLUTION is u / n, and with
+    # u ~ omega that is INDEPENDENT OF RPM. Change the speed and the loop
+    # spacing in metres does not move; what moves is how far down the tube
+    # 0.85 s of wake reaches, and how fast the loops are laid down.
+    omf = om / OMEGA_REF
+    # Momentum theory again, on the other lever: thrust goes as the loading,
+    # induced velocity as its square root.
     usc = wp.sqrt(U_FLOOR + (1.0 - U_FLOOR) * load) / USC_DESIGN
+    # Radiance follows the circulation, which is linear in omega like v_i is.
+    # Since parcels per metre goes as 1 / u ~ 1 / omega, this holds the wake's
+    # flux per METRE invariant under the throttle and lets the throttle change
+    # the wake's LENGTH, which is the honest reading.
+    omg = OM_G_FLOOR + (1.0 - OM_G_FLOOR) * omf
 
     blade = i % blades
     is_sheet = wp.randf(s) < sheet
@@ -586,14 +674,13 @@ def shed(out_pos: wp.array(dtype=wp.vec4),
     # Both legs are anchored here: the point (0, r0, phi_c) on the disc, at the
     # time tb. The wake leg leaves it, the inflow leg arrives at it, and every
     # continuity claim below is just "this term is zero at the crossing".
-    ofr = omega_frac(tb, ramp)
     # Axial: eased from the disc velocity to the developed slipstream. The
     # inner span pushes less air, so it lags -- which is what shears the sheet
     # against the tip helix and starts the braiding.
     ax = 0.55 + 0.45 * span
-    u_w = U_WAKE * ofr * ax * usc
-    u_d = U_DISC * ofr * ax * usc
-    phi_c = theta_of(tb, omega, ramp) + float(blade) * TWO_PI / float(blades)
+    u_w = U_WAKE * omf * ax * usc
+    u_d = U_DISC * omf * ax * usc
+    phi_c = th_b + float(blade) * TWO_PI / float(blades)
 
     x = float(0.0)
     r = r0
@@ -638,10 +725,10 @@ def shed(out_pos: wp.array(dtype=wp.vec4),
         # vortex does not exist yet.
         wc = IN_CORE * (0.42 + 0.58 * uu)
         grow = IN_GROW
-        # A feathered prop draws almost nothing, so the funnel does not merely
-        # get short and narrow (which d_max and the distance-keyed flare give
-        # for free above) -- it goes faint too.
-        gain = IN_GAIN * (1.0 - (1.0 - IN_GAIN_FAR) * uu) \
+        # A feathered or barely-turning prop draws almost nothing, so the
+        # funnel does not merely get short and narrow (which d_max and the
+        # distance-keyed flare give for free above) -- it goes faint too.
+        gain = IN_GAIN * (1.0 - (1.0 - IN_GAIN_FAR) * uu) * omg \
             * (IN_G_FLOOR + (1.0 - IN_G_FLOOR) * load) / IN_GAIN_DESIGN
         col = wp.vec3(0.52, 0.54, 0.58)
     else:
@@ -656,8 +743,11 @@ def shed(out_pos: wp.array(dtype=wp.vec4),
         # The swirl is the filament's own circulation acting on the helical
         # system, so it scales with the loading LINEARLY (not as its root):
         # feather the blade and the helix stops winding, which is the single
-        # most legible thing the slider does to the near wake.
-        sw = SWIRL_F * omega * ofr * (1.6 - 0.6 * span) * load / SWIRL_DESIGN
+        # most legible thing the pitch slider does to the near wake. Against
+        # the throttle it is a fixed FRACTION of the shaft rate, which is what
+        # SWIRL_F always meant -- so the wake's angular twist per metre, like
+        # its advance per revolution, is a property of the pitch alone.
+        sw = SWIRL_F * om * (1.6 - 0.6 * span) * load / SWIRL_DESIGN
         phi = phi_c + sw * TAU_S * (1.0 - wp.exp(-tau / TAU_S))
         # ── The core is a TUBE, not a curve ─────────────────────────────────
         # Lamb-Oseen diffusion: the core fattens as sqrt(t), which is the whole
@@ -667,7 +757,7 @@ def shed(out_pos: wp.array(dtype=wp.vec4),
         # radiance -- carries the loading.
         wc = W_CORE0 + burst * wp.pow(af, W_BURST_P)
         grow = 1.0 + SPRITE_GROW * wp.pow(af, SPRITE_GROW_P)
-        gain = (1.0 - 0.20 * af) \
+        gain = (1.0 - 0.20 * af) * omg \
             * (G_FLOOR + (1.0 - G_FLOOR) * load) / GAIN_DESIGN
         mix = wp.pow(af, 0.55)
         col = wp.vec3(0.58, 0.80, 1.00) * (1.0 - mix) \
@@ -1128,46 +1218,69 @@ frame_no = 0
 imported_pos = imported_col = None
 host_pos = host_col = None
 
-# ── The pitch, and its history ──────────────────────────────────────────────
-# beta_now is what the blades ARE this frame -- the slider's value, or the
-# scripted schedule when there is no UI. hist_np[k] is the loading the disc was
-# working at on frame k, and it is the only channel through which the past
-# reaches the kernel. Pre-filled with the starting loading so that every index
-# a slot can reach is defined before frame 1, including the t < 0 stretch the
-# spin-up ramp walks through.
+# ── The helm, and its history ───────────────────────────────────────────────
+# beta_now / rpm_now are what the levers ARE this frame -- the sliders, or the
+# scripted schedules when there is no UI. hist_np[k] = (loading, omega, theta)
+# as they stood on frame k, and it is the only channel through which the past
+# reaches the kernel. Pre-filled with the starting loading at a STOPPED shaft
+# (omega 0, theta 0) so that every index a slot can reach is defined before
+# frame 1 -- there is no separate "before the prop started" case any more, only
+# the first entries of a schedule that happens to begin at rest.
 import numpy as _np
 beta_now = PITCH
-hist_np = _np.full(HIST_N, loading(PITCH), _np.float32)
-hist_wp = wp.array(hist_np, dtype=float, device=device)
+rpm_now = RPS * 60.0
+omega_now = 0.0
+theta_now = 0.0
+hist_np = _np.zeros((HIST_N, 3), _np.float32)
+hist_np[:, 0] = loading(PITCH)
+hist_wp = wp.array(hist_np, dtype=wp.vec3, device=device)
 
 
 def launch(out_pos, out_col):
     wp.launch(shed, dim=N, device=device,
-              inputs=[out_pos, out_col, hist_wp, sim_time, N, BLADES, OMEGA,
-                      T_RAMP, TURB, SHEET, W_BURST, SPRITE_R0, FLUX_P, BRIGHT,
+              inputs=[out_pos, out_col, hist_wp, sim_time, N, BLADES,
+                      TURB, SHEET, W_BURST, SPRITE_R0, FLUX_P, BRIGHT,
                       T_IN, IN_SHARE, HIST_N])
 
 
 def advance():
-    """The clock, the phase lock and the pitch. The sim time is the FRAME INDEX
-    times DT and never a wall clock, the propeller's azimuth is the same
-    theta(t) the kernel evaluates for a filament's birth -- which is what welds
-    every filament to the tip it was shed from -- and the pitch history is
-    stamped at the SAME frame index, so a seek and a walk see the same lever
-    positions in the same order.
+    """The clock, the phase lock and both levers. The sim time is the FRAME
+    INDEX times DT and never a wall clock, and the helm history is stamped at
+    the SAME frame index, so a seek and a walk see the same lever positions in
+    the same order.
 
-    The blades are set to beta_now here and the ring entry is written here, in
-    one place, on purpose: what the reader sees the blade doing this frame and
-    what the wake will remember about this frame are the same number."""
-    global sim_time, frame_no, beta_now
+    THETA IS INTEGRATED HERE AND ONLY HERE. The trapezoid rule, not Euler: with
+    omega linear in t (which is exactly what the spin-up ramp is) the trapezoid
+    is EXACT, so the ramp reproduces the closed form this function replaced to
+    the last bit and the shots stay comparable across the change. Euler would
+    have slipped a fifth of a radian by the top of the ramp -- invisible as
+    motion, fatal as a regression diff.
+
+    theta is wrapped into [0, 2pi) before it is stored. Only cos and sin ever
+    see it, so wrapping costs nothing, and it keeps a float32 ring from losing
+    a degree of resolution after an hour of a window being left open.
+
+    The blades are set here and the ring entry is written here, in one place,
+    on purpose: what the reader sees the propeller doing this frame and what
+    the wake will remember about this frame are the same numbers."""
+    global sim_time, frame_no, beta_now, rpm_now, omega_now, theta_now
     frame_no += 1
     sim_time = frame_no * DT
     if ui is None:
         beta_now = scheduled_beta(sim_time)
-    prop.rotation.x = prop_theta(sim_time)
+        rpm_now = scheduled_rps(sim_time) * 60.0
+        om = TWO_PI * rpm_now / 60.0
+    else:
+        # The slider commands a speed; the spin-up ramp still owns the first
+        # T_RAMP seconds of it, so the wake grows into existence rather than
+        # appearing whole on frame one.
+        om = TWO_PI * (rpm_now / 60.0) * ramp_frac(sim_time)
+    theta_now = (theta_now + 0.5 * (omega_now + om) * DT) % TWO_PI
+    omega_now = om
+    prop.rotation.x = theta_now
     set_pitch(beta_now)
-    hist_np[frame_no % HIST_N] = loading(beta_now)
-    hist_wp.assign(hist_np)          # 76 floats: ~300 B/frame, below measurable
+    hist_np[frame_no % HIST_N] = (loading(beta_now), omega_now, theta_now)
+    hist_wp.assign(hist_np)      # 3 x 76 floats: ~900 B/frame, below measurable
 
 
 def device_copy():
@@ -1227,16 +1340,25 @@ field.set_live_count(N)
 # the banner states the claim the demo exists to make rather than a guess: how
 # far ahead of the disc the outermost streamline starts, and how much wider than
 # the tip radius it is when it does.
-IN_D_MAX = U_DISC * T_IN / ((1.0 - IN_F) * IN_K + IN_F)
+# The mouth is quoted at the COMMANDED operating point and not at the
+# reference one, because both levers move it: the funnel's length is pinned to
+# the disc velocity, which now carries the throttle and the pitch.
+OPF = (RPS / RPS_REF) * math.sqrt(
+    U_FLOOR + (1.0 - U_FLOOR) * loading(PITCH)) / USC_DESIGN
+IN_D_MAX = U_DISC * OPF * T_IN / ((1.0 - IN_F) * IN_K + IN_F)
 IN_R_MOUTH = R_TIP * (1.0 + IN_FLARE_HI * (IN_LINES_R - 0.5) / IN_LINES_R * (
     1.0 / math.sqrt(1.0 - IN_D_MAX / math.hypot(IN_D_MAX, IN_RV)) - 1.0))
-print(f"       prop:   {BLADES} blades, R {R_TIP:g} m, {RPS:g} rev/s "
-      f"(ramp {T_RAMP:g} s), wake {LIFETIME:g} s\n"
+print(f"       prop:   {BLADES} blades, R {R_TIP:g} m, wake {LIFETIME:g} s\n"
+      f"       shaft:  {RPS * 60:g} rpm (ref {RPS_REF * 60:g}, "
+      f"ramp {T_RAMP:g} s)"
+      + (f" -> {RPS_TO * 60:g} rpm at t={RPS_AT:g} s" if RPS_AT < 1e8 else "")
+      + f", slipstream {U_WAKE * OPF:.2f} m/s, "
+      f"advance {(U_WAKE * OPF / RPS if RPS > 0 else 0):.2f} m/rev\n"
       f"       pitch:  beta {PITCH:g} deg (design {BETA_DESIGN:g}), "
       f"L {loading(PITCH):.2f}"
       + (f" -> {PITCH_TO:g} deg (L {loading(PITCH_TO):.2f}) at t={PITCH_AT:g} s"
          if PITCH_AT < 1e8 else "")
-      + f", history {HIST_N} frames = {HIST_N * DT:.2f} s\n"
+      + f", helm history {HIST_N} frames = {HIST_N * DT:.2f} s\n"
       f"       inflow: {IN_SHARE:.0%} of slots, {T_IN:g} s upstream "
       f"({T_IN / PERIOD:.0%} of the period), reaching {IN_D_MAX:.2f} m ahead of "
       f"the disc at {IN_R_MOUTH:.2f} m = {IN_R_MOUTH / R_TIP:.1f} x the tip radius\n"
@@ -1279,34 +1401,45 @@ else:
     controls.target.set(*CAM_T)
 
     def draw_ui():
-        """The helm. One slider, and everything else is a readout of what that
-        slider has already done -- there is nothing here to configure, only a
-        lever to pull and the consequences to watch."""
-        global beta_now
+        """The helm. Two levers, and everything else is a readout of what they
+        have already done -- there is nothing here to configure, only the pitch
+        and the throttle and the consequences to watch."""
+        global beta_now, rpm_now
         tp.imgui.set_next_window_pos(12, 12)
         tp.imgui.set_next_window_size(434, 0)
-        tp.imgui.begin("Controllable pitch")
+        tp.imgui.begin("Helm")
         _, beta_now = tp.imgui.slider_float("blade pitch (deg)", beta_now,
                                             BETA_MIN, BETA_MAX)
+        _, rpm_now = tp.imgui.slider_float("shaft speed (rpm)", rpm_now,
+                                           RPM_MIN, RPM_MAX)
         ld = loading(beta_now)
-        ofr = min(sim_time / T_RAMP, 1.0)
+        # Read the ACTUAL shaft state back out of the integrator rather than
+        # recomputing it from the sliders: during the spin-up the two differ,
+        # and the number that means anything is the one the wake was given.
+        omf = omega_now / OMEGA_REF
+        rpm = omega_now * 60.0 / TWO_PI
         usc = math.sqrt(U_FLOOR + (1.0 - U_FLOOR) * ld) / USC_DESIGN
+        uw = U_WAKE * omf * usc
         tp.imgui.text(f"beta   {beta_now:5.1f} deg at 0.7R   "
-                      f"(design {BETA_DESIGN:.0f})")
-        tp.imgui.text(f"thrust {ld:5.2f} of design   "
-                      f"slipstream {U_WAKE * ofr * usc:5.2f} m/s")
-        tp.imgui.text(f"shaft  {RPS * 60.0 * ofr:5.0f} rpm   "
-                      f"advance {(U_WAKE * usc / RPS if RPS > 0 else 0.0):5.2f} m/rev")
+                      f"(design {BETA_DESIGN:.0f})   thrust {ld:4.2f}")
+        tp.imgui.text(f"shaft  {rpm:5.0f} rpm   (ref {RPS_REF * 60:.0f})   "
+                      f"tip {omega_now * R_TIP:5.1f} m/s")
+        tp.imgui.text(f"wake   {uw:5.2f} m/s   "
+                      f"advance {(uw / (rpm / 60.0) if rpm > 1.0 else 0.0):5.2f} "
+                      f"m/rev   reach {uw * LIFETIME:4.1f} m")
         tp.imgui.text(f"{tp.imgui.get_framerate():5.0f} fps   "
-                      f"{N / 1e6:.1f} M parcels   t={sim_time:5.2f} s")
+                      f"{N / 1e6:.1f} M parcels   t={sim_time:6.2f} s")
         tp.imgui.separator()
         # The one thing to say about the lag, because it is the feature and it
         # looks like a bug for the half-second it takes to convect away.
-        tp.imgui.text("the blades twist NOW; the wake answers with history.")
-        tp.imgui.text(f"{LIFETIME:.2f} s of old slipstream keeps the pitch it")
-        tp.imgui.text(f"was shed under ({HIST_N}-frame ring), and the boundary")
-        tp.imgui.text("convects away. the funnel ahead of the disc does")
-        tp.imgui.text("not lag: a pressure field is not convected.")
+        tp.imgui.text("both levers move NOW; the wake answers with history.")
+        tp.imgui.text(f"{LIFETIME:.2f} s of old slipstream keeps the pitch AND")
+        tp.imgui.text(f"the speed it was shed under ({HIST_N}-frame ring), and")
+        tp.imgui.text("the boundary convects away. the funnel does not lag:")
+        tp.imgui.text("a pressure field is not convected.")
+        tp.imgui.text("advance/rev is a property of PITCH alone -- the")
+        tp.imgui.text("throttle changes how far the wake reaches, not its")
+        tp.imgui.text("loop spacing. that is what a screw does.")
         tp.imgui.end()
 
     def animate():
