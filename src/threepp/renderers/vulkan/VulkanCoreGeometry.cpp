@@ -2293,7 +2293,7 @@ void VulkanRenderer::Impl::recordDisplacedDeform(VkCommandBuffer cb, DisplacedMe
             // all), so a deferred upload changes nothing else.
             static const uint32_t kFoamInterval = [] {
                 const char* e = std::getenv("THREEPP_OCEAN_FOAM_INTERVAL");
-                const long v = e ? std::atol(e) : 1L;
+                const long v = e ? std::atol(e) : 2L;
                 return static_cast<uint32_t>(std::max(v, 1L));
             }();
             const bool runFoam = (st.foamTick++ % kFoamInterval) == 0u;
@@ -3545,13 +3545,29 @@ VulkanRenderer::Impl::DisplacedMeshState* VulkanRenderer::Impl::ensureDisplacedS
             // old density. R32F storage so both compute imageLoad/Store and
             // chit linear sampling work without format conversions.
             {
+                // THREEPP_OCEAN_FOAM_RES caps the foam accumulator's edge (power
+                // of two). Raise it to 2048 to restore the pre-cap density on a
+                // large ocean; see the cost note below.
+                static const uint32_t kFoamResCap = [] {
+                    const char* e = std::getenv("THREEPP_OCEAN_FOAM_RES");
+                    const long v = e ? std::atol(e) : 1024L;
+                    return static_cast<uint32_t>(std::clamp(v, 256L, 2048L));
+                }();
                 static const float kFoamTexelTarget = [] {
                     const char* e = std::getenv("THREEPP_OCEAN_FOAM_TEXEL");
                     const float v = e ? static_cast<float>(std::atof(e)) : 1.0f;
                     return v > 0.f ? v : 1.0f;
                 }();
+                // Cap by COST, not by texture size. The loop below targets a
+                // fixed texel SIZE, so the dispatch grows with tile AREA: the
+                // fjord's 3200 m cascade-0 tile hit the old 2048 ceiling at
+                // 4.2 M texels/frame (2.5-3.0 ms) while a 500 m ocean bought
+                // the same visual density for ~1/40th. 2048 read as "largest
+                // sane texture"; what actually matters is the dispatch cost,
+                // and 1024^2 = 1 M texels lands at ~0.9 ms. Small oceans never
+                // reach the cap, so this changes nothing for them.
                 uint32_t foamRes = 256u;
-                while (foamRes < 2048u && float(foamRes) * kFoamTexelTarget < dm.params.tileSize0)
+                while (foamRes < kFoamResCap && float(foamRes) * kFoamTexelTarget < dm.params.tileSize0)
                     foamRes *= 2u;
                 state->foamRes      = foamRes;
                 state->foamTileSize = dm.params.tileSize0;
