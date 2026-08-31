@@ -412,8 +412,8 @@ def blade_geometry(stations=14, around=10):
             # blade vertex a normal pointing into the solid, N.L is negative on
             # the face the camera can see, and the blade shades black no matter
             # what light you put on it. That, not the material, is why this
-            # demo's prop was a silhouette -- the hub and spinner are stock
-            # primitives with correct windings and they were always lit. Along
+            # demo's prop was a silhouette -- the hub is a stock primitive
+            # with correct windings and it was always lit. Along
             # the ring, increasing j sweeps from the chord's +Z edge toward +X,
             # so (a0, b1, a1) is the order whose cross product points OUT.
             idx += [a0, b1, a1, a0, b0, b1]
@@ -485,10 +485,6 @@ prop = tp.Group()
 hub = tp.Mesh(tp.CylinderGeometry(0.135, 0.155, 0.30, 28), metal)
 hub.rotate_z(math.pi / 2)                    # the cylinder's own axis is Y
 prop.add(hub)
-spinner = tp.Mesh(tp.ConeGeometry(0.135, 0.22, 28), metal)
-spinner.rotate_z(-math.pi / 2)               # nose into the inflow, -X
-spinner.position.set(-0.26, 0, 0)
-prop.add(spinner)
 bg = blade_geometry()
 for b in range(BLADES):
     blade = tp.Mesh(bg, metal)
