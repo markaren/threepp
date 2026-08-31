@@ -8,7 +8,7 @@ import numpy.typing
 import typing
 from . import editor
 from . import imgui
-__all__: list[str] = ['AmbientLight', 'AnimationAction', 'AnimationBlendMode', 'AnimationClip', 'AnimationMixer', 'Approach', 'ArrowHelper', 'Articulation', 'ArticulationLink', 'Audio', 'AudioDistanceModel', 'AudioListener', 'AxesHelper', 'Background', 'BarkStyle', 'BirdPlumage', 'BirdRole', 'BirdShape', 'BirdState', 'Blending', 'Blob', 'Box3', 'Box3Helper', 'BoxGeometry', 'BoxHelper', 'BranchingMode', 'BufferGeometry', 'Camera', 'CameraHelper', 'Canvas', 'CapsuleGeometry', 'CatmullRomCurve3', 'CircleGeometry', 'Clock', 'Cluster', 'Colonise', 'Color', 'ColorKeyframeTrack', 'ColorSpace', 'CombineOperation', 'Cone', 'ConeGeometry', 'ContactPoint', 'ContactSample', 'ContactSensor', 'ConvexGeometry', 'CrossQuad', 'CrownShape', 'Cruise', 'Cylinder', 'CylinderGeometry', 'DepthPacking', 'DepthSensor', 'DirectionalLight', 'DirectionalLightHelper', 'DisplacedMesh', 'EXPONENTIAL', 'EXRLoader', 'Ellipsoid', 'ErosionType', 'Euler', 'Evade', 'FBXLoader', 'Filter', 'Flare', 'Flock', 'FlockParams', 'Fog', 'FogExp2', 'Follower', 'Font', 'FontLoader', 'ForceTorqueSensor', 'FrameChannel', 'Frond', 'Furrowed', 'GLRenderer', 'GLTFLoader', 'GLTFResult', 'Gait', 'GrassMesh', 'GridHelper', 'Group', 'HAS_AUDIO', 'HAS_IMGUI', 'HAS_PHYSX', 'HAS_VULKAN', 'Hemisphere', 'HemisphereLight', 'HemisphereLightHelper', 'Hop', 'HorizontalAlignment', 'INVERSE', 'IcosahedronGeometry', 'IcpOptions', 'IcpResult', 'IkOptions', 'IkResult', 'IkSolver', 'IkTask', 'ImguiContext', 'Imu', 'ImuSample', 'InstancedMesh', 'Interpolation', 'IsoMesh', 'Joint', 'JointEncoder', 'JointInfo', 'JointRange', 'JointSample', 'JointType', 'KeyframeTrack', 'LINEAR', 'Lanceolate', 'Launch', 'Leader', 'LeafShape', 'LeafStyle', 'LidarBeam', 'LidarModel', 'LidarParams', 'LidarReturn', 'Light', 'Line', 'LineBasicMaterial', 'LineSegments', 'Lobed', 'Loner', 'Loop', 'Mapping', 'Material', 'Matrix3', 'Matrix4', 'Mesh', 'MeshBasicMaterial', 'MeshDepthMaterial', 'MeshLambertMaterial', 'MeshNormalMaterial', 'MeshPhongMaterial', 'MeshPhysicalMaterial', 'MeshStandardMaterial', 'ModelLoader', 'NONE', 'NoiseModel', 'NoiseType', 'NumberKeyframeTrack', 'OBJLoader', 'Object3D', 'Ocean', 'OctahedronGeometry', 'OrbitControls', 'OrthographicCamera', 'Ovate', 'Papery', 'ParticleField', 'PathTracedLidarSensor', 'Perched', 'PerspectiveCamera', 'PhysxGpuBatch', 'PhysxMaterial', 'PhysxSoftBodyMaterial', 'PhysxWorld', 'PlaneGeometry', 'Plated', 'PointLight', 'PointLightHelper', 'Points', 'PointsMaterial', 'PolarGridHelper', 'PositionalAudio', 'Quad', 'Quaternion', 'QuaternionKeyframeTrack', 'RGBELoader', 'RangeNoiseModel', 'RectAreaLight', 'RigidBody', 'RingGeometry', 'Robot', 'RotationOrder', 'STLLoader', 'SVGLoader', 'ScalarField', 'Scene', 'Sensor', 'Serrate', 'ShadowMaterial', 'Side', 'SkeletonHelper', 'SoftBody', 'Sphere', 'SphereGeometry', 'SplatCloud', 'SplatData', 'SplatLoader', 'SpotLight', 'SpotLightHelper', 'Sprite', 'SpriteMaterial', 'TerrainFalloff', 'TerrainGenerator', 'TerrainParams', 'Text2D', 'Text3D', 'TextSprite', 'Texture', 'TextureLoader', 'TextureWrapping', 'ToneMapping', 'TorusGeometry', 'TorusKnotGeometry', 'TransformControls', 'TreeGenerator', 'TreeParams', 'URDFLoader', 'Vector2', 'Vector3', 'Vector4', 'VectorKeyframeTrack', 'VerticalAlignment', 'VoxelGrid', 'VulkanRenderer', 'Walk', 'Whorl', 'WrenchSample', 'apply_terrain_preset', 'apply_tree_preset', 'clamp', 'damp', 'data_texture', 'deg_to_rad', 'editor', 'euclidean_modulo', 'float_texture', 'generate_uuid', 'icp_point_to_point', 'imgui', 'inverse_lerp', 'is_power_of_two', 'iso_mesh_to_geometry', 'lerp', 'make_bark_textures', 'make_flower_texture', 'make_leaf_texture', 'make_needle_frond_texture', 'map_linear', 'marching_cubes', 'merge_buffer_geometries', 'merge_vertices', 'rad_to_deg', 'rand_float', 'rand_float_range', 'rand_float_spread', 'rand_int', 'rotate_equirect', 'simplify_geometry', 'splat_points_to_field', 'terrain_from_json', 'terrain_load_config', 'terrain_save_config', 'terrain_to_json', 'voxel_downsample', 'vulkan_available', 'vulkan_validation_active', 'vulkan_validation_error_count', 'write_wav']
+__all__: list[str] = ['AmbientLight', 'AnimationAction', 'AnimationBlendMode', 'AnimationClip', 'AnimationMixer', 'Approach', 'ArrowHelper', 'Articulation', 'ArticulationLink', 'Audio', 'AudioDistanceModel', 'AudioListener', 'AxesHelper', 'Background', 'BarkStyle', 'BirdPlumage', 'BirdRole', 'BirdShape', 'BirdState', 'Blending', 'Blob', 'Box3', 'Box3Helper', 'BoxGeometry', 'BoxHelper', 'BranchingMode', 'BufferGeometry', 'Camera', 'CameraHelper', 'Canvas', 'CapsuleGeometry', 'CatmullRomCurve3', 'CircleGeometry', 'Clock', 'Cluster', 'Colonise', 'Color', 'ColorKeyframeTrack', 'ColorSpace', 'CombineOperation', 'Cone', 'ConeGeometry', 'ContactPoint', 'ContactSample', 'ContactSensor', 'ConvexGeometry', 'CrossQuad', 'CrownShape', 'Cruise', 'Cylinder', 'CylinderGeometry', 'DepthPacking', 'DepthSensor', 'DirectionalLight', 'DirectionalLightHelper', 'DisplacedMesh', 'EXPONENTIAL', 'EXRLoader', 'Ellipsoid', 'ErosionType', 'Euler', 'Evade', 'FBXLoader', 'Filter', 'Flare', 'Flock', 'FlockParams', 'Fog', 'FogExp2', 'Follower', 'Font', 'FontLoader', 'ForceTorqueSensor', 'FrameChannel', 'Frond', 'Furrowed', 'GLRenderer', 'GLTFLoader', 'GLTFResult', 'Gait', 'GrassMesh', 'GridHelper', 'Group', 'HAS_AUDIO', 'HAS_IMGUI', 'HAS_PHYSX', 'HAS_VULKAN', 'Hemisphere', 'HemisphereLight', 'HemisphereLightHelper', 'Hop', 'HorizontalAlignment', 'INVERSE', 'IcosahedronGeometry', 'IcpOptions', 'IcpResult', 'IkOptions', 'IkResult', 'IkSolver', 'IkTask', 'ImguiContext', 'Imu', 'ImuSample', 'InstancedMesh', 'Interpolation', 'IsoMesh', 'Joint', 'JointEncoder', 'JointInfo', 'JointRange', 'JointSample', 'JointType', 'KeyframeTrack', 'LINEAR', 'Lanceolate', 'Launch', 'Leader', 'LeafShape', 'LeafStyle', 'LidarBeam', 'LidarModel', 'LidarParams', 'LidarReturn', 'Light', 'Line', 'LineBasicMaterial', 'LineSegments', 'Lobed', 'Loner', 'Loop', 'Mapping', 'Material', 'Matrix3', 'Matrix4', 'Mesh', 'MeshBasicMaterial', 'MeshDepthMaterial', 'MeshLambertMaterial', 'MeshNormalMaterial', 'MeshPhongMaterial', 'MeshPhysicalMaterial', 'MeshStandardMaterial', 'ModelLoader', 'NONE', 'NoiseModel', 'NoiseType', 'NumberKeyframeTrack', 'OBJLoader', 'Object3D', 'Ocean', 'OctahedronGeometry', 'OrbitControls', 'OrthographicCamera', 'Ovate', 'Papery', 'ParticleField', 'PathTracedLidarSensor', 'Perched', 'PerspectiveCamera', 'PhysxGpuBatch', 'PhysxMaterial', 'PhysxSoftBodyMaterial', 'PhysxVehicle', 'PhysxWorld', 'PlaneGeometry', 'Plated', 'PointLight', 'PointLightHelper', 'Points', 'PointsMaterial', 'PolarGridHelper', 'PositionalAudio', 'Quad', 'Quaternion', 'QuaternionKeyframeTrack', 'RGBELoader', 'RangeNoiseModel', 'RectAreaLight', 'RigidBody', 'RingGeometry', 'Robot', 'RotationOrder', 'STLLoader', 'SVGLoader', 'ScalarField', 'Scene', 'Sensor', 'Serrate', 'ShadowMaterial', 'Side', 'SkeletonHelper', 'SoftBody', 'Sphere', 'SphereGeometry', 'SplatCloud', 'SplatData', 'SplatLoader', 'SpotLight', 'SpotLightHelper', 'Sprite', 'SpriteMaterial', 'TerrainFalloff', 'TerrainGenerator', 'TerrainParams', 'Text2D', 'Text3D', 'TextSprite', 'Texture', 'TextureLoader', 'TextureWrapping', 'ToneMapping', 'TorusGeometry', 'TorusKnotGeometry', 'TransformControls', 'TreeGenerator', 'TreeParams', 'URDFLoader', 'Vector2', 'Vector3', 'Vector4', 'VectorKeyframeTrack', 'VerticalAlignment', 'VoxelGrid', 'VulkanRenderer', 'Walk', 'Whorl', 'WrenchSample', 'apply_terrain_preset', 'apply_tree_preset', 'clamp', 'damp', 'data_texture', 'deg_to_rad', 'editor', 'euclidean_modulo', 'float_texture', 'generate_uuid', 'icp_point_to_point', 'imgui', 'inverse_lerp', 'is_power_of_two', 'iso_mesh_to_geometry', 'lerp', 'make_bark_textures', 'make_flower_texture', 'make_leaf_texture', 'make_needle_frond_texture', 'map_linear', 'marching_cubes', 'merge_buffer_geometries', 'merge_vertices', 'rad_to_deg', 'rand_float', 'rand_float_range', 'rand_float_spread', 'rand_int', 'rotate_equirect', 'simplify_geometry', 'splat_points_to_field', 'terrain_from_json', 'terrain_load_config', 'terrain_save_config', 'terrain_to_json', 'voxel_downsample', 'vulkan_available', 'vulkan_validation_active', 'vulkan_validation_error_count', 'write_wav']
 class AmbientLight(Light):
     def __init__(self, color: Color = ..., intensity: typing.SupportsFloat | typing.SupportsIndex = 1.0) -> None:
         ...
@@ -4372,22 +4372,6 @@ class MeshPhysicalMaterial(MeshStandardMaterial):
     def dispersion(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
         ...
     @property
-    def specular_intensity(self) -> float:
-        """
-        Scales dielectric F0 linearly; 0 kills the specular lobe (direct and environment) entirely. Default 1.
-        """
-    @specular_intensity.setter
-    def specular_intensity(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
-        ...
-    @property
-    def specular_color(self) -> Color:
-        """
-        Tints dielectric F0; applied together with specular_intensity.
-        """
-    @specular_color.setter
-    def specular_color(self, arg0: Color) -> None:
-        ...
-    @property
     def ior(self) -> float:
         ...
     @ior.setter
@@ -4410,6 +4394,22 @@ class MeshPhysicalMaterial(MeshStandardMaterial):
         ...
     @iridescence_thickness_nm.setter
     def iridescence_thickness_nm(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def specular_color(self) -> Color:
+        """
+        Tints dielectric F0; applied together with specular_intensity.
+        """
+    @specular_color.setter
+    def specular_color(self, arg0: Color) -> None:
+        ...
+    @property
+    def specular_intensity(self) -> float:
+        """
+        Scales dielectric F0 linearly; 0 kills the specular lobe (direct and environment) entirely. Default 1.
+        """
+    @specular_intensity.setter
+    def specular_intensity(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
         ...
     @property
     def thickness(self) -> float:
@@ -4819,6 +4819,14 @@ class ParticleField(Mesh):
         def color_hot(self, arg0: Color) -> None:
             ...
         @property
+        def core_weight(self) -> float:
+            """
+            Weight of the fixed 1-2 px core dot under the softness-shaped skirt. 0.85 (the default) is the pre-knob look; big soft smoke parcels set ~0 so a dense field stops speckling.
+            """
+        @core_weight.setter
+        def core_weight(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+            ...
+        @property
         def fade_power(self) -> float:
             """
             Brightness over life: (1 - age_frac)^fade_power. 0 = no fade (rain).
@@ -4970,9 +4978,48 @@ class ParticleField(Mesh):
         @texture.setter
         def texture(self, arg0: Texture) -> None:
             ...
+        @property
+        def volume_ambient(self) -> float:
+            """
+            Floor under the sun term, so the shadowed side of the volume does not go black. Only read when volume_shadow > 0.
+            """
+        @volume_ambient.setter
+        def volume_ambient(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+            ...
+        @property
+        def volume_extinction(self) -> float:
+            """
+            Dim each sprite by the transmittance of the field's OWN DensityRepr volume between it and the camera, as pow(T_cam, this). 1 is the physically honest answer; >1 is a 'more dust' grade that does not disturb sigma_per_particle (which the deferred fog march also reads). 0 is an EXACT no-op — the shader takes a uniform branch around the march. This is what puts DUST LANES across a nebula: additive blending is orderless and therefore carries zero occlusion information, and this is the occlusion, from the medium the same particles collectively are. Needs DensityRepr on.
+            """
+        @volume_extinction.setter
+        def volume_extinction(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+            ...
+        @property
+        def volume_shadow(self) -> float:
+            """
+            Mix each sprite toward T_sun * (volume_ambient + volume_sun_gain * HG(V.L)) — the transmittance from the sprite to the sun through the same volume, times one phase lobe. 0 = unshadowed (the pre-change look and an exact no-op), 1 = fully replace. This is the LIT RIM and the self-shadowed interior. Needs DensityRepr on.
+            """
+        @volume_shadow.setter
+        def volume_shadow(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+            ...
+        @property
+        def volume_sun_gain(self) -> float:
+            """
+            Scale on the sun's own contribution through T_sun. Unitless — it multiplies the HG lobe (whose asymmetry is lit_phase_g), not a radiance, because the sprite's colour already IS its radiance.
+            """
+        @volume_sun_gain.setter
+        def volume_sun_gain(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+            ...
     class Config:
-        attributes: bool
         def __init__(self) -> None:
+            ...
+        @property
+        def attributes(self) -> bool:
+            """
+            Allocate the per-particle vec4 appearance buffer (rgb = linear HDR radiance, a reserved). It rides the POSITIONS' path exactly: under Ownership.Interop it is a second exported allocation handed back by the same enable_particle_field_interop call and snapshotted by the same per-frame copy, so positions and colours can never diverge. With it on, BillboardRepr uses attribute.rgb INSTEAD of the color_hot/color_cool ramp — one scheme or the other, never a blend.
+            """
+        @attributes.setter
+        def attributes(self, arg0: bool) -> None:
             ...
         @property
         def capacity(self) -> int:
@@ -5437,6 +5484,14 @@ class ParticleField(Mesh):
         """
     def __repr__(self) -> str:
         ...
+    def set_attributes(self, rgba: typing.Annotated[numpy.typing.ArrayLike, numpy.float32]) -> None:
+        """
+        Per-particle appearance as (n, 4) float32 (r, g, b, a): rgb is LINEAR HDR radiance in the same domain BillboardRepr.color_hot is authored in, a is reserved for the phase-2 alpha-over opacity. Requires Config.attributes.
+        
+        WRITE-ONCE by contract, exactly like set_orientations: the device buffer is not ringed, so rewriting it while frames are in flight is a host write to memory the GPU may be reading. A sim that needs colours EVERY frame wants the interop leg — enable_particle_field_interop hands back a second handle for this buffer and the foreign kernel writes it device-to-device.
+        
+        THROWS on an Ownership.Interop field that is not in host_fallback().
+        """
     def set_billboard_repr(self, hot: Color, cool: Color, intensity: typing.SupportsFloat | typing.SupportsIndex = 1.0, size_scale: typing.SupportsFloat | typing.SupportsIndex = 1.0) -> None:
         """
         Draw every live particle as one camera-facing ADDITIVE quad, composited after the upscalers (so it is outside TAA and is NOT exposed by auto-exposure — scale intensity with the scene exposure by hand). Vulkan only.
@@ -5681,6 +5736,14 @@ class PhysxGpuBatch:
         """
         Overwrite ALL joints' velocities from the [n, max_dofs] float32 cuda tensor (full-batch reset).
         """
+    def write_link_force(self, tensor: typing.Any) -> None:
+        """
+        Apply an external force (N) to every link, from the [n, max_links, 3] float32 cuda tensor, in WORLD coordinates at each link's centre of mass. This is the only way to push a batched robot: ArticulationLink.add_force is a CPU-path call and PhysX rejects it outright under direct-GPU. Forces are consumed by the next step and cleared, so re-apply every substep you want them to act on — a random shove is one substep of impulse/dt on the base link.
+        """
+    def write_link_torque(self, tensor: typing.Any) -> None:
+        """
+        Apply an external torque (N*m) to every link, from the [n, max_links, 3] float32 cuda tensor, in WORLD coordinates. Cleared after each step, like write_link_force.
+        """
     def write_subset_joint_pos(self, src: typing.Any, indices: typing.Any) -> None:
         ...
     def write_subset_joint_vel(self, src: typing.Any, indices: typing.Any) -> None:
@@ -5753,6 +5816,141 @@ class PhysxSoftBodyMaterial:
         ...
     @young.setter
     def young(self, arg1: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+class PhysxVehicle:
+    """
+    A drivable 4-wheel vehicle (PxVehicle2 direct drive) in a PhysxWorld. Feed it throttle/brake/steer each frame and copy its chassis + wheel poses onto your visuals; it advances itself inside world.step(dt). Valid only while its world lives. Wheel indices: 0=front-right, 1=front-left, 2=rear-right, 3=rear-left.
+    """
+    class Gear:
+        """
+        Members:
+        
+          REVERSE
+        
+          NEUTRAL
+        
+          FORWARD
+        """
+        FORWARD: typing.ClassVar[PhysxVehicle.Gear]  # value = <Gear.FORWARD: 2>
+        NEUTRAL: typing.ClassVar[PhysxVehicle.Gear]  # value = <Gear.NEUTRAL: 1>
+        REVERSE: typing.ClassVar[PhysxVehicle.Gear]  # value = <Gear.REVERSE: 0>
+        __members__: typing.ClassVar[dict[str, PhysxVehicle.Gear]]  # value = {'REVERSE': <Gear.REVERSE: 0>, 'NEUTRAL': <Gear.NEUTRAL: 1>, 'FORWARD': <Gear.FORWARD: 2>}
+        def __eq__(self, other: typing.Any) -> bool:
+            ...
+        def __getstate__(self) -> int:
+            ...
+        def __hash__(self) -> int:
+            ...
+        def __index__(self) -> int:
+            ...
+        def __init__(self, value: typing.SupportsInt | typing.SupportsIndex) -> None:
+            ...
+        def __int__(self) -> int:
+            ...
+        def __ne__(self, other: typing.Any) -> bool:
+            ...
+        def __repr__(self) -> str:
+            ...
+        def __setstate__(self, state: typing.SupportsInt | typing.SupportsIndex) -> None:
+            ...
+        def __str__(self) -> str:
+            ...
+        @property
+        def name(self) -> str:
+            ...
+        @property
+        def value(self) -> int:
+            ...
+    def __init__(self, world: PhysxWorld, chassis_width: typing.SupportsFloat | typing.SupportsIndex = 1.9500000476837158, chassis_height: typing.SupportsFloat | typing.SupportsIndex = 1.399999976158142, chassis_length: typing.SupportsFloat | typing.SupportsIndex = 4.400000095367432, chassis_mass: typing.SupportsFloat | typing.SupportsIndex = 1500.0, wheelbase: typing.SupportsFloat | typing.SupportsIndex = 2.6600000858306885, track_width: typing.SupportsFloat | typing.SupportsIndex = 1.649999976158142, wheel_radius: typing.SupportsFloat | typing.SupportsIndex = 0.4000000059604645, wheel_half_width: typing.SupportsFloat | typing.SupportsIndex = 0.15000000596046448, wheel_mass: typing.SupportsFloat | typing.SupportsIndex = 25.0, driven_wheels: typing.Annotated[collections.abc.Sequence[bool], "FixedSize(4)"] = [True, True, True, True], max_throttle_torque: typing.SupportsFloat | typing.SupportsIndex = 1500.0, max_brake_torque: typing.SupportsFloat | typing.SupportsIndex = 5000.0, max_steer_angle: typing.SupportsFloat | typing.SupportsIndex = 0.6000000238418579, tire_friction: typing.SupportsFloat | typing.SupportsIndex = 2.0, longitudinal_stiffness: typing.SupportsFloat | typing.SupportsIndex = 100000.0, lateral_stiffness: typing.SupportsFloat | typing.SupportsIndex = 80000.0, suspension_travel: typing.SupportsFloat | typing.SupportsIndex = 0.30000001192092896, suspension_stiffness: typing.SupportsFloat | typing.SupportsIndex = 35000.0, suspension_damping: typing.SupportsFloat | typing.SupportsIndex = 4500.0, suspension_attachment_y: typing.SupportsFloat | typing.SupportsIndex = -0.4000000059604645, wheel_damping_rate: typing.SupportsFloat | typing.SupportsIndex = 1.5, position: Vector3 = ..., rotation: Quaternion = ...) -> None:
+        """
+        Spawn a vehicle in `world`. Defaults are the Range Rover Evoque tuning of the C++ demo: 4WD direct drive, tire_friction 2.0 (dry asphalt). Dimensions are the chassis box PhysX simulates — match them to whatever body you draw on top. driven_wheels selects which wheels take throttle torque, in wheel-index order.
+        """
+    def add_force_at_pos(self, force: Vector3, world_pos: Vector3) -> None:
+        """
+        Apply a continuous force (N) to the chassis at a world-space point — the way to add something PhysX's vehicle knows nothing about, e.g. the bulldozing drag of a wheel ploughing through soil. Consumed by the next step().
+        """
+    def clear_road_override(self, wheel: typing.SupportsInt | typing.SupportsIndex) -> None:
+        """
+        Give this wheel back to the scene query (the rigid fallback).
+        """
+    def respawn(self, position: Vector3, rotation: Quaternion = ...) -> None:
+        """
+        Teleport the chassis and kill its velocities (the wheels keep spinning down on their own). The suspension re-settles over the next few steps.
+        """
+    def road_override_active(self, wheel: typing.SupportsInt | typing.SupportsIndex) -> bool:
+        ...
+    def set_brake(self, value: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        """
+        Brake, 0..1 (all four wheels).
+        """
+    def set_road_override(self, wheel: typing.SupportsInt | typing.SupportsIndex, height: typing.SupportsFloat | typing.SupportsIndex, mu: typing.SupportsFloat | typing.SupportsIndex, v_road: typing.SupportsFloat | typing.SupportsIndex = 0.0) -> None:
+        """
+        Hand this wheel's suspension a road of your own instead of what the PhysX scene query found: a horizontal plane at world y=`height` with friction `mu`. Set it per wheel, per frame, from whatever ground model you own — e.g. terrain grade minus the soil's equilibrium sinkage, so the wheel rides IN the ground by exactly the sinkage the load dictates, with mu from Mohr-Coulomb rather than the tire_friction ceiling. On a road PROFILE also pass `v_road`, the surface's vertical velocity under the wheel (v * slope, m/s, +up) — it reaches the tire slip terms. NOTE (probe-verified, PhysX 5.x): the suspension damper IGNORES it and still measures against a static plane, so suspension_force() reads biased low by damping*v_road on grades while the limit constraint quietly carries the difference; see the header for why compensating externally makes it worse. Everything else about the vehicle is untouched.
+        """
+    def set_steer(self, value: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        """
+        Steer, -1..1 (front wheels; 1 = max_steer_angle to the right).
+        """
+    def set_throttle(self, value: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        """
+        Throttle, 0..1. Direct drive: torque straight to the driven wheels.
+        """
+    def suspension_force(self, wheel: typing.SupportsInt | typing.SupportsIndex) -> float:
+        """
+        Wheel load (N): the magnitude of the suspension force this wheel puts into the chassis. On level ground the four sum to the chassis weight and redistribute under braking/cornering — this is the W a soil model wants for sinkage and grip.
+        """
+    def suspension_jounce(self, wheel: typing.SupportsInt | typing.SupportsIndex) -> float:
+        """
+        Suspension compression (m): 0 = full droop, suspension_travel = bottomed out.
+        """
+    def suspension_jounce_speed(self, wheel: typing.SupportsInt | typing.SupportsIndex) -> float:
+        """
+        Compression rate (m/s) — spikes on landings and curb strikes.
+        """
+    def tire_lateral_slip(self, wheel: typing.SupportsInt | typing.SupportsIndex) -> float:
+        """
+        Lateral slip (≈ tan of the slip angle; 0.1 ≈ 6° of drift).
+        """
+    def tire_longitudinal_slip(self, wheel: typing.SupportsInt | typing.SupportsIndex) -> float:
+        """
+        Longitudinal slip ratio: 0 = pure rolling, +1 = the wheel spinning up under a stationary car, -1 = locked. The wheelspin readout.
+        """
+    def wheel_angular_speed(self, wheel: typing.SupportsInt | typing.SupportsIndex) -> float:
+        """
+        Wheel spin rate (rad/s).
+        """
+    def wheel_grounded(self, wheel: typing.SupportsInt | typing.SupportsIndex) -> bool:
+        """
+        True while this wheel has ground within suspension reach.
+        """
+    def wheel_local_pose(self, wheel: typing.SupportsInt | typing.SupportsIndex) -> tuple[Vector3, Quaternion]:
+        """
+        (position, quaternion) of the wheel in CHASSIS space — steer, suspension travel and spin included. Put your wheel visual under the chassis group and assign both.
+        """
+    def wheel_rotation_angle(self, wheel: typing.SupportsInt | typing.SupportsIndex) -> float:
+        """
+        Wheel spin angle (radians, wrapped to ±2π).
+        """
+    @property
+    def forward_speed(self) -> float:
+        """
+        Speed along the chassis forward axis (m/s); negative in reverse.
+        """
+    @property
+    def gear(self) -> PhysxVehicle.Gear:
+        """
+        Gear.FORWARD / Gear.NEUTRAL / Gear.REVERSE. Direct drive has no gearbox — this only picks the sign of the drive torque.
+        """
+    @gear.setter
+    def gear(self, arg1: PhysxVehicle.Gear) -> None:
+        ...
+    @property
+    def position(self) -> Vector3:
+        """
+        Chassis center, world space. Copy onto your visual each frame.
+        """
+    @property
+    def quaternion(self) -> Quaternion:
         ...
 class PhysxWorld:
     """
@@ -7772,7 +7970,7 @@ class VulkanRenderer:
         """
         Export an Ownership.Interop ParticleField's positions allocation and arm the per-frame device-to-device copy that fills it.
         
-        Returns (os_handle, size_bytes), or None when the device has no external-memory extension — in which case the field is left in host_fallback() and submit() is legal on it, so the caller drops to the HostRing path rather than failing.
+        Returns (os_handle, size_bytes) — or, when the field was created with Config.attributes, (os_handle, size_bytes, attr_handle, attr_size_bytes): the second allocation is the per-particle vec4 appearance buffer (rgb = linear HDR radiance), imported and written exactly like the positions and snapshotted by the same per-frame copy. Or None when the device has no external-memory extension — in which case the field is left in host_fallback() and submit() is legal on it, so the caller drops to the HostRing path rather than failing.
         
         CALL IT AFTER THE FIRST render(): the field's device state and this renderer's field pass are both created on the frame the field is first seen, so this returns None until then — render once, then enable.
         
@@ -7797,7 +7995,7 @@ class VulkanRenderer:
         The handles are OS handles owned by the RENDERER (Win32 NT handles on Windows): import them, but never CloseHandle them from Python — disable_vertex_interop / renderer teardown releases them. The layout is tightly-packed float xyz (12-byte stride, wp.vec3), and *_bytes is the ALLOCATION size, which may exceed count*12 — write only the real range.
         
         validate=True (default) runs a GPU finiteness pass over the exported positions each frame, rewriting non-finite vertices as degenerates. Leave it on unless the producer is trusted: a NaN reaching the BLAS build is a device-lost (GPU reset) on NVIDIA, not an error return.
-
+        
         stable_correspondence=True (default) means vertex i is the SAME surface point every frame (a deforming fixed-topology mesh — cloth, a soft body); per-vertex motion vectors then come from the previous frame's positions. Pass False for a producer that RE-TRIANGULATES each frame (a marching-cubes soup: one changed cell shifts every later vertex slot) — that history is noise there, so the mesh reprojects as world-static and the temporal passes (TAA/upscaler, reflection denoiser) stop flickering on the regions that changed.
         """
     def frame_interop_active(self, view: typing.SupportsInt | typing.SupportsIndex = 0) -> bool:
