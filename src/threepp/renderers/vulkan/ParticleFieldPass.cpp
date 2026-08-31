@@ -1659,6 +1659,8 @@ void ParticleFieldPass::prepareFrame(std::uint64_t serial, std::uint32_t frame,
             bp.stretchMax    = std::max(bb.stretchMax, 0.f);
             bp.intensity     = std::max(bb.intensity, 0.f);
             bp.softness      = std::max(0.f, std::min(1.f, bb.softness));
+            bp.coreWeight    = std::max(bb.coreWeight, 0.f);
+            bp.pad0          = 0.f;
             bp.fadePower     = std::max(bb.fadePower, 0.f);
             bp.brightJitter  = std::max(0.f, std::min(1.f, bb.brightJitter));
             bp.sizeTaper     = std::max(0.f, std::min(1.f, bb.sizeTaper));

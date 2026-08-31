@@ -115,6 +115,8 @@ layout(buffer_reference, scalar, buffer_reference_align = 16) readonly buffer Bb
     // particlefield_transmit.comp just before this view's draws. 0 when the
     // field marches nothing, which is exactly when kBbVolume is clear.
     uint64_t transAddr;
+    float    coreWeight;    // weight of the falloff's t^9 core; 0.85 = the old constant
+    float    pad0;
 };
 // BbParams::flags bits.
 const uint kBbRadiusInW = 1u;
@@ -213,7 +215,7 @@ layout(push_constant, scalar) uniform Pc {
 
 layout(location = 0) out vec2  vLocal;// [-1,1]^2 parametric square
 layout(location = 1) out vec4  vColor;// rgb = linear HDR radiance, a = coverage
-layout(location = 2) out float vSoft;
+layout(location = 2) out vec2  vSoft; // x = softness, y = core-term weight
 // F4: the display transform travels with the vertex now that it lives in the
 // per-view record rather than the push block — the fragment stage would
 // otherwise have to dereference the same buffer_reference per FRAGMENT to read
@@ -638,7 +640,7 @@ void main() {
     const float ra = rnd01(pi, 31u, P.seed) * 6.2831853;
     vRot = alphaOver ? vec2(cos(ra), sin(ra)) : vec2(1.0, 0.0);
     vLocal = c;
-    vSoft  = clamp(P.softness, 0.0, 1.0);
+    vSoft  = vec2(clamp(P.softness, 0.0, 1.0), max(P.coreWeight, 0.0));
     // The display transform. In the glow pass the fragment stage must NOT apply
     // it: that target is linear HDR, which is the domain the bright pass and the
     // 13-tap downsample are defined in. Signalled by a negative exposure rather

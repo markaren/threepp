@@ -264,6 +264,18 @@ namespace threepp {
 
             // 0 = a tight spark, 1 = a broad glow. Shapes the radial falloff.
             float softness = 0.45f;
+            // Weight of the fixed tight core term (t^9) the falloff adds under
+            // the softness-shaped skirt. The core is what keeps a few-pixel
+            // ember from reading as a soft blob — but it plants a 1-2 px hard
+            // dot at every sprite's centre REGARDLESS of drawn radius, and in
+            // a dense field of big soft smoke sprites those dots are speckle
+            // that only averages away at particle counts fill-rate cannot
+            // afford (measured: the prop-wash far wake mottles at 2M and needs
+            // 5M to smooth with the core on). Softness deliberately does not
+            // reach this term, so a field of large parcels turns it down here.
+            // 0.85 is the pre-knob constant: the default is byte-identical to
+            // every field authored before the knob existed.
+            float coreWeight = 0.85f;
             // Brightness over life: (1 - ageFrac)^fadePower. > 1 holds the
             // spark bright and drops it late, which is what a burning ember
             // does; the age is re-derived from the emitter's closed form, so

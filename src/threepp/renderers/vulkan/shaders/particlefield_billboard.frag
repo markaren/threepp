@@ -32,7 +32,7 @@ layout(set = 0, binding = 0) uniform sampler2D tex;
 
 layout(location = 0) in vec2  vLocal;// [-1,1]^2 parametric square
 layout(location = 1) in vec4  vColor;// rgb = linear HDR radiance, a = alive
-layout(location = 2) in float vSoft;
+layout(location = 2) in vec2  vSoft; // x = softness, y = core-term weight
 // F4: the display transform, flat from the vertex stage. A NEGATIVE exposure is
 // the glow pass's signal to emit LINEAR HDR instead — that target is the input
 // to a bright pass and a 13-tap downsample, both of which are defined on linear
@@ -79,9 +79,9 @@ void main() {
     // Skirt vs core. The exponent runs 4 (hard, a spark) to 1.2 (soft, a glow)
     // with softness, and the core term is what survives when the sprite is only
     // a few pixels across.
-    const float skirt = pow(t, mix(4.0, 1.2, vSoft));
+    const float skirt = pow(t, mix(4.0, 1.2, vSoft.x));
     const float core  = pow(t, 9.0);
-    float a = skirt + 0.85 * core;
+    float a = skirt + vSoft.y * core;
 
     // ── F5: the splash ANNULUS ──────────────────────────────────────────────
     // A splash is a rim of water thrown outward, not a filled blob: the disc

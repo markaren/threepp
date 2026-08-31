@@ -288,8 +288,14 @@ namespace threepp::vulkan {
         // 8-aligned, so this lands naturally and the block needs no pad.
         // 0 exactly when the field marches nothing, i.e. when bit 16 is clear.
         VkDeviceAddress transAddr;    // 240
-    };                                // 248
-    static_assert(sizeof(BillboardParamsGpu) == 248,
+        // Weight of the fragment falloff's fixed t^9 core term. 0.85 was the
+        // hardcoded constant before it became a knob (BillboardRepr's default
+        // keeps those bytes); big soft smoke parcels set it toward 0 so every
+        // sprite stops planting a 1-2 px hard dot the skirt cannot soften.
+        float coreWeight;             // 248
+        float pad0;                   // 252  keeps sizeof at the 8-aligned 256
+    };                                // 256
+    static_assert(sizeof(BillboardParamsGpu) == 256,
                   "BillboardParamsGpu drifted from particlefield_billboard.vert");
 
     // ── F4: the per-VIEW billboard record ───────────────────────────────────

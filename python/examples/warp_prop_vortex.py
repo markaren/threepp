@@ -148,15 +148,13 @@ SPRITE_GROW_P = 2.2                             # its delay -- the same knee as 
 # 0.80 is a deliberate half-step back from conserving: it trades a little
 # smoothness for a far wake that is still THERE.
 FLUX_P = cli_arg("--flux", 0.80, float)         # 1 = flux-conserving, >1 = dims faster
-# WHAT IS ACTUALLY LEFT, measured and not guessed. Bigger grains alone do not
-# finish the job: the residual mottle in a 2x crop of the far wake is ~1-2 px,
-# which is the size of the sprite's t^9 CORE spike (particlefield_billboard.frag
-# adds it under the skirt at a fixed 0.85 and `softness` does not reach it), so
-# every sprite plants a hard dot at its centre no matter how wide it is drawn.
-# The only thing that erases those dots is enough of them per pixel to average,
-# i.e. N -- and --n 5000000 is visibly, completely smooth. 2M is where the
-# 25 fps floor put the default on a 4070 at 1280x800; the demo ships at 2M and
-# a machine with fill to spare should run --n 5000000 for the still.
+# The last speckle source was the sprite's t^9 CORE spike: the falloff plants
+# a 1-2 px hard dot at every sprite's centre regardless of drawn radius, and
+# `softness` deliberately does not reach it (it is what keeps a few-pixel ember
+# from reading as a blob). It is a knob now -- BillboardRepr.core_weight, 0.85
+# being the old hardcoded constant -- and this demo turns it OFF below, which
+# is what lets 2M read smooth where it used to take --n 5000000 to average the
+# dots away. 2M is where the 25 fps floor put the default on a 4070 at 1280x800.
 
 # ── The look ────────────────────────────────────────────────────────────────
 # The density volume is LATCHED at these bounds and never refitted: a box that
@@ -532,6 +530,10 @@ bb = field.billboard_repr
 # profile has nowhere to act inside a pixel and a half. The knee gives softness
 # its age selectivity for free.
 bb.softness = 0.92
+# The core dot OFF entirely: a smoke parcel has no spark at its centre. The
+# ropes survive this -- a young grain is ~1.5 px and its whole profile is one
+# bright sample either way -- but the wake stops being 2M pinpricks.
+bb.core_weight = 0.0
 bb.bright_jitter = 0.0        # the sim authors the colour; do not hash over it
 bb.fade_power = 0.0           # no age exists on an interop field
 bb.size_taper = 0.0

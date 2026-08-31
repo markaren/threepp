@@ -126,6 +126,10 @@ namespace threepp_py {
                                "INSIDE — rain wants ~0.07, not ~0.5.")
                 .def_readwrite("softness", &ParticleField::BillboardRepr::softness,
                                "0 = a tight spark, 1 = a broad glow.")
+                .def_readwrite("core_weight", &ParticleField::BillboardRepr::coreWeight,
+                               "Weight of the fixed 1-2 px core dot under the softness-shaped "
+                               "skirt. 0.85 (the default) is the pre-knob look; big soft smoke "
+                               "parcels set ~0 so a dense field stops speckling.")
                 .def_readwrite("fade_power", &ParticleField::BillboardRepr::fadePower,
                                "Brightness over life: (1 - age_frac)^fade_power. 0 = no fade (rain).")
                 .def_readwrite("bright_jitter", &ParticleField::BillboardRepr::brightJitter,
