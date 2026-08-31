@@ -24,6 +24,7 @@
 #include "threepp/renderers/Renderer.hpp"
 
 #include <array>
+#include <cfloat>
 #include <functional>
 #include <memory>
 #include <stdexcept>
@@ -165,6 +166,81 @@ namespace threepp_py {
             bool changed = ImGui::Combo(label.c_str(), &idx, ptrs.data(), static_cast<int>(ptrs.size()));
             return py::make_tuple(changed, idx);
         }, py::arg("label"), py::arg("current"), py::arg("items"));
+
+        // ---- plots and free drawing ------------------------------------------
+        // A panel that has to show a CURVE -- a propeller's open-water diagram, a
+        // convergence history, a spectrum -- had nothing here but text. plot_lines
+        // is ImGui's own sparkline; the draw_* calls below are the escape hatch for
+        // the cases it cannot serve (several curves on one pair of axes, an
+        // operating point marked on top of them), and together they are the whole
+        // of what a read-only diagram needs.
+        im.def("plot_lines", [](const std::string& label, const std::vector<float>& values,
+                                const std::string& overlay, float scale_min, float scale_max,
+                                float width, float height) {
+            ImGui::PlotLines(label.c_str(), values.empty() ? nullptr : values.data(),
+                             static_cast<int>(values.size()), 0,
+                             overlay.empty() ? nullptr : overlay.c_str(),
+                             scale_min, scale_max, ImVec2(width, height));
+        }, py::arg("label"), py::arg("values"), py::arg("overlay") = "",
+           py::arg("scale_min") = FLT_MAX, py::arg("scale_max") = FLT_MAX,
+           py::arg("width") = 0.0f, py::arg("height") = 0.0f,
+           "A sparkline of `values`. scale_min/max default to the data's own range.");
+
+        // Reserve a rectangle in the layout and hand back where it landed, so the
+        // draw_* calls below have somewhere to put a diagram that ImGui itself has
+        // no widget for. Coordinates are SCREEN space, which is what the draw list
+        // takes -- a panel that moves takes its diagram with it.
+        im.def("dummy", [](float width, float height) { ImGui::Dummy(ImVec2(width, height)); },
+               py::arg("width"), py::arg("height"),
+               "Reserve an empty rect in the layout; pair with item_rect().");
+        im.def("item_rect", [] {
+            const ImVec2 a = ImGui::GetItemRectMin();
+            const ImVec2 b = ImGui::GetItemRectMax();
+            return py::make_tuple(a.x, a.y, b.x, b.y);
+        }, "(x0, y0, x1, y1) of the LAST item, in screen coordinates.");
+
+        // The draw list is the current window's, so everything below is clipped to
+        // the panel and scrolls with it.
+        im.def("draw_line", [](float x0, float y0, float x1, float y1,
+                               std::array<float, 4> rgba, float thickness) {
+            ImGui::GetWindowDrawList()->AddLine(ImVec2(x0, y0), ImVec2(x1, y1),
+                                                ImGui::GetColorU32(ImVec4(rgba[0], rgba[1], rgba[2], rgba[3])),
+                                                thickness);
+        }, py::arg("x0"), py::arg("y0"), py::arg("x1"), py::arg("y1"),
+           py::arg("rgba"), py::arg("thickness") = 1.0f);
+        im.def("draw_polyline", [](const std::vector<std::array<float, 2>>& pts,
+                                   std::array<float, 4> rgba, float thickness) {
+            if (pts.size() < 2) return;
+            std::vector<ImVec2> v;
+            v.reserve(pts.size());
+            for (const auto& p : pts) v.emplace_back(p[0], p[1]);
+            ImGui::GetWindowDrawList()->AddPolyline(v.data(), static_cast<int>(v.size()),
+                                                    ImGui::GetColorU32(ImVec4(rgba[0], rgba[1], rgba[2], rgba[3])),
+                                                    0, thickness);
+        }, py::arg("points"), py::arg("rgba"), py::arg("thickness") = 1.0f,
+           "One open polyline through screen-space (x, y) points.");
+        im.def("draw_rect", [](float x0, float y0, float x1, float y1,
+                               std::array<float, 4> rgba, float thickness, bool filled) {
+            auto* dl = ImGui::GetWindowDrawList();
+            const ImU32 c = ImGui::GetColorU32(ImVec4(rgba[0], rgba[1], rgba[2], rgba[3]));
+            if (filled) dl->AddRectFilled(ImVec2(x0, y0), ImVec2(x1, y1), c);
+            else dl->AddRect(ImVec2(x0, y0), ImVec2(x1, y1), c, 0.0f, 0, thickness);
+        }, py::arg("x0"), py::arg("y0"), py::arg("x1"), py::arg("y1"),
+           py::arg("rgba"), py::arg("thickness") = 1.0f, py::arg("filled") = false);
+        im.def("draw_circle", [](float x, float y, float radius,
+                                 std::array<float, 4> rgba, float thickness, bool filled) {
+            auto* dl = ImGui::GetWindowDrawList();
+            const ImU32 c = ImGui::GetColorU32(ImVec4(rgba[0], rgba[1], rgba[2], rgba[3]));
+            if (filled) dl->AddCircleFilled(ImVec2(x, y), radius, c, 0);
+            else dl->AddCircle(ImVec2(x, y), radius, c, 0, thickness);
+        }, py::arg("x"), py::arg("y"), py::arg("radius"),
+           py::arg("rgba"), py::arg("thickness") = 1.0f, py::arg("filled") = false);
+        im.def("draw_text", [](float x, float y, const std::string& s,
+                               std::array<float, 4> rgba) {
+            ImGui::GetWindowDrawList()->AddText(ImVec2(x, y),
+                                                ImGui::GetColorU32(ImVec4(rgba[0], rgba[1], rgba[2], rgba[3])),
+                                                s.c_str());
+        }, py::arg("x"), py::arg("y"), py::arg("text"), py::arg("rgba"));
 
         im.def("show_demo_window", [] { ImGui::ShowDemoWindow(); },
                "Show the built-in ImGui demo window (a gallery of every widget).");
