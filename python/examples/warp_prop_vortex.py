@@ -28,16 +28,19 @@ resolve into vapour ropes wound around a lit column of bubbles. --flat at the
 same timestamp is the whole acceptance test.
 
     pip install warp-lang
-    python warp_prop_vortex.py                   # window; PUSH EITHER SLIDER
+    python warp_prop_vortex.py                   # window; PUSH ANY SLIDER
+    python warp_prop_vortex.py --openwater       # the B-series check, then exit
     python warp_prop_vortex.py --shot 5.5        # 120 rpm: JUST BELOW inception
     python warp_prop_vortex.py --shot 5.5 --rps 3    # 180 rpm: ropes that END
     python warp_prop_vortex.py --shot 5.5 --rps 5    # 300 rpm: the whole wake boils
-    python warp_prop_vortex.py --shot 5.5 --pitch 35 # same gate, other lever
+    python warp_prop_vortex.py --shot 5.5 --pitch 30 # same gate, other lever
+    python warp_prop_vortex.py --shot 5.5 --speed 4  # J 1.11: the screw BRAKES
+    python warp_prop_vortex.py --shot 5.5 --rps 4 --speed 6   # J 0.83, eta_0 0.59
     python warp_prop_vortex.py --shot 5.5 --flat # the SAME frame, knobs at 0
     python warp_prop_vortex.py --depth 1.2       # shallower: it cavitates sooner
     python warp_prop_vortex.py --view mouth      # across the disc: water IN, ropes OUT
     python warp_prop_vortex.py --view prop       # the bronze, close
-    python warp_prop_vortex.py --pitch 8         # feathered: a nearly dead wake
+    python warp_prop_vortex.py --pitch 8         # P/D 0.31: a third of the thrust
     python warp_prop_vortex.py --shot 5.0 --rps 5 --rps-to 2 --rps-at 4.6
                                                  # the throttle's step, 0.4 s later
     python warp_prop_vortex.py --n 5000000       # more particles: a grainless far wake
@@ -46,15 +49,42 @@ same timestamp is the whole acceptance test.
     python warp_prop_vortex.py --film --probe 100    # what it will cost first
     python warp_prop_vortex.py --film --takes feather # re-cut ONE beat in place
 
-    NOTE the 5.5 s: the wake is 2.4 s deep and the shaft takes 2 s to spin up,
-    so anything before ~4.5 s is still showing the ramp in its far half. The
-    air version's 4.0 s was right for a 0.85 s wake and is now too early.
+    NOTE the 5.5 s: the wake is 1.7 s deep and the shaft takes 2 s to spin up,
+    so anything before ~3.8 s is still showing the ramp in its far half.
+
+THE NUMBERS ARE OUTPUTS NOW, and that is what this revision is. Thrust used to
+be an authored smoothstep on the blade angle, torque did not exist at all, and
+the clip ran at the bollard where efficiency is zero by definition -- so the
+one question a marine engineer asks of a propeller demo ("can you pull out Kt,
+Kq and eta_0?") had no honest answer. It does now, because the blade geometry
+this demo drew to LOOK like a ship's screw turned out to be one: five blades at
+an expanded area ratio of 0.75 is a Wageningen B5-75, the most measured
+propeller family there is.
+
+    K_T, K_Q   the Oosterveld & van Oossanen (1975) regression polynomials,
+               39 and 47 terms in (J, P/D, EAR, Z), hard-coded first-party.
+               `--openwater` prints the check they had to pass against the
+               published B5-75 curves before anything was wired to them.
+    J          V_a / n D, from the NEW ship-speed slider. At the bollard it is
+               zero and so is eta_0, which is honest and is still the default.
+    T, Q       K_T rho n^2 D^4 and K_Q rho n^2 D^5. 17.8 kN and 4.25 kNm at
+               the default helm, for 53 kW at the shaft.
+    v_i        the momentum inversion WITH advance, which is the ONLY channel
+               from those numbers to the water:
+                   v_i = (-V_a + sqrt(V_a^2 + 2 T / (rho A))) / 2
+               u_disc = V_a + v_i, u_wake = V_a + 2 v_i. Nothing downstream is
+               tuned separately any more -- wake speed, funnel length, helix
+               advance and cavitation all hang off T.
+
+The panel draws the open-water diagram live, with the operating point moving
+on it as the sliders move, and says "outside B-series validity" whenever a
+lever has pushed J or P/D past the box the regression was fitted over.
 
 --film IS THE DEMO ARGUING ITS OWN CASE, and the argument it makes is that
 inception is a threshold rather than a look. Six beats and no cuts: a still
 prop, a spin-up to 120 rpm in CLEAR water so the pull is felt before anything
-is seen, a crawl to 130 rpm where the hub rope lights ALONE (the hub crosses at
-124.6 rpm and the tips not until 131.8, so there is a real window and the
+is seen, a crawl to 138 rpm where the hub rope lights ALONE (the hub crosses at
+127.8 rpm and the tips not until 141.2, so there is a real window and the
 camera holds in it), a throttle step down that shortens the ropes and sends the
 old wake off frame, a pitch feather that kills the wake while the shaft keeps
 turning, and a slam back to 30 deg for the re-bloom. The camera is a Hermite
@@ -63,16 +93,38 @@ index -- so the film is a pure function of frame number and --takes re-renders
 one beat into exactly the picture the full run made. See THE FILM below.
 
 CAVITATION IS A THRESHOLD AND THE DEMO IS TUNED TO SIT UNDER IT. At the default
-helm -- 120 rpm, beta 22 deg, 3 m down -- the tip cores reach 83% of the
-available pressure margin and NOTHING happens: the water is clear, the wake is
-a faint bubbly column, and the helices are barely a hint. Push either slider
-and the ropes switch on, because the core suction goes as (L omega R)^2 and the
-margin does not move. That is the beat. It is the same beat a ship's engineer
-lives with: cavitation is not a setting, it is an operating point you cross.
+helm -- 120 rpm, beta 22 deg, 3 m down -- the blade is loaded to 83% of what it
+takes to start boiling and NOTHING happens: the water is clear, the wake is a
+faint bubbly column, and the helices are barely a hint. Push a slider and the
+ropes switch on. That is the beat, and it is the beat a ship's engineer lives
+with: cavitation is not a setting, it is an operating point you cross.
 
-    ca      = K_CAV L(beta)^2 (omega R_tip)^2      the tip core's suction, m2/s2
-    margin  = (p_atm + rho g DEPTH - p_vapour)/rho the water's own resistance
-    e       = max(0, ca / margin - 1)              the EXCESS, per parcel
+WHAT DECIDES IT IS BURRILL'S, not a coefficient chosen to make the beat work.
+Both of the standard axes are computed live from quantities this file already
+has, and both of them move when the shaft does:
+
+    V_R^2   = V_a^2 + (0.7 pi n D)^2         resultant speed at 0.7 R
+    sigma   = (p_atm + rho g DEPTH - p_v) / (0.5 rho V_R^2)      at 0.7 R
+    tau_c   = T / (0.5 rho A_P V_R^2)        thrust loading, A_P from EAR by
+                                             Taylor's 1.067 - 0.229 P/D
+    limit   = 0.30 sigma^0.57                Burrill & Emerson's 5% back-
+                                             cavitation line, as fitted
+    e       = max(0, tau_c / (0.610 limit) - 1)   the EXCESS, per parcel
+
+The one authored number left is that 0.610: Burrill's lines are percentage BACK
+COVERAGE limits and inception is below all of them, by an amount that depends
+on section shape and nuclei content and that no chart of this kind carries. So
+inception is a stated fraction of the 5% line and that fraction is set, as the
+old coefficient was, to put the default helm just under.
+
+AND THE SHAPE OF IT CHANGED THE WHOLE DEMO. tau_c does not depend on shaft
+speed at all at the bollard -- T and V_R^2 both go as n^2 -- and sigma goes as
+1/n^2, so the criterion goes as n^1.14 where the authored one went as n^2.
+Cavitation arrives more gently and never gets as violent: the hub rope lights
+at 127.8 rpm and the tips at 141.2 (they were 124.6 and 131.8), and 300 rpm is
+2.36x inception where the old model claimed 5.19x. That is a 13 rpm hub-only
+window instead of 7 -- a better beat, and one that was derived rather than
+tuned.
 
 Both are evaluated AT BIRTH, from the helm ring, so a parcel that was shed
 cavitating stays cavitating as it convects and a parcel shed clear stays clear.
@@ -98,9 +150,9 @@ and not a fade. The turbulence still wiggles the cores while they live.
 THE HUB VORTEX is the single most recognisable feature of real CPP footage, and
 it cavitates FIRST: the flow behind the cap is slower, the pressure lower, and
 the head start is worth about 12% here (HUB_CAV). So at the default the hub
-core sits at 93% of margin against the tips' 83%, and a nudge on either slider
-lights the axial rope a few rpm before the helices. A small share of slots is
-taken out of the sheet's budget and born on the axis, aft of the cap.
+sits at 93% of its inception line against the tips' 83%, and a nudge on either
+slider lights the axial rope 13 rpm before the helices. A small share of slots
+is taken out of the sheet's budget and born on the axis, aft of the cap.
 
 IT IS A CONTROLLABLE-PITCH PROPELLER, and that is the demo's second thesis.
 The first (below) is that particles carry the image and a volume carries the
@@ -110,41 +162,44 @@ flanges at once, and the wake does NOT change at once, because the wake is made
 of parcels that were shed under whatever pitch was set when each of them
 crossed the disc. The boundary between the old slipstream and the new one
 convects away downstream at the slipstream's own speed and the old wake
-persists until it ages out, two and a half seconds later. That lag is the whole
-point -- and now the boundary is also a boundary in CAVITATION NUMBER, so a
+persists until it ages out, one and three quarter seconds later. That lag is
+the whole point -- and the boundary is also a boundary in CAVITATION, so a
 throttle step lights the new wake and leaves the old one dark.
 
-    beta   the blade angle at 0.7 R, 0..35 deg, BETA_DESIGN = 22 the neutral
-    L      the loading it makes: smoothstep(sin(beta - 2 deg)), 0 at feather
-           and 1 at 32 deg, and the ONLY channel from the pitch to the flow
-           -- to the wake speed as sqrt(L), and to the cavitation number as
-           L^2, which is why the pitch lever alone can cross inception
+    beta   the blade angle at 0.7 R, 0..35 deg, BETA_DESIGN = 22 the neutral.
+           It is a PITCH RATIO in the polynomials' own units: a blade is a
+           slice of a screw thread, so P/D = 0.7 pi tan(beta), and 22 deg is
+           P/D 0.889. The slider's ends (P/D 0.19 and 1.54) are outside the
+           B-series validity box and the panel says so.
     omega  the shaft rate, 60..600 rpm, RPS_REF = 6 rev/s the reference.
-           Tip speed 11 m/s at the default 120 rpm and 34 at 360, and it is
-           the SQUARE of that number that decides whether the wake is white
-    hist   HIST_N vec3 (L, omega, theta), one per frame, one full slot period
-           deep. Written on the host at frame_no % HIST_N, read in the kernel
-           at the parcel's OWN crossing frame. That is the whole added state.
+           Tip speed 11 m/s at the default 120 rpm and 34 at 360.
+    V_a    the ship's speed of advance, 0..6 m/s, 0 by default. It is what
+           makes J = V_a / n D real, and with it eta_0.
+    hist   HIST_N vec4 (omega, theta, v_i, V_a), one per frame, one full slot
+           period deep, beside a vec2 (K_T/K_T_design, Burrill ratio) at the
+           same index. Written on the host at frame_no % HIST_N, read in the
+           kernel at the parcel's OWN crossing frame. The split is measured
+           rather than tidy: both vec2 entries are per-FRAME quantities, and
+           evaluating the Burrill pow per parcel cost 1.6 ms of a 42 ms frame.
 
-    u ~ omega sqrt(L)  induced velocity. Static-thrust momentum theory, which
-                  does not care what the fluid is: at a fixed pitch T ~ omega^2
-                  so v_i ~ omega, and the sqrt is spent on the loading. Wake
-                  speed, funnel length and (through the distance-keyed flare)
-                  funnel WIDTH all follow, so a feathered OR idling prop's
-                  funnel collapses onto the disc. The ANCHOR is water: the
-                  default helm makes a 2.0 m/s slipstream, which is what a
-                  ship at the bollard actually throws.
-    swirl ~ omega L    circulation is linear in both
-    ca ~ (L omega)^2   the cavitation number, and the reason both levers are
-                  so much sharper here than they were in air
+    K_T(J, P/D)  the polynomials, and the ONLY channel from either lever to
+                  the flow. Thrust falls out of it, the induced velocity falls
+                  out of thrust, and wake speed, funnel length, funnel WIDTH
+                  and the cavitation criterion all fall out of that. The ANCHOR
+                  is no longer a number somebody liked: the default helm makes
+                  17.8 kN, which is a 3.69 m/s slipstream.
+    swirl ~ omega K_T   circulation, linear in both
+    tau_c ~ K_T         thrust loading, and INDEPENDENT of shaft speed
 
 WHAT THE THROTTLE DOES NOT DO IS THE INTERESTING PART. Advance per revolution
-is u / n, and with u ~ omega that is INDEPENDENT OF RPM: change the shaft speed
-and the helix's loop spacing in metres does not move at all. What moves is how
-far 2.4 s of wake reaches (halve the rpm and the slipstream is half as long),
-how fast the loops are laid down, and -- only in water -- whether they are
-VISIBLE at all. Loop SPACING is a property of the PITCH alone. That is what a
-screw is: it advances its geometric pitch per turn whatever speed you turn it
+is u / n, and at the bollard u ~ n, so it is INDEPENDENT OF RPM: change the
+shaft speed and the helix's loop spacing in metres does not move at all. What
+moves is how far 1.7 s of wake reaches (halve the rpm and the slipstream is
+half as long), how fast the loops are laid down, and -- only in water --
+whether they are VISIBLE at all. Loop SPACING is a property of the PITCH alone
+at the bollard; put a ship speed on and it stops being, because J moves and
+K_T with it. That is what a screw is: it advances its geometric pitch per turn
+whatever speed you turn it
 at, and the rpm-step crops show exactly that -- a short stub of new wake whose
 loops line up with the old wake's, a rarefaction between them, and the old wake
 convecting off to age out.
@@ -305,11 +360,25 @@ DT = 1.0 / FPS
 # point at (0, r, 0) rotated about X by theta lands at (0, r cos, r sin), which
 # is exactly the kernel's (y, z) -- so the mesh's rotation.x and the kernel's
 # azimuth are the same number with no sign to get wrong.
+TWO_PI = 2.0 * math.pi
 BLADES = cli_arg("--blades", 5, int)
 R_TIP = 0.90                        # m
 R_HUB = 0.27       # the bulbous hub: a 5-blade CPP carries the whole pitch
                    # mechanism inside it, so hub/diameter is ~0.30, not 0.15
 R_PALM = 0.245     # radius at which a blade root meets its own flange
+# ── THE HAPPY ACCIDENT: THIS IS VERY NEARLY A WAGENINGEN B5-75 ──────────────
+# The blade planform below was drawn to LOOK like a ship's CPP -- wide rounded
+# trapezoids, C_MAX 0.50 m on a 0.90 m radius -- and the expanded area that
+# falls out of it is ~0.75 of the disc. Five blades at EAR 0.75 IS a B5-75, the
+# most thoroughly measured propeller family there is, so the Wageningen
+# open-water regression applies to this prop directly and every integral
+# quantity below is a LOOKUP rather than an invention. D is the one number the
+# polynomials need that the demo did not already have a name for.
+D_PROP = 2.0 * R_TIP                # m, diameter
+D_PROP2 = D_PROP * D_PROP
+D_PROP4 = D_PROP2 * D_PROP2
+A_DISC = math.pi * R_TIP * R_TIP    # m2, the actuator disc
+EAR = 0.75                          # expanded area ratio, A_E / A_0
 # ── THE WATER, AND THE PRESSURE IT HAS TO GIVE UP ───────────────────────────
 # Everything cavitation-related is here, and there is very little of it: three
 # fluid constants, one geometric one, and the margin they make. That margin is
@@ -329,31 +398,75 @@ G_ACC = 9.81
 # racing in a swell howls.
 DEPTH = cli_arg("--depth", 3.0, float)      # m of water over the shaft
 CAV_MARGIN = (P_ATM + RHO * G_ACC * DEPTH - P_VAP) / RHO    # m2/s2
-# K_CAV IS SET BY THE DEMO'S BEAT, and that is a legitimate way to fix a
-# coefficient this crude: the model says the tip-core suction goes as the
-# circulation SQUARED (Gamma ~ L omega R for a lifting section), so
-# ca = K_CAV (L omega R)^2, and K_CAV is the one number that says how tight the
-# core is. Rather than invent a core radius, it is chosen so the DEFAULT helm
-# -- 120 rpm, beta 22, 3 m down -- lands at 0.83 of the margin. Just under.
-# Everything the demo is for happens in the last 17%.
-K_CAV = cli_arg("--k-cav", 1.40, float)
+# ── THE CRITERION IS BURRILL'S, NOT AN AUTHORED COEFFICIENT ─────────────────
+# This used to be `ca = K_CAV (L omega R)^2` against the margin, with K_CAV
+# picked so the default helm landed at 0.83. The shape of that was a guess: it
+# made the criterion quadratic in shaft speed, because the suction went as
+# omega^2 and the margin did not move. That is not how a propeller cavitates.
+#
+# The standard pair a naval architect actually plots is Burrill's, and BOTH of
+# its axes move with the shaft:
+#
+#   sigma_0.7R = (p_atm + rho g h - p_v) / (0.5 rho V_R^2)   the cavitation no.
+#   V_R^2      = V_a^2 + (0.7 pi n D)^2      resultant water speed at 0.7 R
+#   tau_c      = T / (0.5 rho A_P V_R^2)     the thrust-loading coefficient
+#
+# Burrill & Emerson's diagram then draws limit lines of tau_c against sigma for
+# a given percentage of BACK CAVITATION, and the line quoted everywhere as the
+# upper limit for merchant-ship propellers -- 5% back cavitation -- is fitted
+# by tau_c = 0.30 sigma_0.7R^0.57. That is BURRILL_5PCT below, and the panel
+# quotes it as-is because it is the number an engineer recognises.
+#
+# INCEPTION IS NOT THAT LINE, and the demo needs inception. 5% back coverage is
+# a developed sheet; the first bubbles appear well below even Burrill's 2.5%
+# line, and where exactly is a function of section shape, roughness and nuclei
+# content that no chart of this kind carries. So the inception line is a stated
+# FRACTION of the 5% line, and that fraction is the one authored number left in
+# the whole cavitation model -- chosen, as K_CAV was, so the default helm
+# (120 rpm, beta 22, 3 m down) sits at 0.83 of it. Just under. Everything the
+# demo is for happens in the last 17%.
+#
+# WHAT CHANGED WITH THE SHAPE is the demo's whole dynamic range, and it is
+# worth stating because it moved every look constant below. tau_c is
+# INDEPENDENT of shaft speed at the bollard (T and V_R^2 both go as n^2), and
+# sigma goes as 1/n^2, so the ratio goes as n^1.14 -- not n^2. Cavitation
+# arrives more gently and never gets as violent: 300 rpm is 2.36x the inception
+# line where the old model said 5.19x. The excess is therefore ~3x smaller at
+# every interesting helm, and CAV_KNEE and CAV_LK are divided and multiplied by
+# that 3 to put the vapour back where it was. See each of them.
+BURRILL_5PCT = 0.30     # tau_c = 0.30 sigma^0.57, Burrill's 5% back-cavitation
+BURRILL_P = 0.57        # line (Burrill & Emerson 1963), as commonly fitted
+BURRILL_INC = cli_arg("--inception", 0.610, float)   # x that line = inception
+# The projected blade area, from the expanded area, by Taylor's approximation
+# A_P / A_D = 1.067 - 0.229 P/D with the developed area taken as the expanded
+# one. It rides the DESIGN pitch and not the parcel's: the correction swings
+# 14% over the usable P/D range, which would cost the history ring a fifth slot
+# it does not have, and the panel quotes this same design-pitch A_P so the
+# number on screen is the number the wake was drawn with.
 # The hub vortex's head start. Behind the cap the axial flow is slower and the
 # static pressure lower, so the hub core reaches vapour pressure BEFORE the tips
 # do -- which is why the axial rope is the first thing to appear in real CPP
-# footage and the last thing to go. 1.12 puts the hub at 0.93 of margin at the
-# default against the tips' 0.83, so a few rpm separate the two inceptions.
+# footage and the last thing to go. 1.12 puts the hub at 0.93 of the inception
+# line at the default against the tips' 0.83, and under Burrill that is now a
+# 13 rpm window (128 -> 141) rather than the old model's 7.
 HUB_CAV = 1.12
-CAV_KNEE = 0.45      # excess at which the vapour is 63% of its full brightness
+# 0.45 -> 0.15: the excess this saturates against is ~3x smaller under Burrill
+# (see above), so the knee divides by 3 to leave the vapour's brightness at
+# 180 and 300 rpm within a percent of where it was.
+CAV_KNEE = 0.15      # excess at which the vapour is 63% of its full brightness
 CAV_R = 2.6          # x core radius at full vapour: a fat rope, not a wire
 # How long the vapour SURVIVES, as a fraction of LIFETIME, against the excess.
 # See COLLAPSE in the docstring: this is the length knob and it is deliberately
 # not the intensity knob, and it is the LEVER'S OWN RANGE that sets the slope.
 # 0.50 saturated at e ~ 1.7 -- 230 rpm -- which put every interesting helm
 # setting at "the rope runs off the frame" and made the collapse invisible at
-# anything you would actually want to look at. 0.30 saturates at e ~ 2.9
-# (about 245 rpm at the design pitch) and spreads the useful part over the
-# 130-240 rpm band, where a rope that ENDS is the whole point.
-CAV_L0, CAV_LK = 0.14, 0.30
+# anything you would actually want to look at. 0.30 saturated at e ~ 2.9 and
+# spread the useful part over the 130-240 rpm band, where a rope that ENDS is
+# the whole point -- and 0.90 is that same band under Burrill, whose excess is
+# 3x smaller. The check is that the two documented shots come out where they
+# were: --rps 3 gives 0.43 of a life (it was 0.40) and --rps 5 saturates at
+# 1.00 (it did too). The slope moved so the picture would not.
+CAV_L0, CAV_LK = 0.14, 0.90
 CAV_COLLAPSE = 0.30  # the last 30% of that life is the condensation ramp
 # ── CONTROLLABLE SHAFT SPEED ────────────────────────────────────────────────
 # RPS_REF is the ANCHOR and not the default: every flow coupling below is
@@ -361,6 +474,10 @@ CAV_COLLAPSE = 0.30  # the last 30% of that life is the condensation ramp
 # evaluates to exactly the numbers this demo had before either lever existed.
 # RPS is merely where the throttle starts.
 RPS_REF = 6.0                       # rev/s, the tuning reference
+RPS_OP = 2.0                        # rev/s: the helm the LOOK is anchored at.
+                                    # Defined here rather than beside OMG_OP
+                                    # because the B-series anchor below needs
+                                    # it, and there must be exactly one of it.
 # 2 rev/s = 120 rpm is where the DEMO starts, and it is an honest ship speed:
 # a large slow-speed diesel turns its screw at 60-120 rpm and this is the top
 # of that. It is also, by construction, the operating point that sits just
@@ -395,19 +512,24 @@ def scheduled_rps(t):
 # groups sit at zero rotation there and the designed twist is what you see.
 BETA_DESIGN = 22.0                  # deg, at 0.7 R
 BETA_MIN, BETA_MAX = 0.0, 35.0      # the slider's range
-# The loading curve. L is the fraction of design thrust the blade is making,
-# and it is the ONLY thing the flow reads: a smoothstep of sin(beta - beta0),
-# zero at the feathered angle and saturating at the design-plus angle.
-BETA_0 = 2.0                        # deg: feathered, no lift, no wake
-BETA_1 = 32.0                       # deg: full loading
+# THE PITCH SLIDER IS NOW P/D, in the only units the polynomials speak. A
+# propeller blade is a slice of a screw thread, so a blade angle at 0.7 R and a
+# pitch ratio are the same statement twice: P = 2 pi (0.7 R) tan(beta), and
+# dividing by D = 2R gives P/D = 0.7 pi tan(beta). BETA_DESIGN 22 deg is
+# P/D 0.889, comfortably inside the B-series box; the slider's own ends are
+# not, which is what R5's validity label is for.
+BETA_0 = 2.0    # deg: the no-lift angle. It used to be the foot of an authored
+                # smoothstep; it is now the P/D at which the extrapolation
+                # below sends K_T to zero, which is the same claim in the same
+                # place -- a blade at its no-lift angle makes no thrust.
 # Floors, and they earn their keep. U_FLOOR keeps a feathered prop's wake
 # CREEPING rather than stacking every parcel of every slot on the disc plane
-# in one bright annulus, which is what a hard zero does. G_FLOOR is the
-# matching brightness floor -- and it has to be well BELOW the speed floor,
-# because parcels per unit length goes as 1/u: at L = 0 the line density is
-# 5.8x and the per-parcel radiance 0.05x, so the wake's flux per metre lands
-# at a quarter of design. That is the number that reads as "near-dead".
-U_FLOOR = 0.03
+# in one bright annulus, which is what a hard zero does -- and it is now a
+# fraction of TIP SPEED rather than of an authored loading, because the honest
+# chain really does return u_wake = 0 at zero pitch and something has to be
+# left over. G_FLOOR is the matching brightness floor -- and it has to be well
+# BELOW the speed floor, because parcels per unit length goes as 1/u.
+U_FLOOR = 0.02                      # x tip speed: the creep of a dead screw
 G_FLOOR = 0.05
 IN_G_FLOOR = 0.06
 PITCH = cli_arg("--pitch", BETA_DESIGN, float)      # headless: the pitch held
@@ -415,29 +537,29 @@ PITCH_TO = cli_arg("--pitch-to", PITCH, float)      # ... and the step it takes
 PITCH_AT = cli_arg("--pitch-at", 1.0e9, float)      # ... at this sim time
 
 
-def loading(beta_deg):
-    """L(beta): 0 at the feathered angle, 1 at design-plus. Momentum theory
-    only needs a monotone, smooth, saturating shape; sin(alpha) is the lift
-    slope's own argument and the smoothstep takes the corners off both ends."""
-    x = math.sin(math.radians(max(beta_deg - BETA_0, 0.0))) \
-        / math.sin(math.radians(BETA_1 - BETA_0))
-    x = min(max(x, 0.0), 1.0)
-    return x * x * (3.0 - 2.0 * x)
+def pd_of(beta_deg):
+    """P/D from the blade angle at 0.7 R. The blade IS a screw thread."""
+    return 0.7 * math.pi * math.tan(math.radians(max(beta_deg, 0.0)))
 
 
-# THE FLOW IS SCALED RELATIVE TO DESIGN, NOT TO L. L(BETA_DESIGN) is 0.76, not
-# 1 -- 22 deg is the designed cruise setting and there is deliberately more
-# pitch available above it. If the kernel used L raw, the DEFAULT wake would
-# come out 12% slower and 23% dimmer than the wake this demo spent four
-# revisions tuning, and every crop against the pre-pitch baseline would be
-# comparing two different pictures. So every flow term is divided by its own
-# value at the design point: at beta = BETA_DESIGN the kernel evaluates to
-# exactly the numbers it evaluated to before pitch existed, and the slider
-# reads as a departure from design in both directions.
-USC_DESIGN = math.sqrt(U_FLOOR + (1.0 - U_FLOOR) * loading(BETA_DESIGN))
-GAIN_DESIGN = G_FLOOR + (1.0 - G_FLOOR) * loading(BETA_DESIGN)
-IN_GAIN_DESIGN = IN_G_FLOOR + (1.0 - IN_G_FLOOR) * loading(BETA_DESIGN)
-SWIRL_DESIGN = loading(BETA_DESIGN)
+PD_DESIGN = pd_of(BETA_DESIGN)      # 0.8885
+# ── R5: THE VALIDITY BOX, AND WHAT HAPPENS AT ITS EDGES ─────────────────────
+# The Wageningen regression was fitted over J in [0, 1.5] and P/D in [0.5, 1.4]
+# and it is a POLYNOMIAL: outside that box it does not degrade, it diverges.
+# Both of this demo's own sliders leave it -- beta 5 deg is P/D 0.19 and beta
+# 35 deg is P/D 1.54 -- so the inputs are clamped to the box edge and the panel
+# says so, in words, for as long as anything is clamped. Never silently.
+PD_LO, PD_HI = 0.5, 1.4
+J_LO, J_HI = 0.0, 1.5
+# BELOW the box there is one thing the polynomial cannot say and the physics
+# can: a blade at its no-lift angle makes no thrust at all, and the clamped
+# edge value (K_T 0.21 at P/D 0.5) is not that. So under the edge K_T is faded
+# LINEARLY to zero at P/D(BETA_0) -- the file's own no-lift angle -- which
+# keeps the feather beat alive and is stated as an extrapolation wherever it is
+# used. K_Q is NOT faded: it is left at the edge value, an overestimate that
+# keeps a feathered shaft absorbing power rather than none, which is the
+# conservative direction for a torque readout.
+PD_ZERO = pd_of(BETA_0)             # 0.0768
 
 
 def scheduled_beta(t):
@@ -447,31 +569,376 @@ def scheduled_beta(t):
     the one edge the shots exist to show."""
     return PITCH_TO if t >= PITCH_AT else PITCH
 
-# ── The wake, CALIBRATED FOR WATER ──────────────────────────────────────────
-# The anchors are quoted at RPS_REF (360 rpm) as everything else is, and they
-# are set by the OPERATING point: 6.0 m/s at the reference is 2.0 m/s at the
-# default 120 rpm, which is the slipstream a large screw actually throws at the
-# bollard. In air the same numbers were 5.6 / 3.6 and the default was the
-# reference speed; the ratio between disc and developed slipstream is unchanged
-# because momentum theory does not care what the fluid is.
+# ── THE THIRD LEVER: SHIP SPEED, WHICH IS WHAT MAKES J REAL ─────────────────
+# Everything above this line ran at the BOLLARD -- a screw turning in water
+# that is not going anywhere -- and at the bollard the advance ratio J is zero,
+# which means the open-water diagram is being read at one end of its own x
+# axis and the efficiency is zero by definition. That is a perfectly honest
+# operating point (a tug on a tow, a ship on trials at a wall) and it stays the
+# DEFAULT, because it is the framing every shot and the whole film were
+# composed at. But a propeller demo that cannot move the ship cannot answer
+# "what is eta_0", so:
 #
-# THE LIFETIME HAD TO GROW WITH THE CALIBRATION, and this is the one change
-# that is arithmetic rather than judgement. Reach is u x LIFETIME. At 2.0 m/s
-# the old 0.85 s reached 1.7 m, which in this framing is a stub against an
-# empty frame; 2.4 s puts it back at 4.8 m, within a hand's width of the reach
-# the air version had at its own default, so the crops stay comparable and the
-# box barely moves. It is also free: the same N over a proportionally longer
-# period leaves parcels-per-metre where it was, which is what BRIGHT and SIGMA
-# are actually tuned against. The helm ring is sized from PERIOD, so it grew
-# with it and nothing else had to be told.
-LIFETIME = 2.4           # s of wake held on screen; also the slot recycle period
-U_DISC = 3.86            # axial velocity AT the disc (m/s) at RPS_REF
-U_WAKE = 6.0             # fully developed slipstream at RPS_REF; ~2x inflow
-TAU_A = 0.13             # s over which the flow eases from U_DISC to U_WAKE
-CONTRACT = 0.78          # slipstream contracts to this fraction of its birth radius
-TAU_C = 0.16             # s of that contraction
-SWIRL_F = 0.22           # self-induced rotation of the helix, as a fraction of OMEGA
-TAU_S = 0.40             # s over which the swirl decays away
+#   V_a   the speed of advance: the water's own speed into the disc, which on
+#         a real hull is the ship's speed reduced by the wake fraction. Here
+#         there is no hull, so it is simply the freestream.
+#   J     V_a / (n D), the advance ratio, and the x axis of every open-water
+#         diagram ever drawn.
+#
+# It advects BOTH legs of the closed form: the wake leaves at V_a + 2 v_i
+# instead of 2 v_i, and the funnel's far-upstream drift becomes the freestream
+# instead of a fraction of the disc speed. The funnel's MOUTH follows from
+# continuity, A_inf = A_disc u_disc / V_a -- which is infinite at the bollard,
+# exactly the flare the shipped demo already had, and closes down to something
+# barely wider than the disc once the ship is moving.
+VA_MIN, VA_MAX = 0.0, 6.0
+V_A = cli_arg("--speed", 0.0, float)        # m/s of advance; 0 = the bollard
+
+# ── THE WAGENINGEN B-SERIES OPEN-WATER POLYNOMIALS ──────────────────────────
+# Oosterveld, M.W.C. and van Oossanen, P., "Further Computer-Analyzed Data of
+# the Wageningen B-Screw Series", International Shipbuilding Progress, Vol. 22,
+# No. 251, 1975, pp. 251-262. K_T is 39 terms and K_Q is 47, each of the form
+#
+#     C * J^s * (P/D)^t * (A_E/A_0)^u * Z^v
+#
+# fitted to the Wageningen towing-tank measurements at Rn = 2e6. The
+# coefficients are a page of public-domain numbers, so they are hard-coded
+# here as first-party tables: no asset, no dependency, no licence.
+#
+# TRANSCRIPTION IS THE WHOLE RISK. A wrong digit in a 39-term polynomial does
+# not crash and does not look wrong; it quietly shifts a curve. So the tables
+# are checked against the published B5-75 open-water diagram before anything
+# reads them -- run `--openwater` and the demo prints the check and exits.
+# The gate the numbers had to pass: K_T(J=0) at P/D 0.889 in 0.40-0.50,
+# eta_0 peaking at 0.60-0.65, and the zero-thrust J landing where the chart
+# puts it for every P/D on the sheet. See the table --openwater prints.
+#
+# EAR and Z ARE CONSTANTS HERE, so the (A_E/A_0)^u Z^v part of every term is
+# folded into the coefficient once at import and the per-evaluation work is
+# 86 multiply-adds over J and P/D alone.
+_KT_TERMS = (
+    (+0.00880496, 0, 0, 0, 0), (-0.204554, 1, 0, 0, 0),
+    (+0.166351, 0, 1, 0, 0), (+0.158114, 0, 2, 0, 0),
+    (-0.147581, 2, 0, 1, 0), (-0.481497, 1, 1, 1, 0),
+    (+0.415437, 0, 2, 1, 0), (+0.0144043, 0, 0, 0, 1),
+    (-0.0530054, 2, 0, 0, 1), (+0.0143481, 0, 1, 0, 1),
+    (+0.0606826, 1, 1, 0, 1), (-0.0125894, 0, 0, 1, 1),
+    (+0.0109689, 1, 0, 1, 1), (-0.133698, 0, 3, 0, 0),
+    (+0.00638407, 0, 6, 0, 0), (-0.00132718, 2, 6, 0, 0),
+    (+0.168496, 3, 0, 1, 0), (-0.0507214, 0, 0, 2, 0),
+    (+0.0854559, 2, 0, 2, 0), (-0.0504475, 3, 0, 2, 0),
+    (+0.010465, 1, 6, 2, 0), (-0.00648272, 2, 6, 2, 0),
+    (-0.00841728, 0, 3, 0, 1), (+0.0168424, 1, 3, 0, 1),
+    (-0.00102296, 3, 3, 0, 1), (-0.0317791, 0, 3, 1, 1),
+    (+0.018604, 1, 0, 2, 1), (-0.00410798, 0, 2, 2, 1),
+    (-0.000606848, 0, 0, 0, 2), (-0.0049819, 1, 0, 0, 2),
+    (+0.0025983, 2, 0, 0, 2), (-0.000560528, 3, 0, 0, 2),
+    (-0.00163652, 1, 2, 0, 2), (-0.000328787, 1, 6, 0, 2),
+    (+0.000116502, 2, 6, 0, 2), (+0.000690904, 0, 0, 1, 2),
+    (+0.00421749, 0, 3, 1, 2), (+0.0000565229, 3, 6, 1, 2),
+    (-0.00146564, 0, 3, 2, 2),
+)
+_KQ_TERMS = (
+    (+0.00379368, 0, 0, 0, 0), (+0.00886523, 2, 0, 0, 0),
+    (-0.032241, 1, 1, 0, 0), (+0.00344778, 0, 2, 0, 0),
+    (-0.0408811, 0, 1, 1, 0), (-0.108009, 1, 1, 1, 0),
+    (-0.0885381, 2, 1, 1, 0), (+0.188561, 0, 2, 1, 0),
+    (-0.00370871, 1, 0, 0, 1), (+0.00513696, 0, 1, 0, 1),
+    (+0.0209449, 1, 1, 0, 1), (+0.00474319, 2, 1, 0, 1),
+    (-0.00723408, 2, 0, 1, 1), (+0.00438388, 1, 1, 1, 1),
+    (-0.0269403, 0, 2, 1, 1), (+0.0558082, 3, 0, 1, 0),
+    (+0.0161886, 0, 3, 1, 0), (+0.00318086, 1, 3, 1, 0),
+    (+0.015896, 0, 0, 2, 0), (+0.0471729, 1, 0, 2, 0),
+    (+0.0196283, 3, 0, 2, 0), (-0.0502782, 0, 1, 2, 0),
+    (-0.030055, 3, 1, 2, 0), (+0.0417122, 2, 2, 2, 0),
+    (-0.0397722, 0, 3, 2, 0), (-0.00350024, 0, 6, 2, 0),
+    (-0.0106854, 3, 0, 0, 1), (+0.00110903, 3, 3, 0, 1),
+    (-0.000313912, 0, 6, 0, 1), (+0.0035985, 3, 0, 1, 1),
+    (-0.00142121, 0, 6, 1, 1), (-0.00383637, 1, 0, 2, 1),
+    (+0.0126803, 0, 2, 2, 1), (-0.00318278, 2, 3, 2, 1),
+    (+0.00334268, 0, 6, 2, 1), (-0.00183491, 1, 1, 0, 2),
+    (+0.000112451, 3, 2, 0, 2), (-0.0000297228, 3, 6, 0, 2),
+    (+0.000269551, 1, 0, 1, 2), (+0.00083265, 2, 0, 1, 2),
+    (+0.00155334, 0, 2, 1, 2), (+0.000302683, 0, 6, 1, 2),
+    (-0.0001843, 0, 0, 2, 2), (-0.000425399, 0, 3, 2, 2),
+    (+0.0000869243, 3, 3, 2, 2), (-0.0004659, 0, 6, 2, 2),
+    (+0.0000554194, 1, 6, 2, 2),
+)
+
+
+def _fold(terms):
+    """(C, s, t, u, v) -> (C * EAR^u * Z^v, s, t), EAR and Z being fixed."""
+    return tuple((c * EAR ** u * float(BLADES) ** v, s, t)
+                 for c, s, t, u, v in terms)
+
+
+_KT = _fold(_KT_TERMS)
+_KQ = _fold(_KQ_TERMS)
+
+
+def _poly(folded, j, pd):
+    tot = 0.0
+    for c, s, t in folded:
+        tot += c * j ** s * pd ** t
+    return tot
+
+
+def open_water(j, pd):
+    """K_T, K_Q at this advance ratio and pitch ratio, plus whether either
+    input had to be clamped to the validity box. The clamp is R5: the
+    polynomials are a REGRESSION and outside their box they diverge, so the
+    caller is told and the panel says so on screen."""
+    jc = min(max(j, J_LO), J_HI)
+    pdc = min(max(pd, PD_LO), PD_HI)
+    kt, kq = _poly(_KT, jc, pdc), _poly(_KQ, jc, pdc)
+    if pd < PD_LO:
+        # Below the box: fade the thrust to zero at the no-lift pitch. See
+        # PD_ZERO. K_Q keeps the edge value.
+        kt *= max((pd - PD_ZERO) / (PD_LO - PD_ZERO), 0.0)
+    return kt, kq, (jc != j or pdc != pd)
+
+
+class PropState:
+    """Everything the model says about one helm setting, in one object.
+
+    THE CHAIN RUNS ONE WAY AND ONLY ONE WAY: the polynomials give K_T and K_Q,
+    those give thrust and torque, and thrust gives the induced velocity through
+    the actuator disc's own momentum balance. Nothing downstream is tuned
+    independently any more -- the wake's speed, the funnel's length, the
+    helix's advance per revolution and the cavitation criterion are all
+    functions of T, and T is a function of the diagram.
+
+        T   = K_T rho n^2 D^4          Q  = K_Q rho n^2 D^5
+        P_D = 2 pi n Q                 eta_0 = J K_T / (2 pi K_Q)
+        v_i = (-V_a + sqrt(V_a^2 + 2 T / (rho A))) / 2
+        u_disc = V_a + v_i             u_wake = V_a + 2 v_i
+
+    The induced velocity is the momentum inversion WITH advance, which reduces
+    to the familiar static sqrt(T / 2 rho A) at V_a = 0 and is the reason the
+    wake speeds up rather than doubling when the ship starts moving.
+
+    v_i CAN COME OUT NEGATIVE and that is not a bug: past the zero-thrust J the
+    screw is braking, and a braking disc leaves the water behind it SLOWER than
+    the freestream. The wake then convects at V_a + 2 v_i, which the kernel
+    floors so parcels still leave the disc rather than piling up on it."""
+
+    __slots__ = ("n", "va", "beta", "pd", "j", "kt", "kq", "thrust", "torque",
+                 "power", "eta", "vi", "u_disc", "u_wake", "extrapolated")
+
+    def __init__(self, rpm, beta_deg, va):
+        self.n = max(rpm, 0.0) / 60.0
+        self.va = max(va, 0.0)
+        self.beta = beta_deg
+        self.pd = pd_of(beta_deg)
+        self.j = self.va / (self.n * D_PROP) if self.n > 1.0e-4 else 0.0
+        self.kt, self.kq, self.extrapolated = open_water(self.j, self.pd)
+        rn2d4 = RHO * self.n * self.n * D_PROP4
+        self.thrust = self.kt * rn2d4
+        self.torque = self.kq * rn2d4 * D_PROP
+        self.power = TWO_PI * self.n * self.torque
+        self.eta = (self.j * self.kt / (TWO_PI * self.kq)
+                    if self.kq > 1.0e-6 and self.kt > 0.0 else 0.0)
+        rad = self.va * self.va + 2.0 * self.thrust / (RHO * A_DISC)
+        self.vi = 0.5 * (-self.va + math.sqrt(max(rad, 0.0)))
+        self.u_disc = self.va + self.vi
+        self.u_wake = self.va + 2.0 * self.vi
+
+    def creep(self):
+        """The kernel's own speed floor, mirrored so the banner and the panel
+        quote the number the wake was actually drawn with."""
+        umin = U_FLOOR * TWO_PI * self.n * R_TIP + 0.10 * self.va
+        return max(self.u_disc, umin), max(self.u_wake, umin)
+
+
+# The anchor: everything the LOOK is calibrated against is quoted here, at the
+# demo's own default helm and at the bollard. K_T_DESIGN normalises the
+# kernel's loading term to exactly 1 at the design pitch, which is what keeps
+# G_FLOOR and IN_G_FLOOR meaning what they meant before the polynomials landed.
+OP = PropState(RPS_OP * 60.0, BETA_DESIGN, 0.0)
+KT_DESIGN = OP.kt                   # 0.4133
+U_DISC_OP, U_WAKE_OP = OP.u_disc, OP.u_wake     # 1.847, 3.693 m/s
+
+
+def projected_area(pd):
+    """Taylor's approximation A_P / A_D = 1.067 - 0.229 P/D, with the developed
+    area taken as the expanded one. It is evaluated at the LIVE pitch because
+    the criterion it feeds is computed once per frame on the host -- per parcel
+    it would have cost a ring slot nobody had, and the design-pitch value is
+    14% out at the ends of the slider."""
+    return EAR * A_DISC * (1.067 - 0.229 * min(max(pd, PD_LO), PD_HI))
+
+
+def burrill(st):
+    """(sigma_0.7R, tau_c, tau_c at the 5% line, ratio to the INCEPTION line).
+
+    The ratio is the number the wake is gated on and the number the panel draws
+    its bar from: > 1 is cavitating. Both of Burrill's axes are computed from
+    quantities this file already has -- the pressure margin the water block
+    defines, the resultant speed at 0.7 R, and the thrust the polynomials gave
+    -- so "inception at X rpm at 3 m depth" is now a sentence derived from
+    named quantities rather than a coefficient chosen to make it true."""
+    om = TWO_PI * st.n
+    vr2 = st.va * st.va + (0.7 * om * R_TIP) ** 2
+    if vr2 < 1.0e-6:
+        return 0.0, 0.0, 0.0, 0.0
+    sigma = 2.0 * CAV_MARGIN / vr2
+    tau_c = st.thrust / (0.5 * RHO * projected_area(st.pd) * vr2)
+    line5 = BURRILL_5PCT * sigma ** BURRILL_P
+    return sigma, tau_c, line5, max(tau_c, 0.0) / (BURRILL_INC * line5)
+
+
+def inception_rpm(beta_deg, va, hub=False):
+    """The shaft speed at which the criterion above crosses 1, by bisection.
+    A derived sentence, not a tuned constant: this is what R4 bought."""
+    boost = HUB_CAV if hub else 1.0
+    lo, hi = 1.0, 4000.0
+    for _ in range(60):
+        mid = 0.5 * (lo + hi)
+        if burrill(PropState(mid, beta_deg, va))[3] * boost < 1.0:
+            lo = mid
+        else:
+            hi = mid
+    return 0.5 * (lo + hi)
+
+
+if "--openwater" in sys.argv:
+    # ── THE GATE THE COEFFICIENTS HAD TO PASS ───────────────────────────────
+    # Printed from the same tables the wake reads, so this is a check OF the
+    # demo and not a check beside it. Compare against any published B5-75
+    # open-water diagram.
+    print(f"Wageningen B{BLADES}-{EAR * 100:.0f} open water, "
+          f"{len(_KT)} K_T terms / {len(_KQ)} K_Q terms\n"
+          f"D {D_PROP:g} m, EAR {EAR:g}, Z {BLADES}\n")
+    for pd in (0.6, 0.8, PD_DESIGN, 1.0, 1.2, 1.4):
+        best_e, best_j, jz = 0.0, 0.0, 0.0
+        for i in range(1, 1601):
+            jj = i * 0.001
+            k_t, k_q, _ = open_water(jj, pd)
+            if k_q > 1e-6 and k_t > 0.0:
+                e = jj * k_t / (TWO_PI * k_q)
+                if e > best_e:
+                    best_e, best_j = e, jj
+            if jz == 0.0 and k_t <= 0.0:
+                jz = jj
+        k_t0 = open_water(0.0, pd)[0]
+        print(f"  P/D {pd:5.3f}   K_T(J=0) {k_t0:6.4f}   "
+              f"peak eta_0 {best_e:6.4f} at J {best_j:5.3f}   "
+              f"K_T = 0 at J {jz:5.3f}")
+    print(f"\n  at the default helm ({RPS_OP * 60:g} rpm, beta {BETA_DESIGN:g}, "
+          f"V_a 0, {DEPTH:g} m):")
+    sg, tc, l5, rr = burrill(OP)
+    print(f"    J {OP.j:.3f}  P/D {OP.pd:.4f}  K_T {OP.kt:.4f}  "
+          f"10 K_Q {10 * OP.kq:.4f}  eta_0 {OP.eta:.4f}\n"
+          f"    T {OP.thrust / 1e3:.2f} kN  Q {OP.torque / 1e3:.2f} kNm  "
+          f"P_D {OP.power / 1e3:.1f} kW\n"
+          f"    v_i {OP.vi:.3f}  u_disc {OP.u_disc:.3f}  "
+          f"u_wake {OP.u_wake:.3f} m/s\n"
+          f"    sigma_0.7R {sg:.3f}  tau_c {tc:.4f}  "
+          f"Burrill 5% line {l5:.4f}  -> {rr:.3f} x inception\n"
+          f"    INCEPTION: hub {inception_rpm(BETA_DESIGN, 0.0, True):.1f} rpm, "
+          f"tips {inception_rpm(BETA_DESIGN, 0.0, False):.1f} rpm")
+    sys.exit(0)
+
+# ── The wake, AND THE VELOCITIES THAT BECAME HONEST ─────────────────────────
+# It used to be anchored at RPS_REF by two authored constants -- U_DISC 3.86
+# and U_WAKE 6.0 -- which made 1.29 and 2.00 m/s at the default helm, "the
+# slipstream a large screw actually throws at the bollard" as judged by eye
+# over four revisions. The eye was low by a factor of 1.85, and the whole of
+# this block is what putting that right cost.
+# U_DISC 3.86 and U_WAKE 6.0 at the reference are GONE. They were authored, and
+# what replaces them is the momentum inversion on the polynomials' own thrust:
+# at the default helm B5-75 makes 17.8 kN, which is v_i = 1.85 m/s, a disc
+# velocity of 1.85 and a developed slipstream of 3.69. The tuned numbers were
+# 1.29 and 2.00 -- so the water is moving 1.85x faster than four revisions of
+# eyeballing had it, and nothing about the picture may move with it.
+#
+# THE FIX IS ONE FACTOR APPLIED EVERYWHERE, and it is arithmetic rather than
+# taste. Every constant in this block is a LENGTH divided by a SPEED:
+#
+#   LIFETIME  = REACH / u_wake          how far the wake runs before it ages out
+#   T_IN      = IN_REACH * dnm / u_disc how far ahead of the disc the funnel starts
+#   TAU_A/C/S = (an ease length) / u_wake
+#
+# So the lengths are what get authored -- they are what the camera sees and what
+# the latched box was cut for -- and the times fall out of them at whatever
+# speed the model says. LIFETIME lands at 1.30 s where it was 2.4, T_IN at 0.56
+# where it was 0.80, and the wake's SHAPE, its grain, its burst, its turbulence
+# and its collapse are all keyed on age FRACTIONS and so are untouched to the
+# last pixel. What changed is that the water now moves at a speed a naval
+# architect would recognise, and the box did not have to move at all: reach is
+# 4.80 m and the funnel 0.77 m, exactly the numbers the box was latched around,
+# so BOX_VOX_RATIO below re-derives to the same value it had. That was the
+# point of authoring the lengths.
+#
+# THE ONE VISIBLE CONSEQUENCE is the helix's advance per revolution, which is
+# u_wake / n and therefore rose with u_wake: 1.85 m/rev against the tuned 1.00.
+# The loops are twice as far apart and there are half as many of them in the
+# same four metres. That is not a regression -- it is the geometric pitch
+# (P = 1.60 m) plus the slipstream's own acceleration past it, which is what a
+# screw at the bollard actually lays down, and the tuned 1.00 m was simply half
+# of the truth.
+# ── AND THE FIRST RETUNE WAS WRONG, WHICH IS THE INTERESTING PART ──────────
+# Setting LIFETIME = REACH / u_wake and stopping there gave a wake of exactly
+# the right length that read as a WIRE CAGE: the helix's advance per revolution
+# is u / n, so at 3.69 m/s it is 1.85 m and the frame held 2.6 turns of it
+# where the tuned version held 4.8. Same reach, half the loops, and a column
+# you can see straight through -- which is the failure the SHEET block below
+# was written about.
+#
+# The fix was not to put the speed back. It was that u_wake is the velocity
+# INFINITELY FAR DOWNSTREAM, and the shipped TAU_A reached it in 26 cm. A real
+# slipstream takes a couple of diameters to accelerate and contract, and this
+# demo draws 2.7 diameters in total -- so nearly the whole visible wake is
+# still developing, and it convects at something much closer to the DISC
+# velocity than to the far-field one. Authoring the development LENGTH instead
+# of a time constant is what states that:
+#
+#   the loops leave the blade at u_disc / n = 0.92 m apart and open out to
+#   1.7 m by the end of the frame -- a helix that STRETCHES downstream, which
+#   is what an accelerating slipstream is and what the constant-pitch tuned
+#   version could not draw at all.
+#
+# LIFETIME then has to be SOLVED rather than divided, because the reach is the
+# integral of a velocity that is not constant. It comes out at 1.70 s.
+REACH = 4.80             # m of slipstream the framing was composed around
+IN_REACH = 0.774         # m the funnel stands ahead of the disc, ditto
+EASE_L = 2.0 * D_PROP    # m: the slipstream's acceleration length, ~2 diameters
+CONTRACT_L = 1.0 * D_PROP    # m: and its contraction length, ~1
+SWIRL_L = 0.80           # m over which the swirl decays away
+TAU_A = EASE_L / U_WAKE_OP          # 0.97 s
+TAU_C = CONTRACT_L / U_WAKE_OP      # 0.49 s
+TAU_S = SWIRL_L / U_WAKE_OP         # 0.22 s
+
+
+def wake_reach(u_d, u_w, life):
+    """How far a parcel gets in `life` seconds under the kernel's own axial
+    law -- the same expression, on the host, so the banner does not have to
+    guess. x = u_w tau - (u_w - u_d) TAU_A (1 - exp(-tau / TAU_A))."""
+    return u_w * life - (u_w - u_d) * TAU_A * (1.0 - math.exp(-life / TAU_A))
+
+
+def _solve_lifetime():
+    lo, hi = 0.05, 20.0
+    for _ in range(60):
+        mid = 0.5 * (lo + hi)
+        if wake_reach(U_DISC_OP, U_WAKE_OP, mid) < REACH:
+            lo = mid
+        else:
+            hi = mid
+    return 0.5 * (lo + hi)
+
+
+LIFETIME = _solve_lifetime()        # 1.70 s; also the slot recycle period
+# CONTRACT IS DERIVED PER PARCEL NOW and is not a constant at all -- see the
+# kernel. Mass conservation across the disc says r_wake / r_0 = sqrt(u_disc /
+# u_wake), which at the bollard is exactly 1/sqrt(2) = 0.707 against the 0.78
+# that was tuned by eye, and which INVERTS into an expansion once the ship is
+# moving fast enough for the screw to be braking. It costs one sqrt.
+# SWIRL_F is a RATE and so scales the other way: to keep the same angular twist
+# per METRE against a slipstream that now averages REACH / LIFETIME = 2.82 m/s
+# where the authored one was a flat 2.00, the rate rises by that ratio.
+# 0.22 -> 0.31, and the wake winds as tightly per metre of tube as it did.
+SWIRL_F = 0.31           # self-induced rotation of the helix, as a fraction of OMEGA
 W_CORE0 = 0.010          # vortex core radius at shedding (m)
 # ── Core growth: BURST, not sqrt ────────────────────────────────────────────
 # Lamb-Oseen's w = sqrt(w0^2 + 2 nu_t tau) was the first thing tried and it is
@@ -622,13 +1089,14 @@ SHEET_R0 = cli_arg("--sheet-r0", 0.155, float)      # x R_TIP
 # frame that says the blade caused this rather than merely stood in it.
 # Position stays continuous; IDENTITY deliberately does not.
 #
-# T_IN GREW WITH THE WATER CALIBRATION for the same reason LIFETIME did, and
-# by the same arithmetic: the funnel's reach is a SPEED times this time, and
-# the speed fell to a third. 0.28 s at 1.29 m/s reaches 27 cm, which is inside
-# the hub; 0.80 s puts the mouth back at 0.77 m, where the air version had it.
-# It also keeps T_IN / PERIOD at 25%, so IN_SHARE, WAKE_SHARE and every budget
-# derived from them are untouched.
-T_IN = cli_arg("--t-in", 0.80, float)   # s spent upstream; ~25% of the period
+# T_IN IS DERIVED FROM THE FUNNEL'S REACH, not authored, for the same reason
+# LIFETIME is -- see the wake block. IN_REACH is the length the framing and the
+# latched box were cut around (0.77 m ahead of the disc); the time it takes is
+# that length over whatever disc velocity the polynomials give, which at the
+# default helm is 1.85 m/s and puts T_IN at 0.56 s where the authored velocities
+# had it at 0.80. It moves T_IN / PERIOD from 25% to 30%, which WAKE_SHARE picks
+# up and BRIGHT and SIGMA divide back out, so no budget below has to be told.
+T_IN = 0.0               # set below, once IN_K and IN_F exist to make dnm
 # IN_SHARE is the answer to the first thing that went wrong here. Giving EVERY
 # slot an inflow leg costs the wake 25% of its parcels, and the far wake is
 # exactly the place in this picture that cannot afford them: it is already at
@@ -640,8 +1108,17 @@ T_IN = cli_arg("--t-in", 0.80, float)   # s spent upstream; ~25% of the period
 # its parcels for a funnel drawn with a quarter of a million.
 IN_SHARE = cli_arg("--in-share", 0.50, float)
 IN_K = 1.6               # the acceleration knee: 1 = uniform, higher = later rush
-IN_F = 0.45              # far-upstream drift, as a fraction of the disc speed
+# IN_F is the far-upstream drift as a fraction of the disc speed, and it is now
+# a FLOOR rather than the value: with a ship speed there is a real freestream
+# out there and the drift is that, so the kernel takes max(V_a / u_disc, IN_F).
+# At the bollard the max is IN_F and the leg is bit-for-bit what it was.
+IN_F = 0.45
 IN_RV = 0.70             # m, the induced-velocity law's radius -- sets the flare
+# The funnel's own time constant, from its authored length. dnm is what the
+# kernel's d(u) profile integrates to over the leg, so IN_REACH / (u_disc/dnm)
+# is exactly the time the outermost parcel spends getting there.
+T_IN = cli_arg("--t-in", IN_REACH * ((1.0 - IN_F) * IN_K + IN_F) / U_DISC_OP,
+               float)    # 0.56 s upstream; ~30% of the period
 # The flare multiplier, spread across the rake's radial stations below: a stream
 # is a COLUMN and not a cone shell, so the inner stations have to fill the
 # middle of it while the outer one puts the mouth past 2x the tip radius.
@@ -750,7 +1227,7 @@ IN_GAIN_FAR = 0.30       # x that, at the mouth: the far end is much fainter
 #
 # THE BOX GREW UPSTREAM and only upstream. It used to start at x = -0.35, a
 # hand's width in front of a disc nothing had ever been in front of; the funnel
-# reaches U_DISC * T_IN / IN_K_DEN = 0.68 m, so x = -0.85 covers it with margin.
+# reaches u_disc * T_IN / dnm = IN_REACH = 0.77 m, so x = -0.85 covers it.
 # It did NOT grow sideways to the mouth's ~2.0 m, and that is a decision rather
 # than an oversight: the volume is a fixed BOX_RES^3 lattice however big the box
 # is, so widening it to the mouth would coarsen the lattice by 1.7x across the
@@ -760,13 +1237,17 @@ IN_GAIN_FAR = 0.30       # x that, at the mouth: the far end is much fainter
 # outside the box and is unshadowed, which is what unshadowed water looks like.
 #
 # AND IT WAS RE-DERIVED ONCE FOR THE WATER CALIBRATION, downstream this time.
-# Reach at the default helm is u x LIFETIME = 2.00 x 2.4 = 4.80 m, and the
-# funnel now stands 0.77 m ahead of the disc, so the box spans x = -0.85 to
-# +4.85: centre 2.00, half 2.85. Done ONCE and latched, because the point of a
-# latched box is that it does not move; and because it moved at all, the
-# BOX_VOX_RATIO below has to be re-read, which is exactly the trap it exists
-# for. The cross-section did not change, so the lattice is coarser along the
-# wake by 6% and unchanged across it -- the axis the self-shadowing lives on.
+# Reach at the default helm is 4.80 m and the funnel stands 0.77 m ahead of the
+# disc, so the box spans x = -0.85 to +4.85: centre 2.00, half 2.85. Done ONCE
+# and latched, because the point of a latched box is that it does not move.
+#
+# THE B-SERIES REWRITE DID NOT MOVE IT AGAIN, and that was the point of
+# authoring REACH and IN_REACH as LENGTHS rather than deriving them from a
+# lifetime. The velocities nearly doubled and every time constant in the wake
+# block halved to absorb it, so the two numbers this box was cut around --
+# 4.80 and 0.77 -- came out bit for bit the same and BOX_VOX_RATIO below
+# re-derives to exactly the value it had. Re-read it anyway when either length
+# moves; that is the trap it exists for.
 BOX_CENTER = (2.00, 0.0, 0.0)
 BOX_HALF = (2.85, 1.20, 1.20)
 BOX_RES = cli_arg("--vol-res", 160, int)
@@ -831,7 +1312,6 @@ SHADOW = 0.0 if FLAT else cli_arg("--shadow", 0.72, float)
 # sprites back beside the volume they are supposed to be drawn on. It is a
 # CONSTANT and deliberately not a function of --rps: the throttle's own
 # invariance is the thing being re-anchored, not the thing being overridden.
-RPS_OP = 2.0             # the helm the look is anchored at
 OMG_OP = OM_G_FLOOR + (1.0 - OM_G_FLOOR) * (RPS_OP / RPS_REF)
 BRIGHT = cli_arg("--bright", 0.038, float) * (2_000_000 / N) \
     / (WAKE_SHARE * OMG_OP)
@@ -858,8 +1338,6 @@ BRIGHT = cli_arg("--bright", 0.038, float) * (2_000_000 / N) \
 #
 # 9M looks like 2M with less speckle because that is precisely what it is.
 
-TWO_PI = 2.0 * math.pi
-
 
 # ── The kernel ──────────────────────────────────────────────────────────────
 # One launch, no state: out_pos is the exported POSITION allocation (xyz + w =
@@ -884,12 +1362,12 @@ TWO_PI = 2.0 * math.pi
 @wp.kernel
 def shed(out_pos: wp.array(dtype=wp.vec4),
          out_col: wp.array(dtype=wp.vec4),
-         hist: wp.array(dtype=wp.vec3),
+         hist: wp.array(dtype=wp.vec4),
+         helm: wp.array(dtype=wp.vec2),
          t: float, n: int, blades: int,
          turb: float, sheet: float, hub_share: float,
          burst: float, sprite_r0: float, flux_p: float, bright: float,
          t_in: float, in_share: float, hist_n: int,
-         k_cav: float, cav_margin: float,
          tip_hint: float, vap_gain: float, bub_cav: float):
     i = wp.tid()
     s = wp.rand_init(90210, i)
@@ -961,7 +1439,7 @@ def shed(out_pos: wp.array(dtype=wp.vec4),
         return
 
     # ── THE HELM AT THIS PARCEL'S OWN CROSSING ──────────────────────────────
-    # hist[k] = (loading, omega, theta) as they stood on frame k. The ring is
+    # hist[k] = (omega, theta, v_i, V_a) as they stood on frame k. The ring is
     # read at floor(tb / DT), which for the WAKE leg is a frame in the past --
     # that is the whole causal beat: move a lever and the near wake changes at
     # once while a metre of old wake is still spiralling away under the pitch
@@ -978,12 +1456,48 @@ def shed(out_pos: wp.array(dtype=wp.vec4),
     kh = int(wp.floor(tbh / DT + 1.0e-3))
     if kh < 0:
         kh = 0
+    # ── THE RING WIDENED, AND THEN IT SPLIT IN TWO ─────────────────────────
+    # It used to carry (loading, omega, theta): an authored loading scalar and
+    # the shaft state. The loading is gone -- there is no such number any more,
+    # only a thrust -- and what a parcel needs at birth came to six quantities,
+    # so the history is two arrays indexed by the SAME frame:
+    #
+    #   hist[k]  vec4 (omega, theta, v_i, V_a)   the shaft and the water
+    #   helm[k]  vec2 (K_T / K_T_design, Burrill ratio)   what they MEAN
+    #
+    # THE SPLIT IS A MEASUREMENT, not a tidiness preference. Both entries of
+    # helm are functions of the helm alone -- they do not vary over the disc,
+    # over the span or with age -- and computing them per parcel meant running
+    # sigma_0.7R, tau_c and a wp.pow(sigma, 0.57) 1.7 million times a frame for
+    # one number per frame. That pow measured 1.6 ms, which is 4% of the frame
+    # and the difference between 24 and 25 fps at the shipped count; pow is the
+    # expensive instruction in this kernel and this file has paid for it once
+    # already (see SELECTS, NOT BRANCHES). On the host it is free, and it
+    # brought a bonus with it: A_P can use the parcel's OWN pitch through
+    # Taylor's correction instead of the design pitch, so the 14% approximation
+    # that a fifth ring slot would have been needed to remove is simply gone.
+    #
+    # What is STILL derived in the kernel is what momentum theory can recover
+    # exactly from the four state slots and nothing else:
+    #
+    #   u_disc = V_a + v_i        u_wake = V_a + 2 v_i     (definitions)
+    #
+    # Both rings are read at the same index, so a parcel's loading, its
+    # cavitation and its velocities are all the ones that stood at ITS OWN
+    # crossing frame. That is the causal beat and it is not negotiable.
     h = hist[kh % hist_n]
-    load = h[0]
-    om = h[1]
+    hl = helm[kh % hist_n]
+    om = h[0]
+    vi = h[2]
+    va = h[3]
+    ld = hl[0]                                  # K_T / K_T_design at birth
+    caq = hl[1]                                 # Burrill ratio at birth
+    # The two legs' own speeds, before the per-span lag below.
+    u_d0 = va + vi
+    u_w0 = va + 2.0 * vi
     # ── AZIMUTH: INTERPOLATE INSIDE THE FRAME, EXTRAPOLATE PAST IT ──────────
     # The ring is stamped once per frame and tb is continuous, so reading
-    # h[2] raw would quantise every filament's birth azimuth to 16.7 ms of
+    # h[1] raw would quantise every filament's birth azimuth to 16.7 ms of
     # shaft rotation -- 36 degrees at 360 rpm. The helix would be drawn as a
     # staircase of 36-degree steps instead of a curve. Walking the residual out
     # at that frame's own rate is exact for constant omega and smooth for any
@@ -1004,41 +1518,19 @@ def shed(out_pos: wp.array(dtype=wp.vec4),
     # is hidden inside a blend that is itself going to zero. Extrapolate the
     # WAKE's azimuth by the same amount and it would be a lie about a filament
     # welded to a blade tip, which is the one thing this demo cannot get wrong.
-    th_b = h[2] + om * (tb - float(kh) * DT)
-    # ── THE TWO COUPLINGS ───────────────────────────────────────────────────
-    # omf is the speed factor and it replaces, exactly, the spin-up ramp
-    # fraction the kernel used to compute for itself: at RPS_REF it is 1 and
-    # every formula below is the one that was tuned.
-    #
-    # Static-thrust momentum theory is the anchor. At a fixed pitch a screw has
-    # a fixed thrust coefficient, so T ~ omega^2 and the induced velocity
-    # v_i ~ sqrt(T) ~ omega -- LINEAR in shaft speed, and the sqrt is spent on
-    # the loading instead. The consequence is worth stating because it is not
-    # what one expects: the helix's advance PER REVOLUTION is u / n, and with
-    # u ~ omega that is INDEPENDENT OF RPM. Change the speed and the loop
-    # spacing in metres does not move; what moves is how far down the tube
-    # 2.4 s of wake reaches, and how fast the loops are laid down.
-    omf = om / OMEGA_REF
-    # Momentum theory again, on the other lever: thrust goes as the loading,
-    # induced velocity as its square root.
-    usc = wp.sqrt(U_FLOOR + (1.0 - U_FLOOR) * load) / USC_DESIGN
+    th_b = h[1] + om * (tb - float(kh) * DT)
+    # ── THE RADIANCE COUPLING ───────────────────────────────────────────────
     # Radiance follows the circulation, which is linear in omega like v_i is.
     # Since parcels per metre goes as 1 / u ~ 1 / omega, this holds the wake's
     # flux per METRE invariant under the throttle and lets the throttle change
-    # the wake's LENGTH, which is the honest reading.
-    omg = OM_G_FLOOR + (1.0 - OM_G_FLOOR) * omf
-    # ── THE CAVITATION NUMBER, AT THIS PARCEL'S OWN CROSSING ────────────────
-    # Momentum-theory level, like everything else in this file. The tip core's
-    # suction goes as the circulation SQUARED and Gamma ~ L omega R for a
-    # lifting section, so ca = K (L omega R)^2 -- quadratic in BOTH levers,
-    # which is why a helm that feels gentle on the wake is violent on the
-    # bubbles. It is compared against a specific energy (m2/s2) so rho never
-    # enters the kernel, and it is read from the RING, so a parcel carries the
-    # cavitation state of the moment it was shed for the rest of its life. The
-    # throttle-step shots therefore show a lit stub of new wake against a dark
-    # slug of old, which is a thing a ship's engineer has actually seen.
-    vt = om * R_TIP                        # tip speed, m/s
-    caq = k_cav * load * load * vt * vt / cav_margin
+    # the wake's LENGTH, which is the honest reading. It stays a function of
+    # omega alone -- the LOADING half of the same coupling is ld, above.
+    omg = OM_G_FLOOR + (1.0 - OM_G_FLOOR) * om / OMEGA_REF
+    # caq -- the Burrill ratio at this parcel's own crossing -- came off the
+    # helm ring above. It is what the throttle-step shots are made of: a parcel
+    # carries the cavitation state of the moment it was shed for the rest of
+    # its life, so a lit stub of new wake sits against a dark slug of old,
+    # which is a thing a ship's engineer has actually seen.
 
     blade = i % blades
 
@@ -1062,9 +1554,25 @@ def shed(out_pos: wp.array(dtype=wp.vec4),
     # Axial: eased from the disc velocity to the developed slipstream. The
     # inner span pushes less air, so it lags -- which is what shears the sheet
     # against the tip helix and starts the braiding.
+    #
+    # THE FLOOR IS ON THE KINEMATICS ONLY. u_w0 really does go to zero at zero
+    # pitch (and negative past the zero-thrust J, where the screw is braking
+    # and leaves the water slower than it found it), and a wake at zero speed
+    # stacks every parcel of every slot in one bright annulus on the disc
+    # plane. So the two speeds are floored at a small fraction of TIP speed --
+    # after thr, ld and caq have already been taken from the unfloored values,
+    # which is what keeps the thrust readout and the vapour honest while the
+    # picture still shows a creep.
     ax = 0.55 + 0.45 * span
-    u_w = U_WAKE * omf * ax * usc
-    u_d = U_DISC * omf * ax * usc
+    # The floor has a term for each way water can be moving past the disc: a
+    # fraction of TIP speed, and a fraction of the FREESTREAM. Either alone
+    # goes to zero in a case the other covers -- a feathered screw turning in
+    # still water, and a stopped screw in a moving one -- and the second term
+    # is exactly zero at the bollard, so the default and the film are
+    # bit-for-bit what they were.
+    umin = U_FLOOR * om * R_TIP + 0.10 * va
+    u_w = wp.max(u_w0, umin) * ax
+    u_d = wp.max(u_d0, umin) * ax
     phi_c = th_b + float(blade) * TWO_PI / float(blades)
 
     x = float(0.0)
@@ -1078,15 +1586,36 @@ def shed(out_pos: wp.array(dtype=wp.vec4),
     if inflow:
         # ── Upstream: the converging streamtube ─────────────────────────────
         uu = w_in / tin                       # 1 at birth, 0 at the disc
-        dnm = (1.0 - IN_F) * IN_K + IN_F
+        # ── THE FREESTREAM ENTERS HERE, IN TWO PLACES ───────────────────────
+        # fcont is the ratio the flow far upstream bears to the flow at the
+        # disc, V_a / u_disc, and it is the whole of what the ship's speed does
+        # to this leg. At the BOLLARD it is zero and both expressions below
+        # collapse, term for term, to the ones that shipped.
+        #
+        #   drift  the far-upstream axial speed. Without a freestream it was an
+        #          authored IN_F of the disc speed; with one it is the
+        #          freestream itself, so IN_F becomes a floor. A funnel in
+        #          moving water is LONGER, because the water was already
+        #          travelling when it started.
+        #   flare  continuity. A_inf / A_disc = u_disc / V_a, so the tube's
+        #          radius saturates at sqrt(u_disc / V_a) rather than growing
+        #          without bound -- which is why a prop at the bollard drinks
+        #          from a mouth twice its own diameter and a prop on a ship
+        #          barely flares at all. The induced-velocity law still sets
+        #          the SHAPE of the approach to it.
+        fcont = wp.clamp(va / wp.max(u_d, 1.0e-4), 0.0, 1.0)
+        fdr = wp.max(fcont, IN_F)
+        dnm = (1.0 - fdr) * IN_K + fdr
         # d_max falls out of pinning the slope at the disc to u_d: no axial
         # speed pop, and a funnel that GROWS with the spin-up ramp for free.
         d_max = u_d * tin / dnm
-        d = d_max * ((1.0 - IN_F) * (1.0 - wp.pow(1.0 - uu, IN_K)) + IN_F * uu)
+        d = d_max * ((1.0 - fdr) * (1.0 - wp.pow(1.0 - uu, IN_K)) + fdr * uu)
         x = -d
-        # Mass conservation through the on-axis induced velocity. Keyed on the
-        # DISTANCE, so a short funnel is also a narrow one.
-        g = 1.0 - d / wp.sqrt(d * d + IN_RV * IN_RV)
+        # Mass conservation through the on-axis induced velocity, floored at
+        # the freestream. Keyed on the DISTANCE, so a short funnel is also a
+        # narrow one.
+        gd = 1.0 - d / wp.sqrt(d * d + IN_RV * IN_RV)
+        g = fcont + (1.0 - fcont) * gd
         flare = 1.0 / wp.sqrt(wp.max(g, 0.02)) - 1.0
         # ── THE RAKE: NO SWIRL, NO BLADE ────────────────────────────────────
         # Which of the IN_LINES_A x IN_LINES_R streamlines this parcel is on.
@@ -1114,15 +1643,23 @@ def shed(out_pos: wp.array(dtype=wp.vec4),
         # funnel does not merely get short and narrow (which d_max and the
         # distance-keyed flare give for free above) -- it goes faint too.
         gain = IN_GAIN * (1.0 - (1.0 - IN_GAIN_FAR) * uu) * omg \
-            * (IN_G_FLOOR + (1.0 - IN_G_FLOOR) * load) / IN_GAIN_DESIGN
+            * (IN_G_FLOOR + (1.0 - IN_G_FLOOR) * ld)
         # Suspended sediment lit by what is left of the sun three metres down:
         # a pale green-grey, warmer than the vapour and much dimmer than it.
         col = wp.vec3(0.50, 0.56, 0.52)
     else:
         # ── Downstream: the wake ────────────────────────────────────────────
         x = u_w * tau - (u_w - u_d) * TAU_A * (1.0 - wp.exp(-tau / TAU_A))
-        # Radial: contraction toward CONTRACT * r0.
-        r = r0 * (CONTRACT + (1.0 - CONTRACT) * wp.exp(-tau / TAU_C))
+        # Radial: contraction toward sqrt(u_disc / u_wake) * r0, which is mass
+        # conservation across the disc and nothing else -- the constant 0.78
+        # that used to sit here was an eyeball of the same quantity. At the
+        # bollard it evaluates to 1/sqrt(2) = 0.707; past the zero-thrust J,
+        # where the screw brakes and u_wake falls below u_disc, it goes above 1
+        # and the slipstream EXPANDS, which is the correct picture and one the
+        # authored constant could not draw. The clamp keeps a floored u_w0 from
+        # turning the tube inside out.
+        contract = wp.sqrt(wp.clamp(u_d0 / wp.max(u_w0, 1.0e-4), 0.25, 1.4))
+        r = r0 * (contract + (1.0 - contract) * wp.exp(-tau / TAU_C))
         # Azimuth: the blade's own phase at shedding, plus a self-induced
         # rotation of the helical system that DECAYS with age (integral of a
         # decaying rate). The inner sheet sits deeper in the swirl and turns
@@ -1134,7 +1671,7 @@ def shed(out_pos: wp.array(dtype=wp.vec4),
         # the throttle it is a fixed FRACTION of the shaft rate, which is what
         # SWIRL_F always meant -- so the wake's angular twist per metre, like
         # its advance per revolution, is a property of the pitch alone.
-        sw = SWIRL_F * om * (1.6 - 0.6 * span) * load / SWIRL_DESIGN
+        sw = SWIRL_F * om * (1.6 - 0.6 * span) * ld
         phi = phi_c + sw * TAU_S * (1.0 - wp.exp(-tau / TAU_S))
         # ── DOES THIS PARCEL BOIL? ──────────────────────────────────────────
         # One comparison, evaluated on the helm as it stood when the blade cut
@@ -1144,6 +1681,8 @@ def shed(out_pos: wp.array(dtype=wp.vec4),
         if is_hub:
             cq = caq * HUB_CAV
         exc = wp.max(cq - 1.0, 0.0)          # the EXCESS over the margin
+        # (the excess is now over the Burrill INCEPTION LINE rather than over
+        # a pressure margin, which is why CAV_KNEE and CAV_LK moved with it.)
         # INTENSITY SATURATES and LENGTH DOES NOT, and the split is the point.
         # Past a modest excess a core is simply full of vapour and cannot get
         # any whiter; what a harder-pressed screw buys is a rope that survives
@@ -1161,7 +1700,7 @@ def shed(out_pos: wp.array(dtype=wp.vec4),
         cl = wp.clamp((frac - af) / (CAV_COLLAPSE * frac + 1.0e-4), 0.0, 1.0)
         vap = cavi * cl * cl * (3.0 - 2.0 * cl)
         # The loading/speed radiance factor both populations share.
-        omgl = omg * (G_FLOOR + (1.0 - G_FLOOR) * load) / GAIN_DESIGN
+        omgl = omg * (G_FLOOR + (1.0 - G_FLOOR) * ld)
         # ── SELECTS, NOT BRANCHES, AND THE POWS HOISTED OUT OF BOTH ─────────
         # The obvious way to write the two populations is `if is_sheet: ...
         # else: ...`, and it cost 7.5 ms/frame at 2M. Slots are assigned to
@@ -1768,30 +2307,47 @@ imported_pos = imported_col = None
 host_pos = host_col = None
 
 # ── The helm, and its history ───────────────────────────────────────────────
-# beta_now / rpm_now are what the levers ARE this frame -- the sliders, or the
-# scripted schedules when there is no UI. hist_np[k] = (loading, omega, theta)
-# as they stood on frame k, and it is the only channel through which the past
-# reaches the kernel. Pre-filled with the starting loading at a STOPPED shaft
-# (omega 0, theta 0) so that every index a slot can reach is defined before
-# frame 1 -- there is no separate "before the prop started" case any more, only
-# the first entries of a schedule that happens to begin at rest.
+# beta_now / rpm_now / va_now are what the three levers ARE this frame -- the
+# sliders, or the scripted schedules when there is no UI. hist_np[k] =
+# (omega, theta, v_i, V_a) as they stood on frame k, and it is the only channel
+# through which the past reaches the kernel.
+#
+# THE RING WIDENED FROM vec3 TO vec4 AND THE AUDIT IS THE INTERESTING PART.
+# The old three slots were (loading, omega, theta) and the loading no longer
+# exists -- there is a THRUST now, and thrust needs the speed of advance to be
+# defined at all. Every consumer of hist[] in the kernel had to be walked:
+# the azimuth moved from h[2] to h[1], the loading term became K_T / K_T_design
+# derived from v_i and V_a, and the cavitation criterion, which used to read
+# the loading directly, is now Burrill's on the thrust the same two slots give.
+# Nothing that a parcel reads at birth is passed as a kernel parameter any
+# more except the constants, which is the property the causal beat rests on.
+#
+# Pre-filled at a STOPPED shaft (omega 0, theta 0, v_i 0) carrying the starting
+# ship speed, so that every index a slot can reach is defined before frame 1.
 import numpy as _np
 beta_now = PITCH
 rpm_now = RPS * 60.0
+va_now = V_A
 omega_now = 0.0
 theta_now = 0.0
-hist_np = _np.zeros((HIST_N, 3), _np.float32)
-hist_np[:, 0] = loading(PITCH)
-hist_wp = wp.array(hist_np, dtype=wp.vec3, device=device)
+state_now = PropState(0.0, PITCH, V_A)   # the model at rest; advance() restamps
+hist_np = _np.zeros((HIST_N, 4), _np.float32)
+hist_np[:, 3] = V_A
+hist_wp = wp.array(hist_np, dtype=wp.vec4, device=device)
+# The second ring: the two DERIVED scalars, so the kernel does not recompute
+# a per-frame quantity per parcel. See the kernel's own note on the split.
+helm_np = _np.zeros((HIST_N, 2), _np.float32)
+helm_np[:, 0] = 1.0                 # a stopped shaft still has a pitch
+helm_wp = wp.array(helm_np, dtype=wp.vec2, device=device)
 
 
 def launch(out_pos, out_col):
     wp.launch(shed, dim=N, device=device,
-              inputs=[out_pos, out_col, hist_wp, sim_time, N, BLADES,
+              inputs=[out_pos, out_col, hist_wp, helm_wp, sim_time, N, BLADES,
                       TURB, SHEET, HUB_SHARE,
                       W_BURST, SPRITE_R0, FLUX_P, BRIGHT,
                       T_IN, IN_SHARE, HIST_N,
-                      K_CAV, CAV_MARGIN, TIP_HINT, VAP_GAIN, BUB_CAV])
+                      TIP_HINT, VAP_GAIN, BUB_CAV])
 
 
 def advance():
@@ -1814,7 +2370,7 @@ def advance():
     The blades are set here and the ring entry is written here, in one place,
     on purpose: what the reader sees the propeller doing this frame and what
     the wake will remember about this frame are the same numbers."""
-    global sim_time, frame_no, beta_now, rpm_now, omega_now, theta_now
+    global sim_time, frame_no, beta_now, rpm_now, omega_now, theta_now, state_now
     frame_no += 1
     sim_time = frame_no * DT
     if ui is None:
@@ -1830,8 +2386,17 @@ def advance():
     omega_now = om
     prop.rotation.x = theta_now
     set_pitch(beta_now)
-    hist_np[frame_no % HIST_N] = (loading(beta_now), omega_now, theta_now)
-    hist_wp.assign(hist_np)      # 3 x 76 floats: ~900 B/frame, below measurable
+    # THE MODEL IS EVALUATED ON THE SHAFT SPEED THE SHAFT ACTUALLY HAS, not on
+    # the one the slider commands: during the spin-up ramp the two differ by up
+    # to a factor of the ramp fraction, and J, K_T and the thrust that follows
+    # them all belong to the turning shaft. The panel reads the same object.
+    state_now = PropState(omega_now * 60.0 / TWO_PI, beta_now, va_now)
+    hist_np[frame_no % HIST_N] = (omega_now, theta_now,
+                                  state_now.vi, state_now.va)
+    helm_np[frame_no % HIST_N] = (
+        min(max(state_now.kt / KT_DESIGN, 0.0), 4.0), burrill(state_now)[3])
+    hist_wp.assign(hist_np)      # 6 x 144 floats: ~3 kB/frame, below measurable
+    helm_wp.assign(helm_np)
 
 
 def device_copy():
@@ -1894,39 +2459,56 @@ field.set_live_count(N)
 # The mouth is quoted at the COMMANDED operating point and not at the
 # reference one, because both levers move it: the funnel's length is pinned to
 # the disc velocity, which now carries the throttle and the pitch.
-OPF = (RPS / RPS_REF) * math.sqrt(
-    U_FLOOR + (1.0 - U_FLOOR) * loading(PITCH)) / USC_DESIGN
-IN_D_MAX = U_DISC * OPF * T_IN / ((1.0 - IN_F) * IN_K + IN_F)
+ST0 = PropState(RPS * 60.0, PITCH, V_A)          # the commanded operating point
+UD0, UW0 = ST0.creep()
+IN_D_MAX = UD0 * T_IN / ((1.0 - max(min(V_A / max(UD0, 1e-4), 1.0), IN_F))
+                         * IN_K + max(min(V_A / max(UD0, 1e-4), 1.0), IN_F))
+_gd = 1.0 - IN_D_MAX / math.hypot(IN_D_MAX, IN_RV)
+_fc = min(max(V_A / max(UD0, 1e-4), 0.0), 1.0)
 IN_R_MOUTH = R_TIP * (1.0 + IN_FLARE_HI * (IN_LINES_R - 0.5) / IN_LINES_R * (
-    1.0 / math.sqrt(1.0 - IN_D_MAX / math.hypot(IN_D_MAX, IN_RV)) - 1.0))
+    1.0 / math.sqrt(max(_fc + (1.0 - _fc) * _gd, 0.02)) - 1.0))
 
 
-def cav_ratio(beta_deg, rps):
-    """ca / margin for a tip filament shed at this helm. > 1 is cavitating.
-    The kernel's own expression, on the host, so the banner and the panel
-    state the number the wake was actually drawn with."""
-    return K_CAV * loading(beta_deg) ** 2 \
-        * (TWO_PI * rps * R_TIP) ** 2 / CAV_MARGIN
+def cav_ratio(beta_deg, rps, va=None):
+    """The Burrill ratio for a tip filament shed at this helm. > 1 is
+    cavitating. The kernel's own expression, on the host, so the banner and the
+    panel state the number the wake was actually drawn with."""
+    return burrill(PropState(rps * 60.0, beta_deg,
+                             V_A if va is None else va))[3]
 
 
-print(f"       prop:   {BLADES} blades, R {R_TIP:g} m, wake {LIFETIME:g} s\n"
+_SG, _TC, _L5, _CR = burrill(ST0)
+print(f"       prop:   B{BLADES}-{EAR * 100:.0f}, D {D_PROP:g} m, "
+      f"EAR {EAR:g}, wake {LIFETIME:.2f} s over "
+      f"{wake_reach(UD0, UW0, LIFETIME):.2f} m\n"
       f"       shaft:  {RPS * 60:g} rpm (ref {RPS_REF * 60:g}, "
       f"ramp {T_RAMP:g} s)"
       + (f" -> {RPS_TO * 60:g} rpm at t={RPS_AT:g} s" if RPS_AT < 1e8 else "")
       + f", tip {TWO_PI * RPS * R_TIP:.1f} m/s"
-      + f", slipstream {U_WAKE * OPF:.2f} m/s, "
-      f"advance {(U_WAKE * OPF / RPS if RPS > 0 else 0):.2f} m/rev\n"
+      + f", slipstream {UW0:.2f} m/s, "
+      f"advance {(UW0 / RPS if RPS > 0 else 0):.2f} m/rev\n"
       f"       pitch:  beta {PITCH:g} deg (design {BETA_DESIGN:g}), "
-      f"L {loading(PITCH):.2f}"
-      + (f" -> {PITCH_TO:g} deg (L {loading(PITCH_TO):.2f}) at t={PITCH_AT:g} s"
+      f"P/D {ST0.pd:.3f}"
+      + (f" -> {PITCH_TO:g} deg (P/D {pd_of(PITCH_TO):.3f}) at t={PITCH_AT:g} s"
          if PITCH_AT < 1e8 else "")
       + f", helm history {HIST_N} frames = {HIST_N * DT:.2f} s\n"
-      f"       water:  rho {RHO:g}, {DEPTH:g} m down, margin {CAV_MARGIN:.1f} "
-      f"m2/s2; tips at {cav_ratio(PITCH, RPS):.2f} x, "
-      f"hub at {cav_ratio(PITCH, RPS) * HUB_CAV:.2f} x "
-      + ("-> CAVITATING" if cav_ratio(PITCH, RPS) > 1.0
-         else ("-> hub rope only" if cav_ratio(PITCH, RPS) * HUB_CAV > 1.0
+      f"       open water: J {ST0.j:.3f}, K_T {ST0.kt:.4f}, "
+      f"10 K_Q {10 * ST0.kq:.4f}, eta_0 {ST0.eta:.3f}"
+      + ("   [OUTSIDE B-SERIES VALIDITY -- EXTRAPOLATED]"
+         if ST0.extrapolated else "") + "\n"
+      f"               T {ST0.thrust / 1e3:.2f} kN, Q {ST0.torque / 1e3:.2f} kNm, "
+      f"P_D {ST0.power / 1e3:.1f} kW, V_a {V_A:g} m/s, "
+      f"v_i {ST0.vi:.2f} m/s\n"
+      f"       water:  rho {RHO:g}, {DEPTH:g} m down, "
+      f"sigma_0.7R {_SG:.2f}, tau_c {_TC:.3f} "
+      f"(Burrill 5% line {_L5:.3f}); tips at {_CR:.2f} x, "
+      f"hub at {_CR * HUB_CAV:.2f} x "
+      + ("-> CAVITATING" if _CR > 1.0
+         else ("-> hub rope only" if _CR * HUB_CAV > 1.0
                else "-> clear")) + "\n"
+      f"               inception at this pitch: hub "
+      f"{inception_rpm(PITCH, V_A, True):.0f} rpm, "
+      f"tips {inception_rpm(PITCH, V_A, False):.0f} rpm\n"
       f"       inflow: {IN_SHARE:.0%} of slots, {T_IN:g} s upstream "
       f"({T_IN / PERIOD:.0%} of the period), reaching {IN_D_MAX:.2f} m ahead of "
       f"the disc at {IN_R_MOUTH:.2f} m = {IN_R_MOUTH / R_TIP:.1f} x the tip radius\n"
@@ -1949,7 +2531,7 @@ def run_to(seconds):
 
 if BENCH:
     # Warm to a FULLY DEVELOPED wake, not merely a warm pipeline. The old 2.5 s
-    # was longer than the air version's whole 0.85 s lifetime; at 2.4 s it is
+    # was longer than the air version's whole 0.85 s lifetime; at 1.7 s it is
     # shorter than the spin-up plus one lifetime, so the frame being timed would
     # be a half-grown wake covering half the film -- which is a cheaper frame
     # than the one anybody looks at, and a bench that flatters itself.
@@ -1968,7 +2550,7 @@ elif FILM:
     # and everything before it exists to make the audience feel the threshold
     # before they see it crossed. Six beats, ONE continuous simulation and ONE
     # continuous camera move -- there is not a single cut in it, and that is
-    # not restraint for its own sake. The wake carries 2.4 s of history, so a
+    # not restraint for its own sake. The wake carries 1.7 s of history, so a
     # cut throws away the one thing this demo is about; the lag between a lever
     # and the water is only legible if the camera stays on the water while it
     # happens.
@@ -1978,13 +2560,13 @@ elif FILM:
     #   2 SPIN-UP    7.0 - 15.0   -> 120 rpm. The funnel establishes and the
     #                             bubble column grows. CLEAN: tips at 0.83 of
     #                             the margin, hub at 0.93. No ropes.
-    #   3 INCEPTION 15.0 - 26.0   120 -> 130 rpm and HOLD. The hub crosses at
-    #                             124.6 rpm and the tips not until 131.8, so
-    #                             130 is a 4 s window with the axial rope lit
+    #   3 INCEPTION 15.0 - 26.0   120 -> 138 rpm and HOLD. The hub crosses at
+    #                             127.8 rpm and the tips not until 141.2, so
+    #                             138 is a 4 s window with the axial rope lit
     #                             and the helices still clear -- the thing real
     #                             CPP footage shows and the reason the beat is
     #                             shaped this way instead of as one ramp. Then
-    #                             130 -> 300 and the tips bloom.
+    #                             138 -> 300 and the tips bloom.
     #   4 COLLAPSE  26.0 - 34.0   300 -> 180 rpm, a HARD step. The rope length
     #                             gate falls from 1.00 to 0.40 of a life, the
     #                             fast slug already downstream keeps its own
@@ -1992,9 +2574,9 @@ elif FILM:
     #                             convects off frame.
     #   5 FEATHER   34.0 - 41.5   beta 22 -> 5 at 180 rpm. The other lever,
     #                             and the causality lesson in one shot: the
-    #                             funnel dies in a frame, the wake takes 2.4 s
+    #                             funnel dies in a frame, the wake takes 1.7 s
     #                             to age out, and the propeller never stops.
-    #   6 FINALE    41.5 - 55.0   beta 5 -> 30. Full re-bloom (3.13 x margin)
+    #   6 FINALE    41.5 - 55.0   beta 5 -> 30. Full re-bloom (2.08 x inception)
     #                             and a slow pull back to the widest framing
     #                             the murk allows: funnel, prop, slipstream.
     #
@@ -2030,8 +2612,15 @@ elif FILM:
                 (7.0, 10.0, "hold"),        # 1 OPEN: barely turning
                 (10.0, 120.0, "ease"),      # 2 SPIN-UP
                 (15.0, 120.0, "hold"),
-                (18.5, 130.0, "ease"),      # 3 INCEPTION: into the hub's window
-                (21.0, 130.0, "hold"),      #   HUB ROPE ONLY lives here
+                # 138, NOT 130. Burrill moved both inception speeds -- the hub
+                # crosses at 127.8 rpm now and the tips at 141.2, where the
+                # authored gate had them at 124.6 and 131.8 -- so the hub-only
+                # window is 13 rpm wide instead of 7 and this is the rpm that
+                # sits in it exactly as 130 sat in the old one: hub +9.1% over
+                # its inception line, tips 2.6% short of theirs. The beat is
+                # unchanged; the number under it is now derived.
+                (18.5, 138.0, "ease"),      # 3 INCEPTION: into the hub's window
+                (21.0, 138.0, "hold"),      #   HUB ROPE ONLY lives here
                 (24.5, 300.0, "ease"),      #   and the tips bloom
                 (26.0, 300.0, "hold"),
                 (26.0, 180.0, "step"),      # 4 COLLAPSE: the throttle's step
@@ -2304,45 +2893,157 @@ else:
     controls.enable_damping = True
     controls.target.set(*CAM_T)
 
+    # ── THE OPEN-WATER DIAGRAM, LIVE ────────────────────────────────────────
+    # K_T, 10 K_Q and eta_0 against J at the CURRENT P/D, with the operating
+    # point on it. This is the picture every propeller is sold with and the one
+    # a marine engineer recognises before reading a single label -- and it is
+    # not decoration here, because the curve under the moving dot is literally
+    # the function the wake is being drawn from.
+    #
+    # 10 K_Q RATHER THAN K_Q, always, for the reason the convention exists: at
+    # this EAR and Z the torque coefficient is a twentieth of the thrust one
+    # and would be a flat line on the floor of the axes.
+    #
+    # THE CURVES ARE CACHED ON P/D. 41 samples x 86 polynomial terms is a
+    # millisecond of Python, which is nothing on a slider drag and everything
+    # at 25 fps when the pitch has not moved -- and it has not moved on all but
+    # a handful of frames.
+    OW_N = 41
+    _ow_cache = {}
+
+    def open_water_curve(pd):
+        key = round(pd, 3)
+        hit = _ow_cache.get(key)
+        if hit is None:
+            if len(_ow_cache) > 64:
+                _ow_cache.clear()
+            js, kts, kqs, ets = [], [], [], []
+            for i in range(OW_N):
+                jj = J_HI * i / (OW_N - 1)
+                k_t, k_q, _ = open_water(jj, pd)
+                js.append(jj)
+                kts.append(k_t)
+                kqs.append(10.0 * k_q)
+                ets.append(jj * k_t / (TWO_PI * k_q)
+                           if k_q > 1e-6 and k_t > 0.0 else 0.0)
+            hit = (js, kts, kqs, ets)
+            _ow_cache[key] = hit
+        return hit
+
+    # Explicit, because Dummy(0, h) reserves a ZERO-width item and the rect
+    # comes back as a stub -- there is no content-region binding to ask the
+    # panel how wide it is, and hard-coding to the window width is honest
+    # enough for a panel that sets its own.
+    OW_W, OW_H = 424.0, 132.0
+    OW_YMAX = 1.0            # K_T, 10 K_Q and eta_0 all live in 0..1 here
+    C_KT = (0.62, 0.80, 1.00, 1.0)      # the vapour's own blue
+    C_KQ = (1.00, 0.78, 0.42, 1.0)      # the rake's warm
+    C_ET = (0.55, 0.95, 0.62, 1.0)      # efficiency, and nothing else is green
+    C_AX = (0.55, 0.60, 0.66, 0.85)
+    C_GR = (0.35, 0.40, 0.46, 0.45)
+    C_OP = (1.00, 1.00, 1.00, 1.0)
+
+    def draw_open_water(st):
+        """The diagram, drawn straight onto the panel's own draw list."""
+        tp.imgui.dummy(OW_W, OW_H)
+        x0, y0, x1, y1 = tp.imgui.item_rect()
+        x1 = max(x1, x0 + 120.0)              # a collapsed panel still has axes
+        w, h = x1 - x0, y1 - y0
+
+        def px(j, v):
+            return (x0 + w * min(max(j, 0.0), J_HI) / J_HI,
+                    y1 - h * min(max(v, 0.0), OW_YMAX) / OW_YMAX)
+
+        tp.imgui.draw_rect(x0, y0, x1, y1, (0.06, 0.09, 0.11, 0.85), 1.0, True)
+        for gv in (0.2, 0.4, 0.6, 0.8):
+            gy = y1 - h * gv / OW_YMAX
+            tp.imgui.draw_line(x0, gy, x1, gy, C_GR, 1.0)
+        for gj in (0.5, 1.0):
+            gx = x0 + w * gj / J_HI
+            tp.imgui.draw_line(gx, y0, gx, y1, C_GR, 1.0)
+        tp.imgui.draw_rect(x0, y0, x1, y1, C_AX, 1.0, False)
+
+        js, kts, kqs, ets = open_water_curve(st.pd)
+        for vals, col in ((kts, C_KT), (kqs, C_KQ), (ets, C_ET)):
+            tp.imgui.draw_polyline([px(j, v) for j, v in zip(js, vals)],
+                                   col, 1.8)
+        # THE OPERATING POINT, and it is drawn at the CLAMPED J and P/D -- the
+        # same place the wake is being evaluated -- so a slider pushed outside
+        # the validity box parks the dot on the box's edge rather than sliding
+        # off into a region the curve does not cover. The panel says why.
+        jc = min(max(st.j, J_LO), J_HI)
+        opx = x0 + w * jc / J_HI
+        tp.imgui.draw_line(opx, y0, opx, y1, (1.0, 1.0, 1.0, 0.35), 1.0)
+        for v, col in ((st.kt, C_KT), (10.0 * st.kq, C_KQ), (st.eta, C_ET)):
+            cx, cy = px(jc, v)
+            tp.imgui.draw_circle(cx, cy, 3.5, col, 1.0, True)
+            tp.imgui.draw_circle(cx, cy, 5.0, C_OP, 1.2, False)
+        tp.imgui.draw_text(x0 + 5.0, y0 + 3.0,
+                           f"B{BLADES}-{EAR * 100:.0f}  P/D {st.pd:.3f}", C_AX)
+        tp.imgui.draw_text(x0 + 5.0, y0 + 17.0, "K_T", C_KT)
+        tp.imgui.draw_text(x0 + 38.0, y0 + 17.0, "10 K_Q", C_KQ)
+        tp.imgui.draw_text(x0 + 96.0, y0 + 17.0, "eta_0", C_ET)
+        tp.imgui.draw_text(x1 - 46.0, y1 - 15.0, f"J {J_HI:g}", C_AX)
+
     def draw_ui():
-        """The helm. Two levers, and everything else is a readout of what they
-        have already done -- there is nothing here to configure, only the pitch
-        and the throttle and the consequences to watch."""
-        global beta_now, rpm_now
+        """The helm. Three levers, and everything else is a readout of what
+        they have already done -- there is nothing here to configure, only the
+        pitch, the throttle, the ship's speed and the consequences to watch."""
+        global beta_now, rpm_now, va_now
         tp.imgui.set_next_window_pos(12, 12)
-        tp.imgui.set_next_window_size(434, 0)
+        tp.imgui.set_next_window_size(452, 0)
         tp.imgui.begin("Helm")
         _, beta_now = tp.imgui.slider_float("blade pitch (deg)", beta_now,
                                             BETA_MIN, BETA_MAX)
         _, rpm_now = tp.imgui.slider_float("shaft speed (rpm)", rpm_now,
                                            RPM_MIN, RPM_MAX)
-        ld = loading(beta_now)
+        _, va_now = tp.imgui.slider_float("ship speed (m/s)", va_now,
+                                          VA_MIN, VA_MAX)
         # Read the ACTUAL shaft state back out of the integrator rather than
         # recomputing it from the sliders: during the spin-up the two differ,
         # and the number that means anything is the one the wake was given.
-        omf = omega_now / OMEGA_REF
+        # state_now IS that object -- advance() built it from omega_now.
+        st = state_now
         rpm = omega_now * 60.0 / TWO_PI
-        usc = math.sqrt(U_FLOOR + (1.0 - U_FLOOR) * ld) / USC_DESIGN
-        uw = U_WAKE * omf * usc
-        tp.imgui.text(f"beta   {beta_now:5.1f} deg at 0.7R   "
-                      f"(design {BETA_DESIGN:.0f})   thrust {ld:4.2f}")
-        tp.imgui.text(f"shaft  {rpm:5.0f} rpm   (ref {RPS_REF * 60:.0f})   "
-                      f"tip {omega_now * R_TIP:5.1f} m/s")
-        tp.imgui.text(f"wake   {uw:5.2f} m/s of water   "
-                      f"advance {(uw / (rpm / 60.0) if rpm > 1.0 else 0.0):5.2f} "
-                      f"m/rev   reach {uw * LIFETIME:4.1f} m")
+        _, uw = st.creep()
+        draw_open_water(st)
+        tp.imgui.text(f"J {st.j:5.3f}   K_T {st.kt:6.4f}   "
+                      f"10 K_Q {10 * st.kq:6.4f}   eta_0 {st.eta:5.3f}")
+        tp.imgui.text(f"T {st.thrust / 1e3:7.2f} kN   Q {st.torque / 1e3:6.2f} kNm"
+                      f"   P_D {st.power / 1e3:7.1f} kW")
+        # ── R5: SAY IT, DO NOT HIDE IT ──────────────────────────────────────
+        # The polynomials are a regression over J in [0, 1.5] and P/D in
+        # [0.5, 1.4]. Both sliders leave that box at their ends, and a panel
+        # that kept quoting four decimals there would be lying with precision.
+        if st.extrapolated:
+            tp.imgui.text("*** outside B-series validity -- EXTRAPOLATED ***")
+            tp.imgui.text(f"    P/D {st.pd:5.3f} (box {PD_LO:g}-{PD_HI:g})   "
+                          f"J {st.j:5.3f} (box {J_LO:g}-{J_HI:g})")
+        else:
+            tp.imgui.text(f"beta {beta_now:5.1f} deg at 0.7R -> P/D {st.pd:5.3f}"
+                          f"   (design {BETA_DESIGN:.0f} deg / {PD_DESIGN:.3f})")
+        tp.imgui.text(f"shaft  {rpm:5.0f} rpm   tip {omega_now * R_TIP:5.1f} m/s"
+                      f"   v_i {st.vi:5.2f} m/s")
+        ud, _ = st.creep()
+        tp.imgui.text(f"wake   {uw:5.2f} m/s   advance "
+                      f"{(ud / (rpm / 60.0) if rpm > 1.0 else 0.0):4.2f}-"
+                      f"{(uw / (rpm / 60.0) if rpm > 1.0 else 0.0):4.2f} m/rev"
+                      f"   reach {wake_reach(ud, uw, LIFETIME):4.1f} m")
         tp.imgui.separator()
-        # ── THE CAVITATION INDICATOR ────────────────────────────────────────
-        # The one readout this demo exists for. The bar is the tip core's
-        # suction as a fraction of the pressure margin, and the line under it
-        # is the answer: how far short, or how far over and by how much. imgui
-        # here has no coloured text and no progress bar, so the bar is ASCII --
-        # which costs nothing and is legible in a 1:1 crop, which is where it
-        # actually gets read.
-        cr = cav_ratio(beta_now, max(rpm, 0.0) / 60.0)
+        # ── THE CAVITATION INDICATOR, NOW BURRILL'S ─────────────────────────
+        # The one readout this demo exists for, and it finally quotes the pair
+        # a naval architect would ask for: the cavitation number at 0.7 R and
+        # the thrust-loading coefficient, against Burrill's own 5% line. The
+        # bar is how far the loading has come toward INCEPTION, which sits at
+        # BURRILL_INC of that line. imgui here has no coloured text and no
+        # progress bar, so the bar is ASCII -- which costs nothing and is
+        # legible in a 1:1 crop, which is where it actually gets read.
+        sg, tc, l5, cr = burrill(st)
         fill = int(round(min(cr, 1.0) * 24))
         tp.imgui.text(f"cav    [{'#' * fill}{'-' * (24 - fill)}] "
-                      f"{cr:4.2f} x margin")
+                      f"{cr:4.2f} x inception")
+        tp.imgui.text(f"       sigma_0.7R {sg:6.2f}   tau_c {tc:5.3f}   "
+                      f"Burrill 5% {l5:5.3f}")
         tp.imgui.text(f"       {DEPTH:.1f} m down, margin {CAV_MARGIN:.0f} m2/s2"
                       f"   ({RHO:.0f} kg/m3)")
         if cr > 1.0:
@@ -2354,21 +3055,24 @@ else:
         else:
             tp.imgui.text(f"clear water   tips {100.0 * (1.0 - cr):.0f}% short, "
                           f"hub {100.0 * (1.0 - cr * HUB_CAV):.0f}% short")
+        tp.imgui.text(f"       inception at this pitch and speed: hub "
+                      f"{inception_rpm(beta_now, va_now, True):.0f}, tips "
+                      f"{inception_rpm(beta_now, va_now, False):.0f} rpm")
         tp.imgui.text(f"{tp.imgui.get_framerate():5.0f} fps   "
                       f"{N / 1e6:.1f} M parcels   t={sim_time:6.2f} s")
         tp.imgui.separator()
         # The one thing to say about the lag, because it is the feature and it
         # looks like a bug for the seconds it takes to convect away.
+        tp.imgui.text("K_T, K_Q and eta_0 are the Wageningen B5-75 regression")
+        tp.imgui.text("(Oosterveld & van Oossanen 1975), and the wake is what")
+        tp.imgui.text("the thrust they give does to the water. NOTHING below")
+        tp.imgui.text("the diagram is tuned separately from it.")
         tp.imgui.text("water carries no tracer. what you see is VAPOUR, and")
-        tp.imgui.text("it only exists above the bar. push either lever.")
-        tp.imgui.text("both levers move NOW; the wake answers with history.")
+        tp.imgui.text("it only exists above the bar. push any lever.")
         tp.imgui.text(f"{LIFETIME:.1f} s of old slipstream keeps the pitch, the")
         tp.imgui.text(f"speed AND the cavitation it was shed under ({HIST_N}-frame")
         tp.imgui.text("ring), and the boundary convects away. the inflow does")
         tp.imgui.text("not lag: a pressure field is not convected.")
-        tp.imgui.text("advance/rev is a property of PITCH alone -- the")
-        tp.imgui.text("throttle changes how far the wake reaches, not its")
-        tp.imgui.text("loop spacing. that is what a screw does.")
         tp.imgui.end()
 
     def animate():
