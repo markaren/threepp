@@ -802,6 +802,7 @@ int main(int argc, char** argv) {
                                 // raise it (or the "haze" slider) to fill the fjord
                                 // with haze + god rays (Phase 2: a plain density
                                 // scale — no clip-lifting hack any more).
+    bool profNoAo = false, profNoGi = false, profHardShadow = false;// perf A/B: isolate the RT cost in the deferred shade
     bool noAutoExposure = false;// --noae: fixed exposure — the AE histogram meters the
                                 // fog's in-scatter and normalises it away, hiding
                                 // exactly the shafts the scout is trying to compare
@@ -876,6 +877,9 @@ int main(int argc, char** argv) {
         else if (std::strcmp(argv[i], "--climb") == 0 && i + 1 < argc) climbRate = static_cast<float>(std::atof(argv[++i]));
         else if (std::strcmp(argv[i], "--fogscale") == 0 && i + 1 < argc) startFogScale = static_cast<float>(std::atof(argv[++i]));
         else if (std::strcmp(argv[i], "--noae") == 0) noAutoExposure = true;
+        else if (std::strcmp(argv[i], "--noao") == 0) profNoAo = true;
+        else if (std::strcmp(argv[i], "--nogi") == 0) profNoGi = true;
+        else if (std::strcmp(argv[i], "--hardshadow") == 0) profHardShadow = true;
         else if (std::strcmp(argv[i], "--wind") == 0 && i + 1 < argc) startWind = static_cast<float>(std::atof(argv[++i]));
         else if (std::strcmp(argv[i], "--foamamount") == 0 && i + 1 < argc) foamAmount = static_cast<float>(std::atof(argv[++i]));
         else if (std::strcmp(argv[i], "--waterres") == 0 && i + 2 < argc) {
@@ -918,7 +922,9 @@ int main(int argc, char** argv) {
     renderer.setAutoExposureSpeed(headlessish ? 12.0f : 2.0f);
     // renderer.setGbufferMsaa(2);// leaf canopies + grass edges
     renderer.setRenderScale(0.85f);
-    renderer.setSunAngularRadius(0.6f);// soft RT sun shadows
+    renderer.setSunAngularRadius(profHardShadow ? 0.f : 0.6f);// soft RT sun shadows
+    if (profNoAo) renderer.setDeferredAO(false);
+    if (profNoGi) renderer.setProbeGI(false);
     // Phase 2 unified fog: scene.fog (set per-frame below) is the AIR medium —
     // the haze + god rays through the fjord walls, driven live by the "haze"
     // slider. The volumetrics follow automatically (no setVolumetricFog opt-in).
@@ -2143,8 +2149,16 @@ int main(int argc, char** argv) {
             const auto t = renderer.lastFrameTimings();
             const auto ls = renderer.autoLodStats();
             std::cout << "wrote " << path.string() << " (" << fps << " fps)\n"
-                      << "  gbuf " << t.rasterGbufMs << "  shade " << t.shadeBMs
+                      << "  gbuf " << t.rasterGbufMs << "  shade " << t.pathTraceMs
                       << "  denoise " << t.denoiseMs << "  taa " << t.taaMs
+                      << "  froxel " << t.froxelMs << "  dof " << t.dofMs
+                      << "  overlay " << t.overlayMs
+                      << "  oceanFft " << t.oceanFftMs << "  oceanDisp " << t.oceanDisplaceMs
+                      << "  oceanFoam " << t.oceanFoamMs << "  oceanBlas " << t.oceanBlasMs
+                      << "  tlasRefit " << t.tlasRefitMs << "  dynGeom " << t.dynGeomRefitMs
+                      << "  instExpand " << t.instanceExpandMs
+                      << "\n  gpuTotal " << t.gpuTotalMs << "  gpuPassSum " << t.gpuPassSumMs
+                      << "  unbracketed " << (t.gpuTotalMs - t.gpuPassSumMs)
                       << "  cpuEnsure " << t.cpuEnsureSceneMs << "  cpuRecord " << t.cpuRecordMs
                       << "  cpuFrame " << t.cpuFrameMs
                       << "  tiles " << tiles->activeTiles()
