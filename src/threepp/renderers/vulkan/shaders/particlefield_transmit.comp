@@ -1,0 +1,147 @@
+#version 460
+#extension GL_EXT_scalar_block_layout    : require
+#extension GL_EXT_buffer_reference       : require
+#extension GL_EXT_buffer_reference2      : require
+#extension GL_EXT_shader_explicit_arithmetic_types_int64 : require
+
+// ParticleField TRANSMITTANCE PREPASS — plans/particle-volumetric-sprites R8.
+//
+// ── WHY THIS EXISTS ─────────────────────────────────────────────────────────
+// The first cut of the volumetric sprites did both marches in the BILLBOARD
+// VERTEX stage, which the plan accepted as "4x redundancy for v1 simplicity".
+// The bill came in at +9.4 ms for 4M sprites: a quad has four vertices, the
+// march origin is the particle CENTRE, and so all four vertices computed the
+// same two numbers. The redundancy bought nothing at all — not a gradient, not
+// a per-corner variation, nothing — because neither T_cam nor T_sun is a
+// function of the corner.
+//
+// So the march moves here: one thread per SLOT, once per view, into a
+// (T_cam, T_sun) pair the vertex stage then reads by index. Same march, same
+// origin, same eight steps, same volume — a quarter of the work.
+//
+// ── WHY PER SLOT AND NOT PER LIVE PARTICLE ──────────────────────────────────
+// The vertex stage indexes by gl_InstanceIndex, which is a SLOT index into the
+// position buffer, and there is no compaction anywhere in this design (a dead
+// slot is a collapsed quad, never a removed one). Writing the output at the
+// same index is what makes the fetch a single load with no indirection. Dead
+// slots cost one store of (1,1) rather than a march.
+//
+// ── PACKING ─────────────────────────────────────────────────────────────────
+// Two transmittances in [0,1] carry no information a half float loses, so the
+// pair is one packHalf2x16'd uint per slot: 4 B/particle, 16 MB at 4M. A
+// genuine rg16f storage buffer would need 16-bit storage features this
+// renderer does not otherwise require; packHalf2x16 is core and identical in
+// bytes.
+
+layout(local_size_x = 64) in;
+
+// Same 16 B stride and same DEAD sentinel (w < 0) as every other consumer.
+layout(buffer_reference, scalar, buffer_reference_align = 16) readonly buffer PosBuf { vec4 v[]; };
+// The output. One uint per slot, packHalf2x16(T_cam, T_sun).
+layout(buffer_reference, scalar, buffer_reference_align = 4) writeonly buffer TransBuf { uint v[]; };
+
+// The field's own r16f density mirror — the SAME image, the SAME linear-clamp
+// sampler and therefore the same filtered values the vertex stage marched
+// before this pass existed. An image is the one thing that cannot ride a
+// buffer_reference, so it is this pipeline's only descriptor.
+layout(set = 0, binding = 0) uniform sampler3D fieldDensity;
+
+layout(push_constant, scalar) uniform Pc {
+    uint64_t posAddr;    //   0
+    uint64_t outAddr;    //   8
+    vec4     model[3];   //  16  ROWS of the affine field->world matrix
+    vec3     boxMin;     //  64  the density volume's world min corner
+    vec3     boxInvSize; //  76  1 / (2 * halfExtent)
+    vec3     camWorld;   //  88  the eye, world space — the ONE per-VIEW input
+    vec3     sunDirWorld;// 100  unit, TOWARD the sun
+    uint     capacity;   // 112
+    uint     flags;      // 116  bit0 = march the camera leg, bit1 = the sun leg
+} pc;                    // 120 B — inside the guaranteed 128 B push range
+const uint kTransCam = 1u;
+const uint kTransSun = 2u;
+
+// ── Beer-Lambert through the field's own density volume ─────────────────────
+// LIFTED VERBATIM from bbTransmittance in particlefield_billboard.vert, which
+// is where it lived until this pass took the work over. It is a deliberate
+// copy for the reason that one is a copy of pdTransmittance: the header those
+// two would share declares set 0 bindings 67/68/69, and neither this pipeline
+// nor the billboard one has those bindings or any prospect of them. The vertex
+// stage's copy is now GONE — it fetches instead of marching — so the count of
+// live copies did not grow.
+//
+// The march is in the box's own NORMALISED space, which makes the slab
+// intersection two multiplies and makes `t` come out in WORLD METRES for free.
+float bbTransmittance(vec3 p, vec3 dir) {
+    const vec3 o = (p - pc.boxMin) * pc.boxInvSize;
+    const vec3 d = dir * pc.boxInvSize;
+    // Never a zero divisor and never a 0*inf NaN: a ray parallel to a pair of
+    // faces gets a huge finite crossing parameter, which min() then ignores.
+    const vec3 sgn = mix(vec3(-1.0), vec3(1.0), greaterThanEqual(d, vec3(0.0)));
+    const vec3 inv = sgn / max(abs(d), vec3(1e-8));
+    const vec3 tf  = max((vec3(0.0) - o) * inv, (vec3(1.0) - o) * inv);
+    // Bounded above by the box's own L1 span, so a particle that has drifted
+    // outside the box cannot ask for a kilometre-long march.
+    const float span = 1.0 / pc.boxInvSize.x + 1.0 / pc.boxInvSize.y + 1.0 / pc.boxInvSize.z;
+    const float tExit = clamp(min(min(tf.x, tf.y), tf.z), 0.0, span);
+    if (tExit <= 0.0) return 1.0;
+
+    const float ds = tExit * (1.0 / 8.0);
+    float tau = 0.0;
+    for (int i = 0; i < 8; ++i) {
+        const vec3 uvw = o + d * (ds * (float(i) + 0.5));
+        // Skip, don't clamp: CLAMP_TO_EDGE would smear the boundary voxels over
+        // the whole world, which reads as infinite dust.
+        if (any(lessThan(uvw, vec3(0.0))) || any(greaterThan(uvw, vec3(1.0)))) continue;
+        // textureLod, NOT texture: an implicit-LOD sample is only defined in a
+        // FRAGMENT stage (there are no derivatives in a compute one either),
+        // and glslang will happily emit OpImageSampleImplicitLod anyway — which
+        // is invalid SPIR-V that a permissive driver answers with ZERO rather
+        // than with an error. The volume then reads as vacuum, every
+        // transmittance comes back as exactly 1, and the feature looks like a
+        // tuning problem instead of a bug. This tree has already been bitten by
+        // it once, in the vertex stage this code came from.
+        tau += textureLod(fieldDensity, uvw, 0.0).r * ds;
+    }
+    return exp(-min(tau, 40.0));
+}
+
+void main() {
+    const uint pi = gl_GlobalInvocationID.x;
+    if (pi >= pc.capacity) return;
+
+    const vec4 pw = PosBuf(pc.posAddr).v[pi];
+
+    // 1.0 is "nothing in the way", which is both the physically right answer
+    // for a knob that is off and the exact IEEE identity for the multiply the
+    // vertex stage does with it.
+    vec2 T = vec2(1.0);
+
+    // Dead slot. NOT written as (w < 0): a NaN fails every comparison, so the
+    // positive form catches garbage as dead too — the same rule every other
+    // consumer of this buffer uses. A dead slot's quad is collapsed to zero
+    // area by the vertex stage, so what it stores could be anything; it stores
+    // 1.0 rather than nothing so the buffer never holds an uninitialised value
+    // a later frame could read.
+    if (pw.w >= 0.0) {
+        // The positions are FIELD-LOCAL and the volume is world-anchored.
+        const vec4 p4  = vec4(pw.xyz, 1.0);
+        const vec3 pw4 = vec3(dot(pc.model[0], p4), dot(pc.model[1], p4), dot(pc.model[2], p4));
+
+        if ((pc.flags & kTransCam) != 0u) {
+            const vec3  toEye = pc.camWorld - pw4;
+            const float dEye  = length(toEye);
+            const vec3  dir   = (dEye > 1e-6) ? (toEye / dEye) : vec3(0.0, 0.0, 1.0);
+            T.x = bbTransmittance(pw4, dir);
+        }
+        if ((pc.flags & kTransSun) != 0u) {
+            T.y = bbTransmittance(pw4, pc.sunDirWorld);
+        }
+    }
+
+    // The EXPONENT (volumeExtinction) and the phase lobe stay in the vertex
+    // stage on purpose: the first is a per-field grade that would cost this
+    // pass nothing to apply but would make the stored number mean something
+    // other than a transmittance, and the second depends on the direction to
+    // the particle, which the vertex stage already has in view space.
+    TransBuf(pc.outAddr).v[pi] = packHalf2x16(T);
+}

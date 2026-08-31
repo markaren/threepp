@@ -1703,6 +1703,16 @@ void VulkanRenderer::Impl::recordSecondaryViews(VkCommandBuffer cb) {
                 // prepass, which is a sub-pixel disagreement on a soft sprite
                 // and not worth a second full-screen depth pass per view.
                 if (fieldBillboardPipeline1x_ != VK_NULL_HANDLE && sceneHasFieldBillboards()) {
+                    // R8/R9: this view's own transmittance prepass, re-
+                    // dispatched over the frame's one buffer. T_cam is a
+                    // property of the EYE, so the primary's answers are wrong
+                    // for a sensor looking from somewhere else — and the
+                    // re-dispatch is what makes a shared buffer correct, since
+                    // this view's draws sit between this barrier and the next
+                    // view's. Outside the rendering scope below, because a
+                    // compute dispatch cannot be recorded inside one.
+                    recordFieldTransmittance(cb);
+
                     VkImageMemoryBarrier2 toAtt{};
                     toAtt.sType         = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
                     toAtt.srcStageMask  = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;

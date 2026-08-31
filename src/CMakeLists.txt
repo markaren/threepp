@@ -1458,6 +1458,16 @@ if (THREEPP_WITH_VULKAN)
         "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/particlefield_billboard.frag"
         kParticleFieldBillboardFragSpv
         _particlefield_billboard_frag_spv_h)
+    # R8 of plans/particle-volumetric-sprites: the transmittance PREPASS. One
+    # thread per slot marches the field's density volume toward the eye and
+    # toward the sun and writes the pair packed into one uint, which the
+    # billboard vertex stage then fetches. It used to march in that stage, four
+    # times per particle (a quad has four vertices and the march origin is the
+    # particle centre) — measured at +9.4 ms for 4M sprites.
+    compile_vulkan_shader(threepp
+        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/particlefield_transmit.comp"
+        kParticleFieldTransmitCompSpv
+        _particlefield_transmit_spv_h)
     # F4 (1): the billboard-only bloom composite. The glow-enabled fields are
     # drawn a SECOND time into a small offscreen linear-HDR target, the shared
     # bloom_down/bloom_up pyramid runs on that target alone, and this fullscreen

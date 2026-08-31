@@ -1545,17 +1545,12 @@ namespace threepp {
         // appearance record comes by device address. The one descriptor is the
         // optional sprite texture, which reuses the legacy path's set layout,
         // its per-frame pool and its 1x1 white default.
+        // (plans/particle-volumetric-sprites briefly gave this pipeline a SET 1
+        // — the field's r16f density mirror, marched by the vertex stage. R8
+        // moved the marches into particlefield_transmit.comp, which is where
+        // the image is bound now, so the exception closed again and the draw
+        // side is back to one set.)
         VkPipelineLayout fieldBillboardPipelineLayout_ = VK_NULL_HANDLE;
-        // ...with ONE exception, added by plans/particle-volumetric-sprites:
-        // SET 1 is the field's own r16f density mirror, which the vertex stage
-        // marches for its transmittance terms. An image is the one thing that
-        // cannot ride a buffer_reference, so the choice was a set or no light
-        // transport. Its own layout rather than a binding grown into
-        // particleDescSetLayout_ — that layout is shared with the legacy
-        // particle and world-Sprite pipelines, and neither has any business
-        // carrying a 3D sampler. Sets come from particleDescPools_, allocated
-        // and written per frame like the texture sets beside them.
-        VkDescriptorSetLayout fieldVolumeDescSetLayout_ = VK_NULL_HANDLE;
         // At overlaySampleBits() — the primary's overlay pass.
         VkPipeline       fieldBillboardPipeline_       = VK_NULL_HANDLE;
         // At 1 sample — a secondary view composites into its own colour target
@@ -1625,10 +1620,7 @@ namespace threepp {
         std::array<VkDescriptorPool, kFramesInFlight> particleDescPools_{};
         // 1×1 white default bound when a particle system has no texture.
         Image2D particleWhiteTex_{};
-        // 64 sprite-texture sets plus the field billboards' per-field density
-        // volume sets, which come out of the same pool (one per field per view
-        // per output mode).
-        static constexpr uint32_t kMaxParticleTexPerFrame = 96;
+        static constexpr uint32_t kMaxParticleTexPerFrame = 64;
 
         // ── Overlay-pass fog (Phase 2b) ─────────────────────────────────────
         // The post-TAA overlay draws world-space ParticleSystem billboards
@@ -3899,6 +3891,9 @@ namespace threepp {
         // consumes it lives inside that overlay pass and compute cannot run
         // inside a render-pass instance. No-op when no field asked for a glow.
         void recordFieldBillboardGlow(VkCommandBuffer cb);
+        // R8/R9: (T_cam, T_sun) once per particle for the view whose draws come
+        // next. Outside any render-pass instance; no-op when nothing marches.
+        void recordFieldTransmittance(VkCommandBuffer cb);
         // Lazily create the glow pass + its two graphics pipelines + its images.
         // Called from the PREPARE window (never mid-recording), so the pipeline
         // compile lands where every other lazy creation in this renderer does.

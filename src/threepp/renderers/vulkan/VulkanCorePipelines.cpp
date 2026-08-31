@@ -2552,41 +2552,20 @@ void VulkanRenderer::Impl::createFieldBillboardPipeline() {
             pcRange.stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
             pcRange.offset     = 0;
             pcRange.size       = sizeof(FieldBillboardPC);
-            // Set 0 is the LEGACY path's texture layout reused verbatim — so
-            // BillboardRepr::texture works through the same ensureParticleTexture
-            // cache and the same 1x1 white default, and an untextured field costs
-            // one extra descriptor write per draw from a pool that is already
-            // reset once per frame.
+            // Set 0 only, and it is the LEGACY path's texture layout reused
+            // verbatim — so BillboardRepr::texture works through the same
+            // ensureParticleTexture cache and the same 1x1 white default, and
+            // an untextured field costs one extra descriptor write per draw
+            // from a pool that is already reset once per frame.
             //
-            // Set 1 is the field's own r16f density mirror, marched by the
-            // VERTEX stage for BillboardRepr::volumeExtinction / volumeShadow
-            // (plans/particle-volumetric-sprites R4). It is the pass's ONLY
-            // descriptor beyond the sprite texture, and it exists for one
-            // reason: an image cannot be reached by device address, so a 3D
-            // volume is the single thing this otherwise descriptor-free design
-            // has to bind. Its own layout, not a binding added to set 0 — that
-            // layout is shared with the legacy particle and world-Sprite
-            // pipelines, which have no use for a sampler3D.
-            {
-                VkDescriptorSetLayoutBinding vb{};
-                vb.binding         = 0;
-                vb.descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-                vb.descriptorCount = 1;
-                vb.stageFlags      = VK_SHADER_STAGE_VERTEX_BIT;
-                VkDescriptorSetLayoutCreateInfo vlci{};
-                vlci.sType        = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-                vlci.bindingCount = 1;
-                vlci.pBindings    = &vb;
-                check(vkCreateDescriptorSetLayout(ctx->device(), &vlci, nullptr,
-                                                  &fieldVolumeDescSetLayout_),
-                      "vkCreateDescriptorSetLayout(fieldBillboardVolume)");
-            }
-            const VkDescriptorSetLayout fbLayouts[2] = {particleDescSetLayout_,
-                                                        fieldVolumeDescSetLayout_};
+            // (plans/particle-volumetric-sprites added a set 1 here for the
+            // density volume the vertex stage marched. R8 moved the marches to
+            // particlefield_transmit.comp, which binds the volume itself, and
+            // this layout went back to one set.)
             VkPipelineLayoutCreateInfo plci{};
             plci.sType                  = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
-            plci.setLayoutCount         = 2;
-            plci.pSetLayouts            = fbLayouts;
+            plci.setLayoutCount         = 1;
+            plci.pSetLayouts            = &particleDescSetLayout_;
             plci.pushConstantRangeCount = 1;
             plci.pPushConstantRanges    = &pcRange;
             check(vkCreatePipelineLayout(ctx->device(), &plci, nullptr,

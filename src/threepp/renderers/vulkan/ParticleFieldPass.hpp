@@ -283,8 +283,13 @@ namespace threepp::vulkan {
         float volumeShadow;           // 228  mix toward the sun term; 0 = no march
         float volumeAmbient;          // 232
         float volumeSunGain;          // 236
-    };                                // 240
-    static_assert(sizeof(BillboardParamsGpu) == 240,
+        // R8: this field's slice of the frame's transmittance buffer, which
+        // particlefield_transmit.comp fills once per particle per view. 240 is
+        // 8-aligned, so this lands naturally and the block needs no pad.
+        // 0 exactly when the field marches nothing, i.e. when bit 16 is clear.
+        VkDeviceAddress transAddr;    // 240
+    };                                // 248
+    static_assert(sizeof(BillboardParamsGpu) == 248,
                   "BillboardParamsGpu drifted from particlefield_billboard.vert");
 
     // ── F4: the per-VIEW billboard record ───────────────────────────────────
@@ -407,14 +412,6 @@ namespace threepp::vulkan {
             // the whole chain is never recorded.
             bool            glow          = false;
             float           glowThreshold = 0.f;// bright-pass knee, linear HDR
-            // The r16f density volume the vertex stage marches for this field's
-            // transmittance terms, or VK_NULL_HANDLE when it has none / the
-            // knobs are off — the recorder then binds the renderer's 1x1x1 zero
-            // dummy, so the descriptor is always valid and the factor is exactly
-            // 1. A VIEW rather than an address: an image cannot be reached by
-            // buffer_reference, which is the whole reason this one term costs
-            // the pass a descriptor set (set 1) it otherwise has none of.
-            VkImageView     volumeView    = VK_NULL_HANDLE;
         };
 
         // Same contract and same reason as InstanceExpand::RetireBufferFn: a
@@ -545,6 +542,31 @@ namespace threepp::vulkan {
         // skip the timestamp bracket (so the timing measures only real work)
         // on the common frame that has no emitter.
         [[nodiscard]] bool emitActive() const { return !emitDispatch_.empty(); }
+
+        // ── R8/R9: the per-view transmittance prepass ───────────────────────
+        // One dispatch per marching field, writing (T_cam, T_sun) per SLOT into
+        // this frame's buffer, closed with a compute-write → vertex-read
+        // barrier. Recorded OUTSIDE any render-pass instance, immediately
+        // before the billboard draws of the view whose eye `camWorld` is —
+        // and re-recorded for the next view over the SAME buffer behind the
+        // next barrier (R9). T_sun is view-independent and is recomputed with
+        // it; a second buffer to avoid that would cost more memory than the
+        // eight taps it saves.
+        //
+        // Views are recorded sequentially into one command buffer, so one
+        // buffer per frame-in-flight is all the depth this needs. The glow leg
+        // is the same camera as its display leg and deliberately does NOT
+        // re-dispatch: it reads what the display leg's dispatch wrote.
+        //
+        // R10: no-op — not one command, and not one allocated byte — when no
+        // visible field has a volumetric knob on.
+        void recordTransmittance(VkCommandBuffer cb, const float camWorld[3],
+                                 const float sunDirWorld[3]);
+
+        // Any field will run the prepass this frame. Lets the renderer skip the
+        // whole call (and its camera-inverse) on every scene that has no
+        // volumetric field, which is nearly all of them.
+        [[nodiscard]] bool transmittanceActive() const { return !transDispatch_.empty(); }
 
         // ── PHASE 2 ─────────────────────────────────────────────────────────
         // Zero the density volumes and splat this frame's live particles into
@@ -767,6 +789,15 @@ namespace threepp::vulkan {
             // once, outside any frame's record.
             Image2D         densityLin{};
             VkDescriptorSet convertSet = VK_NULL_HANDLE;
+            // R8: the transmittance prepass's view of the SAME r16f mirror, as
+            // a COMBINED_IMAGE_SAMPLER so the march gets the hardware trilinear
+            // filtering the vertex stage's textureLod had. Allocated and
+            // written ONCE, on the first frame this field actually marches —
+            // the image handle never changes for the life of the field, so this
+            // set is never rewritten and can never be a VUID-03047 in-flight
+            // update. VK_NULL_HANDLE on a field that never marches, which is
+            // half of R10's "not one allocated byte".
+            VkDescriptorSet marchSet = VK_NULL_HANDLE;
 
             // ── F5: the baked height map ────────────────────────────────────
             // RINGED over the frames in flight, unlike the density volume,
@@ -824,6 +855,18 @@ namespace threepp::vulkan {
             // therefore its slot in the majorant buffer. Pushed to the convert
             // dispatch, which reduces the volume's maximum into it.
             std::uint32_t   volIndex   = 0;
+        };
+
+        // R8: one field's transmittance dispatch, resolved in prepareFrame so
+        // recording touches no ParticleField and no map — the same shape as
+        // EmitDispatch / BakeDispatch / DensityDispatch above. Everything here
+        // is view-INDEPENDENT; the two per-view vectors arrive as arguments to
+        // recordTransmittance and are patched into the push block there, which
+        // is what makes re-dispatching for the next view free of any host work.
+        struct TransDispatch {
+            VkDescriptorSet set     = VK_NULL_HANDLE;// the r16f mirror, sampled
+            std::uint32_t   groups  = 0;             // ceil(capacity / 64)
+            unsigned char   pc[120]{};               // TransmitPc, prebuilt
         };
 
         VulkanContext&  ctx_;
@@ -917,6 +960,26 @@ namespace threepp::vulkan {
         // resized, so the per-field convert sets that name it are written once.
         Buffer                densityMajorants_{};
 
+        // ── R8: the transmittance prepass ───────────────────────────────────
+        // Created lazily, on the first field that actually marches, so a scene
+        // with dust but no volumetric sprites compiles nothing and allocates
+        // nothing. Its own sampler because the pass owns no other one, and a
+        // linear-clamp 3D sampler is what makes the compute march read the same
+        // filtered values the vertex stage's textureLod did.
+        VkSampler             transSampler_    = VK_NULL_HANDLE;
+        VkDescriptorSetLayout transDsLayout_   = VK_NULL_HANDLE;
+        VkPipelineLayout      transPipeLayout_ = VK_NULL_HANDLE;
+        VkPipeline            transPipe_       = VK_NULL_HANDLE;
+        // (T_cam, T_sun) as one packHalf2x16 uint per SLOT, for every marching
+        // field this frame laid end to end. One buffer per frame-in-flight
+        // (R9): views re-dispatch over the same one behind their own barriers,
+        // but the PREVIOUS frame's vertex reads must not see this frame's
+        // writes — the same per-FIF discipline every other per-frame resource
+        // here follows. Device-local: nothing on the host ever reads it.
+        Buffer        transBufs_[impl::kFramesInFlight]{};
+        std::uint32_t transCapacity_ = 0;// in uint elements, i.e. in slots
+        std::vector<TransDispatch> transDispatch_;
+
         // A destroyed field's descriptor set, held until no in-flight frame can
         // still name it. Same rule as VulkanRetireQueue (serial +
         // kFramesInFlight <= current), kept local because the renderer's queue
@@ -965,6 +1028,10 @@ namespace threepp::vulkan {
         void   retireOrDestroy(Image2D& img);
         void   ensureEmitPipeline();
         void   ensureDensityPipeline();
+        // R8. False when the pipeline could not be created, which leaves the
+        // field's kBbVolume bit clear and its sprites flat rather than wrong.
+        bool   ensureTransmittancePipeline();
+        void   ensureTransCapacity(std::uint32_t count);
         // Allocates the field's volume on first use; false when the field's
         // DensityRepr is off or the volume could not be created.
         bool   ensureDensityVolume(State& st, const ParticleField& field);

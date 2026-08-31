@@ -1687,14 +1687,12 @@ void VulkanRenderer::Impl::recordFieldBillboards(VkCommandBuffer cb, VkPipeline 
             const Texture* curTex = nullptr;
             bool curTexBound = false;
             std::unordered_map<const Texture*, VkDescriptorSet> setCache;
-            // Set 1: the field's own density volume, for the vertex stage's
-            // transmittance marches. Keyed by the VIEW handle so the common
-            // scene — every field on the dummy, or one field with a volume —
-            // allocates exactly one set for the whole pass.
-            ensureParticleDensityResources();
-            VkImageView curVol = VK_NULL_HANDLE;
-            bool curVolBound = false;
-            std::unordered_map<VkImageView, VkDescriptorSet> volCache;
+            // NOTE: this loop also bound a SET 1 — the field's density volume,
+            // for the vertex stage's transmittance marches — until
+            // plans/particle-volumetric-sprites R8 moved those marches into
+            // recordFieldTransmittance's compute prepass. The image went with
+            // them, so the billboard pass is back to the one descriptor it had
+            // before that feature: the sprite texture.
 
             for (const auto& st : states) {
                 if (!st.billboard || st.bbIndirect == VK_NULL_HANDLE || !st.field) continue;
@@ -1755,55 +1753,6 @@ void VulkanRenderer::Impl::recordFieldBillboards(VkCommandBuffer cb, VkPipeline 
                     curTexBound = true;
                 }
 
-                // ── Set 1: the density volume the vertex stage marches ──────
-                // Always bound, even when the field asks for no transport: the
-                // vertex shader references the sampler statically, so leaving
-                // set 1 unbound is undefined behaviour rather than a saving.
-                // The 1x1x1 zero dummy makes the unused case read sigma = 0 and
-                // therefore T = 1 — though the uniform kBbVolume branch means
-                // it is never actually sampled there.
-                {
-                    const VkImageView vol = (st.volumeView != VK_NULL_HANDLE)
-                                                    ? st.volumeView
-                                                    : particleDensityLinDummy_.view;
-                    if (!curVolBound || vol != curVol) {
-                        VkDescriptorSet vset = VK_NULL_HANDLE;
-                        if (auto it = volCache.find(vol); it != volCache.end()) {
-                            vset = it->second;
-                        } else {
-                            VkDescriptorSetAllocateInfo vsi{};
-                            vsi.sType              = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
-                            vsi.descriptorPool     = particleDescPools_[currentFrame];
-                            vsi.descriptorSetCount = 1;
-                            vsi.pSetLayouts        = &fieldVolumeDescSetLayout_;
-                            if (vkAllocateDescriptorSets(ctx->device(), &vsi, &vset) != VK_SUCCESS)
-                                continue;
-                            VkDescriptorImageInfo vii{};
-                            vii.imageView = vol;
-                            // GENERAL for its whole life — the convert dispatch
-                            // writes it as a storage image and nothing ever
-                            // transitions it, which is the same contract the
-                            // deferred set's binding 69 is written under.
-                            vii.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
-                            vii.sampler     = textureSamplerIsoClamp_;
-                            VkWriteDescriptorSet vw{};
-                            vw.sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-                            vw.dstSet          = vset;
-                            vw.dstBinding      = 0;
-                            vw.descriptorCount = 1;
-                            vw.descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-                            vw.pImageInfo      = &vii;
-                            vkUpdateDescriptorSets(ctx->device(), 1, &vw, 0, nullptr);
-                            volCache.emplace(vol, vset);
-                        }
-                        vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_GRAPHICS,
-                                                fieldBillboardPipelineLayout_, 1, 1, &vset,
-                                                0, nullptr);
-                        curVol      = vol;
-                        curVolBound = true;
-                    }
-                }
-
                 Matrix4 modelM, mvM;
                 std::memcpy(modelM.elements.data(), st.field->matrixWorld->elements.data(), 64);
                 mvM.multiplyMatrices(viewM, modelM);
@@ -1828,6 +1777,33 @@ void VulkanRenderer::Impl::recordFieldBillboards(VkCommandBuffer cb, VkPipeline 
 
                 vkCmdDrawIndirect(cb, st.bbIndirect, 0, 1, sizeof(VkDrawIndirectCommand));
             }
+        }
+
+// ── R8/R9: the transmittance prepass, for the view about to draw ────────────
+// Called immediately before a view's billboard draws and OUTSIDE its render-
+// pass instance, because a compute dispatch cannot be recorded inside one. The
+// PRIMARY calls it once, before the glow pass — the glow leg and the display
+// leg are the same camera, so the second reads what the first dispatched. A
+// SECONDARY calls it again with its own eye, re-dispatching over the same
+// per-frame buffer behind its own barrier (R9): T_cam is a property of the
+// view, so a shared buffer is only correct because the views are recorded
+// sequentially and each one's draws sit between its dispatch and the next.
+//
+// The eye is the fourth column of the inverse UNJITTERED view — the same matrix
+// recordFieldBillboards builds its push block from, so the position the march
+// starts toward and the position the quad is projected onto cannot disagree.
+//
+// No-op, and not even the inverse, when no visible field marches.
+void VulkanRenderer::Impl::recordFieldTransmittance(VkCommandBuffer cb) {
+            if (!particleFieldPass_ || !particleFieldPass_->transmittanceActive()) return;
+
+            Matrix4 viewInv;
+            std::memcpy(viewInv.elements.data(), view().currViewUnjit_.data(), 64);
+            viewInv.invert();
+            const float camWorld[3] = {static_cast<float>(viewInv.elements[12]),
+                                       static_cast<float>(viewInv.elements[13]),
+                                       static_cast<float>(viewInv.elements[14])};
+            particleFieldPass_->recordTransmittance(cb, camWorld, bbSunDirWorld_);
         }
 
 // ── F4: the per-VIEW billboard record ───────────────────────────────────────
@@ -3137,6 +3113,13 @@ void VulkanRenderer::Impl::recordCommandBuffer(VkCommandBuffer cb, uint32_t imag
             // draw that consumes the pyramid lives inside it, and a compute
             // chain cannot be recorded inside a render-pass instance). No-op
             // unless a visible field asked for a glow.
+            //
+            // R8: the transmittance prepass goes FIRST, and here rather than
+            // inside either billboard pass, because both of them draw the
+            // PRIMARY camera's quads — the glow leg is the display leg's
+            // content a second time — so one dispatch serves both. Outside any
+            // render-pass instance for the reason the glow chain is.
+            recordFieldTransmittance(cb);
             recordFieldBillboardGlow(cb);
 
             // Post-TAA wireframe / line / particle / sprite overlays. The

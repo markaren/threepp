@@ -8,6 +8,7 @@
 #include "threepp/renderers/vulkan/shaders/particle_density_scatter.comp.spv.h"
 #include "threepp/renderers/vulkan/shaders/particle_emit.comp.spv.h"
 #include "threepp/renderers/vulkan/shaders/particle_height_bake.comp.spv.h"
+#include "threepp/renderers/vulkan/shaders/particlefield_transmit.comp.spv.h"
 
 #include <algorithm>
 #include <cstdio>
@@ -105,6 +106,42 @@ namespace {
 
     constexpr std::uint32_t kScatterLocalSize = 64;// == particle_density_scatter.comp
     constexpr std::uint32_t kConvertLocalSize = 4; // == particle_density_convert.comp (4³)
+    constexpr std::uint32_t kTransmitLocalSize = 64;// == particlefield_transmit.comp
+
+    // R8: the transmittance buffer. STORAGE + an address, because the compute
+    // pass writes it through a buffer_reference and the billboard VERTEX stage
+    // reads it through one — no descriptor on either side, which is the
+    // property the whole billboard pass is built on.
+    constexpr VkBufferUsageFlags kTransmitUsage =
+            VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
+            VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT;
+
+    // MUST mirror the push block in particlefield_transmit.comp under scalar
+    // layout. 120 B — inside the 128 B every Vulkan implementation guarantees.
+    // The two addresses lead so the block's 8-byte alignment is satisfied at
+    // offset 0 and every float after is naturally 4-aligned, which keeps MSVC's
+    // layout and GLSL's scalar layout byte-identical.
+    //
+    // camWorld is the ONE per-view member. recordTransmittance patches it (and
+    // sunDirWorld, which is view-independent but sits beside it) into the
+    // prebuilt bytes rather than rebuilding the block, so re-dispatching for a
+    // second view costs two memcpys and no host arithmetic at all.
+    struct TransmitPc {
+        VkDeviceAddress posAddr;      //   0
+        VkDeviceAddress outAddr;      //   8
+        float           model[12];    //  16  ROWS of the affine field->world
+        float           boxMin[3];    //  64
+        float           boxInvSize[3];//  76
+        float           camWorld[3];  //  88
+        float           sunDirWorld[3];// 100
+        std::uint32_t   capacity;     // 112
+        std::uint32_t   flags;        // 116
+    };                                // 120
+    static_assert(sizeof(TransmitPc) == 120,
+                  "TransmitPc drifted from particlefield_transmit.comp");
+    // Mirrored in the shader.
+    constexpr std::uint32_t kTransCamBit = 1u;
+    constexpr std::uint32_t kTransSunBit = 2u;
 
     // MUST mirror the push block in particle_density_scatter.comp under scalar
     // layout. 120 B — inside the 128 B every Vulkan implementation guarantees.
@@ -216,8 +253,13 @@ ParticleFieldPass::~ParticleFieldPass() {
     for (auto& b : bbParamBufs_) destroyBuffer(ctx_.allocator(), b);
     for (auto& b : bbViewBufs_)  destroyBuffer(ctx_.allocator(), b);
     for (auto& b : auxBufs_)     destroyBuffer(ctx_.allocator(), b);
+    for (auto& b : transBufs_)   destroyBuffer(ctx_.allocator(), b);
 
     const VkDevice d = ctx_.device();
+    if (transPipe_)         vkDestroyPipeline(d, transPipe_, nullptr);
+    if (transPipeLayout_)   vkDestroyPipelineLayout(d, transPipeLayout_, nullptr);
+    if (transDsLayout_)     vkDestroyDescriptorSetLayout(d, transDsLayout_, nullptr);
+    if (transSampler_)      vkDestroySampler(d, transSampler_, nullptr);
     if (emitPipe_)          vkDestroyPipeline(d, emitPipe_, nullptr);
     if (emitPipeLayout_)    vkDestroyPipelineLayout(d, emitPipeLayout_, nullptr);
     if (bakePipe_)          vkDestroyPipeline(d, bakePipe_, nullptr);
@@ -335,23 +377,26 @@ void ParticleFieldPass::ensureDensityPipeline() {
     check(vkCreateDescriptorSetLayout(d, &dlci, nullptr, &densityDsLayout_),
           "vkCreateDescriptorSetLayout(particle density)");
 
-    // Sized for kMaxDensityFields fields, each holding TWO sets: the scatter's
-    // (1 storage image) and the convert's (2 storage images + the shared
-    // majorant SSBO). A field past that gets no volume, which
-    // densityOverflowCount reports.
-    VkDescriptorPoolSize ps[2]{};
+    // Sized for kMaxDensityFields fields, each holding up to THREE sets: the
+    // scatter's (1 storage image), the convert's (2 storage images + the shared
+    // majorant SSBO) and — only for a field whose sprites march it (R8) — the
+    // transmittance prepass's (1 sampled image). A field past that gets no
+    // volume, which densityOverflowCount reports.
+    VkDescriptorPoolSize ps[3]{};
     ps[0].type            = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
     ps[0].descriptorCount = kMaxDensityFields * 3u;
     ps[1].type            = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
     ps[1].descriptorCount = kMaxDensityFields;
+    ps[2].type            = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    ps[2].descriptorCount = kMaxDensityFields;
     VkDescriptorPoolCreateInfo dpci{};
     dpci.sType         = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
     // FREE_DESCRIPTOR_SET: a destroyed field returns its sets to the pool. The
     // pool is exactly kMaxDensityFields fields deep, so without this a scene
     // that created and dropped four dust fields could never have a fifth.
     dpci.flags         = VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT;
-    dpci.maxSets       = kMaxDensityFields * 2u;
-    dpci.poolSizeCount = 2;
+    dpci.maxSets       = kMaxDensityFields * 3u;
+    dpci.poolSizeCount = 3;
     dpci.pPoolSizes    = ps;
     check(vkCreateDescriptorPool(d, &dpci, nullptr, &densityPool_),
           "vkCreateDescriptorPool(particle density)");
@@ -454,6 +499,106 @@ void ParticleFieldPass::ensureDensityPipeline() {
                                                  nullptr, &convertPipe_);
     vkDestroyShaderModule(d, cmod, nullptr);
     check(cr, "vkCreateComputePipelines(particle_density_convert)");
+}
+
+// ── R8: the transmittance prepass's pipeline ────────────────────────────────
+// Created on the first frame a field actually marches, so a scene with dust but
+// no volumetric sprites — every scene in the tree before this feature — creates
+// no sampler, no layout and no pipeline. ONE binding, the r16f mirror, for the
+// reason the billboard pass had one until this pass took it over: an image is
+// the only thing that cannot be reached by device address. Everything else, the
+// positions and the output included, rides the 120 B push block.
+bool ParticleFieldPass::ensureTransmittancePipeline() {
+
+    if (transPipe_ != VK_NULL_HANDLE) return true;
+    const VkDevice d = ctx_.device();
+
+    // LINEAR + CLAMP_TO_EDGE, matching the sampler the vertex stage marched
+    // with (textureSamplerIsoClamp_). The filtering is load-bearing: a nearest
+    // sample of a 160³ lattice from four million positions reads as blocks, and
+    // the whole thesis of the feature is that the low-frequency half survives a
+    // coarse grid. CLAMP is belt-and-braces — the march skips samples outside
+    // the box rather than clamping them, which is the rule the deferred march
+    // states and the reason the border mode is never actually exercised.
+    VkSamplerCreateInfo sci{};
+    sci.sType        = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
+    sci.magFilter    = VK_FILTER_LINEAR;
+    sci.minFilter    = VK_FILTER_LINEAR;
+    sci.mipmapMode   = VK_SAMPLER_MIPMAP_MODE_NEAREST;
+    sci.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    sci.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    sci.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    sci.maxLod       = 0.f;
+    if (vkCreateSampler(d, &sci, nullptr, &transSampler_) != VK_SUCCESS) return false;
+
+    VkDescriptorSetLayoutBinding b{};
+    b.binding         = 0;
+    b.descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    b.descriptorCount = 1;
+    b.stageFlags      = VK_SHADER_STAGE_COMPUTE_BIT;
+    VkDescriptorSetLayoutCreateInfo dlci{};
+    dlci.sType        = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+    dlci.bindingCount = 1;
+    dlci.pBindings    = &b;
+    check(vkCreateDescriptorSetLayout(d, &dlci, nullptr, &transDsLayout_),
+          "vkCreateDescriptorSetLayout(particlefield transmit)");
+
+    VkPushConstantRange pcr{};
+    pcr.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+    pcr.offset     = 0;
+    pcr.size       = sizeof(TransmitPc);
+    VkPipelineLayoutCreateInfo plci{};
+    plci.sType                  = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+    plci.setLayoutCount         = 1;
+    plci.pSetLayouts            = &transDsLayout_;
+    plci.pushConstantRangeCount = 1;
+    plci.pPushConstantRanges    = &pcr;
+    check(vkCreatePipelineLayout(d, &plci, nullptr, &transPipeLayout_),
+          "vkCreatePipelineLayout(particlefield transmit)");
+
+    VkShaderModuleCreateInfo smci{};
+    smci.sType    = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
+    smci.codeSize = sizeof(kParticleFieldTransmitCompSpv);
+    smci.pCode    = kParticleFieldTransmitCompSpv;
+    VkShaderModule mod = VK_NULL_HANDLE;
+    check(vkCreateShaderModule(d, &smci, nullptr, &mod),
+          "vkCreateShaderModule(particlefield_transmit)");
+    VkPipelineShaderStageCreateInfo stage{};
+    stage.sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+    stage.stage  = VK_SHADER_STAGE_COMPUTE_BIT;
+    stage.module = mod;
+    stage.pName  = "main";
+    VkComputePipelineCreateInfo cpci{};
+    cpci.sType  = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
+    cpci.stage  = stage;
+    cpci.layout = transPipeLayout_;
+    const VkResult r = vkCreateComputePipelines(d, ctx_.pipelineCache(), 1, &cpci,
+                                                nullptr, &transPipe_);
+    vkDestroyShaderModule(d, mod, nullptr);
+    check(r, "vkCreateComputePipelines(particlefield_transmit)");
+    return transPipe_ != VK_NULL_HANDLE;
+}
+
+// R9's ring, sized in SLOTS. Same growth discipline as ensureBbParamCapacity
+// and the same reason for growing EVERY frame-in-flight at once: the capacity
+// is shared bookkeeping, and a half-grown ring under-runs the other frame the
+// next time round. Called from prepareFrame — the post-fence, pre-record
+// window — so the slot being (re)allocated is provably not one an in-flight
+// frame is reading, and the old buffers go through the renderer's frame-serial
+// retire queue rather than being destroyed under a frame that still names them.
+void ParticleFieldPass::ensureTransCapacity(std::uint32_t count) {
+
+    const std::uint32_t want = std::max(count, 1u);
+    if (want <= transCapacity_ && transBufs_[0].handle != VK_NULL_HANDLE) return;
+
+    const std::uint32_t newCap = std::max(want, transCapacity_ * 2u);
+    for (auto& b : transBufs_) retireOrDestroy(b);
+    for (auto& b : transBufs_) {
+        b = createBuffer(ctx_.allocator(), ctx_.device(),
+                         VkDeviceSize(newCap) * sizeof(std::uint32_t),
+                         kTransmitUsage, VMA_MEMORY_USAGE_AUTO, 0);
+    }
+    transCapacity_ = newCap;
 }
 
 bool ParticleFieldPass::ensureDensityVolume(State& st, const ParticleField& field) {
@@ -949,6 +1094,18 @@ void ParticleFieldPass::prepareFrame(std::uint64_t serial, std::uint32_t frame,
     // describes it moved (BakeKey).
     bakeDispatch_.clear();
     densityOverflow_ = 0;
+    // R8/R10: rebuilt from scratch every frame and EMPTY unless some visible
+    // field actually marches, which is what makes "both knobs at 0 records no
+    // prepass" true frame by frame rather than only at scene load.
+    transDispatch_.clear();
+    // Parallel to transDispatch_, and local to this frame: which
+    // bbParamScratch_ record each dispatch feeds, and where in the frame's
+    // transmittance buffer its slice starts. Both are patched into real
+    // addresses below, once the buffer's final size is known — growing it
+    // mid-loop would invalidate every address already handed out.
+    std::vector<std::uint32_t> transBbIndex;
+    std::vector<std::uint32_t> transElemOff;
+    std::uint32_t              transElems = 0;
 
     // Reclaim descriptor sets whose last referencing frame has provably
     // retired — the same `R + kFramesInFlight <= S` rule the resource retire
@@ -1523,22 +1680,21 @@ void ParticleFieldPass::prepareFrame(std::uint64_t serial, std::uint32_t frame,
             bp.attrAddr = attrAddr;
             if (attrAddr != 0) bp.flags |= 8u;
 
-            // ── The volumetric marches (R4/R5) ──────────────────────────────
+            // ── The volumetric marches (R4/R5, prepassed by R8) ─────────────
             // Both knobs at 0 is the EXACT no-op: nothing below is published,
-            // the shader's uniform branch skips both marches, and the field
+            // no dispatch is recorded, no transmittance buffer is allocated
+            // (R10), the shader's uniform branch skips the fetch, and the field
             // renders the bits it did before this feature existed.
             const float volExt = std::max(bb.volumeExtinction, 0.f);
             const float volShd = std::max(0.f, std::min(1.f, bb.volumeShadow));
             if ((volExt > 0.f || volShd > 0.f) &&
                 st.densityLin.view != VK_NULL_HANDLE && dr.enabled) {
-                bp.volumeExtinction = volExt;
-                bp.volumeShadow     = volShd;
-                bp.volumeAmbient    = std::max(bb.volumeAmbient, 0.f);
-                bp.volumeSunGain    = std::max(bb.volumeSunGain, 0.f);
                 // The field's world matrix as ROWS of its affine part: the
                 // marches happen in world space and the positions are
-                // field-local, and this is the one basis the vertex stage
-                // cannot otherwise reach (it holds view*model, not model).
+                // field-local, and this is the one basis neither the vertex
+                // stage nor the prepass can otherwise reach. Written into bp
+                // first because the prepass's push block copies it from there —
+                // one expression, two consumers, no way for them to disagree.
                 for (int rw = 0; rw < 3; ++rw) {
                     bp.model[rw * 4 + 0] = static_cast<float>(world[rw]);
                     bp.model[rw * 4 + 1] = static_cast<float>(world[rw + 4]);
@@ -1557,8 +1713,83 @@ void ParticleFieldPass::prepareFrame(std::uint64_t serial, std::uint32_t frame,
                 bp.boxInvSize[0] = 1.f / (2.f * hx);
                 bp.boxInvSize[1] = 1.f / (2.f * hy);
                 bp.boxInvSize[2] = 1.f / (2.f * hz);
-                bp.flags |= 16u;
-                ds.volumeView = st.densityLin.view;
+
+                // ── R8: the prepass that does the marching ──────────────────
+                // Everything above describes WHERE the dust is; this hands the
+                // same description to the compute pass that walks it. The
+                // vertex stage no longer marches at all — it fetches by slot —
+                // so the flag is only raised once the dispatch is real. A
+                // device that cannot create the pipeline (or a pool with no
+                // set left) therefore renders FLAT sprites rather than sprites
+                // multiplied by an unwritten buffer.
+                bool marching = false;
+                if (ensureTransmittancePipeline()) {
+                    // The set names the field's r16f mirror, whose handle never
+                    // changes for the life of the field — so it is allocated
+                    // and written ONCE, here, and never touched again. That is
+                    // what keeps this pass out of the VUID-03047 zone despite
+                    // owning a descriptor.
+                    if (st.marchSet == VK_NULL_HANDLE) {
+                        VkDescriptorSetAllocateInfo ai{};
+                        ai.sType              = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+                        ai.descriptorPool     = densityPool_;
+                        ai.descriptorSetCount = 1;
+                        ai.pSetLayouts        = &transDsLayout_;
+                        if (vkAllocateDescriptorSets(ctx_.device(), &ai, &st.marchSet) == VK_SUCCESS) {
+                            VkDescriptorImageInfo ii{};
+                            ii.imageView = st.densityLin.view;
+                            // GENERAL for its whole life — the convert dispatch
+                            // writes it as a storage image and nothing ever
+                            // transitions it, the same contract the deferred
+                            // set's binding 69 is written under.
+                            ii.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+                            ii.sampler     = transSampler_;
+                            VkWriteDescriptorSet w{};
+                            w.sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+                            w.dstSet          = st.marchSet;
+                            w.dstBinding      = 0;
+                            w.descriptorCount = 1;
+                            w.descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+                            w.pImageInfo      = &ii;
+                            vkUpdateDescriptorSets(ctx_.device(), 1, &w, 0, nullptr);
+                        } else {
+                            st.marchSet = VK_NULL_HANDLE;
+                        }
+                    }
+                    if (st.marchSet != VK_NULL_HANDLE) {
+                        TransmitPc tp{};
+                        tp.posAddr = d.posAddr;
+                        // An ELEMENT OFFSET for now; the base is not known
+                        // until every field has been counted.
+                        tp.outAddr = 0;
+                        std::memcpy(tp.model, bp.model, sizeof(tp.model));
+                        std::memcpy(tp.boxMin, bp.boxMin, sizeof(tp.boxMin));
+                        std::memcpy(tp.boxInvSize, bp.boxInvSize, sizeof(tp.boxInvSize));
+                        tp.capacity = st.capacity;
+                        // Per KNOB, not per field: a field that asks only for
+                        // self-shadowing marches one ray, not two.
+                        tp.flags = (volExt > 0.f ? kTransCamBit : 0u) |
+                                   (volShd > 0.f ? kTransSunBit : 0u);
+
+                        TransDispatch td{};
+                        td.set    = st.marchSet;
+                        td.groups = (st.capacity + kTransmitLocalSize - 1u) / kTransmitLocalSize;
+                        std::memcpy(td.pc, &tp, sizeof(tp));
+                        transDispatch_.push_back(td);
+                        transBbIndex.push_back(
+                                static_cast<std::uint32_t>(bbParamScratch_.size()));
+                        transElemOff.push_back(transElems);
+                        transElems += st.capacity;
+                        marching = true;
+                    }
+                }
+                if (marching) {
+                    bp.volumeExtinction = volExt;
+                    bp.volumeShadow     = volShd;
+                    bp.volumeAmbient    = std::max(bb.volumeAmbient, 0.f);
+                    bp.volumeSunGain    = std::max(bb.volumeSunGain, 0.f);
+                    bp.flags |= 16u;
+                }
             }
 
             // ── F4 ──────────────────────────────────────────────────────────
@@ -1648,6 +1879,26 @@ void ParticleFieldPass::prepareFrame(std::uint64_t serial, std::uint32_t frame,
                           VkDeviceSize(descCount_) * sizeof(FieldDescGpu));
     }
 
+    // R8: the frame's transmittance buffer, sized to every marching field's
+    // slots laid end to end, and the two addresses that name each slice — the
+    // prepass's destination and the vertex stage's source. Done BEFORE the
+    // billboard-params upload because it writes into bbParamScratch_, and
+    // AFTER the field loop because a buffer grown mid-loop would invalidate
+    // every address already handed out.
+    //
+    // Empty on every scene without a volumetric field, which is where R10's
+    // "not one allocated byte" actually lives: transBufs_ stay VK_NULL_HANDLE.
+    if (!transDispatch_.empty()) {
+        ensureTransCapacity(transElems);
+        const VkDeviceAddress base = transBufs_[frame].address;
+        for (std::size_t i = 0; i < transDispatch_.size(); ++i) {
+            const VkDeviceAddress a =
+                    base + VkDeviceSize(transElemOff[i]) * sizeof(std::uint32_t);
+            std::memcpy(transDispatch_[i].pc + offsetof(TransmitPc, outAddr), &a, sizeof(a));
+            bbParamScratch_[transBbIndex[i]].transAddr = a;
+        }
+    }
+
     // Billboard params: one upload for every field, then turn the indices the
     // loop stashed into real device addresses.
     if (!bbParamScratch_.empty()) {
@@ -1721,6 +1972,12 @@ void ParticleFieldPass::prepareFrame(std::uint64_t serial, std::uint32_t frame,
                 densitySetRetire_.push_back({st.convertSet, serial});
                 st.convertSet = VK_NULL_HANDLE;
             }
+            // R8's set comes out of the same pool and goes back by the same
+            // rule; leaking it would cap the process at four marching fields.
+            if (st.marchSet != VK_NULL_HANDLE) {
+                densitySetRetire_.push_back({st.marchSet, serial});
+                st.marchSet = VK_NULL_HANDLE;
+            }
             retireOrDestroy(st.density);
             retireOrDestroy(st.densityLin);
             it = states_.erase(it);
@@ -1787,6 +2044,67 @@ void ParticleFieldPass::recordEmit(VkCommandBuffer cb) {
                        VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR;
     mb.dstAccessMask = VK_ACCESS_2_SHADER_STORAGE_READ_BIT |
                        VK_ACCESS_2_ACCELERATION_STRUCTURE_READ_BIT_KHR;
+    VkDependencyInfo dep{};
+    dep.sType              = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
+    dep.memoryBarrierCount = 1;
+    dep.pMemoryBarriers    = &mb;
+    vkCmdPipelineBarrier2(cb, &dep);
+}
+
+// ── R8/R9: (T_cam, T_sun) once per particle, once per view ──────────────────
+// The whole optimisation, as a command stream: one bind, then per marching
+// field two memcpys into a prebuilt push block, one vkCmdPushConstants and one
+// vkCmdDispatch over the CPU-CONSTANT capacity domain — the same shape as the
+// emit and scatter dispatches beside it. Nothing is uploaded and no descriptor
+// is written; the field's set was written once when it first marched.
+//
+// PER VIEW BY RE-DISPATCH (R9). T_sun is view-independent and T_cam is not, and
+// views are recorded sequentially into one command buffer, so the second view
+// simply overwrites the first view's answers behind its own barrier rather than
+// owning a second buffer. At 4M slots that trade is 16 MB per extra view saved
+// for eight extra taps per particle re-run — and the sun leg has to be re-run
+// anyway to keep the two halves of one packed word consistent.
+//
+// The BARRIER is the contract: this pass writes the buffer through a
+// buffer_reference (SHADER_STORAGE_WRITE) and the billboard VERTEX stage reads
+// it through one, so without the compute→vertex dependency the draws that
+// follow are reading memory whose writes have not been made visible. It is one
+// barrier for every field, not one per field: the dispatches are independent
+// and the consumer is downstream of all of them.
+//
+// Recorded OUTSIDE any render-pass instance — a compute dispatch cannot go
+// inside one — which is why the call site is immediately before the view's
+// vkCmdBeginRendering rather than inside recordFieldBillboards.
+void ParticleFieldPass::recordTransmittance(VkCommandBuffer cb, const float camWorld[3],
+                                            const float sunDirWorld[3]) {
+
+    if (transDispatch_.empty() || transPipe_ == VK_NULL_HANDLE) return;
+
+    vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, transPipe_);
+    for (TransDispatch& td : transDispatch_) {
+        // The two per-view vectors, patched into the block prepareFrame built.
+        // A rebuild would recompute a matrix and a box that did not change.
+        std::memcpy(td.pc + offsetof(TransmitPc, camWorld), camWorld, 3 * sizeof(float));
+        std::memcpy(td.pc + offsetof(TransmitPc, sunDirWorld), sunDirWorld, 3 * sizeof(float));
+        vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_COMPUTE, transPipeLayout_,
+                                0, 1, &td.set, 0, nullptr);
+        vkCmdPushConstants(cb, transPipeLayout_, VK_SHADER_STAGE_COMPUTE_BIT,
+                           0, static_cast<std::uint32_t>(sizeof(TransmitPc)), td.pc);
+        vkCmdDispatch(cb, td.groups, 1, 1);
+    }
+
+    // COMPUTE is on the destination list as well as VERTEX: the NEXT view's
+    // re-dispatch writes the same buffer this one just wrote, so without it the
+    // two dispatches are an unsynchronised write-after-write over the whole
+    // buffer. The vertex reads in between are what make that hazard real.
+    VkMemoryBarrier2 mb{};
+    mb.sType         = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2;
+    mb.srcStageMask  = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+    mb.srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
+    mb.dstStageMask  = VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT |
+                       VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+    mb.dstAccessMask = VK_ACCESS_2_SHADER_STORAGE_READ_BIT |
+                       VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
     VkDependencyInfo dep{};
     dep.sType              = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
     dep.memoryBarrierCount = 1;
