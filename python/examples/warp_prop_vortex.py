@@ -42,10 +42,25 @@ same timestamp is the whole acceptance test.
                                                  # the throttle's step, 0.4 s later
     python warp_prop_vortex.py --n 5000000       # more particles: a grainless far wake
     python warp_prop_vortex.py --bench           # frame time, knobs on vs --flat
+    python warp_prop_vortex.py --film            # THE FILM: 55 s, 1080p, 5M
+    python warp_prop_vortex.py --film --probe 100    # what it will cost first
+    python warp_prop_vortex.py --film --takes feather # re-cut ONE beat in place
 
     NOTE the 5.5 s: the wake is 2.4 s deep and the shaft takes 2 s to spin up,
     so anything before ~4.5 s is still showing the ramp in its far half. The
     air version's 4.0 s was right for a 0.85 s wake and is now too early.
+
+--film IS THE DEMO ARGUING ITS OWN CASE, and the argument it makes is that
+inception is a threshold rather than a look. Six beats and no cuts: a still
+prop, a spin-up to 120 rpm in CLEAR water so the pull is felt before anything
+is seen, a crawl to 130 rpm where the hub rope lights ALONE (the hub crosses at
+124.6 rpm and the tips not until 131.8, so there is a real window and the
+camera holds in it), a throttle step down that shortens the ropes and sends the
+old wake off frame, a pitch feather that kills the wake while the shaft keeps
+turning, and a slam back to 30 deg for the re-bloom. The camera is a Hermite
+track and the helm is a keyframe table, both read at the film's own frame
+index -- so the film is a pure function of frame number and --takes re-renders
+one beat into exactly the picture the full run made. See THE FILM below.
 
 CAVITATION IS A THRESHOLD AND THE DEMO IS TUNED TO SIT UNDER IT. At the default
 helm -- 120 rpm, beta 22 deg, 3 m down -- the tip cores reach 83% of the
@@ -257,7 +272,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import warp as wp
 
 import threepp as tp
-from warp_common import cli_arg
+from warp_common import cli_arg, find_ffmpeg
 
 # 2M -> 1.7M, and it is the 25 fps floor that moved it, not taste. Fixing the
 # negative-age bug (see the kernel) put a sixth of the parcels BACK into the
@@ -268,14 +283,20 @@ from warp_common import cli_arg
 # both anchored at 2M and both go as 1/N, so total radiance and total optical
 # depth are invariant and the only thing 1.7M buys less of is smoothness. See
 # THE N CONTRACT below.
-N = cli_arg("--n", 1_700_000, int)
 BENCH = "--bench" in sys.argv
 SHOT = "--shot" in sys.argv
 SHOT_TIME = cli_arg("--shot", 4.0, float)
 FLAT = "--flat" in sys.argv
 INTEROP = "--no-interop" not in sys.argv
-W, H = cli_arg("--width", 1280, int), cli_arg("--height", 800, int)
-HEADLESS = SHOT or BENCH
+# --film renders OFFLINE, so it takes the offline defaults: 5M parcels and
+# 1920x1080. Nothing in the LOOK moves with either -- BRIGHT and SIGMA both go
+# as 1/N (see THE N CONTRACT), so 5M is the same picture as 1.7M with a third
+# of the speckle, which is the one thing a 55 s film cannot fake.
+FILM = "--film" in sys.argv
+N = cli_arg("--n", 5_000_000 if FILM else 1_700_000, int)
+W, H = (cli_arg("--width", 1920 if FILM else 1280, int),
+        cli_arg("--height", 1080 if FILM else 800, int))
+HEADLESS = SHOT or BENCH or FILM
 FPS = 60
 DT = 1.0 / FPS
 
@@ -1941,6 +1962,337 @@ if BENCH:
     dt = (time.perf_counter() - t0) / n
     print(f"bench {N:,} particles [{'flat' if FLAT else 'volumetric'}]: "
           f"{1e3 * dt:.2f} ms/frame ({1.0 / dt:.0f} fps)")
+elif FILM:
+    # ── THE FILM ────────────────────────────────────────────────────────────
+    # 55 s at 60 fps, and the physics is the story: inception is the third act
+    # and everything before it exists to make the audience feel the threshold
+    # before they see it crossed. Six beats, ONE continuous simulation and ONE
+    # continuous camera move -- there is not a single cut in it, and that is
+    # not restraint for its own sake. The wake carries 2.4 s of history, so a
+    # cut throws away the one thing this demo is about; the lag between a lever
+    # and the water is only legible if the camera stays on the water while it
+    # happens.
+    #
+    #   1 OPEN       0.0 -  7.0   10 rpm, beta 22. Bronze in deep water, motes
+    #                             drifting, the funnel collapsed onto the disc.
+    #   2 SPIN-UP    7.0 - 15.0   -> 120 rpm. The funnel establishes and the
+    #                             bubble column grows. CLEAN: tips at 0.83 of
+    #                             the margin, hub at 0.93. No ropes.
+    #   3 INCEPTION 15.0 - 26.0   120 -> 130 rpm and HOLD. The hub crosses at
+    #                             124.6 rpm and the tips not until 131.8, so
+    #                             130 is a 4 s window with the axial rope lit
+    #                             and the helices still clear -- the thing real
+    #                             CPP footage shows and the reason the beat is
+    #                             shaped this way instead of as one ramp. Then
+    #                             130 -> 300 and the tips bloom.
+    #   4 COLLAPSE  26.0 - 34.0   300 -> 180 rpm, a HARD step. The rope length
+    #                             gate falls from 1.00 to 0.40 of a life, the
+    #                             fast slug already downstream keeps its own
+    #                             speed, and the rarefaction between the two
+    #                             convects off frame.
+    #   5 FEATHER   34.0 - 41.5   beta 22 -> 5 at 180 rpm. The other lever,
+    #                             and the causality lesson in one shot: the
+    #                             funnel dies in a frame, the wake takes 2.4 s
+    #                             to age out, and the propeller never stops.
+    #   6 FINALE    41.5 - 55.0   beta 5 -> 30. Full re-bloom (3.13 x margin)
+    #                             and a slow pull back to the widest framing
+    #                             the murk allows: funnel, prop, slipstream.
+    #
+    # THE FILM IS A PURE FUNCTION OF THE FRAME INDEX. The helm is a keyframe
+    # table read at film time, the camera is a cubic Hermite track read at film
+    # time, and the sim clock is frame_no * DT exactly as it is everywhere else
+    # -- so --takes re-renders one beat into the same picture the full run made.
+    import glob
+    import subprocess
+
+    from PIL import Image
+
+    # CWD-relative, as --shot's own output is and as the other films are: an
+    # 11-minute render should not land in the source tree because that is where
+    # the script happens to live.
+    FILM_DIR = cli_arg("--film-dir", "prop_vortex_film", str)
+    CRF = cli_arg("--crf", 17, int)
+    PROBE = cli_arg("--probe", 0, int)
+    ONLY = [s.strip() for s in cli_arg("--takes", "", str).split(",") if s.strip()]
+    # The pre-roll is not padding. The wake is LIFETIME deep and the shaft has
+    # a T_RAMP spin-up, so frame 0 of the film has to be preceded by at least
+    # both of them or the opening shot is a wake still growing into existence
+    # under a ramp the schedule does not know about. It is rendered (the
+    # temporal history needs it too) and thrown away.
+    PREROLL = int(round((T_RAMP + LIFETIME + 0.2) * FPS))
+    LEAD = 24        # discarded frames before a captured beat in a --takes run
+
+    # ── The helm schedule ───────────────────────────────────────────────────
+    # (film time, value, how to approach it). "ease" is a smoothstep, "hold" a
+    # constant, "step" an instantaneous jump -- written as a second key at the
+    # SAME time, which is what makes a step a step and not a one-frame ramp.
+    RPM_KEYS = [(0.0, 10.0),
+                (7.0, 10.0, "hold"),        # 1 OPEN: barely turning
+                (10.0, 120.0, "ease"),      # 2 SPIN-UP
+                (15.0, 120.0, "hold"),
+                (18.5, 130.0, "ease"),      # 3 INCEPTION: into the hub's window
+                (21.0, 130.0, "hold"),      #   HUB ROPE ONLY lives here
+                (24.5, 300.0, "ease"),      #   and the tips bloom
+                (26.0, 300.0, "hold"),
+                (26.0, 180.0, "step"),      # 4 COLLAPSE: the throttle's step
+                (55.0, 180.0, "hold")]
+    BETA_KEYS = [(0.0, BETA_DESIGN),
+                 (34.0, BETA_DESIGN, "hold"),
+                 (34.0, 5.0, "step"),       # 5 FEATHER
+                 (41.5, 5.0, "hold"),
+                 (41.5, 30.0, "step"),      # 6 FINALE
+                 (55.0, 30.0, "hold")]
+    BEATS = [("open", 7.0), ("spinup", 15.0), ("inception", 26.0),
+             ("collapse", 34.0), ("feather", 41.5), ("finale", 55.0)]
+    FILM_SECS = BEATS[-1][1]
+
+    def keyed(keys, t):
+        prev = keys[0]
+        for k in keys[1:]:
+            if t < k[0]:
+                shape = k[2] if len(k) > 2 else "ease"
+                if shape == "hold" or k[0] <= prev[0]:
+                    return prev[1]
+                u = (t - prev[0]) / (k[0] - prev[0])
+                return prev[1] + (k[1] - prev[1]) * (
+                    u * u * (3.0 - 2.0 * u) if shape == "ease" else u)
+            prev = k
+        return prev[1]
+
+    # advance() reads these two names out of the module globals every frame, so
+    # rebinding them here is the whole of installing the film's schedule -- the
+    # helm ring, the blade angles and the banner all follow with no other edit.
+    FILM_T0 = PREROLL * DT
+
+    def scheduled_rps(t):                                       # noqa: F811
+        return keyed(RPM_KEYS, max(t - FILM_T0, 0.0)) / 60.0
+
+    def scheduled_beta(t):                                      # noqa: F811
+        return keyed(BETA_KEYS, max(t - FILM_T0, 0.0))
+
+    # ── The camera track ────────────────────────────────────────────────────
+    # (film time, eye, look-at, stop). A cubic Hermite through the keys with
+    # finite-difference tangents taken over the ACTUAL times, so the spline is
+    # C1 and the camera never restarts at a key -- a smoothstep between every
+    # pair would ease in and out fourteen times over 55 s and read as a series
+    # of nudges. `stop` zeroes the tangent, which is how the first and last
+    # frames sit still.
+    CAM_KEYS = [
+        (0.0, (1.90, 0.95, 2.95), (0.30, 0.00, 0.00), True),
+        (7.0, (1.05, 0.60, 2.55), (0.25, -0.02, 0.10), False),
+        # 2: out to the mouth, where the funnel is legible and the disc is not
+        (11.0, (0.30, 0.75, 4.60), (0.85, -0.05, 0.00), False),
+        (15.0, (0.60, 0.65, 3.55), (1.05, -0.04, 0.00), False),
+        # 3: the push in. Inception happens ON SCREEN and this is why.
+        (18.0, (1.35, 0.42, 1.95), (0.55, -0.02, 0.00), False),
+        (21.0, (1.30, 0.45, 2.20), (0.75, -0.02, 0.00), False),
+        (26.0, (1.55, 0.80, 3.90), (1.65, -0.03, 0.00), False),
+        # 4: wide enough that the rarefaction has somewhere to travel
+        (30.0, (2.20, 0.95, 6.00), (2.60, -0.04, 0.00), False),
+        (34.0, (1.95, 0.85, 5.30), (2.20, -0.04, 0.00), False),
+        # 5: back in, because the point of the beat is a prop that is TURNING
+        (38.0, (1.25, 0.58, 3.30), (0.95, -0.02, 0.00), False),
+        (41.5, (1.10, 0.52, 3.00), (0.80, -0.02, 0.00), False),
+        # 6: hold for the re-bloom, then the pull back
+        (45.0, (1.20, 0.62, 3.40), (1.15, -0.02, 0.00), False),
+        (50.0, (1.70, 1.05, 5.10), (2.00, -0.05, 0.00), False),
+        (55.0, (2.00, 1.40, 6.90), (2.40, -0.07, 0.00), True),
+    ]
+
+    def _tangents(idx):
+        ts = [k[0] for k in CAM_KEYS]
+        out = []
+        for i, k in enumerate(CAM_KEYS):
+            if k[3] or i == 0 or i == len(CAM_KEYS) - 1:
+                out.append((0.0, 0.0, 0.0))
+            else:
+                dt = ts[i + 1] - ts[i - 1]
+                out.append(tuple((CAM_KEYS[i + 1][idx][c] - CAM_KEYS[i - 1][idx][c])
+                                 / dt for c in range(3)))
+        return out
+
+    TAN_E, TAN_T = _tangents(1), _tangents(2)
+
+    def cam_at(t):
+        t = min(max(t, CAM_KEYS[0][0]), CAM_KEYS[-1][0])
+        i = 0
+        while i < len(CAM_KEYS) - 2 and t >= CAM_KEYS[i + 1][0]:
+            i += 1
+        h = CAM_KEYS[i + 1][0] - CAM_KEYS[i][0]
+        u = (t - CAM_KEYS[i][0]) / h
+        u2, u3 = u * u, u * u * u
+        h00, h10 = 2 * u3 - 3 * u2 + 1, u3 - 2 * u2 + u
+        h01, h11 = -2 * u3 + 3 * u2, u3 - u2
+        out = []
+        for idx, tan in ((1, TAN_E), (2, TAN_T)):
+            a, b = CAM_KEYS[i][idx], CAM_KEYS[i + 1][idx]
+            out.append(tuple(h00 * a[c] + h10 * h * tan[i][c]
+                             + h01 * b[c] + h11 * h * tan[i + 1][c]
+                             for c in range(3)))
+        return out
+
+    # ── The banner, and the clearance check that goes with it ───────────────
+    # A keyframed track can be right at every key and still put the eye inside
+    # the slipstream between two of them, so the track is SAMPLED before a
+    # frame is rendered and the closest approach to the prop and to the wake
+    # axis is stated. R_TIP + the turbulence is ~1.2 m; anything under that is
+    # a camera about to fly through its own subject.
+    d_prop = min(math.dist(cam_at(t * FILM_SECS / 600.0)[0], (0.0, 0.0, 0.0))
+                 for t in range(601))
+    d_axis = min(math.hypot(cam_at(t * FILM_SECS / 600.0)[0][1],
+                            cam_at(t * FILM_SECS / 600.0)[0][2])
+                 for t in range(601))
+    print(f"\n       FILM  {FILM_SECS:.1f} s at {FPS} fps = "
+          f"{int(round(FILM_SECS * FPS))} frames, {W}x{H}, {N:,} parcels\n"
+          f"       track closest approach: {d_prop:.2f} m to the hub, "
+          f"{d_axis:.2f} m off the wake axis (tips at {R_TIP:.2f} m)")
+    for bi, (name, end) in enumerate(BEATS):
+        start = 0.0 if bi == 0 else BEATS[bi - 1][1]
+        mid = 0.5 * (start + end)
+        for tag, tt in (("in", start + 0.05), ("mid", mid), ("out", end - 0.05)):
+            bd, rp = keyed(BETA_KEYS, tt), keyed(RPM_KEYS, tt)
+            cr = cav_ratio(bd, rp / 60.0)
+            state = "CAVITATING" if cr > 1.0 else (
+                "hub rope only" if cr * HUB_CAV > 1.0 else "clear")
+            print(f"       {name:>9} {tag:>3} t={tt:5.1f}  {rp:5.1f} rpm  "
+                  f"beta {bd:4.1f}  tips {cr:5.2f}x  hub {cr * HUB_CAV:5.2f}x  "
+                  f"{state}")
+
+    # ── The frames worth reading at 1:1 ─────────────────────────────────────
+    # One per beat plus the two the beat structure is actually graded on: the
+    # hub-only window, and the frame just after the throttle step.
+    KEYSHOTS = [("b1_open", 3.0), ("b2_funnel", 9.5), ("b2_clean", 14.0),
+                ("b3a_hub_only", 20.0), ("b3b_tips", 22.5),
+                ("b3c_ropes_run", 25.8), ("b4_front", 27.2),
+                ("b4_short", 32.0), ("b5_feather", 39.5),
+                ("b6a_bloom", 44.5), ("b6_wide", 54.8)]
+    shot_at = {int(round(t * FPS)): n for n, t in KEYSHOTS}
+
+    os.makedirs(FILM_DIR, exist_ok=True)
+    FFMPEG = find_ffmpeg()
+    if FFMPEG is None:
+        print("       no ffmpeg on PATH and no imageio-ffmpeg: frames only")
+    log = open(os.path.join(FILM_DIR, "ffmpeg.log"), "w")
+
+    # The film's own camera, because the demo's is aimed by --view/--cam-* and
+    # the film owns its framing outright. 16:9 at the film's real aspect.
+    camera.fov = cli_arg("--fov", 46.0, float)
+    camera.aspect = W / float(H)
+    camera.update_projection_matrix()
+
+    def place_camera(tf):
+        eye, tgt = cam_at(tf)
+        camera.position.set(*eye)
+        camera.look_at(*tgt)
+
+    # PRE-ROLL: settle the wake, the spin-up and the temporal history at the
+    # opening helm and the opening framing, then throw it all away.
+    place_camera(0.0)
+    for _ in range(PREROLL):
+        step_frame()
+        renderer.render(scene, camera)
+
+    # The frame size is what the FRAMEBUFFER says it is and not what the canvas
+    # was asked for -- Canvas::size() is a request. rawvideo -s has to agree
+    # with the bytes actually being piped or the encode shears.
+    px = renderer.read_pixels()
+    FH, FW = px.shape[0], px.shape[1]
+    if (FW, FH) != (W, H):
+        print(f"       framebuffer is {FW}x{FH}, not the requested {W}x{H}")
+
+    def encoder(path):
+        cmd = [FFMPEG, "-y", "-hide_banner", "-loglevel", "error",
+               "-f", "rawvideo", "-pix_fmt", "rgb24", "-s", f"{FW}x{FH}",
+               "-r", str(FPS), "-i", "-", "-an",
+               "-c:v", "libx264", "-pix_fmt", "yuv420p", "-crf", str(CRF),
+               "-preset", "slow", "-movflags", "+faststart"]
+        if FW % 2 or FH % 2:
+            cmd += ["-vf", "scale=trunc(iw/2)*2:trunc(ih/2)*2"]
+        return subprocess.Popen(cmd + [path], stdin=subprocess.PIPE,
+                                stdout=log, stderr=log)
+
+    # ── The run ─────────────────────────────────────────────────────────────
+    # One pass over the film's frames. A beat that is not being captured still
+    # SIMULATES every frame (advance() is what keeps theta and the helm ring
+    # honest, and it is nearly free) and renders only the last LEAD of them, so
+    # that a --takes re-render of one beat starts with the same temporal
+    # history the full run gave it.
+    total = int(round(FILM_SECS * FPS))
+    caps = [b[0] for b in BEATS] if not ONLY else ONLY
+    t_run = time.perf_counter()
+    rendered = 0
+    f = 0
+    for bi, (name, end) in enumerate(BEATS):
+        n_end = min(int(round(end * FPS)), total)
+        capture = name in caps
+        nxt = BEATS[bi + 1][0] if bi + 1 < len(BEATS) else None
+        enc = None
+        seg = os.path.join(FILM_DIR, f"seg_{bi:02d}_{name}.mp4")
+        if capture and FFMPEG is not None and not PROBE:
+            enc = encoder(seg)
+        while f < n_end:
+            tf = f * DT
+            warm = (not capture) and nxt in caps and f >= n_end - LEAD
+            step_frame()
+            if capture or warm:
+                place_camera(tf)
+                renderer.render(scene, camera)
+                rendered += 1
+            if capture:
+                px = renderer.read_pixels()
+                if enc is not None:
+                    enc.stdin.write(_np.ascontiguousarray(px).tobytes())
+                if f in shot_at:
+                    Image.fromarray(px).save(
+                        os.path.join(FILM_DIR, f"{shot_at[f]}.png"))
+            f += 1
+            if PROBE and rendered >= PROBE:
+                break
+            if f % 120 == 0:
+                el = time.perf_counter() - t_run
+                print(f"  {name:>9}  t={tf:5.1f}  {f}/{total}  "
+                      f"{1e3 * el / max(rendered, 1):.0f} ms/rendered frame",
+                      flush=True)
+        if enc is not None:
+            enc.stdin.close()
+            enc.wait()
+        if PROBE and rendered >= PROBE:
+            break
+    wall = time.perf_counter() - t_run
+
+    if PROBE:
+        ms = 1e3 * wall / max(rendered, 1)
+        print(f"\nprobe: {rendered} frames in {wall:.1f} s = {ms:.0f} ms/frame\n"
+              f"       the full {total}-frame film is ~{total * ms / 60e3:.1f} min")
+    elif FFMPEG is None:
+        # The beat keyframes are still on disk, which is the part that cannot be
+        # recovered without another 10 minutes of GPU. State the command that
+        # would have finished the job so it can be run by hand.
+        print(f"\nno ffmpeg on PATH and no imageio-ffmpeg: {len(KEYSHOTS)} beat "
+              f"keyframes in {FILM_DIR}, no mp4.\n"
+              "install it (`pip install imageio-ffmpeg`) and re-run --film, or "
+              "encode a PNG sequence by hand with:\n"
+              f'  ffmpeg -y -framerate {FPS} -i "%05d.png" -c:v libx264 '
+              f"-crf {CRF} -preset slow -pix_fmt yuv420p -movflags +faststart "
+              f'"{os.path.join(FILM_DIR, "warp_prop_vortex.mp4")}"')
+    else:
+        # Assembly: the concat demuxer over every segment in beat order, stream
+        # copy, so a --takes re-render of one beat drops straight back into the
+        # film without touching a pixel of the other five.
+        segs = sorted(glob.glob(os.path.join(FILM_DIR, "seg_*.mp4")))
+        lst = os.path.join(FILM_DIR, "segments.txt")
+        with open(lst, "w") as fh:
+            for s in segs:
+                fh.write("file '%s'\n" % s.replace("\\", "/"))
+        mp4 = os.path.join(FILM_DIR, cli_arg("--out", "warp_prop_vortex.mp4", str))
+        subprocess.run([FFMPEG, "-y", "-hide_banner", "-loglevel", "error",
+                        "-f", "concat", "-safe", "0", "-i", lst,
+                        "-c", "copy", mp4], check=True)
+        print(f"\nfilm: {rendered} frames in {wall / 60.0:.1f} min "
+              f"({1e3 * wall / max(rendered, 1):.0f} ms/frame)\n"
+              f"      {mp4}\n"
+              f"      {len(KEYSHOTS)} beat keyframes beside it")
+    log.close()
 elif SHOT:
     frames, wall = run_to(SHOT_TIME)
     out = cli_arg("--out", "warp_prop_vortex_flat.png" if FLAT
