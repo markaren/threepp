@@ -310,7 +310,23 @@ W_BURST_P = 2.4                             # its delay: flat, then a knee
 TURB = cli_arg("--turb", 0.30, float)    # m of curl displacement at end of life
 TURB_P = 1.9             # its growth exponent in age -- tight at the tip, wild downstream
 TURB_FREQ = 0.55         # label-space wavelength of the meander
-SHEET = cli_arg("--sheet", 0.30, float)  # fraction of slots born across the SPAN
+# ── The entrained SHEET, and what it is really for ──────────────────────────
+# It began as a supporting structure -- the vortex sheet rolling up behind the
+# blade, there to shear against the tip helix and start the braiding -- and it
+# turns out to be the thing that decides whether the slipstream has an INSIDE.
+# The tip filaments are ropes on the tube's surface and nothing else fills the
+# volume they bound, so at SHEET 0.30 with a 0.42 radiance penalty the near
+# wake was a wire cage with black between the loops however many parcels were
+# thrown at it. Raised here, and the penalty relaxed, because the sheet is the
+# only population that lives BETWEEN the ropes.
+SHEET = cli_arg("--sheet", 0.46, float)  # fraction of slots born across the SPAN
+SHEET_GAIN = cli_arg("--sheet-gain", 0.62, float)   # its radiance vs a tip rope
+# The sheet's inner station. It used to start at 0.26 R -- just outside the old
+# slim hub -- which left the tube's own axis empty; a side view then showed a
+# hollow core wherever the near and far walls did not overlap. A real prop does
+# put a wake behind its hub (the hub vortex is a genuine structure), so the
+# inner stations now reach in to the hub's own radius and the column is solid.
+SHEET_R0 = cli_arg("--sheet-r0", 0.155, float)      # x R_TIP
 # ── The INFLOW: a prop drinks from a tube WIDER than its own disc ────────────
 # Every parcel used to be BORN at the disc, which made the air in front of the
 # propeller inert -- and a propeller's most legible single fact is that it is
@@ -501,20 +517,64 @@ BOX_HALF_REF = (2.45, 1.20, 1.20)   # the pre-inflow box SIGMA was tuned against
 # from the diff. Divide it back out here and the box is free to move.
 BOX_VOX_RATIO = (BOX_HALF[0] * BOX_HALF[1] * BOX_HALF[2]) \
     / (BOX_HALF_REF[0] * BOX_HALF_REF[1] * BOX_HALF_REF[2])
-SIGMA = cli_arg("--sigma", 0.32, float) / (WAKE_SHARE * BOX_VOX_RATIO)
+# 0.32 -> 0.50, and the extra depth is the second half of the body fix. On its
+# own more sigma only darkened (the medium had no albedo to scatter with); with
+# VOL_ALBEDO raised it is what makes the column SHADOW ITSELF -- a thin medium
+# lets the sun through everywhere and comes out flat and milky, and the sunward
+# flank only separates from the belly once there is enough tau across the tube
+# for the far side to be in the near side's shade. Past ~0.7 it veils the ropes,
+# which is the nebula's failure and the other wall of this corridor.
+#
+# AND IT IS NOW DIVIDED BY N, which it never was and should always have been.
+# The scatter deposits sigma per PARCEL, so the column's optical depth was
+# proportional to the particle count: --n 9000000 was a wake 4.5x thicker, not
+# a wake more finely sampled. With a black medium that only ever showed up as a
+# slightly murkier far wake and nobody caught it; the moment the medium carries
+# light it is unmissable, and 9M came out as milk with the ropes gone. Optical
+# depth is a property of the AIR, not of how finely one chooses to sample it.
+SIGMA = cli_arg("--sigma", 0.42, float) * (2_000_000 / N) \
+    / (WAKE_SHARE * BOX_VOX_RATIO)
 EXPOSURE = cli_arg("--exposure", 1.0, float)
 EXTINCTION = 0.0 if FLAT else cli_arg("--extinction", 1.0, float)
 SHADOW = 0.0 if FLAT else cli_arg("--shadow", 0.72, float)
-# Additive sums clip and overlap grows with the particle count, so exposure
-# follows the same 1/sqrt(N) law the other field demos use. The 1/WAKE_SHARE is
-# the inflow leg's rent: the same N now covers the funnel as well as the wake,
-# so only WAKE_SHARE of the slots are downstream at any instant and the wake's
-# linear density -- and with it its brightness -- would otherwise drop by
-# exactly that fraction. This puts the wake back where the pre-inflow baseline
-# had it, which is what makes the far/near crops comparable. It does NOT undo
-# the lost parcels, only the lost brightness; that is what IN_SHARE is for.
-BRIGHT = cli_arg("--bright", 0.038, float) * math.sqrt(2_000_000 / N) \
-    / WAKE_SHARE
+# 1/N, and NOT the 1/sqrt(N) the other field demos use. Sprite accumulation is
+# additive and linear, so N parcels each at 1/N radiance put exactly the same
+# total light on the film as 2M parcels at 1x -- the pixel is then an average
+# over more samples and nothing else changes. The sqrt law was inherited and it
+# meant --n 9000000 arrived 2.1x brighter, which reads as "thicker" and is
+# precisely the confusion this demo has to stop making: N is not a body knob.
+# Both laws are anchored at 2M, so the default frame is untouched by the change.
+#
+# The 1/WAKE_SHARE is the inflow leg's rent: the same N now covers the funnel as
+# well as the wake, so only WAKE_SHARE of the slots are downstream at any
+# instant and the wake's linear density -- and with it its brightness -- would
+# otherwise drop by exactly that fraction. This puts the wake back where the
+# pre-inflow baseline had it, which is what makes the far/near crops comparable.
+# It does NOT undo the lost parcels, only the lost brightness; that is what
+# IN_SHARE is for.
+BRIGHT = cli_arg("--bright", 0.038, float) * (2_000_000 / N) / WAKE_SHARE
+# ── THE N CONTRACT: N BUYS SMOOTHNESS, NEVER BODY ───────────────────────────
+# Worth stating outright, because the natural response to a thin-looking wake
+# is to raise --n, and raising --n cannot fix it. Read the two laws above:
+#
+#   BRIGHT ~ 1/N         so total emitted radiance is INVARIANT in N. Raise the
+#                        count and the same light is diced into more grains:
+#                        each pixel is the average of more samples, which is
+#                        smoothness and is the only thing it is.
+#   SIGMA  ~ 1/N         so the column's optical depth is invariant too. Both
+#                        of these were wrong until the body pass: BRIGHT went
+#                        as 1/sqrt(N) and SIGMA did not scale at all, so 9M
+#                        arrived 2.1x brighter through 4.5x the optical depth
+#                        and the honest answer to "why does more N not help"
+#                        was that more N was changing the wrong things.
+#
+# So the two dials are separate and neither substitutes for the other:
+#
+#   N              = grain smoothness. How finely the same light is diced.
+#   VOL_ALBEDO,
+#   SIGMA, SHEET   = optical BODY. How much lit medium is actually there.
+#
+# 9M looks like 2M with less speckle because that is precisely what it is.
 
 TWO_PI = 2.0 * math.pi
 
@@ -667,7 +727,7 @@ def shed(out_pos: wp.array(dtype=wp.vec4),
     # behind the blade as the entrained vortex sheet.
     r0 = R_TIP * (0.985 + 0.02 * wp.randf(s))
     if is_sheet:
-        r0 = R_TIP * (0.26 + 0.72 * wp.randf(s))
+        r0 = R_TIP * (SHEET_R0 + (0.98 - SHEET_R0) * wp.randf(s))
     span = r0 / R_TIP
 
     # ── The crossing ────────────────────────────────────────────────────────
@@ -804,7 +864,7 @@ def shed(out_pos: wp.array(dtype=wp.vec4),
     c = col
     gain = gain / wp.pow(grow, flux_p)
     if is_sheet and not inflow:
-        gain = gain * 0.42
+        gain = gain * SHEET_GAIN
     c = c * (bright * gain)
 
     out_pos[i] = wp.vec4(p[0], p[1], p[2], sprite_r0 * grow)
@@ -1180,12 +1240,37 @@ scene.add(field)
 # LIGHT TRANSPORT reads. center/half_extent are per-frame writable and are
 # deliberately never written.
 field.set_density_repr(tp.Vector3(*BOX_CENTER), tp.Vector3(*BOX_HALF), SIGMA, BOX_RES)
-# Nearly black, deliberately: the same volume is also marched by the deferred
-# fog, which in-scatters through it at low frequency and would lay a smooth grey
-# veil over exactly the filaments this demo exists to keep. The volume's job
-# here is TRANSPORT; the sprites carry every photon.
-field.density_repr.albedo = tp.Color(0.016, 0.018, 0.022)
-field.density_repr.anisotropy = 0.0
+# ── THE MEDIUM'S OWN LIGHT, WHICH IS WHERE THE BODY COMES FROM ──────────────
+# This was 0.016 -- effectively black -- and inherited straight from the nebula,
+# where a lit haze was the enemy. It was the wrong constant for a slipstream and
+# it is the single reason this demo read as wireframe: sigma_s = sigma_t x
+# albedo, so at 0.016 the volume ABSORBS and in-scatters nothing. Every particle
+# added to it subtracted light. That is why 9M did not help -- see the N
+# CONTRACT above; the medium had no way to turn density into brightness.
+#
+# Raised, the same march that computes T_cam and T_sun also fills the tube: the
+# sunward flank of the column glows through the phase lobe and the near flank
+# sits in its own shadow, and the ropes are then drawn ON something instead of
+# on black. The knob is the whole walk between wireframe and milk and it is
+# tuned by eye against exactly one failure -- the nebula's veil, where the
+# in-scatter rises far enough to wash the filaments out. VOL_ALBEDO is the last
+# value at which the near ropes still read at full contrast.
+#
+# --flat ZEROES IT, which it did not have to do and which keeps the A/B honest:
+# the acceptance test is "the same frame with the volume's contribution at 0",
+# and now that the medium carries light as well as shadow, leaving it lit under
+# --flat would hand the flat render half the win it is supposed to be missing.
+VOL_ALBEDO = 0.0 if FLAT else cli_arg("--vol-albedo", 0.12, float)
+# Forward-scattering, and NOT the isotropic 0 it was. A slipstream backlit by a
+# key placed deliberately behind it is exactly the arrangement an HG lobe is for:
+# g > 0 puts the in-scattered light on the sun side and leaves the camera side
+# dark, which is the asymmetry that makes a cylinder read as a cylinder. It also
+# matches the billboards' own lit_phase_g so the two halves of the render agree
+# about which way the light is going.
+VOL_G = cli_arg("--vol-g", 0.55, float)
+field.density_repr.albedo = tp.Color(VOL_ALBEDO * 0.92, VOL_ALBEDO * 0.96,
+                                     VOL_ALBEDO * 1.00)
+field.density_repr.anisotropy = VOL_G
 
 # The IMAGE half.
 field.set_billboard_repr(tp.Color(1, 1, 1), tp.Color(1, 1, 1), 1.0, 1.0)
