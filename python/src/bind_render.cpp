@@ -299,13 +299,13 @@ namespace threepp_py {
                 "GPU depth sensor: scans the scene from its own pose and returns a world-space "
                 "point cloud.\n\n"
                 "Beam convention: beams are cast down the sensor's LOCAL -Z axis (camera "
-                "convention). The sensor is an Object3D, not a Camera, so look_at() applies "
-                "the non-camera convention and turns local +Z toward the target -- aiming the "
-                "sensor exactly backwards, and every scan returns an empty (0, 3) cloud with "
-                "no other symptom. Aim it by setting rotation/quaternion directly, or reflect "
-                "the target through the sensor position:\n\n"
-                "    p = sensor.position\n"
-                "    sensor.look_at(2 * p.x - t.x, 2 * p.y - t.y, 2 * p.z - t.z)\n")
+                "convention), and look_at() honours it -- look_at(target) turns the beams "
+                "toward the target, exactly as it would for a camera. (Older releases gave "
+                "the sensor the plain-Object3D convention instead, turning local +Z toward "
+                "the target -- beams aimed exactly backwards, every scan an empty (0, 3) "
+                "cloud -- and callers compensated by aiming at the mirror point "
+                "2*position - target. Such call sites now aim backwards: pass the target "
+                "itself.)\n")
                 .def(py::init([](float fov_y, unsigned int width, unsigned int height, float near, float far) {
                     return std::make_shared<DepthSensor>(fov_y, width, height, near, far);
                 }), py::arg("fov_y"), py::arg("width"), py::arg("height"),
@@ -356,8 +356,8 @@ namespace threepp_py {
                    "Depth scan -> (N,3) float32 world-space hit points (N = points that hit within far). "
                    "Works with a GLRenderer (raster depth) or a VulkanRenderer (path-traced through the "
                    "renderer's acceleration structure -- render() the scene at least once first). "
-                   "Beams go down the sensor's local -Z; an all-empty cloud from a sensor aimed with "
-                   "look_at() usually means it is pointing exactly backwards (see the class docstring).")
+                   "Beams go down the sensor's local -Z; aim them with look_at(target) "
+                   "(see the class docstring).")
                 // ---- pipelined scan: fire on one frame, collect on a later one ----
                 .def("scan_begin", [](DepthSensor& self, const py::object& renderer, Scene& scene) {
                     self.updateWorldMatrix(true, true);            // sync sensor + child camera pose

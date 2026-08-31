@@ -65,6 +65,9 @@ namespace threepp {
 
         ~CameraSensor() override;
 
+        // Images along local -Z, so lookAt() aims it (camera convention).
+        [[nodiscard]] bool usesCameraLookAtConvention() const override { return true; }
+
         /**
          * Render `scene` from this sensor's pose and read the frame back.
          *

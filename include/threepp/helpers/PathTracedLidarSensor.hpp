@@ -49,6 +49,9 @@ namespace threepp {
         // Tweakable LIDAR-equation parameters (forwarded to the renderer).
         LidarParams params;
 
+        // Forward is local -Z (azimuth 0), so lookAt() aims it (camera convention).
+        [[nodiscard]] bool usesCameraLookAtConvention() const override { return true; }
+
         /**
          * Dense-grid mode: shoots `hRes × vRes` beams covering the full
          * sphere (azimuth ∈ [-π, π], elevation ∈ [-π/2, π/2]).

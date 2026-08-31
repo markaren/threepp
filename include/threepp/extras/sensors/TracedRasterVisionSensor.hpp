@@ -48,6 +48,9 @@ namespace threepp {
     public:
         using Cloud = std::vector<PointT>;
 
+        // Beams leave along local -Z, so lookAt() aims them (camera convention).
+        [[nodiscard]] bool usesCameraLookAtConvention() const override { return true; }
+
         // Also re-seeds the traced back-end, which owns the stream on Vulkan.
         void resetNoise() override;
 

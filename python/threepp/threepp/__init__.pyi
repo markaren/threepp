@@ -1284,10 +1284,7 @@ class DepthSensor(Object3D, Sensor):
     """
     GPU depth sensor: scans the scene from its own pose and returns a world-space point cloud.
     
-    Beam convention: beams are cast down the sensor's LOCAL -Z axis (camera convention). The sensor is an Object3D, not a Camera, so look_at() applies the non-camera convention and turns local +Z toward the target -- aiming the sensor exactly backwards, and every scan returns an empty (0, 3) cloud with no other symptom. Aim it by setting rotation/quaternion directly, or reflect the target through the sensor position:
-    
-        p = sensor.position
-        sensor.look_at(2 * p.x - t.x, 2 * p.y - t.y, 2 * p.z - t.z)
+    Beam convention: beams are cast down the sensor's LOCAL -Z axis (camera convention), and look_at() honours it -- look_at(target) turns the beams toward the target, exactly as it would for a camera. (Older releases gave the sensor the plain-Object3D convention instead, turning local +Z toward the target -- beams aimed exactly backwards, every scan an empty (0, 3) cloud -- and callers compensated by aiming at the mirror point 2*position - target. Such call sites now aim backwards: pass the target itself.)
     """
     def __init__(self, fov_y: typing.SupportsFloat | typing.SupportsIndex, width: typing.SupportsInt | typing.SupportsIndex, height: typing.SupportsInt | typing.SupportsIndex, near: typing.SupportsFloat | typing.SupportsIndex = 0.10000000149011612, far: typing.SupportsFloat | typing.SupportsIndex = 100.0) -> None:
         """
@@ -1299,7 +1296,7 @@ class DepthSensor(Object3D, Sensor):
         """
     def scan(self, renderer: typing.Any, scene: Scene) -> numpy.typing.NDArray[numpy.float32]:
         """
-        Depth scan -> (N,3) float32 world-space hit points (N = points that hit within far). Works with a GLRenderer (raster depth) or a VulkanRenderer (path-traced through the renderer's acceleration structure -- render() the scene at least once first). Beams go down the sensor's local -Z; an all-empty cloud from a sensor aimed with look_at() usually means it is pointing exactly backwards (see the class docstring).
+        Depth scan -> (N,3) float32 world-space hit points (N = points that hit within far). Works with a GLRenderer (raster depth) or a VulkanRenderer (path-traced through the renderer's acceleration structure -- render() the scene at least once first). Beams go down the sensor's local -Z; aim them with look_at(target) (see the class docstring).
         """
     def scan_begin(self, renderer: typing.Any, scene: Scene) -> bool:
         """
@@ -5521,7 +5518,7 @@ class PathTracedLidarSensor(Object3D, Sensor):
     
     `params` (a threepp.LidarParams, mutated in place) exposes the whole LIDAR equation: max/min range, laser power, reference range, detector threshold, atmospheric extinction, multi-return through transmissive surfaces, beam divergence sampling, a dedicated water-column/dust medium, and the paired clean/degraded trace (see LidarParams).
     
-    Beam convention matches DepthSensor: beams leave along the sensor's LOCAL -Z. The sensor is an Object3D, not a Camera, so look_at() aims it exactly backwards -- set rotation/quaternion directly, or reflect the target through the sensor position.
+    Beam convention matches DepthSensor: beams leave along the sensor's LOCAL -Z, and look_at() honours it -- look_at(target) turns the beams toward the target, exactly as it would for a camera. (Older releases aimed local +Z at the target instead; mirror-point workarounds now aim backwards.)
     """
     @typing.overload
     def __init__(self, h_res: typing.SupportsInt | typing.SupportsIndex, v_res: typing.SupportsInt | typing.SupportsIndex, max_range: typing.SupportsFloat | typing.SupportsIndex = 100.0) -> None:

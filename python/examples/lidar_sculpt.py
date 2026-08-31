@@ -352,18 +352,16 @@ def _sph(az_deg, el_deg, r):
 
 
 def aim(sensor, origin, target):
-    """Point a DepthSensor at `target`.
+    """Place a DepthSensor at `origin` and point its beams at `target`.
 
-    NOT `look_at(target)`. A DepthSensor is an Object3D, not a Camera, so
-    `Object3D::lookAt` gives it the NON-camera convention and turns its +Z --
-    not its -Z -- toward the argument, which points the beams exactly backwards
-    and returns an empty cloud from every pose. Reflecting the target through
-    the sensor origin is the one-line fix; the alternative is building the
-    quaternion by hand. This cost half an hour to find, so it is written down.
+    A straight look_at: sensors override the lookAt convention so the beams
+    (local -Z) turn toward the target, exactly as for a camera. Older threepp
+    releases applied the plain-Object3D convention -- +Z toward the target,
+    beams exactly backwards, an empty cloud from every pose -- which is why
+    this helper once aimed at the mirror point 2*origin - target.
     """
     sensor.position.set(float(origin[0]), float(origin[1]), float(origin[2]))
-    m = 2.0 * origin - target
-    sensor.look_at(float(m[0]), float(m[1]), float(m[2]))
+    sensor.look_at(float(target[0]), float(target[1]), float(target[2]))
 
 
 def _pinhole_dirs(fov_y_deg, w, h):

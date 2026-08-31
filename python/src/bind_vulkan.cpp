@@ -1856,9 +1856,9 @@ namespace threepp_py {
                 "divergence sampling, a dedicated water-column/dust medium, and the paired "
                 "clean/degraded trace (see LidarParams).\n\n"
                 "Beam convention matches DepthSensor: beams leave along the sensor's LOCAL "
-                "-Z. The sensor is an Object3D, not a Camera, so look_at() aims it exactly "
-                "backwards -- set rotation/quaternion directly, or reflect the target "
-                "through the sensor position.")
+                "-Z, and look_at() honours it -- look_at(target) turns the beams toward the "
+                "target, exactly as it would for a camera. (Older releases aimed local +Z "
+                "at the target instead; mirror-point workarounds now aim backwards.)")
                 .def(py::init([](unsigned int h_res, unsigned int v_res, float max_range) {
                     return std::make_shared<PathTracedLidarSensor>(h_res, v_res, max_range);
                 }), py::arg("h_res"), py::arg("v_res"), py::arg("max_range") = 100.f,

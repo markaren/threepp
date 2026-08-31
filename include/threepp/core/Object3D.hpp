@@ -198,6 +198,14 @@ namespace threepp {
         // Rotates the object to face a point in world space.
         void lookAt(float x, float y, float z);
 
+        // Which way lookAt() faces this object: false (the default) turns
+        // local +Z toward the target; true turns local -Z toward it, the way
+        // a camera looks. Cameras and Lights are detected by type inside
+        // lookAt(); a node that is neither but still images along its local
+        // -Z (the pinhole sensors) overrides this so lookAt() aims its beams
+        // rather than its back.
+        [[nodiscard]] virtual bool usesCameraLookAtConvention() const { return false; }
+
         // Adds object as child of this object. An arbitrary number of objects may be added.
         // Any current parent on an object passed in here will be removed, since an object can have at most one parent.
         // This version of add takes ownership of the passed in object

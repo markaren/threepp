@@ -210,7 +210,7 @@ void Object3D::lookAt(float x, float y, float z) {
 
     _position.setFromMatrixPosition(*this->matrixWorld);
 
-    if (this->is<Camera>() || this->is<Light>()) {
+    if (this->is<Camera>() || this->is<Light>() || this->usesCameraLookAtConvention()) {
 
         _m1.lookAt(_position, _target, this->up);
 

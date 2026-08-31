@@ -20,6 +20,8 @@
 #include "threepp/helpers/DepthSensor.hpp"
 #include "threepp/helpers/LidarSensor.hpp"
 
+#include <algorithm>
+#include <cmath>
 #include <memory>
 #include <vector>
 
@@ -127,6 +129,36 @@ TEST_CASE("the raster fire/collect pair is the sync scan, delivered the same fra
     REQUIRE(lidar.scanBegin(renderer, *scene, lidarSplit));
     REQUIRE(lidar.scanCollect(renderer, lidarSplit));
     REQUIRE(sameCloud(lidarSync, lidarSplit));
+}
+
+TEST_CASE("lookAt aims the beams: a sensor beside a cube sees it", "[sensors]") {
+
+    GLRenderer renderer(glCanvas());
+
+    // One cube and nothing else. The sensor images along local -Z, and its
+    // usesCameraLookAtConvention() override makes lookAt() turn the BEAMS
+    // toward the target; under the plain-Object3D convention (+Z toward the
+    // target — what the sensor got before the override) it faces empty space
+    // and this cloud comes back empty.
+    auto scene = Scene::create();
+    scene->add(Mesh::create(BoxGeometry::create(1, 1, 1), MeshStandardMaterial::create()));
+    scene->updateMatrixWorld(true);
+
+    DepthSensor sensor(60.f, 64, 48, 0.1f, 20.f);
+    sensor.position.set(4, 0, 0);
+    sensor.lookAt(0, 0, 0);
+    sensor.updateMatrixWorld();
+
+    std::vector<Vector3> cloud;
+    sensor.scan(renderer, *scene, cloud);
+    REQUIRE_FALSE(cloud.empty());
+
+    // ...and what it sees is the cube: every return on its surface, give or
+    // take the default range noise.
+    const bool onCube = std::all_of(cloud.begin(), cloud.end(), [](const Vector3& p) {
+        return std::abs(p.x) < 0.8f && std::abs(p.y) < 0.8f && std::abs(p.z) < 0.8f;
+    });
+    REQUIRE(onCube);
 }
 
 TEST_CASE("a seed reset replays the identical model-based cloud", "[sensors]") {
