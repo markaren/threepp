@@ -1,35 +1,91 @@
-"""Propeller tip vortices that read as ROPES -- NVIDIA Warp sim, Vulkan rendering.
+"""A ship's propeller CAVITATING underwater -- NVIDIA Warp sim, Vulkan rendering.
 
 warp_nebula_vk.py proved the thesis on a cloud: particles carry the IMAGE, the
 field's own density volume carries the LIGHT TRANSPORT. A nebula is the easy
 case for it, because a cloud has no shape you can be wrong about. This is the
-hard case, and the one the feature was built for: a five-bladed propeller
-shedding tip vortices into the classic interleaved helices, which braid,
-destabilise and diffuse into a self-shadowed slipstream.
+hard case, and the one the feature was built for: a five-bladed controllable-
+pitch propeller on a ship's shaft three metres down, shedding tip vortices into
+the classic interleaved helices -- and, when it is pushed hard enough, filling
+their cores with VAPOUR.
+
+THIS DEMO USED TO BE A PROP IN AIR, and git keeps that version (5fb670d3 and
+back). Every structure below was built there and none of it changed in kind:
+the closed form, the two legs, the helm ring, the volume. What changed is the
+MEDIUM, and with it the story. Water carries no tracer. A propeller turning
+quietly under a hull is very nearly invisible -- the wake is water in water and
+the photographs of it are black. What you DO see, and the reason every naval
+architect knows the shape of a propeller wake by heart, is CAVITATION: the tip
+cores drop below the vapour pressure of water and BOIL, and the vortex draws
+itself in white. That is not a look laid over the wake. It is a THRESHOLD, and
+crossing it is now what the two levers are for.
 
 WHY IT NEEDS THE VOLUME. A helix is a curve that passes IN FRONT OF ITSELF.
 Additive sprites cannot say which loop is nearer -- every crossing is the same
 sum from either side -- so a flat render of this is a tangle of uniform glowing
 wire. With the two marches on, the near loop occludes the far one (T_cam) and
-the slipstream shadows its own far side (T_sun), and the same particles resolve
-into ropes wound around a lit cylinder of smoke. --flat at the same timestamp
-is the whole acceptance test.
+the bubbly wake shadows its own far side (T_sun), and the same particles
+resolve into vapour ropes wound around a lit column of bubbles. --flat at the
+same timestamp is the whole acceptance test.
 
     pip install warp-lang
-    python warp_prop_vortex.py                   # window; DRAG THE PITCH SLIDER
-    python warp_prop_vortex.py --shot 0.9        # headless PNG, the spin-up
-    python warp_prop_vortex.py --shot 4.0        # the developed wake
-    python warp_prop_vortex.py --shot 4.0 --flat # the SAME frame, knobs at 0
-    python warp_prop_vortex.py --view mouth      # across the disc: air IN, ropes OUT
+    python warp_prop_vortex.py                   # window; PUSH EITHER SLIDER
+    python warp_prop_vortex.py --shot 5.5        # 120 rpm: JUST BELOW inception
+    python warp_prop_vortex.py --shot 5.5 --rps 3    # 180 rpm: ropes that END
+    python warp_prop_vortex.py --shot 5.5 --rps 5    # 300 rpm: the whole wake boils
+    python warp_prop_vortex.py --shot 5.5 --pitch 35 # same gate, other lever
+    python warp_prop_vortex.py --shot 5.5 --flat # the SAME frame, knobs at 0
+    python warp_prop_vortex.py --depth 1.2       # shallower: it cavitates sooner
+    python warp_prop_vortex.py --view mouth      # across the disc: water IN, ropes OUT
     python warp_prop_vortex.py --view prop       # the bronze, close
     python warp_prop_vortex.py --pitch 8         # feathered: a nearly dead wake
-    python warp_prop_vortex.py --rps 2.5         # a slow shaft: a SHORT wake
-    python warp_prop_vortex.py --shot 3.4 --pitch 22 --pitch-to 6 --pitch-at 3.0
-                                                 # the step, 0.4 s after the lever
-    python warp_prop_vortex.py --shot 3.4 --rps 6 --rps-to 2.5 --rps-at 3.0
-                                                 # the throttle's own step
+    python warp_prop_vortex.py --shot 5.0 --rps 5 --rps-to 2 --rps-at 4.6
+                                                 # the throttle's step, 0.4 s later
     python warp_prop_vortex.py --n 5000000       # more particles: a grainless far wake
     python warp_prop_vortex.py --bench           # frame time, knobs on vs --flat
+
+    NOTE the 5.5 s: the wake is 2.4 s deep and the shaft takes 2 s to spin up,
+    so anything before ~4.5 s is still showing the ramp in its far half. The
+    air version's 4.0 s was right for a 0.85 s wake and is now too early.
+
+CAVITATION IS A THRESHOLD AND THE DEMO IS TUNED TO SIT UNDER IT. At the default
+helm -- 120 rpm, beta 22 deg, 3 m down -- the tip cores reach 83% of the
+available pressure margin and NOTHING happens: the water is clear, the wake is
+a faint bubbly column, and the helices are barely a hint. Push either slider
+and the ropes switch on, because the core suction goes as (L omega R)^2 and the
+margin does not move. That is the beat. It is the same beat a ship's engineer
+lives with: cavitation is not a setting, it is an operating point you cross.
+
+    ca      = K_CAV L(beta)^2 (omega R_tip)^2      the tip core's suction, m2/s2
+    margin  = (p_atm + rho g DEPTH - p_vapour)/rho the water's own resistance
+    e       = max(0, ca / margin - 1)              the EXCESS, per parcel
+
+Both are evaluated AT BIRTH, from the helm ring, so a parcel that was shed
+cavitating stays cavitating as it convects and a parcel shed clear stays clear.
+The excess drives three things and they are deliberately different curves:
+INTENSITY saturates (1 - exp(-e/0.45)), CORE RADIUS grows with it, and visible
+rope LENGTH grows with it -- see COLLAPSE below.
+
+    rho     1025 kg/m3      seawater
+    DEPTH   3 m, --depth    submergence of the shaft centreline. THE HONEST
+            LEVER: static head is most of the margin, so moving the prop up
+            moves the inception point down. --depth 1.2 cavitates at the
+            default helm; --depth 12 will not cavitate at 300 rpm.
+
+COLLAPSE, NOT DIFFUSION, is the other thing the water changed. In air the far
+wake DIFFUSED: the core burst, the grain ballooned, the rope dissolved into
+smoke. Vapour does not dissolve. It CONDENSES, the instant the core pressure
+recovers downstream, and it does so over a few centimetres -- the rope simply
+STOPS. So the tip population's visible length is an age gate scaled by the
+excess (a small excess lives a fraction of a loop and ends; a large one runs
+the whole frame), with a short smoothstep at the end so the tail is a collapse
+and not a fade. The turbulence still wiggles the cores while they live.
+
+THE HUB VORTEX is the single most recognisable feature of real CPP footage, and
+it cavitates FIRST: the flow behind the cap is slower, the pressure lower, and
+the head start is worth about 12% here (HUB_CAV). So at the default the hub
+core sits at 93% of margin against the tips' 83%, and a nudge on either slider
+lights the axial rope a few rpm before the helices. A small share of slots is
+taken out of the sheet's budget and born on the axis, aft of the cap.
 
 IT IS A CONTROLLABLE-PITCH PROPELLER, and that is the demo's second thesis.
 The first (below) is that particles carry the image and a volume carries the
@@ -39,34 +95,44 @@ flanges at once, and the wake does NOT change at once, because the wake is made
 of parcels that were shed under whatever pitch was set when each of them
 crossed the disc. The boundary between the old slipstream and the new one
 convects away downstream at the slipstream's own speed and the old wake
-persists until it ages out, half a second later. That lag is the whole point.
+persists until it ages out, two and a half seconds later. That lag is the whole
+point -- and now the boundary is also a boundary in CAVITATION NUMBER, so a
+throttle step lights the new wake and leaves the old one dark.
 
     beta   the blade angle at 0.7 R, 0..35 deg, BETA_DESIGN = 22 the neutral
     L      the loading it makes: smoothstep(sin(beta - 2 deg)), 0 at feather
            and 1 at 32 deg, and the ONLY channel from the pitch to the flow
-    omega  the shaft rate, 60..600 rpm, RPS_REF = 6 rev/s the reference
+           -- to the wake speed as sqrt(L), and to the cavitation number as
+           L^2, which is why the pitch lever alone can cross inception
+    omega  the shaft rate, 60..600 rpm, RPS_REF = 6 rev/s the reference.
+           Tip speed 11 m/s at the default 120 rpm and 34 at 360, and it is
+           the SQUARE of that number that decides whether the wake is white
     hist   HIST_N vec3 (L, omega, theta), one per frame, one full slot period
            deep. Written on the host at frame_no % HIST_N, read in the kernel
            at the parcel's OWN crossing frame. That is the whole added state.
 
-    u ~ omega sqrt(L)  induced velocity. Static-thrust momentum theory: at a
-                  fixed pitch T ~ omega^2 so v_i ~ omega, and the sqrt is spent
-                  on the loading. Wake speed, funnel length and (through the
-                  distance-keyed flare) funnel WIDTH all follow, so a feathered
-                  OR idling prop's funnel collapses onto the disc.
+    u ~ omega sqrt(L)  induced velocity. Static-thrust momentum theory, which
+                  does not care what the fluid is: at a fixed pitch T ~ omega^2
+                  so v_i ~ omega, and the sqrt is spent on the loading. Wake
+                  speed, funnel length and (through the distance-keyed flare)
+                  funnel WIDTH all follow, so a feathered OR idling prop's
+                  funnel collapses onto the disc. The ANCHOR is water: the
+                  default helm makes a 2.0 m/s slipstream, which is what a
+                  ship at the bollard actually throws.
     swirl ~ omega L    circulation is linear in both
-    gain ~ omega L     a weak vortex is a FAINT vortex and not a fat one: the
-                  core radius does not move with either lever
+    ca ~ (L omega)^2   the cavitation number, and the reason both levers are
+                  so much sharper here than they were in air
 
 WHAT THE THROTTLE DOES NOT DO IS THE INTERESTING PART. Advance per revolution
 is u / n, and with u ~ omega that is INDEPENDENT OF RPM: change the shaft speed
 and the helix's loop spacing in metres does not move at all. What moves is how
-far 0.85 s of wake reaches (halve the rpm and the slipstream is half as long)
-and how fast the loops are laid down. Loop SPACING is a property of the PITCH
-alone. That is what a screw is: it advances its geometric pitch per turn
-whatever speed you turn it at, and the rpm-step crops show exactly that -- a
-short stub of new wake whose loops line up with the old wake's, a rarefaction
-between them, and the old wake convecting off to age out.
+far 2.4 s of wake reaches (halve the rpm and the slipstream is half as long),
+how fast the loops are laid down, and -- only in water -- whether they are
+VISIBLE at all. Loop SPACING is a property of the PITCH alone. That is what a
+screw is: it advances its geometric pitch per turn whatever speed you turn it
+at, and the rpm-step crops show exactly that -- a short stub of new wake whose
+loops line up with the old wake's, a rarefaction between them, and the old wake
+convecting off to age out.
 
 THETA CANNOT BE A CLOSED FORM ONCE OMEGA IS A LEVER. theta_of(t) = OMEGA t^2 /
 2 T_RAMP was exact while omega was a constant; the moment it is a slider, any
@@ -90,26 +156,31 @@ screen is what a CPP looks like.
 A HARD STEP TEARS THE SLIPSTREAM, and the black gap that opens in the
 --pitch-at shots is the model being right rather than the model breaking. Past
 the disc there is no force on a parcel, so it keeps the speed it was shed with
-for the rest of its life: drop the pitch and the fast slug already downstream
-keeps going at 5.6 m/s while the flow behind it leaves at 1.8, and the two
-separate. What fills the tear is ambient air that never went through the disc,
-which carries no seeding and is therefore black. A real servo takes seconds to
+for the rest of its life: drop the throttle and the fast slug already
+downstream keeps going at 5.0 m/s while the flow behind it leaves at 2.0, and
+the two separate. What fills the tear is ambient water that never went through
+the disc, which carries no bubbles and no vapour and is therefore black -- an
+easier thing to believe underwater than it ever was in a room. A servo takes
+seconds to
 swing and a slider drag takes a human moment, so both stretch that tear into a
 visible rarefaction instead of a void; only the scripted instantaneous step
 opens it fully, and it is the clearest single frame of the causal claim.
 
 A PROPELLER PULLS, and for a long time this one did not look like it: every
-parcel was born ON the disc, so the air in front of the propeller was inert and
-the whole thrust of the picture began at the blade. It does not, in a real one.
-The disc draws its air from a streamtube WIDER THAN ITSELF -- the wind-tunnel
-smoke photographs show lines well outside the tip radius drifting slowly
-inward, accelerating as they converge, necking down through the disc and only
-THEN spiralling away. So each slot's life now has two legs, an INFLOW leg and
-the wake it always had, joined at the disc. The air arriving is PLAIN AIR and
-carries none of the wake's identity -- no swirl, no helix, no blade phase, no
-tight core -- because the blade is what makes those, at the instant it cuts.
---view mouth is the framing that shows it: the mouth twice the disc's diameter,
-the disc plane splitting the frame, converging air one side and ropes the other.
+parcel was born ON the disc, so the water in front of the propeller was inert
+and the whole thrust of the picture began at the blade. It does not, in a real
+one. The disc draws its water from a streamtube WIDER THAN ITSELF, and
+underwater there is something to SEE it with that a wind tunnel has to inject:
+SUSPENDED SEDIMENT. Silt and plankton are in the water already, they are lit by
+the same downwelling sun, and every diver's video of a working screw shows them
+streaming in from well outside the tip radius, accelerating as they converge,
+necking down through the disc and only THEN spiralling away. So each slot's
+life has two legs, an INFLOW leg and the wake, joined at the disc. What arrives
+is PLAIN WATER carrying motes, and it has none of the wake's identity -- no
+swirl, no helix, no blade phase, no tight core -- because the blade is what
+makes those, at the instant it cuts. --view mouth is the framing that shows it:
+the mouth twice the disc's diameter, the disc plane splitting the frame,
+converging motes one side and vapour the other.
 
 THE SIM IS A CLOSED FORM, like the renderer's own emitter and unlike the
 nebula's integrator: slot s is reborn every `period` seconds and its whole
@@ -134,7 +205,9 @@ state, no integration and no loss of seeking.
     phi_a  theta(tb) + blade * 2pi/B + swirl(tau)  -- swirl DECAYS with age
     x     U_wake * tau, eased from the disc velocity over the first ~0.1 s
     r     r0 contracting toward 0.78 r0 (slipstream contraction)
-    w     sqrt(w0^2 + 2 nu_t tau)                  -- Lamb-Oseen core diffusion
+    w     a tight vapour tube while the parcel cavitates, widening with the
+          excess; the burst-and-diffuse core is what a CLEAR parcel does
+    vap   (1 - exp(-e/0.45)) x a collapse gate on age -- the rope ENDS
     +     a curl-noise displacement growing as tau^1.9, sampled at the
           Lagrangian LABEL rather than at the position, so the wobble convects
           WITH the filament instead of standing still in the world while the
@@ -143,15 +216,24 @@ state, no integration and no loss of seeking.
 POSITION IS CONTINUOUS AT THE CROSSING AND IDENTITY DELIBERATELY IS NOT. The
 axial speed matches (d's slope is pinned to u_disc), the radius matches and the
 azimuth matches, so nothing pops or teleports; but the parcel arrives as a fat,
-dim, neutral blob of plain air and leaves as a 1 cm bright filament welded to a
-blade tip. That step IS the propeller. Read the frame left to right and the
+dim mote of silt in plain water and leaves as a 1 cm vapour filament welded to
+a blade tip. That step IS the propeller. Read the frame left to right and the
 blade is unmistakably the thing that caused the wake, which is the entire point
-of drawing the air in front of it at all.
+of drawing the water in front of it at all.
 
 THE CREDIBILITY DETAIL is theta(t): the visible propeller's rotation and the
 kernel's birth azimuth are the same function of the same clock, so every
 filament is rooted at a blade tip and stays welded to it. Get that wrong by one
-frame and the whole thing reads as a smoke machine behind a fan.
+frame and the whole thing reads as a bubble curtain behind a fan.
+
+THE STAGE IS THE ENGINE'S OWN and no new rendering was written for it: a deep
+blue-green background, `set_fog_water_surface_y(DEPTH)` to put the waterline
+three metres up, and `set_underwater_murk` for the column's extinction and
+in-scatter, so distance falls into murk exactly as it does in the sailboat and
+hull films. The sun is DOWNWELLING -- from above, blue-shifted and dimmed by
+three metres of water -- which is what gives the bubble column a bright top and
+a dark belly, and it stays brighter than the rake because the billboards take
+the single brightest DirectionalLight as their sun.
 
 BillboardRepr::stretchSeconds is NOT used, and not for lack of trying: the
 backend gates the streak on `rendererOwned || hostPrevIsPrevStep`, and an
@@ -177,7 +259,16 @@ import warp as wp
 import threepp as tp
 from warp_common import cli_arg
 
-N = cli_arg("--n", 2_000_000, int)
+# 2M -> 1.7M, and it is the 25 fps floor that moved it, not taste. Fixing the
+# negative-age bug (see the kernel) put a sixth of the parcels BACK into the
+# frame that the rasteriser had been silently discarding as NaN, which is 5.6
+# ms of work that was always supposed to be there; the underwater medium is
+# another 3. Both are honest, neither is optional, and the count is the dial
+# that pays for them. Nothing in the look moves with it: BRIGHT and SIGMA are
+# both anchored at 2M and both go as 1/N, so total radiance and total optical
+# depth are invariant and the only thing 1.7M buys less of is smoothness. See
+# THE N CONTRACT below.
+N = cli_arg("--n", 1_700_000, int)
 BENCH = "--bench" in sys.argv
 SHOT = "--shot" in sys.argv
 SHOT_TIME = cli_arg("--shot", 4.0, float)
@@ -198,13 +289,62 @@ R_TIP = 0.90                        # m
 R_HUB = 0.27       # the bulbous hub: a 5-blade CPP carries the whole pitch
                    # mechanism inside it, so hub/diameter is ~0.30, not 0.15
 R_PALM = 0.245     # radius at which a blade root meets its own flange
+# ── THE WATER, AND THE PRESSURE IT HAS TO GIVE UP ───────────────────────────
+# Everything cavitation-related is here, and there is very little of it: three
+# fluid constants, one geometric one, and the margin they make. That margin is
+# a SPECIFIC ENERGY (m2/s2 = J/kg), because dividing the pressure by rho is
+# what lets it be compared with a velocity squared without carrying rho into
+# every term of the kernel.
+RHO = 1025.0            # kg/m3, seawater
+P_ATM = 101325.0        # Pa at the surface
+P_VAP = 2340.0          # Pa, the vapour pressure of water at 20 C
+G_ACC = 9.81
+# DEPTH IS THE HONEST LEVER and the reason it is a CLI knob rather than a
+# constant. Static head is 23% of the margin at 3 m and it is LINEAR in depth,
+# while the suction that has to beat it is quadratic in tip speed -- so moving
+# the propeller up moves the inception point down, hard. --depth 1.2 cavitates
+# at the default helm; --depth 12 does not cavitate at 300 rpm. A real ship
+# meets this as a loaded/ballasted difference and as the reason a propeller
+# racing in a swell howls.
+DEPTH = cli_arg("--depth", 3.0, float)      # m of water over the shaft
+CAV_MARGIN = (P_ATM + RHO * G_ACC * DEPTH - P_VAP) / RHO    # m2/s2
+# K_CAV IS SET BY THE DEMO'S BEAT, and that is a legitimate way to fix a
+# coefficient this crude: the model says the tip-core suction goes as the
+# circulation SQUARED (Gamma ~ L omega R for a lifting section), so
+# ca = K_CAV (L omega R)^2, and K_CAV is the one number that says how tight the
+# core is. Rather than invent a core radius, it is chosen so the DEFAULT helm
+# -- 120 rpm, beta 22, 3 m down -- lands at 0.83 of the margin. Just under.
+# Everything the demo is for happens in the last 17%.
+K_CAV = cli_arg("--k-cav", 1.40, float)
+# The hub vortex's head start. Behind the cap the axial flow is slower and the
+# static pressure lower, so the hub core reaches vapour pressure BEFORE the tips
+# do -- which is why the axial rope is the first thing to appear in real CPP
+# footage and the last thing to go. 1.12 puts the hub at 0.93 of margin at the
+# default against the tips' 0.83, so a few rpm separate the two inceptions.
+HUB_CAV = 1.12
+CAV_KNEE = 0.45      # excess at which the vapour is 63% of its full brightness
+CAV_R = 2.6          # x core radius at full vapour: a fat rope, not a wire
+# How long the vapour SURVIVES, as a fraction of LIFETIME, against the excess.
+# See COLLAPSE in the docstring: this is the length knob and it is deliberately
+# not the intensity knob, and it is the LEVER'S OWN RANGE that sets the slope.
+# 0.50 saturated at e ~ 1.7 -- 230 rpm -- which put every interesting helm
+# setting at "the rope runs off the frame" and made the collapse invisible at
+# anything you would actually want to look at. 0.30 saturates at e ~ 2.9
+# (about 245 rpm at the design pitch) and spreads the useful part over the
+# 130-240 rpm band, where a rope that ENDS is the whole point.
+CAV_L0, CAV_LK = 0.14, 0.30
+CAV_COLLAPSE = 0.30  # the last 30% of that life is the condensation ramp
 # ── CONTROLLABLE SHAFT SPEED ────────────────────────────────────────────────
 # RPS_REF is the ANCHOR and not the default: every flow coupling below is
 # normalised by it, so a prop turning at RPS_REF with beta at BETA_DESIGN
 # evaluates to exactly the numbers this demo had before either lever existed.
 # RPS is merely where the throttle starts.
 RPS_REF = 6.0                       # rev/s, the tuning reference
-RPS = cli_arg("--rps", 6.0, float)  # revolutions per second commanded
+# 2 rev/s = 120 rpm is where the DEMO starts, and it is an honest ship speed:
+# a large slow-speed diesel turns its screw at 60-120 rpm and this is the top
+# of that. It is also, by construction, the operating point that sits just
+# under inception -- see K_CAV.
+RPS = cli_arg("--rps", 2.0, float)  # revolutions per second commanded
 OMEGA = 2.0 * math.pi * RPS
 OMEGA_REF = 2.0 * math.pi * RPS_REF
 RPM_MIN, RPM_MAX = 60.0, 600.0      # the slider's range
@@ -286,10 +426,26 @@ def scheduled_beta(t):
     the one edge the shots exist to show."""
     return PITCH_TO if t >= PITCH_AT else PITCH
 
-# ── The wake ────────────────────────────────────────────────────────────────
-LIFETIME = 0.85          # s of wake held on screen; also the slot recycle period
-U_DISC = 3.6             # axial velocity AT the disc (m/s)
-U_WAKE = 5.6             # fully developed slipstream velocity; ~2x inflow
+# ── The wake, CALIBRATED FOR WATER ──────────────────────────────────────────
+# The anchors are quoted at RPS_REF (360 rpm) as everything else is, and they
+# are set by the OPERATING point: 6.0 m/s at the reference is 2.0 m/s at the
+# default 120 rpm, which is the slipstream a large screw actually throws at the
+# bollard. In air the same numbers were 5.6 / 3.6 and the default was the
+# reference speed; the ratio between disc and developed slipstream is unchanged
+# because momentum theory does not care what the fluid is.
+#
+# THE LIFETIME HAD TO GROW WITH THE CALIBRATION, and this is the one change
+# that is arithmetic rather than judgement. Reach is u x LIFETIME. At 2.0 m/s
+# the old 0.85 s reached 1.7 m, which in this framing is a stub against an
+# empty frame; 2.4 s puts it back at 4.8 m, within a hand's width of the reach
+# the air version had at its own default, so the crops stay comparable and the
+# box barely moves. It is also free: the same N over a proportionally longer
+# period leaves parcels-per-metre where it was, which is what BRIGHT and SIGMA
+# are actually tuned against. The helm ring is sized from PERIOD, so it grew
+# with it and nothing else had to be told.
+LIFETIME = 2.4           # s of wake held on screen; also the slot recycle period
+U_DISC = 3.86            # axial velocity AT the disc (m/s) at RPS_REF
+U_WAKE = 6.0             # fully developed slipstream at RPS_REF; ~2x inflow
 TAU_A = 0.13             # s over which the flow eases from U_DISC to U_WAKE
 CONTRACT = 0.78          # slipstream contracts to this fraction of its birth radius
 TAU_C = 0.16             # s of that contraction
@@ -310,7 +466,41 @@ W_BURST_P = 2.4                             # its delay: flat, then a knee
 TURB = cli_arg("--turb", 0.30, float)    # m of curl displacement at end of life
 TURB_P = 1.9             # its growth exponent in age -- tight at the tip, wild downstream
 TURB_FREQ = 0.55         # label-space wavelength of the meander
-# ── The entrained SHEET, and what it is really for ──────────────────────────
+# ── WHAT A TIP PARCEL LOOKS LIKE, WHICH IN WATER IS ALMOST NOTHING ──────────
+# This is the single biggest departure from the air version and it took some
+# nerve. In air the tip population was the STAR: a bright cyan-white filament
+# from the moment it left the blade. In water there is no tracer, and a
+# non-cavitating tip vortex is a pressure minimum in clear water -- it is not
+# dark, it is INVISIBLE. Real footage of a lightly loaded screw shows the hub
+# and a faint bubbly haze and nothing else at all.
+#
+# TIP_HINT is what is left: 9% of the old radiance, enough that the helix is a
+# suggestion at the default helm rather than an absence (the geometry is still
+# the demo's whole thesis, and a completely empty frame proves nothing about
+# it), and far too little to compete with the bubble column. Everything above
+# that comes from the vapour, which is gated.
+#
+# BOTH ARE RELATIVE TO THE RE-ANCHORED BRIGHT (see OMG_OP), so 1.0 is the
+# radiance the air version's tip rope had at ITS default. A full vapour core is
+# a little brighter than that and a clear one is a tenth of it, which is the
+# whole dynamic range this demo works in. The first cut had VAP_GAIN at 2.3 --
+# set before the re-anchor and therefore 5x over -- and the 300 rpm frame came
+# out as SAND: each parcel bright enough to be an individual visible dot, which
+# no amount of grain growth fixes because the problem is contrast per sample.
+TIP_HINT = cli_arg("--tip-hint", 0.09, float)
+VAP_GAIN = cli_arg("--vapour", 0.85, float)  # radiance of a fully vapour-filled core
+# The vapour rope's grain does NOT balloon with AGE the way the air wake's did:
+# growth in age was the diffusion story and vapour does not diffuse. What it
+# does do is grow with the EXCESS, in step with the core it is sampling --
+# VAP_R0 beside CAV_R -- and that turned out to be the fix for the sand. A
+# cavitating core is a centimetres-thick TUBE; sampling it with the same 2.6 mm
+# grain the clear-water hint uses leaves a fat rope drawn as a scatter of
+# individual bright dots, which is exactly how the 300 rpm frame first came
+# out. Widen the grain with the tube and neighbouring samples OVERLAP, which is
+# the only thing that ever makes a particle wake smooth.
+VAP_R0 = 2.2             # x grain radius at full vapour, beside CAV_R's 2.6
+VAP_GROW = 5.0           # x more, over the rope's life
+# ── The entrained SHEET, WHICH IS NOW THE BUBBLY WAKE ───────────────────────
 # It began as a supporting structure -- the vortex sheet rolling up behind the
 # blade, there to shear against the tip helix and start the braiding -- and it
 # turns out to be the thing that decides whether the slipstream has an INSIDE.
@@ -319,8 +509,37 @@ TURB_FREQ = 0.55         # label-space wavelength of the meander
 # wake was a wire cage with black between the loops however many parcels were
 # thrown at it. Raised here, and the penalty relaxed, because the sheet is the
 # only population that lives BETWEEN the ropes.
+#
+# UNDERWATER IT KEEPS ITS JOB AND CHANGES ITS NAME. The machinery is untouched;
+# what it draws is the entrained air and the turbulent microbubble mist a
+# working screw drags into its own slipstream, which is the one part of a
+# propeller wake that is visible whether or not anything is cavitating. It is
+# WHITE rather than blue-grey (bubbles are broadband scatterers), it scales
+# with the loading as the sheet always did, and it takes a BOOST when the tips
+# are cavitating, because collapsing vapour is itself a bubble source. That
+# boost is the reason the whole column brightens on the same slider push that
+# lights the ropes, instead of the ropes appearing over a dead wake.
 SHEET = cli_arg("--sheet", 0.46, float)  # fraction of slots born across the SPAN
-SHEET_GAIN = cli_arg("--sheet-gain", 0.62, float)   # its radiance vs a tip rope
+# 0.62 -> 0.40, and the reason is the DEMO'S BEAT rather than the physics. At
+# the default helm nothing is cavitating, so the bubble column is the entire
+# picture, and at the air version's level it filled the frame with white and
+# said "look at all this" -- which is the opposite of what shot A has to say.
+# Clear water first, then the switch. What it loses at the default it takes
+# back through BUB_CAV the moment the tips start boiling.
+SHEET_GAIN = cli_arg("--sheet-gain", 0.40, float)   # its radiance vs a tip rope
+BUB_CAV = cli_arg("--bubble-cav", 1.35, float)   # x radiance at full cavitation
+# ── The HUB VORTEX, taken out of the sheet's own budget ─────────────────────
+# A small population born on the AXIS, aft of the cap, and it is a separate
+# population rather than a special case of the sheet for one reason: it reads
+# the cavitation gate at HUB_CAV, so it lights first. HUB_X0 puts its birth
+# station behind the dome (which ends at x = 0.435) so the rope emerges from
+# the cap rather than out of the middle of the hub, and its slots skip the
+# inflow leg entirely -- there is nothing upstream of a hub vortex.
+HUB_SHARE = cli_arg("--hub-share", 0.05, float)  # fraction of slots, from SHEET's
+HUB_X0 = 0.46            # m aft of the disc: just clear of the cap dome
+HUB_R = 0.055            # m, the core's own radius -- fatter than a tip's
+HUB_W = 2.2              # x the tip's vapour core width at the same excess
+HUB_GAIN = 1.7           # x a tip rope's radiance: a fatter core holds more vapour
 # The sheet's inner station. It used to start at 0.26 R -- just outside the old
 # slim hub -- which left the tube's own axis empty; a side view then showed a
 # hollow core wherever the near and far walls did not overlap. A real prop does
@@ -367,8 +586,8 @@ SHEET_R0 = cli_arg("--sheet-r0", 0.155, float)      # x R_TIP
 # backwards. Nothing is spinning ahead of a propeller. The blade is what makes
 # the vortex, at the instant it cuts the air.
 #
-# So the inflow leg is now a stream of PLAIN AIR and carries none of the wake's
-# identity. Its azimuth is a per-slot hash, uniform over the circle, which
+# So the inflow leg is PLAIN WATER carrying motes and it takes none of the
+# wake's identity. Its azimuth is a per-slot hash, uniform over the circle, which
 # leaves an axisymmetric haze with no helix, no spoke and no phase relationship
 # to the blades at all; it converges onto the crossing azimuth only over the
 # last IN_LOCK-worth of the leg, a few centimetres, so position is still exactly
@@ -376,12 +595,19 @@ SHEET_R0 = cli_arg("--sheet-r0", 0.155, float)      # x R_TIP
 # neutral -- and its core is a loose 10 cm blob rather than a 1 cm rope.
 #
 # Everything that says "vortex" therefore switches on AT the disc: the tight
-# W_CORE0 core, the cyan-white brightness, the swirl, the blade phase lock. The
-# step in brightness and tightness across the disc plane is not a seam to be
-# tuned away -- it IS the propeller doing its job, and it is the one thing in
-# the frame that says the blade caused this rather than merely stood in it.
+# W_CORE0 core, the swirl, the blade phase lock, and (above inception) the
+# vapour. The step in identity across the disc plane is not a seam to be tuned
+# away -- it IS the propeller doing its job, and it is the one thing in the
+# frame that says the blade caused this rather than merely stood in it.
 # Position stays continuous; IDENTITY deliberately does not.
-T_IN = cli_arg("--t-in", 0.28, float)   # s spent upstream; ~25% of the period
+#
+# T_IN GREW WITH THE WATER CALIBRATION for the same reason LIFETIME did, and
+# by the same arithmetic: the funnel's reach is a SPEED times this time, and
+# the speed fell to a third. 0.28 s at 1.29 m/s reaches 27 cm, which is inside
+# the hub; 0.80 s puts the mouth back at 0.77 m, where the air version had it.
+# It also keeps T_IN / PERIOD at 25%, so IN_SHARE, WAKE_SHARE and every budget
+# derived from them are untouched.
+T_IN = cli_arg("--t-in", 0.80, float)   # s spent upstream; ~25% of the period
 # IN_SHARE is the answer to the first thing that went wrong here. Giving EVERY
 # slot an inflow leg costs the wake 25% of its parcels, and the far wake is
 # exactly the place in this picture that cannot afford them: it is already at
@@ -404,24 +630,25 @@ IN_FLARE_HI = 1.50
 # is where a real prop imparts rotation: at the blade, not before it.
 IN_LOCK_P = 26.0
 # ── THE RAKE, AND WHY THE HAZE ALONE WOULD NOT DO ──────────────────────────
-# The first attempt at plain air was a smooth axisymmetric haze -- a per-slot
+# The first attempt at plain flow was a smooth axisymmetric haze -- a per-slot
 # random azimuth and nothing else -- and it failed in the opposite direction
 # from the helix: bright enough to see, it was a shapeless glow around the
 # propeller that said nothing about direction; dim enough not to glow, it was
-# not there at all. Air has no texture of its own. A stream has to be MADE
-# visible, and the way every wind tunnel does that is a smoke rake: a fixed
-# grid of seeding points that draws a finite set of streamlines.
+# not there at all. A clear fluid has no texture of its own. A stream has to be
+# MADE visible, and in a wind tunnel that is a smoke rake; underwater it is
+# already done for you, because silt is not uniformly distributed -- it comes
+# in strands and clouds, and a diver's light picks out a finite set of them.
 #
 # So the upstream azimuth and the flare are quantised onto IN_LINES_A x
 # IN_LINES_R streamlines, jittered per line so the grid does not read as a
 # grid. The lines are STATIC IN THE WORLD -- they do not rotate, they carry no
-# blade phase, they are the same lines frame to frame -- which is what a rake
-# in front of a propeller looks like and is the exact opposite of the helix
-# that made the first cut read backwards. What moves along them is the air.
+# blade phase, they are the same lines frame to frame -- which is what drawn-in
+# sediment looks like and is the exact opposite of the helix that made the
+# first cut read backwards. What moves along them is the water.
 IN_LINES_A = 30          # streamlines around the axis
 IN_LINES_R = 5           # and across the tube's radius
-IN_CORE = 0.030          # m, the loose blob a parcel of undisturbed air is
-IN_TURB = 0.05           # m of curl wander at the mouth -- room air is not a lathe
+IN_CORE = 0.030          # m, the loose blob a parcel of undisturbed water is
+IN_TURB = 0.05           # m of curl wander at the mouth -- open water is not a lathe
 IN_TURB_P = 1.5
 PERIOD = T_IN + LIFETIME
 # ── THE PITCH-HISTORY RING ──────────────────────────────────────────────────
@@ -477,16 +704,23 @@ FLUX_P = cli_arg("--flux", 0.80, float)         # 1 = flux-conserving, >1 = dims
 # cut did and which is precisely how the funnel took on the wake's identity: a
 # parcel one centimetre ahead of the blade was drawn at the shed vortex's own
 # brightness, so the rope appeared to already exist in front of the propeller.
+#
+# DIMMED FOR THE MEDIUM: 0.90 -> 0.42. In air the funnel was the same smoke the
+# wake was made of and could sit at nearly the wake's own brightness; here it
+# is suspended silt lit only by what the downwelling sun has left after three
+# metres of water, and the wake it feeds is a bubble column. Left at 0.90 the
+# motes out-glowed the slipstream and the frame read as a fog machine again.
 IN_GROW = cli_arg("--in-grow", 5.0, float)      # x grain radius, the whole leg
-IN_GAIN = cli_arg("--in-gain", 0.90, float)     # pre-flux radiance of plain air
+IN_GAIN = cli_arg("--in-gain", 0.30, float)     # pre-flux radiance of the motes
 IN_GAIN_FAR = 0.30       # x that, at the mouth: the far end is much fainter
 # The last speckle source was the sprite's t^9 CORE spike: the falloff plants
 # a 1-2 px hard dot at every sprite's centre regardless of drawn radius, and
 # `softness` deliberately does not reach it (it is what keeps a few-pixel ember
 # from reading as a blob). It is a knob now -- BillboardRepr.core_weight, 0.85
 # being the old hardcoded constant -- and this demo turns it OFF below, which
-# is what lets 2M read smooth where it used to take --n 5000000 to average the
-# dots away. 2M is where the 25 fps floor put the default on a 4070 at 1280x800.
+# is what lets the default read smooth where it used to take --n 5000000 to
+# average the dots away. 1.7M is where the 25 fps floor puts the default on a
+# 4070 at 1280x800 -- 44.2 ms at 2M, 40.4 at 1.7M, 38.2 flat.
 
 # ── The look ────────────────────────────────────────────────────────────────
 # The density volume is LATCHED at these bounds and never refitted: a box that
@@ -502,9 +736,18 @@ IN_GAIN_FAR = 0.30       # x that, at the mouth: the far end is much fainter
 # slipstream -- which is the one axis whose detail the self-shadowing lives on --
 # to compute transmittance for parcels that have nothing between them and either
 # the eye or the sun and would have come back as 1.0 anyway. The mouth sits
-# outside the box and is unshadowed, which is what unshadowed air looks like.
-BOX_CENTER = (1.85, 0.0, 0.0)
-BOX_HALF = (2.70, 1.20, 1.20)
+# outside the box and is unshadowed, which is what unshadowed water looks like.
+#
+# AND IT WAS RE-DERIVED ONCE FOR THE WATER CALIBRATION, downstream this time.
+# Reach at the default helm is u x LIFETIME = 2.00 x 2.4 = 4.80 m, and the
+# funnel now stands 0.77 m ahead of the disc, so the box spans x = -0.85 to
+# +4.85: centre 2.00, half 2.85. Done ONCE and latched, because the point of a
+# latched box is that it does not move; and because it moved at all, the
+# BOX_VOX_RATIO below has to be re-read, which is exactly the trap it exists
+# for. The cross-section did not change, so the lattice is coarser along the
+# wake by 6% and unchanged across it -- the axis the self-shadowing lives on.
+BOX_CENTER = (2.00, 0.0, 0.0)
+BOX_HALF = (2.85, 1.20, 1.20)
 BOX_RES = cli_arg("--vol-res", 160, int)
 BOX_HALF_REF = (2.45, 1.20, 1.20)   # the pre-inflow box SIGMA was tuned against
 # sigma_t one particle contributes, and it pays TWO rents. WAKE_SHARE is the
@@ -552,7 +795,25 @@ SHADOW = 0.0 if FLAT else cli_arg("--shadow", 0.72, float)
 # pre-inflow baseline had it, which is what makes the far/near crops comparable.
 # It does NOT undo the lost parcels, only the lost brightness; that is what
 # IN_SHARE is for.
-BRIGHT = cli_arg("--bright", 0.038, float) * (2_000_000 / N) / WAKE_SHARE
+#
+# AND IT IS RE-ANCHORED AT THE OPERATING POINT, which is pure arithmetic and
+# was the single biggest thing the water calibration broke. omg (in the kernel)
+# holds the wake's flux per METRE invariant under the throttle, and it is
+# normalised at RPS_REF -- so moving the demo's operating point to RPS_REF / 3
+# divided every sprite's radiance by 2.8. SIGMA did NOT move with it, because
+# sigma is deposited per PARCEL and parcels per metre is reach / count, which
+# the longer LIFETIME left within 1% of where it was. So the volume kept
+# glowing at full strength while the sprites went out: the first water render
+# was MILK WITH NO ROPES, and that is exactly the arithmetic that made it.
+#
+# OMG_OP is the value omg takes at the DEFAULT helm. Dividing by it puts the
+# sprites back beside the volume they are supposed to be drawn on. It is a
+# CONSTANT and deliberately not a function of --rps: the throttle's own
+# invariance is the thing being re-anchored, not the thing being overridden.
+RPS_OP = 2.0             # the helm the look is anchored at
+OMG_OP = OM_G_FLOOR + (1.0 - OM_G_FLOOR) * (RPS_OP / RPS_REF)
+BRIGHT = cli_arg("--bright", 0.038, float) * (2_000_000 / N) \
+    / (WAKE_SHARE * OMG_OP)
 # ── THE N CONTRACT: N BUYS SMOOTHNESS, NEVER BODY ───────────────────────────
 # Worth stating outright, because the natural response to a thin-looking wake
 # is to raise --n, and raising --n cannot fix it. Read the two laws above:
@@ -604,15 +865,31 @@ def shed(out_pos: wp.array(dtype=wp.vec4),
          out_col: wp.array(dtype=wp.vec4),
          hist: wp.array(dtype=wp.vec3),
          t: float, n: int, blades: int,
-         turb: float, sheet: float,
+         turb: float, sheet: float, hub_share: float,
          burst: float, sprite_r0: float, flux_p: float, bright: float,
-         t_in: float, in_share: float, hist_n: int):
+         t_in: float, in_share: float, hist_n: int,
+         k_cav: float, cav_margin: float,
+         tip_hint: float, vap_gain: float, bub_cav: float):
     i = wp.tid()
     s = wp.rand_init(90210, i)
     # The inflow leg's own stream, drawn from a SEPARATE seed so that adding
     # this leg did not renumber a single one of the wake's random draws -- the
     # before/after crops are then comparing the same noise realisation.
     s2 = wp.rand_init(1337, i)
+
+    # ── WHICH POPULATION, decided before anything else ──────────────────────
+    # Three now: the TIP filaments, the entrained SHEET that fills between
+    # them, and the HUB rope on the axis. The hub's share comes OUT of the
+    # sheet's -- the tip share (1 - sheet) is untouched -- so the helices are
+    # drawn with exactly the parcels they were tuned with. The draw moved to
+    # the top of the kernel because tin below has to know about it, and it
+    # consumes the same single randf(s) in the same position it always did, so
+    # not one of the wake's random numbers is renumbered by the move.
+    q = wp.randf(s)
+    is_hub = q < hub_share
+    is_sheet = q < sheet
+    if is_hub:
+        is_sheet = False
 
     # ── The slot's own clock ────────────────────────────────────────────────
     # Uniform phase offsets over one PERIOD give a uniform shedding RATE, so
@@ -625,8 +902,12 @@ def shed(out_pos: wp.array(dtype=wp.vec4),
     #
     # A slot that did not win the IN_SHARE draw simply has t_in = 0: its period
     # collapses back to LIFETIME and it is born at the disc exactly as before.
+    # A HUB slot always has t_in = 0 -- there is nothing upstream of a hub
+    # vortex to draw. The randf is taken into a local FIRST so the branch
+    # cannot short-circuit past it and desynchronise the s2 stream.
+    rin = wp.randf(s2)
     tin = t_in
-    if wp.randf(s2) >= in_share:
+    if is_hub or rin >= in_share:
         tin = 0.0
     u = (float(i) + 0.5) / float(n)
     period = tin + LIFETIME
@@ -640,7 +921,15 @@ def shed(out_pos: wp.array(dtype=wp.vec4),
         w_in = tin - phi_t
         tb = t + w_in
     else:
-        tau = phi_t - t_in
+        # tin, NOT t_in. This was a genuine bug and it had been eating a sixth
+        # of the parcels since the inflow leg landed: a born-at-disc slot has
+        # tin = 0, so subtracting the SHARED T_IN gave every such parcel
+        # younger than T_IN a NEGATIVE age -- and wp.pow(negative, 2.4) in the
+        # core and grain laws is NaN, which the rasteriser silently discards.
+        # The parcels lost were precisely the youngest ones, at the disc, which
+        # is where the vapour rope is born and the one place this slice cannot
+        # afford to be missing anything.
+        tau = phi_t - tin
         tb = t - tau
     af = tau / LIFETIME                         # age fraction, [0, 1)
     if tb < 0.0:
@@ -707,7 +996,7 @@ def shed(out_pos: wp.array(dtype=wp.vec4),
     # what one expects: the helix's advance PER REVOLUTION is u / n, and with
     # u ~ omega that is INDEPENDENT OF RPM. Change the speed and the loop
     # spacing in metres does not move; what moves is how far down the tube
-    # 0.85 s of wake reaches, and how fast the loops are laid down.
+    # 2.4 s of wake reaches, and how fast the loops are laid down.
     omf = om / OMEGA_REF
     # Momentum theory again, on the other lever: thrust goes as the loading,
     # induced velocity as its square root.
@@ -717,17 +1006,32 @@ def shed(out_pos: wp.array(dtype=wp.vec4),
     # flux per METRE invariant under the throttle and lets the throttle change
     # the wake's LENGTH, which is the honest reading.
     omg = OM_G_FLOOR + (1.0 - OM_G_FLOOR) * omf
+    # ── THE CAVITATION NUMBER, AT THIS PARCEL'S OWN CROSSING ────────────────
+    # Momentum-theory level, like everything else in this file. The tip core's
+    # suction goes as the circulation SQUARED and Gamma ~ L omega R for a
+    # lifting section, so ca = K (L omega R)^2 -- quadratic in BOTH levers,
+    # which is why a helm that feels gentle on the wake is violent on the
+    # bubbles. It is compared against a specific energy (m2/s2) so rho never
+    # enters the kernel, and it is read from the RING, so a parcel carries the
+    # cavitation state of the moment it was shed for the rest of its life. The
+    # throttle-step shots therefore show a lit stub of new wake against a dark
+    # slug of old, which is a thing a ship's engineer has actually seen.
+    vt = om * R_TIP                        # tip speed, m/s
+    caq = k_cav * load * load * vt * vt / cav_margin
 
     blade = i % blades
-    is_sheet = wp.randf(s) < sheet
 
     # ── Birth on the blade ──────────────────────────────────────────────────
     # The tip population is born in the last 2% of the span (that IS the tip
     # vortex); the sheet population is born across the whole span and rolls up
-    # behind the blade as the entrained vortex sheet.
+    # behind the blade as the entrained vortex sheet; the hub population is
+    # born on the AXIS, a few centimetres off it, and its axial station is
+    # pushed aft of the cap dome further down.
     r0 = R_TIP * (0.985 + 0.02 * wp.randf(s))
     if is_sheet:
         r0 = R_TIP * (SHEET_R0 + (0.98 - SHEET_R0) * wp.randf(s))
+    if is_hub:
+        r0 = HUB_R * (0.25 + 0.75 * wp.randf(s))
     span = r0 / R_TIP
 
     # ── The crossing ────────────────────────────────────────────────────────
@@ -790,9 +1094,11 @@ def shed(out_pos: wp.array(dtype=wp.vec4),
         # distance-keyed flare give for free above) -- it goes faint too.
         gain = IN_GAIN * (1.0 - (1.0 - IN_GAIN_FAR) * uu) * omg \
             * (IN_G_FLOOR + (1.0 - IN_G_FLOOR) * load) / IN_GAIN_DESIGN
-        col = wp.vec3(0.52, 0.54, 0.58)
+        # Suspended sediment lit by what is left of the sun three metres down:
+        # a pale green-grey, warmer than the vapour and much dimmer than it.
+        col = wp.vec3(0.50, 0.56, 0.52)
     else:
-        # ── Downstream: the wake, exactly as it was ─────────────────────────
+        # ── Downstream: the wake ────────────────────────────────────────────
         x = u_w * tau - (u_w - u_d) * TAU_A * (1.0 - wp.exp(-tau / TAU_A))
         # Radial: contraction toward CONTRACT * r0.
         r = r0 * (CONTRACT + (1.0 - CONTRACT) * wp.exp(-tau / TAU_C))
@@ -809,23 +1115,85 @@ def shed(out_pos: wp.array(dtype=wp.vec4),
         # its advance per revolution, is a property of the pitch alone.
         sw = SWIRL_F * om * (1.6 - 0.6 * span) * load / SWIRL_DESIGN
         phi = phi_c + sw * TAU_S * (1.0 - wp.exp(-tau / TAU_S))
-        # ── The core is a TUBE, not a curve ─────────────────────────────────
-        # Lamb-Oseen diffusion: the core fattens as sqrt(t), which is the whole
-        # reason the far wake is smoke and the near wake is a rope.
-        # The CORE STAYS TIGHT whatever the pitch: a weak vortex is a faint
-        # vortex, not a fat one. Only its strength -- and so the sprite's
-        # radiance -- carries the loading.
-        wc = W_CORE0 + burst * wp.pow(af, W_BURST_P)
-        grow = 1.0 + SPRITE_GROW * wp.pow(af, SPRITE_GROW_P)
-        gain = (1.0 - 0.20 * af) * omg \
-            * (G_FLOOR + (1.0 - G_FLOOR) * load) / GAIN_DESIGN
-        mix = wp.pow(af, 0.55)
-        col = wp.vec3(0.58, 0.80, 1.00) * (1.0 - mix) \
-            + wp.vec3(0.46, 0.47, 0.50) * mix
+        # ── DOES THIS PARCEL BOIL? ──────────────────────────────────────────
+        # One comparison, evaluated on the helm as it stood when the blade cut
+        # this parcel. The hub reads the same number with a 12% head start,
+        # which is the whole reason its rope lights first.
+        cq = caq
+        if is_hub:
+            cq = caq * HUB_CAV
+        exc = wp.max(cq - 1.0, 0.0)          # the EXCESS over the margin
+        # INTENSITY SATURATES and LENGTH DOES NOT, and the split is the point.
+        # Past a modest excess a core is simply full of vapour and cannot get
+        # any whiter; what a harder-pressed screw buys is a rope that survives
+        # FURTHER before the pressure recovers and it condenses.
+        cavi = 1.0 - wp.exp(-exc / CAV_KNEE)
+        # ── COLLAPSE, NOT DIFFUSION ─────────────────────────────────────────
+        # The air version's far wake DIFFUSED: burst core, ballooning grain,
+        # rope dissolving into smoke. Vapour does not do that. It condenses the
+        # moment the core pressure recovers, and it does so over centimetres --
+        # so the visible rope has an END, at an age set by the excess, with a
+        # short smoothstep in front of it so the tail reads as a collapse and
+        # not as a fade. This is the single most recognisable thing about
+        # cavitation footage after the whiteness itself.
+        frac = wp.min(1.0, CAV_L0 + CAV_LK * exc)
+        cl = wp.clamp((frac - af) / (CAV_COLLAPSE * frac + 1.0e-4), 0.0, 1.0)
+        vap = cavi * cl * cl * (3.0 - 2.0 * cl)
+        # The loading/speed radiance factor both populations share.
+        omgl = omg * (G_FLOOR + (1.0 - G_FLOOR) * load) / GAIN_DESIGN
+        # ── SELECTS, NOT BRANCHES, AND THE POWS HOISTED OUT OF BOTH ─────────
+        # The obvious way to write the two populations is `if is_sheet: ...
+        # else: ...`, and it cost 7.5 ms/frame at 2M. Slots are assigned to
+        # populations by a hash, so a 32-thread warp is essentially always
+        # mixed and executes BOTH sides of that branch -- which means both
+        # sides' wp.pow calls, and pow is the expensive instruction in this
+        # kernel. Divergence does not save the work; it only hides it.
+        #
+        # So the two age powers are computed ONCE, above the split, and the
+        # per-population values are chosen with wp.where. Same arithmetic on
+        # paper, one pow each instead of two, and it is the whole difference
+        # between 48.6 and 41 ms. Measured, not assumed: this is the single
+        # largest line item in this slice's frame-time budget.
+        pa_b = wp.pow(af, W_BURST_P)
+        pa_g = wp.pow(af, SPRITE_GROW_P)
+        pa_m = wp.pow(af, 0.55)
+        # ── The bubbly wake ────────────────────────────────────────────────
+        # Unchanged machinery, reframed: entrained air and turbulent
+        # microbubble mist. Broadband white, because that is what a bubble
+        # scatters, and BOOSTED when the tips are boiling because collapsing
+        # vapour is itself a bubble source -- which is what makes the whole
+        # column brighten on the same push that lights the ropes, instead of
+        # ropes appearing over a dead wake.
+        wc_b = W_CORE0 + burst * pa_b
+        grow_b = 1.0 + SPRITE_GROW * pa_g
+        gain_b = (1.0 - 0.20 * af) * omgl * (1.0 + bub_cav * cavi)
+        col_b = wp.vec3(0.80, 0.87, 0.94) * (1.0 - pa_m) \
+            + wp.vec3(0.50, 0.58, 0.64) * pa_m
+        # ── A TIP OR HUB FILAMENT: vapour, or almost nothing ────────────────
+        # Below inception this is a pressure minimum in clear water and it is
+        # INVISIBLE, not dark. TIP_HINT leaves a suggestion of the helix and no
+        # more. Above inception the core fills, widens with the excess and goes
+        # white; the burst-and-diffuse law is faded out by the same factor,
+        # because a vapour tube does not diffuse.
+        ww = wp.where(is_hub, HUB_W, 1.0)
+        hg = wp.where(is_hub, HUB_GAIN, 1.0)
+        wc_f = W_CORE0 * (1.0 + CAV_R * ww * vap) + burst * pa_b * (1.0 - vap)
+        grow_f = (1.0 + VAP_R0 * vap) \
+            * (1.0 + (VAP_GROW * vap + SPRITE_GROW * (1.0 - vap)) * pa_g)
+        gain_f = (tip_hint + vap_gain * vap) * omgl * hg
+        col_f = wp.vec3(0.44, 0.58, 0.70) * (1.0 - vap) \
+            + wp.vec3(0.88, 0.94, 1.00) * vap
+        wc = wp.where(is_sheet, wc_b, wc_f)
+        grow = wp.where(is_sheet, grow_b, grow_f)
+        gain = wp.where(is_sheet, gain_b, gain_f)
+        col = wp.where(is_sheet, col_b, col_f)
+        # The hub rope is shed from the CAP, not from the disc plane, so its
+        # whole leg is pushed aft far enough to clear the dome.
+        x = x + wp.where(is_hub, HUB_X0, 0.0)
 
     p = wp.vec3(x, r * wp.cos(phi), r * wp.sin(phi))
     # Tip vs sheet is a WAKE distinction -- which structure the blade rolled the
-    # parcel into -- and means nothing to air that has not reached the blade.
+    # parcel into -- and means nothing to water that has not reached the blade.
     if is_sheet and not inflow:
         wc = wc * 2.6                     # the sheet is diffuse from the start
     p = p + wp.vec3(wp.randn(s), wp.randn(s), wp.randn(s)) * (0.55 * wc)
@@ -838,9 +1206,13 @@ def shed(out_pos: wp.array(dtype=wp.vec4),
     # neighbouring labels, so the meander is smooth ALONG a filament while the
     # blades wander independently -- which is what makes them collide.
     # UPSTREAM the same label drives a much smaller wander that grows with
-    # distance from the disc: real room air arriving at a propeller is not
+    # distance from the disc: open water arriving at a propeller is not
     # laminar, and a few centimetres of coherent drift keeps the column from
     # reading as a rendered cone. Both terms vanish at the crossing.
+    #
+    # IT STILL APPLIES TO A CAVITATING CORE, and it should: the vapour rope is
+    # a vortex before it is a rope, and the helical instability wiggles it for
+    # as long as it lives. What changed is only how long that is.
     lab = wp.vec4(tb * 3.1, wp.cos(phi_c) * TURB_FREQ, wp.sin(phi_c) * TURB_FREQ,
                   span * 1.3)
     amp = turb * wp.pow(af, TURB_P)
@@ -848,19 +1220,22 @@ def shed(out_pos: wp.array(dtype=wp.vec4),
         amp = IN_TURB * wp.pow(w_in / tin, IN_TURB_P)
     if is_sheet and not inflow:
         amp = amp * 1.7
+    if is_hub:
+        # The hub rope is the STRAIGHT one -- it is held on the axis by its own
+        # symmetry and only starts to whip once it is well downstream.
+        amp = amp * 0.45
     n1 = wp.rand_init(11)
     n2 = wp.rand_init(29)
     p = p + wp.curlnoise(n1, lab) * amp
     p = p + wp.curlnoise(n2, lab * 2.7) * (amp * 0.35)
 
     # ── Colour, in kernel ───────────────────────────────────────────────────
-    # Young and tight: a bright, slightly cyan-white condensation core, which
-    # is what a tip vortex actually looks like when it fogs. Old and diffused:
-    # dim neutral smoke, so the far wake's shape is carried by the SUN term
-    # (volume_shadow) and not by its own emission. Upstream of the disc the
-    # branch above hands over a flat neutral grey instead -- plain air, no
-    # condensation core, nothing the blade has not made yet. Only the flux split
-    # is common to both legs.
+    # Three palettes and one flux split. VAPOUR is white with a cold cast (a
+    # vapour core is dense enough to be broadband, and the ambient it sits in
+    # is blue). BUBBLES are white too but ageing toward the murk's own colour,
+    # so the far wake's shape is carried by the SUN term (volume_shadow) rather
+    # than by its own emission. SEDIMENT upstream is a pale green-grey mote.
+    # Only the flux split is common to all of them.
     c = col
     gain = gain / wp.pow(grow, flux_p)
     if is_sheet and not inflow:
@@ -878,7 +1253,7 @@ print(f"prop vortex: {N:,} particles on {device}"
 INTEROP = INTEROP and device.is_cuda
 
 # ── Scene ───────────────────────────────────────────────────────────────────
-canvas = tp.Canvas("threepp x warp - propeller tip vortices", width=W, height=H,
+canvas = tp.Canvas("threepp x warp - propeller cavitation", width=W, height=H,
                    vsync=False, headless=HEADLESS)
 renderer = tp.VulkanRenderer(canvas)
 renderer.tone_mapping = tp.ToneMapping.ACESFilmic
@@ -893,7 +1268,42 @@ renderer.tone_mapping_exposure = EXPOSURE
 ui = tp.ImguiContext(canvas, renderer) if (tp.HAS_IMGUI and not HEADLESS) else None
 
 scene = tp.Scene()
-scene.background = tp.Color(0.004, 0.005, 0.008)
+# ── THE STAGE IS UNDERWATER, AND IT IS THE ENGINE'S OWN ─────────────────────
+# No new rendering was written for this. Three calls, all of them already load-
+# bearing in warp_sailboat.py and warp_hull_sculpt.py:
+#
+#   background            the deep blue-green a light loses itself in
+#   fog_water_surface_y   where air stops. DEPTH, so the world agrees with the
+#                         number the cavitation margin is computed from: the
+#                         shaft is on y = 0 and the surface is 3 m up.
+#   underwater_murk       sigma_t and the in-scatter tint below that line, so
+#                         distance falls into murk instead of into black
+#
+# --flat does NOT turn the murk off, deliberately: the A/B this demo is graded
+# on is the FIELD's own volume transport, and zeroing the stage as well would
+# be comparing two different scenes rather than one scene with and without the
+# two marches.
+#
+# THE BACKGROUND HAS TO STAY NEARLY BLACK, which is not what the first cut
+# assumed. A wake made of ADDITIVE sprites needs something dark to be added to;
+# put a mid-teal behind it and the volume's extinction turns the whole
+# slipstream into a SILHOUETTE cut out of the backdrop, which is the one read
+# this demo cannot have (--vol-albedo 0 shows it perfectly). So the background
+# is the colour of water at the edge of a diver's light, the murk supplies the
+# in-scatter that lifts DISTANCE out of it, and the wake is still drawn on
+# something close to black.
+#
+# THE TINT *IS* THE BACKGROUND at any distance the murk has saturated over, and
+# that is the trap in this pair of knobs: scene.background can be set to
+# anything at all and the far field still converges on MURK_COLOR. The first
+# pass set the tint by eye as "the colour of the water" and got a mid-teal
+# backdrop that no amount of darkening the background could touch.
+MURK = cli_arg("--murk", 0.12, float)          # sigma_t, 1/m
+MURK_COLOR = (0.004, 0.017, 0.021)
+scene.background = tp.Color(0.0018, 0.0075, 0.0092)
+if MURK > 0.0:
+    renderer.set_fog_water_surface_y(DEPTH)
+    renderer.set_underwater_murk(MURK, tp.Color(*MURK_COLOR))
 
 # ── Two framings ────────────────────────────────────────────────────────────
 # "side" is the wake's own shot: the disc at the left edge and four metres of
@@ -929,8 +1339,16 @@ camera.look_at(*CAM_T)
 # and slightly BEHIND it: a backlit slipstream is the arrangement that makes
 # self-shadowing legible -- the sunward flank of every loop flares through the
 # forward HG lobe while the near flank sits in the wake's own shadow.
-sun = tp.DirectionalLight(0xFFEFD8, 3.2)
-sun.position.set(-0.9, 1.5, -2.4)
+#
+# UNDERWATER IT IS DOWNWELLING, and that is not a mood choice. Three metres of
+# water is a low-pass filter on daylight: the red is gone, the intensity is
+# down, and every ray that reaches the propeller has come from ABOVE. Steepened
+# from (-0.9, 1.5) to nearly overhead, blue-shifted and dimmed 3.2 -> 2.3, and
+# the payoff is the bubble column: a bright top and a dark belly, which is what
+# every photograph of a working screw looks like and what the flat-lit air
+# version never had.
+sun = tp.DirectionalLight(0xB6D2FF, 2.3)
+sun.position.set(-0.55, 3.10, -1.55)
 scene.add(sun)
 
 # The RAKE -- the second half of "the prop is not a hole". It exists for the
@@ -942,12 +1360,27 @@ scene.add(sun)
 # they take the single BRIGHTEST DirectionalLight in the scene as their sun and
 # march T_sun toward it (VulkanCoreUploads.cpp). Let this one win on max
 # channel and the whole wake's self-shadowing silently flips to a front-lit
-# read, which is the one arrangement that makes a helix illegible. 1.5 vs 3.2
-# is the margin; anything that raises it has to check the far crop.
-rake = tp.DirectionalLight(0xD8E4FF, 1.5)
+# read, which is the one arrangement that makes a helix illegible. 1.05 vs 2.3
+# is the margin (it was 1.5 vs 3.2 in air; the ratio is what matters and it is
+# unchanged); anything that raises it has to check the far crop.
+#
+# AND UNDERWATER IT IS THE ONLY WARM THING IN THE FRAME, which is the second
+# job it picked up with the medium. Three metres of water has taken the red out
+# of the sun, and a bronze casting lit by nothing but blue is a grey casting;
+# the yard's work light on the hull (or a diver's lamp, take your pick) is the
+# one source that still has a spectrum, and it is aimed at the propeller and
+# nothing else. This is why the blades still read as bronze in a blue scene.
+rake = tp.DirectionalLight(0xFFE2BE, 1.05)
 rake.position.set(2.4, 0.95, 3.1)
 scene.add(rake)
-scene.add(tp.AmbientLight(0x8C9BC0, 1.0))
+# The ambient IS the water. Underwater there is no black: every direction the
+# bronze can look returns scattered blue-green, and with the key dimmed and
+# steepened this is now most of what keeps the casting from going to silhouette
+# -- a metal has no diffuse term, so the ambient reaching it is doing real work
+# on a metalness 0.62 surface. Warmed slightly toward green and raised 1.0 ->
+# 1.5 to pay for the dimmer sun; checked against --view prop, not against the
+# wake shot, because the wake does not care and the bronze does.
+scene.add(tp.AmbientLight(0x628A94, 1.3))
 
 
 # ── The propeller: a MARINE CONTROLLABLE-PITCH prop, from primitives ────────
@@ -1260,7 +1693,17 @@ field.set_density_repr(tp.Vector3(*BOX_CENTER), tp.Vector3(*BOX_HALF), SIGMA, BO
 # the acceptance test is "the same frame with the volume's contribution at 0",
 # and now that the medium carries light as well as shadow, leaving it lit under
 # --flat would hand the flat render half the win it is supposed to be missing.
-VOL_ALBEDO = 0.0 if FLAT else cli_arg("--vol-albedo", 0.12, float)
+#
+# AND IT WENT UP AGAIN FOR THE WATER, 0.12 -> 0.30, which is a change of KIND
+# and not of taste. In air the medium was smoke: a dark, absorbing, weakly
+# scattering thing, and the corridor above (wireframe below, milk above) was
+# narrow because smoke has no business being bright. What fills a propeller's
+# slipstream underwater is BUBBLES, and a bubble is very nearly a pure
+# scatterer -- an air/water interface absorbs essentially nothing. A high
+# single-scattering albedo is what that IS. The upper wall is still there, and
+# it is still the nebula's veil, but the whole corridor has moved with the
+# medium, and the tint below is very slightly blue rather than neutral.
+VOL_ALBEDO = 0.0 if FLAT else cli_arg("--vol-albedo", 0.22, float)
 # Forward-scattering, and NOT the isotropic 0 it was. A slipstream backlit by a
 # key placed deliberately behind it is exactly the arrangement an HG lobe is for:
 # g > 0 puts the in-scattered light on the sun side and leaves the camera side
@@ -1324,8 +1767,10 @@ hist_wp = wp.array(hist_np, dtype=wp.vec3, device=device)
 def launch(out_pos, out_col):
     wp.launch(shed, dim=N, device=device,
               inputs=[out_pos, out_col, hist_wp, sim_time, N, BLADES,
-                      TURB, SHEET, W_BURST, SPRITE_R0, FLUX_P, BRIGHT,
-                      T_IN, IN_SHARE, HIST_N])
+                      TURB, SHEET, HUB_SHARE,
+                      W_BURST, SPRITE_R0, FLUX_P, BRIGHT,
+                      T_IN, IN_SHARE, HIST_N,
+                      K_CAV, CAV_MARGIN, TIP_HINT, VAP_GAIN, BUB_CAV])
 
 
 def advance():
@@ -1433,10 +1878,21 @@ OPF = (RPS / RPS_REF) * math.sqrt(
 IN_D_MAX = U_DISC * OPF * T_IN / ((1.0 - IN_F) * IN_K + IN_F)
 IN_R_MOUTH = R_TIP * (1.0 + IN_FLARE_HI * (IN_LINES_R - 0.5) / IN_LINES_R * (
     1.0 / math.sqrt(1.0 - IN_D_MAX / math.hypot(IN_D_MAX, IN_RV)) - 1.0))
+
+
+def cav_ratio(beta_deg, rps):
+    """ca / margin for a tip filament shed at this helm. > 1 is cavitating.
+    The kernel's own expression, on the host, so the banner and the panel
+    state the number the wake was actually drawn with."""
+    return K_CAV * loading(beta_deg) ** 2 \
+        * (TWO_PI * rps * R_TIP) ** 2 / CAV_MARGIN
+
+
 print(f"       prop:   {BLADES} blades, R {R_TIP:g} m, wake {LIFETIME:g} s\n"
       f"       shaft:  {RPS * 60:g} rpm (ref {RPS_REF * 60:g}, "
       f"ramp {T_RAMP:g} s)"
       + (f" -> {RPS_TO * 60:g} rpm at t={RPS_AT:g} s" if RPS_AT < 1e8 else "")
+      + f", tip {TWO_PI * RPS * R_TIP:.1f} m/s"
       + f", slipstream {U_WAKE * OPF:.2f} m/s, "
       f"advance {(U_WAKE * OPF / RPS if RPS > 0 else 0):.2f} m/rev\n"
       f"       pitch:  beta {PITCH:g} deg (design {BETA_DESIGN:g}), "
@@ -1444,6 +1900,12 @@ print(f"       prop:   {BLADES} blades, R {R_TIP:g} m, wake {LIFETIME:g} s\n"
       + (f" -> {PITCH_TO:g} deg (L {loading(PITCH_TO):.2f}) at t={PITCH_AT:g} s"
          if PITCH_AT < 1e8 else "")
       + f", helm history {HIST_N} frames = {HIST_N * DT:.2f} s\n"
+      f"       water:  rho {RHO:g}, {DEPTH:g} m down, margin {CAV_MARGIN:.1f} "
+      f"m2/s2; tips at {cav_ratio(PITCH, RPS):.2f} x, "
+      f"hub at {cav_ratio(PITCH, RPS) * HUB_CAV:.2f} x "
+      + ("-> CAVITATING" if cav_ratio(PITCH, RPS) > 1.0
+         else ("-> hub rope only" if cav_ratio(PITCH, RPS) * HUB_CAV > 1.0
+               else "-> clear")) + "\n"
       f"       inflow: {IN_SHARE:.0%} of slots, {T_IN:g} s upstream "
       f"({T_IN / PERIOD:.0%} of the period), reaching {IN_D_MAX:.2f} m ahead of "
       f"the disc at {IN_R_MOUTH:.2f} m = {IN_R_MOUTH / R_TIP:.1f} x the tip radius\n"
@@ -1465,7 +1927,12 @@ def run_to(seconds):
 
 
 if BENCH:
-    run_to(2.5)                                   # warm the pipeline and the wake
+    # Warm to a FULLY DEVELOPED wake, not merely a warm pipeline. The old 2.5 s
+    # was longer than the air version's whole 0.85 s lifetime; at 2.4 s it is
+    # shorter than the spin-up plus one lifetime, so the frame being timed would
+    # be a half-grown wake covering half the film -- which is a cheaper frame
+    # than the one anybody looks at, and a bench that flatters itself.
+    run_to(T_RAMP + LIFETIME)
     n = 240
     t0 = time.perf_counter()
     for _ in range(n):
@@ -1509,19 +1976,44 @@ else:
                       f"(design {BETA_DESIGN:.0f})   thrust {ld:4.2f}")
         tp.imgui.text(f"shaft  {rpm:5.0f} rpm   (ref {RPS_REF * 60:.0f})   "
                       f"tip {omega_now * R_TIP:5.1f} m/s")
-        tp.imgui.text(f"wake   {uw:5.2f} m/s   "
+        tp.imgui.text(f"wake   {uw:5.2f} m/s of water   "
                       f"advance {(uw / (rpm / 60.0) if rpm > 1.0 else 0.0):5.2f} "
                       f"m/rev   reach {uw * LIFETIME:4.1f} m")
+        tp.imgui.separator()
+        # ── THE CAVITATION INDICATOR ────────────────────────────────────────
+        # The one readout this demo exists for. The bar is the tip core's
+        # suction as a fraction of the pressure margin, and the line under it
+        # is the answer: how far short, or how far over and by how much. imgui
+        # here has no coloured text and no progress bar, so the bar is ASCII --
+        # which costs nothing and is legible in a 1:1 crop, which is where it
+        # actually gets read.
+        cr = cav_ratio(beta_now, max(rpm, 0.0) / 60.0)
+        fill = int(round(min(cr, 1.0) * 24))
+        tp.imgui.text(f"cav    [{'#' * fill}{'-' * (24 - fill)}] "
+                      f"{cr:4.2f} x margin")
+        tp.imgui.text(f"       {DEPTH:.1f} m down, margin {CAV_MARGIN:.0f} m2/s2"
+                      f"   ({RHO:.0f} kg/m3)")
+        if cr > 1.0:
+            tp.imgui.text(f"CAVITATING   tips +{100.0 * (cr - 1.0):.0f}%   "
+                          f"hub +{100.0 * (cr * HUB_CAV - 1.0):.0f}%")
+        elif cr * HUB_CAV > 1.0:
+            tp.imgui.text(f"HUB ROPE ONLY   hub +{100.0 * (cr * HUB_CAV - 1.0):.0f}%"
+                          f"   tips {100.0 * (1.0 - cr):.0f}% short")
+        else:
+            tp.imgui.text(f"clear water   tips {100.0 * (1.0 - cr):.0f}% short, "
+                          f"hub {100.0 * (1.0 - cr * HUB_CAV):.0f}% short")
         tp.imgui.text(f"{tp.imgui.get_framerate():5.0f} fps   "
                       f"{N / 1e6:.1f} M parcels   t={sim_time:6.2f} s")
         tp.imgui.separator()
         # The one thing to say about the lag, because it is the feature and it
-        # looks like a bug for the half-second it takes to convect away.
+        # looks like a bug for the seconds it takes to convect away.
+        tp.imgui.text("water carries no tracer. what you see is VAPOUR, and")
+        tp.imgui.text("it only exists above the bar. push either lever.")
         tp.imgui.text("both levers move NOW; the wake answers with history.")
-        tp.imgui.text(f"{LIFETIME:.2f} s of old slipstream keeps the pitch AND")
-        tp.imgui.text(f"the speed it was shed under ({HIST_N}-frame ring), and")
-        tp.imgui.text("the boundary convects away. the funnel does not lag:")
-        tp.imgui.text("a pressure field is not convected.")
+        tp.imgui.text(f"{LIFETIME:.1f} s of old slipstream keeps the pitch, the")
+        tp.imgui.text(f"speed AND the cavitation it was shed under ({HIST_N}-frame")
+        tp.imgui.text("ring), and the boundary convects away. the inflow does")
+        tp.imgui.text("not lag: a pressure field is not convected.")
         tp.imgui.text("advance/rev is a property of PITCH alone -- the")
         tp.imgui.text("throttle changes how far the wake reaches, not its")
         tp.imgui.text("loop spacing. that is what a screw does.")
