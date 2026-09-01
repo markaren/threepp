@@ -1141,11 +1141,12 @@ TURB_FREQ = 0.55         # label-space wavelength of the meander
 # dark, it is INVISIBLE. Real footage of a lightly loaded screw shows the hub
 # and a faint bubbly haze and nothing else at all.
 #
-# TIP_HINT is what is left: 9% of the old radiance, enough that the helix is a
-# suggestion at the default helm rather than an absence (the geometry is still
-# the demo's whole thesis, and a completely empty frame proves nothing about
-# it), and far too little to compete with the bubble column. Everything above
-# that comes from the vapour, which is gated.
+# TIP_HINT shipped at 0.09 -- a visibility crutch so the helix stayed a
+# suggestion below inception -- and a propeller specialist on the receiving
+# end read it, correctly, as smoke coming off the blades. Real sub-inception
+# footage shows clean water and nothing else, so the default is now 0.0 and
+# the sediment inflow alone carries the "it is pulling" story. The flag
+# remains for anyone who wants the geometry legible while tuning.
 #
 # BOTH ARE RELATIVE TO THE RE-ANCHORED BRIGHT (see OMG_OP), so 1.0 is the
 # radiance the air version's tip rope had at ITS default. A full vapour core is
@@ -1154,7 +1155,7 @@ TURB_FREQ = 0.55         # label-space wavelength of the meander
 # set before the re-anchor and therefore 5x over -- and the 300 rpm frame came
 # out as SAND: each parcel bright enough to be an individual visible dot, which
 # no amount of grain growth fixes because the problem is contrast per sample.
-TIP_HINT = cli_arg("--tip-hint", 0.09, float)
+TIP_HINT = cli_arg("--tip-hint", 0.0, float)
 VAP_GAIN = cli_arg("--vapour", 0.85, float)  # radiance of a fully vapour-filled core
 # The vapour rope's grain does NOT balloon with AGE the way the air wake's did:
 # growth in age was the diffusion story and vapour does not diffuse. What it
