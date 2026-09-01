@@ -3571,6 +3571,18 @@ VulkanRenderer::Impl::DisplacedMeshState* VulkanRenderer::Impl::ensureDisplacedS
                     foamRes *= 2u;
                 state->foamRes      = foamRes;
                 state->foamTileSize = dm.params.tileSize0;
+                // Attach the accumulator config to any run that is profiling.
+                // Foam cost is set by texel COUNT, so a foam number without its
+                // foamRes is ambiguous — an unattached 1024-vs-2048 assumption
+                // manufactured a phantom 3.4x per-texel anomaly once already.
+                if (vulkan::cpuprof::Registry::get().on) {
+                    std::fprintf(stderr,
+                                 "[foam] foamRes=%u tileSize0=%.1f texelTarget=%.2f "
+                                 "-> %.2f m/texel, %.2fM texels\n",
+                                 foamRes, double(dm.params.tileSize0), double(kFoamTexelTarget),
+                                 double(dm.params.tileSize0) / double(foamRes),
+                                 double(foamRes) * double(foamRes) / 1.0e6);
+                }
                 VkImageCreateInfo ici{};
                 ici.sType         = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
                 ici.imageType     = VK_IMAGE_TYPE_2D;
