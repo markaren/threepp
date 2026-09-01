@@ -605,6 +605,19 @@ const float kMurkShaftG = 0.65;
 const float kMurkCausticBite  = 0.9;
 const float kMurkCausticScale = 9.0;
 const float kMurkCausticPeak  = 2.6;
+// The same proxy on SURFACES (murkSunCaustic, below), with three numbers of its
+// own. BITE is lower than the shafts': a shaft is a column of medium whose whole
+// depth averages the pattern, so it can take full contrast without reading as
+// paint, while a hull plate shows the modulation at one depth on one normal and
+// the shafts' 0.9 turns a bronze blade into a stencil. NEAR is a focal length —
+// a surface pattern has not focused into anything a centimetre under it, and the
+// ramp is also what keeps the dapple off FOAM, which floats in the troughs and
+// is therefore a hair below waterSurfaceY. FADE is the physical half of it:
+// caustics focus and defocus over depth, so their contrast washes out as the
+// column deepens, and by ~7 m there is only the mean left.
+const float kMurkCausticSurfBite = 0.45;
+const float kMurkCausticSurfNear = 0.55;// m: no dapple above this, full below it
+const float kMurkCausticSurfFade = 7.0; // m: contrast gone by here
 // Shaft gain. NOT a fudge for the single-scatter integral, which is complete:
 // applyMurk's ambient in-scatter is keyed on the env MEAN, and that mean already
 // contains the sun disc, so the flat murk arrives carrying a share of the very
@@ -778,6 +791,77 @@ vec3 murkSunScatter(vec3 ro, vec3 rd, float tMax, ivec2 px) {
     // convention applyMurk's in-scatter term uses, so the shafts and the ambient
     // murk are tinted by one value and cannot drift apart.
     return sum * (fog.murkColor * kMurkShaftGain);
+}
+
+// ── The dapple — the same crest proxy on submerged SURFACES ──────────────────
+// murkSunScatter braids the shafts in the MEDIUM. This puts the identical
+// pattern on the things the shafts land on: a hull's flank, a propeller blade,
+// a seabed — the moving net of light that is the single most recognisable thing
+// about any photograph taken under water in sunshine. It is the SAME quantity,
+// so it is the same tap and the same shaping, and the two cannot drift apart:
+// walk from the shaded point UP THE REFRACTED SUN DIRECTION to the surface
+// plane, take one sample of the FFT ocean's fine cascade there, and shape it
+// with kMurkCaustic*.
+//
+// STILL A CREST PROXY, and the label matters more here than it did in the
+// medium, because a surface shows the pattern sharply enough to be read as a
+// claim. A real caustic is a FOCUSING determinant — the second differences of
+// the interface, which is five taps and a Jacobian — and this is the height,
+// which correlates with convergence well enough for a smoothstep to sharpen
+// into filaments. It is a look, honestly labelled, sharing one set of constants
+// with the look it already ships beside.
+//
+// DEPTH DOES TWO DIFFERENT THINGS TO IT and both are here. Close under the
+// surface the pattern has not focused yet (kMurkCausticSurfNear ramps it in),
+// and deep down it has focused, defocused and overlapped with itself until only
+// its mean is left (kMurkCausticSurfFade takes the contrast out over a few
+// metres). Between them is the band where a diver sees the net.
+//
+// THE SPRITES' SUN TERM DOES NOT CALL THIS, and that is a decision rather than
+// an omission. A billboard is a slab of MEDIUM seen end-on: its sun term is an
+// integral through a volume that is metres deep along the light's own leg, and
+// a metre of water averages the dapple to its mean by construction — a mist
+// bank under a rippled surface glows evenly, it does not wear a net. Where the
+// eye reads the flicker in the medium is the SHAFTS, and murkSunScatter already
+// carries it there. Sampling this per sprite would be paying for a pattern that
+// integration is about to erase.
+//
+// PER LIGHT, and the gate is the same one the shafts use: only a directional
+// light ABOVE the horizon has a leg that crossed the surface at all. An upwelling
+// fill (every murk scene has one) fails dot(L, up) and is returned untouched, so
+// the light that stands in for the water's own scatter is never patterned by the
+// water's own surface.
+//
+// EXACT no-op — returns 1.0, and 1.0 multiplies bit-for-bit — with no ocean
+// (oceanFineTileSize == 0), no murk, or a point at or above the surface.
+float murkSunCaustic(vec3 P, vec3 L) {
+    if (pc.oceanFineTileSize <= 0.0 || !murkLive()) return 1.0;
+    const float depth = fog.waterSurfaceY - P.y;
+    if (depth <= kMurkCausticSurfNear * 0.5) return 1.0;// at/above the surface, and the foam
+    const vec3  up = (dot(fog.worldUp, fog.worldUp) > 1e-6) ? normalize(fog.worldUp) : vec3(0.0, 1.0, 0.0);
+    if (dot(L, up) <= 0.02) return 1.0;                 // never came through the surface
+    vec3 sd = refract(-L, up, kMurkEtaAirWater);
+    if (dot(sd, sd) < 1e-6) return 1.0;
+    sd = normalize(sd);
+    const float sy = max(-dot(sd, up), 0.08);           // metres of leg per metre of depth
+    // The surface point this pixel's sunlight entered at — the shaft march's own
+    // walk-back, with the march's step position replaced by the shaded point.
+    const vec2  sp = (P.xz - sd.xz * (depth / sy)) / pc.oceanFineTileSize;
+    const float h  = textureLod(oceanFineHeight, sp, 0.0).r * kMurkCausticScale;
+    const float s  = smoothstep(-0.10, 0.55, h);// the shafts' own crest measure, unchanged
+    const float bite = kMurkCausticSurfBite
+                     * smoothstep(kMurkCausticSurfNear * 0.5, kMurkCausticSurfNear, depth)
+                     * (1.0 - smoothstep(0.0, kMurkCausticSurfFade, depth));
+    // THE SWING IS CENTRED, and this is the one place the two uses differ. The
+    // shafts take mix(1, s·kMurkCausticPeak, bite) and let the MEAN ride up with
+    // it, which is right for them: a shaft is light ADDED to the frame and a
+    // brighter mean is simply a brighter shaft. A surface's direct sun IS the
+    // light, so the same construction lifts the plate 20% and reads as the sun
+    // getting stronger rather than as a pattern moving over it (measured: mean
+    // 62 → 77 on a bronze blade before this line existed). Crest 1+bite, trough
+    // 1−bite, and a mean of exactly 1 for any sea whose crest measure averages a
+    // half — so the dapple redistributes the sun and never adds to it.
+    return 1.0 + bite * (2.0 * s - 1.0);
 }
 // ── Sky aerial perspective (deferred) ────────────────────────────────────────
 // The HDR background is infinitely far, so applySceneFog never touches it — a

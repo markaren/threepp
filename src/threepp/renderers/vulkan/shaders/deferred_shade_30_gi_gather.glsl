@@ -220,8 +220,14 @@ vec3 shadeDiffuseDirect(vec3 P, vec3 N, vec3 V, vec3 albedo, float roughness,
                 ? sunShadowVis(shadowOrig, L, pc.sunTanHalfAngle, cheapHit)
                 : 1.0) * wPick;
         if (vis <= 0.0) continue;
+        // The dapple, on the INLINE path (denoise off, dispatch B, glass/sheen)
+        // and at every reflection/GI hit — the same multiplier analyticDirectSplit
+        // applies on the demod path, so a submerged plate wears the same net
+        // whichever of the two computed it, and so does its reflection. 1.0 with
+        // no ocean / no murk / above the surface, which is every scene that has
+        // never called setUnderwaterMurk.
         lit += evalLight(N, V, L, NdotV, F0, albedo, roughness, metalness, k, sheenColor, sheenRoughness)
-               * lights.dirLights[i].color * vis;
+               * lights.dirLights[i].color * vis * murkSunCaustic(P, L);
     }
     for (uint i = 0u; !gSkipAnalyticDirect && i < lights.pointCount; ++i) {
         if (pickOne && (lights.dirCount + i) != pickIdx) continue;

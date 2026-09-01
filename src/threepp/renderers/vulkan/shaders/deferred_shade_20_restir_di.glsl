@@ -468,9 +468,13 @@ vec3 analyticDirectSplit(vec3 P, vec3 N, vec3 V, vec3 albedo, float roughness,
     for (uint i = 0u; i < lights.dirCount; ++i) {
         const vec3 L = normalize(lights.dirLights[i].direction);
         vec3 c = vec3(0.0);
+        // murkSunCaustic is cloudShadow's underwater twin and sits beside it for
+        // that reason: both are an attenuation this sun picked up on its way down
+        // from something the shading point cannot see, one a cloud deck and one a
+        // rippled surface. Both are exactly 1.0 when their feature is off.
         if (dot(N, L) > 0.0)
             c = evalLight(N, V, L, NdotV, F0, albedo, roughness, metalness, k, sheenColor, sheenRoughness)
-              * lights.dirLights[i].color * cloudShadow;
+              * lights.dirLights[i].color * cloudShadow * murkSunCaustic(P, L);
         U += c;
         lw[nL] = dot(c, LUM); wSum += lw[nL]; ++nL;
     }

@@ -649,6 +649,16 @@ float specularOcclusion(float NdotV, float ao, float roughness) {
     return clamp(pow(max(NdotV + ao, 0.0), exp2(-16.0 * roughness - 1.0)) - 1.0 + ao, 0.0, 1.0);
 }
 
+// FORWARD DECLARATION, and the include order is the whole reason for it. The
+// dapple (caustics on submerged SURFACES) belongs with the shafts' own crest
+// proxy in _60 — same constants, same refraction, one place documenting that it
+// is a proxy and not a focusing determinant — but the two direct-light loops it
+// has to multiply live in _20 (analyticDirectSplit, the denoised-shadow path)
+// and _30 (shadeDiffuseDirect, the inline path). A prototype here is cheaper
+// than splitting the murk constants across three files to satisfy an ordering.
+// Returns EXACTLY 1.0 with no murk, no ocean, or a point above the surface.
+float murkSunCaustic(vec3 P, vec3 L);
+
 #include "deferred_shade_10_lighting_utils.glsl"
 #include "deferred_shade_20_restir_di.glsl"
 #include "deferred_shade_30_gi_gather.glsl"
