@@ -148,26 +148,49 @@ The panel draws the open-water diagram live, with the operating point moving
 on it as the sliders move, and says "outside B-series validity" whenever a
 lever has pushed J or P/D past the box the regression was fitted over.
 
---film STILL RUNS AND ITS CHOREOGRAPHY IS NOW OUT OF DATE, which is stated
-rather than quietly tolerated: the track was composed for one screw turning on
-the axis, and beat 3's push-in key is 0.89 m off the port wake's axis against a
-0.90 m tip radius -- the camera flies through the slipstream. The clearance
-check measures both shafts now and --film prints the warning every run. The
-beats, the helm schedule and the keyframe times are untouched; re-cutting the
-track is a film-v2 slice and taking the look budget for it here would have come
-out of the breathing this revision exists for.
+AND THE DIAGRAM IS IN THE FILM NOW, which is what this revision is. It could
+not be, before: imgui does not draw headless, so the one picture a marine
+engineer reads a propeller by was visible only to somebody sitting at the
+window with a mouse. So the film composites it -- a 460 x 270 card in the
+lower right, drawn at 2x and downsampled, from the SAME open_water_marks()
+the imgui panel calls. One source of truth for the samples, the operating
+point and the validity flag; two pieces of drawing code over it. It costs
+about 3 ms a frame and the static half is cached on P/D.
+
+AND THE SHIP GETS UNDER WAY DURING THE FILM, which is what makes the card
+worth compositing. The clip used to run all 55 s at the bollard, where J is 0
+and eta_0 is 0 by definition -- the operating point sat on the left edge of
+its own axes from the first frame to the last, and a diagram that cannot move
+is a photograph. There is a third keyframe table now, beside the throttle's
+and the pitch's: she is stopped for the opening, way comes on behind the
+spin-up, it is HELD through the graded inception rungs, and the finale is
+thirteen seconds of full ahead that walk J from 0.28 to 0.59 and eta_0 from
+0.24 to 0.48. Advance unloads the blade, so every rpm key in the film moved
+with it -- the beat table --film prints is the proof that each beat still
+lands on the rung its story needs.
+
+--film IS RE-CUT FOR THE TWIN STERN. The old track was composed for one screw
+turning on the axis and beat 3's push-in key sat 0.89 m off the port wake's
+axis against a 0.90 m tip radius: the camera flew through the slipstream and
+the film said so, every run, with the number that proved it. Every key is now
+at least 1.2 m off BOTH wake axes, the check samples the spline rather than
+the keys, and the framings are built out of the demo's own named views -- the
+port slipstream with the starboard one running behind it, the backs of the
+blades for the sheet beat, and a finale that swings aft and rises THROUGH the
+surface into the air, which the sky and the ocean made possible.
 
 --film IS THE DEMO ARGUING ITS OWN CASE, and the argument it makes is that
 inception is a threshold rather than a look. Six beats and no cuts: a still
-prop, a spin-up to 120 rpm in CLEAR water so the pull is felt before anything
-is seen, a crawl to 138 rpm where the hub rope lights ALONE (the hub crosses at
-127.8 rpm and the tips not until 141.2, so there is a real window and the
-camera holds in it), a throttle step down that shortens the ropes and sends the
-old wake off frame, a pitch feather that kills the wake while the shaft keeps
-turning, and a slam back to 30 deg for the re-bloom. The camera is a Hermite
-track and the helm is a keyframe table, both read at the film's own frame
-index -- so the film is a pure function of frame number and --takes re-renders
-one beat into exactly the picture the full run made. See THE FILM below.
+prop on a stopped ship, a spin-up to 132 rpm in CLEAR water so the pull is felt
+before anything is seen, a crawl to 170 rpm where the hub rope lights ALONE (at
+1.6 m/s of way the hub crosses at 161 rpm and the tips not until 174, so there
+is a real window and the camera holds in it), a throttle step down that
+shortens the ropes and sends the old wake off frame, a pitch feather that kills
+the wake while the shaft keeps turning, and a slam back to 30 deg for the
+re-bloom under full ahead. The camera is a Hermite track and the helm is three
+keyframe tables, all read at the film's own frame index -- so the film is a
+pure function of frame number and --takes re-renders one beat into exactly the
+picture the full run made. See THE FILM below.
 
 CAVITATION IS A THRESHOLD AND THE DEMO IS TUNED TO SIT UNDER IT. At the default
 helm -- 120 rpm, beta 22 deg, 3 m down -- the blade is loaded to 83% of what it
@@ -577,7 +600,7 @@ D_PROP2 = D_PROP * D_PROP
 D_PROP4 = D_PROP2 * D_PROP2
 A_DISC = math.pi * R_TIP * R_TIP    # m2, the actuator disc
 EAR = 0.75                          # expanded area ratio, A_E / A_0
-# ── THE WATER, AND THE PRESSURE IT HAS TO GIVE UP ───────────────────────────
+# ── THE WATER, AND THE pPRESSURE IT HAS TO GIVE UP ───────────────────────────
 # Everything cavitation-related is here, and there is very little of it: three
 # fluid constants, one geometric one, and the margin they make. That margin is
 # a SPECIFIC ENERGY (m2/s2 = J/kg), because dividing the pressure by rho is
@@ -845,6 +868,16 @@ def scheduled_beta(t):
 VA_MIN, VA_MAX = 0.0, 6.0
 V_SHIP = cli_arg("--speed", 0.0, float)     # m/s through the water; 0 = bollard
 
+
+def scheduled_speed(t):
+    """Headless ship speed: whatever --speed said, held. The third schedule,
+    and it exists for the same reason the other two do -- the film rebinds it
+    with a keyframe table so way comes on DURING the clip and the operating
+    point walks up the diagram instead of sitting on its left edge for 55
+    seconds. Every other run holds one number, which is the old behaviour to
+    the bit."""
+    return V_SHIP
+
 # ── R1: THE HULL'S WAKE, AND THE ONCE-PER-REV IT CAUSES ─────────────────────
 # There is a hull over these propellers now, and the single most consequential
 # thing a hull does to a screw is not to hide it: it drags a BOUNDARY LAYER,
@@ -993,6 +1026,69 @@ def open_water(j, pd):
         # PD_ZERO. K_Q keeps the edge value.
         kt *= max((pd - PD_ZERO) / (PD_LO - PD_ZERO), 0.0)
     return kt, kq, (jc != j or pdc != pd)
+
+
+# ── THE OPEN-WATER DIAGRAM, SAMPLED ONCE FOR EVERYONE WHO DRAWS IT ──────────
+# Two things draw this diagram now -- the imgui panel in the window, and the
+# card the film composites onto every frame -- and there is exactly one place
+# the numbers come from. That is not tidiness for its own sake: a second copy
+# of "sample K_T over J at this P/D, mark the operating point, say whether the
+# box was left" is a second chance to disagree with the wake, and the whole
+# claim of this panel is that the curve under the dot IS the function the water
+# was drawn from. So the sampling lives here, beside the polynomials, and both
+# panels are pure drawing code over what it returns.
+#
+# 10 K_Q RATHER THAN K_Q, always, for the reason the convention exists: at this
+# EAR and Z the torque coefficient is a twentieth of the thrust one and would
+# be a flat line on the floor of the axes.
+#
+# THE CURVES ARE CACHED ON P/D. 41 samples x 86 polynomial terms is about a
+# millisecond of Python, which is nothing on a slider drag and everything at
+# 60 fps when the pitch has not moved -- and the pitch has not moved on all but
+# a handful of frames of the film.
+OW_N = 41                       # J samples across the axis
+OW_YMAX = 1.0                   # K_T, 10 K_Q and eta_0 all live in 0..1 here
+OW_J_MAX = J_HI                 # the x axis IS the validity box's own J range
+OW_LABELS = ("K_T", "10 K_Q", "eta_0")
+OW_RGB = ((0.62, 0.80, 1.00),   # the vapour's own blue
+          (1.00, 0.78, 0.42),   # the rake's warm
+          (0.55, 0.95, 0.62))   # efficiency, and nothing else in here is green
+_ow_cache = {}
+
+
+def open_water_curve(pd):
+    """(J samples, (K_T, 10 K_Q, eta_0) over them) at this pitch ratio."""
+    key = round(pd, 3)
+    hit = _ow_cache.get(key)
+    if hit is None:
+        if len(_ow_cache) > 64:
+            _ow_cache.clear()
+        js, kts, kqs, ets = [], [], [], []
+        for i in range(OW_N):
+            jj = OW_J_MAX * i / (OW_N - 1)
+            k_t, k_q, _ = open_water(jj, pd)
+            js.append(jj)
+            kts.append(k_t)
+            kqs.append(10.0 * k_q)
+            ets.append(jj * k_t / (TWO_PI * k_q)
+                       if k_q > 1e-6 and k_t > 0.0 else 0.0)
+        hit = (js, (kts, kqs, ets))
+        _ow_cache[key] = hit
+    return hit
+
+
+def open_water_marks(st):
+    """Everything a panel needs to draw ONE operating point on those curves:
+    the curves at its pitch, the J the dot goes at, the three values it goes
+    at, and whether a lever has pushed the state outside the box.
+
+    THE DOT IS AT THE CLAMPED J AND P/D -- the same place the wake is being
+    evaluated -- so a lever pushed outside the validity box parks the dot on
+    the box's edge rather than sliding off into a region the curve does not
+    cover. Both panels then say so in words."""
+    js, curves = open_water_curve(st.pd)
+    jc = min(max(st.j, J_LO), J_HI)
+    return js, curves, jc, (st.kt, 10.0 * st.kq, st.eta), st.extrapolated
 
 
 class PropState:
@@ -3657,7 +3753,7 @@ def advance():
     on purpose: what the reader sees the propeller doing this frame and what
     the wake will remember about this frame are the same numbers."""
     global sim_time, frame_no, beta_now, rpm_now, omega_now, theta_now, state_now
-    global dpitch_now
+    global dpitch_now, vs_now, va_now
     frame_no += 1
     sim_time = frame_no * DT
     # AND THE SEA IS ON THE SAME CLOCK, which the Ocean made non-optional. Every
@@ -3673,6 +3769,14 @@ def advance():
     if ui is None:
         beta_now = scheduled_beta(sim_time)
         rpm_now = scheduled_rps(sim_time) * 60.0
+        # THE THIRD LEVER IS ON THE SAME CLOCK AS THE OTHER TWO. The slider
+        # writes vs_now/va_now when there is a UI; headless, the schedule does,
+        # in the same place and at the same frame index -- so the ring entry
+        # stamped below carries the speed of advance this frame really had and
+        # a parcel shed before the ship had way on never learns about way the
+        # ship only got later.
+        vs_now = scheduled_speed(sim_time)
+        va_now = vs_now * (1.0 - W_MEAN)
         om = TWO_PI * rpm_now / 60.0
     else:
         # The slider commands a speed; the spin-up ramp still owns the first
@@ -3914,39 +4018,54 @@ elif FILM:
     # and the water is only legible if the camera stays on the water while it
     # happens.
     #
-    #   1 OPEN       0.0 -  7.0   10 rpm, beta 22. Bronze in deep water, motes
-    #                             drifting, the funnel collapsed onto the disc.
-    #   2 SPIN-UP    7.0 - 15.0   -> 120 rpm. The funnel establishes and the
-    #                             bubble column grows. CLEAN: tips at 0.83 of
-    #                             the margin, hub at 0.93. No ropes.
-    #   3 INCEPTION 15.0 - 26.0   120 -> 138 rpm and HOLD. The hub crosses at
-    #                             127.8 rpm and the tips not until 141.2, so
-    #                             138 is a 4 s window with the axial rope lit
-    #                             and the helices still clear -- the thing real
-    #                             CPP footage shows and the reason the beat is
-    #                             shaped this way instead of as one ramp. Then
-    #                             138 -> 300 and the tips bloom.
-    #   4 COLLAPSE  26.0 - 34.0   300 -> 180 rpm, a HARD step. The rope length
-    #                             gate falls from 1.00 to 0.40 of a life, the
-    #                             fast slug already downstream keeps its own
-    #                             speed, and the rarefaction between the two
-    #                             convects off frame.
-    #   5 FEATHER   34.0 - 41.5   beta 22 -> 5 at 180 rpm. The other lever,
+    #   1 OPEN       0.0 -  7.0   10 rpm, beta 22, STOPPED in the water.
+    #                             Bronze in deep water, motes drifting, the
+    #                             funnel collapsed onto the disc, and the
+    #                             operating point at the origin of its own
+    #                             diagram because that is where a bollard is.
+    #   2 SPIN-UP    7.0 - 15.0   -> 132 rpm, and way starts to come on behind
+    #                             it. The funnel establishes and the bubble
+    #                             column grows. CLEAN: tips at 0.87 of the
+    #                             margin at mid-beat. No ropes.
+    #   3 INCEPTION 15.0 - 26.0   132 -> 170 rpm at 1.6 m/s, and HOLD. At that
+    #                             advance the hub crosses at 161 rpm and the
+    #                             tips not until 174, so 170 is a 4 s window
+    #                             with the axial rope lit and the helices
+    #                             still clear -- the thing real CPP footage
+    #                             shows and the reason the beat is shaped this
+    #                             way instead of as one ramp. Then 170 -> 330
+    #                             and the tips bloom, 2.37 x inception.
+    #   4 COLLAPSE  26.0 - 34.0   330 -> 230 rpm, a HARD step. The rope length
+    #                             gate falls, the fast slug already downstream
+    #                             keeps its own speed, and the rarefaction
+    #                             between the two convects off frame. She is
+    #                             still gathering way through all of it.
+    #   5 FEATHER   34.0 - 41.5   beta 22 -> 5 at 230 rpm. The other lever,
     #                             and the causality lesson in one shot: the
     #                             funnel dies in a frame, the wake takes 1.7 s
     #                             to age out, and the propeller never stops.
-    #   6 FINALE    41.5 - 55.0   beta 5 -> 30. Full re-bloom (2.08 x inception)
-    #                             and a slow pull back to the widest framing
-    #                             the murk allows: funnel, prop, slipstream.
+    #                             K_T falls to 0.03, so the ship coasts down
+    #                             too -- the only leg where she loses speed.
+    #   6 FINALE    41.5 - 55.0   beta 5 -> 30. Full re-bloom (2.36 x) and
+    #                             full ahead: thirteen seconds of the ship
+    #                             taking hold, J walking from 0.28 to 0.59 and
+    #                             eta_0 from 0.24 to 0.48 while the camera
+    #                             swings aft and RISES THROUGH THE SURFACE.
+    #                             The bloom eases to 1.74 x as she goes,
+    #                             because advance unloads the blade -- which
+    #                             is the diagram in the corner being read out
+    #                             loud by the water.
     #
-    # THE FILM IS A PURE FUNCTION OF THE FRAME INDEX. The helm is a keyframe
-    # table read at film time, the camera is a cubic Hermite track read at film
-    # time, and the sim clock is frame_no * DT exactly as it is everywhere else
-    # -- so --takes re-renders one beat into the same picture the full run made.
+    # THE FILM IS A PURE FUNCTION OF THE FRAME INDEX. The helm is three
+    # keyframe tables read at film time, the camera is a cubic Hermite track
+    # read at film time, and the sim clock is frame_no * DT exactly as it is
+    # everywhere else -- so --takes re-renders one beat into the same picture
+    # the full run made. The panel composited into the corner is a function of
+    # the same frame's PropState and nothing else, so it re-cuts with it.
     import glob
     import subprocess
 
-    from PIL import Image
+    from PIL import Image, ImageDraw, ImageFont
 
     # CWD-relative, as --shot's own output is and as the other films are: an
     # 11-minute render should not land in the source tree because that is where
@@ -3967,23 +4086,76 @@ elif FILM:
     # (film time, value, how to approach it). "ease" is a smoothstep, "hold" a
     # constant, "step" an instantaneous jump -- written as a second key at the
     # SAME time, which is what makes a step a step and not a one-frame ramp.
+    # ── AND THERE ARE THREE SCHEDULES NOW, BECAUSE THE SHIP GETS UNDER WAY ──
+    # The film used to run the whole 55 s at the BOLLARD, and that made the
+    # open-water diagram a photograph: J is 0 and eta_0 is 0 by definition
+    # there, so the operating point sat on the left edge of its own axes from
+    # the first frame to the last. A propeller film whose panel cannot move is
+    # a propeller film that has not answered the question the panel is for.
+    #
+    # So the ship gets under way DURING the clip, and the schedule below is
+    # shaped by what a hull actually does rather than by where the dot would
+    # look nice:
+    #
+    #   0.0 - 8.0    STOPPED. The shaft is idling at 10 rpm and 10 rpm does
+    #                not move a workboat. J = 0, eta_0 = 0, and the dot sits
+    #                at the origin of the diagram where it belongs.
+    #   8.0 - 18.5   0 -> 1.6 m/s. Way comes on BEHIND the spin-up, not with
+    #                it: the shaft reaches 132 rpm at t = 10 and the ship is
+    #                still under 0.4 m/s there. That lag is the hull's mass
+    #                and it is the reason the dot crawls right while the wake
+    #                is already established.
+    #  18.5 - 26.0   HELD at 1.6. The hub-only window and the bloom are graded
+    #                rungs on Burrill's ladder (see the beat table) and a
+    #                moving advance would drag them off it mid-shot.
+    #  26.0 - 34.0   1.6 -> 2.6. The bloom's 330 rpm put real thrust in the
+    #                water and she answers it, through the throttle step.
+    #  34.0 - 41.5   2.6 -> 2.3. FEATHERED: K_T is 0.03 and the screw is
+    #                pushing nothing at all, so the hull coasts down. This is
+    #                the one leg of the schedule that goes the other way and
+    #                it is the feather beat's causality lesson said twice.
+    #  41.5 - 55.0   2.3 -> 4.8. Full ahead on 30 deg of pitch for thirteen
+    #                seconds: 0.19 m/s^2, which is what a workboat does.
+    #
+    # AND THE SPEED IS A SCHEDULE, NOT A HULL. There is no resistance curve
+    # here and no integration of T - R over a displacement -- these are keys
+    # chosen to be plausible for the class, exactly as the rpm keys are. What
+    # is NOT authored is everything downstream of them: J, K_T, K_Q, eta_0,
+    # the thrust, the induced velocity and all three cavitation thresholds
+    # follow from the speed the same way they follow from the throttle.
+    #
+    # WHICH IS WHY EVERY RPM KEY MOVED. Advance unloads the blade -- the tip
+    # inception speed at beta 22 goes from 141 rpm at the bollard to 183 rpm
+    # at 2 m/s -- so the old numbers would have put beat 3's window and beat
+    # 4's ropes on the wrong rung of the ladder. The rungs are what the story
+    # is; the rpm that reaches them is a consequence, and the beat table below
+    # is the proof that each beat still lands on its own.
+    SPEED_KEYS = [(0.0, 0.0),
+                  (8.0, 0.0, "hold"),       # 1 OPEN: stopped in the water
+                  (15.0, 1.0, "ease"),      # 2 SPIN-UP: she starts to move
+                  (18.5, 1.6, "ease"),
+                  (26.0, 1.6, "hold"),      # 3 INCEPTION: held on the rung
+                  (31.0, 2.4, "ease"),      # 4 COLLAPSE: still gathering way
+                  (34.0, 2.6, "ease"),
+                  (41.5, 2.3, "ease"),      # 5 FEATHER: no thrust, she coasts
+                  (55.0, 4.8, "ease")]      # 6 FINALE: full ahead
     RPM_KEYS = [(0.0, 10.0),
                 (7.0, 10.0, "hold"),        # 1 OPEN: barely turning
-                (10.0, 120.0, "ease"),      # 2 SPIN-UP
-                (15.0, 120.0, "hold"),
-                # 138, NOT 130. Burrill moved both inception speeds -- the hub
-                # crosses at 127.8 rpm now and the tips at 141.2, where the
-                # authored gate had them at 124.6 and 131.8 -- so the hub-only
-                # window is 13 rpm wide instead of 7 and this is the rpm that
-                # sits in it exactly as 130 sat in the old one: hub +9.1% over
-                # its inception line, tips 2.6% short of theirs. The beat is
-                # unchanged; the number under it is now derived.
-                (18.5, 138.0, "ease"),      # 3 INCEPTION: into the hub's window
-                (21.0, 138.0, "hold"),      #   HUB ROPE ONLY lives here
-                (24.5, 300.0, "ease"),      #   and the tips bloom
-                (26.0, 300.0, "hold"),
-                (26.0, 180.0, "step"),      # 4 COLLAPSE: the throttle's step
-                (55.0, 180.0, "hold")]
+                (10.0, 132.0, "ease"),      # 2 SPIN-UP
+                (15.0, 132.0, "hold"),
+                # 170, and the derivation is the same one that put 138 here
+                # when the film ran at the bollard: it is the rpm that sits
+                # INSIDE the hub-only window at the advance this beat holds.
+                # At V_ship 1.6 the hub crosses at 161 rpm and the tips not
+                # until 174, so 170 is hub +9% over its inception line and
+                # tips 3% short of theirs -- the same two margins the bollard
+                # cut had at 138, on a window that advance moved bodily up.
+                (18.5, 170.0, "ease"),      # 3 INCEPTION: into the hub's window
+                (21.0, 170.0, "hold"),      #   HUB ROPE ONLY lives here
+                (24.5, 330.0, "ease"),      #   and the tips bloom, 2.37 x
+                (26.0, 330.0, "hold"),
+                (26.0, 230.0, "step"),      # 4 COLLAPSE: the throttle's step
+                (55.0, 230.0, "hold")]
     BETA_KEYS = [(0.0, BETA_DESIGN),
                  (34.0, BETA_DESIGN, "hold"),
                  (34.0, 5.0, "step"),       # 5 FEATHER
@@ -4007,9 +4179,10 @@ elif FILM:
             prev = k
         return prev[1]
 
-    # advance() reads these two names out of the module globals every frame, so
-    # rebinding them here is the whole of installing the film's schedule -- the
-    # helm ring, the blade angles and the banner all follow with no other edit.
+    # advance() reads these three names out of the module globals every frame,
+    # so rebinding them here is the whole of installing the film's schedule --
+    # the helm ring, the blade angles, the speed of advance and the banner all
+    # follow with no other edit.
     FILM_T0 = PREROLL * DT
 
     def scheduled_rps(t):                                       # noqa: F811
@@ -4018,6 +4191,9 @@ elif FILM:
     def scheduled_beta(t):                                      # noqa: F811
         return keyed(BETA_KEYS, max(t - FILM_T0, 0.0))
 
+    def scheduled_speed(t):                                     # noqa: F811
+        return keyed(SPEED_KEYS, max(t - FILM_T0, 0.0))
+
     # ── The camera track ────────────────────────────────────────────────────
     # (film time, eye, look-at, stop). A cubic Hermite through the keys with
     # finite-difference tangents taken over the ACTUAL times, so the spline is
@@ -4025,26 +4201,61 @@ elif FILM:
     # pair would ease in and out fourteen times over 55 s and read as a series
     # of nudges. `stop` zeroes the tangent, which is how the first and last
     # frames sit still.
+    # ── THE RE-CUT, AND WHAT IT IS CUT AGAINST ─────────────────────────────
+    # The old track was composed for ONE screw turning on the axis and it did
+    # not survive the twin stern: beat 3's push-in key sat 0.89 m off the port
+    # wake's axis against a 0.90 m tip radius, so the shot that was supposed to
+    # show inception happening on screen flew the camera through the inside of
+    # the port slipstream. Every key below is at least 1.2 m off BOTH wake
+    # axes -- R_TIP plus the turbulence -- and _clear() samples the SPLINE, not
+    # the keys, so the curve between them is held to the same number and the
+    # run prints no warning.
+    #
+    # THE FRAMINGS ARE THE DEMO'S OWN NAMED VIEWS, not new inventions. CAMS
+    # above carries the composition rationale for each of them and the track
+    # walks between them:
+    #
+    #   1 OPEN       a wide quarter easing in on "prop" -- the bronze, both
+    #                shafts in frame, nothing in the water yet
+    #   2 SPIN-UP    out to "mouth", where the funnel is legible and the disc
+    #                is not, then back to "side"
+    #   3 INCEPTION  "side" pushed in and DROPPED BELOW THE SHAFT LINE, which
+    #                is how the file's own note says a stern is read: the
+    #                counter closes the top of the frame, the port slipstream
+    #                owns the middle of it and the starboard one runs away
+    #                behind. The hub rope lights alone in that frame.
+    #   4 COLLAPSE   the same axis, wide, so the rarefaction has somewhere to
+    #                travel before it leaves frame
+    #   5 FEATHER    a long swing forward and inboard to "back" -- the backs
+    #                of the blades, which is where the sheet IS. The feather
+    #                strips it off them on camera while the shaft keeps
+    #                turning, and no other framing in this file shows that.
+    #   6 FINALE     hold on the backs for the re-bloom, then swing aft and
+    #                RISE THROUGH THE SURFACE. There is a sky and a real ocean
+    #                now, so the last shot can leave the water: the ship, the
+    #                sea and both wakes from the air, which is the one frame
+    #                that says what the whole 55 s was of.
     CAM_KEYS = [
-        (0.0, (1.90, 0.95, 2.95), (0.30, 0.00, 0.00), True),
-        (7.0, (1.05, 0.60, 2.55), (0.25, -0.02, 0.10), False),
+        (0.0, (2.35, 0.70, 4.65), (0.10, 0.00, 1.10), True),
+        (7.0, (1.45, 0.30, 3.60), (0.20, 0.00, 1.05), False),
         # 2: out to the mouth, where the funnel is legible and the disc is not
-        (11.0, (0.30, 0.75, 4.60), (0.85, -0.05, 0.00), False),
-        (15.0, (0.60, 0.65, 3.55), (1.05, -0.04, 0.00), False),
-        # 3: the push in. Inception happens ON SCREEN and this is why.
-        (18.0, (1.35, 0.42, 1.95), (0.55, -0.02, 0.00), False),
-        (21.0, (1.30, 0.45, 2.20), (0.75, -0.02, 0.00), False),
-        (26.0, (1.55, 0.80, 3.90), (1.65, -0.03, 0.00), False),
+        (11.0, (0.55, 0.55, 7.10), (0.95, -0.05, 0.60), False),
+        (15.0, (1.10, -0.40, 4.30), (1.44, 0.20, 0.60), False),
+        # 3: the push in, UNDER the shaft line. Inception happens ON SCREEN.
+        (18.0, (1.10, -0.55, 2.95), (1.05, 0.05, 0.90), False),
+        (21.0, (0.95, -0.62, 2.65), (0.95, 0.02, 0.95), False),
+        (26.0, (1.90, -0.30, 4.70), (1.90, 0.10, 0.60), False),
         # 4: wide enough that the rarefaction has somewhere to travel
-        (30.0, (2.20, 0.95, 6.00), (2.60, -0.04, 0.00), False),
-        (34.0, (1.95, 0.85, 5.30), (2.20, -0.04, 0.00), False),
-        # 5: back in, because the point of the beat is a prop that is TURNING
-        (38.0, (1.25, 0.58, 3.30), (0.95, -0.02, 0.00), False),
-        (41.5, (1.10, 0.52, 3.00), (0.80, -0.02, 0.00), False),
-        # 6: hold for the re-bloom, then the pull back
-        (45.0, (1.20, 0.62, 3.40), (1.15, -0.02, 0.00), False),
-        (50.0, (1.70, 1.05, 5.10), (2.00, -0.05, 0.00), False),
-        (55.0, (2.00, 1.40, 6.90), (2.40, -0.07, 0.00), True),
+        (30.0, (2.80, -0.20, 6.15), (2.90, 0.05, 0.60), False),
+        (34.0, (2.40, -0.28, 5.45), (2.50, 0.05, 0.70), False),
+        # 5: forward and inboard to the backs of the blades, because the point
+        #    of the beat is a sheet leaving a prop that is still TURNING
+        (38.0, (-1.10, -0.80, 3.30), (0.05, 0.00, 1.15), False),
+        (41.5, (-1.54, -0.77, 2.86), (0.05, 0.00, 1.17), False),
+        # 6: hold for the re-bloom, then out and up through the waterline
+        (45.0, (-1.30, -0.70, 3.10), (0.10, 0.00, 1.15), False),
+        (50.0, (3.40, 1.90, 5.60), (0.80, 0.10, 0.20), False),
+        (55.0, (5.20, 5.40, 4.20), (0.40, 0.60, 0.10), True),
     ]
 
     def _tangents(idx):
@@ -4102,51 +4313,57 @@ elif FILM:
           f"{int(round(FILM_SECS * FPS))} frames, {W}x{H}, {N:,} parcels\n"
           f"       track closest approach: {d_prop:.2f} m to the nearer hub, "
           f"{d_axis:.2f} m off the nearer wake axis (tips at {R_TIP:.2f} m)")
-    # ── R6: THE FILM IS VERIFIED, NOT RE-CHOREOGRAPHED ──────────────────────
-    # The camera track and the six beats were composed for ONE screw turning on
-    # the axis, and the acceptance test for this revision was to render the
-    # beat keyframes once and look. Beat 3 does not survive: its push-in key
-    # sits at (1.35, 0.42, 1.95), which was 0.58 m off a wake on the axis and
-    # is 0.89 m off the PORT wake's axis now -- inside the tip radius. The
-    # camera flies through the port slipstream and the shot that was supposed
-    # to show inception happening on screen shows the inside of a propeller
-    # instead. Re-directing it is a film-v2 slice and is deliberately NOT done
-    # here: spending the look budget on a re-cut would have come out of the
-    # breathing, which is what this revision is for. So the film says so, every
-    # time it runs, with the number that proves it.
-    if d_axis < R_TIP:
-        print(f"\n       *** the film choreography predates the twin stern ***\n"
+    # ── THE CLEARANCE IS A GATE NOW, NOT A CONFESSION ───────────────────────
+    # This block used to print, every run, that the track predated the twin
+    # stern and flew the camera through the port slipstream at beat 3. The
+    # track has been re-cut against both shafts (see CAM_KEYS) and the number
+    # that used to prove the failure is the number that now proves the fix, so
+    # the message stays -- it just has nothing to say unless a future key drops
+    # back inside a wake. CAM_CLEAR is R_TIP plus the turbulence the filaments
+    # are smeared over, which is the radius the slipstream is actually opaque
+    # out to.
+    CAM_CLEAR = 1.20
+    if d_axis < CAM_CLEAR:
+        print(f"\n       *** a camera key is inside a slipstream ***\n"
               f"       the track comes within {d_axis:.2f} m of a wake axis "
-              f"(tips at {R_TIP:.2f} m), so at least one beat has the camera\n"
-              f"       INSIDE a slipstream. beat 3's push-in is the one that "
-              f"breaks. re-cutting the track is a film-v2 slice;\n"
-              f"       the beats and the helm schedule are unchanged here.\n")
+              f"(tips at {R_TIP:.2f} m, clearance wanted {CAM_CLEAR:.2f} m)\n")
     for bi, (name, end) in enumerate(BEATS):
         start = 0.0 if bi == 0 else BEATS[bi - 1][1]
         mid = 0.5 * (start + end)
         for tag, tt in (("in", start + 0.05), ("mid", mid), ("out", end - 0.05)):
             bd, rp = keyed(BETA_KEYS, tt), keyed(RPM_KEYS, tt)
-            cr = cav_ratio(bd, rp / 60.0)
-            # Three rungs now, and the table says which one each beat is on.
-            # The film's schedule was written when there were two, and beat 6's
-            # 300 rpm is the only one that reaches the sheet -- which is worth
-            # knowing before watching it and is the kind of thing a re-cut (see
-            # the choreography warning above) would be composed around.
+            # AND THE TABLE IS READ AT THIS BEAT'S OWN ADVANCE. Every one of
+            # the three thresholds below moves with the speed of advance --
+            # tip inception at beta 22 is 141 rpm at the bollard and 183 rpm
+            # at 2 m/s -- so a beat table computed at V_a = 0 would be quoting
+            # rungs the film never stands on.
+            vs = keyed(SPEED_KEYS, tt)
+            st = PropState(rp, bd, vs * (1.0 - W_MEAN))
+            cr = cav_ratio(bd, rp / 60.0, vs * (1.0 - W_MEAN))
+            # Three rungs, and the table says which one each beat is on. This
+            # IS the acceptance test for the re-key: the speed schedule moved
+            # every threshold, so the rpm keys were chosen by reading this
+            # table until each beat landed back on the rung its story needs --
+            # clear, hub rope only, cavitating, sheet -- and not the other way
+            # round.
             state = "SHEET" if cr > SHEET_CAV_INC else (
                 "CAVITATING" if cr > 1.0 else (
                     "hub rope only" if cr * HUB_CAV > 1.0 else "clear"))
             print(f"       {name:>9} {tag:>3} t={tt:5.1f}  {rp:5.1f} rpm  "
-                  f"beta {bd:4.1f}  tips {cr:5.2f}x  hub {cr * HUB_CAV:5.2f}x  "
+                  f"beta {bd:4.1f}  V_s {vs:4.2f}  J {st.j:5.3f}  "
+                  f"eta_0 {st.eta:5.3f}  tips {cr:5.2f}x  "
+                  f"hub {cr * HUB_CAV:5.2f}x  "
                   f"sheet {cr / SHEET_CAV_INC:5.2f}x  {state}")
 
     # ── The frames worth reading at 1:1 ─────────────────────────────────────
     # One per beat plus the two the beat structure is actually graded on: the
     # hub-only window, and the frame just after the throttle step.
-    KEYSHOTS = [("b1_open", 3.0), ("b2_funnel", 9.5), ("b2_clean", 14.0),
-                ("b3a_hub_only", 20.0), ("b3b_tips", 22.5),
+    KEYSHOTS = [("b1_open", 3.0), ("b2_funnel", 11.0), ("b2_side", 14.6),
+                ("b3a_hub_only", 20.5), ("b3b_tips", 22.5),
                 ("b3c_ropes_run", 25.8), ("b4_front", 27.2),
                 ("b4_short", 32.0), ("b5_feather", 39.5),
-                ("b6a_bloom", 44.5), ("b6_wide", 54.8)]
+                ("b6a_bloom", 43.0), ("b6b_surface", 51.6),
+                ("b6_wide", 54.8)]
     shot_at = {int(round(t * FPS)): n for n, t in KEYSHOTS}
 
     os.makedirs(FILM_DIR, exist_ok=True)
@@ -4165,6 +4382,150 @@ elif FILM:
         eye, tgt = cam_at(tf)
         camera.position.set(*eye)
         camera.look_at(*tgt)
+
+    # ── THE DIAGRAM, ON THE FILM ────────────────────────────────────────────
+    # The window has had the open-water diagram live under the sliders since
+    # the polynomials landed, and the film -- the thing anyone actually watches
+    # -- did not, because imgui does not draw headless and the film has no UI
+    # to draw it into. So the panel is composited onto the pixels instead,
+    # between read_pixels() and the pipe to ffmpeg, in numpy and PIL.
+    #
+    # IT IS THE SAME DIAGRAM AND NOT A SECOND ONE. open_water_marks() is the
+    # single source of the samples, the operating point and the validity flag;
+    # this function is drawing code over what it returns, exactly as
+    # draw_open_water() is. If the film's dot and the window's dot ever
+    # disagreed, one of them would be lying about the water.
+    #
+    # DRAWN AT 2x AND DOWNSAMPLED WITH LANCZOS, because a one-pixel polyline
+    # at 1080p is a staircase and this card is the one part of the frame with
+    # no motion blur, no depth of field and no grain to hide behind.
+    #
+    # THE STATIC HALF IS CACHED ON P/D, and that is what makes it cheap: the
+    # card, the grid, the axes and the three curves only change when the pitch
+    # lever moves, which in 3300 frames of film happens twice. What is redrawn
+    # every frame is the vertical line, three dots and two lines of text.
+    PS = max(H / 1080.0, 0.5)               # the card is sized at 1080p
+    PW, PH = int(round(460 * PS)), int(round(270 * PS))
+    PMARGIN = int(round(26 * PS))
+    SS = 2                                  # the supersample
+    # plot box inside the card, in 1x card pixels
+    # The plot box inside the card, in 1x card pixels. The right edge stops
+    # short of the card so the last J tick can be CENTRED under its gridline
+    # and the axis still has room for its own name beside it.
+    BX0, BY0, BX1, BY1 = 46, 30, 428, 202
+    C_CARD = (9, 15, 19, 186)
+    C_EDGE = (120, 140, 152, 190)
+    C_GRID = (78, 92, 104, 120)
+    C_TEXT = (188, 202, 212, 255)
+    C_DIM = (132, 146, 158, 255)
+    C_WARN = (255, 176, 96, 255)
+    OW_PIL = tuple(tuple(int(round(255 * c)) for c in rgb) + (255,)
+                   for rgb in OW_RGB)
+
+    def _font(px, mono=False):
+        """A face that is actually there. consola/DejaVuSansMono is the readout
+        line's, because a proportional font makes the numbers dance in place as
+        they change and a readout that jitters is a readout nobody reads. The
+        bundled default is the fallback and it is legible at this size."""
+        for name in (("consola.ttf", "DejaVuSansMono.ttf") if mono
+                     else ("segoeui.ttf", "DejaVuSans.ttf")):
+            try:
+                return ImageFont.truetype(name, px)
+            except OSError:
+                pass
+        try:
+            return ImageFont.load_default(size=px)
+        except TypeError:
+            return ImageFont.load_default()
+
+    F_LAB = _font(int(round(13 * PS * SS)))
+    F_SML = _font(int(round(12 * PS * SS)))
+    F_NUM = _font(int(round(13 * PS * SS)), mono=True)
+    _bg_cache = {}
+
+    def _panel_px(j, v):
+        """(J, value) -> card pixels at the supersampled scale."""
+        return (SS * PS * (BX0 + (BX1 - BX0) * min(max(j, 0.0), OW_J_MAX)
+                           / OW_J_MAX),
+                SS * PS * (BY1 - (BY1 - BY0) * min(max(v, 0.0), OW_YMAX)
+                           / OW_YMAX))
+
+    def _panel_bg(pd, js, curves):
+        key = round(pd, 3)
+        hit = _bg_cache.get(key)
+        if hit is not None:
+            return hit
+        if len(_bg_cache) > 16:
+            _bg_cache.clear()
+        img = Image.new("RGBA", (PW * SS, PH * SS), (0, 0, 0, 0))
+        d = ImageDraw.Draw(img)
+        s = SS * PS
+        d.rounded_rectangle([0, 0, PW * SS - 1, PH * SS - 1], radius=int(7 * s),
+                            fill=C_CARD, outline=(60, 74, 84, 150),
+                            width=max(int(s), 1))
+        for gv in (0.2, 0.4, 0.6, 0.8, 1.0):
+            y = _panel_px(0.0, gv)[1]
+            d.line([_panel_px(0.0, gv), _panel_px(OW_J_MAX, gv)],
+                   fill=C_GRID, width=max(int(s), 1))
+            d.text((s * (BX0 - 30), y - 8 * s), f"{gv:.1f}", font=F_SML,
+                   fill=C_DIM)
+        for gj in (0.5, 1.0, 1.5):
+            d.line([_panel_px(gj, 0.0), _panel_px(gj, OW_YMAX)],
+                   fill=C_GRID, width=max(int(s), 1))
+            d.text((_panel_px(gj, 0.0)[0], s * (BY1 + 4)), f"{gj:.1f}",
+                   font=F_SML, fill=C_DIM, anchor="mt")
+        d.rectangle([_panel_px(0.0, OW_YMAX), _panel_px(OW_J_MAX, 0.0)],
+                    outline=C_EDGE, width=max(int(s), 1))
+        for ys, col in zip(curves, OW_PIL):
+            d.line([_panel_px(j, v) for j, v in zip(js, ys)], fill=col,
+                   width=max(int(round(1.9 * s)), 1), joint="curve")
+        d.text((s * BX0, s * 7), f"open water   B{BLADES}-{EAR * 100:.0f}   "
+               f"P/D {pd:.3f}", font=F_LAB, fill=C_TEXT)
+        # The legend rides the top of the plot box, laid out left to right in
+        # the same order as the curves so the colours need no key.
+        xx = s * (BX0 + 6)
+        for lab, col in zip(OW_LABELS, OW_PIL):
+            d.text((xx, s * (BY0 + 4)), lab, font=F_SML, fill=col)
+            xx += d.textlength(lab, font=F_SML) + 14 * s
+        d.text((s * (BX1 + 16), s * (BY1 + 4)), "J", font=F_SML, fill=C_DIM,
+               anchor="lt")
+        _bg_cache[key] = img
+        return img
+
+    def draw_film_panel(px_rgb, st, rpm):
+        """Composite the diagram onto ONE frame, in place."""
+        js, curves, jc, vals, extrap = open_water_marks(st)
+        img = _panel_bg(st.pd, js, curves).copy()
+        d = ImageDraw.Draw(img)
+        s = SS * PS
+        ox = _panel_px(jc, 0.0)[0]
+        d.line([(ox, _panel_px(0.0, OW_YMAX)[1]), (ox, _panel_px(0.0, 0.0)[1])],
+               fill=(255, 255, 255, 110), width=max(int(s), 1))
+        for v, col in zip(vals, OW_PIL):
+            cx, cy = _panel_px(jc, v)
+            r = 3.6 * s
+            d.ellipse([cx - r, cy - r, cx + r, cy + r], fill=col,
+                      outline=(255, 255, 255, 235), width=max(int(1.3 * s), 1))
+        d.text((s * BX0, s * (BY1 + 20)),
+               f"{rpm:5.0f} rpm  V_a {st.va:4.2f} m/s  J {jc:5.3f}",
+               font=F_NUM, fill=C_TEXT)
+        d.text((s * BX0, s * (BY1 + 38)),
+               f"K_T {vals[0]:5.3f}  10K_Q {vals[1]:5.3f}  eta_0 {vals[2]:5.3f}",
+               font=F_NUM, fill=C_TEXT)
+        if extrap:
+            # The same sentence the window's panel says, for the same reason:
+            # the feather beat drives P/D to 0.19 and the regression was fitted
+            # over 0.5 to 1.4. A card that kept quoting three decimals there
+            # would be lying with precision.
+            d.text((s * BX0, s * (BY1 + 56)),
+                   "outside B-series validity -- extrapolated",
+                   font=F_SML, fill=C_WARN)
+        card = _np.asarray(img.resize((PW, PH), Image.LANCZOS), _np.float32)
+        y0 = px_rgb.shape[0] - PH - PMARGIN
+        x0 = px_rgb.shape[1] - PW - PMARGIN
+        sub = px_rgb[y0:y0 + PH, x0:x0 + PW]
+        a = card[:, :, 3:4] * (1.0 / 255.0)
+        sub[:] = (sub * (1.0 - a) + card[:, :, :3] * a + 0.5).astype(_np.uint8)
 
     # PRE-ROLL: settle the wake, the spin-up and the temporal history at the
     # opening helm and the opening framing, then throw it all away.
@@ -4220,9 +4581,13 @@ elif FILM:
                 renderer.render(scene, camera)
                 rendered += 1
             if capture:
-                px = renderer.read_pixels()
+                # A writable contiguous copy, because the panel is composited
+                # INTO these bytes and read_pixels() hands back the mapped
+                # staging buffer's own view.
+                px = _np.array(renderer.read_pixels(), _np.uint8, order="C")
+                draw_film_panel(px, state_now, omega_now * 60.0 / TWO_PI)
                 if enc is not None:
-                    enc.stdin.write(_np.ascontiguousarray(px).tobytes())
+                    enc.stdin.write(px.tobytes())
                 if f in shot_at:
                     Image.fromarray(px).save(
                         os.path.join(FILM_DIR, f"{shot_at[f]}.png"))
@@ -4292,45 +4657,19 @@ else:
     # not decoration here, because the curve under the moving dot is literally
     # the function the wake is being drawn from.
     #
-    # 10 K_Q RATHER THAN K_Q, always, for the reason the convention exists: at
-    # this EAR and Z the torque coefficient is a twentieth of the thrust one
-    # and would be a flat line on the floor of the axes.
+    # THE SAMPLING IS NOT HERE. open_water_curve / open_water_marks live beside
+    # the polynomials, because the film composites the same diagram onto every
+    # one of its frames and two copies of the sampling would be two chances to
+    # disagree with the water. This function is drawing code and nothing else.
     #
-    # THE CURVES ARE CACHED ON P/D. 41 samples x 86 polynomial terms is a
-    # millisecond of Python, which is nothing on a slider drag and everything
-    # at 25 fps when the pitch has not moved -- and it has not moved on all but
-    # a handful of frames.
-    OW_N = 41
-    _ow_cache = {}
-
-    def open_water_curve(pd):
-        key = round(pd, 3)
-        hit = _ow_cache.get(key)
-        if hit is None:
-            if len(_ow_cache) > 64:
-                _ow_cache.clear()
-            js, kts, kqs, ets = [], [], [], []
-            for i in range(OW_N):
-                jj = J_HI * i / (OW_N - 1)
-                k_t, k_q, _ = open_water(jj, pd)
-                js.append(jj)
-                kts.append(k_t)
-                kqs.append(10.0 * k_q)
-                ets.append(jj * k_t / (TWO_PI * k_q)
-                           if k_q > 1e-6 and k_t > 0.0 else 0.0)
-            hit = (js, kts, kqs, ets)
-            _ow_cache[key] = hit
-        return hit
-
-    # Explicit, because Dummy(0, h) reserves a ZERO-width item and the rect
-    # comes back as a stub -- there is no content-region binding to ask the
-    # panel how wide it is, and hard-coding to the window width is honest
+    # Explicit sizes, because Dummy(0, h) reserves a ZERO-width item and the
+    # rect comes back as a stub -- there is no content-region binding to ask
+    # the panel how wide it is, and hard-coding to the window width is honest
     # enough for a panel that sets its own.
     OW_W, OW_H = 424.0, 132.0
-    OW_YMAX = 1.0            # K_T, 10 K_Q and eta_0 all live in 0..1 here
-    C_KT = (0.62, 0.80, 1.00, 1.0)      # the vapour's own blue
-    C_KQ = (1.00, 0.78, 0.42, 1.0)      # the rake's warm
-    C_ET = (0.55, 0.95, 0.62, 1.0)      # efficiency, and nothing else is green
+    C_KT = OW_RGB[0] + (1.0,)
+    C_KQ = OW_RGB[1] + (1.0,)
+    C_ET = OW_RGB[2] + (1.0,)
     C_AX = (0.55, 0.60, 0.66, 0.85)
     C_GR = (0.35, 0.40, 0.46, 0.45)
     C_OP = (1.00, 1.00, 1.00, 1.0)
@@ -4343,7 +4682,7 @@ else:
         w, h = x1 - x0, y1 - y0
 
         def px(j, v):
-            return (x0 + w * min(max(j, 0.0), J_HI) / J_HI,
+            return (x0 + w * min(max(j, 0.0), OW_J_MAX) / OW_J_MAX,
                     y1 - h * min(max(v, 0.0), OW_YMAX) / OW_YMAX)
 
         tp.imgui.draw_rect(x0, y0, x1, y1, (0.06, 0.09, 0.11, 0.85), 1.0, True)
@@ -4351,31 +4690,26 @@ else:
             gy = y1 - h * gv / OW_YMAX
             tp.imgui.draw_line(x0, gy, x1, gy, C_GR, 1.0)
         for gj in (0.5, 1.0):
-            gx = x0 + w * gj / J_HI
+            gx = x0 + w * gj / OW_J_MAX
             tp.imgui.draw_line(gx, y0, gx, y1, C_GR, 1.0)
         tp.imgui.draw_rect(x0, y0, x1, y1, C_AX, 1.0, False)
 
-        js, kts, kqs, ets = open_water_curve(st.pd)
-        for vals, col in ((kts, C_KT), (kqs, C_KQ), (ets, C_ET)):
-            tp.imgui.draw_polyline([px(j, v) for j, v in zip(js, vals)],
+        js, curves, jc, vals, _ = open_water_marks(st)
+        for ys, col in zip(curves, (C_KT, C_KQ, C_ET)):
+            tp.imgui.draw_polyline([px(j, v) for j, v in zip(js, ys)],
                                    col, 1.8)
-        # THE OPERATING POINT, and it is drawn at the CLAMPED J and P/D -- the
-        # same place the wake is being evaluated -- so a slider pushed outside
-        # the validity box parks the dot on the box's edge rather than sliding
-        # off into a region the curve does not cover. The panel says why.
-        jc = min(max(st.j, J_LO), J_HI)
-        opx = x0 + w * jc / J_HI
+        opx = x0 + w * jc / OW_J_MAX
         tp.imgui.draw_line(opx, y0, opx, y1, (1.0, 1.0, 1.0, 0.35), 1.0)
-        for v, col in ((st.kt, C_KT), (10.0 * st.kq, C_KQ), (st.eta, C_ET)):
+        for v, col in zip(vals, (C_KT, C_KQ, C_ET)):
             cx, cy = px(jc, v)
             tp.imgui.draw_circle(cx, cy, 3.5, col, 1.0, True)
             tp.imgui.draw_circle(cx, cy, 5.0, C_OP, 1.2, False)
         tp.imgui.draw_text(x0 + 5.0, y0 + 3.0,
                            f"B{BLADES}-{EAR * 100:.0f}  P/D {st.pd:.3f}", C_AX)
-        tp.imgui.draw_text(x0 + 5.0, y0 + 17.0, "K_T", C_KT)
-        tp.imgui.draw_text(x0 + 38.0, y0 + 17.0, "10 K_Q", C_KQ)
-        tp.imgui.draw_text(x0 + 96.0, y0 + 17.0, "eta_0", C_ET)
-        tp.imgui.draw_text(x1 - 46.0, y1 - 15.0, f"J {J_HI:g}", C_AX)
+        tp.imgui.draw_text(x0 + 5.0, y0 + 17.0, OW_LABELS[0], C_KT)
+        tp.imgui.draw_text(x0 + 38.0, y0 + 17.0, OW_LABELS[1], C_KQ)
+        tp.imgui.draw_text(x0 + 96.0, y0 + 17.0, OW_LABELS[2], C_ET)
+        tp.imgui.draw_text(x1 - 46.0, y1 - 15.0, f"J {OW_J_MAX:g}", C_AX)
 
     def draw_ui():
         """The helm. Three levers, and everything else is a readout of what
