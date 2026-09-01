@@ -13,6 +13,8 @@
 // needs first, not by call graph). shadeWater's from-below branch needs both:
 // the gate, and applyMurk to composite the murk onto its traced reflection leg.
 bool camUnderwater();
+bool murkLive();
+vec3 applyMurkSky(vec3 dir);
 bool camPortWetDryEye();
 vec3 applyMurk(vec3 col, vec3 ro, vec3 hit);
 
@@ -211,6 +213,55 @@ vec3 shadeWater(vec3 P, vec3 N, vec3 V, MaterialDesc pm, int instIdx,
         transmitColor = (dot(wDir, wDir) > 1e-6)
                       ? sampleEnvLod(normalize(wDir), reflLod)
                       : reflectColor;// outside the window there is no transmitted ray (F == 1)
+    } else if (murkLive()) {
+        // ── ONE MEDIUM, FROM ABOVE TOO ──────────────────────────────────────
+        // The scene declared a murk (setUnderwaterMurk + setFogWaterSurfaceY),
+        // so the column under this surface IS that murk — the same medium the
+        // primary leg gets from below, the from-below mirror above, and every
+        // particle sprite on both sides. Until this branch existed the view
+        // from above used the MATERIAL's Beer-Lambert (attenuationColor over
+        // attenuationDistance, sun path doubled) plus the analytic deep body,
+        // so a hull at 3 m kept ~(0.007, 0.18, 0.27) of its light while a
+        // sprite beside it, on the murk, kept 0.66 achromatic: the prop
+        // ghosted into teal and the cavitation ropes blazed through the waves.
+        // Two water models for one column; this makes it one. Refract the view
+        // ray for real, probe for what is under the surface, and hand the hit
+        // to applyMurk over the actual in-water leg — attenuation and veil
+        // from the same expression the primary leg uses, so the two cannot
+        // disagree. A miss is the infinite column, which is applyMurkSky's
+        // saturated limit — exactly what the env miss shows from below.
+        // Gated on murkLive(), so every scene without a murk keeps the
+        // material path below byte-for-byte.
+        vec3 dRef = refract(-V, N, 1.0 / ior);
+        // From the air side a transmitted ray always exists; the guard only
+        // covers a degenerate normal.
+        if (dot(dRef, dRef) < 1e-6) dRef = -N;
+        dRef = normalize(dRef);
+        transmitColor = applyMurkSky(dRef);
+        // Beyond ~6 optical depths the hit term is < ~2% — invisible. The same
+        // budget the material path uses, on the medium that is actually there.
+        const float maxVis   = min(6.0 / fog.murkDensity, 1.0e4);
+        const vec3  uwOrigin = P - N * SHADOW_EPS;
+        rayQueryEXT rq;
+        rayQueryInitializeEXT(rq, topAS, gl_RayFlagsOpaqueEXT, kRayMaskAll,
+                              uwOrigin, 1e-3, dRef, maxVis);
+        while (rayQueryProceedEXT(rq)) {}
+        if (rayQueryGetIntersectionTypeEXT(rq, true) != gl_RayQueryCommittedIntersectionNoneEXT) {
+            const int   hitId = rayQueryGetIntersectionInstanceCustomIndexEXT(rq, true);
+            const float dBot  = rayQueryGetIntersectionTEXT(rq, true);
+            if (geoms[hitId].foamAddress == 0ul) {// not a wave-crest self-hit
+                // doShadows=false for the reason the material path gives:
+                // water is opaque-masked for occlusion queries, so a shadow ray
+                // from the hit would read the surface overhead as a full
+                // occluder. murkSunCaustic on the hit's direct light is what
+                // the from-below primary gets too.
+                const vec3 bottom = traceRadiance(uwOrigin, dRef, /*doShadows=*/false,
+                                                  maxLod, 0.12 * maxLod, seed,
+                                                  /*cheapHits=*/false,
+                                                  /*probeHitFill=*/false);
+                transmitColor = applyMurk(bottom, uwOrigin, uwOrigin + dRef * dBot);
+            }
+        }
     } else {
     // Two terms:
     //

@@ -306,6 +306,25 @@ float bbMurkOpticalDepth(BbView V, float partY, float len) {
     return V.murkDensity * d;
 }
 
+// Fresnel transmission at the air→water crossing, for a camera ABOVE the
+// surface looking down at a submerged particle. The deferred water shader
+// mixes (1−F)·transmit for whatever is under the same surface, so without
+// this the sprite is the only thing in the frame that crosses the interface
+// for free — a few percent looking down, everything toward grazing, where
+// the reflection takes the surface and the ropes should vanish exactly as
+// the hull does. Flat interface (the waves are centimetres, this acts over
+// metres), Schlick with water's r0. 1.0 whenever the leg does not cross from
+// the air side, so every other frame is untouched.
+float bbWaterCrossingT(BbView V, float partY, float len) {
+    if (V.murkDensity <= 0.0 || V.waterSurfaceY >= 1e29) return 1.0;
+    if (!(V.camWorldY > V.waterSurfaceY && partY < V.waterSurfaceY)) return 1.0;
+    const float cosI = clamp((V.camWorldY - partY) / max(len, 1e-6), 0.0, 1.0);
+    const float r0   = 0.02;// ((1.333−1)/(1.333+1))²
+    const float m    = 1.0 - cosI;
+    const float m2   = m * m;
+    return 1.0 - (r0 + (1.0 - r0) * m2 * m2 * m);
+}
+
 void main() {
     BbParams   P  = BbParams(pc.paramsAddr);// a reference cannot be `const`
     BbView     V  = BbView(pc.viewAddr);
@@ -510,7 +529,7 @@ void main() {
         const float partY = dot(V.viewToWorldY, vp) + V.camWorldY;
         const float od    = bbAirOpticalDepth(V, partY, camDist) +
                             bbMurkOpticalDepth(V, partY, camDist);
-        distFade *= exp(-od);
+        distFade *= exp(-od) * bbWaterCrossingT(V, partY, camDist);
     }
 
     // The GLOW pass draws the same quads a second time into a small offscreen
