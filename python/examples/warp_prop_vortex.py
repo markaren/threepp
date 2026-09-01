@@ -1,4 +1,4 @@
-"""A ship's propeller CAVITATING underwater -- NVIDIA Warp sim, Vulkan rendering.
+"""A twin-screw stern CAVITATING underwater -- NVIDIA Warp sim, Vulkan rendering.
 
 warp_nebula_vk.py proved the thesis on a cloud: particles carry the IMAGE, the
 field's own density volume carries the LIGHT TRANSPORT. A nebula is the easy
@@ -27,14 +27,57 @@ the bubbly wake shadows its own far side (T_sun), and the same particles
 resolve into vapour ropes wound around a lit column of bubbles. --flat at the
 same timestamp is the whole acceptance test.
 
+THERE IS A HULL OVER IT NOW, AND THE HULL IS NOT SET DRESSING. That was the
+trap this revision had to avoid: a stern lowered over perfectly STEADY
+cavitation quietly advertises the model's limits, because real cavitation next
+to a hull BREATHES once per revolution. The hull drags a boundary layer, the
+disc turns inside it, the blade sweeping through the slower water at twelve
+o'clock loads up, and the vapour blooms at the top of the disc every rev and
+corkscrews away downstream as a bright band. That breathing is the headline of
+this revision, it costs one scalar in the helm ring, and the second screw and
+the stern above it are the stage it is played on.
+
+    w(theta) = w_mean + w_peak lobe(theta)   the circumferential wake fraction
+    V_a      = V_ship (1 - w_mean)           the SPEED OF ADVANCE, which is
+                                             what J has always meant behind a
+                                             hull and is what the panel says
+    lambda   = K_T(J_local) / K_T(J)         the local loading, linearised, and
+                                             it multiplies the cavitation
+                                             criterion and NOTHING else
+
+    THE BOLLARD CONTROL IS DERIVED AND NOT AUTHORED. lambda's amplitude is
+    proportional to J -- see wake_lobe_k -- so at V_ship 0 there is no
+    breathing at all, because a boundary-layer shadow needs way through the
+    water. Push the ship-speed slider and the ropes start pulsing at the top
+    of the disc. There is no `if` anywhere in that sentence.
+
+TWO SCREWS, AND THEY ARE A MIRRORED PAIR. Outward-turning, as nearly every
+twin-screw ship is built: seen from astern the starboard screw runs clockwise
+and the port screw anticlockwise, so both tips sweep OUTBOARD over the top.
+The screw this demo always had turns its top toward +Z, which makes it the
+LEFT-HANDED PORT one -- that is a deduction from the axis convention, not a
+choice -- and the starboard screw is its reflection in z: mirrored loft with
+the winding flipped, reversed blade order, reversed pitch rotation, and in the
+kernel one sign on the last line. Half a blade pitch of phase between the
+shafts so they do not strobe together. `--view stern` is where the two helices
+are legible winding OPPOSITE ways in one frame, and `--view prop` / `--view
+stbd` are the same screw twice and have to be mirror images of each other.
+
     pip install warp-lang
     python warp_prop_vortex.py                   # window; PUSH ANY SLIDER
+    python warp_prop_vortex.py --shot 5.5 --rps 4.2 --speed 5
+                                                 # THE BREATHING: 0.90 x mean,
+                                                 # 1.21 x at twelve o'clock
+    python warp_prop_vortex.py --shot 5.5 --rps 4.2 --speed 5 --wake-peak 0
+                                                 # the same helm, lobe OFF
+    python warp_prop_vortex.py --shot 5.5 --rps 2.9    # the bollard control
+    python warp_prop_vortex.py --view stern      # both wakes, opposite senses
     python warp_prop_vortex.py --openwater       # the B-series check, then exit
     python warp_prop_vortex.py --shot 5.5        # 120 rpm: JUST BELOW inception
     python warp_prop_vortex.py --shot 5.5 --rps 3    # 180 rpm: ropes that END
     python warp_prop_vortex.py --shot 5.5 --rps 5    # 300 rpm: the whole wake boils
     python warp_prop_vortex.py --shot 5.5 --pitch 30 # same gate, other lever
-    python warp_prop_vortex.py --shot 5.5 --speed 4  # J 1.11: the screw BRAKES
+    python warp_prop_vortex.py --shot 5.5 --speed 4  # the ship has way on
     python warp_prop_vortex.py --shot 5.5 --rps 4 --speed 6   # J 0.83, eta_0 0.59
     python warp_prop_vortex.py --shot 5.5 --flat # the SAME frame, knobs at 0
     python warp_prop_vortex.py --depth 1.2       # shallower: it cavitates sooner
@@ -79,6 +122,15 @@ propeller family there is.
 The panel draws the open-water diagram live, with the operating point moving
 on it as the sliders move, and says "outside B-series validity" whenever a
 lever has pushed J or P/D past the box the regression was fitted over.
+
+--film STILL RUNS AND ITS CHOREOGRAPHY IS NOW OUT OF DATE, which is stated
+rather than quietly tolerated: the track was composed for one screw turning on
+the axis, and beat 3's push-in key is 0.89 m off the port wake's axis against a
+0.90 m tip radius -- the camera flies through the slipstream. The clearance
+check measures both shafts now and --film prints the warning every run. The
+beats, the helm schedule and the keyframe times are untouched; re-cutting the
+track is a film-v2 slice and taking the look budget for it here would have come
+out of the breathing this revision exists for.
 
 --film IS THE DEMO ARGUING ITS OWN CASE, and the argument it makes is that
 inception is a threshold rather than a look. Six beats and no cuts: a still
@@ -173,10 +225,13 @@ throttle step lights the new wake and leaves the old one dark.
            B-series validity box and the panel says so.
     omega  the shaft rate, 60..600 rpm, RPS_REF = 6 rev/s the reference.
            Tip speed 11 m/s at the default 120 rpm and 34 at 360.
-    V_a    the ship's speed of advance, 0..6 m/s, 0 by default. It is what
-           makes J = V_a / n D real, and with it eta_0.
+    V_ship the ship's speed through the water, 0..6 m/s, 0 by default. The
+           model's own input is the speed of ADVANCE, V_a = V_ship (1 - w_mean)
+           -- there is a hull in front of the disc now -- and it is what makes
+           J = V_a / n D real, and with it eta_0.
     hist   HIST_N vec4 (omega, theta, v_i, V_a), one per frame, one full slot
-           period deep, beside a vec2 (K_T/K_T_design, Burrill ratio) at the
+           period deep, beside a vec4 (K_T/K_T_design, Burrill ratio, the wake
+           lobe's amplitude, spare) at the
            same index. Written on the host at frame_no % HIST_N, read in the
            kernel at the parcel's OWN crossing frame. The split is measured
            rather than tidy: both vec2 entries are per-FRAME quantities, and
@@ -305,6 +360,20 @@ three metres of water -- which is what gives the bubble column a bright top and
 a dark belly, and it stays brighter than the rake because the billboards take
 the single brightest DirectionalLight as their sun.
 
+THE STERN IS FIRST-PARTY GEOMETRY, lofted from cross sections by the blade's
+own technique at ten times the size, and there is ONE THING IT CANNOT DO: the
+sprites' T_sun march samples the particle density volume and nothing else, so
+the hull does not shadow the wake. Geometry-aware sprite shadowing is a
+renderer feature and is out of scope here. What IS in scope is refusing to put
+the hull where the missing shadow can be read, so the key was raked down to
+the Snell floor and swung onto the QUARTER: every path from the slipstream to
+the sun now runs up and AFT, over open water, past a ship that ends at
+x = 1.06. The funnel and the first half metre of wake ARE under the counter
+and are lit as though they were not; they are silt motes and the dimmest thing
+in the frame. Rudders are out of scope for the same family of reason -- they
+would sit IN the slipstream, and this closed form has no interaction to give
+them.
+
 BillboardRepr::stretchSeconds is NOT used, and not for lack of trying: the
 backend gates the streak on `rendererOwned || hostPrevIsPrevStep`, and an
 Interop field is neither, so it is a hard no-op here (ParticleFieldPass.cpp).
@@ -366,6 +435,36 @@ R_TIP = 0.90                        # m
 R_HUB = 0.27       # the bulbous hub: a 5-blade CPP carries the whole pitch
                    # mechanism inside it, so hub/diameter is ~0.30, not 0.15
 R_PALM = 0.245     # radius at which a blade root meets its own flange
+# ── R2: TWO SCREWS, AND THE HANDEDNESS THAT MAKES THEM A PAIR ───────────────
+# A twin-screw ship does not carry two of the same propeller. It carries a
+# MIRRORED PAIR, turning in opposite senses, and the standard arrangement is
+# OUTWARD-TURNING: seen from astern the starboard screw runs clockwise and the
+# port screw anticlockwise, so both blade tips are moving OUTBOARD as they pass
+# top dead centre. (Outward turning keeps the blade tips out of the hull's own
+# boundary layer at the top of the disc and is what nearly every twin-screw
+# ship is built with.)
+#
+# WHICH ONE IS THE ONE THIS DEMO ALREADY HAD is a question with an answer, not
+# a choice. The wake blows toward +X, so +X is ASTERN and the ship's bow is
+# -X; with +Y up that makes +Z the PORT side. theta increases with time and a
+# point at (0, r, 0) rotates to (0, r cos, r sin), so the existing screw's top
+# moves toward +Z -- outboard, if and only if it sits on the port side. The
+# screw that shipped is therefore the LEFT-HANDED, PORT screw, and the new one
+# is its mirror image: right-handed, starboard, at -Z, turning -theta.
+#
+# Every consequence follows from ONE operation, applied at the very end of the
+# kernel and to the whole assembly in the scene: reflect z. The mesh mirrors
+# (with the winding flipped -- see blade_geometry, and see f2010a73 for what
+# forgetting that looks like), the blade order reverses, the pitch rotation
+# reverses, and in the kernel the helix, the swirl and the blade phase all
+# reverse together because they are all just z of a point that was reflected.
+# Nothing in the closed form has a handedness of its own to get wrong.
+SHAFT_Z = cli_arg("--shaft-z", 1.30 * R_TIP, float)   # m, half the spacing
+# A phase offset on the starboard shaft so the two sets of blades do not cross
+# top dead centre together. Half a blade pitch is the maximum possible
+# separation for identical shaft speeds, and it is what stops the pair reading
+# as one ten-bladed strobe when both wakes are in frame.
+PHASE_OFF = math.pi / BLADES        # rad, starboard blades vs port
 # ── THE HAPPY ACCIDENT: THIS IS VERY NEARLY A WAGENINGEN B5-75 ──────────────
 # The blade planform below was drawn to LOOK like a ship's CPP -- wide rounded
 # trapezoids, C_MAX 0.50 m on a 0.90 m radius -- and the expanded area that
@@ -592,7 +691,53 @@ def scheduled_beta(t):
 # exactly the flare the shipped demo already had, and closes down to something
 # barely wider than the disc once the ship is moving.
 VA_MIN, VA_MAX = 0.0, 6.0
-V_A = cli_arg("--speed", 0.0, float)        # m/s of advance; 0 = the bollard
+V_SHIP = cli_arg("--speed", 0.0, float)     # m/s through the water; 0 = bollard
+
+# ── R1: THE HULL'S WAKE, AND THE ONCE-PER-REV IT CAUSES ─────────────────────
+# There is a hull over these propellers now, and the single most consequential
+# thing a hull does to a screw is not to hide it: it drags a BOUNDARY LAYER,
+# and the disc turns inside it. The water arriving at the top of the disc --
+# nearest the hull -- has been slowed most; the water at the bottom is nearly
+# freestream. So the blade sweeps through a circumferentially varying advance
+# once every revolution, loads up at twelve o'clock, and a screw that is near
+# its threshold BREATHES: vapour blooms at the top of the disc, is shed there,
+# and corkscrews away downstream as a bright band on an otherwise even rope.
+# That is what cavitation next to a hull looks like in every photograph of it,
+# and a demo that put a hull over perfectly steady cavitation would be
+# advertising its own limits.
+#
+#   w(theta) = w_mean + w_peak * lobe(theta)      the wake fraction
+#   lobe     = ((1 + cos theta) / 2)^p - <that>   ZERO MEAN, peaked at TDC
+#   V_a      = V_ship (1 - w_mean)                the SPEED OF ADVANCE
+#
+# The zero mean is the whole discipline of it. w_mean is then the honest mean
+# wake fraction and V_a is the honest speed of advance, so the B-series
+# evaluation -- J, K_T, K_Q, T, Q, eta_0, the diagram and every readout hung
+# off them -- is done on the MEAN and stays exactly as citable as it was. The
+# peak term is a redistribution around that mean and is spent in ONE place: a
+# per-parcel loading factor lambda(theta_birth) on the cavitation criterion.
+# It never touches the momentum chain. If it did, the thrust readout would
+# stop matching the diagram the panel draws it on.
+#
+# W_MEAN 0.15 is a twin-screw stern's own number and not a single-screw one:
+# the shafts here run out well off the centreline, in water the hull has
+# disturbed far less than the water directly behind a single screw's deadwood
+# (a single-screw ship is 0.25-0.35, a twin with open shafts 0.10-0.20).
+# W_PEAK 0.30 puts the top of the disc at w 0.37 and the bottom at 0.07, which
+# is the kind of range a circumferential wake survey of a fine twin stern
+# actually draws.
+W_MEAN = cli_arg("--wake-frac", 0.15, float)    # mean wake fraction, hull
+W_PEAK = cli_arg("--wake-peak", 0.30, float)    # its peak-to-mean swing at TDC
+W_LOBE_P = 4.0          # how tightly the deficit is packed around top-dead-centre
+# The mean of ((1 + cos)/2)^p over the circle, which is what makes the peak
+# term integrate to zero. Closed form for even p; the quadrature is exact to
+# float and costs one import-time loop, which is cheaper than being wrong.
+W_LOBE_MEAN = sum((0.5 * (1.0 + math.cos(TWO_PI * k / 2048))) ** W_LOBE_P
+                  for k in range(2048)) / 2048.0        # 0.2734 at p = 4
+# The speed of advance: the ship's speed reduced by the mean wake fraction.
+# THIS is what J is built on, and it is the standard definition of advance
+# behind a hull. The panel says so, in words, beside the number.
+V_A = V_SHIP * (1.0 - W_MEAN)
 
 # ── THE WAGENINGEN B-SERIES OPEN-WATER POLYNOMIALS ──────────────────────────
 # Oosterveld, M.W.C. and van Oossanen, P., "Further Computer-Analyzed Data of
@@ -785,6 +930,40 @@ def burrill(st):
     tau_c = st.thrust / (0.5 * RHO * projected_area(st.pd) * vr2)
     line5 = BURRILL_5PCT * sigma ** BURRILL_P
     return sigma, tau_c, line5, max(tau_c, 0.0) / (BURRILL_INC * line5)
+
+
+def wake_lobe_k(st):
+    """The breathing's one number: lambda(theta) = 1 + k * lobe(theta).
+
+    A blade section at birth azimuth theta sees J_local = J (1 - w(theta)) /
+    (1 - w_mean), and what that does to its loading is dK_T/dJ times the
+    difference. Linearised about the operating point, the whole modulation
+    collapses to a single per-frame scalar:
+
+        k = -(dK_T/dJ) * J * w_peak / ((1 - w_mean) K_T)
+
+    and lambda multiplies the thrust loading in Burrill's tau_c, which is what
+    the vapour is gated on. THE BOLLARD CONTROL IS BUILT IN AND NOT AUTHORED:
+    k is proportional to J, so at V_ship = 0 it is exactly zero and the ropes
+    do not breathe at all. A boundary-layer shadow needs way through the water,
+    and this is that sentence in arithmetic rather than in an `if`.
+
+    dK_T/dJ is central-differenced on the same polynomial the wake is drawn
+    from -- 78 more multiply-adds once per FRAME, against the 1.7 million
+    per-parcel evaluations the helm ring exists to avoid.
+
+    THE CLAMP IS REAL: past the zero-thrust J, K_T goes through zero and the
+    ratio diverges. A screw that close to windmilling is not cavitating at all
+    (tau_c has gone to zero with it), so the clamp is never the operating
+    regime -- it is there so a slider dragged to the end of its travel cannot
+    put a NaN in the ring."""
+    if st.j <= 1.0e-6 or st.kt <= 1.0e-4:
+        return 0.0
+    jc = min(max(st.j, J_LO), J_HI)
+    pdc = min(max(st.pd, PD_LO), PD_HI)
+    hi, lo = min(jc + 0.01, J_HI), max(jc - 0.01, J_LO)
+    dkt = (_poly(_KT, hi, pdc) - _poly(_KT, lo, pdc)) / max(hi - lo, 1.0e-6)
+    return min(max(-dkt * st.j * W_PEAK / ((1.0 - W_MEAN) * st.kt), 0.0), 1.5)
 
 
 def inception_rpm(beta_deg, va, hub=False):
@@ -1217,8 +1396,22 @@ IN_GAIN_FAR = 0.30       # x that, at the mouth: the far end is much fainter
 # from reading as a blob). It is a knob now -- BillboardRepr.core_weight, 0.85
 # being the old hardcoded constant -- and this demo turns it OFF below, which
 # is what lets the default read smooth where it used to take --n 5000000 to
-# average the dots away. 1.7M is where the 25 fps floor puts the default on a
-# 4070 at 1280x800 -- 44.2 ms at 2M, 40.4 at 1.7M, 38.2 flat.
+# average the dots away. 1.7M is where the 25 fps floor USED to put the
+# default on a 4070 at 1280x800 -- 44.2 ms at 2M, 40.4 at 1.7M, 38.2 flat.
+#
+# ── AND THE TWIN STERN MISSED THAT FLOOR, WHICH IS SAID HERE RATHER THAN
+# ── QUIETLY ABSORBED. 46.2 ms volumetric and 39.9 flat at the same count and
+# the same size (three interleaved rounds on a quiet 4070, spread 0.2% and
+# 1.7%), against 40.4 and 38.2 before. That is 22 fps where the documented
+# floor is 25, and the whole of the 5.9 ms is the VOLUME rather than the ship:
+# the same wide box at the old 160^3 lattice benches 44.0, so ~2.3 ms is the
+# box that had to cover two wakes and ~3.6 ms is the resolution that had to go
+# up with it to hold the voxel edge -- the self-shadowing this demo is graded
+# on lives on that edge (see BOX_HALF). The hull, the second screw and the
+# breathing together are inside the noise: flat moved 1.7 ms for all of them.
+# --vol-res 160 buys the floor back at the price of a 36 mm lateral voxel, and
+# --n 1400000 buys it back without touching the lattice; neither is the
+# default, because the default is the picture.
 
 # ── The look ────────────────────────────────────────────────────────────────
 # The density volume is LATCHED at these bounds and never refitted: a box that
@@ -1248,9 +1441,31 @@ IN_GAIN_FAR = 0.30       # x that, at the mouth: the far end is much fainter
 # 4.80 and 0.77 -- came out bit for bit the same and BOX_VOX_RATIO below
 # re-derives to exactly the value it had. Re-read it anyway when either length
 # moves; that is the trap it exists for.
+#
+# ── AND THEN THE SECOND SCREW WIDENED IT, WHICH IS THE TRAP IT WARNED ABOUT ─
+# Two wakes at z = +-SHAFT_Z need a box that covers both: 1.17 + 1.20 = 2.37
+# each side, which is 1.98x the width the lattice was cut for. Left at
+# BOX_RES 160 that would coarsen the lattice ACROSS the slipstream by exactly
+# that factor -- and lateral resolution across the tube is the one axis the
+# self-shadowing lives on (the v7 lesson: coarsen it and the sunward flank
+# stops separating from the belly). So the resolution goes up with the box and
+# the rule is stated as a rule: the voxel EDGE stays within 1.2x of what it
+# was, on every axis.
+#
+#   was  5.70 x 2.40 x 2.40 m over 160^3   = 35.6 x 15.0 x 15.0 mm
+#   now  5.70 x 2.40 x 4.74 m over 264^3   = 21.6 x  9.1 x 18.0 mm
+#
+# The lateral edge grows 1.20x -- exactly the budget -- and the other two
+# SHRINK by 1.65x, which is free detail along the wake and across the tube and
+# is paid for in memory rather than in milliseconds (the marches are a fixed
+# 8 steps whatever the lattice is; only the scatter's write locality moves).
+# The banner prints the bill. ONE ParticleField, not two: a second field would
+# double the pass, the volume and the plumbing for two wakes that have to
+# share a lattice anyway if either is ever to shadow the other.
 BOX_CENTER = (2.00, 0.0, 0.0)
-BOX_HALF = (2.85, 1.20, 1.20)
-BOX_RES = cli_arg("--vol-res", 160, int)
+BOX_HALF = (2.85, 1.20, SHAFT_Z + 1.20)
+BOX_RES = cli_arg("--vol-res", 264, int)
+BOX_RES_REF = 160                   # the lattice SIGMA was tuned against
 BOX_HALF_REF = (2.45, 1.20, 1.20)   # the pre-inflow box SIGMA was tuned against
 # sigma_t one particle contributes, and it pays TWO rents. WAKE_SHARE is the
 # one BRIGHT pays: fewer parcels downstream is less optical depth downstream.
@@ -1260,8 +1475,18 @@ BOX_HALF_REF = (2.45, 1.20, 1.20)   # the pre-inflow box SIGMA was tuned against
 # proportional to the voxel volume while the 8-step march's ds cancels. Grow the
 # box 10% and the whole wake gets 10% thicker for no reason anyone would guess
 # from the diff. Divide it back out here and the box is free to move.
-BOX_VOX_RATIO = (BOX_HALF[0] * BOX_HALF[1] * BOX_HALF[2]) \
-    / (BOX_HALF_REF[0] * BOX_HALF_REF[1] * BOX_HALF_REF[2])
+#
+# AND IT IS A VOXEL RATIO, NOT A BOX RATIO, which only became visible the
+# moment BOX_RES moved with the box. The quantity that matters is the volume
+# of ONE CELL -- that is what decides how many parcels a cell catches -- so the
+# resolution belongs in it cubed. Widening the box 1.98x laterally while
+# raising the lattice 1.65x on every axis leaves each cell 0.51x its old
+# volume, so each parcel now has to deposit ~2x the sigma it did. Read the
+# comment above and then read this line: the box ratio alone would have got
+# the sign of the correction right and the size of it wrong by 4.4x.
+BOX_VOX_RATIO = (BOX_HALF[0] * BOX_HALF[1] * BOX_HALF[2]
+                 / (BOX_HALF_REF[0] * BOX_HALF_REF[1] * BOX_HALF_REF[2])) \
+    * (float(BOX_RES_REF) / float(BOX_RES)) ** 3
 # 0.32 -> 0.50, and the extra depth is the second half of the body fix. On its
 # own more sigma only darkened (the medium had no albedo to scatter with); with
 # VOL_ALBEDO raised it is what makes the column SHADOW ITSELF -- a thin medium
@@ -1277,7 +1502,24 @@ BOX_VOX_RATIO = (BOX_HALF[0] * BOX_HALF[1] * BOX_HALF[2]) \
 # slightly murkier far wake and nobody caught it; the moment the medium carries
 # light it is unmissable, and 9M came out as milk with the ropes gone. Optical
 # depth is a property of the AIR, not of how finely one chooses to sample it.
-SIGMA = cli_arg("--sigma", 0.42, float) * (2_000_000 / N) \
+# ── R5: TWO WAKES OUT OF ONE BUDGET, AND WHAT IT COSTS PER WAKE ─────────────
+# The slots split 50/50 between the screws, so each wake is drawn with half the
+# parcels per metre it had -- and parcels per metre is exactly what both the
+# radiance and the optical depth are made of. Doubling N would put it back and
+# is the wrong answer: N is the SMOOTHNESS dial (see THE N CONTRACT) and this
+# is a BODY problem, so it is paid for the way every body problem in this file
+# is paid for, by moving the per-parcel quantities under the same flux
+# discipline that already holds BRIGHT and SIGMA invariant in N.
+#
+# 1.4 AND NOT 2.0, and the 0.7 that leaves per wake is deliberate rather than
+# timid. Two slipstreams are in frame now and a good deal of the time one is
+# behind the other, so a per-wake restoration to 1.0 puts more light and more
+# tau on the film than the single-screw frame ever had. 1.4 was judged at the
+# v8/v9 mid-wake crop: the near wake reads at the density it had, and the pair
+# does not add up to milk. It is one number for both because they are the same
+# claim -- if a wake is half as dense it is half as bright AND half as deep.
+TWIN_BOOST = cli_arg("--twin-boost", 1.4, float)
+SIGMA = cli_arg("--sigma", 0.42, float) * (2_000_000 / N) * TWIN_BOOST \
     / (WAKE_SHARE * BOX_VOX_RATIO)
 EXPOSURE = cli_arg("--exposure", 1.0, float)
 EXTINCTION = 0.0 if FLAT else cli_arg("--extinction", 1.0, float)
@@ -1313,7 +1555,7 @@ SHADOW = 0.0 if FLAT else cli_arg("--shadow", 0.72, float)
 # CONSTANT and deliberately not a function of --rps: the throttle's own
 # invariance is the thing being re-anchored, not the thing being overridden.
 OMG_OP = OM_G_FLOOR + (1.0 - OM_G_FLOOR) * (RPS_OP / RPS_REF)
-BRIGHT = cli_arg("--bright", 0.038, float) * (2_000_000 / N) \
+BRIGHT = cli_arg("--bright", 0.038, float) * (2_000_000 / N) * TWIN_BOOST \
     / (WAKE_SHARE * OMG_OP)
 # ── THE N CONTRACT: N BUYS SMOOTHNESS, NEVER BODY ───────────────────────────
 # Worth stating outright, because the natural response to a thin-looking wake
@@ -1363,13 +1605,22 @@ BRIGHT = cli_arg("--bright", 0.038, float) * (2_000_000 / N) \
 def shed(out_pos: wp.array(dtype=wp.vec4),
          out_col: wp.array(dtype=wp.vec4),
          hist: wp.array(dtype=wp.vec4),
-         helm: wp.array(dtype=wp.vec2),
+         helm: wp.array(dtype=wp.vec4),
          t: float, n: int, blades: int,
          turb: float, sheet: float, hub_share: float,
          burst: float, sprite_r0: float, flux_p: float, bright: float,
          t_in: float, in_share: float, hist_n: int,
          tip_hint: float, vap_gain: float, bub_cav: float):
     i = wp.tid()
+    # ── WHICH SHAFT, BY PARITY ──────────────────────────────────────────────
+    # An even slot is the PORT screw, an odd one the STARBOARD, so the split is
+    # exactly 50/50 with no draw and no state, and every population -- tips,
+    # sheet, hub -- splits with it. sgn is the reflection: the whole closed form
+    # below is evaluated in ONE screw's frame and the last line of the kernel
+    # mirrors z and slides the result out to its own shaft. Counter-rotation,
+    # the opposite helix handedness and the opposite swirl are not three things
+    # to implement; they are one reflection of a point.
+    sgn = 1.0 - 2.0 * float(i & 1)              # +1 port (+Z), -1 starboard
     s = wp.rand_init(90210, i)
     # The inflow leg's own stream, drawn from a SEPARATE seed so that adding
     # this leg did not renumber a single one of the wake's random draws -- the
@@ -1492,6 +1743,7 @@ def shed(out_pos: wp.array(dtype=wp.vec4),
     va = h[3]
     ld = hl[0]                                  # K_T / K_T_design at birth
     caq = hl[1]                                 # Burrill ratio at birth
+    lamk = hl[2]                                # the wake lobe's own amplitude
     # The two legs' own speeds, before the per-span lag below.
     u_d0 = va + vi
     u_w0 = va + 2.0 * vi
@@ -1573,7 +1825,11 @@ def shed(out_pos: wp.array(dtype=wp.vec4),
     umin = U_FLOOR * om * R_TIP + 0.10 * va
     u_w = wp.max(u_w0, umin) * ax
     u_d = wp.max(u_d0, umin) * ax
-    phi_c = th_b + float(blade) * TWO_PI / float(blades)
+    # The blade phase, plus half a blade pitch on the starboard shaft so the
+    # two screws do not cross top dead centre together. It goes in HERE, in the
+    # crossing azimuth, which is the one place both legs and the mesh agree on.
+    phi_c = th_b + float(blade) * TWO_PI / float(blades) \
+        + wp.where(sgn < 0.0, PHASE_OFF, 0.0)
 
     x = float(0.0)
     r = r0
@@ -1677,8 +1933,29 @@ def shed(out_pos: wp.array(dtype=wp.vec4),
         # One comparison, evaluated on the helm as it stood when the blade cut
         # this parcel. The hub reads the same number with a 12% head start,
         # which is the whole reason its rope lights first.
-        cq = caq
+        # ── AND THE HULL'S SHADOW BREATHES IT ───────────────────────────────
+        # lambda is the LOCAL loading at this parcel's own birth azimuth,
+        # relative to the mean the whole momentum chain is anchored on: the
+        # blade at twelve o'clock is inside the hull's boundary layer, sees a
+        # lower advance and is working harder, and the blade at six o'clock is
+        # in nearly clean water and is not. lamk carries the entire
+        # linearisation (see wake_lobe_k) and it is proportional to J, so the
+        # bollard needs no special case -- lamk is zero there and the rope is
+        # as steady as it was before there was a hull.
+        #
+        # IT MULTIPLIES THE CRITERION AND NOTHING ELSE. Not u_w, not u_d, not
+        # ld: the thrust, the torque, the slipstream speed and the helix
+        # spacing all belong to the MEAN and have to keep matching the diagram
+        # the panel draws them on. What breathes is the vapour -- intensity,
+        # core width and rope length, all of which hang off exc below.
+        lobe = wp.pow(0.5 * (1.0 + wp.cos(phi_c)), W_LOBE_P) - W_LOBE_MEAN
+        cq = caq * wp.max(1.0 + lamk * lobe, 0.0)
         if is_hub:
+            # The hub rope is born ON the axis, where there is no azimuth to
+            # be modulated at -- the circumferential deficit is a property of
+            # the disc's rim, not of its centre. So the axial rope stays STEADY
+            # while the helices pulse, which is both the physics and, as a
+            # bonus, the control that makes the pulsing legible.
             cq = caq * HUB_CAV
         exc = wp.max(cq - 1.0, 0.0)          # the EXCESS over the margin
         # (the excess is now over the Burrill INCEPTION LINE rather than over
@@ -1802,7 +2079,19 @@ def shed(out_pos: wp.array(dtype=wp.vec4),
         gain = gain * SHEET_GAIN
     c = c * (bright * gain)
 
-    out_pos[i] = wp.vec4(p[0], p[1], p[2], sprite_r0 * grow)
+    # ── THE REFLECTION, AND IT IS THE LAST THING THAT HAPPENS ───────────────
+    # Everything above ran in ONE screw's frame -- the port one, which is the
+    # screw this demo has always had. A starboard parcel is that parcel
+    # reflected in the ship's centreline plane, and reflecting z is the whole
+    # of it: the helix winds the other way, the swirl turns the other way, the
+    # blade phase runs the other way, and the mesh does the same reflection so
+    # the filaments stay welded to the tips that made them.
+    #
+    # It is done AFTER the turbulence on purpose. The curl noise is sampled at
+    # the Lagrangian label, so the two screws' wobbles are already independent
+    # realisations; reflecting the sum rather than the position keeps the
+    # displacement attached to the filament it belongs to.
+    out_pos[i] = wp.vec4(p[0], p[1], sgn * (p[2] + SHAFT_Z), sprite_r0 * grow)
     out_col[i] = wp.vec4(c[0], c[1], c[2], 1.0)
 
 
@@ -1880,14 +2169,43 @@ if MURK > 0.0:
 # turned one into the other. Three-quarter angles flatter the propeller and
 # lose both. A crop centred on the blade is the acceptance test.
 VIEW = cli_arg("--view", "side", str)
-CAMS = {"side":  ((1.10, 0.56, 3.00), (1.42, -0.02, 0.0)),
-        "mouth": ((0.45, 0.60, 5.60), (0.95, -0.05, 0.0)),
+        # ── AND IT MOVED OUT FOR THE SECOND SCREW, BY EXACTLY ITS SPACING ───
+        # "side" used to sit 3.00 m off a wake on the axis. There are two wakes
+        # now, 2.34 m apart, and the shot that reads is the one down the PORT
+        # slipstream with the starboard one running away behind it -- so the
+        # eye moved out by the shaft offset and the aim moved half of it. The
+        # near wake is still 3.0 m from the lens, which is what keeps a 1:1
+        # mid-wake crop comparable with every crop taken before the pair
+        # existed; that was the point of moving it this way rather than simply
+        # pulling back.
+        # AND IT DROPPED BELOW THE SHAFT LINE FOR THE HULL. A stern is read
+        # from UNDERNEATH -- the counter overhead, the screws hanging out of
+        # it, the slipstreams running aft under open water -- and a camera
+        # above the shaft looks down at the ship's FLANK instead, which is a
+        # wall of paint with no shape in it. The eye is 0.45 m under the shaft
+        # and the aim 0.3 m over it, so the counter closes the top of the frame
+        # and the wake owns the middle of it.
+CAMS = {"side":  ((1.02, -0.45, 3.00 + SHAFT_Z), (1.44, 0.26, 0.5 * SHAFT_Z)),
+        "mouth": ((0.45, 0.60, 7.40), (0.95, -0.05, 0.0)),
         # "prop" is the geometry's own shot and nothing else's: close enough
         # that a 2 cm bolt head is several pixels, three-quarters on so the
         # flange discs are ellipses rather than edge-on lines, and aimed at the
         # hub so the blade roots and their bolt circles fill the frame. It is
         # deliberately NOT a framing the wake reads well at.
-        "prop":  ((1.25, 0.62, 2.15), (0.06, 0.0, 0.0))}
+        "prop":  ((1.25, 0.62, 2.15 + SHAFT_Z), (0.06, 0.0, SHAFT_Z)),
+        # "stbd" is "prop" REFLECTED, and it exists as a view because it is the
+        # acceptance test for R2: the starboard screw is supposed to be the
+        # port screw's mirror image, so these two frames have to be mirror
+        # images of each other -- same bronze, same lighting sense reversed,
+        # same blades leaning the other way. A mirrored loft whose winding was
+        # not flipped shades BLACK, and putting the two crops side by side is
+        # the fastest way there is to see that it did not.
+        "stbd":  ((1.25, 0.62, -2.15 - SHAFT_Z), (0.06, 0.0, -SHAFT_Z)),
+        # "stern" is the pair's own shot and the one frame the counter-rotation
+        # is legible in: high on the port quarter, looking forward and down the
+        # two slipstreams at once, so both helices show their handedness in the
+        # same image and wind visibly OPPOSITE ways.
+        "stern": ((6.60, 2.85, 5.60), (0.80, -0.05, 0.0))}
 CAM_P, CAM_T = CAMS[VIEW if VIEW in CAMS else "side"]
 camera = tp.PerspectiveCamera(46, canvas.aspect(), 0.02, 200)
 camera.position.set(cli_arg("--cam-x", CAM_P[0], float),
@@ -1907,8 +2225,35 @@ camera.look_at(*CAM_T)
 # the payoff is the bubble column: a bright top and a dark belly, which is what
 # every photograph of a working screw looks like and what the flat-lit air
 # version never had.
+#
+# ── AND THEN THE HULL MOVED IT ONTO THE QUARTER ─────────────────────────────
+# The sprites' T_sun march samples the density volume alone, so the stern above
+# these screws does not shadow their wakes. That is a renderer limit and it is
+# out of scope to fix; what is in scope is refusing to put the hull where the
+# missing shadow is READABLE. So the key was raked down and swung aft, and the
+# geometry of it is the whole of the staging:
+#
+#   from any point in the slipstream, the path to this sun runs UP AND AFT --
+#   +X, away from a hull that ends at x = 0.62 -- so it crosses open water for
+#   its entire length and there is nothing there to have cast a shadow.
+#
+# It was (-0.55, 3.10, -1.55): 62 deg up, off the BOW. Every ray from the wake
+# to that sun went forward and up, straight through eight metres of ship.
+#
+# 43 DEGREES IS A FLOOR AND NOT A PREFERENCE. Refraction packs the entire sky
+# into Snell's 48.6 deg cone, so underwater there is no such thing as a sun
+# lower than 41.4 deg above the horizontal however low the real one is. This
+# sits just inside that, which is as raking as downwelling light is allowed to
+# be -- and it keeps the column's bright top and dark belly, because 0.69 of
+# this direction is still straight up.
+#
+# WHAT IS STILL DISHONEST, stated rather than hidden: the funnel and the first
+# half-metre of slipstream ARE under the counter and are lit as though they
+# were not. They are suspended silt and the dimmest thing in the frame, and
+# everything the eye actually reads -- the ropes, the column, the collapse --
+# is aft of the transom in genuinely open water.
 sun = tp.DirectionalLight(0xB6D2FF, 2.3)
-sun.position.set(-0.55, 3.10, -1.55)
+sun.position.set(2.05, 2.55, -1.75)
 scene.add(sun)
 
 # The RAKE -- the second half of "the prop is not a hole". It exists for the
@@ -1941,6 +2286,21 @@ scene.add(rake)
 # 1.5 to pay for the dimmer sun; checked against --view prop, not against the
 # wake shot, because the wake does not care and the bronze does.
 scene.add(tp.AmbientLight(0x628A94, 1.3))
+# ── AND THE HULL NEEDED ONE MORE, WHICH THE WATER WAS ALREADY OWED ──────────
+# The key is downwelling and the counter faces DOWN, so with two lights the
+# whole underside of the ship went to black and the screws hung out of a void:
+# the one thing R4 exists to show -- propellers under a hull -- was the thing
+# that could not be seen. What lights the underside of a hull in every piece of
+# diver's footage is the water itself: the column below and the bottom beyond
+# it scatter the downwelling light back UP, and a hull's belly is lit by that
+# and by nothing else. It is a fill, it is cold and green like the murk it
+# comes out of, and it is a fifth of the key -- well under it, because a
+# DirectionalLight brighter than the sun would steal the billboards' own sun
+# (they take the brightest one in the scene) and flip the whole wake to a
+# front-lit read.
+upwell = tp.DirectionalLight(0x7FB6A8, 0.80)
+upwell.position.set(-1.20, -2.40, 1.35)
+scene.add(upwell)
 
 
 # ── The propeller: a MARINE CONTROLLABLE-PITCH prop, from primitives ────────
@@ -1977,7 +2337,7 @@ BOLT_CIRCLE = 0.128     # m
 FLANGE_R = 0.165        # m, the palm disc
 
 
-def blade_geometry(stations=18, around=14):
+def blade_geometry(stations=18, around=14, mirror=False):
     """One wide, skewed, twisted marine blade, lofted from cambered sections.
 
     Span runs along +Y from the palm to R_TIP, chord along Z, and each section
@@ -1991,6 +2351,17 @@ def blade_geometry(stations=18, around=14):
     rotation there and the slider adds (beta - BETA_DESIGN) about the same
     spanwise axis the sections were already rotated about. Neutral is neutral
     by construction rather than by a magic offset.
+
+    mirror=True IS THE STARBOARD SCREW, and it is a reflection in z -- the same
+    operation the kernel applies to every parcel. A reflection reverses
+    ORIENTATION, so every triangle has to be wound back the other way or
+    compute_vertex_normals() hands the blade a normal pointing into the solid
+    and the casting shades black on the face the camera can see. That is not a
+    hypothetical: it is exactly what this loft did the first time it was
+    written (see WINDING below), and mirroring is the one operation guaranteed
+    to reproduce it. The uv is left alone -- u is a triangle wave about the
+    seam and already mirrors the two faces, and a wear map has no direction in
+    it to get wrong.
     """
     import numpy as np
     sp = np.linspace(R_PALM, R_TIP, stations)
@@ -2065,6 +2436,9 @@ def blade_geometry(stations=18, around=14):
         for j in range(1, around - 1):
             tri = [base, base + j, base + j + 1]
             idx += tri[::-1] if flip else tri
+    if mirror:
+        v[:, :, 2] = -v[:, :, 2]
+        idx = [idx[k + o] for k in range(0, len(idx), 3) for o in (2, 1, 0)]
     g = tp.BufferGeometry()
     g.set_attribute("position", v.reshape(-1, 3))
     g.set_attribute("uv", uv.reshape(-1, 2))
@@ -2153,70 +2527,372 @@ polish.roughness = 0.24
 # there is then a stationary ring and a rotating one in contact, so a pitch
 # change is visible as ten bolts walking round a collar and not merely as a
 # blade that happens to look different.
-prop = tp.Group()
-hub = tp.Mesh(tp.SphereGeometry(R_HUB, 40, 26), metal)
-prop.add(hub)
-# The shaft, coming forward out of the picture: without it the hub floats.
-shaft = tp.Mesh(tp.CylinderGeometry(0.115, 0.115, 0.34, 24), polish)
-shaft.rotate_z(math.pi / 2)                  # the cylinder's own axis is Y
-shaft.position.x = -0.28
-prop.add(shaft)
-# The cap: a bolted ring flange, then the dome. Aft (+X), downstream, which on
-# this axis convention is the side the wake leaves from.
-cap_ring = tp.Mesh(tp.CylinderGeometry(0.198, 0.208, 0.048, 40), polish)
-cap_ring.rotate_z(math.pi / 2)
-cap_ring.position.x = 0.222
-prop.add(cap_ring)
-dome = tp.Mesh(tp.SphereGeometry(0.192, 32, 18, 0.0, TWO_PI, 0.0, math.pi / 2),
-               polish)
-dome.rotate_z(-math.pi / 2)                  # the +Y pole becomes +X
-dome.position.x = 0.243
-prop.add(dome)
-
+HUB_G = tp.SphereGeometry(R_HUB, 40, 26)
+SHAFT_G = tp.CylinderGeometry(0.115, 0.115, 2.90, 24)
+CAPR_G = tp.CylinderGeometry(0.198, 0.208, 0.048, 40)
+DOME_G = tp.SphereGeometry(0.192, 32, 18, 0.0, TWO_PI, 0.0, math.pi / 2)
 BOLT_G = tp.CylinderGeometry(0.0195, 0.0215, 0.028, 8)   # a hex-ish head
-for k in range(12):                          # the cap's own bolt circle
-    ang = (k + 0.5) * TWO_PI / 12
-    bolt = tp.Mesh(BOLT_G, polish)
-    bolt.rotate_z(math.pi / 2)
-    bolt.position.set(0.240, 0.163 * math.cos(ang), 0.163 * math.sin(ang))
-    prop.add(bolt)
-
-bg = blade_geometry()
 SEAT_G = tp.CylinderGeometry(0.186, 0.192, 0.030, 40)
 PALM_G = tp.CylinderGeometry(FLANGE_R, FLANGE_R + 0.018, 0.052, 40)
-pivots = []
-for b in range(BLADES):
-    arm = tp.Group()
-    arm.rotate_x(b * TWO_PI / BLADES)        # same offset the kernel uses
-    seat = tp.Mesh(SEAT_G, polish)           # fixed to the hub
-    seat.position.y = R_PALM - 0.036
-    arm.add(seat)
-    pivot = tp.Group()
-    palm = tp.Mesh(PALM_G, polish)
-    palm.position.y = R_PALM - 0.004
-    pivot.add(palm)
-    for k in range(BOLTS):
-        ang = (k + 0.5) * TWO_PI / BOLTS
+BLADE_G = (blade_geometry(mirror=False), blade_geometry(mirror=True))
+
+
+def build_screw(mirror):
+    """One complete screw and its pitch pivots.
+
+    THE STARBOARD ONE IS THE PORT ONE REFLECTED IN z, and it is built by
+    reflecting the three things that have a handedness rather than by writing a
+    second assembly: the blade loft (mirror=True, winding flipped), the blade
+    ORDER around the hub (the arm rotation reverses), and the spindle rotation
+    the pitch slider drives (see set_pitch). Everything else in here is a body
+    of revolution about the shaft and is its own mirror image."""
+    g = tp.Group()
+    g.add(tp.Mesh(HUB_G, metal))
+    # The shaft, running forward to the bracket and on into the hull: without
+    # something at the far end of it the hub floats, which was survivable when
+    # there was nothing else in frame and is not now that there is a stern
+    # over it.
+    shaft = tp.Mesh(SHAFT_G, polish)
+    shaft.rotate_z(math.pi / 2)                  # the cylinder's own axis is Y
+    shaft.position.x = -1.56
+    g.add(shaft)
+    # The cap: a bolted ring flange, then the dome. Aft (+X), downstream, which
+    # on this axis convention is the side the wake leaves from.
+    cap_ring = tp.Mesh(CAPR_G, polish)
+    cap_ring.rotate_z(math.pi / 2)
+    cap_ring.position.x = 0.222
+    g.add(cap_ring)
+    dome = tp.Mesh(DOME_G, polish)
+    dome.rotate_z(-math.pi / 2)                  # the +Y pole becomes +X
+    dome.position.x = 0.243
+    g.add(dome)
+
+    for k in range(12):                          # the cap's own bolt circle
+        ang = (k + 0.5) * TWO_PI / 12
         bolt = tp.Mesh(BOLT_G, polish)
-        bolt.position.set(BOLT_CIRCLE * math.sin(ang), R_PALM + 0.030,
-                          BOLT_CIRCLE * math.cos(ang))
-        pivot.add(bolt)
-    pivot.add(tp.Mesh(bg, metal))
-    arm.add(pivot)
-    prop.add(arm)
-    pivots.append(pivot)
+        bolt.rotate_z(math.pi / 2)
+        bolt.position.set(0.240, 0.163 * math.cos(ang), 0.163 * math.sin(ang))
+        g.add(bolt)
+
+    pvs = []
+    for b in range(BLADES):
+        arm = tp.Group()
+        # The same offset the kernel uses, with the same reflection: a mirrored
+        # screw's blades run round the hub the other way.
+        arm.rotate_x((-1.0 if mirror else 1.0) * b * TWO_PI / BLADES)
+        seat = tp.Mesh(SEAT_G, polish)           # fixed to the hub
+        seat.position.y = R_PALM - 0.036
+        arm.add(seat)
+        pivot = tp.Group()
+        palm = tp.Mesh(PALM_G, polish)
+        palm.position.y = R_PALM - 0.004
+        pivot.add(palm)
+        for k in range(BOLTS):
+            ang = (k + 0.5) * TWO_PI / BOLTS
+            bolt = tp.Mesh(BOLT_G, polish)
+            bolt.position.set(BOLT_CIRCLE * math.sin(ang), R_PALM + 0.030,
+                             BOLT_CIRCLE * math.cos(ang))
+            pivot.add(bolt)
+        pivot.add(tp.Mesh(BLADE_G[1 if mirror else 0], metal))
+        arm.add(pivot)
+        g.add(arm)
+        pvs.append(pivot)
+    return g, pvs
+
+
+# PORT is +Z and is the screw this demo has always had; STARBOARD is -Z and is
+# its mirror image. See R2 up beside SHAFT_Z for why that assignment is forced
+# rather than chosen.
+prop, pivots = build_screw(False)
+prop.position.z = SHAFT_Z
 scene.add(prop)
+prop_s, pivots_s = build_screw(True)
+prop_s.position.z = -SHAFT_Z
+scene.add(prop_s)
 
 
 def set_pitch(beta_deg):
-    """Turn every blade in its flange. The loft is authored at BETA_DESIGN, so
-    this is a DELTA about the spindle -- zero rotation is the designed blade.
-    The sign is the loft's: a section's chord goes to -X as its pitch angle
-    grows, and a +Y rotation takes it to +X, so more pitch is a NEGATIVE
-    rotation about the spindle."""
+    """Turn every blade in its flange, on both shafts. The loft is authored at
+    BETA_DESIGN, so this is a DELTA about the spindle -- zero rotation is the
+    designed blade. The sign is the loft's: a section's chord goes to -X as its
+    pitch angle grows, and a +Y rotation takes it to +X, so more pitch is a
+    NEGATIVE rotation about the spindle -- and a POSITIVE one on the mirrored
+    screw, because a reflection reverses the sense of every rotation about an
+    axis lying in its plane. Get this one backwards and the two screws feather
+    in opposite directions, which the film's beat 5 would show immediately."""
     d = -math.radians(beta_deg - BETA_DESIGN)
     for pv in pivots:
         pv.rotation.y = d
+    for pv in pivots_s:
+        pv.rotation.y = -d
+
+# ── R4: THE STERN THE SCREWS HANG UNDER ─────────────────────────────────────
+# A hull is what makes a twin screw a SHIP and it is what R1's wake deficit is
+# a consequence of, so it has to be here and it has to be first-party. It is
+# the blade loft's own technique at ten times the size: a rake of cross
+# sections along x, quads between neighbours, both ends capped, one closed
+# solid. Eight metres of run, a counter that rises over the discs, a centreline
+# skeg, bossings that fair the shafts into the underbody, and a transom just
+# aft of the disc plane so the slipstream runs into open water at once.
+#
+# WHAT IT IS NOT is as important. No rudders: they would sit IN the slipstream
+# and this closed form has no interaction to give them, so a rudder would be
+# the one piece of geometry in the frame that is visibly lying (out of scope,
+# stated in the plan). No propeller-hull interaction beyond R1's own wake
+# fraction. No plating detail, no weld seams, no name on the transom: the
+# silhouette is the deliverable at this framing distance and detail on a shape
+# that is not right is what makes a model read as amateur.
+#
+# ── THE ONE DISHONESTY, AND WHY IT IS STAGED RATHER THAN CODED ──────────────
+# The sprites' T_sun march samples the particle density volume and NOTHING
+# else, so this hull does not shadow the wake. Geometry-aware sprite shadowing
+# is a renderer feature and is out of scope here. What is IN scope is not
+# putting the hull where the missing shadow can be read: the sun is raked down
+# to the Snell floor and swung onto the QUARTER, so its path from the wake goes
+# up and AFT over open water and never crosses the hull at all -- see the sun
+# below. What remains under the counter is the funnel and the first half metre
+# of slipstream, which are silt motes and the dimmest part of the frame.
+HULL_X0, HULL_X1 = -8.60, 1.06      # the run this section covers, m
+WATERLINE = DEPTH                   # y of the surface: the shaft is 3 m down
+HULL_TOP = WATERLINE + 0.30         # the deck edge, and it is never in frame
+# (x, y of the underside on the centreline, half beam, section fullness).
+# FULLNESS is the exponent in z = z_keel + (B - z_keel) sin(pi u / 2)^p and it
+# is what makes this read as a stern rather than as a hull: p well UNDER 1 is a
+# full, flat-bottomed section that carries its beam right down to the keel,
+# which is exactly what a counter over a pair of propellers is. The first cut
+# used p > 1 -- a fine V, which is what a bow looks like -- and the result put
+# the hull's surface 1.5 m above the blade tips at the shaft's own z, so the
+# screws hung in open water under a distant roof and the stern read as scenery
+# rather than as the thing they are bolted to.
+#
+# THE TIP CLEARANCE IS THE NUMBER TO CHECK and the banner prints it: the
+# underside directly over each disc lands ~0.45 m over a 0.90 m tip, which is
+# 0.25 D and is what a real twin-screw arrangement is drawn with.
+#
+# THE BEAM AT THE TRANSOM IS THE SECOND THING THE FIRST CUT GOT WRONG. It
+# narrowed to a 2.1 m transom over a 2.34 m shaft spacing, so the shafts stuck
+# out past the sides of the ship and the stern read as a wedge somebody had
+# sharpened. A transom stern carries most of its beam right to the after
+# perpendicular -- that is what makes it a transom -- so the run aft loses
+# height much faster than it loses width, and the counter over the screws is a
+# BROAD flat roof rather than a taper.
+HULL_STATIONS = (
+    (-8.60, -1.38, 2.94, 0.34),
+    (-6.40, -1.24, 2.92, 0.34),
+    (-4.60, -1.02, 2.86, 0.33),
+    (-3.30, -0.72, 2.76, 0.32),
+    (-2.35, -0.36, 2.64, 0.31),
+    (-1.55, +0.06, 2.50, 0.30),
+    (-0.85, +0.56, 2.36, 0.29),
+    (-0.25, +1.10, 2.22, 0.28),
+    (+0.25, +1.46, 2.08, 0.27),
+    (+0.62, +1.86, 1.88, 0.27),
+    # ── AND THEN IT FAIRS AWAY UPWARD, WHICH IS THE THIRD FIX ───────────────
+    # Ending the run at x +0.62 left a flat transom plate 2.5 m wide and 1.5 m
+    # tall in the middle of the side shot, and at the demo's own framing that
+    # is what it read as: a shard. A COUNTER does not end in a plate under
+    # water -- its buttocks sweep up and aft and the hull leaves the water
+    # somewhere above the frame -- so the last two stations lift the underside
+    # clear through the surface and pull the beam in with it. What is left in
+    # frame is one long curve, which is a silhouette a stern can be recognised
+    # from, and the cap that closes the solid is now a small quad above the
+    # waterline that nothing will ever see.
+    (+0.90, +2.48, 1.46, 0.28),
+    (+1.06, +3.12, 0.88, 0.30),
+)
+HULL_KEEL_W = 0.06      # half-width of the flat at the keel: no degenerate ring
+HULL_RING = 20           # points up ONE side of a section
+
+
+def loft(rings, xs):
+    """A closed solid from a rake of same-length (y, z) rings at stations xs.
+
+    The blade's loft at ship scale, and with BOTH of its traps handled by
+    construction rather than by getting them right:
+
+    WINDING. Which cross product points outward is exactly what went wrong at
+    f2010a73 and exactly what the mirrored blade above had to be careful about
+    all over again. Here each piece is oriented against a criterion it cannot
+    argue with -- the shell's first quad must face AWAY from its own ring
+    centre, and each cap must face along +-x -- and the whole piece is reversed
+    if it does not. A test beats a convention.
+
+    CAP VERTICES. Fan-capping the END RINGS in place is the obvious way to
+    close the solid and it is what the first cut did.
+    compute_vertex_normals() then averages the transom's own +x normal into the
+    shell's sideways one at every vertex they share, so the hard corner a
+    transom IS gets smoothed away -- and eight metres of ship came out looking
+    like an inflated balloon with propellers under it. The caps get their own
+    copies of the rings, so the edge survives. Same class of mistake as the
+    winding one, and just as invisible in the diff.
+    """
+    import numpy as np
+    k, m = len(rings), len(rings[0])
+    v = np.empty((k, m, 3), np.float32)
+    for i, (x, ring) in enumerate(zip(xs, rings)):
+        v[i, :, 0] = x
+        v[i, :, 1] = [p[0] for p in ring]
+        v[i, :, 2] = [p[1] for p in ring]
+
+    def oriented(tris, verts, want):
+        """tris wound so the FIRST one's normal points the way `want` does."""
+        n = np.cross(verts[tris[1]] - verts[tris[0]],
+                     verts[tris[2]] - verts[tris[0]])
+        return tris if float(np.dot(n, want)) > 0.0 else \
+            [tris[q + o] for q in range(0, len(tris), 3) for o in (2, 1, 0)]
+
+    shell = []
+    for i in range(k - 1):
+        for j in range(m):
+            j2 = (j + 1) % m
+            a0, b0 = i * m + j, i * m + j2
+            a1, b1 = (i + 1) * m + j, (i + 1) * m + j2
+            shell += [a0, b1, a1, a0, b0, b1]
+    flat = v.reshape(-1, 3)
+    ctr0 = np.array([0.0, v[0, :, 1].mean(), v[0, :, 2].mean()], np.float32)
+    shell = oriented(shell, flat, flat[shell[0]] - ctr0 - np.array(
+        [flat[shell[0]][0], 0.0, 0.0], np.float32))
+    caps = np.concatenate([v[0], v[-1]], 0)
+    mid = np.array([[xs[0], v[0, :, 1].mean(), v[0, :, 2].mean()],
+                    [xs[-1], v[-1, :, 1].mean(), v[-1, :, 2].mean()]],
+                   np.float32)
+    v = np.concatenate([flat, caps, mid], 0)
+    idx = list(shell)
+    for c, want in ((0, np.array([-1.0, 0.0, 0.0], np.float32)),
+                    (1, np.array([1.0, 0.0, 0.0], np.float32))):
+        b, cv = k * m + c * m, k * m + 2 * m + c
+        fan = []
+        for j in range(m):
+            fan += [cv, b + j, b + (j + 1) % m]
+        idx += oriented(fan, v, want)
+    # uv: v runs fore to aft along the stations, u around the girth as a
+    # triangle wave so the two sides mirror and the seam carries no stripe --
+    # the same trick, and for the same reason, as the blade's. The caps take
+    # the uv of the ring they were copied from.
+    uv = np.empty((k, m, 2), np.float32)
+    gir = np.abs(2.0 * np.arange(m, dtype=np.float32) / m - 1.0)
+    uv[:, :, 0] = gir[None, :] * 3.0
+    uv[:, :, 1] = np.linspace(0.0, 1.0, k, dtype=np.float32)[:, None] * 6.0
+    uv = np.concatenate([uv.reshape(-1, 2), uv[0], uv[-1],
+                         np.zeros((2, 2), np.float32)], 0)
+    g = tp.BufferGeometry()
+    g.set_attribute("position", v)
+    g.set_attribute("uv", uv)
+    g.set_index(np.asarray(idx, np.uint32))
+    g.compute_vertex_normals()
+    return g
+
+
+def hull_ring(y_bot, half_beam, p):
+    """One station, as a closed ring of (y, z) from the keel round to the keel.
+
+    Up the port side to the deck edge, straight across the deck, down the
+    starboard side. The keel carries a small flat so the ring does not close on
+    a degenerate edge, which is what would put a NaN in the vertex normals of
+    the two triangles either side of it."""
+    out = []
+    for sign in (1.0, -1.0):
+        rng = range(HULL_RING) if sign > 0 else range(HULL_RING - 1, -1, -1)
+        for j in rng:
+            u = j / float(HULL_RING - 1)
+            z = HULL_KEEL_W + (half_beam - HULL_KEEL_W) \
+                * math.sin(0.5 * math.pi * u) ** p
+            out.append((y_bot + (HULL_TOP - y_bot) * u, sign * z))
+    return out
+
+
+def hull_y(x, z):
+    """The underside's height at (x, z), by the same expression the loft uses.
+    The banner quotes the tip clearance out of this rather than out of a
+    number somebody measured off a screenshot."""
+    xs = [s[0] for s in HULL_STATIONS]
+    i = max(0, min(len(xs) - 2, next((k for k in range(len(xs) - 1)
+                                      if x < xs[k + 1]), len(xs) - 2)))
+    f = (x - xs[i]) / (xs[i + 1] - xs[i])
+    y0 = HULL_STATIONS[i][1] + f * (HULL_STATIONS[i + 1][1] - HULL_STATIONS[i][1])
+    bm = HULL_STATIONS[i][2] + f * (HULL_STATIONS[i + 1][2] - HULL_STATIONS[i][2])
+    pp = HULL_STATIONS[i][3] + f * (HULL_STATIONS[i + 1][3] - HULL_STATIONS[i][3])
+    q = min(max((abs(z) - HULL_KEEL_W) / max(bm - HULL_KEEL_W, 1e-6), 0.0), 1.0)
+    u = 2.0 / math.pi * math.asin(min(q ** (1.0 / pp), 1.0))
+    return y0 + (HULL_TOP - y0) * u
+
+
+# ── The paint ───────────────────────────────────────────────────────────────
+# ANTIFOULING RED, and it is a working choice rather than a decorative one: it
+# is what the underwater half of nearly every ship is painted, it is the one
+# colour that says "this is below the waterline" without a caption, and a matte
+# oxide red hides modelling sins that a bare grey would broadcast. The whole of
+# this hull is below the waterline as far as the camera is concerned -- the
+# surface is 3 m over the shaft and the widest framing in the film tops out
+# well under it -- so there is no boot top and no topside colour here, and
+# authoring them would be authoring pixels nothing can see.
+#
+# The same wear maps the bronze uses, at a coarser tile: roughness and normal
+# only, never albedo. Antifouling weathers and fouls, it does not rust through.
+antifoul = tp.MeshStandardMaterial()
+#
+# AND IT IS A DARK RED, WHICH IS THE POINT RATHER THAN A COMPROMISE. Red is
+# the first thing three metres of water takes out of daylight, and the key
+# here is already blue-shifted for exactly that reason -- so a bright oxide
+# albedo under it comes back as a cartoon slab of poster paint, which is what
+# the first render of this hull was. Dropped to 0.10: what reaches the camera
+# is a dark warm brown that reads as red only where the rake grazes it, which
+# is what antifouling actually looks like at this depth.
+antifoul.color = tp.Color(0.118, 0.029, 0.023)      # linear oxide red
+antifoul.metalness = 0.0
+antifoul.roughness = 0.90
+_hn = rust_map("nor_gl", False)
+if _hn is not None:
+    antifoul.normal_map = _hn
+    antifoul.roughness_map = rust_map("rough", False)
+    antifoul.normal_scale = tp.Vector2(0.40, 0.40)
+
+hull = tp.Group()
+hull.add(tp.Mesh(loft([hull_ring(s[1], s[2], s[3]) for s in HULL_STATIONS],
+                      [s[0] for s in HULL_STATIONS]), antifoul))
+# The SKEG: the centreline fin between the shafts. It is the single feature
+# that stops the stern reading as a slab -- it gives the underbody a keel line
+# to run aft along, and it is what a twin-screw ship carries there instead of
+# the single-screw deadwood. Same loft, five stations, a tapered plate.
+#
+# ITS THICKNESS IS SET BY THE WAKES and not by taste: the two slipstream tubes
+# reach in to |z| = SHAFT_Z - R_TIP = 0.27 m at the disc, so a skeg wider than
+# that would have the slipstream growing out of the inside of it.
+SKEG_T = 0.22            # half-thickness at mid-depth, m
+SKEG = ((-4.20, -1.28), (-2.80, -1.06), (-1.60, -0.74),
+        (-0.55, -0.28), (0.10, +0.36))       # (x, the bottom of the fin)
+
+
+def skeg_ring(x, y_low, n=9):
+    """A lens section from the fin's bottom up into the hull's underbody. The
+    same small flat at both ends as the hull's keel, and for the same reason:
+    a ring that closes on a point closes on a degenerate triangle."""
+    top = hull_y(x, 0.0) + 0.30
+    out = []
+    for sign in (1.0, -1.0):
+        rng = range(n) if sign > 0 else range(n - 1, -1, -1)
+        for j in rng:
+            u = j / float(n - 1)
+            out.append((y_low + (top - y_low) * u,
+                        sign * (0.035 + SKEG_T * math.sin(math.pi * u))))
+    return out
+
+
+hull.add(tp.Mesh(loft([skeg_ring(x, y) for x, y in SKEG],
+                      [s[0] for s in SKEG]), antifoul))
+# The BOSSINGS: each shaft has to come OUT of something. A shaft hanging in
+# open water with nothing holding it is the single most amateur thing a stern
+# can do, and it is what the first render of this showed. A bossing -- the
+# hull's own plating faired out around the shaft, which is what a twin-screw
+# ship with shallow shaft angles carries instead of A-brackets -- is a cone,
+# and a cone is the cheapest possible fix that is also the right answer.
+BOSS_G = tp.CylinderGeometry(0.165, 0.72, 2.35, 26)
+for sd in (1.0, -1.0):
+    boss = tp.Mesh(BOSS_G, antifoul)
+    boss.rotate_z(math.pi / 2)
+    boss.position.set(-1.90, -0.06, sd * SHAFT_Z)
+    hull.add(boss)
+scene.add(hull)
 
 # ── The field ───────────────────────────────────────────────────────────────
 cfg = tp.ParticleField.Config()
@@ -2327,6 +3003,11 @@ host_pos = host_col = None
 import numpy as _np
 beta_now = PITCH
 rpm_now = RPS * 60.0
+# The SLIDER is the ship's speed through the water; the model's input is the
+# speed of ADVANCE, which is that reduced by the mean wake fraction. Keeping
+# both names is not redundancy -- it is the one place the hull enters the
+# momentum chain, and mixing them up would quietly move every J on the panel.
+vs_now = V_SHIP
 va_now = V_A
 omega_now = 0.0
 theta_now = 0.0
@@ -2336,9 +3017,14 @@ hist_np[:, 3] = V_A
 hist_wp = wp.array(hist_np, dtype=wp.vec4, device=device)
 # The second ring: the two DERIVED scalars, so the kernel does not recompute
 # a per-frame quantity per parcel. See the kernel's own note on the split.
-helm_np = _np.zeros((HIST_N, 2), _np.float32)
+# It is a vec4 now, not a vec2, and the third slot is the hull's: the wake
+# lobe's amplitude at this frame's own operating point (wake_lobe_k). It rides
+# the ring for the same reason everything else here does -- a parcel shed
+# before the ship had way on must not start breathing because the ship has way
+# on NOW. The fourth slot is spare.
+helm_np = _np.zeros((HIST_N, 4), _np.float32)
 helm_np[:, 0] = 1.0                 # a stopped shaft still has a pitch
-helm_wp = wp.array(helm_np, dtype=wp.vec2, device=device)
+helm_wp = wp.array(helm_np, dtype=wp.vec4, device=device)
 
 
 def launch(out_pos, out_col):
@@ -2385,6 +3071,11 @@ def advance():
     theta_now = (theta_now + 0.5 * (omega_now + om) * DT) % TWO_PI
     omega_now = om
     prop.rotation.x = theta_now
+    # The starboard screw is the port one reflected, and a reflection negates
+    # the rotation about an axis lying IN its plane. The phase offset goes in
+    # before the negation so it matches the kernel's own phi_c, which adds it
+    # to the crossing azimuth in the un-reflected frame.
+    prop_s.rotation.x = -(theta_now + PHASE_OFF)
     set_pitch(beta_now)
     # THE MODEL IS EVALUATED ON THE SHAFT SPEED THE SHAFT ACTUALLY HAS, not on
     # the one the slider commands: during the spin-up ramp the two differ by up
@@ -2394,7 +3085,8 @@ def advance():
     hist_np[frame_no % HIST_N] = (omega_now, theta_now,
                                   state_now.vi, state_now.va)
     helm_np[frame_no % HIST_N] = (
-        min(max(state_now.kt / KT_DESIGN, 0.0), 4.0), burrill(state_now)[3])
+        min(max(state_now.kt / KT_DESIGN, 0.0), 4.0), burrill(state_now)[3],
+        wake_lobe_k(state_now), 0.0)
     hist_wp.assign(hist_np)      # 6 x 144 floats: ~3 kB/frame, below measurable
     helm_wp.assign(helm_np)
 
@@ -2512,8 +3204,29 @@ print(f"       prop:   B{BLADES}-{EAR * 100:.0f}, D {D_PROP:g} m, "
       f"       inflow: {IN_SHARE:.0%} of slots, {T_IN:g} s upstream "
       f"({T_IN / PERIOD:.0%} of the period), reaching {IN_D_MAX:.2f} m ahead of "
       f"the disc at {IN_R_MOUTH:.2f} m = {IN_R_MOUTH / R_TIP:.1f} x the tip radius\n"
+      f"       stern:  twin screws at z {SHAFT_Z:+.2f} / {-SHAFT_Z:+.2f} m "
+      f"(port left-handed, starboard right, tops outboard), "
+      f"phase {math.degrees(PHASE_OFF):.0f} deg apart\n"
+      f"       hull:   stern section {HULL_X1 - HULL_X0:.1f} m, transom at "
+      f"x {HULL_X1:+.2f}, counter {hull_y(0.0, SHAFT_Z):.2f} m over the shaft "
+      f"= {hull_y(0.0, SHAFT_Z) - R_TIP:.2f} m tip clearance "
+      f"({(hull_y(0.0, SHAFT_Z) - R_TIP) / D_PROP:.2f} D)\n"
+      f"       wake:   w_mean {W_MEAN:.2f}, w_peak {W_PEAK:.2f} at TDC "
+      f"(w {W_MEAN - W_PEAK * W_LOBE_MEAN:.2f} at the bottom, "
+      f"{W_MEAN + W_PEAK * (1.0 - W_LOBE_MEAN):.2f} at the top); "
+      f"V_ship {V_SHIP:g} -> V_a {V_A:.2f} m/s\n"
+      f"               once-per-rev loading swing "
+      f"{100.0 * wake_lobe_k(ST0) * (1.0 - W_LOBE_MEAN):+.0f}% / "
+      f"{-100.0 * wake_lobe_k(ST0) * W_LOBE_MEAN:+.0f}% "
+      + ("(BOLLARD: no way on, no boundary layer, no breathing)"
+         if wake_lobe_k(ST0) <= 0.0 else "on the cavitation criterion") + "\n"
       f"       volume: {BOX_RES}^3 over {2 * BOX_HALF[0]:.1f} x "
-      f"{2 * BOX_HALF[1]:.1f} x {2 * BOX_HALF[2]:.1f} m, sigma/particle {SIGMA:g}\n"
+      f"{2 * BOX_HALF[1]:.1f} x {2 * BOX_HALF[2]:.1f} m "
+      f"({1e3 * 2 * BOX_HALF[0] / BOX_RES:.1f} x "
+      f"{1e3 * 2 * BOX_HALF[1] / BOX_RES:.1f} x "
+      f"{1e3 * 2 * BOX_HALF[2] / BOX_RES:.1f} mm voxels, "
+      f"{6 * BOX_RES ** 3 / 1e6:.0f} MB r32ui+r16f), "
+      f"sigma/particle {SIGMA:g}\n"
       f"       knobs:  extinction {EXTINCTION:g}, shadow {SHADOW:g}, "
       f"grain {SPRITE_R0:g} m, flux {FLUX_P:g}, bright {BRIGHT:.5f}")
 
@@ -2726,15 +3439,42 @@ elif FILM:
     # frame is rendered and the closest approach to the prop and to the wake
     # axis is stated. R_TIP + the turbulence is ~1.2 m; anything under that is
     # a camera about to fly through its own subject.
-    d_prop = min(math.dist(cam_at(t * FILM_SECS / 600.0)[0], (0.0, 0.0, 0.0))
-                 for t in range(601))
-    d_axis = min(math.hypot(cam_at(t * FILM_SECS / 600.0)[0][1],
-                            cam_at(t * FILM_SECS / 600.0)[0][2])
-                 for t in range(601))
+    # ── AND THE CHECK IS AGAINST BOTH SHAFTS NOW, WHICH IS THE WHOLE POINT ──
+    # It used to measure the eye against ONE axis at z = 0 and one hub at the
+    # origin. There are two of each and neither is where those were, so the
+    # check that was supposed to catch a camera flying through its own subject
+    # was measuring the clear water BETWEEN the screws and reporting it as
+    # clearance. Measuring against both is what turns the composition failure
+    # below from an opinion into a number.
+    def _clear(t):
+        e = cam_at(t)[0]
+        return (min(math.dist(e, (0.0, 0.0, sd * SHAFT_Z)) for sd in (1, -1)),
+                min(math.hypot(e[1], e[2] - sd * SHAFT_Z) for sd in (1, -1)))
+    d_prop = min(_clear(t * FILM_SECS / 600.0)[0] for t in range(601))
+    d_axis = min(_clear(t * FILM_SECS / 600.0)[1] for t in range(601))
     print(f"\n       FILM  {FILM_SECS:.1f} s at {FPS} fps = "
           f"{int(round(FILM_SECS * FPS))} frames, {W}x{H}, {N:,} parcels\n"
-          f"       track closest approach: {d_prop:.2f} m to the hub, "
-          f"{d_axis:.2f} m off the wake axis (tips at {R_TIP:.2f} m)")
+          f"       track closest approach: {d_prop:.2f} m to the nearer hub, "
+          f"{d_axis:.2f} m off the nearer wake axis (tips at {R_TIP:.2f} m)")
+    # ── R6: THE FILM IS VERIFIED, NOT RE-CHOREOGRAPHED ──────────────────────
+    # The camera track and the six beats were composed for ONE screw turning on
+    # the axis, and the acceptance test for this revision was to render the
+    # beat keyframes once and look. Beat 3 does not survive: its push-in key
+    # sits at (1.35, 0.42, 1.95), which was 0.58 m off a wake on the axis and
+    # is 0.89 m off the PORT wake's axis now -- inside the tip radius. The
+    # camera flies through the port slipstream and the shot that was supposed
+    # to show inception happening on screen shows the inside of a propeller
+    # instead. Re-directing it is a film-v2 slice and is deliberately NOT done
+    # here: spending the look budget on a re-cut would have come out of the
+    # breathing, which is what this revision is for. So the film says so, every
+    # time it runs, with the number that proves it.
+    if d_axis < R_TIP:
+        print(f"\n       *** the film choreography predates the twin stern ***\n"
+              f"       the track comes within {d_axis:.2f} m of a wake axis "
+              f"(tips at {R_TIP:.2f} m), so at least one beat has the camera\n"
+              f"       INSIDE a slipstream. beat 3's push-in is the one that "
+              f"breaks. re-cutting the track is a film-v2 slice;\n"
+              f"       the beats and the helm schedule are unchanged here.\n")
     for bi, (name, end) in enumerate(BEATS):
         start = 0.0 if bi == 0 else BEATS[bi - 1][1]
         mid = 0.5 * (start + end)
@@ -2989,7 +3729,7 @@ else:
         """The helm. Three levers, and everything else is a readout of what
         they have already done -- there is nothing here to configure, only the
         pitch, the throttle, the ship's speed and the consequences to watch."""
-        global beta_now, rpm_now, va_now
+        global beta_now, rpm_now, vs_now, va_now
         tp.imgui.set_next_window_pos(12, 12)
         tp.imgui.set_next_window_size(452, 0)
         tp.imgui.begin("Helm")
@@ -2997,8 +3737,12 @@ else:
                                             BETA_MIN, BETA_MAX)
         _, rpm_now = tp.imgui.slider_float("shaft speed (rpm)", rpm_now,
                                            RPM_MIN, RPM_MAX)
-        _, va_now = tp.imgui.slider_float("ship speed (m/s)", va_now,
+        # THE SLIDER IS THE SHIP and the model's input is the ADVANCE. There is
+        # a hull now, so the two are no longer the same number and the panel
+        # has to say which one it is quoting.
+        _, vs_now = tp.imgui.slider_float("ship speed (m/s)", vs_now,
                                           VA_MIN, VA_MAX)
+        va_now = vs_now * (1.0 - W_MEAN)
         # Read the ACTUAL shaft state back out of the integrator rather than
         # recomputing it from the sliders: during the spin-up the two differ,
         # and the number that means anything is the one the wake was given.
@@ -3009,6 +3753,20 @@ else:
         draw_open_water(st)
         tp.imgui.text(f"J {st.j:5.3f}   K_T {st.kt:6.4f}   "
                       f"10 K_Q {10 * st.kq:6.4f}   eta_0 {st.eta:5.3f}")
+        # ── R1: SAY WHICH SPEED THE DIAGRAM IS BEING READ AT ────────────────
+        # J is the advance ratio and advance is not the ship's speed once there
+        # is a hull in front of the disc. Every number above this line belongs
+        # to V_a = V_ship (1 - w_mean); the once-per-rev swing below belongs to
+        # the peak term, and it is spent on the vapour alone.
+        lk = wake_lobe_k(st)
+        tp.imgui.text(f"J = V_a / nD,  V_a {st.va:4.2f} = V_ship {vs_now:4.2f} "
+                      f"x (1 - w_mean {W_MEAN:4.2f})")
+        tp.imgui.text(f"wake shadow  w {W_MEAN - W_PEAK * W_LOBE_MEAN:4.2f} at "
+                      f"6 o'clock -> {W_MEAN + W_PEAK * (1.0 - W_LOBE_MEAN):4.2f} "
+                      f"at 12   loading "
+                      + (f"{100.0 * lk * (1.0 - W_LOBE_MEAN):+.0f}% at TDC: "
+                         "the ropes BREATHE" if lk > 0.005 else
+                         "steady (no way on: no boundary layer)"))
         tp.imgui.text(f"T {st.thrust / 1e3:7.2f} kN   Q {st.torque / 1e3:6.2f} kNm"
                       f"   P_D {st.power / 1e3:7.1f} kW")
         # ── R5: SAY IT, DO NOT HIDE IT ──────────────────────────────────────
