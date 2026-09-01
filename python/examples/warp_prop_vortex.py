@@ -4337,14 +4337,16 @@ else:
         tp.imgui.text(f"sheet  [{'#' * sfill}{'-' * (24 - sfill)}] "
                       f"{cr / SHEET_CAV_INC:4.2f} x back-cav inception")
         if mid > 0.0:
-            tp.imgui.text(f"       SHEET ON THE BACKS   extent {mid:4.2f} of the "
-                          f"blade" + (f", {lo6:4.2f} at 6 -> {hi12:4.2f} at 12"
-                                      if hi12 - lo6 > 1e-3 else "  (steady)"))
+            tp.imgui.text(f"       SHEET ON THE BACKS   extent {mid:4.2f} "
+                          f"of the blade")
+            tp.imgui.text(f"       once per rev: {lo6:4.2f} at 6 o'clock -> "
+                          f"{hi12:4.2f} at 12" if hi12 - lo6 > 1e-3 else
+                          "       steady (no way on: no boundary layer)")
         else:
             tp.imgui.text(f"       no back cavitation   "
                           f"{100.0 * (1.0 - cr / SHEET_CAV_INC):.0f}% short "
-                          f"({SHEET_CAV_INC:.2f} x the tips' line)")
-        tp.imgui.text(f"       inception at this pitch and speed: hub "
+                          f"({SHEET_CAV_INC:.2f} x the tips')")
+        tp.imgui.text(f"       inception here: hub "
                       f"{inception_rpm(beta_now, va_now, HUB_CAV):.0f}, tips "
                       f"{inception_rpm(beta_now, va_now, 1.0):.0f}, sheet "
                       f"{inception_rpm(beta_now, va_now, 1.0 / SHEET_CAV_INC):.0f}"
