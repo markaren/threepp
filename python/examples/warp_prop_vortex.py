@@ -4240,11 +4240,33 @@ elif FILM:
         (7.0, (1.45, 0.30, 3.60), (0.20, 0.00, 1.05), False),
         # 2: out to the mouth, where the funnel is legible and the disc is not
         (11.0, (0.55, 0.55, 7.10), (0.95, -0.05, 0.60), False),
-        (15.0, (1.10, -0.40, 4.30), (1.44, 0.20, 0.60), False),
-        # 3: the push in, UNDER the shaft line. Inception happens ON SCREEN.
-        (18.0, (1.10, -0.55, 2.95), (1.05, 0.05, 0.90), False),
-        (21.0, (0.95, -0.62, 2.65), (0.95, 0.02, 0.95), False),
-        (26.0, (1.90, -0.30, 4.70), (1.90, 0.10, 0.60), False),
+        (15.0, (1.55, -0.35, 5.60), (1.35, 0.15, 0.75), False),
+        # ── 3: THE PUSH IN, AND CLEARING THE GATE WAS NOT ENOUGH ───────────
+        # The first re-cut moved this beat's keys out to 1.5 m off the port
+        # axis, which passes the clearance check and still does not make the
+        # shot: at 1.9 m from the hub a 1.8 m screw is wider than the frame,
+        # the cap ran off the left edge, and the one thing the beat exists to
+        # show -- an axial rope lighting ALONE behind that cap -- had its own
+        # bubble column filling every pixel behind it. Clearance is a floor,
+        # not a composition.
+        #
+        # So the push in is BROADSIDE and it stands off. The eye holds 3.1-3.6
+        # m off the port axis and drops under the shaft line the way "side"
+        # argues a stern has to be read, and the move is made by the AIM: the
+        # look-at slides forward from x 1.35 to 0.60 over six seconds, which
+        # walks the hub in from the left edge to the near third of the frame
+        # while the rope it sheds runs away across the rest of it. The screw
+        # still grows by half (5.05 m to the hub at the top of the beat, 3.42
+        # at the hold) so the move reads as a push in and not as a pan.
+        #
+        # AND THE BACKGROUND IS CHOSEN. The sight line past the port hub
+        # passes 0.86 m from the STARBOARD hub, so the second screw sits just
+        # behind and beside the first, and behind THAT is five metres of murk
+        # -- which is the dark the hub rope has to be the one bright thing
+        # against.
+        (18.0, (1.20, -0.50, 4.70), (0.85, 0.05, 0.95), False),
+        (21.0, (1.00, -0.58, 4.20), (0.60, 0.02, 1.05), False),
+        (26.0, (1.90, -0.30, 5.30), (1.90, 0.10, 0.60), False),
         # 4: wide enough that the rarefaction has somewhere to travel
         (30.0, (2.80, -0.20, 6.15), (2.90, 0.05, 0.60), False),
         (34.0, (2.40, -0.28, 5.45), (2.50, 0.05, 0.70), False),
