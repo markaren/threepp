@@ -462,10 +462,11 @@ import time
 # Make the built `threepp` module (in the parent python/ dir) importable.
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+import numpy as np
 import warp as wp
 
 import threepp as tp
-from warp_common import cli_arg, find_ffmpeg
+from warp_common import cli_arg, find_ffmpeg, sky_env
 
 # 2M -> 1.7M, and it is the 25 fps floor that moved it, not taste. Fixing the
 # negative-age bug (see the kernel) put a sixth of the parcels BACK into the
@@ -2599,8 +2600,33 @@ scene = tp.Scene()
 # pass set the tint by eye as "the colour of the water" and got a mid-teal
 # backdrop that no amount of darkening the background could touch.
 MURK = cli_arg("--murk", 0.12, float)          # sigma_t, 1/m
-MURK_COLOR = (0.004, 0.017, 0.021)
-scene.background = tp.Color(0.0018, 0.0075, 0.0092)
+# ── AND NOW THERE IS A SKY, WHICH IS WHAT THE WATER WAS MISSING ─────────────
+# Everything above about a near-black background was written for a scene lit
+# by three DirectionalLights and nothing else, and it was right for the wake
+# in isolation: additive sprites need something dark behind them. It was also
+# why the water itself was dark from every side -- the murk's in-scatter is
+# murkColor times (ambient + the environment's top mip), and with no
+# environment the column had nothing to scatter. So the murk colour is a sea's
+# now (the sailboat's, whose water reads), and the scene gets the procedural
+# sky the hull sculpt uses: background AND image-based light, its sun disc on
+# the key's own line so the glint on the waves, the Snell window from below and
+# the shadows all agree. The wake still draws on the DARK half of that: the
+# ropes sit under the counter against water that has already fallen into murk,
+# and the sprites' own volume owns their read (see THE VOLUME). --no-sky is
+# the A/B back to the diver's-lamp frame.
+SKY = "--no-sky" not in sys.argv
+SUN_POS = (2.05, 2.55, -1.75)
+_sun_dir = np.array(SUN_POS, np.float32) / np.linalg.norm(np.array(SUN_POS, np.float32))
+if SKY:
+    MURK_COLOR = (0.022, 0.115, 0.155)
+    # The world under this horizon is the sea, and the bronze reflects it.
+    _sky = sky_env(_sun_dir, below_horizon=(0.10, 0.26, 0.36),
+                   below_nadir=(0.012, 0.045, 0.075))
+    scene.background = _sky
+    scene.environment = _sky
+else:
+    MURK_COLOR = (0.004, 0.017, 0.021)
+    scene.background = tp.Color(0.0018, 0.0075, 0.0092)
 if MURK > 0.0:
     renderer.set_fog_water_surface_y(WATERLINE)
     renderer.set_underwater_murk(MURK, tp.Color(*MURK_COLOR))
@@ -2791,8 +2817,16 @@ camera.look_at(*CAM_T)
 # were not. They are suspended silt and the dimmest thing in the frame, and
 # everything the eye actually reads -- the ropes, the column, the collapse --
 # is aft of the transom in genuinely open water.
-sun = tp.DirectionalLight(0xB6D2FF, 2.3)
-sun.position.set(2.05, 2.55, -1.75)
+# WITH A SKY IT STAYS MOSTLY THE DIMMED BLUE ABOVE, and that is a renderer
+# limit stated rather than hidden: the murk attenuates the VIEW leg and shapes
+# the sun into caustics, but a submerged surface's direct sun is not extinguished
+# through the column, so the three metres of water are still hand-applied to
+# the light itself. A full daylight sun here turned the bronze white from every
+# side and blew the ropes out. The topside of the hull is lit by the sky's IBL
+# regardless. The direction is untouched -- it is the whole of the staging --
+# and the sky's disc is on it.
+sun = tp.DirectionalLight(0xCFE0FF if SKY else 0xB6D2FF, 2.2 if SKY else 2.3)
+sun.position.set(*SUN_POS)
 scene.add(sun)
 
 # The RAKE -- the second half of "the prop is not a hole". It exists for the
@@ -2814,7 +2848,7 @@ scene.add(sun)
 # the yard's work light on the hull (or a diver's lamp, take your pick) is the
 # one source that still has a spectrum, and it is aimed at the propeller and
 # nothing else. This is why the blades still read as bronze in a blue scene.
-rake = tp.DirectionalLight(0xFFE2BE, 1.05)
+rake = tp.DirectionalLight(0xFFE2BE, 1.5 if SKY else 1.05)# still under the 2.2 sun
 rake.position.set(2.4, 0.95, 3.1)
 scene.add(rake)
 # The ambient IS the water. Underwater there is no black: every direction the
@@ -2824,7 +2858,10 @@ scene.add(rake)
 # on a metalness 0.62 surface. Warmed slightly toward green and raised 1.0 ->
 # 1.5 to pay for the dimmer sun; checked against --view prop, not against the
 # wake shot, because the wake does not care and the bronze does.
-scene.add(tp.AmbientLight(0x628A94, 1.3))
+# With a sky the environment IS the ambient (image-based light on the metal),
+# so the flat term drops to a floor; at 1.3 on top of the IBL the bronze went
+# to white from every side.
+scene.add(tp.AmbientLight(0x628A94, 0.45 if SKY else 1.3))
 # ── AND THE HULL NEEDED ONE MORE, WHICH THE WATER WAS ALREADY OWED ──────────
 # The key is downwelling and the counter faces DOWN, so with two lights the
 # whole underside of the ship went to black and the screws hung out of a void:
@@ -2837,7 +2874,7 @@ scene.add(tp.AmbientLight(0x628A94, 1.3))
 # DirectionalLight brighter than the sun would steal the billboards' own sun
 # (they take the brightest one in the scene) and flip the whole wake to a
 # front-lit read.
-upwell = tp.DirectionalLight(0x7FB6A8, 0.80)
+upwell = tp.DirectionalLight(0x7FB6A8, 0.45 if SKY else 0.80)
 upwell.position.set(-1.20, -2.40, 1.35)
 scene.add(upwell)
 

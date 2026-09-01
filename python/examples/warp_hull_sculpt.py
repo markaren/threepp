@@ -172,6 +172,7 @@ import numpy as np
 import warp as wp
 
 import threepp as tp
+from warp_common import sky_env
 from warp_common import (accum_normals, cli_arg, icosphere, normalize_vec3,
                          parse_size, resize_handler, signed_volume,
                          smooth_vec3_csr, standard_material, unique_edges,
@@ -2610,37 +2611,8 @@ SUN_DIR = np.array([0.52, 0.75, 0.41], np.float32)
 SUN_DIR /= np.linalg.norm(SUN_DIR)
 
 
-def sky_env(w=512, h=256):
-    """A procedural float equirect: background AND image-based light, no assets.
-
-    Same trick vulkan_ocean.py uses to avoid shipping an .hdr, minus the RGBE
-    round trip -- `float_texture` takes the linear array directly. The lower
-    hemisphere fades to a haze rather than to black, or the ocean's grazing
-    reflections drop out at the horizon.
-    """
-    elev = ((np.arange(h, dtype=np.float32) + 0.5) / h - 0.5) * math.pi
-    az = ((np.arange(w, dtype=np.float32) + 0.5) / w - 0.5) * 2.0 * math.pi
-    d = np.empty((h, w, 3), np.float32)
-    d[..., 0] = np.cos(elev)[:, None] * np.cos(az)[None, :]
-    d[..., 1] = np.sin(elev)[:, None]
-    d[..., 2] = np.cos(elev)[:, None] * np.sin(az)[None, :]
-    y = d[..., 1]
-    up = np.clip(y, 0.0, 1.0)[..., None] ** 0.40
-    down = np.clip(-y, 0.0, 1.0)[..., None] ** 0.60
-    col = np.where(y[..., None] >= 0.0,
-                   np.float32([0.60, 0.71, 0.90]) * (1.0 - up)
-                   + np.float32([0.09, 0.23, 0.56]) * up,
-                   np.float32([0.60, 0.71, 0.90]) * (1.0 - down)
-                   + np.float32([0.15, 0.19, 0.25]) * down).astype(np.float32)
-    col += (np.exp(-(y * y) / (2.0 * 0.0040))[..., None]
-            * np.float32([0.36, 0.28, 0.20]))
-    ang = np.arccos(np.clip(d @ SUN_DIR, -1.0, 1.0))
-    col += ((np.exp(-(ang / math.radians(1.7)) ** 2) * 42.0
-             + np.exp(-(ang / math.radians(12.0)) ** 2) * 2.6)[..., None]
-            * np.float32([1.0, 0.96, 0.88]))
-    out = np.ones((h, w, 4), np.float32)
-    out[..., :3] = col
-    return tp.float_texture(out)
+# The procedural sky lives in warp_common.sky_env now (the prop vortex is its
+# third caller); the maths is the one that was here.
 
 
 def build_scene(canvas):
@@ -2650,7 +2622,7 @@ def build_scene(canvas):
     renderer.shadow_map_enabled = True
 
     scene = tp.Scene()
-    env = sky_env()
+    env = sky_env(SUN_DIR)
     scene.background = env
     scene.environment = env
     sun = tp.DirectionalLight(0xfff3dc, 2.6)

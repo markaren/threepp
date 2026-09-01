@@ -637,3 +637,49 @@ def bench_loop(step, render, phases, warmup, timed, label):
     total = sum(acc) * ms
     cols = " | ".join(f"{name} {a * ms:.2f}" for name, a in zip(tuple(phases) + ("render",), acc))
     print(f"bench {label}: {cols} = {total:.2f} ms/frame ({1000.0 / total:.0f} fps)")
+
+
+def sky_env(sun_dir, w=512, h=256,
+            below_horizon=(0.60, 0.71, 0.90), below_nadir=(0.15, 0.19, 0.25)):
+    """A procedural float equirect: background AND image-based light, no assets.
+
+    Same trick vulkan_ocean.py uses to avoid shipping an .hdr, minus the RGBE
+    round trip -- `float_texture` takes the linear array directly. The lower
+    hemisphere fades to a haze rather than to black, or an ocean's grazing
+    reflections drop out at the horizon. `sun_dir` is the unit vector TOWARD
+    the sun; put the scene's key DirectionalLight on the same line so the disc
+    in the reflections, the glint and the shadows agree. Third caller (the
+    hull sculpt, now the prop vortex) is what moved it here from the sculpt.
+
+    `below_horizon` / `below_nadir` are the lower hemisphere. The default is
+    the haze an above-water ocean wants; a scene whose world under the horizon
+    is WATER (the prop vortex: the bronze sits in it and reflects it) passes a
+    sea instead, because the renderer's image-based light on a submerged metal
+    is this map unattenuated, and a bright haze under the horizon turns bronze
+    to white.
+    """
+    sun_dir = np.asarray(sun_dir, np.float32)
+    sun_dir = sun_dir / np.linalg.norm(sun_dir)
+    elev = ((np.arange(h, dtype=np.float32) + 0.5) / h - 0.5) * math.pi
+    az = ((np.arange(w, dtype=np.float32) + 0.5) / w - 0.5) * 2.0 * math.pi
+    d = np.empty((h, w, 3), np.float32)
+    d[..., 0] = np.cos(elev)[:, None] * np.cos(az)[None, :]
+    d[..., 1] = np.sin(elev)[:, None]
+    d[..., 2] = np.cos(elev)[:, None] * np.sin(az)[None, :]
+    y = d[..., 1]
+    up = np.clip(y, 0.0, 1.0)[..., None] ** 0.40
+    down = np.clip(-y, 0.0, 1.0)[..., None] ** 0.60
+    col = np.where(y[..., None] >= 0.0,
+                   np.float32([0.60, 0.71, 0.90]) * (1.0 - up)
+                   + np.float32([0.09, 0.23, 0.56]) * up,
+                   np.float32(below_horizon) * (1.0 - down)
+                   + np.float32(below_nadir) * down).astype(np.float32)
+    col += (np.exp(-(y * y) / (2.0 * 0.0040))[..., None]
+            * np.float32([0.36, 0.28, 0.20]))
+    ang = np.arccos(np.clip(d @ sun_dir, -1.0, 1.0))
+    col += ((np.exp(-(ang / math.radians(1.7)) ** 2) * 42.0
+             + np.exp(-(ang / math.radians(12.0)) ** 2) * 2.6)[..., None]
+            * np.float32([1.0, 0.96, 0.88]))
+    out = np.ones((h, w, 4), np.float32)
+    out[..., :3] = col
+    return tp.float_texture(out)
