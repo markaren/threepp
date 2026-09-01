@@ -6,7 +6,7 @@ case for it, because a cloud has no shape you can be wrong about. This is the
 hard case, and the one the feature was built for: a five-bladed controllable-
 pitch propeller on a ship's shaft three metres down, shedding tip vortices into
 the classic interleaved helices -- and, when it is pushed hard enough, filling
-their cores with VAPOUR.
+their cores with VAPOUR and boiling the backs of its own blades.
 
 THIS DEMO USED TO BE A PROP IN AIR, and git keeps that version (5fb670d3 and
 back). Every structure below was built there and none of it changed in kind:
@@ -65,6 +65,24 @@ stbd` are the same screw twice and have to be mirror images of each other.
 
     pip install warp-lang
     python warp_prop_vortex.py                   # window; PUSH ANY SLIDER
+    python warp_prop_vortex.py --view back --shot 5.5 --rps 3.2
+                                                 # THE SHEET, on the backs of
+                                                 # the blades. 192 rpm -- just
+                                                 # over its own line, which is
+                                                 # where it READS: past ~250
+                                                 # the slipstream is a wall of
+                                                 # white and the blades are a
+                                                 # silhouette cut out of it
+    python warp_prop_vortex.py --view back --shot 5.5 --rps 4.9 --vapour 0 --sheet-gain 0 --in-gain 0
+                                                 # the sheet ALONE: the three
+                                                 # wake populations turned off
+                                                 # and nothing else touched
+    python warp_prop_vortex.py --view back --shot 5.5 --rps 4.9 --speed 5
+                                                 # AND IT BREATHES: the top of
+                                                 # the disc carries a sheet and
+                                                 # the bottom carries none
+    python warp_prop_vortex.py --view back --shot 5.5 --rps 4.9 --speed 5 --wake-peak 0
+                                                 # the same helm, lobe OFF
     python warp_prop_vortex.py --shot 5.5 --rps 4.2 --speed 5
                                                  # THE BREATHING: 0.90 x mean,
                                                  # 1.21 x at twelve o'clock
@@ -198,6 +216,49 @@ STOPS. So the tip population's visible length is an age gate scaled by the
 excess (a small excess lives a fraction of a loop and ends; a large one runs
 the whole frame), with a short smoothstep at the end so the tail is a collapse
 and not a fade. The turbulence still wiggles the cores while they live.
+
+AND THE CRITERION HAS FOUND ITS OWN PHENOMENON. Burrill's diagram is a BACK
+CAVITATION chart: every line on it is a stated percentage of the blade's
+SUCTION SIDE covered by a vapour sheet. This file has been gating tip vortices
+with it -- the one structure it does not describe -- since the criterion
+landed, and the sheet it was always about was not drawn at all. It is now, on
+the backs of the blades, and the ladder that falls out of the three gates is
+the thing a ship's engineer recognises before any of the numbers:
+
+    hub    x 1.12 (HUB_CAV)        127.8 rpm   the flow behind the cap is
+                                               slowest, so the axial rope is
+                                               first and it is last to go
+    tips   x 1                     141.2 rpm   the helices light
+    sheet  / 1.20 (SHEET_CAV_INC)  167.2 rpm   the blade's own back boils
+
+    --view back --rps 2.05 / 2.25 / 2.55 / 3.2 walks all four rungs.
+
+WHAT A SHEET PARCEL IS, AND WHY IT COST NO NEW MACHINERY. It is the one
+population in this file that is not shed. Every other parcel is water that
+crossed the disc at some time tb and has been convecting since; a sheet cavity
+is a feature OF A SURFACE, and the surface is turning. So it has no age, no
+history and nothing to remember: its whole state is f(seed, slot, t) at the
+CURRENT t, placed in BLADE-LOCAL coordinates off the same planform, twist,
+skew, rake and pivot angle the casting is lofted from, and rotated by the same
+theta the mesh is drawn at. It cannot lag, because its position contains
+exactly one clock. It is on the UPSTREAM face -- the blade advances toward +X,
+so the face that pushes is the +X one and the BACK is the other -- and the
+casting occludes it for free, because the billboards are depth-tested against
+the scene. That is why the demo's own aft framings do not show it and why
+`--view back` exists.
+
+    THE EXTENT LAW IS AUTHORED AND IS THE ONLY PART THAT IS. How far the sheet
+    reaches for a given excess -- SHEET_CAV_KNEE, SHEET_CAV_R0, SHEET_CAV_C --
+    is a curve chosen to look right. A real extent comes from the section's own
+    pressure distribution, which is the BEMT rung and is out of scope here.
+    What is NOT authored is WHEN it appears (Burrill, as above) or HOW IT
+    BREATHES: the sheet reads the hull's loading lobe at the blade's CURRENT
+    azimuth rather than at a birth azimuth, because it rides the blade, so it
+    grows through twelve o'clock and shrinks through six once per revolution.
+    At 294 rpm with 5 m/s of way on the extent runs 0.00 at the bottom of the
+    sweep to 0.78 at the top -- the vapour exists only over the top of the disc
+    -- and at the bollard lamk is zero and every blade carries the same sheet.
+    No `if` anywhere in either sentence.
 
 THE HUB VORTEX is the single most recognisable feature of real CPP footage, and
 it cavitates FIRST: the flow behind the cap is slower, the pressure lower, and
@@ -435,6 +496,35 @@ R_TIP = 0.90                        # m
 R_HUB = 0.27       # the bulbous hub: a 5-blade CPP carries the whole pitch
                    # mechanism inside it, so hub/diameter is ~0.30, not 0.15
 R_PALM = 0.245     # radius at which a blade root meets its own flange
+# ── THE BLADE'S OWN SECTION MATH, AND WHY IT LIVES UP HERE NOW ──────────────
+# These six numbers used to sit beside blade_geometry, eighteen hundred lines
+# down, because the loft was the only thing that had ever needed them. The
+# SHEET CAVITY needs them too -- it is drawn ON the blade's suction surface, so
+# it is placed by the same planform, the same thickness law, the same twist and
+# the same skew the casting was lofted from -- and a second copy of a blade's
+# shape is the one duplication this file cannot afford: a sheet drawn on a
+# planform that has drifted from the mesh's would float off the blade, which is
+# the exact failure the whole slice is graded against.
+#
+# So they moved to the geometry block and there is exactly one of each. The
+# loft reads them (blade_geometry), the kernel reads them (through PLAN_TAB,
+# resampled once onto a uniform span grid so a parcel's lookup is an index and
+# not a search), and neither can drift from the other.
+C_MAX = 0.50            # m, the widest chord -- ~0.75 expanded area ratio at B=5
+SKEW_DEG = 20.0         # tip skew; moderate, as on the reference
+RAKE_M = 0.085          # m of aft rake at the tip
+SKEW_RAD = math.radians(SKEW_DEG)
+# The rounded-trapezoid outline, as control points in (span fraction, chord /
+# C_MAX). Interpolated rather than fitted to a polynomial because the SHAPE is
+# the deliverable here and a cubic cannot hold a broad tip and a narrow root at
+# once. The last point is what rounds the tip off; the first is the root boss.
+PF_F = (0.00, 0.06, 0.15, 0.30, 0.48, 0.65, 0.80, 0.90, 0.96, 1.00)
+PF_C = (0.34, 0.52, 0.72, 0.89, 0.98, 1.00, 0.95, 0.86, 0.74, 0.36)
+# Thickness / chord down the span: a fat structural root fairing into a thin
+# outer blade. At the root this is near 0.6, which is what turns the section
+# from an aerofoil into the circular boss that enters the palm.
+PF_T = (0.62, 0.44, 0.30, 0.21, 0.16, 0.13, 0.105, 0.088, 0.075, 0.070)
+PLAN_N = 33             # the uniform span grid the kernel indexes into
 # ── R2: TWO SCREWS, AND THE HANDEDNESS THAT MAKES THEM A PAIR ───────────────
 # A twin-screw ship does not carry two of the same propeller. It carries a
 # MIRRORED PAIR, turning in opposite senses, and the standard arrangement is
@@ -549,6 +639,29 @@ BURRILL_INC = cli_arg("--inception", 0.610, float)   # x that line = inception
 # line at the default against the tips' 0.83, and under Burrill that is now a
 # 13 rpm window (128 -> 141) rather than the old model's 7.
 HUB_CAV = 1.12
+# ── SHEET CAVITATION, AND THE IRONY OF WHAT WAS ALREADY GATING THE ROPES ────
+# Burrill's diagram is a BACK-CAVITATION chart. Every line on it is a stated
+# percentage of the blade's SUCTION SIDE covered by a vapour sheet, and this
+# file has been using it as a proxy for the tip vortices -- the one structure
+# it does not describe -- since the criterion landed. So the sheet is not a new
+# model bolted on: it is the phenomenon the criterion was always about, drawn
+# at last, and the tip ropes keep it as an acknowledged proxy.
+#
+# THE LADDER IS THE POINT. A propeller pushed off its design point does not
+# light up all at once, and the order it lights up in is the thing a ship's
+# engineer recognises: the hub rope first (the flow behind the cap is slowest),
+# then the tip vortices, and only then does the blade's own back start to boil.
+# So the sheet's inception line sits ABOVE the tips':
+#
+#   hub    caq x 1.12  > 1     127.8 rpm at the default pitch, 3 m down
+#   tips   caq         > 1     141.2
+#   sheet  caq / 1.20  > 1     167.2      <- this line
+#
+# 1.20 sits in the middle of the 1.15-1.25 the plan allows, and what sets it is
+# that the three crossings have to be far enough apart to be a LADDER at the
+# throttle's own resolution: 128 / 141 / 167 rpm is two windows of 13 and 26
+# rpm, both of which a slider can be parked in.
+SHEET_CAV_INC = cli_arg("--sheet-inception", 1.20, float)   # x the tips' line
 # 0.45 -> 0.15: the excess this saturates against is ~3x smaller under Burrill
 # (see above), so the knee divides by 3 to leave the vapour's brightness at
 # 180 and 300 rpm within a percent of where it was.
@@ -610,6 +723,12 @@ def scheduled_rps(t):
 # docstring. BETA_DESIGN is the angle the loft is AUTHORED at, so the pivot
 # groups sit at zero rotation there and the designed twist is what you see.
 BETA_DESIGN = 22.0                  # deg, at 0.7 R
+# The screw the loft is a slice of: P = 2 pi (0.7 R) tan(BETA_DESIGN), so
+# beta(r) = atan(P / 2 pi r) is the twist law and it is exact at 0.7 R by
+# construction. ONE statement of it, because the mesh and the sheet cavity are
+# both placed by it and a blade whose sheet sits at a different twist is a
+# sheet floating off the blade.
+P_SCREW = TWO_PI * 0.7 * R_TIP * math.tan(math.radians(BETA_DESIGN))
 BETA_MIN, BETA_MAX = 0.0, 35.0      # the slider's range
 # THE PITCH SLIDER IS NOW P/D, in the only units the polynomials speak. A
 # propeller blade is a slice of a screw thread, so a blade angle at 0.7 R and a
@@ -966,10 +1085,14 @@ def wake_lobe_k(st):
     return min(max(-dkt * st.j * W_PEAK / ((1.0 - W_MEAN) * st.kt), 0.0), 1.5)
 
 
-def inception_rpm(beta_deg, va, hub=False):
+def inception_rpm(beta_deg, va, boost=1.0):
     """The shaft speed at which the criterion above crosses 1, by bisection.
-    A derived sentence, not a tuned constant: this is what R4 bought."""
-    boost = HUB_CAV if hub else 1.0
+    A derived sentence, not a tuned constant: this is what R4 bought.
+
+    `boost` is which of the three structures is being asked about, and it is
+    the SAME factor the kernel multiplies the criterion by: HUB_CAV for the
+    axial rope, 1 for the tip filaments, 1 / SHEET_CAV_INC for the blade
+    sheet. There is no second gate anywhere -- three numbers on one line."""
     lo, hi = 1.0, 4000.0
     for _ in range(60):
         mid = 0.5 * (lo + hi)
@@ -1014,8 +1137,8 @@ if "--openwater" in sys.argv:
           f"u_wake {OP.u_wake:.3f} m/s\n"
           f"    sigma_0.7R {sg:.3f}  tau_c {tc:.4f}  "
           f"Burrill 5% line {l5:.4f}  -> {rr:.3f} x inception\n"
-          f"    INCEPTION: hub {inception_rpm(BETA_DESIGN, 0.0, True):.1f} rpm, "
-          f"tips {inception_rpm(BETA_DESIGN, 0.0, False):.1f} rpm")
+          f"    INCEPTION: hub {inception_rpm(BETA_DESIGN, 0.0, HUB_CAV):.1f} rpm, "
+          f"tips {inception_rpm(BETA_DESIGN, 0.0, 1.0):.1f} rpm")
     sys.exit(0)
 
 # ── The wake, AND THE VELOCITIES THAT BECAME HONEST ─────────────────────────
@@ -1208,6 +1331,90 @@ HUB_X0 = 0.46            # m aft of the disc: just clear of the cap dome
 HUB_R = 0.055            # m, the core's own radius -- fatter than a tip's
 HUB_W = 2.2              # x the tip's vapour core width at the same excess
 HUB_GAIN = 1.7           # x a tip rope's radiance: a fatter core holds more vapour
+# ── THE BLADE SHEET, ALSO OUT OF THE SHEET'S BUDGET ─────────────────────────
+# The one population in this file that is NOT shed. Every other parcel is a
+# piece of water that crossed the disc at some time tb and has been convecting
+# ever since; a sheet cavity is a feature OF THE BLADE, welded to a surface
+# that is turning, and it has no age, no history and nothing to remember. Its
+# whole state is f(seed, slot, t) with t the CURRENT time -- which is what the
+# closed form was built to make cheap, and is why R1 costs no new machinery:
+# the blade's pose at t is already in the ring (theta is host-integrated), the
+# blade's SHAPE is already in the planform tables, and the criterion is already
+# on the helm ring. The parcel is placed in blade-local coordinates and rotated
+# by the same azimuth the mesh is drawn at. No lag is possible, because there
+# is no second clock for it to lag against.
+#
+# THE SUCTION SIDE IS THE UPSTREAM FACE and getting it wrong is the one error
+# this slice's audience spots without reading anything else. The blade advances
+# toward +X (that is what makes the wake blow that way), so the face that does
+# the pushing -- the PRESSURE side, the "face" -- is the +X one, and the BACK,
+# where the pressure drops and the water boils, is the -X one. In the loft's
+# own section coordinates that is negative thickness, which is the sign on
+# th_s below and the only place the choice is made.
+#
+# ── AND THE CASTING OCCLUDES IT, WHICH IS FREE ─────────────────────────────
+# The billboards are depth-TESTED against the scene's own depth (reverse-Z,
+# GREATER_OR_EQUAL, depth write off -- VulkanCorePipelines.cpp), so a sheet on
+# the far face of a blade is rejected by the bronze in front of it exactly as a
+# mesh would be. Nothing here has to know where the camera is: the sheet is put
+# on the surface it belongs to, offset a few millimetres clear of the casting,
+# and which blades show it is the rasteriser's business. That is also why the
+# demo's own aft framings do NOT show it and --view back exists.
+SHEET_CAV = cli_arg("--sheet-cav", 0.030, float)  # fraction of slots, from SHEET's
+# How fast the sheet grows past its own inception line. It is the ONE authored
+# curve in the sheet and it is labelled as such in the docstring: a real extent
+# comes from the section pressure distribution, which is the BEMT rung and is
+# out of scope. What is NOT authored is when it starts (Burrill) or how it
+# breathes (the wake shadow, below).
+SHEET_CAV_KNEE = 0.22    # excess at which the sheet is 63% of its full extent
+SHEET_CAV_R0 = 0.55      # x R_TIP: how far inboard a FULLY developed sheet reaches
+SHEET_CAV_C = 0.55       # chord fraction it covers at the outer radii, developed
+# The chordwise reach grows OUTBOARD -- (0.25 + 0.75 rr) of the above across
+# the sheet's own radial span -- which is the shape every photograph of a
+# partial sheet shows: a wedge, widest near the tip, tapering to nothing at its
+# inboard edge. The two numbers are also what the radial sampling is weighted
+# by, so parcels per square metre of blade is constant across it.
+SHEET_CAV_CR = 0.25      # the inboard end of that wedge, as a fraction of the tip's
+SHEET_CAV_T = 0.026      # m, the cavity's own thickness where it is fattest
+SHEET_CAV_OFF = 0.005    # m of standoff: the vapour is ON the casting, not IN it
+SHEET_CAV_GAIN = 1.05    # x, against a fully vapour-filled tip core's VAP_GAIN
+# The grain is DELIBERATELY FATTER than the wake's. A sheet has to read as a
+# CONNECTED surface, and the VAP_GAIN sand lesson two blocks up applies with
+# the sign it always had: the fix for a scatter of dots is never more contrast
+# per sample, it is neighbouring samples that OVERLAP. 2.1x the wake's grain on
+# a sheet sampled at ~4.5 mm centres is a coverage of ~4, and the flux split
+# divides the radiance back out so the total light is what it was.
+SHEET_CAV_GROW = 3.4     # x SPRITE_R0
+# The unsteadiness, in LABEL space -- on (radial station, blade, t) rather than
+# on the world position, for exactly the reason the wake's turbulence is: a
+# world-keyed wobble is a standing disturbance the blade sweeps through, which
+# reads as a shimmer in the ROOM rather than on the sheet. This one rides the
+# blade, which is what a cavity's closure line actually does.
+SHEET_CAV_SHIM = 0.30    # +- of the chordwise extent
+SHEET_CAV_RATE = 5.5     # label-space Hz of the closure line's own flutter
+# The lobe is a property of the DISC's rim, and the blade's outer half sits at
+# a skewed azimuth rather than at its spindle's. This is that skew at 0.7 R,
+# taken as one constant: the lobe is 60 deg wide at half height and the skew
+# swings 13 deg over the useful span, so resolving it per parcel would be
+# arithmetic spent below the resolution of the thing it corrects.
+SHEET_CAV_SKEWREF = -SKEW_RAD * 0.7 ** 1.9
+# ── THE SLOT BUDGET, AND WHOSE PARCELS THESE ARE ────────────────────────────
+# The sheet takes the TAIL of the buffer -- a contiguous range, because unlike
+# every other population its slot index carries no meaning (see sheet_cav) --
+# and the wake kernel launches over what is left. That would quietly cost every
+# other population SHEET_CAV of its parcels, including the tip filaments, and
+# R5 says the sheet's share comes out of the BODY populations and not out of
+# the helices. So the two shares the wake kernel is given are re-normalised on
+# the shorter launch: the tip count and the hub count come out bit for bit what
+# they were, and the entrained bubbly sheet -- the one population that is a
+# volume rather than a line, and the only one that can absorb it invisibly --
+# pays the whole bill. Measured: 1.5% off the mean lit luminance of the
+# sub-inception frame, against v10's own, which is under the noise the change
+# of noise realisation puts there anyway.
+N_CAV = int(round(N * max(SHEET_CAV, 0.0)))
+N_MAIN = max(N - N_CAV, 1)
+SHEET_EFF = 1.0 - (1.0 - SHEET) * N / N_MAIN        # tips: unchanged count
+HUB_EFF = HUB_SHARE * N / N_MAIN                    # hub rope: unchanged count
 # The sheet's inner station. It used to start at 0.26 R -- just outside the old
 # slim hub -- which left the tube's own axis empty; a side view then showed a
 # hollow core wherever the near and far walls did not overlap. A real prop does
@@ -1629,13 +1836,15 @@ def shed(out_pos: wp.array(dtype=wp.vec4),
     s2 = wp.rand_init(1337, i)
 
     # ── WHICH POPULATION, decided before anything else ──────────────────────
-    # Three now: the TIP filaments, the entrained SHEET that fills between
-    # them, and the HUB rope on the axis. The hub's share comes OUT of the
-    # sheet's -- the tip share (1 - sheet) is untouched -- so the helices are
-    # drawn with exactly the parcels they were tuned with. The draw moved to
-    # the top of the kernel because tin below has to know about it, and it
-    # consumes the same single randf(s) in the same position it always did, so
-    # not one of the wake's random numbers is renumbered by the move.
+    # Three here: the TIP filaments, the entrained SHEET that fills between
+    # them, and the HUB rope on the axis. The FOURTH -- the blade-attached
+    # cavity -- is not in this kernel at all; see sheet_cav below for why it
+    # had to be its own launch. The hub's share comes OUT of the sheet's -- the
+    # tip share (1 - sheet) is untouched -- so the helices are drawn with
+    # exactly the parcels they were tuned with. The draw moved to the top of
+    # the kernel because tin below has to know about it, and it consumes the
+    # same single randf(s) in the same position it always did, so not one of
+    # the wake's random numbers is renumbered by the move.
     q = wp.randf(s)
     is_hub = q < hub_share
     is_sheet = q < sheet
@@ -2096,6 +2305,215 @@ def shed(out_pos: wp.array(dtype=wp.vec4),
     out_col[i] = wp.vec4(c[0], c[1], c[2], 1.0)
 
 
+# ── R1: THE SHEET ON THE BACK OF THE BLADE, AND WHY IT IS A SECOND LAUNCH ───
+# It was written as a fourth population inside shed() first, which is where it
+# belongs on paper: one kernel, one closed form, one pass. It cost ELEVEN
+# MILLISECONDS of a 45 ms frame -- and it cost them with `--sheet-cav 0`, which
+# is the measurement that settles what they were. Not the work: there was none.
+# REGISTERS. The blade-local branch declares three dozen live locals (a
+# planform lerp, a section solve, a twist, a skew and a pivot rotation), the
+# compiler allocates the union of every branch's registers, occupancy falls for
+# the whole launch, and 1.7 million parcels pay for arithmetic 3% of them will
+# execute. Divergence hides work; register pressure does not even hide.
+#
+# So the population gets its own kernel over its own CONTIGUOUS slot range, and
+# the split is free in a way it is free for nothing else in this file: a sheet
+# parcel has no phase, no lifetime and no shedding rate, so which slot it sits
+# in means nothing at all. Every other population is hash-assigned precisely
+# because the slot index IS its clock. This one has no clock.
+#
+# 45.5 -> 45.8 ms after the move, against 56.4 before it. See THE BENCH.
+@wp.kernel
+def sheet_cav(out_pos: wp.array(dtype=wp.vec4),
+              out_col: wp.array(dtype=wp.vec4),
+              hist: wp.array(dtype=wp.vec4),
+              helm: wp.array(dtype=wp.vec4),
+              plan: wp.array(dtype=wp.vec2),
+              t: float, base: int, blades: int,
+              sprite_r0: float, flux_p: float, bright: float,
+              hist_n: int, sheet_inc: float, dpitch: float):
+    i = wp.tid()
+    j = base + i                                # the slot in the shared buffers
+    s = wp.rand_init(4271, j)
+    # Screw and blade by INDEX and not by hash, for the same reason the range
+    # is contiguous: with nothing riding on the slot number, i & 1 and
+    # (i / 2) % B give an exactly balanced ten-way split rather than a
+    # binomially wobbly one, and a sheet is a surface whose sampling density is
+    # the whole of its look.
+    sgn = 1.0 - 2.0 * float(i & 1)              # +1 port (+Z), -1 starboard
+    blade = (i // 2) % blades
+
+    # ── THE HELM, AT NOW ────────────────────────────────────────────────────
+    # A sheet cavity is not shed and does not convect: it is a feature OF a
+    # surface, and the surface is turning. So there is no crossing time in the
+    # past to look up -- the index is simply this frame's, which advance()
+    # stamped a few microseconds ago in the same breath as setting
+    # prop.rotation.x to the theta it carries. That is the whole of the
+    # anti-lag argument. Every other parcel is welded to a blade by AGREEMENT
+    # between two clocks and the docstring's CREDIBILITY DETAIL is about
+    # getting that agreement wrong by a frame; this population cannot lag,
+    # because its position contains exactly one clock.
+    kh = int(wp.floor(t / DT + 1.0e-3))
+    if kh < 0:
+        kh = 0
+    h = hist[kh % hist_n]
+    hl = helm[kh % hist_n]
+    om = h[0]
+    ld = hl[0]                                  # K_T / K_T_design
+    caq = hl[1]                                 # the Burrill ratio
+    lamk = hl[2]                                # the wake lobe's amplitude
+    omg = OM_G_FLOOR + (1.0 - OM_G_FLOOR) * om / OMEGA_REF
+    # The same azimuth the mesh is drawn at, built the same way phi_c is in
+    # shed() -- sub-frame residual walked out at the frame's own rate, blade
+    # offset, and half a blade pitch on the starboard shaft.
+    phi_c = h[1] + om * (t - float(kh) * DT) \
+        + float(blade) * TWO_PI / float(blades) \
+        + wp.where(sgn < 0.0, PHASE_OFF, 0.0)
+
+    # ── THE GATE, AND IT BREATHES AT THE BLADE'S OWN AZIMUTH ────────────────
+    # The wake parcels evaluate the hull's loading lobe at their BIRTH azimuth,
+    # because that is where the blade was when it cut them and they have been
+    # convecting ever since. The sheet does not convect: it rides the blade, so
+    # it evaluates the same lobe at the azimuth the blade has NOW -- and the
+    # consequence is the headline of this slice. The sheet grows as the blade
+    # sweeps through the hull's boundary layer at twelve o'clock and shrinks
+    # again through the bottom of the sweep, once per revolution.
+    #
+    # lamk is the ring's own linearisation and it is PROPORTIONAL TO J, so the
+    # bollard control needs no `if` here either: with no way on there is no
+    # boundary layer, lamk is zero, and the sheet is as steady as the ropes
+    # were before there was a hull over them.
+    lobe = wp.pow(0.5 * (1.0 + wp.cos(phi_c + SHEET_CAV_SKEWREF)),
+                  W_LOBE_P) - W_LOBE_MEAN
+    cq = caq * wp.max(1.0 + lamk * lobe, 0.0)
+    # THE LADDER: this line sits sheet_inc ABOVE the tip vortices'. Below it
+    # there is no sheet AT ALL -- not a dim one -- for the same reason TIP_HINT
+    # is 0.0: clean water is clean water (619dd5e1).
+    exs = wp.max(cq / sheet_inc - 1.0, 0.0)
+    ext = 1.0 - wp.exp(-exs / SHEET_CAV_KNEE)
+    if ext <= 1.0e-4:
+        out_pos[j] = wp.vec4(0.0, 0.0, 0.0, -1.0)
+        out_col[j] = wp.vec4(0.0, 0.0, 0.0, 0.0)
+        return
+    # ── THE EXTENT GROWS IN AREA, NOT IN DENSITY ────────────────────────────
+    # The obvious way to draw a growing sheet is to spread a fixed parcel count
+    # over a growing patch, and it is wrong twice over: the newborn sheet comes
+    # out as an over-bright smear and the developed one thins into sand. So the
+    # patch's own AREA fraction is the survival probability and everything else
+    # -- radiance, grain, spacing -- is held constant. Parcels per square metre
+    # of blade is then invariant, what the excess buys is exactly what it
+    # should buy (more blade covered), and the density volume stays honest: a
+    # sliver of a sheet deposits a sliver of optical depth rather than the
+    # whole population's worth of it into a tenth of the voxels.
+    ur = wp.randf(s)
+    uc = wp.randf(s)
+    ut = wp.randf(s)
+    ua = wp.randf(s)
+    spf = 0.25 + 0.75 * ext                     # radial reach, 1 = developed
+    cam = 0.25 + 0.75 * ext                     # chordwise reach, ditto
+    if ua > spf * cam:
+        out_pos[j] = wp.vec4(0.0, 0.0, 0.0, -1.0)
+        out_col[j] = wp.vec4(0.0, 0.0, 0.0, 0.0)
+        return
+    # Radial station, sampled with a density proportional to the local
+    # chordwise reach so the WEDGE below is filled evenly rather than bunched
+    # at its narrow end. Closed-form inversion for a linear reach: one sqrt,
+    # against a rejection loop that has no bound.
+    cr0 = SHEET_CAV_CR
+    cr1 = 1.0 - SHEET_CAV_CR
+    rr = (-cr0 + wp.sqrt(cr0 * cr0
+                         + 2.0 * cr1 * (cr0 + 0.5 * cr1) * ur)) / cr1
+    r_in = R_TIP * (1.0 - (1.0 - SHEET_CAV_R0) * spf)
+    rs = r_in + (0.995 * R_TIP - r_in) * rr
+    fs = wp.clamp((rs - R_PALM) / (R_TIP - R_PALM), 0.0, 1.0)
+    # The blade's own planform and thickness law, off the same PF_ tables the
+    # loft is built from -- resampled onto a uniform span grid at import so the
+    # lookup is an index and a lerp. See PLAN_TAB.
+    fi = fs * float(PLAN_N - 1)
+    i0 = int(fi)
+    if i0 > PLAN_N - 2:
+        i0 = PLAN_N - 2
+    fr = fi - float(i0)
+    pa = plan[i0]
+    pb = plan[i0 + 1]
+    chord = C_MAX * (pa[0] + (pb[0] - pa[0]) * fr)
+    thick = chord * (pa[1] + (pb[1] - pa[1]) * fr)
+    # ── THE CLOSURE LINE FLUTTERS, IN LABEL SPACE ───────────────────────────
+    # Sampled on (radial station, which blade, time) and NOT on the world
+    # position, for the reason the wake's curl noise is: a world-keyed
+    # disturbance stands still while the blade sweeps through it, which reads
+    # as a shimmer in the ROOM. This one is welded to the blade and is the only
+    # thing in the sheet that moves independently of the casting.
+    sh = wp.noise(wp.rand_init(6131), wp.vec4(
+        rr * 3.4, float(blade) * 5.0 - sgn * 11.0, t * SHEET_CAV_RATE, 0.0))
+    cext = wp.max(SHEET_CAV_C * cam * (cr0 + cr1 * rr)
+                  * (1.0 + SHEET_CAV_SHIM * sh), 0.02)
+    cf = 0.008 + (cext - 0.008) * uc        # chord fraction, 0 = leading edge
+    # ── THE SECTION, AND THE SIGN THAT PUTS IT ON THE BACK ──────────────────
+    # The loft's own section is cw = 0.5 cos a chordwise and th = 0.5 sin a +
+    # 0.13 sin^2 a in thickness. Solving the first for the chord fraction and
+    # taking the a in (pi, 2pi) branch is the SUCTION side -- negative
+    # thickness, which is the -X, upstream-facing face, because the blade
+    # advances toward +X (that is what makes the wake blow that way) and the
+    # face that does the pushing is therefore the +X one. That single minus
+    # sign is the whole of "which side of the blade", and it is the first thing
+    # a propeller man checks.
+    eh = wp.sqrt(wp.max(cf * (1.0 - cf), 0.0))
+    # A partial cavity is thin at the leading edge and thickest toward its
+    # closure. Offsetting along the section's own normal is, for a pure
+    # thickness displacement, simply a subtraction from yt.
+    u01 = cf / cext
+    tprof = wp.sqrt(u01) * (1.0 - 0.35 * u01)
+    off = SHEET_CAV_OFF + SHEET_CAV_T * (0.35 + 0.65 * ext) * tprof * ut
+    yt = (-eh + 0.52 * eh * eh) * thick - off
+    zc = chord * (0.5 - cf)
+    # The twist law, the rake and the skew: the loft's, line for line.
+    bet = wp.atan2(P_SCREW, TWO_PI * rs)
+    cb = wp.cos(bet)
+    sb = wp.sin(bet)
+    axl = yt * cb - zc * sb + RAKE_M * fs * fs
+    chd = yt * sb + zc * cb
+    skw = -SKEW_RAD * wp.pow(fs, 1.9)
+    ck = wp.cos(skw)
+    sk = wp.sin(skw)
+    py = rs * ck - chd * sk
+    pz = rs * sk + chd * ck
+    # ── AND THE PITCH PIVOT, BECAUSE THE BLADE TURNS IN ITS FLANGE ──────────
+    # set_pitch rotates each blade about its own spindle (local +Y) by
+    # -(beta - BETA_DESIGN) and hands the angle back; the sheet is ON that
+    # blade, so it takes the same rotation about the same axis, in the local
+    # frame and BEFORE the azimuth, exactly as the scene graph does.
+    cd = wp.cos(dpitch)
+    sd = wp.sin(dpitch)
+    pxr = axl * cd + pz * sd
+    pzr = -axl * sd + pz * cd
+    # The azimuth. Everything above is in the PORT screw's own frame and the
+    # last line mirrors z, which is the same one operation shed() ends with --
+    # and it is what makes the starboard sheet a reflection rather than a
+    # second piece of code (M_z R_y(d) is R_y(-d) M_z, which is exactly what
+    # build_screw does to the casting).
+    cp = wp.cos(phi_c)
+    sp = wp.sin(phi_c)
+    p = wp.vec3(pxr, py * cp - pzr * sp, py * sp + pzr * cp)
+    # A little body across the cavity, so the sheet is a layer and not a decal.
+    p = p + wp.vec3(wp.randn(s), wp.randn(s), wp.randn(s)) * 0.0018
+
+    # WHITE, because a vapour cavity is a dense broadband scatterer and it is
+    # the whitest thing in the frame; brighter than a tip core because it is a
+    # sheet seen face-on rather than a tube seen edge-on. The grain is
+    # DELIBERATELY fatter than the wake's -- the VAP_GAIN sand lesson with the
+    # sign it always had, that the cure for a scatter of dots is neighbouring
+    # samples which OVERLAP and never more contrast per sample -- and the flux
+    # split divides the radiance back out so the total light is unchanged.
+    grow = SHEET_CAV_GROW
+    vapi = 1.0 - wp.exp(-exs / CAV_KNEE)
+    gain = SHEET_CAV_GAIN * omg * (G_FLOOR + (1.0 - G_FLOOR) * ld) \
+        * (0.55 + 0.45 * vapi) * (1.0 + 0.22 * sh)
+    c = wp.vec3(0.90, 0.95, 1.00) * (bright * gain / wp.pow(grow, flux_p))
+    out_pos[j] = wp.vec4(p[0], p[1], sgn * (p[2] + SHAFT_Z), sprite_r0 * grow)
+    out_col[j] = wp.vec4(c[0], c[1], c[2], 1.0)
+
+
 wp.init()
 device = wp.get_preferred_device()
 print(f"prop vortex: {N:,} particles on {device}"
@@ -2206,7 +2624,39 @@ CAMS = {"side":  ((1.02, -0.45, 3.00 + SHAFT_Z), (1.44, 0.26, 0.5 * SHAFT_Z)),
         # is legible in: high on the port quarter, looking forward and down the
         # two slipstreams at once, so both helices show their handedness in the
         # same image and wind visibly OPPOSITE ways.
-        "stern": ((6.60, 2.85, 5.60), (0.80, -0.05, 0.0))}
+        "stern": ((6.60, 2.85, 5.60), (0.80, -0.05, 0.0)),
+        # ── "back" IS THE SHEET'S OWN SHOT, AND IT HAS TO BE FROM AHEAD ─────
+        # The suction side of a propeller blade is its UPSTREAM face, and every
+        # other framing in this table sits AFT of the disc plane and therefore
+        # looks at the pressure side. The billboards are depth-tested against
+        # the casting, so from those views the sheet is correctly hidden BEHIND
+        # the blades and there is nothing to grade. This one stands forward of
+        # the disc and outboard of the port shaft, below the counter and clear
+        # of the bossing, and it is the composition the reference photograph
+        # has: the backs of the blades filling the frame, the vapour sheet at
+        # their leading edges and outer radii, and a tip rope leaving the tip
+        # into the slipstream running away behind.
+        # ── AND IT CANNOT BE HEAD-ON, WHICH IS THE STERN BEING RIGHT ───────
+        # The obvious framing is straight up the shaft from ahead, and the ship
+        # refuses it: the port BOSSING is a cone flaring from 0.165 m at
+        # x = -3.08 to 0.72 m at x = -0.73, so a near-axial eye is looking at
+        # the inside of the shaft fairing and the blades are behind it. That is
+        # what a bossing IS -- the hull's plating faired around the shaft --
+        # and it is exactly why a cavitation observer on a real ship works
+        # through a window rather than from in front of the disc. So the eye
+        # goes to a 50-degree forward quarter, from BELOW (a stern is read from
+        # underneath, as "side" already found), where the sight line clears the
+        # cone's widest station by 0.16 m and the backs of all five blades are
+        # open. The wake runs away to the right of the frame, which is the
+        # reference photograph's own layout.
+        # It is also CLOSE -- 2.5 m, where every other framing in this table
+        # stands off at 3 or more. The slipstream is directly behind the disc
+        # from any forward angle and it is the brightest thing in the frame, so
+        # the shot has to be tight enough to put the blades against water
+        # rather than against four metres of boiling wake. The sheet is a
+        # centimetres-thick feature on a half-metre chord; it is graded at 1:1
+        # and it needs the pixels.
+        "back":  ((-1.54, -0.77, 1.69 + SHAFT_Z), (0.05, 0.00, SHAFT_Z))}
 CAM_P, CAM_T = CAMS[VIEW if VIEW in CAMS else "side"]
 camera = tp.PerspectiveCamera(46, canvas.aspect(), 0.02, 200)
 camera.position.set(cli_arg("--cam-x", CAM_P[0], float),
@@ -2320,19 +2770,10 @@ scene.add(upwell)
 #       capped by a bolted ring flange and a dome. R_HUB went 0.14 -> 0.27.
 #
 # All of it is first-party geometry: stock primitives plus the same loft.
-C_MAX = 0.50            # m, the widest chord -- ~0.75 expanded area ratio at B=5
-SKEW_DEG = 20.0         # tip skew; moderate, as on the reference
-RAKE_M = 0.085          # m of aft rake at the tip
-# The rounded-trapezoid outline, as control points in (span fraction, chord /
-# C_MAX). Interpolated rather than fitted to a polynomial because the SHAPE is
-# the deliverable here and a cubic cannot hold a broad tip and a narrow root at
-# once. The last point is what rounds the tip off; the first is the root boss.
-PF_F = (0.00, 0.06, 0.15, 0.30, 0.48, 0.65, 0.80, 0.90, 0.96, 1.00)
-PF_C = (0.34, 0.52, 0.72, 0.89, 0.98, 1.00, 0.95, 0.86, 0.74, 0.36)
-# Thickness / chord down the span: a fat structural root fairing into a thin
-# outer blade. At the root this is near 0.6, which is what turns the section
-# from an aerofoil into the circular boss that enters the palm.
-PF_T = (0.62, 0.44, 0.30, 0.21, 0.16, 0.13, 0.105, 0.088, 0.075, 0.070)
+# C_MAX, SKEW_DEG, RAKE_M and the three PF_ tables are the blade's SECTION MATH
+# and they now live in the geometry block at the top of the file, because the
+# cavitation sheet is drawn on this same surface and there must be exactly one
+# statement of the shape. See THE BLADE'S OWN SECTION MATH up there.
 BOLTS = 10              # per blade flange
 BOLT_CIRCLE = 0.128     # m
 FLANGE_R = 0.165        # m, the palm disc
@@ -2369,8 +2810,7 @@ def blade_geometry(stations=18, around=14, mirror=False):
     f = (sp - R_PALM) / (R_TIP - R_PALM)                # 0 at root, 1 at tip
     chord = C_MAX * np.interp(f, PF_F, PF_C)
     thick = chord * np.interp(f, PF_F, PF_T)
-    p_screw = TWO_PI * 0.7 * R_TIP * math.tan(math.radians(BETA_DESIGN))
-    pitch = np.arctan(p_screw / (TWO_PI * sp))          # 46 deg root, 16 deg tip
+    pitch = np.arctan(P_SCREW / (TWO_PI * sp))          # 46 deg root, 16 deg tip
     # Skew is NEGATIVE in azimuth: the tip TRAILS the root, which is the whole
     # point of skew (each station enters the wake field a moment after the one
     # inboard of it, so the blade never takes a load impulse across its span).
@@ -2626,6 +3066,11 @@ def set_pitch(beta_deg):
         pv.rotation.y = d
     for pv in pivots_s:
         pv.rotation.y = -d
+    # Handed back so the sheet-cavitation kernel can turn its parcels in the
+    # flange by the SAME number the casting turned by. The kernel works in the
+    # port screw's frame and mirrors z on its last line, and M_z R_y(d) is
+    # R_y(-d) M_z -- so the port angle is the only one it needs.
+    return d
 
 # ── R4: THE STERN THE SCREWS HANG UNDER ─────────────────────────────────────
 # A hull is what makes a twin screw a SHIP and it is what R1's wake deficit is
@@ -3026,15 +3471,41 @@ hist_wp = wp.array(hist_np, dtype=wp.vec4, device=device)
 helm_np = _np.zeros((HIST_N, 4), _np.float32)
 helm_np[:, 0] = 1.0                 # a stopped shaft still has a pitch
 helm_wp = wp.array(helm_np, dtype=wp.vec4, device=device)
+# ── THE PLANFORM, AS THE KERNEL WANTS IT ────────────────────────────────────
+# The same PF_C / PF_T control points the loft interpolates, resampled ONCE
+# onto a uniform span grid so a parcel's lookup is an index and a lerp rather
+# than a ten-step search through an irregular table. 33 stations over a span
+# the loft itself draws with 18, so the sheet's chord and thickness agree with
+# the casting's to better than the grain it is drawn with. It is a table, not
+# a second model: change PF_C and both move.
+PLAN_TAB = wp.array(
+    _np.stack([_np.interp(_np.linspace(0.0, 1.0, PLAN_N), PF_F, PF_C),
+               _np.interp(_np.linspace(0.0, 1.0, PLAN_N), PF_F, PF_T)],
+              axis=1).astype(_np.float32),
+    dtype=wp.vec2, device=device)
+# The blade's pivot angle THIS FRAME, in radians, and it is the same number
+# set_pitch hands the scene graph -- see advance(). The sheet is on the blade,
+# so it turns in the flange with it.
+dpitch_now = 0.0
 
 
 def launch(out_pos, out_col):
-    wp.launch(shed, dim=N, device=device,
-              inputs=[out_pos, out_col, hist_wp, helm_wp, sim_time, N, BLADES,
-                      TURB, SHEET, HUB_SHARE,
+    wp.launch(shed, dim=N_MAIN, device=device,
+              inputs=[out_pos, out_col, hist_wp, helm_wp, sim_time,
+                      N_MAIN, BLADES,
+                      TURB, SHEET_EFF, HUB_EFF,
                       W_BURST, SPRITE_R0, FLUX_P, BRIGHT,
                       T_IN, IN_SHARE, HIST_N,
                       TIP_HINT, VAP_GAIN, BUB_CAV])
+    # The blade sheet, over the tail of the same two buffers. A second launch
+    # rather than a fourth branch, and the eleven milliseconds that bought are
+    # written up beside the kernel.
+    if N_CAV > 0:
+        wp.launch(sheet_cav, dim=N_CAV, device=device,
+                  inputs=[out_pos, out_col, hist_wp, helm_wp, PLAN_TAB,
+                          sim_time, N_MAIN, BLADES,
+                          SPRITE_R0, FLUX_P, BRIGHT, HIST_N,
+                          SHEET_CAV_INC, dpitch_now])
 
 
 def advance():
@@ -3058,6 +3529,7 @@ def advance():
     on purpose: what the reader sees the propeller doing this frame and what
     the wake will remember about this frame are the same numbers."""
     global sim_time, frame_no, beta_now, rpm_now, omega_now, theta_now, state_now
+    global dpitch_now
     frame_no += 1
     sim_time = frame_no * DT
     if ui is None:
@@ -3077,7 +3549,11 @@ def advance():
     # before the negation so it matches the kernel's own phi_c, which adds it
     # to the crossing azimuth in the un-reflected frame.
     prop_s.rotation.x = -(theta_now + PHASE_OFF)
-    set_pitch(beta_now)
+    # The spindle angle set_pitch just gave every blade, taken FROM it rather
+    # than recomputed beside it, for the same reason theta is integrated in one
+    # place: what the reader sees the blade doing and what the sheet is drawn
+    # on have to be the same number and not two agreeing ones.
+    dpitch_now = set_pitch(beta_now)
     # THE MODEL IS EVALUATED ON THE SHAFT SPEED THE SHAFT ACTUALLY HAS, not on
     # the one the slider commands: during the spin-up ramp the two differ by up
     # to a factor of the ramp fraction, and J, K_T and the thrust that follows
@@ -3170,7 +3646,33 @@ def cav_ratio(beta_deg, rps, va=None):
                              V_A if va is None else va))[3]
 
 
+def sheet_extent(cav_ratio_now, lam=1.0):
+    """The blade sheet's extent fraction at this Burrill ratio, 0 = none.
+
+    The kernel's own two lines, on the host, so the panel and the banner quote
+    the number the blades were actually drawn with. `lam` is the local loading
+    factor -- 1 for the disc-mean answer, 1 + k (1 - lobe_mean) at twelve
+    o'clock -- which is what makes the panel's pulse figure a measurement of
+    the same expression rather than a second one."""
+    exs = max(cav_ratio_now * lam / SHEET_CAV_INC - 1.0, 0.0)
+    return 1.0 - math.exp(-exs / SHEET_CAV_KNEE)
+
+
+def sheet_pulse(st):
+    """(extent at six o'clock, at the disc mean, at twelve o'clock).
+
+    The once-per-rev breathing as a triple, straight out of sheet_extent at the
+    lobe's own two extremes. At the bollard lamk is zero and all three are the
+    same number, which is the control being derived rather than authored."""
+    lk = wake_lobe_k(st)
+    cr = burrill(st)[3]
+    return (sheet_extent(cr, 1.0 - lk * W_LOBE_MEAN),
+            sheet_extent(cr, 1.0),
+            sheet_extent(cr, 1.0 + lk * (1.0 - W_LOBE_MEAN)))
+
+
 _SG, _TC, _L5, _CR = burrill(ST0)
+_SHX = sheet_pulse(ST0)
 print(f"       prop:   B{BLADES}-{EAR * 100:.0f}, D {D_PROP:g} m, "
       f"EAR {EAR:g}, wake {LIFETIME:.2f} s over "
       f"{wake_reach(UD0, UW0, LIFETIME):.2f} m\n"
@@ -3200,8 +3702,13 @@ print(f"       prop:   B{BLADES}-{EAR * 100:.0f}, D {D_PROP:g} m, "
          else ("-> hub rope only" if _CR * HUB_CAV > 1.0
                else "-> clear")) + "\n"
       f"               inception at this pitch: hub "
-      f"{inception_rpm(PITCH, V_A, True):.0f} rpm, "
-      f"tips {inception_rpm(PITCH, V_A, False):.0f} rpm\n"
+      f"{inception_rpm(PITCH, V_A, HUB_CAV):.0f} rpm, "
+      f"tips {inception_rpm(PITCH, V_A, 1.0):.0f} rpm, "
+      f"sheet {inception_rpm(PITCH, V_A, 1.0 / SHEET_CAV_INC):.0f} rpm\n"
+      f"       sheet:  back cavitation at {SHEET_CAV_INC:.2f} x the tips' line, "
+      f"{_CR / SHEET_CAV_INC:.2f} x here -> extent {_SHX[1]:.2f}"
+      + (f", breathing {_SHX[0]:.2f} at 6 o'clock -> {_SHX[2]:.2f} at 12"
+         if _SHX[2] - _SHX[0] > 1.0e-3 else " (steady: no way on)") + "\n"
       f"       inflow: {IN_SHARE:.0%} of slots, {T_IN:g} s upstream "
       f"({T_IN / PERIOD:.0%} of the period), reaching {IN_D_MAX:.2f} m ahead of "
       f"the disc at {IN_R_MOUTH:.2f} m = {IN_R_MOUTH / R_TIP:.1f} x the tip radius\n"
@@ -3482,11 +3989,17 @@ elif FILM:
         for tag, tt in (("in", start + 0.05), ("mid", mid), ("out", end - 0.05)):
             bd, rp = keyed(BETA_KEYS, tt), keyed(RPM_KEYS, tt)
             cr = cav_ratio(bd, rp / 60.0)
-            state = "CAVITATING" if cr > 1.0 else (
-                "hub rope only" if cr * HUB_CAV > 1.0 else "clear")
+            # Three rungs now, and the table says which one each beat is on.
+            # The film's schedule was written when there were two, and beat 6's
+            # 300 rpm is the only one that reaches the sheet -- which is worth
+            # knowing before watching it and is the kind of thing a re-cut (see
+            # the choreography warning above) would be composed around.
+            state = "SHEET" if cr > SHEET_CAV_INC else (
+                "CAVITATING" if cr > 1.0 else (
+                    "hub rope only" if cr * HUB_CAV > 1.0 else "clear"))
             print(f"       {name:>9} {tag:>3} t={tt:5.1f}  {rp:5.1f} rpm  "
                   f"beta {bd:4.1f}  tips {cr:5.2f}x  hub {cr * HUB_CAV:5.2f}x  "
-                  f"{state}")
+                  f"sheet {cr / SHEET_CAV_INC:5.2f}x  {state}")
 
     # ── The frames worth reading at 1:1 ─────────────────────────────────────
     # One per beat plus the two the beat structure is actually graded on: the
@@ -3814,9 +4327,28 @@ else:
         else:
             tp.imgui.text(f"clear water   tips {100.0 * (1.0 - cr):.0f}% short, "
                           f"hub {100.0 * (1.0 - cr * HUB_CAV):.0f}% short")
+        # ── R4: THE SHEET'S OWN LINE ────────────────────────────────────────
+        # State, extent and -- when the hull's shadow is driving anything --
+        # the once-per-rev pulse, as the two ends of the same expression rather
+        # than as a percentage somebody wrote down. At the bollard the two ends
+        # coincide and the line says so.
+        lo6, mid, hi12 = sheet_pulse(st)
+        sfill = int(round(min(cr / SHEET_CAV_INC, 1.0) * 24))
+        tp.imgui.text(f"sheet  [{'#' * sfill}{'-' * (24 - sfill)}] "
+                      f"{cr / SHEET_CAV_INC:4.2f} x back-cav inception")
+        if mid > 0.0:
+            tp.imgui.text(f"       SHEET ON THE BACKS   extent {mid:4.2f} of the "
+                          f"blade" + (f", {lo6:4.2f} at 6 -> {hi12:4.2f} at 12"
+                                      if hi12 - lo6 > 1e-3 else "  (steady)"))
+        else:
+            tp.imgui.text(f"       no back cavitation   "
+                          f"{100.0 * (1.0 - cr / SHEET_CAV_INC):.0f}% short "
+                          f"({SHEET_CAV_INC:.2f} x the tips' line)")
         tp.imgui.text(f"       inception at this pitch and speed: hub "
-                      f"{inception_rpm(beta_now, va_now, True):.0f}, tips "
-                      f"{inception_rpm(beta_now, va_now, False):.0f} rpm")
+                      f"{inception_rpm(beta_now, va_now, HUB_CAV):.0f}, tips "
+                      f"{inception_rpm(beta_now, va_now, 1.0):.0f}, sheet "
+                      f"{inception_rpm(beta_now, va_now, 1.0 / SHEET_CAV_INC):.0f}"
+                      f" rpm")
         tp.imgui.text(f"{tp.imgui.get_framerate():5.0f} fps   "
                       f"{N / 1e6:.1f} M parcels   t={sim_time:6.2f} s")
         tp.imgui.separator()
