@@ -8,6 +8,12 @@ pitch propeller on a ship's shaft three metres down, shedding tip vortices into
 the classic interleaved helices -- and, when it is pushed hard enough, filling
 their cores with VAPOUR and boiling the backs of its own blades.
 
+THE SHIP IS A TWIN-SCREW WORKBOAT -- a tug or a coastal supply vessel, 1.8 m
+controllable-pitch screws 2.34 m apart under eight metres of counter -- and that
+class is what every rpm below has to be read against: 120 rpm is a working helm
+on a 1.8 m screw, where the same number on a 6 m container-ship wheel would be
+flank speed and on a 0.3 m outboard would be idle.
+
 THIS DEMO USED TO BE A PROP IN AIR, and git keeps that version (5fb670d3 and
 back). Every structure below was built there and none of it changed in kind:
 the closed form, the two legs, the helm ring, the volume. What changed is the
@@ -99,6 +105,7 @@ stbd` are the same screw twice and have to be mirror images of each other.
     python warp_prop_vortex.py --shot 5.5 --rps 4 --speed 6   # J 0.83, eta_0 0.59
     python warp_prop_vortex.py --shot 5.5 --flat # the SAME frame, knobs at 0
     python warp_prop_vortex.py --depth 1.2       # shallower: it cavitates sooner
+    python warp_prop_vortex.py --no-ocean        # the flat analytic ceiling, as before
     python warp_prop_vortex.py --view mouth      # across the disc: water IN, ropes OUT
     python warp_prop_vortex.py --view prop       # the bronze, close
     python warp_prop_vortex.py --pitch 8         # P/D 0.31: a third of the thrust
@@ -284,8 +291,9 @@ throttle step lights the new wake and leaves the old one dark.
            slice of a screw thread, so P/D = 0.7 pi tan(beta), and 22 deg is
            P/D 0.889. The slider's ends (P/D 0.19 and 1.54) are outside the
            B-series validity box and the panel says so.
-    omega  the shaft rate, 60..600 rpm, RPS_REF = 6 rev/s the reference.
-           Tip speed 11 m/s at the default 120 rpm and 34 at 360.
+    omega  the shaft rate, 60..450 rpm, RPS_REF = 6 rev/s the reference.
+           Tip speed 11 m/s at the default 120 rpm, 34 at 360 and 42 at the
+           slider's top -- see RPM_MAX for why the top is 450 and not 600.
     V_ship the ship's speed through the water, 0..6 m/s, 0 by default. The
            model's own input is the speed of ADVANCE, V_a = V_ship (1 - w_mean)
            -- there is a hull in front of the disc now -- and it is what makes
@@ -587,6 +595,23 @@ G_ACC = 9.81
 # racing in a swell howls.
 DEPTH = cli_arg("--depth", 3.0, float)      # m of water over the shaft
 CAV_MARGIN = (P_ATM + RHO * G_ACC * DEPTH - P_VAP) / RHO    # m2/s2
+# ── ONE NUMBER, FOUR CONSUMERS ──────────────────────────────────────────────
+# The shaft centreline is y = 0, so "the surface" and "the submergence" are the
+# same quantity seen from the two ends, and there is now enough hanging off it
+# that repeating it would be a bug waiting to happen. WATERLINE is stated once,
+# HERE, beside the head it is the head OF, and everything downstream reads it:
+#
+#   CAV_MARGIN                     static head in the Burrill margin (above)
+#   renderer.set_fog_water_surface_y   where the murk's air stops
+#   Ocean.position.y               the FFT surface itself, so the waves are on
+#                                  the same plane the murk refracts the sun at
+#                                  and the caustic proxy walks up to
+#   HULL_TOP / the stern's stations   the ship floats on it
+#
+# --depth therefore moves all four together: --depth 1.2 is a shallow-draught
+# boat whose screws cavitate at the default helm AND whose surface is 1.2 m over
+# them, close enough that the Snell window fills the frame.
+WATERLINE = DEPTH
 # ── THE CRITERION IS BURRILL'S, NOT AN AUTHORED COEFFICIENT ─────────────────
 # This used to be `ca = K_CAV (L omega R)^2` against the margin, with K_CAV
 # picked so the default helm landed at 0.83. The shape of that was a guess: it
@@ -697,7 +722,14 @@ RPS_OP = 2.0                        # rev/s: the helm the LOOK is anchored at.
 RPS = cli_arg("--rps", 2.0, float)  # revolutions per second commanded
 OMEGA = 2.0 * math.pi * RPS
 OMEGA_REF = 2.0 * math.pi * RPS_REF
-RPM_MIN, RPM_MAX = 60.0, 600.0      # the slider's range
+# THE SLIDER'S RANGE, AND ITS TOP IS A PHYSICAL LIMIT RATHER THAN A ROUND
+# NUMBER. Tip speed is pi D n, so on this 1.8 m screw 600 rpm is 57 m/s at the
+# tips -- past anything a marine propeller is turned at, and far enough past it
+# that every number the panel prints up there is an extrapolation of the
+# B-series regression into water no ship has ever put a blade through. 450 rpm
+# is 42 m/s, which is still hard driving for a workboat and is the top of the
+# band the model can be held to.
+RPM_MIN, RPM_MAX = 60.0, 450.0      # the slider's range
 RPS_TO = cli_arg("--rps-to", RPS, float)      # headless: the step it takes
 RPS_AT = cli_arg("--rps-at", 1.0e9, float)    # ... at this sim time
 T_RAMP = cli_arg("--ramp", 2.0, float)   # spin-up, seconds
@@ -2570,8 +2602,64 @@ MURK = cli_arg("--murk", 0.12, float)          # sigma_t, 1/m
 MURK_COLOR = (0.004, 0.017, 0.021)
 scene.background = tp.Color(0.0018, 0.0075, 0.0092)
 if MURK > 0.0:
-    renderer.set_fog_water_surface_y(DEPTH)
+    renderer.set_fog_water_surface_y(WATERLINE)
     renderer.set_underwater_murk(MURK, tp.Color(*MURK_COLOR))
+
+# ── AND NOW THERE IS A REAL SURFACE ON THAT PLANE ───────────────────────────
+# set_fog_water_surface_y states WHERE the air stops; until this revision
+# nothing was drawn there, so the ceiling of this scene was an infinite flat
+# analytic plane. Everything the murk does with the sun was already correct
+# against it -- the sun is refracted at the interface (kMurkEtaAirWater), the
+# shadow rays follow the REFRACTED direction, and the shaft march carries a
+# CAUSTIC PROXY sampled from an FFT ocean's fine cascade at the surface point
+# each step's light passed through. That last one was simply inert here,
+# because it arms itself on `oceanFineTileSize > 0` and there was no Ocean in
+# the scene. Adding one is the whole of the change: the god-rays stop being
+# smooth cones and braid, with no renderer knob touched and none invented.
+#
+# THE SEA STATE IS SHORT-FETCH CHOP, NOT SWELL, and that is a caustics choice
+# rather than a weather one. The proxy reads the FINE cascade -- the metre-scale
+# ripple -- so what braids the shafts is the small stuff; a long ocean swell
+# would heave the whole surface without changing the pattern the light is cut
+# into. fetch = 25 km at 6.5 m/s is a coastal sea: steep centimetre-to-metre
+# waves, a surface that moves visibly through the Snell window, and no drama.
+#
+# THE RESOLUTION IS DELIBERATE, and the number that matters is not the FFT's.
+# `resolution` is the MESH grid, and it was a 1024-vertex sheet that turned out
+# to be the whole of an unrelated demo's 5 fps mystery. Here the murk saturates
+# at 6/sigma = 50 m, so a 400 m sheet is already twice as much water as can ever
+# be seen and 256 columns puts a vertex every 1.6 m -- coarse in the far field
+# that murk has eaten anyway, and irrelevant near the camera because the
+# cascades DISPLACE below mesh resolution and the chit perturbs the normal
+# below that. tile_size_2 is PINNED at 7 m rather than left to auto (which
+# would derive 3.7 m from a 400 m extent): that is the band the murk's caustic
+# constants were shaped against in the fjord, and letting the mesh extent
+# silently retune the light pattern is not a coupling this demo wants.
+#
+# WHAT IT DOES NOT BUY, MEASURED RATHER THAN HOPED: a Snell window. Looking UP
+# from under a real surface you see the whole sky packed into a 48.6 deg cone,
+# and that is the postcard shot of any underwater scene -- but only if there is
+# a sky. This scene has none: scene.background is deliberately near-black (see
+# THE BACKGROUND HAS TO STAY NEARLY BLACK), there is no environment map, and the
+# daylight is three DirectionalLights standing in for one. So the surface from
+# below refracts black and reflects dark water, and an up-looking framing comes
+# back an almost empty frame. Giving it a real sky would mean an environment
+# map, and the env is what feeds BOTH the murk's in-scatter and the ambient the
+# bronze is read against -- retuning the entire look for one shot. Not done, and
+# the same reason is why the ceiling in the aft framings is DARKER than it was:
+# the analytic plane's stand-in gradient (applyMurkSky) was quietly flattering a
+# sky that is not there, and the real surface is honest about it.
+#
+# --no-ocean is the A/B and the regression: it is the frame this demo drew
+# before the surface existed, and it must still be that frame exactly.
+OCEAN = "--no-ocean" not in sys.argv
+ocean = None
+if OCEAN and MURK > 0.0:
+    ocean = tp.Ocean(size=400.0, resolution=256, fft_size=512,
+                     wind_speed=6.5, wind_theta=0.35, fetch=25.0e3,
+                     choppiness=0.45, tile_size_1=64.0, tile_size_2=7.0)
+    ocean.position.y = WATERLINE
+    scene.add(ocean)
 
 # ── Two framings ────────────────────────────────────────────────────────────
 # "side" is the wake's own shot: the disc at the left edge and four metres of
@@ -3099,7 +3187,10 @@ def set_pitch(beta_deg):
 # below. What remains under the counter is the funnel and the first half metre
 # of slipstream, which are silt motes and the dimmest part of the frame.
 HULL_X0, HULL_X1 = -8.60, 1.06      # the run this section covers, m
-WATERLINE = DEPTH                   # y of the surface: the shaft is 3 m down
+# WATERLINE is DEPTH, stated once up beside CAV_MARGIN -- see ONE NUMBER, FOUR
+# CONSUMERS. The stern floats on the same plane the Ocean is built on and the
+# murk refracts the sun at; a second `WATERLINE = DEPTH` here is exactly the
+# kind of duplicate that survives one --depth change and not the next.
 HULL_TOP = WATERLINE + 0.30         # the deck edge, and it is never in frame
 # (x, y of the underside on the centreline, half beam, section fullness).
 # FULLNESS is the exponent in z = z_keel + (B - z_keel) sin(pi u / 2)^p and it
@@ -3532,6 +3623,16 @@ def advance():
     global dpitch_now
     frame_no += 1
     sim_time = frame_no * DT
+    # AND THE SEA IS ON THE SAME CLOCK, which the Ocean made non-optional. Every
+    # renderer-side animated field -- the FFT deform above all -- reads a WALL
+    # clock unless it is pinned, and this demo's whole contract is that a frame
+    # is a pure function of its index: --shot 5.5 has to be the frame --film
+    # renders at 5.5 s, and the wake was always careful about that while there
+    # was nothing else moving. Add a surface and leave it unpinned and the sea
+    # is at whatever phase 20 s of offline rendering put it at, so two runs of
+    # the same command disagree and --takes cannot re-cut a beat in place.
+    # Pinned here, one line, once per frame, before render().
+    renderer.sim_time = sim_time
     if ui is None:
         beta_now = scheduled_beta(sim_time)
         rpm_now = scheduled_rps(sim_time) * 60.0
