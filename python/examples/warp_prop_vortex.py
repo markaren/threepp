@@ -4506,10 +4506,10 @@ elif FILM:
             r = 3.6 * s
             d.ellipse([cx - r, cy - r, cx + r, cy + r], fill=col,
                       outline=(255, 255, 255, 235), width=max(int(1.3 * s), 1))
-        d.text((s * BX0, s * (BY1 + 20)),
+        d.text((s * BX0, s * (BY1 + 17)),
                f"{rpm:5.0f} rpm  V_a {st.va:4.2f} m/s  J {jc:5.3f}",
                font=F_NUM, fill=C_TEXT)
-        d.text((s * BX0, s * (BY1 + 38)),
+        d.text((s * BX0, s * (BY1 + 34)),
                f"K_T {vals[0]:5.3f}  10K_Q {vals[1]:5.3f}  eta_0 {vals[2]:5.3f}",
                font=F_NUM, fill=C_TEXT)
         if extrap:
@@ -4517,7 +4517,7 @@ elif FILM:
             # the feather beat drives P/D to 0.19 and the regression was fitted
             # over 0.5 to 1.4. A card that kept quoting three decimals there
             # would be lying with precision.
-            d.text((s * BX0, s * (BY1 + 56)),
+            d.text((s * BX0, s * (BY1 + 51)),
                    "outside B-series validity -- extrapolated",
                    font=F_SML, fill=C_WARN)
         card = _np.asarray(img.resize((PW, PH), Image.LANCZOS), _np.float32)
