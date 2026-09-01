@@ -195,7 +195,15 @@ namespace threepp::vulkan_pt {
         float terrainNormalScale;      // band tangent perturbation scale
         float terrainRoughStrength;    // 0..1 band roughness modulation
         float terrainHeightBlend;      // height-blend sharpness (0 = linear)
-        float _padTerrain[2];
+        // MaterialWithEnvMap::envMapIntensity (MeshStandardMaterial's
+        // env_map_intensity in Python). Scales the ENVIRONMENT-lit terms of
+        // this material where it is the PRIMARY surface: the reflection ray's
+        // env-miss radiance, the split-sum env specular, and the diffuse
+        // env-ambient gather. Direct lights, probe GI and geometry hits are
+        // NOT scaled — this is an IBL knob, not an exposure. 1.0 = unscaled,
+        // which is what every material that never sets it carries.
+        float envMapIntensity;
+        float _padTerrain;
         int32_t terrainBandAlbedoTex[4]; // -1 = band inert
         int32_t terrainBandNormalTex[4]; // -1 = no relief for that band
         float terrainBandRepeat[4];      // repeats per world metre
@@ -270,7 +278,8 @@ struct MaterialDesc {
     float terrainNormalScale;   // band tangent perturbation scale
     float terrainRoughStrength; // 0..1 band roughness modulation
     float terrainHeightBlend;   // height-blend sharpness (0 = linear)
-    vec2  _padTerrain;
+    float envMapIntensity;      // IBL scale for this material as PRIMARY surface; 1 = unscaled
+    float _padTerrain;
     ivec4 terrainBandAlbedoTex; // per-band overlay (A = height); -1 = inert
     ivec4 terrainBandNormalTex; // per-band normal/roughness; -1 = none
     vec4  terrainBandRepeat;    // repeats per world metre

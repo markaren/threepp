@@ -133,7 +133,8 @@ vec3 shadeWater(vec3 P, vec3 N, vec3 V, MaterialDesc pm, int instIdx,
     const vec3 reflOrig = P + Nmacro * SHADOW_EPS;// this water's own reflection: pass through crests
     vec3 reflectColor = traceRadiance(reflOrig, R, doShadows, maxLod,
                                       reflLod, seed, /*cheapHits=*/true,// water: blur+temporal absorb
-                                      /*probeHitFill=*/true);
+                                      /*probeHitFill=*/true,
+                                      /*envInt=*/pm.envMapIntensity);
     gTraceSkipWater = false;
 
     // ── FIRE IN THE MIRROR ───────────────────────────────────────────────────
@@ -258,7 +259,8 @@ vec3 shadeWater(vec3 P, vec3 N, vec3 V, MaterialDesc pm, int instIdx,
                 const vec3 bottom = traceRadiance(uwOrigin, dRef, /*doShadows=*/false,
                                                   maxLod, 0.12 * maxLod, seed,
                                                   /*cheapHits=*/false,
-                                                  /*probeHitFill=*/false);
+                                                  /*probeHitFill=*/false,
+                                                  /*envInt=*/1.0);// transmitted, not IBL
                 transmitColor = applyMurk(bottom, uwOrigin, uwOrigin + dRef * dBot);
             }
         }
@@ -335,7 +337,8 @@ vec3 shadeWater(vec3 P, vec3 N, vec3 V, MaterialDesc pm, int instIdx,
                     const vec3 bottom = traceRadiance(uwOrigin, dRef, /*doShadows=*/false,
                                                       maxLod, 0.12 * maxLod, seed,
                                                       /*cheapHits=*/false,// the floor IS the subject — keep it sharp
-                                                      /*probeHitFill=*/false);// probes can't resolve the underwater cavity
+                                                      /*probeHitFill=*/false,// probes can't resolve the underwater cavity
+                                                      /*envInt=*/1.0);// transmitted, not IBL
                     // View path + approximate sun path (vertical depth) through
                     // the column, Beer-Lambert per channel.
                     const float sunPath = dBot * (1.0 + clamp(-dRef.y, 0.0, 1.0));
@@ -688,7 +691,8 @@ vec3 shadeGlass(vec3 P, vec3 N, vec3 V, MaterialDesc pm, vec3 albedo,
         // every splat-free scene.
         vec3 reflectColor = traceRadiance(reflOrig, R, doShadows, maxLod, missLod, seed,
                                           /*cheapHits=*/false,// glass shows hits SHARP — deterministic shading
-                                          /*probeHitFill=*/true);
+                                          /*probeHitFill=*/true,
+                                          /*envInt=*/pm.envMapIntensity);
         // Splats in the mirror, the glass leg — the shadeWater block's twin, on
         // this path's own origin/direction and bounded by its own traced hit
         // distance. See that block for the argument; flags bit 12 is the same
@@ -712,7 +716,8 @@ vec3 shadeGlass(vec3 P, vec3 N, vec3 V, MaterialDesc pm, vec3 albedo,
             {
                 const vec3 behind = traceRadiance(P - N * SHADOW_EPS, dT, doShadows, maxLod, missLod, seed,
                                                   /*cheapHits=*/false,// refracted content is sharp
-                                                  /*probeHitFill=*/false);// content under glass: probes can't resolve the cavity
+                                                  /*probeHitFill=*/false,// content under glass: probes can't resolve the cavity
+                                                  /*envInt=*/1.0);// transmitted, not IBL
                 vec3 tint = albedo;
                 if (pm.attenuationDistance > 0.0 && pm.thickness > 0.0)
                     tint *= pow(max(pm.attenuationColor, vec3(1e-6)), vec3(pm.thickness / pm.attenuationDistance));
@@ -752,7 +757,8 @@ vec3 shadeGlass(vec3 P, vec3 N, vec3 V, MaterialDesc pm, vec3 albedo,
                 }
                 const vec3 behind = traceRadiance(exitP + dOut * SHADOW_EPS, dOut, doShadows, maxLod, missLod, seed,
                                                   /*cheapHits=*/false,// refracted content is sharp
-                                                  /*probeHitFill=*/false);// content under glass: probes can't resolve the cavity
+                                                  /*probeHitFill=*/false,// content under glass: probes can't resolve the cavity
+                                                  /*envInt=*/1.0);// transmitted, not IBL
                 vec3 tint = albedo;
                 if (pm.attenuationDistance > 0.0)
                     tint *= pow(max(pm.attenuationColor, vec3(1e-6)), vec3(inDist / pm.attenuationDistance));

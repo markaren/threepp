@@ -186,7 +186,13 @@ float probeEnvFillVis(vec3 P, vec3 N, float maxLod) {
     return mix(1.0, vis, smoothstep(0.0, 0.1, conf));
 }
 
-vec3 traceRadiance(vec3 origin, vec3 dir, bool doShadows, float maxLod, float missLod, inout uint seed, bool cheapHits, bool probeHitFill) {
+// envInt = the PRIMARY surface's MaterialDesc.envMapIntensity, passed down
+// rather than read off a global so the two nested callers (a glass retrace
+// inside a water shade) can never disagree about whose material is in force.
+// It scales ONLY the terms where this ray ESCAPES to the environment; a
+// geometry hit is lit by the scene, not by the primary surface's IBL knob, and
+// stays untouched at every bounce.
+vec3 traceRadiance(vec3 origin, vec3 dir, bool doShadows, float maxLod, float missLod, inout uint seed, bool cheapHits, bool probeHitFill, float envInt) {
     const int REFL_MAX_BOUNCES = 3;
     // A PASS-THROUGH is not a bounce: the water-crest skip, a sub-cutoff cutout
     // texel and a blend layer all leave the ray travelling in the SAME direction
@@ -219,7 +225,7 @@ vec3 traceRadiance(vec3 origin, vec3 dir, bool doShadows, float maxLod, float mi
         rayQueryInitializeEXT(rq, topAS, gl_RayFlagsOpaqueEXT, kRayMaskAll, o, 1e-3, d, 1e30);
         while (rayQueryProceedEXT(rq)) {}
         if (rayQueryGetIntersectionTypeEXT(rq, true) == gl_RayQueryCommittedIntersectionNoneEXT) {
-            radiance += tput * sampleEnvLod(d, curMissLod);// escaped → environment
+            radiance += tput * sampleEnvLod(d, curMissLod) * envInt;// escaped → environment
             break;
         }
         const int          hitId  = rayQueryGetIntersectionInstanceCustomIndexEXT(rq, true);
@@ -372,7 +378,7 @@ vec3 traceRadiance(vec3 origin, vec3 dir, bool doShadows, float maxLod, float mi
     // answer in its own right; at 3 it fired constantly, and a frequent wrong
     // answer is a visible artifact whichever colour it is.
     // Every shading exit break's first, so this can never double-count.
-    if (step >= REFL_MAX_STEPS) radiance += tput * sampleEnvLod(d, curMissLod);
+    if (step >= REFL_MAX_STEPS) radiance += tput * sampleEnvLod(d, curMissLod) * envInt;
     // A moving-caster SHADOW inside the reflected content is moving content just
     // like the mover itself: the shadow rays at the reflected hits committed on
     // a currently-MOVING mesh, so the reflected radiance carries a shadow that
@@ -394,7 +400,7 @@ vec3 traceRadiance(vec3 origin, vec3 dir, bool doShadows, float maxLod, float mi
 // Diffuse GI is what the cosine gather integrates anyway. The hit gets NO env
 // fill: the 2nd-bounce sky comes from the gather's OWN rays that MISS — so
 // enclosed scenes don't leak sky while open scenes still get it.
-vec3 giRadiance(vec3 origin, vec3 dir, bool doShadows, float maxLod, inout uint seed, out bool missed) {
+vec3 giRadiance(vec3 origin, vec3 dir, bool doShadows, float maxLod, inout uint seed, out bool missed, float envInt) {
     missed = false;
     gGiRayHitMoved = false;// set below on a 1-bounce hit on a MOVING mesh (GI dwell cut)
     rayQueryEXT rq;
@@ -405,7 +411,7 @@ vec3 giRadiance(vec3 origin, vec3 dir, bool doShadows, float maxLod, inout uint 
     while (rayQueryProceedEXT(rq)) {}
     if (rayQueryGetIntersectionTypeEXT(rq, true) == gl_RayQueryCommittedIntersectionNoneEXT) {
         missed = true;// sky visible along this ray — feeds the openness estimate
-        return sampleEnvLod(dir, maxLod);// escaped → sky (the env 1st-bounce term)
+        return sampleEnvLod(dir, maxLod) * envInt;// escaped → sky (the env 1st-bounce term)
     }
 
     const int          hitId  = rayQueryGetIntersectionInstanceCustomIndexEXT(rq, true);

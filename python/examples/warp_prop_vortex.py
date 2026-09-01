@@ -3159,9 +3159,25 @@ def rust_map(suffix, srgb):
     return t
 
 
+# The sky is three metres above the prop and the renderer does not know it. An
+# environment map lights a surface as if it hung in open air; this casting hangs
+# under a water surface, and the blue-green half of that sky has already been
+# spent getting down here. Nothing in the deferred path attenuates image-based
+# light along the view or the reflection ray -- the one-medium water colours what
+# is BEHIND it, not what falls on it -- so the sky arrived at full strength and
+# the blades came out cream instead of bronze: an albedo of 0.66/0.42/0.17 was
+# being washed out by an unattenuated white IBL sitting on top of it.
+# env_map_intensity is that attenuation, hand-applied. 0.35 is the value at which
+# the metal reads as warm bronze from the prop, side and stern views without the
+# blade backs going to a silhouette, and it is in the same family as the
+# transmission the water itself shows over that depth. It scales ONLY the
+# environment terms -- the key, the rake and the upwell below are untouched.
+IBL_UNDERWATER = 0.35
 metal = tp.MeshStandardMaterial()
 metal.color = BRONZE
 metal.metalness = MET
+if SKY:
+    metal.env_map_intensity = IBL_UNDERWATER
 nrm = rust_map("nor_gl", False)
 if nrm is not None:
     metal.normal_map = nrm
@@ -3185,6 +3201,9 @@ polish = tp.MeshStandardMaterial()
 polish.color = tp.Color(0.72, 0.48, 0.21)
 polish.metalness = min(MET + 0.12, 1.0)
 polish.roughness = 0.24
+if SKY:
+    # Same water over the same parts -- the flanges are not in a different sea.
+    polish.env_map_intensity = IBL_UNDERWATER
 # aoMap is deliberately NOT set and its 1k JPG deliberately not shipped: the
 # Vulkan deferred G-buffer carries albedo / rough-metal / normal texture slots
 # and no occlusion term (gbuffer.frag), so it would be 640 kB in the repo for

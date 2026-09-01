@@ -3411,7 +3411,8 @@ VulkanRenderer::Impl::MaterialDesc VulkanRenderer::Impl::materialFromMesh(const 
             d.terrainNormalScale = 1.f;
             d.terrainRoughStrength = 0.f;
             d.terrainHeightBlend = 0.f;
-            d._padTerrain[0] = d._padTerrain[1] = 0.f;
+            d.envMapIntensity = 1.f;// unscaled IBL: what every material that never sets it carries
+            d._padTerrain = 0.f;
             for (int bi = 0; bi < 4; ++bi) {
                 d.terrainBandAlbedoTex[bi] = -1;
                 d.terrainBandNormalTex[bi] = -1;
@@ -3523,6 +3524,14 @@ VulkanRenderer::Impl::MaterialDesc VulkanRenderer::Impl::materialFromMesh(const 
                 d.attenuationColor[1] = att->attenuationColor.g;
                 d.attenuationColor[2] = att->attenuationColor.b;
                 d.attenuationDistance = att->attenuationDistance;
+            }
+            if (auto* em = dynamic_cast<MaterialWithEnvMap*>(mat.get())) {
+                // The deferred path has no per-material env MAP — one scene
+                // environment lights everything — so only the INTENSITY is
+                // meaningful here, and only where this material is the primary
+                // surface. Negative values would flip the sign of a radiance,
+                // so the knob is clamped at zero and left open above 1.
+                d.envMapIntensity = std::max(0.f, em->envMapIntensity);
             }
             if (auto* th = dynamic_cast<MaterialWithThickness*>(mat.get())) {
                 d.thickness  = std::max(0.0f, th->thickness);

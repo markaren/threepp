@@ -2,7 +2,11 @@
 // rect-light form factor, analytic-light pick weighting, and
 // shadeDiffuseDirect (emissive + direct analytic + diffuse IBL).
 
-vec3 gatherEnv(vec3 P, vec3 N, ivec2 px, uint frame, bool doShadows, bool stochastic, int nGI, out float openness) {
+// envInt = the shaded surface's MaterialDesc.envMapIntensity. It scales the
+// SKY the gather sees -- the rays that miss, and (deterministic path) the
+// near-hit env fill -- and nothing else: a ray that lands on geometry brings
+// back that geometry's own shade, which this surface's IBL knob has no say in.
+vec3 gatherEnv(vec3 P, vec3 N, ivec2 px, uint frame, bool doShadows, bool stochastic, int nGI, float envInt, out float openness) {
     const float maxLod  = float(max(pc.envMipCount, 1u) - 1u);
     const vec3 up = abs(N.y) < 0.99 ? vec3(0.0, 1.0, 0.0) : vec3(1.0, 0.0, 0.0);
     const vec3 T  = normalize(cross(up, N));
@@ -37,7 +41,7 @@ vec3 gatherEnv(vec3 P, vec3 N, ivec2 px, uint frame, bool doShadows, bool stocha
             const vec3  hemi = vec3(r * cos(phi), r * sin(phi), sqrt(max(0.0, 1.0 - u1)));
             const vec3  dir  = normalize(T * hemi.x + B * hemi.y + N * hemi.z);
             bool missed;
-            vec3 gi = giRadiance(orig, dir, doShadows, maxLod, seed, missed);// cheap 1-bounce; cosine pdf cancels
+            vec3 gi = giRadiance(orig, dir, doShadows, maxLod, seed, missed, envInt);// cheap 1-bounce; cosine pdf cancels
             if (missed) missN += 1.0;
             // FIREFLY CLAMP (safety) — giRadiance has no specular sun-catch and its
             // emitter NEE is internally clamped, so the diffuse GI is already
@@ -80,11 +84,11 @@ vec3 gatherEnv(vec3 P, vec3 N, ivec2 px, uint frame, bool doShadows, bool stocha
         rayQueryInitializeEXT(rq, topAS, gl_RayFlagsOpaqueEXT, kRayMaskOpaque, orig, 1e-3, dir, SKY_DIST);
         while (rayQueryProceedEXT(rq)) {}
         if (rayQueryGetIntersectionTypeEXT(rq, true) == gl_RayQueryCommittedIntersectionNoneEXT) {
-            acc  += sampleEnvLod(dir, maxLod);
+            acc  += sampleEnvLod(dir, maxLod) * envInt;
             open += 1.0;
         } else {
             const float t = rayQueryGetIntersectionTEXT(rq, true);
-            hitHack += clamp(t / AO_RADIUS, 0.0, 1.0) * sampleEnvLod(dir, maxLod);
+            hitHack += clamp(t / AO_RADIUS, 0.0, 1.0) * sampleEnvLod(dir, maxLod) * envInt;
         }
     }
     openness = open / float(GI_RAYS);

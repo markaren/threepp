@@ -291,8 +291,8 @@ vec3 emissiveIrradiance(vec3 P, vec3 N, int EM_SAMPLES, bool doShadows) {
     return sum;
 }
 
-vec3 traceRadiance(vec3 origin, vec3 dir, bool doShadows, float maxLod, float missLod, inout uint seed, bool cheapHits, bool probeHitFill);// fwd decl
-vec3 giRadiance(vec3 origin, vec3 dir, bool doShadows, float maxLod, inout uint seed, out bool missed);// fwd decl (cheap 1-bounce GI)
+vec3 traceRadiance(vec3 origin, vec3 dir, bool doShadows, float maxLod, float missLod, inout uint seed, bool cheapHits, bool probeHitFill, float envInt);// fwd decl
+vec3 giRadiance(vec3 origin, vec3 dir, bool doShadows, float maxLod, inout uint seed, out bool missed, float envInt);// fwd decl (cheap 1-bounce GI)
 
 // Scales the DIRECT emission of traceRadiance's hits — the emitter-specular
 // OWNERSHIP split for the opaque reflection. 1 = the ray owns emitter spec

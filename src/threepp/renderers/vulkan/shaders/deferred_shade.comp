@@ -1297,7 +1297,7 @@ void main() {
         // occlude the scene ambient with RT AO instead of the gather's openness.
         float openness;
         gGiMovFrac = 0.0;// set by gatherEnv: fraction of GI rays hitting moving geometry
-        diffInd = gatherEnv(worldPos, N, px, pc.frame, shadowsOn, demodIndirect, giSpp, openness) + (lights.ambient + hemiAmbient(N)) * rtAo;
+        diffInd = gatherEnv(worldPos, N, px, pc.frame, shadowsOn, demodIndirect, giSpp, pm.envMapIntensity, openness) + (lights.ambient + hemiAmbient(N)) * rtAo;
     } else {
         diffInd = sampleEnvLod(N, maxLod) + lights.ambient + hemiAmbient(N);
     }
@@ -1487,7 +1487,13 @@ void main() {
                 envSpecVis = mix(1.0, envSpecVis, smoothstep(0.0, 0.1, conf));
             }
         }
-        lit += sampleEnvLod(R, roughness * maxLod) * (F0 * ab.x + ab.y) * envSpecW * envSpecVis;
+        // envMapIntensity rides here too: on a >=0.7-rough metal the traced
+        // reflection band is faded out entirely (reflBlend 0) and THIS
+        // split-sum lookup is the surface's whole environment answer -- leaving
+        // it unscaled would make the knob inert on exactly the materials that
+        // need it most.
+        lit += sampleEnvLod(R, roughness * maxLod) * (F0 * ab.x + ab.y) * envSpecW * envSpecVis
+             * pm.envMapIntensity;
     }
     // ── Emitter-specular ESTIMATOR SPLIT by lobe width ──────────────────────
     // specNEET: 0 = near-mirror (the BRDF ray owns emitter spec — tight lobe hits
@@ -1598,7 +1604,10 @@ void main() {
         if (dot(Rd, N) <= 0.0) Rd = R;
         vec3 r = traceRadiance(shadowOrig, Rd, shadowsOn, maxLod, missLod, reflSeed,
                                /*cheapHits=*/true,// reflection channel: blur+temporal absorb
-                               /*probeHitFill=*/true);
+                               /*probeHitFill=*/true,
+                               // THE reflection channel: this surface's own
+                               // environment, so its envMapIntensity applies.
+                               /*envInt=*/pm.envMapIntensity);
         // SPLATS IN THE MIRROR, glossy path — the water/glass legs' block
         // (deferred_shade_50_water_glass.glsl:113), verbatim on this path's own
         // ray and hit: the traced leg cannot see a SplatCloud (composited AFTER
@@ -1687,7 +1696,8 @@ void main() {
             gEnvFillVis = probeEnvFillVis(worldPos, N, maxLod);// surface sky visibility for the env hit fill
             const vec3  behind   = traceRadiance(worldPos - V * SHADOW_EPS, -V, shadowsOn, maxLod, 0.0, seed,
                                                  /*cheapHits=*/false,// straight into lit, unblurred
-                                                 /*probeHitFill=*/false);// content behind a blend surface
+                                                 /*probeHitFill=*/false,// content behind a blend surface
+                                                 /*envInt=*/1.0);// TRANSMITTED content, not this surface's IBL
             lit = behind + lit * strength;
         } else if (pm.transmission > 0.0) {
             if (pm.ior < 1.05) {
@@ -1700,7 +1710,8 @@ void main() {
                 gEnvFillVis = probeEnvFillVis(worldPos, N, maxLod);// surface sky visibility for the env hit fill
                 const vec3  behind  = traceRadiance(worldPos - V * SHADOW_EPS, -V, shadowsOn, maxLod, 0.0, seed,
                                                     /*cheapHits=*/false,// straight into lit, unblurred
-                                                    /*probeHitFill=*/false);// content behind a blend surface
+                                                    /*probeHitFill=*/false,// content behind a blend surface
+                                                    /*envInt=*/1.0);// TRANSMITTED content, not this surface's IBL
                 lit = mix(behind, lit, opacity);
             } else {
                 // REAL refractive glass (ior>1). ONE sharp Fresnel reflect+refract
