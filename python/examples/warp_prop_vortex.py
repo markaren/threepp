@@ -2711,7 +2711,34 @@ scene = tp.Scene()
 # anything at all and the far field still converges on MURK_COLOR. The first
 # pass set the tint by eye as "the colour of the water" and got a mid-teal
 # backdrop that no amount of darkening the background could touch.
-MURK = cli_arg("--murk", 0.12, float)          # sigma_t, 1/m
+#
+# AND THE VEIL IS WHAT WAS PAINTING THE BRONZE CREAM, which took a measurement
+# rather than an argument. In-scatter is murkColor x (ambient + the sky's top
+# mip) x (1 - exp(-sigma s)), so it is a wash of LIT teal-white laid over
+# everything at a strength set by distance -- and the camera in `--view prop`
+# sits about three metres off the disc, which at 0.12/m is a 30% veil over the
+# casting. The three candidates were measured on the same crop of the same
+# frame (`--shot 5.5 --rps 3.2 --view prop`, median of a blade face, as R/B):
+#
+#     sprites off (--bright 0 --in-gain 0)   1.30    the volume in front of
+#                                                    the casting is worth
+#                                                    NOTHING, to two digits
+#     env map off (task A)                   ~3%     not the IBL either
+#     0.12/m, as shipped                     1.29
+#     0.06/m                                 1.40
+#     0.03/m                                 1.45
+#     no murk at all                         1.57    the whole veil, removed
+#     the albedo itself, 0.66/0.42/0.17      1.84
+#
+# So the veil owns the wash and the light rig is left alone. 0.12/m is HARBOUR
+# water and this scene is not in a harbour -- there is a sky over it, a 25 km
+# fetch on the ocean and open water astern -- so 0.06/m, the murky end of the
+# open coastal band, is the honest number and it is half the wash back. The far
+# field still falls into murk well inside the frame: saturation is 6/sigma =
+# 100 m against the ocean's 200 m half-extent, so the sheet's edge is never
+# reachable and `--view side` still has the ropes standing against water that
+# has gone to MURK_COLOR.
+MURK = cli_arg("--murk", 0.06, float)          # sigma_t, 1/m
 # ── AND NOW THERE IS A SKY, WHICH IS WHAT THE WATER WAS MISSING ─────────────
 # Everything above about a near-black background was written for a scene lit
 # by three DirectionalLights and nothing else, and it was right for the wake
@@ -2765,7 +2792,7 @@ if MURK > 0.0:
 # THE RESOLUTION IS DELIBERATE, and the number that matters is not the FFT's.
 # `resolution` is the MESH grid, and it was a 1024-vertex sheet that turned out
 # to be the whole of an unrelated demo's 5 fps mystery. Here the murk saturates
-# at 6/sigma = 50 m, so a 400 m sheet is already twice as much water as can ever
+# at 6/sigma = 100 m, so a 400 m sheet is still twice as much water as can ever
 # be seen and 256 columns puts a vertex every 1.6 m -- coarse in the far field
 # that murk has eaten anyway, and irrelevant near the camera because the
 # cascades DISPLACE below mesh resolution and the chit perturbs the normal
