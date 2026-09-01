@@ -853,6 +853,7 @@ namespace threepp::vulkan {
             float           world[16]{};
             VkDeviceAddress posAddr   = 0;
             VkDeviceAddress countAddr = 0;
+            VkDeviceAddress attrAddr = 0;// Config::attributes; .a = medium weight, 0 = none
             float           boxMin[3]{};
             float           boxInvSize[3]{};
             std::uint32_t   capacity   = 0;

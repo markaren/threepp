@@ -2082,6 +2082,8 @@ def shed(out_pos: wp.array(dtype=wp.vec4),
     va = h[3]
     ld = hl[0]                                  # K_T / K_T_design at birth
     caq = hl[1]                                 # Burrill ratio at birth
+    colf = wp.clamp(caq / COL_CR_OP, 0.0, 1.0)   # see THE COLUMN NEEDS A REASON TO EXIST
+    colf = colf * colf
     lamk = hl[2]                                # the wake lobe's own amplitude
     # The two legs' own speeds, before the per-span lag below.
     u_d0 = va + vi
@@ -2342,7 +2344,7 @@ def shed(out_pos: wp.array(dtype=wp.vec4),
         # ropes appearing over a dead wake.
         wc_b = W_CORE0 + burst * pa_b
         grow_b = 1.0 + SPRITE_GROW * pa_g
-        gain_b = (1.0 - 0.20 * af) * omgl * (1.0 + bub_cav * cavi)
+        gain_b = (1.0 - 0.20 * af) * omgl * (1.0 + bub_cav * cavi) * colf
         col_b = wp.vec3(0.80, 0.87, 0.94) * (1.0 - pa_m) \
             + wp.vec3(0.50, 0.58, 0.64) * pa_m
         # ── A TIP OR HUB FILAMENT: vapour, or almost nothing ────────────────
@@ -2431,7 +2433,19 @@ def shed(out_pos: wp.array(dtype=wp.vec4),
     # realisations; reflecting the sum rather than the position keeps the
     # displacement attached to the filament it belongs to.
     out_pos[i] = wp.vec4(p[0], p[1], sgn * (p[2] + SHAFT_Z), sprite_r0 * grow)
-    out_col[i] = wp.vec4(c[0], c[1], c[2], 1.0)
+    # ── THE BODY FOLLOWS THE THROTTLE TOO ───────────────────────────────────
+    # Alpha is the parcel's MEDIUM WEIGHT: the share of SIGMA it deposits into
+    # the density volume. It used to be implicit and equal to 1 for every slot,
+    # and that was the "smoke ring" at a barely-turning shaft: parcels are born
+    # per unit time, so at 10 rpm they crowd the disc twelve times denser than
+    # at the operating point, and every one of them carried the operating
+    # point's full body -- a fog ring around a screw that is not doing
+    # anything. The RADIANCE already follows omg x loading (omgl); the body now
+    # follows the same law, normalised at the default helm so the frame there
+    # and every frame above it are unchanged (capped at 1: past the operating
+    # point the sprite law carries the excess, the column does not thicken).
+    out_col[i] = wp.vec4(c[0], c[1], c[2],
+                         colf * wp.clamp(omg * (G_FLOOR + (1.0 - G_FLOOR) * ld) / OMG_OP, 0.0, 1.0))
 
 
 # ── R1: THE SHEET ON THE BACK OF THE BLADE, AND WHY IT IS A SECOND LAUNCH ───
@@ -2640,7 +2654,9 @@ def sheet_cav(out_pos: wp.array(dtype=wp.vec4),
         * (0.55 + 0.45 * vapi) * (1.0 + 0.22 * sh)
     c = wp.vec3(0.90, 0.95, 1.00) * (bright * gain / wp.pow(grow, flux_p))
     out_pos[j] = wp.vec4(p[0], p[1], sgn * (p[2] + SHAFT_Z), sprite_r0 * grow)
-    out_col[j] = wp.vec4(c[0], c[1], c[2], 1.0)
+    # The same body law as the wake's (see THE BODY FOLLOWS THE THROTTLE TOO).
+    out_col[j] = wp.vec4(c[0], c[1], c[2],
+                         wp.clamp(omg * (G_FLOOR + (1.0 - G_FLOOR) * ld) / OMG_OP, 0.0, 1.0))
 
 
 wp.init()
@@ -3886,6 +3902,21 @@ def cav_ratio(beta_deg, rps, va=None):
     panel state the number the wake was actually drawn with."""
     return burrill(PropState(rps * 60.0, beta_deg,
                              V_A if va is None else va))[3]
+
+
+# ── THE COLUMN NEEDS A REASON TO EXIST ──────────────────────────────────────
+# omg holds the wake's flux per METRE invariant under the throttle, and the
+# floor under it (OM_G_FLOOR) leaves a barely-turning shaft "something" to
+# show. Underwater that pair is the smoke ring: at 10 rpm the parcels of a
+# LIFETIME travel centimetres, so the operating point's whole column -- kept
+# per metre -- is folded onto the disc as a ring of puffs around a screw that
+# is doing nothing. A real screw at 10 rpm entrains no bubbles at all; the
+# sub-inception column the default helm shows is faint BECAUSE it is close to
+# inception. So the column scales with the parcel's own Burrill ratio at
+# birth, squared (it is a pressure deficit, and that goes as n^2), normalised
+# at the default helm so that frame and everything above it are untouched.
+# This is what the sprite radiance AND the volume body are multiplied by.
+COL_CR_OP = cav_ratio(BETA_DESIGN, RPS_OP)
 
 
 def sheet_extent(cav_ratio_now, lam=1.0):

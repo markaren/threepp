@@ -46,8 +46,16 @@ layout(push_constant, scalar) uniform Pc {
     float    sigmaFixed; // DensityRepr::sigmaPerParticle * kParticleDensityScale
     float    _pad;       // the uint64 members give the block 8-byte alignment;
                          // spelled out so the host struct's tail padding and
-                         // this block are the same 120 bytes by construction
+                         // this block are the same 128 bytes by construction
+    // Config::attributes, or 0. When present, .a is the parcel's MEDIUM WEIGHT:
+    // the share of sigmaPerParticle this parcel deposits. A field whose parcels
+    // differ in how much body they carry (a wake that is silt at one throttle
+    // and vapour at another) puts that here, so the optical body follows the
+    // same law the radiance does instead of every slot weighing the same. The
+    // default attribute alpha is 1, which is the old behaviour exactly.
+    uint64_t attrAddr;
 } pc;
+layout(buffer_reference, scalar, buffer_reference_align = 16) readonly buffer AttrBuf { vec4 v[]; };
 
 void main() {
     const uint i = gl_GlobalInvocationID.x;
@@ -58,6 +66,14 @@ void main() {
     if (!(P.w >= 0.0)) return;// dead slot (and NaN-safe: NaN fails every compare)
 
     const vec3 w = (pc.world * vec4(P.xyz, 1.0)).xyz;
+    // The parcel's medium weight (see the push block). NaN-safe like the dead
+    // test: garbage weighs nothing rather than everything.
+    float bodyW = 1.0;
+    if (pc.attrAddr != 0ul) {
+        const float a = AttrBuf(pc.attrAddr).v[i].a;
+        bodyW = (a >= 0.0) ? min(a, 16.0) : 0.0;
+    }
+    if (bodyW <= 0.0) return;
     const vec3 t = (w - pc.boxMin) * pc.boxInvSize;
     if (any(lessThan(t, vec3(0.0))) || any(greaterThan(t, vec3(1.0)))) return;
 
@@ -80,7 +96,7 @@ void main() {
         // the whole boundary layer's mass onto the face voxels.
         if (any(lessThan(c, ivec3(0))) || any(greaterThan(c, ivec3(hi)))) continue;
         const vec3  wt = mix(vec3(1.0) - f, f, vec3(o));
-        const uint  q  = uint(pc.sigmaFixed * (wt.x * wt.y * wt.z) + 0.5);
+        const uint  q  = uint(pc.sigmaFixed * bodyW * (wt.x * wt.y * wt.z) + 0.5);
         if (q != 0u) imageAtomicAdd(densityImage, c, q);
     }
 }

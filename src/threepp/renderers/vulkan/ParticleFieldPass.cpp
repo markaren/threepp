@@ -158,8 +158,9 @@ namespace {
         std::uint32_t   capacity;
         float           sigmaFixed;
         float           _pad;
+        VkDeviceAddress attrAddr;// Config::attributes; .a = medium weight, 0 = none
     };
-    static_assert(sizeof(DensityScatterPc) == 120,
+    static_assert(sizeof(DensityScatterPc) == 128,
                   "particle_density_scatter push-constant drift");
 
     constexpr std::uint32_t kEmitLocalSize = 64;// == particle_emit.comp
@@ -1612,6 +1613,7 @@ void ParticleFieldPass::prepareFrame(std::uint64_t serial, std::uint32_t frame,
                 // The scatter adds an INTEGER, so the host does the one float
                 // multiply that turns σ per particle into fixed-point units.
                 dd.sigmaFixed = std::max(dr.sigmaPerParticle, 0.f) * kDensityFixedScale;
+                dd.attrAddr   = d.attrAddr;// the same buffer the billboards colour from
                 densityDispatch_.push_back(dd);
             }
         }
@@ -2193,6 +2195,7 @@ void ParticleFieldPass::recordDensityScatter(VkCommandBuffer cb) {
         pc.res        = dd.res;
         pc.capacity   = dd.capacity;
         pc.sigmaFixed = dd.sigmaFixed;
+        pc.attrAddr   = dd.attrAddr;
         vkCmdPushConstants(cb, densityPipeLayout_, VK_SHADER_STAGE_COMPUTE_BIT,
                            0, sizeof(pc), &pc);
         vkCmdDispatch(cb, dd.groups, 1, 1);

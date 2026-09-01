@@ -147,8 +147,11 @@ namespace threepp {
             bool          orientations  = false;// allocate the snorm16x4 buffer
             // ── PER-PARTICLE APPEARANCE (plans/particle-volumetric-sprites R2) ─
             // Allocate ONE device buffer of capacity * 16 B holding a vec4 per
-            // particle: rgb = linear HDR radiance, a = reserved (phase-2
-            // opacity). It rides the POSITIONS' path exactly — same exportable
+            // particle: rgb = linear HDR radiance, a = the parcel's MEDIUM
+            // WEIGHT — the share of DensityRepr::sigmaPerParticle it deposits
+            // into the density volume (1 = the old every-slot-equal body; the
+            // phase-2 alpha-over coverage reads the same number). It rides the
+            // POSITIONS' path exactly — same exportable
             // flags under Ownership::Interop, same export call, same per-frame
             // snapshot — so a mode where positions are safe and attributes are
             // not cannot exist by construction.

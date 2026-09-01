@@ -325,6 +325,55 @@ float bbWaterCrossingT(BbView V, float partY, float len) {
     return 1.0 - (r0 + (1.0 - r0) * m2 * m2 * m);
 }
 
+// ── Where a submerged particle APPEARS from above the surface ────────────────
+// The deferred water shows what is under it through a REFRACTED ray, so a hull
+// or a screw seen from the air sits where Snell puts it, not where it is. A
+// sprite projected at its true position lands beside the geometry it belongs
+// to: from a deck the cavitation ropes leave the screws that shed them. This
+// moves the particle to its apparent place for a camera in the air and a
+// particle in the water, and is an exact no-op otherwise.
+//
+// Flat interface (the waves are centimetres, this acts over metres), the same
+// plane the murk and the crossing Fresnel use. In VIEW space the eye is the
+// origin and world up is viewToWorldY (the world-Y row of the inverse view:
+// unit for a rigid transform). Split the eye->particle vector into a height
+// pair (h_c above the plane, h_p below) and a horizontal run L; the crossing
+// sits x along that run where Snell holds,
+//     x / sqrt(x^2 + h_c^2) = n (L - x) / sqrt((L - x)^2 + h_p^2),  n = 1.333,
+// which is monotone in x, so four Newton steps from the straight-line crossing
+// converge everywhere the eye can be. The apparent DIRECTION is toward the
+// crossing point; the apparent DISTANCE is kept at the true optical path
+// (eye->crossing->particle), so the sprite keeps the size, the depth and the
+// fog leg it had, and only its bearing moves. The deferred bottom trace and
+// this now put a screw and its rope on the same line from the same eye.
+vec3 bbApparentAbove(BbView V, vec3 vp) {
+    if (V.murkDensity <= 0.0 || V.waterSurfaceY >= 1e29) return vp;
+    const float hc = V.camWorldY - V.waterSurfaceY;
+    if (hc <= 0.0) return vp;                         // the eye is in the water
+    const vec3  up = V.viewToWorldY;
+    const float dy = dot(up, vp);                     // particle height rel. eye
+    const float hp = -(hc + dy);                      // depth below the plane
+    if (hp <= 0.0) return vp;                         // the particle is in the air
+    const vec3  horiz = vp - up * dy;
+    const float L = length(horiz);
+    if (L < 1e-5) return vp;                          // straight down: no bend
+    const vec3  hdir = horiz / L;
+    const float n  = 1.333;
+    float x = L * hc / (hc + hp);                     // the straight-line crossing
+    for (int i = 0; i < 4; ++i) {
+        const float a  = sqrt(x * x + hc * hc);
+        const float lx = L - x;
+        const float b  = sqrt(lx * lx + hp * hp);
+        const float f  = x / a - n * lx / b;
+        const float df = hc * hc / (a * a * a) + n * hp * hp / (b * b * b);
+        x = clamp(x - f / df, 0.0, L);
+    }
+    const vec3  cross = hdir * x - up * hc;
+    const float lx = L - x;
+    const float path = length(cross) + sqrt(lx * lx + hp * hp);
+    return normalize(cross) * path;
+}
+
 void main() {
     BbParams   P  = BbParams(pc.paramsAddr);// a reference cannot be `const`
     BbView     V  = BbView(pc.viewAddr);
@@ -356,7 +405,7 @@ void main() {
     float radius = (((P.flags & kBbRadiusInW) != 0u) ? pw.w : P.uniformRadius) * P.sizeScale;
     radius *= max(1.0 - P.sizeTaper * ageFrac, 0.0);
 
-    const vec3 vp = viewOf(vec4(pw.xyz, 1.0));
+    const vec3 vp = bbApparentAbove(V, viewOf(vec4(pw.xyz, 1.0)));
     // Distance to the eye. For a perspective camera this is the literal camera
     // distance; for an orthographic one it is the distance to the view origin,
     // which is the only thing "near" can mean there and is what every
@@ -411,7 +460,7 @@ void main() {
         // A slot reborn between the two samples has prevPos == pos by the
         // emitter's own cycle guard, so this needs no second dead test: the
         // displacement is exactly zero and the quad stays round.
-        const vec2 d = (vp.xy - viewOf(vec4(pp.xyz, 1.0)).xy) * P.stretchOverDt;
+        const vec2 d = (vp.xy - bbApparentAbove(V, viewOf(vec4(pp.xyz, 1.0))).xy) * P.stretchOverDt;
         const float len = length(d);
         if (len > 1e-7) {
             axisMajor = d / len;
