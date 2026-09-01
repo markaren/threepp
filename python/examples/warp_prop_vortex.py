@@ -2082,8 +2082,6 @@ def shed(out_pos: wp.array(dtype=wp.vec4),
     va = h[3]
     ld = hl[0]                                  # K_T / K_T_design at birth
     caq = hl[1]                                 # Burrill ratio at birth
-    colf = wp.clamp(caq / COL_CR_OP, 0.0, 1.0)   # see THE COLUMN NEEDS A REASON TO EXIST
-    colf = colf * colf
     lamk = hl[2]                                # the wake lobe's own amplitude
     # The two legs' own speeds, before the per-span lag below.
     u_d0 = va + vi
@@ -2119,6 +2117,8 @@ def shed(out_pos: wp.array(dtype=wp.vec4),
     # the wake's LENGTH, which is the honest reading. It stays a function of
     # omega alone -- the LOADING half of the same coupling is ld, above.
     omg = OM_G_FLOOR + (1.0 - OM_G_FLOOR) * om / OMEGA_REF
+    colf = wp.clamp(om / OMEGA_OP, 0.0, 1.0)     # see THE COLUMN NEEDS A REASON TO EXIST
+    colf = colf * colf
     # caq -- the Burrill ratio at this parcel's own crossing -- came off the
     # helm ring above. It is what the throttle-step shots are made of: a parcel
     # carries the cavitation state of the moment it was shed for the rest of
@@ -3910,13 +3910,20 @@ def cav_ratio(beta_deg, rps, va=None):
 # show. Underwater that pair is the smoke ring: at 10 rpm the parcels of a
 # LIFETIME travel centimetres, so the operating point's whole column -- kept
 # per metre -- is folded onto the disc as a ring of puffs around a screw that
-# is doing nothing. A real screw at 10 rpm entrains no bubbles at all; the
-# sub-inception column the default helm shows is faint BECAUSE it is close to
-# inception. So the column scales with the parcel's own Burrill ratio at
-# birth, squared (it is a pressure deficit, and that goes as n^2), normalised
-# at the default helm so that frame and everything above it are untouched.
-# This is what the sprite radiance AND the volume body are multiplied by.
-COL_CR_OP = cav_ratio(BETA_DESIGN, RPS_OP)
+# is doing nothing. A real screw at 10 rpm entrains no bubbles at all. So the
+# column scales with the SHAFT SPEED at birth, squared (entrainment is a
+# pressure deficit, and that goes as n^2), normalised at the default helm so
+# that frame and everything above it are untouched. This is what the sprite
+# radiance AND the volume body are multiplied by.
+#
+# SHAFT SPEED AND NOT LOADING, deliberately. The first cut keyed this on the
+# Burrill ratio, which also collapses when the blades FEATHER -- and a screw
+# at 230 rpm and 5 degrees still slices the water at 20 m/s; what it sheds is
+# a ghost of its column, which the loading term in omgl already dims 4-5x,
+# and which is the whole of the feather beat: the funnel dies, the wake ages
+# out, and the propeller visibly never stops. Keying on the Burrill ratio
+# switched that shot to black water. Speed alone leaves it exactly as it was.
+OMEGA_OP = 2.0 * math.pi * RPS_OP
 
 
 def sheet_extent(cav_ratio_now, lam=1.0):
