@@ -1106,6 +1106,9 @@ namespace threepp_py {
                                            d["overlay_ms"] = t.overlayMs;
                                            d["dof_ms"] = t.dofMs;
                                            d["froxel_ms"] = t.froxelMs;
+                                           // Half-res RT AO + bent normals (rtao.comp);
+                                           // 0 unless deferred AO is enabled.
+                                           d["rtao_ms"] = t.rtaoMs;
                                            d["instance_expand_ms"] = t.instanceExpandMs;
                                            // Staging (or interop-export) -> vertex/normal copies +
                                            // the batched BLAS refit, for every graduated CPU
