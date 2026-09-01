@@ -268,6 +268,10 @@ int main(int argc, char** argv) {
     bool closeUp = false;// low camera near a rock face (inspect detail relief)
     std::string shotPath;
     int shotFrames = 140;
+    // --cam px py pz tx ty tz: fixed camera (close-up rock-face / grazing-terrain
+    // shots for the RTAO validation gate). Overrides the orbit controls.
+    bool camSet = false;
+    float camV[6] = {};
     for (int i = 1; i < argc; ++i) {
         const std::string a = argv[i];
         if (a == "--shot" && i + 1 < argc) shotPath = argv[++i];
@@ -276,6 +280,10 @@ int main(int argc, char** argv) {
         else if (a == "--topdown") topDown = true;
         else if (a == "--noerode") noErode = true;
         else if (a == "--closeup") closeUp = true;
+        else if (a == "--cam" && i + 6 < argc) {
+            for (int k = 0; k < 6; ++k) camV[k] = static_cast<float>(std::atof(argv[++i]));
+            camSet = true;
+        }
     }
 
     Canvas canvas("Vulkan Deferred - Mountains", {{"vsync", false}});
@@ -603,7 +611,13 @@ int main(int argc, char** argv) {
             fpsFrames = 0;
         }
 
-        controls.update();
+        if (camSet) {// fixed close-up camera overrides the orbit controls
+            camera.position.set(camV[0], camV[1], camV[2]);
+            controls.target.set(camV[3], camV[4], camV[5]);
+            camera.lookAt(controls.target);
+        } else {
+            controls.update();
+        }
 
         // Single in-place re-roll at frame 20 (then settle): exercises the
         // applyTo path and lets the motion vector settle for the prevVertex

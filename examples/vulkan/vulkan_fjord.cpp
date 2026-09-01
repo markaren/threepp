@@ -783,6 +783,7 @@ int main(int argc, char** argv) {
     // wind never freezes — the "no culling" baseline). The default builds the
     // same blades as a grid of GrassMesh tiles (cullable + distance-frozen).
     bool singleGrass = false;
+    int optProbe = -1;// --probe 0|1: probe-GI override (indirect-lighting A/B harness)
     // --mist [density]: shape the unified AIR medium as a tall ground-mist
     // PROFILE (setHeightFog). With the "haze" slider at 0 (no scene.fog) this
     // density CREATES the medium directly (back-compat); the froxels own the near
@@ -854,6 +855,7 @@ int main(int argc, char** argv) {
     };
     for (int i = 1; i < argc; ++i) {
         if (std::strcmp(argv[i], "--shot") == 0 && i + 1 < argc) shotPath = argv[++i];
+        else if (std::strcmp(argv[i], "--probe") == 0 && i + 1 < argc) optProbe = std::atoi(argv[++i]);
         else if (std::strcmp(argv[i], "--frames") == 0 && i + 1 < argc) shotFrames = std::atoi(argv[++i]);
         else if (std::strcmp(argv[i], "--time") == 0 && i + 1 < argc) startTime = static_cast<float>(std::atof(argv[++i]));
         else if (std::strcmp(argv[i], "--view") == 0 && i + 1 < argc) shotCam = std::atoi(argv[++i]);
@@ -909,6 +911,7 @@ int main(int argc, char** argv) {
                   {{"vsync", false},
                    {"size", WindowSize{winW > 0 ? winW : 960, winH > 0 ? winH : 600}}});
     VulkanRenderer renderer(canvas);
+    if (optProbe >= 0) renderer.setProbeGI(optProbe != 0);
     renderer.toneMapping = ToneMapping::ACESFilmic;
     renderer.setAutoExposure(!noAutoExposure);
     if (debugView > 0) renderer.setHybridDebugView(debugView);
@@ -2157,6 +2160,7 @@ int main(int argc, char** argv) {
                       << "  oceanFoam " << t.oceanFoamMs << "  oceanBlas " << t.oceanBlasMs
                       << "  tlasRefit " << t.tlasRefitMs << "  dynGeom " << t.dynGeomRefitMs
                       << "  instExpand " << t.instanceExpandMs
+                      << "  rtao " << t.rtaoMs
                       << "\n  gpuTotal " << t.gpuTotalMs << "  gpuPassSum " << t.gpuPassSumMs
                       << "  unbracketed " << (t.gpuTotalMs - t.gpuPassSumMs)
                       << "  cpuEnsure " << t.cpuEnsureSceneMs << "  cpuRecord " << t.cpuRecordMs

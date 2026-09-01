@@ -1320,6 +1320,9 @@ namespace threepp {
             // grass deformers are NOT in here — they record their own dispatches
             // and BLAS work elsewhere, and only the ocean's is bracketed.
             float dynGeomRefitMs  = 0.f;
+            // Half-res RT ambient occlusion + bent normals (rtao.comp).
+            // 0 unless setDeferredAO is on (the pass is only dispatched then).
+            float rtaoMs          = 0.f;
             // GPU execution SPAN of the whole submitted command buffer — not a sum
             // of the fields above, and not busy time. It covers the passes that
             // have no timestamp bracket at all (skinned/tet/grass deformers,

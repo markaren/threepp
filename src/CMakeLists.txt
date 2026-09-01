@@ -1305,6 +1305,13 @@ if (THREEPP_WITH_VULKAN)
         "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/cloud_shadow.comp"
         kCloudShadowCompSpv
         _cloud_shadow_spv_h)
+    # Half-res ray-traced ambient occlusion + bent normals (deferred): short
+    # cosine occlusion rays through the TLAS, temporally reprojected at half res.
+    # See DeferredShade::recordRtao.
+    compile_vulkan_shader(threepp
+        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/rtao.comp"
+        kRtaoCompSpv
+        _rtao_spv_h)
     compile_vulkan_shader(threepp
         "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/probe_update.comp"
         kProbeUpdateCompSpv

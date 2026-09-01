@@ -235,6 +235,35 @@ namespace threepp {
             cldDep.pMemoryBarriers = &cldBar;
             vkCmdPipelineBarrier2(cb, &cldDep);
         }
+        // Half-res RT ambient occlusion + bent normals. Recorded AFTER the
+        // probe-GI update (shares the TLAS) and BEFORE the shade, which
+        // bilaterally upsamples rtao for its ambient / specular-occlusion and
+        // (Phase B) its bent-normal probe+env diffuse indirect. The barrier
+        // makes the pass's storage writes visible to the shade's sampled read,
+        // same shape as the cloud barrier above.
+        if (deferredAO_) {
+            gpuTimings_->begin(cb, TP_Rtao, currentFrame);
+            view().deferredShade_->recordRtao(cb, currentFrame,
+                                              regionRenderExt_.width, regionRenderExt_.height,
+                                              sampleIndex);
+            gpuTimings_->end(cb, TP_Rtao, currentFrame);
+            VkMemoryBarrier2 aoBar{};
+            aoBar.sType         = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2;
+            aoBar.srcStageMask  = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+            aoBar.srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
+            aoBar.dstStageMask  = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+            // BOTH read bits: the shade samples rtao (binding 74, sampler2D)
+            // but reads rtaoAux (binding 75) via imageLoad on a readonly
+            // image2D — a STORAGE read. A SAMPLED_READ-only mask leaves the
+            // aux write unsynchronised against that load.
+            aoBar.dstAccessMask = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT |
+                                  VK_ACCESS_2_SHADER_STORAGE_READ_BIT;
+            VkDependencyInfo aoDep{};
+            aoDep.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
+            aoDep.memoryBarrierCount = 1;
+            aoDep.pMemoryBarriers = &aoBar;
+            vkCmdPipelineBarrier2(cb, &aoDep);
+        }
         vulkan::DeferredShade::DispatchParams shadeParams{};
         shadeParams.width              = regionRenderExt_.width;
         shadeParams.height             = regionRenderExt_.height;

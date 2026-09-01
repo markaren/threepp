@@ -10,6 +10,7 @@
 #include "threepp/utils/BufferGeometryUtils.hpp"
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstdlib>
 #include <filesystem>
@@ -91,6 +92,7 @@ int main(int argc, char** argv) {
     bool camSet = false;   // --cam px py pz tx ty tz: fixed camera (interior shots)
     float camV[6] = {};
     int optSun = -1;       // --sun 0|1: hide/show the example's stand-in DirectionalLight
+    int optAo = -1;        // --ao 0|1: half-res RT ambient occlusion + bent normals
     float optLightRad = -1.f;// --lightrad r: physical source radius on loaded point/spot lights (soft-shadow triage)
     bool  fogOnCli = false; float fogDensityCli = 0.05f;// --fog d: FogExp2 at density d (volumetric-fog triage)
     bool  volFogCli = false;// --volfog: enable the volumetric dir-light fog (sun shafts)
@@ -126,6 +128,7 @@ int main(int argc, char** argv) {
             camSet = true;
         }
         else if (a == "--sun" && i + 1 < argc) optSun = std::atoi(argv[++i]);
+        else if (a == "--ao" && i + 1 < argc) optAo = std::atoi(argv[++i]);
         else if (a == "--lightrad" && i + 1 < argc) optLightRad = static_cast<float>(std::atof(argv[++i]));
         else if (a == "--fog" && i + 1 < argc) { fogOnCli = true; fogDensityCli = static_cast<float>(std::atof(argv[++i])); }
         else if (a == "--volfog") volFogCli = true;
@@ -202,6 +205,7 @@ int main(int argc, char** argv) {
         else if (sunPolicy == "off") vk->setEnvSunPolicy(VulkanRenderer::EnvSunPolicy::Off);
         else if (sunPolicy == "auto") vk->setEnvSunPolicy(VulkanRenderer::EnvSunPolicy::Auto);
         if (optSunRad >= 0.f) vk->setSunAngularRadius(optSunRad);
+        if (optAo >= 0) vk->setDeferredAO(optAo != 0);
         if (optOccl >= 0) vk->setOcclusionCulling(optOccl != 0);
         if (optLod >= 0) vk->setAutoLod(optLod != 0);
         if (optDlss >= 0) vk->setDlss(optDlss != 0);
@@ -536,9 +540,25 @@ int main(int argc, char** argv) {
         }
         renderer->render(scene, camera);
 
+        // Perf harness: average the frame time over the last 60 settle frames
+        // before the capture (interleave probe/AO on-off runs in one session).
+        static auto perfLast = std::chrono::steady_clock::now();
+        static double perfSum = 0.0;
+        static int    perfN = 0;
+        const auto perfNow = std::chrono::steady_clock::now();
+        const double perfDt = std::chrono::duration<double>(perfNow - perfLast).count();
+        perfLast = perfNow;
+        if (!shotPath.empty() && modelReady && shotFrame >= shotFrames - 60) {
+            perfSum += perfDt;
+            ++perfN;
+        }
+
         if (shotPath.empty()) {
             ui->render();
         } else if (modelReady && ++shotFrame >= shotFrames) {
+            if (perfN > 0)
+                std::cout << "[perf] avg " << (perfSum / perfN * 1000.0) << " ms/frame ("
+                          << (perfN / perfSum) << " fps) over " << perfN << " frames" << std::endl;
             if (shotFrame == shotFrames && vk) {// env-sun extraction is Vulkan-only
                 const auto d = vk->envSunDirection();
                 const auto c = vk->envSunColor();

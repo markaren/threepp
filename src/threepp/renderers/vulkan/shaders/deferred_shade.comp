@@ -401,6 +401,18 @@ layout(set = 0, binding = 61) uniform sampler2D cloudColorTex;// composited by c
 // upsample in cloudGather() needs r to reject taps whose cloud lies behind
 // the compositing pixel's own surface.
 layout(set = 0, binding = 66) uniform sampler2D cloudAuxTex;
+// Half-res RTAO (rtao.comp, bindings 72-76). rgb = bent normal (n*0.5+0.5),
+// a = ambient occlusion in [0,1] (1 = fully open). The full-res shade
+// depth-aware bilateral-upsamples it (rtaoGather() below) and feeds ao/bentN
+// into the ambient + specular-occlusion + bent-normal probe/env diffuse
+// indirect. texelFetch (the depth reject reconstructs each tap's own surface).
+layout(set = 0, binding = 74) uniform sampler2D rtaoTex;
+// RTAO aux (the SAME storage descriptor the rtao pass writes — this pass only
+// reads it via imageLoad). .b = NEAR-FIELD ao (distance-weighted: contact hits
+// darken fully, occluders near AO_RADIUS barely) — the AO applied to the probe
+// indirect, whose own Chebyshev depth already carries far-field visibility.
+// .a = far-field sky visibility (enclosure).
+layout(set = 0, binding = 75, rgba16f) readonly uniform image2D rtaoAuxImage;
 // Cloud shadow map (cloud_shadow.comp, binding 65) — top-down cloud
 // transmittance over an 8 km camera-centred square. Sampled by cloudShadowSample()
 // (deferred_shade_10_lighting_utils.glsl) to attenuate the sun on the ground.
@@ -569,6 +581,74 @@ vec2 paneToPhys(sampler2D t, vec2 paneUv) {
 }
 
 #include "emissive_lights.glsl"// emitter light table + coverage sample plan (the NEE loops below)
+// DEPTH-AWARE 2×2 bilateral upsample of the half-res RTAO at this full-res
+// pixel (mirrors cloudGather). A plain bilinear tap bleeds occlusion across
+// depth discontinuities — a dark halo hugging every silhouette. Each tap is
+// reconstructed to its OWN surface view-Z from the full-res depth and rejected
+// when it disagrees with this pixel's surface; all four rejected (thin
+// geometry between the half-res taps) → fully open (ao=1), the safe identity.
+void rtaoGather(ivec2 px, float centerViewZ, vec3 N,
+                out float ao, out float aoNear, out float skyVis, out vec3 bentN) {
+    const ivec2 hsz = textureSize(rtaoTex, 0);
+    const vec2  size = vec2(float(pc.width), float(pc.height));
+    const vec2  uv  = (vec2(px) + 0.5) / size;
+    const vec2  pos = uv * vec2(hsz) - 0.5;
+    const ivec2 b0  = ivec2(floor(pos));
+    const vec2  f   = pos - vec2(b0);
+    const vec4  wb  = vec4((1.0 - f.x) * (1.0 - f.y), f.x * (1.0 - f.y),
+                           (1.0 - f.x) * f.y,         f.x * f.y);
+    float aoAcc = 0.0, nearAcc = 0.0, skyAcc = 0.0; vec3 bnAcc = vec3(0.0); float wSum = 0.0;
+    for (int i = 0; i < 4; ++i) {
+        const ivec2 tp   = clamp(b0 + ivec2(i & 1, i >> 1), ivec2(0), hsz - 1);
+        // Each half-res tap is ANCHORED to full-res texel tp*2 (rtao.comp's
+        // convention) — reconstruct the tap's surface from THAT texel's own
+        // depth + NDC so the reject compares the surface the AO was actually
+        // traced from (a half-pixel mismatch reads grazing floors as
+        // depth-inconsistent and rejects everything).
+        const ivec2 tf   = min(tp * 2, ivec2(int(pc.width) - 1, int(pc.height) - 1));
+        const vec2  tuv  = (vec2(tf) + 0.5) / size;
+        const vec2  tndc = vec2(tuv.x * 2.0 - 1.0, -(tuv.y * 2.0 - 1.0)) + cam.jitter.xy;
+        const float td   = texelFetch(gbufDepthTex, tf, 0).x;
+        const vec4  tvh  = cam.projInverse * vec4(tndc, td, 1.0);
+        const float tvz  = tvh.z / tvh.w;
+        if (abs(tvz - centerViewZ) > 0.1 * max(abs(centerViewZ), 1e-3)) continue;
+        const vec4 r   = texelFetch(rtaoTex, tp, 0);
+        const vec4 aux = imageLoad(rtaoAuxImage, tp);// (histLen, E[ao^2], aoNear, skyVis)
+        aoAcc   += wb[i] * r.a;
+        nearAcc += wb[i] * clamp(aux.b, 0.0, 1.0);
+        skyAcc  += wb[i] * clamp(aux.a, 0.0, 1.0);
+        bnAcc   += wb[i] * (r.xyz * 2.0 - 1.0);
+        wSum    += wb[i];
+    }
+    if (wSum > 1e-4) {
+        ao     = aoAcc / wSum;
+        aoNear = nearAcc / wSum;
+        skyVis = skyAcc / wSum;
+        bentN  = (dot(bnAcc, bnAcc) > 1e-8) ? normalize(bnAcc) : N;
+    } else {
+        ao = 1.0; aoNear = 1.0; skyVis = 1.0; bentN = N;
+    }
+}
+
+// Jiménez et al. (GTAO 2016) multi-bounce approximation: a per-channel curve
+// that lifts the AO term in bright-albedo regions (light bounces more in a
+// white room) so corners don't over-darken. Returns a colour ∈ [ao..1] used in
+// place of the scalar ao on the diffuse indirect.
+vec3 gtaoMultiBounce(float visibility, vec3 albedo) {
+    const vec3 a =  2.0404 * albedo - 0.3324;
+    const vec3 b = -4.7951 * albedo + 0.6417;
+    const vec3 c =  2.7552 * albedo + 0.6903;
+    return max(vec3(visibility), ((visibility * a + b) * visibility + c) * visibility);
+}
+
+// Frostbite specular occlusion (Lagarde & de Rousiers 2014): derive a specular
+// AO from the diffuse AO + view/roughness so glossy IBL is occluded in
+// cavities without a separate bent-cone trace. Rough surfaces keep more, mirror
+// surfaces almost none (they sample a tight cone).
+float specularOcclusion(float NdotV, float ao, float roughness) {
+    return clamp(pow(max(NdotV + ao, 0.0), exp2(-16.0 * roughness - 1.0)) - 1.0 + ao, 0.0, 1.0);
+}
+
 #include "deferred_shade_10_lighting_utils.glsl"
 #include "deferred_shade_20_restir_di.glsl"
 #include "deferred_shade_30_gi_gather.glsl"
@@ -1115,8 +1195,19 @@ void main() {
     }
 
     // Diffuse indirect: visibility-gated env irradiance (RT, flags bit 1).
-    const bool aoOn = (pc.flags & 2u) != 0u;
-    if (!aoOn) giSkip = false;// checkerboard only pays off on the RT gather
+    const bool aoOn    = (pc.flags & 2u) != 0u;
+    const bool probesOn = probeGrid.enabled > 0.5;
+    // Half-res RT ambient occlusion + bent normal (rtao.comp), depth-aware
+    // upsampled to this pixel. ao=1 / bentN=N when AO is off (identity).
+    float rtAo = 1.0;
+    float rtAoNear = 1.0;
+    float rtSkyVis = 1.0;// far-field sky visibility (enclosure): env/ambient gate
+    vec3  bentN = N;
+    if (aoOn && pc.shadeMode != 1u) rtaoGather(px, viewH.z / viewH.w, N, rtAo, rtAoNear, rtSkyVis, bentN);
+    // Checkerboard only pays off on the stochastic RT gather (Phase A). With a
+    // probe field (Phase B) the diffuse indirect is a cheap smooth probe/env
+    // tap — never skip it — and with AO off there is no gather to skip.
+    if (!aoOn || probesOn) giSkip = false;
     vec3 diffInd;
     if (pc.shadeMode == 1u) {
         // Dispatch B: cheap deterministic fill only — no RT gather, no
@@ -1151,10 +1242,52 @@ void main() {
             imageStore(reservoirPosWrite, px, imageLoad(reservoirPosRead, px));
             imageStore(reservoirWWrite,  px, imageLoad(reservoirWRead,  px));
         }
+    } else if (aoOn && probesOn) {
+        // ── Phase B: probe + bent-normal env diffuse indirect ────────────────
+        // The probe field already carries the sky + multi-bounce interior GI
+        // (what the stochastic 1-bounce rays approximated); RT AO restores the
+        // near-field occlusion the SH-L1 grid can't represent. This REPLACES
+        // the per-pixel gatherEnv GI rays — a smooth, ray-free indirect.
+        //
+        // OCCLUSION SPLIT (the Sponza black-floor fix): the probe tap's own
+        // Chebyshev depth is already a far-field visibility term, so gating
+        // probeE by the FULL hemisphere AO double-counts occlusion — a floor
+        // shadowed by columns 1-2 m away went near-black while the GI-ray path
+        // kept its wall bounce. probeE gets only the NEAR-FIELD AO (contact
+        // darkening the grid can't see).
+        //
+        // ENCLOSURE (the Sponza corridor sky-leak fix): the env/sky and flat
+        // scene ambient carry NO probe visibility, but finite-radius ao ≈ 1 on a
+        // flat wall mid-corridor ("no occluder within 2 m" ≠ "sky visible") let
+        // full-sky irradiance flood the interior. They are now gated by rtSkyVis
+        // — the temporally-accumulated LONG-ray sky visibility (→ 0 deep inside,
+        // matching the GI-ray path that only sampled env on a true ray miss).
+        //
+        // NORMAL SPLIT: the probe is tapped with the GEOMETRIC normal — SH-L1
+        // irradiance evaluated along an aggressive bent normal points a floor's
+        // tap away from the lit walls that light it (and per-pixel bent normals
+        // on the primary surface would draw the AO structure into the smooth
+        // probe field). The ENV tap keeps the bent normal: sky visibility is
+        // exactly what the bent normal measures, and the PMREM has no other
+        // occlusion information.
+        //
+        // PORT NOTE (not in the original commits): hemiAmbient(N) landed on dev
+        // after the fork and is folded into the ambient term by BOTH the Phase A
+        // branch and the AO-off branch below. It is included here too so Phase B
+        // is not systematically darker than Phase A by that term.
+        float conf;
+        const vec3 probeE = probeIrradianceConf(worldPos + N * SHADOW_EPS, N, conf) * (1.0 / PI);
+        const vec3 envE   = sampleEnvLod(bentN, maxLod);
+        diffInd = mix(envE * gtaoMultiBounce(rtSkyVis, albedo),
+                      probeE * gtaoMultiBounce(rtAoNear, albedo), conf)
+                + (lights.ambient + hemiAmbient(N)) * rtSkyVis;
     } else if (aoOn) {
+        // ── Phase A: no probe field — keep the stochastic 1-bounce GI gather
+        // for the sky/indirect term (nothing else supplies the near-field), but
+        // occlude the scene ambient with RT AO instead of the gather's openness.
         float openness;
         gGiMovFrac = 0.0;// set by gatherEnv: fraction of GI rays hitting moving geometry
-        diffInd = gatherEnv(worldPos, N, px, pc.frame, shadowsOn, demodIndirect, giSpp, openness) + (lights.ambient + hemiAmbient(N)) * openness;
+        diffInd = gatherEnv(worldPos, N, px, pc.frame, shadowsOn, demodIndirect, giSpp, openness) + (lights.ambient + hemiAmbient(N)) * rtAo;
     } else {
         diffInd = sampleEnvLod(N, maxLod) + lights.ambient + hemiAmbient(N);
     }
@@ -1293,31 +1426,56 @@ void main() {
     // opaqueRefl keeps the usual rough remainder (1 − reflBlend).
     const float envSpecW = opaqueRefl ? (1.0 - reflBlend) : 1.0;
     if (pm.transmission <= 0.0 && envSpecW > 0.0) {
-        float envSpecVis = 1.0;
-        if (probeGrid.enabled > 0.5) {
-            // Pure measured ratio — NO validity-confidence floor. A conf-mix
-            // toward 1.0 here re-admitted (1−conf) of the full-sky specular on
-            // every interior wall (probes near walls are only partially valid)
-            // and measurably re-brightened the Sponza corridors the probe
-            // model had fixed. The starved-neighbourhood concern belongs to
-            // the glass retrace fill (probeHitFill), not this term.
-            const vec3  LUMW   = vec3(0.2126, 0.7152, 0.0722);
-            float conf;
-            const float actE   = dot(probeIrradianceConf(worldPos, N, conf), LUMW) * (1.0 / PI);
-            const float unoccE = dot(sampleEnvLod(N, maxLod), LUMW);
-            envSpecVis = clamp(actE / max(unoccE, 1e-5), 0.0, 1.0);
-            // …EXCEPT when the neighbourhood measured NOTHING (conf → 0: every
-            // trilinear probe invalid — inside geometry — or fully crushed).
-            // probeIrradiance then returns black meaning "unmeasured", and the
-            // raw ratio read that as "fully occluded": on ≥0.7-rough METALS
-            // (diffuse ≡ 0, this env split-sum is their ENTIRE shade) it
-            // painted probe-cell-sized black squares on models thinner than a
-            // grid cell (glTF AnisotropyStrengthTest / SheenWoodLeatherSofa /
-            // RecursiveSkeletons). The steep gate keeps the interior ratio
-            // untouched — a wall with ANY valid, visible probe has conf well
-            // above 0.1 — and only bails to unoccluded env where nothing
-            // measured at all (there the ratio is noise, not signal).
-            envSpecVis = mix(1.0, envSpecVis, smoothstep(0.0, 0.1, conf));
+        // SPECULAR OCCLUSION, split by whether RT AO is available.
+        //
+        // AO ON — Frostbite (Lagarde & de Rousiers 2014): the un-occluded PMREM
+        // lookup is what made enclosed interiors read "lit with no light" —
+        // every rough wall received full-sky specular ambient regardless of
+        // visibility. Near-field ao alone can't express enclosure (a flat
+        // corridor wall reads ao≈1), so feed the tighter of near-field ao and
+        // the far-field sky visibility: cavities occlude via ao, deep interiors
+        // via skyVis. Works with or without a probe field.
+        //
+        // AO OFF — PORT NOTE: the AO-off branch preserves pre-port dev
+        // behaviour; unifying it under Frostbite is a user decision, not a port
+        // side effect. Frostbite needs rtAo/rtSkyVis, which do not exist with
+        // the RTAO pass disabled, and hard-1.0 there measured ~3.3x brighter
+        // than dev on a Sponza interior (0.336 vs 0.101 mean, exposure pinned)
+        // because it drops the occlusion the probe ratio was supplying. AO off
+        // is a supported config (--noao, legacy callers), so dev's probe-ratio
+        // estimator is restored verbatim below — including the conf-smoothstep
+        // guard, which protects THAT estimator's unmeasured-probe case on
+        // ≥0.7-rough metals and is live again because the estimator is.
+        float envSpecVis;
+        if (aoOn) {
+            envSpecVis = specularOcclusion(NdotV, min(rtAo, rtSkyVis), roughness);
+        } else {
+            envSpecVis = 1.0;// assign the outer decl (do NOT shadow it)
+            if (probeGrid.enabled > 0.5) {
+                // Pure measured ratio — NO validity-confidence floor. A conf-mix
+                // toward 1.0 here re-admitted (1−conf) of the full-sky specular on
+                // every interior wall (probes near walls are only partially valid)
+                // and measurably re-brightened the Sponza corridors the probe
+                // model had fixed. The starved-neighbourhood concern belongs to
+                // the glass retrace fill (probeHitFill), not this term.
+                const vec3  LUMW   = vec3(0.2126, 0.7152, 0.0722);
+                float conf;
+                const float actE   = dot(probeIrradianceConf(worldPos, N, conf), LUMW) * (1.0 / PI);
+                const float unoccE = dot(sampleEnvLod(N, maxLod), LUMW);
+                envSpecVis = clamp(actE / max(unoccE, 1e-5), 0.0, 1.0);
+                // …EXCEPT when the neighbourhood measured NOTHING (conf → 0: every
+                // trilinear probe invalid — inside geometry — or fully crushed).
+                // probeIrradiance then returns black meaning "unmeasured", and the
+                // raw ratio read that as "fully occluded": on ≥0.7-rough METALS
+                // (diffuse ≡ 0, this env split-sum is their ENTIRE shade) it
+                // painted probe-cell-sized black squares on models thinner than a
+                // grid cell (glTF AnisotropyStrengthTest / SheenWoodLeatherSofa /
+                // RecursiveSkeletons). The steep gate keeps the interior ratio
+                // untouched — a wall with ANY valid, visible probe has conf well
+                // above 0.1 — and only bails to unoccluded env where nothing
+                // measured at all (there the ratio is noise, not signal).
+                envSpecVis = mix(1.0, envSpecVis, smoothstep(0.0, 0.1, conf));
+            }
         }
         lit += sampleEnvLod(R, roughness * maxLod) * (F0 * ab.x + ab.y) * envSpecW * envSpecVis;
     }

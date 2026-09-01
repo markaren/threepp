@@ -219,6 +219,8 @@ void VulkanRenderer::Impl::rewriteDeferredDescriptors(int onlyFrame) {
             std::array<VkImageView, kFramesInFlight> cloudColorViews{};
             std::array<VkImageView, kFramesInFlight> cloudAuxViews{};
             std::array<VkImageView, kFramesInFlight> cloudShadowViews{};
+            std::array<VkImageView, kFramesInFlight> rtaoViews{};
+            std::array<VkImageView, kFramesInFlight> rtaoAuxViews{};
             std::array<VkImageView, kFramesInFlight> sceneHdrViews{};
             std::array<VkBuffer, kFramesInFlight> fogBufs{};
             std::array<VkBuffer, kFramesInFlight> cloudBufs{};
@@ -263,6 +265,8 @@ void VulkanRenderer::Impl::rewriteDeferredDescriptors(int onlyFrame) {
                 cloudColorViews[f]    = view().rasterGbufs[f].cloudColor.view;
                 cloudAuxViews[f]      = view().rasterGbufs[f].cloudAux.view;
                 cloudShadowViews[f]   = view().rasterGbufs[f].cloudShadow.view;
+                rtaoViews[f]          = view().rasterGbufs[f].rtao.view;
+                rtaoAuxViews[f]       = view().rasterGbufs[f].rtaoAux.view;
                 sceneHdrViews[f] = view().bloom_->sceneHdrView(f);
                 const bool haveMS = gbufMsaaSamples_ > 1 && view().rasterGbufs[f].normalMS.view != VK_NULL_HANDLE;
                 normalMSViews[f] = haveMS ? view().rasterGbufs[f].normalMS.view : gbufDummyMS_[0].view;
@@ -304,6 +308,8 @@ void VulkanRenderer::Impl::rewriteDeferredDescriptors(int onlyFrame) {
             in.cloudColor       = cloudColorViews.data();
             in.cloudAux         = cloudAuxViews.data();
             in.cloudShadow      = cloudShadowViews.data();
+            in.rtao             = rtaoViews.data();
+            in.rtaoAux          = rtaoAuxViews.data();
             in.sceneHdr         = sceneHdrViews.data();
             in.fogBuf           = fogBufs.data();
             in.fogRange         = sizeof(GpuFogUbo);

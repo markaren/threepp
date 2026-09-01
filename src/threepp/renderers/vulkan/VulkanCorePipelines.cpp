@@ -157,6 +157,8 @@ void VulkanRenderer::Impl::destroyRasterGbufImages() {
                 destroyImage2D(ctx->allocator(), d, g.cloudColor);
                 destroyImage2D(ctx->allocator(), d, g.cloudAux);
                 destroyImage2D(ctx->allocator(), d, g.cloudShadow);
+                destroyImage2D(ctx->allocator(), d, g.rtao);
+                destroyImage2D(ctx->allocator(), d, g.rtaoAux);
                 destroyImage2D(ctx->allocator(), d, g.splatDepth);
                 destroyImage2D(ctx->allocator(), d, g.depth);
                 destroyImage2D(ctx->allocator(), d, g.unjitDepth);
@@ -551,6 +553,21 @@ void VulkanRenderer::Impl::createRasterGbufImages(uint32_t w, uint32_t h) {
                                                      VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT |
                                                              VK_IMAGE_USAGE_TRANSFER_DST_BIT,
                                                      VK_IMAGE_ASPECT_COLOR_BIT, N("cloudAux"));
+                // Half-res RT ambient occlusion + bent normals, and its temporal
+                // aux. Same hw/hh as the cloud pair; rtao.comp runs one thread
+                // per half-res pixel. TRANSFER_DST for the same reason as the
+                // clouds: cleared to known contents at creation (below) — a
+                // layout transition alone leaves texel contents UNDEFINED, and
+                // random fp16 garbage can pass the history-validity checks on
+                // the first RTAO-enabled frame.
+                g.rtao = createAttachmentImage2D(hw, hh, VK_FORMAT_R16G16B16A16_SFLOAT,
+                                                 VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT |
+                                                         VK_IMAGE_USAGE_TRANSFER_DST_BIT,
+                                                 VK_IMAGE_ASPECT_COLOR_BIT, N("rtao"));
+                g.rtaoAux = createAttachmentImage2D(hw, hh, VK_FORMAT_R16G16B16A16_SFLOAT,
+                                                    VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT |
+                                                            VK_IMAGE_USAGE_TRANSFER_DST_BIT,
+                                                    VK_IMAGE_ASPECT_COLOR_BIT, N("rtaoAux"));
                 // Cloud shadow map — FIXED 512² R8 (independent of the render
                 // extent; recreated here on resize). Top-down cloud
                 // transmittance regenerated per frame by cloud_shadow.comp.
@@ -717,6 +734,8 @@ void VulkanRenderer::Impl::createRasterGbufImages(uint32_t w, uint32_t h) {
                 pushInit(g.cloudColor.image, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_GENERAL);// storage (compute r/w)
                 pushInit(g.cloudAux.image, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_GENERAL);// storage (compute r/w)
                 pushInit(g.cloudShadow.image, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_GENERAL);// storage (compute r/w)
+                pushInit(g.rtao.image, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_GENERAL);// storage (compute r/w)
+                pushInit(g.rtaoAux.image, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_GENERAL);// storage (compute r/w)
                 pushInit(g.splatDepth.image, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_GENERAL);// storage (compute r/w) + transfer clear
                 pushInit(g.depth.image,  VK_IMAGE_ASPECT_DEPTH_BIT, VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL);
                 // null-check, not just the msaa toggle: a SECONDARY view gets no
@@ -749,10 +768,21 @@ void VulkanRenderer::Impl::createRasterGbufImages(uint32_t w, uint32_t h) {
                 VkClearColorValue identity{};
                 identity.float32[3] = 1.0f;// (0,0,0,1) — no in-scatter, full T
                 VkClearColorValue zero{};
+                // bentN = +Z encoded (0.5,0.5,1.0), ao = 1 (fully open): the
+                // identity an un-run RTAO pass must present to the shade.
+                VkClearColorValue rtaoIdentity{};
+                rtaoIdentity.float32[0] = 0.5f;
+                rtaoIdentity.float32[1] = 0.5f;
+                rtaoIdentity.float32[2] = 1.0f;
+                rtaoIdentity.float32[3] = 1.0f;
                 for (auto& g : view().rasterGbufs) {
                     vkCmdClearColorImage(initCb, g.cloudColor.image,
                                          VK_IMAGE_LAYOUT_GENERAL, &identity, 1, &full);
                     vkCmdClearColorImage(initCb, g.cloudAux.image,
+                                         VK_IMAGE_LAYOUT_GENERAL, &zero, 1, &full);
+                    vkCmdClearColorImage(initCb, g.rtao.image,
+                                         VK_IMAGE_LAYOUT_GENERAL, &rtaoIdentity, 1, &full);
+                    vkCmdClearColorImage(initCb, g.rtaoAux.image,
                                          VK_IMAGE_LAYOUT_GENERAL, &zero, 1, &full);
                 }
                 VkMemoryBarrier mb{};

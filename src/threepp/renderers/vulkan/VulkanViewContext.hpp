@@ -59,6 +59,8 @@ namespace threepp::vulkan::impl {
         Image2D       cloudColor;   // rgba16f HALF-res — cloud march result (rgb=in-scatter, a=transmittance); STORAGE (march) + SAMPLED (shade upsample + prev-fif reproject), ping-ponged
         Image2D       cloudAux;     // rg16f HALF-res — cloud mean-depth (.r) + temporal histLen (.g); STORAGE (march) + SAMPLED (prev-fif history), ping-ponged
         Image2D       cloudShadow;  // r8 512² (FIXED) — top-down cloud transmittance over an 8 km camera-centred square; STORAGE (shadow pass) + SAMPLED (surface/froxel/water sun); regenerated per frame
+        Image2D       rtao;         // rgba16f HALF-res — RT ambient occlusion (rgb=bentN*0.5+0.5, a=ao); STORAGE (rtao pass) + SAMPLED (shade upsample + prev-fif reproject), ping-ponged
+        Image2D       rtaoAux;      // rgba16f HALF-res — RTAO temporal aux (.r=histLen, .g=E[ao^2], .b=near-field ao, .a=skyVis); STORAGE (rtao pass) + SAMPLED (prev-fif history), ping-ponged
         Image2D       splatDepth;   // r32f — Gaussian-splat expected view distance in world units, 0 where no cloud owns the pixel (SplatPass); FULL-RES only under setSplatDepthAov, 1x1 otherwise. STORAGE + TRANSFER (clear + AOV copy), GENERAL for its whole life
         Image2D       depth;        // d32_sfloat — JITTERED projection (matches color attachments above; consumed by chit + TAA)
         // Hybrid raster overlay's UNJITTERED depth attachment. Filled by

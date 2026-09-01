@@ -103,7 +103,11 @@ namespace threepp::vulkan {
         // was an extrapolation from the ocean's numbers — this work had no
         // bracket at all and landed in the gpuTotal-minus-passSum residual.
         TP_DynGeomRefit   = 24,
-        TP_COUNT          = 25,
+        // Half-res RT ambient occlusion + bent normals (rtao.comp). Its own
+        // bracket because without one the pass hides inside the unbracketed
+        // residual, and the whole Phase-2 case is decided by what it costs.
+        TP_Rtao           = 25,
+        TP_COUNT          = 26,
     };
     inline constexpr uint32_t kTimingSlots = TP_COUNT * 2u;
 

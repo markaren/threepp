@@ -15,6 +15,7 @@
 #include "threepp/renderers/vulkan/shaders/cloud_march.comp.spv.h"
 #include "threepp/renderers/vulkan/shaders/cloud_shadow.comp.spv.h"
 #include "threepp/renderers/vulkan/shaders/particle_light.comp.spv.h"
+#include "threepp/renderers/vulkan/shaders/rtao.comp.spv.h"
 
 #include <algorithm>
 #include <array>
@@ -31,7 +32,7 @@ namespace threepp::vulkan {
     // that no validation layer can see). Both tables are std::array of this
     // size now, filled through .at(), and the fill count is checked, so the
     // failure mode is a loud throw at init instead.
-    constexpr uint32_t kDeferredBindingCount = 71;
+    constexpr uint32_t kDeferredBindingCount = 76;
 
     // ParticleField density volumes bound at once (binding 67 is an array of
     // this many). KEEP IN SYNC with kMaxDensityFields in
@@ -61,6 +62,7 @@ namespace threepp::vulkan {
         if (froxelIntegratePipe_) vkDestroyPipeline(d, froxelIntegratePipe_, nullptr);
         if (cloudMarchPipe_)      vkDestroyPipeline(d, cloudMarchPipe_, nullptr);
         if (cloudShadowPipe_)     vkDestroyPipeline(d, cloudShadowPipe_, nullptr);
+        if (rtaoPipe_)            vkDestroyPipeline(d, rtaoPipe_, nullptr);
         if (particleLightPipe_)   vkDestroyPipeline(d, particleLightPipe_, nullptr);
         if (particlePipeLayout_)  vkDestroyPipelineLayout(d, particlePipeLayout_, nullptr);
         if (particleIoLayout_)    vkDestroyDescriptorSetLayout(d, particleIoLayout_, nullptr);
@@ -213,6 +215,17 @@ namespace threepp::vulkan {
         set(70, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER); // splat reflection volumes...
         b[nb - 1].descriptorCount = kMaxSplatVolumeSlots;   // ...fixed-size array
         set(71, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER);         // SplatVolumeUbo (worldToUvw + world AABBs)
+
+        // Half-res RT ambient occlusion + bent normals (rtao.comp). CUR is
+        // written as a storage image by the RTAO pass and sampled by the shade's
+        // bilateral upsample; PREV is the other FIF's result, sampled for the
+        // temporal reprojection. Aux carries histLen / E[ao²] / near-field ao /
+        // skyVis.
+        set(72, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE);          // rtao CUR (rtao.comp writes)
+        set(73, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER); // rtao PREV (reproject tap)
+        set(74, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER); // rtao CUR sampled (shade upsample)
+        set(75, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE);          // rtaoAux CUR (rtao.comp writes)
+        set(76, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER); // rtaoAux PREV (history)
 
         // Exact fit is the contract: a new binding must bump
         // kDeferredBindingCount, and rewriteDescriptors must gain the matching
@@ -372,6 +385,18 @@ namespace threepp::vulkan {
         check(vkCreateComputePipelines(d, ctx_.pipelineCache(), 1, &cpciS, nullptr, &cloudShadowPipe_),
               "vkCreateComputePipelines(cloud_shadow)");
 
+        // Half-res ray-traced AO + bent normals (rtao.comp) — same shared set 0
+        // and 80-byte ShadePush range as the shade itself.
+        VkShaderModuleCreateInfo smciAo = smciS;
+        smciAo.codeSize = sizeof(kRtaoCompSpv);
+        smciAo.pCode    = kRtaoCompSpv;
+        VkShaderModule modAo = VK_NULL_HANDLE;
+        check(vkCreateShaderModule(d, &smciAo, nullptr, &modAo), "vkCreateShaderModule(rtao)");
+        VkComputePipelineCreateInfo cpciAo = cpci;
+        cpciAo.stage.module = modAo;
+        check(vkCreateComputePipelines(d, ctx_.pipelineCache(), 1, &cpciAo, nullptr, &rtaoPipe_),
+              "vkCreateComputePipelines(rtao)");
+
         // Particle billboard lighting — set 0 is the shared deferred set; set 1
         // is the caller-owned particle IO pair (centers in, light/fog out), so
         // this one needs its own two-set pipeline layout + small push block.
@@ -426,6 +451,7 @@ namespace threepp::vulkan {
         vkDestroyShaderModule(d, modI, nullptr);
         vkDestroyShaderModule(d, modM, nullptr);
         vkDestroyShaderModule(d, modS, nullptr);
+        vkDestroyShaderModule(d, modAo, nullptr);
     }
 
     void DeferredShade::createDescriptorPool() {
@@ -901,6 +927,35 @@ namespace threepp::vulkan {
             svUboInfo.offset = 0;
             svUboInfo.range  = VK_WHOLE_SIZE;
             setw(70, 71, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, nullptr, &svUboInfo);
+
+            // Half-res RTAO (72-76). CUR pair are storage images the rtao pass
+            // writes (no sampler); the PREV pair use lutSampler_ (LINEAR) for
+            // the temporal reprojection tap; CUR-sampled uses gbufSampler_ —
+            // the shade texelFetches it, so the filter is irrelevant and this
+            // just matches the other gbuf taps. All GENERAL, like the clouds.
+            VkDescriptorImageInfo rtaoCurInfo{};
+            rtaoCurInfo.imageView   = in.rtao[f];
+            rtaoCurInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+            VkDescriptorImageInfo rtaoPrevInfo{};
+            rtaoPrevInfo.sampler     = lutSampler_;
+            rtaoPrevInfo.imageView   = in.rtao[pf];
+            rtaoPrevInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+            VkDescriptorImageInfo rtaoCurSampledInfo{};
+            rtaoCurSampledInfo.sampler     = gbufSampler_;
+            rtaoCurSampledInfo.imageView   = in.rtao[f];
+            rtaoCurSampledInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+            VkDescriptorImageInfo rtaoAuxCurInfo{};
+            rtaoAuxCurInfo.imageView   = in.rtaoAux[f];
+            rtaoAuxCurInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+            VkDescriptorImageInfo rtaoAuxPrevInfo{};
+            rtaoAuxPrevInfo.sampler     = lutSampler_;
+            rtaoAuxPrevInfo.imageView   = in.rtaoAux[pf];
+            rtaoAuxPrevInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+            setw(71, 72, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,          &rtaoCurInfo,        nullptr);
+            setw(72, 73, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &rtaoPrevInfo,       nullptr);
+            setw(73, 74, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &rtaoCurSampledInfo, nullptr);
+            setw(74, 75, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,          &rtaoAuxCurInfo,     nullptr);
+            setw(75, 76, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &rtaoAuxPrevInfo,    nullptr);
             vkUpdateDescriptorSets(ctx_.device(), static_cast<uint32_t>(w.size()), w.data(), 0, nullptr);
         }
     }
@@ -1065,6 +1120,28 @@ namespace threepp::vulkan {
         vkCmdPushConstants(cb, pipeLayout_, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(push), &push);
         // One thread per texel of the fixed 512² map (local 8×8).
         vkCmdDispatch(cb, 512u / 8u, 512u / 8u, 1);
+    }
+
+    void DeferredShade::recordRtao(VkCommandBuffer cb, uint32_t frame,
+                                   uint32_t width, uint32_t height,
+                                   uint32_t frameCounter) {
+        // Shared ShadePush block — the RTAO pass consumes the FULL render
+        // extent (it derives half res), frame (blue-noise jitter) and reads the
+        // G-buffer + TLAS from the shared set. The rest ride as zeros. Same
+        // field offsets the old raw uint32_t pc[19] used (width=1, height=2,
+        // frame=4); ShadePush is that block, named.
+        ShadePush push{};
+        push.width  = width;
+        push.height = height;
+        push.frame  = frameCounter;
+
+        vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, rtaoPipe_);
+        vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_COMPUTE,
+                                pipeLayout_, 0, 1, &sets_[frame], 0, nullptr);
+        vkCmdPushConstants(cb, pipeLayout_, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(push), &push);
+        // One thread per HALF-res pixel (local 8×8).
+        const uint32_t hw = (width + 1u) / 2u, hh = (height + 1u) / 2u;
+        vkCmdDispatch(cb, (hw + 7u) / 8u, (hh + 7u) / 8u, 1);
     }
 
     void DeferredShade::recordParticleLight(VkCommandBuffer cb, uint32_t frame,

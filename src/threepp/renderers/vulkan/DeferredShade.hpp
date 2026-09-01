@@ -138,6 +138,13 @@ namespace threepp::vulkan {
             // Cloud shadow map (bindings 64/65) — 512² R8 top-down cloud
             // transmittance, per FIF, regenerated each frame.
             const VkImageView* cloudShadow = nullptr;// [framesInFlight] r8 512²
+            // Half-res RTAO (bindings 72-76) — the per-FIF AO+bent-normal image
+            // (rgba16f) + its rgba16f aux (histLen/E[ao²]/near-field ao/skyVis),
+            // each ping-ponged across frames-in-flight for the temporal
+            // reprojection. Always bound (small); the pass is only dispatched
+            // when AO is enabled.
+            const VkImageView* rtao    = nullptr;// [framesInFlight] rgba16f half-res
+            const VkImageView* rtaoAux = nullptr;// [framesInFlight] rgba16f half-res
             // ParticleField density volumes (bindings 67/68) — plan §3.3. A
             // FIXED-SIZE array of r32ui 3D images sampled by the froxel passes
             // through mediumExtinction, plus the small std140 UBO that says
@@ -302,6 +309,19 @@ namespace threepp::vulkan {
         // compute→compute barrier after. Only dispatch when clouds are on.
         void recordCloudShadow(VkCommandBuffer cb, uint32_t frame, uint32_t frameCounter);
 
+        // Half-resolution ray-traced ambient occlusion + bent normals
+        // (rtao.comp). One dispatch over the HALF render extent that writes the
+        // AO + bent-normal image the full-res shade upsamples for its ambient/
+        // spec-occlusion + bent-normal probe/env diffuse indirect, with a
+        // temporal reprojection EMA against the previous frame's result. Record
+        // AFTER the probe-GI update (shares the TLAS) and BEFORE the shade
+        // dispatch, with a compute→compute barrier after (the shade samples
+        // rtao). Only dispatch when AO is enabled. width/height = the FULL
+        // render extent (the shader derives half res).
+        void recordRtao(VkCommandBuffer cb, uint32_t frame,
+                        uint32_t width, uint32_t height,
+                        uint32_t frameCounter);
+
         // Particle billboard lighting (particle_light.comp): one thread per
         // live overlay particle evaluates the deferred light field at the
         // particle's world center (sun × RT shadow × cloud shadow, clustered
@@ -360,6 +380,7 @@ namespace threepp::vulkan {
         VkPipeline            froxelIntegratePipe_ = VK_NULL_HANDLE;// froxel LUT integrate (froxel_integrate.comp)
         VkPipeline            cloudMarchPipe_      = VK_NULL_HANDLE;// half-res cloud march (cloud_march.comp)
         VkPipeline            cloudShadowPipe_     = VK_NULL_HANDLE;// cloud shadow map (cloud_shadow.comp)
+        VkPipeline            rtaoPipe_            = VK_NULL_HANDLE;// half-res ray-traced AO + bent normals (rtao.comp)
         // Particle billboard lighting (particle_light.comp) — set 0 is the
         // shared deferred set, set 1 the caller's particle IO buffers.
         VkDescriptorSetLayout particleIoLayout_    = VK_NULL_HANDLE;
