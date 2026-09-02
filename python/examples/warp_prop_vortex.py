@@ -443,14 +443,33 @@ kernel's birth azimuth are the same function of the same clock, so every
 filament is rooted at a blade tip and stays welded to it. Get that wrong by one
 frame and the whole thing reads as a bubble curtain behind a fan.
 
-THE STAGE IS THE ENGINE'S OWN and no new rendering was written for it: a deep
-blue-green background, `set_fog_water_surface_y(DEPTH)` to put the waterline
-three metres up, and `set_underwater_murk` for the column's extinction and
+THE STAGE IS THE ENGINE'S OWN and no new rendering was written for it: a
+procedural SKY as both background and image-based light, an FFT Ocean on
+`set_fog_water_surface_y(DEPTH)`'s own plane to put a real waterline three
+metres up, and `set_underwater_murk` for the column's extinction and
 in-scatter, so distance falls into murk exactly as it does in the sailboat and
-hull films. The sun is DOWNWELLING -- from above, blue-shifted and dimmed by
-three metres of water -- which is what gives the bubble column a bright top and
-a dark belly, and it stays brighter than the rake because the billboards take
-the single brightest DirectionalLight as their sun.
+hull films. The murk is a SEA COLOUR rather than a lamp's edge, and its sigma
+is 0.06/m -- open coastal water, not a harbour -- because the in-scatter veil
+is a wash of lit teal-white laid over everything and at 0.12/m it was painting
+the bronze cream from every underwater framing. The sun is DOWNWELLING -- from
+above, blue-shifted and dimmed by three metres of water -- which is what gives
+the bubble column a bright top and a dark belly, and it stays brighter than the
+rake because the billboards take the single brightest DirectionalLight as their
+sun. Nothing in the deferred path attenuates image-based light along a ray, so
+the three metres of water over the casting are hand-applied to the metal's
+env_map_intensity and stated as such (IBL_UNDERWATER).
+
+THE COLUMN FOLLOWS THE SHAFT, NOT THE LOADING, and that is one line in the
+kernel rather than a look. A parcel's alpha is its MEDIUM WEIGHT -- the share
+of SIGMA it deposits into the density volume -- and it used to be 1 for every
+slot. Parcels are born per unit TIME, so at 10 rpm they crowd the disc twelve
+times denser than at the operating point while each still carried the operating
+point's full body: a fog ring around a screw that is not doing anything. The
+radiance already followed omg x loading; the body follows the same law now,
+normalised at the default helm so that frame and every frame above it are
+unchanged. And SPRITES REFRACT AT THE SURFACE: the field's own T_cam and T_sun
+marches bend at the waterline the same way the murk's shadow rays do, so the
+wake seen from the air through the interface is where the water says it is.
 
 THE STERN IS FIRST-PARTY GEOMETRY, lofted from cross sections by the blade's
 own technique at ten times the size, and there is ONE THING IT CANNOT DO: the
@@ -1447,7 +1466,17 @@ SHEET = cli_arg("--sheet", 0.46, float)  # fraction of slots born across the SPA
 # Clear water first, then the switch. What it loses at the default it takes
 # back through BUB_CAV the moment the tips start boiling.
 SHEET_GAIN = cli_arg("--sheet-gain", 0.40, float)   # its radiance vs a tip rope
-BUB_CAV = cli_arg("--bubble-cav", 1.35, float)   # x radiance at full cavitation
+# 1.35 -> 0.95, and this is the field's own glow rather than the sheet's. At
+# the film's re-bloom the right third of the frame was one white mass, and
+# turning the blade sheet off entirely left 18 of its 21 clipped percent still
+# there: the thing filling the frame is the entrained bubble column, boosted by
+# THIS number, and the boost was chosen when the tips were the only cavitating
+# structure in the file and the blade sheet did not exist. Below 1 the column
+# still brightens on the same slider push that lights the ropes -- vapi carries
+# that on its own -- and the helices are legible through it instead of drowned
+# in it. VAP_GAIN and SHEET_GAIN are deliberately NOT touched: they set every
+# rung of the ladder and the ladder is the beat.
+BUB_CAV = cli_arg("--bubble-cav", 0.95, float)   # x radiance at full cavitation
 # ── The HUB VORTEX, taken out of the sheet's own budget ─────────────────────
 # A small population born on the AXIS, aft of the cap, and it is a separate
 # population rather than a special case of the sheet for one reason: it reads
@@ -1506,14 +1535,27 @@ SHEET_CAV_C = 0.55       # chord fraction it covers at the outer radii, develope
 SHEET_CAV_CR = 0.25      # the inboard end of that wedge, as a fraction of the tip's
 SHEET_CAV_T = 0.026      # m, the cavity's own thickness where it is fattest
 SHEET_CAV_OFF = 0.005    # m of standoff: the vapour is ON the casting, not IN it
-SHEET_CAV_GAIN = 1.05    # x, against a fully vapour-filled tip core's VAP_GAIN
+# 1.05 -> 0.60, and the frame that moved it is the film's re-bloom (230 rpm,
+# 30 deg): at that excess the sheet stopped reading as a cavity ON the blade
+# and became a white blob laid OVER it, with the casting's silhouette lost
+# inside its own vapour. The EXTENT law above is conservative for that sigma
+# and is not what was wrong -- the sheet was in the right place and simply too
+# bright to see the blade through the edge of. Sheet off at the same helm is
+# the measurement: it costs 3 of the frame's 21 clipped percent and all of the
+# blade shape.
+SHEET_CAV_GAIN = 0.60    # x, against a fully vapour-filled tip core's VAP_GAIN
 # The grain is DELIBERATELY FATTER than the wake's. A sheet has to read as a
 # CONNECTED surface, and the VAP_GAIN sand lesson two blocks up applies with
 # the sign it always had: the fix for a scatter of dots is never more contrast
 # per sample, it is neighbouring samples that OVERLAP. 2.1x the wake's grain on
 # a sheet sampled at ~4.5 mm centres is a coverage of ~4, and the flux split
 # divides the radiance back out so the total light is what it was.
-SHEET_CAV_GROW = 3.4     # x SPRITE_R0
+# 3.4 -> 2.8 with the gain, and it is a FOOTPRINT change rather than a second
+# radiance one: the flux split divides by grow^flux_p with flux_p 0.80 < 1, so
+# a fatter grain is a NET brighter sheet as well as a softer-edged one, and at
+# 2.8x on ~4.5 mm centres the coverage is still ~2.7 and the surface still
+# reads connected.
+SHEET_CAV_GROW = 2.8     # x SPRITE_R0
 # The unsteadiness, in LABEL space -- on (radial station, blade, t) rather than
 # on the world position, for exactly the reason the wake's turbulence is: a
 # world-keyed wobble is a standing disturbance the blade sweeps through, which
@@ -2801,19 +2843,19 @@ if MURK > 0.0:
 # constants were shaped against in the fjord, and letting the mesh extent
 # silently retune the light pattern is not a coupling this demo wants.
 #
-# WHAT IT DOES NOT BUY, MEASURED RATHER THAN HOPED: a Snell window. Looking UP
-# from under a real surface you see the whole sky packed into a 48.6 deg cone,
-# and that is the postcard shot of any underwater scene -- but only if there is
-# a sky. This scene has none: scene.background is deliberately near-black (see
-# THE BACKGROUND HAS TO STAY NEARLY BLACK), there is no environment map, and the
-# daylight is three DirectionalLights standing in for one. So the surface from
-# below refracts black and reflects dark water, and an up-looking framing comes
-# back an almost empty frame. Giving it a real sky would mean an environment
-# map, and the env is what feeds BOTH the murk's in-scatter and the ambient the
-# bronze is read against -- retuning the entire look for one shot. Not done, and
-# the same reason is why the ceiling in the aft framings is DARKER than it was:
-# the analytic plane's stand-in gradient (applyMurkSky) was quietly flattering a
-# sky that is not there, and the real surface is honest about it.
+# WHAT IT DID NOT BUY UNTIL THE SKY LANDED: a Snell window. Looking UP from
+# under a real surface you see the whole sky packed into a 48.6 deg cone, and
+# that is the postcard shot of any underwater scene -- but only if there is a
+# sky. This scene had none: scene.background was deliberately near-black, there
+# was no environment map, and the daylight was three DirectionalLights standing
+# in for one, so the surface from below refracted black and an up-looking
+# framing came back an almost empty frame. That was the entry on this list that
+# said the retune was not worth one shot, and then the retune was done anyway
+# for the BRONZE (see AND NOW THERE IS A SKY): the env feeds the murk's
+# in-scatter and the ambient the casting is read against, and it feeds this as
+# well. The window is there now, the ocean's own chop moves through it, and the
+# film's finale rises out through it into the air. --no-sky is the frame this
+# paragraph was written about.
 #
 # --no-ocean is the A/B and the regression: it is the frame this demo drew
 # before the surface existed, and it must still be that frame exactly.
@@ -3155,8 +3197,12 @@ def blade_geometry(stations=18, around=14, mirror=False):
 # ── The prop has to be an OBJECT, not a hole ────────────────────────────────
 # A bare grey MeshStandardMaterial gave this demo a black silhouette, and for a
 # reason that is the wake's own doing: the key is deliberately BEHIND the
-# slipstream (see the light below) and there is no environment map, so the blade
-# faces the camera sees have nothing at all to return.
+# slipstream (see the light below), and before the sky there was no environment
+# map either, so the blade faces the camera sees had nothing at all to return.
+# There is an env now and the problem inverted -- see IBL_UNDERWATER below --
+# but everything in this block still holds, because --no-sky is still a
+# supported frame and metalness is still what decides whether a casting under a
+# grazing key is an object or an outline.
 #
 # BRONZE IS THE HARD CASE OF THAT, and the metalness knob is where it bites. A
 # metal has no diffuse term, so on a full metalness=1 surface the AmbientLight
@@ -4359,8 +4405,29 @@ elif FILM:
         (38.0, (-1.10, -0.80, 3.30), (0.05, 0.00, 1.15), False),
         (41.5, (-1.54, -0.77, 2.86), (0.05, 0.00, 1.17), False),
         # 6: hold for the re-bloom, then out and up through the waterline
+        #
+        # THE CROSSING IS FAST BECAUSE OF WHAT IT COSTS TO BE SLOW. The old
+        # track climbed from y -0.70 at 45 s to 1.90 at 50 s and only reached
+        # the surface (y = WATERLINE = 3.0) somewhere past 51 s, which put the
+        # b6b keyshot at 51.6 s about twenty centimetres over the water with
+        # its aim still a metre under it. That is the worst place a camera can
+        # be in this scene and none of it is a renderer fault: a sea seen from
+        # just above it at a grazing angle is very nearly a mirror (Fresnel
+        # goes to 1 at grazing), so the top half of the frame was the sky's
+        # bright horizon reflected off the whole visible surface, the bottom
+        # half was murk, the ship was a chip at the top edge, and the keyshot
+        # came back a white wash. Auto exposure is not involved -- this file
+        # PINS tone_mapping_exposure (see the renderer, above) -- and the
+        # meniscus band is a renderer behaviour that other films depend on.
+        #
+        # So the eye is held UNDER the water until 48.2 s and then punched
+        # through: 4.1 m in 1.8 s, which is about 3 m/s at the interface and
+        # roughly two frames inside the +-5 cm band. The aim goes up with it,
+        # from 0.05 to 0.55, so the moment the lens is clear it is looking at
+        # the ship and both wakes from the air instead of along the water.
         (45.0, (-1.30, -0.70, 3.10), (0.10, 0.00, 1.15), False),
-        (50.0, (3.40, 1.90, 5.60), (0.80, 0.10, 0.20), False),
+        (48.2, (1.10, -0.15, 4.30), (0.70, 0.05, 0.30), False),
+        (50.0, (3.40, 3.95, 5.60), (0.80, 0.55, 0.20), False),
         (55.0, (5.20, 5.40, 4.20), (0.40, 0.60, 0.10), True),
     ]
 
