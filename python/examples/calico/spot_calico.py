@@ -272,7 +272,7 @@ class LodBudget:
         self.last_submitted = 0
         self.pending = None     # (scale, cap, ema) to judge the last coarsening by
         self.lock = 0           # frames left of a no-payoff lockout
-        self.engaged = 0        # frames spent below full quality
+        self.enforced = 0       # frames where the cap actually replaced the ranges
         self.reverts = 0
 
     @property
@@ -296,8 +296,6 @@ class LodBudget:
         self.ema = ms if self.ema is None else self.ema + a * (ms - self.ema)
         self.floor = ms if self.floor is None else min(self.floor, ms)
         self.since_up += 1
-        if self.scale < 1.0 or self.cap is not None:
-            self.engaged += 1
         if self.cool > 0:
             self.cool -= 1
             return
@@ -1250,6 +1248,7 @@ def main():
                         cloud.submit_ranges = [(int(lod_levels[pick]["base"]),
                                                 int(lod_levels[pick]["count"]))]
                         lvl = pick
+                        budget.enforced += 1
         if lvl != _lod_report[0]:
             _lod_report[0] = lvl
             _lod_switches[0] += 1
@@ -1759,11 +1758,13 @@ def main():
             slander the other."""
             budget.reset(budget_ms)
             _lod_report[0] = -1
-            ms, lv, sub, gpu, sw = [], [], [], [], []
+            ms, lv, sub, gpu, sw, enf = [], [], [], [], [], []
             for i in range(n_spin * revs):
                 _aim(i % n_spin, n_spin)
                 _prev = _lod_report[0]
+                _e0 = budget.enforced
                 lvl = pick_lod(canvas.size()[1])
+                enf.append(1 if budget.enforced > _e0 else 0)
                 t0 = time.perf_counter()
                 rend.render(scene, camera)
                 dt = (time.perf_counter() - t0) * 1e3
@@ -1775,6 +1776,7 @@ def main():
                 gpu.append(float(_ft.get("gpu_total_ms", 0.0)))
             for r in range(revs):
                 lo, hi = r * n_spin, (r + 1) * n_spin
+                nenf = int(sum(enf[lo:hi]))
                 a = np.array(ms[lo:hi])
                 g = np.array(gpu[lo:hi])
                 hist = {int(k): int(v) for k, v in
@@ -1792,8 +1794,8 @@ def main():
                 print(f"[spin] {'':<14} level switches {nsw} in {secs:.1f} s = "
                       f"{nsw / max(secs, 1e-6):.2f}/s   scale changes "
                       f"{budget.changes}, final vh scale {budget.scale:.2f}, "
-                      f"guard engaged {100.0 * budget.engaged / max(1, hi):.0f}% "
-                      f"of frames so far, {budget.reverts} stand-downs")
+                      f"guard enforced on {100.0 * nenf / n_spin:.0f}% of frames, "
+                      f"{budget.reverts} stand-downs")
             return np.array(ms[-n_spin:]), lv[-n_spin:]
 
         print(f"[spin] {n_spin} frames per revolution at {canvas.size()} "
