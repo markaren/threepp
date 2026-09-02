@@ -428,10 +428,12 @@ def main():
                          "1200x720 render_scale 0.5: 5.7 fps, 173 ms of it CPU-side submit. "
                          "select_lod at a high --spp keeps the chunk culling and is the "
                          "default; 0 disables the force.")
-    ap.add_argument("--lod-budget-ms", type=float, default=25.0, metavar="MS",
+    ap.add_argument("--lod-budget-ms", type=float, default=0.0, metavar="MS",
                     help="frame-time budget for the splat pass, in milliseconds of "
-                         "measured RENDER wall time (default 25.0 at 1200x720 "
-                         "render_scale 0.5; 0 disables the feedback and leaves "
+                         "measured RENDER wall time. OFF by default (0): the per-node LOD "
+                         "selector already holds the brush wall at ~16 ms, and the guard's "
+                         "coarser level is a visible loss (woolly brush). 25 is a sane value "
+                         "when you turn it on; 0 disables the feedback and leaves "
                          "select_lod alone). See LodBudget: the budget does not "
                          "pick levels itself, it scales the viewport height that "
                          "select_lod is told about, which is the only lever that "
