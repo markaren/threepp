@@ -58,6 +58,7 @@ from spot_deploy import (build_spot, fetch_assets, _quat_to_R,
                          default_q, isaac_to_add, add_to_isaac, ACTION_SCALE, Z0)
 from spot_depth_scan import ForwardDepthScanner
 from calico_slam_pip import SlamSurface, DepthPip
+import calico_collider as CC
 import calico_look
 from spot_terrain_env import VX_HI
 from scratch_env import STIFF_GAINS
@@ -188,6 +189,17 @@ def main():
                     help="CONTROL: replace the baked collider with a flat plane at the spawn's "
                          "floor. The splats still draw. If Spot cannot stand HERE the fault is "
                          "in this script, not in the surface.")
+    ap.add_argument("--collider", default="grid", choices=("bake", "grid", "heightfield"),
+                    help="what PhysX stands on. 'bake' is the raw marching-cubes shell -- the "
+                         "SENSOR surface, and a bad collider: it has holes where the bake's "
+                         "poses disagreed, it is a zero-thickness sheet a fast foot plant "
+                         "tunnels through, and it fuses twigs into spikes that kick a foot "
+                         "into the air. 'grid' derives a 2.5D height field from those same "
+                         "triangles (calico_collider.build_height_grid), watertight by "
+                         "construction, and hands PhysX a regular-grid trimesh. "
+                         "'heightfield' is the same field as a real PxHeightField, which also "
+                         "has THICKNESS. The sensor mesh is unchanged in every case -- what "
+                         "the scanner sees is still the bake, brush and all.")
     ap.add_argument("--spawn-wp", type=int, default=4,
                     help="spine waypoint index to spawn on. NOT 0: WP0's own spawn sits at the "
                          "brushy +x end where the bake is twigs over a shell with holes in it "
@@ -393,6 +405,7 @@ def main():
 
     sensor_mesh = None
     surf_pos = None
+    hgrid = [None]          # the height-grid collider, when --collider is not 'bake'
     if args.flat:
         _fg = tp.BufferGeometry()
         _q = [(-20, -20), (20, -20), (20, 20), (-20, -20), (20, 20), (-20, 20)]
@@ -448,14 +461,41 @@ def main():
                 print(f"[bake]   wp{i:2d} ({wpt[0]:+6.2f},{wpt[1]:+6.2f},{wpt[2]:+5.2f}) "
                       f"verts={near.shape[0]:6d} z {zs}")
 
-        # ONE object: the renderer's sensor surface AND the PhysX collider.
+        # The bake is the SENSOR surface: added at the scene root, on the
+        # sensor-only layer, never drawn in the picture. Unchanged, brush and all,
+        # because that is what the scan looks like and what the scanner should see.
         sensor_mesh = tp.make_sensor_mesh(surface)
         scene.add(sensor_mesh)
         rend.set_sensor_only_surfaces(True)
-        body = world.add_static_trimesh(sensor_mesh)
         print(f"[bake] sensor mesh added at the scene root; "
-              f"sensor_only_surfaces={rend.sensor_only_surfaces}; "
-              f"PhysX static trimesh = {body}")
+              f"sensor_only_surfaces={rend.sensor_only_surfaces}")
+
+        # The COLLIDER is a separate question, and the demo used to answer it with
+        # the same triangles -- which is why the user watched Spot fall through the
+        # ground and get kicked into the air. See --collider and calico_collider.py.
+        if args.collider == "bake":
+            body = world.add_static_trimesh(sensor_mesh)
+            print(f"[collider] bake: the raw marching-cubes shell as a static trimesh "
+                  f"({surface.triangle_count} triangles) = {body}")
+        else:
+            _cw = CC.CORRIDOR_HALF_W
+            hgrid[0] = CC.build_height_grid(
+                surf_pos, surface.indices,
+                bounds=(float(spine[:, 0].min()) - _cw, float(spine[:, 0].max()) + _cw,
+                        float(spine[:, 1].min()) - _cw, float(spine[:, 1].max()) + _cw))
+            if args.collider == "heightfield":
+                if not hasattr(world, "add_static_heightfield"):
+                    raise SystemExit("--collider heightfield needs a pyd with "
+                                     "PhysxWorld.add_static_heightfield (build threepp_py)")
+                body = world.add_static_heightfield(
+                    hgrid[0].H, cell=hgrid[0].cell,
+                    origin=tp.Vector3(hgrid[0].x0, hgrid[0].y0, 0.0))
+                print(f"[collider] heightfield: PxHeightField {hgrid[0].shape} at "
+                      f"{hgrid[0].cell} m, thickness 0.5 = {body}")
+            else:
+                body = world.add_static_trimesh(hgrid[0].to_mesh())
+                print(f"[collider] grid: the height field as a regular-grid trimesh "
+                      f"{hgrid[0].shape} at {hgrid[0].cell} m = {body}")
 
         if args.probe:
             idx = surface.indices
@@ -517,10 +557,27 @@ def main():
         return float(np.percentile(surf_pos[m, 2], 90.0)) if m.any() else default
 
     def footprint_h(x, y, yaw):
-        """Highest floor over the four feet + base, MEASURED by dropping a ball at each."""
+        """Highest floor over the four feet + base.
+
+        On the height-grid collider this is a LOOKUP, not a probe, and the swap is
+        the difference between standing and being thrown. probe_floor's ball ROLLS:
+        it is a 6 cm sphere given 1.6 s on a real wash, and by the end it reports
+        the bottom of whatever slope it landed on. At the wp0 spawn it read +0.059
+        while the collider under the front feet is +0.35, so the robot was reset a
+        third of a metre INSIDE its own ground and PhysX depenetrated it to
+        (+13.4, -12.0, +9.97) -- ten metres up -- before the first policy step.
+        The grid IS the collider, so ask the grid; the probe stays as the cross
+        check and is still the only measurement available for --collider bake.
+        """
         c, sn = math.cos(yaw), math.sin(yaw)
-        hs = [probe_floor(x + dx * c - dy * sn, y + dx * sn + dy * c) for dx, dy in _FEET]
+        pts = [(x + dx * c - dy * sn, y + dx * sn + dy * c) for dx, dy in _FEET]
+        hs = [probe_floor(px, py) for px, py in pts]
         print("[spot] probed floor per foot: " + "  ".join(f"{v:+.3f}" for v in hs))
+        if hgrid[0] is not None:
+            gs = [float(hgrid[0].height_at(px, py)) for px, py in pts]
+            print("[spot]   grid floor per foot: " + "  ".join(f"{v:+.3f}" for v in gs)
+                  + f"   (grid max - probe max = {max(gs) - max(hs):+.3f} m)")
+            return max(gs)
         return max(hs)
 
     # ── the floor, as a lookup ────────────────────────────────────────────────
@@ -536,6 +593,13 @@ def main():
     _FLOOR_CELL = 0.25
 
     def _floor_lookup():
+        if hgrid[0] is not None:
+            # The collider IS a height field: no need to bin vertices and guess.
+            # The probe bias below comes out near zero, which is itself the check
+            # that the grid sits where PhysX pushes the feet off.
+            g = hgrid[0]
+            return (lambda x, y: float(g.height_at(x, y)) + _floor_bias[0]), \
+                   float(np.median(g.H))
         if surf_pos is None:
             return (lambda x, y: float(SPAWN[2])), 0.0
         P = surf_pos
@@ -564,9 +628,18 @@ def main():
     floor_at, _floor_med = _floor_lookup()
 
     h0 = footprint_h(SPAWN[0], SPAWN[1], spawn_yaw)
-    _floor_bias[0] = h0 - floor_at(SPAWN[0], SPAWN[1])
-    print(f"[floor] baked-vertex grid ({_FLOOR_CELL} m cells) shifted by "
-          f"{_floor_bias[0]:+.3f} m so it matches the probed floor at the spawn")
+    if hgrid[0] is not None:
+        # No bias: the floor lookup and the collider are the SAME height field, so
+        # a shift here would only make the contact shadows disagree with the feet.
+        _floor_bias[0] = 0.0
+        print(f"[floor] the collider's own height grid is the floor lookup "
+              f"(no bias; probe at the spawn centre reads "
+              f"{probe_floor(SPAWN[0], SPAWN[1]) - floor_at(SPAWN[0], SPAWN[1]):+.3f} m "
+              f"against it)")
+    else:
+        _floor_bias[0] = h0 - floor_at(SPAWN[0], SPAWN[1])
+        print(f"[floor] baked-vertex grid ({_FLOOR_CELL} m cells) shifted by "
+              f"{_floor_bias[0]:+.3f} m so it matches the probed floor at the spawn")
     print(f"[spot] probed floor under the spawn footprint: z = {h0:+.3f}  "
           f"(baked-vertex 90th pct says {surface_h(SPAWN[0], SPAWN[1]):+.3f})")
 
@@ -850,14 +923,24 @@ def main():
             vx *= float(range_gate[0](p))
         return vx, 0.0, wz
 
+    attitude = [0.0, 0.0]            # max |roll|, max |pitch| in degrees
+
     def track(rs):
         p = np.array(rs[:3], float)
         walked[0] += float(np.linalg.norm(p[:2] - _last_p[0][:2]))
         _last_p[0] = p
+        R = _quat_to_R(rs[3:7])
         # Tipped over, not "low": the trail is rough enough that a height threshold
         # fires on every boulder. The body's own up axis is unambiguous.
-        if float(_quat_to_R(rs[3:7])[2, 2]) < 0.5:
+        if float(R[2, 2]) < 0.5:
             falls[0] += 1
+        # Attitude off the body axes: pitch is how far the forward axis leaves the
+        # horizontal, roll how far the left axis does. The collider's roughness
+        # shows up here long before it shows up as a fall.
+        pitch = math.degrees(math.asin(max(-1.0, min(1.0, -float(R[2, 0])))))
+        roll = math.degrees(math.asin(max(-1.0, min(1.0, float(R[2, 1])))))
+        attitude[0] = max(attitude[0], abs(roll))
+        attitude[1] = max(attitude[1], abs(pitch))
         return p
 
     def _save_frame(path):
@@ -1150,7 +1233,8 @@ def main():
         rs = art.root_state()
         print(f"[walk] {walked[0]:.2f} m in {fc} frames, waypoint {wp_i[0]}/{len(route[0])}"
               f"{' (turned back)' if turned[0] else ''}, "
-              f"falls={falls[0]}, final z={rs[2]:.3f}")
+              f"falls={falls[0]}, final z={rs[2]:.3f}, "
+              f"max |roll| {attitude[0]:.1f} deg, max |pitch| {attitude[1]:.1f} deg")
         if _scan_hist:
             arr = np.array(_scan_hist)
             print(f"[scanstats] over {len(arr)} samples: std mean={arr[:,2].mean():.4f} "

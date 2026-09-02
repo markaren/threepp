@@ -1,2 +1,4 @@
 # verification captures are produced locally; never commit them
 *.png
+# ...and so are calico_collider's drop-test dumps
+*.npz
