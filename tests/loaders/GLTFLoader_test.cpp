@@ -548,3 +548,48 @@ TEST_CASE("GLTFLoader widens COLOR_0 when preserveNarrowAttributes is off") {
     CHECK(colWide->array()[0] == 1.f);
     CHECK(colWide->array()[4] == 1.f);
 }
+
+// OpenCASCADE's RWGltf_CafWriter emits {"POSITION":-1,"indices":-1} primitives
+// for faces it failed to triangulate. Those must not sink the whole document.
+TEST_CASE("GLTFLoader skips primitives with out-of-range accessors") {
+    Bin bin;
+    size_t posOff = bin.put<float>({0.f, 0.f, 0.f, 1.f, 0.f, 0.f, 0.f, 1.f, 0.f});
+    size_t idxOff = bin.put<uint16_t>({0, 1, 2});
+
+    // Mesh 0: one good primitive plus a degenerate one. Mesh 1: nothing but
+    // degenerate primitives, which must still yield an (empty) Group.
+    std::string json = R"({
+      "asset":{"version":"2.0"},
+      "buffers":[{"byteLength":)" + std::to_string(bin.data.size()) + R"(}],
+      "bufferViews":[
+        {"buffer":0,"byteOffset":)" + std::to_string(posOff) + R"(,"byteLength":36},
+        {"buffer":0,"byteOffset":)" + std::to_string(idxOff) + R"(,"byteLength":6}],
+      "accessors":[
+        {"bufferView":0,"componentType":5126,"count":3,"type":"VEC3"},
+        {"bufferView":1,"componentType":5123,"count":3,"type":"SCALAR"}],
+      "meshes":[
+        {"name":"Solid","primitives":[
+          {"attributes":{"POSITION":0},"indices":1,"mode":4},
+          {"attributes":{"POSITION":-1},"indices":-1,"mode":4}]},
+        {"name":"BadFace","primitives":[
+          {"attributes":{"POSITION":-1},"indices":-1,"mode":4}]}],
+      "nodes":[{"mesh":0},{"mesh":1}],
+      "scenes":[{"nodes":[0,1]}]
+    })";
+
+    auto path = writeTempGlb(makeGlb(json, bin.data));
+    GLTFLoader loader;
+    auto res = loader.load(path);
+    fs::remove(path);
+
+    REQUIRE(res);
+    std::vector<Mesh*> meshes;
+    collectMeshes(res->scene.get(), meshes);
+    REQUIRE(meshes.size() == 1);
+
+    // The survivor is the valid primitive, decoded intact.
+    auto geom = meshes[0]->geometry();
+    REQUIRE(geom->getAttribute<float>("position")->count() == 3);
+    REQUIRE(geom->hasIndex());
+    CHECK(geom->getIndex()->array().size() == 3);
+}

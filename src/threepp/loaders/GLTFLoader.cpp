@@ -377,7 +377,30 @@ namespace threepp {
                 return decoded;
             }
 
+            // Accessors declared by the document (0 if the array is absent).
+            size_t accessorCount() const {
+                return gltf.contains("accessors") ? gltf["accessors"].size() : 0;
+            }
+
+            bool accessorIndexValid(int accessorIdx) const {
+                return accessorIdx >= 0 &&
+                       static_cast<size_t>(accessorIdx) < accessorCount();
+            }
+
+            // Same check straight off a json value: a reference that isn't even
+            // an integer is as unusable as an out-of-range one.
+            bool accessorIndexValid(const json& v) const {
+                return v.is_number_integer() && accessorIndexValid(v.get<int>());
+            }
+
             AccessorData getAccessor(int accessorIdx) {
+                // Every read helper funnels through here, so one range check
+                // turns a bad reference into a named error instead of a
+                // nlohmann type_error out of `gltf["accessors"][-1]`.
+                if (!accessorIndexValid(accessorIdx))
+                    throw std::runtime_error("Accessor index " + std::to_string(accessorIdx) +
+                                             " out of range [0, " + std::to_string(accessorCount()) + ")");
+
                 const auto& acc = gltf["accessors"][accessorIdx];
                 size_t accOff = acc.value("byteOffset", 0);
                 size_t count = acc["count"].get<size_t>();
@@ -1263,6 +1286,49 @@ namespace threepp {
                 return geometry;
             }
 
+            // Exporters can emit primitives whose accessor references are
+            // simply invalid: OpenCASCADE's RWGltf_CafWriter writes
+            // {"attributes":{"POSITION":-1},"indices":-1} for faces it failed to
+            // triangulate. Decoding one aborts the whole document, so a 165 MB
+            // assembly is lost over a single degenerate face. Validate every
+            // index a primitive references up front and skip just that
+            // primitive, keeping the rest of the mesh.
+            bool primitiveAccessorsValid(int meshIdx, const std::string& meshName,
+                                         int primIdx, const json& prim) const {
+                auto reject = [&](const std::string& why) {
+                    std::cerr << "GLTFLoader: skipping primitive " << primIdx
+                              << " of mesh " << meshIdx;
+                    if (!meshName.empty()) std::cerr << " ('" << meshName << "')";
+                    std::cerr << " - " << why << std::endl;
+                    return false;
+                };
+
+                if (!prim.contains("attributes") || !prim["attributes"].is_object())
+                    return reject("no attributes");
+
+                for (auto it = prim["attributes"].begin(); it != prim["attributes"].end(); ++it) {
+                    if (!accessorIndexValid(it.value()))
+                        return reject("attribute " + it.key() + " references invalid accessor " +
+                                      it.value().dump());
+                }
+
+                if (prim.contains("indices") && !accessorIndexValid(prim["indices"]))
+                    return reject("indices reference invalid accessor " + prim["indices"].dump());
+
+                if (prim.contains("targets")) {
+                    for (const auto& target : prim["targets"]) {
+                        if (!target.is_object()) continue;
+                        for (auto it = target.begin(); it != target.end(); ++it) {
+                            if (!accessorIndexValid(it.value()))
+                                return reject("morph target " + it.key() +
+                                              " references invalid accessor " + it.value().dump());
+                        }
+                    }
+                }
+
+                return true;
+            }
+
             std::shared_ptr<Object3D> loadMesh(int meshIdx, bool hasSkin = false) {
                 const auto& meshDef = gltf["meshes"][meshIdx];
                 const auto& primitives = meshDef["primitives"];
@@ -1287,6 +1353,11 @@ namespace threepp {
                         std::cerr << "GLTFLoader: skipping primitive " << primIdx
                                   << " of mesh " << meshIdx << " - unsupported mode "
                                   << primMode << " (only TRIANGLES is supported)" << std::endl;
+                        ++primIdx;
+                        continue;
+                    }
+
+                    if (!primitiveAccessorsValid(meshIdx, meshName, primIdx, prim)) {
                         ++primIdx;
                         continue;
                     }
