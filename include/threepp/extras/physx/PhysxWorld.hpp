@@ -21,6 +21,7 @@
 #include <cmath>
 #include <cstdint>
 #include <functional>
+#include <limits>
 #include <memory>
 #include <stdexcept>
 #include <string>
@@ -1283,6 +1284,139 @@ namespace threepp {
                 if (auto* body = addStaticTrimesh(m, mat)) out.push_back(body);
             });
             return out;
+        }
+
+        // Add a 2.5D height field as a static collider, in a Z-UP world.
+        //
+        // Why this exists next to addStaticTrimesh: a height field is watertight by
+        // construction — one height per cell means a HOLE is not representable, and
+        // neither is a near-vertical spike — which is exactly what a marching-cubes
+        // bake of a scan is not. It is also ~4 bytes per sample against ~100 for the
+        // same surface cooked as a triangle soup, and PhysX's height-field
+        // narrowphase indexes the cell under a contact instead of walking a BVH.
+        //
+        // `heights` is row-major with the ROW index running along WORLD Y:
+        //
+        //     heights[iy * nx + ix]  is the surface z at
+        //     (origin.x + ix*cell, origin.y + iy*cell, origin.z + heights[...])
+        //
+        // i.e. the natural NumPy layout of an (ny, nx) array. `cell` is the sample
+        // spacing in metres, the same in x and y.
+        //
+        // Axis mapping. PhysX height fields are Y-UP in the shape's LOCAL frame:
+        // the row index runs along local +x, the column index along local +z, the
+        // height along local +y. Mapping local +y to world +z while keeping local
+        // +x on world +x forces the third axis: local +z must go to world -y, or
+        // the map is a reflection and no quaternion can express it. So the shape's
+        // local pose is a QUARTER TURN ABOUT +X (local y -> world z, local z ->
+        // world -y) and the columns are stored REVERSED (column c holds row
+        // iy = ny-1-c), with the pose's translation moved to the far y edge to
+        // compensate. Sample (r, c) then lands at world
+        //     (origin.x + r*cell, origin.y + (ny-1-c)*cell, origin.z + h),
+        // which is exactly the contract above. PhysxWorld_test's analytic-ramp
+        // probe (an asymmetric z = 0.1x + 0.3 sin y) is what pins this down: a
+        // transposed grid or a flipped axis fails it.
+        //
+        // Heights are quantised to int16: heightScale is picked from the actual
+        // z range so the range spans 32000 counts (a 20 m range quantises at
+        // 0.6 mm), with a 1e-4 m floor for a flat or near-flat field.
+        //
+        // `thickness` is how deep below the surface the caller wants the field to
+        // stay solid. PhysX 5 has NO such knob: PxHeightFieldDesc::thickness was a
+        // PhysX 3 field and is gone from the 5.5 header. The parameter is accepted
+        // and validated (> 0) so callers can express the intent, but PhysX cannot
+        // honour it, and a height field is NOT a solid volume. Measured, in
+        // PhysxWorld_test: a 4 cm ball thrown down at 6 m/s (0.113 m of travel per
+        // 1/60 s substep, no CCD) passes straight through this height field —
+        // 12 probes of 12 — and through the identical surface cooked as a trimesh,
+        // 12 of 12, at the same rest depth to four decimals. Discrete collision
+        // detection is the limit, not the shape: nothing tunnels once the probe's
+        // diameter exceeds its per-substep travel (a 16 cm ball at the same 6 m/s
+        // holds on all 12). If a caller genuinely needs a fast small body to stop
+        // here, the fix is CCD or a smaller substep, and it is the same fix for a
+        // trimesh. What the height field buys over the bake is holes and spikes.
+        //
+        // Returns nullptr on a degenerate field (nx or ny < 2, cell <= 0, no finite
+        // sample) or a cook failure.
+        ::physx::PxRigidStatic* addStaticHeightField(
+                const float* heights, int nx, int ny, float cell,
+                const Vector3& origin, float thickness,
+                ::physx::PxMaterial* mat) {
+            using namespace ::physx;
+            if (!heights || nx < 2 || ny < 2 || !(cell > 0.f) || !(thickness > 0.f)) return nullptr;
+
+            const std::size_t n = static_cast<std::size_t>(nx) * static_cast<std::size_t>(ny);
+
+            // z range over the finite samples only; a NaN cell is pinned to the floor
+            // rather than poisoning the quantisation for the whole field.
+            float zMin = std::numeric_limits<float>::infinity();
+            float zMax = -std::numeric_limits<float>::infinity();
+            for (std::size_t i = 0; i < n; ++i) {
+                const float h = heights[i];
+                if (!std::isfinite(h)) continue;
+                zMin = std::min(zMin, h);
+                zMax = std::max(zMax, h);
+            }
+            if (!std::isfinite(zMin) || !std::isfinite(zMax)) return nullptr;
+
+            // 32000 of the int16's 32767 counts, so rounding can never overflow.
+            const float heightScale = std::max((zMax - zMin) / 32000.f, 1e-4f);
+            const float invScale = 1.f / heightScale;
+
+            std::vector<PxHeightFieldSample> samples(n);
+            for (int ix = 0; ix < nx; ++ix) {
+                for (int c = 0; c < ny; ++c) {
+                    const int iy = ny - 1 - c;// columns reversed: see the quarter turn above
+                    const float h = heights[static_cast<std::size_t>(iy) * nx + ix];
+                    const float q = (std::isfinite(h) ? h : zMin) - zMin;
+                    auto& s = samples[static_cast<std::size_t>(ix) * ny + c];
+                    s.height = static_cast<PxI16>(std::lround(q * invScale));
+                    s.materialIndex0 = 0;
+                    s.materialIndex1 = 0;
+                }
+            }
+
+            PxHeightFieldDesc desc;
+            desc.format = PxHeightFieldFormat::eS16_TM;
+            desc.nbRows = static_cast<PxU32>(nx);
+            desc.nbColumns = static_cast<PxU32>(ny);
+            desc.samples.data = samples.data();
+            desc.samples.stride = sizeof(PxHeightFieldSample);
+
+            PxHeightField* hf = PxCreateHeightField(desc);
+            if (!hf) return nullptr;
+
+            if (!mat) mat = defaultMat_;
+            PxHeightFieldGeometry geom(hf, PxMeshGeometryFlags(), heightScale, cell, cell);
+
+            PxRigidStatic* body = physics_->createRigidStatic(PxTransform(PxIdentity));
+            PxShape* shape = physics_->createShape(geom, *mat, true);
+            shape->setLocalPose(PxTransform(
+                    PxVec3(origin.x, origin.y + static_cast<float>(ny - 1) * cell, origin.z + zMin),
+                    PxQuat(PxPiDivTwo, PxVec3(1.f, 0.f, 0.f))));
+            body->attachShape(*shape);
+            shape->release();
+            hf->release();// the shape holds its own reference
+            scene_->addActor(*body);
+            return body;
+        }
+
+        // Vector overload. Same contract; `heights` must hold exactly nx*ny samples.
+        // (Two explicit overloads rather than one signature with defaults after a
+        // pointer: MSVC and GCC disagree about nested `= {}` defaults, and the house
+        // fix is to spell the overloads out.)
+        ::physx::PxRigidStatic* addStaticHeightField(
+                const std::vector<float>& heights, int nx, int ny, float cell,
+                const Vector3& origin, float thickness = 0.5f,
+                ::physx::PxMaterial* mat = nullptr) {
+            if (nx < 2 || ny < 2) return nullptr;
+            if (heights.size() != static_cast<std::size_t>(nx) * static_cast<std::size_t>(ny)) {
+                throw std::runtime_error(
+                        "PhysxWorld::addStaticHeightField: heights holds " +
+                        std::to_string(heights.size()) + " samples, expected nx*ny = " +
+                        std::to_string(static_cast<std::size_t>(nx) * static_cast<std::size_t>(ny)));
+            }
+            return addStaticHeightField(heights.data(), nx, ny, cell, origin, thickness, mat);
         }
 
         // Cook a convex hull from raw positions (tightly packed x,y,z floats).
