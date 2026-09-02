@@ -198,6 +198,206 @@ def v2_obs(art, last_act, cmd, ahead, h_here, phi):
                            clk, [float(rs[2]) - h_here], ahead]).astype(np.float32)
 
 
+# ── the LOD frame-time budget ─────────────────────────────────────────────────
+class LodBudget:
+    """A frame-time budget wrapped around `select_lod`.
+
+    `select_lod` is a QUALITY policy: it keeps the coarsest resident level whose
+    splats still cover the picture at ~`target_splats_per_pixel`, and it has no
+    idea what that costs. In this scene the cost is wildly asymmetric. Standing
+    at the spawn and looking down the open wash (-x) submits 1.07 M splats and
+    renders in 15 ms; turning round to face the brushy end (+x) puts EVERY chunk
+    of level 1 inside the frustum -- 4.81 M splats, 71 ms. Same policy, same spp,
+    4.7x the frame. Raising spp makes it worse (spp 16 picks level 0: 18 M
+    submitted, 203 ms), and the far plane changes nothing: the tile rasterizer
+    does not clip chunks by camera far.
+
+    The one lever that biases that policy coarser without touching C++ is the
+    VIEWPORT HEIGHT it is told about. The footprint test scales with it, so
+    telling it the picture is 0.7x as tall makes it step down a level -- exactly
+    what dropping render_scale to 0.25 did by accident (level 2, 1.2 M, 27 ms).
+
+    So: hold a scale in [0.25, 1], measure the render's wall time, and move the
+    scale on it. Wall time is the honest signal here; `frame_timings.gpu_total_ms`
+    read 22 ms on a frame whose wall time was 71 ms (it covers the deferred passes
+    it instruments, not the splat submit-and-blend), so a controller fed from the
+    GPU counter would never see the stall it exists to remove.
+
+    Feedback (deliberately asymmetric, the way any drop-quality-fast controller
+    is): over budget by more than TOL, multiply by DOWN at once; under LOW of the
+    budget for HOLD_UP consecutive frames, divide by DOWN. `select_lod`'s own
+    1.25 hysteresis sits underneath, and a COOLDOWN after every change stops the
+    EMA's lag from spending three steps of scale on one stall.
+    """
+
+    EMA_N = 10          # frames in the smoothing window
+    TOL = 1.15          # over budget by more than this -> coarser, now
+    LOW = 0.85          # under this much of the budget -> a candidate for finer.
+                        # 0.60 was the first try and it RATCHETS: about 10 ms of
+                        # this frame is base cost (deferred shade, TAA/FSR, the
+                        # robot, the SLAM mesh) and does not move with the splat
+                        # count, so a settled 13 ms frame never reaches 0.6 x 18
+                        # and the controller never gives quality back -- it sat
+                        # on the coarsest resident level for 73 % of a revolution
+                        # with 5 ms of its own budget unspent.
+    HOLD_UP = 20        # ...for this many consecutive frames
+    DOWN = 0.7          # the multiplicative step, both ways
+    MIN_SCALE = 0.25    # and no lower: see `cap` for what happens past it
+    MAX_STEPS = 4       # steps of DOWN a single over-budget frame may take
+    MIN_CAP = 250_000   # splats; below the coarsest resident level nothing helps
+    CAP_OFF = 30_000_000    # a cap above the whole cloud is no cap at all
+    PAYOFF = 0.90       # a coarsening must buy at least 10 % or it is undone
+    LOCKOUT = 600       # frames of silence after a change that bought nothing
+    COOLDOWN = 5        # frames to let the EMA re-seed after a change
+    UP_COOLDOWN = 45    # ...longer after going finer, which is the risky direction
+    HOLD_UP_MAX = 160   # backoff ceiling (see `up_hold`)
+
+    def __init__(self, budget_ms):
+        self.budget = float(budget_ms)
+        self.reset()
+
+    def reset(self, budget_ms=None):
+        if budget_ms is not None:
+            self.budget = float(budget_ms)
+        self.scale = 1.0
+        self.ema = None
+        self.n_low = 0
+        self.cool = 0
+        self.changes = 0
+        self.last_ms = 0.0
+        self.floor = None       # cheapest frame seen: with vsync this IS the cap
+        self.up_hold = self.HOLD_UP
+        self.since_up = 10 ** 9
+        self.cap = None         # splats; None = whatever select_lod asked for
+        self.last_submitted = 0
+        self.pending = None     # (scale, cap, ema) to judge the last coarsening by
+        self.lock = 0           # frames left of a no-payoff lockout
+        self.engaged = 0        # frames spent below full quality
+        self.reverts = 0
+
+    @property
+    def on(self):
+        return self.budget > 0.0
+
+    def viewport(self, vh):
+        """The height to hand `select_lod` this frame."""
+        if not self.on:
+            return int(vh)
+        return max(1, int(round(float(vh) * self.scale)))
+
+    def note(self, ms, submitted=None):
+        """Feed one measured render wall time in ms, and what that frame drew."""
+        self.last_ms = float(ms)
+        if not self.on:
+            return
+        if submitted is not None and submitted > 0:
+            self.last_submitted = int(submitted)
+        a = 2.0 / (self.EMA_N + 1.0)
+        self.ema = ms if self.ema is None else self.ema + a * (ms - self.ema)
+        self.floor = ms if self.floor is None else min(self.floor, ms)
+        self.since_up += 1
+        if self.scale < 1.0 or self.cap is not None:
+            self.engaged += 1
+        if self.cool > 0:
+            self.cool -= 1
+            return
+        # Did the last coarsening actually buy anything? A frame is only splat
+        # bound some of the time -- at 1600x1000 this scene costs ~30 ms with
+        # deferred shading, TAA/FSR, the robot and the SLAM mesh before a single
+        # splat is drawn -- and against a budget it cannot reach, a controller
+        # with no payoff test walks all the way down to the coarsest level and
+        # sits there, having bought nothing and spent the whole picture. So:
+        # judge the change, undo it if it did not pay, and go quiet for a while.
+        if self.pending is not None:
+            prev_scale, prev_cap, prev_ema = self.pending
+            self.pending = None
+            cur = self.ema
+            if cur is not None and cur > self.PAYOFF * prev_ema:
+                self.scale, self.cap = prev_scale, prev_cap
+                self.reverts += 1
+                self.lock = self.LOCKOUT
+                self.ema = None
+                print(f"[lod] budget guard STANDS DOWN: coarsening bought "
+                      f"{100.0 * (1.0 - cur / prev_ema):.0f}% ({prev_ema:.1f} -> "
+                      f"{cur:.1f} ms), so this frame is not splat bound -- "
+                      f"reverting to scale {prev_scale:.2f} and going quiet for "
+                      f"{self.LOCKOUT} frames")
+                return
+        if self.lock > 0:
+            self.lock -= 1
+            return
+        # Under budget, OR pinned at the presentation cap. The second clause is
+        # there because interactive runs are vsync'd: render() blocks in present,
+        # so a frame with 6 ms of GPU work still measures ~16.7 ms and the plain
+        # "< 0.6 * budget" test would never fire -- the scale would ratchet
+        # coarse and stay there for the rest of the session.
+        cheap = (self.ema < self.LOW * self.budget
+                 or (self.floor is not None and self.ema <= self.floor * 1.10
+                     and self.ema <= self.budget))
+        if self.ema > self.TOL * self.budget:
+            self.n_low = 0
+            # One step per decision was measured to be too slow to matter: facing
+            # +x costs 200 ms a frame, and five 12-frame steps down is seven
+            # SECONDS of stall before the scale arrives. Take as many steps as
+            # the overshoot is worth, at once; cost is near-linear in the splats
+            # submitted, so the overshoot ratio in DOWN-sized steps is the honest
+            # first guess.
+            k = 1
+            if self.ema > 2.0 * self.TOL * self.budget:
+                k = int(min(self.MAX_STEPS,
+                            math.ceil(math.log(self.ema / (self.TOL * self.budget))
+                                      / math.log(1.0 / self.DOWN))))
+            new = max(self.MIN_SCALE, self.scale * self.DOWN ** k)
+            # ...and the cap, which is the lever that still bites at the scale's
+            # floor. Cost is very nearly linear in the splats actually submitted
+            # (measured: 1.07 M = 15 ms, 4.81 M = 71 ms, 18.0 M = 203 ms, i.e.
+            # ~15 ms per million), so "draw less than you just drew" is a
+            # well-posed instruction in splats even where it is not in viewport
+            # height. It has to exist because the height lever is NOT monotone:
+            # past roughly 0.25 the per-node selection fragments into more than
+            # the 64 submit ranges the backend takes, selectLodPerNode bridges
+            # the gaps to fit, and a bridged range carries every splat between
+            # its ends -- so pushing the height further down put 18 M splats back
+            # on the GPU and made the frame WORSE than no policy at all.
+            cap = None
+            if self.last_submitted > 0:
+                cap = max(self.MIN_CAP, int(self.last_submitted * self.DOWN))
+                cap = cap if self.cap is None else min(self.cap, cap)
+            if new != self.scale or cap != self.cap:
+                # If we only just went finer and are already back over budget,
+                # this is the boundary case that oscillates. Back off: demand
+                # twice as long a quiet spell before trying finer again.
+                if self.since_up < 4 * self.HOLD_UP:
+                    self.up_hold = min(self.HOLD_UP_MAX, self.up_hold * 2)
+                if self.scale >= 1.0 and self.cap is None:
+                    print(f"[lod] budget guard ENGAGES: {self.ema:.1f} ms "
+                          f"smoothed over a {self.budget:.0f} ms budget, "
+                          f"{self.last_submitted / 1e6:.2f} M splats submitted")
+                self.pending = (self.scale, self.cap, self.ema)
+                self.scale = new
+                self.cap = cap
+                self.changes += 1
+                self.cool = self.COOLDOWN
+                self.ema = None     # the old regime's frames say nothing now
+        elif cheap:
+            self.n_low += 1
+            if self.n_low >= self.up_hold:
+                self.n_low = 0
+                new = min(1.0, self.scale / self.DOWN)
+                cap = None if self.cap is None else int(self.cap / self.DOWN)
+                if cap is not None and cap > self.CAP_OFF:
+                    cap = None
+                if new != self.scale or cap != self.cap:
+                    self.scale = new
+                    self.cap = cap
+                    self.changes += 1
+                    self.cool = self.UP_COOLDOWN
+                    self.since_up = 0
+                    self.ema = None
+        else:
+            self.n_low = 0
+
+
 # ── main ──────────────────────────────────────────────────────────────────────
 def main():
     ap = argparse.ArgumentParser()
@@ -206,8 +406,9 @@ def main():
     ap.add_argument("--shot", metavar="PNG")
     ap.add_argument("--cam", default="low_following",
                     help="shots.json camera for --shot (establishing/low_following/topdown/lookback),"
-                         " 'follow' for a chase pose behind the robot, or 'trackside' for WP0's"
-                         " low_following geometry rebuilt at whatever waypoint we spawned on")
+                         " 'follow' for a chase pose behind the robot, 'trackside' for WP0's"
+                         " low_following geometry rebuilt at whatever waypoint we spawned on,"
+                         " or 'back' for the spawn +1.5 m looking +x (the expensive view)")
     ap.add_argument("--strafe-m", type=float, default=0.0,
                     help="--shot: strafe sideways off the spine this far before capturing")
     ap.add_argument("--walk-m", type=float, default=0.0,
@@ -217,14 +418,31 @@ def main():
                     help="render the cloud alone at WP0's lookback pose and exit "
                          "(the one-time check that the Y-up -> Z-up map is right)")
     ap.add_argument("--auto", action="store_true", help="auto-walk the spine from the start")
-    ap.add_argument("--spp", type=float, default=8.0,
-                    help="select_lod target_splats_per_pixel")
+    ap.add_argument("--spp", type=float, default=4.0,
+                    help="select_lod target_splats_per_pixel. 4, not 8: on the "
+                         "per-node selector (splats::selectLodPerNode, which "
+                         "select_lod now dispatches to because this asset carries "
+                         "the SSOG tree) the near field stays at level 0 either "
+                         "way, and 4 costs 20.5 ms looking +x where 8 costs 43.8.")
     ap.add_argument("--near-lod-m", type=float, default=0.0,
                     help="within this distance of the nearest spine waypoint, force the "
                          "FINEST resident level, every chunk, no frustum trim. MEASURED at "
                          "1200x720 render_scale 0.5: 5.7 fps, 173 ms of it CPU-side submit. "
                          "select_lod at a high --spp keeps the chunk culling and is the "
                          "default; 0 disables the force.")
+    ap.add_argument("--lod-budget-ms", type=float, default=25.0, metavar="MS",
+                    help="frame-time budget for the splat pass, in milliseconds of "
+                         "measured RENDER wall time (default 25.0 at 1200x720 "
+                         "render_scale 0.5; 0 disables the feedback and leaves "
+                         "select_lod alone). See LodBudget: the budget does not "
+                         "pick levels itself, it scales the viewport height that "
+                         "select_lod is told about, which is the only lever that "
+                         "biases that policy coarser from Python.")
+    ap.add_argument("--bench-spin", type=float, default=0.0, metavar="SECONDS",
+                    help="headless A/B bench: stand at the spawn +1.5 m and turn the "
+                         "camera through 360 degrees over SECONDS, once with the LOD "
+                         "budget OFF and once ON, reporting frame-time p50/p95/max, "
+                         "the level histogram and the level-switch rate for each.")
     ap.add_argument("--no-bake", action="store_true", help="skip the bake (splats only, no physics ground)")
     ap.add_argument("--flat", action="store_true",
                     help="CONTROL: replace the baked collider with a flat plane at the spawn's "
@@ -364,8 +582,19 @@ def main():
     if args.drive_test:
         args.no_slam = True
         args.no_pip = True
-    headless = bool(args.shot) or bool(args.verify_frame) or bool(args.drive_test)
+    spin_s = float(args.bench_spin)
+    headless = bool(args.shot) or bool(args.verify_frame) or bool(args.drive_test) \
+        or spin_s > 0.0
     bench = int(args.bench)
+    # The film is a fixed-quality product: a controller that trades level for
+    # frame time would make shot 3 look different from shot 1 for no reason the
+    # viewer can see. The drive test never looks at its own picture.
+    if film or args.drive_test:
+        if args.lod_budget_ms > 0.0:
+            print(f"[lod] budget disabled for "
+                  f"{'--film' if film else '--drive-test'} (fixed quality)")
+        args.lod_budget_ms = 0.0
+    budget = LodBudget(args.lod_budget_ms)
     if film:
         # Everything downstream of here that could make one run differ from the
         # next: numpy's global RNG (nothing in this script draws from it, but the
@@ -413,7 +642,7 @@ def main():
         _bw, _bh = 1200, 720
     if bench and os.environ.get("SPOT_BENCH_SIZE"):
         _bw, _bh = (int(v) for v in os.environ["SPOT_BENCH_SIZE"].split("x"))
-    _vsync = (not bench) or bool(os.environ.get("SPOT_BENCH_VSYNC"))
+    _vsync = (not bench and spin_s <= 0.0) or bool(os.environ.get("SPOT_BENCH_VSYNC"))
     canvas = tp.Canvas("threepp - Spot on Calico Tanks", width=_bw, height=_bh,
                        antialiasing=4, headless=headless or film, vsync=_vsync)
     rend = tp.VulkanRenderer(canvas)
@@ -968,6 +1197,15 @@ def main():
 
     # ── LOD ───────────────────────────────────────────────────────────────────
     _lod_report = [-1]
+    _lod_switches = [0]          # level changes since the last reset
+    _lod_t0 = [time.perf_counter()]
+
+    def submitted_splats():
+        """What the cloud will actually draw: the sum of its submit ranges."""
+        try:
+            return int(sum(int(c) for _b, c in cloud.submit_ranges))
+        except Exception:
+            return -1
 
     def pick_lod(vh):
         """Per-frame level choice.
@@ -977,6 +1215,9 @@ def main():
         near field must be level 0 or the rock beside a foot reads as blobs, so
         when the camera is inside --near-lod-m of the spine the finest resident
         level is forced outright (all its chunks submitted, no frustum trim).
+
+        `vh` is the RAW viewport height; LodBudget scales it, which is how the
+        frame-time budget biases this policy coarser (see the class).
         """
         cp = camera.position
         d = float(np.min(np.linalg.norm(spine - np.array([cp.x, cp.y, cp.z]), axis=1)))
@@ -985,11 +1226,38 @@ def main():
             cloud.submit_ranges = [(int(lv["base"]), int(lv["count"]))]
             lvl = 0
         else:
-            lvl = tp.select_lod(cloud, camera, vh, target_splats_per_pixel=args.spp)
+            lvl = tp.select_lod(cloud, camera, budget.viewport(vh),
+                                target_splats_per_pixel=args.spp)
+            # The budget's hard backstop. select_lod has just written its ranges;
+            # if they add up to more splats than the budget can pay for, replace
+            # them with the WHOLE of the finest resident level that fits, as one
+            # range. One range is deliberate: it is the fragmentation of the
+            # per-node selection that bridges gaps and submits everything, so the
+            # fallback must not be another scattered set. Frustum culling is lost
+            # in the fallback, but in the direction where it fires the frustum
+            # held the whole cloud anyway.
+            if budget.cap is not None and lod_levels:
+                n = submitted_splats()
+                if n > budget.cap:
+                    pick = None
+                    for i, lv in enumerate(lod_levels):
+                        if int(lv["count"]) <= budget.cap:
+                            pick = i
+                            break
+                    if pick is None:
+                        pick = len(lod_levels) - 1
+                    if int(lod_levels[pick]["count"]) < n:
+                        cloud.submit_ranges = [(int(lod_levels[pick]["base"]),
+                                                int(lod_levels[pick]["count"]))]
+                        lvl = pick
         if lvl != _lod_report[0]:
             _lod_report[0] = lvl
+            _lod_switches[0] += 1
             n = lod_levels[lvl]["count"] if lvl < len(lod_levels) else 0
-            print(f"[lod] level {lvl} ({n} splats), camera {d:.1f} m from the spine")
+            print(f"[lod] level {lvl} ({n} splats, {submitted_splats() / 1e6:.2f} M "
+                  f"submitted), {d:.1f} m from the spine, "
+                  f"{budget.last_ms:.1f} ms/frame, vh scale {budget.scale:.2f}, cap "
+                  f"{'-' if budget.cap is None else f'{budget.cap / 1e6:.2f} M'}")
         # NO cloud.update() here. SplatCloud::update runs sortByDepth, a CPU
         # counting sort over every resident splat whenever the camera moved
         # (SplatCloud.cpp:764-800) -- that is the GL path's per-frame entry.
@@ -1459,6 +1727,96 @@ def main():
         canvas.close()
         return
 
+    # ── the spin bench: what the frame costs in every direction ───────────────
+    # The complaint this exists to measure is directional. Standing where the
+    # robot spawns and turning round is the whole experiment: the wash is open
+    # toward -x and every chunk of the cloud is in frame toward +x, so one
+    # revolution walks the frustum through the best and the worst case the demo
+    # has. Physics does not run here and neither do the scanner or the SLAM
+    # rebuild: the question is what the SPLAT PASS costs, and a policy step or a
+    # marching-cubes hitch in the same samples would only blur the answer.
+    if spin_s > 0.0:
+        SPIN_FPS = 60.0
+        n_spin = max(30, int(round(spin_s * SPIN_FPS)))
+        eye = np.array([SPAWN[0], SPAWN[1], SPAWN[2] + 1.5], float)
+        camera.fov = 50.0
+        camera.update_projection_matrix()
+        if pip is not None:
+            pip.place(art.root_state())
+
+        def _aim(i, n):
+            th = 2.0 * math.pi * (i / float(n))
+            camera.position.set(*eye)
+            camera.look_at(float(eye[0] + 10.0 * math.cos(th)),
+                           float(eye[1] + 10.0 * math.sin(th)),
+                           float(eye[2] - 0.6))
+
+        def spin_pass(label, budget_ms, revs=2):
+            """One or more revolutions. The FIRST is the controller learning the
+            scene from scale 1.0 -- the honest cost of walking into the bad
+            heading cold -- and the second is what the demo settles at; they are
+            reported separately, because averaging them would flatter one and
+            slander the other."""
+            budget.reset(budget_ms)
+            _lod_report[0] = -1
+            ms, lv, sub, gpu, sw = [], [], [], [], []
+            for i in range(n_spin * revs):
+                _aim(i % n_spin, n_spin)
+                _prev = _lod_report[0]
+                lvl = pick_lod(canvas.size()[1])
+                t0 = time.perf_counter()
+                rend.render(scene, camera)
+                dt = (time.perf_counter() - t0) * 1e3
+                nsub = submitted_splats()
+                budget.note(dt, nsub)
+                ms.append(dt); lv.append(lvl); sub.append(nsub)
+                sw.append(1 if (_prev >= 0 and lvl != _prev) else 0)
+                _ft = dict(rend.frame_timings) if hasattr(rend, "frame_timings") else {}
+                gpu.append(float(_ft.get("gpu_total_ms", 0.0)))
+            for r in range(revs):
+                lo, hi = r * n_spin, (r + 1) * n_spin
+                a = np.array(ms[lo:hi])
+                g = np.array(gpu[lo:hi])
+                hist = {int(k): int(v) for k, v in
+                        zip(*np.unique(np.array(lv[lo:hi]), return_counts=True))}
+                secs = float(a.sum()) / 1e3
+                nsw = int(sum(sw[lo:hi]))
+                tag = f"{label} r{r + 1}"
+                print(f"[spin] {tag:<14} budget={budget_ms:5.1f}ms  "
+                      f"p50 {np.percentile(a, 50):6.1f}  p95 {np.percentile(a, 95):6.1f}  "
+                      f"max {a.max():6.1f}  mean {a.mean():6.1f} ms   "
+                      f"gpu_total p95 {np.percentile(g, 95):5.1f} ms")
+                print(f"[spin] {'':<14} levels {hist}   submitted "
+                      f"{np.min(sub[lo:hi]) / 1e6:.2f}..{np.max(sub[lo:hi]) / 1e6:.2f} M "
+                      f"(mean {np.mean(sub[lo:hi]) / 1e6:.2f} M)")
+                print(f"[spin] {'':<14} level switches {nsw} in {secs:.1f} s = "
+                      f"{nsw / max(secs, 1e-6):.2f}/s   scale changes "
+                      f"{budget.changes}, final vh scale {budget.scale:.2f}, "
+                      f"guard engaged {100.0 * budget.engaged / max(1, hi):.0f}% "
+                      f"of frames so far, {budget.reverts} stand-downs")
+            return np.array(ms[-n_spin:]), lv[-n_spin:]
+
+        print(f"[spin] {n_spin} frames per revolution at {canvas.size()} "
+              f"render_scale {rend.render_scale}, eye "
+              f"({eye[0]:+.2f}, {eye[1]:+.2f}, {eye[2]:+.2f}), spp {args.spp}")
+        for i in range(40):                      # warmup: TAA, pipelines, allocator
+            _aim(i, 120)
+            pick_lod(canvas.size()[1])
+            rend.render(scene, camera)
+        off_ms, off_lv = spin_pass("BUDGET OFF", 0.0, revs=1)   # nothing to learn
+        on_ms, on_lv = spin_pass("BUDGET ON", float(args.lod_budget_ms) or 25.0)
+        # The heading histogram is the point: the average hides the +x arc.
+        print("[spin] frame ms by heading (deg from +x, 12 sectors):")
+        for lab, arr, lvs in (("off", off_ms, off_lv), ("on", on_ms, on_lv)):
+            secs = []
+            for s in range(12):
+                lo, hi = s * n_spin // 12, (s + 1) * n_spin // 12
+                secs.append(f"{np.percentile(arr[lo:hi], 50):5.0f}"
+                            f"/{int(np.median(lvs[lo:hi]))}")
+            print(f"[spin]   {lab:<3} " + " ".join(secs))
+        canvas.close()
+        return
+
     # ── headless capture ──────────────────────────────────────────────────────
     if headless:
         gphi = 0.0
@@ -1523,6 +1881,13 @@ def main():
         if args.cam == "trackside":
             pos = trackside_eye
             look = np.array(rs[:3], float) + np.array([0.0, 0.0, 0.15])
+        elif args.cam == "back":
+            # The user's complaint pose: stand where the robot spawns, 1.5 m up,
+            # and look back down the wash toward the brushy end. The Y-up +x of
+            # the analysis frame is world +x here (world = (x, -z, y) + t), so
+            # "looking back" is simply +x.
+            pos = np.array([SPAWN[0], SPAWN[1], SPAWN[2] + 1.5])
+            look = pos + np.array([10.0, 0.0, -0.6])
         elif args.cam == "follow":
             p = np.array(rs[:3], float)
             fwd = _quat_to_R(rs[3:7])[:, 0]; fwd[2] = 0
@@ -1553,14 +1918,24 @@ def main():
             print(f"[slam] {slam.voxels} voxels -> {tris} triangles "
                   f"in {time.perf_counter() - t_mc:.2f}s, banded on "
                   f"z = {h_here_cache[0]:+.3f} +/- {SlamSurface.BAND}")
-        for _ in range(3):                      # let TAA settle on the new pose
+        # Three frames let TAA settle on the new pose. The budget needs more than
+        # that: it is a feedback loop over a 10-frame EMA, and a capture taken
+        # three frames after a cut shows the level the PREVIOUS pose deserved.
+        _n_settle = 3 if not budget.on else 90
+        for _k in range(_n_settle):             # let TAA settle on the new pose
             pick_lod(h)
             if pip is not None:
                 pip.place(rs)
             look_update(rs)
+            _t_r = time.perf_counter()
             rend.render(scene, camera)
+            budget.note((time.perf_counter() - _t_r) * 1e3, submitted_splats())
             if pip is not None:
                 pip.update(canvas.size())
+        if budget.on:
+            print(f"[lod] capture settled at level {_lod_report[0]}, "
+                  f"{submitted_splats() / 1e6:.2f} M submitted, vh scale "
+                  f"{budget.scale:.2f}, {budget.ema:.1f} ms/frame smoothed")
         _sd2 = rend.read_gbuffer_aov_raw("splat_depth")
         print(f"[splat] splat_depth AOV at capture time: "
               f"{'ALLOCATED ' + str(_sd2.shape) if _sd2 is not None else 'NOT allocated'} "
@@ -1749,7 +2124,12 @@ def main():
         if pip is not None:
             pip.place(rs)                       # the view rides the same body mount
         look_update(rs)
+        # The budget's signal. Wall time around render() and nothing else: it is
+        # the number the user feels, and the only one that saw the 71 ms stall
+        # (frame_timings.gpu_total_ms read 22 ms on the same frame).
+        _t_r = time.perf_counter()
         rend.render(scene, camera)
+        budget.note((time.perf_counter() - _t_r) * 1e3, submitted_splats())
         if bench: _mark("render")
         if pip is not None and fc[0] % PIP_EVERY == 0:
             pip.update(canvas.size())           # reads the frame just rendered
