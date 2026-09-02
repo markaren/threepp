@@ -133,6 +133,30 @@ namespace threepp {
             std::vector<ChunkInfo> chunks;
         };
 
+        // One leaf of the asset's spatial tree, and where its splats sit inside
+        // each level.
+        //
+        // This is the ONE thing in the container that relates the levels to
+        // each other: a leaf's entry for level 0 and its entry for level 2
+        // describe the SAME piece of space at two densities. Per-level chunk
+        // bounds cannot say that (a chunk of level 0 and a chunk of level 2
+        // overlap arbitrarily), which is why per-node LOD needs the tree and
+        // why LevelInfo::chunks alone was not enough.
+        struct NodeRange {
+
+            int lod{};            // the asset's own level number
+            std::size_t chunk{};  // index into Info::levels[lod].chunks
+            std::size_t offset{}; // splat offset INSIDE that chunk
+            std::size_t count{};
+        };
+
+        struct NodeInfo {
+
+            Box3 bound;                  // the leaf's own bound, verbatim
+            std::vector<NodeRange> lods; // ascending lod; a level the leaf has
+                                         // no splats at is simply absent
+        };
+
         // What an asset holds, without decoding a single plane. Reads only the
         // json — milliseconds against the ~1.2 GB resident that load() of
         // level 0 costs, which is exactly why it exists: a caller deserves to
@@ -142,6 +166,18 @@ namespace threepp {
 
             int lodLevels = 1;
             std::vector<LevelInfo> levels;
+
+            // The tree's leaves, in the order lod-meta.json declares them —
+            // which for every writer seen so far is also the order each chunk
+            // file's splats are stored in, so a leaf's ranges within one chunk
+            // are contiguous and the leaves of one chunk tile it exactly.
+            // loadSogWithLod checks that rather than assuming it.
+            //
+            // EMPTY when the asset is a lone chunk, and empty when the tree's
+            // level entries carry no `offset` member (an older writer): a
+            // caller then falls back to whole-cloud selection rather than
+            // guessing an offset.
+            std::vector<NodeInfo> nodes;
 
             // The lod-meta tree's root bound, verbatim. Empty for a lone chunk,
             // which declares no bound of its own.

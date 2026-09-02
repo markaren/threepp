@@ -542,6 +542,25 @@ namespace {
 
         // level -> file index -> (summed count, accumulated bound)
         std::vector<std::map<std::size_t, std::pair<std::size_t, Box3>>> byLevel;
+
+        // The leaves themselves, in tree order, with the (file, offset, count)
+        // each level's entry names. `offset` is what makes per-node LOD
+        // possible; `haveOffsets` goes false the moment one entry omits it,
+        // and the leaves are then dropped rather than half-trusted.
+        struct LeafLod {
+
+            int level{};
+            std::size_t file{};
+            std::size_t offset{};
+            std::size_t count{};
+        };
+        struct Leaf {
+
+            Box3 bound;
+            std::vector<LeafLod> lods;
+        };
+        std::vector<Leaf> leaves;
+        bool haveOffsets = true;
     };
 
     Box3 boundOf(const nlohmann::json& node, const std::string& where) {
@@ -587,6 +606,9 @@ namespace {
 
         const Box3 nodeBound = boundOf(node, "lod-meta.json tree leaf");
 
+        LodMeta::Leaf leaf;
+        leaf.bound = nodeBound;
+
         for (auto it = lods->begin(); it != lods->end(); ++it) {
 
             const int level = std::stoi(it.key());
@@ -612,7 +634,28 @@ namespace {
             bool first = !seeded[static_cast<std::size_t>(level)][file];
             mergeBound(slot.second, nodeBound, first);
             seeded[static_cast<std::size_t>(level)][file] = true;
+
+            const auto offsetIt = entry.find("offset");
+            if (offsetIt == entry.end() || !offsetIt->is_number_unsigned()) {
+
+                out.haveOffsets = false;
+            } else {
+
+                LodMeta::LeafLod ll;
+                ll.level = level;
+                ll.file = file;
+                ll.offset = offsetIt->get<std::size_t>();
+                ll.count = count;
+                leaf.lods.push_back(ll);
+            }
         }
+
+        // Ascending level, so a consumer can walk a leaf's levels finest-first
+        // without re-sorting. (nlohmann's object iteration is by string key,
+        // which agrees for one-digit levels and stops agreeing at ten.)
+        std::sort(leaf.lods.begin(), leaf.lods.end(),
+                  [](const LodMeta::LeafLod& a, const LodMeta::LeafLod& b) { return a.level < b.level; });
+        out.leaves.push_back(std::move(leaf));
     }
 
     LodMeta parseLodMeta(const Source& src) {
@@ -806,6 +849,39 @@ SogLoader::Info SogLoader::describe(const std::filesystem::path& path) {
             lvl.chunks.push_back(ChunkInfo{prefixOf(lm.filenames[file]), slot.first, slot.second});
         }
         info.levels.push_back(std::move(lvl));
+    }
+
+    // The tree's leaves, with each level's file index turned into an index into
+    // that level's own chunk list — the order load() decodes them in, and the
+    // only form a caller can turn into an absolute offset without re-reading
+    // lod-meta.json. Dropped wholesale when any entry lacked an `offset`: a
+    // partial tree would address some nodes right and some nodes wrong, which
+    // is worse than not having one.
+    if (lm.haveOffsets) {
+
+        std::vector<std::map<std::size_t, std::size_t>> chunkIndex(static_cast<std::size_t>(lm.lodLevels));
+        for (std::size_t l = 0; l < chunkIndex.size(); ++l) {
+
+            std::size_t k = 0;
+            for (const auto& [file, slot] : lm.byLevel[l]) chunkIndex[l][file] = k++;
+        }
+
+        info.nodes.reserve(lm.leaves.size());
+        for (const auto& leaf : lm.leaves) {
+
+            NodeInfo n;
+            n.bound = leaf.bound;
+            for (const auto& e : leaf.lods) {
+
+                NodeRange r;
+                r.lod = e.level;
+                r.chunk = chunkIndex[static_cast<std::size_t>(e.level)].at(e.file);
+                r.offset = e.offset;
+                r.count = e.count;
+                n.lods.push_back(r);
+            }
+            info.nodes.push_back(std::move(n));
+        }
     }
 
     // One chunk's meta.json for the degree; they are required to agree.

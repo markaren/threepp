@@ -14,6 +14,7 @@
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
 
+#include <algorithm>
 #include <cmath>
 #include <cstdlib>
 #include <filesystem>
@@ -21,6 +22,8 @@
 #include <fstream>
 #include <optional>
 #include <string>
+#include <utility>
+#include <vector>
 
 using namespace threepp;
 using Catch::Approx;
@@ -429,6 +432,51 @@ TEST_CASE("SogLoader reads a real SOG scan") {
         std::size_t summed = 0;
         for (const auto& chunk : level.chunks) summed += chunk.count;
         CHECK(summed == level.count);
+    }
+
+    // The tree, which per-node LOD addresses splats through. Nothing in the
+    // container states that a leaf's (offset, count) ranges TILE their chunk —
+    // it is a property of every writer seen, and the property the whole scheme
+    // rests on, so it is asserted rather than assumed. A tree that only nearly
+    // tiled would render a subset of the scan and look merely thin.
+    if (!info.nodes.empty()) {
+
+        // level -> chunk -> the ranges landing in it
+        std::vector<std::vector<std::vector<std::pair<std::size_t, std::size_t>>>> tiles(
+                info.levels.size());
+        for (std::size_t l = 0; l < info.levels.size(); ++l) tiles[l].resize(info.levels[l].chunks.size());
+
+        for (const auto& node : info.nodes) {
+
+            CHECK(!node.lods.empty());
+            for (const auto& r : node.lods) {
+
+                REQUIRE(r.lod >= 0);
+                REQUIRE(static_cast<std::size_t>(r.lod) < info.levels.size());
+                REQUIRE(r.chunk < info.levels[static_cast<std::size_t>(r.lod)].chunks.size());
+                tiles[static_cast<std::size_t>(r.lod)][r.chunk].emplace_back(r.offset, r.count);
+            }
+        }
+
+        for (std::size_t l = 0; l < tiles.size(); ++l) {
+
+            for (std::size_t c = 0; c < tiles[l].size(); ++c) {
+
+                INFO("level " << l << " chunk " << c);
+                auto& mine = tiles[l][c];
+                std::sort(mine.begin(), mine.end());
+
+                std::size_t at = 0;
+                bool contiguous = true;
+                for (const auto& [off, count] : mine) {
+
+                    if (off != at) contiguous = false;
+                    at += count;
+                }
+                CHECK(contiguous);
+                CHECK(at == info.levels[l].chunks[c].count);
+            }
+        }
     }
 
     // The coarsest level, so the case stays affordable: on the Sanctuaire scan
