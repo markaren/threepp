@@ -18,6 +18,22 @@ vec3 applyMurkSky(vec3 dir);
 bool camPortWetDryEye();
 vec3 applyMurk(vec3 col, vec3 ro, vec3 hit);
 
+// The murk is only the WATER BODY once it is dense enough to BE water. Below
+// this the scene is using setUnderwaterMurk as a haze/absorption stand-in, and
+// the one-medium branch (the `else if` in shadeWater's transmission, below)
+// would then paint the whole column with a near-transparent medium's in-scatter:
+// applyMurkSky is the t→∞ limit, so a σ_t of 0.0004 /m still returns
+// murkColor·fogLight at full strength and the water goes milk-grey from above.
+// 0.01 /m is an extinction length of 100 m — 600 m of visibility at the 6
+// optical depths the branch budgets. No sea is that clear: the clearest open
+// ocean (Jerlov I) runs ~0.03-0.04 /m and coastal water an order more, while
+// 0.01 and below is the range a demo picks when it wants a faint tint over a
+// kilometre, i.e. haze. A scene under the threshold keeps the material's own
+// Beer-Lambert body from above, which is what it was tuned against; from BELOW
+// nothing changes, because that branch and every other murk path are still on
+// murkLive() alone.
+const float kMurkIsWater = 0.01;
+
 // Thin-shell water (RenderMode::RasterFirst). Replicates closest_hit's
 // DETERMINISTIC thin-shell BSDF — noise-free because it's an analytic Fresnel
 // split, not a stochastic reflect/refract pick:
@@ -214,7 +230,7 @@ vec3 shadeWater(vec3 P, vec3 N, vec3 V, MaterialDesc pm, int instIdx,
         transmitColor = (dot(wDir, wDir) > 1e-6)
                       ? sampleEnvLod(normalize(wDir), reflLod)
                       : reflectColor;// outside the window there is no transmitted ray (F == 1)
-    } else if (murkLive()) {
+    } else if (murkLive() && fog.murkDensity >= kMurkIsWater) {
         // ── ONE MEDIUM, FROM ABOVE TOO ──────────────────────────────────────
         // The scene declared a murk (setUnderwaterMurk + setFogWaterSurfaceY),
         // so the column under this surface IS that murk — the same medium the
