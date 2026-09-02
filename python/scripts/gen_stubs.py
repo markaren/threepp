@@ -86,6 +86,7 @@ ENUM_CLASS_LOCATIONS = [
     f"CurveType:{MODULE}.CatmullRomCurve3",
     f"LeafShape:{MODULE}",
     f"BarkStyle:{MODULE}",
+    f"SplatPoseSet:{MODULE}",
 ]
 
 # A bound name that is a Python keyword cannot appear literally in a stub (or in

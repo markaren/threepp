@@ -772,6 +772,38 @@ namespace threepp_py {
                 .def("view_size", &PyVulkanRenderer::view_size, py::arg("handle"),
                      "Pixel size of a view's output as (width, height), or None if the handle is "
                      "unknown.")
+                // ── Sensor-only surfaces ─────────────────────────────────
+                // Geometry the SENSORS may perceive and the camera may not —
+                // splats.make_sensor_mesh's baked scan surface is the case it
+                // exists for.
+                .def("set_sensor_only_surfaces",
+                     [](PyVulkanRenderer& r, bool enabled) { r.native().setSensorOnlySurfaces(enabled); },
+                     py::arg("enabled"),
+                     "Scene master switch for sensor-only surfaces (meshes from "
+                     "splats.make_sensor_mesh). OFF, the default, nothing at all sees them. ON, "
+                     "lidar beams hit them and the secondary views that ALSO ask "
+                     "(set_view_sensor_surfaces) rasterize them. The primary view never draws "
+                     "them either way, and no radiance trace — reflection, shadow, GI — has "
+                     "them in its cull mask: the real splats are what the picture shows.")
+                .def_property_readonly("sensor_only_surfaces",
+                                       [](PyVulkanRenderer& r) { return r.native().sensorOnlySurfaces(); },
+                                       "Whether sensor-only surfaces are perceivable at all (the scene "
+                                       "master switch).")
+                .def("set_view_sensor_surfaces",
+                     [](PyVulkanRenderer& r, uint32_t handle, bool enabled) {
+                         return r.native().setViewSensorSurfaces(handle, enabled);
+                     },
+                     py::arg("handle"), py::arg("enabled"),
+                     "Let ONE secondary view rasterize sensor-only surfaces. OFF by default for "
+                     "every view, because 'secondary' does not mean 'sensor': an RGB camera "
+                     "preview showing an untextured bake shell in front of the splats it "
+                     "approximates is a defect. A DEPTH consumer is the caller that turns it "
+                     "on. Takes effect only if set_sensor_only_surfaces(True) as well. False "
+                     "for an unknown handle, and for handle 0 — the primary never draws them.")
+                .def("view_sensor_surfaces",
+                     [](PyVulkanRenderer& r, uint32_t handle) { return r.native().viewSensorSurfaces(handle); },
+                     py::arg("handle"),
+                     "Whether this view has asked for sensor-only surfaces.")
                 .def("read_scene_pixels", &PyVulkanRenderer::read_scene_pixels,
                      "Last captured scene-only RGB (post-TAA, pre-overlay; no sprite/ImGui) as "
                      "(H, W, 3) uint8. Requires scene_capture=True.")

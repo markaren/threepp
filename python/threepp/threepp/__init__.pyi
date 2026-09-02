@@ -8,7 +8,7 @@ import numpy.typing
 import typing
 from . import editor
 from . import imgui
-__all__: list[str] = ['AmbientLight', 'AnimationAction', 'AnimationBlendMode', 'AnimationClip', 'AnimationMixer', 'Approach', 'ArrowHelper', 'Articulation', 'ArticulationLink', 'Audio', 'AudioDistanceModel', 'AudioListener', 'AxesHelper', 'Background', 'BarkStyle', 'BirdPlumage', 'BirdRole', 'BirdShape', 'BirdState', 'Blending', 'Blob', 'Box3', 'Box3Helper', 'BoxGeometry', 'BoxHelper', 'BranchingMode', 'BufferGeometry', 'Camera', 'CameraHelper', 'Canvas', 'CapsuleGeometry', 'CatmullRomCurve3', 'CircleGeometry', 'Clock', 'Cluster', 'Colonise', 'Color', 'ColorKeyframeTrack', 'ColorSpace', 'CombineOperation', 'Cone', 'ConeGeometry', 'ContactPoint', 'ContactSample', 'ContactSensor', 'ConvexGeometry', 'CrossQuad', 'CrownShape', 'Cruise', 'Cylinder', 'CylinderGeometry', 'DepthPacking', 'DepthSensor', 'DirectionalLight', 'DirectionalLightHelper', 'DisplacedMesh', 'EXPONENTIAL', 'EXRLoader', 'Ellipsoid', 'ErosionType', 'Euler', 'Evade', 'FBXLoader', 'Filter', 'Flare', 'Flock', 'FlockParams', 'Fog', 'FogExp2', 'Follower', 'Font', 'FontLoader', 'ForceTorqueSensor', 'FrameChannel', 'Frond', 'Furrowed', 'GLRenderer', 'GLTFLoader', 'GLTFResult', 'Gait', 'GrassMesh', 'GridHelper', 'Group', 'HAS_AUDIO', 'HAS_IMGUI', 'HAS_PHYSX', 'HAS_VULKAN', 'Hemisphere', 'HemisphereLight', 'HemisphereLightHelper', 'Hop', 'HorizontalAlignment', 'INVERSE', 'IcosahedronGeometry', 'IcpOptions', 'IcpResult', 'IkOptions', 'IkResult', 'IkSolver', 'IkTask', 'ImguiContext', 'Imu', 'ImuSample', 'InstancedMesh', 'Interpolation', 'IsoMesh', 'Joint', 'JointEncoder', 'JointInfo', 'JointRange', 'JointSample', 'JointType', 'KeyframeTrack', 'LINEAR', 'Lanceolate', 'Launch', 'Leader', 'LeafShape', 'LeafStyle', 'LidarBeam', 'LidarModel', 'LidarParams', 'LidarReturn', 'Light', 'Line', 'LineBasicMaterial', 'LineSegments', 'Lobed', 'Loner', 'Loop', 'Mapping', 'Material', 'Matrix3', 'Matrix4', 'Mesh', 'MeshBasicMaterial', 'MeshDepthMaterial', 'MeshLambertMaterial', 'MeshNormalMaterial', 'MeshPhongMaterial', 'MeshPhysicalMaterial', 'MeshStandardMaterial', 'ModelLoader', 'NONE', 'NoiseModel', 'NoiseType', 'NumberKeyframeTrack', 'OBJLoader', 'Object3D', 'Ocean', 'OctahedronGeometry', 'OrbitControls', 'OrthographicCamera', 'Ovate', 'Papery', 'ParticleField', 'PathTracedLidarSensor', 'Perched', 'PerspectiveCamera', 'PhysxGpuBatch', 'PhysxMaterial', 'PhysxSoftBodyMaterial', 'PhysxVehicle', 'PhysxWorld', 'PlaneGeometry', 'Plated', 'PointLight', 'PointLightHelper', 'Points', 'PointsMaterial', 'PolarGridHelper', 'PositionalAudio', 'Quad', 'Quaternion', 'QuaternionKeyframeTrack', 'RGBELoader', 'RangeNoiseModel', 'RectAreaLight', 'RigidBody', 'RingGeometry', 'Robot', 'RotationOrder', 'STLLoader', 'SVGLoader', 'ScalarField', 'Scene', 'Sensor', 'Serrate', 'ShadowMaterial', 'Side', 'SkeletonHelper', 'SoftBody', 'Sphere', 'SphereGeometry', 'SplatCloud', 'SplatData', 'SplatLoader', 'SpotLight', 'SpotLightHelper', 'Sprite', 'SpriteMaterial', 'TerrainFalloff', 'TerrainGenerator', 'TerrainParams', 'Text2D', 'Text3D', 'TextSprite', 'Texture', 'TextureLoader', 'TextureWrapping', 'ToneMapping', 'TorusGeometry', 'TorusKnotGeometry', 'TransformControls', 'TreeGenerator', 'TreeParams', 'URDFLoader', 'Vector2', 'Vector3', 'Vector4', 'VectorKeyframeTrack', 'VerticalAlignment', 'VoxelGrid', 'VulkanRenderer', 'Walk', 'Whorl', 'WrenchSample', 'apply_terrain_preset', 'apply_tree_preset', 'clamp', 'damp', 'data_texture', 'deg_to_rad', 'editor', 'euclidean_modulo', 'float_texture', 'generate_uuid', 'icp_point_to_point', 'imgui', 'inverse_lerp', 'is_power_of_two', 'iso_mesh_to_geometry', 'lerp', 'make_bark_textures', 'make_flower_texture', 'make_leaf_texture', 'make_needle_frond_texture', 'map_linear', 'marching_cubes', 'merge_buffer_geometries', 'merge_vertices', 'rad_to_deg', 'rand_float', 'rand_float_range', 'rand_float_spread', 'rand_int', 'rotate_equirect', 'simplify_geometry', 'splat_points_to_field', 'terrain_from_json', 'terrain_load_config', 'terrain_save_config', 'terrain_to_json', 'voxel_downsample', 'vulkan_available', 'vulkan_validation_active', 'vulkan_validation_error_count', 'write_wav']
+__all__: list[str] = ['AmbientLight', 'AnimationAction', 'AnimationBlendMode', 'AnimationClip', 'AnimationMixer', 'Approach', 'ArrowHelper', 'Articulation', 'ArticulationLink', 'Audio', 'AudioDistanceModel', 'AudioListener', 'AxesHelper', 'Background', 'BakePose', 'BarkStyle', 'BirdPlumage', 'BirdRole', 'BirdShape', 'BirdState', 'Blending', 'Blob', 'Box3', 'Box3Helper', 'BoxGeometry', 'BoxHelper', 'BranchingMode', 'BufferGeometry', 'Camera', 'CameraHelper', 'Canvas', 'CapsuleGeometry', 'CatmullRomCurve3', 'CircleGeometry', 'Clock', 'Cluster', 'Colonise', 'Color', 'ColorKeyframeTrack', 'ColorSpace', 'CombineOperation', 'Cone', 'ConeGeometry', 'ContactPoint', 'ContactSample', 'ContactSensor', 'ConvexGeometry', 'CrossQuad', 'CrownShape', 'Cruise', 'Cylinder', 'CylinderGeometry', 'DepthPacking', 'DepthSensor', 'DirectionalLight', 'DirectionalLightHelper', 'DisplacedMesh', 'EXPONENTIAL', 'EXRLoader', 'Ellipsoid', 'ErosionType', 'Euler', 'Evade', 'FBXLoader', 'Filter', 'Flare', 'Flock', 'FlockParams', 'Fog', 'FogExp2', 'Follower', 'Font', 'FontLoader', 'ForceTorqueSensor', 'FrameChannel', 'Frond', 'Furrowed', 'GLRenderer', 'GLTFLoader', 'GLTFResult', 'Gait', 'GrassMesh', 'GridHelper', 'Group', 'HAS_AUDIO', 'HAS_IMGUI', 'HAS_PHYSX', 'HAS_VULKAN', 'Hemisphere', 'HemisphereLight', 'HemisphereLightHelper', 'Hop', 'HorizontalAlignment', 'INVERSE', 'IcosahedronGeometry', 'IcpOptions', 'IcpResult', 'IkOptions', 'IkResult', 'IkSolver', 'IkTask', 'ImguiContext', 'Imu', 'ImuSample', 'InstancedMesh', 'Interpolation', 'IsoMesh', 'Joint', 'JointEncoder', 'JointInfo', 'JointRange', 'JointSample', 'JointType', 'KeyframeTrack', 'LINEAR', 'Lanceolate', 'Launch', 'Leader', 'LeafShape', 'LeafStyle', 'LidarBeam', 'LidarModel', 'LidarParams', 'LidarReturn', 'Light', 'Line', 'LineBasicMaterial', 'LineSegments', 'Lobed', 'Loner', 'Loop', 'Mapping', 'Material', 'Matrix3', 'Matrix4', 'Mesh', 'MeshBasicMaterial', 'MeshDepthMaterial', 'MeshLambertMaterial', 'MeshNormalMaterial', 'MeshPhongMaterial', 'MeshPhysicalMaterial', 'MeshStandardMaterial', 'ModelLoader', 'NONE', 'NoiseModel', 'NoiseType', 'NumberKeyframeTrack', 'OBJLoader', 'Object3D', 'Ocean', 'OctahedronGeometry', 'OrbitControls', 'OrthographicCamera', 'Ovate', 'Papery', 'ParticleField', 'PathTracedLidarSensor', 'Perched', 'PerspectiveCamera', 'PhysxGpuBatch', 'PhysxMaterial', 'PhysxSoftBodyMaterial', 'PhysxVehicle', 'PhysxWorld', 'PlaneGeometry', 'Plated', 'PointLight', 'PointLightHelper', 'Points', 'PointsMaterial', 'PolarGridHelper', 'PositionalAudio', 'Quad', 'Quaternion', 'QuaternionKeyframeTrack', 'RGBELoader', 'RangeNoiseModel', 'RectAreaLight', 'RigidBody', 'RingGeometry', 'Robot', 'RotationOrder', 'STLLoader', 'SVGLoader', 'ScalarField', 'Scene', 'Sensor', 'Serrate', 'ShadowMaterial', 'Side', 'SkeletonHelper', 'SoftBody', 'SogLoader', 'Sphere', 'SphereGeometry', 'SplatCloud', 'SplatData', 'SplatLoader', 'SplatPoseSet', 'SpotLight', 'SpotLightHelper', 'Sprite', 'SpriteMaterial', 'SurfaceMesh', 'TerrainFalloff', 'TerrainGenerator', 'TerrainParams', 'Text2D', 'Text3D', 'TextSprite', 'Texture', 'TextureLoader', 'TextureWrapping', 'ToneMapping', 'TorusGeometry', 'TorusKnotGeometry', 'TransformControls', 'TreeGenerator', 'TreeParams', 'URDFLoader', 'Vector2', 'Vector3', 'Vector4', 'VectorKeyframeTrack', 'VerticalAlignment', 'VoxelGrid', 'VulkanRenderer', 'Walk', 'Whorl', 'WrenchSample', 'apply_terrain_preset', 'apply_tree_preset', 'bake_surface', 'clamp', 'damp', 'data_texture', 'deg_to_rad', 'editor', 'euclidean_modulo', 'float_texture', 'generate_uuid', 'icp_point_to_point', 'imgui', 'inverse_lerp', 'is_power_of_two', 'iso_mesh_to_geometry', 'lerp', 'make_bark_textures', 'make_flower_texture', 'make_leaf_texture', 'make_needle_frond_texture', 'make_sensor_mesh', 'map_linear', 'marching_cubes', 'merge_buffer_geometries', 'merge_vertices', 'rad_to_deg', 'rand_float', 'rand_float_range', 'rand_float_spread', 'rand_int', 'rotate_equirect', 'select_lod', 'simplify_geometry', 'splat_points_to_field', 'terrain_from_json', 'terrain_load_config', 'terrain_save_config', 'terrain_to_json', 'voxel_downsample', 'vulkan_available', 'vulkan_validation_active', 'vulkan_validation_error_count', 'write_wav']
 class AmbientLight(Light):
     def __init__(self, color: Color = ..., intensity: typing.SupportsFloat | typing.SupportsIndex = 1.0) -> None:
         ...
@@ -334,6 +334,21 @@ class Background:
     def is_color(self) -> bool:
         ...
     def is_texture(self) -> bool:
+        ...
+class BakePose:
+    """
+    One capture viewpoint for bake_surface. `fov` is vertical degrees; the bake renders at the renderer's own framebuffer extent, so the horizontal field follows from its aspect.
+    """
+    position: Vector3
+    target: Vector3
+    up: Vector3
+    def __init__(self, position: Vector3, target: Vector3, up: Vector3 = ..., fov: typing.SupportsFloat | typing.SupportsIndex = 55.0) -> None:
+        ...
+    @property
+    def fov(self) -> float:
+        ...
+    @fov.setter
+    def fov(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
         ...
 class BarkStyle:
     """
@@ -6679,6 +6694,26 @@ class SoftBody:
         """
         Collision-mesh vertex count (the length of sim_positions()).
         """
+class SogLoader:
+    @staticmethod
+    def describe(path: os.PathLike | str | bytes) -> dict:
+        """
+        What the asset holds, WITHOUT decoding a plane — json only, milliseconds against the gigabyte load() of level 0 costs. Returns a dict: lod_levels, sh_degree, counts (splats per level, finest first), levels (per-level dicts with lod/count/chunks) and bound_min/max. Levels are ALTERNATIVES, not a residual pyramid: each covers the whole scene at its own density, so the counts do not add up to a total.
+        """
+    @staticmethod
+    def is_sog(path: os.PathLike | str | bytes) -> bool:
+        """
+        Is this a SOG / SuperSplat SSOG asset? Answers by CONTENT (the meta.json / lod-meta.json inside), not by name — a SOG asset is usually an extensionless directory. Never raises: a missing or malformed asset is simply False.
+        """
+    @staticmethod
+    def load(path: os.PathLike | str | bytes, level: typing.SupportsInt | typing.SupportsIndex = 0) -> SplatData:
+        """
+        Read ONE detail level of a SOG asset into a SplatData. 0 is the finest (and the only legal value for a lone chunk, which declares no levels). Seconds and gigabytes at level 0 on a real scan — call describe() first and pick a coarser level if that is not what you want. Raises RuntimeError naming the offending member, file and numbers.
+        
+        FRAME: the file's own coordinates, untouched. A SOG re-encoded from a COLMAP .ply is +Y DOWN like its .ply, so the caller flips it the same way — cloud.rotation.x = math.pi is what the editor and the gaussian_splats example do.
+        """
+    def __init__(self) -> None:
+        ...
 class SphereGeometry(BufferGeometry):
     def __init__(self, radius: typing.SupportsFloat | typing.SupportsIndex = 1.0, width_segments: typing.SupportsInt | typing.SupportsIndex = 16, height_segments: typing.SupportsInt | typing.SupportsIndex = 12, phi_start: typing.SupportsFloat | typing.SupportsIndex = 0.0, phi_length: typing.SupportsFloat | typing.SupportsIndex = 6.2831854820251465, theta_start: typing.SupportsFloat | typing.SupportsIndex = 0.0, theta_length: typing.SupportsFloat | typing.SupportsIndex = 3.1415927410125732) -> None:
         ...
@@ -6686,6 +6721,13 @@ class SphereGeometry(BufferGeometry):
     def radius(self) -> float:
         ...
 class SplatCloud(Mesh):
+    @staticmethod
+    def from_sog_lod(path: os.PathLike | str | bytes) -> SplatCloud:
+        """
+        Load a multi-level SOG asset for DYNAMIC LOD: every other level (0, 2, 4, ...) resident in one cloud, with the LOD table set on it. Every other because residency is the sum of the levels and it is paid twice (GL textures + the Vulkan pass); adjacent levels differ by only 2x, and keeping level 0 is what the close-up invariant needs.
+        
+        Then call select_lod(cloud, camera, viewport_h) once per frame: it writes submit_ranges for the level and chunks that frame should draw. A single-level asset comes back with an EMPTY table — it renders plainly and select_lod is a no-op returning 0.
+        """
     def __init__(self, data: SplatData) -> None:
         """
         Create a renderable splat cloud. CONSUMES `data` (it is left empty) to avoid copying gigabyte-scale scans; load the file again if you need a second cloud.
@@ -6711,6 +6753,16 @@ class SplatCloud(Mesh):
     @debug_non_finite.setter
     def debug_non_finite(self, arg1: bool) -> None:
         ...
+    @property
+    def lod_held_level(self) -> int:
+        """
+        Index into lod_levels of the level select_lod is currently holding (hysteresis state lives on the cloud's own table). 0 without LOD.
+        """
+    @property
+    def lod_levels(self) -> list:
+        """
+        The resident detail levels as dicts (lod, base, count, chunks), finest first — empty unless the cloud came from from_sog_lod on a multi-level asset. `base` is the level's first splat index in this cloud.
+        """
     @property
     def point_mix(self) -> float:
         """
@@ -6777,6 +6829,43 @@ class SplatLoader:
         Write a SplatData as a 3DGS .ply (the INRIA layout load_ply reads: channel-major f_rest, log scales, logit opacity, w-first rotation). Raises RuntimeError if the file cannot be written.
         """
     def __init__(self) -> None:
+        ...
+class SplatPoseSet:
+    """
+    Members:
+    
+      Orbit : Outside the fit sphere looking IN. Right for an object, a facade, an outdoor site seen from outside. The default.
+    
+      Interior : Inside the scan looking OUT, from the fit centre plus jittered stations. Right for a room, a canyon, anything the camera stands IN. Orbiting such a scan reconstructs the OUTSIDE of its walls and never observes the walkable volume at all.
+    """
+    Interior: typing.ClassVar[SplatPoseSet]  # value = <SplatPoseSet.Interior: 1>
+    Orbit: typing.ClassVar[SplatPoseSet]  # value = <SplatPoseSet.Orbit: 0>
+    __members__: typing.ClassVar[dict[str, SplatPoseSet]]  # value = {'Orbit': <SplatPoseSet.Orbit: 0>, 'Interior': <SplatPoseSet.Interior: 1>}
+    def __eq__(self, other: typing.Any) -> bool:
+        ...
+    def __getstate__(self) -> int:
+        ...
+    def __hash__(self) -> int:
+        ...
+    def __index__(self) -> int:
+        ...
+    def __init__(self, value: typing.SupportsInt | typing.SupportsIndex) -> None:
+        ...
+    def __int__(self) -> int:
+        ...
+    def __ne__(self, other: typing.Any) -> bool:
+        ...
+    def __repr__(self) -> str:
+        ...
+    def __setstate__(self, state: typing.SupportsInt | typing.SupportsIndex) -> None:
+        ...
+    def __str__(self) -> str:
+        ...
+    @property
+    def name(self) -> str:
+        ...
+    @property
+    def value(self) -> int:
         ...
 class SpotLight(Light):
     def __init__(self, color: Color = ..., intensity: typing.SupportsFloat | typing.SupportsIndex = 1.0, distance: typing.SupportsFloat | typing.SupportsIndex = 0.0, angle: typing.SupportsFloat | typing.SupportsIndex = 1.0471975803375244, penumbra: typing.SupportsFloat | typing.SupportsIndex = 0.0, decay: typing.SupportsFloat | typing.SupportsIndex = 1.0) -> None:
@@ -6870,6 +6959,40 @@ class SpriteMaterial(Material):
         ...
     @size.setter
     def size(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+class SurfaceMesh:
+    """
+    The triangle surface bake_surface fused out of a splat cloud, in WORLD space (the cloud's transform is already in the vertices). Three consumers: make_sensor_mesh() for the renderer's sensors, PhysxWorld.add_static_trimesh for collision, and to_geometry() for anything else.
+    """
+    def __repr__(self) -> str:
+        ...
+    def to_geometry(self) -> BufferGeometry:
+        """
+        The surface as a BufferGeometry (position + index + computed normals), ready for tp.Mesh(geom, material). The hand route is the same thing spelled out: BufferGeometry().set_attribute('position', s.positions) then .set_index(s.indices.reshape(-1)). A tp.Mesh built either way is what PhysxWorld.add_static_trimesh takes — or skip both and hand it make_sensor_mesh(s), which is already a Mesh over these triangles.
+        """
+    @property
+    def empty(self) -> bool:
+        ...
+    @property
+    def indices(self) -> numpy.typing.NDArray[numpy.uint32]:
+        """
+        Triangles as an (M, 3) uint32 array of vertex indices. A copy.
+        """
+    @property
+    def positions(self) -> numpy.typing.NDArray[numpy.float32]:
+        """
+        Vertices as an (N, 3) float32 array, world space. A copy.
+        """
+    @property
+    def stats(self) -> dict:
+        """
+        What the bake did and what it dropped, as a dict. The ones that diagnose an empty or wrong bake: observed_voxels 0 means no voxel ever met weight_floor (too few poses agreed); refused_blocks > 0 means max_block_bytes bit; beyond_centre_samples a large fraction of depth_samples under PoseSet.Orbit means YOUR SCAN MAY BE AN INTERIOR — re-bake with PoseSet.Interior. render_ms/fuse_ms/mesh_ms split the cost.
+        """
+    @property
+    def triangle_count(self) -> int:
+        ...
+    @property
+    def vertex_count(self) -> int:
         ...
 class TerrainFalloff:
     """
@@ -8218,6 +8341,10 @@ class VulkanRenderer:
         """
         Shot/read/dark-current/PRNU sensor noise, in ELECTRONS, applied after the temporal resolve (TAA would otherwise average it away). Noise scales with the ISO from set_camera_exposure, as on a real sensor. Deterministic: the same seed replays the same frames. Default off.
         """
+    def set_sensor_only_surfaces(self, enabled: bool) -> None:
+        """
+        Scene master switch for sensor-only surfaces (meshes from splats.make_sensor_mesh). OFF, the default, nothing at all sees them. ON, lidar beams hit them and the secondary views that ALSO ask (set_view_sensor_surfaces) rasterize them. The primary view never draws them either way, and no radiance trace — reflection, shadow, GI — has them in its cull mask: the real splats are what the picture shows.
+        """
     def set_size(self, width: typing.SupportsInt | typing.SupportsIndex, height: typing.SupportsInt | typing.SupportsIndex) -> None:
         """
         Resize the renderer's framebuffer/swapchain — call this from canvas.on_window_resize together with updating the camera aspect.
@@ -8236,6 +8363,10 @@ class VulkanRenderer:
         
         1:1 ONLY: width/height must equal the size the view was added at, and a mismatch draws NOTHING rather than a filtered rescale. A rect running off the window edge is clipped. Composited after the scene capture and before the UI overlay, so ImGui and screen-space sprites still draw on top.
         """
+    def set_view_sensor_surfaces(self, handle: typing.SupportsInt | typing.SupportsIndex, enabled: bool) -> bool:
+        """
+        Let ONE secondary view rasterize sensor-only surfaces. OFF by default for every view, because 'secondary' does not mean 'sensor': an RGB camera preview showing an untextured bake shell in front of the splats it approximates is a defect. A DEPTH consumer is the caller that turns it on. Takes effect only if set_sensor_only_surfaces(True) as well. False for an unknown handle, and for handle 0 — the primary never draws them.
+        """
     def set_viewport(self, x: typing.SupportsInt | typing.SupportsIndex, y: typing.SupportsInt | typing.SupportsIndex, width: typing.SupportsInt | typing.SupportsIndex, height: typing.SupportsInt | typing.SupportsIndex) -> None:
         ...
     def set_white_balance(self, temperature: typing.SupportsFloat | typing.SupportsIndex = 6500.0, tint: typing.SupportsFloat | typing.SupportsIndex = 0.0) -> None:
@@ -8247,6 +8378,10 @@ class VulkanRenderer:
     def sync_frame_interop(self) -> bool:
         """
         Block until the last submitted frame's interop copies have completed. Waits ONE frame fence, not the whole device: a single queue signals fences in submission order, so this retires every earlier frame too. False before the first frame.
+        """
+    def view_sensor_surfaces(self, handle: typing.SupportsInt | typing.SupportsIndex) -> bool:
+        """
+        Whether this view has asked for sensor-only surfaces.
         """
     def view_size(self, handle: typing.SupportsInt | typing.SupportsIndex) -> typing.Any:
         """
@@ -8530,6 +8665,11 @@ class VulkanRenderer:
         Current sensor-noise settings as a dict.
         """
     @property
+    def sensor_only_surfaces(self) -> bool:
+        """
+        Whether sensor-only surfaces are perceivable at all (the scene master switch).
+        """
+    @property
     def sim_time(self) -> float | None:
         """
         Simulation time in seconds that pins EVERY wall-clock read the frame
@@ -8594,6 +8734,21 @@ def apply_tree_preset(preset: typing.SupportsInt | typing.SupportsIndex, params:
     """
     Apply species preset: 0=Oak, 1=Pine/Spruce (whorl conifer, Frond leaves), 2=Birch, 3=Willow.
     """
+def bake_surface(renderer: typing.Any, cloud: SplatCloud, voxel_size: typing.SupportsFloat | typing.SupportsIndex = 0.0, truncation: typing.SupportsFloat | typing.SupportsIndex = 0.0, truncation_voxels: typing.SupportsFloat | typing.SupportsIndex = 4.0, max_weight: typing.SupportsFloat | typing.SupportsIndex = 32.0, weight_floor: typing.SupportsFloat | typing.SupportsIndex = 2.0, max_depth: typing.SupportsFloat | typing.SupportsIndex = 0.0, carve_fast_paths: bool = True, max_block_bytes: typing.SupportsInt | typing.SupportsIndex = 1073741824, pose_set: SplatPoseSet = SplatPoseSet.Orbit, poses: collections.abc.Sequence[BakePose] = [], pose_count: typing.SupportsInt | typing.SupportsIndex = 26, pose_distance: typing.SupportsFloat | typing.SupportsIndex = 0.0, min_component_voxels: typing.SupportsInt | typing.SupportsIndex = 256, fringe_erode: typing.SupportsInt | typing.SupportsIndex = 1, outlier_tolerance: typing.SupportsFloat | typing.SupportsIndex = 1.0) -> SurfaceMesh:
+    """
+    Fuse a Gaussian-splat cloud into a triangle SurfaceMesh, by rendering it from a set of poses and integrating the median-depth AOV into a TSDF. VULKAN ONLY. Deterministic: the same cloud baked twice gives the same vertices and indices, bit for bit.
+    
+    Bake AFTER the cloud has its final transform — the vertices come out in WORLD space, so a later rotation of the cloud does not move them.
+    
+    The knobs that matter first:
+      pose_set    Orbit (default) stands OUTSIDE looking in; Interior stands inside looking out. A canyon, a room, anything the camera is IN needs Interior — Orbit reconstructs the outside of its walls instead.
+      poses       an explicit list of BakePose overrides pose_set entirely; the answer for replaying a real capture trajectory.
+      voxel_size  0 derives it from the cloud's robust fit (radius / 256, clamped to 5 mm .. 10 cm).
+      weight_floor is COUNTED IN POSES: 2 means two viewpoints had to agree. It can never be met by fewer poses than its own value.
+      min_component_voxels drops islands smaller than this many surface CELLS (voxel_size^2 each) — photogrammetry floaters that survived carving.
+    
+    An empty result is diagnosed from .stats: see its docstring.
+    """
 def clamp(value: typing.SupportsFloat | typing.SupportsIndex, low: typing.SupportsFloat | typing.SupportsIndex, high: typing.SupportsFloat | typing.SupportsIndex) -> float:
     ...
 def damp(x: typing.SupportsFloat | typing.SupportsIndex, y: typing.SupportsFloat | typing.SupportsIndex, lambda_: typing.SupportsFloat | typing.SupportsIndex, dt: typing.SupportsFloat | typing.SupportsIndex) -> float:
@@ -8642,6 +8797,14 @@ def make_needle_frond_texture(size: typing.SupportsInt | typing.SupportsIndex = 
     """
     RGBA conifer needle-frond alpha-cutout DataTexture. Pair with LeafStyle.Frond + BranchingMode.Whorl. `variants` is the atlas grid side and must match TreeParams.leaf_atlas_cells. Use mat.alpha_test = 0.5.
     """
+def make_sensor_mesh(surface: SurfaceMesh) -> Mesh:
+    """
+    The baked surface as a Mesh that ONLY THE SENSORS perceive. Add it at the SCENE ROOT, not under the cloud: the vertices are world space already.
+    
+    It is inert until the scene opts in with VulkanRenderer.set_sensor_only_surfaces(True); after that a lidar scan hits it, and so does any secondary view that also asks (set_view_sensor_surfaces(handle, True)). The primary camera NEVER draws it and no radiance trace sees it — the real splats render there, which is the whole point. Returns None for an empty surface.
+    
+    It is also an ordinary triangle Mesh, so PhysxWorld.add_static_trimesh(mesh) takes it directly: one bake is the ground for the feet and the ground for the sensors.
+    """
 def map_linear(x: typing.SupportsFloat | typing.SupportsIndex, a1: typing.SupportsFloat | typing.SupportsIndex, a2: typing.SupportsFloat | typing.SupportsIndex, b1: typing.SupportsFloat | typing.SupportsIndex, b2: typing.SupportsFloat | typing.SupportsIndex) -> float:
     ...
 def marching_cubes(field: ScalarField, isolevel: typing.SupportsFloat | typing.SupportsIndex = 0.5) -> IsoMesh:
@@ -8665,6 +8828,12 @@ def rand_int(low: typing.SupportsInt | typing.SupportsIndex, high: typing.Suppor
 def rotate_equirect(texture: Texture, x_deg: typing.SupportsFloat | typing.SupportsIndex = 0.0, y_deg: typing.SupportsFloat | typing.SupportsIndex = 0.0, z_deg: typing.SupportsFloat | typing.SupportsIndex = 0.0) -> Texture:
     """
     Resample an equirect float texture by a 3D rotation (Euler XYZ degrees). For a Z-up scene with a Y-up HDRI: rotate_equirect(env, -90, 0, 0).
+    """
+def select_lod(cloud: SplatCloud, camera: Camera, viewport_height_px: typing.SupportsInt | typing.SupportsIndex, target_splats_per_pixel: typing.SupportsFloat | typing.SupportsIndex = 1.0, hysteresis: typing.SupportsFloat | typing.SupportsIndex = 1.25) -> int:
+    """
+    Pick the coarsest resident level whose splat count still covers the cloud's projected footprint at about target_splats_per_pixel, then submit only the chunks of that level that survive the frustum. Writes the result into the cloud's submit_ranges and returns the level index it settled on (an index into cloud.lod_levels, not the asset's own lod number).
+    
+    Call once per frame, before render(), with the RENDER resolution's height. The cloud carries its own hysteresis state, so nothing has to be kept on the Python side. A cloud with no LOD table is left alone and 0 comes back. Raise target_splats_per_pixel when the camera stands INSIDE the scan: the footprint rule was tuned on a subject seen from outside, and a robot on the ground wants the finest level near it.
     """
 def simplify_geometry(geometry: BufferGeometry, ratio: typing.SupportsFloat | typing.SupportsIndex, error: typing.SupportsFloat | typing.SupportsIndex = 0.009999999776482582) -> BufferGeometry:
     ...
