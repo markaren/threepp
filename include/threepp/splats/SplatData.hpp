@@ -50,6 +50,19 @@ namespace threepp {
             return std::log(p / (1.f - p));
         }
 
+        // Median distance from a point to its nearest neighbour, over a
+        // fixed-stride sample of at most `sampleCount` points tested against
+        // a hash grid of the whole set. Exact for a sample point whose
+        // neighbour lies within one grid cell (twice the mean spacing the
+        // bounds imply); farther than that the search widens three cells and
+        // then reports the search radius. 0 for fewer than two finite points.
+        //
+        // Sizes the Gaussians a colour-only point cloud is imported as
+        // (SplatLoader::loadPointCloudPly); nothing on the render path calls
+        // it. O(n log n) in the point count.
+        [[nodiscard]] float medianNeighbourSpacing(const std::vector<Vector3>& points,
+                                                   size_t sampleCount = 20000);
+
     }// namespace splats
 
     // A splat rotation: four plain floats in threepp order (x, y, z, w),

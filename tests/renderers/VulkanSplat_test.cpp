@@ -438,6 +438,52 @@ int main(int argc, char** argv) {
         }
     }
 
+    // ── 2d. point mode ──────────────────────────────────────────────────────
+    // SplatCloud::setPointMix(1): every splat an opaque 2 px disc, through the
+    // same sort, the same software depth test and the same compositor. The
+    // slab is still in the scene, so the assertions are the occlusion ones
+    // again, on dots — plus that dots cover fewer pixels than the Gaussians
+    // they replace, that the frame is still deterministic, and that mix 0
+    // brings the Gaussian frame back.
+    {
+        cloud->setPointMix(1.f);
+        cloud->setPointSize(2.f);
+        for (int i = 0; i < 40; ++i) draw();
+        const auto dots = renderer.readRGBPixels();
+        const long long leftDots  = countLit(dots, 0, kW / 4);
+        const long long rightDots = countLit(dots, 3 * kW / 4, kW);
+        std::printf("       point mode lit px  left %lld  right %lld (gaussians %lld)\n",
+                    leftDots, rightDots, rightAfter);
+        report(rightDots > 300, "point mode draws the cloud as dots");
+        report(rightDots < rightAfter, "2 px discs cover fewer pixels than the Gaussians did");
+        report(leftDots * 4 < leftBefore, "the opaque slab hides the points behind it");
+
+        std::uint64_t pa[4]{}, pb[4]{};
+        draw();
+        const bool gotPa = renderer.splatDebugChecksum(pa);
+        draw();
+        const bool gotPb = renderer.splatDebugChecksum(pb);
+        report(gotPa && gotPb && pa[0] == pb[0] && pa[1] == pb[1] && pa[2] == pb[2],
+               "point mode is bit-identical across two frames");
+        report(gotPa && gotA && pa[2] != a[2], "point mode composites a different frame");
+
+        // A half mix: between the two pixel counts, and still deterministic.
+        cloud->setPointMix(0.5f);
+        for (int i = 0; i < 40; ++i) draw();
+        const auto half = renderer.readRGBPixels();
+        const long long rightHalf = countLit(half, 3 * kW / 4, kW);
+        std::printf("       half mix lit px right %lld\n", rightHalf);
+        report(rightHalf >= rightDots && rightHalf <= rightAfter,
+               "a half mix covers between the dots and the Gaussians");
+
+        cloud->setPointMix(0.f);
+        for (int i = 0; i < 40; ++i) draw();
+        const auto restored = renderer.readRGBPixels();
+        const long long rightRestored = countLit(restored, 3 * kW / 4, kW);
+        report(rightRestored * 50 > rightAfter * 49 && rightRestored * 49 < rightAfter * 50,
+               "mix 0 brings the Gaussian frame back");
+    }
+
     // ── 3. delete, then load another — residency must follow the scene ──────
     // The residency cache is keyed by SplatCloud pointer. Two ways that goes
     // wrong, both exercised here: a deleted cloud's buffers staying resident

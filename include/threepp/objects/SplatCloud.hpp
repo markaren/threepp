@@ -124,6 +124,36 @@ namespace threepp {
         // uniforms (the Vulkan compute rasterizer) can honour the same switch.
         [[nodiscard]] bool debugNonFinite() const { return debugNonFinite_; }
 
+        // â”€â”€ Point rendering â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+        // 0 (the default) draws every splat as its Gaussian. 1 draws it as an
+        // opaque disc of pointSize() pixels centred on its mean â€” the point
+        // cloud view â€” composited in the same depth order, so the nearest
+        // point wins where two overlap. Values between blend the two: the
+        // projected covariance is lerped toward the disc's and the opacity
+        // toward 1, which makes a 0 -> 1 sweep a continuous dissolve from
+        // surface to dots.
+        //
+        // Both backends read it, and everything else about the pass is
+        // unchanged: the sort, the depth test against scene geometry, the
+        // overlay depth stamp, the depth AOV. A point cloud is therefore
+        // occluded by a mesh and occludes a gizmo exactly as the Gaussians
+        // are. At mix 0 the shaders take their pre-existing path and the
+        // frame is bit-identical to one rendered before this existed.
+        void setPointMix(float mix);
+        [[nodiscard]] float pointMix() const { return pointMix_; }
+
+        // Disc diameter in pixels at mix 1 â€” PointsMaterial::size's
+        // convention. Floored at 1. Default 2.
+        void setPointSize(float pixels);
+        [[nodiscard]] float pointSize() const { return pointSize_; }
+
+        // The standard deviation, in pixels, of the isotropic footprint the
+        // mix lerps toward. The disc edge sits at 3 sigma and carries a
+        // one-pixel feather centred on the requested radius, so
+        // sigma = (size / 2 + 0.5) / 3. Both backends build the disc from
+        // this one number; the Vulkan collector reads it from here.
+        [[nodiscard]] float pointSigmaPixels() const;
+
         // Whether the GL-side data textures exist yet — the assertable form of
         // "a Vulkan-only cloud never pays the GL copy" (see ensureGlResources).
         [[nodiscard]] bool glResourcesBuilt() const { return glResourcesBuilt_; }
@@ -248,6 +278,8 @@ namespace threepp {
         bool sorted_{false};
         bool debugNonFinite_{false};
         bool glResourcesBuilt_{false};
+        float pointMix_{0.f};
+        float pointSize_{2.f};
         std::vector<std::pair<uint32_t, uint32_t>> submitRanges_;
         splats::LodTable lodTable_;
 

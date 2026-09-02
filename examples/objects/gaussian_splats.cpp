@@ -9,6 +9,11 @@
 //   --screenshot=<out.png>                 same thing, spelled the other way
 //   --cam x,y,z --look x,y,z               reframe a capture without rebuilding
 //   --occluder                             a box through the middle of the cloud
+//   --points                               every splat as an opaque disc (point
+//                                          cloud view); P toggles it live with a
+//                                          short dissolve, either backend
+//   --point-size N                         disc diameter in pixels (default 2)
+//   --point-mix M                          0..1, a fixed blend of the two looks
 //                                          (the splat-behind-mesh depth test)
 //   --wireframe                            the same box, wireframe: the same test
 //                                          for the post-resolve OVERLAY path,
@@ -232,6 +237,10 @@ int main(int argc, char** argv) {
     bool useVulkan = false;
     bool occluder = false;
     bool wireOccluder = false;
+    // Point rendering (SplatCloud::setPointMix). --points is mix 1; the P key
+    // dissolves between 0 and 1 over kPointDissolveSeconds.
+    float pointMix = 0.f;
+    float pointSize = 2.f;
     // Canvas antialiasing. 0 by default for GL parity in captures; raising it
     // puts the Vulkan overlay pass on its hardware-MSAA path, which is the
     // other depth attachment the splat depth stamp has to write.
@@ -264,6 +273,12 @@ int main(int argc, char** argv) {
             debugNaN = true;
         } else if (arg == "--occluder") {
             occluder = true;
+        } else if (arg == "--points") {
+            pointMix = 1.f;
+        } else if (arg == "--point-mix" && i + 1 < argc) {
+            pointMix = std::clamp(std::stof(argv[++i]), 0.f, 1.f);
+        } else if (arg == "--point-size" && i + 1 < argc) {
+            pointSize = std::stof(argv[++i]);
         } else if (arg == "--msaa" && i + 1 < argc) {
             msaa = std::atoi(argv[++i]);
         } else if (arg == "--wireframe") {
@@ -379,6 +394,19 @@ int main(int argc, char** argv) {
             for (const auto& l : info.levels) std::cout << " [" << l.lod << "] " << l.count;
             std::cout << "\n  reading level " << lodLevel << std::endl;
             data = SogLoader::load(plyPath, {lodLevel});
+        } else if (!SplatLoader::isSplatPly(plyPath) && SplatLoader::isPointCloudPly(plyPath)) {
+
+            // A colour-only point cloud (no f_dc_0): one degree-0 Gaussian per
+            // point, sized from the median neighbour spacing, so it draws as
+            // a surface at mix 0 and as dots at mix 1. No outlier cull — the
+            // rule is written for an optimiser's scale tail.
+            SplatLoader::PointCloudInfo info;
+            data = SplatLoader::loadPointCloudPly(plyPath, {}, &info);
+            cull = false;
+            std::cout << "  point cloud: " << info.count << " points, spacing " << info.spacing
+                      << ", sigma " << info.sigma
+                      << (info.hadColor ? ", rgb" : info.hadIntensity ? ", intensity" : ", no colour")
+                      << (info.hadNormals ? ", normals -> discs" : "") << std::endl;
         } else {
             data = SplatLoader::loadPly(plyPath);
         }
@@ -669,6 +697,15 @@ int main(int argc, char** argv) {
 
     for (auto& p : parts) scene->add(p);
 
+    for (auto& p : parts) {
+        p->setPointMix(pointMix);
+        p->setPointSize(pointSize);
+    }
+    if (pointMix > 0.f) {
+        std::cout << "  point mix " << pointMix << ", point size " << pointSize << " px"
+                  << std::endl;
+    }
+
     // --water: a calm pond under the cloud, scaled from the fit sphere so a
     // unit-radius toy and a metres-scale scan both float over water instead of
     // in it. The point is the reflection: the deferred water's traced leg
@@ -828,11 +865,23 @@ int main(int argc, char** argv) {
         std::cout << "  non-finite debug ON: splats with a corrupt SH coefficient paint magenta"
                   << std::endl;
     }
+    // P dissolves between Gaussians and points over a short interval rather
+    // than snapping: the mix is continuous by construction, and the sweep is
+    // what shows that the two looks are the same splats.
+    constexpr double kPointDissolveSeconds = 0.6;
+    float pointTarget = pointMix;
+    auto pointChangedAt = std::chrono::steady_clock::now();
+    float pointFrom = pointMix;
     KeyAdapter keyAdapter(KeyAdapter::Mode::KEY_PRESSED, [&](KeyEvent evt) {
         if (evt.key == Key::D) {
             debugNonFinite = !debugNonFinite;
             cloud->setDebugNonFinite(debugNonFinite);
             std::cout << "non-finite debug " << (debugNonFinite ? "on (magenta)" : "off") << std::endl;
+        } else if (evt.key == Key::P) {
+            pointFrom = cloud->pointMix();
+            pointTarget = pointTarget > 0.5f ? 0.f : 1.f;
+            pointChangedAt = std::chrono::steady_clock::now();
+            std::cout << "point mix -> " << pointTarget << std::endl;
         }
     });
     canvas.addKeyListener(keyAdapter);
@@ -867,6 +916,13 @@ int main(int argc, char** argv) {
     bool volPrinted = false;
 
     canvas.animate([&] {
+        if (cloud->pointMix() != pointTarget) {
+            const double t = std::chrono::duration<double>(std::chrono::steady_clock::now() - pointChangedAt).count() / kPointDissolveSeconds;
+            const float mix = t >= 1.0 ? pointTarget
+                                       : pointFrom + (pointTarget - pointFrom) * static_cast<float>(t);
+            for (auto& p : parts) p->setPointMix(mix);
+        }
+
         if (benching) {
 
             const float c = std::cos(orbitRadians), s = std::sin(orbitRadians);

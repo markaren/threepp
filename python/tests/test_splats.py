@@ -78,3 +78,53 @@ def test_submit_ranges_roundtrip(tmp_path):
     assert cloud.submit_ranges == []
     cloud.submit_ranges = [(0, 2), (3, 1)]
     assert cloud.submit_ranges == [(0, 2), (3, 1)]
+
+
+def _point_cloud_ply(path, points):
+    """Write a colour-only binary PLY: x y z as float, red green blue as uchar."""
+    header = "\n".join(
+        ["ply", "format binary_little_endian 1.0", f"element vertex {len(points)}",
+         "property float x", "property float y", "property float z",
+         "property uchar red", "property uchar green", "property uchar blue",
+         "end_header", ""])
+    with open(path, "wb") as f:
+        f.write(header.encode("ascii"))
+        for x, y, z, r, g, b in points:
+            f.write(struct.pack("<3f3B", x, y, z, r, g, b))
+
+
+def test_point_cloud_ply_loads_as_splats(tmp_path):
+    ply = tmp_path / "scan.ply"
+    grid = [(x * 0.5, y * 0.5, 0.0, 255, 0, 0) for x in range(4) for y in range(4)]
+    _point_cloud_ply(ply, grid)
+    assert tp.SplatLoader.is_point_cloud_ply(ply)
+    assert not tp.SplatLoader.is_splat_ply(ply)
+    data = tp.SplatLoader.load_point_cloud_ply(ply)
+    assert data.count == 16
+    cloud = tp.SplatCloud(data)
+    assert cloud.splat_count == 16
+
+
+def test_point_mode_roundtrip(tmp_path):
+    ply = tmp_path / "cloud.ply"
+    _splat_ply(ply, [_white_splat()])
+    cloud = tp.SplatCloud(tp.SplatLoader.load_ply(ply))
+    assert cloud.point_mix == 0.0 and cloud.point_size == 2.0
+    cloud.point_mix = 1.0
+    cloud.point_size = 5.0
+    assert cloud.point_mix == 1.0 and cloud.point_size == 5.0
+    cloud.point_mix = 7.0  # clamped
+    cloud.point_size = 0.0  # floored
+    assert cloud.point_mix == 1.0 and cloud.point_size == 1.0
+
+
+def test_write_ply_round_trips(tmp_path):
+    ply = tmp_path / "in.ply"
+    _splat_ply(ply, [_white_splat(-1), _white_splat(+1, scale=-2.0)])
+    data = tp.SplatLoader.load_ply(ply)
+    out = tmp_path / "out.ply"
+    tp.SplatLoader.write_ply(data, out)
+    assert tp.SplatLoader.is_splat_ply(out)
+    assert tp.SplatLoader.load_ply(out).count == 2
+    with pytest.raises(RuntimeError):
+        tp.SplatLoader.write_ply(data, tmp_path / "missing_dir" / "x.ply")

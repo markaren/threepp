@@ -208,6 +208,7 @@ set(publicHeaders
         "threepp/objects/ParticleField.hpp"
         "threepp/objects/SplatCloud.hpp"
 
+        "threepp/splats/PointSurface.hpp"
         "threepp/splats/SplatData.hpp"
         "threepp/splats/SplatLod.hpp"
         "threepp/splats/SplatSH.hpp"
@@ -640,6 +641,7 @@ set(sources
         "threepp/objects/ParticleField.cpp"
         "threepp/objects/SplatCloud.cpp"
 
+        "threepp/splats/PointSurface.cpp"
         "threepp/splats/SplatData.cpp"
         "threepp/splats/SplatLod.cpp"
 

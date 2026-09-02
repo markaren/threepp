@@ -8,3 +8,5 @@ add_test_executable(SplatData_test)
 add_test_executable(SplatCloudSort_test)
 add_test_executable(SplatCloudRaycast_test)
 add_test_executable(SplatSH_test)
+# The direct point-cloud collider is CPU code: no window, no GPU.
+add_test_executable(PointSurface_test)

@@ -135,6 +135,12 @@ layout(set = 0, binding = 0, scalar) uniform SplatUbo {
     vec2  jitterClip; // this frame's raster jitter, already inside `proj`
     float nearPlane;
     float preExposure;// the factor already baked into sceneHdr's stores
+    // Point rendering (SplatCloud::setPointMix). 0 = Gaussians, the pre-
+    // existing path bit for bit; 1 = an opaque disc of 3 * pointSigma pixels
+    // radius (one-pixel feather at the edge) per splat. project lerps the
+    // projected covariance and the opacity, raster lerps the falloff.
+    float pointMix;
+    float pointSigma;// pixels; see SplatCloud::pointSigmaPixels
 
     uint  splatCount;
     uint  shCoeffs;   // (degree+1)^2

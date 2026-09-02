@@ -974,7 +974,7 @@ namespace threepp::editor {
         // ObjectExporter — Play because Stop restores from a snapshot in the
         // same format the save file uses. Losing the object is accepted for
         // now; losing it silently is not. Returns how many were found.
-        std::size_t warnAboutSplatClouds(const char* action);
+
         void applyGizmoMode();
         // Whether the transform handles belong on screen at all: something is
         // selected, the toolbar is not in Select mode, and play is stopped.

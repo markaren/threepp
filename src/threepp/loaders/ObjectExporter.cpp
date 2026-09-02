@@ -36,6 +36,8 @@
 
 #include "ObjectJsonConstants.hpp"
 #include "threepp/loaders/AssetSource.hpp"
+#include "threepp/loaders/SplatLoader.hpp"
+#include "threepp/objects/SplatCloud.hpp"
 #include "threepp/utils/Base64.hpp"
 #include "threepp/utils/ZipReader.hpp"
 #include "threepp/utils/ZipWriter.hpp"
@@ -53,7 +55,9 @@
 #include <functional>
 #include <iostream>
 #include <map>
+#include <any>
 #include <optional>
+#include <sstream>
 #include <set>
 #include <unordered_set>
 
@@ -125,15 +129,13 @@ namespace {
     // Object types this format cannot carry, dropped with a warning rather than
     // written out to be thrown away on load.
     //
-    // SplatCloud: without this it takes the InstancedMesh branch below and
-    // writes one 16-float instanceMatrix per splat — 14 MB of identity matrices
-    // for a 216k-splat scan, because that class keeps them identity on purpose
-    // and puts the real per-splat data (means, covariances, spherical
-    // harmonics) in DataTextures hanging off a RawShaderMaterial's uniforms,
-    // which are not serialized either. ObjectLoader has no "SplatCloud" case
-    // and rejects the type outright, so every one of those bytes is written to
-    // be discarded. A splat cloud belongs in its own .ply, referenced — that is
-    // the serialization pass, and it is not this one.
+    // SplatCloud is NOT one of them any more: writeSplatCloud below writes a
+    // reference to the file the splats came from (see splatSourceKey), which is
+    // the only sane container for a scan. It used to be, and the reason is
+    // worth keeping: as a Mesh it would otherwise take the mesh branch and
+    // write its unit quad and a RawShaderMaterial whose DataTextures are not
+    // serialized, and as an InstancedMesh before that it wrote 16 identity
+    // floats per splat.
     //
     // ParticleField: the failure is quieter and worse. It IS a Mesh, so the
     // mesh branch below writes it happily — and what it writes is the zero-area
@@ -151,19 +153,153 @@ namespace {
     // write.
     bool isUnexportable(const Object3D& object) {
 
-        return object.type() == "SplatCloud" || object.type() == "ParticleField";
+        return object.type() == "ParticleField";
     }
 
     std::string unexportableReason(const Object3D& object) {
 
-        const std::string what =
-                object.type() == "ParticleField"
-                        ? "particle fields are runtime content built from userData[\"particles\"], not document nodes"
-                        : "splat clouds are not serialized yet";
-
         return "skipping " + object.type() + " '" +
                (object.name.empty() ? object.uuid : object.name) +
-               "': " + what + ", it will not be in the saved document";
+               "': particle fields are runtime content built from userData[\"particles\"], "
+               "not document nodes, it will not be in the saved document";
+    }
+
+    std::optional<std::vector<unsigned char>> readFile(const std::filesystem::path& path);
+
+    // ------------------------------------------------------------ splat clouds
+
+    // A userData string, or empty when the key is absent or not a string.
+    std::string userDataString(const Object3D& object, const char* key) {
+
+        const auto it = object.userData.find(key);
+        if (it == object.userData.end()) return {};
+        if (const auto* s = std::any_cast<std::string>(&it->second)) return *s;
+        return {};
+    }
+
+    // The importer's ops string ("cull=1;removed=812;flipX=1;lod=-1;points=0",
+    // SplatImportConfig in editor-core) read for the three entries a reload
+    // has to replay. flipX is not one of them: the importer put the half-turn
+    // on the node's rotation, and the matrix carries it.
+    void parseSplatOps(const std::string& ops, bool& cull, int& lod, bool& pointCloud) {
+
+        cull = false;
+        lod = -1;
+        pointCloud = false;
+
+        std::size_t start = 0;
+        while (start < ops.size()) {
+            const auto end = ops.find(';', start);
+            const auto pair = ops.substr(start, end == std::string::npos ? std::string::npos : end - start);
+            const auto eq = pair.find('=');
+            if (eq != std::string::npos) {
+                const auto key = pair.substr(0, eq);
+                const auto value = pair.substr(eq + 1);
+                if (key == "cull") cull = value == "1" || value == "true";
+                else if (key == "lod") lod = std::atoi(value.c_str());
+                else if (key == "points") pointCloud = value == "1" || value == "true";
+            }
+            if (end == std::string::npos) break;
+            start = end + 1;
+        }
+    }
+
+    // The splats of a cloud as the bytes of a .ply, for an archive or a sidecar.
+    std::string encodeSplatPly(const SplatCloud& cloud) {
+
+        std::ostringstream out(std::ios::binary);
+        SplatLoader::writePly(cloud.data(), out);
+        return out.str();
+    }
+
+    // Writes the `threeppSplat` block: WHERE the splats come from and what to do
+    // to them on the way in, never the splats. Four cases, by what the exporter
+    // has to work with:
+    //
+    //   archive          the cloud's source file is copied in as a member
+    //                    (any container: .ply, .sog, .zip) and the ops replay
+    //                    on it; a cloud with no file, or a SOG folder (not a
+    //                    file), is written as a .ply member with no ops
+    //   source file      a path, relative to the document when possible — the
+    //                    same rule as a linked model, and ModelStorage does not
+    //                    change it: embedding gigabytes into JSON is not a mode
+    //   no file, a dir   a sidecar splats/<uuid>.ply next to the document
+    //   neither          a pathless block. The play snapshot is this case, and
+    //                    it hands the live object back through
+    //                    ObjectLoader::setSplatCloudResolver; a plain load has
+    //                    nothing to read and says so
+    //
+    // The point-mode look rides along; the sort, LOD and everything else are
+    // derived from the data again on load.
+    void writeSplatCloud(Object3D& object, json& data, Meta& meta) {
+
+        auto* cloud = dynamic_cast<SplatCloud*>(&object);
+        if (!cloud) return;
+
+        const std::string source = userDataString(object, splatSourceKey);
+        bool cull = false, pointCloud = false;
+        int lod = -1;
+        parseSplatOps(userDataString(object, splatOpsKey), cull, lod, pointCloud);
+
+        std::error_code ec;
+        const bool sourceIsFile = !source.empty() &&
+                                  std::filesystem::is_regular_file(std::filesystem::u8path(source), ec);
+        const bool sourceIsDir = !source.empty() &&
+                                 std::filesystem::is_directory(std::filesystem::u8path(source), ec);
+
+        std::string path;
+        bool embedded = false;// the bytes are a fresh .ply of the data: no ops apply
+
+        if (meta.archive) {
+
+            if (sourceIsFile) {
+                if (auto bytes = readFile(std::filesystem::u8path(source))) {
+                    const auto ext = std::filesystem::u8path(source).extension().string();
+                    path = std::string(archiveSplatDir) + object.uuid + (ext.empty() ? ".ply" : ext);
+                    meta.archive->add(path, std::move(*bytes));
+                }
+            }
+            if (path.empty()) {
+                if (sourceIsDir) {
+                    meta.warn("'" + (object.name.empty() ? object.uuid : object.name) +
+                              "' came from a SOG folder, which cannot travel inside an archive - "
+                              "its splats are written as a .ply member instead");
+                }
+                path = std::string(archiveSplatDir) + object.uuid + ".ply";
+                const auto ply = encodeSplatPly(*cloud);
+                meta.archive->add(path, std::vector<unsigned char>(ply.begin(), ply.end()));
+                embedded = true;
+            }
+
+        } else if (!source.empty()) {
+
+            path = meta.reference(std::filesystem::u8path(source));
+
+        } else if (!meta.resourcePath.empty()) {
+
+            const auto dir = meta.resourcePath / splatSidecarDir;
+            std::filesystem::create_directories(dir, ec);
+            const auto file = dir / (object.uuid + ".ply");
+            try {
+                SplatLoader::writePly(cloud->data(), file);
+                path = std::string(splatSidecarDir) + object.uuid + ".ply";
+                embedded = true;
+            } catch (const std::exception& e) {
+                meta.warn("'" + (object.name.empty() ? object.uuid : object.name) +
+                          "' has no source file and its sidecar could not be written: " + e.what());
+            }
+        }
+        // else: pathless, see above.
+
+        json ref;
+        ref["path"] = path;
+        ref["cull"] = embedded ? false : cull;
+        ref["lod"] = embedded ? -1 : lod;
+        ref["pointCloud"] = embedded ? false : pointCloud;
+        ref["count"] = cloud->splatCount();
+        ref["pointMix"] = cloud->pointMix();
+        ref["pointSize"] = cloud->pointSize();
+        data["threeppSplat"] = ref;
     }
 
     // Deterministic iteration over threepp's unordered maps.
@@ -1416,6 +1552,15 @@ namespace {
             if (object.matrixAutoUpdate) object.updateMatrix();
             data["matrix"] = toArray(*object.matrix);
             if (!object.matrixAutoUpdate) data["matrixAutoUpdate"] = false;
+        }
+
+        // ---- splat cloud
+        // A reference to its file plus the point-mode look; no geometry, no
+        // material, no children of its own (a sensor mesh a play session hung
+        // under it is gone by the time anything saves).
+        if (object.type() == "SplatCloud") {
+            writeSplatCloud(object, data, meta);
+            return data;
         }
 
         // ---- linked asset

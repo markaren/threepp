@@ -164,6 +164,8 @@ namespace threepp::vulkan {
             float jitterClip[2];
             float nearPlane;
             float preExposure;
+            float pointMix;
+            float pointSigma;
             uint32_t splatCount;
             uint32_t shCoeffs;
             uint32_t shDegree;
@@ -1204,6 +1206,8 @@ namespace threepp::vulkan {
             fc.pLo = e.pLo;
             fc.pHi = e.pHi;
             fc.debugNonFinite = e.debugNonFinite;
+            fc.pointMix       = e.pointMix;
+            fc.pointSigma     = e.pointSigma;
             // Validate the submission list HERE rather than trusting it in the
             // shader: a range past the end of the cloud would read another
             // cloud's memory through the same descriptor, and a caller that
@@ -1483,6 +1487,8 @@ namespace threepp::vulkan {
             u.percentile[1] = fc.pHi;
             u.nearPlane   = p.nearPlane;
             u.preExposure = p.preExposure;
+            u.pointMix    = fc.pointMix;
+            u.pointSigma  = fc.pointSigma;
             // The SUBMITTED total, not the resident total: every stage after
             // project indexes compactly, so this is the only count they need.
             u.splatCount  = fc.submitCount;

@@ -15,6 +15,9 @@
 #include <stdexcept>
 #include <string>
 #include <vector>
+#include <algorithm>
+#include <cstdint>
+#include <iterator>
 
 using namespace threepp;
 using Catch::Approx;
@@ -368,5 +371,433 @@ TEST_CASE("SplatLoader: rejects what it cannot represent") {
         ply.resize(ply.size() - 17);
 
         CHECK_THROWS_AS(load(ply), std::runtime_error);
+    }
+}
+
+
+// ---------------------------------------------------------------------------
+// Colour-only point clouds (SplatLoader::loadPointCloudPly)
+// ---------------------------------------------------------------------------
+
+namespace {
+
+    struct PointSpec {
+        float x, y, z;
+        unsigned char r = 255, g = 255, b = 255;
+        float nx = 0.f, ny = 0.f, nz = 0.f;
+    };
+
+    struct PointPlyOptions {
+        bool color = true;
+        bool normals = false;
+        bool ascii = false;
+        bool bigEndian = false;
+        bool faces = false;         // a mesh: one triangle after the vertices
+        bool doubles = false;       // x/y/z as double
+        bool floatColor = false;    // red/green/blue as float in [0, 255]
+        bool intensity = false;     // ushort intensity instead of a colour
+        bool leadingElement = false;// an unrelated element before the vertices
+    };
+
+    void putBytes(std::string& out, const void* p, size_t n, bool bigEndian) {
+
+        const auto* b = static_cast<const unsigned char*>(p);
+        if (bigEndian)
+            for (size_t i = n; i-- > 0;) out.push_back(static_cast<char>(b[i]));
+        else
+            out.append(reinterpret_cast<const char*>(b), n);
+    }
+
+    std::string pointCloudPly(const std::vector<PointSpec>& pts, const PointPlyOptions& o = {}) {
+
+        std::ostringstream h;
+        h << "ply\nformat "
+          << (o.ascii ? "ascii" : o.bigEndian ? "binary_big_endian" : "binary_little_endian")
+          << " 1.0\ncomment made by SplatLoader_test\n";
+        if (o.leadingElement) h << "element camera 1\nproperty float fx\nproperty float fy\n";
+        h << "element vertex " << pts.size() << "\n";
+        const char* ct = o.doubles ? "double" : "float";
+        h << "property " << ct << " x\nproperty " << ct << " y\nproperty " << ct << " z\n";
+        if (o.normals) h << "property float nx\nproperty float ny\nproperty float nz\n";
+        if (o.color) {
+            const char* cc = o.floatColor ? "float" : "uchar";
+            h << "property " << cc << " red\nproperty " << cc << " green\nproperty " << cc << " blue\n";
+        }
+        if (o.intensity) h << "property ushort intensity\n";
+        h << "property float confidence\n";
+        if (o.faces) h << "element face 1\nproperty list uchar int vertex_indices\n";
+        h << "end_header\n";
+
+        std::string out = h.str();
+
+        if (o.ascii) {
+            if (o.leadingElement) out += "1.5 2.5\n";
+            for (size_t i = 0; i < pts.size(); ++i) {
+                const auto& p = pts[i];
+                std::ostringstream l;
+                l << p.x << " " << p.y << " " << p.z;
+                if (o.normals) l << " " << p.nx << " " << p.ny << " " << p.nz;
+                if (o.color) {
+                    if (o.floatColor) l << " " << float(p.r) << " " << float(p.g) << " " << float(p.b);
+                    else l << " " << int(p.r) << " " << int(p.g) << " " << int(p.b);
+                }
+                if (o.intensity) l << " " << (i * 100);
+                l << " " << 0.5f * static_cast<float>(i) << "\n";
+                out += l.str();
+            }
+            if (o.faces) out += "3 0 1 2\n";
+            return out;
+        }
+
+        const bool be = o.bigEndian;
+        const auto putF = [&](float v) { putBytes(out, &v, 4, be); };
+        if (o.leadingElement) {
+            putF(1.5f);
+            putF(2.5f);
+        }
+        for (size_t i = 0; i < pts.size(); ++i) {
+            const auto& p = pts[i];
+            if (o.doubles) {
+                const double d[3] = {p.x, p.y, p.z};
+                for (double v : d) putBytes(out, &v, 8, be);
+            } else {
+                putF(p.x);
+                putF(p.y);
+                putF(p.z);
+            }
+            if (o.normals) {
+                putF(p.nx);
+                putF(p.ny);
+                putF(p.nz);
+            }
+            if (o.color) {
+                if (o.floatColor) {
+                    putF(float(p.r));
+                    putF(float(p.g));
+                    putF(float(p.b));
+                } else {
+                    out.push_back(static_cast<char>(p.r));
+                    out.push_back(static_cast<char>(p.g));
+                    out.push_back(static_cast<char>(p.b));
+                }
+            }
+            if (o.intensity) {
+                const uint16_t v = static_cast<uint16_t>(i * 100);
+                putBytes(out, &v, 2, be);
+            }
+            putF(0.5f * static_cast<float>(i));
+        }
+        if (o.faces) {
+            out.push_back(3);
+            const int32_t idx[3] = {0, 1, 2};
+            for (int32_t v : idx) putBytes(out, &v, 4, be);
+        }
+        return out;
+    }
+
+    std::vector<PointSpec> lattice(int n, float pitch) {
+
+        std::vector<PointSpec> pts;
+        for (int x = 0; x < n; ++x)
+            for (int y = 0; y < n; ++y)
+                for (int z = 0; z < n; ++z) {
+                    PointSpec p{x * pitch, y * pitch, z * pitch};
+                    p.r = static_cast<unsigned char>(255 * x / std::max(1, n - 1));
+                    p.g = 0;
+                    p.b = static_cast<unsigned char>(255 * z / std::max(1, n - 1));
+                    pts.push_back(p);
+                }
+        return pts;
+    }
+
+    SplatData loadPoints(const std::string& buffer, const SplatLoader::PointCloudOptions& o = {},
+                         SplatLoader::PointCloudInfo* info = nullptr) {
+
+        std::istringstream in(buffer, std::ios::binary);
+        return SplatLoader::parsePointCloudPly(in, o, info);
+    }
+
+    bool isPointCloud(const std::string& buffer) {
+
+        std::istringstream in(buffer, std::ios::binary);
+        return SplatLoader::isPointCloudPly(in);
+    }
+
+    PointPlyOptions plyOpts(bool color = true, bool normals = false, bool ascii = false,
+                            bool bigEndian = false, bool faces = false, bool doubles = false,
+                            bool floatColor = false, bool intensity = false,
+                            bool leadingElement = false) {
+
+        PointPlyOptions o;
+        o.color = color;
+        o.normals = normals;
+        o.ascii = ascii;
+        o.bigEndian = bigEndian;
+        o.faces = faces;
+        o.doubles = doubles;
+        o.floatColor = floatColor;
+        o.intensity = intensity;
+        o.leadingElement = leadingElement;
+        return o;
+    }
+
+}// namespace
+
+
+TEST_CASE("SplatLoader point cloud: the discriminator tells a point cloud from a splat and a mesh") {
+
+    const auto pts = lattice(3, 0.5f);
+    CHECK(isPointCloud(pointCloudPly(pts)));
+    CHECK(isPointCloud(pointCloudPly(pts, plyOpts(true, false, /*ascii*/ true))));
+    CHECK(isPointCloud(pointCloudPly(pts, plyOpts(true, false, false, false, false, false, false, false,
+                                                  /*leadingElement*/ true))));
+    CHECK_FALSE(isPointCloud(pointCloudPly(pts, plyOpts(true, false, false, false, /*faces*/ true))));
+    CHECK_FALSE(isPointCloud(splattest::writeSplatPly(makeCloud(0, 8))));
+    CHECK_FALSE(isPointCloud("not a ply\n"));
+    CHECK_FALSE(SplatLoader::isPointCloudPly(std::filesystem::path("does-not-exist.ply")));
+
+    // The splat discriminator says no to a point cloud, so an importer that
+    // asks both gets exactly one yes.
+    std::istringstream in(pointCloudPly(pts), std::ios::binary);
+    CHECK_FALSE(SplatLoader::isSplatPly(in));
+}
+
+TEST_CASE("SplatLoader point cloud: uchar colour becomes the DC colour, sigma comes from the spacing") {
+
+    const auto pts = lattice(4, 0.5f);
+    SplatLoader::PointCloudInfo info;
+    const auto data = loadPoints(pointCloudPly(pts), {}, &info);
+
+    REQUIRE(data.count() == pts.size());
+    CHECK(data.shDegree == 0);
+    CHECK(info.count == pts.size());
+    CHECK(info.hadColor);
+    CHECK_FALSE(info.hadNormals);
+    CHECK(info.spacing == Approx(0.5f).margin(1e-5f));
+    CHECK(info.sigma == Approx(0.5f).margin(1e-5f));// 1.0 * spacing
+
+    for (size_t i = 0; i < data.count(); ++i) {
+
+        INFO("point " << i);
+        CHECK(data.means[i].x == Approx(pts[i].x));
+        CHECK(data.means[i].y == Approx(pts[i].y));
+        CHECK(data.means[i].z == Approx(pts[i].z));
+        CHECK(data.scales[i].x == Approx(0.5f).margin(1e-5f));
+        CHECK(data.scales[i].y == Approx(0.5f).margin(1e-5f));
+        CHECK(data.scales[i].z == Approx(0.5f).margin(1e-5f));
+        CHECK(data.rotations[i] == SplatQuat{});
+        CHECK(data.opacities[i] == 1.f);
+
+        const auto c = data.colorAt(i, Vector3{0, 0, 1});
+        CHECK(c.x == Approx(pts[i].r / 255.f).margin(2e-3f));
+        CHECK(c.y == Approx(0.f).margin(2e-3f));
+        CHECK(c.z == Approx(pts[i].b / 255.f).margin(2e-3f));
+    }
+
+    // The unconsumed scalar rides in extras, as the splat loader's do.
+    REQUIRE(data.extras.count("confidence") == 1);
+    CHECK(data.extras.at("confidence")[3] == Approx(1.5f));
+}
+
+TEST_CASE("SplatLoader point cloud: ascii, big-endian and double coordinates read the same cloud") {
+
+    const auto pts = lattice(3, 1.f);
+    const auto ref = loadPoints(pointCloudPly(pts));
+
+    const std::string variants[] = {
+            pointCloudPly(pts, plyOpts(true, false, /*ascii*/ true)),
+            pointCloudPly(pts, plyOpts(true, false, false, /*bigEndian*/ true)),
+            pointCloudPly(pts, plyOpts(true, false, false, false, false, /*doubles*/ true)),
+            pointCloudPly(pts, plyOpts(true, false, false, true, false, true)),
+            pointCloudPly(pts, plyOpts(true, false, false, false, false, false, false, false, true)),
+            pointCloudPly(pts, plyOpts(true, false, true, false, false, false, false, false, true)),
+    };
+    for (size_t v = 0; v < std::size(variants); ++v) {
+
+        INFO("variant " << v);
+        const auto data = loadPoints(variants[v]);
+        REQUIRE(data.count() == ref.count());
+        for (size_t i = 0; i < data.count(); ++i) {
+            CHECK(data.means[i].x == Approx(ref.means[i].x).margin(1e-5f));
+            CHECK(data.means[i].y == Approx(ref.means[i].y).margin(1e-5f));
+            CHECK(data.means[i].z == Approx(ref.means[i].z).margin(1e-5f));
+            CHECK(data.shAt(i)[0] == Approx(ref.shAt(i)[0]).margin(1e-5f));
+            CHECK(data.shAt(i)[2] == Approx(ref.shAt(i)[2]).margin(1e-5f));
+        }
+    }
+}
+
+TEST_CASE("SplatLoader point cloud: float colours in [0, 255] are normalised, intensity is grey") {
+
+    const auto pts = lattice(2, 1.f);
+
+    SECTION("float [0, 255]") {
+
+        const auto data = loadPoints(pointCloudPly(pts, plyOpts(true, false, false, false, false, false,
+                                                                /*floatColor*/ true)));
+        const auto c = data.colorAt(7, Vector3{0, 0, 1});// x = 1, z = 1 corner: (255, 0, 255)
+        CHECK(c.x == Approx(1.f).margin(2e-3f));
+        CHECK(c.y == Approx(0.f).margin(2e-3f));
+        CHECK(c.z == Approx(1.f).margin(2e-3f));
+    }
+
+    SECTION("intensity, scaled by the cloud's maximum") {
+
+        SplatLoader::PointCloudInfo info;
+        const auto data = loadPoints(pointCloudPly(pts, plyOpts(/*color*/ false, false, false, false, false,
+                                                                false, false, /*intensity*/ true)),
+                                     {}, &info);
+        CHECK_FALSE(info.hadColor);
+        CHECK(info.hadIntensity);
+        // Intensities 0, 100, ..., 700: the last point is white, the first black.
+        const auto last = data.colorAt(7, Vector3{0, 0, 1});
+        const auto first = data.colorAt(0, Vector3{0, 0, 1});
+        CHECK(last.x == Approx(1.f).margin(2e-3f));
+        CHECK(last.x == Approx(last.y).margin(1e-6f));
+        CHECK(first.x == Approx(0.f).margin(2e-3f));
+    }
+
+    SECTION("no colour at all is white") {
+
+        const auto data = loadPoints(pointCloudPly(pts, plyOpts(/*color*/ false)));
+        const auto c = data.colorAt(0, Vector3{0, 0, 1});
+        CHECK(c.x == Approx(1.f).margin(2e-3f));
+        CHECK(c.y == Approx(1.f).margin(2e-3f));
+        CHECK(c.z == Approx(1.f).margin(2e-3f));
+    }
+}
+
+TEST_CASE("SplatLoader point cloud: normals orient a thin disc, and can be ignored") {
+
+    auto pts = lattice(3, 1.f);
+    for (auto& p : pts) {
+        p.nx = 1.f;
+        p.ny = 0.f;
+        p.nz = 0.f;
+    }
+    pts[0].nx = 0.f;// one zero normal stays isotropic
+
+    SplatLoader::PointCloudInfo info;
+    const auto data = loadPoints(pointCloudPly(pts, plyOpts(true, /*normals*/ true)), {}, &info);
+    CHECK(info.hadNormals);
+    REQUIRE(data.count() == pts.size());
+
+    // The local +Z axis, rotated, must land on the normal.
+    const Vector3 z{0.f, 0.f, 1.f};
+    for (size_t i = 1; i < data.count(); ++i) {
+        INFO("point " << i);
+        Vector3 axis = z;
+        axis.applyQuaternion(data.rotations[i].toQuaternion());
+        CHECK(axis.x == Approx(1.f).margin(1e-5f));
+        CHECK(axis.y == Approx(0.f).margin(1e-5f));
+        CHECK(axis.z == Approx(0.f).margin(1e-5f));
+        CHECK(data.scales[i].z == Approx(data.scales[i].x * 0.15f).margin(1e-6f));
+    }
+    CHECK(data.rotations[0] == SplatQuat{});
+    CHECK(data.scales[0].z == Approx(data.scales[0].x).margin(1e-6f));
+
+    SECTION("a normal pointing at -Z is a half turn, not a NaN") {
+
+        auto flipped = lattice(2, 1.f);
+        for (auto& p : flipped) p.nz = -1.f;
+        const auto d = loadPoints(pointCloudPly(flipped, plyOpts(true, true)));
+        Vector3 axis = z;
+        axis.applyQuaternion(d.rotations[0].toQuaternion());
+        CHECK(axis.z == Approx(-1.f).margin(1e-5f));
+    }
+
+    SECTION("useNormals = false keeps every point isotropic") {
+
+        SplatLoader::PointCloudOptions o;
+        o.useNormals = false;
+        const auto d = loadPoints(pointCloudPly(pts, plyOpts(true, true)), o);
+        for (size_t i = 0; i < d.count(); ++i) {
+            CHECK(d.rotations[i] == SplatQuat{});
+            CHECK(d.scales[i].z == Approx(d.scales[i].x).margin(1e-6f));
+        }
+    }
+}
+
+TEST_CASE("SplatLoader point cloud: options override the spacing, the opacity and the thickness") {
+
+    const auto pts = lattice(3, 1.f);
+    SplatLoader::PointCloudOptions o;
+    o.sigma = 0.07f;
+    o.opacity = 0.4f;
+
+    SplatLoader::PointCloudInfo info;
+    const auto data = loadPoints(pointCloudPly(pts), o, &info);
+    CHECK(info.spacing == 0.f);// not measured when sigma is given
+    CHECK(info.sigma == Approx(0.07f));
+    for (size_t i = 0; i < data.count(); ++i) {
+        CHECK(data.scales[i].x == Approx(0.07f));
+        CHECK(data.opacities[i] == Approx(0.4f));
+    }
+
+    SECTION("sigmaPerSpacing scales the measured spacing") {
+
+        SplatLoader::PointCloudOptions s;
+        s.sigmaPerSpacing = 1.5f;
+        const auto d = loadPoints(pointCloudPly(pts), s, &info);
+        CHECK(info.spacing == Approx(1.f).margin(1e-5f));
+        CHECK(d.scales[0].x == Approx(1.5f).margin(1e-5f));
+    }
+
+    SECTION("a single point has no spacing and gets the documented fallback") {
+
+        const auto d = loadPoints(pointCloudPly({PointSpec{1.f, 2.f, 3.f}}), {}, &info);
+        CHECK(d.count() == 1);
+        CHECK(info.spacing == 0.f);
+        CHECK(d.scales[0].x == Approx(0.01f));
+    }
+}
+
+TEST_CASE("SplatLoader point cloud: a mesh's vertices load and its faces are skipped") {
+
+    const auto pts = lattice(2, 1.f);
+    for (const bool ascii : {false, true}) {
+
+        INFO("ascii " << ascii);
+        const auto data = loadPoints(pointCloudPly(pts, plyOpts(true, false, ascii, false, /*faces*/ true)));
+        REQUIRE(data.count() == pts.size());
+        CHECK(data.means[7].x == Approx(1.f));
+    }
+}
+
+TEST_CASE("SplatLoader point cloud: rejects what it cannot represent") {
+
+    SECTION("no x/y/z") {
+
+        CHECK_THROWS_AS(loadPoints("ply\nformat binary_little_endian 1.0\nelement vertex 1\n"
+                                   "property float u\nproperty float v\nend_header\n"),
+                        std::runtime_error);
+    }
+
+    SECTION("a list property on the vertex element") {
+
+        CHECK_THROWS_AS(loadPoints("ply\nformat binary_little_endian 1.0\nelement vertex 1\n"
+                                   "property float x\nproperty float y\nproperty float z\n"
+                                   "property list uchar float weights\nend_header\n"),
+                        std::runtime_error);
+    }
+
+    SECTION("a truncated body") {
+
+        auto ply = pointCloudPly(lattice(2, 1.f));
+        ply.resize(ply.size() - 5);
+        CHECK_THROWS_AS(loadPoints(ply), std::runtime_error);
+    }
+
+    SECTION("a truncated ascii body") {
+
+        auto ply = pointCloudPly(lattice(2, 1.f), plyOpts(true, false, /*ascii*/ true));
+        ply.resize(ply.size() - 20);
+        CHECK_THROWS_AS(loadPoints(ply), std::runtime_error);
+    }
+
+    SECTION("loading a missing file names it") {
+
+        CHECK_THROWS_AS(SplatLoader::loadPointCloudPly(std::filesystem::path("does-not-exist.ply")),
+                        std::runtime_error);
     }
 }

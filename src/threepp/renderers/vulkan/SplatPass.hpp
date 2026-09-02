@@ -207,6 +207,10 @@ namespace threepp::vulkan {
             // does. The sort key's content interval — see splatDepthBucket.
             float pLo = 0.f, pHi = 0.f;
             bool  debugNonFinite = false;
+            // SplatCloud::pointMix / pointSigmaPixels, copied per frame: the
+            // shaders read them from the per-cloud UBO slot.
+            float pointMix = 0.f;
+            float pointSigma = 0.f;
             // Partial submission for per-chunk LOD: (source offset, count) into
             // the cloud's own splats, submitted in the order given. Empty =
             // submit the whole cloud, which is the identity path.
@@ -566,6 +570,8 @@ namespace threepp::vulkan {
             float  model[16]{};
             float  pLo = 0.f, pHi = 0.f;
             bool   debugNonFinite = false;
+            float  pointMix = 0.f;
+            float  pointSigma = 0.f;
             // Validated copy of CloudEntry::ranges, clamped to the cloud and to
             // kMaxRanges, plus the total they submit. submitCount == cloud->count
             // and an empty list is the whole-cloud path.

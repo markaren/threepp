@@ -381,6 +381,105 @@ while the lit air around it stayed grey. `--fog --sun` is that configuration, an
 metres-scale scan leaves the unit-scale procedural cloud at `T = 0.97`, which
 renders a plausible frame while testing nothing.
 
+## Point mode, and point clouds as splats
+
+`SplatCloud::setPointMix(m)` draws the same cloud as dots: at `m = 1` every
+splat is an opaque disc of `setPointSize` pixels (default 2) centred on its
+mean, nearest wins where two overlap; at `m = 0` the pass is byte-identical
+to one rendered before the knob existed; between, the projected covariance is
+lerped toward the disc's and the opacity toward 1, so a slider sweep is a
+continuous dissolve from surface to points. Both backends read the same two
+numbers (`pointMix`, `pointSigma = (size / 2 + 0.5) / 3` px) and apply the
+same two lerps — `splat_project.comp` / the GL vertex shader on the
+covariance and opacity, `splat_raster.comp` / the GL fragment shader on the
+falloff, where the Gaussian `exp(power)` is mixed with a one-pixel-feathered
+disc `clamp((3 - sqrt(-2 power)) * sigma, 0, 1)`.
+
+Nothing else in the pass changes, and that is the point: the sort, the
+software depth test against the G-buffer, the depth AOV, the overlay depth
+stamp and the reflection volume are all unaware of the mode. A point cloud
+is therefore occluded by a mesh, occludes a gizmo and appears in a pond
+exactly as the Gaussians do. `VulkanSplat_test` 2d holds the slab from the
+occlusion check in place, switches to dots and asserts the same hiding, the
+determinism of the dot frame, and that mix 0 restores the Gaussian frame.
+
+Cost: the disc footprint is smaller than nearly every Gaussian's, so the
+expansion and the raster shrink; the sort is unchanged.
+
+**A colour-only point cloud loads into the same object.** A PLY whose
+vertices carry `x y z` and optionally `red green blue`, `nx ny nz`,
+`intensity` and scalar fields — a laser scan, a CloudCompare, MeshLab or
+Open3D export — has no `f_dc_0`, so `SplatLoader::isSplatPly` says no and
+`SplatLoader::isPointCloudPly` says yes (a mesh PLY with faces says no to
+both). `SplatLoader::loadPointCloudPly` turns every point into one degree-0
+Gaussian: DC colour from the point's colour (white without one, grey from
+`intensity` when that is all there is), opacity 1, and one isotropic sigma
+for the whole cloud, `1.0 ×` its median nearest-neighbour distance
+(`splats::medianNeighbourSpacing`, a hash-grid estimate over a 20k-point
+sample; `PointCloudOptions::sigma` overrides it — a Poisson sampling's
+nearest neighbour sits at about half its mean pitch, which is why the factor
+is 1 and not the 0.6 a lattice would need). A point with normals
+becomes a disc facing them, its sigma along the normal `0.15 ×` the others.
+So the cloud renders as a closed surface at mix 0 and as its dots at mix 1.
+Binary little- and big-endian and ascii bodies, any numeric property type,
+and elements before or after the vertices all parse. The editor's import,
+the `gaussian_splats` example and the Python bindings
+(`SplatLoader.load_point_cloud_ply`, `SplatCloud.point_mix` /
+`.point_size`) take the same path; the example's `--points` flag starts in
+point mode, `--point-size` sets the disc, and P dissolves between the looks.
+
+**A point cloud gets its collider straight from its points.**
+`splats::buildPointSurface` (`threepp/splats/PointSurface.hpp`, CPU, every
+backend) voxel-hashes the transformed means at `2 ×` their median spacing,
+evaluates the union-of-balls field `max(0, 1 - d / voxel)` on the nodes
+around occupied voxels, runs marching cubes at `0.5` with welded vertices
+and outward winding, and drops islands under 64 cells. It returns the same
+`SurfaceMesh` the depth-fusion bake does, so PhysX cooking, the sensor mesh
+and the editor's preview overlay are shared. The surface is an OFFSET one:
+it sits half a voxel outside the samples on both sides of a sheet, which is
+the price of a method with no normals and no free-space carving. That is why
+it is the wrong tool for a Gaussian scan — every fog splat's centre is a
+point to it — and why the editor's Surface section routes by `Method`: Auto
+takes the point route for a cloud imported as a point cloud and the fusion
+bake otherwise, and the other two force one. `PointSurface_test` pins the
+slab-around-a-sheet geometry, a closed manifold shell at its radius,
+determinism, the transform, the island filter and the voxel ceiling.
+
+**A scan can be a moving body.** The Surface section's `Body` is Static,
+Dynamic or Kinematic (`SplatSurfaceConfig::body`, with `mass` and a V-HACD
+`hulls` budget). Static cooks the triangles as they are. PhysX will not
+simulate a triangle mesh, so a moving body has its baked surface split into
+convex hulls (`decomposeConvex`, one hull of every vertex when V-HACD is not
+linked) and welded into one compound actor at the cloud's pose; a Dynamic
+cloud is bound to the actor and follows it, parents and all, while a
+Kinematic one drives the actor from its own transform each frame. The
+sensor mesh of a moving body is parented under the cloud in its local frame
+instead of sitting at the scene root, so it rides along. The editor selftest
+drops a 1500-point shell scan (direct route, 8 hulls, 2 kg) onto the fused
+floor scan: it rests at 4.29 over a floor whose top is 4.045, radius 0.25.
+
+**A cloud is saved by reference.** `ObjectExporter` writes a `SplatCloud` as
+a `threeppSplat` block: the source path (relative to the document when it
+can be; the editor's `SplatImportConfig` mark is where it comes from), the
+import ops to replay (`cull`, `lod`, `pointCloud`), the point-mode look, and
+the splat count for the record. Never the splats. Inside a `.tpz` the source
+file is copied in as `splats/<uuid>.<ext>` whatever its container, so the
+archive is self-contained; a cloud with no file (a procedural one) gets a
+`.ply` member, or a sidecar `splats/<uuid>.ply` next to a loose document,
+written by `SplatLoader::writePly`. `ObjectLoader` re-imports by content
+(SOG, 3DGS `.ply`, or a colour point cloud), replays the cull unless a LOD
+table is resident, and re-stamps the source mark with this machine's path or
+the archive-and-entry mark. A file that is gone leaves a placed, named
+`Object3D` and a warning. The editor's play snapshot is the one document
+that carries neither a path nor bytes: it keeps the live clouds by uuid and
+hands them back through `ObjectLoader::setSplatCloudResolver`, so Stop
+re-places the same object instead of reloading a gigabyte.
+`ObjectExporterSplat_test` covers the reference, sidecar, archive, pathless
+and missing-file cases.
+
+Still out of scope, unchanged: a point cloud is not in any acceleration
+structure either, so the sensor wall above applies to it as written.
+
 ## Tile size: 16×16 stays, and zooming OUT is the open problem
 
 `kTileW/kTileH = 16` was measured against 8×8 (three sites: `splat_common.glsl`,

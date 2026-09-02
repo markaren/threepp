@@ -3248,6 +3248,8 @@ void VulkanRenderer::Impl::collectSplatClouds(Object3D& scene, Camera& camera) {
                 vulkan::SplatPass::CloudEntry e{};
                 e.cloud = sc;
                 e.debugNonFinite = sc->debugNonFinite();
+                e.pointMix       = sc->pointMix();
+                e.pointSigma     = sc->pointSigmaPixels();
                 std::memcpy(e.model, sc->matrixWorld->elements.data(), 64);
 
                 // What the app asked to draw this frame (SplatCloud::

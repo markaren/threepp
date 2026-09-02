@@ -1115,6 +1115,24 @@ void EditorApp::drawSplatSection(Object3D& object) {
     // texels a splat occupies. Worth stating, and there is nowhere else it
     // shows.
     ImGui::Text("SH degree  %d", data.shDegree);
+
+    // --- point rendering ----------------------------------------------------
+    // The one look control a cloud has. 0 is the Gaussians, 1 is every splat
+    // as an opaque disc of Point Size pixels â€” the point cloud view â€” and the
+    // slider between is a continuous dissolve. Both backends honour it; the
+    // depth sort, the occlusion by meshes and the overlay stamp are the same
+    // either way. Saved with the cloud's threeppSplat block, like a look.
+    {
+        float mix = cloud->pointMix();
+        if (ImGui::SliderFloat("Point Mix", &mix, 0.f, 1.f, "%.2f")) cloud->setPointMix(mix);
+        if (ImGui::IsItemHovered()) {
+            ImGui::SetTooltip("0 = Gaussian splats, 1 = one opaque disc per splat (point cloud).\n"
+                              "In between blends footprint and opacity.");
+        }
+        float size = cloud->pointSize();
+        if (ImGui::SliderFloat("Point Size", &size, 1.f, 12.f, "%.1f px")) cloud->setPointSize(size);
+    }
+
     if (!data.extras.empty()) {
         // Per-splat properties the loader kept but nothing renders — semantic
         // labels, confidences, learned descriptors. Named because their
@@ -1136,6 +1154,10 @@ void EditorApp::drawSplatSection(Object3D& object) {
         ImGui::TextColored(theme::muted(), "Source");
         ImGui::TextWrapped("%s", config->source.c_str());
 
+        if (config->pointCloud) {
+            ImGui::TextColored(theme::muted(),
+                               "Point cloud: one Gaussian per point, sized from the spacing.");
+        }
         if (config->culled) {
             ImGui::TextColored(theme::muted(), "Culled %zu outlier splats on import.",
                                config->removed);
@@ -1185,6 +1207,62 @@ void EditorApp::drawSplatSection(Object3D& object) {
 
         if (config.enabled) {
             ImGui::PushItemWidth(-130 * contentScale_);
+            // Which builder. A loaded point cloud is a set of surface samples
+            // already, so Auto meshes it straight from the points on the CPU;
+            // a Gaussian scan goes through the rendered depth-fusion bake,
+            // which is what carves its fog splats away.
+            {
+                static const char* methods = "Auto\0Depth fusion\0Points (direct)\0";
+                int method = config.method;
+                if (ImGui::Combo("Method", &method, methods)) {
+                    auto after = config;
+                    after.method = std::clamp(method, 0, 2);
+                    commit(std::move(after), "Splat Surface Method");
+                }
+            }
+            const bool pointRoute = editor::SplatSurfaceCache::usesPointRoute(*cloud, config);
+            ImGui::TextColored(theme::muted(),
+                               pointRoute ? "Direct: a union-of-balls field over the points, marching "
+                                            "cubes, no renderer. The surface sits half a voxel "
+                                            "outside the samples."
+                                          : "Depth fusion: renders the scan from a set of poses and "
+                                            "fuses the depth maps. Needs Vulkan; carves floaters.");
+
+            // What the surface is to PhysX. A static scan keeps its exact
+            // triangles; a moving one is split into convex hulls at Play.
+            {
+                static const char* bodies = "Static\0Dynamic\0Kinematic\0";
+                int body = config.body;
+                if (ImGui::Combo("Body", &body, bodies)) {
+                    auto after = config;
+                    after.body = std::clamp(body, 0, 2);
+                    commit(std::move(after), "Splat Surface Body");
+                }
+            }
+            if (config.body != editor::SplatSurfaceConfig::Static) {
+                if (config.body == editor::SplatSurfaceConfig::Dynamic) {
+                    float mass = config.mass;
+                    const bool changed = ImGui::DragFloat("Mass (kg)", &mass, 0.1f, 0.001f, 100000.f, "%.3f");
+                    committed(commands_, changed, [&] {
+                        auto after = config;
+                        after.mass = std::max(mass, 0.001f);
+                        commit(std::move(after), "Splat Surface Mass");
+                    });
+                }
+                int hulls = config.hulls;
+                const bool changed = ImGui::DragInt("Hulls", &hulls, 0.25f, 1, 256);
+                committed(commands_, changed, [&] {
+                    auto after = config;
+                    after.hulls = std::clamp(hulls, 1, 256);
+                    commit(std::move(after), "Splat Surface Hulls");
+                });
+                ImGui::TextColored(theme::muted(),
+                                   config.body == editor::SplatSurfaceConfig::Dynamic
+                                           ? "Play splits the surface into convex hulls (V-HACD) and "
+                                             "simulates them as one body; the scan moves with it."
+                                           : "Play splits the surface into convex hulls (V-HACD); the "
+                                             "scan's transform drives them and they push dynamics.");
+            }
             {
                 float voxel = config.voxelSize;
                 const bool changed = ImGui::DragFloat("Voxel (m)", &voxel, 0.002f, 0.f, 0.5f, "%.3f");
@@ -1203,7 +1281,7 @@ void EditorApp::drawSplatSection(Object3D& object) {
                     commit(std::move(after), "Splat Surface Islands");
                 });
             }
-            {
+            if (!pointRoute) {
                 int poses = config.poseCount;
                 const bool changed = ImGui::DragInt("Poses", &poses, 0.5f, 0, 256);
                 committed(commands_, changed, [&] {
@@ -1213,20 +1291,24 @@ void EditorApp::drawSplatSection(Object3D& object) {
                 });
             }
             ImGui::PopItemWidth();
-            ImGui::TextColored(theme::muted(), "Voxel 0 sizes itself from the scan; poses 0 uses 26.");
-
-            bool interior = config.interior;
-            if (ImGui::Checkbox("Interior", &interior)) {
-                auto after = config;
-                after.interior = interior;
-                commit(std::move(after), interior ? "Splat Surface Interior" : "Splat Surface Orbit");
-            }
             ImGui::TextColored(theme::muted(),
-                               "Tick for a scan of the INSIDE of a room: the cameras stand in the "
-                               "scan and look out. Orbited from outside, a room bakes the OUTSIDE "
-                               "of its walls and nothing can walk in it.");
+                               pointRoute ? "Voxel 0 is twice the points' median spacing."
+                                          : "Voxel 0 sizes itself from the scan; poses 0 uses 26.");
 
-            const bool canBake = editor::SplatSurfaceCache::available(renderer_.get());
+            if (!pointRoute) {
+                bool interior = config.interior;
+                if (ImGui::Checkbox("Interior", &interior)) {
+                    auto after = config;
+                    after.interior = interior;
+                    commit(std::move(after), interior ? "Splat Surface Interior" : "Splat Surface Orbit");
+                }
+                ImGui::TextColored(theme::muted(),
+                                   "Tick for a scan of the INSIDE of a room: the cameras stand in the "
+                                   "scan and look out. Orbited from outside, a room bakes the OUTSIDE "
+                                   "of its walls and nothing can walk in it.");
+            }
+
+            const bool canBake = editor::SplatSurfaceCache::availableFor(renderer_.get(), *cloud, config);
             if (!canBake) {
                 // The depth AOV the bake reads is a Vulkan G-buffer attachment.
                 ImGui::TextColored(theme::warning(),
@@ -1264,12 +1346,12 @@ void EditorApp::drawSplatSection(Object3D& object) {
     }
 
     ImGui::Separator();
-    // The limitation, on the object it applies to. The console and the status
-    // bar say it at Play and at Save; this is where you find out why without
-    // having pressed anything.
-    ImGui::TextColored(theme::warning(), "Not serialized yet");
-    ImGui::TextWrapped("This cloud is not written to the scene file and does not survive Play. "
-                       "Re-import the .ply after Stop.");
+    // How it is saved, on the object it applies to: the document keeps a path
+    // and the import ops, never the splats, so a scan moved on disk has to be
+    // re-imported.
+    ImGui::TextColored(theme::muted(), "Saved by reference");
+    ImGui::TextWrapped("The scene file stores the scan's path and the import settings and reloads "
+                       "it on open; a .tpz carries a copy of the file. Play keeps the live cloud.");
 
     ImGui::TreePop();
 }
@@ -1308,14 +1390,27 @@ void EditorApp::bakeSplatSurface(Object3D& object) {
     // What it produced AND what it dropped, which is the contract every bounded
     // thing in this repo keeps.
     char line[256];
-    std::snprintf(line, sizeof(line),
-                  "%zu triangles, %.3f m voxels, %d poses, %.2f s "
-                  "(dropped %llu fringe, %llu outlier of %llu samples)",
-                  mesh->triangleCount(), static_cast<double>(mesh->stats.voxelSize),
-                  mesh->stats.poses, static_cast<double>(seconds),
-                  static_cast<unsigned long long>(mesh->stats.skippedFringe),
-                  static_cast<unsigned long long>(mesh->stats.skippedOutlier),
-                  static_cast<unsigned long long>(mesh->stats.depthSamples));
+    if (mesh->stats.poses == 0) {
+        // The direct point route: nothing was rendered, so the numbers that
+        // describe it are the voxels the points occupied and the islands it
+        // dropped.
+        std::snprintf(line, sizeof(line),
+                      "%zu triangles, %.3f m voxels, from %llu occupied voxels, %.2f s "
+                      "(dropped %u of %u islands)",
+                      mesh->triangleCount(), static_cast<double>(mesh->stats.voxelSize),
+                      static_cast<unsigned long long>(mesh->stats.observedVoxels),
+                      static_cast<double>(seconds), mesh->stats.culledComponents,
+                      mesh->stats.components);
+    } else {
+        std::snprintf(line, sizeof(line),
+                      "%zu triangles, %.3f m voxels, %d poses, %.2f s "
+                      "(dropped %llu fringe, %llu outlier of %llu samples)",
+                      mesh->triangleCount(), static_cast<double>(mesh->stats.voxelSize),
+                      mesh->stats.poses, static_cast<double>(seconds),
+                      static_cast<unsigned long long>(mesh->stats.skippedFringe),
+                      static_cast<unsigned long long>(mesh->stats.skippedOutlier),
+                      static_cast<unsigned long long>(mesh->stats.depthSamples));
+    }
     splatBakeStats_ = line;
     log("splat surface: \"" + object.name + "\" baked - " + splatBakeStats_);
     flashStatus("Surface baked");

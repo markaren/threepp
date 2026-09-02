@@ -4,9 +4,129 @@
 #include "threepp/math/Rng.hpp"
 
 #include <algorithm>
+#include <cmath>
 #include <cstdint>
+#include <limits>
+#include <utility>
 
 using namespace threepp;
+
+
+float splats::medianNeighbourSpacing(const std::vector<Vector3>& points, size_t sampleCount) {
+
+    const size_t n = points.size();
+
+    Vector3 lo{std::numeric_limits<float>::infinity(), std::numeric_limits<float>::infinity(),
+               std::numeric_limits<float>::infinity()};
+    Vector3 hi{-lo.x, -lo.y, -lo.z};
+    size_t finite = 0;
+    for (const auto& p : points) {
+
+        if (!std::isfinite(p.x) || !std::isfinite(p.y) || !std::isfinite(p.z)) continue;
+        lo.min(p);
+        hi.max(p);
+        ++finite;
+    }
+    if (finite < 2) return 0.f;
+
+    // Cell edge: twice the spacing n points would have spread evenly through
+    // the bounds. A flat or linear cloud has a zero extent along one or two
+    // axes; those axes are left out and the root is taken over the axes that
+    // remain, so a sheet is sized by area and a line by length.
+    const Vector3 extent{hi.x - lo.x, hi.y - lo.y, hi.z - lo.z};
+    const float longest = std::max({extent.x, extent.y, extent.z});
+    if (!(longest > 0.f)) return 0.f;// every point coincides
+    float measure = 1.f;
+    int axes = 0;
+    for (const float e : {extent.x, extent.y, extent.z}) {
+        if (e > longest * 1e-3f) {
+            measure *= e;
+            ++axes;
+        }
+    }
+    float cell = 2.f * std::pow(measure / static_cast<float>(finite), 1.f / static_cast<float>(axes));
+    if (!(cell > 0.f)) cell = longest;
+
+    // 21 bits per axis. The grid is at most longest / cell cells wide, and
+    // the cell size ties that to the point count, so the clamp below never
+    // engages for a cloud that fits in memory.
+    constexpr uint64_t kAxisBits = 21;
+    constexpr uint64_t kAxisMask = (uint64_t{1} << kAxisBits) - 1;
+    const auto cellOf = [&](const Vector3& p, int64_t& ix, int64_t& iy, int64_t& iz) {
+        ix = static_cast<int64_t>(std::floor((p.x - lo.x) / cell));
+        iy = static_cast<int64_t>(std::floor((p.y - lo.y) / cell));
+        iz = static_cast<int64_t>(std::floor((p.z - lo.z) / cell));
+    };
+    const auto keyOf = [&](int64_t ix, int64_t iy, int64_t iz) {
+        const uint64_t ux = static_cast<uint64_t>(std::clamp<int64_t>(ix, 0, static_cast<int64_t>(kAxisMask)));
+        const uint64_t uy = static_cast<uint64_t>(std::clamp<int64_t>(iy, 0, static_cast<int64_t>(kAxisMask)));
+        const uint64_t uz = static_cast<uint64_t>(std::clamp<int64_t>(iz, 0, static_cast<int64_t>(kAxisMask)));
+        return (ux << (2 * kAxisBits)) | (uy << kAxisBits) | uz;
+    };
+
+    // Sorted (cell key, point index): a cell's members are one contiguous run,
+    // found by lower_bound.
+    std::vector<std::pair<uint64_t, uint32_t>> cells;
+    cells.reserve(finite);
+    for (size_t i = 0; i < n; ++i) {
+
+        const auto& p = points[i];
+        if (!std::isfinite(p.x) || !std::isfinite(p.y) || !std::isfinite(p.z)) continue;
+        int64_t ix, iy, iz;
+        cellOf(p, ix, iy, iz);
+        cells.emplace_back(keyOf(ix, iy, iz), static_cast<uint32_t>(i));
+    }
+    std::sort(cells.begin(), cells.end());
+
+    const auto nearestInRing = [&](const Vector3& q, uint32_t self, int64_t ring, float& bestD2) {
+        int64_t cx, cy, cz;
+        cellOf(q, cx, cy, cz);
+        for (int64_t dz = -ring; dz <= ring; ++dz)
+            for (int64_t dy = -ring; dy <= ring; ++dy)
+                for (int64_t dx = -ring; dx <= ring; ++dx) {
+
+                    // Only the shell of this ring: the interior was searched
+                    // by the previous, smaller ring.
+                    if (std::max({std::abs(dx), std::abs(dy), std::abs(dz)}) != ring) continue;
+                    const uint64_t key = keyOf(cx + dx, cy + dy, cz + dz);
+                    auto it = std::lower_bound(cells.begin(), cells.end(),
+                                               std::make_pair(key, uint32_t{0}));
+                    for (; it != cells.end() && it->first == key; ++it) {
+
+                        if (it->second == self) continue;
+                        const float d2 = q.distanceToSquared(points[it->second]);
+                        if (d2 < bestD2) bestD2 = d2;
+                    }
+                }
+    };
+
+    const size_t stride = std::max<size_t>(1, cells.size() / std::max<size_t>(1, sampleCount));
+    std::vector<float> spacing;
+    spacing.reserve(cells.size() / stride + 1);
+    constexpr int64_t kMaxRing = 3;
+    for (size_t s = 0; s < cells.size(); s += stride) {
+
+        const uint32_t idx = cells[s].second;
+        const Vector3& q = points[idx];
+        float bestD2 = std::numeric_limits<float>::infinity();
+        for (int64_t ring = 0; ring <= kMaxRing; ++ring) {
+
+            nearestInRing(q, idx, ring, bestD2);
+            // Exact once the best candidate is closer than the unsearched
+            // shell can be.
+            const float reach = static_cast<float>(ring) * cell;
+            if (bestD2 <= reach * reach) break;
+        }
+        if (bestD2 == 0.f) continue;// a duplicate point says nothing about spacing
+        spacing.push_back(std::isfinite(bestD2) ? std::sqrt(bestD2)
+                                                : static_cast<float>(kMaxRing + 1) * cell);
+    }
+    if (spacing.empty()) return 0.f;
+
+    const size_t mid = spacing.size() / 2;
+    std::nth_element(spacing.begin(), spacing.begin() + static_cast<std::ptrdiff_t>(mid), spacing.end());
+    return spacing[mid];
+}
 
 void SplatData::resize(size_t n, int degree) {
 

@@ -24,11 +24,13 @@
 #ifndef THREEPP_EDITOR_SPLATSURFACECACHE_HPP
 #define THREEPP_EDITOR_SPLATSURFACECACHE_HPP
 
+#include "threepp/extras/editor/SplatImportConfig.hpp"
 #include "threepp/extras/editor/SplatSurfaceConfig.hpp"
 #include "threepp/extras/editor/detail/ConfigCodec.hpp"
 
 #include "threepp/objects/SplatCloud.hpp"
 #include "threepp/renderers/Renderer.hpp"
+#include "threepp/splats/PointSurface.hpp"
 
 #ifdef THREEPP_WITH_VULKAN
 #include "threepp/renderers/VulkanRenderer.hpp"
@@ -38,6 +40,7 @@
 #include <cstddef>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 
 namespace threepp::editor {
 
@@ -48,8 +51,26 @@ namespace threepp::editor {
     public:
         // Which renderer can bake at all. Null reads as "no" — a headless or GL
         // session authors the config and declines to realize it.
+        // The depth-fusion bake needs the Vulkan backend.
         [[nodiscard]] static bool available(const Renderer* renderer) {
             return dynamic_cast<const VulkanRenderer*>(renderer) != nullptr;
+        }
+
+        // Which route this config takes for this cloud: the direct point
+        // surface when asked for, or under Auto when the cloud came in as a
+        // point cloud; the fusion bake otherwise.
+        [[nodiscard]] static bool usesPointRoute(const SplatCloud& cloud, const SplatSurfaceConfig& config) {
+            if (config.method == SplatSurfaceConfig::Points) return true;
+            if (config.method == SplatSurfaceConfig::Fusion) return false;
+            const auto imported = SplatImportConfig::read(cloud);
+            return imported && imported->pointCloud;
+        }
+
+        // Can THIS cloud be baked with THIS config on THIS renderer: the point
+        // route always, the fusion bake on Vulkan.
+        [[nodiscard]] static bool availableFor(const Renderer* renderer, const SplatCloud& cloud,
+                                               const SplatSurfaceConfig& config) {
+            return usesPointRoute(cloud, config) || available(renderer);
         }
 
         // The baked mesh for this node under this config, or nullptr on a miss.
@@ -74,31 +95,57 @@ namespace threepp::editor {
 
             if (const auto* hit = find(cloud, config)) return hit;
 
-            auto* vulkan = dynamic_cast<VulkanRenderer*>(renderer);
-            if (!vulkan) {
-                if (problem) *problem = "the surface bake needs the Vulkan backend";
-                return nullptr;
-            }
             if (cloud.splatCount() == 0) {
                 if (problem) *problem = "the cloud has no splats";
                 return nullptr;
             }
 
-            splats::SurfaceBakeOptions options;
-            options.voxelSize = config.voxelSize;
-            if (config.minComponentVoxels > 0) options.minComponentVoxels = config.minComponentVoxels;
-            if (config.poseCount > 0) options.poseCount = config.poseCount;
-            options.poseSet = config.interior ? splats::SurfaceBakeOptions::PoseSet::Interior
-                                              : splats::SurfaceBakeOptions::PoseSet::Orbit;
+            splats::SurfaceMesh mesh;
+            if (usesPointRoute(cloud, config)) {
 
-            auto mesh = splats::bakeSurface(*vulkan, cloud, options);
-            ++bakeCount_;
-            if (mesh.empty()) {
-                if (problem) *problem = "the bake found no surface";
-                // Not cached: an empty result is usually a scan the poses could
-                // not see, and the next press should try again rather than
-                // return the same nothing instantly.
-                return nullptr;
+                // Direct from the points, no renderer: the cloud is a set of
+                // surface samples already (a loaded point cloud), or the user
+                // asked for this route on a Gaussian scan knowing that every
+                // splat centre counts as a point there.
+                splats::PointSurfaceOptions options;
+                options.voxelSize = config.voxelSize;
+                if (config.minComponentVoxels > 0) options.minComponentVoxels = config.minComponentVoxels;
+                cloud.updateWorldMatrix(true, false);
+                mesh = splats::buildPointSurface(cloud, options);
+                ++bakeCount_;
+                if (mesh.empty()) {
+                    if (problem) {
+                        *problem = mesh.stats.refusedBlocks > 0
+                                           ? "too many occupied voxels at this voxel size - raise Voxel"
+                                           : "the points gave no surface";
+                    }
+                    return nullptr;
+                }
+
+            } else {
+
+                auto* vulkan = dynamic_cast<VulkanRenderer*>(renderer);
+                if (!vulkan) {
+                    if (problem) *problem = "the surface bake needs the Vulkan backend";
+                    return nullptr;
+                }
+
+                splats::SurfaceBakeOptions options;
+                options.voxelSize = config.voxelSize;
+                if (config.minComponentVoxels > 0) options.minComponentVoxels = config.minComponentVoxels;
+                if (config.poseCount > 0) options.poseCount = config.poseCount;
+                options.poseSet = config.interior ? splats::SurfaceBakeOptions::PoseSet::Interior
+                                                  : splats::SurfaceBakeOptions::PoseSet::Orbit;
+
+                mesh = splats::bakeSurface(*vulkan, cloud, options);
+                ++bakeCount_;
+                if (mesh.empty()) {
+                    if (problem) *problem = "the bake found no surface";
+                    // Not cached: an empty result is usually a scan the poses
+                    // could not see, and the next press should try again
+                    // rather than return the same nothing instantly.
+                    return nullptr;
+                }
             }
 
             auto& entry = entries_[cloud.uuid];
@@ -117,6 +164,21 @@ namespace threepp::editor {
         // holding meshes for a scene that is gone is a leak with a plausible
         // excuse.
         void clear() { entries_.clear(); }
+
+        // Drops every entry whose cloud is not in `root` any more. The key is
+        // the cloud's uuid and find() re-checks the transform, so an entry for
+        // a cloud that survived a scene swap (a Play/Stop hands the same object
+        // back) stays warm and one for a deleted cloud is freed.
+        void retainClouds(Object3D& root) {
+            std::unordered_set<std::string> live;
+            root.traverse([&](Object3D& o) {
+                if (o.as<SplatCloud>()) live.insert(o.uuid);
+            });
+            for (auto it = entries_.begin(); it != entries_.end();) {
+                if (live.count(it->first)) ++it;
+                else it = entries_.erase(it);
+            }
+        }
 
         // The key find() matches on, for a consumer that CACHES what a hit gave
         // it: a find() that succeeds says the mesh is current, not that it is
@@ -164,6 +226,7 @@ namespace threepp::editor {
         [[nodiscard]] std::size_t bakeCount() const { return 0; }
         [[nodiscard]] std::size_t size() const { return 0; }
         void clear() {}
+        void retainClouds(Object3D&) {}
     };
 
 #endif

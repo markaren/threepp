@@ -5,6 +5,7 @@
 #include "threepp/loaders/ObjectLoader.hpp"
 #include "threepp/materials/interfaces.hpp"
 #include "threepp/objects/ObjectWithMaterials.hpp"
+#include "threepp/objects/SplatCloud.hpp"
 #include "threepp/scenes/Scene.hpp"
 #include "threepp/textures/Texture.hpp"
 
@@ -143,6 +144,15 @@ bool SceneSnapshot::capture(Scene& scene, std::string* error) {
     }
 
     collectTextures(scene, textures_);
+
+    // The clouds, by uuid. Scene children are owned by shared_ptr, so
+    // shared_from_this is valid here (Object3D says so for exactly this case).
+    scene.traverse([&](Object3D& object) {
+        if (!object.as<SplatCloud>()) return;
+        if (auto cloud = std::dynamic_pointer_cast<SplatCloud>(object.shared_from_this())) {
+            splats_.emplace(cloud->uuid, cloud);
+        }
+    });
     return true;
 }
 
@@ -154,6 +164,12 @@ std::shared_ptr<Scene> SceneSnapshot::restore(std::string* error) const {
     }
 
     ObjectLoader loader;
+    if (!splats_.empty()) {
+        loader.setSplatCloudResolver([this](const std::string& uuid) -> std::shared_ptr<SplatCloud> {
+            const auto it = splats_.find(uuid);
+            return it == splats_.end() ? nullptr : it->second;
+        });
+    }
     std::shared_ptr<Object3D> parsed;
     try {
         parsed = loader.parse(json_);
@@ -176,4 +192,5 @@ void SceneSnapshot::clear() {
 
     json_.clear();
     textures_.clear();
+    splats_.clear();
 }

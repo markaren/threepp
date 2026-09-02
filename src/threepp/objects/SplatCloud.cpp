@@ -162,6 +162,10 @@ uniform int splatShDegree;
 uniform vec2 splatViewport;// framebuffer size in pixels
 uniform float splatNear;   // camera near plane
 uniform bool isOrthographic;
+// Point rendering (SplatCloud::setPointMix): 0 = Gaussians, 1 = a disc of
+// 3 * splatPointSigma pixels radius per splat. See pointSigmaPixels().
+uniform float splatPointMix;
+uniform float splatPointSigma;
 
 in vec3 position;   // unit quad corner, xy in [-1, 1]
 in float splatIndex;// the splat this draw slot renders (sorted)
@@ -323,6 +327,20 @@ void main() {
     float b = cov2[0][1];
     float c = cov2[1][1] + SCREEN_DILATION;
 
+    // Point mix: pull the footprint toward an isotropic disc of the requested
+    // pixel size. After the dilation, so mix 1 is exactly the disc whatever
+    // the splat was; guarded, so mix 0 leaves a, b, c untouched. The same
+    // lerp as splat_project.comp.
+    float opacity = meanOpacity.w;
+    if (splatPointMix > 0.0) {
+
+        float v = splatPointSigma * splatPointSigma;
+        a = mix(a, v, splatPointMix);
+        b = mix(b, 0.0, splatPointMix);
+        c = mix(c, v, splatPointMix);
+        opacity = mix(opacity, 1.0, splatPointMix);
+    }
+
     float det = a * c - b * b;
     if (!(det > 0.0)) {// also catches NaN
 
@@ -357,7 +375,7 @@ void main() {
     vec2 ndcQuad = ndc + vDelta * 2.0 / splatViewport;
     gl_Position = vec4(ndcQuad * clip.w, clip.z, clip.w);
 
-    vOpacity = meanOpacity.w;
+    vOpacity = opacity;
 
     vec3 meanWorld = (modelMatrix * vec4(meanLocal, 1.0)).xyz;
     vColor = shColor(splat, normalize(meanWorld - cameraPosition));
@@ -377,6 +395,8 @@ in vec3 vConic;
 in vec2 vDelta;
 
 uniform bool splatDebugNonFinite;
+uniform float splatPointMix;
+uniform float splatPointSigma;
 
 out vec4 fragColor;
 
@@ -398,7 +418,17 @@ void main() {
         discard;
     }
 
-    float alpha = vOpacity * exp(power);
+    float falloff = exp(power);
+    if (splatPointMix > 0.0) {
+
+        // The disc: distance from the centre in sigma units is sqrt(-2 power),
+        // the edge is at 3 sigma, and (3 - t) * sigma is a one-pixel ramp
+        // ending there. The same expression as splat_raster.comp.
+        float disc = clamp((3.0 - sqrt(max(0.0, -2.0 * power))) * splatPointSigma, 0.0, 1.0);
+        falloff = mix(falloff, disc, splatPointMix);
+    }
+
+    float alpha = vOpacity * falloff;
     if (!(alpha >= 0.00392156862)) {// 1/255: below this the blend is a no-op
 
         discard;
@@ -467,6 +497,8 @@ SplatCloud::SplatCloud(SplatData data)
     splatMaterial_->uniforms["splatViewport"] = Uniform(Vector2(1.f, 1.f));
     splatMaterial_->uniforms["splatNear"] = Uniform(0.1f);
     splatMaterial_->uniforms["splatDebugNonFinite"] = Uniform(false);
+    splatMaterial_->uniforms["splatPointMix"] = Uniform(pointMix_);
+    splatMaterial_->uniforms["splatPointSigma"] = Uniform(pointSigmaPixels());
 
     // The DATA TEXTURES are built LAZILY, on the first GL draw or update() —
     // see ensureGlResources. Only the GL path ever gets there, so on a Vulkan
@@ -679,6 +711,23 @@ void SplatCloud::setDebugNonFinite(bool flag) {
 
     debugNonFinite_ = flag;
     splatMaterial_->uniforms["splatDebugNonFinite"].setValue(flag);
+}
+
+void SplatCloud::setPointMix(float mix) {
+
+    pointMix_ = std::isfinite(mix) ? std::clamp(mix, 0.f, 1.f) : 0.f;
+    splatMaterial_->uniforms["splatPointMix"].setValue(pointMix_);
+}
+
+void SplatCloud::setPointSize(float pixels) {
+
+    pointSize_ = std::isfinite(pixels) ? std::max(1.f, pixels) : 2.f;
+    splatMaterial_->uniforms["splatPointSigma"].setValue(pointSigmaPixels());
+}
+
+float SplatCloud::pointSigmaPixels() const {
+
+    return (pointSize_ * 0.5f + 0.5f) / 3.f;
 }
 
 void SplatCloud::raycast(const Raycaster& raycaster, std::vector<Intersection>& intersects) {

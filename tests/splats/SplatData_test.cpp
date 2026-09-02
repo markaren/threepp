@@ -783,3 +783,69 @@ TEST_CASE("SplatData::reorderMorton: degenerate clouds are no-ops") {
         }
     }
 }
+
+
+TEST_CASE("splats::medianNeighbourSpacing: a regular grid reports its pitch") {
+
+    SECTION("a 10x10x10 lattice at pitch 0.25") {
+
+        std::vector<Vector3> pts;
+        for (int x = 0; x < 10; ++x)
+            for (int y = 0; y < 10; ++y)
+                for (int z = 0; z < 10; ++z) pts.emplace_back(x * 0.25f, y * 0.25f, z * 0.25f);
+
+        CHECK(splats::medianNeighbourSpacing(pts) == Approx(0.25f).margin(1e-5f));
+    }
+
+    SECTION("a flat 30x30 sheet at pitch 1 (one extent is zero)") {
+
+        std::vector<Vector3> pts;
+        for (int x = 0; x < 30; ++x)
+            for (int y = 0; y < 30; ++y) pts.emplace_back(static_cast<float>(x), static_cast<float>(y), 0.f);
+
+        CHECK(splats::medianNeighbourSpacing(pts) == Approx(1.f).margin(1e-5f));
+    }
+
+    SECTION("a jittered lattice lands near the pitch") {
+
+        std::vector<Vector3> pts;
+        uint32_t s = 7u;
+        auto jitter = [&] {
+            s = s * 1664525u + 1013904223u;
+            return (static_cast<float>(s >> 8) / 16777216.f - 0.5f) * 0.2f;
+        };
+        for (int x = 0; x < 12; ++x)
+            for (int y = 0; y < 12; ++y)
+                for (int z = 0; z < 12; ++z)
+                    pts.emplace_back(x + jitter(), y + jitter(), z + jitter());
+
+        const float spacing = splats::medianNeighbourSpacing(pts);
+        CHECK(spacing > 0.8f);
+        CHECK(spacing < 1.05f);
+    }
+
+    SECTION("the sample stride does not change a uniform answer") {
+
+        std::vector<Vector3> pts;
+        for (int x = 0; x < 20; ++x)
+            for (int y = 0; y < 20; ++y)
+                for (int z = 0; z < 20; ++z) pts.emplace_back(x * 2.f, y * 2.f, z * 2.f);
+
+        CHECK(splats::medianNeighbourSpacing(pts, 100) == Approx(2.f).margin(1e-5f));
+        CHECK(splats::medianNeighbourSpacing(pts, 1000000) == Approx(2.f).margin(1e-5f));
+    }
+
+    SECTION("degenerate inputs") {
+
+        CHECK(splats::medianNeighbourSpacing({}) == 0.f);
+        CHECK(splats::medianNeighbourSpacing({Vector3{1.f, 2.f, 3.f}}) == 0.f);
+        CHECK(splats::medianNeighbourSpacing({Vector3{0.f, 0.f, 0.f}, Vector3{0.f, 0.f, 0.f}}) == 0.f);
+        CHECK(splats::medianNeighbourSpacing({Vector3{0.f, 0.f, 0.f}, Vector3{3.f, 0.f, 0.f}}) ==
+              Approx(3.f).margin(1e-5f));
+
+        // A non-finite point is skipped, not counted.
+        const float nan = std::numeric_limits<float>::quiet_NaN();
+        CHECK(splats::medianNeighbourSpacing({Vector3{0.f, 0.f, 0.f}, Vector3{nan, 0.f, 0.f},
+                                              Vector3{0.f, 5.f, 0.f}}) == Approx(5.f).margin(1e-5f));
+    }
+}

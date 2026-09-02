@@ -9393,13 +9393,9 @@ int EditorApp::runSelfTest() {
               "a SOG import mark records which detail level it read");
         config.write(*cloud);
 
-        // The limitation is announced, not discovered.
-        check(warnAboutSplatClouds("Play") == 1,
-              "Play warns that the cloud is not serialized");
-
         // Re-selected, and with the console out of the way, so the picture
         // shows the whole Splats section — the source path and the
-        // not-serialized warning sit below the fold otherwise, and those are
+        // saved-by-reference note sit below the fold otherwise, and those are
         // the two lines this pass exists to put on screen.
         selectObject(cloud.get());
         const bool consoleWasOpen = bottomPanelOpen_;
@@ -9409,25 +9405,30 @@ int EditorApp::runSelfTest() {
         bottomPanelOpen_ = consoleWasOpen;
         stepFixed();
 
-        // And then it really is lost, because Stop restores from a snapshot in
-        // the same format the save file uses. Pinned deliberately: when the
-        // serialization pass lands, THIS is the assertion that has to flip.
-        const std::size_t consoleBefore = console_.size();
+        // Play/Stop restores from a snapshot in the same format the save file
+        // uses. The snapshot writes the cloud as a reference and keeps the
+        // live object (SceneSnapshot + ObjectLoader::setSplatCloudResolver),
+        // so Stop hands back the SAME cloud, re-placed, with no reload.
+        const Vector3 authoredPosition = cloud->position;
+        cloud->setPointMix(0.6f);
         startPlay();
         stepFixed(4);
-
-        // Through the real Play, not the helper: the call site is the half that
-        // can be forgotten, and a warning nobody wired up is worse than none.
-        bool warned = false;
-        for (std::size_t i = consoleBefore; i < console_.size(); ++i) {
-            if (console_[i].find("not serialized yet") != std::string::npos) warned = true;
-        }
-        check(warned, "and pressing Play really does say so, not just the helper");
-
+        cloud->position.x += 3.f;// what a session might do to it
+        cloud->setPointMix(0.f);
         stopPlay();
         stepFixed(4);
-        check(document_.scene().getObjectByName("Procedural Splats") == nullptr,
-              "and Stop drops it, which is the gap the warning is about");
+
+        auto* survivor = document_.scene().getObjectByName("Procedural Splats");
+        check(survivor != nullptr && survivor->as<SplatCloud>() != nullptr,
+              "the cloud survives Play/Stop");
+        check(survivor == cloud.get(),
+              "as the same live object, not a reload");
+        check(survivor && survivor->position.equals(authoredPosition),
+              "with its authored placement restored");
+        check(survivor && survivor->as<SplatCloud>()->pointMix() == 0.6f,
+              "and its point-mode look restored");
+        check(survivor && editor::SplatImportConfig::read(*survivor).has_value(),
+              "and its import mark still on it");
     }
 
     // A scan becomes a FLOOR. The cloud carries a surface-bake config, Play
@@ -9486,6 +9487,40 @@ int EditorApp::runSelfTest() {
         const auto interiorBack = editor::SplatSurfaceConfig::decode(interiorConfig.encode());
         check(interiorBack && *interiorBack == interiorConfig && interiorConfig != surfaceConfig,
               "the Interior pose-set flag round-trips through the config codec");
+
+        // The direct point route (splats::buildPointSurface): a Gaussian scan
+        // resolves Auto to the fusion bake, and forcing Points meshes its splat
+        // centres on the CPU with no renderer involved.
+        {
+            auto pointsConfig = surfaceConfig;
+            pointsConfig.method = editor::SplatSurfaceConfig::Points;
+            const auto pointsBack = editor::SplatSurfaceConfig::decode(pointsConfig.encode());
+            check(pointsBack && *pointsBack == pointsConfig,
+                  "the surface Method round-trips through the config codec");
+            check(!editor::SplatSurfaceCache::usesPointRoute(*scan, surfaceConfig) &&
+                          editor::SplatSurfaceCache::usesPointRoute(*scan, pointsConfig),
+                  "Auto takes the fusion bake for a Gaussian scan; Points forces the direct route");
+            check(editor::SplatSurfaceCache::availableFor(nullptr, *scan, pointsConfig),
+                  "the direct route needs no renderer");
+
+            const auto bakesBefore = splatSurfaces_->bakeCount();
+            std::string problem;
+            const auto* direct = splatSurfaces_->bake(nullptr, *scan, pointsConfig, &problem);
+            if (!direct) std::cout << "[selftest] direct point surface failed: " << problem << std::endl;
+            check(direct != nullptr && !direct->empty() && direct->stats.poses == 0,
+                  "the direct route meshes the scan's points without a renderer");
+            check(splatSurfaces_->bakeCount() == bakesBefore + 1 &&
+                          splatSurfaces_->find(*scan, pointsConfig) == direct,
+                  "and the memo caches it under its own config key");
+            if (direct) {
+                std::cout << "[selftest] direct point surface: " << direct->triangleCount()
+                          << " triangles at " << direct->stats.voxelSize << " m from "
+                          << direct->stats.observedVoxels << " voxels" << std::endl;
+                // The scan is a floor slab at y = 4: the surface must sit there.
+                check(direct->stats.aabbMin.y > 3.f && direct->stats.aabbMax.y < 5.f,
+                      "and the surface sits where the scan is");
+            }
+        }
 
         auto ball = Mesh::create(SphereGeometry::create(0.15f, 16, 12),
                                  MeshStandardMaterial::create());
@@ -9578,13 +9613,67 @@ int EditorApp::runSelfTest() {
             step(1);
         }
 
+        // A second scan as a MOVING body: a shell of points, meshed by the
+        // direct route (no renderer), split into convex hulls at Play and
+        // dropped onto the floor scan. The cloud must follow its actor down.
+        std::shared_ptr<SplatCloud> rock;
+        {
+            SplatData rockData;
+            constexpr int kRockPoints = 1500;
+            rockData.resize(kRockPoints, 0);
+            const float golden = math::PI * (3.f - std::sqrt(5.f));
+            for (int i = 0; i < kRockPoints; ++i) {
+                const float y = 1.f - 2.f * (static_cast<float>(i) + 0.5f) / kRockPoints;
+                const float r = std::sqrt(std::max(0.f, 1.f - y * y));
+                const float a = golden * static_cast<float>(i);
+                rockData.means[i].set(0.25f * r * std::cos(a), 0.25f * y, 0.25f * r * std::sin(a));
+                rockData.scales[i].set(0.01f, 0.01f, 0.01f);
+                rockData.opacities[i] = 1.f;
+                rockData.setDcColor(static_cast<std::size_t>(i), Vector3{0.6f, 0.4f, 0.3f});
+            }
+            rock = SplatCloud::create(std::move(rockData));
+            rock->name = "Scan Rock";
+            rock->position.set(-1.f, 5.2f, 0.4f);
+            addObject(rock, document_.scene(), "Add Rock Scan");
+            selectObject(nullptr);
+
+            editor::SplatSurfaceConfig rockConfig;
+            rockConfig.enabled = true;
+            rockConfig.method = editor::SplatSurfaceConfig::Points;
+            rockConfig.body = editor::SplatSurfaceConfig::Dynamic;
+            rockConfig.mass = 2.f;
+            rockConfig.hulls = 8;
+            rockConfig.write(*rock);
+            const auto rockBack = editor::SplatSurfaceConfig::read(*rock);
+            check(rockBack && *rockBack == rockConfig,
+                  "the moving-body fields round-trip on the rock scan");
+        }
+        const double rockStartY = rock->position.y;
+        const auto bakesBeforePlay = splatSurfaces_ ? splatSurfaces_->bakeCount() : 0;
+
         startPlay();
         stepFixed(240);
 
+        {
+            const double rockY = rock->position.y;
+            std::cout << "[selftest] rock scan: " << (splatSurfaceSession_ ? splatSurfaceSession_->movingCount() : 0)
+                      << " moving body, fell from y " << rockStartY << " to " << rockY << std::endl;
+            check(splatSurfaceSession_ && splatSurfaceSession_->movingCount() == 1,
+                  "Play cooks the rock scan into a dynamic compound of convex hulls");
+            check(rockY < rockStartY - 0.3,
+                  "and the cloud follows its body down");
+            if (bakeable) {
+                // Floor slab top at ~4.05, rock radius 0.25 plus its own offset
+                // skin: it rests around 4.35 and must not have gone through.
+                check(rockY > 3.8 && rockY < 4.7,
+                      "and comes to rest on the floor scan rather than through it");
+            }
+        }
+
         if (bakeable) {
-            check(splatSurfaceSession_ && splatSurfaceSession_->surfaceCount() == 1 &&
-                          splatSurfaceSession_->colliderCount() == 1,
-                  "Play bakes the scan and cooks it into one static collider");
+            check(splatSurfaceSession_ && splatSurfaceSession_->surfaceCount() == 2 &&
+                          splatSurfaceSession_->colliderCount() == 2,
+                  "Play bakes both scans: one static collider, one dynamic");
 
             // The plane the ball is graded against is the very mesh the session
             // used — read back out of the memo, not re-derived.
@@ -9609,13 +9698,16 @@ int EditorApp::runSelfTest() {
                   "and a dropped ball rests on the baked scan, within a voxel");
             check(splatSurfaceSession_ && splatSurfaceSession_->sensorSurfaces(),
                   "the sensor-only master is on while the surface plays");
-            check(splatSurfaces_ && splatSurfaces_->bakeCount() == 1,
-                  "one bake, memoized - Play did not re-fuse what the memo holds");
+            check(splatSurfaces_ && splatSurfaces_->bakeCount() == bakesBeforePlay + 1,
+                  "the floor came from the memo and only the rock baked at Play");
             check(splatSurfacePreviews_.empty(),
                   "and Play hides the edit-mode preview - its sensor twin is the surface now");
         } else {
-            check(splatSurfaceSession_ == nullptr || splatSurfaceSession_->surfaceCount() == 0,
-                  "no surface is baked on a backend that has no depth AOV");
+            // The floor needs the depth AOV and stays unbaked here; the rock
+            // took the direct route and is the one surface this play has.
+            check(splatSurfaceSession_ && splatSurfaceSession_->surfaceCount() == 1 &&
+                          splatSurfaceSession_->colliderCount() == 1,
+                  "without a depth AOV only the direct-route scan is baked");
         }
 
         stopPlay();

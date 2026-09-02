@@ -64,6 +64,84 @@ namespace threepp {
         // scan stopped, so a caller that wants to parse afterwards must seek
         // back to the magic.
         [[nodiscard]] static bool isSplatPly(std::istream& stream);
+
+        // â”€â”€ Colour-only point clouds â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+        // A PLY whose vertices carry a position and, optionally, a colour,
+        // normals and scalar fields â€” what a laser scanner, CloudCompare,
+        // MeshLab or Open3D writes â€” loaded as a SplatData of degree-0
+        // Gaussians. Every point becomes one splat: its DC colour is the
+        // point's colour (white when the file has none, grey from
+        // `intensity` when it has that instead), its opacity is
+        // PointCloudOptions::opacity, and its sigma is either the option's
+        // `sigma` or sigmaPerSpacing times the cloud's median nearest-
+        // neighbour distance (splats::medianNeighbourSpacing) â€” so at
+        // SplatCloud::setPointMix 0 the cloud renders as a closed surface and
+        // at 1 as its dots. A point with normals becomes a disc facing them:
+        // the axis along the normal is scaled by normalThickness.
+        //
+        // Accepts binary_little_endian, binary_big_endian and ascii, any
+        // numeric property type, and elements before or after the vertices
+        // (they are skipped). A mesh PLY parses too â€” its vertices become
+        // the cloud and its faces are ignored â€” which is what
+        // isPointCloudPly exists to decide against for an importer.
+        //
+        // Properties consumed: x y z; red green blue (or r g b, or
+        // diffuse_*; integer types are normalised by their range, floats
+        // taken as [0, 1] unless the cloud's maximum exceeds 1, then as
+        // [0, 255]); nx ny nz (or normal_*); intensity (or
+        // scalar_intensity); alpha is dropped. Every other numeric property
+        // lands in SplatData::extras as a float, like the splat loader's.
+        struct PointCloudOptions {
+            float sigma = 0.f;            // > 0: every point's sigma, in the file's units
+            // sigma = this * the median nearest-neighbour distance when sigma
+            // is 0. 1.0 closes a randomly sampled surface (a Poisson sampling's
+            // nearest neighbour sits at about half its mean pitch); a lattice
+            // reads as closed from ~0.6.
+            float sigmaPerSpacing = 1.0f;
+            float opacity = 1.f;
+            bool useNormals = true;       // orient a disc along nx/ny/nz when present
+            float normalThickness = 0.15f;// the disc's sigma along its normal, as a fraction of sigma
+        };
+
+        // What the loader found and decided; every field is also derivable
+        // from the returned data, this is for the console line.
+        struct PointCloudInfo {
+            std::size_t count = 0;
+            float spacing = 0.f;// median neighbour distance, 0 if not measured
+            float sigma = 0.f;  // the sigma every point got
+            bool hadColor = false;
+            bool hadNormals = false;
+            bool hadIntensity = false;
+        };
+
+        // Throws std::runtime_error, with the offending property in the
+        // message, on anything it cannot represent. A cloud of one point
+        // has no spacing and gets sigma 0.01.
+        [[nodiscard]] static SplatData loadPointCloudPly(const std::filesystem::path& path,
+                                                         const PointCloudOptions& options = {},
+                                                         PointCloudInfo* info = nullptr);
+
+        [[nodiscard]] static SplatData parsePointCloudPly(std::istream& stream,
+                                                          const PointCloudOptions& options = {},
+                                                          PointCloudInfo* info = nullptr);
+
+        // The twin of isSplatPly for an importer choosing a loader: a vertex
+        // element with x, y and z, no f_dc_0, and no `face` element declaring
+        // any faces. Header only, never throws.
+        [[nodiscard]] static bool isPointCloudPly(const std::filesystem::path& path);
+
+        [[nodiscard]] static bool isPointCloudPly(std::istream& stream);
+
+        // ── Writing ─────────────────────────────────────────────────────────
+        // The INRIA layout back out, exactly what loadPly reads: binary
+        // little-endian; x y z; f_dc_*; f_rest_* CHANNEL-major; opacity as a
+        // logit; scale_* as logs; rot_* w-first; then every extra in name
+        // order. A zero scale is written as log(1e-9) (the format has no zero)
+        // and an opacity is clamped inside (0, 1) before the logit.
+        static void writePly(const SplatData& data, std::ostream& out);
+
+        // Throws std::runtime_error when the file cannot be opened.
+        static void writePly(const SplatData& data, const std::filesystem::path& path);
     };
 
 }// namespace threepp

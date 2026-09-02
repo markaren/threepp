@@ -309,26 +309,40 @@ namespace {
                                      " - a path or permissions problem, not a format one");
         }
 
-        if (!SplatLoader::isSplatPly(path)) {
+        const bool splat = SplatLoader::isSplatPly(path);
+        const bool pointCloud = !splat && SplatLoader::isPointCloudPly(path);
+        if (!splat && !pointCloud) {
 
-            // Not a splat scan, so it belongs to the mesh path — which is
-            // unchanged, and which is where it stops: threepp has no mesh PLY
-            // loader today, and ModelLoader refuses the extension. Saying so
-            // here beats letting "no importable content in the file" stand for
-            // both "your scan is malformed" and "we cannot read mesh PLYs".
+            // Not a splat scan and not a point cloud, so it belongs to the
+            // mesh path — which is unchanged, and which is where it stops:
+            // threepp has no mesh PLY loader today, and ModelLoader refuses
+            // the extension. Saying so here beats letting "no importable
+            // content in the file" stand for both "your scan is malformed"
+            // and "we cannot read mesh PLYs".
             ModelLoader loader;
             if (auto group = loader.load(path)) return group;
             throw std::runtime_error(
-                    "no f_dc_0 property in the PLY header, so this is not a Gaussian splat scan"
+                    "no f_dc_0 property and no vertex-only element in the PLY header, so this"
+                    " is neither a Gaussian splat scan nor a point cloud"
                     " - and threepp has no mesh PLY loader");
         }
 
-        auto data = SplatLoader::loadPly(path);
+        // A colour-only point cloud (a laser scan, a photogrammetry export
+        // without Gaussians) takes the same object: one degree-0 Gaussian per
+        // point, sized from the cloud's median neighbour spacing, so it
+        // renders as a surface at point mix 0 and as its dots at 1 (the
+        // Splats section of the inspector has the slider). No outlier cull:
+        // the rule is written for the scale tail of an optimiser's output,
+        // and a point cloud has no scales of its own.
+        SplatLoader::PointCloudInfo pcInfo;
+        auto data = pointCloud ? SplatLoader::loadPointCloudPly(path, {}, &pcInfo)
+                               : SplatLoader::loadPly(path);
 
         // The two defaults a user means by "import my scan", both of them the
         // gaussian_splats example's, and both recorded so a future
         // serialization pass can reproduce this import from the file alone.
         editor::SplatImportConfig config;
+        config.pointCloud = pointCloud;
         // Stored as UTF-8; .string() narrows through the ANSI code page and
         // would mangle the same paths the drop handler just went out of its
         // way to decode correctly.
@@ -339,8 +353,10 @@ namespace {
         // splats that render as fog over the subject. The rule is
         // percentile-based against the cloud's own distribution, so it is a
         // no-op on a clean scan and carries no unit.
-        config.culled = true;
-        config.removed = data.removeOutliers();
+        if (!pointCloud) {
+            config.culled = true;
+            config.removed = data.removeOutliers();
+        }
 
         auto cloud = SplatCloud::create(std::move(data));
 
@@ -555,10 +571,9 @@ EditorApp::EditorApp(const Options& options)
         // Thumbnails are keyed by texture uuid, and the restored scene rebuilds
         // its textures — same uuid, different object. Nothing stale survives.
         clearThumbnailCache();
-        // Baked scan surfaces are keyed by the outgoing clouds' uuids, and a
-        // splat cloud never survives a scene replace in the first place (it is
-        // not serialized yet), so every entry is now unreachable megabytes.
-        if (splatSurfaces_) splatSurfaces_->clear();
+        // Baked scan surfaces are keyed by cloud uuid. A cloud that survives
+        // the swap — a Play/Stop hands the same live object back — keeps its
+        // entry warm; the pruning happens below, once the new graph is here.
         splatBakeNode_.clear();
         splatBakeStats_.clear();
         // The previews drew those meshes, and they hang off the surviving
@@ -595,6 +610,9 @@ EditorApp::EditorApp(const Options& options)
         // Before rebinding: this replaces nodes, and the command stack should
         // resolve its targets against the final graph.
         rearticulateRobots(scene);
+
+        // Entries for clouds that did not come back are unreachable megabytes.
+        if (splatSurfaces_) splatSurfaces_->retainClouds(scene);
 
         commands_.rebind(scene);
         if (!uuid.empty()) {
@@ -1517,12 +1535,6 @@ void EditorApp::saveSceneAs(const std::filesystem::path& path) {
 
     if (rejectWhilePlaying("Save As")) return;
 
-    // Said before the write rather than left to the exporter's own warning
-    // afterwards: this one names the objects and reaches the status bar, and it
-    // reads as a caveat on a save that is about to happen rather than a
-    // complaint about one that already did. ObjectExporter still warns for
-    // every other caller.
-    warnAboutSplatClouds("Save");
 
     // The look goes into the file with the geometry. Written as a difference
     // from the editor's startup state, so a document nobody adjusted the
@@ -1769,16 +1781,15 @@ void EditorApp::pollImports(float dt) {
     log(message);
     flashStatus(message);
 
-    // The gap, said once at the moment it is created rather than only when it
-    // bites. Repeated on Play and on Save, because that is where it costs
-    // something — see warnAboutSplatClouds.
     if (splatCloud) {
         if (const auto config = editor::SplatImportConfig::read(*splatCloud); config && config->culled) {
             log("culled " + std::to_string(config->removed) + " outlier splats, and flipped 180" +
                 " degrees about X for +Y-up");
         }
-        log("note: splat clouds are not serialized yet - \"" + splatCloud->name +
-            "\" is not saved with the scene and will not survive Play");
+        // Saved as a reference to the file plus these ops (ObjectExporter's
+        // threeppSplat block), so the document stays small and reopening
+        // re-imports the scan; a Play/Stop keeps the live object.
+        log("saved by reference: \"" + splatCloud->name + "\" reloads from its file when the scene opens");
     }
 }
 
@@ -4166,11 +4177,6 @@ void EditorApp::startPlay() {
     scriptsPolledKeys_ = false;
     vehicleTeleopActive_ = false;
 
-    // Before play_.play, because that is where the snapshot is taken and the
-    // cloud stops being in the document's future. Warn only; refusing to play
-    // over a splat would make the scene unusable for the thing it was imported
-    // to be looked at in.
-    warnAboutSplatClouds("Stop");
 
     std::string error;
     if (!play_.play(document_, &error)) {
@@ -4592,30 +4598,6 @@ void EditorApp::logWarnings() {
     for (const auto& warning : document_.warnings()) log("warning: " + warning);
 }
 
-std::size_t EditorApp::warnAboutSplatClouds(const char* action) {
-
-    std::vector<std::string> names;
-    document_.scene().traverse([&](Object3D& object) {
-        if (object.as<SplatCloud>()) {
-            names.push_back(object.name.empty() ? object.uuid : object.name);
-        }
-    });
-    if (names.empty()) return 0;
-
-    // Named, not counted: "1 splat cloud" tells you nothing about which of the
-    // three in the scene you are about to lose.
-    for (const auto& name : names) {
-        log(std::string("warning: splat clouds are not serialized yet - \"") + name +
-            "\" will not survive " + action);
-    }
-
-    char message[192];
-    std::snprintf(message, sizeof(message), "%s drops %zu unserialized splat cloud%s",
-                  action, names.size(), names.size() == 1 ? "" : "s");
-    flashStatus(message);
-
-    return names.size();
-}
 
 void EditorApp::beginEditIfActivated() {
 

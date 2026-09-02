@@ -13,6 +13,7 @@
 
 #include <cmath>
 #include <limits>
+#include <catch2/catch_approx.hpp>
 
 namespace {
 
@@ -445,4 +446,95 @@ TEST_CASE("GL splats: an empty cloud drawn without an explicit update is also fi
     const auto pixels = renderSplats(cloud, *camera, Color(0x000000), /*explicitUpdate*/ false);
 
     CHECK(countNonBlack(pixels) == 0);
+}
+
+
+TEST_CASE("GL splats: point mix 1 draws a disc of the requested pixel size, not the Gaussian") {
+
+    auto camera = PerspectiveCamera::create(50, 1.0f, 0.1f, 100);
+    camera->position.set(0, 0, 4);
+    camera->lookAt(Vector3{0, 0, 0});
+
+    // A wide Gaussian: at this framing sigma 0.5 is ~8.6 px, so a pixel 6 px
+    // from the centre still gets alpha ~0.78 of the green in Gaussian mode.
+    // As a 4 px disc (radius 2, feather to 2.5) that pixel is background.
+    auto cloud = makeCloud({{{0, 0, 0}, {0.f, 1.f, 0.f}, 0.5f, 0.9f}});
+    const Color background(1.f, 0.f, 0.f);
+    const int cx = RT_WIDTH / 2, cy = RT_HEIGHT / 2;
+
+    const auto gaussian = renderSplats(cloud, *camera, background);
+    const auto gCentre = pixelAt(gaussian, cx, cy);
+    const auto gSide = pixelAt(gaussian, cx + 6, cy);
+    CHECK(gCentre.g > 200.0);
+    CHECK(gSide.g > 100.0);// the Gaussian reaches out there
+
+    cloud->setPointMix(1.f);
+    cloud->setPointSize(4.f);
+    CHECK(cloud->pointMix() == 1.f);
+    CHECK(cloud->pointSize() == 4.f);
+    CHECK(cloud->pointSigmaPixels() == Catch::Approx((2.f + 0.5f) / 3.f));
+
+    const auto points = renderSplats(cloud, *camera, background);
+    const auto pCentre = pixelAt(points, cx, cy);
+    const auto pSide = pixelAt(points, cx + 6, cy);
+    INFO("centre " << pCentre.g << " side " << pSide.g);
+    // Opaque at the centre: opacity 0.9 lerps to 1 (clamped to 0.99 by the shader).
+    CHECK(pCentre.g > 245.0);
+    CHECK(pCentre.r < 10.0);
+    // Background 6 px out: the disc ended at 2.5 px.
+    CHECK(pSide.g < 5.0);
+    CHECK(pSide.r > 250.0);
+
+    // Mix 0 again is the Gaussian again.
+    cloud->setPointMix(0.f);
+    const auto back = renderSplats(cloud, *camera, background);
+    CHECK(pixelAt(back, cx + 6, cy).g == Catch::Approx(gSide.g).margin(1.0));
+
+    SECTION("the setters clamp") {
+
+        cloud->setPointMix(3.f);
+        CHECK(cloud->pointMix() == 1.f);
+        cloud->setPointMix(-1.f);
+        CHECK(cloud->pointMix() == 0.f);
+        cloud->setPointSize(0.f);
+        CHECK(cloud->pointSize() == 1.f);
+        cloud->setPointSize(std::numeric_limits<float>::quiet_NaN());
+        CHECK(cloud->pointSize() == 2.f);
+    }
+}
+
+TEST_CASE("GL splats: at point mix 1 the nearest point wins, whatever its opacity") {
+
+    auto camera = PerspectiveCamera::create(50, 1.0f, 0.1f, 100);
+    camera->position.set(0, 0, 4);
+    camera->lookAt(Vector3{0, 0, 0});
+
+    // Two faint splats on the view axis, red in front of green. As Gaussians
+    // the centre is a blend of both over the background; as points the front
+    // one covers the back one outright.
+    auto cloud = makeCloud({{{0, 0, 1.0f}, {1.f, 0.f, 0.f}, 0.2f, 0.3f},
+                            {{0, 0, 0.0f}, {0.f, 1.f, 0.f}, 0.2f, 0.3f}});
+    const Color background(0.f, 0.f, 1.f);
+    const int cx = RT_WIDTH / 2, cy = RT_HEIGHT / 2;
+
+    const auto blended = pixelAt(renderSplats(cloud, *camera, background), cx, cy);
+    CHECK(blended.r > 40.0);
+    CHECK(blended.g > 40.0);
+    CHECK(blended.b > 40.0);
+
+    cloud->setPointMix(1.f);
+    cloud->setPointSize(6.f);
+    const auto front = pixelAt(renderSplats(cloud, *camera, background), cx, cy);
+    INFO("front " << front.r << "," << front.g << "," << front.b);
+    CHECK(front.r > 245.0);
+    CHECK(front.g < 8.0);
+    CHECK(front.b < 8.0);
+
+    // From the other side the green point is the near one.
+    camera->position.set(0, 0, -4);
+    camera->lookAt(Vector3{0, 0, 0});
+    const auto behind = pixelAt(renderSplats(cloud, *camera, background), cx, cy);
+    INFO("behind " << behind.r << "," << behind.g << "," << behind.b);
+    CHECK(behind.g > 245.0);
+    CHECK(behind.r < 8.0);
 }

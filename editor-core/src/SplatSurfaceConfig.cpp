@@ -27,6 +27,14 @@ std::string SplatSurfaceConfig::encode() const {
     out += std::to_string(poseCount);
     out += ";interior=";
     out += interior ? "1" : "0";
+    out += ";method=";
+    out += std::to_string(method);
+    out += ";body=";
+    out += std::to_string(body);
+    out += ";mass=";
+    out += number(mass);
+    out += ";hulls=";
+    out += std::to_string(hulls);
     return out;
 }
 
@@ -45,8 +53,22 @@ std::optional<SplatSurfaceConfig> SplatSurfaceConfig::decode(const std::string& 
             config.poseCount = toInt(value, config.poseCount);
         } else if (key == "interior") {
             config.interior = toBool(value, config.interior);
+        } else if (key == "method") {
+            config.method = toInt(value, config.method);
+        } else if (key == "body") {
+            config.body = toInt(value, config.body);
+        } else if (key == "mass") {
+            config.mass = toFloat(value, config.mass);
+        } else if (key == "hulls") {
+            config.hulls = toInt(value, config.hulls);
         }
     });
+    config.method = std::clamp(config.method, static_cast<int>(SplatSurfaceConfig::Auto),
+                               static_cast<int>(SplatSurfaceConfig::Points));
+    config.body = std::clamp(config.body, static_cast<int>(SplatSurfaceConfig::Static),
+                             static_cast<int>(SplatSurfaceConfig::Kinematic));
+    config.mass = std::max(config.mass, 1e-3f);
+    config.hulls = std::clamp(config.hulls, 1, 256);
 
     // 0 means "let the bake decide" for both derived knobs, so the floor is 0
     // and not a minimum sane value.

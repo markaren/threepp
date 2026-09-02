@@ -62,6 +62,32 @@ namespace threepp::editor {
         // except that a robot cannot walk in it.
         bool interior = false;
 
+        // How the surface is built. Auto takes the direct point route for a
+        // cloud imported as a point cloud (SplatImportConfig::pointCloud) and
+        // the depth-fusion bake for a Gaussian scan; the other two force one.
+        // The point route needs no renderer at all (splats::buildPointSurface);
+        // the fusion bake needs Vulkan (splats::bakeSurface).
+        enum Method : int { Auto = 0, Fusion = 1, Points = 2 };
+        int method = Auto;
+
+        // What the surface IS in the physics world. Static (the default) cooks
+        // the triangles as they are: exact, and free for a scan of a site. A
+        // moving body cannot carry a triangle mesh in PhysX, so Dynamic and
+        // Kinematic split the surface into convex hulls (V-HACD, `hulls` of
+        // them at most) and weld those into one rigid actor at the cloud's
+        // pose: Dynamic is simulated and the cloud follows it; Kinematic is
+        // driven by the cloud's own transform and pushes dynamics aside.
+        enum Body : int { Static = 0, Dynamic = 1, Kinematic = 2 };
+        int body = Static;
+
+        // Kilograms, for a Dynamic body. Authored directly, like
+        // PhysicsConfig::mass; the inertia follows from the hulls.
+        float mass = 10.f;
+
+        // V-HACD budget for a moving body. More hulls follow concavities more
+        // closely and cost more at cook time and per contact.
+        int hulls = 16;
+
         static constexpr const char* userDataKey = "splatSurface";
 
         [[nodiscard]] std::string encode() const;
@@ -79,7 +105,8 @@ namespace threepp::editor {
         bool operator==(const SplatSurfaceConfig& other) const {
             return enabled == other.enabled && voxelSize == other.voxelSize &&
                    minComponentVoxels == other.minComponentVoxels && poseCount == other.poseCount &&
-                   interior == other.interior;
+                   interior == other.interior && method == other.method && body == other.body &&
+                   mass == other.mass && hulls == other.hulls;
         }
         bool operator!=(const SplatSurfaceConfig& other) const { return !(*this == other); }
     };

@@ -168,6 +168,21 @@ namespace threepp::objectjson {
     // hunting for a file that never existed on disk.
     inline constexpr char archiveAssetMark = '|';
 
+    // ── Splat clouds ────────────────────────────────────────────────────────
+    // A SplatCloud is written as a `threeppSplat` block: a file to load the
+    // splats from plus what the importer did to them, never the splats
+    // themselves (a scan is gigabytes; the .ply is the better container). The
+    // two userData keys are the editor's SplatImportConfig ones, read here by
+    // name so the library needs nothing from editor-core.
+    inline constexpr const char* splatSourceKey = "splatSource";
+    inline constexpr const char* splatOpsKey = "splatImportOps";
+    // Where a cloud's bytes go inside an archive: a copy of its source file,
+    // or a freshly written .ply when it never had one.
+    inline constexpr const char* archiveSplatDir = "splats/";
+    // The sidecar directory next to a loose document, for a cloud with no
+    // source file.
+    inline constexpr const char* splatSidecarDir = "splats/";
+
     // Splits a mark into its two halves. False when `text` is an ordinary path,
     // which is the common case and not an error.
     inline bool splitArchiveAsset(const std::string& text, std::string& archive, std::string& entry) {

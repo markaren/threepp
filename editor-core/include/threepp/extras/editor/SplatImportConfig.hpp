@@ -1,11 +1,15 @@
 // Where a splat cloud came from, and what the importer did to it on the way in.
 //
-// A SplatCloud is NOT serialized yet — ObjectExporter skips it and says so, and
-// the object is lost on save and on Play-restore. This mark exists anyway, and
-// costs nothing now: it is the hook the serialization pass will read. When that
-// pass lands, "re-load this file and re-apply these operations" is the whole of
-// what a document needs to store for an imported scan, because a .ply on disk
-// is a far better container for a million Gaussians than three.js JSON is.
+// This mark is what ObjectExporter serializes a SplatCloud FROM: it writes a
+// `threeppSplat` block holding the source path (relative to the document when
+// it can be) and the ops to replay, and ObjectLoader re-imports the file and
+// replays them on open. "Re-load this file and re-apply these operations" is
+// the whole of what a document needs to store for an imported scan, because a
+// .ply on disk is a far better container for a million Gaussians than three.js
+// JSON is. A cloud with no source (a procedural one) gets a sidecar .ply next
+// to the document, or a member of the .tpz. The keys are read by name in the
+// library (ObjectJsonConstants.hpp's splatSourceKey / splatOpsKey), so they
+// must not change here without changing there.
 //
 // Only what CANNOT be recovered from the live object is recorded. The splat
 // count and the SH degree are already on the cloud (splatCount(), data()), and
@@ -69,6 +73,12 @@ namespace threepp::editor {
         // a re-import has to be able to tell "level 0" from "no levels at all",
         // and 0 cannot say both.
         int lod = -1;
+
+        // The file held a colour-only point cloud (no f_dc_0), imported
+        // through SplatLoader::loadPointCloudPly: one isotropic degree-0
+        // Gaussian per point, sized from the median neighbour spacing. A
+        // re-import has to take that loader again rather than the splat one.
+        bool pointCloud = false;
 
         static constexpr const char* sourceKey = "splatSource";
         static constexpr const char* opsKey = "splatImportOps";

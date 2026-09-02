@@ -50,7 +50,41 @@ namespace threepp_py {
                 .def_static("is_splat_ply", py::overload_cast<const std::filesystem::path&>(&SplatLoader::isSplatPly),
                             py::arg("path"),
                             "Does this .ply hold Gaussian splats rather than a mesh? Reads only the "
-                            "header and never raises — a missing or malformed file is simply False.");
+                            "header and never raises — a missing or malformed file is simply False.")
+                .def_static("write_ply",
+                            [](const SplatData& data, const std::filesystem::path& path) {
+                                SplatLoader::writePly(data, path);
+                            },
+                            py::arg("data"), py::arg("path"),
+                            "Write a SplatData as a 3DGS .ply (the INRIA layout load_ply reads: "
+                            "channel-major f_rest, log scales, logit opacity, w-first rotation). "
+                            "Raises RuntimeError if the file cannot be written.")
+                .def_static("is_point_cloud_ply",
+                            py::overload_cast<const std::filesystem::path&>(&SplatLoader::isPointCloudPly),
+                            py::arg("path"),
+                            "Does this .ply hold a colour-only point cloud (x/y/z, no f_dc_0, no "
+                            "faces)? Header only, never raises.")
+                .def_static(
+                        "load_point_cloud_ply",
+                        [](const std::filesystem::path& path, float sigma, float sigma_per_spacing,
+                           float opacity, bool use_normals, float normal_thickness) {
+                            SplatLoader::PointCloudOptions o;
+                            o.sigma = sigma;
+                            o.sigmaPerSpacing = sigma_per_spacing;
+                            o.opacity = opacity;
+                            o.useNormals = use_normals;
+                            o.normalThickness = normal_thickness;
+                            return SplatLoader::loadPointCloudPly(path, o);
+                        },
+                        py::arg("path"), py::arg("sigma") = 0.f, py::arg("sigma_per_spacing") = 1.0f,
+                        py::arg("opacity") = 1.f, py::arg("use_normals") = true,
+                        py::arg("normal_thickness") = 0.15f,
+                        "Load a colour-only point-cloud .ply (binary or ascii; red/green/blue, "
+                        "nx/ny/nz and intensity honoured) as a SplatData of degree-0 Gaussians, "
+                        "one per point. sigma 0 sizes them from the cloud's median neighbour "
+                        "spacing times sigma_per_spacing; a point with normals becomes a disc "
+                        "facing them. Render with SplatCloud.point_mix = 1 for dots, 0 for a "
+                        "closed surface.");
 
         // Bound as a subclass of the already-registered Mesh: Mesh is a
         // non-virtual base of SplatCloud, so the concrete Object3D API bound on
@@ -83,6 +117,13 @@ namespace threepp_py {
                      py::arg("width"), py::arg("height"),
                      "Override the framebuffer pixel size used for splat scaling — only needed "
                      "when rendering into a target whose size differs from the renderer's own.")
+                .def_property("point_mix", &SplatCloud::pointMix, &SplatCloud::setPointMix,
+                              "0 (default) renders Gaussians; 1 renders every splat as an opaque "
+                              "disc of point_size pixels at its centre, nearest wins — the point "
+                              "cloud view. Values between dissolve one into the other. Same depth "
+                              "sort and mesh occlusion on both backends.")
+                .def_property("point_size", &SplatCloud::pointSize, &SplatCloud::setPointSize,
+                              "Disc diameter in pixels at point_mix 1. Floored at 1; default 2.")
                 .def_property("debug_non_finite",
                               &SplatCloud::debugNonFinite,
                               &SplatCloud::setDebugNonFinite,

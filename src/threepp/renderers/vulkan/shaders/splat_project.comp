@@ -74,9 +74,21 @@ void main() {
 
     const mat3 cov2 = J * sigmaView * transpose(J);
 
-    const float a = cov2[0][0] + kScreenDilation;
-    const float b = cov2[0][1];
-    const float c = cov2[1][1] + kScreenDilation;
+    float a = cov2[0][0] + kScreenDilation;
+    float b = cov2[0][1];
+    float c = cov2[1][1] + kScreenDilation;
+
+    // Point mix: pull the footprint toward an isotropic disc of the requested
+    // pixel size. After the dilation, so mix 1 is exactly the disc whatever
+    // the splat was; guarded, so mix 0 leaves a, b, c untouched.
+    float opacity = geom[i].opacity;
+    if (ubo.pointMix > 0.0) {
+        const float v = ubo.pointSigma * ubo.pointSigma;
+        a = mix(a, v, ubo.pointMix);
+        b = mix(b, 0.0, ubo.pointMix);
+        c = mix(c, v, ubo.pointMix);
+        opacity = mix(opacity, 1.0, ubo.pointMix);
+    }
 
     const float det = a * c - b * b;
     if (!(det > 0.0)) return;// also catches NaN
@@ -136,7 +148,7 @@ void main() {
 
     proj[dst].center    = center;
     proj[dst].conic     = vec3(c, -b, a) / det;
-    proj[dst].opacity   = geom[i].opacity;
+    proj[dst].opacity   = opacity;
     proj[dst].color     = color;
     proj[dst].viewDist  = dist;
     proj[dst].tileX0    = tx0;

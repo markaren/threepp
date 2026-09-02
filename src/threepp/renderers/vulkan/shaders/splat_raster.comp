@@ -112,7 +112,16 @@ void main() {
                 // Negated so NaN — which fails every comparison — is rejected.
                 if (!(power <= 0.0)) continue;
 
-                float alpha = sOpacity[k] * exp(power);
+                float falloff = exp(power);
+                if (ubo.pointMix > 0.0) {
+                    // The disc: distance from the centre in sigma units is
+                    // sqrt(-2 power), the edge is at 3 sigma, and
+                    // (3 - t) * sigma is a one-pixel ramp ending there.
+                    const float disc = clamp((3.0 - sqrt(max(0.0, -2.0 * power))) * ubo.pointSigma,
+                                             0.0, 1.0);
+                    falloff = mix(falloff, disc, ubo.pointMix);
+                }
+                float alpha = sOpacity[k] * falloff;
                 if (!(alpha >= kMinAlpha)) continue;
                 alpha = min(kMaxAlpha, alpha);
 

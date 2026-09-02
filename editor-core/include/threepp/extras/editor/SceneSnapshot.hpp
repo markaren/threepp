@@ -26,6 +26,7 @@ namespace threepp {
 
     class Object3D;
     class Scene;
+    class SplatCloud;
     class Texture;
 
 }// namespace threepp
@@ -64,6 +65,14 @@ namespace threepp::editor {
     private:
         std::string json_;
         std::unordered_map<std::string, std::shared_ptr<Texture>> textures_;
+
+        // The splat clouds, kept live for the same reason as the textures and
+        // a bigger one: the document holds a reference to a file, and reading
+        // a scan back is seconds and a gigabyte of host memory plus a GPU
+        // re-upload. restore() hands these to the loader by uuid
+        // (ObjectLoader::setSplatCloudResolver); the loader re-applies the
+        // captured placement and look to the same object.
+        std::unordered_map<std::string, std::shared_ptr<SplatCloud>> splats_;
     };
 
 }// namespace threepp::editor

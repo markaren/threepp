@@ -20,6 +20,10 @@
 #include "threepp/geometries/TorusKnotGeometry.hpp"
 #include "threepp/lights/lights.hpp"
 #include "threepp/loaders/AssetSource.hpp"
+#include "threepp/loaders/SogLoader.hpp"
+#include "threepp/loaders/SplatLoader.hpp"
+#include "threepp/objects/SplatCloud.hpp"
+#include "threepp/splats/SplatLod.hpp"
 #include "threepp/loaders/ImageLoader.hpp"
 #include "threepp/loaders/ModelLoader.hpp"
 #include "threepp/loaders/URDFLoader.hpp"
@@ -1164,6 +1168,9 @@ namespace {
         // say which archive it came from — see resolveLinkedAsset.
         const ZipReader* archive{nullptr};
         const std::filesystem::path& archivePath;
+        // ObjectLoader::setSplatCloudResolver, consulted before a splat cloud
+        // is loaded from its file. Null or empty means always load.
+        const ObjectLoader::SplatCloudResolver* splatResolver{nullptr};
     };
 
     std::shared_ptr<BufferGeometry> lookupGeometry(const json& j, const ParseContext& ctx) {
@@ -1248,6 +1255,8 @@ namespace {
 
         shadow.camera->updateProjectionMatrix();
     }
+
+    std::shared_ptr<Object3D> createSplatCloud(const json& j, const ParseContext& ctx);
 
     std::shared_ptr<Object3D> createObject(const json& j, const ParseContext& ctx) {
 
@@ -1393,6 +1402,7 @@ namespace {
         }
         if (type == "Group") return Group::create();
         if (type == "Bone") return Bone::create();
+        if (type == "SplatCloud") return createSplatCloud(j, ctx);
         // A robot writes its type as the plain Object3D it also is, so a reader
         // without the articulation extension still gets the hierarchy — frozen,
         // exactly as before this existed. With it, the object comes back live.
@@ -1793,6 +1803,179 @@ namespace {
         return imported;
     }
 
+    // ------------------------------------------------------- splat clouds
+
+    // Where a `threeppSplat` path resolves to on this machine: an archive
+    // member extracted to a temp file (kept alive by `extracted`), or a path
+    // relative to the document made absolute. `mark` is what userData's source
+    // entry should say afterwards — the archive-and-entry mark for a member,
+    // the absolute path otherwise — so a re-save copies the same bytes.
+    bool resolveSplatPath(const std::string& stored, const ParseContext& ctx,
+                          std::optional<TempAsset>& extracted, std::filesystem::path& path,
+                          std::string& mark, std::string& why) {
+
+        std::string markArchive, markEntry;
+        std::optional<ZipReader> other;
+        const ZipReader* holder = nullptr;
+
+        if (splitArchiveAsset(stored, markArchive, markEntry)) {
+
+            try {
+                other.emplace(markArchive);
+                holder = &*other;
+            } catch (const std::exception& e) {
+                why = "could not open archive '" + markArchive + "': " + e.what();
+                return false;
+            }
+
+        } else if (ctx.archive && ctx.archive->has(stored)) {
+
+            markArchive = ctx.archivePath.generic_string();
+            markEntry = stored;
+            holder = ctx.archive;
+        }
+
+        if (holder) {
+
+            if (!holder->has(markEntry)) {
+                why = "archive '" + markArchive + "' has no entry '" + markEntry + "'";
+                return false;
+            }
+            extracted.emplace(markEntry, holder->read(markEntry));
+            if (!extracted->ok()) {
+                why = "could not extract '" + markEntry + "' from '" + markArchive + "'";
+                return false;
+            }
+            path = extracted->path();
+            mark = markArchive + archiveAssetMark + markEntry;
+            return true;
+        }
+
+        path = std::filesystem::u8path(stored);
+        if (path.is_relative() && !ctx.resourcePath.empty()) path = ctx.resourcePath / path;
+        std::error_code ec;
+        if (auto canonical = std::filesystem::weakly_canonical(path, ec); !ec && !canonical.empty()) {
+            path = canonical;
+        }
+        const auto u8 = path.u8string();
+        mark = std::string(u8.begin(), u8.end());
+        return true;
+    }
+
+    // A splat cloud, from the `threeppSplat` block ObjectExporter wrote: the
+    // live object the resolver hands back (the play snapshot's case), else
+    // the file loaded by its content — a SOG asset, a 3DGS .ply or a colour
+    // point cloud — with the importer's ops replayed. Anything that fails
+    // leaves a plain Object3D placeholder, placed and named, with a warning.
+    std::shared_ptr<Object3D> createSplatCloud(const json& j, const ParseContext& ctx) {
+
+        const std::string name = value<std::string>(j, "name", value<std::string>(j, "uuid", "?"));
+        const auto placeholder = [&](const std::string& why) -> std::shared_ptr<Object3D> {
+            ctx.warnings.add("splat cloud '" + name + "' could not be restored: " + why +
+                             " - an empty node stands in for it");
+            return Object3D::create();
+        };
+
+        if (!j.contains("threeppSplat") || !j["threeppSplat"].is_object()) {
+            return placeholder("no threeppSplat block");
+        }
+        const json& ref = j["threeppSplat"];
+        const float pointMix = value(ref, "pointMix", 0.f);
+        const float pointSize = value(ref, "pointSize", 2.f);
+
+        if (ctx.splatResolver && *ctx.splatResolver) {
+            if (auto live = (*ctx.splatResolver)(value<std::string>(j, "uuid", ""))) {
+                live->setPointMix(pointMix);
+                live->setPointSize(pointSize);
+                return live;
+            }
+        }
+
+        const auto stored = value<std::string>(ref, "path", "");
+        if (stored.empty()) {
+            return placeholder("the document carries no file for it (a snapshot without its live object?)");
+        }
+
+        std::optional<TempAsset> extracted;
+        std::filesystem::path path;
+        std::string mark, why;
+        if (!resolveSplatPath(stored, ctx, extracted, path, mark, why)) return placeholder(why);
+
+        const bool cull = value(ref, "cull", false);
+        const int lod = value(ref, "lod", -1);
+
+        SplatData data;
+        splats::LodTable table;
+        try {
+
+            if (SogLoader::isSog(path)) {
+                if (lod >= 0) {
+                    data = SogLoader::load(path, {lod});
+                } else {
+                    auto loaded = splats::loadSogWithLod(path);
+                    data = std::move(loaded.data);
+                    table = std::move(loaded.table);
+                }
+            } else if (SplatLoader::isSplatPly(path)) {
+                data = SplatLoader::loadPly(path);
+            } else if (SplatLoader::isPointCloudPly(path)) {
+                data = SplatLoader::loadPointCloudPly(path);
+            } else {
+                std::error_code ec;
+                return placeholder(std::filesystem::exists(path, ec)
+                                           ? "'" + path.string() + "' is not a splat scan or a point cloud"
+                                           : "'" + path.string() + "' does not exist");
+            }
+
+        } catch (const std::exception& e) {
+            return placeholder(e.what());
+        }
+
+        // The importer's cull, replayed on the same data: deterministic, so
+        // the same splats go. Never under a LOD table, whose offsets it would
+        // invalidate (the editor's import makes the same exception).
+        if (cull && table.empty()) data.removeOutliers();
+
+        auto cloud = SplatCloud::create(std::move(data));
+        if (!table.empty()) cloud->setLodTable(std::move(table));
+        cloud->setPointMix(pointMix);
+        cloud->setPointSize(pointSize);
+        // Where the file is NOW, for the inspector and the next save. parseObject
+        // overwrites userData from the document right after this; restampSplatSource
+        // puts it back.
+        cloud->userData[splatSourceKey] = mark;
+        return cloud;
+    }
+
+    // After the document's userData landed on the cloud: the source entry it
+    // carries is the saving machine's absolute path, and the one createSplatCloud
+    // resolved is this machine's. Same rule as assetSource on a linked model.
+    void restampSplatSource(Object3D& object, const json& j, const ParseContext& ctx) {
+
+        auto* cloud = dynamic_cast<SplatCloud*>(&object);
+        if (!cloud || !j.contains("threeppSplat")) return;
+        const auto stored = value<std::string>(j["threeppSplat"], "path", "");
+        if (stored.empty()) return;
+
+        std::optional<TempAsset> extracted;// not extracted here: has() decides the mark
+        std::string markArchive, markEntry, mark;
+        if (splitArchiveAsset(stored, markArchive, markEntry)) {
+            mark = stored;
+        } else if (ctx.archive && ctx.archive->has(stored)) {
+            mark = ctx.archivePath.generic_string() + archiveAssetMark + stored;
+        } else {
+            std::filesystem::path path = std::filesystem::u8path(stored);
+            if (path.is_relative() && !ctx.resourcePath.empty()) path = ctx.resourcePath / path;
+            std::error_code ec;
+            if (auto canonical = std::filesystem::weakly_canonical(path, ec); !ec && !canonical.empty()) {
+                path = canonical;
+            }
+            const auto u8 = path.u8string();
+            mark = std::string(u8.begin(), u8.end());
+        }
+        object.userData[splatSourceKey] = mark;
+    }
+
     std::shared_ptr<Object3D> parseObject(const json& j, const ParseContext& ctx) {
 
         auto object = createObject(j, ctx);
@@ -1820,6 +2003,7 @@ namespace {
         }
 
         if (j.contains("userData")) applyUserData(*object, j["userData"], ctx.warnings);
+        restampSplatSource(*object, j, ctx);
 
         if (j.contains("animations")) {
             for (const auto& entry : j["animations"]) {
@@ -1963,6 +2147,11 @@ void ObjectLoader::setResourcePath(const std::filesystem::path& path) {
     resourcePath_ = path;
 }
 
+void ObjectLoader::setSplatCloudResolver(SplatCloudResolver resolver) {
+
+    splatResolver_ = std::move(resolver);
+}
+
 const std::vector<std::string>& ObjectLoader::warnings() const {
 
     return warnings_;
@@ -1998,7 +2187,7 @@ std::shared_ptr<Object3D> ObjectLoader::parse(const std::string& jsonText) {
     const auto materials = parseMaterials(j.contains("materials") ? j["materials"] : json(), textures, warnings);
 
     const ParseContext ctx{geometries, materials, textures, animations, warnings,
-                           resourcePath_, archive_.get(), archivePath_};
+                           resourcePath_, archive_.get(), archivePath_, &splatResolver_};
 
     auto object = parseObject(j["object"], ctx);
 
