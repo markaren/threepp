@@ -6003,6 +6003,18 @@ class PhysxWorld:
         """
         Add a static collider inferred from the mesh's Box/Sphere/Capsule geometry. `material` (from create_material) sets its friction/restitution — e.g. a grippy floor.
         """
+    def add_static_heightfield(self, heights: typing.Annotated[numpy.typing.ArrayLike, numpy.float32], cell: typing.SupportsFloat | typing.SupportsIndex, origin: Vector3, thickness: typing.SupportsFloat | typing.SupportsIndex = 0.5) -> RigidBody:
+        """
+        Add a 2.5D height field as a static collider, in a Z-UP world.
+        
+        `heights` is a 2-D float32/float64 array of shape (ny, nx): ROWS ARE Y. heights[iy, ix] is the surface z at world (origin.x + ix*cell, origin.y + iy*cell), with `cell` the sample spacing in metres, the same in x and y. A (nx, ny) grid indexed the other way round must be passed transposed. Heights are quantised to int16 against the field's own z range (0.6 mm for a 20 m range), and a non-finite sample is pinned to the field's floor rather than poisoning the whole grid.
+        
+        Use this instead of add_static_trimesh wherever the collider is terrain: a height field cannot represent a HOLE or a near-vertical SPIKE, which is what a marching-cubes bake of a scan is full of, and it costs ~4 bytes a sample against ~100 for the same surface as triangles.
+        
+        `thickness` is how deep below the surface the field is meant to stay solid. PhysX 5 has no such knob (PxHeightFieldDesc::thickness was a PhysX 3 field) and a height field is a surface, not a volume: measured, a 4 cm ball at 6 m/s tunnels through it exactly as it tunnels through the same surface as a trimesh. Nothing tunnels while the body's diameter exceeds its per-substep travel. The argument is accepted and validated (> 0) but PhysX cannot honour it.
+        
+        Returns a RigidBody; the world owns the actor.
+        """
     def add_static_trimesh(self, mesh: Mesh) -> RigidBody:
         """
         Add a static collider matching the mesh triangles exactly (static/kinematic only).

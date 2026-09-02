@@ -808,7 +808,7 @@ def main():
             if not hasattr(world, "add_static_heightfield"):
                 print("[skip] heightfield: this pyd has no add_static_heightfield")
                 continue
-            body = world.add_static_heightfield(grid.H, cell=grid.cell,
+            body = world.add_static_heightfield(grid.H.T, cell=grid.cell,
                                                 origin=tp.Vector3(grid.x0, grid.y0, 0.0))
         else:
             raise SystemExit(f"unknown collider {name!r}")

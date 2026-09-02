@@ -624,7 +624,7 @@ def main():
                     raise SystemExit("--collider heightfield needs a pyd with "
                                      "PhysxWorld.add_static_heightfield (build threepp_py)")
                 body = world.add_static_heightfield(
-                    hgrid[0].H, cell=hgrid[0].cell,
+                    hgrid[0].H.T, cell=hgrid[0].cell,
                     origin=tp.Vector3(hgrid[0].x0, hgrid[0].y0, 0.0))
                 print(f"[collider] heightfield: PxHeightField {hgrid[0].shape} at "
                       f"{hgrid[0].cell} m, thickness 0.5 = {body}")
@@ -681,7 +681,7 @@ def main():
                 body = world.add_static_trimesh(sensor_mesh)
             elif args.collider == "heightfield":
                 body = world.add_static_heightfield(
-                    hgrid[0].H, cell=hgrid[0].cell,
+                    hgrid[0].H.T, cell=hgrid[0].cell,
                     origin=tp.Vector3(hgrid[0].x0, hgrid[0].y0, 0.0))
             else:
                 body = world.add_static_trimesh(hgrid[0].to_mesh())
