@@ -804,6 +804,49 @@ namespace threepp_py {
                      [](PyVulkanRenderer& r, uint32_t handle) { return r.native().viewSensorSurfaces(handle); },
                      py::arg("handle"),
                      "Whether this view has asked for sensor-only surfaces.")
+                // ── Splat depth AOV ──────────────────────────────────────
+                // The one G-buffer channel that is not always allocated: a
+                // full-res r32f per frame in flight, off unless asked for or
+                // latched on. Read it with read_gbuffer_aov_raw('splat_depth').
+                .def("set_splat_depth_aov",
+                     [](PyVulkanRenderer& r, const std::string& mode) {
+                         using M = VulkanRenderer::SplatDepthMode;
+                         M m{};
+                         if (mode == "off" || mode == "none") m = M::Off;
+                         else if (mode == "expected" || mode == "mean") m = M::Expected;
+                         else if (mode == "median") m = M::Median;
+                         else throw std::invalid_argument(
+                                 "unknown splat depth mode '" + mode + "' (off/expected/median)");
+                         r.native().setSplatDepthAov(m);
+                     },
+                     py::arg("mode"),
+                     "Ask for the Gaussian-splat depth AOV: 'off', 'expected' (the "
+                     "transmittance-weighted mean view distance) or 'median' (the front of the "
+                     "cloud — what an occlusion test wants). A SETUP knob: turning it on or off "
+                     "reallocates the render targets, so call it once before the loop, not per "
+                     "frame. Changing only the statistic reallocates nothing. Primary view only.")
+                .def_property_readonly("splat_depth_aov",
+                                       [](PyVulkanRenderer& r) { return r.native().splatDepthAov(); },
+                                       "Whether the APPLICATION asked for the splat depth AOV. Note "
+                                       "the renderer also turns it on by itself — the first frame a "
+                                       "scene holds both splat clouds and overlay content (lines, "
+                                       "wireframe, world sprites, unlit transparent meshes), so the "
+                                       "cloud can occlude them — and that does NOT show up here. A "
+                                       "read_gbuffer_aov_raw('splat_depth') can therefore succeed "
+                                       "while this is False; it returns None only when the AOV is "
+                                       "genuinely unallocated (a 1x1 placeholder).")
+                .def_property_readonly("splat_depth_aov_mode",
+                                       [](PyVulkanRenderer& r) {
+                                           switch (r.native().splatDepthAovMode()) {
+                                               case VulkanRenderer::SplatDepthMode::Expected: return "expected";
+                                               case VulkanRenderer::SplatDepthMode::Median: return "median";
+                                               default: return "off";
+                                           }
+                                       },
+                                       "Which statistic set_splat_depth_aov asked for: 'off', "
+                                       "'expected' or 'median'. 'off' with a readable AOV means the "
+                                       "renderer latched it on for overlay occlusion, in which case "
+                                       "the image carries the median.")
                 .def("read_scene_pixels", &PyVulkanRenderer::read_scene_pixels,
                      "Last captured scene-only RGB (post-TAA, pre-overlay; no sprite/ImGui) as "
                      "(H, W, 3) uint8. Requires scene_capture=True.")
@@ -1245,7 +1288,8 @@ namespace threepp_py {
                      "'splat_depth' (or FrameChannel values). view=0 is the primary; anything "
                      "else must be a live add_view handle.\n\n"
                      "Returns a list of dicts, one per EXPORTABLE channel — duplicates collapse "
-                     "and unexportable ones are skipped ('splat_depth' without splat_depth_aov), "
+                     "and unexportable ones are skipped ('splat_depth' while the AOV is "
+                     "unallocated — neither set_splat_depth_aov nor the overlay-occlusion latch), "
                      "so match on the 'channel' key. Each dict carries handle, size_bytes, "
                      "width, height, bytes_per_pixel and (for 'color') bgra. An EMPTY list means "
                      "nothing could be exported: before the first render(), on a stale view "

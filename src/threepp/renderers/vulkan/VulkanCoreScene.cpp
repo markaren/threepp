@@ -3352,6 +3352,18 @@ void VulkanRenderer::Impl::collectSplatClouds(Object3D& scene, Camera& camera) {
             // render() call — so the pending-realloc gate beginDeferredFrame
             // already owns applies it to THIS frame, at the point where the
             // device is idled. Sticky: see splatOverlayDepth_.
+            //
+            // How to OBSERVE it, because the obvious way used to lie: reading
+            // the SplatDepth AOV back. The latch leaves splatDepthMode_ at Off
+            // (it wants the image, not the app's statistic), and both readback
+            // paths gated on splatDepthAov() — mode != Off — rather than on
+            // splatDepthAovAllocated(). So a scene where this latch HAD fired
+            // and the stamp WAS occluding overlays still reported "splat_depth:
+            // not allocated", which reads as "the latch never fired". Fixed at
+            // both gates; SplatOverlayOcclusion_probe measures the occlusion
+            // itself (pixels, not a flag) and covers the LOD / submit-ranges
+            // cloud, a secondary view, and the overlay arriving frames after
+            // the cloud.
             if (!splatOverlayDepth_ && !lastVisibleSplats_.empty() && sceneHasOverlayContent()) {
                 splatOverlayDepth_ = true;
                 primaryView().rasterGbufs[0].width = 0;// force the image rebuild

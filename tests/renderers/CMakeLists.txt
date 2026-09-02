@@ -80,6 +80,15 @@ if (THREEPP_WITH_VULKAN AND THREEPP_WITH_GLFW)
     target_link_libraries(SplatOverlayFlicker_probe PRIVATE threepp)
     target_include_directories(SplatOverlayFlicker_probe PRIVATE "${PROJECT_SOURCE_DIR}/src")
 
+    # Does a cloud OCCLUDE the post-resolve overlay? The flicker probe above
+    # measures the exempt path's stability; this one measures the plain path's
+    # correctness on the kSnapUiBlend fill route (an untextured transparent
+    # MeshBasicMaterial), which is where the auto-latch has to fire for the
+    # stamp to run at all. Exit-code probe, not a CTest golden.
+    add_executable(SplatOverlayOcclusion_probe SplatOverlayOcclusion_probe.cpp)
+    target_link_libraries(SplatOverlayOcclusion_probe PRIVATE threepp)
+    target_include_directories(SplatOverlayOcclusion_probe PRIVATE "${PROJECT_SOURCE_DIR}/src")
+
     # Gaussian-splat compute tile rasterizer: bit-exact repeat-frame
     # determinism (the gate on the prefix-sum tile expansion — an atomic-append
     # expansion passes every visual check and fails this one), splat-behind-mesh

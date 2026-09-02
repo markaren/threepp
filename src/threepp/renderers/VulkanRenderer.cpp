@@ -1140,7 +1140,17 @@ namespace threepp {
                     // successful read of a one-pixel image, which reads as
                     // "the frame had no splats in it" instead of "you never
                     // asked for this AOV".
-                    if (!impl.splatDepthAov()) continue;
+                    //
+                    // ALLOCATED, not "the app asked for it": the renderer turns
+                    // the AOV on by itself for overlay occlusion (see the latch
+                    // in collectSplatClouds), and that image is full-resolution
+                    // and holds the real Median statistic. Gating on
+                    // splatDepthAov() skipped exactly those frames, so a caller
+                    // watching this read for evidence that the stamp was
+                    // running got None from a scene where it WAS running — the
+                    // 1x1 case is precisely what splatDepthAovAllocated()==false
+                    // means, and it is still skipped.
+                    if (!impl.splatDepthAovAllocated()) continue;
                     img = &g.splatDepth; restLayout = VK_IMAGE_LAYOUT_GENERAL; break;
             }
             if (!img || img->image == VK_NULL_HANDLE || img->width == 0 || img->height == 0) {

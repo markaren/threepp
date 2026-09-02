@@ -2118,7 +2118,11 @@ bool VulkanRenderer::Impl::frameInteropSource(uint32_t viewHandle,
                     // the reason readViewGBufferAOVs gives: a caller who forgot
                     // setSplatDepthAov would otherwise get a successful
                     // one-pixel read that looks like "no splats in the frame".
-                    if (!splatDepthAov()) return false;
+                    // ALLOCATED, not "asked for": the overlay-occlusion latch
+                    // allocates it full-res on its own, and those frames were
+                    // being skipped as if nothing existed. See the same fix in
+                    // readViewGBufferAOVs.
+                    if (!splatDepthAovAllocated()) return false;
                     img = &g.splatDepth;
                     out.restLayout = VK_IMAGE_LAYOUT_GENERAL;
                     break;

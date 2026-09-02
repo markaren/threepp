@@ -330,6 +330,14 @@ otherwise — and stays on (the latch is sticky: turning it off again is a devic
 idle every time a gizmo is hidden). It reports `Median` when it was enabled for
 this reason alone, since the front of the cloud is what an occlusion test wants;
 an app that asked for `Expected` keeps `Expected`, one image and one statistic.
+Do not read `splatDepthAov()` (Python `splat_depth_aov`) as "the stamp is
+running": it reports what the APP asked for, and the latch deliberately leaves
+the mode at `Off`. Both readbacks used to gate on it, so a scene where the latch
+had fired reported the AOV as unallocated — a false "the latch never fires" that
+cost a debugging session. They gate on `splatDepthAovAllocated()` now, so the
+read succeeds (at the render extent, carrying the median) exactly when the image
+is real. `SplatOverlayOcclusion_probe` measures the occlusion itself, in pixels.
+
 And the answer is **binary at the AOV's `coverage > 0.5` gate** — a pixel the
 cloud more than half owns hides the overlay, one it owns less does not. GL
 attenuates instead, so a fringe a pixel or two wide differs. A depth buffer has

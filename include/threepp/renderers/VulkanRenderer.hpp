@@ -122,8 +122,13 @@ namespace threepp {
         //   Albedo (4)  4x unorm8  : linear base colour in rgb, metalness in a
         //   SplatDepth (4) 1x float32 : Gaussian-splat VIEW DISTANCE in world
         //                  units (positive, NOT reversed-Z NDC), 0 where no
-        //                  splat cloud owns the pixel. Requires setSplatDepthAov;
-        //                  which statistic it carries is that call's mode.
+        //                  splat cloud owns the pixel. Readable whenever the
+        //                  AOV is ALLOCATED — setSplatDepthAov, or the
+        //                  renderer's own overlay-occlusion latch, which turns
+        //                  it on (as Median) the first frame a scene holds both
+        //                  clouds and overlay content. Which statistic it
+        //                  carries is setSplatDepthAov's mode, Median when the
+        //                  latch is the only reason it exists.
         enum class GBufferAOV { Depth, Normal, Motion, Ids, Albedo, SplatDepth };
         [[nodiscard]] bool readGBufferAOV(GBufferAOV aov, std::vector<uint8_t>& out,
                                           int& width, int& height, int& bytesPerPixel);
