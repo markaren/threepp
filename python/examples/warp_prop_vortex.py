@@ -472,18 +472,25 @@ marches bend at the waterline the same way the murk's shadow rays do, so the
 wake seen from the air through the interface is where the water says it is.
 
 THE STERN IS FIRST-PARTY GEOMETRY, lofted from cross sections by the blade's
-own technique at ten times the size, and there is ONE THING IT CANNOT DO: the
-sprites' T_sun march samples the particle density volume and nothing else, so
-the hull does not shadow the wake. Geometry-aware sprite shadowing is a
-renderer feature and is out of scope here. What IS in scope is refusing to put
-the hull where the missing shadow can be read, so the key was raked down to
-the Snell floor and swung onto the QUARTER: every path from the slipstream to
-the sun now runs up and AFT, over open water, past a ship that ends at
-x = 1.06. The funnel and the first half metre of wake ARE under the counter
-and are lit as though they were not; they are silt motes and the dimmest thing
-in the frame. Rudders are out of scope for the same family of reason -- they
-would sit IN the slipstream, and this closed form has no interaction to give
-them.
+own technique at ten times the size, and IT SHADOWS THE WAKE NOW. The sprites'
+T_sun used to be a march of the particle density volume and nothing else, so
+the ship was not in the light path at all; sun_geometry_shadow adds ONE ray
+query per parcel toward the sun against the scene's own acceleration structure
+and folds the hit into that same term (particlefield_sun_occlude.comp). Water
+is not an occluder on that ray -- the renderer carries water on the opaque
+visibility mask, so a naive query would shadow every submerged parcel with the
+sea surface above it, and this one steps past the crest and keeps going. The
+bill is +1.2 ms at 1.7M parcels, interleaved and measured.
+
+THE STAGING DID NOT MOVE WITH IT, and that is why the new shadow is a quiet
+one. The key is still raked to the Snell floor and swung onto the QUARTER,
+because that is the arrangement a backlit slipstream reads in, and every path
+from the open-water wake to a sun on the quarter runs up and AFT past a ship
+that ends at x = 1.06 and crosses nothing. So what darkens is exactly what is
+genuinely in the way: the funnel and the first half metre under the counter,
+and the parcels standing behind the blades and the hub, which are shadowed by
+the screw that made them. Rudders are still out of scope -- they would sit IN
+the slipstream, and this closed form has no interaction to give them.
 
 BillboardRepr::stretchSeconds is NOT used, and not for lack of trying: the
 backend gates the streak on `rendererOwned || hostPrevIsPrevStep`, and an
@@ -2973,11 +2980,13 @@ camera.look_at(*CAM_T)
 # version never had.
 #
 # ── AND THEN THE HULL MOVED IT ONTO THE QUARTER ─────────────────────────────
-# The sprites' T_sun march samples the density volume alone, so the stern above
-# these screws does not shadow their wakes. That is a renderer limit and it is
-# out of scope to fix; what is in scope is refusing to put the hull where the
-# missing shadow is READABLE. So the key was raked down and swung aft, and the
-# geometry of it is the whole of the staging:
+# This swing predates sun_geometry_shadow and it OUTLIVED it. When the sprites'
+# T_sun was the density volume's march alone the stern above these screws did
+# not shadow their wakes at all, and the answer was to refuse to put the hull
+# where the missing shadow would be READABLE. The hull shadows the wake now, so
+# that is no longer why the key sits here -- it sits here because a backlit
+# slipstream is what makes a helix legible, and because the geometry of it is
+# still the whole of the staging:
 #
 #   from any point in the slipstream, the path to this sun runs UP AND AFT --
 #   +X, away from a hull that ends at x = 0.62 -- so it crosses open water for
@@ -2993,11 +3002,17 @@ camera.look_at(*CAM_T)
 # be -- and it keeps the column's bright top and dark belly, because 0.69 of
 # this direction is still straight up.
 #
-# WHAT IS STILL DISHONEST, stated rather than hidden: the funnel and the first
-# half-metre of slipstream ARE under the counter and are lit as though they
-# were not. They are suspended silt and the dimmest thing in the frame, and
-# everything the eye actually reads -- the ropes, the column, the collapse --
-# is aft of the transom in genuinely open water.
+# THE FUNNEL AND THE FIRST HALF-METRE ARE UNDER THE COUNTER, and with
+# sun_geometry_shadow on they are lit like it. The arithmetic of who is in the
+# shadow is the tip clearance against this direction: 0.552 aft per 0.687 up,
+# so a parcel at the top of the disc has to travel 0.41 m aft to gain the
+# 0.51 m to the counter and is blocked well forward of the transom at x = 1.06,
+# while one on the shaft line needs 1.13 m and just clears. That is exactly the
+# gradient the frame shows -- the upper arc of the funnel dims, the belly does
+# not. Everything the eye actually reads -- the ropes, the column, the collapse
+# -- is aft of the transom in genuinely open water and is unchanged to the
+# pixel, which is also the check that the sea SURFACE is being stepped past
+# rather than shadowing everything under it.
 # WITH A SKY IT STAYS MOSTLY THE DIMMED BLUE ABOVE, and that is a renderer
 # limit stated rather than hidden: the murk attenuates the VIEW leg and shapes
 # the sun into caustics, but a submerged surface's direct sun is not extinguished
@@ -3752,6 +3767,14 @@ bb.stretch_seconds = 0.0      # a hard no-op on an Interop field -- see the docs
 bb.lit_phase_g = 0.58         # forward: the backlit flank flares
 bb.volume_extinction = EXTINCTION
 bb.volume_shadow = SHADOW
+# And the HULL is in that sun term now. The march above walks the field's own
+# density and nothing else, so until this flag existed the counter overhead was
+# not in the light path at all -- the funnel and the first half metre of
+# slipstream were lit as though the ship above them were open sky. One ray per
+# parcel toward the sun against the scene fixes exactly that and nothing else:
+# water is not an occluder (the ray steps past the surface it is under), so the
+# open-water wake aft of the transom is bit-for-bit the frame it always was.
+bb.sun_geometry_shadow = True
 bb.volume_ambient = 0.26
 bb.volume_sun_gain = 0.85
 

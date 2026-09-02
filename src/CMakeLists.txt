@@ -1475,6 +1475,15 @@ if (THREEPP_WITH_VULKAN)
         "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/particlefield_transmit.comp"
         kParticleFieldTransmitCompSpv
         _particlefield_transmit_spv_h)
+    # The geometry half of T_sun: one ray query per particle toward the sun
+    # against the scene TLAS, folded into the word the prepass above just
+    # wrote. A separate module and not four lines in that one because a ray
+    # query is a CAPABILITY — every volumetric field on every device compiles
+    # the prepass, including devices with no ray query at all.
+    compile_vulkan_shader(threepp
+        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/particlefield_sun_occlude.comp"
+        kParticleFieldSunOccludeCompSpv
+        _particlefield_sun_occlude_spv_h)
     # F4 (1): the billboard-only bloom composite. The glow-enabled fields are
     # drawn a SECOND time into a small offscreen linear-HDR target, the shared
     # bloom_down/bloom_up pyramid runs on that target alone, and this fullscreen

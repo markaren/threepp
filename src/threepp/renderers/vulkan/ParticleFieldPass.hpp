@@ -538,6 +538,13 @@ namespace threepp::vulkan {
         // this pass never writes a set an in-flight frame could name.
         void setTlas(VkAccelerationStructureKHR tlas);
 
+        // This frame's slot of the renderer's GeometryDesc ring, by device
+        // address. Handed over beside the TLAS and for the same pass: the sun
+        // occlusion needs one field of it (foamAddress) to tell a water hit,
+        // which must be walked past, from a hull hit, which is the shadow.
+        // Per FRAME, not per handle change — the ring rotates every frame.
+        void setSceneGeomAddress(VkDeviceAddress addr) { sceneGeomAddr_ = addr; }
+
         // Throw every field's bake away. The renderer calls this when the entry
         // list is rebuilt, i.e. when the set of things a flake could land on may
         // have changed. Cheap: it bumps a counter, and the re-bake happens on
@@ -874,6 +881,13 @@ namespace threepp::vulkan {
             VkDescriptorSet set     = VK_NULL_HANDLE;// the r16f mirror, sampled
             std::uint32_t   groups  = 0;             // ceil(capacity / 64)
             unsigned char   pc[120]{};               // TransmitPc, prebuilt
+            // The sun-occlusion follow-up, when the field asked for it and the
+            // device can trace. It rides in the SAME record because it covers
+            // exactly the same slots with the same groups and the same field
+            // matrix — a second parallel vector would only be a way for the two
+            // to disagree about which field they mean.
+            bool            occlude = false;
+            unsigned char   opc[88]{};               // OccludePc, prebuilt
         };
 
         VulkanContext&  ctx_;
@@ -936,12 +950,12 @@ namespace threepp::vulkan {
         // one per frame in flight: its only binding is the TLAS, whose handle
         // changes only on a structural rebuild, which is vkDeviceWaitIdle
         // guarded — so it is never rewritten under an in-flight frame.
-        VkDescriptorSetLayout bakeDsLayout_   = VK_NULL_HANDLE;
-        VkDescriptorPool      bakePool_       = VK_NULL_HANDLE;
-        VkDescriptorSet       bakeSet_        = VK_NULL_HANDLE;
+        VkDescriptorSetLayout tlasDsLayout_   = VK_NULL_HANDLE;
+        VkDescriptorPool      tlasPool_       = VK_NULL_HANDLE;
+        VkDescriptorSet       tlasSet_        = VK_NULL_HANDLE;
         VkPipelineLayout      bakePipeLayout_ = VK_NULL_HANDLE;
         VkPipeline            bakePipe_       = VK_NULL_HANDLE;
-        VkAccelerationStructureKHR bakeTlas_  = VK_NULL_HANDLE;// what the set holds
+        VkAccelerationStructureKHR tlasBound_  = VK_NULL_HANDLE;// what the set holds
         VkAccelerationStructureKHR wantTlas_  = VK_NULL_HANDLE;// what the scene has
         std::uint64_t         bakeStructGen_  = 0;
         std::vector<BakeDispatch> bakeDispatch_;
@@ -987,6 +1001,20 @@ namespace threepp::vulkan {
         std::uint32_t transCapacity_ = 0;// in uint elements, i.e. in slots
         std::vector<TransDispatch> transDispatch_;
 
+        // The sun-occlusion pass: one ray query per particle against the scene
+        // TLAS, folded into the T_sun half of the word the prepass wrote. NO
+        // descriptor of its own — it binds the shared tlasSet_, and its three
+        // buffers (positions, transmittance, the renderer's GeometryDesc array)
+        // are device addresses in an 88 B push block. Created only for a field
+        // that set BillboardRepr::sunGeometryShadow, which defaults off.
+        VkPipelineLayout occludePipeLayout_ = VK_NULL_HANDLE;
+        VkPipeline       occludePipe_       = VK_NULL_HANDLE;
+        // The renderer's per-entry GeometryDesc array for THIS frame's slot,
+        // handed over beside the TLAS. Only foamAddress is read, and only to
+        // tell water (which is opaque-masked in this TLAS, so it would shadow
+        // every submerged parcel) from geometry that really does occlude.
+        VkDeviceAddress  sceneGeomAddr_     = 0;
+
         // A destroyed field's descriptor set, held until no in-flight frame can
         // still name it. Same rule as VulkanRetireQueue (serial +
         // kFramesInFlight <= current), kept local because the renderer's queue
@@ -1030,6 +1058,11 @@ namespace threepp::vulkan {
         void   ensureBbParamCapacity(std::uint32_t frame, std::uint32_t count);
         void   ensureAuxCapacity(std::uint32_t frame, std::uint32_t count);
         void   ensureBakePipeline();
+        // The scene TLAS set both tracing pipelines bind. Creates the objects on
+        // first use and refreshes the descriptor when the handle moved; false
+        // when this device has no ray query or the scene has no TLAS yet, which
+        // is what every caller checks before recording a traversal.
+        bool   ensureTlasSet();
         void   destroyState(State& st);
         void   retireOrDestroy(Buffer& b);
         void   retireOrDestroy(Image2D& img);
@@ -1038,6 +1071,10 @@ namespace threepp::vulkan {
         // R8. False when the pipeline could not be created, which leaves the
         // field's kBbVolume bit clear and its sprites flat rather than wrong.
         bool   ensureTransmittancePipeline();
+        // The geometry half of T_sun. False when this device has no ray query or
+        // the pipeline could not be created, which leaves the field's sun term
+        // exactly the volume-only one it was before the flag existed.
+        bool   ensureSunOccludePipeline();
         void   ensureTransCapacity(std::uint32_t count);
         // Allocates the field's volume on first use; false when the field's
         // DensityRepr is off or the volume could not be created.

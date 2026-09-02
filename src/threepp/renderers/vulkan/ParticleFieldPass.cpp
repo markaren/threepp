@@ -8,6 +8,7 @@
 #include "threepp/renderers/vulkan/shaders/particle_density_scatter.comp.spv.h"
 #include "threepp/renderers/vulkan/shaders/particle_emit.comp.spv.h"
 #include "threepp/renderers/vulkan/shaders/particle_height_bake.comp.spv.h"
+#include "threepp/renderers/vulkan/shaders/particlefield_sun_occlude.comp.spv.h"
 #include "threepp/renderers/vulkan/shaders/particlefield_transmit.comp.spv.h"
 
 #include <algorithm>
@@ -143,6 +144,30 @@ namespace {
     constexpr std::uint32_t kTransCamBit = 1u;
     constexpr std::uint32_t kTransSunBit = 2u;
 
+    constexpr std::uint32_t kOccludeLocalSize = 64;// == particlefield_sun_occlude.comp
+    // The occlusion dispatch reuses the prepass's group count verbatim, which
+    // is only correct while the two local sizes agree.
+    static_assert(kOccludeLocalSize == kTransmitLocalSize,
+                  "the sun-occlusion dispatch reuses the prepass's group count");
+
+    // MUST mirror the push block in particlefield_sun_occlude.comp under scalar
+    // layout. The three addresses lead for the same alignment reason
+    // TransmitPc's two do; 88 B, well inside the guaranteed 128.
+    //
+    // No camWorld: geometry between the eye and a sprite is the DEPTH TEST's
+    // problem, so this pass is view-independent from end to end and its block
+    // is built once in prepareFrame and never patched.
+    struct OccludePc {
+        VkDeviceAddress posAddr;       //  0
+        VkDeviceAddress transAddr;     //  8
+        VkDeviceAddress geomAddr;      // 16
+        float           model[12];     // 24  ROWS of the affine field->world
+        float           sunDirWorld[3];// 72
+        std::uint32_t   capacity;      // 84
+    };                                 // 88
+    static_assert(sizeof(OccludePc) == 88,
+                  "OccludePc drifted from particlefield_sun_occlude.comp");
+
     // MUST mirror the push block in particle_density_scatter.comp under scalar
     // layout. 120 B — inside the 128 B every Vulkan implementation guarantees.
     // The explicit tail pad keeps the scalar-layout size and MSVC's struct
@@ -261,12 +286,14 @@ ParticleFieldPass::~ParticleFieldPass() {
     if (transPipeLayout_)   vkDestroyPipelineLayout(d, transPipeLayout_, nullptr);
     if (transDsLayout_)     vkDestroyDescriptorSetLayout(d, transDsLayout_, nullptr);
     if (transSampler_)      vkDestroySampler(d, transSampler_, nullptr);
+    if (occludePipe_)       vkDestroyPipeline(d, occludePipe_, nullptr);
+    if (occludePipeLayout_) vkDestroyPipelineLayout(d, occludePipeLayout_, nullptr);
     if (emitPipe_)          vkDestroyPipeline(d, emitPipe_, nullptr);
     if (emitPipeLayout_)    vkDestroyPipelineLayout(d, emitPipeLayout_, nullptr);
     if (bakePipe_)          vkDestroyPipeline(d, bakePipe_, nullptr);
     if (bakePipeLayout_)    vkDestroyPipelineLayout(d, bakePipeLayout_, nullptr);
-    if (bakePool_)          vkDestroyDescriptorPool(d, bakePool_, nullptr);
-    if (bakeDsLayout_)      vkDestroyDescriptorSetLayout(d, bakeDsLayout_, nullptr);
+    if (tlasPool_)          vkDestroyDescriptorPool(d, tlasPool_, nullptr);
+    if (tlasDsLayout_)      vkDestroyDescriptorSetLayout(d, tlasDsLayout_, nullptr);
     if (densityPipe_)       vkDestroyPipeline(d, densityPipe_, nullptr);
     if (densityPipeLayout_) vkDestroyPipelineLayout(d, densityPipeLayout_, nullptr);
     if (convertPipe_)       vkDestroyPipeline(d, convertPipe_, nullptr);
@@ -580,6 +607,57 @@ bool ParticleFieldPass::ensureTransmittancePipeline() {
     return transPipe_ != VK_NULL_HANDLE;
 }
 
+// ── The sun-occlusion pipeline ──────────────────────────────────────────────
+// Created on the first frame a field asks for BillboardRepr::sunGeometryShadow,
+// which no field does by default — so every scene that shipped before this
+// feature compiles nothing new. It reuses the shared TLAS set as its only
+// descriptor; the positions, the transmittance buffer and the renderer's
+// GeometryDesc array all ride device addresses in the push block, which is the
+// property the rest of this pass is built on.
+bool ParticleFieldPass::ensureSunOccludePipeline() {
+
+    if (occludePipe_ != VK_NULL_HANDLE) return true;
+    if (!ctx_.rayQuerySupported()) return false;
+    ensureTlasSet();
+    if (tlasDsLayout_ == VK_NULL_HANDLE) return false;
+    const VkDevice d = ctx_.device();
+
+    VkPushConstantRange pcr{};
+    pcr.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+    pcr.offset     = 0;
+    pcr.size       = sizeof(OccludePc);
+    VkPipelineLayoutCreateInfo plci{};
+    plci.sType                  = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+    plci.setLayoutCount         = 1;
+    plci.pSetLayouts            = &tlasDsLayout_;
+    plci.pushConstantRangeCount = 1;
+    plci.pPushConstantRanges    = &pcr;
+    check(vkCreatePipelineLayout(d, &plci, nullptr, &occludePipeLayout_),
+          "vkCreatePipelineLayout(particlefield sun occlude)");
+
+    VkShaderModuleCreateInfo smci{};
+    smci.sType    = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
+    smci.codeSize = sizeof(kParticleFieldSunOccludeCompSpv);
+    smci.pCode    = kParticleFieldSunOccludeCompSpv;
+    VkShaderModule mod = VK_NULL_HANDLE;
+    check(vkCreateShaderModule(d, &smci, nullptr, &mod),
+          "vkCreateShaderModule(particlefield_sun_occlude)");
+    VkPipelineShaderStageCreateInfo stage{};
+    stage.sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+    stage.stage  = VK_SHADER_STAGE_COMPUTE_BIT;
+    stage.module = mod;
+    stage.pName  = "main";
+    VkComputePipelineCreateInfo cpci{};
+    cpci.sType  = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
+    cpci.stage  = stage;
+    cpci.layout = occludePipeLayout_;
+    const VkResult r = vkCreateComputePipelines(d, ctx_.pipelineCache(), 1, &cpci,
+                                                nullptr, &occludePipe_);
+    vkDestroyShaderModule(d, mod, nullptr);
+    check(r, "vkCreateComputePipelines(particlefield_sun_occlude)");
+    return occludePipe_ != VK_NULL_HANDLE;
+}
+
 // R9's ring, sized in SLOTS. Same growth discipline as ensureBbParamCapacity
 // and the same reason for growing EVERY frame-in-flight at once: the capacity
 // is shared bookkeeping, and a half-grown ring under-runs the other frame the
@@ -889,51 +967,94 @@ void ParticleFieldPass::ensureAuxCapacity(std::uint32_t frame, std::uint32_t cou
     auxCapacity_ = newCap;
 }
 
+// ── The scene TLAS set, shared by every tracing pipeline in this pass ───────
+// One binding, one set, no per-frame copy. An acceleration structure cannot be
+// reached by buffer_reference — that is the constraint F4's amendment note 4
+// recorded about the density volumes, arriving here for the same reason — so
+// the choice was a set or no ray tracing; everything else every one of these
+// pipelines needs rides in its push block.
+//
+// TWO consumers now: F5's height bake and the sun-occlusion pass. They share
+// the set OBJECT and not merely the layout, because what it holds is a property
+// of the SCENE and not of either pipeline: one write per TLAS handle change
+// serves both.
+//
+// Returns true when tlasSet_ names the scene's current acceleration structure,
+// which is what a caller has to know before it records a dispatch against it.
+// The write happens here, in prepareFrame's post-fence window, and only on the
+// frame the handle actually changed — a structural rebuild, which is itself
+// vkDeviceWaitIdle-guarded (see setTlas), so it can never land on a set an
+// in-flight frame names (R6 / VUID-03047).
+bool ParticleFieldPass::ensureTlasSet() {
+
+    if (!ctx_.rayQuerySupported()) return false;
+    const VkDevice d = ctx_.device();
+
+    if (tlasSet_ == VK_NULL_HANDLE) {
+        VkDescriptorSetLayoutBinding b{};
+        b.binding         = 0;
+        b.descriptorType  = VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR;
+        b.descriptorCount = 1;
+        b.stageFlags      = VK_SHADER_STAGE_COMPUTE_BIT;
+        VkDescriptorSetLayoutCreateInfo lci{};
+        lci.sType        = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+        lci.bindingCount = 1;
+        lci.pBindings    = &b;
+        check(vkCreateDescriptorSetLayout(d, &lci, nullptr, &tlasDsLayout_),
+              "vkCreateDescriptorSetLayout(particle field TLAS)");
+
+        VkDescriptorPoolSize ps{};
+        ps.type            = VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR;
+        ps.descriptorCount = 1;
+        VkDescriptorPoolCreateInfo pci{};
+        pci.sType         = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+        pci.maxSets       = 1;
+        pci.poolSizeCount = 1;
+        pci.pPoolSizes    = &ps;
+        check(vkCreateDescriptorPool(d, &pci, nullptr, &tlasPool_),
+              "vkCreateDescriptorPool(particle field TLAS)");
+
+        VkDescriptorSetAllocateInfo ai{};
+        ai.sType              = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+        ai.descriptorPool     = tlasPool_;
+        ai.descriptorSetCount = 1;
+        ai.pSetLayouts        = &tlasDsLayout_;
+        check(vkAllocateDescriptorSets(d, &ai, &tlasSet_),
+              "vkAllocateDescriptorSets(particle field TLAS)");
+    }
+    if (tlasSet_ == VK_NULL_HANDLE || wantTlas_ == VK_NULL_HANDLE) return false;
+
+    if (tlasBound_ != wantTlas_) {
+        VkWriteDescriptorSetAccelerationStructureKHR asInfo{};
+        asInfo.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET_ACCELERATION_STRUCTURE_KHR;
+        asInfo.accelerationStructureCount = 1;
+        asInfo.pAccelerationStructures    = &wantTlas_;
+        VkWriteDescriptorSet w{};
+        w.sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        w.pNext           = &asInfo;
+        w.dstSet          = tlasSet_;
+        w.dstBinding      = 0;
+        w.descriptorCount = 1;
+        w.descriptorType  = VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR;
+        vkUpdateDescriptorSets(d, 1, &w, 0, nullptr);
+        tlasBound_ = wantTlas_;
+    }
+    return true;
+}
+
 // ── F5: the height-bake pipeline ────────────────────────────────────────────
-// The one pipeline in this pass that owns a descriptor set, and it owns exactly
-// one binding: the scene TLAS. An acceleration structure cannot be reached by
-// buffer_reference — that is the constraint F4's amendment note 4 recorded
-// about the density volumes, arriving here for the same reason — so the choice
-// was a set or no ray tracing. Everything else the bake needs (the destination
-// map, the footprint) rides in a 40 B push block, and the CONSUMER of the map
-// keeps its zero-descriptor property because a float buffer does have an
-// address.
+// Everything the bake needs beyond the shared TLAS set (the destination map,
+// the footprint) rides in a 40 B push block, and the CONSUMER of the map keeps
+// its zero-descriptor property because a float buffer does have an address.
 void ParticleFieldPass::ensureBakePipeline() {
 
     if (bakePipe_ != VK_NULL_HANDLE) return;
     if (!ctx_.rayQuerySupported()) return;
+    // The layout the pipeline layout below names. Its CONTENT is refreshed by
+    // the caller each frame; this call is here for the objects.
+    ensureTlasSet();
+    if (tlasDsLayout_ == VK_NULL_HANDLE) return;
     const VkDevice d = ctx_.device();
-
-    VkDescriptorSetLayoutBinding b{};
-    b.binding         = 0;
-    b.descriptorType  = VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR;
-    b.descriptorCount = 1;
-    b.stageFlags      = VK_SHADER_STAGE_COMPUTE_BIT;
-    VkDescriptorSetLayoutCreateInfo lci{};
-    lci.sType        = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-    lci.bindingCount = 1;
-    lci.pBindings    = &b;
-    check(vkCreateDescriptorSetLayout(d, &lci, nullptr, &bakeDsLayout_),
-          "vkCreateDescriptorSetLayout(particle height bake)");
-
-    VkDescriptorPoolSize ps{};
-    ps.type            = VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR;
-    ps.descriptorCount = 1;
-    VkDescriptorPoolCreateInfo pci{};
-    pci.sType         = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
-    pci.maxSets       = 1;
-    pci.poolSizeCount = 1;
-    pci.pPoolSizes    = &ps;
-    check(vkCreateDescriptorPool(d, &pci, nullptr, &bakePool_),
-          "vkCreateDescriptorPool(particle height bake)");
-
-    VkDescriptorSetAllocateInfo ai{};
-    ai.sType              = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
-    ai.descriptorPool     = bakePool_;
-    ai.descriptorSetCount = 1;
-    ai.pSetLayouts        = &bakeDsLayout_;
-    check(vkAllocateDescriptorSets(d, &ai, &bakeSet_),
-          "vkAllocateDescriptorSets(particle height bake)");
 
     VkPushConstantRange pcr{};
     pcr.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
@@ -942,7 +1063,7 @@ void ParticleFieldPass::ensureBakePipeline() {
     VkPipelineLayoutCreateInfo plci{};
     plci.sType                  = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
     plci.setLayoutCount         = 1;
-    plci.pSetLayouts            = &bakeDsLayout_;
+    plci.pSetLayouts            = &tlasDsLayout_;
     plci.pushConstantRangeCount = 1;
     plci.pPushConstantRanges    = &pcr;
     check(vkCreatePipelineLayout(d, &plci, nullptr, &bakePipeLayout_),
@@ -991,7 +1112,7 @@ void ParticleFieldPass::recordSurfaceBake(VkCommandBuffer cb) {
 
     vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, bakePipe_);
     vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_COMPUTE, bakePipeLayout_, 0, 1,
-                            &bakeSet_, 0, nullptr);
+                            &tlasSet_, 0, nullptr);
     for (const BakeDispatch& bd : bakeDispatch_) {
         vkCmdPushConstants(cb, bakePipeLayout_, VK_SHADER_STAGE_COMPUTE_BIT, 0,
                            static_cast<std::uint32_t>(sizeof(BakePc)), bd.pc);
@@ -1400,29 +1521,7 @@ void ParticleFieldPass::prepareFrame(std::uint64_t serial, std::uint32_t frame,
                     ensureBakePipeline();
                 }
             }
-            if (sp.enabled && bakePipe_ != VK_NULL_HANDLE &&
-                wantTlas_ != VK_NULL_HANDLE) {
-
-                // The set holds a stale acceleration structure. Written here,
-                // in prepareFrame's post-fence window, and only on the frame
-                // the handle actually changed — which is a structural rebuild,
-                // which is itself vkDeviceWaitIdle-guarded (see setTlas).
-                if (bakeTlas_ != wantTlas_) {
-                    VkWriteDescriptorSetAccelerationStructureKHR asInfo{};
-                    asInfo.sType =
-                            VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET_ACCELERATION_STRUCTURE_KHR;
-                    asInfo.accelerationStructureCount = 1;
-                    asInfo.pAccelerationStructures    = &wantTlas_;
-                    VkWriteDescriptorSet w{};
-                    w.sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-                    w.pNext           = &asInfo;
-                    w.dstSet          = bakeSet_;
-                    w.dstBinding      = 0;
-                    w.descriptorCount = 1;
-                    w.descriptorType  = VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR;
-                    vkUpdateDescriptorSets(ctx_.device(), 1, &w, 0, nullptr);
-                    bakeTlas_ = wantTlas_;
-                }
+            if (sp.enabled && bakePipe_ != VK_NULL_HANDLE && ensureTlasSet()) {
 
                 const std::uint32_t res =
                         std::max(kBakeResMin, std::min(kBakeResMax, sp.resolution));
@@ -1779,6 +1878,27 @@ void ParticleFieldPass::prepareFrame(std::uint64_t serial, std::uint32_t frame,
                         td.set    = st.marchSet;
                         td.groups = (st.capacity + kTransmitLocalSize - 1u) / kTransmitLocalSize;
                         std::memcpy(td.pc, &tp, sizeof(tp));
+
+                        // ── The geometry half of T_sun ──────────────────────
+                        // Only for a field that asked, only on a device that can
+                        // trace, and only once the scene has both a TLAS and a
+                        // GeometryDesc array — the last because the pass tells a
+                        // water hit from a real occluder by that array's
+                        // foamAddress, and without it every submerged parcel
+                        // would be shadowed by the sea surface above it.
+                        // Anything missing leaves the sun term exactly the
+                        // volume-only one, which is the pre-flag look.
+                        if (bb.sunGeometryShadow && volShd > 0.f && sceneGeomAddr_ != 0 &&
+                            ensureSunOccludePipeline() && ensureTlasSet()) {
+                            OccludePc op{};
+                            op.posAddr   = d.posAddr;
+                            op.geomAddr  = sceneGeomAddr_;
+                            op.transAddr = 0;// element offset, patched below
+                            std::memcpy(op.model, bp.model, sizeof(op.model));
+                            op.capacity = st.capacity;
+                            std::memcpy(td.opc, &op, sizeof(op));
+                            td.occlude = true;
+                        }
                         transDispatch_.push_back(td);
                         transBbIndex.push_back(
                                 static_cast<std::uint32_t>(bbParamScratch_.size()));
@@ -1899,6 +2019,10 @@ void ParticleFieldPass::prepareFrame(std::uint64_t serial, std::uint32_t frame,
             const VkDeviceAddress a =
                     base + VkDeviceSize(transElemOff[i]) * sizeof(std::uint32_t);
             std::memcpy(transDispatch_[i].pc + offsetof(TransmitPc, outAddr), &a, sizeof(a));
+            if (transDispatch_[i].occlude) {
+                std::memcpy(transDispatch_[i].opc + offsetof(OccludePc, transAddr),
+                            &a, sizeof(a));
+            }
             bbParamScratch_[transBbIndex[i]].transAddr = a;
         }
     }
@@ -2095,6 +2219,49 @@ void ParticleFieldPass::recordTransmittance(VkCommandBuffer cb, const float camW
         vkCmdPushConstants(cb, transPipeLayout_, VK_SHADER_STAGE_COMPUTE_BIT,
                            0, static_cast<std::uint32_t>(sizeof(TransmitPc)), td.pc);
         vkCmdDispatch(cb, td.groups, 1, 1);
+    }
+
+    // ── The geometry half of T_sun ──────────────────────────────────────────
+    // A SECOND dispatch over the same slots rather than four lines inside the
+    // first, because a ray query is a capability and not a branch: folding it
+    // into the prepass would put SPV_KHR_ray_query into the module every
+    // volumetric field compiles, on devices that do not have it. The read of
+    // this pass is the write of the one above, so the two are separated by
+    // their own barrier; it is one barrier for all the fields, the same rule
+    // the closing one follows.
+    bool anyOcclude = false;
+    for (const TransDispatch& td : transDispatch_) anyOcclude |= td.occlude;
+    if (anyOcclude && occludePipe_ != VK_NULL_HANDLE) {
+        VkMemoryBarrier2 ob{};
+        ob.sType         = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2;
+        ob.srcStageMask  = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+        ob.srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
+        ob.dstStageMask  = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+        ob.dstAccessMask = VK_ACCESS_2_SHADER_STORAGE_READ_BIT |
+                           VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
+        VkDependencyInfo odep{};
+        odep.sType              = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
+        odep.memoryBarrierCount = 1;
+        odep.pMemoryBarriers    = &ob;
+        vkCmdPipelineBarrier2(cb, &odep);
+
+        vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, occludePipe_);
+        vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_COMPUTE, occludePipeLayout_,
+                                0, 1, &tlasSet_, 0, nullptr);
+        for (TransDispatch& td : transDispatch_) {
+            if (!td.occlude) continue;
+            // The sun is this pass's ONLY per-view-invariant vector and the
+            // only thing patched here, for the same reason the prepass patches
+            // two: the block was built in prepareFrame and the direction is not
+            // known until the view is recorded.
+            std::memcpy(td.opc + offsetof(OccludePc, sunDirWorld), sunDirWorld,
+                        3 * sizeof(float));
+            vkCmdPushConstants(cb, occludePipeLayout_, VK_SHADER_STAGE_COMPUTE_BIT,
+                               0, static_cast<std::uint32_t>(sizeof(OccludePc)), td.opc);
+            // The SAME group count: the same slot domain at the same local
+            // size, which the static_assert beside kOccludeLocalSize pins.
+            vkCmdDispatch(cb, td.groups, 1, 1);
+        }
     }
 
     // COMPUTE is on the destination list as well as VERTEX: the NEXT view's

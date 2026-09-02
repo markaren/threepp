@@ -4971,6 +4971,14 @@ class ParticleField(Mesh):
         def stretch_seconds(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
             ...
         @property
+        def sun_geometry_shadow(self) -> bool:
+            """
+            Let the SCENE shadow the sprites, not only the field's own dust: one ray query per particle toward the sun against the scene's acceleration structure, folded into the same T_sun the volume march produces. A wake under a ship's counter goes dark; a wake in open water is unchanged. False by default and read only when volume_shadow > 0, so nothing that predates the flag moves. WATER IS NOT AN OCCLUDER (the ray steps past it) because the renderer carries water on the opaque visibility mask, and glass and blended geometry are culled outright. Needs VK_KHR_ray_query; without it the sun term is silently the volume-only one.
+            """
+        @sun_geometry_shadow.setter
+        def sun_geometry_shadow(self, arg0: bool) -> None:
+            ...
+        @property
         def texture(self) -> Texture:
             """
             Optional sprite that MODULATES the procedural quad (rgb tint x alpha). None binds a 1x1 white default.

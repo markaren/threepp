@@ -1,0 +1,159 @@
+#version 460
+#extension GL_EXT_scalar_block_layout    : require
+#extension GL_EXT_buffer_reference       : require
+#extension GL_EXT_buffer_reference2      : require
+#extension GL_EXT_shader_explicit_arithmetic_types_int64 : require
+#extension GL_EXT_ray_query              : require
+
+// ParticleField SUN OCCLUSION — the geometry half of T_sun.
+//
+// ── WHY THIS EXISTS ─────────────────────────────────────────────────────────
+// particlefield_transmit.comp marches the field's OWN density volume toward
+// the sun, so a sprite is shadowed by the dust around it and by nothing else.
+// A wake under a ship's counter is therefore lit as though the ship were not
+// there. This pass adds the one term that was missing: ONE ray query per
+// particle toward the sun against the scene TLAS, folded into the T_sun half
+// of the word the prepass just wrote.
+//
+// ── WHY IT IS A SECOND SHADER AND NOT FOUR LINES IN THE PREPASS ─────────────
+// A ray query is a CAPABILITY, not a branch. Putting rayQueryEXT into
+// particlefield_transmit.comp would put SPV_KHR_ray_query into the module every
+// volumetric field on every device compiles — including devices with no ray
+// query at all, where creating that shader module is invalid. Splitting it in
+// two keeps the prepass exactly as portable as it was and makes this pipeline
+// something a device without the extension simply never creates. The cost of
+// the split is one extra read-modify-write of 4 B per slot, which is nothing
+// next to the traversal it guards.
+//
+// ── WHAT IT DELIBERATELY DOES NOT DO ────────────────────────────────────────
+//   • NO SOFT SHADOW. One ray toward the sun's centre is a hard boundary. The
+//     sprites it shadows are a volume, so the boundary lands on a cloud of
+//     positions rather than on a surface and reads soft anyway; a real penumbra
+//     would be N rays, and N is the whole cost of this feature.
+//   • NO COLOURED TRANSMISSION. Glass and blended geometry live on
+//     kRayMaskAlpha and are culled here, which is the same call every
+//     pure-visibility occlusion query in this renderer already makes.
+//   • NOTHING FOR THE CAMERA LEG. T_cam stays the volume's own march: geometry
+//     between the eye and a sprite is resolved by the DEPTH TEST, which the
+//     billboard draws already take.
+
+layout(local_size_x = 64) in;
+
+// Same 16 B stride and same DEAD sentinel (w < 0) as every other consumer.
+layout(buffer_reference, scalar, buffer_reference_align = 16) readonly buffer PosBuf { vec4 v[]; };
+// The prepass's output, read-modify-written in place: this pass owns the
+// T_sun half of the word and leaves T_cam's bits exactly as they were found.
+layout(buffer_reference, scalar, buffer_reference_align = 4) buffer TransBuf { uint v[]; };
+
+// The renderer's per-entry GeometryDesc array, reached by device address rather
+// than by a descriptor for the reason everything else in this pass is: the ONE
+// thing that cannot ride an address is the acceleration structure. Only
+// foamAddress is read, but the whole struct is declared so the stride is stated
+// by the layout rather than assumed by an index. KEEP IN SYNC with
+// GeometryDesc in deferred_shade.comp / probe_update.comp.
+struct GeometryDesc {
+    uint64_t vertexAddress;
+    uint64_t normalAddress;
+    uint64_t indexAddress;
+    uint64_t uvAddress;
+    uint64_t foamAddress;
+    uint64_t prevVertexAddress;
+    uint64_t colorAddress;
+    uint     indexed;
+    uint     flags;
+};
+layout(buffer_reference, scalar, buffer_reference_align = 8) readonly buffer GeomBuf {
+    GeometryDesc g[];
+};
+
+// The scene TLAS. The ONE descriptor, on the SAME set layout the F5 height bake
+// owns (set 0, binding 0, one acceleration structure) — literally the same set
+// object, written once per TLAS handle change, which happens only on a
+// structural rebuild, which is vkDeviceWaitIdle-guarded (R6 / VUID-03047).
+layout(set = 0, binding = 0) uniform accelerationStructureEXT topAS;
+
+layout(push_constant, scalar) uniform Pc {
+    uint64_t posAddr;     //  0
+    uint64_t transAddr;   //  8
+    uint64_t geomAddr;    // 16
+    vec4     model[3];    // 24  ROWS of the affine field->world matrix
+    vec3     sunDirWorld; // 72  unit, TOWARD the sun
+    uint     capacity;    // 84
+} pc;                     // 88 B
+
+// Opaque + alpha-cutout instances only. KEEP IN SYNC with kRayMaskOpaque in
+// vulkan_shared.h — spelled out rather than included for the same reason
+// particle_height_bake.comp spells it out.
+const uint kMaskOpaque = 0x01u;
+
+// A few centimetres off the parcel. The sprites this shadows sit in a wake
+// whose own water surface is one of the things the ray has to walk past, and a
+// ray that starts exactly on a particle can re-hit whatever triangle the
+// particle is sitting inside from float error alone.
+const float kBias = 0.05;
+// Effectively the sun. Bounded rather than infinite so a NaN direction cannot
+// turn into an unbounded traversal.
+const float kFar = 1.0e4;
+// Water surfaces the ray is allowed to walk past before it gives up and calls
+// the parcel lit. One for the ocean the wake is inside; the second covers a
+// folded crest re-entered at a grazing angle. A third would be a wave shape
+// this shadow term cannot afford to resolve.
+const int kMaxWaterSkips = 2;
+
+void main() {
+    const uint pi = gl_GlobalInvocationID.x;
+    if (pi >= pc.capacity) return;
+
+    const vec4 pw = PosBuf(pc.posAddr).v[pi];
+    // Dead slot, in the positive form every other consumer of this buffer uses
+    // so a NaN counts as dead too. The prepass already stored (1,1) for it and
+    // its quad is collapsed to zero area; nothing here has anything to add.
+    if (!(pw.w >= 0.0)) return;
+
+    // The positions are FIELD-LOCAL and the TLAS is world-anchored — the same
+    // transform, from the same push block, the prepass applies.
+    const vec4 p4  = vec4(pw.xyz, 1.0);
+    const vec3 pw4 = vec3(dot(pc.model[0], p4), dot(pc.model[1], p4), dot(pc.model[2], p4));
+
+    vec3 o = pw4 + pc.sunDirWorld * kBias;
+    bool occluded = false;
+
+    // WATER IS OPAQUE-MASKED in this renderer's TLAS (VulkanCoreScene: "water
+    // stays opaque-mask; underwater light transport is handled by its
+    // volumetrics"), so a naive query from a submerged parcel hits the sea
+    // surface and shadows the entire wake. The fix is the one the deferred
+    // reflection trace already uses for its own water self-hits: identify the
+    // hit by its foam attribute, advance past the crest and keep tracing.
+    for (int i = 0; i <= kMaxWaterSkips; ++i) {
+        rayQueryEXT rq;
+        // NO TerminateOnFirstHit: the CLOSEST hit is the one whose identity
+        // decides whether to stop or to step past, and a first hit would hand
+        // this loop whichever triangle the traversal happened to reach first.
+        rayQueryInitializeEXT(rq, topAS, gl_RayFlagsOpaqueEXT, kMaskOpaque,
+                              o, 0.0, pc.sunDirWorld, kFar);
+        while (rayQueryProceedEXT(rq)) {}
+        if (rayQueryGetIntersectionTypeEXT(rq, true) ==
+            gl_RayQueryCommittedIntersectionNoneEXT) break;
+
+        // instanceCustomIndex IS the entry index, which is what geoms[] is
+        // indexed by — the same identity the deferred trace resolves hits with.
+        const int   hitId = rayQueryGetIntersectionInstanceCustomIndexEXT(rq, true);
+        const float tHit  = rayQueryGetIntersectionTEXT(rq, true);
+        if (GeomBuf(pc.geomAddr).g[hitId].foamAddress != 0ul) {
+            o = o + pc.sunDirWorld * (tHit + max(1e-3, tHit * 1e-4));
+            continue;
+        }
+        occluded = true;
+        break;
+    }
+
+    if (!occluded) return;
+
+    // The T_sun half only. A hard zero rather than a soft factor: the volume
+    // march's own answer is already multiplied in, and the vertex stage floors
+    // the result with volumeAmbient, so "no sun reaches this parcel" is exactly
+    // what the shadowed side of the field is supposed to sit at.
+    TransBuf tb = TransBuf(pc.transAddr);
+    const vec2 T = unpackHalf2x16(tb.v[pi]);
+    tb.v[pi] = packHalf2x16(vec2(T.x, 0.0));
+}

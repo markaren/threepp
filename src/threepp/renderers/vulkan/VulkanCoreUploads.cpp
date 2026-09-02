@@ -1913,6 +1913,12 @@ void VulkanRenderer::Impl::prepareParticleFields(uint32_t frame) {
             // rather than in rewriteDeferredDescriptors because the pass is
             // created lazily and may not exist when that last ran.
             particleFieldPass_->setTlas(tlas);
+            // Beside it, and for the sun-occlusion query that shares its set:
+            // this frame's slot of the GeometryDesc ring, whose foamAddress is
+            // how that query tells a water hit (walk past it) from a hull hit
+            // (that is the shadow). Per frame, because the ring rotates.
+            particleFieldPass_->setSceneGeomAddress(
+                    geometryDescsBuffers[frame].address);
             particleFieldRecs_.clear();
             particleFieldRecs_.reserve(particleFields_.size());
             for (const auto& [field, entryIndex] : particleFields_) {

@@ -198,6 +198,18 @@ namespace threepp_py {
                                "same volume, times one phase lobe. 0 = unshadowed (the pre-change "
                                "look and an exact no-op), 1 = fully replace. This is the LIT RIM "
                                "and the self-shadowed interior. Needs DensityRepr on.")
+                .def_readwrite("sun_geometry_shadow",
+                               &ParticleField::BillboardRepr::sunGeometryShadow,
+                               "Let the SCENE shadow the sprites, not only the field's own dust: "
+                               "one ray query per particle toward the sun against the scene's "
+                               "acceleration structure, folded into the same T_sun the volume "
+                               "march produces. A wake under a ship's counter goes dark; a wake in "
+                               "open water is unchanged. False by default and read only when "
+                               "volume_shadow > 0, so nothing that predates the flag moves. WATER "
+                               "IS NOT AN OCCLUDER (the ray steps past it) because the renderer "
+                               "carries water on the opaque visibility mask, and glass and blended "
+                               "geometry are culled outright. Needs VK_KHR_ray_query; without it "
+                               "the sun term is silently the volume-only one.")
                 .def_readwrite("volume_ambient", &ParticleField::BillboardRepr::volumeAmbient,
                                "Floor under the sun term, so the shadowed side of the volume does "
                                "not go black. Only read when volume_shadow > 0.")

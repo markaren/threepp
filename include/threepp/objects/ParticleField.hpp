@@ -447,6 +447,25 @@ namespace threepp {
             // sprite's own radiance with the sun term. A mix rather than a
             // multiply because an emissive nebula is not only reflecting the key.
             float volumeShadow = 0.f;
+            // Let the SCENE shadow the sprites, not only the field's own dust.
+            // One ray query per particle toward the sun against the scene's
+            // acceleration structure, folded into the same T_sun the volume
+            // march produces: a wake under a ship's counter goes dark, a wake
+            // in open water does not change at all.
+            //
+            // OFF by default and read only when volumeShadow > 0, so no field
+            // that existed before this flag renders one bit differently. Needs
+            // VK_KHR_ray_query; on a device without it the sun term is silently
+            // the volume-only one it always was.
+            //
+            // WATER IS NOT AN OCCLUDER here. The renderer's acceleration
+            // structure carries water on the opaque visibility mask (its light
+            // transport is volumetric, not a pass-through surface), so a naive
+            // query would shadow every submerged particle with the sea above
+            // it; the ray steps past water hits and stops at the first thing
+            // that is not one. Glass and blended geometry are culled outright,
+            // exactly as they are for every other occlusion query here.
+            bool sunGeometryShadow = false;
             // What the shadowed side sits at, so nothing in the volume goes
             // black — the litAmbient argument applied to the 3D transport.
             float volumeAmbient = 0.25f;
