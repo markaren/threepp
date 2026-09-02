@@ -6768,12 +6768,22 @@ class SplatCloud(Mesh):
     @property
     def lod_held_level(self) -> int:
         """
-        Index into lod_levels of the level select_lod is currently holding (hysteresis state lives on the cloud's own table). 0 without LOD.
+        Index into lod_levels of the level select_lod is currently holding (hysteresis state lives on the cloud's own table). 0 without LOD. On the per-node path this is the FINEST level in use this frame, since there is no single level any more.
         """
     @property
     def lod_levels(self) -> list:
         """
         The resident detail levels as dicts (lod, base, count, chunks), finest first — empty unless the cloud came from from_sog_lod on a multi-level asset. `base` is the level's first splat index in this cloud.
+        """
+    @property
+    def lod_node_count(self) -> int:
+        """
+        Leaves of the asset's SSOG tree resident in this cloud. 0 when the asset carries no tree (or no per-node offsets), which is exactly when select_lod falls back to whole-cloud selection.
+        """
+    @property
+    def lod_node_levels(self) -> list:
+        """
+        The level index each tree node was submitted at by the last per-node select_lod, -1 for a node the frustum culled. Length lod_node_count; all -1 before the first per-node selection. A histogram of this is the readable form of 'what did LOD actually do this frame'.
         """
     @property
     def point_mix(self) -> float:
@@ -8855,11 +8865,15 @@ def rotate_equirect(texture: Texture, x_deg: typing.SupportsFloat | typing.Suppo
     """
     Resample an equirect float texture by a 3D rotation (Euler XYZ degrees). For a Z-up scene with a Y-up HDRI: rotate_equirect(env, -90, 0, 0).
     """
-def select_lod(cloud: SplatCloud, camera: Camera, viewport_height_px: typing.SupportsInt | typing.SupportsIndex, target_splats_per_pixel: typing.SupportsFloat | typing.SupportsIndex = 1.0, hysteresis: typing.SupportsFloat | typing.SupportsIndex = 1.25) -> int:
+def select_lod(cloud: SplatCloud, camera: Camera, viewport_height_px: typing.SupportsInt | typing.SupportsIndex, target_splats_per_pixel: typing.SupportsFloat | typing.SupportsIndex = 1.0, hysteresis: typing.SupportsFloat | typing.SupportsIndex = 1.25, per_node: bool = True) -> int:
     """
-    Pick the coarsest resident level whose splat count still covers the cloud's projected footprint at about target_splats_per_pixel, then submit only the chunks of that level that survive the frustum. Writes the result into the cloud's submit_ranges and returns the level index it settled on (an index into cloud.lod_levels, not the asset's own lod number).
+    Choose what this frame draws, and write it into the cloud's submit_ranges. Returns a level index into cloud.lod_levels (not the asset's own lod number).
     
-    Call once per frame, before render(), with the RENDER resolution's height. The cloud carries its own hysteresis state, so nothing has to be kept on the Python side. A cloud with no LOD table is left alone and 0 comes back. Raise target_splats_per_pixel when the camera stands INSIDE the scan: the footprint rule was tuned on a subject seen from outside, and a robot on the ground wants the finest level near it.
+    PER NODE by default, whenever the asset carried an SSOG tree (cloud.lod_node_count > 0): every leaf of that tree gets its own level, so a near wall stays fine while the far end of the canyon coarsens. Without a tree this is the whole-cloud rule — one level for everything, then its chunks against the frustum — which is also what per_node=False forces, for A/B.
+    
+    target_splats_per_pixel means the same thing on both paths: splats per SCREEN pixel for the whole visible cloud. The per-node rule derives its own per-leaf threshold by dividing it by the frame's overdraw factor (the visible leaves' footprints summed over the screen area), so the total submitted count lands near target_splats_per_pixel * screen pixels by construction and the SAME argument value keeps its meaning across the switch. Raise it when the camera stands INSIDE the scan; the calico demo runs 8.
+    
+    Call once per frame, before render(), with the RENDER resolution's height. The cloud carries its own hysteresis state (per node on the per-node path), so nothing has to be kept on the Python side. A cloud with no LOD table is left alone and 0 comes back.
     """
 def simplify_geometry(geometry: BufferGeometry, ratio: typing.SupportsFloat | typing.SupportsIndex, error: typing.SupportsFloat | typing.SupportsIndex = 0.009999999776482582) -> BufferGeometry:
     ...
