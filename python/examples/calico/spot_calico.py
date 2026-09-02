@@ -146,6 +146,45 @@ def spine_bake_poses(wp):
     return poses
 
 
+def lattice_bake_poses(cells, spacing=2.0):
+    """Bake stations on a lattice across WP0's walkable region. `cells` is (N,3) world.
+
+    The spine set walks a LINE and measures a ribbon about 2.5 m wide (97.5 % of the
+    grid cells within 1.25 m of the spine come from real samples; at 3 m that is
+    69 % and at 5 m it is 45 %). Everything else in the height grid is inpainted
+    from the nearest cell that WAS seen, which is a fine way to avoid a hole and a
+    poor way to describe rock. A user with a keyboard leaves the ribbon at once, so
+    the bake has to leave it too.
+
+    One station per `spacing` lattice cell -- the walkable cell nearest that cell's
+    centre, chosen by an argmin over a fixed ordering, so the set is deterministic.
+    Each station gets the SAME look set the spine stations get: straight down, and
+    four horizontal looks 4 m out at +0.5 m (the four compass directions rather than
+    a tangent's left/right, because a lattice point has no tangent).
+    """
+    P = np.asarray(cells, np.float64)
+    if len(P) == 0:
+        return []
+    k = np.floor(P[:, :2] / float(spacing)).astype(np.int64)
+    key = k[:, 0] * 100003 + k[:, 1]
+    ctr = (k + 0.5) * float(spacing)
+    d2 = ((P[:, :2] - ctr) ** 2).sum(axis=1)
+    order = np.lexsort((d2, key))
+    ks = key[order]
+    first = np.concatenate([[True], ks[1:] != ks[:-1]])
+    stations = P[order][first]
+    poses = []
+    up = tp.Vector3(0, 0, 1)
+    for w in stations:
+        eye = np.array([w[0], w[1], w[2] + BAKE_EYE_UP])
+        poses.append(tp.BakePose(_v3(eye), _v3(w), tp.Vector3(-1, 0, 0), BAKE_FOV))
+        for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1)):
+            tgt = np.array([w[0] + dx * BAKE_SIDE_M, w[1] + dy * BAKE_SIDE_M,
+                            w[2] + BAKE_SIDE_UP])
+            poses.append(tp.BakePose(_v3(eye), _v3(tgt), up, BAKE_FOV))
+    return poses, stations
+
+
 # ── policy observation (96-d clock: mirrors SpotStepsEnv) ─────────────────────
 def v2_obs(art, last_act, cmd, ahead, h_here, phi):
     rs, rv = art.root_state(), art.root_velocity()
@@ -169,6 +208,8 @@ def main():
                     help="shots.json camera for --shot (establishing/low_following/topdown/lookback),"
                          " 'follow' for a chase pose behind the robot, or 'trackside' for WP0's"
                          " low_following geometry rebuilt at whatever waypoint we spawned on")
+    ap.add_argument("--strafe-m", type=float, default=0.0,
+                    help="--shot: strafe sideways off the spine this far before capturing")
     ap.add_argument("--walk-m", type=float, default=0.0,
                     help="--shot: auto-walk this many metres along the spine before capturing")
     ap.add_argument("--shot-size", default="1600x1000")
@@ -200,12 +241,51 @@ def main():
                          "'heightfield' is the same field as a real PxHeightField, which also "
                          "has THICKNESS. The sensor mesh is unchanged in every case -- what "
                          "the scanner sees is still the bake, brush and all.")
+    ap.add_argument("--grid-area", default="full", choices=("corridor", "full"),
+                    help="how far the height-grid collider reaches. 'corridor' is what "
+                         "WP6 phase 1 shipped: the spine's bounding box plus 1.25 m plus "
+                         "1 m of margin, i.e. x -17.9..2.3, y -2.3..5.9. The BAKE covers "
+                         "-27.2..9.6 by -14.4..10.4, so a user driving with W/A/S/D left "
+                         "the collider entirely within a couple of metres and fell into "
+                         "nothing -- which is why the grid appeared to change nothing "
+                         "interactively. 'full' builds over the bake's own AABB and adds "
+                         "an edge-clamped skirt past it. 'corridor' is kept as the A/B.")
+    ap.add_argument("--grid-map", metavar="PNG",
+                    help="save a top-down map of the collider grid (height as colour, "
+                         "inpainted cells hatched, spine and walkable region overlaid)")
+    ap.add_argument("--grid-out", metavar="NPZ",
+                    help="save the collider grid (with its measured mask) for offline work")
+    ap.add_argument("--no-skirt", action="store_true",
+                    help="CONTROL: no edge-clamped skirt past the grid, so walking off "
+                         "the scanned area is a cliff into nothing again")
+    ap.add_argument("--bake-poses", default="spine+lattice",
+                    choices=("spine", "spine+lattice"),
+                    help="'spine' is the 61-pose set judged after WP1: eye 1.6 m over each "
+                         "spine waypoint, looking ahead/back/down plus side looks every "
+                         "third waypoint. It measures a 2.5 m ribbon and leaves the rest "
+                         "of the wash unmeasured, so the height grid out there is "
+                         "inpainted guesswork. 'spine+lattice' adds a 2 m lattice of "
+                         "stations across WP0's walkable region with the same look set.")
+    ap.add_argument("--lattice-m", type=float, default=2.0,
+                    help="lattice spacing for the extra bake stations")
     ap.add_argument("--spawn-wp", type=int, default=4,
                     help="spine waypoint index to spawn on. NOT 0: WP0's own spawn sits at the "
                          "brushy +x end where the bake is twigs over a shell with holes in it "
                          "-- probed floors there are +0.00..+0.07 while the baked vertices read "
                          "+0.275 (20 cm of brush), and the robot drops straight through. wp4 is "
                          "open wash rock: 8.03 m walked, zero falls.")
+    ap.add_argument("--drive-test", metavar="SCRIPT", default=None,
+                    choices=("full", "strafe3"),
+                    help="headless INTERACTIVE-STYLE test: drive the robot with the same "
+                         "velocity commands the W/A/S/D keys produce, on a fixed script, "
+                         "and report base-z-minus-grid, roll, pitch and falls. 'full' is "
+                         "the 90 s tour that leaves the corridor (fwd / strafe left / fwd "
+                         "/ turn 90 and walk / strafe right / seeded random walk); "
+                         "'strafe3' is the user's complaint reproduced: strafe sideways "
+                         "off the spine and watch the base z.")
+    ap.add_argument("--drive-seconds", type=float, default=90.0)
+    ap.add_argument("--drive-seed", type=int, default=11)
+    ap.add_argument("--drive-out", metavar="NPZ", default=None)
     ap.add_argument("--probe", action="store_true",
                     help="drop a ball on the baked collider and report where it rests")
     ap.add_argument("--windowed", action="store_true")
@@ -281,7 +361,10 @@ def main():
     args = ap.parse_args()
     assert tp.HAS_PHYSX, "needs a PhysX-enabled threepp build"
     film = bool(args.film)
-    headless = bool(args.shot) or bool(args.verify_frame)
+    if args.drive_test:
+        args.no_slam = True
+        args.no_pip = True
+    headless = bool(args.shot) or bool(args.verify_frame) or bool(args.drive_test)
     bench = int(args.bench)
     if film:
         # Everything downstream of here that could make one run differ from the
@@ -319,7 +402,10 @@ def main():
         return F(c["pos"]), F(c["look"])
 
     # ── canvas + renderer ─────────────────────────────────────────────────────
-    if args.shot or args.verify_frame:
+    if args.drive_test:
+        _bw, _bh = 640, 400     # nothing is looked at; the render is only there to
+                                # rebuild the TLAS the depth scan traces
+    elif args.shot or args.verify_frame:
         _bw, _bh = (int(v) for v in args.shot_size.split("x"))
     elif film:
         _bw, _bh = (int(v) for v in args.film_size.split("x"))
@@ -406,6 +492,7 @@ def main():
     sensor_mesh = None
     surf_pos = None
     hgrid = [None]          # the height-grid collider, when --collider is not 'bake'
+    skirt_body = [None]     # the edge-clamped ring past it
     if args.flat:
         _fg = tp.BufferGeometry()
         _q = [(-20, -20), (20, -20), (20, 20), (-20, -20), (20, 20), (-20, 20)]
@@ -432,8 +519,19 @@ def main():
         print(f"[splat] first render {time.perf_counter() - t0:.2f}s (shader compile included)")
 
         poses = spine_bake_poses(spine)
-        print(f"[bake] {len(poses)} poses along the spine, voxel={BAKE_VOXEL} "
-              f"max_depth={BAKE_MAX_DEPTH} ...")
+        n_spine = len(poses)
+        n_lat = 0
+        if args.bake_poses == "spine+lattice":
+            cw = np.array([F(c) for c in shots["walkable_region"]["cells"]], np.float64)
+            lat, stations = lattice_bake_poses(cw, args.lattice_m)
+            poses = poses + lat
+            n_lat = len(lat)
+            print(f"[bake] + {len(stations)} lattice stations at {args.lattice_m} m over "
+                  f"the walkable region (x {stations[:,0].min():+.1f}..{stations[:,0].max():+.1f}, "
+                  f"y {stations[:,1].min():+.1f}..{stations[:,1].max():+.1f}) "
+                  f"= {n_lat} extra poses")
+        print(f"[bake] {len(poses)} poses ({n_spine} spine + {n_lat} lattice), "
+              f"voxel={BAKE_VOXEL} max_depth={BAKE_MAX_DEPTH} ...")
         t0 = time.perf_counter()
         surface = tp.bake_surface(rend, cloud, poses=poses,
                                   voxel_size=BAKE_VOXEL, max_depth=BAKE_MAX_DEPTH)
@@ -478,11 +576,49 @@ def main():
             print(f"[collider] bake: the raw marching-cubes shell as a static trimesh "
                   f"({surface.triangle_count} triangles) = {body}")
         else:
-            _cw = CC.CORRIDOR_HALF_W
-            hgrid[0] = CC.build_height_grid(
-                surf_pos, surface.indices,
-                bounds=(float(spine[:, 0].min()) - _cw, float(spine[:, 0].max()) + _cw,
-                        float(spine[:, 1].min()) - _cw, float(spine[:, 1].max()) + _cw))
+            if args.grid_area == "corridor":
+                _cw = CC.CORRIDOR_HALF_W
+                _gb = (float(spine[:, 0].min()) - _cw, float(spine[:, 0].max()) + _cw,
+                       float(spine[:, 1].min()) - _cw, float(spine[:, 1].max()) + _cw)
+                _fc = CC.FLOOR_CELL
+            else:
+                # The WHOLE baked area, not the spine's corridor. The bake is what
+                # was measured; anything narrower leaves the robot standing on
+                # nothing the moment it steps sideways.
+                _gb = CC.bake_bounds(surf_pos)
+                # 0.5 m rather than 1 m: the local floor is a per-cell MINIMUM, and
+                # over the whole scan the cells are no longer all wash floor. A 1 m
+                # cell on a canyon flank has a metre of relief inside it, so its
+                # minimum sits far below its own surface and the 0.30 m brush test
+                # throws the upper half of the cell away. Halving the cell halves
+                # that relief. On the wash it changes nothing measurable: the wp4
+                # spawn moves by 0.0005 m.
+                _fc = 0.5
+            print(f"[collider] grid area '{args.grid_area}': "
+                  f"x {_gb[0]:+.2f}..{_gb[1]:+.2f}  y {_gb[2]:+.2f}..{_gb[3]:+.2f}")
+            hgrid[0] = CC.build_height_grid(surf_pos, surface.indices,
+                                            bounds=_gb, floor_cell=_fc)
+            if args.grid_map or args.grid_out:
+                _M = CC.measured_mask(surf_pos, surface.indices, hgrid[0],
+                                      floor_cell=_fc)
+                if args.grid_out:
+                    np.savez_compressed(args.grid_out, H=hgrid[0].H, x0=hgrid[0].x0,
+                                        y0=hgrid[0].y0, cell=hgrid[0].cell, measured=_M)
+                    print(f"[collider] grid saved to {args.grid_out}")
+                if args.grid_map:
+                    _cwm = np.array([F(c) for c in shots["walkable_region"]["cells"]])
+                    CC.grid_map_png(args.grid_map, hgrid[0], measured=_M, spine=spine,
+                                    walkable=_cwm,
+                                    title=f"calico collider grid  area={args.grid_area}  "
+                                          f"{hgrid[0].shape[0]}x{hgrid[0].shape[1]} @ "
+                                          f"{hgrid[0].cell} m   measured "
+                                          f"{100.0 * _M.mean():.1f}%  (dim+hatched = "
+                                          f"inpainted)   cyan spine, magenta walkable")
+                    print(f"[collider] map -> {args.grid_map}")
+            _gs = hgrid[0].stats
+            print(f"[collider]   {100.0 * _gs['frac_measured']:.1f}% of cells measured, "
+                  f"{100.0 * _gs['frac_inpainted']:.1f}% inpainted from the nearest "
+                  f"measured cell")
             if args.collider == "heightfield":
                 if not hasattr(world, "add_static_heightfield"):
                     raise SystemExit("--collider heightfield needs a pyd with "
@@ -496,6 +632,16 @@ def main():
                 body = world.add_static_trimesh(hgrid[0].to_mesh())
                 print(f"[collider] grid: the height field as a regular-grid trimesh "
                       f"{hgrid[0].shape} at {hgrid[0].cell} m = {body}")
+            # The skirt: the SAME field carried outward at its edge value, so a
+            # robot driven off the scan gets a flat shelf instead of the void.
+            # Disjoint from the grid in plan view -- the two together are one
+            # ground surface, not two stacked ones.
+            if not args.no_skirt:
+                skirt_body[0] = world.add_static_trimesh(hgrid[0].skirt_mesh())
+                _sb = hgrid[0].stats["skirt_bounds"]
+                print(f"[collider] skirt: {hgrid[0].stats['skirt_tris']} triangles at "
+                      f"{CC.SKIRT_CELL} m out to x {_sb[0]:+.1f}..{_sb[1]:+.1f} "
+                      f"y {_sb[2]:+.1f}..{_sb[3]:+.1f} (edge-clamped) = {skirt_body[0]}")
 
         if args.probe:
             idx = surface.indices
@@ -524,7 +670,22 @@ def main():
             soup = np.ascontiguousarray(P[idx.reshape(-1)], np.float32)
             gsoup = tp.BufferGeometry(); gsoup.set_attribute("position", soup)
             drop("soup", tp.Mesh(gsoup, tp.MeshStandardMaterial()))
-            body = world.add_static_trimesh(sensor_mesh)
+            # RESTORE the collider that --collider asked for. This line used to read
+            # `add_static_trimesh(sensor_mesh)` unconditionally, so `--collider grid
+            # --probe` removed the height grid and put the raw BAKE back as the
+            # ground -- the diagnostic quietly swapped in the very collider the grid
+            # exists to replace. Every `drop()` above adds and removes its own body
+            # inside the call, so after this line there is exactly ONE ground body
+            # (plus the disjoint skirt).
+            if args.collider == "bake":
+                body = world.add_static_trimesh(sensor_mesh)
+            elif args.collider == "heightfield":
+                body = world.add_static_heightfield(
+                    hgrid[0].H, cell=hgrid[0].cell,
+                    origin=tp.Vector3(hgrid[0].x0, hgrid[0].y0, 0.0))
+            else:
+                body = world.add_static_trimesh(hgrid[0].to_mesh())
+            print(f"[probe] restored the '{args.collider}' collider = {body}")
 
     _FEET = ((0.30, 0.17), (0.30, -0.17), (-0.30, 0.17), (-0.30, -0.17), (0.0, 0.0))
 
@@ -1193,6 +1354,111 @@ def main():
         canvas.close()
         return
 
+    # ── the interactive-style drive test ──────────────────────────────────────
+    # The film walked the spine and never left the corridor, which is exactly why
+    # it looked fixed. What the user does is hold W and A. This drives the SAME
+    # command vector the key handler builds -- (vx, vy, wz) straight into
+    # step_policy -- on a script that leaves the corridor within ten seconds, and
+    # measures the one number that says whether there is ground: base z minus the
+    # collider's own height under the base.
+    if args.drive_test:
+        rng = np.random.default_rng(args.drive_seed)
+        DT = 0.02
+        gphi = 0.0
+        n = int(round(float(args.drive_seconds) / DT))
+        rs0 = art.root_state()
+        yaw0 = math.atan2(*_quat_to_R(rs0[3:7])[[1, 0], 0])
+        turn_target = [yaw0 + math.pi / 2]
+        rw = [np.zeros(3)]
+
+        def script(t, rs):
+            """(vx, vy, wz) exactly as W/A/S/D/Q/E would produce them."""
+            R = _quat_to_R(rs[3:7])
+            yaw = math.atan2(float(R[1, 0]), float(R[0, 0]))
+            if args.drive_test == "strafe3":
+                # the complaint, minimal: hold A and walk off the side of the spine
+                return (0.0, 1.0, 0.0)
+            if t < 10.0:
+                return (float(VX_HI), 0.0, 0.0)            # W
+            if t < 20.0:
+                return (0.0, 1.0, 0.0)                     # A
+            if t < 30.0:
+                return (float(VX_HI), 0.0, 0.0)            # W
+            if t < 40.0:                                   # Q until 90 deg, then W
+                err = (turn_target[0] - yaw + math.pi) % (2 * math.pi) - math.pi
+                if abs(err) > math.radians(10.0):
+                    return (0.0, 0.0, float(np.clip(1.5 * np.sign(err), -1.5, 1.5)))
+                return (float(VX_HI), 0.0, 0.0)
+            if t < 50.0:
+                return (0.0, -1.0, 0.0)                    # D
+            # a seeded random walk: a new key combination every 1.5 s, held
+            if int((t - 50.0) / 1.5) != int((t - 50.0 - DT) / 1.5) or t <= 50.0 + DT:
+                rw[0] = np.array([rng.choice([0.0, float(VX_HI), -1.0]),
+                                  rng.choice([0.0, 1.0, -1.0]),
+                                  rng.choice([0.0, 1.5, -1.5])])
+            return tuple(rw[0])
+
+        rec = np.zeros((n, 8), np.float64)   # t x y z dz roll pitch fallen
+        gh_at = (lambda x, y: float(hgrid[0].height_at(x, y))) if hgrid[0] is not None \
+            else (lambda x, y: float(SPAWN[2]))
+        t_wall = time.perf_counter()
+        for i in range(n):
+            t = i * DT
+            rs = art.root_state()
+            track(rs)
+            if i % SCAN_EVERY == 0:
+                look_update(rs)
+                rend.render(scene, camera)
+                ahead_cache[0], h_here_cache[0] = scanner.scan(rs)
+            R = _quat_to_R(rs[3:7])
+            rec[i] = (t, rs[0], rs[1], rs[2], rs[2] - gh_at(rs[0], rs[1]),
+                      math.degrees(math.asin(max(-1.0, min(1.0, float(R[2, 1]))))),
+                      math.degrees(math.asin(max(-1.0, min(1.0, -float(R[2, 0]))))),
+                      1.0 if float(R[2, 2]) < 0.5 else 0.0)
+            step_policy(np.array(script(t, rs), np.float32), gphi)
+            gphi = (gphi + DT / GAIT_PERIOD) % 1.0
+            if rs[2] < gh_at(rs[0], rs[1]) - 5.0:
+                print(f"[drive] LOST at t={t:.1f}s ({rs[0]:+.2f}, {rs[1]:+.2f}) "
+                      f"z={rs[2]:+.2f}, grid {gh_at(rs[0], rs[1]):+.2f} -- stopping")
+                rec = rec[:i + 1]
+                break
+
+        dz = rec[:, 4]
+        # A "drop" is the base falling more than 0.5 m below where it was standing:
+        # the median offset IS the standing height, so measure against that.
+        base = float(np.median(dz[:min(len(dz), 250)]))
+        drops = np.where(dz < base - 0.5)[0]
+        nfall = int(rec[:, 7].sum())
+        print()
+        print(f"  ==== DRIVE TEST '{args.drive_test}' "
+              f"(grid_area={args.grid_area} skirt={not args.no_skirt} "
+              f"bake={args.bake_poses}) ====")
+        print(f"  {len(rec)} steps = {rec[-1,0]:.1f} s in "
+              f"{time.perf_counter() - t_wall:.0f}s wall")
+        print(f"  base z - grid height:  min {dz.min():+.3f}  max {dz.max():+.3f}  "
+              f"median {np.median(dz):+.3f}  (standing offset {base:+.3f})")
+        print(f"  max |roll| {np.abs(rec[:,5]).max():.1f} deg   "
+              f"max |pitch| {np.abs(rec[:,6]).max():.1f} deg")
+        print(f"  falls (body up axis < 0.5): {nfall} steps"
+              + (f", first at t={rec[rec[:,7]>0][0,0]:.1f}s "
+                 f"({rec[rec[:,7]>0][0,1]:+.2f}, {rec[rec[:,7]>0][0,2]:+.2f})"
+                 if nfall else ""))
+        print(f"  drops > 0.5 m below the standing offset: {len(drops)} steps"
+              + (f", first at t={rec[drops[0],0]:.1f}s "
+                 f"({rec[drops[0],1]:+.2f}, {rec[drops[0],2]:+.2f}) dz={dz[drops[0]]:+.2f}"
+                 if len(drops) else ""))
+        print(f"  travelled x {rec[:,1].min():+.2f}..{rec[:,1].max():+.2f}  "
+              f"y {rec[:,2].min():+.2f}..{rec[:,2].max():+.2f}  "
+              f"z {rec[:,3].min():+.2f}..{rec[:,3].max():+.2f}   walked {walked[0]:.2f} m")
+        print("  base z every 5 s: " + " ".join(
+            f"{rec[k,3]:+.2f}" for k in range(0, len(rec), int(5.0 / DT))))
+        if args.drive_out:
+            np.savez_compressed(args.drive_out, rec=rec,
+                                grid_area=args.grid_area, base=base)
+            print(f"  -> {args.drive_out}")
+        canvas.close()
+        return
+
     # ── headless capture ──────────────────────────────────────────────────────
     if headless:
         gphi = 0.0
@@ -1221,11 +1487,24 @@ def main():
                     slam.apply_pending()
                 if nharvest % 15 == 0:
                     scanstats("walk", fc)
-            cmd = np.array((0.0, 0.0, 0.0) if (target_m <= 0.0 or fc < 60) else auto_cmd(rs),
-                           np.float32)
+            if args.strafe_m > 0.0:
+                # Walk SIDEWAYS off the spine, which is the whole point: the film's
+                # camera never saw this ground and neither did the corridor grid.
+                off = float(np.linalg.norm(np.array(rs[:2]) - SPAWN[:2]))
+                cmd = np.array((0.0, 0.0, 0.0) if fc < 60 else
+                               ((0.0, 1.0, 0.0) if off < args.strafe_m else (0.0, 0.0, 0.0)),
+                               np.float32)
+                if off >= args.strafe_m and fc > 60 + 250:
+                    break
+            else:
+                cmd = np.array((0.0, 0.0, 0.0) if (target_m <= 0.0 or fc < 60)
+                               else auto_cmd(rs), np.float32)
             step_policy(cmd, gphi)
             gphi = (gphi + 0.02 / GAIT_PERIOD) % 1.0
-            if target_m <= 0.0:
+            if args.strafe_m > 0.0:
+                if fc >= 60 + int(args.strafe_m * 220) + 250:
+                    break
+            elif target_m <= 0.0:
                 if fc >= 120:
                     break
             elif walked[0] >= target_m or fc >= max_frames or wp_i[0] >= len(route[0]):

@@ -54,6 +54,15 @@ BAKE_CACHE = os.path.join(DEFAULT_ASSET, "calico_bake_cache.npz")
 CELL = 0.05             # collider cell, matched to the bake's 5 cm voxel
 MARGIN = 1.0            # metres of grid past the walkable region (never step off an edge)
 FLOOR_CELL = 1.0        # the local-floor field's cell, as in calico_slam_pip
+# How far past the fine grid the edge-clamped SKIRT reaches, and at what cell.
+# The fine grid ends at the bake's own AABB + MARGIN; past that there is no data
+# at all, and the first version of this file simply ENDED there. A robot driven
+# off the scan then had nothing under it: it fell into the void, or caught the
+# clamped last row as a shelf. The skirt continues the same field outward with
+# the edge value (which is exactly what `height_at` already returns out there),
+# so walking off the scan is a flat shelf rather than a cliff.
+SKIRT_EXTEND = 10.0
+SKIRT_CELL = 0.5
 # Reject samples more than this far over the local floor. 0.40 was the first
 # guess and it is not tight enough at the wp0 end of the spine: the cell under
 # Spot's front-left foot there holds 17 vertices in a 5 cm band at +0.33..+0.38
@@ -126,6 +135,52 @@ class HeightGrid:
 
     def to_mesh(self, material=None):
         return tp.Mesh(self.to_geometry(), material or tp.MeshStandardMaterial())
+
+    def skirt_geometry(self, extend=SKIRT_EXTEND, cell=SKIRT_CELL):
+        """The RING outside the grid, out to `extend` metres, at edge-clamped height.
+
+        `height_at` already clamps to the edge outside the grid, so this mesh is
+        literally the same height field evaluated further out: every skirt vertex
+        is `height_at(x, y)`, and a vertex on the shared boundary line evaluates to
+        the fine grid's own bilinear surface there. The seam is therefore a
+        T-junction (the fine side has a vertex every 5 cm, the skirt one every
+        `cell`), not a gap: a T-junction has zero width in plan view, so a foot
+        cannot pass through it, while a missing skirt is a genuine hole in the
+        world. Only the ring is emitted -- the interior is the fine mesh's job, and
+        two colliders stacked on the same ground is exactly the double-ground bug
+        this file exists to avoid.
+        """
+        x0, x1, y0, y1 = self.bounds
+        ex0, ex1 = x0 - extend, x1 + extend
+        ey0, ey1 = y0 - extend, y1 + extend
+        # Index lines that CONTAIN the inner boundary exactly, coarse outside it.
+        def line(a, lo, hi, b):
+            out = list(np.arange(lo, a - 1e-9, cell)) + [a, b] + \
+                  list(np.arange(b + cell, hi + 1e-9, cell))
+            return np.unique(np.round(np.asarray(out, np.float64), 6))
+        xs = line(x0, ex0, ex1, x1)
+        ys = line(y0, ey0, ey1, y1)
+        X, Y = np.meshgrid(xs, ys, indexing="ij")
+        Z = self.height_at(X, Y)
+        V = np.stack([X, Y, Z], axis=-1)
+        # quad (i, j) is INSIDE when both its spans lie within the fine rect
+        cxi = 0.5 * (xs[:-1] + xs[1:]); cyi = 0.5 * (ys[:-1] + ys[1:])
+        inx = (cxi > x0) & (cxi < x1)
+        iny = (cyi > y0) & (cyi < y1)
+        keep = ~(inx[:, None] & iny[None, :])
+        a = V[:-1, :-1]; b = V[1:, :-1]; c = V[1:, 1:]; d = V[:-1, 1:]
+        tri = np.concatenate([np.stack([a, b, c], axis=2),
+                              np.stack([a, c, d], axis=2)], axis=2)   # [nx-1, ny-1, 6, 3]
+        soup = tri[keep].reshape(-1, 3)
+        g = tp.BufferGeometry()
+        g.set_attribute("position", np.ascontiguousarray(soup, np.float32))
+        g.compute_vertex_normals()
+        self.stats["skirt_tris"] = soup.shape[0] // 3
+        self.stats["skirt_bounds"] = (ex0, ex1, ey0, ey1)
+        return g
+
+    def skirt_mesh(self, material=None, **kw):
+        return tp.Mesh(self.skirt_geometry(**kw), material or tp.MeshStandardMaterial())
 
     def save(self, path):
         np.savez_compressed(path, H=self.H, x0=self.x0, y0=self.y0, cell=self.cell)
@@ -277,9 +332,23 @@ def _slope_clamp(H, maxd, rounds=4):
     return F
 
 
+def bake_bounds(positions, indices=None):
+    """The bake's own XY AABB -- the area the collider should cover.
+
+    The first version of the demo built the grid over the SPINE's bounding box plus
+    a 1.25 m corridor: x in [-17.9, 2.3], y in [-2.3, 5.9]. The bake covers
+    (-27.2..9.6, -14.4..10.4). A user driving with W/A/S/D leaves the corridor in a
+    couple of seconds and finds NO COLLIDER AT ALL out there -- which is why the
+    height grid made no difference to anyone who did not walk the film's line.
+    """
+    P = np.asarray(positions, np.float64)
+    return (float(P[:, 0].min()), float(P[:, 0].max()),
+            float(P[:, 1].min()), float(P[:, 1].max()))
+
+
 def build_height_grid(positions, indices=None, bounds=None, cell=CELL, margin=MARGIN,
                       floor_cell=FLOOR_CELL, brush_above=BRUSH_ABOVE, low_pct=LOW_PCT,
-                      slope_deg=SLOPE_DEG, verbose=True):
+                      slope_deg=SLOPE_DEG, slope_allow=0.0, verbose=True):
     """The bake's triangles -> a watertight 2.5D collider.
 
     `bounds` is the WALKABLE region (x0, x1, y0, y1); the grid is built `margin`
@@ -317,7 +386,20 @@ def build_height_grid(positions, indices=None, bounds=None, cell=CELL, margin=MA
 
     fl = _local_floor(S, floor_cell, (gx0, gx0 + nx * cell, gy0, gy0 + ny * cell))
     dz = S[:, 2] - _floor_lookup(fl, S[:, 0], S[:, 1])
-    on_floor = dz <= brush_above
+    thr = np.full(dz.shape, float(brush_above))
+    if slope_allow > 0.0:
+        # On the WASH a 1 m floor cell is flat, so "0.30 m over the cell's minimum"
+        # means brush. On a 40 deg canyon flank the cell's own minimum is 0.8 m
+        # below its far corner and the SAME test throws away the upper half of every
+        # sloped cell -- the surviving samples terrace the slope into 0.3 m steps.
+        # Widen the band by the drop the local floor itself is making across a cell,
+        # which is zero on the wash (so nothing in the corridor moves) and grows
+        # exactly where the terracing was.
+        F = fl[0]
+        gxg, gyg = np.gradient(F, floor_cell)
+        G = np.hypot(gxg, gyg)
+        thr = thr + slope_allow * floor_cell * _floor_lookup((G,) + fl[1:], S[:, 0], S[:, 1])
+    on_floor = dz <= thr
     n_brush = int((~on_floor).sum())
     S = S[on_floor]
 
@@ -338,6 +420,8 @@ def build_height_grid(positions, indices=None, bounds=None, cell=CELL, margin=MA
 
     stats = {
         "cells": nx * ny, "cells_seen": n_seen, "cells_filled": n_filled,
+        "frac_measured": n_seen / float(nx * ny),
+        "frac_inpainted": n_filled / float(nx * ny),
         "samples": n_in, "samples_brush": n_brush,
         "median_max_move": med_moved, "slope_cells": n_clamped,
         "slope_max_move": clamp_moved, "max_step": maxd,
@@ -502,6 +586,73 @@ def hole_spike_png(path, samples, dz, grid_xy=None, hole=-0.5, spike=0.15, px=6,
         d.text((4, 4), title, fill=(255, 255, 255))
     im.save(path)
     return path
+
+
+def grid_map_png(path, grid, measured=None, spine=None, walkable=None, px=2, title=""):
+    """Top-down plan of the collider: height as colour, unmeasured cells hatched.
+
+    Height goes through a perceptual-ish ramp over the grid's own z range, so the
+    wash reads as one band and the canyon walls as another. Cells the bake never
+    saw -- inpainted from the nearest measured cell -- are dimmed and cross-hatched,
+    because "there is a height here" and "we measured a height here" are different
+    claims and only the second one is evidence. The spine is drawn in cyan and
+    WP0's walkable region in magenta, so the corridor the film walked is visible
+    against the area a user actually drives.
+    """
+    from PIL import Image, ImageDraw
+    H = grid.H
+    nx, ny = H.shape
+    lo, hi = float(np.percentile(H, 1)), float(np.percentile(H, 99))
+    tt = np.clip((H - lo) / max(hi - lo, 1e-6), 0.0, 1.0)
+    # dark blue -> teal -> sand -> white
+    stops = np.array([[16, 26, 58], [22, 96, 104], [176, 154, 108],
+                      [232, 226, 210], [255, 255, 255]], np.float64)
+    f = tt * (len(stops) - 1)
+    k = np.clip(f.astype(np.int64), 0, len(stops) - 2)
+    w = (f - k)[..., None]
+    rgb = stops[k] * (1 - w) + stops[k + 1] * w
+    if measured is not None:
+        M = np.asarray(measured, bool)
+        i, j = np.meshgrid(np.arange(nx), np.arange(ny), indexing="ij")
+        hatch = ((i + j) % 6) < 3
+        rgb[~M] = rgb[~M] * 0.55
+        rgb[(~M) & hatch] = rgb[(~M) & hatch] * 0.72 + np.array([40, 10, 10]) * 0.28
+    img = np.ascontiguousarray(rgb.transpose(1, 0, 2)[::-1], np.uint8)
+    im = Image.fromarray(img, "RGB").resize((nx * px, ny * px), Image.NEAREST)
+    d = ImageDraw.Draw(im)
+
+    def to_px(P):
+        return [((float(x) - grid.x0) / grid.cell * px,
+                 (ny - 1 - (float(y) - grid.y0) / grid.cell) * px) for x, y in P]
+
+    if walkable is not None and len(walkable):
+        for x, y in to_px(np.asarray(walkable)[:, :2]):
+            d.rectangle([x - px * 4, y - px * 4, x + px * 4, y + px * 4],
+                        outline=(226, 72, 200))
+    if spine is not None and len(spine) > 1:
+        d.line(to_px(np.asarray(spine)[:, :2]), fill=(70, 235, 235), width=max(2, px))
+    if title:
+        d.rectangle([0, 0, nx * px, 20], fill=(0, 0, 0))
+        d.text((5, 5), title, fill=(255, 255, 255))
+    im.save(path)
+    return path
+
+
+def measured_mask(positions, indices, grid, floor_cell=FLOOR_CELL,
+                  brush_above=BRUSH_ABOVE):
+    """Which cells of `grid` came from real samples. Mirrors build_height_grid."""
+    S = _sample_triangles(positions, indices)
+    nx, ny = grid.shape
+    fl = _local_floor(S, floor_cell, (grid.x0, grid.x0 + nx * grid.cell,
+                                      grid.y0, grid.y0 + ny * grid.cell))
+    dz = S[:, 2] - _floor_lookup(fl, S[:, 0], S[:, 1])
+    S = S[dz <= brush_above]
+    ix = ((S[:, 0] - grid.x0) / grid.cell + 0.5).astype(np.int64)
+    iy = ((S[:, 1] - grid.y0) / grid.cell + 0.5).astype(np.int64)
+    m = (ix >= 0) & (ix < nx) & (iy >= 0) & (iy < ny)
+    M = np.zeros((nx, ny), bool)
+    M[ix[m], iy[m]] = True
+    return M
 
 
 # ── the script: bake once, build both colliders, drop on each ─────────────────
