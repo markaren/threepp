@@ -1,0 +1,2 @@
+# verification captures are produced locally; never commit them
+*.png
