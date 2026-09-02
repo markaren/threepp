@@ -8118,7 +8118,7 @@ class VulkanRenderer:
         
         channels: any of 'color', 'depth', 'normal', 'motion', 'ids', 'albedo', 'splat_depth' (or FrameChannel values). view=0 is the primary; anything else must be a live add_view handle.
         
-        Returns a list of dicts, one per EXPORTABLE channel — duplicates collapse and unexportable ones are skipped ('splat_depth' without splat_depth_aov), so match on the 'channel' key. Each dict carries handle, size_bytes, width, height, bytes_per_pixel and (for 'color') bgra. An EMPTY list means nothing could be exported: before the first render(), on a stale view handle, or on a device with no external-memory extension (one line on stderr) — the fallback is the read_* host readback path.
+        Returns a list of dicts, one per EXPORTABLE channel — duplicates collapse and unexportable ones are skipped ('splat_depth' while the AOV is unallocated — neither set_splat_depth_aov nor the overlay-occlusion latch), so match on the 'channel' key. Each dict carries handle, size_bytes, width, height, bytes_per_pixel and (for 'color') bgra. An EMPTY list means nothing could be exported: before the first render(), on a stale view handle, or on a device with no external-memory extension (one line on stderr) — the fallback is the read_* host readback path.
         
         CALL IT AFTER THE FIRST render(): the exports are sized from the G-buffer / swapchain extents, which exist only once a frame has run.
         
@@ -8348,6 +8348,10 @@ class VulkanRenderer:
     def set_size(self, width: typing.SupportsInt | typing.SupportsIndex, height: typing.SupportsInt | typing.SupportsIndex) -> None:
         """
         Resize the renderer's framebuffer/swapchain — call this from canvas.on_window_resize together with updating the camera aspect.
+        """
+    def set_splat_depth_aov(self, mode: str) -> None:
+        """
+        Ask for the Gaussian-splat depth AOV: 'off', 'expected' (the transmittance-weighted mean view distance) or 'median' (the front of the cloud — what an occlusion test wants). A SETUP knob: turning it on or off reallocates the render targets, so call it once before the loop, not per frame. Changing only the statistic reallocates nothing. Primary view only.
         """
     def set_underwater_murk(self, density: typing.SupportsFloat | typing.SupportsIndex, color: Color = ...) -> None:
         """
@@ -8689,6 +8693,16 @@ class VulkanRenderer:
     @sim_time.setter
     def sim_time(self, arg1: typing.SupportsFloat | typing.SupportsIndex | None) -> None:
         ...
+    @property
+    def splat_depth_aov(self) -> bool:
+        """
+        Whether the APPLICATION asked for the splat depth AOV. Note the renderer also turns it on by itself — the first frame a scene holds both splat clouds and overlay content (lines, wireframe, world sprites, unlit transparent meshes), so the cloud can occlude them — and that does NOT show up here. A read_gbuffer_aov_raw('splat_depth') can therefore succeed while this is False; it returns None only when the AOV is genuinely unallocated (a 1x1 placeholder).
+        """
+    @property
+    def splat_depth_aov_mode(self) -> str:
+        """
+        Which statistic set_splat_depth_aov asked for: 'off', 'expected' or 'median'. 'off' with a readable AOV means the renderer latched it on for overlay occlusion, in which case the image carries the median.
+        """
     @property
     def starfield(self) -> float:
         """
