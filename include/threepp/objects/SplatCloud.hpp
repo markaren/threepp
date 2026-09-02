@@ -124,10 +124,10 @@ namespace threepp {
         // uniforms (the Vulkan compute rasterizer) can honour the same switch.
         [[nodiscard]] bool debugNonFinite() const { return debugNonFinite_; }
 
-        // â”€â”€ Point rendering â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+        // ── Point rendering ─────────────────────────────────────────────────
         // 0 (the default) draws every splat as its Gaussian. 1 draws it as an
-        // opaque disc of pointSize() pixels centred on its mean â€” the point
-        // cloud view â€” composited in the same depth order, so the nearest
+        // opaque disc of pointSize() pixels centred on its mean — the point
+        // cloud view — composited in the same depth order, so the nearest
         // point wins where two overlap. Values between blend the two: the
         // projected covariance is lerped toward the disc's and the opacity
         // toward 1, which makes a 0 -> 1 sweep a continuous dissolve from
@@ -142,7 +142,7 @@ namespace threepp {
         void setPointMix(float mix);
         [[nodiscard]] float pointMix() const { return pointMix_; }
 
-        // Disc diameter in pixels at mix 1 â€” PointsMaterial::size's
+        // Disc diameter in pixels at mix 1 — PointsMaterial::size's
         // convention. Floored at 1. Default 2.
         void setPointSize(float pixels);
         [[nodiscard]] float pointSize() const { return pointSize_; }

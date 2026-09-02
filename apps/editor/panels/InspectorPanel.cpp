@@ -1118,7 +1118,7 @@ void EditorApp::drawSplatSection(Object3D& object) {
 
     // --- point rendering ----------------------------------------------------
     // The one look control a cloud has. 0 is the Gaussians, 1 is every splat
-    // as an opaque disc of Point Size pixels â€” the point cloud view â€” and the
+    // as an opaque disc of Point Size pixels — the point cloud view — and the
     // slider between is a continuous dissolve. Both backends honour it; the
     // depth sort, the occlusion by meshes and the overlay stamp are the same
     // either way. Saved with the cloud's threeppSplat block, like a look.
@@ -1366,7 +1366,6 @@ void EditorApp::drawSplatSection(Object3D& object) {
 // run while a session is holding the graph.
 void EditorApp::bakeSplatSurface(Object3D& object) {
 
-#ifdef THREEPP_WITH_VULKAN
     auto* cloud = object.as<SplatCloud>();
     if (!cloud || !splatSurfaces_) return;
 
@@ -1414,10 +1413,6 @@ void EditorApp::bakeSplatSurface(Object3D& object) {
     splatBakeStats_ = line;
     log("splat surface: \"" + object.name + "\" baked - " + splatBakeStats_);
     flashStatus("Surface baked");
-#else
-    (void) object;
-    log("splat surface: this build has no Vulkan backend to bake with");
-#endif
 }
 
 

@@ -643,6 +643,11 @@ bool SplatLoader::isPointCloudPly(std::istream& stream) {
     return hasVertex;
 }
 
+SplatData SplatLoader::loadPointCloudPly(const std::filesystem::path& path) {
+
+    return loadPointCloudPly(path, PointCloudOptions{}, nullptr);
+}
+
 SplatData SplatLoader::loadPointCloudPly(const std::filesystem::path& path,
                                          const PointCloudOptions& options, PointCloudInfo* info) {
 
@@ -657,6 +662,11 @@ SplatData SplatLoader::loadPointCloudPly(const std::filesystem::path& path,
 
         throw std::runtime_error(std::string(e.what()) + " (in '" + path.string() + "')");
     }
+}
+
+SplatData SplatLoader::parsePointCloudPly(std::istream& stream) {
+
+    return parsePointCloudPly(stream, PointCloudOptions{}, nullptr);
 }
 
 SplatData SplatLoader::parsePointCloudPly(std::istream& stream, const PointCloudOptions& options,

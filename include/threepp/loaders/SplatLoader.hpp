@@ -65,24 +65,24 @@ namespace threepp {
         // back to the magic.
         [[nodiscard]] static bool isSplatPly(std::istream& stream);
 
-        // â”€â”€ Colour-only point clouds â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+        // ── Colour-only point clouds ────────────────────────────────────────
         // A PLY whose vertices carry a position and, optionally, a colour,
-        // normals and scalar fields â€” what a laser scanner, CloudCompare,
-        // MeshLab or Open3D writes â€” loaded as a SplatData of degree-0
+        // normals and scalar fields — what a laser scanner, CloudCompare,
+        // MeshLab or Open3D writes — loaded as a SplatData of degree-0
         // Gaussians. Every point becomes one splat: its DC colour is the
         // point's colour (white when the file has none, grey from
         // `intensity` when it has that instead), its opacity is
         // PointCloudOptions::opacity, and its sigma is either the option's
         // `sigma` or sigmaPerSpacing times the cloud's median nearest-
-        // neighbour distance (splats::medianNeighbourSpacing) â€” so at
+        // neighbour distance (splats::medianNeighbourSpacing) — so at
         // SplatCloud::setPointMix 0 the cloud renders as a closed surface and
         // at 1 as its dots. A point with normals becomes a disc facing them:
         // the axis along the normal is scaled by normalThickness.
         //
         // Accepts binary_little_endian, binary_big_endian and ascii, any
         // numeric property type, and elements before or after the vertices
-        // (they are skipped). A mesh PLY parses too â€” its vertices become
-        // the cloud and its faces are ignored â€” which is what
+        // (they are skipped). A mesh PLY parses too — its vertices become
+        // the cloud and its faces are ignored — which is what
         // isPointCloudPly exists to decide against for an importer.
         //
         // Properties consumed: x y z; red green blue (or r g b, or
@@ -117,12 +117,20 @@ namespace threepp {
         // Throws std::runtime_error, with the offending property in the
         // message, on anything it cannot represent. A cloud of one point
         // has no spacing and gets sigma 0.01.
+        [[nodiscard]] static SplatData loadPointCloudPly(const std::filesystem::path& path);
+
+        // Two overloads rather than a defaulted argument, for the reason
+        // SplatData::removeOutliers has two: `= {}` on a nested type needs that
+        // type's default member initializers complete while the enclosing class
+        // still isn't, which GCC rejects.
         [[nodiscard]] static SplatData loadPointCloudPly(const std::filesystem::path& path,
-                                                         const PointCloudOptions& options = {},
+                                                         const PointCloudOptions& options,
                                                          PointCloudInfo* info = nullptr);
 
+        [[nodiscard]] static SplatData parsePointCloudPly(std::istream& stream);
+
         [[nodiscard]] static SplatData parsePointCloudPly(std::istream& stream,
-                                                          const PointCloudOptions& options = {},
+                                                          const PointCloudOptions& options,
                                                           PointCloudInfo* info = nullptr);
 
         // The twin of isSplatPly for an importer choosing a loader: a vertex

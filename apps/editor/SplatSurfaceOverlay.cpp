@@ -57,8 +57,6 @@ using namespace threepp::editor;
 
 void EditorApp::syncSplatSurfacePreviews() {
 
-#ifdef THREEPP_WITH_VULKAN
-
     if (!splatSurfacePreview_ || isPlaying() || !splatSurfaces_ || !overlay_) {
         clearSplatSurfacePreviews();
         return;
@@ -143,7 +141,15 @@ void EditorApp::syncSplatSurfacePreviews() {
             // per frame however it is biased (measured, and the numbers are in
             // SplatOverlayFlicker_probe). The layer draws these lines before
             // the stamp: occluded by geometry, never by splats.
+            //
+            // The layer is a Vulkan one. A GL session reaches here only for a
+            // point-route cloud (the fusion bake declines earlier), and draws
+            // the shell depth-tested against the splats like any other overlay
+            // line — the flicker above is the price, and a visible preview is
+            // worth more than none.
+#ifdef THREEPP_WITH_VULKAN
             preview.mesh->layers.enable(VulkanRenderer::kSplatUnoccludedOverlayLayer);
+#endif
             // splats::bakeSurface emits WORLD-space vertices (the play session
             // parents its twin at the scene root for this reason), so the
             // preview must carry no transform of its own.
@@ -170,10 +176,6 @@ void EditorApp::syncSplatSurfacePreviews() {
         }
         it = splatSurfacePreviews_.erase(it);
     }
-
-#else
-    clearSplatSurfacePreviews();
-#endif
 }
 
 void EditorApp::clearSplatSurfacePreviews() {

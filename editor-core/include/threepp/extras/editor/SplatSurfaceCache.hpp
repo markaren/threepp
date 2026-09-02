@@ -17,9 +17,12 @@
 // new key REPLACES the old one, so dragging the voxel slider does not accumulate
 // a megabyte of stale meshes.
 //
-// Vulkan only, and it says so rather than pretending: the depth AOV the bake
-// reads is a Vulkan G-buffer attachment. On any other backend bake() declines
-// with a reason and the caller reports it.
+// The FUSION bake is Vulkan only, and it says so rather than pretending: the
+// depth AOV it reads is a Vulkan G-buffer attachment. On any other backend
+// bake() declines that route with a reason and the caller reports it. The
+// direct POINT route beside it is pure CPU (splats::buildPointSurface, compiled
+// in every configuration), so a cloud that takes it bakes on every backend and
+// there is one class here, not one per backend.
 
 #ifndef THREEPP_EDITOR_SPLATSURFACECACHE_HPP
 #define THREEPP_EDITOR_SPLATSURFACECACHE_HPP
@@ -44,8 +47,6 @@
 
 namespace threepp::editor {
 
-#ifdef THREEPP_WITH_VULKAN
-
     class SplatSurfaceCache {
 
     public:
@@ -53,7 +54,15 @@ namespace threepp::editor {
         // session authors the config and declines to realize it.
         // The depth-fusion bake needs the Vulkan backend.
         [[nodiscard]] static bool available(const Renderer* renderer) {
+#ifdef THREEPP_WITH_VULKAN
             return dynamic_cast<const VulkanRenderer*>(renderer) != nullptr;
+#else
+            // No Vulkan compiled in, so no fusion bake to reach: the config
+            // still authors and the callers still report one reason, instead of
+            // failing to link against a bake that was not compiled.
+            (void) renderer;
+            return false;
+#endif
         }
 
         // Which route this config takes for this cloud: the direct point
@@ -124,6 +133,7 @@ namespace threepp::editor {
 
             } else {
 
+#ifdef THREEPP_WITH_VULKAN
                 auto* vulkan = dynamic_cast<VulkanRenderer*>(renderer);
                 if (!vulkan) {
                     if (problem) *problem = "the surface bake needs the Vulkan backend";
@@ -146,6 +156,14 @@ namespace threepp::editor {
                     // rather than return the same nothing instantly.
                     return nullptr;
                 }
+#else
+                // The fusion bake was not compiled into this build at all, so
+                // there is nothing to decline against a renderer: say that,
+                // rather than blaming the one that was passed in.
+                (void) renderer;
+                if (problem) *problem = "this build has no Vulkan backend to bake with";
+                return nullptr;
+#endif
             }
 
             auto& entry = entries_[cloud.uuid];
@@ -205,31 +223,6 @@ namespace threepp::editor {
         std::unordered_map<std::string, Entry> entries_;// by cloud uuid
         std::size_t bakeCount_ = 0;
     };
-
-#else
-
-    // Same shape, no Vulkan: the config authors and the callers report one
-    // reason instead of failing to link against a bake that was not compiled.
-    class SplatSurfaceCache {
-
-    public:
-        [[nodiscard]] static bool available(const Renderer*) { return false; }
-
-        [[nodiscard]] const void* find(SplatCloud&, const SplatSurfaceConfig&) { return nullptr; }
-
-        const void* bake(Renderer*, SplatCloud&, const SplatSurfaceConfig&,
-                         std::string* problem = nullptr) {
-            if (problem) *problem = "this build has no Vulkan backend to bake with";
-            return nullptr;
-        }
-
-        [[nodiscard]] std::size_t bakeCount() const { return 0; }
-        [[nodiscard]] std::size_t size() const { return 0; }
-        void clear() {}
-        void retainClouds(Object3D&) {}
-    };
-
-#endif
 
 }// namespace threepp::editor
 
