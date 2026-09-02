@@ -715,6 +715,53 @@ namespace threepp_py {
                      },
                      py::arg("mesh"), py::keep_alive<0, 1>(),
                      "Add a static collider matching the mesh triangles exactly (static/kinematic only).")
+                .def("add_static_heightfield",
+                     [](PhysxWorld& w,
+                        py::array_t<float, py::array::c_style | py::array::forcecast> heights,
+                        float cell, const Vector3& origin, float thickness) {
+                         if (heights.ndim() != 2) {
+                             throw std::runtime_error(
+                                     "add_static_heightfield: heights must be a 2-D (ny, nx) array, got " +
+                                     std::to_string(heights.ndim()) + " dimensions");
+                         }
+                         const int ny = static_cast<int>(heights.shape(0));
+                         const int nx = static_cast<int>(heights.shape(1));
+                         if (nx < 2 || ny < 2) {
+                             throw std::runtime_error(
+                                     "add_static_heightfield: need at least 2x2 samples, got (" +
+                                     std::to_string(ny) + ", " + std::to_string(nx) + ")");
+                         }
+                         auto* a = w.addStaticHeightField(heights.data(), nx, ny, cell,
+                                                          origin, thickness, nullptr);
+                         if (!a) {
+                             throw std::runtime_error(
+                                     "add_static_heightfield: degenerate field (cell and thickness must "
+                                     "be > 0, and at least one sample must be finite)");
+                         }
+                         return RigidBody(a);
+                     },
+                     py::arg("heights"), py::arg("cell"), py::arg("origin"),
+                     py::arg("thickness") = 0.5f, py::keep_alive<0, 1>(),
+                     "Add a 2.5D height field as a static collider, in a Z-UP world.\n\n"
+                     "`heights` is a 2-D float32/float64 array of shape (ny, nx): ROWS ARE Y. "
+                     "heights[iy, ix] is the surface z at world "
+                     "(origin.x + ix*cell, origin.y + iy*cell), with `cell` the sample spacing in "
+                     "metres, the same in x and y. A (nx, ny) grid indexed the other way round must "
+                     "be passed transposed. Heights are quantised to int16 against the field's own "
+                     "z range (0.6 mm for a 20 m range), and a non-finite sample is pinned to the "
+                     "field's floor rather than poisoning the whole grid.\n\n"
+                     "Use this instead of add_static_trimesh wherever the collider is terrain: a "
+                     "height field cannot represent a HOLE or a near-vertical SPIKE, which is what "
+                     "a marching-cubes bake of a scan is full of, and it costs ~4 bytes a sample "
+                     "against ~100 for the same surface as triangles.\n\n"
+                     "`thickness` is how deep below the surface the field is meant to stay solid. "
+                     "PhysX 5 has no such knob (PxHeightFieldDesc::thickness was a PhysX 3 field) "
+                     "and a height field is a surface, not a volume: measured, a 4 cm ball at "
+                     "6 m/s tunnels through it exactly as it tunnels through the same surface as a "
+                     "trimesh. Nothing tunnels while the body's diameter exceeds its per-substep "
+                     "travel. The argument is accepted and validated (> 0) but PhysX cannot honour "
+                     "it.\n\n"
+                     "Returns a RigidBody; the world owns the actor.")
                 .def("add_static_trimesh_tree",
                      [](PhysxWorld& w, const py::handle& root) {
                          auto obj = as_object3d(root);
