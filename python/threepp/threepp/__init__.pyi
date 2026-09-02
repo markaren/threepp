@@ -6712,6 +6712,22 @@ class SplatCloud(Mesh):
     def debug_non_finite(self, arg1: bool) -> None:
         ...
     @property
+    def point_mix(self) -> float:
+        """
+        0 (default) renders Gaussians; 1 renders every splat as an opaque disc of point_size pixels at its centre, nearest wins — the point cloud view. Values between dissolve one into the other. Same depth sort and mesh occlusion on both backends.
+        """
+    @point_mix.setter
+    def point_mix(self, arg1: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def point_size(self) -> float:
+        """
+        Disc diameter in pixels at point_mix 1. Floored at 1; default 2.
+        """
+    @point_size.setter
+    def point_size(self, arg1: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
     def splat_count(self) -> int:
         """
         Number of splats in the cloud.
@@ -6736,6 +6752,11 @@ class SplatData:
         """
 class SplatLoader:
     @staticmethod
+    def is_point_cloud_ply(path: os.PathLike | str | bytes) -> bool:
+        """
+        Does this .ply hold a colour-only point cloud (x/y/z, no f_dc_0, no faces)? Header only, never raises.
+        """
+    @staticmethod
     def is_splat_ply(path: os.PathLike | str | bytes) -> bool:
         """
         Does this .ply hold Gaussian splats rather than a mesh? Reads only the header and never raises — a missing or malformed file is simply False.
@@ -6744,6 +6765,16 @@ class SplatLoader:
     def load_ply(path: os.PathLike | str | bytes) -> SplatData:
         """
         Load a 3D-Gaussian-Splatting .ply (the format 3DGS optimisers emit) into a SplatData. Header-driven: files with/without normals, extra per-splat properties or any SH degree all parse. Raises RuntimeError with the offending property in the message on anything unrepresentable.
+        """
+    @staticmethod
+    def load_point_cloud_ply(path: os.PathLike | str | bytes, sigma: typing.SupportsFloat | typing.SupportsIndex = 0.0, sigma_per_spacing: typing.SupportsFloat | typing.SupportsIndex = 1.0, opacity: typing.SupportsFloat | typing.SupportsIndex = 1.0, use_normals: bool = True, normal_thickness: typing.SupportsFloat | typing.SupportsIndex = 0.15000000596046448) -> SplatData:
+        """
+        Load a colour-only point-cloud .ply (binary or ascii; red/green/blue, nx/ny/nz and intensity honoured) as a SplatData of degree-0 Gaussians, one per point. sigma 0 sizes them from the cloud's median neighbour spacing times sigma_per_spacing; a point with normals becomes a disc facing them. Render with SplatCloud.point_mix = 1 for dots, 0 for a closed surface.
+        """
+    @staticmethod
+    def write_ply(data: SplatData, path: os.PathLike | str | bytes) -> None:
+        """
+        Write a SplatData as a 3DGS .ply (the INRIA layout load_ply reads: channel-major f_rest, log scales, logit opacity, w-first rotation). Raises RuntimeError if the file cannot be written.
         """
     def __init__(self) -> None:
         ...
