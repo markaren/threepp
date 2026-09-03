@@ -994,11 +994,24 @@ vec3 volumetricSpotScatter(vec3 ro, vec3 rd, float tMax, ivec2 px) {
     // in any fogged deferred scene); pc.volDensity remains the explicit knob
     // for clear-air beams (the lighthouse).
     const bool  fogDriven = fog.enabled > 0.5;
-    const float sigma = fogDriven ? max(dot(fog.sigmaT, vec3(1.0 / 3.0)), pc.volDensity)
-                                  : pc.volDensity;
-    const float hgG   = fogDriven ? fog.anisotropy : pc.volAniso;
-    const vec3  medAlbedo = fogDriven ? fog.color : vec3(1.0);
-    if (sigma <= 0.0 || lights.spotCount == 0u) return vec3(0.0);
+    float sigma = fogDriven ? max(dot(fog.sigmaT, vec3(1.0 / 3.0)), pc.volDensity)
+                            : pc.volDensity;
+    float hgG   = fogDriven ? fog.anisotropy : pc.volAniso;
+    vec3  medAlbedo = fogDriven ? fog.color : vec3(1.0);
+    float tLo = 0.0, tHi = tMax;
+    // Submerged camera: the beam lives in the MURK, not the air medium (which
+    // is clipped to above the waterline, so an ROV's lamps under water had no
+    // medium to scatter in and drew as two bare discs). Same σ, single-scatter
+    // albedo and phase the sun-shaft march uses; the leg stops at the surface
+    // and at the optical-depth horizon.
+    if (murkLive() && ro.y < fog.waterSurfaceY) {
+        sigma     = fog.murkDensity;
+        hgG       = fogDriven ? fog.anisotropy : kMurkShaftG;
+        medAlbedo = fog.murkColor;
+        if (rd.y > 1e-6) tHi = min(tHi, (fog.waterSurfaceY - ro.y) / rd.y);
+        tHi = min(tHi, 6.0 / sigma);
+    }
+    if (sigma <= 0.0 || lights.spotCount == 0u || tHi <= tLo) return vec3(0.0);
     const int   STEPS = 40;
     uint seed = pcgHash(uint(px.x) * 7919u + pcgHash(uint(px.y) * 104729u + pc.frame * 6271u));
     const float jitter = rnd(seed);
@@ -1012,8 +1025,8 @@ vec3 volumetricSpotScatter(vec3 ro, vec3 rd, float tMax, ivec2 px) {
         const float disc = b * b - c;
         if (disc <= 0.0) continue;
         const float sq = sqrt(disc);
-        const float t0 = max(-b - sq, 0.0);
-        const float t1 = min(-b + sq, tMax);
+        const float t0 = max(-b - sq, tLo);
+        const float t1 = min(-b + sq, tHi);
         if (t1 <= t0) continue;
         const float dt = (t1 - t0) / float(STEPS);
         vec3 acc = vec3(0.0);
