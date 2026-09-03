@@ -3,7 +3,7 @@ camera + sonar insets, and a Warp school of procedural salmon.
 
     python warp_netpen.py                          # window; drag to orbit, Esc quits
     python warp_netpen.py --shot p3_hud --out x.png --seconds 8 --size 1600x900
-    python warp_netpen.py --film [out.mp4]         # 66 s film + contact sheet + poster (--film-test: 3 stills per cut)
+    python warp_netpen.py --film [out.mp4]         # 82 s film + contact sheet + poster (--film-test: stills per cut)
 Cameras: p1_net_wide p1_collar_below p1_rov_hero p1_tear p2_school p2_fish_close p2_leak p3_hud p3_sonar_tear.
 `--fish N` (400); `--profile` prints per-stage ms over 300 live frames and exits; `--no-interop` uploads the school
 through the host. Vulkan only; Warp on CUDA if present.
@@ -511,8 +511,8 @@ sun = tp.DirectionalLight(0xfff0d8, 2.4)
 sun.position.set(*(SUN_DIR * 1000.0))
 scene.add(sun)
 
-ocean = tp.Ocean(size=320.0, resolution=384, wind_speed=5.5, wind_theta=0.6,
-                 choppiness=0.6, fft_size=512, fetch=15e3)
+ocean = tp.Ocean(size=320.0, resolution=384, wind_speed=7.0, wind_theta=0.6,
+                 choppiness=0.8, fft_size=512, fetch=3e3)      # young short-fetched sea: texture, no big crests
 ocean.params.foam_amount = 0.0                 # whitecaps print as white slabs from below
 ocean.material.attenuation_color = tp.Color(0.16, 0.30, 0.24)   # fjord water from above: dark green-grey, not tropical teal
 ocean.material.attenuation_distance = 2.5
@@ -742,6 +742,17 @@ for k in range(48):
         collar.add(tube(((PEN_R + 0.85) * c, WATER_Y - 0.05, (PEN_R + 0.85) * s), far, 0.022, rope_mat, 6))
 scene.add(collar)
 
+gp = tp.FlockParams()
+gp.seed, gp.bird_count, gp.perching, gp.birds_cast_shadow = 4711, 32, False, False
+gp.home, gp.roam_radius, gp.cruise_altitude, gp.altitude_spread = tp.Vector3(0.0, 11.0, 0.0), 22.0, 11.0, 0.4
+gp.cruise_speed, gp.max_speed, gp.mass_kg = 9.5, 17.0, 0.95
+gp.shape.body_length, gp.shape.body_radius, gp.shape.wing_span, gp.shape.tail_fork = 0.58, 0.075, 1.42, 0.15
+gp.plumage.back, gp.plumage.belly = tp.Color(0.48, 0.52, 0.57), tp.Color(0.88, 0.88, 0.86)
+gp.plumage.cap, gp.plumage.leg, gp.plumage.wingtip_dark = tp.Color(0.80, 0.78, 0.72), tp.Color(0.85, 0.62, 0.22), 0.22
+gp.w_cohesion, gp.w_alignment, gp.loner_fraction = 0.30, 0.45, 0.30
+gulls = tp.Flock(gp)                                  # parked at y -9000 by transform once the film is under
+scene.add(gulls)
+
 # ---- the ROV -----------------------------------------------------------------
 foam = standard_material(0xf2c21a, roughness=0.75)
 acrylic = tp.MeshPhysicalMaterial()
@@ -821,6 +832,9 @@ def thruster(pos, axis):
     return g, prop
 
 
+SPOT_I = 1000.0
+
+
 def build_rov():
     rov = tp.Group()
     props = []
@@ -882,7 +896,7 @@ def build_rov():
         disc.rotation.y = math.pi / 2
         disc.position.set(0.2135, -0.075, z)
         rov.add(disc)
-        spot = tp.SpotLight(tp.Color(1.0, 0.95, 0.85), 700.0, 5.0, math.radians(21.0), 0.55, 2.0)   # a lamp dies within ~5 m
+        spot = tp.SpotLight(tp.Color(1.0, 0.95, 0.85), SPOT_I, 3.5, math.radians(21.0), 0.55, 3.0)   # the cone is gone by ~2.5 m
         spot.position.set(0.215, -0.075, z)
         tgt = tp.Group()
         tgt.position.set(4.0, -0.35, z)
@@ -1008,7 +1022,19 @@ PATROL_T0 = {"p3_sonar_tear": _hover_i / 60.0 - SECONDS, "p3_hud": _wall_i / 60.
 rov_pos, rov_R, rov_thrust = PATROL[0, :3].copy(), np.eye(3), np.zeros(3)
 
 
-ROV_LIFT = [0.0]                                      # film cut 1: the ROV hangs this far above its patrol start
+T_WALL = _wall_i / 60.0
+ROV_HOLD = [0.0]                                      # film: seconds the ROV holds station at the wall while the camera sweeps
+LIFT = [None]                                         # film: crane path (walkway -> water) for negative patrol time
+
+
+def patrol_clock(t):
+    """Patrol time -> baked row time: the descent, then a station hold, then the wall run."""
+    t = max(t, 0.0)
+    return t if t < T_WALL else max(t - ROV_HOLD[0], T_WALL)
+
+
+def lift_at(t):
+    return LIFT[0](t + FILM_T_OFF) - PATROL[0, :3] if LIFT[0] is not None and t < 0.0 else np.zeros(3)
 
 
 rov_off = np.zeros(3)                                 # live push-back off the sagging cloth
@@ -1016,19 +1042,29 @@ net_host = [None]                                     # last downloaded cloth po
 ROV_STATS = {"min_d": float("inf"), "max_roll": 0.0, "max_pitch": 0.0}
 
 
+def net_nearest(p):
+    """Nearest cloth particle: distance, position, local sheet normal."""
+    pos = net_host[0] if net_host[0] is not None else net.pos.numpy()
+    j = int(np.argmin(((pos - p) ** 2).sum(1)))
+    iv, iu = divmod(j, NU)
+    n = np.cross(pos[iv * NU + (iu + 1) % NU] - pos[iv * NU + (iu - 1) % NU],
+                 pos[min(iv + 1, NVT - 1) * NU + iu] - pos[max(iv - 1, 0) * NU + iu])
+    return float(np.linalg.norm(p - pos[j])), pos[j], n / max(np.linalg.norm(n), 1e-9)
+
+
 def rov_pose(t, dt=1.0 / 60.0):
     global rov_pos, rov_R, rov_thrust, rov_off
-    x, y, z, yaw, pitch, roll, tf, tl, tv = PATROL[int(max(t, 0.0) * 60.0) % len(PATROL)]
-    y += ROV_LIFT[0]
-    cand = np.array([x, y, z]) + rov_off
-    pos = net_host[0] if net_host[0] is not None else net.pos.numpy()
-    j = int(np.argmin(((pos - cand) ** 2).sum(1)))
-    d = float(np.linalg.norm(cand - pos[j]))
+    x, y, z, yaw, pitch, roll, tf, tl, tv = PATROL[int(patrol_clock(t) * 60.0) % len(PATROL)]
+    base = np.array([x, y, z]) + lift_at(t)
+    cand = base + rov_off
+    d, q, _ = net_nearest(cand)
     if d < NET_CLEAR:                                   # instant push along the line from the nearest particle
-        rov_off += (NET_CLEAR - d) / max(d, 1e-6) * (cand - pos[j])
-        cand, d = np.array([x, y, z]) + rov_off, NET_CLEAR
+        rov_off += (NET_CLEAR - d) / max(d, 1e-6) * (cand - q)
+        cand, d = base + rov_off, NET_CLEAR
     else:
         rov_off *= math.exp(-dt / 2.0)
+    if T_WALL <= t < T_WALL + ROV_HOLD[0]:              # station keeping: idle thrust
+        tf, tl, tv = 0.2 * tf, 0.2 * tl, 0.2 * tv
     ROV_STATS["min_d"] = min(ROV_STATS["min_d"], d)
     ROV_STATS["max_roll"] = max(ROV_STATS["max_roll"], abs(roll))
     ROV_STATS["max_pitch"] = max(ROV_STATS["max_pitch"], abs(pitch))
@@ -1040,7 +1076,7 @@ def rov_pose(t, dt=1.0 / 60.0):
     wet = min(max((WATER_Y - 0.08 - cand[1]) / 0.25, 0.0), 1.0)           # lamps come on as the ROV submerges
     for k, l in enumerate(rov_lights):
         if k % 2:
-            l.intensity = 700.0 * wet
+            l.intensity = SPOT_I * wet
         else:
             l.emissive_intensity = 120.0 * wet
 
@@ -1919,6 +1955,7 @@ def hud_update():
 
 # ---- cameras -----------------------------------------------------------------
 camera = tp.PerspectiveCamera(60.0, W / H, 0.05, 600.0)
+gulls.set_observer(camera)
 murk_plane_update()
 sun_h3 = np.array([SUN_H[0], 0.0, SUN_H[1]])
 SHOTS = {
@@ -1957,7 +1994,7 @@ def place(cam, key):
         p, t, fov = SHOTS[key]
     cam.fov = fov
     cam.update_projection_matrix()
-    cam.position.set(*p)
+    cam.position.set(*net_clear(np.asarray(p, np.float64)))
     cam.look_at(*t)
 
 
@@ -2022,6 +2059,8 @@ def step(dt=1.0 / 60.0):
         cmd = (abs(tf) + 0.5 * abs(tl) + (0.4 if k >= 2 else 0.0) * max(tf, 0.0)) if k < 4 else abs(tv) + 0.15
         p.rotation.y += dt * 45.0 * min(cmd, 1.5) * (1 if k % 2 else -1)
     bubbles_step(dt)
+    if gulls.position.y > -1.0:
+        gulls.update(dt)
     mark("props+bubbles")
     rov_cam_place()
     hud_update()
@@ -2041,6 +2080,7 @@ P0 = PATROL[0, :3]
 R0 = np.array([P0[0], 0.0, P0[2]]) / np.hypot(P0[0], P0[2])
 T0 = np.array([-R0[2], 0.0, R0[0]])
 _anchor = {}
+CAM_STATS = [float("inf"), float("inf"), 0.0]         # min camera-to-net particle distance: film, current cut, its time
 
 
 def smooth(u, hold=0.0):
@@ -2049,25 +2089,104 @@ def smooth(u, hold=0.0):
     return u * u * (3.0 - 2.0 * u)
 
 
-def cam_waterline(u, t):
-    ROV_LIFT[0] = 1.1 * (1.0 - smooth((u - 0.1) / 0.8))
-    eye = P0 - 2.5 * R0 + 0.6 * T0
-    eye[1] = WATER_Y + 0.10 - 0.16 * smooth(u)        # mean surface: the waves ride through the lens, under only at the end
-    return eye, P0 + [0, ROV_LIFT[0] + 0.1, 0], 55.0   # the ROV enters the water 2.6 m in front
+def pchip(xs, ys, x):
+    """Monotone cubic through (xs, ys): eased, no overshoot, flat where ys repeats; zero slope at the ends."""
+    h, d = np.diff(xs), np.diff(ys) / np.diff(xs)
+    m = np.zeros(len(xs))
+    for i in range(1, len(xs) - 1):
+        if d[i - 1] * d[i] > 0:
+            m[i] = 2.0 / (1.0 / d[i - 1] + 1.0 / d[i])
+    i = int(np.clip(np.searchsorted(xs, x, side="right") - 1, 0, len(xs) - 2))
+    u = min(max((x - xs[i]) / h[i], 0.0), 1.0)
+    return ((2 * u ** 3 - 3 * u ** 2 + 1) * ys[i] + (u ** 3 - 2 * u ** 2 + u) * h[i] * m[i]
+            + (-2 * u ** 3 + 3 * u ** 2) * ys[i + 1] + (u ** 3 - u ** 2) * h[i] * m[i + 1])
 
 
-def cam_descent(u, t):
-    inb = -np.array([rov_pos[0], 0.0, rov_pos[2]]) / np.hypot(rov_pos[0], rov_pos[2])
-    back = np.array([-inb[2], 0.0, inb[0]])            # behind the ROV along the wall
-    eye = rov_pos + 2.3 * inb + 1.0 * back + [0, -1.0 - 0.4 * smooth(u), 0]
-    return eye, rov_pos + [0, 1.0, 0], 66.0            # below and inboard, looking up past the ROV at the window
+class Path:
+    """Centripetal Catmull-Rom through timed points, paced by a pchip schedule (a repeated point = a hold)."""
+    def __init__(self, keys):
+        self.t = np.array([k[0] for k in keys], np.float64)
+        p = np.array([np.asarray(k[1], np.float64) for k in keys])
+        d = np.sqrt(np.linalg.norm(np.diff(p, axis=0), axis=1))
+        k = np.concatenate([[0.0], np.cumsum(np.maximum(d, 1e-4))])
+        self.p = np.concatenate([[2 * p[0] - p[1]], p, [2 * p[-1] - p[-2]]])       # phantom ends
+        self.k = np.concatenate([[2 * k[0] - k[1]], k, [2 * k[-1] - k[-2]]])
+        self.knot = k
+
+    def __call__(self, t):
+        s = float(pchip(self.t, self.knot, t))
+        i = int(np.clip(np.searchsorted(self.knot, s, side="right"), 1, len(self.knot) - 1))
+        t0, t1, t2, t3 = self.k[i - 1:i + 3]
+        p0, p1, p2, p3 = self.p[i - 1:i + 3]
+        a1 = ((t1 - s) * p0 + (s - t0) * p1) / (t1 - t0)
+        a2 = ((t2 - s) * p1 + (s - t1) * p2) / (t2 - t1)
+        a3 = ((t3 - s) * p2 + (s - t2) * p3) / (t3 - t2)
+        b1 = ((t2 - s) * a1 + (s - t0) * a2) / (t2 - t0)
+        b2 = ((t3 - s) * a2 + (s - t1) * a3) / (t3 - t1)
+        return ((t2 - s) * b1 + (s - t1) * b2) / (t2 - t1)
 
 
-def cam_patrol(u, t):
-    fwd = rov_R @ [1.0, 0.0, 0.0]
-    inb = -np.array([rov_pos[0], 0.0, rov_pos[2]]) / np.hypot(rov_pos[0], rov_pos[2])
-    back = 3.2 - 1.3 * smooth(u)
-    return rov_pos - back * fwd + 1.1 * inb + [0, 0.6, 0], rov_pos + 1.2 * fwd + [0, -0.2, 0], 62.0
+T_LIFT, T_WL, FILM_T_OFF, T_DIVE = 9.0, 17.0, 22.0, 24.0        # crane starts, eye at the waterline, patrol starts, eye under
+T_SWEEP, T_HOLD0, T_HOLD1, T_FOLLOW, T_END = 31.0, 36.0, 44.0, 49.0, 54.0
+SONAR_S = 6.0
+APPROACH = {}
+
+
+def rov_at(tf):
+    """Baked ROV at film time tf (no live clearance): pos, fwd, inboard."""
+    x, y, z, yaw = PATROL[int(patrol_clock(tf - FILM_T_OFF) * 60.0) % len(PATROL)][:4]
+    p = np.array([x, y, z]) + lift_at(tf - FILM_T_OFF)
+    return p, np.array([math.cos(yaw), 0.0, -math.sin(yaw)]), -np.array([p[0], 0.0, p[2]]) / np.hypot(p[0], p[2])
+
+
+def build_approach():
+    """Air -> handrail -> waterline -> under with the ROV -> across the pen -> hold -> back to the wall for the patrol."""
+    W = R0 * (PEN_R + 0.43) + [0, WATER_Y + 0.36, 0]                 # the ROV on the walkway
+    LIFT[0] = Path([(0.0, W), (T_LIFT, W), (T_LIFT + 2.5, W + [0, 1.4, 0]), (T_LIFT + 5.5, [P0[0], WATER_Y + 1.4, P0[2]]),
+                    (FILM_T_OFF - 3.0, P0 + [0, 0.9, 0]), (FILM_T_OFF, P0)])
+    R = lambda t, dy=0.1: rov_at(t)[0] + [0, dy, 0]
+    WL = P0 - 2.5 * R0 + 0.6 * T0
+    wl = lambda y: np.array([WL[0], WATER_Y + y, WL[2]])
+
+    def desc(t, dy):
+        p, _, inb = rov_at(t)
+        return p + 2.3 * inb + [-inb[2], 0.0, inb[0]] + [0, dy, 0]
+
+    def follow(t, back):
+        p, fwd, inb = rov_at(t)
+        return p - back * fwd + 1.1 * inb + [0, 0.6, 0]
+
+    def ahead(t):
+        p, fwd, _ = rov_at(t)
+        return p + 1.2 * fwd + [0, -0.2, 0]
+    ph, pf, _ = rov_at(T_HOLD0 + 4.0)                                # the ROV holding station at the wall
+    H = -5.0 * np.array([ph[0], 0.0, ph[2]]) / np.hypot(ph[0], ph[2]) + [0, -4.7, 0]   # 2 m inside the opposite wall, under the band
+    look = ph + [0, 0.9, 0] + 2.2 * pf                               # the ROV small, off centre; the window above
+    mid = 0.5 * (H + follow(T_FOLLOW, 3.2)) * [0.75, 1.0, 0.75]
+    APPROACH["eye"] = Path([
+        (0.0, -16.0 * sun_h3 + [0, 34.0, 0]), (5.0, -13.0 * sun_h3 + [0, 31.0, 0]),
+        (10.0, R0 * (PEN_R + 5.0) + 2.0 * T0 + [0, 13.0, 0]), (13.5, R0 * (PEN_R + 1.8) + 2.2 * T0 + [0, 3.0, 0]),
+        (15.5, R0 * (PEN_R - 2.0) + 1.6 * T0 + [0, 0.9, 0]), (T_WL, wl(0.10)), (T_WL + 4.0, wl(0.07)), (T_DIVE, wl(-0.12)),
+        (26.0, desc(26.0, -1.0)), (28.5, desc(28.5, -1.2)), (T_SWEEP, desc(T_SWEEP, -1.4)),
+        (T_HOLD0, H), (T_HOLD1, H), (T_HOLD1 + 2.5, mid),
+        (T_FOLLOW, follow(T_FOLLOW, 3.2)), (T_FOLLOW + 2.5, follow(T_FOLLOW + 2.5, 2.55)), (T_END, follow(T_END, 1.9))])
+    C = np.array([0.0, WATER_Y - 0.5, 0.0])
+    APPROACH["tgt"] = Path([
+        (0.0, C), (5.0, C), (10.0, R(10.0)), (13.5, R(13.5)), (15.5, R(15.5)), (T_WL, R(T_WL)), (T_WL + 4.0, R(T_WL + 4.0)),
+        (T_DIVE, R(T_DIVE)), (26.0, R(26.0, 1.0)), (28.5, R(28.5, 1.0)), (T_SWEEP, R(T_SWEEP, 1.0)),
+        (T_HOLD0, look), (T_HOLD1, look), (T_HOLD1 + 2.5, ahead(T_HOLD1 + 2.5)),
+        (T_FOLLOW, ahead(T_FOLLOW)), (T_FOLLOW + 2.5, ahead(T_FOLLOW + 2.5)), (T_END, ahead(T_END))])
+    APPROACH["w"] = (np.array([0.0, 5.0, 10.0, T_END]), np.array([0.0, 0.0, 1.0, 1.0]))     # live-ROV weight of the target
+    APPROACH["fov"] = (np.array([0.0, T_DIVE, 26.0, T_SWEEP, T_HOLD0, T_HOLD1, T_FOLLOW, T_END]),
+                       np.array([55.0, 55.0, 66.0, 66.0, 64.0, 64.0, 62.0, 62.0]))
+
+
+def cam_approach(u, t):
+    hud_park(t >= T_FOLLOW - 0.5)
+    eye = APPROACH["eye"](t)
+    gulls.position.y = 0.0 if eye[1] > WATER_Y - 0.5 else -9000.0
+    tgt = APPROACH["tgt"](t) + float(pchip(*APPROACH["w"], t)) * (rov_pos - rov_at(t)[0])
+    return eye, tgt, float(pchip(*APPROACH["fov"], t))
 
 
 def cam_sonar(u, t):
@@ -2076,12 +2195,16 @@ def cam_sonar(u, t):
     return rov_pos - 2.2 * fwd + 0.7 * inb + [0, 0.9, 0], rov_pos + 1.5 * fwd + [0, -0.1, 0], 58.0
 
 
-def net_clear(eye, r=0.8):
-    """Keep the eye r metres off the nearest cloth particle (the wall bulges inward under the current)."""
-    pos = net_host[0] if net_host[0] is not None else net.pos.numpy()
-    j = int(np.argmin(((pos - eye) ** 2).sum(1)))
-    d = float(np.linalg.norm(eye - pos[j]))
-    return eye + (r - d) / max(d, 1e-6) * (eye - pos[j]) if d < r else eye
+def net_clear(eye, r=0.7):
+    """Keep the eye r metres off the cloth along the local sheet normal (a radial push can slide in-plane)."""
+    for _ in range(3):
+        d, q, n = net_nearest(eye)
+        if d >= r:
+            break
+        h = float(np.dot(eye - q, n))
+        side = math.copysign(1.0, h if abs(h) > 0.15 else -np.dot([q[0], 0.0, q[2]], n))   # ambiguous: inside
+        eye = eye + (side * r - h) * n
+    return eye
 
 
 def cam_tear(u, t):
@@ -2090,22 +2213,21 @@ def cam_tear(u, t):
         _anchor["tear"] = rov_pos - 1.5 * fwd - 1.2 * e_t + [0, 0.6, 0]   # the ROV creeps along +e_t: stay on the other side
     a, b = _anchor["tear"], TEAR_C - 1.1 * e_r - 1.15 * e_t + [0, 0.35, 0]
     e = smooth(u, hold=0.3)                           # the push stops 0.8 m off the twine and holds the last 3 s
-    return net_clear(a + (b - a) * e), TEAR_C + 0.3 * e_r * e, 50.0
+    return a + (b - a) * e, TEAR_C + 0.3 * e_r * e, 50.0
 
 
 def cam_hero(u, t):
     a = TEAR_C - 1.1 * e_r - 1.15 * e_t + [0, 0.35, 0]
     b = TEAR_C - 3.6 * e_r - 1.5 * e_t + [0, -1.7, 0]           # below the milling band, looking up at the hole and the window
     e = smooth(u, hold=0.15)
-    return net_clear(a + (b - a) * e), TEAR_C + (0.3 - 0.9 * e) * e_r + [0, 0.3 * e, 0], 50.0 + 8.0 * e
+    return a + (b - a) * e, TEAR_C + (0.3 - 0.9 * e) * e_r + [0, 0.3 * e, 0], 50.0 + 8.0 * e
 
 
 T_HOVER = _hover_i / 60.0
-CUTS = [("waterline", 10.0, cam_waterline, False), ("descent", 9.0, cam_descent, False),
-        ("patrol", 10.0, cam_patrol, True), ("sonar", T_HOVER - 19.0, cam_sonar, True),
+CUTS = [("approach", T_END, cam_approach, False), ("sonar", SONAR_S, cam_sonar, True),
         ("tear", 10.0, cam_tear, True), ("hero", 12.0, cam_hero, False)]
 T_CUT = np.concatenate([[0.0], np.cumsum([c[1] for c in CUTS])])
-FILM_T_OFF = T_CUT[1]                                 # the patrol starts with the descent cut; HOVER opens the tear cut
+TEST_T = (1.0, 8.0, 13.5, 17.0, 20.0, 23.5, 26.0, 29.0, 33.0, 38.0, 45.0, 50.0, 53.0)   # --film-test stills of the approach
 POSTER_U = 0.9
 
 
@@ -2113,6 +2235,11 @@ def film_cam(cut, u, t):
     eye, tgt, fov = CUTS[cut][2](u, t)
     camera.fov = fov
     camera.update_projection_matrix()
+    eye = net_clear(np.asarray(eye, np.float64))
+    d = net_nearest(eye)[0]
+    if d < CAM_STATS[1]:
+        CAM_STATS[1], CAM_STATS[2] = d, t
+    CAM_STATS[0] = min(CAM_STATS[0], d)
     camera.position.set(*eye)
     camera.look_at(*tgt)
 
@@ -2133,6 +2260,8 @@ def film_bench(n=90):
     """A/B/A/B over the first n frames of the descent cut: flush 3 + x264 slow vs flush 1 + veryfast (PROVISIONAL numbers)."""
     global PATROL_T0
     PATROL_T0 = -FILM_T_OFF
+    ROV_HOLD[0] = T_CUT[2] - FILM_T_OFF - T_HOVER
+    build_approach()
     dt, res = 1.0 / FPS, {}
     hud_park(False)
     for tag in ("A", "B", "A", "B"):
@@ -2142,7 +2271,7 @@ def film_bench(n=90):
         t0 = time.perf_counter()
         for f in range(n):
             step(dt)
-            film_cam(1, f / n, f * dt)
+            film_cam(0, 0.0, T_DIVE + f * dt)
             renderer.render(scene, camera)
             px = renderer.read_pixels()
             w.append_data(px)
@@ -2159,7 +2288,9 @@ def run_film():
     global PATROL_T0
     from PIL import Image
     PATROL_T0 = -FILM_T_OFF
-    LEAK_T0[0] = T_CUT[4] - 8.0
+    ROV_HOLD[0] = T_CUT[2] - FILM_T_OFF - T_HOVER      # HOVER opens the tear cut
+    LEAK_T0[0] = T_CUT[2] - 8.0
+    build_approach()
     dt = 1.0 / FPS
     out = os.path.abspath(FILM_OUT)
     stem = os.path.splitext(out)[0]
@@ -2167,8 +2298,10 @@ def run_film():
     total = sum(counts)
     picks = set(np.linspace(0, total - 1, 16).round().astype(int).tolist())
     if FILM_TEST:
-        picks = {int(T_CUT[k] * FPS) + int(q * (n - 1)) for k, n in enumerate(counts) for q in (0.05, 0.5, 0.95)}
-    print(f"film: {len(CUTS)} cuts, {total} frames = {total / FPS:.1f} s at {FPS} fps, {W}x{H}; patrol offset {FILM_T_OFF:.1f} s")
+        picks = {int(T_CUT[k] * FPS) + int(q * (n - 1)) for k, n in enumerate(counts)
+                 for q in ((0.05, 0.5, 0.95) if k else tuple(x / T_END for x in TEST_T))}
+    print(f"film: {len(CUTS)} cuts, {total} frames = {total / FPS:.1f} s at {FPS} fps, {W}x{H}; "
+          f"patrol offset {FILM_T_OFF:.1f} s, station hold {ROV_HOLD[0]:.1f} s")
     writer = None if FILM_TEST else film_writer(out)
     renderer.set_flush_frames(1)                      # one GPU frame per render(): the film reads every frame once
     sheet, rec, wall0 = [], 0, time.perf_counter()
@@ -2183,6 +2316,7 @@ def run_film():
             renderer.render(scene, camera)
             world_t_rewind(dt)
         renderer.set_auto_exposure_speed(1.2)
+        CAM_STATS[1] = float("inf")
         t0 = time.perf_counter()
         for f in range(n):
             u = f / max(n - 1, 1)
@@ -2203,16 +2337,17 @@ def run_film():
                 if name == "hero" and f == int(POSTER_U * (n - 1)):
                     Image.fromarray(px).save(stem + "_poster.png")
             rec += 1
-        print(f"  cut {k} {name:<10s} {n:4d} f  {1e3 * (time.perf_counter() - t0) / n:6.1f} ms/f")
+        print(f"  cut {k} {name:<10s} {n:4d} f  {1e3 * (time.perf_counter() - t0) / n:6.1f} ms/f  cam-net min {CAM_STATS[1]:.2f} m at {CAM_STATS[2]:.1f} s")
     if writer is not None:
         writer.close()
-    cols = 3 if FILM_TEST else 4
+    cols = 4
     cs = Image.new("RGB", (400 * cols, 225 * ((len(sheet) + cols - 1) // cols)), (0, 0, 0))
     for i, im in enumerate(sheet):
         cs.paste(im, (400 * (i % cols), 225 * (i // cols)))
     cs.save(stem + "_contact.png")
     print(f"film -> {out}; contact {stem}_contact.png; wall {(time.perf_counter() - wall0) / 60:.1f} min")
     rov_report()
+    print(f"camera: min net distance {CAM_STATS[0]:.2f} m")
 
 
 if HEADLESS and SHOT and SHOT not in SHOTS:
