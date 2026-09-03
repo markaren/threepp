@@ -65,7 +65,7 @@ def net_rest():
 
 S0 = PEN_R * (TEAR_TH % (2.0 * math.pi))            # arc length of the tear meridian
 D0 = NET_TOP - TEAR_Y                                # row length down to the tear centre
-TONGUES = [(1.55, 0.52, 0.20), (2.85, 0.42, 0.15), (-0.30, 0.36, 0.13)]   # (rim angle, length, half-width)
+TONGUES = [(1.55, 0.22, 0.20), (2.85, 0.24, 0.15), (-0.45, 0.20, 0.13)]   # (rim angle, length, half-width)
 
 
 def wall_coords(p):
@@ -852,6 +852,16 @@ def loop_spline(pts, s):
     return 0.5 * (2 * p1 + (-p0 + p2) * t + (2 * p0 - 5 * p1 + 4 * p2 - p3) * t ** 2 + (-p0 + 3 * p1 - 3 * p2 + p3) * t ** 3)
 
 
+def catmull(y, u):
+    """Catmull-Rom through the control values (scalars or points), sampled at u in [0, 1]."""
+    n = len(y)
+    x = np.clip(u, 0.0, 1.0) * (n - 1)
+    i = np.clip(np.floor(x).astype(int), 0, n - 2)
+    t = (x - i)[..., None] if y.ndim > 1 else x - i
+    p0, p1, p2, p3 = (y[np.clip(i + k, 0, n - 1)] for k in (-1, 0, 1, 2))
+    return 0.5 * (2 * p1 + (-p0 + p2) * t + (2 * p0 - 5 * p1 + 4 * p2 - p3) * t ** 2 + (-p0 + 3 * p1 - 3 * p2 + p3) * t ** 3)
+
+
 def build_patrol(dt=1.0 / 60.0):
     """Per-frame rows (x, y, z, yaw, pitch, roll, thrust fwd/lat/vert) for one loop; slows and faces the tear at HOVER."""
     P = np.array([patrol_xyz(*q) for q in PATROL_PTS])
@@ -937,20 +947,21 @@ def tube_index(n, sides):
     return np.stack([i, j, j + sides, i, j + sides, i + sides], -1).reshape(-1).astype(np.uint32)
 
 
+TETHER_U = np.linspace(0.0, 1.0, 4 * (ROPE_N - 1) + 1)          # spline through the particles: no segment kinks
 _ta, _tb = tether_pins(0.0)
 rope.reset(_ta, _tb)
 tether_geo = tp.BufferGeometry()
-_tv, _tn = tube_verts(rope.pos.numpy().astype(np.float64), 0.006, 6)
+_tv, _tn = tube_verts(catmull(rope.pos.numpy().astype(np.float64), TETHER_U), 0.006, 8)
 tether_geo.set_attribute("position", _tv)
 tether_geo.set_attribute("normal", _tn)
-tether_geo.set_index(tube_index(ROPE_N, 6))
+tether_geo.set_index(tube_index(len(TETHER_U), 8))
 tether = tp.Mesh(tether_geo, cable)
 tether.frustum_culled = False
 scene.add(tether)
 
 
 def tether_upload():
-    v, n = tube_verts(rope.pos.numpy().astype(np.float64), 0.006, 6)
+    v, n = tube_verts(catmull(rope.pos.numpy().astype(np.float64), TETHER_U), 0.006, 8)
     tether_geo.update_attribute("position", v)
     tether_geo.update_attribute("normal", n)
 
@@ -1013,16 +1024,6 @@ EYE_U, EYE_TH = 0.085, 0.25
 TEX_W, TEX_H, BODY_ROWS = 1024, 512, 392
 BODY_V = BODY_ROWS / TEX_H
 FIN_BANDS = {k: ((402 + 36 * k) / TEX_H, (434 + 36 * k) / TEX_H) for k in range(3)}   # dark fins / pectoral / pelvic+anal
-
-
-def catmull(y, u):
-    """Catmull-Rom through the control values, sampled at u in [0, 1]."""
-    n = len(y)
-    x = np.clip(u, 0.0, 1.0) * (n - 1)
-    i = np.clip(np.floor(x).astype(int), 0, n - 2)
-    t = x - i
-    p0, p1, p2, p3 = (y[np.clip(i + k, 0, n - 1)] for k in (-1, 0, 1, 2))
-    return 0.5 * (2 * p1 + (-p0 + p2) * t + (2 * p0 - 5 * p1 + 4 * p2 - p3) * t ** 2 + (-p0 + 3 * p1 - 3 * p2 + p3) * t ** 3)
 
 
 HALF_H = np.float32([0.024, 0.060, 0.082, 0.096, 0.106, 0.106, 0.099, 0.086, 0.069, 0.049, 0.030, 0.014])
@@ -1198,7 +1199,7 @@ def fish_albedo():
             su, sd = sx / TEX_W, np.abs(sy / BODY_ROWS - 0.5) / 0.5
             p = 0.30 * (1 - sm(sd, 0.34, 0.46)) * (su > ue.mean())
             on = hash01(jx, jy, 3) < p
-            r0 = 5.0 + 6.0 * hash01(jx, jy, 5) + 9.0 * (hash01(jx, jy, 6) < 0.12)
+            r0 = 4.0 + 5.0 * hash01(jx, jy, 5)                # <= ~2 scales across
             ex = 0.8 + 0.4 * hash01(jx, jy, 8)
             r = np.hypot((X - sx) * ex, (Y - sy * ysc) / ex) * (1 + 0.5 * rim)
             cov = np.maximum(cov, np.clip((r0 - r) * 0.7 + 0.5, 0, 1) * on)
@@ -1313,7 +1314,7 @@ def boids(pos: wp.array(dtype=wp.vec3), vel: wp.array(dtype=wp.vec3),
     rad = wp.vec3(p[0], 0.0, p[2]) / wp.max(r, 1.0e-3)
     tan = wp.vec3(-rad[2], 0.0, rad[0])
     leaking = leak_t[i] >= 0.0 and t > leak_t[i]
-    near_tear = wp.length(p - tear) < 1.4
+    near_tear = wp.length(p - tear) < 2.4
     goal = wp.vec3(0.0, 0.0, 0.0)
     if leaking:
         acc = acc * 0.25
@@ -1332,8 +1333,8 @@ def boids(pos: wp.array(dtype=wp.vec3), vel: wp.array(dtype=wp.vec3),
         acc += (want - v) * 1.1
     dwall = pen_r - r
     if not (leaking and near_tear):
-        if dwall > 0.0 and dwall < 1.2:
-            acc -= rad * (1.2 - dwall) * 6.0
+        if dwall > 0.0 and dwall < 2.2:
+            acc -= rad * (2.2 - dwall) * 4.0
         if dwall <= 0.0 and dwall > -1.0:
             acc += rad * (1.0 + dwall) * 6.0
     if p[1] > -0.7:
@@ -1344,6 +1345,10 @@ def boids(pos: wp.array(dtype=wp.vec3), vel: wp.array(dtype=wp.vec3),
     lr = wp.length(dr)
     if lr < 2.0:
         acc += dr / wp.max(lr, 1.0e-3) * (1.0 - lr / 2.0) * 5.0
+    dc = p - uni[4]
+    lc = wp.length(dc)
+    if i > 0 and lc < 1.2:                            # keep the shot camera clear; fish 0 is the close-up hero
+        acc += dc / wp.max(lc, 1.0e-3) * (1.0 - lc / 1.2) * 5.0
     acc += wp.vec3(0.0, -0.4 * v[1], 0.0)
     v2 = v + acc * dt
     s2 = wp.max(wp.length(v2), 1.0e-4)
@@ -1406,13 +1411,13 @@ class School:
         self.uv = np.ascontiguousarray(np.tile(uv, (FISH_N, 1)))
         self.index = np.ascontiguousarray((tri[None, :] + (np.arange(FISH_N, dtype=np.uint32) * self.nv)[:, None]).reshape(-1))
         L = rng.uniform(0.45, 0.75, FISH_N).astype(np.float32)
-        pref = np.stack([rng.uniform(3.2, 5.6, FISH_N), rng.uniform(-4.2, -1.4, FISH_N), rng.uniform(-0.25, 0.25, FISH_N)], 1)
+        pref = np.stack([rng.uniform(2.4, 4.6, FISH_N), rng.uniform(-4.2, -1.4, FISH_N), rng.uniform(-0.25, 0.25, FISH_N)], 1)
         leak = np.full(FISH_N, -1.0, np.float32)
         nl = max(int(LEAK_FRAC * FISH_N), 3)
         who = rng.choice(np.arange(1, FISH_N), nl, replace=False)      # fish 0 is the close-up hero
         leak[who] = 0.5 + 0.9 * np.arange(nl)
         th = rng.uniform(0.0, 2 * np.pi, FISH_N)
-        rr = rng.uniform(2.6, 6.0, FISH_N)
+        rr = rng.uniform(2.2, 4.8, FISH_N)
         p0 = np.stack([rr * np.cos(th), pref[:, 1] + rng.normal(0, 0.5, FISH_N), rr * np.sin(th)], 1)
         p0[who] = (TEAR_C - e_r * rng.uniform(1.5, 3.5, nl)[:, None] + e_t * rng.uniform(-2.0, 2.0, nl)[:, None]
                    + np.float32([0, 1, 0]) * rng.uniform(-0.6, 0.6, nl)[:, None])
@@ -1428,13 +1433,13 @@ class School:
         self.beat, self.amp = A(rng.uniform(0, 2 * np.pi, FISH_N)), A(np.full(FISH_N, 0.06))
         self.brake, self.len = A(np.full(FISH_N, 0.1)), A(L)
         self.pref, self.leak = A(pref, wp.vec3), A(leak)
-        self.uni = wp.zeros(4, dtype=wp.vec3, device=device)
+        self.uni = wp.zeros(5, dtype=wp.vec3, device=device)
         self.c0, self.c1, self.n0, self.n1, self.uu = A(c0, wp.vec3), A(c1, wp.vec3), A(n0, wp.vec3), A(n1, wp.vec3), A(uu)
         self.out_p = wp.zeros(FISH_N * self.nv, dtype=wp.vec3, device=device)
         self.out_n = wp.zeros(FISH_N * self.nv, dtype=wp.vec3, device=device)
 
-    def step(self, t, dt, rov_pos):
-        self.uni.assign(np.asarray([rov_pos, TEAR_C, e_r, [PEN_R, PEN_D, 0.0]], np.float32))
+    def step(self, t, dt, rov_pos, cam_pos):
+        self.uni.assign(np.asarray([rov_pos, TEAR_C, e_r, [PEN_R, PEN_D, 0.0], cam_pos], np.float32))
         wp.launch(boids, dim=FISH_N, device=device,
                   inputs=[self.pos, self.vel, self.pos2, self.vel2, self.yaw, self.pitch, self.roll, self.beat,
                           self.amp, self.brake, self.len, self.pref, self.leak, self.uni, FISH_N, t, dt])
@@ -1452,7 +1457,7 @@ class School:
 
 
 school = School()
-_fp0, _fn0 = school.step(0.0, 1.0 / 60.0, np.zeros(3))
+_fp0, _fn0 = school.step(0.0, 1.0 / 60.0, np.zeros(3), np.zeros(3))
 fish_mat = tp.MeshPhysicalMaterial()
 fish_mat.color = 0xffffff
 fish_mat.roughness, fish_mat.metalness = 1.0, 0.15    # roughness lives in the map
@@ -1476,7 +1481,8 @@ scene.add(fish)
 
 
 def fish_step(t, dt):
-    p, n = school.step(t, dt, rov_pos)
+    cp = camera.position
+    p, n = school.step(t, dt, rov_pos, np.array([cp.x, cp.y, cp.z]))
     fish_geo.update_attribute("position", p)
     fish_geo.update_attribute("normal", n)
 
@@ -1535,12 +1541,12 @@ def sonar(mesh: wp.uint64, mat: wp.array(dtype=int), refl: wp.array(dtype=float)
     i = tid // nvs
     j = tid - i * nvs
     az = (-0.5 * SON_FOV + SON_FOV * (float(i) + 0.5) / float(nb)) * wp.pi / 180.0
-    el = (-8.0 + 20.0 * (float(j) + 0.5) / float(nvs)) * wp.pi / 180.0
+    el = (-6.0 + 12.0 * (float(j) + 0.5) / float(nvs)) * wp.pi / 180.0
     d = frame[1] * (wp.cos(el) * wp.cos(az)) + frame[2] * (wp.cos(el) * wp.sin(az)) + frame[3] * wp.sin(el)
     q = wp.mesh_query_ray(mesh, frame[0], d, rng)
     if q.result:
         b = wp.min(int(q.t / rng * float(nbins)), nbins - 1)
-        wp.atomic_max(out, i, b, refl[mat[q.face]] * wp.abs(wp.dot(q.normal, d)) * wp.exp(-0.10 * q.t))
+        wp.atomic_max(out, i, b, refl[mat[q.face]] * (0.35 + 0.65 * wp.abs(wp.dot(q.normal, d))) * wp.exp(-0.10 * q.t))
 
 
 def net_solid_tris():
@@ -1587,7 +1593,10 @@ _c0, _c1, _c2 = np.float32([0.02, 0.01, 0.0]), np.float32([0.62, 0.26, 0.05]), n
 SON_LUT = srgb8(np.where(_k < 0.5, _c0 + (_c1 - _c0) * (_k / 0.5), _c1 + (_c2 - _c1) * ((_k - 0.5) / 0.5)))
 _rb = (np.arange(SON_BINS) + 0.5) / SON_BINS * SON_RANGE
 SON_NEAR = (0.35 * np.exp(-((_rb - 0.3) / 0.08) ** 2)).astype(np.float32)[None, :]
-son_img = np.zeros((SON_H, SON_W, 3), np.uint8)
+son_img = np.zeros((SON_H, SON_W, 4), np.uint8)
+son_hist = np.zeros((3, SON_BEAMS, SON_BINS), np.float32)
+SON_FRAME = (_yy < 2) | (_yy >= SON_H - 2) | (_xx < 2) | (_xx >= SON_W - 2)
+SON_TILT = -15.0                                        # mount pitch, deg: the 12 deg band sits on the hole, below the top flap
 
 
 def sonar_step(frame_i):
@@ -1595,16 +1604,23 @@ def sonar_step(frame_i):
     wp.copy(_son_pts, school.out_p, _n_net, 0, _n_fish)
     son_mesh.refit()
     o = rov_pos + rov_R @ [0.20, 0.09, 0.0]
-    son_frame.assign(np.asarray([o, rov_R @ [1, 0, 0], rov_R @ [0, 0, 1], rov_R @ [0, 1, 0]], np.float32))
+    R = rov_R @ rot_z(math.radians(SON_TILT))
+    son_frame.assign(np.asarray([o, R @ [1, 0, 0], R @ [0, 0, 1], R @ [0, 1, 0]], np.float32))
     son_out.zero_()
     wp.launch(sonar, dim=SON_BEAMS * SON_VS, device=device,
               inputs=[son_mesh.id, son_mat, son_refl, son_frame, son_out, SON_BEAMS, SON_VS, SON_BINS, SON_RANGE])
-    a = son_out.numpy() * np.random.default_rng(1000 + frame_i).uniform(0.5, 1.5, (SON_BEAMS, SON_BINS)).astype(np.float32) + SON_NEAR
+    son_hist[frame_i % 3] = son_out.numpy()
+    a = son_hist.max(0)                                                   # 3-frame persistence
+    a = np.maximum(a, np.maximum(np.roll(a, 1, 1), np.roll(a, -1, 1)))   # +-1 bin: the wall reads as a solid arc
+    a = a * np.random.default_rng(1000 + frame_i).uniform(0.7, 1.3, (SON_BEAMS, SON_BINS)).astype(np.float32) + SON_NEAR
     v = (255 * (1 - np.exp(-4.0 * a))).astype(np.uint8)
-    son_img[:] = 6
-    son_img[SON_VALID] = SON_LUT[v[SON_BEAM[SON_VALID], SON_BIN[SON_VALID]]]
-    son_img[SON_RINGS | SON_EDGE] = np.maximum(son_img[SON_RINGS | SON_EDGE], np.uint8([70, 42, 14]))
-    son_img[SON_TICK] = np.maximum(son_img[SON_TICK], np.uint8([120, 80, 30]))
+    son_img[:] = (6, 6, 6, 191)
+    vv = v[SON_BEAM[SON_VALID], SON_BIN[SON_VALID]]
+    son_img[SON_VALID, :3] = SON_LUT[vv]
+    son_img[SON_VALID, 3] = 191 + (vv >> 2)
+    son_img[SON_RINGS | SON_EDGE] = np.maximum(son_img[SON_RINGS | SON_EDGE], np.uint8([70, 42, 14, 255]))
+    son_img[SON_TICK] = np.maximum(son_img[SON_TICK], np.uint8([120, 80, 30, 255]))
+    son_img[SON_FRAME] = (208, 138, 42, 255)
     son_tex.update_data(son_img[::-1])
 
 
@@ -1614,8 +1630,8 @@ rov_cam = tp.PerspectiveCamera(80.0, CAM_W / CAM_H, 0.05, 200.0)
 FONT = tp.FontLoader().default_font()
 
 
-def hud_panel(w, h, ax, label):
-    tex = tp.data_texture(np.zeros((h, w, 3), np.uint8), srgb=True)
+def hud_panel(w, h, ax, label, channels=3):
+    tex = tp.data_texture(np.zeros((h, w, channels), np.uint8), srgb=True)
     tex.generate_mipmaps = False
     tex.wrap_s = tex.wrap_t = tp.TextureWrapping.ClampToEdge
     mat = tp.SpriteMaterial()
@@ -1635,13 +1651,13 @@ def hud_panel(w, h, ax, label):
     lab.center.set(ax, 0.0)
     lab.position.set(HUD_M if ax == 0 else -HUD_M, HUD_M + h + 6, 0.0)
     scene.add(lab)
-    return tex
+    return tex, (sp, lab)
 
 
-cam_tex = hud_panel(CAM_W, CAM_H, 0.0, "ROV CAM")
-son_tex = hud_panel(SON_W, SON_H, 1.0, "SONAR 130 deg")
+cam_tex, _hud_a = hud_panel(CAM_W, CAM_H, 0.0, "ROV CAM")
+son_tex, _hud_b = hud_panel(SON_W, SON_H, 1.0, "SONAR 130 deg", 4)
 if SHOT and not SHOT.startswith("p3"):
-    for _o in scene.children[-4:]:                   # the two panels and their labels: off-screen, never visible=False
+    for _o in _hud_a + _hud_b:                       # insets off-screen for the other shots, never visible=False
         _o.position.x = -9000.0
 ROV_VIEW = 0
 
@@ -1692,8 +1708,8 @@ def place(cam, key):
             p, t, fov = rov_pos - 0.85 * e_r + 1.15 * fwd + [0, 0.30, 0], rov_pos + [0, 0.02, 0], 50.0
         elif key == "p3_hud":
             p, t, fov = rov_pos - 1.9 * fwd + 1.1 * inb + [0, 0.6, 0], rov_pos + 1.2 * fwd + [0, -0.2, 0], 62.0
-        else:
-            p, t, fov = rov_pos - 1.4 * fwd + 0.7 * inb + [0, 0.8, 0], rov_pos + 1.0 * fwd + [0, -0.1, 0], 58.0
+        else:                                    # p3_sonar_tear: beside and above the ROV, looking past it at the tear
+            p, t, fov = rov_pos - 1.5 * fwd + 1.2 * e_t + [0, 0.6, 0], TEAR_C, 50.0
     else:
         p, t, fov = SHOTS[key]
     cam.fov = fov
