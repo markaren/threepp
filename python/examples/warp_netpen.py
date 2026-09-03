@@ -303,7 +303,7 @@ def net_maps(U, V, ppm, keep=None, twine=0.11):
     hgt = np.maximum(np.maximum(hv, hh), hk)
     fibre = 0.82 + 0.36 * fbm(V / TILE_MESHES * 16, U / TILE_MESHES * 16, 16, 16, rng)
     twist = 0.5 + 0.5 * np.sin(2 * np.pi * (V * 18 + U * 18)) * (hv > hh) + 0.5 * np.sin(2 * np.pi * (U * 18 - V * 18)) * (hv <= hh)
-    base = np.float32([0.40, 0.44, 0.34])
+    base = np.float32([0.34, 0.37, 0.28])
     col = base[None, None, :] * (fibre * (0.85 + 0.3 * twist))[..., None]
     col[hk > 0.98] *= 0.7
     alpha = hgt > 0.0 if keep is None else (hgt > 0.0) & keep
@@ -463,8 +463,8 @@ def net_material(tex, nrm):
     m.normal_scale = tp.Vector2(0.8, 0.8)
     m.alpha_test = 0.30
     m.vertex_colors = True
-    m.translucency = 0.7               # thin twine reads back-lit from inside the pen
-    m.translucency_color = 0xd9e6c8
+    m.translucency = 0.45              # thin twine reads back-lit from inside the pen
+    m.translucency_color = 0x9aa48c
     return m
 
 
@@ -473,7 +473,7 @@ patch_mat = net_material(patch_tex, patch_nrm)
 foul_mat = standard_material(0xffffff, roughness=0.92, metalness=0.0, side=tp.Side.Double)
 foul_mat.map = foul_tex
 foul_mat.alpha_test = 0.5
-foul_mat.translucency = 0.7
+foul_mat.translucency = 0.3
 foul_mat.translucency_color = 0x8fa552
 
 
@@ -757,6 +757,10 @@ F_K = 5.6
 FISH_SPEED_MIN, FISH_SPEED_MAX = 0.25, 1.6
 MILL_SPEED = 0.75
 LEAK_FRAC = 0.05
+EYE_U, EYE_TH = 0.085, 0.25
+TEX_W, TEX_H, BODY_ROWS = 1024, 512, 392
+BODY_V = BODY_ROWS / TEX_H
+FIN_V0, FIN_V1 = 402 / TEX_H, 510 / TEX_H
 
 
 def catmull(y, u):
@@ -778,16 +782,28 @@ def skin_fn(u, th):
     """The skin at body fraction u (0 nose, 1 tail root) and ring angle th; +Z is the nose."""
     h, w, kb = catmull(HALF_H, u), catmull(HALF_W, u), catmull(KEEL, u)
     s, c = np.sin(th), np.cos(th)
-    y = h * s * np.where(s < 0, kb * (1.0 - 0.18 * c * c), 1.0) - 0.15 * h
-    return np.stack([w * c, y, 0.5 - u], -1)
+    eye = 1.0 + 0.10 * np.exp(-((u - EYE_U) / 0.035) ** 2) * (np.exp(-(1 - np.cos(th - EYE_TH)) / 0.05)
+                                                              + np.exp(-(1 - np.cos(th + EYE_TH - np.pi)) / 0.05))
+    y = h * s * np.where(s < 0, kb * (1.0 - 0.18 * c * c), 1.0) * eye - 0.15 * h
+    return np.stack([w * c * eye, y, 0.5 - u], -1)
 
 
-def fan(outline, nrm):
-    """A flat fin: centre vertex plus an outline, triangle-fanned; tris are local."""
-    outline = np.asarray(outline, np.float64)
+def fan(outline, nrm, ray, camber, shift=(0.0, 0.0, 0.0)):
+    """A thin fin fanned from its centre, cambered along nrm; uv = (across the rays, root->tip) in the fin band."""
+    outline = np.asarray(outline, np.float64) + np.float64(shift)
     v = np.concatenate([[outline.mean(0)], outline])
     tris = [[0, 1 + k, 1 + (k + 1) % len(outline)] for k in range(len(outline) - 1)]
-    return v, np.asarray(tris), np.tile(np.float64(nrm), (len(v), 1))
+    nrm, ray = np.float64(nrm) / np.linalg.norm(nrm), np.float64(ray) / np.linalg.norm(ray)
+    perp = np.cross(nrm, ray)
+    perp /= np.linalg.norm(perp)
+    rel = v - outline[0]
+    al, ac = rel @ ray, rel @ perp
+    la, lc = max(al.max() - al.min(), 1e-6), max(ac.max() - ac.min(), 1e-6)
+    al, ac = (al - al.min()) / la, (ac - ac.min()) / lc
+    v = v + (camber * 4 * ac * (1 - ac) * al)[:, None] * nrm
+    n = nrm - np.outer(camber * 4 * (1 - 2 * ac) * al / lc, perp) - np.outer(camber * 4 * ac * (1 - ac) / la, ray)
+    n /= np.linalg.norm(n, axis=1, keepdims=True)
+    return v, np.asarray(tris), n, np.stack([ac, FIN_V0 + (FIN_V1 - FIN_V0) * al], 1)
 
 
 def rot_y(a):
@@ -801,9 +817,10 @@ def rot_z(a):
 
 
 def salmon():
-    """Canonical unit-length salmon: folded/flared positions and normals, body fraction u, kind, index."""
+    """Canonical unit-length salmon: folded/flared positions and normals, uv, body fraction u, kind, index."""
+    S1 = F_SIDES + 1                                # ring closes on a duplicated belly vertex (uv seam)
     u = np.linspace(0.0, 1.0, F_RINGS) ** 0.85
-    th = 2.0 * np.pi * np.arange(F_SIDES) / F_SIDES + np.pi / 2
+    th = -np.pi / 2 + 2.0 * np.pi * np.arange(S1) / F_SIDES
     U, TH = np.meshgrid(u, th, indexing="ij")
     P = skin_fn(U, TH)
     e = 1e-3
@@ -811,26 +828,31 @@ def salmon():
     dt = skin_fn(U, TH + e) - skin_fn(U, TH - e)
     N = np.cross(du, dt)
     N /= np.maximum(np.linalg.norm(N, axis=-1, keepdims=True), 1e-9)
+    V = np.broadcast_to((np.arange(S1) / F_SIDES * BODY_V)[None, :], U.shape)
     pos, nrm, uu, kind = [P.reshape(-1, 3)], [N.reshape(-1, 3)], [U.reshape(-1)], [np.zeros(U.size)]
+    uv = [np.stack([U, V], -1).reshape(-1, 2)]
     tris = []
     for i in range(F_RINGS - 1):
         for j in range(F_SIDES):
-            a, b = i * F_SIDES + j, i * F_SIDES + (j + 1) % F_SIDES
-            tris += [[a, a + F_SIDES, b], [b, a + F_SIDES, b + F_SIDES]]
-    nv = F_RINGS * F_SIDES
+            a = i * S1 + j
+            tris += [[a, a + S1, a + 1], [a + 1, a + S1, a + S1 + 1]]
+    nv = F_RINGS * S1
     pos.append([[0.0, -0.15 * HALF_H[0], 0.505], [0.0, -0.15 * HALF_H[-1], -0.5]])
     nrm.append([[0.0, 0.0, 1.0], [0.0, 0.0, -1.0]])
     uu.append([0.0, 1.0])
     kind.append([0, 0])
+    uv.append([[0.0, 0.5 * BODY_V], [1.0, 0.5 * BODY_V]])
     for j in range(F_SIDES):
-        tris.append([nv, (j + 1) % F_SIDES, j])
-        tris.append([nv + 1, nv - F_SIDES + j, nv - F_SIDES + (j + 1) % F_SIDES])
+        tris.append([nv, j + 1, j])
+        tris.append([nv + 1, nv - S1 + j, nv - S1 + j + 1])
     nv += 2
 
-    def add(v, t, n, k):
+    def add(f, k):
         nonlocal nv
+        v, t, n, tuv = f
         pos.append(v)
         nrm.append(n)
+        uv.append(tuv)
         tris.extend((np.asarray(t) + nv).tolist())
         uu.append(0.5 - v[:, 2])
         kind.append(np.full(len(v), k))
@@ -839,28 +861,24 @@ def salmon():
     top = lambda x: float(skin_fn(x, np.pi / 2)[1])
     bot = lambda x: float(skin_fn(x, -np.pi / 2)[1])
     z = lambda x: 0.5 - x
-    add(*fan([[0, 0.012, -0.46], [0, 0.07, -0.56], [0, 0.125, -0.66], [0, 0.135, -0.71], [0, 0.08, -0.65],
-              [0, 0.02, -0.60], [0, -0.02, -0.60], [0, -0.08, -0.65], [0, -0.13, -0.70], [0, -0.115, -0.65],
-              [0, -0.065, -0.56], [0, -0.016, -0.46]], [1, 0, 0]), 1)
-    add(*fan([[0, top(0.40), z(0.40)], [0, top(0.42) + 0.045, z(0.43)], [0, top(0.46) + 0.075, z(0.47)],
-              [0, top(0.52) + 0.062, z(0.53)], [0, top(0.58) + 0.03, z(0.59)], [0, top(0.60), z(0.60)],
-              [0, top(0.50), z(0.50)]], [1, 0, 0]), 1)
-    add(*fan([[0, top(0.79), z(0.79)], [0, top(0.80) + 0.018, z(0.815)], [0, top(0.84) + 0.012, z(0.85)],
-              [0, top(0.85), z(0.85)]], [1, 0, 0]), 1)
-    add(*fan([[0, bot(0.70), z(0.70)], [0, bot(0.71) - 0.03, z(0.72)], [0, bot(0.74) - 0.048, z(0.76)],
-              [0, bot(0.78) - 0.035, z(0.80)], [0, bot(0.80), z(0.80)], [0, bot(0.75), z(0.75)]], [1, 0, 0]), 1)
+    add(fan([[0, 0.012, -0.46], [0, 0.07, -0.56], [0, 0.125, -0.66], [0, 0.135, -0.71], [0, 0.08, -0.65],
+             [0, 0.02, -0.60], [0, -0.02, -0.60], [0, -0.08, -0.65], [0, -0.13, -0.70], [0, -0.115, -0.65],
+             [0, -0.065, -0.56], [0, -0.016, -0.46]], [1, 0, 0], [0, 0, -1], 0.006), 1)
+    add(fan([[0, top(x) + h, z(x)] for x, h in ((0.40, 0), (0.415, 0.020), (0.44, 0.031), (0.49, 0.029), (0.54, 0.017),
+                                                (0.58, 0.004), (0.585, 0), (0.49, 0))], [1, 0, 0], [0, 1, -0.5], 0.004), 1)
+    add(fan([[0, top(x) + h, z(x)] for x, h in ((0.80, 0), (0.81, 0.008), (0.83, 0.011), (0.845, 0.005), (0.85, 0))],
+            [1, 0, 0], [0, 1, -0.3], 0.001), 1)
+    add(fan([[0, bot(x) + h, z(x)] for x, h in ((0.70, 0), (0.71, -0.018), (0.735, -0.028), (0.77, -0.016),
+                                                (0.795, -0.002), (0.745, 0))], [1, 0, 0], [0, -1, -0.5], 0.003), 1)
     for sgn in (1.0, -1.0):
-        r = np.array([sgn * 0.016, bot(0.55) + 0.004, z(0.55)])
-        v, t, n = fan([[0, 0, 0], [sgn * 0.02, -0.02, -0.035], [sgn * 0.035, -0.035, -0.07],
-                       [sgn * 0.012, -0.028, -0.065], [0, -0.006, -0.02]], [0.3 * sgn, -1, 0])
-        add(v + r, t, n, 1)
+        r = [sgn * 0.014, bot(0.55) + 0.004, z(0.55)]
+        add(fan([[0, 0, 0], [sgn * 0.012, -0.012, -0.024], [sgn * 0.024, -0.024, -0.05], [sgn * 0.009, -0.021, -0.046],
+                 [0, -0.005, -0.015]], [0.3 * sgn, -1, 0], [sgn * 0.4, -0.45, -1], 0.003, r), 1)
     for sgn in (1.0, -1.0):
-        w0 = float(skin_fn(0.28, 0.0)[0])
-        r = np.array([sgn * (w0 + 0.003), -0.1 * HALF_H[3] - 0.012, z(0.28)])
-        v, t, n = fan([[0, 0, 0], [sgn * 0.006, -0.010, -0.045], [sgn * 0.012, -0.018, -0.105],
-                       [sgn * 0.010, -0.038, -0.085], [sgn * 0.004, -0.030, -0.025]], [sgn, 0, 0])
-        add(v + r, t, n, 2 if sgn > 0 else 3)
-    pos, nrm = np.concatenate(pos), np.concatenate(nrm)
+        r = skin_fn(0.22, -0.3 * np.pi if sgn > 0 else 1.3 * np.pi) + [sgn * 0.003, 0, 0]
+        add(fan([[0, 0, 0], [sgn * 0.006, -0.006, -0.03], [sgn * 0.012, -0.012, -0.078], [sgn * 0.010, -0.028, -0.064],
+                 [sgn * 0.004, -0.022, -0.018]], [sgn * 0.8, -0.6, 0], [sgn * 0.1, -0.2, -1], -0.003, r), 2 if sgn > 0 else 3)
+    pos, nrm, uv = np.concatenate(pos), np.concatenate(nrm), np.concatenate(uv)
     uu, kind = np.concatenate(uu), np.concatenate(kind).astype(np.int32)
     pos1, nrm1 = pos.copy(), nrm.copy()
     for sgn, k in ((1.0, 2), (-1.0, 3)):           # flared pectorals: swept out and laid flat
@@ -870,7 +888,7 @@ def salmon():
         pos1[sel] = (pos[sel] - r) @ R.T + r
         nrm1[sel] = nrm[sel] @ R.T
     return (pos.astype(np.float32), pos1.astype(np.float32), nrm.astype(np.float32), nrm1.astype(np.float32),
-            uu.astype(np.float32), kind, np.asarray(tris, np.uint32).reshape(-1))
+            uv.astype(np.float32), uu.astype(np.float32), kind, np.asarray(tris, np.uint32).reshape(-1))
 
 
 def hash01(*ints):
@@ -881,32 +899,82 @@ def hash01(*ints):
     return (h & np.uint32(0xFFFFFF)) / float(0xFFFFFF)
 
 
-def fish_colours(pos, nrm, kind, rng):
-    """(FISH_N, V, 3) linear RGB: white belly, silver flank, steel-blue back, hashed spots, per-fish tint."""
-    V = len(pos)
-    body = kind == 0
-    f = np.clip(0.5 + 0.5 * nrm[:, 1] + 0.2 * (pos[:, 1] / 0.1), 0.0, 1.0)
-    f = np.where(body, f, 0.45)
-    belly, flank, back = np.float32([0.85, 0.88, 0.86]), np.float32([0.44, 0.49, 0.53]), np.float32([0.07, 0.12, 0.17])
-    t1 = np.clip((f - 0.25) / 0.25, 0, 1)[:, None] ** 1.5
-    t2 = np.clip((f - 0.55) / 0.25, 0, 1)[:, None]
-    base = belly * (1 - t1) + flank * t1
-    base = base * (1 - t2) + back * t2
-    head = np.clip((0.12 - (0.5 - pos[:, 2])) / 0.12, 0, 1)[:, None]
-    base = base * (1 - 0.25 * head) + np.float32([0.22, 0.30, 0.32]) * 0.25 * head
-    fin = np.float32([0.30, 0.34, 0.36])
-    base[~body] = fin * (0.85 + 0.15 * np.clip(-pos[~body, 2] - 0.5, 0, 1))[:, None]
-    fi = np.arange(FISH_N)[:, None]
-    vi = np.arange(V)[None, :]
-    ring = np.minimum(vi // F_SIDES, F_RINGS)
-    side = vi % F_SIDES
-    spot = (hash01(fi, ring * 3 + 7, side) < 0.13) & (f[None, :] > 0.6) & body[None, :]
-    spot |= (hash01(fi + 91, ring, side * 5 + 1) < 0.35) & (f[None, :] > 0.9) & body[None, :]
+def srgb8(lin):
+    c = np.clip(lin, 0, 1)
+    return (np.where(c <= 0.0031308, 12.92 * c, 1.055 * c ** (1 / 2.4) - 0.055) * 255 + 0.5).astype(np.uint8)
+
+
+def fish_albedo():
+    """(TEX_H, TEX_W, 3) linear RGB: body band (u nose->tail, v belly->back->belly) plus a fin-membrane band."""
+    rng = np.random.default_rng(7)
+    U, V = np.meshgrid((np.arange(TEX_W) + 0.5) / TEX_W, (np.arange(BODY_ROWS) + 0.5) / BODY_ROWS)
+    px, py = U * TEX_W, V * BODY_ROWS
+    d = np.abs(V - 0.5) / 0.5                          # 0 back, 1 belly
+    rows = BODY_ROWS / 2                               # rows per unit d
+    n = fbm(*grid(BODY_ROWS, TEX_W, 4, 12), 4, 12, rng, 4) - 0.5
+    de = d + 0.08 * n - 0.06 * (1 - np.clip((U - 0.12) / 0.10, 0, 1))          # dark top reaches lower on the head
+    sm = lambda x, a, b: np.clip((x - a) / (b - a), 0, 1) ** 2 * (3 - 2 * np.clip((x - a) / (b - a), 0, 1))
+    back, flank, belly = np.float32([0.045, 0.075, 0.085]), np.float32([0.33, 0.37, 0.39]), np.float32([0.64, 0.66, 0.64])
+    t1, t2 = sm(de, 0.22, 0.48)[..., None], sm(de, 0.62, 0.88)[..., None]
+    col = (back * (1 - t1) + flank * t1) * (1 - t2) + belly * t2
+    col = col * (1 + 0.12 * n[..., None] * np.float32([1.0, 1.1, 0.8]))
+    col *= 1 - 0.12 * np.exp(-((d - 0.46) * rows / 1.6) ** 2)[..., None] * (U > 0.19)[..., None]      # lateral line
+    ue = 0.165 + 0.04 * np.sin(np.pi * np.clip((d - 0.05) / 0.9, 0, 1))                                # gill cover edge
+    ge = (U - ue) * TEX_W
+    head = (U < ue)[..., None]
+    col = np.where(head, col * np.float32([0.80, 0.86, 0.84]) * (1 + 0.06 * (U > 0.105))[..., None], col)
+    col *= (1 - 0.55 * np.exp(-(ge / 1.5) ** 2) + 0.15 * np.exp(-((ge - 4) / 2.5) ** 2) * (ge > 0))[..., None]
+    for sg in (1, -1):
+        vm = 0.5 + sg * (0.30 + 0.05 * U / 0.115)
+        m = np.exp(-((V - vm) * BODY_ROWS / 2.2) ** 2) * (U < 0.115) * np.clip((0.115 - U) / 0.02, 0, 1)
+        col *= (1 - 0.7 * m)[..., None]                                                                # mouth line
+    rx, ry = 7.5, 7.5 * BODY_ROWS / 0.55 / TEX_W       # spot radii in texels (0.75 % of L, round in the world)
+    cx, cy = 24, 17
+    ix, iy = (px // cx).astype(int), (py // cy).astype(int)
+    cov = np.zeros_like(U)
+    for dx in (-1, 0, 1):
+        for dy in (-1, 0, 1):
+            jx, jy = ix + dx + 8, iy + dy + 8
+            sx = (jx - 8 + 0.2 + 0.6 * hash01(jx, jy, 1)) * cx
+            sy = (jy - 8 + 0.2 + 0.6 * hash01(jx, jy, 2)) * cy
+            su, sd = sx / TEX_W, np.abs(sy / BODY_ROWS - 0.5) / 0.5
+            p = 0.62 * (1.15 - 0.55 * su) * (1 - sm(sd, 0.36, 0.64))
+            p = np.where(su < 0.165, 0.3 * (sd > 0.2) * (sd < 0.65), p) * (su > 0.10)
+            p *= (np.hypot((su - EYE_U) * TEX_W / 16.4, (sd - 0.42) * rows / 11.4) > 1.8)
+            k = 0.7 + 0.6 * hash01(jx, jy, 4)
+            dist = np.hypot((px - sx) / (rx * k), (py - sy) / (ry * k))
+            cov = np.maximum(cov, np.clip((1 - dist) * rx * k * 0.8, 0, 1) * (hash01(jx, jy, 3) < p))
+    col = col * (1 - 0.92 * cov[..., None]) + np.float32([0.03, 0.045, 0.055]) * (0.92 * cov)[..., None]
+    for sg in (1, -1):
+        r = np.hypot((px - EYE_U * TEX_W) / 16.4, (py - (0.5 - sg * 0.21) * BODY_ROWS) / 11.4)
+        disc = lambda r0: np.clip((r0 - r) * 12.0, 0, 1)[..., None]
+        col *= 1 + 0.12 * (disc(1.32) - disc(1.12))
+        col = col * (1 - disc(1.12)) + np.float32([0.03, 0.035, 0.04]) * disc(1.12)
+        col = col * (1 - disc(0.95)) + (np.float32([0.60, 0.52, 0.30]) * (0.65 + 0.5 * r)[..., None]) * disc(0.95)
+        col = col * (1 - disc(0.55)) + np.float32([0.008, 0.008, 0.01]) * disc(0.55)
+    tex = np.tile(np.float32([0.19, 0.225, 0.235]), (TEX_H, TEX_W, 1))
+    tex[:BODY_ROWS] = col
+    fr = TEX_H - int(FIN_V0 * TEX_H) + 2
+    al = np.clip((np.arange(fr) + 0.5 - 2) / (fr - 4), 0, 1)[:, None]
+    ac = (np.arange(TEX_W) + 0.5) / TEX_W
+    ray = np.exp(-(((ac * 11) % 1 - 0.5) * TEX_W / 11 / 3.5) ** 2)[None, :]
+    n2 = fbm(*grid(fr, TEX_W, 2, 16), 2, 16, rng, 3) - 0.5
+    fin = np.float32([0.19, 0.225, 0.235]) * (1 - 0.35 * ray * np.clip(al * 4, 0, 1) + 0.12 * n2)[..., None]
+    fin *= (1 - 0.45 * sm(al, 0.8, 1.0))[..., None]
+    fin = flank * 0.75 * (1 - np.clip(al / 0.18, 0, 1))[..., None] + fin * np.clip(al / 0.18, 0, 1)[..., None]
+    tex[TEX_H - fr:] = fin
+    return tex
+
+
+def fish_texture():
+    return tp.data_texture(srgb8(fish_albedo()), srgb=True)
+
+
+def fish_tint(rng):
+    """(FISH_N, 1, 3) per-fish albedo multiplier: brightness plus a slight blue-vs-olive hue."""
     tint = rng.uniform(0.82, 1.06, (FISH_N, 1, 1)).astype(np.float32)
     hue = rng.uniform(0.0, 1.0, (FISH_N, 1, 1)).astype(np.float32)
-    col = base[None] * tint * (1.0 - 0.15 * hue * np.float32([0.0, 0.3, 1.0]))
-    col = np.where(spot[..., None], np.float32([0.05, 0.07, 0.09]) * (0.7 + 0.6 * hash01(fi, vi)[..., None]), col)
-    return np.ascontiguousarray(col, np.float32)
+    return tint * (1.0 - 0.15 * hue * np.float32([0.0, 0.3, 1.0]))
 
 
 @wp.func
@@ -1039,10 +1107,11 @@ def skin(c0: wp.array(dtype=wp.vec3), c1: wp.array(dtype=wp.vec3),
 
 class School:
     def __init__(self):
-        c0, c1, n0, n1, uu, kind, tri = salmon()
+        c0, c1, n0, n1, uv, uu, kind, tri = salmon()
         self.nv = len(c0)
         rng = np.random.default_rng(20260903)
-        self.col = fish_colours(c0, n0, kind, rng).reshape(-1, 3)
+        self.col = np.ascontiguousarray(np.broadcast_to(fish_tint(rng), (FISH_N, self.nv, 3)).reshape(-1, 3))
+        self.uv = np.ascontiguousarray(np.tile(uv, (FISH_N, 1)))
         self.index = np.ascontiguousarray((tri[None, :] + (np.arange(FISH_N, dtype=np.uint32) * self.nv)[:, None]).reshape(-1))
         L = rng.uniform(0.45, 0.75, FISH_N).astype(np.float32)
         pref = np.stack([rng.uniform(3.2, 5.6, FISH_N), rng.uniform(-4.2, -1.4, FISH_N), rng.uniform(-0.25, 0.25, FISH_N)], 1)
@@ -1092,10 +1161,17 @@ class School:
 
 school = School()
 _fp0, _fn0 = school.step(0.0, 1.0 / 60.0, np.zeros(3))
-fish_mat = standard_material(0xffffff, 0.35, 0.25, side=tp.Side.Double, vertex_colors=True)
+fish_mat = tp.MeshPhysicalMaterial()
+fish_mat.color = 0xffffff
+fish_mat.roughness, fish_mat.metalness = 0.45, 0.05
+fish_mat.specular_intensity = 0.2      # skin/water IOR contrast is small: F0 ~0.008, else the sky env chromes the back
+fish_mat.side = tp.Side.Double
+fish_mat.vertex_colors = True
+fish_mat.map = fish_texture()
 fish_geo = tp.BufferGeometry()
 fish_geo.set_attribute("position", _fp0)
 fish_geo.set_attribute("normal", _fn0)
+fish_geo.set_attribute("uv", school.uv)
 fish_geo.set_attribute("color", school.col)
 fish_geo.set_index(school.index)
 fish = tp.Mesh(fish_geo, fish_mat)
