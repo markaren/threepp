@@ -1,10 +1,10 @@
-"""Net-pen inspection ROV: Warp-cloth net with a tear, collar, BlueROV2, and a Warp school of procedural salmon.
+"""Net-pen inspection ROV: Warp-cloth net with a tear, collar, BlueROV2 on a patrol with tether, bubbles,
+camera + sonar insets, and a Warp school of procedural salmon.
 
     python warp_netpen.py                          # window; drag to orbit, Esc quits
-    python warp_netpen.py --shot p1_tear           # still -> aaa_caps/netpen/p1_tear.png
-    python warp_netpen.py --shot p1_rov_hero --out x.png --seconds 8 --size 1600x900
-Cameras: p1_net_wide p1_collar_below p1_rov_hero p1_tear p2_school p2_fish_close p2_leak. `--fish N` (400).
-Vulkan only; Warp on CUDA if present.
+    python warp_netpen.py --shot p3_hud --out x.png --seconds 8 --size 1600x900
+Cameras: p1_net_wide p1_collar_below p1_rov_hero p1_tear p2_school p2_fish_close p2_leak p3_hud p3_sonar_tear.
+`--fish N` (400). Vulkan only; Warp on CUDA if present.
 """
 import math
 import os
@@ -243,11 +243,81 @@ class Net:
         wp.launch(compute_normals, dim=self.n, device=device, inputs=[self.pos, self.nrm, NU, NVT])
 
 
+ROPE_N, ROPE_L = 40, 7.5
+ROPE_SEG = ROPE_L / (ROPE_N - 1)
+
+
+@wp.func
+def rope_spring(p: wp.vec3, pos: wp.array(dtype=wp.vec3), j: int, n: int, r: float, k: float) -> wp.vec3:
+    if j < 0 or j >= n:
+        return wp.vec3(0.0, 0.0, 0.0)
+    d = pos[j] - p
+    l = wp.length(d)
+    if l < 1.0e-9:
+        return wp.vec3(0.0, 0.0, 0.0)
+    return d * (0.5 * k * (l - r) / l)
+
+
+@wp.kernel
+def rope_integrate(pos: wp.array(dtype=wp.vec3), prev: wp.array(dtype=wp.vec3), pred: wp.array(dtype=wp.vec3),
+                   pins: wp.array(dtype=wp.vec3), n: int, dt: float):
+    i = wp.tid()
+    p = pos[i]
+    step = p - prev[i]
+    prev[i] = p
+    if i == 0:
+        pred[i] = pins[0]
+        return
+    if i == n - 1:
+        pred[i] = pins[1]
+        return
+    q = p + step * 0.92 + wp.vec3(0.0, 0.30, 0.0) * dt * dt        # slightly buoyant, heavily damped
+    pred[i] = wp.vec3(q[0], wp.min(q[1], -0.06), q[2])
+
+
+@wp.kernel
+def rope_solve(p_in: wp.array(dtype=wp.vec3), p_out: wp.array(dtype=wp.vec3), n: int, seg: float):
+    i = wp.tid()
+    p = p_in[i]
+    if i == 0 or i == n - 1:
+        p_out[i] = p
+        return
+    c = rope_spring(p, p_in, i - 1, n, seg, 1.0) + rope_spring(p, p_in, i + 1, n, seg, 1.0)
+    c += rope_spring(p, p_in, i - 2, n, 1.96 * seg, 0.25) + rope_spring(p, p_in, i + 2, n, 1.96 * seg, 0.25)
+    p_out[i] = p + c * 0.8
+
+
+class Rope:
+    def __init__(self):
+        z = np.zeros((ROPE_N, 3), np.float32)
+        self.pos, self.prev = wp.array(z, dtype=wp.vec3, device=device), wp.array(z, dtype=wp.vec3, device=device)
+        self.pred, self.scratch = wp.zeros(ROPE_N, dtype=wp.vec3, device=device), wp.zeros(ROPE_N, dtype=wp.vec3, device=device)
+        self.pins = wp.zeros(2, dtype=wp.vec3, device=device)
+
+    def reset(self, a, b):
+        p = np.linspace(a, b, ROPE_N).astype(np.float32)
+        p[:, 1] = np.minimum(p[:, 1] + 0.6 * np.sin(np.pi * np.linspace(0, 1, ROPE_N)), -0.06)
+        self.pos.assign(p)
+        self.prev.assign(p)
+        self.pins.assign(np.asarray([a, b], np.float32))
+
+    def launches(self):
+        for _ in range(SUBSTEPS):
+            wp.launch(rope_integrate, dim=ROPE_N, device=device, inputs=[self.pos, self.prev, self.pred, self.pins, ROPE_N, DT])
+            a, b = self.pred, self.scratch
+            for _ in range(ITERATIONS):
+                wp.launch(rope_solve, dim=ROPE_N, device=device, inputs=[a, b, ROPE_N, ROPE_SEG])
+                a, b = b, a
+            wp.copy(self.pos, a)
+
+
 net = Net()
+rope = Rope()
 graph = None
 if device.is_cuda:
     with wp.ScopedCapture(device) as cap:
         net.launches()
+        rope.launches()
     graph = cap.graph
 
 
@@ -257,6 +327,7 @@ def net_step(current, t):
         wp.capture_launch(graph)
     else:
         net.launches()
+        rope.launches()
 
 
 # ---- textures ----------------------------------------------------------------
@@ -397,7 +468,7 @@ def fouling_maps():
 # ---- renderer ----------------------------------------------------------------
 canvas = tp.Canvas("threepp x warp - net pen", width=W, height=H, vsync=False, headless=HEADLESS)
 renderer = tp.VulkanRenderer(canvas)
-renderer.tone_mapping = tp.ToneMapping.ACESFilmic
+renderer.tone_mapping = tp.ToneMapping.AgX
 renderer.tone_mapping_exposure = 0.72
 renderer.render_scale = 1.0
 renderer.gbuffer_msaa = 2
@@ -415,7 +486,7 @@ scene = tp.Scene()
 sky = sky_env(SUN_DIR, below_horizon=(0.30, 0.42, 0.48), below_nadir=(0.08, 0.16, 0.20))
 scene.environment = sky
 scene.background = sky
-sun = tp.DirectionalLight(0xfff0d8, 3.2)
+sun = tp.DirectionalLight(0xfff0d8, 2.4)
 sun.position.set(*(SUN_DIR * 1000.0))
 scene.add(sun)
 
@@ -728,27 +799,208 @@ def build_rov():
         spot.set_target(tgt)
         rov.add(spot)
         lights.append(spot)
-    pts = [np.array([-0.19, 0.11, 0.0])]
-    for k in range(1, 9):
-        t = k / 8.0
-        pts.append(np.array([-0.19 - 0.9 * t, 0.11 + 1.6 * t * t, 0.35 * t]))
-    for a, b in zip(pts[:-1], pts[1:]):
-        rov.add(tube(a, b, 0.006, cable, 8))
     return rov, props, lights
 
 
 rov, props, rov_lights = build_rov()
-scene.add(rov)
-ROV_TH = TEAR_TH - math.radians(40.0)
-ROV_R = PEN_R - 1.5
-ROV_Y = -2.2
-rov.position.set(ROV_R * math.cos(ROV_TH), ROV_Y, ROV_R * math.sin(ROV_TH))
-ROV_YAW = -ROV_TH - math.pi / 2                   # +X forward along the wall toward the tear
-rov.rotation.y = ROV_YAW
+rov_pitch = tp.Group()
+rov_pitch.add(rov)
+rov_yaw = tp.Group()
+rov_yaw.add(rov_pitch)
+scene.add(rov_yaw)
 
 e_r = np.array([math.cos(TEAR_TH), 0.0, math.sin(TEAR_TH)])
 e_t = np.array([-math.sin(TEAR_TH), 0.0, math.cos(TEAR_TH)])
 TEAR_C = np.array([PEN_R * e_r[0], TEAR_Y, PEN_R * e_r[2]])
+
+
+def rot_x(a):
+    c, s = math.cos(a), math.sin(a)
+    return np.array([[1, 0, 0], [0, c, -s], [0, s, c]])
+
+
+def rot_y(a):
+    c, s = math.cos(a), math.sin(a)
+    return np.array([[c, 0, s], [0, 1, 0], [-s, 0, c]])
+
+
+def rot_z(a):
+    c, s = math.cos(a), math.sin(a)
+    return np.array([[c, -s, 0], [s, c, 0], [0, 0, 1]])
+
+
+# ---- patrol: closed spline (deg from the tear meridian, stand-off from the net, y) ---------
+PATROL_PTS = [(-70, 0.9, -0.5), (-62, 1.2, -1.6), (-50, 1.2, -3.2), (-32, 1.2, -4.2), (-16, 1.7, -3.6),
+              (-7, 2.5, -3.15), (0, 1.5, TEAR_Y), (9, 1.0, -2.75), (22, 1.2, -1.9), (34, 1.5, -0.8),
+              (5, 3.8, -0.5), (-40, 3.5, -0.6)]
+HOVER = TEAR_C - 1.5 * e_r
+ROV_SPEED = 0.45
+
+
+def patrol_xyz(deg, off, y):
+    th = TEAR_TH + math.radians(deg)
+    return np.array([(PEN_R - off) * math.cos(th), y, (PEN_R - off) * math.sin(th)])
+
+
+def loop_spline(pts, s):
+    """Closed Catmull-Rom through pts at fractions s."""
+    n = len(pts)
+    x = (np.asarray(s, np.float64) % 1.0) * n
+    i = np.floor(x).astype(int)
+    t = (x - i)[:, None]
+    p0, p1, p2, p3 = (pts[(i + k) % n] for k in (-1, 0, 1, 2))
+    return 0.5 * (2 * p1 + (-p0 + p2) * t + (2 * p0 - 5 * p1 + 4 * p2 - p3) * t ** 2 + (-p0 + 3 * p1 - 3 * p2 + p3) * t ** 3)
+
+
+def build_patrol(dt=1.0 / 60.0):
+    """Per-frame rows (x, y, z, yaw, pitch, roll, thrust fwd/lat/vert) for one loop; slows and faces the tear at HOVER."""
+    P = np.array([patrol_xyz(*q) for q in PATROL_PTS])
+    fine = loop_spline(P, np.linspace(0, 1, 4001)[:-1])
+    cum = np.concatenate([[0.0], np.cumsum(np.linalg.norm(np.roll(fine, -1, 0) - fine, axis=1))])
+    L = cum[-1]
+    at = lambda u: loop_spline(P, np.interp((np.asarray(u) % 1.0) * L, cum, np.linspace(0, 1, 4001)))
+    rows, u, yaw, pitch, roll, vprev = [], 0.0, None, 0.0, 0.0, np.zeros(3)
+    while True:
+        p, p2, lead = at([u, u + 0.002, u + 0.03])
+        near = min(np.linalg.norm(p - HOVER) / 2.0, 1.0)
+        v = ROV_SPEED * (0.25 + 0.75 * near)
+        tang = (p2 - p) / np.linalg.norm(p2 - p)
+        look = (lead - p) * near + (TEAR_C - p) * (1 - near)
+        yaw_t = math.atan2(-look[2], look[0])
+        yaw = yaw_t if yaw is None else yaw
+        dy = (yaw_t - yaw + math.pi) % (2 * math.pi) - math.pi
+        yaw += dy * (1 - math.exp(-dt / 0.9))
+        vel = tang * v
+        acc = (vel - vprev) / dt if rows else np.zeros(3)
+        vprev = vel
+        fwd, right = np.array([math.cos(yaw), 0.0, -math.sin(yaw)]), np.array([math.sin(yaw), 0.0, math.cos(yaw)])
+        tf = np.dot(vel, fwd) / ROV_SPEED + 0.6 * np.dot(acc, fwd)
+        tl = np.dot(vel, right) / ROV_SPEED + 0.6 * np.dot(acc, right) + 0.8 * dy / dt
+        tv = vel[1] / 0.3 + 0.6 * acc[1]
+        pitch += ((-0.10 * tf - 0.06 * tv) - pitch) * (1 - math.exp(-dt / 1.2))
+        roll += (0.12 * tl - roll) * (1 - math.exp(-dt / 1.2))
+        rows.append([*p, yaw, pitch, roll, tf, tl, tv])
+        u += v * dt / L
+        if u >= 1.0:
+            return np.array(rows)
+
+
+PATROL = build_patrol()
+T_LOOP = len(PATROL) / 60.0
+_hover_i = int(np.argmin(np.linalg.norm(PATROL[:, :3] - HOVER, axis=1)))
+_wall_i = int(np.argmin(np.linalg.norm(PATROL[:, :3] - patrol_xyz(-42, 1.2, -3.8), axis=1)))
+PATROL_T0 = {"p3_sonar_tear": _hover_i / 60.0 - SECONDS, "p3_hud": _wall_i / 60.0 - SECONDS}.get(SHOT, 0.0) % T_LOOP
+rov_pos, rov_R, rov_thrust = PATROL[0, :3].copy(), np.eye(3), np.zeros(3)
+
+
+def rov_pose(t):
+    global rov_pos, rov_R, rov_thrust
+    x, y, z, yaw, pitch, roll, tf, tl, tv = PATROL[int(t * 60.0) % len(PATROL)]
+    rov_yaw.position.set(x, y, z)
+    rov_yaw.rotation.y = yaw
+    rov_pitch.rotation.z = pitch
+    rov.rotation.x = roll
+    rov_pos, rov_R, rov_thrust = np.array([x, y, z]), rot_y(yaw) @ rot_z(pitch) @ rot_x(roll), np.array([tf, tl, tv])
+
+
+rov_pose(PATROL_T0)
+
+# ---- tether: rope from the tail to a surface point on the collar that trails the ROV ------------
+TETHER_LOCAL = np.array([-0.19, 0.11, 0.0])
+tether_th = math.atan2(rov_pos[2], rov_pos[0]) - 0.2
+
+
+def tether_pins(dt):
+    global tether_th
+    th = math.atan2(rov_pos[2], rov_pos[0])
+    tether_th += ((th - tether_th + math.pi) % (2 * math.pi) - math.pi) * (1 - math.exp(-dt / 8.0))
+    top = np.array([(PEN_R - 0.35) * math.cos(tether_th - 0.15), WATER_Y - 0.05, (PEN_R - 0.35) * math.sin(tether_th - 0.15)])
+    return rov_pos + rov_R @ TETHER_LOCAL, top
+
+
+def tube_verts(pts, r, sides):
+    """Ring vertices + normals along a polyline (no twist control; fine at r = 6 mm)."""
+    d = np.gradient(pts, axis=0)
+    d /= np.maximum(np.linalg.norm(d, axis=1, keepdims=True), 1e-9)
+    a = np.where(np.abs(d[:, 1:2]) < 0.9, np.float64([[0, 1, 0]]), np.float64([[1, 0, 0]]))
+    b1 = np.cross(d, a)
+    b1 /= np.maximum(np.linalg.norm(b1, axis=1, keepdims=True), 1e-9)
+    b2 = np.cross(d, b1)
+    ang = 2 * np.pi * np.arange(sides) / sides
+    n = np.cos(ang)[None, :, None] * b1[:, None] + np.sin(ang)[None, :, None] * b2[:, None]
+    return (pts[:, None] + r * n).reshape(-1, 3).astype(np.float32), n.reshape(-1, 3).astype(np.float32)
+
+
+def tube_index(n, sides):
+    i = np.arange(n - 1)[:, None] * sides + np.arange(sides)[None, :]
+    j = np.arange(n - 1)[:, None] * sides + (np.arange(sides)[None, :] + 1) % sides
+    return np.stack([i, j, j + sides, i, j + sides, i + sides], -1).reshape(-1).astype(np.uint32)
+
+
+_ta, _tb = tether_pins(0.0)
+rope.reset(_ta, _tb)
+tether_geo = tp.BufferGeometry()
+_tv, _tn = tube_verts(rope.pos.numpy().astype(np.float64), 0.006, 6)
+tether_geo.set_attribute("position", _tv)
+tether_geo.set_attribute("normal", _tn)
+tether_geo.set_index(tube_index(ROPE_N, 6))
+tether = tp.Mesh(tether_geo, cable)
+tether.frustum_culled = False
+scene.add(tether)
+
+
+def tether_upload():
+    v, n = tube_verts(rope.pos.numpy().astype(np.float64), 0.006, 6)
+    tether_geo.update_attribute("position", v)
+    tether_geo.update_attribute("normal", n)
+
+
+# ---- thruster bubbles: a host-fed billboard field, ring-buffered -------------------------------
+BUB_CAP = 512
+_bc = tp.ParticleField.Config()
+_bc.capacity = BUB_CAP
+_bc.ownership = tp.ParticleField.Ownership.HostRing
+_bc.w_semantic = tp.ParticleField.WSemantic.Radius
+_bc.uniform_radius = 0.004
+_bc.host_stable_slots = True
+bubbles = tp.ParticleField.create(_bc)
+bubbles.frustum_culled = False
+bubbles.set_billboard_repr(tp.Color(0.85, 0.95, 1.0), tp.Color(0.50, 0.72, 0.78), 0.9, 1.0)
+_bb = bubbles.billboard_repr
+_bb.lod_near = _bb.lod_fade = _bb.stretch_seconds = _bb.size_taper = _bb.glow = 0.0
+_bb.softness = 0.45
+_bb.fade_power = 1.2
+_bb.near_fade = 0.1
+bubbles.set_live_count(0)
+scene.add(bubbles)
+REAR_THR = np.array([[-0.22, -0.02, -0.23], [-0.22, -0.02, 0.23]])
+bub_p, bub_v = np.zeros((BUB_CAP, 3)), np.zeros((BUB_CAP, 3))
+bub_age, bub_life, bub_r = np.full(BUB_CAP, 1e9), np.ones(BUB_CAP), np.full(BUB_CAP, 0.004)
+bub_buf = np.zeros((BUB_CAP, 4), np.float32)
+bub_rng, bub_next, bub_acc = np.random.default_rng(31), 0, 0.0
+
+
+def bubbles_step(dt):
+    global bub_next, bub_acc
+    push = min(max((rov_thrust[0] - 0.25) / 0.75, 0.0), 1.0)
+    bub_acc += 70.0 * push * dt
+    k, bub_acc = int(bub_acc), bub_acc % 1.0
+    fwd = rov_R @ [1.0, 0.0, 0.0]
+    for m in range(k):
+        i, bub_next = bub_next, (bub_next + 1) % BUB_CAP
+        bub_p[i] = rov_pos + rov_R @ (REAR_THR[m % 2] + bub_rng.normal(0, 0.012, 3))
+        bub_v[i] = -fwd * 0.35 + bub_rng.normal(0, 0.05, 3)
+        bub_age[i], bub_life[i], bub_r[i] = 0.0, bub_rng.uniform(1.4, 2.4), bub_rng.uniform(0.0015, 0.005)
+    bub_age[:] += dt
+    bub_v[:, 1] += (0.22 - bub_v[:, 1]) * dt / 0.5
+    bub_v[:, [0, 2]] *= math.exp(-dt / 0.6)
+    bub_p[:] += bub_v * dt
+    alive = bub_age < bub_life
+    bub_buf[:, :3] = bub_p
+    bub_buf[:, 3] = np.where(alive, bub_r * (1 + 0.4 * bub_age / bub_life), -1.0)
+    bubbles.submit(bub_buf, dt)
+
+
 
 # ---- fish: procedural salmon v2 ---------------------------------------------
 FISH_N = max(cli_arg("--fish", 400, int), 2)
@@ -773,8 +1025,8 @@ def catmull(y, u):
     return 0.5 * (2 * p1 + (-p0 + p2) * t + (2 * p0 - 5 * p1 + 4 * p2 - p3) * t ** 2 + (-p0 + 3 * p1 - 3 * p2 + p3) * t ** 3)
 
 
-HALF_H = np.float32([0.010, 0.048, 0.078, 0.096, 0.106, 0.106, 0.099, 0.086, 0.069, 0.049, 0.030, 0.014])
-HALF_W = np.float32([0.008, 0.032, 0.049, 0.059, 0.063, 0.061, 0.056, 0.048, 0.038, 0.027, 0.016, 0.006])
+HALF_H = np.float32([0.024, 0.060, 0.082, 0.096, 0.106, 0.106, 0.099, 0.086, 0.069, 0.049, 0.030, 0.014])
+HALF_W = np.float32([0.016, 0.040, 0.051, 0.059, 0.063, 0.061, 0.056, 0.048, 0.038, 0.027, 0.016, 0.006])
 KEEL = np.float32([1.0, 1.05, 1.15, 1.22, 1.25, 1.24, 1.20, 1.14, 1.08, 1.02, 1.0, 1.0])
 
 
@@ -784,7 +1036,8 @@ def skin_fn(u, th):
     s, c = np.sin(th), np.cos(th)
     eye = 1.0 + 0.10 * np.exp(-((u - EYE_U) / 0.035) ** 2) * (np.exp(-(1 - np.cos(th - EYE_TH)) / 0.05)
                                                               + np.exp(-(1 - np.cos(th + EYE_TH - np.pi)) / 0.05))
-    y = h * s * np.where(s < 0, kb * (1.0 - 0.18 * c * c), 1.0) * eye - 0.15 * h
+    jaw = 1.0 + 0.30 * np.exp(-((u - 0.05) / 0.035) ** 2) * np.clip(-s, 0, 1) ** 2     # lower jaw lobe
+    y = h * s * np.where(s < 0, kb * (1.0 - 0.18 * c * c) * jaw, 1.0) * eye - 0.15 * h
     return np.stack([w * c * eye, y, 0.5 - u], -1)
 
 
@@ -792,7 +1045,7 @@ def fan(outline, nrm, ray, camber, shift=(0.0, 0.0, 0.0), band=0, flip=False):
     """A thin fin fanned from its centre, cambered along nrm; uv = (across the rays, root->tip) in the fin band."""
     outline = np.asarray(outline, np.float64) + np.float64(shift)
     v = np.concatenate([[outline.mean(0)], outline])
-    tris = [[0, 1 + k, 1 + (k + 1) % len(outline)] for k in range(len(outline) - 1)]
+    tris = [[0, 1 + k, 1 + (k + 1) % len(outline)] for k in range(len(outline))]
     nrm, ray = np.float64(nrm) / np.linalg.norm(nrm), np.float64(ray) / np.linalg.norm(ray)
     perp = np.cross(nrm, ray)
     perp /= np.linalg.norm(perp)
@@ -805,16 +1058,6 @@ def fan(outline, nrm, ray, camber, shift=(0.0, 0.0, 0.0), band=0, flip=False):
     n /= np.linalg.norm(n, axis=1, keepdims=True)
     v0, v1 = FIN_BANDS[band]
     return v, np.asarray(tris), n, np.stack([1 - ac if flip else ac, v0 + (v1 - v0) * al], 1)
-
-
-def rot_y(a):
-    c, s = math.cos(a), math.sin(a)
-    return np.array([[c, 0, s], [0, 1, 0], [-s, 0, c]])
-
-
-def rot_z(a):
-    c, s = math.cos(a), math.sin(a)
-    return np.array([[c, -s, 0], [s, c, 0], [0, 0, 1]])
 
 
 def salmon():
@@ -865,8 +1108,8 @@ def salmon():
     add(fan([[0, 0.012, -0.46], [0, 0.06, -0.55], [0, 0.115, -0.65], [0, 0.13, -0.70], [0, 0.07, -0.675],
              [0, 0.02, -0.66], [0, -0.02, -0.66], [0, -0.07, -0.675], [0, -0.125, -0.70], [0, -0.11, -0.65],
              [0, -0.055, -0.55], [0, -0.016, -0.46]], [1, 0, 0], [0, 0, -1], 0.006), 1)
-    add(fan([[0, top(x) + h, z(x)] for x, h in ((0.45, 0), (0.46, 0.020), (0.475, 0.028), (0.565, 0), (0.51, 0))],
-            [1, 0, 0], [0, 1, -0.5], 0.004), 1)
+    add(fan([[0, top(x) + h, z(x)] for x, h in ((0.45, 0), (0.455, 0.009), (0.468, 0.015), (0.49, 0.017), (0.52, 0.013),
+                                                (0.55, 0.006), (0.565, 0), (0.51, 0))], [1, 0, 0], [0, 1, -0.5], 0.004), 1)
     add(fan([[0, top(x) + h, z(x)] for x, h in ((0.80, 0), (0.81, 0.006), (0.825, 0.008), (0.84, 0.003), (0.845, 0))],
             [1, 0, 0], [0, 1, -0.3], 0.001), 1)
     add(fan([[0, bot(x) + h, z(x)] for x, h in ((0.75, 0), (0.76, -0.016), (0.78, -0.024), (0.81, -0.012),
@@ -921,7 +1164,7 @@ def fish_albedo():
     col = (back * (1 - t1) + flank * t1) * (1 - t2) + belly * t2
     g = np.clip((de - 0.35) / 0.4, 0, 1)[..., None]    # blue -> purple -> copper sheen down the flank
     sheen = (1 - g) ** 2 * np.float32([0.94, 0.97, 1.06]) + 2 * g * (1 - g) * np.float32([1.02, 0.95, 1.04]) + g ** 2 * np.float32([1.06, 0.98, 0.93])
-    col = col * (1 + (sheen - 1) * t1 * (1 - t2)) * (1 + 0.08 * n[..., None] * np.float32([1.0, 1.1, 0.8]))
+    col = col * (1 + 0.5 * (sheen - 1) * t1 * (1 - t2)) * (1 + 0.08 * n[..., None] * np.float32([1.0, 1.1, 0.8]))
     col *= 1 - 0.12 * np.exp(-((d - 0.46) * rows / 1.6) ** 2)[..., None] * (U > 0.21)[..., None]      # lateral line
     ue = 0.19 + 0.03 * np.sin(np.pi * np.clip((d - 0.05) / 0.9, 0, 1))                                 # gill cover rear edge
     ge = (U - ue) * TEX_W
@@ -930,39 +1173,35 @@ def fish_albedo():
     ta, tb = np.abs(a1 % 1 - 0.5), np.abs(a2 % 1 - 0.5)
     edge = np.exp(-(np.minimum(ta, tb) / 0.09) ** 2)
     col *= (1 - 0.16 * edge * scl)[..., None]                                                          # ~90 diamond scales
-    head = (U < ue)[..., None]
-    col = np.where(head, col * np.float32([0.80, 0.86, 0.84]) * (1 + 0.18 * ((U > 0.145) & (d > 0.18)))[..., None], col)
-    col *= (1 - 0.55 * np.exp(-(ge / 1.5) ** 2) + 0.15 * np.exp(-((ge - 4) / 2.5) ** 2) * (ge > 0))[..., None]
-    col *= (1 - 0.25 * np.exp(-((U - 0.145) * TEX_W / 1.5) ** 2) * (d > 0.18))[..., None]              # front crease
+    hd = (1 - sm(U, ue - 0.02, ue + 0.02))[..., None]                                                 # head weight
+    col = col * (1 - hd) + col * np.float32([0.84, 0.88, 0.87]) * hd
+    op = sm(U, 0.10, 0.15) * (1 - sm(U, ue - 0.015, ue + 0.01)) * (d > 0.12)                          # operculum plate
+    col *= (1 + 0.16 * op * (0.6 + 0.4 * sm(d, 0.15, 0.5)))[..., None]
+    col *= (1 - 0.14 * np.exp(-((ge - 5.0) / 7.0) ** 2) * (ge > -2) * (d > 0.12))[..., None]           # soft shade behind it
     for sg in (1, -1):
         vm = 0.5 + sg * (0.30 + 0.06 * U / 0.125)
-        m = np.exp(-((V - vm) * BODY_ROWS / 2.2) ** 2) * (U < 0.125) * np.clip((0.125 - U) / 0.02, 0, 1)
-        col *= (1 - 0.7 * m)[..., None]                                                                # mouth line
-        jaw = ((sg * (V - 0.5) > 0.30 + 0.06 * U / 0.125) & (U < 0.12))[..., None]
-        col = np.where(jaw, col * 0.5 + np.float32([0.62, 0.50, 0.48]) * 0.5, col)                     # pinkish lower jaw
+        m = np.exp(-((V - vm) * BODY_ROWS / 3.2) ** 2) * sm(U, 0.015, 0.07) * (1 - sm(U, 0.10, 0.13))
+        col *= (1 - 0.40 * m)[..., None]                                                               # mouth seam
+        jw = sm(sg * (V - 0.5), 0.27 + 0.06 * U / 0.125, 0.35 + 0.06 * U / 0.125) * (1 - sm(U, 0.09, 0.13))
+        col = col * (1 - 0.35 * jw)[..., None] + np.float32([0.58, 0.47, 0.45]) * (0.35 * jw)[..., None]   # lower jaw
         r = np.hypot(px - 0.055 * TEX_W, (py - (0.5 - sg * 0.20) * BODY_ROWS) * ysc)
-        col *= (1 - 0.8 * np.clip((1.6 - r) * 2, 0, 1))[..., None]                                     # nostril
+        col *= (1 - 0.6 * np.clip((2.2 - r) * 0.8, 0, 1))[..., None]                                   # nostril
     X, Y = px, py * ysc
     cov = np.zeros_like(U)
-    for dx in (-1, 0, 1):                              # sparse X / M marks on the back, 2-3 scales wide
+    rim = fbm(*grid(BODY_ROWS, TEX_W, 32, 128), 32, 128, rng, 3) - 0.5
+    for dx in (-1, 0, 1):                              # sparse irregular black dots, back and upper flank
         for dy in (-1, 0, 1):
-            cx, cy = 52, 26
+            cx, cy = 48, 24
             jx, jy = (px // cx).astype(int) + dx + 8, (py // cy).astype(int) + dy + 8
             sx = (jx - 8 + 0.15 + 0.7 * hash01(jx, jy, 1)) * cx
             sy = (jy - 8 + 0.15 + 0.7 * hash01(jx, jy, 2)) * cy
             su, sd = sx / TEX_W, np.abs(sy / BODY_ROWS - 0.5) / 0.5
-            p = 0.33 * (1 - sm(sd, 0.34, 0.44)) * (su > ue.mean())
+            p = 0.30 * (1 - sm(sd, 0.34, 0.46)) * (su > ue.mean())
             on = hash01(jx, jy, 3) < p
-            ang = 0.6 + 0.5 * hash01(jx, jy, 5)
-            ln = 11 + 6 * hash01(jx, jy, 6)
-            rx, ry = X - sx, (Y - sy * ysc)
-            for k in range(3):
-                th = ang * (1 if k == 0 else -1) + (0.0 if k < 2 else 1.4)
-                lx = rx * np.cos(th) + ry * np.sin(th)
-                ly = -rx * np.sin(th) + ry * np.cos(th)
-                dist = np.hypot(np.maximum(np.abs(lx) - ln * (0.5 if k == 2 else 1.0), 0), ly)
-                use = on if k < 2 else on & (hash01(jx, jy, 7) < 0.4)
-                cov = np.maximum(cov, np.clip((1.7 - dist) * 1.2 + 0.5, 0, 1) * use)
+            r0 = 5.0 + 6.0 * hash01(jx, jy, 5) + 9.0 * (hash01(jx, jy, 6) < 0.12)
+            ex = 0.8 + 0.4 * hash01(jx, jy, 8)
+            r = np.hypot((X - sx) * ex, (Y - sy * ysc) / ex) * (1 + 0.5 * rim)
+            cov = np.maximum(cov, np.clip((r0 - r) * 0.7 + 0.5, 0, 1) * on)
     for dx in (-1, 0, 1):                              # round dots on the gill cover / head; speckles on top
         for dy in (-1, 0, 1):
             cx, cy = 22, 14
@@ -979,15 +1218,22 @@ def fish_albedo():
     col = col * (1 - 0.95 * cov[..., None]) + np.float32([0.012, 0.015, 0.018]) * (0.95 * cov)[..., None]
     for sg in (1, -1):
         r = np.hypot((px - EYE_U * TEX_W) / 16.4, (py - (0.5 - sg * 0.21) * BODY_ROWS) / 11.4)
-        disc = lambda r0: np.clip((r0 - r) * 12.0, 0, 1)[..., None]
-        col *= 1 + 0.12 * (disc(1.32) - disc(1.12))
+        disc = lambda r0: np.clip((r0 - r) * 3.5, 0, 1)[..., None]
+        col *= 1 - 0.22 * (disc(1.55) - disc(1.05))
         col = col * (1 - disc(1.12)) + np.float32([0.03, 0.035, 0.04]) * disc(1.12)
-        col = col * (1 - disc(0.95)) + (np.float32([0.75, 0.55, 0.12]) * (0.7 + 0.45 * r)[..., None]) * disc(0.95)
+        col = col * (1 - disc(0.95)) + (np.float32([0.40, 0.29, 0.09]) * (0.55 + 0.6 * r)[..., None]) * disc(0.95)
         col = col * (1 - disc(0.52)) + np.float32([0.008, 0.008, 0.01]) * disc(0.52)
     tex = np.tile(np.float32([0.05, 0.06, 0.065]), (TEX_H, TEX_W, 1))
     tex[:BODY_ROWS] = col
+    fa, fb = a1 % 1 - 0.5, a2 % 1 - 0.5                    # in-scale coords; +fa+fb points to the tail
+    ca, cb = np.floor(a1).astype(int) + 64, np.floor(a2).astype(int) + 64
+    cup = -1.3 * np.clip(1 - (fa * fa + fb * fb) / 0.25, 0, 1)
+    ridge = 0.9 * np.clip((fa + fb - 0.22) / 0.2, 0, 1) * np.clip((0.5 - np.maximum(np.abs(fa), np.abs(fb))) / 0.1, 0, 1)
+    tilt = 11.4 * 0.052 * (fa * (hash01(ca, cb, 21) - 0.5) + fb * (hash01(ca, cb, 22) - 0.5)) * 2.0     # 2-4 deg per scale
     hgt = np.zeros((TEX_H, TEX_W), np.float32)
-    hgt[:BODY_ROWS] = (ta * tb) * scl * 4.0                # diamond scale domes for the normal map
+    hgt[:BODY_ROWS] = (cup + ridge + tilt) * scl
+    rough = np.full((TEX_H, TEX_W), 0.5, np.float32)
+    rough[:BODY_ROWS] = 0.42 * (1 - scl) + (0.30 + 0.25 * edge) * scl
     ac = (np.arange(TEX_W) + 0.5) / TEX_W
     ray = np.exp(-(((ac * 11) % 1 - 0.5) * TEX_W / 11 / 3.5) ** 2)[None, :]
     for k, (v0, v1) in FIN_BANDS.items():
@@ -1004,16 +1250,16 @@ def fish_albedo():
             fin = np.float32([0.60, 0.60, 0.58]) * w[..., None] + fin * (1 - w)[..., None]
         tex[r0:r1] = fin
     gy, gx = np.gradient(hgt)
-    nrm = np.stack([-gx * 1.5, gy * 1.5, np.ones_like(gx)], -1)
+    nrm = np.stack([-gx, gy, np.ones_like(gx)], -1)
     nrm /= np.linalg.norm(nrm, axis=-1, keepdims=True)
     nmap = np.full((TEX_H, TEX_W, 4), 255, np.uint8)
     nmap[..., :3] = np.clip((nrm * 0.5 + 0.5) * 255, 0, 255)
-    return tex, nmap
+    return tex, nmap, np.repeat((rough * 255).astype(np.uint8)[..., None], 3, -1)
 
 
 def fish_texture():
-    tex, nmap = fish_albedo()
-    return tp.data_texture(srgb8(tex), srgb=True), tp.data_texture(nmap, srgb=False)
+    tex, nmap, rough = fish_albedo()
+    return tp.data_texture(srgb8(tex), srgb=True), tp.data_texture(nmap, srgb=False), tp.data_texture(rough, srgb=False)
 
 
 def fish_tint(rng):
@@ -1209,12 +1455,13 @@ school = School()
 _fp0, _fn0 = school.step(0.0, 1.0 / 60.0, np.zeros(3))
 fish_mat = tp.MeshPhysicalMaterial()
 fish_mat.color = 0xffffff
-fish_mat.roughness, fish_mat.metalness = 0.42, 0.15
+fish_mat.roughness, fish_mat.metalness = 1.0, 0.15    # roughness lives in the map
 fish_mat.specular_intensity = 0.2      # skin/water IOR contrast is small: F0 ~0.008, else the sky env chromes the back
+fish_mat.iridescence, fish_mat.iridescence_ior, fish_mat.iridescence_thickness_nm = 0.5, 1.3, 350.0
 fish_mat.side = tp.Side.Double
 fish_mat.vertex_colors = True
-fish_mat.map, fish_mat.normal_map = fish_texture()
-fish_mat.normal_scale = tp.Vector2(0.35, 0.35)
+fish_mat.map, fish_mat.normal_map, fish_mat.roughness_map = fish_texture()
+fish_mat.normal_scale = tp.Vector2(0.7, 0.7)
 fish_geo = tp.BufferGeometry()
 fish_geo.set_attribute("position", _fp0)
 fish_geo.set_attribute("normal", _fn0)
@@ -1229,7 +1476,7 @@ scene.add(fish)
 
 
 def fish_step(t, dt):
-    p, n = school.step(t, dt, np.array([rov.position.x, rov.position.y, rov.position.z]))
+    p, n = school.step(t, dt, rov_pos)
     fish_geo.update_attribute("position", p)
     fish_geo.update_attribute("normal", n)
 
@@ -1276,19 +1523,155 @@ motes.set_emitter_time(0.0, 1.0 / 60.0)
 motes.set_live_count(MOTE_CAP)
 scene.add(motes)
 
+# ---- sonar: Warp ray fan against a wp.Mesh of net + collar + fish ------------------------------
+SON_BEAMS, SON_VS, SON_BINS, SON_RANGE, SON_FOV = 256, 8, 512, 20.0, 130.0
+SON_W, SON_H, SON_VIEW = 512, 384, 8.0                  # 20 m of bins, 8 m on the display
+
+
+@wp.kernel
+def sonar(mesh: wp.uint64, mat: wp.array(dtype=int), refl: wp.array(dtype=float), frame: wp.array(dtype=wp.vec3),
+          out: wp.array2d(dtype=float), nb: int, nvs: int, nbins: int, rng: float):
+    tid = wp.tid()
+    i = tid // nvs
+    j = tid - i * nvs
+    az = (-0.5 * SON_FOV + SON_FOV * (float(i) + 0.5) / float(nb)) * wp.pi / 180.0
+    el = (-8.0 + 20.0 * (float(j) + 0.5) / float(nvs)) * wp.pi / 180.0
+    d = frame[1] * (wp.cos(el) * wp.cos(az)) + frame[2] * (wp.cos(el) * wp.sin(az)) + frame[3] * wp.sin(el)
+    q = wp.mesh_query_ray(mesh, frame[0], d, rng)
+    if q.result:
+        b = wp.min(int(q.t / rng * float(nbins)), nbins - 1)
+        wp.atomic_max(out, i, b, refl[mat[q.face]] * wp.abs(wp.dot(q.normal, d)) * wp.exp(-0.10 * q.t))
+
+
+def net_solid_tris():
+    """Periodic-grid triangles minus the invisible hole membrane, so the tear is a gap to the sonar."""
+    iv, iu = np.meshgrid(np.arange(NVT - 1), np.arange(NU), indexing="ij")
+    a, b = iv * NU + iu, iv * NU + (iu + 1) % NU
+    tri = np.concatenate([np.stack([a, b, b + NU], -1), np.stack([a, b + NU, a + NU], -1)]).reshape(-1, 3)
+    return tri[(net.cls[tri] != -2).all(1)]
+
+
+def collar_tris(seg=96, sides=8):
+    th, ph = np.meshgrid(2 * np.pi * np.arange(seg) / seg, 2 * np.pi * np.arange(sides) / sides, indexing="ij")
+    r = PEN_R + 0.16 * np.cos(ph)
+    pts = np.stack([r * np.cos(th), WATER_Y + 0.04 + 0.16 * np.sin(ph), r * np.sin(th)], -1).reshape(-1, 3)
+    i, j = np.arange(seg)[:, None], np.arange(sides)[None, :]
+    a, b, c, d = i * sides + j, i * sides + (j + 1) % sides, ((i + 1) % seg) * sides + (j + 1) % sides, ((i + 1) % seg) * sides + j
+    return pts, np.stack([a, b, c, a, c, d], -1).reshape(-1, 3)
+
+
+_net_tri = net_solid_tris()
+_col_pts, _col_tri = collar_tris()
+_n_net, _n_fish = net.n, FISH_N * school.nv
+_son_pts = wp.zeros(_n_net + _n_fish + len(_col_pts), dtype=wp.vec3, device=device)
+wp.copy(_son_pts, wp.array(_col_pts.astype(np.float32), dtype=wp.vec3, device=device), _n_net + _n_fish, 0, len(_col_pts))
+_son_idx = np.concatenate([_net_tri.reshape(-1), school.index.astype(np.int64) + _n_net, _col_tri.reshape(-1) + _n_net + _n_fish])
+son_mesh = wp.Mesh(points=_son_pts, indices=wp.array(_son_idx.astype(np.int32), dtype=int, device=device))
+son_mat = wp.array(np.concatenate([np.zeros(len(_net_tri)), np.full(len(school.index) // 3, 2), np.ones(len(_col_tri))]).astype(np.int32),
+                   dtype=int, device=device)
+son_refl = wp.array(np.float32([1.0, 1.0, 0.35]), dtype=float, device=device)
+son_frame = wp.zeros(4, dtype=wp.vec3, device=device)
+son_out = wp.zeros((SON_BEAMS, SON_BINS), dtype=float, device=device)
+_yy, _xx = np.mgrid[0:SON_H, 0:SON_W]
+_dx, _dy = _xx - SON_W / 2, (SON_H - 12) - _yy
+_r_m = np.hypot(_dx, _dy) / (SON_H - 24) * SON_VIEW
+_bear = np.degrees(np.arctan2(_dx, np.maximum(_dy, 1e-6)))
+SON_VALID = (_r_m < SON_VIEW) & (np.abs(_bear) < 0.5 * SON_FOV) & (_dy > 0)
+SON_BEAM = np.clip(((_bear + 0.5 * SON_FOV) / SON_FOV * SON_BEAMS).astype(int), 0, SON_BEAMS - 1)
+SON_BIN = np.clip((_r_m / SON_RANGE * SON_BINS).astype(int), 0, SON_BINS - 1)
+SON_RINGS = SON_VALID & (np.abs(_r_m - np.round(_r_m / 2) * 2) < 0.025) & (_r_m > 1)
+SON_TICK = SON_VALID & (np.abs(_dx) < 0.8) & (_r_m > 0.5)
+SON_EDGE = ((np.abs(np.abs(_bear) - 0.5 * SON_FOV) < 0.35) & (_r_m < SON_VIEW) & (_dy > 0)) | ((np.abs(_r_m - SON_VIEW) < 0.03) & (np.abs(_bear) < 0.5 * SON_FOV))
+_k = np.linspace(0, 1, 256)[:, None]
+_c0, _c1, _c2 = np.float32([0.02, 0.01, 0.0]), np.float32([0.62, 0.26, 0.05]), np.float32([1.0, 0.86, 0.55])
+SON_LUT = srgb8(np.where(_k < 0.5, _c0 + (_c1 - _c0) * (_k / 0.5), _c1 + (_c2 - _c1) * ((_k - 0.5) / 0.5)))
+_rb = (np.arange(SON_BINS) + 0.5) / SON_BINS * SON_RANGE
+SON_NEAR = (0.35 * np.exp(-((_rb - 0.3) / 0.08) ** 2)).astype(np.float32)[None, :]
+son_img = np.zeros((SON_H, SON_W, 3), np.uint8)
+
+
+def sonar_step(frame_i):
+    wp.copy(_son_pts, net.pos, 0, 0, _n_net)
+    wp.copy(_son_pts, school.out_p, _n_net, 0, _n_fish)
+    son_mesh.refit()
+    o = rov_pos + rov_R @ [0.20, 0.09, 0.0]
+    son_frame.assign(np.asarray([o, rov_R @ [1, 0, 0], rov_R @ [0, 0, 1], rov_R @ [0, 1, 0]], np.float32))
+    son_out.zero_()
+    wp.launch(sonar, dim=SON_BEAMS * SON_VS, device=device,
+              inputs=[son_mesh.id, son_mat, son_refl, son_frame, son_out, SON_BEAMS, SON_VS, SON_BINS, SON_RANGE])
+    a = son_out.numpy() * np.random.default_rng(1000 + frame_i).uniform(0.5, 1.5, (SON_BEAMS, SON_BINS)).astype(np.float32) + SON_NEAR
+    v = (255 * (1 - np.exp(-4.0 * a))).astype(np.uint8)
+    son_img[:] = 6
+    son_img[SON_VALID] = SON_LUT[v[SON_BEAM[SON_VALID], SON_BIN[SON_VALID]]]
+    son_img[SON_RINGS | SON_EDGE] = np.maximum(son_img[SON_RINGS | SON_EDGE], np.uint8([70, 42, 14]))
+    son_img[SON_TICK] = np.maximum(son_img[SON_TICK], np.uint8([120, 80, 30]))
+    son_tex.update_data(son_img[::-1])
+
+
+# ---- insets: ROV camera view + sonar as screen-space sprites ---------------------------------
+CAM_W, CAM_H, HUD_M = 480, 270, 16
+rov_cam = tp.PerspectiveCamera(80.0, CAM_W / CAM_H, 0.05, 200.0)
+FONT = tp.FontLoader().default_font()
+
+
+def hud_panel(w, h, ax, label):
+    tex = tp.data_texture(np.zeros((h, w, 3), np.uint8), srgb=True)
+    tex.generate_mipmaps = False
+    tex.wrap_s = tex.wrap_t = tp.TextureWrapping.ClampToEdge
+    mat = tp.SpriteMaterial()
+    mat.map = tex
+    sp = tp.Sprite(mat)
+    sp.screen_space = True
+    sp.screen_anchor.set(ax, 0.0)
+    sp.center.set(ax, 0.0)
+    sp.position.set(HUD_M if ax == 0 else -HUD_M, HUD_M, 0.0)
+    sp.scale.set(w, h, 1.0)
+    scene.add(sp)
+    lab = tp.TextSprite(FONT, world_scale=18.0)
+    lab.set_text(label)
+    lab.set_color(0xe6f0ee)
+    lab.screen_space = True
+    lab.screen_anchor.set(ax, 0.0)
+    lab.center.set(ax, 0.0)
+    lab.position.set(HUD_M if ax == 0 else -HUD_M, HUD_M + h + 6, 0.0)
+    scene.add(lab)
+    return tex
+
+
+cam_tex = hud_panel(CAM_W, CAM_H, 0.0, "ROV CAM")
+son_tex = hud_panel(SON_W, SON_H, 1.0, "SONAR 130 deg")
+if SHOT and not SHOT.startswith("p3"):
+    for _o in scene.children[-4:]:                   # the two panels and their labels: off-screen, never visible=False
+        _o.position.x = -9000.0
+ROV_VIEW = 0
+
+
+def rov_cam_place():
+    p = rov_pos + rov_R @ [0.16, 0.035, 0.0]
+    rov_cam.position.set(*p)
+    rov_cam.look_at(*(p + rov_R @ [1.0, 0.0, 0.0]))
+
+
+def hud_update():
+    if ROV_VIEW:
+        rgb = renderer.read_view_rgb_pixels(ROV_VIEW)
+        if rgb.size:
+            cam_tex.update_data(np.ascontiguousarray(rgb[::-1]))
+
+
 # ---- cameras -----------------------------------------------------------------
 camera = tp.PerspectiveCamera(60.0, W / H, 0.05, 600.0)
-rov_p = np.array([rov.position.x, rov.position.y, rov.position.z])
-rov_f = np.array([math.cos(ROV_YAW), 0.0, -math.sin(ROV_YAW)])
 sun_h3 = np.array([SUN_H[0], 0.0, SUN_H[1]])
 SHOTS = {
     "p1_net_wide": (1.0 * e_r + [0, -2.6, 0], TEAR_C + [0, 0.6, 0], 62.0),
     "p1_collar_below": (-1.5 * sun_h3 + [0, -5.0, 0], 0.85 * PEN_R * sun_h3 + [0, 0.3, 0], 78.0),
-    "p1_rov_hero": (rov_p - 0.85 * e_r + 1.15 * rov_f + [0, 0.30, 0], rov_p + [0, 0.02, 0], 50.0),
+    "p1_rov_hero": None,
     "p1_tear": (TEAR_C - 2.0 * e_r + [0, 0.15, 0], TEAR_C, 55.0),
     "p2_school": (-1.2 * sun_h3 + [0, -6.2, 0], 4.5 * sun_h3 + [0, -0.6, 0], 72.0),
     "p2_fish_close": None,
     "p2_leak": (TEAR_C + 2.6 * e_r - 1.4 * e_t + [0, 0.35, 0], TEAR_C + 0.6 * e_r, 52.0),
+    "p3_hud": None,
+    "p3_sonar_tear": None,
 }
 
 
@@ -1302,7 +1685,17 @@ def place(cam, key):
         cam.position.set(*(hp + 0.78 * side + 0.32 * hf + [0, 0.22, 0]))
         cam.look_at(*(hp + 0.05 * hf))
         return
-    p, t, fov = SHOTS[key]
+    if SHOTS[key] is None:
+        fwd = rov_R @ [1.0, 0.0, 0.0]
+        inb = -np.array([rov_pos[0], 0.0, rov_pos[2]]) / np.hypot(rov_pos[0], rov_pos[2])
+        if key == "p1_rov_hero":
+            p, t, fov = rov_pos - 0.85 * e_r + 1.15 * fwd + [0, 0.30, 0], rov_pos + [0, 0.02, 0], 50.0
+        elif key == "p3_hud":
+            p, t, fov = rov_pos - 1.9 * fwd + 1.1 * inb + [0, 0.6, 0], rov_pos + 1.2 * fwd + [0, -0.2, 0], 62.0
+        else:
+            p, t, fov = rov_pos - 1.4 * fwd + 0.7 * inb + [0, 0.8, 0], rov_pos + 1.0 * fwd + [0, -0.1, 0], 58.0
+    else:
+        p, t, fov = SHOTS[key]
     cam.fov = fov
     cam.update_projection_matrix()
     cam.position.set(*p)
@@ -1313,34 +1706,50 @@ def place(cam, key):
 world_t = 0.0
 
 
+frame_i = 0
+
+
 def step(dt=1.0 / 60.0):
-    global world_t
+    global world_t, frame_i
     world_t += dt
+    frame_i += 1
+    rov_pose(world_t + PATROL_T0)
+    rope.pins.assign(np.asarray(tether_pins(dt), np.float32))
     sp = 0.15 * (1.0 + 0.35 * math.sin(0.21 * world_t))
     ang = 0.35 + 0.25 * math.sin(0.09 * world_t)
     net_step(np.array([sp * math.cos(ang), 0.0, sp * math.sin(ang)], np.float32), world_t)
     net_upload()
+    tether_upload()
     fish_step(world_t, dt)
+    tf, tl, tv = rov_thrust
     for k, p in enumerate(props):
-        p.rotation.y += dt * (38.0 + 6.0 * (k % 3)) * (1 if k % 2 else -1)
-    rov.position.y = ROV_Y + 0.03 * math.sin(0.7 * world_t)
-    rov.rotation.z = 0.02 * math.sin(0.5 * world_t + 1.0)
-    rov.rotation.x = 0.015 * math.sin(0.43 * world_t)
+        cmd = (abs(tf) + 0.5 * abs(tl) + (0.4 if k >= 2 else 0.0) * max(tf, 0.0)) if k < 4 else abs(tv) + 0.15
+        p.rotation.y += dt * 45.0 * min(cmd, 1.5) * (1 if k % 2 else -1)
+    bubbles_step(dt)
+    rov_cam_place()
+    hud_update()
+    sonar_step(frame_i)
     cp = camera.position
     motes.set_follow_center(tp.Vector3(cp.x, cp.y, cp.z))
     motes.set_emitter_time(world_t, dt)
     motes.billboard_repr.intensity = MOTE_BASE * (1.0 + 0.9 * min(max(-cp.y, 0.0), 8.0) / 8.0)
 
 
+if HEADLESS and SHOT not in SHOTS:
+    sys.exit(f"unknown shot {SHOT!r}; one of {', '.join(SHOTS)}")
+rov_cam_place()
+renderer.render(scene, camera)                 # a view shares the primary's pipelines: needs one frame first
+ROV_VIEW = renderer.add_view(rov_cam, CAM_W, CAM_H)
+if ROV_VIEW == 0:
+    print("could not create the ROV camera view")
+
 if HEADLESS:
-    if SHOT not in SHOTS:
-        sys.exit(f"unknown shot {SHOT!r}; one of {', '.join(SHOTS)}")
     os.makedirs(os.path.dirname(OUT) or ".", exist_ok=True)
     place(camera, SHOT)
     frames = int(SECONDS * 60)
     for _ in range(frames):
         step()
-        if SHOT == "p2_fish_close":
+        if SHOTS[SHOT] is None:
             place(camera, SHOT)
         renderer.render(scene, camera)
     renderer.save_frame(scene, camera, OUT)
