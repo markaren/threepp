@@ -257,7 +257,7 @@ class Net:
         wp.launch(compute_normals, dim=self.n, device=device, inputs=[self.pos, self.nrm, NU, NVT])
 
 
-ROPE_N, ROPE_L = 40, 7.5
+ROPE_N, ROPE_L = 40, 5.4                             # short enough to go taut at the deep end of the patrol
 ROPE_SEG = ROPE_L / (ROPE_N - 1)
 
 
@@ -658,6 +658,7 @@ def net_upload():
         return
     pos = net.pos.numpy()
     nrm = net.nrm.numpy()
+    net_host[0] = pos
     for g in (net_geo, patch_geo):
         g.update_attribute("position", pos[GATHER])
         g.update_attribute("normal", nrm[GATHER])
@@ -903,11 +904,13 @@ def rot_z(a):
 
 
 # ---- patrol: closed spline (deg from the tear meridian, stand-off from the net, y) ---------
-PATROL_PTS = [(-70, 0.9, -0.5), (-62, 1.2, -1.6), (-50, 1.2, -3.2), (-32, 1.2, -4.2), (-16, 1.7, -3.6),
-              (-7, 2.5, -3.15), (0, 1.5, TEAR_Y), (9, 1.0, -2.75), (22, 1.2, -1.9), (34, 1.5, -0.8),
+PATROL_PTS = [(-70, 1.5, -0.5), (-62, 1.5, -1.6), (-50, 1.5, -3.2), (-32, 1.5, -4.2), (-16, 1.8, -3.6),
+              (-7, 2.5, -3.15), (0, 1.5, TEAR_Y), (9, 1.5, -2.75), (22, 1.5, -1.9), (34, 1.6, -0.8),
               (5, 3.8, -0.5), (-40, 3.5, -0.6)]
 HOVER = TEAR_C - 1.5 * e_r
-ROV_SPEED = 0.45
+A_MAX, C_DRAG = 0.3, 0.3 / 0.8 ** 2                   # thrust-limited acceleration; quadratic drag, 0.8 m/s terminal
+V_NET, V_OPEN, YAW_RATE_MAX = 0.5, 0.8, math.radians(25.0)
+PITCH_CAP, ROLL_CAP, NET_CLEAR = math.radians(6.0), math.radians(3.0), 0.95
 
 
 def patrol_xyz(deg, off, y):
@@ -936,42 +939,54 @@ def catmull(y, u):
 
 
 def build_patrol(dt=1.0 / 60.0):
-    """Per-frame rows (x, y, z, yaw, pitch, roll, thrust fwd/lat/vert) for one loop; slows and faces the tear at HOVER."""
+    """Per-frame rows (x, y, z, yaw, pitch, roll, thrust fwd/lat/vert): a thrust-limited, drag-damped vehicle chasing a carrot on the spline."""
     P = np.array([patrol_xyz(*q) for q in PATROL_PTS])
     fine = loop_spline(P, np.linspace(0, 1, 4001)[:-1])
     cum = np.concatenate([[0.0], np.cumsum(np.linalg.norm(np.roll(fine, -1, 0) - fine, axis=1))])
     L = cum[-1]
-    at = lambda u: loop_spline(P, np.interp((np.asarray(u) % 1.0) * L, cum, np.linspace(0, 1, 4001)))
-    rows, u, yaw, pitch, roll, vprev = [], 0.0, None, 0.0, 0.0, np.zeros(3)
-    while True:
-        p, p2, lead = at([u, u + 0.002, u + 0.03])
+    at = lambda s: loop_spline(P, np.interp(np.asarray(s) % L, cum, np.linspace(0, 1, 4001)))
+    p, v, k = fine[0].copy(), np.zeros(3), 0
+    t0 = fine[8] - fine[0]
+    yaw, yaw_rate, pitch, roll = math.atan2(-t0[2], t0[0]), 0.0, 0.0, 0.0
+    rows = []
+    while k < len(fine) - 1:
+        win = fine[k:k + 80]                           # progress = nearest fine sample ahead, monotone
+        k += int(np.argmin(np.linalg.norm(win - p, axis=1)))
+        carrot, ahead = at([cum[k] + 0.8, cum[k] + 0.3])
+        tang = ahead - fine[k]
+        tang /= max(np.linalg.norm(tang), 1e-9)
         near = min(np.linalg.norm(p - HOVER) / 2.0, 1.0)
-        v = ROV_SPEED * (0.25 + 0.75 * near)
-        tang = (p2 - p) / np.linalg.norm(p2 - p)
-        look = (lead - p) * near + (TEAR_C - p) * (1 - near)
-        yaw_t = math.atan2(-look[2], look[0])
-        yaw = yaw_t if yaw is None else yaw
-        dy = (yaw_t - yaw + math.pi) % (2 * math.pi) - math.pi
-        yaw += dy * (1 - math.exp(-dt / 0.9))
-        vel = tang * v
-        acc = (vel - vprev) / dt if rows else np.zeros(3)
-        vprev = vel
+        v_des = (V_NET if np.hypot(p[0], p[2]) > PEN_R - 3.0 else V_OPEN) * (0.12 + 0.88 * near)
+        want = carrot - p
+        want *= v_des / max(np.linalg.norm(want), 1e-9)
+        a_cmd = want - v                                # 1/s velocity loop, then the thrust limit
+        n = np.linalg.norm(a_cmd)
+        if n > A_MAX:
+            a_cmd *= A_MAX / n
+        v = v + (a_cmd - C_DRAG * np.linalg.norm(v) * v) * dt
+        p = p + v * dt
+        r = np.hypot(p[0], p[2])
+        if r > PEN_R - 1.2:                             # never closer than 1.2 m to the resting wall; the cloth is handled live
+            p[[0, 2]] *= (PEN_R - 1.2) / r
+            rad = np.array([p[0], 0.0, p[2]]) / (PEN_R - 1.2)
+            v -= max(np.dot(v, rad), 0.0) * rad
+        look = tang * near + (TEAR_C - p) * (1 - near)
+        dy = (math.atan2(-look[2], look[0]) - yaw + math.pi) % (2 * math.pi) - math.pi
+        yaw_rate += (max(-YAW_RATE_MAX, min(YAW_RATE_MAX, 1.2 * dy)) - yaw_rate) * (1 - math.exp(-dt / 0.4))
+        yaw += yaw_rate * dt
         fwd, right = np.array([math.cos(yaw), 0.0, -math.sin(yaw)]), np.array([math.sin(yaw), 0.0, math.cos(yaw)])
-        tf = np.dot(vel, fwd) / ROV_SPEED + 0.6 * np.dot(acc, fwd)
-        tl = np.dot(vel, right) / ROV_SPEED + 0.6 * np.dot(acc, right) + 0.8 * dy / dt
-        tv = vel[1] / 0.3 + 0.6 * acc[1]
-        pitch += ((-0.10 * tf - 0.06 * tv) - pitch) * (1 - math.exp(-dt / 1.2))
-        roll += (0.12 * tl - roll) * (1 - math.exp(-dt / 1.2))
+        tf, tl, tv = np.dot(a_cmd, fwd) / A_MAX, np.dot(a_cmd, right) / A_MAX, a_cmd[1] / A_MAX
+        # Passively stable hull: trim is the thrust moment against the metacentric restoring moment, lagged 0.6 s.
+        pitch += (max(-PITCH_CAP, min(PITCH_CAP, -math.radians(4.0) * tf)) - pitch) * (1 - math.exp(-dt / 0.6))
+        roll += (max(-ROLL_CAP, min(ROLL_CAP, math.radians(3.0) * tl)) - roll) * (1 - math.exp(-dt / 0.6))
         rows.append([*p, yaw, pitch, roll, tf, tl, tv])
-        u += v * dt / L
-        if u >= 1.0:
-            return np.array(rows)
+    return np.array(rows)
 
 
 PATROL = build_patrol()
 T_LOOP = len(PATROL) / 60.0
 _hover_i = int(np.argmin(np.linalg.norm(PATROL[:, :3] - HOVER, axis=1)))
-_wall_i = int(np.argmin(np.linalg.norm(PATROL[:, :3] - patrol_xyz(-42, 1.2, -3.8), axis=1)))
+_wall_i = int(np.argmin(np.linalg.norm(PATROL[:, :3] - patrol_xyz(-42, 1.5, -3.8), axis=1)))
 PATROL_T0 = {"p3_sonar_tear": _hover_i / 60.0 - SECONDS, "p3_hud": _wall_i / 60.0 - SECONDS}.get(SHOT, 0.0) % T_LOOP
 rov_pos, rov_R, rov_thrust = PATROL[0, :3].copy(), np.eye(3), np.zeros(3)
 
@@ -979,15 +994,37 @@ rov_pos, rov_R, rov_thrust = PATROL[0, :3].copy(), np.eye(3), np.zeros(3)
 ROV_LIFT = [0.0]                                      # film cut 1: the ROV hangs this far above its patrol start
 
 
-def rov_pose(t):
-    global rov_pos, rov_R, rov_thrust
+rov_off = np.zeros(3)                                 # live push-back off the sagging cloth
+net_host = [None]                                     # last downloaded cloth positions (net_upload)
+ROV_STATS = {"min_d": float("inf"), "max_roll": 0.0, "max_pitch": 0.0}
+
+
+def rov_pose(t, dt=1.0 / 60.0):
+    global rov_pos, rov_R, rov_thrust, rov_off
     x, y, z, yaw, pitch, roll, tf, tl, tv = PATROL[int(max(t, 0.0) * 60.0) % len(PATROL)]
     y += ROV_LIFT[0]
-    rov_yaw.position.set(x, y, z)
+    cand = np.array([x, y, z]) + rov_off
+    pos = net_host[0] if net_host[0] is not None else net.pos.numpy()
+    j = int(np.argmin(((pos - cand) ** 2).sum(1)))
+    d = float(np.linalg.norm(cand - pos[j]))
+    if d < NET_CLEAR:                                   # instant push along the line from the nearest particle
+        rov_off += (NET_CLEAR - d) / max(d, 1e-6) * (cand - pos[j])
+        cand, d = np.array([x, y, z]) + rov_off, NET_CLEAR
+    else:
+        rov_off *= math.exp(-dt / 2.0)
+    ROV_STATS["min_d"] = min(ROV_STATS["min_d"], d)
+    ROV_STATS["max_roll"] = max(ROV_STATS["max_roll"], abs(roll))
+    ROV_STATS["max_pitch"] = max(ROV_STATS["max_pitch"], abs(pitch))
+    rov_yaw.position.set(*cand)
     rov_yaw.rotation.y = yaw
     rov_pitch.rotation.z = pitch
     rov.rotation.x = roll
-    rov_pos, rov_R, rov_thrust = np.array([x, y, z]), rot_y(yaw) @ rot_z(pitch) @ rot_x(roll), np.array([tf, tl, tv])
+    rov_pos, rov_R, rov_thrust = cand, rot_y(yaw) @ rot_z(pitch) @ rot_x(roll), np.array([tf, tl, tv])
+
+
+def rov_report():
+    print(f"ROV: min net distance {ROV_STATS['min_d']:.2f} m, max |roll| {math.degrees(ROV_STATS['max_roll']):.1f} deg, "
+          f"max |pitch| {math.degrees(ROV_STATS['max_pitch']):.1f} deg")
 
 
 rov_pose(PATROL_T0)
@@ -1932,15 +1969,18 @@ class Prof:
 prof = Prof() if PROFILE else None
 mark = prof.mark if PROFILE else (lambda name, gpu=False: None)
 world_t = 0.0
+sim_t = 0.0                                           # render clock: ocean, particle fields, clouds, shader time follow it, not the wall
 frame_i = 0
 
 
 def step(dt=1.0 / 60.0):
-    global world_t, frame_i
+    global world_t, sim_t, frame_i
     world_t += dt
+    sim_t += dt
+    renderer.sim_time = sim_t                         # before every render; warm-up frames advance it too (never rewound)
     frame_i += 1
     mark("other")
-    rov_pose(world_t + PATROL_T0)
+    rov_pose(world_t + PATROL_T0, dt)
     rope.pins.assign(np.asarray(tether_pins(dt), np.float32))
     sp = 0.15 * (1.0 + 0.35 * math.sin(0.21 * world_t))
     ang = 0.35 + 0.25 * math.sin(0.09 * world_t)
@@ -2010,17 +2050,17 @@ def cam_sonar(u, t):
 def cam_tear(u, t):
     if "tear" not in _anchor:                         # the ROV keeps creeping: anchor the push on its pose at the cut
         fwd = rov_R @ [1.0, 0.0, 0.0]
-        _anchor["tear"] = rov_pos - 1.5 * fwd + 1.2 * e_t + [0, 0.6, 0]
-    a, b = _anchor["tear"], TEAR_C - 1.1 * e_r + 1.15 * e_t + [0, 0.35, 0]
+        _anchor["tear"] = rov_pos - 1.5 * fwd - 1.2 * e_t + [0, 0.6, 0]   # the ROV creeps along +e_t: stay on the other side
+    a, b = _anchor["tear"], TEAR_C - 1.1 * e_r - 1.15 * e_t + [0, 0.35, 0]
     e = smooth(u)
     return a + (b - a) * e, TEAR_C + 0.3 * e_r * e, 50.0
 
 
 def cam_hero(u, t):
-    a = TEAR_C - 1.1 * e_r + 1.15 * e_t + [0, 0.35, 0]
-    b = TEAR_C - 4.5 * e_r + 1.8 * e_t + [0, 0.9, 0]
+    a = TEAR_C - 1.1 * e_r - 1.15 * e_t + [0, 0.35, 0]
+    b = TEAR_C - 3.6 * e_r - 1.5 * e_t + [0, -1.7, 0]           # below the milling band, looking up at the hole and the window
     e = smooth(u, hold=0.15)
-    return a + (b - a) * e, TEAR_C + (0.3 - 0.9 * e) * e_r + [0, 0.2 * e, 0], 50.0 + 8.0 * e
+    return a + (b - a) * e, TEAR_C + (0.3 - 0.9 * e) * e_r + [0, 0.3 * e, 0], 50.0 + 8.0 * e
 
 
 CUTS = [("waterline", 10.0, cam_waterline, False, WATER_Y), ("descent", 12.0, cam_descent, False, MURK_PLANE),
@@ -2100,11 +2140,13 @@ def run_film():
         cs.paste(im, (400 * (i % cols), 225 * (i // cols)))
     cs.save(stem + "_contact.png")
     print(f"film -> {out}; contact {stem}_contact.png; wall {(time.perf_counter() - wall0) / 60:.1f} min")
+    rov_report()
 
 
 if HEADLESS and SHOT and SHOT not in SHOTS:
     sys.exit(f"unknown shot {SHOT!r}; one of {', '.join(SHOTS)}")
 rov_cam_place()
+renderer.sim_time = 0.0
 renderer.render(scene, camera)                 # a view shares the primary's pipelines: needs one frame first
 ROV_VIEW = renderer.add_view(rov_cam, CAM_W, CAM_H)
 if ROV_VIEW == 0:
@@ -2131,6 +2173,7 @@ elif HEADLESS:
         renderer.render(scene, camera)
     renderer.save_frame(scene, camera, OUT)
     print(f"simulated {SECONDS:.1f} s ({frames} frames), wrote {OUT}")
+    rov_report()
     if SHOT == "p1_tear":
         for _ in range(30):
             step()
