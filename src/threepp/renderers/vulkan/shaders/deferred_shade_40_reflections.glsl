@@ -255,24 +255,55 @@ vec3 traceRadiance(vec3 origin, vec3 dir, bool doShadows, float maxLod, float mi
             continue;
         }
 
-        // Blend surfaces (alphaCutoff < 0, no transmission — alpha quads, text
-        // decals): COMPOSITE them src-over along the ray instead of skipping.
-        // Skipping made every blend surface invisible through glass/reflections
-        // (the TransmissionOrderTest "missing alpha blend" failure); shading
-        // them fully opaque painted the whole quad as a dark plate. The texel
-        // alpha weights a diffuse shade, the remainder carries on through.
-        const bool blendThrough = (hm.alphaCutoff < 0.0 && hm.transmission <= 0.0);
-        float hitAlpha = 1.0;
-        if (blendThrough) {
-            hitAlpha = hitTexAlpha(hm.albedoTexIndex, hm.uvTransform, hitUv);
-            if (hitAlpha <= 0.01) {// nothing to composite
+        // Surfaces that do not STOP the ray: composite them src-over along it
+        // and carry the remainder through in the same direction.
+        //   • blend quads (alphaCutoff < 0, no transmission — alpha quads, text
+        //     decals): α = texel alpha,
+        //   • flat alpha blend (host: transmission = 1−opacity, ior = 1):
+        //     α = opacity · texel alpha (the texel only when alphaCutoff < 0),
+        //   • glass (transmission t, ior > 1): the covered part shades opaque
+        //     by (1−t) and transmits t·tint STRAIGHT through — a secondary ray
+        //     gets no Fresnel split or refraction (thin-shell approximation),
+        //   • additive (transmission > 1): glows by its strength, passes fully.
+        // Skipping blend hits made every blend surface invisible through
+        // glass/reflections (the TransmissionOrderTest "missing alpha blend"
+        // failure); shading them opaque painted whole quads as dark plates.
+        // Transmissive hits WERE shaded opaque here: a glass shell's back face,
+        // a nested shell or a blend prop inside a transmissive volume read as a
+        // solid wall, so a skeleton-in-jelly prop rendered as an opaque green
+        // block with its embedded smoke quads as bright shards.
+        const bool passThrough = (hm.alphaCutoff < 0.0 || hm.transmission > 0.0);
+        float hitAlpha = 1.0;      // weight of this hit's own shade
+        vec3  hitPass  = vec3(0.0);// throughput carried on past it
+        if (passThrough) {
+            const float cov = (hm.alphaCutoff < 0.0) ? hitTexAlpha(hm.albedoTexIndex, hm.uvTransform, hitUv) : 1.0;
+            if (hm.transmission > 1.0) {
+                hitAlpha = cov * clamp(hm.transmission - 1.0, 0.0, 1.0);
+                hitPass  = vec3(1.0);
+            } else {
+                const float t    = clamp(hm.transmission, 0.0, 1.0);
+                const vec3  tint = (hm.ior < 1.05) ? vec3(1.0)
+                                                   : hitTex(hm.albedoTexIndex, hm.uvTransform, hitUv, hm.albedo);
+                hitAlpha = cov * (1.0 - t);
+                hitPass  = vec3(1.0 - cov) + cov * t * tint;
+            }
+            if (hitAlpha <= 0.01) {// nothing to composite — carry on
+                tput *= hitPass;
+                if (max(max(tput.r, tput.g), tput.b) < 0.02) break;
                 o = o + d * (tHit + 1e-3);
                 continue;
             }
         }
 
         const vec3 hAlbedo = hitTex(hm.albedoTexIndex, hm.uvTransform, hitUv, hm.albedo);
-        if (hm.roughness < 0.0) { radiance += tput * hAlbedo; break; }// unlit hit
+        if (hm.roughness < 0.0) {// unlit hit
+            radiance += tput * hitAlpha * hAlbedo;
+            if (!passThrough) break;
+            tput *= hitPass;
+            if (max(max(tput.r, tput.g), tput.b) < 0.02) break;
+            o = o + d * (tHit + 1e-3);
+            continue;
+        }
 
         vec3 hitV = -d;// view dir at the hit = back along the ray
         if (dot(hitN, hitV) < 0.0) hitN = -hitN;
@@ -336,11 +367,11 @@ vec3 traceRadiance(vec3 origin, vec3 dir, bool doShadows, float maxLod, float mi
                                               /*addEmissive=*/true,// reflected hit: no per-pixel reservoir → coherent emissiveNEE
                                               /*cheapHit=*/cheapHits);// caller decides (see header comment)
 
-        // Blend hit composited — carry the remaining (1−α) through along the
-        // same ray. No specular continuation for the blend layer itself (its
-        // alpha-weighted diffuse is the visually dominant term).
-        if (blendThrough) {
-            tput *= (1.0 - hitAlpha);
+        // Pass-through hit composited — carry the remainder on along the same
+        // ray. No specular continuation for the layer itself (its weighted
+        // diffuse is the visually dominant term).
+        if (passThrough) {
+            tput *= hitPass;
             if (max(max(tput.r, tput.g), tput.b) < 0.02) break;
             o = o + d * (tHit + 1e-3);
             continue;

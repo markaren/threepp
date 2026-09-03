@@ -3479,15 +3479,26 @@ VulkanRenderer::Impl::MaterialDesc VulkanRenderer::Impl::materialFromMesh(const 
                 // the tint + low alpha): taking the tint alone renders them
                 // opaque-black in both render modes, while GL — which ignores
                 // the transmission extension and plain alpha-blends — shows
-                // the background through. Fold the coverage into the tint,
-                // tint' = mix(1, tint, α): for the dominant straight-through
-                // path this reproduces the blend composite exactly, with no
-                // second blend pass in either pipeline.
-                if (d.transmission > 0.0f && mat->transparent && mat->opacity < 1.0f) {
-                    const float a = std::clamp(mat->opacity, 0.0f, 1.0f);
+                // the background through. Fold the coverage into BOTH knobs
+                // the deferred glass path consumes. It composites
+                //   (1−t)·diffuse + t·tint·behind,
+                // and the spec composite of the same glass under coverage α is
+                //   α(1−t)·diffuse + (α·t·tint + (1−α))·behind,
+                // so t' = 1 − α(1−t) and tint' = (α·t·tint + 1−α)/t' reproduce
+                // it exactly for the dominant straight-through path, with no
+                // second blend pass in either pipeline. (Folding the tint alone
+                // left the opaque diffuse term at its full 1−t weight: a
+                // jelly cube with t=0.59, α=0.41 shaded 41% solid green over
+                // a 35% background instead of 17% over 59%, and the skeleton
+                // inside all but vanished.)
+                if (d.transmission > 0.0f && d.transmission <= 1.0f && mat->transparent && mat->opacity < 1.0f) {
+                    const float a  = std::clamp(mat->opacity, 0.0f, 1.0f);
+                    const float t  = d.transmission;
+                    const float tp = 1.0f - a * (1.0f - t);
                     for (float& c : d.albedo) {
-                        c = (1.0f - a) + a * c;
+                        c = (a * t * c + (1.0f - a)) / tp;
                     }
+                    d.transmission = tp;
                 }
             }
             // Additive-blend effects (muzzle flashes, sparks, energy glows): the
@@ -3526,8 +3537,20 @@ VulkanRenderer::Impl::MaterialDesc VulkanRenderer::Impl::materialFromMesh(const 
             // Every shader-side blend test is a sign test (alphaCutoff < 0),
             // so -2 inherits all -1 semantics (no shadow cast, stochastic
             // pass-through in the ray-query hit handling) automatically.
-            if (mat->transparent && d.alphaCutoff == 0.0f && d.transmission == 0.0f) {
-                d.alphaCutoff = (!mat->depthWrite && mat->polygonOffset) ? -2.0f : -1.0f;
+            if (mat->transparent && d.alphaCutoff == 0.0f) {
+                if (d.transmission == 0.0f) {
+                    d.alphaCutoff = (!mat->depthWrite && mat->polygonOffset) ? -2.0f : -1.0f;
+                } else if (auto* mm = dynamic_cast<MaterialWithMap*>(mat.get()); mm && mm->map) {
+                    // BLEND with BOTH a flat opacity/transmission (handled above)
+                    // AND a texture: the texel alpha is still the surface's
+                    // coverage (a ground-fog card = opacity 0.87 over a soft
+                    // alpha mask). Without the marker the raster wrote the
+                    // whole quad opaque and only the flat term blended, so
+                    // every such card rendered as a solid plate. Plain -1
+                    // (never the decal -2): the decal pipeline blends albedo
+                    // only and would drop the flat term.
+                    d.alphaCutoff = -1.0f;
+                }
             }
             if (auto* cc = dynamic_cast<MaterialWithClearcoat*>(mat.get())) {
                 d.clearcoat = cc->clearcoat;
