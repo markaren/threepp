@@ -28,8 +28,9 @@ except ImportError:
 
 SHOT = cli_arg("--shot", "", str)
 FILM = "--film" in sys.argv
+FILM_BENCH = "--film-bench" in sys.argv               # interleaved A/B of the offline frame path over one short cut
 FILM_TEST = "--film-test" in sys.argv                # 3 stills per cut instead of the mp4
-HEADLESS = bool(SHOT) or FILM
+HEADLESS = bool(SHOT) or FILM or FILM_BENCH
 SECONDS = cli_arg("--seconds", 6.0, float)
 W, H = parse_size(cli_arg("--size", "1600x900", str))
 CAP_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
@@ -49,8 +50,8 @@ TEAR_TH = math.atan2(-SUN_H[1], -SUN_H[0])          # the wall the sun lights fr
 TEAR_Y, TEAR_R = -3.0, 0.65
 MESH_M, TILE_MESHES = 0.045, 4
 TILE_M = MESH_M * TILE_MESHES
-MURK_SIGMA = 0.14
-MURK_COLOR = tp.Color(0.018, 0.100, 0.108)
+MURK_SIGMA = 0.22                                     # fjord: 4-6 m visibility
+MURK_COLOR = tp.Color(0.020, 0.070, 0.055)            # green-grey, low luminance
 
 # ---- net cloth: one periodic grid, wall rows then bottom rings ---------------
 NU, NV, NR = 288, 72, 16
@@ -497,7 +498,7 @@ renderer.fog_anisotropy = 0.55
 renderer.deferred_ao = False       # RT AO reads the coincident cutout planes as walls: blackens twine and fouling
 
 scene = tp.Scene()
-sky = sky_env(SUN_DIR, below_horizon=(0.30, 0.42, 0.48), below_nadir=(0.08, 0.16, 0.20))
+sky = sky_env(SUN_DIR, below_horizon=(0.16, 0.24, 0.20), below_nadir=(0.05, 0.10, 0.08))
 scene.environment = sky
 scene.background = sky
 sun = tp.DirectionalLight(0xfff0d8, 2.4)
@@ -507,14 +508,23 @@ scene.add(sun)
 ocean = tp.Ocean(size=320.0, resolution=384, wind_speed=4.5, wind_theta=0.6,
                  choppiness=0.5, fft_size=512, fetch=15e3)
 ocean.params.foam_amount = 0.0                 # whitecaps print as white slabs from below
+ocean.material.attenuation_color = tp.Color(0.16, 0.30, 0.24)   # fjord water from above: dark green-grey, not tropical teal
+ocean.material.attenuation_distance = 2.5
 if "--no-ocean" not in sys.argv:
     scene.add(ocean)
 floor = tp.Mesh(tp.PlaneGeometry(400.0, 400.0), standard_material(0x03060a))
 floor.rotate_x(-math.pi / 2)
 floor.position.y = -45.0
 scene.add(floor)
-MURK_PLANE = WATER_Y + 0.30            # above every crest: a crest shaded from above prints sun glints through the murk
-renderer.set_fog_water_surface_y(MURK_PLANE)
+MURK_PLANE = WATER_Y + 0.30            # deep cuts: above every crest, or a crest shaded from above prints sun glints through the murk
+
+
+def murk_plane_update():
+    """The per-pixel over/under split rides the LOCAL wave through the lens; the +0.30 crest guard blends in with depth."""
+    cp = camera.position
+    k = min(max((WATER_Y - cp.y - 0.5) / 1.0, 0.0), 1.0)
+    k = k * k * (3.0 - 2.0 * k)
+    renderer.set_fog_water_surface_y(float(ocean.sample_height(cp.x, cp.z)) * (1.0 - k) + MURK_PLANE * k)
 renderer.set_underwater_murk(MURK_SIGMA, MURK_COLOR)
 
 # ---- net meshes --------------------------------------------------------------
@@ -865,7 +875,7 @@ def build_rov():
         disc.rotation.y = math.pi / 2
         disc.position.set(0.2135, -0.075, z)
         rov.add(disc)
-        spot = tp.SpotLight(tp.Color(1.0, 0.95, 0.85), 1100.0, 14.0, math.radians(21.0), 0.55, 2.0)
+        spot = tp.SpotLight(tp.Color(1.0, 0.95, 0.85), 700.0, 5.0, math.radians(21.0), 0.55, 2.0)   # a lamp dies within ~5 m
         spot.position.set(0.215, -0.075, z)
         tgt = tp.Group()
         tgt.position.set(4.0, -0.35, z)
@@ -1120,7 +1130,7 @@ def bubbles_step(dt):
     bub_v[:, 1] += (0.22 - bub_v[:, 1]) * dt / 0.5
     bub_v[:, [0, 2]] *= math.exp(-dt / 0.6)
     bub_p[:] += bub_v * dt
-    alive = bub_age < bub_life
+    alive = (bub_age < bub_life) & (bub_p[:, 1] < WATER_Y - 0.05)   # nothing airborne
     bub_buf[:, :3] = bub_p
     bub_buf[:, 3] = np.where(alive, bub_r * (1 + 0.4 * bub_age / bub_life), -1.0)
     bubbles.submit(bub_buf, dt)
@@ -1661,7 +1671,7 @@ def fish_step(t, dt):
 
 
 # ---- marine snow --------------------------------------------------------------
-MOTE_CAP, MOTE_HALF, MOTE_TOP, MOTE_BOTTOM = 20_000, 9.0, 0.0, -12.0
+MOTE_CAP, MOTE_HALF, MOTE_TOP, MOTE_BOTTOM = 20_000, 9.0, WATER_Y - 0.55, -12.0   # the slab stays under the surface
 _uc = tp.ParticleField.Config()
 _uc.capacity = MOTE_CAP
 _uc.ownership = tp.ParticleField.Ownership.Renderer
@@ -1684,7 +1694,7 @@ _mb.glow = 0.0
 _me = motes.emitter
 _me.spawn_center = tp.Vector3(0.0, 0.5 * (MOTE_TOP + MOTE_BOTTOM), 0.0)
 _me.spawn_half_extent = tp.Vector3(MOTE_HALF, 0.5 * (MOTE_TOP - MOTE_BOTTOM), MOTE_HALF)
-_me.velocity = tp.Vector3(0.0, 0.022, 0.0)
+_me.velocity = tp.Vector3(0.0, -0.022, 0.0)          # snow sinks, so the slab top is the ceiling
 _me.speed_spread = 0.012
 _me.wind = tp.Vector3(0.045, 0.0, 0.020)
 _me.drift_amplitude = 0.10
@@ -1896,6 +1906,7 @@ def hud_update():
 
 # ---- cameras -----------------------------------------------------------------
 camera = tp.PerspectiveCamera(60.0, W / H, 0.05, 600.0)
+murk_plane_update()
 sun_h3 = np.array([SUN_H[0], 0.0, SUN_H[1]])
 SHOTS = {
     "p1_net_wide": (1.0 * e_r + [0, -2.6, 0], TEAR_C + [0, 0.6, 0], 62.0),
@@ -2005,11 +2016,12 @@ def step(dt=1.0 / 60.0):
     motes.set_follow_center(tp.Vector3(cp.x, cp.y, cp.z))
     motes.set_emitter_time(world_t, dt)
     motes.billboard_repr.intensity = MOTE_BASE * (1.0 + 0.9 * min(max(-cp.y, 0.0), 8.0) / 8.0)
+    murk_plane_update()
     mark("motes")
 
 
 # ---- film ----------------------------------------------------------------------
-FPS, WARMUP = 60, 40
+FPS, WARMUP = 60, 30
 P0 = PATROL[0, :3]
 R0 = np.array([P0[0], 0.0, P0[2]]) / np.hypot(P0[0], P0[2])
 T0 = np.array([-R0[2], 0.0, R0[0]])
@@ -2030,8 +2042,10 @@ def cam_waterline(u, t):
 
 
 def cam_descent(u, t):
-    e = smooth(u)
-    return (-1.2 * sun_h3 + [0, -0.5 - 5.7 * e, 0], 4.5 * sun_h3 + [0, 0.4 - 1.0 * e, 0], 72.0)
+    inb = -np.array([rov_pos[0], 0.0, rov_pos[2]]) / np.hypot(rov_pos[0], rov_pos[2])
+    back = np.array([-inb[2], 0.0, inb[0]])            # behind the ROV along the wall
+    eye = rov_pos + 2.3 * inb + 1.0 * back + [0, -1.0 - 0.4 * smooth(u), 0]
+    return eye, rov_pos + [0, 1.0, 0], 66.0            # below and inboard, looking up past the ROV at the window
 
 
 def cam_patrol(u, t):
@@ -2063,11 +2077,12 @@ def cam_hero(u, t):
     return a + (b - a) * e, TEAR_C + (0.3 - 0.9 * e) * e_r + [0, 0.3 * e, 0], 50.0 + 8.0 * e
 
 
-CUTS = [("waterline", 10.0, cam_waterline, False, WATER_Y), ("descent", 12.0, cam_descent, False, MURK_PLANE),
-        ("patrol", 14.0, cam_patrol, True, MURK_PLANE), ("sonar", 8.0, cam_sonar, True, MURK_PLANE),
-        ("tear", 10.0, cam_tear, True, MURK_PLANE), ("hero", 12.0, cam_hero, False, MURK_PLANE)]
+T_HOVER = _hover_i / 60.0
+CUTS = [("waterline", 10.0, cam_waterline, False), ("descent", 9.0, cam_descent, False),
+        ("patrol", 10.0, cam_patrol, True), ("sonar", T_HOVER - 19.0, cam_sonar, True),
+        ("tear", 10.0, cam_tear, True), ("hero", 12.0, cam_hero, False)]
 T_CUT = np.concatenate([[0.0], np.cumsum([c[1] for c in CUTS])])
-FILM_T_OFF = T_CUT[4] - _hover_i / 60.0               # the ROV is at HOVER, facing the tear, when the tear cut opens
+FILM_T_OFF = T_CUT[1]                                 # the patrol starts with the descent cut; HOVER opens the tear cut
 POSTER_U = 0.9
 
 
@@ -2085,9 +2100,40 @@ def world_t_rewind(dt):
     world_t -= dt
 
 
+def film_writer(path, preset="veryfast", crf="18"):
+    import imageio.v2 as imageio
+    return imageio.get_writer(path, fps=FPS, codec="libx264", quality=None, macro_block_size=None,
+                              ffmpeg_params=["-crf", crf, "-pix_fmt", "yuv420p", "-preset", preset])
+
+
+def film_bench(n=90):
+    """A/B/A/B over the first n frames of the descent cut: flush 3 + x264 slow vs flush 1 + veryfast (PROVISIONAL numbers)."""
+    global PATROL_T0
+    PATROL_T0 = -FILM_T_OFF
+    dt, res = 1.0 / FPS, {}
+    hud_park(False)
+    for tag in ("A", "B", "A", "B"):
+        flush, preset, crf = (3, "slow", "17") if tag == "A" else (1, "veryfast", "18")
+        renderer.set_flush_frames(flush)
+        w, prev, dup = film_writer(os.path.join(CAP_DIR, f"bench_{tag}.mp4"), preset, crf), None, 0
+        t0 = time.perf_counter()
+        for f in range(n):
+            step(dt)
+            film_cam(1, f / n, f * dt)
+            renderer.render(scene, camera)
+            px = renderer.read_pixels()
+            w.append_data(px)
+            dup += int(prev is not None and np.array_equal(px, prev))
+            prev = px.copy()
+        w.close()
+        res.setdefault(tag, []).append(1e3 * (time.perf_counter() - t0) / n)
+        print(f"  {tag} flush {flush} preset {preset}: {res[tag][-1]:.1f} ms/f, {dup} duplicate frames of {n}")
+    for tag, v in res.items():
+        print(f"bench {tag}: {np.mean(v):.1f} ms/f = {1e3 / np.mean(v):.1f} fps (PROVISIONAL, GPU shared)")
+
+
 def run_film():
     global PATROL_T0
-    import imageio.v2 as imageio
     from PIL import Image
     PATROL_T0 = -FILM_T_OFF
     LEAK_T0[0] = T_CUT[4] - 8.0
@@ -2100,13 +2146,12 @@ def run_film():
     if FILM_TEST:
         picks = {int(T_CUT[k] * FPS) + int(q * (n - 1)) for k, n in enumerate(counts) for q in (0.05, 0.5, 0.95)}
     print(f"film: {len(CUTS)} cuts, {total} frames = {total / FPS:.1f} s at {FPS} fps, {W}x{H}; patrol offset {FILM_T_OFF:.1f} s")
-    writer = None if FILM_TEST else imageio.get_writer(out, fps=FPS, codec="libx264", quality=None, macro_block_size=None,
-                                                       ffmpeg_params=["-crf", "17", "-pix_fmt", "yuv420p", "-preset", "slow"])
+    writer = None if FILM_TEST else film_writer(out)
+    renderer.set_flush_frames(1)                      # one GPU frame per render(): the film reads every frame once
     sheet, rec, wall0 = [], 0, time.perf_counter()
-    for k, (name, dur, _, hud, plane) in enumerate(CUTS):
+    for k, (name, dur, _, hud) in enumerate(CUTS):
         n = counts[k]
         hud_park(hud)
-        renderer.set_fog_water_surface_y(plane)
         renderer.set_auto_exposure_speed(12.0)          # meter fast through the warm-up, cinematic during the cut
         film_cam(k, 0.0, 0.0)
         for _ in range(0 if FILM_TEST else WARMUP):
@@ -2121,6 +2166,8 @@ def run_film():
             step(dt)
             film_cam(k, u, f * dt)
             if writer is not None or any(rec + q in picks for q in range(21)):   # test mode: 20 warm frames per still
+                if FILM_TEST:
+                    renderer.set_auto_exposure_speed(1.2 if rec in picks else 12.0)
                 renderer.render(scene, camera)
             if writer is not None or rec in picks:
                 px = renderer.read_pixels()
@@ -2128,6 +2175,8 @@ def run_film():
                     writer.append_data(px)
                 if rec in picks:
                     sheet.append(Image.fromarray(px).resize((400, 225), Image.LANCZOS))
+                    if FILM_TEST:
+                        Image.fromarray(px).save(f"{stem}_c{k}_{f * 100 // max(n - 1, 1):02d}.png")   # native still
                 if name == "hero" and f == int(POSTER_U * (n - 1)):
                     Image.fromarray(px).save(stem + "_poster.png")
             rec += 1
@@ -2160,7 +2209,9 @@ arm_net_interop()
 print(f"fish: {'interop' if fish_vk else 'host upload'}; net: {'interop' if net_vk else 'host upload'}; "
       f"ROV cam: {'pip' if PIP else 'readback'}")
 
-if FILM:
+if FILM_BENCH:
+    film_bench()
+elif FILM:
     run_film()
 elif HEADLESS:
     os.makedirs(os.path.dirname(OUT) or ".", exist_ok=True)
