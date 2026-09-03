@@ -4,11 +4,14 @@ camera + sonar insets, and a Warp school of procedural salmon.
     python warp_netpen.py                          # window; drag to orbit, Esc quits
     python warp_netpen.py --shot p3_hud --out x.png --seconds 8 --size 1600x900
 Cameras: p1_net_wide p1_collar_below p1_rov_hero p1_tear p2_school p2_fish_close p2_leak p3_hud p3_sonar_tear.
-`--fish N` (400). Vulkan only; Warp on CUDA if present.
+`--fish N` (400); `--profile` prints per-stage ms over 300 live frames and exits; `--no-interop` uploads the school
+through the host. Vulkan only; Warp on CUDA if present.
 """
+import atexit
 import math
 import os
 import sys
+import time
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -17,6 +20,10 @@ import warp as wp
 
 import threepp as tp
 from warp_common import cli_arg, orbit_loop, parse_size, sky_env, standard_material
+try:
+    from threepp.cuda_interop import VkInteropArray
+except ImportError:
+    VkInteropArray = None
 
 SHOT = cli_arg("--shot", "", str)
 HEADLESS = bool(SHOT)
@@ -25,6 +32,9 @@ W, H = parse_size(cli_arg("--size", "1600x900", str))
 CAP_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
                        "aaa_caps", "netpen")
 OUT = cli_arg("--out", os.path.join(CAP_DIR, f"{SHOT}.png"), str)
+PROFILE = "--profile" in sys.argv
+INTEROP = "--no-interop" not in sys.argv          # CUDA->Vulkan zero copy for the school (host upload otherwise)
+NET_INTEROP = "--net-interop" in sys.argv         # opt-in repro: four interop meshes = VK_ERROR_DEVICE_LOST on dev 2026-09-03
 
 # ---- world ------------------------------------------------------------------
 WATER_Y = 0.0
@@ -574,15 +584,73 @@ def net_geometry(uv, index):
 net_geo = net_geometry(uv_net, NET_INDEX)
 patch_geo = net_geometry(uv_patch, PATCH_INDEX)
 foul_geo = net_geometry(uv_foul, np.concatenate([NET_INDEX, PATCH_INDEX]))
+net_meshes = []
 for geo, mat in ((net_geo, net_mat), (patch_geo, patch_mat), (foul_geo, foul_mat)):
     m = tp.Mesh(geo, mat)
     m.frustum_culled = False
     m.cast_shadow = True
     m.receive_shadow = True
     scene.add(m)
+    net_meshes.append(m)
+
+
+@wp.kernel
+def gather_net(pos: wp.array(dtype=wp.vec3), nrm: wp.array(dtype=wp.vec3), ids: wp.array(dtype=int), lift: float,
+               out_p: wp.array(dtype=wp.vec3), out_n: wp.array(dtype=wp.vec3)):
+    i = wp.tid()
+    j = ids[i]
+    out_p[i] = pos[j] + nrm[j] * lift
+    out_n[i] = nrm[j]
+
+
+_gather_ids = wp.array(GATHER.astype(np.int32), dtype=int, device=device)
+net_vk = []                                           # per net mesh: (pos, nrm) VkInteropArray pair once armed
+
+
+def net_on_frame(k):
+    def cb():
+        t0 = time.perf_counter()
+        p, n = net_vk[k]
+        wp.launch(gather_net, dim=len(GATHER), device=device,
+                  inputs=[net.pos, net.nrm, _gather_ids, 0.0005 if k == 2 else 0.0, p.array, n.array])
+        wp.synchronize_device(device)
+        if prof:
+            prof.add("net gather (in render)", time.perf_counter() - t0)
+    return cb
+
+
+def arm_net_interop():
+    """After the first render: all three net meshes go zero-copy, or none (net_upload is one host path)."""
+    if VkInteropArray is None or not device.is_cuda or not (INTEROP and NET_INTEROP):
+        return
+    for k, m in enumerate(net_meshes):
+        h = renderer.enable_vertex_interop(m, net_on_frame(k))
+        if h is None:
+            break
+        try:
+            net_vk.append(tuple(VkInteropArray(hd, nb, wp.vec3, len(GATHER), device) for hd, nb in h))
+        except Exception as e:
+            print(f"net interop import failed ({e}); host upload path")
+            renderer.disable_vertex_interop(m)
+            break
+    if len(net_vk) < len(net_meshes):
+        release_net_interop()
+    else:
+        atexit.register(release_net_interop)
+
+
+def release_net_interop():
+    pairs = list(net_vk)
+    net_vk.clear()
+    for (p, n), m in zip(pairs, net_meshes):
+        p.close()
+        n.close()
+        renderer.disable_vertex_interop(m)
 
 
 def net_upload():
+    if net_vk:
+        return
     pos = net.pos.numpy()
     nrm = net.nrm.numpy()
     for g in (net_geo, patch_geo):
@@ -1445,10 +1513,11 @@ class School:
                           self.amp, self.brake, self.len, self.pref, self.leak, self.uni, FISH_N, t, dt])
         self.pos, self.pos2 = self.pos2, self.pos
         self.vel, self.vel2 = self.vel2, self.vel
+
+    def skin(self):
         wp.launch(skin, dim=FISH_N * self.nv, device=device,
                   inputs=[self.c0, self.c1, self.n0, self.n1, self.uu, self.pos, self.yaw, self.pitch, self.roll,
                           self.beat, self.amp, self.brake, self.len, self.out_p, self.out_n, self.nv])
-        return self.out_p.numpy(), self.out_n.numpy()
 
     def hero(self):
         """(position, forward) of fish 0 on the host."""
@@ -1457,7 +1526,9 @@ class School:
 
 
 school = School()
-_fp0, _fn0 = school.step(0.0, 1.0 / 60.0, np.zeros(3), np.zeros(3))
+school.step(0.0, 1.0 / 60.0, np.zeros(3), np.zeros(3))
+school.skin()
+_fp0, _fn0 = school.out_p.numpy(), school.out_n.numpy()
 fish_mat = tp.MeshPhysicalMaterial()
 fish_mat.color = 0xffffff
 fish_mat.roughness, fish_mat.metalness = 1.0, 0.15    # roughness lives in the map
@@ -1480,11 +1551,62 @@ fish.receive_shadow = True
 scene.add(fish)
 
 
+fish_vk = None                                        # (pos, nrm) VkInteropArray pair once armed
+
+
+def fish_on_frame():
+    """Inside render(): skin straight into the renderer's vertex buffers, synchronously."""
+    t0 = time.perf_counter()
+    school.skin()
+    wp.synchronize_device(device)
+    if prof:
+        prof.add("fish skin (in render)", time.perf_counter() - t0)
+
+
+def arm_fish_interop():
+    """After the first render: CUDA->Vulkan zero copy for the school; host upload stays the fallback."""
+    global fish_vk
+    if VkInteropArray is None or not device.is_cuda or not INTEROP:
+        return
+    h = renderer.enable_vertex_interop(fish, fish_on_frame)
+    if h is None:
+        return
+    try:
+        fish_vk = tuple(VkInteropArray(hd, nb, wp.vec3, FISH_N * school.nv, device) for hd, nb in h)
+    except Exception as e:
+        print(f"fish interop import failed ({e}); host upload path")
+        renderer.disable_vertex_interop(fish)
+        return
+    school.out_p, school.out_n = fish_vk[0].array, fish_vk[1].array
+    atexit.register(release_fish_interop)
+
+
+def release_fish_interop():
+    global fish_vk
+    if fish_vk is None:
+        return
+    pair, fish_vk = fish_vk, None
+    school.out_p, school.out_n = _fish_p, _fish_n
+    for a in pair:
+        a.close()
+    renderer.disable_vertex_interop(fish)
+
+
+_fish_p, _fish_n = school.out_p, school.out_n
+
+
 def fish_step(t, dt):
     cp = camera.position
-    p, n = school.step(t, dt, rov_pos, np.array([cp.x, cp.y, cp.z]))
+    school.step(t, dt, rov_pos, np.array([cp.x, cp.y, cp.z]))
+    mark("fish boids", gpu=True)
+    if fish_vk is not None:
+        return
+    school.skin()
+    p, n = school.out_p.numpy(), school.out_n.numpy()
+    mark("fish skin", gpu=True)
     fish_geo.update_attribute("position", p)
     fish_geo.update_attribute("normal", n)
+    mark("fish upload")
 
 
 # ---- marine snow --------------------------------------------------------------
@@ -1566,14 +1688,36 @@ def collar_tris(seg=96, sides=8):
     return pts, np.stack([a, b, c, a, c, d], -1).reshape(-1, 3)
 
 
+def fish_cage():
+    """Sonar proxy per fish: every 4th body ring x every 4th side of the skinned mesh (42 verts, 72 tris)."""
+    S1 = F_SIDES + 1
+    rings, sides = np.append(np.arange(0, F_RINGS, 4), F_RINGS - 1), np.arange(0, F_SIDES, 4)
+    ids = (rings[:, None] * S1 + sides[None, :]).reshape(-1)
+    i, j = np.arange(len(rings) - 1)[:, None], np.arange(len(sides))[None, :]
+    a, b = i * len(sides) + j, i * len(sides) + (j + 1) % len(sides)
+    tri = np.stack([a, b, b + len(sides), a, b + len(sides), a + len(sides)], -1).reshape(-1, 3)
+    ids = (ids[None, :] + (np.arange(FISH_N) * school.nv)[:, None]).reshape(-1)
+    tri = (tri[None] + (np.arange(FISH_N) * len(rings) * len(sides))[:, None, None]).reshape(-1, 3)
+    return wp.array(ids.astype(np.int32), dtype=int, device=device), tri
+
+
+@wp.kernel
+def gather(src: wp.array(dtype=wp.vec3), ids: wp.array(dtype=int), dst: wp.array(dtype=wp.vec3), off: int):
+    i = wp.tid()
+    dst[off + i] = src[ids[i]]
+
+
+SON_EVERY = 3
 _net_tri = net_solid_tris()
 _col_pts, _col_tri = collar_tris()
-_n_net, _n_fish = net.n, FISH_N * school.nv
+_cage_ids, _cage_tri = fish_cage()
+_n_net, _n_fish = net.n, len(_cage_ids)
 _son_pts = wp.zeros(_n_net + _n_fish + len(_col_pts), dtype=wp.vec3, device=device)
 wp.copy(_son_pts, wp.array(_col_pts.astype(np.float32), dtype=wp.vec3, device=device), _n_net + _n_fish, 0, len(_col_pts))
-_son_idx = np.concatenate([_net_tri.reshape(-1), school.index.astype(np.int64) + _n_net, _col_tri.reshape(-1) + _n_net + _n_fish])
-son_mesh = wp.Mesh(points=_son_pts, indices=wp.array(_son_idx.astype(np.int32), dtype=int, device=device))
-son_mat = wp.array(np.concatenate([np.zeros(len(_net_tri)), np.full(len(school.index) // 3, 2), np.ones(len(_col_tri))]).astype(np.int32),
+_son_idx = np.concatenate([_net_tri.reshape(-1), _cage_tri.reshape(-1) + _n_net, _col_tri.reshape(-1) + _n_net + _n_fish])
+_son_idx_wp = wp.array(_son_idx.astype(np.int32), dtype=int, device=device)
+son_mesh = None
+son_mat = wp.array(np.concatenate([np.zeros(len(_net_tri)), np.full(len(_cage_tri), 2), np.ones(len(_col_tri))]).astype(np.int32),
                    dtype=int, device=device)
 son_refl = wp.array(np.float32([1.0, 1.0, 0.35]), dtype=float, device=device)
 son_frame = wp.zeros(4, dtype=wp.vec3, device=device)
@@ -1596,32 +1740,45 @@ SON_NEAR = (0.35 * np.exp(-((_rb - 0.3) / 0.08) ** 2)).astype(np.float32)[None, 
 son_img = np.zeros((SON_H, SON_W, 4), np.uint8)
 son_hist = np.zeros((3, SON_BEAMS, SON_BINS), np.float32)
 SON_FRAME = (_yy < 2) | (_yy >= SON_H - 2) | (_xx < 2) | (_xx >= SON_W - 2)
+# Flat index maps on the bottom-up image (what update_data takes), so the fan draw is gathers, not mask indexing.
+SON_PIX = np.flatnonzero(SON_VALID[::-1])
+SON_SRC = (SON_BEAM * SON_BINS + SON_BIN)[::-1].reshape(-1)[SON_PIX]
+SON_LUT4 = np.concatenate([SON_LUT, (191 + (np.arange(256) >> 2)).astype(np.uint8)[:, None]], 1)
+SON_OVER = np.zeros((SON_H, SON_W, 4), np.uint8)
+SON_OVER[SON_RINGS | SON_EDGE] = (70, 42, 14, 255)
+SON_OVER[SON_TICK] = np.maximum(SON_OVER[SON_TICK], np.uint8([120, 80, 30, 255]))
+SON_OVER = np.ascontiguousarray(SON_OVER[::-1])
+SON_FRAME_I = np.flatnonzero(SON_FRAME[::-1])
 SON_TILT = -15.0                                        # mount pitch, deg: the 12 deg band sits on the hole, below the top flap
 
 
 def sonar_step(frame_i):
+    if frame_i % SON_EVERY or not HUD_ON:
+        return
+    global son_mesh
     wp.copy(_son_pts, net.pos, 0, 0, _n_net)
-    wp.copy(_son_pts, school.out_p, _n_net, 0, _n_fish)
-    son_mesh.refit()
+    wp.launch(gather, dim=_n_fish, device=device, inputs=[school.out_p, _cage_ids, _son_pts, _n_net])
+    son_mesh = wp.Mesh(points=_son_pts, indices=_son_idx_wp, bvh_constructor="lbvh")
+    mark("sonar bvh build", gpu=True)
     o = rov_pos + rov_R @ [0.20, 0.09, 0.0]
     R = rov_R @ rot_z(math.radians(SON_TILT))
     son_frame.assign(np.asarray([o, R @ [1, 0, 0], R @ [0, 0, 1], R @ [0, 1, 0]], np.float32))
     son_out.zero_()
     wp.launch(sonar, dim=SON_BEAMS * SON_VS, device=device,
               inputs=[son_mesh.id, son_mat, son_refl, son_frame, son_out, SON_BEAMS, SON_VS, SON_BINS, SON_RANGE])
-    son_hist[frame_i % 3] = son_out.numpy()
+    son_hist[(frame_i // SON_EVERY) % 3] = son_out.numpy()
+    mark("sonar kernel", gpu=True)
     a = son_hist.max(0)                                                   # 3-frame persistence
     a = np.maximum(a, np.maximum(np.roll(a, 1, 1), np.roll(a, -1, 1)))   # +-1 bin: the wall reads as a solid arc
     a = a * np.random.default_rng(1000 + frame_i).uniform(0.7, 1.3, (SON_BEAMS, SON_BINS)).astype(np.float32) + SON_NEAR
     v = (255 * (1 - np.exp(-4.0 * a))).astype(np.uint8)
-    son_img[:] = (6, 6, 6, 191)
-    vv = v[SON_BEAM[SON_VALID], SON_BIN[SON_VALID]]
-    son_img[SON_VALID, :3] = SON_LUT[vv]
-    son_img[SON_VALID, 3] = 191 + (vv >> 2)
-    son_img[SON_RINGS | SON_EDGE] = np.maximum(son_img[SON_RINGS | SON_EDGE], np.uint8([70, 42, 14, 255]))
-    son_img[SON_TICK] = np.maximum(son_img[SON_TICK], np.uint8([120, 80, 30, 255]))
-    son_img[SON_FRAME] = (208, 138, 42, 255)
-    son_tex.update_data(son_img[::-1])
+    flat = son_img.reshape(-1, 4)
+    flat[:] = (6, 6, 6, 191)
+    flat[SON_PIX] = SON_LUT4[v.reshape(-1)[SON_SRC]]
+    np.maximum(son_img, SON_OVER, out=son_img)
+    flat[SON_FRAME_I] = (208, 138, 42, 255)
+    son_tex.update_data(son_img)
+    mark("sonar draw")
 
 
 # ---- insets: ROV camera view + sonar as screen-space sprites ---------------------------------
@@ -1656,10 +1813,11 @@ def hud_panel(w, h, ax, label, channels=3):
 
 cam_tex, _hud_a = hud_panel(CAM_W, CAM_H, 0.0, "ROV CAM")
 son_tex, _hud_b = hud_panel(SON_W, SON_H, 1.0, "SONAR 130 deg", 4)
-if SHOT and not SHOT.startswith("p3"):
+HUD_ON = not SHOT or SHOT.startswith("p3")
+if not HUD_ON:
     for _o in _hud_a + _hud_b:                       # insets off-screen for the other shots, never visible=False
         _o.position.x = -9000.0
-ROV_VIEW = 0
+ROV_VIEW, PIP = 0, False
 
 
 def rov_cam_place():
@@ -1669,7 +1827,9 @@ def rov_cam_place():
 
 
 def hud_update():
-    if ROV_VIEW:
+    if PIP:                                           # composited on the device; the rect follows the window height
+        renderer.set_view_display_rect(ROV_VIEW, HUD_M, renderer.size()[1] - HUD_M - CAM_H, CAM_W, CAM_H)
+    elif ROV_VIEW and HUD_ON and frame_i % 4 == 0:   # fallback: a device-idle readback, 15 Hz
         rgb = renderer.read_view_rgb_pixels(ROV_VIEW)
         if rgb.size:
             cam_tex.update_data(np.ascontiguousarray(rgb[::-1]))
@@ -1719,9 +1879,37 @@ def place(cam, key):
 
 
 # ---- step --------------------------------------------------------------------
+class Prof:
+    """--profile: per-stage wall time; gpu=True syncs Warp first so kernel time lands on its stage."""
+    def __init__(self):
+        self.acc, self.t0, self.on = {}, time.perf_counter(), True
+
+    def add(self, name, s):
+        if self.on:
+            self.acc[name] = self.acc.get(name, 0.0) + s
+
+    def mark(self, name, gpu=False):
+        if not self.on:
+            return
+        if gpu:
+            wp.synchronize_device(device)
+        t = time.perf_counter()
+        self.add(name, t - self.t0)
+        self.t0 = t
+
+    def report(self, frames, engine):
+        inner = sum(v for k, v in self.acc.items() if k.endswith("(in render)"))   # ran inside render(): split out
+        tot = sum(self.acc.values()) / frames
+        print(f"--- {frames} frames, {1000 * tot:.1f} ms/frame = {1 / tot:.1f} fps (with per-stage GPU syncs)")
+        for k, v in self.acc.items():
+            print(f"{k:24s}{1000 * (v - inner if k == 'render' else v) / frames:8.2f} ms")
+        for k, v in sorted(engine.items()):
+            print(f"  engine {k:22s}{v / frames:8.2f} ms")
+
+
+prof = Prof() if PROFILE else None
+mark = prof.mark if PROFILE else (lambda name, gpu=False: None)
 world_t = 0.0
-
-
 frame_i = 0
 
 
@@ -1729,26 +1917,33 @@ def step(dt=1.0 / 60.0):
     global world_t, frame_i
     world_t += dt
     frame_i += 1
+    mark("other")
     rov_pose(world_t + PATROL_T0)
     rope.pins.assign(np.asarray(tether_pins(dt), np.float32))
     sp = 0.15 * (1.0 + 0.35 * math.sin(0.21 * world_t))
     ang = 0.35 + 0.25 * math.sin(0.09 * world_t)
     net_step(np.array([sp * math.cos(ang), 0.0, sp * math.sin(ang)], np.float32), world_t)
+    mark("net+tether solve", gpu=True)
     net_upload()
+    mark("net upload")
     tether_upload()
+    mark("tether tube")
     fish_step(world_t, dt)
     tf, tl, tv = rov_thrust
     for k, p in enumerate(props):
         cmd = (abs(tf) + 0.5 * abs(tl) + (0.4 if k >= 2 else 0.0) * max(tf, 0.0)) if k < 4 else abs(tv) + 0.15
         p.rotation.y += dt * 45.0 * min(cmd, 1.5) * (1 if k % 2 else -1)
     bubbles_step(dt)
+    mark("props+bubbles")
     rov_cam_place()
     hud_update()
+    mark("rov cam inset")
     sonar_step(frame_i)
     cp = camera.position
     motes.set_follow_center(tp.Vector3(cp.x, cp.y, cp.z))
     motes.set_emitter_time(world_t, dt)
     motes.billboard_repr.intensity = MOTE_BASE * (1.0 + 0.9 * min(max(-cp.y, 0.0), 8.0) / 8.0)
+    mark("motes")
 
 
 if HEADLESS and SHOT not in SHOTS:
@@ -1758,6 +1953,14 @@ renderer.render(scene, camera)                 # a view shares the primary's pip
 ROV_VIEW = renderer.add_view(rov_cam, CAM_W, CAM_H)
 if ROV_VIEW == 0:
     print("could not create the ROV camera view")
+elif HUD_ON:
+    PIP = renderer.set_view_display_rect(ROV_VIEW, HUD_M, H - HUD_M - CAM_H, CAM_W, CAM_H)
+    if PIP:
+        _hud_a[0].position.x = -9000.0             # the sprite copy is replaced by the composited view
+arm_fish_interop()
+arm_net_interop()
+print(f"fish: {'interop' if fish_vk else 'host upload'}; net: {'interop' if net_vk else 'host upload'}; "
+      f"ROV cam: {'pip' if PIP else 'readback'}")
 
 if HEADLESS:
     os.makedirs(os.path.dirname(OUT) or ".", exist_ok=True)
@@ -1777,6 +1980,31 @@ if HEADLESS:
         out_b = OUT[:-4] + "_b.png"
         renderer.save_frame(scene, camera, out_b)
         print(f"wrote {out_b} (+0.5 s)")
+elif PROFILE:
+    WARM, TIMED = 60, 300
+    engine, n = {}, [0]
+
+    def profile_frame():
+        step()
+        place(camera, "p3_hud")
+        mark("other")
+        renderer.render(scene, camera)
+        mark("render")
+        n[0] += 1
+        if n[0] == WARM:
+            prof.acc.clear()
+        elif n[0] > WARM and prof.on:
+            for k, v in renderer.frame_timings.items():
+                engine[k] = engine.get(k, 0.0) + v
+
+    while n[0] < WARM + TIMED and canvas.animate_once(profile_frame):
+        pass
+    prof.report(TIMED, engine)
+    prof.on, n[0] = False, 0
+    t0 = time.perf_counter()
+    while n[0] < TIMED and canvas.animate_once(profile_frame):
+        pass
+    print(f"live, no syncs: {TIMED / (time.perf_counter() - t0):.1f} fps over {TIMED} frames")
 else:
     place(camera, "p1_tear")
     camera.position.set(*(TEAR_C - 4.0 * e_r + 1.5 * e_t + [0, 0.6, 0]))
