@@ -322,6 +322,7 @@ set(privateHeaders
 
         "threepp/utils/Base64.hpp"
         "threepp/utils/RegexUtil.hpp"
+        "threepp/utils/TriangleIntersect.hpp"
 
         "threepp/loaders/HdrTexture.hpp"
         "threepp/loaders/ObjectJsonConstants.hpp"
@@ -657,6 +658,7 @@ set(sources
         "threepp/utils/StbImageWrite.cpp"
         "threepp/utils/StringUtils.cpp"
         "threepp/utils/TaskManager.cpp"
+        "threepp/utils/TriangleIntersect.cpp"
         "threepp/utils/ZipReader.cpp"
         "threepp/utils/ZipWriter.cpp"
 

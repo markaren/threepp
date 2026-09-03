@@ -8,7 +8,7 @@ import numpy.typing
 import typing
 from . import editor
 from . import imgui
-__all__: list[str] = ['AmbientLight', 'AnimationAction', 'AnimationBlendMode', 'AnimationClip', 'AnimationMixer', 'Approach', 'ArrowHelper', 'Articulation', 'ArticulationLink', 'Audio', 'AudioDistanceModel', 'AudioListener', 'AxesHelper', 'Background', 'BakePose', 'BarkStyle', 'BirdPlumage', 'BirdRole', 'BirdShape', 'BirdState', 'Blending', 'Blob', 'Box3', 'Box3Helper', 'BoxGeometry', 'BoxHelper', 'BranchingMode', 'BufferGeometry', 'Camera', 'CameraHelper', 'Canvas', 'CapsuleGeometry', 'CatmullRomCurve3', 'CircleGeometry', 'Clock', 'Cluster', 'Colonise', 'Color', 'ColorKeyframeTrack', 'ColorSpace', 'CombineOperation', 'Cone', 'ConeGeometry', 'ContactPoint', 'ContactSample', 'ContactSensor', 'ConvexGeometry', 'CrossQuad', 'CrownShape', 'Cruise', 'Cylinder', 'CylinderGeometry', 'DepthPacking', 'DepthSensor', 'DirectionalLight', 'DirectionalLightHelper', 'DisplacedMesh', 'EXPONENTIAL', 'EXRLoader', 'Ellipsoid', 'ErosionType', 'Euler', 'Evade', 'FBXLoader', 'Filter', 'Flare', 'Flock', 'FlockParams', 'Fog', 'FogExp2', 'Follower', 'Font', 'FontLoader', 'ForceTorqueSensor', 'FrameChannel', 'Frond', 'Furrowed', 'GLRenderer', 'GLTFLoader', 'GLTFResult', 'Gait', 'GrassMesh', 'GridHelper', 'Group', 'HAS_AUDIO', 'HAS_IMGUI', 'HAS_PHYSX', 'HAS_VULKAN', 'Hemisphere', 'HemisphereLight', 'HemisphereLightHelper', 'Hop', 'HorizontalAlignment', 'INVERSE', 'IcosahedronGeometry', 'IcpOptions', 'IcpResult', 'IkOptions', 'IkResult', 'IkSolver', 'IkTask', 'ImguiContext', 'Imu', 'ImuSample', 'InstancedMesh', 'Interpolation', 'IsoMesh', 'Joint', 'JointEncoder', 'JointInfo', 'JointRange', 'JointSample', 'JointType', 'KeyframeTrack', 'LINEAR', 'Lanceolate', 'Launch', 'Leader', 'LeafShape', 'LeafStyle', 'LidarBeam', 'LidarModel', 'LidarParams', 'LidarReturn', 'Light', 'Line', 'LineBasicMaterial', 'LineSegments', 'Lobed', 'Loner', 'Loop', 'Mapping', 'Material', 'Matrix3', 'Matrix4', 'Mesh', 'MeshBasicMaterial', 'MeshDepthMaterial', 'MeshLambertMaterial', 'MeshNormalMaterial', 'MeshPhongMaterial', 'MeshPhysicalMaterial', 'MeshStandardMaterial', 'ModelLoader', 'NONE', 'NoiseModel', 'NoiseType', 'NumberKeyframeTrack', 'OBJLoader', 'Object3D', 'Ocean', 'OctahedronGeometry', 'OrbitControls', 'OrthographicCamera', 'Ovate', 'Papery', 'ParticleField', 'PathTracedLidarSensor', 'Perched', 'PerspectiveCamera', 'PhysxGpuBatch', 'PhysxMaterial', 'PhysxSoftBodyMaterial', 'PhysxVehicle', 'PhysxWorld', 'PlaneGeometry', 'Plated', 'PointLight', 'PointLightHelper', 'Points', 'PointsMaterial', 'PolarGridHelper', 'PositionalAudio', 'Quad', 'Quaternion', 'QuaternionKeyframeTrack', 'RGBELoader', 'RangeNoiseModel', 'RectAreaLight', 'RigidBody', 'RingGeometry', 'Robot', 'RotationOrder', 'STLLoader', 'SVGLoader', 'ScalarField', 'Scene', 'Sensor', 'Serrate', 'ShadowMaterial', 'Side', 'SkeletonHelper', 'SoftBody', 'SogLoader', 'Sphere', 'SphereGeometry', 'SplatCloud', 'SplatData', 'SplatLoader', 'SplatPoseSet', 'SpotLight', 'SpotLightHelper', 'Sprite', 'SpriteMaterial', 'SurfaceMesh', 'TerrainFalloff', 'TerrainGenerator', 'TerrainParams', 'Text2D', 'Text3D', 'TextSprite', 'Texture', 'TextureLoader', 'TextureWrapping', 'ToneMapping', 'TorusGeometry', 'TorusKnotGeometry', 'TransformControls', 'TreeGenerator', 'TreeParams', 'URDFLoader', 'Vector2', 'Vector3', 'Vector4', 'VectorKeyframeTrack', 'VerticalAlignment', 'VoxelGrid', 'VulkanRenderer', 'Walk', 'Whorl', 'WrenchSample', 'apply_terrain_preset', 'apply_tree_preset', 'bake_surface', 'clamp', 'damp', 'data_texture', 'deg_to_rad', 'editor', 'euclidean_modulo', 'float_texture', 'generate_uuid', 'icp_point_to_point', 'imgui', 'inverse_lerp', 'is_power_of_two', 'iso_mesh_to_geometry', 'lerp', 'make_bark_textures', 'make_flower_texture', 'make_leaf_texture', 'make_needle_frond_texture', 'make_sensor_mesh', 'map_linear', 'marching_cubes', 'merge_buffer_geometries', 'merge_vertices', 'rad_to_deg', 'rand_float', 'rand_float_range', 'rand_float_spread', 'rand_int', 'rotate_equirect', 'select_lod', 'simplify_geometry', 'splat_points_to_field', 'terrain_from_json', 'terrain_load_config', 'terrain_save_config', 'terrain_to_json', 'voxel_downsample', 'vulkan_available', 'vulkan_validation_active', 'vulkan_validation_error_count', 'write_wav']
+__all__: list[str] = ['AmbientLight', 'AnimationAction', 'AnimationBlendMode', 'AnimationClip', 'AnimationMixer', 'Approach', 'ArrowHelper', 'Articulation', 'ArticulationLink', 'Audio', 'AudioDistanceModel', 'AudioListener', 'AxesHelper', 'BVH', 'Background', 'BakePose', 'BarkStyle', 'BirdPlumage', 'BirdRole', 'BirdShape', 'BirdState', 'Blending', 'Blob', 'Box3', 'Box3Helper', 'BoxGeometry', 'BoxHelper', 'BranchingMode', 'BufferGeometry', 'Camera', 'CameraHelper', 'Canvas', 'CapsuleGeometry', 'CatmullRomCurve3', 'CircleGeometry', 'Clock', 'Cluster', 'Colonise', 'Color', 'ColorKeyframeTrack', 'ColorSpace', 'CombineOperation', 'Cone', 'ConeGeometry', 'ContactPoint', 'ContactSample', 'ContactSensor', 'ConvexGeometry', 'CrossQuad', 'CrownShape', 'Cruise', 'Curve2', 'Curve3', 'Cylinder', 'CylinderGeometry', 'DepthPacking', 'DepthSensor', 'DirectionalLight', 'DirectionalLightHelper', 'DisplacedMesh', 'EXPONENTIAL', 'EXRLoader', 'Ellipsoid', 'ErosionType', 'Euler', 'Evade', 'ExtrudeGeometry', 'FBXLoader', 'Filter', 'Flare', 'Flock', 'FlockParams', 'Fog', 'FogExp2', 'Follower', 'Font', 'FontLoader', 'ForceTorqueSensor', 'FrameChannel', 'Frond', 'Furrowed', 'GLRenderer', 'GLTFLoader', 'GLTFResult', 'Gait', 'GrassMesh', 'GridHelper', 'Group', 'HAS_AUDIO', 'HAS_IMGUI', 'HAS_PHYSX', 'HAS_VULKAN', 'Hemisphere', 'HemisphereLight', 'HemisphereLightHelper', 'Hop', 'HorizontalAlignment', 'INVERSE', 'IcosahedronGeometry', 'IcpOptions', 'IcpResult', 'IkOptions', 'IkResult', 'IkSolver', 'IkTask', 'ImguiContext', 'Imu', 'ImuSample', 'InstancedMesh', 'Interpolation', 'IsoMesh', 'Joint', 'JointEncoder', 'JointInfo', 'JointRange', 'JointSample', 'JointType', 'KeyframeTrack', 'LINEAR', 'Lanceolate', 'Launch', 'Layers', 'Leader', 'LeafShape', 'LeafStyle', 'LidarBeam', 'LidarModel', 'LidarParams', 'LidarReturn', 'Light', 'Line', 'LineBasicMaterial', 'LineCurve', 'LineCurve3', 'LineSegments', 'Lobed', 'Loner', 'Loop', 'Mapping', 'Material', 'Matrix3', 'Matrix4', 'Mesh', 'MeshBasicMaterial', 'MeshDepthMaterial', 'MeshLambertMaterial', 'MeshNormalMaterial', 'MeshPhongMaterial', 'MeshPhysicalMaterial', 'MeshStandardMaterial', 'ModelLoader', 'NONE', 'NoiseModel', 'NoiseType', 'NumberKeyframeTrack', 'OBJLoader', 'Object3D', 'Ocean', 'OctahedronGeometry', 'OrbitControls', 'OrthographicCamera', 'Ovate', 'Papery', 'ParticleField', 'Path', 'PathTracedLidarSensor', 'Perched', 'PerspectiveCamera', 'PhysxGpuBatch', 'PhysxMaterial', 'PhysxSoftBodyMaterial', 'PhysxVehicle', 'PhysxWorld', 'PlaneGeometry', 'Plated', 'PointLight', 'PointLightHelper', 'Points', 'PointsMaterial', 'PolarGridHelper', 'PositionalAudio', 'Quad', 'Quaternion', 'QuaternionKeyframeTrack', 'RGBELoader', 'RangeNoiseModel', 'Ray', 'RayHit', 'RectAreaLight', 'RigidBody', 'RingGeometry', 'Robot', 'RotationOrder', 'STLLoader', 'SVGLoader', 'ScalarField', 'Scene', 'Sensor', 'Serrate', 'ShadowMaterial', 'Shape', 'ShapeGeometry', 'Side', 'SkeletonHelper', 'SoftBody', 'SogLoader', 'Sphere', 'SphereGeometry', 'SplatCloud', 'SplatData', 'SplatLoader', 'SplatPoseSet', 'SplineCurve', 'SpotLight', 'SpotLightHelper', 'Sprite', 'SpriteMaterial', 'SurfaceMesh', 'TerrainFalloff', 'TerrainGenerator', 'TerrainParams', 'Text2D', 'Text3D', 'TextSprite', 'Texture', 'TextureLoader', 'TextureWrapping', 'ToneMapping', 'TorusGeometry', 'TorusKnotGeometry', 'TransformControls', 'TreeGenerator', 'TreeParams', 'TubeGeometry', 'URDFLoader', 'Vector2', 'Vector3', 'Vector4', 'VectorKeyframeTrack', 'VerticalAlignment', 'VoxelGrid', 'VulkanRenderer', 'Walk', 'Whorl', 'WrenchSample', 'apply_terrain_preset', 'apply_tree_preset', 'bake_surface', 'clamp', 'damp', 'data_texture', 'deg_to_rad', 'editor', 'euclidean_modulo', 'float_texture', 'generate_uuid', 'icp_point_to_point', 'imgui', 'inverse_lerp', 'is_power_of_two', 'iso_mesh_to_geometry', 'lerp', 'make_bark_textures', 'make_flower_texture', 'make_leaf_texture', 'make_needle_frond_texture', 'make_sensor_mesh', 'map_linear', 'marching_cubes', 'merge_buffer_geometries', 'merge_vertices', 'rad_to_deg', 'rand_float', 'rand_float_range', 'rand_float_spread', 'rand_int', 'rotate_equirect', 'select_lod', 'simplify_geometry', 'splat_points_to_field', 'terrain_from_json', 'terrain_load_config', 'terrain_save_config', 'terrain_to_json', 'voxel_downsample', 'vulkan_available', 'vulkan_validation_active', 'vulkan_validation_error_count', 'write_wav']
 class AmbientLight(Light):
     def __init__(self, color: Color = ..., intensity: typing.SupportsFloat | typing.SupportsIndex = 1.0) -> None:
         ...
@@ -320,6 +320,79 @@ class AudioListener(Object3D):
         ...
 class AxesHelper(LineSegments):
     def __init__(self, size: typing.SupportsFloat | typing.SupportsIndex = 1.0) -> None:
+        ...
+class BVH:
+    @staticmethod
+    def distance(a: BVH, b: BVH, m1: Matrix4 = ..., m2: Matrix4 = ..., max_distance: typing.SupportsFloat | typing.SupportsIndex = ...) -> float:
+        """
+        Smallest surface-to-surface distance: 0 when the meshes intersect, inf when either is empty or nothing is closer than max_distance. A finite max_distance seeds the pruning bound and is much cheaper than an exact search.
+        """
+    @staticmethod
+    def distance_many(candidates: collections.abc.Sequence[BVH], targets: collections.abc.Sequence[BVH], max_distance: typing.SupportsFloat | typing.SupportsIndex = ...) -> numpy.typing.NDArray[numpy.float32]:
+        """
+        (C, T) float32 array of surface-to-surface distances; 0 where they intersect, inf beyond max_distance.
+        """
+    @staticmethod
+    def intersect(a: BVH, b: BVH, m1: Matrix4 = ..., m2: Matrix4 = ..., accurate: bool = True) -> numpy.typing.NDArray[numpy.float32]:
+        """
+        (N, 3) float32 points of intersection, one per intersecting triangle pair. With accurate=True each point lies on both surfaces; accurate=False is the cheap conservative form that reports the centres of overlapping leaf boxes.
+        """
+    @staticmethod
+    def intersect_many(candidates: collections.abc.Sequence[BVH], targets: collections.abc.Sequence[BVH], accurate: bool = True) -> list:
+        """
+        C x T nested list of (N, 3) float32 point arrays — the intersection points of every candidate/target pair. An empty (0, 3) array means no contact.
+        """
+    @staticmethod
+    def intersect_pairs(a: BVH, b: BVH, m1: Matrix4 = ..., m2: Matrix4 = ..., accurate: bool = True) -> tuple[numpy.typing.NDArray[numpy.int32], numpy.typing.NDArray[numpy.int32], numpy.typing.NDArray[numpy.float32]]:
+        """
+        As intersect(), plus which triangles met: (idx_a, idx_b, points). The indices are -1 when accurate=False, which reports nodes rather than triangles.
+        """
+    @staticmethod
+    def intersects(a: BVH, b: BVH, m1: Matrix4 = ..., m2: Matrix4 = ...) -> bool:
+        """
+        Do the two surfaces touch? Exact at the triangle level, early-exiting on the first hit.
+        """
+    @staticmethod
+    def intersects_many(candidates: collections.abc.Sequence[BVH], targets: collections.abc.Sequence[BVH]) -> numpy.typing.NDArray[numpy.bool]:
+        """
+        (C, T) bool array: does candidate i touch target j?
+        """
+    def __init__(self, max_triangles_per_node: typing.SupportsInt | typing.SupportsIndex = 8, max_subdivisions: typing.SupportsInt | typing.SupportsIndex = 10) -> None:
+        """
+        max_triangles_per_node is the leaf size; smaller gives a deeper tree that prunes harder.
+        """
+    def __repr__(self) -> str:
+        ...
+    def bounding_box(self) -> Box3:
+        """
+        Root bounds, in the BVH's own space.
+        """
+    def build(self, geometry: BufferGeometry) -> None:
+        """
+        Build from a BufferGeometry (indexed or a raw soup). The triangles are COPIED, so the geometry may be dropped afterwards.
+        """
+    def build_arrays(self, positions: typing.Annotated[numpy.typing.ArrayLike, numpy.float32], indices: typing.Annotated[numpy.typing.ArrayLike, numpy.uint32] | None = None) -> None:
+        """
+        Build from raw arrays: `positions` flat or (N, 3) float, `indices` a flat or (M, 3) uint32 triangle list, or None for a soup (three consecutive vertices per triangle) — the layout of BufferGeometry.get_attribute('position') / get_index().
+        """
+    def collect_boxes(self, leaves_only: bool = False) -> list[Box3]:
+        """
+        Every node's box, for debug visualisation.
+        """
+    def intersect_box(self, box: Box3, matrix: Matrix4 = ...) -> list[int]:
+        """
+        Indices of the triangles whose boxes overlap `box`.
+        """
+    def raycast(self, ray: Ray, max_distance: typing.SupportsFloat | typing.SupportsIndex = ...) -> RayHit | None:
+        """
+        Closest hit, or None. The ray is in the BVH's own space.
+        """
+    def raycast_any(self, ray: Ray, max_distance: typing.SupportsFloat | typing.SupportsIndex = ...) -> bool:
+        """
+        Early-out occlusion query: is anything hit within max_distance?
+        """
+    @property
+    def triangle_count(self) -> int:
         ...
 class Background:
     @typing.overload
@@ -701,6 +774,8 @@ class BufferGeometry:
     name: str
     def __init__(self) -> None:
         ...
+    def apply_matrix4(self, matrix: Matrix4) -> BufferGeometry:
+        ...
     def attribute_names(self) -> list[str]:
         """
         Sorted names of the attributes this geometry carries.
@@ -742,6 +817,10 @@ class BufferGeometry:
     def set_index(self, data: typing.Annotated[numpy.typing.ArrayLike, numpy.uint32]) -> BufferGeometry:
         """
         Give this geometry an index buffer, so its vertices can be shared between faces. Accepts a flat or (M, 3) integer array. Validated against the vertex count of the attributes already set, so set_attribute first. Sets the draw range to the whole index buffer; once indexed, a later set_attribute leaves the draw range alone.
+        """
+    def to_non_indexed(self) -> BufferGeometry:
+        """
+        A new geometry with the index resolved into duplicated vertices (a triangle soup).
         """
     def translate(self, x: typing.SupportsFloat | typing.SupportsIndex, y: typing.SupportsFloat | typing.SupportsIndex, z: typing.SupportsFloat | typing.SupportsIndex) -> BufferGeometry:
         ...
@@ -843,7 +922,7 @@ class CapsuleGeometry(BufferGeometry):
     @property
     def radius(self) -> float:
         ...
-class CatmullRomCurve3:
+class CatmullRomCurve3(Curve3):
     class CurveType:
         """
         Members:
@@ -892,48 +971,6 @@ class CatmullRomCurve3:
     def __init__(self, points: collections.abc.Sequence[Vector3] = [], closed: bool = False, curve_type: CatmullRomCurve3.CurveType = CatmullRomCurve3.CurveType.centripetal, tension: typing.SupportsFloat | typing.SupportsIndex = 0.5) -> None:
         ...
     def __repr__(self) -> str:
-        ...
-    def get_length(self) -> float:
-        """
-        Total arc length, from the cached table.
-        """
-    def get_lengths(self) -> list[float]:
-        """
-        Cumulative segment lengths, arc_length_divisions + 1 of them.
-        """
-    def get_point(self, t: typing.SupportsFloat | typing.SupportsIndex) -> Vector3:
-        """
-        Point at curve parameter t in [0, 1] (NOT arc length).
-        """
-    def get_point_at(self, u: typing.SupportsFloat | typing.SupportsIndex) -> Vector3:
-        """
-        Point at fraction u in [0, 1] of the ARC LENGTH — equidistant.
-        """
-    def get_points(self, divisions: typing.SupportsInt | typing.SupportsIndex = 5) -> list[Vector3]:
-        """
-        divisions + 1 points, evenly spaced in t.
-        """
-    def get_spaced_points(self, divisions: typing.SupportsInt | typing.SupportsIndex = 5) -> list[Vector3]:
-        """
-        divisions + 1 points, evenly spaced along the curve.
-        """
-    def get_tangent(self, t: typing.SupportsFloat | typing.SupportsIndex) -> Vector3:
-        """
-        Unit tangent at curve parameter t.
-        """
-    def get_tangent_at(self, u: typing.SupportsFloat | typing.SupportsIndex) -> Vector3:
-        """
-        Unit tangent at fraction u of the arc length.
-        """
-    def update_arc_lengths(self) -> None:
-        """
-        Rebuild the arc-length table after editing points in place.
-        """
-    @property
-    def arc_length_divisions(self) -> int:
-        ...
-    @arc_length_divisions.setter
-    def arc_length_divisions(self, arg0: typing.SupportsInt | typing.SupportsIndex) -> None:
         ...
     @property
     def points(self) -> list[Vector3]:
@@ -1254,6 +1291,96 @@ class CrownShape:
         ...
     @property
     def value(self) -> int:
+        ...
+class Curve2:
+    def get_length(self) -> float:
+        """
+        Total arc length, from the cached table.
+        """
+    def get_lengths(self) -> list[float]:
+        """
+        Cumulative segment lengths, arc_length_divisions + 1 of them.
+        """
+    def get_point(self, t: typing.SupportsFloat | typing.SupportsIndex) -> Vector2:
+        """
+        Point at curve parameter t in [0, 1] (NOT arc length).
+        """
+    def get_point_at(self, u: typing.SupportsFloat | typing.SupportsIndex) -> Vector2:
+        """
+        Point at fraction u in [0, 1] of the ARC LENGTH — equidistant.
+        """
+    def get_points(self, divisions: typing.SupportsInt | typing.SupportsIndex = 5) -> list[Vector2]:
+        """
+        divisions + 1 points, evenly spaced in t.
+        """
+    def get_spaced_points(self, divisions: typing.SupportsInt | typing.SupportsIndex = 5) -> list[Vector2]:
+        """
+        divisions + 1 points, evenly spaced along the curve.
+        """
+    def get_tangent(self, t: typing.SupportsFloat | typing.SupportsIndex) -> Vector2:
+        """
+        Unit tangent at curve parameter t.
+        """
+    def get_tangent_at(self, u: typing.SupportsFloat | typing.SupportsIndex) -> Vector2:
+        """
+        Unit tangent at fraction u of the arc length.
+        """
+    def update_arc_lengths(self) -> None:
+        """
+        Rebuild the arc-length table after editing the curve in place.
+        """
+    @property
+    def arc_length_divisions(self) -> int:
+        """
+        Segments used to build the arc-length table get_point_at and get_length work from.
+        """
+    @arc_length_divisions.setter
+    def arc_length_divisions(self, arg0: typing.SupportsInt | typing.SupportsIndex) -> None:
+        ...
+class Curve3:
+    def get_length(self) -> float:
+        """
+        Total arc length, from the cached table.
+        """
+    def get_lengths(self) -> list[float]:
+        """
+        Cumulative segment lengths, arc_length_divisions + 1 of them.
+        """
+    def get_point(self, t: typing.SupportsFloat | typing.SupportsIndex) -> Vector3:
+        """
+        Point at curve parameter t in [0, 1] (NOT arc length).
+        """
+    def get_point_at(self, u: typing.SupportsFloat | typing.SupportsIndex) -> Vector3:
+        """
+        Point at fraction u in [0, 1] of the ARC LENGTH — equidistant.
+        """
+    def get_points(self, divisions: typing.SupportsInt | typing.SupportsIndex = 5) -> list[Vector3]:
+        """
+        divisions + 1 points, evenly spaced in t.
+        """
+    def get_spaced_points(self, divisions: typing.SupportsInt | typing.SupportsIndex = 5) -> list[Vector3]:
+        """
+        divisions + 1 points, evenly spaced along the curve.
+        """
+    def get_tangent(self, t: typing.SupportsFloat | typing.SupportsIndex) -> Vector3:
+        """
+        Unit tangent at curve parameter t.
+        """
+    def get_tangent_at(self, u: typing.SupportsFloat | typing.SupportsIndex) -> Vector3:
+        """
+        Unit tangent at fraction u of the arc length.
+        """
+    def update_arc_lengths(self) -> None:
+        """
+        Rebuild the arc-length table after editing the curve in place.
+        """
+    @property
+    def arc_length_divisions(self) -> int:
+        """
+        Segments used to build the arc-length table get_point_at and get_length work from.
+        """
+    @arc_length_divisions.setter
+    def arc_length_divisions(self, arg0: typing.SupportsInt | typing.SupportsIndex) -> None:
         ...
 class CylinderGeometry(BufferGeometry):
     def __init__(self, radius_top: typing.SupportsFloat | typing.SupportsIndex = 1.0, radius_bottom: typing.SupportsFloat | typing.SupportsIndex = 1.0, height: typing.SupportsFloat | typing.SupportsIndex = 1.0, radial_segments: typing.SupportsInt | typing.SupportsIndex = 16, height_segments: typing.SupportsInt | typing.SupportsIndex = 1, open_ended: bool = False, theta_start: typing.SupportsFloat | typing.SupportsIndex = 0.0, theta_length: typing.SupportsFloat | typing.SupportsIndex = 6.2831854820251465) -> None:
@@ -1784,6 +1911,9 @@ class Euler:
         ...
     @z.setter
     def z(self, arg1: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+class ExtrudeGeometry(BufferGeometry):
+    def __init__(self, shapes: typing.Any, depth: typing.SupportsFloat | typing.SupportsIndex = 1.0, steps: typing.SupportsInt | typing.SupportsIndex = 1, bevel_enabled: bool = True, curve_segments: typing.SupportsInt | typing.SupportsIndex = 12, bevel_thickness: typing.SupportsFloat | typing.SupportsIndex = 0.20000000298023224, bevel_size: typing.SupportsFloat | typing.SupportsIndex = 0.10000000149011612, bevel_offset: typing.SupportsFloat | typing.SupportsIndex = 0.0, bevel_segments: typing.SupportsInt | typing.SupportsIndex = 3) -> None:
         ...
 class FBXLoader:
     class MaterialMode:
@@ -3403,6 +3533,33 @@ class KeyframeTrack:
     @property
     def values(self) -> list[float]:
         ...
+class Layers:
+    def __init__(self) -> None:
+        ...
+    def __repr__(self) -> str:
+        ...
+    def disable(self, channel: typing.SupportsInt | typing.SupportsIndex) -> None:
+        ...
+    def disable_all(self) -> None:
+        ...
+    def enable(self, channel: typing.SupportsInt | typing.SupportsIndex) -> None:
+        ...
+    def enable_all(self) -> None:
+        ...
+    def is_enabled(self, channel: typing.SupportsInt | typing.SupportsIndex) -> bool:
+        ...
+    def mask(self) -> int:
+        ...
+    def set(self, channel: typing.SupportsInt | typing.SupportsIndex) -> None:
+        """
+        Membership of exactly this one channel.
+        """
+    def test(self, layers: Layers) -> bool:
+        """
+        True if the two masks share a channel.
+        """
+    def toggle(self, channel: typing.SupportsInt | typing.SupportsIndex) -> None:
+        ...
 class LeafShape:
     """
     Members:
@@ -3683,6 +3840,7 @@ class Light(Object3D):
 class Line(Object3D):
     cast_shadow: bool
     frustum_culled: bool
+    layers: Layers
     matrix_auto_update: bool
     name: str
     position: Vector3
@@ -3815,6 +3973,20 @@ class LineBasicMaterial(Material):
         ...
     @opacity.setter
     def opacity(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+class LineCurve(Curve2):
+    v1: Vector2
+    v2: Vector2
+    def __init__(self, v1: Vector2, v2: Vector2) -> None:
+        ...
+    def __repr__(self) -> str:
+        ...
+class LineCurve3(Curve3):
+    v1: Vector3
+    v2: Vector3
+    def __init__(self, v1: Vector3, v2: Vector3) -> None:
+        ...
+    def __repr__(self) -> str:
         ...
 class LineSegments(Line):
     def __init__(self, geometry: BufferGeometry = None, material: typing.Any = None) -> None:
@@ -3977,6 +4149,12 @@ class Matrix4:
         ...
     def make_translation(self, x: typing.SupportsFloat | typing.SupportsIndex, y: typing.SupportsFloat | typing.SupportsIndex, z: typing.SupportsFloat | typing.SupportsIndex) -> Matrix4:
         ...
+    def multiply(self, m: Matrix4) -> Matrix4:
+        ...
+    def premultiply(self, m: Matrix4) -> Matrix4:
+        ...
+    def set(self, n11: typing.SupportsFloat | typing.SupportsIndex, n12: typing.SupportsFloat | typing.SupportsIndex, n13: typing.SupportsFloat | typing.SupportsIndex, n14: typing.SupportsFloat | typing.SupportsIndex, n21: typing.SupportsFloat | typing.SupportsIndex, n22: typing.SupportsFloat | typing.SupportsIndex, n23: typing.SupportsFloat | typing.SupportsIndex, n24: typing.SupportsFloat | typing.SupportsIndex, n31: typing.SupportsFloat | typing.SupportsIndex, n32: typing.SupportsFloat | typing.SupportsIndex, n33: typing.SupportsFloat | typing.SupportsIndex, n34: typing.SupportsFloat | typing.SupportsIndex, n41: typing.SupportsFloat | typing.SupportsIndex, n42: typing.SupportsFloat | typing.SupportsIndex, n43: typing.SupportsFloat | typing.SupportsIndex, n44: typing.SupportsFloat | typing.SupportsIndex) -> Matrix4:
+        ...
     def set_position(self, x: typing.SupportsFloat | typing.SupportsIndex, y: typing.SupportsFloat | typing.SupportsIndex, z: typing.SupportsFloat | typing.SupportsIndex) -> Matrix4:
         ...
     def to_numpy(self) -> numpy.typing.NDArray[numpy.float32]:
@@ -3986,6 +4164,7 @@ class Matrix4:
 class Mesh(Object3D):
     cast_shadow: bool
     frustum_culled: bool
+    layers: Layers
     matrix_auto_update: bool
     name: str
     position: Vector3
@@ -4611,6 +4790,7 @@ class OBJLoader:
 class Object3D:
     cast_shadow: bool
     frustum_culled: bool
+    layers: Layers
     matrix_auto_update: bool
     name: str
     position: Vector3
@@ -5590,6 +5770,27 @@ class ParticleField(Mesh):
     @property
     def mesh_repr(self) -> ParticleField.MeshRepr:
         ...
+class Path(Curve2):
+    auto_close: bool
+    current_point: Vector2
+    def __init__(self, points: collections.abc.Sequence[Vector2] = []) -> None:
+        ...
+    def absarc(self, x: typing.SupportsFloat | typing.SupportsIndex, y: typing.SupportsFloat | typing.SupportsIndex, radius: typing.SupportsFloat | typing.SupportsIndex, start_angle: typing.SupportsFloat | typing.SupportsIndex, end_angle: typing.SupportsFloat | typing.SupportsIndex, clockwise: bool = False) -> Path:
+        ...
+    def bezier_curve_to(self, cp1x: typing.SupportsFloat | typing.SupportsIndex, cp1y: typing.SupportsFloat | typing.SupportsIndex, cp2x: typing.SupportsFloat | typing.SupportsIndex, cp2y: typing.SupportsFloat | typing.SupportsIndex, x: typing.SupportsFloat | typing.SupportsIndex, y: typing.SupportsFloat | typing.SupportsIndex) -> Path:
+        ...
+    def close_path(self) -> None:
+        ...
+    def line_to(self, x: typing.SupportsFloat | typing.SupportsIndex, y: typing.SupportsFloat | typing.SupportsIndex) -> Path:
+        ...
+    def move_to(self, x: typing.SupportsFloat | typing.SupportsIndex, y: typing.SupportsFloat | typing.SupportsIndex) -> Path:
+        ...
+    def quadratic_curve_to(self, cpx: typing.SupportsFloat | typing.SupportsIndex, cpy: typing.SupportsFloat | typing.SupportsIndex, x: typing.SupportsFloat | typing.SupportsIndex, y: typing.SupportsFloat | typing.SupportsIndex) -> Path:
+        ...
+    def set_from_points(self, points: collections.abc.Sequence[Vector2]) -> Path:
+        ...
+    def spline_thru(self, points: collections.abc.Sequence[Vector2]) -> Path:
+        ...
 class PathTracedLidarSensor(Object3D, Sensor):
     """
     Path-traced LIDAR: fires beams through the renderer's own acceleration structure and returns full radiometric hits (position, normal, distance, intensity from the GPU back-scatter BRDF, stable instance id, return number/kind). Vulkan only; render() the scene at least once first so the TLAS exists.
@@ -6114,6 +6315,7 @@ class PointLightHelper(Mesh):
 class Points(Object3D):
     cast_shadow: bool
     frustum_culled: bool
+    layers: Layers
     matrix_auto_update: bool
     name: str
     position: Vector3
@@ -6367,6 +6569,44 @@ class RangeNoiseModel:
         """
     @stddev_per_metre.setter
     def stddev_per_metre(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+class Ray:
+    direction: Vector3
+    origin: Vector3
+    def __init__(self, origin: Vector3 = ..., direction: Vector3 = ...) -> None:
+        ...
+    def __repr__(self) -> str:
+        ...
+    def apply_matrix4(self, matrix: Matrix4) -> Ray:
+        ...
+    def at(self, t: typing.SupportsFloat | typing.SupportsIndex) -> Vector3:
+        """
+        The point `t` along the ray from its origin.
+        """
+    def distance_to_point(self, point: Vector3) -> float:
+        ...
+    def intersects_box(self, box: Box3) -> bool:
+        ...
+    def look_at(self, v: Vector3) -> Ray:
+        ...
+    def set(self, origin: Vector3, direction: Vector3) -> Ray:
+        ...
+class RayHit:
+    def __repr__(self) -> str:
+        ...
+    @property
+    def distance(self) -> float:
+        ...
+    @property
+    def normal(self) -> Vector3:
+        """
+        Geometric face normal, flipped to face the ray origin.
+        """
+    @property
+    def point(self) -> Vector3:
+        ...
+    @property
+    def triangle_index(self) -> int:
         ...
 class RectAreaLight(Light):
     def __init__(self, color: Color = ..., intensity: typing.SupportsFloat | typing.SupportsIndex = 1.0, width: typing.SupportsFloat | typing.SupportsIndex = 1.0, height: typing.SupportsFloat | typing.SupportsIndex = 1.0) -> None:
@@ -6633,6 +6873,27 @@ class ShadowMaterial(Material):
     @opacity.setter
     def opacity(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
         ...
+class Shape(Path):
+    def __init__(self, points: collections.abc.Sequence[Vector2] = []) -> None:
+        ...
+    def __repr__(self) -> str:
+        ...
+    def extract_points(self, divisions: typing.SupportsInt | typing.SupportsIndex = 12) -> tuple[list[Vector2], list[list[Vector2]]]:
+        """
+        (outline, holes) as point lists, sampling every curve segment with `divisions` steps.
+        """
+    @property
+    def holes(self) -> list[Path]:
+        ...
+    @holes.setter
+    def holes(self, arg0: collections.abc.Sequence[Path]) -> None:
+        ...
+    @property
+    def uuid(self) -> str:
+        ...
+class ShapeGeometry(BufferGeometry):
+    def __init__(self, shapes: typing.Any, curve_segments: typing.SupportsInt | typing.SupportsIndex = 12) -> None:
+        ...
 class Side:
     """
     Members:
@@ -6888,6 +7149,17 @@ class SplatPoseSet:
         ...
     @property
     def value(self) -> int:
+        ...
+class SplineCurve(Curve2):
+    def __init__(self, points: collections.abc.Sequence[Vector2] = []) -> None:
+        ...
+    def __repr__(self) -> str:
+        ...
+    @property
+    def points(self) -> list[Vector2]:
+        ...
+    @points.setter
+    def points(self, arg0: collections.abc.Sequence[Vector2]) -> None:
         ...
 class SpotLight(Light):
     def __init__(self, color: Color = ..., intensity: typing.SupportsFloat | typing.SupportsIndex = 1.0, distance: typing.SupportsFloat | typing.SupportsIndex = 0.0, angle: typing.SupportsFloat | typing.SupportsIndex = 1.0471975803375244, penumbra: typing.SupportsFloat | typing.SupportsIndex = 0.0, decay: typing.SupportsFloat | typing.SupportsIndex = 1.0) -> None:
@@ -7834,6 +8106,14 @@ class TreeParams:
         ...
     @whorl_spacing.setter
     def whorl_spacing(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+class TubeGeometry(BufferGeometry):
+    def __init__(self, path: Curve3, tubular_segments: typing.SupportsInt | typing.SupportsIndex = 64, radius: typing.SupportsFloat | typing.SupportsIndex = 1.0, radial_segments: typing.SupportsInt | typing.SupportsIndex = 8, closed: bool = False) -> None:
+        ...
+    def get_path(self) -> Curve3:
+        ...
+    @property
+    def radius(self) -> float:
         ...
 class URDFLoader:
     def __init__(self) -> None:

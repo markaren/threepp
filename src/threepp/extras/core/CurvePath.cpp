@@ -51,14 +51,14 @@ void CurvePath<T>::getPoint(float t, T& target) const {
             auto u = segmentLength == 0 ? 0 : 1 - diff / segmentLength;
 
             curve->getPointAt(u, target);
+            return;
         }
 
         ++i;
     }
 
+    // t outside [0, 1], or a path with no curves.
     target.makeNan();
-
-    // loop where sum != 0, sum > d , sum+1 <d
 }
 
 template<class T>

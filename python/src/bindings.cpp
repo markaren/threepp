@@ -59,8 +59,12 @@ PYBIND11_MODULE(threepp, m) {
     tp::init_textures(m);// before materials: their map slots reference Texture
     tp::init_core(m);
     tp::init_sensor_base(m);// Sensor base: before init_render, whose DepthSensor derives from it
+    // Curves and 2-D shapes before the geometries built from them (TubeGeometry
+    // takes a Curve3, ExtrudeGeometry a Shape); both need Vector2/Vector3 from
+    // init_math.
+    tp::init_curves(m);
     tp::init_geometries(m);
-    tp::init_curves(m);// CatmullRomCurve3; needs Vector3 from init_math
+    tp::init_bvh(m);   // BVH + RayHit; needs BufferGeometry from init_geometries
     tp::init_editor(m);// threepp.editor; needs the CurveType enum from init_curves
     tp::init_materials(m);
     tp::init_objects(m);

@@ -17,6 +17,7 @@
 #include "threepp/math/Matrix3.hpp"
 #include "threepp/math/Matrix4.hpp"
 #include "threepp/math/Quaternion.hpp"
+#include "threepp/math/Ray.hpp"
 #include "threepp/math/MathUtils.hpp"
 #include "threepp/math/Vector2.hpp"
 #include "threepp/math/Vector3.hpp"
@@ -220,6 +221,18 @@ namespace threepp_py {
                 .def("transpose", &Matrix4::transpose, py::return_value_policy::reference_internal)
                 .def("determinant", &Matrix4::determinant)
                 .def("copy", &Matrix4::copy, py::arg("m"), py::return_value_policy::reference_internal)
+                // Row-major, like three.js' Matrix4.set: n11 is the first row's
+                // first column. (`elements()` reads back the column-major buffer.)
+                .def("set", &Matrix4::set,
+                     py::arg("n11"), py::arg("n12"), py::arg("n13"), py::arg("n14"),
+                     py::arg("n21"), py::arg("n22"), py::arg("n23"), py::arg("n24"),
+                     py::arg("n31"), py::arg("n32"), py::arg("n33"), py::arg("n34"),
+                     py::arg("n41"), py::arg("n42"), py::arg("n43"), py::arg("n44"),
+                     py::return_value_policy::reference_internal)
+                .def("multiply", [](Matrix4& self, const Matrix4& m) -> Matrix4& { return self.multiply(m); },
+                     py::arg("m"), py::return_value_policy::reference_internal)
+                .def("premultiply", [](Matrix4& self, const Matrix4& m) -> Matrix4& { return self.premultiply(m); },
+                     py::arg("m"), py::return_value_policy::reference_internal)
                 .def("make_translation", py::overload_cast<float, float, float>(&Matrix4::makeTranslation), py::arg("x"), py::arg("y"), py::arg("z"), py::return_value_policy::reference_internal)
                 .def("make_rotation_x", &Matrix4::makeRotationX, py::arg("theta"), py::return_value_policy::reference_internal)
                 .def("make_rotation_y", &Matrix4::makeRotationY, py::arg("theta"), py::return_value_policy::reference_internal)
@@ -256,6 +269,32 @@ namespace threepp_py {
                 .def("set_from_object", [](Box3& b, const py::object& obj, bool precise) -> Box3& {
                     return b.setFromObject(*as_object3d(obj), precise);
                 }, py::arg("object"), py::arg("precise") = false, py::return_value_policy::reference_internal);
+
+        // ---- Ray -------------------------------------------------------------
+        // Used by BVH.raycast. `direction` is expected to be a unit vector.
+        py::class_<Ray>(m, "Ray")
+                .def(py::init<const Vector3&, const Vector3&>(),
+                     py::arg("origin") = Vector3(), py::arg("direction") = Vector3(0, 0, -1))
+                .def_readwrite("origin", &Ray::origin)
+                .def_readwrite("direction", &Ray::direction)
+                .def("set", &Ray::set, py::arg("origin"), py::arg("direction"), py::return_value_policy::reference_internal)
+                .def("look_at", &Ray::lookAt, py::arg("v"), py::return_value_policy::reference_internal)
+                .def(
+                        "at", [](const Ray& r, float t) {
+                            Vector3 v;
+                            r.at(t, v);
+                            return v;
+                        },
+                        py::arg("t"), "The point `t` along the ray from its origin.")
+                .def("distance_to_point", &Ray::distanceToPoint, py::arg("point"))
+                .def("intersects_box", &Ray::intersectsBox, py::arg("box"))
+                .def("apply_matrix4", &Ray::applyMatrix4, py::arg("matrix"), py::return_value_policy::reference_internal)
+                .def("__repr__", [](const Ray& r) {
+                    std::ostringstream o;
+                    o << "Ray(origin=(" << r.origin.x << ", " << r.origin.y << ", " << r.origin.z
+                      << "), direction=(" << r.direction.x << ", " << r.direction.y << ", " << r.direction.z << "))";
+                    return o.str();
+                });
 
         // ---- MathUtils free functions (module-level) -------------------------
         // Plain scalar helpers from threepp::math, reimplemented constantly in

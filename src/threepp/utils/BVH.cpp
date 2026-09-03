@@ -1,9 +1,14 @@
 #include "threepp/utils/BVH.hpp"
 
 #include "threepp/core/BufferGeometry.hpp"
+#include "threepp/utils/TriangleIntersect.hpp"
 
 #include <algorithm>
+#include <cmath>
 #include <functional>
+#include <limits>
+#include <stdexcept>
+#include <utility>
 
 using namespace threepp;
 
@@ -12,6 +17,59 @@ namespace {
     // Keeps a segment query between two points that lie exactly on a surface
     // from hitting the surfaces the endpoints sit on.
     constexpr float rayEps = 1e-4f;
+
+    // Transforms are passed as `const Matrix4*`, null meaning identity, so the
+    // identity case skips the per-node box and per-triangle transforms.
+    const Matrix4* nonIdentity(const Matrix4& m) {
+        static const Matrix4 identity;
+        return m.elements == identity.elements ? nullptr : &m;
+    }
+
+    void transformBox(const Box3& src, const Matrix4* m, Box3& dst) {
+        dst.copy(src);
+        if (m) dst.applyMatrix4(*m);
+    }
+
+    void transformTriangle(const Triangle& src, const Matrix4* m, Triangle& dst) {
+        if (!m) {
+            dst.set(src.a(), src.b(), src.c());
+            return;
+        }
+        Vector3 a{src.a()}, b{src.b()}, c{src.c()};
+        dst.set(a.applyMatrix4(*m), b.applyMatrix4(*m), c.applyMatrix4(*m));
+    }
+
+    Box3 triangleBox(const Triangle& t) {
+        Box3 box;
+        box.expandByPoint(t.a());
+        box.expandByPoint(t.b());
+        box.expandByPoint(t.c());
+        return box;
+    }
+
+    // One leaf's triangles, transformed and boxed. Keyed on the address of the
+    // node's index vector, so a leaf tested against several opposing leaves is
+    // transformed once; the buffers are reused across the traversal.
+    struct LeafCache {
+        const void* key{};
+        std::vector<Triangle> triangles;
+        std::vector<Box3> boxes;
+
+        void load(const std::vector<Triangle>& source, const std::vector<int>& indices, const Matrix4* m) {
+            if (key == &indices) return;
+            key = &indices;
+            triangles.resize(indices.size());
+            boxes.resize(indices.size());
+            for (std::size_t i = 0; i < indices.size(); ++i) {
+                transformTriangle(source[indices[i]], m, triangles[i]);
+                boxes[i] = triangleBox(triangles[i]);
+            }
+        }
+
+        [[nodiscard]] std::size_t size() const {
+            return triangles.size();
+        }
+    };
 
 }// namespace
 
@@ -74,6 +132,8 @@ std::unique_ptr<BVH::BVHNode> BVH::buildNode(std::vector<int>& indices, int dept
 
 void BVH::build(const BufferGeometry& geom) {
     triangles.clear();
+    // Reset before the early return: the old tree would otherwise index a cleared triangle list.
+    root.reset();
     geometry = &geom;
 
     const auto posAttr = geom.getAttribute<float>("position");
@@ -111,12 +171,113 @@ void BVH::build(const BufferGeometry& geom) {
     root = buildNode(indices, 0);
 }
 
+void BVH::build(const std::vector<float>& positions, const std::vector<unsigned int>& indices) {
+    triangles.clear();
+    // The triangles are copied; there is no geometry to point at.
+    geometry = nullptr;
+    root.reset();
+
+    const auto vertexCount = positions.size() / 3;
+    const auto vertex = [&positions](std::size_t i) {
+        return Vector3(positions[i * 3], positions[i * 3 + 1], positions[i * 3 + 2]);
+    };
+
+    std::vector<int> triangleIndices;
+
+    if (!indices.empty()) {
+        if (indices.size() % 3 != 0) {
+            throw std::invalid_argument("BVH::build: index count must be a multiple of 3");
+        }
+        for (std::size_t i = 0; i + 2 < indices.size(); i += 3) {
+            const auto a = indices[i], b = indices[i + 1], c = indices[i + 2];
+            if (a >= vertexCount || b >= vertexCount || c >= vertexCount) {
+                throw std::out_of_range("BVH::build: index out of range for the given positions");
+            }
+            triangles.emplace_back(vertex(a), vertex(b), vertex(c));
+            triangleIndices.emplace_back(static_cast<int>(triangles.size()) - 1);
+        }
+    } else {
+        if (positions.size() % 9 != 0) {
+            throw std::invalid_argument("BVH::build: a non-indexed soup needs 9 floats (3 vertices) per triangle");
+        }
+        for (std::size_t i = 0; i + 2 < vertexCount; i += 3) {
+            triangles.emplace_back(vertex(i), vertex(i + 1), vertex(i + 2));
+            triangleIndices.emplace_back(static_cast<int>(triangles.size()) - 1);
+        }
+    }
+
+    root = buildNode(triangleIndices, 0);
+}
+
 std::vector<BVH::IntersectionResult> BVH::intersect(const BVH& b1, const Matrix4& m1, const BVH& b2, const Matrix4& m2, bool accurate) {
     std::vector<IntersectionResult> results;
+    if (!b1.root || !b2.root) return results;
 
-    // Test intersection between the two BVH trees
-    intersectBVHNodes(b1, b1.root.get(), m1, b2, b2.root.get(), m2, results, accurate);
+    const Matrix4* t1 = nonIdentity(m1);
+    const Matrix4* t2 = nonIdentity(m2);
 
+    LeafCache cacheA, cacheB;
+    Vector3 center;
+
+    const auto visit = [&](auto&& self, const BVHNode* nodeA, const BVHNode* nodeB) -> void {
+        Box3 bb1, bb2;
+        transformBox(nodeA->boundingBox, t1, bb1);
+        transformBox(nodeB->boundingBox, t2, bb2);
+
+        // Quick rejection test using bounding boxes
+        if (!bb1.intersectsBox(bb2)) return;
+
+        if (nodeA->isLeaf() && nodeB->isLeaf()) {
+
+            if (accurate) {
+                // One result per intersecting triangle pair; `position` lies on both surfaces.
+                cacheA.load(b1.triangles, nodeA->triangleIndices, t1);
+                cacheB.load(b2.triangles, nodeB->triangleIndices, t2);
+
+                for (std::size_t i = 0; i < cacheA.size(); ++i) {
+                    if (!cacheA.boxes[i].intersectsBox(bb2)) continue;
+                    for (std::size_t j = 0; j < cacheB.size(); ++j) {
+                        if (!cacheA.boxes[i].intersectsBox(cacheB.boxes[j])) continue;
+                        if (detail::triTriIntersectionPoint(cacheA.triangles[i], cacheB.triangles[j], center)) {
+                            results.emplace_back(IntersectionResult{
+                                    nodeA->triangleIndices[i], nodeB->triangleIndices[j], center});
+                        }
+                    }
+                }
+            } else {
+                const Box3 intersectionBox(
+                        {std::max(bb1.min().x, bb2.min().x),
+                         std::max(bb1.min().y, bb2.min().y),
+                         std::max(bb1.min().z, bb2.min().z)},
+                        {std::min(bb1.max().x, bb2.max().x),
+                         std::min(bb1.max().y, bb2.max().y),
+                         std::min(bb1.max().z, bb2.max().z)});
+
+                intersectionBox.getCenter(center);
+                // Use -1 for idxA/idxB to indicate node-level intersection
+                results.emplace_back(IntersectionResult{-1, -1, center});
+            }
+            return;
+        }
+
+        // Split the side with the larger box (if it has children).
+        Vector3 sizeA, sizeB;
+        bb1.getSize(sizeA);
+        bb2.getSize(sizeB);
+        const float volumeA = sizeA.x * sizeA.y * sizeA.z;
+        const float volumeB = sizeB.x * sizeB.y * sizeB.z;
+
+        const bool descendA = nodeA->left && nodeA->right && (volumeA >= volumeB || !(nodeB->left && nodeB->right));
+        if (descendA) {
+            self(self, nodeA->left.get(), nodeB);
+            self(self, nodeA->right.get(), nodeB);
+        } else {
+            self(self, nodeA, nodeB->left.get());
+            self(self, nodeA, nodeB->right.get());
+        }
+    };
+
+    visit(visit, b1.root.get(), b2.root.get());
     return results;
 }
 
@@ -197,91 +358,58 @@ std::vector<int> BVH::intersect(const Sphere& sphere, const Matrix4& m) const {
 bool BVH::intersects(const BVH& b1, const BVH& b2, const Matrix4& m1, const Matrix4& m2) {
     if (!b1.root || !b2.root) return false;
 
-    // Create transformed copies of the bounding boxes
-    const Box3 thisRootBox = b1.root->boundingBox.clone().applyMatrix4(m1);
-    const Box3 otherRootBox = b2.root->boundingBox.clone().applyMatrix4(m2);
+    const Matrix4* t1 = nonIdentity(m1);
+    const Matrix4* t2 = nonIdentity(m2);
 
-    // Quick rejection test
-    if (!thisRootBox.intersectsBox(otherRootBox)) {
-        return false;
-    }
+    Box3 rootA, rootB;
+    transformBox(b1.root->boundingBox, t1, rootA);
+    transformBox(b2.root->boundingBox, t2, rootB);
+    if (!rootA.intersectsBox(rootB)) return false;
 
-    Box3 boxA, boxB;
-    Vector3 sizeA, sizeB;
+    LeafCache cacheA, cacheB;
 
-    // Helper function to test transformed triangles
-    std::function<bool(const BVHNode*, const BVHNode*)> testNodes = [&](const BVHNode* nodeA, const BVHNode* nodeB) -> bool {
-        // Transform bounding boxes for this test
-        boxA.copy(nodeA->boundingBox).applyMatrix4(m1);
-        boxB.copy(nodeB->boundingBox).applyMatrix4(m2);
+    // Generic recursive lambda rather than std::function: called once per
+    // unseparated node pair, where the indirect call is a measurable share of the query.
+    const auto testNodes = [&](auto&& self, const BVHNode* nodeA, const BVHNode* nodeB) -> bool {
+        Box3 boxA, boxB;
+        transformBox(nodeA->boundingBox, t1, boxA);
+        transformBox(nodeB->boundingBox, t2, boxB);
 
-        if (!boxA.intersectsBox(boxB)) {
-            return false;
-        }
+        if (!boxA.intersectsBox(boxB)) return false;
 
-        // If both nodes are leaves, test triangles
         if (nodeA->isLeaf() && nodeB->isLeaf()) {
 
-            Box3 boxTriA, boxTriB;
-            for (const int idxA : nodeA->triangleIndices) {
+            // Exact triangle test at the leaves; a box-only test reports near misses as hits.
+            cacheA.load(b1.triangles, nodeA->triangleIndices, t1);
+            cacheB.load(b2.triangles, nodeB->triangleIndices, t2);
 
-                const Triangle& triA = b1.triangles[idxA];
-
-                boxTriA.makeEmpty();
-                boxTriA.expandByPoint(triA.a());
-                boxTriA.expandByPoint(triA.b());
-                boxTriA.expandByPoint(triA.c());
-                boxTriA.applyMatrix4(m1);
-
-                for (const int idxB : nodeB->triangleIndices) {
-
-                    const Triangle& triB = b2.triangles[idxB];
-
-                    boxTriB.makeEmpty();
-                    boxTriB.expandByPoint(triB.a());
-                    boxTriB.expandByPoint(triB.b());
-                    boxTriB.expandByPoint(triB.c());
-                    boxTriB.applyMatrix4(m2);
-
-                    if (boxTriA.intersectsBox(boxTriB)) {
-                        return true;
-                    }
+            for (std::size_t i = 0; i < cacheA.size(); ++i) {
+                if (!cacheA.boxes[i].intersectsBox(boxB)) continue;
+                for (std::size_t j = 0; j < cacheB.size(); ++j) {
+                    if (!cacheA.boxes[i].intersectsBox(cacheB.boxes[j])) continue;
+                    if (detail::triTriOverlap(cacheA.triangles[i], cacheB.triangles[j])) return true;
                 }
             }
             return false;
         }
 
-        // Recursively descend into smaller node first (heuristic)
-
+        // Split the side with the larger box (if it has children).
+        Vector3 sizeA, sizeB;
         boxA.getSize(sizeA);
         boxB.getSize(sizeB);
         const float volumeA = sizeA.x * sizeA.y * sizeA.z;
         const float volumeB = sizeB.x * sizeB.y * sizeB.z;
 
-        if (volumeA < volumeB) {
-            // A is smaller, descend A
-            if (nodeA->left && nodeA->right) {
-                return testNodes(nodeA->left.get(), nodeB) ||
-                       testNodes(nodeA->right.get(), nodeB);
-            } else {
-                // B must have children, descend B
-                return testNodes(nodeA, nodeB->left.get()) ||
-                       testNodes(nodeA, nodeB->right.get());
-            }
-        } else {
-            // B is smaller, descend B
-            if (nodeB->left && nodeB->right) {
-                return testNodes(nodeA, nodeB->left.get()) ||
-                       testNodes(nodeA, nodeB->right.get());
-            } else {
-                // A must have children, descend A
-                return testNodes(nodeA->left.get(), nodeB) ||
-                       testNodes(nodeA->right.get(), nodeB);
-            }
+        const bool descendA = nodeA->left && nodeA->right && (volumeA >= volumeB || !(nodeB->left && nodeB->right));
+        if (descendA) {
+            return self(self, nodeA->left.get(), nodeB) ||
+                   self(self, nodeA->right.get(), nodeB);
         }
+        return self(self, nodeA, nodeB->left.get()) ||
+               self(self, nodeA, nodeB->right.get());
     };
 
-    return testNodes(b1.root.get(), b2.root.get());
+    return testNodes(testNodes, b1.root.get(), b2.root.get());
 }
 
 std::optional<BVH::RayHit> BVH::raycast(const Ray& ray, float maxDistance) const {
@@ -369,106 +497,85 @@ void BVH::collectBoxes(std::vector<BVHBox3>& boxes) const {
     collectBoxes(root.get(), boxes);
 }
 
-void BVH::intersectBVHNodes(const BVH& b1, const BVHNode* nodeA, const Matrix4& m1, const BVH& b2, const BVHNode* nodeB, const Matrix4& m2, std::vector<IntersectionResult>& results, bool accurate) {
+float BVH::distance(const BVH& b1, const BVH& b2, const Matrix4& m1, const Matrix4& m2, float maxDistance) {
+    constexpr float inf = std::numeric_limits<float>::infinity();
+    if (!b1.root || !b2.root || b1.triangles.empty() || b2.triangles.empty()) return inf;
+    if (maxDistance <= 0.f) return inf;
 
-    Box3 bb1 = nodeA->boundingBox.clone();
-    bb1.applyMatrix4(m1);
+    const Matrix4* t1 = nonIdentity(m1);
+    const Matrix4* t2 = nonIdentity(m2);
 
-    Box3 bb2 = nodeB->boundingBox.clone();
-    bb2.applyMatrix4(m2);
+    const float limitSq = maxDistance == inf ? inf : maxDistance * maxDistance;
+    float bestSq = limitSq;
+    LeafCache cacheA, cacheB;
 
-    // Quick rejection test using bounding boxes
-    if (!bb1.intersectsBox(bb2)) {
-        return;
-    }
+    // Depth-first with a running best: node pairs whose boxes are farther apart
+    // than bestSq are pruned, and the nearer child is visited first so bestSq drops early.
+    const auto visit = [&](auto&& self, const BVHNode* nodeA, const Box3& boxA,
+                           const BVHNode* nodeB, const Box3& boxB) -> void {
+        if (bestSq <= 0.f) return;
+        if (detail::boxDistanceSq(boxA, boxB) >= bestSq) return;
 
-    // If both nodes are leaves, test all triangle pairs
-    if (nodeA->isLeaf() && nodeB->isLeaf()) {
+        if (nodeA->isLeaf() && nodeB->isLeaf()) {
+            cacheA.load(b1.triangles, nodeA->triangleIndices, t1);
+            cacheB.load(b2.triangles, nodeB->triangleIndices, t2);
 
-        Vector3 center;
-        if (accurate) {
-            Box3 boxA, boxB, intersectionBox;
-            for (const int idxA : nodeA->triangleIndices) {
+            for (std::size_t i = 0; i < cacheA.size(); ++i) {
+                if (detail::boxDistanceSq(cacheA.boxes[i], boxB) >= bestSq) continue;
 
-                const Triangle& triA = b1.triangles[idxA];
+                for (std::size_t j = 0; j < cacheB.size(); ++j) {
+                    if (detail::boxDistanceSq(cacheA.boxes[i], cacheB.boxes[j]) >= bestSq) continue;
 
-                boxA.makeEmpty();
-                boxA.expandByPoint(triA.a());
-                boxA.expandByPoint(triA.b());
-                boxA.expandByPoint(triA.c());
-                boxA.applyMatrix4(m1);
-
-                for (const int idxB : nodeB->triangleIndices) {
-                    // Could implement detailed triangle-triangle intersection here
-                    // For now, using bounding box test as an approximation
-
-                    const Triangle& triB = b2.triangles[idxB];
-
-                    boxB.makeEmpty();
-                    boxB.expandByPoint(triB.a());
-                    boxB.expandByPoint(triB.b());
-                    boxB.expandByPoint(triB.c());
-                    boxB.applyMatrix4(m2);
-
-                    if (boxA.intersectsBox(boxB)) {
-                        // Compute intersection box
-                        intersectionBox.set({std::max(boxA.min().x, boxB.min().x),
-                                             std::max(boxA.min().y, boxB.min().y),
-                                             std::max(boxA.min().z, boxB.min().z)},
-                                            {std::min(boxA.max().x, boxB.max().x),
-                                             std::min(boxA.max().y, boxB.max().y),
-                                             std::min(boxA.max().z, boxB.max().z)});
-
-
-                        intersectionBox.getCenter(center);
-                        results.emplace_back(IntersectionResult{idxA, idxB, center});
-                    }
+                    bestSq = std::min(bestSq, detail::triTriDistanceSq(cacheA.triangles[i], cacheB.triangles[j]));
+                    if (bestSq <= 0.f) return;
                 }
             }
-        } else {
-            const Box3 intersectionBox(
-                    {std::max(bb1.min().x, bb2.min().x),
-                     std::max(bb1.min().y, bb2.min().y),
-                     std::max(bb1.min().z, bb2.min().z)},
-                    {std::min(bb1.max().x, bb2.max().x),
-                     std::min(bb1.max().y, bb2.max().y),
-                     std::min(bb1.max().z, bb2.max().z)});
-
-            intersectionBox.getCenter(center);
-            // Use -1 for idxA/idxB to indicate node-level intersection
-            results.emplace_back(IntersectionResult{-1, -1, center});
+            return;
         }
-        return;
-    }
 
-    // Recursively descend into smaller node first (heuristic)
-    Vector3 sizeA, sizeB;
-    nodeA->boundingBox.getSize(sizeA);
-    nodeB->boundingBox.getSize(sizeB);
-    const float volumeA = sizeA.x * sizeA.y * sizeA.z;
-    const float volumeB = sizeB.x * sizeB.y * sizeB.z;
+        // Split whichever side still has children, preferring the bigger box.
+        Vector3 sizeA, sizeB;
+        boxA.getSize(sizeA);
+        boxB.getSize(sizeB);
+        const float volumeA = sizeA.x * sizeA.y * sizeA.z;
+        const float volumeB = sizeB.x * sizeB.y * sizeB.z;
+        const bool splitA = nodeA->left && nodeA->right && (volumeA >= volumeB || !(nodeB->left && nodeB->right));
 
-    if (volumeA < volumeB) {
-        // A is smaller, descend A
-        if (nodeA->left && nodeA->right) {
-            intersectBVHNodes(b1, nodeA->left.get(), m1, b2, nodeB, m2, results, accurate);
-            intersectBVHNodes(b1, nodeA->right.get(), m1, b2, nodeB, m2, results, accurate);
+        const BVHNode* first;
+        const BVHNode* second;
+        Box3 firstBox, secondBox;
+        if (splitA) {
+            transformBox(nodeA->left->boundingBox, t1, firstBox);
+            transformBox(nodeA->right->boundingBox, t1, secondBox);
+            first = nodeA->left.get();
+            second = nodeA->right.get();
+            if (detail::boxDistanceSq(secondBox, boxB) < detail::boxDistanceSq(firstBox, boxB)) {
+                std::swap(first, second);
+                std::swap(firstBox, secondBox);
+            }
+            self(self, first, firstBox, nodeB, boxB);
+            self(self, second, secondBox, nodeB, boxB);
         } else {
-            // B must have children, descend B
-            intersectBVHNodes(b1, nodeA, m1, b2, nodeB->left.get(), m2, results, accurate);
-            intersectBVHNodes(b1, nodeA, m1, b2, nodeB->right.get(), m2, results, accurate);
+            transformBox(nodeB->left->boundingBox, t2, firstBox);
+            transformBox(nodeB->right->boundingBox, t2, secondBox);
+            first = nodeB->left.get();
+            second = nodeB->right.get();
+            if (detail::boxDistanceSq(boxA, secondBox) < detail::boxDistanceSq(boxA, firstBox)) {
+                std::swap(first, second);
+                std::swap(firstBox, secondBox);
+            }
+            self(self, nodeA, boxA, first, firstBox);
+            self(self, nodeA, boxA, second, secondBox);
         }
-    } else {
-        // B is smaller, descend B
-        if (nodeB->left && nodeB->right) {
-            intersectBVHNodes(b1, nodeA, m1, b2, nodeB->left.get(), m2, results, accurate);
-            intersectBVHNodes(b1, nodeA, m1, b2, nodeB->right.get(), m2, results, accurate);
-        } else {
-            // A must have children, descend A
-            intersectBVHNodes(b1, nodeA->left.get(), m1, b2, nodeB, m2, results, accurate);
-            intersectBVHNodes(b1, nodeA->right.get(), m1, b2, nodeB, m2, results, accurate);
-        }
-    }
+    };
+
+    Box3 rootA, rootB;
+    transformBox(b1.root->boundingBox, t1, rootA);
+    transformBox(b2.root->boundingBox, t2, rootB);
+    visit(visit, b1.root.get(), rootA, b2.root.get(), rootB);
+
+    // Nothing closer than the cutoff.
+    return bestSq >= limitSq ? inf : std::sqrt(bestSq);
 }
 
 void BVH::collectBoxes(const BVHNode* node, std::vector<BVHBox3>& boxes) {

@@ -8,7 +8,9 @@
 #include "threepp/core/BufferGeometry.hpp"
 #include "threepp/geometries/geometries.hpp"
 // Not aggregated by geometries.hpp:
+#include "threepp/extras/core/Shape.hpp"
 #include "threepp/geometries/ConvexGeometry.hpp"
+#include "threepp/geometries/ExtrudeGeometry.hpp"
 #include "threepp/geometries/OctahedronGeometry.hpp"
 #include "threepp/geometries/TorusKnotGeometry.hpp"
 #include "threepp/math/MathUtils.hpp"
@@ -125,6 +127,65 @@ namespace threepp_py {
                 }),
                      py::arg("points"))
                 .def("contains_point", &ConvexGeometry::containsPoint, py::arg("point"), py::arg("tolerance") = -1.f);
+
+        // ---- TubeGeometry ----------------------------------------------------
+        // `path` is kept alive by the geometry. radial_segments defaults to 8 as in
+        // three.js (the C++ create() default is 16).
+        py::class_<TubeGeometry, BufferGeometry, std::shared_ptr<TubeGeometry>>(m, "TubeGeometry")
+                .def(py::init([](std::shared_ptr<Curve3> path, unsigned ts, float radius, unsigned rs, bool closed) {
+                         if (!path) throw std::invalid_argument("TubeGeometry: path must not be None");
+                         return TubeGeometry::create(std::move(path), TubeGeometry::Params(ts, radius, rs, closed));
+                     }),
+                     py::arg("path"), py::arg("tubular_segments") = 64, py::arg("radius") = 1.f,
+                     py::arg("radial_segments") = 8, py::arg("closed") = false)
+                .def_readonly("radius", &TubeGeometry::radius)
+                .def("get_path", &TubeGeometry::getPath, py::return_value_policy::reference_internal);
+
+        // ---- ExtrudeGeometry -------------------------------------------------
+        // One Shape or a list of them, swept `depth` along +z. bevel_enabled defaults
+        // to True as in three.js. The output is non-indexed.
+        py::class_<ExtrudeGeometry, BufferGeometry, std::shared_ptr<ExtrudeGeometry>>(m, "ExtrudeGeometry")
+                .def(py::init([](const py::object& shapes, float depth, unsigned steps, bool bevelEnabled,
+                                 unsigned curveSegments, float bevelThickness, float bevelSize,
+                                 float bevelOffset, unsigned bevelSegments) {
+                         std::vector<Shape> list;
+                         if (py::isinstance<Shape>(shapes)) {
+                             list.push_back(shapes.cast<Shape>());
+                         } else {
+                             for (const auto& h : shapes) list.push_back(h.cast<Shape>());
+                         }
+                         if (list.empty()) throw std::invalid_argument("ExtrudeGeometry: needs at least one shape");
+
+                         ExtrudeGeometry::Options options;
+                         options.depth = depth;
+                         options.steps = steps;
+                         options.bevelEnabled = bevelEnabled;
+                         options.curveSegments = curveSegments;
+                         options.bevelThickness = bevelThickness;
+                         options.bevelSize = bevelSize;
+                         options.bevelOffset = bevelOffset;
+                         options.bevelSegments = bevelSegments;
+                         return ExtrudeGeometry::create(list, options);
+                     }),
+                     py::arg("shapes"), py::arg("depth") = 1.f, py::arg("steps") = 1,
+                     py::arg("bevel_enabled") = true, py::arg("curve_segments") = 12,
+                     py::arg("bevel_thickness") = 0.2f, py::arg("bevel_size") = 0.1f,
+                     py::arg("bevel_offset") = 0.f, py::arg("bevel_segments") = 3);
+
+        // ---- ShapeGeometry ---------------------------------------------------
+        // Flat triangulation of the shapes.
+        py::class_<ShapeGeometry, BufferGeometry, std::shared_ptr<ShapeGeometry>>(m, "ShapeGeometry")
+                .def(py::init([](const py::object& shapes, unsigned curveSegments) {
+                         std::vector<Shape> list;
+                         if (py::isinstance<Shape>(shapes)) {
+                             list.push_back(shapes.cast<Shape>());
+                         } else {
+                             for (const auto& h : shapes) list.push_back(h.cast<Shape>());
+                         }
+                         if (list.empty()) throw std::invalid_argument("ShapeGeometry: needs at least one shape");
+                         return ShapeGeometry::create(list, curveSegments);
+                     }),
+                     py::arg("shapes"), py::arg("curve_segments") = 12);
 
         // ---- BufferGeometry merge / simplify utilities (free functions) ------
         // Merge static scene geometry into one draw, or weld / decimate imported

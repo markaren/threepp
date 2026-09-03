@@ -21,6 +21,7 @@ pybind11_add_module(threepp_py
         src/bind_core.cpp
         src/bind_geometries.cpp
         src/bind_curves.cpp
+        src/bind_bvh.cpp
         src/bind_editor.cpp
         src/bind_materials.cpp
         src/bind_objects.cpp

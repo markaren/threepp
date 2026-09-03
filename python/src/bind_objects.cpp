@@ -67,6 +67,7 @@ namespace threepp_py {
                 .def_readwrite("frustum_culled", &T::frustumCulled)
                 .def_readwrite("render_order", &T::renderOrder)
                 .def_readwrite("matrix_auto_update", &T::matrixAutoUpdate)
+                .def_readwrite("layers", &T::layers)
                 .def_property_readonly("id", [](const T& o) { return o.id; })
                 .def_property_readonly("uuid", [](const T& o) { return o.uuid; })
                 .def_property_readonly("parent", [](T& o) { return o.parent; }, py::return_value_policy::reference)

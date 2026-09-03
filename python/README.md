@@ -132,7 +132,13 @@ python examples/headless_render.py
   place, exactly like three.js; `scene.add(a, b, c)`, `traverse`,
   `get_object_by_name`, `children` all work.
 - **Geometries**: `Box`, `Sphere`, `Plane`, `Cylinder`, `Cone`, `Capsule`,
-  `Torus`, `TorusKnot`, `Circle`, `Ring`, `Icosahedron`, `Octahedron`.
+  `Torus`, `TorusKnot`, `Circle`, `Ring`, `Icosahedron`, `Octahedron`, plus the
+  swept/extruded pair — `TubeGeometry(curve, ...)` and
+  `ExtrudeGeometry(shape, depth=...)` / `ShapeGeometry(shape)`.
+- **Curves and 2-D shapes**: `CatmullRomCurve3`, `LineCurve3` (both `Curve3`),
+  `LineCurve`, `SplineCurve`, `Path` (both `Curve2`) and `Shape` — the sampling
+  API (`get_point`, `get_point_at`, `get_tangent`, `get_points`,
+  `get_spaced_points`, `get_length`) is shared by all of them.
 - **Materials**: `MeshStandard`, `MeshPhong`, `MeshLambert`, `MeshBasic`,
   `MeshNormal`, `Points`, `LineBasic`, `Sprite`, `Shadow` — concrete fields, the
   shared base fields (`opacity`, `transparent`, `side`, …), and texture-map slots
@@ -188,6 +194,24 @@ python examples/headless_render.py
   result in the scene graph like any mesh — rendered by **both** the GL and
   Vulkan backends. `is_splat_ply()` discriminates splat files from mesh PLYs;
   `submit_ranges` exposes the chunk-LOD/culling mechanism (Vulkan).
+- **Mesh collision queries**: `BVH` — `BVH.intersects(a, b)` (exact
+  triangle-triangle, early-exit), `BVH.intersect(a, b)` → an `(N, 3)` array of
+  points on both surfaces, `BVH.distance(a, b, max_distance=...)`, and `raycast`.
+  Build from a `BufferGeometry` or from numpy (`build_arrays(positions, indices)`).
+  Every query releases the GIL; `intersects_many`, `intersect_many` and
+  `distance_many` evaluate a candidate x target grid in parallel in one call:
+
+  ```python
+  volumes = [tp.BVH() for _ in tracks]
+  for bvh, track in zip(volumes, tracks):
+      g = tp.TubeGeometry(tp.LineCurve3(*track), radius=5.0, radial_segments=8)
+      bvh.build_arrays(g.get_attribute("position"), g.get_index())
+
+  hits = tp.BVH.intersects_many(candidates, volumes)      # (C, T) bool
+  when = tp.BVH.intersect(candidates[0], volumes[2])[:, 1]  # y of each contact point
+  ```
+- **Layers**: `obj.layers` / `camera.layers` (`set`, `enable`, `disable`,
+  `test`) — the three.js visibility mask.
 - **Rigid-body physics** (when built with PhysX, see below): `PhysxWorld` +
   `RigidBody` — add `Mesh`es as dynamic/static bodies (box/sphere/capsule, convex
   hull, or triangle mesh), `step(dt)`, and the bound meshes follow the simulation

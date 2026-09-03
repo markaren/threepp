@@ -10,6 +10,7 @@
 #include "threepp/core/BufferAttribute.hpp"
 #include "threepp/core/BufferGeometry.hpp"
 #include "threepp/core/Clock.hpp"
+#include "threepp/core/Layers.hpp"
 #include "threepp/core/Object3D.hpp"
 #include "threepp/objects/Line.hpp"
 #include "threepp/objects/Mesh.hpp"
@@ -68,6 +69,24 @@ namespace threepp_py {
 
     void init_core(py::module_& m) {
 
+        // ---- Layers ----------------------------------------------------------
+        // 32-channel visibility mask: an object is drawn by a camera only if their
+        // masks share a channel. Everything starts on channel 0.
+        py::class_<Layers>(m, "Layers")
+                .def(py::init<>())
+                .def("set", &Layers::set, py::arg("channel"), "Membership of exactly this one channel.")
+                .def("enable", &Layers::enable, py::arg("channel"))
+                .def("enable_all", &Layers::enableAll)
+                .def("toggle", &Layers::toggle, py::arg("channel"))
+                .def("disable", &Layers::disable, py::arg("channel"))
+                .def("disable_all", &Layers::disableAll)
+                .def("test", &Layers::test, py::arg("layers"), "True if the two masks share a channel.")
+                .def("is_enabled", &Layers::isEnabled, py::arg("channel"))
+                .def("mask", &Layers::mask)
+                .def("__repr__", [](const Layers& l) {
+                    return "Layers(mask=" + std::to_string(l.mask()) + ")";
+                });
+
         // ---- Object3D --------------------------------------------------------
         // Polymorphic base; registered with a shared_ptr holder so derived
         // objects (Mesh, Group, lights, cameras...) share one ownership model.
@@ -90,6 +109,8 @@ namespace threepp_py {
                 .def_readwrite("frustum_culled", &Object3D::frustumCulled)
                 .def_readwrite("render_order", &Object3D::renderOrder)
                 .def_readwrite("matrix_auto_update", &Object3D::matrixAutoUpdate)
+                // Mutable in place: `obj.layers.set(1)` moves the object to channel 1.
+                .def_readwrite("layers", &Object3D::layers)
                 .def_property_readonly("parent", [](Object3D& o) { return o.parent; }, py::return_value_policy::reference)
                 .def_property_readonly("children", [](Object3D& o) { return o.children; }, py::return_value_policy::reference)
                 // add(child) / add(a, b, c) — takes shared ownership of each child.
@@ -185,6 +206,10 @@ namespace threepp_py {
                 .def("rotate_y", &BufferGeometry::rotateY, py::arg("angle"), py::return_value_policy::reference_internal)
                 .def("rotate_z", &BufferGeometry::rotateZ, py::arg("angle"), py::return_value_policy::reference_internal)
                 .def("center", &BufferGeometry::center, py::return_value_policy::reference_internal)
+                // Bakes a transform into the vertex positions (normals / tangents are rotated).
+                .def("apply_matrix4", &BufferGeometry::applyMatrix4, py::arg("matrix"), py::return_value_policy::reference_internal)
+                .def("to_non_indexed", &BufferGeometry::toNonIndexed,
+                     "A new geometry with the index resolved into duplicated vertices (a triangle soup).")
                 .def("set_from_points", [](BufferGeometry& g, const std::vector<Vector3>& pts) -> BufferGeometry& { return g.setFromPoints(pts); }, py::arg("points"), py::return_value_policy::reference_internal)
                 // Set/replace a float vertex attribute (e.g. "position", "color", "normal") from an
                 // (N, item_size) numpy array. The attribute is marked Dynamic. Setting "position" on a

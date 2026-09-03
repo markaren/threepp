@@ -1,5 +1,7 @@
 import os
 
+import numpy as np
+
 import threepp as tp
 
 
@@ -95,3 +97,50 @@ def test_resize_handler_operations(renderer):
         assert abs(cam.aspect - 320 / 240) < 1e-5
     finally:
         renderer.set_size(200, 150)  # restore the shared fixture's size
+
+
+def test_a_resized_headless_renderer_reads_back_at_the_new_size(renderer):
+    """The render-to-array path: GLRenderer.set_size is what changes the shape
+    read_pixels comes back with, and the frame is really drawn at that size."""
+    scene = tp.Scene()
+    scene.add(tp.Mesh(tp.BoxGeometry(), tp.MeshBasicMaterial()))
+    renderer.set_clear_color(0x000000)
+
+    try:
+        for w, h in ((320, 240), (128, 96)):
+            renderer.set_size(w, h)
+            cam = tp.PerspectiveCamera(60, w / h, 0.1, 100)
+            cam.position.z = 5
+            renderer.render(scene, cam)
+
+            pixels = renderer.read_pixels()
+            assert pixels.shape == (h, w, 3)
+            # The cube is actually drawn at every size, not just allocated.
+            assert (pixels.sum(axis=2) > 10).sum() > 0
+    finally:
+        renderer.set_size(200, 150)  # restore the shared fixture's size
+        renderer.set_clear_color(0x202830)
+
+
+def test_layers_hide_an_object_from_a_render(renderer, lit_scene):
+    """Debug content parked on channel 1 must not reach the frame.
+
+    Lives here rather than beside the other Layers tests because a render needs
+    the session's GL context, and this file is where that context is first used
+    (see the note on the `renderer` fixture: one context per process).
+    """
+    blocker = tp.Mesh(tp.BoxGeometry(100, 100, 1), tp.MeshBasicMaterial())
+    blocker.position.z = 1
+    lit_scene.add(blocker)
+
+    camera = tp.PerspectiveCamera(60, 200 / 150, 0.1, 100)
+    camera.position.z = 5
+
+    renderer.render(lit_scene, camera)
+    with_blocker = renderer.read_pixels().copy()
+
+    blocker.layers.set(1)
+    renderer.render(lit_scene, camera)
+    without = renderer.read_pixels().copy()
+
+    assert not np.array_equal(with_blocker, without)

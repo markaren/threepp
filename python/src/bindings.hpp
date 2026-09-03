@@ -77,7 +77,10 @@ namespace threepp_py {
     void init_textures(py::module_& m);
     void init_core(py::module_& m);
     void init_geometries(py::module_& m);
-    void init_curves(py::module_& m);// CatmullRomCurve3 (the editor's spline curve)
+    // BVH + Ray queries (mesh-vs-mesh overlap / distance); needs BufferGeometry
+    // from init_geometries and Ray/Box3/Matrix4 from init_math.
+    void init_bvh(py::module_& m);
+    void init_curves(py::module_& m);// Curve2/Curve3, CatmullRomCurve3, LineCurve(3), SplineCurve, Path, Shape
     void init_editor(py::module_& m);// threepp.editor — SplinePath sampling of authored splines
     // threepp.editor, physics half — RigidBody/SoftBody handles onto the live
     // play session. Defined only where the PhysX SDK was found, and must be
