@@ -505,8 +505,8 @@ sun = tp.DirectionalLight(0xfff0d8, 2.4)
 sun.position.set(*(SUN_DIR * 1000.0))
 scene.add(sun)
 
-ocean = tp.Ocean(size=320.0, resolution=384, wind_speed=4.5, wind_theta=0.6,
-                 choppiness=0.5, fft_size=512, fetch=15e3)
+ocean = tp.Ocean(size=320.0, resolution=384, wind_speed=7.0, wind_theta=0.6,
+                 choppiness=0.7, fft_size=512, fetch=15e3)
 ocean.params.foam_amount = 0.0                 # whitecaps print as white slabs from below
 ocean.material.attenuation_color = tp.Color(0.16, 0.30, 0.24)   # fjord water from above: dark green-grey, not tropical teal
 ocean.material.attenuation_distance = 2.5
@@ -872,6 +872,7 @@ def build_rov():
         body.position.set(0.19, -0.075, z)
         rov.add(body)
         disc = tp.Mesh(tp.CircleGeometry(0.017, 24), standard_material(0xfff4e0, roughness=0.3, emissive=0xfff2d8, emissive_intensity=120.0))
+        lights.append(disc.material)
         disc.rotation.y = math.pi / 2
         disc.position.set(0.2135, -0.075, z)
         rov.add(disc)
@@ -1030,6 +1031,12 @@ def rov_pose(t, dt=1.0 / 60.0):
     rov_pitch.rotation.z = pitch
     rov.rotation.x = roll
     rov_pos, rov_R, rov_thrust = cand, rot_y(yaw) @ rot_z(pitch) @ rot_x(roll), np.array([tf, tl, tv])
+    wet = min(max((WATER_Y - 0.08 - cand[1]) / 0.25, 0.0), 1.0)           # lamps come on as the ROV submerges
+    for k, l in enumerate(rov_lights):
+        if k % 2:
+            l.intensity = 700.0 * wet
+        else:
+            l.emissive_intensity = 120.0 * wet
 
 
 def rov_report():
@@ -2036,9 +2043,9 @@ def smooth(u, hold=0.0):
 
 def cam_waterline(u, t):
     ROV_LIFT[0] = 1.1 * (1.0 - smooth((u - 0.1) / 0.8))
-    eye = P0 - 3.0 * R0 + 0.8 * T0
-    eye[1] = float(ocean.sample_height(eye[0], eye[2])) + 0.04
-    return eye, P0 + [0, 0.5 * ROV_LIFT[0] + 0.45, 0], 55.0
+    eye = P0 - 2.5 * R0 + 0.6 * T0
+    eye[1] = WATER_Y + 0.03 - 0.11 * smooth(u)        # mean surface: the waves ride through the lens
+    return eye, P0 + [0, ROV_LIFT[0] + 0.1, 0], 55.0   # the ROV enters the water 2.6 m in front
 
 
 def cam_descent(u, t):
