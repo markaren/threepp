@@ -1,9 +1,10 @@
-"""Net-pen inspection ROV, phase 1: the pen, its Warp-cloth net, the collar and a BlueROV2 in the murk.
+"""Net-pen inspection ROV: Warp-cloth net with a tear, collar, BlueROV2, and a Warp school of procedural salmon.
 
     python warp_netpen.py                          # window; drag to orbit, Esc quits
     python warp_netpen.py --shot p1_tear           # still -> aaa_caps/netpen/p1_tear.png
     python warp_netpen.py --shot p1_rov_hero --out x.png --seconds 8 --size 1600x900
-Cameras: p1_net_wide  p1_collar_below  p1_rov_hero  p1_tear. Vulkan only; Warp on CUDA if present.
+Cameras: p1_net_wide p1_collar_below p1_rov_hero p1_tear p2_school p2_fish_close p2_leak. `--fish N` (400).
+Vulkan only; Warp on CUDA if present.
 """
 import math
 import os
@@ -462,6 +463,8 @@ def net_material(tex, nrm):
     m.normal_scale = tp.Vector2(0.8, 0.8)
     m.alpha_test = 0.30
     m.vertex_colors = True
+    m.translucency = 0.7               # thin twine reads back-lit from inside the pen
+    m.translucency_color = 0xd9e6c8
     return m
 
 
@@ -470,6 +473,8 @@ patch_mat = net_material(patch_tex, patch_nrm)
 foul_mat = standard_material(0xffffff, roughness=0.92, metalness=0.0, side=tp.Side.Double)
 foul_mat.map = foul_tex
 foul_mat.alpha_test = 0.5
+foul_mat.translucency = 0.7
+foul_mat.translucency_color = 0x8fa552
 
 
 def net_index():
@@ -741,6 +746,371 @@ rov.position.set(ROV_R * math.cos(ROV_TH), ROV_Y, ROV_R * math.sin(ROV_TH))
 ROV_YAW = -ROV_TH - math.pi / 2                   # +X forward along the wall toward the tear
 rov.rotation.y = ROV_YAW
 
+e_r = np.array([math.cos(TEAR_TH), 0.0, math.sin(TEAR_TH)])
+e_t = np.array([-math.sin(TEAR_TH), 0.0, math.cos(TEAR_TH)])
+TEAR_C = np.array([PEN_R * e_r[0], TEAR_Y, PEN_R * e_r[2]])
+
+# ---- fish: procedural salmon v2 ---------------------------------------------
+FISH_N = max(cli_arg("--fish", 400, int), 2)
+F_RINGS, F_SIDES = 24, 24
+F_K = 5.6
+FISH_SPEED_MIN, FISH_SPEED_MAX = 0.25, 1.6
+MILL_SPEED = 0.75
+LEAK_FRAC = 0.05
+
+
+def catmull(y, u):
+    """Catmull-Rom through the control values, sampled at u in [0, 1]."""
+    n = len(y)
+    x = np.clip(u, 0.0, 1.0) * (n - 1)
+    i = np.clip(np.floor(x).astype(int), 0, n - 2)
+    t = x - i
+    p0, p1, p2, p3 = (y[np.clip(i + k, 0, n - 1)] for k in (-1, 0, 1, 2))
+    return 0.5 * (2 * p1 + (-p0 + p2) * t + (2 * p0 - 5 * p1 + 4 * p2 - p3) * t ** 2 + (-p0 + 3 * p1 - 3 * p2 + p3) * t ** 3)
+
+
+HALF_H = np.float32([0.010, 0.048, 0.078, 0.096, 0.106, 0.106, 0.099, 0.086, 0.069, 0.049, 0.030, 0.014])
+HALF_W = np.float32([0.008, 0.032, 0.049, 0.059, 0.063, 0.061, 0.056, 0.048, 0.038, 0.027, 0.016, 0.006])
+KEEL = np.float32([1.0, 1.05, 1.15, 1.22, 1.25, 1.24, 1.20, 1.14, 1.08, 1.02, 1.0, 1.0])
+
+
+def skin_fn(u, th):
+    """The skin at body fraction u (0 nose, 1 tail root) and ring angle th; +Z is the nose."""
+    h, w, kb = catmull(HALF_H, u), catmull(HALF_W, u), catmull(KEEL, u)
+    s, c = np.sin(th), np.cos(th)
+    y = h * s * np.where(s < 0, kb * (1.0 - 0.18 * c * c), 1.0) - 0.15 * h
+    return np.stack([w * c, y, 0.5 - u], -1)
+
+
+def fan(outline, nrm):
+    """A flat fin: centre vertex plus an outline, triangle-fanned; tris are local."""
+    outline = np.asarray(outline, np.float64)
+    v = np.concatenate([[outline.mean(0)], outline])
+    tris = [[0, 1 + k, 1 + (k + 1) % len(outline)] for k in range(len(outline) - 1)]
+    return v, np.asarray(tris), np.tile(np.float64(nrm), (len(v), 1))
+
+
+def rot_y(a):
+    c, s = math.cos(a), math.sin(a)
+    return np.array([[c, 0, s], [0, 1, 0], [-s, 0, c]])
+
+
+def rot_z(a):
+    c, s = math.cos(a), math.sin(a)
+    return np.array([[c, -s, 0], [s, c, 0], [0, 0, 1]])
+
+
+def salmon():
+    """Canonical unit-length salmon: folded/flared positions and normals, body fraction u, kind, index."""
+    u = np.linspace(0.0, 1.0, F_RINGS) ** 0.85
+    th = 2.0 * np.pi * np.arange(F_SIDES) / F_SIDES + np.pi / 2
+    U, TH = np.meshgrid(u, th, indexing="ij")
+    P = skin_fn(U, TH)
+    e = 1e-3
+    du = skin_fn(np.clip(U + e, 0, 1), TH) - skin_fn(np.clip(U - e, 0, 1), TH)
+    dt = skin_fn(U, TH + e) - skin_fn(U, TH - e)
+    N = np.cross(du, dt)
+    N /= np.maximum(np.linalg.norm(N, axis=-1, keepdims=True), 1e-9)
+    pos, nrm, uu, kind = [P.reshape(-1, 3)], [N.reshape(-1, 3)], [U.reshape(-1)], [np.zeros(U.size)]
+    tris = []
+    for i in range(F_RINGS - 1):
+        for j in range(F_SIDES):
+            a, b = i * F_SIDES + j, i * F_SIDES + (j + 1) % F_SIDES
+            tris += [[a, a + F_SIDES, b], [b, a + F_SIDES, b + F_SIDES]]
+    nv = F_RINGS * F_SIDES
+    pos.append([[0.0, -0.15 * HALF_H[0], 0.505], [0.0, -0.15 * HALF_H[-1], -0.5]])
+    nrm.append([[0.0, 0.0, 1.0], [0.0, 0.0, -1.0]])
+    uu.append([0.0, 1.0])
+    kind.append([0, 0])
+    for j in range(F_SIDES):
+        tris.append([nv, (j + 1) % F_SIDES, j])
+        tris.append([nv + 1, nv - F_SIDES + j, nv - F_SIDES + (j + 1) % F_SIDES])
+    nv += 2
+
+    def add(v, t, n, k):
+        nonlocal nv
+        pos.append(v)
+        nrm.append(n)
+        tris.extend((np.asarray(t) + nv).tolist())
+        uu.append(0.5 - v[:, 2])
+        kind.append(np.full(len(v), k))
+        nv += len(v)
+
+    top = lambda x: float(skin_fn(x, np.pi / 2)[1])
+    bot = lambda x: float(skin_fn(x, -np.pi / 2)[1])
+    z = lambda x: 0.5 - x
+    add(*fan([[0, 0.012, -0.46], [0, 0.07, -0.56], [0, 0.125, -0.66], [0, 0.135, -0.71], [0, 0.08, -0.65],
+              [0, 0.02, -0.60], [0, -0.02, -0.60], [0, -0.08, -0.65], [0, -0.13, -0.70], [0, -0.115, -0.65],
+              [0, -0.065, -0.56], [0, -0.016, -0.46]], [1, 0, 0]), 1)
+    add(*fan([[0, top(0.40), z(0.40)], [0, top(0.42) + 0.045, z(0.43)], [0, top(0.46) + 0.075, z(0.47)],
+              [0, top(0.52) + 0.062, z(0.53)], [0, top(0.58) + 0.03, z(0.59)], [0, top(0.60), z(0.60)],
+              [0, top(0.50), z(0.50)]], [1, 0, 0]), 1)
+    add(*fan([[0, top(0.79), z(0.79)], [0, top(0.80) + 0.018, z(0.815)], [0, top(0.84) + 0.012, z(0.85)],
+              [0, top(0.85), z(0.85)]], [1, 0, 0]), 1)
+    add(*fan([[0, bot(0.70), z(0.70)], [0, bot(0.71) - 0.03, z(0.72)], [0, bot(0.74) - 0.048, z(0.76)],
+              [0, bot(0.78) - 0.035, z(0.80)], [0, bot(0.80), z(0.80)], [0, bot(0.75), z(0.75)]], [1, 0, 0]), 1)
+    for sgn in (1.0, -1.0):
+        r = np.array([sgn * 0.016, bot(0.55) + 0.004, z(0.55)])
+        v, t, n = fan([[0, 0, 0], [sgn * 0.02, -0.02, -0.035], [sgn * 0.035, -0.035, -0.07],
+                       [sgn * 0.012, -0.028, -0.065], [0, -0.006, -0.02]], [0.3 * sgn, -1, 0])
+        add(v + r, t, n, 1)
+    for sgn in (1.0, -1.0):
+        w0 = float(skin_fn(0.28, 0.0)[0])
+        r = np.array([sgn * (w0 + 0.003), -0.1 * HALF_H[3] - 0.012, z(0.28)])
+        v, t, n = fan([[0, 0, 0], [sgn * 0.006, -0.010, -0.045], [sgn * 0.012, -0.018, -0.105],
+                       [sgn * 0.010, -0.038, -0.085], [sgn * 0.004, -0.030, -0.025]], [sgn, 0, 0])
+        add(v + r, t, n, 2 if sgn > 0 else 3)
+    pos, nrm = np.concatenate(pos), np.concatenate(nrm)
+    uu, kind = np.concatenate(uu), np.concatenate(kind).astype(np.int32)
+    pos1, nrm1 = pos.copy(), nrm.copy()
+    for sgn, k in ((1.0, 2), (-1.0, 3)):           # flared pectorals: swept out and laid flat
+        sel = kind == k
+        r = pos[sel][1]
+        R = rot_z(-sgn * 0.7) @ rot_y(sgn * 1.05)
+        pos1[sel] = (pos[sel] - r) @ R.T + r
+        nrm1[sel] = nrm[sel] @ R.T
+    return (pos.astype(np.float32), pos1.astype(np.float32), nrm.astype(np.float32), nrm1.astype(np.float32),
+            uu.astype(np.float32), kind, np.asarray(tris, np.uint32).reshape(-1))
+
+
+def hash01(*ints):
+    h = np.zeros(np.broadcast(*ints).shape, np.uint32)
+    for k, a in enumerate(ints):
+        h = (h ^ (np.asarray(a, np.uint32) * np.uint32([0x9E3779B1, 0x85EBCA77, 0xC2B2AE3D][k % 3]))) * np.uint32(0x27D4EB2F)
+        h ^= h >> np.uint32(15)
+    return (h & np.uint32(0xFFFFFF)) / float(0xFFFFFF)
+
+
+def fish_colours(pos, nrm, kind, rng):
+    """(FISH_N, V, 3) linear RGB: white belly, silver flank, steel-blue back, hashed spots, per-fish tint."""
+    V = len(pos)
+    body = kind == 0
+    f = np.clip(0.5 + 0.5 * nrm[:, 1] + 0.2 * (pos[:, 1] / 0.1), 0.0, 1.0)
+    f = np.where(body, f, 0.45)
+    belly, flank, back = np.float32([0.85, 0.88, 0.86]), np.float32([0.44, 0.49, 0.53]), np.float32([0.07, 0.12, 0.17])
+    t1 = np.clip((f - 0.25) / 0.25, 0, 1)[:, None] ** 1.5
+    t2 = np.clip((f - 0.55) / 0.25, 0, 1)[:, None]
+    base = belly * (1 - t1) + flank * t1
+    base = base * (1 - t2) + back * t2
+    head = np.clip((0.12 - (0.5 - pos[:, 2])) / 0.12, 0, 1)[:, None]
+    base = base * (1 - 0.25 * head) + np.float32([0.22, 0.30, 0.32]) * 0.25 * head
+    fin = np.float32([0.30, 0.34, 0.36])
+    base[~body] = fin * (0.85 + 0.15 * np.clip(-pos[~body, 2] - 0.5, 0, 1))[:, None]
+    fi = np.arange(FISH_N)[:, None]
+    vi = np.arange(V)[None, :]
+    ring = np.minimum(vi // F_SIDES, F_RINGS)
+    side = vi % F_SIDES
+    spot = (hash01(fi, ring * 3 + 7, side) < 0.13) & (f[None, :] > 0.6) & body[None, :]
+    spot |= (hash01(fi + 91, ring, side * 5 + 1) < 0.35) & (f[None, :] > 0.9) & body[None, :]
+    tint = rng.uniform(0.82, 1.06, (FISH_N, 1, 1)).astype(np.float32)
+    hue = rng.uniform(0.0, 1.0, (FISH_N, 1, 1)).astype(np.float32)
+    col = base[None] * tint * (1.0 - 0.15 * hue * np.float32([0.0, 0.3, 1.0]))
+    col = np.where(spot[..., None], np.float32([0.05, 0.07, 0.09]) * (0.7 + 0.6 * hash01(fi, vi)[..., None]), col)
+    return np.ascontiguousarray(col, np.float32)
+
+
+@wp.func
+def wrap_pi(a: float) -> float:
+    return a - 2.0 * wp.pi * wp.floor((a + wp.pi) / (2.0 * wp.pi))
+
+
+@wp.kernel
+def boids(pos: wp.array(dtype=wp.vec3), vel: wp.array(dtype=wp.vec3),
+          pos_o: wp.array(dtype=wp.vec3), vel_o: wp.array(dtype=wp.vec3),
+          yaw: wp.array(dtype=float), pitch: wp.array(dtype=float), roll: wp.array(dtype=float),
+          beat: wp.array(dtype=float), amp: wp.array(dtype=float), brake: wp.array(dtype=float),
+          flen: wp.array(dtype=float), pref: wp.array(dtype=wp.vec3), leak_t: wp.array(dtype=float),
+          uni: wp.array(dtype=wp.vec3), n: int, t: float, dt: float):
+    i = wp.tid()
+    p = pos[i]
+    v = vel[i]
+    sp = wp.max(wp.length(v), 1.0e-4)
+    fwd = v / sp
+    coh = wp.vec3(0.0, 0.0, 0.0)
+    ali = wp.vec3(0.0, 0.0, 0.0)
+    sep = wp.vec3(0.0, 0.0, 0.0)
+    cnt = float(0.0)
+    for j in range(n):
+        if j != i:
+            d = pos[j] - p
+            r2 = wp.dot(d, d)
+            if r2 < 4.0:
+                coh += d
+                ali += vel[j]
+                cnt += 1.0
+            if r2 < 0.42:
+                sep -= d / wp.max(r2, 1.0e-3)
+    if cnt > 0.0:
+        coh = coh / cnt
+        ali = ali / cnt - v
+    acc = coh * 1.2 + ali * 1.8 + sep * 0.7
+    rov = uni[0]
+    tear = uni[1]
+    e_r = uni[2]
+    pen_r = uni[3][0]
+    pen_d = uni[3][1]
+    r = wp.sqrt(p[0] * p[0] + p[2] * p[2])
+    rad = wp.vec3(p[0], 0.0, p[2]) / wp.max(r, 1.0e-3)
+    tan = wp.vec3(-rad[2], 0.0, rad[0])
+    leaking = leak_t[i] >= 0.0 and t > leak_t[i]
+    near_tear = wp.length(p - tear) < 1.4
+    goal = wp.vec3(0.0, 0.0, 0.0)
+    if leaking:
+        acc = acc * 0.25
+        pj = wp.vec3(0.0, pref[i][2], 0.0)
+        if r < pen_r:
+            if wp.length(p - tear) > 1.6:
+                goal = tear - e_r * 1.2 + pj
+            else:
+                goal = tear + e_r * 1.5 + pj
+        else:
+            goal = tear + e_r * 6.0 + tan * 3.0 * pref[i][2]
+        want = wp.normalize(goal - p) * 0.85
+        acc += (want - v) * 2.5
+    else:
+        want = tan * MILL_SPEED - rad * (r - pref[i][0]) * 0.45 + wp.vec3(0.0, (pref[i][1] - p[1]) * 0.45, 0.0)
+        acc += (want - v) * 1.1
+    dwall = pen_r - r
+    if not (leaking and near_tear):
+        if dwall > 0.0 and dwall < 1.2:
+            acc -= rad * (1.2 - dwall) * 6.0
+        if dwall <= 0.0 and dwall > -1.0:
+            acc += rad * (1.0 + dwall) * 6.0
+    if p[1] > -0.7:
+        acc += wp.vec3(0.0, -6.0 * (p[1] + 0.7), 0.0)
+    if p[1] < -pen_d + 1.0:
+        acc += wp.vec3(0.0, 4.0 * (-pen_d + 1.0 - p[1]), 0.0)
+    dr = p - rov
+    lr = wp.length(dr)
+    if lr < 2.0:
+        acc += dr / wp.max(lr, 1.0e-3) * (1.0 - lr / 2.0) * 5.0
+    acc += wp.vec3(0.0, -0.4 * v[1], 0.0)
+    v2 = v + acc * dt
+    s2 = wp.max(wp.length(v2), 1.0e-4)
+    v2 = v2 * (wp.clamp(s2, FISH_SPEED_MIN, FISH_SPEED_MAX) / s2)
+    vel_o[i] = v2
+    pos_o[i] = p + v2 * dt
+    s2 = wp.length(v2)
+    f2 = v2 / s2
+    dy = wrap_pi(wp.atan2(f2[0], f2[2]) - yaw[i])
+    yaw[i] = yaw[i] + dy * 0.35
+    pitch[i] = pitch[i] + (-wp.asin(wp.clamp(f2[1], -1.0, 1.0)) - pitch[i]) * 0.2
+    roll[i] = roll[i] + (wp.clamp(-1.2 * dy / dt, -0.6, 0.6) - roll[i]) * (1.0 - wp.exp(-dt / 0.25))
+    beat[i] = beat[i] + dt * 2.0 * wp.pi * (0.9 + 1.1 * s2 / wp.max(flen[i], 0.3))
+    amp[i] = amp[i] + ((0.035 + 0.055 * wp.min(s2, 1.4) / 1.4) - amp[i]) * (1.0 - wp.exp(-dt / 0.4))
+    b = wp.clamp(-wp.dot(acc, fwd) * 0.5, 0.0, 1.0) * 0.8 + 0.1
+    brake[i] = brake[i] + (b - brake[i]) * (1.0 - wp.exp(-dt / 0.3))
+
+
+@wp.kernel
+def skin(c0: wp.array(dtype=wp.vec3), c1: wp.array(dtype=wp.vec3),
+         n0: wp.array(dtype=wp.vec3), n1: wp.array(dtype=wp.vec3), uu: wp.array(dtype=float),
+         pos: wp.array(dtype=wp.vec3), yaw: wp.array(dtype=float), pitch: wp.array(dtype=float),
+         roll: wp.array(dtype=float), beat: wp.array(dtype=float), amp: wp.array(dtype=float),
+         brake: wp.array(dtype=float), flen: wp.array(dtype=float),
+         out_p: wp.array(dtype=wp.vec3), out_n: wp.array(dtype=wp.vec3), nv: int):
+    tid = wp.tid()
+    f = tid // nv
+    v = tid - f * nv
+    fl = brake[f]
+    c = c0[v] * (1.0 - fl) + c1[v] * fl
+    nn = wp.normalize(n0[v] * (1.0 - fl) + n1[v] * fl)
+    u = uu[v]
+    a = amp[f]
+    # Wave envelope: grows from 30 % back, with a small counter-swing of the head.
+    if u < 0.3:
+        env = -0.12 * (0.3 - u) / 0.3
+        denv = 0.12 / 0.3
+    else:
+        env = ((u - 0.3) / 0.7) * ((u - 0.3) / 0.7)
+        denv = 2.0 * (u - 0.3) / 0.49
+    ph = F_K * u - beat[f]
+    s = a * env * wp.sin(ph)
+    th = wp.atan(-a * (denv * wp.sin(ph) + env * F_K * wp.cos(ph)))
+    ct = wp.cos(th)
+    st = wp.sin(th)
+    lp = wp.vec3(s + c[0] * ct, c[1], c[2] - c[0] * st) * flen[f]
+    ln = wp.vec3(nn[0] * ct + nn[2] * st, nn[1], -nn[0] * st + nn[2] * ct)
+    q = wp.quat_from_axis_angle(wp.vec3(0.0, 1.0, 0.0), yaw[f]) * wp.quat_from_axis_angle(wp.vec3(1.0, 0.0, 0.0), pitch[f]) \
+        * wp.quat_from_axis_angle(wp.vec3(0.0, 0.0, 1.0), roll[f])
+    out_p[tid] = wp.quat_rotate(q, lp) + pos[f]
+    out_n[tid] = wp.quat_rotate(q, ln)
+
+
+class School:
+    def __init__(self):
+        c0, c1, n0, n1, uu, kind, tri = salmon()
+        self.nv = len(c0)
+        rng = np.random.default_rng(20260903)
+        self.col = fish_colours(c0, n0, kind, rng).reshape(-1, 3)
+        self.index = np.ascontiguousarray((tri[None, :] + (np.arange(FISH_N, dtype=np.uint32) * self.nv)[:, None]).reshape(-1))
+        L = rng.uniform(0.45, 0.75, FISH_N).astype(np.float32)
+        pref = np.stack([rng.uniform(3.2, 5.6, FISH_N), rng.uniform(-4.2, -1.4, FISH_N), rng.uniform(-0.25, 0.25, FISH_N)], 1)
+        leak = np.full(FISH_N, -1.0, np.float32)
+        nl = max(int(LEAK_FRAC * FISH_N), 3)
+        who = rng.choice(np.arange(1, FISH_N), nl, replace=False)      # fish 0 is the close-up hero
+        leak[who] = 0.5 + 0.9 * np.arange(nl)
+        th = rng.uniform(0.0, 2 * np.pi, FISH_N)
+        rr = rng.uniform(2.6, 6.0, FISH_N)
+        p0 = np.stack([rr * np.cos(th), pref[:, 1] + rng.normal(0, 0.5, FISH_N), rr * np.sin(th)], 1)
+        p0[who] = (TEAR_C - e_r * rng.uniform(1.5, 3.5, nl)[:, None] + e_t * rng.uniform(-2.0, 2.0, nl)[:, None]
+                   + np.float32([0, 1, 0]) * rng.uniform(-0.6, 0.6, nl)[:, None])
+        v0 = np.stack([-np.sin(th), np.zeros(FISH_N), np.cos(th)], 1) * 0.7
+
+        def A(a, dt=float):
+            return wp.array(np.ascontiguousarray(a, np.float32), dtype=dt, device=device)
+
+        self.pos, self.vel = A(p0, wp.vec3), A(v0, wp.vec3)
+        self.pos2, self.vel2 = A(p0, wp.vec3), A(v0, wp.vec3)
+        self.yaw = A(np.arctan2(v0[:, 0], v0[:, 2]))
+        self.pitch, self.roll = A(np.zeros(FISH_N)), A(np.zeros(FISH_N))
+        self.beat, self.amp = A(rng.uniform(0, 2 * np.pi, FISH_N)), A(np.full(FISH_N, 0.06))
+        self.brake, self.len = A(np.full(FISH_N, 0.1)), A(L)
+        self.pref, self.leak = A(pref, wp.vec3), A(leak)
+        self.uni = wp.zeros(4, dtype=wp.vec3, device=device)
+        self.c0, self.c1, self.n0, self.n1, self.uu = A(c0, wp.vec3), A(c1, wp.vec3), A(n0, wp.vec3), A(n1, wp.vec3), A(uu)
+        self.out_p = wp.zeros(FISH_N * self.nv, dtype=wp.vec3, device=device)
+        self.out_n = wp.zeros(FISH_N * self.nv, dtype=wp.vec3, device=device)
+
+    def step(self, t, dt, rov_pos):
+        self.uni.assign(np.asarray([rov_pos, TEAR_C, e_r, [PEN_R, PEN_D, 0.0]], np.float32))
+        wp.launch(boids, dim=FISH_N, device=device,
+                  inputs=[self.pos, self.vel, self.pos2, self.vel2, self.yaw, self.pitch, self.roll, self.beat,
+                          self.amp, self.brake, self.len, self.pref, self.leak, self.uni, FISH_N, t, dt])
+        self.pos, self.pos2 = self.pos2, self.pos
+        self.vel, self.vel2 = self.vel2, self.vel
+        wp.launch(skin, dim=FISH_N * self.nv, device=device,
+                  inputs=[self.c0, self.c1, self.n0, self.n1, self.uu, self.pos, self.yaw, self.pitch, self.roll,
+                          self.beat, self.amp, self.brake, self.len, self.out_p, self.out_n, self.nv])
+        return self.out_p.numpy(), self.out_n.numpy()
+
+    def hero(self):
+        """(position, forward) of fish 0 on the host."""
+        p, y = self.pos.numpy()[0], float(self.yaw.numpy()[0])
+        return p, np.array([math.sin(y), 0.0, math.cos(y)])
+
+
+school = School()
+_fp0, _fn0 = school.step(0.0, 1.0 / 60.0, np.zeros(3))
+fish_mat = standard_material(0xffffff, 0.35, 0.25, side=tp.Side.Double, vertex_colors=True)
+fish_geo = tp.BufferGeometry()
+fish_geo.set_attribute("position", _fp0)
+fish_geo.set_attribute("normal", _fn0)
+fish_geo.set_attribute("color", school.col)
+fish_geo.set_index(school.index)
+fish = tp.Mesh(fish_geo, fish_mat)
+fish.frustum_culled = False
+fish.cast_shadow = False
+fish.receive_shadow = True
+scene.add(fish)
+
+
+def fish_step(t, dt):
+    p, n = school.step(t, dt, np.array([rov.position.x, rov.position.y, rov.position.z]))
+    fish_geo.update_attribute("position", p)
+    fish_geo.update_attribute("normal", n)
+
+
 # ---- marine snow --------------------------------------------------------------
 MOTE_CAP, MOTE_HALF, MOTE_TOP, MOTE_BOTTOM = 20_000, 9.0, 0.0, -12.0
 _uc = tp.ParticleField.Config()
@@ -785,9 +1155,6 @@ scene.add(motes)
 
 # ---- cameras -----------------------------------------------------------------
 camera = tp.PerspectiveCamera(60.0, W / H, 0.05, 600.0)
-e_r = np.array([math.cos(TEAR_TH), 0.0, math.sin(TEAR_TH)])
-e_t = np.array([-math.sin(TEAR_TH), 0.0, math.cos(TEAR_TH)])
-TEAR_C = np.array([PEN_R * e_r[0], TEAR_Y, PEN_R * e_r[2]])
 rov_p = np.array([rov.position.x, rov.position.y, rov.position.z])
 rov_f = np.array([math.cos(ROV_YAW), 0.0, -math.sin(ROV_YAW)])
 sun_h3 = np.array([SUN_H[0], 0.0, SUN_H[1]])
@@ -796,10 +1163,22 @@ SHOTS = {
     "p1_collar_below": (-1.5 * sun_h3 + [0, -5.0, 0], 0.85 * PEN_R * sun_h3 + [0, 0.3, 0], 78.0),
     "p1_rov_hero": (rov_p - 0.85 * e_r + 1.15 * rov_f + [0, 0.30, 0], rov_p + [0, 0.02, 0], 50.0),
     "p1_tear": (TEAR_C - 2.0 * e_r + [0, 0.15, 0], TEAR_C, 55.0),
+    "p2_school": (-1.2 * sun_h3 + [0, -6.2, 0], 4.5 * sun_h3 + [0, -0.6, 0], 72.0),
+    "p2_fish_close": None,
+    "p2_leak": (TEAR_C + 2.6 * e_r - 1.4 * e_t + [0, 0.35, 0], TEAR_C + 0.6 * e_r, 52.0),
 }
 
 
 def place(cam, key):
+    if key == "p2_fish_close":
+        hp, hf = school.hero()
+        side = np.cross([0.0, 1.0, 0.0], hf)
+        side *= 1.0 if np.dot(side, sun_h3) > 0 else -1.0
+        cam.fov = 45.0
+        cam.update_projection_matrix()
+        cam.position.set(*(hp + 0.78 * side + 0.32 * hf + [0, 0.22, 0]))
+        cam.look_at(*(hp + 0.05 * hf))
+        return
     p, t, fov = SHOTS[key]
     cam.fov = fov
     cam.update_projection_matrix()
@@ -818,6 +1197,7 @@ def step(dt=1.0 / 60.0):
     ang = 0.35 + 0.25 * math.sin(0.09 * world_t)
     net_step(np.array([sp * math.cos(ang), 0.0, sp * math.sin(ang)], np.float32), world_t)
     net_upload()
+    fish_step(world_t, dt)
     for k, p in enumerate(props):
         p.rotation.y += dt * (38.0 + 6.0 * (k % 3)) * (1 if k % 2 else -1)
     rov.position.y = ROV_Y + 0.03 * math.sin(0.7 * world_t)
@@ -837,6 +1217,8 @@ if HEADLESS:
     frames = int(SECONDS * 60)
     for _ in range(frames):
         step()
+        if SHOT == "p2_fish_close":
+            place(camera, SHOT)
         renderer.render(scene, camera)
     renderer.save_frame(scene, camera, OUT)
     print(f"simulated {SECONDS:.1f} s ({frames} frames), wrote {OUT}")
