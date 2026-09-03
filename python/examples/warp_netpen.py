@@ -62,46 +62,56 @@ def net_rest():
     return np.asarray(rows, np.float32).reshape(-1, 3)
 
 
+S0 = PEN_R * (TEAR_TH % (2.0 * math.pi))            # arc length of the tear meridian
+D0 = NET_TOP - TEAR_Y                                # row length down to the tear centre
+TONGUES = [(1.55, 0.52, 0.20), (2.85, 0.42, 0.15), (-0.30, 0.36, 0.13)]   # (rim angle, length, half-width)
+
+
 def wall_coords(p):
-    """(arc offset from the tear meridian, height above the tear centre) for a wall point."""
-    dth = (math.atan2(p[2], p[0]) - TEAR_TH + math.pi) % (2.0 * math.pi) - math.pi
-    return PEN_R * dth, p[1] - TEAR_Y
+    """(arc offset from the tear meridian, height above the tear centre) for wall point(s)."""
+    p = np.asarray(p, np.float64)
+    dth = (np.arctan2(p[..., 2], p[..., 0]) - TEAR_TH + np.pi) % (2.0 * np.pi) - np.pi
+    return PEN_R * dth, p[..., 1] - TEAR_Y
 
 
 def tear_radius(phi):
-    return TEAR_R * (1.0 + 0.30 * math.sin(3.0 * phi + 1.1) + 0.18 * math.sin(7.0 * phi + 0.4) + 0.10 * math.sin(13.0 * phi + 2.0))
+    return TEAR_R * (1.0 + 0.30 * np.sin(3.0 * phi + 1.1) + 0.18 * np.sin(7.0 * phi + 0.4) + 0.10 * np.sin(13.0 * phi + 2.0))
 
 
-def in_tear(p):
-    s, d = wall_coords(p)
-    return math.hypot(s, d) < tear_radius(math.atan2(d, s))
+def tongue_frame(s, d, k):
+    """(along, across) of wall point(s) in tongue k's frame: base on the rim, axis pointing into the hole."""
+    phi, _, _ = TONGUES[k]
+    c, sn = math.cos(phi), math.sin(phi)
+    bs, bd = (tear_radius(phi) + 0.08) * c, (tear_radius(phi) + 0.08) * sn
+    return -(s - bs) * c - (d - bd) * sn, -(s - bs) * sn + (d - bd) * c
 
 
-def cut_edge(pa, pb):
-    """Cut where the edge crosses the ragged rim (except its bottom hinge arc) or the centre slit."""
-    ia, ib = in_tear(pa), in_tear(pb)
-    sa, da = wall_coords(pa)
-    sb, db = wall_coords(pb)
-    if ia != ib:
-        phi = math.atan2(0.5 * (da + db), 0.5 * (sa + sb))
-        return not (-2.6 < phi < -0.55)
-    return ia and ib and (sa * sb < 0.0) and 0.5 * (da + db) > -0.25
+def tear_classes(rest):
+    """Per vertex: -1 intact net, -2 invisible hole interior, k = flap tongue k; plus its hinge flag."""
+    s, d = wall_coords(rest)
+    r, phi = np.hypot(s, d), np.arctan2(d, s)
+    cls = np.full(len(rest), -1, np.int32)
+    hinge = np.zeros(len(rest), bool)
+    cls[r < tear_radius(phi) - 0.08] = -2
+    for k, (_, L, w) in enumerate(TONGUES):
+        t, q = tongue_frame(s, d, k)
+        on = (cls == -2) & (t > -0.1) & (t < L + 0.12) & (np.abs(q) < w + 0.10)
+        cls[on] = k
+        hinge[on & (t < 0.12)] = True
+    return cls, hinge
 
 
-def net_mask(rest):
+def net_mask(cls, hinge):
+    """Spring bits: a tongue keeps springs inside itself and from its hinge row to the rim, nothing else."""
     mask = np.zeros(NU * NVT, np.int32)
-    inside = np.zeros(NU * NVT, bool)
-    for iv in range(NV):
-        for iu in range(NU):
-            i = iv * NU + iu
-            if abs(wall_coords(rest[i])[0]) > 2.0 * TEAR_R or abs(rest[i][1] - TEAR_Y) > 2.0 * TEAR_R:
-                continue
-            inside[i] = in_tear(rest[i])
-            for bit, (du, dv) in enumerate(OFFS):
-                ju, jv = (iu + du) % NU, iv + dv
-                if 0 <= jv < NV and cut_edge(rest[i], rest[jv * NU + ju]):
-                    mask[i] |= 1 << bit
-    return mask, inside
+    iu, iv = np.arange(NU * NVT) % NU, np.arange(NU * NVT) // NU
+    for bit, (du, dv) in enumerate(OFFS):
+        jv = iv + dv
+        j = np.clip(jv, 0, NVT - 1) * NU + (iu + du) % NU
+        cj, hj = cls[j], hinge[j]
+        keep = (cls == cj) | ((cls == -1) & hj) | ((cj == -1) & hinge) | ((cls < 0) & (cj < 0))
+        mask[(jv >= 0) & (jv < NVT) & ~keep] |= 1 << bit
+    return mask
 
 
 @wp.func
@@ -192,13 +202,14 @@ class Net:
         rest = net_rest()
         rng = np.random.default_rng(7)
         p0 = np.ascontiguousarray(rest + rng.uniform(-3e-3, 3e-3, rest.shape), np.float32)
-        mask, self.inside = net_mask(rest)
+        self.cls, hinge = tear_classes(rest)
+        mask = net_mask(self.cls, hinge)
         iv = np.arange(self.n) // NU
         inv_mass = np.ones(self.n, np.float32)
         inv_mass[iv == 0] = 0.0                       # hung from the collar
         load = np.full(self.n, 0.10, np.float32)      # twine: barely negative buoyancy
         load[iv == NV - 1] = 2.4                      # sinker tube
-        load[self.inside] = 0.55                      # torn flaps droop
+        load[self.cls >= 0] = 0.55                    # torn flaps droop
         self.pos = wp.array(p0, dtype=wp.vec3, device=device)
         self.prev = wp.array(p0, dtype=wp.vec3, device=device)
         self.pred = wp.zeros(self.n, dtype=wp.vec3, device=device)
@@ -248,34 +259,36 @@ def net_step(current, t):
 
 
 # ---- textures ----------------------------------------------------------------
-def vnoise(h, w, cy, cx, rng):
-    """Periodic-in-x value noise on a (h, w) grid with (cy, cx) cells."""
-    g = rng.random((cy + 1, cx + 1)).astype(np.float32)
-    g[:, cx] = g[:, 0]
-    y = np.linspace(0, cy, h, endpoint=False)
-    x = np.linspace(0, cx, w, endpoint=False)
-    y0, x0 = np.floor(y).astype(int), np.floor(x).astype(int)
-    ty, tx = (y - y0)[:, None], (x - x0)[None, :]
+def vnoise(Y, X, cy, cx, rng):
+    """Value noise at (Y, X) given in cell units, periodic on a (cy, cx) lattice."""
+    g = rng.random((cy, cx)).astype(np.float32)
+    y0, x0 = np.floor(Y).astype(int), np.floor(X).astype(int)
+    ty, tx = Y - y0, X - x0
     ty, tx = ty * ty * (3 - 2 * ty), tx * tx * (3 - 2 * tx)
-    return (g[y0][:, x0] * (1 - tx) * (1 - ty) + g[y0][:, x0 + 1] * tx * (1 - ty)
-            + g[y0 + 1][:, x0] * (1 - tx) * ty + g[y0 + 1][:, x0 + 1] * tx * ty)
+    y0, x0 = y0 % cy, x0 % cx
+    y1, x1 = (y0 + 1) % cy, (x0 + 1) % cx
+    return (g[y0, x0] * (1 - tx) * (1 - ty) + g[y0, x1] * tx * (1 - ty)
+            + g[y1, x0] * (1 - tx) * ty + g[y1, x1] * tx * ty)
 
 
-def fbm(h, w, cy, cx, rng, octaves=5):
-    out = np.zeros((h, w), np.float32)
-    amp, tot = 1.0, 0.0
+def fbm(Y, X, cy, cx, rng, octaves=5):
+    out, amp, tot = 0.0, 1.0, 0.0
     for k in range(octaves):
-        out += amp * vnoise(h, w, cy << k, cx << k, rng)
+        out = out + amp * vnoise(Y * (1 << k), X * (1 << k), cy << k, cx << k, rng)
         tot += amp
         amp *= 0.5
-    return out / tot
+    return (out / tot).astype(np.float32)
 
 
-def net_tile(px=256, twine=0.11):
-    """Knotted square mesh: (albedo+alpha, normal map) tiles of TILE_MESHES meshes."""
+def grid(h, w, cy, cx):
+    """(Y, X) broadcastable cell coordinates covering a (h, w) texture with (cy, cx) cells."""
+    return ((np.arange(h) + 0.5) / h * cy)[:, None], ((np.arange(w) + 0.5) / w * cx)[None, :]
+
+
+def net_maps(U, V, ppm, keep=None, twine=0.11):
+    """Knotted square mesh at tile coords (U, V) in meshes -> (albedo+alpha, normal map) uint8 arrays."""
     rng = np.random.default_rng(3)
-    u = (np.arange(px) + 0.5) / px * TILE_MESHES
-    U, V = np.meshgrid(u, u)
+    U, V = U % TILE_MESHES, V % TILE_MESHES
     hw = 0.5 * twine
     wob_u = 0.035 * np.sin(2 * np.pi * V + 0.7) + 0.02 * np.sin(4 * np.pi * V * 1.3)
     wob_v = 0.035 * np.sin(2 * np.pi * U + 2.1) + 0.02 * np.sin(4 * np.pi * U * 0.7)
@@ -287,27 +300,70 @@ def net_tile(px=256, twine=0.11):
     dk = np.hypot(du, dv)
     hk = 1.25 * np.sqrt(np.clip(1 - (dk / (1.7 * hw)) ** 2, 0, 1))
     hgt = np.maximum(np.maximum(hv, hh), hk)
-    fibre = 0.82 + 0.36 * fbm(px, px, 16, 16, rng)
+    fibre = 0.82 + 0.36 * fbm(V / TILE_MESHES * 16, U / TILE_MESHES * 16, 16, 16, rng)
     twist = 0.5 + 0.5 * np.sin(2 * np.pi * (V * 18 + U * 18)) * (hv > hh) + 0.5 * np.sin(2 * np.pi * (U * 18 - V * 18)) * (hv <= hh)
     base = np.float32([0.40, 0.44, 0.34])
     col = base[None, None, :] * (fibre * (0.85 + 0.3 * twist))[..., None]
     col[hk > 0.98] *= 0.7
-    rgba = np.zeros((px, px, 4), np.uint8)
+    alpha = hgt > 0.0 if keep is None else (hgt > 0.0) & keep
+    rgba = np.zeros(hgt.shape + (4,), np.uint8)
     rgba[..., :3] = np.clip(col * 255, 0, 255)
-    rgba[..., 3] = np.where(hgt > 0.0, 255, 0)
-    gy, gx = np.gradient(hgt * 0.5 * hw * px / TILE_MESHES * 0.012)
+    rgba[..., 3] = np.where(alpha, 255, 0)
+    gy, gx = np.gradient(hgt * 0.5 * hw * ppm * 0.012)
     nrm = np.stack([-gx, gy, np.ones_like(gx)], -1)
     nrm /= np.linalg.norm(nrm, axis=-1, keepdims=True)
-    nmap = np.full((px, px, 4), 255, np.uint8)
+    nmap = np.full(hgt.shape + (4,), 255, np.uint8)
     nmap[..., :3] = np.clip((nrm * 0.5 + 0.5) * 255, 0, 255)
+    return rgba, nmap
+
+
+def net_tile(px=256):
+    u = (np.arange(px) + 0.5) / px * TILE_MESHES
+    U, V = np.meshgrid(u, u)
+    rgba, nmap = net_maps(U, V, px / TILE_MESHES)
     return tp.data_texture(rgba, srgb=True), tp.data_texture(nmap, srgb=False)
 
 
-def fouling_maps(rest):
-    """Biofouling: an unwrapped wall texture of clumps plus a per-particle tint weight."""
+def tear_keep(U, V, s, d, rng):
+    """Texel survives the tear: outside the noisy rim, on a flap tongue, or a broken twine end poking in."""
+    r, phi = np.hypot(s, d), np.arctan2(d, s)
+    n = fbm(d / 0.05, s / 0.05, 64, 64, rng, 3)
+    keep = r > tear_radius(phi) * (0.93 + 0.14 * n)
+    for k, (_, L, w) in enumerate(TONGUES):
+        t, q = tongue_frame(s, d, k)
+        keep |= (t > -0.05) & (t < L * (0.85 + 0.3 * n)) & (np.abs(q) < np.minimum(w * (1 - 0.3 * t / L) * (0.7 + 0.6 * n), w + 0.03))
+    hw = 0.5 * 0.11
+    for _ in range(9):
+        ph = rng.uniform(-np.pi, np.pi)
+        rs, rd = tear_radius(ph) * math.cos(ph), tear_radius(ph) * math.sin(ph)
+        uk, vk = (rs + S0) / MESH_M, (D0 - rd) / MESH_M
+        ln = rng.uniform(0.5, 1.5)
+        if rng.random() < 0.5:                        # along a vertical twine, toward the hole centre
+            sg = 1.0 if rd > 0 else -1.0
+            keep |= (np.abs(U - np.round(uk)) < 1.6 * hw) & ((V - vk) * sg > -0.3) & ((V - vk) * sg < ln)
+        else:
+            sg = -1.0 if rs > 0 else 1.0
+            keep |= (np.abs(V - np.round(vk)) < 1.6 * hw) & ((U - uk) * sg > -0.3) & ((U - uk) * sg < ln)
+    return keep
+
+
+def tear_patch(px=2048):
+    """Net texture over the tear window at texel resolution: the ragged rim lives here, not in the grid."""
+    Y, X = grid(px, px, 1, 1)
+    U = PATCH_U[0] + X * (PATCH_U[1] - PATCH_U[0])
+    V = PATCH_V[0] + Y * (PATCH_V[1] - PATCH_V[0])
+    U, V = np.broadcast_arrays(U, V)
+    s, d = U * MESH_M - S0, D0 - V * MESH_M
+    keep = tear_keep(U, V, s, d, np.random.default_rng(21))
+    rgba, nmap = net_maps(U, V, px / (PATCH_U[1] - PATCH_U[0]), keep)
+    return tp.data_texture(rgba, srgb=True), tp.data_texture(nmap, srgb=False)
+
+
+def fouling_maps():
+    """Biofouling: an unwrapped wall texture of lacy olive clumps plus a per-particle tint weight."""
     rng = np.random.default_rng(11)
-    h, w = 1024, 2048
-    f = fbm(h, w, 18, 72, rng)
+    h, w = 2048, 4096
+    f = fbm(*grid(h, w, 18, 72), 18, 72, rng)
     v = (np.arange(h) + 0.5) / h
     u = (np.arange(w) + 0.5) / w
     th = 2 * np.pi * u
@@ -316,15 +372,20 @@ def fouling_maps(rest):
     weight = (0.35 + 0.65 * sunlit)[None, :] * depth_w[:, None]
     weight[v > (NV - 1) / (NVT - 1)] = 0.05
     thr = 0.70 - 0.24 * weight
-    alpha = np.clip((f - thr) / 0.04, 0, 1)
-    fine = fbm(h, w, 96, 384, np.random.default_rng(5))
-    alpha *= np.clip(0.35 + 1.6 * (fine - 0.40), 0, 1)
-    tint = fbm(h, w, 12, 48, np.random.default_rng(9))[..., None]
-    col = np.float32([0.36, 0.42, 0.15]) * (1 - tint) + np.float32([0.30, 0.24, 0.10]) * tint
-    col *= (0.6 + 0.8 * fine)[..., None]
+    edge = np.clip((f - thr) / 0.10, 0, 1)
+    fine = fbm(*grid(h, w, 192, 768), 192, 768, np.random.default_rng(5), 4)
+    lace = fbm(*grid(h, w, 384, 1536), 384, 1536, np.random.default_rng(6), 3)
+    alpha = (edge * (0.4 + 1.2 * (fine - 0.35)) > 0.35) & (lace > 0.28 + 0.35 * (1 - edge))   # frayed, holey
+    C = 2 * np.pi * PEN_R
+    s = ((u * C - S0 + 0.5 * C) % C - 0.5 * C)[None, :]
+    d = (D0 - v * (NVT - 1) * PEN_D / (NV - 1))[:, None]
+    alpha &= np.hypot(s, d) > tear_radius(np.arctan2(d, s)) + 0.03
+    tint = fbm(*grid(h, w, 12, 48), 12, 48, np.random.default_rng(9))[..., None]
+    col = np.float32([0.42, 0.45, 0.19]) * (1 - tint) + np.float32([0.36, 0.30, 0.13]) * tint
+    col *= (0.75 + 0.5 * fine)[..., None]
     rgba = np.zeros((h, w, 4), np.uint8)
     rgba[..., :3] = np.clip(col * 255, 0, 255)
-    rgba[..., 3] = np.clip(alpha * 255, 0, 255)
+    rgba[..., 3] = np.where(alpha, 255, 0)
     iu = np.arange(NU * NVT) % NU
     iv = np.arange(NU * NVT) // NU
     pw = weight[np.minimum((iv * h) // (NVT - 1), h - 1), (iu * w) // NU]
@@ -347,6 +408,7 @@ AE_RANGE = (-2.2, 1.2)
 renderer.set_auto_exposure_range(*AE_RANGE)
 renderer.set_auto_exposure_speed(1.2)
 renderer.fog_anisotropy = 0.55
+renderer.deferred_ao = False       # RT AO reads the coincident cutout planes as walls: blackens twine and fouling
 
 scene = tp.Scene()
 sky = sky_env(SUN_DIR, below_horizon=(0.30, 0.42, 0.48), below_nadir=(0.08, 0.16, 0.20))
@@ -378,49 +440,65 @@ uv_net = np.stack([np.tile(np.arange(NU + 1), NVT) * (2 * np.pi * radii.reshape(
                    np.repeat(row_len, NU + 1) / TILE_M], 1).astype(np.float32)
 uv_foul = np.stack([np.tile(np.arange(NU + 1) / NU, NVT),
                     np.repeat(np.arange(NVT) / (NVT - 1), NU + 1)], 1).astype(np.float32)
+# The tear patch: a window of grid cells around the tear with its own texel-resolution net texture.
+IU_C, IV_C = int(round(S0 / (2 * np.pi * PEN_R) * NU)), int(round(D0 / (PEN_D / (NV - 1))))
+IU0, IU1, IV0, IV1 = IU_C - 8, IU_C + 8, IV_C - 11, IV_C + 11
+PATCH_U = (IU0 * 2 * np.pi * PEN_R / NU / MESH_M, IU1 * 2 * np.pi * PEN_R / NU / MESH_M)
+PATCH_V = (row_len[IV0] / MESH_M, row_len[IV1] / MESH_M)
+uv_patch = np.stack([(uv_net[:, 0] * TILE_MESHES - PATCH_U[0]) / (PATCH_U[1] - PATCH_U[0]),
+                     (uv_net[:, 1] * TILE_MESHES - PATCH_V[0]) / (PATCH_V[1] - PATCH_V[0])], 1).astype(np.float32)
 
 tile_tex, tile_nrm = net_tile()
-foul_tex, foul_w = fouling_maps(net.rest_host)
-net_mat = standard_material(0xffffff, roughness=0.78, metalness=0.0, side=tp.Side.Double)
-net_mat.map = tile_tex
-net_mat.normal_map = tile_nrm
-net_mat.normal_scale = tp.Vector2(0.8, 0.8)
-net_mat.alpha_test = 0.30
-net_mat.vertex_colors = True
+patch_tex, patch_nrm = tear_patch()
+foul_tex, foul_w = fouling_maps()
+tint = np.float32([0.55, 0.62, 0.30])
+vcol = ((1.0 - foul_w[GATHER][:, None]) * 1.0 + foul_w[GATHER][:, None] * tint[None, :]).astype(np.float32)
+
+
+def net_material(tex, nrm):
+    m = standard_material(0xffffff, roughness=0.78, metalness=0.0, side=tp.Side.Double)
+    m.map = tex
+    m.normal_map = nrm
+    m.normal_scale = tp.Vector2(0.8, 0.8)
+    m.alpha_test = 0.30
+    m.vertex_colors = True
+    return m
+
+
+net_mat = net_material(tile_tex, tile_nrm)
+patch_mat = net_material(patch_tex, patch_nrm)
 foul_mat = standard_material(0xffffff, roughness=0.92, metalness=0.0, side=tp.Side.Double)
 foul_mat.map = foul_tex
 foul_mat.alpha_test = 0.5
 
-tint = np.float32([0.55, 0.62, 0.30])
-vcol = (1.0 - foul_w[GATHER][:, None]) * 1.0 + foul_w[GATHER][:, None] * tint[None, :]
-
 
 def net_index():
-    """Grid triangles minus every one that spans a cut spring, so the tear is a real hole."""
-    mask = net.mask.numpy()
+    """Full grid triangles split into (outside patch, inside patch); cut cells stay and stretch, the rim is texture."""
     iv, iu = np.meshgrid(np.arange(NVT - 1), np.arange(NU), indexing="ij")
-    a, b = iv * NU + iu, iv * NU + (iu + 1) % NU
-    c, d = b + NU, a + NU
-    bit = lambda idx, k: (mask[idx] >> k) & 1
-    ab, bc, cd, da, ac = bit(a, 1), bit(b, 3), bit(c, 0), bit(d, 2), bit(a, 7)
     ga, gb = iv * (NU + 1) + iu, iv * (NU + 1) + iu + 1
     gc, gd = gb + NU + 1, ga + NU + 1
-    t1 = np.stack([ga, gb, gc], -1)[(ab | bc | ac) == 0]
-    t2 = np.stack([ga, gc, gd], -1)[(ac | cd | da) == 0]
-    return np.concatenate([t1, t2]).reshape(-1).astype(np.uint32)
+    tri = np.concatenate([np.stack([ga, gb, gc], -1), np.stack([ga, gc, gd], -1)]).reshape(-1, 3)
+    cu, cv = tri[:, 0] % (NU + 1), tri[:, 0] // (NU + 1)
+    inp = (cu >= IU0) & (cu < IU1) & (cv >= IV0) & (cv < IV1)
+    return tri[~inp].reshape(-1).astype(np.uint32), tri[inp].reshape(-1).astype(np.uint32)
 
 
-NET_INDEX = net_index()
-net_geo = tp.PlaneGeometry(1.0, 1.0, NU, NVT - 1)
-net_geo.set_attribute("position", rest_g)
-net_geo.set_attribute("uv", uv_net)
-net_geo.set_attribute("color", vcol.astype(np.float32))
-net_geo.set_index(NET_INDEX)
-foul_geo = tp.PlaneGeometry(1.0, 1.0, NU, NVT - 1)
-foul_geo.set_attribute("position", rest_g)
-foul_geo.set_attribute("uv", uv_foul)
-foul_geo.set_index(NET_INDEX)
-for geo, mat in ((net_geo, net_mat), (foul_geo, foul_mat)):
+NET_INDEX, PATCH_INDEX = net_index()
+
+
+def net_geometry(uv, index):
+    g = tp.PlaneGeometry(1.0, 1.0, NU, NVT - 1)
+    g.set_attribute("position", rest_g)
+    g.set_attribute("uv", uv)
+    g.set_attribute("color", vcol)
+    g.set_index(index)
+    return g
+
+
+net_geo = net_geometry(uv_net, NET_INDEX)
+patch_geo = net_geometry(uv_patch, PATCH_INDEX)
+foul_geo = net_geometry(uv_foul, np.concatenate([NET_INDEX, PATCH_INDEX]))
+for geo, mat in ((net_geo, net_mat), (patch_geo, patch_mat), (foul_geo, foul_mat)):
     m = tp.Mesh(geo, mat)
     m.frustum_culled = False
     m.cast_shadow = True
@@ -431,8 +509,9 @@ for geo, mat in ((net_geo, net_mat), (foul_geo, foul_mat)):
 def net_upload():
     pos = net.pos.numpy()
     nrm = net.nrm.numpy()
-    net_geo.update_attribute("position", pos[GATHER])
-    net_geo.update_attribute("normal", nrm[GATHER])
+    for g in (net_geo, patch_geo):
+        g.update_attribute("position", pos[GATHER])
+        g.update_attribute("normal", nrm[GATHER])
     # Coincident within the shadow-ray bias: a cutout plane is opaque to RT shadows.
     foul_geo.update_attribute("position", (pos + nrm * 0.0005)[GATHER])
     foul_geo.update_attribute("normal", nrm[GATHER])
