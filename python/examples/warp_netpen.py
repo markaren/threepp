@@ -291,9 +291,10 @@ def rope_integrate(pos: wp.array(dtype=wp.vec3), prev: wp.array(dtype=wp.vec3), 
 
 
 @wp.kernel
-def rope_solve(p_in: wp.array(dtype=wp.vec3), p_out: wp.array(dtype=wp.vec3), n: int, seg: float):
+def rope_solve(p_in: wp.array(dtype=wp.vec3), p_out: wp.array(dtype=wp.vec3), n: int, seg_a: wp.array(dtype=float)):
     i = wp.tid()
     p = p_in[i]
+    seg = seg_a[0]
     if i == 0 or i == n - 1:
         p_out[i] = p
         return
@@ -308,6 +309,7 @@ class Rope:
         self.pos, self.prev = wp.array(z, dtype=wp.vec3, device=device), wp.array(z, dtype=wp.vec3, device=device)
         self.pred, self.scratch = wp.zeros(ROPE_N, dtype=wp.vec3, device=device), wp.zeros(ROPE_N, dtype=wp.vec3, device=device)
         self.pins = wp.zeros(2, dtype=wp.vec3, device=device)
+        self.seg = wp.array(np.float32([ROPE_SEG]), dtype=float, device=device)   # rest length per segment, paid out per frame
 
     def reset(self, a, b):
         p = np.linspace(a, b, ROPE_N).astype(np.float32)
@@ -316,12 +318,16 @@ class Rope:
         self.prev.assign(p)
         self.pins.assign(np.asarray([a, b], np.float32))
 
+    def pay_out(self, dist):
+        """Rest length 1.06 x the straight run (capped at the rope): a gentle catenary, never loops."""
+        self.seg.assign(np.float32([min(1.06 * dist, ROPE_L) / (ROPE_N - 1)]))
+
     def launches(self):
         for _ in range(SUBSTEPS):
             wp.launch(rope_integrate, dim=ROPE_N, device=device, inputs=[self.pos, self.prev, self.pred, self.pins, ROPE_N, DT])
             a, b = self.pred, self.scratch
             for _ in range(ITERATIONS):
-                wp.launch(rope_solve, dim=ROPE_N, device=device, inputs=[a, b, ROPE_N, ROPE_SEG])
+                wp.launch(rope_solve, dim=ROPE_N, device=device, inputs=[a, b, ROPE_N, self.seg])
                 a, b = b, a
             wp.copy(self.pos, a)
 
@@ -505,8 +511,8 @@ sun = tp.DirectionalLight(0xfff0d8, 2.4)
 sun.position.set(*(SUN_DIR * 1000.0))
 scene.add(sun)
 
-ocean = tp.Ocean(size=320.0, resolution=384, wind_speed=7.0, wind_theta=0.6,
-                 choppiness=0.7, fft_size=512, fetch=15e3)
+ocean = tp.Ocean(size=320.0, resolution=384, wind_speed=5.5, wind_theta=0.6,
+                 choppiness=0.6, fft_size=512, fetch=15e3)
 ocean.params.foam_amount = 0.0                 # whitecaps print as white slabs from below
 ocean.material.attenuation_color = tp.Color(0.16, 0.30, 0.24)   # fjord water from above: dark green-grey, not tropical teal
 ocean.material.attenuation_distance = 2.5
@@ -1999,7 +2005,9 @@ def step(dt=1.0 / 60.0):
     frame_i += 1
     mark("other")
     rov_pose(world_t + PATROL_T0, dt)
-    rope.pins.assign(np.asarray(tether_pins(dt), np.float32))
+    pins = tether_pins(dt)
+    rope.pins.assign(np.asarray(pins, np.float32))
+    rope.pay_out(float(np.linalg.norm(pins[1] - pins[0])))
     sp = 0.15 * (1.0 + 0.35 * math.sin(0.21 * world_t))
     ang = 0.35 + 0.25 * math.sin(0.09 * world_t)
     net_step(np.array([sp * math.cos(ang), 0.0, sp * math.sin(ang)], np.float32), world_t)
@@ -2044,7 +2052,7 @@ def smooth(u, hold=0.0):
 def cam_waterline(u, t):
     ROV_LIFT[0] = 1.1 * (1.0 - smooth((u - 0.1) / 0.8))
     eye = P0 - 2.5 * R0 + 0.6 * T0
-    eye[1] = WATER_Y + 0.03 - 0.11 * smooth(u)        # mean surface: the waves ride through the lens
+    eye[1] = WATER_Y + 0.10 - 0.16 * smooth(u)        # mean surface: the waves ride through the lens, under only at the end
     return eye, P0 + [0, ROV_LIFT[0] + 0.1, 0], 55.0   # the ROV enters the water 2.6 m in front
 
 
@@ -2068,20 +2076,28 @@ def cam_sonar(u, t):
     return rov_pos - 2.2 * fwd + 0.7 * inb + [0, 0.9, 0], rov_pos + 1.5 * fwd + [0, -0.1, 0], 58.0
 
 
+def net_clear(eye, r=0.8):
+    """Keep the eye r metres off the nearest cloth particle (the wall bulges inward under the current)."""
+    pos = net_host[0] if net_host[0] is not None else net.pos.numpy()
+    j = int(np.argmin(((pos - eye) ** 2).sum(1)))
+    d = float(np.linalg.norm(eye - pos[j]))
+    return eye + (r - d) / max(d, 1e-6) * (eye - pos[j]) if d < r else eye
+
+
 def cam_tear(u, t):
     if "tear" not in _anchor:                         # the ROV keeps creeping: anchor the push on its pose at the cut
         fwd = rov_R @ [1.0, 0.0, 0.0]
         _anchor["tear"] = rov_pos - 1.5 * fwd - 1.2 * e_t + [0, 0.6, 0]   # the ROV creeps along +e_t: stay on the other side
     a, b = _anchor["tear"], TEAR_C - 1.1 * e_r - 1.15 * e_t + [0, 0.35, 0]
-    e = smooth(u)
-    return a + (b - a) * e, TEAR_C + 0.3 * e_r * e, 50.0
+    e = smooth(u, hold=0.3)                           # the push stops 0.8 m off the twine and holds the last 3 s
+    return net_clear(a + (b - a) * e), TEAR_C + 0.3 * e_r * e, 50.0
 
 
 def cam_hero(u, t):
     a = TEAR_C - 1.1 * e_r - 1.15 * e_t + [0, 0.35, 0]
     b = TEAR_C - 3.6 * e_r - 1.5 * e_t + [0, -1.7, 0]           # below the milling band, looking up at the hole and the window
     e = smooth(u, hold=0.15)
-    return a + (b - a) * e, TEAR_C + (0.3 - 0.9 * e) * e_r + [0, 0.3 * e, 0], 50.0 + 8.0 * e
+    return net_clear(a + (b - a) * e), TEAR_C + (0.3 - 0.9 * e) * e_r + [0, 0.3 * e, 0], 50.0 + 8.0 * e
 
 
 T_HOVER = _hover_i / 60.0
