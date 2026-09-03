@@ -11,6 +11,10 @@ import sys
 
 import numpy as np
 
+# The packs live in the repo's (gitignored) geodata/ root -- the same place
+# examples/extras/terrain/norway_terrain.cpp reads as PROJECT_FOLDER/geodata.
+REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 
 def load(pack_dir):
     with open(os.path.join(pack_dir, "region.json"), encoding="utf-8") as f:
@@ -146,4 +150,5 @@ def main(pack_dir):
 
 
 if __name__ == "__main__":
-    main(sys.argv[1] if len(sys.argv) > 1 else r"C:\dev\threepp\geodata\trollstigen")
+    main(sys.argv[1] if len(sys.argv) > 1
+         else os.path.join(REPO_ROOT, "geodata", "trollstigen"))

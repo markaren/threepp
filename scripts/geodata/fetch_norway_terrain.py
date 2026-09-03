@@ -43,6 +43,14 @@ import tifffile
 from pyproj import Transformer
 
 # --------------------------------------------------------------------------
+# Packs are written to the repo's (gitignored) geodata/ root by default -- the
+# same place examples/extras/terrain/norway_terrain.cpp reads them from as
+# PROJECT_FOLDER/geodata/<name>. --out overrides it.
+# --------------------------------------------------------------------------
+REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+DEFAULT_OUT = os.path.join(REPO_ROOT, "geodata")
+
+# --------------------------------------------------------------------------
 # Presets  (lat, lon in WGS84).
 #   trollstigen: centered on the Fv63 switchback wall (the famous 11 hairpins).
 #     The wall climbs ~62.449N..62.456N; this center places it in the middle
@@ -1079,7 +1087,8 @@ def parse_args(argv):
     ap.add_argument("--size", type=float, default=8000.0, help="region size in meters (default 8000)")
     ap.add_argument("--res", type=float, default=2.0, help="grid resolution m/cell (default 2)")
     ap.add_argument("--name", help="region name (defaults to preset name)")
-    ap.add_argument("--out", default=r"C:\dev\threepp\geodata", help="output root dir")
+    ap.add_argument("--out", default=DEFAULT_OUT,
+                    help=f"output root dir (default {DEFAULT_OUT})")
     ap.add_argument("--include-paths", action="store_true", help="include foot/bike paths")
     ap.add_argument("--no-roads", action="store_true", help="skip road fetch")
     ap.add_argument("--buildings", action="store_true",

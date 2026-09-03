@@ -47,7 +47,8 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(_HERE)))       # repo/python
 
 import threepp as tp
 
-DEFAULT_ASSET = os.environ.get("THREEPP_CALICO_ASSET", "C:/dev/splats/calico_tanks")
+DEFAULT_ASSET = os.environ.get("THREEPP_CALICO_ASSET",
+                               os.path.expanduser("~/.cache/threepp/splats/calico_tanks"))
 BAKE_CACHE = os.path.join(DEFAULT_ASSET, "calico_bake_cache.npz")
 
 # ── grid parameters ───────────────────────────────────────────────────────────

@@ -31,7 +31,7 @@ Only the first ``count`` pixels (row-major) of each image are valid.
 Usage
 -----
     py -3.14 python/examples/calico/trail_analysis.py \
-        [--asset C:/dev/splats/calico_tanks] [--level 2] [--out shots.json]
+        [--asset ~/.cache/threepp/splats/calico_tanks] [--level 2] [--out shots.json]
 """
 
 from __future__ import annotations
@@ -45,7 +45,8 @@ from pathlib import Path
 import numpy as np
 from PIL import Image
 
-DEFAULT_ASSET = os.environ.get("THREEPP_CALICO_ASSET", r"C:/dev/splats/calico_tanks")
+DEFAULT_ASSET = os.environ.get("THREEPP_CALICO_ASSET",
+                               os.path.expanduser("~/.cache/threepp/splats/calico_tanks"))
 
 # SuperSplat's initial camera, post-flip. Used only as the "near here" anchor
 # when several walkable regions survive the plane test.

@@ -69,7 +69,8 @@ from spot_slam import _bench_report, BENCH_WARMUP, BENCH_PHASES
 GRAV = np.array([0.0, 0.0, -1.0])
 _SCANSTATS = bool(os.environ.get("SPOT_SCANSTATS"))
 
-DEFAULT_ASSET = os.environ.get("THREEPP_CALICO_ASSET", "C:/dev/splats/calico_tanks")
+DEFAULT_ASSET = os.environ.get("THREEPP_CALICO_ASSET",
+                               os.path.expanduser("~/.cache/threepp/splats/calico_tanks"))
 SHOTS_JSON = os.path.join(_HERE, "shots.json")
 
 SENSOR_W, SENSOR_H = 128, 96

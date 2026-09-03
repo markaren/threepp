@@ -9,7 +9,7 @@ chunk + env/), from a public CDN, and that is what this script pulls: about 430 
 72 chunk directories, 360 WebP planes. threepp's SogLoader reads the directory as
 is (SogLoader.is_sog(dir) is true), so nothing is converted.
 
-    py -3.14 fetch_calico_asset.py                # -> C:/dev/splats/calico_tanks (or $THREEPP_CALICO_ASSET)
+    py -3.14 fetch_calico_asset.py                # -> ~/.cache/threepp/splats/calico_tanks (or $THREEPP_CALICO_ASSET)
     py -3.14 fetch_calico_asset.py --out D:/scans/calico_tanks
 
 Re-running skips files already present. An ATTRIBUTION.txt is written beside the
@@ -23,7 +23,8 @@ import urllib.request
 
 SCENE_ID = "19312f07"
 BASE = f"https://d28zzqy0iyovbz.cloudfront.net/{SCENE_ID}/v1/"
-DEFAULT_OUT = os.environ.get("THREEPP_CALICO_ASSET", "C:/dev/splats/calico_tanks")
+DEFAULT_OUT = os.environ.get("THREEPP_CALICO_ASSET",
+                             os.path.expanduser("~/.cache/threepp/splats/calico_tanks"))
 
 ATTRIBUTION = (
     "Calico Tanks Trail, Red Rock Canyon, Las Vegas NV (XGRIDS PortalCam)\n"

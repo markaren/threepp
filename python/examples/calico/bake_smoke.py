@@ -26,7 +26,8 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspa
 
 import threepp as tp
 
-DEFAULT_ASSET = os.environ.get("THREEPP_CALICO_ASSET", "C:/dev/splats/calico_tanks")
+DEFAULT_ASSET = os.environ.get("THREEPP_CALICO_ASSET",
+                               os.path.expanduser("~/.cache/threepp/splats/calico_tanks"))
 
 ap = argparse.ArgumentParser()
 ap.add_argument("--asset", default=DEFAULT_ASSET)

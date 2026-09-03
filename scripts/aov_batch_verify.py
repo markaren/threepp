@@ -20,11 +20,13 @@
 # Usage:  python scripts/aov_batch_verify.py [--w 1280 --h 720 --iters 20]
 
 import argparse
+import os
 import statistics
 import sys
 import time
 
-sys.path.insert(0, r"C:\dev\threepp\python")
+sys.path.insert(0, os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "python"))
 import numpy as np  # noqa: E402
 import threepp as tp  # noqa: E402
 

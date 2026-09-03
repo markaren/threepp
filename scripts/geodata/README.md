@@ -32,7 +32,7 @@ python fetch_norway_terrain.py --center 62.4482,7.6714 --size 8000 --res 2 --nam
 | `--size` | 8000 | region size in meters (square) |
 | `--res` | 2 | grid resolution, m/cell |
 | `--name` | preset name | output subdir name |
-| `--out` | `C:\dev\threepp\geodata` | output root |
+| `--out` | `<repo>/geodata` | output root |
 | `--include-paths` | off | also emit foot/bike paths (Gangveg, Gang- og sykkelveg, Gågate) |
 | `--no-roads` | off | skip the NVDB fetch |
 | `--buildings` | off | fetch OSM building footprints + DOM nDSM heights |

@@ -31,6 +31,8 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."
 import threepp as tp
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+DEFAULT_ASSET = os.environ.get("THREEPP_CALICO_ASSET",
+                               os.path.expanduser("~/.cache/threepp/splats/calico_tanks"))
 
 # The five framings the complaint was measured in. The cloud is flipped Y-down
 # to Y-up (rotation.x = pi) exactly as the demo flips it, so these are world
@@ -58,7 +60,7 @@ def histogram(levels, n_levels):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--asset", default="C:/dev/splats/calico_tanks")
+    ap.add_argument("--asset", default=DEFAULT_ASSET)
     ap.add_argument("--width", type=int, default=1200)
     ap.add_argument("--height", type=int, default=720)
     ap.add_argument("--render-scale", type=float, default=0.5)
