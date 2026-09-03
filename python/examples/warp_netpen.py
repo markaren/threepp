@@ -3,6 +3,7 @@ camera + sonar insets, and a Warp school of procedural salmon.
 
     python warp_netpen.py                          # window; drag to orbit, Esc quits
     python warp_netpen.py --shot p3_hud --out x.png --seconds 8 --size 1600x900
+    python warp_netpen.py --film [out.mp4]         # 66 s film + contact sheet + poster (--film-test: 3 stills per cut)
 Cameras: p1_net_wide p1_collar_below p1_rov_hero p1_tear p2_school p2_fish_close p2_leak p3_hud p3_sonar_tear.
 `--fish N` (400); `--profile` prints per-stage ms over 300 live frames and exits; `--no-interop` uploads the school
 through the host. Vulkan only; Warp on CUDA if present.
@@ -26,12 +27,15 @@ except ImportError:
     VkInteropArray = None
 
 SHOT = cli_arg("--shot", "", str)
-HEADLESS = bool(SHOT)
+FILM = "--film" in sys.argv
+FILM_TEST = "--film-test" in sys.argv                # 3 stills per cut instead of the mp4
+HEADLESS = bool(SHOT) or FILM
 SECONDS = cli_arg("--seconds", 6.0, float)
 W, H = parse_size(cli_arg("--size", "1600x900", str))
 CAP_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
                        "aaa_caps", "netpen")
 OUT = cli_arg("--out", os.path.join(CAP_DIR, f"{SHOT}.png"), str)
+FILM_OUT = cli_arg("--film", os.path.join(CAP_DIR, "netpen_film.mp4"), str)
 PROFILE = "--profile" in sys.argv
 INTEROP = "--no-interop" not in sys.argv          # CUDA->Vulkan zero copy for the school (host upload otherwise)
 NET_INTEROP = "--net-interop" in sys.argv         # opt-in repro: four interop meshes = VK_ERROR_DEVICE_LOST on dev 2026-09-03
@@ -509,7 +513,8 @@ floor = tp.Mesh(tp.PlaneGeometry(400.0, 400.0), standard_material(0x03060a))
 floor.rotate_x(-math.pi / 2)
 floor.position.y = -45.0
 scene.add(floor)
-renderer.set_fog_water_surface_y(WATER_Y)
+MURK_PLANE = WATER_Y + 0.30            # above every crest: a crest shaded from above prints sun glints through the murk
+renderer.set_fog_water_surface_y(MURK_PLANE)
 renderer.set_underwater_murk(MURK_SIGMA, MURK_COLOR)
 
 # ---- net meshes --------------------------------------------------------------
@@ -859,7 +864,7 @@ def build_rov():
         disc.rotation.y = math.pi / 2
         disc.position.set(0.2135, -0.075, z)
         rov.add(disc)
-        spot = tp.SpotLight(tp.Color(1.0, 0.95, 0.85), 220.0, 14.0, math.radians(21.0), 0.55, 2.0)
+        spot = tp.SpotLight(tp.Color(1.0, 0.95, 0.85), 1100.0, 14.0, math.radians(21.0), 0.55, 2.0)
         spot.position.set(0.215, -0.075, z)
         tgt = tp.Group()
         tgt.position.set(4.0, -0.35, z)
@@ -971,9 +976,13 @@ PATROL_T0 = {"p3_sonar_tear": _hover_i / 60.0 - SECONDS, "p3_hud": _wall_i / 60.
 rov_pos, rov_R, rov_thrust = PATROL[0, :3].copy(), np.eye(3), np.zeros(3)
 
 
+ROV_LIFT = [0.0]                                      # film cut 1: the ROV hangs this far above its patrol start
+
+
 def rov_pose(t):
     global rov_pos, rov_R, rov_thrust
-    x, y, z, yaw, pitch, roll, tf, tl, tv = PATROL[int(t * 60.0) % len(PATROL)]
+    x, y, z, yaw, pitch, roll, tf, tl, tv = PATROL[int(max(t, 0.0) * 60.0) % len(PATROL)]
+    y += ROV_LIFT[0]
     rov_yaw.position.set(x, y, z)
     rov_yaw.rotation.y = yaw
     rov_pitch.rotation.z = pitch
@@ -1088,6 +1097,7 @@ F_K = 5.6
 FISH_SPEED_MIN, FISH_SPEED_MAX = 0.25, 1.6
 MILL_SPEED = 0.75
 LEAK_FRAC = 0.05
+LEAK_T0 = [0.0]                                       # world time the leak schedule starts (the film sets it)
 EYE_U, EYE_TH = 0.085, 0.25
 TEX_W, TEX_H, BODY_ROWS = 1024, 512, 392
 BODY_V = BODY_ROWS / TEX_H
@@ -1381,7 +1391,7 @@ def boids(pos: wp.array(dtype=wp.vec3), vel: wp.array(dtype=wp.vec3),
     r = wp.sqrt(p[0] * p[0] + p[2] * p[2])
     rad = wp.vec3(p[0], 0.0, p[2]) / wp.max(r, 1.0e-3)
     tan = wp.vec3(-rad[2], 0.0, rad[0])
-    leaking = leak_t[i] >= 0.0 and t > leak_t[i]
+    leaking = leak_t[i] >= 0.0 and t > leak_t[i] + uni[3][2]
     near_tear = wp.length(p - tear) < 2.4
     goal = wp.vec3(0.0, 0.0, 0.0)
     if leaking:
@@ -1394,8 +1404,9 @@ def boids(pos: wp.array(dtype=wp.vec3), vel: wp.array(dtype=wp.vec3),
                 goal = tear + e_r * 1.5 + pj
         else:
             goal = tear + e_r * 6.0 + tan * 3.0 * pref[i][2]
-        want = wp.normalize(goal - p) * 0.85
-        acc += (want - v) * 2.5
+        g = goal - p
+        want = wp.normalize(wp.vec3(g[0], 0.3 * g[1], g[2])) * 0.7    # a level run at the hole
+        acc += (want - v) * 1.4
     else:
         want = tan * MILL_SPEED - rad * (r - pref[i][0]) * 0.45 + wp.vec3(0.0, (pref[i][1] - p[1]) * 0.45, 0.0)
         acc += (want - v) * 1.1
@@ -1411,12 +1422,15 @@ def boids(pos: wp.array(dtype=wp.vec3), vel: wp.array(dtype=wp.vec3),
         acc += wp.vec3(0.0, 4.0 * (-pen_d + 1.0 - p[1]), 0.0)
     dr = p - rov
     lr = wp.length(dr)
-    if lr < 2.0:
-        acc += dr / wp.max(lr, 1.0e-3) * (1.0 - lr / 2.0) * 5.0
+    rr = 2.0
+    if leaking:
+        rr = 0.7
+    if lr < rr:
+        acc += dr / wp.max(lr, 1.0e-3) * (1.0 - lr / rr) * 5.0
     dc = p - uni[4]
     lc = wp.length(dc)
-    if i > 0 and lc < 1.2:                            # keep the shot camera clear; fish 0 is the close-up hero
-        acc += dc / wp.max(lc, 1.0e-3) * (1.0 - lc / 1.2) * 5.0
+    if i > 0 and lc < 1.8:                            # keep the shot camera clear; fish 0 is the close-up hero
+        acc += dc / wp.max(lc, 1.0e-3) * (1.0 - lc / 1.8) * 5.0
     acc += wp.vec3(0.0, -0.4 * v[1], 0.0)
     v2 = v + acc * dt
     s2 = wp.max(wp.length(v2), 1.0e-4)
@@ -1507,7 +1521,7 @@ class School:
         self.out_n = wp.zeros(FISH_N * self.nv, dtype=wp.vec3, device=device)
 
     def step(self, t, dt, rov_pos, cam_pos):
-        self.uni.assign(np.asarray([rov_pos, TEAR_C, e_r, [PEN_R, PEN_D, 0.0], cam_pos], np.float32))
+        self.uni.assign(np.asarray([rov_pos, TEAR_C, e_r, [PEN_R, PEN_D, LEAK_T0[0]], cam_pos], np.float32))
         wp.launch(boids, dim=FISH_N, device=device,
                   inputs=[self.pos, self.vel, self.pos2, self.vel2, self.yaw, self.pitch, self.roll, self.beat,
                           self.amp, self.brake, self.len, self.pref, self.leak, self.uni, FISH_N, t, dt])
@@ -1653,7 +1667,7 @@ scene.add(motes)
 
 # ---- sonar: Warp ray fan against a wp.Mesh of net + collar + fish ------------------------------
 SON_BEAMS, SON_VS, SON_BINS, SON_RANGE, SON_FOV = 256, 8, 512, 20.0, 130.0
-SON_W, SON_H, SON_VIEW = 512, 384, 8.0                  # 20 m of bins, 8 m on the display
+SON_W, SON_H, SON_VIEW = 512, 384, 4.0                  # 20 m of bins, 4 m on the display: the wall arc fills the fan
 
 
 @wp.kernel
@@ -1729,7 +1743,7 @@ _bear = np.degrees(np.arctan2(_dx, np.maximum(_dy, 1e-6)))
 SON_VALID = (_r_m < SON_VIEW) & (np.abs(_bear) < 0.5 * SON_FOV) & (_dy > 0)
 SON_BEAM = np.clip(((_bear + 0.5 * SON_FOV) / SON_FOV * SON_BEAMS).astype(int), 0, SON_BEAMS - 1)
 SON_BIN = np.clip((_r_m / SON_RANGE * SON_BINS).astype(int), 0, SON_BINS - 1)
-SON_RINGS = SON_VALID & (np.abs(_r_m - np.round(_r_m / 2) * 2) < 0.025) & (_r_m > 1)
+SON_RINGS = SON_VALID & (np.abs(_r_m - np.round(_r_m)) < 0.0125) & (_r_m > 0.5)
 SON_TICK = SON_VALID & (np.abs(_dx) < 0.8) & (_r_m > 0.5)
 SON_EDGE = ((np.abs(np.abs(_bear) - 0.5 * SON_FOV) < 0.35) & (_r_m < SON_VIEW) & (_dy > 0)) | ((np.abs(_r_m - SON_VIEW) < 0.03) & (np.abs(_bear) < 0.5 * SON_FOV))
 _k = np.linspace(0, 1, 256)[:, None]
@@ -1753,7 +1767,7 @@ SON_TILT = -15.0                                        # mount pitch, deg: the 
 
 
 def sonar_step(frame_i):
-    if frame_i % SON_EVERY or not HUD_ON:
+    if frame_i % SON_EVERY or not HUD_LIVE[0]:
         return
     global son_mesh
     wp.copy(_son_pts, net.pos, 0, 0, _n_net)
@@ -1814,9 +1828,17 @@ def hud_panel(w, h, ax, label, channels=3):
 cam_tex, _hud_a = hud_panel(CAM_W, CAM_H, 0.0, "ROV CAM")
 son_tex, _hud_b = hud_panel(SON_W, SON_H, 1.0, "SONAR 130 deg", 4)
 HUD_ON = not SHOT or SHOT.startswith("p3")
+HUD_LIVE = [HUD_ON]                                  # the film parks the insets per cut
+
+
+def hud_park(live):
+    HUD_LIVE[0] = live
+    for _o in _hud_b + (_hud_a[1:] if PIP else _hud_a):      # off-screen, never visible=False
+        _o.position.x = (HUD_M if _o in _hud_a else -HUD_M) if live else -9000.0
+
+
 if not HUD_ON:
-    for _o in _hud_a + _hud_b:                       # insets off-screen for the other shots, never visible=False
-        _o.position.x = -9000.0
+    hud_park(False)
 ROV_VIEW, PIP = 0, False
 
 
@@ -1828,8 +1850,8 @@ def rov_cam_place():
 
 def hud_update():
     if PIP:                                           # composited on the device; the rect follows the window height
-        renderer.set_view_display_rect(ROV_VIEW, HUD_M, renderer.size()[1] - HUD_M - CAM_H, CAM_W, CAM_H)
-    elif ROV_VIEW and HUD_ON and frame_i % 4 == 0:   # fallback: a device-idle readback, 15 Hz
+        renderer.set_view_display_rect(ROV_VIEW, HUD_M if HUD_LIVE[0] else -9000, renderer.size()[1] - HUD_M - CAM_H, CAM_W, CAM_H)
+    elif ROV_VIEW and HUD_LIVE[0] and frame_i % 4 == 0:   # fallback: a device-idle readback, 15 Hz
         rgb = renderer.read_view_rgb_pixels(ROV_VIEW)
         if rgb.size:
             cam_tex.update_data(np.ascontiguousarray(rgb[::-1]))
@@ -1946,7 +1968,141 @@ def step(dt=1.0 / 60.0):
     mark("motes")
 
 
-if HEADLESS and SHOT not in SHOTS:
+# ---- film ----------------------------------------------------------------------
+FPS, WARMUP = 60, 40
+P0 = PATROL[0, :3]
+R0 = np.array([P0[0], 0.0, P0[2]]) / np.hypot(P0[0], P0[2])
+T0 = np.array([-R0[2], 0.0, R0[0]])
+_anchor = {}
+
+
+def smooth(u, hold=0.0):
+    """Ease in/out on [0, 1 - hold]; flat for the last `hold` of the cut."""
+    u = min(max(u / max(1.0 - hold, 1e-6), 0.0), 1.0)
+    return u * u * (3.0 - 2.0 * u)
+
+
+def cam_waterline(u, t):
+    ROV_LIFT[0] = 1.1 * (1.0 - smooth((u - 0.1) / 0.8))
+    eye = P0 - 3.0 * R0 + 0.8 * T0
+    eye[1] = float(ocean.sample_height(eye[0], eye[2])) + 0.04
+    return eye, P0 + [0, 0.5 * ROV_LIFT[0] + 0.45, 0], 55.0
+
+
+def cam_descent(u, t):
+    e = smooth(u)
+    return (-1.2 * sun_h3 + [0, -0.5 - 5.7 * e, 0], 4.5 * sun_h3 + [0, 0.4 - 1.0 * e, 0], 72.0)
+
+
+def cam_patrol(u, t):
+    fwd = rov_R @ [1.0, 0.0, 0.0]
+    inb = -np.array([rov_pos[0], 0.0, rov_pos[2]]) / np.hypot(rov_pos[0], rov_pos[2])
+    back = 3.2 - 1.3 * smooth(u)
+    return rov_pos - back * fwd + 1.1 * inb + [0, 0.6, 0], rov_pos + 1.2 * fwd + [0, -0.2, 0], 62.0
+
+
+def cam_sonar(u, t):
+    fwd = rov_R @ [1.0, 0.0, 0.0]
+    inb = -np.array([rov_pos[0], 0.0, rov_pos[2]]) / np.hypot(rov_pos[0], rov_pos[2])
+    return rov_pos - 2.2 * fwd + 0.7 * inb + [0, 0.9, 0], rov_pos + 1.5 * fwd + [0, -0.1, 0], 58.0
+
+
+def cam_tear(u, t):
+    if "tear" not in _anchor:                         # the ROV keeps creeping: anchor the push on its pose at the cut
+        fwd = rov_R @ [1.0, 0.0, 0.0]
+        _anchor["tear"] = rov_pos - 1.5 * fwd + 1.2 * e_t + [0, 0.6, 0]
+    a, b = _anchor["tear"], TEAR_C - 1.1 * e_r + 1.15 * e_t + [0, 0.35, 0]
+    e = smooth(u)
+    return a + (b - a) * e, TEAR_C + 0.3 * e_r * e, 50.0
+
+
+def cam_hero(u, t):
+    a = TEAR_C - 1.1 * e_r + 1.15 * e_t + [0, 0.35, 0]
+    b = TEAR_C - 4.5 * e_r + 1.8 * e_t + [0, 0.9, 0]
+    e = smooth(u, hold=0.15)
+    return a + (b - a) * e, TEAR_C + (0.3 - 0.9 * e) * e_r + [0, 0.2 * e, 0], 50.0 + 8.0 * e
+
+
+CUTS = [("waterline", 10.0, cam_waterline, False, WATER_Y), ("descent", 12.0, cam_descent, False, MURK_PLANE),
+        ("patrol", 14.0, cam_patrol, True, MURK_PLANE), ("sonar", 8.0, cam_sonar, True, MURK_PLANE),
+        ("tear", 10.0, cam_tear, True, MURK_PLANE), ("hero", 12.0, cam_hero, False, MURK_PLANE)]
+T_CUT = np.concatenate([[0.0], np.cumsum([c[1] for c in CUTS])])
+FILM_T_OFF = T_CUT[4] - _hover_i / 60.0               # the ROV is at HOVER, facing the tear, when the tear cut opens
+POSTER_U = 0.9
+
+
+def film_cam(cut, u, t):
+    eye, tgt, fov = CUTS[cut][2](u, t)
+    camera.fov = fov
+    camera.update_projection_matrix()
+    camera.position.set(*eye)
+    camera.look_at(*tgt)
+
+
+def world_t_rewind(dt):
+    """Warm-up frames must not advance the story clock: the cut opens where the previous one ended."""
+    global world_t
+    world_t -= dt
+
+
+def run_film():
+    global PATROL_T0
+    import imageio.v2 as imageio
+    from PIL import Image
+    PATROL_T0 = -FILM_T_OFF
+    LEAK_T0[0] = T_CUT[4] - 8.0
+    dt = 1.0 / FPS
+    out = os.path.abspath(FILM_OUT)
+    stem = os.path.splitext(out)[0]
+    counts = [int(round(c[1] * FPS)) for c in CUTS]
+    total = sum(counts)
+    picks = set(np.linspace(0, total - 1, 16).round().astype(int).tolist())
+    if FILM_TEST:
+        picks = {int(T_CUT[k] * FPS) + int(q * (n - 1)) for k, n in enumerate(counts) for q in (0.05, 0.5, 0.95)}
+    print(f"film: {len(CUTS)} cuts, {total} frames = {total / FPS:.1f} s at {FPS} fps, {W}x{H}; patrol offset {FILM_T_OFF:.1f} s")
+    writer = None if FILM_TEST else imageio.get_writer(out, fps=FPS, codec="libx264", quality=None, macro_block_size=None,
+                                                       ffmpeg_params=["-crf", "17", "-pix_fmt", "yuv420p", "-preset", "slow"])
+    sheet, rec, wall0 = [], 0, time.perf_counter()
+    for k, (name, dur, _, hud, plane) in enumerate(CUTS):
+        n = counts[k]
+        hud_park(hud)
+        renderer.set_fog_water_surface_y(plane)
+        renderer.set_auto_exposure_speed(12.0)          # meter fast through the warm-up, cinematic during the cut
+        film_cam(k, 0.0, 0.0)
+        for _ in range(0 if FILM_TEST else WARMUP):
+            step(dt)
+            film_cam(k, 0.0, 0.0)
+            renderer.render(scene, camera)
+            world_t_rewind(dt)
+        renderer.set_auto_exposure_speed(1.2)
+        t0 = time.perf_counter()
+        for f in range(n):
+            u = f / max(n - 1, 1)
+            step(dt)
+            film_cam(k, u, f * dt)
+            if writer is not None or any(rec + q in picks for q in range(21)):   # test mode: 20 warm frames per still
+                renderer.render(scene, camera)
+            if writer is not None or rec in picks:
+                px = renderer.read_pixels()
+                if writer is not None:
+                    writer.append_data(px)
+                if rec in picks:
+                    sheet.append(Image.fromarray(px).resize((400, 225), Image.LANCZOS))
+                if name == "hero" and f == int(POSTER_U * (n - 1)):
+                    Image.fromarray(px).save(stem + "_poster.png")
+            rec += 1
+        print(f"  cut {k} {name:<10s} {n:4d} f  {1e3 * (time.perf_counter() - t0) / n:6.1f} ms/f")
+    if writer is not None:
+        writer.close()
+    cols = 3 if FILM_TEST else 4
+    cs = Image.new("RGB", (400 * cols, 225 * ((len(sheet) + cols - 1) // cols)), (0, 0, 0))
+    for i, im in enumerate(sheet):
+        cs.paste(im, (400 * (i % cols), 225 * (i // cols)))
+    cs.save(stem + "_contact.png")
+    print(f"film -> {out}; contact {stem}_contact.png; wall {(time.perf_counter() - wall0) / 60:.1f} min")
+
+
+if HEADLESS and SHOT and SHOT not in SHOTS:
     sys.exit(f"unknown shot {SHOT!r}; one of {', '.join(SHOTS)}")
 rov_cam_place()
 renderer.render(scene, camera)                 # a view shares the primary's pipelines: needs one frame first
@@ -1962,7 +2118,9 @@ arm_net_interop()
 print(f"fish: {'interop' if fish_vk else 'host upload'}; net: {'interop' if net_vk else 'host upload'}; "
       f"ROV cam: {'pip' if PIP else 'readback'}")
 
-if HEADLESS:
+if FILM:
+    run_film()
+elif HEADLESS:
     os.makedirs(os.path.dirname(OUT) or ".", exist_ok=True)
     place(camera, SHOT)
     frames = int(SECONDS * 60)
