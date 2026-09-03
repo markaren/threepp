@@ -215,7 +215,9 @@ vec3 shadeDiffuseDirect(vec3 P, vec3 N, vec3 V, vec3 albedo, float roughness,
 
     for (uint i = 0u; !gSkipAnalyticDirect && i < lights.dirCount; ++i) {
         if (pickOne && i != pickIdx) continue;
-        const vec3 L = normalize(lights.dirLights[i].direction);
+        vec3 L = normalize(lights.dirLights[i].direction);
+        const float caus = murkSunCaustic(P, L);// walks back along the ORIGINAL L
+        const float leg  = murkSunLeg(P, L);     // submerged: refracted, attenuated
         if (dot(N, L) <= 0.0) continue;
         // Soft sun shadow: adaptive multi-ray disc visibility (see sunShadowVis;
         // pc.sunTanHalfAngle = 0 → exact hard single-ray shadow). The BRDF
@@ -231,7 +233,7 @@ vec3 shadeDiffuseDirect(vec3 P, vec3 N, vec3 V, vec3 albedo, float roughness,
         // no ocean / no murk / above the surface, which is every scene that has
         // never called setUnderwaterMurk.
         lit += evalLight(N, V, L, NdotV, F0, albedo, roughness, metalness, k, sheenColor, sheenRoughness)
-               * lights.dirLights[i].color * vis * murkSunCaustic(P, L);
+               * lights.dirLights[i].color * (vis * caus * leg);
     }
     for (uint i = 0u; !gSkipAnalyticDirect && i < lights.pointCount; ++i) {
         if (pickOne && (lights.dirCount + i) != pickIdx) continue;

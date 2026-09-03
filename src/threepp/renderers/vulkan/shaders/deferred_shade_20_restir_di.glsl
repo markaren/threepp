@@ -407,7 +407,8 @@ uint clusterCellBase(ivec2 px, float viewDist) {
 // instead of flickering.
 float shadowRayVisTo(vec3 orig, vec3 P, uint gi, vec2 xi, uint cellBase) {
     if (gi < lights.dirCount) {
-        const vec3  L    = normalize(lights.dirLights[gi].direction);
+        vec3        L    = normalize(lights.dirLights[gi].direction);
+        murkSunLeg(P, L);// submerged: the occluder test follows the refracted leg
         const float tanR = pc.sunTanHalfAngle;
         if (tanR <= 0.0) return shadowVis(orig, L, 1e30);
         const vec3 up = abs(L.y) < 0.99 ? vec3(0.0, 1.0, 0.0) : vec3(1.0, 0.0, 0.0);
@@ -466,15 +467,19 @@ vec3 analyticDirectSplit(vec3 P, vec3 N, vec3 V, vec3 albedo, float roughness,
     // the cloud transmittance overhead (cloudShadowSample; 1.0 when clouds off).
     const float cloudShadow = cloudShadowSample(P);
     for (uint i = 0u; i < lights.dirCount; ++i) {
-        const vec3 L = normalize(lights.dirLights[i].direction);
-        vec3 c = vec3(0.0);
+        vec3 L = normalize(lights.dirLights[i].direction);
         // murkSunCaustic is cloudShadow's underwater twin and sits beside it for
         // that reason: both are an attenuation this sun picked up on its way down
         // from something the shading point cannot see, one a cloud deck and one a
         // rippled surface. Both are exactly 1.0 when their feature is off.
+        // murkSunLeg takes the ORIGINAL L (the caustic walks back along it) and
+        // hands the loop the in-water direction + the leg's transmittance.
+        const float caus = murkSunCaustic(P, L);
+        const float leg  = murkSunLeg(P, L);
+        vec3 c = vec3(0.0);
         if (dot(N, L) > 0.0)
             c = evalLight(N, V, L, NdotV, F0, albedo, roughness, metalness, k, sheenColor, sheenRoughness)
-              * lights.dirLights[i].color * cloudShadow * murkSunCaustic(P, L);
+              * lights.dirLights[i].color * (cloudShadow * caus * leg);
         U += c;
         lw[nL] = dot(c, LUM); wSum += lw[nL]; ++nL;
     }
@@ -585,7 +590,8 @@ vec3 analyticDirectSplit(vec3 P, vec3 N, vec3 V, vec3 albedo, float roughness,
         // (sun-minor, or flagged already) never pay it.
         if (!topUp) topUp = texelFetch(shadowVisPrevTex, px, 0).z <= 2.5;
         if (topUp) {
-            const vec3  Ls     = normalize(lights.dirLights[0].direction);
+            vec3        Ls     = normalize(lights.dirLights[0].direction);
+            murkSunLeg(orig, Ls);// submerged: refracted leg
             const float sunVis = sunShadowVis(orig, Ls, pc.sunTanHalfAngle, /*cheapHit=*/false);
             visEst = mix(visEst, sunVis, lw[0] / wSum);
             gShadowSunTopUp = true;

@@ -498,11 +498,12 @@ vec3 giRadiance(vec3 origin, vec3 dir, bool doShadows, float maxLod, inout uint 
 
     for (uint i = 0u; i < lights.dirCount; ++i) {
         if (pickOne && i != pick) continue;
-        const vec3  L   = normalize(lights.dirLights[i].direction);
+        vec3        L   = normalize(lights.dirLights[i].direction);
+        const float leg = murkSunLeg(hitP, L);// submerged hit: refracted, attenuated
         const float ndl = dot(hitN, L);
         if (ndl <= 0.0) continue;
         const float vis = doShadows ? shadowVis(shadowOrig, L, 1e30) : 1.0;
-        lit += diff * ndl * lights.dirLights[i].color * (vis * wL);
+        lit += diff * ndl * lights.dirLights[i].color * (vis * wL * leg);
     }
     for (uint i = 0u; i < lights.pointCount; ++i) {
         if (pickOne && (lights.dirCount + i) != pick) continue;

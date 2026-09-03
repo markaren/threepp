@@ -863,6 +863,30 @@ float murkSunCaustic(vec3 P, vec3 L) {
     // half — so the dapple redistributes the sun and never adds to it.
     return 1.0 + bite * (2.0 * s - 1.0);
 }
+// A directional light as a SUBMERGED point sees it: the leg inside the water.
+// Above the surface the sun travels along L; below it the ray that reaches P
+// entered the surface at the refracted angle and was absorbed over the in-water
+// leg, which is exactly what the shaft march (murkSunScatter) integrates. The
+// surface loops evaluated the UNREFRACTED L with no attenuation, so a net wall
+// seen from inside a pen faced away from a low sun and got no direct light at
+// all, while the shafts around it were lit — and a plate at 8 m read as bright
+// as one at the surface. Bends L to the in-water direction and returns the leg
+// transmittance; EXACTLY 1.0 with L untouched for no murk, a point at or above
+// the surface, or a light below the horizon (the upwelling fill every murk
+// scene has, which never crossed the surface).
+float murkSunLeg(vec3 P, inout vec3 L) {
+    if (!murkLive()) return 1.0;
+    const float depth = fog.waterSurfaceY - P.y;
+    if (depth <= 0.0) return 1.0;
+    const vec3 up = (dot(fog.worldUp, fog.worldUp) > 1e-6) ? normalize(fog.worldUp) : vec3(0.0, 1.0, 0.0);
+    if (dot(L, up) <= 0.02) return 1.0;
+    vec3 sd = refract(-L, up, kMurkEtaAirWater);
+    if (dot(sd, sd) < 1e-6) return 1.0;
+    sd = normalize(sd);
+    const float sy = max(-dot(sd, up), 0.08);
+    L = -sd;
+    return exp(-fog.murkDensity * depth / sy);
+}
 // ── Sky aerial perspective (deferred) ────────────────────────────────────────
 // The HDR background is infinitely far, so applySceneFog never touches it — a
 // foggy scene then shows distant geometry fading to fog colour against a crisp,

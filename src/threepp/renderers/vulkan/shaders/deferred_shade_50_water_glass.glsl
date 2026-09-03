@@ -809,10 +809,11 @@ vec3 shadeGlass(vec3 P, vec3 N, vec3 V, MaterialDesc pm, vec3 albedo,
         const float NdotV = max(dot(N, V), 1e-4);
         const float kG    = (gr + 1.0) * (gr + 1.0) / 8.0;
         for (uint i = 0u; i < lights.dirCount; ++i) {
-            const vec3  L     = normalize(lights.dirLights[i].direction);
+            vec3        L     = normalize(lights.dirLights[i].direction);
+            const float leg   = murkSunLeg(P, L);// submerged glass: refracted, attenuated
             const float NdotL = max(dot(N, L), 0.0);
             if (NdotL <= 0.0) continue;
-            const float vis = doShadows ? shadowVis(P + N * SHADOW_EPS, L, 1e30) : 1.0;
+            const float vis = doShadows ? shadowVis(P + N * SHADOW_EPS, L, 1e30) * leg : 1.0 * leg;
             if (vis <= 0.0) continue;
             const vec3  H = normalize(V + L);
             const float D = distGGX(max(dot(N, H), 0.0), gr);

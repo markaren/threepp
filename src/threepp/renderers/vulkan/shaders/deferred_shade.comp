@@ -658,6 +658,9 @@ float specularOcclusion(float NdotV, float ao, float roughness) {
 // than splitting the murk constants across three files to satisfy an ordering.
 // Returns EXACTLY 1.0 with no murk, no ocean, or a point above the surface.
 float murkSunCaustic(vec3 P, vec3 L);
+// Its sibling: bends L to the in-water direction for a submerged P and returns
+// the in-water leg transmittance (1.0, L untouched, everywhere else).
+float murkSunLeg(vec3 P, inout vec3 L);
 
 #include "deferred_shade_10_lighting_utils.glsl"
 #include "deferred_shade_20_restir_di.glsl"
@@ -1364,7 +1367,8 @@ void main() {
         const vec3  tCol  = albedo * pm.translucencyColor;
         vec3        tSum  = vec3(0.0);
         for (uint i = 0u; i < lights.dirCount; ++i) {
-            const vec3  L    = normalize(lights.dirLights[i].direction);
+            vec3        L    = normalize(lights.dirLights[i].direction);
+            const float leg  = murkSunLeg(worldPos, L);// submerged: refracted, attenuated
             const float ndl  = dot(N, L);
             const float back = max(-ndl, 0.0);// sun behind the card
             const float fwd  = pow(max(dot(V, -L), 0.0), kTransScatterPower) * kTransScatterWeight;
@@ -1380,7 +1384,7 @@ void main() {
             const float vis = shadowsOn
                     ? sunShadowVis(tOrig, L, pc.sunTanHalfAngle, /*cheapHit=*/true)
                     : 1.0;
-            tSum += lights.dirLights[i].color * (w * vis);
+            tSum += lights.dirLights[i].color * (w * vis * leg);
         }
         // Back-face env fill: sky/env irradiance reaching the shaded underside so
         // canopy interiors are dim, not dead black. Cheap env LOD tap (no rays).
