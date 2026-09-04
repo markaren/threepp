@@ -33,6 +33,7 @@
 #include "threepp/extras/terrain/GeoTerrainPack.hpp"
 #include "threepp/extras/terrain/TerrainScatter.hpp"
 #include "threepp/extras/terrain/TerrainTiles.hpp"
+#include "threepp/extras/vegetation/CanopyForest.hpp"
 #include "threepp/lights/DirectionalLight.hpp"
 #include "threepp/loaders/RGBELoader.hpp"
 #include "threepp/materials/MeshPhysicalMaterial.hpp"
@@ -46,6 +47,8 @@
 #endif
 
 #include <algorithm>
+#include <array>
+#include <chrono>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
@@ -645,6 +648,57 @@ int main(int argc, char** argv) {
         controls.target.copy(camTargetArg);
     }
     controls.update();
+
+    // ── canopy-driven forest ───────────────────────────────────────────────────
+    // Packs fetched with --canopy carry a canopy height model (DOM - DTM): metres
+    // of vegetation per cell, i.e. a MEASUREMENT of where forest stands and how
+    // tall it is. Trees go exactly there, at that height, instead of on a
+    // slope/elevation rule that invents a forest. Packs without a CHM get nothing
+    // (trollstigen/aalesund unchanged). NT_NO_FOREST=1 for the A/B,
+    // NT_FOREST_CAP=<n> for the instance budget.
+    if (pack.hasCanopy() && !envSet("NT_NO_FOREST")) {
+        const auto tf0 = std::chrono::high_resolution_clock::now();
+
+        vegetation::CanopySiteOptions so;
+        so.seaLevel = reg.seaLevel;
+        // The shot only ever looks at part of a 4 km pack, and the instance budget
+        // is better spent dense near the subject than thin across the whole square.
+        so.centerX = controls.target.x;
+        so.centerZ = controls.target.z;
+        so.halfExtent = envF("NT_FOREST_EXTENT", 1100.f);
+        const auto sites = vegetation::detectTreeSites(pack.canopy, pack.grid, so);
+
+        // Two prototypes per species for the near tier (card/frond canopies), three
+        // for the far tier (blob puffs) — enough silhouette variety that a hillside
+        // does not read as one stamp repeated.
+        std::array<vegetation::SpeciesVariants, 3> species;
+        for (int s = 0; s < 3; ++s) {
+            const auto sp = static_cast<vegetation::TreeSpecies>(s);
+            const auto base = static_cast<unsigned int>(100 + s * 37);
+            species[s].near = {vegetation::makeForestTreeVariant(sp, base + 1u, false),
+                               vegetation::makeForestTreeVariant(sp, base + 2u, false)};
+            species[s].far = {vegetation::makeForestTreeVariant(sp, base + 11u, true),
+                              vegetation::makeForestTreeVariant(sp, base + 12u, true),
+                              vegetation::makeForestTreeVariant(sp, base + 13u, true)};
+        }
+
+        vegetation::ForestOptions fo;
+        fo.cameraPos = camera.position;
+        fo.cap = static_cast<int>(envF("NT_FOREST_CAP", 40000.f));
+        // Bases must come from the PROVIDER (cliff relief + road carving included),
+        // not the raw DEM, or every trunk floats or sinks by that delta.
+        auto forest = Group::create();
+        forest->name = "canopy_forest";
+        const auto st = vegetation::buildCanopyForest(*forest, sites, species, prov.height, fo);
+        scene.add(forest);
+
+        const auto tf1 = std::chrono::high_resolution_clock::now();
+        std::cout << "[norway] forest: " << st.sites << " sites (CHM local maxima), "
+                  << st.planted << " instances (" << st.nearTier << " near + " << st.farTier
+                  << " far) in " << st.meshes << " meshes, "
+                  << std::chrono::duration<float>(tf1 - tf0).count() << " s\n"
+                  << std::flush;
+    }
 
     canvas.onWindowResize([&](const WindowSize& ns) {
         renderer->setSize(ns);
