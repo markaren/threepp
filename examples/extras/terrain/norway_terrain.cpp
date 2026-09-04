@@ -720,36 +720,96 @@ int main(int argc, char** argv) {
         so.halfExtent = envF("NT_FOREST_EXTENT", 1100.f);
         const auto sites = vegetation::detectTreeSites(pack.canopy, pack.grid, so);
 
+        // NT_FOREST_LOD=0 restores the phase-2 single-tier planting (the A/B).
+        // The default is the camera-following cell LOD: the old path splits its
+        // tiers ONCE against the startup camera, which is a still-frame trick —
+        // walk the camera in and the near trees are still blobs.
+        const bool lodForest = !envSet("NT_FOREST_LOD") || std::getenv("NT_FOREST_LOD")[0] != '0';
+
         // Two prototypes per species for the near tier (card/frond canopies), three
         // for the far tier (blob puffs) — enough silhouette variety that a hillside
-        // does not read as one stamp repeated.
+        // does not read as one stamp repeated. The LOD path takes the CHEAP blob
+        // (~30 tris/puff, 110 attractors) for its 300-800 m level: at that range
+        // the fjord demo's blob spends tens of thousands of triangles per tree on
+        // a crown that covers ten pixels.
         std::array<vegetation::SpeciesVariants, 3> species;
         for (int s = 0; s < 3; ++s) {
             const auto sp = static_cast<vegetation::TreeSpecies>(s);
             const auto base = static_cast<unsigned int>(100 + s * 37);
             species[s].near = {vegetation::makeForestTreeVariant(sp, base + 1u, false),
                                vegetation::makeForestTreeVariant(sp, base + 2u, false)};
-            species[s].far = {vegetation::makeForestTreeVariant(sp, base + 11u, true),
-                              vegetation::makeForestTreeVariant(sp, base + 12u, true),
-                              vegetation::makeForestTreeVariant(sp, base + 13u, true)};
+            species[s].far = {vegetation::makeForestTreeVariant(sp, base + 11u, true, lodForest),
+                              vegetation::makeForestTreeVariant(sp, base + 12u, true, lodForest),
+                              vegetation::makeForestTreeVariant(sp, base + 13u, true, lodForest)};
         }
 
-        vegetation::ForestOptions fo;
-        fo.cameraPos = camera.position;
-        fo.cap = static_cast<int>(envF("NT_FOREST_CAP", 40000.f));
-        // Bases must come from the PROVIDER (cliff relief + road carving included),
-        // not the raw DEM, or every trunk floats or sinks by that delta.
         auto forest = Group::create();
         forest->name = "canopy_forest";
-        const auto st = vegetation::buildCanopyForest(*forest, sites, species, prov.height, fo);
-        scene.add(forest);
+        // Bases must come from the PROVIDER (cliff relief + road carving included),
+        // not the raw DEM, or every trunk floats or sinks by that delta.
+        if (lodForest) {
+            // The canopy-surface material. The leaf atlas is a GRAIN map here, not
+            // the colour: it is generated near-neutral so the vertex colour (the
+            // species tint the blobs use, times a burial AO) survives the multiply.
+            // NO alphaTest: the sprig atlas is ~half transparent, and at the 3 m
+            // lattice a cutout punches the sheet into a bubble-wrap net of
+            // square holes (looked at, 2 km shot). The ragged edge has to come
+            // from the GEOMETRY — the valid region ends on the lattice and the
+            // boundary carries a skirt — so the map is a pure grain layer.
+            auto leafTex = vegetation::makeLeafClusterTexture(256, 77u, {0.90f, 0.93f, 0.86f},
+                                                              vegetation::LeafShape::Ovate, 8, 2);
+            leafTex->wrapS = TextureWrapping::Repeat;
+            leafTex->wrapT = TextureWrapping::Repeat;
+            auto canopyMat = MeshStandardMaterial::create(
+                    MeshStandardMaterial::Params{}.color(Color::white).roughness(0.9f).metalness(0.f));
+            canopyMat->map = leafTex;
+            canopyMat->side = Side::Double;// the skirt is a curtain, seen from both
+            canopyMat->vertexColors = true;
+            canopyMat->translucencyColor = Color(0.50f, 0.80f, 0.28f);
+            canopyMat->translucency = 0.3f;
 
-        const auto tf1 = std::chrono::high_resolution_clock::now();
-        std::cout << "[norway] forest: " << st.sites << " sites (CHM local maxima), "
-                  << st.planted << " instances (" << st.nearTier << " near + " << st.farTier
-                  << " far) in " << st.meshes << " meshes, "
-                  << std::chrono::duration<float>(tf1 - tf0).count() << " s\n"
-                  << std::flush;
+            vegetation::ForestLodOptions lo;
+            lo.cap = static_cast<int>(envF("NT_FOREST_CAP", 40000.f));
+            lo.cellSize = envF("NT_FOREST_CELL", 128.f);
+            lo.l0Distance = envF("NT_FOREST_L0", 300.f);
+            lo.l1Distance = envF("NT_FOREST_L1", 800.f);
+            // NT_FOREST_L2MESH=1 swaps the thinned blob level for the CHM canopy
+            // SURFACE (buildCanopySurface). Kept as an A/B, not the default: it
+            // is faster and closes the canopy on gentle ground, but on this
+            // pack's benched wall the slope gate leaves tread-wide strips that
+            // read as a staircase of lit green trays.
+            lo.buildCanopyMesh = envSet("NT_FOREST_L2MESH");
+            lo.l2Keep = static_cast<int>(envF("NT_FOREST_L2KEEP", 4.f));
+            lo.mesh.seaLevel = reg.seaLevel;
+            lo.mesh.maxSlopeDeg = so.maxSlopeDeg;// same gate as the sites, or the
+            lo.mesh.minGroundHeight = so.minGroundHeight;// handoff grows new forest
+            const auto st = vegetation::buildCanopyForestLod(*forest, sites, species, canopyMat,
+                                                             pack.canopy, pack.grid, prov.height, lo);
+            scene.add(forest);
+            const auto tf1 = std::chrono::high_resolution_clock::now();
+            std::cout << "[norway] forest LOD: " << st.sites << " sites, " << st.planted
+                      << " instances in " << st.cells << " cells @ " << lo.cellSize << " m"
+                      << " (L0 " << st.l0Meshes << " meshes < " << lo.l0Distance << " m, L1 "
+                      << st.l1Meshes << " meshes, L2 " << st.l2Meshes
+                      << (lo.buildCanopyMesh ? " canopy meshes / " : " thinned meshes 1-in-" )
+                      << (lo.buildCanopyMesh ? st.canopyTris : lo.l2Keep)
+                      << (lo.buildCanopyMesh ? " tris > " : " > ") << lo.l1Distance
+                      << " m), L1 prototype " << st.l1ProtoTris << " tris, "
+                      << std::chrono::duration<float>(tf1 - tf0).count() << " s\n"
+                      << std::flush;
+        } else {
+            vegetation::ForestOptions fo;
+            fo.cameraPos = camera.position;
+            fo.cap = static_cast<int>(envF("NT_FOREST_CAP", 40000.f));
+            const auto st = vegetation::buildCanopyForest(*forest, sites, species, prov.height, fo);
+            scene.add(forest);
+            const auto tf1 = std::chrono::high_resolution_clock::now();
+            std::cout << "[norway] forest: " << st.sites << " sites (CHM local maxima), "
+                      << st.planted << " instances (" << st.nearTier << " near + " << st.farTier
+                      << " far) in " << st.meshes << " meshes, "
+                      << std::chrono::duration<float>(tf1 - tf0).count() << " s\n"
+                      << std::flush;
+        }
     }
 
     canvas.onWindowResize([&](const WindowSize& ns) {

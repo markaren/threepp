@@ -39,7 +39,10 @@
 #include "threepp/math/Matrix4.hpp"
 #include "threepp/math/Quaternion.hpp"
 #include "threepp/math/Vector3.hpp"
+#include "threepp/objects/Group.hpp"
 #include "threepp/objects/InstancedMesh.hpp"
+#include "threepp/objects/LOD.hpp"
+#include "threepp/objects/Mesh.hpp"
 
 #include <algorithm>
 #include <array>
@@ -223,7 +226,16 @@ namespace threepp::vegetation {
     // One prototype. `cheapBlob` swaps the card/frond canopy for low-poly puffs —
     // the distance tier, where a card atlas costs alpha-test bandwidth for
     // sub-pixel leaves nobody can resolve.
-    inline TreeVariant makeForestTreeVariant(TreeSpecies sp, unsigned int seed, bool cheapBlob) {
+    //
+    // `distant` cheapens the blob AGAIN, and it is the whole reason a canopy-model
+    // forest can move the camera. The fjord demo's blob was tuned for ~1000 far
+    // trees: 320 attractors × 3 puffs × an 80-triangle UV sphere is tens of
+    // thousands of triangles, which is a bargain once and a frame-killer instanced
+    // 30 000 times. At 300-800 m a whole crown is 5-15 px, so what has to survive
+    // is the OUTLINE and the mass — not the puff count. Fewer, bigger, coarser
+    // puffs on a sparser skeleton keep both at a twentieth of the triangles.
+    inline TreeVariant makeForestTreeVariant(TreeSpecies sp, unsigned int seed, bool cheapBlob,
+                                             bool distant = false) {
         TreeParams tp;
         applyPreset(sp == TreeSpecies::Spruce ? 1 : 2, tp);// 1 = Norway spruce, 2 = birch
         tp.seed = seed;
@@ -284,6 +296,26 @@ namespace threepp::vegetation {
             tp.attractorCount = 320;
             tp.radialSegments = 5;
             if (sp == TreeSpecies::Spruce) tp.crownShape = CrownShape::Cone;
+        }
+        if (cheapBlob && distant) {
+            // Coarser skeleton: a longer kill distance retires an attractor after
+            // fewer segments, so the node count (and with it the puff count, which
+            // is what the triangles are) falls roughly linearly.
+            tp.attractorCount = 190;
+            tp.influenceDistance = 4.2f;
+            tp.killDistance = 1.05f;
+            tp.segmentLength = 0.6f;
+            tp.maxIterations = 130;
+            tp.radialSegments = 4;
+            tp.leafDensity = 0.78f;
+            tp.leavesPerCluster = 2;
+            // Slightly bigger puffs so two per tip still close the crown. Pushed
+            // much past this the crown loses its SHAPE — measured by looking: at
+            // 1.55× on a 110-attractor skeleton a spruce becomes four bright
+            // balloons and the conifer silhouette is gone.
+            tp.leafSize *= 1.2f;
+            tp.blobLatSegs = 3;
+            tp.blobLonSegs = 5;// 30 triangles per puff instead of 80
         }
 
         TreeGenerator gen(seed);
@@ -454,6 +486,479 @@ namespace threepp::vegetation {
                     st.meshes += 2;
                 }
             }
+        return st;
+    }
+
+    // ── Camera-following cell LOD ───────────────────────────────────────────
+    //
+    // `buildCanopyForest` above splits the tiers ONCE, against the camera the
+    // scene was built with. That is a still-frame optimisation: move the camera
+    // and every near tree stays a card atlas at 2 km while every far tree stays a
+    // blob at 40 m. It also submits one InstancedMesh spanning the whole region,
+    // so nothing is ever skipped.
+    //
+    // The fix is spatial: cut the sites into cells and give each cell its own
+    // `threepp::LOD` node, whose level is chosen per frame from the camera. Three
+    // levels, because the interesting range spans two orders of magnitude:
+    //
+    //   L0  0-300 m    card/frond crowns — the only range where a leaf is a pixel
+    //   L1  300-800 m  distant blob puffs (~2-3 k tris) — outline and mass only
+    //   L2  > 800 m    ONE canopy surface mesh per cell, built from the CHM
+    //
+    // L2 is the level that makes the whole thing affordable, and it is not an
+    // approximation of the trees — it is the same measurement the trees came
+    // from. A canopy height model already IS a surface: ground + CHM, sampled on
+    // a few-metre lattice, keeps the crown bumps that give a forest its texture
+    // at a kilometre, for a few thousand triangles per 128 m cell instead of a
+    // few hundred million. What it must not do is end in mid-air, so every
+    // boundary edge of the valid region gets a skirt down toward the ground: seen
+    // side-on from across a fjord, a forest edge is a WALL of foliage, and a
+    // floating sheet reads instantly as a hack.
+    //
+    // Hidden levels are `visible = false`, so the renderer's traverseVisible walk
+    // never reaches them: no draws, no TLAS instances, no BLAS residency churn.
+
+    struct CanopyMeshOptions {
+        float step = 3.f;      // lattice spacing (world units)
+        float minCanopy = 2.f; // below this the cell is not forest
+        float maxSlopeDeg = 65.f;// same gate the SITES use, or L2 grows forest
+        float slopeEpsilon = 3.f;// that L1 does not have and the handoff pops
+        float seaLevel = 0.f;
+        float minGroundHeight = 0.5f;
+        // The CHM's local max is the crown APEX; the surface through the apexes
+        // sits a little above the canopy an observer sees between them.
+        float topFraction = 0.92f;
+        // Metres of foliage wall at a forest edge. Kept SHORT: on a benched wall
+        // the 65° gate below already cuts the valid region into tread-wide
+        // strips, and a deep skirt under every strip turns the stand into a
+        // ladder of bright rungs over dark risers (measured by looking at the
+        // 2 km shot with 9 m).
+        float skirtDepth = 7.f;
+        float uvPeriod = 4.5f;// world metres per leaf-atlas tile
+        // Species rule — must be the ForestOptions rule, or L2 recolours the
+        // forest at the handoff.
+        float scrubMaxHeight = 6.f, birchMaxHeight = 14.f, birchMaxElevation = 350.f;
+        // Vertex AO: a vertex this far below its 3×3 neighbourhood maximum is
+        // fully buried. Canopy gaps are where a forest gets its value structure.
+        float aoDepth = 6.f, aoStrength = 0.45f;
+        // The leaf atlas is used as a GRAIN map (neutral, near-white), so the
+        // species colour can live in the vertex colour. Its mean is well below 1,
+        // hence the gain.
+        float texGain = 0.85f;
+    };
+
+    // One canopy surface for the world-XZ rectangle [x0,x1) × [z0,z1), with all
+    // vertices expressed relative to `origin` (the LOD node's own position).
+    // Returns nullptr when the rectangle holds no forest.
+    inline std::shared_ptr<BufferGeometry> buildCanopySurface(
+            const terrain::HeightGrid& canopy, const terrain::HeightGrid& dem,
+            const std::function<float(float, float)>& heightFn,
+            const std::array<Color, 3>& speciesColor,
+            float x0, float z0, float x1, float z1,
+            const Vector3& origin, const CanopyMeshOptions& o) {
+
+        const float s = std::max(0.5f, o.step);
+        // Quad indices on a GLOBAL lattice, half-open so a quad belongs to exactly
+        // one cell: neighbouring cells share their boundary node positions, hence
+        // sample the same CHM there, hence meet without a crack or an overlap.
+        const int qi0 = static_cast<int>(std::floor(x0 / s));
+        const int qi1 = static_cast<int>(std::floor(x1 / s));
+        const int qj0 = static_cast<int>(std::floor(z0 / s));
+        const int qj1 = static_cast<int>(std::floor(z1 / s));
+        const int nx = qi1 - qi0 + 1, nz = qj1 - qj0 + 1;// nodes
+        if (nx < 2 || nz < 2) return nullptr;
+
+        const float cosMax = std::cos(o.maxSlopeDeg * math::DEG2RAD);
+        const size_t nn = static_cast<size_t>(nx) * static_cast<size_t>(nz);
+        std::vector<float> hCan(nn, 0.f), hGnd(nn, 0.f);
+        std::vector<unsigned char> ok(nn, 0u);
+
+        for (int j = 0; j < nz; ++j)
+            for (int i = 0; i < nx; ++i) {
+                const float x = static_cast<float>(qi0 + i) * s;
+                const float z = static_cast<float>(qj0 + j) * s;
+                // MAX over the lattice cell, not a point sample: the CHM is 1 m
+                // and the crowns ARE its local maxima, so averaging (or picking
+                // one texel in nine) throws away exactly the bumps that make the
+                // surface read as canopy rather than as a tarpaulin.
+                float hc = 0.f;
+                for (int dz = -1; dz <= 1; ++dz)
+                    for (int dx = -1; dx <= 1; ++dx)
+                        hc = std::max(hc, canopy.sampleBilinear(x + static_cast<float>(dx) * s / 3.f,
+                                                                z + static_cast<float>(dz) * s / 3.f));
+                const float g = heightFn ? heightFn(x, z) : dem.sampleBilinear(x, z);
+                hCan[static_cast<size_t>(j) * nx + i] = hc;
+                hGnd[static_cast<size_t>(j) * nx + i] = g;
+                ok[static_cast<size_t>(j) * nx + i] =
+                        (hc >= o.minCanopy && g > o.seaLevel + o.minGroundHeight &&
+                         dem.slopeNy(x, z, o.slopeEpsilon) >= cosMax)
+                                ? 1u
+                                : 0u;
+            }
+
+        std::vector<float> positions, normals, uvs, colors;
+        std::vector<unsigned int> indices;
+        std::vector<int> vidx(nn, -1);// node → emitted vertex, -1 = not emitted
+
+        const auto topY = [&](size_t k) { return hGnd[k] + hCan[k] * o.topFraction; };
+        const auto emitTop = [&](int i, int j) {
+            const size_t k = static_cast<size_t>(j) * nx + i;
+            if (vidx[k] >= 0) return vidx[k];
+            const float x = static_cast<float>(qi0 + i) * s;
+            const float z = static_cast<float>(qj0 + j) * s;
+            const float y = topY(k);
+            // Burial AO from the 3×3 neighbourhood: a crown that sits well below
+            // its neighbours is in their shade.
+            float localMax = hCan[k];
+            for (int dj = -1; dj <= 1; ++dj)
+                for (int di = -1; di <= 1; ++di) {
+                    const int ii = i + di, jj = j + dj;
+                    if (ii < 0 || jj < 0 || ii >= nx || jj >= nz) continue;
+                    localMax = std::max(localMax, hCan[static_cast<size_t>(jj) * nx + ii]);
+                }
+            const float ao = 1.f - o.aoStrength * std::clamp((localMax - hCan[k]) / o.aoDepth, 0.f, 1.f);
+            int sp;
+            if (hCan[k] < o.scrubMaxHeight) sp = 0;
+            else if (hCan[k] < o.birchMaxHeight && hGnd[k] < o.birchMaxElevation)
+                sp = 1;
+            else
+                sp = 2;
+            const Color& c = speciesColor[static_cast<size_t>(sp)];
+            positions.push_back(x - origin.x);
+            positions.push_back(y - origin.y);
+            positions.push_back(z - origin.z);
+            normals.push_back(0.f);
+            normals.push_back(1.f);
+            normals.push_back(0.f);
+            uvs.push_back(x / o.uvPeriod);
+            uvs.push_back(z / o.uvPeriod);
+            colors.push_back(c.r * ao * o.texGain);
+            colors.push_back(c.g * ao * o.texGain);
+            colors.push_back(c.b * ao * o.texGain);
+            vidx[k] = static_cast<int>(positions.size() / 3) - 1;
+            return vidx[k];
+        };
+
+        const int qw = nx - 1, qh = nz - 1;
+        std::vector<unsigned char> quad(static_cast<size_t>(qw) * static_cast<size_t>(qh), 0u);
+        for (int j = 0; j < qh; ++j)
+            for (int i = 0; i < qw; ++i) {
+                const size_t k = static_cast<size_t>(j) * nx + i;
+                if (ok[k] && ok[k + 1] && ok[k + nx] && ok[k + nx + 1])
+                    quad[static_cast<size_t>(j) * qw + i] = 1u;
+            }
+        // Drop ISOLATED and single-file quads. The 65° gate slices a benched
+        // wall into tread-wide slivers, and a lone 3 m quad with a skirt under it
+        // is a floating shelf — stack a slope's worth of them and the ridge line
+        // becomes a staircase of green trays against the sky (looked at, 2 km
+        // shot). A quad needs two orthogonal neighbours to be part of a STAND.
+        {
+            std::vector<unsigned char> keep(quad.size(), 0u);
+            for (int j = 0; j < qh; ++j)
+                for (int i = 0; i < qw; ++i) {
+                    if (!quad[static_cast<size_t>(j) * qw + i]) continue;
+                    int n = 0;
+                    if (i > 0) n += quad[static_cast<size_t>(j) * qw + i - 1];
+                    if (i + 1 < qw) n += quad[static_cast<size_t>(j) * qw + i + 1];
+                    if (j > 0) n += quad[static_cast<size_t>(j - 1) * qw + i];
+                    if (j + 1 < qh) n += quad[static_cast<size_t>(j + 1) * qw + i];
+                    keep[static_cast<size_t>(j) * qw + i] = n >= 2 ? 1u : 0u;
+                }
+            quad.swap(keep);
+        }
+        for (int j = 0; j < qh; ++j)
+            for (int i = 0; i < qw; ++i) {
+                if (!quad[static_cast<size_t>(j) * qw + i]) continue;
+                const unsigned int a = static_cast<unsigned int>(emitTop(i, j));
+                const unsigned int b = static_cast<unsigned int>(emitTop(i + 1, j));
+                const unsigned int c = static_cast<unsigned int>(emitTop(i + 1, j + 1));
+                const unsigned int d = static_cast<unsigned int>(emitTop(i, j + 1));
+                indices.push_back(a);
+                indices.push_back(d);
+                indices.push_back(c);
+                indices.push_back(a);
+                indices.push_back(c);
+                indices.push_back(b);
+            }
+        if (indices.empty()) return nullptr;
+
+        // ── Edge skirt ──────────────────────────────────────────────────────
+        // A lattice edge with a quad on exactly one side is the forest boundary.
+        // Hang a curtain from it: the canopy top down to (canopy top − skirtDepth)
+        // clamped to the ground, so a stand seen from the side is a wall of
+        // foliage and not a sheet with daylight under it.
+        const auto quadAt = [&](int i, int j) {
+            if (i < 0 || j < 0 || i >= qw || j >= qh) return 0;
+            return static_cast<int>(quad[static_cast<size_t>(j) * qw + i]);
+        };
+        const auto emitSkirt = [&](int i0, int j0, int i1, int j1) {
+            const size_t ka = static_cast<size_t>(j0) * nx + i0;
+            const size_t kb = static_cast<size_t>(j1) * nx + i1;
+            const float xa = static_cast<float>(qi0 + i0) * s, za = static_cast<float>(qj0 + j0) * s;
+            const float xb = static_cast<float>(qi0 + i1) * s, zb = static_cast<float>(qj0 + j1) * s;
+            const float ya = topY(ka), yb = topY(kb);
+            const float la = std::max(hGnd[ka], ya - o.skirtDepth);
+            const float lb = std::max(hGnd[kb], yb - o.skirtDepth);
+            const unsigned int base = static_cast<unsigned int>(positions.size() / 3);
+            const float px[4] = {xa, xb, xb, xa};
+            const float py[4] = {ya, yb, lb, la};
+            const float pz[4] = {za, zb, zb, za};
+            // Colour from the taller end, dimmed: a canopy wall is shaded by the
+            // crowns above it, and the darker band is what reads as depth.
+            const size_t kc = hCan[ka] >= hCan[kb] ? ka : kb;
+            int sp;
+            if (hCan[kc] < o.scrubMaxHeight) sp = 0;
+            else if (hCan[kc] < o.birchMaxHeight && hGnd[kc] < o.birchMaxElevation)
+                sp = 1;
+            else
+                sp = 2;
+            const Color& c = speciesColor[static_cast<size_t>(sp)];
+            for (int v = 0; v < 4; ++v) {
+                const float dim = (v < 2) ? 1.f : 1.f - o.aoStrength;
+                positions.push_back(px[v] - origin.x);
+                positions.push_back(py[v] - origin.y);
+                positions.push_back(pz[v] - origin.z);
+                normals.push_back(0.f);
+                normals.push_back(1.f);
+                normals.push_back(0.f);// replaced by computeVertexNormals
+                // Vertical faces get a (horizontal, height) parametrisation —
+                // world-XZ UVs on a wall are the vertical smear this whole demo
+                // has been fighting since phase 1b.
+                uvs.push_back((px[v] + pz[v]) / o.uvPeriod);
+                uvs.push_back(py[v] / o.uvPeriod);
+                colors.push_back(c.r * dim * o.texGain);
+                colors.push_back(c.g * dim * o.texGain);
+                colors.push_back(c.b * dim * o.texGain);
+            }
+            indices.push_back(base);
+            indices.push_back(base + 1);
+            indices.push_back(base + 2);
+            indices.push_back(base);
+            indices.push_back(base + 2);
+            indices.push_back(base + 3);
+        };
+        for (int j = 0; j < nz; ++j)
+            for (int i = 0; i < nx - 1; ++i)// edge along +x, between quads (i,j-1) and (i,j)
+                if (quadAt(i, j - 1) + quadAt(i, j) == 1) emitSkirt(i, j, i + 1, j);
+        for (int j = 0; j < nz - 1; ++j)
+            for (int i = 0; i < nx; ++i)// edge along +z, between quads (i-1,j) and (i,j)
+                if (quadAt(i - 1, j) + quadAt(i, j) == 1) emitSkirt(i, j, i, j + 1);
+
+        auto geo = std::make_shared<BufferGeometry>();
+        geo->setIndex(indices);
+        geo->setAttribute("position", FloatBufferAttribute::create(positions, 3));
+        geo->setAttribute("normal", FloatBufferAttribute::create(normals, 3));
+        geo->setAttribute("uv", FloatBufferAttribute::create(uvs, 2));
+        geo->setAttribute("color", FloatBufferAttribute::create(colors, 3));
+        geo->computeVertexNormals();
+        geo->computeBoundingBox();
+        geo->computeBoundingSphere();
+        return geo;
+    }
+
+    struct ForestLodOptions {
+        float cellSize = 128.f;// world metres per LOD cell
+        float l0Distance = 300.f;
+        float l1Distance = 800.f;
+        // Same site → same species/scale/yaw at every level, so a handoff moves
+        // no tree. Shared with ForestOptions.
+        float scrubMaxHeight = 6.f, birchMaxHeight = 14.f, birchMaxElevation = 350.f;
+        float minScale = 0.35f, maxScale = 2.2f;
+        float sink = 0.4f;
+        int cap = 40000;
+        unsigned int seed = 20260904u;
+
+        // L2 = THINNED L1, not a surface. `buildCanopySurface` above is the
+        // prettier idea and it works where the ground is gentle, but on a benched
+        // cliff the slope gate cuts the valid region into tread-wide strips and a
+        // lit horizontal sheet on each tread reads as a STAIRCASE OF GREEN TRAYS
+        // against the sky (looked at: aaa_caps/geiranger_lod_2km_crop_ridge.png,
+        // and it survives an isolated-quad filter because the strips really are
+        // connected). Blobs on the same treads read as trees because they have a
+        // silhouette in three dimensions. So beyond `l1Distance` keep the blobs
+        // and drop 3 in 4, widening the survivors to hold the canopy MASS — the
+        // thing the user said "did wonders for the look".
+        int l2Keep = 4;          // keep 1 instance in l2Keep
+        float l2ScaleBoost = 1.4f;// survivors widen to close the gaps
+        bool buildCanopyMesh = false;
+        CanopyMeshOptions mesh;
+    };
+
+    struct ForestLodStats {
+        int sites = 0, planted = 0, cells = 0;
+        int l0Meshes = 0, l1Meshes = 0, l2Meshes = 0;
+        int canopyTris = 0;
+        int l1ProtoTris = 0;// triangles in ONE L1 prototype (trunk + leaves)
+    };
+
+    // One LOD node per non-empty cell under `parent`.
+    inline ForestLodStats buildCanopyForestLod(
+            Object3D& parent, const std::vector<TreeSite>& sites,
+            const std::array<SpeciesVariants, 3>& species,
+            const std::shared_ptr<MeshStandardMaterial>& canopyMat,
+            const terrain::HeightGrid& canopy, const terrain::HeightGrid& dem,
+            const std::function<float(float, float)>& heightFn,
+            const ForestLodOptions& o) {
+
+        ForestLodStats st;
+        st.sites = static_cast<int>(sites.size());
+        if (sites.empty() || !heightFn) return st;
+
+        std::mt19937 rng(o.seed);
+        std::uniform_real_distribution<float> u01(0.f, 1.f);
+        std::vector<int> order(sites.size());
+        for (size_t i = 0; i < order.size(); ++i) order[i] = static_cast<int>(i);
+        if (static_cast<int>(order.size()) > o.cap) {
+            std::shuffle(order.begin(), order.end(), rng);
+            order.resize(static_cast<size_t>(o.cap));
+        }
+
+        const float cs = std::max(16.f, o.cellSize);
+        struct Cell {
+            int cx = 0, cz = 0;
+            std::array<std::vector<Matrix4>, 3> xf;// per species, WORLD transforms
+            Vector3 sum;
+            int n = 0;
+        };
+        std::unordered_map<std::int64_t, Cell> cells;
+        const auto key = [](int bx, int bz) {
+            return (static_cast<std::int64_t>(bx) << 32) ^ static_cast<std::uint32_t>(bz);
+        };
+
+        Quaternion q;
+        const Vector3 up{0.f, 1.f, 0.f};
+        for (int idx : order) {
+            const TreeSite& p = sites[static_cast<size_t>(idx)];
+            const float y = heightFn(p.x, p.z);
+            int s;
+            if (p.canopyHeight < o.scrubMaxHeight) s = 0;
+            else if (p.canopyHeight < o.birchMaxHeight && y < o.birchMaxElevation)
+                s = 1;
+            else
+                s = 2;
+            // The scale divisor is the L0 prototype's height; L1/L0 prototypes are
+            // measured separately below and re-scaled per level, so a tree keeps
+            // its metre height across the handoff.
+            const int cx = static_cast<int>(std::floor(p.x / cs));
+            const int cz = static_cast<int>(std::floor(p.z / cs));
+            auto& cell = cells[key(cx, cz)];
+            cell.cx = cx;
+            cell.cz = cz;
+            q.setFromAxisAngle(up, u01(rng) * math::TWO_PI);
+            Matrix4 m;
+            // Scale field carries the site's CANOPY HEIGHT, not a ratio: each level
+            // divides by its own prototype height when it writes its matrices.
+            m.compose(Vector3(p.x, y - o.sink, p.z), q, Vector3(p.canopyHeight, p.canopyHeight, p.canopyHeight));
+            cell.xf[static_cast<size_t>(s)].push_back(m);
+            cell.sum.add(Vector3(p.x, y, p.z));
+            ++cell.n;
+            ++st.planted;
+        }
+        st.cells = static_cast<int>(cells.size());
+
+        // Prototype triangle count, for the budget line the demo prints.
+        const auto triCount = [](const TreeVariant& v) {
+            int t = 0;
+            for (const auto& g : {v.trunkGeo, v.leafGeo}) {
+                if (!g) continue;
+                if (auto* ix = g->getIndex()) t += static_cast<int>(ix->count()) / 3;
+                else if (auto* pa = g->getAttribute<float>("position"))
+                    t += static_cast<int>(pa->count()) / 3;
+            }
+            return t;
+        };
+        if (!species[2].far.empty()) st.l1ProtoTris = triCount(species[2].far.front());
+
+        Matrix4 local;
+        for (auto& [k, cell] : cells) {
+            const Vector3 origin(cell.sum.x / static_cast<float>(cell.n),
+                                 cell.sum.y / static_cast<float>(cell.n),
+                                 cell.sum.z / static_cast<float>(cell.n));
+            auto lod = LOD::create();
+            lod->name = "forest_cell";
+            lod->position.copy(origin);
+
+            // One variant per (species, level) per CELL, not per tree: variety
+            // still comes from the cell mosaic, but the mesh (and entry) count
+            // stays at 2 per species per level instead of 2 per variant.
+            auto levelGroup = [&](bool nearTier, int keep, float boost) {
+                auto g = Group::create();
+                int meshes = 0;
+                for (int s = 0; s < 3; ++s) {
+                    const auto& xf = cell.xf[static_cast<size_t>(s)];
+                    if (xf.empty()) continue;
+                    const auto& vars = nearTier ? species[s].near : species[s].far;
+                    if (vars.empty()) continue;
+                    const size_t vi = static_cast<size_t>(
+                            (cell.cx * 31 + cell.cz * 17 + s * 7) & 0x7fffffff) % vars.size();
+                    // Thinning is a stride over a list that was already shuffled by
+                    // the cap pass, so the survivors are spread over the cell
+                    // rather than being its first rows.
+                    const size_t n = keep <= 1 ? xf.size()
+                                               : (xf.size() + static_cast<size_t>(keep) - 1) /
+                                                         static_cast<size_t>(keep);
+                    if (n == 0) continue;
+                    auto trunks = InstancedMesh::create(vars[vi].trunkGeo, vars[vi].barkMat, n);
+                    auto leaves = InstancedMesh::create(vars[vi].leafGeo, vars[vi].leafMat, n);
+                    for (size_t oi = 0, i = 0; oi < n; ++oi, i += static_cast<size_t>(std::max(1, keep))) {
+                        // Re-derive the instance from the stored (position, yaw,
+                        // canopy height) so each level divides by ITS prototype's
+                        // measured height: the two prototypes are not the same
+                        // number of metres tall, and reusing one matrix would make
+                        // every tree jump in size at the handoff.
+                        Vector3 p, sc;
+                        Quaternion rq;
+                        xf[i].decompose(p, rq, sc);
+                        const float scale = boost * std::clamp(sc.x / vars[vi].height,
+                                                               o.minScale, o.maxScale);
+                        local.compose(Vector3(p.x - origin.x, p.y - origin.y, p.z - origin.z), rq,
+                                      Vector3(scale, scale, scale));
+                        trunks->setMatrixAt(oi, local);
+                        leaves->setMatrixAt(oi, local);
+                    }
+                    trunks->instanceMatrix()->needsUpdate();
+                    leaves->instanceMatrix()->needsUpdate();
+                    g->add(trunks);
+                    g->add(leaves);
+                    meshes += 2;
+                }
+                return std::pair{g, meshes};
+            };
+
+            auto [g0, m0] = levelGroup(true, 1, 1.f);
+            auto [g1, m1] = levelGroup(false, 1, 1.f);
+            st.l0Meshes += m0;
+            st.l1Meshes += m1;
+            lod->addLevel(g0, 0.f);
+            lod->addLevel(g1, o.l0Distance);
+
+            if (!o.buildCanopyMesh && o.l2Keep > 1) {
+                auto [g2, m2] = levelGroup(false, o.l2Keep, o.l2ScaleBoost);
+                st.l2Meshes += m2;
+                lod->addLevel(g2, o.l1Distance);
+            }
+            if (o.buildCanopyMesh && canopyMat) {
+                std::array<Color, 3> sc{};
+                for (int s = 0; s < 3; ++s)
+                    sc[static_cast<size_t>(s)] = species[s].far.empty()
+                                                         ? Color(0.2f, 0.35f, 0.12f)
+                                                         : species[s].far.front().leafMat->color;
+                auto geo = buildCanopySurface(canopy, dem, heightFn, sc,
+                                              static_cast<float>(cell.cx) * cs,
+                                              static_cast<float>(cell.cz) * cs,
+                                              static_cast<float>(cell.cx + 1) * cs,
+                                              static_cast<float>(cell.cz + 1) * cs,
+                                              origin, o.mesh);
+                if (geo) {
+                    if (auto* ix = geo->getIndex()) st.canopyTris += static_cast<int>(ix->count()) / 3;
+                    auto m = Mesh::create(geo, canopyMat);
+                    m->name = "canopy_surface";
+                    lod->addLevel(m, o.l1Distance);
+                    ++st.l2Meshes;
+                }
+            }
+            parent.add(lod);
+        }
         return st;
     }
 

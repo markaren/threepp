@@ -160,6 +160,15 @@ namespace threepp::vegetation {
         float leafSize = 0.7f;// quad half-size (card), or puff radius for Blob
         float leafDensity = 0.9f;
         int leavesPerCluster = 5;
+        // Tessellation of a LeafStyle::Blob puff (UV sphere). 5×8 = 80 triangles
+        // is the fjord-demo silhouette at ~1000 far trees; a forest planted from
+        // a canopy model instances the same prototype tens of thousands of times,
+        // where 80 tris × 3 puffs × ~700 tips is the whole frame budget. Drop to
+        // 3×5 (30 tris) for a distance tier — the puff is a handful of pixels and
+        // the lumpiness noise, not the segment count, carries its outline.
+        // Default stays 5×8 so every existing caller is byte-identical.
+        int blobLatSegs = 5;
+        int blobLonSegs = 8;
         // The leaf map is an N×N grid of INDEPENDENT sprig variants; every card
         // picks one cell and a random horizontal mirror (2·N² distinct cards).
         //
@@ -640,8 +649,8 @@ namespace threepp::vegetation {
 
             // ── Low-poly foliage puff (deformed UV sphere, radial normals) ──
             auto emitBlob = [&](const Vector3& c, float radius, const Vector3& col) {
-                constexpr int latSegs = 5;
-                constexpr int lonSegs = 8;
+                const int latSegs = std::max(2, tp.blobLatSegs);
+                const int lonSegs = std::max(3, tp.blobLonSegs);
                 constexpr float PI = 3.14159265358979f;
                 const unsigned int start = baseVert;
                 for (int lat = 0; lat <= latSegs; ++lat) {
