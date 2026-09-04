@@ -529,15 +529,11 @@ sun = tp.DirectionalLight(0xfff0d8, 2.4)
 sun.position.set(*(SUN_DIR * 1000.0))
 scene.add(sun)
 
-ocean = tp.Ocean(size=320.0, resolution=384, wind_speed=7.0, wind_theta=0.6,
-                 choppiness=0.8, fft_size=512, fetch=3e3)      # young short-fetched sea: texture, no big crests
-ocean.params.foam_amount = 0.0                 # whitecaps print as white slabs from below
-ocean.material.attenuation_color = tp.Color(0.16, 0.30, 0.24)   # fjord water from above: dark green-grey, not tropical teal
-ocean.material.attenuation_distance = 2.5
-if "--no-ocean" not in sys.argv:
-    scene.add(ocean)
-
 # ---- terrain: the real fjord around the pen ----------------------------------
+# Loaded BEFORE the ocean because the pack size decides how far the water has to
+# reach. There is ONE ocean either way -- a second sheet for the far field is
+# what put two overlapping transmissive surfaces in the scene, and since you see
+# through the near one, the far one read as a second water surface under it.
 GEO = None
 if TERRAIN:
     _t0 = time.perf_counter()
@@ -555,35 +551,41 @@ if TERRAIN:
           f"{GEO.height_min:.0f}..{GEO.height_max:.0f} m, {GEO.stats}; "
           f"seabed under the pen {GEO.height_at(0.0, 0.0):.1f} m, "
           f"loaded in {time.perf_counter() - _t0:.1f} s")
-    # Water out to the pack edge. The 320 m FFT sheet above stays the PEN's
-    # water (0.83 m vertex spacing is what makes the surface read from 2 m away,
-    # and barge_bob samples it at the hull corners); this one only has to fill
-    # the 160 m..2 km band between it and the shore, where a crest is a pixel.
-    #
-    # The two sheets OVERLAP over the whole near disc, and depth decides which
-    # is drawn -- so the far one must never rise into the near one. Looked at:
-    # at -0.08 m with its own waves on, its 19.5 m-spaced crests won the depth
-    # test in broad patches and replaced the pen's chop with smooth plates
-    # (compare noterrain_film_c0_24.png). Fix is both halves: FLAT (wave_scale
-    # 0.35 leaves a slow distant swell, not chop that can lift) and 0.9 m down,
-    # which is below every trough of the near sheet. The cost is a 0.9 m band
-    # of exposed foreshore at the waterline -- 5 px at the 200 m shore, and it
-    # reads as a tide line.
-    ocean_far = tp.Ocean(size=GEO.pack_world_size * 1.25, resolution=256, wind_speed=7.0,
-                         wind_theta=0.6, choppiness=0.35, fft_size=256, fetch=3e3)
-    ocean_far.params.foam_amount = 0.0
-    ocean_far.params.wave_scale = 0.35
-    ocean_far.material.attenuation_color = tp.Color(0.16, 0.30, 0.24)
-    ocean_far.material.attenuation_distance = 2.5
-    ocean_far.position.y = WATER_Y - 0.9
-    if "--no-ocean" not in sys.argv:
-        scene.add(ocean_far)
 else:
     # No terrain: the flat stand-in seabed the demo has always had.
     floor = tp.Mesh(tp.PlaneGeometry(400.0, 400.0), standard_material(0x03060a))
     floor.rotate_x(-math.pi / 2)
     floor.position.y = -45.0
     scene.add(floor)
+
+# ---- the one ocean -----------------------------------------------------------
+# Without terrain: the 320 m sheet the demo has always had, 0.83 m spacing.
+# With terrain the same sheet has to span the pack, so instead of adding a
+# second one the SINGLE mesh is stretched to the shore and its vertices are
+# packed toward the pen by DisplacedMesh.warp:
+#     x = halfRange * (coefA*u + (1 - coefA)*u^3),  u in [-1, 1]
+# At 512 rows over +-2500 m with coefA 0.07 that is 0.68 m at the pen (finer
+# than the old near sheet), ~1.7 m at 50 m, ~4.7 m at the 200 m shore and 28 m
+# at the pack edge, where a crest is a pixel. 512^2 verts against the 384^2 +
+# 256^2 the two sheets cost, and one FFT pipeline instead of two.
+OCEAN_SIZE = (GEO.pack_world_size * 1.25) if TERRAIN else 320.0
+ocean = tp.Ocean(size=OCEAN_SIZE, resolution=512 if TERRAIN else 384, wind_speed=7.0,
+                 wind_theta=0.6, choppiness=0.8, fft_size=512, fetch=3e3)   # young short-fetched sea
+ocean.params.foam_amount = 0.0                 # whitecaps print as white slabs from below
+# Ocean sizes cascade 0 from the mesh extent (Ocean.cpp: tileSize0 = size), so a
+# 5 km sheet would ask for a 5 km swell. Pin the tile: the sea stays the young
+# fjord chop the pen cuts were lit for, whatever the mesh spans.
+ocean.params.tile_size_0 = 320.0
+if TERRAIN:
+    ocean.warp.center_x = 0.0
+    ocean.warp.center_z = 0.0
+    ocean.warp.half_range = OCEAN_SIZE * 0.5
+    ocean.warp.coef_a = 0.07
+ocean.material.attenuation_color = tp.Color(0.16, 0.30, 0.24)   # fjord water from above: dark green-grey, not tropical teal
+ocean.material.attenuation_distance = 2.5
+if "--no-ocean" not in sys.argv:
+    scene.add(ocean)
+
 MURK_PLANE = WATER_Y + 0.30            # deep cuts: above every crest, or a crest shaded from above prints sun glints through the murk
 
 
@@ -1261,33 +1263,22 @@ barge.rotation.y = BARGE_YAW
 barge.position.set(*BARGE_POS)
 scene.add(barge)
 
-# feed fan: hoses leave the stern gantry, sweep astern and splay across the water. Each is cut where
-# its own curve first crosses the collar, so the ones that reach the pen land on the rim instead of
-# spiralling over it; the rest run on toward pens outside the frame.
+# feed fan: hoses leave the stern gantry, sweep astern and run to the pen. Each one is AIMED at its
+# own point on the collar arc facing the barge, so it lands there by construction -- an angular fan
+# with a reach test instead left the ones that missed running off to nothing.
 _hose_mat = standard_material(0x8c9296, roughness=0.55)
 _stern = BARGE_POS + (-BARGE_L / 2 - 0.55) * _b_bow
-_bear = -np.array([_stern[0], 0.0, _stern[2]])
-_bear /= np.linalg.norm(_bear)                                    # stern -> pen centre
 _R_COLLAR = PEN_R + 0.85
+_barge_th = math.atan2(BARGE_POS[2], BARGE_POS[0])
 for _k in range(HOSE_N):
     _f = _k / (HOSE_N - 1.0)
     _a = _stern + (-3.55 + 7.1 * _f) * _b_port + [0.0, WATER_Y + 0.02, 0.0]
-    _phi = (_f - 0.5) * 1.05                                      # fan spread about the pen bearing
-    _cp, _sp = math.cos(_phi), math.sin(_phi)
-    _d = np.array([_bear[0] * _cp + _bear[2] * _sp, 0.0, -_bear[0] * _sp + _bear[2] * _cp])
-    _len = 70.0 + 34.0 * abs(_phi)                                # long enough to leave frame if it misses
-    _mid = _a + 18.6 * (0.55 * -_b_bow + 0.45 * _d)               # leaves astern, then sweeps round
-    _u = np.linspace(0, 1, 64)[:, None]
-    _pts = (1 - _u) ** 2 * _a + 2 * (1 - _u) * _u * _mid + _u ** 2 * (_a + _len * _d)
+    _th = _barge_th + (_f - 0.5) * 1.10                           # spread across the near collar arc
+    _end = np.array([_R_COLLAR * math.cos(_th), WATER_Y + 0.02, _R_COLLAR * math.sin(_th)])
+    _mid = _a + 0.42 * (_end - _a) + 0.30 * float(np.linalg.norm(_end - _a)) * -_b_bow
+    _u = np.linspace(0, 1, 40)[:, None]
+    _pts = (1 - _u) ** 2 * _a + 2 * (1 - _u) * _u * _mid + _u ** 2 * _end
     _pts[:, 1] = WATER_Y + 0.02                                   # ride the surface
-    _rad = np.hypot(_pts[:, 0], _pts[:, 2])
-    _in = np.nonzero(_rad <= _R_COLLAR)[0]
-    if len(_in) and _in[0] > 1:                                   # land on the rim, exactly
-        _i = int(_in[0])
-        _w = (_rad[_i - 1] - _R_COLLAR) / max(_rad[_i - 1] - _rad[_i], 1e-6)
-        _pts = np.vstack([_pts[:_i], _pts[_i - 1] + _w * (_pts[_i] - _pts[_i - 1])])
-    if len(_pts) < 3:
-        continue
     _fl = pipe_along(_pts, 0.05, 6, _hose_mat)
     _fl.frustum_culled = False
     scene.add(_fl)
@@ -2532,7 +2523,9 @@ def hud_update():
 
 
 # ---- cameras -----------------------------------------------------------------
-camera = tp.PerspectiveCamera(60.0, W / H, 0.05, 600.0)
+camera = tp.PerspectiveCamera(60.0, W / H, 0.05, 6000.0)   # the far shore is 2 km out and the
+# ocean spans 5 km; 600 clipped both. Reverse-Z on a D32_SFLOAT buffer puts the precision at the
+# near plane, so the far plane is nearly free -- 0.05 is what actually sets resolution here.
 gulls.set_observer(camera)
 murk_plane_update()
 sun_h3 = np.array([SUN_H[0], 0.0, SUN_H[1]])
