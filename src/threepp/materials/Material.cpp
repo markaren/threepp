@@ -216,7 +216,9 @@ void Material::copyCompatibleFrom(const Material& other) {
                    d->transmissionMap = s->transmissionMap;);
     TPP_COPY_MIXIN(MaterialWithAttenuation,
                    d->attenuationDistance = s->attenuationDistance;
-                   d->attenuationColor = s->attenuationColor;);
+                   d->attenuationColor = s->attenuationColor;
+                   d->scatterDistance = s->scatterDistance;
+                   d->scatterColor = s->scatterColor;);
     TPP_COPY_MIXIN(MaterialWithSheen,
                    d->sheenColor = s->sheenColor;
                    d->sheenRoughness = s->sheenRoughness;);

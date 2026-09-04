@@ -320,6 +320,26 @@ namespace threepp {
 
         float attenuationDistance = 0;
         Color attenuationColor{1, 1, 1};
+
+        // ── Volume IN-SCATTER (the other half of the medium) ─────────────────
+        // attenuationColor/attenuationDistance describe what the medium TAKES
+        // OUT of a ray (Beer-Lambert absorption). These two describe what it
+        // puts BACK IN: single scattering off suspended matter. Glacial and
+        // silty water is bright turquoise BECAUSE of rock flour scattering the
+        // skylight sideways into the eye, which absorption cannot produce at
+        // any parameter value (it can only ever darken).
+        //
+        //   scatterColor    — single-scattering albedo weight per channel
+        //                     (σ_s direction: which wavelengths scatter).
+        //   scatterDistance — mean free path in METRES, i.e. 1/σ_s. 0 = OFF.
+        //
+        // scatterDistance == 0 is the default and every arithmetic path that
+        // reads these is gated on it being > 0, so existing materials render
+        // bit-identically. Consumed by the Vulkan deferred WATER body only
+        // (deferred_shade_50_water_glass.glsl); the GL renderer and the path
+        // tracer ignore both fields.
+        float scatterDistance = 0;
+        Color scatterColor{0, 0, 0};
     };
 
     struct MaterialWithSheen: virtual Material {

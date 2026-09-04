@@ -149,7 +149,7 @@ namespace {
     TPP_MIXIN(MaterialWithThickness, thickness, thicknessMap, thinWalled)
     TPP_MIXIN(MaterialWithClearcoat, clearcoat, clearcoatMap, clearcoatRoughness, clearcoatRoughnessMap, clearcoatNormalScale, clearcoatNormalMap)
     TPP_MIXIN(MaterialWithTransmission, transmission, ior, dispersion, transmissionMap)
-    TPP_MIXIN(MaterialWithAttenuation, attenuationDistance, attenuationColor)
+    TPP_MIXIN(MaterialWithAttenuation, attenuationDistance, attenuationColor, scatterDistance, scatterColor)
     TPP_MIXIN(MaterialWithSheen, sheenColor, sheenRoughness)
     TPP_MIXIN(MaterialWithIridescence, iridescence, iridescenceIOR, iridescenceThicknessNm)
     TPP_MIXIN(MaterialWithPbrSpecular, specularIntensity, specularColor)

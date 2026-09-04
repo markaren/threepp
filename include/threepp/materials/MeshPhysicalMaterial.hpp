@@ -87,6 +87,8 @@ namespace threepp {
             TPP_PARAM(std::shared_ptr<Texture>, thicknessMap)
             TPP_PARAM(float, attenuationDistance)
             TPP_PARAM(Color, attenuationColor)
+            TPP_PARAM(float, scatterDistance)
+            TPP_PARAM(Color, scatterColor)
             TPP_PARAM(float, iridescence)
             TPP_PARAM(float, iridescenceIOR)
             TPP_PARAM(float, iridescenceThicknessNm)
@@ -142,6 +144,8 @@ namespace threepp {
             std::shared_ptr<Texture> thicknessMap_;
             std::optional<float> attenuationDistance_;
             std::optional<Color> attenuationColor_;
+            std::optional<float> scatterDistance_;
+            std::optional<Color> scatterColor_;
             std::optional<float> iridescence_;
             std::optional<float> iridescenceIOR_;
             std::optional<float> iridescenceThicknessNm_;

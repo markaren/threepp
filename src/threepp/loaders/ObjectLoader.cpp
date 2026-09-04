@@ -545,6 +545,8 @@ namespace {
         if (dynamic_cast<MaterialWithAttenuation*>(&material)) {
             setFloat("attenuationDistance");
             setColor("attenuationColor");
+            setFloat("scatterDistance");
+            setColor("scatterColor");
         }
         if (dynamic_cast<MaterialWithIridescence*>(&material)) {
             setFloat("iridescence");

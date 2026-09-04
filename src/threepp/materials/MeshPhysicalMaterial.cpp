@@ -20,6 +20,9 @@ MeshPhysicalMaterial::MeshPhysicalMaterial()
 
     attenuationDistance = 0.f;
     attenuationColor = Color(1, 1, 1);
+    // 0 = no in-scatter; keeps every existing material on the old arithmetic.
+    scatterDistance = 0.f;
+    scatterColor = Color(0, 0, 0);
 }
 
 
@@ -101,6 +104,8 @@ std::shared_ptr<MeshPhysicalMaterial> MeshPhysicalMaterial::create(const Params&
     TPP_TEX(thicknessMap)
     TPP_SET(attenuationDistance)
     TPP_SET(attenuationColor)
+    TPP_SET(scatterDistance)
+    TPP_SET(scatterColor)
     TPP_SET(iridescence)
     TPP_SET(iridescenceIOR)
     TPP_SET(iridescenceThicknessNm)
@@ -145,6 +150,9 @@ void MeshPhysicalMaterial::copyInto(Material& material) const {
 
     m->attenuationDistance = attenuationDistance;
     m->attenuationColor.copy(attenuationColor);
+
+    m->scatterDistance = scatterDistance;
+    m->scatterColor.copy(scatterColor);
 
     m->iridescence = iridescence;
     m->iridescenceIOR = iridescenceIOR;
@@ -254,6 +262,16 @@ bool MeshPhysicalMaterial::setValue(const std::string& key, const MaterialValue&
     } else if (key == "attenuationColor") {
 
         attenuationColor.copy(extractColor(value));
+        return true;
+
+    } else if (key == "scatterDistance") {
+
+        scatterDistance = extractFloat(value);
+        return true;
+
+    } else if (key == "scatterColor") {
+
+        scatterColor.copy(extractColor(value));
         return true;
 
     } else if (key == "iridescence") {

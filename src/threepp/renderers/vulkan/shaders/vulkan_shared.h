@@ -208,12 +208,18 @@ namespace threepp::vulkan_pt {
         int32_t terrainBandNormalTex[4]; // -1 = no relief for that band
         float terrainBandRepeat[4];      // repeats per world metre
         float terrainBandRough[4];       // base roughness per band
+        // Volume IN-SCATTER (MaterialWithAttenuation::scatterColor/Distance).
+        // scatterDistance is the mean free path in metres, 1/sigma_s;
+        // 0 = OFF and the shader keeps the pure-absorption arithmetic
+        // bit-for-bit. Read by the deferred WATER body only.
+        float scatterColor[3];
+        float scatterDistance;
     };
 
     // Catches silent layout drift: if any field is added/removed/reordered
     // above, the size changes and this fires. Update the GLSL `MaterialDesc`
     // mirror below to match before bumping the expected size.
-    static_assert(sizeof(MaterialDesc) == 608,
+    static_assert(sizeof(MaterialDesc) == 624,
                   "MaterialDesc size changed - update the GLSL mirror in this file too.");
 }
 
@@ -284,6 +290,8 @@ struct MaterialDesc {
     ivec4 terrainBandNormalTex; // per-band normal/roughness; -1 = none
     vec4  terrainBandRepeat;    // repeats per world metre
     vec4  terrainBandRough;     // base roughness per band
+    vec3  scatterColor;         // single-scattering albedo weight per channel
+    float scatterDistance;      // mean free path (m), 1/sigma_s; 0 = no in-scatter
 };
 
 #endif  // __cplusplus

@@ -1110,6 +1110,14 @@ int main(int argc, char** argv) {
     if (auto* waterMat = ocean->material()->as<MeshPhysicalMaterial>()) {
         waterMat->attenuationColor = Color(0.045f, 0.14f, 0.16f);
         waterMat->attenuationDistance = 1.9f;
+        // FJ_SEA_SCATTER=1 adds volume IN-SCATTER to this same absorption — the
+        // second scene the water-body-scatter work is checked against, on water
+        // that is deliberately DARK rather than glacial. Off by default, so the
+        // demo's own look and every existing capture are untouched.
+        if (const char* v = std::getenv("FJ_SEA_SCATTER"); v && *v && *v != '0') {
+            waterMat->scatterColor = Color(0.18f, 0.42f, 0.45f);
+            waterMat->scatterDistance = 8.f;
+        }
     }
     scene.add(ocean);
 
