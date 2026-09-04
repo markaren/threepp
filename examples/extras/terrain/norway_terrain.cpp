@@ -27,6 +27,7 @@
 
 #include "threepp/extras/imgui/RendererSettings.hpp"
 #include "threepp/extras/road/RoadNetwork.hpp"
+#include "threepp/extras/terrain/CliffShell.hpp"
 #include "threepp/extras/terrain/DetailTexture.hpp"
 #include "threepp/extras/terrain/GeoBuildings.hpp"
 #include "threepp/extras/terrain/GeoTerrain.hpp"
@@ -288,7 +289,12 @@ int main(int argc, char** argv) {
     // actually measured. NT_NO_CLIFF forces it off for an A/B.
     const float gridStep = reg.worldSize / static_cast<float>(reg.dim - 1);
     const bool cliffPack = gridStep <= 1.5f && !std::getenv("NT_NO_CLIFF");
-    gopt.cliffRelief = cliffPack;
+    // CONTOUR-STRIP CLIFF SHELL (phase 2b): a free-parametrised skin over the
+    // steep faces, u = contour arc length / v = world height. It OWNS the wall
+    // relief once it is on — a positive terrain relief under it would poke
+    // through the shell's 0.35 m offset — so the two are mutually exclusive.
+    const bool shellOn = gridStep <= 1.5f && !std::getenv("NT_NO_SHELL");
+    gopt.cliffRelief = cliffPack && !shellOn;
     const terrain::TerrainProvider prov = terrain::makeGeoProvider(pack, network, gopt);
 
     reportRoadConformance(pack, network);
@@ -353,6 +359,11 @@ int main(int argc, char** argv) {
             return network.corridorIntersects(cx, cz, half) ? 2.2f : 1.0f;
         };
     }
+    // Hoisted out of the block below: the cliff shell shades the SAME wall as
+    // the tiles and must carry the same band set — two different rock
+    // generators meeting at the shell boundary would draw the boundary.
+    terrain::TerrainBandSet bandSet;
+    bool bandSetBuilt = false;
     {
         // Per-band STRUCTURE sets (grass/rock/scree/snow): the terrain shader
         // resolves them at screen density over the macro splat, selected by
@@ -366,8 +377,10 @@ int main(int argc, char** argv) {
             // On a cliff pack the rock slot carries the GNEISS generator
             // (foliation hanging vertically on the triplanar side projections,
             // joint blocks, wet veins) instead of the generic plate rock.
-            const terrain::TerrainBandSet bands = terrain::makeTerrainBandSet(
+            bandSet = terrain::makeTerrainBandSet(
                     4242u, cliffPack ? terrain::BandKind::Cliff : terrain::BandKind::Rock);
+            bandSetBuilt = true;
+            const terrain::TerrainBandSet& bands = bandSet;
             for (size_t i = 0; i < 4; ++i) {
                 tileOpts.bandAlbedo[i] = bands.band[i].albedo;
                 tileOpts.bandNormalRough[i] = bands.band[i].normalRough;
@@ -648,6 +661,45 @@ int main(int argc, char** argv) {
         controls.target.copy(camTargetArg);
     }
     controls.update();
+
+    // ── contour-strip cliff shell ──────────────────────────────────────────────
+    // The terrain is a heightfield, so every baked tile map is a function of
+    // (x, z): on a near-vertical wall each texel is one stretched vertical
+    // column and NOTHING baked on the tiles can vary along a column. That is the
+    // vertical-stripe smear the phase-1b/2 shots kept showing. The shell is a
+    // separate free mesh over the steep faces whose parametrisation is
+    // u = contour arc length, v = world height — metric on the wall, so texel
+    // density is uniform and content (ledge rows, seepage streaks) can vary
+    // along v. NT_NO_SHELL=1 for the A/B, NT_SHELL_STEP=<m> for the level
+    // spacing. 2 m packs (trollstigen/aalesund) never build one.
+    if (shellOn && bandSetBuilt) {
+        terrain::CliffShellOptions so;
+        so.seaLevel = reg.seaLevel;
+        so.levelStep = envF("NT_SHELL_STEP", 2.f);
+        so.snowHeightMin = gopt.snowHeightMin;
+        so.snowFeather = gopt.snowFeather;
+        so.canopyForestMin = gopt.canopyForestMin;
+        // Same ROI reasoning as the forest: a 4 km pack is 16 M cells, the shot
+        // looks at part of it, and the shell is static geometry submitted whole.
+        so.centerX = controls.target.x;
+        so.centerZ = controls.target.z;
+        so.halfExtent = envF("NT_SHELL_EXTENT", 1200.f);
+        auto shellRoot = Group::create();
+        shellRoot->name = "cliff_shell_root";
+        const auto stShell = terrain::buildCliffShell(*shellRoot, pack, bandSet, so,
+                                                      cliffPack ? 1.0f : 0.8f,
+                                                      cliffPack ? 2.2f : 1.4f);
+        scene.add(shellRoot);
+        std::cout << "[norway] cliff shell: " << stShell.regions << " regions, "
+                  << stShell.levels << " levels @ " << so.levelStep << " m, "
+                  << stShell.maskCells << " mask cells, " << stShell.polylines
+                  << " contours, " << stShell.strips << " strips, "
+                  << stShell.vertices << " verts / " << stShell.triangles << " tris, "
+                  << (stShell.atlasTexels / 1024) << " k atlas texels ("
+                  << "trace " << stShell.traceSeconds << " s, stitch "
+                  << stShell.stitchSeconds << " s, bake " << stShell.bakeSeconds << " s)\n"
+                  << std::flush;
+    }
 
     // ── canopy-driven forest ───────────────────────────────────────────────────
     // Packs fetched with --canopy carry a canopy height model (DOM - DTM): metres
