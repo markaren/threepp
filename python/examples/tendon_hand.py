@@ -1339,7 +1339,9 @@ def visual(shots=None, poses=None, width=1280, height=800, obj="ball", tension=3
     cam.position.set(*pos)
     cam.look_at(*tgt)
     controls = tp.OrbitControls(cam, canvas)
-    controls.target.set(*tgt)
+    # Assignment, not .set() on the property: OrbitControls.target may hand back a copy,
+    # and mutating that silently leaves the camera orbiting the origin.
+    controls.target = tp.Vector3(*tgt)
     controls.enable_damping = True
     ui = tp.ImguiContext(canvas, renderer)
     ctl = HandController(hand)
