@@ -456,14 +456,61 @@ def e6_library_cable(q1=0.0, q2=0.9, tension=20.0):
           f"  ({100*(1-cable.tip_tension/max(1e-9,cable.tension)):.1f}% eaten by the routing)")
 
 
+# --------------------------------------------------------------------------- E7
+def e7_wrap():
+    """Does a WRAPPED cable hold its moment arm at the pulley radius through the range?
+
+    A via point is welded to its link, so a cable strung across a flexing joint chords
+    over it, and once the distal point swings behind the joint axis the moment REVERSES.
+    A real tendon slides along its pulley instead. The textbook consequence is that a
+    wrapped tendon's moment arm about that pulley IS the pulley radius, flat in angle --
+    which is why a cadaver study can quote one number for it. This is the check that the
+    wrap implementation reproduces that, and that a via-point routing does not.
+    """
+    print("\n=== E7  wrapped cable: is the moment arm the pulley radius, at every angle? ===")
+    R = 0.008
+    print(f"  pulley radius {R*1000:.1f} mm  ->  predicted moment arm {R*1000:.1f} mm at EVERY angle")
+
+    base = (0.0, 0.0, 50.0)
+    art, root, links = make_finger(base, 0.0, 0.0)
+    art.finalize()
+
+    wrapped = tp.TendonCable(world(), tp.TendonCable.Mode.TENSION)
+    wrapped.add_via_point(root, tp.Vector3(-0.030, -R, 0.0))
+    wrapped.add_wrap(links[0], tp.Vector3(0.0, -0.5 * L1, 0.0), tp.Vector3(0, 0, 1), R,
+                     tp.Vector3(1, 0, 0))                       # volar side, link frame
+    wrapped.add_via_point(links[0], tp.Vector3(R, 0.30 * L1, 0.0))
+
+    chorded = tp.TendonCable(world(), tp.TendonCable.Mode.TENSION)
+    chorded.add_via_point(root, tp.Vector3(-0.030, -R, 0.0))
+    chorded.add_via_point(links[0], tp.Vector3(R, 0.30 * L1, 0.0))
+
+    print(f"  {'MCP angle':>10}  {'wrapped arm':>12}  {'via-point arm':>14}   path pts")
+    for deg in (0, 20, 40, 60, 80, 100):
+        q = math.radians(deg)
+        art.set_joint_positions(np.array([q, 0.0], dtype=np.float32))
+        h = 1e-5
+        def arm(c):
+            art.set_joint_positions(np.array([q + h, 0.0], dtype=np.float32))
+            lp = c.length
+            art.set_joint_positions(np.array([q - h, 0.0], dtype=np.float32))
+            lm = c.length
+            art.set_joint_positions(np.array([q, 0.0], dtype=np.float32))
+            return -(lp - lm) / (2 * h) * 1000.0
+        print(f"  {deg:8d} deg  {arm(wrapped):9.2f} mm  {arm(chorded):11.2f} mm   "
+              f"{wrapped.num_path_points}")
+    print("  READ: the wrapped column should stay near the radius and never change sign;")
+    print("        the via-point column is what a welded routing does instead.")
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--only", default=None, help="E1|E2|E4|E5")
     a = ap.parse_args()
     run = {"E1": e1_recip_coefficient, "E2": e2_offset_vs_limits,
            "E4": e4_chord_vs_polyline, "E5": e5_first_party_cable,
-           "E6": e6_library_cable}
-    for k in ([a.only] if a.only else ["E1", "E2", "E4", "E5", "E6"]):
+           "E6": e6_library_cable, "E7": e7_wrap}
+    for k in ([a.only] if a.only else ["E1", "E2", "E4", "E5", "E6", "E7"]):
         try:
             run[k]()
         except Exception as exc:      # a probe that cannot run is itself a result

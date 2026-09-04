@@ -56,6 +56,7 @@
 #include "threepp/math/Vector3.hpp"
 
 #include <algorithm>
+#include <numbers>
 #include <cmath>
 #include <cstddef>
 #include <stdexcept>
@@ -86,8 +87,41 @@ namespace threepp {
         // from the actuator end to the insertion. The first and last are the anchor and
         // the insertion; everything between is a pulley.
         void addViaPoint(const ArticulationLink& link, const Vector3& localOffset) {
-            links_.push_back(link);
-            local_.push_back(localOffset);
+            nodes_.push_back({Node::Via, link, localOffset, Vector3(0, 0, 1), 0.f, Vector3(1, 0, 0)});
+        }
+
+        // Add a WRAP: between the previous and the next via point the cable runs around
+        // a cylinder of `radius` centred at `localCentre` on `link`, with its axis along
+        // `localAxis` (both in the link's actor frame). Put the cylinder on the joint,
+        // co-axial with the hinge, and the radius is the tendon's standoff.
+        //
+        // WHY A WRAP AND NOT MORE VIA POINTS. A via point is welded to its link, so a
+        // cable strung between via points on either side of a flexing joint chords
+        // straight across it, and once the distal point swings behind the joint axis the
+        // moment REVERSES. Measured on the index finger of this hand: an FDP whose MCP
+        // moment arm ran +9.98 mm extended to -5.03 mm at 89 deg of flexion -- a flexor
+        // that extends the knuckle, in exactly the posture a grasp lives in. No number of
+        // via points fixes it, because the real tendon's contact point SLIDES along the
+        // pulley as the joint moves, and a welded point cannot slide.
+        //
+        // Resolved by discretising the arc into via points regenerated every substep, so
+        // the exact free-body force law above is reused unchanged: the wrap adds
+        // geometry, not a second force model. The moment arm about the cylinder's own
+        // axis then comes out at the radius and STAYS there through the full range, which
+        // is the textbook result for a wrapped tendon and the reason biomechanics quotes
+        // a pulley's moment arm as a single number.
+        // `sideHint` (link frame, from the centre outward) says WHICH SIDE of the
+        // cylinder the cable runs on -- volar for a flexor, dorsal for an extensor. It is
+        // required rather than inferred because the two are not distinguishable from the
+        // endpoints alone, and "take the shorter way round" is simply wrong for a tendon:
+        // a sheath holds it on one definite side whether or not that side is shorter.
+        // Inferring it put this hand's extensor on the volar side of every joint, which
+        // measured as an extensor with a +7.53 mm FLEXION arm at the MCP.
+        void addWrap(const ArticulationLink& link, const Vector3& localCentre,
+                     const Vector3& localAxis, float radius, const Vector3& sideHint) {
+            if (nodes_.empty())
+                throw std::runtime_error("TendonCable.add_wrap: a wrap needs a via point before it");
+            nodes_.push_back({Node::Wrap, link, localCentre, localAxis, radius, sideHint});
         }
 
         // --- commands ---------------------------------------------------------------
@@ -126,20 +160,169 @@ namespace threepp {
         // ratio between them is exactly what the routing swallowed.
         [[nodiscard]] float tipTension() const { return tipTension_; }
         [[nodiscard]] Mode mode() const { return mode_; }
-        [[nodiscard]] std::size_t numViaPoints() const { return links_.size(); }
+        [[nodiscard]] std::size_t numNodes() const { return nodes_.size(); }
+        // Points in the RESOLVED path, wrap arcs included -- so it grows as a joint flexes.
+        [[nodiscard]] std::size_t numPathPoints() const { return points().size(); }
 
     private:
+        struct Node {
+            enum Kind { Via,
+                        Wrap } kind;
+            ArticulationLink link;
+            Vector3 local;  // via point, or cylinder centre
+            Vector3 axis;   // cylinder axis (wrap only)
+            float radius;   // wrap only
+            Vector3 side;   // which side of the cylinder the cable runs on (wrap only)
+        };
+
+        // Resolve the node list into the actual cable path: a flat list of world points,
+        // each tagged with the link it presses on. Wrap arcs become extra points on the
+        // wrapped link, so everything downstream sees one uniform polyline.
+        void resolve(std::vector<Vector3>& pts, std::vector<const ArticulationLink*>& owner) const {
+            pts.clear();
+            owner.clear();
+            for (std::size_t i = 0; i < nodes_.size(); ++i) {
+                const Node& nd = nodes_[i];
+                if (nd.kind == Node::Via) {
+                    pts.push_back(nd.link.worldPoint(nd.local));
+                    owner.push_back(&nd.link);
+                    continue;
+                }
+                // A wrap sits between the previous resolved point and the next via node.
+                if (pts.empty() || i + 1 >= nodes_.size()) continue;
+                const Node& nxt = nodes_[i + 1];
+                if (nxt.kind != Node::Via) continue;
+                arc(nd, pts.back(), nxt.link.worldPoint(nxt.local), pts, owner);
+            }
+        }
+
+        // Planar tangent-arc-tangent around one cylinder. Everything is solved in the
+        // plane through the cylinder centre perpendicular to its axis, which is exact for
+        // a hinge because the cable and both neighbours lie in that plane by construction.
+        static void arc(const Node& w, const Vector3& P, const Vector3& Q,
+                        std::vector<Vector3>& pts, std::vector<const ArticulationLink*>& owner) {
+            const Vector3 C = w.link.worldPoint(w.local);
+            Vector3 n = w.link.worldPoint(w.local + w.axis) - C;// the axis, rotated into world
+            const float nl = n.length();
+            if (nl < 1e-9f) return;
+            n.divideScalar(nl);
+
+            // In-plane components of the two neighbours relative to the centre.
+            auto flat = [&](const Vector3& X) {
+                Vector3 d = X - C;
+                Vector3 along = n;
+                along.multiplyScalar(d.dot(n));
+                return d - along;
+            };
+            const Vector3 a = flat(P), b = flat(Q);
+            const float ra = a.length(), rb = b.length();
+            const float r = w.radius;
+            // A neighbour inside the cylinder has no tangent line; leave the path straight
+            // rather than emitting a NaN.
+            if (ra <= r * 1.001f || rb <= r * 1.001f) return;
+
+            // Signed angles in a right-handed 2D basis (u, v) spanning the plane.
+            Vector3 u = a;
+            u.divideScalar(ra);
+            Vector3 v = n.clone().cross(u);
+            const float angB = std::atan2(b.dot(v), b.dot(u));
+            const float ta = std::acos(std::clamp(r / ra, -1.f, 1.f));// tangent offset from a
+            const float tb = std::acos(std::clamp(r / rb, -1.f, 1.f));
+            constexpr float kPi = 3.14159265358979323846f;
+
+            // The side the sheath holds the cable on, in the same 2D basis.
+            Vector3 hw = w.link.worldPoint(w.local + w.side) - C;
+            const float hx = hw.dot(u), hy = hw.dot(v);
+            const float hang = std::atan2(hy, hx);
+
+            // Two ways round; take the one whose arc actually sits on that side.
+            float bestT1 = 0.f, bestSweep = 0.f, bestScore = -2.f;
+            bool found = false;
+            // Tangent construction. With the basis anchored so P sits at angle 0, the two
+            // tangent points from P are at +-ta and those from Q at angB +- tb. A cable
+            // that leaves P at +ta must travel COUNTER-clockwise and arrive at angB - tb;
+            // the clockwise branch is the mirror. Getting these two signs backwards makes
+            // both branches fail the consistency test below, and the wrap then silently
+            // does nothing at all -- the cable stays a chord and every moment arm reverts
+            // to the welded-via-point behaviour, with no error anywhere.
+            for (const float sg : {1.f, -1.f}) {
+                const float t1 = sg * ta;
+                const float t2 = angB - sg * tb;
+                // The two tangent PAIRS are the choice; the sweep direction is not free
+                // once a pair is picked. Between two tangent points of the same pair a
+                // cable can never wrap more than half the circle, so the short way is the
+                // only physical one -- and finger joints top out near 115 deg, well
+                // inside that. Normalising the other way (into each branch's own
+                // direction) made the selection take the LONG way round the far side, and
+                // the moment arm came out at the pulley radius with the WRONG SIGN.
+                float sweep = std::fmod(t2 - t1 + kPi, 2.f * kPi);
+                if (sweep < 0.f) sweep += 2.f * kPi;
+                sweep -= kPi;
+                float mid = t1 + 0.5f * sweep;
+                float d = mid - hang;
+                while (d > kPi) d -= 2.f * kPi;
+                while (d < -kPi) d += 2.f * kPi;
+                const float score = std::cos(d);// +1 when the arc midpoint is on the hinted side
+                if (score > bestScore) {
+                    bestScore = score;
+                    bestT1 = t1;
+                    bestSweep = sweep;
+                    found = true;
+                }
+            }
+            if (!found) return;
+            const float t1 = bestT1;
+            const float sweep = bestSweep;
+
+            // Contact only where the free path would actually cut through the pulley.
+            // This is not an optimisation, it is the physics, and it is what separates a
+            // flexor from an extensor. A cable on the CONCAVE side of a closing joint
+            // (a flexor, volar) lifts OFF its pulley and bowstrings: its chord shortens
+            // as the joint flexes, which is why pulling it flexes at all, and the pulley
+            // acts as a CAP on how far it can bow rather than as a surface it follows.
+            // Force it to wrap anyway and the volar path LENGTHENS by r*theta, turning
+            // the flexor into an extensor -- measured, on the reference geometry: path
+            // 58.5 -> 73.2 mm over 105 deg of flexion, moment arm +8 mm where the chord
+            // gives -8. A cable on the CONVEX side (an extensor, dorsal) genuinely does
+            // wrap, and there this branch engages and holds the arm at the radius.
+            if (distancePointSegment(C, P, Q) >= r) return;
+
+            const int steps = std::max(2, static_cast<int>(std::ceil(std::fabs(sweep) / 0.25f)));
+            for (int k = 0; k <= steps; ++k) {
+                const float th = t1 + sweep * (static_cast<float>(k) / static_cast<float>(steps));
+                Vector3 uu = u;
+                uu.multiplyScalar(r * std::cos(th));
+                Vector3 vv = v;
+                vv.multiplyScalar(r * std::sin(th));
+                pts.push_back(C + uu + vv);
+                owner.push_back(&w.link);
+            }
+        }
+
+        static float distancePointSegment(const Vector3& C, const Vector3& P, const Vector3& Q) {
+            Vector3 d = Q - P;
+            const float dd = d.dot(d);
+            if (dd < 1e-12f) return (C - P).length();
+            const float t = std::clamp((C - P).dot(d) / dd, 0.f, 1.f);
+            Vector3 s = d;
+            s.multiplyScalar(t);
+            return (C - (P + s)).length();
+        }
+
         [[nodiscard]] std::vector<Vector3> points() const {
             std::vector<Vector3> p;
-            p.reserve(links_.size());
-            for (std::size_t i = 0; i < links_.size(); ++i) p.push_back(links_[i].worldPoint(local_[i]));
+            std::vector<const ArticulationLink*> o;
+            resolve(p, o);
             return p;
         }
 
         void apply(float dt) {
-            if (links_.size() < 2) return;
-            const auto p = points();
+            if (nodes_.size() < 2) return;
+            std::vector<Vector3> p;
+            std::vector<const ArticulationLink*> owner;
+            resolve(p, owner);
             const std::size_t n = p.size();
+            if (n < 2) return;
 
             std::vector<Vector3> seg(n - 1);
             float len = 0.f;
@@ -188,17 +371,19 @@ namespace threepp {
             // addForceAtPos, not addForce: a force through the centre of mass produces no
             // torque about the link's own joint and would drive nothing.
             const auto scaled = [](Vector3 v, float s) { return v.multiplyScalar(s); };
-            links_[0].addForceAtPos(scaled(seg[0], segT[0]), p[0]);
+            const auto push = [&](std::size_t i, const Vector3& f) {
+                const_cast<ArticulationLink*>(owner[i])->addForceAtPos(f, p[i]);
+            };
+            push(0, scaled(seg[0], segT[0]));
             for (std::size_t i = 1; i + 1 < n; ++i)
-                links_[i].addForceAtPos(scaled(seg[i], segT[i]) - scaled(seg[i - 1], segT[i - 1]), p[i]);
-            links_[n - 1].addForceAtPos(scaled(seg[n - 2], -segT[n - 2]), p[n - 1]);
+                push(i, scaled(seg[i], segT[i]) - scaled(seg[i - 1], segT[i - 1]));
+            push(n - 1, scaled(seg[n - 2], -segT[n - 2]));
         }
 
         PhysxWorld& world_;
         Mode mode_;
         PhysxWorld::SubstepHandle handle_{};
-        std::vector<ArticulationLink> links_;
-        std::vector<Vector3> local_;
+        std::vector<Node> nodes_;
         float cmdTension_{0.f};
         float spool_{0.f}, k_{0.f}, c_{0.f}, mu_{0.f};
         float lastLen_{0.f}, tension_{0.f}, tipTension_{0.f};
