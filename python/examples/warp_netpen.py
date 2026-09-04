@@ -1640,15 +1640,34 @@ def tear_now():
     return TEAR_C if pos is None or not len(_TEAR_RING) else pos[_TEAR_RING].mean(0) + _TEAR_BIAS
 
 
+def patrol_row(t):
+    """The baked patrol at an arbitrary time, LERPed between the two bracketing 60 Hz rows.
+    `PATROL[int(clock * 60)]` snapped the whole pose to whichever row the truncation landed
+    on, so every frame whose clock did not fall exactly on a bake step repeated or skipped
+    one -- the judder on the way down. Same fix as the car: blend the states either side
+    (warp_mudsnow_drive.py's pose_prev/pose_cur + nlerp) instead of picking one."""
+    f = patrol_clock(t) * 60.0
+    i0 = int(f) % len(PATROL)
+    r0, r1 = PATROL[i0], PATROL[(i0 + 1) % len(PATROL)]
+    a = f - math.floor(f)
+    r = r0 + (r1 - r0) * a
+    for k in (3, 4, 5):                                 # yaw/pitch/roll: never the long way round
+        r[k] = r0[k] + ((r1[k] - r0[k] + math.pi) % (2.0 * math.pi) - math.pi) * a
+    return r
+
+
 def rov_pose(t, dt=1.0 / 60.0):
     global rov_pos, rov_R, rov_thrust, rov_off
-    x, y, z, yaw, pitch, roll, tf, tl, tv = PATROL[int(patrol_clock(t) * 60.0) % len(PATROL)]
+    x, y, z, yaw, pitch, roll, tf, tl, tv = patrol_row(t)
     base = np.array([x, y, z]) + lift_at(t)
     cand = base + rov_off
     d, q, _ = net_nearest(cand)
-    if d < NET_CLEAR:                                   # instant push along the line from the nearest particle
-        rov_off += (NET_CLEAR - d) / max(d, 1e-6) * (cand - q)
-        cand, d = base + rov_off, NET_CLEAR
+    if d < NET_CLEAR:                                   # push along the line from the nearest particle,
+        # ramped: the nearest-particle argmin flips as the hull slides down the wall, and an
+        # instant correction turns each flip into a visible sideways step
+        rov_off += (NET_CLEAR - d) / max(d, 1e-6) * (cand - q) * (1.0 - math.exp(-dt / 0.15))
+        cand = base + rov_off
+        d = net_nearest(cand)[0]
     else:
         rov_off *= math.exp(-dt / 2.0)
     if T_WALL <= t < T_WALL + ROV_HOLD[0]:              # station keeping: idle thrust
@@ -2877,7 +2896,7 @@ APPROACH = {}
 
 def rov_at(tf):
     """Baked ROV at film time tf (no live clearance): pos, fwd, inboard."""
-    x, y, z, yaw = PATROL[int(patrol_clock(tf - FILM_T_OFF) * 60.0) % len(PATROL)][:4]
+    x, y, z, yaw = patrol_row(tf - FILM_T_OFF)[:4]
     p = np.array([x, y, z]) + lift_at(tf - FILM_T_OFF)
     return p, np.array([math.cos(yaw), 0.0, -math.sin(yaw)]), -np.array([p[0], 0.0, p[2]]) / np.hypot(p[0], p[2])
 
